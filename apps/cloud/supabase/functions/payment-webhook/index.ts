@@ -74,12 +74,18 @@ async function applyPaid(admin: SupabaseClient, event: WebhookEvent): Promise<vo
   // Idempotent order lookup: upsert status to paid, then grant only on first transition.
   const existing = await admin
     .from("orders")
-    .select("id,user_id,status,product,provider_event_id,created_at")
+    .select("id,user_id,status,product,provider_event_id,created_at,product_snapshot")
     .eq("provider", "mock")
     .eq("provider_order_id", event.provider_order_id)
     .maybeSingle();
   if (existing.error) throw new ApiError("internal_error", "订单读取失败", true);
   if (!existing.data) throw new ApiError("invalid_request", "未知订单");
+
+  if (existing.data.product_snapshot) {
+    const { error } = await admin.rpc("apply_bcoin_order", { p_order_id: existing.data.id, p_event_id: event.provider_event_id });
+    if (error) throw new ApiError("invalid_request", "订单状态或支付事件冲突");
+    return;
+  }
 
   const product = existing.data.product as string;
   const sku: Record<string, { type: "subscription" | "credits"; tier?: string; period?: string; credits?: number }> = {
@@ -162,12 +168,17 @@ async function applyPaid(admin: SupabaseClient, event: WebhookEvent): Promise<vo
 async function applyRefunded(admin: SupabaseClient, event: WebhookEvent): Promise<void> {
   const { data, error } = await admin
     .from("orders")
-    .select("id,user_id,status,product")
+    .select("id,user_id,status,product,product_snapshot")
     .eq("provider", "mock")
     .eq("provider_order_id", event.provider_order_id)
     .maybeSingle();
   if (error) throw new ApiError("internal_error", "订单读取失败", true);
-  if (!data || data.status !== "paid") return; // refund of non-paid is idempotent no-op
+  if (data?.product_snapshot) {
+    const result = await admin.rpc("refund_bcoin_order", { p_order_id: data.id, p_event_id: event.provider_event_id });
+    if (result.error) throw new ApiError("invalid_request", "订单无法自动全额退款，请核对已消费余额或后续订阅变动");
+    return;
+  }
+  if (!data || data.status !== "paid") return; // legacy order
 
   if ((data.product as string).startsWith("pro_") || (data.product as string).startsWith("studio_")) {
     const { error: subError } = await admin

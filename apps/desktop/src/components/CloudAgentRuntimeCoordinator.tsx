@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef } from "react";
 import { api } from "../lib/api";
 import { automaticAgentApproval, automaticAgentResultAcceptance, autoApproveAgentRun } from "../lib/cloudAgentApproval";
@@ -53,7 +54,8 @@ export function CloudAgentRuntimeCoordinator() {
         },
       }).catch((error) => {
         useStore.getState().setAgentApprovalMode(run, "request");
-        const reason = error instanceof Error ? error.message : String(error);
+        console.error("cloud Agent automatic approval failed", error);
+        const reason = userErrorMessage(error, "请稍后重试。");
         notify(`自行批准失败（执行计划或接受结果），已切回请求批准，请检查任务状态：${reason}`, "error");
       }).finally(() => approving.current.delete(run.runId));
     }

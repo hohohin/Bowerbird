@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "Isolated U1 compatibility spike for DeepSeek Harness; never a production runtime.",
+  "description": "Audited DeepSeek Harness profile used by the production Worker build and isolated compatibility evaluations.",
   "scripts": {
     "acp:probe": "node scripts/acp-probe.mjs",
     "smoke:network": "node scripts/network-smoke.mjs",

@@ -237,7 +237,9 @@ async function assertStickyTags(name) {
     assert.equal(result.title[1],'0px 8px 8px 0px','pinned heading has square left corners and rounded right corners');
     assert.equal(result.leftBorder,'rgba(0, 0, 0, 0)','pinned heading has no visible left border');
     assert.notEqual(result.title[1],result.nav[1],'heading is distinct from source switch capsule');
-    assert.deepEqual(result.title.filter((_,i)=>i!==1),result.nav.filter((_,i)=>i!==1),'pinned title retains shared floating surface');
+    assert.deepEqual(result.title.filter((_,i)=>i!==1&&i!==3),result.nav.filter((_,i)=>i!==1&&i!==3),'pinned title retains shared floating surface');
+    assert.match(result.title[3],/blur\(5px\)/,'pinned title retains its own backdrop blur');
+    assert.equal(result.nav[3],'none','navigation refraction lives on its separate background plane');
     assert.ok(Math.abs(result.titleTop-result.navTop)<1,'pinned capsule aligns exactly with the switch');
     assert.ok(result.plain,'upcoming sections remain ordinary text');
   }
@@ -479,7 +481,8 @@ try {
   await page.waitForFunction(()=>window.calls.some(c=>c.command==='project_canvas_node_create' && JSON.stringify(c.args).includes('catalog-0')));
   await page.locator('.categorized-library [data-asset-id="catalog-0"]').dispatchEvent('dragend',{dataTransfer:dragData}); await dragData.dispose();
   await page.getByRole('button',{name:'展开画板素材库',exact:true}).click();
-  await tab('全局素材').click(); await card('建筑.png').waitFor();
+  if (await tab('全局素材').getAttribute('aria-selected') !== 'true') await tab('全局素材').click();
+  await view('tags'); await card('建筑.png').waitFor();
   await card('建筑.png').click({button:'right'});
   await page.getByRole('menuitem',{name:'添加到集合',exact:true}).click();
   dialog=page.getByRole('dialog',{name:'添加到集合',exact:true});
@@ -609,7 +612,8 @@ try {
         return result;
       };
     });
-    await tab('全局素材').click(); await view('tags');
+    if (await tab('全局素材').getAttribute('aria-selected') !== 'true') await tab('全局素材').click();
+    await view('tags');
     await card('建筑.png').waitFor();
     assert.equal(await card('project-video.mp4').count(),0,'image type excludes videos, even tagged videos');
     assert.equal(await page.locator('.catalog-video-row,[data-tag-section="__catalog_videos__"]').count(),0);

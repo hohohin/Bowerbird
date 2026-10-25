@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 
@@ -16,16 +17,16 @@ export function DreaminaTaskDiagnostics({ submitId }: { submitId?: string | null
       const report = await api.dreaminaTaskDiagnostics(submitId);
       if (revision.current === version) setResult({ id: submitId, text: JSON.stringify(report, null, 2) });
     } catch (error) {
-      if (revision.current === version) setResult({ id: submitId, text: `诊断查询失败：${String(error)}\n原生成任务状态未改变。` });
+      if (revision.current === version) setResult({ id: submitId, text: `诊断查询失败：${userErrorMessage(error, "暂时无法取得诊断信息，请稍后重试。")}\n原生成任务状态未改变。` });
     } finally { if (revision.current === version) setBusy(false); }
   }
   const text = result && result.id === submitId ? result.text : null;
   return <div className="space-y-2 text-xs" data-dreamina-diagnostics>
     <button type="button" disabled={!submitId || busy} onClick={() => void query()}
       className="rounded bg-panel2 px-2.5 py-1 text-ink disabled:opacity-50">
-      {busy ? "正在查询完整错误…" : "查询完整错误"}
+      {busy ? "正在查询诊断信息…" : "查询诊断信息"}
     </button>
-    <p className="text-muted">{submitId ? "查询原任务的状态、错误码、logid 和本机日志，不重新生成。" : "提交未返回任务编号，无法查询远端任务；请查看上方提交错误。"}</p>
+    <p className="text-muted">{submitId ? "供技术支持排查问题使用；只查询已有任务，不会重新生成。" : "提交未返回任务编号，无法查询远端任务；请查看上方提交错误。"}</p>
     {text && <>
       <button type="button" className="text-accent underline" onClick={() => void navigator.clipboard.writeText(text)
         .then(() => setCopied(true)).catch(() => setCopied(false))}>{copied ? "已复制诊断" : "复制完整诊断"}</button>

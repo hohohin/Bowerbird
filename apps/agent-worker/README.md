@@ -23,8 +23,7 @@
   - 见 [src/fakes/](src/fakes/)、[src/eval/runner.ts](src/eval/runner.ts)。
 - **智能精修 Skill**（M0 可运行目标）：结构化意图 → 参考图职责 → 分维度评分 → 必要时精修一次。
   - [src/skills/smart-refinement/](src/skills/smart-refinement/)。
-- **系列创作导演 Skill**：manifest + 18 个 eval case **冻结**（契约级，eval 执行在 A3）。
-  - [src/skills/series-creative-director/](src/skills/series-creative-director/)。
+- **系列创作导演历史草案**：未接入 Skill 注册与执行，manifest 和 18 个案例已移至 [历史参考](../../reference/archive/series-creative-director/)，不随 Worker 发布。
 - **视觉设定 V0**：caption → `VisualEvidenceCard` 规范化、`source_scope_hash`、确定性 map-reduce 提炼、
   token 预算分批；5 个纯 caption fixture。**不读取/上传图片，只用反推结构化数据。**
   - 见 [src/visual/](src/visual/)、[src/fixtures/visual-captions.ts](src/fixtures/visual-captions.ts)。
@@ -42,7 +41,7 @@
 - **原子结算与恢复**：终态、usage 聚合、hold confirm/rollback 在数据库单事务内完成；过期 `exporting` Run 可重新领取并幂等完成结算。
 - **可信计量与短期内容清理**：DeepSeek 回合使用稳定 call id 先记 submitted、持久化脱敏结果再写 usage，恢复不重复请求；Edge 以版本化 `service_costs` 复核 provider/工具/预算。Agent consumer 每 10 分钟清理过期对象和事件正文，VPS 清理超过 24 小时的 orphan workspace，均可幂等重跑。
 - **运维与安全**：控制面提供不含用户内容的 queue/lease/status/cost/failure/TTL 指标；VPS 定时输出 health + 磁盘，测试账号与生产统计隔离。生产安全冒烟覆盖 JWT/Worker Token/IDOR/RLS/MIME/幂等冲突，过期 parked Run 自动取消，Worker 重启后的未知上游结果不盲重放。
-- **eval**：`node --test` 当前跑 297 个用例，全过；其中 8 场景统一图片回归确认峰值并发 8、8 张均保留为 final；生产双 Worker 并发 claim 专项确认同一 Run 只有一个租约、`attempt_count=1`。
+- **eval**：2026-09-17 记录的 `node --test` 297 个用例全过（历史基线，当前数量以测试输出为准）；其中 8 场景统一图片回归确认峰值并发 8、8 张均保留为 final；生产双 Worker 并发 claim 专项确认同一 Run 只有一个租约、`attempt_count=1`。
 
 ## 当前范围边界
 
@@ -58,7 +57,7 @@
 
 ## 如何运行
 
-零运行时依赖；Node v24 内置 TypeScript 类型剥离，tsc 取自根 workspace。
+Worker 基础代码使用 Node v24 内置 TypeScript 类型剥离，tsc 取自根 workspace。完整生产镜像还依赖已锁定的 DSH/ACP Profile 包及系统 ffmpeg/ffprobe；`spikes/` 下的该 Profile 是正式构建输入，不能当作废弃实验目录删除。
 
 ```bash
 # 类型校验
@@ -86,7 +85,7 @@ pnpm --dir apps/agent-worker worker:agent
 或：`pnpm --filter @bowerbird/agent-worker typecheck` / `test`（需先 `pnpm install` 把包装入 workspace；
 当前为零依赖，未跑 install 也能用上面的直连命令）。
 
-### U2/U4 DSH 只读部署（controlled-image test-only 已上线）
+### DSH 只读部署（新建 unified test-only；controlled 仅历史恢复）
 
 候选镜像不会自行替换现役 Worker。它从已审计的 U1/U2 Profile named build context 安装钉版 DSH/ACP，并把依赖模板留在只读镜像层；每次 DSH 启动只在 32 MiB tmpfs 创建独立临时 `DSH_HOME`，用于承接 rc.2 对 `cordis.yml` 和 fallback 软链接的必要写入。生产 `compose.generation.yml` 已复用同一候选 Dockerfile、同一 Profile build context 与 `/dsh-runtime` tmpfs，避免部署时退回不含 DSH 资产的旧镜像；镜像内 unified/controlled 两项 DSH flag 均默认 `false`，仍需按部署环境显式开启。本地仓库默认从 `../../spikes/unified-agent-harness-u1/profiles/bowerbird-u1` 构建；VPS 的扁平部署目录必须在 Compose 插值环境中设置 `BOWERBIRD_DSH_BUILD_CONTEXT=/opt/bowerbird/dsh-profile`，并把同一已审计 Profile 部署到该绝对路径。
 
@@ -131,7 +130,6 @@ src/
   local/          开发态 checkpoint step runner + stdin/stdout CLI
   skills/
     smart-refinement/        M0 可运行 Skill（manifest.ts + skill.json）
-    series-creative-director/ 首个 Skill 冻结（skill.json + eval-cases.json，eval 在 A3）
   visual/          evidence/scope/extract/batch（纯函数，不读图）
   fixtures/        visual-captions.ts（5 场景）+ DeepSeek 脱敏 spike 结果
   spikes/          真实 DeepSeek 两回合 tool-calling 验证（只输出安全摘要）

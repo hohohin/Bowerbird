@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0-m0",
   "type": "module",
-  "description": "Bowerbird Agent Runtime — controlled-image-edit 动态规划、可恢复 RunEngine、VPS consumer 与 durable tool ledger；真实图片 provider / 桌面 UI 仍按阶段接入。",
+  "description": "Bowerbird Agent Runtime — controlled-image-edit 动态规划、可恢复 RunEngine、VPS consumer 与 durable tool ledger；新建 unified DSH 与历史任务恢复。",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --test \"src/**/*.test.ts\"",

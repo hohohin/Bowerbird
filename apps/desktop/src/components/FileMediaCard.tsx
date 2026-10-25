@@ -1,16 +1,17 @@
-import { useEffect, useRef, useState, type DragEventHandler } from "react";
+import { useEffect, useRef, useState, type DragEventHandler, type CSSProperties } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Folder, Image, Play, Sparkles } from "lucide-react";
 import { externalFiles, type LocalFileEntry } from "../lib/externalFiles";
 import { createFilePreviewQueue } from "../lib/filePreviewQueue";
 import { isVideoPath } from "../lib/videoGeneration";
 const previews = createFilePreviewQueue(externalFiles.preview);
-export function FileMediaCard({ entry, selected, revision, labels, onSelect, onActivate, onOpen, onContextMenu, aspectRatio, assetId, generated = false, onDragStart, onDragEnd }: {
+export function FileMediaCard({ entry, selected, revision, labels, onSelect, onActivate, onOpen, onContextMenu, aspectRatio, assetId, generated = false, onDragStart, onDragEnd, style }: {
   entry: LocalFileEntry; selected: boolean; revision: number; labels: string[];
   onSelect: (additive: boolean, range: boolean) => void; onOpen: () => void;
   onActivate?: () => void;
   onContextMenu: (x: number, y: number) => void;
   aspectRatio?: number;
+  style?: CSSProperties;
   generated?: boolean;
   assetId?: string; onDragStart?: DragEventHandler<HTMLButtonElement>; onDragEnd?: DragEventHandler<HTMLButtonElement>;
 }) {
@@ -42,7 +43,7 @@ export function FileMediaCard({ entry, selected, revision, labels, onSelect, onA
     if (ref.current) { visible.observe(ref.current); observer.observe(ref.current); }
     return () => { alive = false; request?.cancel(); visible.disconnect(); observer.disconnect(); };
   }, [entry.path, entry.directory, entry.preview, previewKey, failedPreview]);
-  return <button ref={ref} type="button" className={`folder-media-card${selected ? " is-selected" : ""}`} aria-pressed={selected}
+  return <button ref={ref} type="button" style={style} data-positioned={style ? "true" : undefined} className={`folder-media-card${selected ? " is-selected" : ""}`} aria-pressed={selected}
     data-asset-id={assetId} draggable={!!onDragStart} onDragStart={event => { cancelClick(); onDragStart?.(event); }} onDragEnd={onDragEnd}
     aria-label={entry.directory ? `文件夹 ${entry.name}` : entry.name} title={[entry.path, labels.map(name => `#${name}`).join(" · ")].filter(Boolean).join("\n")}
     onClick={e => {

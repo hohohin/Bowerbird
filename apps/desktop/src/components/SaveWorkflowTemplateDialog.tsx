@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useMemo, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
 import { api } from "../lib/api";
@@ -68,7 +69,7 @@ export function SaveWorkflowTemplateDialog({ nodes, selectedIds, graphNodes, bou
       })();
     }}>{busy ? (exporting ? "正在导出…" : "正在保存…") : exporting ? "导出数据包" : mode === "template" ? "保存" : "封装"}</button></>}>
     <div className="workflow-template-library workflow-template-save">
-      {(error || mode !== "container" && selection.error) && <p role="alert" className="workflow-error">{error || selection.error}</p>}
+      {(error || mode !== "container" && selection.error) && <p role="alert" className="workflow-error">{userErrorMessage(error || selection.error, "工作流模板未保存，请检查所选卡片后重试。")}</p>}
       <label>{exporting ? "工作流名称" : mode === "template" ? "模板名称" : "容器名称"}<input data-modal-autofocus aria-label={exporting ? "工作流名称" : mode === "template" ? "模板名称" : "容器名称"} maxLength={120} value={name} disabled={busy} onChange={event => setName(event.target.value)} /></label>
       <WorkflowTemplatePreview cards={preview.cards} links={preview.links} enclosed={enclosed} disabled={busy} onToggle={id => setEnclosed(old => { const next = new Set(old); if (next.has(id)) next.delete(id); else next.add(id); return next; })} />
       {mode !== "container" && <div className="workflow-template-save-options">

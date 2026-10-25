@@ -23,6 +23,7 @@ w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
   await new Promise(resolve => setTimeout(resolve, 30));
   active--;
   if (args.sourcePath === "/never-load-4.mp4") throw new Error("unsupported codec");
+  if (args.sourcePath === "/never-load-broken-repair.mp4") return "/missing-repaired.jpg";
   return args.sourcePath === "/never-load-2.mp4" ? null : poster;
 };
 const assets = Array.from({ length: 12 }, (_, i) => ({ id: `clip-${i}`, name: `视频 ${i}`, ext: "mp4", width: 160, height: 90,
@@ -76,6 +77,20 @@ w.runMediaPreviewSmoke = async () => {
     await tick();
     check(document.querySelector("img")?.getAttribute("src") !== poster, "old cover leaked into a different video");
     check(!document.querySelector("video"), "failed extraction created a player");
+    // Existing DB/snapshot paths can outlive their files. The actual image load
+    // must trigger a single repair, including under the app's StrictMode.
+    flushSync(() => root.render(<React.StrictMode><VideoPoster path="/never-load-lost.mp4" poster="/missing-cached.jpg" alt="repair" /></React.StrictMode>));
+    await until(() => document.querySelector("img")?.getAttribute("src") === poster);
+    check(calls.filter(path => path === "/never-load-lost.mp4").length === 1, "missing cached image did not rebuild exactly once");
+    flushSync(() => root.render(<VideoPoster path="/never-load-broken-repair.mp4" poster="/missing-original.jpg" alt="repair failed" />));
+    await until(() => calls.includes("/never-load-broken-repair.mp4") && active === 0);
+    await until(() => document.querySelector("img")?.getAttribute("src")?.startsWith("data:image/svg+xml,") === true);
+    await tick();
+    check((document.querySelector("img")?.naturalWidth ?? 0) > 0, "failed repair left a transparent broken image");
+    check(calls.filter(path => path === "/never-load-broken-repair.mp4").length === 1, "failed repair looped");
+    flushSync(() => root.render(<VideoPoster path="/never-load-next.mp4" poster={poster} alt="next" />));
+    await until(() => document.querySelector("img")?.getAttribute("src") === poster);
+    check(!calls.includes("/never-load-next.mp4"), "previous failure leaked into next video");
     flushSync(() => root.render(null));
     check(!performance.getEntriesByType("resource").some(entry => /never-load-.*\.mp4/.test(entry.name)), "passive previews fetched video bytes");
     // Only the deliberately opened playback UI loads the original video, without autoplay.

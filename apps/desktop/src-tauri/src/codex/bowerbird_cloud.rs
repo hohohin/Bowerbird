@@ -252,7 +252,8 @@ impl GenProvider for BowerbirdCloudProvider {
         for path in &req.reference_images {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
             if crate::media::probe::is_video(&ext) {
-                videos.push(serde_json::json!({ "object_key": "", "bytes": std::fs::metadata(path)?.len(), "mime": if ext == "mov" { "video/quicktime" } else { "video/mp4" } }));
+                let duration = crate::media::probe::probe(path)?.duration;
+                videos.push(serde_json::json!({ "object_key": "", "bytes": std::fs::metadata(path)?.len(), "duration": duration, "mime": if ext == "mov" { "video/quicktime" } else { "video/mp4" } }));
                 video_paths.push(path);
             } else { images.push(read_cloud_jpeg(path, true).await?); }
         }

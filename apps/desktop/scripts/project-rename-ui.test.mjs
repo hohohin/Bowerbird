@@ -69,7 +69,6 @@ try {
   assert.equal(await page.locator(".canvas-board-title").inputValue(), "重试名称");
   await page.locator(".project-name").click({ button: "right" });
   assert.equal(await page.getByRole("menuitem", { name: "更新项目文件" }).count(), 0);
-  await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole("menuitem", { name: "删除项目 · 素材保留" }).click();
   const checkbox = page.getByRole("checkbox");
   await checkbox.waitFor();

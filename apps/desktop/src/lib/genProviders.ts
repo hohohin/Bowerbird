@@ -7,8 +7,8 @@ export interface GenProviderOption {
 
 /** 本地 BYO 引擎（CLI 子进程，随客户端发布，不参与云端动态档位）。 */
 export const BYO_PROVIDERS: readonly GenProviderOption[] = [
-  { key: "codex", label: "codex" },
-  { key: "jimeng", label: "即梦" },
+  { key: "codex", label: "gpt-image-2" },
+  { key: "jimeng", label: "Seedream 5.0 Pro" },
 ];
 
 /**
@@ -16,17 +16,18 @@ export const BYO_PROVIDERS: readonly GenProviderOption[] = [
  * generation_services 时（离线/旧 Edge）用它渲染，保证下拉永远可用。
  */
 export const DEFAULT_CLOUD_PROVIDERS: readonly GenProviderOption[] = [
-  { key: "bowerbird-cloud-image_hd", label: "Bowerbird Cloud Pro" },
-  { key: "bowerbird-cloud-image_fast", label: "Bowerbird Cloud Fast" },
-  { key: "bowerbird-cloud-image_lite", label: "Bowerbird Cloud Lite" },
+  { key: "bowerbird-cloud-image_hd", label: "Seedream 5.0 Pro" },
+  { key: "bowerbird-cloud-image_lite", label: "Seedream 5.0 Lite" },
 ];
 
 /** 遗留 provider key → 展示标签（动态档位之前的持久化 job/turn 会带这些 key）。 */
 const LEGACY_CLOUD_LABELS: Record<string, string> = {
-  "bowerbird-cloud": "Bowerbird Cloud Pro",
-  "bowerbird-cloud-fast": "Bowerbird Cloud Fast",
-  "bowerbird-cloud-lite": "Bowerbird Cloud Lite",
-  "bowerbird-cloud-standard": "Bowerbird Cloud Lite",
+  "bowerbird-cloud-image_hd": "Seedream 5.0 Pro",
+  "bowerbird-cloud-image_fast": "Seedream 5.0 Pro · 快速",
+  "bowerbird-cloud-image_lite": "Seedream 5.0 Lite",
+  "bowerbird-cloud-image_sd": "Seedream 5.0 Lite",
+  "bowerbird-cloud-image_gpt25_sunburst": "gpt-image-2.5-sunburst",
+  "bowerbird-cloud-image_gpt25_flare": "gpt-image-2.5-flare",
 };
 
 /** 是否 Cloud 生图档位（key 前缀约定，含全部遗留与动态 key）。 */
@@ -50,12 +51,15 @@ export function cloudGenProviders(
 ): GenProviderOption[] {
   const services = entitlement?.generation_services;
   if (!services?.length) return [...DEFAULT_CLOUD_PROVIDERS];
-  return services.map((s) => ({ key: `bowerbird-cloud-${s.service}`, label: s.label }));
+  return services.filter(s => s.service !== "image_fast").map((s) => {
+    const key = `bowerbird-cloud-${s.service}`;
+    return { key, label: LEGACY_CLOUD_LABELS[key] ?? s.label };
+  });
 }
 
 /** 完整下拉列表：本地 BYO 在前，云端档位在后。 */
-export function genProviders(entitlement: EntitlementSnapshot | null): GenProviderOption[] {
-  return [...BYO_PROVIDERS, ...cloudGenProviders(entitlement)];
+export function genProviders(entitlement: EntitlementSnapshot | null, dreaminaVersion = "5.0Pro"): GenProviderOption[] {
+  return [...BYO_PROVIDERS.map(p => p.key === "jimeng" ? { ...p, label: dreaminaModelLabel(dreaminaVersion) } : p), ...cloudGenProviders(entitlement)];
 }
 
 /** 是否已知 provider key（BYO 枚举或任意 cloud 档位 key——云端上新档位后无需改这里）。 */
@@ -70,9 +74,22 @@ export function cloudProviderLabel(
   entitlement: EntitlementSnapshot | null = null,
 ): string | null {
   if (!isCloudProvider(provider)) return null;
-  const entry = cloudGenProviders(entitlement).find((p) => p.key === provider);
+  const key = canonicalProviderKey(provider!);
+  if (LEGACY_CLOUD_LABELS[key]) return LEGACY_CLOUD_LABELS[key];
+  const entry = cloudGenProviders(entitlement).find((p) => p.key === key);
   if (entry) return entry.label;
-  return LEGACY_CLOUD_LABELS[provider!] ?? "Bowerbird Cloud";
+  return "Bowerbird Cloud";
+}
+
+export function dreaminaModelLabel(version = "5.0Pro"): string {
+  return `Seedream ${version.replace(/(pro|lite)$/i, suffix => ` ${suffix.toLowerCase() === "pro" ? "Pro" : "Lite"}`)}`;
+}
+
+/** Display names only; routing keys and stored history remain unchanged. */
+export function imageProviderLabel(provider: string | null | undefined, entitlement: EntitlementSnapshot | null = null, dreaminaVersion: string | null = "5.0Pro"): string {
+  if (provider === "codex" || provider === "codex-cli") return "gpt-image-2";
+  if (provider === "jimeng" || provider === "dreamina") return dreaminaVersion ? dreaminaModelLabel(dreaminaVersion) : "Seedream · 即梦";
+  return cloudProviderLabel(provider, entitlement) ?? provider ?? "模型未记录";
 }
 
 /**

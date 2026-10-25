@@ -62,11 +62,18 @@ try {
   assert.equal(await node("clip").evaluate(e => e.classList.contains("is-video")), true, "video asset node gets the is-video class");
   assert.equal(await node("clip").locator("video").count(), 0);
   assert.match(await node("clip").locator(":scope > img").getAttribute("src"), /^data:image/);
-  assert.equal(await node("clip").locator(".canvas-video-film").count(), 1);
-  assert.equal(await page.locator(".canvas-video-badge").count(), 0, "film edges replace the play badge");
+  assert.equal(await node("clip").locator(".canvas-video-film").count(), 0);
+  assert.equal(await node("clip").locator(".canvas-video-badge").count(), 1, "a small play marker identifies video without film edges");
+  const videoName = page.locator('[data-card-name="clip"] input');
+  await page.waitForFunction(() => document.querySelector('[data-card-name="clip"] input')?.value.startsWith('视频卡片 '));
+  await videoName.fill('我的短片'); await videoName.press('Enter');
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p'))?.document.cardNames.clip === '我的短片');
   await mkdir(".tmp/canvas-video-film", { recursive: true });
   for (const theme of ["light", "dark"]) {
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    await page.mouse.move(5, 5);
+    const appearance = locator => locator.evaluate(el => { const style = getComputedStyle(el); return [style.borderRadius, style.borderWidth, style.backgroundColor, style.boxShadow]; });
+    assert.deepEqual(await appearance(node('clip')), await appearance(node('wide')), `${theme}: video and image share the card frame`);
     await node("clip").screenshot({ path: `.tmp/canvas-video-film/asset-${theme}.png` });
   }
   // Explicitly opening the card still loads the original video with playback controls.
@@ -100,6 +107,7 @@ try {
   assert.match(await node("agent").innerText(), /设计一张海报/);
   await page.evaluate(() => window.save());
   await page.reload();
+  await page.waitForFunction(() => document.querySelector('[data-card-name="clip"] input')?.value === '我的短片');
   await node("prompt").locator('[data-asset-id="a"] img').waitFor();
   await page.locator('.canvas-workspace').evaluate(async element => {
     await Promise.all(element.getAnimations().map(animation => animation.finished.catch(() => {})));

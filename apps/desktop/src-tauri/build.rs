@@ -83,6 +83,18 @@ fn main() {
         println!("cargo:rustc-link-lib=static=clang_rt.osx");
     }
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rerun-if-changed=windows/video-thumbnail.cpp");
+        cc::Build::new().cpp(true).file("windows/video-thumbnail.cpp")
+            .flag("/std:c++17").compile("bowerbird_video_thumbnail");
+        for library in ["mfplat", "mfreadwrite", "mfuuid", "ole32"] {
+            println!("cargo:rustc-link-lib={library}");
+        }
+        // Windows N may lack Media Foundation. Load it only in the disposable
+        // worker so the main app still starts and FFmpeg can remain the fallback.
+        println!("cargo:rustc-link-lib=delayimp");
+        for library in ["mfplat.dll", "mfreadwrite.dll"] {
+            println!("cargo:rustc-link-arg=/DELAYLOAD:{library}");
+        }
         let output = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
         let compiler = cc::Build::new().cpp(true).get_compiler();
         for (source, name, dll) in [

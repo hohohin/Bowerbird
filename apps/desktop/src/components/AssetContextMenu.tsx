@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
 import { CANVAS_ARTBOARD_FROM_IMAGE } from "../lib/canvasArtboard";
@@ -383,9 +384,9 @@ export function AssetContextMenu() {
   const describeMenu = <ContextSubmenu label={multiIds ? "批量反推" : "反推提示词"} menuLabel="选择反推引擎" icon={<ScanSearch size={13} />}
     disabled={busy || (!multiIds && describing)} title={describing && !multiIds ? "这张图片正在反推或已排队" : undefined}>
     {describeEngines.map(engine => <button key={engine.key} type="button" role="menuitem" className={itemClass}
-      disabled={busy || engine.reason !== null} title={engine.reason ?? `用 ${engine.label} 反推`} onClick={() => runDescribeWith(engine.key)}>
+      disabled={busy || engine.reason !== null} title={engine.reason ? userErrorMessage(engine.reason, "此方式暂不可用，请在设置中重新登录。") : `用 ${engine.label} 反推`} onClick={() => runDescribeWith(engine.key)}>
       <span className={`app-status-dot ${engine.reason === null ? "is-ready" : ""}`} aria-hidden="true" />
-      <span>{engine.label}{engine.reason && <small className="context-menu-reason">{engine.reason}</small>}</span>
+      <span>{engine.label}{engine.reason && <small className="context-menu-reason">{userErrorMessage(engine.reason, "此方式暂不可用，请在设置中重新登录。")}</small>}</span>
     </button>)}
   </ContextSubmenu>;
   const canvasActions = menu.canvasSelection && <>

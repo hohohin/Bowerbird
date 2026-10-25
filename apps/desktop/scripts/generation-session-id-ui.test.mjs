@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ configFile: false, root: process.cwd(),
+const server = await createServer({ configFile: false, root: process.cwd(), cacheDir: '.tmp/generation-session-errors-vite',
   server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -32,6 +32,8 @@ try {
     window.store.setState({ genJobs: { [job.id]: job }, genJobOrder: [job.id], activeJobId: job.id,
       activeSessionKind: 'generation', genPanelOpen: true, boardOpen: false, genEditing: null });
   });
+  await surface.getByText('本次生成未完成，请稍后重试。', { exact: true }).waitFor();
+  assert.doesNotMatch(await surface.innerText(), /synthetic startup failure/);
   await open();
   await copy.click();
   assert.deepEqual(await page.evaluate(() => window.copied), ['failed-before-provider-session']);
@@ -48,6 +50,29 @@ try {
   assert.equal(diagnostic.jobId, 'failed-before-provider-session');
   assert.equal(diagnostic.attempts[0].phase, 'preflight');
   assert.equal(diagnostic.memorySnapshot.turns[0].error, 'synthetic startup failure');
+
+  // Persist raw diagnostics, but never expose paths, stack traces or CLI output by default.
+  await page.evaluate(() => {
+    const state = window.store.getState(), job = state.genJobs[state.activeJobId];
+    const raw = '读取任务失败：TypeError: provider_token_missing at C:\\private\\worker.ts:42';
+    window.rawGenerationFailure = raw;
+    window.store.setState({ genJobs: { [job.id]: { ...job, turns: [{ ...job.turns[0], error: raw }] } } });
+  });
+  await surface.getByText('本次生成未完成，请稍后重试。', { exact: true }).waitFor();
+  assert.doesNotMatch(await surface.innerText(), /TypeError|provider_token_missing|private/);
+  assert.equal(await page.evaluate(() => window.store.getState().genJobs[window.store.getState().activeJobId].turns[0].error), await page.evaluate(() => window.rawGenerationFailure));
+  await page.evaluate(() => {
+    const state = window.store.getState(), job = state.genJobs[state.activeJobId];
+    window.store.setState({ genJobs: { [job.id]: { ...job, running: true, streaming: window.rawGenerationFailure,
+      turns: [{ ...job.turns[0], error: undefined }] } } });
+  });
+  await surface.getByText('生成仍在进行，请稍候。详细运行记录可从会话菜单复制。', { exact: true }).waitFor();
+  assert.doesNotMatch(await surface.innerText(), /TypeError|provider_token_missing|private/);
+  await page.evaluate(() => {
+    const state = window.store.getState(), job = state.genJobs[state.activeJobId];
+    window.store.setState({ genJobs: { [job.id]: { ...job, running: false, streaming: '',
+      turns: [{ ...job.turns[0], error: window.rawGenerationFailure }] } } });
+  });
 
   // Error text, prompts and existing action buttons keep their own native/menu behavior.
   for (const target of [surface.locator('pre'), surface.getByRole('button', { name: '展开全文' }), surface.locator('button').first()]) {
@@ -74,7 +99,7 @@ try {
   await menu.waitFor({ state: 'detached' });
   assert.equal(await surface.evaluate(el => el === document.activeElement), true);
   await open();
-  await surface.click({ position: { x: 3, y: 3 } });
+  await surface.click({ position: { x: 3, y: 200 } });
   await menu.waitFor({ state: 'detached' });
 
   await surface.evaluate(el => el.dispatchEvent(new MouseEvent('contextmenu',

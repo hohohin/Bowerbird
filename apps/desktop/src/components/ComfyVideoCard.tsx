@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -97,7 +98,7 @@ export function ComfyVideoCard({ node, disabled, assets, inputImages, onChange }
     <div className={`comfy-environment${ready ? " is-ready" : ""}`} aria-label="本机运行环境">
       <div className="comfy-environment-heading"><strong>{checking ? "正在检查本机环境…" : ready ? "本机环境已就绪" : installing ? "正在准备本机环境" : "需要准备本机环境"}</strong>
         <button type="button" disabled={checking || acting || installing} onClick={() => setRefresh(value => value + 1)}>重新检测</button></div>
-      <p role="status">{connectionError || (checking ? "自动查找 ComfyUI，并检查所需模型与节点" : environment?.message)}</p>
+      <p role="status">{connectionError ? userErrorMessage(connectionError, "暂时无法检查本机环境，请稍后重新检测。") : (checking ? "自动查找 ComfyUI，并检查所需模型与节点" : environment?.message)}</p>
       {environment && !ready && !checking && <>
         {installing ? <>
           <progress aria-label="环境下载进度" max={environment.totalBytes || 1} value={environment.completedBytes} />

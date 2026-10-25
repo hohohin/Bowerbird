@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { ArrowDown, ArrowUp, Eye, EyeOff, Layers, Loader2, Undo2 } from "lucide-react";
@@ -479,7 +480,7 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
             <button className="ml-auto" aria-label="撤销" title="撤销（Ctrl+Z）" disabled={locked || !history.length} onClick={undo}><Undo2 size={16} /></button></div>
           {!doc && <><label>拆分要求（可选）<textarea aria-label="拆分要求" disabled={locked} value={prompt} onChange={event => setPrompt(event.target.value)} placeholder="留空自动拆分；也可填写：拆出标题、人物和右下角图标" rows={4} /></label>
             <label>输出尺寸<select aria-label="输出尺寸" disabled={locked} value={size} onChange={event => setSize(event.target.value as typeof size)}>{["auto", "1K", "1.5K", "2K"].map(value => <option key={value} value={value}>{value === "auto" ? "自动匹配" : value}</option>)}</select></label>
-            <p className="text-xs text-muted">使用 Seedream 5.0 Pro，通过 Bowerbird Cloud 拆分；费用由云端独立服务档位决定。本地调整不消耗积分。</p>
+            <p className="text-xs text-muted">Seedream 5.0 Pro 拆分最多预留 {decompositionPrice?.credits ?? "—"} Bcoin。按实际输出图片（含底图）结算：每张 ≤261 万像素 5 Bcoin，超过为 10 Bcoin；未用额度退回。本地调整不收费。</p>
             <button className="app-button-primary" disabled={locked || !ready || !source || !decompositionPrice?.available} onClick={() => void start("decompose")}>{decompositionPrice?.available ? "开始拆分" : "拆分服务待开放"}</button></>}
           {doc && <><div className="layer-list" aria-label="图层列表">{[...doc.layers].reverse().map(layer => <div key={layer.id} className={`layer-row ${selectedId === layer.id ? "is-selected" : ""}`}>
             <button aria-label={`${layer.visible ? "隐藏" : "显示"}${layer.name}`} disabled={locked} onClick={() => update(patchLayer(doc, layer.id, { visible: !layer.visible }))}>{layer.visible ? <Eye size={15} /> : <EyeOff size={15} />}</button>
@@ -492,14 +493,14 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
             {!selected.background && <><div className="layer-fields">{(["x", "y", "width", "height"] as const).map((key, index) => <label key={key}>{["X", "Y", "宽", "高"][index]}<input type="number" aria-label={["图层 X", "图层 Y", "图层宽度", "图层高度"][index]} disabled={locked} value={Math.round(selected[key])} min={index > 1 ? 1 : -100000} max={100000} onChange={event => { const value = event.target.valueAsNumber; if (Number.isFinite(value) && (index < 2 || value > 0) && Math.abs(value) <= 100000) patch({ [key]: value }); }} /></label>)}</div>
               <div className="flex gap-2"><button className="app-button" disabled={locked || doc.layers[doc.layers.length - 1]?.id === selectedId} onClick={() => update(moveLayer(doc, selectedId, 1))}><ArrowUp size={14} />上移一层</button><button className="app-button" disabled={locked || doc.layers[1]?.id === selectedId} onClick={() => update(moveLayer(doc, selectedId, -1))}><ArrowDown size={14} />下移一层</button></div></>}
             <label>不透明度 {Math.round(selected.opacity * 100)}%<input type="range" aria-label="不透明度" disabled={locked} min="0" max="100" value={Math.round(selected.opacity * 100)} onChange={event => patch({ opacity: Number(event.target.value) / 100 })} /></label>
-            {!selected.background && <><label>AI 修改此图层<textarea aria-label="图层修改要求" disabled={locked} value={editPrompt} onChange={event => setEditPrompt(event.target.value)} rows={2} placeholder="例如：把红色花朵改成蓝色，保持形状" /></label><button className="app-button" disabled={locked || !ready || !editPrompt.trim() || !editPrice?.available} onClick={() => void start("edit")}>{editPrice?.available ? "修改选中图层" : "图层修改服务待开放"}</button><p className="text-xs text-muted">仅发送选中透明图层；保留位置与尺寸，云端单独计费。</p></>}
+            {!selected.background && <><label>AI 修改此图层<textarea aria-label="图层修改要求" disabled={locked} value={editPrompt} onChange={event => setEditPrompt(event.target.value)} rows={2} placeholder="例如：把红色花朵改成蓝色，保持形状" /></label><button className="app-button" disabled={locked || !ready || !editPrompt.trim() || !editPrice?.available} onClick={() => void start("edit")}>{editPrice?.available ? "修改选中图层" : "图层修改服务待开放"}</button><p className="text-xs text-muted">仅发送选中透明图层；1K / 1.5K 每次 10 Bcoin，2K（含自动）每次 20 Bcoin。保留画布位置与尺寸。</p></>}
           </>}</>}
           {!ready && <p className="text-xs text-muted">登录 Bowerbird 后可使用云端拆分与 AI 修改。</p>}
           {status && <p role="status" className="text-xs text-muted">{status}</p>}
           {busy && (workspace.pending || workspace.textPending) && <button className="app-button" onClick={() => { stop.current = true; setStatus("正在停止等待，原任务继续保留"); }}>停止等待</button>}
           {!busy && workspace.textPending && <button className="app-button" disabled={!ready} onClick={() => void recognizeText(workspace.textPending!, workspace)}>继续取回文字识别</button>}
           {!busy && workspace.pending && <button className="app-button" disabled={!ready} onClick={() => void run(workspace.pending!, workspace, true)}>继续取回原任务</button>}
-          {error && <p role="alert" className="text-xs text-red-400 break-words">{error}</p>}
+          {error && <p role="alert" className="text-xs text-red-400 break-words">{userErrorMessage(error, "图层操作未完成，请稍后重试。")}</p>}
         </aside>
       </div>
     </ModalShell>

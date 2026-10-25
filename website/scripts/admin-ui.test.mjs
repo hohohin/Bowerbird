@@ -13,6 +13,11 @@ try {
   const page = await context.newPage();
   const errors = []; page.on("pageerror", (e) => errors.push(e.message));
   let denied = false, failIssue = false, issues = 0, exports = 0;
+  let failUserUpdate = false, userUpdates = 0;
+  let holdUserList = false, releaseUserList;
+  const users = Array.from({ length: 52 }, (_, i) => ({ id: `33333333-3333-4333-8333-${String(i + 1).padStart(12, "0")}`,
+    email: i === 0 ? '<img src=x onerror=alert(1)>@example.test' : `user${i}@example.test`, is_test_account: i === 1, is_admin: i === 0,
+    created_at: "2026-10-22T00:00:00Z", last_sign_in_at: i ? null : "2026-10-22T01:00:00Z" }));
   let batches = [{ id: "11111111-1111-4111-8111-111111111111", label: "九月内测 · 创作者邀请", code_count: 4 }];
   let rows = ["unused", "redeemed", "disabled", "expired"].map((status, i) => ({
     id: `22222222-2222-4222-8222-${String(i + 1).padStart(12, "0")}`, batch_id: batches[0].id, batch_label: batches[0].label,
@@ -41,6 +46,18 @@ try {
     const body = route.request().postDataJSON();
     assert.equal(route.request().headers().authorization, "Bearer synthetic-token");
     if (denied) return route.fulfill({ status: 403, json: { error: { message: "此账号没有兑换码管理权限" } } });
+    if (body.action === "list_users") {
+      if (holdUserList) await new Promise((resolve) => { releaseUserList = resolve; });
+      const filtered = users.filter((u) => (!body.search || `${u.email} ${u.id}`.includes(body.search))
+        && (!body.filter || u.is_test_account === (body.filter === "test")));
+      return route.fulfill({ json: { rows: filtered.slice(body.page * 50, body.page * 50 + 50), total: filtered.length, page: body.page } });
+    }
+    if (body.action === "set_test_account") {
+      assert.equal(typeof body.enabled, "boolean");
+      users.find((u) => u.id === body.user_id).is_test_account = body.enabled; userUpdates++;
+      if (failUserUpdate) { failUserUpdate = false; return route.abort("failed"); }
+      return route.fulfill({ json: { status: "updated", user_id: body.user_id, is_test_account: body.enabled } });
+    }
     if (body.action === "list") {
       const filtered = rows.filter((r) => (!body.status || r.status === body.status) && (!body.batch_id || r.batch_id === body.batch_id)
         && (!body.search || `${r.batch_label} ${r.code_suffix} ${r.redeemed_email}`.includes(body.search)));
@@ -115,6 +132,43 @@ try {
   await page.locator("#codes-dialog[open]").waitFor();
   assert.equal(await page.locator("#codes-output").inputValue(), plain, "export excludes disabled codes");
   await page.getByRole("button", { name: "关闭", exact: true }).click();
+  await page.getByRole("button", { name: "用户管理", exact: true }).click();
+  await page.locator("#user-rows tr").first().waitFor();
+  assert.equal(await page.locator("#user-rows tr").count(), 50);
+  assert.equal(await page.locator("#user-rows img").count(), 0);
+  await page.locator("#users-next").click();
+  await page.waitForFunction(() => document.querySelectorAll("#user-rows tr").length === 2);
+  await page.locator("#users-filter").selectOption("test");
+  await page.waitForFunction(() => document.querySelectorAll("#user-rows tr").length === 1);
+  await page.getByRole("button", { name: "取消测试资格", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await page.locator("#test-account-dialog").waitFor({ state: "hidden" });
+  assert.equal(userUpdates, 0);
+  await page.getByRole("button", { name: "取消测试资格", exact: true }).click();
+  await page.locator("#confirm-test-account").click();
+  await page.locator("#users-empty").waitFor({ state: "visible" });
+  assert.equal(userUpdates, 1);
+  await page.locator("#users-filter").selectOption("");
+  await page.locator("#users-search").fill("user1@example.test");
+  await page.locator("#users-filter-form").getByRole("button", { name: "查询" }).click();
+  await page.waitForFunction(() => document.querySelectorAll("#user-rows tr").length === 1);
+  failUserUpdate = true;
+  await page.getByRole("button", { name: "设为测试账号", exact: true }).click();
+  await page.locator("#confirm-test-account").click();
+  await page.locator("#notice.error").waitFor();
+  assert.equal(userUpdates, 2);
+  await page.locator("#users-refresh").click();
+  await page.getByRole("button", { name: "取消测试资格", exact: true }).waitFor();
+  assert.equal(users[1].is_test_account, true, "refresh after lost response reads actual state without toggling again");
+  await page.locator("#users-search").fill("");
+  await page.locator("#users-filter-form").getByRole("button", { name: "查询" }).click();
+  await page.waitForFunction(() => document.querySelectorAll("#user-rows tr").length === 50);
+  await page.screenshot({ path: ".tmp/pro-code-admin/users.png" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  assert.equal(await page.getByRole("button", { name: "用户管理", exact: true }).isVisible(), true);
+  await page.screenshot({ path: ".tmp/pro-code-admin/users-mobile.png" });
+  await page.setViewportSize({ width: 1512, height: 1040 });
   await page.getByRole("button", { name: "Kernel 技能" }).click();
   await page.locator("#skills-console").waitFor({ state: "visible" });
   assert.equal(await page.locator("#console").isHidden(), true);
@@ -136,12 +190,29 @@ try {
   await page.locator("#login-status").filter({ hasText: "没有兑换码管理权限" }).waitFor();
   assert.equal(await page.locator("#console").isHidden(), true);
   assert.equal(await page.locator("#code-rows tr").count(), 0);
+  assert.equal(await page.locator("#user-rows tr").count(), 0);
+  await page.getByRole("button", { name: "用户管理", exact: true }).click();
+  assert.equal(await page.locator("#users-console").isHidden(), true, "navigation must not reauthorize a rejected session");
   await page.locator("#logout").click();
   await page.locator("#login-form").waitFor();
   assert.equal(await page.locator("#codes-output").inputValue(), "");
   await page.locator("#login-email").fill("admin@example.test");
   await page.locator("#login-submit").click();
   await page.locator("#login-status").filter({ hasText: "已发送" }).waitFor();
+  denied = false;
+  await page.reload();
+  await page.locator("#code-rows tr").first().waitFor();
+  holdUserList = true;
+  const listRequest = page.waitForRequest((request) => request.postData()?.includes('"list_users"'));
+  await page.getByRole("button", { name: "用户管理", exact: true }).click();
+  await listRequest;
+  await page.evaluate(() => window.supabase.createClient().auth.signOut());
+  await page.locator("#login-form").waitFor();
+  assert.equal(typeof releaseUserList, "function");
+  releaseUserList();
+  await page.waitForFunction(() => !document.getElementById("users-console").hasAttribute("aria-busy"));
+  assert.equal(await page.locator("#user-rows tr").count(), 0, "late user response cannot repopulate data after logout");
+  assert.equal(await page.locator("#users-console").isHidden(), true);
   assert.equal(exports >= 2, true); assert.deepEqual(errors, []);
-  console.log("PASS: /admin redirect, list/filter, issue retry, cipher reveal/export, CSV safety, disable confirmation, kernel skills view, mobile layout, revocation and logout clearing");
+  console.log("PASS: /admin redirect, vouchers, user search/filter/pagination, test access confirmation/cancel, lost response recovery, XSS safety, mobile navigation, revocation and logout clearing");
 } finally { await browser.close(); await new Promise((resolve) => server.close(resolve)); }

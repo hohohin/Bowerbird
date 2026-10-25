@@ -17,13 +17,15 @@ export function LibrarySourceTabs({ value, onChange, project = false }: { value:
   }, [transition]);
   const feedback = transition?.source === value && transition.startedAt !== expired && Date.now() - transition.startedAt < duration
     ? { key: transition.startedAt, label: catalogViewName(transition.kind, media) } : undefined;
-  const hint = media === "images" ? "Tab 切换全部／标签／集合" : "Tab 切换平铺／集合";
+  const hint = media === "images" ? "点击当前标签或 Tab 切换全部／标签／集合" : "点击当前标签或 Tab 切换平铺／集合";
+  const cycleView = () => useLocalFileMode.getState().toggleCatalog();
   if (!project) return <LibraryViewSwitch value={view} label="素材视图切换条" hint={hint}
+    onReselect={cycleView}
     onChange={value => {
       const kind = catalogViews(media).find(kind => kind === value);
       if (kind) useLocalFileMode.getState().setCatalogView(kind);
     }} options={catalogViews(media).map(kind => ({ value: kind, label: catalogViewName(kind, media) }))} />;
-  return <LibraryViewSwitch value={value} onChange={onChange} label="素材视图切换条" hint={`Q 全局素材 · E 项目素材 · ${hint}`}
+  return <LibraryViewSwitch value={value} onChange={onChange} onReselect={cycleView} label="素材视图切换条" hint={`Q 全局素材 · E 项目素材 · ${hint}`}
     feedback={feedback}
     options={[{ value: "global", label: "全局素材", shortcut: "Q" },
       { value: "project", label: "项目素材", shortcut: "E" }]} />;

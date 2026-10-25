@@ -12,8 +12,7 @@ const restore = () => dialog.getByRole('button', { name: /恢复可用项/ });
 const calls = command => page.evaluate(command => window.calls.filter(c => c.command === command), command);
 try {
   await page.goto('http://127.0.0.1:1676/scripts/fixtures/folder-mode/preview.html');
-  await page.getByRole('tab', { name: '全局素材', exact: true }).click();
-  await page.getByRole('tab',{name:'文件浏览器',exact:true}).click();
+  await page.getByRole('button', { name: '文件浏览器', exact: true }).click();
   await page.getByRole('button', { name: 'photo.png', exact: true }).waitFor();
   await page.evaluate(() => {
     window.recordItems = [

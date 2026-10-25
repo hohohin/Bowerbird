@@ -5,6 +5,43 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use tauri::State;
 use crate::{db::Database, error::{AppError, AppResult}};
+use crate::cloud::{AuthClient, EntitlementService};
+
+async fn require_pro(auth: &AuthClient, entitlement: &EntitlementService) -> AppResult<()> {
+    let snapshot = entitlement.current_or_sync(auth).await;
+    let login = auth.snapshot();
+    if !login.logged_in || snapshot.user_id.is_empty() || login.user_id.as_deref() != Some(snapshot.user_id.as_str())
+        || !matches!(snapshot.tier.as_str(), "pro" | "studio")
+        || !matches!(snapshot.offline_state, Some(crate::cloud::entitlement::OfflineState::Fresh | crate::cloud::entitlement::OfflineState::Grace)) {
+        return Err(AppError::Other("工作流卡片的创建、编辑和运行需要 Pro；已有结果仍可查看和导出".into()));
+    }
+    Ok(())
+}
+
+// Existing accepted runs can finish after expiry. Results do not change the paid definition.
+fn paid_definition(document: &Value) -> Vec<Value> {
+    document["nodes"].as_array().into_iter().flatten().filter(|n| n["kind"] != "text")
+        .map(|node| {
+            let mut node = node.clone();
+            if let Some(fields) = node.as_object_mut() {
+                for key in ["outputs","outputPorts","sessionNodeIds","activeSessionNodeId","resultNodeIds","resultGroupId","completionSeen","triggerCount","describeCache","profileCache"] { fields.remove(key); }
+            }
+            node
+        }).collect()
+}
+
+fn has_new_run(before: &Value, after: &Value) -> bool {
+    let ids = |doc: &Value| -> HashSet<String> {
+        doc["runs"].as_array().into_iter().flatten().chain(std::iter::once(&doc["run"]))
+            .filter_map(|r| r["id"].as_str().map(str::to_owned)).collect()
+    };
+    !ids(after).is_subset(&ids(before))
+}
+
+#[tauri::command]
+pub async fn canvas_workflow_authorize(auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>) -> AppResult<()> {
+    require_pro(&auth, &entitlement).await
+}
 
 #[derive(Serialize)]
 pub struct WorkflowSnapshot { revision: i64, document: Value }
@@ -286,11 +323,27 @@ impl Database {
 #[tauri::command]
 pub async fn canvas_workflow_get(db: State<'_, Arc<Database>>, project_id: String) -> AppResult<WorkflowSnapshot> { db.workflow_get(&project_id) }
 #[tauri::command]
-pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, project_id: String, revision: i64, document: Value) -> AppResult<i64> { db.workflow_save(&project_id, revision, document) }
+pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project_id: String, revision: i64, document: Value) -> AppResult<i64> {
+    let before = db.workflow_get(&project_id)?.document;
+    if paid_definition(&before) != paid_definition(&document) || (has_new_run(&before,&document) && !paid_definition(&document).is_empty()) {
+        require_pro(&auth, &entitlement).await?;
+    }
+    db.workflow_save(&project_id, revision, document)
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn paid_edits_and_new_runs_are_distinct_from_accepted_results() {
+        let before=json!({"nodes":[node("paid",json!({}))],"runs":[{"id":"accepted"}],"run":null});
+        let mut result=before.clone(); result["nodes"][0]["outputs"]=json!({"image":{"type":"image","assetIds":["result"]}});
+        assert_eq!(paid_definition(&before),paid_definition(&result));
+        assert!(!has_new_run(&before,&result));
+        result["nodes"][0]["prompt"]=json!("changed"); assert_ne!(paid_definition(&before),paid_definition(&result));
+        result["runs"]=json!([{"id":"accepted"},{"id":"new"}]); assert!(has_new_run(&before,&result));
+        assert!(paid_definition(&json!({"nodes":[{"id":"text","kind":"text"}]})).is_empty());
+    }
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
     #[test]
     fn comfy_video_frame_ports_and_single_video_survive_storage() {

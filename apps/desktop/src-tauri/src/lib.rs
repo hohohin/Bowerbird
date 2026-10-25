@@ -14,6 +14,7 @@ mod media;
 mod prompt;
 
 pub use media::thumb::video_thumbnail_worker;
+pub use media::probe::video_probe_worker;
 pub use agent_generation_wait::agent_generation_wait_worker;
 
 use std::sync::Arc;
@@ -440,6 +441,7 @@ pub fn run() {
             commands::project_canvas::project_canvas_note_update,
             commands::canvas_workflow::canvas_workflow_get,
             commands::canvas_workflow::canvas_workflow_save,
+            commands::canvas_workflow::canvas_workflow_authorize,
             commands::workflow_templates::workflow_templates_list,
             commands::workflow_templates::workflow_template_save,
             commands::workflow_templates::workflow_template_delete,
@@ -483,6 +485,7 @@ pub fn run() {
             commands::cloud::cloud_entitlement,
             commands::cloud::cloud_sync_entitlement,
             commands::cloud::cloud_redeem_code,
+            commands::cloud::cloud_start_pro_trial,
             commands::cloud_agent::cloud_agent_start,
             commands::cloud_agent::cloud_agent_latest,
             commands::cloud_agent::cloud_agent_list,
@@ -506,6 +509,8 @@ pub fn run() {
             commands::projects::add_assets_to_project,
             commands::projects::remove_assets_from_project,
             commands::projects::project_delete_impact,
+            commands::projects::project_exclusive_scan,
+            commands::projects::cancel_project_exclusive_scan,
             commands::projects::delete_project,
             commands::visual_profile::visual_profile_preview,
             commands::visual_profile::visual_profile_extract,
@@ -523,6 +528,10 @@ pub fn run() {
             commands::visual_profile::visual_profile_confirm_validation,
             commands::visual_profile::visual_profile_discard_validation,
             commands::library::import_files,
+            commands::media_import::video_import_begin,
+            commands::media_import::video_import_append,
+            commands::media_import::video_import_finish,
+            commands::media_import::video_import_cancel,
             commands::asset_archive::export_assets_zip,
             commands::library::import_folder,
             commands::library::import_image_bytes,
@@ -542,6 +551,11 @@ pub fn run() {
             commands::library::list_assets,
             commands::library::list_library_view,
             commands::material_catalog::material_catalog,
+            commands::material_catalog::catalog_overview,
+            commands::material_catalog::catalog_page,
+            commands::material_catalog::catalog_graph_page,
+            commands::material_catalog::catalog_ids,
+            commands::material_catalog::catalog_prepare_colors,
             commands::material_catalog::material_catalog_assets,
             commands::material_catalog::save_collection_node,
             commands::material_catalog::delete_collection_node,
@@ -591,6 +605,7 @@ pub fn run() {
             commands::library::set_asset_tags,
             commands::library::reclassify_all,
             commands::local_classification::local_classification_status,
+            commands::local_classification::local_classification_source,
             commands::local_classification::folder_classification_view,
             commands::local_classification::global_classification_view,
             commands::local_classification::global_classification_start,

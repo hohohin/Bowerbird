@@ -1,7 +1,9 @@
 //! 项目 workspace 相关命令。
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, Ordering}};
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, State};
 use ulid::Ulid;
@@ -239,6 +241,7 @@ pub async fn delete_project(
     project_id: String,
     mode: String,
     confirmation: Option<String>,
+    discard_pending_results: Option<Vec<String>>,
 ) -> Result<ProjectDeleteResult, AppError> {
     if mode != "keep" && mode != "delete_exclusive" {
         return Err(AppError::Other("不支持的项目删除方式".into()));
@@ -246,18 +249,15 @@ pub async fn delete_project(
     let paths = paths.inner().clone();
     let db = db.inner().clone();
     let id_for_delete = project_id.clone();
+    // Do not abandon results while a native ingest is still writing files/projections.
+    let _ingest = if discard_pending_results.is_some() {
+        Some(super::cloud_agent::RESULT_INGEST_GATE.try_write().map_err(|_| AppError::Other("Agent 结果正在入库，请稍后重试删除".into()))?)
+    } else { None };
     let result = tokio::task::spawn_blocking(move || {
-        if mode == "delete_exclusive" {
-            db.delete_project_exclusive(
-                &paths,
-                &id_for_delete,
-                confirmation.as_deref().unwrap_or(""),
-            )
-        } else {
-            // A failed restore must not be followed by Keep: deleting its project marker
-            // would make startup mistake an uncommitted physical deletion for a committed one.
-            db.delete_project_keep_managed(&paths,&id_for_delete)
-        }
+        let _ingest = _ingest;
+        db.delete_project_managed(&paths, &id_for_delete,
+            if mode == "delete_exclusive" { Some(confirmation.as_deref().unwrap_or("")) } else { None },
+            discard_pending_results.as_deref())
     })
     .await
     .map_err(|error| AppError::Other(error.to_string()))??;
@@ -274,14 +274,79 @@ pub async fn project_delete_impact(
     db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
     project_id: String,
+    include_physical: Option<bool>,
 ) -> Result<ProjectDeleteImpact, AppError> {
     let db = db.inner().clone();
     let paths = paths.inner().clone();
     tokio::task::spawn_blocking(move || {
         let mut impact = db.project_delete_impact(&project_id)?;
-        impact.physical = db.project_exclusive_impact(&paths, &project_id)?;
+        if include_physical.unwrap_or(true) {
+            impact.physical = db.project_exclusive_impact(&paths, &project_id)?;
+        }
         Ok(impact)
     })
     .await
     .map_err(|error| AppError::Other(error.to_string()))?
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct ProjectDeleteScanProgress {
+    phase: String,
+    completed: usize,
+    total: usize,
+    remaining_ms: Option<u64>,
+}
+
+type DeleteScans = Mutex<HashMap<String, Arc<AtomicBool>>>;
+fn delete_scans() -> &'static DeleteScans {
+    static SCANS: OnceLock<DeleteScans> = OnceLock::new();
+    SCANS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+struct DeleteScanGuard(String);
+impl Drop for DeleteScanGuard {
+    fn drop(&mut self) { delete_scans().lock().unwrap().remove(&self.0); }
+}
+
+#[tauri::command]
+pub async fn project_exclusive_scan(
+    db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>,
+    project_id: String, request_id: String,
+    on_progress: tauri::ipc::Channel<ProjectDeleteScanProgress>,
+) -> Result<Option<crate::core::project_deletion::ExclusiveDeleteImpact>, AppError> {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    {
+        let mut scans = delete_scans().lock().unwrap();
+        if scans.contains_key(&request_id) { return Err(AppError::Other("检索已在进行".into())); }
+        scans.insert(request_id.clone(), cancelled.clone());
+    }
+    let guard = DeleteScanGuard(request_id);
+    let db = db.inner().clone(); let paths = paths.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        let _guard = guard;
+        let check = || if cancelled.load(Ordering::Relaxed) { Err(AppError::Other("检索已停止".into())) } else { Ok(()) };
+        let mut phase = String::new(); let mut started = Instant::now(); let mut sent = Instant::now();
+        let mut started_at_count = 0;
+        let mut report = |next: &str, completed: usize, total: usize| {
+            let changed = phase != next;
+            if changed { phase = next.into(); started = Instant::now(); started_at_count = completed; }
+            if !changed && completed != total && sent.elapsed() < Duration::from_millis(150) { return; }
+            sent = Instant::now();
+            let processed = completed.saturating_sub(started_at_count);
+            let remaining_ms = (processed > 0 && completed < total).then(||
+                (started.elapsed().as_millis() as u64).saturating_mul((total - completed) as u64) / processed as u64);
+            if on_progress.send(ProjectDeleteScanProgress { phase: phase.clone(), completed, total, remaining_ms }).is_err() {
+                cancelled.store(true, Ordering::Relaxed);
+            }
+        };
+        let result = db.project_exclusive_impact_progress(&paths, &project_id, &check, &mut report);
+        if cancelled.load(Ordering::Relaxed) { Ok(None) } else { result.map(Some) }
+    }).await.map_err(|error| AppError::Other(error.to_string()))?
+}
+
+#[tauri::command]
+pub fn cancel_project_exclusive_scan(request_id: String) {
+    if let Some(cancelled) = delete_scans().lock().unwrap().get(&request_id) {
+        cancelled.store(true, Ordering::Relaxed);
+    }
 }

@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import type { ImageInput, MockScenario } from "../_shared/ark.ts";
 import { requireUser } from "../_shared/auth.ts";
-import { ensureDailyCredits, holdCredits } from "../_shared/billing.ts";
+import { ensureDailyCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { assertBodySize, assertReferenceImages, corsHeaders } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
@@ -193,11 +193,22 @@ async function createJob(
   const service = await serviceFor(admin, body);
   let held;
   if (body.media === "video") {
-    const result = await admin.rpc("credit_hold_video", { p_user_id: userId, p_idempotency_key: body.idempotency_key, p_service: service, p_duration: body.video_options!.duration, p_has_video: Boolean(body.reference_videos?.length) });
+    const references = body.reference_videos ?? [];
+    // Old clients without duration reserve the existing 30-second maximum.
+    const seconds = references.some(v => v.duration === undefined) ? 30 : Math.ceil(references.reduce((n,v) => n + (v.duration ?? 0), 0));
+    const result = await admin.rpc("credit_hold_bcoin_video", { p_user_id: userId, p_idempotency_key: body.idempotency_key, p_service: service, p_duration: body.video_options!.duration, p_has_video: Boolean(references.length), p_ratio: body.ratio ?? null, p_reference_seconds: seconds });
     const row = result.data?.[0];
     if (result.error || !row) throw new ApiError("invalid_request", "视频积分预授权失败：请检查积分和服务配置");
     held = { holdId: String(row.hold_id), estimated: Number(row.estimated_amount), pricingVersion: Number(row.pricing_version) };
-  } else held = await holdCredits(admin, userId, body.idempotency_key, service);
+  } else {
+    const result = await admin.rpc("credit_hold_bcoin_image", { p_user_id: userId, p_idempotency_key: body.idempotency_key,
+      p_service: service, p_reference_count: body.reference_images?.length ?? 0, p_size: body.layer_options?.size ?? null });
+    const row = result.data?.[0];
+    if (result.error || !row) throw new ApiError(result.error?.details === "insufficient_credits" ? "insufficient_credits" : "invalid_request", "图片 Bcoin 预授权失败，请检查余额和参数");
+    held = { holdId: String(row.hold_id), estimated: Number(row.estimated_amount), pricingVersion: Number(row.pricing_version) };
+  }
+  const priceSnapshot = body.media === "image" ? await admin.from("credit_holds").select("billing_snapshot").eq("id", held.holdId).single() : null;
+  if (priceSnapshot?.error) throw new ApiError("internal_error", "读取价格快照失败", true);
   const existingResult = await admin.from("generation_jobs").select("*").eq("hold_id", held.holdId).maybeSingle();
   if (existingResult.error) throw new ApiError("internal_error", "读取幂等云任务失败", true);
   let job = existingResult.data as unknown as GenerationJob | null;
@@ -206,6 +217,7 @@ async function createJob(
   const videoReferences = (body.reference_videos ?? []).map((reference, index) => ({
     object_key: `jobs/${jobId}/inputs/video-${index}.${reference.mime === "video/quicktime" ? "mov" : "mp4"}`,
     bytes: reference.bytes, mime: reference.mime ?? "video/mp4",
+    ...(reference.duration !== undefined ? { duration: reference.duration } : {}),
   }));
   const requestPayload = JSON.stringify({
     schema_version: 1,
@@ -217,6 +229,7 @@ async function createJob(
     ...(body.media === "video" ? { video_options: body.video_options, reference_videos: videoReferences } : {}),
     ...(body.media === "image" ? { transparent: body.transparent === true } : {}),
     ...(body.layer_options ? { layer_options: body.layer_options } : {}),
+    ...(priceSnapshot?.data?.billing_snapshot ? { billing: priceSnapshot.data.billing_snapshot } : {}),
   });
   const manifestHash = await sha256Hex(requestPayload);
 

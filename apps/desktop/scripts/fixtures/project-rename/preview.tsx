@@ -1,3 +1,4 @@
+import { installCatalogPagingMock } from "../catalogPagingMock";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { ProjectSection } from "../../../src/components/ProjectSection";
@@ -64,4 +65,5 @@ function Preview() {
     <ProjectContextMenu />
   </div>;
 }
+installCatalogPagingMock(window);
 createRoot(document.getElementById("root")!).render(<Preview />);

@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../../lib/userError";
 import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import { useStore } from "../../store";
@@ -18,7 +19,7 @@ function Credits({ submitId, revision, balance = false }: { submitId?: string | 
   const missingId = !balance && !submitId;
   const label = balance ? "即梦剩余" : "本次消耗";
   return <span className="inline-flex flex-wrap items-center gap-1 text-[11px] text-muted" aria-live="polite">
-    <span title={current?.error}>{label}：{missingId ? "暂无任务编号" : current?.error ? "查询失败" : !current ? "查询中…" : current.value == null ? "官方暂未返回" : `${current.value.toLocaleString("zh-CN")} 积分`}</span>
+    <span title={current?.error ? userErrorMessage(current.error, "暂时无法查询即梦积分，请稍后重试。") : undefined}>{label}：{missingId ? "暂无任务编号" : current?.error ? "查询失败" : !current ? "查询中…" : current.value == null ? "官方暂未返回" : `${current.value.toLocaleString("zh-CN")} 积分`}</span>
     {!missingId && <button type="button" className="underline hover:text-ink disabled:opacity-40" aria-label={`刷新${label}积分`} disabled={!current} onClick={() => setRefresh(value => value + 1)}>刷新</button>}
   </span>;
 }

@@ -1,3 +1,4 @@
+# Legacy non-DSH image; production Compose uses Dockerfile.unified-harness-candidate.
 FROM node:24-bookworm-slim
 
 RUN apt-get update \
@@ -6,7 +7,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY src ./src
-COPY --from=cloud-shared video-contract.ts task-authorization.ts layer-contract.ts image-metadata.ts /cloud/supabase/functions/_shared/
+COPY --from=cloud-shared video-contract.ts task-authorization.ts layer-contract.ts image-metadata.ts replication.ts bcoin-text.ts /cloud/supabase/functions/_shared/
 COPY scripts/video-readonly-probe.mjs ./scripts/video-readonly-probe.mjs
 
 USER node

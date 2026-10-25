@@ -282,8 +282,16 @@ fn link_colors(db: &Database, id: &str, colors: Option<&str>) {
     }
 }
 
-/// 递归遍历目录，返回所有支持图片格式的文件路径。
+/// 递归遍历目录，仅返回图片；生成 provider 的产物扫描保留图片边界。
 pub fn walk_images(dir: &Path) -> Vec<PathBuf> {
+    walk_supported(dir, false)
+}
+
+pub fn walk_media(dir: &Path) -> Vec<PathBuf> {
+    walk_supported(dir, true)
+}
+
+fn walk_supported(dir: &Path, include_videos: bool) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
@@ -293,7 +301,7 @@ pub fn walk_images(dir: &Path) -> Vec<PathBuf> {
                 if p.is_dir() {
                     stack.push(p);
                 } else if let Some(ext) = p.extension().and_then(|x| x.to_str()) {
-                    if media::is_image_ext(ext) {
+                    if media::is_image_ext(ext) || (include_videos && media::probe::is_video(ext)) {
                         out.push(p);
                     }
                 }
@@ -303,10 +311,10 @@ pub fn walk_images(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// 导入目录下所有图片，返回成功入库的资产（含字节相同的已有资产）。
+/// 导入目录下所有媒体，返回成功入库的资产（含字节相同的已有资产）。
 pub fn ingest_dir(paths: &LibraryPaths, db: &Database, dir: &Path) -> AppResult<Vec<Asset>> {
     let mut assets = Vec::new();
-    for p in walk_images(dir) {
+    for p in walk_media(dir) {
         match ingest_file(paths, db, &p) {
             Ok(a) => assets.push(a),
             Err(e) => tracing::warn!("ingest failed for {}: {e}", p.display()),

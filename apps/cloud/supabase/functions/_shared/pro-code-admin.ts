@@ -6,7 +6,7 @@ import { readRedemptionBody, redemptionCodeHash } from "./redemption.ts";
 const encoder = new TextEncoder();
 export function assertCodeAdmin(user: { app_metadata?: Record<string, unknown> }): void {
   if (user.app_metadata?.bowerbird_admin !== true) {
-    throw new ApiError("unauthorized", "此账号没有兑换码管理权限", false, 403);
+    throw new ApiError("unauthorized", "此账号没有后台管理权限", false, 403);
   }
 }
 
@@ -67,13 +67,30 @@ export async function handleCodeAdmin(request: Request, authenticate: (request: 
     const body = await readRedemptionBody(request);
     const rpc = async (name: string, args: Record<string, unknown>) => {
       const { data, error } = await admin.rpc(name, { ...args, p_actor: user.id });
-      if (error?.code === "42501") throw new ApiError("unauthorized", "此账号没有兑换码管理权限", false, 403);
-      if (error?.code === "22023") throw new ApiError("invalid_request", "请求参数无效，或该批次请求已用于其他发码内容");
-      if (error) throw new ApiError("internal_error", "兑换码管理服务暂时不可用，请重试", true);
+      if (error?.code === "42501") throw new ApiError("unauthorized", "此账号没有后台管理权限", false, 403);
+      if (error?.code === "22023") throw new ApiError("invalid_request", "请求参数无效，或请求内容发生冲突");
+      if (error) throw new ApiError("internal_error", "后台管理服务暂时不可用，请重试", true);
       return data;
     };
     let result: unknown;
     switch (body.action) {
+      case "list_users": {
+        const search = body.search ?? "";
+        const filter = body.filter ?? "";
+        const page = body.page ?? 0;
+        if (typeof search !== "string" || search.length > 100 || !["", "test", "regular"].includes(String(filter))
+          || typeof filter !== "string" || !Number.isInteger(page) || Number(page) < 0 || Number(page) > 100000) {
+          throw new ApiError("invalid_request", "用户筛选条件不正确");
+        }
+        result = await rpc("admin_list_users", { p_search: search.trim(), p_filter: filter, p_page: page });
+        break;
+      }
+      case "set_test_account": {
+        if (typeof body.enabled !== "boolean") throw new ApiError("invalid_request", "测试资格必须为布尔值");
+        result = await rpc("admin_set_test_account", { p_user_id: adminUuid(body.user_id), p_enabled: body.enabled });
+        if ((result as { status: string })?.status === "not_found") throw new ApiError("invalid_request", "用户不存在，请刷新列表", false, 404);
+        break;
+      }
       case "list": {
         const status = typeof body.status === "string" ? body.status : "";
         const search = typeof body.search === "string" ? body.search.trim() : "";

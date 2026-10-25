@@ -1,3 +1,4 @@
+import { installCatalogPagingMock } from "../catalogPagingMock";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { Toolbar } from "../../../src/components/Toolbar";
@@ -78,6 +79,7 @@ function TestToolbar() {
   const localFilesOpen=useLocalFileMode(s=>s.open);
   return <Toolbar localFilesOpen={localFilesOpen} canvasMode={new URL(location.href).searchParams.has("canvas-toolbar")} onExplore={()=>{}} onCanvasModeChange={()=>{}} onCreateCreative={()=>{w.createdProjects=(w.createdProjects||0)+1;}} onRefresh={async()=>{}}/>;
 }
+installCatalogPagingMock(window);
 createRoot(document.getElementById("root")!).render(<div className="app-shell" style={{ display: "flex", height: "100vh" }}>
   <FileDropImport /><Sidebar /><main className="explore-main" style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}><header data-test-topbar>测试工具栏 <input aria-label="测试搜索框" /></header>{new URL(location.href).searchParams.has("layout") && <TestToolbar/>}<Library /></main><ToastViewport />
 </div>);

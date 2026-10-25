@@ -303,7 +303,7 @@ fn launch(app: &tauri::AppHandle, root: &Path, task: Value, interactive: bool) -
         }
         let fields = match result {
             Ok(Some(reference)) => {
-                json!({"state":"ready","message":"视频已获取，可点击使用作为参考视频","reference":reference,"finishedAt":now()})
+                json!({"state":"ready","message":"参考视频已获取","reference":reference,"finishedAt":now()})
             }
             Ok(None) => {
                 json!({"state":"needs_login","message":"后台未读取到视频，可打开抖音窗口继续获取；如页面要求，再完成登录或验证"})
@@ -331,7 +331,7 @@ pub(super) async fn handle(
             let entry = entry?;
             if let Some(id) = entry.file_name().to_str() {
                 if let Ok(mut value) = own(root, id, project) {
-                    if value["kind"] == "douyin" {
+                    if value["kind"] == "douyin" && (field(&data,"caseId").is_empty() || value["caseId"] == data["caseId"]) {
                         if ["starting", "waiting", "downloading"].contains(&field(&value, "state"))
                             && !RUNNING
                                 .lock()
@@ -353,9 +353,13 @@ pub(super) async fn handle(
         return Ok(json!(items));
     }
     if action == "douyin-create" {
+        if let Some(id) = data["caseId"].as_str() {
+            let parent = super::cases::require(root,id,project)?;
+            if !field(&parent,"referenceId").is_empty() { return Err(error("此任务已有参考视频，请新建任务")); }
+        }
         let source = share_url(field(&data, "text"))?;
         let id = uuid::Uuid::new_v4().simple().to_string();
-        let task = json!({"id":id,"kind":"douyin","projectId":project,"sourceUrl":source.as_str(),"shareText":data["text"],"state":"starting","createdAt":now()});
+        let task = json!({"id":id,"kind":"douyin","projectId":project,"caseId":data["caseId"],"sourceUrl":source.as_str(),"shareText":data["text"],"state":"starting","createdAt":now()});
         save(root, &task)?;
         return launch(app, root, task, false);
     }

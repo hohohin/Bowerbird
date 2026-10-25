@@ -247,6 +247,7 @@ export type ProjectDeleteMode = "keep" | "delete_exclusive";
 export interface ProjectDeleteImpact {
   physical: {
     exclusive_asset_count: number;
+    exclusive_asset_ids?: string[];
     exclusive_file_count: number;
     preserved_shared_count: number;
     preserved_unsafe_count: number;
@@ -257,6 +258,14 @@ export interface ProjectDeleteImpact {
   node_count: number;
   running_generation_count: number;
   running_agent_count: number;
+  pending_agent_results?: { run_id: string; created_at: number }[];
+}
+
+export interface ProjectDeleteScanProgress {
+  phase: "waiting" | "candidates" | "paths" | "assets" | "fingerprint";
+  completed: number;
+  total: number;
+  remaining_ms: number | null;
 }
 
 export interface ProjectDeleteResult {

@@ -144,7 +144,7 @@ impl LocalClassifier {
                             {
                                 let mut status = self.status.lock().unwrap();
                                 if let Some(progress) = status.jev_progress.as_mut() {
-                                    progress.message = format!("{}已加入 Cloud 补标签队列，Jev 继续分析下一张", if progress.report.is_none() { "没有启用标签，未调用 Jev；" } else { "没有真实标签达到 30%；" });
+                                    progress.message = format!("{}已加入 Cloud 补标签队列，Jev 继续分析下一张", if progress.report.is_none() { "没有启用标签，未调用 Jev；" } else { "没有真实标签达到 42%；" });
                                     let asset = progress.asset.clone();
                                     status.recent_cloud_handoffs.push(asset);
                                     if status.recent_cloud_handoffs.len() > 64 {

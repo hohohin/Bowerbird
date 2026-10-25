@@ -204,8 +204,8 @@ try {
     const card = page.locator('[data-canvas-node-id="video-session"]');
     await card.waitFor();
     await card.locator(`[data-conversation-image="${name}"]`).waitFor();
-    assert.equal(await card.locator('.canvas-video-film').count(), 1, 'video sessions share the film edges');
-    assert.equal(await card.locator('.canvas-video-badge').count(), 0, 'old play badge is removed');
+    assert.equal(await card.locator('.canvas-video-film').count(), 0, 'video sessions have no film edges');
+    assert.equal(await card.locator('.canvas-video-badge').count(), 1, 'video sessions share the passive play marker');
     assert.equal(await card.locator('.canvas-prompt-content').count(), 0, 'completed video has no prompt wrapper');
     const appearance = await card.evaluate(el => ({ border: getComputedStyle(el).borderTopWidth, padding: getComputedStyle(el).padding,
       background: getComputedStyle(el).backgroundColor, ratio: el.clientWidth / el.clientHeight }));

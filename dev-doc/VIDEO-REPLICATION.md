@@ -1,8 +1,75 @@
 # 画板工具箱：视频复刻
 
+**2026-10-24 发布状态：** 本轮相关桌面源码已随 Windows **26.10.2401** 发布，分类 Cloud **0075／jev-proxy v10** 已先行上线，图谱保持隐藏；此前专项中的「未发布」为开发时记录。完整验证范围、现役与回滚见 [桌面自动更新](DESKTOP-UPDATES.md)。
+
+**2026-10-23 发布补记：** 本页当日桌面源码已随 Windows **26.10.2301** 发布（源码 4156e8e0），下方“待发布／未打包”是专项验证时的历史状态。正式包、签名、CDN 及回滚证据见 [桌面自动更新](DESKTOP-UPDATES.md)。原有真实安装／GPU、原生 UI 和 Mac 实机验收边界继续保留。
+
 协议与验收记录，产品范围和发布状态以 `PROJECT.md` 为准。参考源为 EfficientCut 的 `docs/REPLICATION_PORTING.md`（2026-10-16）。
 
+## 2026-10-24 分析改为普通文本（Cloud 已部署，桌面源码待发布）
+
+用户选择 `response_format.type=text`。视频分析提示词改为普通文字分镜，不再要求 JSON；通过「视频分析／语音转写／转写状态」三个标题拆分结果，未遵循标题的普通正文仍接受并保留，转写缺失标为 unavailable。旧 JSON 分镜响应继续兼容。thinking enabled、Mini 260428、1 fps、6000 max_tokens、temperature 0.1、保留音轨及 3 积分价格不变。
+
+Cloud 在既有 resultText 内使用内部 `analysisText/transcript/transcriptStatus` 信封传输，模型实际输出与桌面编辑框均为普通文字。桌面原生保存时提取正文；前端同时兼容信封、已提取正文和旧 JSON 记录，后续改写仍带入转写。新桌面源码未打包或重启。
+
+本地与候选 Worker 24 项及类型检查、前端逻辑 10 项、真实组件工作台回归、Rust 11 项（1 项媒体测试默认忽略）和 Vite 构建通过。工作台回归覆盖信封转为正文、独立转写、改写提交与工作流创建。
+
+基于上一轮 thinking 镜像最小覆盖两模块及测试，队列为空时切换。现役镜像 `sha256:92bd83125ab25006fc1638ba77da2754cd14df93b724e45b60e2079b69c16bc6`，runtime SHA-256 `f3bb6acb90c5d97343b790b329b2fc3977e5f4fd9447ceac6f8a6375a9122203`，replication SHA-256 `da9a42afd51825979bea0ec1825b9f88d78638c52c382aa53c7d493f34d9dbc0`，running、restart=0。Edge、账本及模型配置不变。
+
+真实任务 `c4a93784-53b2-4032-8098-0c62b056b786` 使用 13.4 秒合成语音视频，返回普通文字分析及包含 `video transcription` 的真实转写，`analysisFormat=text`、`transcriptStatus=transcribed`。仅一次 3 积分结算、原键恢复／重放不重投、同键改输入返回 409；一次性测试账号删除成功（200）。证据 `.tmp/replication-text-20261024/live/`。回滚标签 `bowerbird/generation-worker:rollback-replication-text-20261024` 指向 `30198cd72cf7…`；源码备份 `/opt/bowerbird/deploy-backups/replication-text-20261024/{runtime.before.ts,replication.before.ts}`。队列空闲后恢复对应模块及镜像，无数据库回滚。
+
+## 2026-10-24 豆包分析开启 thinking（Cloud 已部署）
+
+- 视频分析请求明确传 `thinking: { type: "enabled" }`；模型保持 `doubao-seed-2-0-mini-260428`，`fps=1`、`max_tokens=6000`、`temperature=0.1`、`response_format=json_object`、`stream=false`。`reasoning_effort` 未显式传入，沿模型默认 medium；文本改写及其他理解操作保留原 thinking 设置。
+- 沿用带音轨代理与根层 `transcript/transcriptStatus` 契约；本轮实际 FFmpeg 带声／无声代理测试通过。新增请求回归验证视频完整字节传递、thinking 开启、转写返回及推理内容不混入分析正文；本地与候选容器各 23 项通过。
+- 基于现役 Bcoin 镜像 `29f3e4b518be…` 仅修改运行时一行请求参数并加入测试，保留计费、环境、模型和 Edge。队列活动任务为 0 后切换；现役镜像 `sha256:30198cd72cf7cb414591c5bd91a59f11f12888770c1ef365b94d143c52538cab`，运行时 SHA-256 `adda7cf089e72c2ed8f22a23ca76c10547e1abae5f0d1cbee7b5a7d91a39e978`，转写模块 SHA-256 仍为 `a185d25872f31164ce7881701fc65750db81737ee5eafb962783f03750513c6d`；running、restart=0。
+- 真实任务 `cf199150-88ff-48de-b656-35219bfd4bc4` 使用 13.4 秒合成语音视频，返回有效分镜、`transcriptStatus=transcribed` 及包含实际说出 `video transcription` 的根层转写；仅一次 3 积分结算，重放与原键恢复均复用原任务，变更同键输入返回 409。注册已不赠币，复验脚本仅向刚创建的隔离账号注入 3 测试积分；账号已删除（200），未扣用户积分。
+- 证据 `.tmp/replication-thinking-20261024/`；回滚标签 `bowerbird/generation-worker:rollback-replication-thinking-20261024` 指向本次前现役 Bcoin 镜像，源码备份 `/opt/bowerbird/deploy-backups/replication-thinking-20261024/runtime.before.ts`。队列空闲后恢复该运行时与镜像，不回退账本或价格。桌面未打包／重启；新 Cloud 分析请求立即使用 enabled，旧安装包是否保留音轨取决于是否包含 10 月 23 日后续桌面源码。
+
+参数依据：[深度思考](https://docs.volcengine.com/docs/ark/deep-thinking?lang=en)、[Chat API](https://docs.volcengine.com/docs/ark/chat-api?lang=zh&redirect=1)、[视频理解](https://docs.volcengine.com/docs/ark/video-understanding?lang=en)、[上下文与输出长度](https://docs.volcengine.com/docs/ark/context-management?lang=en)。Mini 260428 支持 thinking enabled/disabled；reasoning_effort 默认 medium，low/medium/high 可调，minimal 关闭思考，none 映射 minimal，xhigh/max 映射 high。视频 fps 范围 0.2–5；temperature 0–2、top_p 0–1，通常只调整其中一个；max_tokens 控制回答，max_completion_tokens 控制回答与思考总长度，两者不能同时传。转写由带音频视频输入与提示词／结果结构实现，不给 Chat API 添加 MediaKit 智能路由工具专属的 need_audio 参数。
+
+## 2026-10-23 分析供应商与语音转写（Cloud 已部署，桌面源码待发布）
+
+- 第一阶段复用生成任务的 `ModelSelect` 双栏菜单：本机 Codex 归「自有订阅」，豆包归「Bowerbird 积分」。选择随任务保存，旧任务默认豆包；本机保留既有 Pro 与登录门控，豆包仍按分析 3 积分结算。改写仍走 Cloud，供应商选择仅影响视频分析。
+- 豆包代理保留首条音轨（可选映射 `0:a:0?`，AAC 96 kbps），原视频及无音轨视频均支持；视频部分仍为 640 像素边界、10 fps、H.264、35 MiB 上限。模型沿现有支持音频的 `doubao-seed-2-0-mini-260428`，不需更换模型或价格。
+- 模型返回独立 `transcript` 和 `transcriptStatus`（`transcribed/no_speech/unavailable`）；第二阶段只读显示转写，区分无语音与未获得转写，不把画面字幕作为语音。分析文本去除转写字段后仍可编辑；后续改写合并分析文本、语音转写、改写方向。原始模型 JSON 保留在执行记录。任务保存从同项目、同视频的分析记录读取转写，不接受前端伪造转写内容。
+- 本机 Codex 复用已有 `CodexCliProvider::run`，应用以 FFmpeg 每秒抽一帧，最多 120 帧，按顺序拼成最多十张 3×4 画面表，向 Codex 提供图片、时间映射及原视频路径。原视频音轨不删除；该分支当前只分析画面，明确显示未进行语音转写，不下载额外 ASR 模型或静默调用 Cloud，不持有／扣除 Bowerbird 积分。中断后由用户显式重新分析，不错误恢复为 Cloud 任务。
+- 当前验证：Rust 专项 11 项通过，另显式执行并通过 FFmpeg 带声／无声代理及抽帧测试；前端逻辑 10 项、Worker 22 项、双供应商与转写 UI 回归通过。Vite 与独立桌面后端编译通过；TypeScript 仍为既有 ProseMirror 16 项错误。本机 Codex 的真实订阅调用未执行；实际音画模型调用按下方 Cloud 验收完成。独立后端为 `apps/desktop/.tmp/video-replication/tasks/backend/bowerbird-desktop.exe`，未重启应用、未替换安装版。
+
+### 本次 Cloud 部署与真实语音验收
+
+用户明确授权向现有 `106.55.44.143` 部署并用一次性测试账号验证。候选仅覆盖 `/app/src/cloud-understand/replication.ts` 与其单测，复用现役镜像，未部署 Edge／数据库迁移，未改密钥、模型或价格。每次切换前检查 understand/generation/agent 活跃队列为 0，候选断网测试 22 项通过后切换。最终镜像 `sha256:971c1cb01ef0b2f522c36302240023ffc57f25f1da4f6ca257b90fbdcce55770`，源码 SHA-256 `a185d25872f31164ce7881701fc65750db81737ee5eafb962783f03750513c6d`；运行中、重启次数 0、模型 `doubao-seed-2-0-mini-260428`、mock=false。
+
+真实测试使用本机 TTS 合成语音与纯红色视频（13.4 秒、320×180、10 fps、AAC），不使用用户视频。首轮任务 `5bc2a317-3cef-48ad-804d-53a47f5d2f0e` 识别到语音，但模型把 `transcript` 放进分镜对象；据此加强根层字段提示，并兼容按分镜顺序汇总真实转写。最终任务 `34c0da61-74a5-4388-bfb2-fbdfc521b5cf` 成功，根层 `transcriptStatus=transcribed`，转写含实际说出的 `video transcription`；重放 create 与按原键恢复不新增任务，变更同键输入返回 409，每次测试仅一笔独立 hold、一次确认、3 积分结算（两次测试共 6 积分，均为一次性账号），两账号已清理。
+
+证据：`.tmp/replication-audio-20261023/live/`、`live-v2/`，含结果和结算；截图 `apps/desktop/.tmp/video-replication/tasks/analysis-providers.png` 与 `analysis-transcript.png`。复验脚本 `apps/cloud/scripts/test-video-replication-live.mjs` 第五参数可传期望转写短语，只有根层转写实际包含该短语才通过。
+
+回滚：原镜像 `bowerbird/generation-worker:rollback-replication-audio-20261023`（`b18d88d42633…`）；服务器 `/opt/bowerbird/deploy-backups/replication-audio-20261023/replication.before.ts` 保存原源码。队列空闲后将该镜像重新打 `local` 标签，恢复源码并沿 `compose.generation.yml` 重建 generation-worker；本轮不涉及环境变量或数据库回滚。
+
 ## 入口与宿主适配
+
+### 当前：以参考视频为基点的任务管理（2026-10-23）
+
+本节替代下方 10 月 21 日两栏工作台交互；旧记录保留历史说明。
+
+- 工具先展示当前项目的任务缩略图网格及「新建任务」。新增 `kind=case` 本地任务，独立于 `analyze/rewrite` 执行记录；尚未获取视频时显示占位图。链接在输入时自动保存，关闭／返回前刷新待保存内容，失败不退出；获取成功后的卡片通过 `reference-poster` 读取任务视频的真实首帧：校验项目归属与视频哈希，在任务目录缓存 JPEG，兼容旧任务并修复损坏封面。使用串行后台解码，不在列表后台播放。素材库 `video_poster` 仅支持已入库 assets，不能用于任务视频副本。
+- 左栏固定四步：获取视频、分析视频、提供改写方向、改写完成。中间播放器在整个任务生命周期内保持挂载，右栏独立滚动／切换步骤；没有视频不能进入后续步骤，没有分析结果不能推进改写。抖音／本地／素材库三种途径使用本机偏好记忆最近选择；一个任务绑定一个参考视频，换视频须新建任务。
+- 第 2 步分析结果自动填入可编辑文本框，完成后的主要动作变为「进行改写」；第 3 步只填写改写方向、人设、改写规范；分析文本沿第 2 步结果内部带入 Cloud；第 4 步编辑改写结果及明确提取的首帧提示词。重新读取 Cloud 状态不丢输入，不自动提交；抖音验证仍只高亮打开窗口动作。
+- 复用播放器的暂停、时间轴、细调、当前帧／尾帧插入画板；新增独立「添加该帧为参考图」。原始尺寸 PNG 保存为 `video-frame`，任务持久保存参考帧身份，可移除重选。播放器宽度随视频实际宽高比调整，画面区域无额外左右黑边；任务内切步骤不重置播放位置；关闭重开重新加载视频。
+- 第 4 步按钮显示「生成工作流」，实际行为是创建画板工作流，不再单独提交首帧生图或只插入视频对话框：图片生成卡片（编辑后的首帧提示词＋截帧）→单列内容卡片→视频生成卡片（改写结果＋首帧输入＋start/end 跨度向上取整时长）→单列内容卡片。图片采用当前图片渠道，视频采用既有即梦单图生视频默认参数，可在画板调整；生成及内容写入沿原工作流运行时，创建时不调用模型。内容列 writer 的下游绑定使用本轮输出，连线映射到内容卡片图片输出口。
+- 交付身份 `workflowId` 先保存到任务；四卡片及两个隐藏 writer／生成节点组合使用固定 ID。发生部分写入失败后，仅补齐缺失内容／工作流节点，重复点击不覆盖用户已编辑卡片，不重复创建或自动执行。内容卡片与工作流分别保存，非跨文件／数据库原子事务；失败仍可从任务重试。
+
+本地协议：`case-list` 按项目返回任务、参考信息、最新分析／改写执行及获取状态；`case-save` 白名单保存草稿，校验字段长度、步骤、来源与参考归属，不能用空引用解绑已选视频。既有 `create` 和 `douyin-create` 接受 `caseId`，调用前检查任务归属；新任务的分析／改写必须携带已绑定参考。后台获取即使在关闭后完成，重开也按 `caseId` 恢复；旧记录以项目＋参考身份生成稳定任务编号，兼容仅保存 `sourceAnalysisId/sourceRewriteId` 的旧关联，读取归组不重写旧任务或账本。无 SQLite 迁移、Cloud 部署或价格变化。
+
+交付后若修改改写结果、首帧提示词或参考帧，下次建立新版本工作流；未改结果时重复点击定位原工作流，不静默覆盖已编辑卡片。
+
+10 月 23 日四项修正验收：复刻 Rust 专项 9 项、前端逻辑 9 项及四步任务界面回归通过；新增真实 JPEG 首帧像素、横／竖屏与窄窗画面比例、流程三无参考文本编辑框但 Cloud 提交保留已编辑分析文本、最终「生成工作流」按钮检查。原生解码 smoke 使用 270×480 红色视频，验证首帧 JPEG 与坏视频失败行为；界面 IPC 使用模拟，不产生云端扣费。Vite 构建通过，全量 TypeScript 仍为既有 ProseMirror 16 项错误。封面接口随新版原生后端加载生效，前端热更新不足以更新后端接口。
+
+验证入口：`node scripts/video-replication-ui.test.mjs`（保留工具箱权限／键盘检查，并运行新工作台专项）、`node scripts/video-replication-workbench-ui.test.mjs`、`node scripts/video-player-ui.test.mjs`；截图位于 `apps/desktop/.tmp/video-replication/tasks/`。新专项使用合成红／绿视频及模拟 IPC，覆盖粘贴后立即关闭与完整刷新恢复、单任务归组、途径记忆、验证受阻、Cloud 读取失败重试、步骤门控、播放器同一 DOM／时间保持、320×180 绿色截帧、参考及画板双用途、保存失败不退出、暗色／窄窗、四节点执行顺序／三条可见连线与重复交付零新增。未进行真实模型生成、账号计费或安装包发布。
+
+本轮结果：Rust 专项 8 项、前端逻辑／获取 9 项、工具箱权限及四步任务 UI、共享播放器回归通过；另通过实际内容列 writer 写入及下游视频提示词编译检查。Vite 构建通过；全量 TypeScript 仍报既有 ProseMirror 16 项类型错误，本次新增文件没有类型错误。默认 debug EXE 覆盖失败（拒绝访问），独立开发后端已编译到 `apps/desktop/.tmp/video-replication/tasks/backend/bowerbird-desktop.exe`；未重启应用或替换已安装版本，新增任务接口需加载新版后端，不能仅靠前端热更新。
+
+### 早期入口和两栏交互（历史）
 
 画板左侧「工具」分组位于磁吸辅助分组上方；工具箱按钮打开气泡菜单，首项「视频复刻工具」。面板使用 Bowerbird 的 ModalShell、主题变量、播放器和项目身份。工具只保留「分析视频」「改写内容」两栏，各自独立提交；视频生成统一在项目画板对话框完成，不因切换或带入文本调用模型。
 
@@ -33,7 +100,7 @@ Cloud 状态必须区分加载、读取失败和服务关闭，不能把异常�
 
 `video_replication` 单一命令带 `projectId/action/data`。记录位于素材库 `video-replication/<32 位 UUID>/record.json`，临时文件刷盘后原子改名。`preferences.json` 保存工具内产品文字和改写默认值，不含密钥。任务、来源和结果按项目校验；读操作允许未物化画板，首次写入前物化。
 
-分析代理经现有 FFmpeg 发现器生成：640 像素边界、10 fps、H.264、无音轨、最多 35 MiB。当前使用 CPU 转码，超时 300 秒。Worker 在调用模型前再次用 ffprobe 核验真实时长、尺寸和帧率。没有模型 token 使用数据时界面显示「未记录」，不推算。
+分析代理经现有 FFmpeg 发现器生成：640 像素边界、10 fps、H.264、保留可选音轨（AAC 96 kbps）、最多 35 MiB。当前使用 CPU 转码，超时 300 秒。Worker 在调用模型前再次用 ffprobe 核验真实时长、尺寸和帧率。没有模型 token 使用数据时界面显示「未记录」，不推算。
 
 分析/改写创建前保存 `submissionPending`；响应包含 Cloud job ID 后持久化。重启/断线恢复仅使用原 job ID，或经 `get-by-key` 查询原幂等键；未知提交不重投。已完成结果不能通过恢复覆盖。视频生成使用固定 jobId/turnKey 绑定现有会话。
 

@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
-import { DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS } from "./ark.ts";
+import { DEFAULT_UNDERSTAND_UPSTREAM_TIMEOUT_MS } from "./ark.ts";
 import { ApiError } from "./errors.ts";
 import { assertReferenceImages, DEFAULT_PROXY_TIMEOUT_MS, withTimeout } from "./limits.ts";
 
@@ -11,8 +11,8 @@ Deno.test("reference validation accepts matching JPEG bytes", () => {
   assertReferenceImages([{ mime: "image/jpeg", base64: encoded([0xff, 0xd8, 0xff, 0xd9]) }]);
 });
 
-Deno.test("proxy timeout is later than the Ark image timeout", () => {
-  assertEquals(DEFAULT_PROXY_TIMEOUT_MS - DEFAULT_IMAGE_UPSTREAM_TIMEOUT_MS, 5_000);
+Deno.test("proxy timeout is later than the Ark understand timeout", () => {
+  assertEquals(DEFAULT_PROXY_TIMEOUT_MS - DEFAULT_UNDERSTAND_UPSTREAM_TIMEOUT_MS, 30_000);
 });
 
 Deno.test("proxy timeout still bounds a stalled operation", async () => {

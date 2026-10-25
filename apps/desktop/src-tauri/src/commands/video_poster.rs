@@ -33,9 +33,9 @@ fn ensure_poster(
             |row| Ok((row.get(0)?, row.get(1)?))).optional()?
     };
     let Some((id, thumbnail)) = asset else { return Ok(None); };
-    if let Some(thumbnail) = thumbnail.filter(|value| Path::new(value).is_file()) { return Ok(Some(thumbnail)); }
+    if let Some(thumbnail) = thumbnail.filter(|value| valid_poster(Path::new(value))) { return Ok(Some(thumbnail)); }
     let destination = paths.thumb_path(&id);
-    if !destination.is_file() { generate(Path::new(source), &destination)?; }
+    if !valid_poster(&destination) { generate(Path::new(source), &destination)?; }
     let destination_string = destination.to_string_lossy().into_owned();
     // Extraction holds no database lock. Do not attach its result to a deleted/renamed source.
     let changed = db.conn.lock().unwrap().execute(
@@ -45,9 +45,36 @@ fn ensure_poster(
     Ok((changed == 1).then_some(destination_string))
 }
 
+fn valid_poster(path: &Path) -> bool {
+    image::open(path).is_ok_and(|image| image.width() > 0 && image.height() > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn video_poster_rebuilds_missing_and_corrupt_cached_files() {
+        let temp = std::env::temp_dir().join(format!("bowerbird-poster-test-{}", ulid::Ulid::new()));
+        let paths = LibraryPaths::init(temp.clone()).unwrap();
+        let db = Database::open_in_memory().unwrap();
+        db.conn.lock().unwrap().execute_batch("CREATE TABLE assets (id TEXT, store_path TEXT, thumb_path TEXT);").unwrap();
+        for id in ["missing", "corrupt"] {
+            let destination = paths.thumb_path(id);
+            std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            if id == "corrupt" { std::fs::write(&destination, b"broken JPEG").unwrap(); }
+            let source = format!("/test/{id}.mp4");
+            db.conn.lock().unwrap().execute("INSERT INTO assets VALUES (?1, ?2, ?3)",
+                rusqlite::params![id, source, destination.to_string_lossy()]).unwrap();
+            let poster = ensure_poster(&db, &paths, &source, |_, path| {
+                assert!(db.conn.try_lock().is_ok());
+                image::RgbImage::from_pixel(8, 4, image::Rgb([255, 0, 0])).save(path)?;
+                Ok(())
+            }).unwrap().unwrap();
+            assert!(valid_poster(Path::new(&poster)));
+            assert_eq!(ensure_poster(&db, &paths, &source, |_, _| panic!("decoded twice")).unwrap(), Some(poster));
+        }
+        std::fs::remove_dir_all(temp).unwrap();
+    }
     #[test]
     fn video_poster_repairs_once_without_holding_database_lock() {
         let temp = std::env::temp_dir().join(format!("bowerbird-poster-test-{}", ulid::Ulid::new()));

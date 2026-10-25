@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { equal, ok, rejects } from "node:assert/strict";
 import { test } from "node:test";
 import { UnifiedPlanningRunProcessor } from "./unified-planning-run-processor.ts";
@@ -92,4 +94,19 @@ test("controlled DSH deployment injection creates only the per-Run DSH processor
     BOWERBIRD_DSH_MODEL: "deepseek-flash",
   }, { ...deepSeek, model: "deepseek-chat" }, executorFactory);
   ok(processor instanceof ControlledDshRunProcessor);
+});
+
+test("checked-in environment template can enable both DSH processors without a model mismatch", () => {
+  const sample = readFileSync(resolve(import.meta.dirname, "../../../cloud/.env.example"), "utf8");
+  const env = Object.fromEntries(sample.split(/\r?\n/).flatMap((line) => {
+    const match = line.match(/^([A-Z_0-9]+)=([^#]*)/);
+    return match ? [[match[1], match[2].trim()]] : [];
+  }));
+  equal(env.BOWERBIRD_UNIFIED_AGENT_DSH_ENABLED, "false");
+  equal(env.BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED, "false");
+  // Only construct processors; no filesystem setup, worker loop or provider request.
+  env.BOWERBIRD_UNIFIED_AGENT_DSH_ENABLED = "true";
+  env.BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED = "true";
+  ok(unifiedPlanningProcessorFromEnv(env, "/workspace", vision, deepSeek) instanceof UnifiedPlanningRunProcessor);
+  ok(controlledDshProcessorFromEnv(env, deepSeek, executorFactory) instanceof ControlledDshRunProcessor);
 });

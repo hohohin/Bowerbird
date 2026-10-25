@@ -73,7 +73,7 @@ try {
     assert.equal(await page.getByRole('textbox', { name: '搜索当前文件夹', exact: true }).inputValue(), '');
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "导入", exact: true }).click();
-    const importItem = page.getByRole("menuitem", { name: "导入图片", exact: true });
+    const importItem = page.getByRole("menuitem", { name: "导入图片或视频", exact: true });
     await importItem.waitFor();
     assert.equal(await importItem.evaluate(el => {
       const box = el.getBoundingClientRect();

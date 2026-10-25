@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { type CSSProperties, useState } from "react";
+import { Grid2X2, LayoutGrid } from "lucide-react";
 import { useStore } from "../store";
 import { thumbnailWidthFromZoom, thumbnailZoomFromWidth, type ThumbnailScope } from "../lib/thumbnailSize";
 
-export function ThumbnailSizeSlider({ scope }: { scope: ThumbnailScope }) {
+export function ThumbnailSizeSlider({ scope, appearance }: { scope: ThumbnailScope; appearance?: "project-manager" }) {
   const value = useStore(s => scope === "library" ? s.libraryThumbnailWidth : scope === "projects" ? s.projectsThumbnailWidth : s.canvasThumbnailWidth);
   const setWidth = useStore(s => s.setThumbnailWidth);
   const zoom = thumbnailZoomFromWidth(value, scope);
@@ -12,6 +13,14 @@ export function ThumbnailSizeSlider({ scope }: { scope: ThumbnailScope }) {
     if (draft !== null && draft.trim() && Number.isFinite(Number(draft))) setWidth(scope, thumbnailWidthFromZoom(Number(draft), scope));
     setDraft(null);
   }
+  if (appearance === "project-manager") return <div className="project-manager-size" role="group" aria-label={label} title={label}
+    onKeyDown={event => event.stopPropagation()}>
+    <LayoutGrid size={18} aria-hidden="true"/>
+    <input type="range" min={0} max={100} step={1} value={zoom} aria-label={label} aria-valuetext={`卡片大小 ${zoom}（0–100）`}
+      style={{ "--size-fill": `${zoom}%` } as CSSProperties}
+      onChange={event => setWidth(scope, thumbnailWidthFromZoom(Number(event.target.value), scope))}/>
+    <Grid2X2 size={19} aria-hidden="true"/>
+  </div>;
   return <div className="thumbnail-size-slider is-floating" role="group" aria-label="素材缩略图大小调整"
     title="素材缩略图大小调整" onKeyDown={event => event.stopPropagation()}>
     <svg className="thumbnail-size-icon" viewBox="0 0 22 12" aria-hidden="true">

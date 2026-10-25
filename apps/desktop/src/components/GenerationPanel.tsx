@@ -1,11 +1,11 @@
-import { cloudVideoOptions } from "../lib/videoGeneration";
+import { userErrorMessage } from "../lib/userError";
 import { DreaminaTaskCredit } from "./creation/DreaminaCredits";
 import { DreaminaTaskDiagnostics } from "./creation/DreaminaTaskDiagnostics";
 import { GenerationSessionSurface } from "./GenerationSessionSurface";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { DEFAULT_VIDEO_OPTIONS, imageInputError, videoInputError, videoProvider, type VideoOptions } from "../lib/videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS, imageInputError, videoInputError, videoModelLabel, videoProvider, type VideoOptions } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { MediaPreview } from "./MediaPreview";
 import { useStore, type GenEditingMode } from "../store";
@@ -20,7 +20,7 @@ import {
 import { PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
 import { notify, notifyError, notifySuccess } from "../lib/notify";
 import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/entitlement";
-import { cloudProviderLabel, canonicalProviderKey, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
+import { imageProviderLabel, canonicalProviderKey, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import type { Asset, GenJob, GenTurn, VisualProfileCapsule, VisualProfileRuleValue } from "../lib/types";
 import { Lightbox } from "./Lightbox";
 import type { VideoFrame } from "../lib/videoFrame";
@@ -137,7 +137,7 @@ export function GenerationPanel({
         : cloudBalance <= 0
           ? "积分不足"
           : "Bowerbird Cloud 不可用"
-      : targetHealth?.reason || "当前 provider 不可用";
+      : userErrorMessage(targetHealth?.reason, "当前生成服务暂不可用，请在设置中检查登录状态。");
   // 重试要新开 job（版本分支），与「重新编辑」同过并行上限门。
   const canStartAnother = canStartAnotherJob(cloudEntitlement, runningJobCount);
 
@@ -567,11 +567,7 @@ export function GenerationPanel({
             {activeJob && (
               <span className="shrink-0 rounded-full border border-edge px-2 py-0.5 text-[11px] text-muted">
                 {activeJob.turns.length} 轮 · {imageCount} 图
-                {activeJob.provider === "jimeng"
-                  ? " · 即梦"
-                  : isCloudProvider(activeJob.provider)
-                    ? ` · ${cloudProviderLabel(activeJob.provider, cloudEntitlement) ?? "Bowerbird Cloud"}`
-                    : ""}
+                {` · ${activeJob.media === "video" && activeJob.videoOptions ? videoModelLabel(activeJob.videoOptions.model_version) : imageProviderLabel(activeJob.provider, cloudEntitlement, null)}`}
               </span>
             )}
             {readOnly && <span className="rounded-full border border-edge px-2 py-0.5 text-[10px] text-muted">旧会话 · 只读</span>}
@@ -775,12 +771,8 @@ function TurnView({
   const elapsedLabel = busy && turn.startedAt ? fmtDuration(now - turn.startedAt) : null;
   const durationLabel = turn.durationMs != null ? fmtDuration(turn.durationMs) : null;
   const turnEntitlement = useStore((s) => s.cloudEntitlement);
-  const viaLabel =
-    turn.provider && turn.provider !== "codex-cli"
-      ? turn.provider === "jimeng"
-        ? "即梦"
-        : cloudProviderLabel(turn.provider, turnEntitlement) ?? turn.provider
-      : null;
+  const viaLabel = turn.media === "video" && turn.videoOptions ? videoModelLabel(turn.videoOptions.model_version)
+    : turn.provider ? imageProviderLabel(turn.provider, turnEntitlement, null) : null;
   const refThumbs = (refAssets ?? [])
     .map((a) => ({ src: a.thumb_path ?? a.store_path ?? "", name: a.name }))
     .filter((t) => t.src);
@@ -917,7 +909,7 @@ function TurnView({
         <div className="min-w-0 flex-1 space-y-2">
           {(viaLabel || durationLabel) && (
             <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted">
-              {viaLabel && <span>via {viaLabel}{turn.media === "video" && turn.videoOptions ? ` · ${turn.videoOptions.model_version}` : ""}</span>}
+              {viaLabel && <span>via {viaLabel}</span>}
               {durationLabel && <span>{viaLabel ? "· " : ""}用时 {durationLabel}</span>}
             </div>
           )}
@@ -972,7 +964,7 @@ function TurnView({
           ) : turn.error ? (
             <div className="space-y-1.5 rounded border border-red-500/40 bg-red-500/10 p-2">
               <div className="text-[11px] font-semibold text-red-300">❌ 生成失败</div>
-              <pre className="whitespace-pre-wrap break-all text-[11px] text-red-200/90">{turn.error}</pre>
+              <pre className="whitespace-pre-wrap break-all text-[11px] text-red-200/90">{userErrorMessage(turn.error, "本次生成未完成，请稍后重试。")}</pre>
               {turn.media === "video" && turn.provider === "jimeng" && <DreaminaTaskDiagnostics submitId={turn.submitId} />}
               <button
                 onClick={onRetry}
@@ -992,7 +984,7 @@ function TurnView({
               {/* 流式过程日志（codex CLI 输出），生成期间实时滚动 */}
               {streaming && (
                 <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded border border-edge bg-panel px-2.5 py-2 font-mono text-[10.5px] leading-4 text-muted">
-                  {streaming}
+                  {userErrorMessage(streaming, "生成仍在进行，请稍候。详细运行记录可从会话菜单复制。")}
                 </pre>
               )}
             </div>
@@ -1231,8 +1223,7 @@ function GenEditComposer({
             : "Bowerbird Cloud 不可用"
       : !canUseByo(cloudEntitlement)
         ? "升级 Pro 解锁本机 Codex / 即梦 CLI"
-        : (activeGenProvider === "jimeng" ? dreaminaHealth?.reason : codexHealth?.reason) ||
-          "当前 provider 不可用";
+        : userErrorMessage(activeGenProvider === "jimeng" ? dreaminaHealth?.reason : codexHealth?.reason, "当前生成服务暂不可用，请在设置中检查登录状态。");
 
   // 编辑坞高度 → CSS 变量：瀑布流滚动容器据此留出底部 padding，避免坞盖住最后一行素材。
   const dockRef = useRef<HTMLDivElement>(null);
@@ -1493,7 +1484,7 @@ function GenEditComposer({
       <BoardChipPreview hostRef={hostRef} />
       {referenceError && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
       <div className="generation-toolbar flex flex-wrap items-center gap-2">
-          {isVideo ? <VideoControls channel={videoChannel} onChannelChange={channel => { setVideoChannel(channel); if (channel === "cloud") setVideoOptions(cloudVideoOptions(videoOptions)); }} options={videoOptions} onChange={setVideoOptions} ratio={ratio} onRatioChange={setRatio} /> : <>
+          {isVideo ? <VideoControls channel={videoChannel} options={videoOptions} onChange={(options, channel) => { if (channel) setVideoChannel(channel); setVideoOptions(options); }} ratio={ratio} onRatioChange={setRatio} /> : <>
           <RatioSelect value={ratio} onChange={setRatio} />
           {!isRevise && <ProviderSelect
             value={activeGenProvider}

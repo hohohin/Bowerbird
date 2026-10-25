@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { ContextMenu } from "./ContextMenu";
@@ -472,9 +473,9 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
       </div>}
       </LibraryFloatingControls>
     </div>
-    {error && <p role="alert" className="folder-error">{error}</p>}
-    {locations?.migration?.state === "failed" && <p role="alert" className="folder-error">资料目录迁移未完成：{locations.migration.error}</p>}
-    {(allLocations || tag) && tagError && <p role="alert" className="folder-error">{tagError}</p>}
+    {error && <p role="alert" className="folder-error">{userErrorMessage(error, "文件操作未完成，请检查保存位置后重试。")}</p>}
+    {locations?.migration?.state === "failed" && <p role="alert" className="folder-error">{userErrorMessage(locations.migration.error, "资料目录迁移未完成，请检查目标位置和可用空间。")}</p>}
+    {(allLocations || tag) && tagError && <p role="alert" className="folder-error">{userErrorMessage(tagError, "分类素材暂时无法读取，请重新打开后重试。")}</p>}
     <div className="file-browser-body">
     <aside className="file-browser-places" aria-label="文件浏览器目录">
       <button className="file-place-row" disabled={loading || savingPlace || !locations}

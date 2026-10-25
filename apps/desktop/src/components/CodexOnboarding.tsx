@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useStore } from "../store";
@@ -163,7 +164,7 @@ export function CodexOnboarding() {
           </div>
         ) : (
           <div className="app-inline-status is-error">
-            当前状态：{codexHealth?.reason ?? "检测中…"}
+            当前状态：{codexHealth ? userErrorMessage(codexHealth.reason, "暂时无法使用，请重新检测或登录。") : "检测中…"}
           </div>
         )}
 
@@ -199,11 +200,11 @@ export function CodexOnboarding() {
               )}
               {installState === "running" && lines.length > 0 && (
                 <pre className="mt-1.5 max-h-28 overflow-auto rounded bg-panel2 p-2 text-[11px] text-muted">
-                  {lines.join("\n")}
+                  {lines.map(line => userErrorMessage(line, "正在安装，请稍候…")).join("\n")}
                 </pre>
               )}
               {installState === "error" && (
-                <div className="mt-1.5 text-xs text-red-300">{installReason}</div>
+                <div className="mt-1.5 text-xs text-red-300">{userErrorMessage(installReason, "安装未完成，请检查网络后重试。")}</div>
               )}
             </div>
             <div className="mt-1 pl-7 text-xs text-muted">
@@ -233,7 +234,7 @@ export function CodexOnboarding() {
                     : "一键登录 ChatGPT"}
               </button>
               {loginState === "error" && (
-                <div className="mt-1.5 text-xs text-red-300">{loginReason}</div>
+                <div className="mt-1.5 text-xs text-red-300">{userErrorMessage(loginReason, "授权未完成，请重新登录。")}</div>
               )}
             </div>
             <div className="mt-1 pl-7 text-xs text-muted">

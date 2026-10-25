@@ -11,6 +11,8 @@ import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_s
 import { assertReferenceImages, corsHeaders, withTimeout } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
 import { isReplication, replicationOperations, replicationService, replicationPriceAvailable, validateReplication } from "../_shared/replication.ts";
+import { shortRewrite, standardTextFits } from "../_shared/bcoin-text.ts";
+import { imageMetadata } from "../_shared/image-metadata.ts";
 
 // 双模式：UNDERSTAND_ASYNC=false（默认）保持旧的「单次 Edge 请求内同步调方舟」行为；
 // true 时切换为生图 G0 同款异步任务模式（create/get 短请求 + VPS Worker 领取执行），
@@ -66,33 +68,16 @@ function validate(body: unknown): UnderstandRequest {
     }
   } else {
     assertReferenceImages([value.image], 1);
+    const image = value.image as ImageInput;
+    const metadata = imageMetadata(Uint8Array.from(atob(image.base64), c => c.charCodeAt(0)));
+    if (!metadata || metadata.width > 1600 || metadata.height > 1600) throw new ApiError("invalid_request", "标准图片理解最长边为 1600 像素，请先缩小图片");
   }
   if (value.instruction !== undefined &&
     (typeof value.instruction !== "string" || value.instruction.length > 20_000)) {
     throw new ApiError("invalid_request", "instruction 最多 20000 字符");
   }
+  if (!standardTextFits(value.instruction)) throw new ApiError("invalid_request", "标准理解限 8000 字节文字输入；长文本请使用单独预算的 Agent 任务");
   return value as unknown as UnderstandRequest;
-}
-
-async function tierFor(admin: SupabaseClient, userId: string): Promise<string> {
-  const { data, error } = await admin.from("subscriptions").select("tier,status,current_period_end")
-    .eq("user_id", userId).maybeSingle();
-  if (error) throw new ApiError("internal_error", "订阅状态读取失败", true);
-  if (!data || data.status !== "active" ||
-    (data.current_period_end && Date.parse(data.current_period_end) <= Date.now())) return "free";
-  return data.tier;
-}
-
-async function consumeFreeQuota(admin: SupabaseClient, userId: string): Promise<void> {
-  const limit = Number.parseInt(Deno.env.get("FREE_CAPTION_DAILY_LIMIT") ?? "10", 10);
-  const { error } = await admin.rpc("consume_understand_quota", {
-    p_user_id: userId,
-    p_limit: limit,
-  });
-  if (error?.details === "understand_daily_limit" || error?.message?.includes("daily understand")) {
-    throw new ApiError("rate_limited", "今日反推次数已用完");
-  }
-  if (error) throw new ApiError("internal_error", "理解次数计数失败", true);
 }
 
 async function sha256Hex(value: string): Promise<string> {
@@ -154,28 +139,25 @@ async function createJob(
     ...(replication ? { video: body.video ?? null, rewrite: body.rewrite ?? null } : {}),
   });
   const manifestHash = await sha256Hex(requestPayload);
-  // Reopening an existing replication job never consumes quota or creates a new hold.
-  if (replication) {
+  // Reopening accepted work never reprices it or rolls back another in-flight request.
+  {
     const existing = await admin.from("understand_jobs").select("*").eq("user_id", userId).eq("idempotency_key", body.idempotency_key).maybeSingle();
     if (existing.error) throw new ApiError("internal_error", "读取复刻任务失败", true);
     if (existing.data) {
       if (existing.data.input_manifest_hash !== manifestHash) throw new ApiError("invalid_request", "幂等键已用于不同内容", false, 409);
-      return jobResponse(existing.data as UnderstandJob, cors);
+      if (replication || existing.data.status !== "uploading") return jobResponse(existing.data as UnderstandJob, cors);
     }
+  }
+  if (replication) {
     const capability = (await replicationCapabilities(admin)).find(item => item.operation === body.operation);
     if (!capability?.available) throw new ApiError("not_configured", "此复刻能力尚未启价，暂不可提交");
   }
   await ensureDailyCredits(admin, userId);
-  const tier = await tierFor(admin, userId);
   let quotaConsumed = false;
   let holdId: string | undefined;
   let jobId: string | undefined;
   try {
-    if (!replication && tier === "free") {
-      await consumeFreeQuota(admin, userId);
-      quotaConsumed = true;
-    }
-    const held = await holdCredits(admin, userId, body.idempotency_key, replication ? replicationService(body.operation) : "caption");
+    const held = await holdCredits(admin, userId, body.idempotency_key, shortRewrite(body) ? "replication_text_rewrite_short" : replication ? replicationService(body.operation) : "caption");
     holdId = held.holdId;
 
     const existingResult = await admin.from("understand_jobs").select("*")
@@ -183,7 +165,7 @@ async function createJob(
     if (existingResult.error) throw new ApiError("internal_error", "读取幂等云理解任务失败", true);
     let job = existingResult.data as unknown as UnderstandJob | null;
     if (job && job.input_manifest_hash !== manifestHash) {
-      if (replication) holdId = undefined;
+      holdId = undefined;
       throw new ApiError("invalid_request", "幂等键已用于不同的理解内容", false, 409);
     }
     if (job && (replication || job.status !== "uploading")) return jobResponse(job, cors);
@@ -208,7 +190,7 @@ async function createJob(
       }).select("*").single();
       if (error || !data) {
         // A concurrent create can own this same hold. Never roll its credits back.
-        if (replication) holdId = undefined;
+        holdId = undefined;
         throw new ApiError("internal_error", "创建云理解任务失败，请按原任务恢复", true);
       }
       job = data as unknown as UnderstandJob;
@@ -320,11 +302,6 @@ Deno.serve(async (request) => {
     // —— 旧同步路径（UNDERSTAND_ASYNC=false）：行为与改造前完全一致 ——
     const body = validate(raw);
     await ensureDailyCredits(admin, user.id);
-    const tier = await tierFor(admin, user.id);
-    if (tier === "free") {
-      await consumeFreeQuota(admin, user.id);
-      quotaConsumed = true;
-    }
 
     const held = await holdCredits(admin, user.id, body.idempotency_key, "caption");
     holdId = held.holdId;

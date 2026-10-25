@@ -1,7 +1,32 @@
 import { createHash } from "node:crypto";
 import { deepEqual, equal, ok } from "node:assert/strict";
 import { test } from "node:test";
+import { execFile } from "node:child_process";
+import { Buffer } from "node:buffer";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { BRAND_OBSERVATION_TASK, loadBrandPrompt } from "../prompts/brand-visual.ts";
+
+test("video analysis enables thinking and sends the complete audio/video file, returning transcript without reasoning", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "replication-thinking-"));
+  try {
+    const path = join(dir, "reference.mp4");
+    await new Promise<void>((resolve, reject) => execFile("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "color=c=red:s=32x32:r=1:d=1", "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:v", "libx264", "-c:a", "aac", "-shortest", path], { windowsHide: true, timeout: 30_000, maxBuffer: 1024 * 1024 }, error => error ? reject(error) : resolve()));
+    const video = { mime: "video/mp4", base64: Buffer.from(readFileSync(path)).toString("base64"), duration: 1 };
+    const result = { analysisText: "start: 0, end: 1\n红色画面，固定机位。", transcript: "测试语音", transcriptStatus: "transcribed" };
+    const content = `【视频分析】\n${result.analysisText}\n【语音转写】\n${result.transcript}\n【转写状态】\ntranscribed`;
+    const recorded = await runOnce(async () => ({ ok: true, status: 200, body: JSON.stringify({ choices: [{ finish_reason: "stop", message: { content, reasoning_content: "内部推理，不是分析结果" } }] }) }), baseConfig({ arkReplicationVideoModel: "doubao-seed-2-0-mini-260428" }), JSON.stringify({ schema_version: 1, operation: "video-analysis", image: null, instruction: null, mock_scenario: null, video }));
+    const request = recorded.arkRequestBody as { model: string; thinking: { type: string }; max_tokens: number; response_format: { type: string }; messages: { content: { video_url?: { url: string; fps: number }; text?: string }[] }[] };
+    equal(request.model, "doubao-seed-2-0-mini-260428");
+    deepEqual(request.thinking, { type: "enabled" });
+    equal(request.max_tokens, 6000);
+    equal(request.response_format.type, "text");
+    deepEqual(request.messages[0].content[0].video_url, { url: `data:video/mp4;base64,${video.base64}`, fps: 1 });
+    ok(request.messages[0].content[1].text?.includes("转写必须依据实际音轨"));
+    deepEqual(JSON.parse(recorded.finishBody?.resultText as string), result);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 test("replication rewrite uses its model and rejects truncated text without retrying", async () => {
   const input = JSON.stringify({ schema_version: 1, operation: "text-rewrite", image: null, instruction: null, mock_scenario: null, rewrite: { inputText: "原分镜", persona: "编导", rules: "保留节奏", product: null } });
@@ -10,7 +35,8 @@ test("replication rewrite uses its model and rejects truncated text without retr
   equal(calls, 1); equal(recorded.finishBody, null); equal(recorded.settleBody?.action, "fail");
   equal(recorded.settleBody?.safeErrorCode, "replication_result_truncated");
   ok(String(recorded.settleBody?.safeMessage).includes("截断"));
-  const request = recorded.arkRequestBody as { model: string; messages: { role: string; content: string }[] };
+  const request = recorded.arkRequestBody as { model: string; thinking: { type: string }; messages: { role: string; content: string }[] };
+  equal(request.thinking.type, "disabled");
   equal(request.model, "text-model"); equal(request.messages[0].role, "system"); equal(JSON.parse(request.messages[1].content).referenceText, "原分镜");
 });
 

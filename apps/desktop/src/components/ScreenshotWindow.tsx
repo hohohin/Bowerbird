@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -296,7 +297,7 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
       <button title="关闭贴图" disabled={busy} onClick={() => void close()}><X size={14} /></button>
     </div>
     {image && <img draggable={false} src={image.src} alt="置顶截图" onPointerDown={event => { if (event.button === 0) void getCurrentWindow().startDragging(); }} onDoubleClick={() => void close()} />}
-    {error && <p className="snip-error" role="alert">{error}</p>}
+    {error && <p className="snip-error" role="alert">{userErrorMessage(error, "截图操作未完成，请关闭截图窗口后重试。")}</p>}
   </main>;
   return <main className="snip-root">
     <div className={`snip-stage ${tool === 'select' ? 'is-select' : ''}`} onPointerDown={down} onPointerMove={move} onPointerUp={up}
@@ -330,6 +331,6 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
       </div>}
       <p className="snip-tip">{tool === 'select' ? '方向键移动 1 px · Ctrl/⌘ 扩边 · Shift 缩边 · 双击复制' : tool === 'text' ? '点击选区放置文字 · Alt 放大镜 · C 取色' : '在选区中拖动标注 · Alt 放大镜 · C 取色'}{busy ? ' · 正在处理…' : ''}</p>
     </div>}
-    {error && <p className="snip-error" role="alert">{error}</p>}
+    {error && <p className="snip-error" role="alert">{userErrorMessage(error, "截图操作未完成，请关闭截图窗口后重试。")}</p>}
   </main>;
 }

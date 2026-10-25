@@ -21,7 +21,7 @@
 
 **9 月 23 日工作流扩展（开发版源码）：** 工作流文本 Agent 与新增「工作流助手」共用此投递通道，显式请求结果文件；助手使用 `purpose: planning` 返回受限卡片编排 JSON，由桌面校验后一次保存，不执行生成任务。不是新的 Agent Runner，也不改变下述普通创作板 Agent DS 的交互。具体协议与验收边界见 [工作流卡片](CANVAS-WORKFLOW.md)。
 
-> 本节覆盖下方 2026-09-21「拉起本地 DSH」的入口链路；ACP 拉起路径保留未接线（见末条）。
+> 本节覆盖下方 2026-09-21「拉起本地 DSH」的入口链路；旧 ACP 拉起路径已于 2026-10-24 清理（见末条）。
 
 按用户决策，桌面端「Agent DS」不再自己拉起 harness，而是把创作板内容**投递到本机 DSH 队列**，并**自动送进用户正开着的那条 DSH 会话**——目标不是把回复送回 Bowerbird，而是**借用该会话的 harness 能力**（全量工具面、已有上下文）；Bowerbird 端只留两件事：从素材库方便地传图、能看清实际投递原文。此为本机 dev 实验，不改变云端生产「DeepSeek 文本 Agent + 方舟 Vision 工具」边界。
 
@@ -29,7 +29,7 @@
 - **两条腿，文件是权威**：① 先落盘（绝不丢件）；② 再 best-effort 自动送达——`POST http://127.0.0.1:3080/api/session.prompt`（可用 `BOWERBIRD_DSH_WEB_URL` 覆盖基址），信封 `{type:"client-request", rpcId, method, payload}`，`mode:"queue"`（忙时排队而非打断当前轮），内容 = `[Agent DS] <text>` + 逐张 `参考图N（素材名）：绝对路径`。目标会话由 `POST /api/session.list` 发现：**排除 `origin:"subagent"` 与 `blank:true`**、要求 `cwd` 命中本仓库（两侧先 canonicalize 解析符号链接与 `..`；Windows 再统一分隔符、`\\?\` 前缀与大小写，Unix 保留大小写及合法反斜杠）、取 `updatedAt` 最大者（同刻并列时 `running` 优先）。超时 8 秒；失败只降级为「留在队列等人工 drain」，前端提示会带上原因。
 - **消费方 = 本机 DSH 会话**：自动送达后消息直接出现在该会话里、该轮即被唤起；人工兜底路径是会话用 `glob`/`read` 读 `pending/`，把 `text` 当用户消息，参考图按 `images[].path` 取用后把文件搬进 `archive/`。**看图能力受会话模型限制**：本机 DSH 当前模型 `deepseek-v4-flash` 被声明为纯文本（`llm-deepseek/src/adapter.ts`），`read_image` 会以「模型未声明 image 输入」拒绝，因此像素级理解必须外挂——要么把本会话切到声明了 image 的模型，要么走 Bowerbird 自己的 `.agent-z/rpc` 契约调 `understand_asset`（方舟 Vision、用户账号计费、只回文本；已实测通路：请求被桌面端取走后约 100 秒返回，结果同时以 `agentz-<时间>` 维度落进该素材）。payload 因此始终带绝对路径 + 素材名，三条路都不改契约。
 - **链路简化**：不再 spawn node 子进程、不再依赖 `apps/cloud/.env`、DeepSeek key 或 DSH profile 预检；命令返回 `{path, sessionId, sessionTitle, autoDelivered, notice}`，前端投递成功即解除 busy（不再有 `ds_status` done/error 往返等待）。文件系统层契约仍是 `.agent-z/`（gitignore），与 Agent Z/G 的 inbox/rpc 同目录族但**不同子目录**，`drain_inbox` 的消费互不影响。
-- **保留未接线（待回收）**：`src/local/agent-ds-chat-cli.ts`、`agent-ds-dsh.ts`、`profileMode "agent-ds"` 模板组与 spike `agent-ds.e2e.test.mjs` 是旧异步路径遗留，当前无调用方；`.agent-z/ds-session.json` 不再更新（历史 v2 文件留在原处）。这样回退只需改回 Rust 一处，代价是仓库里留一段死代码。
+- **旧路径已清理（2026-10-24，仅仓库）**：无调用方的 `agent-ds-chat-cli.ts`、`agent-ds-dsh.ts`、`profileMode "agent-ds"` 可选模板组及专属测试已移除，同时移除其独占的代理图片放行选项。当前 Rust ds-inbox / session.prompt 投递链路保持；历史实现从 Git 追溯，回退不能只改 Rust 一处。`.agent-z/ds-session.json` 历史文件不改写。下方 9 月 21 日记录是历史证据，不是当前接线说明。
 - **验证**：Rust 7 项单测（payload 组装含空白名退化、`text == message`、投递正文带来源标记与逐张图名、落盘 camelCase + `pending/` 排序 + 无 `.tmp` 残留、送达结果回写同一文件、目标会话选择排除子代理/空白/异 cwd 且取最新、路径归一化）通过；`cargo test --lib` 全量 **406 passed / 9 ignored / 0 failed**、桌面 `pnpm --filter @bowerbird/desktop lint`（tsc）exit 0。**传输层真机实测**（不经桌面端代码，直接按同一逻辑跑）：`session.list` 返回 3 个候选顶层会话（子代理被正确排除）、选中当前会话、`session.prompt` 返回 `{"accepted":true}`。未真实运行新编译的桌面应用、安装包未动、未调用模型 provider。
 - **真注入的机制与红线（已实施，保留作参考）**：`dsh web` 没有私有通道——GUI 自己就走 `POST /api/session.prompt`，而 browser-trust fence 对 loopback 的非浏览器客户端直接放行，且明确「不是鉴权层」（`packages/client/connection/src/api-request-trust.ts` 头注）。host 侧有两条路径都命中活会话——投递走 `packages/api/remotes/src/agent-lookup.ts` 的 `ctx.agents.get(sessionId)`，命名预分配 id 的 RPC 走 `packages/host/apiproxy/src/api-proxy.ts` 的 `ensureSession`，未命中才冷恢复。
   - 回复观察（Bowerbird 侧暂不需要，留给日后）：`ws://127.0.0.1:<端口>/api/events.mux`（**只下行**，HTTP GET 该路径返回 426）；按 `sessionId` 过滤 `session/event`，用 `rpcId` 关联 `user/message → assistant/chunk → assistant/message → turn/end`；基线可用 `session.subscribed.lastSeq`、`POST /api/session.history` 或 `GET /api/session.export`。审批/提问帧必须用 `POST /api/respond` 回答，否则该轮卡住。

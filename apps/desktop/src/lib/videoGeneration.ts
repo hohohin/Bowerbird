@@ -25,6 +25,11 @@ export const DEFAULT_VIDEO_OPTIONS: VideoOptions = {
 };
 export const VIDEO_RATIOS = ["16:9", "9:16", "1:1", "3:4", "4:3", "21:9"];
 export const VIDEO_MODELS = ["seedance2.5", "seedance2.0", "seedance2.0fast", "seedance2.0_vip", "seedance2.0fast_vip", "seedance2.0mini", "seedance1.5pro", "seedance1.0fast"];
+/** New selections; old task keys above remain valid for recovery and history. */
+export const SELECTABLE_VIDEO_MODELS = ["seedance2.5", "seedance2.0", "seedance2.0mini"] as const;
+export function videoModelLabel(model: string): string {
+  return model.replace(/^seedance/i, "Seedance ").replace("fast", " Fast").replace("mini", " Mini").replace("pro", " Pro").replace("_vip", " · VIP");
+}
 export interface VideoModelCapability {
   model_version: string;
   resolutions: VideoOptions["video_resolution"][];

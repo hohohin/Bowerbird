@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { notifySuccess } from "../lib/notify";
@@ -110,7 +111,7 @@ export function RenameDialog({
       </div>
       {error && (
         <p className="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300">
-          {error}
+          {userErrorMessage(error, "名称未保存，请稍后重试。")}
         </p>
       )}
     </ModalShell>

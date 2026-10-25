@@ -15,10 +15,17 @@ Deno.serve(async (request) => {
   try {
     cors = corsHeaders(request);
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-    if (request.method !== "GET") throw new ApiError("invalid_request", "仅支持 GET", false, 405);
+    if (request.method !== "GET" && request.method !== "POST") throw new ApiError("invalid_request", "仅支持 GET/POST", false, 405);
 
     const { user, admin } = await requireUser(request);
     userId = user.id;
+    if (request.method === "POST") {
+      const body = await request.json().catch(() => null);
+      if (body?.action !== "start_trial") throw new ApiError("invalid_request", "未知权益操作");
+      const trial = await admin.rpc("start_pro_feature_trial", { p_user_id: user.id });
+      if (trial.error) throw new ApiError("invalid_request", "此账号无法领取 Pro 体验，已有权益不受影响");
+      return jsonResponse({ status: "trial_started", expires_at: trial.data }, 200, cors);
+    }
     await ensureDailyCredits(admin, user.id);
     const [
       { data: subscription, error: subError },
@@ -41,8 +48,9 @@ Deno.serve(async (request) => {
 
     const tier = activeTier(subscription);
     const issuedAt = new Date();
-    const refreshAfter = new Date(issuedAt.getTime() + 6 * 60 * 60 * 1000);
-    const graceUntil = new Date(issuedAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const paidEnd = tier !== "free" && subscription?.current_period_end ? Date.parse(subscription.current_period_end) : Infinity;
+    const refreshAfter = new Date(Math.min(paidEnd, issuedAt.getTime() + 6 * 60 * 60 * 1000));
+    const graceUntil = new Date(Math.min(paidEnd, issuedAt.getTime() + 7 * 24 * 60 * 60 * 1000));
 
     const generationServices = (imageServices ?? [])
       .filter((row) => typeof row.parameters?.label === "string" && row.parameters.label.trim())

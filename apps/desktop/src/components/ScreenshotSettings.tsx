@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Camera, Keyboard, Pin } from "lucide-react";
 import { useStore } from "../store";
 import { DEFAULT_SCREENSHOT_SHORTCUTS, displayShortcut, shortcutFromEvent } from "../lib/screenshot";
+import { userErrorMessage } from "../lib/userError";
 
 export function ScreenshotSettings() {
   const settings = useStore(s => s.settings);
@@ -10,9 +11,9 @@ export function ScreenshotSettings() {
   const [recording, setRecording] = useState<"capture" | "paste" | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  useEffect(() => { void invoke<{ error: string | null }>("screenshot_shortcut_status").then(s => setError(s.error ?? "")).catch(e => setError(String(e))); }, []);
+  useEffect(() => { void invoke<{ error: string | null }>("screenshot_shortcut_status").then(s => setError(s.error ? userErrorMessage(s.error, "暂时无法启用快捷键，请重新设置。") : "")).catch(e => setError(userErrorMessage(e, "暂时无法读取快捷键状态，请重新打开设置。"))); }, []);
   useEffect(() => {
-    void invoke("screenshot_record_shortcut", { recording: recording !== null }).catch(e => setError(String(e)));
+    void invoke("screenshot_record_shortcut", { recording: recording !== null }).catch(e => setError(userErrorMessage(e, "暂时无法录入快捷键，请重试。")));
     return () => { void invoke("screenshot_record_shortcut", { recording: false }).catch(() => {}); };
   }, [recording]);
   async function save(next: typeof shortcuts) {
@@ -20,12 +21,12 @@ export function ScreenshotSettings() {
     try {
       await invoke("screenshot_set_shortcuts", { shortcuts: next });
       await useStore.getState().loadSettings();
-    } catch (e) { setError(String(e)); }
+    } catch (e) { setError(userErrorMessage(e, "快捷键未保存，请重试。")); }
     finally { setBusy(false); }
   }
   async function run(command: string) {
     setBusy(true); setError("");
-    try { await invoke(command); } catch (e) { setError(String(e)); }
+    try { await invoke(command); } catch (e) { setError(userErrorMessage(e, "截图操作未完成，请重试；如仍失败，请检查屏幕录制和剪贴板权限。")); }
     finally { setBusy(false); }
   }
   return <section className="settings-card px-3 py-3" aria-label="快捷键">

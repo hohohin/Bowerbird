@@ -41,7 +41,8 @@
     <a id="secondary" class="secondary hidden" href="/">bowerbird.cn</a>
   </main>
 
-  <script>
+  <script type="module">
+    import { reportUserError } from "./user-error.js";
     // 微信授权回调中转页（授权回调域必须是本备案域名，不能直接回调 *.supabase.co）。
     // state 前缀分流：dt_ = 桌面端（跳 bowerbird:// deep link）；web_ = 官网（本页换会话）。
     (function () {
@@ -70,11 +71,11 @@
       var wxError = query.get("error_description") || query.get("error") || "";
 
       if (wxError) {
-        done("微信登录未完成：" + wxError + "。请回到发起页重新扫码。", true);
+        done("微信登录未完成，请回到发起页重新扫码。", true);
         return;
       }
       if (!code || !state) {
-        done("缺少微信登录参数；请回到发起页重新扫码。", true);
+        done("登录链接不完整，请回到发起页重新扫码。", true);
         return;
       }
 
@@ -119,7 +120,7 @@
             return response.json().then(function (payload) {
               if (!response.ok || !payload || !payload.access_token || !payload.refresh_token) {
                 var message = payload && payload.error && payload.error.message ? payload.error.message : "登录失败（HTTP " + response.status + "）";
-                throw new Error(message);
+                throw Object.assign(new Error(message), { status: response.status, code: payload && payload.error && payload.error.code });
               }
               return { config: config, tokens: payload };
             });
@@ -137,7 +138,10 @@
                   step.config.supabasePublishableKey || step.config.supabaseAnonKey,
                   { auth: { persistSession: true, autoRefreshToken: true, flowType: "pkce" } }
                 );
-                resolve(client.auth.setSession({ access_token: step.tokens.access_token, refresh_token: step.tokens.refresh_token }));
+                resolve(client.auth.setSession({ access_token: step.tokens.access_token, refresh_token: step.tokens.refresh_token }).then(function (result) {
+                  if (result.error) throw result.error;
+                  return result;
+                }));
               } catch (error) { reject(error); }
             };
             document.head.appendChild(script);
@@ -149,7 +153,7 @@
           window.setTimeout(function () { window.location.replace("/"); }, 600);
         })
         .catch(function (error) {
-          done((error && error.message ? error.message : "登录失败") + "。请回到官网重试。", true);
+          done(reportUserError(error, "微信登录未完成，请回到官网重新扫码。"), true);
         });
     })();
   </script>

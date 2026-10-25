@@ -100,6 +100,11 @@ pub fn read(root: &Path) -> Result<Record, String> {
     if record.labels.iter().any(|l| l.dimension.as_deref().is_some_and(|d| d != "other" && !matches!(d, "subject" | "type" | "style" | "mood"))) {
         return Err("分类记录包含无效标签维度，原文件已保留".into());
     }
+    for label in &record.labels {
+        if let Some(english) = &label.english {
+            english.validate(&label.description).map_err(|e| e.to_string())?;
+        }
+    }
     let ids: HashSet<_> = record.labels.iter().map(|l| l.id.as_str()).collect();
     let pictures: HashSet<_> = record.pictures.iter().map(|p| p.id.as_str()).collect();
     let paths: HashSet<_> = record.pictures.iter().map(|p| p.path.as_str()).collect();
@@ -146,6 +151,24 @@ pub fn view_with_storage(path: &str, local: Option<&Path>) -> Result<FolderView,
         record: Record::default(),
         storage: "folder".into(),
     })
+}
+
+/// Return only the preview captured when this label was created.
+pub fn source_preview(root: &str, local: Option<&Path>, paths: &LibraryPaths, tag_id: &str) -> Result<Option<String>, String> {
+    let view = view_with_storage(root, local)?;
+    let label = view.record.labels.iter().find(|l| l.id == tag_id).ok_or("标签已不存在")?;
+    let Some(id) = label.provenance.as_ref().and_then(|p| p.asset_id.as_ref()) else { return Ok(None); };
+    let Some(picture) = view.record.pictures.iter().find(|p| &p.id == id) else { return Ok(None); };
+    let source = std::path::Path::new(&view.root).join(&picture.path);
+    let canonical = match source.canonicalize() { Ok(path) => path, Err(_) => return Ok(None) };
+    if !canonical.starts_with(&view.root) || crate::core::external_files::fingerprint(&canonical).ok().as_deref() != Some(&picture.fingerprint) { return Ok(None); }
+    let preview = paths.root.join("folder-classification-previews").join(format!("{}.jpg", picture.fingerprint));
+    let expected = label.provenance.as_ref().and_then(|p| p.preview_hash.as_ref());
+    if expected.is_some() && !preview.exists() {
+        crate::media::thumb::generate(&canonical, &preview, 480).map_err(|e| e.to_string())?;
+    }
+    Ok(expected.filter(|hash| crate::core::external_files::fingerprint(&preview).ok().as_ref() == Some(hash))
+        .map(|_| preview.to_string_lossy().into_owned()))
 }
 
 pub fn tagged_images(path: &str, tag_id: &str) -> Result<Vec<external_files::FileEntry>, String> {
@@ -226,6 +249,150 @@ mod tests {
             let _ = fs::remove_dir_all(&self.root);
         }
     }
+
+    #[test]
+    fn folder_english_survives_roundtrip_and_library_updates_stay_isolated() {
+        use super::super::data::EnglishLabel;
+        let f = Fixture::new();
+        let main = Database::open_in_memory().unwrap();
+        main.migrate().unwrap();
+        main.save_local_label(None, "主库规则", "排除背景", true).unwrap();
+        let initial = main.local_labels().unwrap().remove(0);
+        let main_english = EnglishLabel { name: "Library Rule".into(), description: "Exclude backgrounds.".into() };
+        main.cache_label_english(&initial, &main_english).unwrap();
+        let a = f.open("a");
+        a.inherit_labels(&main.local_labels().unwrap()).unwrap();
+        a.save().unwrap();
+        assert_eq!(a.db.local_labels().unwrap().remove(0).english.as_ref(), Some(&main_english));
+        a.db.save_local_label(Some(&initial.id), &initial.name, "目录自己的规则", true).unwrap();
+        let folder_label = a.db.local_labels().unwrap().remove(0);
+        let folder_english = EnglishLabel { name: "Folder Rule".into(), description: "Use this folder's own criteria.".into() };
+        assert!(a.db.cache_label_english(&folder_label, &folder_english).unwrap());
+        a.save().unwrap();
+        drop(a);
+
+        let reopened = f.open("a");
+        assert_eq!(reopened.db.local_labels().unwrap().remove(0).english.as_ref(), Some(&folder_english));
+        main.save_local_label(Some(&initial.id), &initial.name, "主库新规则", true).unwrap();
+        let changed_main = main.local_labels().unwrap().remove(0);
+        let changed_english = EnglishLabel { name: "Changed Library Rule".into(), description: "Changed library criteria.".into() };
+        main.cache_label_english(&changed_main, &changed_english).unwrap();
+        let added_id = main.save_local_label(None, "新主库标签", "新增定义", true).unwrap();
+        let added = main.local_labels().unwrap().into_iter().find(|label| label.id == added_id).unwrap();
+        main.cache_label_english(&added, &main_english).unwrap();
+        reopened.inherit_labels(&main.local_labels().unwrap()).unwrap();
+        reopened.save().unwrap();
+        let labels = reopened.db.local_labels().unwrap();
+        assert_eq!(labels.iter().find(|l| l.id == initial.id).unwrap().english.as_ref(), Some(&folder_english));
+        assert_eq!(labels.iter().find(|l| l.id == added_id).unwrap().english.as_ref(), Some(&main_english));
+        assert_eq!(main.local_labels().unwrap().iter().find(|l| l.id == initial.id).unwrap().english.as_ref(), Some(&changed_english));
+        let record = read(&reopened.root).unwrap();
+        assert_eq!(record.labels.iter().find(|l| l.id == initial.id).unwrap().english.as_ref(), Some(&folder_english));
+    }
+
+    #[test]
+    fn folder_old_json_without_english_still_opens_and_caches_translation() {
+        use super::super::data::EnglishLabel;
+        let f = Fixture::new();
+        let a = f.open("a");
+        a.db.save_local_label(None, "旧目录标签", "原有规则", true).unwrap();
+        a.save().unwrap();
+        let path = a.root.join(RECORD);
+        drop(a);
+        let mut record: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        record["labels"][0].as_object_mut().unwrap().remove("english");
+        fs::write(&path, serde_json::to_vec_pretty(&record).unwrap()).unwrap();
+        let a = f.open("a");
+        let label = a.db.local_labels().unwrap().remove(0);
+        assert!(label.english.is_none());
+        let translated = EnglishLabel { name: "Old Folder Label".into(), description: "Original criteria.".into() };
+        a.db.cache_label_english(&label, &translated).unwrap();
+        a.save().unwrap();
+        assert_eq!(read(&a.root).unwrap().labels[0].english.as_ref(), Some(&translated));
+    }
+
+    #[test]
+    fn folder_cloud_english_is_saved_with_chinese_rule_and_source() {
+        use super::super::{cloud::NewLabel, data::{EnglishLabel, Prediction}};
+        let f = Fixture::new();
+        f.image("a/source.png", 20);
+        let a = f.open("a");
+        a.scan(&f.cache, false, &AtomicBool::new(false)).unwrap();
+        let asset = a.db.local_targets(true).unwrap().remove(0);
+        let english = EnglishLabel { name: "Paper Cutout".into(), description: "Layered cut paper; exclude flat printed graphics.".into() };
+        let definition = NewLabel { name: "剪纸".into(), definition: "多层剪纸，排除平面印刷图案".into(), english: Some(english.clone()) };
+        let prediction = Prediction { description: r#"{"reason":"明确的纸张层次"}"#.into(), tags: vec![definition.name.clone()], matches: vec![] };
+        a.db.apply_classification_with_definitions(&asset, a.db.local_revision().unwrap(), &prediction, true, &[], super::super::jev::OBSERVATION_MODEL, &[definition]).unwrap();
+        a.save().unwrap();
+        drop(a);
+        let reopened = f.open("a");
+        let label = reopened.db.local_labels().unwrap().remove(0);
+        assert_eq!(label.name, "剪纸");
+        assert_eq!(label.description, "多层剪纸，排除平面印刷图案");
+        assert_eq!(label.english.as_ref(), Some(&english));
+        assert_eq!(label.provenance.as_ref().unwrap().kind, "cloud");
+        assert_eq!(label.provenance.as_ref().unwrap().asset_id.as_deref(), Some(asset.as_str()));
+        assert_eq!(label.count, 1);
+    }
+
+    #[test]
+    fn folder_inherits_thirty_rules_and_keeps_five_discoveries_local() {
+        let f = Fixture::new();
+        f.image("a/p.png", 10);
+        let main = Database::open_in_memory().unwrap();
+        main.migrate().unwrap();
+        for i in 0..30 {
+            main.save_local_label(None, &format!("主库{i:02}"), "主库定义", i != 29).unwrap();
+        }
+        let initial = main.local_labels().unwrap();
+        let a = f.open("a");
+        a.inherit_labels(&initial).unwrap();
+        a.scan(&f.cache, false, &AtomicBool::new(false)).unwrap();
+        assert_eq!(a.db.local_labels().unwrap().len(), 30);
+        assert!(a.db.local_labels().unwrap().iter().all(|l| l.count == 0 && !l.has_examples && l.provenance.as_ref().unwrap().kind == "library"));
+        let image = a.db.local_targets(true).unwrap().remove(0);
+        for i in 0..5 {
+            let name = format!("新增{i}");
+            let prediction = super::super::data::Prediction { description: r#"{"reason":"新视觉特征"}"#.into(), tags: vec![name.clone()], matches: vec![] };
+            a.db.apply_classification_with_definitions(&image, a.db.local_revision().unwrap(), &prediction, true, &[], super::super::jev::OBSERVATION_MODEL,
+                &[super::super::cloud::NewLabel { name, definition: "目录独有".into(), english: None }]).unwrap();
+        }
+        a.db.save_local_label(Some(&initial[0].id), &initial[0].name, "目录人工调整", false).unwrap();
+        a.save().unwrap();
+        assert_eq!(main.local_labels().unwrap().len(), 30);
+        assert_eq!(serde_json::to_value(main.local_labels().unwrap()).unwrap(), serde_json::to_value(&initial).unwrap());
+        drop(a);
+        let reopened = f.open("a");
+        assert_eq!(reopened.db.local_labels().unwrap().len(), 35);
+        main.save_local_label(Some(&initial[0].id), &initial[0].name, "主库后来调整", true).unwrap();
+        main.save_local_label(None, "新增0", "同名主库定义", true).unwrap();
+        let added = main.save_local_label(None, "主库后来新增", "新规则", true).unwrap();
+        reopened.inherit_labels(&main.local_labels().unwrap()).unwrap();
+        reopened.save().unwrap();
+        let labels = reopened.db.local_labels().unwrap();
+        assert_eq!(labels.len(), 36);
+        let kept = labels.iter().find(|l| l.id == initial[0].id).unwrap();
+        assert_eq!(kept.description, "目录人工调整");
+        assert!(!kept.enabled);
+        assert!(labels.iter().any(|l| l.id == added && l.description == "新规则"));
+        let cloud = labels.iter().find(|l| l.name == "新增0").unwrap();
+        assert_eq!(cloud.description, "目录独有");
+        assert_eq!(cloud.provenance.as_ref().unwrap().kind, "cloud");
+        let root = reopened.root.to_str().unwrap();
+        assert!(source_preview(root, None, &f.cache, &cloud.id).unwrap().is_some());
+        let fresh_cache = LibraryPaths::init(f.root.join("fresh-cache")).unwrap();
+        let saved_record = fs::read(reopened.root.join(RECORD)).unwrap();
+        assert!(source_preview(root, None, &fresh_cache, &cloud.id).unwrap().is_some(), "a portable record can rebuild its missing local preview");
+        assert_eq!(fs::read(reopened.root.join(RECORD)).unwrap(), saved_record, "viewing evidence never rewrites folder rules");
+        f.image("a/p.png", 230);
+        assert!(source_preview(root, None, &f.cache, &cloud.id).unwrap().is_none());
+        reopened.scan(&f.cache, false, &AtomicBool::new(false)).unwrap();
+        reopened.save().unwrap();
+        assert!(source_preview(root, None, &f.cache, &cloud.id).unwrap().is_none(), "rescanning a changed image must not change creation evidence");
+        fs::remove_file(f.root.join("a/p.png")).unwrap();
+        assert!(source_preview(root, None, &f.cache, &cloud.id).unwrap().is_none());
+    }
+
     #[test]
     fn tag_results_flatten_only_existing_images_in_the_current_subtree() {
         let f = Fixture::new();
@@ -519,7 +686,7 @@ impl Session {
             {
                 let conn = db.conn.lock().unwrap();
                 for l in &record.labels {
-                    conn.execute("INSERT INTO tags(id,name,source,classification_description,classification_enabled,classification_dimension) VALUES(?1,?2,'auto',?3,?4,?5)",params![l.id,l.name,l.description,l.enabled,l.dimension]).map_err(|e| e.to_string())?;
+                    conn.execute("INSERT INTO tags(id,name,source,classification_description,classification_enabled,classification_dimension,classification_provenance,classification_english) VALUES(?1,?2,'auto',?3,?4,?5,?6,?7)",params![l.id,l.name,l.description,l.enabled,l.dimension,l.provenance.as_ref().map(serde_json::to_string).transpose().map_err(|e| e.to_string())?,l.english.as_ref().map(serde_json::to_string).transpose().map_err(|e| e.to_string())?]).map_err(|e| e.to_string())?;
                 }
                 for p in &record.pictures {
                     conn.execute("INSERT INTO assets(id,name,ext,source,created_at) VALUES(?1,?2,'png','folder',0)",params![p.id,p.path]).map_err(|e| e.to_string())?;
@@ -561,6 +728,28 @@ impl Session {
         }
         result
     }
+    /// Copy missing rules into this folder's database only. Folder edits and
+    /// discoveries remain authoritative; library asset identities are not copied.
+    pub fn inherit_labels(&self, labels: &[Label]) -> Result<(), String> {
+        let mut conn = self.db.conn.lock().unwrap();
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        for label in labels {
+            if let Some(english) = &label.english {
+                english.validate(&label.description).map_err(|e| e.to_string())?;
+            }
+            let provenance = super::data::LabelProvenance {
+                kind: "library".into(), asset_id: None, asset_name: None, reason: None,
+                created_at: chrono::Utc::now().timestamp(),
+                preview_hash: None,
+            };
+            tx.execute("INSERT INTO tags(id,name,source,classification_description,classification_enabled,classification_provenance,classification_english)
+                SELECT ?1,?2,'auto',?3,?4,?5,?6 WHERE NOT EXISTS(SELECT 1 FROM tags WHERE id=?1 OR name=?2 COLLATE NOCASE)",
+                params![label.id,label.name,label.description,label.enabled,serde_json::to_string(&provenance).map_err(|e| e.to_string())?,label.english.as_ref().map(serde_json::to_string).transpose().map_err(|e| e.to_string())?])
+                .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
     pub fn scan(
         &self,
         paths: &LibraryPaths,
@@ -802,6 +991,7 @@ impl LocalClassifier {
         self: &Arc<Self>,
         app: AppHandle,
         paths: Arc<LibraryPaths>,
+        labels: Vec<Label>,
         root: String,
         recursive: bool,
         pending: bool,
@@ -842,6 +1032,7 @@ impl LocalClassifier {
                 let cache = paths.clone();
                 let session = tokio::task::spawn_blocking(move || {
                     let session = Session::open_with_storage(&root, Some(&worker.folder_records_root()))?;
+                    session.inherit_labels(&labels)?;
                     session.scan(&cache, recursive, &worker.cancel)?;
                     session.save()?;
                     Ok::<_, String>(session)

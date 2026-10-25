@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, LogIn, LogOut, Settings, Zap } from "lucide-react";
+import { ChevronDown, ChevronUp, Coins, LogIn, LogOut, Settings, Zap } from "lucide-react";
 import { useStore } from "../store";
 import { understandReady } from "../lib/entitlement";
 import { SettingsDialog } from "./SettingsDialog";
 
 /**
- * 共用账号入口：顶栏显示头像并向下展开菜单，旧侧栏布局保留兼容。
+ * 共用账号入口：顶栏将头像与 Bcoin 合为账号面板入口，旧侧栏保留菜单。
  * 已登录 → 升级账号（应用内账号管理）/ 设置 / 登出；未登录 → 登录 Bowerbird 账号 / 设置。
  * 账号详情（账号名 / 积分明细 / 升级）已移入设置面板「账号管理」。
  */
@@ -23,17 +23,21 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   const logoutCloud = useStore((s) => s.logoutCloud);
   const setAccountOnboardingForceOpen = useStore((s) => s.setAccountOnboardingForceOpen);
   const codexHealth = useStore((s) => s.codexHealth);
-  const extensionConnected = useStore((s) => s.extensionConnected);
   const [open, setOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<"system" | "account">("system");
   const rootRef = useRef<HTMLDivElement>(null);
 
   const loggedIn = cloudAuth?.logged_in === true;
+  const balances = cloudEntitlement?.balances;
+  const credits = loggedIn && balances ? balances.daily + balances.sub + balances.topup : null;
+  const creditsText = credits == null ? "—" : credits.toLocaleString("zh-CN");
+  const creditsLabel = !loggedIn ? "登录后查看 Bcoin" : credits == null ? "Bcoin 余额暂不可用" : `可用 Bcoin：${creditsText}`;
   const name = cloudAuth?.display_name || cloudAuth?.email || cloudAuth?.user_id || "";
   const avatarUrl = cloudAuth?.avatar_url ?? null;
   const tier = cloudEntitlement?.tier?.toUpperCase() ?? "";
-  const hasIssue = !understandReady({ entitlement: cloudEntitlement, codexHealth, cloudAuth }) || !extensionConnected;
+  // 旧版本浏览器扩展不再参与未就绪提醒。
+  const hasIssue = !understandReady({ entitlement: cloudEntitlement, codexHealth, cloudAuth });
 
   useEffect(() => {
     onInteractionChange?.(open || settingsOpen);
@@ -155,14 +159,16 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => { if (topbar) { setSettingsSection("account"); setSettingsOpen(true); } else setOpen((v) => !v); }}
         className={topbar ? "topbar-account-trigger" : `flex w-full items-center rounded-lg py-2 hover:bg-panel2 ${collapsed ? "justify-center" : "gap-2 px-2"}`}
-        title={loggedIn ? `${name} · ${tier || "已登录"}` : "未登录"}
-        aria-label={loggedIn ? `${name}，账号与设置` : "未登录，账号与设置"}
+        title={topbar ? `账号管理 · ${creditsLabel}` : loggedIn ? `${name} · ${tier || "已登录"}` : "未登录"}
+        aria-label={topbar ? `${loggedIn ? name : "未登录"}，账号管理，${creditsLabel}` : loggedIn ? `${name}，账号与设置` : "未登录，账号与设置"}
         data-tour="sidebar-account"
-        aria-haspopup="menu"
-        aria-expanded={open}
+        aria-haspopup={topbar ? "dialog" : "menu"}
+        aria-expanded={topbar ? settingsOpen : open}
       >
+        {topbar && <span className="app-topbar-credits"><Coins size={16} aria-hidden="true"/><span>{creditsText}</span></span>}
+        {topbar && !loggedIn && <span className="text-xs text-muted">登录</span>}
         {loggedIn && avatarUrl ? (
           <img src={avatarUrl} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" />
         ) : (

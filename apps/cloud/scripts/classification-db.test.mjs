@@ -10,7 +10,7 @@ try {
     create schema auth; create schema extensions; create table auth.users(id uuid primary key);
     create function auth.uid() returns uuid language sql as $$ select null::uuid $$;
     create function extensions.gen_random_uuid() returns uuid language sql as $$ select gen_random_uuid() $$;`);
-  for (const prefix of ["0001","0002","0003","0004","0005","0009","0010","0023","0065","0066"]) {
+  for (const prefix of ["0001","0002","0003","0004","0005","0009","0010","0023","0065","0066","0067"]) {
     const file=fs.readdirSync("apps/cloud/supabase/migrations").find(f=>f.startsWith(prefix));
     await db.exec(fs.readFileSync(`apps/cloud/supabase/migrations/${file}`,"utf8").replace("create extension if not exists pgcrypto with schema extensions;",""));
   }
@@ -54,6 +54,53 @@ try {
   const pending=await Promise.all(Array.from({length:5},(_,i)=>begin(`parallel-${i}`)));
   await Promise.all(pending.reverse().map(({request})=>advance(request,"judge_done",true)));
   assert.equal(await successes(),10); assert.equal(await spent(),2);
+  // Supplier accounting is independent of application success and credit price.
+  const usage = {response_id:"chatcmpl-test",model:"vision-test",provider_created:1792600000,
+    prompt_tokens:1000,completion_tokens:200,total_tokens:1200,cached_tokens:300,reasoning_tokens:50};
+  const fallback = async key => {
+    const {request:r}=await begin(key);
+    await advance(r,"await_discovery");
+    await q("select advance_classification($1,$2,'claim_discovery','image','catalogue')",[user,r.id]);
+    return r;
+  };
+  const start = async (r,uid=user,provider="ark") => (await q("select start_classification_usage($1,$2,$3,'endpoint-test') ok",[uid,r.id,provider]))[0].ok;
+  const record = (r,v=usage,uid=user)=>q("select record_classification_usage($1,$2,$3)",[uid,r.id,JSON.stringify(v)]);
+  const ledger = async r=>(await q("select * from classification_usage where classification_id=$1",[r.id]))[0];
+  const paidInvalid=await fallback("paid-invalid-output");
+  await assert.rejects(()=>start(paidInvalid,other));
+  assert.equal(await start(paidInvalid),true);
+  assert.equal(await start(paidInvalid),false);
+  await assert.rejects(()=>record(paidInvalid,usage,other));
+  await assert.rejects(()=>record(paidInvalid,{...usage,prompt:"must not persist"}));
+  await record(paidInvalid); await record(paidInvalid);
+  await assert.rejects(()=>record(paidInvalid,{...usage,total_tokens:999}));
+  await advance(paidInvalid,"fail");
+  assert.equal((await ledger(paidInvalid)).usage_status,"recorded");
+  assert.equal(Number((await ledger(paidInvalid)).total_tokens),1200);
+  await q("update classification_requests set created_at=now()-interval '2 days',discovery_response='{}' where id=$1",[paidInvalid.id]);
+  await q("select cleanup_classification()");
+  assert.equal((await q("select discovery_response from classification_requests where id=$1",[paidInvalid.id]))[0].discovery_response,null);
+  assert.equal(Number((await ledger(paidInvalid)).total_tokens),1200);
+  for(const [key,v,state] of [
+    ["missing",{},"missing"], ["partial-cache",{...usage,cached_tokens:null},"partial"],
+    ["inconsistent",{...usage,total_tokens:12},"partial"],
+    ["zero",{...usage,prompt_tokens:0,completion_tokens:0,total_tokens:0,cached_tokens:0,reasoning_tokens:0},"recorded"]]) {
+    const r=await fallback(`usage-${key}`); await start(r); await record(r,v);
+    await advance(r,"discovery_done",false,{status:"undetermined"});
+    assert.equal((await ledger(r)).usage_status,state);
+  }
+  const unknown=await fallback("usage-timeout"); await start(unknown);
+  await advance(unknown,"fail");
+  assert.equal((await ledger(unknown)).usage_status,"pending");
+  assert.equal((await ledger(unknown)).total_tokens,null);
+  // Late evidence can still reconcile a failed/expired classification.
+  await record(unknown); assert.equal((await ledger(unknown)).usage_status,"recorded");
+  const mock=await fallback("usage-mock"); await start(mock,user,"mock"); await record(mock,{});
+  assert.equal((await ledger(mock)).usage_status,"mock"); await advance(mock,"fail");
+  assert.equal((await q("select has_table_privilege('authenticated','classification_usage','SELECT') allowed"))[0].allowed,false);
+  assert.equal((await q("select has_function_privilege('authenticated','record_classification_usage(uuid,uuid,jsonb)','EXECUTE') allowed"))[0].allowed,false);
+  assert.equal(await successes(),10); assert.equal(await spent(),2);
+  console.log("PASS: durable token ledger, single-call idempotency, ownership, immutable reported usage, invalid output cost, TTL retention, missing/partial/zero/mock distinction, late reconciliation, access controls");
   // Cancelled/abandoned requests release holds and the free quota via cleanup.
   const abandoned=(await begin("abandoned",user,10)).request;
   await q("update classification_requests set updated_at=now()-interval '11 minutes' where id=$1",[abandoned.id]);

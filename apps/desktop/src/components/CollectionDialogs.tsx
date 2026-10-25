@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useId, useRef, useState } from "react";
 import { Check, Folder as FolderIcon, Plus } from "lucide-react";
 import { api } from "../lib/api";
@@ -27,7 +28,7 @@ export function CollectionEditorDialog({ collections, item, parentId, onClose, o
     description={item ? "修改集合名称，保留原有层级和素材。" : parentName ? `在「${parentName}」中新建子集合。` : "新建顶层集合，用来整理素材。"}>
     <form className="catalog-form" onSubmit={event => { event.preventDefault(); void save(); }}>
       <label>集合名称<input data-modal-autofocus value={name} maxLength={100} onChange={e => setName(e.target.value)} disabled={busy} /></label>
-      {error && <p role="alert">{error}</p>}
+      {error && <p role="alert">{userErrorMessage(error, "集合未保存，请稍后重试。")}</p>}
       <button className="app-button-accent" type="submit" disabled={busy || !name.trim()}>{busy ? "保存中…" : "保存"}</button>
     </form>
   </ModalShell>;
@@ -82,7 +83,7 @@ export function CollectionAssignDialog({ assetIds, onClose, onSaved }: { assetId
       </fieldset>
       {!selected && <label>集合名称<input value={name} maxLength={100} disabled={busy || !!created.current} onChange={e => setName(e.target.value)} /></label>}
       {loading && <p role="status">正在读取集合…</p>}
-      {error && <p role="alert">{error} <button type="button" disabled={busy} onClick={() => setRevision(v => v + 1)}>重新读取</button></p>}
+      {error && <p role="alert">{userErrorMessage(error, "集合操作未完成，请重新读取后重试。")} <button type="button" disabled={busy} onClick={() => setRevision(v => v + 1)}>重新读取</button></p>}
       <button type="submit" className="app-button-accent" disabled={loading || busy || (!selected && !name.trim())}>{busy ? "添加中…" : "添加"}</button>
     </form>
   </ModalShell>;

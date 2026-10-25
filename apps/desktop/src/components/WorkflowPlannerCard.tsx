@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useState } from "react";
 import type { WorkflowNode, WorkflowPromptReference } from "../lib/canvasWorkflow";
 import type { CanvasNode } from "../lib/types";
@@ -22,7 +23,7 @@ export function WorkflowPlannerCard({ node, nodes, graphNodes, runtime, onChange
     <p className="workflow-hint">按 @ 引用接入的文本和图片，说明各自用途。搭建完成后，点击新流程的触发器运行。</p>
     {!import.meta.env.DEV && <p className="workflow-waiting">工作流助手目前仅在开发版连接本机 DSH。</p>}
     {planning?.summary && <p className="workflow-planner-summary" style={{ whiteSpace: "pre-wrap" }}>{planning.summary}</p>}
-    {planning?.error && <p className={planning.status === "failed" ? "workflow-error" : "workflow-waiting"} role="status">{planning.error}</p>}
+    {planning?.error && <p className={planning.status === "failed" ? "workflow-error" : "workflow-waiting"} role="status">{userErrorMessage(planning.error, "工作流编排未完成，请稍后取回结果。")}</p>}
     <footer>
       <span>{waiting ? "等待编排结果" : planning?.status === "applied" ? "流程已搭建 · 未自动运行" : planning?.status === "undone" ? "已撤回流程" : "本机 DSH · 开发版"}</span>
       {waiting ? <>

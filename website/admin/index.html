@@ -16,6 +16,7 @@
     <div class="nav-label">工作台</div>
     <nav class="nav">
       <button type="button" class="nav-item active" data-view="codes" aria-current="page"><span>▦</span> 兑换码管理 <span class="nav-dot"></span></button>
+      <button type="button" class="nav-item" data-view="users"><span aria-hidden="true">◎</span> 用户管理 <span class="nav-dot"></span></button>
       <button type="button" class="nav-item" data-view="skills"><span>⌘</span> Kernel 技能 <span class="nav-dot"></span></button>
     </nav>
     <div class="sidebar-bottom"><span class="live-dot"></span> 账号与权益管理<p>让每一次创作，从这里开始。</p></div>
@@ -24,13 +25,13 @@
     <header class="topbar"><span>运营管理 <span class="slash">/</span> <span id="topbar-crumb">兑换码</span></span><div class="account"><span id="account-email">管理员入口</span><button id="logout" class="text-button" hidden>退出登录</button></div></header>
     <section id="login-panel" class="login-panel">
       <div class="eyebrow">BOWERBIRD CONSOLE</div><h1>管理创作的通行证。</h1>
-      <p>使用你的 Bowerbird 管理员账号登录，创建、发放并跟踪 Pro 兑换码。</p>
+      <p>使用你的 Bowerbird 管理员账号登录，管理用户测试资格与 Pro 兑换码。</p>
       <form id="login-form"><label for="login-email">管理员邮箱</label><input id="login-email" type="email" autocomplete="email" placeholder="you@example.com" required><button id="login-submit" class="primary">发送登录链接 <span>↗</span></button></form>
       <p id="login-status" role="status">正在连接账号服务…</p>
     </section>
+    <div id="notice" class="notice admin-notice" role="status" hidden></div>
     <section id="console" hidden>
       <div class="page-heading"><div><div class="eyebrow">PRO ACCESS</div><h1>兑换码管理<span class="heading-dot">.</span></h1><p>创建一批兑换码，把 Pro 创作体验交到用户手中。</p></div><button id="refresh" class="secondary">↻ 刷新数据</button></div>
-      <div id="notice" class="notice" role="status" hidden></div>
       <div class="stats">
         <div class="stat"><span>累计生成</span><strong id="stat-total">—</strong><small>全部兑换码</small></div>
         <div class="stat active-stat"><span><i class="live-dot"></i> 可发放</span><strong id="stat-unused">—</strong><small>未兑换且在有效期内</small></div>
@@ -50,6 +51,17 @@
       </section>
       <footer>兑换码开通权益与积分，用户素材仍保存在本地。<span>BOWERBIRD · ADMIN</span></footer>
     </section>
+    <section id="users-console" hidden>
+      <div class="page-heading"><div><div class="eyebrow">USER ACCESS</div><h1>用户管理<span class="heading-dot">.</span></h1><p>查看已注册用户，管理测试功能的访问资格。</p></div><button id="users-refresh" class="secondary">↻ 刷新用户</button></div>
+      <section class="inventory">
+        <div class="inventory-heading"><div><h2>用户清单</h2><span id="users-count" class="chip" role="status">正在读取…</span></div></div>
+        <form id="users-filter-form" class="filters"><label class="search"><span aria-hidden="true">⌕</span><input id="users-search" placeholder="搜索邮箱或用户 ID" aria-label="搜索用户" maxlength="100"></label><select id="users-filter" aria-label="测试资格筛选"><option value="">全部用户</option><option value="test">仅测试账号</option><option value="regular">非测试账号</option></select><button class="secondary" type="submit">查询</button></form>
+        <div class="table-wrap"><table><thead><tr><th>账号 / 用户 ID</th><th>测试资格</th><th>注册时间</th><th>最近登录</th><th class="right">操作</th></tr></thead><tbody id="user-rows"></tbody></table></div>
+        <div id="users-empty" class="empty" hidden><h3>没有匹配的用户</h3><p>调整筛选条件，或确认对方已注册 Bowerbird。</p></div>
+        <div class="pagination"><span id="users-page-label">每页 50 条</span><div><button id="users-previous" class="secondary" disabled>← 上一页</button><button id="users-next" class="secondary" disabled>下一页 →</button></div></div>
+      </section>
+      <footer>修改测试资格后，用户需在桌面端设置中点击「刷新权益」。测试资格不赠送会员、积分或管理员权限。</footer>
+    </section>
     <section id="skills-console" hidden>
       <div class="page-heading"><div><div class="eyebrow">KERNEL RUNTIME</div><h1>Kernel 技能<span class="heading-dot">.</span></h1><p>当前云端 Kernel 内置的官方技能与统一 Agent 领域方法。全部随 Worker 镜像发布、版本钉死，不开放用户上传。</p></div></div>
       <section class="inventory">
@@ -63,6 +75,7 @@
       <footer>清单与 apps/agent-worker 镜像内的 BuiltinSkillRegistry 和领域方法目录同步；镜像更新后需同步本页数据。<span>BOWERBIRD · ADMIN</span></footer>
     </section>
   </main>
+  <dialog id="test-account-dialog" aria-labelledby="test-account-title"><form method="dialog"><div class="eyebrow">测试资格</div><h2 id="test-account-title">修改测试资格？</h2><p id="test-account-description" class="wrap"></p><p>只改变测试功能访问资格。会员、积分与管理员权限保持不变；操作将留存记录。</p><div class="dialog-actions"><button class="secondary" value="cancel" autofocus>取消</button><button id="confirm-test-account" class="primary" value="confirm">确认修改</button></div></form></dialog>
   <dialog id="disable-dialog"><form method="dialog"><div class="eyebrow">停用兑换码</div><h2>停止这张码的兑换？</h2><p id="disable-description"></p><p>停用后不可恢复。已兑换用户的权益不受影响。</p><div class="dialog-actions"><button class="secondary" value="cancel">取消</button><button id="confirm-disable" class="danger" value="confirm">确认停用</button></div></form></dialog>
   <dialog id="codes-dialog"><div class="eyebrow">可发放兑换码</div><h2 id="codes-title">批次已准备好</h2><p>复制或下载后发给用户。下次也可从此批次重新导出可用码。</p><textarea id="codes-output" readonly aria-label="可发放兑换码" spellcheck="false"></textarea><div class="dialog-actions"><button id="close-codes" class="secondary">关闭</button><button id="download-codes" class="secondary">下载 CSV</button><button id="copy-codes" class="primary">复制全部</button></div><p id="copy-status" role="status"></p></dialog>
 </body>

@@ -40,7 +40,7 @@ try {
   await mount();
   const importFiles = async () => {
     await page.locator("[data-import-trigger]").click();
-    await page.getByRole("menuitem", { name: "导入图片", exact: true }).click();
+    await page.getByRole("menuitem", { name: "导入图片或视频", exact: true }).click();
     await page.waitForFunction(() => !window.store.getState().loading);
   };
   await importFiles();

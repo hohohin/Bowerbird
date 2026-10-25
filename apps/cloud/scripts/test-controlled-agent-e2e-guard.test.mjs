@@ -3,48 +3,35 @@ import { spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
-const script = fileURLToPath(new URL("./test-controlled-agent-e2e.mjs", import.meta.url));
-
-function run(args, allowEnv = false) {
-  const env = { ...process.env };
-  delete env.BOWERBIRD_U4_ALLOW_REAL_PROVIDER_COSTS;
-  if (allowEnv) env.BOWERBIRD_U4_ALLOW_REAL_PROVIDER_COSTS = "1";
-  return spawnSync(process.execPath, [script, ...args], {
-    encoding: "utf8",
-    env,
-    windowsHide: true,
+function run(name, args = [], extraEnv = {}) {
+  return spawnSync(process.execPath, [fileURLToPath(new URL(name, import.meta.url)), ...args], {
+    encoding: "utf8", windowsHide: true,
+    // Malformed credentials would throw if a retired script tried reading them.
+    env: { ...process.env, SUPABASE_PUBLISHABLE_KEYS: "invalid-json", ...extraEnv },
   });
 }
 
-test("real controlled E2E help is side-effect free", () => {
-  const result = run(["--help"]);
-  equal(result.status, 0);
-  match(result.stdout, /--runtime legacy_kernel\|dsh/);
-});
+for (const name of ["test-controlled-agent-e2e.mjs", "test-agent-control-plane.mjs"]) {
+  test(name + " help is side-effect free", () => {
+    const result = run(name, ["--help"]);
+    equal(result.status, 0);
+    match(result.stdout, /已退役/);
+  });
+  test(name + " refuses even with old provider gates enabled", () => {
+    const result = run(name, ["--runtime", "dsh", "--allow-real-provider-costs"], {
+      BOWERBIRD_U4_ALLOW_REAL_PROVIDER_COSTS: "1",
+    });
+    equal(result.status, 2);
+    match(result.stderr, /已退役/);
+  });
+}
 
-test("real controlled E2E requires an explicit runtime", () => {
-  const result = run([]);
-  equal(result.status, 2);
-  match(result.stderr, /不允许隐式默认运行时/);
-});
-
-test("real controlled E2E requires both independent provider-cost gates", () => {
-  const flagOnly = run(["--runtime", "dsh", "--allow-real-provider-costs"]);
-  equal(flagOnly.status, 2);
-  match(flagOnly.stderr, /真实 E2E 已拒绝/);
-
-  const envOnly = run(["--runtime", "dsh"], true);
-  equal(envOnly.status, 2);
-  match(envOnly.stderr, /真实 E2E 已拒绝/);
-});
-
-test("recovery observation rejects flows with normal extra execution leases", () => {
-  const result = run([
-    "--runtime", "dsh",
-    "--allow-real-provider-costs",
-    "--expect-reclaim",
-    "--retry-text", "retry",
-  ], true);
-  equal(result.status, 2);
-  match(result.stderr, /只允许单次批准执行/);
+test("remote smoke rejects obsolete and misspelled skills before reading credentials", () => {
+  for (const skill of ["--skill=controlled", "--skill=typo", "--skill"]) {
+    const result = run("test-agent-runtime-selection-remote.mjs", [
+      "--allow-remote-control-plane-smoke", skill,
+    ], { BOWERBIRD_U4_ALLOW_REMOTE_CONTROL_PLANE_SMOKE: "1" });
+    equal(result.status, 2);
+    match(result.stderr, /只允许 --skill=unified/);
+  }
 });

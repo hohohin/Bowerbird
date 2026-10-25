@@ -92,11 +92,15 @@ export function cloudAgentIngestionFingerprint(run: CloudAgentRunRecord): string
  * Only project-owned runs belong to the current workspace lifecycle. Legacy
  * project-less sessions remain read-only and must not gain new local writes.
  */
-export function cloudAgentNeedsIngestion(run: CloudAgentRunRecord): boolean {
+function isAcceptedProjectResult(run: CloudAgentRunRecord): boolean {
   const feedbackAction = run.feedbackAction ?? run.snapshot.run.result_feedback_action ?? null;
   return run.status === "succeeded"
     && feedbackAction === "accept"
-    && !!run.projectId
+    && !!run.projectId;
+}
+
+export function cloudAgentNeedsIngestion(run: CloudAgentRunRecord): boolean {
+  return isAcceptedProjectResult(run)
     && !!run.threadId
     && cloudAgentIngestionFingerprint(run) !== null;
 }
@@ -107,7 +111,7 @@ export function cloudAgentNeedsIngestion(run: CloudAgentRunRecord): boolean {
  * projection, and provider acknowledgement is durable; all three are required.
  */
 export function cloudAgentIngestionPersisted(run: CloudAgentRunRecord): boolean {
-  if (!cloudAgentNeedsIngestion(run) || !run.finalAssetId) return false;
+  if (!isAcceptedProjectResult(run) || !run.finalAssetId) return false;
   const artifacts = selectCloudAgentResultArtifacts(
     run.snapshot.artifacts,
     run.snapshot.renderManifest,
@@ -127,14 +131,15 @@ export function cloudAgentIngestionPersisted(run: CloudAgentRunRecord): boolean 
 /**
  * The task center is an action surface, not history. Besides active/failed
  * runs, keep an accepted result visible until every selected artifact has a
- * durable local acknowledgement. Minimal legacy projections without a
+ * durable local acknowledgement. Missing legacy thread/artifact metadata blocks
+ * automatic ingestion, but must not hide a project-deletion blocker. Projections without a
  * snapshot cannot be mistaken for pending ingestion.
  */
 export function cloudAgentNeedsAttention(run: CloudAgentAttentionInput): boolean {
   if (cloudAgentNeedsRuntime(run.status) || run.status === "failed") return true;
   if (run.status !== "succeeded" || !run.runId || !run.snapshot) return false;
   const complete = run as CloudAgentRunRecord;
-  return cloudAgentNeedsIngestion(complete) && !cloudAgentIngestionPersisted(complete);
+  return isAcceptedProjectResult(complete) && !cloudAgentIngestionPersisted(complete);
 }
 
 export function cloudAgentIngestReconcilePhase(

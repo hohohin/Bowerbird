@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -169,7 +170,7 @@ export function LocalFileBrowser({ onClose, onCreateProject, initialTab = "files
       </div>
       <form onSubmit={event => { event.preventDefault(); void navigate(pathInput); }}><input aria-label="文件夹路径" value={pathInput} onChange={event => setPathInput(event.target.value)} placeholder="输入文件夹路径，按回车打开" /></form>
     </>}
-    {error && <div role="alert" className="local-file-error">{error}</div>}
+    {error && <div role="alert" className="local-file-error">{userErrorMessage(error, "文件操作未完成，请检查文件是否可用后重试。")}</div>}
     <div className="local-file-content">
       {tab === "files" ? <>
         <div className="local-file-grid">

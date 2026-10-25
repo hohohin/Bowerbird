@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { useStore } from "../store";
+import { userErrorMessage } from "../lib/userError";
 
 export function RedeemCodeCard() {
   const redeem = useStore((s) => s.redeemCloudCode);
@@ -22,10 +23,10 @@ export function RedeemCodeCard() {
       setCode("");
       const end = new Date(result.period_end).toLocaleDateString("zh-CN");
       const creditEnd = new Date(result.credits_expires_at).toLocaleDateString("zh-CN");
-      setMessage(`${result.already_redeemed ? "此码已兑换成功，未重复发放。" : "兑换成功！"}本次兑换后 Pro 到期日：${end}；已发放 ${result.credits} 积分，有效期至 ${creditEnd}。${result.entitlement ? "" : "权益暂未同步，请点击上方「刷新权益」。"}`);
+      setMessage(`${result.already_redeemed ? "此码已兑换成功，未重复发放。" : "兑换成功！"}本次兑换后 Pro 到期日：${end}。${result.credits > 0 ? `按旧码承诺发放 ${result.credits} Bcoin，有效期至 ${creditEnd}。` : "本兑换码不含 Bcoin。"}${result.entitlement ? "" : "权益暂未同步，请点击上方「刷新权益」。"}`);
     } catch (error) {
       setFailed(true);
-      setMessage(error instanceof Error ? error.message : "兑换请求失败，请使用同一码重试");
+      setMessage(userErrorMessage(error, "兑换请求未完成，请使用同一码重试。"));
     } finally {
       running.current = false;
       setBusy(false);
@@ -35,13 +36,11 @@ export function RedeemCodeCard() {
   return (
     <form className="settings-card px-3 py-2.5" onSubmit={(event) => void submit(event)}>
       <label htmlFor="pro-redemption-code" className="text-ink">兑换 Pro</label>
-      <p id="pro-redemption-hint" className="mt-1 text-[11px] text-muted">
-        每码可兑换 1 个月 Pro 和 1100 积分。已有 Pro 时长顺延；积分到账后 30 天有效。
-      </p>
       <div className="mt-2 flex gap-2">
         <input
           id="pro-redemption-code"
-          aria-describedby="pro-redemption-hint"
+          aria-describedby={message ? "pro-redemption-result" : undefined}
+          aria-invalid={failed && !!message}
           value={code}
           onChange={(event) => { setCode(event.target.value); setMessage(null); }}
           maxLength={128}
@@ -56,7 +55,7 @@ export function RedeemCodeCard() {
           {busy ? "兑换中…" : "兑换"}
         </button>
       </div>
-      {message && <p role={failed ? "alert" : "status"} className={`mt-2 text-xs ${failed ? "text-red-300" : "text-accent"}`}>{message}</p>}
+      {message && <p id="pro-redemption-result" role={failed ? "alert" : "status"} className={`mt-2 text-xs ${failed ? "text-red-300" : "text-accent"}`}>{message}</p>}
     </form>
   );
 }

@@ -1,10 +1,11 @@
+import { userErrorMessage } from "../lib/userError";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Check, Circle, RefreshCw, Sparkles, X, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { agentApprovalMode, currentAgentSkillVersion } from "../lib/cloudAgentApproval";
 import { AgentApprovalToggle } from "./AgentApprovalToggle";
-import { cloudAgentFailureMessage, cloudAgentStatusLabel } from "../lib/cloudAgent";
+import { cloudAgentFailureMessage, cloudAgentStatusLabel, cloudAgentStepLabel } from "../lib/cloudAgent";
 import { cloudAgentPlanDisplay, type CloudAgentPlanDisplayStep } from "../lib/cloudAgentPlan";
 import { isRenderedDocumentResult, selectCloudAgentResultArtifacts } from "../lib/cloudAgentResult";
 import {
@@ -137,7 +138,7 @@ function eventTitle(type: string): string {
     "html.composed": "HTML/CSS 已完成并通过校验",
     "html.render.completed": "离线渲染已完成",
   };
-  return labels[type] ?? type;
+  return labels[type] ?? (/failed|error/i.test(type) ? "这一步未能完成" : "任务进度已更新");
 }
 
 function textList(value: unknown): string[] {
@@ -176,8 +177,8 @@ function TimelineEvent({
           <span className="text-xs font-medium text-ink">{eventTitle(event.type)}</span>
           {event.progress != null && <span className="text-[10px] text-muted">{event.progress}%</span>}
         </div>
-        {(summary || goal) && <p className="mt-1.5 text-[11px] leading-5 text-ink/85">{summary ?? goal}</p>}
-        {rationale && <p className="mt-1 text-[10px] leading-4 text-muted">判断依据：{rationale}</p>}
+        {(summary || goal) && <p className="mt-1.5 text-[11px] leading-5 text-ink/85">{/failed|error/i.test(event.type) ? userErrorMessage(summary ?? goal, "这一步未能完成，请检查任务状态。") : summary ?? goal}</p>}
+        {rationale && !/failed|error/i.test(event.type) && <p className="mt-1 text-[10px] leading-4 text-muted">判断依据：{rationale}</p>}
         {(ratio || preserves.length > 0 || excludes.length > 0) && (
           <div className="mt-2 space-y-0.5 text-[10px] leading-4 text-muted">
             {ratio && <div>最终比例：{ratio}</div>}
@@ -556,7 +557,7 @@ export function CloudAgentSession({
                           : run.snapshot.run.current_step === "compose_revision_plan"
                             ? automaticApproval ? "诊断完成，正在制定修订计划；新计划将按当前模式自行批准。" : "诊断完成，正在制定修订计划；新计划会再次提交给你批准。"
                             : run.snapshot.run.current_step
-                              ? `当前步骤：${run.snapshot.run.current_step}`
+                              ? cloudAgentStepLabel(run.snapshot.run.current_step)
                               : "Agent 会在需要你决定时暂停。"}
                   </p>
                 </div>
@@ -695,7 +696,7 @@ export function CloudAgentSession({
 
                 {run.status === "failed" && (
                   <div className="rounded-lg border border-red-500/30 bg-red-500/8 p-3 text-xs text-red-300">
-                    {cloudAgentFailureMessage(run.snapshot.run.safe_message)}
+                    {userErrorMessage(cloudAgentFailureMessage(run.snapshot.run.safe_message), "助手任务未完成，请稍后重试。")}
                   </div>
                 )}
                 {run.status === "succeeded" && (
@@ -722,7 +723,7 @@ export function CloudAgentSession({
                   <span>最大预算 {run.snapshot.run.budget_credits} 积分</span>
                   {run.snapshot.run.actual_credits != null && <span>实际结算 {run.snapshot.run.actual_credits} 积分</span>}
                 </div>
-                {visibleError && <div className="rounded-lg bg-red-500/10 p-3 text-xs text-red-300">{visibleError}</div>}
+                {visibleError && <div className="rounded-lg bg-red-500/10 p-3 text-xs text-red-300">{userErrorMessage(visibleError, "助手操作未完成，请稍后重试。")}</div>}
               </div>
             </div>
           </div>

@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import { equal } from 'node:assert/strict';
-import { replicationDuration, replicationRewriteParts, replicationRewriteInput, validateReplicationInput } from '../src/lib/videoReplication.ts';
+import { replicationAnalysisParts, replicationDuration, replicationRewriteParts, replicationRewriteInput, validateReplicationInput } from '../src/lib/videoReplication.ts';
+
+test('analysis separates speech from shot text and keeps old results readable', () => {
+  const result=replicationAnalysisParts({analysis:JSON.stringify({overview:'画面',shots:[],transcript:'你好',transcriptStatus:'transcribed'})});
+  equal(result.transcript,'你好');equal(result.transcriptStatus,'transcribed');equal(result.analysisText.includes('transcript'),false);
+  const legacy=replicationAnalysisParts({analysis:'旧分析'});equal(legacy.analysisText,'旧分析');equal(legacy.transcriptStatus,'unavailable');
+  const plain=replicationAnalysisParts({analysis:JSON.stringify({analysisText:'start: 0, end: 5\n产品特写。',transcript:'你好',transcriptStatus:'transcribed'})});
+  equal(plain.analysisText,'start: 0, end: 5\n产品特写。');equal(plain.transcript,'你好');equal(plain.transcriptStatus,'transcribed');
+});
 
 test('rewrite duration spans start/end, rounds up and does not clamp to model limits', () => {
   equal(replicationDuration('{"shots":[{"start":2,"end":5},{"end":12.1,"start":4}]}'),11);
@@ -13,7 +21,7 @@ test('rewrite duration spans start/end, rounds up and does not clamp to model li
 test('missing or invalid shot boundaries do not guess a duration', () => {
   for (const text of ['白色瓶身，缓慢推进。', '{"start":3,"end":2}', '{"start":-1,"end":5}', '{"start":0}', '[{"start":0,"end":5},{"start":5}]', '{"start":"00:70","end":"01:20"}', 'start: 0\nstart: 5\nend: 8']) equal(replicationDuration(text),null);
 });
-test('analysis is independent of products; pasted rewrite is independent of analysis', () => {
+test('legacy direct-operation validation remains compatible; task UI supplies its video and analysis', () => {
   equal(validateReplicationInput({ operation:'analyze', title:'视频', referenceId:'ref' }),null);
   equal(validateReplicationInput({ operation:'rewrite', title:'改写', inputText:'原文', persona:'编导', rules:'保持节奏' }),null);
 });

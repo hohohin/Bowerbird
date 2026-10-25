@@ -59,13 +59,26 @@ pub fn generate_video(src: &Path, dst: &Path, max_size: u32) -> AppResult<()> {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let binary = tools::resolve(Tool::Ffmpeg)?;
-            let mut command = tools::command(&binary);
-            command.args(["-nostdin", "-y", "-i"]).arg(src)
-                .args(["-frames:v", "1", "-vf"])
-                .arg(format!("scale={max_size}:{max_size}:force_original_aspect_ratio=decrease"))
-                .arg(&temporary);
-            run_bounded(&mut command, Duration::from_secs(15))?;
+            // Windows ships a decoder for common generated MP4s. Keep extraction out
+            // of the app process, just like AVFoundation on macOS; FFmpeg remains a
+            // fallback for codecs the OS cannot decode.
+            #[cfg(target_os = "windows")]
+            let native = {
+                let mut command = tools::command(&std::env::current_exe()?);
+                command.arg("--video-thumbnail-worker").arg(src).arg(&temporary).arg(max_size.to_string());
+                run_bounded(&mut command, Duration::from_secs(15)).is_ok()
+            };
+            #[cfg(not(target_os = "windows"))]
+            let native = false;
+            if !native {
+                let binary = tools::resolve(Tool::Ffmpeg)?;
+                let mut command = tools::command(&binary);
+                command.args(["-nostdin", "-y", "-i"]).arg(src)
+                    .args(["-frames:v", "1", "-vf"])
+                    .arg(format!("scale={max_size}:{max_size}:force_original_aspect_ratio=decrease"))
+                    .arg(&temporary);
+                run_bounded(&mut command, Duration::from_secs(15))?;
+            }
         }
         let image = image::open(&temporary)?;
         if image.width() == 0 || image.height() == 0 || image.width().max(image.height()) > max_size {
@@ -75,6 +88,8 @@ pub fn generate_video(src: &Path, dst: &Path, max_size: u32) -> AppResult<()> {
         Ok(())
     })();
     let _ = std::fs::remove_file(&temporary);
+    #[cfg(target_os = "windows")]
+    let _ = std::fs::remove_file(temporary.with_extension("bmp"));
     result
 }
 
@@ -101,6 +116,33 @@ fn run_bounded(command: &mut Command, timeout: Duration) -> AppResult<()> {
 pub fn video_thumbnail_worker() -> Option<i32> {
     let args: Vec<_> = std::env::args_os().collect();
     if args.get(1).and_then(|arg| arg.to_str()) != Some("--video-thumbnail-worker") { return None; }
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        #[link(name = "bowerbird_video_thumbnail", kind = "static")]
+        #[link(name = "mfplat")]
+        #[link(name = "mfreadwrite")]
+        #[link(name = "mfuuid")]
+        #[link(name = "ole32")]
+        #[link(name = "delayimp")]
+        extern "C" { fn bowerbird_windows_video_frame(source: *const u16, destination: *const u16, rotation: *mut u32) -> i32; }
+        if args.len() != 5 { return Some(2); }
+        let Some(size) = args[4].to_str().and_then(|size| size.parse::<u32>().ok()).filter(|size| (1..=1024).contains(size)) else { return Some(2); };
+        let bitmap = Path::new(&args[3]).with_extension("bmp");
+        let source: Vec<u16> = args[2].encode_wide().chain(Some(0)).collect();
+        let destination: Vec<u16> = bitmap.as_os_str().encode_wide().chain(Some(0)).collect();
+        let mut rotation = 0;
+        // SAFETY: NUL-terminated OS paths and a writable u32; the worker owns the decoder.
+        let status = unsafe { bowerbird_windows_video_frame(source.as_ptr(), destination.as_ptr(), &mut rotation) };
+        let result = (|| -> AppResult<()> {
+            if status < 0 { return Err(AppError::Media(format!("Windows 视频封面提取失败：{status:#x}"))); }
+            let frame = image::open(&bitmap)?;
+            let frame = match rotation { 90 => frame.rotate90(), 180 => frame.rotate180(), 270 => frame.rotate270(), _ => frame };
+            generate_from_image(&frame, Path::new(&args[3]), size)
+        })();
+        let _ = std::fs::remove_file(bitmap);
+        return Some(if result.is_ok() { 0 } else { 1 });
+    }
     #[cfg(target_os = "macos")]
     {
         #[link(name = "bowerbird_video_thumbnail", kind = "static")]
@@ -113,7 +155,7 @@ pub fn video_thumbnail_worker() -> Option<i32> {
             _ => 2,
         });
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     Some(2)
 }
 

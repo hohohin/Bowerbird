@@ -6,6 +6,12 @@
 .workflow-card button { display:inline-flex; align-items:center; justify-content:center; gap:4px; }
 .workflow-card button:disabled { opacity:.4; cursor:not-allowed; }
 .workflow-card-body { padding:12px 16px; }
+.workflow-card.is-generation > header strong { display:flex; align-items:center; }
+/* Keep sockets at the existing wire anchors while placing their labels outside the editor. */
+.workflow-card.is-generation > .workflow-port.is-input { flex-direction:row-reverse; transform:translateX(calc(-100% + 13px)); }
+.workflow-card.is-generation > .workflow-port.is-output { flex-direction:row; transform:translateX(calc(100% - 13px)); }
+.workflow-card.is-generation > .workflow-port i { flex-shrink:0; }
+.workflow-card.is-generation > .workflow-port span { border-radius:4px; }
 .workflow-card select { width:100%; background:var(--bb-surface-2); border:1px solid var(--bb-line); border-radius:6px; padding:5px 8px; font-size:12px; color:var(--bb-ink); }
 .workflow-card textarea { width:100%; min-height:80px; max-height:220px; resize:vertical; padding:9px; border:1px solid var(--bb-line); border-radius:8px; background:var(--bb-surface-2); color:var(--bb-ink); font-size:12px; line-height:1.6; user-select:text; }
 .workflow-card textarea:focus { outline:1px solid var(--bb-blue); }
@@ -30,9 +36,11 @@
 .workflow-reference-menu img { width:44px; height:40px; object-fit:contain; flex-shrink:0; }
 .workflow-reference-menu span { min-width:0; }
 .workflow-reference-menu b,.workflow-reference-menu small { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-.workflow-floating-tools { position:absolute; left:0; bottom:calc(100% + 40px); padding:6px; border:1px solid var(--bb-line); border-radius:9px; background:var(--bb-surface); box-shadow:0 4px 12px #0002; opacity:0; pointer-events:none; }
-.workflow-card:hover .workflow-floating-tools,.workflow-card.is-selected .workflow-floating-tools,.workflow-floating-tools:focus-within { opacity:1; pointer-events:auto; }
-.workflow-floating-tools fieldset { display:flex; gap:5px; }
+.workflow-generation-parameters { padding:12px 16px 0; }
+.workflow-generation-parameters fieldset { display:flex; align-items:center; flex-wrap:wrap; gap:6px; min-width:0; }
+.workflow-generation-parameters select { width:auto; height:28px; padding:3px 8px; }
+.workflow-generation-parameters .model-select { flex:1 1 120px; max-width:100%; }
+.workflow-generation-parameters .model-select .model-select-trigger { width:100%; height:28px; padding:3px 8px; gap:5px; font-size:11px; }
 .workflow-video-controls { display:flex; flex-wrap:wrap; gap:8px; min-width:0; margin-bottom:12px; }
 .workflow-video-controls select { width:auto; max-width:100%; }
 .workflow-video-controls p { font-size:11px; color:var(--bb-muted); line-height:1.5; }
@@ -100,7 +108,7 @@
 .workflow-card footer > span:first-child { flex:1; }
 .workflow-card footer button { color:var(--bb-blue); }
 .workflow-detail { font-size:11px; color:var(--bb-blue); margin-top:10px; }
-.workflow-generation-history { position:absolute; right:10px; top:116px; display:flex; align-items:center; gap:5px; padding:5px 7px; border-radius:6px; color:var(--bb-muted); font-size:11px; }
+.workflow-generation-history { display:flex; align-items:center; flex-shrink:0; gap:5px; padding:5px 7px; border-radius:6px; color:var(--bb-muted); font-size:11px; }
 .workflow-generation-history:hover, .workflow-generation-history[aria-expanded="true"] { color:var(--bb-blue); background:var(--bb-surface-2); }
 .workflow-generation-history-popover { position:fixed; z-index:99999; width:min(320px,calc(100vw - 16px)); max-height:min(360px,calc(100vh - 16px)); overflow:auto; padding:8px; border:1px solid var(--bb-line); border-radius:12px; background:var(--bb-surface); color:var(--bb-ink); box-shadow:0 8px 28px #0003; font-size:12px; }
 .workflow-generation-history-popover > strong { display:flex; justify-content:space-between; padding:7px 8px 10px; }

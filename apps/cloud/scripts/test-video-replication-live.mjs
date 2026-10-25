@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import {readFileSync,existsSync,mkdirSync,writeFileSync} from 'node:fs';
 import {randomUUID,randomBytes} from 'node:crypto';
-const [videoPath,durationArg,out,operation='video-analysis']=process.argv.slice(2);
+const [videoPath,durationArg,out,operation='video-analysis',expectedTranscript]=process.argv.slice(2);
 const isRewrite=operation==='text-rewrite';
 assert.ok(videoPath && out && ['video-analysis','text-rewrite'].includes(operation) && (isRewrite || Number(durationArg)>0),'Usage: node test-video-replication-live.mjs input duration evidence-directory [video-analysis|text-rewrite]');
 mkdirSync(out,{recursive:true});
@@ -29,6 +29,9 @@ try {
   const email=`replication-${randomUUID()}@example.test`,password=randomBytes(32).toString('base64url');
   const created=await request('/auth/v1/admin/users',{email,password,email_confirm:true,app_metadata:{bowerbird_test:true}});
   check(created.status===200&&created.data.id,'created isolated test account');evidence.userId=created.data.id;save();
+  // Registration no longer grants credits; fund only this freshly created disposable test account.
+  const funding=await request('/rest/v1/rpc/grant_topup_credits',{p_user_id:evidence.userId,p_order_id:'replication-test:'+evidence.userId,p_amount:3});
+  check(funding.status===200&&funding.data[0]?.granted===true,'funded isolated test account with 3 test credits');
   const login=await request('/auth/v1/token?grant_type=password',{email,password},pub,pub);
   check(login.status===200&&login.data.access_token,'authenticated test account');token=login.data.access_token;
   const capabilities=await edge(token,{action:'replication-capabilities'});evidence.capabilities=capabilities;save();
@@ -52,7 +55,8 @@ try {
     if(['succeeded','failed','cancelled','outcome_unknown'].includes(evidence.status)) {
       if(result.data.text){
         if(isRewrite){writeFileSync(out+'/rewrite-result.txt',result.data.text);evidence.resultChars=result.data.text.length;check(result.data.text.length>30&&result.data.text.includes('洗发水'),'returned real rewrite incorporating target product');}
-        else {writeFileSync(out+'/analysis-result.json',result.data.text);const analysis=JSON.parse(result.data.text);evidence.shots=analysis.shots.length;check(analysis.shots.length>0,'returned real structured shot analysis');}
+        else {writeFileSync(out+'/analysis-result.json',result.data.text);const analysis=JSON.parse(result.data.text);evidence.shots=analysis.shots?.length;evidence.analysisFormat=typeof analysis.analysisText==='string'?'text':'json';check(typeof analysis.analysisText==='string'?analysis.analysisText.trim().length>30:analysis.shots?.length>0,'returned real video analysis');
+          if(expectedTranscript){evidence.transcriptStatus=analysis.transcriptStatus;evidence.transcript=analysis.transcript;check(analysis.transcriptStatus==='transcribed'&&typeof analysis.transcript==='string'&&analysis.transcript.toLowerCase().includes(expectedTranscript.toLowerCase()),'returned actual speech in the root transcript field');}}
       }
       break;
     }

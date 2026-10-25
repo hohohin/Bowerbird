@@ -1,0 +1,61 @@
+import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+import { createServer } from 'vite';
+import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+const server = await createServer({ server: { host: '127.0.0.1', port: 1798, strictPort: true, hmr: false, watch: null } });
+await server.listen();
+const browser = await chromium.launch({ channel: 'chrome', headless: true });
+try {
+  const page = await browser.newPage({ viewport: { width: 1100, height: 850 } });
+  const errors = []; page.on('pageerror', error => errors.push(error.message));
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('http://127.0.0.1:1798/scripts/fixtures/redemption/preview.html');
+  assert.equal(await page.getByText('浏览器扩展', { exact: true }).count(), 0);
+  await page.getByRole('radio', { name: /夜间模式/ }).click();
+  assert.deepEqual(await page.evaluate(() => { const s = window.store.getState().settings; return [s.board_shift_pick, s.hide_project_assets, s.dreamina_model_version]; }), [true, true, '4.7']);
+  await page.getByRole('button', { name: '模型设置', exact: true }).click();
+  await page.evaluate(() => window.store.setState({ dreaminaHealth: { ok: true, reason: '' } }));
+  assert.equal(await page.getByText('模型版本', { exact: true }).count(), 0);
+  assert.equal(await page.getByRole('button', { name: '4.7', exact: true }).count(), 0);
+  await page.evaluate(() => { window.shortcutError = 'HotKey already registered: HotKey { mods: Modifiers(0x0), key: F1, id: 160 }'; });
+  await page.getByRole('button', { name: '个性化与记忆', exact: true }).click();
+  assert.equal(await page.getByText(/创作板打开时，Shift/).count(), 0);
+  assert.equal(await page.getByText(/在画板的全局素材栏中隐藏项目素材/).count(), 0);
+  await page.getByRole('alert').filter({ hasText: '请换一个组合键' }).waitFor();
+  assert.doesNotMatch(await page.getByRole('dialog').innerText(), /HotKey|Modifiers|160/);
+  await page.getByRole('button', { name: '区域截图快捷键', exact: true }).click();
+  await page.keyboard.press('F2');
+  await page.getByRole('alert').filter({ hasText: '请换一个组合键' }).waitFor();
+  assert.equal(await page.evaluate(() => window.store.getState().settings.screenshot_shortcuts.capture), 'F1');
+  await page.evaluate(() => { window.shortcutError = null; window.screenshotError = 'TypeError: private debug payload'; });
+  await page.getByRole('button', { name: '立即截图', exact: true }).click();
+  await page.getByRole('alert').filter({ hasText: '截图操作未完成' }).waitFor();
+  assert.doesNotMatch(await page.getByRole('dialog').innerText(), /TypeError|private debug/);
+  await page.getByRole('button', { name: '账号管理', exact: true }).click();
+  const panel = page.getByRole('region', { name: '积分明细', exact: true });
+  await page.getByText('暂无积分记录', { exact: true }).waitFor();
+  assert.doesNotMatch(await page.getByRole('dialog').innerText(), /Pro ¥39|每码可兑换|¥1 = 20|充值档位/);
+  await page.evaluate(() => {
+    const rows = [['confirm', 0, 'image_hd'], ['confirm', 5, 'image_hd'], ['hold', -20, 'image_hd'], ['rollback', 10, 'image_layer_edit'], ['refund', -100, null], ['grant', 100, null], ['expire', -30, null], ['adjust', 3, null], ['future_kind', 1, 'future_service']];
+    window.store.setState({ cloudEntitlement: { ...window.free, balances: { daily: 0, sub: 10, topup: 400 }, recent_transactions: rows.map(([kind, amount, service], i) => ({ kind, amount, service, created_at: new Date(Date.UTC(2026, 9, 24, 10, 0) - i * 60000).toISOString() })) } });
+  });
+  await panel.getByText('余额不变', { exact: true }).waitFor();
+  await panel.getByText('多余预留返还', { exact: true }).waitFor();
+  await panel.getByText('退款回收积分', { exact: true }).waitFor();
+  assert.doesNotMatch(await panel.innerText(), /hold|confirm|rollback|image_hd|future_kind|future_service/);
+  await panel.getByText('如何看懂积分记录', { exact: true }).click();
+  await panel.getByText(/不会再扣一次/).waitFor();
+  await mkdir('.tmp/settings-presentation', { recursive: true });
+  for (const theme of ['light', 'dark']) {
+    await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
+    await panel.scrollIntoViewIfNeeded();
+    await page.screenshot({ animations: 'disabled', path: `.tmp/settings-presentation/${theme}.png` });
+  }
+  await page.setViewportSize({ width: 600, height: 650 });
+  assert.equal(await page.locator('.app-modal').evaluate(el => el.scrollWidth > el.clientWidth), false);
+  await page.screenshot({ animations: 'disabled', path: '.tmp/settings-presentation/narrow.png' });
+  await page.evaluate(() => window.store.setState({ cloudEntitlement: null }));
+  await panel.getByText(/积分信息暂不可用/).waitFor();
+  assert.deepEqual(errors, []);
+  console.log('PASS: legacy settings hidden, preferences preserved, model choice removed, Chinese credit lifecycle, safe shortcut errors, both themes and narrow layout');
+} finally { await browser.close(); await server.close(); }

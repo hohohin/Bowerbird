@@ -108,11 +108,18 @@ fn register(app: &AppHandle, shortcut: Shortcut) -> Result<(), String> {
                     start_capture(app.clone()).await
                 };
                 if let Err(error) = result {
-                    app.dialog().message(error).title("截图工具").show(|_| {});
+                    tracing::warn!("Screenshot shortcut action failed: {error}");
+                    let message = if error.contains("剪贴板中没有") { "剪贴板中没有可用图片，请先复制一张图片再试。" }
+                        else if error.contains("屏幕录制权限") { "无法截取屏幕，请在系统设置中允许园丁鸟录制屏幕后重试。" }
+                        else { "截图操作未完成，请重试；如仍失败，请检查屏幕录制和剪贴板权限。" };
+                    app.dialog().message(message).title("截图工具").show(|_| {});
                 }
             });
         })
-        .map_err(|e| format!("快捷键无法注册，可能已被其他程序占用：{e}"))
+        .map_err(|e| {
+            tracing::warn!("Screenshot shortcut registration failed: {e}");
+            "这个快捷键暂时无法使用，可能已被其他应用占用。请换一个组合键，或关闭占用它的应用后重试。".to_string()
+        })
 }
 pub fn initialize(app: &AppHandle) {
     app.manage(ScreenshotState::default());

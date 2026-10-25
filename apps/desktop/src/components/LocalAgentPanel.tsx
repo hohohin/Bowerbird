@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useMemo, useState } from "react";
 import { Check, RotateCw, Sparkles, X } from "lucide-react";
 import { api } from "../lib/api";
@@ -242,7 +243,7 @@ export function LocalAgentPanel({
       )}
 
       {stage && <div className="text-xs text-muted">{stage}</div>}
-      {error && <div className="rounded-lg border border-red-400/30 bg-red-400/5 p-2 text-xs text-red-300">{error}</div>}
+      {error && <div className="rounded-lg border border-red-400/30 bg-red-400/5 p-2 text-xs text-red-300">{userErrorMessage(error, "智能精修未完成，请稍后继续。")}</div>}
 
       <div className="flex justify-end gap-2">
         {run?.status === "awaiting_approval" ? (

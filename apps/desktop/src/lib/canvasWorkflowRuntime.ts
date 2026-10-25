@@ -176,11 +176,12 @@ export class CanvasWorkflowController {
     })();
     return this.loading;
   }
-  async save(document = this.document) {
+  async save(document = this.document, authorizeEdit = false) {
     document = { ...document, cardNames: assignCanvasCardNames(document.cardNames, document.nodes.filter(node => !node.textTarget && !node.textSource).map(node => ({ id: node.id, title: workflowTitle(node) }))) };
     this.document = document; this.emit();
     const snapshot = structuredClone(document);
     const write = this.writing.then(async () => {
+      if (authorizeEdit) await api.canvasWorkflowAuthorize();
       this.revision = await api.canvasWorkflowSave(this.projectId, this.revision, snapshot);
     });
     // A failed write blocks later writes and execution until explicitly retried.
@@ -194,6 +195,7 @@ export class CanvasWorkflowController {
     await this.writing.catch(() => {}); this.writing = Promise.resolve(); await this.save();
   }
   async edit(nodes: WorkflowNode[], history?: { removedRuns: WorkflowRun[]; runOrder: string[] }) {
+    const authorizeEdit = nodes.some(node => node.kind !== "text") || this.document.nodes.some(node => node.kind !== "text");
     if (this.encapsulating) throw new Error("正在封装卡片，请稍后再编辑");
     if (!this.ready) throw new Error("工作流尚未载入");
     nodes = nodes.map(node => this.isLocked(node.id) ? node : normalizeWorkflowInputSlots(node, this.document.nodes.find(previous => previous.id === node.id)));
@@ -213,7 +215,8 @@ export class CanvasWorkflowController {
     const runOrder = new Set([...(history?.runOrder ?? []), ...currentRuns.map(run => run.id)]);
     const runs = [...runOrder].flatMap(id => byId.has(id) ? [byId.get(id)!] : [])
       .filter(run => workflowRunActive(run) || run.order.every(id => nodes.some(node => node.id === id)));
-    await this.save({ ...this.document, nodes, runs, run: runs[runs.length - 1] ?? null });
+    // Keep the optimistic snapshot synchronous for follow-up edits and undo; authorize each queued write.
+    await this.save({ ...this.document, nodes, runs, run: runs[runs.length - 1] ?? null }, authorizeEdit);
   }
   async encapsulate(name: string, members: string[], bounds: Parameters<typeof api.workflowEncapsulate>[4], template: Parameters<typeof api.workflowEncapsulate>[5]) {
     if (this.encapsulating || !this.ready || this.error) throw new Error("请先完成当前工作流保存");
@@ -407,6 +410,7 @@ export class CanvasWorkflowController {
     }
   }
   private async startRun(startId: string, single = false, completionSessionId?: string) {
+    if (this.document.nodes.some(node => node.kind !== "text")) await api.canvasWorkflowAuthorize();
     if (this.encapsulating) throw new Error("正在封装卡片，请稍后再运行");
     if (!this.ready) throw new Error("工作流尚未载入");
     if (this.document.nodes.find(node => node.id === startId)?.kind === "loop") single = false;

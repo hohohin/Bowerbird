@@ -432,6 +432,9 @@ html[data-theme="light"] [role="button"]:focus-visible {
   border-right: 1px solid var(--bb-line-strong);
 }
 
+.app-topbar-credits { display: flex; align-items: center; gap: 6px; flex-shrink: 0; height: 36px; padding: 0 8px; color: var(--bb-blue); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.app-topbar-credits svg { flex-shrink: 0; }
+
 .library-view-control { display: flex; flex-direction: column; gap: 3px; }
 .library-view-control > span { color: var(--bb-muted); font-size: 10px; padding-left: 3px; }
 .library-view-segments { display: flex; padding: 2px; border: 1px solid var(--bb-line); border-radius: 7px; background: rgb(var(--bb-ink-rgb) / 3%); }
@@ -470,7 +473,8 @@ html[data-theme="light"] [role="button"]:focus-visible {
 .library-home { position: relative; flex: 1; min-height: 0; height: 100%; --library-footer-space: 34px; }
 .library-home .masonry-layout { padding:4px; }
 .topbar-account { position:relative; flex-shrink:0; }
-.topbar-account-trigger { display:grid; place-items:center; width:36px; height:36px; border-radius:999px; }
+.topbar-account-trigger { display:flex; align-items:center; gap:8px; height:36px; padding:2px 3px 2px 10px; border-radius:999px; background:rgb(var(--bb-ink-rgb) / 4%); }
+.topbar-account-trigger .app-topbar-credits { height:auto; padding:0; }
 .topbar-account-trigger:hover { background:var(--bb-surface-hover); }
 .topbar-account-menu { position:absolute; right:0; top:calc(100% + 8px); z-index:70; width:224px; max-width:calc(100vw - 24px); }
 .library-scroll-area { height: 100%; min-width: 0; }
@@ -4163,6 +4167,20 @@ html[data-theme="light"] .app-form-input:focus {
 
 .canvas-node.is-moving { cursor: grabbing; }
 
+/* Filters emphasize media without removing nodes or changing saved geometry. */
+.canvas-stage [data-canvas-filter] {
+  transition: opacity 200ms ease, filter 140ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+.canvas-stage [data-canvas-filter="dim"] { opacity: 0.2; }
+.canvas-stage [data-canvas-filter="match"] { animation: canvas-filter-lift 420ms cubic-bezier(.2,.7,.3,1); }
+@keyframes canvas-filter-lift {
+  0%, 100% { translate: 0 0; }
+  40% { translate: 0 -6px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .canvas-stage [data-canvas-filter] { transition: none; animation: none; }
+}
+
 .canvas-node.is-asset { cursor: zoom-in; background: transparent; }
 .canvas-node.is-folder { cursor: pointer; }
 .canvas-stage.is-creation-mode .canvas-node.is-asset { cursor: copy; }
@@ -4251,41 +4269,30 @@ html[data-theme="light"] .app-form-input:focus {
 .canvas-node.is-asset > img { background: transparent; }
 .canvas-node-name { background: var(--bb-surface-card); }
 
-/* Film perforations identify passive video cards without changing their geometry. */
-.canvas-node.is-asset.is-video,
-.canvas-node.is-asset.is-video:hover,
-.canvas-node.is-asset.is-video:focus-visible {
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  box-shadow: none;
-}
-
-.canvas-node.is-asset.is-video:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 3px; }
-
-.canvas-node.is-asset.is-video .canvas-node-name {
-  background: transparent;
-}
-
-.canvas-video-film {
+/* Video assets share the image card frame, with a blue corner flag for identification. */
+.canvas-video-badge {
   position: absolute;
-  inset: 0;
+  right: 0;
+  bottom: 0;
+  width: 48px;
+  height: 48px;
+  clip-path: polygon(100% 0, 100% 100%, 0 100%);
+  background: var(--bb-blue);
+  color: white;
   pointer-events: none;
 }
-
-.canvas-video-film::before,
-.canvas-video-film::after {
+.canvas-video-badge::before {
   content: "";
   position: absolute;
-  left: 0;
-  right: 0;
-  height: 14px;
-  background: #22211f url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='14'%3E%3Crect x='5' y='4' width='10' height='6' rx='1.5' fill='%23e5e0d4'/%3E%3C/svg%3E") repeat-x center;
+  right: 8px;
+  bottom: 8px;
+  width: 0;
+  height: 0;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+  border-left: 9px solid currentColor;
 }
-
-.canvas-video-film::before { top: 0; }
-.canvas-video-film::after { bottom: 0; }
-.canvas-node.is-asset:not(.is-name-hidden) > .canvas-video-film { bottom: 30px; }
+.canvas-node.is-asset:not(.is-name-hidden) > .canvas-video-badge { bottom:30px; }
 
 .canvas-folder-grid > video,
 .canvas-folder-asset:has(> video) {
@@ -4556,7 +4563,7 @@ html[data-theme="light"] .app-form-input:focus {
 .library-browser-heading { --library-floating-height:28px; position:absolute; top:12px; left:12px; right:12px; height:var(--library-floating-height); display:flex; justify-content:center; align-items:center; z-index:5; pointer-events:none; }
 .library-browser-heading > * { pointer-events:auto; }
 :root {
-  --library-glass-fill:rgb(30 35 44 / 58%);
+  --library-glass-fill:rgb(30 35 44 / 32%);
   --library-glass-hover:rgb(42 48 58 / 68%);
   --library-glass-edge:rgb(255 255 255 / 28%);
   --library-glass-shine:rgb(255 255 255 / 38%);
@@ -4565,28 +4572,55 @@ html[data-theme="light"] .app-form-input:focus {
   --library-glass-selected-shadow:inset 0 1px 1px rgb(255 255 255 / 44%), 0 1px 5px rgb(0 0 0 / 16%);
 }
 :root:not([data-theme]), html[data-theme="light"] {
-  --library-glass-fill:rgb(255 255 255 / 48%);
+  --library-glass-fill:rgb(255 255 255 / 22%);
   --library-glass-hover:rgb(255 255 255 / 64%);
   --library-glass-edge:rgb(255 255 255 / 60%);
   --library-glass-shine:rgb(255 255 255 / 92%);
   --library-glass-glint:rgb(255 255 255 / 26%);
-  --library-glass-selected:rgb(255 255 255 / 62%);
+  --library-glass-selected:rgb(255 255 255 / 34%);
   --library-glass-selected-shadow:inset 0 1px 1px rgb(255 255 255 / 92%), 0 1px 5px rgb(0 0 0 / 9%);
 }
-/* Small navigation surfaces only: static refraction, translucent tint and a lit rim. */
+/* Small navigation surfaces: translucent tint and a lit rim. */
 .library-floating-surface, .library-filter-trigger {
   border:1px solid var(--library-glass-edge);
   background:linear-gradient(135deg, var(--library-glass-glint), transparent 35%, transparent 63%, var(--library-glass-glint)), var(--library-glass-fill);
   -webkit-backdrop-filter:blur(5px) saturate(1.6);
-  backdrop-filter:var(--library-glass-filter, blur(0px)) blur(5px) saturate(1.6);
+  backdrop-filter:blur(5px) saturate(1.6);
   box-shadow:inset 0 1.3px 1px var(--library-glass-shine), inset 0 -1px 1.5px var(--library-glass-edge), inset 1px 0 2px var(--library-glass-edge), inset -1px 0 2px rgb(94 114 142 / 13%), 0 5px 14px -5px rgb(var(--bb-shadow-rgb) / 22%), 0 1px 2px rgb(var(--bb-shadow-rgb) / 8%);
 }
 .library-floating-surface { height:var(--library-floating-height, 28px); border-radius:999px; }
+/* Like rdev/liquid-glass-react, warp a separate backdrop plane, never the text.
+   Keep blur BEFORE refraction so the lens edge remains visible. The plain
+   backdrop remains usable in WKWebView, which lacks backdrop SVG displacement. */
+.library-view-switch.library-floating-surface,
+.composer-mode-picker.library-floating-surface,
+.creation-dock.composer-glass {
+  background:radial-gradient(ellipse at var(--glass-light-x, 18%) var(--glass-light-y, 0%), var(--library-glass-glint), transparent 65%), linear-gradient(155deg, var(--library-glass-glint), transparent 30%, transparent 72%, var(--library-glass-glint)), var(--composer-fill, var(--library-glass-fill));
+  -webkit-backdrop-filter:none;
+  backdrop-filter:none;
+  isolation:isolate;
+}
+:is(.library-view-switch, .composer-mode-picker, .creation-dock.composer-glass)::before {
+  content:""; position:absolute; inset:0; z-index:-1; border-radius:inherit; pointer-events:none;
+  -webkit-backdrop-filter:blur(3px) saturate(1.8);
+  backdrop-filter:blur(3px) saturate(1.8);
+  filter:var(--library-glass-filter, none);
+  box-shadow:inset 0 2px 2px -1px var(--library-glass-shine), inset 2px 0 3px -2px var(--library-glass-shine), inset 0 -2px 2px -1px var(--library-glass-edge);
+}
+.creation-dock.composer-glass::before {
+  -webkit-backdrop-filter:blur(6px) saturate(1.65);
+  backdrop-filter:blur(6px) saturate(1.65);
+}
+@media (prefers-reduced-transparency:reduce), (forced-colors:active) {
+  .library-view-switch.library-floating-surface, .composer-mode-picker.library-floating-surface, .creation-dock.composer-glass { background:var(--bb-surface); }
+  :is(.library-view-switch, .composer-mode-picker, .creation-dock.composer-glass)::before { content:none; }
+}
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) {
-  .library-floating-surface, .library-filter-trigger { background:var(--bb-surface); }
+  .library-floating-surface, .library-filter-trigger, .library-view-switch.library-floating-surface, .composer-mode-picker.library-floating-surface, .creation-dock.composer-glass { background:var(--bb-surface); }
+  :is(.library-view-switch, .composer-mode-picker, .creation-dock.composer-glass)::before { content:none; }
 }
 .library-view-switch { --switch-count:2; position:relative; display:grid; grid-template-columns:repeat(var(--switch-count),minmax(0,1fr)); padding:2px; width:calc(var(--switch-count) * 89.6px); }
-.library-view-switch-thumb { position:absolute; top:2px; bottom:2px; left:2px; width:calc((100% - 4px) / var(--switch-count)); border-radius:999px; background:var(--library-glass-selected); box-shadow:var(--library-glass-selected-shadow); transform:translateX(calc(var(--switch-index) * 100%)); transition:transform 320ms cubic-bezier(.2,.85,.2,1); pointer-events:none; }
+.library-view-switch-thumb { position:absolute; top:2px; bottom:2px; left:2px; width:calc((100% - 4px) / var(--switch-count)); border-radius:999px; background:var(--library-glass-selected); box-shadow:var(--library-glass-selected-shadow); transform:translateX(calc(var(--switch-index) * 100%)); transition:transform 420ms cubic-bezier(.2,1.25,.3,1); pointer-events:none; }
 .library-view-switch button { position:relative; z-index:1; border-radius:999px; font-size:11px; line-height:1; color:var(--bb-ink-soft); white-space:nowrap; }
 .library-view-switch button[aria-selected=true] { color:var(--bb-ink); font-weight:600; }
 .library-source-key-hint { position:absolute; left:2px; top:50%; z-index:2; transform:translateY(-50%); color:var(--bb-muted); opacity:0; pointer-events:none; transition:opacity 120ms ease; }

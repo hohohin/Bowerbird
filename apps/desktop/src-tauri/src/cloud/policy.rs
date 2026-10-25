@@ -78,7 +78,7 @@ impl FeaturePolicy {
             can_use_byo: false,
             can_use_cloud: true,
             max_parallel_jobs: 1,
-            understand_daily_limit: Some(10),
+            understand_daily_limit: None,
             can_use_priority_queue: false,
             can_hd_export: false,
             can_use_agent_runs: true,
@@ -131,7 +131,9 @@ mod tests {
         let policy = FeaturePolicy::for_tier("free");
         assert!(!policy.can_use_byo);
         assert_eq!(policy.max_parallel_jobs, 1);
-        assert_eq!(policy.understand_daily_limit, Some(10));
+        // Bcoin removes the free daily quota; Cloud still requires paid balance.
+        assert_eq!(policy.understand_daily_limit, None);
+        assert!(policy.can_use_cloud);
         assert!(policy.allows_agent_run("bowerbird-controlled-image-edit"));
     }
 

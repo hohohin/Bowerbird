@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { canvasCardNameError } from "../lib/canvasCardNames";
 
@@ -31,6 +32,6 @@ export function CanvasCardName({ id, name, names, activeIds, style, disabled, on
         if (event.key === "Enter") { event.preventDefault(); event.currentTarget.blur(); }
         if (event.key === "Escape") { event.preventDefault(); setDraft(name); setSaveError(""); }
       }} />
-    {error && <span id={messageId} role="alert">{error}</span>}
+    {error && <span id={messageId} role="alert">{userErrorMessage(error, "名称未保存，请稍后重试。")}</span>}
   </div>;
 }

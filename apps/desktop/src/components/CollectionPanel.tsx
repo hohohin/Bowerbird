@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { CollectionLearning } from "./CollectionOnboarding";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { useEffect, useRef, useState } from "react";
@@ -5,6 +6,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowLeft, Image, Palette, Plus } from "lucide-react";
 import { api } from "../lib/api";
+import { importDroppedMedia } from "../lib/mediaImport";
 import type { Asset, Folder } from "../lib/types";
 import { ModalShell } from "./ModalShell";
 import { MediaPreview } from "./MediaPreview";
@@ -37,19 +39,13 @@ export function CollectionPanel({ folder, onClose }: { folder: Folder; onClose: 
     for (const file of files) {
       let ingested = false;
       try {
-        if (file.size > 50 * 1024 * 1024) throw new Error("图片不能超过 50 MB");
-        const dataUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = () => reject(reader.error ?? new Error("无法读取文件"));
-          reader.readAsDataURL(file);
-        });
-        const asset = await api.importImageBytes({ dataUrl, fileName: file.name || "clipboard.png", projectId: null, source });
+        const asset = await importDroppedMedia(file, null, source);
         ingested = true;
         await api.moveAssetsToFolder([asset.id], folder.id);
         imported += 1;
       } catch (error) {
-        const reason = error instanceof Error ? error.message : typeof error === "string" ? error : "请重试";
+        console.error("Collection import failed", error);
+        const reason = userErrorMessage(error, "请检查文件是否可用后重试。");
         failures.push(`${file.name || "剪贴板图片"}：${ingested ? "已入素材库，但加入集合失败，" : "导入失败，"}${reason}`);
       }
     }
@@ -58,7 +54,7 @@ export function CollectionPanel({ folder, onClose }: { folder: Folder; onClose: 
     setImportErrors(failures);
     setPreviewId(null);
     setRetry((value) => value + 1);
-    if (imported) notifySuccess(`已导入 ${imported} 张素材到「${folder.name}」`);
+    if (imported) notifySuccess(`已导入 ${imported} 个素材到「${folder.name}」`);
   }
   function openProfile() {
     onClose();

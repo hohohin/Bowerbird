@@ -1,6 +1,6 @@
 # Unified Agent Harness test-only 运维 Runbook
 
-适用范围：`bowerbird-controlled-image-edit` 的 `legacy_kernel` / `dsh` 双 runtime，以及尚未公开的 `bowerbird-unified-agent`。本 Runbook 不授权扩大 FeaturePolicy、公开 DSH、修改预算/计费或部署小红书发布能力。
+适用范围：新建 `bowerbird-unified-agent` + `dsh` 的 test-only 部署，以及旧 `bowerbird-controlled-image-edit` 的 `legacy_kernel` / `dsh` 历史任务恢复；旧 Skill 已禁止新建。本 Runbook 不授权扩大 FeaturePolicy、公开 DSH、修改预算/计费或部署小红书发布能力。
 
 ## 1. 每次候选必须冻结的身份
 
@@ -50,9 +50,9 @@
 
 1. 确认 Agent 队列为空、无 active lease、TTL backlog 为 0；记录 Worker/Edge 当前健康与版本。
 2. 先保存旧 Worker 镜像 rollback tag 与 Edge 源码；migration 必须 additive 且先 dry-run。不要用数据库回滚脚本删除既有 Run 数据。
-3. Edge 仍保持 `BOWERBIRD_TEST_DSH_RUNTIME_ENABLED=true` 只对测试账号接受显式 `agentRuntime=dsh`；普通账号与未声明 runtime 的历史 Run 不得变化。
-4. Worker 的 `BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED` 与统一 Agent 闸门只在候选容器内显式开启；基础 Compose 的 test-only claim delay 必须为 0。
-5. 先跑零 provider create/get/claim/cancel，再跑一组预算内 test-only 真实样本。每次 provider 调用按项目持续授权执行，但仍须事后报告 token、图片/视觉次数、credits、`provider_cost_micros`、失败和 `outcome_unknown`。
+3. Edge 使用真实闸门 `AGENT_DSH_RUNTIME_SELECTION_ENABLED=true` 与 `AGENT_UNIFIED_DSH_ENABLED=true`，仅测试账号可新建 `bowerbird-unified-agent` + `agentRuntime=dsh`；同时保持 `AGENT_ACCESS_MODE=test_only`。旧 Skill 新建会被拒绝，历史 Run 的 runtime 不改写。
+4. Worker 的 `BOWERBIRD_UNIFIED_AGENT_DSH_ENABLED` 控制统一处理器；`BOWERBIRD_CONTROLLED_IMAGE_EDIT_DSH_ENABLED` 仅保留历史受控任务兼容。它们与 Edge 闸门独立，更新时保留已验收配置；新环境模板默认关闭。基础 Compose 的 test-only claim delay 必须为 0。
+5. 先用 `test-agent-runtime-selection-remote.mjs --skill=unified` 跑零 provider create/get/claim/cancel（保留脚本参数与 env 双闸，先停常驻 Worker，完成后恢复），再跑一组预算内 test-only 真实样本。每次 provider 调用按项目持续授权执行，但仍须事后报告 token、图片/视觉次数、credits、`provider_cost_micros`、失败和 `outcome_unknown`。
 6. 运行无内容观察报告；可重复传入已冻结 paired evidence：
 
    ```text

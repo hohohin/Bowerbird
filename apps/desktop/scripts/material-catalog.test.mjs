@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { orderCatalogTags, collectionRows, catalogInitial, groupCatalogAssets, UNTAGGED_SECTION, isCatalogVideo } from '../src/lib/materialCatalogOrder.ts';
+import { orderCatalogTags, collectionRows, catalogInitial } from '../src/lib/materialCatalogOrder.ts';
 const tag = (name, projectCount = 0, description = '') => ({ id:name, name, projectCount, description });
 
 test('home uses pinyin; project ranks its prompt and asset signals without mutating tags', () => {
@@ -35,33 +35,9 @@ test('Chinese and Latin initials share A-Z buckets, with symbols last', () => {
   const names=orderCatalogTags(['Zebra','海报','插画','Art','标志','标题卡','Icon','123'].map(n=>tag(n)),[],false).map(t=>t.name);
   assert.deepEqual(names,['Art','标题卡','标志','插画','海报','Icon','Zebra','123']);
 });
-test('tag sections preserve multi-tag membership, exclude stale IDs and keep untagged assets', () => {
-  const assets=[{id:'a'},{id:'b'},{id:'untagged'}];
-  const groups=groupCatalogAssets([{id:'logo',name:'标志'},{id:'title',name:'标题卡'},{id:'empty',name:'空'}],assets,{logo:['a','a','gone'],title:['a','b']});
-  assert.deepEqual(groups.map(g=>g.assets.map(a=>a.id)),[['a'],['a','b'],['untagged']]);
-  assert.equal(groups.at(-1).id,UNTAGGED_SECTION);
-  assert.equal(groupCatalogAssets([{id:'logo',name:'标志'},{id:'empty',name:'空'}],[assets[0]],{logo:['a']}).length,1);
-  assert.deepEqual(groupCatalogAssets([{id:'logo',name:'标志'}],[],{logo:['a']}),[],'project/search scope with no members has no empty headings');
-  assert.deepEqual(groupCatalogAssets([{id:'stale',name:'过期'}],[{id:'b'}],{stale:['gone']}),[{id:UNTAGGED_SECTION,name:'未分类',assets:[{id:'b'}]}]);
-});
-
 test('manual pins precede both pinyin and relevance without changing unpinned order', () => {
   const tags=[tag('建筑'),tag('插画'),tag('海报',2),tag('字体')];
   assert.deepEqual(orderCatalogTags(tags,['建筑空间'],true,['字体','插画']).map(t=>t.name),['字体','插画','建筑','海报']);
   assert.deepEqual(orderCatalogTags(tags,[],false,['missing','字体']).map(t=>t.name),['字体','插画','海报','建筑']);
   assert.deepEqual(orderCatalogTags(tags,[],false,[]).map(t=>t.name),['插画','海报','建筑','字体']);
-});
-
-test('media types stay separate; videos never create tag or untagged image sections', () => {
-  const videos=['mp4','MOV','webm','m4v','avi','mkv'].map(ext=>({id:ext,ext}));
-  videos.push({id:'path-video',store_path:'/clip.mp4?version=1'});
-  const assets=[...videos,{id:'photo',ext:'png'},{id:'other',ext:'webp'}];
-  const tags=[{id:'real-video-tag',name:'视频'},{id:'videos-only-tag',name:'空标签'}];
-  const memberships={'real-video-tag':['photo',...videos.map(a=>a.id)],'videos-only-tag':['mp4']};
-  const groups=groupCatalogAssets(tags,assets,memberships);
-  assert.deepEqual(groups.map(g=>g.id),['real-video-tag',UNTAGGED_SECTION]);
-  assert.deepEqual(groups.map(g=>g.assets.map(a=>a.id)),[['photo'],['other']]);
-  assert.deepEqual(groupCatalogAssets([],videos,{}),[]);
-  assert.deepEqual(assets.filter(isCatalogVideo),videos);
-  assert.deepEqual(assets.filter(a=>!isCatalogVideo(a)).map(a=>a.id),['photo','other']);
 });

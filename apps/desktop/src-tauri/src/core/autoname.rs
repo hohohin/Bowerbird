@@ -81,6 +81,7 @@ const NAME_SOURCE_TEXT_MAX_CHARS: usize = 2000;
 /// 采集/导入入库后调用：后台让 codex 看图 → 产出命名 + caption，写回 DB 并 emit 刷新。
 /// 立即返回（不阻塞导入）；任一失败静默降级。
 pub fn spawn_auto_analyze(app: AppHandle, db: Arc<Database>, asset: Asset) {
+    if asset.ext.as_deref().is_some_and(crate::media::probe::is_video) { return; }
     tokio::spawn(async move {
         if let Err(e) = auto_analyze(&app, &db, asset).await {
             tracing::warn!("auto-name: {e}");

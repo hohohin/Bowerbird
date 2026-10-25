@@ -53,11 +53,30 @@ pub async fn folder_classification_images(classifier: State<'_, Arc<LocalClassif
 #[tauri::command]
 pub async fn folder_classification_start(
     app: AppHandle, classifier: State<'_, Arc<LocalClassifier>>, paths: State<'_, Arc<LibraryPaths>>,
+    db: State<'_, Arc<Database>>,
     settings: State<'_, SettingsState>, root: String, recursive: bool, pending_only: bool, tag_id: Option<String>,
 ) -> Result<(),String> {
     let settings=settings.get();
     let key=settings.jev_image_classification_enabled;
-    classifier.start_folder(app,paths.inner().clone(),root,recursive,pending_only,tag_id,key)
+    classifier.start_folder(app,paths.inner().clone(),db.local_labels().map_err(|e| e.to_string())?,root,recursive,pending_only,tag_id,key)
+}
+
+/// Resolve creation evidence on demand; membership is never used as provenance.
+#[tauri::command]
+pub async fn local_classification_source(
+    classifier: State<'_, Arc<LocalClassifier>>, db: State<'_, Arc<Database>>,
+    paths: State<'_, Arc<LibraryPaths>>, tag_id: String, root: Option<String>,
+) -> Result<Option<String>, String> {
+    let local = classifier.folder_records_root();
+    let db = db.inner().clone();
+    let paths = paths.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        if let Some(root) = root {
+            crate::core::local_classification::folder::source_preview(&root, Some(&local), &paths, &tag_id)
+        } else {
+            db.local_label_source(&tag_id).map_err(|e| e.to_string())
+        }
+    }).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

@@ -16,9 +16,11 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/EMBEDDED-BROWSER.md` | 探索内置浏览器、登录资料持久化、网页拖图入库/画板落点、素材栏折叠与隔离 WebView2 验证 | 内置浏览器、探索工作区、网页拖图、探索联动画板素材栏与登录状态相关工作前必读 |
 | `dev-doc/ONBOARDING.md` | 身份实操引导、三条真实操作路线、独立项目与进度恢复、跳步及隔离验证 | 入门引导、首启/升级介绍、引导素材导入或学习提示相关工作前必读 |
 | `dev-doc/DESKTOP-UPDATES.md` | 双端自动更新协议、密钥与发布流程、部署/回滚证据、验收边界及 Mac 协作共识 | 自动更新、更新包签名/清单发布、更新失败或双端上线状态核验前必读 |
+| `dev-doc/USER-FACING-ERRORS.md` | 全应用错误提示展示边界、中文转换、诊断保留与故障注入验证 | 新增或修改错误提示、任务失败展示、通知、安装授权及生产错误排查前必读 |
 | `PROJECT.md` | **活文档（项目内容唯一权威）**：项目说明 / 目前进展 / 关键约定 / 踩坑记录 | 每次开工前先读「目前进展」与「关键约定」 |
+| `apps/code-reader-mcp/README.md` | GPT 网页端只读代码 MCP、脱敏快照、Node 权限限制与官方私有 HTTPS 隧道接入 | 代码只读分享、快照更新、MCP 接入或撤销权限前必读 |
 | `dev-doc/Bowerbird开发计划.md` | 当前架构与代码入口（技术栈 / 数据身份 / 生成与理解 provider），已合并旧 provider 草案 | 任何实现工作之前必读；产品决策以 PROJECT.md 为准 |
-| `dev-doc/Bowerbird定价方案v2-订阅积分制.md` | 商业模式与定价（免费+订阅+积分混合制 / 四档结构 / 积分消耗表 / 毛利测算；已取代 PRICING.md v1 买断制） | 商业化、定价、积分、功能门控相关工作前必读 |
+| `dev-doc/Bowerbird定价方案v2-订阅积分制.md` | Bcoin 当前定价、Pro 功能订阅、价格快照、迁移／回退与验证边界；末尾保留历史 v2 草案 | 商业化、定价、积分、功能门控相关工作前必读 |
 | `dev-doc/ARCH-ADJUST-PLAN.md` | 收费化架构调整开发计划（账号 / 积分 / 托管 provider / 支付 / 门控，P0–P9 阶段任务卡 + 验收标准；agent 执行用） | 收费化 / 账号 / 积分 / 云端任何实现工作前必读 |
 | `dev-doc/ARCH-ADJUST-PROGRESS.md` | 收费化当前进度、最近部署证据入口与剩余验收 | 接续收费化任务或核对已记录线上基线时必读 |
 | `apps/cloud/PRO-REDEMPTION.md` | Pro 兑换码、可视化管理员后台、加密发码与导出、权限配置、迁移及隔离验证 | 兑换码、发码管理、管理员授权或后台部署相关工作前必读 |
@@ -49,6 +51,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `macOS/CROSS-PLATFORM-SYNC-2026-10-15.md` | 10 月 15 日分叉合并、工作流/Agent 增量与跨端接收验证 | 其他端接收本次 mac 存档或核对 Intel 包与后续源码边界时 |
 | `macOS/DEV-SYNC-2026-10-19.md` | Windows dev 文件优先工作区、素材导航、分类／视频增量的 Apple Silicon 接收与系统路径别名修复 | 接续 10 月 19 日 M 系列 Mac 同步、核对 SQLite 0040 与 ARM64 验证边界时 |
 | `macOS/DEV-SYNC-2026-10-22.md` | Windows 2201 共享增量的 Apple Silicon 接收、H3 暂缓清单与验证 | 接续本轮 Mac 同步、恢复 H3 增量或核对 SQLite 0042 与本机颜色缓存保留时 |
+| `macOS/DEV-SYNC-2026-10-25.md` | Windows 2202–2401 共享增量的 Apple Silicon 接收、H3 延续暂缓与工作流异步授权兼容修复 | 接续 10 月 25 日同步、恢复 H3 或核对 SQLite 0045、Bcoin／Pro 门控与原生媒体验证时 |
 | `macOS/README.md` | Intel / Apple Silicon 开发运行、DMG 固定拖动安装规范、重打包脚本与交付检查 | macOS 开发 / 构建 / 重打包 / 交付 / 排障前必读 |
 
 ## 文档维护规则

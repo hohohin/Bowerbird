@@ -57,6 +57,13 @@ pub async fn cloud_sync_entitlement(
 }
 
 #[tauri::command]
+pub async fn cloud_start_pro_trial(
+    auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>,
+) -> Result<EntitlementSnapshot, AppError> {
+    entitlement.start_trial(&auth).await
+}
+
+#[tauri::command]
 pub async fn cloud_redeem_code(
     auth: State<'_, AuthClient>,
     entitlement: State<'_, EntitlementService>,

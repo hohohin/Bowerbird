@@ -1,8 +1,28 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Bot, Image, MessageSquareText, MoveRight } from "lucide-react";
 import type { CanvasEdge, CanvasNode } from "../lib/types";
+import { cloudAgentStatusLabel, cloudAgentStepLabel } from "../lib/cloudAgent";
+import { userErrorMessage } from "../lib/userError";
 
 type JsonObject = Record<string, unknown>;
+
+export function generationStatusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    saved: "已保存",
+    created: "等待生成",
+    pending: "等待生成",
+    queued: "排队中",
+    running: "生成中",
+    querying: "正在查询结果",
+    done: "已完成",
+    succeeded: "已完成",
+    failed: "生成失败",
+    cancelled: "已取消",
+    canceled: "已取消",
+    interrupted: "生成已中断",
+  };
+  return labels[status] ?? "正在确认生成状态";
+}
 
 function payload(node: CanvasNode): JsonObject {
   try {
@@ -35,10 +55,10 @@ function nodeTitle(node: CanvasNode) {
 function nodeMeta(node: CanvasNode) {
   const data = payload(node);
   if (node.kind === "prompt") {
-    return [text(data.provider), text(data.ratio), text(data.status)].filter(Boolean).join(" · ");
+    return [text(data.provider), text(data.ratio), generationStatusLabel(text(data.status) ?? "")].filter(Boolean).join(" · ");
   }
   if (node.kind === "agent_group") {
-    return [text(data.skill_id), text(data.status), number(data.progress) != null ? `${number(data.progress)}%` : null]
+    return [text(data.skill_id), cloudAgentStatusLabel(text(data.status) ?? ""), number(data.progress) != null ? `${number(data.progress)}%` : null]
       .filter(Boolean)
       .join(" · ");
   }
@@ -66,8 +86,10 @@ function AgentEventTrail({ node }: { node: CanvasNode }) {
     <div className="creative-timeline-agent-events">
       {visible.map((event, index) => (
         <div key={`${number(event.seq) ?? index}-${text(event.event_type) ?? "event"}`}>
-          <span>{text(event.step) ?? text(event.event_type) ?? "Agent 事件"}</span>
-          <p>{text(event.summary) ?? `${number(event.progress) ?? 0}%`}</p>
+          <span>{cloudAgentStepLabel(text(event.step) ?? "")}</span>
+          <p>{/fail|error|interrupt/i.test(text(event.event_type) ?? "")
+            ? userErrorMessage(event.summary, "本次操作未完成，请查看任务结果。")
+            : text(event.summary) ?? `${number(event.progress) ?? 0}%`}</p>
         </div>
       ))}
     </div>
@@ -120,14 +142,14 @@ function Inspector({
           <dt>参考输入</dt><dd>{referenceNodes.length > 0 ? referenceNodes.map(nodeTitle).join("、") : "—"}</dd>
           <dt>父结果</dt><dd>{parentNode ? nodeTitle(parentNode) : "—"}</dd>
           <dt>视觉设定</dt><dd>{visualProfileLabel}</dd>
-          <dt>状态</dt><dd>{text(data.status) ?? "—"}</dd>
+          <dt>状态</dt><dd>{generationStatusLabel(text(data.status) ?? "")}</dd>
         </dl>
       )}
       {node.kind === "agent_group" && (
         <dl>
           <dt>Run</dt><dd>{text(data.run_id) ?? "—"}</dd>
           <dt>Runtime / Skill</dt><dd>{[text(data.agent_runtime), text(data.skill_id)].filter(Boolean).join(" · ") || "—"}</dd>
-          <dt>步骤 / 状态</dt><dd>{[text(data.current_step), text(data.status), number(data.progress) != null ? `${number(data.progress)}%` : null].filter(Boolean).join(" · ") || "—"}</dd>
+          <dt>步骤 / 状态</dt><dd>{[text(data.current_step) ? cloudAgentStepLabel(text(data.current_step)!) : null, cloudAgentStatusLabel(text(data.status) ?? ""), number(data.progress) != null ? `${number(data.progress)}%` : null].filter(Boolean).join(" · ")}</dd>
           <dt>安全计量摘要</dt><dd>预算 {number(data.budget_credits) ?? "—"} · 实际 {number(data.actual_credits) ?? "—"}</dd>
           <dt>视觉设定</dt><dd>{visualProfileLabel}</dd>
           <dt>事件</dt><dd>{events.length} 条</dd>

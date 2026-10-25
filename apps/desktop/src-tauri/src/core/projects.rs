@@ -73,6 +73,13 @@ pub struct ProjectDeleteImpact {
     pub node_count: i64,
     pub running_generation_count: i64,
     pub running_agent_count: i64,
+    pub pending_agent_results: Vec<PendingAgentResult>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingAgentResult {
+    pub run_id: String,
+    pub created_at: i64,
 }
 
 /// 「更新项目文件」结果：本次新加入项目的素材数（0 = 文件夹没有新素材）。
@@ -110,16 +117,21 @@ const PROJECT_RUNNING_GENERATION_COUNT_SQL: &str =
 // project deletion until its lifecycle semantics are reviewed. A succeeded + accepted run is
 // unfinished until the whole artifact group has its local durable-ingest checkpoint. A primary
 // final_asset_id alone can be written before later artifacts finish projecting/acknowledging.
-const PROJECT_UNFINISHED_AGENT_COUNT_SQL: &str =
-    "SELECT COUNT(*) FROM cloud_agent_runs WHERE project_id=?1 AND (\
-       status NOT IN ('succeeded','failed','cancelled') OR \
-       (status='succeeded' AND feedback_action='accept' AND (\
+pub(crate) const PROJECT_PENDING_AGENT_RESULT_SQL: &str =
+    "status='succeeded' AND feedback_action='accept' AND (\
           final_asset_id IS NULL OR \
           COALESCE(json_extract(snapshot_json,'$._bowerbirdAgentIngestV1.schemaVersion'),0) != 1 OR \
           COALESCE(json_extract(snapshot_json,'$._bowerbirdAgentIngestV1.fingerprint'),'') = '' OR \
           json_extract(snapshot_json,'$._bowerbirdAgentIngestV1.completedAt') IS NULL\
-       ))\
-     )";
+       )";
+
+pub(super) fn pending_agent_results(conn: &rusqlite::Connection, project: &str) -> AppResult<Vec<PendingAgentResult>> {
+    let mut statement = conn.prepare(&format!(
+        "SELECT run_id,created_at FROM cloud_agent_runs WHERE project_id=?1 AND ({PROJECT_PENDING_AGENT_RESULT_SQL}) ORDER BY created_at,run_id"
+    ))?;
+    let rows = statement.query_map([project], |row| Ok(PendingAgentResult { run_id: row.get(0)?, created_at: row.get(1)? }))?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
 
 fn project_unfinished_work_counts(
     conn: &rusqlite::Connection,
@@ -130,7 +142,7 @@ fn project_unfinished_work_counts(
             row.get(0)
         })?;
     let running_agent_count: i64 =
-        conn.query_row(PROJECT_UNFINISHED_AGENT_COUNT_SQL, [project_id], |row| {
+        conn.query_row(&format!("SELECT COUNT(*) FROM cloud_agent_runs WHERE project_id=?1 AND (status NOT IN ('succeeded','failed','cancelled') OR ({PROJECT_PENDING_AGENT_RESULT_SQL}))"), [project_id], |row| {
             row.get(0)
         })?;
     let local_agent_count: i64 = conn.query_row(
@@ -150,13 +162,26 @@ fn project_unfinished_work_counts(
 pub(super) fn ensure_project_has_no_unfinished_work(
     conn: &rusqlite::Connection,
     project_id: &str,
+    discard_pending_results: bool,
 ) -> AppResult<()> {
-    let (generation_count, agent_count) = project_unfinished_work_counts(conn, project_id)?;
+    let (generation_count, mut agent_count) = project_unfinished_work_counts(conn, project_id)?;
+    if discard_pending_results {
+        agent_count -= pending_agent_results(conn, project_id)?.len() as i64;
+    }
     if generation_count > 0 || agent_count > 0 {
         return Err(AppError::Other(format!(
             "项目仍有未完成任务（生成 {generation_count}，Agent {agent_count}），请等待任务终态且已接受结果完成入库后再删除"
         )));
     }
+    Ok(())
+}
+
+pub(super) fn discard_project_pending_results(conn: &rusqlite::Connection, project: &str) -> AppResult<()> {
+    // Local abandonment, not a fabricated remote cancellation or successful ingest.
+    // Committed with project deletion; rollback preserves the original records.
+    conn.execute(&format!(
+        "UPDATE cloud_agent_runs SET snapshot_json=json_set(snapshot_json,'$._bowerbirdResultAbandonedV1',json_object('reason','project_deleted','projectId',?1,'abandonedAt',unixepoch())) WHERE project_id=?1 AND ({PROJECT_PENDING_AGENT_RESULT_SQL})"
+    ), [project])?;
     Ok(())
 }
 
@@ -285,6 +310,7 @@ impl Database {
             node_count: count("SELECT COUNT(*) FROM canvas_nodes WHERE project_id=?1")?,
             running_generation_count,
             running_agent_count,
+            pending_agent_results: pending_agent_results(&conn, project_id)?,
         })
     }
 
@@ -410,7 +436,7 @@ impl Database {
             )
             .optional()?
             .ok_or_else(|| AppError::NotFound(format!("project {project_id}")))?;
-        ensure_project_has_no_unfinished_work(&tx, project_id)?;
+        ensure_project_has_no_unfinished_work(&tx, project_id, false)?;
         // 预置项目（如「欢迎来到园丁鸟」）：workspace_path 是虚拟值，无真实目录可移出，
         // 成员素材（source='sample'）应留全局供未来按 source 清理。强制 Keep 语义，忽略传入 mode。
         // 空白项目（kind="blank"）没有 workspace，「移出」无处可移（MoveOut 会把文件移到相对
@@ -726,7 +752,7 @@ pub fn refresh_workspace_assets(
 ) -> AppResult<(Vec<Asset>, usize)> {
     let existing = db.list_origin_paths()?;
     let mut assets = Vec::new();
-    for p in ingest::walk_images(workspace) {
+    for p in ingest::walk_media(workspace) {
         if existing.contains(p.to_string_lossy().as_ref()) {
             continue;
         }

@@ -1,5 +1,5 @@
 # Bowerbird html-renderer —— 断网、非 root、确定性 Chromium 渲染容器
-# 依据 dev-doc/HTML-RENDER-PLAN.md §3.2/§3.3（H0-T1；容器实机断网/沙箱验证 = H0-T2/T5，待 VPS）
+# 依据 dev-doc/HTML-RENDER-PLAN.md §3.2/§3.3（已部署基线与沙箱验收边界见 README.md 和 Cloud DEPLOY.md；变更后重跑容器验收）
 #
 # 版本钉定：
 #   - 基础镜像 node:24-bookworm-slim（生产构建建议改钉 digest 并同步 build-info）

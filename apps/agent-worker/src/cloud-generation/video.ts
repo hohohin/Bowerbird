@@ -78,6 +78,7 @@ export async function executeVideo(input: VideoInput, job: { id: string; leaseId
         const bytes = await download(fetch, signed.url, reference.bytes);
         if (bytes.length !== reference.bytes) throw new Error("video_input_size_mismatch");
         const info = await probe(bytes);
+        if (reference.duration !== undefined && Math.abs(info.duration - reference.duration) > 0.05) throw new Error("video_reference_quoted_duration_mismatch");
         const ratio = info.width / info.height;
         if (info.duration < 2 || info.duration > 30 || ratio < 0.4 || ratio > 2.5 || info.width < 300 || info.height < 300 || info.width > 6000 || info.height > 6000 || info.width * info.height < 407696 || info.width * info.height > 8295044 || info.fps < 24 || info.fps > 60) throw new Error("video_reference_spec_invalid");
         totalSeconds += info.duration;

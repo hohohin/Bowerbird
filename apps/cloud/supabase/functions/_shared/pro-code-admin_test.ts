@@ -35,11 +35,33 @@ Deno.test("admin HTTP rejects callers before RPC and overrides supplied actor", 
   const authenticate = (isAdmin: boolean) => async () => ({ user: { id: actor, app_metadata: { bowerbird_admin: isAdmin } },
     admin: { rpc: (name: string, args: unknown) => { calls.push({ name, args }); return Promise.resolve({ data: { rows: [] }, error: null }); } } }) as unknown as AuthContext;
   const request = (action: string) => new Request("https://example.test", { method: "POST", body: JSON.stringify({ action, p_actor: "forged", user_id: "forged" }) });
-  for (const action of ["list", "issue", "reveal", "export", "disable"]) assertEquals((await handleCodeAdmin(request(action), authenticate(false))).status, 403);
+  for (const action of ["list", "issue", "reveal", "export", "disable", "list_users", "set_test_account"]) assertEquals((await handleCodeAdmin(request(action), authenticate(false))).status, 403);
   assertEquals(calls.length, 0);
   const result = await handleCodeAdmin(request("list"), authenticate(true));
   assertEquals(result.status, 200); assertEquals(result.headers.get("cache-control"), "no-store");
   assertEquals((calls[0] as { args: { p_actor: string } }).args.p_actor, actor);
   const denied = await handleCodeAdmin(request("list"), async () => { throw new ApiError("unauthorized", "请先登录"); });
   assertEquals(denied.status, 401);
+});
+Deno.test("user admin validates input, narrows mutations and maps missing/revoked users", async () => {
+  const actor = crypto.randomUUID(), target = crypto.randomUUID();
+  const calls: { name: string; args: Record<string, unknown> }[] = [];
+  let data: unknown = { rows: [], total: 0 }, error: unknown = null;
+  const authenticate = async () => ({ user: { id: actor, app_metadata: { bowerbird_admin: true } },
+    admin: { rpc: (name: string, args: Record<string, unknown>) => { calls.push({ name, args }); return Promise.resolve({ data, error }); } } }) as unknown as AuthContext;
+  const request = (body: unknown) => handleCodeAdmin(new Request("https://example.test", { method: "POST", body: JSON.stringify(body) }), authenticate);
+  for (const body of [{ action: "set_test_account", user_id: target, enabled: "true" }, { action: "set_test_account", user_id: "bad", enabled: true },
+    { action: "list_users", page: -1 }, { action: "list_users", filter: "admin" }, { action: "list_users", search: {} }, { action: "list_users", search: "x".repeat(101) }]) {
+    assertEquals((await request(body)).status, 400);
+  }
+  assertEquals(calls.length, 0);
+  assertEquals((await request({ action: "set_test_account", user_id: target, enabled: true, p_actor: target, app_metadata: { bowerbird_admin: true } })).status, 200);
+  assertEquals(calls[0], { name: "admin_set_test_account", args: { p_actor: actor, p_user_id: target, p_enabled: true } });
+  const list = await request({ action: "list_users", search: " mail ", filter: "test", page: 1 });
+  assertEquals(list.status, 200); assertEquals(list.headers.get("cache-control"), "no-store");
+  assertEquals(calls[1], { name: "admin_list_users", args: { p_actor: actor, p_search: "mail", p_filter: "test", p_page: 1 } });
+  data = { status: "not_found" };
+  assertEquals((await request({ action: "set_test_account", user_id: target, enabled: false })).status, 404);
+  error = { code: "42501" };
+  assertEquals((await request({ action: "list_users" })).status, 403);
 });

@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -1149,11 +1150,11 @@ export function ImageAnnotator() {
         {assetLoading ? (
           <p className="text-sm text-white/60">正在加载素材…</p>
         ) : assetError ? (
-          <p className="text-sm text-red-300">素材加载失败：{assetError}</p>
+          <p className="text-sm text-red-300">{userErrorMessage(assetError, "素材暂时无法读取，请重新打开。")}</p>
         ) : !asset && !isDraft ? (
           <p className="text-sm text-white/60">素材不存在或已删除</p>
         ) : loadError ? (
-          <p className="text-sm text-red-300">底图加载失败：{loadError}</p>
+          <p className="text-sm text-red-300">{userErrorMessage(loadError, "底图暂时无法读取，请重新打开。")}</p>
         ) : !base || !displaySize ? (
           <p className="text-sm text-white/60">正在加载底图…</p>
         ) : (

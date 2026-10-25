@@ -1,3 +1,4 @@
+import { userErrorMessage } from "../lib/userError";
 import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { GripVertical, LoaderCircle } from "lucide-react";
 import { SourceBrowserPanel } from "./SourceBrowserPanel";
@@ -58,7 +59,8 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       let analysisIssue = "";
       const analysing = await api.claimSourceBrowserAnalysis(dragId, image.imageUrl, image.pageUrl).catch(error => {
         const reason = error instanceof Error ? error.message : typeof error === "string" ? error : "";
-        analysisIssue = /not found|unknown command/i.test(reason) ? "分类服务未连接，请重启开发程序" : reason || "分类服务暂不可用";
+        console.error("Capture classification unavailable", error);
+        analysisIssue = /not found|unknown command/i.test(reason) ? "分类暂不可用，请更新应用后重试" : userErrorMessage(error, "分类暂不可用，可稍后重新分类");
         return false;
       });
       // Flush existing composer state before materializing a still-empty project.

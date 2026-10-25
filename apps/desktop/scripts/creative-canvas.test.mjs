@@ -608,7 +608,7 @@ for (const collection of ["promptGraphNodes", "agentGraphNodes"]) {
     for (const status of ["creating", "running", "awaiting_approval", "failed", "succeeded", "cancelled"]) {
       const removed = [];
       const summary = () => ({ status, jobId: "job", runId: "run" });
-      const bindings = { React, X: () => null, selectCloudAgentResultArtifacts, promptNodeSummary: summary, agentGroupSummary: summary,
+      const bindings = { React, X: () => null, generationStatusLabel: status => status, cloudAgentStatusLabel: status => status, cloudAgentStepLabel: step => step, selectCloudAgentResultArtifacts, promptNodeSummary: summary, agentGroupSummary: summary,
         conversationCards: { cards: new Map() }, nodeRect: (node) => node,
         conversationImages: () => [], imageOnlyConversationIds: new Set(), isVideoPath, selectedConversationImage: () => null,
         cloudAgentRuns: {}, genJobs: {}, focusedNodeId: null, activeDragId: null, focusedThreadId: null,

@@ -10,23 +10,31 @@ const page = await browser.newPage({ viewport: { width: 560, height: 400 } });
 const errors = [];
 page.on("pageerror", error => errors.push(error.message));
 const waitText = text => page.waitForFunction(value => document.body.innerText.includes(value), text);
+const choose = async key => {
+  await page.getByTitle('选择视频模型', { exact: true }).click();
+  await page.getByRole('dialog', { name: '视频模型', exact: true }).locator(`[data-model-key="${key}"]`).click();
+};
 try {
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/video-controls/preview.html`);
   await waitText("即梦剩余：9,434 积分");
   await waitText("本次消耗：240 积分");
   await page.getByLabel("视频时长（秒）").fill("30");
   await page.getByLabel("视频分辨率", { exact: true }).selectOption("1080p");
-  await page.getByLabel("视频模型", { exact: true }).selectOption("seedance2.0fast");
+  await choose('jimeng:seedance2.0');
   assert.deepEqual(await page.evaluate(() => [window.options.duration, window.options.video_resolution]), [15, "720p"]);
-  await page.getByLabel("视频模型", { exact: true }).selectOption("seedance2.0_vip");
+  // Restored legacy tasks retain their original parameters but cannot be newly selected.
+  await page.evaluate(() => window.setOptions({ ...window.options, model_version: 'seedance2.0_vip' }));
   await page.getByLabel("视频分辨率", { exact: true }).selectOption("4k");
-  await page.getByLabel("视频生成渠道").selectOption("cloud");
+  await page.getByTitle('选择视频模型', { exact: true }).click();
+  assert.equal(await page.locator('[data-model-key*="vip"]').count(), 0);
+  assert.equal(await page.locator('[data-model-key*="fast"]').count(), 0);
+  await page.locator('[data-model-key="cloud:seedance2.5"]').click();
   assert.deepEqual(await page.evaluate(() => [window.options.model_version, window.options.video_resolution]), ["seedance2.5", "720p"]);
   assert.equal(await page.getByLabel("刷新即梦剩余积分").count(), 0);
-  await page.getByLabel("视频生成渠道").selectOption("jimeng");
+  await choose('jimeng:seedance2.0mini');
   await page.getByLabel("视频生成模式").selectOption("image2video");
-  await page.waitForFunction(() => [...document.querySelectorAll('[aria-label="视频模型"] option')].some(option => option.value === "seedance1.0fast"));
-  await page.getByLabel("视频模型", { exact: true }).selectOption("seedance1.0fast");
+  await page.evaluate(() => window.setOptions({ ...window.options, model_version: 'seedance1.0fast' }));
+  await waitText('Seedance 1.0 Fast');
   assert.equal(await page.getByLabel("视频时长（秒）").getAttribute("max"), "10");
 
   await page.evaluate(() => { window.balance = 9000; window.store.setState({ genJobs: { job: { id: "job", provider: "jimeng", submitId: "submitted", running: true } } }); });
@@ -73,8 +81,12 @@ try {
       cloudEntitlement: { plan: "pro", policy: { can_use_byo: true }, balances: { daily: 100, sub: 0, topup: 0 } } });
   });
   await page.locator('.creation-dock .ProseMirror').click();
-  await page.getByLabel("生成媒体", { exact: true }).selectOption("video");
+  await page.locator('.creation-dock').getByRole('button', { name: '视频', exact: true }).click();
+  await page.locator('.creation-dock').getByTitle('选择视频模型', { exact: true }).click();
   await waitText("即梦剩余：9,434 积分");
+  await page.getByRole('dialog', { name: '视频模型', exact: true }).getByRole('button', { name: '刷新即梦剩余积分' }).click();
+  await waitText("即梦剩余：9,434 积分");
+  await page.keyboard.press('Escape');
   await page.getByLabel("视频分辨率", { exact: true }).selectOption("1080p");
   await page.evaluate(() => {
     const options = { kind: "text2video", model_version: "seedance2.5", duration: 5, video_resolution: "720p" };

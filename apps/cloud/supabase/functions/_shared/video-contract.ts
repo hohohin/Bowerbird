@@ -11,7 +11,7 @@ export interface CloudVideoOptions {
   generate_audio?: boolean;
 }
 export interface VideoImage { mime: "image/jpeg" | "image/png"; base64: string }
-export interface VideoReference { object_key: string; bytes: number; mime?: "video/mp4" | "video/quicktime" }
+export interface VideoReference { object_key: string; bytes: number; mime?: "video/mp4" | "video/quicktime"; duration?: number }
 export interface VideoInput {
   schema_version: 1;
   media: "video";
@@ -55,6 +55,7 @@ export function validateVideoInput(value: VideoInput): void {
     default: throw new Error("video_kind_invalid");
   }
   for (const video of value.reference_videos) {
+    if (video.duration !== undefined && (!Number.isFinite(video.duration) || video.duration < 2 || video.duration > 30)) throw new Error("video_reference_duration_invalid");
     if (!video || typeof video.object_key !== "string" || (video.mime !== undefined && !["video/mp4", "video/quicktime"].includes(video.mime)) || !Number.isSafeInteger(video.bytes) || video.bytes <= 0 || video.bytes > 200 * 1024 * 1024) throw new Error("video_reference_invalid");
   }
 }

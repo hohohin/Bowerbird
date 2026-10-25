@@ -1,6 +1,7 @@
 import { BRAND_OBSERVATION_TASK, loadBrandPrompt } from "../prompts/brand-visual.ts";
 import { replicationMessages, validateReplicationResult, validateReplicationVideo, REPLICATION_RESULT_ERRORS, type ReplicationPayload } from "./replication.ts";
 import { validateReplication } from "../../../cloud/supabase/functions/_shared/replication.ts";
+import { shortRewrite } from "../../../cloud/supabase/functions/_shared/bcoin-text.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { IdlePollBackoff } from "../idle-poll-backoff.ts";
 
@@ -205,8 +206,9 @@ class ArkVisionClient {
       },
       body: JSON.stringify({
         model,
-        ...(replication ? { max_tokens: 6000, stream: false, thinking: { type: "disabled" } } : {}),
-        ...(input.operation === "video-analysis" ? { response_format: { type: "json_object" } } : {}),
+        max_tokens: replication && !shortRewrite(input) ? 6000 : 2000,
+        stream: false, thinking: { type: input.operation === "video-analysis" ? "enabled" : "disabled" },
+        ...(input.operation === "video-analysis" ? { response_format: { type: "text" } } : {}),
         messages: replication ? replicationMessages(input as ReplicationPayload) : [{
           role: "user",
           content: [

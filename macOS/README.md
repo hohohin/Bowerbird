@@ -2,6 +2,10 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
+## 2026-10-25 Apple Silicon 接收 Windows 2202–2401
+
+接收 `dev@c34c088` 的素材分页、分类来源／内部英文缓存、视频导入与复刻、项目管理／删除、Bcoin／Pro 工作流和设置／错误提示，H3 专属更新继续暂缓。SQLite 源码至 0045，Mac 版本仍 26.10.1502；保留本机玻璃效果、颜色缓存与路径修复。已通过 ARM64 编译和隔离回归，仅更新本地源码与开发主程序；完整范围、工作流兼容修复及验收边界见 [10 月 25 日同步记录](DEV-SYNC-2026-10-25.md)。
+
 ## 2026-10-22 Apple Silicon 选择性接收 Windows dev
 
 接收 `dev@70ad8c1` 的共享素材库、分类、画板／完成触发和视频复刻更新，按用户确认暂缓 H3 专属增量。Mac 版本保持 26.10.1502、SQLite 至 0042，保留本机颜色缓存及系统路径别名修复；仅源码与开发主程序更新，未发布安装包。排除清单、未来恢复 H3 的方法与验证见 [10 月 22 日同步记录](DEV-SYNC-2026-10-22.md)。
