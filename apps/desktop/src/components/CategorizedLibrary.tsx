@@ -1,11 +1,14 @@
+import { useLibraryModeStore, useLibraryPane, useLibraryThumbnail, useLibraryPins, type LibraryBrowsePosition } from "../lib/libraryPane";
+import { getDragAssets, getDragAssetName, getDragAssetPreview } from "../lib/dragPayload";
+import { localClassification, projectClassification } from "../lib/localClassification";
+import { LibraryDropPreview } from "./LibraryDropPreview";
 import { userErrorMessage } from "../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { ChevronDown, ChevronRight, Folder, MoreHorizontal, Pencil, Plus, Settings2, Trash2, X } from "lucide-react";
 import { materialCatalog, type CatalogKind, type MaterialCatalog, type CatalogFilter } from "../lib/materialCatalog";
 import { catalogInitial, collectionRows, orderCatalogTags, UNTAGGED_SECTION } from "../lib/materialCatalogOrder";
-import { useLocalFileMode, type LibraryMedia } from "../lib/localFileMode";
-import { useCatalogPins } from "../lib/catalogPins";
+import { type LibraryMedia } from "../lib/localFileMode";
 import { api } from "../lib/api";
 import { VirtualCatalog, type CatalogLocation } from "./VirtualCatalog";
 import type { CatalogSectionInfo } from "../lib/catalogVirtualLayout";
@@ -22,6 +25,7 @@ import { LibraryMediaSwitch } from "./LibraryMediaSwitch";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { useLibraryGlass } from "./useLibraryGlass";
 import { LibraryMotion } from "./LibraryMotion";
+import { LibraryTacticalBackdrop } from "./LibraryTacticalBackdrop";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { Lightbox } from "./Lightbox";
@@ -33,17 +37,21 @@ import { CatalogTagIndex } from "./CatalogTagIndex";
 import { ContextMenu, DeleteSubmenu } from "./ContextMenu";
 import "./CategorizedLibrary.css";
 
-type BrowsePosition = { active: string | null; top: number; alphabetic: boolean; color: string | null; query: string; generatedFilter: string | null };
-const browsePositions = new Map<string, BrowsePosition>();
+const browsePositions = new Map<string, LibraryBrowsePosition>();
 
-export function CategorizedLibrary({ kind, media = "images", projectId = null, projectScope = false, navigation, onClose, onCreateProject, onAssetsChange }: {
+export function CategorizedLibrary({ kind, media = "images", projectId = null, projectScope = false, navigation, onClose, onCreateProject, onAssetsChange, positionId = "default", showEmptyTags = false, toolbarActions, dropPreview = false }: {
   kind: CatalogKind; projectId?: string | null; projectScope?: boolean; navigation: ReactNode; onClose: () => void; onCreateProject?: (ids?: string[]) => Promise<unknown>;
-  media?: LibraryMedia;
+  media?: LibraryMedia; positionId?: string; showEmptyTags?: boolean;
+  toolbarActions?: ReactNode; dropPreview?: boolean;
   onAssetsChange?: (assets: Asset[]) => void;
 }) {
+  const useLocalFileMode = useLibraryModeStore();
+  const pane = useLibraryPane();
+  const root = useRef<HTMLElement>(null);
   const glass = useLibraryGlass();
-  const positionKey = JSON.stringify([projectId, projectScope, media, kind]);
-  const [savedPosition] = useState(() => browsePositions.get(positionKey));
+  const positions = pane?.positions ?? browsePositions;
+  const positionKey = JSON.stringify([pane ? "pane" : positionId, projectId, projectScope, media, kind]);
+  const [savedPosition] = useState(() => positions.get(positionKey));
   const flat = kind === "all" || (media === "videos" && kind === "tags");
   const [catalog, setCatalog] = useState<MaterialCatalog>({ tags: [], collections: [], prompts: [], tag_asset_ids: {} });
   const [active, setActive] = useState<string | null>(savedPosition?.active ?? null);
@@ -78,18 +86,19 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   const resizing = useRef<{ pointer: number; x: number; width: number } | null>(null);
   const [sidebarMetrics, setSidebarMetrics] = useState({ width: 208, max: 320 });
   const [sidebarWidth, setSidebarWidth] = useState<number | null>(() => {
-    try { const value = Number(localStorage.getItem("bowerbird.catalog.tagSidebarWidth")); return value >= 89 && value <= 320 ? value : null; } catch { return null; }
+    try { const value = Number(localStorage.getItem(`bowerbird.catalog.tagSidebarWidth${pane ? `.${pane.id}` : ""}`)); return value >= 89 && value <= 320 ? value : null; } catch { return null; }
   });
   const [jump, setJump] = useState<{ id: string; sequence: number } | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const query = useLocalFileMode(s => s.query);
   const generatedFilter = useLocalFileMode(s => s.generatedFilter);
-  const pinnedTags = useCatalogPins(s => s.ids);
-  const togglePin = useCatalogPins(s => s.toggle);
-  const width = useStore(s => s.libraryThumbnailWidth);
+  const [dragItem, setDragItem] = useState({ name: "", preview: null as string | null, count: 0 });
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const { ids: pinnedTags, toggle: togglePin } = useLibraryPins();
+  const { width } = useLibraryThumbnail("library");
   const pinch = useThumbnailPinch("library");
   const tags = useMemo(() => orderCatalogTags(catalog.tags, catalog.prompts, !!projectId && !alphabetic, pinnedTags), [catalog, projectId, alphabetic, pinnedTags]);
-  const visibleTags = useMemo(() => tags.filter(tag => tag.count > 0), [tags]);
+  const visibleTags = useMemo(() => tags.filter(tag => showEmptyTags || tag.count > 0), [tags, showEmptyTags]);
   const rows = useMemo(() => collectionRows(catalog.collections), [catalog.collections]);
   const currentCollection = catalog.collections.find(c => c.id === active);
   const scope = kind === "collections" ? currentCollection?.id ?? null : null;
@@ -129,8 +138,11 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   position.current = { active, alphabetic, color, query, generatedFilter };
   useLayoutEffect(() => {
     const view = scroll.current;
-    return () => { browsePositions.set(positionKey, { ...position.current, top: view?.scrollTop ?? 0 }); };
-  }, [positionKey]);
+    const save = () => positions.set(positionKey, { ...position.current, top: view?.scrollTop ?? 0 });
+    view?.addEventListener("scroll", save, { passive: true });
+    return () => { save(); view?.removeEventListener("scroll", save); };
+  }, [positionKey, positions]);
+  useLayoutEffect(() => { positions.set(positionKey, { ...position.current, top: scroll.current?.scrollTop ?? 0 }); });
   function navigateTag(id: string) { setActive(id); setJump(previous => ({ id, sequence: (previous?.sequence ?? 0) + 1 })); }
   function navigateLetter(letter: string) {
     const target = orderCatalogTags(visibleTags, [], false).find(tag => !pinnedTags.includes(tag.id) && catalogInitial(tag.name) === letter)
@@ -141,7 +153,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     const maximum = Math.min(320, (sidebar.current?.parentElement?.clientWidth ?? 520) - 200);
     const next = value === null ? null : Math.max(89, Math.min(maximum, value));
     setSidebarWidth(next);
-    try { if (next === null) localStorage.removeItem("bowerbird.catalog.tagSidebarWidth"); else localStorage.setItem("bowerbird.catalog.tagSidebarWidth", String(next)); } catch { /* Session width still works. */ }
+    try { if (next === null) localStorage.removeItem(`bowerbird.catalog.tagSidebarWidth${pane ? `.${pane.id}` : ""}`); else localStorage.setItem(`bowerbird.catalog.tagSidebarWidth${pane ? `.${pane.id}` : ""}`, String(next)); } catch { /* Session width still works. */ }
   }
   useLayoutEffect(() => {
     const element = sidebar.current;
@@ -193,7 +205,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     const handler = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "a" || document.querySelector('[role="dialog"], [role="menu"]')) return;
       const target = event.target as HTMLElement | null;
-      if (!target?.closest('.categorized-library') || target.closest('input,textarea,select,[contenteditable="true"]')) return;
+      if (!target || !root.current?.contains(target) || target.closest('input,textarea,select,[contenteditable="true"]')) return;
       event.preventDefault(); void selectAll();
     };
     window.addEventListener("keydown", handler);
@@ -304,8 +316,38 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1 : Math.max(0, Math.min(items.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)));
     event.preventDefault(); event.stopPropagation(); items[next]?.focus();
   }
-  return <section data-file-import-project-id={projectScope ? projectId ?? "" : ""} className={`categorized-library${kind === "tags" && !flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : kind === "tags" ? "按标签浏览素材" : "按集合浏览素材"}
+  useEffect(() => {
+    const clear = () => setDropTarget(null);
+    window.addEventListener("dragend", clear); window.addEventListener("drop", clear);
+    return () => { window.removeEventListener("dragend", clear); window.removeEventListener("drop", clear); };
+  }, []);
+  const dropName = kind === "tags" ? catalog.tags.find(tag => tag.id === dropTarget)?.name : catalog.collections.find(item => item.id === dropTarget)?.name;
+  function dropDestination(target: EventTarget) {
+    const element = (target as HTMLElement).closest<HTMLElement>(kind === "tags" ? '[data-tag-id], [data-tag-section]' : '[data-collection-id], .catalog-gallery');
+    const id = kind === "tags" ? element?.dataset.tagId ?? element?.dataset.tagSection : element?.dataset.collectionId ?? (element ? active : null);
+    return id === UNTAGGED_SECTION ? null : id ?? null;
+  }
+  return <section ref={root} onDragOver={event => {
+    const id = !flat && dropDestination(event.target);
+    if (!id || !getDragAssets()?.length || working) { setDropTarget(null); return; }
+    event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; setDropTarget(id);
+    const ids = getDragAssets()!;
+    const name = getDragAssetName() ?? "图片", preview = getDragAssetPreview();
+    setDragItem(previous => previous.name === name && previous.preview === preview && previous.count === ids.length ? previous : { name, preview, count: ids.length });
+  }} onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }}
+    onDragEnd={() => setDropTarget(null)} onDrop={event => {
+      const id = !flat && dropDestination(event.target), ids = getDragAssets(); setDropTarget(null);
+      if (!id || !ids?.length) return;
+      event.preventDefault(); event.stopPropagation();
+      void run(async () => {
+        if (kind === "tags") await (projectScope && projectId ? projectClassification(projectId) : localClassification).example(id, [...new Set(ids)], true);
+        else await materialCatalog.members(id, [...new Set(ids)]);
+        if (alive.current) setRevision(value => value + 1);
+        notifySuccess(kind === "tags" ? "已添加手动分类" : "已添加到集合");
+      });
+    }} data-drop-target={dropTarget ?? undefined} data-file-import-project-id={projectScope ? projectId ?? "" : ""} className={`categorized-library library-tactical${kind === "tags" && !flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : kind === "tags" ? "按标签浏览素材" : "按集合浏览素材"}
     style={{ ...glass.style, ...(sidebarWidth !== null ? { "--catalog-sidebar-width": `${sidebarWidth}px` } : {}) } as CSSProperties}>
+    {dropPreview && dropTarget && dropName && <LibraryDropPreview {...dragItem} target={dropName} collection={kind === "collections"}/>}
     {glass.definition}
     <LibraryMotion />
     <div className="catalog-body">
@@ -315,13 +357,13 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
             onClick={() => kind === "tags" ? setManageTags(true) : setEditor({ parentId: null })}>{kind === "tags" ? <Settings2 size={15}/> : <Plus size={16}/>}</button></div>
         {kind === "tags" && <p className="catalog-sort-note">{projectId ? <button onClick={() => { setAlphabetic(v => !v); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} title="根据本项目生图提示词和素材标签在本机排序；点击切换拼音顺序">{alphabetic ? "拼音 A–Z" : "项目相关优先"}</button> : "拼音 A–Z"}</p>}
         {catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
-        {kind === "tags" ? <CatalogTagIndex tags={visibleTags} active={active} alphabetic={!projectId || alphabetic} pinned={pinnedTags} onTogglePin={id => { togglePin(id); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} onNavigate={navigateTag} onLetter={navigateLetter}/> : <OverlayScrollArea className="catalog-tree-scroll" viewportClassName="catalog-index" label="集合目录滚动条">
+        {kind === "tags" ? <CatalogTagIndex tags={visibleTags} active={active} dropTarget={dropTarget} alphabetic={!projectId || alphabetic} pinned={pinnedTags} onTogglePin={id => { togglePin(id); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} onNavigate={navigateTag} onLetter={navigateLetter}/> : <OverlayScrollArea className="catalog-tree-scroll" viewportClassName="catalog-index" label="集合目录滚动条">
           <div role="tree" aria-label="集合层级" onKeyDown={listKey}>
             {rows.filter(row => !hidden(row.item.id)).map(({ item, depth, path }) => {
               const children = catalog.collections.some(c => c.parent_id === item.id);
               return <div key={item.id} data-catalog-item data-collection-id={item.id} role="treeitem" aria-label={item.name} aria-level={depth + 1} aria-selected={active === item.id}
                 aria-expanded={children ? !collapsed.has(item.id) : undefined} tabIndex={active === item.id ? 0 : -1} title={path}
-                className={`catalog-row catalog-tree-row${collectionMenu?.item.id === item.id ? " is-menu-open" : ""}`} style={{ paddingLeft: 4 + Math.min(depth, 8) * 24 }} onClick={event => { setActive(item.id); event.currentTarget.focus(); }}
+                className={`catalog-row catalog-tree-row${dropTarget === item.id ? " is-drop-target" : ""}${collectionMenu?.item.id === item.id ? " is-menu-open" : ""}`} style={{ paddingLeft: 4 + Math.min(depth, 8) * 24 }} onClick={event => { setActive(item.id); event.currentTarget.focus(); }}
                 onKeyDown={event => {
                   if (event.target !== event.currentTarget) return;
                   if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActive(item.id); }
@@ -360,6 +402,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
           }}/>
       </aside>}
       <div ref={pinch} className="catalog-gallery">
+        <LibraryTacticalBackdrop />
         <div className="file-view-heading">
           {navigation}
           <LibraryFloatingControls>
@@ -367,6 +410,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
             <GeneratedImageFilter floating value={generatedFilter} onChange={useLocalFileMode.getState().setGeneratedFilter}/>
             <LibraryBrowserButton/>
             <FileColorFilter open={colorsOpen} onOpenChange={setColorsOpen} color={color} onColorChange={setColor} palette={palette}/>
+            {toolbarActions}
           </LibraryFloatingControls>
         </div>
         {flat && catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}

@@ -1,18 +1,19 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Search, Upload, X } from "lucide-react";
+import { ArrowLeft, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Upload } from "lucide-react";
 import { SidebarAccount } from "./SidebarAccount";
 import { ProjectManagerPanel } from "./ProjectManagerPanel";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { MediaTypeFilter } from "./MediaTypeFilter";
 import { useStore } from "../store";
-import { useLocalFileMode } from "../lib/localFileMode";
+import { useActiveLibraryModeStore, useActiveLibraryPane } from "../lib/libraryPane";
 import { api } from "../lib/api";
 import { prepareMediaImport, showImportedMedia } from "../lib/mediaImport";
 import { prepareExplorerCanvasDrop } from "../lib/explorerCanvasDrop";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore";
+import "./LibraryTactical.css";
 
-/** 顶部工具栏：导入 + 项目/主页入口 + 搜索 + 用户中心。 */
+/** 顶部工具栏：导入 + 项目/主页入口 + 用户中心。 */
 export function Toolbar({
   onRefresh,
   canvasMode,
@@ -30,12 +31,11 @@ export function Toolbar({
   exploring?: boolean;
   localFilesOpen?: boolean;
 }) {
+  const useLocalFileMode = useActiveLibraryModeStore();
+  const activePane = useActiveLibraryPane(s => s.pane);
   const setLoading = useStore((s) => s.setLoading);
   const busy = useStore((s) => s.loading);
-  const libraryQuery = useStore((s) => s.searchQuery);
-  const folderQuery = useLocalFileMode(s => s.query);
   const setNavigationHost = useLocalFileMode(s => s.setNavigationHost);
-  const searchQuery = localFilesOpen ? folderQuery : libraryQuery;
   const activeProjectId = useStore((s) => s.activeProjectId);
   const setLibraryQuery = useStore((s) => s.setSearchQuery);
   const setFolderQuery = useLocalFileMode(s => s.setQuery);
@@ -50,34 +50,31 @@ export function Toolbar({
   const [importOpen, setImportOpen] = useState(false);
   const [projectsOpen, setProjectsOpen] = useState(false);
   const fileMode = useLocalFileMode(s => s.mode);
-  const showFileNavigation = localFilesOpen && fileMode === "files";
-  const materialSearchLabel = ({ all: "搜索全部图片", global: "搜索全局素材", files: "搜索当前文件夹", tags: "搜索分类素材", collections: "搜索集合素材" })[fileMode];
-  const searchRef = useRef<HTMLInputElement>(null);
+  const showFileNavigation = localFilesOpen && fileMode === "files" && !activePane;
   const importRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLElement>(null);
+  const tactical = localFilesOpen && !exploring;
 
   useEffect(() => {
-    function onKeyDown(e: KeyboardEvent) {
-      if (document.querySelector('[role="dialog"]')) return;
-      const target = e.target as HTMLElement | null;
-      const typing =
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        !!target?.isContentEditable;
-      if (e.key === "/" && !typing) {
-        e.preventDefault();
-        searchRef.current?.focus();
-      }
-      if (e.key === "Escape" && document.activeElement === searchRef.current) {
-        searchRef.current?.blur();
-      }
-    }
+    if (!tactical) return;
+    const toolbar = toolbarRef.current!;
+    const sync = () => { toolbar.dataset.libraryMotionPaused = String(document.hidden); };
+    sync();
+    document.addEventListener("visibilitychange", sync);
+    return () => {
+      delete toolbar.dataset.libraryMotionPaused;
+      document.removeEventListener("visibilitychange", sync);
+    };
+  }, [tactical]);
+
+  // Hidden search must not leave an invisible filter behind after a view change.
+  useEffect(() => { setLibraryQuery(""); setFolderQuery(""); }, [setLibraryQuery, setFolderQuery]);
+  useEffect(() => {
     function onPointerDown(e: MouseEvent) {
       if (!importRef.current?.contains(e.target as Node)) setImportOpen(false);
     }
-    window.addEventListener("keydown", onKeyDown);
     window.addEventListener("mousedown", onPointerDown);
     return () => {
-      window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("mousedown", onPointerDown);
     };
   }, []);
@@ -130,7 +127,7 @@ export function Toolbar({
       if (!assets.length) throw new Error("未导入任何素材，请检查所选文件是否可读取");
       if (place) for (const asset of assets) await place(asset);
       const current = useStore.getState();
-      if (current.activeProjectId === activeProjectId && current.projectRouteRevision === revision && !current.projectRoutePending) showImportedMedia(assets);
+      if (current.activeProjectId === activeProjectId && current.projectRouteRevision === revision && !current.projectRoutePending) showImportedMedia(assets, useLocalFileMode);
       completeLesson();
       if (assets.length < paths.length) notifyError(null, `${paths.length - assets.length} 个文件导入失败`);
       return `已导入 ${assets.length} 个文件（相同文件复用已有素材）`;
@@ -162,7 +159,7 @@ export function Toolbar({
   }
 
   return (
-    <header className={`app-topbar${canvasMode ? "" : " is-library"}${showFileNavigation ? " has-file-navigation" : localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
+    <header ref={toolbarRef} className={`app-topbar is-search-hidden${canvasMode ? "" : " is-library"}${tactical ? " library-tactical" : ""}${showFileNavigation ? " has-file-navigation" : localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
       <div className="app-topbar-leading">
         <div ref={importRef} className="app-topbar-import relative">
           <button
@@ -240,32 +237,6 @@ export function Toolbar({
       </div>
 
       {showFileNavigation && <div className="app-file-navigation-slot" ref={setNavigationHost} />}
-      <div className="app-search">
-        <Search size={15} strokeWidth={1.8} aria-hidden />
-        <input
-          ref={searchRef}
-          value={searchQuery}
-          onChange={(e) => {
-            setSearchQuery(e.target.value);
-            if (canvasMode && !localFilesOpen && e.target.value) useStore.getState().setCanvasLibraryOpen(true);
-          }}
-          placeholder={localFilesOpen ? `${materialSearchLabel}…` : "搜索素材…"}
-          aria-label={localFilesOpen ? materialSearchLabel : "搜索素材"}
-        />
-        {searchQuery ? (
-          <button
-            type="button"
-            onClick={() => setSearchQuery("")}
-            className="app-search-clear"
-            title="清除搜索"
-            aria-label="清除搜索"
-          >
-            <X size={14} />
-          </button>
-        ) : (
-          <kbd>/</kbd>
-        )}
-      </div>
 
       <div className="app-topbar-actions" aria-label="视图与账号">
         {!localFilesOpen && (canvasMode || homeView === "library") && <div className="app-topbar-view-controls" role="group" aria-label="素材视图">

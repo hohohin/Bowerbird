@@ -3,10 +3,21 @@ param(
   [ValidatePattern('^tunnel_[A-Za-z0-9]+$')]
   [string]$TunnelId,
   [string]$TunnelClient = 'tunnel-client',
+  [string]$ControlPlaneProxy = '',
   [switch]$Configure
 )
 
 $ErrorActionPreference = 'Stop'
+$proxyArgs = @()
+if ($ControlPlaneProxy) {
+  $proxyUri = $null
+  if (-not [Uri]::TryCreate($ControlPlaneProxy, [UriKind]::Absolute, [ref]$proxyUri) -or
+      $proxyUri.Scheme -notin @('http', 'https') -or -not $proxyUri.Host -or $proxyUri.UserInfo -or
+      $proxyUri.Query -or $proxyUri.Fragment -or $proxyUri.AbsolutePath -ne '/') {
+    throw '代理地址必须是 http://主机:端口 或 https://主机:端口，不能包含账号、密码或路径。'
+  }
+  $proxyArgs = @('--control-plane.http-proxy', $ControlPlaneProxy)
+}
 $nodeCommand = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 if ($TunnelClient -eq 'tunnel-client' -and -not (Get-Command $TunnelClient -CommandType Application -ErrorAction SilentlyContinue)) {
   $TunnelClient = Join-Path $PSScriptRoot '.local/tunnel-client-v0.0.18/tunnel-client.exe'
@@ -33,9 +44,9 @@ try {
     try { $env:CONTROL_PLANE_API_KEY = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($keyPointer) }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($keyPointer); $secureKey.Dispose() }
   }
-  & $tunnelCommand doctor --profile $profileName --profile-dir $profileDir --mcp.stdio-send-initialized-notification --explain
+  & $tunnelCommand doctor --profile $profileName --profile-dir $profileDir --mcp.stdio-send-initialized-notification --explain @proxyArgs
   if ($LASTEXITCODE -ne 0) { throw '隧道检查未通过；首次运行或隧道 ID 变化时请加 -Configure。' }
-  & $tunnelCommand run --profile $profileName --profile-dir $profileDir --mcp.stdio-send-initialized-notification --health.listen-addr 127.0.0.1:0 --health.url-file (Join-Path $PSScriptRoot '.local/health.url')
+  & $tunnelCommand run --profile $profileName --profile-dir $profileDir --mcp.stdio-send-initialized-notification --health.listen-addr 127.0.0.1:0 --health.url-file (Join-Path $PSScriptRoot '.local/health.url') @proxyArgs
   if ($LASTEXITCODE -ne 0) { throw '隧道进程退出，检查本机网络和账号权限。' }
 }
 finally {

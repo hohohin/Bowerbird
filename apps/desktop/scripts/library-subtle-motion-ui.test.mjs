@@ -41,11 +41,13 @@ try {
     await card.waitFor(); await page.waitForTimeout(700);
     assert.ok(await page.evaluate(()=>window.entered.includes('motion-0')),'visible cards enter');
     assert.equal(await page.evaluate(()=>window.entered.includes('motion-44')),false,'offscreen cards wait');
-    assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el).pointerEvents),'none');
-    assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el,'::before').animationDuration),'24s');
+    assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el).display),'none');
+    assert.equal(await root.locator('.library-tactical-backdrop').evaluate(el=>getComputedStyle(el).pointerEvents),'none');
+    assert.equal(await root.locator('.library-tactical-backdrop').evaluate(el=>getComputedStyle(el,'::before').animationName),'none','cross matrix stays static');
+    assert.equal(await root.locator('.library-tactical-backdrop').evaluate(el=>getComputedStyle(el,'::before').maskSize),'96px 88px');
     const original=await card.evaluate(el=>({transform:el.style.transform,width:el.offsetWidth,height:el.offsetHeight}));
     await card.hover(); await page.waitForTimeout(220);
-    assert.equal(await card.evaluate(el=>getComputedStyle(el).translate),'0px -2px');
+    assert.equal(await card.evaluate(el=>getComputedStyle(el).translate),'0px -5px');
     assert.deepEqual(await card.evaluate(el=>({transform:el.style.transform,width:el.offsetWidth,height:el.offsetHeight})),original,'hover preserves masonry geometry');
     const transfer=await page.evaluateHandle(()=>new DataTransfer());
     await card.dispatchEvent('dragstart',{dataTransfer:transfer});
@@ -54,7 +56,9 @@ try {
     await card.dispatchEvent('dragend',{dataTransfer:transfer});await transfer.dispose();
     if(scene==='project') {await page.locator('.canvas-stage').focus();await page.keyboard.press('Tab');await page.waitForTimeout(350);}
     await root.locator('.library-view-switch').hover();
-    assert.equal(await root.locator('.library-view-switch').evaluate(el=>getComputedStyle(el,'::after').animationName),'library-glass-sheen');
+    assert.equal(await root.locator('.library-view-switch').evaluate(el=>getComputedStyle(el,'::after').content),'none','glass sweep is removed');
+    assert.equal(await root.locator('.library-view-switch-thumb').evaluate(el=>getComputedStyle(el).animationName),'library-tactical-control-contact');
+    assert.equal(await root.locator('.library-view-switch-thumb').evaluate(el=>getComputedStyle(el).animationDuration),'0.16s');
     await page.mouse.move(5,5);
     await page.evaluate(()=>{window.firstMotionCard=document.querySelector('[data-asset-id="motion-0"]');window.entered=[];window.store.getState().setThumbnailWidth('library',180)});
     await page.waitForTimeout(700);
@@ -65,30 +69,38 @@ try {
     assert.ok(await page.evaluate(()=>window.entered.includes('motion-44')),'scroll reveals new cards');
     await root.locator('.catalog-scroller').evaluate(el=>el.scrollTop=0);
     await page.waitForTimeout(150);
+    await card.hover();
     await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'))});
-    assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el,'::before').animationPlayState),'paused');
+    assert.equal(await root.getAttribute('data-library-motion-paused'),'true');
+    assert.equal(await card.evaluate(el=>getComputedStyle(el,'::after').animationName),'none');
+    assert.equal(await card.evaluate(el=>getComputedStyle(el,'::after').backgroundPosition),'0% 0%, 100% 0%, 0% 100%, 100% 100%','hidden page leaves corner markers in their final positions');
     await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});
-    assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el,'::before').animationPlayState),'running');
+    assert.equal(await root.getAttribute('data-library-motion-paused'),'false');
+    assert.ok(await card.evaluate(el=>getComputedStyle(el,'::after').animationName.includes('library-tactical-card-spread')));
+    await page.mouse.move(5,5);
     if(scene==='project') { await page.setViewportSize({width:900,height:650}); await page.getByRole('separator',{name:'调整素材库宽度',exact:true}).focus();await page.keyboard.press('Home');await page.waitForTimeout(350); }
     for(const theme of ['light','dark']) {await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);await page.waitForTimeout(250);await page.screenshot({path:`.tmp/library-subtle-motion/${scene}-${theme}.png`});}
     await page.emulateMedia({reducedMotion:'reduce'}); await card.hover();
     assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el).display),'none');
     assert.equal(await card.evaluate(el=>getComputedStyle(el).translate),'none');
     await root.locator('.library-view-switch').hover();
-    assert.equal(await root.locator('.library-view-switch').evaluate(el=>getComputedStyle(el,'::after').animationName),'none');
+    assert.equal(await root.locator('.library-view-switch-thumb').evaluate(el=>getComputedStyle(el).animationName),'none');
     await page.emulateMedia({reducedMotion:'no-preference',forcedColors:'active'});
-    assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el).display),'none');
+    assert.equal(await root.locator('.library-tactical-backdrop').evaluate(el=>getComputedStyle(el).display),'none');
     await page.emulateMedia({reducedMotion:'no-preference',forcedColors:'none'});
     await page.evaluate(()=>window.mode.getState().openBrowser());
     const files=page.locator('.local-file-workspace');
     await files.locator('.folder-media-card').first().waitFor(); await page.waitForTimeout(700);
-    assert.equal(await files.locator('.library-ambient-light').count(),1);
+    assert.deepEqual(await page.locator('.folder-address').evaluate(el=>({radius:getComputedStyle(el).borderRadius,border:getComputedStyle(el).borderTopColor})),{radius:'0px',border:'rgba(0, 0, 0, 0)'},'file navigation uses the same straight borderless surface');
+    assert.ok(await page.locator('.folder-navigation button').evaluateAll(elements=>elements.every(el=>getComputedStyle(el).borderRadius==='0px')),'file navigation buttons share straight corners');
+    assert.equal(await files.locator('.library-tactical-backdrop').count(),1);
+    assert.equal(await files.locator('.library-tactical-backdrop').evaluate(el=>getComputedStyle(el,'::before').animationName),'none');
     await files.locator('.folder-media-card').first().hover();await page.waitForTimeout(220);
-    assert.equal(await files.locator('.folder-media-card').first().evaluate(el=>getComputedStyle(el).translate),'0px -2px');
+    assert.equal(await files.locator('.folder-media-card').first().evaluate(el=>getComputedStyle(el).translate),'0px -5px');
     await page.screenshot({path:`.tmp/library-subtle-motion/${scene}-files.png`});
     await page.setViewportSize({width:1280,height:840});
   }
   assert.deepEqual(errors,[]);
-  console.log('PASS: viewport-only entry, stable masonry and card identity, drag offset reset, glass sheen, ambient pause/resume, light/dark and narrow drawer, reduced motion and forced colors');
+  console.log('PASS: viewport-only entry, stable masonry and card identity, drag offset reset, static cross matrix, control flash and hidden-page final state, light/dark and narrow drawer, reduced motion and forced colors');
 } catch(error) {await page.screenshot({path:'.tmp/library-subtle-motion/failure.png'});throw error;}
 finally {await browser.close();await server.close();}

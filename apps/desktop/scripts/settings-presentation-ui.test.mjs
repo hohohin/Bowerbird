@@ -34,7 +34,9 @@ try {
   await page.getByRole('button', { name: '账号管理', exact: true }).click();
   const panel = page.getByRole('region', { name: '积分明细', exact: true });
   await page.getByText('暂无积分记录', { exact: true }).waitFor();
-  assert.doesNotMatch(await page.getByRole('dialog').innerText(), /Pro ¥39|每码可兑换|¥1 = 20|充值档位/);
+  assert.doesNotMatch(await page.getByRole('dialog').innerText(), /每码可兑换/);
+  await page.getByRole('region', { name: 'Plan', exact: true }).waitFor();
+  await page.getByRole('region', { name: 'Bcoin 充值', exact: true }).waitFor();
   await page.evaluate(() => {
     const rows = [['confirm', 0, 'image_hd'], ['confirm', 5, 'image_hd'], ['hold', -20, 'image_hd'], ['rollback', 10, 'image_layer_edit'], ['refund', -100, null], ['grant', 100, null], ['expire', -30, null], ['adjust', 3, null], ['future_kind', 1, 'future_service']];
     window.store.setState({ cloudEntitlement: { ...window.free, balances: { daily: 0, sub: 10, topup: 400 }, recent_transactions: rows.map(([kind, amount, service], i) => ({ kind, amount, service, created_at: new Date(Date.UTC(2026, 9, 24, 10, 0) - i * 60000).toISOString() })) } });

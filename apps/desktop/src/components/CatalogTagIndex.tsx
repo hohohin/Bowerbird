@@ -4,7 +4,8 @@ import { Pin } from "lucide-react";
 import { catalogInitial, catalogLetters } from "../lib/materialCatalogOrder";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 
-export function CatalogTagIndex({ tags, active, alphabetic, pinned, onTogglePin, onNavigate, onLetter }: {
+export function CatalogTagIndex({ tags, active, dropTarget, alphabetic, pinned, onTogglePin, onNavigate, onLetter }: {
+  dropTarget?: string | null;
   tags: { id: string; name: string }[]; active: string | null; alphabetic: boolean;
   pinned: string[]; onTogglePin: (id: string) => void;
   onNavigate: (id: string) => void; onLetter: (letter: string) => void;
@@ -62,7 +63,7 @@ export function CatalogTagIndex({ tags, active, alphabetic, pinned, onTogglePin,
         return <div key={tag.id}>
           {isPinned && index === 0 && <div className="catalog-letter-heading">置顶</div>}
           {!isPinned && alphabetic && (index === 0 || pinned.includes(tags[index - 1].id) || catalogInitial(tags[index - 1].name) !== initial) && <div className="catalog-letter-heading" aria-hidden="true">{initial}</div>}
-          <button className="catalog-row" data-tag-id={tag.id} data-section-id={tag.id} aria-current={active === tag.id ? "location" : undefined}
+          <button className={`catalog-row${dropTarget === tag.id ? " is-drop-target" : ""}`} data-tag-id={tag.id} data-section-id={tag.id} aria-current={active === tag.id ? "location" : undefined}
             title={isPinned ? `${tag.name} · 已置顶` : tag.name} onClick={() => onNavigate(tag.id)}
             onContextMenu={event => {
               event.preventDefault(); event.stopPropagation();

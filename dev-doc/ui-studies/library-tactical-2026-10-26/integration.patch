@@ -1,0 +1,675 @@
+diff --git a/apps/desktop/src/components/Toolbar.tsx b/apps/desktop/src/components/Toolbar.tsx
+index 70dbf85e..32048e07 100644
+--- a/apps/desktop/src/components/Toolbar.tsx
++++ b/apps/desktop/src/components/Toolbar.tsx
+@@ -11,6 +11,7 @@ import { prepareMediaImport, showImportedMedia } from "../lib/mediaImport";
+ import { prepareExplorerCanvasDrop } from "../lib/explorerCanvasDrop";
+ import { notifyError, notifySuccess } from "../lib/notify";
+ import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore";
++import "./LibraryTactical.css";
+ 
+ /** 顶部工具栏：导入 + 项目/主页入口 + 用户中心。 */
+ export function Toolbar({
+@@ -51,6 +52,24 @@ export function Toolbar({
+   const fileMode = useLocalFileMode(s => s.mode);
+   const showFileNavigation = localFilesOpen && fileMode === "files" && !activePane;
+   const importRef = useRef<HTMLDivElement>(null);
++  const toolbarRef = useRef<HTMLElement>(null);
++  const tactical = localFilesOpen && !exploring;
++
++  useEffect(() => {
++    if (!tactical) return;
++    const toolbar = toolbarRef.current!;
++    const sync = () => { toolbar.dataset.libraryMotionPaused = String(document.hidden || !document.hasFocus()); };
++    sync();
++    document.addEventListener("visibilitychange", sync);
++    window.addEventListener("focus", sync);
++    window.addEventListener("blur", sync);
++    return () => {
++      delete toolbar.dataset.libraryMotionPaused;
++      document.removeEventListener("visibilitychange", sync);
++      window.removeEventListener("focus", sync);
++      window.removeEventListener("blur", sync);
++    };
++  }, [tactical]);
+ 
+   // Hidden search must not leave an invisible filter behind after a view change.
+   useEffect(() => { setLibraryQuery(""); setFolderQuery(""); }, [setLibraryQuery, setFolderQuery]);
+@@ -144,7 +163,7 @@ export function Toolbar({
+   }
+ 
+   return (
+-    <header className={`app-topbar is-search-hidden${canvasMode ? "" : " is-library"}${showFileNavigation ? " has-file-navigation" : localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
++    <header ref={toolbarRef} className={`app-topbar is-search-hidden${canvasMode ? "" : " is-library"}${tactical ? " library-tactical" : ""}${showFileNavigation ? " has-file-navigation" : localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
+       <div className="app-topbar-leading">
+         <div ref={importRef} className="app-topbar-import relative">
+           <button
+diff --git a/apps/desktop/src/components/LibraryHome.tsx b/apps/desktop/src/components/LibraryHome.tsx
+index ec18a9c4..a0a2e2b3 100644
+--- a/apps/desktop/src/components/LibraryHome.tsx
++++ b/apps/desktop/src/components/LibraryHome.tsx
+@@ -7,6 +7,7 @@ import { LocalFileWorkspace } from "./LocalFileWorkspace";
+ import { useLocalFileMode } from "../lib/localFileMode";
+ import { copyLibraryPane, createLibraryPane, LibraryPaneContext, registerLibraryPane, useActiveLibraryPane, type LibraryPaneState } from "../lib/libraryPane";
+ import "./LibrarySplit.css";
++import "./LibraryTactical.css";
+ 
+ export function LibraryHome({ onCreateProject, shortcutsEnabled = true }: { onCreateProject?: (assetIds?: string[]) => Promise<unknown>; shortcutsEnabled?: boolean } = {}) {
+   const [panes, setPanes] = useState(() => [{ pane: createLibraryPane("home-left", useLocalFileMode), weight: 1 }]);
+@@ -46,7 +47,7 @@ export function LibraryHome({ onCreateProject, shortcutsEnabled = true }: { onCr
+       return current.map(item => item.pane === left ? { ...item, weight: total * ratio } : item.pane === right ? { ...item, weight: total * (1 - ratio) } : item);
+     });
+   }
+-  return <div className="library-home library-browser">
++  return <div className="library-home library-browser library-tactical">
+     <div ref={body} className={`library-split-body${panes.length > 1 ? " is-split" : ""}`}>
+       {panes.map(({ pane, weight }, index) => <Fragment key={pane.id}>
+         {index > 0 && <PaneDivider index={index} ratio={panes[index - 1].weight / (panes[index - 1].weight + weight)} onResize={ratio => resizePair(panes[index - 1].pane, pane, ratio)}/>}
+diff --git a/apps/desktop/src/components/CategorizedLibrary.tsx b/apps/desktop/src/components/CategorizedLibrary.tsx
+index f7b67e43..5f61139d 100644
+--- a/apps/desktop/src/components/CategorizedLibrary.tsx
++++ b/apps/desktop/src/components/CategorizedLibrary.tsx
+@@ -25,6 +25,7 @@ import { LibraryMediaSwitch } from "./LibraryMediaSwitch";
+ import { GeneratedImageFilter } from "./GeneratedImageFilter";
+ import { useLibraryGlass } from "./useLibraryGlass";
+ import { LibraryMotion } from "./LibraryMotion";
++import { LibraryTacticalBackdrop } from "./LibraryTacticalBackdrop";
+ import { OverlayScrollArea } from "./CollectionScrollArea";
+ import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
+ import { Lightbox } from "./Lightbox";
+@@ -344,7 +345,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
+         if (alive.current) setRevision(value => value + 1);
+         notifySuccess(kind === "tags" ? "已添加手动分类" : "已添加到集合");
+       });
+-    }} data-drop-target={dropTarget ?? undefined} data-file-import-project-id={projectScope ? projectId ?? "" : ""} className={`categorized-library${kind === "tags" && !flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : kind === "tags" ? "按标签浏览素材" : "按集合浏览素材"}
++    }} data-drop-target={dropTarget ?? undefined} data-file-import-project-id={projectScope ? projectId ?? "" : ""} className={`categorized-library library-tactical${kind === "tags" && !flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : kind === "tags" ? "按标签浏览素材" : "按集合浏览素材"}
+     style={{ ...glass.style, ...(sidebarWidth !== null ? { "--catalog-sidebar-width": `${sidebarWidth}px` } : {}) } as CSSProperties}>
+     {dropPreview && dropTarget && dropName && <LibraryDropPreview {...dragItem} target={dropName} collection={kind === "collections"}/>}
+     {glass.definition}
+@@ -401,6 +402,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
+           }}/>
+       </aside>}
+       <div ref={pinch} className="catalog-gallery">
++        <LibraryTacticalBackdrop />
+         <div className="file-view-heading">
+           {navigation}
+           <LibraryFloatingControls>
+diff --git a/apps/desktop/src/components/LocalFileWorkspace.tsx b/apps/desktop/src/components/LocalFileWorkspace.tsx
+index e820bfc7..d6feca01 100644
+--- a/apps/desktop/src/components/LocalFileWorkspace.tsx
++++ b/apps/desktop/src/components/LocalFileWorkspace.tsx
+@@ -12,6 +12,7 @@ import { FileColorFilter } from "./FileColorFilter";
+ import { LibraryFloatingControls } from "./LibraryFloatingControls";
+ import { useLibraryGlass } from "./useLibraryGlass";
+ import { LibraryMotion } from "./LibraryMotion";
++import { LibraryTacticalBackdrop } from "./LibraryTacticalBackdrop";
+ import { fileWorkspace, prepareFileWorkspace, type FileWorkspaceStatus } from "../lib/fileWorkspace";
+ import { folderClassification, type FolderClassification } from "../lib/folderClassification";
+ import { globalClassification, localClassification, type ClassificationLabel, type GlobalClassificationView } from "../lib/localClassification";
+@@ -425,7 +426,7 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
+       <button className={loading ? "is-loading" : ""} aria-label="刷新文件夹" title="刷新" disabled={loading} onClick={() => void (allLocations ? showAll() : navigate(directory?.path))}><RefreshCw size={16}/></button>
+       </div>
+     </div>;
+-  return <section className="local-file-workspace" aria-label="本机文件" ref={pinchRef} aria-busy={busy} style={glass.style}
++  return <section className="local-file-workspace library-tactical" aria-label="本机文件" ref={pinchRef} aria-busy={busy} style={glass.style}
+     onKeyDown={e => {
+       if (e.target instanceof Element && e.target.closest('input,textarea,[contenteditable="true"],[role="dialog"]')) return;
+       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { e.preventDefault(); e.stopPropagation(); setMultiSelect(true); setSelected(new Set(entries.filter(entry => !entry.directory).map(entry => entry.path))); }
+@@ -506,6 +507,7 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
+       </OverlayScrollArea>
+     </aside>
+     <div className="library-browser-grid folder-browser-grid">
++    <LibraryTacticalBackdrop />
+     <OverlayScrollArea scrollRef={scroll} className="folder-scroll-area" viewportClassName="folder-scroller library-scroller" label="文件夹素材滚动条">
+       {color && palette.pending && <p className="folder-empty" role="status">正在筛选颜色…</p>}
+       {busy && showLoading && <p className="folder-loading" role="status">{tag ? "正在读取标签图片…" : mode === "global" ? "正在读取全局素材…" : "正在读取文件夹…"}</p>}
+diff --git a/apps/desktop/scripts/toolbar-layout-ui.test.mjs b/apps/desktop/scripts/toolbar-layout-ui.test.mjs
+index a5b81cd2..fc664971 100644
+--- a/apps/desktop/scripts/toolbar-layout-ui.test.mjs
++++ b/apps/desktop/scripts/toolbar-layout-ui.test.mjs
+@@ -41,6 +41,7 @@ try {
+               labelsVisible: labels.every(label => label.getBoundingClientRect().width > 0 && label.getBoundingClientRect().height > 0),
+               controlHeights: surfaces.map(control => control.getBoundingClientRect().height),
+               controlRadii: surfaces.map(control => getComputedStyle(control).borderTopLeftRadius),
++              tactical: el.classList.contains('library-tactical'),
+               overflow: el.scrollWidth > el.clientWidth,
+               contained: controls.every(box => box.left >= bar.left && box.right <= bar.right && box.top >= bar.top && box.bottom <= bar.bottom),
+               overlap: controls.some((a, i) => controls.slice(i + 1).some(b => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top)),
+@@ -52,7 +53,7 @@ try {
+           assert.equal(layout.searchHidden, true, context);
+           assert.equal(layout.labelsVisible, true, context);
+           assert.ok(layout.controlHeights.every(height => height === 36), context);
+-          assert.ok(layout.controlRadii.every(radius => radius === '8px'), context);
++          assert.ok(layout.controlRadii.every(radius => radius === (layout.tactical ? '0px' : '8px')), context);
+           assert.equal(layout.overflow, false, context);
+           assert.equal(layout.contained, true, context);
+           assert.equal(layout.overlap, false, context);
+diff --git a/apps/desktop/scripts/library-subtle-motion-ui.test.mjs b/apps/desktop/scripts/library-subtle-motion-ui.test.mjs
+index d743e002..e30f1567 100644
+--- a/apps/desktop/scripts/library-subtle-motion-ui.test.mjs
++++ b/apps/desktop/scripts/library-subtle-motion-ui.test.mjs
+@@ -41,11 +41,13 @@ try {
+     await card.waitFor(); await page.waitForTimeout(700);
+     assert.ok(await page.evaluate(()=>window.entered.includes('motion-0')),'visible cards enter');
+     assert.equal(await page.evaluate(()=>window.entered.includes('motion-44')),false,'offscreen cards wait');
+-    assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el).pointerEvents),'none');
+-    assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el,'::before').animationDuration),'24s');
++    assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el).display),'none');
++    assert.equal(await root.locator('.library-tactical-backdrop').evaluate(el=>getComputedStyle(el).pointerEvents),'none');
++    assert.equal(await root.locator('.library-tactical-backdrop').evaluate(el=>getComputedStyle(el,'::before').animationName),'none','cross matrix stays static');
++    assert.equal(await root.locator('.library-tactical-backdrop').evaluate(el=>getComputedStyle(el,'::before').maskSize),'96px 88px');
+     const original=await card.evaluate(el=>({transform:el.style.transform,width:el.offsetWidth,height:el.offsetHeight}));
+     await card.hover(); await page.waitForTimeout(220);
+-    assert.equal(await card.evaluate(el=>getComputedStyle(el).translate),'0px -2px');
++    assert.equal(await card.evaluate(el=>getComputedStyle(el).translate),'0px -5px');
+     assert.deepEqual(await card.evaluate(el=>({transform:el.style.transform,width:el.offsetWidth,height:el.offsetHeight})),original,'hover preserves masonry geometry');
+     const transfer=await page.evaluateHandle(()=>new DataTransfer());
+     await card.dispatchEvent('dragstart',{dataTransfer:transfer});
+@@ -54,7 +56,9 @@ try {
+     await card.dispatchEvent('dragend',{dataTransfer:transfer});await transfer.dispose();
+     if(scene==='project') {await page.locator('.canvas-stage').focus();await page.keyboard.press('Tab');await page.waitForTimeout(350);}
+     await root.locator('.library-view-switch').hover();
+-    assert.equal(await root.locator('.library-view-switch').evaluate(el=>getComputedStyle(el,'::after').animationName),'library-glass-sheen');
++    assert.equal(await root.locator('.library-view-switch').evaluate(el=>getComputedStyle(el,'::after').content),'none','glass sweep is removed');
++    assert.equal(await root.locator('.library-view-switch-thumb').evaluate(el=>getComputedStyle(el).animationName),'library-tactical-control-contact');
++    assert.equal(await root.locator('.library-view-switch-thumb').evaluate(el=>getComputedStyle(el).animationDuration),'0.16s');
+     await page.mouse.move(5,5);
+     await page.evaluate(()=>{window.firstMotionCard=document.querySelector('[data-asset-id="motion-0"]');window.entered=[];window.store.getState().setThumbnailWidth('library',180)});
+     await page.waitForTimeout(700);
+@@ -65,30 +69,38 @@ try {
+     assert.ok(await page.evaluate(()=>window.entered.includes('motion-44')),'scroll reveals new cards');
+     await root.locator('.catalog-scroller').evaluate(el=>el.scrollTop=0);
+     await page.waitForTimeout(150);
++    await card.hover();
+     await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'))});
+-    assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el,'::before').animationPlayState),'paused');
++    assert.equal(await root.getAttribute('data-library-motion-paused'),'true');
++    assert.equal(await card.evaluate(el=>getComputedStyle(el,'::after').animationName),'none');
++    assert.equal(await card.evaluate(el=>getComputedStyle(el,'::after').backgroundPosition),'0% 0%, 100% 0%, 0% 100%, 100% 100%','hidden page leaves corner markers in their final positions');
+     await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});
+-    assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el,'::before').animationPlayState),'running');
++    assert.equal(await root.getAttribute('data-library-motion-paused'),'false');
++    assert.ok(await card.evaluate(el=>getComputedStyle(el,'::after').animationName.includes('library-tactical-card-spread')));
++    await page.mouse.move(5,5);
+     if(scene==='project') { await page.setViewportSize({width:900,height:650}); await page.getByRole('separator',{name:'调整素材库宽度',exact:true}).focus();await page.keyboard.press('Home');await page.waitForTimeout(350); }
+     for(const theme of ['light','dark']) {await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);await page.waitForTimeout(250);await page.screenshot({path:`.tmp/library-subtle-motion/${scene}-${theme}.png`});}
+     await page.emulateMedia({reducedMotion:'reduce'}); await card.hover();
+     assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el).display),'none');
+     assert.equal(await card.evaluate(el=>getComputedStyle(el).translate),'none');
+     await root.locator('.library-view-switch').hover();
+-    assert.equal(await root.locator('.library-view-switch').evaluate(el=>getComputedStyle(el,'::after').animationName),'none');
++    assert.equal(await root.locator('.library-view-switch-thumb').evaluate(el=>getComputedStyle(el).animationName),'none');
+     await page.emulateMedia({reducedMotion:'no-preference',forcedColors:'active'});
+-    assert.equal(await root.locator('.library-ambient-light').evaluate(el=>getComputedStyle(el).display),'none');
++    assert.equal(await root.locator('.library-tactical-backdrop').evaluate(el=>getComputedStyle(el).display),'none');
+     await page.emulateMedia({reducedMotion:'no-preference',forcedColors:'none'});
+     await page.evaluate(()=>window.mode.getState().openBrowser());
+     const files=page.locator('.local-file-workspace');
+     await files.locator('.folder-media-card').first().waitFor(); await page.waitForTimeout(700);
+-    assert.equal(await files.locator('.library-ambient-light').count(),1);
++    assert.deepEqual(await page.locator('.folder-address').evaluate(el=>({radius:getComputedStyle(el).borderRadius,border:getComputedStyle(el).borderTopColor})),{radius:'0px',border:'rgba(0, 0, 0, 0)'},'file navigation uses the same straight borderless surface');
++    assert.ok(await page.locator('.folder-navigation button').evaluateAll(elements=>elements.every(el=>getComputedStyle(el).borderRadius==='0px')),'file navigation buttons share straight corners');
++    assert.equal(await files.locator('.library-tactical-backdrop').count(),1);
++    assert.equal(await files.locator('.library-tactical-backdrop').evaluate(el=>getComputedStyle(el,'::before').animationName),'none');
+     await files.locator('.folder-media-card').first().hover();await page.waitForTimeout(220);
+-    assert.equal(await files.locator('.folder-media-card').first().evaluate(el=>getComputedStyle(el).translate),'0px -2px');
++    assert.equal(await files.locator('.folder-media-card').first().evaluate(el=>getComputedStyle(el).translate),'0px -5px');
+     await page.screenshot({path:`.tmp/library-subtle-motion/${scene}-files.png`});
+     await page.setViewportSize({width:1280,height:840});
+   }
+   assert.deepEqual(errors,[]);
+-  console.log('PASS: viewport-only entry, stable masonry and card identity, drag offset reset, glass sheen, ambient pause/resume, light/dark and narrow drawer, reduced motion and forced colors');
++  console.log('PASS: viewport-only entry, stable masonry and card identity, drag offset reset, static cross matrix, control flash and hidden-page final state, light/dark and narrow drawer, reduced motion and forced colors');
+ } catch(error) {await page.screenshot({path:'.tmp/library-subtle-motion/failure.png'});throw error;}
+ finally {await browser.close();await server.close();}
+diff --git a/apps/desktop/src/components/LibraryTactical.css b/apps/desktop/src/components/LibraryTactical.css
+new file mode 100644
+--- /dev/null
++++ b/apps/desktop/src/components/LibraryTactical.css
+@@ -0,0 +1,191 @@
++/* Approved library surface. Keep tokens local: canvas nodes and modal panels retain their themes. */
++.library-tactical {
++  --lt-base: #1d2224;
++  --lt-screen: rgb(44 51 54 / .76);
++  --lt-panel: rgb(35 42 45 / .92);
++  --lt-hover-screen: rgb(61 68 70 / .82);
++  --lt-hover: rgb(225 229 228 / .12);
++  --lt-selected: rgb(219 224 222 / .86);
++  --lt-selected-ink: #252b2d;
++  --lt-ink: #e5e8e7;
++  --lt-mark: #c7cecb;
++  --lt-shadow: rgb(0 0 0 / .42);
++  --lt-nav: rgb(221 226 224 / .13);
++  --file-gallery-background: var(--lt-base);
++  --library-glass-selected: var(--lt-selected);
++  --library-glass-selected-shadow: none;
++}
++html[data-theme="light"] .library-tactical {
++  --lt-base: #f5f4f0;
++  --lt-screen: rgb(235 237 233 / .72);
++  --lt-panel: rgb(243 244 240 / .92);
++  --lt-hover-screen: rgb(221 225 221 / .80);
++  --lt-hover: rgb(47 55 58 / .09);
++  --lt-selected: rgb(59 67 70 / .86);
++  --lt-selected-ink: #fff;
++  --lt-ink: #2c3437;
++  --lt-mark: #56615e;
++  --lt-shadow: rgb(31 39 42 / .22);
++  --lt-nav: rgb(49 59 62 / .11);
++}
++.app-topbar.library-tactical, .library-home.library-tactical,
++.categorized-library.library-tactical, .local-file-workspace.library-tactical { background: var(--lt-base); }
++.library-tactical :is(.catalog-sidebar, .file-browser-places) { background: var(--lt-base); border-color: transparent; }
++.app-topbar.library-tactical { border-color: transparent; box-shadow: none; }
++
++/* Paint only: control dimensions, placement and hit areas remain owned by their components. */
++.library-tactical :is(.app-button-dark, .app-button-accent, .topbar-account-trigger, .app-search,
++  .library-view-segments, .library-floating-surface, .library-filter-trigger, .thumbnail-size-slider,
++  .catalog-selection, .folder-selection-bar, .folder-history button, .folder-return, .file-place-add,
++  :where(.catalog-sidebar-heading button)) {
++  background: var(--lt-screen); color: var(--lt-ink); border-color: transparent;
++  border-radius: 0; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none;
++}
++.library-tactical :is(.app-topbar-view-controls, .app-search kbd, .library-view-switch button,
++  .library-view-switch-thumb, .library-media-switch button, .library-view-segments button,
++  .catalog-row, .catalog-section-title, .catalog-selection button, .folder-selection-bar button,
++  .library-filter-colors button, .library-filter-colors svg, .library-color-action,
++  .library-source-key-hint kbd, .library-tag-filter > button, .topbar-account-trigger > span,
++  .topbar-account-trigger > img, .file-place-row, .folder-navigation button,
++  .file-places-heading button, .file-place-remove) { border-radius: 0; box-shadow: none; }
++.library-tactical .folder-address { position: relative; border-radius: 0; border-color: transparent; background: var(--lt-screen); color: var(--lt-ink); }
++.library-tactical .folder-address:focus-within { border-color: transparent; background: var(--lt-hover-screen); }
++.library-tactical .folder-address:has(input:focus-visible) { outline-color: var(--lt-mark); }
++.library-tactical .folder-navigation button { background: var(--lt-screen); color: var(--lt-ink); }
++.library-tactical .folder-address button { background: transparent; }
++.library-tactical .folder-navigation button:not(:disabled):hover { background: var(--lt-hover-screen); color: var(--lt-ink); }
++.library-tactical .folder-history { border-color: transparent; }
++.library-tactical .app-search input { border-color: transparent; border-radius: 0; background: transparent; box-shadow: none; }
++.library-tactical .app-search input:focus { outline: 2px solid var(--lt-mark); outline-offset: 1px; }
++.library-tactical :is(.app-button-dark, .app-button-accent, .topbar-account-trigger,
++  .library-filter-trigger, :where(.catalog-sidebar-heading button)):hover { background-color: var(--lt-hover-screen); }
++.library-tactical .library-color-control > .library-filter-trigger { background: transparent; }
++.library-tactical :is(.library-view-switch-thumb, .library-media-switch button[aria-pressed="true"],
++  .library-view-segments button[aria-pressed="true"]),
++.library-tactical.library-motion-root .library-filter-trigger:is([aria-pressed="true"], [data-active="true"], [aria-expanded="true"]) {
++  background: var(--lt-selected); color: var(--lt-selected-ink); box-shadow: none;
++}
++.library-tactical .library-view-switch button[aria-selected="true"],
++.library-tactical .library-media-switch button[aria-pressed="true"]:hover { color: var(--lt-selected-ink); }
++.library-tactical .library-view-switch button:not([aria-selected="true"]):hover { background: var(--lt-hover); color: var(--lt-ink); }
++.library-tactical .library-view-switch-thumb { transition-duration: 140ms; transition-timing-function: cubic-bezier(.2,.8,.2,1); }
++.library-tactical .library-tab-overlay { background: var(--lt-selected); }
++.library-tactical .library-tab-view-label { color: var(--lt-selected-ink); }
++.library-tactical .library-tab-crossing-arrow { stroke: var(--lt-selected-ink); }
++.library-tactical .app-topbar-credits { color: inherit; }
++.library-tactical .topbar-account-trigger > span.bg-accent { background: var(--lt-selected); color: var(--lt-selected-ink); }
++.library-tactical .library-filter-dot { display: none; }
++.library-tactical .library-rgb-orb { border-radius: 0; box-shadow: none; }
++.library-tactical :is(.catalog-row, .file-place-row):hover { background: var(--lt-hover); }
++.library-tactical :is(.catalog-row, .file-place-row):is([aria-current="location"], [aria-selected="true"], [aria-pressed="true"]) { background: var(--lt-nav); color: var(--lt-ink); }
++.library-tactical .catalog-alphabet button:not([aria-disabled="true"]) { color: var(--lt-ink); }
++.library-tactical .catalog-section-title { background: transparent; border-color: transparent; color: var(--lt-ink); backdrop-filter: none; box-shadow: none; }
++.library-tactical .catalog-section-heading.is-pinned .catalog-section-title { background: var(--lt-screen); border-radius: 0; }
++.library-tactical :is(.catalog-selection, .folder-selection-bar) button { color: var(--lt-ink); }
++.library-tactical :is(.catalog-selection, .folder-selection-bar) button:hover { background: var(--lt-hover); }
++.library-tactical :is(.app-popover, .topbar-account-menu, .folder-popover, .library-tag-filter, .library-color-strip.library-floating-surface) {
++  border-color: transparent; border-radius: 0; background: var(--lt-panel);
++  box-shadow: 0 9px 24px -12px var(--lt-shadow); backdrop-filter: none;
++}
++.library-tactical :is(.app-popover, .folder-popover) button { border-radius: 0; background: transparent; color: var(--lt-ink); }
++.library-tactical :is(.app-popover, .folder-popover) button:hover { background: var(--lt-hover-screen); }
++.library-tactical .thumbnail-size-slider.is-floating { background: var(--lt-screen); box-shadow: none; }
++.library-tactical .thumbnail-size-slider.is-floating input::-webkit-slider-thumb { border-radius: 0; background: var(--lt-mark); }
++.library-tactical .thumbnail-size-slider.is-floating input::-moz-range-thumb { border-radius: 0; background: var(--lt-mark); }
++
++/* The close-pane button is absolutely positioned by LibrarySplit; never relocate it. */
++.library-tactical :is(.app-button-dark, .app-button-accent, .topbar-account-trigger,
++  .library-view-switch button, .library-media-switch button, .library-view-segments button,
++  .library-filter-trigger:not(.library-pane-close), .catalog-sidebar-heading button, .catalog-row,
++  .catalog-selection button, .folder-selection-bar button, .app-popover button, .folder-popover button,
++  .library-color-action, .file-place-row, .folder-navigation button, .file-places-heading button) { position: relative; }
++.library-tactical.library-motion-root :is(.library-view-switch, .library-media-switch, .library-filter-trigger, .catalog-section-title)::after,
++.library-tactical .library-filter-trigger::before { content: none; }
++.library-tactical :is(.app-button-dark, .app-button-accent, .topbar-account-trigger,
++  .library-view-switch button, .library-media-switch button, .library-view-segments button,
++  .library-filter-trigger, .catalog-sidebar-heading button, .catalog-row, .catalog-selection button,
++  .folder-selection-bar button, .app-popover button, .folder-popover button, .library-color-action,
++  .thumbnail-size-slider, .file-place-row, .folder-navigation button, .file-places-heading button,
++  .file-place-remove, .folder-address):not(:disabled):is(:hover, :focus-visible, [aria-selected="true"],
++  [aria-pressed="true"], [aria-expanded="true"], [data-active="true"], [aria-current="location"])::after {
++  content: ""; position: absolute; inset: auto 3px 3px auto; width: 2px; height: 2px;
++  border: 0; border-radius: 0; background: currentColor; opacity: .8; pointer-events: none;
++  box-shadow: none; transform: none; animation: library-tactical-contact 160ms steps(1,end);
++}
++.library-tactical :is(.app-button-dark, .app-button-accent, .topbar-account-trigger,
++  .library-view-switch button, .library-media-switch button, .library-view-segments button,
++  .library-filter-trigger, .catalog-sidebar-heading button, .catalog-row, .catalog-selection button,
++  .folder-selection-bar button, .app-popover button, .folder-popover button, .library-color-action,
++  .thumbnail-size-slider, .file-place-row, .folder-navigation button, .file-places-heading button,
++  .file-place-remove, .folder-address):not(:disabled):is(:hover, :focus-visible) { animation: library-tactical-control-contact 160ms steps(1,end); }
++.library-tactical .library-view-switch:is(:hover, :focus-within) .library-view-switch-thumb { animation: library-tactical-control-contact 160ms steps(1,end); }
++@keyframes library-tactical-contact { 0%,38%,70%,100% { opacity: .8; } 18%,55%,85% { opacity: .12; } }
++@keyframes library-tactical-control-contact { 0%,38%,78% { opacity: .48; } 18%,58%,100% { opacity: 1; } }
++
++/* Four 4px points straddle the image vertices. Only the hovered card animates. */
++.library-tactical .folder-media-card { overflow: visible; border-radius: 0; box-shadow: 0 2px 6px -5px var(--lt-shadow); }
++.library-tactical .folder-media-preview { overflow: hidden; }
++.library-tactical.library-motion-root .folder-media-card[data-positioned] {
++  transition: width 240ms ease-out, transform 280ms ease-out, translate 180ms ease, rotate 180ms ease, box-shadow 180ms ease;
++}
++.categorized-library.library-tactical.library-motion-root .folder-media-card[data-positioned] { transition: translate 180ms ease, rotate 180ms ease, box-shadow 180ms ease; }
++.library-tactical .folder-media-card.is-selected { outline: none; box-shadow: 0 18px 24px -12px var(--lt-shadow); }
++.library-tactical .folder-media-card.is-selected::after {
++  --lt-card-dot: linear-gradient(#f7f8f6,#f7f8f6);
++  content: ""; position: absolute; inset: -2px; border: 0; pointer-events: none; opacity: 1;
++  background: var(--lt-card-dot) left top/4px 4px no-repeat, var(--lt-card-dot) right top/4px 4px no-repeat,
++    var(--lt-card-dot) left bottom/4px 4px no-repeat, var(--lt-card-dot) right bottom/4px 4px no-repeat;
++  filter: drop-shadow(0 1px 1px #000b);
++}
++@media (hover:hover) and (pointer:fine) {
++  .library-tactical.library-motion-root:not([data-library-dragging]) .folder-media-card:hover {
++    translate: 0 -5px; rotate: 1 1 0 1deg; z-index: 4; box-shadow: 0 18px 24px -12px var(--lt-shadow);
++  }
++  .library-tactical.library-motion-root:not([data-library-dragging]) .folder-media-card:hover::after {
++    --lt-card-dot: linear-gradient(#f7f8f6,#f7f8f6);
++    content: ""; position: absolute; inset: -2px; border: 0; pointer-events: none; opacity: .9;
++    background: var(--lt-card-dot) left top/4px 4px no-repeat, var(--lt-card-dot) right top/4px 4px no-repeat,
++      var(--lt-card-dot) left bottom/4px 4px no-repeat, var(--lt-card-dot) right bottom/4px 4px no-repeat;
++    filter: drop-shadow(0 1px 1px #000b);
++    animation: library-tactical-card-spread 400ms cubic-bezier(.2,.75,.25,1), library-tactical-card-contact 160ms steps(1,end) 400ms;
++  }
++}
++@keyframes library-tactical-card-spread {
++  from { background-position: 50% 50%,50% 50%,50% 50%,50% 50%; }
++  to { background-position: 0% 0%,100% 0%,0% 100%,100% 100%; }
++}
++@keyframes library-tactical-card-contact { 0%,50% { opacity: 0; } 25%,75%,100% { opacity: 1; } }
++.library-tactical .folder-media-card:focus-visible { outline: 2px solid var(--lt-mark); outline-offset: 2px; }
++.library-tactical .folder-media-generated { border-radius: 0; background: rgb(30 36 39 / .84); }
++/* Directory tiles include a caption: keep their selection around the entire tile. */
++.library-tactical .folder-media-card:has(.is-folder)::after { content: none !important; }
++.library-tactical .folder-media-card:has(.is-folder).is-selected { outline: 2px solid var(--lt-mark); outline-offset: -2px; }
++
++/* Decorative grid is gallery-local and below media, outside the alphabet and slider. */
++.library-tactical .library-ambient-light { display: none; }
++.library-tactical :is(.catalog-gallery, .folder-browser-grid) { isolation: isolate; }
++.library-tactical-backdrop { position: absolute; inset: 52px 24px 56px; z-index: -1; pointer-events: none; overflow: hidden; }
++.folder-browser-grid > .library-tactical-backdrop { top: 0; }
++.library-tactical-backdrop::before {
++  content: ""; position: absolute; inset: 0; background: var(--lt-mark); opacity: .22;
++  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='88'%3E%3Cpath d='M46 42l4 4m0-4-4 4' fill='none' stroke='black' stroke-width='1'/%3E%3C/svg%3E") repeat;
++  mask-size: 96px 88px;
++}
++.library-tactical[data-library-motion-paused="true"] :is(button, .thumbnail-size-slider, .library-view-switch-thumb),
++.library-tactical[data-library-motion-paused="true"] *::before,
++.library-tactical[data-library-motion-paused="true"] *::after { animation: none !important; }
++@media (prefers-reduced-motion:reduce) {
++  .library-tactical.library-motion-root .folder-media-card:is(:hover, :focus-visible) { translate: none !important; rotate: none !important; }
++  .library-tactical *, .library-tactical *::before, .library-tactical *::after { animation: none !important; transition: none !important; }
++}
++@media (prefers-reduced-transparency:reduce) {
++  .library-tactical { --lt-screen: #2c3336; --lt-panel: #232a2d; }
++  html[data-theme="light"] .library-tactical { --lt-screen: #ebede9; --lt-panel: #f3f4f0; }
++}
++@media (forced-colors:active) {
++  .library-tactical-backdrop { display: none; }
++  .library-tactical *::before, .library-tactical *::after { display: none !important; }
++  .library-tactical :is(.library-view-switch-thumb, .library-media-switch button[aria-pressed="true"]) { background: Highlight; }
++  .library-tactical :is(.library-view-switch button[aria-selected="true"], .library-media-switch button[aria-pressed="true"]) { color: HighlightText; }
++  .library-tactical .folder-media-card.is-selected { outline: 2px solid Highlight; }
++}
+diff --git a/apps/desktop/src/components/LibraryTacticalBackdrop.tsx b/apps/desktop/src/components/LibraryTacticalBackdrop.tsx
+new file mode 100644
+--- /dev/null
++++ b/apps/desktop/src/components/LibraryTacticalBackdrop.tsx
+@@ -0,0 +1,6 @@
++import "./LibraryTactical.css";
++
++/** Place within the gallery so the matrix cannot cover navigation or media. */
++export function LibraryTacticalBackdrop() {
++  return <div className="library-tactical-backdrop" aria-hidden="true" />;
++}
+diff --git a/apps/desktop/scripts/library-tactical-ui.test.mjs b/apps/desktop/scripts/library-tactical-ui.test.mjs
+new file mode 100644
+--- /dev/null
++++ b/apps/desktop/scripts/library-tactical-ui.test.mjs
+@@ -0,0 +1,165 @@
++import assert from "node:assert/strict";
++import { mkdir } from "node:fs/promises";
++import { createServer } from "vite";
++import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
++
++const server = await createServer({ server: { host: "127.0.0.1", port: 1643, strictPort: true, hmr: false, watch: null } });
++await server.listen();
++const browser = await chromium.launch({ channel: "chrome", headless: true });
++const page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
++const errors = [];
++page.on("pageerror", error => errors.push(error.message));
++await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
++const output = ".tmp/library-tactical";
++const card = page.locator(".folder-media-card").first();
++const geometrySelectors = [".app-topbar", ".topbar-account-trigger", ".catalog-sidebar", ".catalog-alphabet", ".library-view-switch", ".library-media-switch", ".thumbnail-size-slider", ".catalog-section-title", ".folder-media-card"];
++async function geometry() {
++  return page.evaluate(selectors => Object.fromEntries(selectors.map(selector => [selector, [...document.querySelectorAll(selector)].slice(0, 3).map(element => {
++    const rect = element.getBoundingClientRect();
++    return [rect.x, rect.y, rect.width, rect.height];
++  })])), geometrySelectors);
++}
++async function setTacticalStyles(enabled) {
++  await page.evaluate(value => {
++    const sheets = [...document.styleSheets].filter(sheet => sheet.ownerNode?.getAttribute("data-vite-dev-id")?.endsWith("/LibraryTactical.css"));
++    if (!sheets.length) throw new Error("Production LibraryTactical.css was not loaded");
++    sheets.forEach(sheet => { sheet.disabled = !value; });
++  }, enabled);
++  await page.waitForTimeout(250);
++}
++try {
++  await mkdir(output, { recursive: true });
++  await page.goto("http://127.0.0.1:1643/scripts/fixtures/library-tactical/preview.html");
++  await card.waitFor();
++  await page.waitForFunction(() => [...document.querySelectorAll(".folder-media-card img")].some(image => image.complete && image.naturalWidth));
++  await page.waitForTimeout(650);
++  assert.equal(await page.locator('link[href*=".tmp"],style[data-vite-dev-id*=".tmp"]').count(), 0, "fixture uses production CSS only");
++
++  // Turning off only the new paint layer must preserve the established library geometry.
++  for (const width of [1500, 900, 390]) {
++    await page.setViewportSize({ width, height: 1000 });
++    await page.mouse.move(0, 0);
++    await page.waitForTimeout(350);
++    const styled = await geometry();
++    const sentinel = await page.locator("[data-unrelated-control]").evaluate(element => getComputedStyle(element).cssText + getComputedStyle(element).background + getComputedStyle(element).borderRadius);
++    await setTacticalStyles(false);
++    const original = await geometry();
++    assert.equal(await page.locator("[data-unrelated-control]").evaluate(element => getComputedStyle(element).cssText + getComputedStyle(element).background + getComputedStyle(element).borderRadius), sentinel, "new rules do not affect unrelated controls");
++    for (const selector of geometrySelectors) {
++      assert.equal(styled[selector].length, original[selector].length);
++      styled[selector].forEach((box, index) => box.forEach((value, axis) => assert.ok(Math.abs(value - original[selector][index][axis]) < 1, `${width}px ${selector} changed layout: ${JSON.stringify({ styled: box, original: original[selector][index] })}`)));
++    }
++    await setTacticalStyles(true);
++  }
++  await page.setViewportSize({ width: 1500, height: 1000 });
++  await page.waitForTimeout(350);
++
++  for (const theme of ["light", "dark"]) {
++    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
++    await page.mouse.move(0, 0);
++    await page.waitForTimeout(200);
++    const controls = await page.evaluate(() => [".app-topbar-import > button", ".topbar-account-trigger", ".library-view-switch", ".library-media-switch", '.library-filter-trigger[aria-label="文件浏览器"]', ".thumbnail-size-slider"].map(selector => {
++      const element = document.querySelector(selector), style = getComputedStyle(element);
++      return { selector, radius: style.borderRadius, image: style.backgroundImage, alpha: Number(style.backgroundColor.match(/[\d.]+/g).at(-1)), blur: style.backdropFilter, point: getComputedStyle(element, "::after").content };
++    }));
++    assert.ok(controls.every(control => control.radius === "0px" && control.image === "none" && control.blur === "none" && control.alpha < .8 && control.point === "none"), `${theme}: ${JSON.stringify(controls)}`);
++    const activeTab = page.getByRole("tab", { name: "标签分类", exact: true });
++    const point = await activeTab.evaluate(element => { const style = getComputedStyle(element, "::after"); return { content: style.content, width: style.width, height: style.height, right: style.right, bottom: style.bottom }; });
++    assert.deepEqual(point, { content: '""', width: "2px", height: "2px", right: "3px", bottom: "3px" }, "only highlighted controls expose the lower-right point");
++    await page.screenshot({ path: `${output}/${theme}.png` });
++  }
++  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
++
++  const importButton = page.locator(".app-topbar-import > button");
++  await importButton.hover();
++  const controlFlash = await importButton.evaluate(element => {
++    const animation = element.getAnimations().find(item => item.animationName === "library-tactical-control-contact");
++    if (!animation) return null;
++    animation.pause(); animation.currentTime = 30; const bright = Number(getComputedStyle(element).opacity);
++    animation.currentTime = 70; const dim = Number(getComputedStyle(element).opacity);
++    animation.finish(); return { bright, dim, duration: animation.effect.getTiming().duration };
++  });
++  assert.ok(controlFlash && controlFlash.bright > controlFlash.dim); assert.equal(controlFlash.duration, 160);
++  await page.mouse.move(0, 0);
++  assert.equal(await importButton.evaluate(element => getComputedStyle(element, "::after").content), "none");
++
++  const colors = page.getByRole("button", { name: "颜色筛选", exact: true });
++  await colors.click();
++  await page.waitForTimeout(200);
++  const selectedColor = await page.locator(".library-view-switch-thumb").evaluate(element => getComputedStyle(element).backgroundColor);
++  assert.equal(await colors.evaluate(element => getComputedStyle(element).backgroundColor), selectedColor, "open filter retains active paint while hovered");
++  assert.ok(await page.locator(".library-filter-colors button").evaluateAll(elements => elements.every(element => getComputedStyle(element).borderRadius === "0px")));
++  await page.getByRole("button", { name: "红", exact: true }).click();
++  await page.keyboard.press("Escape");
++  await page.waitForFunction(() => [...document.querySelectorAll(".folder-media-card")].length > 0 && [...document.querySelectorAll(".folder-media-card")].every(element => Number(element.dataset.assetId.split("-")[1]) % 2 === 1));
++  assert.equal(await colors.getAttribute("data-active"), "true");
++  await colors.click(); await page.getByRole("button", { name: "清除颜色筛选", exact: true }).click(); await page.keyboard.press("Escape");
++  await page.locator('[data-asset-id="tactical-0"]').waitFor();
++
++  await card.hover();
++  const motion = await card.evaluate(element => {
++    const animations = element.getAnimations({ subtree: true });
++    const spread = animations.find(item => item.animationName === "library-tactical-card-spread");
++    const flash = animations.find(item => item.animationName === "library-tactical-card-contact");
++    if (!spread || !flash) return null;
++    spread.pause(); flash.pause(); flash.currentTime = 0;
++    spread.currentTime = 0; const start = getComputedStyle(element, "::after").backgroundPosition;
++    spread.currentTime = 200; const middle = getComputedStyle(element, "::after").backgroundPosition;
++    spread.finish(); const end = getComputedStyle(element, "::after").backgroundPosition;
++    const opacity = [350, 410, 450, 490, 530].map(time => { flash.currentTime = time; return Number(getComputedStyle(element, "::after").opacity); });
++    flash.finish();
++    const marker = getComputedStyle(element, "::after"), preview = element.querySelector(".folder-media-preview");
++    return { start, middle, end, opacity, duration: spread.effect.getTiming().duration, flash: flash.effect.getTiming(), size: marker.backgroundSize,
++      inset: marker.inset, pointer: marker.pointerEvents, overflow: getComputedStyle(element).overflow, previewOverflow: getComputedStyle(preview).overflow,
++      imageCorners: preview.offsetLeft === 0 && preview.offsetTop === 0 && preview.offsetWidth === element.clientWidth && preview.offsetHeight === element.clientHeight };
++  });
++  assert.ok(motion, "hover starts both position and delayed flicker animations");
++  assert.equal(motion.duration, 400); assert.equal(motion.flash.duration, 160); assert.equal(motion.flash.delay, 400);
++  assert.equal(motion.start, "50% 50%, 50% 50%, 50% 50%, 50% 50%");
++  assert.equal(motion.end, "0% 0%, 100% 0%, 0% 100%, 100% 100%");
++  assert.notEqual(motion.middle, motion.start); assert.notEqual(motion.middle, motion.end);
++  assert.ok(motion.opacity[0] >= .8); assert.deepEqual(motion.opacity.slice(1), [0, 1, 0, 1], "two full dark/bright pulses occur only after arrival");
++  assert.equal(motion.size, "4px 4px, 4px 4px, 4px 4px, 4px 4px");
++  assert.equal(motion.inset, "-2px"); assert.equal(motion.pointer, "none"); assert.equal(motion.overflow, "visible"); assert.equal(motion.previewOverflow, "hidden"); assert.ok(motion.imageCorners, "4px markers centered at image vertices, not inside the image");
++  await page.screenshot({ path: `${output}/hover.png` });
++  await card.click({ modifiers: ["Control"] }); await page.mouse.move(0, 0);
++  assert.equal(await card.getAttribute("aria-pressed"), "true");
++  assert.equal(await card.evaluate(element => getComputedStyle(element, "::after").opacity), "1", "selected points persist after pointer exit");
++  await page.getByRole("button", { name: "取消选择", exact: true }).click();
++
++  const backdrop = await page.locator(".library-tactical-backdrop").first().evaluate(element => {
++    const box = element.getBoundingClientRect(), gallery = element.parentElement.getBoundingClientRect();
++    const sidebar = document.querySelector(".catalog-sidebar").getBoundingClientRect(), alphabet = document.querySelector(".catalog-alphabet").getBoundingClientRect();
++    const slider = document.querySelector(".thumbnail-size-slider").getBoundingClientRect(), style = getComputedStyle(element);
++    return { safe: box.left >= Math.max(sidebar.right, alphabet.right) && box.top >= gallery.top + 52 && box.bottom <= gallery.bottom - 56 && box.bottom <= slider.top,
++      z: Number(style.zIndex), pointer: style.pointerEvents, mask: getComputedStyle(element, "::before").maskSize, hidden: element.getAttribute("aria-hidden") };
++  });
++  assert.ok(backdrop.safe); assert.ok(backdrop.z < 0); assert.equal(backdrop.pointer, "none"); assert.equal(backdrop.mask, "96px 88px"); assert.equal(backdrop.hidden, "true");
++  await page.locator(".catalog-scroller").evaluate(element => { element.scrollTop = 220; });
++  const pinnedTitle = page.locator(".catalog-section-heading.is-pinned .catalog-section-title").first();
++  await pinnedTitle.waitFor();
++  assert.equal(await pinnedTitle.evaluate(element => getComputedStyle(element).borderRadius), "0px", "scrolled sticky title retains straight corners");
++  await page.screenshot({ path: `${output}/pinned.png` });
++  await page.locator(".catalog-scroller").evaluate(element => { element.scrollTop = 0; });
++  await page.getByRole("button", { name: "视频", exact: true }).click();
++  await page.locator('[data-asset-id="video-0"]').waitFor();
++  await card.hover();
++  assert.equal(await card.evaluate(element => getComputedStyle(element, "::after").inset), "-2px", "video card uses the same markers");
++  await page.getByRole("button", { name: "图片", exact: true }).click();
++  await page.locator('[data-asset-id="tactical-0"]').waitFor();
++
++  await importButton.focus(); await page.keyboard.press("Tab"); await page.getByRole("tab", { name: "标签分类", exact: true }).focus();
++  assert.ok(await page.getByRole("tab", { name: "标签分类", exact: true }).evaluate(element => element.matches(":focus-visible") && getComputedStyle(element).outlineStyle !== "none"), "keyboard focus remains visible");
++  await card.hover();
++  await page.evaluate(() => { Object.defineProperty(document, "hidden", { configurable: true, get: () => true }); document.dispatchEvent(new Event("visibilitychange")); });
++  assert.ok(await card.evaluate(element => element.closest(".library-motion-root").dataset.libraryMotionPaused === "true" && element.getAnimations({ subtree: true }).filter(animation => animation.animationName?.startsWith("library-tactical-")).every(animation => animation.playState !== "running")), "hidden library stops transient animations");
++  await page.evaluate(() => { delete document.hidden; document.dispatchEvent(new Event("visibilitychange")); });
++  await page.emulateMedia({ reducedMotion: "reduce" });
++  await page.mouse.move(0, 0); await card.hover();
++  assert.equal(await card.evaluate(element => getComputedStyle(element, "::after").animationName), "none");
++  await importButton.hover(); assert.equal(await importButton.evaluate(element => getComputedStyle(element).animationName), "none");
++  await page.emulateMedia({ forcedColors: "active" });
++  assert.equal(await page.locator(".library-tactical-backdrop").first().evaluate(element => getComputedStyle(element).display), "none");
++  assert.deepEqual(errors, []);
++  console.log("PASS production tactical library: unchanged 1500/900/390 layout and CSS scope; neutral transparent controls, active points, filter and square sticky title; center-to-corner 400ms + delayed 160ms two flashes; media selection/video; safe background; keyboard, hidden-page and reduced-motion/forced-color handling.");
++} finally { await browser.close(); await server.close(); }
+diff --git a/apps/desktop/scripts/fixtures/library-tactical/preview.html b/apps/desktop/scripts/fixtures/library-tactical/preview.html
+new file mode 100644
+--- /dev/null
++++ b/apps/desktop/scripts/fixtures/library-tactical/preview.html
+@@ -0,0 +1,1 @@
++<!doctype html><html lang="zh-CN" data-theme="light"><meta charset="utf-8"><div id="root"></div><script type="module" src="./preview.tsx"></script></html>
+diff --git a/apps/desktop/scripts/fixtures/library-tactical/preview.tsx b/apps/desktop/scripts/fixtures/library-tactical/preview.tsx
+new file mode 100644
+--- /dev/null
++++ b/apps/desktop/scripts/fixtures/library-tactical/preview.tsx
+@@ -0,0 +1,63 @@
++import React from "react";
++import { createRoot } from "react-dom/client";
++import { LibraryHome } from "../../../src/components/LibraryHome";
++import { Toolbar } from "../../../src/components/Toolbar";
++import { useStore } from "../../../src/store";
++import { useLocalFileMode } from "../../../src/lib/localFileMode";
++import { installCatalogPagingMock } from "../catalogPagingMock";
++import "../../../src/styles.css";
++import "../../../src/components/LocalFileWorkspace.css";
++
++// Real library components and styles; all media and IPC are isolated synthetic fixtures.
++const w = window as any;
++const tags = [{ id: "a", name: "A 品牌" }, { id: "z", name: "Z 插画" }];
++const assets = Array.from({ length: 32 }, (_, index) => {
++  const height = [160, 240, 320][index % 3];
++  const image = "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="240" height="${height}"><rect width="240" height="${height}" fill="${index % 2 ? "#7e9294" : "#bdac92"}"/><path d="M0 0L240 ${height}M240 0L0 ${height}" stroke="#ffffff" opacity=".2"/><text x="20" y="50" fill="#fff" font-size="20">${String(index + 1).padStart(2, "0")}</text></svg>`);
++  return { id: `tactical-${index}`, name: `素材 ${index + 1}`, ext: "png", source: "imported", width: 240, height,
++    store_path: image, thumb_path: image, created_at: 1000 - index, generation_session_id: index % 5 === 0 ? "generated" : null };
++});
++const videos = [{ ...assets[0], id: "video-0", name: "示例视频", ext: "mp4", store_path: "/fixture/video.mp4" }];
++const catalog = { tags: tags.map(tag => ({ ...tag, count: 16, projectCount: 0, description: "" })), prompts: [],
++  collections: [{ id: "collection", name: "收藏", kind: "collection", parent_id: null }],
++  tag_asset_ids: Object.fromEntries(tags.map((tag, index) => [tag.id, assets.slice(index * 16, index * 16 + 16).map(asset => asset.id)])) };
++let callbackId = 0;
++w.store = useStore; w.mode = useLocalFileMode; w.calls = [];
++w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
++w.__TAURI_INTERNALS__ = {
++  metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main" } },
++  transformCallback: () => ++callbackId,
++  convertFileSrc: (path: string) => path,
++  invoke: async (command: string, args: any = {}) => {
++    w.calls.push({ command, args });
++    if (command === "plugin:event|listen") return args.handler;
++    if (command === "plugin:event|unlisten" || command === "set_setting") return;
++    if (command === "material_catalog") return catalog;
++    if (command === "material_catalog_assets") return args.kind === "collections" ? assets.slice(0, 8) : [...assets, ...videos];
++    if (command === "get_assets_by_ids") return [...assets, ...videos].filter(asset => args.assetIds.includes(asset.id));
++    if (command === "external_files_preview" || command === "external_files_media") return args.path?.startsWith("data:") ? args.path : assets[0].thumb_path;
++    if (command === "file_colors") return [assets.findIndex(asset => asset.store_path === args.path) % 2 ? "red" : "blue"];
++    if (command === "get_projects" || command === "list_projects" || command === "get_folders" || command === "get_collections") return [];
++    if (command === "get_settings") return {};
++    if (command.startsWith("plugin:dialog|")) return null;
++    if (command === "get_asset") return assets.find(asset => asset.id === args.id) ?? assets[0];
++    if (command === "file_workspace_status") return { config: { root: "/fixture", places: [], projects: {} }, proposed_root: "/fixture" };
++    if (command === "file_workspace_all") return { entries: [], unavailable: [] };
++    if (command === "global_classification_view") return { labels: [], pictures: [] };
++    if (command === "external_files_browse") return { path: args.path ?? "/fixture", parent: null, entries: [], total: 0 };
++    return null;
++  },
++};
++installCatalogPagingMock(w);
++useStore.setState({ activeProjectId: null, libraryThumbnailWidth: 180, loading: false, assets: assets as any, mode: "browse",
++  cloudAuth: { logged_in: true, display_name: "Fixture", cloud_available: true } as any,
++  cloudEntitlement: { tier: "pro", balances: { daily: 0, sub: 0, topup: 1230 }, policy: { can_use_cloud: true, can_use_byo: true }, recent_transactions: [], generation_services: [], prompt_configs: [] } as any });
++useLocalFileMode.setState({ mode: "tags", views: { global: "tags", project: "tags" }, query: "" });
++
++createRoot(document.getElementById("root")!).render(<>
++  <div className="app-shell flex h-full w-full flex-col">
++    <Toolbar localFilesOpen canvasMode={false} onCanvasModeChange={() => {}} onRefresh={async () => {}} onCreateCreative={() => {}} onExplore={() => {}}/>
++    <main className="app-workspace relative flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas"><LibraryHome/></main>
++  </div>
++  <button data-unrelated-control className="library-floating-surface library-filter-trigger" style={{ position: "fixed", left: -1000 }}>Unrelated surface</button>
++</>);

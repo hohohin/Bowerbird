@@ -53,9 +53,9 @@ export async function prepareMediaImport(projectId: string | null, revision: num
   }
 }
 
-export function showImportedMedia(assets: Asset[]) {
+export function showImportedMedia(assets: Asset[], mode = useLocalFileMode) {
   if (!assets.length) return;
-  const library = useLocalFileMode.getState();
+  const library = mode.getState();
   if (!library.open) return;
   const videos = assets.every(asset => isVideoPath(asset.store_path));
   library.setMedia(videos ? "videos" : "images");

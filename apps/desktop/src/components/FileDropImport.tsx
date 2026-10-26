@@ -6,6 +6,8 @@ import type { Asset } from "../lib/types";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { prepareExplorerCanvasDrop } from "../lib/explorerCanvasDrop";
 import { EXPLORER_MIME } from "../lib/explorer";
+import { getDragAssets } from "../lib/dragPayload";
+import { libraryPaneAt } from "../lib/libraryPane";
 
 /** Capture external files above cards, editors and portals; internal asset drags keep their own handlers. */
 export function FileDropImport() {
@@ -14,6 +16,7 @@ export function FileDropImport() {
   useEffect(() => {
     let alive = true;
     const isFiles = (event: DragEvent) => {
+      if (getDragAssets()?.length) return false;
       const data = event.dataTransfer;
       if (!data?.types.includes("Files")) return false;
       // WebView2 image drags can carry both Files and our capture protocol.
@@ -56,6 +59,7 @@ export function FileDropImport() {
       if (!files.length) { notifyError(null, "未读取到素材文件，请重新拖入"); return; }
       const state = useStore.getState();
       const projectId = targetProject(event);
+      const libraryMode = libraryPaneAt(event.target)?.mode;
       const revision = state.projectRouteRevision;
       const place = prepareExplorerCanvasDrop(event.target, projectId, event.clientX, event.clientY);
       setPending(count => count + 1);
@@ -75,7 +79,7 @@ export function FileDropImport() {
           if (current.activeProjectId === state.activeProjectId && current.projectRouteRevision === revision && !current.projectRoutePending) {
             current.setCurrentCollection(null); current.setCurrentFolder(null);
             current.setSearchQuery(""); current.setSmartFilter(null); current.setColorFilter(null);
-            showImportedMedia(imported);
+            showImportedMedia(imported, libraryMode);
           }
           notifySuccess(`已导入 ${imported.length} 个素材`);
         }

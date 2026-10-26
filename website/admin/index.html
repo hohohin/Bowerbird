@@ -55,8 +55,8 @@
       <div class="page-heading"><div><div class="eyebrow">USER ACCESS</div><h1>用户管理<span class="heading-dot">.</span></h1><p>查看已注册用户，管理测试功能的访问资格。</p></div><button id="users-refresh" class="secondary">↻ 刷新用户</button></div>
       <section class="inventory">
         <div class="inventory-heading"><div><h2>用户清单</h2><span id="users-count" class="chip" role="status">正在读取…</span></div></div>
-        <form id="users-filter-form" class="filters"><label class="search"><span aria-hidden="true">⌕</span><input id="users-search" placeholder="搜索邮箱或用户 ID" aria-label="搜索用户" maxlength="100"></label><select id="users-filter" aria-label="测试资格筛选"><option value="">全部用户</option><option value="test">仅测试账号</option><option value="regular">非测试账号</option></select><button class="secondary" type="submit">查询</button></form>
-        <div class="table-wrap"><table><thead><tr><th>账号 / 用户 ID</th><th>测试资格</th><th>注册时间</th><th>最近登录</th><th class="right">操作</th></tr></thead><tbody id="user-rows"></tbody></table></div>
+        <form id="users-filter-form" class="filters"><label class="search"><span aria-hidden="true">⌕</span><input id="users-search" placeholder="搜索昵称、邮箱或用户 ID" aria-label="搜索昵称、邮箱或用户 ID" maxlength="100"></label><select id="users-filter" aria-label="测试资格筛选"><option value="">全部用户</option><option value="test">仅测试账号</option><option value="regular">非测试账号</option></select><button class="secondary" type="submit">查询</button></form>
+        <div class="table-wrap"><table><thead><tr><th>用户 / 账号信息</th><th>测试资格</th><th>注册时间</th><th>最近登录</th><th class="right">操作</th></tr></thead><tbody id="user-rows"></tbody></table></div>
         <div id="users-empty" class="empty" hidden><h3>没有匹配的用户</h3><p>调整筛选条件，或确认对方已注册 Bowerbird。</p></div>
         <div class="pagination"><span id="users-page-label">每页 50 条</span><div><button id="users-previous" class="secondary" disabled>← 上一页</button><button id="users-next" class="secondary" disabled>下一页 →</button></div></div>
       </section>

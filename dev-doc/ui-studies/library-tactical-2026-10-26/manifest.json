@@ -1,0 +1,221 @@
+{
+  "date": "2026-10-26",
+  "scope": "Library visual style before tactical integration; snapshots include pre-existing working-tree changes.",
+  "files": [
+    {
+      "source": "apps/desktop/src/styles.css",
+      "sha256": "2c166ff7156b40d535fbfd0c894c69962451bbb40924165f59861d9d224c1986"
+    },
+    {
+      "source": "apps/desktop/src/components/Toolbar.tsx",
+      "sha256": "63d651f6b053eb7aab5cbceecf73fe2114ab8d99b6f6f27ae23b36debd8557b1"
+    },
+    {
+      "source": "apps/desktop/src/components/LibraryHome.tsx",
+      "sha256": "485b7e19a24b550f8894b4a09a1b70a61441bc74bb9688b0949097a92b581100"
+    },
+    {
+      "source": "apps/desktop/src/components/LibraryMotion.tsx",
+      "sha256": "56e4ce7b71421044a0f5793f82fef5af0d03956bef5860f1c8645e68923894db"
+    },
+    {
+      "source": "apps/desktop/src/components/LibraryMotion.css",
+      "sha256": "6cbb76cde9ff2c872158269c406ee678084fecdc6dfd7c2662d7ac1c77b399de"
+    },
+    {
+      "source": "apps/desktop/src/components/CategorizedLibrary.tsx",
+      "sha256": "0d6efe904856abeb0de19efcb76699c6255ea5e916a91cc832c4f7d3b0f83017"
+    },
+    {
+      "source": "apps/desktop/src/components/CategorizedLibrary.css",
+      "sha256": "338b72a66cdbbea41a9d33e97b702ab22a939ee3dec74eaf0c5a4783919e21e7"
+    },
+    {
+      "source": "apps/desktop/src/components/LocalFileWorkspace.tsx",
+      "sha256": "8d387425dd61e56d0fa8e8a587325a52ae13d4d2c25a6bdd5316eebe0cd1fbb8"
+    },
+    {
+      "source": "apps/desktop/src/components/LocalFileWorkspace.css",
+      "sha256": "334a23aeaf624a078885a804a4fc26033104d26a59adba5179a05346e6c0a510"
+    },
+    {
+      "source": "apps/desktop/src/components/FileMediaCard.tsx",
+      "sha256": "0a68d9772df1d8aabef0871423e3cfa2a08080ec299d67106a50f45c3821c923"
+    },
+    {
+      "source": "apps/desktop/src/components/LibrarySplit.css",
+      "sha256": "e4c8a2b9883933fb8029d26b807f817977026ab2a3dc2b79bacd45b00a238a3f"
+    },
+    {
+      "source": "apps/desktop/scripts/toolbar-layout-ui.test.mjs",
+      "sha256": "5548f5d96e0fdd414cf355341e3d25954fb5a8de03550eb74d5ebb0a418e8db1"
+    },
+    {
+      "source": "apps/desktop/scripts/library-subtle-motion-ui.test.mjs",
+      "sha256": "dbcdb8064ab8bc09161691c215fa936366ef3d159957aa4740a589466e009390"
+    }
+  ],
+  "integrationFiles": [
+    {
+      "source": "apps/desktop/src/components/Toolbar.tsx",
+      "sha256": "67442a3ec509a15d460da0c022a427a448610c257741d5bc301445f260980380"
+    },
+    {
+      "source": "apps/desktop/src/components/LibraryHome.tsx",
+      "sha256": "e5f5450c7e336b2ac3078b0576a8b717ba68647ba428e2b31cb84526bd2fd907"
+    },
+    {
+      "source": "apps/desktop/src/components/CategorizedLibrary.tsx",
+      "sha256": "45e7d13fbf7b91c278a2b5c39ebed7d7a336f3d923d4dc241b006d2304383d17"
+    },
+    {
+      "source": "apps/desktop/src/components/LocalFileWorkspace.tsx",
+      "sha256": "ea0690e81a35476eccfccbfdabdffc68471724439751f075c7cb5ae0ccc09145"
+    },
+    {
+      "source": "apps/desktop/scripts/toolbar-layout-ui.test.mjs",
+      "sha256": "b112b38889fae3262a3fa3cdc325254a02ea85b60a5a87fd7c6febbb8116a9e2"
+    },
+    {
+      "source": "apps/desktop/scripts/library-subtle-motion-ui.test.mjs",
+      "sha256": "2f650c6a41cd89598ca7eba7e3526a79df20f98f6f68df4d2e2fe6a9178ae2be"
+    },
+    {
+      "source": "apps/desktop/src/components/LibraryTactical.css",
+      "sha256": "e588b06583bd8da43967d7953b532c73ab4326b07238a64d544e5ad9bf2a98bb"
+    },
+    {
+      "source": "apps/desktop/src/components/LibraryTacticalBackdrop.tsx",
+      "sha256": "da24af1e99477980e231c0049cbbcf9f9f3b1134df9ef7eda684b855bcacd9fe"
+    },
+    {
+      "source": "apps/desktop/scripts/library-tactical-ui.test.mjs",
+      "sha256": "08dbb2f03aee7b501162dffa00266eeab6556a73ef71b86fef7ff860398006ef"
+    },
+    {
+      "source": "apps/desktop/scripts/fixtures/library-tactical/preview.html",
+      "sha256": "bd6d1660f1fa2ca3a2cc11e6a1843d109d8a1b5b7e4a4be8b0ec8a7104230f12"
+    },
+    {
+      "source": "apps/desktop/scripts/fixtures/library-tactical/preview.tsx",
+      "sha256": "9fbb6376dd721c8b3b625c68d839a6fded170f1d77241d85b12441180a912b65"
+    }
+  ],
+  "patchSha256": "00b1d117b5dc987fe710fb90627a06a72c1179c15b5abba2b661721e74175b32",
+  "frozenFiles": [
+    {
+      "path": "approved-source/index.html",
+      "sha256": "ca60316e17c1e6858e1a816d28a19be8224da17301eefa5b1c9fe3953a618f7b"
+    },
+    {
+      "path": "approved-source/preview.tsx",
+      "sha256": "d9a5448bcd019b38dfb07744bec5deedd4f2b101fa19f63baaa58d2a5a88c58f"
+    },
+    {
+      "path": "approved-source/study.css",
+      "sha256": "9c59af89d40677e851a64924cec6f23a95d2205e6e3f55dae835118a8e080d46"
+    },
+    {
+      "path": "site/.tmp/library-structure-preview/index.html",
+      "sha256": "b485c4ab9318a3274812f35a32f4f274fbbe5433262318b124f40aed01ca8702"
+    },
+    {
+      "path": "site/assets/index-BLVgyPdE.css",
+      "sha256": "1b579773265398e08bb4ce087ac430aa28bd49140c913c4097c1f5b27c3c4673"
+    },
+    {
+      "path": "site/assets/index-SxeBWEj0.js",
+      "sha256": "c089ff822073435a8dbb8d40fc02cf396fc0cee550483f999eca44383c4e1218"
+    },
+    {
+      "path": "site/assets/library-glass-displacement-BTVH-YiM.png",
+      "sha256": "5cdf52708a397dbf8568e93b490b08482b61dd020e3338cc7e62ea1169ac3d95"
+    },
+    {
+      "path": "site/demo-assets.js",
+      "sha256": "825536d0d06c6c6cc2d80eceedda83bc5c10362434dee1d8d02f96a5e222aa71"
+    },
+    {
+      "path": "site/index.html",
+      "sha256": "a073b7013da0a12011afb9ca02c7af78bc9d37f6846b7426e3c6f227384d6125"
+    },
+    {
+      "path": "screenshots/structure-dark.png",
+      "sha256": "a191b9f35192ef5f91d12646b76f155d847f0db67455a6abda4a96960c9d8b39"
+    },
+    {
+      "path": "screenshots/structure-light.png",
+      "sha256": "fc14d6219bd3631d5112d3935e83b644a3c6a7f17e0ad3697b6f7def85d53980"
+    },
+    {
+      "path": "screenshots/structure-original.png",
+      "sha256": "c43a5b950ee2b982117b1d808cf71a9dc8a0d55230e0bc0554bee3c97717221d"
+    },
+    {
+      "path": "screenshots/structure-pinned.png",
+      "sha256": "98b19c6009dee82a157d0a0db31b037db51378ccfe944a7aeb4fc49e76479677"
+    },
+    {
+      "path": "screenshots/tactical-hover.png",
+      "sha256": "232f93bf7ce486822b5cb7e6a8910537e5c156d9e8016d9bd22c019c3a5c7d21"
+    }
+  ],
+  "integrationHashFormat": "SHA-256 of UTF-8 text with LF line endings",
+  "focusFix": {
+    "date": "2026-10-26",
+    "description": "Visible embedded views animate without keyboard focus; hidden/offscreen/reduced-motion behavior preserved.",
+    "file": "integration-with-focus-fix.patch",
+    "sha256": "4bfc1c2f5e3c81462f9f8c2ed4a1986cbf1f29a79b78cb3d34af9f11a35a64ad",
+    "integrationHashFormat": "SHA-256 of UTF-8 text with LF line endings",
+    "integrationFiles": [
+      {
+        "source": "apps/desktop/src/components/Toolbar.tsx",
+        "sha256": "d0ed39d3d324dff25ac779e38e8045eb0972c8258cfe4d367159c82014b7319d"
+      },
+      {
+        "source": "apps/desktop/src/components/LibraryHome.tsx",
+        "sha256": "e5f5450c7e336b2ac3078b0576a8b717ba68647ba428e2b31cb84526bd2fd907"
+      },
+      {
+        "source": "apps/desktop/src/components/CategorizedLibrary.tsx",
+        "sha256": "45e7d13fbf7b91c278a2b5c39ebed7d7a336f3d923d4dc241b006d2304383d17"
+      },
+      {
+        "source": "apps/desktop/src/components/LocalFileWorkspace.tsx",
+        "sha256": "ea0690e81a35476eccfccbfdabdffc68471724439751f075c7cb5ae0ccc09145"
+      },
+      {
+        "source": "apps/desktop/src/components/LibraryMotion.tsx",
+        "sha256": "e54abb25e7e52027738b455057cab84e2ad14583aeb6978fad5a0179ce73159b"
+      },
+      {
+        "source": "apps/desktop/scripts/toolbar-layout-ui.test.mjs",
+        "sha256": "b112b38889fae3262a3fa3cdc325254a02ea85b60a5a87fd7c6febbb8116a9e2"
+      },
+      {
+        "source": "apps/desktop/scripts/library-subtle-motion-ui.test.mjs",
+        "sha256": "2f650c6a41cd89598ca7eba7e3526a79df20f98f6f68df4d2e2fe6a9178ae2be"
+      },
+      {
+        "source": "apps/desktop/src/components/LibraryTactical.css",
+        "sha256": "e588b06583bd8da43967d7953b532c73ab4326b07238a64d544e5ad9bf2a98bb"
+      },
+      {
+        "source": "apps/desktop/src/components/LibraryTacticalBackdrop.tsx",
+        "sha256": "da24af1e99477980e231c0049cbbcf9f9f3b1134df9ef7eda684b855bcacd9fe"
+      },
+      {
+        "source": "apps/desktop/scripts/library-tactical-ui.test.mjs",
+        "sha256": "4f70972dbd59b6ea5a28f2deb20c492cdb3f9b9f5a60e2d12bd40efc71100f58"
+      },
+      {
+        "source": "apps/desktop/scripts/fixtures/library-tactical/preview.html",
+        "sha256": "bd6d1660f1fa2ca3a2cc11e6a1843d109d8a1b5b7e4a4be8b0ec8a7104230f12"
+      },
+      {
+        "source": "apps/desktop/scripts/fixtures/library-tactical/preview.tsx",
+        "sha256": "9fbb6376dd721c8b3b625c68d839a6fded170f1d77241d85b12441180a912b65"
+      }
+    ]
+  }
+}

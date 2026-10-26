@@ -3,6 +3,14 @@
 > 目标：把 `apps/cloud/` 的 Supabase 迁移 + Edge Functions 推上云端，完成 Auth/积分/算力的真实联调。
 > 前提：你已在 Supabase 控制台拿到 Project URL / publishable key / secret key，并已在 `apps/cloud/.env` 填好方舟 key 与 endpoint id。
 
+## 2026-10-25 后台昵称已上线／微信收款只读核验
+
+仅定向应用 **0076** 并登记迁移历史，`admin_list_users` 新增昵称返回及搜索，鉴权与目标 UUID 保持；0068 未应用。官网在 2401 现役基础上只替换 admin 两个静态文件，现役 `20261025-admin-nickname`，回滚 `20261024-windows-26.10.2401`；所有 Edge（含 `code-admin` v5）、Worker、价格、环境及桌面更新通道未变。本地回归、公网文件、真实同名临时账号 API／浏览器操作及会员积分不变验证通过，临时账号已全部清理。实现、证据和回退见 [后台昵称记录](PRO-REDEMPTION.md#2026-10-25-昵称展示与搜索已上线)。
+
+微信收款只读核验（2026-10-25）：线上 `BOWERBIRD_PAYMENT_MOCK=true`，`create-checkout` v29／`payment-webhook` v30 下载源码与仓库一致，均只实现 Mock。`SUPERUN_WEBHOOK_SECRET` 已存在，但当前用于 Mock 静态签名校验，不能视作真实渠道接入。数据库 18 笔订单全部 `provider=mock`（pending 15／paid 1／refunded 2）；该 paid 状态不代表实际收款。本轮未创建订单、修改支付开关或测试真实扣款。
+
+已有基础为服务端商品价格／快照、订单、订阅和积分原子入账、幂等及内部退款；真实下单、收银台／二维码、渠道通知验签与金额核对、查单／退款、真实小额端到端验收仍未实现或未完成。本次只读配置检查发现的是 Mock 开关与 Mock 回调密钥，没有真实渠道 adapter 的部署证据。**用户随后于 2026-10-25 确认微信支付商户资质已完成，并取消 superun、改走微信支付直连**；商户资质状态以用户确认优先，不再等待申请。Native API v3 接入研究、技术参数和任务卡已补入 [收费化计划 P7](../../dev-doc/ARCH-ADJUST-PLAN.md#p7--订阅与支付)，本次研究未部署支付代码或发起真实交易。`wechat-login` v16 是网站应用 OAuth 登录，与微信支付商户接入独立。现役代码直接将 Mock 设为 false 会返回 503，不会开启收款。只读证据 `.tmp/admin-nickname-20261025/inspection.json` 与 `deployed-before/`。
+
 ## 2026-10-24 分类英文规则与 Windows 2401 已发布
 
 本轮先存档源码 fd948497 并推送，再于 20:11（北京时间）定向应用 **0075**、部署 **jev-proxy v10**。从 v9 下载实际依赖构建候选，仅替换 jev 的 index／prompt／protocol、新增 translation 和 Ark 输出上限参数；其余依赖原样。生产 schema 演练事务回滚核对后正式应用，advance_classification 仅将过期依据从 created_at 改为 updated_at，原 Bcoin 结算保留。
@@ -413,7 +421,7 @@ node --env-file=.env scripts/check-agent-runtime-health.mjs
 
 ## 支付（Mock）
 
-`create-checkout` / `payment-webhook` 目前只提供 **Mock 契约**（验签、幂等、状态机）。**不要**接入真实支付渠道；等 superun/Paddle 凭据到位后再换真实 adapter。
+`create-checkout` / `payment-webhook` 现役仍只提供 **Mock 契约**（验签、幂等、状态机）。2026-10-25 用户确认商户资质已完成，后续按微信支付直连实施，不再等待 superun。当前开关不是启用真实支付的实现；须先完成 [P7 技术接入与验收](../../dev-doc/ARCH-ADJUST-PLAN.md#p7--订阅与支付) 再开放购买。现有 `SUPERUN_WEBHOOK_SECRET` 只供旧 Mock 使用，不作为微信支付凭据，也不在本次研究中删除。
 
 ## 注意事项
 

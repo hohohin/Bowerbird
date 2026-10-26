@@ -1,3 +1,4 @@
+import { useLibraryModeStore, useLibraryPane, useLibraryThumbnail, useActiveLibraryPane } from "../lib/libraryPane";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
@@ -11,11 +12,11 @@ import { FileColorFilter } from "./FileColorFilter";
 import { LibraryFloatingControls } from "./LibraryFloatingControls";
 import { useLibraryGlass } from "./useLibraryGlass";
 import { LibraryMotion } from "./LibraryMotion";
+import { LibraryTacticalBackdrop } from "./LibraryTacticalBackdrop";
 import { fileWorkspace, prepareFileWorkspace, type FileWorkspaceStatus } from "../lib/fileWorkspace";
 import { folderClassification, type FolderClassification } from "../lib/folderClassification";
 import { globalClassification, localClassification, type ClassificationLabel, type GlobalClassificationView } from "../lib/localClassification";
 import { useFileColors } from "../lib/useFileColors";
-import { useLocalFileMode } from "../lib/localFileMode";
 import { useMasonryLayout } from "../lib/useMasonryLayout";
 import { useThumbnailPinch } from "../lib/useThumbnailPinch";
 import { isVideoPath } from "../lib/videoGeneration";
@@ -35,7 +36,7 @@ import { FileWorkspaceMoveDialog } from "./FileWorkspaceMoveDialog";
 import "./LocalFileWorkspace.css";
 
 const KEY = "bowerbird.localFiles.lastDirectory";
-function lastPath() { try { return localStorage.getItem(KEY) || ""; } catch { return ""; } }
+function lastPath(key = KEY) { try { return localStorage.getItem(key) ?? localStorage.getItem(KEY) ?? ""; } catch { return ""; } }
 function normalize(path: string) { return path.replace(/^\\\\\?\\UNC\\/i, "//").replace(/^\\\\\?\\/, "").replace(/\\/g, "/").replace(/\/$/, ""); }
 function relative(root: string, path: string) {
   const base = normalize(root); const file = normalize(path);
@@ -53,7 +54,10 @@ function breadcrumbs(path: string) {
     }) ];
 }
 
-export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLegacy }: { onClose: () => void; onCreateProject?: (assetIds?: string[]) => Promise<unknown>; navigation?: ReactNode; onLegacy?: () => void }) {
+export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLegacy, toolbarActions }: { onClose: () => void; onCreateProject?: (assetIds?: string[]) => Promise<unknown>; navigation?: ReactNode; toolbarActions?: ReactNode; onLegacy?: () => void }) {
+  const useLocalFileMode = useLibraryModeStore();
+  const pane = useLibraryPane();
+  const pathKey = pane ? `${KEY}.${pane.id}` : KEY;
   const glass = useLibraryGlass();
   const [locations, setLocations] = useState<FileWorkspaceStatus | null>(null);
   const [savingPlace, setSavingPlace] = useState(false);
@@ -62,14 +66,15 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
   const [allLocations, setAllLocations] = useState(() => useLocalFileMode.getState().mode === "global");
   const globalRequest = useLocalFileMode(s => s.globalRequest);
   const [directory, setDirectory] = useState<LocalDirectory | null>(null);
-  const [pathInput, setPathInput] = useState(lastPath);
+  const [pathInput, setPathInput] = useState(() => lastPath(pathKey));
   const [editingPath, setEditingPath] = useState(false);
   const [panel, setPanel] = useState<"actions" | "colors" | null>(null);
   const header = useRef<HTMLDivElement>(null);
   const addressInput = useRef<HTMLInputElement>(null);
   const addressButton = useRef<HTMLDivElement>(null);
   const colorsButton = useRef<HTMLButtonElement>(null);
-  const navigationHost = useLocalFileMode(s => s.navigationHost);
+  const sharedNavigationHost = useLocalFileMode(s => s.navigationHost);
+  const navigationHost = pane ? null : sharedNavigationHost;
   const [color, setColor] = useState<string | null>(null);
   const [media, setMedia] = useState<"image" | "video" | null>(null);
   const actionsButton = useRef<HTMLButtonElement>(null);
@@ -104,7 +109,7 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
   const [grid, setGrid] = useState<HTMLDivElement | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const query = useLocalFileMode(s => s.query);
-  const width = useStore(s => s.libraryThumbnailWidth);
+  const { width } = useLibraryThumbnail("library");
   const project = useStore(s => s.activeProjectId);
   const pinchRef = useThumbnailPinch("library");
   const pictures = useMemo(() => new Map(classification?.record.pictures.map(p => [p.path, p]) ?? []), [classification]);
@@ -219,9 +224,10 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
   function menuAction(action: () => void) { closePanel(); action(); }
   useEffect(() => {
     function focusAddress(event: KeyboardEvent) {
-      if (mode !== "files" || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "l"
+      const workspace = header.current?.closest<HTMLElement>(".local-file-workspace");
+      if ((pane && useActiveLibraryPane.getState().pane !== pane) || mode !== "files" || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "l"
         || document.querySelector('[role="dialog"], [role="menu"]')
-        || !header.current || header.current.closest('[inert]') || getComputedStyle(header.current).visibility === "hidden") return;
+        || !workspace || workspace.closest('[inert]') || getComputedStyle(workspace).visibility === "hidden") return;
       event.preventDefault(); event.stopPropagation(); editPath();
     }
     window.addEventListener("keydown", focusAddress, true);
@@ -271,7 +277,7 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
       useLocalFileMode.getState().setMode("files");
       setLoading(false);
       if (scroll.current) scroll.current.scrollTop = 0;
-      try { localStorage.setItem(KEY,result.path); } catch { /* Session browsing remains available. */ }
+      try { localStorage.setItem(pathKey,result.path); } catch { /* Session browsing remains available. */ }
       try {
         const next = await folderClassification.view(result.path);
         if (alive.current && version === sequence.current) setClassification(next);
@@ -287,7 +293,7 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
       if (!alive.current) return;
       setLocations(value);
       if (version === sequence.current) {
-        if (useLocalFileMode.getState().mode === "files") void navigate(lastPath() || value.config.root || undefined);
+        if (useLocalFileMode.getState().mode === "files") void navigate(lastPath(pathKey) || value.config.root || undefined);
         else void showAll();
       }
     }).catch(e => { if (alive.current && version === sequence.current) setError(String(e)); });
@@ -388,7 +394,7 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
   }
   useLayoutEffect(() => {
     // Move focus off the source tab that is now inside a hidden preserved workspace.
-    if (navigation) document.querySelector<HTMLButtonElement>('.local-file-workspace [role="tab"][aria-selected="true"]')?.focus({ preventScroll: true });
+    if (navigation) header.current?.closest('.local-file-workspace')?.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true });
   }, []);
   const selectedFiles = useMemo(() => new Set([...selected].flatMap(path => {
     if (allLocations) { const picture = globalPictures.get(path); return picture ? [picture.id] : []; }
@@ -420,7 +426,7 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
       <button className={loading ? "is-loading" : ""} aria-label="刷新文件夹" title="刷新" disabled={loading} onClick={() => void (allLocations ? showAll() : navigate(directory?.path))}><RefreshCw size={16}/></button>
       </div>
     </div>;
-  return <section className="local-file-workspace" aria-label="本机文件" ref={pinchRef} aria-busy={busy} style={glass.style}
+  return <section className="local-file-workspace library-tactical" aria-label="本机文件" ref={pinchRef} aria-busy={busy} style={glass.style}
     onKeyDown={e => {
       if (e.target instanceof Element && e.target.closest('input,textarea,[contenteditable="true"],[role="dialog"]')) return;
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { e.preventDefault(); e.stopPropagation(); setMultiSelect(true); setSelected(new Set(entries.filter(entry => !entry.directory).map(entry => entry.path))); }
@@ -471,6 +477,7 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
           <button onClick={() => menuAction(() => setMoveOpen(true))}>迁移资料目录</button>
           {onLegacy && <button onClick={() => menuAction(onLegacy)}>历史素材</button>}
       </div>}
+        {toolbarActions}
       </LibraryFloatingControls>
     </div>
     {error && <p role="alert" className="folder-error">{userErrorMessage(error, "文件操作未完成，请检查保存位置后重试。")}</p>}
@@ -500,6 +507,7 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
       </OverlayScrollArea>
     </aside>
     <div className="library-browser-grid folder-browser-grid">
+    <LibraryTacticalBackdrop />
     <OverlayScrollArea scrollRef={scroll} className="folder-scroll-area" viewportClassName="folder-scroller library-scroller" label="文件夹素材滚动条">
       {color && palette.pending && <p className="folder-empty" role="status">正在筛选颜色…</p>}
       {busy && showLoading && <p className="folder-loading" role="status">{tag ? "正在读取标签图片…" : mode === "global" ? "正在读取全局素材…" : "正在读取文件夹…"}</p>}

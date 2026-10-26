@@ -11,6 +11,7 @@ import { LearningHint } from "./OnboardingTour";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { ExplorerCaptureFeedback, type CaptureFeedback } from "./ExplorerCaptureFeedback";
 import { useExplorerDragMotion } from "../lib/useExplorerDragMotion";
+import { getDragAssets } from "../lib/dragPayload";
 
 export function ExploreWorkspace({ url, open, navigationId = 0, onClose, children }: { url: string | null; open: boolean; navigationId?: number; onClose: () => void; children: ReactNode }) {
   const [busy, setBusy] = useState(false);
@@ -29,6 +30,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
   useEffect(() => { sequence.current += 1; setFeedback(null); }, [open, activeProjectId]);
 
   async function drop(event: DragEvent) {
+    if (getDragAssets()?.length) { setOver(false); return; }
     const image = parseExplorerImage(event.dataTransfer);
     setOver(false);
     if (!image) {
@@ -129,6 +131,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       onPointerUp={() => setResizing(false)} onLostPointerCapture={() => setResizing(false)}><GripVertical size={12} /></div>
     <section className={`explore-main ${over ? "is-drop-target" : ""}`} aria-label="探索采集素材"
       onDragOverCapture={event => {
+        if (getDragAssets()?.length) { setOver(false); return; }
         if (Array.from(event.dataTransfer.types).some(type => type === EXPLORER_MIME || type === "text/plain")) {
           event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = busy ? "none" : "copy"; setOver(!busy);
           if (!busy) dragMotion.over(event.clientX, event.clientY);

@@ -1,0 +1,55 @@
+.library-motion-root { isolation:isolate; }
+/* Behind all content, clipped to the library; never tint images or capture input. */
+.library-ambient-light { position:absolute; inset:0; z-index:-1; overflow:hidden; border-radius:inherit; pointer-events:none; }
+.library-ambient-light::before {
+  content:""; position:absolute; inset:-15%;
+  background:radial-gradient(ellipse at 20% 25%, #ffffffc0, transparent 42%), radial-gradient(ellipse at 85% 85%, #c8c6bf50, transparent 38%);
+  animation:library-ambient-drift 24s ease-in-out infinite alternate;
+}
+html[data-theme="dark"] .library-ambient-light::before {
+  background:radial-gradient(ellipse at 20% 25%, #ffffff10, transparent 42%), radial-gradient(ellipse at 85% 85%, #c8c6bf0c, transparent 38%);
+}
+@keyframes library-ambient-drift {
+  from { opacity:.3; transform:translate(-3%, 0); }
+  to { opacity:.75; transform:translate(4%, 3%); }
+}
+/* Inner preview enters independently of the masonry's outer transform and measured size. */
+.library-motion-root .library-card-enter > .folder-media-preview {
+  animation:library-material-enter 420ms cubic-bezier(.2,.7,.25,1) backwards;
+  animation-delay:var(--library-enter-delay, 0ms);
+}
+@keyframes library-material-enter {
+  from { opacity:.2; translate:0 6px; }
+  to { opacity:1; translate:0 0; }
+}
+.library-motion-root .folder-media-card[data-positioned] { transition:width 240ms ease-out, transform 280ms ease-out, translate 180ms ease-out, box-shadow 180ms ease-out; }
+.categorized-library.library-motion-root .folder-media-card[data-positioned] { transition:translate 180ms ease-out, box-shadow 180ms ease-out; }
+@media (hover:hover) and (pointer:fine) {
+  .library-motion-root:not([data-library-dragging]) .folder-media-card:hover { translate:0 -2px; box-shadow:0 7px 16px -9px rgb(var(--bb-shadow-rgb) / 40%); }
+}
+.library-motion-root:not([data-library-dragging]) .folder-media-card:focus-visible { translate:0 -2px; }
+.library-motion-root :is(.library-view-switch, .library-media-switch, .library-filter-trigger, .catalog-section-title) { position:relative; }
+.library-motion-root :where(.library-view-switch, .library-media-switch, .library-filter-trigger, .catalog-section-title.library-floating-surface):is(:hover, :focus-within)::after {
+  content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+  background:linear-gradient(105deg, transparent 25%, #ffffff40 48%, transparent 68%);
+  background-size:260% 100%; animation:library-glass-sheen 650ms ease-out both;
+}
+@keyframes library-glass-sheen {
+  from { background-position:140% 0; opacity:0; }
+  30% { opacity:.65; }
+  to { background-position:-40% 0; opacity:0; }
+}
+.library-motion-root[data-library-motion-paused="true"] .library-ambient-light::before,
+.library-motion-root[data-library-motion-paused="true"] .library-card-enter > .folder-media-preview,
+.library-motion-root[data-library-motion-paused="true"] :is(.library-view-switch, .library-media-switch, .library-filter-trigger, .catalog-section-title)::after { animation-play-state:paused; }
+@media (prefers-reduced-motion:reduce), (forced-colors:active) {
+  .library-motion-root .library-ambient-light { display:none; }
+  .library-motion-root .library-card-enter > .folder-media-preview { animation:none; }
+  .library-motion-root .folder-media-card[data-positioned] { transition:none !important; }
+  .library-motion-root:not([data-library-dragging]) .folder-media-card:is(:hover, :focus-visible) { translate:none; }
+  .library-motion-root :is(.library-view-switch, .library-media-switch, .library-filter-trigger, .catalog-section-title)::after { animation:none; content:none; }
+}
+@media (prefers-reduced-transparency:reduce) {
+  .library-motion-root .library-ambient-light { display:none; }
+  .library-motion-root :is(.library-view-switch, .library-media-switch, .library-filter-trigger, .catalog-section-title)::after { content:none; }
+}

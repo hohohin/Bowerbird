@@ -15,6 +15,7 @@ import { ScreenshotSettings } from "./ScreenshotSettings";
 import { AppUpdateCard } from "./AppUpdateCard";
 import { FileWorkspaceMoveDialog } from "./FileWorkspaceMoveDialog";
 import { CreditDetails } from "./CreditDetails";
+import { AccountBilling } from "./AccountBilling";
 import { userErrorMessage } from "../lib/userError";
 
 const STAGE_LABEL: Record<string, string> = {
@@ -480,7 +481,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
 
   const loggedIn = cloudAuth?.logged_in === true;
   const accountName = cloudAuth?.display_name || cloudAuth?.email || cloudAuth?.user_id || "";
-  const tier = cloudEntitlement?.tier?.toUpperCase() ?? "FREE";
+  const canStartTrial = loggedIn && cloudEntitlement?.tier === "free" && cloudEntitlement.offline_state !== "expired" && cloudEntitlement.offline_state !== "invalid";
   // 测试账号（bowerbird_test 标记，云端随权益快照下发）才追加「开发者选项」分区。
   const isTestAccount = cloudEntitlement?.is_test_account === true;
   const sections = isTestAccount ? [...SECTIONS, DEVELOPER_SECTION] : SECTIONS;
@@ -709,34 +710,30 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 )}
               </div>
 
-              {/* 等级 & 升级 */}
-              {loggedIn && (
-                <div className="settings-card px-3 py-2.5">
-                  <span className="text-ink">
-                    当前档位：
-                    <span className="ml-1 rounded bg-accent/15 px-1.5 py-0.5 text-xs font-semibold text-accent">
-                      {tier}
-                    </span>
-                  </span>
-                  {tier === "FREE" && <button className="app-button mt-2" disabled={trialBusy} onClick={async () => {
+              <AccountBilling
+                key={cloudAuth?.user_id ?? "guest"}
+                loggedIn={loggedIn}
+                entitlement={cloudEntitlement}
+                trialAction={loggedIn && (canStartTrial || trialMessage) ? <>
+                  {canStartTrial && <>
+                  <button type="button" className="app-button" disabled={trialBusy} onClick={async () => {
                     if (trialBusy) return; setTrialBusy(true); setTrialMessage("");
                     try { const next = await api.cloudStartProTrial(); useStore.setState({ cloudEntitlement: next }); setTrialMessage("7 天 Pro 功能体验已领取；Cloud 仍按用量计费，到期不会自动扣款。"); }
                     catch (error) { setTrialMessage(userErrorMessage(error, "暂时无法领取体验，请稍后重试。")); }
                     finally { setTrialBusy(false); }
-                  }}>{trialBusy ? "领取中…" : "领取一次 7 天 Pro 功能体验"}</button>}
-                  {trialMessage && <p role="status" className="mt-1 text-xs text-muted">{trialMessage}</p>}
-                  <p className="mt-1 text-[11px] text-muted">
-                    在线购买暂未开放。如有 Pro 兑换码，可在下方兑换，权益将同步到当前账号。
-                  </p>
-                </div>
-              )}
+                  }}>{trialBusy ? "领取中…" : "领取一次 7 天 Pro 功能体验"}</button>
+                  <p className="account-billing-note">每账号一次，不赠算力，到期不会自动扣款。</p>
+                  </>}
+                  {trialMessage && <p role="status" className="text-xs text-muted">{trialMessage}</p>}
+                </> : undefined}
+              />
 
               {loggedIn && <RedeemCodeCard key={cloudAuth?.user_id} />}
 
               {/* credits 明细 */}
               {loggedIn && (
                 <div className="settings-card px-3 py-2.5">
-                  <CreditDetails entitlement={cloudEntitlement} />
+                  <CreditDetails entitlement={cloudEntitlement?.offline_state === "expired" || cloudEntitlement?.offline_state === "invalid" ? null : cloudEntitlement} />
                   <button
                     onClick={() => void logoutCloud()}
                     disabled={cloudBusy}

@@ -1,0 +1,86 @@
+/* Preview only: paint the real components without changing their geometry. */
+.study-tools{position:fixed;bottom:12px;left:12px;z-index:80;display:flex;align-items:center;gap:3px;padding:5px;background:var(--bb-surface);box-shadow:0 6px 22px #0003;color:var(--bb-ink);font-size:10px;max-width:calc(100vw - 24px)}
+.study-tools small{padding:0 6px;color:var(--bb-muted);font-size:10px}.study-tools button{padding:6px 8px;white-space:nowrap}.study-tools button:hover,.study-tools button[aria-pressed=true]{background:rgb(var(--bb-ink-rgb)/8%)}
+.study-notice{position:fixed;left:50%;bottom:70px;transform:translateX(-50%);z-index:100;background:var(--bb-surface);padding:12px;color:var(--bb-ink);font-size:12px;box-shadow:0 8px 22px #0003}
+:root[data-study=terminal]{--study-base:#1d2224;--study-screen:rgb(36 42 45/.88);--study-hover:rgb(225 229 228/.12);--study-selected:rgb(219 224 222/.96);--study-selected-ink:#252b2d;--study-ink:#e5e8e7;--study-mark:#c7cecb;--study-rule:rgb(199 206 203/.30);--study-axis:rgb(184 193 190/.14);--study-shadow:rgb(0 0 0/.42);--study-signal:#929c98;--study-nav:rgb(221 226 224/.13);--file-gallery-background:var(--study-base);--library-glass-selected:var(--study-selected);--library-glass-selected-shadow:none}
+:root[data-theme=light][data-study=terminal]{--study-base:#f5f4f0;--study-screen:rgb(247 247 243/.90);--study-hover:rgb(47 55 58/.09);--study-selected:rgb(59 67 70/.96);--study-selected-ink:#fff;--study-ink:#2c3437;--study-mark:#56615e;--study-rule:rgb(83 96 91/.32);--study-axis:rgb(83 96 91/.16);--study-shadow:rgb(31 39 42/.22);--study-signal:#68736e;--study-nav:rgb(49 59 62/.11)}
+:root[data-study=terminal]{--study-screen:rgb(44 51 54/.76);--study-panel:rgb(35 42 45/.92);--study-hover-screen:rgb(61 68 70/.82);--study-selected:rgb(219 224 222/.86)}
+:root[data-theme=light][data-study=terminal]{--study-screen:rgb(235 237 233/.72);--study-panel:rgb(243 244 240/.92);--study-hover-screen:rgb(221 225 221/.80);--study-selected:rgb(59 67 70/.86)}
+html[data-study=terminal] .app-shell,html[data-study=terminal] .app-topbar{background:var(--study-base)}
+html[data-study=terminal] :is(.app-topbar,.app-topbar-view-controls,.catalog-sidebar,.app-search,.app-search kbd,.app-topbar button,.library-view-segments,.library-floating-surface,.library-filter-trigger,.catalog-section-title,.thumbnail-size-slider){border-color:transparent!important;box-shadow:none}
+html[data-study=terminal] :is(.app-topbar button,.app-search,.app-search kbd,.app-topbar img,.topbar-account-trigger>span,.library-view-segments,.library-view-segments button,.library-floating-surface,.library-view-switch button,.library-view-switch-thumb,.library-filter-trigger,.library-media-switch button,.catalog-row,.catalog-sidebar-heading button,.catalog-section-title,.thumbnail-size-slider,.folder-media-card){border-radius:0!important}
+html[data-study=terminal] :is(.app-topbar button,.app-search,.library-view-segments,.library-floating-surface,.library-filter-trigger,.thumbnail-size-slider),html[data-study=terminal] .categorized-library :is(.library-floating-surface,.library-filter-trigger){background:var(--study-screen);backdrop-filter:none;-webkit-backdrop-filter:none;color:var(--study-ink)}
+html[data-study=terminal] .app-topbar .app-button-accent{background:var(--study-nav);color:var(--study-ink);box-shadow:none}
+html[data-study=terminal] .app-search input{border-color:transparent;border-radius:0;background:transparent;box-shadow:none}
+html[data-study=terminal] .app-search input:focus{outline:2px solid var(--study-mark);outline-offset:1px}
+html[data-study=terminal] :is(.app-topbar button:hover,.library-filter-trigger:hover){background-color:var(--study-hover)}
+html[data-study=terminal] :is(.library-view-switch-thumb,.library-media-switch button[aria-pressed=true],.library-view-segments button[aria-pressed=true]){background:var(--study-selected);color:var(--study-selected-ink);box-shadow:none}
+html[data-study=terminal] .library-view-switch button[aria-selected=true],html[data-study=terminal] .library-media-switch button[aria-pressed=true]:hover{color:var(--study-selected-ink)}
+html[data-study=terminal] .library-view-switch button:not([aria-selected=true]):hover{background:var(--study-hover);color:var(--study-ink)}
+html[data-study=terminal] .library-view-switch-thumb{transition-duration:140ms;transition-timing-function:cubic-bezier(.2,.8,.2,1)}
+html[data-study=terminal] .library-media-switch button{position:relative}
+html[data-study=terminal] .library-color-control>.library-filter-trigger{background:transparent}
+html[data-study=terminal] .library-filter-trigger[aria-expanded=true]{background:var(--study-selected);color:var(--study-selected-ink)}
+html[data-study=terminal] .library-filter-trigger[data-active]{color:var(--study-ink);background-color:var(--study-nav)}
+html[data-study=terminal] :is(.library-filter-dot,.library-rgb-orb){border-radius:0;box-shadow:none}
+html[data-study=terminal] .library-filter-dot{background:var(--study-mark)}
+html[data-study=terminal] .library-tab-overlay{background:var(--study-selected)}
+html[data-study=terminal] .library-tab-view-label{color:var(--study-selected-ink)}
+html[data-study=terminal] .library-tab-crossing-arrow{stroke:var(--study-selected-ink)}
+/* The alphabet and resize handles keep their clean input areas. */
+html[data-study=terminal] .catalog-sidebar{background:var(--study-base)}
+html[data-study=terminal] .catalog-row:hover{background:var(--study-hover)}
+html[data-study=terminal] .catalog-row:is([aria-current=location],[aria-selected=true],[aria-pressed=true]){background:var(--study-nav);color:var(--study-ink)}
+html[data-study=terminal] .catalog-alphabet button:not([aria-disabled=true]){color:var(--study-ink)}
+html[data-study=terminal] .catalog-section-title{background:transparent;color:var(--study-ink);backdrop-filter:none}
+html[data-study=terminal] .catalog-section-title::before{content:none}
+html[data-study=terminal] .catalog-section-heading.is-pinned .catalog-section-title{background:var(--study-screen);color:var(--study-ink);box-shadow:none}
+html[data-study=terminal] :is(.catalog-selection,.folder-selection-bar){border-color:transparent;border-radius:0;background:var(--study-screen);box-shadow:0 6px 18px -9px var(--study-shadow)}
+html[data-study=terminal] :is(.catalog-selection,.folder-selection-bar) button{border-radius:0;color:var(--study-ink)}
+html[data-study=terminal] :is(.catalog-selection,.folder-selection-bar) button:hover{background:var(--study-hover)}
+/* Only highlighted controls show a single lower-right signal point. */
+html[data-study=terminal] .library-motion-root :is(.library-view-switch,.library-media-switch,.library-filter-trigger,.catalog-section-title)::after{content:none}
+html[data-study=terminal] .library-view-switch-thumb::after,html[data-study=terminal] .categorized-library .library-filter-trigger::before{content:none}
+html[data-study=terminal] :is(.app-topbar,.library-motion-root) :is(.app-button-dark,.app-button-accent,.topbar-account-trigger,.library-view-switch button,.library-media-switch button,.library-view-segments button,.library-filter-trigger,.catalog-sidebar-heading button,.catalog-row,.catalog-selection button,.folder-selection-bar button,.app-popover button,.folder-popover button,.library-color-action){position:relative}
+html[data-study=terminal] :is(.app-topbar,.library-motion-root) :is(.app-button-dark,.app-button-accent,.topbar-account-trigger,.library-view-switch button,.library-media-switch button,.library-view-segments button,.library-filter-trigger,.catalog-sidebar-heading button,.catalog-row,.catalog-selection button,.folder-selection-bar button,.app-popover button,.folder-popover button,.library-color-action,.thumbnail-size-slider):not(:disabled):is(:hover,:focus-visible,[aria-selected=true],[aria-pressed=true],[aria-expanded=true],[data-active=true],[aria-current=location])::after{content:'';position:absolute;inset:auto 3px 3px auto;width:2px;height:2px;border:0;border-radius:0;background:currentColor;opacity:.8;pointer-events:none;box-shadow:none;transform:none;animation:study-contact 160ms steps(1,end)}
+html[data-study=terminal] :is(.app-topbar,.library-motion-root) :is(.app-button-dark,.app-button-accent,.topbar-account-trigger,.library-view-switch button,.library-media-switch button,.library-view-segments button,.library-filter-trigger,.catalog-sidebar-heading button,.catalog-row,.catalog-selection button,.folder-selection-bar button,.app-popover button,.folder-popover button,.library-color-action,.thumbnail-size-slider):not(:disabled):is(:hover,:focus-visible){animation:study-control-contact 160ms steps(1,end)}
+html[data-study=terminal] .library-view-switch:is(:hover,:focus-within) .library-view-switch-thumb{animation:study-control-contact 160ms steps(1,end)}
+@keyframes study-contact{0%,38%,70%,100%{opacity:.8}18%,55%,85%{opacity:.12}}
+@keyframes study-control-contact{0%,38%,78%{opacity:.48}18%,58%,100%{opacity:1}}
+html[data-study-paused=true] :is(.app-topbar,.library-motion-root) :is(button,.thumbnail-size-slider,.library-view-switch-thumb),html[data-study-paused=true] :is(.app-topbar,.library-motion-root) *::before,html[data-study-paused=true] :is(.app-topbar,.library-motion-root) *::after{animation:none!important}
+html[data-study=terminal] .folder-media-card{overflow:visible;box-shadow:0 2px 6px -5px var(--study-shadow);transition:translate 180ms ease,rotate 180ms ease,box-shadow 180ms ease}
+html[data-study=terminal] .folder-media-preview{overflow:hidden}
+@media(hover:hover) and (pointer:fine){html[data-study=terminal] .library-motion-root:not([data-library-dragging]) .folder-media-card:hover{translate:0 -5px;rotate:1 1 0 1deg;z-index:4;box-shadow:0 18px 24px -12px var(--study-shadow)}}
+html[data-study=terminal] .folder-media-card.is-selected{outline:none;box-shadow:0 18px 24px -12px var(--study-shadow)}
+html[data-study=terminal] .library-motion-root:not([data-library-dragging]) .folder-media-card:hover::after,html[data-study=terminal] .folder-media-card.is-selected::after{--study-card-dot:linear-gradient(#f7f8f6,#f7f8f6);content:'';position:absolute;inset:-2px;border:0;pointer-events:none;opacity:.9;background:var(--study-card-dot) left top/4px 4px no-repeat,var(--study-card-dot) right top/4px 4px no-repeat,var(--study-card-dot) left bottom/4px 4px no-repeat,var(--study-card-dot) right bottom/4px 4px no-repeat;filter:drop-shadow(0 1px 1px #000b)}
+html[data-study=terminal] .library-motion-root:not([data-library-dragging]) .folder-media-card:hover::after{animation:study-card-spread 400ms cubic-bezier(.2,.75,.25,1),study-card-contact 160ms steps(1,end) 400ms}
+html[data-study=terminal] .folder-media-card.is-selected::after{opacity:1}
+@keyframes study-card-contact{0%,50%{opacity:0}25%,75%,100%{opacity:1}}
+@keyframes study-card-spread{from{background-position:50% 50%,50% 50%,50% 50%,50% 50%}to{background-position:0% 0%,100% 0%,0% 100%,100% 100%}}
+html[data-study=terminal] .folder-media-card:focus-visible{outline:2px solid var(--study-mark);outline-offset:2px}
+html[data-study=terminal] .folder-media-generated{border-radius:0;background:rgb(30 36 39/.84)}
+html[data-study=terminal] .thumbnail-size-slider.is-floating{background-color:var(--study-screen);box-shadow:none}
+html[data-study=terminal] .thumbnail-size-slider.is-floating input::-webkit-slider-thumb{border-radius:0;background:var(--study-mark)}
+html[data-study=terminal] .thumbnail-size-slider.is-floating input::-moz-range-thumb{border-radius:0;background:var(--study-mark)}
+/* A shared surface and state system for every control, including expanded layers. */
+html[data-study=terminal] :is(.app-topbar,.library-motion-root) :is(.app-button-dark,.app-button-accent,.topbar-account-trigger,.app-search,.library-floating-surface,.library-filter-trigger,.thumbnail-size-slider,.catalog-selection,.folder-selection-bar,:where(.catalog-sidebar-heading button)){background:var(--study-screen);color:var(--study-ink);border-color:transparent;box-shadow:none}
+html[data-study=terminal] :is(.app-topbar,.library-motion-root) :is(.app-button-dark,.app-button-accent,.topbar-account-trigger,.library-filter-trigger,:where(.catalog-sidebar-heading button)):hover{background-color:var(--study-hover-screen)}
+html[data-study=terminal] .library-color-control>.library-filter-trigger{background:transparent}
+html[data-study=terminal] :is(.library-view-switch-thumb,.library-media-switch button[aria-pressed=true],.library-view-segments button[aria-pressed=true]),
+html[data-study=terminal] .library-motion-root .library-filter-trigger:is([aria-pressed=true],[data-active=true],[aria-expanded=true]){background:var(--study-selected);color:var(--study-selected-ink);box-shadow:none}
+html[data-study=terminal] .app-topbar .app-topbar-credits{color:inherit}
+html[data-study=terminal] .topbar-account-trigger>span.bg-accent{background:var(--study-selected);color:var(--study-selected-ink)}
+html[data-study=terminal] .app-topbar :is(.app-popover,.topbar-account-menu),html[data-study=terminal] .library-motion-root :is(.folder-popover,.library-tag-filter,.library-color-strip.library-floating-surface){border-color:transparent;border-radius:0;background:var(--study-panel);box-shadow:0 9px 24px -12px var(--study-shadow);backdrop-filter:none}
+html[data-study=terminal] :is(.app-popover,.folder-popover) button{border-radius:0;background:transparent;color:var(--study-ink)}
+html[data-study=terminal] :is(.app-popover,.folder-popover) button:hover{background:var(--study-hover-screen)}
+html[data-study=terminal] .library-motion-root :is(.library-filter-colors button,.library-filter-colors svg,.library-color-action,.library-source-key-hint kbd,.library-tag-filter>button){border-radius:0;box-shadow:none}
+html[data-study=terminal] .library-filter-dot{display:none}
+/* Background graphics never sit above media, the alphabet, toolbar, or slider. */
+html[data-study=terminal] .library-ambient-light{display:none}
+html[data-study=terminal] .catalog-gallery{isolation:isolate}
+.study-gallery-decoration{display:none;position:absolute;inset:52px 24px 56px;z-index:-1;pointer-events:none;overflow:hidden}
+html[data-study=terminal] .study-gallery-decoration{display:block}
+.study-tactical-marks{position:absolute;inset:0;background:var(--study-mark);opacity:.22;pointer-events:none;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='96' height='88'%3E%3Cpath d='M46 42l4 4m0-4-4 4' fill='none' stroke='black' stroke-width='1'/%3E%3C/svg%3E") repeat;mask-size:96px 88px}
+@media(prefers-reduced-motion:reduce){html[data-study=terminal] .folder-media-card:hover{translate:none!important;rotate:none!important}html[data-study=terminal] :is(.app-topbar,.library-motion-root) *,html[data-study=terminal] :is(.app-topbar,.library-motion-root) *::before,html[data-study=terminal] :is(.app-topbar,.library-motion-root) *::after{animation:none!important;transition:none!important}}
+@media(forced-colors:active){.study-gallery-decoration{display:none!important}html[data-study=terminal] .library-motion-root *::before,html[data-study=terminal] .library-motion-root *::after{display:none!important}html[data-study=terminal] :is(.library-view-switch-thumb,.library-media-switch button[aria-pressed=true]){background:Highlight}html[data-study=terminal] .library-view-switch button[aria-selected=true],html[data-study=terminal] .library-media-switch button[aria-pressed=true]{color:HighlightText}html[data-study=terminal] .folder-media-card.is-selected{outline:2px solid Highlight}}
+@media(max-width:550px){.study-tools small{display:none}.study-tools{bottom:52px;font-size:9px}.study-tools button{padding:5px}}

@@ -90,6 +90,7 @@ try {
     const stage = document.querySelector(".canvas-stage");
     const rect = stage.getBoundingClientRect();
     for (const type of ["dragover", "drop"]) stage.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer, clientX: rect.left + 600, clientY: rect.top + 360 }));
+    element.dispatchEvent(new DragEvent("dragend", { bubbles: true, dataTransfer }));
   });
   await page.waitForFunction(count => window.snapshot().nodes.length === count + 1, nodesBefore);
   assert.equal((await imports()).length, uploadCount);

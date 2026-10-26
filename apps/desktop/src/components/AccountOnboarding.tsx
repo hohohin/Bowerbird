@@ -4,6 +4,7 @@ import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
 import { accountErrorMessage } from "../lib/accountError";
 import { CreditDetails } from "./CreditDetails";
+import { AccountBilling } from "./AccountBilling";
 
 /**
  * Bowerbird 账号面板（独立于「环境状态」总览）：侧栏底部账号区「登录 / 管理账号」唤起，
@@ -40,17 +41,17 @@ export function AccountOnboarding() {
       )}
     >
         {auth?.logged_in ? (
-          <div className="settings-card p-4">
-            <div className="flex items-center gap-2">
+          <div className="space-y-3">
+            <div className="settings-card flex items-center gap-2 p-4">
               {auth.avatar_url && (
                 <img src={auth.avatar_url} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" />
               )}
               <div className="min-w-0">
                 <div className="truncate text-sm text-ink">{auth.display_name || auth.email || auth.user_id}</div>
-                <div className="mt-0.5 text-xs text-muted">当前档位：{entitlement?.tier?.toUpperCase() || "FREE"}</div>
               </div>
             </div>
-            <div className="mt-3"><CreditDetails entitlement={entitlement} /></div>
+            <AccountBilling key={auth.user_id} loggedIn entitlement={entitlement} />
+            <div className="settings-card p-4"><CreditDetails entitlement={entitlement?.offline_state === "expired" || entitlement?.offline_state === "invalid" ? null : entitlement} /></div>
             <button type="button" onClick={() => void logout()} disabled={busy} className="app-modal-button is-danger mt-3">
               {busy && <span className="app-spinner" aria-hidden="true" />}
               登出账号

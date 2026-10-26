@@ -13,10 +13,11 @@ try {
   const page = await context.newPage();
   const errors = []; page.on("pageerror", (e) => errors.push(e.message));
   let denied = false, failIssue = false, issues = 0, exports = 0;
-  let failUserUpdate = false, userUpdates = 0;
+  let failUserUpdate = false, userUpdates = 0, lastUpdatedUserId;
   let holdUserList = false, releaseUserList;
   const users = Array.from({ length: 52 }, (_, i) => ({ id: `33333333-3333-4333-8333-${String(i + 1).padStart(12, "0")}`,
     email: i === 0 ? '<img src=x onerror=alert(1)>@example.test' : `user${i}@example.test`, is_test_account: i === 1, is_admin: i === 0,
+    nickname: i === 0 ? '<img src=x onerror=alert(1)>' : i === 1 || i === 2 ? "小鸟 Bird" : i === 3 ? null : `创作者 ${i}`,
     created_at: "2026-10-22T00:00:00Z", last_sign_in_at: i ? null : "2026-10-22T01:00:00Z" }));
   let batches = [{ id: "11111111-1111-4111-8111-111111111111", label: "九月内测 · 创作者邀请", code_count: 4 }];
   let rows = ["unused", "redeemed", "disabled", "expired"].map((status, i) => ({
@@ -48,12 +49,14 @@ try {
     if (denied) return route.fulfill({ status: 403, json: { error: { message: "此账号没有兑换码管理权限" } } });
     if (body.action === "list_users") {
       if (holdUserList) await new Promise((resolve) => { releaseUserList = resolve; });
-      const filtered = users.filter((u) => (!body.search || `${u.email} ${u.id}`.includes(body.search))
+      const filtered = users.filter((u) => (!body.search || `${u.nickname || ""} ${u.email} ${u.id}`.toLowerCase().includes(body.search.toLowerCase()))
         && (!body.filter || u.is_test_account === (body.filter === "test")));
       return route.fulfill({ json: { rows: filtered.slice(body.page * 50, body.page * 50 + 50), total: filtered.length, page: body.page } });
     }
     if (body.action === "set_test_account") {
       assert.equal(typeof body.enabled, "boolean");
+      assert.deepEqual(Object.keys(body).sort(), ["action", "enabled", "user_id"]);
+      lastUpdatedUserId = body.user_id;
       users.find((u) => u.id === body.user_id).is_test_account = body.enabled; userUpdates++;
       if (failUserUpdate) { failUserUpdate = false; return route.abort("failed"); }
       return route.fulfill({ json: { status: "updated", user_id: body.user_id, is_test_account: body.enabled } });
@@ -136,6 +139,23 @@ try {
   await page.locator("#user-rows tr").first().waitFor();
   assert.equal(await page.locator("#user-rows tr").count(), 50);
   assert.equal(await page.locator("#user-rows img").count(), 0);
+  const firstIdentity = page.locator("#user-rows .user-identity").first();
+  assert.equal(await firstIdentity.evaluate((el) => el.firstChild.textContent), users[0].nickname);
+  assert.equal(await firstIdentity.locator("small").nth(0).textContent(), users[0].email);
+  assert.equal(await firstIdentity.locator(".user-id").textContent(), `ID · ${users[0].id}`);
+  assert.equal(await page.locator("#user-rows .user-identity").nth(3).evaluate((el) => el.firstChild.textContent), "未设置昵称");
+  await page.getByLabel("搜索昵称、邮箱或用户 ID").fill("小鸟 bIRD");
+  await page.locator("#users-filter-form").getByRole("button", { name: "查询" }).click();
+  await page.waitForFunction(() => document.querySelectorAll("#user-rows tr").length === 2);
+  await page.getByRole("button", { name: "设为测试账号", exact: true }).click();
+  await page.locator("#test-account-dialog[open]").waitFor();
+  const confirmation = await page.locator("#test-account-dialog").textContent();
+  for (const identity of [users[2].nickname, users[2].email, users[2].id]) assert.equal(confirmation.includes(identity), true);
+  await page.keyboard.press("Escape");
+  assert.equal(userUpdates, 0);
+  await page.locator("#users-search").fill("");
+  await page.locator("#users-filter-form").getByRole("button", { name: "查询" }).click();
+  await page.waitForFunction(() => document.querySelectorAll("#user-rows tr").length === 50);
   await page.locator("#users-next").click();
   await page.waitForFunction(() => document.querySelectorAll("#user-rows tr").length === 2);
   await page.locator("#users-filter").selectOption("test");
@@ -148,6 +168,8 @@ try {
   await page.locator("#confirm-test-account").click();
   await page.locator("#users-empty").waitFor({ state: "visible" });
   assert.equal(userUpdates, 1);
+  assert.equal(lastUpdatedUserId, users[1].id);
+  assert.equal(users[2].is_test_account, false, "the other user with the same nickname is unchanged");
   await page.locator("#users-filter").selectOption("");
   await page.locator("#users-search").fill("user1@example.test");
   await page.locator("#users-filter-form").getByRole("button", { name: "查询" }).click();

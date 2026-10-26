@@ -38,6 +38,14 @@ ChatGPT <──官方私有 HTTPS 隧道──> stdio MCP 子进程
 
    脚本隐藏输入隧道 runtime key，不把它写入文件或命令参数；退出时恢复原环境变量。该 key 仅供隧道进程使用，MCP 子进程的环境会清理。先 `doctor` 再 `run`，保留窗口运行。后续继续使用同一 profile 时可省略 `-Configure`；更换 ID 时重新配置。
 
+   如果访问 OpenAI 需要本机代理，请显式传入当前代理地址（下面的端口仅为本机示例）。Windows 浏览器能访问 Platform 不代表隧道进程会沿用系统代理：
+
+   ```powershell
+   .\apps\code-reader-mcp\start-tunnel.ps1 -TunnelId tunnel_你的ID -ControlPlaneProxy http://127.0.0.1:7890
+   ```
+
+   此参数只设置官方客户端的 `--control-plane.http-proxy`，不改变系统代理、MCP 文件权限或本机 stdio 连接；代理地址不能包含凭据。
+
 5. 在 ChatGPT 的 [Plugins](https://chatgpt.com/plugins) 添加自定义 MCP，Connection 选择 **Tunnel**，选择相同隧道（或填 ID）。本 stdio 服务无额外 OAuth 登录，应用层选择 **No authentication**；访问控制由私有隧道承担，不能据此改用公网匿名访问。页面入口和可用性以账号实际显示为准。
 
 6. 在启用此工具的聊天中验证：
@@ -45,6 +53,10 @@ ChatGPT <──官方私有 HTTPS 隧道──> stdio MCP 子进程
    > 调用 project_overview，再读取 PROJECT.md 和开发计划，概括 Bowerbird 的当前架构。引用文件路径和行号；区分当前实现和待办。只做分析，不修改任何内容。
 
 只有网页端真实工具调用成功才算接入完成。若没有 Tunnel 入口或看不到隧道，检查工作区关联及权限；不能用猜测的公网 URL 替代。此实现无需 OpenAI 模型 API 调用，但官方隧道需要自己的 runtime key。
+
+### 配置失败时的连接验证
+
+不要仅用 `/healthz` 的 `live` 或 `/readyz` 的 `ready` 判断远端连接成功。通过 `.local/health.url` 指向的本机接口读取 `/health?details=true`，检查 `components.control-plane` 的状态、失败原因与成功轮询证据；`/metrics` 中的 `commands_poll_last_successful_timestamp_seconds` 应为近期非零时间。`network_error`、连续失败且成功时间为 0，说明客户端尚未成功连接控制面，即使网页显示“应用配置受到速率限制”，也应先排查出站网络。随后查看 `/health/mcp` 的初始化和工具发现结果，最终用 ChatGPT 的真实 `project_overview` 调用验收。
 
 ## 只读与保密边界
 
@@ -71,3 +83,5 @@ ChatGPT <──官方私有 HTTPS 隧道──> stdio MCP 子进程
 2026-10-24 启动修复：本机 PATH 同时存在多个 Node，PowerShell `Get-Command` 返回数组，旧脚本将其拼为 `System.Object[]`，导致客户端预检找不到程序。现对 Node/隧道客户端均按 PATH 顺序取第一项，保留路径引号，并将 `init` 预检放在密钥输入前。`test/launcher.test.ps1` 覆盖重复 PATH、空格路径、初始化参数和环境恢复；官方客户端使用隔离的合成隧道 ID 实际执行 `init` 已通过，测试未访问远端隧道。
 
 2026-10-24 用户完成配置后，本机实际核验 tunnel-client 进程运行，`/healthz` 返回 HTTP 200 `live`，`/readyz` 返回 HTTP 200 `ready`。隧道客户端已就绪；尚无 ChatGPT 网页端工具调用成功证据，浏览器内容读取持续超时，不能将健康就绪视为网页端验收完成。保留启动窗口运行，再在 ChatGPT 添加/启用同一隧道并调用 `project_overview` 验证。失败退出会恢复原密钥环境，不保存新输入的 key，重试需在本机重新输入。服务实现 MCP 的 stdio 基础生命周期与工具子集，不提供 HTTP/SSE、资源订阅或 sampling。
+
+2026-10-26 更正连接判断：重启后虽然 `live/ready` 为 200，详细健康状态却显示控制面 `network_error`、29 次连续失败、从未成功轮询，MCP 初始化尚未被观察到。无凭据网络探测直连 OpenAI 超时，经用户现有 Windows 代理 `127.0.0.1:7890` 收到预期 HTTP 401（未携带 key），证明代理路径可达，不代表凭据鉴权通过。启动脚本增加显式控制面代理参数，默认直连、参数透传和拒绝带凭据/路径的代理地址测试通过；用户输入 key 后，2026-10-26 10:03（北京时间）核验控制面 status=ok、state=polling，last_success 为 10:02:41、consecutive_failures=0，代理 healthy，成功轮询指标非零；启动期曾有一次 timeout，随后已恢复。MCP initialize/tools_list 仍为 not_observed，尚未收到网页端发现请求，网页端验收仍待完成。

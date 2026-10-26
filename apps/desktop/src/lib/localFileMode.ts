@@ -7,7 +7,7 @@ export const catalogViews = (media: LibraryMedia): CatalogKind[] => media === "i
 export const catalogViewName = (kind: CatalogKind, media: LibraryMedia) => kind === "all" ? "全部" : kind === "collections" ? "集合分类" : media === "videos" ? "视频平铺" : "标签分类";
 // "global" here is the file browser's aggregate directory, not a source tab.
 type FileMode = CatalogKind | "files" | "global";
-export const useLocalFileMode = create<{
+export const createLocalFileMode = () => create<{
   open: boolean; query: string;
   source: LibrarySource;
   views: Record<LibrarySource, CatalogKind>;
@@ -58,3 +58,5 @@ export const useLocalFileMode = create<{
   setOpen: value => set(state => ({ open: typeof value === "function" ? value(state.open) : value, viewTransition: null })),
   setQuery: query => set({ query }),
 }));
+
+export const useLocalFileMode = createLocalFileMode();

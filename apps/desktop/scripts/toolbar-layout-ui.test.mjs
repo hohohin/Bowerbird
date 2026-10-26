@@ -16,8 +16,10 @@ try {
   for (const mode of ["library", "canvas"]) {
     await page.goto(`http://127.0.0.1:1581/scripts/fixtures/project-drop/preview.html?layout${mode === "canvas" ? "&canvas-toolbar" : ""}`);
     await page.getByRole("button", { name: "探索", exact: true }).waitFor();
-    await page.getByRole('tab',{name:'文件浏览器',exact:true}).click();
-    await page.locator('.app-file-navigation-slot').waitFor();
+    const more=page.getByRole('button',{name:'更多素材库控件',exact:true});
+    if(await more.isVisible()) await more.click();
+    await page.getByRole('button',{name:'文件浏览器',exact:true}).click();
+    await page.getByRole('group',{name:'文件夹地址栏',exact:true}).waitFor();
     for (const theme of ["light", "dark"]) {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
       // Include the native minimum width and both sides of every toolbar breakpoint.
@@ -28,17 +30,18 @@ try {
           await page.waitForFunction(busy => document.querySelector('.app-topbar').getAttribute('aria-busy') === String(busy), busy);
           const layout = await page.locator(".app-topbar").evaluate(el => {
             const bar = el.getBoundingClientRect();
-            const groups = [".app-topbar-leading", ".app-search", ".app-topbar-actions", ".app-file-navigation-slot"].map(selector => el.querySelector(selector).getBoundingClientRect());
+            const groups = [".app-topbar-leading", ".app-topbar-actions"].map(selector => el.querySelector(selector).getBoundingClientRect());
             const controls = [...el.querySelectorAll("button, input")].map(control => control.getBoundingClientRect()).filter(box => box.width > 0 && box.height > 0);
             const labels = [...el.querySelectorAll('.app-topbar-button-label')];
             const surfaces = [...el.querySelectorAll('.app-topbar-leading > button, .app-topbar-import > button, .app-search input, .library-view-segments, .app-topbar-actions > button, .task-center-trigger')];
             return {
               height: bar.height,
               aligned: groups.every(box => Math.abs(box.y + box.height / 2 - (groups[0].y + groups[0].height / 2)) < 1),
-              searchWidth: groups[1].width,
+              searchHidden: el.querySelector('.app-search') === null,
               labelsVisible: labels.every(label => label.getBoundingClientRect().width > 0 && label.getBoundingClientRect().height > 0),
               controlHeights: surfaces.map(control => control.getBoundingClientRect().height),
               controlRadii: surfaces.map(control => getComputedStyle(control).borderTopLeftRadius),
+              tactical: el.classList.contains('library-tactical'),
               overflow: el.scrollWidth > el.clientWidth,
               contained: controls.every(box => box.left >= bar.left && box.right <= bar.right && box.top >= bar.top && box.bottom <= bar.bottom),
               overlap: controls.some((a, i) => controls.slice(i + 1).some(b => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top)),
@@ -47,10 +50,10 @@ try {
           const context = JSON.stringify({ mode, theme, width, busy, layout });
           assert.equal(layout.height, 64, context);
           assert.equal(layout.aligned, true, context);
-          assert.ok(layout.searchWidth >= 56, context);
-          assert.equal(layout.labelsVisible, width > 900, context);
+          assert.equal(layout.searchHidden, true, context);
+          assert.equal(layout.labelsVisible, true, context);
           assert.ok(layout.controlHeights.every(height => height === 36), context);
-          assert.ok(layout.controlRadii.every(radius => radius === '8px'), context);
+          assert.ok(layout.controlRadii.every(radius => radius === (layout.tactical ? '0px' : '8px')), context);
           assert.equal(layout.overflow, false, context);
           assert.equal(layout.contained, true, context);
           assert.equal(layout.overlap, false, context);
@@ -62,15 +65,13 @@ try {
       await page.setViewportSize({ width: 1280, height: 900 });
       await page.screenshot({ path: `.tmp/toolbar-layout/${mode}-${theme}-1280.png` });
     }
-    // Narrow search remains editable and clearable; menus remain unclipped.
+    // Hidden search has no keyboard focus target; menus remain unclipped.
     await page.setViewportSize({ width: 900, height: 900 });
     assert.equal(await page.getByRole("button", { name: "打开本机文件资源管理器", exact: true }).count(), 0);
     await page.getByRole("button", { name: "导入", exact: true }).focus();
     await page.keyboard.press("/");
-    assert.equal(await page.getByRole("textbox", { name: "搜索当前文件夹", exact: true }).evaluate(el => el === document.activeElement), true);
-    await page.getByRole('textbox', { name: '搜索当前文件夹', exact: true }).fill('长搜索词测试');
-    await page.getByRole('button', { name: '清除搜索', exact: true }).click();
-    assert.equal(await page.getByRole('textbox', { name: '搜索当前文件夹', exact: true }).inputValue(), '');
+    assert.equal(await page.getByRole("button", { name: "导入", exact: true }).evaluate(el => el === document.activeElement), true);
+    assert.equal(await page.locator('.app-search').count(),0);
     await page.keyboard.press("Escape");
     await page.getByRole("button", { name: "导入", exact: true }).click();
     const importItem = page.getByRole("menuitem", { name: "导入图片或视频", exact: true });
@@ -81,7 +82,7 @@ try {
     }), true);
   }
   assert.deepEqual(errors, []);
-  console.log("Toolbar layout: library/canvas with file navigation, light/dark, 900–1920px, idle/importing, responsive labels, uniform 36px height/8px radius, single row, no overlaps/clipping, search input/clear and import popup passed.");
+  console.log("Toolbar layout: library/canvas, light/dark, 900–1920px, idle/importing, hidden search, uniform controls, single row, no overlaps/clipping and import popup passed.");
 } finally {
   await browser.close();
   await server.close();

@@ -34,6 +34,25 @@ try {
     if ('--mcp.stdio-send-initialized-notification' -notin $call) { throw 'Missing MCP initialization flag' }
   }
   if ($env:CONTROL_PLANE_API_KEY -ne 'fixture-local-only') { throw 'Environment was not restored' }
+  foreach ($call in $calls) {
+    if ('--control-plane.http-proxy' -in $call) { throw 'Proxy must remain opt-in' }
+  }
+  $calls.Clear()
+  & (Join-Path $PSScriptRoot '../start-tunnel.ps1') -TunnelId tunnel_fixture -TunnelClient fixture-tunnel -ControlPlaneProxy 'http://127.0.0.1:7890'
+  if ($calls.Count -ne 2) { throw 'Expected doctor and run when reusing profile' }
+  foreach ($call in $calls) {
+    $proxyIndex = [array]::IndexOf($call, '--control-plane.http-proxy')
+    if ($proxyIndex -lt 0 -or $call[$proxyIndex + 1] -ne 'http://127.0.0.1:7890') { throw 'Missing explicit control-plane proxy' }
+    if ('--http-proxy' -in $call) { throw 'Proxy must not apply to local MCP' }
+  }
+  foreach ($invalidProxy in @('http://user:secret@localhost:7890', 'file:///tmp/proxy', 'http://localhost:7890/private', 'http://localhost:7890?key=secret')) {
+    $calls.Clear()
+    $rejected = $false
+    try { & (Join-Path $PSScriptRoot '../start-tunnel.ps1') -TunnelId tunnel_fixture -TunnelClient fixture-tunnel -ControlPlaneProxy $invalidProxy }
+    catch { $rejected = $true }
+    if (-not $rejected -or $calls.Count -ne 0) { throw 'Invalid proxy must fail before starting a process' }
+  }
+  Write-Output 'PASS: explicit control-plane proxy forwarding, default direct mode and unsafe proxy URL rejection'
   Write-Output 'PASS: multiple PATH matches, space quoting, command order, initialization flags and key environment restoration'
 }
 finally { $env:CONTROL_PLANE_API_KEY = $previousKey }

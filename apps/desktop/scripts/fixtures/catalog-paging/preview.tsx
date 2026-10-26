@@ -1,5 +1,9 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
+import { FileDropImport } from "../../../src/components/FileDropImport";
+import { Toolbar } from "../../../src/components/Toolbar";
+import { LibraryHome } from "../../../src/components/LibraryHome";
 import { CategorizedLibrary } from "../../../src/components/CategorizedLibrary";
 import { useLocalFileMode } from "../../../src/lib/localFileMode";
 import { useStore } from "../../../src/store";
@@ -13,7 +17,7 @@ const thumb = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www
 w.total = 300000; w.requests = []; w.inFlight = 0; w.maxInFlight = 0; w.failOffset = -1; w.delay = 0;
 w.mode = useLocalFileMode; w.store = useStore;
 const asset = (i: number) => ({ id: `asset-${i}`, name: `素材${i}.png`, ext: "png", source: "imported", width: 240, height: i % 5 ? 160 : 320,
-  store_path: `/asset-${i}.png`, thumb_path: thumb, generation_session_id: i % 2 ? "generated" : null });
+  store_path: `/asset-${i}.png`, thumb_path: i === 0 ? null : thumb, generation_session_id: i % 2 ? "generated" : null });
 function range(f: CatalogFilter) {
   let first = f.id === "last" ? Math.max(0,w.total - 60) : 0;
   let count = f.id === "last" ? Math.min(60,w.total) : w.total;
@@ -32,6 +36,12 @@ w.__TAURI_INTERNALS__ = {
     if (command === "plugin:event|listen") return args.handler;
     if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return; }
     w.requests.push({command,args});
+    if (command === "file_workspace_status") return { config: { root: "C:/library", places: [], projects: {} }, proposed_root: "C:/library" };
+    if (command === "external_files_browse") return { path: args.path ?? "C:/library", parent: null, entries: [], total: 0 };
+    if (command === "folder_classification_view") return { root: args.path, record: { labels: [], pictures: [] }, counts: [] };
+    if (command === "claim_source_browser_analysis") return false;
+    if (command === "release_source_browser_analysis") return;
+    if (command === "capture_source_browser_image") { w.captured = args; return asset(0); }
     if(command === "catalog_prepare_colors") return {after:null,more:false,failed:0,updated:0};
     if (command === "catalog_overview") {
       if (args.filter.query === "slow") await new Promise(r => setTimeout(r,400));
@@ -55,7 +65,8 @@ w.__TAURI_INTERNALS__ = {
       return Array.from({length:Math.min(args.limit,Math.max(0,count-args.offset))},(_,i)=>`asset-${first+args.offset+i}`);
     }
     if (command === "get_assets_by_ids") return args.assetIds.map((id:string)=>asset(Number(id.split('-')[1])));
-    if (command === "external_file_media") return thumb;
+    if (command === "external_files_preview" || command === "external_files_media") return thumb;
+    if (command === "local_classification_example") { w.classified = args; return; }
     if (command === "set_collection_members") { w.assigned = args.assetIds; return; }
     throw new Error(`Unexpected IPC: ${command}`);
   },
@@ -70,4 +81,9 @@ function Fixture() {
     navigation={<input aria-label="搜索素材" onChange={e=>useLocalFileMode.getState().setQuery(e.target.value)}/>}
     onClose={()=>{}} onCreateProject={async ids=>{w.created=ids;}}/></div>;
 }
-createRoot(document.getElementById("root")!).render(<Fixture/>);
+function SplitFixture() {
+  const [open, setOpen] = React.useState(false);
+  w.setExploreOpen = setOpen;
+  return <div style={{position:"fixed",inset:0,display:"flex",flexDirection:"column"}}><Toolbar localFilesOpen canvasMode={false} onCanvasModeChange={() => {}} onRefresh={async () => {}} onCreateCreative={() => {}}/><FileDropImport/><ExploreWorkspace url={null} open={open} onClose={() => setOpen(false)}><LibraryHome/></ExploreWorkspace></div>;
+}
+createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("split") ? <SplitFixture/> : <Fixture/>);

@@ -149,7 +149,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
               aspectRatio={cell.ratio} selected={selected.has(asset.id)} revision={revision} labels={[]} assetId={asset.id} generated={asset.generation_session_id != null}
               onSelect={(additive, range) => onSelect(asset, additive, range, { section: section.id, index: block.offset + index })}
               onActivate={onActivate ? () => onActivate(asset) : undefined} onOpen={() => onOpen(asset)} onContextMenu={(x,y) => onContextMenu(asset,x,y)}
-              onDragStart={event => { const ids = selected.has(asset.id) ? [...selected] : [asset.id]; setDragAssets(ids); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", ids.join(",")); }} onDragEnd={() => setDragAssets(null)}/>;
+              onDragStart={event => { const ids = selected.has(asset.id) ? [...selected] : [asset.id]; setDragAssets(ids, asset.name, event.currentTarget.querySelector("img")?.src); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", ids.join(",")); }} onDragEnd={() => setDragAssets(null)}/>;
           })}
         </div>;
       })}
