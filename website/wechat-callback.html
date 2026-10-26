@@ -3,105 +3,147 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
   <title>微信登录 · Bowerbird</title>
-  <style>
-    :root { color-scheme: light; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-      font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-      background: #f6f6f4; color: #1c1c1a;
-    }
-    .card {
-      width: min(92vw, 380px); padding: 32px 28px; border-radius: 16px; background: #fff;
-      border: 1px solid #e5e5e0; box-shadow: 0 10px 30px rgba(0, 0, 0, .06); text-align: center;
-    }
-    .logo { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
-    .status { margin-top: 14px; font-size: 14px; line-height: 1.7; color: #55554f; }
-    .spinner {
-      margin: 18px auto 0; width: 22px; height: 22px; border-radius: 50%;
-      border: 2.5px solid #e2e2dc; border-top-color: #16a34a; animation: spin .8s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .error { color: #b91c1c; }
-    a.button {
-      display: inline-block; margin-top: 20px; padding: 9px 22px; border-radius: 999px;
-      background: #16a34a; color: #fff; font-size: 14px; text-decoration: none; font-weight: 600;
-    }
-    a.secondary { display: inline-block; margin-top: 12px; font-size: 13px; color: #7a7a72; }
-    .hidden { display: none; }
-  </style>
+  <link rel="icon" type="image/png" href="./assets/logo.png" />
+  <link rel="stylesheet" href="./wechat-callback.css" />
 </head>
 <body>
-  <main class="card">
-    <div class="logo">🐦 Bowerbird</div>
-    <div id="status" class="status">正在处理微信登录…</div>
-    <div id="spinner" class="spinner"></div>
-    <a id="primary" class="button hidden" href="/">回到 Bowerbird 官网</a>
-    <a id="secondary" class="secondary hidden" href="/">bowerbird.cn</a>
-  </main>
+  <div class="page-shell">
+    <header class="page-header">
+      <div class="brand"><img src="./assets/logo.png" width="30" height="30" alt=""><span>Bowerbird</span></div>
+      <span class="header-label">微信登录</span>
+    </header>
+    <main class="page-main">
+      <article id="login-card" class="login-card" aria-labelledby="status-title" data-state="processing">
+        <div class="logo-wrap"><img src="./assets/logo.png" width="80" height="80" alt="Bowerbird 园丁鸟标志"></div>
+        <div class="status-eyebrow"><span id="spinner" class="status-dot" aria-hidden="true"></span><span id="status-eyebrow">正在验证登录</span></div>
+        <div id="status-copy" class="status-copy" role="status" aria-live="polite" aria-atomic="true">
+          <h1 id="status-title">正在完成微信登录</h1>
+          <p id="status">请稍候，正在确认你的登录信息。</p>
+        </div>
 
+        <div class="journey" id="journey" hidden aria-label="登录进度：已收到微信授权，等待返回应用，登录尚未完成">
+          <div class="journey-step is-complete"><span class="step-marker"><svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m5.2 10.1 3.1 3.1 6.5-6.5"/></svg></span><span>微信授权</span></div>
+          <span class="step-line" aria-hidden="true"></span>
+          <div class="journey-step is-current"><span class="step-marker"><span class="small-dot"></span></span><span>返回应用</span></div>
+          <span class="step-line is-pending" aria-hidden="true"></span>
+          <div class="journey-step is-pending"><span class="step-marker">3</span><span>完成登录</span></div>
+        </div>
+
+        <div class="help-box" id="help-box" hidden>
+          <svg class="help-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2.5"/><path d="M8 21h8m-4-4v4"/></svg>
+          <div><strong id="help-title">允许浏览器打开应用</strong><p id="help-description">出现提示时，选择「打开 Bowerbird」。</p></div>
+        </div>
+
+        <a class="primary-button" id="primary" href="/" hidden><span id="primary-label">打开 Bowerbird</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg></a>
+        <p class="action-hint" id="action-hint" hidden>没有自动打开？可以点击上方按钮。</p>
+        <div class="card-footer"><span id="footer-note">请稍候，登录完成后将自动返回</span></div>
+      </article>
+      <p class="trust-note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="6" y="10" width="12" height="10" rx="2"/><path d="M8.5 10V7a3.5 3.5 0 0 1 7 0v3"/></svg><span id="trust-label">正在安全验证登录信息</span></p>
+    </main>
+    <footer class="page-footer"><span>灵感在这里，创作继续。</span><a id="secondary" href="/">回到官网<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M5 15 15 5M6 5h9v9"/></svg></a></footer>
+  </div>
   <script type="module">
     import { reportUserError } from "./user-error.js";
-    // 微信授权回调中转页（授权回调域必须是本备案域名，不能直接回调 *.supabase.co）。
-    // state 前缀分流：dt_ = 桌面端（跳 bowerbird:// deep link）；web_ = 官网（本页换会话）。
+    // dt_ 回调仅将一次性 code 交回桌面；web_ 回调在本站校验 state 后换取会话。
     (function () {
+      var card = document.getElementById("login-card");
       var status = document.getElementById("status");
+      var title = document.getElementById("status-title");
+      var eyebrow = document.getElementById("status-eyebrow");
+      var statusCopy = document.getElementById("status-copy");
       var spinner = document.getElementById("spinner");
       var primary = document.getElementById("primary");
-      var secondary = document.getElementById("secondary");
+      var primaryLabel = document.getElementById("primary-label");
+      var journey = document.getElementById("journey");
+      var help = document.getElementById("help-box");
+      var helpTitle = document.getElementById("help-title");
+      var helpDescription = document.getElementById("help-description");
+      var hint = document.getElementById("action-hint");
+      var footer = document.getElementById("footer-note");
+      var trust = document.getElementById("trust-label");
       var WECHAT_LOGIN_STATE_KEY = "bowerbird.wechatLoginState";
       var SUPABASE_FUNCTION_REGION = "ap-northeast-1";
-
-      function done(message, isError, primaryHref, primaryText) {
-        spinner.classList.add("hidden");
-        status.textContent = message;
-        status.className = isError ? "status error" : "status";
-        if (primaryHref) {
-          primary.textContent = primaryText || "回到 Bowerbird 官网";
-          primary.setAttribute("href", primaryHref);
-          primary.classList.remove("hidden");
-        }
-        secondary.classList.remove("hidden");
-      }
-
       var query = new URLSearchParams(window.location.search);
       var code = query.get("code") || "";
       var state = query.get("state") || "";
       var wxError = query.get("error_description") || query.get("error") || "";
 
+      function setStatus(kind, heading, message) {
+        card.dataset.state = kind;
+        title.textContent = heading;
+        status.textContent = message;
+        statusCopy.setAttribute("role", kind === "error" ? "alert" : "status");
+        spinner.hidden = kind === "error" || kind === "success";
+      }
+
+      function showAction(href, label) {
+        primary.setAttribute("href", href);
+        primaryLabel.textContent = label;
+        primary.hidden = false;
+      }
+
+      function showError(message) {
+        setStatus("error", "这次登录未完成", message);
+        eyebrow.textContent = "登录尚未完成";
+        journey.hidden = true;
+        help.hidden = false;
+        helpTitle.textContent = "重新扫码即可继续";
+        helpDescription.textContent = state.indexOf("dt_") === 0
+          ? "请切回 Bowerbird 应用，从登录入口获取新的二维码。"
+          : "请回到发起登录的页面，重新获取二维码。";
+        showAction("/", "回到官网");
+        hint.hidden = true;
+        footer.textContent = "此页面不会继续提交本次登录";
+        trust.textContent = "重新扫码后，请在微信中确认授权";
+      }
+
       if (wxError) {
-        done("微信登录未完成，请回到发起页重新扫码。", true);
+        showError("微信登录未完成，请回到发起页重新扫码。");
         return;
       }
       if (!code || !state) {
-        done("登录链接不完整，请回到发起页重新扫码。", true);
+        showError("登录链接不完整，请回到发起页重新扫码。");
         return;
       }
 
       if (state.indexOf("dt_") === 0) {
-        // 桌面端：把一次性 code 交回本机的 Bowerbird，token 不经过浏览器。
-        status.textContent = "正在返回 Bowerbird 桌面应用…";
-        window.location.replace("bowerbird://wechat/callback?code=" + encodeURIComponent(code) + "&state=" + encodeURIComponent(state));
-        // 浏览器可能拦截自定义协议；保留手动重试入口。
+        var desktopHref = "bowerbird://wechat/callback?code=" + encodeURIComponent(code) + "&state=" + encodeURIComponent(state);
+        setStatus("returning", "准备返回 Bowerbird", "请在浏览器弹出的提示中选择「打开」。\n我们将在应用中继续完成登录。");
+        eyebrow.textContent = "正在连接应用";
+        journey.hidden = false;
+        hint.textContent = "没有自动打开？可以点击上方按钮。";
+        hint.hidden = false;
+        footer.textContent = "完成登录后，即可关闭此页面";
+        trust.textContent = "登录结果以应用内显示为准";
+        // 自动导航前先准备原生链接，手动点击保留浏览器的用户手势。
+        showAction(desktopHref, "打开 Bowerbird");
         setTimeout(function () {
-          done("如果没有自动返回，请点击下方按钮重试（需已安装 Bowerbird 桌面版）。", false,
-            "bowerbird://wechat/callback?code=" + encodeURIComponent(code) + "&state=" + encodeURIComponent(state),
-            "打开 Bowerbird");
+          // 网页无法确认桌面登录结果；只提供重试提示，不宣称打开或登录失败。
+          setStatus("retry", "回到应用，继续登录", "Bowerbird 还没有打开？\n点击下方按钮，再试一次。");
+          eyebrow.textContent = "等待返回应用";
+          journey.hidden = true;
+          help.hidden = false;
+          helpTitle.textContent = "允许浏览器打开应用";
+          helpDescription.textContent = "出现提示时，选择「打开 Bowerbird」。";
+          showAction(desktopHref, "再次打开 Bowerbird");
+          hint.textContent = "请先确认这台电脑已安装 Bowerbird。";
+          footer.textContent = "已经在应用内完成登录？可以关闭此页面";
         }, 1200);
+        try { window.location.replace(desktopHref); } catch (e) { /* 自动回跳被拦截时，仍可点击手动链接。 */ }
         return;
       }
 
       if (state.indexOf("web_") !== 0) {
-        done("无法识别的登录来源；请回到官网重新发起微信登录。", true);
+        showError("无法识别的登录来源；请回到官网重新发起微信登录。");
         return;
       }
 
-      // 官网：校验 sessionStorage 的 state（CSRF），再换取会话写入本站。
       var expected = null;
       try { expected = window.sessionStorage.getItem(WECHAT_LOGIN_STATE_KEY); } catch (e) { /* 隐私模式 */ }
       if (!expected || expected !== state) {
-        done("登录会话不匹配；请回到官网重新发起微信登录。", true);
+        showError("登录会话不匹配；请回到官网重新发起微信登录。");
         return;
       }
 
@@ -149,11 +191,15 @@
         })
         .then(function () {
           try { window.sessionStorage.removeItem(WECHAT_LOGIN_STATE_KEY); } catch (e) { /* 忽略 */ }
-          status.textContent = "微信登录成功，正在回到官网…";
+          setStatus("success", "微信登录成功", "正在回到官网…");
+          eyebrow.textContent = "已完成登录";
+          showAction("/", "回到官网");
+          footer.textContent = "登录已完成，可以继续创作了";
+          trust.textContent = "即将返回 Bowerbird 官网";
           window.setTimeout(function () { window.location.replace("/"); }, 600);
         })
         .catch(function (error) {
-          done(reportUserError(error, "微信登录未完成，请回到官网重新扫码。"), true);
+          showError(reportUserError(error, "微信登录未完成，请回到官网重新扫码。"));
         });
     })();
   </script>

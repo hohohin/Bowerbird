@@ -217,5 +217,74 @@
         "sha256": "9fbb6376dd721c8b3b625c68d839a6fded170f1d77241d85b12441180a912b65"
       }
     ]
+  },
+  "clockwiseRevision": {
+    "date": "2026-10-26",
+    "description": "Emphasized neutral project entry without hover shadow; four markers move clockwise one corner in 400ms; control transparency reduced by 20%.",
+    "file": "integration-clockwise.patch",
+    "sha256": "01c744a458585ab7736328998c65383b74bf67b79eece7e8a3301bc735de5950",
+    "integrationHashFormat": "SHA-256 of UTF-8 text with LF line endings",
+    "integrationFiles": [
+      {
+        "source": "apps/desktop/src/components/Toolbar.tsx",
+        "sha256": "472427e2a5d3ad74cf99c75761b15f788f50f6398465584df9c0231ffb8eee72"
+      },
+      {
+        "source": "apps/desktop/src/components/LibraryHome.tsx",
+        "sha256": "e5f5450c7e336b2ac3078b0576a8b717ba68647ba428e2b31cb84526bd2fd907"
+      },
+      {
+        "source": "apps/desktop/src/components/CategorizedLibrary.tsx",
+        "sha256": "45e7d13fbf7b91c278a2b5c39ebed7d7a336f3d923d4dc241b006d2304383d17"
+      },
+      {
+        "source": "apps/desktop/src/components/LocalFileWorkspace.tsx",
+        "sha256": "ea0690e81a35476eccfccbfdabdffc68471724439751f075c7cb5ae0ccc09145"
+      },
+      {
+        "source": "apps/desktop/src/components/LibraryMotion.tsx",
+        "sha256": "e54abb25e7e52027738b455057cab84e2ad14583aeb6978fad5a0179ce73159b"
+      },
+      {
+        "source": "apps/desktop/scripts/toolbar-layout-ui.test.mjs",
+        "sha256": "b112b38889fae3262a3fa3cdc325254a02ea85b60a5a87fd7c6febbb8116a9e2"
+      },
+      {
+        "source": "apps/desktop/scripts/library-subtle-motion-ui.test.mjs",
+        "sha256": "f1dca0473cfcbdec51b5bd338798bc5ccb3ae22e744955f6e8127e4250971229"
+      },
+      {
+        "source": "apps/desktop/src/components/LibraryTactical.css",
+        "sha256": "7d0bc653898c57d9daad27a017e0ed18ee8978250d69be697e8050fd81fb0e39"
+      },
+      {
+        "source": "apps/desktop/src/components/LibraryTacticalBackdrop.tsx",
+        "sha256": "da24af1e99477980e231c0049cbbcf9f9f3b1134df9ef7eda684b855bcacd9fe"
+      },
+      {
+        "source": "apps/desktop/scripts/library-tactical-ui.test.mjs",
+        "sha256": "c1bca4f8071a2782f1168334fb3d95562c66078fa236cc874ca6d05437cb4bed"
+      },
+      {
+        "source": "apps/desktop/scripts/fixtures/library-tactical/preview.html",
+        "sha256": "bd6d1660f1fa2ca3a2cc11e6a1843d109d8a1b5b7e4a4be8b0ec8a7104230f12"
+      },
+      {
+        "source": "apps/desktop/scripts/fixtures/library-tactical/preview.tsx",
+        "sha256": "9fbb6376dd721c8b3b625c68d839a6fded170f1d77241d85b12441180a912b65"
+      }
+    ]
+  },
+  "lightGrayRevision": {
+    "date": "2026-10-26",
+    "description": "Only change the light library base from #f5f4f0 to #e6e7e5; reverse this patch before integration-clockwise.patch.",
+    "file": "light-gray.patch",
+    "sha256": "18a202dba8d95f6fb71913e73fc372a2d9df7484b3ebd01ab8974ce21106d1d7"
+  },
+  "zonesRevision": {
+    "date": "2026-10-26",
+    "description": "Trial zone surfaces: remove the hatchbar, distinguish toolbar/sidebar/gallery surfaces and add pixels only in the spare toolbar track. Incremental App.tsx and LibraryTactical.css changes from this round's starting snapshots; reverse before light-gray.patch and integration-clockwise.patch.",
+    "file": "zones.patch",
+    "sha256": "0bfe8ef554dac3e0e7692e0edba5842c05b38e09498de937314d18f05db82d26"
   }
 }

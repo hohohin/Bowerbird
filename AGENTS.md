@@ -14,6 +14,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/FOLDER-MODE.md` | 文件优先工作区、独立分类、随图资料恢复、BowerbirdLibrary/历史素材迁移及共享文件转存 | 本机目录、文件夹分类、随图资料、资料迁移或项目删除文件归属相关工作前必读 |
 | `dev-doc/LOCAL-CLASSIFICATION.md` | 自动分类、Jev 图片匹配与 Cloud 补标签、本地模型包、人工保护与验证记录 | 自动/本地分类、Jev 图片判断、自动标签、分类模型下载与运行时相关工作前必读 |
 | `dev-doc/EMBEDDED-BROWSER.md` | 探索内置浏览器、登录资料持久化、网页拖图入库/画板落点、素材栏折叠与隔离 WebView2 验证 | 内置浏览器、探索工作区、网页拖图、探索联动画板素材栏与登录状态相关工作前必读 |
+| `apps/extension/README.md` | 浏览器插件安装／更新、探索页配置入口、浏览器取图与本机入库协议、独立副本及隔离测试 | 浏览器插件采集、配置教程、扩展打包或 Windows 独立加载副本相关工作前必读 |
 | `dev-doc/ONBOARDING.md` | 身份实操引导、三条真实操作路线、独立项目与进度恢复、跳步及隔离验证 | 入门引导、首启/升级介绍、引导素材导入或学习提示相关工作前必读 |
 | `dev-doc/DESKTOP-UPDATES.md` | 双端自动更新协议、密钥与发布流程、部署/回滚证据、验收边界及 Mac 协作共识 | 自动更新、更新包签名/清单发布、更新失败或双端上线状态核验前必读 |
 | `dev-doc/USER-FACING-ERRORS.md` | 全应用错误提示展示边界、中文转换、诊断保留与故障注入验证 | 新增或修改错误提示、任务失败展示、通知、安装授权及生产错误排查前必读 |

@@ -1,0 +1,214 @@
+{
+  "date": "2026-10-26",
+  "scope": "Approved structure and project-panel palette integration, with restrained project-button background. Six-file incremental snapshot; four production files and two matching UI tests.",
+  "files": [
+    {
+      "source": "apps/desktop/src/components/LibraryTactical.css",
+      "before": {
+        "file": "before/apps/desktop/src/components/LibraryTactical.css",
+        "sha256": "b34338466f31f43f520bc6b588a81aca8d6d20fe365c6a113541408fd5ea31ed",
+        "origin": ".tmp/library-approved-integration-before/apps/desktop/src/components/LibraryTactical.css"
+      },
+      "after": {
+        "file": "after/apps/desktop/src/components/LibraryTactical.css",
+        "sha256": "0393ea57cdbe4c81f7dcee6e334d873010702882275879721dc7958120615341"
+      }
+    },
+    {
+      "source": "apps/desktop/src/components/Toolbar.tsx",
+      "before": {
+        "file": "before/apps/desktop/src/components/Toolbar.tsx",
+        "sha256": "a2a8334daa0d776ad129e8f75ce00a20fc13382e56325271bb5b4b69e21ce6a7",
+        "origin": ".tmp/library-approved-integration-before/apps/desktop/src/components/Toolbar.tsx"
+      },
+      "after": {
+        "file": "after/apps/desktop/src/components/Toolbar.tsx",
+        "sha256": "faf4958af672692cca415b44617361efc5d91f12f6d056bfd8a6f4b5ad0c7129"
+      }
+    },
+    {
+      "source": "apps/desktop/src/components/CategorizedLibrary.tsx",
+      "before": {
+        "file": "before/apps/desktop/src/components/CategorizedLibrary.tsx",
+        "sha256": "cdf6af7fd578f8a5b7ed0477e08a8b501116cd49416914e9dada420891004107",
+        "origin": ".tmp/library-approved-integration-before/apps/desktop/src/components/CategorizedLibrary.tsx"
+      },
+      "after": {
+        "file": "after/apps/desktop/src/components/CategorizedLibrary.tsx",
+        "sha256": "a3156e51ef38d9ee1eaa86192b6c452c13864914f73a66009616fb877d35e5f9"
+      }
+    },
+    {
+      "source": "apps/desktop/src/components/VirtualCatalog.tsx",
+      "before": {
+        "file": "before/apps/desktop/src/components/VirtualCatalog.tsx",
+        "sha256": "21cf5f7b30252ab84351c20c86dbadbc19d1aa1952330c7502b6a583e8dcc997",
+        "origin": ".tmp/library-approved-integration-before/VirtualCatalog.tsx"
+      },
+      "after": {
+        "file": "after/apps/desktop/src/components/VirtualCatalog.tsx",
+        "sha256": "6a9252fc49d34ab2b73e2265f1f5eacac93b2dbba23ea77ade222cddc92cdd38"
+      }
+    },
+    {
+      "source": "apps/desktop/scripts/library-tactical-ui.test.mjs",
+      "before": {
+        "file": "before/apps/desktop/scripts/library-tactical-ui.test.mjs",
+        "sha256": "6defa0a9f9f60455bfa3b877cbf5b9d3e2b997bc60a8d369de7d610ea2e1c555",
+        "origin": ".tmp/library-approved-integration-before/apps/desktop/scripts/library-tactical-ui.test.mjs"
+      },
+      "after": {
+        "file": "after/apps/desktop/scripts/library-tactical-ui.test.mjs",
+        "sha256": "e0c3587b8d9869bf57301b657b93ac66d18a4e561f908fdb044cf6e36b209b34"
+      }
+    },
+    {
+      "source": "apps/desktop/scripts/toolbar-layout-ui.test.mjs",
+      "before": {
+        "file": "before/apps/desktop/scripts/toolbar-layout-ui.test.mjs",
+        "sha256": "b112b38889fae3262a3fa3cdc325254a02ea85b60a5a87fd7c6febbb8116a9e2",
+        "origin": "Current file with only this integration's control-height assertion restored to height === 36"
+      },
+      "after": {
+        "file": "after/apps/desktop/scripts/toolbar-layout-ui.test.mjs",
+        "sha256": "788d22f66fad4b3a6a2b7ab6bb003f30db8e2b51ec7432a4a90a170770d104a6"
+      }
+    }
+  ],
+  "frozenArchive": {
+    ".gitattributes": "100bf3e3e048223d4ee659196aa13c6d0b9fc5d4ef1a3f16db031bab8ac100a5",
+    "integration-clockwise.patch": "01c744a458585ab7736328998c65383b74bf67b79eece7e8a3301bc735de5950",
+    "integration-with-focus-fix.patch": "4bfc1c2f5e3c81462f9f8c2ed4a1986cbf1f29a79b78cb3d34af9f11a35a64ad",
+    "integration.patch": "00b1d117b5dc987fe710fb90627a06a72c1179c15b5abba2b661721e74175b32",
+    "light-gray.patch": "18a202dba8d95f6fb71913e73fc372a2d9df7484b3ebd01ab8974ce21106d1d7",
+    "manifest.json": "0c7f78195ecbbbb122e3e5303683d899908705927a1b5e1d8b6f505ea89d727c",
+    "serve.mjs": "e7dd8467a683f4eed48bbd2c61298ae4e8a200658f6b26d7ebb92e0e4ef5e1ad",
+    "zones.patch": "0bfe8ef554dac3e0e7692e0edba5842c05b38e09498de937314d18f05db82d26",
+    "approved-source/index.html": "ca60316e17c1e6858e1a816d28a19be8224da17301eefa5b1c9fe3953a618f7b",
+    "approved-source/preview.tsx": "d9a5448bcd019b38dfb07744bec5deedd4f2b101fa19f63baaa58d2a5a88c58f",
+    "approved-source/study.css": "9c59af89d40677e851a64924cec6f23a95d2205e6e3f55dae835118a8e080d46",
+    "screenshots/structure-dark.png": "a191b9f35192ef5f91d12646b76f155d847f0db67455a6abda4a96960c9d8b39",
+    "screenshots/structure-light.png": "fc14d6219bd3631d5112d3935e83b644a3c6a7f17e0ad3697b6f7def85d53980",
+    "screenshots/structure-original.png": "c43a5b950ee2b982117b1d808cf71a9dc8a0d55230e0bc0554bee3c97717221d",
+    "screenshots/structure-pinned.png": "98b19c6009dee82a157d0a0db31b037db51378ccfe944a7aeb4fc49e76479677",
+    "screenshots/tactical-hover.png": "232f93bf7ce486822b5cb7e6a8910537e5c156d9e8016d9bd22c019c3a5c7d21",
+    "site/demo-assets.js": "825536d0d06c6c6cc2d80eceedda83bc5c10362434dee1d8d02f96a5e222aa71",
+    "site/index.html": "a073b7013da0a12011afb9ca02c7af78bc9d37f6846b7426e3c6f227384d6125",
+    "site/assets/index-BLVgyPdE.css": "1b579773265398e08bb4ce087ac430aa28bd49140c913c4097c1f5b27c3c4673",
+    "site/assets/index-SxeBWEj0.js": "c089ff822073435a8dbb8d40fc02cf396fc0cee550483f999eca44383c4e1218",
+    "site/assets/library-glass-displacement-BTVH-YiM.png": "5cdf52708a397dbf8568e93b490b08482b61dd020e3338cc7e62ea1169ac3d95",
+    "site/.tmp/library-structure-preview/index.html": "b485c4ab9318a3274812f35a32f4f274fbbe5433262318b124f40aed01ca8702",
+    "before/apps/desktop/scripts/library-subtle-motion-ui.test.mjs": "dbcdb8064ab8bc09161691c215fa936366ef3d159957aa4740a589466e009390",
+    "before/apps/desktop/scripts/toolbar-layout-ui.test.mjs": "5548f5d96e0fdd414cf355341e3d25954fb5a8de03550eb74d5ebb0a418e8db1",
+    "before/apps/desktop/src/styles.css": "2c166ff7156b40d535fbfd0c894c69962451bbb40924165f59861d9d224c1986",
+    "before/apps/desktop/src/components/CategorizedLibrary.css": "338b72a66cdbbea41a9d33e97b702ab22a939ee3dec74eaf0c5a4783919e21e7",
+    "before/apps/desktop/src/components/CategorizedLibrary.tsx": "0d6efe904856abeb0de19efcb76699c6255ea5e916a91cc832c4f7d3b0f83017",
+    "before/apps/desktop/src/components/FileMediaCard.tsx": "0a68d9772df1d8aabef0871423e3cfa2a08080ec299d67106a50f45c3821c923",
+    "before/apps/desktop/src/components/LibraryHome.tsx": "485b7e19a24b550f8894b4a09a1b70a61441bc74bb9688b0949097a92b581100",
+    "before/apps/desktop/src/components/LibraryMotion.css": "6cbb76cde9ff2c872158269c406ee678084fecdc6dfd7c2662d7ac1c77b399de",
+    "before/apps/desktop/src/components/LibraryMotion.tsx": "56e4ce7b71421044a0f5793f82fef5af0d03956bef5860f1c8645e68923894db",
+    "before/apps/desktop/src/components/LibrarySplit.css": "e4c8a2b9883933fb8029d26b807f817977026ab2a3dc2b79bacd45b00a238a3f",
+    "before/apps/desktop/src/components/LocalFileWorkspace.css": "334a23aeaf624a078885a804a4fc26033104d26a59adba5179a05346e6c0a510",
+    "before/apps/desktop/src/components/LocalFileWorkspace.tsx": "8d387425dd61e56d0fa8e8a587325a52ae13d4d2c25a6bdd5316eebe0cd1fbb8",
+    "before/apps/desktop/src/components/Toolbar.tsx": "63d651f6b053eb7aab5cbceecf73fe2114ab8d99b6f6f27ae23b36debd8557b1"
+  },
+  "reverseOrder": [
+    "structure-approved.patch",
+    "switch-isolation.patch",
+    "zones.patch",
+    "light-gray.patch",
+    "integration-clockwise.patch"
+  ],
+  "patches": [
+    {
+      "file": "../structure-approved.patch",
+      "sha256": "beaeeda02ead4133428bbda87cc6376003e7a85a9c3bf210aad74b182931f5d2"
+    },
+    {
+      "file": "../switch-isolation.patch",
+      "sha256": "abf85145cebb9732f7ba1d51c90ee4d52810972d458497cdbb0387e8f7c5dfac"
+    },
+    {
+      "file": "../zones.patch",
+      "sha256": "0bfe8ef554dac3e0e7692e0edba5842c05b38e09498de937314d18f05db82d26"
+    },
+    {
+      "file": "../light-gray.patch",
+      "sha256": "18a202dba8d95f6fb71913e73fc372a2d9df7484b3ebd01ab8974ce21106d1d7"
+    },
+    {
+      "file": "../integration-clockwise.patch",
+      "sha256": "01c744a458585ab7736328998c65383b74bf67b79eece7e8a3301bc735de5950"
+    }
+  ],
+  "validation": {
+    "sandbox": ".tmp/library-structure-restore-q0avxfw_",
+    "workspaceModified": false,
+    "reverse": [
+      {
+        "patch": "structure-approved.patch",
+        "checkPassed": true,
+        "appliedInSandbox": true
+      },
+      {
+        "patch": "switch-isolation.patch",
+        "checkPassed": true,
+        "appliedInSandbox": true
+      },
+      {
+        "patch": "zones.patch",
+        "checkPassed": true,
+        "appliedInSandbox": true
+      },
+      {
+        "patch": "light-gray.patch",
+        "checkPassed": true,
+        "appliedInSandbox": true
+      },
+      {
+        "patch": "integration-clockwise.patch",
+        "checkPassed": true,
+        "appliedInSandbox": true
+      }
+    ],
+    "forward": [
+      {
+        "patch": "integration-clockwise.patch",
+        "checkPassed": true,
+        "appliedInSandbox": true
+      },
+      {
+        "patch": "light-gray.patch",
+        "checkPassed": true,
+        "appliedInSandbox": true
+      },
+      {
+        "patch": "zones.patch",
+        "checkPassed": true,
+        "appliedInSandbox": true
+      },
+      {
+        "patch": "switch-isolation.patch",
+        "checkPassed": true,
+        "appliedInSandbox": true
+      },
+      {
+        "patch": "structure-approved.patch",
+        "checkPassed": true,
+        "appliedInSandbox": true
+      }
+    ],
+    "originalBeforeMatchesNormalized": true,
+    "originalBeforeMismatches": [],
+    "roundTripMatchesNormalized": true,
+    "liveSourcesMatchAfterSnapshots": true,
+    "originalArchiveHashesUnchanged": true
+  },
+  "screenshots": [
+    {
+      "file": "screenshots/production-integrated-light.png",
+      "sha256": "9a716504179db7ef845f4a4e2a815fe3f4923affc57e6f396fba378a693175d4",
+      "source": "apps/desktop/.tmp/library-structure-preview/production-integrated-light.png"
+    }
+  ]
+}

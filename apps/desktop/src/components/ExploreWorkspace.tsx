@@ -1,5 +1,5 @@
 import { userErrorMessage } from "../lib/userError";
-import { useCallback, useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { GripVertical, LoaderCircle } from "lucide-react";
 import { SourceBrowserPanel } from "./SourceBrowserPanel";
 import { useStore } from "../store";
@@ -12,6 +12,8 @@ import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { ExplorerCaptureFeedback, type CaptureFeedback } from "./ExplorerCaptureFeedback";
 import { useExplorerDragMotion } from "../lib/useExplorerDragMotion";
 import { getDragAssets } from "../lib/dragPayload";
+import { convertFileSrc } from "@tauri-apps/api/core";
+import { ExplorerClassificationDock, type ExplorerClassificationItem } from "./ExplorerClassificationDock";
 
 export function ExploreWorkspace({ url, open, navigationId = 0, onClose, children }: { url: string | null; open: boolean; navigationId?: number; onClose: () => void; children: ReactNode }) {
   const [busy, setBusy] = useState(false);
@@ -21,13 +23,22 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
   const [resizing, setResizing] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const [feedback, setFeedback] = useState<CaptureFeedback | null>(null);
+  const [classifications, setClassifications] = useState<ExplorerClassificationItem[]>([]);
+  const completionOrder = useRef(0);
   const sequence = useRef(0);
   const mounted = useRef(true);
   const activeProjectId = useStore(s => s.activeProjectId);
-  const dragMotion = useExplorerDragMotion(root, open, activeProjectId);
+  const projectRouteRevision = useStore(s => s.projectRouteRevision);
+  const receiveThumbnail = useCallback((dragId: string, thumbnail: string) => {
+    setClassifications(items => items.map(item => item.id.startsWith(`${dragId}:`) && /^https?:/.test(item.imageUrl)
+      ? { ...item, imageUrl: thumbnail } : item));
+  }, []);
+  const dragMotion = useExplorerDragMotion(root, open, activeProjectId, receiveThumbnail);
   const clearFeedback = useCallback(() => setFeedback(null), []);
+  const removeClassification = useCallback((id: string) => setClassifications(items => items.filter(item => item.id !== id)), []);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { sequence.current += 1; setFeedback(null); }, [open, activeProjectId]);
+  useLayoutEffect(() => { setClassifications([]); }, [activeProjectId, projectRouteRevision]);
 
   async function drop(event: DragEvent) {
     if (getDragAssets()?.length) { setOver(false); return; }
@@ -53,7 +64,15 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
     const placeOnCanvas = prepareExplorerCanvasDrop(event.target, target, event.clientX, event.clientY);
     // Older/incomplete page injections can lack a drag ID; start on drop then.
     const dragId = image.dragId ?? crypto.randomUUID().replaceAll("-", "");
-    dragMotion.drop(image, dragId, point.x, point.y);
+    const previewUrl = dragMotion.drop(image, dragId, point.x, point.y);
+    const classificationId = `${dragId}:${operation}`;
+    const inTarget = () => {
+      const route = useStore.getState();
+      return mounted.current && route.activeProjectId === target && route.projectRouteRevision === revision;
+    };
+    const updateClassification = (patch: Partial<ExplorerClassificationItem>) => {
+      if (inTarget()) setClassifications(items => items.map(item => item.id === classificationId ? { ...item, ...patch } : item));
+    };
     let capturedId: string | undefined;
     let placedNodeId: string | undefined;
     let handedOff = false;
@@ -65,6 +84,10 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
         analysisIssue = /not found|unknown command/i.test(reason) ? "分类暂不可用，请更新应用后重试" : userErrorMessage(error, "分类暂不可用，可稍后重新分类");
         return false;
       });
+      if (analysing && inTarget()) {
+        const imageUrl = dragMotion.park(dragId) ?? previewUrl;
+        setClassifications(items => [...items, { id: classificationId, imageUrl, origin: point }]);
+      }
       // Flush existing composer state before materializing a still-empty project.
       if (target) {
         await state.projectCanvasFlush?.();
@@ -85,6 +108,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       }
       const asset = await api.captureSourceBrowserImage(image.imageUrl, image.pageUrl, target, dragId);
       capturedId = asset.id;
+      if (asset.thumb_path) updateClassification({ imageUrl: convertFileSrc(asset.thumb_path) });
       let nodeId: string | void = undefined;
       if (placeOnCanvas) {
         try { nodeId = await placeOnCanvas(asset); }
@@ -93,18 +117,18 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       if (placeOnCanvas) completeLesson();
       placedNodeId = nodeId || undefined;
       const result: CaptureFeedback = { id: operation, assetId: asset.id, nodeId: nodeId || undefined, ...point,
-        projectId: target, message: analysing ? "已采集，正在识别标签…" : analysisIssue ? `已采集；${analysisIssue}` : "已采集", pending: analysing };
+        projectId: target, message: analysisIssue ? `已采集；${analysisIssue}` : "已采集", pending: false };
       const show = (value: CaptureFeedback) => {
         const route = useStore.getState();
         if (mounted.current && sequence.current === operation && route.activeProjectId === target && route.projectRouteRevision === revision) setFeedback(value);
       };
-      show(result);
+      if (!analysing) show(result);
       if (analysing) {
         handedOff = true;
         void api.finishSourceBrowserAnalysis(dragId, asset.id).then(tags => {
-          show({ ...result, pending: false, message: tags.length ? `已添加到 ${tags.map(tag => `#${tag}`).join(" ")}` : "已采集，暂无匹配标签" });
+          updateClassification({ labels: tags, outcome: tags.length ? "matched" : "unmatched", completedOrder: ++completionOrder.current });
         }).catch(error => {
-          show({ ...result, pending: false, message: "已采集，标签识别未完成" });
+          updateClassification({ outcome: "failed", completedOrder: ++completionOrder.current });
           notifyError(error, "图片已采集，但标签识别未完成");
         });
       }
@@ -113,7 +137,10 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
     } catch (error) { notifyError(error, "采集失败，请重试"); }
     finally {
       dragMotion.finish(dragId, capturedId, placedNodeId);
-      if (!handedOff) void api.releaseSourceBrowserAnalysis(dragId).catch(() => {});
+      if (!handedOff) {
+        if (mounted.current) removeClassification(classificationId);
+        void api.releaseSourceBrowserAnalysis(dragId).catch(() => {});
+      }
       busyRef.current = false; setBusy(false);
     }
   }
@@ -141,6 +168,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       onDropCapture={event => void drop(event)}>
       {open && <div className="explore-learning-hint"><LearningHint topic="explore" /></div>}
       {children}
+      <ExplorerClassificationDock items={classifications} onDone={removeClassification} />
       {open && feedback && feedback.projectId === activeProjectId && <ExplorerCaptureFeedback value={feedback} onDone={clearFeedback} />}
       {busy && <div className="explore-capture-status pointer-events-none" role="status"><LoaderCircle size={13} className="animate-spin" />采集中…</div>}
       {over && <div className="explore-drop-hint">松开采集图片</div>}

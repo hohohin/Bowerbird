@@ -51,11 +51,11 @@ try {
     assert.deepEqual(await card.evaluate(el=>({transform:el.style.transform,width:el.offsetWidth,height:el.offsetHeight})),original,'hover preserves masonry geometry');
     const transfer=await page.evaluateHandle(()=>new DataTransfer());
     await card.dispatchEvent('dragstart',{dataTransfer:transfer});
-    await page.waitForTimeout(220);
+    await page.waitForFunction(()=>getComputedStyle(document.querySelector('[data-asset-id="motion-0"]')).translate==='none');
     assert.equal(await card.evaluate(el=>getComputedStyle(el).translate),'none','drag removes hover offset');
     await card.dispatchEvent('dragend',{dataTransfer:transfer});await transfer.dispose();
     if(scene==='project') {await page.locator('.canvas-stage').focus();await page.keyboard.press('Tab');await page.waitForTimeout(350);}
-    await root.locator('.library-view-switch').hover();
+    await root.locator('.library-view-switch button[aria-selected="true"]').hover();
     assert.equal(await root.locator('.library-view-switch').evaluate(el=>getComputedStyle(el,'::after').content),'none','glass sweep is removed');
     assert.equal(await root.locator('.library-view-switch-thumb').evaluate(el=>getComputedStyle(el).animationName),'library-tactical-control-contact');
     assert.equal(await root.locator('.library-view-switch-thumb').evaluate(el=>getComputedStyle(el).animationDuration),'0.16s');
@@ -73,10 +73,10 @@ try {
     await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'))});
     assert.equal(await root.getAttribute('data-library-motion-paused'),'true');
     assert.equal(await card.evaluate(el=>getComputedStyle(el,'::after').animationName),'none');
-    assert.equal(await card.evaluate(el=>getComputedStyle(el,'::after').backgroundPosition),'0% 0%, 100% 0%, 0% 100%, 100% 100%','hidden page leaves corner markers in their final positions');
+    assert.deepEqual(await card.evaluate(el=>getComputedStyle(el,'::after').backgroundPosition.split(',').map(point=>point.trim()).sort()),['0% 0%','0% 100%','100% 0%','100% 100%'],'hidden page leaves one marker at each corner');
     await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});
     assert.equal(await root.getAttribute('data-library-motion-paused'),'false');
-    assert.ok(await card.evaluate(el=>getComputedStyle(el,'::after').animationName.includes('library-tactical-card-spread')));
+    assert.ok(await card.evaluate(el=>getComputedStyle(el,'::after').animationName.includes('library-tactical-card-clockwise')));
     await page.mouse.move(5,5);
     if(scene==='project') { await page.setViewportSize({width:900,height:650}); await page.getByRole('separator',{name:'调整素材库宽度',exact:true}).focus();await page.keyboard.press('Home');await page.waitForTimeout(350); }
     for(const theme of ['light','dark']) {await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);await page.waitForTimeout(250);await page.screenshot({path:`.tmp/library-subtle-motion/${scene}-${theme}.png`});}

@@ -17,7 +17,7 @@ try {
     const { api } = await import('/src/lib/api.ts');
     const check = (value, message) => { if (!value) throw new Error(message); };
     const invoke = window.__TAURI_INTERNALS__.invoke;
-    window.store.setState({ cloudAuth: { logged_in: true, user_id: 'tester' }, cloudEntitlement: { user_id: 'tester', is_test_account: true, balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_cloud: true, can_use_byo: true }, generation_services: [] } });
+    window.store.setState({ cloudAuth: { logged_in: true, user_id: 'tester' }, cloudEntitlement: { user_id: 'tester', tier: 'pro', offline_state: 'fresh', is_test_account: true, balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_cloud: true, can_use_byo: true }, generation_services: [] } });
     let calls = [], mode = 'done', snapshots = [], hold, cancelCalls = 0, cancelDone = false;
     const video = { id: 'repeat-video', name: '合成视频', store_path: '/synthetic-h3.mp4', ext: 'mp4', width: 672, height: 1216, duration: 8 };
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {

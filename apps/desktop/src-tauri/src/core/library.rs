@@ -776,6 +776,7 @@ impl Database {
             .optional()?
             .unwrap_or((None, None));
         let tx = conn.unchecked_transaction()?;
+        crate::core::project_canvas::hide_empty_generation_cards_for_asset(&tx, id)?;
         crate::core::project_canvas::hide_asset_canvas_nodes(&tx, id, None)?;
         tx.execute("DELETE FROM assets WHERE id = ?1", rusqlite::params![id])?;
         tx.commit()?;

@@ -14,10 +14,11 @@ const w = window as any;
 const listeners = new Map<number, (event: unknown) => void>();
 let callbackId = 0;
 const thumb = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="160"><rect width="240" height="160" fill="#7b9eaa"/></svg>');
-w.total = 300000; w.requests = []; w.inFlight = 0; w.maxInFlight = 0; w.failOffset = -1; w.delay = 0;
+w.total ??= 300000; w.requests = []; w.inFlight = 0; w.maxInFlight = 0; w.failOffset = -1; w.delay = 0;
 w.mode = useLocalFileMode; w.store = useStore;
 const asset = (i: number) => ({ id: `asset-${i}`, name: `素材${i}.png`, ext: "png", source: "imported", width: 240, height: i % 5 ? 160 : 320,
-  store_path: `/asset-${i}.png`, thumb_path: i === 0 ? null : thumb, generation_session_id: i % 2 ? "generated" : null });
+  store_path: `/asset-${i}.png`, thumb_path: i === 0 ? null : thumb, generation_session_id: i % 2 ? "generated" : null,
+  ...w.assetDimensions?.(i) });
 function range(f: CatalogFilter) {
   let first = f.id === "last" ? Math.max(0,w.total - 60) : 0;
   let count = f.id === "last" ? Math.min(60,w.total) : w.total;

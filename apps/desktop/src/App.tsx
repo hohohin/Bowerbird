@@ -891,7 +891,6 @@ function App() {
           setSourceBrowserOpen(current => !current);
         }}
       />
-      {!projectWorkspaceActive && <div className="app-shell-hatch" aria-hidden="true"><span /></div>}
       <div className="relative flex flex-1 overflow-hidden">
         {COLLECTIONS_FEATURE_ENABLED && !projectWorkspaceActive && !localFilesOpen && <Sidebar />}
         <main className="app-workspace relative flex flex-1 flex-col overflow-hidden bg-canvas">

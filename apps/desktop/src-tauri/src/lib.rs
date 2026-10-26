@@ -138,6 +138,19 @@ fn forward_auth_callback(app: &tauri::AppHandle, value: &str) {
     if !wechat && !email {
         return;
     }
+    // A browser callback reaches the existing instance in the background. Restore
+    // its window before exchanging the code so login progress/errors are visible.
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(error) = window.show() {
+            tracing::warn!(%error, "failed to show auth callback window");
+        }
+        if let Err(error) = window.unminimize() {
+            tracing::warn!(%error, "failed to restore auth callback window");
+        }
+        if let Err(error) = window.set_focus() {
+            tracing::warn!(%error, "failed to focus auth callback window");
+        }
+    }
     let handle = app.clone();
     let callback = value.to_string();
     tauri::async_runtime::spawn(async move {

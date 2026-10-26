@@ -224,10 +224,12 @@ export function Toolbar({
         ) : (
           <button
             type="button"
-            className="app-button-accent"
+            className="app-button-accent library-projects-trigger"
             data-tour="new-creation"
             title="打开项目管理"
             aria-label="我的项目"
+            aria-haspopup="dialog"
+            aria-expanded={projectsOpen}
             onClick={() => setProjectsOpen(true)}
           >
             <LayoutDashboard size={15} />
@@ -237,6 +239,7 @@ export function Toolbar({
       </div>
 
       {showFileNavigation && <div className="app-file-navigation-slot" ref={setNavigationHost} />}
+      {tactical && !showFileNavigation && <span className="library-toolbar-context"><i aria-hidden="true"/><span>素材库<small>ASSET LIBRARY</small></span></span>}
 
       <div className="app-topbar-actions" aria-label="视图与账号">
         {!localFilesOpen && (canvasMode || homeView === "library") && <div className="app-topbar-view-controls" role="group" aria-label="素材视图">

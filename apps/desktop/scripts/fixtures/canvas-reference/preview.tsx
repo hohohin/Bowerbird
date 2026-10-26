@@ -321,6 +321,17 @@ w.__TAURI_INTERNALS__ = {
     }
     if (command === "delete_asset_with_mode") {
       if (w.failAssetDelete) throw "模拟删除失败";
+      if (args.mode === "delete") {
+        for (const prompt of snapshot.nodes.filter((node: any) => node.kind === "prompt" && JSON.parse(node.payloadJson).job_id)) {
+          const outputs = snapshot.edges.filter((edge: any) => edge.fromNodeId === prompt.id && edge.kind === "produced")
+            .map((edge: any) => snapshot.nodes.find((node: any) => node.id === edge.toNodeId))
+            .filter((node: any) => node?.kind === "asset" && node.role === "output");
+          if (outputs.some((node: any) => node.assetId === args.id)
+            && !outputs.some((node: any) => node.assetId !== args.id && assets.some(asset => asset.id === node.assetId))) {
+            prompt.hiddenAt = 20;
+          }
+        }
+      }
       for (const node of snapshot.nodes) {
         if (node.assetId === args.id && (args.mode === "delete" || node.projectId === args.projectId)) {
           node.hiddenAt = 20;

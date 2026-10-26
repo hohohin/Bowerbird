@@ -52,7 +52,7 @@ try {
           assert.equal(layout.aligned, true, context);
           assert.equal(layout.searchHidden, true, context);
           assert.equal(layout.labelsVisible, true, context);
-          assert.ok(layout.controlHeights.every(height => height === 36), context);
+          assert.ok(layout.controlHeights.every(height => height === (layout.tactical ? 32 : 36)), context);
           assert.ok(layout.controlRadii.every(radius => radius === (layout.tactical ? '0px' : '8px')), context);
           assert.equal(layout.overflow, false, context);
           assert.equal(layout.contained, true, context);

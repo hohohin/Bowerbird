@@ -97,18 +97,20 @@ try {
   }
   await page.evaluate(() => { window.analyse = true; window.hold = true; });
   await over(); await drop();
-  await host.locator('[data-phase="landing"]').waitFor({ state: "attached" });
+  const dock = page.locator("[data-explorer-classification-dock]");
+  await host.waitFor({ state: "detached" });
+  await dock.locator("[data-classification-id]").waitFor();
   await page.waitForTimeout(270);
   await page.screenshot({ path: ".tmp/explorer-motion/03-impact.png" });
   await emit("source-browser://drag", { phase: "end", id });
   await page.waitForTimeout(150);
-  assert.equal(await host.count(), 1, "dragend must not erase pending landing");
+  assert.equal(await dock.locator("[data-classification-id]").count(), 1, "dragend must not erase pending classification");
   await emit("source-browser://drag-preview", { id, labels: [] });
   assert.equal(await host.getByText("暂无已有标签").count(), 0);
   await page.waitForFunction(() => window.release);
   await page.evaluate(() => { window.hold = false; window.release(); });
   await host.waitFor({ state: "detached" });
-  await page.locator(".explorer-capture-feedback").getByText("已添加到 #插画 #柔光").waitFor();
+  await dock.locator('[data-classification-labels]').getByText("插画", { exact: true }).waitFor();
 
   await emit("source-browser://drag", { phase: "start", id, imageUrl }); await over();
   await page.keyboard.press("Escape"); assert.equal(await host.count(), 0);

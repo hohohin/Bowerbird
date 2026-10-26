@@ -53,6 +53,7 @@ export class CanvasWorkflowController {
   private listeners = new Set<() => void>();
   private loading: Promise<void> | null = null;
   private writing: Promise<void> = Promise.resolve();
+  private pendingEditAuthorization = false;
   private encapsulating = false;
   private executing = new Set<string>();
   private reservations = new Map<string, { access: string[]; writes: string[] }>();
@@ -190,25 +191,30 @@ export class CanvasWorkflowController {
     })();
     return this.loading;
   }
-  async save(document = this.document) {
+  async save(document = this.document, authorizeEdit = false) {
+    if (authorizeEdit) this.pendingEditAuthorization = true;
     document = { ...document, cardNames: assignCanvasCardNames(document.cardNames, document.nodes.filter(node => !node.textTarget && !node.textSource).map(node => ({ id: node.id, title: workflowTitle(node) }))) };
     this.document = document; this.emit();
     const snapshot = structuredClone(document);
     const write = this.writing.then(async () => {
+      if (authorizeEdit) await api.canvasWorkflowAuthorize();
       this.revision = await api.canvasWorkflowSave(this.projectId, this.revision, snapshot);
     });
     // A failed write blocks later writes and execution until explicitly retried.
     this.writing = write;
-    try { await write; this.error = ""; }
+    try {
+      await write; this.error = "";
+      if (this.writing === write) this.pendingEditAuthorization = false;
+    }
     catch (error) { this.error = `工作流未保存：${String(error)}`; throw error; }
     finally { this.emit(); this.scheduleSessionCompletions(); }
   }
   async retrySave() {
     if (!this.ready) { this.loading = null; await this.load(); return; }
-    await this.writing.catch(() => {}); this.writing = Promise.resolve(); await this.save();
+    await this.writing.catch(() => {}); this.writing = Promise.resolve(); await this.save(this.document, this.pendingEditAuthorization);
   }
   async edit(nodes: WorkflowNode[], history?: { removedRuns: WorkflowRun[]; runOrder: string[] }) {
-    if (nodes.some(node => node.kind !== "text") || this.document.nodes.some(node => node.kind !== "text")) await api.canvasWorkflowAuthorize();
+    const authorizeEdit = nodes.some(node => node.kind !== "text") || this.document.nodes.some(node => node.kind !== "text");
     if (this.encapsulating) throw new Error("正在封装卡片，请稍后再编辑");
     if (!this.ready) throw new Error("工作流尚未载入");
     nodes = nodes.map(node => this.isLocked(node.id) ? node : normalizeWorkflowInputSlots(node, this.document.nodes.find(previous => previous.id === node.id)));
@@ -228,7 +234,8 @@ export class CanvasWorkflowController {
     const runOrder = new Set([...(history?.runOrder ?? []), ...currentRuns.map(run => run.id)]);
     const runs = [...runOrder].flatMap(id => byId.has(id) ? [byId.get(id)!] : [])
       .filter(run => workflowRunActive(run) || run.order.every(id => nodes.some(node => node.id === id)));
-    await this.save({ ...this.document, nodes, runs, run: runs[runs.length - 1] ?? null });
+    // Controlled inputs and undo need the edit synchronously; authorize each snapshot in the write queue.
+    await this.save({ ...this.document, nodes, runs, run: runs[runs.length - 1] ?? null }, authorizeEdit);
   }
   async encapsulate(name: string, members: string[], bounds: Parameters<typeof api.workflowEncapsulate>[4], template: Parameters<typeof api.workflowEncapsulate>[5]) {
     if (this.encapsulating || !this.ready || this.error) throw new Error("请先完成当前工作流保存");

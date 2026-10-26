@@ -2014,6 +2014,7 @@ export const useStore = create<State>((set, get) => {
       await api.codexCreateImage({
         jobId,
         prompt: sentPrompt,
+        dreaminaModelVersion: media === "image" && (prov === "jimeng" || prov === "dreamina") ? get().settings?.dreamina_model_version ?? "5.0Pro" : null,
         media, videoOptions, count, transparent,
         promptRaw: rawPrompt,
         // 借用维度源图 id（图 chip 被删、只借维度）：随 generation_meta 落库，复用时回绑车牌。
@@ -2121,6 +2122,7 @@ export const useStore = create<State>((set, get) => {
     try {
       await api.codexCreateImage({
         jobId,
+        dreaminaModelVersion: media === "image" && (prov === "jimeng" || prov === "dreamina") ? get().settings?.dreamina_model_version ?? "5.0Pro" : null,
         prompt: sentText,
         media, videoOptions, count, transparent,
         promptRaw: opts?.rawPrompt ?? null,

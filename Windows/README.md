@@ -76,7 +76,7 @@ cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml 
 - 应用内可一键直装官方独立版 codex（从 npm 镜像下载平台包 tarball 解压到应用数据目录，用户无需安装 Node.js；解析时托管副本优先）。
 - Codex 登录、生成、检测和打开会话统一使用 `%APPDATA%\com.bowerbird.desktop\cli-profiles\codex`，不继承系统 `CODEX_HOME`、API Key 或共享登录。
 - “在 codex 中打开会话”会启动 Windows 命令提示符并运行 `codex resume`。
-- 浏览器采集服务的 `save_batch` 与 `save_blob + binary` 两条协议均位于 canonical Rust 源码；`apps/extension/` 与 `Windows/extension/` 分别使用对应协议。
+- 浏览器扩展统一使用 `save_blob + binary`：浏览器取图后上传字节，桌面按当前项目／收集箱规则入库。`apps/extension/` 为主源码，`Windows/extension/` 保持同版供独立加载；Rust 保留旧 `save`／`save_batch` 兼容。配置与更新入口位于探索页的「浏览器插件」，更新后需在浏览器重新加载扩展并刷新采集网页。
 - 用户数据继续由 Tauri 写入 Windows AppData，不写入安装目录。
 
 ## 环境要求

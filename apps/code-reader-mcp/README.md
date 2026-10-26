@@ -58,6 +58,8 @@ ChatGPT <──官方私有 HTTPS 隧道──> stdio MCP 子进程
 
 不要仅用 `/healthz` 的 `live` 或 `/readyz` 的 `ready` 判断远端连接成功。通过 `.local/health.url` 指向的本机接口读取 `/health?details=true`，检查 `components.control-plane` 的状态、失败原因与成功轮询证据；`/metrics` 中的 `commands_poll_last_successful_timestamp_seconds` 应为近期非零时间。`network_error`、连续失败且成功时间为 0，说明客户端尚未成功连接控制面，即使网页显示“应用配置受到速率限制”，也应先排查出站网络。随后查看 `/health/mcp` 的初始化和工具发现结果，最终用 ChatGPT 的真实 `project_overview` 调用验收。
 
+服务同时支持 MCP `2026-07-28` 的 `server/discover`、逐请求 `_meta` 与 `resultType: complete`，以及旧版 `initialize` → `notifications/initialized` 流程。隧道会复用 stdio 子进程，因此重复旧版初始化会重新开始握手；现代请求独立验证版本和客户端能力，不会打开旧版初始化门禁。两种协议都只调用同样的四个只读工具。
+
 ## 只读与保密边界
 
 - **工具能力**：仅 `project_overview`、`list_files`、`read_file`、`search_code`；不提供 shell、文件写入、Git、网络请求或快照导出工具。所有工具声明 `readOnlyHint: true`，实际限制由实现执行。
@@ -85,3 +87,5 @@ ChatGPT <──官方私有 HTTPS 隧道──> stdio MCP 子进程
 2026-10-24 用户完成配置后，本机实际核验 tunnel-client 进程运行，`/healthz` 返回 HTTP 200 `live`，`/readyz` 返回 HTTP 200 `ready`。隧道客户端已就绪；尚无 ChatGPT 网页端工具调用成功证据，浏览器内容读取持续超时，不能将健康就绪视为网页端验收完成。保留启动窗口运行，再在 ChatGPT 添加/启用同一隧道并调用 `project_overview` 验证。失败退出会恢复原密钥环境，不保存新输入的 key，重试需在本机重新输入。服务实现 MCP 的 stdio 基础生命周期与工具子集，不提供 HTTP/SSE、资源订阅或 sampling。
 
 2026-10-26 更正连接判断：重启后虽然 `live/ready` 为 200，详细健康状态却显示控制面 `network_error`、29 次连续失败、从未成功轮询，MCP 初始化尚未被观察到。无凭据网络探测直连 OpenAI 超时，经用户现有 Windows 代理 `127.0.0.1:7890` 收到预期 HTTP 401（未携带 key），证明代理路径可达，不代表凭据鉴权通过。启动脚本增加显式控制面代理参数，默认直连、参数透传和拒绝带凭据/路径的代理地址测试通过；用户输入 key 后，2026-10-26 10:03（北京时间）核验控制面 status=ok、state=polling，last_success 为 10:02:41、consecutive_failures=0，代理 healthy，成功轮询指标非零；启动期曾有一次 timeout，随后已恢复。MCP initialize/tools_list 仍为 not_observed，尚未收到网页端发现请求，网页端验收仍待完成。
+
+2026-10-26 10:04（北京时间）网页设置请求已到达本机、三次响应投递被控制面接收，但 MCP 发现失败。官方客户端记录同一子进程收到新版 `server/discover` 和两次旧版初始化；旧实现不支持新版发现且拒绝重复初始化。本轮按 [MCP 发现协议](https://modelcontextprotocol.io/specification/2026-07-28/server/discover) 与双版本兼容契约修复。12 项安全／协议测试及启动脚本测试通过；通过官方客户端 v0.0.18 `dev proxy` 回环测试实际完成新版发现、四工具列表、`project_overview` 调用、两次旧版初始化与列表，健康状态 `ok/discovered`、工具目录完整。临时测试进程已停止，用户输入 key 后，10:17（北京时间）实际隧道已加载新进程并成功轮询控制面，连续失败为 0、代理 healthy；该新进程尚未收到网页端发现请求，ChatGPT 网页端最终验收仍待完成；快照未更新。

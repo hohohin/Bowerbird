@@ -158,6 +158,52 @@ test('protocol requires initialization, rejects oversized input and refuses unre
   assert.throws(() => execFileSync(process.execPath, [path.join(dir, 'server.mjs')], { stdio: 'pipe' }));
 });
 
+test('repeated legacy discovery on one stdio child keeps the initialization gate', async t => {
+  const dir = await fixtureServer(t);
+  const result = await converse(dir, [init, ready, rpc(2, 'tools/list'), init, rpc(3, 'tools/list'), ready,
+    rpc(4, 'tools/list'), rpc(5, 'tools/call', { name: 'project_overview', arguments: {} })].join('\n') + '\n');
+  assert.equal(result.code, 0, result.stderr);
+  const messages = result.stdout.trim().split('\n').map(JSON.parse);
+  assert.equal(messages[2].result.serverInfo.name, 'bowerbird-code-reader');
+  assert.equal(messages[3].error.code, -32000);
+  assert.equal(messages[4].result.tools.length, 4);
+  assert.equal(JSON.parse(messages[5].result.content[0].text).fileCount, 2);
+});
+
+test('modern discovery and inline tools work without opening the legacy gate', async t => {
+  const dir = await fixtureServer(t);
+  const meta = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
+  const modern = (id, method, params = {}) => rpc(id, method, { ...params, _meta: meta });
+  const result = await converse(dir, [
+    modern(1, 'tools/call', { name: 'project_overview', arguments: {} }),
+    modern(2, 'server/discover'), modern(3, 'tools/list'),
+    rpc(4, 'tools/list'),
+    rpc(5, 'server/discover', { _meta: { ...meta, 'io.modelcontextprotocol/protocolVersion': '2099-01-01' } }),
+    rpc(6, 'tools/list', { _meta: { ...meta, 'io.modelcontextprotocol/clientCapabilities': null } }),
+    modern(7, 'tools/call', { name: 'read_file', arguments: { path: '../.env' } }),
+    modern(8, 'tools/call', { name: 'write_file', arguments: {} }),
+    modern(9, 'exec', { command: 'whoami' }), init, ready, rpc(10, 'tools/list'),
+  ].join('\n') + '\n');
+  assert.equal(result.code, 0, result.stderr);
+  const messages = result.stdout.trim().split('\n').map(JSON.parse);
+  assert.equal(messages[0].result.resultType, 'complete');
+  assert.equal(JSON.parse(messages[0].result.content[0].text).fileCount, 2);
+  assert.deepEqual(messages[1].result.supportedVersions, ['2026-07-28']);
+  assert.equal(messages[1].result._meta['io.modelcontextprotocol/serverInfo'].name, 'bowerbird-code-reader');
+  assert.equal(messages[2].result.tools.length, 4);
+  assert.equal(messages[2].result.resultType, 'complete');
+  assert.equal(messages[3].error.code, -32000);
+  assert.equal(messages[4].error.code, -32022);
+  assert.deepEqual(messages[4].error.data.supported, ['2026-07-28']);
+  assert.equal(messages[5].error.code, -32602);
+  assert.equal(messages[6].result.isError, true);
+  assert.equal(messages[6].result.resultType, 'complete');
+  assert.equal(messages[7].error.code, -32602);
+  assert.equal(messages[8].error.code, -32601);
+  assert.equal(messages[10].result.tools.length, 4);
+  assert.equal(messages[10].result.resultType, undefined);
+});
+
 test('Node runtime denies file writes, out-of-snapshot reads and child execution', async t => {
   const dir = await temporary(t);
   const target = path.join(dir, 'sentinel.txt');

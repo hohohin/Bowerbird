@@ -62,6 +62,33 @@ pub(crate) fn hide_asset_canvas_nodes(
     Ok(())
 }
 
+/// Removing the last saved output also removes its generation card from the canvas.
+/// Run before deleting the asset row (which clears node asset IDs), in the same transaction.
+/// Keep execution nodes/edges for recovery and audit; other turns and reference users survive.
+pub(crate) fn hide_empty_generation_cards_for_asset(
+    conn: &rusqlite::Connection,
+    asset_id: &str,
+) -> AppResult<()> {
+    conn.execute(
+        "UPDATE canvas_nodes AS prompt SET hidden_at = ?2, updated_at = ?2
+         WHERE prompt.kind = 'prompt' AND prompt.hidden_at IS NULL
+           AND json_extract(prompt.payload_json, '$.job_id') IS NOT NULL
+           AND EXISTS (
+               SELECT 1 FROM canvas_edges e JOIN canvas_nodes output ON output.id = e.to_node_id
+               WHERE e.from_node_id = prompt.id AND e.kind = 'produced'
+                 AND output.kind = 'asset' AND output.role = 'output' AND output.asset_id = ?1
+           )
+           AND NOT EXISTS (
+               SELECT 1 FROM canvas_edges e JOIN canvas_nodes output ON output.id = e.to_node_id
+               JOIN assets a ON a.id = output.asset_id
+               WHERE e.from_node_id = prompt.id AND e.kind = 'produced'
+                 AND output.kind = 'asset' AND output.role = 'output' AND a.id <> ?1
+           )",
+        params![asset_id, Utc::now().timestamp()],
+    )?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProjectTitleSource {
@@ -4350,6 +4377,93 @@ mod tests {
             .unwrap()
             .hidden_at
             .is_some());
+    }
+
+    #[test]
+    fn physical_asset_deletion_hides_only_empty_generating_turns_and_survives_replay() {
+        use crate::core::projects::AssetDeleteMode;
+
+        let db = db();
+        let files = tempfile::tempdir().unwrap();
+        let path = |id: &str| files.path().join(id).to_string_lossy().into_owned();
+        for (project_id, thread_id) in [("p1", "t1"), ("p2", "t2")] {
+            materialize(&db, project_id);
+            db.create_creative_thread(&NewCreativeThread {
+                id: thread_id.into(), project_id: project_id.into(), title: thread_id.into(),
+                origin: CreativeThreadOrigin::Direct,
+            }).unwrap();
+        }
+        {
+            let conn = db.conn.lock().unwrap();
+            for id in ["a", "b", "c", "reference"] {
+                std::fs::write(path(id), b"synthetic image").unwrap();
+                conn.execute("INSERT INTO assets(id,name,store_path,created_at) VALUES (?1,?1,?2,1)", params![id, path(id)]).unwrap();
+            }
+        }
+        let turn = ProjectGenerationTurnInput {
+            project_id: "p1".into(), thread_id: "t1".into(),
+            generation_conversation_id: "conversation".into(), job_id: "job".into(), turn_key: "one".into(),
+            prompt: "生成图片".into(), applied_prompt: "生成图片".into(), provider: "test".into(),
+            provider_session_id: None, ratio: None, visual_profile: None,
+            references: vec![path("reference")], reference_node_ids: vec![],
+            parent_node_id: None, parent_asset_path: None, relation: None, retry_anchor_node_id: None,
+        };
+        let graph = db.begin_project_generation_turn(&turn).unwrap();
+        let outputs = db.complete_project_generation_turn("p1", "t1", "job", "one", None,
+            &[db.get_asset("a").unwrap().unwrap(), db.get_asset("b").unwrap().unwrap()]).unwrap();
+        let next = ProjectGenerationTurnInput { turn_key: "two".into(), references: vec![path("a")], ..turn.clone() };
+        let next_graph = db.begin_project_generation_turn(&next).unwrap();
+        db.complete_project_generation_turn("p1", "t1", "job", "two", None,
+            &[db.get_asset("c").unwrap().unwrap()]).unwrap();
+        // A deduplicated result may be produced in multiple projects. Every exact producer is cleaned.
+        let other = ProjectGenerationTurnInput {
+            project_id: "p2".into(), thread_id: "t2".into(), generation_conversation_id: "other".into(),
+            job_id: "other-job".into(), references: vec![], ..turn.clone()
+        };
+        let other_graph = db.begin_project_generation_turn(&other).unwrap();
+        db.complete_project_generation_turn("p2", "t2", "other-job", "one", None,
+            &[db.get_asset("a").unwrap().unwrap()]).unwrap();
+
+        // Removing only project membership or a reference image never deletes its generation card.
+        db.delete_asset_with_mode("a", AssetDeleteMode::Keep, Some("p1")).unwrap();
+        db.delete_asset("reference").unwrap();
+        assert!(db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap().hidden_at.is_none());
+        assert!(db.get_canvas_node(&other_graph.prompt_node_id).unwrap().unwrap().hidden_at.is_none());
+
+        db.delete_asset_with_mode("a", AssetDeleteMode::Delete, Some("p1")).unwrap();
+        assert!(db.get_canvas_node(&other_graph.prompt_node_id).unwrap().unwrap().hidden_at.is_some());
+        assert!(db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap().hidden_at.is_none(), "second output survives");
+        assert!(db.get_canvas_node(&next_graph.prompt_node_id).unwrap().unwrap().hidden_at.is_none(), "reference consumers survive");
+
+        // A failed DB deletion must roll back card visibility as well as the asset row.
+        db.conn.lock().unwrap().execute_batch(
+            "CREATE TRIGGER reject_test_delete BEFORE DELETE ON assets BEGIN SELECT RAISE(ABORT, 'delete failed'); END;"
+        ).unwrap();
+        assert!(db.delete_asset("b").is_err());
+        assert!(db.get_asset("b").unwrap().is_some());
+        assert!(Path::new(&path("b")).exists());
+        assert!(db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap().hidden_at.is_none());
+        db.conn.lock().unwrap().execute_batch("DROP TRIGGER reject_test_delete").unwrap();
+
+        db.delete_asset("b").unwrap();
+        assert!(!Path::new(&path("b")).exists());
+        assert!(db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap().hidden_at.is_some());
+        assert!(db.get_canvas_node(&next_graph.prompt_node_id).unwrap().unwrap().hidden_at.is_none(), "another turn in the conversation survives");
+        for id in outputs {
+            let node = db.get_canvas_node(&id).unwrap().unwrap();
+            assert!(node.hidden_at.is_some());
+            assert!(node.asset_id.is_none());
+        }
+        // Replaying a completed turn cannot restore a removed card. History remains intact.
+        let replay = ProjectGenerationTurnInput { references: vec![], ..turn };
+        db.begin_project_generation_turn(&replay).unwrap();
+        db.complete_project_generation_turn("p1", "t1", "job", "one", None, &[]).unwrap();
+        assert!(db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap().hidden_at.is_some());
+        assert_eq!(db.conn.lock().unwrap().query_row(
+            "SELECT COUNT(*) FROM canvas_edges WHERE from_node_id=?1 AND kind='produced'",
+            [&graph.prompt_node_id], |row| row.get::<_, i64>(0)).unwrap(), 2);
+        db.delete_asset("c").unwrap();
+        assert!(db.get_canvas_node(&next_graph.prompt_node_id).unwrap().unwrap().hidden_at.is_some());
     }
 
     #[test]

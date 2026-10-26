@@ -12,6 +12,7 @@ import "../../../src/styles.css";
 const w = window as any;
 const withSidebar = new URLSearchParams(location.search).has("sidebar");
 w.calls = []; w.hold = false; w.fail = false; w.release = null; w.callbacks = {};
+w.analysisResolvers = {}; w.captureResolvers = {}; w.claimResolvers = {}; w.captureSequence = 0;
 w.store = useStore;
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 w.__TAURI_INTERNALS__ = {
@@ -22,20 +23,28 @@ w.__TAURI_INTERNALS__ = {
     w.calls.push({ command, args });
     if (command === "plugin:event|listen") return w.calls.length;
     if (command === "claim_source_browser_analysis") {
+      if (w.holdClaim) await new Promise(resolve => { w.claimResolvers[args.dragId] = resolve; });
       if (w.claimError) throw w.claimError;
       return w.analyse ?? false;
     }
     if (command === "finish_source_browser_analysis") {
-      if (w.holdAnalysis) await new Promise(resolve => { w.finishAnalysis = resolve; });
+      let held: string[] | undefined;
+      if (w.holdAnalysis) held = await new Promise((resolve, reject) => {
+        const finish = (tags?: string[]) => { delete w.analysisResolvers[args.dragId]; resolve(tags); };
+        w.analysisResolvers[args.dragId] = { resolve: finish, reject: (error: string) => { delete w.analysisResolvers[args.dragId]; reject(error); } };
+        w.finishAnalysis = finish;
+      });
       if (w.failAnalysis) throw "模拟分类失败";
-      return w.analysisTags ?? ["插画", "柔光"];
+      return held ?? w.analysisTags ?? ["插画", "柔光"];
     }
     if (command === "capture_source_browser_image") {
-      if (w.hold) await new Promise(resolve => { w.release = resolve; });
+      if (w.hold) await new Promise(resolve => { w.captureResolvers[args.dragId] = resolve; w.release = resolve; });
       if (w.fail) throw "模拟网站拒绝图片";
-      const asset = { id: "captured", name: "采集图片", width: 200, height: 240, ext: "png", source: "extension", source_url: args.pageUrl,
-        thumb_path: "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="240"><rect width="200" height="240" fill="#4868ff"/></svg>') };
-      if (useStore.getState().activeProjectId === args.projectId) useStore.setState({ assets: [asset], total: 1 });
+      const sequence = ++w.captureSequence;
+      const color = w.uniqueCaptures ? ["#4868ff", "#6b8b67", "#c98957", "#aa6c91"][sequence % 4] : "#4868ff";
+      const asset = { id: w.uniqueCaptures ? `captured-${sequence}` : "captured", name: w.uniqueCaptures ? `采集图片 ${sequence}` : "采集图片", width: 200, height: 240, ext: "png", source: "extension", source_url: args.pageUrl,
+        thumb_path: "data:image/svg+xml," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="200" height="240"><rect width="200" height="240" fill="${color}"/></svg>`) };
+      if (useStore.getState().activeProjectId === args.projectId) useStore.setState(state => ({ assets: w.uniqueCaptures ? [...state.assets, asset] : [asset], total: w.uniqueCaptures ? state.assets.length + 1 : 1 }));
       return asset;
     }
     if (command === "project_canvas_materialize") {

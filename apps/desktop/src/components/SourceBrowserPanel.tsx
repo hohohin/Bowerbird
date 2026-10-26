@@ -9,12 +9,15 @@ import {
   ExternalLink,
   LoaderCircle,
   LockKeyhole,
+  Puzzle,
   RefreshCw,
   X,
 } from "lucide-react";
 import { api, type SourceBrowserBounds } from "../lib/api";
 import { normalizeSourceAddress, sourceDiscoveryFor } from "../lib/sourceDiscovery";
 import { EXPLORER_SITES, queueBrowserOperation } from "../lib/explorer";
+import { useStore } from "../store";
+import "./BrowserExtension.css";
 
 const STATUS_EVENT = "source-browser://status";
 const TITLE_EVENT = "source-browser://title";
@@ -44,6 +47,7 @@ function hostnameFor(url: string) {
 }
 
 export function SourceBrowserPanel({ url, onClose, visible = true, suspended = false, navigationId = 0 }: { url: string; onClose: () => void; visible?: boolean; suspended?: boolean; navigationId?: number }) {
+  const openExtension = useStore((state) => state.setExtensionOnboardingForceOpen);
   const viewportRef = useRef<HTMLDivElement>(null);
   const addressFocusedRef = useRef(false);
   const addressRef = useRef<HTMLInputElement>(null);
@@ -276,6 +280,9 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
       <nav className="explore-sites" aria-label="探索网站">
         {EXPLORER_SITES.map(site => <button key={site.name} type="button" onClick={() => void navigate(site.url)}>{site.name}</button>)}
         <span>登录状态保存在本机</span>
+        <button type="button" className="source-browser-extension-entry" onClick={() => openExtension(true)} aria-haspopup="dialog">
+          <Puzzle size={13} aria-hidden />浏览器插件
+        </button>
       </nav>
 
       {error && <div className="source-browser-error" role="alert">{userErrorMessage(error, "网页暂时无法打开，请检查网络和网址后重试。")}</div>}

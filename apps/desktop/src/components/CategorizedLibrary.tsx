@@ -352,6 +352,8 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     <LibraryMotion />
     <div className="catalog-body">
       {!flat && <aside ref={sidebar} className="catalog-sidebar" aria-label={kind === "tags" ? "标签分类" : "集合目录"}>
+        <div className="library-sidebar-meter" aria-hidden="true">{[0, 1, 2].map(group => <span key={group}>{Array.from({ length: 7 }, (_, index) => <i key={index}/>)}</span>)}</div>
+        <div className="library-sidebar-foot" aria-hidden="true"><i/><i/><i/><i/></div>
         <div className="catalog-sidebar-heading"><strong>{kind === "tags" ? "标签" : "集合"}</strong>
           <button title={kind === "tags" ? "管理标签" : "新建集合"} aria-label={kind === "tags" ? "管理标签" : "新建集合"}
             onClick={() => kind === "tags" ? setManageTags(true) : setEditor({ parentId: null })}>{kind === "tags" ? <Settings2 size={15}/> : <Plus size={16}/>}</button></div>
