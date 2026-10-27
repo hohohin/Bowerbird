@@ -1931,6 +1931,38 @@ html .generation-mode-button:focus-visible {
   color: var(--bb-ink);
 }
 
+/* Account controls use the same theme tokens as the settings shell. */
+.account-settings .account-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid var(--bb-line);
+  border-radius: 6px;
+  color: var(--bb-ink);
+  background: var(--bb-surface-card);
+  font-size: 12px;
+  font-weight: 500;
+  transition: background 150ms ease, opacity 150ms ease;
+}
+.account-settings .account-action:hover:not(:disabled) { background: var(--bb-surface-hover); }
+.account-settings .account-action-primary {
+  min-height: 44px;
+  background: var(--bb-ink);
+  color: var(--bb-surface-card);
+  border-color: var(--bb-ink);
+}
+.account-settings .account-action-primary:hover:not(:disabled) { background: var(--bb-ink); opacity: .85; }
+.account-settings .account-action:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 3px; }
+.account-settings .account-action:disabled { cursor: not-allowed; opacity: .5; }
+.account-settings .account-action svg { flex-shrink: 0; }
+.account-settings .account-membership { border-radius: 8px; }
+@media (prefers-reduced-motion: reduce) {
+  .account-settings .account-action { transition: none; }
+}
+
 .settings-nav {
   padding: 0 12px 0 0;
   border-right: 1px solid var(--bb-line);

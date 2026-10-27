@@ -16,6 +16,7 @@ try {
   let failUserUpdate = false, userUpdates = 0;
   let holdUserList = false, releaseUserList;
   const users = Array.from({ length: 52 }, (_, i) => ({ id: `33333333-3333-4333-8333-${String(i + 1).padStart(12, "0")}`,
+    nickname: i === 0 ? '<img src=x onerror=alert(1)> 微信昵称🌿' : i === 1 ? "小鸟" : null,
     email: i === 0 ? '<img src=x onerror=alert(1)>@example.test' : `user${i}@example.test`, is_test_account: i === 1, is_admin: i === 0,
     created_at: "2026-10-22T00:00:00Z", last_sign_in_at: i ? null : "2026-10-22T01:00:00Z" }));
   let batches = [{ id: "11111111-1111-4111-8111-111111111111", label: "九月内测 · 创作者邀请", code_count: 4 }];
@@ -48,7 +49,7 @@ try {
     if (denied) return route.fulfill({ status: 403, json: { error: { message: "此账号没有兑换码管理权限" } } });
     if (body.action === "list_users") {
       if (holdUserList) await new Promise((resolve) => { releaseUserList = resolve; });
-      const filtered = users.filter((u) => (!body.search || `${u.email} ${u.id}`.includes(body.search))
+      const filtered = users.filter((u) => (!body.search || `${u.nickname || ""} ${u.email} ${u.id}`.includes(body.search))
         && (!body.filter || u.is_test_account === (body.filter === "test")));
       return route.fulfill({ json: { rows: filtered.slice(body.page * 50, body.page * 50 + 50), total: filtered.length, page: body.page } });
     }
@@ -136,6 +137,15 @@ try {
   await page.locator("#user-rows tr").first().waitFor();
   assert.equal(await page.locator("#user-rows tr").count(), 50);
   assert.equal(await page.locator("#user-rows img").count(), 0);
+  assert.match(await page.locator("#user-rows tr").first().innerText(), /微信昵称🌿/);
+  assert.match(await page.locator("#user-rows tr").nth(2).innerText(), /user2@example.test/);
+  await page.locator("#users-search").fill("小鸟");
+  await page.locator("#users-filter-form").getByRole("button", { name: "查询" }).click();
+  await page.waitForFunction(() => document.querySelectorAll("#user-rows tr").length === 1);
+  assert.match(await page.locator("#user-rows").innerText(), /小鸟/);
+  await page.locator("#users-search").fill("");
+  await page.locator("#users-filter-form").getByRole("button", { name: "查询" }).click();
+  await page.waitForFunction(() => document.querySelectorAll("#user-rows tr").length === 50);
   await page.locator("#users-next").click();
   await page.waitForFunction(() => document.querySelectorAll("#user-rows tr").length === 2);
   await page.locator("#users-filter").selectOption("test");

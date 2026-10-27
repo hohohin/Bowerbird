@@ -62,8 +62,26 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
   const [zoom, setZoom] = useState(1);
   const canvas = useRef<HTMLCanvasElement>(null);
   const draftCanvas = useRef<HTMLCanvasElement>(null);
+  const toolbar = useRef<HTMLDivElement>(null);
   const gesture = useRef<Gesture | null>(null);
   const [viewport, setViewport] = useState({ width: innerWidth, height: innerHeight });
+  useLayoutEffect(() => {
+    const element = toolbar.current;
+    if (!element || !selection || !image) return;
+    const position = () => {
+      const { width, height } = element.getBoundingClientRect();
+      const gap = 8;
+      const right = (selection.x + selection.width) / image.naturalWidth * viewport.width;
+      const bottom = (selection.y + selection.height) / image.naturalHeight * viewport.height;
+      const top = bottom + gap + height <= viewport.height - gap ? bottom + gap : bottom - gap - height;
+      element.style.left = Math.max(gap, Math.min(viewport.width - width - gap, right - width)) + 'px';
+      element.style.top = Math.max(gap, Math.min(viewport.height - height - gap, top)) + 'px';
+    };
+    position();
+    const observer = new ResizeObserver(position);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [selection, image, viewport, tool, busy]);
   useEffect(() => {
     let disposed = false, revision = 0;
     let imageUrl: string | null = null;
@@ -312,7 +330,7 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
     </div>
     {!selection && <div className="snip-hint">拖动选区 · 方向键 / WASD 微调光标 · C 取色 · Esc 退出<button title="取消截图" onClick={() => void close()}><X size={16} /></button></div>}
     {image && cursor && canvas.current && (!selection || tool === 'select' || inspect) && <ScreenshotLoupe source={canvas.current} cursor={cursor} viewport={viewport} marks={marks} />}
-    {selection && <div className="snip-toolbar" role="toolbar" aria-label="截图工具">
+    {selection && <div ref={toolbar} className="snip-toolbar" role="toolbar" aria-label="截图工具">
       <div className="snip-tools">{TOOLS.map(([value, label, Icon]) => <button key={value} title={label} aria-label={label} aria-pressed={tool === value} disabled={busy} className={tool === value ? 'active' : ''} onClick={() => setTool(value)}><Icon size={18} /></button>)}
         <span className="snip-divider" />
         <button title="撤销（Ctrl/⌘ Z）" aria-label="撤销" disabled={!marks.length || busy} onClick={undo}><Undo2 size={18} /></button>

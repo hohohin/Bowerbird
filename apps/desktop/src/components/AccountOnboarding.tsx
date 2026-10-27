@@ -29,7 +29,6 @@ export function AccountOnboarding() {
     <ModalShell
       title="Bowerbird 账号"
       eyebrow="Account"
-      description="账号只同步订阅和积分；素材库与本地数据库默认不上传。使用 Cloud / Agent 时，仅本次明确提交的文字和参考图会临时上传。"
       width="md"
       preventClose={busy}
       onClose={() => setOpen(false)}

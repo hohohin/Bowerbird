@@ -39,6 +39,16 @@
 
 真实验收覆盖公网三文件哈希、未登录 401、普通用户 403、搜索与筛选、严格布尔值／不存在用户、重复设置唯一审计、其他 metadata／管理员权限保留、会员积分不变、RPC／审计表越权拒绝、权益刷新、真实浏览器取消资格与管理员撤权后旧 JWT 拒绝及页面清空。测试通过后临时 Auth 账号全部删除，审计保留；未发送邮件、发码、调用模型或修改正式账号资格。首轮测试将权益刷新的 `updated_at` 变化误计入余额变化，核对 `refresh_user_credit_snapshot` 后修正测试口径并完整复验；不修改生产计费逻辑。证据 `.tmp/user-admin-20261022/{published.json,deployment.json,smoke.json,live-users.png}`；旧 Edge 源码在其中 `rollback/`，原官网目录保留。官网回滚切回上述 2203 目录并重启 `bowerbird-website.service`，Edge 回滚部署该 `rollback/` 中的 `code-admin`；保留 0069 及审计，避免删除已发生操作的记录。
 
+### 昵称展示与搜索（2026-10-25，已验证、待部署）
+
+新增 `0076_user_admin_nickname.sql`，仅替换 `admin_list_users`：从现有 `raw_user_meta_data.nickname` 读取非空字符串，随列表返回并支持大小写不敏感的字面子串搜索；不返回 openid、unionid 或完整 metadata，不更新账号资料。后台列表与测试资格确认框优先显示昵称，列表保留邮箱和 UUID；缺昵称回退邮箱。昵称通过 `textContent` 展示，不能作为权限或唯一身份依据。
+
+验证：PGlite 覆盖中文／英文／emoji、字面 `%_`、空值与非字符串、metadata 不泄漏及原有管理／兑换码权限回归；生产构建的 Chromium 覆盖昵称搜索、无昵称回退、HTML 字符按文字展示、分页、撤权、退出迟到响应及 390px 窄屏。官网生产构建通过。本机未检出索引中 `ARCH-ADJUST-PLAN.md`、`Bowerbird开发计划.md`，本次依据当前 PROJECT、收费化进度、已有后台实现与部署文档进行局部修改。
+
+上线前读取实际线上迁移与 `admin_list_users` 定义并备份，核对与 0069 基线的差异；定向应用 0076 并登记迁移，勿全量 push（0068 保持未应用）。现有 `code-admin` 原样返回 RPC 结果，无须重部署 Edge。网站须从实际现役发布目录创建候选，仅替换本次 `dist/admin/index.html` 与 `dist/admin/admin.js`，其余现役文件保留；若硬链接克隆，先替换 inode，禁止原地改写共享文件。核验公网文件哈希、管理员昵称查询、普通用户拒绝后记录上线证据。回退网站使用实际备份目录；需要撤销查询变更时恢复备份函数定义，保留迁移记录与用户资料。
+
+当前部署受阻：这台 Mac 的 SSH 尝试返回 `Permission denied (publickey)`，`apps/cloud/.env.local` 仅有公开 URL 与 publishable key；等待可用 VPS 登录方式及 Supabase 管理凭据路径。尚未连接生产数据库或修改线上后台。
+
 ### 管理员授权
 
 2026-09-14 已核验 `admin@bowerbird.cn` 为已验证邮箱的现有账号，并通过 Auth 管理 API 合并添加 `bowerbird_admin=true`；随后重新读取账号，确认权限生效、其他 app metadata 保持。仅变更这一账号标记，未发送登录邮件或修改密码、订阅与积分。部署后未登录调用两个接口均返回 401，官网后台返回 200；正式管理员标记已再次回读确认。无密钥的验证回执保留在本地 `.tmp/code-admin-account-verified.json`。

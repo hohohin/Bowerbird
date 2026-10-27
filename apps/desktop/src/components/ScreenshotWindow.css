@@ -7,7 +7,7 @@
 .snip-dimensions { position: absolute; left: 0; top: 4px; padding: 3px 6px; background: #17191ee8; border-radius: 3px; font-size: 11px; white-space: nowrap; }
 .snip-handle { position: absolute; width: 9px; height: 9px; border: 1px solid #347ed9; background: white; pointer-events: auto; }
 .snip-handle.nw { left: -5px; top: -5px; cursor: nwse-resize; }.snip-handle.ne { right: -5px; top: -5px; cursor: nesw-resize; }.snip-handle.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }.snip-handle.se { right: -5px; bottom: -5px; cursor: nwse-resize; }
-.snip-toolbar { width: max-content; position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); max-width: calc(100% - 24px); padding: 8px; border: 1px solid #ffffff25; border-radius: 10px; background: #24272df7; box-shadow: 0 8px 30px #0005; }
+.snip-toolbar { width: max-content; position: absolute; max-width: calc(100% - 16px); max-height: calc(100% - 16px); overflow: auto; padding: 8px; border: 1px solid #ffffff25; border-radius: 10px; background: #24272df7; box-shadow: 0 8px 30px #0005; }
 .snip-tools, .snip-options { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .snip-tools button, .snip-pin-bar button, .snip-hint button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; border: 0; border-radius: 5px; width: 32px; height: 32px; color: #e4e7ed; background: transparent; cursor: pointer; }
 .snip-tools button:hover, .snip-pin-bar button:hover { background: #ffffff18; }.snip-tools button.active { background: #367bc5; color: white; }.snip-tools button.snip-confirm { color: #83dba2; }.snip-tools button:disabled, .snip-pin-bar button:disabled { opacity: .3; cursor: default; }

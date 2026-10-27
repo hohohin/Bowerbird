@@ -209,7 +209,8 @@ async function loadUsers() {
   $("users-count").textContent = `${result.total} 位用户`;
   $("user-rows").replaceChildren(...result.rows.map((row) => {
     const tr = document.createElement("tr");
-    const account = cell(row.email || "未绑定邮箱", row.id); account.className = "user-identity";
+    const name = row.nickname || row.email || "未绑定邮箱";
+    const account = cell(name, row.nickname && row.email ? `${row.email} · ${row.id}` : row.id); account.className = "user-identity";
     if (row.is_admin) account.append(Object.assign(document.createElement("small"), { textContent: "管理员" }));
     const status = cell(""); status.append(Object.assign(document.createElement("span"), {
       className: `badge ${row.is_test_account ? "unused" : "expired"}`, textContent: row.is_test_account ? "测试账号" : "非测试账号",
@@ -220,7 +221,7 @@ async function loadUsers() {
       testTarget = { id: row.id, enabled: !row.is_test_account };
       $("test-account-dialog").returnValue = "cancel";
       $("test-account-title").textContent = row.is_test_account ? "取消测试资格？" : "设为测试账号？";
-      $("test-account-description").textContent = `${row.email || "未绑定邮箱"} · ${row.id}`;
+      $("test-account-description").textContent = `${name} · ${row.id}`;
       $("test-account-dialog").showModal();
     });
     action.append(button);

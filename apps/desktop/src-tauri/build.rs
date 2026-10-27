@@ -58,6 +58,12 @@ fn public_value(names: &[&str], files: &[HashMap<String, String>]) -> Option<Str
 
 fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rerun-if-changed=macos/screenshot_focus.m");
+        cc::Build::new()
+            .file("macos/screenshot_focus.m")
+            .flag("-fobjc-arc")
+            .compile("bowerbird_screenshot_focus");
+        println!("cargo:rustc-link-lib=framework=AppKit");
         println!("cargo:rerun-if-changed=macos/browser_capture.m");
         cc::Build::new()
             .file("macos/browser_capture.m")

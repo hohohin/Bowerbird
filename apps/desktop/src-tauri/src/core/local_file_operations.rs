@@ -170,11 +170,13 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let path = selected_file(&tx, id, expected_path)?;
+        let draft_files = super::library::draft_workspace_files(&tx, &[id.to_string()], None)?;
         super::project_canvas::hide_asset_canvas_nodes(&tx, id, None)?;
         tx.execute("DELETE FROM assets WHERE id=?1", [id])?;
         // SQL failures and filesystem failures leave the index intact; never report a failed removal as success.
         fs::remove_file(&path)?;
         tx.commit()?;
+        super::library::cleanup_draft_workspace_files(&conn, &draft_files);
         Ok(())
     }
 }

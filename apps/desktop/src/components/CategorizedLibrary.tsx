@@ -36,13 +36,14 @@ import "./CategorizedLibrary.css";
 type BrowsePosition = { active: string | null; top: number; alphabetic: boolean; color: string | null; query: string; generatedFilter: string | null };
 const browsePositions = new Map<string, BrowsePosition>();
 
-export function CategorizedLibrary({ kind, media = "images", projectId = null, projectScope = false, navigation, onClose, onCreateProject, onAssetsChange }: {
+export function CategorizedLibrary({ kind, media = "images", projectId = null, projectScope = false, navigation, onClose, onCreateProject, onAssetsChange, onPickImages }: {
   kind: CatalogKind; projectId?: string | null; projectScope?: boolean; navigation: ReactNode; onClose: () => void; onCreateProject?: (ids?: string[]) => Promise<unknown>;
   media?: LibraryMedia;
   onAssetsChange?: (assets: Asset[]) => void;
+  onPickImages?: (assets: Asset[]) => Promise<void>;
 }) {
   const glass = useLibraryGlass();
-  const positionKey = JSON.stringify([projectId, projectScope, media, kind]);
+  const positionKey = JSON.stringify([projectId, projectScope, media, kind, !!onPickImages]);
   const [savedPosition] = useState(() => browsePositions.get(positionKey));
   const flat = kind === "all" || (media === "videos" && kind === "tags");
   const [catalog, setCatalog] = useState<MaterialCatalog>({ tags: [], collections: [], prompts: [], tag_asset_ids: {} });
@@ -259,6 +260,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   }
   function openDetail(asset: Pick<Asset, "id">) {
     if (working) return;
+    if (onPickImages) { void run(async () => onPickImages(await resolveSelection([asset.id]))); return; }
     previewVersion.current++;
     setPreview(null);
     useStore.getState().openDetail(asset.id);
@@ -272,7 +274,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     } catch (error) { if (alive.current && version === previewVersion.current) notifyError(error, "无法预览素材"); }
   }
   function context(asset: Asset, x: number, y: number) {
-    if (working) return;
+    if (working || onPickImages) return;
     const ids = selected.has(asset.id) ? [...selected] : [asset.id];
     const key = filterKey;
     if (!selected.has(asset.id)) setSelected(new Set([asset.id]));
@@ -363,9 +365,9 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
         <div className="file-view-heading">
           {navigation}
           <LibraryFloatingControls>
-            <LibraryMediaSwitch/>
+            {!onPickImages && <LibraryMediaSwitch/>}
             <GeneratedImageFilter floating value={generatedFilter} onChange={useLocalFileMode.getState().setGeneratedFilter}/>
-            <LibraryBrowserButton/>
+            {!onPickImages && <LibraryBrowserButton/>}
             <FileColorFilter open={colorsOpen} onOpenChange={setColorsOpen} color={color} onColorChange={setColor} palette={palette}/>
           </LibraryFloatingControls>
         </div>
@@ -374,7 +376,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
           {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !total && !catalogError ? <p className="catalog-hint catalog-empty">{kind === "collections" && !currentCollection ? "还没有集合，点击左侧 ＋ 新建集合。" : query || color || generatedFilter ? "没有匹配的素材。" : kind !== "collections" ? "还没有已登记的素材。" : "集合还没有素材。可在素材右键菜单中选择「添加到集合」。"}</p> : null}
           {loadedCatalogScope.current === filterKey && <VirtualCatalog key={filterKey} filter={filter} sections={sections} headings={!flat} width={width} revision={revision} scroll={scroll}
             selected={selected} jump={jump} initialTop={savedPosition?.query === query && savedPosition?.color === color && savedPosition?.generatedFilter === generatedFilter ? savedPosition.top : 0}
-            onActive={onActive} onAssetsChange={onAssetsChange} onSelect={select} onActivate={multiple || working ? undefined : activate} onOpen={openDetail} onContextMenu={context}/>}
+            onActive={onActive} onAssetsChange={onAssetsChange} onSelect={select} onActivate={multiple || working || onPickImages ? undefined : activate} onOpen={openDetail} onContextMenu={context}/>}
         </OverlayScrollArea>
         <ThumbnailSizeSlider scope="library"/>
         {(selected.size > 0 || multiple) && <div className="catalog-selection" role="group" aria-label="分类素材所选操作">
@@ -382,7 +384,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
           <span>{working ? "正在处理…" : `${selected.size} 项`}</span><button disabled={working} onClick={() => void selectAll()}>全选</button>
           <button disabled={working || !selected.size} onClick={() => setAssign([...selected])}>添加到集合</button>
           {kind === "collections" && active && <button disabled={working || !selected.size} onClick={() => void run(async () => { await materialCatalog.members(active, [...selected], false); finishSelection(); setRevision(v => v + 1); })}>移出集合</button>}
-          <button disabled={working || !selected.size} onClick={() => void run(async () => { const key = filterKey; const assets = await resolveSelection(); if (!alive.current || filterKeyRef.current !== key) return; await addMaterialAssets(assets, projectId, onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); })}>{projectId ? "添加到画板" : "添加到新项目"}</button>
+          <button disabled={working || !selected.size} onClick={() => void run(async () => { const key = filterKey; const assets = await resolveSelection(); if (!alive.current || filterKeyRef.current !== key) return; if (onPickImages) { await onPickImages(assets); finishSelection(); return; } await addMaterialAssets(assets, projectId, onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); })}>{onPickImages ? "添加到草稿" : projectId ? "添加到画板" : "添加到新项目"}</button>
         </div>}
       </div>
     </div>

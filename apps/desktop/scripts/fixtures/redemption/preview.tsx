@@ -38,7 +38,11 @@ w.__TAURI_INTERNALS__ = {
     if (command === "library_root") return "synthetic-library";
     if (command === "codex_health" || command === "dreamina_health") return { ok: false };
     if (command === "cloud_sync_entitlement") return pro;
-    if (command === "cloud_start_pro_trial") return { ...pro, balances: { daily: 0, sub: 0, topup: 0 } };
+    if (command === "cloud_start_pro_trial") {
+      if (w.trialMode === "hold") await new Promise((resolve) => { w.releaseTrial = resolve; });
+      if (w.trialMode === "error") throw "暂时无法领取体验，请稍后重试。";
+      return { ...(w.trialMode === "expired" ? free : pro), balances: { daily: 0, sub: 0, topup: 0 } };
+    }
     if (command === "cloud_redeem_code") {
       if (w.mode === "error") throw "兑换码无效、已过期或已被使用";
       if (w.mode === "hold") await new Promise((resolve) => { w.release = resolve; });

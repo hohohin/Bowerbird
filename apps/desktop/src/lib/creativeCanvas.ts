@@ -126,6 +126,7 @@ interface AssetPayload {
     height?: number;
   };
   execution?: unknown;
+  draft_document_id?: string;
 }
 
 function parseAssetPayload(payloadJson: string): AssetPayload | null {

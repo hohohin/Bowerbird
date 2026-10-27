@@ -34,6 +34,8 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/进展归档.md` | PROJECT.md「目前进展」历史里程碑全量归档（append-only 只进不改；PROJECT.md 只留最近 3 条） | 追溯旧里程碑 / 查历史实现细节时 |
 | `dev-doc/研究报告-服务器化CLI与API化改造可行性.md` | 服务器套壳 CLI vs 官方 API 可行性结论（推荐火山方舟官方 API） | 托管算力 / 远程化方向决策前必读 |
 | `dev-doc/LAYER-EDITING.md` | Seedream 5.0 Pro 分层编辑、独立面板、本地工程、Cloud 图层包与隔离验证 | 分层拆分、透明图层修改、图层工程保存或分层服务启价前必读 |
+| `dev-doc/PHOTOSUITE-DRAFT-RESEARCH.md` | PhotoSuite / PhotoSplice 画笔与交互源码研究、草稿现状差距及最简 PS 分期建议 | 追溯草稿编辑器设计依据时读；当前实现读 DRAFT-EDITOR.md |
+| `dev-doc/DRAFT-EDITOR.md` | 最简草稿编辑器、画笔压感／惯性、图层／文字／自由选区／颜色板、工程快照、画板重试与隔离验证 | 新建草稿、画笔内核、草稿工程保存或删除清理相关工作前必读 |
 | `dev-doc/SEEDANCE-2.5-INTEGRATION.md` | 即梦 Seedance 2.5 视频接入、官方 CLI 四模式契约与验收证据 | 视频生成、参数、任务恢复、视频入库与播放相关工作前必读 |
 | `dev-doc/VIDEO-REPLICATION.md` | 画板工具箱、视频分析与改写、插入画板生成、抖音获取、Cloud 独立计费与验证 | 视频复刻、抖音参考视频获取或分析/改写启价相关工作前必读 |
 | `dev-doc/COMFYUI-LOCAL-VIDEO.md` | 本机 ComfyUI H3 视频卡片、环境检测与一键安装、固定工作流参数、账号门控、任务恢复与隔离验证 | 本机 H3 视频、首尾帧或 ComfyUI 接入/安装相关工作前必读 |

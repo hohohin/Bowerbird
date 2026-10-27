@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-shell";
-import { Moon, RefreshCw, Sun } from "lucide-react";
+import { ArrowRight, BadgeCheck, Gift, LogOut, Moon, RefreshCw, Sun, UserRound } from "lucide-react";
 import { useStore, understandEngineUsable } from "../store";
 import { api } from "../lib/api";
 import { CODEX_ONBOARDING_ENABLED, DREAMINA_ONBOARDING_ENABLED, LEGACY_SETTINGS_ENABLED } from "../lib/featureFlags";
@@ -676,76 +676,59 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
 
           {section === "account" && (
             <>
-              {/* 账号名 */}
-              <div className="settings-card px-3 py-2.5">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="min-w-0 truncate text-ink">
-                    {loggedIn ? accountName : "未登录"}
-                  </span>
-                  {loggedIn ? (
-                    <button
-                      onClick={() => void syncCloudEntitlement()}
-                      disabled={cloudBusy}
-                      className="shrink-0 text-xs text-muted hover:text-accent disabled:opacity-50"
-                    >
-                      {cloudBusy ? "同步中…" : "刷新权益"}
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => {
-                        setAccountOnboardingForceOpen(true);
-                        onClose();
-                      }}
-                      className="shrink-0 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90"
-                    >
-                      登录 Bowerbird 账号
-                    </button>
-                  )}
-                </div>
-                {loggedIn && (
-                  <p className="mt-1 text-[11px] text-muted">
-                    账号只同步订阅和积分；素材库与本地数据库默认不上传。使用 Cloud / Agent 时，仅本次明确提交的文字和参考图会临时上传。
-                  </p>
-                )}
+              <div className="account-settings space-y-4">
+                <header className="flex flex-wrap items-center justify-between gap-3 border-b border-edge pb-4">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-panel2 text-muted"><UserRound size={20} aria-hidden="true" /></span>
+                    <div className="min-w-0">
+                      <p className="text-xs text-muted">{loggedIn ? "当前账号" : "Bowerbird 账号"}</p>
+                      <h2 className="mt-1 break-all text-sm font-semibold text-ink">{loggedIn ? accountName : "登录，管理你的创作权益"}</h2>
+                    </div>
+                  </div>
+                  {loggedIn && <button type="button" onClick={() => void syncCloudEntitlement()} disabled={cloudBusy || trialBusy} className="account-action">
+                    <RefreshCw size={14} aria-hidden="true" className={cloudBusy ? "motion-safe:animate-spin" : undefined} />
+                    {cloudBusy ? "同步中…" : "刷新权益"}
+                  </button>}
+                </header>
+
+                {loggedIn ? <>
+                  <section className="settings-card account-membership p-4" aria-label="订阅权益">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="flex items-center gap-2 font-medium text-ink"><BadgeCheck size={18} aria-hidden="true" />订阅权益</h3>
+                      <span className="rounded-full bg-panel2 px-3 py-1 text-xs font-semibold text-ink">{cloudEntitlement ? tier : "待同步"}</span>
+                    </div>
+                    <p className="mt-3 text-base font-semibold text-ink">{!cloudEntitlement ? "刷新权益，查看订阅状态" : tier === "FREE" ? "体验 Pro，拓展创作方式" : `${tier === "PRO" ? "Pro" : "Studio"} 功能权益已开启`}</p>
+                    <p className="mt-1 text-xs leading-5 text-muted">{tier === "FREE" ? "每个账号可领取一次 7 天功能体验，不含 Bcoin。" : "Cloud 服务按实际用量单独消耗 Bcoin。"}</p>
+                    {cloudEntitlement && tier === "FREE" && <>
+                      <button type="button" className="account-action account-action-primary mt-4" disabled={trialBusy || cloudBusy} aria-busy={trialBusy} onClick={async () => {
+                        if (trialBusy || cloudBusy) return;
+                        setTrialBusy(true); setTrialMessage("");
+                        try {
+                          const next = await api.cloudStartProTrial();
+                          useStore.setState({ cloudEntitlement: next });
+                          setTrialMessage(next.tier === "free" ? "此账号的 Pro 体验已结束，每个账号仅可领取一次。" : "7 天 Pro 功能体验已领取；Cloud 仍按用量计费，到期不会自动扣款。");
+                        } catch (error) { setTrialMessage(userErrorMessage(error, "暂时无法领取体验，请稍后重试。")); }
+                        finally { setTrialBusy(false); }
+                      }}><Gift size={16} aria-hidden="true" />{trialBusy ? "领取中…" : "领取 7 天 Pro 体验"}<ArrowRight size={15} aria-hidden="true" /></button>
+                      <p className="mt-2 text-xs text-muted">到期不会自动扣款 · Cloud 另行计费</p>
+                    </>}
+                    {trialMessage && <p role="status" className="mt-3 rounded-md bg-panel2 p-3 text-xs leading-5 text-ink">{trialMessage}</p>}
+                  </section>
+
+                  <section aria-label="兑换权益" className="space-y-2">
+                    <RedeemCodeCard key={cloudAuth?.user_id} />
+                    <p className="px-1 text-xs leading-5 text-muted">在线购买暂未开放，已有兑换码可在上方兑换。</p>
+                  </section>
+                  <div className="settings-card p-4"><CreditDetails entitlement={cloudEntitlement} /></div>
+                  <footer className="flex justify-end border-t border-edge pt-3">
+                    <button type="button" onClick={() => void logoutCloud()} disabled={cloudBusy || trialBusy} className="account-action"><LogOut size={14} aria-hidden="true" />登出账号</button>
+                  </footer>
+                </> : <section className="settings-card p-5">
+                  <h3 className="font-medium text-ink">开启你的创作账号</h3>
+                  <p className="mt-2 text-xs leading-5 text-muted">登录后可查看 Pro 权益、兑换会员及管理 Bcoin。</p>
+                  <button type="button" onClick={() => { setAccountOnboardingForceOpen(true); onClose(); }} className="account-action account-action-primary mt-4">登录 Bowerbird 账号<ArrowRight size={15} aria-hidden="true" /></button>
+                </section>}
               </div>
-
-              {/* 等级 & 升级 */}
-              {loggedIn && (
-                <div className="settings-card px-3 py-2.5">
-                  <span className="text-ink">
-                    当前档位：
-                    <span className="ml-1 rounded bg-accent/15 px-1.5 py-0.5 text-xs font-semibold text-accent">
-                      {tier}
-                    </span>
-                  </span>
-                  {tier === "FREE" && <button className="app-button mt-2" disabled={trialBusy} onClick={async () => {
-                    if (trialBusy) return; setTrialBusy(true); setTrialMessage("");
-                    try { const next = await api.cloudStartProTrial(); useStore.setState({ cloudEntitlement: next }); setTrialMessage("7 天 Pro 功能体验已领取；Cloud 仍按用量计费，到期不会自动扣款。"); }
-                    catch (error) { setTrialMessage(userErrorMessage(error, "暂时无法领取体验，请稍后重试。")); }
-                    finally { setTrialBusy(false); }
-                  }}>{trialBusy ? "领取中…" : "领取一次 7 天 Pro 功能体验"}</button>}
-                  {trialMessage && <p role="status" className="mt-1 text-xs text-muted">{trialMessage}</p>}
-                  <p className="mt-1 text-[11px] text-muted">
-                    在线购买暂未开放。如有 Pro 兑换码，可在下方兑换，权益将同步到当前账号。
-                  </p>
-                </div>
-              )}
-
-              {loggedIn && <RedeemCodeCard key={cloudAuth?.user_id} />}
-
-              {/* credits 明细 */}
-              {loggedIn && (
-                <div className="settings-card px-3 py-2.5">
-                  <CreditDetails entitlement={cloudEntitlement} />
-                  <button
-                    onClick={() => void logoutCloud()}
-                    disabled={cloudBusy}
-                    className="mt-3 text-xs text-muted hover:text-red-300 disabled:opacity-50"
-                  >
-                    登出账号
-                  </button>
-                </div>
-              )}
             </>
           )}
 

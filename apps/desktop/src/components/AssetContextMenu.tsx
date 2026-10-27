@@ -449,6 +449,7 @@ export function AssetContextMenu() {
       }}><LayoutDashboard size={13} />以此图新建画板</button>}
       {isGenerated && <button role="menuitem" data-tour="ctx-reuse-gen" className={itemClass} disabled={busy} onClick={reuseGeneration}><ClipboardCopy size={13} />复用生成提示词</button>}
       {annotatable && <>
+        <button role="menuitem" className={itemClass} disabled={busy} onClick={() => useStore.getState().openDraftEditor({ assetId, projectId, canvasNodeId: menu.canvasSelection?.primaryNodeId ?? (menu.canvasSelection?.nodeIds.length === 1 ? menu.canvasSelection.nodeIds[0] : undefined) })}><PenTool size={13} />编辑草稿</button>
         <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { openAnnotator(assetId); closeContextMenu(); }}><PenTool size={13} />图片标注</button>
         <button role="menuitem" className={itemClass} disabled={busy} onClick={() => useStore.getState().openLayerEditor(assetId)}><Layers size={13} />分层编辑</button>
       </>}

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 
 const MIN_ZOOM = .25, MAX_ZOOM = 8;
-const isTyping = (target: EventTarget | null) => target instanceof HTMLElement && !!target.closest('input, textarea, select, [contenteditable="true"]');
+const isTyping = (target: EventTarget | null) => target instanceof HTMLElement && !!target.closest('input, textarea, select, [contenteditable="true"], [data-draft-color-panel]');
 
 /** View-only navigation, independent of layer geometry and undo history. */
-export function useLayerViewport(preview: RefObject<HTMLElement>) {
+export function useLayerViewport(preview: RefObject<HTMLElement>, enabled = true) {
   const [view, setView] = useState({ zoom: 1, x: 0, y: 0 });
   const [spaceHeld, setSpaceHeld] = useState(false);
   const [panning, setPanning] = useState(false);
@@ -31,6 +31,10 @@ export function useLayerViewport(preview: RefObject<HTMLElement>) {
   }
 
   useEffect(() => {
+    if (!enabled) {
+      space.current = false; setSpaceHeld(false); endPan();
+      return;
+    }
     const node = preview.current;
     if (!node) return;
     const onWheel = (event: WheelEvent) => {
@@ -64,7 +68,7 @@ export function useLayerViewport(preview: RefObject<HTMLElement>) {
       window.removeEventListener("blur", reset);
       document.removeEventListener("visibilitychange", visibility);
     };
-  }, []);
+  }, [enabled]);
 
   function onPointerDownCapture(event: ReactPointerEvent<HTMLElement>) {
     if ((event.target as HTMLElement).closest('.layer-view-tools')) return;

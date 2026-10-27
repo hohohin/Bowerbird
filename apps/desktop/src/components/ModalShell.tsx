@@ -59,7 +59,8 @@ export function ModalShell({
         return;
       }
       if (event.key !== "Tab" || !panelRef.current) return;
-      const focusable = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE));
+      const focusable = Array.from(panelRef.current.querySelectorAll<HTMLElement>(FOCUSABLE))
+        .filter(element => !element.closest('[inert], [hidden], [aria-hidden="true"]'));
       if (focusable.length === 0) return;
       const firstItem = focusable[0];
       const lastItem = focusable[focusable.length - 1];

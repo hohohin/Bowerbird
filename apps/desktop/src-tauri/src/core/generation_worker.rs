@@ -1109,6 +1109,7 @@ mod tests {
             .unwrap();
         }
         let payload = serde_json::to_string(&AssetNodePayloadV1 {
+            draft_document_id: None,
             schema_version: 1,
             snapshot: AssetSnapshotV1 {
                 name: "父素材".into(),

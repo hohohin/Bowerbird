@@ -13,6 +13,20 @@ async function drag(x1, y1, x2, y2) {
 }
 async function output() { return page.evaluate(() => window.calls.filter(c => c.command === 'screenshot_output').at(-1)?.args); }
 async function selectionRect() { return page.locator('.snip-selection').evaluate(el => ({ x: Math.round(parseFloat(el.style.left) * 16), y: Math.round(parseFloat(el.style.top) * 12), width: Math.round(parseFloat(el.style.width) * 16), height: Math.round(parseFloat(el.style.height) * 12) })); }
+async function toolbarGeometry(placement) {
+  await page.waitForFunction(placement => {
+    const selection = document.querySelector('.snip-selection')?.getBoundingClientRect();
+    const toolbar = document.querySelector('.snip-toolbar')?.getBoundingClientRect();
+    if (!selection || !toolbar) return false;
+    const edge = placement === 'outside' ? toolbar.top - selection.bottom : selection.bottom - toolbar.bottom;
+    return Math.abs(edge - 8) < 1 && toolbar.left >= 7.5 && toolbar.top >= 7.5
+      && toolbar.right <= innerWidth - 7.5 && toolbar.bottom <= innerHeight - 7.5;
+  }, placement);
+  return page.evaluate(() => ({
+    selection: document.querySelector('.snip-selection').getBoundingClientRect().toJSON(),
+    toolbar: document.querySelector('.snip-toolbar').getBoundingClientRect().toJSON(),
+  }));
+}
 async function loupePixel() { return page.locator('.snip-loupe canvas').evaluate(el => [...el.getContext('2d').getImageData(57, 57, 1, 1).data]); }
 async function pixels(data) {
   return page.evaluate(async data => {
@@ -149,6 +163,63 @@ try {
   assert.deepEqual(await selectionRect(), { x: 0, y: 0, width: 1, height: 1 });
   await page.keyboard.press('Enter');
   assert.equal(await page.evaluate(async data => { const img = new Image(); img.src = data; await img.decode(); return img.width * img.height; }, (await output()).data), 1);
+  // Toolbar follows the real selection edges, including movement and resizing.
+  await page.goto(url);
+  await page.waitForFunction(() => window.calls.some(c => c.command === 'plugin:window|show'));
+  await drag(100, 80, 700, 300);
+  const initialToolbar = await toolbarGeometry('outside');
+  assert.ok(Math.abs(initialToolbar.toolbar.right - initialToolbar.selection.right) < 1, 'toolbar aligns to the selection right edge');
+  const geometryPaints = await page.evaluate(() => window.basePaints);
+  await drag(200, 160, 240, 180);
+  const movedToolbar = await toolbarGeometry('outside');
+  assert.equal(movedToolbar.selection.x - initialToolbar.selection.x, 40);
+  assert.equal(movedToolbar.toolbar.x - initialToolbar.toolbar.x, 40);
+  assert.equal(movedToolbar.toolbar.y - initialToolbar.toolbar.y, 20);
+  await drag(movedToolbar.selection.right, movedToolbar.selection.bottom, 760, 350);
+  const resizedToolbar = await toolbarGeometry('outside');
+  assert.equal(resizedToolbar.selection.right, 760);
+  assert.equal(resizedToolbar.selection.bottom, 350);
+  assert.ok(Math.abs(resizedToolbar.toolbar.right - resizedToolbar.selection.right) < 1);
+  assert.equal(await page.evaluate(() => window.basePaints), geometryPaints, 'toolbar movement never repaints screenshot pixels');
+  // Choose a boundary where the compact toolbar fits below, but text options do not.
+  await page.getByRole('button', { name: '文字', exact: true }).click();
+  const expandedToolbar = await toolbarGeometry('outside');
+  assert.ok(expandedToolbar.toolbar.height > resizedToolbar.toolbar.height);
+  await page.getByRole('button', { name: '调整选区', exact: true }).click();
+  await page.mouse.click(20, 20, { button: 'right' });
+  const thresholdBottom = Math.round(600 - 16 - (resizedToolbar.toolbar.height + expandedToolbar.toolbar.height) / 2);
+  await drag(100, 80, 700, thresholdBottom);
+  const compactBoundary = await toolbarGeometry('outside');
+  await page.screenshot({ path: '.tmp/screenshot/toolbar-outside.png' });
+  await page.getByRole('button', { name: '文字', exact: true }).click();
+  const textBoundary = await toolbarGeometry('inside');
+  assert.deepEqual(textBoundary.selection, compactBoundary.selection, 'tool changes do not move the selection');
+  await page.screenshot({ path: '.tmp/screenshot/toolbar-inside.png' });
+  await page.getByRole('button', { name: '调整选区', exact: true }).click();
+  const collapsedBoundary = await toolbarGeometry('outside');
+  assert.deepEqual(collapsedBoundary.toolbar, compactBoundary.toolbar, 'closing text options returns the toolbar below the selection');
+  // Resizing only the viewport Y dimension must still follow the visible bottom edge.
+  await page.mouse.click(20, 20, { button: 'right' });
+  await drag(100, 80, 790, 590);
+  await toolbarGeometry('inside');
+  await page.setViewportSize({ width: 800, height: 480 });
+  const unequalToolbar = await toolbarGeometry('inside');
+  assert.ok(Math.abs(unequalToolbar.selection.bottom - 472) < 1);
+  assert.equal(unequalToolbar.selection.right, 790);
+  // A tiny edge selection cannot contain the toolbar: keep its controls on screen.
+  await page.setViewportSize({ width: 320, height: 260 });
+  await page.goto(url);
+  await page.waitForFunction(() => window.calls.some(c => c.command === 'plugin:window|show'));
+  await drag(314, 252, 318, 258);
+  await toolbarGeometry('inside');
+  await page.getByRole('button', { name: '文字', exact: true }).click();
+  await toolbarGeometry('inside');
+  const narrowButtons = await page.getByRole('toolbar').locator('button').evaluateAll(buttons => buttons.map(button => button.getBoundingClientRect().toJSON()));
+  assert.ok(narrowButtons.every(box => box.left >= 8 && box.top >= 8 && box.right <= 312 && box.bottom <= 252), 'all toolbar buttons remain reachable on a narrow viewport');
+  await page.screenshot({ path: '.tmp/screenshot/toolbar-narrow.png' });
+  await page.getByRole('button', { name: '复制截图', exact: true }).click();
+  assert.equal((await output()).action, 'copy');
+  await page.setViewportSize({ width: 800, height: 600 });
   await page.goto(url + '?mode=pin'); await page.getByAltText('置顶截图').waitFor();
   await page.getByTitle('原始尺寸', { exact: true }).click();
   assert.ok(await page.evaluate(() => window.calls.some(c => c.command === 'plugin:window|set_size' && c.args.value.size.width === 1600)));
@@ -160,7 +231,7 @@ try {
   await capture.waitFor(); assert.equal(await capture.textContent(), 'F1');
   await capture.click(); await page.keyboard.press('Control+Shift+S'); await page.waitForFunction(() => window.settings.screenshot_shortcuts.capture === 'Control+Shift+KeyS');
   await page.evaluate(() => { window.conflict = true; }); await capture.click(); await page.keyboard.press('F6');
-  await page.getByRole('alert').filter({ hasText: '已被占用' }).waitFor(); assert.equal(await capture.textContent(), 'Ctrl + Shift + S');
+  await page.getByRole('alert').filter({ hasText: '可能已被其他应用占用' }).waitFor(); assert.equal(await capture.textContent(), 'Ctrl + Shift + S');
   await page.evaluate(() => { window.conflict = false; });
   await page.getByRole('button', { name: '停用', exact: true }).first().click(); await page.waitForFunction(() => window.settings.screenshot_shortcuts.capture === '');
   await page.getByRole('button', { name: '恢复默认', exact: true }).click(); await page.waitForFunction(() => window.settings.screenshot_shortcuts.capture === 'F1');
@@ -168,7 +239,7 @@ try {
   await page.getByRole('button', { name: '立即截图', exact: true }).click();
   assert.ok(await page.evaluate(() => window.calls.some(c => c.command === 'screenshot_start')));
   await page.screenshot({ path: '.tmp/screenshot/settings.png' });
-  assert.deepEqual(errors, []); console.log('Screenshot UI passed: pixel-exact loupe/colour, edge flipping, Retina/fractional/unequal scales, native cursor IPC, repeated pixel nudges, expand/shrink/bounds/minimum size, text focus, cached base/draft rendering, Retina export, 6 tools, undo/redo, cancellation/retry, warm-window reuse/reset, stale-load rejection, pin, shortcut persistence/conflict.');
+  assert.deepEqual(errors, []); console.log('Screenshot UI passed: pixel-exact loupe/colour, edge flipping, Retina/fractional/unequal scales, native cursor IPC, repeated pixel nudges, expand/shrink/bounds/minimum size, text focus, cached base/draft rendering, Retina export, 6 tools, undo/redo, cancellation/retry, warm-window reuse/reset, stale-load rejection, selection-following toolbar, text-height inside/outside flipping, narrow/tiny selection bounds, pin, shortcut persistence/conflict.');
 } catch (error) {
   await mkdir('.tmp/screenshot', { recursive: true });
   await page.screenshot({ path: '.tmp/screenshot/failure.png' });

@@ -1615,6 +1615,79 @@ impl Database {
         Ok(updated)
     }
 
+    /// Publish a draft revision without replacing the user's canvas instance or its graph links.
+    pub(crate) fn upsert_draft_canvas_node(
+        &self, project_id: &str, document_id: &str, asset: &Asset,
+        source_node_id: Option<&str>, new_node: &NewCanvasNode,
+    ) -> AppResult<CanvasNode> {
+        validate_new_node(new_node)?;
+        if new_node.project_id != project_id || new_node.kind != CreativeNodeKind::Asset
+            || new_node.asset_id.as_deref() != Some(&asset.id)
+            || new_node.thread_id.is_some() || new_node.role != Some(CreativeNodeRole::Reference) {
+            return Err(invalid("草稿画板节点数据不匹配"));
+        }
+        let now = Utc::now().timestamp();
+        let mut conn = self.conn.lock().unwrap();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let saved_document: Option<String> = tx.query_row(
+            "SELECT json_extract(payload,'$.documentId') FROM analyses WHERE asset_id=?1 AND kind='draft_save' AND json_valid(payload) LIMIT 1",
+            [&asset.id], |row| row.get(0),
+        ).optional()?;
+        if saved_document.as_deref() != Some(document_id) {
+            return Err(invalid("素材不属于这份草稿工程"));
+        }
+        let document_for_node = |node: &CanvasNode| -> AppResult<Option<String>> {
+            let payload: AssetNodePayloadV1 = serde_json::from_str(&node.payload_json)?;
+            if let Some(id) = payload.draft_document_id { return Ok(Some(id)); }
+            Ok(tx.query_row(
+                "SELECT json_extract(payload,'$.documentId') FROM analyses WHERE asset_id=?1 AND kind='draft_save' AND json_valid(payload) LIMIT 1",
+                [&node.asset_id], |row| row.get(0),
+            ).optional()?)
+        };
+        let source = if let Some(id) = source_node_id {
+            let node = get_node_tx(&tx, id)?.ok_or_else(|| invalid("原草稿卡片已被移除，请重新打开草稿"))?;
+            if node.project_id != project_id || node.kind != CreativeNodeKind::Asset
+                || node.hidden_at.is_some() || node.asset_id.is_none() {
+                return Err(invalid("原草稿卡片已被移除或不属于当前项目"));
+            }
+            match document_for_node(&node)? {
+                Some(id) if id == document_id => Some(node),
+                Some(_) => return Err(invalid("原卡片已关联另一份草稿，请重新打开")),
+                // Editing an ordinary image starts a separate draft, preserving its original result.
+                None => None,
+            }
+        } else { None };
+        let existing = if source.is_some() { source } else {
+            let id: Option<String> = tx.query_row(
+                "SELECT n.id FROM canvas_nodes n WHERE n.project_id=?1 AND n.kind='asset' AND n.hidden_at IS NULL AND (
+                 json_extract(n.payload_json,'$.draft_document_id')=?2 OR EXISTS(
+                   SELECT 1 FROM analyses a WHERE a.asset_id=n.asset_id AND a.kind='draft_save' AND json_valid(a.payload) AND json_extract(a.payload,'$.documentId')=?2))
+                 ORDER BY n.created_at,n.id LIMIT 1", params![project_id,document_id], |row| row.get(0),
+            ).optional()?;
+            id.map(|id| get_node_tx(&tx, &id)).transpose()?.flatten()
+        };
+        tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) VALUES(?1,?2,?3)",
+            params![project_id,asset.id,now])?;
+        let node = if let Some(existing) = existing {
+            let mut payload: AssetNodePayloadV1 = serde_json::from_str(&existing.payload_json)?;
+            payload.snapshot = asset_snapshot(asset);
+            payload.draft_document_id = Some(document_id.into());
+            tx.execute("UPDATE canvas_nodes SET asset_id=?2,payload_json=?3,updated_at=?4 WHERE id=?1",
+                params![existing.id,asset.id,serde_json::to_string(&payload)?,now])?;
+            get_node_tx(&tx, &existing.id)?.ok_or_else(|| invalid("草稿卡片不存在"))?
+        } else {
+            let mut node = new_node.clone();
+            node.payload_json = serde_json::to_string(&AssetNodePayloadV1 {
+                schema_version: 1, snapshot: asset_snapshot(asset), execution: None,
+                draft_document_id: Some(document_id.into()),
+            })?;
+            insert_node_tx(&tx, &node, now)?
+        };
+        touch_canvas_tx(&tx, project_id, now)?;
+        tx.commit()?;
+        Ok(node)
+    }
+
     pub fn restore_canvas_node(
         &self,
         project_id: &str,
@@ -2079,6 +2152,7 @@ impl Database {
                 } else {
                     let node_id = projection_id("gen-parent", &value.job_id, &value.turn_key, "0");
                     let payload = serde_json::to_string(&AssetNodePayloadV1 {
+                        draft_document_id: None,
                         schema_version: 1,
                         snapshot: snapshot.clone(),
                         execution: Some(AssetExecutionRefV1 {
@@ -2214,6 +2288,7 @@ impl Database {
                     new_reference_ids.push(node_id.clone());
                 }
                 let payload = serde_json::to_string(&AssetNodePayloadV1 {
+                    draft_document_id: None,
                     schema_version: 1,
                     snapshot: snapshot.clone(),
                     execution: Some(AssetExecutionRefV1 {
@@ -2346,6 +2421,7 @@ impl Database {
             let node_id = projection_id("gen-output", job_id, turn_key, &asset.id);
             let snapshot = asset_snapshot(asset);
             let payload = serde_json::to_string(&AssetNodePayloadV1 {
+                draft_document_id: None,
                 schema_version: 1,
                 snapshot: snapshot.clone(),
                 execution: Some(AssetExecutionRefV1 {
@@ -2583,6 +2659,7 @@ impl Database {
                         asset_id: Some(asset_id.clone()),
                         role: Some(CreativeNodeRole::Reference),
                         payload_json: serde_json::to_string(&AssetNodePayloadV1 {
+                            draft_document_id: None,
                             schema_version: 1,
                             snapshot: snapshot.clone(),
                             execution: Some(AssetExecutionRefV1 {
@@ -2804,6 +2881,7 @@ impl Database {
                 asset_id: Some(asset.id.clone()),
                 role: Some(role_value),
                 payload_json: serde_json::to_string(&AssetNodePayloadV1 {
+                    draft_document_id: None,
                     schema_version: 1,
                     snapshot: snapshot.clone(),
                     execution: Some(AssetExecutionRefV1 {
@@ -3144,6 +3222,7 @@ mod tests {
             asset_id: Some(asset_id.into()),
             role: Some(CreativeNodeRole::Output),
             payload_json: serde_json::to_string(&AssetNodePayloadV1 {
+                draft_document_id: None,
                 schema_version: 1,
                 snapshot: AssetSnapshotV1 {
                     name: asset_id.into(),
@@ -4241,6 +4320,7 @@ mod tests {
         assert_eq!(group.project_id, "p1");
 
         let asset_payload = serde_json::to_string(&AssetNodePayloadV1 {
+            draft_document_id: None,
             schema_version: 1,
             snapshot: AssetSnapshotV1 {
                 name: "结果".into(),
@@ -4378,6 +4458,7 @@ mod tests {
         }
         db.add_assets_to_project("p1", &["kept".into()]).unwrap();
         let payload = serde_json::to_string(&AssetNodePayloadV1 {
+            draft_document_id: None,
             schema_version: 1,
             snapshot: AssetSnapshotV1 {
                 name: "素材".into(),

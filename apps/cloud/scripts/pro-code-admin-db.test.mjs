@@ -22,7 +22,7 @@ try {
     create function auth.uid() returns uuid language sql as $$ select null::uuid $$;
     create function extensions.gen_random_uuid() returns uuid language sql as $$ select gen_random_uuid() $$;`);
   const dir = new URL("../supabase/migrations/", import.meta.url);
-  for (const prefix of ["0001", "0002", "0003", "0008", "0059", "0060", "0069"]) {
+  for (const prefix of ["0001", "0002", "0003", "0008", "0059", "0060", "0069", "0076"]) {
     await db.exec(readFileSync(new URL(readdirSync(dir).find((n) => n.startsWith(prefix)), dir), "utf8").replace("create extension if not exists pgcrypto with schema extensions;", ""));
   }
   await q("insert into auth.users(id,email,raw_app_meta_data,raw_user_meta_data) values($1,'admin@example.test','{\"bowerbird_admin\":true}','{}'),($2,'reader@example.test','{}','{\"bowerbird_admin\":true}'),($3,'other@example.test','{\"bowerbird_admin\":\"true\"}','{}')", [actor, customer, other]);
@@ -30,9 +30,18 @@ try {
     await assert.rejects(users("", "", 0, who), /admin required/);
     await assert.rejects(setTest(customer, true, who), /admin required/);
   }
+  await q("update auth.users set raw_user_meta_data=$1::jsonb where id=$2", [JSON.stringify({ nickname: "  小鸟 Bird%_🌿  ", openid: "private-wechat-id" }), customer]);
+  assert.equal((await users("小鸟")).rows[0].nickname, "小鸟 Bird%_🌿");
+  assert.equal((await users("bird%_")).rows[0].id, customer);
+  assert.equal((await users("private-wechat-id")).total, 0);
+  assert.equal(JSON.stringify(await users()).includes("private-wechat-id"), false);
+  for (const nickname of [null, "   ", 123, { value: "invalid" }]) {
+    await q("update auth.users set raw_user_meta_data=$1::jsonb where id=$2", [JSON.stringify({ nickname }), other]);
+    assert.equal((await users(other)).rows[0].nickname, null);
+  }
   assert.equal((await users("READER@")).total, 1);
   assert.equal((await users(customer)).rows[0].id, customer);
-  assert.equal((await users("%_")).total, 0, "search treats SQL wildcards as literal text");
+  assert.equal((await users("%_")).total, 1, "search treats SQL wildcards as literal text");
   assert.equal((await users("", "test")).total, 0);
   await q("update auth.users set raw_app_meta_data = '{\"provider\":\"email\",\"bowerbird_test\":\"true\"}' where id=$1", [customer]);
   assert.equal((await users("", "test")).total, 0, "string true is not a test account");

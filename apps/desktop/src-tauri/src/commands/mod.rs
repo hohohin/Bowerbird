@@ -15,6 +15,7 @@ pub mod media_import;
 pub mod material_catalog;
 pub mod asset_archive;
 pub mod layers;
+pub mod drafts;
 pub mod layer_text;
 pub mod layer_export;
 pub mod local_classification;
