@@ -1,6 +1,40 @@
 import type { PromptedAsset } from "./types";
 import type { CreationEditorDraft } from "../components/creation/useCreationEditor";
 
+export type CreativeComposerMode = "image" | "video" | "chat";
+export interface CreativeComposerState {
+  mode: CreativeComposerMode;
+  drafts: Partial<Record<CreativeComposerMode, CreationEditorDraft>>;
+}
+
+export function parseCreativeComposerState(draftJson: string): CreativeComposerState {
+  const legacy = parseCreativeComposerDraft(draftJson);
+  const fallbackMode = legacy?.generation?.media === "video" ? "video" : "image";
+  try {
+    const saved = JSON.parse(draftJson);
+    const mode: CreativeComposerMode = ["image", "video", "chat"].includes(saved.mode) ? saved.mode : fallbackMode;
+    const drafts: CreativeComposerState["drafts"] = {};
+    for (const key of ["image", "video", "chat"] as const) {
+      const draft = saved.modeDrafts?.[key];
+      if (draft && Array.isArray(draft.refs) && draft.doc) drafts[key] = draft;
+    }
+    if (legacy && !drafts[mode]) drafts[mode] = legacy;
+    return { mode, drafts };
+  } catch { return { mode: fallbackMode, drafts: legacy ? { [fallbackMode]: legacy } : {} }; }
+}
+
+export function serializeCreativeComposerState(state: CreativeComposerState) {
+  return JSON.stringify({ schema_version: 1, mode: state.mode, modeDrafts: state.drafts,
+    composer: state.drafts[state.mode] ?? { doc: { type: "doc", content: [{ type: "paragraph" }] }, refs: [] } });
+}
+
+export function clearSentCreativeChatDraft(draftJson: string, sentDraftJson: string): string | null {
+  const state = parseCreativeComposerState(draftJson);
+  if (JSON.stringify(state.drafts.chat) !== sentDraftJson) return null;
+  delete state.drafts.chat;
+  return serializeCreativeComposerState(state);
+}
+
 export function parseCreativeComposerDraft(draftJson: string): CreationEditorDraft | null {
   try {
     const value = JSON.parse(draftJson) as {
@@ -19,7 +53,11 @@ export function serializeCreativeComposerDraft(composer: CreationEditorDraft) {
 }
 
 export function isCreativeComposerDraftMeaningful(draftJson: string) {
-  const composer = parseCreativeComposerDraft(draftJson);
+  const state = parseCreativeComposerState(draftJson);
+  return Object.values(state.drafts).some(isComposerMeaningful);
+}
+
+function isComposerMeaningful(composer: CreationEditorDraft | null) {
   if (!composer) return false;
   if (composer.refs.length > 0) return true;
 

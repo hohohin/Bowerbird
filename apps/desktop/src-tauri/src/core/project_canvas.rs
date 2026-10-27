@@ -677,6 +677,9 @@ fn touch_canvas_tx(tx: &Transaction<'_>, project_id: &str, now: i64) -> AppResul
 }
 
 fn validate_new_node(value: &NewCanvasNode) -> AppResult<()> {
+    if value.kind == CreativeNodeKind::Note && serde_json::from_str::<serde_json::Value>(&value.payload_json)?["note_type"] == "chat" {
+        return Err(invalid("chat cards must be created by the chat runtime"));
+    }
     required(&value.id, "node id")?;
     required(&value.project_id, "project id")?;
     validate_node_kind_role(&value.id, value.kind, value.role)
@@ -1170,7 +1173,8 @@ fn place_new_references_near_card_tx(
 fn node_is_execution_owned(node: &CanvasNode) -> bool {
     match node.kind {
         CreativeNodeKind::Prompt | CreativeNodeKind::AgentGroup => true,
-        CreativeNodeKind::Note => false,
+        CreativeNodeKind::Note => matches!(parse_node_payload(node.kind, &node.payload_json),
+            Ok(CreativeNodePayload::Note(payload)) if payload.note_type == Some(crate::core::creative_session_contract::CanvasNoteType::Chat)),
         CreativeNodeKind::Asset => {
             if node.role != Some(CreativeNodeRole::Reference) {
                 return true;
@@ -1601,6 +1605,9 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let existing = get_node_tx(&tx, node_id)?.ok_or_else(|| invalid("note not found"))?;
+        if node_is_execution_owned(&existing) || serde_json::from_str::<serde_json::Value>(payload_json)?["note_type"] == "chat" {
+            return Err(invalid("chat cards are maintained by the chat runtime"));
+        }
         if existing.kind != CreativeNodeKind::Note || existing.hidden_at.is_some() {
             return Err(invalid("only visible notes can be edited"));
         }

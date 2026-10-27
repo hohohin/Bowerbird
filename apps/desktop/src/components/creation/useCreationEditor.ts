@@ -104,6 +104,7 @@ function refreshDraftImageAttrs(value: unknown, assets: Map<string, PromptedAsse
 export function useCreationEditor(opts?: {
   draftKey?: string | null;
   initialEmpty?: boolean;
+  enterInsertsParagraph?: boolean;
   consumePendingKeyword?: boolean;
   initialDraft?: CreationEditorDraft | null;
   onDraftChange?: (draft: CreationEditorDraft) => void;
@@ -150,6 +151,7 @@ export function useCreationEditor(opts?: {
   useEffect(() => {
     if (!hostRef.current) return;
     const plugins = buildPlugins({
+      enterInsertsParagraph: opts?.enterInsertsParagraph,
       viewRef,
       assetByIdRef,
       chipSectionsRef,
@@ -221,6 +223,9 @@ export function useCreationEditor(opts?: {
       },
     });
     viewRef.current = view;
+    // A mode switch remounts an existing draft. Publish the restored document
+    // immediately so submission does not stay disabled until the next edit.
+    setTick((value) => value + 1);
     flushDraftRef.current = () => {
       if (saveTimer) {
         clearTimeout(saveTimer);

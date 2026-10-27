@@ -191,7 +191,6 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
     if (entry.directory || busy || working) return;
     const version = ++menuSequence.current;
     const files = selected.has(entry.path) ? entries.filter(item => !item.directory && selected.has(item.path)) : [entry];
-    if (!selected.has(entry.path)) { setSelected(new Set([entry.path])); anchor.current = entry.path; }
     useStore.getState().closeContextMenu();
     setPreparingMenu({ x, y, count: files.length, version });
     try {

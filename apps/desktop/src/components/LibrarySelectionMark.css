@@ -1,0 +1,39 @@
+.library-selection-mark, .library-selection-signal { position:absolute; inset:0; display:block; pointer-events:none; }
+.library-selection-mark { inset:2px auto auto 2px; z-index:2; filter:drop-shadow(0 1px 1px #000c); }
+.library-selection-mark * { pointer-events:none; }
+.library-selection-signal { opacity:1; }
+.library-selection-bracket { position:absolute; inset:0; width:100%; height:100%; overflow:visible; fill:none; stroke:#b7bdbb; stroke-width:1.35; }
+.library-selection-bracket path { vector-effect:non-scaling-stroke; }
+.library-selection-aim { position:absolute; width:clamp(64px,44%,86px); aspect-ratio:1; left:50%; top:50%; translate:-50% -50%; scale:var(--selection-aim-scale, 1); }
+.library-selection-ray { position:absolute; left:50%; top:50%; width:50%; height:1.15px; translate:0 -50%; transform-origin:0 50%; rotate:var(--ray-angle); }
+.library-selection-ray::after { content:""; position:absolute; left:20px; right:0; height:100%; background:#f7f8f6; }
+.library-selection-ray.is-top-right { --ray-start:-90deg; --ray-angle:calc(0deg - var(--selection-angle,45deg)); }
+.library-selection-ray.is-bottom-right { --ray-start:0deg; --ray-angle:var(--selection-angle,45deg); }
+.library-selection-ray.is-bottom-left { --ray-start:90deg; --ray-angle:calc(180deg - var(--selection-angle,45deg)); }
+.library-selection-ray.is-top-left { --ray-start:180deg; --ray-angle:calc(180deg + var(--selection-angle,45deg)); }
+.library-selection-tick { position:absolute; inset:0; }
+.library-selection-tick i { position:absolute; display:block; background:#f7f8f6; translate:-50% -50%; }
+.library-selection-tick:is(.is-left,.is-right) i { width:var(--selection-tick,6px); height:1.4px; top:50%; }
+.library-selection-tick:is(.is-top,.is-bottom) i { width:1.4px; height:var(--selection-tick,6px); left:50%; }
+.library-selection-tick.is-left i { left:0; } .library-selection-tick.is-right i { left:100%; }
+.library-selection-tick.is-top i { top:0; } .library-selection-tick.is-bottom i { top:100%; }
+.library-selection-center { position:absolute; width:22px; height:22px; left:50%; top:50%; translate:-50% -50%; opacity:1; }
+.library-selection-center svg { display:block; width:100%; height:100%; fill:none; stroke:#f7f8f6; stroke-width:1.4; }
+.library-selection-mark.is-entering :is(.library-selection-bracket.is-left,.library-selection-tick.is-left) { animation:library-select-left 300ms cubic-bezier(.2,.7,.2,1) both; }
+.library-selection-mark.is-entering :is(.library-selection-bracket.is-right,.library-selection-tick.is-right) { animation:library-select-right 300ms cubic-bezier(.2,.7,.2,1) both; }
+.library-selection-mark.is-entering .library-selection-tick.is-top { animation:library-select-up 300ms cubic-bezier(.2,.7,.2,1) both; }
+.library-selection-mark.is-entering .library-selection-tick.is-bottom { animation:library-select-down 300ms cubic-bezier(.2,.7,.2,1) both; }
+.library-selection-mark.is-entering .library-selection-ray { animation:library-select-rotate 300ms cubic-bezier(.2,.7,.2,1) both; }
+.library-selection-mark.is-entering .library-selection-center { animation:library-select-center 300ms ease-out both; }
+.library-selection-mark.is-entering .library-selection-signal { animation:library-select-contact 160ms steps(1,end) 140ms forwards; }
+@keyframes library-select-left { from { transform:translateX(50%); } to { transform:translateX(0); } }
+@keyframes library-select-right { from { transform:translateX(-50%); } to { transform:translateX(0); } }
+@keyframes library-select-up { from { transform:translateY(50%); } to { transform:translateY(0); } }
+@keyframes library-select-down { from { transform:translateY(-50%); } to { transform:translateY(0); } }
+@keyframes library-select-rotate { from { rotate:var(--ray-start); } to { rotate:var(--ray-angle); } }
+@keyframes library-select-center { 0%,25% { opacity:0; } to { opacity:1; } }
+@keyframes library-select-contact { 0%,50% { opacity:.18; } 25%,75%,100% { opacity:1; } }
+[data-library-motion-paused="true"] .library-selection-mark *,
+[data-library-dragging="true"] .library-selection-mark * { animation:none !important; }
+@media (prefers-reduced-motion:reduce) { .library-selection-mark * { animation:none !important; } }
+@media (forced-colors:active) { .library-selection-mark { display:none; } }

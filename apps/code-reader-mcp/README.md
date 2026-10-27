@@ -89,3 +89,5 @@ ChatGPT <──官方私有 HTTPS 隧道──> stdio MCP 子进程
 2026-10-26 更正连接判断：重启后虽然 `live/ready` 为 200，详细健康状态却显示控制面 `network_error`、29 次连续失败、从未成功轮询，MCP 初始化尚未被观察到。无凭据网络探测直连 OpenAI 超时，经用户现有 Windows 代理 `127.0.0.1:7890` 收到预期 HTTP 401（未携带 key），证明代理路径可达，不代表凭据鉴权通过。启动脚本增加显式控制面代理参数，默认直连、参数透传和拒绝带凭据/路径的代理地址测试通过；用户输入 key 后，2026-10-26 10:03（北京时间）核验控制面 status=ok、state=polling，last_success 为 10:02:41、consecutive_failures=0，代理 healthy，成功轮询指标非零；启动期曾有一次 timeout，随后已恢复。MCP initialize/tools_list 仍为 not_observed，尚未收到网页端发现请求，网页端验收仍待完成。
 
 2026-10-26 10:04（北京时间）网页设置请求已到达本机、三次响应投递被控制面接收，但 MCP 发现失败。官方客户端记录同一子进程收到新版 `server/discover` 和两次旧版初始化；旧实现不支持新版发现且拒绝重复初始化。本轮按 [MCP 发现协议](https://modelcontextprotocol.io/specification/2026-07-28/server/discover) 与双版本兼容契约修复。12 项安全／协议测试及启动脚本测试通过；通过官方客户端 v0.0.18 `dev proxy` 回环测试实际完成新版发现、四工具列表、`project_overview` 调用、两次旧版初始化与列表，健康状态 `ok/discovered`、工具目录完整。临时测试进程已停止，用户输入 key 后，10:17（北京时间）实际隧道已加载新进程并成功轮询控制面，连续失败为 0、代理 healthy；该新进程尚未收到网页端发现请求，ChatGPT 网页端最终验收仍待完成；快照未更新。
+
+2026-10-27 用户重新输入 key 后，控制面 ok/polling、连续失败 0、代理 healthy；通过当前已接入的 bbmcp 插件实际调用 project_overview 与 read_file(PROJECT.md) 均成功，确认远端插件到本机只读服务的链路可用。返回快照 createdAt=2026-10-24T09:15:45.264Z、1274 个文件；本次未更新快照。

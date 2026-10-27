@@ -77,13 +77,14 @@ interface Props {
   onDragMove: (event: React.PointerEvent<HTMLElement>) => void;
   onDragEnd: (event: React.PointerEvent<HTMLElement>, cancelled?: boolean) => void;
   onNodeMenu: (event: React.MouseEvent<HTMLElement>, id: string) => void;
+  onRemove: (id: string) => void;
   projectId: string; zoom: number; materials: MaterialAnchor[];
   ensureMaterialized: () => Promise<unknown>;
   toBoardPoint: (clientX: number, clientY: number) => { x: number; y: number };
   onPlaced: (rect: { x: number; y: number; width: number; height: number }) => void;
 }
 type Connection = WorkflowInput & { type: WorkflowPort["type"] };
-export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, zoom, materials, graphNodes, conversationCards, imageOnlyConversationIds, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, onDragStart, onDragMove, onDragEnd, onNodeMenu }, ref) {
+export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, zoom, materials, graphNodes, conversationCards, imageOnlyConversationIds, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
   const controller = useMemo(() => canvasWorkflowController(projectId), [projectId]);
   const [, redraw] = useState(0);
   // Cell sockets are measured from the committed table layout, including row/column resizing.
@@ -697,14 +698,14 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
         onMouseLeave={() => { if (node.kind === "trigger") setKeyHover(null); }}
         style={{ left: node.x, top: node.y, width: workflowCardWidth(node), minHeight: height, zIndex: selectedIds.has(node.id) ? 11000 : 9000 }}
         onPointerDownCapture={event => {
-          if (armed && !busy && node.kind !== "planner" && !(event.target as HTMLElement).closest(".canvas-card-name")) { event.stopPropagation(); event.preventDefault(); patch(node.id, { trigger: true, inputs: { ...node.inputs, signal: [] } }, false); setArmed(false); }
+          if (event.button === 0 && armed && !busy && node.kind !== "planner" && !(event.target as HTMLElement).closest(".canvas-card-name")) { event.stopPropagation(); event.preventDefault(); patch(node.id, { trigger: true, inputs: { ...node.inputs, signal: [] } }, false); setArmed(false); }
         }}
-        onPointerDown={event => { if (event.button === 1 || (event.button === 0 && panReady)) return; event.stopPropagation(); if (!selectedIds.has(node.id) || event.ctrlKey || event.metaKey) onSelect(node.id, event.ctrlKey || event.metaKey); }} onDoubleClick={event => event.stopPropagation()}
+        onPointerDown={event => { if (event.button !== 0 || panReady) return; event.stopPropagation(); if (!selectedIds.has(node.id) || event.ctrlKey || event.metaKey) onSelect(node.id, event.ctrlKey || event.metaKey); }} onDoubleClick={event => event.stopPropagation()}
         onClick={event => {
           if (node.kind === "agent" && busy && !panReady && !armed && !event.ctrlKey && !event.metaKey
               && !(event.target as HTMLElement).closest("button,input,select,textarea,[contenteditable=true],.canvas-card-name")) onOpenAgent(node.id);
         }}
-        onKeyDown={event => { if (event.key !== "Escape" && !((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z")) event.stopPropagation(); }}
+        onKeyDown={event => { if (!["Escape", "Delete", "Backspace"].includes(event.key) && !((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z")) event.stopPropagation(); }}
         onContextMenu={event => onNodeMenu(event, node.id)} onWheel={event => { if ((event.target as HTMLElement).closest("textarea,.workflow-prompt-editor,.workflow-preview,.workflow-text-result")) event.stopPropagation(); }}
         onDragOver={event => { if (getDragAssets() || event.dataTransfer.types.includes("text/plain")) { event.preventDefault(); event.stopPropagation(); } }}
         onDrop={event => {
@@ -718,6 +719,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           }
           const ids = getDragAssets(); if (!ids?.length || node.kind === "trigger" || node.kind === "agent" || node.kind === "comfy-video") return;
           if (node.kind === "loop" && node.loopMode === "rows") { notifyError(null, "逐行模式请连接内容卡的整体文本输出"); return; }
+          if (node.kind === "loop" && node.loopMode === "count") { notifyError(null, "按次数循环无需输入图片，请把图片连接到下游生成卡片"); return; }
           if (node.kind === "visual-profile" && node.profileId) { notifyError(null, "请先切换到从输入提炼"); return; }
           if (node.kind === "instruction" && node.action !== "describe" && ids.length !== 1) { notifyError(null, "此指令只接收一张图片"); return; }
           patch(node.id, { inputs: { ...node.inputs, image: ids.map(assetId => ({ assetId })) } });
@@ -735,10 +737,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
             const copy = { ...structuredClone(node), id: crypto.randomUUID(), x: node.x + 350, outputs: {}, activeSessionNodeId: null, sessionNodeIds: [], resultNodeIds: [], resultGroupId: undefined, planning: undefined, templateInstance: undefined, trigger: false };
             handle(edit([...document.nodes, copy])); onSelect(copy.id);
           }}><Copy size={13} /></button>
-          <button aria-label="删除卡片" disabled={busy} onClick={() => {
-            const remaining = removeWorkflowNodes(controller.document.nodes, [node.id]);
-            handle(edit(remaining));
-          }}><X size={15} /></button>
+          <button aria-label="删除卡片" disabled={busy} onClick={() => onRemove(node.id)}><X size={15} /></button>
         </header>
         {node.kind === "generation" && <div className="workflow-generation-parameters" role="toolbar" aria-label="生成参数" onPointerDown={event => event.stopPropagation()}>
           <fieldset disabled={busy}><select aria-label="生成类型" value={node.generation?.media ?? "image"} onChange={event => patch(node.id, { generation: { ...node.generation, media: event.target.value as "image" | "video" } })}>
@@ -760,12 +759,13 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
             <button disabled={busy || node.templateInstance.nodeIds.some(id => controller.isLocked(id))} onClick={() => handle(edit(removeWorkflowNodes(controller.document.nodes, node.templateInstance!.nodeIds)))}>移除整个子流程</button>
           </section>}
           {node.kind === "loop" && <select aria-label="循环方式" disabled={busy} value={node.loopMode ?? "images"} onChange={event => {
-              const loopMode = event.target.value as "images" | "rows";
+              const loopMode = event.target.value as NonNullable<WorkflowNode["loopMode"]>;
+              const outputIds = new Set(workflowOutputs({ ...node, loopMode }).map(port => port.id));
               const nodes = invalidateWorkflow(document.nodes, node.id).map(candidate => candidate.id === node.id
-                ? { ...candidate, loopMode, inputs: { ...(node.inputs.signal ? { signal: node.inputs.signal } : {}) } }
-                : loopMode === "images" ? { ...candidate, inputs: Object.fromEntries(Object.entries(candidate.inputs).map(([port, bindings]) => [port, bindings.filter(input => input.nodeId !== node.id || input.portId !== "text")])) } : candidate);
+                ? { ...candidate, loopMode, loopCount: loopMode === "count" ? candidate.loopCount ?? 1 : undefined, loopStartItem: 1, inputs: { ...(node.inputs.signal ? { signal: node.inputs.signal } : {}) } }
+                : { ...candidate, inputs: Object.fromEntries(Object.entries(candidate.inputs).map(([port, bindings]) => [port, bindings.filter(input => input.nodeId !== node.id || outputIds.has(input.portId ?? ""))])) });
               handle(edit(nodes));
-            }}><option value="images">逐张图片</option><option value="rows">内容卡逐行</option></select>}
+            }}><option value="images">逐张图片</option><option value="rows">内容卡逐行</option><option value="count">按次数</option></select>}
           {node.kind === "planner" && <WorkflowPlannerCard node={{ ...node, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: materials.find(item => item.groupId === input.groupId)?.assetIds ?? [] } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} runtime={controller.planner} onChange={(prompt, promptReferences) => patch(node.id, { prompt, promptReferences })} onLocate={() => { const first = node.planning?.appliedNodes?.[0]; if (first) locateIssue(first.id); }} />}
           {node.kind === "instruction" && <select aria-label="指令功能" disabled={busy} value={node.action} onChange={event => {
             const action = event.target.value as WorkflowNode["action"];
@@ -787,7 +787,11 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           {node.kind !== "comfy-video" && node.kind !== "generation" && <div className="workflow-port-space" style={{ height: Math.max(inputPorts.length, outputPorts.length, 2) * 30 }} />}
           {node.kind === "comfy-video" && <ComfyVideoCard node={node} disabled={busy} assets={assets} inputImages={inputImages} onChange={changes => patch(node.id, changes)} />}
           {node.kind === "loop" && <section className="workflow-loop" aria-label="循环设置">
-            <p className="workflow-hint">{node.loopMode === "rows" ? "连接内容卡整体文本输出，每行的文字和图片一起处理；空行跳过。" : "按输入顺序逐张处理图片。"}全部下游完成后再进入下一项，最多 100 项。</p>
+            {node.loopMode === "count" && <label>循环次数 <input aria-label="循环次数" type="number" min={1} max={100} step={1} disabled={busy} value={node.loopCount ?? 1} onChange={event => {
+              const loopCount = Number(event.target.value);
+              if (Number.isInteger(loopCount) && loopCount >= 1 && loopCount <= 100) patch(node.id, { loopCount });
+            }} /></label>}
+            <p className="workflow-hint">{node.loopMode === "count" ? "按设定次数重复执行，将当前轮次连接到下游并在指令中引用。" : node.loopMode === "rows" ? "连接内容卡整体文本输出，每行的文字和图片一起处理；空行跳过。" : "按输入顺序逐张处理图片。"}全部下游完成后再进入下一项，最多 100 项。</p>
             <WorkflowLoopStartSelect id={node.id} items={loopItems ?? []} assets={assets} value={node.loopStartItem ?? 1} disabled={busy} notice={loopInputNotice} onChange={loopStartItem => patch(node.id, { loopStartItem }, false)} />
             {loopStartInvalid && <p className="workflow-hint">原起始项已超出输入范围，请重新选择。</p>}
             {loopInputChanged && <p className="workflow-hint">输入内容已更新为 {loopItems!.length} 项。{busy ? `当前循环仍按启动时的 ${loop!.items!.length} 项执行，新循环使用最新内容。` : "开始新循环时使用最新内容；此前运行记录保留。"}</p>}

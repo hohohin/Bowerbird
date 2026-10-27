@@ -53,7 +53,7 @@ export function Toolbar({
   const showFileNavigation = localFilesOpen && fileMode === "files" && !activePane;
   const importRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLElement>(null);
-  const tactical = localFilesOpen && !exploring;
+  const tactical = !canvasMode && localFilesOpen && !exploring;
 
   useEffect(() => {
     if (!tactical) return;

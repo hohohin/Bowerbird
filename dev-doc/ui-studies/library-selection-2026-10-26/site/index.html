@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Bowerbird · 素材多选动效预览</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <header><div class="title"><span class="eyebrow">BOWERBIRD / SELECTION</span><h1>素材多选 · 锁定标记</h1></div><span class="preview-label">独立预览</span><button id="theme">切换浅色</button></header>
+  <main>
+    <section class="reference-panel" aria-label="参考与单项动效">
+      <div class="section-label"><span>01 / 标记</span><span>300 ms</span></div>
+      <div class="reference-pair"><figure><img src="./assets/reference.png" alt="用户提供的括号与中心准星参考图"><figcaption>参考图</figcaption></figure><figure><button class="asset reference-card" data-asset="reference" aria-label="黑底标记演示" aria-pressed="true"></button><figcaption>点击重播</figcaption></figure></div>
+      <p class="description">选中图片等比内缩，左右括号落在图片外侧。白色准星的四条线分别旋转至指向素材四角，与中心方框保持间隙；中心方框与十字渐现。</p>
+      <div class="playback"><button id="replay">重播动效</button><label>速度<select id="speed" aria-label="播放速度"><option value="1">1× · 300 ms</option><option value="0.25">¼× · 慢放</option></select></label></div>
+      <label class="timeline-label" for="timeline">逐帧查看 <output id="time">300 ms</output></label><input id="timeline" type="range" min="0" max="300" value="300" aria-label="动效进度">
+      <div class="timeline-ticks"><span>0</span><span>100</span><span>200</span><span>300 ms</span></div>
+    </section>
+    <section class="gallery-panel" aria-label="多选素材效果">
+      <div class="section-label"><span>02 / 素材上的效果</span><span id="selection-count" role="status">已选 2 项</span></div>
+      <div class="gallery">
+        <button class="asset portrait" data-asset="1" aria-label="棋盘花卉" aria-pressed="true"><img src="./assets/sample-1.jpg" alt="棋盘与花卉设计"></button>
+        <button class="asset portrait" data-asset="2" aria-label="荷花海报" aria-pressed="false"><img src="./assets/sample-2.jpg" alt="荷花海报设计"></button>
+        <button class="asset landscape" data-asset="3" aria-label="横向素材" aria-pressed="true"><img src="./assets/sample-4.jpg" alt="横向设计素材"></button>
+        <button class="asset square" data-asset="4" aria-label="方形素材" aria-pressed="false"><img src="./assets/sample-5.jpg" alt="方形设计素材"></button>
+      </div>
+      <footer><span>点击素材选中 / 取消，可同时选择多项。</span><button id="clear">取消选择</button></footer>
+    </section>
+  </main>
+  <template id="selection-mark">
+    <span class="selection-mark" aria-hidden="true"><span class="selection-signal">
+      <svg class="bracket bracket-left" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M4 0H0V100H4"/></svg>
+      <svg class="bracket bracket-right" viewBox="0 0 100 100" preserveAspectRatio="none"><path d="M96 0H100V100H96"/></svg>
+      <span class="reticle"><i class="reticle-ray ray-top-right"></i><i class="reticle-ray ray-bottom-right"></i><i class="reticle-ray ray-bottom-left"></i><i class="reticle-ray ray-top-left"></i></span>
+      <span class="short-tick tick-left"><i></i></span><span class="short-tick tick-right"><i></i></span>
+      <span class="short-tick tick-top"><i></i></span><span class="short-tick tick-bottom"><i></i></span>
+      <span class="center-lock"><svg viewBox="0 0 22 22"><path d="M2 2H20V20H2ZM7 11H15M11 7V15"/></svg></span>
+    </span></span>
+  </template>
+  <script src="./preview.js"></script>
+</body>
+</html>

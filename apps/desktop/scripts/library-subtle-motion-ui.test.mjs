@@ -91,8 +91,11 @@ try {
     await page.evaluate(()=>window.mode.getState().openBrowser());
     const files=page.locator('.local-file-workspace');
     await files.locator('.folder-media-card').first().waitFor(); await page.waitForTimeout(700);
-    assert.deepEqual(await page.locator('.folder-address').evaluate(el=>({radius:getComputedStyle(el).borderRadius,border:getComputedStyle(el).borderTopColor})),{radius:'0px',border:'rgba(0, 0, 0, 0)'},'file navigation uses the same straight borderless surface');
-    assert.ok(await page.locator('.folder-navigation button').evaluateAll(elements=>elements.every(el=>getComputedStyle(el).borderRadius==='0px')),'file navigation buttons share straight corners');
+    const addressStyle = await page.locator('.folder-address').evaluate(el=>({radius:getComputedStyle(el).borderRadius,border:getComputedStyle(el).borderTopColor}));
+    assert.equal(addressStyle.radius, scene === 'home' ? '0px' : '8px', 'home uses Tactical navigation; the canvas retains its restored rounded toolbar');
+    if (scene === 'home') assert.equal(addressStyle.border, 'rgba(0, 0, 0, 0)');
+    else assert.notEqual(addressStyle.border, 'rgba(0, 0, 0, 0)');
+    assert.ok(await page.locator('.folder-navigation button').evaluateAll((elements, radius)=>elements.every(el=>getComputedStyle(el).borderRadius===radius), scene === 'home' ? '0px' : '7px'), 'navigation buttons follow their toolbar surface');
     assert.equal(await files.locator('.library-tactical-backdrop').count(),1);
     assert.equal(await files.locator('.library-tactical-backdrop').evaluate(el=>getComputedStyle(el,'::before').animationName),'none');
     await files.locator('.folder-media-card').first().hover();await page.waitForTimeout(220);

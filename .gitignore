@@ -63,10 +63,12 @@ dev-doc/*
 !dev-doc/SEEDANCE-2.5-INTEGRATION.md
 !dev-doc/COMFYUI-LOCAL-VIDEO.md
 !dev-doc/VIDEO-API-INTEGRATION.md
+!dev-doc/FILMCRAFT-RESEARCH.md
 !dev-doc/进展归档.md
 !dev-doc/ui-studies/
 dev-doc/ui-studies/*
 !dev-doc/ui-studies/library-tactical-2026-10-26/
+!dev-doc/ui-studies/library-selection-2026-10-26/
 
 # Agent Z（dev-only）：MCP 桥 + inbox 回传事件（Bowerbird × Claude Code TUI）
 .agent-z/

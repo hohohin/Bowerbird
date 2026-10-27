@@ -32,3 +32,5 @@ pub mod file_workspace_move;
 pub mod creative_files;
 pub mod creative_restore;
 pub mod generation_diagnostics;
+pub mod local_chat;
+pub mod local_chat_cards;

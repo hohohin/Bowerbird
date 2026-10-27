@@ -503,6 +503,7 @@ interface State {
     assetId: string;
     workspaceProjectId?: string | null;
     asset?: Asset;
+    singleAsset?: boolean;
     fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string> };
     libraryProjectId?: string;
     addCanvasImagesToBoard?: { count: number; run: () => void };
@@ -513,7 +514,7 @@ interface State {
     x: number,
     y: number,
     assetId: string,
-    context?: { asset?: Asset; fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string> }; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
+    context?: { asset?: Asset; singleAsset?: boolean; fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string> }; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
   ) => void;
   closeContextMenu: () => void;
   // —— 项目右键菜单（侧栏项目行 / 收起态圆标）——

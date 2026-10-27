@@ -48,9 +48,10 @@ fn validate(value: &Value) -> AppResult<()> {
     let v4 = value["schemaVersion"] == 4;
     for node in nodes {
         let mut node_fields = vec!["id", "kind", "action", "skill", "prompt", "ratio", "overwriteDescribe"];
-        if v4 { node_fields.extend(["loopMode", "loopStartItem", "agentTransport"]); }
+        if v4 { node_fields.extend(["loopMode", "loopCount", "loopStartItem", "agentTransport"]); }
         fields(node, &node_fields)?;
-        if node.get("loopMode").is_some_and(|mode| node["kind"] != "loop" || !matches!(mode.as_str(), Some("images" | "rows")))
+        if node.get("loopMode").is_some_and(|mode| node["kind"] != "loop" || !matches!(mode.as_str(), Some("images" | "rows" | "count")))
+            || (node.get("loopCount").is_some() || node["loopMode"] == "count") && (node["kind"] != "loop" || node["loopMode"] != "count" || node["loopCount"].as_u64().is_none_or(|count| !(1..=100).contains(&count)))
             || node.get("loopStartItem").is_some_and(|item| node["kind"] != "loop" || item.as_u64().is_none_or(|n| !(1..=100).contains(&n)))
             || node.get("agentTransport").is_some_and(|transport| node["kind"] != "agent" || !matches!(transport.as_str(), Some("local-ds" | "codex-cli" | "cloud"))) { return Err(invalid()); }
         if node.get("overwriteDescribe").is_some_and(|flag| !flag.is_boolean() || node["kind"] != "instruction" || node["action"] != "describe") { return Err(invalid()); }
@@ -320,6 +321,29 @@ mod tests {
         let mut bad = doc.clone(); bad["plan"]["edges"][4]["from"] = json!("style"); assert!(validate(&bad).is_err());
         let mut bad = doc.clone(); bad["plan"]["nodes"][3]["agentTransport"] = json!("unknown"); assert!(validate(&bad).is_err());
         let mut bad = doc; bad["inputs"][0]["whole"] = json!("true"); assert!(validate(&bad).is_err());
+    }
+    #[test]
+    fn v4_count_loop_retains_bounded_repeat_count() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        let mut doc = template(); doc["schemaVersion"] = json!(4);
+        doc["plan"]["nodes"] = json!([
+            {"id":"start","kind":"trigger"},
+            {"id":"each","kind":"loop","loopMode":"count","loopCount":3},
+            {"id":"draw","kind":"generation","prompt":"第 {{each.iteration}} 轮"}
+        ]);
+        doc["inputs"] = json!([]);
+        doc["outputs"] = json!([{"id":"out","node":"draw","port":"image","label":"结果"}]);
+        doc["plan"]["edges"] = json!([
+            {"from":"start","output":"signal","to":"each","input":"signal"},
+            {"from":"each","output":"iteration","to":"draw","input":"text"}
+        ]);
+        let saved = db.workflow_template_save(doc.clone(), 0).unwrap();
+        assert_eq!(db.workflow_templates_list().unwrap()[0], saved);
+        for count in [json!(0), json!(101), json!(1.5), json!("3"), Value::Null] {
+            let mut bad = doc.clone(); bad["plan"]["nodes"][1]["loopCount"] = count; assert!(validate(&bad).is_err());
+        }
+        let mut bad = doc.clone(); bad["plan"]["nodes"][1].as_object_mut().unwrap().remove("loopCount"); assert!(validate(&bad).is_err());
+        let mut bad = doc; bad["plan"]["nodes"][1]["loopMode"] = json!("rows"); assert!(validate(&bad).is_err());
     }
     #[test]
     fn layout_round_trip_rejects_private_or_duplicate_members() {

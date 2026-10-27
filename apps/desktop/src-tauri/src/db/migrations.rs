@@ -94,6 +94,8 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0043_catalog_paging.sql")),
         M::up(include_str!("../../sql/0044_classification_provenance.sql")),
         M::up(include_str!("../../sql/0045_classification_english.sql")),
+        M::up(include_str!("../../sql/0046_local_chat.sql")),
+        M::up(include_str!("../../sql/0047_local_chat_cards.sql")),
     ])
 }
 

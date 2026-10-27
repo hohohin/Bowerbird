@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
-const server = await createServer({ server: { host: "127.0.0.1", port: 1568, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: '.tmp/canvas-notes-vite', server: { host: "127.0.0.1", port: 1568, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const context = await browser.newContext({ viewport: { width: 1800, height: 1200 }, permissions: ["clipboard-read", "clipboard-write"] });
@@ -278,7 +278,7 @@ try {
   assert.ok(Math.abs(await cell.evaluate(e => parseFloat(getComputedStyle(e).lineHeight)) - 18.6) < 0.01, "line spacing survives reload");
   assert.deepEqual(await cell.evaluate(e => [getComputedStyle(e).fontWeight, getComputedStyle(e).fontStyle, getComputedStyle(e).textAlign]), ["700", "italic", "center"]);
   assert.equal(await page.getByRole("toolbar", { name: "文本样式（当前单元格）" }).count(), 0);
-  await text.locator('.canvas-cell-markdown').first().click();
+  await cell.click();
   await page.getByRole("toolbar", { name: "文本样式（当前单元格）" }).waitFor();
   // Pointer deltas are converted from screen pixels at the current canvas zoom.
   await page.getByRole("button", { name: "缩小", exact: true }).click();

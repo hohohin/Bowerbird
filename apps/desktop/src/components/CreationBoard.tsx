@@ -31,13 +31,15 @@ import {
   type CreationEditorDraft,
 } from "./creation/useCreationEditor";
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
+import type { CreativeComposerMode } from "../lib/creativeDraft";
+import { localChatInputError } from "../lib/localChat";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ImageGenOptions } from "./creation/ImageGenOptions";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
-import { ArrowUp, ChevronDown, Image, Info, Plus, Sparkles, Video } from "lucide-react";
+import { ArrowUp, ChevronDown, History, Image, Info, MessageCircle, Plus, Sparkles, UserRound, Video } from "lucide-react";
 import { useLibraryGlass } from "./useLibraryGlass";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import "./CreationBoard.css";
@@ -99,6 +101,11 @@ export interface CreationBoardProps {
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
   onGenerateLocalVideo?: (request: ComposerLocalVideoRequest) => Promise<void>;
+  composerMode?: CreativeComposerMode;
+  onComposerModeChange?: (mode: CreativeComposerMode) => void;
+  onSendChat?: (request: { prompt: string; references: Asset[] }) => Promise<void>;
+  onOpenChatHistory?: () => void;
+  chatHistoryOpen?: boolean;
   resolveCreativeThread?: (
     parentAssetId: string | null,
     prompt: string,
@@ -123,6 +130,11 @@ export function CreationBoard({
   registerDraftFlush,
   beforeGenerate,
   onGenerateLocalVideo,
+  composerMode,
+  onComposerModeChange,
+  onSendChat,
+  onOpenChatHistory,
+  chatHistoryOpen,
   resolveCreativeThread,
 }: CreationBoardProps = {}) {
   const glass = useLibraryGlass();
@@ -143,12 +155,13 @@ export function CreationBoard({
   const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
   const selectedImageProvider = useStore((s) => s.activeGenProvider);
   const [generation, setGeneration] = useState<GenerationSettings>(() => initialDraft?.generation ?? { media: "image" });
+  const isChat = composerMode === "chat";
   const isVideo = generation.media === "video";
   const isLocalVideo = isVideo && !!generation.localVideo;
   const localAllowed = canUseComfyVideo(cloudAuth, cloudEntitlement);
   const [localEnvironment, setLocalEnvironment] = useState<ComfyEnvironmentState>({ ready: false, checking: true, message: "正在检测环境…" });
   const videoOptions = generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS;
-  const activeGenProvider = isLocalVideo ? "comfy-video" : isVideo ? videoProvider(generation.videoChannel, videoOptions) : selectedImageProvider;
+  const activeGenProvider = isChat ? "codex" : isLocalVideo ? "comfy-video" : isVideo ? videoProvider(generation.videoChannel, videoOptions) : selectedImageProvider;
   const draftRef = useRef<CreationEditorDraft | null>(initialDraft ?? null);
   const generationRef = useRef(generation);
   generationRef.current = generation;
@@ -194,6 +207,7 @@ export function CreationBoard({
   } = useCreationEditor({
     consumePendingKeyword: true,
     initialEmpty: true,
+    enterInsertsParagraph: isChat,
     draftKey: embedded ? null : undefined,
     initialDraft,
     onDraftChange: persistGenerationDraft,
@@ -243,7 +257,10 @@ export function CreationBoard({
   }, [embedded, loadPrompt, onPromptLoadConsumed, promptLoadRequest, setBoardActive]);
 
   // 画面比例（null=自动/不指定，发送时不注入 instruction）。记忆进 localStorage，跨会话保留。
-  const [ratio, setRatio] = useState<string | null>(() => initialDraft?.generation?.ratio ?? loadBoardRatio());
+  const [ratio, setRatio] = useState<string | null>(() => {
+    const restored = initialDraft?.generation?.ratio ?? loadBoardRatio();
+    return isVideo && !VIDEO_RATIOS.includes(restored ?? "") ? "16:9" : restored;
+  });
   const selectRatio = (v: string | null) => {
     setRatio(v);
     setGeneration((current) => ({ ...current, ratio: v }));
@@ -400,6 +417,7 @@ export function CreationBoard({
   }
 
   function selectMedia(media: "image" | "video") {
+    if (onComposerModeChange && composerMode !== media) { onComposerModeChange(media); return; }
     const nextRatio = media === "video" && !VIDEO_RATIOS.includes(ratio ?? "") ? "16:9" : ratio;
     setRatio(nextRatio);
     setGeneration({ ...generation, media, videoOptions, ratio: nextRatio });
@@ -514,7 +532,11 @@ export function CreationBoard({
   const sendTooltipId = useId();
   const referenceError = isLocalVideo ? localVideoInputError(finalPrompt, localFrames, generation.localVideo!) : !isVideo && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode
     ? imageInputError(references) : null;
-  const sendDisabledReason = submitting
+  const sendDisabledReason = isChat
+    ? submitting ? "正在发送消息，请稍候。" : targetUnavailableReason
+      ?? (references.some(asset => /\.(mp4|mov|webm|mkv)$/i.test(asset.store_path ?? "")) ? "对话暂时只支持图片参考，请移除视频。" : null)
+      ?? localChatInputError(finalPrompt, references.map(asset => asset.id))
+    : submitting
     ? "正在提交指令，任务启动后即可继续生成。"
     : agentZBusy
       ? "正在投递到 Agent 终端，请等待投递完成。"
@@ -548,7 +570,7 @@ export function CreationBoard({
     source.dimensions.some((title) => title === "标注" || title === "标记")
   );
   const annotationWarning =
-    !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode && hasAnnotationDimension && !supportsAnnotationCoordinates(activeGenProvider);
+    !isChat && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode && hasAnnotationDimension && !supportsAnnotationCoordinates(activeGenProvider);
 
   // 把当前组稿发 provider 生成。生成期间编辑器仍可继续组下一轮稿（prompt 在此快照进 store）。
   // provider / visual profile 与 prompt、refs 一样在点击时冻结；异步 Agent
@@ -556,6 +578,22 @@ export function CreationBoard({
   // 普通生成任务启动、会话卡片创建成功后退出创作模式，后台继续生成；
   // 校验不过或提交失败保留组稿。后续任务结算不影响用户重新开启的创作模式。
   async function send() {
+    if (isChat) {
+      if (sendDisabledReason || !onSendChat) return;
+      const origin = useStore.getState();
+      const originId = projectId ?? origin.activeProjectId;
+      const claim = acquireCreativeSubmission(originId);
+      if (!claim) return;
+      setSubmitting(true);
+      flushDraft();
+      try {
+        await onSendChat({ prompt: finalPrompt.trim(), references: [...references] });
+        const current = useStore.getState();
+        if (claim.isCurrent() && isWorkspaceOperationCurrent(originId, current.activeProjectId, current.projectRoutePending, origin.projectRouteRevision, current.projectRouteRevision)) exitCreationMode();
+      } catch (error) { notifyError(error, "对话未能发送，请检查连接后重试。"); }
+      finally { claim.release(); setSubmitting(false); }
+      return;
+    }
     if (isLocalVideo && sendDisabledReason) { notifyError(sendDisabledReason, "本地生成暂不可用"); return; }
     const originRoute = useStore.getState();
     const originProjectId = projectId ?? originRoute.activeProjectId;
@@ -920,10 +958,10 @@ export function CreationBoard({
 
   const terminalAgent = agentZMode || agentGMode || agentDsMode;
   const agentSelected = cloudAgentMode || agentMode !== "off" || terminalAgent;
-  const showAgent = agentSelected || (agentModeOn && cloudAgentEntitled)
+  const showAgent = !isChat && (agentSelected || (agentModeOn && cloudAgentEntitled)
     || (agentAvailable && (agentAOn || agentBOn)) || (agentZAvailable && agentZOn)
-    || (agentZAvailable && codexHealth?.ok && agentGOn) || (agentDsAvailable && agentDsOn);
-  const selectedMode = agentSelected ? 2 : isVideo ? 1 : 0;
+    || (agentZAvailable && codexHealth?.ok && agentGOn) || (agentDsAvailable && agentDsOn));
+  const selectedMode = isChat ? 2 : agentSelected ? (onSendChat ? 3 : 2) : isVideo ? 1 : 0;
   const agentLabel = cloudAgentMode ? "Agent" : agentZMode ? "Agent Z" : agentGMode ? "Agent G"
     : agentDsMode ? "Agent DS" : agentMode === "a" ? "Agent A" : agentMode === "b" ? "Agent B" : "Agent";
 
@@ -962,10 +1000,11 @@ export function CreationBoard({
         {glass.definition}
         <div className="composer-heading">
           <div className="composer-mode-picker library-floating-surface" role="group" aria-label="创作方式"
-            style={{ "--switch-count": showAgent ? 3 : 2, "--switch-index": selectedMode } as CSSProperties}>
+            style={{ "--switch-count": 2 + (onSendChat ? 1 : 0) + (showAgent ? 1 : 0), "--switch-index": selectedMode } as CSSProperties}>
             <span className="composer-mode-thumb" aria-hidden="true" />
-            <button type="button" aria-pressed={!isVideo && !agentSelected} onClick={() => selectMedia("image")}><Image size={15} aria-hidden="true" />图片</button>
-            <button type="button" aria-pressed={isVideo && !agentSelected} onClick={() => selectMedia("video")}><Video size={15} aria-hidden="true" />视频</button>
+            <button type="button" aria-pressed={!isChat && !isVideo && !agentSelected} onClick={() => selectMedia("image")}><Image size={15} aria-hidden="true" />图片</button>
+            <button type="button" aria-pressed={!isChat && isVideo && !agentSelected} onClick={() => selectMedia("video")}><Video size={15} aria-hidden="true" />视频</button>
+            {onSendChat && <button type="button" aria-pressed={isChat} onClick={() => onComposerModeChange?.("chat")}><MessageCircle size={15} aria-hidden="true" />对话</button>}
             {showAgent && <button ref={agentTriggerRef} type="button" aria-pressed={agentSelected}
               aria-label="选择 Agent 模式" aria-haspopup="dialog" aria-expanded={agentMenuOpen}
               onClick={() => setAgentMenuOpen(open => !open)}><Sparkles size={15} aria-hidden="true" />{agentLabel}<ChevronDown size={12} aria-hidden="true" /></button>}
@@ -1129,7 +1168,7 @@ export function CreationBoard({
 
             </div>}
           </div>
-          <div className="composer-profile"><VisualProfileSelect value={activeVisualProfileId} onChange={setActiveVisualProfile} /></div>
+          {!isChat && <div className="composer-profile"><VisualProfileSelect value={activeVisualProfileId} onChange={setActiveVisualProfile} /></div>}
           <button type="button" className="composer-collapse creation-exit-tab" data-tour="board-exit"
             title="退出创作模式，收起并保留草稿" aria-label="退出创作模式" onClick={exitCreationMode}><ChevronDown size={16} aria-hidden="true" /></button>
         </div>
@@ -1279,8 +1318,12 @@ export function CreationBoard({
         {/* 编辑框：随主题切换的独立输入区；超高后内部滚动（不触发主区滚动收起）。
             获得焦点（contenteditable 冒泡）= 激活创作模式（等同旧「创作板」按钮）。 */}
         <div className="composer-description-heading">
-          <span id={editorLabelId}>创作描述</span>
-          {isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
+          <span id={editorLabelId}>{isChat ? "聊聊你的创作想法" : "创作描述"}</span>
+          <div className="composer-description-actions">
+            {isChat && onOpenChatHistory && <button type="button" className="composer-chat-history" aria-label="打开对话记录" aria-expanded={chatHistoryOpen} aria-controls="project-chat-history"
+              onClick={() => { flushDraft(); onOpenChatHistory(); }}><History size={13} aria-hidden="true" />对话记录</button>}
+            {isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
+          </div>
         </div>
         <OverlayScrollArea className="composer-editor-scroll" scrollRef={editorScrollRef} label="创作描述滚动条">
         <div
@@ -1292,8 +1335,9 @@ export function CreationBoard({
             if (!(event.target instanceof Element && event.target.closest(".ProseMirror"))) focus();
           }}
           onFocus={() => { setBoardActive(true); beginOnboardingOperation("activate-composer", useStore.getState().activeProjectId)(); }}
-          onKeyDown={(event) => {
-            if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+          onKeyDownCapture={(event) => {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229
+              && (event.ctrlKey || event.metaKey)) {
               event.preventDefault();
               void send();
             }
@@ -1303,14 +1347,15 @@ export function CreationBoard({
           className="creation-editor composer-description cursor-text text-ink"
         />
         </OverlayScrollArea>
+        {isChat && !isCollapsed && <p className="composer-chat-key-hint">Enter 换行 · Ctrl / ⌘ + Enter 发送</p>}
         {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
         <BoardChipPreview hostRef={hostRef} />
-        {referenceError && !isLocalVideo && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
+        {!isChat && referenceError && !isLocalVideo && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
         {/* 素材、模型参数、帮助与发送保持同一条底栏。 */}
         <div className={`generation-toolbar composer-toolbar${isVideo ? " is-video" : ""}`}>
           {onOpenLibrary && <button type="button" className="composer-add-material" aria-label="添加参考素材" title="打开素材库（Tab）"
             onMouseDown={event => event.preventDefault()} onClick={() => { setBoardActive(true); onOpenLibrary(); }}><Plus size={16} aria-hidden="true" />素材<kbd>Tab</kbd></button>}
-          <div className="group relative flex shrink-0 items-center composer-help">
+          {!isChat && <div className="group relative flex shrink-0 items-center composer-help">
             <button
               type="button"
               className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-white/10 hover:text-ink"
@@ -1327,8 +1372,11 @@ export function CreationBoard({
                 </p>
               )}
             </div>
-          </div>
+          </div>}
           <div className="composer-parameters">
+          {isChat ? <span className="composer-chat-provider" title="使用 Bowerbird 内独立登录的 Codex，自有订阅额度">
+            <span><UserRound size={13} aria-hidden="true" /></span>Codex · 本机
+          </span> : <>
           {isVideo && <VideoControls composer channel={generation.videoChannel} options={videoOptions} onChange={(options, videoChannel = generation.videoChannel) => setGeneration({ ...generation, localVideo: undefined, media: "video", videoChannel, videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio}
             local={onGenerateLocalVideo ? { options: generation.localVideo, onSelect: () => { setLocalEnvironment({ ready: false, checking: true, message: "正在检测环境…" }); setGeneration({ ...generation, localVideo: { ...DEFAULT_COMFY_VIDEO } }); }, onChange: localVideo => setGeneration({ ...generation, localVideo }) } : undefined} />}
           {isLocalVideo && !isCollapsed && <LocalVideoFrames frames={localFrames.slice(0, 2)} ignored={references.length - Math.min(2, localFrames.length)} />}
@@ -1365,6 +1413,7 @@ export function CreationBoard({
             />
           </div>
           )}
+          </>}
           </div>
           {annotationWarning && (
             <span className="composer-annotation-warning flex shrink-0 items-center text-red-400" title="该模型不支持标注参数，标注图可以被发送，但控制效果可能不及预期。">
@@ -1374,14 +1423,14 @@ export function CreationBoard({
           <div
             className="group relative ml-auto composer-send"
             tabIndex={sendDisabledReason ? 0 : undefined}
-            aria-label={sendDisabledReason ? "生成暂不可用" : undefined}
+            aria-label={sendDisabledReason ? (isChat ? "对话暂不可用" : "生成暂不可用") : undefined}
             aria-describedby={sendDisabledReason ? sendTooltipId : undefined}
           >
             <button
               onClick={() => void send()}
               disabled={sendDisabledReason !== null}
               aria-describedby={sendDisabledReason ? sendTooltipId : undefined}
-              title={sendDisabledReason ? undefined : cloudAgentMode
+              title={sendDisabledReason ? undefined : isChat ? "发送到本机 Codex，使用自有订阅额度" : cloudAgentMode
                 ? "创建 Bowerbird Agent 会话：明确目标并获得授权后执行"
                 : agentZMode
                   ? "发送到 Agent Z 终端（Claude Code TUI）"
@@ -1395,7 +1444,7 @@ export function CreationBoard({
               className={`generation-send-button ${sendDisabledReason ? "pointer-events-none" : ""}`}
             >
               <span className="generation-button-content gap-1.5">
-                {submitting && !cloudAgentBusy && !agentZBusy && !agentDsBusy && !agentBusy
+                {isChat ? (submitting ? "正在发送…" : "发送") : submitting && !cloudAgentBusy && !agentZBusy && !agentDsBusy && !agentBusy
                   ? "正在提交…"
                   : cloudAgentBusy
                   ? "正在创建 Agent 会话…"

@@ -213,23 +213,20 @@ html[data-theme="light"] .app-topbar.library-tactical {
 /* Four 4px points straddle the vertices, then each travels clockwise along one edge. */
 .library-tactical .folder-media-card { overflow: visible; border-radius: 0; box-shadow: 0 2px 6px -5px var(--lt-shadow); }
 .library-tactical .folder-media-preview { overflow: hidden; }
+.library-tactical .folder-media-card:not(:has(.is-folder)) { background: transparent; }
+.library-tactical .folder-media-preview:not(.is-folder) { scale: 1; transition: scale 300ms cubic-bezier(.2,.7,.2,1); }
+.library-tactical .folder-media-card.is-selected > .folder-media-preview:not(.is-folder) { scale: .88; }
 .library-tactical.library-motion-root .folder-media-card[data-positioned] {
   transition: width 240ms ease-out, transform 280ms ease-out, translate 180ms ease, rotate 180ms ease, box-shadow 180ms ease;
 }
 .categorized-library.library-tactical.library-motion-root .folder-media-card[data-positioned] { transition: translate 180ms ease, rotate 180ms ease, box-shadow 180ms ease; }
-.library-tactical .folder-media-card.is-selected { outline: none; box-shadow: 0 18px 24px -12px var(--lt-shadow); }
-.library-tactical .folder-media-card.is-selected::after {
-  --lt-card-dot: linear-gradient(#f7f8f6,#f7f8f6);
-  content: ""; position: absolute; inset: -2px; border: 0; pointer-events: none; opacity: 1;
-  background: var(--lt-card-dot) left top/4px 4px no-repeat, var(--lt-card-dot) right top/4px 4px no-repeat,
-    var(--lt-card-dot) right bottom/4px 4px no-repeat, var(--lt-card-dot) left bottom/4px 4px no-repeat;
-  filter: drop-shadow(0 1px 1px #000b);
-}
+.library-tactical .folder-media-card.is-selected { outline: none; }
+.library-tactical .folder-media-card.is-selected::after { content: none; }
 @media (hover:hover) and (pointer:fine) {
   .library-tactical.library-motion-root:not([data-library-dragging]) .folder-media-card:hover {
     translate: 0 -5px; rotate: 1 1 0 1deg; z-index: 4; box-shadow: 0 18px 24px -12px var(--lt-shadow);
   }
-  .library-tactical.library-motion-root:not([data-library-dragging]) .folder-media-card:hover::after {
+  .library-tactical.library-motion-root:not([data-library-dragging]) .folder-media-card:not(.is-selected):hover::after {
     --lt-card-dot: linear-gradient(#f7f8f6,#f7f8f6);
     content: ""; position: absolute; inset: -2px; border: 0; pointer-events: none; opacity: .9;
     background: var(--lt-card-dot) right top/4px 4px no-repeat, var(--lt-card-dot) right bottom/4px 4px no-repeat,

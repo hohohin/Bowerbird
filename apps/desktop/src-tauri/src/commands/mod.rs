@@ -6,6 +6,8 @@ pub mod agent_z;
 pub mod cloud;
 pub mod cloud_agent;
 pub mod codex;
+pub mod local_chat;
+pub mod local_chat_cards;
 pub mod collect;
 pub mod jimeng;
 #[cfg(target_os = "macos")]

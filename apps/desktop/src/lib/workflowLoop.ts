@@ -34,6 +34,10 @@ export function validateLoopStart(items: WorkflowLoopItem[], index: number, node
 
 /** The selector and executor must use the same input order and empty-row rules. */
 export function workflowLoopItems(node: WorkflowNode, nodes: WorkflowNode[], canvas: CanvasNode[], readCell?: (nodeId: string, cellId: string) => string | WorkflowValue | undefined): WorkflowLoopItem[] {
+  if (node.loopMode === "count") {
+    if (!Number.isInteger(node.loopCount) || node.loopCount! < 1 || node.loopCount! > 100) throw new WorkflowNodeError("循环次数须为 1–100 的整数", node);
+    return Array.from({ length: node.loopCount! }, (_, index) => ({ text: `第 ${index + 1} 轮`, assetIds: [] }));
+  }
   if (node.loopMode === "rows") return workflowLoopRows(node, nodes, canvas);
   const values = workflowInputValues(nodes, node, readCell ?? ((id, cellId) => {
     const source = canvas.find(card => card.id === id && card.hiddenAt == null);

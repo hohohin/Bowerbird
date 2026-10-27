@@ -162,14 +162,18 @@ export function buildWorkflowPlan(text: string, owner: WorkflowNode, sources: Pl
   if (existing.length + plan.nodes.length > 500) throw new Error("画板工作流卡片数量已达上限");
   const aliases = new Map<string, WorkflowNode>();
   for (const raw of plan.nodes) {
-    const spec = record(raw); keys(spec, ["id", "kind", "action", "skill", "prompt", "ratio", ...(mode === "template" ? ["loopMode", "loopStartItem", "agentTransport"] : [])]);
+    const spec = record(raw); keys(spec, ["id", "kind", "action", "skill", "prompt", "ratio", ...(mode === "template" ? ["loopMode", "loopCount", "loopStartItem", "agentTransport"] : [])]);
     const id = string(spec.id, 32);
     if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(id) || aliases.has(id) || sources.some(source => source.id === id)) throw new Error("卡片标识重复或无效");
     if (!kinds.includes(spec.kind as typeof kinds[number]) && !(mode === "template" && spec.kind === "loop")) throw new Error("方案使用了不存在的卡片类型");
     const node = newWorkflowNode(spec.kind as typeof kinds[number], 0, 0, owner.provider);
     if (spec.loopMode !== undefined) {
-      if (node.kind !== "loop" || !["images", "rows"].includes(String(spec.loopMode))) throw new Error("循环方式无效");
-      node.loopMode = spec.loopMode as "images" | "rows";
+      if (node.kind !== "loop" || !["images", "rows", "count"].includes(String(spec.loopMode))) throw new Error("循环方式无效");
+      node.loopMode = spec.loopMode as WorkflowNode["loopMode"];
+    }
+    if (spec.loopCount !== undefined || node.loopMode === "count") {
+      if (node.kind !== "loop" || node.loopMode !== "count" || !Number.isInteger(spec.loopCount) || Number(spec.loopCount) < 1 || Number(spec.loopCount) > 100) throw new Error("循环次数须为 1–100 的整数");
+      node.loopCount = Number(spec.loopCount);
     }
     if (spec.loopStartItem !== undefined) {
       if (node.kind !== "loop" || !Number.isInteger(spec.loopStartItem) || Number(spec.loopStartItem) < 1 || Number(spec.loopStartItem) > 100) throw new Error("循环起始项须为 1–100 的整数");

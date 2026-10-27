@@ -34,7 +34,11 @@ html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: r
 .composer-glass .composer-collapse.creation-exit-tab { position: static; display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; padding: 0; border: 0; border-radius: 999px; background: transparent; box-shadow: none; color: var(--bb-muted); font-size: 12px; }
 .composer-glass .composer-collapse:hover, .composer-add-material:hover { background: var(--library-glass-hover); color: var(--bb-ink); }
 .composer-description-heading { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px 4px; height: 36px; font-size: 11px; color: var(--bb-muted); }
-.composer-description-heading > button { display: grid; place-items: center; width: 32px; height: 28px; border-radius: 999px; }
+.composer-description-actions { display: flex; align-items: center; gap: 6px; }
+.composer-description-actions .composer-expand { display: grid; place-items: center; width: 32px; height: 28px; border-radius: 999px; }
+.composer-chat-history { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 3px 8px; border: 1px solid var(--bb-line); border-radius: 999px; white-space: nowrap; }
+.composer-chat-history:hover, .composer-chat-history[aria-expanded="true"] { color: var(--bb-ink); background: var(--library-glass-hover); }
+.composer-chat-key-hint { margin: 0; padding: 0 20px 8px; font-size: 10px; color: var(--bb-muted); }
 .composer-editor-scroll .collection-scroll-viewport { max-height: min(224px, 30vh); }
 .composer-glass .composer-description { padding: 0 20px 12px; font-size: 16px; line-height: 36px; }
 .composer-glass .creation-editor .ProseMirror { min-height: 76px; }
@@ -125,3 +129,6 @@ html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: r
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .creation-dock.composer-glass, .composer-glass .composer-mode-picker, .composer-glass .composer-parameters button[aria-haspopup], .composer-glass .composer-parameters select, .composer-glass .composer-parameters input[type="number"] { background: var(--bb-surface); }
 }
+
+.composer-chat-provider { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 10px 4px 5px; border: 1px solid var(--bb-line); border-radius: 999px; background: var(--bb-surface); font-size: 12px; white-space: nowrap; }
+.composer-chat-provider > span { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #8052c3; color: white; }

@@ -287,7 +287,6 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     if (working) return;
     const ids = selected.has(asset.id) ? [...selected] : [asset.id];
     const key = filterKey;
-    if (!selected.has(asset.id)) setSelected(new Set([asset.id]));
     void run(async () => {
       const targets = ids.length === 1 ? [asset] : await resolveSelection(ids);
       if (!alive.current || filterKeyRef.current !== key) return;

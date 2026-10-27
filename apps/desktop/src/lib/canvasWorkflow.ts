@@ -30,7 +30,8 @@ export interface WorkflowNode {
   overwriteDescribe?: boolean;
   describeCache?: { instruction: string; results: { assetId: string; sections: { title: string; body: string }[] }[] };
   agentTransport?: "local-ds" | "codex-cli" | "cloud";
-  loopMode?: "images" | "rows";
+  loopMode?: "images" | "rows" | "count";
+  loopCount?: number;
   loopStartItem?: number;
   planning?: import("./workflowPlanner").WorkflowPlanningState;
   templateInstance?: import("./workflowTemplates").TemplateInstance;
@@ -114,7 +115,7 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
   if (node.kind === "trigger") return [{ id: "completion", label: "完成触发", type: "signal" }];
   if (node.textSource) return [];
   if (node.kind === "comfy-video") return [{ id: "first-frame", label: "首帧", type: "image" }, { id: "last-frame", label: "尾帧（可选）", type: "image" }, { id: "text", label: "文本", type: "text" }];
-  if (node.kind === "loop") return node.loopMode === "rows" ? [{ id: "text", label: "内容行", type: "text" }] : [{ id: "image", label: "图片列表", type: "image" }];
+  if (node.kind === "loop") return node.loopMode === "count" ? [] : node.loopMode === "rows" ? [{ id: "text", label: "内容行", type: "text" }] : [{ id: "image", label: "图片列表", type: "image" }];
   if (node.kind === "instruction") return [{ id: "image", label: "图片", type: "image" }];
   const ports: WorkflowPort[] = [{ id: "text", label: "文本", type: "text" }, { id: "image", label: node.kind === "generation" && node.generation?.media === "video" ? "参考素材" : "图片", type: "image" }];
   if (node.kind === "generation" || node.kind === "skill" || node.kind === "agent") ports.push({ id: "visual-profile", label: "视觉规范", type: "visual-profile" });
@@ -123,7 +124,7 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
 export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
   if (node.kind === "comfy-video") return [{ id: "image", label: "视频", type: "image" }];
   if (node.kind === "planner") return [];
-  if (node.kind === "loop") return node.loopMode === "rows"
+  if (node.kind === "loop") return node.loopMode === "count" ? [{ id: "iteration", label: "当前轮次", type: "text" }] : node.loopMode === "rows"
     ? [{ id: "text", label: "当前行文字", type: "text" }, { id: "image", label: "当前行图片", type: "image" }, { id: "iteration", label: "当前轮次", type: "text" }]
     : [{ id: "image", label: "当前图片", type: "image" }, { id: "iteration", label: "当前轮次", type: "text" }];
   if (node.kind === "agent") return [{ id: "text", label: "返回文字", type: "text" },

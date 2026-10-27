@@ -315,6 +315,7 @@ pub fn run() {
             }
             let db = Arc::new(db::Database::open(&paths.db)?);
             db.migrate()?;
+            db.recover_local_chats()?;
             db.initialize_classification_presets()?;
             db.recover_project_deletions(&paths)?;
             // Execute explicitly requested file-root migration before any background writer.
@@ -649,6 +650,11 @@ pub fn run() {
             commands::prompt::list_prompts_by_asset,
             commands::prompt::assemble_pack,
             commands::codex::codex_health,
+            commands::local_chat::local_chat_list,
+            commands::local_chat::local_chat_get,
+            commands::local_chat::local_chat_send,
+            commands::local_chat::local_chat_stop,
+            commands::local_chat_cards::local_chat_cards_undo,
             commands::codex::codex_generate_prompt_for_asset,
             commands::codex::codex_describe_asset,
             commands::codex::cancel_codex_describe,

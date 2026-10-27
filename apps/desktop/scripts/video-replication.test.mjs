@@ -39,6 +39,18 @@ test('explicit first-frame fields are separated without guessing or consuming la
   equal(replicationRewriteParts('镜头的首帧画面提示词不要放在视频中').firstFramePrompt,'');
   equal(replicationRewriteParts('start: 0, end: 3\n一瓶香水').firstFramePrompt,'');
 });
+
+test('first-frame scene headings copy the first scene while preserving the video script', () => {
+  const scene='两位身着古装的女性，一位是娘娘装束，一位是侍女长今，处于现代办公室场景中，娘娘手上捧着印有godox神牛标识的牛皮纸大礼盒，另一位女性与其对话。景别为中景，构图为两人同框，光照为办公室明亮的室内灯光，色彩融合古装的传统色调与现代办公环境的冷色调。';
+  const text=`# 整体风格\n古装与现代办公室结合的创意广告，以古装对话形式引出神牛产品促销信息。\n\n# 镜头1\n## 首帧画面\n${scene}\n## 拍摄手法\n机位固定，剪辑节奏平缓，以对话推进。\n## 时长\n约10秒`;
+  equal(replicationRewriteParts(text).firstFramePrompt,scene);
+  equal(replicationRewriteParts(text).text,text);
+  equal(replicationRewriteParts(text+'\n# 镜头2\n## 首帧画面\n另一个场景').firstFramePrompt,scene);
+  for(const title of ['【首帧画面】','**首帧画面**','首帧画面：']) equal(replicationRewriteParts(`${title}\n${scene}\n## 拍摄手法\n固定`).firstFramePrompt,scene);
+  equal(replicationRewriteParts('首帧画面需要明亮，不要阴暗。').firstFramePrompt,'');
+  equal(replicationRewriteParts('## 首帧画面\n## 拍摄手法\n固定').firstFramePrompt,'');
+  equal(replicationRewriteParts(JSON.stringify({'首帧画面':scene,拍摄手法:'固定'})).firstFramePrompt,scene);
+});
 test('rewrite direction is submitted alongside the reference, with a combined length limit', () => {
   equal(replicationRewriteInput({inputText:'原文',rewriteDirection:' 改成夜景 '}),'【参考文本】\n原文\n\n【改写方向】\n改成夜景');
   equal(replicationRewriteInput({inputText:'原文'}),'原文');

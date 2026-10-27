@@ -9,6 +9,8 @@ import { imageAttrs } from "./schema";
 import { buildAssetByName } from "./parse";
 
 export interface PluginDeps {
+  /** Chat keeps Enter literal instead of converting a trailing asset/dimension token. */
+  enterInsertsParagraph?: boolean;
   viewRef: { current: EditorView | null };
   assetByIdRef: { current: Map<string, PromptedAsset> };
   chipSectionsRef: { current: CaptionSection[] };
@@ -103,6 +105,7 @@ export function buildPlugins(deps: PluginDeps) {
   return [
     history(),
     keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo }),
+    keymap({ "Shift-Enter": baseKeymap.Enter, ...(deps.enterInsertsParagraph ? { Enter: baseKeymap.Enter } : {}) }),
     keymap(punctKeys),
     keymap(baseKeymap),
     new Plugin({

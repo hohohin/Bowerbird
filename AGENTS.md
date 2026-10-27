@@ -37,11 +37,13 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/LAYER-EDITING.md` | Seedream 5.0 Pro 分层编辑、独立面板、本地工程、Cloud 图层包与隔离验证 | 分层拆分、透明图层修改、图层工程保存或分层服务启价前必读 |
 | `dev-doc/SEEDANCE-2.5-INTEGRATION.md` | 即梦 Seedance 2.5 视频接入、官方 CLI 四模式契约与验收证据 | 视频生成、参数、任务恢复、视频入库与播放相关工作前必读 |
 | `dev-doc/VIDEO-REPLICATION.md` | 画板工具箱、视频分析与改写、插入画板生成、抖音获取、Cloud 独立计费与验证 | 视频复刻、抖音参考视频获取或分析/改写启价相关工作前必读 |
+| `dev-doc/FILMCRAFT-RESEARCH.md` | FilmCraft 剪辑交互、时间线、变速、音频波形源码调研及 Bowerbird 轻剪辑建议（未定案） | 轻量视频剪辑方案、时间模型、波形缓存或 FilmCraft 复用评估前读 |
 | `dev-doc/COMFYUI-LOCAL-VIDEO.md` | 本机 ComfyUI H3 视频卡片、环境检测与一键安装、固定工作流参数、账号门控、任务恢复与隔离验证 | 本机 H3 视频、首尾帧或 ComfyUI 接入/安装相关工作前必读 |
 | `dev-doc/Eagle类创意收集工具调查报告.html` | 前序竞品调研，计划的依据 | 需要背景/对标时 |
 | `reference/theory.md` | 早期素材分类（A–F 类）草稿 | 仅在追溯原始意图时 |
 | `dev-doc/桌面端UI设计.html` | 早期三区外壳与创作板设计稿 | 仅作设计背景；当前 UI 契约读 PROJECT.md 与对应专项 |
 | `dev-doc/ui-studies/library-tactical-2026-10-26/README.md` | 素材库实装前样式、Tactical 确认稿、独立冻结预览及增量撤回补丁 | 恢复素材库旧样式、复现确认稿或核对本次接入范围时 |
+| `dev-doc/ui-studies/library-selection-2026-10-26/README.md` | 素材多选动效确认稿、独立预览、共用组件接入及验证记录 | 调整素材多选标记、核对图片边界／动效或恢复确认稿时 |
 | `Windows/README.md` | Windows x64 开发、构建 NSIS 安装包与环境要求 | Windows 运行 / 打包前 |
 | `Windows/MAC-SYNC-2026-10-16.md` | Windows 接收 mac@300124d 的差异、0034/分类/工作流/截图同步与验证 | 接续本轮 Mac 同步、核对 Windows 平台保留项及未发版边界时 |
 | `Windows/Windows端更新内容-26.10.1001.md` | 相对 Mac d6027fb 的 Windows 按版本更新清单，含 1001 后二维表格、Agent 会话生图、视频截帧及诊断源码 | Mac 接收截至 2026-10-15 的 dev、区分已发布 1001 与后续未发版源码、核对同步及原生验收时 |

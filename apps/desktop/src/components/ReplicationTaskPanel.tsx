@@ -17,7 +17,14 @@ import type { Asset } from "../lib/types";
 import { replicationCall as call, replicationSteps as steps, replicationSourceKey as sourceKey, type ReplicationDialogProps } from "./replicationTaskState";
 
 export function ReplicationTaskPanel({ initial, defaults, onUpdate, onBack, ...props }: ReplicationDialogProps & { initial: ReplicationCase; defaults: { persona: string; rules: string }; onUpdate: (value: ReplicationCase) => void; onBack: () => void }) {
-  const [draft, setDraft] = useState<ReplicationCase>(() => ({ ...defaults, ...initial }));
+  const [draft, setDraft] = useState<ReplicationCase>(() => {
+    const value = { ...defaults, ...initial };
+    // Reopening an older result can recover a previously unrecognized scene heading.
+    if (!value.firstFramePrompt?.trim() && value.rewrittenText) {
+      value.firstFramePrompt = replicationRewriteParts(value.rewrittenText).firstFramePrompt;
+    }
+    return value;
+  });
   const draftRef = useRef(draft), revision = useRef(0), savedRevision = useRef(-1);
   const queue = useRef(Promise.resolve()), timer = useRef<ReturnType<typeof setTimeout>>();
   const alive = useRef(true), busyRef = useRef(false);

@@ -17,6 +17,7 @@ import { canvasMaterialFilterState, type CanvasMaterialFilterState } from "../li
 import { containedSessionOutputIds, hiddenWorkflowSessionIds, resolveGenerationCells, canvasSessionImages } from "../lib/canvasSessionOutputs";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { restoreWorkflowEdit, workflowEditUndo, type WorkflowEditUndo } from "../lib/workflowUndo";
+import { removeWorkflowNodes } from "../lib/workflowRemoval";
 import { WORKFLOW_CARD_DRAG_TYPE, workflowNodeRun, type WorkflowInput, type WorkflowKind } from "../lib/canvasWorkflow";
 import { replicationWorkflow } from "../lib/replicationWorkflow";
 import { captureCanvasClipboard, cloneCanvasClipboard, parseCanvasClipboard, serializeCanvasClipboard, type CanvasClipboard } from "../lib/canvasClipboard";
@@ -32,7 +33,7 @@ import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore"
 import { notify, notifyError } from "../lib/notify";
 import { arrangeCanvasNodes } from "../lib/canvasArrangement";
 import { canvasCardSourceRects, placeCanvasCardNearSource, newReferencesForCanvasCard, placeNewCanvasReferences, trackNewCanvasReferences } from "../lib/canvasReferencePlacement";
-import { isVideoPath, videoModelLabel } from "../lib/videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS, isVideoPath, videoModelLabel } from "../lib/videoGeneration";
 import { VideoPoster } from "./VideoPoster";
 import {
   useCallback,
@@ -90,6 +91,10 @@ import { videoTime, type VideoFrame } from "../lib/videoFrame";
 import type { VideoTrimRequest } from "../lib/videoTrim";
 import { CreativeComposer } from "./CreativeComposer";
 import { CanvasConversation } from "./CanvasConversation";
+import { LocalChatPanel, LocalChatCard, LocalChatHistory } from "./LocalChatPanel";
+import { useLocalChatStore } from "../lib/localChatStore";
+import { LOCAL_CHAT_CARDS_CHANGED_EVENT, LOCAL_CHAT_UPDATED_EVENT, localChat, localChatRunning, type ChatCardAction, type ChatCardDefaults, type ChatConversation } from "../lib/localChat";
+import { canvasChatId } from "../lib/canvasChat";
 import { canvasConversationTurn, canvasConversationTurns } from "../lib/canvasConversation";
 import { GenerationPanel } from "./GenerationPanel";
 import { CloudAgentSession } from "./CloudAgentPanel";
@@ -106,7 +111,7 @@ import {
   resolveProjectFocusNode,
   resolveProjectFocusThread,
 } from "../lib/projectActivity";
-import { isCreativeComposerDraftMeaningful } from "../lib/creativeDraft";
+import { clearSentCreativeChatDraft, isCreativeComposerDraftMeaningful, parseCreativeComposerState, serializeCreativeComposerState } from "../lib/creativeDraft";
 import {
   isWorkspaceOperationCurrent,
   isWorkspaceSnapshotCurrent,
@@ -213,7 +218,7 @@ interface CanvasMarqueePress extends CanvasMarquee {
 type CanvasUndoEntry =
   | { kind: "workflow"; projectId: string; edit: WorkflowEditUndo }
   | { kind: "paste"; projectId: string; nodeIds: string[]; groupIds: string[]; workflowIds: string[] }
-  | { kind: "removal"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; groups: Map<string, CanvasGroup> }
+  | { kind: "removal"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; groups: Map<string, CanvasGroup>; workflow?: WorkflowEditUndo | null }
   | { kind: "geometry"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; workflow: WorkflowGeometry[] };
 
 interface ActiveCanvasState {
@@ -420,6 +425,15 @@ export function CanvasWorkspace({
   const openContextMenu = useStore((state) => state.openContextMenu);
   const showAssetNames = useStore((state) => state.settings?.canvas_show_asset_names ?? false);
   const [workflowAgentDetail, setWorkflowAgentDetail] = useState<{ projectId: string; nodeId: string } | null>(null);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(false);
+  const [composerDraftRevision, setComposerDraftRevision] = useState(0);
+  const chatSummaries = useLocalChatStore(state => state.summaries);
+  useEffect(() => {
+    setSelectedChatId(null);
+    setChatHistoryOpen(false);
+    if (projectId) void useLocalChatStore.getState().loadProject(projectId).catch(error => console.warn("Chat history unavailable", error));
+  }, [projectId]);
   const genPanelOpen = useStore((state) => state.genPanelOpen);
   const boardOpen = useStore((state) => state.boardOpen);
   const activeSessionKind = useStore((state) => state.activeSessionKind);
@@ -430,6 +444,8 @@ export function CanvasWorkspace({
   const setGenPanelOpen = useStore((state) => state.setGenPanelOpen);
   useEffect(() => { setWorkflowAgentDetail(null); }, [projectId]);
   useEffect(() => { if (genPanelOpen) setWorkflowAgentDetail(null); }, [genPanelOpen]);
+  useEffect(() => { if (genPanelOpen) setSelectedChatId(null); }, [genPanelOpen]);
+  useEffect(() => { if (workflowAgentDetail) setSelectedChatId(null); }, [workflowAgentDetail]);
   const cloudEntitlement = useStore((state) => state.cloudEntitlement);
   const cloudAgentRuns = useStore((state) => state.cloudAgentRuns);
   const activeCloudAgentRunId = useStore((state) => state.activeCloudAgentRunId);
@@ -446,6 +462,7 @@ export function CanvasWorkspace({
   const [nodes, setNodes] = useState<CanvasNode[]>([]);
   const [snapshotPromptId, setSnapshotPromptId] = useState<string | null>(null);
   const [graphNodes, setGraphNodes] = useState<ProjectGraphNode[]>([]);
+  const nonChatGraphNodes = useMemo(() => graphNodes.filter(node => !canvasChatId(node)), [graphNodes]);
   const [graphEdges, setGraphEdges] = useState<CanvasEdge[]>([]);
   const [threads, setThreads] = useState<CreativeThread[]>([]);
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(focusNodeId);
@@ -1130,6 +1147,39 @@ export function CanvasWorkspace({
     });
   }
 
+  function clearSentChatDraft(originProjectId: string, sentDraftJson: string) {
+    if (activeCanvasRef.current.id === originProjectId) {
+      // Flush before enqueuing the clear: the editor debounces its latest text,
+      // and its full draft must be saved before the cleared snapshot.
+      composerDraftFlushRef.current?.();
+      const current = activeCanvasRef.current;
+      const clearedDraftJson = clearSentCreativeChatDraft(current.draftJson, sentDraftJson);
+      if (clearedDraftJson === null) return;
+      current.draftJson = clearedDraftJson;
+      setComposerDraftRevision(value => value + 1);
+      // Keep the same snapshot on retries; newer edits queue after this write.
+      void enqueueWrite(async () => { await api.projectCanvasUpdateDraft(originProjectId, clearedDraftJson); });
+      return;
+    }
+    let preparedDraftJson: string | null | undefined;
+    void enqueueWrite(async () => {
+      // A send acknowledgement may arrive after leaving and revisiting its project.
+      // Compare against the latest draft and save only to the original project.
+      if (preparedDraftJson === undefined) {
+        const saved = await api.projectCanvasGet(originProjectId);
+        if (activeCanvasRef.current.id === originProjectId) {
+          // The project became visible during the read. Append its editor flush
+          // and clear in order; awaiting that new queue from here would deadlock.
+          clearSentChatDraft(originProjectId, sentDraftJson);
+          preparedDraftJson = null;
+          return;
+        }
+        preparedDraftJson = clearSentCreativeChatDraft(saved.canvas.draftJson, sentDraftJson);
+      }
+      if (preparedDraftJson !== null) await api.projectCanvasUpdateDraft(originProjectId, preparedDraftJson);
+    });
+  }
+
   async function prepareForGeneration() {
     const draft = activeCanvasRef.current;
     await flushCanvasWrites(false);
@@ -1137,6 +1187,93 @@ export function CanvasWorkspace({
       await ensureMaterialized(draft);
     });
     await retryPendingWrites();
+  }
+
+  function openLocalChat(conversationId: string) {
+    const chat = useLocalChatStore.getState().summaries[conversationId];
+    if (chat && chat.projectId !== activeCanvasRef.current.id) return;
+    composerDraftFlushRef.current?.();
+    setGenPanelOpen(false);
+    setWorkflowAgentDetail(null);
+    setChatHistoryOpen(false);
+    setSelectedChatId(conversationId);
+    useStore.getState().setBoardActive(false);
+    if (chat) {
+      setFocusedNodeId(chat.nodeId);
+      setFocusedThreadId(chat.threadId);
+      useStore.getState().clearProjectThreadUnread(chat.projectId, chat.threadId);
+      markViewDirty();
+    }
+  }
+
+  function newLocalChat() {
+    const draft = parseCreativeComposerState(activeCanvasRef.current.draftJson);
+    draft.mode = "chat";
+    persistComposerDraft(serializeCreativeComposerState(draft));
+    setSelectedChatId(null);
+    setChatHistoryOpen(false);
+    useStore.getState().setBoardActive(true);
+  }
+
+  function chatCardDefaults(): ChatCardDefaults {
+    const state = useStore.getState();
+    const video = parseCreativeComposerState(activeCanvasRef.current.draftJson).drafts.video?.generation;
+    return { provider: state.activeGenProvider || state.defaultProvider,
+      videoChannel: video?.videoChannel ?? "jimeng", videoOptions: { ...(video?.videoOptions ?? DEFAULT_VIDEO_OPTIONS) } };
+  }
+
+  async function undoChatCards(action: ChatCardAction) {
+    const id = activeCanvasRef.current.id;
+    const chat = useLocalChatStore.getState().summaries[action.conversationId];
+    if (chat?.projectId !== id) throw new Error("请回到这段对话所属的项目再撤销。");
+    if (nodeDragRef.current || graphNodeDragRef.current) throw new Error("请先完成卡片拖动再撤销。");
+    await flushCanvasWrites(false);
+    const controller = canvasWorkflowController(id);
+    await controller.flush();
+    const conversation = await localChat.undoCards(action.conversationId, action.id);
+    await controller.refreshExternalCards();
+    return conversation;
+  }
+
+  async function locateChatCards(action: ChatCardAction) {
+    const id = activeCanvasRef.current.id;
+    const revision = useStore.getState().projectRouteRevision;
+    const chat = useLocalChatStore.getState().summaries[action.conversationId];
+    if (chat?.projectId !== id) return;
+    await canvasWorkflowController(id).refreshExternalCards();
+    const snapshot = await api.projectCanvasGet(id);
+    if (activeCanvasRef.current.id !== id || useStore.getState().projectRouteRevision !== revision) return;
+    const ids = new Set(action.cards.map(card => card.id));
+    const workflows = canvasWorkflowController(id).document.nodes.filter(node => ids.has(node.id));
+    const measured = new Map((workflowRef.current?.bounds() ?? []).map(rect => [rect.id, rect]));
+    const rects = [...snapshot.nodes.filter(node => ids.has(node.id) && node.hiddenAt == null),
+      ...workflows.map(node => measured.get(node.id) ?? { ...node, width: 344, height: 536 })];
+    const stage = stageRef.current?.getBoundingClientRect();
+    if (!rects.length || !stage) throw new Error("这些卡片已被移除，无法定位。");
+    const left = Math.min(...rects.map(rect => rect.x)), top = Math.min(...rects.map(rect => rect.y)) - 45;
+    const width = Math.max(...rects.map(rect => rect.x + rect.width)) - left;
+    const height = Math.max(...rects.map(rect => rect.y + rect.height)) - top;
+    const nextZoom = clampCanvasZoom(Math.min(1, Math.max(200, stage.width - 520) / width, Math.max(200, stage.height - 140) / height));
+    const nextPan = { x: 60 - left * nextZoom, y: (stage.height - height * nextZoom) / 2 - top * nextZoom };
+    zoomRef.current = nextZoom; panRef.current = nextPan;
+    setZoom(nextZoom); setPan(nextPan); setSelectedCanvasNodeIds(new Set(rects.map(rect => rect.id)));
+    viewModeRef.current = "canvas"; setViewMode("canvas"); markViewDirty();
+  }
+
+  async function startLocalChat(request: { prompt: string; references: Asset[] }) {
+    const id = activeCanvasRef.current.id;
+    const revision = useStore.getState().projectRouteRevision;
+    await prepareForGeneration();
+    const route = useStore.getState();
+    if (!isWorkspaceOperationCurrent(id, route.activeProjectId, route.projectRoutePending, revision, route.projectRouteRevision)) {
+      throw new Error("项目已切换，请在原项目重新发送。");
+    }
+    const bounds = stageRef.current?.getBoundingClientRect();
+    const point = bounds ? toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 3) : { x: 80, y: 80 };
+    const placement = placeCanvasCardNearSource({ x: point.x - 160, y: point.y, width: 320, height: 190 }, selectionAnchors().map(anchor => anchor.rect));
+    const chat = await useLocalChatStore.getState().send({ projectId: id, text: request.prompt,
+      referenceAssetIds: request.references.map(asset => asset.id), cardDefaults: chatCardDefaults(), placement: { ...placement, width: 320, height: 190, zIndex: Date.now() % 1000000 } });
+    if (activeCanvasRef.current.id === id && useStore.getState().projectRouteRevision === revision) openLocalChat(chat.id);
   }
 
   async function resolveCreativeThread(
@@ -1368,10 +1505,17 @@ export function CanvasWorkspace({
     let unlisten: UnlistenFn | undefined;
     let unlistenAssets: UnlistenFn | undefined;
     let unlistenImport: UnlistenFn | undefined;
+    let unlistenChat: UnlistenFn | undefined;
+    let unlistenChatCards: UnlistenFn | undefined;
     let restoreImportedView = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let alive = true;
     let refreshVersion = 0;
+
+    // A cached controller may have been off screen when a chat created cards.
+    if (projectId && !useStore.getState().projects.find(project => project.id === projectId)?.provisional) {
+      void canvasWorkflowController(projectId).refreshExternalCards().catch(reportError);
+    }
 
     function scheduleRefresh(eventProjectId: string, delay: number) {
       if (timer) clearTimeout(timer);
@@ -1444,6 +1588,17 @@ export function CanvasWorkspace({
       else cleanup();
     });
 
+    listen<ChatConversation>(LOCAL_CHAT_UPDATED_EVENT, ({ payload: chat }) => {
+      if (chat.projectId !== projectId) return;
+      if (!graphNodesRef.current.some(node => node.id === chat.nodeId && node.hiddenAt == null)) scheduleRefresh(chat.projectId, 40);
+    }).then(cleanup => { if (alive) unlistenChat = cleanup; else cleanup(); });
+
+    listen<{ projectId: string }>(LOCAL_CHAT_CARDS_CHANGED_EVENT, ({ payload }) => {
+      if (!alive || payload.projectId !== projectId) return;
+      scheduleRefresh(payload.projectId, 40);
+      void canvasWorkflowController(payload.projectId).refreshExternalCards().catch(reportError);
+    }).then(cleanup => { if (alive) unlistenChatCards = cleanup; else cleanup(); });
+
     // This listener must stay mounted for the whole project lifetime. Asset
     // ingestion emits library://assets-changed immediately before the terminal
     // creative event; rebinding on assetById changes leaves an async listener
@@ -1482,6 +1637,8 @@ export function CanvasWorkspace({
       unlisten?.();
       unlistenAssets?.();
       unlistenImport?.();
+      unlistenChat?.();
+      unlistenChatCards?.();
       if (timer) clearTimeout(timer);
     };
   }, [projectId]);
@@ -2283,7 +2440,6 @@ export function CanvasWorkspace({
     event.stopPropagation();
     useStore.getState().closeContextMenu();
     const nodeIds = selectedCanvasNodeIdsRef.current.has(nodeId) ? [...selectedCanvasNodeIdsRef.current] : [nodeId];
-    setSelectedCanvasNodeIds(new Set(nodeIds));
     const folder = nodesRef.current.find((candidate): candidate is CanvasFolderNode => candidate.id === nodeId && candidate.kind === "folder");
     const section = graphNodesRef.current.find(candidate => candidate.id === nodeId && candidate.kind === "note" && readCanvasNote(candidate).note_type === "section");
     setPromptMenu({ node, nodeIds, folder, x: event.clientX, y: event.clientY, point: null,
@@ -2566,7 +2722,6 @@ export function CanvasWorkspace({
     const selectedIds = selectedCanvasNodeIdsRef.current.has(selectionNode.id)
       ? new Set(selectedCanvasNodeIdsRef.current)
       : new Set([selectionNode.id]);
-    if (!selectedCanvasNodeIdsRef.current.has(selectionNode.id)) setSelectedCanvasNodeIds(selectedIds);
     openContextMenu(event.clientX, event.clientY, selectedAsset.assetId, {
       ungroupCanvasFolder: selectionNode.kind === "folder" ? () => ungroupFolder(selectionNode) : undefined,
       addCanvasImagesToBoard: {
@@ -3369,9 +3524,21 @@ export function CanvasWorkspace({
       if (node.kind === "folder") for (const asset of node.assets) ids.add(asset.id);
     }
     const graph = graphNodesRef.current.filter((node) => ids.has(node.id) && node.hiddenAt == null);
-    if (materials.length === 0 && graph.length === 0) return;
     const draft = activeCanvasRef.current;
-    undoHistoryRef.current.push({ kind: "removal", projectId: draft.id, materials, graph, groups: new Map(groupsRef.current) });
+    const controller = canvasWorkflowController(draft.id);
+    const workflowIds = new Set(controller.document.nodes.filter(node => ids.has(node.id)).map(node => node.id));
+    if (materials.length === 0 && graph.length === 0 && workflowIds.size === 0) return;
+    let workflow: WorkflowEditUndo | null = null;
+    if (workflowIds.size) {
+      if (controller.error) { notify("请先重试保存工作流，再删除卡片", "info"); return; }
+      const before = controller.document;
+      const pending = controller.edit(removeWorkflowNodes(before.nodes, workflowIds));
+      void pending.catch(error => notifyError(error, "工作流删除未完成"));
+      // Validation and running-node locks reject before the optimistic document changes.
+      if (controller.document === before) return;
+      workflow = workflowEditUndo(before, controller.document);
+    }
+    undoHistoryRef.current.push({ kind: "removal", projectId: draft.id, materials, graph, groups: new Map(groupsRef.current), workflow });
     commitNodes(nodesRef.current.filter((node) => !ids.has(node.id)));
     const next = graphNodesRef.current.map((node) => ids.has(node.id) ? { ...node, hiddenAt: Date.now() } : node);
     graphNodesRef.current = next;
@@ -3387,7 +3554,7 @@ export function CanvasWorkspace({
         }
       }
       const groupIds = new Set(materials.filter((node) => node.kind === "folder").map((node) => node.id));
-      for (const id of ids) if (!groupIds.has(id)) await api.projectCanvasNodeRemove(id);
+      for (const id of ids) if (!groupIds.has(id) && !workflowIds.has(id)) await api.projectCanvasNodeRemove(id);
     });
   }
 
@@ -3547,6 +3714,14 @@ export function CanvasWorkspace({
       return;
     }
     if (entry.kind === "geometry" && entry.workflow.some(node => workflowRef.current?.isLocked(node.id))) return;
+    if (entry.kind === "removal" && entry.workflow) {
+      const controller = canvasWorkflowController(entry.projectId);
+      if (controller.error) { notify("请先重试保存工作流，再撤销卡片操作", "info"); return; }
+      const before = controller.document;
+      const pending = controller.edit(restoreWorkflowEdit(before.nodes, entry.workflow), entry.workflow);
+      void pending.catch(error => notifyError(error, "工作流撤销未完成"));
+      if (controller.document === before) return;
+    }
     undoHistoryRef.current.pop();
     if (entry.kind === "geometry") {
       workflowRef.current?.position(new Map(entry.workflow.map(node => [node.id, node])), true);
@@ -3733,6 +3908,7 @@ export function CanvasWorkspace({
     () => activeGraphNodes.filter((node) => node.kind === "agent_group" && node.hiddenAt == null),
     [activeGraphNodes],
   );
+  const chatGraphNodes = useMemo(() => activeGraphNodes.filter(node => node.hiddenAt == null && canvasChatId(node)), [activeGraphNodes]);
   const promptReferences = useMemo(() => new Map(graphNodes.filter(node => node.kind === "prompt")
     .map(node => [node.id, canvasPromptReferences(node.id, graphNodes, graphEdges, assetById)])), [graphNodes, graphEdges, assetById]);
   // ReadonlyPrompt creates its content in an effect; measure after it has mounted.
@@ -4020,7 +4196,7 @@ export function CanvasWorkspace({
       </aside>
       <CanvasLibraryResize panelId={sourcePanelId} collapsed={sourceCollapsed} onClose={closeSource} />
 
-      <section ref={boardShellRef} className={`canvas-board-shell${(scopedInspectorOpen && !inspectorEditing || workflowAgentDetail?.projectId === projectId && !loading && !genPanelOpen) ? " has-project-inspector" : ""}`}>
+      <section ref={boardShellRef} className={`canvas-board-shell${(selectedChatId || scopedInspectorOpen && !inspectorEditing || workflowAgentDetail?.projectId === projectId && !loading && !genPanelOpen) ? " has-project-inspector" : ""}`}>
         <button
           type="button"
           className={`canvas-source-toggle ${sourceCollapsed ? "canvas-source-expand" : "canvas-source-collapse"}`}
@@ -4083,6 +4259,8 @@ export function CanvasWorkspace({
             </small>}
           </div>
           <div className="canvas-zoom-controls" aria-label="画布缩放">
+            <button type="button" aria-label="项目对话记录" title="项目对话记录" aria-expanded={chatHistoryOpen}
+              onClick={() => setChatHistoryOpen(open => !open)}><MessageCircle size={14} /></button>
             {viewMode === "timeline" && threads.length > 0 && (
               <select
                 aria-label="时间线范围"
@@ -4199,7 +4377,6 @@ export function CanvasWorkspace({
               || selectedCanvasNodeIdsRef.current.size === 0) return;
             event.preventDefault();
             event.stopPropagation();
-            if (workflowRef.current?.bounds().some(node => selectedCanvasNodeIdsRef.current.has(node.id))) return;
             removeNodes(selectedCanvasNodeIdsRef.current);
           }}
           onContextMenu={(event) => {
@@ -4261,7 +4438,7 @@ export function CanvasWorkspace({
             className="canvas-plane"
             style={{ "--canvas-running-width": `${4 / zoom}px`, transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` } as CSSProperties}
           >
-            {projectId && !loading && !loadFailed && activeCanvas.id === projectId && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} zoom={zoom} toBoardPoint={toBoardPoint} graphNodes={graphNodes} conversationCards={conversationCards} imageOnlyConversationIds={imageOnlyConversationIds}
+            {projectId && !loading && !loadFailed && activeCanvas.id === projectId && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} zoom={zoom} toBoardPoint={toBoardPoint} graphNodes={nonChatGraphNodes} conversationCards={conversationCards} imageOnlyConversationIds={imageOnlyConversationIds}
               selectedIds={selectedCanvasNodeIds} panReady={spacePanReady || drawingTool === "pan"} onSelect={(id, additive) => { if (additive) toggleCanvasNodeSelection(id); else setSelectedCanvasNodeIds(new Set([id])); }}
               onNodesChanged={() => setWorkflowRevision(value => value + 1)}
               onEdited={(before, after) => {
@@ -4272,6 +4449,7 @@ export function CanvasWorkspace({
               onOpenAgent={nodeId => { setGenPanelOpen(false); setWorkflowAgentDetail({ projectId: projectId!, nodeId }); }}
               onOpenGeneration={openWorkflowGeneration}
               onDragStart={beginGraphNodeDrag} onDragMove={moveGraphNode} onDragEnd={endGraphNodeDrag} onNodeMenu={openCanvasNodeMenu}
+              onRemove={id => removeNodes(selectedCanvasNodeIdsRef.current.has(id) ? selectedCanvasNodeIdsRef.current : [id])}
               onPlaced={card => {
                 const stage = stageRef.current; if (!stage || useStore.getState().activeProjectId !== projectId) return;
                 const bounds = stage.getBoundingClientRect();
@@ -4283,7 +4461,7 @@ export function CanvasWorkspace({
               materials={visibleMaterials.flatMap<MaterialAnchor>(node => node.kind === "folder"
                 ? [{ id: node.id, groupId: node.id, assetIds: [...new Set(node.assets.filter(asset => !isVideoPath(asset.storePath)).flatMap(asset => asset.assetId ? [asset.assetId] : []))], ...nodeRect(node) }]
                 : node.kind === "asset" && node.asset.assetId ? [{ id: node.id, assetId: node.asset.assetId, video: isVideoPath(node.asset.storePath), ...nodeRect(node) }] : [])} />}
-            {graphNodes.filter(node => node.kind === "note" && node.hiddenAt == null).map(savedNode => {
+            {graphNodes.filter(node => node.kind === "note" && node.hiddenAt == null && !canvasChatId(node)).map(savedNode => {
               const value = resolveGenerationCells(readCanvasNote(savedNode), graphNodes);
               const minimum = value.note_type === "text" || value.note_type === "images" ? canvasTextMinSize(value.cells) : savedNode;
               const node = { ...savedNode, width: Math.max(savedNode.width, minimum.width), height: Math.max(savedNode.height, minimum.height) };
@@ -4314,6 +4492,10 @@ export function CanvasWorkspace({
                   ))}
                 </> : <CanvasTextCard value={value} selected={selected} width={node.width} height={node.height} zoom={zoom}
                   onOpenPreview={openCanvasSourcePreview}
+                  onMediaContextMenu={(event, asset) => {
+                    setPromptMenu(null);
+                    openContextMenu(event.clientX, event.clientY, asset.id, { asset, singleAsset: true });
+                  }}
                   onOpenGeneration={cell => {
                     const session = graphNodes.find(item => item.id === cell.generation_ref?.session_node_id && item.hiddenAt == null);
                     if (session) openWorkflowGeneration(session);
@@ -4358,6 +4540,26 @@ export function CanvasWorkspace({
                 );
               })}
             </svg>
+            {chatGraphNodes.map(node => {
+              const chatId = canvasChatId(node)!;
+              const chat = chatSummaries[chatId];
+              return <div key={node.id} data-canvas-node data-canvas-node-id={node.id} data-local-chat-id={chatId}
+                role="button" tabIndex={0} aria-label={`对话 · ${chat?.title ?? "本机 Codex"}`} aria-busy={localChatRunning(chat)}
+                className={`canvas-chat-node${selectedCanvasNodeIds.has(node.id) ? " is-selected" : ""}${selectedChatId === chatId ? " is-focused" : ""}${localChatRunning(chat) ? " canvas-card-running" : ""}`}
+                style={{ width: node.width, minHeight: node.height, transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: activeDragId === node.id ? 10000 + node.zIndex : node.zIndex }}
+                onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
+                onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
+                onContextMenu={event => openCanvasNodeMenu(event, node.id)}
+                onClick={event => {
+                  if (consumeSuppressedNodeClick() || event.ctrlKey || event.metaKey || spacePressedRef.current || drawingTool === "pan") return;
+                  openLocalChat(chatId);
+                }}
+                onKeyDown={event => {
+                  if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) { event.preventDefault(); openLocalChat(chatId); }
+                }}>
+                {chat ? <LocalChatCard conversation={chat} /> : <div className="local-chat-card-content"><strong>本机 Codex 对话</strong><p>打开对话详情</p></div>}
+              </div>;
+            })}
             {promptGraphNodes.map((node) => {
               const conversation = conversationCards.cards.get(node.id);
               const latest = conversation?.latest ?? node;
@@ -4654,7 +4856,7 @@ export function CanvasWorkspace({
             />
           )}
 
-          {nodes.length === 0 && promptGraphNodes.length === 0 && agentGraphNodes.length === 0
+          {nodes.length === 0 && promptGraphNodes.length === 0 && agentGraphNodes.length === 0 && chatGraphNodes.length === 0
             && !graphNodes.some(node => node.kind === "note" && node.hiddenAt == null)
             && !workflowNodes.some(node => node.kind !== "text") && !loading && (
             <div className="canvas-empty-state" aria-hidden="true">
@@ -4670,13 +4872,13 @@ export function CanvasWorkspace({
             nodes={timelineNodes}
             edges={timelineEdges}
             selectedNodeId={focusedNodeId}
-            onSelect={focusGraphNode}
+            onSelect={id => { const node = graphNodes.find(node => node.id === id); const chatId = node && canvasChatId(node); if (chatId) openLocalChat(chatId); else focusGraphNode(id); }}
             onLocate={locateGraphNode}
           />
         )}
-        {shouldMountProjectComposer(loading, activeSessionKind === "generation" && !!genEditing) && (
+        {!selectedChatId && shouldMountProjectComposer(loading, activeSessionKind === "generation" && !!genEditing) && (
           <CreativeComposer
-            key={activeCanvas.id}
+            key={`${activeCanvas.id}:${composerDraftRevision}`}
             projectId={activeCanvas.id}
             draftJson={activeCanvas.draftJson}
             initialAssetIds={composerSeedIds}
@@ -4685,7 +4887,7 @@ export function CanvasWorkspace({
             focusedContinuationThreadId={focusedThreadId}
             promptLoadRequest={promptLoadRequest}
             onPromptLoadConsumed={onLaunchConsumed}
-            onDraftChange={persistComposerDraft}
+            onDraftChange={draftJson => { if (activeCanvasRef.current.id === activeCanvas.id) persistComposerDraft(draftJson); }}
             onOpenLibrary={() => {
               if (!useStore.getState().canvasLibraryOpen) {
                 changeSource("global");
@@ -4698,6 +4900,10 @@ export function CanvasWorkspace({
               composerDraftFlushRef.current = flush;
             }}
             beforeGenerate={prepareForGeneration}
+            onSendChat={startLocalChat}
+            onChatDraftSent={sentDraft => clearSentChatDraft(activeCanvas.id, sentDraft)}
+            onOpenChatHistory={() => setChatHistoryOpen(open => !open)}
+            chatHistoryOpen={chatHistoryOpen}
             onGenerateLocalVideo={async request => {
               const workflow = workflowRef.current;
               const bounds = stageRef.current?.getBoundingClientRect();
@@ -4709,6 +4915,14 @@ export function CanvasWorkspace({
             resolveCreativeThread={resolveCreativeThread}
           />
         )}
+        {selectedChatId && projectId && !loading && <LocalChatPanel key={selectedChatId} conversationId={selectedChatId} projectId={projectId}
+          onClose={() => { setSelectedChatId(null); useStore.getState().setBoardActive(false); }}
+          onSelectConversation={openLocalChat}
+          onNewConversation={newLocalChat}
+          getCardDefaults={chatCardDefaults} onLocateCards={locateChatCards} onUndoCards={undoChatCards}
+          onOpenLibrary={() => { changeSource("global"); setCanvasLibraryOpen(true); useStore.getState().setBoardActive(true); }} />}
+        {chatHistoryOpen && projectId && <div id="project-chat-history" className="canvas-chat-history"><LocalChatHistory projectId={projectId}
+          activeConversationId={selectedChatId ?? undefined} onOpen={openLocalChat} onClose={() => setChatHistoryOpen(false)} /></div>}
         {workflowAgentDetail && workflowAgentDetail.projectId === projectId && !loading && !genPanelOpen && <WorkflowAgentDetail
           key={`${projectId}:${workflowAgentDetail.nodeId}`} projectId={workflowAgentDetail.projectId} nodeId={workflowAgentDetail.nodeId}
           graphNodes={graphNodes} onOpenGeneration={openWorkflowGeneration} onClose={() => setWorkflowAgentDetail(null)} />}
@@ -4796,7 +5010,7 @@ export function CanvasWorkspace({
             {promptMenu.node && promptMenu.nodeIds.length === 1 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => reuseCanvasPrompt(promptMenu.node!)}>
               <Copy size={14} /> 复用提示词
             </button>}
-            {(promptMenu.section || (promptMenu.folder && promptMenu.nodeIds.length === 1) || (promptMenu.nodeIds.length > 0 && !promptMenu.nodeIds.some(id => workflowRef.current?.bounds().some(node => node.id === id)))) && <><div className="app-context-divider" /><DeleteSubmenu>
+            {(promptMenu.section || promptMenu.nodeIds.length > 0) && <><div className="app-context-divider" /><DeleteSubmenu>
             {promptMenu.section && <button type="button" role="menuitem" title="移除分区框，保留其中的卡片" className="app-context-item is-danger px-2 py-1.5" onClick={() => {
               removeNodes([promptMenu.section!.id]);
               setPromptMenu(null);
@@ -4809,7 +5023,7 @@ export function CanvasWorkspace({
             }}>
               <Ungroup size={14} /> 解散素材组
             </button>}
-            {promptMenu.nodeIds.length > 0 && !promptMenu.nodeIds.some(id => workflowRef.current?.bounds().some(node => node.id === id)) && <button type="button" role="menuitem" className="app-context-item is-danger px-2 py-1.5" onClick={() => {
+            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="app-context-item is-danger px-2 py-1.5" onClick={() => {
               removeNodes(promptMenu.nodeIds);
               setPromptMenu(null);
             }}>

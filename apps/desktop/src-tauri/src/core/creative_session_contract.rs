@@ -234,6 +234,8 @@ pub struct NoteNodePayloadV1 {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note_type: Option<CanvasNoteType>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub cells: Vec<Vec<CanvasTextCell>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -277,6 +279,7 @@ pub enum CanvasNoteType {
     Images,
     Section,
     Bubble,
+    Chat,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -660,6 +663,9 @@ fn parse_node_payload_value(
         }
         CreativeNodeKind::Note => {
             let note: NoteNodePayloadV1 = serde_json::from_value(value)?;
+            if (note.note_type == Some(CanvasNoteType::Chat)) != note.conversation_id.as_ref().is_some_and(|id| !id.trim().is_empty()) {
+                return Err(CreativeContractError::InvalidNoteGrid);
+            }
             if note.artboard.as_ref().is_some_and(|artboard|
                 note.note_type != Some(CanvasNoteType::Section)
                     || artboard.base_asset_id.as_ref().is_some_and(|id| id.trim().is_empty())) {

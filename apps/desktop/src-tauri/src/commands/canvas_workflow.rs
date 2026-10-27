@@ -7,7 +7,7 @@ use tauri::State;
 use crate::{db::Database, error::{AppError, AppResult}};
 use crate::cloud::{AuthClient, EntitlementService};
 
-async fn require_pro(auth: &AuthClient, entitlement: &EntitlementService) -> AppResult<()> {
+pub(crate) async fn require_pro(auth: &AuthClient, entitlement: &EntitlementService) -> AppResult<()> {
     let snapshot = entitlement.current_or_sync(auth).await;
     let login = auth.snapshot();
     if !login.logged_in || snapshot.user_id.is_empty() || login.user_id.as_deref() != Some(snapshot.user_id.as_str())
@@ -114,7 +114,7 @@ fn validate_loop(run: &Value, nodes: &[Value], assets: &mut HashSet<String>) -> 
     Ok(())
 }
 
-fn validate(document: &Value) -> AppResult<HashSet<String>> {
+pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
     if document["schema_version"] != 1 || document.to_string().len() > 2_000_000 { return Err(invalid()); }
     let nodes = document["nodes"].as_array().ok_or_else(invalid)?;
     if nodes.len() > 500 { return Err(invalid()); }
@@ -142,9 +142,12 @@ fn validate(document: &Value) -> AppResult<HashSet<String>> {
             }
         }
         if node["kind"] == "loop" {
-            if node.get("loopMode").is_some_and(|mode| !matches!(mode.as_str(), Some("images" | "rows"))) { return Err(invalid()); }
+            if node.get("loopMode").is_some_and(|mode| !matches!(mode.as_str(), Some("images" | "rows" | "count"))) { return Err(invalid()); }
             if node.get("loopStartItem").is_some_and(|value| value.as_u64().is_none_or(|item| !(1..=100).contains(&item))) { return Err(invalid()); }
-            let port = if node["loopMode"] == "rows" { "text" } else { "image" };
+            if node["loopMode"] == "count" {
+                if node["loopCount"].as_u64().is_none_or(|count| !(1..=100).contains(&count)) { return Err(invalid()); }
+            } else if node.get("loopCount").is_some() { return Err(invalid()); }
+            let port = if node["loopMode"] == "count" { "signal" } else if node["loopMode"] == "rows" { "text" } else { "image" };
             if inputs.keys().any(|key| key != port && key != "signal") { return Err(invalid()); }
         }
         if node["kind"] == "text" && node["textSource"].is_string() {
@@ -430,6 +433,19 @@ mod tests {
         doc["run"] = json!({"id":"r","threadId":"t","status":"waiting","order":["loop","draw"],"steps":{},"loop":{"nodeId":"loop","bodyIds":["draw"],"index":0,"completed":[]}});
         assert!(validate(&doc).is_ok());
         doc["run"]["loop"]["index"] = json!(1); assert!(validate(&doc).is_err());
+    }
+    #[test]
+    fn count_loop_requires_bounded_count_and_no_content_input() {
+        let mut owner = node("loop", json!({})); owner["kind"] = json!("loop");
+        owner["loopMode"] = json!("count"); owner["loopCount"] = json!(3);
+        let mut doc = json!({"schema_version":1,"nodes":[owner,node("draw",json!({"text":[{"nodeId":"loop","portId":"iteration"}]}))],"run":null});
+        assert!(validate(&doc).is_ok());
+        for count in [json!(0), json!(101), json!(1.5), json!("3"), Value::Null] {
+            doc["nodes"][0]["loopCount"] = count; assert!(validate(&doc).is_err());
+        }
+        doc["nodes"][0]["loopCount"] = json!(100); assert!(validate(&doc).is_ok());
+        doc["nodes"][0]["inputs"] = json!({"image":[{"assetId":"a"}]}); assert!(validate(&doc).is_err());
+        doc["nodes"][0]["inputs"] = json!({}); doc["nodes"][0]["loopMode"] = json!("images"); assert!(validate(&doc).is_err());
     }
     #[test]
     fn loop_selected_start_and_offset_completion_are_validated() {
