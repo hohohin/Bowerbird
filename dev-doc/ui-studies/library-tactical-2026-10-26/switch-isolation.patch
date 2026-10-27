@@ -1,0 +1,62 @@
+diff --git a/apps/desktop/src/components/LibraryTactical.css b/apps/desktop/src/components/LibraryTactical.css
+--- a/apps/desktop/src/components/LibraryTactical.css
++++ b/apps/desktop/src/components/LibraryTactical.css
+@@ -139,7 +139,7 @@
+   .folder-selection-bar button, .app-popover button, .folder-popover button, .library-color-action,
+   .thumbnail-size-slider, .file-place-row, .folder-navigation button, .file-places-heading button,
+   .file-place-remove, .folder-address):not(:disabled):is(:hover, :focus-visible) { animation: library-tactical-control-contact 160ms steps(1,end); }
+-.library-tactical .library-view-switch:is(:hover, :focus-within) .library-view-switch-thumb { animation: library-tactical-control-contact 160ms steps(1,end); }
++.library-tactical .library-view-switch:has(> button[aria-selected="true"]:is(:hover, :focus-visible)) > .library-view-switch-thumb { animation: library-tactical-control-contact 160ms steps(1,end); }
+ @keyframes library-tactical-contact { 0%,38%,70%,100% { opacity: .8; } 18%,55%,85% { opacity: .12; } }
+ @keyframes library-tactical-control-contact { 0%,38%,78% { opacity: .48; } 18%,58%,100% { opacity: 1; } }
+ 
+diff --git a/apps/desktop/scripts/library-tactical-ui.test.mjs b/apps/desktop/scripts/library-tactical-ui.test.mjs
+--- a/apps/desktop/scripts/library-tactical-ui.test.mjs
++++ b/apps/desktop/scripts/library-tactical-ui.test.mjs
+@@ -96,6 +96,46 @@
+     await page.mouse.move(0, 0); await page.waitForTimeout(200);
+     await page.screenshot({ path: `${output}/${theme}.png` });
+   }
++  await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
++
++  // Hover/focus belongs to one tab; the shared selection thumb must not flash for its siblings.
++  const viewSwitch = page.getByRole("tablist", { name: "素材视图切换条" });
++  const tabMotion = () => viewSwitch.evaluate(element => ({
++    tabs: [...element.querySelectorAll('button')].map(button => ({
++      selected: button.getAttribute('aria-selected') === 'true',
++      interacting: button.matches(':hover, :focus-visible'),
++      animation: getComputedStyle(button).animationName,
++    })),
++    thumb: getComputedStyle(element.querySelector('.library-view-switch-thumb')).animationName,
++    transition: getComputedStyle(element.querySelector('.library-view-switch-thumb')).transitionProperty,
++  }));
++  for (const theme of ["light", "dark"]) {
++    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
++    for (const tab of await viewSwitch.getByRole("tab").all()) {
++      await page.mouse.move(0, 0);
++      await tab.hover();
++      const motion = await tabMotion();
++      assert.equal(motion.tabs.filter(item => item.interacting).length, 1);
++      assert.ok(motion.tabs.every(item => item.animation === (item.interacting ? "library-tactical-control-contact" : "none")), `${theme}: only the hovered tab flashes`);
++      assert.equal(motion.thumb, motion.tabs.some(item => item.selected && item.interacting) ? "library-tactical-control-contact" : "none", `${theme}: unhovered selected tab remains steady`);
++      assert.equal(motion.transition, "transform", "selection thumb keeps its sliding transition");
++    }
++  }
++  await page.mouse.move(0, 0);
++  await viewSwitch.getByRole("tab", { name: "全部", exact: true }).focus();
++  await page.keyboard.press("Shift");
++  assert.equal((await tabMotion()).thumb, "none", "focus on an unselected tab does not flash the selected thumb");
++  await viewSwitch.getByRole("tab", { name: "标签分类", exact: true }).focus();
++  assert.equal((await tabMotion()).thumb, "library-tactical-control-contact", "focus on the selected tab still flashes its thumb");
++  await viewSwitch.getByRole("tab", { name: "全部", exact: true }).click();
++  assert.equal(await viewSwitch.getByRole("tab", { name: "全部", exact: true }).getAttribute("aria-selected"), "true");
++  assert.equal(await viewSwitch.evaluate(element => element.style.getPropertyValue("--switch-index")), "0");
++  await viewSwitch.getByRole("tab", { name: "标签分类", exact: true }).click();
++  assert.equal(await viewSwitch.getByRole("tab", { name: "标签分类", exact: true }).getAttribute("aria-selected"), "true");
++  assert.equal(await viewSwitch.evaluate(element => element.style.getPropertyValue("--switch-index")), "1");
++  await viewSwitch.getByRole("tab", { name: "标签分类", exact: true }).evaluate(element => element.blur());
++  await page.mouse.move(0, 0);
++  await page.locator('[data-asset-id="tactical-0"]').waitFor();
+   await page.evaluate(() => { document.documentElement.dataset.theme = "light"; });
+ 
+   const importButton = page.locator(".app-topbar-import > button");

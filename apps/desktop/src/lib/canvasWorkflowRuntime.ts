@@ -1,4 +1,5 @@
 import { assignCanvasCardNames } from "./canvasCardNames";
+import { mergeWorkflowChanges } from "./workflowExternalChanges";
 import { workflowTitle, WORKFLOW_CARD_WIDTH, workflowCompletionTriggers, workflowTriggerScope } from "./canvasWorkflow";
 import { resolveVideoCardOutputs } from "./workflowVideoFrames";
 import { api } from "./api";
@@ -50,6 +51,9 @@ export class CanvasWorkflowController {
   private listeners = new Set<() => void>();
   private loading: Promise<void> | null = null;
   private writing: Promise<void> = Promise.resolve();
+  private persistedDocument = emptyWorkflow();
+  private queuedDocument = emptyWorkflow();
+  private pendingEditAuthorization = false;
   private encapsulating = false;
   private executing = new Set<string>();
   private reservations = new Map<string, { access: string[]; writes: string[] }>();
@@ -134,6 +138,8 @@ export class CanvasWorkflowController {
       try {
         const snapshot = await api.canvasWorkflowGet(this.projectId);
         this.document = snapshot.document; this.revision = snapshot.revision;
+        this.persistedDocument = structuredClone(snapshot.document);
+        this.queuedDocument = structuredClone(snapshot.document);
         // Old dimension wires now carry the complete prompt through the single text port.
         const describes = new Set(this.document.nodes.filter(node => node.kind === "instruction" && node.action === "describe").map(node => node.id));
         const splits = new Set(this.document.nodes.filter(node => node.kind === "instruction" && node.action === "layers").map(node => node.id));
@@ -177,22 +183,74 @@ export class CanvasWorkflowController {
     return this.loading;
   }
   async save(document = this.document, authorizeEdit = false) {
+    if (authorizeEdit) this.pendingEditAuthorization = true;
     document = { ...document, cardNames: assignCanvasCardNames(document.cardNames, document.nodes.filter(node => !node.textTarget && !node.textSource).map(node => ({ id: node.id, title: workflowTitle(node) }))) };
     this.document = document; this.emit();
     const snapshot = structuredClone(document);
+    const base = this.queuedDocument;
+    this.queuedDocument = snapshot;
     const write = this.writing.then(async () => {
       if (authorizeEdit) await api.canvasWorkflowAuthorize();
-      this.revision = await api.canvasWorkflowSave(this.projectId, this.revision, snapshot);
+      let merged = mergeWorkflowChanges(base, snapshot, this.persistedDocument);
+      let mergeBase = this.persistedDocument, revision = this.revision;
+      // A chat turn can append four batches while unrelated runs checkpoint.
+      for (let conflicts = 0; ; conflicts++) {
+        try {
+          this.revision = await api.canvasWorkflowSave(this.projectId, revision, merged);
+          break;
+        } catch (error) {
+          if (!String(error).includes("工作流已被其他窗口修改") || conflicts >= 4) throw error;
+          const latest = await api.canvasWorkflowGet(this.projectId);
+          merged = mergeWorkflowChanges(mergeBase, merged, latest.document);
+          mergeBase = latest.document; revision = latest.revision;
+        }
+      }
+      this.persistedDocument = structuredClone(merged);
+      this.document = mergeWorkflowChanges(snapshot, this.document, merged);
+      if (this.queuedDocument === snapshot) this.queuedDocument = structuredClone(merged);
     });
     // A failed write blocks later writes and execution until explicitly retried.
     this.writing = write;
-    try { await write; this.error = ""; }
+    try {
+      await write; this.error = "";
+      if (this.writing === write) this.pendingEditAuthorization = false;
+    }
     catch (error) { this.error = `工作流未保存：${String(error)}`; throw error; }
     finally { this.emit(); this.scheduleSessionCompletions(); }
   }
+  async flush() {
+    await this.load();
+    await this.writing;
+    if (this.error) throw new Error(this.error);
+  }
+  async refreshExternalCards() {
+    await this.load();
+    if (this.error) throw new Error(this.error);
+    let readFailure: { error: unknown } | undefined;
+    // A refresh must not replace the merge base of an in-flight save/CAS retry.
+    const refresh = this.writing.then(async () => {
+      const latest = await api.canvasWorkflowGet(this.projectId).catch(error => { readFailure = { error }; return null; });
+      if (!latest || latest.revision <= this.revision) return;
+      const document = mergeWorkflowChanges(this.persistedDocument, this.document, latest.document);
+      const queued = mergeWorkflowChanges(this.persistedDocument, this.queuedDocument, latest.document);
+      this.document = document;
+      this.persistedDocument = structuredClone(latest.document);
+      this.revision = latest.revision;
+      // Rebase queued snapshots without treating unsaved live progress as persisted.
+      this.queuedDocument = structuredClone(queued);
+    });
+    this.writing = refresh;
+    try { await refresh; }
+    catch (error) { this.error = `工作流未保存：${String(error)}`; throw error; }
+    finally { this.emit(); }
+    // A transient read failure is reported without blocking unrelated run checkpoints.
+    if (readFailure) throw readFailure.error;
+  }
   async retrySave() {
     if (!this.ready) { this.loading = null; await this.load(); return; }
-    await this.writing.catch(() => {}); this.writing = Promise.resolve(); await this.save();
+    await this.writing.catch(() => {}); this.writing = Promise.resolve();
+    this.queuedDocument = structuredClone(this.persistedDocument);
+    await this.save(this.document, this.pendingEditAuthorization);
   }
   async edit(nodes: WorkflowNode[], history?: { removedRuns: WorkflowRun[]; runOrder: string[] }) {
     const authorizeEdit = nodes.some(node => node.kind !== "text") || this.document.nodes.some(node => node.kind !== "text");
@@ -215,7 +273,7 @@ export class CanvasWorkflowController {
     const runOrder = new Set([...(history?.runOrder ?? []), ...currentRuns.map(run => run.id)]);
     const runs = [...runOrder].flatMap(id => byId.has(id) ? [byId.get(id)!] : [])
       .filter(run => workflowRunActive(run) || run.order.every(id => nodes.some(node => node.id === id)));
-    // Keep the optimistic snapshot synchronous for follow-up edits and undo; authorize each queued write.
+    // Controlled inputs and undo need the edit synchronously; authorize each snapshot in the write queue.
     await this.save({ ...this.document, nodes, runs, run: runs[runs.length - 1] ?? null }, authorizeEdit);
   }
   async encapsulate(name: string, members: string[], bounds: Parameters<typeof api.workflowEncapsulate>[4], template: Parameters<typeof api.workflowEncapsulate>[5]) {
@@ -226,6 +284,8 @@ export class CanvasWorkflowController {
       await this.writing;
       const result = await api.workflowEncapsulate(this.projectId, this.revision, name, members, bounds, template);
       this.document = result.document; this.revision = result.revision; this.emit();
+      this.persistedDocument = structuredClone(result.document);
+      this.queuedDocument = structuredClone(result.document);
       await emit("creative://changed", { projectId: this.projectId }).catch(() => {});
       return result;
     } finally { this.encapsulating = false; }
@@ -508,7 +568,8 @@ export class CanvasWorkflowController {
     for (const id of triggerScope) {
       const node = this.document.nodes.find(node => node.id === id)!;
       if (node.kind === "loop") {
-        if (!(node.inputs[node.loopMode === "rows" ? "text" : "image"]?.length)) throw new WorkflowNodeError("请先连接循环的待处理内容", node);
+        if (node.loopMode === "count") workflowLoopItems(node, this.document.nodes, []);
+        else if (!(node.inputs[node.loopMode === "rows" ? "text" : "image"]?.length)) throw new WorkflowNodeError("请先连接循环的待处理内容", node);
         continue;
       }
       if (node.kind === "trigger") {
@@ -568,7 +629,8 @@ export class CanvasWorkflowController {
     }
     if (loop) {
       const owner = this.document.nodes.find(node => node.id === loop.nodeId)!;
-      if (owner.loopMode === "rows" && (owner.inputs.text ?? []).every(input => textSources.includes(input.canvasNodeId ?? "")
+      if (owner.loopMode === "count") loop.items = validateLoopStart(workflowLoopItems(owner, this.document.nodes, []), loop.index, owner);
+      else if (owner.loopMode === "rows" && (owner.inputs.text ?? []).every(input => textSources.includes(input.canvasNodeId ?? "")
         || !workflowInputProducers(executionNodes, input).some(id => order.includes(id)))) {
         loop.items = validateLoopStart(workflowLoopRows(owner, this.document.nodes, (await api.projectCanvasGet(this.projectId)).nodes), loop.index, owner);
       }
@@ -1014,7 +1076,7 @@ export class CanvasWorkflowController {
         const run = this.run(runId), loop = run.loop;
         if (!loop || loop.nodeId !== id) throw new WorkflowNodeError("请从循环卡片启动完整流程", node);
         let sourceItems = loop.items;
-        if (!sourceItems && node.loopMode !== "rows") {
+        if (!sourceItems && node.loopMode !== "rows" && node.loopMode !== "count") {
           const values = structuredClone(workflowInputValues(this.document.nodes, node, readCell));
           const pending = values.image.filter(value => value.nodeIds?.length);
           if (pending.length && !await this.resolveInputGenerations(runId, node, pending, halted)) return;

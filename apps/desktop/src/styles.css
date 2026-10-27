@@ -349,6 +349,8 @@ html[data-theme="light"] [role="button"]:focus-visible {
   grid-template-columns: minmax(280px, 1fr) minmax(0, 520px) minmax(280px, 1fr);
 }
 .app-topbar.is-global-materials .app-topbar-actions { justify-self: end; }
+.app-topbar.is-search-hidden, .app-topbar.is-search-hidden.has-file-navigation { grid-template-columns: auto minmax(0, 1fr) auto; }
+.app-topbar.is-search-hidden .app-topbar-actions { grid-column: 3; }
 
 .app-search > svg {
   position: absolute;

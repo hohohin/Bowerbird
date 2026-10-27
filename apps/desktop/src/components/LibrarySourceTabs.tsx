@@ -1,11 +1,13 @@
+import { useLibraryModeStore } from "../lib/libraryPane";
 import { useEffect, useState } from "react";
 import { LibraryViewSwitch } from "./LibraryViewSwitch";
-import { catalogViews, catalogViewName, useLocalFileMode } from "../lib/localFileMode";
+import { catalogViews, catalogViewName } from "../lib/localFileMode";
 
 const duration = 1000;
 
 /** Shared navigation in the homepage and project drawer. */
 export function LibrarySourceTabs({ value, onChange, project = false }: { value: string; onChange: (value: string) => void; project?: boolean }) {
+  const useLocalFileMode = useLibraryModeStore();
   const media = useLocalFileMode(s => s.media);
   const view = useLocalFileMode(s => (s.media === "images" ? s.views : s.videoViews).global);
   const transition = useLocalFileMode(s => s.viewTransition);

@@ -1,0 +1,44 @@
+.explore-sites .source-browser-extension-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  min-height: 28px;
+  white-space: nowrap;
+  color: var(--bb-ink);
+  border: 1px solid var(--bb-line-strong);
+}
+.source-browser-extension-entry:focus-visible,
+.extension-setup button:focus-visible,
+.extension-setup input:focus-visible,
+.extension-guide-shot:focus-visible {
+  outline: 2px solid var(--bb-blue);
+  outline-offset: 3px;
+}
+.extension-setup .setup-card { border-radius: 12px; }
+.extension-setup-status { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; }
+.extension-setup-status-copy { display: flex; align-items: flex-start; gap: 10px; min-width: 0; }
+.extension-setup-status-copy > svg { flex-shrink: 0; margin-top: 2px; color: var(--bb-muted); }
+.extension-setup strong, .extension-setup h3 { color: var(--bb-ink); font-size: 13px; font-weight: 600; }
+.extension-setup p { margin-top: 7px; font-size: 12px; line-height: 1.7; color: var(--bb-muted); }
+.extension-setup-status .app-modal-button { flex-shrink: 0; }
+.extension-setup-usage { margin: 20px 0; }
+.extension-setup-toggle { width: 100%; justify-content: space-between; }
+.extension-install-guide { margin-top: 16px; }
+.extension-browser-choice { display: flex; gap: 8px; margin-bottom: 12px; }
+.extension-browser-choice .app-modal-button { min-width: 94px; min-height: 34px; border: 1px solid var(--bb-line-strong); border-radius: 8px; }
+.extension-browser-choice .app-modal-button[aria-pressed="true"] { background: var(--bb-surface-hover); border-color: var(--bb-ink); color: var(--bb-ink); font-weight: 600; }
+.extension-guide-steps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.extension-guide-steps > li { min-width: 0; padding: 16px; }
+.extension-guide-steps h3 { display: flex; align-items: center; gap: 8px; }
+.extension-guide-steps h3 > span { display: grid; place-items: center; width: 22px; height: 22px; flex-shrink: 0; border: 1px solid var(--bb-line-strong); border-radius: 50%; font-size: 11px; }
+.extension-copy-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.extension-copy-row input { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--bb-line-strong); border-radius: 7px; background: var(--bb-surface-2); color: var(--bb-ink); font-size: 12px; }
+.extension-guide-shot { display: block; max-width: 100%; margin-top: 12px; border-radius: 7px; cursor: zoom-in; }
+.extension-guide-shot img { max-width: 100%; max-height: 144px; object-fit: contain; border: 1px solid var(--bb-line); border-radius: 7px; }
+.extension-update-guide { padding: 16px; margin-top: 12px; }
+.extension-setup .extension-setup-error { color: var(--bb-danger); margin: 10px 0; }
+@media (max-width: 640px) {
+  .extension-guide-steps { grid-template-columns: minmax(0, 1fr); }
+  .extension-setup-status { align-items: flex-start; flex-direction: column; }
+}

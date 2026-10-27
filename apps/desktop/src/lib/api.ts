@@ -541,6 +541,8 @@ export const api = {
     sessionId?: string | null;
     ratio?: string | null;
     provider?: string | null;
+    /** 即梦图片模型快照；不参与 Cloud / Codex / 视频路由。 */
+    dreaminaModelVersion?: string | null;
     projectId?: string | null;
     visualProfileId?: string | null;
     jobId: string;
@@ -571,6 +573,7 @@ export const api = {
       sessionId: req.sessionId ?? null,
       ratio: req.ratio ?? null,
       provider: req.provider ?? null,
+      dreaminaModelVersion: req.dreaminaModelVersion ?? null,
       projectId: req.projectId ?? null,
       visualProfileId: req.visualProfileId ?? null,
       jobId: req.jobId,

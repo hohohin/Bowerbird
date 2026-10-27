@@ -516,6 +516,7 @@ interface State {
     assetId: string;
     workspaceProjectId?: string | null;
     asset?: Asset;
+    singleAsset?: boolean;
     fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string> };
     libraryProjectId?: string;
     addCanvasImagesToBoard?: { count: number; run: () => void };
@@ -526,7 +527,7 @@ interface State {
     x: number,
     y: number,
     assetId: string,
-    context?: { asset?: Asset; fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string> }; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[]; primaryNodeId?: string }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
+    context?: { asset?: Asset; singleAsset?: boolean; fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string> }; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[]; primaryNodeId?: string }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
   ) => void;
   closeContextMenu: () => void;
   // —— 项目右键菜单（侧栏项目行 / 收起态圆标）——
@@ -2027,6 +2028,7 @@ export const useStore = create<State>((set, get) => {
       await api.codexCreateImage({
         jobId,
         prompt: sentPrompt,
+        dreaminaModelVersion: media === "image" && (prov === "jimeng" || prov === "dreamina") ? get().settings?.dreamina_model_version ?? "5.0Pro" : null,
         media, videoOptions, count, transparent,
         promptRaw: rawPrompt,
         // 借用维度源图 id（图 chip 被删、只借维度）：随 generation_meta 落库，复用时回绑车牌。
@@ -2134,6 +2136,7 @@ export const useStore = create<State>((set, get) => {
     try {
       await api.codexCreateImage({
         jobId,
+        dreaminaModelVersion: media === "image" && (prov === "jimeng" || prov === "dreamina") ? get().settings?.dreamina_model_version ?? "5.0Pro" : null,
         prompt: sentText,
         media, videoOptions, count, transparent,
         promptRaw: opts?.rawPrompt ?? null,

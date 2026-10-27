@@ -9,8 +9,11 @@ export function LibraryMotion() {
     const reduced = matchMedia("(prefers-reduced-motion: reduce)");
     const seen = new WeakSet<Element>();
     let visible = true;
+    const clearSelection = () => root.querySelectorAll(".library-selection-mark.is-entering").forEach(mark => mark.classList.remove("is-entering"));
     const updatePause = () => {
-      root.dataset.libraryMotionPaused = String(document.hidden || !document.hasFocus() || !visible);
+      // A visible embedded view can receive hover without owning keyboard focus.
+      root.dataset.libraryMotionPaused = String(document.hidden || !visible);
+      if (document.hidden || !visible) clearSelection();
     };
     const cardsIn = (node: Node) => node instanceof Element
       ? [...(node.matches(".folder-media-card") ? [node] : []), ...node.querySelectorAll(".folder-media-card")]
@@ -43,10 +46,12 @@ export function LibraryMotion() {
         card?.classList.remove("library-card-enter");
       }
     };
-    const clearEntry = () => root.querySelectorAll(".library-card-enter").forEach(card => card.classList.remove("library-card-enter"));
+    const clearEntry = () => {
+      root.querySelectorAll(".library-card-enter").forEach(card => card.classList.remove("library-card-enter"));
+      clearSelection();
+    };
     const startDrag = () => { root.dataset.libraryDragging = "true"; clearEntry(); };
     const endDrag = () => { delete root.dataset.libraryDragging; };
-    const blur = () => { endDrag(); updatePause(); };
     root.classList.add("library-motion-root");
     updatePause();
     observer.observe(root);
@@ -58,8 +63,7 @@ export function LibraryMotion() {
     root.addEventListener("drop", endDrag);
     reduced.addEventListener("change", clearEntry);
     document.addEventListener("visibilitychange", updatePause);
-    window.addEventListener("focus", updatePause);
-    window.addEventListener("blur", blur);
+    window.addEventListener("blur", endDrag);
     return () => {
       observer.disconnect(); mutations.disconnect(); clearEntry(); endDrag();
       root.classList.remove("library-motion-root"); delete root.dataset.libraryMotionPaused;
@@ -69,8 +73,7 @@ export function LibraryMotion() {
       root.removeEventListener("drop", endDrag);
       reduced.removeEventListener("change", clearEntry);
       document.removeEventListener("visibilitychange", updatePause);
-      window.removeEventListener("focus", updatePause);
-      window.removeEventListener("blur", blur);
+      window.removeEventListener("blur", endDrag);
     };
   }, []);
   return <div ref={layer} className="library-ambient-light" aria-hidden="true" />;

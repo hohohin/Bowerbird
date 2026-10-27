@@ -1,7 +1,8 @@
+import { useLibraryModeStore } from "../lib/libraryPane";
 import { Image, Video } from "lucide-react";
-import { useLocalFileMode } from "../lib/localFileMode";
 
 export function LibraryMediaSwitch() {
+  const useLocalFileMode = useLibraryModeStore();
   const media = useLocalFileMode(s => s.media);
   return <div className="library-media-switch library-floating-surface" role="group" aria-label="素材类型">
     {(["images", "videos"] as const).map(value => <button key={value} aria-label={value === "images" ? "图片" : "视频"}

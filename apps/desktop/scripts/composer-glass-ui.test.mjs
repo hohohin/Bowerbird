@@ -184,7 +184,11 @@ try {
   await dock.getByRole('button', { name: '视频', exact: true }).click();
   await dock.getByLabel('视频分辨率').selectOption('1080p');
   await dock.getByLabel('视频时长（秒）').fill('8');
-  assert.equal(await editor.innerText(), referenced, 'mode changes retain the prompt and references');
+  assert.equal((await editor.innerText()).trim(), '', 'video mode starts with its independent draft');
+  await dock.getByRole('button', { name: '图片', exact: true }).click();
+  assert.equal(await editor.innerText(), referenced, 'image mode restores its prompt and references');
+  await dock.getByRole('button', { name: '视频', exact: true }).click();
+  assert.equal(await dock.getByLabel('视频时长（秒）').inputValue(), '8', 'video parameters stay with the video draft');
   for (const label of ['视频分辨率','视频生成模式','视频时长（秒）']) {
     assert.equal(await dock.locator('.composer-toolbar').getByLabel(label, { exact: true }).isVisible(), true);
   }

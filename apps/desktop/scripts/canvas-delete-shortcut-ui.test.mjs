@@ -18,8 +18,8 @@ try {
     await page.evaluate(() => {
       const snapshot = window.snapshot(), base = snapshot.nodes[0];
       snapshot.nodes = [
-        { ...base, x: 60, y: 80 },
-        { ...base, id: "prompt", kind: "prompt", assetId: null, role: null, x: 300, y: 80,
+        { ...base, x: 120, y: 80 },
+        { ...base, id: "prompt", kind: "prompt", assetId: null, role: null, x: 360, y: 80,
           payloadJson: JSON.stringify({ schema_version: 1, text: "生成指令", status: "succeeded" }) },
         { ...base, id: "outside", assetId: "a", x: 800, y: 600 },
       ];
@@ -30,18 +30,18 @@ try {
     await node("prompt").waitFor();
     async function select(width) {
       const rect = await stage.boundingBox();
-      await page.mouse.move(rect.x + 20, rect.y + 60);
+      await page.mouse.move(rect.x + 100, rect.y + 60);
       await page.mouse.down();
       await page.mouse.move(rect.x + width, rect.y + 320, { steps: 8 });
       await page.mouse.up();
-      await page.waitForFunction(count => document.querySelectorAll("[data-canvas-node-id].is-selected").length === count, width === 260 ? 1 : 2);
+      await page.waitForFunction(count => document.querySelectorAll("[data-canvas-node-id].is-selected").length === count, width === 320 ? 1 : 2);
     }
     // The same selected nodes, persistence commands and undo for both platforms.
-    for (const width of [260, 620]) {
+    for (const width of [320, 680]) {
       await select(width);
       await page.keyboard.press(shortcut);
       await node("old").waitFor({ state: "detached", timeout: 5000 });
-      if (width === 620) await node("prompt").waitFor({ state: "detached" });
+      if (width === 680) await node("prompt").waitFor({ state: "detached" });
       assert.equal(await node("outside").count(), 1);
       await page.waitForFunction(() => window.calls.some(call => call.command === "project_canvas_node_remove"));
       assert.equal(await page.evaluate(() => window.calls.some(call => /delete_asset|generation.*delete/.test(call.command))), false);
@@ -49,7 +49,7 @@ try {
       await node("old").waitFor();
       await node("prompt").waitFor();
     }
-    await select(620);
+    await select(680);
     for (const key of ["Backspace", "Control+Backspace", "Control+Delete", "Alt+Delete", "Shift+Delete", "Meta+Shift+Backspace", "Meta+Alt+Backspace", "Meta+Control+Backspace", ...(platform === "Win32" ? ["Meta+Backspace", "Meta+Delete"] : [])]) {
       await page.keyboard.press(key);
       assert.equal(await node("old").count(), 1, `${platform}: ignore ${key}`);
@@ -82,11 +82,11 @@ try {
     await page.keyboard.press(shortcut);
     assert.equal(await node("old").count(), 1, "modal protects the selection");
     await page.locator("#test-modal").evaluate(dialog => dialog.remove());
-    await stage.click({ position: { x: 20, y: 60 } });
+    await stage.click({ position: { x: 100, y: 900 } });
     await node("old").focus();
     await page.keyboard.press(shortcut);
     assert.equal(await node("old").count(), 1, "focus alone is not selection");
-    await select(620);
+    await select(680);
     await page.keyboard.press(shortcut);
     await page.waitForFunction(() => ["old", "prompt"].every(id => window.snapshot().nodes.find(node => node.id === id)?.hiddenAt != null));
     await page.evaluate(() => window.save());

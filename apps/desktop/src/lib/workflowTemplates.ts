@@ -2,7 +2,7 @@ import { activePromptReferences, normalizeWorkflowInputSlots, workflowReferenceM
 import { buildWorkflowPlan, planningSnapshotKey, type PlanningSource } from "./workflowPlanner";
 
 type CardKind = "trigger" | "instruction" | "agent" | "generation" | "skill" | "visual-profile" | "loop";
-interface CardSpec { id: string; kind: CardKind; prompt?: string; action?: string; skill?: string; ratio?: string | null; overwriteDescribe?: boolean; loopMode?: "images" | "rows"; loopStartItem?: number; agentTransport?: WorkflowNode["agentTransport"] }
+interface CardSpec { id: string; kind: CardKind; prompt?: string; action?: string; skill?: string; ratio?: string | null; overwriteDescribe?: boolean; loopMode?: WorkflowNode["loopMode"]; loopCount?: number; loopStartItem?: number; agentTransport?: WorkflowNode["agentTransport"] }
 interface EdgeSpec { from: string; output: string; to: string; input: string }
 export interface TemplateContent { text?: string; images?: { dataUrl: string; token?: string }[] }
 export interface TemplateInput { id: string; label: string; type: "text" | "image"; content?: TemplateContent; whole?: boolean }
@@ -70,7 +70,7 @@ export function parseWorkflowTemplate(raw: string): WorkflowTemplate {
   }
   if (!Array.isArray(value.plan.nodes)) fail("模板步骤无效");
   for (const node of value.plan.nodes) {
-    keys(node, ["id", "kind", "action", "skill", "prompt", "ratio", "overwriteDescribe", ...(value.schemaVersion >= 4 ? ["loopMode", "loopStartItem", "agentTransport"] : [])]);
+    keys(node, ["id", "kind", "action", "skill", "prompt", "ratio", "overwriteDescribe", ...(value.schemaVersion >= 4 ? ["loopMode", "loopCount", "loopStartItem", "agentTransport"] : [])]);
     if (node.kind === "loop" && value.schemaVersion < 4) fail("循环卡片需要新版工作流数据包");
     if (node?.overwriteDescribe !== undefined && (typeof node.overwriteDescribe !== "boolean" || node.kind !== "instruction" || node.action !== "describe")) fail("仅反推步骤可以配置覆盖已有描述");
   }
@@ -155,7 +155,7 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
     }
     if (!Object.values(node.inputs).flat().some(input => input.nodeId && aliases.has(input.nodeId))) edges.push({ from: "start", output: "signal", to: id, input: "signal" });
     specs.push({ id, kind: node.kind as CardKind, prompt, ...(node.kind === "instruction" ? { action: node.action, ...(node.action === "describe" ? { overwriteDescribe: !!node.overwriteDescribe } : {}) } : {}), ...(node.kind === "skill" ? { skill: node.skill } : {}), ...(node.kind === "generation" ? { ratio: node.ratio } : {}),
-      ...(node.kind === "loop" ? { loopMode: node.loopMode ?? "images", loopStartItem: node.loopStartItem ?? 1 } : {}), ...(node.kind === "agent" ? { agentTransport: node.agentTransport ?? "local-ds" } : {}) });
+      ...(node.kind === "loop" ? { loopMode: node.loopMode ?? "images", ...(node.loopMode === "count" ? { loopCount: node.loopCount } : {}), loopStartItem: node.loopStartItem ?? 1 } : {}), ...(node.kind === "agent" ? { agentTransport: node.agentTransport ?? "local-ds" } : {}) });
   }
   const outputs = work.filter(node => !work.some(other => Object.values(other.inputs).flat().some(input => input.nodeId === node.id)))
     .flatMap(node => workflowOutputs(node).filter(port => port.type !== "signal").map(port => ({ id: `out${aliases.get(node.id)}_${port.id.replaceAll("-", "_")}`, label: `${workflowTitle(node)} · ${port.label}`, node: aliases.get(node.id)!, port: port.id })));
@@ -166,7 +166,7 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
 export const templateDefinition = (node: WorkflowNode) => {
   node = normalizeWorkflowInputSlots(node);
   return planningSnapshotKey({ kind: node.kind, action: node.action, skill: node.skill, prompt: node.prompt, ratio: node.ratio,
-  provider: node.provider, generation: node.generation, inputs: node.inputs, promptReferences: node.promptReferences, agentTransport: node.agentTransport, profileId: node.profileId, loopMode: node.loopMode, loopStartItem: node.loopStartItem, overwriteDescribe: !!node.overwriteDescribe });
+  provider: node.provider, generation: node.generation, inputs: node.inputs, promptReferences: node.promptReferences, agentTransport: node.agentTransport, profileId: node.profileId, loopMode: node.loopMode, loopCount: node.loopCount, loopStartItem: node.loopStartItem, overwriteDescribe: !!node.overwriteDescribe });
 };
 
 export function instantiateWorkflowTemplate(template: WorkflowTemplate, bindings: Record<string, WorkflowInput>, values: Record<string, string>, provider: string,

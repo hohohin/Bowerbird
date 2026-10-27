@@ -1,8 +1,9 @@
+import { useLibraryModeStore } from "../lib/libraryPane";
 import { FolderOpen } from "lucide-react";
-import { useLocalFileMode } from "../lib/localFileMode";
 
 /** File browsing is an independent tool, outside the source/view keyboard cycles. */
 export function LibraryBrowserButton() {
+  const useLocalFileMode = useLibraryModeStore();
   const mode = useLocalFileMode(s => s.mode);
   const active = mode === "files" || mode === "global";
   return <button className="library-filter-trigger" aria-label="文件浏览器" aria-pressed={active}

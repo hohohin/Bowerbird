@@ -153,9 +153,10 @@ fn project_unfinished_work_counts(
         "SELECT COUNT(*) FROM canvas_workflows WHERE project_id=?1 AND (json_extract(document_json,'$.run.status') IN ('running','waiting') OR EXISTS (SELECT 1 FROM json_each(document_json,'$.runs') WHERE json_extract(value,'$.status') IN ('running','waiting')))",
         [project_id], |row| row.get(0),
     )?;
+    let chat_count: i64 = conn.query_row("SELECT COUNT(*) FROM local_chat_conversations WHERE project_id=?1 AND status IN ('running','stopping')",[project_id],|row|row.get(0))?;
     Ok((
         running_generation_count + workflow_count,
-        running_agent_count + local_agent_count,
+        running_agent_count + local_agent_count + chat_count,
     ))
 }
 

@@ -11,6 +11,18 @@ export const BYO_PROVIDERS: readonly GenProviderOption[] = [
   { key: "jimeng", label: "Seedream 5.0 Pro" },
 ];
 
+export const DREAMINA_IMAGE_VERSIONS = ["5.0Pro", "5.0", "4.7", "4.0"] as const;
+
+/** Model menu keys stay inside ProviderSelect; execution continues to use jimeng. */
+export function dreaminaModelKey(version: string): string {
+  return version === "5.0Pro" ? "jimeng" : `jimeng-${version}`;
+}
+
+export function dreaminaVersionForKey(key: string): string | null {
+  if (key === "jimeng") return "5.0Pro";
+  return key.startsWith("jimeng-") ? key.slice("jimeng-".length) : null;
+}
+
 /**
  * 云端档位兜底（与服务端 0018 的 service_costs 种子对齐）：entitlement 未提供
  * generation_services 时（离线/旧 Edge）用它渲染，保证下拉永远可用。
@@ -59,7 +71,9 @@ export function cloudGenProviders(
 
 /** 完整下拉列表：本地 BYO 在前，云端档位在后。 */
 export function genProviders(entitlement: EntitlementSnapshot | null, dreaminaVersion = "5.0Pro"): GenProviderOption[] {
-  return [...BYO_PROVIDERS.map(p => p.key === "jimeng" ? { ...p, label: dreaminaModelLabel(dreaminaVersion) } : p), ...cloudGenProviders(entitlement)];
+  const versions: readonly string[] = DREAMINA_IMAGE_VERSIONS.includes(dreaminaVersion as typeof DREAMINA_IMAGE_VERSIONS[number])
+    ? DREAMINA_IMAGE_VERSIONS : [...DREAMINA_IMAGE_VERSIONS, dreaminaVersion];
+  return [BYO_PROVIDERS[0], ...versions.map(version => ({ key: dreaminaModelKey(version), label: dreaminaModelLabel(version) })), ...cloudGenProviders(entitlement)];
 }
 
 /** 是否已知 provider key（BYO 枚举或任意 cloud 档位 key——云端上新档位后无需改这里）。 */

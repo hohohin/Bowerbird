@@ -99,25 +99,26 @@ export function replicationAnalysisParts(task: Pick<ReplicationTask, "analysis" 
 
 /** Only extract an explicitly named field/section; never infer an image prompt from a shot. */
 export function replicationRewriteParts(text: string): { text: string; firstFramePrompt: string } {
-  const keys = ["firstFramePrompt", "first_frame_prompt", "first_frame_image_prompt", "首帧画面提示词", "首帧提示词"];
+  const keys = ["firstFramePrompt", "first_frame_prompt", "first_frame_image_prompt", "首帧画面提示词", "首帧提示词", "首帧画面"];
   try {
     const value = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, ""));
     if (value && !Array.isArray(value) && typeof value === "object") {
       const key = keys.find(key => typeof value[key] === "string");
       if (key) {
         const firstFramePrompt = value[key].trim();
+        if (key === "首帧画面") return { text, firstFramePrompt };
         delete value[key];
         return { text: typeof value.rewrittenText === "string" ? value.rewrittenText : JSON.stringify(value, null, 2), firstFramePrompt };
       }
     }
   } catch { /* Most rewrite responses are Markdown/plain text. */ }
-  const heading = /^(?:#{1,6}\s*|\*\*|【)?(?:\d+[.、]\s*)?(?:首帧画面提示词|首帧图片提示词|首帧提示词|first[ _-]?frame[ _-]?(?:image[ _-]?)?prompt)(?:】|\*\*)?\s*[:：]?\s*(?:\*\*)?\s*/im.exec(text);
+  const heading = /^(?:#{1,6}[ \t]*|\*\*|【)?(?:\d+[.、][ \t]*)?(首帧画面提示词|首帧图片提示词|首帧提示词|first[ _-]?frame[ _-]?(?:image[ _-]?)?prompt|首帧画面(?=[ \t]*(?:】|\*\*)?[ \t]*(?:[:：]|\r?$)))(?:】|\*\*)?[ \t]*[:：]?[ \t]*(?:\*\*)?[ \t]*/im.exec(text);
   if (!heading) return { text, firstFramePrompt: "" };
   const rest = text.slice(heading.index + heading[0].length);
   const next = /\n(?=#{1,6}\s|【[^】\n]+】|\*\*[^*\n]+\*\*\s*[:：]?\s*$)/m.exec(rest);
   const end = next?.index ?? rest.length;
   return {
-    text: (text.slice(0, heading.index).trimEnd() + (next ? "\n\n" + rest.slice(end).trimStart() : "")).trim(),
+    text: heading[1] === "首帧画面" ? text : (text.slice(0, heading.index).trimEnd() + (next ? "\n\n" + rest.slice(end).trimStart() : "")).trim(),
     firstFramePrompt: rest.slice(0, end).trim().replace(/^```(?:text|plaintext)?\s*\n/i, "").replace(/\n```$/, "").trim(),
   };
 }

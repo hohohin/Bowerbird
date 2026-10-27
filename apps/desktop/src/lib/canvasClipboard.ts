@@ -1,6 +1,7 @@
 import type { CanvasNode, CanvasGroup, CanvasGroupItem, NewCanvasNode, NewCanvasGroup } from "./types";
 import type { WorkflowInput, WorkflowNode } from "./canvasWorkflow";
 import { expandCanvasSections, readCanvasNote } from "./canvasNotes";
+import { canvasChatId } from "./canvasChat.ts";
 
 const PREFIX = "BOWERBIRD_CANVAS_V1\n";
 export interface CanvasClipboard {
@@ -14,7 +15,7 @@ export interface CanvasClipboard {
 export function captureCanvasClipboard(projectId: string, selected: Set<string>, nodes: CanvasNode[], groups: CanvasGroup[], items: CanvasGroupItem[], workflow: WorkflowNode[]): CanvasClipboard {
   const ids = expandCanvasSections(new Set(selected), nodes);
   for (const item of items) if (ids.has(item.groupId)) ids.add(item.nodeId);
-  const copied = nodes.filter(node => ids.has(node.id) && node.hiddenAt == null && (node.kind === "asset" || node.kind === "note"));
+  const copied = nodes.filter(node => ids.has(node.id) && node.hiddenAt == null && !canvasChatId(node) && (node.kind === "asset" || node.kind === "note"));
   const nativeIds = new Set(copied.map(node => node.id));
   const cards = workflow.filter(node => node.kind === "text"
     ? nativeIds.has(node.textSource ?? node.textTarget?.nodeId ?? "") : ids.has(node.id));
@@ -31,7 +32,7 @@ export function parseCanvasClipboard(text: string): CanvasClipboard | null {
   try {
     const value = JSON.parse(text.slice(prefix[0].length)) as CanvasClipboard;
     if (typeof value.projectId !== "string" || ![value.nodes, value.groups, value.items, value.workflow, value.selection].every(Array.isArray)
-      || value.workflow.length > 500 || !value.nodes.every(node => node.kind === "asset" || node.kind === "note")) return null;
+      || value.workflow.length > 500 || !value.nodes.every(node => !canvasChatId(node) && (node.kind === "asset" || node.kind === "note"))) return null;
     return value;
   } catch { return null; }
 }

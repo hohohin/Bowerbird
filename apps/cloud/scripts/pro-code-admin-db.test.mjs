@@ -30,24 +30,32 @@ try {
     await assert.rejects(users("", "", 0, who), /admin required/);
     await assert.rejects(setTest(customer, true, who), /admin required/);
   }
-  await q("update auth.users set raw_user_meta_data=$1::jsonb where id=$2", [JSON.stringify({ nickname: "  小鸟 Bird%_🌿  ", openid: "private-wechat-id" }), customer]);
-  assert.equal((await users("小鸟")).rows[0].nickname, "小鸟 Bird%_🌿");
-  assert.equal((await users("bird%_")).rows[0].id, customer);
-  assert.equal((await users("private-wechat-id")).total, 0);
-  assert.equal(JSON.stringify(await users()).includes("private-wechat-id"), false);
-  for (const nickname of [null, "   ", 123, { value: "invalid" }]) {
-    await q("update auth.users set raw_user_meta_data=$1::jsonb where id=$2", [JSON.stringify({ nickname }), other]);
-    assert.equal((await users(other)).rows[0].nickname, null);
-  }
   assert.equal((await users("READER@")).total, 1);
   assert.equal((await users(customer)).rows[0].id, customer);
-  assert.equal((await users("%_")).total, 1, "search treats SQL wildcards as literal text");
+  assert.equal((await users("%_")).total, 0, "search treats SQL wildcards as literal text");
+  await q("update auth.users set raw_user_meta_data = raw_user_meta_data || $1::jsonb where id in ($2,$3)",
+    [JSON.stringify({ nickname: "  小鸟 Bird  ", unionid: "private-provider-identifier" }), customer, other]);
+  const namesakes = await users("小鸟 bIRD");
+  assert.equal(namesakes.total, 2);
+  assert.equal(new Set(namesakes.rows.map((r) => r.id)).size, 2, "duplicate nicknames never merge identities");
+  assert.equal(namesakes.rows.every((r) => r.nickname === "小鸟 Bird"), true);
+  assert.equal(JSON.stringify(namesakes).includes("private-provider-identifier"), false);
+  assert.equal(JSON.stringify(namesakes).includes("raw_user_meta_data"), false);
+  assert.equal((await users(actor)).rows[0].nickname, null);
+  for (const nickname of ["   ", 123, { name: "object" }, null]) {
+    await q("update auth.users set raw_user_meta_data = $1::jsonb where id=$2", [JSON.stringify({ nickname }), actor]);
+    assert.equal((await users(actor)).rows[0].nickname, null);
+  }
+  await q("update auth.users set raw_user_meta_data = $1::jsonb where id=$2", [JSON.stringify({ nickname: "literal%_name" }), actor]);
+  assert.equal((await users("%_")).rows[0].id, actor);
+  assert.equal((await users("' OR 1=1 --")).total, 0);
   assert.equal((await users("", "test")).total, 0);
   await q("update auth.users set raw_app_meta_data = '{\"provider\":\"email\",\"bowerbird_test\":\"true\"}' where id=$1", [customer]);
   assert.equal((await users("", "test")).total, 0, "string true is not a test account");
   assert.equal((await setTest(customer, true)).is_test_account, true);
   await setTest(customer, true);
   assert.equal((await users("", "test")).total, 1);
+  assert.equal((await users(other)).rows[0].is_test_account, false, "changing one UUID leaves its namesake unchanged");
   assert.equal((await users("", "regular")).total, 2);
   assert.equal((await q("select raw_app_meta_data->>'provider' p from auth.users where id=$1", [customer]))[0].p, "email");
   assert.equal((await q("select count(*)::int n from user_admin_events"))[0].n, 1, "retries do not duplicate audit events");

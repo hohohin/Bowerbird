@@ -197,7 +197,16 @@ try {
  await page.getByLabel('首帧画面提示词',{exact:true}).fill('第二版：暮色浴室');
  await page.getByRole('button',{name:'生成工作流',exact:true}).click();await page.getByRole('dialog').waitFor({state:'detached'});
  assert.equal(await page.evaluate(()=>window.controller.document.nodes.filter(n=>n.id.startsWith('replication-')).length),8,'edited results create a new workflow rather than silently retaining the old prompt');
- await openTool();await page.getByRole('button',{name:'新建任务',exact:true}).click();
+ await openTool();await page.locator('.vr-task-tile').click();
+ const sceneScript='# 镜头1\n## 首帧画面\n古装女性捧着神牛礼盒，身处现代办公室。\n## 拍摄手法\n固定机位。\n## 时长\n约10秒';
+ await page.getByLabel('改写结果',{exact:true}).fill(sceneScript);
+ await page.getByLabel('首帧画面提示词',{exact:true}).fill('');
+ const createsBeforeRecovery=await page.evaluate(()=>window.calls.filter(c=>c.args?.action==='create').length);
+ await page.getByRole('button',{name:'全部任务',exact:true}).click();await page.locator('.vr-task-tile').click();
+ assert.equal(await page.getByLabel('首帧画面提示词',{exact:true}).inputValue(),'古装女性捧着神牛礼盒，身处现代办公室。');
+ assert.equal(await page.getByLabel('改写结果',{exact:true}).inputValue(),sceneScript,'scene extraction preserves video script');
+ assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.args?.action==='create').length),createsBeforeRecovery,'reopening does not call a model');
+ await page.getByRole('button',{name:'全部任务',exact:true}).click();await page.getByRole('button',{name:'新建任务',exact:true}).click();
  await page.getByRole('button',{name:'素材库',exact:true}).click();await page.getByRole('button',{name:'全部任务',exact:true}).click();
  await page.getByRole('button',{name:'新建任务',exact:true}).click();
  assert.equal(await page.getByRole('button',{name:'素材库',exact:true}).getAttribute('aria-pressed'),'true','source choice remembered');
@@ -214,6 +223,7 @@ try {
  assert.equal(await page.evaluate(()=>window.jobs[0].analysisProvider),'codex');
  await page.getByRole('button',{name:'全部任务',exact:true}).click();
  await page.locator('.vr-task-tile').first().click();
+ await page.getByRole('button',{name:'重新分析 · 自有订阅',exact:true}).waitFor();
  assert.equal(await page.getByRole('button',{name:'重新分析 · 自有订阅',exact:true}).count(),1,'provider survives reopening');
  assert.deepEqual(errors,[]);
  console.log('PASS task persistence/reload, source memory, verification recovery, video gates, Cloud retry, stable player, exact frame/reference/canvas import, draft failure recovery, four connected cards, no auto-run, idempotent handoff, dark/narrow');

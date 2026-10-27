@@ -118,7 +118,7 @@
             const empty = document.createElement("span"); empty.className = "empty"; empty.textContent = "暂无已有标签";
             chip.append(empty); chips.append(chip);
           }
-          caption.textContent = "Jev 候选概率 · ≥30% 入选";
+          caption.textContent = "Jev 候选概率 · ≥42% 入选，最多 3 项";
           hasPreview = true;
           if (pointer) move(pointer.x, pointer.y);
         }

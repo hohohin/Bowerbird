@@ -1,16 +1,15 @@
 import { type CSSProperties, useState } from "react";
 import { Grid2X2, LayoutGrid } from "lucide-react";
-import { useStore } from "../store";
+import { useLibraryThumbnail } from "../lib/libraryPane";
 import { thumbnailWidthFromZoom, thumbnailZoomFromWidth, type ThumbnailScope } from "../lib/thumbnailSize";
 
 export function ThumbnailSizeSlider({ scope, appearance }: { scope: ThumbnailScope; appearance?: "project-manager" }) {
-  const value = useStore(s => scope === "library" ? s.libraryThumbnailWidth : scope === "projects" ? s.projectsThumbnailWidth : s.canvasThumbnailWidth);
-  const setWidth = useStore(s => s.setThumbnailWidth);
+  const { width: value, setWidth } = useLibraryThumbnail(scope);
   const zoom = thumbnailZoomFromWidth(value, scope);
   const [draft, setDraft] = useState<string | null>(null);
   const label = scope === "library" ? "主页素材大小" : scope === "projects" ? "项目卡片大小" : "项目素材大小";
   function commit() {
-    if (draft !== null && draft.trim() && Number.isFinite(Number(draft))) setWidth(scope, thumbnailWidthFromZoom(Number(draft), scope));
+    if (draft !== null && draft.trim() && Number.isFinite(Number(draft))) setWidth(thumbnailWidthFromZoom(Number(draft), scope));
     setDraft(null);
   }
   if (appearance === "project-manager") return <div className="project-manager-size" role="group" aria-label={label} title={label}
@@ -18,7 +17,7 @@ export function ThumbnailSizeSlider({ scope, appearance }: { scope: ThumbnailSco
     <LayoutGrid size={18} aria-hidden="true"/>
     <input type="range" min={0} max={100} step={1} value={zoom} aria-label={label} aria-valuetext={`卡片大小 ${zoom}（0–100）`}
       style={{ "--size-fill": `${zoom}%` } as CSSProperties}
-      onChange={event => setWidth(scope, thumbnailWidthFromZoom(Number(event.target.value), scope))}/>
+      onChange={event => setWidth(thumbnailWidthFromZoom(Number(event.target.value), scope))}/>
     <Grid2X2 size={19} aria-hidden="true"/>
   </div>;
   return <div className="thumbnail-size-slider is-floating" role="group" aria-label="素材缩略图大小调整"
@@ -34,7 +33,7 @@ export function ThumbnailSizeSlider({ scope, appearance }: { scope: ThumbnailSco
       </svg>
       <input type="range" min={0} max={100} step={1} value={zoom}
         aria-label={label} aria-valuetext={`素材大小 ${zoom}（0–100）`}
-        onChange={event => setWidth(scope, thumbnailWidthFromZoom(Number(event.target.value), scope))} />
+        onChange={event => setWidth(thumbnailWidthFromZoom(Number(event.target.value), scope))} />
     </div>
     <input className="thumbnail-size-value" type="number" inputMode="numeric"
       min={0} max={100} step={1} value={draft ?? zoom}

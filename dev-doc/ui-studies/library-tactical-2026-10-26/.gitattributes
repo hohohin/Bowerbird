@@ -1,0 +1,2 @@
+# Preserve the frozen bytes and their SHA-256 across platform checkouts.
+* -text

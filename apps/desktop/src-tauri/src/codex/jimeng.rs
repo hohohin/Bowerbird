@@ -27,6 +27,16 @@ const POLL_SECS: u64 = 1;
 /// 单次子进程（提交 / 查询）整体超时上限。
 const CMD_TIMEOUT_SECS: u64 = 180;
 
+/// Explicit new selections are checked before submission; omitted values preserve
+/// old settings, including older CLI model versions saved by existing users.
+pub(crate) fn image_model_version(selected: Option<&str>, fallback: &str) -> Result<String, AppError> {
+    match selected {
+        None => Ok(fallback.to_string()),
+        Some(model @ ("5.0Pro" | "5.0" | "4.7" | "4.6" | "4.5" | "4.1" | "4.0" | "3.1" | "3.0")) => Ok(model.to_string()),
+        Some(_) => Err(AppError::Jimeng("请选择可用的即梦图片模型版本".into())),
+    }
+}
+
 pub struct DreaminaCliProvider {
     /// 可执行文件名/路径，默认 "dreamina"（经 `resolve_dreamina_binary` 解析）。
     pub binary: String,
@@ -487,7 +497,19 @@ fn collect_task_objects(value: &serde_json::Value, out: &mut Vec<RemoteJimengTas
 
 #[cfg(test)]
 mod tests {
-    use super::collect_task_objects;
+    use super::{collect_task_objects, image_model_version};
+
+    #[test]
+    fn image_model_selection_is_explicit_and_keeps_legacy_settings() {
+        for version in ["5.0Pro", "5.0", "4.7", "4.0"] {
+            let selected = image_model_version(Some(version), "5.0Pro").unwrap();
+            assert_eq!(selected, version);
+        }
+        assert_eq!(image_model_version(None, "4.5").unwrap(), "4.5");
+        assert_eq!(image_model_version(Some("4.5"), "5.0Pro").unwrap(), "4.5");
+        assert!(image_model_version(Some("unknown"), "5.0Pro").is_err());
+        assert!(image_model_version(Some(""), "5.0Pro").is_err());
+    }
 
     #[test]
     fn collects_tasks_from_array_wrapper_and_single_object() {

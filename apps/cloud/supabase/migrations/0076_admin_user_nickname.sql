@@ -1,4 +1,4 @@
--- Read existing profile nicknames without exposing full user metadata.
+-- Nickname is display/search metadata only. Auth UUID remains the account identity.
 create or replace function public.admin_list_users(p_actor uuid, p_search text, p_filter text, p_page integer)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare v_result jsonb;
@@ -8,19 +8,19 @@ begin
     or p_filter not in ('', 'test', 'regular') or p_page is null or p_page not between 0 and 100000 then
     raise exception 'invalid user filter' using errcode = '22023';
   end if;
-  with profiles as (
-    select *, case when jsonb_typeof(raw_user_meta_data->'nickname') = 'string'
-      then nullif(btrim(raw_user_meta_data->>'nickname'), '') end as nickname
-    from auth.users
-  ), filtered as (
-    select id, email, nickname, created_at, last_sign_in_at, email_confirmed_at,
+  with accounts as (
+    select id, email, created_at, last_sign_in_at, email_confirmed_at,
+      case when jsonb_typeof(raw_user_meta_data->'nickname') = 'string'
+        then nullif(btrim(raw_user_meta_data->>'nickname'), '') end as nickname,
       coalesce(raw_app_meta_data->'bowerbird_test' = 'true'::jsonb, false) as is_test_account,
       coalesce(raw_app_meta_data->'bowerbird_admin' = 'true'::jsonb, false) as is_admin
-    from profiles
-    where (p_search = '' or strpos(lower(coalesce(email, '')), lower(p_search)) > 0
-      or strpos(id::text, lower(p_search)) > 0
-      or strpos(lower(coalesce(nickname, '')), lower(p_search)) > 0)
-      and (p_filter = '' or coalesce(raw_app_meta_data->'bowerbird_test' = 'true'::jsonb, false) = (p_filter = 'test'))
+    from auth.users
+  ), filtered as (
+    select * from accounts
+    where (p_search = '' or strpos(lower(coalesce(nickname, '')), lower(p_search)) > 0
+      or strpos(lower(coalesce(email, '')), lower(p_search)) > 0
+      or strpos(id::text, lower(p_search)) > 0)
+      and (p_filter = '' or is_test_account = (p_filter = 'test'))
   ), paged as (
     select * from filtered order by created_at desc nulls last, id limit 50 offset p_page * 50
   )

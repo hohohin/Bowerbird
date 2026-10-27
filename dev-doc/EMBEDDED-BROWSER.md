@@ -6,6 +6,26 @@
 
 ## 交互与范围
 
+### 2026-10-26：外部浏览器插件入口（源码未发布）
+
+探索页的站点快捷栏提供「浏览器插件」，复用全局 `ExtensionOnboarding` 面板查看连接状态、采集用法和安装／更新教程。此入口服务于系统 Chrome／Edge 的外部网页采集；探索内置浏览器继续使用原来的拖图流程。
+
+打开面板时重新查询桌面扩展状态，支持手动重检及实时连接变化；未连接不等于未安装，检测失败也不伪装成未安装。已连接默认展示用法，用户可主动查看教程，连接变化不自动关闭面板。教程分别提供 Chrome／Edge 的管理页地址、可见且可复制的本机扩展路径、开发者模式／加载已解压步骤，以及更新扩展后重新加载并刷新网页的说明；复制与检测失败显示中文操作指引。
+
+对话框沿用 `ModalShell` 的样式、焦点与关闭行为。`SourceBrowserPanel` 的既有 dialog 遮挡检测使原生网页暂时隐藏；关闭面板恢复同一网页，不发起重新导航或刷新。扩展版本与协议、收集箱／项目素材归属和独立加载副本见 [扩展 README](../apps/extension/README.md)。
+
+验证：扩展候选与通信 Node 测试 **23/23**、真实 content DOM 隔离 Chromium、`scripts/extension-panel-ui.test.mjs` 配置面板专项、7 种探索拖图及错误出口 **2/2** 通过。面板覆盖连断／检测失败、路径重取、复制错误、两项复制竞态、同值心跳与迟到查询、键盘／放大图及 900／560px 浅深色布局；截图位于 `apps/desktop/.tmp/extension-panel/`。旧 `explorer-ui.test.mjs` 仍定位已改名的「新建创作」，在临时测试副本中仅改为现有「我的项目」后完整探索回归通过，未修改原测试。最终 Vite 构建通过（既有大包提示）；完整 TypeScript 仍报 16 项既有编辑器类型错误，本轮新增文件无类型报错。Windows 与 canonical 六份运行／说明文件内容一致。本轮使用合成网页、剪贴板与 IPC，未操作真实用户库、发布安装包或验收真实网站登录采集。
+
+### 2026-10-26：松手后的分类暂存轮盘（源码未发布）
+
+产品样式和时序以 PROJECT.md「探索分类暂存轮盘」为准。`ExploreWorkspace` 在有效投放且 `claim_source_browser_analysis=true` 后建立独立展示项，使用拖动 ID 加本次操作序号区分连续采集／重复素材。`ExplorerClassificationDock` 只接收展示状态，不调用模型或等待动画后才入库；`finish_source_browser_analysis` 返回的已保存标签才触发完成，拖动候选概率不作为完成结果。旧普通采集气泡仅保留自动分类未启用／无法启动的确认。
+
+暂存区位于 `.explore-main` 左下，避开原生 WebView 覆盖范围；全层鼠标穿透。拖动缩略图在松手前后均可交接，采集成功后切换本地缩略图。采集／画板放置失败清理展示并沿原流程释放预分析；已交接分类继续后台执行。关闭探索保留已松手任务，项目 ID 或路由版本变化同步清空，迟到回调只更新仍存在的同范围项。动画使用单条 RAF 与可见时间，文档隐藏不消耗展示停留时间，卸载清理监听与帧。
+
+验证通过：完整 TypeScript、独立目录 Vite 构建，以及四组 Chromium：`scripts/explorer-classification-dock-ui.test.mjs`（连续采集、真实完成 FIFO、400／320／250／1000ms、放平／水平标签、六槽及溢出、后台暂停、动态减少动画、关闭探索／路由隔离、失败和窄窗），`scripts/explorer-classification-canvas-ui.test.mjs`（等待分类时已入画板、下载期间缩放仍冻结落点、同素材多实例、采集／节点保存失败释放、切项目和重载持久坐标），`scripts/explorer-feedback.test.mjs`（未启用分类／无法启动时的普通采集确认），`scripts/explorer-motion.test.mjs`（网页拖影与轮盘交接）。截图目录 `apps/desktop/.tmp/explorer-classification-dock/`，构建在 `.tmp/explorer-classification-build/`。
+
+旧 `explorer-canvas-ui.test.mjs` 在分类／落点断言前因已删除的「中央素材」标签入口超时，本轮未修改无关导航，画板边界改用上面的真实组件专项验证。沙箱中 TypeScript 依赖解析曾报既有编辑器错误、Vite realpath 和浏览器 localhost 访问受限；获准在沙箱外运行相同本机检查后通过，未修改依赖。此轮使用合成 IPC、未调用真实模型或操作用户库、未打包发布；浏览器合成验证不能替代 Windows／Mac 原生跨 WebView 物理拖放验收。
+
 ### 2026-10-17：拖动预分类与结果气泡（源码未发布）
 
 2026-10-18 分类更新：下述历史分维度预览由统一排名取代；四角各展示一个前四候选及原始概率，≥30% 真实标签加粗，未达标项淡化。「无明显匹配项」只展示、不保存。取消纯文字归属和维度候选池，只有没有真实标签达到门槛时才在成功采集后请求 Cloud，沿用任务锁、人工保护、自动处理门控及采集事务。验证：`local_classification` 62 passed / 6 ignored，TypeScript、分类面板和 `explorer-motion` 隔离回归通过；未调用真实模型或打包。

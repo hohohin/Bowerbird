@@ -1,0 +1,56 @@
+diff --git a/apps/desktop/src/App.tsx b/apps/desktop/src/App.tsx
+index 1594ed27..c3a36296 100644
+--- a/apps/desktop/src/App.tsx
++++ b/apps/desktop/src/App.tsx
+@@ -891,7 +891,6 @@ function App() {
+           setSourceBrowserOpen(current => !current);
+         }}
+       />
+-      {!projectWorkspaceActive && <div className="app-shell-hatch" aria-hidden="true"><span /></div>}
+       <div className="relative flex flex-1 overflow-hidden">
+         {COLLECTIONS_FEATURE_ENABLED && !projectWorkspaceActive && !localFilesOpen && <Sidebar />}
+         <main className="app-workspace relative flex flex-1 flex-col overflow-hidden bg-canvas">
+diff --git a/apps/desktop/src/components/LibraryTactical.css b/apps/desktop/src/components/LibraryTactical.css
+index 24eed1f6..ba202206 100644
+--- a/apps/desktop/src/components/LibraryTactical.css
++++ b/apps/desktop/src/components/LibraryTactical.css
+@@ -2,6 +2,8 @@
+ .library-tactical {
+   /* Reduce transmitted background by 20%: alpha = 1 - (1 - previous alpha) * .8. */
+   --lt-base: #1d2224;
++  --lt-console: #13191b;
++  --lt-sidebar: #171d1f;
+   --lt-screen: rgb(44 51 54 / .808);
+   --lt-panel: rgb(35 42 45 / .936);
+   --lt-hover-screen: rgb(61 68 70 / .856);
+@@ -18,6 +20,8 @@
+ }
+ html[data-theme="light"] .library-tactical {
+   --lt-base: #e6e7e5;
++  --lt-console: #c9cecb;
++  --lt-sidebar: #d7dbd8;
+   --lt-screen: rgb(235 237 233 / .776);
+   --lt-panel: rgb(243 244 240 / .936);
+   --lt-hover-screen: rgb(221 225 221 / .84);
+@@ -29,10 +33,18 @@ html[data-theme="light"] .library-tactical {
+   --lt-shadow: rgb(31 39 42 / .22);
+   --lt-nav: rgb(49 59 62 / .11);
+ }
+-.app-topbar.library-tactical, .library-home.library-tactical,
++.library-home.library-tactical,
+ .categorized-library.library-tactical, .local-file-workspace.library-tactical { background: var(--lt-base); }
+-.library-tactical :is(.catalog-sidebar, .file-browser-places) { background: var(--lt-base); border-color: transparent; }
+-.app-topbar.library-tactical { border-color: transparent; box-shadow: none; }
++.library-tactical :is(.catalog-sidebar, .file-browser-places) { background: var(--lt-sidebar); border-color: transparent; }
++.app-topbar.library-tactical { background: var(--lt-console); border-color: transparent; box-shadow: none; }
++/* Screen pixels occupy only the toolbar's spare grid track, never its controls or file address. */
++@media (min-width:900px) {
++  .app-topbar.library-tactical:not(.has-file-navigation)::before {
++    content: ""; grid-column: 2; grid-row: 1; height: 24px; margin-inline: 24px;
++    background: var(--lt-mark); opacity: .16; pointer-events: none;
++    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8'%3E%3Crect width='1' height='1' fill='black'/%3E%3C/svg%3E") repeat;
++  }
++}
+ 
+ /* Paint only: control dimensions, placement and hit areas remain owned by their components. */
+ .library-tactical :is(.app-button-dark, .app-button-accent, .topbar-account-trigger, .app-search,

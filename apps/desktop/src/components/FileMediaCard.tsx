@@ -4,6 +4,7 @@ import { Folder, Image, Play, Sparkles } from "lucide-react";
 import { externalFiles, type LocalFileEntry } from "../lib/externalFiles";
 import { createFilePreviewQueue } from "../lib/filePreviewQueue";
 import { isVideoPath } from "../lib/videoGeneration";
+import { LibrarySelectionMark } from "./LibrarySelectionMark";
 const previews = createFilePreviewQueue(externalFiles.preview);
 export function FileMediaCard({ entry, selected, revision, labels, onSelect, onActivate, onOpen, onContextMenu, aspectRatio, assetId, generated = false, onDragStart, onDragEnd, style }: {
   entry: LocalFileEntry; selected: boolean; revision: number; labels: string[];
@@ -65,6 +66,7 @@ export function FileMediaCard({ entry, selected, revision, labels, onSelect, onA
       {!entry.directory && isVideoPath(entry.path) && <span className="folder-media-kind"><Play size={11} />视频</span>}
       {!entry.directory && generated && <span className="folder-media-generated" title="生成图" aria-label="生成图"><Sparkles size={12} aria-hidden="true"/></span>}
     </span>
+    <LibrarySelectionMark selected={selected && !entry.directory} previewKey={preview ?? previewKey}/>
     {entry.directory && <span className="folder-media-name">{entry.name}</span>}
   </button>;
 }

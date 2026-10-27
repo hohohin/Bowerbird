@@ -27,7 +27,7 @@
 
 ### 用户管理（2026-10-22，已上线）
 
-`/admin/` 左侧新增「用户管理」，沿用同一管理员登录与 `bowerbird_admin=true` 鉴权。支持按邮箱或用户 ID 子串搜索、全部／仅测试／非测试筛选及每页 50 人分页，展示邮箱、Auth UUID、注册时间、最近登录和测试资格；无邮箱账号以 UUID 识别，管理员标记只读显示。行内「设为测试账号／取消测试资格」经确认后保存，成功提示用户在桌面端「刷新权益」。会员、积分、密码及管理员权限不在此入口修改。
+`/admin/` 左侧「用户管理」沿用同一管理员登录与 `bowerbird_admin=true` 鉴权。2026-10-25 起优先展示昵称，邮箱和完整 Auth UUID 为辅助信息；没有有效昵称时显示「未设置昵称」。支持按昵称、邮箱或用户 ID 子串搜索、全部／仅测试／非测试筛选及每页 50 人分页，同时展示注册时间、最近登录和测试资格，管理员标记只读显示。昵称来自 Auth `user_metadata.nickname`，仅为展示／搜索信息，不作为账号标识；同名用户分别保留，各项操作始终绑定原 UUID。行内「设为测试账号／取消测试资格」确认时同时显示昵称、邮箱及完整 UUID，成功提示用户在桌面端「刷新权益」。会员、积分、密码及管理员权限不在此入口修改。
 
 - `0069_user_admin.sql` 增加仅 service role 可调用的 `admin_list_users` / `admin_set_test_account`，每次 RPC 再检查 Auth 中当前管理员标记；不向客户端返回完整 metadata。搜索把 `%`、`_` 当普通字符。
 - 沿用 `code-admin`，新增 `list_users` / `set_test_account` 操作。调用者 ID 来自已验证会话，目标用户 ID 与布尔值严格校验；只按目标 UUID 修改 `bowerbird_test`，保留其他 app metadata。行锁内记录 `user_admin_events` 操作人、目标、前后状态及时间；设置为同一状态不重复写审计。
@@ -39,15 +39,15 @@
 
 真实验收覆盖公网三文件哈希、未登录 401、普通用户 403、搜索与筛选、严格布尔值／不存在用户、重复设置唯一审计、其他 metadata／管理员权限保留、会员积分不变、RPC／审计表越权拒绝、权益刷新、真实浏览器取消资格与管理员撤权后旧 JWT 拒绝及页面清空。测试通过后临时 Auth 账号全部删除，审计保留；未发送邮件、发码、调用模型或修改正式账号资格。首轮测试将权益刷新的 `updated_at` 变化误计入余额变化，核对 `refresh_user_credit_snapshot` 后修正测试口径并完整复验；不修改生产计费逻辑。证据 `.tmp/user-admin-20261022/{published.json,deployment.json,smoke.json,live-users.png}`；旧 Edge 源码在其中 `rollback/`，原官网目录保留。官网回滚切回上述 2203 目录并重启 `bowerbird-website.service`，Edge 回滚部署该 `rollback/` 中的 `code-admin`；保留 0069 及审计，避免删除已发生操作的记录。
 
-### 昵称展示与搜索（2026-10-25，已验证、待部署）
+### 2026-10-25 昵称展示与搜索（已上线）
 
-新增 `0076_user_admin_nickname.sql`，仅替换 `admin_list_users`：从现有 `raw_user_meta_data.nickname` 读取非空字符串，随列表返回并支持大小写不敏感的字面子串搜索；不返回 openid、unionid 或完整 metadata，不更新账号资料。后台列表与测试资格确认框优先显示昵称，列表保留邮箱和 UUID；缺昵称回退邮箱。昵称通过 `textContent` 展示，不能作为权限或唯一身份依据。
+定向应用 **0076_admin_user_nickname.sql**，只扩展 `admin_list_users`：从 Auth metadata 提取字符串昵称，去除首尾空格，空白／非字符串返回 null；昵称、邮箱不区分大小写，`%`／`_` 仍按普通字符匹配。不返回其余 user metadata，原管理员鉴权和 service-role-only 权限不变，目标操作仍复用原 UUID。0068 保持未应用，`code-admin` **v5** 及其他 Edge 均未重部署。
 
-验证：PGlite 覆盖中文／英文／emoji、字面 `%_`、空值与非字符串、metadata 不泄漏及原有管理／兑换码权限回归；生产构建的 Chromium 覆盖昵称搜索、无昵称回退、HTML 字符按文字展示、分页、撤权、退出迟到响应及 390px 窄屏。官网生产构建通过。本机未检出索引中 `ARCH-ADJUST-PLAN.md`、`Bowerbird开发计划.md`，本次依据当前 PROJECT、收费化进度、已有后台实现与部署文档进行局部修改。
+官网在现役 Windows 26.10.2401 目录上仅替换 admin 的 `index.html`／`admin.js`；CSS、账号网关、服务源码、环境、下载与更新文件均保持。现役目录 `/opt/bowerbird/website-releases/20261025-admin-nickname`，回滚目录 `/opt/bowerbird/website-releases/20261024-windows-26.10.2401`。硬链接克隆后用 `sudo install` 加 `sudo mv` 替换文件 inode，环境只用 `sudo cmp` 核对，不输出内容；原目录哈希保持。准备期遇到 root 属主权限限制，在切换现役前修正发布脚本，未影响在线版本。
 
-上线前读取实际线上迁移与 `admin_list_users` 定义并备份，核对与 0069 基线的差异；定向应用 0076 并登记迁移，勿全量 push（0068 保持未应用）。现有 `code-admin` 原样返回 RPC 结果，无须重部署 Edge。网站须从实际现役发布目录创建候选，仅替换本次 `dist/admin/index.html` 与 `dist/admin/admin.js`，其余现役文件保留；若硬链接克隆，先替换 inode，禁止原地改写共享文件。核验公网文件哈希、管理员昵称查询、普通用户拒绝后记录上线证据。回退网站使用实际备份目录；需要撤销查询变更时恢复备份函数定义，保留迁移记录与用户资料。
+PGlite 与 Chrome 回归覆盖中文／大小写昵称搜索、同名不同 UUID、空昵称、非字符串 metadata、字面通配符、HTML 注入、确认信息、分页、退出及撤权。真实线上验收覆盖两名同名临时用户的搜索、邮箱／UUID 兼容搜索、浏览器主次信息、只修改选中 UUID、会员积分不变及公网文件一致。三个临时 Auth 账号全部删除，审计保留，未操作正式账号或创建支付订单。
 
-当前部署受阻：这台 Mac 的 SSH 尝试返回 `Permission denied (publickey)`，`apps/cloud/.env.local` 仅有公开 URL 与 publishable key；等待可用 VPS 登录方式及 Supabase 管理凭据路径。尚未连接生产数据库或修改线上后台。
+证据 `.tmp/admin-nickname-20261025/{inspection.json,deployment.json,smoke.json,live-users.png}`；原 SQL 函数备份为 `admin_list_users-before.sql`。通常回退网站即可，0076 为兼容字段扩展可保留；如必须撤回查询能力，应通过新的前向迁移恢复备份函数，不删除现有迁移历史或用户数据。
 
 ### 管理员授权
 

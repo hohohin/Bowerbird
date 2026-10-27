@@ -12,6 +12,8 @@ page.on("pageerror", error => errors.push(error.message));
 const node = id => page.locator(`[data-canvas-node-id="${id}"]`);
 const editor = page.locator(".ProseMirror:not([aria-readonly])");
 const chips = () => editor.locator("[data-asset-id]").evaluateAll(elements => elements.map(e => e.dataset.assetId));
+const selectedNodes = () => page.locator("[data-canvas-node-id].is-selected").evaluateAll(elements => elements.map(element => element.dataset.canvasNodeId).sort());
+const mixedSelection = ["old", "a", "duplicate-a", "prompt"].sort();
 
 async function reset() {
   await page.reload();
@@ -65,9 +67,19 @@ try {
   });
 
   await reset();
+  await node("old").click({ button: "right", position: { x: 30, y: 30 } });
+  await page.getByRole("menu").waitFor();
+  assert.deepEqual(await selectedNodes(), [], "right-clicking an image does not create a selection");
+  assert.deepEqual(await page.evaluate(() => window.store.getState().contextMenu.canvasSelection.nodeIds), ["old"]);
+  await page.keyboard.press("Escape");
+  assert.deepEqual(await selectedNodes(), [], "dismissing the image menu leaves the canvas unselected");
+
+  await reset();
   await marquee();
   assert.deepEqual(await chips(), [], "selection alone must not insert references");
   await node("a").click({ button: "right", position: { x: 30, y: 30 } });
+  assert.deepEqual(await selectedNodes(), mixedSelection, "right-clicking inside a mixed selection preserves it");
+  assert.deepEqual(await page.evaluate(() => [...window.store.getState().contextMenu.canvasSelection.nodeIds].sort()), mixedSelection, "the image menu keeps the whole selected group as its target");
   await addFromMenu("添加所选 2 张图片到对话框");
   assert.deepEqual(await chips(), ["existing", "a"], "deduplicate images and skip execution cards");
 
@@ -80,18 +92,38 @@ try {
   await reset();
   await marquee();
   await node("prompt").click({ button: "right", position: { x: 30, y: 30 } });
+  assert.deepEqual(await selectedNodes(), mixedSelection, "the mixed-card menu does not replace the selected group");
   await addFromMenu("添加所选 2 张图片到对话框");
   assert.deepEqual(await chips(), ["existing", "a"], "mixed-selection card menu adds selected images");
 
   await reset();
   await marquee();
   await node("outside").click({ button: "right", position: { x: 30, y: 30 } });
+  assert.deepEqual(await selectedNodes(), mixedSelection, "right-clicking outside the selection does not replace it");
+  assert.deepEqual(await page.evaluate(() => window.store.getState().contextMenu.canvasSelection.nodeIds), ["outside"], "the unselected image is still the sole menu target");
   await addFromMenu("添加到对话框");
   assert.deepEqual(await chips(), ["b"], "right-clicking an unselected image targets only that image");
 
   await reset();
   await node("prompt").click({ button: "right", position: { x: 30, y: 30 } });
+  await page.getByRole("menu").waitFor();
+  assert.deepEqual(await selectedNodes(), [], "right-clicking an execution card does not create a selection");
   assert.equal(await page.getByRole("menuitem", { name: /添加.*对话框/ }).count(), 0);
+
+  // Both menu implementations remove their captured target, never the preserved selection.
+  for (const id of ["outside", "agent"]) {
+    await reset();
+    await marquee();
+    await node(id).click({ button: "right", position: { x: 30, y: 30 } });
+    assert.deepEqual(await selectedNodes(), mixedSelection, `${id}: an outside menu preserves the mixed selection`);
+    await page.getByRole("menuitem", { name: "删除", exact: true }).click();
+    await page.getByRole("menuitem", { name: "从画布移出", exact: true }).click();
+    await node(id).waitFor({ state: "detached" });
+    assert.deepEqual(await selectedNodes(), mixedSelection, `${id}: removing the menu target preserves unrelated selected nodes`);
+    assert.equal(await page.locator("[data-canvas-node-id]").count(), 6);
+    await page.waitForFunction(id => window.calls.some(call => call.command === "project_canvas_node_remove" && call.args.nodeId === id), id);
+    assert.deepEqual(await page.evaluate(() => window.calls.filter(call => call.command === "project_canvas_node_remove").map(call => call.args.nodeId)), [id], `${id}: the frozen menu target alone is persisted as removed`);
+  }
 
   // Delete removes the actual marquee selection without requiring a node click.
   for (const [width, height, ids] of [
@@ -181,7 +213,7 @@ try {
   for (const id of ["old", "a", "duplicate-a", "prompt"]) assert.equal(await node(id).count(), 0);
   assert.equal(await page.evaluate(() => window.store.getState().assets.length), 5, "central assets survive removal and reload");
   assert.deepEqual(errors, []);
-  console.log("PASS marquee references and Delete: single/multiple images, mixed cards, keyboard safety, context menus and undo");
+  console.log("PASS marquee references and Delete: single/multiple images, mixed cards, right-click preserves selection with independent removal targets, keyboard safety, context menus and undo");
 } finally {
   await browser.close();
   await server.close();

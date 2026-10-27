@@ -744,6 +744,7 @@ test("one undo restores " + (grouped ? "grouped" : "mixed") + " removal without 
   const bindings = {
     nodesRef, graphNodesRef, undoHistoryRef: history, groupsRef: { current: new Map([["group", { id: "group", name: "my group", role: "composition" }]]) },
     conversationCardsRef: { current: { cards: new Map() } },
+    canvasWorkflowController: () => ({ document: { nodes: [] } }),
     groupedAssetNode: (snapshot) => ({ ...asset, asset: snapshot }),
     projectCanvasGroupUpdate: (original, node) => ({ ...original, x: node.x, y: node.y }),
     activeCanvasRef: { current: { id: "project" } }, focusedNodeIdRef: { current: "prompt" },

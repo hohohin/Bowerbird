@@ -1,0 +1,397 @@
+diff --git a/apps/desktop/src/components/LibraryTactical.css b/apps/desktop/src/components/LibraryTactical.css
+--- a/apps/desktop/src/components/LibraryTactical.css
++++ b/apps/desktop/src/components/LibraryTactical.css
+@@ -1,50 +1,57 @@
+ /* Approved library surface. Keep tokens local: canvas nodes and modal panels retain their themes. */
+ .library-tactical {
+   /* Reduce transmitted background by 20%: alpha = 1 - (1 - previous alpha) * .8. */
+-  --lt-base: #1d2224;
+-  --lt-console: #13191b;
+-  --lt-sidebar: #171d1f;
+-  --lt-screen: rgb(44 51 54 / .808);
+-  --lt-panel: rgb(35 42 45 / .936);
+-  --lt-hover-screen: rgb(61 68 70 / .856);
+-  --lt-hover: rgb(225 229 228 / .12);
+-  --lt-selected: rgb(219 224 222 / .888);
+-  --lt-selected-ink: #252b2d;
+-  --lt-ink: #e5e8e7;
+-  --lt-mark: #c7cecb;
++  --lt-base: #191f21;
++  --lt-console: #202528;
++  --lt-sidebar: #1d2224;
++  --lt-screen: rgb(49 57 59 / .808);
++  --lt-panel: rgb(29 34 36 / .936);
++  --lt-hover-screen: rgb(43 50 52 / .856);
++  --lt-hover: rgb(221 228 232 / .09);
++  --lt-selected: rgb(228 230 235 / .888);
++  --lt-selected-ink: #292c32;
++  --lt-ink: #e4e6eb;
++  --lt-mark: #9c9fa9;
+   --lt-shadow: rgb(0 0 0 / .42);
+-  --lt-nav: rgb(221 226 224 / .13);
++  --lt-nav: rgb(221 228 232 / .13);
++  --bb-ink: var(--lt-ink);
++  --bb-muted: var(--lt-mark);
+   --file-gallery-background: var(--lt-base);
+   --library-glass-selected: var(--lt-selected);
+   --library-glass-selected-shadow: none;
+ }
+ html[data-theme="light"] .library-tactical {
+-  --lt-base: #e6e7e5;
+-  --lt-console: #c9cecb;
+-  --lt-sidebar: #d7dbd8;
+-  --lt-screen: rgb(235 237 233 / .776);
+-  --lt-panel: rgb(243 244 240 / .936);
+-  --lt-hover-screen: rgb(221 225 221 / .84);
+-  --lt-hover: rgb(47 55 58 / .09);
+-  --lt-selected: rgb(59 67 70 / .888);
+-  --lt-selected-ink: #fff;
+-  --lt-ink: #2c3437;
+-  --lt-mark: #56615e;
+-  --lt-shadow: rgb(31 39 42 / .22);
+-  --lt-nav: rgb(49 59 62 / .11);
++  --lt-base: #eeede9;
++  --lt-console: #f5f4f0;
++  --lt-sidebar: #e6e5e1;
++  --lt-screen: rgb(255 255 255 / .776);
++  --lt-panel: rgb(245 244 240 / .936);
++  --lt-hover-screen: rgb(252 252 249 / .84);
++  --lt-hover: rgb(41 44 50 / .075);
++  --lt-selected: rgb(41 44 50 / .888);
++  --lt-selected-ink: #fcfcf9;
++  --lt-ink: #292c32;
++  --lt-mark: #777b82;
++  --lt-shadow: rgb(37 43 42 / .18);
++  --lt-nav: rgb(41 44 50 / .085);
+ }
+ .library-home.library-tactical,
+ .categorized-library.library-tactical, .local-file-workspace.library-tactical { background: var(--lt-base); }
+ .library-tactical :is(.catalog-sidebar, .file-browser-places) { background: var(--lt-sidebar); border-color: transparent; }
+-.app-topbar.library-tactical { background: var(--lt-console); border-color: transparent; box-shadow: none; }
+-/* Screen pixels occupy only the toolbar's spare grid track, never its controls or file address. */
+-@media (min-width:900px) {
+-  .app-topbar.library-tactical:not(.has-file-navigation)::before {
+-    content: ""; grid-column: 2; grid-row: 1; height: 24px; margin-inline: 24px;
+-    background: var(--lt-mark); opacity: .16; pointer-events: none;
+-    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='8'%3E%3Crect width='1' height='1' fill='black'/%3E%3C/svg%3E") repeat;
+-  }
+-}
++.app-topbar.library-tactical {
++  --lt-topbar-group: rgb(228 230 235 / .045);
++  --lt-topbar-hover: rgb(228 230 235 / .065);
++  --lt-project-entry: rgb(228 230 235 / .12);
++  --lt-project-hover: rgb(228 230 235 / .18);
++  background: var(--lt-console); border-color: transparent; box-shadow: none; isolation: isolate; backdrop-filter: none;
++}
++html[data-theme="light"] .app-topbar.library-tactical {
++  --lt-topbar-group: rgb(255 255 255 / .58);
++  --lt-topbar-hover: rgb(41 44 50 / .035);
++  --lt-project-entry: rgb(41 44 50 / .09);
++  --lt-project-hover: rgb(41 44 50 / .14);
++}
++.app-topbar.library-tactical::before, .app-topbar.library-tactical::after { content: none; }
+ 
+ /* Paint only: control dimensions, placement and hit areas remain owned by their components. */
+ .library-tactical :is(.app-button-dark, .app-button-accent, .topbar-account-trigger, .app-search,
+@@ -74,11 +81,43 @@
+   .library-filter-trigger, :where(.catalog-sidebar-heading button)):hover:not(:disabled) {
+   background-color: var(--lt-hover-screen); border-color: transparent; box-shadow: none;
+ }
+-.app-topbar.library-tactical .library-projects-trigger {
+-  background: var(--lt-selected); color: var(--lt-selected-ink); font-weight: 700; box-shadow: none;
+-}
+-.app-topbar.library-tactical .library-projects-trigger:is(:hover, :focus-visible, :active) {
+-  background: var(--lt-selected); color: var(--lt-selected-ink); box-shadow: none;
++.app-topbar.library-tactical .app-topbar-leading { padding: 4px; gap: 2px; background: var(--lt-topbar-group); }
++.app-topbar.library-tactical .app-topbar-leading :is(.app-button-dark, .library-projects-trigger) {
++  min-height: 32px; height: 32px; padding-inline: 9px; background: transparent; color: var(--lt-ink); font-size: 12px; box-shadow: none;
++}
++.app-topbar.library-tactical .app-topbar-leading .app-button-dark:hover:not(:disabled) { background: var(--lt-topbar-hover); }
++.app-topbar.library-tactical .app-topbar-leading .library-projects-trigger {
++  margin-left: 0; gap: 6px; background: var(--lt-project-entry); font-weight: 600;
++}
++.app-topbar.library-tactical .app-topbar-leading .library-projects-trigger:is(:hover, :focus-visible, :active) {
++  background: var(--lt-project-hover); color: var(--lt-ink); box-shadow: none;
++}
++.library-tactical .catalog-sidebar-heading button { background: transparent; color: var(--lt-mark); box-shadow: none; }
++.library-tactical .catalog-sidebar-heading button:is(:hover, :focus-visible, :active):not(:disabled) {
++  background: var(--lt-hover); color: var(--lt-ink); box-shadow: none;
++}
++.library-tactical :is(.library-projects-trigger, .catalog-sidebar-heading button):focus-visible {
++  outline: 2px solid var(--lt-mark); outline-offset: 2px;
++}
++/* No clipping or transforms on the header: its import menu and project dialog render outside it. */
++.app-topbar.library-tactical .topbar-account-trigger {
++  height: 40px; padding: 4px 4px 4px 12px; gap: 10px; background: var(--lt-topbar-group); color: var(--lt-ink); box-shadow: none;
++}
++.app-topbar.library-tactical .topbar-account-trigger:hover { background: var(--lt-topbar-hover); box-shadow: none; }
++.app-topbar.library-tactical .topbar-account-trigger > :is(span.bg-accent, img) {
++  width: 28px; height: 28px; background: var(--lt-topbar-hover); color: var(--lt-ink); font-size: 11px;
++}
++.app-topbar.library-tactical .app-topbar-credits { font-size: 12px; font-weight: 600; letter-spacing: .02em; }
++.app-topbar.library-tactical .app-topbar-credits svg { color: var(--lt-mark); }
++.library-toolbar-context {
++  position: absolute; grid-column: 2 / 3; grid-row: 1; inset: 0 12px 0 24px; display: flex; align-items: center; gap: 10px;
++  color: var(--lt-ink); pointer-events: none; white-space: nowrap;
++}
++.library-toolbar-context > span { display: flex; flex-direction: column; gap: 3px; font-size: 11px; letter-spacing: .08em; }
++.library-toolbar-context small { font: 8px ui-monospace, Consolas, monospace; letter-spacing: .14em; color: var(--lt-mark); }
++.library-toolbar-context > i {
++  width: 13px; height: 13px; opacity: .7;
++  background: linear-gradient(currentColor,currentColor) 0 0/4px 4px no-repeat, linear-gradient(currentColor,currentColor) 7px 0/4px 4px no-repeat, linear-gradient(currentColor,currentColor) 0 7px/4px 4px no-repeat;
+ }
+ .library-tactical .library-color-control > .library-filter-trigger { background: transparent; }
+ .library-tactical :is(.library-view-switch-thumb, .library-media-switch button[aria-pressed="true"],
+@@ -102,6 +141,34 @@
+ .library-tactical .catalog-alphabet button:not([aria-disabled="true"]) { color: var(--lt-ink); }
+ .library-tactical .catalog-section-title { background: transparent; border-color: transparent; color: var(--lt-ink); backdrop-filter: none; box-shadow: none; }
+ .library-tactical .catalog-section-heading.is-pinned .catalog-section-title { background: var(--lt-screen); border-radius: 0; }
++.library-tactical .catalog-sidebar { background: transparent; isolation: isolate; }
++.library-tactical .catalog-sidebar::before {
++  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; background: var(--lt-sidebar);
++  clip-path: polygon(0 0,100% 0,100% 50px,calc(100% - 5px) 50px,calc(100% - 5px) 72px,100% 72px,100% calc(100% - 82px),calc(100% - 8px) calc(100% - 82px),calc(100% - 8px) calc(100% - 52px),100% calc(100% - 52px),100% 100%,0 100%);
++}
++.library-sidebar-meter {
++  position: absolute; display: flex; flex-direction: column; justify-content: space-between; right: -6px; width: 5px; top: 142px; bottom: 120px;
++  pointer-events: none; color: var(--lt-mark); opacity: .48; z-index: 1;
++}
++.library-sidebar-meter > span { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
++.library-sidebar-meter i { display: block; height: 1px; width: 2px; background: currentColor; }
++.library-sidebar-meter i:nth-child(3n + 1) { width: 5px; }
++.library-sidebar-foot {
++  display: flex; gap: 3px; position: absolute; right: 14px; bottom: 22px; pointer-events: none; color: var(--lt-mark); opacity: .4;
++}
++.library-sidebar-foot i { width: 3px; height: 3px; background: currentColor; }
++.library-sidebar-foot i:nth-child(2) { width: 16px; }
++.library-tactical .catalog-section-title { font-size: 12px; letter-spacing: .025em; }
++.library-tactical .catalog-section-title::before {
++  content: ""; display: inline-block; position: static; width: 7px; height: 11px; margin-right: 8px; vertical-align: -1px;
++  background: linear-gradient(currentColor,currentColor) 0 0/7px 3px no-repeat, linear-gradient(currentColor,currentColor) 0 4px/3px 3px no-repeat, linear-gradient(currentColor,currentColor) 0 8px/5px 3px no-repeat; opacity: .65;
++}
++.library-tactical.library-motion-root .catalog-section-title[data-library-count]::after {
++  content: attr(data-library-count); position: static; display: inline; width: auto; height: auto; margin-left: 12px; inset: auto;
++  font: 10px ui-monospace, Consolas, monospace; letter-spacing: .03em; color: var(--lt-ink); opacity: .65;
++  background: none; border: 0; box-shadow: none; transform: none; pointer-events: none; animation: none;
++}
++.library-tactical [data-catalog-section]:has(.folder-media-card:hover) .catalog-section-title::before { animation: library-tactical-contact 160ms steps(1,end); }
+ .library-tactical :is(.catalog-selection, .folder-selection-bar) button { color: var(--lt-ink); }
+ .library-tactical :is(.catalog-selection, .folder-selection-bar) button:hover { background: var(--lt-hover); }
+ .library-tactical :is(.app-popover, .topbar-account-menu, .folder-popover, .library-tag-filter, .library-color-strip.library-floating-surface) {
+@@ -200,8 +267,18 @@
+   .library-tactical *, .library-tactical *::before, .library-tactical *::after { animation: none !important; transition: none !important; }
+ }
+ @media (prefers-reduced-transparency:reduce) {
+-  .library-tactical { --lt-screen: #2c3336; --lt-panel: #232a2d; }
+-  html[data-theme="light"] .library-tactical { --lt-screen: #ebede9; --lt-panel: #f3f4f0; }
++  .library-tactical { --lt-screen: #31393b; --lt-panel: #1d2224; }
++  html[data-theme="light"] .library-tactical { --lt-screen: #fff; --lt-panel: #f5f4f0; }
++}
++@media (max-width:899px) { .library-toolbar-context { display: none; } }
++@media (max-width:600px) {
++  .app-topbar.library-tactical .app-topbar-leading { padding: 2px; gap: 0; }
++  .app-topbar.library-tactical .app-topbar-leading :is(.app-button-dark, .library-projects-trigger) { padding-inline: 5px; gap: 4px; }
++  .app-topbar.library-tactical .topbar-account-trigger { padding-left: 6px; gap: 5px; }
++  .library-tactical.library-motion-root .catalog-section-title[data-library-count]::after { content: none; }
++}
++@media (max-width:480px) {
++  .app-topbar.library-tactical .app-topbar-leading [aria-label="探索"] .app-topbar-button-label { display: none; }
+ }
+ @media (forced-colors:active) {
+   .library-tactical-backdrop { display: none; }
+diff --git a/apps/desktop/src/components/Toolbar.tsx b/apps/desktop/src/components/Toolbar.tsx
+--- a/apps/desktop/src/components/Toolbar.tsx
++++ b/apps/desktop/src/components/Toolbar.tsx
+@@ -1,5 +1,5 @@
+ import { useEffect, useRef, useState } from "react";
+-import { ArrowLeft, ArrowUpRight, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Upload } from "lucide-react";
++import { ArrowLeft, ChevronDown, Compass, FolderOpen, LayoutDashboard, LoaderCircle, Upload } from "lucide-react";
+ import { SidebarAccount } from "./SidebarAccount";
+ import { ProjectManagerPanel } from "./ProjectManagerPanel";
+ import { GeneratedImageFilter } from "./GeneratedImageFilter";
+@@ -234,12 +234,12 @@
+           >
+             <LayoutDashboard size={15} />
+             <span className="app-topbar-button-label">我的项目</span>
+-            {tactical && <ArrowUpRight size={14} aria-hidden="true" />}
+           </button>
+         )}
+       </div>
+ 
+       {showFileNavigation && <div className="app-file-navigation-slot" ref={setNavigationHost} />}
++      {tactical && !showFileNavigation && <span className="library-toolbar-context"><i aria-hidden="true"/><span>素材库<small>ASSET LIBRARY</small></span></span>}
+ 
+       <div className="app-topbar-actions" aria-label="视图与账号">
+         {!localFilesOpen && (canvasMode || homeView === "library") && <div className="app-topbar-view-controls" role="group" aria-label="素材视图">
+diff --git a/apps/desktop/src/components/CategorizedLibrary.tsx b/apps/desktop/src/components/CategorizedLibrary.tsx
+--- a/apps/desktop/src/components/CategorizedLibrary.tsx
++++ b/apps/desktop/src/components/CategorizedLibrary.tsx
+@@ -352,6 +352,8 @@
+     <LibraryMotion />
+     <div className="catalog-body">
+       {!flat && <aside ref={sidebar} className="catalog-sidebar" aria-label={kind === "tags" ? "标签分类" : "集合目录"}>
++        <div className="library-sidebar-meter" aria-hidden="true">{[0, 1, 2].map(group => <span key={group}>{Array.from({ length: 7 }, (_, index) => <i key={index}/>)}</span>)}</div>
++        <div className="library-sidebar-foot" aria-hidden="true"><i/><i/><i/><i/></div>
+         <div className="catalog-sidebar-heading"><strong>{kind === "tags" ? "标签" : "集合"}</strong>
+           <button title={kind === "tags" ? "管理标签" : "新建集合"} aria-label={kind === "tags" ? "管理标签" : "新建集合"}
+             onClick={() => kind === "tags" ? setManageTags(true) : setEditor({ parentId: null })}>{kind === "tags" ? <Settings2 size={15}/> : <Plus size={16}/>}</button></div>
+diff --git a/apps/desktop/src/components/VirtualCatalog.tsx b/apps/desktop/src/components/VirtualCatalog.tsx
+--- a/apps/desktop/src/components/VirtualCatalog.tsx
++++ b/apps/desktop/src/components/VirtualCatalog.tsx
+@@ -129,7 +129,7 @@
+   return <div ref={root} className={`catalog-sections catalog-virtual${filter.kind === "tags" ? " catalog-tag-sections" : ""}`} aria-label="分类素材" style={{ height: Math.min(layout.height + 100, 8_000_000), position: "relative", overflow: "clip", overflowAnchor: "none" }} data-cached-pages={cache.current.size}>
+     {sections.map((section, index) => <section key={section.id} data-catalog-section={section.id} data-tag-section={section.tagId ?? undefined}
+       aria-label={headings ? `${section.name}${section.tagId ? "图片" : "素材"}` : undefined} style={{ position: "absolute", top: layout.groups[index].top * scale, height: layout.groups[index].height * scale, width: "100%" }}>
+-      {headings && (current === section.id || visible.some(block => block.section === index)) && <h3 style={{ position: "absolute", width: "100%", top: Math.min(Math.max(layout.groups[index].top, logicalTop), layout.groups[index].top + layout.groups[index].height - 40) - logicalTop + viewport.top - layout.groups[index].top * scale }} className={`catalog-section-heading${current === section.id && viewport.top > 0 ? " is-pinned" : ""}`}><span title={section.name} className={`catalog-section-title${current === section.id && viewport.top > 0 ? " library-floating-surface" : ""}`}>{section.name}</span></h3>}
++      {headings && (current === section.id || visible.some(block => block.section === index)) && <h3 style={{ position: "absolute", width: "100%", top: Math.min(Math.max(layout.groups[index].top, logicalTop), layout.groups[index].top + layout.groups[index].height - 40) - logicalTop + viewport.top - layout.groups[index].top * scale }} className={`catalog-section-heading${current === section.id && viewport.top > 0 ? " is-pinned" : ""}`}><span title={section.name} data-library-count={`${String(section.count).padStart(2, "0")} 项`} className={`catalog-section-title${current === section.id && viewport.top > 0 ? " library-floating-surface" : ""}`}>{section.name}</span></h3>}
+       {visible.filter(block => block.section === index).map(block => {
+         const page = cache.current.get(block.key), error = errors.current.get(block.key);
+         const geometry = page ? masonryGeometry(page.assets, viewport.width, width) : null;
+diff --git a/apps/desktop/scripts/library-tactical-ui.test.mjs b/apps/desktop/scripts/library-tactical-ui.test.mjs
+--- a/apps/desktop/scripts/library-tactical-ui.test.mjs
++++ b/apps/desktop/scripts/library-tactical-ui.test.mjs
+@@ -14,7 +14,7 @@
+ await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
+ const output = ".tmp/library-tactical";
+ const card = page.locator(".folder-media-card").first();
+-const geometrySelectors = [".app-topbar", ".library-projects-trigger", ".topbar-account-trigger", ".catalog-sidebar", ".catalog-alphabet", ".library-view-switch", ".library-media-switch", ".thumbnail-size-slider", ".catalog-section-title", ".folder-media-card"];
++const geometrySelectors = [".app-topbar", ".catalog-sidebar", ".catalog-alphabet", ".catalog-gallery", ".catalog-scroller", ".library-view-switch", ".library-media-switch", ".thumbnail-size-slider", ".catalog-section-heading", ".folder-media-card"];
+ async function geometry() {
+   return page.evaluate(selectors => Object.fromEntries(selectors.map(selector => [selector, [...document.querySelectorAll(selector)].slice(0, 3).map(element => {
+     const rect = element.getBoundingClientRect();
+@@ -37,7 +37,7 @@
+   await page.waitForTimeout(650);
+   assert.equal(await page.locator('link[href*=".tmp"],style[data-vite-dev-id*=".tmp"]').count(), 0, "fixture uses production CSS only");
+ 
+-  // Turning off only the new paint layer must preserve the established library geometry.
++  // Toolbar buttons and title contents changed intentionally; the shell and gallery geometry must not.
+   for (const width of [1500, 900, 390]) {
+     await page.setViewportSize({ width, height: 1000 });
+     await page.mouse.move(0, 0);
+@@ -56,31 +56,72 @@
+       const box = element.getBoundingClientRect();
+       return box.left >= 0 && box.right <= innerWidth && element.scrollWidth <= element.clientWidth;
+     }), `${width}px project entry remains within the toolbar without clipped contents`);
++    assert.ok(await page.locator(".app-topbar").evaluate(element => {
++      const leading = element.querySelector(".app-topbar-leading").getBoundingClientRect();
++      const account = element.querySelector(".topbar-account-trigger").getBoundingClientRect();
++      const box = element.getBoundingClientRect();
++      return leading.left >= box.left && leading.right <= account.left && account.right <= box.right && leading.height <= box.height && account.height <= box.height;
++    }), `${width}px action and account groups fit without overlap`);
++    const importTrigger = page.locator(".app-topbar-import > button");
++    await importTrigger.click();
++    assert.ok(await page.locator('.app-topbar-import [role="menu"]').evaluate(element => {
++      const box = element.getBoundingClientRect(), header = element.closest(".app-topbar").getBoundingClientRect();
++      const hit = document.elementFromPoint(box.left + box.width / 2, Math.min(box.bottom - 4, innerHeight - 4));
++      return box.bottom > header.bottom && box.left >= 0 && box.right <= innerWidth && element.contains(hit);
++    }), `${width}px import popover extends beyond the header without clipping`);
++    await importTrigger.click();
+   }
+   await page.setViewportSize({ width: 1500, height: 1000 });
+   await page.waitForTimeout(350);
++  assert.equal(await page.locator('.structure-study-tools,.structure-preview-menu').count(), 0, "preview tools are not shipped in the production toolbar");
++  assert.equal(await page.locator('.library-toolbar-context').count(), 1);
++  assert.ok(await page.locator('.library-sidebar-meter').evaluate(element => {
++    const box = element.getBoundingClientRect(), sidebar = element.closest('.catalog-sidebar').getBoundingClientRect();
++    return element.getAttribute('aria-hidden') === 'true' && getComputedStyle(element).pointerEvents === 'none' && box.left >= sidebar.right;
++  }), 'sidebar meter remains outside the interactive sidebar and ignores pointer input');
++  const firstTitle = page.locator('[data-tag-section="a"] .catalog-section-title');
++  assert.equal(await firstTitle.getAttribute('data-library-count'), '16 项', 'heading exposes the actual total, not the currently rendered card count');
++  await page.getByRole('button', { name: '只看生成图', exact: true }).click();
++  await page.waitForFunction(() => document.querySelector('[data-tag-section="a"] .catalog-section-title')?.getAttribute('data-library-count') === '04 项');
++  assert.equal(await page.locator('[data-tag-section="z"] .catalog-section-title').getAttribute('data-library-count'), '03 项', 'each tag count follows the generated filter');
++  await page.getByRole('button', { name: '只看生成图', exact: true }).click();
++  await page.waitForFunction(() => document.querySelector('[data-tag-section="a"] .catalog-section-title')?.getAttribute('data-library-count') === '16 项');
+ 
+   for (const theme of ["light", "dark"]) {
+     await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+     await page.mouse.move(0, 0);
+     await page.waitForTimeout(200);
+-    const controls = await page.evaluate(() => [".app-topbar-import > button", ".topbar-account-trigger", ".library-view-switch", ".library-media-switch", '.library-filter-trigger[aria-label="文件浏览器"]', ".thumbnail-size-slider"].map(selector => {
++    const controls = await page.evaluate(() => [".library-view-switch", ".library-media-switch", '.library-filter-trigger[aria-label="文件浏览器"]', ".thumbnail-size-slider"].map(selector => {
+       const element = document.querySelector(selector), style = getComputedStyle(element);
+       return { selector, radius: style.borderRadius, image: style.backgroundImage, alpha: Number(style.backgroundColor.match(/[\d.]+/g).at(-1)), blur: style.backdropFilter, point: getComputedStyle(element, "::after").content };
+     }));
+     const expectedAlpha = theme === "light" ? .776 : .808;
+     assert.ok(controls.every(control => control.radius === "0px" && control.image === "none" && control.blur === "none" && Math.abs(control.alpha - expectedAlpha) < .005 && control.point === "none"), `${theme}: ${JSON.stringify(controls)}`);
++    const surfaces = await page.evaluate(() => ({
++      floor: getComputedStyle(document.querySelector('.categorized-library')).backgroundColor,
++      header: getComputedStyle(document.querySelector('.app-topbar')).backgroundColor,
++      import: getComputedStyle(document.querySelector('.app-topbar-import > button')).backgroundColor,
++      tagManager: getComputedStyle(document.querySelector('.catalog-sidebar-heading button')).backgroundColor,
++      buttonHeight: getComputedStyle(document.querySelector('.app-topbar-import > button')).height,
++      accountHeight: getComputedStyle(document.querySelector('.topbar-account-trigger')).height,
++    }));
++    assert.deepEqual(surfaces, {
++      floor: theme === 'light' ? 'rgb(238, 237, 233)' : 'rgb(25, 31, 33)',
++      header: theme === 'light' ? 'rgb(245, 244, 240)' : 'rgb(32, 37, 40)',
++      import: 'rgba(0, 0, 0, 0)', tagManager: 'rgba(0, 0, 0, 0)', buttonHeight: '32px', accountHeight: '40px',
++    }, `${theme}: project-panel palette and restrained controls`);
+     const activeTab = page.getByRole("tab", { name: "标签分类", exact: true });
+     const point = await activeTab.evaluate(element => { const style = getComputedStyle(element, "::after"); return { content: style.content, width: style.width, height: style.height, right: style.right, bottom: style.bottom }; });
+     assert.deepEqual(point, { content: '""', width: "2px", height: "2px", right: "3px", bottom: "3px" }, "only highlighted controls expose the lower-right point");
+     const projectEntry = page.locator(".library-projects-trigger");
+     assert.equal(await projectEntry.getAttribute("aria-haspopup"), "dialog");
+     assert.equal(await projectEntry.getAttribute("aria-expanded"), "false");
+-    assert.equal(await projectEntry.locator("svg").count(), 2, "project entry combines its label/icon with an opening arrow");
+-    const selectedSurface = await page.locator(".library-view-switch-thumb").evaluate(element => getComputedStyle(element).backgroundColor);
+-    assert.equal(await projectEntry.evaluate(element => getComputedStyle(element).backgroundColor), selectedSurface, `${theme} project entry has the stronger neutral surface`);
+-    assert.ok(Math.abs(Number(selectedSurface.match(/[\d.]+/g).at(-1)) - .888) < .005);
++    assert.equal(await projectEntry.locator("svg").count(), 1, "project entry uses one plain icon without an ending arrow");
++    assert.deepEqual(await projectEntry.locator("svg").evaluate(element => { const style = getComputedStyle(element); return [style.width, style.height, style.backgroundColor, style.padding]; }), ['15px', '15px', 'rgba(0, 0, 0, 0)', '0px'], "project icon has no separate tile");
++    assert.equal(await projectEntry.evaluate(element => getComputedStyle(element).backgroundColor), theme === 'light' ? 'rgba(41, 44, 50, 0.09)' : 'rgba(228, 230, 235, 0.12)', `${theme} project entry has a low-contrast background`);
+     await projectEntry.hover();
++    await page.waitForTimeout(200);
++    assert.equal(await projectEntry.evaluate(element => getComputedStyle(element).backgroundColor), theme === 'light' ? 'rgba(41, 44, 50, 0.14)' : 'rgba(228, 230, 235, 0.18)', `${theme} project hover keeps the neutral background`);
+     assert.equal(await projectEntry.evaluate(element => getComputedStyle(element).boxShadow), "none", `${theme} project hover has no legacy shadow`);
+     await page.mouse.down();
+     assert.ok(await projectEntry.evaluate(element => element.matches(":active") && getComputedStyle(element).boxShadow === "none"), `${theme} project pressed state has no legacy shadow`);
+@@ -91,7 +132,7 @@
+       const style = getComputedStyle(element), channels = style.backgroundColor.match(/[\d.]+/g);
+       return { color: style.backgroundColor, alpha: channels.length === 4 ? Number(channels[3]) : 1, border: style.borderTopColor };
+     });
+-    assert.ok(Math.abs(hoverSurface.alpha - (theme === "light" ? .84 : .856)) < .005, `${theme} hover transparency decreases by 20%: ${JSON.stringify(hoverSurface)}`);
++    assert.ok(Math.abs(hoverSurface.alpha - (theme === "light" ? .035 : .065)) < .005, `${theme} toolbar hover remains subtle: ${JSON.stringify(hoverSurface)}`);
+     assert.equal(hoverSurface.border, "rgba(0, 0, 0, 0)", "hover does not restore the legacy button border");
+     await page.mouse.move(0, 0); await page.waitForTimeout(200);
+     await page.screenshot({ path: `${output}/${theme}.png` });
+@@ -169,9 +210,11 @@
+   await page.getByRole("button", { name: "红", exact: true }).click();
+   await page.keyboard.press("Escape");
+   await page.waitForFunction(() => [...document.querySelectorAll(".folder-media-card")].length > 0 && [...document.querySelectorAll(".folder-media-card")].every(element => Number(element.dataset.assetId.split("-")[1]) % 2 === 1));
++  assert.equal(await firstTitle.getAttribute('data-library-count'), '08 项', 'heading count follows the color filter');
+   assert.equal(await colors.getAttribute("data-active"), "true");
+   await colors.click(); await page.getByRole("button", { name: "清除颜色筛选", exact: true }).click(); await page.keyboard.press("Escape");
+   await page.locator('[data-asset-id="tactical-0"]').waitFor();
++  assert.equal(await firstTitle.getAttribute('data-library-count'), '16 项', 'clearing color restores the actual total');
+ 
+   await card.hover();
+   const motion = await card.evaluate(element => {
+@@ -254,8 +297,15 @@
+   await page.mouse.move(0, 0); await card.hover();
+   assert.equal(await card.evaluate(element => getComputedStyle(element, "::after").animationName), "none");
+   await importButton.hover(); assert.ok(await importButton.evaluate(element => getComputedStyle(element).animationName === "none" && getComputedStyle(element, "::after").animationName === "none"));
++  const mediaSession = await page.context().newCDPSession(page);
++  await mediaSession.send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }] });
++  for (const theme of ['light', 'dark']) {
++    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
++    assert.equal(await page.locator('.library-view-switch').evaluate(element => getComputedStyle(element).backgroundColor), theme === 'light' ? 'rgb(255, 255, 255)' : 'rgb(49, 57, 59)', `${theme}: reduced transparency uses an opaque surface`);
++  }
++  await mediaSession.detach();
+   await page.emulateMedia({ forcedColors: "active" });
+   assert.equal(await page.locator(".library-tactical-backdrop").first().evaluate(element => getComputedStyle(element).display), "none");
+   assert.deepEqual(errors, []);
+-  console.log("PASS production tactical library: unchanged 1500/900/390 layout and CSS scope; clearer shadow-free project entry; 20% less transparent controls, active points, filter and square sticky title; visible-unfocused control/point flashes and clockwise edge motion for 400ms + delayed 160ms two flashes; media selection/video; safe background; keyboard, hidden/offscreen and reduced-motion/forced-color handling.");
++  console.log("PASS production tactical library: unchanged 1500/900/390 shell/gallery and CSS scope; unclipped import menus; neutral header groups and low-contrast project entry; real filtered tag counts and safe sidebar marks; isolated tab flashes; visible-unfocused control/point flashes and 400ms clockwise motion + 160ms two flashes; media selection/video; keyboard, hidden/offscreen, reduced-motion/transparency and forced colors.");
+ } finally { await browser.close(); await server.close(); }
+diff --git a/apps/desktop/scripts/toolbar-layout-ui.test.mjs b/apps/desktop/scripts/toolbar-layout-ui.test.mjs
+--- a/apps/desktop/scripts/toolbar-layout-ui.test.mjs
++++ b/apps/desktop/scripts/toolbar-layout-ui.test.mjs
+@@ -52,7 +52,7 @@
+           assert.equal(layout.aligned, true, context);
+           assert.equal(layout.searchHidden, true, context);
+           assert.equal(layout.labelsVisible, true, context);
+-          assert.ok(layout.controlHeights.every(height => height === 36), context);
++          assert.ok(layout.controlHeights.every(height => height === (layout.tactical ? 32 : 36)), context);
+           assert.ok(layout.controlRadii.every(radius => radius === (layout.tactical ? '0px' : '8px')), context);
+           assert.equal(layout.overflow, false, context);
+           assert.equal(layout.contained, true, context);

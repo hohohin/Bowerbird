@@ -565,6 +565,7 @@ pub async fn codex_create_image(
     ratio: Option<String>,
     provider: Option<String>,
     project_id: Option<String>,
+    dreamina_model_version: Option<String>,
     visual_profile_id: Option<String>,
     job_id: String,
     conversation_id: Option<String>,
@@ -581,6 +582,7 @@ pub async fn codex_create_image(
     diagnostic_id: Option<String>,
 ) -> Result<String, AppError> {
     // Record receipt before validation. These rows never enter the execution queue.
+    let dreamina_model = settings.get().dreamina_model_version;
     let diagnostic_job_id = job_id.clone();
     let diagnostic_id = match diagnostic_id {
         Some(id) => id,
@@ -595,6 +597,7 @@ pub async fn codex_create_image(
     };
     crate::core::generation_diagnostics::track_attempt(db.inner(), &diagnostic_id, &diagnostic_job_id, async {
     db.generation_diagnostic_phase(&diagnostic_id, &job_id, "validation", Some(&reference_images))?;
+    let dreamina_model = crate::codex::jimeng::image_model_version(dreamina_model_version.as_deref(), &dreamina_model)?;
     let internal_agent = internal_agent.unwrap_or(false);
     let media = media.unwrap_or_else(|| "image".into());
     if !matches!(media.as_str(), "image" | "video") {
@@ -957,11 +960,10 @@ pub async fn codex_create_image(
 
     // 先解析 provider（可能出错 → ?）：必须在注册 GENERATE_CANCEL 之前，否则出错提前返回
     // 会留下 stale cancel sender（下次 cancel_codex_create take 到它）。None → codex（默认）。
-    // 即梦模型版本每次生成都从 settings 重读 → 设置页热修改下一次生成即生效。
+    // 即梦模型使用提交时的快照，等待串行名额期间切换模型不影响当前任务。
     db.generation_diagnostic_phase(&diagnostic_id, &job_id, "task_setup", None)?;
     let cloud_context = crate::codex::is_cloud_generation_provider(provider.as_deref())
         .then(|| (cloud_client.inner().clone(), auth_client.inner().clone()));
-    let dreamina_model = settings.get().dreamina_model_version;
     let p = resolve_gen_provider(provider.as_deref(), cloud_context, Some(&dreamina_model))?;
     let provider_name = p.name().to_string();
 

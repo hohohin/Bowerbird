@@ -14,6 +14,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/FOLDER-MODE.md` | 文件优先工作区、独立分类、随图资料恢复、BowerbirdLibrary/历史素材迁移及共享文件转存 | 本机目录、文件夹分类、随图资料、资料迁移或项目删除文件归属相关工作前必读 |
 | `dev-doc/LOCAL-CLASSIFICATION.md` | 自动分类、Jev 图片匹配与 Cloud 补标签、本地模型包、人工保护与验证记录 | 自动/本地分类、Jev 图片判断、自动标签、分类模型下载与运行时相关工作前必读 |
 | `dev-doc/EMBEDDED-BROWSER.md` | 探索内置浏览器、登录资料持久化、网页拖图入库/画板落点、素材栏折叠与隔离 WebView2 验证 | 内置浏览器、探索工作区、网页拖图、探索联动画板素材栏与登录状态相关工作前必读 |
+| `apps/extension/README.md` | 浏览器插件安装／更新、探索页配置入口、浏览器取图与本机入库协议、独立副本及隔离测试 | 浏览器插件采集、配置教程、扩展打包或 Windows 独立加载副本相关工作前必读 |
 | `dev-doc/ONBOARDING.md` | 身份实操引导、三条真实操作路线、独立项目与进度恢复、跳步及隔离验证 | 入门引导、首启/升级介绍、引导素材导入或学习提示相关工作前必读 |
 | `dev-doc/DESKTOP-UPDATES.md` | 双端自动更新协议、密钥与发布流程、部署/回滚证据、验收边界及 Mac 协作共识 | 自动更新、更新包签名/清单发布、更新失败或双端上线状态核验前必读 |
 | `dev-doc/USER-FACING-ERRORS.md` | 全应用错误提示展示边界、中文转换、诊断保留与故障注入验证 | 新增或修改错误提示、任务失败展示、通知、安装授权及生产错误排查前必读 |
@@ -38,10 +39,13 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/DRAFT-EDITOR.md` | 最简草稿编辑器、画笔压感／惯性、图层／文字／自由选区／颜色板、工程快照、画板重试与隔离验证 | 新建草稿、画笔内核、草稿工程保存或删除清理相关工作前必读 |
 | `dev-doc/SEEDANCE-2.5-INTEGRATION.md` | 即梦 Seedance 2.5 视频接入、官方 CLI 四模式契约与验收证据 | 视频生成、参数、任务恢复、视频入库与播放相关工作前必读 |
 | `dev-doc/VIDEO-REPLICATION.md` | 画板工具箱、视频分析与改写、插入画板生成、抖音获取、Cloud 独立计费与验证 | 视频复刻、抖音参考视频获取或分析/改写启价相关工作前必读 |
+| `dev-doc/FILMCRAFT-RESEARCH.md` | FilmCraft 剪辑交互、时间线、变速、音频波形源码调研及 Bowerbird 轻剪辑建议（未定案） | 轻量视频剪辑方案、时间模型、波形缓存或 FilmCraft 复用评估前读 |
 | `dev-doc/COMFYUI-LOCAL-VIDEO.md` | 本机 ComfyUI H3 视频卡片、环境检测与一键安装、固定工作流参数、账号门控、任务恢复与隔离验证 | 本机 H3 视频、首尾帧或 ComfyUI 接入/安装相关工作前必读 |
 | `dev-doc/Eagle类创意收集工具调查报告.html` | 前序竞品调研，计划的依据 | 需要背景/对标时 |
 | `reference/theory.md` | 早期素材分类（A–F 类）草稿 | 仅在追溯原始意图时 |
 | `dev-doc/桌面端UI设计.html` | 早期三区外壳与创作板设计稿 | 仅作设计背景；当前 UI 契约读 PROJECT.md 与对应专项 |
+| `dev-doc/ui-studies/library-tactical-2026-10-26/README.md` | 素材库实装前样式、Tactical 确认稿、独立冻结预览及增量撤回补丁 | 恢复素材库旧样式、复现确认稿或核对本次接入范围时 |
+| `dev-doc/ui-studies/library-selection-2026-10-26/README.md` | 素材多选动效确认稿、独立预览、共用组件接入及验证记录 | 调整素材多选标记、核对图片边界／动效或恢复确认稿时 |
 | `Windows/README.md` | Windows x64 开发、构建 NSIS 安装包与环境要求 | Windows 运行 / 打包前 |
 | `Windows/MAC-SYNC-2026-10-16.md` | Windows 接收 mac@300124d 的差异、0034/分类/工作流/截图同步与验证 | 接续本轮 Mac 同步、核对 Windows 平台保留项及未发版边界时 |
 | `Windows/Windows端更新内容-26.10.1001.md` | 相对 Mac d6027fb 的 Windows 按版本更新清单，含 1001 后二维表格、Agent 会话生图、视频截帧及诊断源码 | Mac 接收截至 2026-10-15 的 dev、区分已发布 1001 与后续未发版源码、核对同步及原生验收时 |
@@ -54,6 +58,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `macOS/DEV-SYNC-2026-10-19.md` | Windows dev 文件优先工作区、素材导航、分类／视频增量的 Apple Silicon 接收与系统路径别名修复 | 接续 10 月 19 日 M 系列 Mac 同步、核对 SQLite 0040 与 ARM64 验证边界时 |
 | `macOS/DEV-SYNC-2026-10-22.md` | Windows 2201 共享增量的 Apple Silicon 接收、H3 暂缓清单与验证 | 接续本轮 Mac 同步、恢复 H3 增量或核对 SQLite 0042 与本机颜色缓存保留时 |
 | `macOS/DEV-SYNC-2026-10-25.md` | Windows 2202–2401 共享增量的 Apple Silicon 接收、H3 延续暂缓与工作流异步授权兼容修复 | 接续 10 月 25 日同步、恢复 H3 或核对 SQLite 0045、Bcoin／Pro 门控与原生媒体验证时 |
+| `macOS/DEV-SYNC-2026-10-28.md` | Windows 素材分栏／本机对话／受控建卡的 Apple Silicon 接收、H3 暂缓及 CLI 版本前提 | 接续 10 月 28 日同步、核对 SQLite 0047、独立同步工作区及原生验收边界时 |
 | `macOS/README.md` | Intel / Apple Silicon 开发运行、DMG 固定拖动安装规范、重打包脚本与交付检查 | macOS 开发 / 构建 / 重打包 / 交付 / 排障前必读 |
 
 ## 文档维护规则

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-shell";
-import { ArrowRight, BadgeCheck, Gift, LogOut, Moon, RefreshCw, Sun, UserRound } from "lucide-react";
+import { ArrowRight, Gift, LogOut, Moon, RefreshCw, Sun, UserRound } from "lucide-react";
 import { useStore, understandEngineUsable } from "../store";
 import { api } from "../lib/api";
 import { CODEX_ONBOARDING_ENABLED, DREAMINA_ONBOARDING_ENABLED, LEGACY_SETTINGS_ENABLED } from "../lib/featureFlags";
@@ -15,6 +15,7 @@ import { ScreenshotSettings } from "./ScreenshotSettings";
 import { AppUpdateCard } from "./AppUpdateCard";
 import { FileWorkspaceMoveDialog } from "./FileWorkspaceMoveDialog";
 import { CreditDetails } from "./CreditDetails";
+import { AccountBilling } from "./AccountBilling";
 import { userErrorMessage } from "../lib/userError";
 
 const STAGE_LABEL: Record<string, string> = {
@@ -480,7 +481,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
 
   const loggedIn = cloudAuth?.logged_in === true;
   const accountName = cloudAuth?.display_name || cloudAuth?.email || cloudAuth?.user_id || "";
-  const tier = cloudEntitlement?.tier?.toUpperCase() ?? "FREE";
+  const canStartTrial = loggedIn && cloudEntitlement?.tier === "free" && cloudEntitlement.offline_state !== "expired" && cloudEntitlement.offline_state !== "invalid";
   // 测试账号（bowerbird_test 标记，云端随权益快照下发）才追加「开发者选项」分区。
   const isTestAccount = cloudEntitlement?.is_test_account === true;
   const sections = isTestAccount ? [...SECTIONS, DEVELOPER_SECTION] : SECTIONS;
@@ -691,15 +692,12 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                   </button>}
                 </header>
 
-                {loggedIn ? <>
-                  <section className="settings-card account-membership p-4" aria-label="订阅权益">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <h3 className="flex items-center gap-2 font-medium text-ink"><BadgeCheck size={18} aria-hidden="true" />订阅权益</h3>
-                      <span className="rounded-full bg-panel2 px-3 py-1 text-xs font-semibold text-ink">{cloudEntitlement ? tier : "待同步"}</span>
-                    </div>
-                    <p className="mt-3 text-base font-semibold text-ink">{!cloudEntitlement ? "刷新权益，查看订阅状态" : tier === "FREE" ? "体验 Pro，拓展创作方式" : `${tier === "PRO" ? "Pro" : "Studio"} 功能权益已开启`}</p>
-                    <p className="mt-1 text-xs leading-5 text-muted">{tier === "FREE" ? "每个账号可领取一次 7 天功能体验，不含 Bcoin。" : "Cloud 服务按实际用量单独消耗 Bcoin。"}</p>
-                    {cloudEntitlement && tier === "FREE" && <>
+                <AccountBilling
+                  key={cloudAuth?.user_id ?? "guest"}
+                  loggedIn={loggedIn}
+                  entitlement={cloudEntitlement}
+                  trialAction={loggedIn && (canStartTrial || trialMessage) ? <>
+                    {canStartTrial && <>
                       <button type="button" className="account-action account-action-primary mt-4" disabled={trialBusy || cloudBusy} aria-busy={trialBusy} onClick={async () => {
                         if (trialBusy || cloudBusy) return;
                         setTrialBusy(true); setTrialMessage("");
@@ -713,13 +711,15 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                       <p className="mt-2 text-xs text-muted">到期不会自动扣款 · Cloud 另行计费</p>
                     </>}
                     {trialMessage && <p role="status" className="mt-3 rounded-md bg-panel2 p-3 text-xs leading-5 text-ink">{trialMessage}</p>}
-                  </section>
+                  </> : undefined}
+                />
 
+                {loggedIn ? <>
                   <section aria-label="兑换权益" className="space-y-2">
                     <RedeemCodeCard key={cloudAuth?.user_id} />
                     <p className="px-1 text-xs leading-5 text-muted">在线购买暂未开放，已有兑换码可在上方兑换。</p>
                   </section>
-                  <div className="settings-card p-4"><CreditDetails entitlement={cloudEntitlement} /></div>
+                  <div className="settings-card p-4"><CreditDetails entitlement={cloudEntitlement?.offline_state === "expired" || cloudEntitlement?.offline_state === "invalid" ? null : cloudEntitlement} /></div>
                   <footer className="flex justify-end border-t border-edge pt-3">
                     <button type="button" onClick={() => void logoutCloud()} disabled={cloudBusy || trialBusy} className="account-action"><LogOut size={14} aria-hidden="true" />登出账号</button>
                   </footer>

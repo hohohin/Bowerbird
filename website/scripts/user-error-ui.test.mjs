@@ -61,6 +61,9 @@ try {
   await page.goto(`http://127.0.0.1:1565/wechat-callback.html?error_description=${encodeURIComponent(raw)}`);
   await page.locator("#status").getByText("微信登录未完成，请回到发起页重新扫码。").waitFor();
   assert.ok(!(await page.locator("body").innerText()).includes(raw));
+  assert.equal(await page.locator("#primary").getAttribute("href"), "/", "failed login must offer a valid website exit instead of resending rejected codes");
+  assert.equal(await page.locator("#spinner").isVisible(), false, "failed login must stop loading");
+  assert.equal(await page.locator("#secondary").isVisible(), true, "failed login must retain the website exit");
   await page.evaluate(() => sessionStorage.setItem("bowerbird.wechatLoginState", "web_fixture"));
   await page.goto("http://127.0.0.1:1565/wechat-callback.html?state=web_fixture&code=synthetic");
   await page.locator("#status").getByText("微信登录未完成，请回到官网重新扫码。").waitFor();

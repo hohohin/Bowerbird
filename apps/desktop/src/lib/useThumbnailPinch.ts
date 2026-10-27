@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
+import { useLibraryPane } from "./libraryPane";
 import { useStore } from "../store";
 import { clampThumbnailWidth, MAX_THUMBNAIL_WIDTH, minThumbnailWidth, type ThumbnailScope } from "./thumbnailSize";
 
 /** Attach to the library region once, including all its embedded project grids. */
 export function useThumbnailPinch(scope: ThumbnailScope) {
+  const pane = useLibraryPane();
   const [element, setElement] = useState<HTMLElement | null>(null);
   useEffect(() => {
     if (!element) return;
     const readWidth = () => {
+      if (scope === "library" && pane) return pane.preferences.getState().width;
       const state = useStore.getState();
       return scope === "library" ? state.libraryThumbnailWidth : scope === "projects" ? state.projectsThumbnailWidth : state.canvasThumbnailWidth;
     };
@@ -25,7 +28,8 @@ export function useThumbnailPinch(scope: ThumbnailScope) {
       const next = clampThumbnailWidth(width, scope);
       if (next === lastApplied) return;
       lastApplied = next;
-      useStore.getState().setThumbnailWidth(scope, next);
+      if (scope === "library" && pane) pane.preferences.getState().setWidth(next);
+      else useStore.getState().setThumbnailWidth(scope, next);
     }
     function onWheel(event: WheelEvent) {
       // Chromium pinch uses Ctrl+wheel; also support explicit Ctrl/Cmd+wheel.
@@ -74,6 +78,6 @@ export function useThumbnailPinch(scope: ThumbnailScope) {
       element.removeEventListener("gesturechange", onGestureChange);
       element.removeEventListener("gestureend", onGestureEnd);
     };
-  }, [element, scope]);
+  }, [element, scope, pane]);
   return setElement;
 }

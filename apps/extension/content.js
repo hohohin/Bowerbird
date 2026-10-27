@@ -7,9 +7,12 @@
 
   const WS_URL = "ws://127.0.0.1:39871/ws";
   const XHS_HOST = "www.xiaohongshu.com";
+  const S = globalThis.BowerbirdCollection;
+  let collecting = false;
+  let scanning = false;
 
   // 心跳：让桌面端知道扩展已安装且当前浏览器可连接（每 15s 建短连发 ping）。
-  // 不影响采集（采集走独立的 save_batch 连接）；桌面端据此显示「扩展已连接」。
+  // 不影响采集（采集走独立的 save_blob 连接）；桌面端据此显示「扩展已连接」。
   function heartbeat() {
     try {
       const ws = new WebSocket(WS_URL);
@@ -22,7 +25,9 @@
   heartbeat();
   setInterval(heartbeat, 15000);
 
-  const btn = document.createElement("div");
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.setAttribute("aria-label", "采集网页图片");
   const btnLogo = document.createElement("img");
   btnLogo.src = chrome.runtime.getURL("icons/48x48.png");
   btnLogo.alt = "";
@@ -36,6 +41,8 @@
     "width:48px",
     "height:48px",
     "border-radius:12px",
+    "border:0",
+    "padding:0",
     "background:#0b1026",
     "overflow:hidden",
     "cursor:pointer",
@@ -50,12 +57,22 @@
   btn.addEventListener("mouseenter", () => (btn.style.opacity = "1"));
   btn.addEventListener("mouseleave", () => (btn.style.opacity = "0.85"));
   btn.addEventListener("click", async () => {
-    const batch = await collectMaterials();
-    if (batch.items.length === 0) {
-      showToast("未发现可采集素材", false);
-      return;
+    if (collecting || scanning) return;
+    scanning = true;
+    btn.disabled = true;
+    try {
+      const batch = S.limitBatch(await collectMaterials());
+      if (batch.items.length === 0) {
+        showToast("未发现可采集素材", false);
+        return;
+      }
+      showConfirm(batch);
+    } catch (error) {
+      showToast(S.failureMessage({ error: String(error) }), false, 12000);
+    } finally {
+      scanning = false;
+      btn.disabled = collecting;
     }
-    showConfirm(batch);
   });
   btn.addEventListener("dragover", (e) => {
     e.preventDefault();
@@ -67,16 +84,10 @@
   btn.addEventListener("drop", async (e) => {
     e.preventDefault();
     resetBtnStyle();
+    if (collecting || scanning) return;
     const candidates = candidatesFromDropEvent(e);
     if (candidates.length === 0) {
       showToast("未识别到图片地址", false);
-      return;
-    }
-    const local = candidates.find((item) => item.kind === "blob" || item.kind === "data");
-    if (local) {
-      showToast("采集中…");
-      const result = await saveLocalCandidate(local, location.href);
-      showCollectResult(result.ok);
       return;
     }
     saveBatch(makeGenericBatch(candidates));
@@ -88,7 +99,7 @@
     btn.style.boxShadow = "0 2px 12px rgba(0,0,0,0.35)";
   }
 
-  function showToast(text, ok = true) {
+  function showToast(text, ok = true, duration = 3000) {
     document.getElementById("__bowerbird_toast")?.remove();
     const t = document.createElement("div");
     t.id = "__bowerbird_toast";
@@ -98,6 +109,7 @@
       "bottom:80px",
       "right:24px",
       "padding:8px 12px",
+      "max-width:min(380px,calc(100vw - 48px))",
       "border-radius:6px",
       "font:13px -apple-system,sans-serif",
       "color:#fff",
@@ -105,12 +117,9 @@
       "z-index:2147483647",
       "box-shadow:0 2px 8px rgba(0,0,0,0.3)",
     ].join(";");
+    t.setAttribute("role", "status");
     document.documentElement.appendChild(t);
-    setTimeout(() => t.remove(), 3000);
-  }
-
-  function showCollectResult(ok) {
-    showToast(ok ? "采集成功" : "采集失败", ok);
+    if (duration > 0) setTimeout(() => t.remove(), duration);
   }
 
   async function collectMaterials() {
@@ -264,10 +273,13 @@
   }
 
   async function fetchXhsDetailState() {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), S.FETCH_TIMEOUT_MS);
     try {
       const response = await fetch(location.href, {
         credentials: "omit",
         headers: { Accept: "text/html" },
+        signal: controller.signal,
       });
       if (!response.ok) return null;
       const html = await response.text();
@@ -276,6 +288,8 @@
     } catch (err) {
       console.warn("Bowerbird: 小红书详情 HTML 读取失败，回退当前 DOM", err);
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -603,43 +617,20 @@
   }
 
   async function uploadLocalBytes(bytes, metadata) {
-    if (!bytes || bytes.byteLength === 0) return { ok: false, error: "页面图片字节为空" };
-    if (bytes.byteLength > 20 * 1024 * 1024) {
-      return { ok: false, error: "页面内嵌图片超过 20 MiB 上限" };
+    if (!bytes || bytes.byteLength === 0) return { ok: false, code: "invalid_image", error: "页面图片字节为空" };
+    if (bytes.byteLength > S.MAX_INLINE_BYTES) {
+      return { ok: false, code: "too_large", error: "页面内嵌图片超过 20 MiB 上限" };
     }
-    return new Promise((resolve) => {
-      let finished = false;
-      let ws;
-      const finish = (value) => {
-        if (finished) return;
-        finished = true;
-        clearTimeout(timer);
-        try { ws?.close(); } catch { /* ignore */ }
-        resolve(value);
-      };
-      const timer = setTimeout(() => finish({ ok: false, error: "桌面端接收图片超时" }), 55000);
-      try {
-        ws = new WebSocket(WS_URL);
-        ws.binaryType = "arraybuffer";
-        ws.onopen = () => {
-          ws.send(JSON.stringify({ type: "save_blob", ...metadata }));
-          ws.send(bytes);
-        };
-        ws.onmessage = (event) => {
-          try { finish(JSON.parse(event.data)); }
-          catch { finish({ ok: false, error: "桌面端响应无法解析" }); }
-        };
-        ws.onerror = () => finish({ ok: false, error: "无法连接 Bowerbird 桌面端" });
-      } catch (error) {
-        finish({ ok: false, error: String(error) });
-      }
-    });
+    return S.uploadBytes(bytes, metadata);
   }
 
   async function saveLocalCandidate(candidate, pageUrl) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), S.FETCH_TIMEOUT_MS);
     try {
-      const response = await fetch(candidate.url);
+      const response = await fetch(candidate.url, { signal: controller.signal });
       if (!response.ok) return { ok: false, error: `页面读取图片失败：HTTP ${response.status}` };
+      if (Number(response.headers.get("content-length")) > S.MAX_INLINE_BYTES) return { ok: false, code: "too_large" };
       const contentType = response.headers.get("content-type") || "";
       const bytes = await response.arrayBuffer();
       return uploadLocalBytes(bytes, {
@@ -652,7 +643,9 @@
         candidate_source: candidate.source,
       });
     } catch (error) {
-      return { ok: false, error: `页面读取内嵌图片失败：${String(error)}` };
+      return { ok: false, code: error?.name === "AbortError" ? "fetch_timeout" : "fetch_failed", error: String(error) };
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -673,7 +666,7 @@
         candidate_source: "canvas",
       });
     } catch (error) {
-      return { ok: false, error: `Canvas 无法导出（可能受跨域保护）：${String(error)}` };
+      return { ok: false, code: "canvas_blocked", error: String(error) };
     }
   }
 
@@ -681,14 +674,13 @@
     "click",
     async (e) => {
       if (!e.altKey) return;
+      if (collecting || scanning) return;
       const path = typeof e.composedPath === "function" ? e.composedPath() : [e.target];
       const canvas = path.find((node) => node?.tagName === "CANVAS");
       if (canvas) {
         e.preventDefault();
         e.stopPropagation();
-        showToast("采集中…");
-        const result = await saveCanvas(canvas, location.href);
-        showCollectResult(result.ok);
+        saveBatch({ items: [{ canvas, source_url: location.href }] });
         return;
       }
       const image = path.find((node) => node?.tagName === "IMG");
@@ -709,73 +701,29 @@
       e.stopPropagation();
       const noteLink = sourceElement?.closest?.('a[href*="/explore/"]')?.href;
       candidates = candidates.map((item) => ({ ...item, explicit: true, pageUrl: noteLink || location.href }));
-      const local = candidates.find((item) => item.kind === "blob" || item.kind === "data");
-      if (local) {
-        showToast("采集中…");
-        const result = await saveLocalCandidate(local, noteLink || location.href);
-        showCollectResult(result.ok);
-        return;
-      }
       saveBatch(makeGenericBatch(candidates, noteLink || location.href));
     },
     true
   );
 
-  function saveBatch(batch) {
-    if (batch.items.length === 0) return;
-    showToast("采集中…");
-    saveViaWs(batch).then((response) => {
-      const results = Array.isArray(response?.results) ? response.results : [response];
-      showCollectResult(results.length > 0 && results.every((item) => item?.ok));
-    });
-  }
-
-  // 浏览器内取图：逐项交给 background service worker fetch（自动走浏览器系统代理 + Cookie），
-  // background 再经 save_blob（metadata text + binary bytes）上传桌面端。避免桌面 reqwest 二次下载
-  // 丢代理/登录态；Pinterest 等国外/Cookie 保护站走这条成熟路径。
-  async function saveViaWs(batch) {
-    const results = [];
-    for (const item of batch.items) {
-      const result = await new Promise((resolve) => {
-        let settled = false;
-        const finish = (value) => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timer);
-          resolve(value);
-        };
-        const timer = setTimeout(
-          () => finish({ ok: false, error: "扩展后台读取图片超时" }),
-          55000
-        );
-        try {
-          chrome.runtime.sendMessage(
-            {
-              type: "save_image",
-              url: item.media_url,
-              pageUrl: item.source_url || location.href,
-              candidateKind: item.candidate_kind || "image-url",
-              candidateSource: item.candidate_source || "unknown",
-            },
-            (response) => {
-              if (chrome.runtime.lastError) {
-                finish({ ok: false, error: chrome.runtime.lastError.message });
-              } else {
-                finish(response || { ok: false, error: "扩展后台未响应" });
-              }
-            }
-          );
-        } catch (error) {
-          finish({ ok: false, error: String(error) });
-        }
-      });
-      results.push(result);
+  async function saveBatch(batch) {
+    if (collecting || batch.items.length === 0) return;
+    collecting = true;
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    hideConfirm();
+    try {
+      // 普通 URL 由后台继承浏览器会话取图；页面 blob/data 只能在当前页面读取。
+      const summary = await S.runBatch(batch.items, {
+        remote: (item) => S.requestBackground({ ...item, source_url: item.source_url || location.href }),
+        local: (item) => saveLocalCandidate({ url: item.media_url, source: item.candidate_source }, item.source_url || location.href),
+        canvas: (item) => saveCanvas(item.canvas, item.source_url || location.href),
+      }, (progress) => showToast(S.progressMessage(progress), true, 0));
+      showToast(S.progressMessage(summary, true), summary.failed === 0 && summary.unconfirmed === 0, 12000);
+    } finally {
+      collecting = false;
+      btn.disabled = false;
+      btn.setAttribute("aria-busy", "false");
     }
-    return {
-      ok: results.every((item) => item?.ok),
-      saved: results.filter((item) => item?.ok).length,
-      total: results.length,
-      results,
-    };
   }
 })();

@@ -138,6 +138,19 @@ fn forward_auth_callback(app: &tauri::AppHandle, value: &str) {
     if !wechat && !email {
         return;
     }
+    // A browser callback reaches the existing instance in the background. Restore
+    // its window before exchanging the code so login progress/errors are visible.
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(error) = window.show() {
+            tracing::warn!(%error, "failed to show auth callback window");
+        }
+        if let Err(error) = window.unminimize() {
+            tracing::warn!(%error, "failed to restore auth callback window");
+        }
+        if let Err(error) = window.set_focus() {
+            tracing::warn!(%error, "failed to focus auth callback window");
+        }
+    }
     let handle = app.clone();
     let callback = value.to_string();
     tauri::async_runtime::spawn(async move {
@@ -302,6 +315,7 @@ pub fn run() {
             }
             let db = Arc::new(db::Database::open(&paths.db)?);
             db.migrate()?;
+            db.recover_local_chats()?;
             db.initialize_classification_presets()?;
             db.recover_project_deletions(&paths)?;
             // Execute explicitly requested file-root migration before any background writer.
@@ -640,6 +654,11 @@ pub fn run() {
             commands::prompt::list_prompts_by_asset,
             commands::prompt::assemble_pack,
             commands::codex::codex_health,
+            commands::local_chat::local_chat_list,
+            commands::local_chat::local_chat_get,
+            commands::local_chat::local_chat_send,
+            commands::local_chat::local_chat_stop,
+            commands::local_chat_cards::local_chat_cards_undo,
             commands::codex::codex_generate_prompt_for_asset,
             commands::codex::codex_describe_asset,
             commands::codex::cancel_codex_describe,

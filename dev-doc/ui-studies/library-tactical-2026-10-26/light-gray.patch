@@ -1,0 +1,12 @@
+diff --git a/apps/desktop/src/components/LibraryTactical.css b/apps/desktop/src/components/LibraryTactical.css
+--- a/apps/desktop/src/components/LibraryTactical.css
++++ b/apps/desktop/src/components/LibraryTactical.css
+@@ -17,7 +17,7 @@
+   --library-glass-selected-shadow: none;
+ }
+ html[data-theme="light"] .library-tactical {
+-  --lt-base: #f5f4f0;
++  --lt-base: #e6e7e5;
+   --lt-screen: rgb(235 237 233 / .776);
+   --lt-panel: rgb(243 244 240 / .936);
+   --lt-hover-screen: rgb(221 225 221 / .84);

@@ -86,6 +86,7 @@ fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>, ch
         "SELECT supporting_asset_ids FROM visual_profile_rules v JOIN project_visual_profiles p ON p.id=v.profile_id WHERE ?1 IS NOT NULL",
         "SELECT opposing_asset_ids FROM visual_profile_rules v JOIN project_visual_profiles p ON p.id=v.profile_id WHERE ?1 IS NOT NULL",
         "SELECT reference_asset_ids FROM cloud_agent_runs WHERE ?1 IS NOT NULL",
+        "SELECT m.reference_asset_ids FROM local_chat_messages m JOIN local_chat_conversations c ON c.id=m.conversation_id WHERE c.project_id<>?1",
         "SELECT snapshot_json FROM cloud_agent_runs WHERE project_id IS NOT ?1",
         "SELECT checkpoint_json FROM local_agent_runs WHERE ?1 IS NOT NULL",
         "SELECT payload FROM task_queue WHERE project_id IS NOT ?1",

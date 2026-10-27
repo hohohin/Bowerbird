@@ -145,7 +145,7 @@ export function AssetContextMenu() {
   const canvasMulti = !!menu.canvasSelection && menu.canvasSelection.nodeIds.length > 1;
   const multiIds = canvasMulti ? [...new Set(menu.canvasSelection!.assetIds ?? [])]
     : menu.fileSelection ? menu.fileSelection.assets.length > 1 ? menu.fileSelection.assets.map(asset => asset.id) : null
-    : !menu.canvasSelection && mode === "manage" && selectedIds.size > 1 && selectedIds.has(assetId) ? [...selectedIds] : null;
+    : !menu.singleAsset && !menu.canvasSelection && mode === "manage" && selectedIds.size > 1 && selectedIds.has(assetId) ? [...selectedIds] : null;
   const targetIds = multiIds ?? [assetId];
   const knownAssets = menu.fileSelection?.assets ?? (selectionAssets?.menu === menu ? selectionAssets.assets : assets);
   const targets = targetIds.map(id => id === assetId ? asset ?? knownAssets.find(a => a.id === id) : knownAssets.find(a => a.id === id));
