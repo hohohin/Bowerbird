@@ -2,6 +2,17 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## Windows 26.10.2801 发布准备（2026-10-28）
+
+经用户确认，将 2401 后已存档的桌面增量与官网生成网关修复一并发版：素材库分栏／Tactical 样式与多选、浏览器插件 0.2.0 采集、连续瀑布流、本机图文对话／历史与受控建卡、常用素材／手动固定、HEIC 导入和按区域拖放／粘贴、账号展示及微信回跳，并包含 Cloud 生成／签名文件官网网关的 10054 修复。SQLite 0047；先提交代码、版本和文档并推送，再从提交冻结构建。中文／English 安装器、原 updater 公钥、应用内更新保留登录均沿用。
+
+本轮检查：完整 TypeScript、Rust **762 passed / 26 ignored**、五组桌面 Chromium、27 项官网网关／更新及官网构建通过。首次沙箱阻止本地服务，提权复跑；对话测试修正原生光标同步时序后通过。此前四次存档已分别验证分栏、插件、本机工具、HEIC 等增量。
+
+官网候选必须复制最新现役 `/opt/bowerbird/website-releases/20261028-cloud-gateway`，保留 `cloud-proxy.mjs`、Nginx `/api/cloud/`、账号网关、后台昵称及 Mac 清单。新目录计划 `20261028-windows-26.10.2801`，回滚到上述网关基线；不能回退到没有网关的官网。先上传并完整核验 TOS／CDN 安装包与原公钥签名，再切 Windows 更新清单和双首页下载。暂未声称安装包或通道已发布；结果待完成后补记。
+
+证据目录 `.tmp/release-windows-26.10.2801/`。不调用真实付费模型、不替用户安装／重启应用；原故障电脑完整生成／账单及真实用户库升级待实机验收。Mac、Cloud 视频未启价及支付 Mock 边界保持。
+
+
 ## 2026-10-24 Windows 26.10.2401 已发布
 
 源码 fd948497 已存档推送，视频导入、创作框 H3 首尾帧／环境安装与驱动指引、项目管理／删除预检与剩余结果处理、右键取消连线、视频复刻多来源及普通文本／语音转写、分类内部英文规则、Bcoin 账号／试用与工作流门控、设置精简及中文错误提示、中文／English 安装语言选择已签名上线。TypeScript／Vite、Rust **700 passed / 24 ignored**、18 组桌面 Chromium、前端逻辑／Bcoin 与分类 PGlite、24 项 Deno、32 项 Worker、官网错误提示／网关／更新和构建通过。双语 NSIS 与更新登录保留、冻结输入、资源、签名及 CDN 完整下载通过。SQLite 0045；Cloud 0075／jev-proxy v10 先行部署，Mac 保持。安装包 `Windows/dist/Bowerbird_26.10.2401_x64-setup.exe`；完整证据与回滚见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。

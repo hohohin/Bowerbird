@@ -33,7 +33,16 @@ try {
   await mode('图片').click(); assert.equal(await editor.innerText(), '图片模式的独立草稿');
   await mode('视频').click(); assert.equal(await editor.innerText(), '视频模式的独立草稿');
   await mode('对话').click(); assert.equal(await editor.innerText(), '给荷月礼盒三个视觉方向');
-  await editor.press('End'); await editor.press('Enter'); await page.keyboard.insertText('保留粉灰色关系');
+  await editor.click(); await editor.press('Control+End');
+  // Native selectionchange follows the key event; let the editor observe the
+  // restored draft's caret before the next key splits its paragraph.
+  await page.waitForFunction(() => {
+    const selection = window.getSelection();
+    return selection?.isCollapsed && selection.anchorNode?.textContent === '给荷月礼盒三个视觉方向'
+      && selection.anchorOffset === '给荷月礼盒三个视觉方向'.length;
+  });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await editor.press('Enter'); await page.keyboard.insertText('保留粉灰色关系');
   await editor.press('Shift+Enter'); await page.keyboard.insertText('包装正面留白');
   const openingText = '给荷月礼盒三个视觉方向\n保留粉灰色关系\n包装正面留白';
   assert.deepEqual(await editor.locator('p').allTextContents(), openingText.split('\n'));

@@ -50,6 +50,12 @@ impl CloudConfig {
         if !self.is_available() {
             return None;
         }
+        if function == "generate-proxy" && self.account_api_url.is_some() {
+            let mut url = self.generation_gateway()?;
+            url.set_path("/api/cloud/functions/v1/generate-proxy");
+            url.set_query(Some(&format!("forceFunctionRegion={FUNCTION_REGION}")));
+            return Some(url.into());
+        }
         let base = self.supabase_url.as_deref()?.trim().trim_end_matches('/');
         if base.is_empty() {
             return None;
@@ -57,6 +63,45 @@ impl CloudConfig {
         Some(format!(
             "{base}/functions/v1/{function}?forceFunctionRegion={FUNCTION_REGION}"
         ))
+    }
+
+    fn generation_gateway(&self) -> Option<reqwest::Url> {
+        let mut url = reqwest::Url::parse(self.account_api_url.as_deref()?).ok()?;
+        if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
+            return None;
+        }
+        url.set_query(None);
+        url.set_fragment(None);
+        Some(url)
+    }
+
+    /// Only signed generation objects from our configured Cloud may use the gateway.
+    /// Keep the signature query byte-for-byte; the gateway does not mint credentials.
+    pub fn generation_transfer_url(&self, signed_url: &str, upload: bool) -> Option<String> {
+        let source = reqwest::Url::parse(signed_url).ok()?;
+        let upstream = reqwest::Url::parse(self.supabase_url.as_deref()?).ok()?;
+        let prefix = if upload {
+            "/storage/v1/object/upload/sign/generation-temp/jobs/"
+        } else {
+            "/storage/v1/object/sign/generation-temp/jobs/"
+        };
+        if source.scheme() != "https" || source.origin() != upstream.origin()
+            || !source.username().is_empty() || source.password().is_some()
+            || source.fragment().is_some() || !source.path().starts_with(prefix)
+        {
+            return None;
+        }
+        let query: Vec<_> = source.query_pairs().collect();
+        if query.len() != 1 || query[0].0 != "token" || query[0].1.is_empty() {
+            return None;
+        }
+        if self.account_api_url.is_none() {
+            return Some(source.into());
+        }
+        let mut target = self.generation_gateway()?;
+        target.set_path(&format!("/api/cloud{}", source.path()));
+        target.set_query(source.query());
+        Some(target.into())
     }
 }
 
@@ -92,7 +137,7 @@ mod tests {
     }
 
     #[test]
-    fn account_gateway_does_not_reroute_generation_or_storage() {
+    fn generation_uses_separate_gateway_without_rerouting_other_functions() {
         let config = CloudConfig {
             supabase_url: Some("https://example.supabase.co".into()),
             supabase_publishable_key: Some("sb_publishable_test".into()),
@@ -104,10 +149,45 @@ mod tests {
             ));
         }
         assert_eq!(config.account_endpoint("generate-proxy"), None);
-        assert!(config.endpoint("generate-proxy").unwrap().starts_with("https://example.supabase.co/"));
+        assert_eq!(config.endpoint("generate-proxy").unwrap(), "https://bowerbird.cn/api/cloud/functions/v1/generate-proxy?forceFunctionRegion=ap-northeast-1");
+        assert!(config.endpoint("understand-proxy").unwrap().starts_with("https://example.supabase.co/"));
         assert_eq!(config.auth_base_url(), Some("https://bowerbird.cn/api/account/"));
         let direct = CloudConfig { account_api_url: None, ..config };
         assert_eq!(direct.auth_base_url(), Some("https://example.supabase.co"));
         assert!(direct.account_endpoint("wechat-login").unwrap().starts_with("https://example.supabase.co/"));
+    }
+
+    #[test]
+    fn signed_generation_transfers_preserve_tokens_and_reject_untrusted_origins() {
+        let config = CloudConfig {
+            supabase_url: Some("https://example.supabase.co".into()),
+            supabase_publishable_key: Some("public".into()),
+            account_api_url: Some("https://bowerbird.cn/api/account".into()),
+        };
+        for (upload, path) in [
+            (false, "sign/generation-temp/jobs/id/outputs/result.mp4"),
+            (false, "sign/generation-temp/jobs/id/outputs/result.png"),
+            (false, "sign/generation-temp/jobs/id/outputs/result.json"),
+            (true, "upload/sign/generation-temp/jobs/id/inputs/video-0.mov"),
+        ] {
+            let source = format!("https://example.supabase.co/storage/v1/object/{path}?token=a%2Bb.c%2Fd");
+            assert_eq!(config.generation_transfer_url(&source, upload).unwrap(), source.replace("https://example.supabase.co", "https://bowerbird.cn/api/cloud"));
+            let direct = CloudConfig { account_api_url: None, ..config.clone() };
+            assert_eq!(direct.generation_transfer_url(&source, upload), Some(source));
+        }
+        let source = "https://example.supabase.co/storage/v1/object/sign/generation-temp/jobs/id/outputs/result.png?token=signed";
+        for bad in [
+            source.replace("https:", "http:"),
+            source.replace("example.supabase.co", "example.supabase.co.evil.test"),
+            source.replace("example.supabase.co", "user@example.supabase.co"),
+            source.replace("generation-temp", "other-bucket"),
+            source.replace("?token=signed", ""),
+            format!("{source}&token=second"),
+            format!("{source}&url=https://evil.test"),
+            format!("{source}#fragment"),
+        ] {
+            assert_eq!(config.generation_transfer_url(&bad, false), None, "{bad}");
+        }
+        assert_eq!(config.generation_transfer_url(source, true), None);
     }
 }

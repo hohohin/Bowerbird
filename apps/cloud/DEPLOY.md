@@ -378,6 +378,29 @@ Secrets 仅新增 `COMFY_TOS_ACCESS_KEY_ID`、`COMFY_TOS_SECRET_ACCESS_KEY`，�
 
 代码、候选/现役/公网拒绝未授权、三平台更新保持、账号网关及 6 个对象真实签名 Range/匿名/过期拒绝已验证。自动审批阻止了临时生产账号写入验收，因此没有声称线上真实 Pro 登录至下载的完整链路通过；全新安装/GPU 和新客户端发布仍待完成。证据本机 `.tmp/tos-migration/comfy-*` 及 VPS `/tmp/bowerbird-comfy-tos/`。当前公开桌面包仍使用旧安装器，须发布包含新原生代码的版本。
 
+### 5.7 生成与签名文件官网网关（2026-10-28，已部署，客户端待发布）
+
+`website/cloud-proxy.mjs` 由 `server.mjs` 挂载到 `/api/cloud/`；独立于账号入口，不放宽账号的 64 KiB 限制。桌面 `CloudConfig.endpoint("generate-proxy")` 使用现有官方账号配置的同源 `/api/cloud/functions/v1/generate-proxy`，其他函数保持原路由。`generation_transfer_url` 只接受原配置 Supabase 同源、HTTPS、私有生成桶的签名地址，再改为官网入口，保留原 token 查询字符串；账号网关配置为空的隔离测试仍使用测试上游。
+
+- POST 只开放 `generate-proxy`，要求用户 Bearer、JSON 对象，最多 20 MiB；固定区域 `ap-northeast-1`，正文和正常业务 JSON 原样转发，响应 JSON 最多 1 MiB。Supabase 继续校验用户、任务归属、价格和预授权。共用该函数的图层任务也走此入口，其 JSON 文件走下述签名下载。
+- PUT 只开放 `storage/v1/object/upload/sign/generation-temp/jobs/<UUID>/inputs/video-<index>.mp4|mov?token=...`，要求 MP4／QuickTime MIME 和精确 Content-Length，最多 200 MiB；GET 只开放相同桶下 `jobs/<UUID>/outputs/result.png|jpg|webp|mp4|json` 的签名路径。没有通用代理目标、任意对象或管理入口。
+- 文件流式转发，不缓存在内存或磁盘；下载传输上限 500 MiB，桌面原有图片 20 MiB／视频 500 MiB／图层包 256 MiB 和大小／SHA-256 校验保持。签名由原 Storage 颁发，网关不签发凭据，不向 Storage 额外转发用户 Bearer／Cookie／API key。
+- 上游仅取既有 `SUPABASE_URL` 和 publishable/anon key，不需要 service role。拒绝跳转，不自动重发任何请求；中断或超时保留原任务查询语义，不改变幂等键、上传完成确认或计费。请求总上限 180 秒，客户端断开即中止上游；每 IP 300 次/分钟、最多 10,000 个内存桶、全局最多 8 个在途请求。仅 loopback 加显式 `BOWERBIRD_TRUST_PROXY=1` 才接受被 Nginx 覆写的 X-Real-IP。
+
+部署顺序：
+
+1. 基于现役官网创建独立候选目录，复制 `server.mjs` 与 **`cloud-proxy.mjs`**，保留现役账号模块、配置、静态文件、安装包和更新清单；不要用旧本地整站覆盖现役。仅不可变下载包可共享硬链接。
+2. 将 `website/deploy/cloud-gateway.nginx.conf` 合入官网 TLS server，保持 `/api/account/` 原配置。新入口 200 MiB 上限、关闭请求／响应缓存与缓冲、关闭重试及请求日志；Node 上游仍为 `127.0.0.1:4173`。候选及 `nginx -t` 通过后才原子切换并重启／重载。
+3. 验证公网未登录生成 401、非法路径拒绝、健康检查及旧账号／三平台更新入口。使用独立测试会话验证原任务查询、签名上传下载；真实付费模型验收单独记录，不能用匿名 401 声称生成成功。
+4. 网关在线验收后才发布包含新路由的桌面版本。旧桌面仍走旧生成路径；仅部署官网不能修复已安装旧包。客户端发布前可以完整回退官网候选；发布后必须保留新入口，除非同步回退所有受影响客户端，不回退数据库／账本／Worker。
+
+验证：`node --test --test-timeout=10000 website/scripts/cloud-proxy.test.mjs website/scripts/account-proxy.test.mjs website/scripts/app-updater.test.mjs` 共 27 项通过；Rust `cloud::` 46 项、`commands::layers` 4 项通过。覆盖模拟 10054／超时不重发、原任务身份／业务错误保持、恶意目标与跳转拒绝、请求限额、真实 Node fetch 回环上传／下载、上游未完成即收到文件字节、客户端断开取消、并发上限、慢请求及账号／更新兼容。没有调用真实模型，也没有在故障电脑验证；官网网关及 Nginx 配置已上线，现役 Windows 包仍为 26.10.2401，客户端尚待发版。视频服务和价格继续保持既有关闭状态，不随此网关发布自动开启。
+
+
+**2026-10-28 部署证据：** 北京时间 14:58 完成，现役官网为 `/opt/bowerbird/website-releases/20261028-cloud-gateway`，上一版 `20261025-admin-nickname` 保留。从现役复制，84 个原文件逐项保持，只有 `server.mjs` 改动并新增 `cloud-proxy.mjs`；不可变安装包共享硬链接，配置、首页、后台和更新清单保持独立原副本。现役环境保持 root 600，候选使用 sudo 启动，未放宽权限。Node 18.19.1 下 27 项回归通过；Nginx 配置检查、候选 4174／现役 4173／公网健康、二维码、匿名及无效用户生成鉴权、无效上传／下载签名拒绝、非法路由和三平台更新回归通过，页面／后台／清单哈希与部署前一致。临时候选已退出，官网服务 active。只读／拒绝请求没有创建生成任务或扣费；不能以此代替已登录原机生成验收。
+
+`server.mjs` SHA-256：`97db617660fd78df2066757e7b1d80272ec995a193958b56a1388850adf77f21`；`cloud-proxy.mjs`：`375895f636e317659bc4ddfd0ae6d945341423a86e1d1abe740ec1a158623e0e`；原 `account-proxy.mjs` 仍为 `363bdde73b028bcaf90cb31dfb0af756abeab7955c61cf0b87f3eb2bd875a53e`。本机证据 `.tmp/cloud-gateway-20261028/`，服务器 `/tmp/bowerbird-cloud-gateway-20261028/` 保存候选／现役／公网报告、原 Nginx 配置与 `rollback.sh`。该脚本仅允许当前为本轮或原基线，恢复原目录和 Nginx 并重启／重载；客户端发布后不得直接撤销新入口。没有部署 Edge、Worker 或数据库迁移，没有修改视频开关／定价、账号配置、安装包或更新清单。发版对话接手时必须基于本轮现役目录，保留新的 `cloud-proxy.mjs` 与 Nginx 入口，不能用旧整站覆盖。
+
 ## 6. 验证
 
 ```bash

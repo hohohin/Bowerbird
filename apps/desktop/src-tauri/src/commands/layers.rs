@@ -461,15 +461,10 @@ pub async fn layer_cloud_request(
         if artifact["mime"] != "application/json" || size == 0 || size > MAX_WORKSPACE as u64 {
             return Err(invalid());
         }
-        let parsed = reqwest::Url::parse(url).map_err(|_| invalid())?;
-        let endpoint = reqwest::Url::parse(&cloud.config().endpoint("generate-proxy").unwrap())
-            .map_err(|_| invalid())?;
-        if parsed.origin() != endpoint.origin() {
-            return Err(invalid());
-        }
+        let download_url = cloud.config().generation_transfer_url(url, false).ok_or_else(invalid)?;
         let mut response = cloud
             .http()
-            .get(url)
+            .get(download_url)
             .send()
             .await
             .map_err(|_| AppError::Cloud("图层包下载失败，可继续取回原任务".into()))?;
