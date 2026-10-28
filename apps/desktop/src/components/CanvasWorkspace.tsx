@@ -46,6 +46,7 @@ import {
   type DragEvent,
   type CSSProperties,
   type PointerEvent,
+  type SyntheticEvent,
   type WheelEvent,
 } from "react";
 import { ContextMenu, DeleteSubmenu } from "./ContextMenu";
@@ -86,6 +87,7 @@ import {
 } from "lucide-react";
 import { LibrarySourceTabs } from "./LibrarySourceTabs";
 import { LibraryCatalogTransition } from "./LibraryCatalogTransition";
+import { CanvasFrequentAssets, useCanvasFrequentAssets } from "./CanvasFrequentAssets";
 import { Lightbox } from "./Lightbox";
 import { videoTime, type VideoFrame } from "../lib/videoFrame";
 import type { VideoTrimRequest } from "../lib/videoTrim";
@@ -101,6 +103,7 @@ import { CloudAgentSession } from "./CloudAgentPanel";
 import { AgentApprovalToggle } from "./AgentApprovalToggle";
 import { CreativeTimeline, generationStatusLabel } from "./CreativeTimeline";
 import { api } from "../lib/api";
+import { externalFiles } from "../lib/externalFiles";
 import { countCloudAgentResultImages, selectCloudAgentResultArtifacts } from "../lib/cloudAgentResult";
 import { getDragAssets } from "../lib/dragPayload";
 import {
@@ -175,7 +178,8 @@ import {
 } from "../lib/creativeLaunch";
 import { createOrderedWriteJournal, drainOrderedWriteJournal } from "../lib/orderedWriteJournal";
 import { useStore } from "../store";
-import { EXPLORER_CANVAS_DROP_EVENT, type ExplorerCanvasDropDetail } from "../lib/explorerCanvasDrop";
+import { EXPLORER_CANVAS_DROP_EVENT, prepareExplorerCanvasDrop, type ExplorerCanvasDropDetail } from "../lib/explorerCanvasDrop";
+import { importDroppedMedia, prepareMediaImport } from "../lib/mediaImport";
 import type {
   Asset,
   AnnotationMeta,
@@ -371,8 +375,8 @@ function FolderPreview({
     <div className="canvas-folder-grid" aria-hidden="true">
       {node.assets.slice(0, 4).map((asset) => {
         const path = canvasAssetMediaPath(asset);
-        return isVideoPath(asset.storePath) ? <VideoPoster key={asset.id} data-canvas-filter={filterState(asset)} path={asset.storePath} poster={asset.thumbPath} alt={asset.name} onContextMenu={event => onAssetContextMenu(event, asset)} /> : path ? (
-          <div key={asset.id} data-canvas-filter={filterState(asset)} className="relative min-h-0" onContextMenu={(event) => onAssetContextMenu(event, asset)}>
+        return isVideoPath(asset.storePath) ? <VideoPoster key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} path={asset.storePath} poster={asset.thumbPath} alt={asset.name} onContextMenu={event => onAssetContextMenu(event, asset)} /> : path ? (
+          <div key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} className="relative min-h-0" onContextMenu={(event) => onAssetContextMenu(event, asset)}>
             <img
               src={convertFileSrc(path)}
               alt=""
@@ -382,7 +386,7 @@ function FolderPreview({
             {asset.assetId && layerWorkspaceIds.has(asset.assetId) && <span className="pointer-events-none absolute left-1 top-1 z-10 rounded-full bg-black/70 px-1.5 py-1 text-white backdrop-blur" title="有分层工程" aria-label="有分层工程"><Layers size={12} /></span>}
           </div>
         ) : (
-          <span key={asset.id} data-canvas-filter={filterState(asset)} onContextMenu={(event) => onAssetContextMenu(event, asset)}>
+          <span key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} onContextMenu={(event) => onAssetContextMenu(event, asset)}>
             {asset.name.slice(0, 1)}
           </span>
         );
@@ -476,6 +480,11 @@ export function CanvasWorkspace({
   const [viewMode, setViewMode] = useState<CreativeViewMode>("canvas");
   const [composerSeedIds, setComposerSeedIds] = useState<string[]>([]);
   const sourceCollapsed = !useStore(state => state.canvasLibraryOpen);
+  const frequentLibrary = useCanvasFrequentAssets(!sourceCollapsed, projectId);
+  const [frequentPicking, setFrequentPicking] = useState(false);
+  const frequentPickingRef = useRef(frequentPicking);
+  frequentPickingRef.current = frequentPicking;
+  useEffect(() => { setFrequentPicking(false); }, [projectId, exploring]);
   const setCanvasLibraryOpen = useStore(state => state.setCanvasLibraryOpen);
   const setSourceCollapsed = useCallback((collapsed: boolean) => setCanvasLibraryOpen(!collapsed), [setCanvasLibraryOpen]);
   const sourcePanelRef = useRef<HTMLElement>(null);
@@ -563,6 +572,7 @@ export function CanvasWorkspace({
   );
   const workspaceRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const lastImportPointRef = useRef<{ projectId: string; x: number; y: number } | null>(null);
   const nodesRef = useRef(nodes);
   const graphNodesRef = useRef(graphNodes);
   const focusedThreadIdRef = useRef(focusedThreadId);
@@ -650,6 +660,13 @@ export function CanvasWorkspace({
     conversationImageClickRef.current = undefined;
   }
   useEffect(() => cancelConversationImageClick, [projectId, boardOpen, genEditing]);
+  useEffect(() => {
+    if (!frequentPicking) return;
+    setDrawingTool("select");
+    cancelConversationImageClick();
+    setPromptMenu(null);
+    useStore.getState().closeContextMenu();
+  }, [frequentPicking]);
   function conversationImages(id: string) {
     return (conversationCardsRef.current.cards.get(id)?.outputs ?? []).flatMap(output => {
       const material = nodes.find(item => item.kind === "asset" && item.id === output.id);
@@ -772,9 +789,10 @@ export function CanvasWorkspace({
     for (const asset of promptedAssets) map.set(asset.id, asset);
     for (const asset of assets) map.set(asset.id, asset);
     for (const asset of catalogAssets) map.set(asset.id, asset);
+    for (const asset of [...frequentLibrary.items.frequent, ...frequentLibrary.items.pinned]) map.set(asset.id, asset);
     for (const asset of canvasAssets) map.set(asset.id, asset);
     return map;
-  }, [assets, canvasAssets, catalogAssets, promptedAssets]);
+  }, [assets, canvasAssets, catalogAssets, frequentLibrary.items, promptedAssets]);
   const assetByIdRef = useRef(assetById);
   assetByIdRef.current = assetById;
   const generatedAssetIds = useMemo(() => new Set(graphNodes
@@ -1727,10 +1745,15 @@ export function CanvasWorkspace({
         && workspaceRef.current?.contains(target)
         && !!target.closest('.creation-editor .ProseMirror, [data-generation-composer] .ProseMirror');
       if (!composerTab && event.key !== "Escape" && (target?.isContentEditable || target?.closest('input, textarea, select, .app-topbar'))) return;
-      if (event.key === "Escape" && target?.closest('[data-folder-path-editor]')) return;
+      if (event.key === "Escape" && target?.closest('[data-folder-path-editor], [data-frequent-threshold]')) return;
       if (target?.closest('[role="dialog"], [role="menu"]')
         || document.querySelector('[role="dialog"], [role="menu"]') || useStore.getState().contextMenu
         || useStore.getState().projectContextMenu) return;
+      if (event.key === "Escape" && frequentPickingRef.current) {
+        event.preventDefault(); event.stopPropagation();
+        frequentPickingRef.current = false; setFrequentPicking(false);
+        return;
+      }
       const open = useStore.getState().canvasLibraryOpen;
       if (event.key !== "Tab" && !open) return;
       if (["q", "e"].includes(event.key.toLowerCase()) && target && boardShellRef.current?.contains(target)) return;
@@ -2393,13 +2416,15 @@ export function CanvasWorkspace({
       const frozenProject = activeCanvasRef.current;
       const point = toBoardPoint(detail.clientX, detail.clientY);
       const order = nodesRef.current.reduce((max, node) => Math.max(max, node.order), 0) + 1;
+      let placedCount = 0;
       detail.place = async (asset) => {
+        const index = placedCount++;
         const snapshot = createCanvasAssetSnapshot(asset, canvasId("asset"));
         const size = assetNodeSize(snapshot);
         const node: CanvasAssetNode = {
           kind: "asset", id: snapshot.id, asset: snapshot,
-          x: point.x - size.width / 2, y: point.y - size.height / 2,
-          ...size, order,
+          x: point.x - size.width / 2 + index * 24, y: point.y - size.height / 2 + index * 24,
+          ...size, order: order + index,
         };
         // Persist to the frozen project even when indexing finishes after navigation.
         await enqueueWrite(async () => {
@@ -3506,8 +3531,27 @@ export function CanvasWorkspace({
     const paste = (event: ClipboardEvent) => {
       if (!allowed(event)) return;
       const value = parseCanvasClipboard(event.clipboardData?.getData("text/plain") ?? "");
-      if (!value) return;
-      event.preventDefault(); event.stopPropagation(); void pasteCanvasSelection(value);
+      if (value) {
+        event.preventDefault(); event.stopPropagation(); void pasteCanvasSelection(value); return;
+      }
+      const stage = stageRef.current;
+      if (!stage || !(event.target instanceof Node) || !stage.contains(event.target)) return;
+      const files = Array.from(event.clipboardData?.files ?? []).filter(file => file.type.startsWith("image/"));
+      if (!files.length) return;
+      event.preventDefault(); event.stopPropagation();
+      const state = useStore.getState(), projectId = activeCanvasRef.current.id;
+      const bounds = stage.getBoundingClientRect();
+      const last = lastImportPointRef.current;
+      const point = last?.projectId === projectId ? last : { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 };
+      const place = prepareExplorerCanvasDrop(stage, projectId, point.x, point.y);
+      if (!place) { notifyError(null, "画布尚未准备好，请稍后再粘贴"); return; }
+      void (async () => {
+        await prepareMediaImport(projectId, state.projectRouteRevision);
+        for (const file of files) {
+          try { await place(await importDroppedMedia(file, projectId, "clipboard")); }
+          catch (error) { notifyError(error, "粘贴图片到画布失败"); }
+        }
+      })().catch(error => notifyError(error, "粘贴图片到画布失败"));
     };
     window.addEventListener("copy", copy, true); window.addEventListener("paste", paste, true);
     return () => { window.removeEventListener("copy", copy, true); window.removeEventListener("paste", paste, true); };
@@ -4168,14 +4212,57 @@ export function CanvasWorkspace({
     </div>
   </header>;
 
+  function frequentPickTarget(target: EventTarget | null) {
+    if (!frequentPickingRef.current || loadingRef.current || useStore.getState().projectRoutePending
+      || useStore.getState().activeProjectId !== projectId || !(target instanceof Element)
+      || !workspaceRef.current?.contains(target) || target.closest('[inert], [role="dialog"], [role="menu"]')) return null;
+    const material = target.closest<HTMLElement>('[data-frequent-asset-id], [data-asset-id], [data-file-path]');
+    if (!material || !(sourcePanelRef.current?.contains(material) || stageRef.current?.contains(material))) return null;
+    const control = target.closest('button, input, textarea, select, a, [contenteditable="true"]');
+    if (control && control !== material) return null;
+    const assetId = material.dataset.frequentAssetId ?? material.dataset.assetId, path = material.dataset.filePath;
+    return assetId || path ? { assetId, path } : null;
+  }
+  function captureFrequentMaterial(event: SyntheticEvent) {
+    const material = frequentPickTarget(event.target);
+    if (material) { event.preventDefault(); event.stopPropagation(); }
+    return material;
+  }
+  async function pinFrequentMaterial(material: { assetId?: string; path?: string }) {
+    let assetId = material.assetId;
+    if (!assetId && material.path) {
+      try { assetId = (await externalFiles.index(material.path)).id; }
+      catch (error) { notifyError(error, "无法添加此素材，请重试。"); return; }
+      if (useStore.getState().activeProjectId !== projectId) return;
+    }
+    if (assetId) await frequentLibrary.pinAsset(assetId);
+  }
+
   return (
     <div
       ref={workspaceRef}
       data-onboarding-project={projectId ?? undefined}
-      className={`canvas-workspace${sourceCollapsed ? " is-source-collapsed" : " is-library-open"}${libraryDragging ? " is-library-dragging" : ""}${loading || projectRoutePending ? " is-route-pending" : ""}`}
+      className={`canvas-workspace${sourceCollapsed ? " is-source-collapsed" : " is-library-open"}${libraryDragging ? " is-library-dragging" : ""}${frequentPicking ? " is-picking-frequent" : ""}${loading || projectRoutePending ? " is-route-pending" : ""}`}
       aria-busy={loading || projectRoutePending}
+      onPointerDownCapture={event => {
+        if (event.button === 0 && !isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) captureFrequentMaterial(event);
+      }}
+      onClickCapture={event => {
+        if (event.button !== 0 || spacePressedRef.current || drawingTool === "pan") return;
+        const material = captureFrequentMaterial(event);
+        if (material && event.detail < 2) void pinFrequentMaterial(material);
+      }}
+      onDoubleClickCapture={captureFrequentMaterial}
+      onDragStartCapture={captureFrequentMaterial}
+      onContextMenuCapture={captureFrequentMaterial}
+      onKeyDownCapture={event => {
+        if (!["Enter", " ", "Delete", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
+        const material = captureFrequentMaterial(event);
+        if (material && !event.repeat && (event.key === "Enter" || event.key === " ")) void pinFrequentMaterial(material);
+      }}
     >
       <aside ref={sourcePanelRef} id={sourcePanelId} className="canvas-source-panel library-browser" aria-label="画板素材库"
+        data-file-import-project-id={sourceScope === "project" ? projectId ?? "" : ""}
         aria-hidden={sourceCollapsed} tabIndex={-1} onDragStart={event => {
           if (!(event.target as HTMLElement).closest('[data-asset-id]') || !getDragAssets()?.length) return;
           if (sourceDragFrame.current !== null) cancelAnimationFrame(sourceDragFrame.current);
@@ -4193,8 +4280,13 @@ export function CanvasWorkspace({
                 projectScope={sourceScope === "project"} navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>
             : <LocalFileWorkspace navigation={sourceNavigation} onClose={closeSource}/>}
         </div>
+        <CanvasFrequentAssets library={frequentLibrary} projectId={projectId} picking={frequentPicking} onPickingChange={setFrequentPicking}/>
       </aside>
       <CanvasLibraryResize panelId={sourcePanelId} collapsed={sourceCollapsed} onClose={closeSource} />
+      {frequentPicking && <div className="canvas-frequent-pick-banner" role="status">
+        <div><strong>正在添加常用素材</strong><span>点击素材库或画板中的素材，可连续添加</span></div>
+        <button type="button" onClick={() => setFrequentPicking(false)}>完成添加</button>
+      </div>}
 
       <section ref={boardShellRef} className={`canvas-board-shell${(selectedChatId || scopedInspectorOpen && !inspectorEditing || workflowAgentDetail?.projectId === projectId && !loading && !genPanelOpen) ? " has-project-inspector" : ""}`}>
         <button
@@ -4359,7 +4451,12 @@ export function CanvasWorkspace({
             backgroundPosition: `${pan.x}px ${pan.y}px`,
             backgroundSize: `${24 * zoom}px ${24 * zoom}px`,
           }}
-          onPointerDownCapture={beginDrawing}
+          onPointerDownCapture={event => {
+            if (event.button === 0 && !(event.target as HTMLElement).closest('button,input,textarea,select,[contenteditable="true"]')) {
+              lastImportPointRef.current = { projectId: activeCanvasRef.current.id, x: event.clientX, y: event.clientY };
+            }
+            beginDrawing(event);
+          }}
           onPointerDown={beginPan}
           onKeyDown={(event) => {
             // Mac's backward Delete reports Backspace; also support forward Delete keyboards.
@@ -4478,7 +4575,7 @@ export function CanvasWorkspace({
                 onLostPointerCapture={event => endGraphNodeDrag(event, true)}
                 onContextMenu={event => openCanvasNodeMenu(event, node.id)}>
                 {section ? <>
-                  {value.artboard?.base_asset_id && assetById.get(value.artboard.base_asset_id)?.store_path && <img className="canvas-artboard-base" draggable={false}
+                  {value.artboard?.base_asset_id && assetById.get(value.artboard.base_asset_id)?.store_path && <img className="canvas-artboard-base" data-frequent-asset-id={value.artboard.base_asset_id} draggable={false}
                     src={convertFileSrc(assetById.get(value.artboard.base_asset_id)!.store_path!)} alt="画板基底" />}
                   <div className="canvas-section-heading" title={value.artboard ? "拖动画板" : "拖动分区"}><GripHorizontal size={17} />
                     {value.workflow_container && <span className="canvas-workflow-container-badge">封装 · {value.member_ids.length}</span>}
@@ -4735,6 +4832,7 @@ export function CanvasWorkspace({
                   data-canvas-node
                   data-canvas-node-id={node.id}
                   role="group"
+                  data-frequent-asset-id={node.kind === "asset" ? node.asset.assetId ?? undefined : undefined}
                   tabIndex={0}
                   aria-label={`${node.kind === "asset" ? `${node.asset.name}，${boardOpen || genEditing ? "点击加入创作" : "点击放大"}` : `素材组，${node.assets.length} 个素材，${expanded ? "已展开" : "点击展开"}`}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
                   aria-expanded={node.kind === "folder" ? expanded : undefined}
@@ -4805,7 +4903,7 @@ export function CanvasWorkspace({
                         <div className="canvas-folder-expanded-grid" style={{ gridAutoRows: showAssetNames ? 164 : 140 }}>
                           {node.assets.map((asset, index) => {
                             const assetPath = canvasAssetMediaPath(asset);
-                            return <button type="button" key={asset.id} data-canvas-folder-asset-id={asset.id}
+                            return <button type="button" key={asset.id} data-canvas-folder-asset-id={asset.id} data-frequent-asset-id={asset.assetId ?? undefined}
                               data-canvas-filter={materialFilterState(asset)}
                               className="canvas-folder-asset" aria-label={asset.name}
                               onPointerDown={(event) => { if (!isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) event.stopPropagation(); }}

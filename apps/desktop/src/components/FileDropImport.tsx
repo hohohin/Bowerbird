@@ -8,6 +8,8 @@ import { prepareExplorerCanvasDrop } from "../lib/explorerCanvasDrop";
 import { EXPLORER_MIME } from "../lib/explorer";
 import { getDragAssets } from "../lib/dragPayload";
 import { libraryPaneAt } from "../lib/libraryPane";
+import { materialCatalog } from "../lib/materialCatalog";
+import { useLocalFileMode } from "../lib/localFileMode";
 
 /** Capture external files above cards, editors and portals; internal asset drags keep their own handlers. */
 export function FileDropImport() {
@@ -35,6 +37,8 @@ export function FileDropImport() {
       if (target) return target.dataset.projectDropId ?? (target.dataset.fileImportProjectId || null);
       return useStore.getState().activeProjectId;
     };
+    const targetCollection = (event: DragEvent) => event.target instanceof Element
+      ? event.target.closest<HTMLElement>("[data-file-import-collection-id]") : null;
     function over(event: DragEvent) {
       if (!isFiles(event)) return;
       event.preventDefault();
@@ -43,7 +47,10 @@ export function FileDropImport() {
       event.stopPropagation();
       const id = targetProject(event);
       const project = useStore.getState().projects.find(project => project.id === id);
-      setHint(project ? `松开导入到「${project.name}」` : "松开导入到素材库");
+      const collectionName = targetCollection(event)?.dataset.fileImportCollectionName;
+      const canvas = event.target instanceof Element && event.target.closest("[data-canvas-stage]");
+      setHint(canvas ? "松开放到画布当前位置" : collectionName ? `松开导入到集合「${collectionName}」`
+        : project ? `松开导入到「${project.name}」素材库` : "松开导入到全局素材库");
     }
     function clear() { setHint(null); }
     function leave(event: DragEvent) {
@@ -59,24 +66,33 @@ export function FileDropImport() {
       if (!files.length) { notifyError(null, "未读取到素材文件，请重新拖入"); return; }
       const state = useStore.getState();
       const projectId = targetProject(event);
-      const libraryMode = libraryPaneAt(event.target)?.mode;
+      const libraryMode = libraryPaneAt(event.target)?.mode ?? useLocalFileMode;
+      const librarySource = libraryMode.getState().source;
+      const collectionId = targetCollection(event)?.dataset.fileImportCollectionId;
       const revision = state.projectRouteRevision;
       const place = prepareExplorerCanvasDrop(event.target, projectId, event.clientX, event.clientY);
+      if (!place && event.target instanceof Element && event.target.closest("[data-canvas-stage]")) {
+        notifyError(null, "画布尚未准备好，请稍后重新拖入"); return;
+      }
       setPending(count => count + 1);
       const imported: Asset[] = [];
       const failures: string[] = [];
       try {
         await prepareMediaImport(projectId, revision);
         for (const file of files) {
+          let ingested = false;
           try {
             const asset = await importDroppedMedia(file, projectId);
-            imported.push(asset);
+            ingested = true;
+            if (collectionId) await materialCatalog.members(collectionId, [asset.id]);
             if (place) await place(asset);
-          } catch (error) { console.error("File import failed", error); failures.push(`${file.name}：${userErrorMessage(error, "导入未完成，请检查文件是否可用后重试。")}`); }
+            imported.push(asset);
+          } catch (error) { console.error("File import failed", error); failures.push(`${file.name}：${ingested ? "已入素材库，但放置未完成，" : ""}${userErrorMessage(error, "导入未完成，请检查文件是否可用后重试。")}`); }
         }
         if (imported.length) {
           const current = useStore.getState();
-          if (current.activeProjectId === state.activeProjectId && current.projectRouteRevision === revision && !current.projectRoutePending) {
+          if (!place && !collectionId && libraryMode.getState().source === librarySource
+            && current.activeProjectId === state.activeProjectId && current.projectRouteRevision === revision && !current.projectRoutePending) {
             current.setCurrentCollection(null); current.setCurrentFolder(null);
             current.setSearchQuery(""); current.setSmartFilter(null); current.setColorFilter(null);
             showImportedMedia(imported, libraryMode);

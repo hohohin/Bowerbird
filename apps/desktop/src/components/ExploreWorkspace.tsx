@@ -14,6 +14,7 @@ import { useExplorerDragMotion } from "../lib/useExplorerDragMotion";
 import { getDragAssets } from "../lib/dragPayload";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ExplorerClassificationDock, type ExplorerClassificationItem } from "./ExplorerClassificationDock";
+import { materialCatalog } from "../lib/materialCatalog";
 
 export function ExploreWorkspace({ url, open, navigationId = 0, onClose, children }: { url: string | null; open: boolean; navigationId?: number; onClose: () => void; children: ReactNode }) {
   const [busy, setBusy] = useState(false);
@@ -58,7 +59,14 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
     const operation = ++sequence.current;
     setFeedback(null);
     const point = { x: event.clientX, y: event.clientY };
-    const target = state.activeProjectId;
+    const contextProjectId = state.activeProjectId;
+    const destination = event.target instanceof Element
+      ? event.target.closest<HTMLElement>("[data-project-drop-id], [data-file-import-project-id]") : null;
+    const target = destination
+      ? destination.dataset.projectDropId ?? (destination.dataset.fileImportProjectId || null)
+      : contextProjectId;
+    const collectionId = event.target instanceof Element
+      ? event.target.closest<HTMLElement>("[data-file-import-collection-id]")?.dataset.fileImportCollectionId || null : null;
     const completeLesson = beginOnboardingOperation("explore", target);
     const revision = state.projectRouteRevision;
     const placeOnCanvas = prepareExplorerCanvasDrop(event.target, target, event.clientX, event.clientY);
@@ -68,7 +76,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
     const classificationId = `${dragId}:${operation}`;
     const inTarget = () => {
       const route = useStore.getState();
-      return mounted.current && route.activeProjectId === target && route.projectRouteRevision === revision;
+      return mounted.current && route.activeProjectId === contextProjectId && route.projectRouteRevision === revision;
     };
     const updateClassification = (patch: Partial<ExplorerClassificationItem>) => {
       if (inTarget()) setClassifications(items => items.map(item => item.id === classificationId ? { ...item, ...patch } : item));
@@ -77,6 +85,9 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
     let placedNodeId: string | undefined;
     let handedOff = false;
     try {
+      if (!placeOnCanvas && event.target instanceof Element && event.target.closest("[data-canvas-stage]")) {
+        notifyError(null, "画布尚未准备好，请稍后重新拖入"); return;
+      }
       let analysisIssue = "";
       const analysing = await api.claimSourceBrowserAnalysis(dragId, image.imageUrl, image.pageUrl).catch(error => {
         const reason = error instanceof Error ? error.message : typeof error === "string" ? error : "";
@@ -90,9 +101,9 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       }
       // Flush existing composer state before materializing a still-empty project.
       if (target) {
-        await state.projectCanvasFlush?.();
+        if (target === contextProjectId) await state.projectCanvasFlush?.();
         const current = useStore.getState();
-        if (current.projectRoutePending || current.projectRouteRevision !== revision || current.activeProjectId !== target) {
+        if (current.projectRoutePending || current.projectRouteRevision !== revision || current.activeProjectId !== contextProjectId) {
           throw new Error("项目正在切换，请重新拖入图片");
         }
         const selected = current.projects.find(p => p.id === target);
@@ -109,6 +120,10 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       const asset = await api.captureSourceBrowserImage(image.imageUrl, image.pageUrl, target, dragId);
       capturedId = asset.id;
       if (asset.thumb_path) updateClassification({ imageUrl: convertFileSrc(asset.thumb_path) });
+      if (collectionId) {
+        try { await materialCatalog.members(collectionId, [asset.id]); }
+        catch (error) { notifyError(error, "图片已入库，但加入集合失败，请重新添加"); return; }
+      }
       let nodeId: string | void = undefined;
       if (placeOnCanvas) {
         try { nodeId = await placeOnCanvas(asset); }
@@ -117,10 +132,9 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       if (placeOnCanvas) completeLesson();
       placedNodeId = nodeId || undefined;
       const result: CaptureFeedback = { id: operation, assetId: asset.id, nodeId: nodeId || undefined, ...point,
-        projectId: target, message: analysisIssue ? `已采集；${analysisIssue}` : "已采集", pending: false };
+        projectId: contextProjectId, message: analysisIssue ? `已采集；${analysisIssue}` : "已采集", pending: false };
       const show = (value: CaptureFeedback) => {
-        const route = useStore.getState();
-        if (mounted.current && sequence.current === operation && route.activeProjectId === target && route.projectRouteRevision === revision) setFeedback(value);
+        if (sequence.current === operation && inTarget()) setFeedback(value);
       };
       if (!analysing) show(result);
       if (analysing) {
@@ -133,7 +147,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
         });
       }
       // Retain a global acknowledgement if the user has navigated away from the target.
-      if (useStore.getState().activeProjectId !== target) notifySuccess(placeOnCanvas ? "图片已采集并添加到画板" : "图片已采集");
+      if (useStore.getState().activeProjectId !== contextProjectId) notifySuccess(placeOnCanvas ? "图片已采集并添加到画板" : "图片已采集");
     } catch (error) { notifyError(error, "采集失败，请重试"); }
     finally {
       dragMotion.finish(dragId, capturedId, placedNodeId);

@@ -314,7 +314,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
               event.preventDefault(); event.stopPropagation(); cancelImageClick();
               if (asset) onMediaContextMenu?.(event, asset);
             };
-            if (images) return <button type="button" className="canvas-image-preview" key={ref.token} aria-disabled={!available || !onOpenPreview}
+            if (images) return <button type="button" className="canvas-image-preview" key={ref.token} data-frequent-asset-id={ref.asset_id} aria-disabled={!available || !onOpenPreview}
               onContextMenu={contextMenu}
               title={available ? item.generation_ref ? "单击打开会话，双击放大" : "双击放大" : "媒体已不可用"} aria-label={`${item.generation_ref ? "查看生成会话" : video ? "播放视频" : "放大图片"}：${asset?.name ?? "媒体已不可用"}`}
               onClick={event => {

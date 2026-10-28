@@ -23,9 +23,10 @@ pub async fn update_settings(
     settings: AppSettings,
 ) -> Result<(), AppError> {
     let mut settings = settings;
-    // Shortcut bindings are changed atomically through screenshot_set_shortcuts.
+    // Shortcuts and canvas shelf membership each use dedicated atomic commands.
     state.update_with(|current| {
         settings.screenshot_shortcuts = current.screenshot_shortcuts.clone();
+        settings.canvas_frequent_assets = current.canvas_frequent_assets.clone();
         *current = settings;
     })?;
     Ok(())

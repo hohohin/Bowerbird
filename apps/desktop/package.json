@@ -41,6 +41,7 @@
     "test:canvas:media": "node scripts/canvas-media-ui.test.mjs",
     "test:canvas:transparency": "node scripts/canvas-transparency-ui.test.mjs",
     "test:canvas:library-visibility": "node scripts/canvas-library-visibility-ui.test.mjs",
+    "test:canvas:frequent-assets": "node scripts/canvas-frequent-assets-ui.test.mjs",
     "test:canvas:group-drop": "node scripts/canvas-group-drop-ui.test.mjs",
     "test:canvas:group-expand": "node scripts/canvas-group-expand-ui.test.mjs",
     "test:canvas:layers": "node --experimental-strip-types --test scripts/canvas-layers.test.mjs && node scripts/canvas-layers-ui.test.mjs",

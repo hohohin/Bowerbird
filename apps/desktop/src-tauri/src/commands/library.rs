@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter, State};
 use ulid::Ulid;
 
 use crate::core::caption;
+use crate::core::canvas_frequent_assets::{self, CanvasFrequentAssetsResult, CanvasFrequentAssetsRow};
 use crate::core::ingest;
 use crate::core::library::{
     collapse_generation_groups, Analysis, Asset, AssetTag, CaptionSection, ColorBucket, Folder,
@@ -24,6 +25,67 @@ use crate::error::AppError;
 /// 开关来自设置面板（settings.json），命令层每次现读，改设置后无需重启即生效。
 fn hide_in_global(settings: &SettingsState, project_id: &Option<String>) -> bool {
     settings.get().hide_project_assets && project_id.is_none()
+}
+
+#[tauri::command]
+pub async fn canvas_frequent_assets(
+    db: State<'_, Arc<Database>>,
+    settings: State<'_, SettingsState>,
+    project_id: Option<String>,
+) -> Result<CanvasFrequentAssetsResult, AppError> {
+    canvas_frequent_assets::list(&db, &settings, project_id.as_deref())
+}
+
+#[tauri::command]
+pub async fn canvas_frequent_assets_refresh(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    settings: State<'_, SettingsState>,
+    project_id: Option<String>,
+) -> Result<CanvasFrequentAssetsResult, AppError> {
+    let result = canvas_frequent_assets::refresh(&db, &settings, project_id.as_deref())?;
+    let _ = app.emit("library://frequent-assets-changed", ());
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn canvas_frequent_assets_set_threshold(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    settings: State<'_, SettingsState>,
+    threshold: i64,
+    project_id: Option<String>,
+) -> Result<CanvasFrequentAssetsResult, AppError> {
+    let result = canvas_frequent_assets::set_threshold(&db, &settings, threshold, project_id.as_deref())?;
+    let _ = app.emit("library://frequent-assets-changed", ());
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn canvas_frequent_assets_pin(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    settings: State<'_, SettingsState>,
+    asset_ids: Vec<String>,
+    project_id: Option<String>,
+) -> Result<CanvasFrequentAssetsResult, AppError> {
+    let result = canvas_frequent_assets::pin(&db, &settings, asset_ids, project_id.as_deref())?;
+    let _ = app.emit("library://frequent-assets-changed", ());
+    Ok(result)
+}
+
+#[tauri::command]
+pub async fn canvas_frequent_assets_remove(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    settings: State<'_, SettingsState>,
+    asset_id: String,
+    row: CanvasFrequentAssetsRow,
+    project_id: Option<String>,
+) -> Result<CanvasFrequentAssetsResult, AppError> {
+    let result = canvas_frequent_assets::remove(&db, &settings, &asset_id, row, project_id.as_deref())?;
+    let _ = app.emit("library://frequent-assets-changed", ());
+    Ok(result)
 }
 
 #[tauri::command]

@@ -10,6 +10,7 @@ pub mod library_view;
 pub mod material_catalog;
 pub mod catalog_browser;
 pub mod canvas_library;
+pub mod canvas_frequent_assets;
 pub mod local_classification;
 pub mod migrate;
 pub mod onboarding_pack;

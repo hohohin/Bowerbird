@@ -45,7 +45,7 @@ export function FileMediaCard({ entry, selected, revision, labels, onSelect, onA
     return () => { alive = false; request?.cancel(); visible.disconnect(); observer.disconnect(); };
   }, [entry.path, entry.directory, entry.preview, previewKey, failedPreview]);
   return <button ref={ref} type="button" style={style} data-positioned={style ? "true" : undefined} className={`folder-media-card${selected ? " is-selected" : ""}`} aria-pressed={selected}
-    data-asset-id={assetId} draggable={!!onDragStart} onDragStart={event => { cancelClick(); onDragStart?.(event); }} onDragEnd={onDragEnd}
+    data-asset-id={assetId} data-file-path={!entry.directory ? entry.path : undefined} draggable={!!onDragStart} onDragStart={event => { cancelClick(); onDragStart?.(event); }} onDragEnd={onDragEnd}
     aria-label={entry.directory ? `文件夹 ${entry.name}` : entry.name} title={[entry.path, labels.map(name => `#${name}`).join(" · ")].filter(Boolean).join("\n")}
     onClick={e => {
       cancelClick();

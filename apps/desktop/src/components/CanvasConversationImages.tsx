@@ -20,7 +20,7 @@ export function CanvasConversationImages({ images, imageOnly, selectedId, onSele
   const index = Math.max(0, images.findIndex(image => image.id === (selectedId ?? newest)));
   const shown = images[index];
   const path = canvasAssetMediaPath(shown);
-  return <section className={`canvas-conversation-images${isVideoPath(shown.storePath) ? " is-video" : ""}`} data-conversation-image={shown.assetId}
+  return <section className={`canvas-conversation-images${isVideoPath(shown.storePath) ? " is-video" : ""}`} data-conversation-image={shown.assetId} data-frequent-asset-id={shown.assetId ?? undefined}
     role="button" tabIndex={0} aria-label={shown.name}
     onPointerDown={onPointerDown}
     onClick={event => { event.stopPropagation(); onClick(event, shown); }}

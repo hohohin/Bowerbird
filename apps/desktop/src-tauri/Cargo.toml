@@ -4,7 +4,7 @@ version = "26.10.2401"
 description = "Bowerbird desktop app"
 authors = ["Bowerbird"]
 edition = "2021"
-rust-version = "1.77"
+rust-version = "1.85"
 default-run = "bowerbird-desktop"
 
 [lib]
@@ -63,6 +63,8 @@ image = { version = "0.25", default-features = false, features = [
   "bmp",
 ] }
 fast_image_resize = "3"
+# Decode HEIC locally on both desktop platforms, without a system codec install.
+heic-rs = "=0.1.4"
 # 注：img_hash 3.2 绑定 image 0.23，与本项目 0.25 冲突 —— 改自实现 dHash（media/phash.rs），去重够用。
 # 颜色提取（Phase 2 K-Means 提色，LAB 空间）
 palette = "0.7"
@@ -141,6 +143,8 @@ incremental = true
 # Full-screen pixel conversion/PNG loops otherwise take seconds in debug builds.
 # Keep application code debuggable while optimizing the capture hot path.
 [profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.heic-rs]
 opt-level = 3
 [profile.dev.package.png]
 opt-level = 3
