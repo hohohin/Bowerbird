@@ -380,6 +380,8 @@ Secrets 仅新增 `COMFY_TOS_ACCESS_KEY_ID`、`COMFY_TOS_SECRET_ACCESS_KEY`，�
 
 ### 5.7 生成与签名文件官网网关（2026-10-28，已部署，客户端待发布）
 
+**后续客户端发布：** 2026-10-28 15:29:20（北京时间）Windows **26.10.2801** 已签名发布，源码 be4a3f11；generate-proxy、参考视频上传、图片／视频与分层包下载已包含官网网关路由。官网现役 `/opt/bowerbird/website-releases/20261028-windows-26.10.2801`，回滚 `/opt/bowerbird/website-releases/20261028-cloud-gateway`，Nginx 与生成／账号代理保留；无 Edge／Worker／价格／支付变更。原故障电脑完整生成和实际账单尚待用户更新后验收。包与发布证据见 [桌面自动更新](../../dev-doc/DESKTOP-UPDATES.md)。
+
 `website/cloud-proxy.mjs` 由 `server.mjs` 挂载到 `/api/cloud/`；独立于账号入口，不放宽账号的 64 KiB 限制。桌面 `CloudConfig.endpoint("generate-proxy")` 使用现有官方账号配置的同源 `/api/cloud/functions/v1/generate-proxy`，其他函数保持原路由。`generation_transfer_url` 只接受原配置 Supabase 同源、HTTPS、私有生成桶的签名地址，再改为官网入口，保留原 token 查询字符串；账号网关配置为空的隔离测试仍使用测试上游。
 
 - POST 只开放 `generate-proxy`，要求用户 Bearer、JSON 对象，最多 20 MiB；固定区域 `ap-northeast-1`，正文和正常业务 JSON 原样转发，响应 JSON 最多 1 MiB。Supabase 继续校验用户、任务归属、价格和预授权。共用该函数的图层任务也走此入口，其 JSON 文件走下述签名下载。
