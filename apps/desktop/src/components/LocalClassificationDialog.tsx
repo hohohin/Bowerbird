@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { globalClassification, localClassification, mergeClassificationProgress, projectClassification, type ClassificationLabel, type LocalClassificationStatus } from "../lib/localClassification";
 import { folderClassification } from "../lib/folderClassification";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Plus } from "lucide-react";
+import { Cloud, Plus, Tags } from "lucide-react";
 import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
 import { ConfirmDialog } from "./ConfirmDialog";
@@ -14,7 +14,7 @@ import { ClassificationLabelDetails, classificationOrigin } from "./Classificati
 
 function JevResults({ progress }: { progress: NonNullable<LocalClassificationStatus["jev_progress"]> }) {
   const report = progress.report;
-  return <section aria-label="Jev 返回结果" className="overflow-hidden rounded-lg border border-edge">
+  return <section aria-label="Jev 返回结果" className="classification-result overflow-hidden rounded-lg border border-edge">
     <div className="space-y-2 p-3">
       <h5 className="font-medium">Jev 返回结果</h5>
       <p className="text-xs text-muted break-all">素材：{progress.asset.name}</p>
@@ -231,7 +231,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
         {status?.busy && !sameTarget && <div className="space-y-2"><p role="status">另一分类范围的任务正在运行，完成或停止后可处理当前目标。</p><button className="app-modal-button" disabled={working} onClick={() => void action(() => local.stop())}>停止当前任务</button></div>}
       </section>}
       {error && <p role="alert" className="text-red-400">{userErrorMessage(error, "分类操作未完成，请稍后重试。")}</p>}
-      {!folder && !globalScope && <section aria-label="新素材自动分类" className="rounded-lg border border-edge p-3 space-y-2">
+      {!folder && !globalScope && <section aria-label="新素材自动分类" className="classification-section rounded-lg border border-edge p-3 space-y-2">
         <label className="flex items-center gap-2">
           <input type="checkbox" checked={status?.enabled ?? false} disabled={!status || working || (!status.enabled && status.busy)}
             onChange={(e) => { const enabled = e.target.checked; void action(async () => { if (enabled) await ensureCloud(); await localClassification.enable(enabled); }); }} />
@@ -242,9 +242,9 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
       </section>}
       <ClassificationPlayback status={showProgress ? status : null} />
       {import.meta.env.DEV && showProgress && status && <ClassificationDiagnostics status={status} />}
-      {view === "classification" && <section aria-label="云端分类" className="rounded-lg border border-edge p-4 space-y-3">
+      {view === "classification" && <section aria-label="云端分类" className="classification-section rounded-lg border border-edge p-4 space-y-3">
         <div className="space-y-1">
-          <h3 className="font-medium">云端分类</h3>
+          <h3 className="classification-heading font-medium"><Cloud size={15} aria-hidden="true" />云端分类</h3>
           <p className="text-xs text-muted">优先匹配已有标签，没有合适类别时再补充新标签。</p>
           <p className="text-xs text-muted">每张成功获得标签扣 1 Bcoin，技术重试不重复收费；无法判断或请求失败退回预留。</p>
         </div>
@@ -259,10 +259,10 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
         </>}
       </section>}
       <div className={`flex items-center justify-between ${view === "classification" ? "border-t border-edge pt-3" : ""}`}>
-        <h3 className="font-medium">已有标签 · {labels.length}</h3>
+        <h3 className="classification-heading font-medium"><Tags size={15} aria-hidden="true" />已有标签 · {labels.length}</h3>
         <button className="app-modal-button inline-flex items-center gap-1" disabled={working} onClick={() => edit()}><Plus size={14} />新建标签</button>
       </div>
-      {editorOpen && <section className="space-y-2 rounded-lg border border-edge bg-panel2/50 p-3">
+      {editorOpen && <section className="classification-label-editor classification-section space-y-2 rounded-lg border border-edge bg-panel2/50 p-3">
         <h3 className="font-medium">{editing ? "编辑分类标签" : "新建分类标签"}</h3>
         <input aria-label="标签名称" className="w-full rounded border border-edge bg-panel2 px-3 py-2" maxLength={40}
           autoFocus placeholder="例如：水彩植物、手工感包装" value={name} onChange={(e) => setName(e.target.value)} />
@@ -298,7 +298,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
         {status?.busy && labels.length > 0 && <p className="text-xs text-muted">请先停止当前任务，再删除标签。</p>}
         {labels.length === 0 && <p className="text-muted py-3">还没有标签。识别图片后会自动发现，也可以先创建。</p>}
         <div className="classification-label-list divide-y divide-edge">
-          {labels.map((label) => <div key={label.id} className="py-2 space-y-1">
+          {labels.map((label) => <div key={label.id} className="classification-label-row py-2 space-y-1" data-selected={selectedLabels.has(label.id) || undefined}>
             <div className="flex flex-wrap items-center gap-2">
               <input type="checkbox" aria-label={`选择标签 ${label.name}`} checked={selectedLabels.has(label.id)} disabled={busy}
                 onChange={(e) => setSelectedLabels((current) => {

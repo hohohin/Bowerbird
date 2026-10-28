@@ -66,7 +66,7 @@
 .catalog-selection span { padding:0 4px; white-space:nowrap; }
 .catalog-form { display:flex; flex-direction:column; gap:16px; }
 .catalog-form label { display:flex; flex-direction:column; gap:7px; font-size:12px; }
-.catalog-form input,.catalog-form select { width:100%; border:1px solid var(--bb-line); border-radius:8px; padding:9px 10px; background:var(--bb-surface); color:var(--bb-ink); }
+.catalog-form input,.catalog-form :is(select, .tactical-select-trigger) { width:100%; border:1px solid var(--bb-line); border-radius:8px; padding:9px 10px; background:var(--bb-surface); color:var(--bb-ink); }
 .catalog-form [role=alert] { color:var(--bb-danger-strong); font-size:12px; }
 .collection-picker { min-width:0; border:0; padding:0; }
 .collection-picker legend { margin-bottom:8px; font-size:12px; }

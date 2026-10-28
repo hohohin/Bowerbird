@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 
 const MIN_ZOOM = .25, MAX_ZOOM = 8;
-const isTyping = (target: EventTarget | null) => target instanceof HTMLElement && !!target.closest('input, textarea, select, [contenteditable="true"]');
+const isTyping = (target: EventTarget | null) => target instanceof HTMLElement && !!target.closest('input, textarea, select, [role="combobox"], [contenteditable="true"]');
 
 /** View-only navigation, independent of layer geometry and undo history. */
 export function useLayerViewport(preview: RefObject<HTMLElement>) {

@@ -22,7 +22,23 @@ assert.equal(productionConfig['features.code_mode_host'],true,'production must e
 assert.equal(productionConfig['features.code_mode'],false,'ordinary models keep their direct tool route');
 assert.equal(productionConfig['agents.enabled'],false,'code-mode model metadata must not enable delegation');
 const toolSpec=JSON.parse(await readFile(new URL('../src/commands/local_chat_card_tool.json',import.meta.url),'utf8'));
-const toolArgs={cards:[{id:'ideas',kind:'content',title:'离线内容卡',rows:[['第一行'],['第二行']]},{id:'image',kind:'generation',title:'离线生成卡',prompt:'按当前行绘制',mediaType:'image'},{id:'repeat',kind:'loop',title:'逐行循环',mode:'rows',source:'ideas',body:['image']},{id:'start',kind:'trigger',title:'开始'}],connections:[{from:'start',to:'repeat',output:'signal',input:'signal'}]};
+assert.ok(Number(source.match(/const CARD_TOOL_VERSION: i64 = (\d+);/)[1])>=3,'section schema changes require provider-thread migration');
+const versionTwoToolSpec=structuredClone(toolSpec);
+versionTwoToolSpec.description='Create native generation, local H3, content, trigger and loop cards without executing them.';
+delete versionTwoToolSpec.inputSchema.properties.sections;
+const legacyToolSpec=structuredClone(versionTwoToolSpec);
+legacyToolSpec.description='Create native generation, content, trigger and loop cards without executing them.';
+legacyToolSpec.inputSchema.properties.cards.items.oneOf=legacyToolSpec.inputSchema.properties.cards.items.oneOf.filter(card=>card.properties.kind.const!=='comfy-video');
+legacyToolSpec.inputSchema.properties.cards.items.oneOf.find(card=>card.properties.kind.const==='loop').properties.body.description='Aliases of generation cards controlled by this loop.';
+legacyToolSpec.inputSchema.properties.connections.items.properties.input.enum=['text','image','signal','completion'];
+assert.ok(!JSON.stringify(legacyToolSpec).includes('comfy-video'));
+const legacyToolArgs={cards:[{id:'ideas',kind:'content',title:'离线内容卡',rows:[['第一行'],['第二行']]},{id:'image',kind:'generation',title:'离线生成卡',prompt:'按当前行绘制',mediaType:'image'},{id:'repeat',kind:'loop',title:'逐行循环',mode:'rows',source:'ideas',body:['image']},{id:'start',kind:'trigger',title:'开始'}],connections:[{from:'start',to:'repeat',output:'signal',input:'signal'}]};
+const versionTwoToolArgs=structuredClone(legacyToolArgs);
+versionTwoToolArgs.cards.splice(2,0,{id:'h3',kind:'comfy-video',title:'本地 H3',prompt:'由首帧运动至尾帧',seconds:8,ratio:'auto',resolution:0.8,lastFrameAlias:'image1'});
+versionTwoToolArgs.cards.find(card=>card.kind==='loop').body.push('h3');
+versionTwoToolArgs.connections.push({from:'image',to:'h3',output:'image',input:'first-frame'});
+const toolArgs={...structuredClone(versionTwoToolArgs),sections:[{id:'visuals',title:'画面与视频',members:['image','h3']},{id:'sequence',title:'内容与循环',members:['ideas','repeat','start']}]};
+function argsForRound(round){return round===8?legacyToolArgs:round===11?versionTwoToolArgs:toolArgs;}
 const catalog=JSON.parse(await readFile(new URL('./fixtures/local-chat-code-mode-model.json',import.meta.url),'utf8'));
 const catalogPath=path.join(root,'models.json');await writeFile(catalogPath,JSON.stringify(catalog));
 const instructions='你是 Bowerbird 创作工作台中的图文对话助手。只能使用 create_canvas_cards 创建待运行卡片，不操作文件或执行生成。';
@@ -51,7 +67,7 @@ try{
     const home=path.join(root,route),cwd=path.join(home,'chat-workspaces','probe'),marker=path.join(home,'mcp-started.txt');
     await mkdir(cwd,{recursive:true});
     const config={...productionConfig,'features.enable_request_compression':false,...(route==='code-mode'?{model_catalog_json:catalogPath}:{})};
-    let round=-1,providerThread,legacyThread,failedThread,serverFailure;
+    let round=-1,providerThread,legacyThread,versionOneThread,versionTwoThread,failedThread,serverFailure;
     const requests=[],calls=[];
     const server=createServer(async(req,res)=>{
       try{
@@ -63,16 +79,20 @@ try{
         assert.ok(!toolText.includes('"name":"collaboration"'),'delegation must not be advertised');
         if(round!==3&&!output){
           assert.ok(route==='code-mode'?toolText.includes('create_canvas_cards(args'):(body.tools??[]).some(item=>item.name===toolSpec.name),`dynamic tool missing in ${route} round ${round}`);
-          const hostScript=`const toolNames=ALL_TOOLS.map(t=>t.name).sort(); if(JSON.stringify(toolNames)!==JSON.stringify(['apply_patch','clock__curr_time','create_canvas_cards']))throw new Error('unexpected nested tool catalog'); text({isolation:{process:typeof process,require:typeof require,fetch:typeof fetch,toolNames}}); text(await tools.create_canvas_cards(${JSON.stringify(toolArgs)}));`;
-          const item=round>=6?{id:`tool-${round}`,type:'function_call',call_id:callId,name:round===6?'list_agents':'spawn_agent',namespace:'collaboration',arguments:JSON.stringify(round===6?{}:{task_name:'boundary_probe_child',fork_turns:'none',message:'Synthetic offline fixture; reply only with FIXTURE_CHILD_UNEXPECTED.'})}:route==='code-mode'?{id:`tool-${round}`,type:'custom_tool_call',call_id:callId,name:'exec',namespace:'functions',input:hostScript}:{id:`tool-${round}`,type:'function_call',call_id:callId,name:toolSpec.name,arguments:JSON.stringify(toolArgs)};
+          assert.equal(toolText.includes('comfy-video'),round!==8,'only migrated tool schemas expose local H3');
+          assert.equal(toolText.includes('sections'),![8,11].includes(round),'only the current tool schema exposes sections');
+          const currentArgs=argsForRound(round);
+          const hostScript=`const toolNames=ALL_TOOLS.map(t=>t.name).sort(); if(JSON.stringify(toolNames)!==JSON.stringify(['apply_patch','clock__curr_time','create_canvas_cards']))throw new Error('unexpected nested tool catalog'); text({isolation:{process:typeof process,require:typeof require,fetch:typeof fetch,toolNames}}); text(await tools.create_canvas_cards(${JSON.stringify(currentArgs)}));`;
+          const item=[6,7].includes(round)?{id:`tool-${round}`,type:'function_call',call_id:callId,name:round===6?'list_agents':'spawn_agent',namespace:'collaboration',arguments:JSON.stringify(round===6?{}:{task_name:'boundary_probe_child',fork_turns:'none',message:'Synthetic offline fixture; reply only with FIXTURE_CHILD_UNEXPECTED.'})}:route==='code-mode'?{id:`tool-${round}`,type:'custom_tool_call',call_id:callId,name:'exec',namespace:'functions',input:hostScript}:{id:`tool-${round}`,type:'function_call',call_id:callId,name:toolSpec.name,arguments:JSON.stringify(currentArgs)};
           stream(res,item,evidence.requests.length);
           return;
         }
         if(round!==3){
           if(round===0){assert.match(JSON.stringify(output),/code-mode host is disabled/);assert.equal(calls.length,0,'disabled host never reaches the app tool');}
-          else if(round>=6)assert.match(JSON.stringify(output),new RegExp(`unsupported call: collaboration${round===6?'list_agents':'spawn_agent'}`),'delegation remains unavailable even when forced by the model fixture');
+          else if([6,7].includes(round))assert.match(JSON.stringify(output),new RegExp(`unsupported call: collaboration${round===6?'list_agents':'spawn_agent'}`),'delegation remains unavailable even when forced by the model fixture');
           else{
             assert.ok(JSON.stringify(output).includes(`batch-${route}-${round}`),'model receives the native durable result');
+            if(![8,11].includes(round))for(const section of toolArgs.sections)assert.ok(JSON.stringify(output).includes(`saved-${round}-${section.id}`),'model receives each created section with its cards');
             if(route==='code-mode'){
               const returned=JSON.stringify(output);
               for(const name of ['process','require','fetch'])assert.ok(returned.includes(`\\"${name}\\":\\"undefined\\"`),`${name} must not exist in the JS host`);
@@ -89,9 +109,12 @@ try{
       await writeFile(path.join(home,'config.toml'),`model=${JSON.stringify(route==='code-mode'?catalog.models[0].slug:'gpt-5.4')}\nmodel_provider="offline_fixture"\n[mcp_servers."probe.test"]\ncommand="node"\nargs=${JSON.stringify(['-e','require("node:fs").writeFileSync(process.argv[1],"started")',marker])}\n[model_providers.offline_fixture]\nname="Offline fixture"\nbase_url="http://127.0.0.1:${port}/v1"\nwire_api="responses"\nrequires_openai_auth=false\nsupports_websockets=false\n`);
       const skillDir=path.join(home,'skills','probe-skill');await mkdir(skillDir,{recursive:true});
       await writeFile(path.join(skillDir,'SKILL.md'),'---\nname: probe-skill\ndescription: PRIVATE_SKILL_CATALOG_MUST_NOT_LEAK\n---\nPRIVATE_SKILL_BODY_MUST_NOT_LEAK');
-      for(round=route==='code-mode'?0:1;round<=(route==='code-mode'?7:5);round++){
-        if(round===3)providerThread=undefined;
+      for(const currentRound of route==='code-mode'?[0,1,2,3,4,5,6,7,8,9,10,11,12,13]:[1,2,3,4,5,8,9,10,11,12,13]){
+        round=currentRound;
+        if([3,8,11].includes(round))providerThread=undefined;
         if(round===4){legacyThread=providerThread;providerThread=undefined;}
+        if(round===9){versionOneThread=providerThread;providerThread=undefined;}
+        if(round===12){versionTwoThread=providerThread;providerThread=undefined;}
         const turnConfig={...config,...(round===0?{'features.code_mode_host':false}:{})};
         const args=['app-server','--listen','stdio://','-c','approval_policy="never"','-c','sandbox_mode="read-only"'];
         for(const [key,value]of Object.entries(turnConfig))args.push('-c',`${key}=${JSON.stringify(value)}`);
@@ -107,20 +130,25 @@ try{
         const effective=await rpc(5,'config/read',{includeLayers:false});
         for(const key of ['shell_tool','unified_exec','plugins','apps','multi_agent','multi_agent_v2'])assert.equal(effective.config.features[key],false);
         const threadConfig={...turnConfig,mcp_servers:Object.fromEntries(Object.entries(effective.config.mcp_servers??{}).map(([name,value])=>[name,{...(typeof value.command==='string'?{command:value.command}:{}),...(typeof value.url==='string'?{url:value.url}:{}),enabled:false,required:false}]))};
-        const thread=await rpc(2,providerThread?'thread/resume':'thread/start',{...(providerThread?{threadId:providerThread}:round===3?{}:{dynamicTools:[toolSpec]}),cwd,approvalPolicy:'never',sandbox:'read-only',config:threadConfig,baseInstructions:instructions,developerInstructions:instructions});
+        const thread=await rpc(2,providerThread?'thread/resume':'thread/start',{...(providerThread?{threadId:providerThread}:round===3?{}:{dynamicTools:[round===8?legacyToolSpec:round===11?versionTwoToolSpec:toolSpec]}),cwd,approvalPolicy:'never',sandbox:'read-only',config:threadConfig,baseInstructions:instructions,developerInstructions:instructions});
         assert.equal(thread.approvalPolicy,'never');assert.equal(thread.sandbox.type,'readOnly');
         if(providerThread)assert.equal(thread.thread.id,providerThread);providerThread=thread.thread.id;
         if(round===0)failedThread=providerThread;
         if(round===1&&route==='code-mode')assert.equal(providerThread,failedThread,'the failed production-style thread resumes without migration');
         if(round===4)assert.notEqual(providerThread,legacyThread,'legacy upgrade creates a tool-enabled provider thread');
-        const input=[...(round===4?[{type:'text',text:'同一应用对话的历史文字，仅供上下文参考，不重做过去请求：[{"role":"user","text":"这是离线测试第 3 轮"},{"role":"assistant","text":"离线回复 3"}]',text_elements:[]}]:[]),{type:'text',text:`这是离线测试第 ${round} 轮`,text_elements:[]}];
+        if(round===9)assert.notEqual(providerThread,versionOneThread,'v1 upgrade creates a provider thread with the H3 and section schema');
+        if(round===12)assert.notEqual(providerThread,versionTwoThread,'v2 H3 upgrade creates a provider thread with the section schema');
+        const historyRound=round===4?3:round===9?8:round===12?11:undefined;
+        const input=[...(historyRound===undefined?[]:[{type:'text',text:`同一应用对话的历史文字，仅供上下文参考，不重做过去请求：${JSON.stringify([{role:'user',text:`这是离线测试第 ${historyRound} 轮`},{role:'assistant',text:`离线回复 ${historyRound}`}])}`,text_elements:[]}]),{type:'text',text:`这是离线测试第 ${round} 轮`,text_elements:[]}];
         const requestStart=requests.length;
         send({id:3,method:'turn/start',params:{threadId:providerThread,input,approvalPolicy:'never',sandboxPolicy:{type:'readOnly',networkAccess:false}}});
         let delta='',providerTurn;for(;;){const value=await next();if(value.error)throw new Error(JSON.stringify(value.error));if(value.id===3)providerTurn=value.result.turn.id;if(value.method==='turn/started')providerTurn=value.params.turn.id;
           if(value.method==='item/tool/call'){
-            assert.equal(value.params.threadId,providerThread);assert.equal(value.params.turnId,providerTurn);assert.equal(value.params.namespace,null);assert.equal(value.params.tool,toolSpec.name);assert.deepEqual(value.params.arguments,toolArgs);
+            const currentArgs=argsForRound(round);
+            assert.equal(value.params.threadId,providerThread);assert.equal(value.params.turnId,providerTurn);assert.equal(value.params.namespace,null);assert.equal(value.params.tool,toolSpec.name);assert.deepEqual(value.params.arguments,currentArgs);
             calls.push(value.params);evidence.calls.push({route,round,...value.params});
-            send({id:value.id,result:{contentItems:[{type:'inputText',text:JSON.stringify({id:`batch-${route}-${round}`,status:'created',cards:toolArgs.cards.map(c=>({alias:c.id,id:`saved-${round}-${c.id}`,kind:c.kind,title:c.title}))})}],success:true}});
+            const receiptCards=[...currentArgs.cards,...(currentArgs.sections??[]).map(section=>({...section,kind:'section'}))].map(c=>({alias:c.id,id:`saved-${round}-${c.id}`,kind:c.kind,title:c.title}));
+            send({id:value.id,result:{contentItems:[{type:'inputText',text:JSON.stringify({id:`batch-${route}-${round}`,status:'created',cards:receiptCards})}],success:true}});
           }else if(value.id!=null&&value.method)throw new Error('unexpected server request '+value.method);
           if(value.method==='item/agentMessage/delta')delta+=value.params.delta;
           if(value.method==='turn/completed'){if(serverFailure)throw serverFailure;assert.equal(value.params.turn.status,'completed',JSON.stringify(value.params.turn));break;}
@@ -129,17 +157,21 @@ try{
         const roundInput=JSON.stringify(requests[requestStart].input);
         if(round===2){assert.ok(roundInput.includes('离线回复 1'));assert.ok(roundInput.includes(`batch-${route}-1`));}
         if(round===3)assert.ok(!JSON.stringify([requests[requestStart].tools??[],requests[requestStart].input.filter(item=>item.type==='additional_tools')]).includes('create_canvas_cards'),'legacy pure-chat thread has no card tool');
-        if(round>=4)assert.ok(roundInput.includes('离线回复 3'),'upgraded transcript persists');
+        if(round>=4&&round<=7)assert.ok(roundInput.includes('离线回复 3'),'upgraded transcript persists');
         if(round===5)assert.ok(roundInput.includes(`batch-${route}-4`),'upgraded tool result persists');
+        if(round===9||round===10){assert.ok(roundInput.includes('离线回复 8'),'v1 public transcript persists after H3 and section upgrade');assert.ok(!roundInput.includes(`batch-${route}-8`),'old v1 tool result is not replayed as fresh creation authority');}
+        if(round===10)assert.ok(roundInput.includes(`batch-${route}-9`),'H3 result survives a resumed CLI process');
+        if(round>=12){assert.ok(roundInput.includes('离线回复 11'),'v2 public transcript persists after section upgrade');assert.ok(!roundInput.includes(`batch-${route}-11`),'old v2 tool result is not replayed as fresh creation authority');}
+        if(round===13){assert.ok(roundInput.includes(`batch-${route}-12`),'section result survives a resumed CLI process');for(const section of toolArgs.sections)assert.ok(roundInput.includes(`saved-12-${section.id}`),'resumed transcript retains every section receipt');}
         evidence.rounds.push({route,round,threadId:providerThread,requests:requests.length-requestStart});
         child.stdin.end();child.kill();if(!closed)await new Promise(resolve=>child.once('exit',resolve));activeChild=undefined;
       }
-      assert.equal(calls.length,4);assert.equal(requests.length,route==='code-mode'?15:9,'disabled delegation must not cause extra child model requests');
+      assert.equal(calls.length,10);assert.equal(requests.length,route==='code-mode'?27:21,'disabled delegation must not cause extra child model requests');
       let mcpStarted=true;try{await access(marker);}catch{mcpStarted=false;}assert.equal(mcpStarted,false,'configured MCP process must not start');
       for(const body of requests){const text=JSON.stringify(body);for(const marker of ['PRIVATE_AGENT_INSTRUCTION','PRIVATE_SKILL_CATALOG','PRIVATE_SKILL_BODY'])assert.ok(!text.includes(marker),`${marker} leaked`);}
     }finally{server.close();}
   }
-  console.log(JSON.stringify({ok:true,modelRequests:evidence.requests.length,toolCalls:evidence.calls.length,directCalls:true,codeModeHostCalls:true,disabledHostReproduced:true,sameThreadRecovered:true,dynamicToolsPersisted:true,legacyUpgrade:true,delegationRejected:true,mcpStarted:false,root},null,2));
+  console.log(JSON.stringify({ok:true,modelRequests:evidence.requests.length,toolCalls:evidence.calls.length,directCalls:true,codeModeHostCalls:true,h3Calls:true,sectionCalls:true,versionOneH3Upgrade:true,versionTwoSectionUpgrade:true,sectionReceiptsResumed:true,disabledHostReproduced:true,sameThreadRecovered:true,dynamicToolsPersisted:true,legacyUpgrade:true,delegationRejected:true,mcpStarted:false,root},null,2));
 }finally{
   activeChild?.kill();await writeFile(path.join(root,'evidence.json'),JSON.stringify(evidence,null,2));
 }

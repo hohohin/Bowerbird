@@ -89,7 +89,7 @@ export const api = {
   workflowTemplateDelete: (id: string, expectedRevision: number) => invoke<void>("workflow_template_delete", { id, expectedRevision }),
   workflowTemplateExport: (id: string, path: string) => invoke<void>("workflow_template_export", { id, path }),
   workflowTemplateExportDocument: (document: WorkflowTemplate, path: string) => invoke<void>("workflow_template_export", { document, path }),
-  canvasWorkflowSave: (projectId: string, revision: number, document: import("./canvasWorkflow").CanvasWorkflow) => invoke<number>("canvas_workflow_save", { projectId, revision, document }),
+  canvasWorkflowSave: (projectId: string, revision: number, document: import("./canvasWorkflow").CanvasWorkflow, createdContent?: NewCanvasNode) => invoke<number>("canvas_workflow_save", { projectId, revision, document, ...(createdContent ? { createdContent } : {}) }),
   // 健康检查
   ping: (name: string) => invoke<string>("ping", { name }),
   dbHealth: () => invoke<string>("db_health"),

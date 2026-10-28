@@ -3,11 +3,12 @@ import type { canvasConversationCards } from "../lib/canvasConversationCards";
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { GripHorizontal, Play, Square, X, Copy, ImagePlus } from "lucide-react";
+import { Clapperboard, Images, List, Palette, Play, Repeat2, Sparkles, Square, TextCursorInput, Timer, Workflow, X, Copy, ImagePlus } from "lucide-react";
 import { api } from "../lib/api";
 import { canUseComfyVideo } from "../lib/comfyVideo";
 import { assignCanvasCardNames, canvasCardNameError } from "../lib/canvasCardNames";
 import { CanvasCardName } from "./CanvasCardName";
+import { TacticalSelect } from "./TacticalSelect";
 import { WorkflowDisconnectMenu, type DisconnectChoice } from "./WorkflowDisconnectMenu";
 import { WorkflowLoopStartSelect } from "./WorkflowLoopStartSelect";
 import { workflowLoopItems } from "../lib/workflowLoop";
@@ -23,7 +24,7 @@ import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { workflowDiagnosticReport } from "../lib/workflowDiagnostics";
 import { removeWorkflowNodes, retryWorkflowSave } from "../lib/workflowRemoval";
 import { WORKFLOW_CARD_DRAG_TYPE, workflowBindingKey } from "../lib/canvasWorkflow";
-import { invalidateWorkflow, newWorkflowNode, workflowNodeRun, workflowRuns, workflowInputProducers, workflowConnectionError, workflowInputs, workflowOutputs,
+import { assertWorkflowAcyclic, invalidateWorkflow, newWorkflowNode, workflowNodeRun, workflowRuns, workflowInputProducers, workflowConnectionError, workflowInputs, workflowOutputs,
   workflowPortY, workflowTitle, workflowCardWidth, WORKFLOW_SKILLS, type CanvasWorkflow, type WorkflowInput, type WorkflowKind, type WorkflowLoopItem, type WorkflowNode, type WorkflowPort } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode, VisualProfileSummary } from "../lib/types";
 import { ProviderSelect } from "./creation/ProviderSelect";
@@ -41,6 +42,19 @@ import { WorkflowPlannerCard } from "./WorkflowPlannerCard";
 import { WorkflowTemplateLibrary } from "./WorkflowTemplateLibrary";
 import { SaveWorkflowTemplateDialog } from "./SaveWorkflowTemplateDialog";
 import "./CanvasWorkflow.css";
+
+const WORKFLOW_CARD_PRESENTATION = {
+  instruction: { icon: List, code: "CMD", title: "指令处理" },
+  generation: { icon: Images, code: "GEN", title: "图片生成" },
+  agent: { icon: TextCursorInput, code: "AGT", title: "Agent 执行" },
+  loop: { icon: Repeat2, code: "LOOP", title: "循环处理" },
+  "visual-profile": { icon: Palette, code: "VIS", title: "视觉规范" },
+  trigger: { icon: Timer, code: "TRG", title: "触发模块" },
+  "comfy-video": { icon: Clapperboard, code: "VID", title: "本地 H3 视频" },
+  skill: { icon: Sparkles, code: "MOD", title: "技能卡片" },
+  planner: { icon: Sparkles, code: "MOD", title: "工作流助手" },
+  text: { icon: Workflow, code: "MOD", title: "工作流" },
+};
 
 export function WindingKey({ size = 20 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -70,7 +84,7 @@ interface Props {
   panReady: boolean;
   onSelect: (id: string, additive?: boolean) => void;
   onNodesChanged: () => void;
-  onEdited: (before: CanvasWorkflow, after: CanvasWorkflow) => void;
+  onEdited: (before: CanvasWorkflow, after: CanvasWorkflow, createdNodeIds?: string[]) => void;
   onOpenGeneration: (node: CanvasNode) => void;
   onOpenAgent: (nodeId: string) => void;
   onDragStart: (event: React.PointerEvent<HTMLElement>, node: WorkflowNode) => void;
@@ -84,6 +98,10 @@ interface Props {
   onPlaced: (rect: { x: number; y: number; width: number; height: number }) => void;
 }
 type Connection = WorkflowInput & { type: WorkflowPort["type"] };
+function connectionForType(source: Connection, type?: WorkflowPort["type"]): Connection {
+  return ["*latest", "*latest-image"].includes(source.cellId ?? "") && (type === "text" || type === "image")
+    ? { ...source, cellId: type === "image" ? "*latest-image" : "*latest", type } : source;
+}
 export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(function CanvasWorkflowLayer({ projectId, provisional = false, zoom, materials, graphNodes, conversationCards, imageOnlyConversationIds, ensureMaterialized, toBoardPoint, onPlaced, selectedIds, panReady, onSelect, onNodesChanged, onEdited, onOpenGeneration, onOpenAgent, onDragStart, onDragMove, onDragEnd, onNodeMenu, onRemove }, ref) {
   const controller = useMemo(() => canvasWorkflowController(projectId), [projectId]);
   const [, redraw] = useState(0);
@@ -154,7 +172,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       const note = readCanvasNote(source), cellId = issue.source.cellId;
       const row = note.cells.findIndex(row => row.some(cell => cell.id === cellId));
       const column = row >= 0 ? note.cells[row].findIndex(cell => cell.id === cellId) : -1;
-      return `${cardNames[source.id] ?? "内容卡片"} · ${row >= 0 ? `第 ${row + 1} 行，第 ${column + 1} 列` : cellId === "*" ? "全部图片" : cellId === "*text" ? "全部文本" : "目标单元格已删除"}`;
+      return `${cardNames[source.id] ?? "内容卡片"} · ${row >= 0 ? `第 ${row + 1} 行，第 ${column + 1} 列` : cellId === "*" ? "全部图片" : cellId === "*text" ? "全部文本" : cellId?.startsWith("*latest") ? "输出最新" : "目标单元格已删除"}`;
     }
     return issue.source.canvasNodeId ? "来源内容卡片当前不可定位" : "";
   })();
@@ -253,7 +271,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       const note = readCanvasNote(native);
       const row = note.cells.findIndex(row => row.some(cell => cell.id === binding.cellId));
       const column = row < 0 ? -1 : note.cells[row].findIndex(cell => cell.id === binding.cellId);
-      detail = row >= 0 ? `第 ${row + 1} 行，第 ${column + 1} 列` : binding.cellId === "*" ? "全部图片" : binding.cellId === "*text" ? "全部文本" : "单元格已删除";
+      detail = row >= 0 ? `第 ${row + 1} 行，第 ${column + 1} 列` : binding.cellId === "*" ? "全部图片" : binding.cellId === "*text" ? "全部文本" : binding.cellId?.startsWith("*latest") ? "输出最新" : "单元格已删除";
     }
     return { label, detail };
   }
@@ -277,25 +295,42 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     })), point);
   }
   function connect(toId: string, inputId: string) {
-    const source = connectionRef.current;
-    if (!source || controller.isLocked(toId)) return;
+    const draft = connectionRef.current;
+    if (!draft || controller.isLocked(toId)) return;
     const nodes = controller.document.nodes;
     const node = nodes.find(node => node.id === toId)!;
     const port = workflowInputs(node).find(port => port.id === inputId);
+    const source = connectionForType(draft, port?.type);
+    const latest = source.cellId === "*latest" || source.cellId === "*latest-image";
     const producers = workflowInputProducers(nodes, source);
     const sessionCompletion = node.kind === "trigger" && inputId === "completion" && source.cellId === "image"
       && graphNodes.some(card => card.id === source.canvasNodeId && card.kind === "prompt" && card.hiddenAt == null);
-    const error = producers.map(producer => workflowConnectionError(nodes, producer, source.portId ?? source.type, toId, inputId)).find(Boolean)
+    const error = (latest ? [] : producers).map(producer => workflowConnectionError(nodes, producer, source.portId ?? source.type, toId, inputId)).find(Boolean)
       ?? (node.kind === "trigger" && inputId === "completion" ? (!source.nodeId && !sessionCompletion ? "请连接执行卡片或绘画会话的输出端口" : null) : port?.type !== source.type ? "只能连接相同类型的端口" : null);
     if (error) { notifyError(null, error); return; }
+    if (node.kind === "visual-profile" && node.profileId) { notifyError(null, "请先切换到从输入提炼"); return; }
+    const generator = nodes.find(node => node.id === source.nodeId);
+    if (generator?.kind === "generation" && generator.generation?.media !== "video" && source.portId === "image" && port?.type === "image") {
+      setConnection(null); connectionRef.current = null;
+      handle((async () => {
+        await ensureMaterialized();
+        const result = await controller.connectGenerationImage(generator.id, toId, inputId);
+        onEdited(result.before, result.after, result.created ? [result.node.id] : undefined);
+        onSelect(result.node.id);
+      })());
+      return;
+    }
     const { type: _type, ...binding } = source;
     const current = node.inputs[inputId] ?? [];
     if (current.some(input => binding.groupId ? input.groupId === binding.groupId : workflowBindingKey(input) === workflowBindingKey(binding))) { setConnection(null); connectionRef.current = null; return; }
-    if (node.kind === "visual-profile" && node.profileId) { notifyError(null, "请先切换到从输入提炼"); return; }
     // An explicit new connection can replace a deleted source on its old pipe.
     const missing = (node.kind === "generation" || node.kind === "agent")
       ? current.filter(input => canvasWorkflowInputState(input, graphNodes, nodes) === "missing").sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))[0] : undefined;
     const connected = missing ? current.map(input => input === missing ? { ...binding, slot: missing.slot } : input) : [...current, binding];
+    if (latest) {
+      try { assertWorkflowAcyclic(nodes.map(item => item.id === toId ? { ...item, inputs: { ...item.inputs, [inputId]: connected } } : item), toId); }
+      catch (error) { notifyError(error, "这条连接会形成循环"); return; }
+    }
     patch(toId, { ...(sessionCompletion ? { completionSeen: [...new Set([...(node.completionSeen ?? []), ...completedCanvasSessions([binding], graphNodes, useStore.getState().genJobs)])] } : {}),
       inputs: { ...node.inputs, [inputId]: (node.kind === "comfy-video" && inputId !== "text") || (node.kind === "instruction" && node.action !== "describe") || (inputId === "visual-profile" || node.kind === "loop" && node.loopMode === "rows") ? [binding] : connected } });
     setConnection(null); connectionRef.current = null;
@@ -315,7 +350,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
     setConnection(null); connectionRef.current = null;
   }
   function inputText(nodeId: string, cellId?: string, disconnect = false, inputType?: "text" | "image", point = cursor) {
-    const source = connectionRef.current;
+    const source = connectionRef.current && connectionForType(connectionRef.current, inputType);
     if (!disconnect && source) {
       if (inputType && source.type !== inputType) { notifyError(null, inputType === "image" ? "此端口接收图片" : "此端口接收文字"); return; }
       if (source.type !== "image" && source.type !== "text") { notifyError(null, "文本卡片只接收文本或图片"); return; }
@@ -514,7 +549,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
         return { x: anchor.x + anchor.width, y: anchor.y + 50, selected: wireSelected(anchor.id) };
       }
       const card = Array.from(window.document.querySelectorAll<HTMLElement>("[data-canvas-node-id]")).find(element => element.dataset.canvasNodeId === binding.canvasNodeId);
-      const port = Array.from(card?.querySelectorAll<HTMLElement>("[data-workflow-cell]") ?? []).find(element => element.dataset.workflowCell === binding.cellId);
+      const port = Array.from(card?.querySelectorAll<HTMLElement>("[data-workflow-cell]") ?? []).find(element => element.dataset.workflowCell === (binding.cellId === "*latest-image" ? "*latest" : binding.cellId));
       if (!port) return null;
       const rect = port.getBoundingClientRect(); return { ...toBoardPoint(rect.left + rect.width / 2, rect.top + rect.height / 2), selected: wireSelected(binding.canvasNodeId) };
     }
@@ -693,6 +728,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
       const profileId = node.profileId || node.profileCache?.profileId || step?.profileId;
       const inputIds = node.kind === "trigger" ? [] : Object.values(node.inputs).flat().flatMap(inputImages);
       const selectedImages = [...new Set(node.kind !== "agent" && images.length ? images : inputIds)].map(id => assets.find(asset => asset.id === id)).filter((asset): asset is Asset => !!asset);
+      const presentation = WORKFLOW_CARD_PRESENTATION[node.kind], CardIcon = presentation.icon;
       return <article key={node.id} data-canvas-node data-workflow-card={node.id} ref={element => { if (element) cardElements.current.set(node.id, element); else cardElements.current.delete(node.id); }} aria-busy={run?.status === "running" && step?.status === "running"} className={`workflow-card ${run?.status === "running" && step?.status === "running" ? "canvas-card-running" : step?.status === "failed" || nodeDiagnostic(node.id) ? "canvas-card-error" : ""} is-${node.kind} ${selectedIds.has(node.id) ? "is-selected" : ""} ${armed ? "is-key-target" : ""}`}
         onMouseEnter={event => { if (node.kind === "trigger" && !event.buttons) showProgress(node.id, event.currentTarget, true); }}
         onMouseLeave={() => { if (node.kind === "trigger") setKeyHover(null); }}
@@ -724,13 +760,16 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           if (node.kind === "instruction" && node.action !== "describe" && ids.length !== 1) { notifyError(null, "此指令只接收一张图片"); return; }
           patch(node.id, { inputs: { ...node.inputs, image: ids.map(assetId => ({ assetId })) } });
         }}>
+        <div className="canvas-tactical-card-shell" aria-hidden="true" />
         {nameEditor(node.id, { left: 0, top: -28, maxWidth: workflowCardWidth(node) - 60 })}
         {node.inputs.signal?.length ? gearButton(node) : node.trigger && keyButton(node)}
         <header onPointerDown={event => {
           if ((event.target as HTMLElement).closest("button") || busy) return;
           onDragStart(event, node);
         }} onPointerMove={onDragMove} onPointerUp={event => onDragEnd(event)} onPointerCancel={event => onDragEnd(event, true)}>
-          <GripHorizontal size={15} /><strong aria-label="拖动卡片">{node.kind === "generation" ? node.generation?.media === "video" ? "视频生成" : "图片生成" : null}</strong>
+          <span className="canvas-tactical-module-icon" aria-hidden="true"><CardIcon size={15} strokeWidth={1.5} /></span>
+          <span className="canvas-tactical-module-code" data-module-code={presentation.code} aria-hidden="true" />
+          <strong title="拖动卡片">{node.kind === "generation" && node.generation?.media === "video" ? "视频生成" : presentation.title}</strong>
           {node.kind === "generation" && <WorkflowGenerationHistory node={node} graphNodes={graphNodes} onOpen={onOpenGeneration} />}
           {node.kind === "comfy-video" && <ComfyEnvironmentControl node={node} disabled={busy} onChange={changes => patch(node.id, changes, false)} />}
           <button aria-label="复制卡片" disabled={busy} onClick={() => {
@@ -740,11 +779,11 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           <button aria-label="删除卡片" disabled={busy} onClick={() => onRemove(node.id)}><X size={15} /></button>
         </header>
         {node.kind === "generation" && <div className="workflow-generation-parameters" role="toolbar" aria-label="生成参数" onPointerDown={event => event.stopPropagation()}>
-          <fieldset disabled={busy}><select aria-label="生成类型" value={node.generation?.media ?? "image"} onChange={event => patch(node.id, { generation: { ...node.generation, media: event.target.value as "image" | "video" } })}>
+          <fieldset disabled={busy}><TacticalSelect aria-label="生成类型" value={node.generation?.media ?? "image"} onValueChange={value => patch(node.id, { generation: { ...node.generation, media: value as "image" | "video" } })}>
             <option value="image">图片</option><option value="video">视频</option>
-          </select>{node.generation?.media !== "video" && <><RatioSelect value={node.ratio} onChange={ratio => patch(node.id, { ratio })} />
+          </TacticalSelect>{node.generation?.media !== "video" && <><RatioSelect value={node.ratio} onChange={ratio => patch(node.id, { ratio })} />
             <ProviderSelect value={node.provider} onChange={provider => patch(node.id, { provider })} codexHealth={state.codexHealth} dreaminaHealth={state.dreaminaHealth}
-              cloudAvailable={!!state.cloudAuth?.cloud_available} cloudAuth={state.cloudAuth} cloudEntitlement={state.cloudEntitlement} /></>}</fieldset>
+              cloudAvailable={!!state.cloudAuth?.cloud_available} cloudAuth={state.cloudAuth} cloudEntitlement={state.cloudEntitlement} menuClassName="canvas-tactical-model-menu" /></>}</fieldset>
         </div>}
         <div className="workflow-card-body">
           {node.templateInstance && <section className="workflow-template-instance" aria-label="子流程接口">
@@ -758,32 +797,32 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
             </details>
             <button disabled={busy || node.templateInstance.nodeIds.some(id => controller.isLocked(id))} onClick={() => handle(edit(removeWorkflowNodes(controller.document.nodes, node.templateInstance!.nodeIds)))}>移除整个子流程</button>
           </section>}
-          {node.kind === "loop" && <select aria-label="循环方式" disabled={busy} value={node.loopMode ?? "images"} onChange={event => {
-              const loopMode = event.target.value as NonNullable<WorkflowNode["loopMode"]>;
+          {node.kind === "loop" && <TacticalSelect aria-label="循环方式" disabled={busy} value={node.loopMode ?? "images"} onValueChange={value => {
+              const loopMode = value as NonNullable<WorkflowNode["loopMode"]>;
               const outputIds = new Set(workflowOutputs({ ...node, loopMode }).map(port => port.id));
               const nodes = invalidateWorkflow(document.nodes, node.id).map(candidate => candidate.id === node.id
                 ? { ...candidate, loopMode, loopCount: loopMode === "count" ? candidate.loopCount ?? 1 : undefined, loopStartItem: 1, inputs: { ...(node.inputs.signal ? { signal: node.inputs.signal } : {}) } }
                 : { ...candidate, inputs: Object.fromEntries(Object.entries(candidate.inputs).map(([port, bindings]) => [port, bindings.filter(input => input.nodeId !== node.id || outputIds.has(input.portId ?? ""))])) });
               handle(edit(nodes));
-            }}><option value="images">逐张图片</option><option value="rows">内容卡逐行</option><option value="count">按次数</option></select>}
+            }}><option value="images">逐张图片</option><option value="rows">内容卡逐行</option><option value="count">按次数</option></TacticalSelect>}
           {node.kind === "planner" && <WorkflowPlannerCard node={{ ...node, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: materials.find(item => item.groupId === input.groupId)?.assetIds ?? [] } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} runtime={controller.planner} onChange={(prompt, promptReferences) => patch(node.id, { prompt, promptReferences })} onLocate={() => { const first = node.planning?.appliedNodes?.[0]; if (first) locateIssue(first.id); }} />}
-          {node.kind === "instruction" && <select aria-label="指令功能" disabled={busy} value={node.action} onChange={event => {
-            const action = event.target.value as WorkflowNode["action"];
+          {node.kind === "instruction" && <TacticalSelect aria-label="指令功能" disabled={busy} value={node.action} onValueChange={value => {
+            const action = value as WorkflowNode["action"];
             const nodes = invalidateWorkflow(document.nodes, node.id).map(candidate => candidate.id === node.id ? { ...candidate, action, outputPorts: [] } : { ...candidate,
               inputs: Object.fromEntries(Object.entries(candidate.inputs).map(([port, bindings]) => [port, bindings.filter(binding => binding.nodeId !== node.id)])) });
             handle(edit(nodes));
-          }}><option value="describe">反推</option><option value="reuse">复用生成提示词</option><option value="layers">分层编辑</option></select>}
-          {node.kind === "skill" && <select aria-label="选择技能" disabled={busy} value={node.skill} onChange={event => patch(node.id, { skill: event.target.value })}>
+          }}><option value="describe">反推</option><option value="reuse">复用生成提示词</option><option value="layers">分层编辑</option></TacticalSelect>}
+          {node.kind === "skill" && <TacticalSelect aria-label="选择技能" disabled={busy} value={node.skill} onValueChange={value => patch(node.id, { skill: value })}>
             {WORKFLOW_SKILLS.map(skill => <option key={skill.id} value={skill.id}>{skill.label}</option>)}
-          </select>}
-          {node.kind === "agent" && <select aria-label="Agent 执行引擎" disabled={busy} value={node.agentTransport ?? "local-ds"} onChange={event => patch(node.id, { agentTransport: event.target.value as "local-ds" | "codex-cli" | "cloud" })}>
+          </TacticalSelect>}
+          {node.kind === "agent" && <TacticalSelect aria-label="Agent 执行引擎" disabled={busy} value={node.agentTransport ?? "local-ds"} onValueChange={value => patch(node.id, { agentTransport: value as "local-ds" | "codex-cli" | "cloud" })}>
             <option value="local-ds">本机 Agent DS · 图文处理</option><option value="codex-cli">Codex CLI · 图文处理</option><option value="cloud">Cloud DSH · 文本改写</option>
-          </select>}
-          {node.kind === "visual-profile" && <select aria-label="视觉规范来源" disabled={busy} value={node.profileId ?? ""} onChange={event => patch(node.id, { profileId: event.target.value || undefined, profileCache: undefined, inputs: {}, prompt: "" })}>
+          </TacticalSelect>}
+          {node.kind === "visual-profile" && <TacticalSelect aria-label="视觉规范来源" disabled={busy} value={node.profileId ?? ""} onValueChange={value => patch(node.id, { profileId: value || undefined, profileCache: undefined, inputs: {}, prompt: "" })}>
             <option value="">从图片 / 文字提炼</option>
             {node.profileId && !profiles.some(p => p.id === node.profileId) && <option value={node.profileId}>已选规范不可用</option>}
             {profiles.map(p => <option key={p.id} value={p.id}>{p.name} · v{p.version}</option>)}
-          </select>}
+          </TacticalSelect>}
           {node.kind !== "comfy-video" && node.kind !== "generation" && <div className="workflow-port-space" style={{ height: Math.max(inputPorts.length, outputPorts.length, 2) * 30 }} />}
           {node.kind === "comfy-video" && <ComfyVideoCard node={node} disabled={busy} assets={assets} inputImages={inputImages} onChange={changes => patch(node.id, changes)} />}
           {node.kind === "loop" && <section className="workflow-loop" aria-label="循环设置">
@@ -810,7 +849,7 @@ export const CanvasWorkflowLayer = forwardRef<WorkflowLayerHandle, Props>(functi
           {node.kind === "instruction" && node.action === "describe" && <WorkflowDescribeOption node={node} assetIds={inputIds} checked={!!node.overwriteDescribe} disabled={busy} onChange={overwriteDescribe => patch(node.id, { overwriteDescribe })} />}
           {node.kind === "visual-profile" && !node.profileId && <input className="workflow-profile-name" aria-label="规范名称" disabled={busy} maxLength={80} placeholder="画板视觉规范" value={node.profileName ?? ""} onChange={event => patch(node.id, { profileName: event.target.value }, false)} />}
           {node.kind === "generation" && node.generation?.media === "video" && <fieldset className="workflow-video-controls" disabled={busy} onPointerDown={event => event.stopPropagation()}>
-            <VideoControls options={node.generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS} channel={node.generation.videoChannel ?? "jimeng"}
+            <VideoControls menuClassName="canvas-tactical-model-menu" options={node.generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS} channel={node.generation.videoChannel ?? "jimeng"}
               onChange={(videoOptions, videoChannel = node.generation?.videoChannel) => patch(node.id, { generation: { ...node.generation, videoChannel, videoOptions } })}
               ratio={node.generation.ratio ?? "16:9"} onRatioChange={ratio => patch(node.id, { generation: { ...node.generation, ratio } })} />
             <p>按 @ 引用顺序传入素材；首尾帧模式依次为首帧、尾帧。</p>

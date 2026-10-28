@@ -2,6 +2,14 @@
 
 **2026-10-23 发布补记：** 本页当日桌面源码已随 Windows **26.10.2301** 发布（源码 4156e8e0），下方“待发布／未打包”是专项验证时的历史状态。正式包、签名、CDN 及回滚证据见 [桌面自动更新](DESKTOP-UPDATES.md)。原有真实安装／GPU、原生 UI 和 Mac 实机验收边界继续保留。
 
+## 2026-10-28：规范化路径导致视频封面仍为空（源码未发布）
+
+- 用户再次反馈其他电脑生成视频只显示播放占位。已在发布版 Windows 26.10.2801 的封面 worker 复现：同一份当日 Cloud 480p 验收 MP4，普通 `D:\...` 路径成功，带 `\\?\D:\...` 前缀的路径失败。`FileWorkspace` 的目录可写检测返回 `fs::canonicalize` 结果，因此正式入库会使用这种路径；开发机存在 FFmpeg 时可被回退路径掩盖，缺工具的电脑会留下空封面。未取得故障电脑日志，此处记录的是已复现代码缺陷。
+- Windows 首帧与系统元数据读取共用 `open_local_reader`：先以 `MFCreateFile` 打开原路径，再用 `MFCreateSourceReaderFromByteStream` 解码，避免把规范化文件路径交给 URL 解析器；不剥离长路径／UNC 前缀，不改视频文件、素材身份或生成任务。独立 worker、15 秒超时、串行提取与 FFmpeg 回退保留。API 依据：[MFCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/mfapi/nf-mfapi-mfcreatefile)、[字节流 Source Reader](https://learn.microsoft.com/en-us/windows/win32/api/mfreadwrite/nf-mfreadwrite-mfcreatesourcereaderfrombytestream)。
+- 前端封面请求不再永久缓存失败：失败共享 10 秒冷却，同一挂载最多自动补试一次，快速重挂载继续去重。实际封面图片加载失败时只失效匹配的已完成缓存，再请求一次修复；修复仍失败保持占位，不循环解码。路径切换和卸载清除补试计时并忽略迟到显示，轮播切换丢弃旧失败状态，返回原视频仍可恢复；被动卡片仍为静态图片，不创建隐藏视频或预取视频字节。
+- 原生验证在明确禁用 FFmpeg 回退后通过：真实 Cloud 854×480 MP4 的规范化路径封面与旧版普通路径产物 SHA-256 完全一致；原生元数据为 854×480、5.042 秒。40ms 中文空格短片、90° 旋转／参考像素比对、规范化路径、损坏视频无半成品，以及 300 字符且含中文／空格／`#`／`%` 的 Windows 长路径均通过。回归已扩展 `src-tauri/examples/video_poster_smoke.rs`；证据位于本机 `.tmp/video-poster-20261028-audit/`。网络 UNC 共享与故障电脑尚未实机验证。
+- 完整 TypeScript、封面缓存 Rust 3 项、元数据 Rust 7 项，以及封面恢复／静态媒体预览／媒体生命周期三组 Chromium 回归通过。新增 `scripts/video-poster-recovery-ui.test.mjs` 覆盖成功缓存丢失后的真实 404、会话快照、冷却内多次重挂载、暂时失败恢复、永久失败停止、切换取消和 A→B→A 恢复；旧媒体夹具在慢速原生测试中按 10 秒冷却检查失败重试，保留成功去重、单解码器、30 轮挂载与 5 轮播放器释放检查。只读使用已有生成验收视频及合成视频，不调用模型、不操作真实素材库；包含原生改动，需重新构建发布客户端后其他电脑才会获得修复，当前未打包发布。
+
 ## 2026-10-23：桌面视频元数据增加系统回退（源码未发布）
 
 - 读取顺序为内置 MP4/MOV/M4V 解析 → Windows Media Foundation / macOS AVFoundation → 可选 ffprobe。`--video-probe-worker` 在主程序初始化前执行；系统探测与 ffprobe 实际探测均在独立进程内，15 秒超时结束并回收，响应限读 64 KiB。复用已有原生静态库与 Windows DLL 延迟加载，不增加媒体工具二进制或依赖包，不修改云端、裁剪/转码或工具发现协议。

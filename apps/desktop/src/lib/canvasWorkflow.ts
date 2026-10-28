@@ -46,7 +46,7 @@ export interface WorkflowNode {
   activeSessionNodeId?: string | null;
   resultNodeIds?: string[];
   resultGroupId?: string;
-  textTarget?: { nodeId: string; cellId: string; cellIds?: string[]; tableCellIds?: string[][]; append?: boolean; image?: boolean; appendAxis?: "row" | "column"; axisCellIds?: string[]; axisOffset?: number };
+  textTarget?: { nodeId: string; cellId: string; cellIds?: string[]; tableCellIds?: string[][]; append?: boolean; image?: boolean; appendAxis?: "row" | "column"; axisCellIds?: string[]; axisOffset?: number; automaticImageRelay?: boolean };
   textSource?: string;
   profileId?: string;
   profileName?: string;
@@ -179,7 +179,7 @@ export function workflowInputProducer(nodes: WorkflowNode[], input: WorkflowInpu
 }
 
 export function workflowInputProducers(nodes: WorkflowNode[], input: WorkflowInput): string[] {
-  if (input.canvasNodeId && (input.cellId === "*" || input.cellId === "*text")) return nodes.filter(node => node.textTarget?.nodeId === input.canvasNodeId || node.resultNodeIds?.includes(input.canvasNodeId!)).map(node => node.id);
+  if (input.canvasNodeId && ["*", "*text", "*latest", "*latest-image"].includes(input.cellId ?? "")) return nodes.filter(node => node.textTarget?.nodeId === input.canvasNodeId || node.resultNodeIds?.includes(input.canvasNodeId!)).map(node => node.id);
   const id = workflowInputProducer(nodes, input);
   return id ? [id] : [];
 }
@@ -290,33 +290,25 @@ export const workflowImageContainer = (input: WorkflowInput) => !!(input.nodeId 
 export function activePromptReferences(node: WorkflowNode) {
   return (node.promptReferences ?? []).filter(ref => node.prompt.includes(workflowReferenceToken(ref.id)));
 }
-/** Input slots belong to the receiving card, independently of their current sources. */
-export function normalizeWorkflowInputSlots(node: WorkflowNode, previous?: WorkflowNode): WorkflowNode {
-  if (node.kind !== "generation" && node.kind !== "agent") return node;
+/** A pipe number is the current position among the receiving card's inputs of that type. */
+export function normalizeWorkflowInputSlots(node: WorkflowNode): WorkflowNode {
+  if (node.kind !== "generation" && node.kind !== "agent" && node.kind !== "planner") return node;
   const inputs = { ...node.inputs };
   for (const type of ["text", "image"] as const) {
     if (!inputs[type]) continue;
-    const used = new Set<number>();
-    const numbered = inputs[type].map(input => {
-      const slot = input.slot ?? previous?.inputs[type]?.find(old => workflowBindingKey(old) === workflowBindingKey(input))?.slot;
-      if (!slot || used.has(slot)) return input.slot === undefined ? input : { ...input, slot: undefined };
-      used.add(slot); return input.slot === slot ? input : { ...input, slot };
-    });
-    inputs[type] = numbered.map(input => {
-      if (input.slot) return input;
-      let slot = 1; while (used.has(slot)) slot++;
-      used.add(slot); return { ...input, slot };
-    });
+    inputs[type] = inputs[type].map((input, index) => input.slot === index + 1 ? input : { ...input, slot: index + 1 });
   }
   const promptReferences = node.promptReferences?.map(ref => {
     if (ref.direction === "output") return ref;
-    // Old saves have source snapshots and numbered labels. Migrate the number,
-    // never require the old cell/card to match the current end of that pipe.
+    // Planner mentions used source identities before numbered pipes. Migrate
+    // those by their connected source once; explicit slots always mean position.
     const labelSlot = /^(?:文本|图片来源|生成结果|图片)\s*(\d+)(?:\.\d+)?$/.exec(ref.label)?.[1];
     const bindings = inputs[ref.type] ?? [];
-    const slot = ref.slot ?? (labelSlot ? Number(labelSlot) : undefined)
+    const slot = ref.slot ?? (node.kind === "planner"
+      ? bindings.find(input => workflowBindingKey(ref.input) === workflowBindingKey(input))?.slot
+      : (labelSlot ? Number(labelSlot) : undefined)
       ?? bindings.find(input => workflowReferenceMatchesInput(ref, input))?.slot
-      ?? (bindings.length === 1 ? bindings[0].slot : undefined);
+      ?? (bindings.length === 1 ? bindings[0].slot : undefined));
     const input = bindings.find(input => input.slot === slot);
     return { ...ref, slot, input: input ?? ref.input, assetId: undefined,
       label: slot ? `${ref.type === "text" ? "文本" : "图片来源"} ${slot}` : ref.label };
@@ -326,7 +318,7 @@ export function normalizeWorkflowInputSlots(node: WorkflowNode, previous?: Workf
 export function rebindGenerationReferences(node: WorkflowNode): WorkflowNode {
   return normalizeWorkflowInputSlots(node);
 }
-export const workflowReferenceMatchesInput = (ref: WorkflowPromptReference, input: WorkflowInput) =>
+export const workflowReferenceMatchesInput = (ref: Pick<WorkflowPromptReference, "direction" | "slot" | "input">, input: WorkflowInput) =>
   ref.direction !== "output" && (ref.slot !== undefined ? ref.slot === input.slot : workflowBindingKey(ref.input) === workflowBindingKey(input));
 export function generationInputNode(node: WorkflowNode): WorkflowNode {
   if (node.kind !== "generation" && node.kind !== "agent") return node;
@@ -442,7 +434,7 @@ export function workflowInputValues(nodes: WorkflowNode[], node: WorkflowNode, c
         if (text === undefined) throw new Error("来源卡片或单元格不存在，请检查来源连接");
           const value: WorkflowValue = typeof text === "string" ? { type: "text", text } : text;
           if (value.type !== port.type) throw new Error("连接的单元格类型不匹配，请重新连接");
-          if (value.type === "text" && !value.text?.trim()) throw new Error("来源卡片或单元格中没有可用文本");
+          if (value.type === "text" && !value.text?.trim() && !value.nodeIds?.length) throw new Error("来源卡片或单元格中没有可用文本");
           if (value.type === "image" && !value.assetIds?.length && !value.nodeIds?.length) throw new Error("来源卡片或单元格中没有可用图片");
           return value;
       }

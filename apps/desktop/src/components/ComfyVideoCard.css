@@ -9,7 +9,7 @@
 .comfy-video-options { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border: 0; padding: 0; margin: 0; min-width: 0; }
 .comfy-video-options label { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--bb-muted); }
 .comfy-video-options input { width: 56px; height: 28px; box-sizing: border-box; padding: 0 8px; border: 1px solid var(--bb-line); border-radius: 4px; background: var(--bb-surface-2); color: var(--bb-ink); }
-.workflow-card .comfy-video-options > select { width: auto; height: 28px; padding: 0 8px; border-radius: 4px; }
+.workflow-card .comfy-video-options > :is(select, .tactical-select-trigger) { width: auto; height: 28px; padding: 0 8px; border-radius: 4px; }
 /* The header keeps a full button hit target around the small status dot. */
 .workflow-card > header .comfy-environment-dot { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; }
 .comfy-environment-dot > span { width: 8px; height: 8px; border-radius: 50%; background: var(--bb-danger-strong); }

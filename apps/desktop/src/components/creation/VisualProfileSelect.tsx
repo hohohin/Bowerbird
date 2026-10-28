@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { useStore } from "../../store";
 import { beginOnboardingOperation } from "../../lib/onboardingStore";
 import { VisualProfileImportButton } from "../VisualProfileImportButton";
+import { TacticalSelect } from "../TacticalSelect";
 
 export function VisualProfileSelect({
   value,
@@ -32,12 +33,11 @@ export function VisualProfileSelect({
     >
       <Palette size={12} className="shrink-0 text-accent" />
       <span className="shrink-0">品牌规范</span>
-      <select
+      <TacticalSelect
         aria-label="品牌视觉规范"
         value={selectedProfile?.id ?? ""}
         disabled={disabled || profiles.length === 0}
-        onChange={(event) => {
-          const selected = event.target.value;
+        onValueChange={(selected) => {
           if (!selected || profiles.some((profile) => profile.id === selected)) {
             const completeLesson = beginOnboardingOperation("profile-select", useStore.getState().activeProjectId);
             onChange(selected || null);
@@ -52,7 +52,7 @@ export function VisualProfileSelect({
             {profile.name} · v{profile.version}
           </option>
         ))}
-      </select>
+      </TacticalSelect>
     </label>
     <VisualProfileImportButton disabled={disabled} compact />
     {selectedProfile && <button type="button" disabled={disabled}

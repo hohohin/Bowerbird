@@ -1,4 +1,4 @@
-import { activePromptReferences, normalizeWorkflowInputSlots, assertWorkflowAcyclic, newWorkflowNode, workflowBindingKey, workflowImageContainer, workflowInputs, workflowOutputs, WORKFLOW_SKILLS,
+import { activePromptReferences, normalizeWorkflowInputSlots, assertWorkflowAcyclic, newWorkflowNode, workflowReferenceMatchesInput, workflowInputs, workflowOutputs, WORKFLOW_SKILLS,
   type WorkflowInput, type WorkflowNode, type WorkflowPortType } from "./canvasWorkflow";
 
 export interface PlanningSource { id: string; type: "text" | "image"; input: WorkflowInput; label: string; preview?: string; contentKey?: string; parentId?: string }
@@ -24,7 +24,20 @@ export const planningSnapshotKey = (value: unknown): string => JSON.stringify(va
   item && typeof item === "object" && !Array.isArray(item)
     ? Object.fromEntries(Object.keys(item).sort().map(key => [key, item[key]])) : item);
 export function samePlanningContext(saved: string, current: string): boolean {
-  try { return planningSnapshotKey(JSON.parse(saved)) === planningSnapshotKey(JSON.parse(current)); }
+  const normalized = (value: unknown) => {
+    if (!Array.isArray(value) || (value.length !== 3 && value.length !== 4)
+      || typeof value[0] !== "string" || typeof value[1] !== "string"
+      || !value[2] || typeof value[2] !== "object" || Array.isArray(value[2])
+      || (value[3] !== undefined && !Array.isArray(value[3]))) return undefined;
+    // Loading adds positional slots and migrates old planner mention labels.
+    // Compare both checkpoints under that same contract without resubmitting.
+    const node = normalizeWorkflowInputSlots({ kind: "planner", prompt: value[0], provider: value[1], inputs: value[2], promptReferences: value[3] } as WorkflowNode);
+    return [node.prompt, node.provider, node.inputs, ...(activePromptReferences(node).length ? [activePromptReferences(node)] : [])];
+  };
+  try {
+    const previous = normalized(JSON.parse(saved)), next = normalized(JSON.parse(current));
+    return previous !== undefined && next !== undefined && planningSnapshotKey(previous) === planningSnapshotKey(next);
+  }
   catch { return false; }
 }
 export const plannerContextKey = (node: WorkflowNode) => planningSnapshotKey([node.prompt, node.provider, node.inputs,
@@ -34,9 +47,9 @@ export const plannerContextKey = (node: WorkflowNode) => planningSnapshotKey([no
 export function compilePlanningPrompt(node: WorkflowNode, sources: PlanningSource[]): string {
   return node.prompt.replace(/@\[([^\]]+)\]/g, (_token, id: string) => {
     const reference = node.promptReferences?.find(ref => ref.id === id);
-    const source = reference && sources.find(source => source.type === reference.type
-      && workflowBindingKey(source.input) === workflowBindingKey(reference.input));
-    if (!reference || !source || (reference.assetId && !workflowImageContainer(reference.input) && reference.assetId !== source.input.assetId)) {
+    const source = reference && sources.find(source => !source.parentId && source.type === reference.type
+      && workflowReferenceMatchesInput(reference, source.input));
+    if (!reference || !source) {
       throw new Error(`引用「${reference?.label ?? "未知内容"}」已断开或失效，请重新按 @ 选择输入`);
     }
     return `【${source.id}.${source.type}：${reference.label}】`;

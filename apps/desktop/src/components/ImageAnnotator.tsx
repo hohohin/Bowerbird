@@ -1,3 +1,4 @@
+import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -6,6 +7,8 @@ import {
   Circle,
   Crop,
   Eraser,
+  FlipHorizontal2,
+  FlipVertical2,
   LayoutDashboard,
   MoveUpRight,
   Pencil,
@@ -32,10 +35,10 @@ import type {
 } from "../lib/types";
 
 /**
- * 图片标注面板（全屏遮罩，Lightbox 同级 z-[90]）：画框/箭头/圆、铅笔、文字 + 裁剪/旋转。
+ * 图片标注面板（全屏遮罩，Lightbox 同级 z-[90]）：画框/箭头/圆、铅笔、文字 + 裁剪/旋转/镜像。
  * 右键菜单 openAnnotator 唤起，App 最外层挂单实例（store.annotator 驱动）。
  *
- * 底图变换：ops 序列（rotate 90° 步进 / crop 归一化矩形）按操作顺序即时生效；每次变换把
+ * 底图变换：ops 序列（rotate 90° 步进 / crop 归一化矩形 / flip 镜像）按操作顺序即时生效；每次变换把
  * 已有形状坐标映射到新坐标系（形状锚定图像内容），显示与导出都基于「原图 → ops」的步进
  * 像素变换，导出只输出最终图（裁剪后区域）。
  *
@@ -48,7 +51,7 @@ import type {
  * 添加到画板（保存素材与标注元数据，再创建独立图片卡片）；
  * 保存到素材库（analyses kind=annotation 记坐标）；插入创作板（临时文件 + sidecar 不入库，
  * 「标注」维度随 chip 自动注入，serialize 时展开为 `@图名 的【标注】：<bbox>…`）。
- * 撤销 = 快照栈（形状 + ops 全量快照），画形状/裁剪/旋转/清空皆可撤销。
+ * 撤销 = 快照栈（形状 + ops 全量快照），画形状/裁剪/旋转/镜像/清空皆可撤销。
  */
 
 /** 面板内绘制形状：坐标 0-1 相对当前底图；strokeRatio = 线宽/底图宽（分辨率无关）。 */
@@ -66,6 +69,7 @@ type DrawShape = {
   fontFamily?: string;
   fontWeight?: number;
   rotation?: number;
+  mirrored?: boolean;
 };
 
 type BaseOp = AnnotationTransformOp;
@@ -126,6 +130,7 @@ function opPoint(op: BaseOp, x: number, y: number): [number, number] {
   if (op.kind === "rotate") {
     return op.dir === 1 ? [1 - y, x] : [y, 1 - x];
   }
+  if (op.kind === "flip") return op.axis === "horizontal" ? [1 - x, y] : [x, 1 - y];
   const sx = Math.max(1e-6, op.x2 - op.x1);
   const sy = Math.max(1e-6, op.y2 - op.y1);
   return [(x - op.x1) / sx, (y - op.y1) / sy];
@@ -134,6 +139,7 @@ function opPoint(op: BaseOp, x: number, y: number): [number, number] {
 /** 像素尺寸过 op：rotate 宽高互换；crop 按跨度缩放。 */
 function opDims(op: BaseOp, w: number, h: number): { w: number; h: number } {
   if (op.kind === "rotate") return { w: h, h: w };
+  if (op.kind === "flip") return { w, h };
   const sx = Math.max(1e-6, op.x2 - op.x1);
   const sy = Math.max(1e-6, op.y2 - op.y1);
   return { w: Math.max(1, Math.round(w * sx)), h: Math.max(1, Math.round(h * sy)) };
@@ -152,7 +158,11 @@ function mapShape(s: DrawShape, op: BaseOp, oldW: number, oldH: number): DrawSha
     }) } : {}),
     ...(s.type === "text" ? {
       fontRatio: (s.fontRatio! * oldW) / d.w,
-      rotation: ((s.rotation ?? 0) + (op.kind === "rotate" ? op.dir * 90 : 0) + 360) % 360,
+      // 反射作用于已旋转的文字：翻转角度并切换局部 X 轴镜像。
+      rotation: ((op.kind === "flip"
+        ? (op.axis === "horizontal" ? 0 : 180) - (s.rotation ?? 0)
+        : (s.rotation ?? 0) + (op.kind === "rotate" ? op.dir * 90 : 0)) + 360) % 360,
+      ...(op.kind === "flip" ? { mirrored: !s.mirrored } : {}),
     } : {}),
   };
 }
@@ -179,6 +189,11 @@ function buildBaseCanvas(img: HTMLImageElement, ops: BaseOp[]): HTMLCanvasElemen
         ctx.translate(0, d.h);
         ctx.rotate(-Math.PI / 2);
       }
+      ctx.drawImage(src, 0, 0);
+    } else if (op.kind === "flip") {
+      const horizontal = op.axis === "horizontal";
+      ctx.translate(horizontal ? w : 0, horizontal ? 0 : h);
+      ctx.scale(horizontal ? -1 : 1, horizontal ? 1 : -1);
       ctx.drawImage(src, 0, 0);
     } else {
       ctx.drawImage(
@@ -234,6 +249,7 @@ function drawShapeCanvas(
     ctx.save();
     ctx.translate(s.x1 * w, s.y1 * h);
     ctx.rotate((s.rotation ?? 0) * Math.PI / 180);
+    ctx.scale(s.mirrored ? -1 : 1, 1);
     ctx.font = `${s.fontWeight} ${size}px ${s.fontFamily}`;
     ctx.fillStyle = s.color;
     ctx.textBaseline = "alphabetic";
@@ -402,7 +418,7 @@ export function ImageAnnotator() {
       setBase(null);
       return;
     }
-    // 底图坐标系变化（换图 / 应用裁剪或旋转 / 撤销）：旧裁剪框坐标失效，清空。
+    // 底图坐标系变化（换图 / 裁剪 / 旋转 / 镜像 / 撤销）：旧裁剪框坐标失效，清空。
     cropDragRef.current = null;
     setCropRect(null);
     if (ops.length === 0) {
@@ -464,7 +480,7 @@ export function ImageAnnotator() {
     function onKey(e: KeyboardEvent) {
       if (busy) return;
       // Text input (including IME confirmation and native undo) owns its keys.
-      if (e.isComposing || (e.target instanceof HTMLElement && e.target.closest("input, textarea, select"))) return;
+      if (e.isComposing || (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [role="combobox"]'))) return;
       if (e.key === "Escape") {
         e.preventDefault();
         if (tool === "crop") cancelCropMode();
@@ -488,6 +504,15 @@ export function ImageAnnotator() {
     const op: BaseOp = { kind: "rotate", dir };
     setOps([...ops, op]);
     setShapes(shapes.map((s) => mapShape(s, op, base.w, base.h)));
+  }
+
+  function flip(axis: "horizontal" | "vertical") {
+    if (!base) return;
+    pushUndo();
+    const op: BaseOp = { kind: "flip", axis };
+    setOps([...ops, op]);
+    setShapes(shapes.map((s) => mapShape(s, op, base.w, base.h)));
+    setDraft(null);
   }
 
   function commitCrop(x1: number, y1: number, x2: number, y2: number) {
@@ -739,7 +764,8 @@ export function ImageAnnotator() {
         token: shapeToken(s),
         ...(s.points ? { points: s.points.map(point => ({ x: v999(point.x), y: v999(point.y) })) } : {}),
         ...(s.type === "text" ? { text: s.text, fontSize: s.fontRatio! * w,
-          fontFamily: s.fontFamily, fontWeight: s.fontWeight, rotation: s.rotation } : {}),
+          fontFamily: s.fontFamily, fontWeight: s.fontWeight, rotation: s.rotation,
+          ...(s.mirrored ? { mirrored: true } : {}) } : {}),
       })),
     };
     return { dataUrl, meta };
@@ -842,7 +868,7 @@ export function ImageAnnotator() {
     if (s.type === "text") {
       const size = s.fontRatio! * dw;
       return <text key={key} fill={s.color} fontSize={size} fontFamily={s.fontFamily} fontWeight={s.fontWeight}
-        style={{ whiteSpace: "pre" }} transform={`translate(${s.x1 * dw} ${s.y1 * dh}) rotate(${s.rotation ?? 0})`}>
+        style={{ whiteSpace: "pre" }} transform={`translate(${s.x1 * dw} ${s.y1 * dh}) rotate(${s.rotation ?? 0}) scale(${s.mirrored ? -1 : 1} 1)`}>
         {s.text!.split("\n").map((line, index) => <tspan key={index} x={0} y={size * (1 + index * 1.25)}>{line}</tspan>)}
       </text>;
     }
@@ -985,12 +1011,12 @@ export function ImageAnnotator() {
       : null;
 
   const toolBtn = (active: boolean) =>
-    `flex items-center gap-1.5 rounded px-2.5 py-1.5 transition-colors ${
+    `annotation-tool ${active ? "is-active " : ""}flex items-center gap-1.5 rounded px-2.5 py-1.5 transition-colors ${
       active ? "bg-white/20 text-white" : "text-white/70 hover:bg-white/10 hover:text-white"
     }`;
 
   const canUndo = undoStack.length > 0;
-  // 有任一编辑（标注 / 裁剪 / 旋转）即可输出——仅裁剪也允许，只是没有「标注」维度。
+  // 有任一编辑（标注 / 裁剪 / 旋转 / 镜像）即可输出，无形状时没有「标注」维度。
   const hasEdits = shapes.length > 0 || ops.length > 0;
 
   return createPortal(
@@ -1038,6 +1064,26 @@ export function ImageAnnotator() {
           title="右转 90°"
         >
           <RotateCw size={14} />
+        </button>
+        <button
+          type="button"
+          className={toolBtn(false)}
+          disabled={!base}
+          onClick={() => flip("horizontal")}
+          title="水平镜像：左右翻转图片及标注"
+          aria-label="水平镜像"
+        >
+          <FlipHorizontal2 size={14} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className={toolBtn(false)}
+          disabled={!base}
+          onClick={() => flip("vertical")}
+          title="垂直镜像：上下翻转图片及标注"
+          aria-label="垂直镜像"
+        >
+          <FlipVertical2 size={14} aria-hidden="true" />
         </button>
         <div className="mx-1 h-4 w-px bg-white/15" />
         {COLORS.map((c) => (
@@ -1132,9 +1178,9 @@ export function ImageAnnotator() {
           value={text} onChange={(event) => setText(event.target.value)}
           className="min-w-48 flex-1 resize-y rounded border border-white/25 bg-black/40 px-2 py-1 text-white" />
         <label className="flex items-center gap-2">字体
-          <select aria-label="字体" value={fontFamily} onChange={(event) => setFontFamily(event.target.value)} className="rounded bg-zinc-800 p-1">
+          <TacticalSelect aria-label="字体" value={fontFamily} onValueChange={value => setFontFamily(value)} className="rounded bg-zinc-800 p-1">
             {FONTS.map(font => <option key={font.name} value={font.value}>{font.name}</option>)}
-          </select>
+          </TacticalSelect>
         </label>
         <label className="flex items-center gap-2">字号
           <input aria-label="字号" type="number" min={12} max={96} value={fontSize}
@@ -1188,7 +1234,7 @@ export function ImageAnnotator() {
       </div>
 
       {/* 状态条 */}
-      <div className="flex items-center justify-between border-t border-white/10 px-3 py-1.5 text-[11px] text-white/50">
+      <div className="annotation-statusbar flex items-center justify-between border-t border-white/10 px-3 py-1.5 text-[11px] text-white/50">
         <span>
           {tool === "crop"
             ? "裁剪：拖手柄调整范围 · 框内拖动移动 · 框外拖拽重画 · Enter 应用 / Esc 取消"

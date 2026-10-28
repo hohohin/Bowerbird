@@ -161,7 +161,7 @@ export function CollectionPanel({ folder, onClose }: { folder: Folder; onClose: 
       : assets.length === 0 ? <p className="py-12 text-center text-sm text-muted">这个集合还没有素材</p>
       : <div className="columns-2 gap-3 sm:columns-3 lg:columns-4">
         {assets.map((asset) => <button key={asset.id} type="button" aria-label={`预览 ${asset.name}`}
-          className="mb-3 block w-full break-inside-avoid overflow-hidden rounded border border-edge bg-panel text-left hover:border-accent"
+          className="collection-asset-card mb-3 block w-full break-inside-avoid overflow-hidden rounded border border-edge bg-panel text-left hover:border-accent"
           onClick={() => setPreviewId(asset.id)}>
           {asset.thumb_path ? <img src={convertFileSrc(asset.thumb_path)} alt="" loading="lazy" draggable={false}
             className="w-full object-cover" style={{ aspectRatio: asset.width && asset.height ? `${asset.width} / ${asset.height}` : undefined }} />

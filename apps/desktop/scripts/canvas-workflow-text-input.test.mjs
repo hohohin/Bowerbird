@@ -41,7 +41,7 @@ try {
     useStore.setState({ startGeneration: async (prompt, assets, ...args) => { submitted++; check(prompt === '@图片1' && assets[0].id === 'existing', 'text output forwards image to generation'); api.localAgentFindAssetId = async () => "existing"; useStore.setState(s => ({ genJobs: { ...s.genJobs, [args[10].jobId]: { turns: [{ turnKey: args[10].turnKey, images: ["out.png"] }] } } })); return { accepted: true, jobId: args[10].jobId }; } });
     await c.start(imageWriter.id);
     check(c.document.run.status === 'done' && submitted === 1 && c.document.run.order.join(',') === `${imageWriter.id},generate`, 'writer advances downstream');
-    await c.edit(c.document.nodes.map(n => n.id === 'generate' ? { ...n, prompt: '@[image] @[cell]', promptReferences: [...n.promptReferences, { id: 'image', type: 'image', input: { assetId: 'a', slot: 2 }, slot: 2, assetId: 'a', label: '图片 2' }], inputs: { ...n.inputs, image: [{ assetId: 'a', slot: 2 }, ...n.inputs.image] } } : n));
+    await c.edit(c.document.nodes.map(n => n.id === 'generate' ? { ...n, prompt: '@[image] @[cell]', promptReferences: [...n.promptReferences, { id: 'image', type: 'image', input: { assetId: 'a', slot: 2 }, slot: 2, assetId: 'a', label: '图片 2' }], inputs: { ...n.inputs, image: [...n.inputs.image, { assetId: 'a', slot: 2 }] } } : n));
     useStore.setState({ startGeneration: async (prompt, assets, ...args) => { check(prompt === '@图片1 @图片2' && assets.map(a => a.id).join(',') === 'a,existing', 'index maps to the combined reference order'); api.localAgentFindAssetId = async () => "existing"; useStore.setState(s => ({ genJobs: { ...s.genJobs, [args[10].jobId]: { turns: [{ turnKey: args[10].turnKey, images: ["out.png"] }] } } })); return { accepted: true, jobId: args[10].jobId }; } });
     await c.start('generate');
     check(c.document.run.status === 'done', 'mixed references complete');
@@ -89,7 +89,7 @@ try {
     const { useStore } = await import('/src/store.ts');
     const { api } = await import('/src/lib/api.ts');
     const c = canvasWorkflowController('p'); await c.load();
-    await c.edit(c.document.nodes.map(n => n.id === 'generate' ? { ...n, inputs: { image: [{ assetId: 'a' }], text: [{ canvasNodeId: 'target', cellId: 'b' }] }, promptReferences: n.promptReferences.map(ref => ref.id === 'cell' ? { ...ref, type: 'text' } : ref) } : n));
+    await c.edit(c.document.nodes.map(n => n.id === 'generate' ? { ...n, inputs: { image: [{ assetId: 'a' }], text: [{ canvasNodeId: 'target', cellId: 'b' }] }, promptReferences: n.promptReferences.map(ref => ref.id === 'cell' ? { ...ref, type: 'text' } : { ...ref, slot: 1 }) } : n));
     // The target still has upstream writers; the key must forward the current edited cell.
     const table = window.snapshot().nodes.find(n => n.id === 'target');
     const note = JSON.parse(table.payloadJson);

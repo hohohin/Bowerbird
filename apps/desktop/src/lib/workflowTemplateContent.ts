@@ -21,14 +21,14 @@ export async function includeTemplateContent(template: WorkflowTemplate, values:
   const result = structuredClone(template);
   result.schemaVersion = result.schemaVersion >= 4 ? 4 : result.layout ? 3 : 2;
   const files = new Map<string, string>();
-  const targets: { id: string; label?: string; type?: "text" | "image"; content?: TemplateContent; whole?: boolean }[] = [...result.inputs, ...(result.layout ?? []).filter(card => !card.node && !card.inputs?.length)];
+  const targets: { id: string; label?: string; type?: "text" | "image"; content?: TemplateContent; whole?: boolean; latest?: boolean }[] = [...result.inputs, ...(result.layout ?? []).filter(card => !card.node && !card.inputs?.length)];
   for (const input of targets) {
     delete input.content;
     if (input.type === "image" ? !images : !text) continue;
     const value = values[input.id];
     if (!input.label && (!value || value.type === "text" && !value.text?.trim() || value.type === "image" && !value.assetIds?.length)) continue;
     if (!value || value.type !== input.type || (input.type === "image" ? !value.assetIds?.length : !value.text?.trim())) throw new Error(`「${input.label ?? "内容卡"}」尚无可携带的内容，请先补充或取消携带`);
-    input.content = input.type === "text" ? { text: input.whole && value.table ? contentTableText(value.table) : value.text } : {};
+    input.content = input.type === "text" ? { text: (input.whole || input.latest) && value.table ? contentTableText(value.table) : value.text } : {};
     if (!images) continue;
     const refs = input.type === "text" ? value.imageRefs ?? [] : (value.assetIds ?? []).map(asset_id => ({ asset_id, token: undefined }));
     input.content.images = [];
@@ -51,9 +51,9 @@ export async function materializeTemplateContent(template: WorkflowTemplate, sel
   const native = (template.layout ?? []).filter(card => !card.node);
   const assigned = new Set(native.flatMap(card => card.inputs ?? []));
   const groups = [...native.flatMap(card => {
-    const inputs = card.inputs?.length ? template.inputs.filter(input => card.inputs!.includes(input.id)) : [{ id: card.id, label: "内容卡", type: card.type!, content: card.content, whole: false }];
+    const inputs = card.inputs?.length ? template.inputs.filter(input => card.inputs!.includes(input.id)) : [{ id: card.id, label: "内容卡", type: card.type!, content: card.content, whole: false, latest: false }];
     // A whole table cannot share a flattened row with unrelated input slots.
-    if (inputs.some(input => input.whole)) return inputs.map((input, i) => ({ card: i === 0 ? card : undefined, inputs: [input] }));
+    if (inputs.some(input => input.whole || input.latest)) return inputs.map((input, i) => ({ card: i === 0 ? card : undefined, inputs: [input] }));
     return [{ card, inputs }];
   }),
     ...template.inputs.filter(input => !assigned.has(input.id)).map(input => ({ card: undefined, inputs: [input] }))];
@@ -79,7 +79,7 @@ export async function materializeTemplateContent(template: WorkflowTemplate, sel
       }
       cells.push({ ...emptyCanvasCell(), id: crypto.randomUUID(), content_type: input.type, text: input.content?.text ?? "", image_refs: imageRefs });
     }
-    const whole = inputs.length === 1 && inputs[0].whole;
+    const whole = inputs.length === 1 && (inputs[0].whole || inputs[0].latest);
     const rows = whole && inputs[0].content?.text ? parseTextTable(inputs[0].content.text) : null;
     const grid = rows ? rows.map(row => row.map(text => {
       const refs = cells[0].image_refs?.filter(ref => text.split(ref.token).slice(1).some(suffix => !/^\d/.test(suffix))) ?? [];
@@ -93,7 +93,7 @@ export async function materializeTemplateContent(template: WorkflowTemplate, sel
     created.push(id);
     if (group.card) layoutIds[group.card.id] = id;
     // Reuse already-created bindings if a later step fails and the user retries.
-    inputs.forEach((input, i) => { selected[input.id] = bindings[input.id] = { canvasNodeId: id, cellId: input.whole ? "*text" : cells[i].id }; });
+    inputs.forEach((input, i) => { selected[input.id] = bindings[input.id] = { canvasNodeId: id, cellId: input.latest ? input.type === "image" ? "*latest-image" : "*latest" : input.whole ? "*text" : cells[i].id }; });
   }
   return { bindings, created, layoutIds };
 }

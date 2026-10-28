@@ -20,7 +20,7 @@
 .layer-resize { position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; background: #88abff; border: 1px solid white; cursor: nwse-resize; touch-action: none; }
 .layer-controls { padding: 18px; display: flex; flex-direction: column; gap: 14px; border-left: 1px solid var(--bb-line); overflow: auto; font-size: 12px; }
 .layer-controls label { display: flex; flex-direction: column; gap: 6px; }
-.layer-controls input:not([type=range]), .layer-controls textarea, .layer-controls select { width: 100%; border: 1px solid var(--bb-line-hover); background: var(--bb-surface-muted); border-radius: 6px; padding: 7px; }
+.layer-controls input:not([type=range]), .layer-controls textarea, .layer-controls :is(select, .tactical-select-trigger) { width: 100%; border: 1px solid var(--bb-line-hover); background: var(--bb-surface-muted); border-radius: 6px; padding: 7px; }
 .layer-controls button:disabled { opacity: .4; cursor: not-allowed; }
 .layer-editor .app-button, .layer-editor .app-button-primary { display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1px solid var(--bb-line-hover); border-radius: 6px; padding: 7px 10px; font-size: 12px; }
 .layer-editor .app-button-primary { background: var(--bb-blue); color: white; }

@@ -12,6 +12,7 @@ import type { Asset } from "../lib/types";
 import type { WorkflowNode, WorkflowStep } from "../lib/canvasWorkflow";
 import "./ComfyVideoCard.css";
 import { ProviderQuota } from "./creation/ProviderQuota";
+import { TacticalSelect } from "./TacticalSelect";
 import { RatioSelect } from "./creation/RatioSelect";
 import { RATIOS } from "./creation/ratios";
 import h3License from "../assets/comfy-licenses/MiniMax-H3-LICENSE.txt?raw";
@@ -237,9 +238,9 @@ export function ComfyVideoCard({ node, disabled, assets, inputImages, onChange }
       <RatioSelect ariaLabel="H3 比例" value={options.ratio === "auto" ? null : options.ratio} ratios={H3_RATIOS}
         autoTitle="按运行时首帧图片的实际宽高比生成，尺寸按模型要求对齐"
         onChange={ratio => update({ ratio: (ratio ?? "auto") as ComfyVideoOptions["ratio"] })} />
-      <select aria-label="H3 分辨率" title="分辨率（MP）" value={options.resolution} onChange={event => update({ resolution: Number(event.target.value) as ComfyVideoOptions["resolution"] })}>
+      <TacticalSelect aria-label="H3 分辨率" title="分辨率（MP）" value={options.resolution} onValueChange={value => update({ resolution: Number(value) as ComfyVideoOptions["resolution"] })}>
         {[0.6, 0.8, 1].map(value => <option value={value} key={value}>{value.toFixed(1)}</option>)}
-      </select>
+      </TacticalSelect>
     </fieldset>
     <ProviderQuota source="local" badge />
   </section>;

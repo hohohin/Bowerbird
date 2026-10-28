@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { Check, ChevronDown } from "lucide-react";
 import { RATIOS, ratioIconBox, type Ratio } from "./ratios";
+import { tacticalSelectPosition } from "../tacticalSelectLogic";
 
 /**
  * 画面比例的 icon：固定外框（box×box）居中一个按 w:h 等比缩放的描边矩形，
@@ -32,7 +34,7 @@ function RatioIcon({
 
 /**
  * 创作板编辑框工具条上的「画面比例」选择器。形态与 ProviderSelect 一致：
- * 定宽 popover 下拉（absolute 浮层 + 点外部 / Esc 关闭），选项三列网格
+ * 定宽 popover 下拉（视窗浮层 + 点外部 / Esc 关闭），选项三列网格
  * （自动 + 各比例 icon），选中项打勾；value=null 表示「自动」——发送时若有
  * 参考图则跟随首张参考图的宽高比选档（store.startGeneration 解析），否则交引擎默认。
  */
@@ -50,40 +52,80 @@ export function RatioSelect({
   autoTitle?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<ReturnType<typeof tacticalSelectPosition> | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
   const current = ratios.find((r) => r.key === value) ?? null;
+
+  function close(restoreFocus = false) {
+    setOpen(false);
+    if (restoreFocus) triggerRef.current?.focus({ preventScroll: true });
+  }
+
+  useLayoutEffect(() => {
+    if (open && triggerRef.current?.matches(":disabled")) close();
+  });
+  useLayoutEffect(() => {
+    if (!open) return;
+    function place(event?: Event) {
+      if (event?.target instanceof Node && menuRef.current?.contains(event.target)) return;
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect || !menuRef.current) return;
+      setPosition(tacticalSelectPosition(rect, { width: 288, height: menuRef.current.scrollHeight }, { width: window.innerWidth, height: window.innerHeight }));
+    }
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+  }, [open, ratios]);
 
   useEffect(() => {
     if (!open) return;
-    function closeOnOutsideClick(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    function closeOnOutsideClick(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node) && !menuRef.current?.contains(event.target as Node)) close();
     }
     function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); }
     }
-    document.addEventListener("mousedown", closeOnOutsideClick);
+    function closeOnOutsideWheel(event: WheelEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) close();
+    }
+    document.addEventListener("pointerdown", closeOnOutsideClick, true);
     document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("wheel", closeOnOutsideWheel, { capture: true, passive: true });
     return () => {
-      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("pointerdown", closeOnOutsideClick, true);
       document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("wheel", closeOnOutsideWheel, true);
     };
   }, [open]);
 
   function pick(key: string | null) {
+    if (triggerRef.current?.matches(":disabled")) { close(); return; }
     onChange(key);
-    setOpen(false);
+    close(true);
   }
 
   return (
     <div ref={rootRef} className="relative shrink-0">
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex h-7 items-center gap-1.5 rounded-[3px] border border-edge bg-panel2 px-2 text-xs text-ink outline-none hover:border-accent/60 hover:bg-edge focus:border-accent"
+        onPointerDown={event => event.stopPropagation()}
+        onClick={event => { event.stopPropagation(); setOpen((v) => !v); }}
+        onKeyDown={event => {
+          if (!open) return;
+          if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); }
+          if (event.key === "Tab" && !event.shiftKey) { event.preventDefault(); menuRef.current?.querySelector<HTMLButtonElement>("button")?.focus(); }
+        }}
+        className="tactical-menu-trigger flex h-7 items-center gap-1.5 border px-2 text-xs outline-none"
         title="选择画面比例"
         aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
       >
         {current ? (
           <>
@@ -99,21 +141,38 @@ export function RatioSelect({
         <ChevronDown size={12} className={`text-muted transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
-          className="app-popover absolute bottom-full left-0 z-30 mb-1 w-52 p-1.5"
+          ref={menuRef}
+          id={menuId}
+          className="app-popover ratio-select-menu w-72 p-1.5"
+          style={{ position: "fixed", ...position, overflowY: "auto", visibility: position ? "visible" : "hidden" }}
           role="listbox"
           aria-label="画面比例"
+          onPointerDown={event => { event.preventDefault(); event.stopPropagation(); }}
+          onPointerUp={event => event.stopPropagation()}
+          onMouseDown={event => { event.preventDefault(); event.stopPropagation(); }}
+          onClick={event => event.stopPropagation()}
+          onWheel={event => event.stopPropagation()}
+          onKeyDown={event => {
+            event.stopPropagation();
+            if (event.key === "Escape") { event.preventDefault(); close(true); }
+            if (event.key === "Tab") {
+              const buttons = menuRef.current?.querySelectorAll<HTMLButtonElement>("button");
+              if (event.shiftKey && event.target === buttons?.[0]) { event.preventDefault(); close(true); }
+              else if (!event.shiftKey && event.target === buttons?.[(buttons?.length ?? 0) - 1]) close(true);
+            }
+          }}
         >
           <div className="app-popover-title">画面比例</div>
-          <div className="grid grid-cols-3 gap-1">
+          <div className="ratio-select-grid grid grid-cols-3 gap-1">
             <button
               type="button"
               onClick={() => pick(null)}
               role="option"
               aria-selected={value === null}
               title={autoTitle}
-              className={`flex items-center gap-1.5 rounded px-1.5 py-1.5 text-xs ${
+              className={`ratio-select-option flex items-center gap-1.5 rounded px-1.5 py-1.5 text-xs ${
                 value === null
                   ? "bg-panel2 font-medium text-ink"
                   : "text-muted hover:bg-panel2 hover:text-ink"
@@ -133,7 +192,7 @@ export function RatioSelect({
                   role="option"
                   aria-selected={selected}
                   title={`画面比例 ${r.key}`}
-                  className={`flex items-center gap-1.5 rounded px-1.5 py-1.5 text-xs ${
+                  className={`ratio-select-option flex items-center gap-1.5 rounded px-1.5 py-1.5 text-xs ${
                     selected
                       ? "bg-panel2 font-medium text-ink"
                       : "text-muted hover:bg-panel2 hover:text-ink"
@@ -146,7 +205,7 @@ export function RatioSelect({
               );
             })}
           </div>
-        </div>
+        </div>, document.body
       )}
     </div>
   );

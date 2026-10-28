@@ -17,6 +17,12 @@ import { SettingsDialog } from "../../../src/components/SettingsDialog";
 import App from "../../../src/App";
 import { useOnboarding } from "../../../src/lib/onboardingStore";
 import "../../../src/styles.css";
+import "../../../src/components/TacticalProjection.css";
+import "../../../src/components/TacticalDialogs.css";
+import "../../../src/components/CanvasSecondaryTactical.css";
+import "../../../src/components/MediaTactical.css";
+import "../../../src/components/ManagementTactical.css";
+import "../../../src/components/TacticalMenus.css";
 
 // Closed synthetic IPC fixture: never reads a library or invokes a provider.
 const w = window as any;
@@ -236,7 +242,9 @@ w.__TAURI_INTERNALS__ = {
     }
     if (command === "canvas_workflow_save") {
       if (w.failWorkflowSave) throw "模拟工作流保存失败";
+      if (args.createdContent && w.failNodeSave) throw "模拟内容卡片保存失败";
       const revision = args.revision + 1;
+      if (args.createdContent && !snapshot.nodes.some((node: any) => node.id === args.createdContent.id)) snapshot.nodes.push({ ...args.createdContent, hiddenAt: null, createdAt: 10, updatedAt: 10 });
       sessionStorage.setItem(`workflow-${args.projectId}`, JSON.stringify({ revision, document: args.document })); return revision;
     }
     if (command === "generation_history") return { turns: [{ prompt: "保持产品主体，生成清晨场景" }], references: [assets[0]] };

@@ -49,7 +49,7 @@ export function WorkflowLoopStartSelect({ id, items, assets, value, disabled, no
     };
   }, [open]);
   return <div className="workflow-loop-start">
-    <button ref={anchor} type="button" aria-label="循环起始项" aria-haspopup="listbox" aria-expanded={open && !disabled && !!items.length} aria-controls={`loop-start-${id}`}
+    <button ref={anchor} className="tactical-menu-trigger" type="button" aria-label="循环起始项" aria-haspopup="listbox" aria-expanded={open && !disabled && !!items.length} aria-controls={`loop-start-${id}`}
       disabled={disabled || !items.length} onClick={() => setOpen(!open)} onKeyDown={event => {
         if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); setOpen(true); }
       }}>

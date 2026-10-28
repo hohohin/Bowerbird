@@ -25,7 +25,7 @@ export function ClassificationLabelDetails({ label, root }: { label: Classificat
       .catch(error => { if (active) setError(String(error)); }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [label.id, root, origin?.asset_id]);
-  return <section aria-label={`${label.name}标签详情`} className="space-y-2 rounded-lg border border-edge bg-panel2/50 p-3">
+  return <section aria-label={`${label.name}标签详情`} className="classification-label-details space-y-2 rounded-lg border border-edge bg-panel2/50 p-3">
     <p className="font-medium">{label.name} · {classificationOrigin(label)}</p>
     {label.description && <p className="whitespace-pre-wrap break-words text-xs">{label.description}</p>}
     {!origin && <p className="text-xs text-muted">此标签没有保存创建来源，无法确定最初来自哪张图片。</p>}

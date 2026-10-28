@@ -194,7 +194,7 @@ export function LocalAgentPanel({
   if (!available) return null;
 
   return (
-    <div className="asset-detail-card space-y-3">
+    <div className="asset-detail-card local-agent-panel space-y-3">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-accent">

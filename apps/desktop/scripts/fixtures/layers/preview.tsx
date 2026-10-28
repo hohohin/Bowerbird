@@ -1,10 +1,11 @@
+import "../../../src/styles.css";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { LayerEditor } from "../../../src/components/LayerEditor";
 import { MasonryGrid } from "../../../src/components/MasonryGrid";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { useStore } from "../../../src/store";
-import "../../../src/styles.css";
+
 
 const w = window as any;
 const png = (width: number, height: number, paint: (ctx: CanvasRenderingContext2D) => void) => {
@@ -78,3 +79,7 @@ w.__TAURI_INTERNALS__ = {
 useStore.setState({ assets: [source], layerWorkspaceIds: new Set(saved ? [source.id] : []), activeProjectId: "project-original", cloudAuth: { logged_in: true, cloud_available: true, user_id: "user-original" } as any });
 const open = () => useStore.getState().openLayerEditor("source");
 createRoot(document.getElementById("root")!).render(<><button onClick={open}>打开分层编辑</button><button onClick={() => useStore.setState({ contextMenu: { assetId: "source", x: 120, y: 80, asset: source } as any })}>打开右键菜单</button><div style={{ width: 300 }}><MasonryGrid assetsOverride={[source]} /></div><LayerEditor /><AssetContextMenu /></>);
+
+import "../../../src/components/TacticalDialogs.css";
+import "../../../src/components/CanvasSecondaryTactical.css";
+import "../../../src/components/MediaTactical.css";

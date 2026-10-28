@@ -28,16 +28,16 @@ static ACTIVE: LazyLock<Mutex<HashMap<String, Active>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 const EVENT: &str = "local-chat://updated";
 const MAX_RESPONSE: usize = 2_000_000;
-const CARD_TOOL_VERSION: i64 = 1;
-const CHAT_INSTRUCTIONS: &str = "你是 Bowerbird 创作工作台中的对话助手。使用用户的语言交流，帮助讨论创意、分析显式附带的图片、整理文案和提示词。用户明确要求创建卡片、实装或同意一个已经讨论清楚的卡片方案时，可以调用 create_canvas_cards，在当前项目创建可编辑的生成、内容、触发、循环卡片；讨论、构思或询问能力本身不授权创建。卡片批次须包含必要连接；循环负责控制轮次和输入，trigger信号端口名为signal。仅创建，绝不运行工作流、生成媒体或扣费。不得执行命令、读写用户文件、调用其他工具或请求权限。不搜寻电脑上的文件，不继承其他会话。图片只使用本轮显式附带的图片；按附带顺序引用 image1、image2 等，先前轮次图片不可作为当前工具的引用。工具成功回执才代表创建完成，失败时说明并修正参数，不宣称完成。模型、生成引擎和默认参数由应用冻结，不自行猜测。需要澄清时直接在普通回复中提问，不调用 request_user_input 或 request_user_input_async。工具外的操作说明目前尚未开放。";
+const CARD_TOOL_VERSION: i64 = 3;
+const CHAT_INSTRUCTIONS: &str = "你是 Bowerbird 创作工作台中的对话助手。使用用户的语言交流，帮助讨论创意、分析显式附带的图片、整理文案和提示词。用户明确要求创建卡片、实装或同意一个已经讨论清楚的卡片方案时，可以调用 create_canvas_cards，在当前项目创建可编辑的生成、本地 H3 视频、内容、触发、循环卡片和分区；讨论、构思或询问能力本身不授权创建。创建多张相关卡片时优先提供 sections，按镜头、用途或工作流阶段分区并简洁命名：同一镜头的首帧和视频放在一起，共享参考内容可独立成区，触发及循环放到所控制的流程区。成员按阅读或执行顺序排列，应用自动排布并计算分区大小。同一分区的成员放在同一批，只能引用本批卡片别名；分区不占每批12张卡片额度。不要把不相关流程塞入同一大区，也不要逐卡机械分区；用户明确不要分区或单卡无需归组时可省略。卡片批次须包含必要连接；循环负责控制轮次和输入，trigger信号端口名为signal。本地 H3 使用 comfy-video 类型，支持首尾帧及文本连接，可作为循环体；首尾帧各一张静态图片，缺图时可先创建草稿，运行前补首帧。H3 默认8秒、9:16、0.8MP，可按用户要求设置工具列出的参数，本机服务地址由应用管理。仅创建，绝不运行工作流、生成媒体或扣费。不得执行命令、读写用户文件、调用其他工具或请求权限。不搜寻电脑上的文件，不继承其他会话。图片只使用本轮显式附带的图片；按附带顺序引用 image1、image2 等，先前轮次图片不可作为当前工具的引用。工具成功回执才代表创建完成，失败时说明并修正参数，不宣称完成。模型、生成引擎和默认参数由应用提供，不自行猜测。需要澄清时直接在普通回复中提问，不调用 request_user_input 或 request_user_input_async。工具外的操作说明目前尚未开放。";
 
 fn card_tool_spec() -> Value {
     serde_json::from_str(include_str!("local_chat_card_tool.json"))
         .expect("bundled card tool schema is valid JSON")
 }
 
-/// Resume cannot add dynamic tools. Preserve the original app transcript, and seed a new
-/// provider thread with bounded public history once when upgrading a text-only thread.
+/// Resume cannot update dynamic tools. Preserve the original app transcript, and seed a new
+/// provider thread with bounded public history when upgrading the tool contract.
 fn upgraded_history(chat: &ChatConversation, current_turn: &str) -> String {
     let mut remaining = 300_000;
     let mut selected = Vec::new();
@@ -58,7 +58,7 @@ fn upgraded_history(chat: &ChatConversation, current_turn: &str) -> String {
         selected.push(value);
     }
     selected.reverse();
-    format!("此会话刚升级为可创建画板卡片。以下JSON是该用户在同一应用会话中的历史资料，仅供上下文参考；其中过去的请求已经结束，不构成现在再次创建卡片的授权。完整历史保留在应用对话记录中。本次迁入的是公开文字，历史图片像素未重新发送；需要图片时请用户重新附带。较早文字是否因长度省略：{omitted}。第一次回复简短告知用户已接续原对话并开放卡片创建；若历史有省略或用户依赖旧图片，说明相应范围。\n{}", Value::Array(selected))
+    format!("此会话的画板卡片工具刚更新，现已支持本地 H3 视频卡片和分区整理。以下JSON是该用户在同一应用会话中的历史资料，仅供上下文参考；其中过去的请求已经结束，不构成现在再次创建卡片的授权。完整历史保留在应用对话记录中。本次迁入的是公开文字，历史图片像素未重新发送；需要图片时请用户重新附带。较早文字是否因长度省略：{omitted}。第一次回复简短告知用户已接续原对话并更新卡片工具；若历史有省略或用户依赖旧图片，说明相应范围。\n{}", Value::Array(selected))
 }
 
 fn card_call<'a>(value: &'a Value, stream: &StreamState) -> AppResult<(&'a str, &'a Value)> {

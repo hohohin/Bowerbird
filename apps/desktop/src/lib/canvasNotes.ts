@@ -41,12 +41,12 @@ export interface CanvasBubbleTail {
 }
 
 export function canvasNoteValue(note: CanvasNotePayload, cellId: string) {
-  if (cellId === "*") {
-    const cells = note.cells.flat();
+  if (cellId === "*" || cellId === "*latest-image") {
+    const cells = (cellId === "*latest-image" ? note.cells.slice(-1) : note.cells).flat();
     return { type: "image" as const, assetIds: [...new Set(cells.flatMap(cell => canvasCellValue(cell).assetIds))] };
   }
-  if (cellId === "*text") {
-    return canvasTableValue(note.cells);
+  if (cellId === "*text" || cellId === "*latest") {
+    return canvasTableValue(cellId === "*latest" ? note.cells.slice(-1) : note.cells);
   }
   const cell = note.cells.flat().find(cell => cell.id === cellId);
   if (cell?.content_type === "image") {

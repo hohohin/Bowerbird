@@ -1,7 +1,7 @@
 import { api } from "./api";
 import { canvasInputValue, canvasWorkflowInputState } from "./canvasSessionOutputs";
 import { readCanvasNote } from "./canvasNotes";
-import { activePromptReferences, workflowBindingKey, workflowOutputs, workflowRuns, workflowTitle, type CanvasWorkflow, type WorkflowNode } from "./canvasWorkflow";
+import { activePromptReferences, workflowReferenceMatchesInput, workflowOutputs, workflowRuns, workflowTitle, type CanvasWorkflow, type WorkflowNode } from "./canvasWorkflow";
 import { buildWorkflowPlan, canResumeWorkflowPlanning, canUndoWorkflowPlan, compilePlanningPrompt, plannerContextKey, planningContract, planningSnapshotKey, samePlanningContext, type PlanningSource, type WorkflowPlanningState } from "./workflowPlanner";
 
 interface Host {
@@ -33,7 +33,7 @@ export class WorkflowPlannerRuntime {
       const input = structuredClone(original);
       if (++sourceIndex > 12) throw new Error("助手一次最多使用 12 个来源");
       const id = `source${sourceIndex}`, children: PlanningSource[] = [];
-      const referenced = activePromptReferences(owner).some(ref => ref.type === type && workflowBindingKey(ref.input) === workflowBindingKey(input));
+      const referenced = activePromptReferences(owner).some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input));
       const textPreview = (text: string) => referenced ? text : text.slice(0, 600);
       let label = "", preview = "", contentKey: string | undefined;
       if (input.nodeId) {
@@ -141,7 +141,7 @@ export class WorkflowPlannerRuntime {
           const owner = this.node(id), sources = await this.sources(owner);
           const canvas = await api.projectCanvasGet(this.host.projectId);
           if (current()?.requestId !== state.requestId || current()?.status !== "waiting") return;
-          const comparable = (items: PlanningSource[]) => planningSnapshotKey(items.map(({ parentId: _parentId, ...source }) => source));
+          const comparable = (items: PlanningSource[]) => planningSnapshotKey(items.map(({ parentId: _parentId, input: { slot: _slot, ...input }, ...source }) => ({ ...source, input })));
           if (!samePlanningContext(state.contextKey, plannerContextKey(this.node(id))) || comparable(sources) !== comparable(state.sources)) throw new Error("需求或来源已变化，请按当前内容重新编排");
           const build = () => {
             if (state.protocolVersion === 2 && JSON.parse(result.text!).schemaVersion !== 2) throw new Error("请使用 schemaVersion:2 的声明式方案，移除 edges/trigger 并声明 sourceUses/outputs");

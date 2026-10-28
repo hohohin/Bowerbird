@@ -403,6 +403,30 @@ Secrets 仅新增 `COMFY_TOS_ACCESS_KEY_ID`、`COMFY_TOS_SECRET_ACCESS_KEY`，�
 
 `server.mjs` SHA-256：`97db617660fd78df2066757e7b1d80272ec995a193958b56a1388850adf77f21`；`cloud-proxy.mjs`：`375895f636e317659bc4ddfd0ae6d945341423a86e1d1abe740ec1a158623e0e`；原 `account-proxy.mjs` 仍为 `363bdde73b028bcaf90cb31dfb0af756abeab7955c61cf0b87f3eb2bd875a53e`。本机证据 `.tmp/cloud-gateway-20261028/`，服务器 `/tmp/bowerbird-cloud-gateway-20261028/` 保存候选／现役／公网报告、原 Nginx 配置与 `rollback.sh`。该脚本仅允许当前为本轮或原基线，恢复原目录和 Nginx 并重启／重载；客户端发布后不得直接撤销新入口。没有部署 Edge、Worker 或数据库迁移，没有修改视频开关／定价、账号配置、安装包或更新清单。发版对话接手时必须基于本轮现役目录，保留新的 `cloud-proxy.mjs` 与 Nginx 入口，不能用旧整站覆盖。
 
+### 2026-10-28 视频未开放误报媒体类型（已修正）
+
+用户在更新最新正式版后确认 Cloud 图片正常，提供的视频失败记录为 `service 与生成媒体类型不匹配`。请求为 video、`video_seedance25_480p`、480p，组合正确；当日只读核查三个 Seedance 2.5 服务和对应价格均 active=false。现役 v41 `serviceFor` 对服务未开放、查询失败均复用了媒体类型错误，导致错误归因。
+
+北京时间 16:03 定向部署 `generate-proxy` **v41→v42**，`verify_jwt=false` 保持，函数内仍按原方式验证真实用户：正常形状但无 active 服务返回 `not_configured` 和明确中文，查询异常返回 `internal_error`，实际媒体／分辨率不一致仍返回原参数错误。分层原有未开放提示保留。部署前已先用旧代码复现 3 项失败、修复后 5 项通过；从现役依赖建立候选再次通过全部 5 项，类型检查通过，没有真实模型调用。
+
+下载回核归一化入口 SHA-256 `9770710d299c6ba2bfe0e08511e95a912221fc59e471324b4b5427e496adb96e`；其他函数版本／JWT、图片／视频服务及视频价格逐项与只读基线一致。第一次发布在 Supabase 构建服务拉取 JSR 时超时，现役保持 v41；重试同一候选成功。不需要桌面重打包即可收到新服务端错误，但这项修复没有开启视频服务。
+
+证据与原 v41 源码位于本机 `.tmp/cloud-generation-20261028/`：`read-only-report.json`、`live/`、`candidate/`、`verified/`、`message-deployed.json`。若回退，仅从已保存的 v41 `live/` 部署 generate-proxy 并保留原 JWT，不动其他函数或账本。Edge 下载包不含仅用于类型检查的 `ark.ts`；候选补回本地该类型依赖，入口只使用 `import type`，不新增 Ark 运行时。
+
+上述 16:03 发布只修正错误提示；其后用户明确确认「启用三个档位并做真实验收」，执行结果如下。
+
+### 2026-10-28 Seedance 2.5 三档启用与真实验收
+
+北京时间 18:09 原子启用 `video_seedance25_480p/720p/1080p`：仅修改 `service_costs` 和 `video_service_pricing` 六个 active 标志，前后完整快照确认其他服务、参数、价格及 20261023 版本保持。动态价格服务的 `unit_cost=0` 保持，不能把该列误当免费或直接写成示例秒价。5 秒、16:9、无参考视频报价分别为 **110／245／600 Bcoin**。无需再发桌面包，Windows 26.10.2801 已有官网生成网关。
+
+18:12–18:15 使用独立正常权限临时账号经官网 `/api/cloud` 完成一次真实 480p 文生视频：5 秒、16:9、无音频／参考图／参考视频。Cloud job `dfe69215-7da9-4308-8bc0-9a9d91ca4264`，上游 `cgt-20261028181253-87tfi`，固定模型 `doubao-seedance-2-5-260628`。仅一条上游创建；后续队列租约重领只查询原任务，数据库 `attempt_count=9` 不代表九次付费提交。验收脚本前置曾错误期望图片权益目录包含视频，并使用不支持的 `action=create`；均在上游提交前停止，后者确认无任务／hold 后复用原账号及原幂等键纠正，没有额外真实生成。
+
+真实返回 MP4/H.264，854×480、24fps、5.041667 秒、796831 字节，无音轨。官网签名下载完整字节及 SHA-256 `ceaf9e38a9237cb950036b8f4d43a6684c3171fa2052e919b83f77e729eb2929` 与服务端一致，接收确认已持久化；原 key 查询返回同一任务。数据库恰好一 job、一 hold、一 confirm，预留／最终扣费均 **110 Bcoin**，hold=confirmed。测试专用合成 110 Bcoin 已全部消费，未创建支付订单、未动真实用户余额；Auth 临时身份已删除、账务审计保留。上游实际返回 48437 completion_tokens，按配置刊例率内部折算 ¥3.39059，此数不是供应商发票核验。新 hold 使用提交时固定报价，实际 token 略高于预估不会追加扣费。
+
+15 项 Worker 视频提交／恢复／产物／用量回归通过。证据：`.tmp/cloud-generation-20261028/activation.json`、`real-video.json`、`audit.json`、`acceptance.json`；本地视频 `seedance25-480p-5s.mp4`。仅 480p 文生视频真实验收；720p／1080p 已启用并核对报价，未额外付费测试，参考图／视频模式、故障电脑实际入库及重启恢复仍待各自实机验收。9 月 6 日旧 unknown 案例未重发、未认领或退款。本次未重建 Worker、修改模型、发布安装包或变更其他服务。
+
+需要停止新视频任务时，在同一数据库事务将上述三个 service 的两张表 active 恢复 false；保留原任务、账本和 Worker，允许已提交任务继续查询／下载／结算，不能以回退开关为由重投或退款。完整前态保存在 activation.json。
+
 ## 6. 验证
 
 ```bash

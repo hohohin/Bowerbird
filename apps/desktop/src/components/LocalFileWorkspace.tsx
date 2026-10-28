@@ -459,22 +459,22 @@ export function LocalFileWorkspace({ onClose, onCreateProject, navigation, onLeg
             buttons[e.key === "Home" ? 0 : e.key === "End" ? buttons.length - 1 : (index + (e.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length]?.focus();
           }
         }}>
-          {allLocations && <button disabled={loading} onClick={() => menuAction(() => void showAll())}><RefreshCw size={15}/>刷新素材</button>}
+          {allLocations && <button className="app-popover-option" disabled={loading} onClick={() => menuAction(() => void showAll())}><RefreshCw size={15}/>刷新素材</button>}
           <div className="folder-menu-label">素材类型</div>
-          <button onClick={() => menuAction(() => setMultiSelect(true))}>多选素材</button>
+          <button className="app-popover-option" onClick={() => menuAction(() => setMultiSelect(true))}>多选素材</button>
           <div className="file-media-options" role="group" aria-label="素材类型筛选">
             <button aria-pressed={media === null} onClick={() => setMedia(null)}>全部</button>
             <button aria-label="只看图片" aria-pressed={media === "image"} onClick={() => setMedia(media === "image" ? null : "image")}>图片</button>
             <button aria-label="只看视频" aria-pressed={media === "video"} onClick={() => setMedia(media === "video" ? null : "video")}>视频</button>
           </div>
           <div className="folder-menu-divider"/>
-          <button disabled={(!allLocations && !classification) || loading} onClick={() => menuAction(() => { setClassificationView("classification"); setClassifyOpen(true); })}>{allLocations ? "自动分类全局素材" : "自动分类此文件夹"}</button>
-          <button disabled={(!allLocations && !classification) || loading} onClick={() => menuAction(() => { setClassificationView("labels"); setClassifyOpen(true); })}>管理分类数据</button>
+          <button className="app-popover-option" disabled={(!allLocations && !classification) || loading} onClick={() => menuAction(() => { setClassificationView("classification"); setClassifyOpen(true); })}>{allLocations ? "自动分类全局素材" : "自动分类此文件夹"}</button>
+          <button className="app-popover-option" disabled={(!allLocations && !classification) || loading} onClick={() => menuAction(() => { setClassificationView("labels"); setClassifyOpen(true); })}>管理分类数据</button>
           <div className="folder-menu-divider"/>
-          <button disabled={!directory || allLocations || loading} onClick={() => menuAction(() => directory && setRecordsRoot(directory.path))}>随图资料</button>
-          <button onClick={() => menuAction(() => setReferencesOpen(true))}>外部引用</button>
-          <button onClick={() => menuAction(() => setMoveOpen(true))}>迁移资料目录</button>
-          {onLegacy && <button onClick={() => menuAction(onLegacy)}>历史素材</button>}
+          <button className="app-popover-option" disabled={!directory || allLocations || loading} onClick={() => menuAction(() => directory && setRecordsRoot(directory.path))}>随图资料</button>
+          <button className="app-popover-option" onClick={() => menuAction(() => setReferencesOpen(true))}>外部引用</button>
+          <button className="app-popover-option" onClick={() => menuAction(() => setMoveOpen(true))}>迁移资料目录</button>
+          {onLegacy && <button className="app-popover-option" onClick={() => menuAction(onLegacy)}>历史素材</button>}
       </div>}
         {toolbarActions}
       </LibraryFloatingControls>

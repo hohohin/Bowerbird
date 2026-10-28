@@ -7,7 +7,11 @@ fn main() {
     let root = env::current_exe().unwrap().parent().unwrap().to_path_buf();
     let log = root.join("calls.txt");
     use std::io::Write;
-    writeln!(fs::OpenOptions::new().append(true).create(true).open(log).unwrap(), "{}", args.join("|")).unwrap();
+    // Diagnostics launch two processes together. Append each short record in one
+    // write so another process cannot insert its arguments before our newline.
+    let record = format!("{}\n", args.join("|"));
+    fs::OpenOptions::new().append(true).create(true).open(log).unwrap()
+        .write_all(record.as_bytes()).unwrap();
     let timeout = || {
         eprintln!("do request: Post \"https://jimeng.jianying.com/mweb/v1/get_history_by_ids?agent_detect=unknown&aid=513695&cli_version=a857341-dirty&from=dreamina_cli\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)");
         std::process::exit(1);

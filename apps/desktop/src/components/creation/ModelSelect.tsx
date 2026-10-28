@@ -18,10 +18,10 @@ function family(label: string): string {
   return label.toLowerCase().startsWith("gpt-image") ? "gpt" : label.toLowerCase().split(" ")[0];
 }
 
-export function ModelSelect({ value, label, source, options, onChange, defaultKey, onSetDefault, kind = "图像", quotaDetail, cloudBalance, cloudLoggedIn, footer }: {
+export function ModelSelect({ value, label, source, options, onChange, defaultKey, onSetDefault, kind = "图像", quotaDetail, cloudBalance, cloudLoggedIn, footer, menuClassName }: {
   value: string; label: string; source?: ModelSource; options: ModelOption[];
   onChange: (key: string) => void; defaultKey?: string; onSetDefault?: (key: string) => void;
-  kind?: string; quotaDetail?: string; cloudBalance?: number | null; cloudLoggedIn?: boolean; footer?: ReactNode;
+  kind?: string; quotaDetail?: string; cloudBalance?: number | null; cloudLoggedIn?: boolean; footer?: ReactNode; menuClassName?: string;
 }) {
   const [open, setOpen] = useState(false);
   const prices = useStore(state => state.cloudEntitlement?.generation_services);
@@ -78,7 +78,7 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
       <span className="model-select-name">{label}</span>
       <ChevronDown size={12} aria-hidden="true" />
     </button>
-    {open && createPortal(<div ref={menu} id={id} role="dialog" aria-label={`${kind}模型`} className="app-popover model-select-menu"
+    {open && createPortal(<div ref={menu} id={id} role="dialog" aria-label={`${kind}模型`} className={`app-popover model-select-menu${menuClassName ? ` ${menuClassName}` : ""}`}
       style={{ position: "fixed", left: position?.left, top: position?.top, bottom: position?.bottom, width: position?.width, visibility: position ? "visible" : "hidden" }}
       onPointerDown={event => event.stopPropagation()} onWheel={event => event.stopPropagation()}
       onKeyDown={event => {

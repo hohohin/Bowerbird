@@ -1,3 +1,4 @@
+import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -35,7 +36,13 @@ export function WorkflowTemplateLibrary({ controller, selectedIds, graphNodes, p
   const options: { label: string; type: string; input: WorkflowInput }[] = [];
   for (const [index, node] of graphNodes.filter(node => node.hiddenAt == null).entries()) {
     if (node.kind === "asset" && node.assetId) options.push({ label: `画板图片 ${index + 1}`, type: "image", input: { assetId: node.assetId, assetNodeId: node.id } });
-    if (node.kind === "note") options.push({ label: `${readCanvasNote(node).title || "内容卡"} · 整张表格`, type: "text", input: { canvasNodeId: node.id, cellId: "*text" } });
+    if (node.kind === "note") {
+      const note = readCanvasNote(node);
+      options.push({ label: `${note.title || "内容卡"} · 整张表格`, type: "text", input: { canvasNodeId: node.id, cellId: "*text" } });
+      if (note.note_type === "text" || note.note_type === "images") for (const type of ["text", "image"] as const) {
+        options.push({ label: `${note.title || "内容卡"} · 输出最新${type === "image" ? "图片" : "内容"}`, type, input: { canvasNodeId: node.id, cellId: type === "image" ? "*latest-image" : "*latest" } });
+      }
+    }
     if (node.kind === "note") for (const [i, cell] of readCanvasNote(node).cells.flat().entries()) {
       const value = canvasInputValue(node, cell.id!, graphNodes);
       if (value) options.push({ label: `${readCanvasNote(node).title || "内容卡"} · 第 ${i + 1} 格${value.type === "text" ? ` · ${value.text?.slice(0, 28) ?? "文本"}` : " · 图片"}`, type: value.type, input: { canvasNodeId: node.id, cellId: cell.id } });
@@ -47,19 +54,19 @@ export function WorkflowTemplateLibrary({ controller, selectedIds, graphNodes, p
     <h3>{active.name} <small>v{active.revision}</small></h3><p>{active.description}</p>
     <p>{active.plan.nodes.length - 1} 个步骤 · {active.inputs.length} 个输入 · {active.outputs.length} 个公开输出</p>
     {active.inputs.map(input => {
-      const available = uniqueOptions.filter(option => option.type === input.type && (!input.whole || option.input.nodeId || option.input.cellId === "*text"));
+      const available = uniqueOptions.filter(option => option.type === input.type && (!input.latest || option.input.cellId === (input.type === "image" ? "*latest-image" : "*latest")) && (!input.whole || option.input.nodeId || option.input.cellId === "*text"));
       const current = bindings[input.id] ? workflowBindingKey(bindings[input.id]) : "";
       return <label key={input.id}>{input.label} · {input.type === "image" ? "图片" : "文本"}
-        <select aria-label={input.label} value={current} onChange={event => setBindings(old => { const next = { ...old }, source = available.find(option => workflowBindingKey(option.input) === event.target.value); if (source) next[input.id] = source.input; else delete next[input.id]; return next; })}>
+        <TacticalSelect aria-label={input.label} value={current} onValueChange={value => setBindings(old => { const next = { ...old }, source = available.find(option => workflowBindingKey(option.input) === value); if (source) next[input.id] = source.input; else delete next[input.id]; return next; })}>
           <option value="">{input.content ? "使用模板自带内容" : active.schemaVersion >= 4 && !instanceRoot ? "新建空白内容卡，导入后填写" : "请选择当前画板的来源"}</option>
           {current && !available.some(option => workflowBindingKey(option.input) === current) && <option value={current}>原来源已失效，请重新选择</option>}
           {available.map((option, i) => <option key={i} value={workflowBindingKey(option.input)}>{option.label}</option>)}
-        </select>
+        </TacticalSelect>
         {input.content && !current && <small>{input.type === "text" ? input.content.text?.slice(0, 100) : `${input.content.images?.length ?? 0} 张自带图片`}</small>}
       </label>;
     })}
     {active.parameters.map(param => <label key={param.id}>{param.label}{param.field === "ratio"
-      ? <select aria-label={param.label} value={values[param.id] ?? param.defaultValue} onChange={event => setValues({ ...values, [param.id]: event.target.value })}>{TEMPLATE_RATIOS.map(ratio => <option key={ratio} value={ratio}>{ratio || "自动比例"}</option>)}</select>
+      ? <TacticalSelect aria-label={param.label} value={values[param.id] ?? param.defaultValue} onValueChange={value => setValues({ ...values, [param.id]: value })}>{TEMPLATE_RATIOS.map(ratio => <option key={ratio} value={ratio}>{ratio || "自动比例"}</option>)}</TacticalSelect>
       : <textarea aria-label={param.label} maxLength={2000} value={values[param.id] ?? param.defaultValue} onChange={event => setValues({ ...values, [param.id]: event.target.value })} />}</label>)}
     {active.schemaVersion >= 4 && active.plan.nodes.some(node => node.kind === "visual-profile") && <p>视觉规范卡不携带发送者的个人规范，请在导入后选择自己的规范或填写提炼要求。</p>}
     <details><summary>查看内部步骤与输出</summary><ol>{active.plan.nodes.filter(node => node.kind !== "trigger").map(node => <li key={node.id}>{{ instruction: "指令", agent: "Agent", generation: "生成", skill: "技能", "visual-profile": "视觉规范", trigger: "触发器", loop: "循环" }[node.kind]} · {node.prompt?.replace(/\{\{[^}]+\}\}/g, "【输入内容】").slice(0, 180)}</li>)}</ol>
@@ -70,7 +77,7 @@ export function WorkflowTemplateLibrary({ controller, selectedIds, graphNodes, p
         await controller.encapsulate(active.name, pending.members, pending.bounds, null);
         pendingContainer.current = null; onClose(); onLocate(pending.root); return;
       }
-      for (const input of active.inputs) if (!((input.content || active.schemaVersion >= 4 && !instanceRoot) && !bindings[input.id]) && !uniqueOptions.some(option => option.type === input.type && (!input.whole || option.input.nodeId || option.input.cellId === "*text") && workflowBindingKey(option.input) === workflowBindingKey(bindings[input.id] ?? {}))) throw new Error(`请重新选择「${input.label}」`);
+      for (const input of active.inputs) if (!((input.content || active.schemaVersion >= 4 && !instanceRoot) && !bindings[input.id]) && !uniqueOptions.some(option => option.type === input.type && (!input.latest || option.input.cellId === (input.type === "image" ? "*latest-image" : "*latest")) && (!input.whole || option.input.nodeId || option.input.cellId === "*text") && workflowBindingKey(option.input) === workflowBindingKey(bindings[input.id] ?? {}))) throw new Error(`请重新选择「${input.label}」`);
       await ensureMaterialized();
       if (instanceRoot) {
         const next = reconfigureTemplateInstance(controller.document.nodes, instanceRoot, bindings, values, id => controller.isLocked(id));
@@ -124,7 +131,7 @@ export function WorkflowTemplateLibrary({ controller, selectedIds, graphNodes, p
             const title = `步骤 ${index + 1} · ${field === "ratio" ? "画面比例" : "附加要求"}`;
             return <div key={id}><label><input type="checkbox" checked={!!param} onChange={event => setDraft({ ...draft, parameters: event.target.checked ? [...draft.parameters, { id, label: title, node: node.id, field, defaultValue: field === "ratio" ? node.ratio ?? "" : "" }] : draft.parameters.filter(param => param.id !== id) })} />{title}</label>
               {param && <><input aria-label={`${title}的名称`} value={param.label} onChange={event => setDraft({ ...draft, parameters: draft.parameters.map(p => p.id === id ? { ...p, label: event.target.value } : p) })} />
-                <label>默认值{field === "ratio" ? <select aria-label={`${title}的默认值`} value={param.defaultValue} onChange={event => setDraft({ ...draft, parameters: draft.parameters.map(p => p.id === id ? { ...p, defaultValue: event.target.value } : p) })}>{TEMPLATE_RATIOS.map(ratio => <option key={ratio} value={ratio}>{ratio || "自动比例"}</option>)}</select>
+                <label>默认值{field === "ratio" ? <TacticalSelect aria-label={`${title}的默认值`} value={param.defaultValue} onValueChange={value => setDraft({ ...draft, parameters: draft.parameters.map(p => p.id === id ? { ...p, defaultValue: value } : p) })}>{TEMPLATE_RATIOS.map(ratio => <option key={ratio} value={ratio}>{ratio || "自动比例"}</option>)}</TacticalSelect>
                   : <textarea aria-label={`${title}的默认值`} maxLength={2000} value={param.defaultValue} onChange={event => setDraft({ ...draft, parameters: draft.parameters.map(p => p.id === id ? { ...p, defaultValue: event.target.value } : p) })} />}</label></>}</div>;
           }))}
           <h4>公开输出</h4>{draft.outputs.map((output, index) => <label key={output.id}>输出名称<input aria-label={`输出名称 ${index + 1}`} value={output.label} onChange={event => setDraft({ ...draft, outputs: draft.outputs.map(other => other.id === output.id ? { ...other, label: event.target.value } : other) })} /></label>)}

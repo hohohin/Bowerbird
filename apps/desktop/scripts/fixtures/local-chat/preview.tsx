@@ -1,3 +1,4 @@
+import "../../../src/styles.css";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CanvasWorkspace } from "../../../src/components/CanvasWorkspace";
@@ -6,7 +7,7 @@ import { ToastViewport } from "../../../src/components/ToastViewport";
 import { useStore } from "../../../src/store";
 import { installCatalogPagingMock } from "../catalogPagingMock";
 import { advance, assets, controls, createCards, failRunning, finish, inspect, install, interrupt, projects, releaseReplies, reset, setDelayReply, setFault, setHold, staleEvent, subscribe } from "./mock";
-import "../../../src/styles.css";
+
 import "./preview.css";
 
 install(window);
@@ -50,6 +51,8 @@ function Fixture() {
         <button type="button" disabled={!chats.length} onClick={staleEvent}>发送过期事件</button>
         <button type="button" disabled={!chats.length} onClick={() => void createCards("rows")}>创建逐行循环四卡</button>
         <button type="button" disabled={!chats.length} onClick={() => void createCards("count")}>创建按次数循环四卡</button>
+        <button type="button" disabled={!chats.length} onClick={() => void createCards("sections")}>创建分区与流程卡片</button>
+        <button type="button" disabled={!chats.length} onClick={() => void createCards("sections_large")}>创建大表与长提示词分区</button>
         <label><input type="checkbox" checked={delayReply} onChange={event => { updateDelayReply(event.target.checked); setDelayReply(event.target.checked); }} />延迟发送回执</label>
         <button type="button" disabled={!snapshot.pendingReplies} onClick={releaseReplies}>释放发送回执（{snapshot.pendingReplies}）</button>
         <label>故障 <select aria-label="测试故障" value={fault} onChange={event => { updateFault(event.target.value); setFault(event.target.value); }}>
@@ -64,3 +67,7 @@ function Fixture() {
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<React.StrictMode><Fixture /></React.StrictMode>);
+
+import "../../../src/components/TacticalDialogs.css";
+import "../../../src/components/CanvasSecondaryTactical.css";
+import "../../../src/components/MediaTactical.css";

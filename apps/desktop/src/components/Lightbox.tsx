@@ -55,7 +55,7 @@ export function Lightbox({
   // 确保 fixed 全屏遮罩不受任何祖先层叠上下文/transform 影响，一定盖住整屏。
   return createPortal(
     <div
-      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/90"
+      className="media-lightbox fixed inset-0 z-[90] flex items-center justify-center bg-black/90"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
@@ -112,7 +112,7 @@ export function Lightbox({
           >
             <ChevronRight size={22} />
           </button>
-          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-xs tabular-nums text-white">
+          <div className="media-lightbox-count absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/60 px-3 py-1 text-xs tabular-nums text-white">
             {index + 1} / {images.length}
           </div>
         </>

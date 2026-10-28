@@ -205,7 +205,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     const handler = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "a" || document.querySelector('[role="dialog"], [role="menu"]')) return;
       const target = event.target as HTMLElement | null;
-      if (!target || !root.current?.contains(target) || target.closest('input,textarea,select,[contenteditable="true"]')) return;
+      if (!target || !root.current?.contains(target) || target.closest('input,textarea,select,[role="combobox"],[contenteditable="true"]')) return;
       event.preventDefault(); void selectAll();
     };
     window.addEventListener("keydown", handler);

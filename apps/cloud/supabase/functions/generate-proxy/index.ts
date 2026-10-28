@@ -83,10 +83,16 @@ async function serviceFor(admin: SupabaseClient, body: GenerateRequest): Promise
   if (body.media === "video" ? service !== videoService(body.video_options!.video_resolution) : !/^image_[a-z0-9_]{1,40}$/.test(service)) {
     throw new ApiError("invalid_request", "service 与生成媒体类型不匹配");
   }
-  const { data } = await admin.from("service_costs").select("service,unit_cost,parameters").eq("service", service)
+  const { data, error } = await admin.from("service_costs").select("service,unit_cost,parameters").eq("service", service)
     .eq("active", true).maybeSingle();
+  if (error) throw new ApiError("internal_error", "生成服务状态读取失败，请稍后重试", true);
   if (!data) {
-    throw new ApiError("invalid_request", LAYER_SERVICES.includes(service as typeof LAYER_SERVICES[number]) ? "分层服务尚未开放，请等待积分定价与服务启用" : "service 与生成媒体类型不匹配");
+    if (LAYER_SERVICES.includes(service as typeof LAYER_SERVICES[number])) {
+      throw new ApiError("invalid_request", "分层服务尚未开放，请等待积分定价与服务启用");
+    }
+    throw new ApiError("not_configured", body.media === "video"
+      ? "当前云视频服务尚未开放，请选择其他生成渠道"
+      : "当前云图片服务暂不可用，请刷新模型列表或选择其他模型");
   }
   if (LAYER_SERVICES.includes(service as typeof LAYER_SERVICES[number]) && (Number(data.unit_cost) <= 0 || data.parameters?.pricing_ready !== true)) throw new ApiError("not_configured", "分层服务价格尚未确认");
   return service;

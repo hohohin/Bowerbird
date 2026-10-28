@@ -1,0 +1,212 @@
+/* Media/workspace chrome shares the approved Tactical language. Pixel surfaces,
+   crop handles, annotation colours and editable layer text remain native. */
+.asset-detail-toolbar,
+.asset-detail-panel-header,
+.source-browser-header { background: var(--bb-surface); box-shadow: none; backdrop-filter: none; }
+.asset-detail > .hatch-divider { display: none; }
+.asset-detail-stage { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72'%3E%3Cpath d='M33 36h6M36 33v6' stroke='%23808489' stroke-opacity='.2' stroke-width='.7'/%3E%3C/svg%3E"); background-size: 72px 72px; }
+.asset-detail-panel { background: var(--bb-surface); border-left-color: var(--bb-line); }
+.asset-detail-panel-header .panel-kicker { font-family: ui-monospace, monospace; font-size: 9px; letter-spacing: .14em; }
+.asset-detail-tabs { border-color: transparent; border-radius: 0; background: transparent; }
+.asset-detail-tabs button { position: relative; border-radius: 0; }
+.asset-detail-tabs button.is-active { background: var(--holo-selection); color: var(--holo-ink); box-shadow: none; }
+.asset-detail-tabs button.is-active svg { color: inherit; }
+.asset-detail-tabs button.is-active::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 2px; height: 2px; background: currentColor; pointer-events: none; }
+.asset-detail-card { border-color: transparent; border-radius: 0; background: transparent; padding-inline: 8px; }
+.asset-detail-card + .asset-detail-card { position: relative; }
+.asset-detail-card + .asset-detail-card::before { content: ""; position: absolute; top: -5px; left: 8px; right: 8px; height: 1px; background: var(--bb-line); pointer-events: none; }
+.asset-detail :is(.asset-detail-back,.asset-detail-collect,.asset-detail-icon-button) { border-color: transparent; border-radius: 0; background: var(--bb-surface-2); }
+.asset-detail :is(.asset-detail-back,.asset-detail-collect,.asset-detail-icon-button):hover { border-color: transparent; background: var(--bb-surface-hover); }
+.asset-detail .asset-detail-collect.is-active { color: var(--bb-ink); background: var(--bb-surface-hover); }
+.asset-detail :is(button,input,:is(select, .tactical-select-trigger),textarea) { border-radius: 0; }
+.asset-detail :is(input,:is(select, .tactical-select-trigger),textarea) { box-shadow: none; border-color: transparent; }
+.asset-detail :is(input,:is(select, .tactical-select-trigger),textarea):focus-visible { outline: 1px dashed var(--bb-muted); outline-offset: 2px; }
+.asset-detail .generation-source-editor { border-color: transparent; border-radius: 0; background: var(--bb-surface-2); }
+
+/* Collection windows retain media geometry and scroll/drag targets. */
+.library-drop-preview { border-color: var(--bb-line); border-radius: 0; background: var(--bb-surface); box-shadow: 0 8px 24px var(--bb-shadow-float); backdrop-filter: none; }
+.library-drop-preview-image { border-color: transparent; border-radius: 0; }
+.library-drop-preview-target { color: var(--bb-ink); }
+.library-drop-preview-count { border-color: transparent; border-radius: 0; background: var(--bb-surface); color: var(--bb-ink); }
+.folder-loading { border-radius: 0; box-shadow: 0 4px 16px var(--bb-shadow-float); }
+.collection-panel .collection-asset-card { border-color: transparent; border-radius: 0; background: transparent; transition: background-color 140ms, box-shadow 140ms; }
+.collection-panel .collection-asset-card:hover { border-color: transparent; background: var(--bb-surface-hover); box-shadow: 0 6px 16px rgb(var(--bb-shadow-rgb) / 10%); }
+.collection-panel .collection-asset-card:focus-visible { outline: 1px dashed var(--bb-muted); outline-offset: 3px; }
+.collection-panel :is(.collection-profile-button,.collection-add-button) { border-color: transparent; border-radius: 0; background: var(--bb-surface-2); color: var(--bb-ink); }
+.collection-panel .collection-add-button { background: var(--holo-primary); color: var(--holo-on-primary); }
+.collection-add-frame { box-shadow: inset 0 0 0 1px var(--bb-line-strong); }
+.collection-add-notch { border-radius: 0; background: var(--bb-ink); color: var(--bb-bg); box-shadow: 0 4px 16px rgb(var(--bb-shadow-rgb) / 10%); }
+.collection-add-actions button { border-color: transparent; border-radius: 0; background: var(--bb-surface); color: var(--bb-ink); }
+.collection-add-actions button:hover:not(:disabled) { background: var(--bb-surface-hover); color: var(--bb-ink); }
+.collection-add-actions button:focus-visible { outline: 1px dashed var(--bb-muted); outline-offset: 2px; }
+.collection-add-selected { border-color: var(--bb-ink); color: var(--bb-ink); box-shadow: inset 0 0 0 1px var(--bb-ink); }
+.collection-add-check { background: var(--bb-ink); color: var(--bb-bg); }
+html[data-theme="light"] .collection-add-actions button:not(:hover),
+html[data-theme="light"] .collection-add-selected { color: var(--bb-ink); }
+.library-batch-bar { background: var(--bb-surface); border-bottom-color: var(--bb-line); }
+.library-batch-bar :is(button,input,:is(select, .tactical-select-trigger)) { border-radius: 0; box-shadow: none; }
+.library-batch-bar :is(input,:is(select, .tactical-select-trigger)) { border: 1px solid transparent; background: var(--bb-surface-2); }
+.library-batch-bar :is(button,input,:is(select, .tactical-select-trigger)):focus-visible { outline: 1px dashed var(--bb-muted); outline-offset: 2px; }
+
+/* Folder rail: selected state is a tonal field plus one register pixel. */
+.app-sidebar :is(.app-sidebar-expanded-toggle,.app-sidebar-rail-toggle,.app-sidebar-project-badge) { border-color: transparent; border-radius: 0; box-shadow: none; background: var(--bb-surface-2); }
+.app-sidebar .app-sidebar-project-badge:is(:hover,.is-active) { border-radius: 0; border-color: transparent; }
+.app-sidebar .app-sidebar-project-badge.is-active { background: var(--holo-selection); color: var(--holo-ink); }
+.app-sidebar .sidebar-nav-item { position: relative; border-color: transparent; border-radius: 0; }
+.app-sidebar .sidebar-nav-item:hover { border-color: transparent; background: var(--bb-surface-hover); }
+.app-sidebar .sidebar-nav-item.is-active { border-color: transparent; background: var(--holo-selection); color: var(--holo-ink); box-shadow: none; }
+.app-sidebar .sidebar-nav-item.is-active::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 3px; height: 3px; background: currentColor; pointer-events: none; }
+.app-sidebar .sidebar-nav-item.is-active :is(.project-name,.text-muted) { color: inherit; }
+.app-sidebar .panel-kicker { font-family: ui-monospace, monospace; letter-spacing: .12em; }
+
+/* Native web content is a separate surface: only React browser chrome is styled. */
+.source-browser-panel .source-browser-mark { border-color: transparent; border-radius: 0; background: var(--bb-surface-2); color: var(--bb-ink); }
+.source-browser-panel :is(.source-browser-nav,.source-browser-actions,.explore-sites) button { border-color: transparent; border-radius: 0; color: var(--bb-muted); }
+.source-browser-panel :is(.source-browser-nav,.source-browser-actions,.explore-sites) button:hover { border-color: transparent; color: var(--bb-ink); background: var(--bb-surface-hover); }
+.source-browser-panel .source-browser-address { border-color: transparent; border-radius: 0; background: var(--bb-surface-2); }
+.source-browser-panel .source-browser-address:focus-within { border-color: transparent; box-shadow: none; outline: 1px dashed var(--bb-muted); outline-offset: -2px; }
+.source-browser-panel .explore-sites { background: var(--bb-surface); }
+.explore-resizer:is(:hover,:focus-visible) { background: var(--bb-surface-2); color: var(--bb-ink); }
+.explore-main.is-drop-target { box-shadow: inset 0 0 0 1px var(--bb-ink); }
+.explore-drop-hint { background: rgb(var(--bb-ink-rgb) / 10%); color: var(--bb-ink); }
+.explore-capture-status,
+.explorer-capture-feedback { border-color: transparent; border-radius: 0; background: var(--bb-surface); box-shadow: 0 4px 16px rgb(var(--bb-shadow-rgb) / 12%); }
+.explorer-capture-feedback svg { color: var(--bb-ink); }
+.explorer-classification-dock,
+html[data-theme="dark"] .explorer-classification-dock {
+  --classification-glass: color-mix(in srgb, var(--bb-surface) 88%, transparent);
+  --classification-edge: transparent;
+  --classification-detail: var(--bb-line);
+  --classification-track: var(--bb-line);
+  --classification-inner-track: rgb(var(--bb-ink-rgb) / 5%);
+  --classification-mark: var(--bb-ink-soft);
+  --classification-axis: var(--bb-line-strong);
+  --classification-tab: var(--bb-muted);
+  --classification-label: var(--bb-surface);
+}
+.explorer-classification-sheet { background: var(--classification-glass); border-radius: 0; box-shadow: 0 3px 12px rgb(var(--bb-shadow-rgb) / 8%); }
+.explorer-classification-sheet::before { border-width: 1px 0 0; inset: 8px 14px; }
+.explorer-classification-labels > span,
+.explorer-classification-overflow { color: var(--bb-ink); box-shadow: none; }
+.explorer-classification-image-placeholder { color: var(--bb-muted); background: var(--bb-surface-2); }
+
+/* Onboarding keeps its real targets, spotlight cutout and teaching animation. */
+.guide-role-card { position: relative; border-color: transparent; border-radius: 0; background: transparent; transition: background-color 140ms, box-shadow 140ms; }
+.guide-role-card:enabled:is(:hover,:focus-visible) { background: var(--bb-surface-hover); border-color: transparent; outline: 1px dashed var(--bb-muted); outline-offset: 3px; box-shadow: 0 8px 20px rgb(var(--bb-shadow-rgb) / 8%); }
+.guide-role-card > svg { color: var(--bb-ink); }
+.guide-role-card:enabled:is(:hover,:focus-visible)::after { content: ""; position: absolute; right: 6px; bottom: 6px; width: 3px; height: 3px; background: currentColor; pointer-events: none; }
+.onboarding-lesson { border-color: transparent; border-radius: 0; background: var(--bb-surface); box-shadow: 0 8px 30px rgb(var(--bb-shadow-rgb) / 16%); }
+.onboarding-lesson > header { padding-bottom: 12px; border-bottom: 1px solid var(--bb-line); }
+.onboarding-lesson li > span { border-color: transparent; border-radius: 0; background: var(--bb-surface-2); font-family: ui-monospace, monospace; }
+.onboarding-lesson li[aria-current] > span { background: var(--holo-selection); color: var(--holo-ink); }
+.onboarding-resume,
+.onboarding-topic,
+.learning-hint,
+.collection-learning,
+.onboarding-completion-login { border-color: transparent; border-radius: 0; background: var(--bb-surface-2); }
+.onboarding-resume { box-shadow: 0 4px 16px rgb(var(--bb-shadow-rgb) / 10%); }
+.onboarding-completion-login > svg { color: var(--bb-ink); }
+.onboarding-control-frame { stroke: var(--bb-ink); stroke-width: 1; stroke-dasharray: 6 4; rx: 2px; }
+
+/* Layer editor controls only; .layer-stage, .layer-object and inline text are
+   deliberately outside these selectors so export and selection geometry stay exact. */
+.layer-editor .layer-controls { background: var(--bb-surface); }
+.layer-editor .layer-controls :is(input:not([type=range]):not([type=color]),textarea,:is(select, .tactical-select-trigger)) { border-color: transparent; border-radius: 0; background: var(--bb-surface-2); box-shadow: none; }
+.layer-editor .layer-controls :is(input:not([type=range]):not([type=color]),textarea,:is(select, .tactical-select-trigger)):focus-visible { outline: 1px dashed var(--bb-muted); outline-offset: 2px; }
+.layer-editor :is(.app-button,.app-button-primary) { border-color: transparent; border-radius: 0; background: var(--bb-surface-2); color: var(--bb-ink); }
+.layer-editor .app-button-primary { background: var(--holo-primary); color: var(--holo-on-primary); }
+.layer-editor .layer-row { border-radius: 0; }
+.layer-editor .layer-row.is-selected { background: var(--holo-selection); }
+.layer-editor .layer-row.is-selected .layer-select { position: relative; }
+.layer-editor .layer-row.is-selected .layer-select::after { content: ""; position: absolute; right: 1px; bottom: 1px; width: 3px; height: 3px; background: var(--bb-ink); pointer-events: none; }
+.layer-view-tools { border-color: transparent; border-radius: 0; background: #272d2ff2; color: #e4e6eb; box-shadow: 0 4px 16px #0003; }
+.layer-view-tools button { border-radius: 0; }
+.layer-view-tools :is(button,output) { font-variant-numeric: tabular-nums; }
+.layer-view-tools button:focus-visible { outline: 1px dashed #9c9fa9; outline-offset: 1px; }
+.layer-convert-tabs { border-bottom-color: transparent; gap: 4px; }
+.layer-convert-tabs button { position: relative; border-color: transparent; border-radius: 0; background: var(--bb-surface-2); }
+.layer-convert-tabs button[aria-selected=true] { border-color: transparent; background: var(--bb-ink); color: var(--bb-bg); }
+.layer-convert-tabs button[aria-selected=true]::after { content: ""; position: absolute; right: 4px; bottom: 4px; width: 3px; height: 3px; background: currentColor; pointer-events: none; }
+
+/* Media work stages stay dark in both themes. Never tint the image/video pixels. */
+.media-lightbox > button { border-radius: 0; background: #272d2fe6; color: #e4e6eb; }
+.media-lightbox > button:hover:not(:disabled) { background: #394144; }
+.media-lightbox > button:focus-visible { outline: 1px dashed #e4e6eb; outline-offset: 3px; }
+.media-lightbox .media-lightbox-count { border-radius: 0; background: #272d2fe6; font-family: ui-monospace, monospace; }
+.video-player { border-color: #ffffff14; border-radius: 0; background: #202528; color: #e4e6eb; box-shadow: 0 12px 40px #0006; }
+.video-player :is(button,.video-player-start,.video-player-timeline,.video-player-trim-selection) { border-radius: 0; }
+.video-player :is(button,.video-player-timeline,.video-player-trim-edge input):focus-visible { outline: 1px dashed #9c9fa9; outline-offset: 2px; }
+.video-player .video-player-fine[aria-pressed=true],
+.video-player .video-player-add { position: relative; background: #e4e6eb; color: #292c32; }
+.video-player .video-player-add:hover:not(:disabled),
+.video-player .video-player-fine[aria-pressed=true]:hover:not(:disabled) { background: #fff; }
+.video-player .video-player-fine[aria-pressed=true]::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 2px; height: 2px; background: currentColor; pointer-events: none; }
+.video-player .video-player-trim-selection i { background: #d4d7dc; }
+.video-player .video-player-trim-edge input[type=range] { accent-color: #d4d7dc; }
+.video-player .video-player-trim-edge input[type=number] { border-color: transparent; border-radius: 0; }
+.video-player .video-player-time { font-family: ui-monospace, monospace; }
+.image-annotator > fieldset { background: #202528; border-color: #ffffff16; }
+.image-annotator > fieldset button:not([style]) { border-radius: 0; border-color: transparent; }
+.image-annotator > fieldset .annotation-tool.is-active { position: relative; background: #e4e6eb; color: #292c32; }
+.image-annotator > fieldset .annotation-tool.is-active::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 2px; height: 2px; background: currentColor; pointer-events: none; }
+.image-annotator > fieldset :is(textarea,:is(select, .tactical-select-trigger),input[type=number]) { border-color: transparent; border-radius: 0; background: #303639; color: #e4e6eb; }
+.image-annotator > fieldset input[type=range] { accent-color: #d4d7dc; }
+.image-annotator > fieldset :is(button,textarea,:is(select, .tactical-select-trigger),input):focus-visible { outline: 1px dashed #9c9fa9; outline-offset: 2px; }
+.image-annotator > fieldset button.bg-accent { background: #e4e6eb; color: #292c32; }
+.image-annotator > .annotation-statusbar { background: #202528; border-color: #ffffff16; }
+
+/* Graph chrome keeps the existing blue relationship highlight and node geometry. */
+.material-graph { background: var(--bb-bg); }
+.material-graph :is(.material-graph-zoom,.material-graph-distance,.material-graph-selection,.material-graph-status) { border-color: transparent; border-radius: 0; background: var(--bb-surface); box-shadow: 0 4px 16px rgb(var(--bb-shadow-rgb) / 8%); }
+.material-graph :is(.material-graph-zoom,.material-graph-selection) button { border-radius: 0; }
+.material-graph .material-graph-heading strong { font-weight: 500; }
+.material-graph .material-graph-heading span,
+.material-graph :is(.material-graph-zoom,.material-graph-distance) output { font-family: ui-monospace, monospace; }
+.material-graph :is(button,input):focus-visible,
+.material-graph .material-graph-surface:focus-visible { outline: 1px dashed var(--bb-muted); outline-offset: 2px; }
+.material-graph .material-graph-node:is(:hover,:focus-visible,.is-selected) .material-graph-thumb { stroke-width: 2; }
+.material-graph .material-graph-node:is(:hover,:focus-visible,.is-selected) .material-graph-tag { stroke-width: 2; }
+.material-graph .material-graph-selection::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 3px; height: 3px; background: var(--bb-blue); pointer-events: none; }
+
+/* Video replication keeps its four stages, provider colours and video sizing. */
+.video-replication .app-modal[data-width="lg"] { border-radius: 0; }
+.video-replication :is(button,input,textarea,summary):focus-visible { outline: 1px dashed var(--bb-muted); outline-offset: 3px; }
+.video-replication .vr-task-tile { position: relative; border-color: transparent; border-radius: 0; background: transparent; transition: background-color 140ms, box-shadow 140ms; }
+.video-replication .vr-task-tile:hover { border-color: transparent; background: var(--bb-surface-hover); box-shadow: 0 8px 20px rgb(var(--bb-shadow-rgb) / 10%); }
+.video-replication .vr-task-tile:is(:hover,:focus-visible)::after { content: ""; position: absolute; right: 5px; bottom: 5px; width: 3px; height: 3px; background: currentColor; pointer-events: none; }
+.video-replication .vr-task-cover { border-radius: 0; }
+.video-replication .vr-step-nav { background: transparent; border-color: transparent; }
+.video-replication .vr-step-nav button { position: relative; border-radius: 0; }
+.video-replication .vr-step-nav button > span { border-color: transparent; border-radius: 0; background: var(--bb-surface); font-family: ui-monospace, monospace; }
+.video-replication .vr-step-nav button[aria-current=step] { background: var(--holo-selection); color: var(--holo-ink); }
+.video-replication .vr-step-nav button[aria-current=step] small { color: inherit; opacity: .75; }
+.video-replication .vr-step-nav button[aria-current=step] > span { background: rgb(var(--bb-surface-rgb) / 18%); }
+.video-replication .vr-step-nav button[aria-current=step]::after,
+.video-replication .vr-source-tabs button[aria-pressed=true]::after { content: ""; position: absolute; right: 4px; bottom: 4px; width: 3px; height: 3px; background: currentColor; pointer-events: none; }
+.video-replication .vr-step-content h3 { display: flex; align-items: center; gap: 8px; }
+.video-replication .vr-step-content h3::before { content: ""; width: 3px; height: 3px; flex: 0 0 3px; background: var(--bb-muted); }
+.video-replication .vr-video-placeholder { border-color: transparent; border-radius: 0; background: var(--bb-surface-2); }
+.video-replication :is(.vr-source-tabs button,.vr-video-placeholder button,.vr-actions button,.vr-library-picker > button) { border-color: transparent; border-radius: 0; background: var(--bb-surface-2); color: var(--bb-ink); }
+.video-replication .vr-source-tabs button { position: relative; }
+.video-replication .vr-source-tabs button[aria-pressed=true],
+.video-replication .vr-actions button.is-primary { border-color: transparent; background: var(--holo-primary); color: var(--holo-on-primary); }
+.video-replication .vr-field :is(input,textarea) { border-color: transparent; border-radius: 0; background: var(--bb-surface-2); }
+.video-replication :is(.vr-message,.vr-frame-reference) { border-radius: 0; }
+.video-replication .video-player { border-radius: 0; }
+
+/* A short contact pulse belongs to the hovered control, never its whole group. */
+:is(.asset-detail-tabs,.source-browser-nav,.source-browser-actions,.explore-sites,.layer-view-tools) button:enabled:hover,
+.asset-detail :is(.asset-detail-back,.asset-detail-collect,.asset-detail-icon-button):enabled:hover,
+.media-lightbox > button:enabled:hover,
+.material-graph :is(.material-graph-zoom,.material-graph-selection) button:enabled:hover,
+.video-replication :is(.vr-step-nav,.vr-source-tabs,.vr-actions) button:enabled:hover,
+.image-annotator > fieldset .annotation-tool:enabled:hover { animation: media-tactical-contact 160ms steps(1,end); }
+@keyframes media-tactical-contact { 0%,28%,62%,100% { opacity: 1; } 14%,45%,78% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) {
+  :is(.asset-detail-tabs,.source-browser-nav,.source-browser-actions,.explore-sites,.layer-view-tools) button:enabled:hover,
+  .asset-detail :is(.asset-detail-back,.asset-detail-collect,.asset-detail-icon-button):enabled:hover,
+  .media-lightbox > button:enabled:hover,
+  .material-graph :is(.material-graph-zoom,.material-graph-selection) button:enabled:hover,
+  .video-replication :is(.vr-step-nav,.vr-source-tabs,.vr-actions) button:enabled:hover,
+  .image-annotator > fieldset .annotation-tool:enabled:hover { animation: none; }
+}

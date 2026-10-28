@@ -1,10 +1,13 @@
+import "../../../src/styles.css";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CanvasToolbox } from "../../../src/components/CanvasToolbox";
 import { VideoReplicationDialog } from "../../../src/components/VideoReplicationDialog";
 import { useStore } from "../../../src/store";
-import "../../../src/styles.css";
 import "../../../src/components/CanvasNotes.css";
+import "../../../src/components/TacticalDialogs.css";
+import "../../../src/components/CanvasSecondaryTactical.css";
+import "../../../src/components/MediaTactical.css";
 
 const w = window as any;
 w.store = useStore;
@@ -21,6 +24,8 @@ w.__TAURI_INTERNALS__ = {
     w.calls.push({ command, args });
     if (command !== "video_replication") throw new Error(`Unexpected IPC ${command}`);
     const { action, data } = args;
+    if (action === "case-list") return structuredClone(tasks);
+    if (action === "case-save") { tasks = [data, ...tasks.filter((item: any) => item.id !== data.id)]; sessionStorage.setItem("replication-tasks", JSON.stringify(tasks)); return structuredClone(data); }
     if (action === "douyin-list") return structuredClone(acquisitions);
     if (action === "douyin-create") { const task = { id: "douyin", state: "needs_login", message: "需要登录验证", shareText: data.text, sourceUrl: "https://v.douyin.com/example/" }; acquisitions = [task]; return structuredClone(task); }
     if (action === "douyin-login") { acquisitions[0] = { ...acquisitions[0], state: "ready", message: "视频已获取", reference: { id: "reference", name: "抖音参考视频.mp4", duration: 8, shareText: acquisitions[0].shareText, originalUrl: "https://www.douyin.com/video/1234567890123456" } }; return location.search.includes("immediate") ? structuredClone(acquisitions[0]) : { ...structuredClone(acquisitions[0]), state: "downloading", reference: undefined }; }

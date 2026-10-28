@@ -51,7 +51,7 @@ export function FileRecordsDialog({ root, onClose, onRestored }: { root: string;
     finally { operation.current = false; if (alive.current) setWriting(false); }
   }
   const ready = preview?.items.filter(item => item.action === "import" || item.action === "relink").length ?? 0;
-  return <ModalShell title="随图资料" width="lg" onClose={onClose} preventClose={writing}
+  return <ModalShell title="随图资料" width="lg" className="file-records-dialog" onClose={onClose} preventClose={writing}
     description="读取文件夹中的资料以恢复描述、生成参数、标签和提示词。已有素材保留本机资料，仅修复失效引用；原文件保留在当前位置。"
     footer={<><button className="app-button-secondary" disabled={writing} onClick={onClose}>关闭</button>
       <button className="app-button-primary" disabled={!ready || busy || writing} onClick={() => void apply()}>{writing ? "正在处理…" : `恢复可用项（${ready}）`}</button></>}>

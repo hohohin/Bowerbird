@@ -3,7 +3,7 @@ import { mergeWorkflowChanges } from "./workflowExternalChanges";
 import { workflowTitle, workflowCardWidth, workflowCompletionTriggers, workflowTriggerScope } from "./canvasWorkflow";
 import { resolveVideoCardOutputs } from "./workflowVideoFrames";
 import { api } from "./api";
-import type { Asset } from "./types";
+import type { Asset, CanvasNode, NewCanvasNode } from "./types";
 import { placeCanvasCardNearSource } from "./canvasReferencePlacement";
 import { assetPayloadJson, canvasAssetNodeSize, createCanvasAssetSnapshot } from "./creativeCanvas";
 import { DEFAULT_VIDEO_OPTIONS, isVideoPath, videoInputError, videoProvider } from "./videoGeneration";
@@ -19,20 +19,20 @@ import { canStartAnotherAgentRun, canUseAgentRun, understandProvider } from "./e
 import { renderLayerDocument } from "./layerDocument";
 import { workflowLayerDecompose } from "./workflowLayerDecompose";
 import { readCanvasNote, emptyCanvasCell, canvasGridWeights, canvasTextMinSize } from "./canvasNotes";
-import { canvasInputValue, reconcileCanvasWorkflowReferences, resolveGenerationCells, canvasSessionImages, completedCanvasSessions } from "./canvasSessionOutputs";
+import { canvasInputValue, canvasWorkflowInputState, reconcileCanvasWorkflowReferences, resolveGenerationCells, canvasSessionImages, completedCanvasSessions } from "./canvasSessionOutputs";
 import { canvasContentInput, contentInputAxisIndex } from "./canvasContentInput";
 import { agentResultValue } from "./workflowAgentResult";
 import { contentTableRows } from "./contentTable";
 import { cloudAgentProfilePrompt } from "./workflowAgentProfile";
 
 import { agentOutputTargets, agentWriterValue, routeAgentOutputs } from "./workflowAgentOutputs";
-import { assertWorkflowAcyclic, rebindGenerationReferences, normalizeWorkflowInputSlots } from "./canvasWorkflow";
+import { assertWorkflowAcyclic, rebindGenerationReferences, normalizeWorkflowInputSlots, workflowBindingKey, workflowConnectionError, workflowInputs } from "./canvasWorkflow";
 import { WorkflowNodeError, workflowDiagnostic, type WorkflowDiagnostic } from "./workflowDiagnostics";
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
 import { describeBrandImage } from "./describeBrandImage";
 import { canUseComfyVideo, comfyEnvironment, comfyVideo, comfyVideoElapsed, DEFAULT_COMFY_VIDEO, type ComfyVideoStatus } from "./comfyVideo";
 import { compileAgentPrompt, activePromptReferences, compileGenerationPrompt, generationInputNode, workflowImageContainer, emptyWorkflow, newWorkflowNode, invalidateWorkflow, workflowExecutionNodes, workflowDependencies, workflowWriteNodes, workflowAccessConflict, workflowLockedNodes, workflowRuns, workflowRunActive, workflowInputProducers, workflowInputValues, workflowOrder, WORKFLOW_SKILLS,
-  type WorkflowInput, type WorkflowRun, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "./canvasWorkflow";
+  type CanvasWorkflow, type WorkflowInput, type WorkflowRun, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "./canvasWorkflow";
 
 const controllers = new Map<string, CanvasWorkflowController>();
 export function canvasWorkflowController(projectId: string) {
@@ -57,6 +57,7 @@ export class CanvasWorkflowController {
   private persistedDocument = emptyWorkflow();
   private queuedDocument = emptyWorkflow();
   private pendingEditAuthorization = false;
+  private pendingCreatedContent: NewCanvasNode | undefined;
   private encapsulating = false;
   private executing = new Set<string>();
   private reservations = new Map<string, { access: string[]; writes: string[] }>();
@@ -175,7 +176,17 @@ export class CanvasWorkflowController {
         // Conversation metadata may hydrate later; baseline all completed turns before grouping them.
         this.historicalSessionCompletions = new Set(completedCanvasSessions(canvas.nodes.filter(node => node.kind === "prompt")
           .map(node => ({ canvasNodeId: node.id, cellId: "image" })), canvas.nodes, {}));
-        this.document = { ...this.document, nodes: reconcileCanvasWorkflowReferences(this.document.nodes, canvas.nodes).map(rebindGenerationReferences), runs, run: runs[runs.length - 1] ?? null };
+        const recovering = workflowLockedNodes({ ...this.document, runs });
+        this.document = { ...this.document, nodes: reconcileCanvasWorkflowReferences(this.document.nodes, canvas.nodes).map(node => {
+          // Old runs may own sparse pipe numbers. Keep their submitted inputs when
+          // projecting those numbers into today's contiguous positions.
+          if (recovering.has(node.id) && node.promptReferences) node = { ...node, promptReferences: node.promptReferences.map(ref => {
+            if (ref.direction === "output" || ref.slot === undefined) return ref;
+            const index = node.inputs[ref.type]?.findIndex(input => input.slot === ref.slot) ?? -1;
+            return index < 0 ? ref : { ...ref, slot: index + 1 };
+          }) };
+          return rebindGenerationReferences(node);
+        }), runs, run: runs[runs.length - 1] ?? null };
         // Loading historical results never authorizes a new generation. Pending turns remain armed.
         this.document.nodes = this.document.nodes.map(node => node.kind === "trigger" && node.inputs.completion?.some(input => input.canvasNodeId)
           ? { ...node, completionSeen: [...new Set([...(node.completionSeen ?? []), ...completedCanvasSessions(node.inputs.completion, canvas.nodes, useStore.getState().genJobs)])] } : node);
@@ -201,6 +212,8 @@ export class CanvasWorkflowController {
     document = { ...document, cardNames: assignCanvasCardNames(document.cardNames, document.nodes.filter(node => !node.textTarget && !node.textSource).map(node => ({ id: node.id, title: workflowTitle(node) }))) };
     this.document = document; this.emit();
     const snapshot = structuredClone(document);
+    const createdContent = this.pendingCreatedContent && snapshot.nodes.some(node => node.textTarget?.nodeId === this.pendingCreatedContent!.id)
+      ? this.pendingCreatedContent : undefined;
     const base = this.queuedDocument;
     this.queuedDocument = snapshot;
     const write = this.writing.then(async () => {
@@ -210,7 +223,11 @@ export class CanvasWorkflowController {
       // A chat turn can append four batches while unrelated runs checkpoint.
       for (let conflicts = 0; ; conflicts++) {
         try {
-          this.revision = await api.canvasWorkflowSave(this.projectId, revision, merged);
+          this.revision = await api.canvasWorkflowSave(this.projectId, revision, merged, this.pendingCreatedContent === createdContent ? createdContent : undefined);
+          if (createdContent && this.pendingCreatedContent === createdContent) {
+            this.pendingCreatedContent = undefined;
+            await emit("creative://changed", { projectId: this.projectId }).catch(() => {});
+          }
           break;
         } catch (error) {
           if (!String(error).includes("工作流已被其他窗口修改") || conflicts >= 4) throw error;
@@ -270,7 +287,7 @@ export class CanvasWorkflowController {
     const authorizeEdit = nodes.some(node => node.kind !== "text") || this.document.nodes.some(node => node.kind !== "text");
     if (this.encapsulating) throw new Error("正在封装卡片，请稍后再编辑");
     if (!this.ready) throw new Error("工作流尚未载入");
-    nodes = nodes.map(node => this.isLocked(node.id) ? node : normalizeWorkflowInputSlots(node, this.document.nodes.find(previous => previous.id === node.id)));
+    nodes = nodes.map(node => this.isLocked(node.id) ? node : normalizeWorkflowInputSlots(node));
     for (const node of this.document.nodes) if (this.isLocked(node.id) && JSON.stringify(node) !== JSON.stringify(nodes.find(next => next.id === node.id))) {
       throw new Error("此卡片关联的工作流正在运行，请先停止对应流程");
     }
@@ -370,6 +387,69 @@ export class CanvasWorkflowController {
     if (!source.nodeId || this.document.nodes.find(node => node.id === source.nodeId)?.outputs[source.portId ?? ""]) await this.start(writer.id, true);
   }
 
+  /** Image generation feeds a persistent history card; consumers bind its latest row. */
+  async connectGenerationImage(sourceId: string, targetId: string, inputId: string): Promise<{ node: CanvasNode; created: boolean; before: CanvasWorkflow; after: CanvasWorkflow }> {
+    return this.withResource("canvas", async () => {
+      await this.flush();
+      const canvas = await api.projectCanvasGet(this.projectId);
+      const source = this.document.nodes.find(node => node.id === sourceId);
+      const target = this.document.nodes.find(node => node.id === targetId);
+      if (!source || !target) throw new Error("连接的卡片已不存在");
+      if (source.kind !== "generation" || source.generation?.media === "video"
+        || workflowInputs(target).find(port => port.id === inputId)?.type !== "image" || target.textTarget) throw new Error("请连接图片生成卡片与其他卡片的图片输入");
+      if (this.isLocked(sourceId) || this.isLocked(targetId)) throw new Error("关联工作流正在运行，请先停止");
+      const error = workflowConnectionError(this.document.nodes, sourceId, "image", targetId, inputId);
+      if (error) throw new Error(error);
+      let writer = this.document.nodes.find(node => node.textTarget?.automaticImageRelay && node.textTarget.image
+        && node.inputs.image?.length === 1 && node.inputs.image[0].nodeId === sourceId && node.inputs.image[0].portId === "image"
+        && canvas.nodes.some(card => card.id === node.textTarget!.nodeId && card.kind === "note" && card.hiddenAt == null));
+      const existing = writer && canvas.nodes.find(card => card.id === writer!.textTarget!.nodeId)!;
+      if (writer && (this.isLocked(writer.id) || this.isLocked(existing!.id))) throw new Error("关联内容卡片正在使用，请先停止对应流程");
+      let createdContent: NewCanvasNode | undefined;
+      if (!writer) {
+        const cell = { ...emptyCanvasCell(), id: crypto.randomUUID(), content_type: "image" as const };
+        const tableId = `text-${crypto.randomUUID()}`;
+        const textTarget = { nodeId: tableId, cellId: cell.id, append: true, image: true, automaticImageRelay: true };
+        let note = readCanvasNote({ payloadJson: JSON.stringify({ schema_version: 1, note_type: "text", text: "", cells: [[cell]], member_ids: [] }) });
+        // Connecting an existing output stores it without running either model.
+        const available = source.outputs.image;
+        const seeded = available && (available.assetIds?.length || available.nodeIds?.length)
+          && (available.nodeIds ?? []).every(id => canvas.nodes.some(card => card.id === id && card.kind === "prompt" && card.hiddenAt == null))
+          ? canvasContentInput(note, textTarget, available) : undefined;
+        if (seeded) note = resolveGenerationCells(seeded.note, canvas.nodes);
+        const size = canvasTextMinSize(note.cells);
+        const rect = { x: (source.x + workflowCardWidth(source) + target.x - size.width) / 2, y: (source.y + target.y) / 2, ...size };
+        const position = placeCanvasCardNearSource(rect, [...canvas.nodes.filter(card => card.hiddenAt == null),
+          ...this.document.nodes.filter(node => !node.textTarget && !node.textSource).map(node => ({ x: node.x, y: node.y, width: workflowCardWidth(node), height: 320 }))]);
+        createdContent = { id: tableId, projectId: this.projectId, threadId: null, kind: "note", assetId: null, role: null,
+          payloadJson: JSON.stringify(note), ...position, ...size, zIndex: Math.max(0, ...canvas.nodes.map(node => node.zIndex)) + 1, positionLocked: false };
+        writer = { ...newWorkflowNode("text", position.x, position.y, ""),
+          textTarget: { ...textTarget, ...(seeded ? { cellIds: seeded.cellIds, tableCellIds: seeded.tableCellIds } : {}) },
+          inputs: { image: [{ nodeId: sourceId, portId: "image" }] } };
+      }
+      const binding: WorkflowInput = { canvasNodeId: writer.textTarget!.nodeId, cellId: "*latest-image" };
+      const current = target.inputs[inputId] ?? [];
+      if (current.some(input => workflowBindingKey(input) === workflowBindingKey(binding))) return { node: existing!, created: false, before: structuredClone(this.document), after: structuredClone(this.document) };
+      const replaced = current.find(input => input.nodeId === sourceId && input.portId === "image")
+        ?? ((target.kind === "generation" || target.kind === "agent") ? current.filter(input => canvasWorkflowInputState(input, canvas.nodes, this.document.nodes) === "missing").sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))[0] : undefined);
+      const connected = replaced ? current.map(input => input === replaced ? { ...binding, slot: replaced.slot } : input) : [...current, binding];
+      const single = target.kind === "comfy-video" || target.kind === "instruction" && target.action !== "describe";
+      const updated = normalizeWorkflowInputSlots({ ...target, inputs: { ...target.inputs, [inputId]: single ? [binding] : connected } });
+      let nodes = this.document.nodes.map(node => node.id === targetId ? updated : node);
+      if (createdContent) nodes = [...nodes, writer];
+      assertWorkflowAcyclic(nodes, targetId);
+      nodes = invalidateWorkflow(nodes, targetId);
+      // All native and workflow changes commit under one revision and SQLite transaction.
+      this.pendingCreatedContent = createdContent;
+      const before = structuredClone(this.document);
+      let after: CanvasWorkflow;
+      try { const saving = this.edit(nodes); after = structuredClone(this.document); await saving; }
+      catch (error) { if (!this.error) this.pendingCreatedContent = undefined; throw error; }
+      const node = existing ?? (await api.projectCanvasGet(this.projectId)).nodes.find(node => node.id === binding.canvasNodeId)!;
+      return { node, created: !!createdContent, before, after };
+    });
+  }
+
   /** Keep a pending turn in a cell; completion only resolves its existing output. */
   async storeCellGeneration(nodeId: string, cellId: string, sessionNodeId: string, outputNodeId?: string) {
     await this.withResource("canvas", async () => {
@@ -442,7 +522,7 @@ export class CanvasWorkflowController {
         // subsequent delivery owns a fresh region, including each loop item.
         const anchor = note.cells.flat().find(cell => cell.id === target.cellId);
         const unused = !target.cellIds?.length && !target.tableCellIds && anchor && !anchor.text && !anchor.image_refs?.length && !anchor.generation_ref;
-        if (!unused) target = { nodeId: target.nodeId, cellId: crypto.randomUUID(), append: true, image: target.image };
+        if (!unused) target = { nodeId: target.nodeId, cellId: crypto.randomUUID(), append: true, image: target.image, ...(target.automaticImageRelay ? { automaticImageRelay: true } : {}) };
       }
       if (!note.cells.flat().some(cell => cell.id === target.cellId)) {
         const row = note.cells[0].map((_, column) => ({ ...emptyCanvasCell(), id: column === 0 ? target.cellId : crypto.randomUUID() }));
@@ -644,7 +724,8 @@ export class CanvasWorkflowController {
     if (loop) {
       const owner = this.document.nodes.find(node => node.id === loop.nodeId)!;
       if (owner.loopMode === "count") loop.items = validateLoopStart(workflowLoopItems(owner, this.document.nodes, []), loop.index, owner);
-      else if (owner.loopMode === "rows" && (owner.inputs.text ?? []).every(input => textSources.includes(input.canvasNodeId ?? "")
+      else if (owner.loopMode === "rows" && !(owner.inputs.text ?? []).some(input => input.cellId === "*latest" && cellValues[JSON.stringify([input.canvasNodeId, input.cellId])]?.nodeIds?.length)
+        && (owner.inputs.text ?? []).every(input => textSources.includes(input.canvasNodeId ?? "")
         || !workflowInputProducers(executionNodes, input).some(id => order.includes(id)))) {
         loop.items = validateLoopStart(workflowLoopRows(owner, this.document.nodes, (await api.projectCanvasGet(this.projectId)).nodes), loop.index, owner);
       }
@@ -805,14 +886,14 @@ export class CanvasWorkflowController {
   }
 
   /** Image consumers wait for the exact submitted turns; cell writers store them immediately. */
-  private async resolveInputGenerations(runId: string, node: WorkflowNode, values: WorkflowValue[], halted: () => boolean) {
-    const started = Date.now();
+  private async resolveInputGenerations(runId: string, node: WorkflowNode, values: WorkflowValue[], halted: () => boolean, started = Date.now(), readLatest?: (canvas: CanvasNode[]) => WorkflowValue[]) {
     await this.step(runId, node.id, { detail: "等待上游生成图片" });
     while (!halted()) {
       const canvas = await api.projectCanvasGet(this.projectId);
+      const current = readLatest ? readLatest(canvas.nodes) : values;
       let pending = false;
       const resolved = new Map<string, string[]>();
-      for (const id of new Set(values.flatMap(value => value.nodeIds ?? []))) {
+      for (const id of new Set(current.flatMap(value => value.nodeIds ?? []))) {
         const session = canvas.nodes.find(item => item.id === id && item.kind === "prompt" && item.hiddenAt == null);
         if (!session) throw new Error("上游生成会话已不存在，请检查原任务");
         const status = JSON.parse(session.payloadJson).status;
@@ -823,7 +904,7 @@ export class CanvasWorkflowController {
         resolved.set(id, ids.slice(-1));
       }
       if (!pending) {
-        for (const value of values) value.assetIds = [...new Set([...(value.assetIds ?? []), ...(value.nodeIds ?? []).flatMap(id => resolved.get(id) ?? [])])];
+        for (const value of current) value.assetIds = [...new Set([...(value.assetIds ?? []), ...(value.nodeIds ?? []).flatMap(id => resolved.get(id) ?? [])])];
         return true;
       }
       if (Date.now() - started > 30 * 60 * 1000) {
@@ -1148,15 +1229,35 @@ export class CanvasWorkflowController {
       if (node.kind === "comfy-video" && step.jobId) { await this.runComfyVideo(runId, node, halted); return; }
       const hasCells = Object.values(node.inputs).flat().some(input => input.canvasNodeId);
       const cellTexts = this.run(runId).cellTexts;
-      const canvas = hasCells || node.kind === "loop" ? await api.projectCanvasGet(this.projectId) : null;
+      let canvas = hasCells || node.kind === "loop" ? await api.projectCanvasGet(this.projectId) : null;
+      let refreshedLatest = false;
       const readCell = (nodeId: string, cellId: string) => {
         const frozenSource = this.document.nodes.some(node => node.textSource === nodeId && this.run(runId).order.includes(node.id));
         const producedThisRun = !frozenSource && workflowInputProducers(this.document.nodes, { canvasNodeId: nodeId, cellId }).some(id => this.run(runId).order.includes(id));
         const frozen = this.run(runId).cellValues?.[JSON.stringify([nodeId, cellId])] ?? cellTexts?.[JSON.stringify([nodeId, cellId])];
-        if (cellTexts && !producedThisRun && frozen !== undefined) return frozen;
+        if (cellTexts && !producedThisRun && frozen !== undefined && !(refreshedLatest && ["*latest", "*latest-image"].includes(cellId))) return frozen;
         const source = canvas?.nodes.find(candidate => candidate.id === nodeId && candidate.hiddenAt == null);
         return source ? canvasInputValue(source, cellId, canvas!.nodes) : undefined;
       };
+      // Latest-row sockets remain dynamic while waiting: a newly appended row
+      // replaces the previous candidate for both text and image consumers.
+      const latestInputs = Object.values(generationInputNode(node).inputs).flat().filter(input => input.canvasNodeId && ["*latest", "*latest-image"].includes(input.cellId ?? ""));
+      const latestWaitStarted = Date.now();
+      while (latestInputs.length && !(node.kind === "text" && node.textTarget?.image) && !(node.kind === "loop" && this.run(runId).loop?.items)) {
+        const pending = latestInputs.flatMap(input => {
+          const value: string | WorkflowValue | undefined = readCell(input.canvasNodeId!, input.cellId!);
+          return value && typeof value !== "string" && value.nodeIds?.length ? [value] : [];
+        });
+        if (!pending.length) break;
+        if (!await this.resolveInputGenerations(runId, node, pending, halted, latestWaitStarted, current => latestInputs.flatMap(input => {
+          const source = current.find(card => card.id === input.canvasNodeId && card.hiddenAt == null);
+          const value: WorkflowValue | undefined = source && canvasInputValue(source, input.cellId!, current);
+          return value?.nodeIds?.length ? [value] : [];
+        }))) return;
+        if (accountId !== undefined && accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后继续，或停止此工作流");
+        canvas = await api.projectCanvasGet(this.projectId);
+        refreshedLatest = true;
+      }
       if (node.kind === "loop") {
         const run = this.run(runId), loop = run.loop;
         if (!loop || loop.nodeId !== id) throw new WorkflowNodeError("请从循环卡片启动完整流程", node);

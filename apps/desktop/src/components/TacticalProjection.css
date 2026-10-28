@@ -1,0 +1,145 @@
+/* Approved pale projection-blue language. Theme tokens live in styles.css.
+   Opaque reading planes, open groups and local translucent control highlights. */
+html[data-theme] .app-modal {
+  position: relative;
+  border: 0;
+  border-radius: 0;
+  background: var(--bb-surface-modal);
+  box-shadow: 0 20px 60px var(--bb-shadow-heavy);
+}
+html[data-theme] .app-modal-header {
+  position: relative;
+  border-color: transparent;
+  background: transparent;
+}
+html[data-theme] .app-modal-eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--holo-ink);
+  font-weight: 500;
+  letter-spacing: .2em;
+}
+html[data-theme] .app-modal-eyebrow::before {
+  content: "";
+  width: 4px;
+  height: 4px;
+  flex-shrink: 0;
+  background: var(--holo-pixel);
+  box-shadow: var(--holo-glow);
+}
+html[data-theme] .app-modal-close {
+  border: 0;
+  border-radius: 0;
+  color: var(--holo-ink);
+  background: var(--holo-selection);
+  clip-path: polygon(0 0, calc(100% - 7px) 0, 100% 7px, 100% 100%, 0 100%);
+}
+html[data-theme] .app-modal-close:hover:not(:disabled) { background: var(--holo-primary); color: var(--holo-ink); }
+html[data-theme] .app-modal-close:focus-visible { outline: 1px dashed var(--holo-ink); outline-offset: -3px; }
+html[data-theme] .app-modal-body { background: transparent; }
+html[data-theme] .app-modal-footer { position: relative; background: transparent; border-color: transparent; }
+html[data-theme] .app-modal-footer::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 18px;
+  right: 18px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--holo-rule) 28px, transparent 28px 36px, var(--bb-line) 36px, transparent);
+  pointer-events: none;
+}
+
+/* Keep disabled and destructive controls out of the blue action treatment. */
+html[data-theme] :is(.app-button-primary, .app-button-accent, .app-button-secondary, .app-button-dark, .app-button-light, .app-icon-button, .app-modal-button) {
+  border-radius: 0;
+  box-shadow: none;
+}
+html[data-theme] :is(.app-button-secondary, .app-button-dark, .app-icon-button, .app-modal-button:not(.is-primary):not(.is-danger)) {
+  position: relative;
+  border-color: transparent;
+  background: transparent;
+  color: var(--bb-ink-soft);
+}
+html[data-theme] :is(.app-button-primary, .app-button-accent, .app-button-light, .app-modal-button.is-primary):not(:disabled):not(.is-danger) {
+  background: var(--holo-primary);
+  color: var(--holo-on-primary);
+  border-color: transparent;
+}
+html[data-theme] :is(.app-button-secondary, .app-button-dark, .app-icon-button, .app-modal-button:not(.is-primary):not(.is-danger)):hover:not(:disabled) {
+  color: var(--holo-ink);
+  background: var(--holo-hover);
+  border-color: transparent;
+  animation: none;
+}
+html[data-theme] :is(.app-button-secondary, .app-button-dark, .app-icon-button, .app-modal-button:not(.is-primary):not(.is-danger)):is(.is-active, [aria-pressed="true"], [aria-selected="true"]):not(:disabled) {
+  background: var(--holo-selection);
+  color: var(--holo-ink);
+  border-color: transparent;
+}
+html[data-theme] .app-modal-button.is-danger {
+  color: var(--bb-danger);
+  border-color: transparent;
+  background: linear-gradient(105deg, rgb(244 63 94 / .15), transparent);
+}
+html[data-theme] .app-modal-button.is-danger:hover:not(:disabled) { background: linear-gradient(105deg, rgb(244 63 94 / .24), transparent); }
+html[data-theme] :is(.app-button-primary, .app-button-accent, .app-button-light, .app-modal-button):disabled {
+  background: var(--holo-field);
+  color: var(--bb-muted);
+}
+html[data-theme] :is(.app-modal, .app-popover) :is(button, input:not([type="range"]):not([type="color"]), :is(select, .tactical-select-trigger), textarea) { border-radius: 0; }
+html[data-theme] .app-form-input {
+  border-radius: 0;
+  background: var(--holo-field);
+  border-color: transparent;
+  box-shadow: none;
+}
+html[data-theme] :is(.app-form-input, .app-button-primary, .app-button-accent, .app-button-secondary, .app-button-dark, .app-button-light, .app-icon-button, .app-modal-button):focus-visible {
+  outline: 1px dashed var(--holo-ink);
+  outline-offset: 3px;
+  box-shadow: none;
+}
+html[data-theme] .app-form-input:focus { border-color: transparent; box-shadow: none; outline: 1px dashed var(--holo-ink); outline-offset: 2px; }
+html[data-theme] .app-form-input[aria-invalid="true"] { outline-color: var(--bb-danger); border-color: var(--bb-danger); }
+html[data-theme] .app-modal .catalog-form :is(input:not([type="radio"]):not([type="checkbox"]), textarea, :is(select, .tactical-select-trigger)) {
+  background: var(--holo-field);
+  border-color: transparent;
+  box-shadow: none;
+}
+html[data-theme] .app-modal .catalog-form :is(input, textarea, :is(select, .tactical-select-trigger)):focus-visible {
+  outline: 1px dashed var(--holo-ink);
+  outline-offset: 2px;
+}
+html[data-theme] :is(.app-popover, .app-context-menu, .app-popover-option, .app-context-item) { border-radius: 0; }
+html[data-theme] :is(.app-popover, .app-context-menu) { border-color: transparent; }
+html[data-theme] :is(.app-popover-option, .app-context-item) { background: transparent; }
+html[data-theme] :is(.app-popover-option:not(.provider-select-option), .app-context-item):not(.is-danger):is(:hover, :focus-visible, .is-active, [aria-selected="true"]):not(:disabled) {
+  background: var(--holo-selection);
+  color: var(--holo-ink);
+}
+
+/* Contact pulse is a light layer; labels themselves remain fully readable. */
+html[data-theme] :is(.app-button-primary, .app-button-accent, .app-button-secondary, .app-button-dark, .app-button-light, .app-modal-button:not(.is-danger), .app-icon-button, .app-modal-close, .app-popover-option:not(.provider-select-option), .app-context-item:not(.is-danger)) { position: relative; }
+html[data-theme] :is(.app-button-primary, .app-button-accent, .app-button-secondary, .app-button-dark, .app-button-light, .app-modal-button:not(.is-danger), .app-icon-button, .app-modal-close, .app-popover-option:not(.provider-select-option), .app-context-item:not(.is-danger))::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background: repeating-linear-gradient(0deg, transparent 0 3px, rgb(var(--holo-rgb) / .08) 3px 4px),
+    linear-gradient(105deg, rgb(var(--holo-rgb) / .16), transparent);
+  mask-image: linear-gradient(90deg, #000, transparent);
+  pointer-events: none;
+}
+@keyframes projection-contact {
+  0%, 32%, 56%, 80%, 100% { opacity: 1; }
+  12%, 43%, 68% { opacity: .12; }
+}
+@keyframes projection-surface-contact {
+  0%, 32%, 56%, 80% { opacity: 1; }
+  12%, 43%, 68%, 100% { opacity: 0; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  html[data-theme] :is(.app-button-primary, .app-button-accent, .app-button-secondary, .app-button-dark, .app-button-light, .app-modal-button:not(.is-danger), .app-icon-button, .app-modal-close, .app-popover-option:not(.provider-select-option), .app-context-item:not(.is-danger)):hover:not(:disabled)::before {
+    animation: projection-surface-contact 160ms steps(1, end);
+  }
+}

@@ -48,8 +48,9 @@ export function canvasInputValue(source: CanvasNode, cellId: string, nodes: read
   if (source.kind !== "note") return undefined;
   const note = resolveGenerationCells(readCanvasNote(source), nodes);
   const value = canvasNoteValue(note, cellId);
-  if (value?.type !== "image") return value;
-  const nodeIds = note.cells.flat().filter(cell => cellId === "*" || cell.id === cellId)
+  if (!value || value.type !== "image" && cellId !== "*latest") return value;
+  const latest = cellId === "*latest" || cellId === "*latest-image";
+  const nodeIds = (latest ? note.cells.slice(-1) : note.cells).flat().filter(cell => latest || cellId === "*" || cell.id === cellId)
     .flatMap(cell => cell.generation_ref && !cell.image_refs?.length ? [cell.generation_ref.session_node_id] : []);
   return nodeIds.length ? { ...value, nodeIds: [...new Set(nodeIds)] } : value;
 }

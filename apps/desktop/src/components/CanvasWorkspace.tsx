@@ -28,6 +28,10 @@ import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
 import { CANVAS_LAYER_STEP_EVENT, stepCanvasLayers, type CanvasLayerStepDetail } from "../lib/canvasLayers";
 import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
 import "./CanvasNotes.css";
+import { CanvasTacticalOverlay } from "./CanvasTacticalOverlay";
+import { TacticalSelect } from "./TacticalSelect";
+import "./CanvasTactical.css";
+import "./CanvasTacticalCards.css";
 import { canvasSectionMembers, canvasTextMinSize, emptyCanvasCell, expandCanvasSections, readCanvasNote, type CanvasNotePayload } from "../lib/canvasNotes";
 import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore";
 import { notify, notifyError } from "../lib/notify";
@@ -220,7 +224,7 @@ interface CanvasMarqueePress extends CanvasMarquee {
 }
 
 type CanvasUndoEntry =
-  | { kind: "workflow"; projectId: string; edit: WorkflowEditUndo }
+  | { kind: "workflow"; projectId: string; edit: WorkflowEditUndo; createdNodeIds?: string[] }
   | { kind: "paste"; projectId: string; nodeIds: string[]; groupIds: string[]; workflowIds: string[] }
   | { kind: "removal"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; groups: Map<string, CanvasGroup>; workflow?: WorkflowEditUndo | null }
   | { kind: "geometry"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; workflow: WorkflowGeometry[] };
@@ -1711,7 +1715,7 @@ export function CanvasWorkspace({
       if (exploring || viewMode !== "canvas" || !sourceCollapsed || scopedInspectorOpen
         || workspaceRef.current?.closest("[inert]") || document.querySelector('[role="dialog"], [role="menu"]')) return;
       const focused = document.activeElement as HTMLElement | null;
-      if (workspaceRef.current?.contains(focused) && focused?.closest('input, textarea, select, [contenteditable="true"]')) return;
+      if (workspaceRef.current?.contains(focused) && focused?.closest('input, textarea, select, [role="combobox"], [contenteditable="true"]')) return;
       stageRef.current?.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
@@ -1730,7 +1734,7 @@ export function CanvasWorkspace({
   useLayoutEffect(() => {
     if (sourcePanelRef.current) sourcePanelRef.current.inert = sourceCollapsed;
     // Typing in the global search also reveals the library; keep that input focused.
-    if (!sourceCollapsed && !document.activeElement?.matches('input, textarea, select, [contenteditable="true"]')) {
+    if (!sourceCollapsed && !document.activeElement?.matches('input, textarea, select, [role="combobox"], [contenteditable="true"]')) {
       sourcePanelRef.current?.focus({ preventScroll: true });
     }
   }, [sourceCollapsed]);
@@ -1744,7 +1748,7 @@ export function CanvasWorkspace({
       const composerTab = event.key === "Tab" && !event.shiftKey && !!target
         && workspaceRef.current?.contains(target)
         && !!target.closest('.creation-editor .ProseMirror, [data-generation-composer] .ProseMirror');
-      if (!composerTab && event.key !== "Escape" && (target?.isContentEditable || target?.closest('input, textarea, select, .app-topbar'))) return;
+      if (!composerTab && event.key !== "Escape" && (target?.isContentEditable || target?.closest('input, textarea, select, [role="combobox"], .app-topbar'))) return;
       if (event.key === "Escape" && target?.closest('[data-folder-path-editor], [data-frequent-threshold]')) return;
       if (target?.closest('[role="dialog"], [role="menu"]')
         || document.querySelector('[role="dialog"], [role="menu"]') || useStore.getState().contextMenu
@@ -1786,6 +1790,7 @@ export function CanvasWorkspace({
         || target.tagName === "INPUT"
         || target.tagName === "TEXTAREA"
         || target.tagName === "SELECT"
+        || !!target.closest('[role="combobox"]')
       );
       if (document.querySelector("[data-context-owner]") || workflowAgentDetail && target?.closest("[data-project-inspector]")) return;
       if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z"
@@ -3518,7 +3523,7 @@ export function CanvasWorkspace({
   useEffect(() => {
     const allowed = (event: ClipboardEvent) => {
       const target = event.target as HTMLElement | null;
-      return !event.defaultPrevented && !target?.closest('input,textarea,select,[contenteditable="true"]')
+      return !event.defaultPrevented && !target?.closest('input,textarea,select,[role="combobox"],[contenteditable="true"]')
         && ((target === document.body && !useStore.getState().canvasLibraryOpen) || (target instanceof Node && stageRef.current?.contains(target)))
         && viewModeRef.current === "canvas" && !useStore.getState().projectRoutePending && !scopedInspectorOpen
         && !document.querySelector('[role="dialog"][aria-modal="true"]') && !!stageRef.current;
@@ -3731,7 +3736,16 @@ export function CanvasWorkspace({
       }
       if (controller.error) { notify("请先重试保存工作流，再撤销卡片操作", "info"); return; }
       const before = controller.document;
-      const pending = controller.edit(restoreWorkflowEdit(before.nodes, entry.edit), entry.edit);
+      const restored = restoreWorkflowEdit(before.nodes, entry.edit);
+      if (entry.createdNodeIds?.length && restored.some(node =>
+        [node.textSource, node.textTarget?.nodeId, ...(node.resultNodeIds ?? []), ...Object.values(node.inputs).flat().map(input => input.canvasNodeId)]
+          .some(id => id && entry.createdNodeIds!.includes(id)))) {
+        notify("内容卡片已有新的外部连线，请先断开后再撤销", "info"); return;
+      }
+      const pending = controller.edit(restored, entry.edit).then(async () => {
+        for (const id of entry.createdNodeIds ?? []) await api.projectCanvasNodeRemove(id);
+        if (entry.createdNodeIds?.length) await refreshClipboardCanvas(entry.projectId);
+      });
       if (controller.document !== before) undoHistoryRef.current.pop();
       void pending.catch(error => notifyError(error, "工作流撤销未完成"));
       return;
@@ -4242,7 +4256,7 @@ export function CanvasWorkspace({
     <div
       ref={workspaceRef}
       data-onboarding-project={projectId ?? undefined}
-      className={`canvas-workspace${sourceCollapsed ? " is-source-collapsed" : " is-library-open"}${libraryDragging ? " is-library-dragging" : ""}${frequentPicking ? " is-picking-frequent" : ""}${loading || projectRoutePending ? " is-route-pending" : ""}`}
+      className={`canvas-workspace canvas-tactical${sourceCollapsed ? " is-source-collapsed" : " is-library-open"}${libraryDragging ? " is-library-dragging" : ""}${frequentPicking ? " is-picking-frequent" : ""}${loading || projectRoutePending ? " is-route-pending" : ""}`}
       aria-busy={loading || projectRoutePending}
       onPointerDownCapture={event => {
         if (event.button === 0 && !isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) captureFrequentMaterial(event);
@@ -4354,16 +4368,16 @@ export function CanvasWorkspace({
             <button type="button" aria-label="项目对话记录" title="项目对话记录" aria-expanded={chatHistoryOpen}
               onClick={() => setChatHistoryOpen(open => !open)}><MessageCircle size={14} /></button>
             {viewMode === "timeline" && threads.length > 0 && (
-              <select
+              <TacticalSelect
                 aria-label="时间线范围"
                 value={timelineScope === "all" ? "__all" : focusedThreadId ?? "__all"}
-                onChange={(event) => {
-                  if (event.target.value === "__all") {
+                onValueChange={(value) => {
+                  if (value === "__all") {
                     setProjectTimelineScope("all");
                   } else {
-                    setFocusedThreadId(event.target.value);
+                    setFocusedThreadId(value);
                     setProjectTimelineScope("focused");
-                    useStore.getState().clearProjectThreadUnread(activeCanvas.id, event.target.value);
+                    useStore.getState().clearProjectThreadUnread(activeCanvas.id, value);
                   }
                   markViewDirty();
                 }}
@@ -4381,7 +4395,7 @@ export function CanvasWorkspace({
                     ))}
                   </optgroup>
                 )}
-              </select>
+              </TacticalSelect>
             )}
             {viewMode === "timeline" && timelineScope === "focused" && focusedThreadId && threads.some((thread) => thread.id === focusedThreadId) && (
               <button
@@ -4449,7 +4463,7 @@ export function CanvasWorkspace({
           className={`canvas-stage ${drawingTool !== "select" && drawingTool !== "pan" ? "is-drawing" : ""} ${drawingTool === "pan" ? "is-hand" : ""} ${externalDragOver ? "is-drag-over" : ""} ${spacePanReady ? "is-pan-ready" : ""} ${panning ? "is-panning" : ""} ${boardOpen || genEditing ? "is-creation-mode" : ""} ${viewMode !== "canvas" ? "is-view-hidden" : ""}`}
           style={{
             backgroundPosition: `${pan.x}px ${pan.y}px`,
-            backgroundSize: `${24 * zoom}px ${24 * zoom}px`,
+            backgroundSize: `${72 * zoom}px ${72 * zoom}px`,
           }}
           onPointerDownCapture={event => {
             if (event.button === 0 && !(event.target as HTMLElement).closest('button,input,textarea,select,[contenteditable="true"]')) {
@@ -4466,7 +4480,7 @@ export function CanvasWorkspace({
             if ((!deleteKey && !macDeleteKey) || event.defaultPrevented || event.repeat || event.nativeEvent.isComposing
               || event.ctrlKey || event.altKey || event.shiftKey) return;
             const target = event.target as HTMLElement;
-            if (target.isContentEditable || target.closest("input, textarea, select")) return;
+            if (target.isContentEditable || target.closest('input, textarea, select, [role="combobox"]')) return;
             if (viewModeRef.current !== "canvas" || loadingRef.current || useStore.getState().projectRoutePending
               || scopedInspectorOpen || canvasLightbox || promptMenu || useStore.getState().contextMenu
               || nodeDragRef.current || graphNodeDragRef.current || marqueePressRef.current || panDragRef.current
@@ -4538,10 +4552,11 @@ export function CanvasWorkspace({
             {projectId && !loading && !loadFailed && activeCanvas.id === projectId && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} zoom={zoom} toBoardPoint={toBoardPoint} graphNodes={nonChatGraphNodes} conversationCards={conversationCards} imageOnlyConversationIds={imageOnlyConversationIds}
               selectedIds={selectedCanvasNodeIds} panReady={spacePanReady || drawingTool === "pan"} onSelect={(id, additive) => { if (additive) toggleCanvasNodeSelection(id); else setSelectedCanvasNodeIds(new Set([id])); }}
               onNodesChanged={() => setWorkflowRevision(value => value + 1)}
-              onEdited={(before, after) => {
+              onEdited={(before, after, createdNodeIds) => {
                 if (activeCanvasRef.current.id !== projectId) return;
                 const edit = workflowEditUndo(before, after);
-                if (edit) undoHistoryRef.current.push({ kind: "workflow", projectId, edit });
+                if (edit) undoHistoryRef.current.push({ kind: "workflow", projectId, edit, createdNodeIds });
+                if (createdNodeIds?.length) void refreshClipboardCanvas(projectId).catch(error => notifyError(error, "内容卡片刷新未完成"));
               }}
               onOpenAgent={nodeId => { setGenPanelOpen(false); setWorkflowAgentDetail({ projectId: projectId!, nodeId }); }}
               onOpenGeneration={openWorkflowGeneration}
@@ -4941,6 +4956,7 @@ export function CanvasWorkspace({
             })}
           </div>
 
+          <CanvasTacticalOverlay key={projectId} stageRef={stageRef} active={viewMode === "canvas" && !loading && !projectRoutePending} />
           {canvasMarquee && (
             <div
               className="canvas-selection-marquee"

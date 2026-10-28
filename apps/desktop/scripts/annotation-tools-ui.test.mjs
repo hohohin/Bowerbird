@@ -37,6 +37,11 @@ async function compareTransform(original, output, kind) {
     const expectedContext = expectedCanvas.getContext("2d"), actualContext = actualCanvas.getContext("2d");
     if (kind === "rotate") {
       expectedContext.translate(actual.width, 0); expectedContext.rotate(Math.PI / 2); expectedContext.drawImage(source, 0, 0);
+    } else if (kind === "horizontal" || kind === "vertical") {
+      const horizontal = kind === "horizontal";
+      expectedContext.translate(horizontal ? actual.width : 0, horizontal ? 0 : actual.height);
+      expectedContext.scale(horizontal ? -1 : 1, horizontal ? 1 : -1);
+      expectedContext.drawImage(source, 0, 0);
     } else expectedContext.drawImage(source, 160, 120, 1280, 960, 0, 0, 1280, 960);
     actualContext.drawImage(actual, 0, 0);
     const a = expectedContext.getImageData(0, 0, actual.width, actual.height).data;
@@ -71,11 +76,22 @@ try {
       else {
         const canvas = document.createElement("canvas"); canvas.width = 1600; canvas.height = 1200;
         const ctx = canvas.getContext("2d"); ctx.fillStyle = "white"; ctx.fillRect(0, 0, 1600, 1200);
+        ctx.fillStyle = "#f08040"; ctx.fillRect(40, 50, 180, 90);
+        ctx.fillStyle = "#4080f0"; ctx.fillRect(1200, 1000, 120, 140);
         window.store.setState({ assets: [{ id: "test-image", name: "素材标注测试", ext: "png", store_path: canvas.toDataURL() }] });
         window.store.getState().openAnnotator("test-image");
       }
     }, mode);
     await dialog.locator("img").waitFor();
+    if (mode === "asset") {
+      const sourceUrl = await dialog.locator("img").getAttribute("src");
+      await dialog.getByRole("button", { name: "水平镜像", exact: true }).click();
+      const flippedOnly = await capture("保存到素材库");
+      assert.equal(flippedOnly.meta.shapes.length, 0, "mirror alone enables saving");
+      await compareTransform({ dataUrl: sourceUrl }, flippedOnly, "horizontal");
+      await dialog.getByRole("button", { name: "撤销", exact: true }).click();
+      assert.equal(await dialog.getByRole("button", { name: "保存到素材库", exact: true }).isDisabled(), true);
+    }
     await dialog.getByRole("button", { name: "颜色 #111111", exact: true }).click();
     await gesture("画圆", [[0.12, 0.12], [0.36, 0.39]], true);
     const circle = await overlay.locator("ellipse").evaluate(el => ({ rx: +el.getAttribute("rx"), ry: +el.getAttribute("ry") }));
@@ -87,7 +103,8 @@ try {
     await input.fill("你好 Bowerbird\n第二行文字");
     await input.evaluate(el => el.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true })));
     assert.equal(await dialog.isVisible(), true, "IME Escape must not close the editor");
-    await dialog.getByLabel("字体", { exact: true }).selectOption({ label: "宋体" });
+    await dialog.getByRole("combobox", { name: "字体", exact: true }).click();
+    await page.getByRole("option", { name: "宋体", exact: true }).click();
     await dialog.getByLabel("字号", { exact: true }).fill("40");
     const bold = dialog.getByRole("button", { name: "粗体", exact: true });
     if (await bold.getAttribute("aria-pressed") !== "true") await bold.click();
@@ -125,6 +142,26 @@ try {
       });
     }, original);
     assert.ok(ink.every(count => count > 100), "all three tools burn visible pixels into PNG output");
+    for (const [axis, label] of [["horizontal", "水平镜像"], ["vertical", "垂直镜像"]]) {
+      await dialog.getByRole("button", { name: label, exact: true }).click();
+      const flipped = await capture(saveButton);
+      await compareTransform(original, flipped, axis);
+      assert.deepEqual(flipped.meta.image, original.meta.image);
+      assert.deepEqual(flipped.meta.transform, [{ kind: "flip", axis }]);
+      assert.equal(flipped.meta.shapes[2].mirrored, true);
+      const point = original.meta.shapes[1].points[3], flippedPoint = flipped.meta.shapes[1].points[3];
+      assert.ok(Math.abs(flippedPoint.x - (axis === "horizontal" ? 1000 - point.x : point.x)) <= 1);
+      assert.ok(Math.abs(flippedPoint.y - (axis === "vertical" ? 1000 - point.y : point.y)) <= 1);
+      const textTransform = await overlay.locator("text").getAttribute("transform");
+      assert.match(textTransform, /scale\(-1 1\)/, "preview mirrors text as well as the base image");
+      await dialog.getByRole("button", { name: label, exact: true }).click();
+      const twice = await capture(saveButton);
+      await compareTransform(flipped, twice, axis);
+      assert.equal(twice.meta.shapes[2].mirrored, undefined);
+      await dialog.getByRole("button", { name: "撤销", exact: true }).click();
+      await dialog.getByRole("button", { name: "撤销", exact: true }).click();
+      assert.equal((await capture(saveButton)).dataUrl, original.dataUrl, "undo restores mirror pixels and annotations");
+    }
     await dialog.getByRole("button", { name: "右转 90°", exact: true }).click();
     const rotated = await capture(saveButton);
     await compareTransform(original, rotated, "rotate");
@@ -134,6 +171,13 @@ try {
     const point = original.meta.shapes[1].points[3], rotatedPoint = rotated.meta.shapes[1].points[3];
     assert.ok(Math.abs(rotatedPoint.x - (1000 - point.y)) <= 1);
     assert.ok(Math.abs(rotatedPoint.y - point.x) <= 1);
+    await dialog.getByRole("button", { name: "水平镜像", exact: true }).click();
+    const rotatedFlipped = await capture(saveButton);
+    await compareTransform(rotated, rotatedFlipped, "horizontal");
+    await dialog.getByRole("button", { name: "右转 90°", exact: true }).click();
+    await compareTransform(rotatedFlipped, await capture(saveButton), "rotate");
+    await dialog.getByRole("button", { name: "撤销", exact: true }).click();
+    await dialog.getByRole("button", { name: "撤销", exact: true }).click();
     await dialog.getByRole("button", { name: "撤销", exact: true }).click();
     const undone = await capture(saveButton);
     assert.equal(undone.dataUrl, original.dataUrl, "undo restores the complete original image");
@@ -144,9 +188,12 @@ try {
     assert.deepEqual(cropped.meta.image, { width: 1280, height: 960 });
     assert.equal(cropped.meta.shapes[1].points.length, original.meta.shapes[1].points.length);
     assert.ok(Math.abs(cropped.meta.shapes[2].fontSize - original.meta.shapes[2].fontSize) < 0.001);
+    await dialog.getByRole("button", { name: "垂直镜像", exact: true }).click();
+    const croppedFlipped = await capture(saveButton);
+    await compareTransform(cropped, croppedFlipped, "vertical");
     if (mode === "asset") {
       const temp = await capture("插入创作板 · 不入库");
-      assert.deepEqual(temp, cropped, "both material annotation outputs preserve every tool");
+      assert.deepEqual(temp, croppedFlipped, "both material annotation outputs preserve every tool and mirror");
     }
     await dialog.getByRole("button", { name: "清空", exact: true }).click();
     assert.equal(await overlay.locator("text, ellipse, polyline").count(), 0);
@@ -155,5 +202,5 @@ try {
     await dialog.getByRole("button", { name: "关闭（Esc）", exact: true }).click();
   }
   assert.deepEqual(errors, []);
-  console.log("PASS shared annotation tools: circle, closed pencil stroke, multilingual/multiline text, fonts, size, bold, IME/native undo, PNG pixels, rotate/crop/undo, clear/undo, library and temporary outputs");
+  console.log("PASS shared annotation tools: circle, closed pencil stroke, multilingual/multiline text, fonts, size, bold, IME/native undo, PNG pixels, horizontal/vertical mirror, repeated mirror, rotate/crop/mirror/undo, clear/undo, library and temporary outputs");
 } finally { await browser.close(); await server.close(); }

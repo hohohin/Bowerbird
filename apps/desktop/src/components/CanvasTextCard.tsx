@@ -8,7 +8,7 @@ import { CanvasResizeHandle } from "./CanvasResizeHandle";
 import { CanvasBubbleTail } from "./CanvasBubbleTail";
 import { VideoPoster } from "./VideoPoster";
 import { isVideoPath } from "../lib/videoGeneration";
-import { AlignCenter, AlignLeft, AlignRight, Bold, Check, ChevronsDownUp, ChevronsUpDown, Copy, GripHorizontal, Italic, Minus, Plus, Table2, Type, Undo2 } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, Bold, Check, ChevronsDownUp, ChevronsUpDown, Copy, GripHorizontal, Italic, MessageCircle, Minus, Plus, Table2, Undo2 } from "lucide-react";
 import { canvasCellValue, canvasGridWeights, canvasTextCsv, canvasTextMinSize, emptyCanvasCell, type CanvasNotePayload, type CanvasTextCell } from "../lib/canvasNotes";
 import { notifyError } from "../lib/notify";
 import { parseCanvasTableClipboard, pasteCanvasTable } from "../lib/canvasTablePaste";
@@ -220,6 +220,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
     } catch (error) { notifyError(error, "复制失败"); }
   }
   return <>
+    {!bubble && <div className="canvas-tactical-card-shell" aria-hidden="true" />}
     <BoardChipPreview hostRef={grid} extraAssets={referenceAssets} clickToFocus={false} />
     {selected && !images && <div className="canvas-text-stylebar" role="toolbar" aria-label="文本样式（当前单元格）"
       onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}>
@@ -234,13 +235,16 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
         setRemoved(null);
       }}><Undo2 size={16} /></button></>}
     </div>}
-    <div className="canvas-text-handle" title="拖动内容卡片"><GripHorizontal size={15} />{bubble ? <Type size={14} /> : <Table2 size={14} />}</div>
+    <div className="canvas-text-handle" title={bubble ? "拖动气泡便签" : "拖动内容卡片"}><GripHorizontal size={15} />{bubble ? <MessageCircle size={14} aria-hidden="true" /> : <Table2 size={14} aria-hidden="true" />}<span className="canvas-tactical-note-title">{bubble ? "气泡便签" : "内容卡片"}</span></div>
     {!bubble && onConnectCell && <button className="workflow-cell-port workflow-image-output" data-workflow-cell="*" aria-label="输出容器图片" title="输出全部图片"
       onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell("*", event.clientX, event.clientY); }}
       onClick={event => { if (event.detail === 0) onConnectCell("*", event.clientX, event.clientY); }} />}
     {!bubble && onConnectCell && <button className="workflow-cell-port workflow-content-text-output" data-workflow-cell="*text" aria-label="输出全部文本" title="输出完整表格，保留行列和空单元格"
       onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell("*text", event.clientX, event.clientY); }}
       onClick={event => { if (event.detail === 0) onConnectCell("*text", event.clientX, event.clientY); }} />}
+    {!bubble && onConnectCell && <button className="workflow-cell-port workflow-latest-output" data-workflow-cell="*latest" aria-label="输出最新" title="输出最下一行；新增行后自动跟随，空行输出为空"
+      onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell("*latest", event.clientX, event.clientY); }}
+      onClick={event => { if (event.detail === 0) onConnectCell("*latest", event.clientX, event.clientY); }}><span>输出最新</span></button>}
     {images && removed && selected && <div className="canvas-text-spacing"><button aria-label="撤销删除行列" onClick={() => { onChange(removed.value); setActive(removed.active); setRemoved(null); }}><Undo2 size={14} /></button></div>}
     {!images && <div className="canvas-text-spacing" role="group" aria-label="文本工具"
       onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }} onKeyDown={event => event.stopPropagation()}>

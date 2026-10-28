@@ -14,10 +14,12 @@ w.__TAURI_INTERNALS__ = { convertFileSrc: (path: string) => path, invoke: async 
 const root = createRoot(document.getElementById("root")!);
 const poster = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='90'%3E%3Crect width='160' height='90' fill='green'/%3E%3C/svg%3E";
 const calls: string[] = [];
+const calledAt = new Map<string, number[]>();
 let active = 0, maxActive = 0;
 w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
   if (command !== "video_poster") return {};
   calls.push(args.sourcePath);
+  calledAt.set(args.sourcePath, [...(calledAt.get(args.sourcePath) ?? []), Date.now()]);
   active++;
   maxActive = Math.max(active, maxActive);
   await new Promise(resolve => setTimeout(resolve, 30));
@@ -68,12 +70,17 @@ w.runMediaPreviewSmoke = async () => {
       flushSync(() => root.render(null));
       await tick();
     }
-    await until(() => calls.length === 6 && active === 0);
-    check(new Set(calls).size === calls.length && maxActive === 1, "poster requests duplicated or decoded concurrently");
+    await until(() => new Set(calls).size === 6 && active === 0);
+    for (const [path, times] of calledAt) {
+      if (["/never-load-2.mp4", "/never-load-4.mp4"].includes(path)) {
+        check(times.every((time, index) => index === 0 || time - times[index - 1] >= 10_000), "failed poster retries ignored cooldown");
+      } else check(times.length === 1, "successful poster requests duplicated");
+    }
+    check(maxActive === 1, "poster requests decoded concurrently");
     // A previous asynchronous result must not become the next video's cover.
     flushSync(() => root.render(<VideoPoster path="/never-load-stale.mp4" alt="stale" />));
     flushSync(() => root.render(<VideoPoster path="/never-load-2.mp4" alt="failed" />));
-    await until(() => calls.length === 7 && active === 0);
+    await until(() => new Set(calls).size === 7 && active === 0);
     await tick();
     check(document.querySelector("img")?.getAttribute("src") !== poster, "old cover leaked into a different video");
     check(!document.querySelector("video"), "failed extraction created a player");

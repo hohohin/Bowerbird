@@ -31,7 +31,7 @@ function PendingPlan({ approval }: { approval: CloudAgentApproval }) {
   const plan = cloudAgentPlanDisplay(approval.proposal);
   if (!plan) return <p className="text-xs text-muted">计划正文正在同步，请稍候。</p>;
   return (
-    <div className="space-y-3">
+    <div className="cloud-agent-plan space-y-3">
       <div className="rounded-lg bg-black/20 p-3 ring-1 ring-white/8">
         <div className="mb-1 flex items-center justify-between gap-3">
           <span className="text-xs font-semibold text-ink">{plan.title}</span>
@@ -167,7 +167,7 @@ function TimelineEvent({
   const ratio = typeof payload.ratio === "string" ? payload.ratio : undefined;
   const completed = event.type === "step.completed" || event.type === "result.ready" || event.type === "run.succeeded";
   return (
-    <div className="relative pl-7">
+    <div className="cloud-agent-event relative pl-7">
       <span className="absolute left-0 top-0.5 flex h-5 w-5 items-center justify-center rounded-full border border-edge bg-panel2 text-lime">
         {completed ? <Check size={11} /> : event.type === "step.started" ? <RefreshCw size={10} className="animate-spin" /> : <Circle size={9} />}
       </span>
@@ -467,7 +467,7 @@ export function CloudAgentSession({
 
   return (
     <>
-      <div className={embedded ? "flex min-h-0 flex-1 flex-col bg-canvas" : "absolute inset-0 z-10 flex flex-col bg-canvas"}>
+      <div className={`cloud-agent-panel ${embedded ? "flex min-h-0 flex-1 flex-col bg-canvas" : "absolute inset-0 z-10 flex flex-col bg-canvas"}`}>
       <div className="gen-view-in flex min-h-0 flex-1 flex-col">
         {!embedded && (
           <>

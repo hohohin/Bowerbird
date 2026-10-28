@@ -121,8 +121,8 @@ export function FileDropImport() {
   }, []);
   return <>
     {hint && <div className="pointer-events-none fixed inset-0 z-[250] flex items-center justify-center bg-accent/10 ring-2 ring-inset ring-accent" data-file-drop-overlay>
-      <div role="status" className="rounded-full border border-accent/30 bg-panel px-5 py-3 text-sm text-ink shadow-panel">{hint}</div>
+      <div role="status" className="file-drop-feedback rounded-full border border-accent/30 bg-panel px-5 py-3 text-sm text-ink shadow-panel">{hint}</div>
     </div>}
-    {pending > 0 && !hint && <div role="status" className="pointer-events-none fixed right-5 top-16 z-[250] rounded-full border border-edge bg-panel px-4 py-2 text-xs text-ink">正在导入素材…</div>}
+    {pending > 0 && !hint && <div role="status" className="file-drop-feedback pointer-events-none fixed right-5 top-16 z-[250] rounded-full border border-edge bg-panel px-4 py-2 text-xs text-ink">正在导入素材…</div>}
   </>;
 }

@@ -1,0 +1,407 @@
+/* Dialog interiors use the approved ice-blue projection tokens. Content stays
+   opaque through the modal shell; semantic danger/provider colours stay native. */
+html[data-theme] :is(.settings-card, .setup-card) {
+  position: relative;
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--bb-ink);
+}
+html[data-theme] .settings-card:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  bottom: -6px;
+  left: 12px;
+  right: 12px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--holo-rule) 0 28px, transparent 28px 36px, var(--bb-line) 36px, transparent 100%);
+  pointer-events: none;
+}
+html[data-theme] .settings-card > .text-ink:first-child {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+html[data-theme] .settings-card > .text-ink:first-child::before {
+  content: "";
+  flex: 0 0 4px;
+  height: 4px;
+  background: var(--holo-pixel);
+  opacity: .65;
+}
+.settings-dialog .settings-card > .rounded.bg-panel { background: transparent; }
+.settings-dialog :is(.rounded, .rounded-md, .rounded-lg, .rounded-xl) { border-radius: 0; }
+.settings-dialog .app-modal-header::after {
+  content: "";
+  position: absolute;
+  top: 27px;
+  right: 84px;
+  width: 42px;
+  height: 18px;
+  opacity: .42;
+  pointer-events: none;
+  background: conic-gradient(var(--holo-pixel) 25%, transparent 0) 0 0 / 6px 6px;
+  mask-image: linear-gradient(90deg, transparent, #000);
+}
+
+html[data-theme] .settings-nav {
+  position: relative;
+  padding: 7px;
+  border-right: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.settings-nav::after {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  right: -5px;
+  width: 1px;
+  background: linear-gradient(transparent, var(--bb-line) 12%, var(--bb-line) 88%, transparent);
+  pointer-events: none;
+}
+html[data-theme] .settings-nav-item {
+  position: relative;
+  border-radius: 0;
+  color: var(--bb-muted);
+  background: transparent;
+  box-shadow: none;
+  transition: color 120ms;
+}
+html[data-theme] .settings-nav-item:hover:not(:disabled) {
+  background: var(--holo-hover);
+  color: var(--holo-ink);
+}
+html[data-theme] .settings-nav-item.is-active:not(:disabled) {
+  background: var(--holo-selection);
+  color: var(--holo-ink);
+  box-shadow: none;
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 7px), calc(100% - 7px) 100%, 0 100%);
+}
+html[data-theme] .settings-nav-item:disabled { background: transparent; color: var(--bb-muted); box-shadow: none; }
+.settings-nav-item.is-active:not(:disabled)::after,
+.settings-card [role="radio"][aria-checked="true"]:not(:disabled)::after,
+.account-billing-option.is-selected:not(:has(input:disabled))::after,
+.extension-browser-choice .app-modal-button[aria-pressed="true"]:not(:disabled)::after {
+  content: "";
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 3px;
+  height: 3px;
+  background: var(--holo-pixel);
+  box-shadow: var(--holo-glow);
+  pointer-events: none;
+}
+.settings-nav-item.is-active:not(:disabled)::after { right: 9px; bottom: 6px; }
+html[data-theme] .settings-card [role="radio"] {
+  position: relative;
+  border-radius: 0;
+  border-color: transparent;
+  background: var(--holo-field);
+  color: var(--bb-muted);
+  box-shadow: none;
+}
+html[data-theme] .settings-card [role="radio"]:hover:not(:disabled) {
+  background: var(--holo-hover);
+  color: var(--holo-ink);
+}
+html[data-theme] .settings-card [role="radio"][aria-checked="true"]:not(:disabled) {
+  border-color: transparent;
+  background: var(--holo-selection);
+  color: var(--holo-ink);
+  box-shadow: none;
+}
+html[data-theme] .settings-card [role="radio"]:disabled {
+  border-color: transparent;
+  background: var(--holo-field);
+  color: var(--bb-muted);
+  box-shadow: none;
+}
+.settings-dialog [role="switch"] {
+  border-radius: 0;
+  background: var(--holo-field);
+  box-shadow: inset 0 0 0 1px var(--bb-line-strong);
+}
+.settings-dialog [role="switch"][aria-checked="true"]:not(:disabled) {
+  background: var(--holo-wash);
+  box-shadow: inset 0 0 0 1px var(--holo-rule);
+}
+.settings-dialog [role="switch"] > span {
+  border-radius: 0;
+  background: var(--bb-muted);
+  box-shadow: none;
+}
+.settings-dialog [role="switch"][aria-checked="true"]:not(:disabled) > span {
+  background: var(--holo-pixel);
+  box-shadow: var(--holo-glow);
+}
+.settings-dialog :is(button.bg-panel, button.bg-panel2, button.bg-accent):not([role="switch"]),
+.settings-card :is(button.bg-panel, button.bg-panel2, button.bg-accent):not([role="switch"]) {
+  position: relative;
+  border-radius: 0;
+  background: var(--holo-field);
+  color: var(--bb-ink);
+}
+.settings-dialog :is(button.bg-panel, button.bg-panel2):not([role="switch"]):hover:not(:disabled),
+.settings-card :is(button.bg-panel, button.bg-panel2):not([role="switch"]):hover:not(:disabled) {
+  background: var(--holo-hover);
+  color: var(--holo-ink);
+}
+.settings-dialog button.bg-accent:not([role="switch"]):not(:disabled) {
+  background: var(--holo-primary);
+  color: var(--holo-on-primary);
+}
+.settings-dialog :is([role="radio"], [role="switch"], .settings-nav-item):focus-visible,
+.settings-card :is(button.bg-panel, button.bg-panel2, button.bg-accent):focus-visible {
+  outline: 1px dashed var(--holo-ink);
+  outline-offset: 3px;
+}
+.settings-dialog .settings-nav-item.is-active:focus-visible { outline-offset: -3px; }
+
+/* Billing retains native radios, amounts and disabled payment actions. */
+.account-billing .account-billing-title > svg { color: var(--holo-ink); }
+.account-billing .account-billing-check { color: var(--bb-muted); }
+.account-billing .account-billing-status {
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
+  font-variant-numeric: tabular-nums;
+}
+.account-billing .account-billing-option {
+  border-color: transparent;
+  border-radius: 0;
+  background: var(--holo-field);
+  transition: color 120ms;
+}
+.account-billing .account-billing-option:hover:not(:has(input:disabled)) {
+  border-color: transparent;
+  background: var(--holo-hover);
+}
+.account-billing .account-billing-option.is-selected:not(:has(input:disabled)) {
+  border-color: transparent;
+  background: var(--holo-selection);
+  color: var(--holo-ink);
+}
+.account-billing-option.is-selected:not(:has(input:disabled)) :is(.account-billing-check, .account-billing-option-heading, .account-billing-price) {
+  color: var(--holo-ink);
+}
+.account-billing .account-billing-option:focus-within {
+  outline: 1px dashed var(--holo-ink);
+  outline-offset: 2px;
+}
+.account-billing .account-billing-saving {
+  border-radius: 0;
+  background: transparent;
+  color: var(--bb-muted);
+}
+.account-billing .account-billing-comparison :is(th, td):last-child { background: transparent; }
+.account-billing :is(.account-billing-price, .account-billing-balance-value, .account-billing-summary strong) { font-variant-numeric: tabular-nums; }
+.account-billing .account-billing-checkout .app-modal-button:disabled {
+  background: var(--holo-field);
+  border-color: transparent;
+  color: var(--bb-muted);
+}
+
+/* Setup steps use open groups and numbered square tabs. */
+.setup-card > div:first-child > span.rounded-full,
+.extension-guide-steps h3 > span {
+  border-color: transparent;
+  border-radius: 0;
+  background: var(--holo-selection);
+  color: var(--holo-ink);
+  font-family: var(--bb-font-mono, ui-monospace, monospace);
+}
+html[data-theme] .extension-setup .setup-card { border-radius: 0; }
+.extension-setup .extension-browser-choice .app-modal-button {
+  position: relative;
+  border-color: transparent;
+  border-radius: 0;
+}
+html[data-theme] .extension-setup .extension-browser-choice .app-modal-button[aria-pressed="true"]:not(:disabled) {
+  background: var(--holo-selection);
+  border-color: transparent;
+  color: var(--holo-ink);
+}
+.extension-setup :is(.extension-copy-row input, .extension-guide-shot, .extension-guide-shot img) { border-radius: 0; }
+.extension-setup .extension-copy-row input { border-color: var(--bb-line); }
+
+/* Visual-profile prose is one plane; only editable fields have a low-contrast fill. */
+.visual-profile-dialog .app-modal[data-width="lg"] { border-radius: 0; }
+.visual-profile-dialog .app-modal .app-modal-header { background: transparent; }
+.visual-profile-dialog .app-modal-button { border-radius: 0; }
+.visual-profile-dialog :is(.bv-style-card, .bv-working, .bv-collection-source) {
+  position: relative;
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
+}
+.visual-profile-dialog .bv-style-card::after {
+  content: "";
+  position: absolute;
+  left: 18px;
+  bottom: 0;
+  width: 48px;
+  height: 1px;
+  background: var(--holo-rule);
+  pointer-events: none;
+}
+.visual-profile-dialog .bv-style-card h4 { display: flex; align-items: center; gap: 7px; color: var(--holo-ink); }
+.visual-profile-dialog .bv-style-card h4::before {
+  content: "";
+  width: 3px;
+  height: 3px;
+  flex: 0 0 3px;
+  background: var(--holo-pixel);
+}
+.visual-profile-dialog .bv-brand-icon { border-radius: 0; color: var(--holo-ink); background: transparent; }
+.visual-profile-dialog :is(.bv-image-grid figure, .bv-trial-result img, .bv-message) { border-radius: 0; }
+.visual-profile-dialog .bv-message:not(.is-error) { background: var(--holo-hover); }
+.visual-profile-dialog .bv-directions button { border-color: transparent; border-radius: 0; background: var(--holo-field); }
+.visual-profile-dialog .bv-directions button:hover:not(:disabled) { background: var(--holo-hover); }
+.visual-profile-dialog .bv-directions button[aria-pressed="true"]:not(:disabled) {
+  border-color: transparent;
+  background: var(--holo-selection);
+  color: var(--holo-ink);
+}
+.visual-profile-dialog .bv-history-item { border-radius: 0; }
+.visual-profile-dialog .bv-fields :is(textarea, input, :is(select, .tactical-select-trigger)) { border-radius: 0; background: var(--holo-field); }
+.visual-profile-dialog .bv-fields :is(button, input, textarea, :is(select, .tactical-select-trigger), summary):focus-visible,
+.visual-profile-dialog .bv-secondary summary:focus-visible { outline: 1px dashed var(--holo-ink); outline-offset: 3px; }
+
+/* Classification-specific rules remain owned by the classification presentation. */
+html[data-theme] .classification-panel section.border {
+  border-color: transparent;
+  border-radius: 6px;
+  background: var(--bb-surface-card);
+}
+.classification-panel .classification-label-list > div { border-color: var(--bb-line); }
+.classification-panel :is(input:not([type="checkbox"]), textarea) { border-radius: 4px; }
+
+/* Destructive and file-operation copy keeps semantic warning colours. */
+html[data-theme] .project-delete-dialog section.border,
+html[data-theme] .file-records-dialog li.border,
+html[data-theme] .file-workspace-move-dialog .app-modal-body > div.border {
+  border-color: transparent;
+  border-radius: 0;
+  background: linear-gradient(90deg, var(--holo-rule), transparent) 0 0 / 72px 1px no-repeat;
+}
+.project-delete-dialog .project-delete-scan { border-radius: 0; background: transparent; }
+.project-delete-scan progress,
+.project-delete-scan progress::-webkit-progress-bar,
+.project-delete-scan progress::-webkit-progress-value { border-radius: 0; }
+.app-modal .catalog-form :is(input:not([type="radio"]), :is(select, .tactical-select-trigger)) { border-radius: 0; }
+.app-modal .catalog-form .collection-choice { border-radius: 0; }
+.app-modal .collection-choice[data-selected="true"] { background: var(--holo-field); color: var(--bb-ink); }
+.app-modal .collection-choice[data-selected="true"]:not(:has(input:disabled)) { background: var(--holo-selection); color: var(--holo-ink); }
+.app-modal .collection-choice:has(input:focus-visible) { outline: 1px dashed var(--holo-ink); outline-offset: -2px; }
+
+/* Task-center remains a separate opaque popover; task-state colours stay native. */
+.status-session-panel {
+  border-color: transparent;
+  border-radius: 0;
+  background: var(--bb-surface-modal);
+  box-shadow: 0 12px 32px rgb(var(--bb-shadow-rgb) / 16%);
+}
+.status-session-panel button { border-radius: 0; }
+.status-session-panel .rounded-full:has(> button[aria-pressed]) { border-color: transparent; border-radius: 0; background: transparent; }
+.status-session-panel button.rounded-full[aria-pressed] { position: relative; border-radius: 0; }
+.status-session-panel button.rounded-full[aria-pressed="true"]:not(:disabled) { background: var(--holo-selection); color: var(--holo-ink); }
+.status-session-panel button.rounded-full[aria-pressed="true"]:not(:disabled)::after {
+  content: "";
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 2px;
+  height: 2px;
+  background: var(--holo-pixel);
+  pointer-events: none;
+}
+.status-session-panel .group > button:first-child:hover:not(:disabled) { background: var(--holo-hover); }
+.task-center-trigger,
+.task-center-unread { border-radius: 2px; }
+.task-center-trigger:focus-visible,
+.status-session-panel button:focus-visible { outline: 1px dashed var(--holo-ink); outline-offset: 2px; }
+
+/* Sidebar account outside the already-approved library/canvas top bars. */
+.app-sidebar [data-tour="sidebar-account"] { border-radius: 3px; }
+.app-sidebar [data-tour="sidebar-account"]:hover { background: var(--bb-surface-hover); }
+.app-sidebar [data-tour="sidebar-account"] > span.bg-accent { border-radius: 3px; background: var(--bb-surface-2); color: var(--bb-ink); }
+.app-sidebar [data-tour="sidebar-account"]:focus-visible { outline: 1px dashed var(--bb-ink); outline-offset: 2px; }
+.app-topbar:not(.canvas-tactical):not(.library-tactical) .topbar-account-trigger { border-radius: 3px; background: var(--bb-surface-2); }
+.app-topbar:not(.canvas-tactical):not(.library-tactical) .topbar-account-trigger:hover { background: var(--bb-surface-hover); }
+.app-topbar:not(.canvas-tactical):not(.library-tactical) .topbar-account-trigger > span.bg-accent { border-radius: 3px; background: var(--bb-surface-hover); color: var(--bb-ink); }
+
+/* Native dialog portal preserves red/green environment indicators and actual progress. */
+.comfy-environment-panel {
+  border-color: transparent;
+  border-radius: 0;
+  background: var(--bb-surface-modal);
+  color: var(--bb-ink);
+  box-shadow: 0 16px 48px rgb(var(--bb-shadow-rgb) / 20%);
+}
+.comfy-environment-panel::backdrop { background: var(--bb-modal-backdrop); }
+.comfy-environment-panel h2 { display: flex; align-items: center; gap: 8px; }
+.comfy-environment-panel h2::before { content: ""; width: 4px; height: 4px; flex: 0 0 4px; background: var(--holo-pixel); }
+.comfy-environment-panel .comfy-environment-tooltip { border-color: transparent; border-radius: 0; background: var(--bb-surface-modal); }
+.comfy-environment-panel .comfy-environment-actions button {
+  border-color: transparent;
+  border-radius: 0;
+  background: var(--holo-field);
+  color: var(--bb-ink);
+}
+.comfy-environment-panel .comfy-environment-actions button:hover:not(:disabled) { background: var(--holo-hover); }
+.comfy-environment-panel .comfy-environment-actions > :last-child button:not(:disabled) { background: var(--holo-primary); color: var(--holo-on-primary); }
+.comfy-environment-panel :is(button, .comfy-environment-action):focus-visible { border-radius: 0; outline: 1px dashed var(--holo-ink); outline-offset: 3px; }
+.comfy-progress-bar { border-color: transparent; border-radius: 0; background: var(--holo-field); }
+.comfy-progress-fill { border-radius: 0; background: rgb(var(--holo-rgb) / .38); }
+.comfy-progress-percent { border-radius: 0; background: var(--bb-surface-card); color: var(--holo-ink); font-family: var(--bb-font-mono, ui-monospace, monospace); }
+.settings-card progress,
+.comfy-environment-panel progress { border: 0; border-radius: 0; accent-color: var(--holo-ink); }
+.settings-card progress[value]::-webkit-progress-bar,
+.comfy-environment-panel progress[value]::-webkit-progress-bar { border-radius: 0; background: var(--holo-field); }
+.settings-card progress[value]::-webkit-progress-value,
+.comfy-environment-panel progress[value]::-webkit-progress-value { border-radius: 0; background: rgb(var(--holo-rgb) / .38); }
+.settings-card progress[value]::-moz-progress-bar,
+.comfy-environment-panel progress[value]::-moz-progress-bar { border-radius: 0; background: rgb(var(--holo-rgb) / .38); }
+
+/* Existing import/media chrome remains scoped outside dialog content. */
+[data-file-drop-overlay] { background: rgb(var(--bb-ink-rgb) / 6%); box-shadow: inset 0 0 0 1px var(--bb-muted); }
+.file-drop-feedback,
+.app-topbar .toolbar-import-notice { border-color: transparent; border-radius: 4px; background: var(--bb-surface-modal); box-shadow: 0 6px 20px rgb(var(--bb-shadow-rgb) / 14%); }
+.project-inspector-header .project-inspector-detail { border-color: transparent; border-radius: 3px; background: var(--bb-surface-2); }
+.app-modal .canvas-artboard-previews img { border-color: transparent; border-radius: 0; }
+.app-modal .canvas-artboard-prompt textarea:focus { outline: 1px dashed var(--holo-ink); outline-offset: 2px; }
+
+/* Scan/contact effects are local background overlays; labels never blink. */
+html[data-theme] :is(.settings-nav-item, .settings-card [role="radio"], .settings-dialog button.bg-panel, .settings-dialog button.bg-panel2, .settings-dialog button.bg-accent:not([role="switch"]))::before,
+.comfy-environment-panel .comfy-environment-actions button::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent 0 3px, rgb(var(--holo-rgb) / .08) 3px 4px), linear-gradient(105deg, rgb(var(--holo-rgb) / .16), transparent);
+  mask-image: linear-gradient(90deg, #000, transparent);
+  pointer-events: none;
+  opacity: 0;
+}
+.comfy-environment-panel .comfy-environment-actions button { position: relative; }
+@media (prefers-reduced-motion: no-preference) {
+  html[data-theme] :is(.settings-nav-item, .settings-card [role="radio"], .settings-dialog button.bg-panel, .settings-dialog button.bg-panel2, .settings-dialog button.bg-accent:not([role="switch"])):hover:not(:disabled)::before,
+  .comfy-environment-panel .comfy-environment-actions button:hover:not(:disabled)::before {
+    animation: projection-surface-contact 160ms steps(1, end);
+  }
+  .settings-nav-item:not(:disabled):hover::after,
+  .settings-card [role="radio"]:not(:disabled):hover::after,
+  .account-billing-option:not(:has(input:disabled)):hover::after,
+  .status-session-panel button.rounded-full:not(:disabled):hover::after { animation: projection-contact 160ms steps(1, end); }
+  .settings-dialog .app-modal-header::after { animation: projection-contact 160ms steps(1, end) 180ms; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme] .settings-nav-item,
+  .account-billing .account-billing-option,
+  .settings-dialog [role="switch"],
+  .settings-dialog [role="switch"] > span { transition: none; }
+}

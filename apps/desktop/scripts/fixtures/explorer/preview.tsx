@@ -1,3 +1,4 @@
+import "../../../src/styles.css";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { ExploreWorkspace } from "../../../src/components/ExploreWorkspace";
@@ -8,7 +9,7 @@ import { Lightbox } from "../../../src/components/Lightbox";
 import { FileDropImport } from "../../../src/components/FileDropImport";
 import { Sidebar } from "../../../src/components/Sidebar";
 import { useStore } from "../../../src/store";
-import "../../../src/styles.css";
+
 const w = window as any;
 const withSidebar = new URLSearchParams(location.search).has("sidebar");
 w.calls = []; w.hold = false; w.fail = false; w.release = null; w.callbacks = {};
@@ -74,3 +75,7 @@ function Fixture() {
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);
+
+import "../../../src/components/TacticalDialogs.css";
+import "../../../src/components/CanvasSecondaryTactical.css";
+import "../../../src/components/MediaTactical.css";

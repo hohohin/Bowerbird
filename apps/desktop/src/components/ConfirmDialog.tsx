@@ -32,7 +32,6 @@ export function ConfirmDialog({
   return (
     <ModalShell
       title={title}
-      eyebrow={danger ? "Danger zone" : "Confirm action"}
       onClose={onCancel}
       footer={
         <>
@@ -49,9 +48,8 @@ export function ConfirmDialog({
         </>
       }
     >
-      <div className="space-y-1 rounded-xl border border-edge bg-panel2/60 px-3 py-2.5 text-xs leading-5 text-muted">
+      <div className="text-[13px] leading-6 text-muted">
         <p>{message}</p>
-        <p>操作执行后将立即生效，请确认当前选择无误。</p>
       </div>
     </ModalShell>
   );

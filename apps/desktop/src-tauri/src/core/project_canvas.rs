@@ -661,7 +661,7 @@ fn get_node_tx(tx: &Transaction<'_>, node_id: &str) -> AppResult<Option<CanvasNo
     Ok(tx.query_row(&sql, [node_id], node_from_row).optional()?)
 }
 
-fn touch_canvas_tx(tx: &Transaction<'_>, project_id: &str, now: i64) -> AppResult<()> {
+pub(crate) fn touch_canvas_tx(tx: &Transaction<'_>, project_id: &str, now: i64) -> AppResult<()> {
     let changed = tx.execute(
         "UPDATE project_canvases SET updated_at=?2 WHERE project_id=?1",
         params![project_id, now],
@@ -698,7 +698,7 @@ fn validate_new_node(value: &NewCanvasNode) -> AppResult<()> {
     validate_geometry(value.x, value.y, value.width, value.height)
 }
 
-fn insert_node_tx(tx: &Transaction<'_>, value: &NewCanvasNode, now: i64) -> AppResult<CanvasNode> {
+pub(crate) fn insert_node_tx(tx: &Transaction<'_>, value: &NewCanvasNode, now: i64) -> AppResult<CanvasNode> {
     validate_new_node(value)?;
     if let Some(existing) = get_node_tx(tx, &value.id)? {
         let same = existing.project_id == value.project_id

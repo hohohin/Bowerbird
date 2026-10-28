@@ -64,8 +64,8 @@ html:not([data-theme="dark"]) .project-manager-panel {
 .project-manager-panel .project-manager-search input { color: var(--pm-ink); font-size: 12px; }
 .project-manager-search input::placeholder { color: var(--pm-muted); }
 .project-manager-panel .project-manager-search:focus-within { background: var(--pm-lit); box-shadow: none; }
-.project-manager-toolbar select { min-height: 42px; max-width: 140px; padding: 8px 10px; border: 0; border-radius: 0; background: transparent; color: var(--pm-muted); font-size: 12px; }
-.project-manager-toolbar select option { background: var(--bb-surface); color: var(--bb-ink); }
+.project-manager-toolbar :is(select, .tactical-select-trigger) { min-height: 42px; max-width: 140px; padding: 8px 10px; border: 0; border-radius: 0; background: transparent; color: var(--pm-muted); font-size: 12px; }
+.project-manager-toolbar :is(select, .tactical-select-trigger) option { background: var(--bb-surface); color: var(--bb-ink); }
 .project-manager-section { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; flex-shrink: 0; color: var(--pm-muted); font-size: 11px; }
 .project-manager-section small, .project-manager-section > span:last-child { font: 9px Consolas, monospace; letter-spacing: 1px; }
 .project-manager-section small { margin-left: 8px; }
@@ -137,7 +137,7 @@ html:not([data-theme="dark"]) .project-manager-panel {
 .project-manager-size input::-webkit-slider-thumb { appearance: none; width: 5px; height: 10px; margin-top: -4px; border: 0; border-radius: 0; background: var(--pm-muted); box-shadow: none; }
 .project-manager-size input::-moz-range-track { height: 2px; background: rgb(var(--bb-ink-rgb) / 22%); }
 .project-manager-size input::-moz-range-thumb { width: 5px; height: 10px; border: 0; border-radius: 0; background: var(--pm-muted); }
-.project-manager-panel button:focus-visible, .project-manager-panel select:focus-visible, .project-manager-size input:focus-visible { outline: 2px solid var(--pm-muted); outline-offset: 2px; }
+.project-manager-panel button:focus-visible, .project-manager-panel :is(select, .tactical-select-trigger):focus-visible, .project-manager-size input:focus-visible { outline: 2px solid var(--pm-muted); outline-offset: 2px; }
 .project-manager-error { padding: 0 0 12px; color: var(--bb-danger); font-size: 13px; }
 .project-manager-error button { margin-left: 8px; text-decoration: underline; }
 .project-manager-ambient { position: absolute; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; color: var(--pm-signal); opacity: .72; }
@@ -170,7 +170,7 @@ html:not([data-theme="dark"]) .project-manager-panel {
   .project-manager-views button span, .project-manager-section small { display: none; }
   .project-manager-panel .project-manager-toolbar { gap: 6px; margin-bottom: 16px; }
   .project-manager-panel .project-manager-search { gap: 6px; padding: 10px; }
-  .project-manager-toolbar select { font-size: 10px; max-width: 100px; padding: 8px 4px; }
+  .project-manager-toolbar :is(select, .tactical-select-trigger) { font-size: 10px; max-width: 100px; padding: 8px 4px; }
   .project-manager-grid { gap: 16px; }
   .project-manager-panel .project-manager-gallery { margin-inline: -10px; }
   .project-manager-panel .library-project-page { padding-inline: 10px; }

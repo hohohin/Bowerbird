@@ -41,7 +41,7 @@ export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo }: { onOpenR
     <span>工具</span>
     <button ref={button} type="button" data-tip={open ? undefined : "工具箱"} aria-label="工具箱" aria-haspopup="menu" aria-expanded={open} aria-controls={open ? menuId : undefined}
       onClick={() => setOpen(value => !value)} onKeyDown={event => { if (event.key === "ArrowDown") { event.preventDefault(); setOpen(true); } }}><BriefcaseBusiness size={18} /></button>
-    {open && createPortal(<div ref={menu} id={menuId} className="canvas-toolbox-menu" role="menu" aria-label="工具箱" style={position}
+    {open && createPortal(<div ref={menu} id={menuId} className="canvas-toolbox-menu canvas-tactical" role="menu" aria-label="工具箱" style={position}
       onPointerDown={event => event.stopPropagation()} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); }}
       onKeyDown={event => {
         if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); setOpen(false); button.current?.focus(); }

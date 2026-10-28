@@ -69,7 +69,7 @@ export function FileWorkspaceMoveDialog({ onClose }: { onClose: () => void }) {
   const history = !!historyPreview || (pending && !!move?.history);
   const missing = historyPreview?.missing ?? (!preview ? move?.history?.missing ?? [] : []);
   const needsMissingConfirmation = !!historyPreview?.missing?.length && !skipMissing;
-  return <ModalShell title="迁移 BowerbirdLibrary" width="lg" onClose={onClose} preventClose={busy}
+  return <ModalShell title="迁移 BowerbirdLibrary" width="lg" className="file-workspace-move-dialog" onClose={onClose} preventClose={busy}
     description="选择资料文件夹的新位置，或将历史素材按项目整理到当前位置。确认后重启应用，再复制、校验并更新引用。"
     footer={<><button className="app-button-secondary" disabled={busy} onClick={onClose}>关闭</button>
       {pending && <button className="app-button-secondary" disabled={busy} onClick={() => void execute(true)}>取消待迁移计划</button>}

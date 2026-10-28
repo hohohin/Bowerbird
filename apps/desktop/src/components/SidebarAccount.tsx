@@ -70,7 +70,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   return (
     <div ref={rootRef} className={topbar ? "topbar-account" : `relative border-t border-edge px-1 pb-1 pt-2 ${collapsed ? "mt-auto w-full" : "mt-2"}`}>
       {open && (
-        <div className={`app-popover mb-1.5 flex flex-col gap-0.5 ${topbar ? "topbar-account-menu" : collapsed ? "absolute bottom-full left-1 z-[60] w-56" : ""}`} role="menu" aria-label="账号与设置">
+        <div className={`app-popover mb-1.5 flex flex-col gap-0.5 ${topbar ? "topbar-account-menu" : collapsed ? "absolute bottom-full left-1 z-[60] w-56" : "relative"}`} role="menu" aria-label="账号与设置">
           {loggedIn ? (
             <>
               <div className="px-2 py-1 text-[11px] text-muted">

@@ -33,11 +33,18 @@ fn main() {
         let difference: u64 = image.as_raw().iter().zip(reference.as_raw()).map(|(a, b)| a.abs_diff(*b) as u64).sum();
         assert!(difference as f64 / (image.as_raw().len() as f64) < 8.0, "native cover must preserve reference orientation and colors");
     }
+    // FileWorkspace stores canonical paths. On Windows these include \\?\,
+    // which must still reach the native decoder on machines without FFmpeg.
+    let canonical_source = std::fs::canonicalize(source).unwrap();
+    let canonical_output = output.with_extension("canonical.jpg");
+    thumb::generate_video(&canonical_source, &canonical_output, 480).expect("extract canonical library path");
+    assert_eq!(image, image::open(&canonical_output).unwrap().to_rgb8(), "canonical paths must preserve the cover pixels");
+    std::fs::remove_file(canonical_output).unwrap();
     let broken = output.with_extension("broken.mp4");
     let missing = output.with_extension("missing.jpg");
     std::fs::write(&broken, b"not a video").unwrap();
     assert!(thumb::generate_video(&broken, &missing, 480).is_err());
     assert!(!missing.exists());
     std::fs::remove_file(broken).unwrap();
-    println!("PASS: real short video, portrait transform, 270x480 red JPEG, corrupt video fails without a partial cover");
+    println!("PASS: real short video, portrait transform, 270x480 red JPEG, canonical library path, corrupt video fails without a partial cover");
 }

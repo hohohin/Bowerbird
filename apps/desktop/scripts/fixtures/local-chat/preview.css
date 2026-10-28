@@ -1,12 +1,12 @@
 html, body, #root { height: 100%; margin: 0; }
 .chat-fixture { display: flex; flex-direction: column; height: 100%; min-width: 0; }
-.chat-fixture-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bg-card, #fff); border-bottom: 1px solid var(--border, #ddd); font-size: 12px; }
+.chat-fixture-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; background: var(--bb-surface); border-bottom: 1px solid var(--bb-line); font-size: 12px; }
 .chat-fixture-bar strong { font-size: 13px; }
 .chat-fixture-bar > span { opacity: .65; margin-right: auto; }
 .chat-fixture button, .chat-fixture select { font: inherit; }
-.chat-fixture-bar button, .chat-fixture-actions button, .chat-fixture select { padding: 4px 8px; border: 1px solid var(--border, #d8d3ca); border-radius: 6px; background: var(--bg-card, #fff); color: inherit; cursor: pointer; }
+.chat-fixture-bar button, .chat-fixture-actions button, .chat-fixture select { padding: 4px 8px; border: 1px solid var(--bb-line); border-radius: 6px; background: var(--bb-surface); color: inherit; cursor: pointer; }
 .chat-fixture button:disabled { cursor: default; opacity: .45; }
-.chat-fixture-controls { background: var(--bg-panel, #f7f4ee); font-size: 12px; padding: 7px 14px; border-bottom: 1px solid var(--border, #ddd); }
+.chat-fixture-controls { background: var(--bb-surface-2); font-size: 12px; padding: 7px 14px; border-bottom: 1px solid var(--bb-line); }
 .chat-fixture-controls summary { cursor: pointer; }
 .chat-fixture-controls output { opacity: .7; margin-left: 10px; }
 .chat-fixture-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; padding-top: 8px; }

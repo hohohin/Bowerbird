@@ -1,3 +1,4 @@
+import { TacticalSelect } from "./TacticalSelect";
 import { useState } from "react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
@@ -182,7 +183,7 @@ export function BatchBar() {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-b border-edge bg-panel px-3 py-2 text-sm">
+    <div className="library-batch-bar flex flex-wrap items-center gap-2 border-b border-edge bg-panel px-3 py-2 text-sm">
       {/* 选择区 */}
       <span className="text-muted">已选 {ids.length} 张</span>
       <button
@@ -226,10 +227,10 @@ export function BatchBar() {
         </>
       ) : moveExisting ? (
         <div className="flex items-center gap-1">
-          <select
+          <TacticalSelect
             autoFocus
             value={targetFolderId}
-            onChange={(e) => setTargetFolderId(e.target.value)}
+            onValueChange={value => setTargetFolderId(value)}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 setMoveExisting(false);
@@ -243,7 +244,7 @@ export function BatchBar() {
                 {f.name}
               </option>
             ))}
-          </select>
+          </TacticalSelect>
           <button
             onClick={moveToExisting}
             disabled={busy || !targetFolderId}
@@ -312,9 +313,9 @@ export function BatchBar() {
       )}
       {!activeProjectId && projectInput && (
         <div className="flex items-center gap-1">
-          <select
+          <TacticalSelect
             value={targetProjectId}
-            onChange={(e) => setTargetProjectId(e.target.value)}
+            onValueChange={value => setTargetProjectId(value)}
             className="max-w-[10rem] rounded bg-panel2 px-1.5 py-1 text-xs"
           >
             {projects.map((project) => (
@@ -322,7 +323,7 @@ export function BatchBar() {
                 {project.name}
               </option>
             ))}
-          </select>
+          </TacticalSelect>
           <button onClick={addToProject} className="rounded bg-accent px-2 py-1 text-xs text-black">
             确定
           </button>

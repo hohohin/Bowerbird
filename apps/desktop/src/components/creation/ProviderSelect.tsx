@@ -11,11 +11,11 @@ import { providerQuota, QUOTA_SOURCES } from "./ProviderQuota";
 
 /** Model names are presentation only; selection keeps the original routing keys. */
 export function ProviderSelect({ value, onChange, codexHealth, dreaminaHealth, cloudAvailable = false,
-  cloudAuth = null, cloudEntitlement = null, defaultProvider = "", onSetDefaultProvider }: {
+  cloudAuth = null, cloudEntitlement = null, defaultProvider = "", onSetDefaultProvider, menuClassName }: {
   value: string; onChange: (provider: string) => void;
   codexHealth: CodexHealth | null; dreaminaHealth: CodexHealth | null;
   cloudAvailable?: boolean; cloudAuth?: AuthSnapshot | null; cloudEntitlement?: EntitlementSnapshot | null;
-  defaultProvider?: string; onSetDefaultProvider?: (provider: string) => void;
+  defaultProvider?: string; onSetDefaultProvider?: (provider: string) => void; menuClassName?: string;
 }) {
   const dreaminaVersion = useStore(state => state.settings?.dreamina_model_version ?? "5.0Pro");
   const settingsReady = useStore(state => state.settings !== null);
@@ -60,7 +60,7 @@ export function ProviderSelect({ value, onChange, codexHealth, dreaminaHealth, c
   }
   const selectionKey = (key: string) => key === "jimeng" || key === "dreamina" ? dreaminaModelKey(dreaminaVersion) : canonicalProviderKey(key);
   const quota = providerQuota(value);
-  return <ModelSelect value={selectionKey(value)} label={imageProviderLabel(value, cloudEntitlement, dreaminaVersion)}
+  return <ModelSelect value={selectionKey(value)} label={imageProviderLabel(value, cloudEntitlement, dreaminaVersion)} menuClassName={menuClassName}
     source={isCloudProvider(value) ? "cloud" : quota === "unknown" ? undefined : "personal"}
     quotaDetail={QUOTA_SOURCES[quota].detail} options={options} onChange={key => { void select(key); }}
     cloudBalance={cloudEntitlement ? balance : null} cloudLoggedIn={cloudAuth?.logged_in}

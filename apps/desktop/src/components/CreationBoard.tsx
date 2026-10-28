@@ -1,3 +1,4 @@
+import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
@@ -398,7 +399,9 @@ export function CreationBoard({
   }, [agentMenuOpen]);
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
-      if (event.target instanceof Node && !dockRef.current?.contains(event.target)) setCollapsed(true);
+      const menu = event.target instanceof Element ? event.target.closest(".model-select-menu, .composer-local-frames, .comfy-environment-panel, .tactical-select-menu, .ratio-select-menu, .image-options-menu") : null;
+      const ownMenu = menu && dockRef.current?.querySelector(`[aria-controls="${menu.id}"]`);
+      if (event.target instanceof Node && !dockRef.current?.contains(event.target) && !ownMenu) setCollapsed(true);
     }
     const onWindowBlur = () => setCollapsed(true);
     window.addEventListener("pointerdown", onPointerDown, true);
@@ -984,7 +987,7 @@ export function CreationBoard({
           if (!(event.target instanceof Element && event.target.closest(".composer-expand"))) setCollapsed(false);
         }}
         onBlurCapture={(e) => {
-          const modelMenu = e.relatedTarget instanceof Element ? e.relatedTarget.closest(".model-select-menu, .composer-local-frames, .comfy-environment-panel") : null;
+          const modelMenu = e.relatedTarget instanceof Element ? e.relatedTarget.closest(".model-select-menu, .composer-local-frames, .comfy-environment-panel, .tactical-select-menu, .ratio-select-menu, .image-options-menu") : null;
           const ownModelMenu = modelMenu && e.currentTarget.querySelector(`[aria-controls="${modelMenu.id}"]`);
           if (!e.currentTarget.contains(e.relatedTarget as Node | null) && !ownModelMenu) {
             setCollapsed(true);
@@ -1178,9 +1181,9 @@ export function CreationBoard({
         <>
         <div className="mb-2 flex flex-wrap items-center gap-1.5 text-xs">
           <span className="shrink-0 text-muted">用途</span>
-          <select
+          <TacticalSelect
             value={activePresetId ?? ""}
-            onChange={(e) => setActivePreset(e.target.value || null)}
+            onValueChange={value => setActivePreset(value || null)}
             className="min-w-0 flex-1 rounded bg-panel2 px-1.5 py-1 text-ink outline-none ring-1 ring-edge focus:ring-accent"
           >
             <option value="">默认</option>
@@ -1189,7 +1192,7 @@ export function CreationBoard({
                 {p.name}
               </option>
             ))}
-          </select>
+          </TacticalSelect>
           {creatingPreset ? (
             <>
               <input

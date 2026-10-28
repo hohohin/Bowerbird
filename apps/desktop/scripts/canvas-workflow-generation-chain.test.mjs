@@ -82,7 +82,14 @@ try {
   await page.reload();await source.waitFor();
   const wire=page.locator('[data-workflow-target="ui-target"]');await wire.waitFor();
   const directPath=await wire.getAttribute('d');
-  assert.match(directPath,/^M 400 /,'wire starts at generator image socket');
+  const relay=await page.evaluate(()=>{
+    const definition=JSON.parse(sessionStorage.getItem('workflow-p')).document;
+    const input=definition.nodes.find(node=>node.id==='ui-target').inputs.image[0];
+    return {input,card:window.snapshot().nodes.find(node=>node.id===input.canvasNodeId)};
+  });
+  assert.equal(relay.input.cellId,'*latest-image','downstream follows the inserted content card latest row');
+  assert.ok(relay.card,'image connection inserts a saved content card');
+  assert.ok(Math.abs(Number(directPath.match(/^M ([\d.-]+)/)[1])-(relay.card.x+relay.card.width))<2,'wire starts at the content card latest socket');
   assert.equal(await page.locator('[data-canvas-node-id="session-old"],[data-canvas-node-id="session-new"]').count(),2);
   assert.equal(await page.locator('[data-workflow-session-link]').count(),2);
   await history.click();const popup=page.getByRole('dialog',{name:'生成历史',exact:true});await popup.waitFor();
