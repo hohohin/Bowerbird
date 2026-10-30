@@ -76,5 +76,7 @@ mod comfy_discovery;
 pub mod video_replication;
 
 pub mod external_files;
+pub mod folder_connections;
+pub mod connection_clipboard;
 pub mod file_colors;
 pub mod file_workspace;

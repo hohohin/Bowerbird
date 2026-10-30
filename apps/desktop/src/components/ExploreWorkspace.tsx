@@ -14,7 +14,7 @@ import { useExplorerDragMotion } from "../lib/useExplorerDragMotion";
 import { getDragAssets } from "../lib/dragPayload";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ExplorerClassificationDock, type ExplorerClassificationItem } from "./ExplorerClassificationDock";
-import { materialCatalog } from "../lib/materialCatalog";
+import { folderConnections } from "../lib/folderConnections";
 
 export function ExploreWorkspace({ url, open, navigationId = 0, onClose, children }: { url: string | null; open: boolean; navigationId?: number; onClose: () => void; children: ReactNode }) {
   const [busy, setBusy] = useState(false);
@@ -121,7 +121,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       capturedId = asset.id;
       if (asset.thumb_path) updateClassification({ imageUrl: convertFileSrc(asset.thumb_path) });
       if (collectionId) {
-        try { await materialCatalog.members(collectionId, [asset.id]); }
+        try { await folderConnections.references([asset.id], collectionId); }
         catch (error) { notifyError(error, "图片已入库，但加入集合失败，请重新添加"); return; }
       }
       let nodeId: string | void = undefined;

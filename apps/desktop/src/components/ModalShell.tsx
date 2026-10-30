@@ -50,7 +50,7 @@ export function ModalShell({
     const panel = panelRef.current;
     const preferred = panel?.querySelector<HTMLElement>("[data-modal-autofocus]");
     const first = panel?.querySelector<HTMLElement>(FOCUSABLE);
-    window.requestAnimationFrame(() => (preferred ?? first)?.focus());
+    window.requestAnimationFrame(() => (preferred ?? first)?.focus({ preventScroll: true }));
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape" && !preventCloseRef.current) {
@@ -75,7 +75,7 @@ export function ModalShell({
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      previous?.focus();
+      previous?.focus({ preventScroll: true });
     };
   }, []);
 

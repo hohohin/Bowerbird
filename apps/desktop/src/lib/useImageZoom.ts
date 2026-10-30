@@ -73,7 +73,7 @@ export function useImageZoom(src?: string, opts: Opts = {}) {
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [min, max, step]);
+  }, [src, min, max, step]);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     // 仅左键拖动平移；右键留给 onContextMenu（避免右键误触发平移）。

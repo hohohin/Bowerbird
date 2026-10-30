@@ -112,6 +112,8 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
     let Some(store_path) = asset.store_path.clone() else {
         return Ok(()); // 无 store_path 无法看图
     };
+    let store_path = db_call(db, move |db| db.resolve_external_image_paths(&[store_path]))
+        .await?.remove(0);
 
     let _permit = AUTO_SEM.acquire().await.map_err(|e| e.to_string())?;
     // 拿到信号量（即将真正调 codex）才计入在途，emit 让前端状态圈反映导入基础分析。

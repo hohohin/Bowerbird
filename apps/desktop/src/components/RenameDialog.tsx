@@ -15,7 +15,6 @@ export function RenameDialog({
   open,
   assetId,
   currentName,
-  external = false,
   localPath,
   onClose,
 }: {
@@ -69,7 +68,7 @@ export function RenameDialog({
     <ModalShell
       title="重命名素材"
       eyebrow="Asset name"
-      description={localPath ? "直接修改本机文件名，保留扩展名，并同步素材引用。同名文件不会被覆盖。" : external ? "仅更新园丁鸟中的引用名称，电脑中的原文件名保持不变。" : "同时更新素材库中的本地文件名；扩展名会保留，同名文件不会被覆盖。"}
+      description={localPath ? "直接修改本机文件名，保留扩展名，并同步素材引用。同名文件不会被覆盖。" : undefined}
       onClose={onClose}
       preventClose={busy}
       footer={

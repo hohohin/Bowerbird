@@ -6,13 +6,13 @@ export const ONBOARDING_ROLES = [
 export type OnboardingRole = typeof ONBOARDING_ROLES[number]["id"];
 export type GuideScene = "more-uses" | "pick-prompt" | "ready-to-create" | "activate-composer" | "sample-dimensions" | "create-project" | "source-scope" | "open-explore" | "expand-source" | "workspace" | "import" | "folder" | "explore" | "annotate" | "edit" | "analyse" | "dimensions" | "collections" | "profile" | "profile-select" | "batch" | "script" | "storyboard" | "video";
 export interface GuideStep { scene: GuideScene; title: string; body: string; target: string; highlight?: string }
-const workspace: GuideStep = { scene: "workspace", title: "认识真实工作台", body: "顶部可以导入和探索，左侧管理素材与项目，中央是本次创作的画板，下方输入需求。先在界面中找到这几个区域，再继续。", target: ".app-topbar, .app-sidebar, .canvas-source-panel, .canvas-board-toolbar, [data-tour=creation-editor]" };
-const importStep: GuideStep = { scene: "import", title: "导入你的图片", body: "点击顶部「导入 → 导入图片」，从电脑选择一张参考图。导入成功后，图片会出现在左侧素材栏。", target: "[data-import-trigger], [data-tour=import-files], .canvas-source-panel" };
+const workspace: GuideStep = { scene: "workspace", title: "认识真实工作台", body: "顶部可以建立连接和探索，左侧管理素材与项目，中央是本次创作的画板，下方输入需求。先在界面中找到这几个区域，再继续。", target: ".app-topbar, .app-sidebar, .canvas-source-panel, .canvas-board-toolbar, [data-tour=creation-editor]" };
+const importStep: GuideStep = { scene: "import", title: "连接你的素材", body: "点击顶部「建立连接」，选择已有的素材文件夹。连接后即可浏览和引用其中的图片，原文件保持原位。", target: "[data-import-trigger], .canvas-source-panel" };
 export const ONBOARDING_ROUTES: Record<OnboardingRole, GuideStep[]> = {
   designer: [
     { scene: "create-project", title: "创建第一个项目", body: "现在我们的巢里什么都没有，先来创建一个新的项目吧", target: "[data-tour=new-creation]" },
-    { scene: "folder", title: "导入初始引导文件夹", body: "点击「导入 → 导入文件夹」，在打开的位置选择「初始引导」文件夹，将示例素材导入这个项目。", target: "[data-import-trigger], [role=menu][aria-label=导入素材]", highlight: "[data-tour=import-folder]" },
-    { scene: "source-scope", title: "认识素材的归属", body: "目前我们在项目中进行导入，则素材默认归为所打开的项目。\n你也可以在主界面导入素材/文件夹，那所导入的素材则属于全局素材。", target: ".canvas-source-panel", highlight: "[data-tour=source-scope]" },
+    { scene: "folder", title: "连接初始引导文件夹", body: "点击「建立连接」，在打开的位置选择「初始引导」文件夹，将示例素材连接到这个项目。", target: "[data-import-trigger]", highlight: "[data-tour=import-folder]" },
+    { scene: "source-scope", title: "认识素材的归属", body: "在项目中建立连接，素材会加入当前项目。\n在主界面建立连接，素材会出现在全局素材中。", target: ".canvas-source-panel", highlight: "[data-tour=source-scope]" },
     { scene: "open-explore", title: "打开探索", body: "你可以点击这里，直接浏览常用网站，收集灵感", target: "[data-tour=explore]" },
     { scene: "explore", title: "把喜欢的素材拖到画板", body: "选一张喜欢的素材，按住图片拖到右侧画板并松开。", target: "[data-canvas-stage]" },
     { scene: "expand-source", title: "", body: "探索面板展开时，素材库面板会收起来\n点击这里即可重新打开", target: ".canvas-workspace", highlight: ".canvas-source-expand, .canvas-source-collapse" },

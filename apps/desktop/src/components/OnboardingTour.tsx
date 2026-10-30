@@ -247,7 +247,7 @@ export function OnboardingTour() {
       {needsProject && <p>这一步需要项目。请点击「新建创作」继续。</p>}
       {onProject && !needsProject && sampleStep && !promptAdded && <>
         {sample ? !captionRing && <p className="onboarding-step-copy">{"在创作模式激活的时候，左键点击素材图片，即可打开维度环。\n请点击这张高亮的素材图片。"}</p>
-          : <p role="status">{sampleLoading ? "正在查找示例图…" : "未找到带反推数据的示例图。请先导入「初始引导」文件夹，再重新查找。"}</p>}
+          : <p role="status">{sampleLoading ? "正在查找示例图…" : "未找到带反推数据的示例图。请先连接「初始引导」文件夹，再重新查找。"}</p>}
         {!sample && !sampleLoading && <button className="app-modal-button" onClick={() => setSampleAttempt(value => value + 1)}>重新查找示例图</button>}
         {!boardOpen && <button className="app-modal-button" onClick={() => document.querySelector<HTMLElement>("[data-onboarding-composer] .ProseMirror")?.focus()}>激活创作模式</button>}
       </>}

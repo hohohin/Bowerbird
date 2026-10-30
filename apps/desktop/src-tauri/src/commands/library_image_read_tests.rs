@@ -75,3 +75,18 @@ fn registered_external_images_still_require_unchanged_fingerprint() {
     image::RgbImage::from_pixel(10, 20, image::Rgb([90, 80, 70])).save(&path).unwrap();
     assert!(f.read(&path).unwrap_err().to_string().contains("已修改"));
 }
+
+#[test]
+fn connected_heic_reads_compatible_cache_without_changing_original() {
+    let f = Fixture::new();
+    let path = f.root.join("phone.heic");
+    let bytes = include_bytes!("../../tests/fixtures/heic/rgb-strips-96.heic");
+    fs::write(&path, bytes).unwrap();
+    assert!(f.read(&path).is_err());
+    let asset = f.db.index_external(&f.paths, &path).unwrap();
+    let readable = f.read(&path).unwrap();
+    assert_ne!(readable, path.canonicalize().unwrap());
+    assert!(image::open(&readable).is_ok());
+    assert_eq!(asset.store_path.as_deref(), path.canonicalize().unwrap().to_str());
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+}

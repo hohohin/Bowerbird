@@ -12,19 +12,22 @@ fn setup() -> (tempfile::TempDir, LibraryPaths, Database) {
 }
 
 #[test]
-fn heic_import_preserves_source_and_produces_usable_png() {
+fn heic_connection_preserves_original_and_produces_usable_cache() {
     let (directory, paths, db) = setup();
     let source = directory.path().join("手机照片.HEIC");
     fs::write(&source, STRIPS).unwrap();
     let asset = ingest_file(&paths, &db, &source).unwrap();
     assert_eq!(fs::read(&source).unwrap(), STRIPS);
     assert_eq!(asset.name, "手机照片");
-    assert_eq!(asset.ext.as_deref(), Some("png"));
-    assert_eq!(asset.origin_path.as_deref(), source.to_str());
+    assert_eq!(asset.ext.as_deref(), Some("heic"));
+    assert_eq!(asset.store_path, asset.origin_path);
+    assert_eq!(Path::new(asset.store_path.as_deref().unwrap()), fs::canonicalize(&source).unwrap());
     assert_eq!((asset.width, asset.height), (Some(96), Some(32)));
     let stored = Path::new(asset.store_path.as_deref().unwrap());
     assert_eq!(asset.size, Some(fs::metadata(stored).unwrap().len() as i64));
-    let image = image::open(stored).unwrap().to_rgb8();
+    let cached = crate::core::external_files::compatible_image(&paths, stored).unwrap();
+    assert_ne!(cached, stored);
+    let image = image::open(&cached).unwrap().to_rgb8();
     for (x, channel) in [(16, 0), (48, 1), (80, 2)] {
         let pixel = image.get_pixel(x, 16).0;
         assert!(pixel[channel] > 220, "{pixel:?}");
@@ -33,11 +36,15 @@ fn heic_import_preserves_source_and_produces_usable_png() {
     assert!(image::open(asset.thumb_path.as_deref().unwrap()).is_ok());
     assert!(asset.phash.is_some());
     assert!(asset.colors.is_some());
-    // Repeated HEIC and the same image arriving through the byte upload share an asset.
+    assert!(walk_media(&paths.images).is_empty());
+    assert_eq!(db.resolve_external_image_paths(&[stored.to_string_lossy().into_owned()]).unwrap()[0], cached.to_string_lossy());
+    assert_eq!(db.resolve_external_paths(&[stored.to_string_lossy().into_owned()]).unwrap()[0], stored.to_string_lossy());
+    // Reconnecting keeps identity. New bytes receive their own first durable original.
     assert_eq!(ingest_file(&paths, &db, &source).unwrap().id, asset.id);
     let uploaded = ingest_from_bytes(&paths, &db, STRIPS, "", Some("其他.heif"), None, "imported").unwrap();
-    assert_eq!(uploaded.id, asset.id);
-    assert_eq!(uploaded.origin_path, asset.origin_path);
+    assert_ne!(uploaded.id, asset.id);
+    assert!(uploaded.origin_path.is_none());
+    assert!(image::open(uploaded.store_path.unwrap()).is_ok());
 }
 
 #[test]
@@ -66,7 +73,10 @@ fn heic_folder_import_decodes_grid_and_heif_extension() {
     assert_eq!(assets.len(), 2);
     let grid = assets.iter().find(|a| a.name == "grid").unwrap();
     assert_eq!((grid.width, grid.height), (Some(1024), Some(1024)));
-    let image = image::open(grid.store_path.as_deref().unwrap()).unwrap().to_rgb8();
+    assert_eq!(grid.ext.as_deref(), Some("heif"));
+    assert!(walk_media(&paths.images).is_empty());
+    let cached = crate::core::external_files::compatible_image(&paths, Path::new(grid.store_path.as_deref().unwrap())).unwrap();
+    let image = image::open(cached).unwrap().to_rgb8();
     // Exercise pixels in all four coded tiles, away from lossy block boundaries.
     for (x, y) in [(32,32), (544,32), (32,544), (544,544)] {
         assert!(image.get_pixel(x, y).0[0] > 220);
@@ -84,7 +94,8 @@ fn heic_import_applies_orientation_before_dimensions_and_thumbnail() {
     fs::write(&source, bytes).unwrap();
     let asset = ingest_file(&paths, &db, &source).unwrap();
     assert_eq!((asset.width, asset.height), (Some(32), Some(96)));
-    let image = image::open(asset.store_path.unwrap()).unwrap().to_rgb8();
+    let cached = crate::core::external_files::compatible_image(&paths, Path::new(asset.store_path.as_deref().unwrap())).unwrap();
+    let image = image::open(cached).unwrap().to_rgb8();
     assert!(image.get_pixel(16, 16).0[2] > 220); // Blue strip now at the top.
     assert!(image.get_pixel(16, 80).0[0] > 220);
     let thumb = image::open(asset.thumb_path.unwrap()).unwrap();

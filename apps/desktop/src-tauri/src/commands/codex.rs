@@ -689,7 +689,7 @@ pub async fn codex_create_image(
     let mut reference_images = {
         db.generation_diagnostic_phase(&diagnostic_id, &job_id, "reference_resolution", None)?;
         let db = db.inner().clone();
-        tokio::task::spawn_blocking(move || db.resolve_external_paths(&reference_images))
+        tokio::task::spawn_blocking(move || db.resolve_external_image_paths(&reference_images))
             .await.map_err(|e| AppError::Other(e.to_string()))??
     };
     let supplied_reference_node_ids = reference_node_ids.unwrap_or_default();
@@ -1697,7 +1697,7 @@ async fn get_asset_store_path(
         .ok_or_else(|| AppError::NotFound(asset_id.to_string()))?;
     let path = asset.store_path.ok_or_else(|| AppError::Media(format!("asset {asset_id} has no store_path")))?;
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.resolve_external_paths(&[path]).map(|paths| paths[0].clone()))
+    tokio::task::spawn_blocking(move || db.resolve_external_image_paths(&[path]).map(|paths| paths[0].clone()))
         .await.map_err(|e| AppError::Other(e.to_string()))?
 }
 

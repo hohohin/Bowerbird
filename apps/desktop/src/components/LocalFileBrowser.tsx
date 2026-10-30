@@ -149,7 +149,7 @@ export function LocalFileBrowser({ onClose, onCreateProject, initialTab = "files
         await externalFiles.update(reference.asset.id, path, action === "update");
       }
       await reloadReferences();
-      notifySuccess(action === "copy" ? "已复制到素材库，原文件保留" : "外部引用已更新");
+      notifySuccess(action === "copy" ? "已加入素材库" : "外部引用已更新");
     } catch (reason) { setError(String(reason)); }
     finally { busyRef.current = false; if (mounted.current) { setBusy(false); setConfirmUpdate(null); } }
   }
@@ -193,7 +193,7 @@ export function LocalFileBrowser({ onClose, onCreateProject, initialTab = "files
           <p title={reference.asset.store_path ?? ""}>{reference.asset.store_path}</p>
           <div><button disabled={busy} onClick={() => void changeReference(reference, "relink")}>重新定位</button>
             {reference.status === "changed" && <button disabled={busy} onClick={() => setConfirmUpdate(reference)}>更新引用</button>}
-            <button disabled={busy || reference.status !== "available"} onClick={() => void changeReference(reference, "copy")}>复制到素材库</button></div>
+            <button disabled={busy || reference.status !== "available"} onClick={() => void changeReference(reference, "copy")}>加入素材库</button></div>
         </article>)}
       </>}
     </div>

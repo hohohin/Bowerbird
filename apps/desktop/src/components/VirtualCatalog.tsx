@@ -1,5 +1,5 @@
 import { userErrorMessage } from "../lib/userError";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject, type ReactNode, type CSSProperties } from "react";
 import { materialCatalog, type CatalogFilter } from "../lib/materialCatalog";
 import { catalogLayout, catalogScrollScale, masonryGeometry, masonryRatios, visibleCatalogBlocks, CATALOG_CACHE_PAGES, CATALOG_PAGE_SIZE, type CatalogSectionInfo } from "../lib/catalogVirtualLayout";
 import type { Asset } from "../lib/types";
@@ -11,12 +11,16 @@ type Page = { assets: Asset[]; revision: number };
 // Keep only visited pages' ratios after asset eviction/view switches. A page's
 // total height alone cannot continue uneven columns or adapt to a new width.
 const layoutHistory = new Map<string, Map<string, readonly number[]>>();
-export function VirtualCatalog({ filter, sections, headings, width, revision, scroll, selected, jump, initialTop, onActive, onAssetsChange, onSelect, onActivate, onOpen, onContextMenu }: {
+export function VirtualCatalog({ filter, sections, headings, width, revision, scroll, selected, jump, initialTop, onActive, onAssetsChange, onSelect, onActivate, onOpen, onContextMenu, readPage, itemKey = asset => asset.id, renderItem, emptySection }: {
   filter: CatalogFilter; sections: CatalogSectionInfo[]; headings: boolean; width: number; revision: number;
   scroll: RefObject<HTMLDivElement>; selected: Set<string>; jump: { id: string; sequence: number } | null; initialTop?: number;
   onActive: (id: string | null) => void; onAssetsChange?: (assets: Asset[]) => void;
   onSelect: (asset: Asset, additive: boolean, range: boolean, location: CatalogLocation) => void;
   onActivate?: (asset: Asset) => void; onOpen: (asset: Asset) => void; onContextMenu: (asset: Asset, x: number, y: number) => void;
+  readPage?: (sectionId: string, offset: number, limit: number) => Promise<Asset[]>;
+  itemKey?: (asset: Asset) => string;
+  renderItem?: (asset: Asset, style: CSSProperties, ratio: number, location: CatalogLocation) => ReactNode;
+  emptySection?: (sectionId: string) => ReactNode;
 }) {
   const root = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: initialTop ?? 0, height: scroll.current?.clientHeight || 800, width: scroll.current?.clientWidth || 800 });
@@ -31,6 +35,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   const [focused, setFocused] = useState<string | null>(null);
   const geometryKey = JSON.stringify(filter);
   const oldGeometry = useRef("");
+  const showEmpty = !!emptySection;
   if (oldGeometry.current !== geometryKey) {
     measured.current = layoutHistory.get(geometryKey) ?? new Map();
     layoutHistory.delete(geometryKey); layoutHistory.set(geometryKey, measured.current);
@@ -40,10 +45,21 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   const layout = useMemo(() => {
     for (const [key, page] of cache.current) measured.current.set(key, masonryRatios(page.assets));
     const layout = catalogLayout(sections, viewport.width, width, measured.current, headings);
+    if (showEmpty) {
+      let extra = 0;
+      const offsets: number[] = [];
+      layout.groups.forEach((group, index) => {
+        offsets[index] = extra;
+        group.top += extra;
+        if (!sections[index].count) { group.height += 72; extra += 72; }
+      });
+      for (const block of layout.blocks) { block.top += offsets[block.section]; block.maxBottom += offsets[block.section]; }
+      layout.height += extra;
+    }
     const last = layout.groups[layout.groups.length - 1];
     if (headings && last) { last.height = Math.max(last.height, viewport.height); layout.height = last.top + last.height; }
     return layout;
-  }, [sections, viewport.width, viewport.height, width, headings, tick]);
+  }, [sections, viewport.width, viewport.height, width, headings, tick, showEmpty]);
   const layoutRef = useRef(layout); layoutRef.current = layout;
   const scale = catalogScrollScale(layout.height + 100, viewport.height);
   const logicalTop = viewport.top / scale;
@@ -68,7 +84,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
         const y = block.top + cell.top;
         if (y + cell.height < top || y > top + view.clientHeight || Math.abs(y - top) >= distance) return;
         distance = Math.abs(y - top);
-        anchor.current = { key: block.key, delta: top - block.top, asset: { id: page.assets[index].id, delta: top - y } };
+        anchor.current = { key: block.key, delta: top - block.top, asset: { id: itemKey(page.assets[index]), delta: top - y } };
       });
     }
     if (anchor.current) return;
@@ -84,7 +100,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
       pending.current.add(block.key);
       const requestedRevision = version.current;
       const section = sections[block.section];
-      void materialCatalog.page({ ...filter, id: section.tagId ?? filter.id }, block.offset, CATALOG_PAGE_SIZE).then(assets => {
+      void (readPage ? readPage(section.id, block.offset, CATALOG_PAGE_SIZE) : materialCatalog.page({ ...filter, id: section.tagId ?? filter.id }, block.offset, CATALOG_PAGE_SIZE)).then(assets => {
         if (!alive.current || version.current !== requestedRevision) return;
         rememberAnchor();
         cache.current.delete(block.key); cache.current.set(block.key, { assets, revision: requestedRevision });
@@ -129,7 +145,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
       const block = layout.blocks.find(item => item.key === saved.key);
       if (block) {
         const page = cache.current.get(block.key);
-        const index = saved.asset && page ? page.assets.findIndex(asset => asset.id === saved.asset!.id) : -1;
+        const index = saved.asset && page ? page.assets.findIndex(asset => itemKey(asset) === saved.asset!.id) : -1;
         const cell = index >= 0 ? masonryGeometry(page!.assets, viewport.width, width, block.columnTops).cells[index] : null;
         const top = cell ? block.top + cell.top + saved.asset!.delta : block.top + Math.min(saved.delta, Math.max(0, block.height - 1));
         scroll.current.scrollTop = top * scale;
@@ -156,6 +172,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
     {sections.map((section, index) => <section key={section.id} data-catalog-section={section.id} data-tag-section={section.tagId ?? undefined}
       aria-label={headings ? `${section.name}${section.tagId ? "图片" : "素材"}` : undefined} style={{ position: "absolute", top: layout.groups[index].top * scale, height: layout.groups[index].height * scale, width: "100%" }}>
       {headings && (current === section.id || visible.some(block => block.section === index)) && <h3 style={{ position: "absolute", width: "100%", top: Math.min(Math.max(layout.groups[index].top, logicalTop), layout.groups[index].top + layout.groups[index].height - 40) - logicalTop + viewport.top - layout.groups[index].top * scale }} className={`catalog-section-heading${current === section.id && viewport.top > 0 ? " is-pinned" : ""}`}><span title={section.name} data-library-count={`${String(section.count).padStart(2, "0")} 项`} className={`catalog-section-title${current === section.id && viewport.top > 0 ? " library-floating-surface" : ""}`}>{section.name}</span></h3>}
+      {!section.count && emptySection && <div className="connected-empty-section" style={{ top: layout.groups[index].top + 48 - logicalTop + viewport.top - layout.groups[index].top * scale }}>{emptySection(section.id)}</div>}
       {visible.filter(block => block.section === index).map(block => {
         const page = cache.current.get(block.key), error = errors.current.get(block.key);
         const geometry = page ? masonryGeometry(page.assets, viewport.width, width, block.columnTops) : null;
@@ -170,6 +187,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
             if (y + cell.height < logicalTop - 500 || y > logicalTop + viewport.height + 500) {
               if (focused !== block.key) return null;
             }
+            if (renderItem) return renderItem(asset, { width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }, cell.ratio, { section: section.id, index: block.offset + index });
             return <FileMediaCard key={asset.id} style={{ width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }}
               entry={{ path: asset.store_path ?? "", name: asset.name, directory: false, preview: asset.thumb_path, version: `${asset.id}:${asset.file_mtime ?? 0}:${asset.thumb_path}` }}
               aspectRatio={cell.ratio} selected={selected.has(asset.id)} revision={revision} labels={[]} assetId={asset.id} generated={asset.generation_session_id != null}

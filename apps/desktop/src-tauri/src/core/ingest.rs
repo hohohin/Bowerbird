@@ -1,4 +1,4 @@
-//! 导入流水线：本地文件按字节去重；网页采集可按 dHash 合并近似变体。
+//! 素材接入：本地文件原位连接；新内容首次保存，网页采集可按 dHash 合并近似变体。
 //! 视频/PSD/SVG 等多格式在 Phase 2 接入；Phase 1 覆盖常见光栅图。
 
 #[cfg(test)]
@@ -22,8 +22,32 @@ use crate::db::Database;
 use crate::error::{AppError, AppResult};
 use crate::media;
 
-/// 显式本地导入只合并字节完全相同的文件，保留相似构图和修订版本。
+/// Existing local media stays at its original path. Only previews are cached.
 pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppResult<Asset> {
+    let mut asset = db.index_external(paths, source)?;
+    if db.is_external_asset(&asset.id)? {
+        let input = crate::core::external_files::compatible_image(paths, Path::new(asset.store_path.as_deref().unwrap()))?;
+        if asset.phash.is_none() && !media::probe::is_video(asset.ext.as_deref().unwrap_or("")) {
+            asset.phash = media::phash::compute(&input).ok().flatten();
+            asset.colors = media::color::extract(&input, 5).ok().and_then(|colors| serde_json::to_string(&colors).ok());
+        }
+        let conn = db.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("UPDATE external_assets SET library_member=1 WHERE asset_id=?1", [&asset.id])?;
+        tx.execute("UPDATE assets SET library_hidden=0,phash=COALESCE(phash,?2),colors=COALESCE(colors,?3) WHERE id=?1",
+            rusqlite::params![asset.id, asset.phash, asset.colors])?;
+        tx.commit()?;
+        drop(conn);
+        asset.library_hidden = false;
+        link_colors(db, &asset.id, asset.colors.as_deref());
+    }
+    preset::recognize_and_prefill(db, source, &mut asset)?;
+    Ok(asset)
+}
+
+/// First durable save of newly received/generated content from a temporary workspace.
+/// Never use this for the user's existing local files; those use ingest_file.
+pub fn ingest_new_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppResult<Asset> {
     ingest_file_with_dedup(paths, db, source, false)
 }
 
@@ -525,7 +549,7 @@ pub async fn ingest_from_url(
     let source_path = std::env::temp_dir().join(format!("bowerbird-{}.{}", Ulid::new(), ext));
     fs::write(&source_path, &bytes)?;
 
-    let ingested = ingest_file(paths, db, &source_path);
+    let ingested = ingest_new_file(paths, db, &source_path);
     let source_path_text = source_path.to_string_lossy().into_owned();
     let _ = fs::remove_file(&source_path);
     let mut asset = ingested?;
@@ -880,6 +904,10 @@ mod tests {
         let img_path = make_photo_file(&tmp.dir, "test.png", 320, 7);
 
         let asset = ingest_file(&paths, &db, &img_path).unwrap();
+        assert_eq!(Path::new(asset.store_path.as_deref().unwrap()), fs::canonicalize(&img_path).unwrap());
+        assert_eq!(asset.store_path, asset.origin_path);
+        assert!(db.is_external_asset(&asset.id).unwrap());
+        assert!(walk_media(&paths.images).is_empty());
         assert_eq!(asset.width, Some(320));
         assert_eq!(asset.height, Some(320));
         assert!(asset.phash.is_some(), "phash should be computed");
@@ -890,7 +918,7 @@ mod tests {
         assert!(Path::new(thumb).exists(), "thumb file should exist");
 
         // 去重：再导入同一张 → 不新增
-        let _ = ingest_file(&paths, &db, &img_path).unwrap();
+        assert_eq!(ingest_file(&paths, &db, &img_path).unwrap().id, asset.id);
         assert_eq!(
             db.count_assets(None).unwrap(),
             1,
@@ -913,10 +941,27 @@ mod tests {
         let second = ingest_file(&paths, &db, &revised).unwrap();
         assert_ne!(first.id, second.id);
         assert_eq!(ingest_file(&paths, &db, &revised).unwrap().id, second.id);
-        fs::remove_file(second.store_path.as_ref().unwrap()).unwrap();
+        let bytes = fs::read(&revised).unwrap();
+        fs::remove_file(&revised).unwrap();
+        assert!(ingest_file(&paths, &db, &revised).is_err());
+        fs::write(&revised, bytes).unwrap();
         let restored = ingest_file(&paths, &db, &revised).unwrap();
         assert!(Path::new(restored.store_path.as_ref().unwrap()).is_file());
-        assert_ne!(restored.id, second.id);
+        assert_eq!(restored.id, second.id);
+        assert!(walk_media(&paths.images).is_empty());
+    }
+
+    #[test]
+    fn connected_svg_keeps_original_as_browser_preview() {
+        let (tmp, paths, db) = setup();
+        let source = tmp.dir.join("shape.svg");
+        let bytes = br#"<svg xmlns="http://www.w3.org/2000/svg" width="32" height="24"><rect width="32" height="24" fill="red"/></svg>"#;
+        fs::write(&source, bytes).unwrap();
+        let asset = ingest_file(&paths, &db, &source).unwrap();
+        assert_eq!(asset.ext.as_deref(), Some("svg"));
+        assert_eq!(asset.thumb_path, asset.store_path);
+        assert_eq!(fs::read(asset.store_path.unwrap()).unwrap(), bytes);
+        assert!(walk_media(&paths.images).is_empty());
     }
 
     #[test]
@@ -1054,12 +1099,28 @@ mod tests {
     }
 
     #[test]
+    fn first_save_survives_temporary_source_cleanup_and_reuses_saved_original() {
+        let (tmp, paths, db) = setup();
+        let source = tmp.dir.join("received.png");
+        make_png(&source, 37, 29, [12, 34, 56]);
+        let bytes = fs::read(&source).unwrap();
+        let first = ingest_new_file(&paths, &db, &source).unwrap();
+        assert_ne!(first.store_path, first.origin_path);
+        assert_eq!(ingest_new_file(&paths, &db, &source).unwrap().id, first.id);
+        fs::remove_file(&source).unwrap();
+        let stored = Path::new(first.store_path.as_deref().unwrap());
+        assert_eq!(fs::read(stored).unwrap(), bytes);
+        assert_eq!(ingest_file(&paths, &db, stored).unwrap().id, first.id);
+        assert_eq!(walk_media(&paths.images).len(), 1);
+    }
+
+    #[test]
     fn delete_removes_db_row_and_files() {
         let (tmp, paths, db) = setup();
         let img_path = tmp.dir.join("del.png");
         make_png(&img_path, 100, 80, [10, 20, 30]);
 
-        let asset = ingest_file(&paths, &db, &img_path).unwrap();
+        let asset = ingest_new_file(&paths, &db, &img_path).unwrap();
         let store = asset.store_path.clone().unwrap();
         let thumb = asset.thumb_path.clone().unwrap();
         assert!(

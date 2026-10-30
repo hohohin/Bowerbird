@@ -465,7 +465,7 @@ export function AssetContextMenu() {
         <button role="menuitem" className={itemClass} disabled={busy} onClick={async () => { setBusy(true); try { await navigator.clipboard.writeText(storePath); notifySuccess("文件路径已复制"); closeContextMenu(); } catch (e) { notifyError(e, "复制文件路径失败"); setBusy(false); } }}>复制文件路径</button>
       </>}
       {asset?.source === "external" && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); if (menu.fileSelection) menu.fileSelection.openReferences(); else window.dispatchEvent(new Event(OPEN_LOCAL_FILES)); }}>管理外部引用 · 原图保留</button>}
-      {menu.canvasSelection && asset?.library_hidden && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => void setLibraryVisibility(true)}>{asset?.source === "external" ? "复制到素材库" : "加入素材库"}</button>}
+      {menu.canvasSelection && asset?.library_hidden && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => void setLibraryVisibility(true)}>加入素材库</button>}
       <div className="app-context-divider" />{deleteMenu}
     </div>
   </ContextMenu>;

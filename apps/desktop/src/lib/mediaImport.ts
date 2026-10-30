@@ -14,24 +14,26 @@ function readDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-/** HTML file drops have no trusted local path. Stream videos through bounded IPC chunks. */
+/** Existing files need their original path; only bitmap-only paste creates an original. */
 export async function importDroppedMedia(file: File, projectId: string | null, source = "imported"): Promise<Asset> {
-  if (!isVideoPath(file.name)) {
-    if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|bmp|svg|heic|heif)$/i.test(file.name)) throw new Error("请选择图片或 MP4、MOV、WebM、MKV、AVI、M4V 视频");
-    if (file.size > 50 * 1024 * 1024) throw new Error("图片不能超过 50 MB");
-    return api.importImageBytes({ dataUrl: await readDataUrl(file), fileName: file.name || "clipboard.png", projectId, source });
-  }
-  const uploadId = await invoke<string>("video_import_begin", { fileName: file.name, size: file.size, projectId });
-  try {
-    const chunkSize = 1024 * 1024;
-    for (let offset = 0; offset < file.size; offset += chunkSize) {
-      const data = await readDataUrl(file.slice(offset, offset + chunkSize));
-      await invoke("video_import_append", { uploadId, offset, data: data.slice(data.indexOf(",") + 1) });
+  let path = (file as File & { path?: string }).path;
+  if (!path && source === "clipboard") {
+    const paths = await invoke<string[]>("clipboard_file_paths");
+    if (paths.length) {
+      path = paths.find(value => value.split(/[\\/]/).pop() === file.name);
+      if (!path && paths.length === 1) path = paths[0];
+      if (!path) throw new Error("无法确定原文件位置，请使用「建立连接」选择素材文件夹");
     }
-    return await invoke<Asset>("video_import_finish", { uploadId });
-  } finally {
-    await invoke("video_import_cancel", { uploadId }).catch(() => {});
   }
+  if (path) {
+    const [asset] = await api.importFiles([path], projectId);
+    if (!asset) throw new Error("未能连接原文件，请检查文件是否可访问");
+    return asset;
+  }
+  if (source !== "clipboard") throw new Error("无法取得原文件位置，请使用「建立连接」选择素材文件夹");
+  if (!file.type.startsWith("image/")) throw new Error("请选择素材文件夹建立连接");
+  if (file.size > 50 * 1024 * 1024) throw new Error("图片不能超过 50 MB");
+  return api.importImageBytes({ dataUrl: await readDataUrl(file), fileName: file.name || "clipboard.png", projectId, source: "clipboard" });
 }
 
 export async function prepareMediaImport(projectId: string | null, revision: number) {

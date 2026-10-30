@@ -11,13 +11,14 @@ use std::{path::PathBuf, sync::Arc};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 #[tauri::command]
-pub async fn external_files_media(app: AppHandle, path: String) -> Result<String, AppError> {
+pub async fn external_files_media(app: AppHandle, paths: State<'_, Arc<LibraryPaths>>, path: String) -> Result<String, AppError> {
+    let paths = paths.inner().clone();
     let path = tokio::task::spawn_blocking(move || -> Result<_, AppError> {
         let path = std::fs::canonicalize(path)?;
         if !path.is_file() || !(external_files::image_path(&path) || external_files::video_path(&path)) {
             return Err(AppError::Other("请选择支持的图片或视频".into()));
         }
-        Ok(path)
+        external_files::compatible_image(&paths, &path)
     }).await.map_err(|e| AppError::Other(e.to_string()))??;
     app.asset_protocol_scope().allow_file(&path).map_err(|e| AppError::Other(e.to_string()))?;
     Ok(path.to_string_lossy().into_owned())
@@ -143,15 +144,15 @@ pub async fn external_files_update(
 #[tauri::command]
 pub async fn external_files_copy(
     app: AppHandle,
-    paths: State<'_, Arc<LibraryPaths>>,
     db: State<'_, Arc<Database>>,
     asset_id: String,
 ) -> Result<Asset, AppError> {
-    let paths = paths.inner().clone();
     let db = db.inner().clone();
-    let asset = tokio::task::spawn_blocking(move || db.copy_external_to_library(&paths, &asset_id))
+    // Retain the IPC name for older callers; joining the library never copies an original.
+    let asset = tokio::task::spawn_blocking(move || db.link_external_to_library(&asset_id))
         .await
         .map_err(|e| AppError::Other(e.to_string()))??;
+    allow(&app, &asset)?;
     changed(&app);
     Ok(asset)
 }

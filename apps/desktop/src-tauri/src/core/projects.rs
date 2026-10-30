@@ -453,7 +453,7 @@ impl Database {
                 "SELECT a.id, a.name, a.store_path, a.thumb_path, EXISTS(\
                    SELECT 1 FROM project_assets other \
                    WHERE other.asset_id = a.id AND other.project_id != ?1\
-                 ) AS shared \
+                 ) OR EXISTS(SELECT 1 FROM connected_entries WHERE asset_id=a.id) AS shared \
                  FROM project_assets current JOIN assets a ON a.id = current.asset_id \
                  WHERE current.project_id = ?1 AND a.id NOT IN (SELECT asset_id FROM external_assets)",
             )?;

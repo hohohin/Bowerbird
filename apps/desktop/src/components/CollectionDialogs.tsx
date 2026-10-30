@@ -2,32 +2,43 @@ import { userErrorMessage } from "../lib/userError";
 import { useEffect, useId, useRef, useState } from "react";
 import { Check, Folder as FolderIcon, Plus } from "lucide-react";
 import { api } from "../lib/api";
-import { materialCatalog } from "../lib/materialCatalog";
+import { folderConnections, type FolderConnection } from "../lib/folderConnections";
 import { collectionRows } from "../lib/materialCatalogOrder";
 import type { Folder } from "../lib/types";
 import { ModalShell } from "./ModalShell";
 import { OverlayScrollArea } from "./CollectionScrollArea";
+import { useStore } from "../store";
 
-export function CollectionEditorDialog({ collections, item, parentId, onClose, onSaved }: {
-  collections: Folder[]; item?: Folder; parentId: string | null; onClose: () => void; onSaved: (id: string) => void;
+export function CollectionEditorDialog({ collections, item, parentId, projectId = null, onClose, onSaved }: {
+  collections: Folder[]; item?: Folder; parentId: string | null; projectId?: string | null; onClose: () => void; onSaved: (id: string) => void;
 }) {
   const [name, setName] = useState(item?.name ?? "");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const lock = useRef(false);
+  const [location, setLocation] = useState("");
   const parent = item ? item.parent_id ?? null : parentId;
   const parentName = collections.find(collection => collection.id === parent)?.name;
   async function save() {
     if (lock.current || !name.trim()) return;
     lock.current = true; setBusy(true); setError("");
-    try { const id = await materialCatalog.saveCollection(item?.id ?? null, name, parent); onSaved(id); onClose(); }
+    try {
+      let id = item?.id;
+      if (id) await folderConnections.renameFolder(id, name);
+      else {
+        const path = parent ? null : location || await api.pickFolder();
+        if (!parent && !path) return;
+        id = await folderConnections.create(parent, name, path, projectId);
+      }
+      onSaved(id); onClose();
+    }
     catch (error) { setError(String(error)); }
     finally { lock.current = false; setBusy(false); }
   }
-  return <ModalShell title={item ? "重命名集合" : "新建集合"} onClose={onClose} preventClose={busy}
-    description={item ? "修改集合名称，保留原有层级和素材。" : parentName ? `在「${parentName}」中新建子集合。` : "新建顶层集合，用来整理素材。"}>
+  return <ModalShell title={item ? "重命名集合" : "新建集合"} onClose={onClose} preventClose={busy}>
     <form className="catalog-form" onSubmit={event => { event.preventDefault(); void save(); }}>
       <label>集合名称<input data-modal-autofocus value={name} maxLength={100} onChange={e => setName(e.target.value)} disabled={busy} /></label>
+      {!item && (parentName ? <p>{parentName}</p> : <button type="button" disabled={busy} onClick={() => { void api.pickFolder().then(path => { if (path) setLocation(path); }).catch(error => setError(String(error))); }}>{location || "选择保存位置"}</button>)}
       {error && <p role="alert">{userErrorMessage(error, "集合未保存，请稍后重试。")}</p>}
       <button className="app-button-accent" type="submit" disabled={busy || !name.trim()}>{busy ? "保存中…" : "保存"}</button>
     </form>
@@ -36,7 +47,8 @@ export function CollectionEditorDialog({ collections, item, parentId, onClose, o
 
 export function CollectionAssignDialog({ assetIds, onClose, onSaved }: { assetIds: string[]; onClose: () => void; onSaved?: () => void }) {
   const choiceName = useId();
-  const [collections, setCollections] = useState<Folder[]>([]);
+  const [projectId] = useState(() => useStore.getState().activeProjectId);
+  const [collections, setCollections] = useState<FolderConnection[]>([]);
   const [selected, setSelected] = useState("");
   const [name, setName] = useState("");
   const [loading, setLoading] = useState(true);
@@ -47,7 +59,7 @@ export function CollectionAssignDialog({ assetIds, onClose, onSaved }: { assetId
   const created = useRef<string | null>(null);
   useEffect(() => {
     let alive = true; setLoading(true); setError("");
-    api.listCollections().then(value => { if (alive) { setCollections(value); setSelected(collectionRows(value)[0]?.item.id ?? ""); } })
+    folderConnections.list().then(value => { if (alive) { setCollections(value); setSelected(collectionRows(value).find(row => value.find(folder => folder.id === row.item.id)?.available)?.item.id ?? ""); } })
       .catch(error => { if (alive) setError(String(error)); }).finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
   }, [revision]);
@@ -56,13 +68,16 @@ export function CollectionAssignDialog({ assetIds, onClose, onSaved }: { assetId
     lock.current = true; setBusy(true); setError("");
     try {
       let id = selected || created.current;
-      if (!id) { id = await materialCatalog.saveCollection(null, name, null); created.current = id; }
-      await materialCatalog.members(id, assetIds);
+      if (!id) {
+        const path = await api.pickFolder(); if (!path) return;
+        id = await folderConnections.create(null, name, path, projectId); created.current = id;
+      }
+      await folderConnections.references([...new Set(assetIds)], id);
       onSaved?.(); onClose();
     } catch (error) { setError(String(error)); }
     finally { lock.current = false; setBusy(false); }
   }
-  return <ModalShell title="添加到集合" onClose={onClose} preventClose={busy} description={`将 ${assetIds.length} 项素材加入集合，保留现有集合归属和原文件。`}>
+  return <ModalShell title="添加到集合" onClose={onClose} preventClose={busy} description="在目标文件夹创建分身，原文件保持原位。">
     <form className="catalog-form" onSubmit={event => { event.preventDefault(); void save(); }}>
       <fieldset className="collection-picker" disabled={loading || busy}>
         <legend>目标集合</legend>
@@ -70,7 +85,7 @@ export function CollectionAssignDialog({ assetIds, onClose, onSaved }: { assetId
           viewportStyle={{ height: Math.min(collections.length * 40 + 8, 320), maxHeight: "35vh" }} viewportClassName="collection-picker-list">
           {collectionRows(collections).map(({ item, depth, path }) => <label key={item.id} className="collection-choice" data-selected={selected === item.id}
             title={path} style={{ paddingLeft: 12 + Math.min(depth, 8) * 16 }}>
-            <input type="radio" name={choiceName} value={item.id} checked={selected === item.id} onChange={() => setSelected(item.id)} />
+            <input type="radio" name={choiceName} value={item.id} disabled={!collections.find(folder => folder.id === item.id)?.available} checked={selected === item.id} onChange={() => setSelected(item.id)} />
             <FolderIcon size={16} aria-hidden="true"/><span>{item.name}</span>
             {selected === item.id && <Check size={15} aria-hidden="true"/>}
           </label>)}

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use rusqlite::OptionalExtension;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use ulid::Ulid;
 
 use crate::core::caption;
@@ -142,6 +142,11 @@ pub async fn import_files(
             )));
         }
     }
+    for asset in &assets {
+        if let Some(path) = &asset.store_path {
+            app.asset_protocol_scope().allow_file(path).map_err(|error| AppError::Other(error.to_string()))?;
+        }
+    }
     // 后台命名 + 反推（非阻塞，约定 7 离线降级）。
     for a in &assets {
         crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), a.clone());
@@ -167,11 +172,14 @@ pub async fn import_folder(
         let project_id = project_id
             .ok_or_else(|| AppError::Other("请先新建创作，再导入包含画板的初始引导".into()))?;
         let target_project = project_id.clone();
+        let connected_directory = path.clone();
         let (count, imported) = tokio::task::spawn_blocking(move || {
             crate::core::onboarding_pack::import(&paths, &db, Path::new(&path), &target_project)
         })
         .await
         .map_err(|e| AppError::Other(e.to_string()))??;
+        app.asset_protocol_scope().allow_directory(&connected_directory, true)
+            .map_err(|error| AppError::Other(error.to_string()))?;
         let _ = app.emit("library://assets-changed", ());
         if imported {
             let _ = app.emit(
@@ -198,6 +206,9 @@ pub async fn import_folder(
         }
     }
     for a in &assets {
+        if let Some(path) = a.store_path.as_deref() {
+            app.asset_protocol_scope().allow_file(path).map_err(|error| AppError::Other(error.to_string()))?;
+        }
         crate::core::autoname::spawn_auto_analyze(app.clone(), db.clone(), a.clone());
     }
     let _ = app.emit("library://assets-changed", ());
@@ -228,6 +239,9 @@ pub async fn import_image_bytes(
     project_id: Option<String>,
     source: String,
 ) -> Result<Asset, AppError> {
+    if source == "imported" {
+        return Err(AppError::Other("请选择原文件建立连接".into()));
+    }
     let bytes = decode_data_url_bytes(&data_url)?;
     let skip_auto_analyze = source == "workflow-template" || source == "video-frame";
     let paths = Arc::new(paths.for_project(&db, project_id.as_deref())?);
@@ -436,7 +450,7 @@ pub(super) fn readable_image_path(paths: &LibraryPaths, db: &Database, path: &st
         }
         db.resolve_external_paths(&[key])?;
     }
-    Ok(canonical)
+    crate::core::external_files::compatible_image(paths, &canonical)
 }
 
 #[cfg(test)]
@@ -734,9 +748,12 @@ pub async fn delete_asset(
     id: String,
 ) -> Result<(), AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.delete_asset(&id))
-        .await
-        .map_err(|e| AppError::Other(e.to_string()))??;
+    super::folder_connections::mutation(app.clone(), move || {
+        if db.has_connected_asset(&id)? {
+            return Err(AppError::Other("请在集合视图将文件移到回收站，或断开文件夹连接".into()));
+        }
+        db.delete_asset(&id)
+    }).await?;
     let _ = app.emit("projects://changed", ());
     let _ = app.emit("library://assets-changed", ());
     Ok(())
@@ -779,11 +796,12 @@ pub async fn delete_asset_with_mode(
         other => return Err(AppError::Other(format!("未知删除模式: {other}"))),
     };
     let db = db.inner().clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let result = super::folder_connections::mutation(app.clone(), move || {
+        if db.has_connected_asset(&id)? && !matches!(mode, AssetDeleteMode::Keep) {
+            return Err(AppError::Other("请在集合视图将文件移到回收站，或断开文件夹连接".into()));
+        }
         db.delete_asset_with_mode(&id, mode, project_id.as_deref())
-    })
-    .await
-    .map_err(|e| AppError::Other(e.to_string()))??;
+    }).await?;
     // 项目成员/素材均可能变化：两个事件都发，前端刷新计数与视图。
     let _ = app.emit("projects://changed", ());
     let _ = app.emit("library://assets-changed", ());
@@ -968,9 +986,12 @@ pub async fn rename_asset(
 ) -> Result<(), AppError> {
     let db = db.inner().clone();
     let id_for_emit = id.clone();
-    tokio::task::spawn_blocking(move || db.rename_asset_files(&id, &new_name))
-        .await
-        .map_err(|e| AppError::Other(e.to_string()))??;
+    super::folder_connections::mutation(app.clone(), move || {
+        if !db.rename_connected_asset_if_present(&id, &new_name)? {
+            db.rename_asset_files(&id, &new_name)?;
+        }
+        Ok(())
+    }).await?;
     let _ = app.emit(
         "library://assets-changed",
         serde_json::json!({ "id": id_for_emit }),

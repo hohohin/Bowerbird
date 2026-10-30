@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useImageZoom } from "../lib/useImageZoom";
+import { useCompatibleImagePath } from "../lib/useCompatibleImagePath";
 import { VideoPlayer } from "./VideoPlayer";
 import type { VideoFrame } from "../lib/videoFrame";
 import type { SaveVideoTrim } from "../lib/videoTrim";
@@ -48,7 +49,8 @@ export function Lightbox({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [images.length, index, onClose, onIndexChange]);
 
-  const zoom = useImageZoom(images[index]);
+  const imagePath = useCompatibleImagePath(images[index]);
+  const zoom = useImageZoom(imagePath);
   const multi = images.length > 1;
 
   // createPortal 到 document.body：脱离 GenerationPanel 父链（多层 overflow-hidden），
@@ -63,7 +65,7 @@ export function Lightbox({
     >
       {isVideoPath(images[index]) ? <VideoPlayer key={images[index]} path={images[index]} onAddFrame={onAddVideoFrame} onSaveTrim={onSaveVideoTrim} /> : <img
         ref={zoom.imgRef}
-        src={convertFileSrc(images[index])}
+        src={imagePath ? convertFileSrc(imagePath) : undefined}
         alt={`预览图 ${index + 1}`}
         draggable={false}
         onClick={(e) => e.stopPropagation()}

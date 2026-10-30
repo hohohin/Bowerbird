@@ -1,5 +1,6 @@
 import { useCallback, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
 import { CategorizedLibrary } from "./CategorizedLibrary";
+import { ConnectedCollections } from "./ConnectedCollections";
 import type { CatalogKind } from "../lib/materialCatalog";
 import "./LibraryCatalogTransition.css";
 
@@ -28,7 +29,7 @@ export function LibraryCatalogTransition(props: Props) {
       return <div key={kind} className="library-catalog-layer" data-outgoing={outgoing || undefined}
         style={{ visibility: !outgoing && !view.covered ? "hidden" : undefined }} aria-hidden={outgoing || !view.covered || undefined}
         ref={element => { if (element) element.inert = outgoing || !view.covered; }}>
-        <CategorizedLibrary {...props} kind={kind} onAssetsChange={outgoing ? undefined : props.onAssetsChange}/>
+        {kind === "collections" ? <ConnectedCollections {...props} kind={kind} onAssetsChange={outgoing ? undefined : props.onAssetsChange}/> : <CategorizedLibrary {...props} kind={kind} onAssetsChange={outgoing ? undefined : props.onAssetsChange}/>}
       </div>;
     })}
     {view.running && <CatalogWipe key={view.sequence} label={`切换至${view.kind === "all" ? "全部" : view.kind === "collections" ? "集合" : props.media === "videos" ? "平铺" : "标签"}视图`}

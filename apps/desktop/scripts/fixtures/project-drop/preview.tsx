@@ -7,9 +7,15 @@ import { BatchBar } from "../../../src/components/BatchBar";
 import { Sidebar } from "../../../src/components/Sidebar";
 import { ToastViewport } from "../../../src/components/ToastViewport";
 import { FileDropImport } from "../../../src/components/FileDropImport";
+import { FileMediaCard } from "../../../src/components/FileMediaCard";
+import { ProjectFolder } from "../../../src/components/ProjectFolder";
+import { ProjectSection } from "../../../src/components/ProjectSection";
+import { useProjectAssetDrop } from "../../../src/lib/useProjectAssetDrop";
+import { setDragAssets } from "../../../src/lib/dragPayload";
 import { useStore } from "../../../src/store";
 import { useLocalFileMode } from "../../../src/lib/localFileMode";
 import "../../../src/styles.css";
+import "../../../src/components/LocalFileWorkspace.css";
 
 // Closed synthetic IPC. Production components and drag payload; no user data or provider calls.
 const w = window as any;
@@ -32,6 +38,20 @@ w.__TAURI_INTERNALS__ = {
     if (command === "external_files_browse") return { path: args.path || "/pictures", parent: null, entries: [], total: 0 };
     if (command === "folder_classification_view") return { root: args.path, storage: "folder", record: { version: 1, recursive: false, labels: [], pictures: [] } };
     w.calls.push({ command, args });
+    if (command === "import_files") {
+      const result = [];
+      for (const path of args.sources) {
+        const name = path.split(/[\\/]/).pop();
+        if (name === "bad.png") throw "模拟图片损坏";
+        if (w.holdImport) await new Promise(resolve => w.releaseImport = resolve);
+        const asset = { ...assets[0], id: `connection-${w.calls.length}-${result.length}`, name, store_path: path, source: "external" };
+        useStore.setState(s => ({ assets: [...s.assets, asset] as any, total: s.total + 1,
+          libraryMemberships: args.projectId ? [...s.libraryMemberships, { projectId: args.projectId, assetId: asset.id }] : s.libraryMemberships }));
+        result.push(asset);
+      }
+      return result;
+    }
+    if (command === "create_material_references") return;
     if (command === "import_image_bytes") {
       if (args.fileName === "bad.png") throw "模拟图片损坏";
       if (w.holdImport) await new Promise(resolve => w.releaseImport = resolve);
@@ -79,7 +99,24 @@ function TestToolbar() {
   const localFilesOpen=useLocalFileMode(s=>s.open);
   return <Toolbar localFilesOpen={localFilesOpen} canvasMode={new URL(location.href).searchParams.has("canvas-toolbar")} onExplore={()=>{}} onCanvasModeChange={()=>{}} onCreateCreative={()=>{w.createdProjects=(w.createdProjects||0)+1;}} onRefresh={async()=>{}}/>;
 }
+function FileDropSurface() {
+  const assets = useStore(s => s.assets), memberships = useStore(s => s.libraryMemberships), projects = useStore(s => s.projects);
+  const [expanded, setExpanded] = React.useState(false);
+  const drop = useProjectAssetDrop(), project = projects.find(project => project.id === "p")!;
+  const owned = assets.filter(asset => memberships.some(item => item.projectId === project.id && item.assetId === asset.id));
+  const media = (asset: typeof assets[number]) => <FileMediaCard key={asset.id} assetId={asset.id} entry={{ path: asset.store_path!, name: asset.name, preview: asset.thumb_path, directory: false }} selected={false} revision={0} labels={[]} style={{ position: "relative", width: 140, height: 100 }} aspectRatio={1.5}
+    onSelect={() => {}} onOpen={() => {}} onContextMenu={() => {}} onDragStart={event => { setDragAssets([asset.id], asset.name); event.dataTransfer.setData("text/plain", asset.id); }} onDragEnd={() => setDragAssets(null)}/>;
+  return <div style={{ display: "flex", flex: 1, minHeight: 0, overflow: "auto" }}>
+    <aside className="app-sidebar" style={{ width: 220 }}><ProjectSection/></aside>
+    <div style={{ flex: 1, minWidth: 0, padding: 16 }}>
+      <div style={{ width: 220 }}><ProjectFolder group={{ project, assets: owned }} onExpand={() => setExpanded(value => !value)}/></div>
+      {expanded && <div className="library-project-frame" {...drop(project)} style={{ display: "flex", gap: 8, padding: 12, minHeight: 124 }}>{owned.map(media)}</div>}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8, paddingTop: 20 }}>{assets.filter(asset => asset.id !== "owned").map(media)}</div>
+    </div>
+  </div>;
+}
+const fileDrop = new URL(location.href).searchParams.has("file-drop");
 installCatalogPagingMock(window);
 createRoot(document.getElementById("root")!).render(<div className="app-shell" style={{ display: "flex", height: "100vh" }}>
-  <FileDropImport /><Sidebar /><main className="explore-main" style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}><header data-test-topbar>测试工具栏 <input aria-label="测试搜索框" /></header>{new URL(location.href).searchParams.has("layout") && <TestToolbar/>}<Library /></main><ToastViewport />
+  <FileDropImport />{!fileDrop && <Sidebar/>}<main className="explore-main" style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}><header data-test-topbar>测试工具栏 <input aria-label="测试搜索框" /></header>{new URL(location.href).searchParams.has("layout") && <TestToolbar/>}{fileDrop ? <FileDropSurface/> : <Library/>}</main><ToastViewport />
 </div>);

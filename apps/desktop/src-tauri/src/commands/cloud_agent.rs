@@ -1500,7 +1500,8 @@ async fn start_html_layout_run(
             .map(PathBuf::from)
             .filter(|path| path.is_file())
             .ok_or_else(|| AppError::Other(format!("参考图 {} 的本地文件不存在", asset.name)))?;
-        db.resolve_external_paths(&[path.to_string_lossy().into_owned()])?;
+        let resolved = db.resolve_external_image_paths(&[path.to_string_lossy().into_owned()])?;
+        let path = PathBuf::from(&resolved[0]);
         image_bytes.push(crate::codex::cloud_image::read_agent_reference_jpeg(&path).await?);
         reference_ids.push(reference.asset_id.clone());
     }
@@ -1777,7 +1778,8 @@ async fn start_unified_agent_run(
             .map(PathBuf::from)
             .filter(|path| path.is_file())
             .ok_or_else(|| AppError::Other(format!("参考图 {} 的本地文件不存在", asset.name)))?;
-        db.resolve_external_paths(&[path.to_string_lossy().into_owned()])?;
+        let resolved = db.resolve_external_image_paths(&[path.to_string_lossy().into_owned()])?;
+        let path = PathBuf::from(&resolved[0]);
         image_bytes.push(crate::codex::cloud_image::read_agent_reference_jpeg(&path).await?);
         reference_ids.push(reference.asset_id.clone());
     }
@@ -2187,7 +2189,8 @@ pub async fn cloud_agent_start(
                 .zip(asset.height)
                 .and_then(|(width, height)| nearest_ratio(width, height)),
         );
-        db.resolve_external_paths(&[path.to_string_lossy().into_owned()])?;
+        let resolved = db.resolve_external_image_paths(&[path.to_string_lossy().into_owned()])?;
+        let path = PathBuf::from(&resolved[0]);
         image_bytes.push(crate::codex::cloud_image::read_agent_reference_jpeg(&path).await?);
         reference_ids.push(reference.asset_id.clone());
     }

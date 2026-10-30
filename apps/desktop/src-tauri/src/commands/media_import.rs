@@ -1,7 +1,11 @@
-//! Bounded temporary uploads for HTML video drops (which cannot expose native paths).
-use crate::{core::{ingest, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}, media::probe};
+//! Legacy HTML video upload IPC. New local files must provide their original path.
+use crate::{core::{ingest, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}};
+#[cfg(test)]
+use crate::media::probe;
 use base64::Engine;
-use std::{collections::HashMap, fs::{File, OpenOptions}, io::Write, path::PathBuf, sync::{Arc, LazyLock, Mutex}, time::{Duration, Instant}};
+use std::{collections::HashMap, fs::File, io::Write, path::PathBuf, sync::{Arc, LazyLock, Mutex}, time::Instant};
+#[cfg(test)]
+use std::fs::OpenOptions;
 use tauri::{AppHandle, Emitter, State};
 
 const CHUNK_SIZE: usize = 1024 * 1024;
@@ -21,6 +25,7 @@ struct VideoUpload {
 fn invalid(message: &str) -> AppError { AppError::Media(message.into()) }
 
 impl VideoUpload {
+    #[cfg(test)]
     fn new(name: &str, size: u64, project_id: Option<String>) -> AppResult<Self> {
         let name = name.rsplit(['/', '\\']).next().unwrap_or("");
         let (stem, ext) = name.rsplit_once('.').ok_or_else(|| invalid("请选择支持的视频文件"))?;
@@ -46,7 +51,7 @@ impl VideoUpload {
         if self.written != self.size { return Err(invalid("视频尚未传输完成，请重新拖入")); }
         self.file.flush()?;
         let paths = paths.for_project(db, self.project_id.as_deref())?;
-        let mut asset = ingest::ingest_file(&paths, db, &self.path)?;
+        let mut asset = ingest::ingest_new_file(&paths, db, &self.path)?;
         if asset.origin_path.as_deref() == Some(self.path.to_string_lossy().as_ref()) {
             db.conn.lock().unwrap().execute("UPDATE assets SET origin_path=NULL WHERE id=?1", [&asset.id])?;
             asset.origin_path = None;
@@ -61,15 +66,8 @@ impl VideoUpload {
 
 #[tauri::command]
 pub async fn video_import_begin(file_name: String, size: u64, project_id: Option<String>) -> AppResult<String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut uploads = UPLOADS.lock().unwrap();
-        uploads.retain(|_, upload| upload.touched.elapsed() < Duration::from_secs(3600));
-        if uploads.len() >= 8 { return Err(invalid("正在导入的视频过多，请等待当前导入完成")); }
-        let upload = VideoUpload::new(&file_name, size, project_id)?;
-        let id = ulid::Ulid::new().to_string();
-        uploads.insert(id.clone(), upload);
-        Ok(id)
-    }).await.map_err(|e| AppError::Other(e.to_string()))?
+    let _ = (file_name, size, project_id);
+    Err(invalid("请选择原视频文件建立连接"))
 }
 
 #[tauri::command]
@@ -104,6 +102,13 @@ pub async fn video_import_cancel(upload_id: String) -> AppResult<()> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn legacy_local_video_upload_requires_original_connection() {
+        let error = video_import_begin("existing.mp4".into(), 1024, None).await.unwrap_err();
+        assert!(error.to_string().contains("建立连接"));
+        assert!(UPLOADS.lock().unwrap().is_empty());
+    }
+
     #[test]
     fn chunks_require_exact_offsets_and_sizes_and_cleanup_on_drop() {
         assert!(VideoUpload::new("bad.txt", 3, None).is_err());
@@ -135,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn video_upload_and_folder_import_keep_metadata_and_deduplicate() {
+    fn video_first_save_survives_cleanup_and_folder_connection_keeps_original() {
         let root = tempfile::tempdir().unwrap();
         let paths = LibraryPaths::init(root.path().join("library")).unwrap();
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
@@ -158,7 +163,9 @@ mod tests {
         assert!(ingest::walk_images(&input).is_empty(), "image generation scans must exclude videos");
         let imported = ingest::ingest_dir(&paths, &db, &input).unwrap();
         assert_eq!(imported.len(), 1);
-        assert_eq!(imported[0].id, asset.id);
-        assert_eq!(db.count_assets(None).unwrap(), 1);
+        assert_ne!(imported[0].id, asset.id);
+        assert_eq!(PathBuf::from(imported[0].store_path.as_deref().unwrap()), input.join("same.MP4").canonicalize().unwrap());
+        assert!(db.is_external_asset(&imported[0].id).unwrap());
+        assert_eq!(db.count_assets(None).unwrap(), 2);
     }
 }

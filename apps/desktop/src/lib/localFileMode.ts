@@ -53,7 +53,7 @@ export const createLocalFileMode = () => create<{
   },
   closeBrowser: () => set(state => ({ mode: (state.media === "images" ? state.views : state.videoViews)[state.source], query: "" })),
   openGlobal: () => get().openSource("global"),
-  openBrowser: () => set(state => ({ open: true, mode: "files", query: "", globalRequest: state.globalRequest + 1, viewTransition: null })),
+  openBrowser: () => { get().setCatalogView("collections"); set({ open: true }); },
   setNavigationHost: navigationHost => set({ navigationHost }),
   setOpen: value => set(state => ({ open: typeof value === "function" ? value(state.open) : value, viewTransition: null })),
   setQuery: query => set({ query }),

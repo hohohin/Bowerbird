@@ -45,6 +45,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/桌面端UI设计.html` | 早期三区外壳与创作板设计稿 | 仅作设计背景；当前 UI 契约读 PROJECT.md 与对应专项 |
 | `dev-doc/ui-studies/library-tactical-2026-10-26/README.md` | 素材库实装前样式、Tactical 确认稿、独立冻结预览及增量撤回补丁 | 恢复素材库旧样式、复现确认稿或核对本次接入范围时 |
 | `dev-doc/ui-studies/library-selection-2026-10-26/README.md` | 素材多选动效确认稿、独立预览、共用组件接入及验证记录 | 调整素材多选标记、核对图片边界／动效或恢复确认稿时 |
+| `dev-doc/ui-studies/library-connections-2026-10-31/README.md` | 建立连接与真实文件夹集合的确认稿、正式组件隔离预览和验证入口 | 接续连接式素材库、目录集合和 `.bowerbird` 分身改造时 |
 | `dev-doc/ui-studies/industrial-hud-2026-10-29/README.md` | 工业制图主题实装、旧版源码与冻结预览、可逆恢复补丁 | 恢复实装前样式、核对工业制图主题接入范围与深浅色验证时 |
 | `Windows/README.md` | Windows x64 开发、构建 NSIS 安装包与环境要求 | Windows 运行 / 打包前 |
 | `Windows/MAC-SYNC-2026-10-16.md` | Windows 接收 mac@300124d 的差异、0034/分类/工作流/截图同步与验证 | 接续本轮 Mac 同步、核对 Windows 平台保留项及未发版边界时 |

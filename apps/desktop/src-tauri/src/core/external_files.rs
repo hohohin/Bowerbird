@@ -23,7 +23,7 @@ pub fn image_path(path: &Path) -> bool {
             .unwrap_or("")
             .to_ascii_lowercase()
             .as_str(),
-        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp"
+        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "heic" | "heif" | "svg" | "psd"
     )
 }
 fn original(path: &Path) -> AppResult<PathBuf> {
@@ -123,6 +123,30 @@ fn preview_key(path: &Path, metadata: &fs::Metadata) -> AppResult<String> {
     Ok(format!("{:x}", Sha256::digest(key.as_bytes())))
 }
 
+/// Decoded HEIC is a disposable compatibility cache; the asset still owns its HEIC path.
+pub fn compatible_image(paths: &LibraryPaths, path: &Path) -> AppResult<PathBuf> {
+    compatible_image_in(&paths.root.join("external-previews"), path)
+}
+
+fn compatible_image_in(folder: &Path, path: &Path) -> AppResult<PathBuf> {
+    if !crate::media::heic::is_path(path) { return Ok(path.to_path_buf()); }
+    let key = preview_key(path, &fs::metadata(path)?)?;
+    fs::create_dir_all(folder)?;
+    let destination = folder.join(format!("{key}.png"));
+    if !destination.is_file() {
+        let temporary = folder.join(format!("{key}-{}.png", ulid::Ulid::new()));
+        let result = (|| -> AppResult<()> {
+            crate::media::heic::convert_to_png(path, &temporary)?;
+            if preview_key(path, &fs::metadata(path)?)? != key { return Err(invalid("文件正在变化，请稍后重试")); }
+            if !destination.is_file() { fs::rename(&temporary, &destination)?; }
+            Ok(())
+        })();
+        let _ = fs::remove_file(temporary);
+        result?;
+    }
+    Ok(destination)
+}
+
 /// Cache-only enumeration: never decode media or wait for the extraction queue.
 pub fn attach_previews(paths: &LibraryPaths, entries: &mut [FileEntry]) {
     let folder = paths.root.join("external-previews");
@@ -175,7 +199,7 @@ pub fn preview_with_index(paths: &LibraryPaths, db: Option<&Database>, path: &Pa
         } else if video_path(&path) {
             crate::media::thumb::generate_video(&path, &temporary, 480)?;
         } else {
-            crate::media::thumb::generate(&path, &temporary, 480)?;
+            crate::media::thumb::generate(&compatible_image(paths, &path)?, &temporary, 480)?;
         }
         if preview_key(&path, &fs::metadata(&path)?)? != hash {
             return Err(invalid("文件正在变化，请刷新后重试缩略图"));
@@ -195,6 +219,16 @@ mod shell_thumbnail;
 use shell_thumbnail::cached as shell_thumbnail;
 
 impl Database {
+    pub fn link_external_to_library(&self, id: &str) -> AppResult<Asset> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        tx.execute("UPDATE external_assets SET library_member=1 WHERE asset_id=?1", [id])?;
+        tx.execute("UPDATE assets SET library_hidden=0 WHERE id=?1", [id])?;
+        tx.commit()?;
+        drop(conn);
+        self.get_asset(id)?.ok_or_else(|| invalid("素材已不存在"))
+    }
+
     pub fn is_external_asset(&self, id: &str) -> AppResult<bool> {
         Ok(self.conn.lock().unwrap().query_row(
             "SELECT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=?1)",
@@ -211,11 +245,15 @@ impl Database {
         Ok(rows)
     }
     pub fn index_external(&self, paths: &LibraryPaths, path: &Path) -> AppResult<Asset> {
+        self.index_external_with_id(paths, path, None)
+    }
+    pub fn index_external_with_id(&self, paths: &LibraryPaths, path: &Path, preferred_id: Option<&str>) -> AppResult<Asset> {
+        let supplied = path.to_string_lossy().into_owned();
         let path = original(path)?;
         // Files created in BowerbirdLibrary keep their existing image identity when browsed.
         let managed: Option<String> = self.conn.lock().unwrap().query_row(
-            "SELECT id FROM assets WHERE store_path=?1 AND NOT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=assets.id)",
-            [path.to_string_lossy().as_ref()], |row| row.get(0)).optional()?;
+            "SELECT id FROM assets WHERE store_path IN (?1,?2) AND NOT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=assets.id)",
+            params![path.to_string_lossy(), supplied], |row| row.get(0)).optional()?;
         if let Some(id) = managed {
             return self.get_asset(&id)?.ok_or_else(|| invalid("素材已不存在"));
         }
@@ -224,9 +262,16 @@ impl Database {
             return Err(invalid("这是库内文件，请从素材库引用"));
         }
         let hash = fingerprint(&path)?;
-        let media = crate::media::probe::probe(&path)?;
+        let input = compatible_image(paths, &path)?;
+        let mut media = crate::media::probe::probe(&input)?;
+        media.ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
+        if !video_path(&path) && !matches!(media.ext.as_str(), "svg" | "psd") && (media.width == 0 || media.height == 0) {
+            return Err(invalid("无法读取这张图片，请确认文件完整"));
+        }
         let dimensions = (media.width, media.height);
-        let thumb = if video_path(&path) { preview(paths, &path).ok() } else { Some(preview(paths, &path)?) };
+        let thumb = if media.ext == "svg" { Some(path.to_string_lossy().into_owned()) }
+            else if video_path(&path) || media.ext == "psd" { preview(paths, &path).ok() }
+            else { Some(preview(paths, &path)?) };
         if fingerprint(&path)? != hash {
             return Err(invalid("图片正在被修改，请稍后重试"));
         }
@@ -246,11 +291,15 @@ impl Database {
             }
             id
         } else {
-            let id = ulid::Ulid::new().to_string();
+            let id = preferred_id.map(str::to_owned).unwrap_or_else(|| ulid::Ulid::new().to_string());
+            if tx.query_row("SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)", [&id], |row| row.get::<_, bool>(0))? {
+                return Err(invalid("分身指向的素材标识已被另一个文件占用，请重新选择原文件"));
+            }
             let p = Path::new(&path);
             let metadata = fs::metadata(p)?;
             tx.execute("INSERT INTO assets(id,name,ext,origin_path,store_path,thumb_path,size,width,height,source,library_hidden,created_at) VALUES(?1,?2,?3,?4,?4,?5,?6,?7,?8,'external',1,?9)", params![id,p.file_stem().unwrap_or_default().to_string_lossy(),p.extension().unwrap_or_default().to_string_lossy().to_lowercase(),path,thumb,metadata.len() as i64,dimensions.0,dimensions.1,chrono::Utc::now().timestamp()])?;
-            tx.execute("UPDATE assets SET duration=?2 WHERE id=?1", params![id,media.duration])?;
+            let mtime = metadata.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map(|time| time.as_secs() as i64);
+            tx.execute("UPDATE assets SET duration=?2,file_mtime=?3 WHERE id=?1", params![id,media.duration,mtime])?;
             tx.execute(
                 "INSERT INTO external_assets(asset_id,fingerprint) VALUES(?1,?2)",
                 params![id, hash],
@@ -268,13 +317,24 @@ impl Database {
     }
     /// Resolve historical aliases after relinking/copying, then validate before provider submission.
     pub fn resolve_external_paths(&self, references: &[String]) -> AppResult<Vec<String>> {
+        self.resolve_external_files(references, false)
+    }
+    pub fn resolve_external_image_paths(&self, references: &[String]) -> AppResult<Vec<String>> {
+        self.resolve_external_files(references, true)
+    }
+    fn resolve_external_files(&self, references: &[String], compatible: bool) -> AppResult<Vec<String>> {
         references.iter().map(|path| {
-            let row: Option<(String, Option<String>)> = self.conn.lock().unwrap().query_row(
-                "SELECT a.store_path,e.fingerprint FROM external_asset_paths p JOIN assets a ON a.id=p.asset_id LEFT JOIN external_assets e ON e.asset_id=a.id WHERE p.path=?1", [path], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
-            if let Some((current, expected)) = row {
+            let row: Option<(String, Option<String>, Option<String>)> = self.conn.lock().unwrap().query_row(
+                "SELECT a.store_path,e.fingerprint,a.thumb_path FROM external_asset_paths p JOIN assets a ON a.id=p.asset_id LEFT JOIN external_assets e ON e.asset_id=a.id WHERE p.path=?1", [path], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+            if let Some((current, expected, thumb)) = row {
                 if let Some(expected) = expected {
                     let p = original(Path::new(&current))?;
-                    if fingerprint(&p)? != expected { return Err(invalid("外部参考图已修改，请先在本机文件浏览器的「外部引用」中确认更新")); }
+                    if fingerprint(&p)? != expected { return Err(invalid("外部参考图已修改，请先确认更新引用")); }
+                    if compatible && crate::media::heic::is_path(&p) {
+                        if let Some(folder) = thumb.as_deref().and_then(|value| Path::new(value).parent()) {
+                            return Ok(compatible_image_in(folder, &p)?.to_string_lossy().into_owned());
+                        }
+                    }
                 }
                 Ok(current)
             } else { Ok(path.clone()) }
@@ -295,9 +355,13 @@ impl Database {
             return Err(invalid("重新定位请选择库外原图片"));
         }
         let hash = fingerprint(&path)?;
-        let media = crate::media::probe::probe(&path)?;
+        let input = compatible_image(paths, &path)?;
+        let mut media = crate::media::probe::probe(&input)?;
+        media.ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
         let dimensions = (media.width, media.height);
-        let thumb = if video_path(&path) { preview(paths, &path).ok() } else { Some(preview(paths, &path)?) };
+        let thumb = if media.ext == "svg" { Some(path.to_string_lossy().into_owned()) }
+            else if video_path(&path) || media.ext == "psd" { preview(paths, &path).ok() }
+            else { Some(preview(paths, &path)?) };
         if fingerprint(&path)? != hash {
             return Err(invalid("图片正在被修改，请稍后重试"));
         }
@@ -325,7 +389,7 @@ impl Database {
         if accept_changes && expected != hash {
             tx.execute("DELETE FROM analyses WHERE asset_id=?1", [id])?;
             tx.execute("DELETE FROM asset_colors WHERE asset_id=?1", [id])?;
-            tx.execute("UPDATE assets SET colors=NULL WHERE id=?1", [id])?;
+            tx.execute("UPDATE assets SET colors=NULL,phash=NULL WHERE id=?1", [id])?;
         }
         tx.execute(
             "UPDATE external_assets SET fingerprint=?2 WHERE asset_id=?1",
@@ -336,62 +400,13 @@ impl Database {
             params![id, path],
         )?;
         tx.execute("UPDATE assets SET origin_path=?2,store_path=?2,thumb_path=?3,size=?4,width=?5,height=?6 WHERE id=?1",params![id,path,thumb,fs::metadata(&path)?.len() as i64,dimensions.0,dimensions.1])?;
-        tx.execute("UPDATE assets SET duration=?2,ext=?3 WHERE id=?1", params![id,media.duration,media.ext])?;
+        let mtime = fs::metadata(&path)?.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map(|time| time.as_secs() as i64);
+        tx.execute("UPDATE assets SET duration=?2,ext=?3,file_mtime=?4 WHERE id=?1", params![id,media.duration,media.ext,mtime])?;
         tx.commit()?;
         drop(conn);
         self.get_asset(id)?.ok_or_else(|| invalid("引用不存在"))
     }
-    pub fn copy_external_to_library(&self, paths: &LibraryPaths, id: &str) -> AppResult<Asset> {
-        if !self.is_external_asset(id)? {
-            return self.get_asset(id)?.ok_or_else(|| invalid("素材不存在"));
-        }
-        let asset = self.get_asset(id)?.ok_or_else(|| invalid("引用不存在"))?;
-        let source = asset
-            .store_path
-            .as_deref()
-            .ok_or_else(|| invalid("原文件不可用"))?;
-        self.resolve_external_paths(&[source.into()])?;
-        let expected: String = self.conn.lock().unwrap().query_row(
-            "SELECT fingerprint FROM external_assets WHERE asset_id=?1",
-            [id],
-            |r| r.get(0),
-        )?;
-        let destination = paths.asset_store_path(id, asset.ext.as_deref().unwrap_or("png"))?;
-        fs::create_dir_all(destination.parent().unwrap())?;
-        // create_new avoids overwriting unrelated data on interrupted retries.
-        let mut output = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&destination)?;
-        let managed_thumb = paths.thumb_path(id);
-        let result = (|| -> AppResult<()> {
-            std::io::copy(&mut fs::File::open(source)?, &mut output)?;
-            output.sync_all()?;
-            self.resolve_external_paths(&[source.into()])?;
-            let copied_thumb = if video_path(&destination) {
-                crate::media::thumb::generate_video(&destination, &managed_thumb, 480).ok().map(|_| managed_thumb.to_string_lossy().into_owned())
-            } else {
-                crate::media::thumb::generate(&destination, &managed_thumb, 480)?;
-                Some(managed_thumb.to_string_lossy().into_owned())
-            };
-            let conn = self.conn.lock().unwrap();
-            let tx = conn.unchecked_transaction()?;
-            let unchanged: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM external_assets e JOIN assets a ON a.id=e.asset_id WHERE a.id=?1 AND a.store_path=?2 AND e.fingerprint=?3)", params![id,source,expected], |r| r.get(0))?;
-            if !unchanged || fingerprint(&destination)? != expected {
-                return Err(invalid("引用或原文件已变化，请重试复制"));
-            }
-            tx.execute("DELETE FROM external_assets WHERE asset_id=?1", [id])?;
-            tx.execute("UPDATE assets SET store_path=?2,thumb_path=?3,source='imported',library_hidden=0 WHERE id=?1",params![id,destination.to_string_lossy(),copied_thumb])?;
-            tx.commit()?;
-            Ok(())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&destination);
-            let _ = fs::remove_file(&managed_thumb);
-        }
-        result?;
-        self.get_asset(id)?.ok_or_else(|| invalid("素材不存在"))
-    }
+
 }
 #[derive(Serialize)]
 pub struct ExternalReference {
@@ -526,7 +541,7 @@ mod tests {
     }
     #[test]
     #[ignore = "requires local ffmpeg for synthetic video and poster; no network or user library"]
-    fn external_video_reference_relink_and_copy_keep_original() {
+    fn external_video_reference_relink_and_join_keep_original() {
         let f=Fixture::new();
         let video=f.root.join("clip.mp4");
         let mut command=crate::media::tools::command(crate::media::tools::resolve(crate::media::tools::Tool::Ffmpeg).unwrap());
@@ -544,7 +559,7 @@ mod tests {
         let moved=f.root.join("moved.mp4"); fs::rename(&video,&moved).unwrap();
         let relinked=f.db.update_external(&f.paths,&asset.id,&moved,false).unwrap();
         assert_eq!(relinked.ext.as_deref(),Some("mp4"));
-        let copied=f.db.copy_external_to_library(&f.paths,&asset.id).unwrap();
+        let copied=f.db.link_external_to_library(&asset.id).unwrap();
         assert_eq!(copied.id,asset.id);
         assert_eq!(fs::read(&moved).unwrap(),original);
         assert_eq!(fs::read(copied.store_path.unwrap()).unwrap(),original);
@@ -632,7 +647,7 @@ mod tests {
         f.project("p", &a.id);
         {
             let conn = f.db.conn.lock().unwrap();
-            conn.execute("UPDATE assets SET colors='[\"#D92424\"]' WHERE id=?1", [&a.id]).unwrap();
+            conn.execute("UPDATE assets SET colors='[\"#D92424\"]',phash='old-hash' WHERE id=?1", [&a.id]).unwrap();
             conn.execute("INSERT INTO asset_colors(asset_id,bucket) VALUES(?1,'red')", [&a.id]).unwrap();
         }
         let old = a.store_path.unwrap();
@@ -659,20 +674,22 @@ mod tests {
         let refreshed = f.db.update_external(&f.paths, &a.id, &moved, true).unwrap();
         assert_eq!(refreshed.width, Some(15));
         assert!(refreshed.colors.is_none());
+        assert!(refreshed.phash.is_none());
         assert_eq!(f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM asset_colors WHERE asset_id=?1", [&a.id], |r| r.get::<_, i64>(0)).unwrap(), 0);
         assert!(f.db.resolve_external_paths(&[old]).is_ok());
     }
     #[test]
-    fn explicit_copy_keeps_identity_and_original_but_owns_new_files() {
+    fn joining_library_keeps_identity_path_and_original() {
         let f = Fixture::new();
         let a = f.index();
         let old = a.store_path.unwrap();
         let bytes = fs::read(&f.original).unwrap();
-        let copied = f.db.copy_external_to_library(&f.paths, &a.id).unwrap();
+        let copied = f.db.link_external_to_library(&a.id).unwrap();
         assert_eq!(a.id, copied.id);
         assert!(!copied.library_hidden);
-        assert!(!f.db.is_external_asset(&a.id).unwrap());
-        assert!(Path::new(copied.store_path.as_ref().unwrap()).starts_with(&f.paths.images));
+        assert!(f.db.is_external_asset(&a.id).unwrap());
+        assert_eq!(copied.store_path.as_deref(), Some(old.as_str()));
+        assert_eq!(fs::read_dir(&f.paths.images).unwrap().count(), 0);
         assert_eq!(
             f.db.resolve_external_paths(&[old]).unwrap()[0],
             copied.store_path.clone().unwrap()
@@ -684,16 +701,29 @@ mod tests {
         assert!(f.db.index_external(&f.paths, &f.original).is_err());
         fs::write(&f.original, &bytes).unwrap();
         f.db.delete_asset(&a.id).unwrap();
-        assert!(!Path::new(copied.store_path.as_ref().unwrap()).exists());
+        assert!(Path::new(copied.store_path.as_ref().unwrap()).exists());
         assert_eq!(fs::read(&f.original).unwrap(), bytes);
     }
     #[test]
-    fn regular_import_does_not_deduplicate_into_an_external_reference() {
+    fn reference_identity_is_preserved_without_reassigning_an_existing_asset() {
+        let f = Fixture::new();
+        let asset = f.db.index_external_with_id(&f.paths, &f.original, Some("shared-reference-id")).unwrap();
+        assert_eq!(asset.id, "shared-reference-id");
+        assert_eq!(f.index().id, asset.id);
+        let other = f.root.join("other.png");
+        image::RgbImage::from_pixel(10, 20, image::Rgb([90, 80, 70])).save(&other).unwrap();
+        assert!(f.db.index_external_with_id(&f.paths, &other, Some(&asset.id)).is_err());
+        assert_eq!(f.db.get_asset(&asset.id).unwrap().unwrap().store_path, asset.store_path);
+        assert_eq!(fs::read_dir(&f.paths.images).unwrap().count(), 0);
+    }
+    #[test]
+    fn local_import_reuses_existing_connection_without_copying() {
         let f = Fixture::new();
         let linked = f.index();
         let imported = ingest::ingest_file(&f.paths, &f.db, &f.original).unwrap();
-        assert_ne!(linked.id, imported.id);
-        assert_ne!(imported.store_path, imported.origin_path);
+        assert_eq!(linked.id, imported.id);
+        assert_eq!(imported.store_path, imported.origin_path);
+        assert_eq!(fs::read_dir(&f.paths.images).unwrap().count(), 0);
         assert!(!imported.library_hidden);
     }
     #[test]

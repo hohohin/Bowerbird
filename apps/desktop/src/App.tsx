@@ -39,6 +39,7 @@ import { prepareGenerationSound } from "./lib/generationNotifications";
 import { useStore } from "./store";
 import { api } from "./lib/api";
 import { prepareFileWorkspace } from "./lib/fileWorkspace";
+import { importDroppedMedia, prepareMediaImport } from "./lib/mediaImport";
 import { notify, notifyError, notifySuccess } from "./lib/notify";
 import { userErrorMessage } from "./lib/userError";
 import {
@@ -694,23 +695,14 @@ function App() {
       e.preventDefault();
       const file = imageFile;
       const projectId = useStore.getState().activeProjectId;
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = reader.result as string;
-        api
-          .importImageBytes({
-            dataUrl,
-            fileName: file.name || "clipboard.png",
-            projectId,
-            source: "clipboard",
-          })
-          .then(() => notifySuccess("剪贴板图片已加入素材库"))
-          .catch((err) => {
-            console.error("paste import failed", err);
-            notifyError(err, "粘贴图片导入失败");
-          });
-      };
-      reader.readAsDataURL(file);
+      const revision = useStore.getState().projectRouteRevision;
+      void prepareMediaImport(projectId, revision)
+        .then(() => importDroppedMedia(file, projectId, "clipboard"))
+        .then(() => notifySuccess("剪贴板图片已加入素材库"))
+        .catch(err => {
+          console.error("paste failed", err);
+          notifyError(err, "粘贴图片失败");
+        });
     }
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);

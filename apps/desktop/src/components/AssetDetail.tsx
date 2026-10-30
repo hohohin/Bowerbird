@@ -24,6 +24,7 @@ import { api } from "../lib/api";
 import { COLLECTIONS_FEATURE_ENABLED, SMART_REFINE_ENABLED } from "../lib/featureFlags";
 import { sourceDiscoveryFor } from "../lib/sourceDiscovery";
 import { useImageZoom } from "../lib/useImageZoom";
+import { useCompatibleImagePath } from "../lib/useCompatibleImagePath";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { RenameDialog } from "./RenameDialog";
 import { LocalAgentPanel } from "./LocalAgentPanel";
@@ -581,7 +582,8 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
     });
   }
 
-  const src = asset?.store_path ? convertFileSrc(asset.store_path) : undefined;
+  const imagePath = useCompatibleImagePath(asset?.store_path);
+  const src = imagePath ? convertFileSrc(imagePath) : undefined;
   const zoom = useImageZoom(src);
 
   // 注意：下面两个 useMemo 必须在「资产不存在」提前 return 之前——Hook 不能落在条件
@@ -666,7 +668,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
           onClick={() => setRenameOpen(true)}
           disabled={!asset.store_path}
           className="asset-detail-icon-button"
-          title={asset.store_path ? "重命名（同步改磁盘文件名）" : "该素材没有本地文件，无法重命名"}
+          title={asset.store_path ? "重命名素材" : "该素材没有本地文件，无法重命名"}
           aria-label="重命名素材"
         >
           <Edit3 size={14} />

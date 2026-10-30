@@ -27,6 +27,7 @@ pub mod visual_profile;
 pub mod project_deletion;
 
 pub mod external_files;
+pub mod folder_connections;
 pub mod local_file_operations;
 pub mod file_workspace;
 pub mod file_workspace_move;

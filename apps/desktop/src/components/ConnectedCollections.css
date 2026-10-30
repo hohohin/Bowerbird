@@ -1,0 +1,22 @@
+.connected-collections .catalog-tree-row-actions { opacity: 1; visibility: visible; pointer-events: auto; }
+.connected-collections .catalog-tree-name { padding-right: 48px; }
+.connected-collections .catalog-tree-row-actions > button:last-child { opacity: 0; }
+.connected-collections .catalog-tree-row:is(:hover,:focus-within) .catalog-tree-row-actions > button:last-child { opacity: 1; }
+.connected-collections .catalog-tree-add { color: var(--bb-muted); }
+.connected-collections .catalog-tree-row.is-offline { color: var(--bb-muted); }
+.connected-media { position: absolute; left: 0; top: 0; }
+.connected-media > .folder-media-card { position: relative; margin: 0; }
+.connected-reference { position: absolute; bottom: 8px; left: 8px; padding: 4px 6px; display: flex; background: rgb(20 20 20 / .78); color: #eee; pointer-events: none; }
+.connected-missing { position: absolute; inset: 0; background: rgb(20 20 20 / .6); color: #eee; display: flex; flex-direction: column; gap: 8px; align-items: center; justify-content: center; font-size: 11px; pointer-events: none; }
+.connected-empty-section { position: absolute; top: 48px; left: 8px; font-size: 12px; color: var(--bb-muted); }
+.connected-status { position: absolute; right: 12px; bottom: 58px; z-index: 5; padding: 8px 12px; display: flex; gap: 10px; align-items: center; max-width: calc(100% - 24px); background: var(--bb-surface); font-size: 11px; }
+.connected-status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connected-status button { color: var(--bb-blue); white-space: nowrap; }
+.connected-selection { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 6; background: var(--bb-surface); padding: 8px 12px; display: flex; gap: 12px; max-width: calc(100% - 24px); flex-wrap: wrap; font-size: 11px; }
+.connected-selection button { white-space: nowrap; }
+.connected-destinations { display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow: auto; }
+.connected-destinations label { display: flex; flex-direction: row; align-items: center; gap: 8px; }
+.connected-dialog-actions { display: flex; justify-content: flex-end; gap: 12px; }
+.connected-refreshing { animation: connected-spin 1s linear infinite; }
+@keyframes connected-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .connected-refreshing { animation: none; } }

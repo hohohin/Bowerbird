@@ -55,6 +55,7 @@ fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>, ch
     // Global collections and saved prompt bindings are independent uses, not project ownership.
     let linked: bool = conn.query_row("SELECT
       EXISTS(SELECT 1 FROM external_assets WHERE asset_id=?2) OR
+      EXISTS(SELECT 1 FROM connected_entries WHERE asset_id=?2) OR
       EXISTS(SELECT 1 FROM project_assets WHERE asset_id=?2 AND project_id<>?1) OR
       EXISTS(SELECT 1 FROM canvas_nodes WHERE asset_id=?2 AND project_id<>?1) OR
       EXISTS(SELECT 1 FROM asset_collections WHERE asset_id=?2) OR
@@ -601,6 +602,54 @@ mod tests {
     fn delete(db: &Database, paths: &LibraryPaths) -> AppResult<ProjectDeleteResult> {
         let impact = db.project_exclusive_impact(paths, "p")?;
         db.delete_project_exclusive(paths, "p", &impact.confirmation)
+    }
+    #[test]
+    fn connected_managed_original_survives_every_project_cleanup_mode() {
+        for mode in ["exclusive", "move-out", "shared-transfer"] {
+            let (db, mut paths) = fixture();
+            let mut file = asset(&db, &paths, "connected");
+            if mode == "shared-transfer" {
+                let files = std::sync::Arc::new(super::super::file_workspace::FileWorkspace::open(
+                    paths.root.join("files.json"), paths.root.join("BowerbirdLibrary")).unwrap());
+                let target = files.project_directory("p", "p").unwrap().join("connected.png");
+                fs::rename(&file, &target).unwrap();
+                file = target;
+                db.conn.lock().unwrap().execute("UPDATE assets SET store_path=?1 WHERE id='connected'", [file.to_string_lossy()]).unwrap();
+                db.add_assets_to_project("other", &["connected".into()]).unwrap();
+                paths.files = Some(files);
+            }
+            let original = fs::read(&file).unwrap();
+            let directory = file.parent().unwrap().to_string_lossy();
+            {
+                let conn = db.conn.lock().unwrap();
+                conn.execute("INSERT INTO connected_roots(id,path) VALUES('root',?1)", [&directory]).unwrap();
+                conn.execute("INSERT INTO connected_folders(id,root_id,path,name) VALUES('root','root',?1,'connected')", [&directory]).unwrap();
+                conn.execute("INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference) VALUES('entry','root','connected',?1,'connected.png',0)", [file.to_string_lossy()]).unwrap();
+            }
+            let result = match mode {
+                "exclusive" => {
+                    let impact = db.project_exclusive_impact(&paths, "p").unwrap();
+                    assert_eq!(impact.exclusive_asset_count, 0);
+                    assert_eq!(impact.preserved_shared_count, 1);
+                    db.delete_project_exclusive(&paths, "p", &impact.confirmation).unwrap()
+                }
+                "move-out" => {
+                    let workspace = paths.root.join("workspace");
+                    fs::create_dir(&workspace).unwrap();
+                    db.conn.lock().unwrap().execute("UPDATE projects SET kind='user',workspace_path=?1 WHERE id='p'", [workspace.to_string_lossy()]).unwrap();
+                    db.delete_project("p", ProjectDeleteMode::MoveOut).unwrap()
+                }
+                _ => db.delete_project_keep_managed(&paths, "p").unwrap(),
+            };
+            assert_eq!(result.moved_assets, 0, "{mode}");
+            assert_eq!(result.deleted_assets, 0, "{mode}");
+            assert_eq!(fs::read(&file).unwrap(), original, "{mode}");
+            assert_eq!(db.get_asset("connected").unwrap().unwrap().store_path.as_deref(), file.to_str());
+            assert!(db.get_project("p").unwrap().is_none());
+            assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM connected_entries WHERE asset_id='connected'", [], |row| row.get::<_, i64>(0)).unwrap(), 1);
+            drop(db);
+            fs::remove_dir_all(paths.root).unwrap();
+        }
     }
     #[test]
     fn cancelled_preview_releases_database_without_changing_files_or_project() {

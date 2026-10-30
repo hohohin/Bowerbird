@@ -139,7 +139,7 @@ fn reference_paths(db: &Database, ids: &[String]) -> AppResult<Vec<String>> {
         let original = asset
             .store_path
             .ok_or_else(|| error("引用图片没有可用原图，请重新选择图片"))?;
-        let resolved = db.resolve_external_paths(&[original])?;
+        let resolved = db.resolve_external_image_paths(&[original])?;
         let path = PathBuf::from(&resolved[0]);
         let metadata = std::fs::metadata(&path)
             .map_err(|_| error("引用图片无法读取，请检查文件位置后重试"))?;

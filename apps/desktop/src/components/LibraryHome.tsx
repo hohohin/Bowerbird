@@ -3,7 +3,6 @@ import { Columns2, X } from "lucide-react";
 import { useStore } from "../store";
 import { LibrarySourceTabs } from "./LibrarySourceTabs";
 import { LibraryCatalogTransition } from "./LibraryCatalogTransition";
-import { LocalFileWorkspace } from "./LocalFileWorkspace";
 import { useLocalFileMode } from "../lib/localFileMode";
 import { copyLibraryPane, createLibraryPane, LibraryPaneContext, registerLibraryPane, useActiveLibraryPane, type LibraryPaneState } from "../lib/libraryPane";
 import "./LibrarySplit.css";
@@ -103,9 +102,7 @@ function HomePane({ pane, split, onSplit, onClose, onCreateProject, shortcutsEna
       event.preventDefault(); event.stopPropagation(); pane.mode.getState().toggleCatalog(); root.current?.focus({ preventScroll: true });
     }}>
     <button type="button" className="library-pane-close library-filter-trigger" aria-label="关闭此栏" title={split ? "关闭此栏" : "至少保留一个素材库"} disabled={!split} onClick={onClose}><X size={15} aria-hidden="true"/></button>
-    {mode === "all" || mode === "tags" || mode === "collections"
-      ? <LibraryCatalogTransition key={media} kind={mode} media={media} positionId={pane.id} showEmptyTags={split} dropPreview={split} toolbarActions={actions} navigation={navigation}
-          onClose={() => pane.mode.getState().setOpen(false)} onCreateProject={onCreateProject}/>
-      : <LocalFileWorkspace toolbarActions={actions} navigation={navigation} onClose={() => pane.mode.getState().closeBrowser()} onCreateProject={onCreateProject}/>}
+    <LibraryCatalogTransition key={media} kind={mode === "all" || mode === "tags" ? mode : "collections"} media={media} positionId={pane.id} showEmptyTags={split} dropPreview={split} toolbarActions={actions} navigation={navigation}
+      onClose={() => pane.mode.getState().setOpen(false)} onCreateProject={onCreateProject}/>
   </div>;
 }

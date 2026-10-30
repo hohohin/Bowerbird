@@ -1,7 +1,7 @@
 //! Frozen, local-only starter project. Import media and the graph in one transaction.
-use std::{collections::HashMap, path::Path};
+use std::{collections::{HashMap, HashSet}, path::Path};
 
-use rusqlite::{params, types::Value as SqlValue};
+use rusqlite::{params, types::Value as SqlValue, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -124,7 +124,7 @@ fn insert_row(
 
 /// Returns (member count, newly imported). Reimport never replays over user edits.
 pub fn import(
-    paths: &LibraryPaths,
+    _paths: &LibraryPaths,
     db: &Database,
     dir: &Path,
     project_id: &str,
@@ -157,6 +157,19 @@ pub fn import(
             ids.insert(id.to_string(), ulid::Ulid::new().to_string());
         }
     }
+    // The released pack is the original. Reuse its connections across projects,
+    // while each project still receives independent canvas nodes and threads.
+    let mut reused = HashSet::new();
+    for asset in &pack.tables["assets"] {
+        let path = dir.join(asset["origin_path"].as_str().unwrap()).canonicalize()?;
+        let existing: Option<String> = tx.query_row(
+            "SELECT id FROM assets WHERE store_path=?1 LIMIT 1",
+            [path.to_string_lossy().as_ref()], |row| row.get(0)).optional()?;
+        if let Some(id) = existing {
+            ids.insert(asset["id"].as_str().unwrap().to_string(), id.clone());
+            reused.insert(id);
+        }
+    }
     for row in pack.tables.values_mut().flatten() {
         for (key, value) in row.iter_mut() {
             if key == "payload_json" || key == "draft_json" {
@@ -168,22 +181,11 @@ pub fn import(
             }
         }
     }
-    let mut copied = Vec::new();
     let result = (|| -> AppResult<()> {
         for asset in pack.tables.get_mut("assets").unwrap() {
-            let id = asset["id"].as_str().unwrap().to_string();
-            let store = paths.asset_store_path(&id, asset["ext"].as_str().unwrap())?;
-            let thumb = paths.thumb_path(&id);
-            asset["origin_path"] = dir
-                .join(asset["origin_path"].as_str().unwrap())
-                .to_string_lossy()
-                .to_string()
-                .into();
-            for (key, target) in [("store_path", store), ("thumb_path", thumb)] {
+            for key in ["origin_path", "store_path", "thumb_path"] {
                 if let Some(name) = asset[key].as_str() {
-                    std::fs::create_dir_all(target.parent().unwrap())?;
-                    copied.push(target.clone());
-                    std::fs::copy(dir.join(name), &target)?;
+                    let target = dir.join(name).canonicalize()?;
                     asset[key] = target.to_string_lossy().to_string().into();
                 }
             }
@@ -216,18 +218,28 @@ pub fn import(
                 tx.execute("DELETE FROM canvas_views WHERE project_id=?1", [project_id])?;
             }
             for row in &pack.tables[table] {
+                let asset_id = if table == "assets" { row.get("id") } else if matches!(table, "asset_colors" | "analyses") { row.get("asset_id") } else { None };
+                if asset_id.and_then(Value::as_str).is_some_and(|id| reused.contains(id)) {
+                    continue;
+                }
                 insert_row(&tx, table, row)?;
+            }
+            if table == "assets" {
+                for asset in &pack.tables["assets"] {
+                    let id = asset["id"].as_str().unwrap();
+                    if reused.contains(id) { continue; }
+                    let path = asset["store_path"].as_str().unwrap();
+                    let hash = format!("{:x}", Sha256::digest(std::fs::read(path)?));
+                    let member = asset["library_hidden"].as_i64().unwrap_or(0) == 0;
+                    tx.execute("INSERT INTO external_assets(asset_id,fingerprint,library_member) VALUES(?1,?2,?3)", params![id,hash,member])?;
+                    tx.execute("INSERT INTO external_asset_paths(asset_id,path) VALUES(?1,?2)", params![id,path])?;
+                }
             }
         }
         tx.execute("INSERT INTO onboarding_imports(project_id,pack_version,imported_at) VALUES (?1,?2,unixepoch())", params![project_id, pack.version])?;
         tx.commit()?;
         Ok(())
     })();
-    if result.is_err() {
-        for file in copied {
-            let _ = std::fs::remove_file(file);
-        }
-    }
     result.map(|_| (count, true))
 }
 
@@ -309,6 +321,8 @@ mod tests {
             !origin.contains("preset-") && !origin.ends_with("asset-024.png") && !origin.ends_with("asset-027.png")
         }));
         for asset in &assets {
+            assert_eq!(asset.store_path, asset.origin_path);
+            assert!(db.is_external_asset(&asset.id).unwrap());
             let filename = Path::new(asset.origin_path.as_ref().unwrap())
                 .file_name()
                 .unwrap()
@@ -370,7 +384,8 @@ mod tests {
             .list_assets(None, Some("other"), 100, 0)
             .unwrap()
             .iter()
-            .all(|a| !assets.iter().any(|original| original.id == a.id)));
+            .all(|a| assets.iter().any(|original| original.id == a.id)));
+        assert_eq!(std::fs::read_dir(&paths.images).unwrap().count(), 0);
         std::fs::remove_dir_all(paths.root).unwrap();
     }
 
