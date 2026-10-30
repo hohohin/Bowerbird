@@ -1,5 +1,6 @@
+import { TacticalSelect } from "./TacticalSelect";
 import { useEffect, useRef, useState, type CSSProperties, type FocusEvent, type MouseEvent } from "react";
-import { FolderOpen, FolderPlus, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { FolderOpen, FolderPlus, PanelLeftClose, PanelLeftOpen, Search, Star } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { getDragAssets } from "../lib/dragPayload";
@@ -319,14 +320,14 @@ function SidebarContent() {
           />
           {creating === "smart" && (
             <div className="flex items-center gap-1">
-              <select
+              <TacticalSelect
                 value={smartKind}
-                onChange={(e) => setSmartKind(e.target.value as "source" | "ext")}
+                onValueChange={value => setSmartKind(value as "source" | "ext")}
                 className="rounded bg-panel px-1.5 py-1"
               >
                 <option value="source">来源 source</option>
                 <option value="ext">格式 ext</option>
-              </select>
+              </TacticalSelect>
               <input
                 value={smartValue}
                 onChange={(e) => setSmartValue(e.target.value)}
@@ -561,7 +562,7 @@ function FolderRow({ folder, onOpen, panelOpen = false }: { folder: Folder; onOp
     >
       <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left"
         aria-haspopup={onOpen ? "dialog" : undefined} aria-expanded={onOpen ? panelOpen : undefined}>
-        {isSmart ? <span aria-hidden="true">🔍</span> : isCollection ? <span aria-hidden="true">★</span> : <FolderOpen size={14} className="shrink-0" aria-hidden="true" />}
+        {isSmart ? <Search size={14} className="shrink-0" aria-hidden="true" /> : isCollection ? <Star size={14} className="shrink-0" aria-hidden="true" /> : <FolderOpen size={14} className="shrink-0" aria-hidden="true" />}
         <span className="truncate">{folder.name}</span>
       </button>
       <span className={`flex items-center gap-0.5 ${actionCls}`}>

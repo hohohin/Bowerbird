@@ -1,0 +1,16 @@
+/* Text names the quota source; color stays on the small icon. */
+[data-quota] { --quota-rgb: 88 99 112; }
+[data-quota="bowerbird"] { --quota-rgb: 37 87 194; }
+[data-quota="chatgpt"], [data-quota="jimeng"] { --quota-rgb: 116 57 169; }
+[data-quota="local"] { --quota-rgb: 56 108 91; }
+html[data-theme="dark"] [data-quota] { --quota-rgb: 180 190 203; }
+html[data-theme="dark"] [data-quota="bowerbird"] { --quota-rgb: 147 185 255; }
+html[data-theme="dark"] [data-quota="chatgpt"], html[data-theme="dark"] [data-quota="jimeng"] { --quota-rgb: 211 174 251; }
+html[data-theme="dark"] [data-quota="local"] { --quota-rgb: 153 201 178; }
+.provider-quota { display: inline-flex; align-items: center; gap: 4px; color: var(--bb-muted); font-size: 11px; line-height: 14px; white-space: nowrap; }
+.provider-quota > svg { flex-shrink: 0; color: rgb(var(--quota-rgb)); }
+.provider-quota-badge { justify-self: start; padding: 5px 8px; border: 1px solid var(--bb-line); border-radius: 999px; background: var(--bb-surface-2); }
+@media (forced-colors: active) {
+  .provider-quota, .provider-quota > svg { color: CanvasText; }
+  .provider-quota-badge { border-color: ButtonText; background: Canvas; }
+}

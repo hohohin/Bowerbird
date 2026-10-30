@@ -17,7 +17,7 @@ function readDataUrl(blob: Blob): Promise<string> {
 /** HTML file drops have no trusted local path. Stream videos through bounded IPC chunks. */
 export async function importDroppedMedia(file: File, projectId: string | null, source = "imported"): Promise<Asset> {
   if (!isVideoPath(file.name)) {
-    if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file.name)) throw new Error("请选择图片或 MP4、MOV、WebM、MKV、AVI、M4V 视频");
+    if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|bmp|svg|heic|heif)$/i.test(file.name)) throw new Error("请选择图片或 MP4、MOV、WebM、MKV、AVI、M4V 视频");
     if (file.size > 50 * 1024 * 1024) throw new Error("图片不能超过 50 MB");
     return api.importImageBytes({ dataUrl: await readDataUrl(file), fileName: file.name || "clipboard.png", projectId, source });
   }

@@ -1,5 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, Layers } from "lucide-react";
+import { tacticalSelectPosition } from "../tacticalSelectLogic";
 
 export const MAX_GEN_COUNT = 4;
 
@@ -24,22 +26,53 @@ export function ImageGenOptions({
   alwaysShowCount?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [position, setPosition] = useState<ReturnType<typeof tacticalSelectPosition> | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
   const current = Math.min(MAX_GEN_COUNT, Math.max(1, Math.round(count) || 1));
+
+  function close(restoreFocus = false) {
+    setOpen(false);
+    if (restoreFocus) triggerRef.current?.focus({ preventScroll: true });
+  }
+
+  useLayoutEffect(() => {
+    if (open && triggerRef.current?.matches(":disabled")) close();
+  });
+  useLayoutEffect(() => {
+    if (!open) return;
+    function place(event?: Event) {
+      if (event?.target instanceof Node && menuRef.current?.contains(event.target)) return;
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect || !menuRef.current) return;
+      setPosition(tacticalSelectPosition(rect, { width: 208, height: menuRef.current.scrollHeight }, { width: window.innerWidth, height: window.innerHeight }));
+    }
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => { window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
-    function closeOnOutsideClick(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    function closeOnOutsideClick(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node) && !menuRef.current?.contains(event.target as Node)) close();
     }
     function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); }
     }
-    document.addEventListener("mousedown", closeOnOutsideClick);
+    function closeOnOutsideWheel(event: WheelEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) close();
+    }
+    document.addEventListener("pointerdown", closeOnOutsideClick, true);
     document.addEventListener("keydown", closeOnEscape);
+    window.addEventListener("wheel", closeOnOutsideWheel, { capture: true, passive: true });
     return () => {
-      document.removeEventListener("mousedown", closeOnOutsideClick);
+      document.removeEventListener("pointerdown", closeOnOutsideClick, true);
       document.removeEventListener("keydown", closeOnEscape);
+      window.removeEventListener("wheel", closeOnOutsideWheel, true);
     };
   }, [open]);
 
@@ -48,27 +81,52 @@ export function ImageGenOptions({
   return (
     <div ref={rootRef} className="relative shrink-0">
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex h-7 items-center gap-1.5 rounded-[3px] border border-edge bg-panel2 px-2 text-xs text-ink outline-none hover:border-accent/60 hover:bg-edge focus:border-accent"
+        onPointerDown={event => event.stopPropagation()}
+        onClick={event => { event.stopPropagation(); setOpen((v) => !v); }}
+        onKeyDown={event => {
+          if (!open) return;
+          if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); }
+          if (event.key === "Tab" && !event.shiftKey) { event.preventDefault(); menuRef.current?.querySelector<HTMLInputElement>("input")?.focus(); }
+        }}
+        className="tactical-menu-trigger flex h-7 items-center gap-1.5 border px-2 text-xs outline-none"
         title="生成选项：透明图层 / 张数（即梦与 Cloud 按张数分别提交，消耗相应积分）"
         aria-haspopup="dialog"
         aria-expanded={open}
+        aria-controls={open ? menuId : undefined}
       >
         <Layers size={13} />
         <span className={transparent || current > 1 ? "" : "text-muted"}>{label}</span>
         <ChevronDown size={12} className={`text-muted transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
 
-      {open && (
+      {open && createPortal(
         <div
-          className="app-popover absolute bottom-full left-0 z-30 mb-1 w-52 p-1.5"
+          ref={menuRef}
+          id={menuId}
+          className="app-popover image-options-menu w-52 p-1.5"
+          style={{ position: "fixed", ...position, overflowY: "auto", visibility: position ? "visible" : "hidden" }}
           role="dialog"
           aria-label="生成选项"
+          onPointerDown={event => { if (!(event.target instanceof Element && event.target.closest("label"))) event.preventDefault(); event.stopPropagation(); }}
+          onPointerUp={event => event.stopPropagation()}
+          onMouseDown={event => { if (!(event.target instanceof Element && event.target.closest("label"))) event.preventDefault(); event.stopPropagation(); }}
+          onClick={event => event.stopPropagation()}
+          onWheel={event => event.stopPropagation()}
+          onKeyDown={event => {
+            event.stopPropagation();
+            if (event.key === "Escape") { event.preventDefault(); close(true); }
+            if (event.key === "Tab") {
+              const controls = menuRef.current?.querySelectorAll<HTMLElement>("input,button");
+              if (event.shiftKey && event.target === controls?.[0]) { event.preventDefault(); close(true); }
+              else if (!event.shiftKey && event.target === controls?.[(controls?.length ?? 0) - 1]) close(true);
+            }
+          }}
         >
           <div className="app-popover-title">生成选项</div>
           <label
-            className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1.5 text-xs text-ink hover:bg-panel2"
+            className="image-options-toggle flex cursor-pointer items-center gap-2 rounded px-1.5 py-1.5 text-xs text-ink hover:bg-panel2"
             title="生成带透明背景的 PNG（background: transparent）"
           >
             <input
@@ -76,7 +134,7 @@ export function ImageGenOptions({
               aria-label="透明图层"
               className="h-3.5 w-3.5 accent-[var(--bb-blue)]"
               checked={transparent}
-              onChange={(event) => onTransparentChange(event.target.checked)}
+              onChange={(event) => { if (!triggerRef.current?.matches(":disabled")) onTransparentChange(event.target.checked); }}
             />
             透明图层
           </label>
@@ -89,8 +147,9 @@ export function ImageGenOptions({
                 key={n}
                 type="button"
                 onClick={() => {
+                  if (triggerRef.current?.matches(":disabled")) { close(); return; }
                   onCountChange(n);
-                  setOpen(false);
+                  close(true);
                 }}
                 role="option"
                 aria-selected={n === current}
@@ -101,7 +160,7 @@ export function ImageGenOptions({
               </button>
             ))}
           </div>
-        </div>
+        </div>, document.body
       )}
     </div>
   );

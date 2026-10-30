@@ -1,0 +1,5 @@
+.library-catalog-transition { position:absolute; inset:0; isolation:isolate; }
+.library-catalog-layer { position:absolute; inset:0; }
+.library-catalog-layer[data-outgoing] { z-index:1; pointer-events:none; }
+.catalog-view-wipe { position:absolute; inset:0; width:100%; height:100%; z-index:30; overflow:hidden; pointer-events:none; }
+.catalog-wipe-text { fill:#fff; font-family:"Segoe UI","Microsoft YaHei",sans-serif; font-weight:300; font-style:italic; font-synthesis:style; letter-spacing:3px; }

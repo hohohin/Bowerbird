@@ -60,7 +60,7 @@ fn validate(value: &Value) -> AppResult<()> {
             || node.get("prompt").is_some_and(|p| p.as_str().is_none_or(|s| s.encode_utf16().count() > 4000)) { return Err(invalid()); }
     }
     let mut input_fields = if value["schemaVersion"] != 1 { vec!["id", "label", "type", "content"] } else { vec!["id", "label", "type"] };
-    if v4 { input_fields.push("whole"); }
+    if v4 { input_fields.extend(["whole", "latest"]); }
     for (section, allowed) in [("inputs", input_fields), ("parameters", vec!["id", "label", "node", "field", "defaultValue"]), ("outputs", vec!["id", "label", "node", "port"])] {
         let items = value[section].as_array().ok_or_else(invalid)?;
         if items.len() > 48 || section == "outputs" && items.is_empty() { return Err(invalid()); }
@@ -69,6 +69,7 @@ fn validate(value: &Value) -> AppResult<()> {
             if !alias(&item["id"]) || !ids.insert(item["id"].as_str().unwrap()) || !text(&item["label"], 120) { return Err(invalid()); }
             if section == "inputs" && !matches!(item["type"].as_str(), Some("text" | "image")) { return Err(invalid()); }
             if section == "inputs" && item.get("whole").is_some_and(|whole| !whole.is_boolean() || item["type"] != "text") { return Err(invalid()); }
+            if section == "inputs" && item.get("latest").is_some_and(|latest| !latest.is_boolean() || latest == true && item["whole"] == true) { return Err(invalid()); }
             if section == "inputs" { if let Some(value) = item.get("content") { content(value, &item["type"])?; } }
             if section != "inputs" && !nodes.iter().any(|node| node["id"] == item["node"]) { return Err(invalid()); }
             if section == "parameters" && (!matches!(item["field"].as_str(), Some("suffix" | "ratio")) || item["defaultValue"].as_str().is_none_or(|s| s.encode_utf16().count() > 2000)) { return Err(invalid()); }
@@ -321,6 +322,28 @@ mod tests {
         let mut bad = doc.clone(); bad["plan"]["edges"][4]["from"] = json!("style"); assert!(validate(&bad).is_err());
         let mut bad = doc.clone(); bad["plan"]["nodes"][3]["agentTransport"] = json!("unknown"); assert!(validate(&bad).is_err());
         let mut bad = doc; bad["inputs"][0]["whole"] = json!("true"); assert!(validate(&bad).is_err());
+    }
+    #[test]
+    fn v4_latest_row_inputs_round_trip_and_reject_conflicting_selectors() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        let mut doc = template(); doc["schemaVersion"] = json!(4);
+        doc["inputs"] = json!([
+            {"id":"words","label":"最新内容","type":"text","latest":true},
+            {"id":"photos","label":"最新图片","type":"image","latest":true}
+        ]);
+        doc["plan"]["edges"].as_array_mut().unwrap().extend([
+            json!({"from":"words","output":"text","to":"draw","input":"text"}),
+            json!({"from":"photos","output":"image","to":"draw","input":"image"})
+        ]);
+        let saved = db.workflow_template_save(doc.clone(), 0).unwrap();
+        assert_eq!(db.workflow_templates_list().unwrap()[0], saved);
+        assert_eq!(saved["inputs"][0]["latest"], true);
+        for invalid_latest in [json!("true"), json!(1), json!(null)] {
+            let mut bad = doc.clone(); bad["inputs"][0]["latest"] = invalid_latest;
+            assert!(validate(&bad).is_err());
+        }
+        let mut bad = doc.clone(); bad["inputs"][0]["whole"] = json!(true); assert!(validate(&bad).is_err());
+        let mut bad = doc; bad["schemaVersion"] = json!(3); assert!(validate(&bad).is_err());
     }
     #[test]
     fn v4_count_loop_retains_bounded_repeat_count() {

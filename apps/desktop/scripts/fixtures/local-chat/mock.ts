@@ -65,10 +65,10 @@ export function staleEvent() {
   const chat = Object.values(database.conversations).at(-1); if (!chat) return;
   const old = clone(chat); old.revision = Math.max(0, old.revision - 1); old.status = "failed"; old.error = "stale payload must be ignored"; old.messages.at(-1)!.text = "过期事件不应覆盖最新内容"; emit("local-chat://updated", old);
 }
-export async function createCards(mode: "count" | "rows") {
+export async function createCards(mode: "count" | "rows" | "sections" | "sections_large") {
   const chat = Object.values(database.conversations).filter(chat => chat.projectId === database.activeProjectId).at(-1);
   if (!chat) return;
-  const examples = await fetch("/.tmp/local-chat/card-fixtures.json").then(response => response.json());
+  const examples = await fetch(mode.startsWith("sections") ? "/.tmp/local-chat/section-card-fixtures.json" : "/.tmp/local-chat/card-fixtures.json").then(response => response.json());
   // Resolve the compiler's synthetic asset identity to this fixture's visible image.
   const example = JSON.parse(JSON.stringify(examples[mode]).replaceAll('"picture"', '"ref-lotus"'));
   const action = { ...clone(example.action), conversationId: chat.id, turnId: chat.messages.at(-1)!.turnId };
@@ -83,7 +83,7 @@ export async function createCards(mode: "count" | "rows") {
   (project.cardBaselines ??= {})[action.id] = { nodes: clone(example.workflow.document.nodes), notes: clone(project.nodes.filter((note: any) => action.cards.some((card: any) => card.id === note.id))) };
   (chat.actions ??= []).push(action);
   clearTimer(chat); chat.status = "idle";
-  Object.assign(chat.messages.at(-1)!, { text: "已创建内容、生成、循环和触发卡片。可以先编辑内容，再点击触发卡片运行。", status: "done", updatedAt: Date.now() });
+  Object.assign(chat.messages.at(-1)!, { text: mode.startsWith("sections") ? "已按流程分区放置卡片，等待你运行。" : "已创建内容、生成、循环和触发卡片。可以先编辑内容，再点击触发卡片运行。", status: "done", updatedAt: Date.now() });
   persistChat(chat); emit("local-chat://cards-changed", { projectId: chat.projectId, conversationId: chat.id, actionId: action.id });
 }
 function autoStream(chat: Conversation) { if (!controls.hold) timers.set(chat.id, setInterval(() => advance(chat.id), 900)); }
@@ -96,6 +96,7 @@ export async function invoke(command: string, args: any = {}) {
   if (command === "plugin:event|listen") { listeners.set(args.handler, args.event); return args.handler; }
   if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return null; }
   if (command === "plugin:event|emit") { emit(args.event, args.payload); return null; }
+  if (command === "visual_profile_list") return [];
   if (command === "local_chat_list") { if (controls.fault === "read") throw new Error("synthetic database C:\\private\\chat.db failed"); return Object.values(database.conversations).filter(chat => chat.projectId === args.projectId).sort((a, b) => b.updatedAt - a.updatedAt).map(summary); }
   if (command === "local_chat_get") { if (controls.fault === "read") throw new Error("synthetic database C:\\private\\chat.db failed"); return clone(database.conversations[args.conversationId] ?? null); }
   if (command === "local_chat_cards_undo") {
@@ -147,7 +148,8 @@ export async function invoke(command: string, args: any = {}) {
     if (chat.status === "running" || chat.status === "stopping") { clearTimer(chat); chat.status = "stopped"; chat.messages.at(-1)!.status = "stopped"; persistChat(chat); }
     return clone(chat);
   }
-  if (/codex_create_image|generate_video|local_agent_run|cloud_agent_create/.test(command)) throw new Error("隔离测试禁止真实生成。");
+  if (command === "comfy_video_environment" && args.action === "detect") return { phase: "ready", endpoint: args.endpoint, message: "合成环境就绪" };
+  if (/codex_create_image|generate_video|local_agent_run|cloud_agent_create|^comfy_video$/.test(command)) throw new Error("隔离测试禁止真实生成。");
   if (command === "list_projects") return clone(projects);
   if (command === "set_active_project") { database.activeProjectId = args.projectId ?? "p"; save(); return null; }
   if (command === "get_active_project") return database.activeProjectId;

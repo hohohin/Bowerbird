@@ -82,9 +82,16 @@ try {
   await page.reload();await source.waitFor();
   const wire=page.locator('[data-workflow-target="ui-target"]');await wire.waitFor();
   const directPath=await wire.getAttribute('d');
-  assert.match(directPath,/^M 400 /,'wire starts at generator image socket');
-  assert.equal(await page.locator('[data-canvas-node-id="session-old"],[data-canvas-node-id="session-new"]').count(),2);
-  assert.equal(await page.locator('[data-workflow-session-link]').count(),2);
+  const relay=await page.evaluate(()=>{
+    const definition=JSON.parse(sessionStorage.getItem('workflow-p')).document;
+    const input=definition.nodes.find(node=>node.id==='ui-target').inputs.image[0];
+    return {input,card:window.snapshot().nodes.find(node=>node.id===input.canvasNodeId)};
+  });
+  assert.equal(relay.input.cellId,'*latest-image','downstream follows the inserted content card latest row');
+  assert.ok(relay.card,'image connection inserts a saved content card');
+  assert.ok(Math.abs(Number(directPath.match(/^M ([\d.-]+)/)[1])-(relay.card.x+relay.card.width))<2,'wire starts at the content card latest socket');
+  assert.equal(await page.locator('[data-canvas-node-id="session-old"],[data-canvas-node-id="session-new"]').count(),0, 'relay output contains its sessions without duplicate external cards');
+  assert.equal(await page.locator('[data-workflow-session-link]').count(),0);
   await history.click();const popup=page.getByRole('dialog',{name:'生成历史',exact:true});await popup.waitFor();
   assert.deepEqual(await popup.locator('[data-workflow-history-session]').evaluateAll(rows=>rows.map(row=>row.dataset.workflowHistorySession)),['session-new','session-old']);
   assert.equal(await popup.locator('time').first().getAttribute('datetime'),new Date((1790121600+420)*1000).toISOString());
@@ -108,7 +115,7 @@ try {
   await page.keyboard.press('Escape');
   await page.evaluate(async()=>{const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const c=canvasWorkflowController('p');await c.edit(c.document.nodes.map(n=>n.id==='ui-source'?{...n,activeSessionNodeId:'session-new'}:n));});
   assert.equal(await wire.getAttribute('d'),directPath,'new session does not move the wire');
-  assert.equal(await page.locator('[data-canvas-node-id="session-old"]').count(),1);
+  assert.equal(await page.locator('[data-canvas-node-id="session-old"]').count(),0);
   await page.reload();await source.waitFor();await history.click();await popup.waitFor();
   assert.equal(await popup.locator('[data-workflow-history-session]').count(),2);
   await page.mouse.click(1500,900);await popup.waitFor({state:'detached'});

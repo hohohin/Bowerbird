@@ -8,8 +8,8 @@
 .visual-profile-dialog .app-modal-button { min-height: 38px; border-radius: 8px; padding: 8px 15px; }
 .visual-profile-dialog .app-modal-button.is-primary { min-width: 160px; }
 .bv-fields { min-width: 0; padding: 0; margin: 0; border: 0; font-size: 13px; color: var(--bb-ink); line-height: 1.7; }
-.bv-fields button, .bv-fields input, .bv-fields textarea, .bv-fields select { font: inherit; }
-.bv-fields :is(button,input,textarea,select,summary):focus-visible, .bv-secondary summary:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 3px; }
+.bv-fields button, .bv-fields input, .bv-fields textarea, .bv-fields :is(select, .tactical-select-trigger) { font: inherit; }
+.bv-fields :is(button,input,textarea,:is(select, .tactical-select-trigger),summary):focus-visible, .bv-secondary summary:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 3px; }
 .bv-fields:disabled { opacity: .65; }
 .bv-fields p { overflow-wrap: anywhere; }
 .bv-fields button:disabled { cursor: not-allowed; opacity: .5; }
@@ -54,7 +54,7 @@
 .bv-edit-rule { padding: 13px 0; border-top: 1px solid var(--bb-line); }
 .bv-edit-rule label { display: block; color: var(--bb-muted); font-size: 12px; }
 .bv-edit-rule textarea { display: block; width: 100%; min-height: 78px; resize: vertical; margin-top: 8px; }
-.bv-fields :is(textarea,input,select) { border: 1px solid var(--bb-line-strong); background: var(--bb-surface); color: var(--bb-ink); border-radius: 7px; padding: 8px 10px; min-width: 0; }
+.bv-fields :is(textarea,input,:is(select, .tactical-select-trigger)) { border: 1px solid var(--bb-line-strong); background: var(--bb-surface); color: var(--bb-ink); border-radius: 7px; padding: 8px 10px; min-width: 0; }
 .bv-edit-rule > div { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .bv-icon-button { display: grid; place-items: center; width: 34px; height: 34px; color: var(--bb-muted); }
 .bv-icon-button:hover:not(:disabled) { color: #ce6a64; }

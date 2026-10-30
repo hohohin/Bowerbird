@@ -1,8 +1,8 @@
 import type { MouseEvent, PointerEvent } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { canvasAssetMediaPath, type CanvasAssetSnapshot } from "../lib/creativeCanvas";
 import { isVideoPath } from "../lib/videoGeneration";
 import { VideoPoster } from "./VideoPoster";
+import { CanvasImage } from "./CanvasImage";
 import "./CanvasConversationImages.css";
 
 export function CanvasConversationImages({ images, imageOnly, selectedId, onSelect, onPointerDown, onClick, onDoubleClick, onContextMenu }: {
@@ -20,7 +20,7 @@ export function CanvasConversationImages({ images, imageOnly, selectedId, onSele
   const index = Math.max(0, images.findIndex(image => image.id === (selectedId ?? newest)));
   const shown = images[index];
   const path = canvasAssetMediaPath(shown);
-  return <section className={`canvas-conversation-images${isVideoPath(shown.storePath) ? " is-video" : ""}`} data-conversation-image={shown.assetId}
+  return <section className={`canvas-conversation-images${isVideoPath(shown.storePath) ? " is-video" : ""}`} data-conversation-image={shown.assetId} data-frequent-asset-id={shown.assetId ?? undefined}
     role="button" tabIndex={0} aria-label={shown.name}
     onPointerDown={onPointerDown}
     onClick={event => { event.stopPropagation(); onClick(event, shown); }}
@@ -33,7 +33,7 @@ export function CanvasConversationImages({ images, imageOnly, selectedId, onSele
     }}
     onContextMenu={event => onContextMenu(event, shown)}>
     {isVideoPath(shown.storePath) ? <VideoPoster path={shown.storePath} poster={shown.thumbPath} alt={shown.name} draggable={false} />
-      : path ? <img src={convertFileSrc(path)} alt={shown.name} draggable={false} />
+      : path ? <CanvasImage path={shown.storePath} thumbPath={shown.thumbPath} sourceWidth={shown.width} sourceHeight={shown.height} alt={shown.name} draggable={false} />
       : <div className="canvas-node-placeholder">{isVideoPath(shown.storePath) ? "视频 · 暂无封面" : shown.name}</div>}
     {isVideoPath(shown.storePath) && <span className="canvas-video-badge" role="img" aria-label="视频" />}
     {(!imageOnly || images.length > 1) && <span className="canvas-conversation-count">{!imageOnly && "✨ "}{index + 1}/{images.length}</span>}

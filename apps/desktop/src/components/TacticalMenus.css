@@ -1,0 +1,220 @@
+/* A shared instrument menu: neutral reading plane, cut edges, small state marks. */
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover, .library-color-strip)[class] {
+  --menu-ink: var(--bb-ink);
+  --menu-mark: var(--bb-ink-soft);
+  --menu-line: rgb(var(--bb-ink-rgb) / .22);
+  --menu-hover: rgb(var(--bb-ink-rgb) / .035);
+  --menu-selected: transparent;
+  --menu-cut: 9px;
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: var(--bb-surface-modal);
+  color: var(--menu-ink);
+  box-shadow: 0 14px 34px -14px rgb(var(--bb-shadow-rgb) / .3);
+  clip-path: polygon(0 0, calc(100% - var(--menu-cut)) 0, 100% var(--menu-cut), 100% 100%, var(--menu-cut) 100%, 0 calc(100% - var(--menu-cut)));
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+/* Positioning stays with each component: these are body portals or anchored popovers. */
+html[data-theme] :is(.tactical-select-menu, .model-select-menu, .workflow-loop-menu, .app-context-menu, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] { position: fixed; }
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover, .library-color-strip)[class]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: auto;
+  height: auto;
+  z-index: 2;
+  background:
+    linear-gradient(var(--menu-mark), var(--menu-mark)) 14px 0 / 28px 2px,
+    linear-gradient(var(--menu-line), var(--menu-line)) 50% 0 / calc(100% - 20px) 1px,
+    linear-gradient(var(--menu-line), var(--menu-line)) 100% 100% / calc(100% - 10px) 1px,
+    linear-gradient(var(--menu-line), var(--menu-line)) 0 0 / 1px calc(100% - 10px),
+    linear-gradient(var(--menu-line), var(--menu-line)) 100% 100% / 1px calc(100% - 10px),
+    linear-gradient(45deg, transparent calc(50% - .5px), var(--menu-mark) 50%, transparent calc(50% + .5px)) 100% 0 / 10px 10px,
+    linear-gradient(45deg, transparent calc(50% - .5px), var(--menu-mark) 50%, transparent calc(50% + .5px)) 0 100% / 10px 10px;
+  background-repeat: no-repeat;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  opacity: 1;
+  transform: none;
+  mask: none;
+  animation: none;
+  pointer-events: none;
+}
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class]::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 16px;
+  width: 14px;
+  height: 6px;
+  background: conic-gradient(from 90deg, var(--menu-line) 25%, transparent 0) 0 0 / 4px 4px;
+  border: 0;
+  border-radius: 0;
+  opacity: 1;
+  box-shadow: none;
+  transform: none;
+  animation: none;
+  pointer-events: none;
+}
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] { padding-top: 14px; }
+html[data-theme] :is(.app-popover-title, .app-context-label, .folder-menu-label, .tactical-select-group-label),
+html[data-theme] .workflow-loop-menu > strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--bb-muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: .06em;
+  text-transform: none;
+}
+html[data-theme] :is(.app-popover-title, .app-context-label, .folder-menu-label, .tactical-select-group-label)::after,
+html[data-theme] .workflow-loop-menu > strong::after {
+  content: "";
+  flex: 1;
+  min-width: 12px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--menu-line), transparent);
+  pointer-events: none;
+}
+html[data-theme] :is(.app-context-divider, .folder-menu-divider) { background: linear-gradient(90deg, var(--menu-line), transparent); }
+html[data-theme] .canvas-source-tag-popover[class] header button { padding: 0; }
+
+/* The option marker carries state; labels and large surfaces stay neutral. */
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] :is(.app-popover-option, .app-context-item, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, .canvas-toolbox-item, [role="menuitem"]),
+html[data-theme] :is(.folder-popover, .canvas-source-tag-popover)[class] button,
+html[data-theme] .workflow-generation-history-popover[class] li button {
+  position: relative;
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--menu-ink);
+  box-shadow: none;
+  padding-left: 24px;
+  transition: none;
+}
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] :is(.app-popover-option, .app-context-item, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, .canvas-toolbox-item, [role="menuitem"], button[aria-pressed]):not(.is-danger):not(:disabled):is(:hover, :focus-visible, [data-active="true"]),
+html[data-theme] :is(.folder-popover, .canvas-source-tag-popover)[class] button:not(:disabled):hover,
+html[data-theme] .workflow-generation-history-popover[class] li button:not(:disabled):hover {
+  background: var(--menu-hover);
+  color: var(--menu-ink);
+  border-color: transparent;
+}
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] :is(.app-popover-option, .app-context-item, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, button[aria-pressed]):not(.is-danger):not(:disabled):is([aria-selected="true"], [aria-pressed="true"], [aria-checked="true"], .is-active) {
+  background: transparent;
+  color: var(--menu-ink);
+  font-weight: 600;
+  box-shadow: none;
+}
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] :is(.app-popover-option, .app-context-item, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, .canvas-toolbox-item, [role="menuitem"], button[aria-pressed])::before {
+  content: "";
+  position: absolute;
+  left: 9px;
+  top: calc(50% - 2px);
+  width: 4px;
+  height: 4px;
+  border: 1px solid var(--menu-mark);
+  background: transparent;
+  opacity: 0;
+  mask: none;
+  box-shadow: none;
+  pointer-events: none;
+}
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] :is(.app-popover-option, .app-context-item, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, .canvas-toolbox-item, [role="menuitem"], button[aria-pressed]):not(:disabled):is(:hover, :focus-visible, [data-active="true"])::before { opacity: .65; }
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .workflow-reference-menu)[class] :is(.app-popover-option, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, button[aria-pressed]):not(:disabled):is([aria-selected="true"], [aria-pressed="true"], [aria-checked="true"], .is-active)::before { background: var(--menu-mark); opacity: 1; }
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover)[class] :is(.app-popover-option, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, button[aria-pressed])::after { content: none; }
+html[data-theme] :is(.app-popover, .folder-popover, .canvas-source-tag-popover)[class] :is(.app-popover-option, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, button[aria-pressed]):not(:disabled):is([aria-selected="true"], [aria-pressed="true"], [aria-checked="true"], .is-active)::after {
+  content: "";
+  position: absolute;
+  inset: auto 8px 4px auto;
+  width: 12px;
+  height: 1px;
+  background: var(--menu-mark);
+  border: 0;
+  border-radius: 0;
+  opacity: .6;
+  box-shadow: none;
+  transform: none;
+  animation: none;
+  pointer-events: none;
+}
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] button { animation: none; }
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] button:focus-visible { outline: 1px solid var(--menu-line); outline-offset: -2px; }
+html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover)[class] button:disabled { background: transparent; color: var(--bb-muted); }
+html[data-theme] :is(.app-popover, .app-context-menu)[class] .app-context-item.is-danger { color: var(--bb-danger); background: transparent; }
+html[data-theme] :is(.app-popover, .app-context-menu)[class] .app-context-item.is-danger:hover:not(:disabled) { color: var(--bb-danger); background: rgb(244 63 94 / .06); }
+html[data-theme] :is(.app-popover, .app-context-menu)[class] .app-context-item.is-danger::before { border-color: var(--bb-danger); }
+
+/* Native single-select replacements keep their original context dimensions. */
+.tactical-select-trigger { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; text-align: left; cursor: pointer; }
+.tactical-select-trigger > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tactical-select-trigger > svg { flex: none; width: 11px; height: 11px; color: var(--bb-muted); }
+html[data-theme] :is(.tactical-select-trigger, .tactical-menu-trigger)[class] { border-color: transparent; border-radius: 0; background: transparent; color: var(--bb-ink-soft); box-shadow: none; }
+html[data-theme] :is(.tactical-select-trigger, .tactical-menu-trigger)[class]:not(:disabled):is(:hover, [aria-expanded="true"]) { background: rgb(var(--bb-ink-rgb) / .035); color: var(--bb-ink); }
+html[data-theme] :is(.tactical-select-trigger, .tactical-menu-trigger)[class]:focus-visible { outline: 1px solid rgb(var(--bb-ink-rgb) / .3); outline-offset: 2px; }
+html[data-theme] .tactical-select-menu[class] { z-index: 100050; padding: 14px 6px 7px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; font-size: 12px; }
+html[data-theme] .tactical-select-option { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 7px 10px 7px 24px; text-align: left; line-height: 1.5; }
+.tactical-select-option > span { min-width: 0; overflow-wrap: anywhere; }
+.tactical-select-group-label { padding: 8px 10px 5px; }
+
+/* Existing rich selectors retain their useful icons and group structure. */
+html[data-theme] :is(.ratio-select-menu, .image-options-menu)[class] { z-index: 100050; }
+html[data-theme] .ratio-select-menu[class] { width: 288px; max-width: calc(100vw - 24px); padding: 14px 6px 7px; }
+html[data-theme] .ratio-select-menu .ratio-select-option { min-height: 34px; gap: 4px; white-space: nowrap; padding-left: 16px; }
+html[data-theme] .ratio-select-menu .ratio-select-option::before { left: 5px; width: 3px; height: 3px; }
+html[data-theme] .ratio-select-menu .ratio-select-option > svg { color: var(--bb-ink-soft); }
+html[data-theme] .image-options-menu .image-options-toggle { position: relative; border-radius: 0; background: transparent; color: var(--bb-ink-soft); }
+html[data-theme] .image-options-menu .image-options-toggle:hover { background: var(--menu-hover); }
+html[data-theme] .image-options-menu .image-options-toggle:has(input:checked) { color: var(--bb-ink); background: transparent; }
+html[data-theme] .image-options-menu input[type="checkbox"] { accent-color: var(--bb-ink-soft); }
+html[data-theme] .image-options-menu .count-select-option { min-height: 32px; padding-left: 16px; }
+html[data-theme] .image-options-menu .count-select-option::before { left: 5px; width: 3px; height: 3px; }
+html[data-theme] .model-select-menu[class] { padding-top: 10px; }
+html[data-theme] .model-select-menu .model-select-column + .model-select-column { border-left-color: transparent; }
+html[data-theme] .model-select-menu .model-select-column-heading { border-bottom-color: transparent; background: var(--bb-surface-modal); color: var(--bb-ink-soft); }
+html[data-theme] .model-select-menu :is(.model-select-column-title, .model-select-balance) { color: var(--bb-ink-soft); }
+html[data-theme] .model-select-menu .model-source-badge { border-radius: 0; background: transparent; color: var(--model-source-color); box-shadow: none; }
+html[data-theme] .model-select-menu .model-select-row { border-radius: 0; background: transparent; }
+html[data-theme] .model-select-menu .model-select-row:has(.model-select-option[aria-pressed="true"]):is(:hover, :focus-within),
+html[data-theme] .model-select-menu .model-select-row:has(.model-select-option[aria-pressed="true"]) { background: transparent; }
+html[data-theme] .model-select-menu .model-select-row:has(.model-select-option:not(:disabled)):hover { background: var(--menu-hover); }
+html[data-theme] .model-select-menu .model-select-default { color: var(--bb-muted); background: transparent; border-radius: 0; }
+html[data-theme] .model-select-menu .model-select-default.is-default { color: var(--bb-ink-soft); }
+html[data-theme] .model-select-menu :is(.model-select-local-row, .model-select-footer) { border-top-color: transparent; background: linear-gradient(90deg, var(--menu-line), transparent) 10px 0 / calc(100% - 20px) 1px no-repeat; }
+html[data-theme] .model-select-menu .model-select-option > svg { color: var(--bb-ink-soft); }
+
+@keyframes tactical-menu-contact { 0%, 35%, 75%, 100% { opacity: 1; } 15%, 55%, 88% { opacity: .12; } }
+@media (prefers-reduced-motion: no-preference) {
+  html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu)[class] :is(.app-popover-option, .app-context-item, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, .canvas-toolbox-item, [role="menuitem"], button[aria-pressed]):not(:disabled):is(:hover, :focus-visible, [data-active="true"])::before { animation: tactical-menu-contact 160ms steps(1,end); }
+}
+@media (forced-colors: active) {
+  html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] { background: Canvas; color: CanvasText; border-color: ButtonText; clip-path: none; }
+  html[data-theme] :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover)[class] button:not(:disabled) { color: ButtonText; }
+  html[data-theme] :is(.app-popover, .folder-popover)[class] button:is([aria-selected="true"], [aria-pressed="true"]) { outline: 1px solid Highlight; outline-offset: -2px; }
+}
+
+/* The compact toolbar contains further popovers, so its frame must stay open. */
+html[data-theme] .library-controls-host.is-compact.is-open > .folder-floating-controls {
+  padding: 8px;
+  border: 0;
+  border-radius: 0;
+  background: var(--bb-surface-modal);
+  color: var(--bb-ink);
+  box-shadow: 0 12px 28px -14px rgb(var(--bb-shadow-rgb) / .3);
+  overflow: visible;
+  clip-path: none;
+}
+html[data-theme] .library-controls-host.is-compact.is-open > .folder-floating-controls::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(var(--bb-ink-soft), var(--bb-ink-soft)) 12px 0 / 20px 2px,
+    linear-gradient(rgb(var(--bb-ink-rgb) / .2), rgb(var(--bb-ink-rgb) / .2)) 0 0 / 100% 1px,
+    linear-gradient(rgb(var(--bb-ink-rgb) / .2), rgb(var(--bb-ink-rgb) / .2)) 0 100% / 100% 1px;
+  background-repeat: no-repeat;
+  pointer-events: none;
+}

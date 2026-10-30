@@ -491,6 +491,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       title="设置"
       eyebrow="Preferences"
       width="lg"
+      className="settings-dialog"
       preventClose={migrating || fileMoveOpen}
       onClose={onClose}
     >

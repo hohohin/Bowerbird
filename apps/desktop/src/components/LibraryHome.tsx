@@ -99,7 +99,7 @@ function HomePane({ pane, split, onSplit, onClose, onCreateProject, shortcutsEna
       const state = useStore.getState(), target = event.target as HTMLElement;
       if (event.key !== "Tab" || event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.nativeEvent.isComposing || event.defaultPrevented
         || !shortcutsEnabled || root.current?.closest("[inert]") || state.projectRoutePending || state.contextMenu || state.projectContextMenu
-        || document.querySelector('[role="dialog"], [role="menu"]') || target.isContentEditable || target.closest('input, textarea, select')) return;
+        || document.querySelector('[role="dialog"], [role="menu"]') || target.isContentEditable || target.closest('input, textarea, select, [role="combobox"]')) return;
       event.preventDefault(); event.stopPropagation(); pane.mode.getState().toggleCatalog(); root.current?.focus({ preventScroll: true });
     }}>
     <button type="button" className="library-pane-close library-filter-trigger" aria-label="关闭此栏" title={split ? "关闭此栏" : "至少保留一个素材库"} disabled={!split} onClick={onClose}><X size={15} aria-hidden="true"/></button>

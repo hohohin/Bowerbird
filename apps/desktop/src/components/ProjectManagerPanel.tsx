@@ -1,3 +1,4 @@
+import { TacticalSelect } from "./TacticalSelect";
 import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import { LayoutGrid, List, Plus, Search } from "lucide-react";
 import { api } from "../lib/api";
@@ -55,7 +56,7 @@ export function ProjectManagerPanel({ onClose, onCreate }: { onClose: () => void
     </aside>
     <div className="project-manager-main"><div className="project-manager-toolbar">
       <div className="project-manager-search"><Search size={18} aria-hidden="true"/><input data-modal-autofocus aria-label="搜索项目" placeholder="搜索项目…" value={search} onChange={e => setSearch(e.target.value)}/></div>
-      <select aria-label="项目排序" value={sort} onChange={e => setSort(e.target.value)}><option value="recent">最近更新</option><option value="name">项目名称</option></select>
+      <TacticalSelect aria-label="项目排序" value={sort} onValueChange={value => setSort(value)}><option value="recent">最近更新</option><option value="name">项目名称</option></TacticalSelect>
     </div>
     <div className="project-manager-section"><span>项目目录 <small>/ PROJECT INDEX</small></span><span>{String(groups.length).padStart(2, "0")} PROJECTS</span></div>
     {error && <p className="project-manager-error" role="alert">项目封面加载失败 <button onClick={() => setRevision(r => r + 1)}>重试</button></p>}

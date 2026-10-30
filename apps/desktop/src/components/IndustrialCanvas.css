@@ -1,0 +1,259 @@
+/* Approved industrial drawing surfaces. Native positions, ports and media transforms stay intact. */
+html[data-theme] .canvas-tactical {
+  --cs-base:rgb(var(--industrial-canvas-rgb));
+  --cs-console:rgb(var(--industrial-chrome-rgb));
+  --cs-surface:rgb(var(--industrial-panel-rgb));
+  --cs-card:rgb(var(--industrial-panel-rgb));
+  --cs-screen:rgb(var(--industrial-chrome-rgb));
+  --cs-field:transparent;
+  --cs-ink:rgb(var(--industrial-ink-rgb));
+  --cs-muted:rgb(var(--industrial-muted-rgb));
+  --cs-rule:rgb(var(--industrial-muted-rgb) / .25);
+  --cs-hover:rgb(var(--industrial-ink-rgb) / .035);
+  --cs-selected:transparent;
+  --cs-selected-ink:rgb(var(--industrial-accent-rgb));
+  --cs-shadow:none;
+  --cs-lift:none;
+  --hud-cut:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,0 100%);
+  --hud-front:#232323;
+  --hud-back:#1c1c1c;
+  --hud-edge:rgb(221 229 232 / .24);
+  --hud-rim:rgb(224 232 235 / .34);
+  --hud-underlay:rgb(180 190 194 / .16);
+  --hud-shadow:0 4px 6px -3px rgb(0 0 0 / .7),0 20px 32px -11px rgb(0 0 0 / .62);
+  --hud-shadow-active:0 5px 8px -3px rgb(0 0 0 / .75),0 25px 40px -10px rgb(0 0 0 / .76);
+}
+html[data-theme="light"] .canvas-tactical {
+  --hud-front:#fcfcfc;
+  --hud-back:#f4f4f4;
+  --hud-edge:rgb(68 75 79 / .2);
+  --hud-rim:rgb(255 255 255 / .95);
+  --hud-underlay:rgb(79 88 93 / .2);
+  --hud-shadow:0 3px 5px -3px rgb(33 39 43 / .23),0 18px 28px -10px rgb(33 39 43 / .26);
+  --hud-shadow-active:0 4px 7px -3px rgb(33 39 43 / .26),0 23px 34px -10px rgb(33 39 43 / .32);
+}
+html[data-theme] .canvas-tactical .canvas-stage {
+  background-color:var(--cs-base);
+  background-image:var(--industrial-cross-pattern);
+  /* CanvasWorkspace supplies a zoom-scaled size inline; this surface uses the approved fixed spacing. */
+  background-size:80px 80px !important;
+}
+html[data-theme] .app-topbar.canvas-tactical { background:var(--cs-console);border-bottom:1px solid var(--cs-rule); }
+html[data-theme] .app-topbar.canvas-tactical .topbar-account-trigger { background:transparent; }
+html[data-theme] .canvas-tactical :is(.canvas-board-toolbar>div,.canvas-drawing-tools) {
+  border:1px solid var(--cs-rule);border-radius:0;background:var(--cs-console);
+  box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;
+}
+html[data-theme] .canvas-tactical .canvas-drawing-tools button:is(.is-active,[aria-pressed="true"]) {
+  color:rgb(var(--industrial-accent-rgb));background:transparent;
+}
+html[data-theme] .canvas-tactical .canvas-drawing-tools button:is(.is-active,[aria-pressed="true"])::before {
+  left:-6px;right:auto;top:8px;bottom:auto;width:2px;height:18px;
+  background:rgb(var(--industrial-accent-rgb));box-shadow:none;
+}
+html[data-theme] .canvas-tactical .canvas-drawing-tools button[data-tip]::after {
+  border:1px solid var(--cs-rule);border-radius:0;background:var(--cs-card);color:var(--cs-ink);box-shadow:none;
+}
+html[data-theme] .canvas-workspace.canvas-tactical>.canvas-source-panel { border-radius:0;box-shadow:none; }
+html[data-theme] .canvas-tactical-telemetry { color:rgb(var(--industrial-muted-rgb));opacity:.45; }
+html[data-theme] .canvas-tactical-telemetry :is(span,small) { display:none; }
+
+/* The front reading plane is opaque. Only the displaced edge behind it is transparent. */
+html[data-theme] .canvas-tactical .canvas-plane :is(.workflow-card,.canvas-note.is-content-card) {
+  --screen-ink:rgb(var(--industrial-secondary-rgb));
+  --screen-line:rgb(var(--industrial-muted-rgb) / .25);
+  --screen-fill:rgb(var(--industrial-panel-rgb));
+  --screen-field:transparent;
+  --screen-wash:transparent;
+  --screen-pattern:rgb(var(--industrial-muted-rgb) / .2);
+  --screen-edge:rgb(var(--industrial-secondary-rgb));
+  border-color:transparent;border-radius:0;box-shadow:none;
+}
+html[data-theme] .canvas-tactical .canvas-plane :is(.workflow-card,.canvas-note.is-content-card):hover {
+  --screen-edge:rgb(var(--industrial-ink-rgb));
+}
+html[data-theme] .canvas-tactical .canvas-plane :is(.workflow-card,.canvas-note.is-content-card):is(.is-selected,:focus-visible,:focus-within) {
+  --screen-edge:rgb(var(--industrial-accent-rgb));
+}
+/* Only the opaque front is clipped; the shadow carrier and ports remain outside it. */
+html[data-theme] .canvas-tactical .canvas-tactical-card-shell { clip-path:none;background:transparent;box-shadow:var(--hud-shadow); }
+html[data-theme] .canvas-tactical .canvas-tactical-card-shell::before {
+  content:"";position:absolute;inset:13px -10px -13px 10px;z-index:-1;
+  border-right:1px solid var(--hud-underlay);border-bottom:1px solid var(--hud-underlay);background:none;pointer-events:none;
+}
+html[data-theme] .canvas-tactical .canvas-tactical-card-shell::after {
+  border:0;clip-path:var(--hud-cut);
+  background:linear-gradient(var(--screen-edge),var(--screen-edge)) 18px 0/32px 1px no-repeat,
+    linear-gradient(var(--screen-edge),var(--screen-edge)) calc(100% - 18px) 100%/48px 1px no-repeat,
+    linear-gradient(155deg,var(--hud-front),var(--hud-back));
+  box-shadow:inset 0 1px var(--hud-rim);
+}
+html[data-theme] .canvas-tactical :is(.workflow-card,.canvas-note.is-content-card):is(:hover,:focus-within,.is-selected)>.canvas-tactical-card-shell {
+  box-shadow:var(--hud-shadow-active);
+}
+html[data-theme] .canvas-tactical :is(.workflow-card,.canvas-note.is-content-card)::before {
+  background:linear-gradient(var(--screen-edge),var(--screen-edge)) 0 0/3px 3px no-repeat,
+    linear-gradient(var(--screen-edge),var(--screen-edge)) 100% 100%/3px 3px no-repeat,
+    linear-gradient(var(--screen-edge),var(--screen-edge)) 0 100%/3px 3px no-repeat;
+}
+html[data-theme] .canvas-tactical .canvas-note.is-content-card::before {
+  background:linear-gradient(var(--screen-edge),var(--screen-edge)) 0 0/3px 3px no-repeat,
+    linear-gradient(var(--screen-edge),var(--screen-edge)) 100% 100%/3px 3px no-repeat,
+    linear-gradient(var(--screen-edge),var(--screen-edge)) 0 100%/3px 3px no-repeat,
+    linear-gradient(var(--screen-edge),var(--screen-edge)) calc(100% - 14px) 0/3px 3px no-repeat;
+}
+html[data-theme] .canvas-tactical .workflow-card { --hud-close-width:35px; }
+html[data-theme] .canvas-tactical .workflow-card>.canvas-tactical-card-shell::after {
+  background:linear-gradient(var(--screen-edge),var(--screen-edge)) 18px 0/32px 1px no-repeat,
+    linear-gradient(var(--hud-rim),var(--hud-rim)) 0 0/calc(100% - var(--hud-close-width)) 1px no-repeat,
+    linear-gradient(var(--screen-edge),var(--screen-edge)) calc(100% - 18px) 100%/48px 1px no-repeat,
+    linear-gradient(155deg,var(--hud-front),var(--hud-back));
+  box-shadow:none;
+}
+html[data-theme] .canvas-tactical .canvas-tactical-module-code { flex-basis:23px; }
+html[data-theme] .canvas-tactical .canvas-tactical-module-code::before { content:none; }
+html[data-theme] .canvas-tactical .canvas-tactical-module-icon { color:var(--cs-muted); }
+html[data-theme] .canvas-tactical .workflow-card>header {
+  background:linear-gradient(var(--screen-line),var(--screen-line)) 15px 100%/calc(100% - 30px) 1px no-repeat;
+}
+html[data-theme] .canvas-tactical .workflow-card:is(:hover,.is-selected)>header {
+  background:linear-gradient(var(--screen-line),var(--screen-line)) 15px 100%/calc(100% - 30px) 1px no-repeat;
+}
+html[data-theme] .canvas-tactical .workflow-card>header>button[aria-label="删除卡片"] {
+  top:-1px;right:-1px;width:var(--hud-close-width);padding:0;
+  background:transparent;color:var(--cs-muted);
+  clip-path:polygon(0 0,calc(100% - 13px) 0,100% 13px,100% 100%,8px 100%,0 calc(100% - 8px));
+}
+html[data-theme] .canvas-tactical .workflow-card>header>button[aria-label="删除卡片"]:is(:hover,:focus-visible):not(:disabled) {
+  background:var(--cs-hover);color:var(--cs-ink);
+}
+html[data-theme] .canvas-tactical .workflow-card>header>button[aria-label="删除卡片"]::before { left:0;top:0;background:var(--screen-edge);box-shadow:none; }
+html[data-theme] .canvas-tactical .workflow-card>header>button[aria-label="删除卡片"] svg { align-self:center;justify-self:center;margin:0; }
+html[data-theme] .canvas-tactical .workflow-card :is(textarea,.ProseMirror,.workflow-profile-name,.workflow-trigger-count input) { background:transparent; }
+html[data-theme] .canvas-tactical .workflow-preview::after { content:none; }
+html[data-theme] .canvas-tactical .workflow-card footer {
+  background:linear-gradient(var(--screen-line),var(--screen-line)) 15px 0/calc(100% - 30px) 1px no-repeat;
+}
+html[data-theme] .canvas-tactical .workflow-card footer>span:first-child::before { box-shadow:none; }
+html[data-theme] .canvas-tactical .workflow-card footer button { background:transparent;color:var(--cs-ink); }
+html[data-theme] .canvas-tactical .workflow-card footer button:hover { background:var(--cs-hover);color:var(--cs-ink); }
+html[data-theme] .canvas-tactical .canvas-note.is-content-card .canvas-text-cell:focus-within { --cell-line:rgb(var(--industrial-accent-rgb)); }
+html[data-theme] .canvas-tactical .canvas-note.is-bubble {
+  --bb-surface:var(--cs-card);--bb-surface-2:var(--cs-console);--bb-ink:var(--cs-ink);--bb-muted:var(--cs-muted);
+  border-radius:0;border-color:var(--cs-rule);background:var(--cs-card);box-shadow:none;
+}
+html[data-theme] .canvas-tactical .canvas-bubble-tail:is(:hover,:focus-visible) { filter:none; }
+html[data-theme] .canvas-tactical .canvas-note:not(.is-section):not(.is-content-card).is-selected { outline:1px solid rgb(var(--industrial-accent-rgb)); }
+html[data-theme] .canvas-tactical :is(.canvas-prompt-node:not(.is-image-only),.canvas-agent-node) { border-radius:0;background:var(--cs-card);box-shadow:none; }
+html[data-theme] .canvas-tactical :is(.canvas-prompt-node,.canvas-agent-node):is(.is-selected,.is-focused) {
+  outline:1px solid rgb(var(--industrial-accent-rgb));box-shadow:none;
+}
+html[data-theme] .canvas-tactical .canvas-chat-node::before {
+  clip-path:var(--hud-cut);border:0;
+  background:linear-gradient(var(--cs-rule),var(--cs-rule)) 18px 0/32px 1px no-repeat,
+    linear-gradient(var(--cs-rule),var(--cs-rule)) calc(100% - 18px) 100%/48px 1px no-repeat,
+    linear-gradient(155deg,var(--hud-front),var(--hud-back));
+  box-shadow:inset 0 1px var(--hud-rim);
+}
+html[data-theme] .canvas-tactical .canvas-chat-node:is(.is-selected,.is-focused,:focus-visible) { outline:1px solid rgb(var(--industrial-accent-rgb)); }
+html[data-theme] .canvas-tactical :is(.canvas-chat-history,.canvas-text-stylebar,.canvas-cell-generation,.project-inspector-shell:not(.is-editing)) { border-radius:0;box-shadow:none; }
+
+/* Media keeps its transparent pixels; independent cards retain native semantic status borders. */
+html[data-theme] .canvas-tactical .canvas-plane :is(.canvas-node,.canvas-note.is-bubble,.canvas-prompt-node,.canvas-agent-node) {
+  box-shadow:var(--hud-shadow),inset 0 1px var(--hud-rim);
+}
+html[data-theme] .canvas-tactical .canvas-plane :is(.canvas-node,.canvas-note.is-bubble,.canvas-prompt-node,.canvas-agent-node):is(:hover,:focus-within,.is-selected,.is-focused) {
+  box-shadow:var(--hud-shadow-active),inset 0 1px var(--hud-rim);
+}
+html[data-theme] .canvas-tactical .canvas-plane :is(.canvas-note.is-bubble,.canvas-prompt-node:not(.is-image-only),.canvas-agent-node) {
+  background:linear-gradient(155deg,var(--hud-front),var(--hud-back));
+}
+html[data-theme] .canvas-tactical .canvas-plane :is(.canvas-note.is-bubble,.canvas-prompt-node:not(.is-image-only),.canvas-agent-node):not(.is-failed,.is-cancelled,.is-awaiting_approval,.is-awaiting_clarification) {
+  border-color:var(--hud-edge);
+}
+html[data-theme] .canvas-tactical .canvas-plane :is(.canvas-node.is-asset,.canvas-prompt-node.is-image-only) { box-shadow:var(--hud-shadow); }
+html[data-theme] .canvas-tactical .canvas-plane :is(.canvas-node.is-asset,.canvas-prompt-node.is-image-only):is(:hover,:focus-within,.is-selected,.is-focused) { box-shadow:var(--hud-shadow-active); }
+html[data-theme] .canvas-tactical .canvas-plane .canvas-node:is(.is-focused,.is-folder-target) {
+  outline:1px solid rgb(var(--industrial-accent-rgb));outline-offset:3px;
+}
+html[data-theme] .canvas-tactical .canvas-chat-node { box-shadow:var(--hud-shadow); }
+html[data-theme] .canvas-tactical .canvas-chat-node:is(:hover,:focus-within,.is-selected,.is-focused) { box-shadow:var(--hud-shadow-active); }
+
+/* Current models are identified by a small state mark instead of a filled provider row. */
+html[data-theme] .canvas-tactical .canvas-plane .workflow-card .model-select .model-select-trigger,
+html[data-theme] .composer-glass .composer-parameters .model-select .model-select-trigger {
+  position:relative;background:transparent;color:var(--bb-ink-soft);padding-left:12px;
+}
+html[data-theme] .canvas-tactical .canvas-plane .workflow-card .model-select .model-select-trigger:is(:hover,[aria-expanded="true"]),
+html[data-theme] .composer-glass .composer-parameters .model-select .model-select-trigger:is(:hover,[aria-expanded="true"]) {
+  background:rgb(var(--industrial-ink-rgb) / .035);color:var(--bb-ink);
+}
+html[data-theme] .canvas-tactical .canvas-plane .workflow-card .model-select .model-select-trigger::before,
+html[data-theme] .composer-glass .composer-parameters .model-select .model-select-trigger::before {
+  content:"";position:absolute;left:2px;top:calc(50% - 2px);width:4px;height:4px;
+  background:rgb(var(--industrial-accent-rgb));pointer-events:none;
+}
+
+/* The composer keeps its native width and responsive layout, with one offset edge. */
+html[data-theme] .creation-dock.composer-glass,
+html[data-theme] .canvas-tactical .creation-dock.composer-glass {
+  border:1px solid rgb(var(--industrial-muted-rgb) / .38);border-radius:0;
+  background:rgb(var(--industrial-panel-rgb));box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;
+}
+html[data-theme] .creation-dock.composer-glass::before {
+  content:"";position:absolute;inset:auto;top:-1px;left:18px;width:42px;height:2px;
+  background:rgb(var(--industrial-ink-rgb));pointer-events:none;
+}
+html[data-theme] .creation-dock.composer-glass::after {
+  content:"";position:absolute;inset:8px -9px -9px 9px;height:auto;width:auto;
+  border-right:1px solid rgb(var(--industrial-muted-rgb) / .27);
+  border-bottom:1px solid rgb(var(--industrial-muted-rgb) / .27);
+  background:none;pointer-events:none;
+}
+html[data-theme] .creation-dock.composer-glass:is(.is-creating,:focus-within)::before { background:rgb(var(--industrial-accent-rgb)); }
+html[data-theme] .composer-glass .composer-mode-thumb { background:transparent;box-shadow:none; }
+html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"],
+html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"] svg { color:rgb(var(--industrial-accent-rgb)); }
+html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"]::after {
+  right:4px;bottom:6px;width:11px;height:2px;background:rgb(var(--industrial-accent-rgb));box-shadow:none;
+}
+html[data-theme] .composer-glass .generation-send-button:not(:disabled) {
+  color:rgb(var(--industrial-accent-rgb));background:transparent;border-color:rgb(var(--industrial-muted-rgb) / .3);box-shadow:none;
+}
+html[data-theme] .composer-glass .generation-send-button:hover:not(:disabled) { color:rgb(var(--industrial-accent-rgb));background:rgb(var(--industrial-ink-rgb) / .035); }
+html[data-theme] .canvas-tactical .canvas-creation-mode-frame {
+  --creation-mode-line:rgb(var(--industrial-muted-rgb) / .3);
+  --creation-mode-stripe:rgb(var(--industrial-muted-rgb) / .5);
+  background:none;box-shadow:inset 0 0 0 1px var(--creation-mode-line);
+}
+html[data-theme] .canvas-tactical .creation-mode-notch.canvas-creation-mode-notch { color:rgb(var(--industrial-accent-rgb));background:var(--cs-console);clip-path:none; }
+html[data-theme] .canvas-tactical .creation-mode-notch.canvas-creation-mode-notch::before { background:rgb(var(--industrial-accent-rgb));box-shadow:none; }
+
+/* Visible focus stays local and continuous; status-specific error and warning colors remain native. */
+html[data-theme] .canvas-tactical .workflow-card :is(textarea,.ProseMirror):focus,
+html[data-theme] .canvas-tactical .workflow-card :is(.tactical-select-trigger,.model-select-trigger,button[title="选择画面比例"],.workflow-profile-name,.workflow-trigger-count input,.workflow-loop-start>button):focus-visible,
+html[data-theme] .canvas-tactical .canvas-bubble-tail:focus-visible,
+html[data-theme] .composer-glass :is(button,.tactical-select-trigger,input):focus-visible,
+html[data-theme] :is(.session-dock,[data-generation-composer="inline"]) .generation-input:focus-within,
+html[data-theme] :is(.local-chat-reply-box,.local-chat-search):focus-within {
+  outline:1px solid rgb(var(--industrial-accent-rgb));outline-offset:2px;box-shadow:none;
+}
+@media (prefers-reduced-motion:no-preference) {
+  html[data-theme] .canvas-tactical .canvas-tactical-card-shell,
+  html[data-theme] .canvas-tactical .canvas-chat-node { transition:box-shadow 160ms ease-out,border-color 160ms ease-out; }
+}
+@media (forced-colors:active) {
+  html[data-theme] .composer-glass .composer-mode-thumb,
+  html[data-theme] .composer-glass .generation-send-button:not(:disabled),
+  html[data-theme] .canvas-tactical .creation-mode-notch.canvas-creation-mode-notch { background:Highlight;color:HighlightText; }
+  html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"],
+  html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"] svg { color:HighlightText; }
+  html[data-theme] .canvas-tactical .canvas-stage { background-image:none; }
+  html[data-theme] .creation-dock.composer-glass { background:Canvas;border-color:ButtonText; }
+  html[data-theme] .canvas-tactical .canvas-plane :is(.canvas-node,.canvas-note.is-bubble,.canvas-prompt-node,.canvas-agent-node),
+  html[data-theme] .canvas-tactical .canvas-chat-node::before { box-shadow:none !important;background:Canvas;border-color:CanvasText; }
+  html[data-theme] .canvas-tactical :is(.canvas-tactical-card-shell,.canvas-chat-node) { background:transparent;box-shadow:none !important; }
+  html[data-theme] .canvas-tactical .canvas-tactical-card-shell::after { background:Canvas;border:1px solid CanvasText;box-shadow:none; }
+  html[data-theme] .canvas-tactical .canvas-drawing-tools button[aria-pressed="true"],
+  html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"] { outline:1px solid Highlight; }
+}

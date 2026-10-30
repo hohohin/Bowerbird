@@ -86,7 +86,9 @@
 .workflow-cell-port.is-image-output, .workflow-cell-port.workflow-image-output { background:#61b8a2; box-shadow:0 0 0 1px #61b8a2; }
 .workflow-cell-port.workflow-image-output { right:-6px; top:24px; }
 .workflow-cell-port.workflow-content-text-output { right:-6px; top:8px; }
-.canvas-note:hover .workflow-image-output, .canvas-note:hover .workflow-content-text-output { opacity:1; pointer-events:auto; }
+.workflow-cell-port.workflow-latest-output { right:-6px; top:44px; background:var(--bb-blue); box-shadow:0 0 0 1px var(--bb-blue); }
+.workflow-latest-output span { position:absolute; right:18px; top:50%; transform:translateY(-50%); padding:2px 4px; white-space:nowrap; color:var(--bb-muted); background:var(--bb-surface); font-size:10px; pointer-events:none; }
+.canvas-note:hover .workflow-image-output, .canvas-note:hover .workflow-content-text-output, .canvas-note:hover .workflow-latest-output { opacity:1; pointer-events:auto; }
 .is-content-card .canvas-text-remove.is-row { left:-26px; }
 .canvas-text-cell:focus-within { box-shadow:inset 0 0 0 1px var(--bb-blue); }
 .canvas-cell-drop-target { position:absolute; z-index:20000; pointer-events:none; border:2px solid var(--bb-blue); border-radius:4px; box-shadow:0 0 0 4px rgb(var(--bb-blue-rgb) / 17%); }

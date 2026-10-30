@@ -54,6 +54,15 @@ import {
   shouldDiscardCreativeTarget,
 } from "./lib/workspaceRoute";
 import type { AuthSnapshot, CodexChunk, JimengOrphanTask } from "./lib/types";
+import "./components/TacticalProjection.css";
+import "./components/TacticalDialogs.css";
+import "./components/CanvasSecondaryTactical.css";
+import "./components/MediaTactical.css";
+import "./components/ManagementTactical.css";
+import "./components/TacticalMenus.css";
+import "./components/IndustrialTheme.css";
+import "./components/IndustrialCanvas.css";
+import "./components/IndustrialMenus.css";
 
 let refreshVersion = 0;
 

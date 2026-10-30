@@ -12,7 +12,7 @@ try {
   const result = await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     const { newWorkflowNode, workflowOrder } = await import('/src/lib/canvasWorkflow.ts');
-    const { buildWorkflowPlan, canResumeWorkflowPlanning, planningSnapshotKey, samePlanningContext } = await import('/src/lib/workflowPlanner.ts');
+    const { buildWorkflowPlan, canResumeWorkflowPlanning, plannerContextKey, planningSnapshotKey, samePlanningContext } = await import('/src/lib/workflowPlanner.ts');
     const { WorkflowPlannerRuntime } = await import('/src/lib/workflowPlannerRuntime.ts');
     const { CanvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     let checks = 0;
@@ -183,6 +183,47 @@ try {
     check(state(restoredJson).status === 'waiting' && !state(restoredJson).proposal.error, 'Rust JSON key ordering and legacy context string do not invalidate unchanged inputs or source snapshots');
     reply = await commit(sourceText); await collect(restoredJson);
     check(state(restoredJson).status === 'applied', 'restored source-bound request commits after real serialization boundary');
+
+    const oldImage = (await api.projectCanvasGet('p')).nodes.find(node => node.id === 'old');
+    await api.projectCanvasNodeCreate({ ...oldImage, id: 'planner-third-image' });
+    const oldInputs = [{ assetId: 'existing', assetNodeId: 'old' }, { assetId: 'existing', assetNodeId: 'planner-third-image' }];
+    const migrating = new CanvasWorkflowController('protocol-legacy-pipes'); await migrating.load();
+    await migrating.edit([{ ...owner, inputs: { image: oldInputs }, prompt: '采用 @[legacy-third]',
+      promptReferences: [{ id: 'legacy-third', type: 'image', input: oldInputs[1], assetId: 'existing', label: '图片 3.1' }] }]);
+    await migrating.planner.start(owner.id);
+    const oldSnapshot = JSON.parse(sessionStorage.getItem('workflow-protocol-legacy-pipes'));
+    const oldOwner = oldSnapshot.document.nodes[0];
+    for (const input of oldOwner.inputs.image) delete input.slot;
+    for (const ref of oldOwner.promptReferences) { delete ref.slot; delete ref.input.slot; ref.label = '图片 3.1'; ref.assetId = 'existing'; }
+    oldOwner.planning.contextKey = plannerContextKey(oldOwner);
+    for (const source of oldOwner.planning.sources) delete source.input.slot;
+    sessionStorage.setItem('workflow-protocol-legacy-pipes', JSON.stringify(oldSnapshot));
+    const beforeMigration = sent, restoredPipes = new CanvasWorkflowController('protocol-legacy-pipes'); await restoredPipes.load();
+    check(restoredPipes.document.nodes[0].promptReferences[0].slot === 2, 'loading pre-slot planner preserves its actual surviving source');
+    check(samePlanningContext(oldOwner.planning.contextKey, plannerContextKey(restoredPipes.document.nodes[0])), 'legacy waiting context canonicalizes only migration metadata');
+    const twoSources = JSON.stringify({ ...simple, sourceUses: [1, 2].map(index => ({ source: `source${index}`, role: 'reference', mode: 'shared' })),
+      nodes: [{ id: 'draw', kind: 'generation', prompt: '结合 {{source1.image}} 和 {{source2.image}}' }] });
+    reply = proposal(twoSources); await collect(restoredPipes);
+    check(state(restoredPipes).status === 'waiting' && !state(restoredPipes).proposal?.error && !!state(restoredPipes).proposal, 'pre-slot waiting request accepts its original valid proposal');
+    reply = await commit(twoSources); await collect(restoredPipes);
+    check(state(restoredPipes).status === 'applied' && sent === beforeMigration && state(restoredPipes).requestId === oldOwner.planning.requestId, 'legacy waiting request commits with the same identity and zero redelivery');
+    for (const [name, mutate] of [
+      ['order', node => { node.inputs.image.reverse(); }],
+      ['slot', node => { node.promptReferences[0].slot = 1; }],
+      ['source', node => { node.inputs.image = node.inputs.image.slice(0, 1); }],
+    ]) {
+      const project = `protocol-legacy-change-${name}`;
+      sessionStorage.setItem(`workflow-${project}`, JSON.stringify(oldSnapshot));
+      const changed = new CanvasWorkflowController(project); await changed.load();
+      const changedOwner = structuredClone(changed.document.nodes[0]); mutate(changedOwner); await changed.edit([changedOwner]);
+      reply = proposal(twoSources); await collect(changed);
+      check(state(changed).status === 'failed' && state(changed).error.includes('需求或来源已变化') && changed.document.nodes.length === 1,
+        `legacy migration still rejects a real ${name} change`);
+    }
+    check(sent === beforeMigration, 'rejected migrated requests also never resubmit');
+    for (const invalid of ['["request","codex",[]]', '["request","codex",{},{}]', '["request","codex",{},[],"extra"]']) {
+      check(!samePlanningContext(invalid, invalid), 'identical malformed context tuples are not accepted');
+    }
     check(!samePlanningContext('[{"a":1}]', '[{"a":2}]') && !samePlanningContext('[1,2]', '[2,1]') && !samePlanningContext('broken', 'broken'), 'canonical comparison still rejects changed values, source order and malformed snapshots');
     return { checks, feedback: feedback.length };
   });

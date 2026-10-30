@@ -1,6 +1,21 @@
 # Seedance 2.5 视频接入与验收记录
 
+## 2026-10-30：重启后视频卡永久等待、无法删除（源码未发布）
+
+- 原恢复代码调用 `recentGenSessions(500)`，但原生最多返回最近 100 条终态会话，且只从最近 200 条队列记录筛选。运行中任务和较旧已完成任务可能均不在结果中；未找到及取消又统一显示「原任务尚未完成」，工作流一直处于 waiting，卡片删除按钮因此禁用。
+- 复用现有原生 `agent_ds_workflow_generation_job`，按原 jobId／turnKey 直接读取持久队列状态与 generation_meta 产物，不依赖近期列表和内存 genJobs。恢复分支提前到输入解析之前，不因原参考素材／连接已失效而阻止取回已提交结果；不调用生成或重发上游请求。
+- 真实 running／queued 保留等待，done 写回视频输出并完成步骤；failed／cancelled、记录缺失、已完成但本地产物缺失分别结束等待并报告原因。IPC 查询失败保持原任务身份，允许重试，不冒充远端失败。等待中的普通视频卡删除按钮可用，先沿既有 stop 停止所属工作流，再删除卡片；取消／保存失败时不绕过锁定。删除不抹掉素材或原生任务记录，远端任务是否继续仍沿现有 provider 取消语义。
+- 验证：完整 TypeScript；`canvas-video-recovery.test.mjs` 实际重载模拟生成中关闭应用，覆盖 running→done、近期列表不可用、原参考素材缺失、任务不存在、failed／cancelled／cancelled_local、空／已删产物、查询断线重试、等待卡片直接删除及再次重载；`canvas-workflow-h3.test.mjs` 与 `local-chat-h3.test.mjs` 4 项回归通过。仅合成数据／模拟 IPC，未重发真实任务、修改用户素材或打包发布。
+
 **2026-10-23 发布补记：** 本页当日桌面源码已随 Windows **26.10.2301** 发布（源码 4156e8e0），下方“待发布／未打包”是专项验证时的历史状态。正式包、签名、CDN 及回滚证据见 [桌面自动更新](DESKTOP-UPDATES.md)。原有真实安装／GPU、原生 UI 和 Mac 实机验收边界继续保留。
+
+## 2026-10-28：规范化路径导致视频封面仍为空（源码未发布）
+
+- 用户再次反馈其他电脑生成视频只显示播放占位。已在发布版 Windows 26.10.2801 的封面 worker 复现：同一份当日 Cloud 480p 验收 MP4，普通 `D:\...` 路径成功，带 `\\?\D:\...` 前缀的路径失败。`FileWorkspace` 的目录可写检测返回 `fs::canonicalize` 结果，因此正式入库会使用这种路径；开发机存在 FFmpeg 时可被回退路径掩盖，缺工具的电脑会留下空封面。未取得故障电脑日志，此处记录的是已复现代码缺陷。
+- Windows 首帧与系统元数据读取共用 `open_local_reader`：先以 `MFCreateFile` 打开原路径，再用 `MFCreateSourceReaderFromByteStream` 解码，避免把规范化文件路径交给 URL 解析器；不剥离长路径／UNC 前缀，不改视频文件、素材身份或生成任务。独立 worker、15 秒超时、串行提取与 FFmpeg 回退保留。API 依据：[MFCreateFile](https://learn.microsoft.com/en-us/windows/win32/api/mfapi/nf-mfapi-mfcreatefile)、[字节流 Source Reader](https://learn.microsoft.com/en-us/windows/win32/api/mfreadwrite/nf-mfreadwrite-mfcreatesourcereaderfrombytestream)。
+- 前端封面请求不再永久缓存失败：失败共享 10 秒冷却，同一挂载最多自动补试一次，快速重挂载继续去重。实际封面图片加载失败时只失效匹配的已完成缓存，再请求一次修复；修复仍失败保持占位，不循环解码。路径切换和卸载清除补试计时并忽略迟到显示，轮播切换丢弃旧失败状态，返回原视频仍可恢复；被动卡片仍为静态图片，不创建隐藏视频或预取视频字节。
+- 原生验证在明确禁用 FFmpeg 回退后通过：真实 Cloud 854×480 MP4 的规范化路径封面与旧版普通路径产物 SHA-256 完全一致；原生元数据为 854×480、5.042 秒。40ms 中文空格短片、90° 旋转／参考像素比对、规范化路径、损坏视频无半成品，以及 300 字符且含中文／空格／`#`／`%` 的 Windows 长路径均通过。回归已扩展 `src-tauri/examples/video_poster_smoke.rs`；证据位于本机 `.tmp/video-poster-20261028-audit/`。网络 UNC 共享与故障电脑尚未实机验证。
+- 完整 TypeScript、封面缓存 Rust 3 项、元数据 Rust 7 项，以及封面恢复／静态媒体预览／媒体生命周期三组 Chromium 回归通过。新增 `scripts/video-poster-recovery-ui.test.mjs` 覆盖成功缓存丢失后的真实 404、会话快照、冷却内多次重挂载、暂时失败恢复、永久失败停止、切换取消和 A→B→A 恢复；旧媒体夹具在慢速原生测试中按 10 秒冷却检查失败重试，保留成功去重、单解码器、30 轮挂载与 5 轮播放器释放检查。只读使用已有生成验收视频及合成视频，不调用模型、不操作真实素材库；包含原生改动，需重新构建发布客户端后其他电脑才会获得修复，当前未打包发布。
 
 ## 2026-10-23：桌面视频元数据增加系统回退（源码未发布）
 

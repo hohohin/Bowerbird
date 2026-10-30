@@ -1,3 +1,4 @@
+import { TacticalSelect } from "./TacticalSelect";
 import { LearningHint } from "./OnboardingTour";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -865,9 +866,9 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
                 </div>
               ) : (
                 <div className="flex items-center gap-1">
-                  <select
+                  <TacticalSelect
                     value={targetCollectionId}
-                    onChange={(e) => setTargetCollectionId(e.target.value)}
+                    onValueChange={value => setTargetCollectionId(value)}
                     disabled={collectionBusy || availableCollections.length === 0}
                     className="min-w-0 flex-1 rounded bg-panel px-1.5 py-1 text-xs outline-none ring-1 ring-edge focus:ring-accent disabled:opacity-50"
                   >
@@ -879,7 +880,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
                         {c.name}
                       </option>
                     ))}
-                  </select>
+                  </TacticalSelect>
                   <button
                     onClick={() => addToCollection(targetCollectionId)}
                     disabled={collectionBusy || !targetCollectionId}

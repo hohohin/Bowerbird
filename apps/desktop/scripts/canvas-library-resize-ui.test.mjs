@@ -21,7 +21,10 @@ async function clickControl(name) {
 }
 async function selectSource(name) {
   if (name === '文件浏览器') await clickControl(name);
-  else await panel.getByRole('tab', { name, exact: true }).click();
+  else {
+    const tab = panel.getByRole('tab', { name, exact: true });
+    if (await tab.getAttribute('aria-selected') !== 'true') await tab.click();
+  }
   const more = panel.getByRole('button', { name: '更多素材库控件', exact: true });
   if (await more.count() && await more.getAttribute('aria-expanded') === 'true') await more.click();
 }
@@ -144,9 +147,11 @@ try {
   await settle();
   assert.ok(await panel.evaluate(el => {
     const workspace = el.parentElement;
-    return ['::before', '::after'].every(pseudo => getComputedStyle(workspace, pseudo).content === 'none')
-      && getComputedStyle(el).boxShadow !== 'none';
-  }), 'drawer uses only a box shadow, without edge blur layers');
+    return ['::before', '::after'].every(pseudo => {
+      const style = getComputedStyle(workspace, pseudo);
+      return style.content === 'none' || (style.pointerEvents === 'none' && style.filter === 'none');
+    }) && getComputedStyle(el).backdropFilter === 'none';
+  }), 'industrial drawer decorations do not intercept input or blur the canvas');
   const fullWidth = (await panel.boundingBox()).width;
   const fullColumns = await assertGrid();
   await dragTo(620);
@@ -247,10 +252,10 @@ try {
   await dragTo(500);
   await assertGrid();
   await page.keyboard.press('Escape');
-  await page.locator('.app-topbar input').focus();
+  await page.locator('.canvas-board-title').focus();
   await page.evaluate(() => window.emitChange());
   await page.waitForTimeout(300);
-  assert.ok(await page.locator('.app-topbar input').evaluate(el => el === document.activeElement), 'background updates do not steal search focus');
+  assert.ok(await page.locator('.canvas-board-title').evaluate(el => el === document.activeElement), 'background updates do not steal input focus');
   assert.deepEqual(errors, []);
-  console.log('PASS project entry focus/Tab, integrated pull tab/close, eased motion, resize/reflow, shadow without edge blur, canvas drag/copy/undo/context menu and pan/zoom with all three sources open, scoped keyboard focus, window bounds, dark/reduced motion and search focus');
+  console.log('PASS project entry focus/Tab, integrated pull tab/close, eased motion, resize/reflow, shadow without edge blur, canvas drag/copy/undo/context menu and pan/zoom with all three sources open, scoped keyboard focus, window bounds, dark/reduced motion and input focus');
 } finally { await browser.close(); await server.close(); }

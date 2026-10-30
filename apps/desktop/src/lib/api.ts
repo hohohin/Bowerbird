@@ -62,7 +62,7 @@ import type {
   TagCount,
 } from "./types";
 
-const IMAGE_EXT = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif"];
+const IMAGE_EXT = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tiff", "tif", "heic", "heif"];
 
 export interface SourceBrowserBounds {
   x: number;
@@ -71,9 +71,16 @@ export interface SourceBrowserBounds {
   height: number;
 }
 
+export interface CanvasFrequentAssetsResult {
+  threshold: number;
+  frequent: Asset[];
+  pinned: Asset[];
+}
+
 export const api = {
   exportAssetsZip: (assetIds: string[], path: string) => invoke<number>("export_assets_zip", { assetIds, path }),
   videoPoster: (sourcePath: string) => invoke<string | null>("video_poster", { sourcePath }),
+  canvasImagePreview: (path: string, maxSize: number) => invoke<string>("canvas_image_preview", { path, maxSize }),
   trimVideo: (request: import("./videoTrim").VideoTrimRequest, projectId?: string) => invoke<Asset>("trim_video", { ...request, projectId: projectId ?? null }),
   canvasWorkflowGet: (projectId: string) => invoke<import("./canvasWorkflow").WorkflowSnapshot>("canvas_workflow_get", { projectId }),
   workflowTemplatesList: () => invoke<WorkflowTemplate[]>("workflow_templates_list"),
@@ -83,7 +90,7 @@ export const api = {
   workflowTemplateDelete: (id: string, expectedRevision: number) => invoke<void>("workflow_template_delete", { id, expectedRevision }),
   workflowTemplateExport: (id: string, path: string) => invoke<void>("workflow_template_export", { id, path }),
   workflowTemplateExportDocument: (document: WorkflowTemplate, path: string) => invoke<void>("workflow_template_export", { document, path }),
-  canvasWorkflowSave: (projectId: string, revision: number, document: import("./canvasWorkflow").CanvasWorkflow) => invoke<number>("canvas_workflow_save", { projectId, revision, document }),
+  canvasWorkflowSave: (projectId: string, revision: number, document: import("./canvasWorkflow").CanvasWorkflow, createdContent?: NewCanvasNode) => invoke<number>("canvas_workflow_save", { projectId, revision, document, ...(createdContent ? { createdContent } : {}) }),
   // 健康检查
   ping: (name: string) => invoke<string>("ping", { name }),
   dbHealth: () => invoke<string>("db_health"),
@@ -322,6 +329,12 @@ export const api = {
   layerCloudRequest: (request: import("./layerDocument").LayerRequest | { action: string; idempotency_key?: string; job_id?: string }) => invoke<{ status: string; progress?: number; services?: { service: string; available: boolean; credits: number | null }[]; error?: { message: string }; layer_result?: { document?: import("./layerDocument").LayerDocument; image?: string } }>("layer_cloud_request", { request }),
 
   // 浏览
+  canvasFrequentAssets: (projectId?: string | null) => invoke<CanvasFrequentAssetsResult>("canvas_frequent_assets", { projectId: projectId ?? null }),
+  refreshCanvasFrequentAssets: (projectId?: string | null) => invoke<CanvasFrequentAssetsResult>("canvas_frequent_assets_refresh", { projectId: projectId ?? null }),
+  setCanvasFrequentAssetsThreshold: (threshold: number, projectId?: string | null) => invoke<CanvasFrequentAssetsResult>("canvas_frequent_assets_set_threshold", { threshold, projectId: projectId ?? null }),
+  pinCanvasFrequentAssets: (assetIds: string[], projectId?: string | null) => invoke<CanvasFrequentAssetsResult>("canvas_frequent_assets_pin", { assetIds, projectId: projectId ?? null }),
+  removeCanvasFrequentAsset: (assetId: string, row: "frequent" | "pinned", projectId?: string | null) =>
+    invoke<CanvasFrequentAssetsResult>("canvas_frequent_assets_remove", { assetId, row, projectId: projectId ?? null }),
   listLibraryView: (filter: { search?: string; smart?: string | null; folderId?: string | null; collectionId?: string | null; color?: string | null }) =>
     invoke<LibraryView>("list_library_view", { filter }),
   listAssets: (folderId?: string, projectId?: string | null, limit = 500, offset = 0) =>

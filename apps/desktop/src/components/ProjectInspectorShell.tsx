@@ -71,7 +71,7 @@ export function ProjectInspectorShell({
           <strong className="min-w-0 flex-1 truncate text-xs font-semibold" title={header.title}>
             {header.title}
           </strong>
-          <span className="max-w-[48%] shrink truncate rounded-full border border-edge px-2 py-0.5 text-[11px] text-muted" title={header.detail}>
+          <span className="project-inspector-detail max-w-[48%] shrink truncate rounded-full border border-edge px-2 py-0.5 text-[11px] text-muted" title={header.detail}>
             {header.detail}
           </span>
           {header.running && (

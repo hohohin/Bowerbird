@@ -159,7 +159,7 @@ export function Toolbar({
   }
 
   return (
-    <header ref={toolbarRef} className={`app-topbar is-search-hidden${canvasMode ? "" : " is-library"}${tactical ? " library-tactical" : ""}${showFileNavigation ? " has-file-navigation" : localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
+    <header ref={toolbarRef} className={`app-topbar is-search-hidden${canvasMode ? " canvas-tactical" : " is-library"}${tactical ? " library-tactical" : ""}${showFileNavigation ? " has-file-navigation" : localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
       <div className="app-topbar-leading">
         <div ref={importRef} className="app-topbar-import relative">
           <button
@@ -252,7 +252,7 @@ export function Toolbar({
       {collectedNotice && (
         <button
           onClick={showCollectedAsset}
-          className="absolute right-4 top-[calc(100%+22px)] z-50 max-w-72 truncate rounded-full border border-lime/25 bg-panel px-3 py-2 text-xs text-lime shadow-panel hover:bg-panel2"
+          className="toolbar-import-notice absolute right-4 top-[calc(100%+22px)] z-50 max-w-72 truncate rounded-full border border-lime/25 bg-panel px-3 py-2 text-xs text-lime shadow-panel hover:bg-panel2"
           title={`已采集：${collectedNotice}。点击回到总库查看。`}
         >
           已采集「{collectedNotice}」 · 查看

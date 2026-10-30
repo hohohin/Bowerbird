@@ -44,14 +44,14 @@ try {
     return received;
   }),expected);
   await execute('甲 / 乙');
-  // Real UI disconnect and reconnect: pipe 2 must keep its number and its value.
+  // Real UI disconnect and reconnect: remaining inputs move forward, new inputs append.
   await consumer.getByRole('button',{name:'输入：文本',exact:true}).click({button:'right'});
   await page.getByRole('menuitem').filter({hasText:'文本 1'}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n=>n.id==='consumer').inputs.text.length===1);
   await editor.press('End');await editor.pressSequentially('@');
   const menu=page.getByRole('listbox',{name:'收到的内容'});await menu.waitFor();
   assert.equal(await menu.getByRole('option').count(),1);
-  assert.match(await menu.getByRole('option').innerText(),/文本 2/);
+  assert.match(await menu.getByRole('option').innerText(),/文本 1/);
   await editor.press('Escape');await editor.press('Backspace');
   const cell=page.locator('[data-canvas-node-id="pipes-table"] [data-canvas-cell="c"]');
   await cell.hover();await cell.locator('[data-workflow-cell="c"]').click();
@@ -60,10 +60,10 @@ try {
   // Clicking the same source again must not duplicate the pipe (slot metadata is not source identity).
   await cell.hover();await cell.locator('[data-workflow-cell="c"]').click();
   await consumer.getByRole('button',{name:'输入：文本',exact:true}).click();
-  assert.deepEqual(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n=>n.id==='consumer').inputs.text.map(i=>[i.slot,i.cellId])),[[2,'b'],[1,'c']]);
+  assert.deepEqual(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n=>n.id==='consumer').inputs.text.map(i=>[i.slot,i.cellId])),[[1,'b'],[2,'c']]);
   await page.evaluate(()=>window.save());await page.reload();await editor.waitFor();
   assert.deepEqual(await editor.locator('[data-reference-id]').allTextContents(),['@文本 1','@文本 2']);
-  await execute('新甲 / 乙');
+  await execute('乙 / 新甲');
   await page.evaluate(async()=>{
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
     const c=canvasWorkflowController('p');
@@ -71,5 +71,5 @@ try {
   });
   await execute('新甲 / 乙');
   assert.deepEqual(errors,[]);
-  console.log('PASS numbered input pipes: legacy mismatch, real disconnect/reconnect, stable menu/chips, duplicate wire, reload, reorder and current runtime values');
+  console.log('PASS numbered input pipes: legacy mismatch, real disconnect/reconnect, compact menu/chips, duplicate wire, reload, reorder and current runtime values');
 }finally{await browser.close();await server.close();}

@@ -1,7 +1,7 @@
 import { workflowInputProducers, workflowInputValues, WorkflowNodeError, type WorkflowNode, type WorkflowLoop, type WorkflowLoopItem, type WorkflowValue } from "./canvasWorkflow";
 import { canvasTableValue, emptyCanvasCell, readCanvasNote } from "./canvasNotes";
 import { contentTableRows } from "./contentTable";
-import { canvasInputValue, canvasSessionImages } from "./canvasSessionOutputs";
+import { canvasInputValue, canvasSessionImages, resolveGenerationCells } from "./canvasSessionOutputs";
 import type { CanvasNode } from "./types";
 
 /** The loop owns every effective descendant, including native content writers. */
@@ -60,9 +60,11 @@ export function workflowLoopRows(node: WorkflowNode, nodes: WorkflowNode[], canv
   let items: WorkflowLoopItem[];
   if (input.canvasNodeId) {
     const source = canvas.find(card => card.id === input.canvasNodeId && card.kind === "note" && card.hiddenAt == null);
-    if (!source || input.cellId !== "*text") throw new WorkflowNodeError("请连接内容卡的整体文本输出，逐行循环不接单个单元格", node);
+    if (!source || input.cellId !== "*text" && input.cellId !== "*latest") throw new WorkflowNodeError("请连接内容卡的整体文本输出或输出最新，逐行循环不接单个单元格", node);
     const note = readCanvasNote(source);
-    items = note.cells.map(row => {
+    const rows = input.cellId === "*latest" ? resolveGenerationCells(note, canvas).cells.slice(-1) : note.cells;
+    if (input.cellId === "*latest" && rows.flat().some(cell => cell.generation_ref && !cell.image_refs?.length)) throw new WorkflowNodeError("上游图片尚未生成完成，请等待原生成任务", node);
+    items = rows.map(row => {
       const { text, table, assetIds } = canvasTableValue([row]);
       return { text, table, assetIds };
     }).filter(item => item.text || item.assetIds.length);

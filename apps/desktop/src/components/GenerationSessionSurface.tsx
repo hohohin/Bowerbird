@@ -15,7 +15,7 @@ export function GenerationSessionSurface({ jobId, className, children }: {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   useEffect(() => { setMenu(null); }, [jobId]);
 
-  return <div ref={surfaceRef} className={className} tabIndex={0} aria-label="生成会话详情"
+  return <div ref={surfaceRef} className={`generation-session-surface ${className}`} tabIndex={0} aria-label="生成会话详情"
     onContextMenu={event => {
       if (event.defaultPrevented || jobId === undefined || !(event.target instanceof Element)) return;
       // Keep text copying, editor menus and media actions intact.

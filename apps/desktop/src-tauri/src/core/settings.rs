@@ -76,6 +76,10 @@ pub struct AppSettings {
     #[serde(default)]
     pub canvas_show_asset_names: bool,
 
+    /// Canvas shelf membership is updated through dedicated atomic commands.
+    #[serde(default)]
+    pub canvas_frequent_assets: crate::core::canvas_frequent_assets::CanvasFrequentAssetsPreferences,
+
     /// 生成成功时的应用内弹窗与提示音，可分别关闭；旧配置默认开启。
     #[serde(default = "default_true")]
     pub generation_completion_popup: bool,
@@ -134,6 +138,7 @@ impl Default for AppSettings {
             board_shift_pick: false,
             hide_project_assets: false,
             canvas_show_asset_names: false,
+            canvas_frequent_assets: Default::default(),
             generation_completion_popup: true,
             generation_completion_sound: true,
             samples_seeded: false,
@@ -194,9 +199,12 @@ impl SettingsState {
         self.settings.read().unwrap().clone()
     }
 
-    /// 全量覆盖设置并持久化到文件。
-    pub fn update(&self, new_settings: AppSettings) -> AppResult<()> {
-        self.update_with(|settings| *settings = new_settings)
+    /// 覆盖普通设置并持久化；常用素材成员由专用命令维护，不能被旧快照覆盖。
+    pub fn update(&self, mut new_settings: AppSettings) -> AppResult<()> {
+        self.update_with(|settings| {
+            new_settings.canvas_frequent_assets = settings.canvas_frequent_assets.clone();
+            *settings = new_settings;
+        })
     }
 
     /// Serialize read-modify-write and publish memory only after replacing the file.

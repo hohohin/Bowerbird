@@ -634,7 +634,7 @@ for (const collection of ["promptGraphNodes", "agentGraphNodes"]) {
   });
 }
 
-import { snapCanvasRect, translateCanvasSelection, exceedsCanvasDragThreshold, isCanvasPanGesture, canvasNodeIdsInRect } from "../src/lib/canvasLogic.ts";
+import { prepareCanvasSnapAnchors, snapCanvasRectPrepared, snapCanvasRect, translateCanvasSelection, exceedsCanvasDragThreshold, isCanvasPanGesture, canvasNodeIdsInRect } from "../src/lib/canvasLogic.ts";
 import { expandCanvasSections, readCanvasNote } from "../src/lib/canvasNotes.ts";
 import { intersectArtboard } from "../src/lib/canvasArtboard.ts";
 
@@ -643,7 +643,7 @@ for (const dragKind of ["material", "execution"]) {
     test("mixed marquee drag from " + dragKind + (cancel ? " cancels both layouts" : " persists both layouts"), async () => {
       const source = readFileSync(new URL("../src/components/CanvasWorkspace.tsx", import.meta.url), "utf8");
       const file = ts.createSourceFile("canvas.tsx", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-      const names = ["selectionAnchors", "expandArtboardSelection", "translateGraphSelection", "translateWorkflowSelection", "beginNodeDrag", "beginGraphNodeDrag", "moveNode", "moveGraphNode", "endNodeDrag", "endGraphNodeDrag", "persistGraphNodeGeometry"];
+      const names = ["selectionAnchors", "expandArtboardSelection", "translateGraphSelection", "translateWorkflowSelection", "beginNodeDrag", "beginGraphNodeDrag", "moveNode", "moveGraphNode", "updateNodeDrag", "updateGraphNodeDrag", "translateMaterialSelection", "endNodeDrag", "endGraphNodeDrag", "persistGraphNodeGeometry"];
       const declarations = [];
       function visit(node) {
         if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text)) declarations.push(node.getText(file));
@@ -662,7 +662,11 @@ for (const dragKind of ["material", "execution"]) {
       const writes = [];
       const persisted = [];
       let activated = 0;
+      let handlers;
       const bindings = {
+        snapSizeObserverRef: { current: null }, observeSnapSizes() {}, prepareCanvasSnapAnchors, snapCanvasRectPrepared, canvasPointerSample: e => e,
+        nodeFrame: { push: e => handlers.updateNodeDrag(e), finish: e => handlers.updateNodeDrag(e), cancel() {} },
+        graphNodeFrame: { push: e => handlers.updateGraphNodeDrag(e), finish: e => handlers.updateGraphNodeDrag(e), cancel() {} },
         conversationCardsRef: { current: { cards: new Map(), hiddenIds: new Set() } },
         window: { getSelection: () => null },
         agentPromptGroupMap, expandCanvasSections, readCanvasNote, intersectArtboard, graphEdges: [], setPendingNewCards() {},
@@ -685,7 +689,7 @@ for (const dragKind of ["material", "execution"]) {
         api: { projectCanvasNodeUpdate: async (id, layout) => { persisted.push({ id, ...layout }); } },
       };
       const code = ts.transpileModule(declarations.join("\n"), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-      const handlers = new Function(...Object.keys(bindings), code + ";return { " + names.join(",") + " };")(...Object.values(bindings));
+      handlers = new Function(...Object.keys(bindings), code + ";return { " + names.join(",") + " };")(...Object.values(bindings));
       const anchors = handlers.selectionAnchors();
       assert.deepEqual(canvasNodeIdsInRect({ x: -10, y: -10, width: 520, height: 120 }, anchors), [...selectedIds]);
       const target = { isConnected: true, focus() {}, setPointerCapture() {}, hasPointerCapture: () => true, releasePointerCapture() {} };
@@ -815,6 +819,7 @@ test("canvas Ctrl+Z undoes removal without taking over text editing or adding to
       useStore: { getState: () => ({ canvasLibraryOpen: false }) },
       useLocalFileMode: { getState: () => ({ open: false }) }, workspaceRef: { current: null } };
     const onKeyDown = new Function(...Object.keys(bindings), code + ";return onKeyDown;")(...Object.values(bindings));
+    target.closest = () => null;
     onKeyDown({ target, key: "z", code: "KeyZ", ...modifier, preventDefault() { prevented++; } });
     assert.equal(undone, expected);
     assert.equal(prevented, expected);

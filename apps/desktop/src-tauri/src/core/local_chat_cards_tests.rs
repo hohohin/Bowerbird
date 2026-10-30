@@ -40,6 +40,35 @@ fn batch() -> Value {
     {"id":"repeat","kind":"loop","title":"重复","mode":"count","count":3,"body":["draw"]}],
     "connections":[{"from":"start","to":"repeat","output":"signal","input":"signal"}]})
 }
+fn video_batch() -> Value {
+    json!({"cards":[
+        {"id":"copy","kind":"content","title":"镜头方向","rows":[["缓慢推近"],["转向侧面"]]},
+        {"id":"draw","kind":"generation","title":"首帧","prompt":"创作首帧","mediaType":"image"},
+        {"id":"still","kind":"generation","title":"视频参考","prompt":"产品缓慢旋转","mediaType":"video","referenceAliases":["image1"]},
+        {"id":"linked","kind":"generation","title":"上游视频","prompt":"镜头缓慢推近","mediaType":"video","ratio":"9:16"},
+        {"id":"start","kind":"trigger","title":"开始"},
+        {"id":"repeat","kind":"loop","title":"重复视频","mode":"count","count":2,"body":["still","linked"]}],
+        "connections":[
+            {"from":"copy","to":"still","output":"text","input":"text"},
+            {"from":"draw","to":"linked","output":"image","input":"image"},
+            {"from":"start","to":"repeat","output":"signal","input":"signal"}]})
+}
+fn section_batch(large: bool) -> Value {
+    let mut args = video_batch();
+    if large {
+        args["cards"][0]["rows"] = json!(vec![vec!["表格内容"; 12]; 100]);
+        args["cards"][1]["prompt"] = json!("产品置于柔和光线中，画面保持简洁。".repeat(160));
+    }
+    args["cards"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"loose","kind":"content","title":"补充说明","text":"暂不归组"}));
+    args["sections"] = json!([
+        {"id":"planning","title":"前期规划","members":["copy","draw"]},
+        {"id":"motion","title":"动态制作","members":["start","repeat","still","linked"]}
+    ]);
+    args
+}
 fn create(db: &Database, s: &StartedChat, args: &Value) -> AppResult<ChatCardAction> {
     db.create_local_chat_cards(&s.conversation.summary.id, &s.turn_id, "call", args)
 }
@@ -297,6 +326,425 @@ fn local_chat_cards_compile_four_native_kinds_without_execution() {
         .query_row("SELECT COUNT(*) FROM task_queue", [], |r| r.get(0))
         .unwrap();
     assert_eq!(count, 0);
+}
+
+#[test]
+fn local_chat_cards_sections_compile_native_members_names_and_grid_without_execution() {
+    for large in [false, true] {
+        let args = section_batch(large);
+        let compiled = compile(
+            &args,
+            &ChatCardDefaults::default(),
+            &["picture".into()],
+            (0.0, 0.0),
+            "sections",
+        )
+        .unwrap();
+        assert_eq!(compiled.cards.len(), 9);
+        assert_eq!(compiled.nodes.len(), 5);
+        let sections: Vec<_> = compiled
+            .notes
+            .iter()
+            .filter(|note| note["payload"]["note_type"] == "section")
+            .collect();
+        assert_eq!(sections.len(), 2);
+        for (index, section) in sections.iter().enumerate() {
+            let payload = &section["payload"];
+            assert_eq!(payload["cells"], json!([]));
+            assert!(payload.get("artboard").is_none());
+            assert!(payload.get("workflow_container").is_none());
+            assert_eq!(payload["text"], payload["title"]);
+            assert_eq!(
+                compiled.names[section["id"].as_str().unwrap()],
+                payload["title"]
+            );
+            let expected: Vec<_> = args["sections"][index]["members"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|alias| {
+                    compiled
+                        .cards
+                        .iter()
+                        .find(|card| card.alias == alias.as_str().unwrap())
+                        .unwrap()
+                        .id
+                        .clone()
+                })
+                .collect();
+            assert_eq!(payload["member_ids"], json!(expected));
+            for id in expected {
+                let member = compiled
+                    .notes
+                    .iter()
+                    .chain(&compiled.nodes)
+                    .find(|node| node["id"] == id)
+                    .unwrap();
+                let width =
+                    member["width"]
+                        .as_f64()
+                        .unwrap_or(if member["kind"] == "comfy-video" {
+                            416.0
+                        } else {
+                            340.0
+                        });
+                let height =
+                    member["height"]
+                        .as_f64()
+                        .unwrap_or(if member["kind"] == "comfy-video" {
+                            720.0
+                        } else {
+                            600.0
+                        });
+                assert!(member["x"].as_f64().unwrap() >= section["x"].as_f64().unwrap() + 72.0);
+                assert!(member["y"].as_f64().unwrap() >= section["y"].as_f64().unwrap() + 96.0);
+                assert!(
+                    member["x"].as_f64().unwrap() + width
+                        <= section["x"].as_f64().unwrap() + section["width"].as_f64().unwrap()
+                            - 72.0
+                );
+                assert!(
+                    member["y"].as_f64().unwrap() + height
+                        <= section["y"].as_f64().unwrap() + section["height"].as_f64().unwrap()
+                            - 64.0
+                );
+            }
+        }
+        assert!(
+            sections[1]["x"].as_f64().unwrap()
+                >= sections[0]["x"].as_f64().unwrap()
+                    + sections[0]["width"].as_f64().unwrap()
+                    + 160.0
+        );
+        let loose = compiled
+            .notes
+            .iter()
+            .find(|note| note["id"] == compiled.cards[6].id)
+            .unwrap();
+        assert!(
+            loose["y"].as_f64().unwrap()
+                > sections
+                    .iter()
+                    .map(|s| s["y"].as_f64().unwrap() + s["height"].as_f64().unwrap())
+                    .fold(0.0, f64::max)
+        );
+        if large {
+            assert_eq!(compiled.notes[0]["width"], json!(2400.0));
+            assert_eq!(compiled.notes[0]["height"], json!(6446.0));
+        }
+        assert!(compiled
+            .nodes
+            .iter()
+            .all(|node| node["outputs"] == json!({}) && node.get("comfyVideoTask").is_none()));
+    }
+}
+
+#[test]
+fn local_chat_cards_sections_reopen_replay_and_undo_with_unrelated_runs_and_names() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("sections.sqlite");
+    let (db, s) = fixture_with_db(Database::open(&path).unwrap());
+    let mut before = parallel_document();
+    before["cardNames"]["reference"] = json!("前期规划");
+    save_workflow(&db.conn.lock().unwrap(), "p", 0, &before).unwrap();
+    let args = section_batch(true);
+    let action = create(&db, &s, &args).unwrap();
+    assert_eq!(action.cards[7].title, "前期规划 2");
+    let section = note_snapshot(&db.conn.lock().unwrap(), &action.cards[7].id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(section["payload"]["title"], json!("前期规划 2"));
+    assert_eq!(section["payload"]["text"], json!("前期规划 2"));
+    let saved = document(&db);
+    assert_eq!(saved["runs"], before["runs"]);
+    drop(db);
+    let db = Database::open(&path).unwrap();
+    assert_eq!(document(&db), saved);
+    assert_eq!(
+        db.get_local_chat(&s.conversation.summary.id)
+            .unwrap()
+            .unwrap()
+            .actions[0]
+            .cards[7]
+            .kind,
+        "section"
+    );
+    assert_eq!(create(&db, &s, &args).unwrap().id, action.id);
+    // Normal H3 environment synchronization remains compatible with whole-batch undo.
+    let mut doc = document(&db);
+    for node in doc["nodes"].as_array_mut().unwrap() {
+        if node["kind"] == "comfy-video" {
+            node["comfyVideo"]["endpoint"] = json!("http://127.0.0.1:8188");
+        }
+    }
+    replace_document(&db, &doc);
+    db.undo_local_chat_cards(&s.conversation.summary.id, &action.id)
+        .unwrap();
+    assert_eq!(document(&db), before);
+    for card in action
+        .cards
+        .iter()
+        .filter(|c| matches!(c.kind.as_str(), "section" | "content"))
+    {
+        assert!(db.get_canvas_node(&card.id).unwrap().is_none());
+    }
+    assert_eq!(create(&db, &s, &args).unwrap().status, "undone");
+}
+
+#[test]
+fn local_chat_cards_sections_reject_invalid_members_and_ports_atomically() {
+    let mut invalids = Vec::new();
+    for section in [
+        json!({"id":"zone","title":"分区","members":[]}),
+        json!({"id":"zone","title":"分区","members":["outside"]}),
+        json!({"id":"zone","title":"分区","members":["zone"]}),
+        json!({"id":"zone","title":"分区","members":["copy","copy"]}),
+        json!({"id":"copy","title":"分区","members":["draw"]}),
+        json!({"id":"zone","title":" ","members":["copy"]}),
+        json!({"id":"invalid alias","title":"分区","members":["copy"]}),
+        json!({"id":"zone","title":"分区","members":["copy"],"x":100}),
+    ] {
+        let mut args = batch();
+        args["sections"] = json!([section]);
+        invalids.push(args);
+    }
+    for second in [
+        json!({"id":"other","title":"二","members":["zone"]}),
+        json!({"id":"other","title":"二","members":["copy"]}),
+        json!({"id":"zone","title":"二","members":["draw"]}),
+    ] {
+        let mut args = batch();
+        args["sections"] = json!([{"id":"zone","title":"一","members":["copy"]},second]);
+        invalids.push(args);
+    }
+    for mutation in ["from", "to", "body", "source"] {
+        let mut args = batch();
+        args["sections"] = json!([{"id":"zone","title":"分区","members":["copy"]}]);
+        match mutation {
+            "from" => {
+                args["connections"] =
+                    json!([{"from":"zone","to":"draw","output":"text","input":"text"}])
+            }
+            "to" => {
+                args["connections"] =
+                    json!([{"from":"copy","to":"zone","output":"text","input":"text"}])
+            }
+            "body" => args["cards"][3]["body"] = json!(["zone"]),
+            _ => {
+                args["cards"][3] = json!({"id":"repeat","kind":"loop","title":"循环","mode":"rows","source":"zone","body":["draw"]})
+            }
+        }
+        invalids.push(args);
+    }
+    for args in invalids {
+        let (db, s) = fixture();
+        assert!(create(&db, &s, &args).is_err(), "{args}");
+        assert!(document(&db)["nodes"].as_array().unwrap().is_empty());
+        assert!(db
+            .get_local_chat(&s.conversation.summary.id)
+            .unwrap()
+            .unwrap()
+            .actions
+            .is_empty());
+        assert_eq!(
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM canvas_nodes", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+}
+
+#[test]
+fn local_chat_cards_sections_limit_is_independent_and_grid_avoids_existing_sections() {
+    let cards: Vec<_> = (0..12).map(|i| json!({"id":format!("c{i}"),"kind":"content","title":format!("卡片{i}"),"text":"文字"})).collect();
+    let sections: Vec<_> = (0..12).map(|i| json!({"id":format!("s{i}"),"title":format!("分区{i}"),"members":[format!("c{i}")]})).collect();
+    let args = json!({"cards":cards,"sections":sections});
+    let (db, s) = fixture();
+    let payload =
+        json!({"schema_version":1,"note_type":"section","text":"旧区","cells":[],"member_ids":[]});
+    db.conn.lock().unwrap().execute("INSERT INTO canvas_nodes(id,project_id,kind,payload_json,x,y,width,height,created_at,updated_at) VALUES('existing-section','p','note',?1,10000,0,9000,400,1,1)",[payload.to_string()]).unwrap();
+    let action = create(&db, &s, &args).unwrap();
+    assert_eq!(action.cards.len(), 24);
+    let bounds: Vec<_> = action
+        .cards
+        .iter()
+        .filter(|c| c.kind == "section")
+        .map(|card| {
+            note_snapshot(&db.conn.lock().unwrap(), &card.id)
+                .unwrap()
+                .unwrap()
+        })
+        .collect();
+    assert!(bounds
+        .iter()
+        .all(|note| note["x"].as_f64().unwrap() >= 19080.0));
+    assert_eq!(
+        bounds[0]["x"], bounds[2]["x"],
+        "sections wrap after two columns"
+    );
+    for (i, first) in bounds.iter().enumerate() {
+        for second in bounds.iter().skip(i + 1) {
+            assert!(
+                first["x"].as_f64().unwrap() + first["width"].as_f64().unwrap()
+                    <= second["x"].as_f64().unwrap()
+                    || second["x"].as_f64().unwrap() + second["width"].as_f64().unwrap()
+                        <= first["x"].as_f64().unwrap()
+                    || first["y"].as_f64().unwrap() + first["height"].as_f64().unwrap()
+                        <= second["y"].as_f64().unwrap()
+                    || second["y"].as_f64().unwrap() + second["height"].as_f64().unwrap()
+                        <= first["y"].as_f64().unwrap()
+            );
+        }
+    }
+    let mut too_many = args.clone();
+    too_many["sections"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id":"extra","title":"额外","members":["c0"]}));
+    assert!(compile(
+        &too_many,
+        &ChatCardDefaults::default(),
+        &[],
+        (0.0, 0.0),
+        "limit"
+    )
+    .is_err());
+    let mut empty = args;
+    empty["cards"] = json!([]);
+    assert!(compile(
+        &empty,
+        &ChatCardDefaults::default(),
+        &[],
+        (0.0, 0.0),
+        "empty"
+    )
+    .is_err());
+}
+
+#[test]
+fn local_chat_cards_sections_rollback_on_late_failure_and_obey_turn_scope() {
+    let (db, s) = fixture();
+    db.conn.lock().unwrap().execute_batch("CREATE TRIGGER reject_chat_action BEFORE INSERT ON local_chat_card_actions BEGIN SELECT RAISE(ABORT,'injected action failure'); END;").unwrap();
+    assert!(create(&db, &s, &section_batch(false)).is_err());
+    assert!(document(&db)["nodes"].as_array().unwrap().is_empty());
+    assert_eq!(
+        db.conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM canvas_nodes", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    let (db, s) = fixture();
+    assert!(db
+        .create_local_chat_cards(
+            &s.conversation.summary.id,
+            "wrong-turn",
+            "call",
+            &section_batch(false)
+        )
+        .is_err());
+    db.mark_local_chat_stopping(&s.conversation.summary.id)
+        .unwrap();
+    assert!(create(&db, &s, &section_batch(false)).is_err());
+}
+
+#[test]
+fn local_chat_cards_sections_undo_rejects_changed_frames_members_and_external_dependencies() {
+    for change in [
+        "x",
+        "height",
+        "title",
+        "members",
+        "name",
+        "member-content",
+        "member-position",
+        "run",
+        "external-section",
+    ] {
+        let (db, s) = fixture();
+        let action = create(&db, &s, &section_batch(false)).unwrap();
+        let section = &action.cards[7].id;
+        let member = &action.cards[0].id;
+        match change {
+            "x" | "height" => {
+                db.conn
+                    .lock()
+                    .unwrap()
+                    .execute(
+                        &format!("UPDATE canvas_nodes SET {change}={change}+1 WHERE id=?1"),
+                        [section],
+                    )
+                    .unwrap();
+            }
+            "title" | "members" => {
+                let mut note = note_snapshot(&db.conn.lock().unwrap(), section)
+                    .unwrap()
+                    .unwrap();
+                if change == "title" {
+                    note["payload"]["text"] = json!("改过名称");
+                } else {
+                    note["payload"]["member_ids"] = json!([]);
+                }
+                db.conn
+                    .lock()
+                    .unwrap()
+                    .execute(
+                        "UPDATE canvas_nodes SET payload_json=?1 WHERE id=?2",
+                        params![note["payload"].to_string(), section],
+                    )
+                    .unwrap();
+            }
+            "member-content" => {
+                let mut note = note_snapshot(&db.conn.lock().unwrap(), member)
+                    .unwrap()
+                    .unwrap();
+                note["payload"]["cells"][0][0]["text"] = json!("用户编辑");
+                db.conn
+                    .lock()
+                    .unwrap()
+                    .execute(
+                        "UPDATE canvas_nodes SET payload_json=?1 WHERE id=?2",
+                        params![note["payload"].to_string(), member],
+                    )
+                    .unwrap();
+            }
+            "external-section" => {
+                let payload = json!({"schema_version":1,"note_type":"section","text":"其他分区","member_ids":[section]});
+                db.conn.lock().unwrap().execute("INSERT INTO canvas_nodes(id,project_id,kind,payload_json,x,y,width,height,created_at,updated_at) VALUES('external-section','p','note',?1,0,0,300,200,1,1)",[payload.to_string()]).unwrap();
+            }
+            _ => {
+                let mut doc = document(&db);
+                match change {
+                    "name" => doc["cardNames"][section] = json!("新分区名"),
+                    "member-position" => doc["nodes"][0]["x"] = json!(0),
+                    _ => {
+                        doc["run"] = json!({"id":"finished","status":"done","order":[action.cards[2].id],"steps":{}})
+                    }
+                }
+                replace_document(&db, &doc);
+            }
+        }
+        assert!(
+            db.undo_local_chat_cards(&s.conversation.summary.id, &action.id)
+                .is_err(),
+            "{change}"
+        );
+        assert!(db.get_canvas_node(section).unwrap().is_some());
+        assert_eq!(
+            db.get_local_chat(&s.conversation.summary.id)
+                .unwrap()
+                .unwrap()
+                .actions[0]
+                .status,
+            "created"
+        );
+    }
 }
 
 #[test]
@@ -588,9 +1036,13 @@ fn local_chat_cards_provider_upgrade_is_compare_and_swap_and_keeps_history() {
 fn local_chat_cards_export_review_fixtures() {
     let path = std::env::var("BOWERBIRD_CARD_FIXTURES").expect("explicit fixture output path");
     let mut examples = serde_json::Map::new();
-    for mode in ["count", "rows"] {
+    for mode in ["count", "rows", "video", "sections", "sections_large"] {
         let (db, s) = fixture();
-        let mut args = batch();
+        let mut args = match mode {
+            "video" => video_batch(),
+            "sections" | "sections_large" => section_batch(mode == "sections_large"),
+            _ => batch(),
+        };
         if mode == "rows" {
             args["cards"][3] = json!({"id":"repeat","kind":"loop","title":"逐行循环","mode":"rows","source":"copy","body":["draw"]});
         }
@@ -598,11 +1050,19 @@ fn local_chat_cards_export_review_fixtures() {
         let notes = action
             .cards
             .iter()
-            .filter(|c| c.kind == "content")
+            .filter(|c| matches!(c.kind.as_str(), "content" | "section"))
             .map(|c| db.get_canvas_node(&c.id).unwrap().unwrap())
             .collect::<Vec<_>>();
         let (revision, document) = workflow(&db.conn.lock().unwrap(), "p").unwrap();
         examples.insert(mode.into(),json!({"args":args,"action":action,"workflow":{"revision":revision,"document":document},"notes":notes}));
     }
     std::fs::write(path, serde_json::to_vec_pretty(&examples).unwrap()).unwrap();
+}
+
+#[test]
+fn local_chat_cards_reject_deferred_h3_without_writing() {
+    let (db, s) = fixture();
+    let before = document(&db);
+    assert!(create(&db, &s, &json!({"cards":[{"id":"h3","kind":"comfy-video","title":"本地视频","prompt":"镜头移动"}]})).is_err());
+    assert_eq!(document(&db), before);
 }

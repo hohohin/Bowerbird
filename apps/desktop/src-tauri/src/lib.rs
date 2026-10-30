@@ -13,6 +13,7 @@ mod installation;
 mod media;
 mod prompt;
 
+pub use core::canvas_frequent_assets::CanvasFrequentAssetsPreferences;
 pub use media::thumb::video_thumbnail_worker;
 pub use media::probe::video_probe_worker;
 pub use agent_generation_wait::agent_generation_wait_worker;
@@ -568,6 +569,11 @@ pub fn run() {
             commands::library::read_image_data_url,
             commands::library::list_assets,
             commands::library::list_library_view,
+            commands::library::canvas_frequent_assets,
+            commands::library::canvas_frequent_assets_refresh,
+            commands::library::canvas_frequent_assets_set_threshold,
+            commands::library::canvas_frequent_assets_pin,
+            commands::library::canvas_frequent_assets_remove,
             commands::material_catalog::material_catalog,
             commands::material_catalog::catalog_overview,
             commands::material_catalog::catalog_page,
@@ -580,6 +586,7 @@ pub fn run() {
             commands::material_catalog::set_collection_members,
             commands::library::get_assets_by_ids,
             commands::video_poster::video_poster,
+            commands::canvas_image_preview::canvas_image_preview,
             commands::video_trim::trim_video,
             commands::comfy_video::comfy_video,
             commands::comfy_video::comfy_video_check,

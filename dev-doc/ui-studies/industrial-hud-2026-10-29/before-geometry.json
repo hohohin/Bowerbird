@@ -1,0 +1,93 @@
+[
+  {
+    "class": "workflow-card  is-instruction  ",
+    "height": 253.70974731445312,
+    "width": 242.7118377685547,
+    "x": 390.974609375,
+    "y": 185.9152679443359
+  },
+  {
+    "class": "workflow-port is-input is-image",
+    "height": 15.16949462890625,
+    "width": 40.199180603027344,
+    "x": 386.1708984375,
+    "y": 250.13278198242188
+  },
+  {
+    "class": "workflow-port is-output is-text",
+    "height": 15.16949462890625,
+    "width": 65.22880554199219,
+    "x": 573.2613525390625,
+    "y": 250.13278198242188
+  },
+  {
+    "class": "workflow-port is-output is-image",
+    "height": 15.16949462890625,
+    "width": 56.88558197021485,
+    "x": 581.6045532226562,
+    "y": 272.88702392578125
+  },
+  {
+    "class": "workflow-card  is-generation  ",
+    "height": 239.55154418945312,
+    "width": 242.7118377685547,
+    "x": 724.7034912109375,
+    "y": 185.9152679443359
+  },
+  {
+    "class": "workflow-port is-input is-text",
+    "height": 15.16949462890625,
+    "width": 40.19921875,
+    "x": 689.5607299804688,
+    "y": 250.13278198242188
+  },
+  {
+    "class": "workflow-port is-input is-image",
+    "height": 15.16949462890625,
+    "width": 40.19921875,
+    "x": 689.5607299804688,
+    "y": 272.88702392578125
+  },
+  {
+    "class": "workflow-port is-input is-visual-profile",
+    "height": 15.169474601745604,
+    "width": 56.8856201171875,
+    "x": 672.8743286132812,
+    "y": 295.6412658691406
+  },
+  {
+    "class": "workflow-port is-output is-image",
+    "height": 15.16949462890625,
+    "width": 40.19913864135742,
+    "x": 962.3588256835938,
+    "y": 250.13278198242188
+  },
+  {
+    "class": "canvas-note is-text is-content-card   ",
+    "height": 131.97457885742188,
+    "width": 576.440673828125,
+    "x": 390.974609375,
+    "y": 559.0847778320312
+  },
+  {
+    "class": "canvas-node is-asset         ",
+    "height": 358.67156982421875,
+    "width": 189.61865234375,
+    "x": 133.09323120117188,
+    "y": 185.9152679443359
+  },
+  {
+    "class": "canvas-node is-asset         ",
+    "height": 306.4237976074219,
+    "width": 189.61865234375,
+    "x": 133.09323120117188,
+    "y": 591.27783203125
+  },
+  {
+    "class": "creation-dock composer-glass pointer-events-auto relative  is-canvas-composer is-collapsed",
+    "height": 66.33333587646484,
+    "width": 884,
+    "x": 113.66667175292967,
+    "y": 1177.666748046875
+  }
+]

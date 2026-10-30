@@ -3,7 +3,8 @@ import {createServer} from 'vite';
 import {chromium} from '../../html-renderer/node_modules/playwright/index.mjs';
 const server=await createServer({configFile:false,root:process.cwd(),server:{host:'127.0.0.1',port:1596,strictPort:true,hmr:false,watch:null}});
 await server.listen();const browser=await chromium.launch({channel:'chrome',headless:true});
-const page=await browser.newPage({viewport:{width:1700,height:1100}});
+// Three image rows grow at their native aspect ratio; keep the bottom insert controls above the composer.
+const page=await browser.newPage({viewport:{width:1700,height:1800}});
 try {
   await page.goto('http://127.0.0.1:1596/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();

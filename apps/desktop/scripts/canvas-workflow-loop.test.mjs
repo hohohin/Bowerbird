@@ -18,10 +18,11 @@ try {
   await placeWorkflowCard(page, '新增循环卡片');
   const card = page.locator('.workflow-card.is-loop'); await card.waitFor();
   assert.equal(await card.getByRole('button', { name: '输出：当前轮次', exact: true }).count(), 1);
-  await card.getByRole('combobox', { name: '循环方式' }).selectOption('rows');
+  await card.getByRole('combobox', { name: '循环方式' }).click();
+  await page.getByRole('option', { name: '内容卡逐行', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(node => node.kind === 'loop' && node.loopMode === 'rows'));
   await page.reload(); await card.waitFor();
-  assert.equal(await card.getByRole('combobox', { name: '循环方式' }).inputValue(), 'rows');
+  assert.match(await card.getByRole('combobox', { name: '循环方式' }).innerText(), /内容卡逐行/);
   assert.equal(await card.getByRole('button', { name: '输出：当前轮次', exact: true }).count(), 1);
   assert.equal(await card.getByRole('spinbutton').count(), 0);
   assert.equal(await card.getByRole('button', { name: '循环起始项', exact: true }).isDisabled(), true);

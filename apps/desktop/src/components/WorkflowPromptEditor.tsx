@@ -13,7 +13,7 @@ import { canvasInputValue, canvasWorkflowInputState } from "../lib/canvasSession
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
 import { readCanvasNote } from "../lib/canvasNotes";
 import { agentOutputWriters } from "../lib/workflowAgentOutputs";
-import { workflowBindingKey, workflowImageContainer, workflowInputValues, workflowReferenceToken, rebindGenerationReferences, type WorkflowNode, type WorkflowPromptReference } from "../lib/canvasWorkflow";
+import { workflowReferenceMatchesInput, workflowImageContainer, workflowInputValues, workflowReferenceToken, rebindGenerationReferences, type WorkflowNode, type WorkflowPromptReference } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode } from "../lib/types";
 
 const schema = new Schema({ nodes: {
@@ -32,7 +32,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
   onChange: (prompt: string, references: WorkflowPromptReference[]) => void;
 }) {
   node = rebindGenerationReferences(node);
-  const usesPipes = node.kind === "generation" || node.kind === "agent";
+  const usesPipes = node.kind === "generation" || node.kind === "agent" || node.kind === "planner";
   const host = useRef<HTMLDivElement>(null), view = useRef<EditorView | null>(null);
   const [menu, setMenu] = useState<{ pos: number; left: number; top: number } | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -75,9 +75,10 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
   }) : [];
   const candidates = [...inputCandidates, ...outputCandidates];
   const referenceLabel = (ref: WorkflowPromptReference) => ref.direction === "output"
-    ? outputCandidates.find(candidate => candidate.reference.input.nodeId === ref.input.nodeId)?.reference.label ?? `${ref.label}（已断开）` : ref.label;
+    ? outputCandidates.find(candidate => candidate.reference.input.nodeId === ref.input.nodeId)?.reference.label ?? `${ref.label}（已断开）`
+    : inputCandidates.some(candidate => candidate.reference.type === ref.type && workflowReferenceMatchesInput(ref, candidate.reference.input)) ? ref.label : `${ref.label}（已断开）`;
   const referenceAssetId = (ref?: Omit<WorkflowPromptReference, "id">) => ref?.direction === "output" ? undefined : ref && (ref.slot !== undefined || workflowImageContainer(ref.input))
-    ? candidates.find(candidate => candidate.reference.type === ref.type && workflowBindingKey(candidate.reference.input) === workflowBindingKey(ref.input))?.assetIds?.[0]
+    ? inputCandidates.find(candidate => candidate.reference.type === ref.type && workflowReferenceMatchesInput(ref, candidate.reference.input))?.assetIds?.[0]
     : ref?.assetId;
   const assetKey = [...new Set([...candidates.flatMap(c => c.assetIds ?? (c.reference.assetId ? [c.reference.assetId] : [])), ...(node.promptReferences ?? []).map(referenceAssetId)].filter((id): id is string => !!id))].sort().join("|");
   useEffect(() => {

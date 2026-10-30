@@ -2,6 +2,7 @@
 //! Phase 1 覆盖常见光栅图；视频/PSD/SVG 在 Phase 2 接入。
 
 pub mod color;
+pub(crate) mod heic;
 pub mod phash;
 pub mod probe;
 pub mod thumb;
@@ -11,6 +12,6 @@ pub(crate) mod tools;
 pub fn is_image_ext(ext: &str) -> bool {
     matches!(
         ext.to_lowercase().as_str(),
-        "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp" | "tiff" | "tif"
+        "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp" | "tiff" | "tif" | "heic" | "heif"
     )
 }

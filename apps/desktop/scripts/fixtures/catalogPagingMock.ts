@@ -24,6 +24,7 @@ export function installCatalogPagingMock(w: any) {
       return result;
     }
     return async (command: string,args: any={}) => {
+      if(command==="canvas_frequent_assets") return await base(command,args) ?? {frequent:[],pinned:[],threshold:10};
       if(command==="catalog_overview") {
         const catalog=await base("material_catalog",{projectId:args.contextProject});
         const assets=await read(args.filter), ids=new Set(assets.map((a:any)=>a.id));

@@ -73,6 +73,19 @@
             "input": {"enum": ["text", "image", "signal", "completion"]}
           }
         }
+      },
+      "sections": {
+        "type": "array", "maxItems": 12,
+        "description": "Prefer named sections for related cards, grouped by scene, purpose or workflow stage. Keep members of one section in the same batch. The application arranges members in the listed order and sizes each section to fit them. Sections do not count toward the 12-card limit. Omit when the user wants ungrouped cards or a section would add no useful grouping.",
+        "items": {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "title", "members"],
+          "properties": {
+            "id": {"type": "string", "pattern": "^[A-Za-z0-9_-]+$", "minLength": 1, "maxLength": 40, "description": "Unique alias across both cards and sections."},
+            "title": {"type": "string", "minLength": 1, "maxLength": 80},
+            "members": {"type": "array", "minItems": 1, "maxItems": 12, "uniqueItems": true, "items": {"type": "string"}, "description": "Card aliases from this batch in reading order. Each card may belong to at most one section. No existing cards, sections, nesting or connections to a section."}
+          }
+        }
       }
     }
   }

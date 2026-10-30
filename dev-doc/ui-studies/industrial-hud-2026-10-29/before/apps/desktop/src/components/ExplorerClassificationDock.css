@@ -1,0 +1,59 @@
+.explorer-classification-dock {
+  --classification-glass: #effaf77a;
+  --classification-edge: #ffffffc9;
+  --classification-detail: #789e924d;
+  --classification-track: #58877c38;
+  --classification-inner-track: #58877c15;
+  --classification-mark: #50685e;
+  --classification-axis: #6b8f7f88;
+  --classification-tab: #6d9f8b;
+  --classification-label: #ffffffed;
+  position: absolute; left: 0; bottom: 0; width: min(510px, 100%); height: 278px;
+  z-index: 18; transform: scale(.6); transform-origin: left bottom;
+  pointer-events: none; user-select: none; isolation: isolate;
+}
+html[data-theme="dark"] .explorer-classification-dock {
+  --classification-glass: #e0f1ec7a;
+  --classification-edge: #e1f2ed80;
+  --classification-detail: #e0f5ec4d;
+  --classification-track: #b0d2ca26;
+  --classification-inner-track: #b0d2ca0d;
+  --classification-mark: #304f44;
+  --classification-axis: #527b6888;
+  --classification-tab: #a4cfb9;
+  --classification-label: #e5eae8eb;
+}
+.explorer-classification-dock *, .explorer-classification-dock *::before, .explorer-classification-dock *::after { box-sizing: border-box; pointer-events: none; }
+.explorer-classification-dock[hidden], .explorer-classification-dock [hidden] { display: none !important; }
+.explorer-classification-floor { position: absolute; border: 1px solid var(--classification-track); border-radius: 50%; opacity: .8; }
+.explorer-classification-floor > div { position: absolute; inset: 15px; border: 1px solid var(--classification-inner-track); border-radius: 50%; }
+.explorer-classification-card { position: absolute; left: 0; top: 0; width: 208px; height: 156px; transform-origin: center; will-change: transform, opacity; }
+.explorer-classification-sheet {
+  position: absolute; inset: 0; display: grid; place-items: center; isolation: isolate;
+  border: 1px solid var(--classification-edge); border-radius: 5px;
+  background: linear-gradient(130deg, #f2fff91c, transparent 65%), var(--classification-glass);
+  backdrop-filter: blur(3px); box-shadow: inset 1px 0 0 #ffffff26;
+  transform: skewY(var(--classification-card-tilt, -16deg)); transform-origin: center;
+}
+.explorer-classification-sheet::before { content: ""; position: absolute; inset: 8px; border: 1px solid var(--classification-detail); border-radius: 1px; }
+.explorer-classification-sheet::after { content: ""; position: absolute; left: 13px; top: -1px; width: 37px; height: 2px; background: var(--classification-tab); }
+.explorer-classification-image {
+  position: relative; z-index: 2; width: 94px; height: 122px; overflow: hidden; border-radius: 1px; opacity: .96;
+  -webkit-mask-image: linear-gradient(to right, transparent, #0009 9%, #000 22%, #000 78%, #0009 91%, transparent), linear-gradient(to bottom, transparent, #0009 9%, #000 20%, #000 80%, #0009 91%, transparent);
+  -webkit-mask-composite: source-in;
+  mask-image: linear-gradient(to right, transparent, #0009 9%, #000 22%, #000 78%, #0009 91%, transparent), linear-gradient(to bottom, transparent, #0009 9%, #000 20%, #000 80%, #0009 91%, transparent);
+  mask-composite: intersect; mask-repeat: no-repeat;
+}
+.explorer-classification-image img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.explorer-classification-image-placeholder { display: grid; place-items: center; width: 100%; height: 100%; color: #354f51; background: #b5cdc64d; font-size: 16px; }
+.explorer-classification-marks { position: absolute; inset: 0; z-index: 3; color: var(--classification-mark); }
+.explorer-classification-serial { position: absolute; left: 16px; top: 15px; font: 400 18px/1 "Bahnschrift", Consolas, monospace; letter-spacing: -.5px; }
+.explorer-classification-serial::after { content: ""; position: absolute; left: 0; top: 25px; width: 11px; height: 1px; background: currentColor; opacity: .5; }
+.explorer-classification-status { position: absolute; right: 16px; top: 17px; width: 4px; height: 4px; background: #c29348; }
+.explorer-classification-axis { position: absolute; left: 17px; bottom: 17px; width: 15px; height: 15px; border-left: 1px solid var(--classification-axis); border-bottom: 1px solid var(--classification-axis); }
+.explorer-classification-register { position: absolute; right: 16px; bottom: 17px; width: 30px; height: 7px; border-bottom: 1px solid var(--classification-axis); background: repeating-linear-gradient(90deg, var(--classification-axis) 0 1px, transparent 1px 7px); opacity: .65; }
+.explorer-classification-labels { position: absolute; left: 190px; top: -9px; display: flex; flex-direction: column; align-items: flex-start; gap: 7px; width: max-content; max-width: var(--classification-label-width, 146px); opacity: var(--classification-label-opacity, 0); }
+.explorer-classification-labels > span { max-width: 100%; background: var(--classification-label); color: #273735; font-size: 14px; line-height: 1.4; font-weight: 400; letter-spacing: 1px; padding: 7px 13px; border-radius: 1px; box-shadow: 0 1px 0 #ffffff20; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.explorer-classification-overflow { position: absolute; left: 28px; bottom: 12px; z-index: 31; padding: 2px 6px; background: var(--classification-label); color: #273735; border-radius: 1px; font-size: 16px; white-space: nowrap; }
+.explorer-classification-announcement { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@media (prefers-reduced-motion: reduce) { .explorer-classification-card { will-change: opacity; } }

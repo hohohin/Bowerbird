@@ -360,12 +360,15 @@ export interface AnnotationShape {
   fontFamily?: string;
   fontWeight?: number;
   rotation?: number;
+  /** 文字局部 X 轴镜像，先镜像再应用 rotation；缺省为 false。 */
+  mirrored?: boolean;
 }
 
 /** 标注输出相对原图的变换序列（面板内按操作顺序记录；裁剪坐标为当时底图归一化 0-1）。
  *  shapes 的坐标 token 一律相对最终输出图（旋转/裁剪后的图），与发给模型的参考图一致。 */
 export type AnnotationTransformOp =
   | { kind: "rotate"; dir: 1 | -1 }
+  | { kind: "flip"; axis: "horizontal" | "vertical" }
   | { kind: "crop"; x1: number; y1: number; x2: number; y2: number };
 
 /** analyses(kind=annotation) 的 payload：标注输出图尺寸 + 相对原图的形状列表（坐标同图 1:1）。 */
@@ -375,7 +378,7 @@ export interface AnnotationMeta {
   source_asset_id: string | null;
   source_store_path: string;
   image: { width: number; height: number };
-  /** 裁剪/旋转过程（无变换时缺省）；供追溯与未来重编辑。 */
+  /** 裁剪/旋转/镜像过程（无变换时缺省）；供追溯与未来重编辑。 */
   transform?: AnnotationTransformOp[];
   shapes: AnnotationShape[];
 }

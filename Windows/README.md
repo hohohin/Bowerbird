@@ -2,6 +2,18 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## Windows 26.10.2801 已发布（2026-10-28）
+
+2026-10-28 15:29:20（北京时间）完成公网验收。源码 **be4a3f11** 已存档推送 dev 后冻结构建，包含素材库分栏／Tactical 样式与多选、浏览器插件 0.2.0 与采集、连续瀑布流、本机图文对话／历史及受控建卡、常用素材／手动固定、HEIC／HEIF 导入、按区域拖放／粘贴、账号展示与微信回跳，以及 Cloud 生成／签名文件官网网关的 10054 修复。SQLite **0047**；独立复刻 Demo／只读 MCP 仅源码存档，不打入桌面包。Mac ARM 801／Intel 1501 保持，未部署 Edge／Worker、启用 Cloud 视频／价格或真实支付。
+
+完整 TypeScript／Vite、Rust **762 passed / 26 ignored**、五组桌面 Chromium、27 项官网网关／更新及微信回跳界面通过。1062 个冻结输入逐一核对 Git 提交，70 个包内资源、x64／版本／NSIS 中文与 English 选择器及登录保留钩子、原 updater 公钥验签和篡改拒绝通过；包内原生等待、生产 bundle 与原生媒体回归通过。 对话测试在模式恢复后等待浏览器光标同步，未修改产品行为；原生升级与真实服务验收仍按下述边界处理。
+
+安装包 `Bowerbird_26.10.2801_x64-setup.exe`：**84936180 bytes**，SHA-256 `9bba56655b3191e23db9dcd4e61a323fa203aacdc0c7f11a0bc36962facb6364`。先完成 TOS／CDN 全量下载哈希、Range 206 与 CDN 包原公钥验签，再切 Windows 更新通道及双首页下载。
+
+现役 `/opt/bowerbird/website-releases/20261028-windows-26.10.2801`；回滚 `/opt/bowerbird/website-releases/20261028-cloud-gateway`。候选复制最新生成网关目录，仅更新 Windows 发布文件和已确认静态页面；48 个其余文件保持，`cloud-proxy.mjs`、账号模块、原配置、后台昵称、Mac 清单、旧包与 Nginx `/api/cloud/` 路由保留。候选／现役／公网完成三平台更新入口、签名、36 个静态文件哈希、账号／生成鉴权拒绝及签名上传下载拒绝检查。未创建真实模型任务。
+
+证据在本机 `.tmp/release-windows-26.10.2801/`，服务器 `/tmp/bowerbird-release-windows-26.10.2801/`；`rollback.sh` 恢复网关基线且保留旧包，不自动降级客户端。不能回滚到无生成网关的官网。未替用户安装／重启应用；故障电脑完整生成与账单、真实用户库升级、跨 WebView 拖放／剪贴板、HDR HEIC 和 Mac 原生仍待实机验收。
+
 ## 2026-10-24 Windows 26.10.2401 已发布
 
 源码 fd948497 已存档推送，视频导入、创作框 H3 首尾帧／环境安装与驱动指引、项目管理／删除预检与剩余结果处理、右键取消连线、视频复刻多来源及普通文本／语音转写、分类内部英文规则、Bcoin 账号／试用与工作流门控、设置精简及中文错误提示、中文／English 安装语言选择已签名上线。TypeScript／Vite、Rust **700 passed / 24 ignored**、18 组桌面 Chromium、前端逻辑／Bcoin 与分类 PGlite、24 项 Deno、32 项 Worker、官网错误提示／网关／更新和构建通过。双语 NSIS 与更新登录保留、冻结输入、资源、签名及 CDN 完整下载通过。SQLite 0045；Cloud 0075／jev-proxy v10 先行部署，Mac 保持。安装包 `Windows/dist/Bowerbird_26.10.2401_x64-setup.exe`；完整证据与回滚见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。

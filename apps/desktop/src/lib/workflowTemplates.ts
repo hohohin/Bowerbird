@@ -5,7 +5,7 @@ type CardKind = "trigger" | "instruction" | "agent" | "generation" | "skill" | "
 interface CardSpec { id: string; kind: CardKind; prompt?: string; action?: string; skill?: string; ratio?: string | null; overwriteDescribe?: boolean; loopMode?: WorkflowNode["loopMode"]; loopCount?: number; loopStartItem?: number; agentTransport?: WorkflowNode["agentTransport"] }
 interface EdgeSpec { from: string; output: string; to: string; input: string }
 export interface TemplateContent { text?: string; images?: { dataUrl: string; token?: string }[] }
-export interface TemplateInput { id: string; label: string; type: "text" | "image"; content?: TemplateContent; whole?: boolean }
+export interface TemplateInput { id: string; label: string; type: "text" | "image"; content?: TemplateContent; whole?: boolean; latest?: boolean }
 export interface TemplateParameter { id: string; label: string; node: string; field: "suffix" | "ratio"; defaultValue: string }
 export interface TemplateOutput { id: string; label: string; node: string; port: string }
 export interface TemplateLayoutCard { id: string; node?: string; inputs?: string[]; type?: "text" | "image"; content?: TemplateContent; x: number; y: number; width: number; height: number; enclosed: boolean }
@@ -62,8 +62,9 @@ export function parseWorkflowTemplate(raw: string): WorkflowTemplate {
   keys(value.plan, ["summary", "nodes", "edges"]);
   const ids = new Set<string>();
   for (const input of value.inputs) {
-    keys(input, ["id", "label", "type", ...(value.schemaVersion >= 2 ? ["content"] : []), ...(value.schemaVersion >= 4 ? ["whole"] : [])]);
+    keys(input, ["id", "label", "type", ...(value.schemaVersion >= 2 ? ["content"] : []), ...(value.schemaVersion >= 4 ? ["whole", "latest"] : [])]);
     if (input.whole !== undefined && (typeof input.whole !== "boolean" || input.type !== "text")) fail("整表输入无效");
+    if (input.latest !== undefined && (typeof input.latest !== "boolean" || input.latest && input.whole)) fail("模板输入无效或重复");
     if (!alias(input.id) || ids.has(input.id) || !label(input.label) || !["text", "image"].includes(input.type)) fail("模板输入无效或重复");
     ids.add(input.id);
     validateTemplateContent(input);
@@ -131,7 +132,12 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
     if (type !== "text" && type !== "image") fail("外部视觉规范需要一并选入子流程，不能保存为他人账号的引用");
     const key = `${type}:${workflowBindingKey(binding)}`;
     let id = external.get(key);
-    if (!id) { id = `source${inputs.length + 1}`; external.set(key, id); inputs.push({ id, type, label: `${type === "text" ? "文本" : "图片"}输入 ${inputs.length + 1}`, ...(type === "text" && (binding.cellId === "*text" || cards.some(node => node.kind === "loop" && node.loopMode === "rows" && node.inputs.text?.some(input => workflowBindingKey(input) === workflowBindingKey(binding)))) ? { whole: true } : {}) }); if (boundaryBindings) boundaryBindings[id] = structuredClone(binding); }
+    if (!id) {
+      id = `source${inputs.length + 1}`; external.set(key, id);
+      const latest = binding.cellId === "*latest" || binding.cellId === "*latest-image";
+      inputs.push({ id, type, label: `${type === "text" ? "文本" : "图片"}输入 ${inputs.length + 1}`, ...(latest ? { latest: true } : type === "text" && (binding.cellId === "*text" || cards.some(node => node.kind === "loop" && node.loopMode === "rows" && node.inputs.text?.some(input => workflowBindingKey(input) === workflowBindingKey(binding)))) ? { whole: true } : {}) });
+      if (boundaryBindings) boundaryBindings[id] = structuredClone(binding);
+    }
     return `${id}.${type}`;
   };
   const specs: CardSpec[] = [{ id: "start", kind: "trigger" }];
@@ -184,9 +190,10 @@ export function instantiateWorkflowTemplate(template: WorkflowTemplate, bindings
     const binding = bindings[input.id];
     if (!binding || ![binding.assetId, binding.nodeId, binding.canvasNodeId, binding.groupId].some(Boolean)) fail(`请选择「${input.label}」`);
     if (input.type === "text" && (binding.assetId || binding.groupId)) fail(`「${input.label}」需要文本来源`);
+    if (input.latest && !binding.canvasNodeId) fail(`「${input.label}」需要内容卡的输出最新`);
     if (input.whole && binding.canvasNodeId && binding.cellId !== "*text") fail(`「${input.label}」需要整张内容卡`);
     if (binding.nodeId && !existing.some(node => node.id === binding.nodeId && workflowOutputs(node).some(port => port.id === binding.portId && port.type === input.type))) fail(`「${input.label}」的来源已失效`);
-    return { ...input, input: structuredClone(binding) };
+    return { ...input, input: input.latest ? { ...structuredClone(binding), cellId: input.type === "image" ? "*latest-image" : "*latest" } : structuredClone(binding) };
   });
   const owner = newWorkflowNode("planner", x - 380, y, provider);
   const result = buildWorkflowPlan(JSON.stringify(executablePlan(plan)), owner, sources, existing, [], template.schemaVersion >= 4 ? "template" : "planner").nodes;
@@ -199,7 +206,7 @@ export function instantiateWorkflowTemplate(template: WorkflowTemplate, bindings
   if (template.layout && !template.layout.some(card => card.node === plan.nodes[0].id)) { result[0].x = x - 380; result[0].y = y; }
   // Embedded files belong to the library, not every canvas save/run snapshot.
   const snapshot = { ...structuredClone(template), inputs: template.inputs.map(({ content: _, ...input }) => input), ...(template.layout ? { layout: template.layout.map(({ content: _, ...card }) => card) } : {}) };
-  result[0].templateInstance = { template: snapshot, nodeIds: result.map(node => node.id), bindings: structuredClone(bindings), values: structuredClone(values), definitions: result.map(templateDefinition) };
+  result[0].templateInstance = { template: snapshot, nodeIds: result.map(node => node.id), bindings: Object.fromEntries(sources.map(source => [source.id, structuredClone(source.input)])), values: structuredClone(values), definitions: result.map(templateDefinition) };
   return result;
 }
 

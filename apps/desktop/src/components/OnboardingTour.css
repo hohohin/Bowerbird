@@ -54,7 +54,7 @@
 .collection-learning-start { margin-top: 20px; font-size: 12px; }
 .collection-learning-start label { display: block; margin-bottom: 8px; font-weight: 600; }
 .collection-learning-start > div { display: flex; gap: 8px; flex-wrap: wrap; }
-.collection-learning-start input, .collection-learning-start select { flex: 1; min-width: 160px; }
+.collection-learning-start input, .collection-learning-start :is(select, .tactical-select-trigger) { flex: 1; min-width: 160px; }
 @media (min-width: 800px) { .collection-learning .collection-learning-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .onboarding-lesson .app-modal-button { font-size: 16px; }

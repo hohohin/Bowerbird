@@ -25,7 +25,7 @@ try {
   await page.locator('[data-asset-id="one"]').waitFor();
   const card = '.library-project-folder[data-project-drop-id="p"]';
   await drag(card);
-  await page.getByText("松开导入到「目标项目」", { exact: true }).waitFor();
+  await page.getByText("松开导入到「目标项目」素材库", { exact: true }).waitFor();
   await drop(card);
   await page.waitForFunction(() => window.store.getState().assets.some(a => a.name === "test.png"));
   assert.equal((await imports()).length, 1);
@@ -35,7 +35,7 @@ try {
   for (const selector of ["[data-test-topbar]", "input", ".app-sidebar", "body"]) {
     const count = (await imports()).length;
     await drag(selector, [`outside-${count}.png`]);
-    await page.getByText("松开导入到素材库", { exact: true }).waitFor();
+    await page.getByText("松开导入到全局素材库", { exact: true }).waitFor();
     await drop(selector);
     await page.waitForFunction(count => window.calls.filter(c => c.command === "import_image_bytes").length === count + 1, count);
     assert.equal((await imports()).at(-1).args.projectId, null);

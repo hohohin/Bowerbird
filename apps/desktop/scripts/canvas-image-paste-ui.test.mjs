@@ -113,22 +113,22 @@ try {
   await page.getByText("模拟图片导入失败", { exact: true }).waitFor();
   assert.equal((await imports()).length, 3);
   await page.evaluate(() => { window.failImageImport = false; });
-  await paste(".canvas-stage", ["recovery.png", "ignored-second.png"]);
-  await waitForAsset(3);
-  assert.equal((await imports()).length, 4, "one paste imports the first image once");
+  await paste(".canvas-stage", ["recovery.png", "second.png"]);
+  await waitForAsset(3); await waitForAsset(4);
+  assert.equal((await imports()).length, 5, "one paste imports every image once");
 
   // Retrying a canvas write reuses its saved image and node identity.
   await page.evaluate(() => { window.failNodeSave = true; });
   await paste(".canvas-stage", ["node-retry.png"]);
   await page.getByRole("button", { name: "重试保存画板", exact: true }).waitFor();
-  assert.equal((await imports()).length, 5);
-  assert.equal(await page.evaluate(() => window.snapshot().nodes.filter(node => node.assetId === "media-4").length), 0);
+  assert.equal((await imports()).length, 6);
+  assert.equal(await page.evaluate(() => window.snapshot().nodes.filter(node => node.assetId === "media-5").length), 0);
   const writesBeforeRetry = (await imageCalls()).length;
   await page.evaluate(() => { window.failNodeSave = false; });
   await page.getByRole("button", { name: "重试保存画板", exact: true }).click();
-  await waitForAsset(4);
+  await waitForAsset(5);
   assert.equal((await imageCalls()).length, writesBeforeRetry);
-  assert.equal(await page.evaluate(() => window.snapshot().nodes.filter(node => node.assetId === "media-4").length), 1);
+  assert.equal(await page.evaluate(() => window.snapshot().nodes.filter(node => node.assetId === "media-5").length), 1);
 
   // A project switch during the image read/import cannot retarget the pending card.
   await page.evaluate(() => { window.holdMedia = true; });
@@ -139,10 +139,10 @@ try {
     window.store.setState({ projects: [...state.projects, { ...state.projects[0], id: "q", name: "新项目" }], activeProjectId: "q", projectRouteRevision: state.projectRouteRevision + 1 });
     window.holdMedia = false; window.releaseMedia();
   });
-  await page.waitForFunction(() => window.snapshot().nodes.some(node => node.assetId === "media-5"));
+  await page.waitForFunction(() => window.snapshot().nodes.some(node => node.assetId === "media-6"));
   assert.equal((await imports()).at(-1).projectId, "p");
-  assert.equal(await page.evaluate(() => window.snapshot().nodes.find(node => node.assetId === "media-5").projectId), "p");
-  assert.equal((await imports()).length, 6);
+  assert.equal(await page.evaluate(() => window.snapshot().nodes.find(node => node.assetId === "media-6").projectId), "p");
+  assert.equal((await imports()).length, 7);
   assert.deepEqual(errors, []);
   console.log("PASS: external canvas image paste, center placement, body focus, open library, no duplicate import, internal card priority, owner isolation, read/import failure recovery, node retry and frozen project.");
 } finally { await browser.close(); await server.close(); }

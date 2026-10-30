@@ -12,6 +12,7 @@ page.on("pageerror", error => errors.push(error.message));
 const node = id => page.locator(`[data-canvas-node-id="${id}"]`);
 async function verifyAlpha(image) {
   await image.waitFor();
+  await page.waitForFunction(image => image.dataset.canvasMediaLoaded === "true", await image.elementHandle());
   const actual = await image.evaluate(async image => {
     await image.decode();
     const canvas = document.createElement("canvas");
@@ -68,6 +69,7 @@ try {
   await page.reload();
   const workflowImage=page.locator('[data-workflow-card="alpha-preview"] .workflow-preview img');
   await workflowImage.waitFor();
+  await page.waitForFunction(image => image.dataset.canvasMediaLoaded === "true", await workflowImage.elementHandle());
   const workflowPixels=await workflowImage.evaluate(async image=>{
     await image.decode();
     const canvas=document.createElement('canvas');canvas.width=canvas.height=150;

@@ -1,6 +1,7 @@
 import type { CanvasNode } from "./types";
 import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasNoteValue, readCanvasNote, type CanvasNotePayload } from "./canvasNotes";
+import { contentInputAxisIndex } from "./canvasContentInput";
 import { activePromptReferences, workflowActiveSession, workflowBindingKey, type WorkflowInput, type WorkflowNode } from "./canvasWorkflow";
 
 function payload(node: CanvasNode) {
@@ -31,6 +32,22 @@ export function hiddenWorkflowSessionIds(workflow: readonly WorkflowNode[]) {
   return workflowSessionIds(workflow.filter(node => node.generation?.media === "video"));
 }
 
+/** A connected content destination owns presentation before delivery and across reruns. */
+export function contentRoutedWorkflowSessionIds(nodes: readonly CanvasNode[], workflow: readonly WorkflowNode[]) {
+  const sources = new Set<string>();
+  for (const writer of workflow) {
+    const target = writer.textTarget;
+    if (!target?.image) continue;
+    const table = nodes.find(node => node.id === target.nodeId && node.kind === "note" && node.hiddenAt == null);
+    if (!table) continue;
+    const note = readCanvasNote(table);
+    if (note.note_type !== "text" && note.note_type !== "images") continue;
+    if (target.appendAxis ? contentInputAxisIndex(note, target) < 0 : !target.append && !note.cells.flat().some(cell => cell.id === target.cellId)) continue;
+    for (const input of writer.inputs.image ?? []) if (input.nodeId && input.portId === "image") sources.add(input.nodeId);
+  }
+  return workflowSessionIds(workflow.filter(node => sources.has(node.id) && node.generation?.media !== "video"));
+}
+
 /** A session socket exposes only this turn's results, never its reference images or later turns. */
 export function canvasSessionImages(session: CanvasNode, nodes: readonly CanvasNode[]) {
   const turn = payload(session);
@@ -48,8 +65,9 @@ export function canvasInputValue(source: CanvasNode, cellId: string, nodes: read
   if (source.kind !== "note") return undefined;
   const note = resolveGenerationCells(readCanvasNote(source), nodes);
   const value = canvasNoteValue(note, cellId);
-  if (value?.type !== "image") return value;
-  const nodeIds = note.cells.flat().filter(cell => cellId === "*" || cell.id === cellId)
+  if (!value || value.type !== "image" && cellId !== "*latest") return value;
+  const latest = cellId === "*latest" || cellId === "*latest-image";
+  const nodeIds = (latest ? note.cells.slice(-1) : note.cells).flat().filter(cell => latest || cellId === "*" || cell.id === cellId)
     .flatMap(cell => cell.generation_ref && !cell.image_refs?.length ? [cell.generation_ref.session_node_id] : []);
   return nodeIds.length ? { ...value, nodeIds: [...new Set(nodeIds)] } : value;
 }

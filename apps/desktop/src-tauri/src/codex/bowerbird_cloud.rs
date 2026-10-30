@@ -264,10 +264,11 @@ impl GenProvider for BowerbirdCloudProvider {
         if !result.reference_uploads.is_empty() {
             for upload in result.reference_uploads {
                 let path = video_paths.get(upload.index).ok_or_else(|| AppError::Cloud("参考视频上传序号无效".into()))?;
-                if !upload.upload_url.starts_with("https://") { return Err(AppError::Cloud("参考视频上传地址无效".into())); }
+                let upload_url = self.cloud.config().generation_transfer_url(&upload.upload_url, true)
+                    .ok_or_else(|| AppError::Cloud("参考视频上传地址无效".into()))?;
                 let bytes = tokio::fs::read(path).await?;
                 if bytes.len() as u64 != videos[upload.index]["bytes"].as_u64().unwrap_or(0) { return Err(AppError::Cloud("参考视频在上传前已变化，请重新选择".into())); }
-                let response = self.cloud.http().put(&upload.upload_url).header("content-type", videos[upload.index]["mime"].as_str().unwrap_or("video/mp4")).body(bytes).send().await.map_err(|_| AppError::Cloud("参考视频上传失败；原任务保留待恢复".into()))?;
+                let response = self.cloud.http().put(upload_url).header("content-type", videos[upload.index]["mime"].as_str().unwrap_or("video/mp4")).body(bytes).send().await.map_err(|_| AppError::Cloud("参考视频上传失败；原任务保留待恢复".into()))?;
                 if !response.status().is_success() { return Err(AppError::Cloud("参考视频上传失败；原任务保留待恢复".into())); }
             }
             // Same key and exact manifest finalize uploads; this is never another provider POST.
@@ -489,9 +490,8 @@ async fn download_artifact(
     remote_task_id: &str,
     artifact: CloudArtifact,
 ) -> Result<(Vec<PathBuf>, PathBuf), AppError> {
-    if !artifact.url.starts_with("https://") {
-        return Err(AppError::Cloud("云图片下载地址不安全".into()));
-    }
+    let download_url = cloud.config().generation_transfer_url(&artifact.url, false)
+        .ok_or_else(|| AppError::Cloud("云产物下载地址无效".into()))?;
     let limit = if artifact.mime == "video/mp4" { 500 * 1024 * 1024 } else { 20 * 1024 * 1024 };
     if artifact.bytes == 0 || artifact.bytes > limit {
         return Err(AppError::Cloud("云图片大小无效".into()));
@@ -502,10 +502,10 @@ async fn download_artifact(
     }
     let mut response = cloud
         .http()
-        .get(&artifact.url)
+        .get(download_url)
         .send()
         .await
-        .map_err(|error| AppError::Cloud(format!("下载云图片失败: {error}")))?;
+        .map_err(|_| AppError::Cloud("云产物下载失败，请稍后取回原任务".into()))?;
     if !response.status().is_success() {
         return Err(AppError::Cloud(format!(
             "下载云图片失败（HTTP {}）",

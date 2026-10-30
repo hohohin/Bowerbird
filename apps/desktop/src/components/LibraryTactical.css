@@ -171,6 +171,8 @@ html[data-theme="light"] .app-topbar.library-tactical {
 .library-tactical [data-catalog-section]:has(.folder-media-card:hover) .catalog-section-title::before { animation: library-tactical-contact 160ms steps(1,end); }
 .library-tactical :is(.catalog-selection, .folder-selection-bar) button { color: var(--lt-ink); }
 .library-tactical :is(.catalog-selection, .folder-selection-bar) button:hover { background: var(--lt-hover); }
+.library-tactical .folder-selection-bar button[aria-pressed="true"]:not(:disabled) { background: var(--holo-selection); color: var(--holo-ink); }
+.library-tactical .folder-selection-bar .folder-selection-primary:not(:disabled) { background: var(--holo-primary); color: var(--holo-on-primary); }
 .library-tactical :is(.app-popover, .topbar-account-menu, .folder-popover, .library-tag-filter, .library-color-strip.library-floating-surface) {
   border-color: transparent; border-radius: 0; background: var(--lt-panel);
   box-shadow: 0 9px 24px -12px var(--lt-shadow); backdrop-filter: none;

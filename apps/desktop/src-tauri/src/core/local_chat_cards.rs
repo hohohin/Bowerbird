@@ -107,7 +107,16 @@ pub struct ChatCardAction {
 struct CardBatch {
     cards: Vec<CardSpec>,
     #[serde(default)]
+    sections: Vec<SectionSpec>,
+    #[serde(default)]
     connections: Vec<ConnectionSpec>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SectionSpec {
+    id: String,
+    title: String,
+    members: Vec<String>,
 }
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
@@ -167,8 +176,146 @@ struct Compilation {
     names: serde_json::Map<String, Value>,
 }
 
+fn valid_identity(alias: &str, title: &str) -> bool {
+    !alias.is_empty()
+        && alias.len() <= 40
+        && alias
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        && !title.trim().is_empty()
+        && title.chars().count() <= 80
+}
+
+fn place_section_groups(
+    sections: &[SectionSpec],
+    aliases: &HashMap<String, (String, String)>,
+    cards: &mut Vec<CreatedChatCard>,
+    nodes: &mut [Value],
+    notes: &mut Vec<Value>,
+    names: &mut serde_json::Map<String, Value>,
+    anchor: (f64, f64),
+) -> AppResult<()> {
+    let mut grouped = HashSet::new();
+    let mut groups: Vec<Vec<String>> = sections
+        .iter()
+        .map(|section| {
+            section
+                .members
+                .iter()
+                .map(|alias| {
+                    let id = aliases[alias].0.clone();
+                    grouped.insert(id.clone());
+                    id
+                })
+                .collect()
+        })
+        .collect();
+    let ungrouped: Vec<String> = cards
+        .iter()
+        .filter(|card| !grouped.contains(&card.id))
+        .map(|card| card.id.clone())
+        .collect();
+    if !ungrouped.is_empty() {
+        groups.push(ungrouped);
+    }
+    // Content tables expand to their minimum editable row height in the canvas.
+    // Persist that size now so the section and its undo footprint match the rendered card.
+    for note in notes.iter_mut() {
+        let rows = note["payload"]["cells"].as_array().unwrap().len();
+        note["height"] = json!(note["height"]
+            .as_f64()
+            .unwrap()
+            .max(rows as f64 * 64.0 + 46.0));
+    }
+    let mut grids = Vec::new();
+    let mut group_widths = [0.0f64; 2];
+    let mut group_heights = vec![0.0f64; (groups.len() + 1) / 2];
+    for (index, members) in groups.iter().enumerate() {
+        let mut widths = vec![340.0f64; members.len().min(3)];
+        let mut heights = vec![600.0f64; (members.len() + 2) / 3];
+        for (member_index, id) in members.iter().enumerate() {
+            if let Some(note) = notes.iter().find(|note| note["id"] == *id) {
+                widths[member_index % 3] =
+                    widths[member_index % 3].max(note["width"].as_f64().unwrap());
+                heights[member_index / 3] =
+                    heights[member_index / 3].max(note["height"].as_f64().unwrap());
+            }
+        }
+        let width = widths.iter().sum::<f64>() + (widths.len() - 1) as f64 * 96.0 + 144.0;
+        let height = heights.iter().sum::<f64>() + (heights.len() - 1) as f64 * 104.0 + 160.0;
+        group_widths[index % 2] = group_widths[index % 2].max(width);
+        group_heights[index / 2] = group_heights[index / 2].max(height);
+        grids.push((widths, heights, width, height));
+    }
+    for (index, members) in groups.iter().enumerate() {
+        let (widths, heights, width, height) = &grids[index];
+        let x = anchor.0
+            + group_widths[..index % 2]
+                .iter()
+                .map(|v| v + 160.0)
+                .sum::<f64>();
+        let y = anchor.1
+            + group_heights[..index / 2]
+                .iter()
+                .map(|v| v + 160.0)
+                .sum::<f64>();
+        for (member_index, id) in members.iter().enumerate() {
+            let target = if let Some(note) = notes.iter_mut().find(|note| note["id"] == *id) {
+                note
+            } else {
+                nodes.iter_mut().find(|node| node["id"] == *id).unwrap()
+            };
+            target["x"] = json!(
+                x + 72.0
+                    + widths[..member_index % 3]
+                        .iter()
+                        .map(|v| v + 96.0)
+                        .sum::<f64>()
+            );
+            target["y"] = json!(
+                y + 96.0
+                    + heights[..member_index / 3]
+                        .iter()
+                        .map(|v| v + 104.0)
+                        .sum::<f64>()
+            );
+        }
+        if let Some(section) = sections.get(index) {
+            let id = &aliases[&section.id].0;
+            let title = section.title.trim();
+            let payload = json!({"schema_version":1,"note_type":"section","text":title,"title":title,"cells":[],"member_ids":members});
+            crate::core::creative_session_contract::parse_node_payload(
+                crate::core::creative_session_contract::CreativeNodeKind::Note,
+                &payload.to_string(),
+            )
+            .map_err(|_| invalid())?;
+            notes
+                .push(json!({"id":id,"payload":payload,"x":x,"y":y,"width":width,"height":height}));
+            names.insert(id.clone(), json!(title));
+            cards.push(CreatedChatCard {
+                alias: section.id.clone(),
+                id: id.clone(),
+                kind: "section".into(),
+                title: title.into(),
+            });
+        }
+    }
+    Ok(())
+}
+
 fn base_node(id: &str, kind: &str, x: f64, y: f64, provider: &str) -> Value {
     json!({"id":id,"kind":kind,"x":x,"y":y,"action":"describe","skill":"image-edit","prompt":"","ratio":null,"provider":provider,"inputs":{},"outputs":{},"outputPorts":[],"trigger":false})
+}
+fn image_alias_index(alias: &str, images: &[String]) -> AppResult<usize> {
+    let index = alias
+        .strip_prefix("image")
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|i| *i > 0 && *i <= images.len() && *i <= 8)
+        .ok_or_else(invalid)?;
+    if alias != format!("image{index}") {
+        return Err(invalid());
+    }
+    Ok(index - 1)
 }
 fn add_input(node: &mut Value, port: &str, mut binding: Value, label: &str) {
     let referenced = node["kind"] == "generation" && matches!(port, "text" | "image");
@@ -216,7 +363,11 @@ fn compile(
         return Err(invalid());
     }
     let batch: CardBatch = serde_json::from_value(args.clone()).map_err(|_| invalid())?;
-    if batch.cards.is_empty() || batch.cards.len() > 12 || batch.connections.len() > 24 {
+    if batch.cards.is_empty()
+        || batch.cards.len() > 12
+        || batch.sections.len() > 12
+        || batch.connections.len() > 24
+    {
         return Err(invalid());
     }
     if batch
@@ -235,15 +386,7 @@ fn compile(
     let mut names = serde_json::Map::new();
     for (index, spec) in batch.cards.iter().enumerate() {
         let (alias, title, kind) = spec.identity();
-        if alias.is_empty()
-            || alias.len() > 40
-            || !alias
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
-            || title.trim().is_empty()
-            || title.chars().count() > 80
-            || aliases.contains_key(alias)
-        {
+        if !valid_identity(alias, title) || aliases.contains_key(alias) {
             return Err(invalid());
         }
         let id = format!("chat-card-{prefix}-{index}");
@@ -334,22 +477,19 @@ fn compile(
                 }
                 let mut seen = HashSet::new();
                 for alias in reference_aliases {
-                    let index = alias
-                        .strip_prefix("image")
-                        .and_then(|s| s.parse::<usize>().ok())
-                        .filter(|i| *i > 0 && *i <= images.len())
-                        .ok_or_else(invalid)?;
-                    if alias != &format!("image{index}") || !seen.insert(index) {
+                    let index = image_alias_index(alias, images)?;
+                    if !seen.insert(index) {
                         return Err(invalid());
                     }
                     add_input(
                         &mut node,
                         "image",
-                        json!({"assetId":images[index-1]}),
-                        &format!("参考图片 {index}"),
+                        json!({"assetId":images[index]}),
+                        &format!("参考图片 {}", index + 1),
                     );
                 }
             }
+
             CardSpec::Trigger { count, .. } => {
                 if count.is_some_and(|c| c > 9999) {
                     return Err(invalid());
@@ -381,6 +521,31 @@ fn compile(
             _ => unreachable!(),
         }
         nodes.push(node);
+    }
+    let mut section_members = HashSet::new();
+    for (index, section) in batch.sections.iter().enumerate() {
+        if !valid_identity(&section.id, &section.title)
+            || aliases.contains_key(&section.id)
+            || section.members.is_empty()
+            || section.members.len() > 12
+            || section.members.iter().any(|member| {
+                !aliases
+                    .get(member)
+                    .is_some_and(|(_, kind)| kind != "section")
+                    || !section_members.insert(member.clone())
+            })
+        {
+            return Err(error(
+                "分区名称或成员无效；每张新卡片只能属于一个分区，本次未创建卡片",
+            ));
+        }
+        aliases.insert(
+            section.id.clone(),
+            (
+                format!("chat-card-{prefix}-{}", batch.cards.len() + index),
+                "section".into(),
+            ),
+        );
     }
     let mut body_owners = HashSet::new();
     for spec in &batch.cards {
@@ -418,7 +583,8 @@ fn compile(
             }
             for alias in body {
                 let (target, kind) = aliases.get(alias).ok_or_else(invalid)?;
-                if kind != "generation" || !body_owners.insert(alias) {
+                if kind != "generation" || !body_owners.insert(alias)
+                {
                     return Err(invalid());
                 }
                 let target = nodes.iter_mut().find(|n| n["id"] == *target).unwrap();
@@ -474,10 +640,11 @@ fn compile(
         if !valid {
             return Err(invalid());
         }
-        if connection.input == "image"
-            && nodes
-                .iter()
-                .any(|n| n["id"] == *from && n["generation"]["media"] == "video")
+        let source_is_video = nodes
+            .iter()
+            .any(|n| n["id"] == *from && n["generation"]["media"] == "video");
+        if source_is_video
+            && connection.input == "image"
             && nodes
                 .iter()
                 .any(|n| n["id"] == *to && n["generation"]["media"] == "image")
@@ -497,25 +664,37 @@ fn compile(
             &cards.iter().find(|c| c.id == *from).unwrap().title,
         );
     }
-    // Final placement uses the real content-card dimensions, not a fixed cell grid.
-    let mut widths = [340.0f64; 3];
-    let mut heights = vec![380.0f64; (cards.len() + 2) / 3];
-    for (index, card) in cards.iter().enumerate() {
-        if let Some(note) = notes.iter().find(|n| n["id"] == card.id) {
-            widths[index % 3] = widths[index % 3].max(note["width"].as_f64().unwrap());
-            heights[index / 3] = heights[index / 3].max(note["height"].as_f64().unwrap());
+    if !batch.sections.is_empty() {
+        place_section_groups(
+            &batch.sections,
+            &aliases,
+            &mut cards,
+            &mut nodes,
+            &mut notes,
+            &mut names,
+            anchor,
+        )?;
+    } else {
+        // Final placement uses the real content-card dimensions, not a fixed cell grid.
+        let mut widths = [340.0f64; 3];
+        let mut heights = vec![380.0f64; (cards.len() + 2) / 3];
+        for (index, card) in cards.iter().enumerate() {
+            if let Some(note) = notes.iter().find(|n| n["id"] == card.id) {
+                widths[index % 3] = widths[index % 3].max(note["width"].as_f64().unwrap());
+                heights[index / 3] = heights[index / 3].max(note["height"].as_f64().unwrap());
+            }
         }
-    }
-    for (index, card) in cards.iter().enumerate() {
-        let x = anchor.0 + widths[..index % 3].iter().map(|w| w + 80.0).sum::<f64>();
-        let y = anchor.1 + heights[..index / 3].iter().map(|h| h + 80.0).sum::<f64>();
-        let target = if card.kind == "content" {
-            notes.iter_mut().find(|n| n["id"] == card.id).unwrap()
-        } else {
-            nodes.iter_mut().find(|n| n["id"] == card.id).unwrap()
-        };
-        target["x"] = json!(x);
-        target["y"] = json!(y);
+        for (index, card) in cards.iter().enumerate() {
+            let x = anchor.0 + widths[..index % 3].iter().map(|w| w + 80.0).sum::<f64>();
+            let y = anchor.1 + heights[..index / 3].iter().map(|h| h + 80.0).sum::<f64>();
+            let target = if card.kind == "content" {
+                notes.iter_mut().find(|n| n["id"] == card.id).unwrap()
+            } else {
+                nodes.iter_mut().find(|n| n["id"] == card.id).unwrap()
+            };
+            target["x"] = json!(x);
+            target["y"] = json!(y);
+        }
     }
     // Select a runnable video input mode after explicit references and batch wiring exist.
     for node in &mut nodes {
@@ -769,8 +948,8 @@ impl Database {
             .as_array()
             .into_iter()
             .flatten()
-            .filter_map(|n| n["x"].as_f64())
-            .fold(x, |right, n| right.max(n + 340.0));
+            .filter_map(|n| n["x"].as_f64().map(|x| x + 340.0))
+            .fold(x, f64::max);
         let mut compiled = compile(
             args,
             &defaults,
@@ -784,8 +963,13 @@ impl Database {
             &id,
         )?;
         for node in &compiled.nodes {
-            if node["generation"]["media"] == "video" {
-                for input in node["inputs"]["image"].as_array().into_iter().flatten() {
+            let image_ports: &[&str] = if node["generation"]["media"] == "video" {
+                &["image"]
+            } else {
+                &[]
+            };
+            for port in image_ports {
+                for input in node["inputs"][*port].as_array().into_iter().flatten() {
                     if let Some(asset) = input["assetId"].as_str() {
                         let (ext, path): (Option<String>, Option<String>) = tx.query_row(
                             "SELECT ext,store_path FROM assets WHERE id=?1",
@@ -830,6 +1014,9 @@ impl Database {
             compiled.names.insert(card.id.clone(), json!(card.title));
             if let Some(note) = compiled.notes.iter_mut().find(|n| n["id"] == card.id) {
                 note["payload"]["title"] = json!(card.title);
+                if card.kind == "section" {
+                    note["payload"]["text"] = json!(card.title);
+                }
             }
         }
         let nodes = doc["nodes"].as_array_mut().ok_or_else(invalid)?;

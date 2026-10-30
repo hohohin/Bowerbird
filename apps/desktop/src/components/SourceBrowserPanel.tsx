@@ -128,7 +128,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
         const bounds = boundsFor(viewport);
         if (bounds.width < 240 || bounds.height < 180) return;
         const viewportRect = viewport.getBoundingClientRect();
-        const overlay = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"], .caption-ring-layer, .app-sidebar.is-auto-hide:not(.is-auto-hidden)'))
+        const overlay = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], .caption-ring-layer, .app-sidebar.is-auto-hide:not(.is-auto-hidden)'))
           .some(element => {
             if (element.getClientRects().length === 0 || getComputedStyle(element).visibility === "hidden") return false;
             // Dialogs and the dimension ring have full-window backdrops. The

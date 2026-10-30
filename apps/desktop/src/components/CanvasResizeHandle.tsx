@@ -4,12 +4,13 @@ type Size = { width: number; height: number };
 type Position = { x: number; y: number };
 
 /** Shared pointer capture keeps resizing separate from canvas dragging and panning. */
-export function CanvasResizeHandle({ label, size, position, corner = "se", zoom, minimum, constrain, onResize }: {
+export function CanvasResizeHandle({ label, size, position, corner = "se", zoom, getZoom, minimum, constrain, onResize }: {
   label: string;
   size: Size;
   position?: Position;
   corner?: "nw" | "ne" | "sw" | "se";
   zoom: number;
+  getZoom?: () => number;
   minimum: Size;
   constrain?: (size: Size, delta: Size) => Size;
   onResize: (size: Size & Partial<Position>, finished: boolean, cancelled?: boolean) => void;
@@ -52,7 +53,7 @@ export function CanvasResizeHandle({ label, size, position, corner = "se", zoom,
       if (event.button !== 0) return;
       event.stopPropagation(); event.preventDefault();
       event.currentTarget.focus({ preventScroll: true });
-      drag.current = { initial: { width: size.width, height: size.height, ...position }, pointerId: event.pointerId, x: event.clientX, y: event.clientY, zoom };
+      drag.current = { initial: { width: size.width, height: size.height, ...position }, pointerId: event.pointerId, x: event.clientX, y: event.clientY, zoom: getZoom?.() ?? zoom };
       event.currentTarget.setPointerCapture(event.pointerId);
       onResize(drag.current.initial, false);
     }}

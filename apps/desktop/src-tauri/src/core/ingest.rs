@@ -1,6 +1,10 @@
 //! 导入流水线：本地文件按字节去重；网页采集可按 dHash 合并近似变体。
 //! 视频/PSD/SVG 等多格式在 Phase 2 接入；Phase 1 覆盖常见光栅图。
 
+#[cfg(test)]
+#[path = "ingest_heic_tests.rs"]
+mod heic_tests;
+
 use std::fs;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
@@ -54,15 +58,24 @@ fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<
 }
 
 fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, approximate: bool) -> AppResult<Asset> {
-    let meta = media::probe::probe(source)?;
+    // Keep the user's HEIC untouched. All consumers receive a full-size PNG,
+    // including previews, classification and providers that cannot read HEIC.
+    let normalized = if media::heic::is_path(source) {
+        let directory = tempfile::Builder::new().prefix("bowerbird-heic-").tempdir()?;
+        media::heic::convert_to_png(source, &directory.path().join("image.png"))?;
+        Some(directory)
+    } else { None };
+    let input = normalized.as_ref().map(|directory| directory.path().join("image.png"));
+    let input = input.as_deref().unwrap_or(source);
+    let meta = media::probe::probe(input)?;
     let decoded = if media::probe::is_video(&meta.ext) || matches!(meta.ext.as_str(), "svg" | "psd") {
         None
     } else {
-        Some(image::ImageReader::open(source)?.with_guessed_format()?.decode()
+        Some(image::ImageReader::open(input)?.with_guessed_format()?.decode()
             .map_err(|error| AppError::Media(format!("无法解码图片 {}: {error}", source.display())))?)
     };
     if !approximate {
-        if let Some(mut existing) = exact_duplicate(db, source, meta.size)? {
+        if let Some(mut existing) = exact_duplicate(db, input, meta.size)? {
             preset::recognize_and_prefill(db, source, &mut existing)?;
             return Ok(existing);
         }
@@ -76,7 +89,7 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
 
     let store_path = paths.asset_store_path(&id, &meta.ext)?;
     fs::create_dir_all(store_path.parent().unwrap())?;
-    fs::copy(source, &store_path)?;
+    fs::copy(input, &store_path)?;
 
     // 缩略图：图片用 image resize；视频由独立进程限时抽帧；SVG 用原文件（前端直渲染）。
     let thumb_path = if media::probe::is_video(&meta.ext) {
@@ -407,6 +420,7 @@ pub fn ingest_from_bytes(
 }
 
 fn uploaded_image_extension(bytes: &[u8], content_type: Option<&str>) -> AppResult<&'static str> {
+    if media::heic::is_heic(bytes) { return Ok("heic"); }
     let is_svg = content_type
         .and_then(|value| value.split(';').next())
         .is_some_and(|value| value.trim().eq_ignore_ascii_case("image/svg+xml"));
@@ -539,6 +553,7 @@ pub async fn ingest_from_url(
 }
 
 fn downloaded_image_extension(content_type: Option<&str>, bytes: &[u8]) -> AppResult<&'static str> {
+    if media::heic::is_heic(bytes) { return Ok("heic"); }
     if content_type.is_some_and(|value| {
         value
             .split(';')

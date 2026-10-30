@@ -12,6 +12,8 @@ page.on("pageerror", error => errors.push(error.message));
 const dialog = page.getByRole("dialog", { name: "草稿编辑器", exact: true });
 const saves = () => page.evaluate(() => window.calls.filter(call => call.command === "draft_workspace_save"));
 async function openDraft() {
+  // Camera updates are painted on animation frames; read the visible transform after settling.
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   const target = page.locator("[data-canvas-stage]");
   const { x, y } = await target.evaluate(element => {
     const rect = element.getBoundingClientRect();
@@ -113,7 +115,7 @@ try {
   assert.ok(pixels.composite.ink > 500 && pixels.layer.ink > 500, "paint and shapes must be present in the raster output");
   const node = await page.evaluate(() => window.snapshot().nodes.find(node => node.assetId?.startsWith("draft-")));
   assert.equal(node.projectId, "p"); assert.equal(node.threadId, null);
-  assert.ok(Math.abs(node.x + node.width / 2 - point.x) < 0.01);
+  assert.ok(Math.abs(node.x + node.width / 2 - point.x) < 0.01, JSON.stringify({node, point}));
   assert.ok(Math.abs(node.y + node.height / 2 - point.y) < 0.01);
   await page.locator(`[data-canvas-node-id="${node.id}"]`).waitFor();
   await page.screenshot({ path: ".tmp/canvas-draft-saved.png" });

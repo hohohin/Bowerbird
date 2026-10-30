@@ -52,7 +52,7 @@ try {
   assert.equal((await imports()).at(-1).projectId, "p");
   await (await canvasAsset("media-1")).waitFor();
   const extensions = await page.evaluate(() => window.mediaCalls.find(c => c.command === "plugin:dialog|open").args.options.filters[0].extensions);
-  for (const ext of ["mp4", "mov", "m4v", "webm", "mkv", "avi"]) assert.ok(extensions.includes(ext));
+  for (const ext of ["mp4", "mov", "m4v", "webm", "mkv", "avi", "heic", "heif"]) assert.ok(extensions.includes(ext));
   const beforeCancel = (await imports()).length;
   await picker(null); assert.equal((await imports()).length, beforeCancel);
   // Global library drop remains enabled while the source drawer is open; no canvas instance.
@@ -115,12 +115,20 @@ try {
   assert.equal((await imports()).at(-1).projectId, null);
   await page.locator('.catalog-virtual [data-asset-id="media-1"]').waitFor();
   assert.equal(await page.evaluate(() => window.snapshot().nodes.length), 2);
+  // Windows can provide empty or generic MIME types for HEIC files.
+  for (const file of [{ name: "手机照片.HEIC" }, { name: "相机.HeIf", type: "application/octet-stream" }]) {
+    const before = (await imports()).length;
+    await drop(".categorized-library", [file]);
+    assert.equal((await imports()).length, before + 1);
+    assert.equal((await imports()).at(-1).asset.name, file.name);
+    assert.equal((await imports()).at(-1).projectId, null);
+  }
   await page.setViewportSize({ width: 560, height: 800 });
   await page.screenshot({ path: ".tmp/media-import/home-narrow.png" });
   assert.deepEqual(errors, []);
-  console.log("PASS: video picker/drop, library and canvas targets, chunk bounds, >50 MB, batch failures, cleanup, cancellation and frozen project/coordinates.");
+  console.log("PASS: HEIC/HEIF picker and MIME-less drops, video import, library and canvas targets, chunk bounds, >50 MB, batch failures, cleanup, cancellation and frozen project/coordinates.");
 } catch (error) {
   await page.screenshot({ path: ".tmp/media-import/failure.png" });
-  console.error(await page.evaluate(() => ({ imports: window.mediaImports, nodes: window.snapshot().nodes, text: document.body.innerText.slice(-1500) })));
+  console.error(await page.evaluate(() => ({ imports: window.mediaImports, nodes: window.snapshot?.().nodes, text: document.body.innerText.slice(-1500) })));
   throw error;
 } finally { await browser.close(); await server.close(); }

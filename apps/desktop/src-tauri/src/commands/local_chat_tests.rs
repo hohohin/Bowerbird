@@ -112,6 +112,49 @@ fn local_chat_card_tool_returns_structured_results_and_correctable_failures() {
 }
 
 #[test]
+fn local_chat_tool_contract_keeps_sections_and_defers_h3() {
+    let tool = card_tool_spec();
+    assert!(CARD_TOOL_VERSION >= 3);
+    assert!(tool["inputSchema"]["properties"].get("sections").is_some());
+    assert!(!tool.to_string().contains("comfy-video"));
+    assert!(!CHAT_INSTRUCTIONS.contains("H3"));
+}
+
+#[test]
+fn local_chat_section_tool_contract_groups_current_batch_cards_without_geometry_access() {
+    assert!(
+        CARD_TOOL_VERSION > 2,
+        "existing H3 tool threads must migrate to receive sections"
+    );
+    let tool = card_tool_spec();
+    let schema = &tool["inputSchema"];
+    assert_eq!(schema["required"], json!(["cards"]));
+    assert_eq!(schema["properties"]["cards"]["maxItems"], 12);
+    let sections = &schema["properties"]["sections"];
+    assert_eq!(sections["type"], "array");
+    assert_eq!(sections["maxItems"], 12);
+    let section = &sections["items"];
+    assert_eq!(section["required"], json!(["id", "title", "members"]));
+    assert_eq!(section["additionalProperties"], false);
+    let properties = section["properties"].as_object().unwrap();
+    assert_eq!(properties.len(), 3);
+    for key in ["id", "title", "members"] {
+        assert!(properties.contains_key(key));
+    }
+    let members = &properties["members"];
+    assert_eq!(members["minItems"], 1);
+    assert_eq!(members["maxItems"], 12);
+    assert_eq!(members["uniqueItems"], true);
+    assert_eq!(members["items"]["type"], "string");
+    let cards = schema["properties"]["cards"]["items"]["oneOf"]
+        .as_array()
+        .unwrap();
+    assert!(cards
+        .iter()
+        .all(|card| card["properties"]["kind"]["const"] != "section"));
+}
+
+#[test]
 fn local_chat_upgrade_preserves_public_history_without_replaying_current_request() {
     let chat: ChatConversation = serde_json::from_value(json!({
         "id":"chat","projectId":"project","threadId":"app-thread","nodeId":"node","title":"旧对话","provider":"codex-local","status":"running","turnCount":2,"preview":"","revision":1,"createdAt":1,"updatedAt":1,"error":null,"actions":[],

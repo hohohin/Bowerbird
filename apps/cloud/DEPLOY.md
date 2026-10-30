@@ -378,6 +378,55 @@ Secrets 仅新增 `COMFY_TOS_ACCESS_KEY_ID`、`COMFY_TOS_SECRET_ACCESS_KEY`，�
 
 代码、候选/现役/公网拒绝未授权、三平台更新保持、账号网关及 6 个对象真实签名 Range/匿名/过期拒绝已验证。自动审批阻止了临时生产账号写入验收，因此没有声称线上真实 Pro 登录至下载的完整链路通过；全新安装/GPU 和新客户端发布仍待完成。证据本机 `.tmp/tos-migration/comfy-*` 及 VPS `/tmp/bowerbird-comfy-tos/`。当前公开桌面包仍使用旧安装器，须发布包含新原生代码的版本。
 
+### 5.7 生成与签名文件官网网关（2026-10-28，已部署，客户端待发布）
+
+**后续客户端发布：** 2026-10-28 15:29:20（北京时间）Windows **26.10.2801** 已签名发布，源码 be4a3f11；generate-proxy、参考视频上传、图片／视频与分层包下载已包含官网网关路由。官网现役 `/opt/bowerbird/website-releases/20261028-windows-26.10.2801`，回滚 `/opt/bowerbird/website-releases/20261028-cloud-gateway`，Nginx 与生成／账号代理保留；无 Edge／Worker／价格／支付变更。原故障电脑完整生成和实际账单尚待用户更新后验收。包与发布证据见 [桌面自动更新](../../dev-doc/DESKTOP-UPDATES.md)。
+
+`website/cloud-proxy.mjs` 由 `server.mjs` 挂载到 `/api/cloud/`；独立于账号入口，不放宽账号的 64 KiB 限制。桌面 `CloudConfig.endpoint("generate-proxy")` 使用现有官方账号配置的同源 `/api/cloud/functions/v1/generate-proxy`，其他函数保持原路由。`generation_transfer_url` 只接受原配置 Supabase 同源、HTTPS、私有生成桶的签名地址，再改为官网入口，保留原 token 查询字符串；账号网关配置为空的隔离测试仍使用测试上游。
+
+- POST 只开放 `generate-proxy`，要求用户 Bearer、JSON 对象，最多 20 MiB；固定区域 `ap-northeast-1`，正文和正常业务 JSON 原样转发，响应 JSON 最多 1 MiB。Supabase 继续校验用户、任务归属、价格和预授权。共用该函数的图层任务也走此入口，其 JSON 文件走下述签名下载。
+- PUT 只开放 `storage/v1/object/upload/sign/generation-temp/jobs/<UUID>/inputs/video-<index>.mp4|mov?token=...`，要求 MP4／QuickTime MIME 和精确 Content-Length，最多 200 MiB；GET 只开放相同桶下 `jobs/<UUID>/outputs/result.png|jpg|webp|mp4|json` 的签名路径。没有通用代理目标、任意对象或管理入口。
+- 文件流式转发，不缓存在内存或磁盘；下载传输上限 500 MiB，桌面原有图片 20 MiB／视频 500 MiB／图层包 256 MiB 和大小／SHA-256 校验保持。签名由原 Storage 颁发，网关不签发凭据，不向 Storage 额外转发用户 Bearer／Cookie／API key。
+- 上游仅取既有 `SUPABASE_URL` 和 publishable/anon key，不需要 service role。拒绝跳转，不自动重发任何请求；中断或超时保留原任务查询语义，不改变幂等键、上传完成确认或计费。请求总上限 180 秒，客户端断开即中止上游；每 IP 300 次/分钟、最多 10,000 个内存桶、全局最多 8 个在途请求。仅 loopback 加显式 `BOWERBIRD_TRUST_PROXY=1` 才接受被 Nginx 覆写的 X-Real-IP。
+
+部署顺序：
+
+1. 基于现役官网创建独立候选目录，复制 `server.mjs` 与 **`cloud-proxy.mjs`**，保留现役账号模块、配置、静态文件、安装包和更新清单；不要用旧本地整站覆盖现役。仅不可变下载包可共享硬链接。
+2. 将 `website/deploy/cloud-gateway.nginx.conf` 合入官网 TLS server，保持 `/api/account/` 原配置。新入口 200 MiB 上限、关闭请求／响应缓存与缓冲、关闭重试及请求日志；Node 上游仍为 `127.0.0.1:4173`。候选及 `nginx -t` 通过后才原子切换并重启／重载。
+3. 验证公网未登录生成 401、非法路径拒绝、健康检查及旧账号／三平台更新入口。使用独立测试会话验证原任务查询、签名上传下载；真实付费模型验收单独记录，不能用匿名 401 声称生成成功。
+4. 网关在线验收后才发布包含新路由的桌面版本。旧桌面仍走旧生成路径；仅部署官网不能修复已安装旧包。客户端发布前可以完整回退官网候选；发布后必须保留新入口，除非同步回退所有受影响客户端，不回退数据库／账本／Worker。
+
+验证：`node --test --test-timeout=10000 website/scripts/cloud-proxy.test.mjs website/scripts/account-proxy.test.mjs website/scripts/app-updater.test.mjs` 共 27 项通过；Rust `cloud::` 46 项、`commands::layers` 4 项通过。覆盖模拟 10054／超时不重发、原任务身份／业务错误保持、恶意目标与跳转拒绝、请求限额、真实 Node fetch 回环上传／下载、上游未完成即收到文件字节、客户端断开取消、并发上限、慢请求及账号／更新兼容。没有调用真实模型，也没有在故障电脑验证；官网网关及 Nginx 配置已上线，现役 Windows 包仍为 26.10.2401，客户端尚待发版。视频服务和价格继续保持既有关闭状态，不随此网关发布自动开启。
+
+
+**2026-10-28 部署证据：** 北京时间 14:58 完成，现役官网为 `/opt/bowerbird/website-releases/20261028-cloud-gateway`，上一版 `20261025-admin-nickname` 保留。从现役复制，84 个原文件逐项保持，只有 `server.mjs` 改动并新增 `cloud-proxy.mjs`；不可变安装包共享硬链接，配置、首页、后台和更新清单保持独立原副本。现役环境保持 root 600，候选使用 sudo 启动，未放宽权限。Node 18.19.1 下 27 项回归通过；Nginx 配置检查、候选 4174／现役 4173／公网健康、二维码、匿名及无效用户生成鉴权、无效上传／下载签名拒绝、非法路由和三平台更新回归通过，页面／后台／清单哈希与部署前一致。临时候选已退出，官网服务 active。只读／拒绝请求没有创建生成任务或扣费；不能以此代替已登录原机生成验收。
+
+`server.mjs` SHA-256：`97db617660fd78df2066757e7b1d80272ec995a193958b56a1388850adf77f21`；`cloud-proxy.mjs`：`375895f636e317659bc4ddfd0ae6d945341423a86e1d1abe740ec1a158623e0e`；原 `account-proxy.mjs` 仍为 `363bdde73b028bcaf90cb31dfb0af756abeab7955c61cf0b87f3eb2bd875a53e`。本机证据 `.tmp/cloud-gateway-20261028/`，服务器 `/tmp/bowerbird-cloud-gateway-20261028/` 保存候选／现役／公网报告、原 Nginx 配置与 `rollback.sh`。该脚本仅允许当前为本轮或原基线，恢复原目录和 Nginx 并重启／重载；客户端发布后不得直接撤销新入口。没有部署 Edge、Worker 或数据库迁移，没有修改视频开关／定价、账号配置、安装包或更新清单。发版对话接手时必须基于本轮现役目录，保留新的 `cloud-proxy.mjs` 与 Nginx 入口，不能用旧整站覆盖。
+
+### 2026-10-28 视频未开放误报媒体类型（已修正）
+
+用户在更新最新正式版后确认 Cloud 图片正常，提供的视频失败记录为 `service 与生成媒体类型不匹配`。请求为 video、`video_seedance25_480p`、480p，组合正确；当日只读核查三个 Seedance 2.5 服务和对应价格均 active=false。现役 v41 `serviceFor` 对服务未开放、查询失败均复用了媒体类型错误，导致错误归因。
+
+北京时间 16:03 定向部署 `generate-proxy` **v41→v42**，`verify_jwt=false` 保持，函数内仍按原方式验证真实用户：正常形状但无 active 服务返回 `not_configured` 和明确中文，查询异常返回 `internal_error`，实际媒体／分辨率不一致仍返回原参数错误。分层原有未开放提示保留。部署前已先用旧代码复现 3 项失败、修复后 5 项通过；从现役依赖建立候选再次通过全部 5 项，类型检查通过，没有真实模型调用。
+
+下载回核归一化入口 SHA-256 `9770710d299c6ba2bfe0e08511e95a912221fc59e471324b4b5427e496adb96e`；其他函数版本／JWT、图片／视频服务及视频价格逐项与只读基线一致。第一次发布在 Supabase 构建服务拉取 JSR 时超时，现役保持 v41；重试同一候选成功。不需要桌面重打包即可收到新服务端错误，但这项修复没有开启视频服务。
+
+证据与原 v41 源码位于本机 `.tmp/cloud-generation-20261028/`：`read-only-report.json`、`live/`、`candidate/`、`verified/`、`message-deployed.json`。若回退，仅从已保存的 v41 `live/` 部署 generate-proxy 并保留原 JWT，不动其他函数或账本。Edge 下载包不含仅用于类型检查的 `ark.ts`；候选补回本地该类型依赖，入口只使用 `import type`，不新增 Ark 运行时。
+
+上述 16:03 发布只修正错误提示；其后用户明确确认「启用三个档位并做真实验收」，执行结果如下。
+
+### 2026-10-28 Seedance 2.5 三档启用与真实验收
+
+北京时间 18:09 原子启用 `video_seedance25_480p/720p/1080p`：仅修改 `service_costs` 和 `video_service_pricing` 六个 active 标志，前后完整快照确认其他服务、参数、价格及 20261023 版本保持。动态价格服务的 `unit_cost=0` 保持，不能把该列误当免费或直接写成示例秒价。5 秒、16:9、无参考视频报价分别为 **110／245／600 Bcoin**。无需再发桌面包，Windows 26.10.2801 已有官网生成网关。
+
+18:12–18:15 使用独立正常权限临时账号经官网 `/api/cloud` 完成一次真实 480p 文生视频：5 秒、16:9、无音频／参考图／参考视频。Cloud job `dfe69215-7da9-4308-8bc0-9a9d91ca4264`，上游 `cgt-20261028181253-87tfi`，固定模型 `doubao-seedance-2-5-260628`。仅一条上游创建；后续队列租约重领只查询原任务，数据库 `attempt_count=9` 不代表九次付费提交。验收脚本前置曾错误期望图片权益目录包含视频，并使用不支持的 `action=create`；均在上游提交前停止，后者确认无任务／hold 后复用原账号及原幂等键纠正，没有额外真实生成。
+
+真实返回 MP4/H.264，854×480、24fps、5.041667 秒、796831 字节，无音轨。官网签名下载完整字节及 SHA-256 `ceaf9e38a9237cb950036b8f4d43a6684c3171fa2052e919b83f77e729eb2929` 与服务端一致，接收确认已持久化；原 key 查询返回同一任务。数据库恰好一 job、一 hold、一 confirm，预留／最终扣费均 **110 Bcoin**，hold=confirmed。测试专用合成 110 Bcoin 已全部消费，未创建支付订单、未动真实用户余额；Auth 临时身份已删除、账务审计保留。上游实际返回 48437 completion_tokens，按配置刊例率内部折算 ¥3.39059，此数不是供应商发票核验。新 hold 使用提交时固定报价，实际 token 略高于预估不会追加扣费。
+
+15 项 Worker 视频提交／恢复／产物／用量回归通过。证据：`.tmp/cloud-generation-20261028/activation.json`、`real-video.json`、`audit.json`、`acceptance.json`；本地视频 `seedance25-480p-5s.mp4`。仅 480p 文生视频真实验收；720p／1080p 已启用并核对报价，未额外付费测试，参考图／视频模式、故障电脑实际入库及重启恢复仍待各自实机验收。9 月 6 日旧 unknown 案例未重发、未认领或退款。本次未重建 Worker、修改模型、发布安装包或变更其他服务。
+
+需要停止新视频任务时，在同一数据库事务将上述三个 service 的两张表 active 恢复 false；保留原任务、账本和 Worker，允许已提交任务继续查询／下载／结算，不能以回退开关为由重投或退款。完整前态保存在 activation.json。
+
 ## 6. 验证
 
 ```bash

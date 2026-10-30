@@ -206,7 +206,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     const handler = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "a" || document.querySelector('[role="dialog"], [role="menu"]')) return;
       const target = event.target as HTMLElement | null;
-      if (!target || !root.current?.contains(target) || target.closest('input,textarea,select,[contenteditable="true"]')) return;
+      if (!target || !root.current?.contains(target) || target.closest('input,textarea,select,[role="combobox"],[contenteditable="true"]')) return;
       event.preventDefault(); void selectAll();
     };
     window.addEventListener("keydown", handler);
@@ -346,7 +346,9 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
         if (alive.current) setRevision(value => value + 1);
         notifySuccess(kind === "tags" ? "已添加手动分类" : "已添加到集合");
       });
-    }} data-drop-target={dropTarget ?? undefined} data-file-import-project-id={projectScope ? projectId ?? "" : ""} className={`categorized-library library-tactical${kind === "tags" && !flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : kind === "tags" ? "按标签浏览素材" : "按集合浏览素材"}
+    }} data-drop-target={dropTarget ?? undefined} data-file-import-project-id={projectScope ? projectId ?? "" : ""}
+      data-file-import-collection-id={scope ?? undefined} data-file-import-collection-name={scope ? currentCollection?.name : undefined}
+      className={`categorized-library library-tactical${kind === "tags" && !flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : kind === "tags" ? "按标签浏览素材" : "按集合浏览素材"}
     style={{ ...glass.style, ...(sidebarWidth !== null ? { "--catalog-sidebar-width": `${sidebarWidth}px` } : {}) } as CSSProperties}>
     {dropPreview && dropTarget && dropName && <LibraryDropPreview {...dragItem} target={dropName} collection={kind === "collections"}/>}
     {glass.definition}

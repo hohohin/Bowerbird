@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use tauri::State;
 use crate::{db::Database, error::{AppError, AppResult}};
 use crate::cloud::{AuthClient, EntitlementService};
+use crate::core::project_canvas::{NewCanvasNode, insert_node_tx, touch_canvas_tx};
 
 pub(crate) async fn require_pro(auth: &AuthClient, entitlement: &EntitlementService) -> AppResult<()> {
     let snapshot = entitlement.current_or_sync(auth).await;
@@ -216,8 +217,9 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                     assets.insert(asset.to_owned());
                 } else if binding["canvasNodeId"].is_string() {
                     if (port != "text" && !image_port) || !binding["cellId"].is_string() || binding.get("nodeId").is_some() { return Err(invalid()); }
-                    if binding["cellId"] == "*" || binding["cellId"] == "*text" {
-                        if (binding["cellId"] == "*" && !image_port) || (binding["cellId"] == "*text" && port != "text") { return Err(invalid()); }
+                    if matches!(binding["cellId"].as_str(), Some("*" | "*text" | "*latest" | "*latest-image")) {
+                        if (matches!(binding["cellId"].as_str(), Some("*" | "*latest-image")) && !image_port)
+                            || (matches!(binding["cellId"].as_str(), Some("*text" | "*latest")) && port != "text") { return Err(invalid()); }
                         for producer in nodes.iter().filter(|node| node["kind"] == "text" && node["textTarget"]["nodeId"] == binding["canvasNodeId"]) {
                             deps.push(producer["id"].as_str().ok_or_else(invalid)?);
                         }
@@ -308,11 +310,29 @@ impl Database {
         }
     }
     fn workflow_save(&self, project_id: &str, revision: i64, document: Value) -> AppResult<i64> {
+        self.workflow_save_with_content(project_id, revision, document, None)
+    }
+    fn workflow_save_with_content(&self, project_id: &str, revision: i64, document: Value, created_content: Option<&NewCanvasNode>) -> AppResult<i64> {
         let assets = validate(&document)?;
+        if let Some(card) = created_content {
+            let payload: Value = serde_json::from_str(&card.payload_json)?;
+            if card.project_id != project_id || card.kind != crate::core::creative_session_contract::CreativeNodeKind::Note
+                || card.thread_id.is_some() || card.asset_id.is_some() || card.role.is_some()
+                || payload["note_type"] != "text"
+                || !document["nodes"].as_array().unwrap().iter().any(|node| node["kind"] == "text"
+                    && node["textTarget"]["nodeId"] == card.id && node["textTarget"]["image"] == true) {
+                return Err(invalid());
+            }
+        }
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
         let current: i64 = tx.query_row("SELECT revision FROM canvas_workflows WHERE project_id=?1", [project_id], |r| r.get(0)).optional()?.unwrap_or(0);
         if current != revision { return Err(AppError::Other("工作流已被其他窗口修改，请重新打开项目".into())); }
+        if let Some(card) = created_content {
+            let now = chrono::Utc::now().timestamp();
+            touch_canvas_tx(&tx, project_id, now)?;
+            insert_node_tx(&tx, card, now)?;
+        }
         for asset in assets {
             // Missing assets remain explicit broken inputs; never resurrect deleted files.
             tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) SELECT ?1,id,strftime('%s','now')*1000 FROM assets WHERE id=?2", params![project_id, asset])?;
@@ -326,12 +346,12 @@ impl Database {
 #[tauri::command]
 pub async fn canvas_workflow_get(db: State<'_, Arc<Database>>, project_id: String) -> AppResult<WorkflowSnapshot> { db.workflow_get(&project_id) }
 #[tauri::command]
-pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project_id: String, revision: i64, document: Value) -> AppResult<i64> {
+pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project_id: String, revision: i64, document: Value, created_content: Option<NewCanvasNode>) -> AppResult<i64> {
     let before = db.workflow_get(&project_id)?.document;
-    if paid_definition(&before) != paid_definition(&document) || (has_new_run(&before,&document) && !paid_definition(&document).is_empty()) {
+    if created_content.is_some() || paid_definition(&before) != paid_definition(&document) || (has_new_run(&before,&document) && !paid_definition(&document).is_empty()) {
         require_pro(&auth, &entitlement).await?;
     }
-    db.workflow_save(&project_id, revision, document)
+    db.workflow_save_with_content(&project_id, revision, document, created_content.as_ref())
 }
 
 #[cfg(test)]
@@ -693,6 +713,24 @@ mod tests {
         assert!(validate(&doc).is_err());
     }
     #[test]
+    fn latest_row_selectors_validate_types_and_track_every_writer() {
+        for (port, selector) in [("text", "*latest"), ("image", "*latest-image"), ("first-frame", "*latest-image"), ("last-frame", "*latest-image")] {
+            let mut first = node("first", json!({"image":[{"assetId":"a"}]}));
+            first["kind"] = json!("text"); first["textTarget"] = json!({"nodeId":"container","cellId":"one","image":true});
+            let mut second = first.clone(); second["id"] = json!("second"); second["textTarget"]["cellId"] = json!("two");
+            let mut consumer = node("consumer", json!({port:[{"canvasNodeId":"container","cellId":selector}]}));
+            if port.ends_with("-frame") { consumer["kind"] = json!("comfy-video"); }
+            let mut doc = json!({"schema_version":1,"nodes":[first,second,consumer],"run":null});
+            assert!(validate(&doc).is_ok(), "{port}: {selector}");
+            doc["nodes"][1]["inputs"] = json!({"image":[{"nodeId":"consumer","portId":"image"}]});
+            assert!(validate(&doc).is_err(), "latest must include later writers in cycle detection");
+        }
+        for (port, selector) in [("image", "*latest"), ("text", "*latest-image")] {
+            let doc = json!({"schema_version":1,"nodes":[node("consumer",json!({port:[{"canvasNodeId":"container","cellId":selector}]}))]});
+            assert!(validate(&doc).is_err(), "{selector} cannot feed {port}");
+        }
+    }
+    #[test]
     fn rejects_cycles_through_generated_text_tables() {
         let mut producer = node("describe", json!({}));
         producer["resultNodeIds"] = json!(["table"]);
@@ -713,6 +751,41 @@ mod tests {
         db.workflow_save("p", 1, running).unwrap();
         assert!(db.conn.lock().unwrap().execute("DELETE FROM projects WHERE id='p'", []).is_err());
         assert_eq!(db.workflow_get("p").unwrap().revision, 2);
+    }
+    #[test]
+    fn generation_content_connection_is_atomic_with_workflow() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        db.ensure_project_canvas("p").unwrap();
+        let card: NewCanvasNode = serde_json::from_value(json!({"id":"relay","projectId":"p","threadId":null,"kind":"note","assetId":null,"role":null,
+            "payloadJson":json!({"schema_version":1,"note_type":"text","text":"","member_ids":[],"cells":[[{"id":"cell","text":"","bold":false,"italic":false,"align":"left","content_type":"image"}]]}).to_string(),
+            "x":200,"y":100,"width":200,"height":166,"zIndex":1,"positionLocked":false})).unwrap();
+        let mut writer = node("writer", json!({"image":[{"nodeId":"source","portId":"image"}]}));
+        writer["kind"] = json!("text"); writer["textTarget"] = json!({"nodeId":"relay","cellId":"cell","image":true,"append":true});
+        let doc = json!({"schema_version":1,"nodes":[node("source",json!({})),writer,node("target",json!({"image":[{"canvasNodeId":"relay","cellId":"*latest-image"}]}))],"run":null});
+        // A failure after INSERT of the native card rolls it back as well.
+        db.conn.lock().unwrap().execute_batch("CREATE TRIGGER fail_workflow_insert BEFORE INSERT ON canvas_workflows BEGIN SELECT RAISE(ABORT,'injected save failure'); END;").unwrap();
+        assert!(db.workflow_save_with_content("p", 0, doc.clone(), Some(&card)).is_err());
+        assert!(db.get_canvas_node("relay").unwrap().is_none());
+        assert_eq!(db.workflow_get("p").unwrap().revision, 0);
+        db.conn.lock().unwrap().execute_batch("DROP TRIGGER fail_workflow_insert;").unwrap();
+        assert_eq!(db.workflow_save_with_content("p", 0, doc.clone(), Some(&card)).unwrap(), 1);
+        assert_eq!(db.get_canvas_node("relay").unwrap().unwrap().payload_json, card.payload_json);
+        let mut conflict = card.clone(); conflict.id = "conflict".into();
+        let mut next = doc.clone(); next["nodes"][1]["textTarget"]["nodeId"] = json!("conflict");
+        next["nodes"][2]["inputs"]["image"][0]["canvasNodeId"] = json!("conflict");
+        assert!(db.workflow_save_with_content("p", 0, next.clone(), Some(&conflict)).is_err());
+        assert!(db.get_canvas_node("conflict").unwrap().is_none());
+        conflict.width = -1.0;
+        assert!(db.workflow_save_with_content("p", 1, next, Some(&conflict)).is_err());
+        assert_eq!(db.workflow_get("p").unwrap().revision, 1);
+        // Foreign projects and unrelated native cards cannot enter this narrow API.
+        let mut foreign = card.clone(); foreign.project_id = "q".into();
+        assert!(db.workflow_save_with_content("p", 1, doc.clone(), Some(&foreign)).is_err());
+        assert!(db.workflow_save_with_content("p", 1, json!({"schema_version":1,"nodes":[],"run":null}), Some(&card)).is_err());
+        // Replaying an already committed identical card never duplicates it.
+        assert_eq!(db.workflow_save_with_content("p", 1, doc, Some(&card)).unwrap(), 2);
+        assert_eq!(db.list_canvas_nodes("p").unwrap().len(), 1);
     }
     #[test]
     fn parallel_workflow_locks_and_delete_guard() {

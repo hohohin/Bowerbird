@@ -96,9 +96,10 @@ function CardAction({ action, onLocate, onUndo }: {
     } catch (reason) { setError(userErrorMessage(reason, undo ? "卡片暂未撤销，请稍后重试。" : "暂时无法定位卡片，请稍后重试。")); }
     finally { setBusy(false); }
   };
-  const labels = { generation: "生成", content: "内容", trigger: "触发", loop: "循环" };
+  const labels = { generation: "生成", "comfy-video": "本地 H3", content: "内容", trigger: "触发", loop: "循环", section: "分区" };
+  const sections = action.cards.filter(card => card.kind === "section").length;
   return <div className="local-chat-card-action" data-chat-action-id={action.id}>
-    <strong><Check size={14} />{action.status === "undone" ? "已撤销此次创建" : `已创建 ${action.cards.length} 张卡片`}</strong>
+    <strong><Check size={14} />{action.status === "undone" ? "已撤销此次创建" : `已创建 ${action.cards.length - sections} 张卡片${sections ? ` · ${sections} 个分区` : ""}`}</strong>
     <ul>{action.cards.map(card => <li key={card.id}><span>{labels[card.kind]}</span>{card.title}</li>)}</ul>
     {action.status === "created" && <><small>已放入画板，等待你运行。</small><div className="local-chat-card-action-buttons">
       {onLocate && <button type="button" disabled={busy} onClick={() => void act(false)}><LocateFixed size={13} />定位卡片</button>}

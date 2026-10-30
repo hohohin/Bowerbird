@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent, type ReactNode } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../lib/api";
 import type { Asset } from "../lib/types";
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
@@ -7,15 +6,16 @@ import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
 import { CanvasBubbleTail } from "./CanvasBubbleTail";
 import { VideoPoster } from "./VideoPoster";
+import { CanvasImage } from "./CanvasImage";
 import { isVideoPath } from "../lib/videoGeneration";
-import { AlignCenter, AlignLeft, AlignRight, Bold, Check, ChevronsDownUp, ChevronsUpDown, Copy, GripHorizontal, Italic, Minus, Plus, Table2, Type, Undo2 } from "lucide-react";
+import { AlignCenter, AlignLeft, AlignRight, Bold, Check, ChevronsDownUp, ChevronsUpDown, Copy, GripHorizontal, Italic, MessageCircle, Minus, Plus, Table2, Undo2 } from "lucide-react";
 import { canvasCellValue, canvasGridWeights, canvasTextCsv, canvasTextMinSize, emptyCanvasCell, type CanvasNotePayload, type CanvasTextCell } from "../lib/canvasNotes";
 import { notifyError } from "../lib/notify";
 import { parseCanvasTableClipboard, pasteCanvasTable } from "../lib/canvasTablePaste";
 
 const MIN_GRID_WEIGHT_SHARE = 0.04;
 
-export function CanvasTextCard({ value, selected, width, height, zoom, onChange, onSelect, onResize, onConnectCell, onInput, inputLocked, onOpenPreview, onOpenGeneration, renderGeneration, onMediaContextMenu }: {
+export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, onChange, onSelect, onResize, onConnectCell, onInput, inputLocked, onOpenPreview, onOpenGeneration, renderGeneration, onMediaContextMenu }: {
   onMediaContextMenu?: (event: MouseEvent<HTMLElement>, asset: Asset) => void;
   renderGeneration?: (cell: CanvasTextCell) => ReactNode;
   onOpenGeneration?: (cell: CanvasTextCell) => void;
@@ -28,6 +28,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
   width: number;
   height: number;
   zoom: number;
+  getZoom?: () => number;
   onChange: (value: CanvasNotePayload, size?: { width: number; height: number }) => void;
   onSelect: () => void;
   onResize: (size: { width: number; height: number }, finished: boolean, cancelled?: boolean) => void;
@@ -72,14 +73,15 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
     if (!contents.length) return;
     let frame = 0;
     const fitMedia = () => {
-      const gridHeight = element.getBoundingClientRect().height / zoom;
+      const currentZoom = getZoom?.() ?? zoom;
+      const gridHeight = element.getBoundingClientRect().height / currentZoom;
       if (gridHeight <= 0) return;
       const unit = rowWeights.reduce((sum, weight) => sum + weight, 0) / gridHeight;
       let growth = 0;
       const weights = Array.from(element.querySelectorAll<HTMLElement>(".canvas-text-row")).map((row, index) => {
-        const current = row.getBoundingClientRect().height / zoom;
+        const current = row.getBoundingClientRect().height / currentZoom;
         const required = Math.max(current, ...Array.from(row.querySelectorAll<HTMLElement>(".canvas-image-content"))
-          .map(content => content.getBoundingClientRect().height / zoom + 1));
+          .map(content => content.getBoundingClientRect().height / currentZoom + 1));
         const extra = required - current > 0.5 ? required - current : 0;
         growth += extra;
         return rowWeights[index] + extra * unit;
@@ -93,7 +95,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
     contents.forEach(content => observer.observe(content));
     schedule();
     return () => { observer.disconnect(); cancelAnimationFrame(frame); };
-  }, [value, width, height, zoom, bubble, resizing, resizingCard, referenceAssets, onChange]);
+  }, [value, width, height, zoom, getZoom, bubble, resizing, resizingCard, referenceAssets, onChange]);
   const boundaryFraction = (weights: number[], index: number) => weights.slice(0, index).reduce((sum, weight) => sum + weight, 0) / weights.reduce((sum, weight) => sum + weight, 0);
   function changeLineHeight(change: number) {
     setRemoved(null);
@@ -106,13 +108,14 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
     onChange({ ...value, cells, text: cells.map(line => line.map(item => item.text).join("\t")).join("\n") });
   }
   function changeGrid(next: CanvasNotePayload) {
+    const currentZoom = getZoom?.() ?? zoom;
     const rect = grid.current?.getBoundingClientRect();
     const total = (weights: number[]) => weights.reduce((sum, weight) => sum + weight, 0);
     // Grow by the new weights, keeping existing cells at their current world sizes.
     const growth = (before: number[], after: number[]) => after.length > before.length ? Math.max(0, total(after) / total(before) - 1) : 0;
     onChange(next, rect ? {
-      width: width + rect.width / zoom * growth(columnWeights, canvasGridWeights(next.column_widths, next.cells[0].length)),
-      height: height + rect.height / zoom * growth(rowWeights, canvasGridWeights(next.row_heights, next.cells.length)),
+      width: width + rect.width / currentZoom * growth(columnWeights, canvasGridWeights(next.column_widths, next.cells[0].length)),
+      height: height + rect.height / currentZoom * growth(rowWeights, canvasGridWeights(next.row_heights, next.cells.length)),
     } : undefined);
   }
   function insert(axis: "row" | "column", index: number) {
@@ -220,6 +223,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
     } catch (error) { notifyError(error, "复制失败"); }
   }
   return <>
+    {!bubble && <div className="canvas-tactical-card-shell" aria-hidden="true" />}
     <BoardChipPreview hostRef={grid} extraAssets={referenceAssets} clickToFocus={false} />
     {selected && !images && <div className="canvas-text-stylebar" role="toolbar" aria-label="文本样式（当前单元格）"
       onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}>
@@ -234,13 +238,16 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
         setRemoved(null);
       }}><Undo2 size={16} /></button></>}
     </div>}
-    <div className="canvas-text-handle" title="拖动内容卡片"><GripHorizontal size={15} />{bubble ? <Type size={14} /> : <Table2 size={14} />}</div>
+    <div className="canvas-text-handle" title={bubble ? "拖动气泡便签" : "拖动内容卡片"}><GripHorizontal size={15} />{bubble ? <MessageCircle size={14} aria-hidden="true" /> : <Table2 size={14} aria-hidden="true" />}<span className="canvas-tactical-note-title">{bubble ? "气泡便签" : "内容卡片"}</span></div>
     {!bubble && onConnectCell && <button className="workflow-cell-port workflow-image-output" data-workflow-cell="*" aria-label="输出容器图片" title="输出全部图片"
       onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell("*", event.clientX, event.clientY); }}
       onClick={event => { if (event.detail === 0) onConnectCell("*", event.clientX, event.clientY); }} />}
     {!bubble && onConnectCell && <button className="workflow-cell-port workflow-content-text-output" data-workflow-cell="*text" aria-label="输出全部文本" title="输出完整表格，保留行列和空单元格"
       onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell("*text", event.clientX, event.clientY); }}
       onClick={event => { if (event.detail === 0) onConnectCell("*text", event.clientX, event.clientY); }} />}
+    {!bubble && onConnectCell && <button className="workflow-cell-port workflow-latest-output" data-workflow-cell="*latest" aria-label="输出最新" title="输出最下一行；新增行后自动跟随，空行输出为空"
+      onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell("*latest", event.clientX, event.clientY); }}
+      onClick={event => { if (event.detail === 0) onConnectCell("*latest", event.clientX, event.clientY); }}><span>输出最新</span></button>}
     {images && removed && selected && <div className="canvas-text-spacing"><button aria-label="撤销删除行列" onClick={() => { onChange(removed.value); setActive(removed.active); setRemoved(null); }}><Undo2 size={14} /></button></div>}
     {!images && <div className="canvas-text-spacing" role="group" aria-label="文本工具"
       onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }} onKeyDown={event => event.stopPropagation()}>
@@ -309,12 +316,12 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
             const available = !!path || video;
             const media = video ? <VideoPoster draggable={false} path={asset?.store_path} poster={asset?.thumb_path} alt={asset?.name ?? "视频"}
               style={asset?.width && asset?.height ? { aspectRatio: `${asset.width} / ${asset.height}` } : undefined} />
-              : path ? <img draggable={false} src={path.startsWith("data:") ? path : convertFileSrc(path)} width={asset?.width ?? undefined} height={asset?.height ?? undefined} alt={asset?.name ?? "图片"} /> : null;
+              : path ? <CanvasImage draggable={false} path={asset?.store_path} thumbPath={asset?.thumb_path} sourceWidth={asset?.width} sourceHeight={asset?.height} width={asset?.width ?? undefined} height={asset?.height ?? undefined} alt={asset?.name ?? "图片"} /> : null;
             const contextMenu = (event: MouseEvent<HTMLElement>) => {
               event.preventDefault(); event.stopPropagation(); cancelImageClick();
               if (asset) onMediaContextMenu?.(event, asset);
             };
-            if (images) return <button type="button" className="canvas-image-preview" key={ref.token} aria-disabled={!available || !onOpenPreview}
+            if (images) return <button type="button" className="canvas-image-preview" key={ref.token} data-frequent-asset-id={ref.asset_id} aria-disabled={!available || !onOpenPreview}
               onContextMenu={contextMenu}
               title={available ? item.generation_ref ? "单击打开会话，双击放大" : "双击放大" : "媒体已不可用"} aria-label={`${item.generation_ref ? "查看生成会话" : video ? "播放视频" : "放大图片"}：${asset?.name ?? "媒体已不可用"}`}
               onClick={event => {
@@ -388,7 +395,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, onChange,
     </div>
     {bubble && <CanvasBubbleTail value={value.bubble_tail ?? { side: "bottom", position: 25 }} width={width} height={height}
       onSelect={onSelect} onChange={tail => onChange({ ...value, bubble_tail: tail })} />}
-    {selected && <CanvasResizeHandle label={bubble ? "调整文本卡片大小" : "调整内容卡片大小"} size={{ width, height }} zoom={zoom}
+    {selected && <CanvasResizeHandle label={bubble ? "调整文本卡片大小" : "调整内容卡片大小"} size={{ width, height }} zoom={zoom} getZoom={getZoom}
       minimum={canvasTextMinSize(value.cells, false, bubble)} onResize={(size, finished, cancelled) => {
         setResizingCard(!finished);
         onResize(size, finished, cancelled);

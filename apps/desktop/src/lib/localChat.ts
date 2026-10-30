@@ -30,7 +30,7 @@ export interface ChatMessage {
 export interface ChatCardAction {
   id: string; conversationId: string; turnId: string; callId: string;
   status: "created" | "undone";
-  cards: { alias: string; id: string; kind: "generation" | "content" | "trigger" | "loop"; title: string }[];
+  cards: { alias: string; id: string; kind: "generation" | "comfy-video" | "content" | "trigger" | "loop" | "section"; title: string }[];
   createdAt: number; undoneAt: number | null;
 }
 export interface ChatCardDefaults {

@@ -1,0 +1,50 @@
+.material-graph { position:relative; flex:1; min-height:0; overflow:hidden; isolation:isolate; background:radial-gradient(ellipse at 50% 45%, rgb(var(--bb-blue-rgb) / 5%), transparent 65%); }
+.material-graph-heading { position:absolute; top:18px; left:24px; right:20px; z-index:2; pointer-events:none; }
+.material-graph-heading > div { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
+.material-graph-heading strong { font-size:16px; font-weight:600; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.material-graph-heading span,.material-graph-heading p { font-size:12px; color:var(--bb-muted); }
+.material-graph-heading p { margin-top:6px; }
+.material-graph-canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+.material-graph-surface { position:relative; z-index:1; display:block; width:100%; height:100%; cursor:grab; touch-action:none; user-select:none; }
+.material-graph-surface:active { cursor:grabbing; }
+.material-graph-node { cursor:pointer; outline:none; }
+.material-graph-node text { pointer-events:none; }
+.material-graph-tag { fill:var(--bb-surface); stroke:rgb(var(--bb-blue-rgb) / 55%); stroke-width:1.5; }
+.material-graph-tag-name { fill:var(--bb-ink); font-size:16px; font-weight:600; }
+.material-graph-node:hover .material-graph-tag,.material-graph-node:focus-visible .material-graph-tag,.material-graph-node.is-selected .material-graph-tag { stroke:var(--bb-blue); stroke-width:3; fill:color-mix(in srgb, var(--bb-surface) 90%, var(--bb-blue)); }
+.material-graph-label { fill:var(--bb-ink); font-size:14px; font-weight:500; paint-order:stroke; stroke:var(--bb-bg); stroke-width:4; stroke-linejoin:round; }
+.material-graph-count { fill:var(--bb-muted); font-size:12px; font-variant-numeric:tabular-nums; }
+.material-graph-thumb { fill:var(--bb-surface); stroke:var(--bb-line); stroke-width:2; }
+.material-graph-node:hover .material-graph-thumb,.material-graph-node:focus-visible .material-graph-thumb,.material-graph-node.is-selected .material-graph-thumb { stroke:var(--bb-blue); stroke-width:4; }
+.material-graph-placeholder { font-size:12px; fill:var(--bb-muted); }
+.material-graph-footer { position:absolute; z-index:2; bottom:18px; left:20px; right:20px; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:8px; pointer-events:none; }
+.material-graph-zoom,.material-graph-distance { display:flex; align-items:center; padding:4px; gap:2px; background:var(--bb-surface); border:1px solid var(--bb-line); border-radius:12px; pointer-events:auto; box-shadow:0 4px 20px rgb(var(--bb-shadow-rgb) / 5%); }
+.material-graph-distance { margin-left:auto; min-height:44px; padding:8px 12px; gap:10px; font-size:12px; }
+.material-graph-distance input { width:100px; min-width:60px; accent-color:var(--bb-blue); cursor:ew-resize; }
+.material-graph-distance output { min-width:34px; text-align:right; font-variant-numeric:tabular-nums; }
+.material-graph-distance input:focus-visible { outline:2px solid var(--bb-blue); outline-offset:4px; border-radius:8px; }
+.material-graph button { color:var(--bb-ink-soft); }
+.material-graph button:hover:not(:disabled) { background:var(--bb-surface-hover); color:var(--bb-blue); }
+.material-graph button:focus-visible,.material-graph-surface:focus-visible { outline:2px solid var(--bb-blue); outline-offset:-2px; }
+.material-graph button:disabled { opacity:.35; cursor:default; }
+.material-graph-zoom button { display:grid; place-items:center; width:32px; height:34px; border-radius:8px; }
+.material-graph-zoom output { min-width:44px; text-align:center; font-size:12px; font-variant-numeric:tabular-nums; }
+.material-graph-legend { font-size:11px; line-height:1.8; color:var(--bb-muted); text-align:center; }
+.material-graph-status { position:absolute; z-index:3; top:100px; left:50%; transform:translateX(-50%); padding:10px 16px; background:var(--bb-surface); border:1px solid var(--bb-line); border-radius:10px; font-size:12px; }
+.material-graph-status button { color:var(--bb-blue); margin-left:12px; }
+.material-graph-selection { position:absolute; z-index:3; bottom:116px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:8px; width:max-content; max-width:calc(100% - 32px); padding:8px 12px; border-radius:12px; border:1px solid var(--bb-line); background:var(--bb-surface); box-shadow:0 8px 32px rgb(var(--bb-shadow-rgb) / 12%); }
+.material-graph-selection strong { min-width:0; max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; }
+.material-graph-selection button { flex-shrink:0; padding:7px 9px; border-radius:6px; font-size:12px; }
+.catalog-graph-toggle { display:flex; align-items:center; gap:5px; padding:4px 10px; height:var(--library-floating-height, 28px); border-radius:999px; font-size:12px; white-space:nowrap; color:var(--bb-ink-soft); }
+.catalog-graph-toggle[aria-pressed=true] { color:var(--bb-blue); background:var(--bb-selection-bg); }
+.catalog-graph-toggle:focus-visible { outline:2px solid var(--bb-blue); outline-offset:2px; }
+@container (max-width:800px) {
+  .material-graph-heading { left:14px; top:10px; }
+  .material-graph-heading span { width:100%; }
+  .material-graph-legend { display:none; }
+  .material-graph-footer { left:10px; right:10px; bottom:12px; }
+}
+@container (max-width:600px) {
+  .material-graph-distance { padding-inline:8px; gap:6px; }
+  .material-graph-distance input { width:65px; }
+}

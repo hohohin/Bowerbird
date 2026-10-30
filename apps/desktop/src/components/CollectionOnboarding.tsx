@@ -1,3 +1,4 @@
+import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { useState } from "react";
 import { api } from "../lib/api";
@@ -76,11 +77,11 @@ export function CollectionOnboarding() {
     </form>
     {(folders.length > 0 || selectedId) && <div className="collection-learning-start">
       <label htmlFor="lesson-existing-collection">也可以使用已有集合</label>
-      <div><select id="lesson-existing-collection" className="app-form-input" disabled={busy} value={selectedId} onChange={event => setSelectedId(event.target.value)}>
+      <div><TacticalSelect id="lesson-existing-collection" className="app-form-input" disabled={busy} value={selectedId} onValueChange={value => setSelectedId(value)}>
         <option value="">选择集合</option>
         {selectedId && !folders.some(folder => folder.id === selectedId) && <option value={selectedId}>刚创建的集合</option>}
         {folders.map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}
-      </select><button className="app-modal-button" disabled={busy || !selectedId} onClick={() => void openCollection(false)}>打开所选集合</button></div>
+      </TacticalSelect><button className="app-modal-button" disabled={busy || !selectedId} onClick={() => void openCollection(false)}>打开所选集合</button></div>
     </div>}
     {error && <p className="mt-3 text-sm text-red-400" role="alert">{userErrorMessage(error, "引导素材未准备好，请稍后重试。")}</p>}
   </ModalShell>;

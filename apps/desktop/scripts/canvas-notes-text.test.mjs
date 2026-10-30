@@ -47,3 +47,23 @@ test('single-cell tables remap image references without losing their generation 
   assert.equal(value.text, value.table.rows[0][0]);
   assert.deepEqual(value.imageRefs, [{ asset_id: 'photo', token: '@图片1' }]);
 });
+
+test('latest output selects the entire physical last row and follows row insertion and deletion', () => {
+  const note = readCanvasNote({ payloadJson: JSON.stringify({ note_type: 'text', cells: [
+    [{ ...cell('old'), id: 'old' }, { ...cell(''), content_type: 'image', image_refs: [{ asset_id: 'old-image', token: '@图片1' }] }],
+    [{ ...cell('查看 @图片3\n细节'), image_refs: [{ asset_id: 'new-image', token: '@图片3' }] }, { ...cell(''), content_type: 'image', image_refs: [{ asset_id: 'second-image', token: '@图片1' }] }],
+  ] }) });
+  const latest = canvasNoteValue(note, '*latest');
+  assert.deepEqual(latest.table.rows, [['查看 @图片1\n细节', '@图片2']]);
+  assert.deepEqual(latest.table.imageCells, [[0, 1]]);
+  assert.deepEqual(latest.assetIds, ['new-image', 'second-image']);
+  assert.deepEqual(canvasNoteValue(note, '*latest-image'), { type: 'image', assetIds: ['new-image', 'second-image'] });
+  note.cells.push([cell(''), cell('')]);
+  assert.equal(canvasNoteValue(note, '*latest').text, '');
+  assert.deepEqual(canvasNoteValue(note, '*latest').table.rows, [['', '']]);
+  assert.deepEqual(canvasNoteValue(note, '*latest-image').assetIds, [], 'empty last row never falls back to historical images');
+  note.cells.pop();
+  assert.deepEqual(canvasNoteValue(note, '*latest').table, latest.table);
+  note.cells.pop();
+  assert.deepEqual(canvasNoteValue(note, '*latest-image').assetIds, ['old-image']);
+});

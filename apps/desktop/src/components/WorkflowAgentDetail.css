@@ -8,7 +8,7 @@
 .workflow-agent-events { list-style: none; margin: 12px 0; padding: 0 0 0 12px; border-left: 2px solid var(--bb-line); }
 .workflow-agent-events li { padding: 0 0 12px 8px; }
 .workflow-agent-events p { margin: 0; }
-.workflow-agent-detail select { display: block; width: 100%; padding: 6px; margin: 4px 0 16px; background: var(--bb-surface-2); border: 1px solid var(--bb-line); border-radius: 6px; }
+.workflow-agent-detail :is(select, .tactical-select-trigger) { display: block; width: 100%; padding: 6px; margin: 4px 0 16px; background: var(--bb-surface-2); border: 1px solid var(--bb-line); border-radius: 6px; }
 .workflow-agent-detail-images { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .workflow-agent-detail-images button { width: 96px; text-align: left; }
 .workflow-agent-detail-images img { width: 96px; height: 96px; object-fit: contain; background: var(--bb-surface-2); border-radius: 6px; }

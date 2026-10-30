@@ -11,12 +11,20 @@
 using Microsoft::WRL::ComPtr;
 #define CHECK_HR(call) do { const HRESULT hr = (call); if (FAILED(hr)) return hr; } while (0)
 
+static HRESULT open_local_reader(const wchar_t* source, IMFAttributes* attributes, IMFSourceReader** reader) {
+    // Library paths are canonical Windows paths (including \\?\ and \\?\UNC\).
+    // The URL resolver rejects these; open the file without rewriting its path.
+    ComPtr<IMFByteStream> stream;
+    CHECK_HR(MFCreateFile(MF_ACCESSMODE_READ, MF_OPENMODE_FAIL_IF_NOT_EXIST, MF_FILEFLAGS_NONE, source, &stream));
+    return MFCreateSourceReaderFromByteStream(stream.Get(), attributes, reader);
+}
+
 static HRESULT extract_frame(const wchar_t* source, const wchar_t* destination, UINT32* rotation) {
     ComPtr<IMFAttributes> attributes;
     CHECK_HR(MFCreateAttributes(&attributes, 1));
     CHECK_HR(attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE));
     ComPtr<IMFSourceReader> reader;
-    CHECK_HR(MFCreateSourceReaderFromURL(source, attributes.Get(), &reader));
+    CHECK_HR(open_local_reader(source, attributes.Get(), &reader));
     CHECK_HR(reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE));
     CHECK_HR(reader->SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM, TRUE));
     ComPtr<IMFMediaType> native;
@@ -106,7 +114,7 @@ extern "C" int bowerbird_windows_video_frame(const wchar_t* source, const wchar_
 // Metadata only: do not request decoded frames or instantiate a video renderer.
 static HRESULT probe_video(const wchar_t* source, UINT32* width, UINT32* height, double* duration) {
     ComPtr<IMFSourceReader> reader;
-    CHECK_HR(MFCreateSourceReaderFromURL(source, nullptr, &reader));
+    CHECK_HR(open_local_reader(source, nullptr, &reader));
     ComPtr<IMFMediaType> type;
     CHECK_HR(reader->GetNativeMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &type));
     CHECK_HR(MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, width, height));

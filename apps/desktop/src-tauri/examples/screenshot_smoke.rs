@@ -5,6 +5,9 @@ mod error;
 #[path = "../src/core/settings.rs"]
 pub mod settings;
 mod core {
+    pub mod canvas_frequent_assets {
+        pub use bowerbird_desktop_lib::CanvasFrequentAssetsPreferences;
+    }
     pub use crate::settings;
 }
 #[path = "../src/commands/screenshot.rs"]

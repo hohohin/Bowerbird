@@ -1,3 +1,4 @@
+import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useMemo, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -87,9 +88,9 @@ export function WorkflowAgentDetail({ projectId, nodeId, graphNodes, onOpenGener
   const sessionIds = [...new Set([...(outputs.image?.nodeIds ?? outputs.session?.nodeIds ?? []), ...generations.flatMap(call => call.response?.submitted ? [call.response.submitted.sessionNodeId] : [])])];
   return <ProjectInspectorShell anchorNodeId={nodeId} onClose={onClose} header={{ kind: "agent", title: "Agent 卡片详情", closeLabel: "关闭项目详情", detail: `${step?.localAgentTransport === "codex-cli" ? "Codex CLI" : step?.agentRunId ? "Cloud DSH" : "Agent DS"} · ${statusLabels[entry?.status ?? "pending"]}`, running: entry?.status === "running" }}>
     <div className="workflow-agent-detail" data-agent-detail={nodeId}>
-      {entries.length > 1 && <label>执行记录<select aria-label="Agent 执行记录" value={selection} onChange={event => setSelection(event.target.value)}>
+      {entries.length > 1 && <label>执行记录<TacticalSelect aria-label="Agent 执行记录" value={selection} onValueChange={value => setSelection(value)}>
         <option value="latest">最新执行</option>{entries.map(entry => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
-      </select></label>}
+      </TacticalSelect></label>}
       <section className="workflow-agent-input"><h3>输入</h3>
         <p>{step?.agentInput?.prompt || (active || step?.status === "pending" ? "正在准备本次输入。" : "此历史任务未保存输入快照。")}</p>
         {Object.entries(sources).filter(([key]) => key !== "__outputTargets").map(([key, value]) => <div key={key}><h4>{key}</h4><p>{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</p></div>)}

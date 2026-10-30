@@ -1,0 +1,165 @@
+/* Approved industrial drawing palette. Layout and semantic status colours stay native. */
+html[data-theme] {
+  --industrial-canvas-rgb: 20 20 20;
+  --industrial-chrome-rgb: 24 24 24;
+  --industrial-panel-rgb: 30 30 30;
+  --industrial-hover-rgb: 40 40 40;
+  --industrial-line-rgb: 61 61 61;
+  --industrial-mark-rgb: 116 116 116;
+  --industrial-muted-rgb: 148 148 148;
+  --industrial-secondary-rgb: 185 185 185;
+  --industrial-ink-rgb: 220 220 220;
+  --industrial-accent-rgb: 143 170 184;
+  --industrial-cross-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Cpath d='m37 37 6 6m0-6-6 6' stroke='%23dddddd' stroke-opacity='.16' stroke-width='.8'/%3E%3C/svg%3E");
+  --bb-bg-rgb: var(--industrial-canvas-rgb);
+  --bb-surface-rgb: var(--industrial-panel-rgb);
+  --bb-surface-2-rgb: var(--industrial-chrome-rgb);
+  --bb-line-rgb: var(--industrial-line-rgb);
+  --bb-ink-rgb: var(--industrial-ink-rgb);
+  --bb-muted-rgb: var(--industrial-muted-rgb);
+  --bb-faint-rgb: var(--industrial-mark-rgb);
+  --bb-cold-rgb: var(--industrial-secondary-rgb);
+  --bb-blue-rgb: var(--industrial-accent-rgb);
+  --bb-blue-soft-rgb: var(--industrial-accent-rgb);
+  --bb-bg: rgb(var(--industrial-canvas-rgb));
+  --bb-surface: rgb(var(--industrial-panel-rgb));
+  --bb-surface-2: rgb(var(--industrial-chrome-rgb));
+  --bb-line: rgb(var(--industrial-line-rgb));
+  --bb-line-strong: rgb(var(--industrial-mark-rgb) / .55);
+  --bb-line-hover: rgb(var(--industrial-mark-rgb));
+  --bb-ink: rgb(var(--industrial-ink-rgb));
+  --bb-ink-soft: rgb(var(--industrial-secondary-rgb));
+  --bb-muted: rgb(var(--industrial-muted-rgb));
+  --bb-faint: rgb(var(--industrial-mark-rgb));
+  --bb-blue: rgb(var(--industrial-accent-rgb));
+  --bb-blue-soft: rgb(var(--industrial-accent-rgb));
+  --bb-surface-card: rgb(var(--industrial-panel-rgb));
+  --bb-surface-modal: rgb(var(--industrial-panel-rgb));
+  --bb-surface-modal-body: rgb(var(--industrial-panel-rgb));
+  --bb-surface-footer: rgb(var(--industrial-panel-rgb));
+  --bb-surface-muted: rgb(var(--industrial-chrome-rgb));
+  --bb-surface-hover: rgb(var(--industrial-hover-rgb));
+  --bb-popover-hover: rgb(var(--industrial-ink-rgb) / .035);
+  --bb-selection-bg: transparent;
+  --bb-selection-border: rgb(var(--industrial-accent-rgb));
+  --bb-selection-ink: rgb(var(--industrial-accent-rgb));
+  /* Existing projection consumers become neutral; only explicit state rules use accent. */
+  --holo-rgb: var(--industrial-ink-rgb);
+  --holo-ink: rgb(var(--industrial-secondary-rgb));
+  --holo-pixel: rgb(var(--industrial-secondary-rgb));
+  --holo-primary: transparent;
+  --holo-on-primary: rgb(var(--industrial-accent-rgb));
+  --holo-selection: transparent;
+  --holo-hover: rgb(var(--industrial-ink-rgb) / .035);
+  --holo-field: transparent;
+  --holo-wash: rgb(var(--industrial-ink-rgb) / .025);
+  --holo-rule: rgb(var(--industrial-muted-rgb) / .26);
+  --holo-glow: none;
+}
+html[data-theme="light"] {
+  --industrial-canvas-rgb: 231 231 231;
+  --industrial-chrome-rgb: 239 239 239;
+  --industrial-panel-rgb: 247 247 247;
+  --industrial-hover-rgb: 225 225 225;
+  --industrial-line-rgb: 197 197 197;
+  --industrial-mark-rgb: 112 112 112;
+  --industrial-muted-rgb: 100 100 100;
+  --industrial-secondary-rgb: 77 77 77;
+  --industrial-ink-rgb: 43 43 43;
+  --industrial-accent-rgb: 73 103 117;
+  --industrial-cross-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80'%3E%3Cpath d='m37 37 6 6m0-6-6 6' stroke='%23222222' stroke-opacity='.17' stroke-width='.8'/%3E%3C/svg%3E");
+}
+html[data-theme] ::selection { color: var(--bb-bg); background: var(--bb-ink); }
+
+/* Other workspaces inherit the same neutral material without changing their arrangement. */
+html[data-theme] .library-tactical {
+  --lt-base: rgb(var(--industrial-canvas-rgb));
+  --lt-console: rgb(var(--industrial-chrome-rgb));
+  --lt-sidebar: rgb(var(--industrial-chrome-rgb));
+  --lt-screen: rgb(var(--industrial-panel-rgb) / .94);
+  --lt-panel: rgb(var(--industrial-panel-rgb));
+  --lt-hover-screen: rgb(var(--industrial-hover-rgb));
+  --lt-hover: rgb(var(--industrial-ink-rgb) / .035);
+  --lt-selected: rgb(var(--industrial-ink-rgb) / .08);
+  --lt-selected-ink: rgb(var(--industrial-accent-rgb));
+  --lt-ink: rgb(var(--industrial-ink-rgb));
+  --lt-mark: rgb(var(--industrial-muted-rgb));
+  --lt-nav: rgb(var(--industrial-ink-rgb) / .12);
+}
+html[data-theme] .project-manager-panel {
+  --pm-ink: rgb(var(--industrial-ink-rgb));
+  --pm-muted: rgb(var(--industrial-muted-rgb));
+  --pm-blue: rgb(var(--industrial-accent-rgb));
+  --pm-panel: rgb(var(--industrial-panel-rgb));
+  --pm-screen: rgb(var(--industrial-ink-rgb) / .025);
+  --pm-lit: rgb(var(--industrial-ink-rgb) / .07);
+  --pm-wash: rgb(var(--industrial-ink-rgb) / .035);
+  --pm-depth-surface: rgb(var(--industrial-panel-rgb));
+  --pm-depth-hover: rgb(var(--industrial-hover-rgb));
+  --pm-signal: rgb(var(--industrial-mark-rgb));
+  --pm-base: rgb(var(--industrial-canvas-rgb));
+}
+
+/* A single displaced outline gives dialogs depth without a tinted glass slab. */
+html[data-theme] .app-modal[class] {
+  border: 1px solid rgb(var(--industrial-muted-rgb) / .3);
+  border-radius: 0;
+  background: rgb(var(--industrial-panel-rgb));
+  box-shadow: 8px 8px 0 -1px rgb(var(--industrial-canvas-rgb)), 8px 8px 0 0 rgb(var(--industrial-muted-rgb) / .25);
+}
+html[data-theme] .app-modal-header::before {
+  content: "";
+  position: absolute;
+  left: 18px;
+  top: -1px;
+  width: 40px;
+  height: 1px;
+  background: var(--bb-ink);
+  pointer-events: none;
+}
+html[data-theme] .app-modal-close[class] {
+  clip-path: none;
+  background: transparent;
+  color: var(--bb-muted);
+}
+html[data-theme] .app-modal-close[class]:hover { background: var(--bb-popover-hover); color: var(--bb-ink); }
+html[data-theme] :is(.app-button-primary, .app-button-accent, .app-button-light, .app-modal-button.is-primary):not(:disabled):not(.is-danger) {
+  position: relative;
+  color: rgb(var(--industrial-accent-rgb));
+  background: transparent;
+  font-weight: 600;
+}
+html[data-theme] :is(.app-button-primary, .app-button-accent, .app-button-light, .app-modal-button.is-primary):not(:disabled):not(.is-danger)::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 3px;
+  height: 3px;
+  background: currentColor;
+  box-shadow: none;
+  pointer-events: none;
+}
+html[data-theme] :is(.settings-nav-item.is-active, .settings-card [role="radio"][aria-checked="true"], .project-manager-views button[aria-pressed="true"]):not(:disabled) {
+  color: rgb(var(--industrial-accent-rgb));
+  background: transparent;
+  font-weight: 600;
+}
+html[data-theme] :is(.settings-nav-item.is-active, .settings-card [role="radio"][aria-checked="true"])::after {
+  background: rgb(var(--industrial-accent-rgb));
+  box-shadow: none;
+}
+html[data-theme] .settings-dialog [role="switch"][aria-checked="true"]:not(:disabled) > span { background: rgb(var(--industrial-accent-rgb)); }
+html[data-theme] :is(.app-modal, .classification-panel) :is(button, input, textarea, [role="combobox"]):focus-visible {
+  outline: 1px solid rgb(var(--industrial-accent-rgb));
+  outline-offset: 2px;
+  box-shadow: none;
+}
+html[data-theme] .app-form-input:focus { outline: 1px solid rgb(var(--industrial-accent-rgb)); }
+html[data-theme] .app-form-input[aria-invalid="true"] { outline-color: var(--bb-danger); }
+html[data-theme] :is(.app-modal, .classification-panel) .app-form-input[aria-invalid="true"]:focus-visible { outline-color: var(--bb-danger); }
+
+@media (forced-colors: active) {
+  html[data-theme] :is(.app-modal, .app-button-primary, .app-button-accent, .app-modal-button.is-primary) { border-color: ButtonText; color: CanvasText; }
+  html[data-theme] .settings-nav-item.is-active { outline: 1px solid Highlight; }
+}

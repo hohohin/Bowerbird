@@ -91,7 +91,8 @@ try {
   });
   await undo(); assert.equal((await persisted()).nodes.length, 3);
   // Form editing keeps its own undo; after leaving the form, canvas undo restores parameters.
-  await card('producer').getByLabel('指令功能').selectOption('reuse');
+  await card('producer').getByLabel('指令功能').click();
+  await page.getByRole('option', { name: '复用生成提示词', exact: true }).click();
   await card('producer').getByLabel('指令功能').focus();
   await undo(); assert.equal((await state()).nodes.find(node => node.id === 'producer').action, 'reuse');
   await card('producer').getByRole('button', { name: '复制卡片', exact: true }).focus();

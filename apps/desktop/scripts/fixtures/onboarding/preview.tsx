@@ -1,10 +1,11 @@
+import "../../../src/styles.css";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { CanvasWorkspace } from "../../../src/components/CanvasWorkspace";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { useStore } from "../../../src/store";
 import { ToastViewport } from "../../../src/components/ToastViewport";
-import "../../../src/styles.css";
+
 import { OnboardingTour } from "../../../src/components/OnboardingTour";
 import { beginOnboardingOperation, useOnboarding } from "../../../src/lib/onboardingStore";
 import { CaptionRing } from "../../../src/components/creation/CaptionRing";
@@ -176,3 +177,7 @@ function Fixture() {
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<Fixture />);
+
+import "../../../src/components/TacticalDialogs.css";
+import "../../../src/components/CanvasSecondaryTactical.css";
+import "../../../src/components/MediaTactical.css";

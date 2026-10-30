@@ -1,3 +1,4 @@
+import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
@@ -479,7 +480,7 @@ function LayerEditorPanel({ assetId, projectId }: { assetId: string; projectId: 
           <div className="flex items-center gap-2"><Layers size={17} /><strong>{doc ? `${doc.layers.length - 1} 个图层 + 底图` : "拆分图像"}</strong>
             <button className="ml-auto" aria-label="撤销" title="撤销（Ctrl+Z）" disabled={locked || !history.length} onClick={undo}><Undo2 size={16} /></button></div>
           {!doc && <><label>拆分要求（可选）<textarea aria-label="拆分要求" disabled={locked} value={prompt} onChange={event => setPrompt(event.target.value)} placeholder="留空自动拆分；也可填写：拆出标题、人物和右下角图标" rows={4} /></label>
-            <label>输出尺寸<select aria-label="输出尺寸" disabled={locked} value={size} onChange={event => setSize(event.target.value as typeof size)}>{["auto", "1K", "1.5K", "2K"].map(value => <option key={value} value={value}>{value === "auto" ? "自动匹配" : value}</option>)}</select></label>
+            <label>输出尺寸<TacticalSelect aria-label="输出尺寸" disabled={locked} value={size} onValueChange={value => setSize(value as typeof size)}>{["auto", "1K", "1.5K", "2K"].map(value => <option key={value} value={value}>{value === "auto" ? "自动匹配" : value}</option>)}</TacticalSelect></label>
             <p className="text-xs text-muted">Seedream 5.0 Pro 拆分最多预留 {decompositionPrice?.credits ?? "—"} Bcoin。按实际输出图片（含底图）结算：每张 ≤261 万像素 5 Bcoin，超过为 10 Bcoin；未用额度退回。本地调整不收费。</p>
             <button className="app-button-primary" disabled={locked || !ready || !source || !decompositionPrice?.available} onClick={() => void start("decompose")}>{decompositionPrice?.available ? "开始拆分" : "拆分服务待开放"}</button></>}
           {doc && <><div className="layer-list" aria-label="图层列表">{[...doc.layers].reverse().map(layer => <div key={layer.id} className={`layer-row ${selectedId === layer.id ? "is-selected" : ""}`}>

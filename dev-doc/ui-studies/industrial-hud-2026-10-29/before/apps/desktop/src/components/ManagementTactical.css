@@ -1,0 +1,118 @@
+/* Management chrome follows the project directory's open planes. Only the
+   hover surface moves; labels, controls, classification data and hit areas stay native. */
+.canvas-toolbox-menu.canvas-tactical {
+  border: 0; border-radius: 0; color: var(--bb-ink);
+  background: linear-gradient(110deg, rgb(var(--holo-rgb) / .045), transparent 64%), var(--bb-surface-modal);
+  box-shadow: 0 10px 28px rgb(var(--bb-shadow-rgb) / 16%);
+  backdrop-filter: blur(14px);
+}
+.canvas-toolbox-menu.canvas-tactical::before { display: none; }
+.canvas-toolbox-menu.canvas-tactical .canvas-toolbox-heading {
+  display: flex; align-items: center; gap: 8px; color: var(--bb-muted);
+  font-size: 10px; letter-spacing: .12em;
+}
+.canvas-toolbox-menu.canvas-tactical .canvas-toolbox-heading::after {
+  content: ""; width: 21px; height: 3px; margin-left: auto; pointer-events: none;
+  background: repeating-linear-gradient(90deg, var(--holo-pixel) 0 3px, transparent 3px 6px); opacity: .55;
+}
+.canvas-toolbox-menu.canvas-tactical button {
+  position: relative; isolation: isolate; border: 0; border-radius: 0;
+  background: transparent; color: var(--bb-ink); box-shadow: none;
+  transition: background-color 140ms, box-shadow 140ms;
+}
+.canvas-toolbox-menu.canvas-tactical button > svg { color: var(--holo-ink); stroke-width: 1.5; }
+.canvas-toolbox-menu.canvas-tactical button:is(:hover,:focus-visible) {
+  background: var(--holo-selection); box-shadow: 0 3px 9px rgb(var(--bb-shadow-rgb) / 5%); animation: none;
+}
+.canvas-toolbox-menu.canvas-tactical button:is(:hover,:focus-visible)::after {
+  content: ""; position: absolute; right: 4px; bottom: 4px; width: 3px; height: 3px;
+  background: var(--holo-pixel); box-shadow: var(--holo-glow); pointer-events: none;
+}
+.canvas-toolbox-menu.canvas-tactical button:focus-visible { outline: 1px dashed var(--holo-ink); outline-offset: -3px; }
+
+/* One continuous opaque panel with open dividers replaces nested grey boxes. */
+html[data-theme] .classification-panel .app-modal {
+  border: 0; border-radius: 0; background: var(--bb-surface-modal);
+}
+html[data-theme] .classification-panel :is(.app-modal-header,.app-modal-body,.app-modal-footer) { background: transparent; }
+html[data-theme] .classification-panel .app-modal-header { border-bottom-color: transparent; }
+html[data-theme] .classification-panel .app-modal-footer { position: relative; border-top-color: transparent; }
+html[data-theme] .classification-panel .app-modal-footer::before {
+  content: ""; position: absolute; top: 0; left: 16px; right: 16px; height: 1px; pointer-events: none;
+  background: linear-gradient(90deg, var(--holo-rule), var(--bb-line) 45%, transparent);
+}
+html[data-theme] .classification-panel section:is(.classification-section,.classification-result,.classification-label-details) {
+  position: relative; border-color: transparent; border-radius: 0; background: transparent; box-shadow: none;
+}
+.classification-panel .classification-section::after {
+  content: ""; position: absolute; bottom: -6px; left: 12px; right: 12px; height: 1px; pointer-events: none;
+  background: linear-gradient(90deg, var(--holo-rule) 0 24px, transparent 24px 32px, var(--bb-line) 32px, transparent 100%);
+}
+.classification-panel .classification-heading { display: flex; align-items: center; gap: 7px; }
+.classification-panel .classification-heading svg { flex-shrink: 0; color: var(--holo-ink); stroke-width: 1.5; }
+.classification-panel :is(button,input:not([type=range]),textarea,:is(select, .tactical-select-trigger),pre) { border-radius: 0; }
+.classification-panel :is(input:not([type=checkbox]),textarea,:is(select, .tactical-select-trigger)) {
+  border-color: transparent; background: var(--holo-field, rgb(var(--bb-ink-rgb) / 3.5%)); box-shadow: none;
+}
+.classification-panel input[type=checkbox] { accent-color: var(--holo-ink); }
+.classification-panel :is(button,input,textarea,:is(select, .tactical-select-trigger),summary):focus-visible { outline: 1px dashed var(--holo-ink); outline-offset: 2px; box-shadow: none; }
+.classification-panel .app-modal-button:not(.is-danger) {
+  position: relative; border-color: transparent; border-radius: 0;
+  background: var(--holo-field, rgb(var(--bb-ink-rgb) / 3.5%)); box-shadow: none;
+}
+.classification-panel .app-modal-button:not(.is-danger):hover:not(:disabled) { background: var(--holo-hover); color: var(--holo-ink); animation: none; }
+.classification-panel .app-modal-button.is-primary:not(:disabled) { background: var(--holo-primary); color: var(--holo-ink); }
+.classification-panel .app-modal-button.is-primary:not(:disabled):hover { background: var(--holo-primary); }
+.classification-panel .app-modal-button.is-primary:not(:disabled)::after {
+  content: ""; position: absolute; right: 4px; bottom: 4px; width: 3px; height: 3px;
+  background: var(--holo-pixel); box-shadow: var(--holo-glow); pointer-events: none;
+}
+.classification-panel .classification-label-list > .classification-label-row {
+  position: relative; border-color: transparent; background: transparent;
+  transition: background-color 140ms;
+}
+.classification-panel .classification-label-list > .classification-label-row + .classification-label-row::before {
+  content: ""; position: absolute; top: 0; left: 8px; right: 8px; height: 1px;
+  background: linear-gradient(90deg, var(--bb-line), transparent); pointer-events: none;
+}
+.classification-panel .classification-label-row:hover { background: var(--holo-hover); }
+.classification-panel .classification-label-list > .classification-label-row[data-selected=true] { background: var(--holo-selection); }
+.classification-panel .classification-label-row[data-selected=true]::after {
+  content: ""; position: absolute; right: 3px; bottom: 3px; width: 3px; height: 3px;
+  background: var(--holo-pixel); box-shadow: var(--holo-glow); pointer-events: none;
+}
+.classification-panel .classification-label-row .text-cold { color: var(--holo-ink); }
+.classification-panel .classification-label-row > div > button { position: relative; }
+.classification-panel .classification-label-row button:not(.text-red-400):hover:not(:disabled) { color: var(--holo-ink); }
+.classification-panel .classification-label-row button[aria-expanded=true] { background: var(--holo-selection); color: var(--holo-ink); }
+.classification-panel .classification-label-details { margin-inline: 8px; }
+.classification-panel .classification-label-details::before {
+  content: ""; position: absolute; top: 0; left: 12px; width: 28px; height: 1px; background: var(--holo-rule); pointer-events: none;
+}
+.classification-panel .classification-label-details img { border-radius: 0; }
+.classification-panel .classification-diagnostics { border-top-color: var(--holo-rule); }
+.classification-panel .classification-diagnostics-row { border-color: transparent; }
+.classification-panel .classification-diagnostics-row + .classification-diagnostics-row { border-top: 1px dashed var(--bb-line); }
+.classification-panel .classification-run-target > span { font-size: 10px; letter-spacing: .08em; }
+.classification-panel .classification-playback-heading { color: var(--holo-ink); }
+.classification-panel .classification-playback-track > span { background: var(--holo-pixel); }
+.classification-panel .classification-playback-picture,
+.classification-panel .classification-playback-picture img { border-radius: 0; }
+
+/* Blink the local light plane, keeping text and destructive-action colours stable. */
+.canvas-toolbox-menu.canvas-tactical button::before,
+.classification-panel .app-modal-button:not(.is-danger)::before {
+  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0;
+  background: repeating-linear-gradient(0deg, transparent 0 3px, rgb(var(--holo-rgb) / .08) 3px 4px),
+    linear-gradient(105deg, rgb(var(--holo-rgb) / .14), transparent);
+  mask-image: linear-gradient(90deg, #000, transparent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .canvas-toolbox-menu.canvas-tactical button:is(:hover,:focus-visible)::before,
+  .classification-panel .app-modal-button:not(.is-danger):is(:hover,:focus-visible):not(:disabled)::before { animation: management-light-contact 160ms steps(1,end); }
+}
+@keyframes management-light-contact { 0%,28%,62% { opacity: .7; } 14%,45%,78%,100% { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .canvas-toolbox-menu.canvas-tactical button,
+  .classification-panel .classification-label-list > .classification-label-row { transition: none; }
+}

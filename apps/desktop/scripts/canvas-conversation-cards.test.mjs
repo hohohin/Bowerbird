@@ -36,3 +36,22 @@ test('embedded session hides its whole conversation until the cell or container 
   assert.equal(canvasConversationCards(nodes.map(node=>node.id==='table'?{...table,hiddenAt:1}:node),{}).hiddenIds.has('first'),false);
   assert.equal(canvasConversationCards(nodes.map(node=>node.id==='table'?{...table,payloadJson:JSON.stringify({cells:[[{id:'cell',content_type:'image',text:'',image_refs:[{asset_id:'a',token:'@图片1'}]}]]})}:node),{}).hiddenIds.has('first'),false);
 });
+
+test('content routing hides pending and replaced workflow turns while keeping exact embedded targets', () => {
+  const first = prompt('first', 'old-job', 'one'), next = prompt('next', 'new-job', 'two', 2);
+  const ordinary = prompt('ordinary', 'ordinary-job', 'one');
+  const nodes = [first, output('old-image', 'old-job', 'one'), next, ordinary];
+  const routed = new Set(['first', 'next']);
+  const pending = canvasConversationCards(nodes, {}, new Set(), new Set(), routed);
+  assert.equal(pending.hiddenIds.has('next'), true, 'new native session does not appear before cell delivery');
+  assert.equal(pending.hiddenIds.has('first'), true, 'replaced turn stays in history');
+  assert.equal(pending.hiddenIds.has('ordinary'), false);
+  assert.equal(pending.cards.get('first').outputs[0].id, 'old-image', 'history still has its pixels');
+  const table = { id: 'table', kind: 'note', hiddenAt: null, payloadJson: JSON.stringify({ cells: [[{ id: 'cell', content_type: 'image', generation_ref: { session_node_id: 'next' } }]] }) };
+  const embedded = canvasConversationCards([...nodes, table], {}, new Set(), new Set(), routed);
+  assert.deepEqual(embedded.embedded.get('next'), { nodeId: 'table', cellId: 'cell' });
+  assert.equal(embedded.embedded.has('first'), false, 'old turn cannot inherit the new turn cell');
+  const disconnected = canvasConversationCards([...nodes, table], {});
+  assert.equal(disconnected.hiddenIds.has('first'), false, 'removing routing returns uncontained history');
+  assert.equal(disconnected.hiddenIds.has('next'), true, 'stored cell keeps its session after disconnect');
+});

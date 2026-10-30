@@ -1,8 +1,33 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { newWorkflowNode, workflowConnectionError, workflowOrder, workflowInputValues, workflowOutputs, invalidateWorkflow, generationInputNode, compileGenerationPrompt, compileAgentPrompt, normalizeWorkflowInputSlots } from '../src/lib/canvasWorkflow.ts';
+import { newWorkflowNode, workflowConnectionError, workflowOrder, workflowInputValues, workflowOutputs, invalidateWorkflow, generationInputNode, compileGenerationPrompt, compileAgentPrompt, normalizeWorkflowInputSlots, workflowInputProducers, assertWorkflowAcyclic } from '../src/lib/canvasWorkflow.ts';
 const node = (id, kind = 'skill') => ({ ...newWorkflowNode(kind, 0, 0, 'codex'), id });
 const mentionText = node => { node.prompt = '@[text]'; node.promptReferences = [{ id: 'text', type: 'text', input: node.inputs.text[0], label: '文本' }]; };
+
+test('latest-row bindings retain container dependencies and reject cycles through every writer', () => {
+  for (const [port, cellId] of [['text', '*latest'], ['image', '*latest-image']]) {
+    const input = { canvasNodeId: 'table', cellId };
+    const source = node('source', 'generation');
+    const first = { ...node('first', 'text'), textTarget: { nodeId: 'table', cellId: 'a', image: true }, inputs: { image: [{ nodeId: 'source', portId: 'image' }] } };
+    const second = { ...node('second', 'text'), textTarget: { nodeId: 'table', cellId: 'b', image: true }, inputs: { image: [{ nodeId: 'source', portId: 'image' }] } };
+    const consumer = { ...node('consumer', 'agent'), inputs: { [port]: [input] }, outputs: { text: { type: 'text', text: 'stale' } } };
+    const nodes = [consumer, first, second, source];
+    assert.deepEqual(workflowInputProducers(nodes, input), ['first', 'second']);
+    const order = workflowOrder(nodes, 'source');
+    assert.ok(order.indexOf('consumer') > order.indexOf('first'));
+    assert.ok(order.indexOf('consumer') > order.indexOf('second'));
+    assert.deepEqual(invalidateWorkflow(nodes, 'second').find(node => node.id === 'consumer').outputs, {});
+    second.inputs = { text: [{ nodeId: 'consumer', portId: 'text' }] };
+    assert.throws(() => assertWorkflowAcyclic(nodes, 'consumer'), /循环/);
+  }
+});
+
+test('latest text can wait for an embedded generation but empty last rows fail at execution', () => {
+  const consumer = { ...node('consumer', 'agent'), inputs: { text: [{ canvasNodeId: 'table', cellId: '*latest' }] } };
+  const pending = { type: 'text', text: '', table: { rows: [['']] }, assetIds: [], nodeIds: ['session'] };
+  assert.deepEqual(workflowInputValues([consumer], consumer, () => pending).text, [pending]);
+  assert.throws(() => workflowInputValues([consumer], consumer, () => ({ ...pending, nodeIds: [] })), /没有可用文本/);
+});
 
 test('local H3 keeps first/last frame roles independent and receives text without prompt mentions',()=>{
   const source={...node('source','instruction'),outputs:{text:{type:'text',text:'上游分镜'}}};
@@ -45,7 +70,7 @@ test('Agent references select inputs, preserve positions and follow current sour
   assert.deepEqual(generationInputNode(agent).inputs.text,[{...agent.inputs.text[1],slot:2}]);
   assert.deepEqual(compile(),{prompt:'将 【引用文本 1】 简写，再润色 【引用文本 1】',source:JSON.stringify({'引用文本 1':'原文B'}),assetIds:[]});
   b.outputs.text.text='更新B';assert.equal(JSON.parse(compile().source)['引用文本 1'],'更新B');
-  agent.inputs.text=[{nodeId:'a',portId:'text',slot:2}];assert.equal(JSON.parse(compile().source)['引用文本 1'],'原文A');
+  agent.inputs.text=[{nodeId:'b',portId:'text'},{nodeId:'a',portId:'text'}];assert.equal(JSON.parse(compile().source)['引用文本 1'],'原文A');
   agent.inputs.text=[];assert.throws(compile,/已断开/);
   agent.prompt='自由写一首诗';assert.deepEqual(compile(),{prompt:agent.prompt,source:'{}',assetIds:[]});
 });
@@ -102,7 +127,7 @@ test('image-container reads stored cells, waits for active writers and rejects a
   assert.throws(()=>workflowOrder([first,consumer,second],'first'),/循环/);
 });
 
-test('generation references retain binding identity through reordering and reject removed selections', () => {
+test('generation references read the current input position and reject an absent pipe', () => {
   const gen = node('gen', 'generation');
   const first = { assetId: 'a',slot:1 }, second = { assetId: 'b',slot:2 };
   gen.inputs = { image: [first, second] }; gen.prompt = '只参考 @[chosen]';
@@ -110,15 +135,15 @@ test('generation references retain binding identity through reordering and rejec
   const compile = () => compileGenerationPrompt(gen, workflowInputValues([gen], generationInputNode(gen)));
   assert.deepEqual(compile(), { prompt: '只参考 @图片1', assetIds: ['b'] });
   gen.inputs.image.reverse();
-  assert.deepEqual(compile(), { prompt: '只参考 @图片1', assetIds: ['b'] });
+  assert.deepEqual(compile(), { prompt: '只参考 @图片1', assetIds: ['a'] });
   gen.inputs.image = [first];
   assert.throws(compile, /已断开/);
-  gen.inputs.image = [{ groupId: 'folder', assetIds: ['a'],slot:2 }];
+  gen.inputs.image = [first, { groupId: 'folder', assetIds: ['a'],slot:2 }];
   gen.promptReferences[0].input = { groupId: 'folder', assetIds: ['a', 'b'] };
   assert.deepEqual(compile(), { prompt: '只参考 @图片1', assetIds: ['a'] });
-  gen.inputs.image[0].assetIds = ['c', 'd'];
+  gen.inputs.image[1].assetIds = ['c', 'd'];
   assert.deepEqual(compile(), { prompt: '只参考 @图片1 @图片2', assetIds: ['c', 'd'] });
-  gen.inputs.image[0].assetIds = [];
+  gen.inputs.image[1].assetIds = [];
   assert.throws(compile, /没有可用图片/);
 });
 
@@ -306,25 +331,26 @@ test('numbered pipes migrate stale cells on different cards and read current sou
   }
 });
 
-test('disconnect never renumbers another pipe; reconnect fills the empty pipe across reload and reordering', () => {
+test('disconnect compacts pipes; new connections append and references read their current position', () => {
   let n=normalizeWorkflowInputSlots({...node('gen','generation'),prompt:'@[one] / @[two]',inputs:{text:[{nodeId:'a',portId:'text'},{nodeId:'b',portId:'text'}]},promptReferences:[
     {id:'one',type:'text',label:'文本 1',input:{}},{id:'two',type:'text',label:'文本 2',input:{}},
   ]});
-  n=normalizeWorkflowInputSlots({...n,inputs:{text:[n.inputs.text[1]]}},n);
-  assert.deepEqual(n.inputs.text.map(i=>i.slot),[2]);
+  n=normalizeWorkflowInputSlots({...n,inputs:{text:[n.inputs.text[1]]}});
+  assert.deepEqual(n.inputs.text.map(i=>i.slot),[1]);
+  assert.equal(n.promptReferences[0].input.nodeId,'b');
   assert.throws(()=>compileGenerationPrompt(n,{text:[{type:'text',text:'乙'}]}),/已断开/);
   n=JSON.parse(JSON.stringify(n));
-  n=normalizeWorkflowInputSlots({...n,inputs:{text:[...n.inputs.text,{nodeId:'c',portId:'text'}]}},n);
-  assert.deepEqual(n.inputs.text.map(i=>i.slot),[2,1]);
-  assert.equal(compileGenerationPrompt(n,{text:[{type:'text',text:'乙'},{type:'text',text:'新甲'}]}).prompt,'新甲 / 乙');
-  n=normalizeWorkflowInputSlots({...n,inputs:{text:[...n.inputs.text].reverse()}},n);
+  n=normalizeWorkflowInputSlots({...n,inputs:{text:[...n.inputs.text,{nodeId:'c',portId:'text'}]}});
+  assert.deepEqual(n.inputs.text.map(i=>i.slot),[1,2]);
+  assert.equal(compileGenerationPrompt(n,{text:[{type:'text',text:'乙'},{type:'text',text:'新甲'}]}).prompt,'乙 / 新甲');
+  n=normalizeWorkflowInputSlots({...n,inputs:{text:[...n.inputs.text].reverse()}});
   assert.equal(compileGenerationPrompt(n,{text:[{type:'text',text:'新甲'},{type:'text',text:'乙'}]}).prompt,'新甲 / 乙');
 });
 
 test('image pipes carry current upstream images and do not pin a selected asset', () => {
   for(const kind of ['generation','agent']) {
     let n=normalizeWorkflowInputSlots({...node('images',kind),prompt:'使用 @[photo]',inputs:{image:[{assetId:'old'}]},promptReferences:[{id:'photo',type:'image',label:'图片 1.1',assetId:'old',input:{assetId:'old'}}]});
-    n=normalizeWorkflowInputSlots({...n,inputs:{image:[{groupId:'new-folder',assetIds:['new-a','new-b'],slot:1}]}},n);
+    n=normalizeWorkflowInputSlots({...n,inputs:{image:[{groupId:'new-folder',assetIds:['new-a','new-b'],slot:1}]}});
     const values=workflowInputValues([],generationInputNode(n));
     const result=kind==='agent'?compileAgentPrompt(n,values):compileGenerationPrompt(n,values);
     assert.deepEqual(result.assetIds,['new-a','new-b']);
@@ -335,4 +361,19 @@ test('image pipes carry current upstream images and do not pin a selected asset'
 test('execution reports the current pipe source when its upstream has no content', () => {
   const n=normalizeWorkflowInputSlots({...node('consumer','agent'),prompt:'@[one]',inputs:{text:[{canvasNodeId:'new',cellId:'empty'}]},promptReferences:[{id:'one',type:'text',label:'文本 1',input:{nodeId:'old',portId:'text'}}]});
   assert.throws(()=>workflowInputValues([],n,()=>''),error=>error.source.canvasNodeId==='new'&&error.source.slot===1&&error.referenceLabel==='文本 1');
+});
+
+test('three input pipes compact after deleting the middle source, independently for text and images', () => {
+  for (const kind of ['generation','agent','planner']) {
+    const input = id => ({assetId:id});
+    let n=normalizeWorkflowInputSlots({...node('consumer',kind),prompt:'@[second] / @[third]',inputs:{
+      image:['a','b','c'].map(input),text:[{canvasNodeId:'table',cellId:'one'},{canvasNodeId:'table',cellId:'two'}],
+    },promptReferences:[2,3].map(slot=>({id:slot===2?'second':'third',type:'image',slot,input:input(slot===2?'b':'c'),label:`图片来源 ${slot}`}))});
+    n=normalizeWorkflowInputSlots({...n,inputs:{...n.inputs,image:[n.inputs.image[0],n.inputs.image[2]]}});
+    assert.deepEqual(n.inputs.image.map(i=>[i.slot,i.assetId]),[[1,'a'],[2,'c']]);
+    assert.deepEqual(n.inputs.text.map(i=>i.slot),[1,2]);
+    assert.equal(n.promptReferences[0].input.assetId,'c');
+    assert.equal(n.promptReferences[1].slot,3);
+    assert.deepEqual(normalizeWorkflowInputSlots(JSON.parse(JSON.stringify(n))),n,'reload does not revive the removed source');
+  }
 });
