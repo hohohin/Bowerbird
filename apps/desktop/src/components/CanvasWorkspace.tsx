@@ -176,7 +176,8 @@ import {
 } from "../lib/creativeLaunch";
 import { createOrderedWriteJournal, drainOrderedWriteJournal } from "../lib/orderedWriteJournal";
 import { useStore, type DraftEditorRequest } from "../store";
-import { EXPLORER_CANVAS_DROP_EVENT, type ExplorerCanvasDropDetail } from "../lib/explorerCanvasDrop";
+import { EXPLORER_CANVAS_DROP_EVENT, prepareExplorerCanvasDrop, type ExplorerCanvasDropDetail } from "../lib/explorerCanvasDrop";
+import { importDroppedMedia, prepareMediaImport } from "../lib/mediaImport";
 import type {
   Asset,
   AnnotationMeta,
@@ -3563,6 +3564,28 @@ export function CanvasWorkspace({
     finally { pastingRef.current = false; }
   }
 
+  async function pasteCanvasImage(file: File) {
+    if (pastingRef.current) return;
+    const stage = stageRef.current;
+    const project = activeCanvasRef.current.id;
+    const route = useStore.getState();
+    if (!stage || loadingRef.current || route.projectRoutePending || route.activeProjectId !== project) {
+      notify("画布尚未就绪，请稍后重新粘贴", "info"); return;
+    }
+    // Freeze the destination and visible center before reading/importing the image.
+    const rect = stage.getBoundingClientRect();
+    const place = prepareExplorerCanvasDrop(stage, project, rect.left + rect.width / 2, rect.top + rect.height / 2);
+    if (!place) { notify("画布尚未就绪，请稍后重新粘贴", "info"); return; }
+    pastingRef.current = true;
+    try {
+      await prepareMediaImport(project, route.projectRouteRevision);
+      const asset = await importDroppedMedia(file, project, "clipboard");
+      await place(asset);
+      notify("剪贴板图片已加入画板", "success");
+    } catch (error) { notifyError(error, "粘贴图片到画板失败"); }
+    finally { pastingRef.current = false; }
+  }
+
   useEffect(() => {
     const allowed = (event: ClipboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -3579,8 +3602,13 @@ export function CanvasWorkspace({
     const paste = (event: ClipboardEvent) => {
       if (!allowed(event)) return;
       const value = parseCanvasClipboard(event.clipboardData?.getData("text/plain") ?? "");
-      if (!value) return;
-      event.preventDefault(); event.stopPropagation(); void pasteCanvasSelection(value);
+      if (value) {
+        event.preventDefault(); event.stopPropagation(); void pasteCanvasSelection(value); return;
+      }
+      const image = Array.from(event.clipboardData?.files ?? []).find(file => file.type.startsWith("image/")
+        || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file.name));
+      if (!image) return;
+      event.preventDefault(); event.stopPropagation(); void pasteCanvasImage(image);
     };
     window.addEventListener("copy", copy, true); window.addEventListener("paste", paste, true);
     return () => { window.removeEventListener("copy", copy, true); window.removeEventListener("paste", paste, true); };

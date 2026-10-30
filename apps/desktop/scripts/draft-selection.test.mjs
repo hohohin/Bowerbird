@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { appendDraftLassoPoint, combineDraftSelection, createDraftLasso, DRAFT_SELECTION_MAX_POINTS, DRAFT_SELECTION_MAX_RUNS, draftSelectionBounds,
-  draftSelectionContains, draftSelectionMask, draftSelectionSvgPath, draftSelectionToLayer } from "../src/lib/draftSelection.ts";
+  draftSelectionContains, draftSelectionMask, draftSelectionSvgPath, draftSelectionToLayer, invertDraftSelection } from "../src/lib/draftSelection.ts";
 
 const p = (x, y) => ({ x, y });
 const concave = () => createDraftLasso([p(1, 1), p(7, 1), p(7, 3), p(3, 3), p(3, 7), p(1, 7)]);
@@ -130,7 +130,9 @@ test("combined contours map to layer pixels and omit every internal scanline edg
   assertMaskMatches(local, { x: 0, y: 0, width: 25, height: 30 });
   assert.deepEqual(selection, saved, "coordinate mapping does not mutate original region");
   const path = draftSelectionSvgPath(selection);
-  assert.equal((path.match(/M/g) ?? []).length, 8, "rectangle with a rectangular hole has exactly eight boundary segments");
+  assert.equal((path.match(/M/g) ?? []).length, 2, "rectangle with a rectangular hole has two continuous contours");
+  assert.equal((path.match(/Z/g) ?? []).length, 2, "each contour closes without resetting its dash phase");
+  assert.equal((path.match(/[HV]/g) ?? []).length, 6, "collinear scanline steps collapse into the eight sides, with each final side closed by Z");
   assert.equal(path.includes("M2 4 H10"), false, "middle scanline is not drawn across a selected region");
 });
 
@@ -146,4 +148,52 @@ test("combination work is bounded by the document and region complexity budget",
   const complicated = { ...bounds, region: { x: 0, y: 0, pixelWidth: 1, pixelHeight: 1,
     rows: Array.from({ length: DRAFT_SELECTION_MAX_RUNS / 1024 + 1 }, () => row) } };
   assert.throws(() => combineDraftSelection(complicated, { x: 0, y: 4095, width: 1, height: 1 }, "add", bounds), /选区轮廓过于复杂/);
+});
+
+
+test("inverse is the bounded complement, including none/empty/full and out-of-canvas selections", () => {
+  const bounds = { x: 0, y: 0, width: 12, height: 10 };
+  const none = invertDraftSelection(null, bounds), empty = invertDraftSelection(none, bounds);
+  assert.equal(draftSelectionMask(none, bounds).every(value => value === 255), true);
+  assert.ok(empty); assert.equal(draftSelectionMask(empty, bounds).some(Boolean), false);
+  assert.equal(draftSelectionSvgPath(empty), "");
+  assert.deepEqual(draftSelectionMask(invertDraftSelection(empty, bounds), bounds), draftSelectionMask(none, bounds));
+  const polygon = createDraftLasso([p(-4, -4), p(7, -4), p(7, 3), p(3, 3), p(3, 14), p(-4, 14)]);
+  const original = structuredClone(polygon), inverse = invertDraftSelection(polygon, bounds);
+  const sourceMask = draftSelectionMask(polygon, bounds), inverseMask = assertMaskMatches(inverse, bounds);
+  assert.deepEqual(inverseMask, sourceMask.map(value => 255 - value));
+  assert.deepEqual(draftSelectionMask(invertDraftSelection(inverse, bounds), bounds), sourceMask, "double inversion restores every in-canvas pixel");
+  assert.equal(draftSelectionContains(inverse, -1, 2), false); assert.equal(draftSelectionContains(inverse, 13, 2), false);
+  assert.deepEqual(polygon, original); assert.deepEqual(bounds, { x: 0, y: 0, width: 12, height: 10 });
+  assert.throws(() => invertDraftSelection(null, { ...bounds, width: 4097 }), /选区像素范围无效/);
+});
+
+test("continuous contours keep diagonal selected contacts separate and close islands and holes", () => {
+  const bounds = { x: 0, y: 0, width: 10, height: 10 };
+  let islands = combineDraftSelection({ x: 1, y: 1, width: 2, height: 2 }, { x: 3, y: 3, width: 2, height: 2 }, "add", bounds);
+  islands = combineDraftSelection(islands, { x: 7, y: 1, width: 2, height: 2 }, "add", bounds);
+  const saved = structuredClone(islands), path = draftSelectionSvgPath(islands);
+  assert.equal((path.match(/M/g) ?? []).length, 3, "point contact does not join the two selected islands");
+  assert.equal((path.match(/Z/g) ?? []).length, 3);
+  assert.equal((path.match(/[HV]/g) ?? []).length, 9, "each rectangle uses three continuous sides and closure");
+  assert.equal(draftSelectionSvgPath(islands), path, "cached outline remains stable");
+  assert.deepEqual(islands, saved, "tracing does not consume or modify source spans");
+  const complement = invertDraftSelection(islands, bounds), inversePath = draftSelectionSvgPath(complement);
+  assert.equal((inversePath.match(/M/g) ?? []).length, (inversePath.match(/Z/g) ?? []).length, "touching hole contours still close");
+  assert.deepEqual(draftSelectionMask(invertDraftSelection(complement, bounds), bounds), draftSelectionMask(islands, bounds));
+  const full = invertDraftSelection(null, { x: 0, y: 0, width: 4096, height: 4096 });
+  assert.equal((draftSelectionSvgPath(full).match(/[MHVZ]/g) ?? []).length, 5, "4096 scanlines collapse to one four-sided closed path");
+});
+
+
+test("contour tracing handles the region budget as 65,536 disconnected pixel islands", () => {
+  const row = Array.from({ length: 512 }, (_, index) => index);
+  const selection = { x: 0, y: 0, width: 511, height: 511,
+    region: { x: 0, y: 0, pixelWidth: 1, pixelHeight: 1,
+      rows: Array.from({ length: 511 }, (_, y) => y % 2 ? [] : row) } };
+  const path = draftSelectionSvgPath(selection);
+  assert.equal((path.match(/M/g) ?? []).length, DRAFT_SELECTION_MAX_RUNS);
+  assert.equal((path.match(/Z/g) ?? []).length, DRAFT_SELECTION_MAX_RUNS);
+  assert.equal((path.match(/[HV]/g) ?? []).length, DRAFT_SELECTION_MAX_RUNS * 3);
+  assert.equal(draftSelectionSvgPath(selection), path, "maximum-complexity outlines are cached");
 });

@@ -218,25 +218,59 @@ export function combineDraftSelection(current: DraftSelection | null, incoming: 
     region: { x, y: y + minY, pixelWidth: 1, pixelHeight: 1, rows: rows.slice(minY, maxY) } };
 }
 
-/** Stroke outlines only the set boundary: shared row/run edges never appear in the overlay. */
+/** Inversion is always bounded by the document; an empty result stays an explicit selection. */
+export function invertDraftSelection(current: DraftSelection | null, bounds: DraftSelectionBounds): DraftSelection {
+  return combineDraftSelection(bounds, current ?? { x: 0, y: 0, width: 0, height: 0 }, "subtract", bounds)!;
+}
+
+/** Trace directed boundaries with selected pixels on the right, including holes and islands. */
 function regionOutline(region: DraftSelectionRegion): string {
   const cached = regionOutlines.get(region);
   if (cached !== undefined) return cached;
-  const commands: string[] = [], verticals = new Map<number, number[]>();
+  type Edge = { end: number; direction: number };
+  // Region coordinates are integer grid indices, even after document-to-layer scaling.
+  const stride = 4097, outgoing = new Map<number, Edge[]>();
+  const addEdge = (x: number, y: number, endX: number, endY: number, direction: number) => {
+    const start = y * stride + x, edges = outgoing.get(start) ?? [];
+    edges.push({ end: endY * stride + endX, direction }); outgoing.set(start, edges);
+  };
   let previous: readonly number[] = [];
   for (let y = 0; y <= region.rows.length; y++) {
     const row = region.rows[y] ?? [];
-    const edges = combineSpans(combineSpans(previous, row, "subtract"), combineSpans(row, previous, "subtract"), "add");
-    for (let index = 0; index < edges.length; index += 2) commands.push(`M${region.x + edges[index] * region.pixelWidth} ${region.y + y * region.pixelHeight} H${region.x + edges[index + 1] * region.pixelWidth}`);
-    for (const x of row) {
-      const segments = verticals.get(x) ?? [];
-      if (segments.length && segments[segments.length - 1] === y) segments[segments.length - 1] = y + 1;
-      else segments.push(y, y + 1);
-      verticals.set(x, segments);
+    const top = combineSpans(row, previous, "subtract"), bottom = combineSpans(previous, row, "subtract");
+    for (let index = 0; index < top.length; index += 2) addEdge(top[index], y, top[index + 1], y, 0);
+    for (let index = 0; index < bottom.length; index += 2) addEdge(bottom[index + 1], y, bottom[index], y, 2);
+    for (let index = 0; index < row.length; index += 2) {
+      addEdge(row[index], y + 1, row[index], y, 3);
+      addEdge(row[index + 1], y, row[index + 1], y + 1, 1);
     }
     previous = row;
   }
-  for (const [x, segments] of verticals) for (let index = 0; index < segments.length; index += 2)
-    commands.push(`M${region.x + x * region.pixelWidth} ${region.y + segments[index] * region.pixelHeight} V${region.y + segments[index + 1] * region.pixelHeight}`);
+  const takeEdge = (start: number, incoming: number): Edge => {
+    const edges = outgoing.get(start)!;
+    // Right turns keep diagonally touching selected pixels on separate closed contours.
+    const priority = [1, 0, 3, 2];
+    const index = edges.length === 1 ? 0 : priority.map(turn => edges.findIndex(edge => (edge.direction - incoming + 4) % 4 === turn)).find(index => index >= 0)!;
+    const [edge] = edges.splice(index, 1);
+    if (!edges.length) outgoing.delete(start);
+    return edge;
+  };
+  const x = (vertex: number) => region.x + vertex % stride * region.pixelWidth;
+  const y = (vertex: number) => region.y + Math.floor(vertex / stride) * region.pixelHeight;
+  const commands: string[] = [];
+  // Keep one iterator as edges are consumed; restarting it per island rescans deleted entries.
+  for (const start of outgoing.keys()) {
+    while (outgoing.has(start)) {
+      commands.push(`M${x(start)} ${y(start)}`);
+      let edge = takeEdge(start, 0);
+      while (edge.end !== start) {
+        const next = takeEdge(edge.end, edge.direction);
+        // Merge collinear steps without breaking the subpath or resetting its dash phase.
+        if (next.direction !== edge.direction) commands.push(edge.direction % 2 ? `V${y(edge.end)}` : `H${x(edge.end)}`);
+        edge = next;
+      }
+      commands.push("Z");
+    }
+  }
   const path = commands.join(" "); regionOutlines.set(region, path); return path;
 }

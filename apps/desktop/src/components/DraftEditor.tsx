@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from "react";
 import { save as saveFileDialog } from "@tauri-apps/plugin-dialog";
 import { ArrowDown, ArrowUp, Brush, Check, Circle, Copy, Crop, Eraser, Eye, EyeOff, Hand, ImagePlus, Lasso, Layers, Lock, Maximize, MousePointer2, MoveUpRight, PaintBucket, Pipette, Plus, Redo2, Save, Scan, Square, Trash2, Type, Undo2, Unlock, X } from "lucide-react";
 import { useStore, type DraftEditorRequest } from "../store";
@@ -13,7 +13,7 @@ import { useDraftLibrary } from "./useDraftLibrary";
 import { useDraftBrushPreferences } from "./useDraftBrushPreferences";
 import { DraftCropPreview } from "./DraftCropPreview";
 import { DraftCropOverlay } from "./DraftCropOverlay";
-import { appendDraftLassoPoint, clipDraftSelection, combineDraftSelection, createDraftLasso, draftSelectionSvgPath, type DraftSelection, type DraftSelectionMode } from "../lib/draftSelection";
+import { appendDraftLassoPoint, clipDraftSelection, combineDraftSelection, createDraftLasso, draftSelectionSvgPath, invertDraftSelection, type DraftSelection, type DraftSelectionMode } from "../lib/draftSelection";
 import { DraftBrushSizeInput } from "./DraftBrushSizeInput";
 import { stepDraftBrushSize } from "../lib/draftBrushSize";
 import { DraftColorPanel } from "./DraftColorPanel";
@@ -35,6 +35,14 @@ const TOOLS = [
 const typing = (node: EventTarget | null) => node instanceof HTMLElement && !!node.closest("input,textarea,select,[contenteditable=true],[data-draft-color-panel]");
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 const metadataBytes = (doc: DraftWorkingDocument) => JSON.stringify(doc, (key, value) => key === "canvas" ? undefined : value).length * 2;
+
+function SelectionOutline({ path, zoom, preview = false, lasso = false }: { path: string; zoom: number; preview?: boolean; lasso?: boolean }) {
+  // vector-effect handles viewBox fitting; the outer CSS zoom still needs compensation.
+  return <g className={`draft-selection-outline${lasso ? " draft-lasso-preview" : ""}`} style={{ "--draft-selection-zoom": zoom } as CSSProperties} aria-hidden="true">
+    <path className="draft-selection-base" d={path} vectorEffect="non-scaling-stroke" />
+    <path className="draft-selection-ants" data-draft-selection={preview ? undefined : true} data-draft-selection-preview={preview ? true : undefined} d={path} vectorEffect="non-scaling-stroke" />
+  </g>;
+}
 
 export function DraftEditor() {
   const request = useStore(state => state.draftEditor);
@@ -468,6 +476,13 @@ function DraftEditorPanel({ request }: { request: DraftEditorRequest }) {
       else { ctx.globalAlpha = opacity; ctx.fillStyle = foreground.current; ctx.fillRect(0, 0, layer.canvas.width, layer.canvas.height); }
     });
   }
+  function invertSelection() {
+    const current = working.current;
+    if (!current || !selection || interactionBusy || loading || closeConfirm) return;
+    cancelGesture();
+    try { setSelection(invertDraftSelection(selection, { x: 0, y: 0, width: current.width, height: current.height })); }
+    catch (e) { fail(e); }
+  }
   function removeLayer() {
     cancelGesture();
     const current = working.current, layer = current?.layers.find(l => l.id === selectedId);
@@ -574,6 +589,7 @@ function DraftEditorPanel({ request }: { request: DraftEditorRequest }) {
       else if (command && event.key.toLowerCase() === "y") undo(true);
       else if (command && event.key.toLowerCase() === "d") { cancelGesture(); setSelection(null); }
       else if (command && event.key.toLowerCase() === "a" && working.current) { cancelGesture(); setSelection({ x: 0, y: 0, width: working.current.width, height: working.current.height }); }
+      else if (command && event.shiftKey && !event.altKey && event.key.toLowerCase() === "i") { if (!event.repeat) invertSelection(); }
       else if (event.key === "Enter" && tool === "crop") applyCrop();
       else if (event.key === "Delete" || event.key === "Backspace") { if (selection) fillOrClear(true); else removeLayer(); }
       else if (!command && !event.altKey && event.key === "[") setSize(v => stepDraftBrushSize(v, -1));
@@ -620,9 +636,9 @@ function DraftEditorPanel({ request }: { request: DraftEditorRequest }) {
           <button className="draft-primary" disabled={interactionBusy} onClick={applyCrop}><Check size={14} />应用裁剪</button>
           <button className="draft-action" disabled={interactionBusy} onClick={() => chooseTool("move")}>取消裁剪</button>
         </> : <>
-        {(tool === "select" || tool === "lasso") && <div className="draft-selection-modes" role="group" aria-label="选区模式">
+        {(tool === "select" || tool === "lasso") && <><div className="draft-selection-modes" role="group" aria-label="选区模式">
           {([["replace", "新选区"], ["add", "增选"], ["subtract", "减选"]] as const).map(([mode, label]) => <button key={mode} aria-pressed={selectionMode === mode} disabled={interactionBusy} onClick={() => { cancelGesture(); setSelectionMode(mode); }}>{label}</button>)}
-        </div>}
+        </div><button className="draft-action" disabled={interactionBusy || closeConfirm || !selection} title="反选 · ⌘/Ctrl Shift I" onClick={invertSelection}>反选</button></>}
         {selection && <button className="draft-action" disabled={interactionBusy} title="取消选区 · ⌘/Ctrl D" onClick={() => { cancelGesture(); setSelection(null); }}>取消选区</button>}
         <label className="draft-color">颜色<input aria-label="前景颜色" type="color" value={color} onChange={e => setColor(e.target.value)} disabled={interactionBusy} /></label>
         <label>大小<DraftBrushSizeInput key={tool === "eraser" ? "eraser" : "brush"} aria-label={`${tool === "eraser" ? "橡皮" : "画笔"}大小`} value={size} onChange={setSize} disabled={interactionBusy} />px</label>
@@ -645,9 +661,9 @@ function DraftEditorPanel({ request }: { request: DraftEditorRequest }) {
             <canvas data-draft-canvas ref={composite} width={doc.width} height={doc.height} />
             {tool === "crop" && cropRect && <DraftCropPreview doc={doc} rect={cropRect} fit={fit} scale={effectiveScale} epoch={epoch} />}
             <svg className="draft-overlay" viewBox={`0 0 ${doc.width} ${doc.height}`}>
-              {selection && (!lassoPreview || selectionMode !== "replace") && <path data-draft-selection className="draft-selection" d={selectionPath} fillRule="evenodd" vectorEffect="non-scaling-stroke" />}
-              {lassoPreview && <path className="draft-selection draft-lasso-preview" d={lassoPreview.map((p, i) => `${i ? "L" : "M"}${p.x},${p.y}`).join(" ")} vectorEffect="non-scaling-stroke" />}
-              {rubber && rubber.kind === "arrow" ? <line x1={rubber.a.x} y1={rubber.a.y} x2={rubber.b.x} y2={rubber.b.y} stroke={color} strokeWidth={size} /> : rubberRect && (rubber?.kind === "ellipse" ? <ellipse cx={rubberRect.x + rubberRect.width / 2} cy={rubberRect.y + rubberRect.height / 2} rx={rubberRect.width / 2} ry={rubberRect.height / 2} fill="none" stroke={color} strokeWidth={size} /> : <rect {...rubberRect} fill="none" stroke={rubber?.kind === "rect" ? color : "#588af8"} strokeWidth={rubber?.kind === "rect" ? size : 1 / effectiveScale} />)}
+              {selection && (!lassoPreview || selectionMode !== "replace") && <SelectionOutline path={selectionPath} zoom={viewport.view.zoom} />}
+              {lassoPreview && <SelectionOutline preview lasso path={lassoPreview.map((p, i) => `${i ? "L" : "M"}${p.x},${p.y}`).join(" ")} zoom={viewport.view.zoom} />}
+              {rubber && rubber.kind === "arrow" ? <line x1={rubber.a.x} y1={rubber.a.y} x2={rubber.b.x} y2={rubber.b.y} stroke={color} strokeWidth={size} /> : rubberRect && (rubber?.kind === "select" ? <SelectionOutline preview path={draftSelectionSvgPath(rubberRect)} zoom={viewport.view.zoom} /> : rubber?.kind === "ellipse" ? <ellipse cx={rubberRect.x + rubberRect.width / 2} cy={rubberRect.y + rubberRect.height / 2} rx={rubberRect.width / 2} ry={rubberRect.height / 2} fill="none" stroke={color} strokeWidth={size} /> : <rect {...rubberRect} fill="none" stroke={rubber?.kind === "rect" ? color : "#588af8"} strokeWidth={rubber?.kind === "rect" ? size : 1 / effectiveScale} />)}
               {selectedBounds && <rect data-draft-selected-layer={selected.id} x={selected.x} y={selected.y} width={selected.width} height={selected.height} fill="none" stroke="#588af8" strokeWidth={1.5 / effectiveScale} />}
               {brushCursor && cursor && <circle className="draft-brush-cursor" ref={cursorCircle} cx={cursorPosition.current?.x ?? cursor.x} cy={cursorPosition.current?.y ?? cursor.y} r={size / 2} fill="none" stroke="#777" strokeWidth={1 / effectiveScale} />}
             </svg>

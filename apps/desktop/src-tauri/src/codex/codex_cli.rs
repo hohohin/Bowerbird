@@ -25,7 +25,7 @@ use crate::error::AppError;
 pub struct CodexCliProvider {
     /// 可执行文件名/路径，默认 "codex"。
     pub binary: String,
-    /// 模型；空则用 codex 默认（当前 gpt-5.x）。
+    /// 模型覆盖；空时生图使用 gpt-6-luna，理解任务沿用 CLI 默认。
     pub model: String,
     pub enabled: bool,
 }
@@ -309,9 +309,10 @@ impl GenProvider for CodexCliProvider {
                 }
             }
         }
-        if !self.model.is_empty() {
-            cmd.arg("-m").arg(&self.model);
-        }
+        // 首轮与续轮均显式指定生图编排模型及思考强度。
+        let model = if self.model.is_empty() { "gpt-6-luna" } else { &self.model };
+        cmd.arg("-m").arg(model)
+            .arg("-c").arg(r#"model_reasoning_effort="low""#);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

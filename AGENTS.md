@@ -55,6 +55,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `macOS/DEV-SYNC-2026-10-10.md` | Windows dev 相对 Mac d6027fb 的更新、存档推送状态、共享功能及 Mac 接收验收 | Mac 接收 Windows 26.10.901–26.10.1001 源码、核对正式 Agent/视频卡/v3 布局与发布边界时 |
 | `macOS/DEV-SYNC-2026-10-13.md` | Windows 1001 后续二维表格/Agent 会话生图增量、Mac 本机改动组合与验证 | 接续 10 月 13 日 Mac 接收、核对比例/分类输出兼容与发布边界时 |
 | `macOS/CROSS-PLATFORM-SYNC-2026-10-15.md` | 10 月 15 日分叉合并、工作流/Agent 增量与跨端接收验证 | 其他端接收本次 mac 存档或核对 Intel 包与后续源码边界时 |
+| `macOS/CROSS-PLATFORM-SYNC-2026-10-30.md` | 自 mac 300124d 以来的完整更新、存档确认状态、H3 暂缓及跨端接收步骤 | 本轮确认推送或其他端接收 Mac 累积更新前必读 |
 | `macOS/DEV-SYNC-2026-10-19.md` | Windows dev 文件优先工作区、素材导航、分类／视频增量的 Apple Silicon 接收与系统路径别名修复 | 接续 10 月 19 日 M 系列 Mac 同步、核对 SQLite 0040 与 ARM64 验证边界时 |
 | `macOS/DEV-SYNC-2026-10-22.md` | Windows 2201 共享增量的 Apple Silicon 接收、H3 暂缓清单与验证 | 接续本轮 Mac 同步、恢复 H3 增量或核对 SQLite 0042 与本机颜色缓存保留时 |
 | `macOS/DEV-SYNC-2026-10-25.md` | Windows 2202–2401 共享增量的 Apple Silicon 接收、H3 延续暂缓与工作流异步授权兼容修复 | 接续 10 月 25 日同步、恢复 H3 或核对 SQLite 0045、Bcoin／Pro 门控与原生媒体验证时 |
@@ -83,6 +84,10 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 - 先检查与本次任务相关的测试结果和最终 diff，确认没有夹带无关修改。
 - 将代码与上述文档更新放进同一个 `git commit`，避免先提交代码、再把文档留在工作区。
+
+### 4. 【存档并推送】
+
+用户说【存档并推送】时，先完成上述本地存档和提交，并核对远端 `mac` 上次推送基线；在 `macOS/` 附上自该基线以来的完整更新说明、平台差异和验证结果，再向用户展示本次待推送内容。**必须等用户明确确认后才推送 `mac`，不得把调用该简称本身视作推送确认。** 确认后只推送已展示范围；若出现新改动或远端新增导致范围变化，先说明差异并重新确认。默认不包含打包、安装包上传或服务部署。
 
 ---
 

@@ -40,7 +40,11 @@
 .draft-stage { position: relative; flex-shrink: 0; transform-origin: center; box-shadow: 0 3px 24px #0002; background-color: #f5f5f5; background-image: conic-gradient(#ddd 25%, transparent 0 50%, #ddd 0 75%, transparent 0); background-size: 16px 16px; }
 .draft-stage > canvas { position: relative; display: block; width: 100%; height: 100%; }
 .draft-overlay { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
-.draft-selection { stroke: #111; stroke-width: 1.5px; stroke-dasharray: 5 4; fill: #6699ff0a; filter: drop-shadow(0 0 1px white); }
+.draft-selection-outline path { fill: none; stroke-width: calc(1px / var(--draft-selection-zoom, 1)); stroke-linecap: butt; stroke-linejoin: round; }
+.draft-selection-base { stroke: #fff; }
+.draft-selection-ants { stroke: #000; stroke-dasharray: calc(4px / var(--draft-selection-zoom, 1)) calc(4px / var(--draft-selection-zoom, 1)); animation: draft-marching-ants .8s linear infinite; }
+@keyframes draft-marching-ants { from { stroke-dashoffset: 0; } to { stroke-dashoffset: calc(-8px / var(--draft-selection-zoom, 1)); } }
+@media (prefers-reduced-motion: reduce) { .draft-selection-ants { animation: none; } }
 .draft-resize { position: absolute; width: 11px; height: 11px; background: #588af8; border: 1px solid white; cursor: nwse-resize !important; padding: 0; }
 .draft-inline-text { position: absolute; transform-origin: top left; display: block; margin: 0; padding: 0; resize: none; overflow: hidden; border: 0; border-radius: 0; background: transparent; outline: 1px dashed #588af8; white-space: pre-wrap; overflow-wrap: anywhere; cursor: text; user-select: text; }
 .draft-inline-text::placeholder { color: #999; }
@@ -108,7 +112,6 @@
 .draft-crop-handle.is-n::after, .draft-crop-handle.is-s::after { width: 16px; height: 3px; border: 0; background: white; }
 .draft-crop-handle.is-e::after, .draft-crop-handle.is-w::after { height: 16px; width: 3px; border: 0; background: white; }
 
-.draft-lasso-preview { fill: none; }
 .draft-pressure input { accent-color: var(--bb-ink); }
 .draft-options output { min-width: 25px; font-variant-numeric: tabular-nums; }
 

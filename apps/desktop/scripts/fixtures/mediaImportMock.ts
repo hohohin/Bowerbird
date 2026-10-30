@@ -5,11 +5,11 @@ export function installMediaImportMock(w: any, assets: any[]) {
   w.mediaImports = [];
   w.mediaCalls = [];
   w.pendingUploads = () => uploads.size;
-  function imported(name: string, projectId: string | null) {
+  function imported(name: string, projectId: string | null, source = "imported") {
     if (name.startsWith("bad")) throw new Error("模拟损坏视频");
     const video = /\.(mp4|mov|m4v|webm|mkv|avi)$/i.test(name);
     const asset = { id: `media-${w.mediaImports.length}`, name, ext: video ? name.split(".").pop().toLowerCase() : "png",
-      width: 160, height: 90, duration: video ? 0.4 : 0, source: "imported", library_hidden: false,
+      width: 160, height: 90, duration: video ? 0.4 : 0, source, library_hidden: false,
       store_path: video ? "/test-media.mp4" : assets[0].store_path, thumb_path: assets[0].thumb_path ?? assets[0].store_path };
     assets.push(asset); w.mediaImports.push({ asset, projectId });
     w.emitAssetsChanged();
@@ -35,7 +35,11 @@ export function installMediaImportMock(w: any, assets: any[]) {
     }
     if (command === "video_import_cancel") { uploads.delete(args.uploadId); return; }
     if (command === "import_files") return args.sources.map((path: string) => imported(path.split(/[\\/]/).pop()!, args.projectId));
-    if (command === "import_image_bytes" && args.source === "imported") return imported(args.fileName, args.projectId);
+    if (command === "import_image_bytes" && ["imported", "clipboard"].includes(args.source)) {
+      if (w.holdMedia) await new Promise(resolve => { w.releaseMedia = resolve; });
+      if (w.failImageImport) throw new Error("模拟图片导入失败");
+      return imported(args.fileName, args.projectId, args.source);
+    }
     if (command === "external_files_media") return args.path;
     return base(command, args);
   };

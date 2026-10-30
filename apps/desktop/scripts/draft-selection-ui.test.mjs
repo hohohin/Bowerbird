@@ -96,10 +96,49 @@ try {
     const expected = ctx.getImageData(0, 0, 12, 12).data;
     expect(actual.every((value, index) => Math.abs(value - expected[index]) <= 1), "noninteger layer scaling introduces no seams between adjacent scanlines");
     checks.push("translated/nonuniform fractional layer scaling matches a continuous vector contour without row seams");
+    const assertSvgRegion = (selection, label) => {
+      ctx.clearRect(0, 0, 12, 12);
+      const path = s.draftSelectionSvgPath(selection);
+      expect((path.match(/M/g) ?? []).length === (path.match(/Z/g) ?? []).length, `${label}: every contour is closed`);
+      ctx.fill(new Path2D(path), "evenodd");
+      const pixels = ctx.getImageData(0, 0, 12, 12).data, expected = s.draftSelectionMask(selection, bounds);
+      for (let index = 0; index < expected.length; index++) expect(pixels[index * 4 + 3] === expected[index], `${label}: filled SVG disagrees with mask at ${index}`);
+    };
+    let touching = s.combineDraftSelection(rect(1, 1, 2, 2), rect(3, 3, 2, 2), "add", bounds);
+    touching = s.combineDraftSelection(touching, rect(8, 2, 2, 2), "add", bounds);
+    for (const [label, selection] of [["union/holes/island", combined], ["diagonal selected islands", touching],
+      ["diagonal holes", s.invertDraftSelection(touching, bounds)], ["self-crossing complement", s.invertDraftSelection(bow, bounds)],
+      ["out-of-canvas complement", s.invertDraftSelection(rect(-10, -5, 15, 10), bounds)],
+      ["full", s.invertDraftSelection(null, bounds)], ["empty", s.invertDraftSelection(bounds, bounds)]]) assertSvgRegion(selection, label);
+    const originalMask = s.draftSelectionMask(combined, bounds);
+    const inverse = s.invertDraftSelection(combined, bounds), inverseMask = s.draftSelectionMask(inverse, bounds);
+    expect(inverseMask.every((value, index) => value === 255 - originalMask[index]), "inversion complements each document pixel");
+    expect(s.draftSelectionMask(s.invertDraftSelection(inverse, bounds), bounds).every((value, index) => value === originalMask[index]), "double inversion recovers the original region");
+    ctx.clearRect(0, 0, 12, 12); ctx.save(); s.clipDraftSelection(ctx, inverse); ctx.fillRect(0, 0, 12, 12); ctx.restore();
+    const inversePixels = ctx.getImageData(0, 0, 12, 12).data;
+    expect(inverseMask.every((value, index) => value === inversePixels[index * 4 + 3]), "inverse editing clip matches its displayed path");
+    checks.push("closed SVG outlines preserve union/holes/islands, complement and double inversion with exact Canvas pixels");
+
+    for (let pattern = 0; pattern < 512; pattern++) {
+      let selection = empty;
+      for (let bit = 0; bit < 9; bit++) if (pattern & (1 << bit)) selection = s.combineDraftSelection(selection, rect(2 + bit % 3, 2 + Math.floor(bit / 3), 1, 1), "add", bounds);
+      ctx.clearRect(0, 0, 12, 12); ctx.fill(new Path2D(s.draftSelectionSvgPath(selection)), "evenodd");
+      const pixels = ctx.getImageData(0, 0, 12, 12).data;
+      for (let y = 0; y < 12; y++) for (let x = 0; x < 12; x++) {
+        const selected = x >= 2 && x < 5 && y >= 2 && y < 5 && Boolean(pattern & (1 << ((y - 2) * 3 + x - 2)));
+        expect(pixels[(y * 12 + x) * 4 + 3] === (selected ? 255 : 0), `3x3 topology ${pattern} changes pixel ${x},${y}`);
+      }
+    }
+    checks.push("all 512 local 3x3 pixel topologies preserve corners, holes and connectivity when filled from the SVG outline");
+
+    ctx.clearRect(0, 0, 12, 12); ctx.fill(new Path2D(s.draftSelectionSvgPath(compoundLocal)), "evenodd");
+    const svgScaledPixels = ctx.getImageData(0, 0, 12, 12).data;
+    expect(svgScaledPixels.every((value, index) => Math.abs(value - expected[index]) <= 1), "continuous outline preserves fractional layer scaling and hole geometry");
+    checks.push("closed outline in fractional/nonuniform layer coordinates matches continuous vector fill without seams");
     return checks;
   });
-  assert.equal(checks.length, 7); assert.deepEqual(errors, []);
-  console.log(`PASS ${checks.length} selection Canvas groups: primitive/compound clips, brush/eraser, empty selections and transformed layers`);
+  assert.equal(checks.length, 10); assert.deepEqual(errors, []);
+  console.log(`PASS ${checks.length} selection Canvas groups: primitive/compound clips, inverse/continuous contours, 512 pixel topologies and transformed layers`);
 } finally {
   await browser?.close(); await server.close();
 }
