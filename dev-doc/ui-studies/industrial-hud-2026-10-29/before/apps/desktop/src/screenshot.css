@@ -1,0 +1,5 @@
+/* Keep the capture webview independent of the main application's styles/bootstrap. */
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; }
+button, input, textarea { font: inherit; }
+button, p { margin: 0; }

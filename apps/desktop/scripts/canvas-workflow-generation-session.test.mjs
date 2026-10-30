@@ -89,8 +89,10 @@ try {
     const update = api.projectCanvasNoteUpdate;
     api.projectCanvasNoteUpdate = async () => { throw Error('write interrupted'); };
     await bounded(c.start('draw', true));
-    check(c.document.run.status === 'waiting' && c.document.run.steps.draw.status === 'done', 'delivery failure parks writer, not completed submit');
-    const beforeDelivery = calls.length, sessionId = c.document.nodes[0].outputs.image.nodeIds[0];
+    check(c.document.run.status === 'waiting' && c.document.run.steps.draw.status === 'waiting'
+      && c.document.run.steps.draw.generationSubmission === 'submitted' && c.document.run.steps.writer.status === 'pending', 'delivery failure parks the submitted source before completing its writer');
+    const beforeDelivery = calls.length, sessionId = c.document.nodes[0].activeSessionNodeId;
+    check(sessionId === `gen-prompt:${c.document.run.steps.draw.jobId}:${c.document.run.steps.draw.turnKey}:0`, 'delivery retry retains the exact submitted session identity');
     api.projectCanvasNoteUpdate = update;
     c = new CanvasWorkflowController(c.projectId); await c.load(); await bounded(c.continue());
     const note = readCanvasNote(window.snapshot().nodes.find(n => n.id === receiver.id));

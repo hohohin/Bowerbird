@@ -1,6 +1,6 @@
 import { assignCanvasCardNames } from "./canvasCardNames";
 import { mergeWorkflowChanges } from "./workflowExternalChanges";
-import { workflowTitle, workflowCardWidth, workflowCompletionTriggers, workflowTriggerScope } from "./canvasWorkflow";
+import { normalizeWorkflowLocalVideo, workflowTitle, workflowCardWidth, workflowCompletionTriggers, workflowTriggerScope } from "./canvasWorkflow";
 import { resolveVideoCardOutputs } from "./workflowVideoFrames";
 import { api } from "./api";
 import type { Asset, CanvasNode, NewCanvasNode } from "./types";
@@ -185,7 +185,7 @@ export class CanvasWorkflowController {
             const index = node.inputs[ref.type]?.findIndex(input => input.slot === ref.slot) ?? -1;
             return index < 0 ? ref : { ...ref, slot: index + 1 };
           }) };
-          return rebindGenerationReferences(node);
+          return normalizeWorkflowLocalVideo(rebindGenerationReferences(node));
         }), runs, run: runs[runs.length - 1] ?? null };
         // Loading historical results never authorizes a new generation. Pending turns remain armed.
         this.document.nodes = this.document.nodes.map(node => node.kind === "trigger" && node.inputs.completion?.some(input => input.canvasNodeId)
@@ -287,7 +287,7 @@ export class CanvasWorkflowController {
     const authorizeEdit = nodes.some(node => node.kind !== "text") || this.document.nodes.some(node => node.kind !== "text");
     if (this.encapsulating) throw new Error("正在封装卡片，请稍后再编辑");
     if (!this.ready) throw new Error("工作流尚未载入");
-    nodes = nodes.map(node => this.isLocked(node.id) ? node : normalizeWorkflowInputSlots(node));
+    nodes = nodes.map(node => this.isLocked(node.id) ? node : normalizeWorkflowLocalVideo(normalizeWorkflowInputSlots(node)));
     for (const node of this.document.nodes) if (this.isLocked(node.id) && JSON.stringify(node) !== JSON.stringify(nodes.find(next => next.id === node.id))) {
       throw new Error("此卡片关联的工作流正在运行，请先停止对应流程");
     }
@@ -942,7 +942,7 @@ export class CanvasWorkflowController {
     }
     while (!halted()) {
       if (!await this.localDsGenerate(runId, node, requestId, images, halted)) return null;
-      if (!await this.deliverAgentSessions(runId, node, halted)) return null;
+      if (!await this.deliverSubmittedSessions(runId, node, halted)) return null;
       const result = await api.agentDsWorkflowResult(requestId);
       if (halted()) return null;
       if (result) {
@@ -1036,7 +1036,7 @@ export class CanvasWorkflowController {
     }
     await this.step(runId, node.id, { localDsGenerations: { ...this.run(runId).steps[node.id].localDsGenerations, [request.id]: call } });
     if (halted()) return false;
-    if (!await this.deliverAgentSessions(runId, node, halted)) return false;
+    if (!await this.deliverSubmittedSessions(runId, node, halted)) return false;
     try {
       await api.agentDsWorkflowGenerationResponse(requestId, request, call.response);
     } catch (error) {
@@ -1048,11 +1048,13 @@ export class CanvasWorkflowController {
     return !halted();
   }
 
-  /** A submitted generation has its own lifetime, independent of the Agent's final reply. */
-  private async deliverAgentSessions(runId: string, node: WorkflowNode, halted: () => boolean): Promise<boolean> {
+  /** Deliver submitted sessions before Agent replies or completion-trigger waits. */
+  private async deliverSubmittedSessions(runId: string, node: WorkflowNode, halted: () => boolean): Promise<boolean> {
     const run = this.run(runId), step = run.steps[node.id];
     if (step.agentOutputTargets?.length) return true;
-    const sessions = [...new Set(Object.values(step.localDsGenerations ?? {}).flatMap(call => call.response?.submitted ? [call.response.submitted.sessionNodeId] : []))];
+    const sessions = node.kind === "generation" && step.generationSubmission === "submitted" && step.jobId && step.turnKey
+      ? [`gen-prompt:${step.jobId}:${step.turnKey}:0`]
+      : [...new Set(Object.values(step.localDsGenerations ?? {}).flatMap(call => call.response?.submitted ? [call.response.submitted.sessionNodeId] : []))];
     for (const writer of this.document.nodes.filter(writer => run.order.includes(writer.id) && writer.textTarget?.image
       && writer.inputs.image?.some(input => input.nodeId === node.id && input.portId === "image"))) {
       try {
@@ -1207,6 +1209,30 @@ export class CanvasWorkflowController {
     await this.continue(runId);
   }
 
+  private async recoverVideoResult(runId: string, node: WorkflowNode, halted: () => boolean) {
+    const step = this.run(runId).steps[node.id];
+    if (!step.jobId || !step.turnKey) throw new Error("原视频任务缺少恢复标识，无法自动取回；可删除此卡片，不会重新提交生成");
+    let result;
+    try {
+      // Query the durable job and turn directly. Recent-session lists omit active and older jobs.
+      result = await api.agentDsWorkflowGenerationJob(step.jobId, step.turnKey);
+    } catch (error) {
+      if (!halted()) await this.step(runId, node.id, { status: "waiting", error: `查询原视频任务失败，可继续取回或删除卡片停止等待：${String(error)}` });
+      return;
+    }
+    if (halted()) return;
+    if (!result) throw new Error("未找到原视频任务记录，无法自动取回；可删除此卡片，不会重新提交生成");
+    if (["failed", "cancelled", "cancelled_local"].includes(result.status)) throw new Error(result.error || (result.status === "failed" ? "原视频任务已失败" : "原视频任务已停止"));
+    if (result.status !== "done") {
+      await this.step(runId, node.id, { status: "waiting", error: "原视频仍在生成或恢复中，完成后可继续取回；也可删除卡片停止等待" });
+      return;
+    }
+    const assetIds = await Promise.all(result.images.map(path => api.localAgentFindAssetId(path)));
+    if (halted()) return;
+    if (!assetIds.length || assetIds.some(id => !id)) throw new Error("原视频任务已结束，但本地结果已缺失；请检查素材库或任务中心，可删除此卡片");
+    await this.finish(runId, node, { image: { type: "image", assetIds: [...new Set(assetIds as string[])] } });
+  }
+
   async continue(runId = this.document.run?.id) {
     if (!runId || this.executing.has(runId) || this.stopping.has(runId) || !this.run(runId) || !workflowRunActive(this.run(runId))) return;
     if (this.issue?.runId === runId) this.issue = null;
@@ -1227,6 +1253,9 @@ export class CanvasWorkflowController {
       if (step.status === "done" || halted()) return;
       this.progress(runId, id, node.kind === "generation" ? `生成${node.generation?.media === "video" ? "视频" : "图片"}，等待会话结果` : node.kind === "skill" ? "执行技能，等待任务结果或审批" : node.kind === "visual-profile" ? "处理视觉规范" : node.kind === "trigger" ? "触发下游流程" : "读取输入素材");
       if (node.kind === "comfy-video" && step.jobId) { await this.runComfyVideo(runId, node, halted); return; }
+      if (node.kind === "generation" && node.generation?.media === "video" && step.jobId) {
+        await this.recoverVideoResult(runId, node, halted); return;
+      }
       const hasCells = Object.values(node.inputs).flat().some(input => input.canvasNodeId);
       const cellTexts = this.run(runId).cellTexts;
       let canvas = hasCells || node.kind === "loop" ? await api.projectCanvasGet(this.projectId) : null;
@@ -1611,6 +1640,7 @@ export class CanvasWorkflowController {
           if (halted()) return;
           if (!turnKey) throw new Error("原生成任务缺少轮次身份，请检查原任务");
           await this.step(runId, id, { generationSubmission: "submitted", detail: "生成任务已提交，图片进度请查看会话" });
+          if (!await this.deliverSubmittedSessions(runId, node, halted)) return;
           await this.finish(runId, node, { image: { type: "image", nodeIds: [`gen-prompt:${jobId}:${turnKey}:0`] } });
           return;
         }

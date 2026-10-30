@@ -1,0 +1,8 @@
+.explorer-capture-feedback-anchor { position: fixed; z-index: 45; transform: translate(-50%, -100%); pointer-events: none; max-width: min(340px, calc(100vw - 40px)); }
+.explorer-capture-feedback { display: flex; align-items: center; gap: 6px; padding: 9px 12px; border: 1px solid var(--bb-line); border-radius: 12px; background: var(--bb-surface-2); color: var(--bb-ink); box-shadow: 0 4px 18px var(--bb-shadow-card); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; animation: explorer-capture-confirm 2s ease both; }
+.explorer-capture-feedback svg { flex-shrink: 0; color: var(--bb-blue); }
+.explorer-capture-feedback.is-pending { animation: none; }
+.explorer-feedback-spinner { animation: explorer-feedback-spin 1s linear infinite; }
+@keyframes explorer-capture-confirm { 0% { opacity: 0; transform: translateY(5px) scale(.96); } 7.5%, 91% { opacity: 1; transform: translateY(0) scale(1); } 100% { opacity: 0; transform: translateY(-3px); } }
+@keyframes explorer-feedback-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .explorer-capture-feedback, .explorer-feedback-spinner { animation: none; } }

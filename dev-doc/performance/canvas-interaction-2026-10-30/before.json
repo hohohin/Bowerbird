@@ -1,0 +1,79 @@
+{
+  "mode": "before",
+  "measuredAt": "2026-10-30T02:30:24.511Z",
+  "environment": "Chrome headless, Vite development, synthetic IPC, 300 mixed cards and 200 workflow input wires",
+  "method": "48 synthetic input events in four groups of 12; flushSync wraps each dispatch, then two real animation frames allow scheduled work. React still coalesces some native-event commits. Counts describe a deterministic stress fixture, not native event cadence or FPS.",
+  "checks": [
+    "300 mounted mixed cards and 200 wires",
+    "pan delta accumulation",
+    "zoom pointer anchor",
+    "mixed multi-selection drag persists final geometry",
+    "cancel rollback",
+    "wire follows live moving content ports before pointerup",
+    "pointerup flushes an unpainted final move",
+    "Escape cancels an unpainted move without later drift",
+    "same-frame drag threshold roundtrip does not activate asset",
+    "route flush persists latest wheel view before camera settles",
+    "mixed-card marquee",
+    "alignment snap",
+    "stationary workflow resize invalidates drag snap geometry"
+  ],
+  "renderedSourceHashes": {
+    "workspace": "7418a8de2c3b1ffb09af5a09a80be5f27c23e245012bb75335edba2df77e001a",
+    "workflow": "43b5e7848b596988166f4108db55a151469d0a7dcf58c448bf0058ec1246aa14"
+  },
+  "samples": [
+    {
+      "label": "pan",
+      "inputEvents": 48,
+      "workspaceRenders": 4,
+      "workspaceCommits": 4,
+      "workflowRenders": 4,
+      "workflowCommits": 4,
+      "globalNodeQueries": 400,
+      "portQueries": 400,
+      "rectReads": 800,
+      "portRectReads": 400,
+      "stageRectReads": 400
+    },
+    {
+      "label": "zoom",
+      "inputEvents": 48,
+      "workspaceRenders": 4,
+      "workspaceCommits": 4,
+      "workflowRenders": 8,
+      "workflowCommits": 8,
+      "globalNodeQueries": 800,
+      "portQueries": 800,
+      "rectReads": 1696,
+      "portRectReads": 800,
+      "stageRectReads": 896
+    },
+    {
+      "label": "multi-drag",
+      "inputEvents": 48,
+      "workspaceRenders": 7,
+      "workspaceCommits": 4,
+      "workflowRenders": 55,
+      "workflowCommits": 8,
+      "globalNodeQueries": 5500,
+      "portQueries": 5500,
+      "rectReads": 11055,
+      "portRectReads": 5500,
+      "stageRectReads": 5550
+    },
+    {
+      "label": "cancel-drag",
+      "inputEvents": 48,
+      "workspaceRenders": 8,
+      "workspaceCommits": 4,
+      "workflowRenders": 52,
+      "workflowCommits": 8,
+      "globalNodeQueries": 5200,
+      "portQueries": 5200,
+      "rectReads": 10453,
+      "portRectReads": 5200,
+      "stageRectReads": 5248
+    }
+  ]
+}

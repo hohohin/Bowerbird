@@ -1,0 +1,26 @@
+{
+  "date": "2026-10-29",
+  "scope": "Production UI source, not a packaged release",
+  "files": [
+    {
+      "path": "apps/desktop/src/App.tsx",
+      "sha256": "fa22062aaf1f0fcf1db1c12eeff2b7a42463f8a688b050a270e63bda5f5be820"
+    },
+    {
+      "path": "apps/desktop/scripts/fixtures/canvas-reference/preview.tsx",
+      "sha256": "bf092060c4ce865b031659fef0d8d770b57e7fdc4c061f2153579fc136d61c34"
+    },
+    {
+      "path": "apps/desktop/src/components/IndustrialTheme.css",
+      "sha256": "78ce291d74d7fb3da605dceb5a4cd6ef9f09f4615f8fb42f40fd8fb99f5bdc3c"
+    },
+    {
+      "path": "apps/desktop/src/components/IndustrialCanvas.css",
+      "sha256": "79e622d7d7e5b9e377b9258a9a033b9e083d6f64611617722807ccda6b82afbc"
+    },
+    {
+      "path": "apps/desktop/src/components/IndustrialMenus.css",
+      "sha256": "e13404ef49362390626d4853958d52f099594926814caf77ce6ec891efdab79a"
+    }
+  ]
+}

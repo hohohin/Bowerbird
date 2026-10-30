@@ -1,0 +1,130 @@
+/* Approved canvas Tactical surfaces. Layout, transforms and socket geometry stay native. */
+.canvas-tactical {
+  --cs-base:#191f21;
+  --cs-console:#202528;
+  --cs-surface:rgb(39 45 47 / .94);
+  --cs-card:#272d2f;
+  --cs-screen:rgb(49 57 59 / .81);
+  --cs-field:var(--holo-field);
+  --cs-ink:#e4e6eb;
+  --cs-muted:#9c9fa9;
+  --cs-rule:rgb(205 210 215 / .14);
+  --cs-hover:var(--holo-wash);
+  --cs-selected:var(--holo-selection);
+  --cs-selected-ink:var(--holo-ink);
+  --cs-shadow:0 4px 16px rgb(0 0 0 / .14);
+  --cs-lift:0 12px 28px rgb(0 0 0 / .27);
+  --cs-cross:rgb(204 209 215 / .13);
+}
+[data-theme="light"] .canvas-tactical {
+  --cs-base:#eeede9;
+  --cs-console:#f5f4f0;
+  --cs-surface:rgb(252 252 249 / .94);
+  --cs-card:#fcfcf9;
+  --cs-screen:rgb(255 255 255 / .78);
+  --cs-field:var(--holo-field);
+  --cs-ink:#292c32;
+  --cs-muted:#777b82;
+  --cs-rule:rgb(41 44 50 / .15);
+  --cs-hover:var(--holo-wash);
+  --cs-selected:var(--holo-selection);
+  --cs-selected-ink:var(--holo-ink);
+  --cs-shadow:0 4px 16px rgb(37 43 42 / .055);
+  --cs-lift:0 12px 28px rgb(37 43 42 / .13);
+  --cs-cross:rgb(41 44 50 / .13);
+}
+.app-topbar.canvas-tactical {background:var(--cs-console);border:0;box-shadow:none;}
+.app-topbar.canvas-tactical .library-toolbar-context {display:none;}
+.canvas-tactical .app-topbar-leading {gap:2px;padding:4px;background:transparent;border-radius:0;}
+.canvas-tactical .app-topbar-leading .app-button-dark {height:32px;min-height:32px;padding:0 12px;border:0;border-radius:0;background:transparent;box-shadow:none;color:var(--cs-ink);}
+.canvas-tactical .app-topbar-leading .canvas-mode-toggle {background:var(--holo-selection);color:var(--holo-ink);}
+.canvas-tactical .app-topbar-leading button:hover {background:var(--holo-hover);color:var(--holo-ink);box-shadow:none;transform:none;animation:canvas-tactical-contact 160ms steps(1,end);}
+.app-topbar.canvas-tactical .topbar-account-trigger {height:40px;padding:4px 4px 4px 12px;gap:10px;border:0;border-radius:0;background:var(--cs-screen);color:var(--cs-ink);box-shadow:none;}
+.canvas-tactical .topbar-account-trigger>span.bg-accent {width:28px;height:28px;border-radius:2px;background:var(--cs-hover);color:var(--cs-ink);font-size:11px;}
+.app-topbar.canvas-tactical .app-topbar-credits {color:var(--cs-ink);}
+.app-topbar.canvas-tactical .library-view-segments {border:0;border-radius:0;background:transparent;box-shadow:none;}
+.app-topbar.canvas-tactical .library-view-segments button {border-radius:0;color:var(--cs-muted);}
+.app-topbar.canvas-tactical .library-view-segments button:hover {animation:canvas-tactical-contact 160ms steps(1,end);background:var(--holo-hover);color:var(--holo-ink);}
+.canvas-workspace.canvas-tactical {--canvas-chrome-radius:0px;--canvas-chrome-shadow:var(--cs-shadow);background:var(--cs-base);color:var(--cs-ink);}
+.canvas-tactical .canvas-board-shell {background:var(--cs-base);}
+.canvas-tactical .canvas-plane {z-index:1;}
+.canvas-tactical .canvas-stage {background-color:var(--cs-base);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72' viewBox='0 0 72 72'%3E%3Cpath d='M33 36h6M36 33v6' stroke='%23777b82' stroke-opacity='.2' stroke-width='.7'/%3E%3C/svg%3E");}
+[data-theme="dark"] .canvas-tactical .canvas-stage {background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72' viewBox='0 0 72 72'%3E%3Cpath d='M33 36h6M36 33v6' stroke='%239c9fa9' stroke-opacity='.25' stroke-width='.7'/%3E%3C/svg%3E");}
+.canvas-tactical .canvas-board-toolbar>div,
+.canvas-tactical .canvas-drawing-tools {border-color:transparent;border-radius:0;background:var(--cs-screen);box-shadow:var(--cs-shadow);color:var(--cs-muted);backdrop-filter:blur(14px);}
+.canvas-tactical .canvas-board-toolbar>div:first-child::before {content:"";width:3px;height:3px;flex-shrink:0;background:var(--cs-muted);box-shadow:0 5px var(--cs-rule);margin-right:3px;}
+.canvas-tactical .canvas-board-title {color:var(--cs-ink);font-weight:500;}
+.canvas-tactical .canvas-board-toolbar small:not(.canvas-save-error):not(.canvas-selection-count) {color:var(--cs-muted);}
+.canvas-tactical .canvas-zoom-controls span {font-family:ui-monospace,monospace;color:var(--cs-muted);font-size:10px;}
+.canvas-tactical .canvas-source-toggle {--source-tab-background:var(--cs-screen);color:var(--cs-ink);}
+.canvas-tactical .canvas-source-toggle::before,
+.canvas-tactical .canvas-source-toggle::after {display:none;}
+.canvas-tactical .canvas-zoom-controls button,
+.canvas-tactical .canvas-drawing-tools button {position:relative;border-radius:0;color:var(--cs-muted);background:transparent;}
+.canvas-tactical :is(.canvas-zoom-controls,.canvas-drawing-tools) button:is(:hover,:focus-visible) {color:var(--holo-ink);background:var(--holo-hover);animation:canvas-tactical-contact 160ms steps(1,end);}
+.canvas-tactical :is(.canvas-zoom-controls,.canvas-drawing-tools) button:is(.is-active,[aria-pressed=true]) {color:var(--cs-selected-ink);background:var(--cs-selected);}
+.canvas-tactical :is(.canvas-zoom-controls,.canvas-drawing-tools) button:is(.is-active,[aria-pressed=true])::before {content:"";position:absolute;right:3px;bottom:3px;width:2px;height:2px;background:var(--holo-pixel);box-shadow:var(--holo-glow);pointer-events:none;}
+.canvas-tactical .canvas-drawing-tools hr {border-color:var(--cs-rule);margin:4px 8px;}
+.canvas-tactical .canvas-drawing-tools button[data-tip]::after {border-radius:4px;}
+.canvas-workspace.canvas-tactical>.canvas-source-panel {background:var(--cs-console);border-color:transparent;border-radius:0 0 8px 0;box-shadow:8px 0 28px rgb(37 43 42 / .08);}
+.canvas-tactical .canvas-library-tab-fill {fill:var(--cs-console);}
+.canvas-tactical .canvas-library-tab-edge {stroke:transparent;}
+.canvas-tactical .canvas-library-close,
+.canvas-tactical .canvas-library-grip {color:var(--cs-muted);border-radius:2px;}
+.canvas-tactical .canvas-library-close:hover {background:var(--holo-hover);color:var(--holo-ink);animation:canvas-tactical-contact 160ms steps(1,end);}
+
+/* Card surfaces only: never override geometry transforms or clip socket overflow. */
+.canvas-tactical :is(.workflow-card,.canvas-note:not(.is-section):not(:where(.is-content-card)),.canvas-prompt-node:not(.is-image-only),.canvas-agent-node) {border:1px solid var(--cs-rule);border-radius:6px;background:var(--cs-card);color:var(--cs-ink);box-shadow:var(--cs-shadow);transition:border-color 160ms,box-shadow 160ms;}
+.canvas-tactical .workflow-card>header {border:0;background:var(--cs-hover);border-radius:5px 5px 0 0;color:var(--cs-muted);}
+.canvas-tactical .workflow-card>header strong {color:var(--cs-ink);}
+.canvas-tactical .workflow-card>header svg {stroke-width:1.5;}
+.canvas-tactical .workflow-card :is(:is(select, .tactical-select-trigger),textarea,.ProseMirror,.model-select-trigger) {border-color:var(--cs-rule);border-radius:5px;background:var(--cs-field);color:var(--cs-ink);box-shadow:none;}
+.canvas-tactical .workflow-card :is(textarea,.ProseMirror):focus {outline:none;border-color:var(--cs-muted);box-shadow:0 0 0 2px var(--cs-hover);}
+.canvas-tactical .workflow-card :is(:is(select, .tactical-select-trigger),.model-select-trigger):hover {background:var(--cs-hover);}
+.canvas-tactical .workflow-card :is(:is(select, .tactical-select-trigger),.model-select-trigger):focus-visible {outline:2px solid var(--cs-muted);outline-offset:2px;}
+.canvas-tactical .workflow-card .workflow-port span {background:var(--cs-surface);color:var(--cs-muted);}
+.canvas-tactical .workflow-card .workflow-port i {border-color:var(--cs-surface);}
+.canvas-tactical .canvas-node {border-radius:3px;border-color:transparent;box-shadow:var(--cs-shadow);}
+.canvas-tactical .canvas-node-name {background:var(--cs-surface);color:var(--cs-ink);font-size:10px;letter-spacing:.2px;}
+.canvas-tactical .canvas-node-name::before {content:"";width:3px;height:3px;margin-right:2px;background:var(--cs-muted);flex-shrink:0;}
+.canvas-tactical :is(.canvas-node,.workflow-card,.canvas-note:not(.is-section):not(:where(.is-content-card))):hover {border-color:var(--cs-rule);box-shadow:var(--cs-lift);}
+.canvas-tactical :is(.canvas-node,.workflow-card,.canvas-note:not(.is-section):not(:where(.is-content-card))).is-selected {outline:1px solid var(--cs-muted);outline-offset:3px;border-color:var(--cs-rule);box-shadow:var(--cs-lift);}
+.canvas-tactical :is(.canvas-prompt-node,.canvas-agent-node):is(.is-selected,.is-focused) {outline:1px solid var(--cs-muted);outline-offset:3px;border-color:var(--cs-muted);box-shadow:var(--cs-lift);}
+.canvas-tactical :is(.canvas-prompt-node,.canvas-agent-node).is-failed {border-color:rgb(239 68 68 / .64);}
+.canvas-tactical .canvas-agent-node:is(.is-awaiting_approval,.is-awaiting_clarification) {border-color:rgb(251 191 36 / .62);}
+.canvas-tactical .workflow-card.is-selected>header {background:var(--cs-hover);}
+.canvas-tactical .canvas-card-name {color:var(--cs-muted);font-size:11px;}
+.canvas-tactical .canvas-card-name input {border-radius:2px;background:transparent;color:var(--cs-muted);padding-left:0;}
+.canvas-tactical .canvas-card-name input:focus {border-color:var(--cs-muted);background:var(--cs-surface);color:var(--cs-ink);}
+.canvas-tactical .workflow-card:hover>header {animation:canvas-tactical-contact 160ms steps(1,end);}
+.canvas-tactical .workflow-card footer button {border-radius:2px;color:var(--cs-ink);background:var(--cs-hover);padding:3px 7px;}
+.canvas-tactical .workflow-card footer button:hover {color:var(--cs-selected-ink);background:var(--cs-selected);animation:canvas-tactical-contact 160ms steps(1,end);}
+.canvas-tactical .workflow-card footer>span:first-child::before {content:"";display:inline-block;width:3px;height:3px;margin:0 6px 2px 0;background:var(--cs-muted);}
+.canvas-tactical .workflow-bindings button {border:0;border-radius:2px;background:var(--cs-hover);color:var(--cs-muted);}
+.canvas-tactical .workflow-bindings button:hover {animation:canvas-tactical-contact 160ms steps(1,end);color:var(--cs-ink);}
+.canvas-tactical :where(.canvas-note:not(.is-content-card)) .canvas-text-handle {color:var(--cs-muted);}
+.canvas-tactical :where(.canvas-note:not(.is-content-card)) .canvas-text-cell {border-color:var(--cs-rule);}
+.canvas-tactical .workflow-wires path:not(.is-selected):not(.is-draft):not(.is-error) {stroke:var(--cs-muted);opacity:.42;stroke-width:1.2;}
+.canvas-tactical .workflow-wires path.is-selected:not(.is-error) {stroke-width:1.7;}
+
+/* Editors and dialogs retain softer, distinct layers and field boundaries. */
+.canvas-tactical :is(.creation-dock.composer-glass,.project-inspector-shell:not(.is-editing)),.canvas-toolbox-menu.canvas-tactical {background:var(--cs-surface);border:1px solid var(--cs-rule);border-radius:12px;box-shadow:var(--cs-lift);color:var(--cs-ink);}
+.canvas-toolbox-menu.canvas-tactical button:hover {background:var(--cs-hover);}
+.canvas-tactical-telemetry {position:absolute;right:28px;bottom:100px;pointer-events:none;display:grid;gap:7px;justify-items:end;color:var(--cs-muted);opacity:.55;z-index:0;}
+.canvas-tactical-telemetry>div {display:flex;gap:3px;margin-bottom:3px;}
+.canvas-tactical-telemetry i {display:block;width:3px;height:3px;background:currentColor;animation:canvas-tactical-signal 4.8s steps(1,end) infinite;}
+.canvas-tactical-telemetry i:nth-child(even){opacity:.3;animation-delay:-1.3s;}
+.canvas-tactical-telemetry span {font:9px ui-monospace,monospace;letter-spacing:1.8px;}
+.canvas-tactical-telemetry small {font:7px ui-monospace,monospace;letter-spacing:1px;opacity:.7;}
+.canvas-tactical-image-pixels {position:absolute;z-index:10;pointer-events:none;}
+.canvas-tactical-image-pixels i {position:absolute;width:4px;height:4px;margin:-2px;background:var(--cs-ink);box-shadow:0 0 0 1px var(--cs-base);animation:canvas-tactical-vertex-1 400ms cubic-bezier(.2,.7,.3,1) both,canvas-tactical-contact 160ms steps(1,end) 400ms;}
+.canvas-tactical-image-pixels i:nth-child(2){animation-name:canvas-tactical-vertex-2,canvas-tactical-contact;}
+.canvas-tactical-image-pixels i:nth-child(3){animation-name:canvas-tactical-vertex-3,canvas-tactical-contact;}
+.canvas-tactical-image-pixels i:nth-child(4){animation-name:canvas-tactical-vertex-4,canvas-tactical-contact;}
+@keyframes canvas-tactical-vertex-1{0%,20%{left:0;top:0}100%{left:100%;top:0}}
+@keyframes canvas-tactical-vertex-2{0%,20%{left:100%;top:0}100%{left:100%;top:100%}}
+@keyframes canvas-tactical-vertex-3{0%,20%{left:100%;top:100%}100%{left:0;top:100%}}
+@keyframes canvas-tactical-vertex-4{0%,20%{left:0;top:100%}100%{left:0;top:0}}
+@keyframes canvas-tactical-contact{0%,28%,62%,100%{opacity:1}14%,45%,78%{opacity:.25}}
+@keyframes canvas-tactical-signal{0%,80%,83%,87%,91%,100%{opacity:1}81%,85%,89%{opacity:.12}}
+@media(prefers-reduced-motion:reduce){.canvas-tactical :is(.canvas-zoom-controls,.canvas-drawing-tools,.app-topbar-leading,.library-view-segments,.workflow-card footer,.workflow-bindings) button,.canvas-tactical .workflow-card>header,.canvas-tactical .canvas-library-close,.canvas-tactical-image-pixels i,.canvas-tactical-telemetry i{animation:none}.canvas-tactical-image-pixels i:nth-child(1){left:0;top:0}.canvas-tactical-image-pixels i:nth-child(2){left:100%;top:0}.canvas-tactical-image-pixels i:nth-child(3){left:100%;top:100%}.canvas-tactical-image-pixels i:nth-child(4){left:0;top:100%}}

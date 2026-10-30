@@ -1,0 +1,343 @@
+/* Secondary canvas surfaces share the approved warm-gray / graphite language.
+   These named surfaces also cover their portals; geometry and execution states remain native. */
+
+/* Writing console: flat tonal controls, with source colors reserved for the chosen provider. */
+.creation-dock.composer-glass {
+  border-color:transparent;border-radius:0;
+  background:var(--bb-surface);color:var(--bb-ink);
+  box-shadow:0 10px 28px rgb(var(--bb-shadow-rgb) / 12%);
+  backdrop-filter:none;-webkit-backdrop-filter:none;
+}
+.canvas-tactical .creation-dock.composer-glass { background:var(--cs-card);border-color:transparent;border-radius:0;backdrop-filter:none; }
+.creation-dock.composer-glass.is-collapsed { border-radius:0; }
+.creation-dock.composer-glass.is-creating { outline:none; }
+.creation-dock.composer-glass.is-creating::before {
+  content:"";position:absolute;inset:-5px;pointer-events:none;
+  background:linear-gradient(var(--holo-pixel),var(--holo-pixel)) 0 0/3px 3px,
+    linear-gradient(var(--holo-pixel),var(--holo-pixel)) 100% 0/3px 3px,
+    linear-gradient(var(--holo-pixel),var(--holo-pixel)) 0 100%/3px 3px,
+    linear-gradient(var(--holo-pixel),var(--holo-pixel)) 100% 100%/3px 3px,
+    linear-gradient(var(--holo-rule),var(--holo-rule)) 12px 1px/calc(100% - 24px) 1px,
+    linear-gradient(var(--holo-rule),var(--holo-rule)) 12px calc(100% - 1px)/calc(100% - 24px) 1px,
+    linear-gradient(var(--holo-rule),var(--holo-rule)) 1px 12px/1px calc(100% - 24px),
+    linear-gradient(var(--holo-rule),var(--holo-rule)) calc(100% - 1px) 12px/1px calc(100% - 24px);
+  background-repeat:no-repeat;
+}
+.creation-dock.composer-glass.is-creating::after {
+  content:"";position:absolute;top:-9px;left:14px;right:14px;height:12px;pointer-events:none;
+  background:linear-gradient(var(--holo-pixel),var(--holo-pixel)) 0 0/88px 2px,
+    linear-gradient(105deg,rgb(var(--holo-rgb) / 12%),transparent) 0 2px/44% 10px;
+  background-repeat:no-repeat;
+}
+.canvas-tactical .canvas-creation-mode-frame {
+  --creation-mode-line:rgb(var(--holo-rgb) / 42%);
+  --creation-mode-stripe:rgb(var(--holo-rgb) / 55%);
+  box-shadow:inset 0 0 0 1px var(--creation-mode-line);
+  background:linear-gradient(rgb(var(--holo-rgb) / 6%),transparent) 0 0/100% 20px,
+    linear-gradient(0deg,rgb(var(--holo-rgb) / 6%),transparent) 0 100%/100% 20px;
+  background-repeat:no-repeat;
+}
+/* Narrow warning lanes stay at the canvas edge, away from cards and controls. */
+.canvas-tactical .canvas-creation-mode-frame::before {
+  content:"";position:absolute;inset:3px;pointer-events:none;
+  background:repeating-linear-gradient(135deg,var(--creation-mode-stripe) 0 2px,transparent 2px 6px) 0 0/clamp(72px,14%,180px) 6px,
+    repeating-linear-gradient(135deg,var(--creation-mode-stripe) 0 2px,transparent 2px 6px) 100% 0/clamp(72px,14%,180px) 6px,
+    repeating-linear-gradient(135deg,var(--creation-mode-stripe) 0 2px,transparent 2px 6px) 0 100%/clamp(72px,14%,180px) 6px,
+    repeating-linear-gradient(135deg,var(--creation-mode-stripe) 0 2px,transparent 2px 6px) 100% 100%/clamp(72px,14%,180px) 6px;
+  background-repeat:no-repeat;
+}
+.canvas-tactical .canvas-creation-mode-frame::after {
+  content:"";position:absolute;inset:0;pointer-events:none;
+  background:linear-gradient(var(--holo-pixel),var(--holo-pixel)) 0 0/3px 3px,
+    linear-gradient(var(--holo-pixel),var(--holo-pixel)) 100% 0/3px 3px,
+    linear-gradient(var(--holo-pixel),var(--holo-pixel)) 0 100%/3px 3px,
+    linear-gradient(var(--holo-pixel),var(--holo-pixel)) 100% 100%/3px 3px,
+    linear-gradient(var(--holo-pixel),var(--holo-pixel)) 0 50%/1px 52px,
+    linear-gradient(var(--holo-pixel),var(--holo-pixel)) 100% 50%/1px 52px;
+  background-repeat:no-repeat;
+}
+.canvas-workspace.canvas-tactical:has(.canvas-creation-mode-frame):has(.creation-editor:focus-within)>.canvas-source-panel::after {
+  box-shadow:none;
+  background:linear-gradient(var(--cs-muted),var(--cs-muted)) 12px 0/48px 1px,
+    linear-gradient(var(--cs-muted),var(--cs-muted)) calc(100% - 12px) 100%/48px 1px;
+  background-repeat:no-repeat;
+}
+.canvas-tactical .creation-mode-notch.canvas-creation-mode-notch {
+  display:flex;align-items:center;gap:7px;padding:5px 12px 6px;border-radius:0;
+  background:var(--cs-selected);color:var(--cs-selected-ink);box-shadow:none;
+  clip-path:polygon(0 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%);
+  font-size:10px;font-weight:500;letter-spacing:1px;text-indent:0;
+}
+.canvas-tactical .creation-mode-notch.canvas-creation-mode-notch::before { content:"";width:3px;height:3px;flex-shrink:0;background:var(--holo-pixel);box-shadow:var(--holo-glow); }
+.composer-glass .composer-mode-picker {
+  border:1px solid transparent;border-radius:0;background:transparent;
+  box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;
+}
+.composer-glass .composer-mode-picker::before,.composer-glass .composer-mode-picker::after { display:none; }
+.composer-glass .composer-mode-picker>button { border-radius:0; }
+.composer-glass .composer-mode-thumb { border-radius:0;background:var(--holo-selection);box-shadow:none; }
+.composer-glass .composer-mode-picker>button[aria-pressed="true"],
+.composer-glass .composer-mode-picker>button[aria-pressed="true"] svg { color:var(--holo-ink); }
+.composer-glass .composer-mode-picker>button[aria-pressed="true"]::after {
+  content:"";position:absolute;right:4px;bottom:4px;width:2px;height:2px;background:var(--holo-pixel);box-shadow:var(--holo-glow);pointer-events:none;
+}
+.composer-glass :is(.composer-collapse.creation-exit-tab,.composer-add-material,.composer-description-actions .composer-expand,.composer-chat-history,.composer-profile button) { border-radius:0; }
+.composer-glass .composer-description-heading { letter-spacing:.04em; }
+.composer-glass .composer-description-heading>span:first-child { display:flex;align-items:center;gap:7px; }
+.composer-glass .composer-description-heading>span:first-child::before { content:"";width:3px;height:3px;background:var(--bb-muted); }
+.composer-glass .composer-toolbar { border-top-color:transparent;background:transparent;border-radius:0; }
+.composer-glass .composer-chat-history { border-color:transparent;background:transparent; }
+.composer-glass :is(.composer-chat-history,.composer-add-material,.composer-description-actions .composer-expand,.composer-collapse.creation-exit-tab):hover { background:var(--holo-hover);color:var(--holo-ink); }
+.composer-glass .composer-parameters :is(button[aria-haspopup],:is(select, .tactical-select-trigger),input[type="number"]) {
+  border-color:transparent;border-radius:0;background:transparent;box-shadow:none;
+  backdrop-filter:none;-webkit-backdrop-filter:none;
+}
+.composer-glass .composer-parameters .model-select .model-select-trigger {
+  border-color:transparent;border-radius:0;box-shadow:none;
+  background:linear-gradient(105deg,color-mix(in srgb,var(--model-source-color,var(--bb-muted)) 12%,transparent),transparent);
+  color:var(--model-source-color,var(--bb-muted));
+}
+.composer-glass .composer-parameters .model-select .model-select-trigger:is(:hover,[aria-expanded="true"]) {
+  background:linear-gradient(105deg,color-mix(in srgb,var(--model-source-color,var(--bb-muted)) 20%,transparent),transparent);
+}
+.composer-glass .model-select-trigger>svg { color:inherit; }
+.composer-glass .model-select-name { font-weight:600; }
+.composer-glass .model-source-badge { border-radius:2px; }
+.composer-glass :is(.composer-chat-provider,.composer-chat-provider>span) { border-radius:0; }
+.composer-glass .composer-chat-provider { border-color:transparent;background:transparent; }
+.composer-glass .composer-environment.is-ready>span:only-child { border-radius:0; }
+.composer-glass .generation-send-button { border-radius:0; }
+.composer-glass .generation-send-button:not(:disabled) {
+  border-color:transparent;background:var(--holo-primary);color:var(--holo-on-primary);box-shadow:none;
+}
+.composer-glass .generation-send-button:hover:not(:disabled) { filter:none;background:var(--holo-primary);transform:none; }
+.composer-glass .generation-send-button:active:not(:disabled) { transform:none;box-shadow:none; }
+.composer-glass .generation-send-button::before,.composer-glass .generation-send-button::after { display:none; }
+.composer-glass .composer-send [role="tooltip"] {
+  border:1px solid var(--bb-line);border-radius:5px;background:var(--bb-surface-modal);color:var(--bb-ink-soft);
+  box-shadow:0 6px 18px rgb(var(--bb-shadow-rgb) / 12%);font-size:11px;line-height:1.7;
+}
+.composer-agent-menu .generation-mode-button { border-radius:0; }
+.composer-glass .generation-mode-button { border-color:transparent;background:var(--holo-selection);color:var(--holo-ink); }
+.composer-glass .generation-mode-button.is-off { background:transparent;color:var(--bb-muted); }
+.composer-glass .generation-mode-button .generation-button-content>span { border-radius:0; }
+.composer-glass .composer-profile label { border-color:transparent; }
+.composer-glass .composer-profile button { border-color:transparent;background:transparent; }
+.composer-local-frames { border-radius:8px;background:var(--bb-surface); }
+.composer-glass :is(button,:is(select, .tactical-select-trigger),input):focus-visible { outline:1px dashed var(--holo-ink);outline-offset:3px; }
+.composer-glass .model-select-trigger:focus-visible { outline-color:var(--model-source-color,var(--bb-muted)); }
+
+/* Model menus are shared portals. Keep provider source colors and keyboard selection explicit. */
+.model-select .model-select-trigger {
+  border-color:transparent;border-radius:0;box-shadow:none;
+  background:linear-gradient(105deg,color-mix(in srgb,var(--model-source-color,var(--bb-muted)) 12%,transparent),transparent);
+  color:var(--model-source-color,var(--bb-muted));
+}
+.model-select .model-select-trigger:is(:hover,[aria-expanded="true"]) { background:linear-gradient(105deg,color-mix(in srgb,var(--model-source-color,var(--bb-muted)) 20%,transparent),transparent); }
+.model-select .model-select-trigger>svg { color:inherit; }
+.model-select .model-source-badge { border-radius:2px; }
+.model-select .model-select-trigger:focus-visible { outline:1px dashed var(--model-source-color,var(--bb-muted));outline-offset:2px; }
+html .app-popover.model-select-menu { border:1px solid var(--bb-line);border-radius:0;background:var(--bb-surface);box-shadow:0 12px 32px var(--bb-shadow-popover); }
+.model-select-menu :is(.model-select-row,.model-select-local,.model-select-default) { border-radius:0; }
+.model-select-menu .model-select-column-heading { border-bottom-color:transparent; }
+.model-select-menu .model-select-column-title { font-size:12px; }
+.model-select-menu .model-select-balance { font-family:ui-monospace,Consolas,monospace; }
+.model-select-menu .model-select-row:has(.model-select-option[aria-pressed="true"]),
+.model-select-menu .model-select-local[aria-pressed="true"] { background:linear-gradient(105deg,color-mix(in srgb,var(--model-source-color,var(--bb-muted)) 18%,transparent),transparent); }
+.model-select-menu :is(.model-select-option,.model-select-local)[aria-pressed="true"] { color:var(--model-source-color,var(--bb-ink));font-weight:600; }
+.model-select-menu button:focus-visible { outline:1px dashed var(--model-source-color,var(--bb-muted));outline-offset:-3px; }
+
+/* Inspectors, generation history and conversation remain separate, softly bounded layers. */
+.canvas-tactical .project-inspector-shell:not(.is-editing) { background:var(--cs-card);border-color:var(--cs-rule);border-radius:10px;backdrop-filter:none; }
+.canvas-tactical .project-inspector-header { background:transparent;border-bottom-color:transparent; }
+.generation-session-surface,.cloud-agent-panel { background:var(--bb-surface); }
+:is(.generation-session-surface,.cloud-agent-panel)>.gen-view-in>.hatch-divider { display:none; }
+:is(.generation-session-surface,.cloud-agent-panel) .border-edge { border-color:transparent; }
+:is(.generation-session-surface,.cloud-agent-panel) :is(.rounded-lg,.rounded-md) { border-radius:4px; }
+:is(.generation-session-surface,.cloud-agent-panel) .rounded-full { border-radius:2px; }
+:is(.generation-session-surface,.cloud-agent-panel) .text-lime { color:var(--bb-success); }
+:is(.generation-session-surface,.cloud-agent-panel) .hover\:text-accent:hover { color:var(--bb-ink-soft); }
+:is(.generation-session-surface,.cloud-agent-panel) .bg-lime { background:var(--bb-success); }
+:is(.generation-session-surface,.cloud-agent-panel) :is(.bg-lime\/10,.bg-accent\/20) { background:transparent;color:var(--bb-ink-soft); }
+:is(.generation-session-surface,.cloud-agent-panel) :is(.bg-black\/15,.bg-black\/20,.bg-black\/25,.bg-black\/30,.bg-white\/6) { background:var(--holo-field); }
+:is(.generation-session-surface,.cloud-agent-panel) .bg-accent { background:var(--holo-primary);color:var(--holo-on-primary); }
+.cloud-agent-panel .bg-lime\/90 { background:var(--holo-primary);color:var(--holo-on-primary); }
+.cloud-agent-panel .ring-white\/8 { box-shadow:none; }
+.cloud-agent-plan>div:first-child { background:transparent;border-radius:0; }
+.cloud-agent-event>span:first-child { border-radius:0;border-color:transparent;background:transparent;color:var(--bb-success); }
+.cloud-agent-event>div:last-child { border-color:transparent;background:transparent; }
+.local-agent-panel :is(.border-edge,.border-accent\/35) { border-color:transparent; }
+.local-agent-panel :is(.rounded-lg,.rounded-full) { border-radius:3px; }
+.local-agent-panel .bg-accent { background:var(--holo-primary);color:var(--holo-on-primary); }
+.local-agent-panel .bg-accent\/5 { background:transparent; }
+.local-agent-panel .text-accent { color:var(--bb-ink-soft); }
+.session-dock { border-color:var(--bb-line);border-radius:0;background:var(--bb-surface);box-shadow:0 -8px 26px rgb(var(--bb-shadow-rgb) / 10%);backdrop-filter:none; }
+:is(.session-dock,[data-generation-composer="inline"]) .generation-input { border-color:transparent;border-radius:0;background:var(--holo-field);box-shadow:none; }
+:is(.session-dock,[data-generation-composer="inline"]) .generation-input:focus-within { outline:1px dashed var(--holo-ink);outline-offset:2px;box-shadow:none; }
+:is(.session-dock,[data-generation-composer="inline"]) .generation-send-button:not(:disabled) { border-radius:0;border-color:transparent;background:var(--holo-primary);color:var(--holo-on-primary);box-shadow:none; }
+:is(.session-dock,[data-generation-composer="inline"]) .generation-toolbar :is(button[aria-haspopup],:is(select, .tactical-select-trigger)) { border-color:transparent;border-radius:0;background:transparent;box-shadow:none; }
+:is(.session-dock,[data-generation-composer="inline"]) .model-select-trigger { color:var(--model-source-color,var(--bb-ink)); }
+
+/* Chat cards stay opaque; the cut belongs to their surface rather than the interactive root. */
+.canvas-tactical .canvas-chat-node {
+  isolation:isolate;overflow:visible;border-color:transparent;border-radius:0;background:transparent;box-shadow:none;
+}
+.canvas-tactical .canvas-chat-node::before {
+  content:"";position:absolute;inset:-1px;z-index:-1;pointer-events:none;
+  background:linear-gradient(var(--cs-rule),var(--cs-rule)) 18px 0/32px 1px no-repeat,
+    linear-gradient(var(--cs-rule),var(--cs-rule)) calc(100% - 18px) 100%/48px 1px no-repeat,var(--cs-card);
+  clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,0 100%);
+}
+.canvas-tactical .canvas-chat-node:is(.is-selected,.is-focused,:focus-visible) { border-color:transparent;outline:1px dashed var(--holo-ink);outline-offset:3px;box-shadow:none; }
+.canvas-tactical .local-chat-card-heading>span { color:var(--holo-ink); }
+.canvas-tactical .local-chat-card-heading svg { stroke-width:1.5; }
+.canvas-tactical .local-chat-card-title { font-weight:500; }
+.canvas-tactical .local-chat-card-heading small { font:9px ui-monospace,Consolas,monospace;letter-spacing:.3px; }
+.canvas-tactical .canvas-chat-history { border-color:var(--cs-rule);border-radius:8px;background:var(--cs-card);box-shadow:var(--cs-lift); }
+.local-chat-heading-icon { border-radius:0;color:var(--holo-ink);background:transparent; }
+.local-chat-message.is-user { border-color:transparent;border-radius:0;background:var(--holo-field); }
+.local-chat-message.is-assistant .local-chat-message-label strong { color:var(--bb-ink-soft); }
+.local-chat-message-label time { font-family:ui-monospace,Consolas,monospace;font-size:9px; }
+.local-chat-text pre { border-color:transparent;border-radius:0;background:var(--holo-field); }
+.local-chat-text p code { border-radius:2px; }
+.local-chat-tool,.local-chat-card-action { border-color:transparent;border-top-color:var(--bb-line);border-radius:0;background:transparent; }
+.local-chat-tool summary>svg { stroke-width:1.5; }
+.local-chat-card-action-buttons button { border-color:transparent;border-radius:0;background:var(--holo-selection);color:var(--holo-ink); }
+.local-chat-card-action-buttons button:hover { color:var(--holo-ink);border-color:transparent;background:var(--holo-primary); }
+.local-chat-reply-area { border-top-color:transparent;background:var(--bb-surface); }
+.local-chat-reply-box { border-color:transparent;border-radius:0;background:var(--holo-field); }
+.local-chat-reply-box:focus-within { border-color:transparent;outline:1px dashed var(--holo-ink);outline-offset:2px; }
+.local-chat-provider { border-color:transparent;border-radius:0;background:transparent; }
+.local-chat-provider-avatar { border-radius:2px; }
+.local-chat-status-dot { border-radius:0; }
+.local-chat-add-image { border-color:transparent;border-radius:0;background:transparent; }
+.local-chat-add-image:hover { border-color:transparent;color:var(--holo-ink);background:var(--holo-hover); }
+.local-chat-send { border-radius:0;background:var(--holo-primary);color:var(--holo-on-primary); }
+.local-chat-send.is-stop { background:var(--holo-selection);color:var(--holo-ink); }
+.local-chat-reference>button:first-child,.local-chat-reference-remove { border-color:transparent;border-radius:2px; }
+.local-chat-reference-remove:focus-visible { outline-offset:1px; }
+.local-chat-latest { border-color:var(--bb-line);border-radius:4px;color:var(--bb-ink-soft); }
+.local-chat-search { border-color:transparent;border-radius:0;background:var(--holo-field); }
+.local-chat-search:focus-within { border-color:transparent;outline:1px dashed var(--holo-ink);outline-offset:2px; }
+.local-chat-history-entry { position:relative;border-color:transparent;border-radius:0;background:transparent; }
+.local-chat-history-entry:hover { border-color:transparent;background:var(--holo-hover); }
+.local-chat-history-entry[aria-current="true"] { border-color:transparent;background:var(--holo-selection); }
+.local-chat-history-entry[aria-current="true"]::after { content:"";position:absolute;right:5px;bottom:5px;width:3px;height:3px;background:var(--holo-pixel);box-shadow:var(--holo-glow);pointer-events:none; }
+.local-chat-history-entry-title svg { color:var(--bb-muted); }
+:is(.local-chat-panel,.local-chat-history) button:focus-visible { outline:1px dashed var(--holo-ink);outline-offset:3px; }
+
+/* Timeline rows use compact square records, with open separators and explicit focus. */
+.canvas-tactical .creative-timeline-layout { background:var(--cs-base); }
+.canvas-tactical .creative-timeline-list li { position:relative;border-color:transparent;border-radius:2px;background:var(--cs-card); }
+.canvas-tactical .creative-timeline-list li.is-selected { border-color:transparent;box-shadow:none;outline:1px dashed var(--holo-ink);outline-offset:2px; }
+.canvas-tactical .creative-timeline-list li.is-selected::after { content:"";position:absolute;right:4px;bottom:4px;width:3px;height:3px;background:var(--holo-pixel);box-shadow:var(--holo-glow);pointer-events:none; }
+.canvas-tactical .creative-timeline-list li strong { font-weight:500; }
+.canvas-tactical .creative-timeline-list li small { font-family:ui-monospace,Consolas,monospace; }
+.canvas-tactical .creative-timeline-locate { border-radius:2px;color:var(--cs-muted); }
+.canvas-tactical .creative-timeline-locate:hover { background:var(--holo-hover);color:var(--holo-ink); }
+.canvas-tactical .creative-timeline-agent-events { border-left-color:var(--cs-rule); }
+.canvas-tactical .creative-timeline-agent-events span { color:var(--cs-ink); }
+.canvas-tactical .creative-inspector { background:var(--cs-console);border-left-color:transparent; }
+.canvas-tactical .creative-inspector-heading { color:var(--cs-muted);font-family:ui-monospace,Consolas,monospace;letter-spacing:.5px; }
+.canvas-tactical .creative-inspector-relations { border-top-style:dashed;border-top-color:var(--cs-rule); }
+.canvas-tactical .creative-inspector-relations b { color:var(--cs-ink-soft,var(--cs-ink)); }
+.workflow-agent-input { border-color:transparent;border-radius:0;background:var(--holo-field); }
+.workflow-agent-events { border-left-width:1px;border-left-style:dashed; }
+.workflow-agent-events li { position:relative; }
+.workflow-agent-events li::before { content:"";position:absolute;left:-15px;top:7px;width:4px;height:4px;background:var(--bb-muted);pointer-events:none; }
+.workflow-agent-detail :is(:is(select, .tactical-select-trigger),.workflow-agent-session) { border-color:transparent;border-radius:0;background:transparent; }
+.workflow-agent-detail .workflow-agent-session:hover { color:var(--holo-ink);background:var(--holo-hover); }
+.workflow-agent-detail-images img { border-radius:2px; }
+
+.canvas-tactical .canvas-text-stylebar { border-color:var(--cs-rule);border-radius:5px;background:var(--cs-card);box-shadow:var(--cs-shadow); }
+.canvas-tactical .canvas-text-stylebar button { position:relative;border-radius:0; }
+.canvas-tactical .canvas-text-stylebar button:hover { color:var(--holo-ink);background:var(--holo-hover); }
+.canvas-tactical .canvas-text-stylebar button[aria-pressed="true"] { color:var(--cs-selected-ink);background:var(--cs-selected); }
+.canvas-tactical .canvas-text-stylebar button[aria-pressed="true"]::after { content:"";position:absolute;right:3px;bottom:3px;width:2px;height:2px;background:var(--holo-pixel);box-shadow:var(--holo-glow);pointer-events:none; }
+.canvas-tactical .canvas-text-stylebar button:focus-visible { outline:1px dashed var(--holo-ink);outline-offset:2px; }
+.canvas-tactical .canvas-cell-generation { border-radius:3px;background:var(--cs-card); }
+.canvas-tactical .canvas-cell-generation:not(.is-failed) { border-color:transparent; }
+.canvas-tactical .canvas-cell-generation>span { color:var(--cs-ink-soft,var(--cs-muted)); }
+.canvas-tactical .canvas-cell-generation:focus-visible { outline:1px dashed var(--cs-muted);outline-offset:2px; }
+
+/* Fixed menus and template dialogs are named explicitly because React portals leave the canvas. */
+.workflow-caption-preview,.workflow-reference-menu,.workflow-progress { border-color:var(--bb-line);border-radius:6px;background:var(--bb-surface);box-shadow:0 10px 28px rgb(var(--bb-shadow-rgb) / 14%); }
+.workflow-caption-preview>strong,.workflow-reference-menu>strong,.workflow-progress>strong { font-size:11px;letter-spacing:.04em; }
+.workflow-reference-menu button { border-radius:0; }
+.workflow-reference-menu button:hover { background:var(--holo-hover);color:var(--holo-ink); }
+.workflow-reference-menu button:focus-visible { outline:1px dashed var(--holo-ink);outline-offset:-2px; }
+.workflow-progress li.is-current::before { content:"";display:inline-block;width:3px;height:3px;margin:0 6px 2px 0;background:currentColor; }
+.workflow-diagnostic { border-color:color-mix(in srgb,var(--bb-danger-strong) 40%,var(--bb-line));border-radius:8px;background:var(--bb-surface);box-shadow:0 10px 28px rgb(var(--bb-shadow-rgb) / 14%); }
+.workflow-diagnostic header>strong { color:var(--bb-danger-strong); }
+.workflow-diagnostic button { border-radius:3px; }
+.workflow-diagnostic button:focus-visible { outline:1px dashed var(--bb-danger-strong);outline-offset:2px; }
+.workflow-generation-history-popover { border-color:var(--bb-line);border-radius:8px;background:var(--bb-surface);box-shadow:0 10px 28px rgb(var(--bb-shadow-rgb) / 14%); }
+.workflow-generation-history-popover>strong { font-size:11px;letter-spacing:.04em; }
+.workflow-generation-history-popover li+li { border-top-color:var(--bb-line-soft); }
+.workflow-generation-history-popover li button,.workflow-history-thumbnail { border-radius:0; }
+.workflow-generation-history-popover li button:is(:hover,:focus-visible) { background:var(--holo-hover);color:var(--holo-ink); }
+.workflow-history-image-count { border-radius:1px;font-family:ui-monospace,Consolas,monospace; }
+.workflow-loop-menu>button { border-radius:0; }
+.workflow-loop-menu>button[aria-selected="true"] { position:relative;background:var(--holo-selection);color:var(--holo-ink); }
+.workflow-loop-menu>button[aria-selected="true"]::after { content:"";width:3px;height:3px;flex-shrink:0;background:var(--holo-pixel);box-shadow:var(--holo-glow); }
+.workflow-loop-thumbs img { border-color:transparent;border-radius:2px; }
+.workflow-template-library { color:var(--bb-ink); }
+.workflow-template-columns aside { border-color:var(--bb-line); }
+.workflow-template-library :is(input:not([type="checkbox"]):not([type="file"]),textarea,:is(select, .tactical-select-trigger)) { border-color:transparent;border-radius:0;background:var(--holo-field);color:var(--bb-ink); }
+.workflow-template-library button,.workflow-template-import { border-color:transparent;border-radius:0;background:transparent; }
+.workflow-template-library button[aria-pressed="true"] { position:relative;border-color:transparent;background:var(--holo-selection);color:var(--holo-ink); }
+.workflow-template-library button[aria-pressed="true"]::after { content:"";position:absolute;right:4px;bottom:4px;width:2px;height:2px;background:var(--holo-pixel);box-shadow:var(--holo-glow);pointer-events:none; }
+.workflow-template-library :is(button,input,textarea,:is(select, .tactical-select-trigger),summary):focus-visible { outline:1px dashed var(--holo-ink);outline-offset:3px; }
+.workflow-template-preview { border-color:var(--bb-line);border-radius:5px; }
+.workflow-template-preview-tools { background:var(--bb-surface);border-bottom-color:transparent; }
+.workflow-template-preview-viewport {
+  background-color:var(--bb-surface-2);
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='48' height='48'%3E%3Cpath d='M21 24h6m-3-3v6' stroke='%23777b82' stroke-opacity='.25' stroke-width='.7'/%3E%3C/svg%3E");background-size:48px 48px;
+}
+.workflow-template-preview-world article { border-color:transparent;border-radius:2px;background:var(--bb-surface);box-shadow:none; }
+.workflow-template-preview-world article.is-enclosed { border-color:transparent;box-shadow:none;outline:1px dashed var(--bb-muted);outline-offset:2px; }
+.workflow-template-preview-world header { border-bottom-color:transparent;background:transparent; }
+.workflow-template-preview-content img { border-radius:2px; }
+
+/* Frequent assets keeps its dedicated image selection and horizontal scrolling geometry. */
+.canvas-tactical .canvas-frequent-assets { border-top-color:transparent;border-radius:0;background:var(--cs-console); }
+.canvas-tactical :is(.canvas-frequent-heading,.canvas-frequent-label) button { border-radius:0; }
+.canvas-tactical .canvas-frequent-scope { border-color:transparent;border-radius:0;background:transparent; }
+.canvas-tactical .canvas-frequent-scope button[aria-pressed="true"] { color:var(--cs-selected-ink);background:var(--cs-selected); }
+.canvas-tactical :is(.canvas-frequent-retrieve,.canvas-frequent-label button) { color:var(--cs-ink); }
+.canvas-tactical .canvas-frequent-label button[aria-pressed="true"] { color:var(--cs-selected-ink);background:var(--cs-selected);box-shadow:none; }
+.canvas-tactical .canvas-frequent-assets button:not(:disabled):hover { background:var(--holo-hover);color:var(--holo-ink); }
+.canvas-tactical .canvas-frequent-assets button[aria-pressed="true"]:hover { background:var(--holo-selection); }
+.canvas-tactical .canvas-frequent-row+.canvas-frequent-row { border-top-style:dashed;border-top-color:var(--cs-rule); }
+.canvas-tactical .canvas-frequent-threshold input { border-color:transparent;border-radius:0;background:var(--holo-field);font-family:ui-monospace,Consolas,monospace; }
+.canvas-tactical .canvas-frequent-card .folder-media-card { border-radius:2px; }
+.canvas-tactical .canvas-frequent-remove { border-color:transparent;border-radius:2px; }
+.canvas-tactical .canvas-frequent-count { border-radius:1px;font-family:ui-monospace,Consolas,monospace; }
+.canvas-tactical .canvas-frequent-assets.is-picking { box-shadow:none;outline:1px dashed var(--cs-muted);outline-offset:-3px; }
+.canvas-tactical .canvas-frequent-pick-banner { border-color:var(--cs-rule);border-radius:5px;background:var(--cs-card); }
+.canvas-tactical .canvas-frequent-pick-banner strong { color:var(--cs-ink); }
+.canvas-tactical .canvas-frequent-pick-banner button { border-radius:2px;color:var(--cs-selected-ink);background:var(--cs-selected); }
+.canvas-tactical :is(.canvas-frequent-assets button,.canvas-frequent-threshold input,.canvas-frequent-scroll,.canvas-frequent-pick-banner button):focus-visible { outline:1px dashed var(--cs-muted);outline-offset:2px; }
+
+@media (prefers-reduced-motion:no-preference) {
+  .composer-glass :is(.composer-mode-picker>button,.composer-add-material,.composer-chat-history,.composer-collapse,.composer-description-actions .composer-expand,.generation-send-button):hover:not(:disabled),
+  .model-select .model-select-trigger:hover,.model-select-menu :is(.model-select-option,.model-select-local):hover:not(:disabled),
+  .local-chat-history-entry:hover,.local-chat-card-action-buttons button:hover:not(:disabled),
+  .workflow-generation-history-popover li button:hover,.workflow-template-library button:hover:not(:disabled),.workflow-reference-menu button:hover:not(:disabled),
+  .canvas-tactical .canvas-text-stylebar button:hover,
+  .canvas-tactical .creative-timeline-locate:hover,.canvas-tactical .canvas-frequent-heading button:hover:not(:disabled) { animation:canvas-tactical-contact 160ms steps(1,end); }
+}
+@media (forced-colors:active) {
+  .composer-glass .composer-mode-thumb,.composer-glass .generation-send-button:not(:disabled),.local-chat-send,
+  .workflow-template-library button[aria-pressed="true"] { background:Highlight;color:HighlightText;forced-color-adjust:none; }
+  .canvas-tactical .canvas-chat-node,.local-chat-history-entry,.local-chat-reply-box,
+  .workflow-template-library :is(input,textarea,:is(select, .tactical-select-trigger),button) { border-color:ButtonText; }
+  html .app-popover.model-select-menu,.model-select .model-select-trigger,
+  .composer-glass .composer-parameters .model-select .model-select-trigger { background:Canvas;color:CanvasText;border-color:ButtonText;box-shadow:none; }
+  .model-select-menu :is(.model-select-option,.model-select-local)[aria-pressed="true"] { color:CanvasText;outline:1px solid Highlight; }
+  .canvas-tactical .creation-mode-notch.canvas-creation-mode-notch { background:Highlight;color:HighlightText;forced-color-adjust:none; }
+  .creation-dock.composer-glass.is-creating { outline:1px solid Highlight;outline-offset:3px; }
+  .canvas-tactical .canvas-creation-mode-frame { outline:1px solid Highlight;outline-offset:-1px; }
+  .creation-dock.composer-glass.is-creating::before,.creation-dock.composer-glass.is-creating::after,
+  .canvas-tactical .canvas-creation-mode-frame::before,.canvas-tactical .canvas-creation-mode-frame::after { display:none; }
+}

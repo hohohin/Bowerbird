@@ -581,6 +581,7 @@ pub fn run() {
             commands::material_catalog::set_collection_members,
             commands::library::get_assets_by_ids,
             commands::video_poster::video_poster,
+            commands::canvas_image_preview::canvas_image_preview,
             commands::video_trim::trim_video,
             commands::comfy_video::comfy_video,
             commands::comfy_video::comfy_video_check,

@@ -144,6 +144,8 @@ incremental = true
 # Keep application code debuggable while optimizing the capture hot path.
 [profile.dev.package.image]
 opt-level = 3
+[profile.dev.package.fast_image_resize]
+opt-level = 3
 [profile.dev.package.heic-rs]
 opt-level = 3
 [profile.dev.package.png]

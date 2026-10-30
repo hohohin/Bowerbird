@@ -1,0 +1,93 @@
+{
+  "mode": "before",
+  "measuredAt": "2026-10-30T01:11:06.771Z",
+  "environment": "Chrome headless; Vite development; synthetic IPC and compressed PNG fixtures; 1800x1200 DPR1",
+  "limitations": "Decoded pixels count unique loaded img sources; this is a memory proxy, not process/GPU memory. Frame intervals include headless scheduling and development overhead; compare trends only, not native WebView2 FPS.",
+  "canvasWorkspaceSha256": "50122d2ad28e7afec6009ade877f4b136d401727ac1e4771f6c7785951523359",
+  "records": [
+    {
+      "scenario": "images",
+      "samples": [
+        {
+          "kind": "pan",
+          "p95Ms": 33.5,
+          "maxMs": 33.600000000000364,
+          "samples": 65
+        },
+        {
+          "kind": "zoom",
+          "p95Ms": 67,
+          "maxMs": 83.30000000000018,
+          "samples": 65
+        }
+      ],
+      "mountedNodes": 330,
+      "loadedMediaElements": 30,
+      "uniqueLoadedMediaSources": 30,
+      "decodedPixelProxy": 251658240,
+      "posterRequests": 0,
+      "offscreenPosterRequests": 0,
+      "previewRequests": 0,
+      "previewSizes": [],
+      "edgeCount": 9,
+      "offscreenCardPresent": true,
+      "imageHttpRequests": 30
+    },
+    {
+      "scenario": "videos",
+      "samples": [
+        {
+          "kind": "pan",
+          "p95Ms": 33.59999999999991,
+          "maxMs": 33.70000000000027,
+          "samples": 65
+        },
+        {
+          "kind": "zoom",
+          "p95Ms": 83.39999999999964,
+          "maxMs": 83.5,
+          "samples": 65
+        }
+      ],
+      "mountedNodes": 330,
+      "loadedMediaElements": 330,
+      "uniqueLoadedMediaSources": 330,
+      "decodedPixelProxy": 43253760,
+      "posterRequests": 330,
+      "offscreenPosterRequests": 300,
+      "previewRequests": 0,
+      "previewSizes": [],
+      "edgeCount": 9,
+      "offscreenCardPresent": true,
+      "imageHttpRequests": 330
+    },
+    {
+      "scenario": "mixed",
+      "samples": [
+        {
+          "kind": "pan",
+          "p95Ms": 33.600000000000364,
+          "maxMs": 33.69999999999982,
+          "samples": 65
+        },
+        {
+          "kind": "zoom",
+          "p95Ms": 100,
+          "maxMs": 133.30000000000018,
+          "samples": 65
+        }
+      ],
+      "mountedNodes": 330,
+      "loadedMediaElements": 180,
+      "uniqueLoadedMediaSources": 180,
+      "decodedPixelProxy": 147456000,
+      "posterRequests": 165,
+      "offscreenPosterRequests": 150,
+      "previewRequests": 0,
+      "previewSizes": [],
+      "edgeCount": 9,
+      "offscreenCardPresent": true,
+      "imageHttpRequests": 180
+    }
+  ]
+}

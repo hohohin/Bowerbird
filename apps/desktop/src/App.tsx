@@ -59,6 +59,9 @@ import "./components/CanvasSecondaryTactical.css";
 import "./components/MediaTactical.css";
 import "./components/ManagementTactical.css";
 import "./components/TacticalMenus.css";
+import "./components/IndustrialTheme.css";
+import "./components/IndustrialCanvas.css";
+import "./components/IndustrialMenus.css";
 
 let refreshVersion = 0;
 

@@ -1,0 +1,45 @@
+.canvas-frequent-assets { flex:0 0 auto; min-width:0; padding:6px 10px; border-top:1px solid var(--bb-line); color:var(--bb-ink); background:var(--bb-surface); border-radius:0 0 14px 0; }
+.canvas-frequent-heading { display:flex; align-items:center; gap:8px; font-size:12px; }
+.canvas-frequent-heading button,.canvas-frequent-label button { display:inline-flex; align-items:center; justify-content:center; gap:4px; min-height:26px; border-radius:5px; padding:3px 5px; font-size:11px; white-space:nowrap; }
+.canvas-frequent-heading strong { font-weight:600; }
+.canvas-frequent-heading .canvas-frequent-toggle { color:var(--bb-ink); padding-left:0; }
+.canvas-frequent-heading .canvas-frequent-retrieve { margin-left:auto; color:var(--bb-blue); }
+.canvas-frequent-scope { display:flex; align-items:center; padding:2px; border:1px solid var(--bb-line); border-radius:7px; }
+.canvas-frequent-scope button { min-height:22px; padding:2px 6px; color:var(--bb-muted); }
+.canvas-frequent-scope button[aria-pressed=true] { color:var(--bb-blue); background:var(--bb-selection-bg); }
+.canvas-frequent-assets button:disabled { opacity:.5; cursor:default; }
+.canvas-frequent-assets button:not(:disabled):hover { background:var(--bb-selection-bg); }
+.canvas-frequent-row { display:flex; align-items:center; gap:10px; min-width:0; }
+.canvas-frequent-row + .canvas-frequent-row { border-top:1px solid color-mix(in srgb,var(--bb-line) 65%,transparent); }
+.canvas-frequent-label { display:flex; flex:0 0 76px; flex-direction:column; align-items:flex-start; gap:4px; font-size:12px; }
+.canvas-frequent-threshold { display:flex; align-items:center; gap:3px; color:var(--bb-muted); font-size:10px; white-space:nowrap; }
+.canvas-frequent-threshold input { width:40px; min-width:0; height:24px; padding:1px 2px; border:1px solid var(--bb-line); border-radius:4px; color:var(--bb-ink); background:var(--bb-surface); font-size:11px; font-variant-numeric:tabular-nums; }
+.canvas-frequent-threshold input:disabled { opacity:.5; }
+.canvas-frequent-label button { margin-left:-4px; color:var(--bb-blue); }
+.canvas-frequent-label button[aria-pressed=true] { color:var(--bb-blue); background:var(--bb-selection-bg); box-shadow:inset 0 0 0 1px var(--bb-blue); }
+.canvas-frequent-scroll { display:flex; flex:1; gap:8px; min-width:0; padding:6px 2px; overflow-x:auto; overflow-y:hidden; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--bb-line) transparent; }
+.canvas-frequent-row.is-empty { min-height:34px; }
+.canvas-frequent-row.is-empty .canvas-frequent-label { flex:0 0 auto; flex-direction:row; align-items:center; gap:10px; }
+.canvas-frequent-row.is-empty .canvas-frequent-label button { margin-left:0; }
+.canvas-frequent-card { position:relative; flex:0 0 72px; width:72px; align-self:flex-start; }
+.canvas-frequent-card .folder-media-card { position:relative; display:block; width:72px; height:64px; min-height:0; border-radius:7px; overflow:hidden; }
+.canvas-frequent-card .folder-media-preview { width:100%; height:100%; }
+.canvas-frequent-card .folder-media-kind { font-size:9px; }
+.canvas-frequent-remove { position:absolute; top:2px; right:2px; z-index:2; display:grid; place-items:center; width:24px; height:24px; border-radius:5px; color:var(--bb-ink); background:var(--bb-surface); border:1px solid var(--bb-line); opacity:0; transition:opacity 120ms; }
+.canvas-frequent-card:hover .canvas-frequent-remove,.canvas-frequent-card:focus-within .canvas-frequent-remove { opacity:1; }
+.canvas-frequent-remove:hover { color:var(--bb-blue); }
+.canvas-frequent-count { position:absolute; bottom:3px; left:3px; pointer-events:none; padding:0 4px; border-radius:3px; color:var(--bb-ink); background:var(--bb-surface); font-size:10px; line-height:16px; }
+.canvas-frequent-empty { align-self:center; margin:0; color:var(--bb-muted); font-size:11px; line-height:20px; white-space:nowrap; }
+.canvas-frequent-assets.is-picking { box-shadow:inset 3px 0 0 var(--bb-blue); }
+.canvas-frequent-assets button:focus-visible,.canvas-frequent-threshold input:focus-visible,.canvas-frequent-scroll:focus-visible,.canvas-frequent-pick-banner button:focus-visible { outline:2px solid var(--bb-blue); outline-offset:2px; }
+.canvas-frequent-error { display:flex; gap:8px; margin:4px 0; font-size:12px; color:var(--bb-ink-soft); }
+.canvas-frequent-error button { color:var(--bb-blue); }
+.canvas-frequent-pick-banner { position:absolute; z-index:48; top:64px; left:50%; transform:translateX(-50%); display:flex; align-items:center; gap:18px; max-width:calc(100% - 32px); padding:10px 14px; border:1px solid var(--bb-blue); border-radius:10px; color:var(--bb-ink); background:var(--bb-surface); box-shadow:0 5px 20px rgba(0,0,0,.12); }
+.canvas-frequent-pick-banner > div { display:flex; flex-direction:column; gap:3px; min-width:0; }
+.canvas-frequent-pick-banner strong { color:var(--bb-blue); font-size:12px; }
+.canvas-frequent-pick-banner span { font-size:11px; color:var(--bb-ink-soft); white-space:nowrap; }
+.canvas-frequent-pick-banner button { flex-shrink:0; min-height:28px; padding:4px 8px; font-size:12px; border-radius:6px; color:var(--bb-blue); background:var(--bb-selection-bg); }
+.is-picking-frequent :is(.canvas-source-panel,.canvas-stage) :is([data-asset-id],[data-frequent-asset-id]),.is-picking-frequent .canvas-source-panel [data-file-path] { cursor:copy; }
+.is-picking-frequent :is(.canvas-source-panel,.canvas-stage) :is([data-asset-id],[data-frequent-asset-id]):hover,.is-picking-frequent .canvas-source-panel [data-file-path]:hover { outline:2px solid var(--bb-blue); outline-offset:2px; }
+.is-picking-frequent .canvas-artboard-base[data-frequent-asset-id] { pointer-events:auto; }
+@media (prefers-reduced-motion:reduce) { .canvas-frequent-remove { transition:none; } }

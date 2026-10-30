@@ -23,6 +23,9 @@ import "../../../src/components/CanvasSecondaryTactical.css";
 import "../../../src/components/MediaTactical.css";
 import "../../../src/components/ManagementTactical.css";
 import "../../../src/components/TacticalMenus.css";
+import "../../../src/components/IndustrialTheme.css";
+import "../../../src/components/IndustrialCanvas.css";
+import "../../../src/components/IndustrialMenus.css";
 
 // Closed synthetic IPC fixture: never reads a library or invokes a provider.
 const w = window as any;

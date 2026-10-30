@@ -1,0 +1,140 @@
+{
+  "mode": "after",
+  "measuredAt": "2026-10-30T01:25:28.131Z",
+  "environment": "Chrome headless; Vite development; synthetic IPC and compressed PNG fixtures; 1800x1200 DPR1",
+  "limitations": "Decoded pixels count unique loaded img sources; this is a memory proxy, not process/GPU memory. Frame intervals include headless scheduling and development overhead; compare trends only, not native WebView2 FPS.",
+  "checks": [
+    "330 mounted cards",
+    "9 unchanged board-space edges",
+    "zero offscreen poster extraction",
+    "visible-after-pan media loads",
+    "offscreen image source released",
+    "hidden timeline view releases media and canvas view restores it",
+    "512/1024/2048 upgrade",
+    "DPR upgrade/downgrade with real browser resize notification (CDP)",
+    "mock alpha 0/128 preserved",
+    "original image viewer"
+  ],
+  "canvasWorkspaceSha256": "7418a8de2c3b1ffb09af5a09a80be5f27c23e245012bb75335edba2df77e001a",
+  "displayPixelRatioEvents": [
+    {
+      "resize": true,
+      "current": 2
+    },
+    {
+      "dpr": 1,
+      "matches": false,
+      "current": 2
+    },
+    {
+      "dpr": 2,
+      "matches": true,
+      "current": 2
+    },
+    {
+      "resize": true,
+      "current": 1
+    },
+    {
+      "dpr": 1,
+      "matches": true,
+      "current": 1
+    },
+    {
+      "dpr": 2,
+      "matches": false,
+      "current": 1
+    }
+  ],
+  "timelineVisibilityMode": "real view controls",
+  "records": [
+    {
+      "scenario": "images",
+      "samples": [
+        {
+          "kind": "pan",
+          "p95Ms": 17,
+          "maxMs": 33.30000000000018,
+          "samples": 65
+        },
+        {
+          "kind": "zoom",
+          "p95Ms": 66.60000000000036,
+          "maxMs": 66.80000000000018,
+          "samples": 65
+        }
+      ],
+      "mountedNodes": 330,
+      "loadedMediaElements": 30,
+      "uniqueLoadedMediaSources": 30,
+      "decodedPixelProxy": 3932160,
+      "posterRequests": 0,
+      "offscreenPosterRequests": 0,
+      "previewRequests": 30,
+      "previewSizes": [
+        512
+      ],
+      "edgeCount": 9,
+      "offscreenCardPresent": true,
+      "imageHttpRequests": 30
+    },
+    {
+      "scenario": "videos",
+      "samples": [
+        {
+          "kind": "pan",
+          "p95Ms": 33.40000000000009,
+          "maxMs": 33.59999999999991,
+          "samples": 65
+        },
+        {
+          "kind": "zoom",
+          "p95Ms": 66.69999999999982,
+          "maxMs": 66.90000000000055,
+          "samples": 65
+        }
+      ],
+      "mountedNodes": 330,
+      "loadedMediaElements": 30,
+      "uniqueLoadedMediaSources": 30,
+      "decodedPixelProxy": 3932160,
+      "posterRequests": 30,
+      "offscreenPosterRequests": 0,
+      "previewRequests": 0,
+      "previewSizes": [],
+      "edgeCount": 9,
+      "offscreenCardPresent": true,
+      "imageHttpRequests": 30
+    },
+    {
+      "scenario": "mixed",
+      "samples": [
+        {
+          "kind": "pan",
+          "p95Ms": 17,
+          "maxMs": 33.5,
+          "samples": 65
+        },
+        {
+          "kind": "zoom",
+          "p95Ms": 50.30000000000018,
+          "maxMs": 66.90000000000055,
+          "samples": 65
+        }
+      ],
+      "mountedNodes": 330,
+      "loadedMediaElements": 30,
+      "uniqueLoadedMediaSources": 30,
+      "decodedPixelProxy": 3932160,
+      "posterRequests": 15,
+      "offscreenPosterRequests": 0,
+      "previewRequests": 15,
+      "previewSizes": [
+        512
+      ],
+      "edgeCount": 9,
+      "offscreenCardPresent": true,
+      "imageHttpRequests": 30
+    }
+  ]
+}

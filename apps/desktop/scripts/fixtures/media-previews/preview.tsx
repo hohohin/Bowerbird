@@ -79,6 +79,7 @@ w.runMediaPreviewSmoke = async () => {
     check(maxActive === 1, "poster requests decoded concurrently");
     // A previous asynchronous result must not become the next video's cover.
     flushSync(() => root.render(<VideoPoster path="/never-load-stale.mp4" alt="stale" />));
+    await until(() => calls.includes("/never-load-stale.mp4"));
     flushSync(() => root.render(<VideoPoster path="/never-load-2.mp4" alt="failed" />));
     await until(() => new Set(calls).size === 7 && active === 0);
     await tick();

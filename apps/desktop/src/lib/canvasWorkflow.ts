@@ -111,6 +111,35 @@ export const WORKFLOW_SKILLS = [
   { id: "html-layout", label: "HTML 图文排版", instruction: "请读取并使用 bowerbird-html-layout-render 技能完成以下任务，交付排版截图。", image: true },
 ] as const;
 
+/** Both provider selection and older local-provider drafts use the toolbox H3 contract. */
+export function normalizeWorkflowLocalVideo(node: WorkflowNode): WorkflowNode {
+  if (node.kind !== "generation" || node.generation?.media !== "video" || !node.generation.localVideo) return node;
+  node = normalizeWorkflowInputSlots(node);
+  const images = node.inputs.image ?? [];
+  const refs = node.promptReferences ?? [];
+  const ordered: WorkflowInput[] = [];
+  for (const match of node.prompt.matchAll(/@\[([^\]]+)\]/g)) {
+    const ref = refs.find(ref => ref.id === match[1] && ref.type === "image" && ref.direction !== "output");
+    const input = ref && images.find(input => workflowReferenceMatchesInput(ref, input));
+    if (input && !ordered.includes(input)) ordered.push(input);
+  }
+  // Connected images work without mentions. Preserve extra inputs so validation can report them.
+  ordered.push(...images.filter(input => !ordered.includes(input)));
+  const frames = ordered.flatMap(input => !workflowImageContainer(input) && input.assetIds?.length
+    ? input.assetIds.map(assetId => ({ assetId })) : [input]);
+  const prompt = node.prompt.replace(/@\[([^\]]+)\]/g, (token, id: string) => {
+    const ref = refs.find(ref => ref.id === id && ref.direction !== "output");
+    if (!ref) return token;
+    if (ref.type === "text") return ""; // The H3 text port supplies its current contents at execution.
+    const index = ordered.findIndex(input => workflowReferenceMatchesInput(ref, input));
+    return index < 0 ? ref.label : `@图片${index + 1}`;
+  }).trim();
+  const { image: _image, "visual-profile": _profile, ...inputs } = node.inputs;
+  return { ...node, kind: "comfy-video", comfyVideo: node.generation!.localVideo, prompt, promptReferences: undefined,
+    generation: { ...node.generation, localVideo: undefined },
+    inputs: { ...inputs, "first-frame": inputs["first-frame"] ?? frames.slice(0, 1), "last-frame": inputs["last-frame"] ?? frames.slice(1) } };
+}
+
 export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
   if (node.kind === "trigger") return [{ id: "completion", label: "完成触发", type: "signal" }];
   if (node.textSource) return [];

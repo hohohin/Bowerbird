@@ -419,7 +419,7 @@ pub async fn read_image_data_url(
     .map_err(|e| AppError::Other(e.to_string()))?
 }
 
-fn readable_image_path(paths: &LibraryPaths, db: &Database, path: &str) -> Result<PathBuf, AppError> {
+pub(super) fn readable_image_path(paths: &LibraryPaths, db: &Database, path: &str) -> Result<PathBuf, AppError> {
     let p = Path::new(path);
     if !p.is_file() {
         return Err(AppError::Other(format!("文件不存在: {path}")));

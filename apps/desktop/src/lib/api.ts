@@ -80,6 +80,7 @@ export interface CanvasFrequentAssetsResult {
 export const api = {
   exportAssetsZip: (assetIds: string[], path: string) => invoke<number>("export_assets_zip", { assetIds, path }),
   videoPoster: (sourcePath: string) => invoke<string | null>("video_poster", { sourcePath }),
+  canvasImagePreview: (path: string, maxSize: number) => invoke<string>("canvas_image_preview", { path, maxSize }),
   trimVideo: (request: import("./videoTrim").VideoTrimRequest, projectId?: string) => invoke<Asset>("trim_video", { ...request, projectId: projectId ?? null }),
   canvasWorkflowGet: (projectId: string) => invoke<import("./canvasWorkflow").WorkflowSnapshot>("canvas_workflow_get", { projectId }),
   workflowTemplatesList: () => invoke<WorkflowTemplate[]>("workflow_templates_list"),

@@ -1,0 +1,95 @@
+/* Approved industrial drawing menus. Placement, dimensions and scrolling stay with the component. */
+html[data-theme] body :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover, .library-color-strip)[class] {
+  --menu-ink: rgb(var(--industrial-ink-rgb));
+  --menu-mark: rgb(var(--industrial-secondary-rgb));
+  --menu-line: rgb(var(--industrial-muted-rgb) / .3);
+  --menu-hover: rgb(var(--industrial-ink-rgb) / .035);
+  --menu-selected: transparent;
+  border: 1px solid var(--menu-line);
+  border-radius: 0;
+  background: rgb(var(--industrial-panel-rgb));
+  color: var(--menu-ink);
+  box-shadow: 8px 8px 0 -1px rgb(var(--industrial-canvas-rgb)), 8px 8px 0 0 rgb(var(--industrial-muted-rgb) / .33);
+  clip-path: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+html[data-theme] body :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover, .library-color-strip)[class]::before {
+  background:
+    linear-gradient(var(--menu-ink), var(--menu-ink)) 10px 0 / 35px 1px,
+    linear-gradient(var(--menu-mark), var(--menu-mark)) 100% 100% / 25px 1px;
+  background-repeat: no-repeat;
+  pointer-events: none;
+}
+html[data-theme] body :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class]::after {
+  top: 6px;
+  right: 10px;
+  width: 21px;
+  height: 4px;
+  opacity: .6;
+  pointer-events: none;
+}
+
+/* Hover is a neutral hollow square; persistent selection is a filled square and heavier accent text. */
+html[data-theme] body :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] :is(.app-popover-option, .app-context-item, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, .canvas-toolbox-item, [role="menuitem"], button[aria-pressed]):not(.is-danger):not(:disabled):is(:hover, :focus-visible, [data-active="true"]) {
+  color: var(--menu-ink);
+  background: var(--menu-hover);
+}
+html[data-theme] body :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] :is(.app-popover-option, .app-context-item, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, .canvas-toolbox-item, [role="menuitem"], button[aria-pressed]):not(.is-danger):not(:disabled):is(:hover, :focus-visible, [data-active="true"])::before {
+  width: 4px;
+  height: 4px;
+  border-color: var(--menu-mark);
+  background: transparent;
+  opacity: .8;
+}
+html[data-theme] body :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] :is(.app-popover-option, .app-context-item, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, .canvas-toolbox-item, [role="menuitem"], button[aria-pressed]):not(.is-danger):not(:disabled):is([aria-selected="true"], [aria-pressed="true"], [aria-checked="true"], .is-active) {
+  color: rgb(var(--industrial-accent-rgb));
+  background: transparent;
+  font-weight: 600;
+  box-shadow: none;
+}
+html[data-theme] body :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] :is(.app-popover-option, .app-context-item, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, .canvas-toolbox-item, [role="menuitem"], button[aria-pressed]):not(.is-danger):not(:disabled):is([aria-selected="true"], [aria-pressed="true"], [aria-checked="true"], .is-active)::before {
+  width: 4px;
+  height: 4px;
+  border-color: rgb(var(--industrial-accent-rgb));
+  background: rgb(var(--industrial-accent-rgb));
+  opacity: 1;
+}
+html[data-theme] body :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] button:focus-visible {
+  outline: 1px solid rgb(var(--industrial-accent-rgb));
+  outline-offset: -2px;
+}
+html[data-theme] body :is(.tactical-select-trigger, .tactical-menu-trigger)[class]:focus-visible {
+  outline: 1px solid rgb(var(--industrial-accent-rgb));
+  outline-offset: 2px;
+}
+html[data-theme] body .image-options-menu .image-options-toggle:has(input:checked) {
+  color: rgb(var(--industrial-accent-rgb));
+  background: transparent;
+}
+html[data-theme] body .image-options-menu input[type="checkbox"] { accent-color: rgb(var(--industrial-accent-rgb)); }
+
+/* Keep the compact library popup open for nested menus; only replace its frame. */
+html[data-theme] .library-controls-host.is-compact.is-open > .folder-floating-controls {
+  border: 1px solid rgb(var(--industrial-muted-rgb) / .3);
+  background: rgb(var(--industrial-panel-rgb));
+  box-shadow: 8px 8px 0 -1px rgb(var(--industrial-canvas-rgb)), 8px 8px 0 0 rgb(var(--industrial-muted-rgb) / .33);
+}
+html[data-theme] .library-controls-host.is-compact.is-open > .folder-floating-controls::before {
+  background:
+    linear-gradient(rgb(var(--industrial-ink-rgb)), rgb(var(--industrial-ink-rgb))) 10px 0 / 35px 1px,
+    linear-gradient(rgb(var(--industrial-secondary-rgb)), rgb(var(--industrial-secondary-rgb))) 100% 100% / 25px 1px;
+  background-repeat: no-repeat;
+}
+
+@media (forced-colors: active) {
+  html[data-theme] body :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover, .library-color-strip)[class] {
+    --menu-ink: CanvasText;
+    --menu-mark: ButtonText;
+    --menu-line: ButtonText;
+    background: Canvas;
+    color: CanvasText;
+    border-color: ButtonText;
+    box-shadow: none;
+  }
+}

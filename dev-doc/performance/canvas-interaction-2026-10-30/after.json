@@ -1,0 +1,80 @@
+{
+  "mode": "after",
+  "measuredAt": "2026-10-30T02:29:15.873Z",
+  "environment": "Chrome headless, Vite development, synthetic IPC, 300 mixed cards and 200 workflow input wires",
+  "method": "48 synthetic input events in four groups of 12; flushSync wraps each dispatch, then two real animation frames allow scheduled work. React still coalesces some native-event commits. Counts describe a deterministic stress fixture, not native event cadence or FPS.",
+  "checks": [
+    "300 mounted mixed cards and 200 wires",
+    "pan delta accumulation",
+    "zoom pointer anchor",
+    "mixed multi-selection drag persists final geometry",
+    "cancel rollback",
+    "wire follows live moving content ports before pointerup",
+    "pointerup flushes an unpainted final move",
+    "Escape cancels an unpainted move without later drift",
+    "same-frame drag threshold roundtrip does not activate asset",
+    "wheel then resize in one task uses live zoom",
+    "route flush persists latest wheel view before camera settles",
+    "mixed-card marquee",
+    "alignment snap",
+    "stationary workflow resize invalidates drag snap geometry"
+  ],
+  "renderedSourceHashes": {
+    "workspace": "a91ee2b385e9bd8893059f7b70f9542538db20cd8fb9a887e498915f8a6225fe",
+    "workflow": "46d60035f9ae8a478e11b79d15bf9ae1aec30d05fc8e5504491ff51910064b95"
+  },
+  "samples": [
+    {
+      "label": "pan",
+      "inputEvents": 48,
+      "workspaceRenders": 0,
+      "workspaceCommits": 0,
+      "workflowRenders": 0,
+      "workflowCommits": 0,
+      "globalNodeQueries": 0,
+      "portQueries": 0,
+      "rectReads": 0,
+      "portRectReads": 0,
+      "stageRectReads": 0
+    },
+    {
+      "label": "zoom",
+      "inputEvents": 48,
+      "workspaceRenders": 1,
+      "workspaceCommits": 1,
+      "workflowRenders": 0,
+      "workflowCommits": 0,
+      "globalNodeQueries": 0,
+      "portQueries": 0,
+      "rectReads": 48,
+      "portRectReads": 0,
+      "stageRectReads": 48
+    },
+    {
+      "label": "multi-drag",
+      "inputEvents": 48,
+      "workspaceRenders": 8,
+      "workspaceCommits": 4,
+      "workflowRenders": 4,
+      "workflowCommits": 4,
+      "globalNodeQueries": 0,
+      "portQueries": 0,
+      "rectReads": 13,
+      "portRectReads": 0,
+      "stageRectReads": 8
+    },
+    {
+      "label": "cancel-drag",
+      "inputEvents": 48,
+      "workspaceRenders": 8,
+      "workspaceCommits": 4,
+      "workflowRenders": 4,
+      "workflowCommits": 4,
+      "globalNodeQueries": 0,
+      "portQueries": 0,
+      "rectReads": 13,
+      "portRectReads": 0,
+      "stageRectReads": 8
+    }
+  ]
+}

@@ -13,7 +13,7 @@ export interface CanvasConversationCard {
 }
 
 /** Presentation only: keep exact turn identities and execution history intact. */
-export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Record<string, Pick<GenJob, "conversationId">>, excluded: ReadonlySet<string> = new Set(), contained: ReadonlySet<string> = new Set()) {
+export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Record<string, Pick<GenJob, "conversationId">>, excluded: ReadonlySet<string> = new Set(), contained: ReadonlySet<string> = new Set(), routed: ReadonlySet<string> = new Set()) {
   const groups = new Map<string, CanvasConversationCard>();
   const aliases = new Map<string, string>();
   const ordered = [...nodes].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
@@ -47,6 +47,8 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
     const target = card.sessions.map(session => embeddedSessions.get(session.id)).find(Boolean);
     if (target) for (const node of [...card.sessions, ...card.outputs]) embedded.set(node.id, target);
   }
+  const routedIds = new Set([...groups.values()].filter(card => card.sessions.some(session => routed.has(session.id)))
+    .flatMap(card => [...card.sessions, ...card.outputs].map(node => node.id)));
   return { cards: new Map([...groups.values()].map(card => [card.anchor.id, card])), aliases,
-    embedded, hiddenIds: new Set([...embedded.keys(), ...[...aliases].filter(([id, anchor]) => id !== anchor).map(([id]) => id)]) };
+    embedded, routedIds, hiddenIds: new Set([...routedIds, ...embedded.keys(), ...[...aliases].filter(([id, anchor]) => id !== anchor).map(([id]) => id)]) };
 }

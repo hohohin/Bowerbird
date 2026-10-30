@@ -1,6 +1,7 @@
 import type { CanvasNode } from "./types";
 import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasNoteValue, readCanvasNote, type CanvasNotePayload } from "./canvasNotes";
+import { contentInputAxisIndex } from "./canvasContentInput";
 import { activePromptReferences, workflowActiveSession, workflowBindingKey, type WorkflowInput, type WorkflowNode } from "./canvasWorkflow";
 
 function payload(node: CanvasNode) {
@@ -29,6 +30,22 @@ export function workflowSessionIds(workflow: readonly WorkflowNode[]) {
 /** Video cards retain their existing history-only presentation. */
 export function hiddenWorkflowSessionIds(workflow: readonly WorkflowNode[]) {
   return workflowSessionIds(workflow.filter(node => node.generation?.media === "video"));
+}
+
+/** A connected content destination owns presentation before delivery and across reruns. */
+export function contentRoutedWorkflowSessionIds(nodes: readonly CanvasNode[], workflow: readonly WorkflowNode[]) {
+  const sources = new Set<string>();
+  for (const writer of workflow) {
+    const target = writer.textTarget;
+    if (!target?.image) continue;
+    const table = nodes.find(node => node.id === target.nodeId && node.kind === "note" && node.hiddenAt == null);
+    if (!table) continue;
+    const note = readCanvasNote(table);
+    if (note.note_type !== "text" && note.note_type !== "images") continue;
+    if (target.appendAxis ? contentInputAxisIndex(note, target) < 0 : !target.append && !note.cells.flat().some(cell => cell.id === target.cellId)) continue;
+    for (const input of writer.inputs.image ?? []) if (input.nodeId && input.portId === "image") sources.add(input.nodeId);
+  }
+  return workflowSessionIds(workflow.filter(node => sources.has(node.id) && node.generation?.media !== "video"));
 }
 
 /** A session socket exposes only this turn's results, never its reference images or later turns. */

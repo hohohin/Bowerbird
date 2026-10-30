@@ -51,6 +51,13 @@ dev-doc/*
 !dev-doc/HTML-RENDER-PLAN.md
 !dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md
 !dev-doc/PROJECT-CANVAS-PLAN.md
+!dev-doc/performance/
+dev-doc/performance/*
+!dev-doc/performance/canvas-interaction-2026-10-30/
+!dev-doc/performance/canvas-media-2026-10-30/
+dev-doc/performance/*/*
+!dev-doc/performance/*/before.json
+!dev-doc/performance/*/after.json
 !dev-doc/CANVAS-WORKFLOW.md
 !dev-doc/LOCAL-CLASSIFICATION.md
 !dev-doc/FOLDER-MODE.md
@@ -69,6 +76,7 @@ dev-doc/*
 dev-doc/ui-studies/*
 !dev-doc/ui-studies/library-tactical-2026-10-26/
 !dev-doc/ui-studies/library-selection-2026-10-26/
+!dev-doc/ui-studies/industrial-hud-2026-10-29/
 
 # Agent Z（dev-only）：MCP 桥 + inbox 回传事件（Bowerbird × Claude Code TUI）
 .agent-z/

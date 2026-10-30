@@ -72,6 +72,16 @@ export interface CanvasSnapResult extends CanvasPoint {
   guides: CanvasSnapGuide[];
 }
 
+export interface PreparedCanvasSnapAnchors {
+  readonly ordered: readonly CanvasSnapAnchor[];
+}
+
+/** Snapshot stationary geometry once per drag; equal orders retain their input order. */
+export function prepareCanvasSnapAnchors(anchors: readonly CanvasSnapAnchor[]): PreparedCanvasSnapAnchors {
+  return { ordered: anchors.map(anchor => ({ ...anchor, rect: { ...anchor.rect } }))
+    .sort((a, b) => a.order - b.order) };
+}
+
 export interface CanvasGroupNodeBase extends CanvasRect {
   id: string;
   order: number;
@@ -100,7 +110,17 @@ function overlapsOrNearlyTouches(
  */
 export function snapCanvasRect(
   moving: CanvasRect,
-  anchors: CanvasSnapAnchor[],
+  anchors: readonly CanvasSnapAnchor[],
+  options: { enabled?: boolean; zoom?: number } = {},
+): CanvasSnapResult {
+  if (options.enabled === false) return { x: moving.x, y: moving.y, guides: [] };
+  return snapCanvasRectPrepared(moving, { ordered: [...anchors].sort((a, b) => a.order - b.order) }, options);
+}
+
+/** Same snap rules, reusing the stationary snapshot throughout a drag. */
+export function snapCanvasRectPrepared(
+  moving: CanvasRect,
+  prepared: PreparedCanvasSnapAnchors,
   options: { enabled?: boolean; zoom?: number } = {},
 ): CanvasSnapResult {
   if (options.enabled === false) return { x: moving.x, y: moving.y, guides: [] };
@@ -108,7 +128,6 @@ export function snapCanvasRect(
   const zoom = options.zoom ?? 1;
   const threshold = SNAP_THRESHOLD / zoom;
   const range = ALIGNMENT_RANGE / zoom;
-  const ordered = [...anchors].sort((a, b) => a.order - b.order);
   type Snap = { distance: number; value: number; rect: CanvasRect };
   let bestX: Snap | null = null;
   let bestY: Snap | null = null;
@@ -129,7 +148,7 @@ export function snapCanvasRect(
     }
   }
 
-  for (const anchor of ordered) {
+  for (const anchor of prepared.ordered) {
     const rect = anchor.rect;
     if (overlapsOrNearlyTouches(moving.y, moving.height, rect.y, rect.height, threshold)) {
       takeX(rect.x + rect.width, rect);
@@ -169,15 +188,16 @@ export function snapCanvasRect(
 /** 命中给定坐标下最上层的静止节点；同层时后进入画布的节点在上。 */
 export function findCanvasHoverTarget<T extends CanvasSnapAnchor>(
   point: CanvasPoint,
-  nodes: T[],
+  nodes: readonly T[],
   excludedId?: string,
 ): T | null {
-  const ordered = [...nodes].sort((a, b) => b.order - a.order);
-  return ordered.find((node) => {
-    if (node.id === excludedId) return false;
+  let target: T | null = null;
+  for (const node of nodes) {
+    if (node.id === excludedId || (target && node.order <= target.order)) continue;
     const { x, y, width, height } = node.rect;
-    return point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height;
-  }) ?? null;
+    if (point.x >= x && point.x <= x + width && point.y >= y && point.y <= y + height) target = node;
+  }
+  return target;
 }
 
 export function clampCanvasZoom(value: number) {

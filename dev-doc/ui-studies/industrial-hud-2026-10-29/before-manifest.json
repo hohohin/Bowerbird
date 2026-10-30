@@ -1,0 +1,186 @@
+{
+  "gitHead": "d17452793232d4c635fbe8b43c1804a7ceb40f30",
+  "description": "Working tree production UI before industrial HUD integration; includes uncommitted styles as-is.",
+  "files": [
+    {
+      "path": "apps/desktop/src/components/AccountBilling.css",
+      "sha256": "93369f8859fb8fb4167caf9d3fcfdd3ec3fab2a65b91ac44cf3e7e1bd9b1e362"
+    },
+    {
+      "path": "apps/desktop/src/components/BrowserExtension.css",
+      "sha256": "772bb0baddadb90cc35dbc0a8099cdcda0f6d3255f515bcc0943b42d12fa29e2"
+    },
+    {
+      "path": "apps/desktop/src/components/CanvasConversationImages.css",
+      "sha256": "8db641053ee877d6a2a2ca5be4914b627618fcfa5fe8c1b427d71c610f981ea0"
+    },
+    {
+      "path": "apps/desktop/src/components/CanvasFrequentAssets.css",
+      "sha256": "7db6450e3fe59f0c94a24aa4c71c5a18419463c7ecf0c821fd92a4cc6b4423f9"
+    },
+    {
+      "path": "apps/desktop/src/components/CanvasNotes.css",
+      "sha256": "8cfee6b2c9b1f239241005ae349fe32e50e224f7e4cc1bec8a34d0209812052f"
+    },
+    {
+      "path": "apps/desktop/src/components/CanvasSecondaryTactical.css",
+      "sha256": "aca3cb65397ff58a1d7debd5e9f1e7a640d70f35689102ccb4625532bd491508"
+    },
+    {
+      "path": "apps/desktop/src/components/CanvasTactical.css",
+      "sha256": "76325951566f230593d8d3c4b2097afaf3a8ef23a7f77657fdc5bf1387f601f2"
+    },
+    {
+      "path": "apps/desktop/src/components/CanvasTacticalCards.css",
+      "sha256": "1bf457b9207f8824059bd84b6771d7a4dfc2755995dd11c1be375ee9d24c7211"
+    },
+    {
+      "path": "apps/desktop/src/components/CanvasToolbox.css",
+      "sha256": "0fc1d58c070c1180574dc08c3aff14ff74998aa477be6dc8b20878c9d2540b89"
+    },
+    {
+      "path": "apps/desktop/src/components/CanvasWorkflow.css",
+      "sha256": "abd62f56e7ccb2e167e418022cb3a2244304bc9810a49ca1f723adc6caae1c65"
+    },
+    {
+      "path": "apps/desktop/src/components/CategorizedLibrary.css",
+      "sha256": "15645b27818753c07dd4eee6e294d4335a36c112115c1a0a3adc30fc88392953"
+    },
+    {
+      "path": "apps/desktop/src/components/ClassificationPlayback.css",
+      "sha256": "41eec3396a0988d806df105ff3229936f0057a3967c565c27857d771b4c4a801"
+    },
+    {
+      "path": "apps/desktop/src/components/ComfyVideoCard.css",
+      "sha256": "1e8450a994b04e7ab3ad6df5362852b9ad495d97521e53ef732325a4007c8c5c"
+    },
+    {
+      "path": "apps/desktop/src/components/creation/ModelSelect.css",
+      "sha256": "9cf8927b557ae1be7351a173698b37c905eb9705450ab0282043c9e12a1ed4d2"
+    },
+    {
+      "path": "apps/desktop/src/components/creation/ProviderQuota.css",
+      "sha256": "dcc5b8084c6c1da7c20d3ab4d6bd1a4e6f659eddacd6c5c6531fe176a6b2c1e3"
+    },
+    {
+      "path": "apps/desktop/src/components/CreationBoard.css",
+      "sha256": "acc8c37c01fac2e8de699292620d3600faf15936e30829c021704f4bcc9229dc"
+    },
+    {
+      "path": "apps/desktop/src/components/ExplorerCaptureFeedback.css",
+      "sha256": "df4cbb30450c2700c3e40cd6f5b5b5e17ae1c4b4da2ffa49752bb47e44645e8b"
+    },
+    {
+      "path": "apps/desktop/src/components/ExplorerClassificationDock.css",
+      "sha256": "71a3eda23b6d7e977d3ee7eb3c55f4daaeabfb6a455183a61166a2f62bce55b1"
+    },
+    {
+      "path": "apps/desktop/src/components/LayerEditor.css",
+      "sha256": "ff13797f12283817678670b955e668771d2d2d06c68e6ee94f12f8159562fdbe"
+    },
+    {
+      "path": "apps/desktop/src/components/LibraryCatalogTransition.css",
+      "sha256": "796308de4b3286230c67126b63f95c4d751351179e2880c06e6b2de7b5478e68"
+    },
+    {
+      "path": "apps/desktop/src/components/LibraryMotion.css",
+      "sha256": "6cbb76cde9ff2c872158269c406ee678084fecdc6dfd7c2662d7ac1c77b399de"
+    },
+    {
+      "path": "apps/desktop/src/components/LibrarySelectionMark.css",
+      "sha256": "f195798be2a8d81d784e5f689e0e44b1040a5426444525f06ed82d237cb0143e"
+    },
+    {
+      "path": "apps/desktop/src/components/LibrarySplit.css",
+      "sha256": "e4c8a2b9883933fb8029d26b807f817977026ab2a3dc2b79bacd45b00a238a3f"
+    },
+    {
+      "path": "apps/desktop/src/components/LibraryTactical.css",
+      "sha256": "0a701d0873332077b3143e6485c36ae53d01868cb7dc3444becda0607313c4d7"
+    },
+    {
+      "path": "apps/desktop/src/components/LocalChatPanel.css",
+      "sha256": "a9b2f7746cd7a43874b05d9dfeb7c449c53d3284b52fcef239fe042d1d3636c4"
+    },
+    {
+      "path": "apps/desktop/src/components/LocalFileWorkspace.css",
+      "sha256": "334a23aeaf624a078885a804a4fc26033104d26a59adba5179a05346e6c0a510"
+    },
+    {
+      "path": "apps/desktop/src/components/ManagementTactical.css",
+      "sha256": "8a15b72b3a2045925cd624c9d3e4e074188ad0d67e71bc7272669460323f9848"
+    },
+    {
+      "path": "apps/desktop/src/components/MaterialGraph.css",
+      "sha256": "3227dede4b91f4f3ae354f304e55709e98da1b3472cbda45774d356d9ee93b5e"
+    },
+    {
+      "path": "apps/desktop/src/components/MediaTactical.css",
+      "sha256": "c7a8b9ca57e4a10fc1c07d02520a94088b68c3ede46366d904652de8d547590f"
+    },
+    {
+      "path": "apps/desktop/src/components/OnboardingTour.css",
+      "sha256": "812fd3ec108ab3422728ddd583f58cdb9127ba62039cabf6a3d33781f67afa50"
+    },
+    {
+      "path": "apps/desktop/src/components/ProjectDeleteDialog.css",
+      "sha256": "e46785dab000b5f378e5b1b45ca3dcd8e7a7b191b10f1d3dc3ee651683c4ffb4"
+    },
+    {
+      "path": "apps/desktop/src/components/ProjectManagerPanel.css",
+      "sha256": "5eccf69e19dd2c2b77ff454d366acbce7195f9a0ce441eba48b615210ac363e7"
+    },
+    {
+      "path": "apps/desktop/src/components/ScreenshotWindow.css",
+      "sha256": "89458a7c55b0f311f366969dea36c2f3f6e57725f6d251a0c62db2bf2d82744f"
+    },
+    {
+      "path": "apps/desktop/src/components/TacticalDialogs.css",
+      "sha256": "cee258f7450e058cd6fd5dfad705365db16eae7859e957be5d0409864bf4f2b9"
+    },
+    {
+      "path": "apps/desktop/src/components/TacticalMenus.css",
+      "sha256": "845a6e635368f3a784029b442997403a2488d55e4b02ac55c82f41a5093f32fa"
+    },
+    {
+      "path": "apps/desktop/src/components/TacticalProjection.css",
+      "sha256": "029da53b6169ae7ffb829be8813bfa342242307705b76b29a585cae05ba7b0c2"
+    },
+    {
+      "path": "apps/desktop/src/components/VideoPlayer.css",
+      "sha256": "0f71dd295801cf4d7773477434743ea7be03f9f3c2b6741911d49d9e46266386"
+    },
+    {
+      "path": "apps/desktop/src/components/VideoReplication.css",
+      "sha256": "36a1f6714d03522a09842375d75759b75fc08a115e41d39e2ebe166ca24f9762"
+    },
+    {
+      "path": "apps/desktop/src/components/VisualProfileDialog.css",
+      "sha256": "0725e4a2112b7fe331be7b181c584f7a35125817766838fd74b072665dda8b04"
+    },
+    {
+      "path": "apps/desktop/src/components/WorkflowAgentDetail.css",
+      "sha256": "540ce3b0023dc46a388594b63f49e748119cc84555d4a2426434bcb1c36d60fb"
+    },
+    {
+      "path": "apps/desktop/src/screenshot.css",
+      "sha256": "ae316bf9b78734c5eda17e2304927b8bf27e6997bcdec3b27851fe89338435e5"
+    },
+    {
+      "path": "apps/desktop/src/styles.css",
+      "sha256": "3b1ce56deab1f17a5bda13448a1ec37fa58ebe91c838be1ec19a902b3f3b9abd"
+    },
+    {
+      "path": "apps/desktop/src/App.tsx",
+      "sha256": "3ce37e95bc1c9d1f5cb6b69d7a76d427503adc27acf199495c5dc2d3f9e8ee00"
+    },
+    {
+      "path": "apps/desktop/src/main.tsx",
+      "sha256": "4c0d87dc86876bee95df8cdca7e8344426772ce0f5e57e4340ed6e2379dffcb3"
+    },
+    {
+      "path": "apps/desktop/scripts/fixtures/canvas-reference/preview.tsx",
+      "sha256": "ed5219dec156f9d0995fcb7ccf599bd46f79b0b0a04136cc1b5e304b86be06e9"
+    }
+  ]
+}
