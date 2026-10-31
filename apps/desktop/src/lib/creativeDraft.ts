@@ -1,9 +1,11 @@
 import type { PromptedAsset } from "./types";
 import type { CreationEditorDraft } from "../components/creation/useCreationEditor";
+import type { ChatProvider } from "./localChat";
 
 export type CreativeComposerMode = "image" | "video" | "chat";
 export interface CreativeComposerState {
   mode: CreativeComposerMode;
+  chatProvider?: ChatProvider;
   drafts: Partial<Record<CreativeComposerMode, CreationEditorDraft>>;
 }
 
@@ -19,12 +21,12 @@ export function parseCreativeComposerState(draftJson: string): CreativeComposerS
       if (draft && Array.isArray(draft.refs) && draft.doc) drafts[key] = draft;
     }
     if (legacy && !drafts[mode]) drafts[mode] = legacy;
-    return { mode, drafts };
+    return { mode, drafts, ...(["codex-local", "deepseek-cloud"].includes(saved.chatProvider) ? { chatProvider: saved.chatProvider } : {}) };
   } catch { return { mode: fallbackMode, drafts: legacy ? { [fallbackMode]: legacy } : {} }; }
 }
 
 export function serializeCreativeComposerState(state: CreativeComposerState) {
-  return JSON.stringify({ schema_version: 1, mode: state.mode, modeDrafts: state.drafts,
+  return JSON.stringify({ schema_version: 1, mode: state.mode, chatProvider: state.chatProvider, modeDrafts: state.drafts,
     composer: state.drafts[state.mode] ?? { doc: { type: "doc", content: [{ type: "paragraph" }] }, refs: [] } });
 }
 

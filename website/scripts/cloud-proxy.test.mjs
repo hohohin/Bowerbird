@@ -11,6 +11,22 @@ const UPLOAD = `/storage/v1/object/upload/sign/generation-temp/jobs/${JOB}/input
 const DOWNLOAD = `/storage/v1/object/sign/generation-temp/jobs/${JOB}/outputs/result.mp4?token=test%2Bsigned`;
 const AUTH = { Authorization: "Bearer user-token" };
 
+test("chat quote, create and recovery use the authenticated fixed Cloud gateway", async t => {
+  const { send, calls } = await fixture(t);
+  for (const action of ["quote", "create", "get"]) {
+    const body = JSON.stringify({ action, idempotency_key: "chat-request-1", job_id: JOB });
+    const response = await send("/functions/v1/chat-proxy", "POST", body, AUTH);
+    assert.equal(response.status, 200);
+    assert.equal(calls.at(-1).url.href, "https://project.supabase.co/functions/v1/chat-proxy?forceFunctionRegion=ap-northeast-1");
+    assert.equal(calls.at(-1).body.toString(), body);
+    assert.equal(calls.at(-1).headers.Authorization, AUTH.Authorization);
+  }
+  assert.equal((await send("/functions/v1/chat-proxy", "POST", "{}")).status, 401);
+  assert.equal((await send("/functions/v1/chat-worker", "POST", "{}", AUTH)).status, 404);
+  assert.equal((await send("/functions/v1/chat-proxy", "GET")).status, 404);
+  assert.equal(calls.length, 3);
+});
+
 async function fixture(t, overrides = {}) {
   const calls = [];
   const proxy = createCloudProxy({ upstream: "https://project.supabase.co", publicKey: "public-key",

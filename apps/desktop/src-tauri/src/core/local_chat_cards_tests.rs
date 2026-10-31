@@ -18,6 +18,7 @@ fn fixture_with_db(db: Database) -> (Database, StartedChat) {
     }
     let started = db
         .begin_local_chat(&ChatSendInput {
+            provider: None,
             project_id: "p".into(),
             conversation_id: None,
             request_id: "request".into(),

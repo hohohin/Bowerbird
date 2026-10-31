@@ -3,9 +3,9 @@ import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import { useEffect, useRef, useState } from "react";
 import { parseCreativeComposerState, serializeCreativeComposerState, type CreativeComposerMode } from "../lib/creativeDraft";
 import type { CreationEditorDraft } from "./creation/useCreationEditor";
-import type { Asset } from "../lib/types";
 import type { CreativeParentCandidate, CreativeThreadResolution } from "../lib/creativeGeneration";
 import type { ComposerLocalVideoRequest } from "../lib/comfyVideo";
+import type { ChatComposeRequest, ChatProvider } from "../lib/localChat";
 
 export function CreativeComposer({
   projectId,
@@ -40,7 +40,7 @@ export function CreativeComposer({
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
   onGenerateLocalVideo?: (request: ComposerLocalVideoRequest) => Promise<void>;
-  onSendChat?: (request: { prompt: string; references: Asset[] }) => Promise<void>;
+  onSendChat?: (request: ChatComposeRequest) => Promise<void>;
   onChatDraftSent?: (sentDraftJson: string) => void;
   onOpenChatHistory?: () => void;
   chatHistoryOpen?: boolean;
@@ -54,6 +54,7 @@ export function CreativeComposer({
 }) {
   const stateRef = useRef(parseCreativeComposerState(draftJson));
   const [mode, setMode] = useState(stateRef.current.mode);
+  const [chatProvider, setChatProvider] = useState<ChatProvider>(stateRef.current.chatProvider ?? "codex-local");
   const flushRef = useRef<(() => void) | null>(null);
   function persist(draft: CreationEditorDraft) {
     stateRef.current.drafts[mode] = draft;
@@ -83,6 +84,8 @@ export function CreativeComposer({
       initialAssetIds={currentDraft ? [] : initialAssetIds}
       composerMode={mode}
       onComposerModeChange={selectMode}
+      chatProvider={chatProvider}
+      onChatProviderChange={provider => { flushRef.current?.(); stateRef.current.chatProvider = provider; setChatProvider(provider); onDraftChange(serializeCreativeComposerState(stateRef.current)); }}
       continuationCandidates={continuationCandidates}
       focusedContinuationNodeId={focusedContinuationNodeId}
       focusedContinuationThreadId={focusedContinuationThreadId}

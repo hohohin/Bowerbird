@@ -21,7 +21,7 @@ for(const m of block.match(/for feature in \[([\s\S]*?)\]/)[1].matchAll(/"([^"]+
 assert.equal(productionConfig['features.code_mode_host'],true,'production must enable the code-mode-only tool transport');
 assert.equal(productionConfig['features.code_mode'],false,'ordinary models keep their direct tool route');
 assert.equal(productionConfig['agents.enabled'],false,'code-mode model metadata must not enable delegation');
-const toolSpec=JSON.parse(await readFile(new URL('../src/commands/local_chat_card_tool.json',import.meta.url),'utf8'));
+const toolSpec=JSON.parse(await readFile(new URL('../../../cloud/supabase/functions/_shared/chat-card-tool.json',import.meta.url),'utf8'));
 assert.ok(Number(source.match(/const CARD_TOOL_VERSION: i64 = (\d+);/)[1])>=3,'section schema changes require provider-thread migration');
 const versionTwoToolSpec=structuredClone(toolSpec);
 versionTwoToolSpec.description='Create native generation, local H3, content, trigger and loop cards without executing them.';

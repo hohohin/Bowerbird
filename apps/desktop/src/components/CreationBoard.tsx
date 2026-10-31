@@ -33,14 +33,15 @@ import {
 } from "./creation/useCreationEditor";
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import type { CreativeComposerMode } from "../lib/creativeDraft";
-import { localChatInputError } from "../lib/localChat";
+import { CHAT_PROVIDER_LABELS, localChatInputError, type ChatComposeRequest, type ChatProvider } from "../lib/localChat";
+import { ChatProviderSelect, useChatProviderAccess } from "./creation/ChatProviderSelect";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ImageGenOptions } from "./creation/ImageGenOptions";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
-import { ArrowUp, ChevronDown, History, Image, Info, MessageCircle, Plus, Sparkles, UserRound, Video } from "lucide-react";
+import { ArrowUp, ChevronDown, History, Image, Info, MessageCircle, Plus, Sparkles, Video } from "lucide-react";
 import { useLibraryGlass } from "./useLibraryGlass";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import "./CreationBoard.css";
@@ -104,7 +105,9 @@ export interface CreationBoardProps {
   onGenerateLocalVideo?: (request: ComposerLocalVideoRequest) => Promise<void>;
   composerMode?: CreativeComposerMode;
   onComposerModeChange?: (mode: CreativeComposerMode) => void;
-  onSendChat?: (request: { prompt: string; references: Asset[] }) => Promise<void>;
+  onSendChat?: (request: ChatComposeRequest) => Promise<void>;
+  chatProvider?: ChatProvider;
+  onChatProviderChange?: (provider: ChatProvider) => void;
   onOpenChatHistory?: () => void;
   chatHistoryOpen?: boolean;
   resolveCreativeThread?: (
@@ -134,6 +137,8 @@ export function CreationBoard({
   composerMode,
   onComposerModeChange,
   onSendChat,
+  chatProvider = "codex-local",
+  onChatProviderChange,
   onOpenChatHistory,
   chatHistoryOpen,
   resolveCreativeThread,
@@ -157,6 +162,7 @@ export function CreationBoard({
   const selectedImageProvider = useStore((s) => s.activeGenProvider);
   const [generation, setGeneration] = useState<GenerationSettings>(() => initialDraft?.generation ?? { media: "image" });
   const isChat = composerMode === "chat";
+  const chatAccess = useChatProviderAccess(isChat);
   const isVideo = generation.media === "video";
   const isLocalVideo = isVideo && !!generation.localVideo;
   const localAllowed = canUseComfyVideo(cloudAuth, cloudEntitlement);
@@ -536,7 +542,7 @@ export function CreationBoard({
   const referenceError = isLocalVideo ? localVideoInputError(finalPrompt, localFrames, generation.localVideo!) : !isVideo && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode
     ? imageInputError(references) : null;
   const sendDisabledReason = isChat
-    ? submitting ? "正在发送消息，请稍候。" : targetUnavailableReason
+    ? submitting ? "正在发送消息，请稍候。" : chatAccess.reason(chatProvider)
       ?? (references.some(asset => /\.(mp4|mov|webm|mkv)$/i.test(asset.store_path ?? "")) ? "对话暂时只支持图片参考，请移除视频。" : null)
       ?? localChatInputError(finalPrompt, references.map(asset => asset.id))
     : submitting
@@ -590,7 +596,7 @@ export function CreationBoard({
       setSubmitting(true);
       flushDraft();
       try {
-        await onSendChat({ prompt: finalPrompt.trim(), references: [...references] });
+        await onSendChat({ prompt: finalPrompt.trim(), references: [...references], provider: chatProvider });
         const current = useStore.getState();
         if (claim.isCurrent() && isWorkspaceOperationCurrent(originId, current.activeProjectId, current.projectRoutePending, origin.projectRouteRevision, current.projectRouteRevision)) exitCreationMode();
       } catch (error) { notifyError(error, "对话未能发送，请检查连接后重试。"); }
@@ -1351,6 +1357,7 @@ export function CreationBoard({
         />
         </OverlayScrollArea>
         {isChat && !isCollapsed && <p className="composer-chat-key-hint">Enter 换行 · Ctrl / ⌘ + Enter 发送</p>}
+        {isChat && chatProvider === "deepseek-cloud" && references.length > 0 && <p className="composer-chat-key-hint">图片仅用于建卡引用；看图分析请选择本机 Codex。</p>}
         {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
         <BoardChipPreview hostRef={hostRef} />
         {!isChat && referenceError && !isLocalVideo && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
@@ -1377,9 +1384,7 @@ export function CreationBoard({
             </div>
           </div>}
           <div className="composer-parameters">
-          {isChat ? <span className="composer-chat-provider" title="使用 Bowerbird 内独立登录的 Codex，自有订阅额度">
-            <span><UserRound size={13} aria-hidden="true" /></span>Codex · 本机
-          </span> : <>
+          {isChat ? <ChatProviderSelect value={chatProvider} onChange={onChatProviderChange} access={chatAccess} disabled={submitting} /> : <>
           {isVideo && <VideoControls composer channel={generation.videoChannel} options={videoOptions} onChange={(options, videoChannel = generation.videoChannel) => setGeneration({ ...generation, localVideo: undefined, media: "video", videoChannel, videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio}
             local={onGenerateLocalVideo ? { options: generation.localVideo, onSelect: () => { setLocalEnvironment({ ready: false, checking: true, message: "正在检测环境…" }); setGeneration({ ...generation, localVideo: { ...DEFAULT_COMFY_VIDEO } }); }, onChange: localVideo => setGeneration({ ...generation, localVideo }) } : undefined} />}
           {isLocalVideo && !isCollapsed && <LocalVideoFrames frames={localFrames.slice(0, 2)} ignored={references.length - Math.min(2, localFrames.length)} />}
@@ -1433,7 +1438,7 @@ export function CreationBoard({
               onClick={() => void send()}
               disabled={sendDisabledReason !== null}
               aria-describedby={sendDisabledReason ? sendTooltipId : undefined}
-              title={sendDisabledReason ? undefined : isChat ? "发送到本机 Codex，使用自有订阅额度" : cloudAgentMode
+              title={sendDisabledReason ? undefined : isChat ? `发送到${CHAT_PROVIDER_LABELS[chatProvider]}` : cloudAgentMode
                 ? "创建 Bowerbird Agent 会话：明确目标并获得授权后执行"
                 : agentZMode
                   ? "发送到 Agent Z 终端（Claude Code TUI）"

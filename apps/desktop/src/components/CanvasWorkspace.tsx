@@ -101,7 +101,7 @@ import { CreativeComposer } from "./CreativeComposer";
 import { CanvasConversation } from "./CanvasConversation";
 import { LocalChatPanel, LocalChatCard, LocalChatHistory } from "./LocalChatPanel";
 import { useLocalChatStore } from "../lib/localChatStore";
-import { LOCAL_CHAT_CARDS_CHANGED_EVENT, LOCAL_CHAT_UPDATED_EVENT, localChat, localChatRunning, type ChatCardAction, type ChatCardDefaults, type ChatConversation } from "../lib/localChat";
+import { LOCAL_CHAT_CARDS_CHANGED_EVENT, LOCAL_CHAT_UPDATED_EVENT, localChat, localChatRunning, type ChatCardAction, type ChatCardDefaults, type ChatConversation, type ChatComposeRequest } from "../lib/localChat";
 import { canvasChatId } from "../lib/canvasChat";
 import { canvasConversationTurn, canvasConversationTurns } from "../lib/canvasConversation";
 import { GenerationPanel } from "./GenerationPanel";
@@ -1350,7 +1350,7 @@ export function CanvasWorkspace({
     viewModeRef.current = "canvas"; setViewMode("canvas"); markViewDirty();
   }
 
-  async function startLocalChat(request: { prompt: string; references: Asset[] }) {
+  async function startLocalChat(request: ChatComposeRequest) {
     const id = activeCanvasRef.current.id;
     const revision = useStore.getState().projectRouteRevision;
     await prepareForGeneration();
@@ -1361,7 +1361,7 @@ export function CanvasWorkspace({
     const bounds = stageRef.current?.getBoundingClientRect();
     const point = bounds ? toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 3) : { x: 80, y: 80 };
     const placement = placeCanvasCardNearSource({ x: point.x - 160, y: point.y, width: 320, height: 190 }, selectionAnchors().map(anchor => anchor.rect));
-    const chat = await useLocalChatStore.getState().send({ projectId: id, text: request.prompt,
+    const chat = await useLocalChatStore.getState().send({ projectId: id, text: request.prompt, provider: request.provider,
       referenceAssetIds: request.references.map(asset => asset.id), cardDefaults: chatCardDefaults(), placement: { ...placement, width: 320, height: 190, zIndex: Date.now() % 1000000 } });
     if (activeCanvasRef.current.id === id && useStore.getState().projectRouteRevision === revision) openLocalChat(chat.id);
   }
@@ -4815,7 +4815,7 @@ export function CanvasWorkspace({
               const chatId = canvasChatId(node)!;
               const chat = chatSummaries[chatId];
               return <div key={node.id} data-canvas-node data-canvas-node-id={node.id} data-local-chat-id={chatId}
-                role="button" tabIndex={0} aria-label={`对话 · ${chat?.title ?? "本机 Codex"}`} aria-busy={localChatRunning(chat)}
+                role="button" tabIndex={0} aria-label={`对话 · ${chat?.title ?? "正在读取"}`} aria-busy={localChatRunning(chat)}
                 className={`canvas-chat-node${selectedCanvasNodeIds.has(node.id) ? " is-selected" : ""}${selectedChatId === chatId ? " is-focused" : ""}${localChatRunning(chat) ? " canvas-card-running" : ""}`}
                 style={{ width: node.width, minHeight: node.height, transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: activeDragId === node.id ? 10000 + node.zIndex : node.zIndex }}
                 onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
@@ -4828,7 +4828,7 @@ export function CanvasWorkspace({
                 onKeyDown={event => {
                   if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) { event.preventDefault(); openLocalChat(chatId); }
                 }}>
-                {chat ? <LocalChatCard conversation={chat} /> : <div className="local-chat-card-content"><strong>本机 Codex 对话</strong><p>打开对话详情</p></div>}
+                {chat ? <LocalChatCard conversation={chat} /> : <div className="local-chat-card-content"><strong>对话</strong><p>打开对话详情</p></div>}
               </div>;
             })}
             {promptGraphNodes.map((node) => {

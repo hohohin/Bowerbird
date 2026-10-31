@@ -56,7 +56,7 @@ export function createCloudProxy({
       const rawPath = request.url.split("?", 1)[0];
       if (!rawPath.startsWith(`${PREFIX}/`) || request.url.length > 8192) throw fail(404);
       const path = rawPath.slice(PREFIX.length);
-      const control = request.method === "POST" && path === "/functions/v1/generate-proxy";
+      const control = request.method === "POST" && ["/functions/v1/generate-proxy", "/functions/v1/chat-proxy"].includes(path);
       const upload = request.method === "PUT" && /^\/storage\/v1\/object\/upload\/sign\/generation-temp\/jobs\/[a-f0-9-]{36}\/inputs\/video-\d+\.(mp4|mov)$/.test(path);
       const download = request.method === "GET" && /^\/storage\/v1\/object\/sign\/generation-temp\/jobs\/[a-f0-9-]{36}\/outputs\/result\.(png|jpg|webp|mp4|json)$/.test(path);
       if (!control && !upload && !download) throw fail(404);

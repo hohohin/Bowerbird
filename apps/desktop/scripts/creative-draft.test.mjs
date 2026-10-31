@@ -4,6 +4,16 @@ import { clearSentCreativeChatDraft, isCreativeComposerDraftMeaningful, parseCre
 
 const draft = (text = '', media = 'image', refs = []) => ({ doc: { type: 'doc', content: [{ type: 'paragraph', ...(text ? { content: [{ type: 'text', text }] } : {}) }] }, refs, generation: { media, ratio: media === 'video' ? '16:9' : '1:1' } });
 
+test('chat provider survives switching modes and clearing accepted text independently of generation', () => {
+  const chat = draft('已经发送');
+  const state = { mode: 'video', chatProvider: 'deepseek-cloud', drafts: { chat, video: draft('视频草稿', 'video') } };
+  const saved = serializeCreativeComposerState(state);
+  assert.deepEqual(parseCreativeComposerState(saved), state);
+  const cleared = clearSentCreativeChatDraft(saved, JSON.stringify(chat));
+  assert.equal(parseCreativeComposerState(cleared).chatProvider, 'deepseek-cloud');
+  assert.deepEqual(parseCreativeComposerState(cleared).drafts.video, state.drafts.video);
+});
+
 test('old schema 1 image and video drafts keep their mode, parameters, text and reference identity', () => {
   for (const media of ['image', 'video']) {
     const composer = draft('旧版未发送内容', media, [{ id: 'reference', store_path: 'preserved-local-path.png' }]);

@@ -59,6 +59,7 @@ dev-doc/performance/*/*
 !dev-doc/performance/*/before.json
 !dev-doc/performance/*/after.json
 !dev-doc/CANVAS-WORKFLOW.md
+!dev-doc/CHAT-PROVIDERS.md
 !dev-doc/LOCAL-CLASSIFICATION.md
 !dev-doc/FOLDER-MODE.md
 !dev-doc/EMBEDDED-BROWSER.md

@@ -1,8 +1,8 @@
 //! Project chat over the installed Codex app-server. No shell/terminal scraping or GenJob reuse.
 use crate::{
-    cloud::{AuthClient, EntitlementService},
+    cloud::{AuthClient, CloudClient, EntitlementService},
     codex::codex_cli::{codex_command, codex_home, resolve_codex_binary},
-    core::local_chat::{ChatConversation, ChatSendInput, ChatSummary},
+    core::local_chat::{ChatConversation, ChatProvider, ChatSendInput, ChatSummary},
     db::Database,
     error::{AppError, AppResult},
 };
@@ -28,12 +28,17 @@ static ACTIVE: LazyLock<Mutex<HashMap<String, Active>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 const EVENT: &str = "local-chat://updated";
 const MAX_RESPONSE: usize = 2_000_000;
+#[path = "local_chat_cloud.rs"]
+mod cloud_chat;
 const CARD_TOOL_VERSION: i64 = 3;
-const CHAT_INSTRUCTIONS: &str = "你是 Bowerbird 创作工作台中的对话助手。使用用户的语言交流，帮助讨论创意、分析显式附带的图片、整理文案和提示词。用户明确要求创建卡片、实装或同意一个已经讨论清楚的卡片方案时，可以调用 create_canvas_cards，在当前项目创建可编辑的生成、本地 H3 视频、内容、触发、循环卡片和分区；讨论、构思或询问能力本身不授权创建。创建多张相关卡片时优先提供 sections，按镜头、用途或工作流阶段分区并简洁命名：同一镜头的首帧和视频放在一起，共享参考内容可独立成区，触发及循环放到所控制的流程区。成员按阅读或执行顺序排列，应用自动排布并计算分区大小。同一分区的成员放在同一批，只能引用本批卡片别名；分区不占每批12张卡片额度。不要把不相关流程塞入同一大区，也不要逐卡机械分区；用户明确不要分区或单卡无需归组时可省略。卡片批次须包含必要连接；循环负责控制轮次和输入，trigger信号端口名为signal。本地 H3 使用 comfy-video 类型，支持首尾帧及文本连接，可作为循环体；首尾帧各一张静态图片，缺图时可先创建草稿，运行前补首帧。H3 默认8秒、9:16、0.8MP，可按用户要求设置工具列出的参数，本机服务地址由应用管理。仅创建，绝不运行工作流、生成媒体或扣费。不得执行命令、读写用户文件、调用其他工具或请求权限。不搜寻电脑上的文件，不继承其他会话。图片只使用本轮显式附带的图片；按附带顺序引用 image1、image2 等，先前轮次图片不可作为当前工具的引用。工具成功回执才代表创建完成，失败时说明并修正参数，不宣称完成。模型、生成引擎和默认参数由应用提供，不自行猜测。需要澄清时直接在普通回复中提问，不调用 request_user_input 或 request_user_input_async。工具外的操作说明目前尚未开放。";
+const CHAT_INSTRUCTIONS: &str =
+    include_str!("../../../../cloud/supabase/functions/_shared/chat-instructions.txt");
 
 fn card_tool_spec() -> Value {
-    serde_json::from_str(include_str!("local_chat_card_tool.json"))
-        .expect("bundled card tool schema is valid JSON")
+    serde_json::from_str(include_str!(
+        "../../../../cloud/supabase/functions/_shared/chat-card-tool.json"
+    ))
+    .expect("bundled card tool schema is valid JSON")
 }
 
 /// Resume cannot update dynamic tools. Preserve the original app transcript, and seed a new
@@ -170,27 +175,65 @@ fn reference_paths(db: &Database, ids: &[String]) -> AppResult<Vec<String>> {
 }
 
 #[tauri::command]
+pub async fn local_chat_quote(
+    cloud: State<'_, CloudClient>,
+    auth: State<'_, AuthClient>,
+) -> AppResult<Value> {
+    cloud_chat::request(&cloud, &auth, json!({"action":"quote"})).await
+}
+
+#[tauri::command]
+pub async fn local_chat_recover(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    cloud: State<'_, CloudClient>,
+    auth: State<'_, AuthClient>,
+    conversation_id: String,
+) -> AppResult<ChatConversation> {
+    cloud_chat::recover(&db, &cloud, &auth, &conversation_id).await?;
+    emit(&app, &db, &conversation_id);
+    db.get_local_chat(&conversation_id)?
+        .ok_or_else(|| error("对话记录不存在"))
+}
+
+#[tauri::command]
 pub async fn local_chat_send(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
     auth: State<'_, AuthClient>,
     entitlement: State<'_, EntitlementService>,
+    cloud: State<'_, CloudClient>,
     input: ChatSendInput,
 ) -> AppResult<ChatConversation> {
     // Lost IPC acknowledgements can be retried safely, including after account downgrade.
     if let Some(previous) = db.replay_local_chat(&input)? {
         return Ok(previous.conversation);
     }
-    super::codex::require_byo(&entitlement, &auth).await?;
-    let binary =
-        resolve_codex_binary().ok_or_else(|| error("未找到 Codex CLI，请在设置中安装并登录"))?;
-    if !codex_home()
-        .is_some_and(|home| std::fs::metadata(home.join("auth.json")).is_ok_and(|m| m.len() > 0))
-    {
-        return Err(error("Bowerbird 的 Codex 未登录，请在设置中登录"));
-    }
+    let provider = db.local_chat_provider(&input)?;
+    let binary = match provider {
+        ChatProvider::CodexLocal => {
+            super::codex::require_byo(&entitlement, &auth).await?;
+            let binary = resolve_codex_binary()
+                .ok_or_else(|| error("未找到 Codex CLI，请在设置中安装并登录"))?;
+            if !codex_home().is_some_and(|home| {
+                std::fs::metadata(home.join("auth.json")).is_ok_and(|m| m.len() > 0)
+            }) {
+                return Err(error("Bowerbird 的 Codex 未登录，请在设置中登录"));
+            }
+            Some(binary)
+        }
+        ChatProvider::DeepseekCloud => {
+            let quote = cloud_chat::request(&cloud, &auth, json!({"action":"quote"})).await?;
+            if quote["available"] != true {
+                return Err(error("DeepSeek Cloud 暂未开放，请稍后重试"));
+            }
+            None
+        }
+    };
     let images = reference_paths(&db, &input.reference_asset_ids)?;
     let db = db.inner().clone();
+    let cloud = cloud.inner().clone();
+    let auth = auth.inner().clone();
     // Serialize process admission with durable turn admission. A second IPC cannot claim a turn
     // between its SQLite commit and registration, and stop always sees a committed active turn.
     let mut active = ACTIVE.lock().unwrap();
@@ -213,17 +256,21 @@ pub async fn local_chat_send(
     let returned = started.conversation;
     emit(&app, &db, &id);
     tokio::spawn(async move {
-        let result = run_turn(
-            &app,
-            &db,
-            &id,
-            &turn,
-            &binary,
-            &input.text,
-            images,
-            cancel_rx,
-        )
-        .await;
+        let result = if let Some(binary) = binary {
+            run_turn(
+                &app,
+                &db,
+                &id,
+                &turn,
+                &binary,
+                &input.text,
+                images,
+                cancel_rx,
+            )
+            .await
+        } else {
+            cloud_chat::run(&app, &db, &cloud, &auth, &id, &turn, cancel_rx).await
+        };
         let (status, detail) = match result {
             Ok(status) => (status, None),
             Err(detail) => ("failed", Some(detail.to_string())),

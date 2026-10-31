@@ -55,7 +55,7 @@ function nodeTitle(node: CanvasNode) {
 
 function nodeMeta(node: CanvasNode) {
   const data = payload(node);
-  if (canvasChatId(node)) return "本机 Codex · 对话";
+  if (canvasChatId(node)) return data.provider === "deepseek-cloud" ? "DeepSeek Cloud · 对话" : "本机 Codex · 对话";
   if (node.kind === "prompt") {
     return [text(data.provider), text(data.ratio), generationStatusLabel(text(data.status) ?? "")].filter(Boolean).join(" · ");
   }

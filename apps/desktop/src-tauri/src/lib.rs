@@ -675,6 +675,8 @@ pub fn run() {
             commands::codex::codex_health,
             commands::local_chat::local_chat_list,
             commands::local_chat::local_chat_get,
+            commands::local_chat::local_chat_quote,
+            commands::local_chat::local_chat_recover,
             commands::local_chat::local_chat_send,
             commands::local_chat::local_chat_stop,
             commands::local_chat_cards::local_chat_cards_undo,

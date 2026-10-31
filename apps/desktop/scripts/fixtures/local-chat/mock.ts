@@ -8,7 +8,7 @@ export const assets = [
 ].map(asset => ({ ...asset, thumb_path: asset.store_path, width: 480, height: 360, ext: "svg", source: "imported" }));
 export const projects = ["p", "q"].map((id, index) => ({ id, name: index ? "项目 B · 包装文案" : "项目 A · 荷月礼盒", kind: "blank", workspace_path: `blank:${id}`, asset_count: 2, title_source: "manual", created_at: 1, updated_at: 1 }));
 type Message = { id: string; turnId: string; role: "user" | "assistant" | "tool"; text: string; referenceAssetIds: string[]; status: string; createdAt: number; updatedAt: number };
-type Conversation = { id: string; projectId: string; threadId: string; nodeId: string; title: string; provider: "codex-local"; status: string; turnCount: number; preview: string; revision: number; createdAt: number; updatedAt: number; error: string | null; messages: Message[]; actions?: any[] };
+type Conversation = { id: string; projectId: string; threadId: string; nodeId: string; title: string; provider: "codex-local" | "deepseek-cloud"; status: string; turnCount: number; preview: string; revision: number; createdAt: number; updatedAt: number; error: string | null; messages: Message[]; actions?: any[] };
 type Database = { activeProjectId: string; projects: Record<string, any>; conversations: Record<string, Conversation>; requests: Record<string, string>; settings: Record<string, unknown> };
 function emptySnapshot(id: string) {
   return { canvas: { projectId: id, draftJson: "{}", createdAt: 1, updatedAt: 1 },
@@ -25,7 +25,7 @@ const subscribers = new Set<() => void>();
 const timers = new Map<string, ReturnType<typeof setInterval>>();
 const pendingReplies: Array<() => void> = [];
 let nextCallback = 0;
-export const controls = { fault: "none", hold: true, delayReply: false, authenticated: true, entitled: true };
+export const controls = { fault: "none", hold: true, delayReply: false, authenticated: true, entitled: true, cloudAuthenticated: true };
 export const calls: Array<{ command: string; args: any }> = [];
 export const subscribe = (listener: () => void) => { subscribers.add(listener); return () => { subscribers.delete(listener); }; };
 const changed = () => { for (const listener of subscribers) listener(); };
@@ -93,6 +93,10 @@ export function setDelayReply(value: boolean) { controls.delayReply = value; cha
 export function releaseReplies() { pendingReplies.splice(0).forEach(resolve => resolve()); changed(); }
 export async function invoke(command: string, args: any = {}) {
   if (!command.startsWith("plugin:event")) { calls.push({ command, args: clone(args) }); if (calls.length > 100) calls.shift(); }
+  if (command === "local_chat_quote") {
+    if (controls.fault === "quote") throw new Error("synthetic quote upstream error");
+    return { provider: "deepseek-cloud", service: "chat_deepseek", available: true, unit_cost: 0, currency: "Bcoin", pricing_version: 1 };
+  }
   if (command === "plugin:event|listen") { listeners.set(args.handler, args.event); return args.handler; }
   if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return null; }
   if (command === "plugin:event|emit") { emit(args.event, args.payload); return null; }
@@ -115,22 +119,27 @@ export async function invoke(command: string, args: any = {}) {
   }
   if (command === "local_chat_send") {
     const input = args.input;
-    if (!controls.authenticated) throw new Error("请先在设置中登录本机 Codex。");
-    if (!controls.entitled) throw new Error("本机对话需要 Pro 或 Studio 权益。");
+    const provider = input.provider ?? "codex-local";
+    if (provider === "deepseek-cloud") { if (!controls.cloudAuthenticated) throw new Error("请先登录 Bowerbird 账号。"); }
+    else {
+      if (!controls.authenticated) throw new Error("请先在设置中登录本机 Codex。");
+      if (!controls.entitled) throw new Error("本机对话需要 Pro 或 Studio 权益。");
+    }
     if (controls.fault === "send") throw new Error("synthetic IPC C:\\private\\auth.json token_missing");
     if (database.requests[input.requestId]) return clone(database.conversations[database.requests[input.requestId]]);
     if (!input.text?.trim()) throw new Error("请输入对话内容。");
     let chat = input.conversationId ? database.conversations[input.conversationId] : undefined;
     if (input.conversationId && (!chat || chat.projectId !== input.projectId)) throw new Error("对话不属于当前项目。");
+    if (chat && chat.provider !== provider) throw new Error("请新建对话切换模型。");
     if (chat && ["running", "stopping"].includes(chat.status)) throw new Error("这条对话仍在回复，请稍候。");
     const now = Date.now();
     if (!chat) {
       const id = crypto.randomUUID(); const project = database.projects[input.projectId];
       if (!project) throw new Error("项目不存在。");
-      chat = { id, projectId: input.projectId, threadId: `chat-thread-${id}`, nodeId: `local-chat:${id}`, title: input.text.trim().slice(0, 30), provider: "codex-local", status: "idle", turnCount: 0, preview: "", revision: 0, createdAt: now, updatedAt: now, error: null, messages: [] };
+      chat = { id, projectId: input.projectId, threadId: `chat-thread-${id}`, nodeId: `local-chat:${id}`, title: input.text.trim().slice(0, 30), provider, status: "idle", turnCount: 0, preview: "", revision: 0, createdAt: now, updatedAt: now, error: null, messages: [] };
       database.conversations[id] = chat;
       project.threads.push({ id: chat.threadId, projectId: chat.projectId, title: chat.title, createdAt: now, updatedAt: now, archivedAt: null });
-      project.nodes.push({ id: chat.nodeId, projectId: chat.projectId, threadId: chat.threadId, kind: "note", assetId: null, role: null, x: 100, y: 310, width: 320, height: 180, zIndex: 2, ...input.placement, positionLocked: false, hiddenAt: null, createdAt: now, updatedAt: now, payloadJson: JSON.stringify({ schema_version: 1, note_type: "chat", text: chat.title, conversation_id: id }) });
+      project.nodes.push({ id: chat.nodeId, projectId: chat.projectId, threadId: chat.threadId, kind: "note", assetId: null, role: null, x: 100, y: 310, width: 320, height: 180, zIndex: 2, ...input.placement, positionLocked: false, hiddenAt: null, createdAt: now, updatedAt: now, payloadJson: JSON.stringify({ schema_version: 1, note_type: "chat", text: chat.title, conversation_id: id, provider }) });
     }
     const turnId = crypto.randomUUID();
     const node = database.projects[chat.projectId].nodes.find((node: any) => node.id === chat.nodeId);
@@ -141,6 +150,13 @@ export async function invoke(command: string, args: any = {}) {
     const accepted = clone(chat);
     if (controls.delayReply) await new Promise<void>(resolve => { pendingReplies.push(resolve); changed(); });
     return accepted;
+  }
+  if (command === "local_chat_recover") {
+    if (controls.fault === "recover") throw new Error("云端仍在处理，请稍后再次取回回复。");
+    const chat = database.conversations[args.conversationId];
+    if (!chat || chat.provider !== "deepseek-cloud") throw new Error("这段对话不支持取回回复。");
+    if (chat.status !== "idle") finish(chat.id);
+    return clone(chat);
   }
   if (command === "local_chat_stop") {
     if (controls.fault === "stop") throw new Error("synthetic transport C:\\private\\pipe failed");
