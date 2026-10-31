@@ -1,4 +1,4 @@
-import { TacticalSelect } from "./TacticalSelect";
+import { AnnotationTextEditor, finishTextShape } from "./AnnotationTextEditor";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -55,7 +55,7 @@ import type {
  */
 
 /** 面板内绘制形状：坐标 0-1 相对当前底图；strokeRatio = 线宽/底图宽（分辨率无关）。 */
-type DrawShape = {
+export type DrawShape = {
   type: "rect" | "arrow" | "ellipse" | "pencil" | "text";
   x1: number;
   y1: number;
@@ -65,6 +65,8 @@ type DrawShape = {
   strokeRatio: number;
   points?: Array<{ x: number; y: number }>;
   text?: string;
+  textSource?: string;
+  textWidthRatio?: number;
   fontRatio?: number;
   fontFamily?: string;
   fontWeight?: number;
@@ -84,11 +86,7 @@ type CropDrag =
   | { kind: "resize"; handle: string; rect: CropRect };
 
 const COLORS = ["#ff4d4d", "#ffd21e", "#3ddc84", "#4d9fff", "#ffffff", "#111111"];
-const FONTS = [
-  { name: "黑体", value: '"Microsoft YaHei", "PingFang SC", sans-serif' },
-  { name: "宋体", value: 'SimSun, "Songti SC", serif' },
-  { name: "等宽", value: 'Consolas, "Microsoft YaHei", monospace' },
-];
+
 
 function shapeBounds(s: DrawShape) {
   const points = s.points ?? [{ x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }];
@@ -158,6 +156,7 @@ function mapShape(s: DrawShape, op: BaseOp, oldW: number, oldH: number): DrawSha
     }) } : {}),
     ...(s.type === "text" ? {
       fontRatio: (s.fontRatio! * oldW) / d.w,
+      ...(s.textWidthRatio ? { textWidthRatio: s.textWidthRatio * oldW / d.w } : {}),
       // 反射作用于已旋转的文字：翻转角度并切换局部 X 轴镜像。
       rotation: ((op.kind === "flip"
         ? (op.axis === "horizontal" ? 0 : 180) - (s.rotation ?? 0)
@@ -387,11 +386,20 @@ export function ImageAnnotator() {
   const [color, setColor] = useState(COLORS[0]);
   const [pen, setPen] = useState(4); // 线宽（显示像素，提交时按显示宽换算 strokeRatio）
   const [busy, setBusy] = useState(false);
-  const [text, setText] = useState("");
-  const [fontSize, setFontSize] = useState(32);
-  const [fontFamily, setFontFamily] = useState(FONTS[0].value);
-  const [bold, setBold] = useState(false);
-  const textInputRef = useRef<HTMLTextAreaElement>(null);
+  const [textEdit, setTextEdit] = useState<{ index: number | null; shape: DrawShape } | null>(null);
+
+  function commitText() {
+    if (!textEdit || !base) return;
+    const shape = finishTextShape(textEdit.shape, base.w, base.h);
+    if (shape || textEdit.index !== null) {
+      pushUndo();
+      setShapes(current => textEdit.index === null
+        ? [...current, ...(shape ? [shape] : [])]
+        : current.flatMap((item, index) => index === textEdit.index ? (shape ? [shape] : []) : [item]));
+    }
+    setTextEdit(null);
+  }
+
 
   useEffect(() => {
     setShapes([]);
@@ -401,7 +409,7 @@ export function ImageAnnotator() {
     setCropRect(null);
     cropDragRef.current = null;
     setBusy(false);
-    setText("");
+    setTextEdit(null);
     if (annotator?.saveDraft) {
       setTool("rect");
       setColor("#111111");
@@ -628,22 +636,12 @@ export function ImageAnnotator() {
     e.preventDefault();
     const p = toRel(e);
     if (tool === "text") {
-      if (!text.trim() || !base) {
-        textInputRef.current?.focus();
-        return;
-      }
-      const size = fontSize * base.w / displaySize.w;
-      const ctx = document.createElement("canvas").getContext("2d");
-      if (!ctx) return;
-      ctx.font = `${bold ? 700 : 400} ${size}px ${fontFamily}`;
-      const lines = text.split("\n");
-      const width = Math.max(...lines.map(line => ctx.measureText(line).width));
-      pushUndo();
-      setShapes((current) => [...current, {
-        type: "text", x1: p.x, y1: p.y, x2: p.x + width / base.w,
-        y2: p.y + size * lines.length * 1.25 / base.h, color, strokeRatio: 0,
-        text, fontRatio: size / base.w, fontFamily, fontWeight: bold ? 700 : 400, rotation: 0,
-      }]);
+      setTextEdit({ index: null, shape: {
+        type: "text", x1: p.x, y1: p.y, x2: p.x, y2: p.y,
+        text: "", textSource: "", textWidthRatio: Math.min(0.35, Math.max(0.08, 1 - p.x)),
+        color, strokeRatio: 0, fontRatio: 32 / displaySize.w,
+        fontFamily: '"Microsoft YaHei", "PingFang SC", sans-serif', fontWeight: 400,
+      } });
       return;
     }
     if (tool === "crop") {
@@ -867,7 +865,7 @@ export function ImageAnnotator() {
       fill="none" stroke={s.color} strokeWidth={w} strokeLinecap="round" strokeLinejoin="round" />;
     if (s.type === "text") {
       const size = s.fontRatio! * dw;
-      return <text key={key} fill={s.color} fontSize={size} fontFamily={s.fontFamily} fontWeight={s.fontWeight}
+      return <text key={key} pointerEvents={tool === "text" ? "bounding-box" : "none"} fill={s.color} fontSize={size} fontFamily={s.fontFamily} fontWeight={s.fontWeight}
         style={{ whiteSpace: "pre" }} transform={`translate(${s.x1 * dw} ${s.y1 * dh}) rotate(${s.rotation ?? 0}) scale(${s.mirrored ? -1 : 1} 1)`}>
         {s.text!.split("\n").map((line, index) => <tspan key={index} x={0} y={size * (1 + index * 1.25)}>{line}</tspan>)}
       </text>;
@@ -1017,12 +1015,17 @@ export function ImageAnnotator() {
 
   const canUndo = undoStack.length > 0;
   // 有任一编辑（标注 / 裁剪 / 旋转 / 镜像）即可输出，无形状时没有「标注」维度。
-  const hasEdits = shapes.length > 0 || ops.length > 0;
+  const hasEdits = shapes.length > 0 || ops.length > 0 || !!textEdit?.shape.textSource?.trim();
 
   return createPortal(
     <div
       className="image-annotator fixed inset-0 z-[90] flex flex-col bg-black/90"
       role="dialog"
+      onPointerDownCapture={event => {
+        if (!textEdit || (event.target instanceof Element && event.target.closest("[data-annotation-text-editor]"))) return;
+        commitText();
+        if (event.target instanceof Element && event.target.closest("svg.cursor-crosshair")) event.stopPropagation();
+      }}
       aria-modal="true"
       aria-label={isDraft ? "草稿" : "图片标注"}
     >
@@ -1173,24 +1176,6 @@ export function ImageAnnotator() {
         </div>
       </fieldset>
 
-      {tool === "text" && <fieldset disabled={busy} className="flex flex-wrap items-center gap-3 border-b border-white/10 px-3 py-2 text-xs text-white">
-        <textarea ref={textInputRef} aria-label="文字内容" placeholder="输入文字后，点击图片放置" rows={2}
-          value={text} onChange={(event) => setText(event.target.value)}
-          className="min-w-48 flex-1 resize-y rounded border border-white/25 bg-black/40 px-2 py-1 text-white" />
-        <label className="flex items-center gap-2">字体
-          <TacticalSelect aria-label="字体" value={fontFamily} onValueChange={value => setFontFamily(value)} className="rounded bg-zinc-800 p-1">
-            {FONTS.map(font => <option key={font.name} value={font.value}>{font.name}</option>)}
-          </TacticalSelect>
-        </label>
-        <label className="flex items-center gap-2">字号
-          <input aria-label="字号" type="number" min={12} max={96} value={fontSize}
-            onChange={(event) => setFontSize(Math.max(12, Math.min(96, Number(event.target.value) || 12)))}
-            className="w-16 rounded bg-zinc-800 px-2 py-1" />
-        </label>
-        <button type="button" aria-pressed={bold} className={toolBtn(bold)} onClick={() => setBold(!bold)}>粗体</button>
-        <span className="text-white/60">支持换行 · 点击图片放置 · 撤销可移除</span>
-      </fieldset>}
-
       {/* 画布区 */}
       <div ref={stageRef} className="relative flex flex-1 items-center justify-center overflow-hidden p-6" style={{ pointerEvents: busy ? "none" : undefined }}>
         {assetLoading ? (
@@ -1224,10 +1209,20 @@ export function ImageAnnotator() {
               }}
               onContextMenu={(e) => e.preventDefault()}
             >
-              <g pointerEvents="none">{shapes.map((s, i) => renderShape(s, `s${i}`))}</g>
+              <g pointerEvents="none">{shapes.map((s, i) => textEdit?.index === i ? null : <g key={i}
+                pointerEvents={tool === "text" && s.type === "text" ? "auto" : "none"}
+                onPointerDown={event => {
+                  if (tool !== "text" || s.type !== "text") return;
+                  event.stopPropagation();
+                  setTextEdit({ index: i, shape: s });
+                }}>{renderShape(s, `s${i}`)}</g>)}</g>
               {draft && renderShape(draft, "draft")}
               {tool === "crop" && cropRect && renderCropUI(cropRect)}
             </svg>
+            {textEdit && <AnnotationTextEditor
+              key={textEdit.index ?? "new"} shape={textEdit.shape} width={dw} height={dh}
+              onChange={shape => setTextEdit({ ...textEdit, shape })}
+              onCommit={commitText} onCancel={() => setTextEdit(null)} />}
             {cropActionBar}
           </div>
         )}
