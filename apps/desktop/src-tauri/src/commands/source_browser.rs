@@ -205,12 +205,18 @@ pub async fn open_source_browser(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceMediaKind { Image, Video }
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DragNotice {
     pub id: String,
     pub image_url: Option<String>,
     pub page_url: Option<String>,
+    pub media_kind: Option<SourceMediaKind>,
+    pub poster_url: Option<String>,
 }
 
 pub struct SourceDragHandler(pub fn(&AppHandle, bool, DragNotice));
@@ -222,8 +228,15 @@ fn parse_drag_notice(url: &Url, token: &str) -> Option<DragNotice> {
     let notice: DragNotice = serde_json::from_str(&payload).ok()?;
     if notice.id.len() != 32 || !notice.id.bytes().all(|c| c.is_ascii_hexdigit()) { return None; }
     if url.path() == "/start" {
-        for raw in [notice.image_url.as_deref()?, notice.page_url.as_deref()?] {
-            if raw.len() > 8192 || parse_http_source_url(raw).is_err() { return None; }
+        let media = notice.image_url.as_deref()?;
+        let page = notice.page_url.as_deref()?;
+        if page.len() > 8192 || parse_http_source_url(page).is_err() || media.len() > 8192 { return None; }
+        // A blob video remains a video drag so the drop can explain unsupported
+        // streams; it is never downloaded here or substituted with its poster.
+        let checked = if notice.media_kind == Some(SourceMediaKind::Video) { media.strip_prefix("blob:").unwrap_or(media) } else { media };
+        if parse_http_source_url(checked).is_err() { return None; }
+        if let Some(poster) = &notice.poster_url {
+            if poster.len() > 8192 || parse_http_source_url(poster).is_err() { return None; }
         }
     }
     Some(notice)
@@ -235,8 +248,12 @@ fn handle_drag_notice(app: &AppHandle, url: &Url, token: &str) {
     let _ = app.emit_to(MAIN_WEBVIEW_LABEL, "source-browser://drag", serde_json::json!({
         "phase": if start { "start" } else { "end" }, "id": notice.id,
         "imageUrl": notice.image_url,
+        "mediaKind": notice.media_kind,
+        "posterUrl": notice.poster_url,
     }));
-    if let Some(handler) = app.try_state::<SourceDragHandler>() { (handler.0)(app, url.path() == "/start", notice); }
+    if !start || notice.media_kind != Some(SourceMediaKind::Video) {
+        if let Some(handler) = app.try_state::<SourceDragHandler>() { (handler.0)(app, start, notice); }
+    }
 }
 
 #[tauri::command]
@@ -313,6 +330,31 @@ pub async fn hide_source_browser(app: AppHandle) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_browser_video_notice_keeps_explicit_media_type() {
+        let mut url = Url::parse("bowerbird-explorer://private/start").unwrap();
+        url.query_pairs_mut().append_pair("data", &serde_json::json!({
+            "id":"a".repeat(32), "imageUrl":"https://cdn.example.com/clip.mp4", "pageUrl":"https://example.com/watch/1",
+            "mediaKind":"video", "posterUrl":"https://cdn.example.com/cover.jpg"
+        }).to_string());
+        let notice = parse_drag_notice(&url, "private").expect("typed video drag must reach the main view");
+        assert_eq!(notice.media_kind, Some(SourceMediaKind::Video));
+        assert_eq!(notice.image_url.as_deref(), Some("https://cdn.example.com/clip.mp4"));
+        assert_eq!(notice.poster_url.as_deref(), Some("https://cdn.example.com/cover.jpg"));
+        assert!(parse_drag_notice(&url, "wrong-token").is_none());
+        for (media, poster, accepted) in [
+            ("blob:https://example.com/temporary", "https://example.com/cover.jpg", true),
+            ("file:///private.mp4", "https://example.com/cover.jpg", false),
+            ("https://example.com/clip.mp4", "file:///private.png", false),
+        ] {
+            url.set_query(None);
+            url.query_pairs_mut().append_pair("data", &serde_json::json!({
+                "id":"a".repeat(32), "imageUrl":media, "pageUrl":"https://example.com/watch", "mediaKind":"video", "posterUrl":poster,
+            }).to_string());
+            assert_eq!(parse_drag_notice(&url, "private").is_some(), accepted);
+        }
+    }
 
     #[test]
     fn drag_notices_require_private_token_and_valid_http_image() {

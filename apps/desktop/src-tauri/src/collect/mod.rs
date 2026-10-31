@@ -4,4 +4,4 @@
 //! 视频需先协商能力并显式标记类型；桌面不读取 Cookie、不做断点续传。
 
 pub mod ws_server;
-mod video_blob;
+pub(crate) mod video_blob;

@@ -17,7 +17,8 @@ fn capture_url(raw: &str) -> AppResult<tauri::Url> {
     Ok(url)
 }
 
-use super::source_browser_network::browser_bytes;
+use super::source_browser_network::{browser_bytes, browser_video_bytes};
+use super::source_browser::SourceMediaKind;
 
 fn import_capture(
     paths: &LibraryPaths,
@@ -40,6 +41,27 @@ fn import_capture(
     Ok(asset)
 }
 
+fn import_video_capture(paths: &LibraryPaths, db: &Database, bytes: &[u8], media_url: &str, page_url: &str, project_id: Option<&str>) -> AppResult<Asset> {
+    let file_name = tauri::Url::parse(media_url).ok().and_then(|url| url.path_segments().and_then(|mut segments| segments.next_back()).map(str::to_owned));
+    crate::collect::video_blob::save(paths, db, bytes, &serde_json::json!({
+        "media_kind":"video", "requested_url":media_url, "page_url":page_url, "file_name":file_name,
+    }), project_id).map_err(|error| {
+        tracing::warn!(code=error.code, diagnostic=%error.diagnostic, "explorer video capture failed");
+        AppError::Other(error.message.into())
+    })
+}
+
+fn video_capture_url(raw: &str) -> AppResult<tauri::Url> {
+    if raw.starts_with("blob:") {
+        return Err(AppError::Other("此视频使用浏览器临时地址，暂不支持拖入采集；请使用完整视频文件链接。".into()));
+    }
+    let url = capture_url(raw)?;
+    if [".m3u8", ".mpd"].iter().any(|ext| url.path().to_ascii_lowercase().ends_with(ext)) {
+        return Err(AppError::Other("此视频使用分段播放，暂不支持拖入采集；请使用完整视频文件链接。".into()));
+    }
+    Ok(url)
+}
+
 #[tauri::command]
 pub async fn capture_source_browser_image(
     app: AppHandle,
@@ -50,13 +72,15 @@ pub async fn capture_source_browser_image(
     page_url: String,
     project_id: Option<String>,
     drag_id: Option<String>,
+    media_kind: Option<SourceMediaKind>,
 ) -> AppResult<Asset> {
     if webview.label() != "main" {
         return Err(AppError::Other("只允许从素材库接收拖入图片".into()));
     }
     let original_image = image_url.clone();
     let original_page = page_url.clone();
-    let image_url = capture_url(&image_url)?;
+    let is_video = media_kind == Some(SourceMediaKind::Video);
+    let image_url = if is_video { video_capture_url(&image_url)? } else { capture_url(&image_url)? };
     let page_url = capture_url(&page_url)?;
     let browser = app
         .get_webview("source-discovery")
@@ -73,6 +97,23 @@ pub async fn capture_source_browser_image(
         if db.get_project(id)?.is_none() {
             return Err(AppError::Other("采集目标项目已不存在".into()));
         }
+    }
+    if is_video {
+        let bytes = browser_video_bytes(&browser, image_url.as_str()).await?;
+        let paths = paths.inner().clone();
+        let db = db.inner().clone();
+        let asset = tokio::task::spawn_blocking(move || import_video_capture(
+            &paths, &db, &bytes, image_url.as_str(), page_url.as_str(), project_id.as_deref(),
+        )).await.map_err(|error| AppError::Other(error.to_string()))??;
+        let _ = app.emit("library://assets-changed", ());
+        for path in [asset.store_path.as_ref(), asset.thumb_path.as_ref()].into_iter().flatten() {
+            if let Err(error) = app.asset_protocol_scope().allow_file(path) {
+                // The asset is already saved: return it for canvas delivery instead
+                // of encouraging a second collection after a preview-only failure.
+                tracing::warn!(asset_id=%asset.id, diagnostic=%error, "saved explorer video preview unavailable");
+            }
+        }
+        return Ok(asset);
     }
     let analysis = app.state::<ExplorerAnalysis>();
     let preview = if let Some(id) = &drag_id {
@@ -139,6 +180,56 @@ pub async fn finish_source_browser_analysis(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn source_browser_video_capture_saves_real_video_to_frozen_project() {
+        let temporary = tempfile::tempdir().unwrap();
+        let paths = LibraryPaths::init(temporary.path().to_owned()).unwrap();
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.create_project("original", "Original", "", "original", "blank").unwrap();
+        db.create_project("later", "Later", "", "later", "blank").unwrap();
+        let bytes = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/media/fragmented.mp4")).unwrap();
+        let media = "https://cdn.example.com/clip.mp4";
+        let page = "https://example.com/watch/1";
+        let asset = import_video_capture(&paths, &db, &bytes, media, page, Some("original")).expect("dragging a real video must save video bytes");
+        assert_eq!(asset.ext.as_deref(), Some("mp4"));
+        assert!(asset.width.unwrap_or(0) > 0 && asset.height.unwrap_or(0) > 0 && asset.duration.unwrap_or(0.0) > 0.0);
+        assert_eq!(std::fs::read(asset.store_path.as_ref().unwrap()).unwrap(), bytes);
+        assert_eq!(asset.source.as_deref(), Some("extension"));
+        assert_eq!(asset.source_url.as_deref(), Some(page));
+        assert!(asset.origin_path.is_none());
+        assert_eq!(db.get_project("original").unwrap().unwrap().asset_count, 1);
+        assert_eq!(db.get_project("later").unwrap().unwrap().asset_count, 0);
+        let repeated = import_video_capture(&paths, &db, &bytes, media, page, Some("original")).unwrap();
+        assert_eq!(repeated.id, asset.id);
+        let conn = db.conn.lock().unwrap();
+        let captured: String = conn.query_row("SELECT payload FROM analyses WHERE asset_id=?1 AND kind='extension_capture'", [&asset.id], |row| row.get(0)).unwrap();
+        let captured: serde_json::Value = serde_json::from_str(&captured).unwrap();
+        assert_eq!(captured["requested_url"], media);
+        assert_eq!(captured["page_url"], page);
+    }
+
+    #[test]
+    fn source_browser_video_capture_rejects_posters_and_deleted_projects() {
+        let temporary = tempfile::tempdir().unwrap();
+        let paths = LibraryPaths::init(temporary.path().to_owned()).unwrap();
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        let image = crate::media::phash::testutil::make_photo_file(temporary.path(), "poster.png", 32, 42);
+        let bytes = std::fs::read(image).unwrap();
+        for bytes in [bytes, b"<html>Login</html>".to_vec(), b"#EXTM3U\nclip.ts".to_vec()] {
+            assert!(import_video_capture(&paths, &db, &bytes, "https://cdn.example/clip.mp4", "https://example/watch", None).is_err());
+        }
+        let video = std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/media/fragmented.mp4")).unwrap();
+        assert!(import_video_capture(&paths, &db, &video, "https://cdn.example/clip.mp4", "https://example/watch", Some("deleted")).is_err());
+        assert_eq!(db.count_assets(None).unwrap(), 0);
+    }
+
+    #[test]
+    fn source_browser_video_url_rejects_streams_and_privileged_sources() {
+        for raw in ["blob:https://example.com/clip", "https://example.com/list.M3U8?token=x", "https://example.com/list.mpd", "file:///clip.mp4", "https://user:pw@example.com/clip.mp4"] {
+            assert!(video_capture_url(raw).is_err(), "{raw}");
+        }
+        assert!(video_capture_url("https://cdn.example.com/media?id=1").is_ok());
+    }
     #[test]
     fn capture_import_preserves_extension_provenance_and_project_membership() {
         let root = std::env::temp_dir().join(format!("bb-explorer-test-{}", ulid::Ulid::new()));

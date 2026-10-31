@@ -48,26 +48,11 @@ try{
   await page.goto('http://127.0.0.1:1766/scripts/fixtures/explorer/preview.html');await mockCollection();
   await page.getByRole('button',{name:'探索',exact:true}).click();
   const panel=page.getByRole('region',{name:'探索浏览器'});
-  await panel.getByRole('button',{name:'采集视频',exact:true}).waitFor({timeout:3000});
-  await panel.getByRole('button',{name:'采集视频',exact:true}).click();await dialog().waitFor();
-  assert.equal(await page.getByRole('textbox',{name:'视频链接'}).inputValue(),'','ordinary pages do not pretend to be direct video links');
-  await page.getByRole('button',{name:'关闭',exact:true}).click();
-  const url='https://www.douyin.com/video/1234567890123456';
-  await page.getByRole('textbox',{name:'网页地址'}).fill(url);await page.getByRole('textbox',{name:'网页地址'}).press('Enter');
-  await panel.getByRole('button',{name:'采集视频',exact:true}).click();await dialog().waitFor();
-  assert.equal(await page.getByRole('textbox',{name:'视频链接'}).inputValue(),url);
-  assert.equal(await page.evaluate(()=>window.calls.filter(call=>call.command==='video_collection' && call.args.action==='create').length),0,'opening the entry never downloads automatically');
-  await page.waitForFunction(()=>window.calls.filter(call=>call.command==='resize_source_browser').at(-1)?.args.visible===false);
-  await page.screenshot({path:'.tmp/video-collection-entry/explorer-dialog.png'});
-  await page.getByRole('button',{name:'关闭',exact:true}).click();
-  await page.waitForFunction(()=>window.calls.filter(call=>call.command==='resize_source_browser').at(-1)?.args.visible===true);
-  await page.screenshot({path:'.tmp/video-collection-entry/explorer-entry.png'});
-  for(const [address,prefill] of [['https://media.example/clip.MP4?token=fixture','https://media.example/clip.MP4?token=fixture'],['https://www.douyin.com.example/video/1234567890123456','']]){
-    await page.getByRole('textbox',{name:'网页地址'}).fill(address);await page.getByRole('textbox',{name:'网页地址'}).press('Enter');
-    await panel.getByRole('button',{name:'采集视频',exact:true}).click();await dialog().waitFor();
-    assert.equal(await page.getByRole('textbox',{name:'视频链接'}).inputValue(),prefill);
-    await page.getByRole('button',{name:'关闭',exact:true}).click();
-  }
+  await panel.waitFor();
+  assert.equal(await panel.getByText('登录状态保存在本机',{exact:true}).count(),0,'explorer has no redundant local-login note');
+  assert.equal(await panel.getByRole('button',{name:'采集视频',exact:true}).count(),0,'explorer uses direct dragging instead of a collection button');
+  assert.equal(await panel.getByRole('button',{name:'浏览器插件',exact:true}).isVisible(),true);
+  await page.screenshot({path:'.tmp/video-collection-entry/explorer-drag-only.png'});
   assert.deepEqual(errors,[]);
-  console.log('PASS: readable persistent library entry at three widths and empty state; explorer entry, supported-only URL prefill, no automatic download, native view occlusion/recovery');
+  console.log('PASS: readable persistent library entry at three widths and empty state; explorer removes redundant login note and collection button');
 }finally{await browser.close();await server.close();}

@@ -187,7 +187,7 @@ function ExtensionPanel({ onClose }: { onClose: () => void }) {
         <section className="extension-setup-usage" aria-label="采集使用方法">
           <h3>如何采集</h3>
           <p>在普通网页中，点击右下角的 Bowerbird 按钮批量采集本页图片，或按住 Alt 点击单张图片。也可以将图片拖到右下角 Bowerbird 按钮。</p>
-          <p>视频：点击旁边的「视频」，选择要采集的一条；也可按住 Alt 点击网页视频。请保持网页打开，等待保存完成。</p>
+          <p>视频也可拖到同一个 Bowerbird 按钮直接采集。请保持网页打开，等待保存完成。</p>
           <p>采集后在项目素材或收集箱查看，再按需拖入画板。内置探索浏览器仍可直接拖图，无需安装插件。</p>
         </section>
         <button type="button" className="app-modal-button extension-setup-toggle" onClick={() => setShowTutorial(value => !value)} aria-expanded={showTutorial} aria-controls="extension-install-guide">

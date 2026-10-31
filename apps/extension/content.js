@@ -12,6 +12,8 @@
   let collecting = false;
   let scanning = false;
   let draggedVideo = null;
+  let temporaryDraggable = null;
+  const handledDrops = new WeakSet();
 
   // 心跳：让桌面端知道扩展已安装且当前浏览器可连接（每 15s 建短连发 ping）。
   // 不影响采集（采集走独立的 save_blob 连接）；桌面端据此显示「扩展已连接」。
@@ -35,7 +37,7 @@
   btnLogo.alt = "";
   btnLogo.style.cssText = "width:100%;height:100%;display:block;pointer-events:none";
   btn.appendChild(btnLogo);
-  btn.title = "Bowerbird：拖拽图片到此处采集，或点击后确认批量采集本页素材";
+  btn.title = "Bowerbird：拖拽图片或视频到此处采集，或点击后确认批量采集本页图片";
   btn.style.cssText = [
     "position:fixed",
     "bottom:24px",
@@ -86,9 +88,10 @@
   btn.addEventListener("drop", async (e) => {
     e.preventDefault();
     resetBtnStyle();
-    if (collecting || scanning) return;
+    if (collecting || scanning || handledDrops.has(e.dataTransfer)) return;
+    handledDrops.add(e.dataTransfer);
     const video = videoFromDrop(e);
-    if (video) { showVideos([video]); return; }
+    if (video) { void saveVideo(video); return; }
     const candidates = candidatesFromDropEvent(e);
     if (candidates.length === 0) {
       showToast("未识别到图片地址", false);
@@ -113,20 +116,45 @@
   });
   videoBtn.addEventListener("dragover",e=>{e.preventDefault();e.dataTransfer.dropEffect="copy";});
   videoBtn.addEventListener("drop",e=>{
-    e.preventDefault();if(collecting || scanning)return;
+    e.preventDefault();if(collecting || scanning || handledDrops.has(e.dataTransfer))return;
+    handledDrops.add(e.dataTransfer);
     const item=videoFromDrop(e);
-    if(item) showVideos([item]);else showToast("未识别到视频，请点击“视频”选择或 Alt 点击网页播放器。",false,10000);
+    if(item) void saveVideo(item);else showToast("未识别到视频，请点击“视频”选择或 Alt 点击网页播放器。",false,10000);
   });
   document.documentElement.appendChild(videoBtn);
+  function restoreVideoDraggable() {
+    if(!temporaryDraggable)return;
+    const {video,attribute}=temporaryDraggable;
+    if(video.getAttribute("draggable")==="true") {
+      if(attribute===null)video.removeAttribute("draggable");else video.setAttribute("draggable",attribute);
+    }
+    temporaryDraggable=null;
+  }
+  document.addEventListener("pointerdown",e=>{
+    restoreVideoDraggable();
+    if(e.button!==0 || e.isPrimary===false || e.pointerType==="touch")return;
+    const video=(e.composedPath?.() || [e.target]).find(node=>node?.tagName==="VIDEO");
+    if(!video || video.draggable)return;
+    // Leave the native control strip to seeking/volume/fullscreen; never prevent normal playback clicks.
+    const rect=video.getBoundingClientRect();
+    if(video.controls && e.clientY>=rect.bottom-Math.min(64,rect.height/2))return;
+    temporaryDraggable={video,attribute:video.getAttribute("draggable")};
+    video.draggable=true;
+  },true);
+  document.addEventListener("pointerup",restoreVideoDraggable,true);
+  document.addEventListener("pointercancel",restoreVideoDraggable,true);
+  window.addEventListener?.("blur",restoreVideoDraggable);
   document.addEventListener("dragstart",e=>{
     const video=(e.composedPath?.() || [e.target]).find(node=>node?.tagName==="VIDEO");
     draggedVideo=video ? V.element(video,location.href) : null;
   },true);
-  document.addEventListener("dragend",()=>{draggedVideo=null;},true);
+  document.addEventListener("dragend",()=>{draggedVideo=null;restoreVideoDraggable();},true);
 
   function videoFromDrop(event) {
     if(draggedVideo) return draggedVideo;
     const html=event.dataTransfer.getData("text/html");
+    // Preserve image drops even when a surrounding page/link happens to contain video markup or a video URL.
+    if(/<(?:img|picture)\b/i.test(html))return null;
     if(/<video\b/i.test(html)) {
       const doc=new DOMParser().parseFromString(html,"text/html");
       const element=doc.querySelector("video");
@@ -210,6 +238,7 @@
     if(collecting || scanning)return;
     if(item.blocked){showToast(S.failureMessage({code:item.blocked},"video"),false,12000);return;}
     collecting=true;btn.disabled=true;videoBtn.disabled=true;videoBtn.textContent="采集中";hideConfirm();
+    document.getElementById("__bowerbird_videos")?.remove();
     showToast("正在采集视频，请保持网页打开…",true,0);
     try {
       const result=/^(blob:|data:)/i.test(item.media_url) ? await savePageVideo(item) : await S.requestBackground(item);

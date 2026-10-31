@@ -3,7 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import type { ExplorerImage } from "./explorer";
 import "./explorerDragVisual.js";
 
-interface DragVisualValue { id: string; imageUrl: string }
+interface DragVisualValue { id: string; imageUrl: string; mediaKind?: "image" | "video"; posterUrl?: string }
+const visualUrl = (value: Pick<ExplorerImage, "imageUrl" | "mediaKind" | "posterUrl">) => value.mediaKind === "video" ? value.posterUrl ?? "" : value.imageUrl;
 interface DragPreview {
   id: string;
   thumbnail?: string;
@@ -41,6 +42,7 @@ export function useExplorerDragMotion(root: RefObject<HTMLDivElement>, open: boo
       }),
       listen<DragPreview>("source-browser://drag-preview", ({ payload }) => {
         if (disposed) return;
+        if (active.current?.id === payload.id && active.current.mediaKind === "video") return;
         if (payload.thumbnail) onThumbnail?.(payload.id, payload.thumbnail);
         if (active.current?.id !== payload.id) return;
         if (payload.thumbnail) active.current.thumbnail = payload.thumbnail;
@@ -64,15 +66,15 @@ export function useExplorerDragMotion(root: RefObject<HTMLDivElement>, open: boo
     over(x: number, y: number) {
       const value = active.current;
       if (!value || value.dropped) return;
-      if (!value.shown) { visual.current?.pick({ ...value, imageUrl: value.preview?.thumbnail ?? value.imageUrl }, x, y); value.shown = true; }
+      if (!value.shown) { visual.current?.pick({ ...value, imageUrl: value.preview?.thumbnail ?? visualUrl(value) }, x, y); value.shown = true; }
       visual.current?.move(x, y);
       if (value.preview) { visual.current?.update(value.preview); value.preview = undefined; }
     },
     leave() { visual.current?.hide(); },
     drop(image: ExplorerImage, id: string, x: number, y: number) {
-      const imageUrl = active.current?.id === id ? active.current.thumbnail ?? image.imageUrl : image.imageUrl;
-      if (active.current?.id !== id || !active.current.shown) visual.current?.pick({ id, imageUrl: image.imageUrl }, x, y);
-      active.current = { id, imageUrl: image.imageUrl, thumbnail: imageUrl, dropped: true, shown: true };
+      const imageUrl = active.current?.id === id ? active.current.thumbnail ?? visualUrl(image) : visualUrl(image);
+      if (active.current?.id !== id || !active.current.shown) visual.current?.pick({ id, imageUrl }, x, y);
+      active.current = { ...image, id, thumbnail: imageUrl, dropped: true, shown: true };
       visual.current?.land(x, y);
       return imageUrl;
     },

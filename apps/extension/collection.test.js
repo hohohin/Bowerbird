@@ -289,7 +289,7 @@ test("actual background fetch abort has no upload and is reported as a read time
 
 test("packaged manifest loads all content dependencies and Windows runtime stays identical", () => {
   const manifest = JSON.parse(source("manifest.json"));
-  assert.equal(manifest.version, "0.3.0");
+  assert.equal(manifest.version, "0.3.1");
   assert.deepEqual(manifest.content_scripts[0].js, ["candidate-utils.js", "collection-utils.js", "video-utils.js", "content.js"]);
   for (const file of ["manifest.json", "candidate-utils.js", "collection-utils.js", "video-utils.js", "content.js", "background.js"]) {
     assert.equal(source(file), readFileSync(new URL(`../../Windows/extension/${file}`, import.meta.url), "utf8"), file);

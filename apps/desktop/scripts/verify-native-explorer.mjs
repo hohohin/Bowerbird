@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 import { startBrowserDrag, finishBrowserDrag } from "./fixtures/explorer/native-drag.mjs";
@@ -12,6 +12,7 @@ const root = path.resolve("../..");
 const directory = path.join(root, ".tmp", "explorer-native-" + Date.now());
 await mkdir(directory, { recursive: true });
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6Qy4AAAAASUVORK5CYII=", "base64");
+const video = await readFile("src-tauri/tests/fixtures/media/fragmented.mp4");
 const servers = [];
 async function serve(port, handler) {
   const server = createServer(handler); servers.push(server);
@@ -22,12 +23,14 @@ await serve(1557, (_, res) => { res.setHeader("Content-Type", "text/html"); res.
 await serve(1558, (req, res) => {
   if (req.url === "/login") { res.setHeader("Set-Cookie", "explorerSession=logged-in; HttpOnly; Max-Age=3600; SameSite=Lax; Path=/"); res.writeHead(302, { Location: "/fixture" }); res.end(); return; }
   res.setHeader("Content-Type", "text/html");
-  res.end(`<html><body><h1>${req.headers.cookie?.includes("explorerSession=logged-in") ? "logged in" : "logged out"}</h1><a href="/login">Login</a><a href="/pin/123"><img id="image" draggable="true" style="width:150px;height:150px" src="http://127.0.0.1:1559/small.png" srcset="http://127.0.0.1:1559/small.png 1x, http://127.0.0.1:1559/protected.png 2x"></a></body></html>`);
+  res.end(`<html><body><h1>${req.headers.cookie?.includes("explorerSession=logged-in") ? "logged in" : "logged out"}</h1><a href="/login">Login</a><a href="/pin/123"><img id="image" draggable="true" style="width:150px;height:150px" src="http://127.0.0.1:1559/small.png" srcset="http://127.0.0.1:1559/small.png 1x, http://127.0.0.1:1559/protected.png 2x"></a><video id="video" controls muted style="display:block;width:320px;height:180px" poster="http://127.0.0.1:1559/protected.png" src="http://127.0.0.1:1559/video.mp4"></video></body></html>`);
 });
 await serve(1559, (req, res) => {
   imageRequests++;
   if (req.url === "/html") { res.setHeader("Content-Type", "text/html"); res.end("<html>Login required</html>"); return; }
   if (!req.headers.cookie?.includes("explorerSession=logged-in")) { res.writeHead(401); res.end("login required"); return; }
+  if (req.url === "/video-partial.mp4") { res.writeHead(206, { "Content-Type":"video/mp4", "Content-Range":`bytes 0-1023/${video.length}` }); res.end(video.subarray(0,1024)); return; }
+  if (req.url === "/video.mp4") { res.setHeader("Content-Type", "video/mp4"); res.end(video); return; }
   res.setHeader("Content-Type", "image/png"); res.end(png); // deliberately no CORS headers
 });
 let child; let browser; let sourceBrowser;
@@ -114,6 +117,28 @@ try {
   await sourceSession.detach();
   await source.locator("[data-explorer-drag-visual]").waitFor({ state: "detached" });
   await main.waitForFunction(async id => (await window.__TAURI_INTERNALS__.invoke("smoke_drag_notices")).some(n => !n.start && n.id === id), dropped.dragId);
+  // A real browser-originated VIDEO drag crosses the same standard-text bridge.
+  await source.waitForFunction(() => document.querySelector('#video').readyState >= 2);
+  const videoRect = await source.locator('#video').boundingBox();
+  const videoDrag = await startBrowserDrag(source, videoRect.x + 60, videoRect.y + 45);
+  const videoPayload = JSON.parse(videoDrag.data.items.find(item => item.mimeType === 'application/x-bowerbird-explorer').data);
+  assert.equal(videoPayload.mediaKind, 'video');
+  assert.equal(videoPayload.imageUrl, 'http://127.0.0.1:1559/video.mp4');
+  assert.equal(videoPayload.posterUrl, 'http://127.0.0.1:1559/protected.png');
+  await main.waitForFunction(id => window.nativeDragEvents.some(event => event.phase === 'start' && event.id === id && event.mediaKind === 'video'), videoPayload.dragId);
+  assert.equal(await main.evaluate(async id => (await window.__TAURI_INTERNALS__.invoke('smoke_drag_notices')).some(n => n.start && n.id === id), videoPayload.dragId), false, 'video never starts the image pre-analysis handler');
+  await finishBrowserDrag(await main.context().newCDPSession(main), { items: videoDrag.data.items.filter(item => item.mimeType === 'text/plain'), dragOperationsMask: 1 }, 100, 200);
+  const videoText = await main.evaluate(() => window.droppedText);
+  const parsedVideo = parseExplorerImage({ getData: type => type === 'text/plain' ? videoText : '' });
+  assert.ok(parsedVideo);
+  assert.equal(parsedVideo.mediaKind, 'video');
+  const videoBytes = await main.evaluate(url => window.__TAURI_INTERNALS__.invoke('smoke_capture', { url, mediaKind: 'video' }), parsedVideo.imageUrl);
+  assert.deepEqual(Buffer.from(videoBytes, 'base64'), video, 'authenticated cross-origin video bytes are complete, not its poster');
+  await assert.rejects(main.evaluate(() => window.__TAURI_INTERNALS__.invoke('smoke_capture', { url: 'http://127.0.0.1:1559/video-partial.mp4', mediaKind: 'video' })), /完整|部分|分段/);
+  await videoDrag.session.send('Input.dispatchDragEvent', {type:'dragCancel',x:0,y:0,data:videoDrag.data});
+  await videoDrag.session.send('Input.dispatchMouseEvent', {type:'mouseReleased',x:0,y:0,button:'left',buttons:0});
+  await videoDrag.session.detach();
+  await source.locator('[data-explorer-drag-visual]').waitFor({state:'detached'});
   await source.evaluate(() => {
     window.explorerDocumentToken = "same-live-document";
     const input = document.createElement("input"); input.id = "draft"; input.value = "unsaved web form"; document.body.append(input);
@@ -138,10 +163,13 @@ try {
   await source.locator("#bowerbird-onboarding-shade").waitFor({ state: "detached" });
   assert.deepEqual(await source.evaluate(() => ({ token: window.explorerDocumentToken, draft: document.querySelector("#draft")?.value, scroll: window.scrollY })),
     { token: "same-live-document", draft: "unsaved web form", scroll: 500 });
-  const payload = await source.locator("#image").evaluate(image => {
-    const transfer = new DataTransfer(); image.dispatchEvent(new DragEvent("dragstart", { bubbles: true, dataTransfer: transfer }));
-    return JSON.parse(transfer.getData("application/x-bowerbird-explorer"));
-  });
+  await source.locator('#image').scrollIntoViewIfNeeded();
+  const imageRect = await source.locator('#image').boundingBox();
+  const resumedDrag = await startBrowserDrag(source, imageRect.x + 30, imageRect.y + 30);
+  const payload = JSON.parse(resumedDrag.data.items.find(item => item.mimeType === 'application/x-bowerbird-explorer').data);
+  await resumedDrag.session.send('Input.dispatchDragEvent', {type:'dragCancel',x:0,y:0,data:resumedDrag.data});
+  await resumedDrag.session.send('Input.dispatchMouseEvent', {type:'mouseReleased',x:0,y:0,button:'left',buttons:0});
+  await resumedDrag.session.detach();
   assert.equal(payload.imageUrl, "http://127.0.0.1:1559/protected.png");
   assert.equal(payload.pageUrl, "http://127.0.0.1:1558/pin/123");
   const data = await main.evaluate(url => window.__TAURI_INTERNALS__.invoke("smoke_capture", { url }), payload.imageUrl);
@@ -165,7 +193,7 @@ try {
   const restored = await main.evaluate(() => window.__TAURI_INTERNALS__.invoke("smoke_capture", { url: "http://127.0.0.1:1559/protected.png" }));
   assert.deepEqual(Buffer.from(restored, "base64"), png);
   await stop(main);
-  console.log(JSON.stringify({ ok: true, nativeWebView2: true, spotlightDimRestoresWithoutReload: true, spotlightSurvivesPageReload: true, browserGeneratedDragTransferredViaCdp: true, crossOriginImageWithoutCors: true,
+  console.log(JSON.stringify({ ok: true, nativeWebView2: true, spotlightDimRestoresWithoutReload: true, spotlightSurvivesPageReload: true, browserGeneratedDragTransferredViaCdp: true, crossOriginImageWithoutCors: true, authenticatedVideoDragTransferredWithoutPosterFallback: true, partialVideoRejected: true,
     httpOnlyCookiePersistedAcrossRestart: true, reopenPreservesDocumentFormAndScroll: true, remoteIpcDenied: true, dragMetadata: payload, imageRequests, profiles: directory }));
 } finally {
   if (child && child.exitCode === null) await new Promise(resolve => {

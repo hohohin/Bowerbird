@@ -13,12 +13,20 @@
 
 ## 独立视频采集
 
-入口为素材库和探索站点栏常显的“采集视频”。素材库入口不进入“更多”溢出层；空库和窄窗口仍可见。探索仅预填当前支持的抖音作品／视频文件页，不自动提交。支持抖音分享文字及直接返回视频文件的 HTTP(S) 链接，不要求先做视频分析／改写；不支持通用网页解析、HLS／DASH 播放列表或任意平台下载。抖音复用原有隐藏浏览器、登录验证、任务恢复和下载实现。
+素材库保留“采集视频”链接入口，不进入“更多”溢出层；空库和窄窗口仍可见。探索页按用户要求删除该按钮及“登录状态保存在本机”提示，使用下述直接拖拽。链接入口支持抖音分享文字及直接返回视频文件的 HTTP(S) 链接，不要求先做视频分析／改写；不支持通用网页解析、HLS／DASH 播放列表或任意平台下载。抖音复用原有隐藏浏览器、登录验证、任务恢复和下载实现。
 
 - `video_collection(projectId?, action, data)` 支持 `list/create/retry/login/cancel/save`，任务存于应用受管 `video-collection` 目录，项目身份在创建时冻结；全局采集使用空项目归属。
 - 下载最多 200 MiB、120 秒；协议、端口、凭据、公网地址、DNS 及每次重定向在边界校验，最终媒体必须实际可探测为有效视频。流式进度展示真实字节；总长未知时不制造百分比。取消／失败释放下载临时内容。
 - 完成后用户明确保存到库或添加到画板。精确去重复用已有素材身份，不覆盖旧素材的名称、来源或原文件；本次来源保留在采集记录。新视频首次保存时登记原始链接和名称，并放行原生 asset protocol 对该结果文件的读取。
 - 保存后画板回调失败，当前弹窗保留已保存 Asset；重试只补交付。已有本机文件仍按连接协议原位登记，此入口不复制用户本地视频。
+
+## 网页视频直接拖拽
+
+内置探索的网页 VIDEO 与图片共用拖拽：拖到素材库直接保存，拖到画板沿原落点交付，无选择弹窗。沿用 version 1 拖放桥和标准文本回退，新增显式视频类型；poster 仅作拖影，不能代替视频入库。视频跳过图片预分析／补分类，原图片流程保持。
+
+接收端仍只允许主窗口调用，核对当前来源页面，使用原生浏览器会话获取完整 HTTP(S) 视频，200 MiB／120 秒；沿用视频实际媒体校验、精确去重及来源记录。松手时冻结项目与画板坐标，后续缩放或切换项目不改投。blob／MediaSource、HLS／DASH 或部分文件明确报不支持，不静默改收封面。Windows 已做隔离 WebView2 验证，Mac 仅代码同步，未原生验收。
+
+外部插件 0.3.1 同样支持将网页视频拖到原 Bowerbird 图标直接采集；图片与视频共用忙碌和重复投放保护。点击视频候选入口的原有方式仍可使用。详见 [内置拖拽协议](EMBEDDED-BROWSER.md) 与 [插件说明](../apps/extension/README.md)。
 
 ## 验证与动作记录
 
@@ -36,7 +44,9 @@
 | `scripts/video-collection-ui.test.mjs` | 取消／恢复／验证／重试、真实字节状态、未知总长、冻结项目、回调失败不重存与窄屏 |
 | Rust `commands::library::video_frame` | 非法来源先拒绝、精确去重、来源身份与时间、重复保存幂等 |
 | Rust `commands::video_replication` | 采集边界、实际流消费／取消、合成 MP4 校验、来源保留、同内容入库与项目约束、既有抖音回归 |
-| `scripts/video-collection-entry-ui.test.mjs` | 入口空库／宽窄可见、更多控件边界、探索链接预填与原生网页弹窗避让 |
+| `scripts/video-collection-entry-ui.test.mjs` | 素材库入口空库／宽窄可见、更多控件边界；探索删除提示与独立采集按钮 |
+| `scripts/explorer-video-drag.test.mjs`、`explorer-video-ui.test.mjs` | 浏览器真实视频起拖、既有素材库／画板投放、冻结项目／落点与图片分类隔离 |
+| `scripts/verify-native-explorer.mjs` | 隔离 WebView2 真实 VIDEO 起拖及跨视图文本传输、带 Cookie 跨源完整视频、部分响应拒绝；原图片／登录／远程 IPC 边界回归 |
 | 扩展 `video.test.js`、`video-ui.test.mjs`，既有 `candidate-utils.test.js`／`collection.test.js`／`collection-ui.test.mjs` | 视频候选／确认／blob、能力协商、大小与超时、部分文件拒绝、保存回执与图片兼容 |
 | Rust `extension_video_blob` | 真实 MP4、伪媒体／长度／无效项目、去重资料保护、幂等来源、事务故障清理与项目文件路径 |
 | `scripts/video-extension-native.test.mjs` | 真实扩展后台→原生 WS→临时 SQLite 与媒体文件→解码播放；去重、来源、图片兼容与伪视频拒绝 |
@@ -48,5 +58,7 @@ Windows 原生 WebView2 隔离验证已通过：真实 React 播放器读取 loc
 详细逐步动作、红绿命令和截图位于 `.tmp/video-upgrade/*-log.md` 与 `apps/desktop/.tmp/video-*`。环境未提供 crapper／dryer／mutator 工具，因此执行编译、行为回归、人工差异与交叉审查，不宣称得到 CRAP／变异测试分数。仅保留本轮证据，不清理原有工作树或用户资料。
 
 视频入口与扩展补齐的动作记录位于 `.tmp/video-extension/*-log.md`，原生临时库与回执位于 `apps/desktop/.tmp/video-extension-native/`。既有 `explorer-ui.test.mjs` 在进入本次场景前仍寻找已改名的“新建创作”按钮而失败，未为本轮修改无关测试；本次探索入口由新正式组件测试覆盖。
+
+拖拽接入及探索精简记录位于 `.tmp/video-drag/*-log.md`；WebView2 CDP 测试覆盖浏览器生成及主视图接收，不等同于 Windows OS 物理拖放循环或真实站点逐一验收。
 
 真实站点下载、macOS WKWebView 以及重新打包后的安装体验仍须各自验收，合成 Chromium 回归不代替这些结果。

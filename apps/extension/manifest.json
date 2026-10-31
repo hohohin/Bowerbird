@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Bowerbird Collect",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "采集网页图片与视频到本地 Bowerbird 桌面应用",
   "icons": {
     "16": "icons/16x16.png",

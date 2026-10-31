@@ -6,16 +6,15 @@ import { userErrorMessage } from "../lib/userError";
 import { ModalShell } from "./ModalShell";
 import "./VideoCollectionDialog.css";
 
-export function VideoCollectionDialog({ projectId, onClose, onCollected, ensureProject, initialText = "" }: {
+export function VideoCollectionDialog({ projectId, onClose, onCollected, ensureProject }: {
   projectId: string | null;
   onClose: () => void;
   onCollected: (asset: Asset, projectId: string | null, addToCanvas: boolean) => Promise<void>;
   ensureProject?: () => Promise<void>;
-  initialText?: string;
 }) {
   // Ownership is fixed when opening. A parent may close/remount when changing projects.
   const [owner] = useState(projectId);
-  const [text,setText] = useState(initialText);
+  const [text,setText] = useState("");
   const [tasks,setTasks] = useState<VideoCollectionTask[]>([]);
   const [error,setError] = useState("");
   const [busy,setBusy] = useState(false);

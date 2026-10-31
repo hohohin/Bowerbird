@@ -91,11 +91,14 @@ try {
   await picker.getByRole("button",{name:"采集视频",exact:true}).click();
   await page.waitForFunction(()=>document.getElementById("__bowerbird_toast")?.textContent.includes("分段播放"));
   await page.getByRole("button",{name:"采集网页图片",exact:true}).evaluate(el=>{
+    window.fixture.messages=[];
     const dataTransfer=new DataTransfer();dataTransfer.setData("text/html",'<video src="https://fixture.test/drop.mp4"></video>');
     el.dispatchEvent(new DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer}));
   });
-  await picker.waitFor();
-  assert.equal(await picker.getByRole("button",{name:"采集视频",exact:true}).count(),1);
+  assert.equal(await page.evaluate(()=>window.fixture.messages.length),1,'dropping a video must collect directly without a second confirmation');
+  assert.equal(await page.evaluate(()=>window.fixture.messages[0].url),"https://fixture.test/drop.mp4");
+  assert.equal(await picker.count(),0);
+  await videoButton.click();await picker.waitFor();
   await page.setViewportSize({width:420,height:720});
   await page.screenshot({path:new URL("../../.tmp/video-extension/picker.png",import.meta.url).pathname.slice(1)});
   await setup("https://www.xiaohongshu.com/explore/note123");

@@ -1,6 +1,6 @@
 # Bowerbird Collect（浏览器扩展）
 
-0.3.0，Manifest V3、原生 JavaScript，无构建步骤。用于从 Chrome / Edge 采集网页图片和视频到本机 Bowerbird。视频需要配套的新版桌面采集器；旧桌面仍可采图，采视频会明确提示更新并重启桌面。
+0.3.1，Manifest V3、原生 JavaScript，无构建步骤。用于从 Chrome / Edge 采集网页图片和视频到本机 Bowerbird。视频需要配套的新版桌面采集器；旧桌面仍可采图，采视频会明确提示更新并重启桌面。
 
 ## 安装与更新
 
@@ -12,7 +12,8 @@
 
 - 点击网页右下角 Bowerbird 按钮，确认后逐张采集本页发现的图片；按钮支持键盘 Enter / Space。
 - 将图片拖到按钮，或按住 Alt 点击图片，可直接采集。支持普通图片、CSS 背景、页面 blob/data 图片；Alt 点击可导出且未受跨域保护的 Canvas 也可采集。
-- 视频点击旁边的「视频」按钮，查看候选并逐条点击「采集」；Alt 点击视频或将视频拖入该入口也会先确认。不会自动下载所有视频。采集中有持续状态，保持网页打开直到回执；本版不提供传给桌面后的取消。
+- 视频与图片一样，拖到右下角 Bowerbird 图标即可直接采集，拖到旁边「视频」入口也可直接采集。普通点击播放与播放器控制条保持；同次拖动或采集中重复投放不会重复提交。
+- 点击「视频」或 Alt 点击视频仍可查看候选再选取，不会自动下载所有视频。采集中有持续状态，保持网页打开直到回执；本版不提供传给桌面后的取消。
 - 通用网页和小红书每批最多 100 张。界面显示已处理进度、已保存数量、明确失败及待确认数量；正在采集时同页其他采集入口不会重复提交。
 - 采集进入桌面当前已保存项目的素材库；没有已保存项目时进入收集箱。需要放到画板时，再从素材库拖入。每张图片上传时由桌面确定归属，批量期间请保持目标项目不变。
 - 部分失败不会回滚已保存图片。回执丢失或超时时，先查看桌面素材库，不要整批重复采集。需要重试时，只重试尚未保存的图片。
@@ -67,8 +68,9 @@ node --test apps/extension/candidate-utils.test.js apps/extension/collection.tes
 node apps/extension/collection-ui.test.mjs
 node --test apps/extension/video.test.js
 node apps/extension/video-ui.test.mjs
+node apps/extension/video-drag-ui.test.mjs
 ```
 
-两项 UI 测试使用仓库已有 Playwright 和独立无头 Chrome，网页、后台与 WebSocket 均为本地合成夹具；不连接用户 Bowerbird、不操作用户浏览器或素材库。
+UI 测试使用仓库已有 Playwright 和独立无头 Chrome，网页、后台与 WebSocket 均为本地合成夹具；不连接用户 Bowerbird、不操作用户浏览器或素材库。
 
 原生协议验收：在 `apps/desktop/src-tauri` 运行 `cargo build --locked --offline --no-default-features --example collect_video_smoke`，再在 `apps/desktop` 运行 `node scripts/video-extension-native.test.mjs`。它执行真实扩展后台、随机 localhost WebSocket、桌面接收与临时 SQLite 入库，并解码保存的视频；覆盖精确去重／来源保留、图片兼容和伪视频拒绝。专用 AppData、禁用自动理解、无生产 setup。真实站点登录、用户浏览器重载及正式安装包仍须实机验证。

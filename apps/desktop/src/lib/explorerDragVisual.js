@@ -80,7 +80,7 @@
       chips = shadow.querySelector(".chips"); caption = shadow.querySelector(".caption");
       picture.onerror = () => { picture.style.opacity = "0"; };
       picture.onload = () => { picture.style.opacity = "1"; };
-      picture.src = value.imageUrl;
+      if (value.imageUrl) picture.src = value.imageUrl;
       parent.append(host);
       if (Number.isFinite(x) && Number.isFinite(y)) {
         move(x, y);

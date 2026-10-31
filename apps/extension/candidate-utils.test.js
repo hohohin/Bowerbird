@@ -89,3 +89,11 @@ test("picture source and fallback img emit one logical image", () => {
   assert.equal(result.length, 1);
   assert.equal(result[0].url, "https://cdn.example/x-1200w.jpg");
 });
+
+test("dragged HTML keeps images and excludes unrelated video source children", () => {
+  const result = c.extractImageCandidatesFromHtml(
+    '<img src="/image.jpg"><video poster="/poster.jpg"><source src="/clip.mp4" type="video/mp4"></video>',
+    "https://example.com/page"
+  );
+  assert.deepEqual(result.map(item => item.url), ["https://example.com/image.jpg"]);
+});

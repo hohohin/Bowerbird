@@ -472,8 +472,8 @@ export const api = {
     invoke<void>("open_source_browser", { url, bounds }),
   resizeSourceBrowser: (bounds: SourceBrowserBounds, visible?: boolean, dimmed?: boolean) =>
     invoke<void>("resize_source_browser", { bounds, visible, dimmed }),
-  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null, dragId?: string) =>
-    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId, ...(dragId ? { dragId } : {}) }),
+  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null, dragId?: string, mediaKind?: "image" | "video") =>
+    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId, ...(dragId ? { dragId } : {}), ...(mediaKind ? { mediaKind } : {}) }),
   claimSourceBrowserAnalysis: (dragId: string, imageUrl: string, pageUrl: string) =>
     invoke<boolean>("claim_source_browser_analysis", { dragId, imageUrl, pageUrl }),
   releaseSourceBrowserAnalysis: (dragId: string) => invoke<void>("release_source_browser_analysis", { dragId }),

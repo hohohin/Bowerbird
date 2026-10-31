@@ -48,11 +48,16 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
     if (!image) {
       if (event.dataTransfer.types.includes(EXPLORER_MIME) || event.dataTransfer.getData("text/plain").startsWith("bowerbird-explorer:")) {
         event.preventDefault(); event.stopPropagation();
-        notifyError(null, "未能识别拖入的图片，请重新拖动网页图片");
+        notifyError(null, "未能识别拖入的素材，请重新拖动网页图片或视频");
       }
       return;
     }
     event.preventDefault(); event.stopPropagation();
+    if (image.blocked === "protected_video") {
+      notifyError(null, "该视频受播放保护，暂不支持采集"); return;
+    }
+    const isVideo = image.mediaKind === "video";
+    const mediaName = isVideo ? "视频" : "图片";
     const state = useStore.getState();
     if (busyRef.current || state.projectRoutePending) return;
     busyRef.current = true; setBusy(true);
@@ -89,7 +94,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
         notifyError(null, "画布尚未准备好，请稍后重新拖入"); return;
       }
       let analysisIssue = "";
-      const analysing = await api.claimSourceBrowserAnalysis(dragId, image.imageUrl, image.pageUrl).catch(error => {
+      const analysing = !isVideo && await api.claimSourceBrowserAnalysis(dragId, image.imageUrl, image.pageUrl).catch(error => {
         const reason = error instanceof Error ? error.message : typeof error === "string" ? error : "";
         console.error("Capture classification unavailable", error);
         analysisIssue = /not found|unknown command/i.test(reason) ? "分类暂不可用，请更新应用后重试" : userErrorMessage(error, "分类暂不可用，可稍后重新分类");
@@ -104,7 +109,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
         if (target === contextProjectId) await state.projectCanvasFlush?.();
         const current = useStore.getState();
         if (current.projectRoutePending || current.projectRouteRevision !== revision || current.activeProjectId !== contextProjectId) {
-          throw new Error("项目正在切换，请重新拖入图片");
+          throw new Error(`项目正在切换，请重新拖入${mediaName}`);
         }
         const selected = current.projects.find(p => p.id === target);
         if (!selected) throw new Error("项目已不存在");
@@ -117,17 +122,17 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
           if (!route.projectRoutePending && route.projectRouteRevision === revision && route.activeProjectId === target) await api.setActiveProject(target);
         }
       }
-      const asset = await api.captureSourceBrowserImage(image.imageUrl, image.pageUrl, target, dragId);
+      const asset = await api.captureSourceBrowserImage(image.imageUrl, image.pageUrl, target, dragId, image.mediaKind);
       capturedId = asset.id;
       if (asset.thumb_path) updateClassification({ imageUrl: convertFileSrc(asset.thumb_path) });
       if (collectionId) {
         try { await folderConnections.references([asset.id], collectionId); }
-        catch (error) { notifyError(error, "图片已入库，但加入集合失败，请重新添加"); return; }
+        catch (error) { notifyError(error, `${mediaName}已入库，但加入集合失败，请重新添加`); return; }
       }
       let nodeId: string | void = undefined;
       if (placeOnCanvas) {
         try { nodeId = await placeOnCanvas(asset); }
-        catch (error) { notifyError(error, "图片已入库，但画板卡片保存失败"); return; }
+        catch (error) { notifyError(error, `${mediaName}已入库，但画板卡片保存失败`); return; }
       }
       if (placeOnCanvas) completeLesson();
       placedNodeId = nodeId || undefined;
@@ -147,13 +152,13 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
         });
       }
       // Retain a global acknowledgement if the user has navigated away from the target.
-      if (useStore.getState().activeProjectId !== contextProjectId) notifySuccess(placeOnCanvas ? "图片已采集并添加到画板" : "图片已采集");
+      if (useStore.getState().activeProjectId !== contextProjectId) notifySuccess(placeOnCanvas ? `${mediaName}已采集并添加到画板` : `${mediaName}已采集`);
     } catch (error) { notifyError(error, "采集失败，请重试"); }
     finally {
       dragMotion.finish(dragId, capturedId, placedNodeId);
       if (!handedOff) {
         if (mounted.current) removeClassification(classificationId);
-        void api.releaseSourceBrowserAnalysis(dragId).catch(() => {});
+        if (!isVideo) void api.releaseSourceBrowserAnalysis(dragId).catch(() => {});
       }
       busyRef.current = false; setBusy(false);
     }
@@ -185,7 +190,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       <ExplorerClassificationDock items={classifications} onDone={removeClassification} />
       {open && feedback && feedback.projectId === activeProjectId && <ExplorerCaptureFeedback value={feedback} onDone={clearFeedback} />}
       {busy && <div className="explore-capture-status pointer-events-none" role="status"><LoaderCircle size={13} className="animate-spin" />采集中…</div>}
-      {over && <div className="explore-drop-hint">松开采集图片</div>}
+      {over && <div className="explore-drop-hint">松开采集</div>}
     </section>
   </div>;
 }

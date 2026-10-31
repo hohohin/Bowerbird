@@ -4,11 +4,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{fs, io::Write, path::Path, sync::Mutex};
 
-pub(super) const MAX_BYTES: usize = 200 * 1024 * 1024;
+pub(crate) const MAX_BYTES: usize = 200 * 1024 * 1024;
 static SAVE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug)]
-pub(super) struct UploadError {
+pub(crate) struct UploadError {
     pub code: &'static str,
     pub message: &'static str,
     pub diagnostic: String,
@@ -68,7 +68,7 @@ fn atomic_copy(source: &Path, destination: &Path) -> Result<(), UploadError> {
     Ok(())
 }
 
-pub(super) fn save(paths: &LibraryPaths, db: &Database, bytes: &[u8], meta: &Value, project: Option<&str>) -> Result<Asset, UploadError> {
+pub(crate) fn save(paths: &LibraryPaths, db: &Database, bytes: &[u8], meta: &Value, project: Option<&str>) -> Result<Asset, UploadError> {
     validate_metadata(meta)?;
     if bytes.len() > MAX_BYTES { return Err(UploadError::new("too_large", "视频超过 200 MiB，请选择较小的视频。")); }
     if bytes.is_empty() || meta.get("byte_length").and_then(Value::as_u64).is_some_and(|length| length != bytes.len() as u64) { return Err(invalid_video()); }

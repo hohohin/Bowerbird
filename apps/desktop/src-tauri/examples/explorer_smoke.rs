@@ -18,10 +18,12 @@ fn smoke_drag_notices(app: tauri::AppHandle) -> Vec<serde_json::Value> {
 async fn smoke_exit(app: tauri::AppHandle) { app.exit(0); }
 
 #[tauri::command]
-async fn smoke_capture(app: tauri::AppHandle, url: String) -> Result<String, String> {
+async fn smoke_capture(app: tauri::AppHandle, url: String, media_kind: Option<String>) -> Result<String, String> {
     use base64::Engine;
     let webview = app.get_webview("source-discovery").ok_or("missing browser")?;
-    let bytes = source_browser_network::browser_bytes(&webview, &url).await.map_err(|e| e.to_string())?;
+    let bytes = if media_kind.as_deref() == Some("video") {
+        source_browser_network::browser_video_bytes(&webview, &url).await
+    } else { source_browser_network::browser_bytes(&webview, &url).await }.map_err(|e| e.to_string())?;
     Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
 }
 
@@ -38,7 +40,8 @@ fn main() {
         .manage(DragNotices::default())
         .manage(source_browser::SourceDragHandler(|app, start, notice| {
             app.state::<DragNotices>().0.lock().unwrap().push(serde_json::json!({
-                "start": start, "id": notice.id, "imageUrl": notice.image_url, "pageUrl": notice.page_url
+                "start": start, "id": notice.id, "imageUrl": notice.image_url, "pageUrl": notice.page_url,
+                "mediaKind": notice.media_kind
             }));
         }))
         .invoke_handler(tauri::generate_handler![

@@ -117,7 +117,8 @@
     // 若全部发出，拖拽一张图会产出多张 → 瀑布流出现重复。每个标签只取**最高分辨率**那张：
     // srcset（选最高描述符）优先，其次 src 系属性。
     // <picture> 内的多个 <source> 与回退 <img> 也只是同一逻辑图片，因此整组只取一个。
-    const remaining = String(html || "").replace(/<picture\b[^>]*>[\s\S]*?<\/picture\s*>/gi, (picture) => {
+    const imageHtml = String(html || "").replace(/<video\b[^>]*>[\s\S]*?<\/video\s*>/gi, "");
+    const remaining = imageHtml.replace(/<picture\b[^>]*>[\s\S]*?<\/picture\s*>/gi, (picture) => {
       const tags = picture.match(/<(?:img|source)\b[^>]*>/gi) || [];
       const best = tags.map(makeTagCandidate).find(Boolean);
       if (best) found.push(best);

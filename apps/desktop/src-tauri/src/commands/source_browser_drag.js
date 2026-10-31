@@ -26,39 +26,50 @@
     }
     pressed = null;
   }
-  function visibleImage(element) {
-    if (!(element instanceof HTMLImageElement)) return false;
+  function visibleMedia(element) {
+    if (!(element instanceof HTMLImageElement || element instanceof HTMLVideoElement)) return false;
     const style = window.getComputedStyle(element);
     if (style.visibility === "hidden" || parseFloat(style.opacity) <= 0) return false;
     const rect = element.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
   }
-  function imageAtPointer(event) {
-    const direct = event.composedPath().find(node => node?.tagName === "IMG");
+  function isPosterFor(image, video) {
+    if (!(image instanceof HTMLImageElement) || (image.currentSrc || image.src) !== video.poster) return false;
+    for (let card = image.parentElement, depth = 0; card && card !== document.body && depth < 4; card = card.parentElement, depth++) {
+      if (card.contains(video)) return true;
+    }
+    return false;
+  }
+  function mediaAtPointer(event) {
+    const direct = event.composedPath().find(node => node?.tagName === "VIDEO");
     if (direct) return direct;
     const target = event.target;
     if (!(target instanceof Element) || target.closest("button,input,textarea,select,[contenteditable=true]")) return null;
     // Note pages with stacked carousels (e.g. Xiaohongshu) keep every slide
     // under the pointer; pick the topmost visible image instead of giving up.
-    const topImage = document.elementsFromPoint(event.clientX, event.clientY).find(visibleImage);
-    if (topImage) return topImage;
+    const stack = document.elementsFromPoint(event.clientX, event.clientY).filter(visibleMedia);
+    const top = stack.find(element => element.tagName === "VIDEO" && isPosterFor(stack[0], element)) || stack[0];
+    if (top) return top;
     // Cards often put a link or transparent div above the image. Resolve only
     // an image under the pointer in that card, never the first image on the page.
     for (let card = target, depth = 0; card && card !== document.body && depth < 4; card = card.parentElement, depth++) {
-      const images = [...card.querySelectorAll("img")].filter(image => {
+      const images = [...card.querySelectorAll("video,img")].filter(image => {
         const rect = image.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0 && event.clientX >= rect.left && event.clientX < rect.right
           && event.clientY >= rect.top && event.clientY < rect.bottom;
       });
+      const videos = images.filter(image => image.tagName === "VIDEO" && visibleMedia(image));
+      if (videos.length === 1) return videos[0];
+      if (videos.length > 1) return null;
       if (images.length === 1) return images[0];
-      if (images.length > 1) return images.filter(visibleImage).pop() || null;
+      if (images.length > 1) return images.filter(visibleMedia).pop() || null;
     }
     return null;
   }
   window.addEventListener("pointerdown", event => {
     clearPressed();
     if (event.button !== 0) return;
-    const image = imageAtPointer(event);
+    const image = mediaAtPointer(event);
     if (!image) return;
     const handle = event.target;
     pressed = { image, handle, draggable: handle.getAttribute("draggable"),
@@ -78,15 +89,19 @@
   // before any document handler and can otherwise cancel the drag first.
   window.addEventListener("dragstart", (event) => {
     const image = pressed && (pressed.handle === event.target || event.target.contains?.(pressed.handle))
-      ? pressed.image : imageAtPointer(event);
+      ? pressed.image : mediaAtPointer(event);
     if (!image || !event.dataTransfer) return;
     const candidates = window.BowerbirdCandidates;
     // Match the extension's explicit high-resolution / lazy-source preference.
     const srcset = image.getAttribute("srcset") || image.getAttribute("data-srcset") || image.getAttribute("data-lazy-srcset");
     const selected = candidates?.parseSrcset(srcset, document.baseURI);
     const lazy = image.getAttribute("data-src") || image.getAttribute("data-original") || image.getAttribute("data-lazy-src");
-    const imageUrl = selected?.url || candidates?.normalizeCandidateUrl(lazy, document.baseURI)?.url || image.currentSrc || image.src;
-    if (!/^https?:/i.test(imageUrl)) return;
+    const video = image instanceof HTMLVideoElement;
+    const sources = video ? [image.currentSrc, image.src, ...Array.from(image.querySelectorAll("source[src]"), source => source.src)] : [];
+    const imageUrl = video ? sources.find(url => /^https?:/i.test(url)) || sources.find(url => /^blob:/i.test(url))
+      : selected?.url || candidates?.normalizeCandidateUrl(lazy, document.baseURI)?.url || image.currentSrc || image.src;
+    if (!imageUrl || !(video ? /^(https?:|blob:)/i : /^https?:/i).test(imageUrl)) return;
+    const posterUrl = video && /^https?:/i.test(image.poster) ? image.poster : undefined;
     let pageUrl = location.href;
     const link = event.target.closest?.("a[href]") || image.closest("a[href]");
     if (link) {
@@ -94,14 +109,15 @@
     }
     dragId = event.isTrusted && bridge.startsWith("bowerbird-explorer://")
       ? [...crypto.getRandomValues(new Uint8Array(16))].map(n => n.toString(16).padStart(2, "0")).join("") : null;
-    const payload = JSON.stringify({ version: 1, imageUrl, pageUrl, ...(dragId ? { dragId } : {}) });
+    const media = { imageUrl, pageUrl, ...(video ? { mediaKind: "video", ...(posterUrl ? { posterUrl } : {}) } : {}) };
+    const payload = JSON.stringify({ version: 1, ...media, ...(dragId ? { dragId } : {}), ...(video && image.mediaKeys ? { blocked: "protected_video" } : {}) });
     event.dataTransfer.setData("application/x-bowerbird-explorer", payload);
     // Native WebView drag bridges may retain only standard text formats.
     event.dataTransfer.setData("text/plain", "bowerbird-explorer:" + payload);
     event.dataTransfer.effectAllowed = "copy";
     if (event.isTrusted && window.createBowerbirdDragVisual) {
       visual ??= window.createBowerbirdDragVisual();
-      visual.pick({ id: dragId, imageUrl: image.currentSrc || image.src }, event.clientX, event.clientY, image.getBoundingClientRect());
+      visual.pick({ id: dragId, imageUrl: video ? posterUrl : image.currentSrc || image.src, mediaKind: video ? "video" : "image" }, event.clientX, event.clientY, image.getBoundingClientRect());
       // A live DOM card can animate and carry tags; the OS drag bitmap cannot.
       const transparent = document.createElement("canvas");
       transparent.width = transparent.height = 1;
@@ -109,6 +125,6 @@
     }
     // Keep site drag handlers from replacing the capture payload or cancelling it.
     event.stopImmediatePropagation();
-    if (dragId) notifyDrag("start", { id: dragId, imageUrl, pageUrl });
+    if (dragId) notifyDrag("start", { id: dragId, ...media });
   }, true);
 })();
