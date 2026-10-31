@@ -159,6 +159,21 @@ html[data-theme] .app-form-input:focus { outline: 1px solid rgb(var(--industrial
 html[data-theme] .app-form-input[aria-invalid="true"] { outline-color: var(--bb-danger); }
 html[data-theme] :is(.app-modal, .classification-panel) .app-form-input[aria-invalid="true"]:focus-visible { outline-color: var(--bb-danger); }
 
+/* The interaction owns its final color; contact animations only pulse opacity. */
+@media (forced-colors: none) {
+html[data-theme] body :is(
+  .app-button-primary, .app-button-accent, .app-button-secondary, .app-button-dark,
+  .app-button-light, .app-icon-button, .app-modal-button, .app-modal-close,
+  .library-tactical button, .canvas-tactical button, .composer-glass button,
+  .settings-dialog button, .classification-panel button
+):not(:disabled):not([aria-disabled="true"]):not(.is-danger):not([class*="danger"]):not([class*="text-red"]):is(:hover, :focus-visible) {
+  color: rgb(var(--industrial-accent-rgb));
+}
+html[data-theme] body .app-modal-button.is-danger:not(:disabled):is(:hover, :focus-visible) {
+  color: var(--bb-danger);
+}
+}
+
 @media (forced-colors: active) {
   html[data-theme] :is(.app-modal, .app-button-primary, .app-button-accent, .app-modal-button.is-primary) { border-color: ButtonText; color: CanvasText; }
   html[data-theme] .settings-nav-item.is-active { outline: 1px solid Highlight; }

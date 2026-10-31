@@ -30,15 +30,15 @@ html[data-theme] body :is(.app-popover, .app-context-menu, .folder-popover, .can
   pointer-events: none;
 }
 
-/* Hover is a neutral hollow square; persistent selection is a filled square and heavier accent text. */
+/* Hover keeps accent text and a hollow square; selection adds a filled square and weight. */
 html[data-theme] body :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] :is(.app-popover-option, .app-context-item, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, .canvas-toolbox-item, [role="menuitem"], button[aria-pressed]):not(.is-danger):not(:disabled):is(:hover, :focus-visible, [data-active="true"]) {
-  color: var(--menu-ink);
+  color: rgb(var(--industrial-accent-rgb));
   background: var(--menu-hover);
 }
 html[data-theme] body :is(.app-popover, .app-context-menu, .folder-popover, .canvas-source-tag-popover, .canvas-toolbox-menu, .workflow-reference-menu, .workflow-generation-history-popover)[class] :is(.app-popover-option, .app-context-item, .ratio-select-option, [role="option"], .generation-mode-button, .model-select-option, .model-select-local, .canvas-toolbox-item, [role="menuitem"], button[aria-pressed]):not(.is-danger):not(:disabled):is(:hover, :focus-visible, [data-active="true"])::before {
   width: 4px;
   height: 4px;
-  border-color: var(--menu-mark);
+  border-color: currentColor;
   background: transparent;
   opacity: .8;
 }
