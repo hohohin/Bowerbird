@@ -1,0 +1,6 @@
+.catalog-gallery .file-view-heading:has(> .video-collection-controls) { grid-template-columns:minmax(0,1fr) auto minmax(128px,1fr); }
+.video-collection-controls { display:flex; align-items:center; gap:8px; min-width:0; pointer-events:auto; }
+.video-collection-controls > * { flex-shrink:0; }
+.library-filter-trigger.video-collection-entry { display:inline-flex; width:auto; gap:5px; padding:0 8px; border-radius:0; font-size:12px; white-space:nowrap; pointer-events:auto; }
+.library-filter-trigger.video-collection-entry > span { margin:0; font-size:inherit; color:inherit; }
+.library-filter-trigger.video-collection-entry > svg { flex-shrink:0; }

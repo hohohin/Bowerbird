@@ -53,7 +53,7 @@ try {
       close() { this.onclose?.(); }
     };
   });
-  for (const name of ["candidate-utils.js", "collection-utils.js", "content.js"]) {
+  for (const name of ["candidate-utils.js", "collection-utils.js", "video-utils.js", "content.js"]) {
     await page.addScriptTag({ content: await readFile(new URL(name, import.meta.url), "utf8") });
   }
   const button = page.getByRole("button", { name: "采集网页图片", exact: true });

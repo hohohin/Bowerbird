@@ -1,6 +1,6 @@
 # 视频预览、播放与采集
 
-2026-11-01，桌面源码增量。产品约定以 [PROJECT.md](../PROJECT.md) 为准；未发布安装包、未部署云端，未修改浏览器扩展的图片采集协议。
+2026-11-01，桌面与浏览器扩展源码增量。产品约定以 [PROJECT.md](../PROJECT.md) 为准；未发布安装包、未部署云端。扩展 0.3.0 新增显式视频协议，旧图片协议保持兼容。
 
 ## 接口与归属
 
@@ -13,7 +13,7 @@
 
 ## 独立视频采集
 
-入口为素材库的“采集视频”，支持抖音分享文字及直接返回视频文件的 HTTP(S) 链接。它不要求先做视频分析／改写；不支持通用网页解析、HLS／DASH 播放列表或任意平台下载。抖音复用原有隐藏浏览器、登录验证、任务恢复和下载实现。
+入口为素材库和探索站点栏常显的“采集视频”。素材库入口不进入“更多”溢出层；空库和窄窗口仍可见。探索仅预填当前支持的抖音作品／视频文件页，不自动提交。支持抖音分享文字及直接返回视频文件的 HTTP(S) 链接，不要求先做视频分析／改写；不支持通用网页解析、HLS／DASH 播放列表或任意平台下载。抖音复用原有隐藏浏览器、登录验证、任务恢复和下载实现。
 
 - `video_collection(projectId?, action, data)` 支持 `list/create/retry/login/cancel/save`，任务存于应用受管 `video-collection` 目录，项目身份在创建时冻结；全局采集使用空项目归属。
 - 下载最多 200 MiB、120 秒；协议、端口、凭据、公网地址、DNS 及每次重定向在边界校验，最终媒体必须实际可探测为有效视频。流式进度展示真实字节；总长未知时不制造百分比。取消／失败释放下载临时内容。
@@ -21,6 +21,8 @@
 - 保存后画板回调失败，当前弹窗保留已保存 Asset；重试只补交付。已有本机文件仍按连接协议原位登记，此入口不复制用户本地视频。
 
 ## 验证与动作记录
+
+浏览器扩展 0.3.0 在图片按钮旁增加“视频”，从播放器、页面视频元数据和小红书详情公开 stream 中列出候选，逐条确认后采集。浏览器内下载完整文件，经能力协商后的 `save_blob + binary` 上传；桌面真实视频校验、来源记录、冻结项目、精确去重与原子保存。旧版桌面会得到更新提示。实际文件 blob 可读，HLS／DASH、MediaSource、保护视频与 HTTP 206 部分响应明确拒绝；视频已存但预览失败时显示已保存。详见 [扩展协议与使用](../apps/extension/README.md)。
 
 按 ub-mode 先用真实行为断言复现缺失音量、库截帧入口、竖片布局、来源污染等问题，再最小修复。所有输入为合成视频／临时库，未调用付费服务或操作用户素材。
 
@@ -34,11 +36,17 @@
 | `scripts/video-collection-ui.test.mjs` | 取消／恢复／验证／重试、真实字节状态、未知总长、冻结项目、回调失败不重存与窄屏 |
 | Rust `commands::library::video_frame` | 非法来源先拒绝、精确去重、来源身份与时间、重复保存幂等 |
 | Rust `commands::video_replication` | 采集边界、实际流消费／取消、合成 MP4 校验、来源保留、同内容入库与项目约束、既有抖音回归 |
+| `scripts/video-collection-entry-ui.test.mjs` | 入口空库／宽窄可见、更多控件边界、探索链接预填与原生网页弹窗避让 |
+| 扩展 `video.test.js`、`video-ui.test.mjs`，既有 `candidate-utils.test.js`／`collection.test.js`／`collection-ui.test.mjs` | 视频候选／确认／blob、能力协商、大小与超时、部分文件拒绝、保存回执与图片兼容 |
+| Rust `extension_video_blob` | 真实 MP4、伪媒体／长度／无效项目、去重资料保护、幂等来源、事务故障清理与项目文件路径 |
+| `scripts/video-extension-native.test.mjs` | 真实扩展后台→原生 WS→临时 SQLite 与媒体文件→解码播放；去重、来源、图片兼容与伪视频拒绝 |
 
 完整类型检查和独立 Vite 生产构建使用本机正常依赖访问权限。沙箱内曾出现依赖 realpath／localhost 权限错误和 ProseMirror 类型解析差异，不记为产品测试结果。构建不覆盖正在运行的客户端。
 
 Windows 原生 WebView2 隔离验证已通过：真实 React 播放器读取 localhost 合成 H.264 视频，首帧暂停且红色像素为 `[254,0,0,255]`；播放时间推进，暂停后输出原尺寸 320×180 PNG；卸载后视频 `src=null`、暂停且脱离 DOM。使用专用 profile／临时环境，无生产初始化或用户库。入口为 `scripts/video-player-native-ui.test.mjs` 与 `src-tauri/examples/video_player_smoke.rs`；这覆盖原生解码与组件生命周期，不代替生产 asset protocol、真实素材库写入或原生全屏验收。
 
 详细逐步动作、红绿命令和截图位于 `.tmp/video-upgrade/*-log.md` 与 `apps/desktop/.tmp/video-*`。环境未提供 crapper／dryer／mutator 工具，因此执行编译、行为回归、人工差异与交叉审查，不宣称得到 CRAP／变异测试分数。仅保留本轮证据，不清理原有工作树或用户资料。
+
+视频入口与扩展补齐的动作记录位于 `.tmp/video-extension/*-log.md`，原生临时库与回执位于 `apps/desktop/.tmp/video-extension-native/`。既有 `explorer-ui.test.mjs` 在进入本次场景前仍寻找已改名的“新建创作”按钮而失败，未为本轮修改无关测试；本次探索入口由新正式组件测试覆盖。
 
 真实站点下载、macOS WKWebView 以及重新打包后的安装体验仍须各自验收，合成 Chromium 回归不代替这些结果。

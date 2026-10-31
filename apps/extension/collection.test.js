@@ -167,6 +167,7 @@ function contentFixture({ urls = [], xhsState, remote, localResult = { ok: true 
     } },
   });
   vm.runInContext(source("candidate-utils.js"), context);
+  vm.runInContext(source("video-utils.js"), context);
   vm.runInContext(source("content.js"), context);
   const button = document.documentElement.children[0];
   const confirm = async () => {
@@ -221,16 +222,19 @@ test("real XHS detail path keeps image order and note URL while limiting confirm
   assert.ok(fixture.messages.every((message) => message.pageUrl === "https://www.xiaohongshu.com/explore/note-id"));
 });
 
-function backgroundFixture(fetch) {
+function backgroundFixture(fetch, videoSupport = true) {
   let listener;
   const uploads = [];
   class Socket {
     constructor() { queueMicrotask(() => this.onopen?.()); }
     send(value) {
-      if (typeof value === "string") this.metadata = JSON.parse(value);
+      if (typeof value === "string") {
+        this.metadata = JSON.parse(value);
+        if(this.metadata.type==="ping") queueMicrotask(()=>this.onmessage?.({data:JSON.stringify({ok:true,pong:true,...(videoSupport ? {capabilities:{video_blob:true,video_max_bytes:209715200}} : {})})}));
+      }
       else {
         uploads.push({ metadata: this.metadata, bytes: value });
-        queueMicrotask(() => this.onmessage?.({ data: '{"ok":true,"asset_id":"fixture"}' }));
+        queueMicrotask(() => this.onmessage?.({ data: JSON.stringify({ok:true,asset_id:"fixture",...(this.metadata.media_kind==="video" ? {media_kind:"video"} : {})}) }));
       }
     }
     close() { this.onclose?.(); }
@@ -239,7 +243,7 @@ function backgroundFixture(fetch) {
     fetch, WebSocket: Socket,
     chrome: { runtime: { onMessage: { addListener: (fn) => { listener = fn; } } } },
   });
-  context.importScripts = (name) => vm.runInContext(source(name), context);
+  context.importScripts = (...names) => names.forEach(name=>vm.runInContext(source(name), context));
   vm.runInContext(source("background.js"), context);
   return {
     uploads, timers,
@@ -285,9 +289,82 @@ test("actual background fetch abort has no upload and is reported as a read time
 
 test("packaged manifest loads all content dependencies and Windows runtime stays identical", () => {
   const manifest = JSON.parse(source("manifest.json"));
-  assert.equal(manifest.version, "0.2.0");
-  assert.deepEqual(manifest.content_scripts[0].js, ["candidate-utils.js", "collection-utils.js", "content.js"]);
-  for (const file of ["manifest.json", "candidate-utils.js", "collection-utils.js", "content.js", "background.js"]) {
+  assert.equal(manifest.version, "0.3.0");
+  assert.deepEqual(manifest.content_scripts[0].js, ["candidate-utils.js", "collection-utils.js", "video-utils.js", "content.js"]);
+  for (const file of ["manifest.json", "candidate-utils.js", "collection-utils.js", "video-utils.js", "content.js", "background.js"]) {
     assert.equal(source(file), readFileSync(new URL(`../../Windows/extension/${file}`, import.meta.url), "utf8"), file);
   }
+});
+
+test("content exposes a separate video entry without downloading all videos", () => {
+  const fixture=contentFixture();
+  const video=fixture.nodes.find(node=>node.attributes["aria-label"]==="采集网页视频");
+  assert.ok(video);
+  assert.equal(fixture.messages.length,0);
+});
+
+test("video background negotiates capability before browser-session download and sends verified video bytes", async () => {
+  const calls=[];
+  const bytes=Uint8Array.from([0,0,0,24,102,116,121,112,105,115,111,109,0,0,0,0]);
+  const fixture=backgroundFixture(async(url,options)=>{calls.push({url,options});return {ok:true,url:"https://cdn.test/final.mp4",headers:{get:key=>key==="content-type" ? "video/mp4" : String(bytes.length)},arrayBuffer:async()=>bytes.buffer};});
+  const result=await fixture.send({type:"save_video",url:"https://cdn.test/input.mp4",pageUrl:"https://site.test/note"});
+  assert.equal(result.ok,true);
+  assert.equal(calls[0].options.credentials,"include");
+  assert.equal(calls[0].options.referrer,"https://site.test/note");
+  assert.equal(fixture.uploads[0].metadata.media_kind,"video");
+  assert.equal(fixture.uploads[0].metadata.byte_length,bytes.length);
+  assert.equal(fixture.uploads[0].metadata.effective_url,"https://cdn.test/final.mp4");
+  assert.equal(fixture.uploads[0].metadata.page_url,"https://site.test/note");
+});
+
+test("old desktop causes no video download; playlists, oversized and fake video never upload", async () => {
+  let requests=0;
+  const old=backgroundFixture(async()=>{requests++;throw new Error("must not fetch");},false);
+  assert.equal((await old.send({type:"save_video",url:"https://cdn.test/clip.mp4"})).code,"desktop_upgrade");
+  assert.equal(requests,0);
+  for(const [url,mime,length,content,expected] of [
+    ["https://cdn.test/a.m3u8","video/mp4",0,"","unsupported_stream"],
+    ["https://cdn.test/a.mp4","video/mp4",209715201,"","too_large"],
+    ["https://cdn.test/a.mp4","video/mp4",10,"<html>login","invalid_video"],
+    ["https://cdn.test/a.mp4","application/dash+xml",10,"<MPD></MPD>","unsupported_stream"],
+    ["https://cdn.test/a.mp4","application/octet-stream",20,"#EXTM3U\n#EXT-X-VERSION:3","unsupported_stream"],
+  ]) {
+    const fixture=backgroundFixture(async()=>({ok:true,url,headers:{get:key=>key==="content-type" ? mime : String(length)},arrayBuffer:async()=>new TextEncoder().encode(content).buffer}));
+    assert.equal((await fixture.send({type:"save_video",url})).code,expected);
+    assert.equal(fixture.uploads.length,0);
+  }
+});
+
+test("video upload rechecks desktop capability and never accepts an image-only receipt as success", async()=>{
+  const sockets=[];
+  class Socket{constructor(){sockets.push(this);this.sent=[];}send(value){this.sent.push(value);}close(){this.onclose?.();}}
+  const {api}=runtime({WebSocket:Socket});
+  const old=api.uploadBytes(new Uint8Array([1]).buffer,{media_kind:"video"});
+  sockets[0].onopen();assert.equal(JSON.parse(sockets[0].sent[0]).type,"ping");
+  sockets[0].onmessage({data:'{"ok":true,"pong":true}'});
+  assert.equal((await old).code,"desktop_upgrade");assert.equal(sockets[0].sent.length,1);
+  const unknown=api.uploadBytes(new Uint8Array([1]).buffer,{media_kind:"video"});
+  sockets[1].onopen();sockets[1].onmessage({data:'{"ok":true,"capabilities":{"video_blob":true,"video_max_bytes":209715200}}'});
+  assert.equal(sockets[1].sent.length,3);
+  sockets[1].onmessage({data:'{"ok":true,"asset_id":"image-only"}'});
+  assert.equal((await unknown).code,"result_unknown");
+});
+
+test("video timeout aborts fetch and unknown transport diagnostics stay out of video feedback", async()=>{
+  const fixture=backgroundFixture((_url,{signal})=>new Promise((_resolve,reject)=>signal.addEventListener("abort",()=>reject(Object.assign(new Error("private-url"),{name:"AbortError"})))));
+  const pending=fixture.send({type:"save_video",url:"https://cdn.test/a.mp4"});
+  await flush();
+  [...fixture.timers.values()].find(timer=>timer.delay===120000).fn();
+  assert.equal((await pending).code,"fetch_timeout");assert.equal(fixture.uploads.length,0);
+  const {api}=runtime();
+  assert.doesNotMatch(api.failureMessage({error:"https://private.test/token C:/secret"},"video"),/private|secret|token/);
+});
+
+test("partial video responses never upload and saved-but-unpreviewable receipts never invite another download",async()=>{
+  const bytes=Uint8Array.from([0,0,0,24,102,116,121,112,105,115,111,109,0,0,0,0]);
+  const fixture=backgroundFixture(async()=>({ok:true,status:206,url:"https://cdn.test/clip.mp4",headers:{get:key=>key==="content-type" ? "video/mp4" : String(bytes.length)},arrayBuffer:async()=>bytes.buffer}));
+  assert.equal((await fixture.send({type:"save_video",url:"https://cdn.test/clip.mp4"})).code,"incomplete_video");
+  assert.equal(fixture.uploads.length,0);
+  const {api}=runtime();
+  assert.match(api.failureMessage({ok:false,saved:true,asset_id:"saved",code:"preview_unavailable"},"video"),/已保存.*预览暂不可用/);
 });

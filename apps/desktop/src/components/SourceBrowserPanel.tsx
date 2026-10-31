@@ -17,6 +17,8 @@ import { api, type SourceBrowserBounds } from "../lib/api";
 import { normalizeSourceAddress, sourceDiscoveryFor } from "../lib/sourceDiscovery";
 import { EXPLORER_SITES, queueBrowserOperation } from "../lib/explorer";
 import { useStore } from "../store";
+import { VideoCollectionEntry } from "./VideoCollectionEntry";
+import { isVideoPath } from "../lib/videoGeneration";
 import "./BrowserExtension.css";
 
 const STATUS_EVENT = "source-browser://status";
@@ -48,6 +50,7 @@ function hostnameFor(url: string) {
 
 export function SourceBrowserPanel({ url, onClose, visible = true, suspended = false, navigationId = 0 }: { url: string; onClose: () => void; visible?: boolean; suspended?: boolean; navigationId?: number }) {
   const openExtension = useStore((state) => state.setExtensionOnboardingForceOpen);
+  const activeProjectId = useStore(state => state.activeProjectId);
   const viewportRef = useRef<HTMLDivElement>(null);
   const addressFocusedRef = useRef(false);
   const addressRef = useRef<HTMLInputElement>(null);
@@ -62,6 +65,16 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
   const [occluded, setOccluded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const discovery = useMemo(() => sourceDiscoveryFor(currentUrl), [currentUrl]);
+  const collectionUrl = useMemo(() => {
+    try {
+      const target = new URL(currentUrl);
+      if (!["http:", "https:"].includes(target.protocol) || target.username || target.password) return "";
+      const douyin = ["douyin.com", "www.douyin.com", "www.iesdouyin.com", "iesdouyin.com"].includes(target.hostname)
+        && (/^\/(?:share\/)?video\/\d{12,24}\/?$/.test(target.pathname) || /^\d{12,24}$/.test(target.searchParams.get("modal_id") ?? ""));
+      const short = target.hostname === "v.douyin.com" && /^\/[\w-]{3,100}\/?$/.test(target.pathname);
+      return isVideoPath(target.pathname) || douyin || short ? currentUrl : "";
+    } catch { return ""; }
+  }, [currentUrl]);
   const suspendedRef = useRef(suspended);
   suspendedRef.current = suspended;
   const browserAction = useCallback((operation: () => Promise<void>) => {
@@ -280,6 +293,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
       <nav className="explore-sites" aria-label="探索网站">
         {EXPLORER_SITES.map(site => <button key={site.name} type="button" onClick={() => void navigate(site.url)}>{site.name}</button>)}
         <span>登录状态保存在本机</span>
+        <VideoCollectionEntry projectId={activeProjectId} initialText={collectionUrl}/>
         <button type="button" className="source-browser-extension-entry" onClick={() => openExtension(true)} aria-haspopup="dialog">
           <Puzzle size={13} aria-hidden />浏览器插件
         </button>

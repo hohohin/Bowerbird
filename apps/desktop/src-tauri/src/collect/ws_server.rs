@@ -5,6 +5,7 @@
 //!   `{ "type": "save", "url": "...", "page_url": "..." }`      → `{ "ok": true, "asset_id": "..." }`
 //!   `{ "type": "save_batch", "items": [...] }`                    → `{ "ok": true, "results": [...] }`
 //!   `{ "type": "save_blob", ... }` Text + 下一帧 Binary 图片字节 → `{ "ok": true, "asset_id": "..." }`
+//!   save_blob + media_kind:"video" → 已协商的视频二进制（200 MiB），回执附 media_kind。
 
 use std::sync::Arc;
 
@@ -13,7 +14,8 @@ use axum::extract::State;
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
+use super::video_blob;
 
 use crate::core::ingest;
 use crate::core::paths::LibraryPaths;
@@ -73,7 +75,8 @@ struct AppState {
 }
 
 async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    ws.max_message_size(video_blob::MAX_BYTES).max_frame_size(video_blob::MAX_BYTES)
+        .on_upgrade(move |socket| handle_socket(socket, state))
 }
 
 async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState) {
@@ -88,6 +91,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                     let _ = state.app.emit("collect://extension-connected", ());
                 }
                 if text.len() > 64 * 1024 {
+                    pending_upload = None;
                     let _ = socket
                         .send(Message::Text(
                             serde_json::json!({ "ok": false, "error": "metadata exceeds 64 KiB limit" })
@@ -97,20 +101,30 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                     continue;
                 }
                 let parsed = serde_json::from_str::<serde_json::Value>(&text).ok();
+                let kind = parsed.as_ref().and_then(|v| v["type"].as_str());
+                // A second upload or command invalidates the pending pair. Never let
+                // its next Binary frame acquire the first upload's provenance/project.
+                if pending_upload.is_some() && kind != Some("ping") {
+                    pending_upload = None;
+                    let _ = socket.send(Message::Text(serde_json::json!({"ok":false,"code":"protocol_error","error":"采集消息顺序异常，请重新采集。"}).to_string())).await;
+                    continue;
+                }
                 if parsed
                     .as_ref()
                     .and_then(|v| v.get("type"))
                     .and_then(|v| v.as_str())
                     == Some("save_blob")
                 {
-                    if pending_upload.is_some() {
-                        let _ = socket
-                            .send(Message::Text(
-                                serde_json::json!({ "ok": false, "error": "save_blob metadata already pending" })
-                                    .to_string(),
-                            ))
-                            .await;
-                        continue;
+                    if let Some(meta) = &parsed {
+                        if meta["media_kind"] == "video" {
+                            if let Err(error) = video_blob::validate_metadata(meta) {
+                                let _ = socket.send(Message::Text(video_error(error))).await;
+                                continue;
+                            }
+                        } else if meta.get("media_kind").is_some_and(|kind| kind != "image") {
+                            let _ = socket.send(Message::Text(serde_json::json!({"ok":false,"code":"invalid_metadata","error":"暂不支持这种采集类型，请更新插件后重试。"}).to_string())).await;
+                            continue;
+                        }
                     }
                     tracing::info!("collect ws recv: kind=save_blob");
                     pending_upload = parsed.map(|meta| (meta, state.active_project.get()));
@@ -121,6 +135,13 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
             }
             Message::Binary(bytes) => {
                 let resp = match pending_upload.take() {
+                    Some((meta, project_id)) if meta["media_kind"] == "video" => {
+                        let state = state.clone();
+                        // Metadata probe, poster and filesystem work must not block the
+                        // async socket executor while another client sends its heartbeat.
+                        tokio::task::spawn_blocking(move || handle_video_blob(bytes.as_ref(), &meta, project_id.as_deref(), &state)).await
+                            .unwrap_or_else(|error| { tracing::error!("video upload worker: {error}"); serde_json::json!({"ok":false,"code":"save_failed","error":"视频未能保存，请稍后重试。"}).to_string() })
+                    }
                     Some((meta, project_id)) if bytes.len() <= 50 * 1024 * 1024 => {
                         handle_blob(bytes.as_ref(), &meta, project_id.as_deref(), &state)
                     }
@@ -141,6 +162,27 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
         }
     }
     tracing::debug!("collect ws: connection closed");
+}
+
+fn video_error(error: video_blob::UploadError) -> String {
+    tracing::warn!("extension video {}: {}", error.code, error.diagnostic);
+    serde_json::json!({"ok":false,"code":error.code,"error":error.message}).to_string()
+}
+
+fn handle_video_blob(bytes: &[u8], meta: &serde_json::Value, project: Option<&str>, state: &AppState) -> String {
+    match video_blob::save(&state.paths, &state.db, bytes, meta, project) {
+        Ok(asset) => {
+            let _ = state.app.emit("library://assets-changed", ());
+            for path in [&asset.store_path, &asset.thumb_path].into_iter().flatten() {
+                if let Err(error) = state.app.asset_protocol_scope().allow_file(path) {
+                    tracing::warn!("video saved but media permission failed: {error}");
+                    return serde_json::json!({"ok":false,"saved":true,"asset_id":asset.id,"name":asset.name,"media_kind":"video","code":"preview_unavailable","error":"视频已保存，但暂时无法预览，请在素材库中重新打开。"}).to_string();
+                }
+            }
+            serde_json::json!({"ok":true,"asset_id":asset.id,"name":asset.name,"media_kind":"video"}).to_string()
+        }
+        Err(error) => video_error(error),
+    }
 }
 
 /// 浏览器 background 已在登录态/系统代理环境内 fetch 图片；收到二进制后直接按真实字节入库。
@@ -243,9 +285,12 @@ async fn handle_message(text: &str, state: &AppState) -> String {
     match kind {
         "ping" => {
             let _ = state.app.emit("collect://extension-connected", ());
-            r#"{"ok":true,"pong":true}"#.to_string()
+            serde_json::json!({"ok":true,"pong":true,"capabilities":{"video_blob":true,"video_max_bytes":video_blob::MAX_BYTES}}).to_string()
         }
         "save" => {
+            if v["media_kind"] == "video" {
+                return serde_json::json!({"ok":false,"code":"video_upload_required","error":"视频需要由浏览器上传文件内容，请更新插件后重试。"}).to_string();
+            }
             let _ = state.app.emit("collect://extension-connected", ());
             let url = v.get("url").and_then(|u| u.as_str()).unwrap_or("");
             if url.is_empty() {
@@ -290,7 +335,9 @@ async fn handle_message(text: &str, state: &AppState) -> String {
                     .or_else(|| v.get("source_url"))
                     .or_else(|| v.get("page_url"))
                     .and_then(|value| value.as_str());
-                let mut result = if url.is_empty() {
+                let mut result = if item["media_kind"] == "video" {
+                    serde_json::json!({"ok":false,"code":"video_upload_required","error":"视频需要由浏览器上传文件内容，请更新插件后重试。"})
+                } else if url.is_empty() {
                     serde_json::json!({ "ok": false, "error": "empty media_url" })
                 } else {
                     match save_one(state, url, source_url, project_id.as_deref()).await {
@@ -389,6 +436,19 @@ pub async fn start(
     status: ExtensionStatus,
     active_project: ActiveProjectContext,
 ) -> Result<(), std::io::Error> {
+    let listener = tokio::net::TcpListener::bind(ADDR).await?;
+    serve_listener(listener, paths, db, app, status, active_project).await
+}
+
+/// Production and isolated acceptance fixtures share the same server; callers own the listener.
+pub async fn serve_listener(
+    listener: tokio::net::TcpListener,
+    paths: Arc<LibraryPaths>,
+    db: Arc<Database>,
+    app: AppHandle,
+    status: ExtensionStatus,
+    active_project: ActiveProjectContext,
+) -> Result<(), std::io::Error> {
     let client = ingest::download_client().map_err(std::io::Error::other)?;
     let state = AppState {
         paths,
@@ -415,8 +475,7 @@ pub async fn start(
     let app = Router::new()
         .route("/ws", get(ws_handler))
         .with_state(state);
-    let listener = tokio::net::TcpListener::bind(ADDR).await?;
-    tracing::info!("collect ws server listening on ws://{ADDR}/ws");
+    tracing::info!("collect ws server listening on ws://{}/ws", listener.local_addr()?);
     axum::serve(listener, app).await?;
     Ok(())
 }

@@ -410,14 +410,16 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
         <LibraryTacticalBackdrop />
         <div className="file-view-heading">
           {navigation}
-          <LibraryFloatingControls>
+          <div className="video-collection-controls">
             <VideoCollectionEntry projectId={projectId} onCloseLibrary={onClose} onCreateProject={onCreateProject} onAssetsChange={onAssetsChange}/>
+          <LibraryFloatingControls>
             <LibraryMediaSwitch/>
             <GeneratedImageFilter floating value={generatedFilter} onChange={useLocalFileMode.getState().setGeneratedFilter}/>
             <LibraryBrowserButton/>
             <FileColorFilter open={colorsOpen} onOpenChange={setColorsOpen} color={color} onColorChange={setColor} palette={palette}/>
             {toolbarActions}
           </LibraryFloatingControls>
+          </div>
         </div>
         {flat && catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none" }}>

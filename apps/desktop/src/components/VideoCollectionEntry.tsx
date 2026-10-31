@@ -4,16 +4,17 @@ import type { Asset } from "../lib/types";
 import { saveCollectedVideoToCanvas, prepareVideoCollectionProject } from "../lib/videoCollectionCanvas";
 import { VideoCollectionDialog } from "./VideoCollectionDialog";
 import { useStore } from "../store";
+import "./VideoCollectionEntry.css";
 
-export function VideoCollectionEntry({ projectId, onCloseLibrary, onCreateProject, onAssetsChange }: {
-  projectId: string | null; onCloseLibrary: () => void;
+export function VideoCollectionEntry({ projectId, onCloseLibrary = () => {}, onCreateProject, onAssetsChange, initialText = "" }: {
+  projectId: string | null; onCloseLibrary?: () => void; initialText?: string;
   onCreateProject?: (ids?: string[]) => Promise<unknown>; onAssetsChange?: (assets: Asset[]) => void;
 }) {
   const [open, setOpen] = useState(false);
   const operations = useRef(new Map<string, string>());
   return <>
-    <button type="button" className="library-filter-trigger" title="采集视频" aria-label="采集视频" onClick={() => setOpen(true)}><Video size={14}/></button>
-    {open && <VideoCollectionDialog projectId={projectId} onClose={() => setOpen(false)}
+    <button type="button" className="library-filter-trigger video-collection-entry" title="采集视频" aria-label="采集视频" aria-haspopup="dialog" onClick={() => setOpen(true)}><Video size={14} aria-hidden/><span>采集视频</span></button>
+    {open && <VideoCollectionDialog projectId={projectId} initialText={initialText} onClose={() => setOpen(false)}
       ensureProject={projectId ? () => prepareVideoCollectionProject(projectId) : undefined} onCollected={async (asset, owner, addToCanvas) => {
       if (addToCanvas) {
         if (!owner) {
