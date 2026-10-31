@@ -209,7 +209,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     if (next) [...root.current!.querySelectorAll<HTMLElement>('[data-collection-id]')].find(element => element.dataset.collectionId === next)?.focus();
   }
   async function relocate(folder: FolderConnection) { const path = await api.pickFolder(folder.path); if (path) await folderConnections.relocate(folder.root_id, path); }
-  const menuButton = (label: string, action: () => void, disabled = false) => <button type="button" role="menuitem" disabled={disabled || busy} onClick={() => { setMenu(null); action(); }}>{label}</button>;
+  const menuButton = (label: string, action: () => void, disabled = false) => <button type="button" role="menuitem" className="app-context-item" disabled={disabled || busy} onClick={() => { setMenu(null); action(); }}>{label}</button>;
   return <section ref={root} className="categorized-library library-tactical connected-collections" aria-label="按集合浏览素材" data-file-import-project-id={scope ?? ""} data-file-import-collection-id={active ?? undefined} data-file-import-collection-name={current?.name}
     style={{ ...glass.style, "--catalog-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
     {glass.definition}<LibraryMotion/>
