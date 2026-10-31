@@ -1,0 +1,63 @@
+import { pathToFileURL } from 'node:url';
+import path from 'node:path';
+import fs from 'node:fs';
+import assert from 'node:assert/strict';
+const { PGlite } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
+const db = new PGlite();
+const dir = 'apps/cloud/supabase/migrations';
+const q = async (sql,args=[]) => (await db.query(sql,args)).rows;
+try {
+ await db.exec(`create role anon; create role authenticated; create role service_role; create role supabase_auth_admin;
+ create schema storage; create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
+ create schema auth; create schema extensions; create table auth.users(id uuid primary key);
+ create function auth.uid() returns uuid language sql as $$ select null::uuid $$;
+ create function extensions.gen_random_uuid() returns uuid language sql as $$ select gen_random_uuid() $$;`);
+ for (const prefix of ['0001','0002','0003','0004','0005','0006','0009','0010','0011','0015','0016','0017','0018','0019','0023','0058','0059','0061','0062','0063','0064','0065','0066','0067','0070','0077']) {
+   const file=fs.readdirSync(dir).find(f=>f.startsWith(prefix));
+   assert.ok(file, `missing ${prefix} migration`);
+   await db.exec(fs.readFileSync(`${dir}/${file}`,'utf8').replace('create extension if not exists pgcrypto with schema extensions;',''));
+ }
+ const user='aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
+ await q('insert into auth.users values($1)',[user]);
+ const begin=async(key='one',hash='a'.repeat(64))=>{
+  const job=(await q('select * from begin_chat_completion($1,$2,$3,$4,10000000,20)',[user,key,hash,`chat/${user}/${key}/request.json`]))[0];
+  return (await q('select * from enqueue_chat_completion($1,$2,true)',[job.id,hash]))[0];
+ };
+ const first=await begin(); assert.equal(first.estimated_credits,0);
+ assert.equal((await begin()).id,first.id);
+ await assert.rejects(()=>begin('one','b'.repeat(64)),/different content/);
+ assert.equal((await q('select count(*)::int n from credit_holds'))[0].n,1);
+ assert.ok(Number((await q('select reserved_cost_micros from credit_holds'))[0].reserved_cost_micros)>0);
+ const claim=(await q("select * from claim_chat_completion('fixture')"))[0];
+ assert.equal(claim.id,first.id);
+ const result={message:{role:'assistant',content:'完成'},usage:{input_tokens:9,output_tokens:2},model:'fixture-model'};
+ const finish=async()=>q("select * from finish_chat_completion($1,$2,'succeeded',$3,null)",[first.id,claim.lease_id,result]);
+ await finish(); await finish();
+ assert.equal((await q('select status,actual_amount from credit_holds'))[0].actual_amount,0);
+ assert.deepEqual(await q('select kind,amount from credit_transactions'),[{kind:'confirm',amount:0}]);
+ assert.deepEqual(await q('select input_tokens::int,output_tokens::int,provider_model from chat_completion_jobs where id=$1',[first.id]),[{input_tokens:9,output_tokens:2,provider_model:'fixture-model'}]);
+ const second=await begin('unknown'); const secondClaim=(await q("select * from claim_chat_completion('fixture')"))[0];
+ await q("update chat_completion_jobs set lease_expires_at=now()-interval '1 second' where id=$1",[second.id]);
+ await q("select * from claim_chat_completion('fixture')");
+ assert.equal((await q('select status from chat_completion_jobs where id=$1',[second.id]))[0].status,'outcome_unknown');
+ assert.equal((await begin('unknown')).id,second.id);
+ await assert.rejects(()=>q("select * from finish_chat_completion($1,$2,'succeeded',$3,null)",[second.id,secondClaim.lease_id,result]),/lease/);
+ await q("update service_costs set unit_cost=3 where service='chat_deepseek'");
+ await assert.rejects(()=>begin('paid'),/chat test price unavailable/);
+ assert.equal((await q('select count(*)::int n from chat_completion_jobs'))[0].n,2);
+ await q("update service_costs set unit_cost=0 where service='chat_deepseek'");
+ const third=await begin('expired');
+ await q("update chat_completion_jobs set content_expires_at=now()-interval '1 second' where id=$1",[third.id]);
+ await q("select * from claim_chat_completion('fixture')");
+ assert.equal((await q('select status from chat_completion_jobs where id=$1',[third.id]))[0].status,'failed');
+ const upload=(await q('select * from begin_chat_completion($1,$2,$3,$4,10000000,20)',[user,'upload','a'.repeat(64),'chat/upload/request.json']))[0];
+ const rejected=(await q('select * from enqueue_chat_completion($1,$2,false)',[upload.id,upload.input_hash]))[0];
+ assert.equal(rejected.status,'failed');
+ assert.equal((await q('select status from credit_holds where id=$1',[upload.hold_id]))[0].status,'rolled_back');
+ await q('update chat_completion_jobs set result_json=null,content_deleted_at=now() where id=$1',[first.id]);
+ assert.equal((await q('select input_tokens::int from chat_completion_jobs where id=$1',[first.id]))[0].input_tokens,9);
+ await assert.rejects(()=>q('select * from begin_chat_completion($1,$2,$3,$4,1,20)',[user,'cost-stop','a'.repeat(64),'chat/cost/request.json']),/daily managed cost limit/);
+ assert.equal((await q('select count(*)::int n from chat_completion_jobs'))[0].n,4);
+ await assert.rejects(()=>q("insert into credit_holds(user_id,idempotency_key,service,pricing_version,estimated_amount) values($1,'invalid-zero','caption',1,0)",[user]),/estimated_amount_check/);
+ console.log('chat DB: zero-price hold/confirm, replay, conflict, cost guard, unknown, paid gate, expiry and upload rollback passed');
+} finally { await db.close(); }

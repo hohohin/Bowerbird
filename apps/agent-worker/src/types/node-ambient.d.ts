@@ -210,6 +210,7 @@ declare class TextDecoder {
 }
 
 interface AbortSignal {}
+declare const AbortSignal: { timeout(milliseconds: number): AbortSignal };
 
 declare class URL {
   constructor(input: string);
@@ -222,6 +223,7 @@ declare class URL {
 }
 
 interface Response {
+  readonly body?: { getReader(): { read(): Promise<{ done: boolean; value: Uint8Array }>; cancel(): Promise<void>; releaseLock(): void } } | null;
   readonly ok: boolean;
   readonly status: number;
   json(): Promise<unknown>;

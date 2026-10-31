@@ -65,3 +65,9 @@ verify_jwt = true
 
 [functions.comfy-download]
 verify_jwt = true
+
+[functions.chat-proxy]
+verify_jwt = true
+
+[functions.chat-worker]
+verify_jwt = false
