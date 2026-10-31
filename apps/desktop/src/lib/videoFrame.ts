@@ -75,15 +75,33 @@ export async function readVideoLastFrame(src: string, path: string): Promise<Vid
   }
 }
 
+// Complete strips only: bounded LRU, with the revision-bearing source URL as identity.
+const stripCache = new Map<string, string[]>();
+const STRIP_CACHE_LIMIT = 16;
+
+export function invalidateVideoStrip(src: string) {
+  const revisionPrefix = `${src}${src.includes("?") ? "&" : "?"}media=`;
+  for (const key of stripCache.keys()) {
+    if (key.startsWith(`${src}|`) || key.startsWith(revisionPrefix)) stripCache.delete(key);
+  }
+}
+
 /** One bounded decoder, only after the user loads the player. Dispose on close/switch. */
-export function loadVideoStrip(src: string, duration: number, onFrame: (index: number, url: string) => void) {
+export function loadVideoStrip(src: string, duration: number, onFrame: (index: number, url: string) => void,
+  range = { start: 0, end: duration }) {
+  const key = `${src}|${duration}|${range.start}:${range.end}`;
+  const cached = stripCache.get(key);
+  if (cached) {
+    stripCache.delete(key); stripCache.set(key, cached);
+    cached.forEach((url, index) => onFrame(index, url));
+    return () => {};
+  }
   const decoder = document.createElement("video");
   decoder.crossOrigin = "anonymous";
   decoder.muted = true;
   decoder.preload = "none";
   const canvas = document.createElement("canvas");
-  canvas.width = 128;
-  canvas.height = 72;
+  const frames: string[] = [];
   const context = canvas.getContext("2d");
   let index = 0, disposed = false;
   const dispose = () => {
@@ -96,14 +114,25 @@ export function loadVideoStrip(src: string, duration: number, onFrame: (index: n
     decoder.load();
   };
   const timeout = window.setTimeout(dispose, 20000);
-  const next = () => { decoder.currentTime = Math.min(duration - 0.001, (index + 0.5) * duration / 12); };
-  decoder.onloadeddata = () => { decoder.onloadeddata = null; next(); };
+  const next = () => { decoder.currentTime = Math.min(duration - 0.001, range.start + (index + 0.5) * (range.end - range.start) / 12); };
+  decoder.onloadeddata = () => {
+    decoder.onloadeddata = null;
+    const scale = Math.min(128 / decoder.videoWidth, 72 / decoder.videoHeight);
+    canvas.width = Math.max(1, Math.round(decoder.videoWidth * scale));
+    canvas.height = Math.max(1, Math.round(decoder.videoHeight * scale));
+    next();
+  };
   decoder.onseeked = () => {
     if (disposed || !context) return;
     try {
       context.drawImage(decoder, 0, 0, canvas.width, canvas.height);
-      onFrame(index, canvas.toDataURL("image/jpeg", 0.7));
-      if (++index < 12) next(); else dispose();
+      frames[index] = canvas.toDataURL("image/jpeg", 0.7);
+      onFrame(index, frames[index]);
+      if (++index < 12) next(); else {
+        stripCache.set(key, frames);
+        while (stripCache.size > STRIP_CACHE_LIMIT) stripCache.delete(stripCache.keys().next().value!);
+        dispose();
+      }
     } catch { dispose(); } // The timeline remains usable without thumbnails.
   };
   decoder.onerror = dispose;

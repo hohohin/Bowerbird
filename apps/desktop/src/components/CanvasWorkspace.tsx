@@ -95,7 +95,11 @@ import { LibrarySourceTabs } from "./LibrarySourceTabs";
 import { LibraryCatalogTransition } from "./LibraryCatalogTransition";
 import { CanvasFrequentAssets, useCanvasFrequentAssets } from "./CanvasFrequentAssets";
 import { Lightbox } from "./Lightbox";
-import { videoTime, type VideoFrame } from "../lib/videoFrame";
+import type { VideoFrame } from "../lib/videoFrame";
+import { saveVideoFrame } from "../lib/saveVideoFrame";
+import { videoSourceKey } from "../lib/videoSourceKey";
+import { VIDEO_FRAME_CANVAS_EVENT, type VideoFrameCanvasDetail } from "../lib/videoFrameCanvas";
+import { VIDEO_COLLECTION_CANVAS_EVENT, VIDEO_COLLECTION_PROJECT_EVENT, type VideoCollectionProjectDetail, type VideoCollectionCanvasDetail } from "../lib/videoCollectionCanvas";
 import type { VideoTrimRequest } from "../lib/videoTrim";
 import { CreativeComposer } from "./CreativeComposer";
 import { CanvasConversation } from "./CanvasConversation";
@@ -2932,8 +2936,7 @@ export function CanvasWorkspace({
           queued = true;
           await enqueueWrite(async () => {
             await ensureMaterialized(project);
-            savedAsset ??= await api.importImageBytes({ dataUrl, projectId: project.id, source: "video-frame",
-              fileName: `${path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") || "视频"}-${videoTime(time).replace(/:/g, "-")}.png` });
+            savedAsset ??= await saveVideoFrame({ path, time, dataUrl }, project.id);
             dataUrl = "";
             const snapshot = createCanvasAssetSnapshot(savedAsset, nodeId);
             const size = assetNodeSize(snapshot);
@@ -2958,6 +2961,72 @@ export function CanvasWorkspace({
     await save();
     videoFrameSaves.current.delete(key);
   }
+
+  const collectedVideoSaves = useRef(new Map<string, () => Promise<void>>());
+  async function addCollectedVideo({ asset, projectId, operationId }: VideoCollectionCanvasDetail) {
+    let save = collectedVideoSaves.current.get(operationId);
+    if (!save) {
+      const stage = stageRef.current, project = activeCanvas;
+      if (!stage || project.id !== projectId || loadingRef.current || useStore.getState().projectRoutePending) throw new Error("请等待目标画板加载完成");
+      const bounds = stage.getBoundingClientRect(), center = toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+      const snapshot = createCanvasAssetSnapshot(asset, canvasId("asset")), size = assetNodeSize(snapshot);
+      const position = placeCanvasCardNearSource({ x: center.x - size.width / 2, y: center.y - size.height / 2, ...size }, nodesRef.current.map(nodeRect));
+      const node: CanvasAssetNode = { kind: "asset", id: snapshot.id, asset: snapshot, ...position, ...size,
+        order: nodesRef.current.reduce((max, node) => Math.max(max, node.order), 0) + 1 };
+      let queued = false, completed = false;
+      save = async () => {
+        await retryPendingWrites();
+        if (completed) return;
+        if (!queued) {
+          queued = true;
+          await enqueueWrite(async () => {
+            await ensureMaterialized(project);
+            await api.projectCanvasNodeCreate(newProjectCanvasAssetNode(projectId, node));
+            completed = true;
+            const current = useStore.getState();
+            if (stage.isConnected && activeCanvasRef.current.id === projectId && current.activeProjectId === projectId && !current.projectRoutePending) {
+              setCanvasAssets(assets => [...assets.filter(item => item.id !== asset.id), asset]);
+              commitNodes([...nodesRef.current.filter(item => item.id !== node.id), node]);
+            }
+          });
+        }
+        if (writeJournalRef.current.failure != null) throw writeJournalRef.current.failure;
+      };
+      collectedVideoSaves.current.set(operationId, save);
+    }
+    await save();
+    collectedVideoSaves.current.delete(operationId);
+  }
+
+  const saveCollectedRef = useRef(addCollectedVideo);
+  saveCollectedRef.current = addCollectedVideo;
+  const saveFrameRef = useRef(addVideoFrame);
+  saveFrameRef.current = addVideoFrame;
+  useEffect(() => {
+    const save = (event: Event) => {
+      const detail = (event as CustomEvent<VideoFrameCanvasDetail>).detail;
+      if (detail.projectId === activeCanvasRef.current.id && useStore.getState().activeProjectId === detail.projectId) {
+        detail.result = saveFrameRef.current(detail.frame);
+      }
+    };
+    window.addEventListener(VIDEO_FRAME_CANVAS_EVENT, save);
+    const saveCollected = (event: Event) => {
+      const detail = (event as CustomEvent<VideoCollectionCanvasDetail>).detail;
+      if (detail.projectId === activeCanvasRef.current.id && useStore.getState().activeProjectId === detail.projectId) detail.result = saveCollectedRef.current(detail);
+    };
+    window.addEventListener(VIDEO_COLLECTION_CANVAS_EVENT, saveCollected);
+    const prepareCollection = (event: Event) => {
+      const detail = (event as CustomEvent<VideoCollectionProjectDetail>).detail;
+      if (detail.projectId === activeCanvasRef.current.id && useStore.getState().activeProjectId === detail.projectId && !useStore.getState().projectRoutePending) {
+        detail.result = ensureMaterialized(activeCanvasRef.current).then(() => {});
+      }
+    };
+    window.addEventListener(VIDEO_COLLECTION_PROJECT_EVENT, prepareCollection);
+    return () => {
+      window.removeEventListener(VIDEO_FRAME_CANVAS_EVENT, save); window.removeEventListener(VIDEO_COLLECTION_CANVAS_EVENT, saveCollected);
+      window.removeEventListener(VIDEO_COLLECTION_PROJECT_EVENT, prepareCollection);
+    };
+  }, []);
 
   async function saveVideoTrim(request: VideoTrimRequest): Promise<Asset> {
     const project = activeCanvas;
@@ -5371,6 +5440,7 @@ export function CanvasWorkspace({
           <Lightbox
             onAddVideoFrame={addVideoFrame}
             onSaveVideoTrim={saveVideoTrim}
+            videoSourceKey={videoSourceKey([...assetById.values()].find(asset => asset.store_path === canvasLightbox.images[canvasLightbox.index]))}
             images={canvasLightbox.images}
             index={canvasLightbox.index}
             onClose={() => setCanvasLightbox(null)}

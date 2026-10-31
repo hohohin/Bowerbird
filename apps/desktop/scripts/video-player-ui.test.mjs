@@ -52,8 +52,8 @@ try {
   await page.reload();
   await page.locator('[data-canvas-node-id="clip"]').focus(); await page.keyboard.press('Enter');
   await dialog.waitFor();
-  assert.equal(await dialog.locator('video').getAttribute('src'), '/.tmp/video-player/colors.mp4',
-    'StrictMode effect cleanup/setup must retain the video source');
+  assert.equal(new URL(await dialog.locator('video').getAttribute('src'), page.url()).pathname, '/.tmp/video-player/colors.mp4',
+    'StrictMode effect cleanup/setup must retain the video source, including revision-bearing URLs');
   await page.waitForFunction(() => document.querySelector('.video-player video')?.readyState >= 2, null, { timeout: 5000 });
   const firstFrame = await dialog.locator('video').evaluate(video => {
     const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 180;

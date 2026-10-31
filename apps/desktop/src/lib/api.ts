@@ -280,12 +280,14 @@ export const api = {
     fileName?: string | null;
     projectId?: string | null;
     source: string;
+    videoFrame?: { sourcePath: string; time: number };
   }) =>
     invoke<Asset>("import_image_bytes", {
       dataUrl: req.dataUrl,
       fileName: req.fileName ?? null,
       projectId: req.projectId ?? null,
       source: req.source,
+      videoFrame: req.videoFrame ?? null,
     }),
   // 图片标注「保存到素材库」：入库 + 坐标元数据落 analyses(kind=annotation)，跳过 auto-analyze。
   saveAnnotatedImage: (req: {

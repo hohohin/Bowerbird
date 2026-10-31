@@ -5,8 +5,9 @@ import { externalFiles, type LocalFileEntry } from "../lib/externalFiles";
 import { createFilePreviewQueue } from "../lib/filePreviewQueue";
 import { isVideoPath } from "../lib/videoGeneration";
 import { LibrarySelectionMark } from "./LibrarySelectionMark";
+import { VideoHoverPreview, videoDurationLabel } from "./VideoHoverPreview";
 const previews = createFilePreviewQueue(externalFiles.preview);
-export function FileMediaCard({ entry, selected, revision, labels, onSelect, onActivate, onOpen, onContextMenu, aspectRatio, assetId, generated = false, onDragStart, onDragEnd, style }: {
+export function FileMediaCard({ entry, selected, revision, labels, onSelect, onActivate, onOpen, onContextMenu, aspectRatio, assetId, generated = false, onDragStart, onDragEnd, style, duration }: {
   entry: LocalFileEntry; selected: boolean; revision: number; labels: string[];
   onSelect: (additive: boolean, range: boolean) => void; onOpen: () => void;
   onActivate?: () => void;
@@ -14,6 +15,7 @@ export function FileMediaCard({ entry, selected, revision, labels, onSelect, onA
   aspectRatio?: number;
   style?: CSSProperties;
   generated?: boolean;
+  duration?: number | null;
   assetId?: string; onDragStart?: DragEventHandler<HTMLButtonElement>; onDragEnd?: DragEventHandler<HTMLButtonElement>;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
@@ -21,6 +23,8 @@ export function FileMediaCard({ entry, selected, revision, labels, onSelect, onA
   function cancelClick() { window.clearTimeout(clickTimer.current); clickTimer.current = undefined; }
   useEffect(() => cancelClick, [entry.path, onActivate === undefined]);
   const previewKey = `${entry.path}:${entry.version ?? revision}`;
+  const video = !entry.directory && isVideoPath(entry.path);
+  const durationLabel = video ? videoDurationLabel(duration) : null;
   const [preview, setPreview] = useState<string | null>(() => entry.preview ?? previews.peek(previewKey) ?? null);
   const [failedPreview, setFailedPreview] = useState<string | null>(null);
   useEffect(() => {
@@ -63,7 +67,9 @@ export function FileMediaCard({ entry, selected, revision, labels, onSelect, onA
     }}>
     <span className={`folder-media-preview${entry.directory ? " is-folder" : ""}`} style={aspectRatio ? { aspectRatio, minHeight: 0 } : undefined}>
       {entry.directory ? <Folder size={52} strokeWidth={1.3} /> : preview ? <img src={convertFileSrc(preview)} style={aspectRatio ? { position: "absolute", inset: 0, height: "100%", objectFit: "contain" } : undefined} alt="" draggable={false} loading="lazy" decoding="async" onError={() => { previews.forget(previewKey); setFailedPreview(preview); setPreview(null); }} /> : isVideoPath(entry.path) ? <Play size={32} /> : <Image size={32} />}
-      {!entry.directory && isVideoPath(entry.path) && <span className="folder-media-kind"><Play size={11} />视频</span>}
+      {video && <VideoHoverPreview path={entry.path} version={entry.version ?? revision} enabled={!!onActivate && !selected}/>}
+      {durationLabel && <span className="folder-media-duration">{durationLabel}</span>}
+      {video && <span className="folder-media-kind"><Play size={11} />视频</span>}
       {!entry.directory && generated && <span className="folder-media-generated" title="生成图" aria-label="生成图"><Sparkles size={12} aria-hidden="true"/></span>}
     </span>
     <LibrarySelectionMark selected={selected && !entry.directory} previewKey={preview ?? previewKey}/>

@@ -5,7 +5,7 @@ use tauri::{
     Url, WebviewUrl, WebviewWindowBuilder,
 };
 #[path = "douyin_media.rs"]
-mod media;
+pub(super) mod media;
 use media::{domain, download, media_url, secure};
 #[path = "douyin_browser.rs"]
 mod browser;
@@ -47,7 +47,7 @@ fn video_id(url: &Url) -> Option<String> {
     })?;
     ((12..=24).contains(&id.len()) && id.bytes().all(|c| c.is_ascii_digit())).then(|| id.to_owned())
 }
-fn share_url(text: &str) -> AppResult<Url> {
+pub(super) fn share_url(text: &str) -> AppResult<Url> {
     if text.trim().is_empty() || text.chars().count() > 8000 {
         return Err(error("请粘贴抖音分享文案，最多 8000 字"));
     }
@@ -226,6 +226,20 @@ async fn acquire(
         .ok_or_else(|| error("无法确认目标作品编号"))?;
     let value = selected(value, &expected)?;
     let canonical = format!("https://www.douyin.com/video/{expected}");
+    // Another share URL may resolve to the same work. Reuse a verified local result.
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let Some(other_id) = entry.file_name().to_str().map(str::to_owned) else { continue };
+        if other_id == id { continue; }
+        if let Ok(previous) = own(root,&other_id,field(task,"projectId")) {
+            if previous["kind"] == "douyin" && previous["state"] == "ready" && field(&previous,"originalUrl") == canonical {
+                if let Ok((reference,_)) = verified_reference(root,field(&previous["reference"],"id"),field(task,"projectId")) {
+                    patch(root,id,json!({"originalUrl":canonical,"videoId":expected}))?;
+                    return Ok(Some(public(reference)));
+                }
+            }
+        }
+    }
     patch(
         root,
         id,
@@ -242,6 +256,7 @@ async fn acquire(
                 &temporary,
                 &canonical,
                 field(&value, "userAgent"),
+                |bytes,total| { let _ = patch(root,id,json!({"downloadedBytes":bytes,"totalBytes":total})); },
             ),
         )
         .await;

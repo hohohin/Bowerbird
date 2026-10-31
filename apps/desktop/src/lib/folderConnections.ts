@@ -8,7 +8,7 @@ export interface FolderConnection {
 }
 export interface ConnectionEntry {
   id: string; folder_id: string; asset_id: string; name: string; path: string;
-  is_reference: boolean; available: boolean; asset: Asset;
+  is_reference: boolean; available: boolean; version?: string | null; asset: Asset;
 }
 export type ConnectionMedia = "images" | "videos" | null;
 async function entryBatches(command: string, ids: string[], key: string, args: Record<string, unknown> = {}) {

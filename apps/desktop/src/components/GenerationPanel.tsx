@@ -23,6 +23,7 @@ import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/
 import { imageProviderLabel, canonicalProviderKey, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import type { Asset, GenJob, GenTurn, VisualProfileCapsule, VisualProfileRuleValue } from "../lib/types";
 import { Lightbox } from "./Lightbox";
+import { videoSourceKey } from "../lib/videoSourceKey";
 import type { VideoFrame } from "../lib/videoFrame";
 import type { SaveVideoTrim } from "../lib/videoTrim";
 import { useCreationEditor } from "./creation/useCreationEditor";
@@ -691,6 +692,7 @@ export function GenerationPanel({
         <Lightbox
           onAddVideoFrame={onAddVideoFrame}
           onSaveVideoTrim={onSaveVideoTrim}
+          videoSourceKey={videoSourceKey(assets.find(asset => asset.store_path === lightbox.images[lightbox.index]))}
           images={lightbox.images}
           index={lightbox.index}
           onClose={() => setLightbox(null)}

@@ -20,6 +20,7 @@ import { useStore } from "../store";
 import type { Asset, Folder as Collection } from "../lib/types";
 import { FileColorFilter } from "./FileColorFilter";
 import { LibraryFloatingControls } from "./LibraryFloatingControls";
+import { VideoCollectionEntry } from "./VideoCollectionEntry";
 import { LibraryBrowserButton } from "./LibraryBrowserButton";
 import { LibraryMediaSwitch } from "./LibraryMediaSwitch";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
@@ -28,7 +29,8 @@ import { LibraryMotion } from "./LibraryMotion";
 import { LibraryTacticalBackdrop } from "./LibraryTacticalBackdrop";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
-import { Lightbox } from "./Lightbox";
+import { LibraryVideoPreview } from "./LibraryVideoPreview";
+import { videoSourceKey } from "../lib/videoSourceKey";
 import { LocalClassificationDialog } from "./LocalClassificationDialog";
 import { LocalFileBrowser } from "./LocalFileBrowser";
 import { CollectionAssignDialog, CollectionEditorDialog } from "./CollectionDialogs";
@@ -71,7 +73,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   const [assign, setAssign] = useState<string[] | null>(null);
   const [manageTags, setManageTags] = useState(false);
   const [references, setReferences] = useState(false);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ path: string; sourceKey: string } | null>(null);
   const [working, setWorking] = useState(false);
   const [colorsOpen, setColorsOpen] = useState(false);
   const [color, setColor] = useState<string | null>(savedPosition?.color ?? null);
@@ -275,12 +277,12 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     setPreview(null);
     useStore.getState().openDetail(asset.id);
   }
-  async function openPreview(asset: Pick<Asset, "store_path">) {
+  async function openPreview(asset: Asset) {
     const version = ++previewVersion.current;
     try {
       if (!asset.store_path) throw new Error("素材原文件不可用");
       const path = await externalFiles.media(asset.store_path);
-      if (alive.current && version === previewVersion.current) setPreview(path);
+      if (alive.current && version === previewVersion.current) setPreview({ path, sourceKey: videoSourceKey(asset)! });
     } catch (error) { if (alive.current && version === previewVersion.current) notifyError(error, "无法预览素材"); }
   }
   function context(asset: Asset, x: number, y: number) {
@@ -409,6 +411,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
         <div className="file-view-heading">
           {navigation}
           <LibraryFloatingControls>
+            <VideoCollectionEntry projectId={projectId} onCloseLibrary={onClose} onCreateProject={onCreateProject} onAssetsChange={onAssetsChange}/>
             <LibraryMediaSwitch/>
             <GeneratedImageFilter floating value={generatedFilter} onChange={useLocalFileMode.getState().setGeneratedFilter}/>
             <LibraryBrowserButton/>
@@ -433,7 +436,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
         </div>}
       </div>
     </div>
-    {preview && <Lightbox images={[preview]} index={0} onIndexChange={() => {}} onClose={() => setPreview(null)}/>}
+    {preview && <LibraryVideoPreview {...preview} projectId={projectId} onClose={() => setPreview(null)}/>}
     {manageTags && <LocalClassificationDialog initialView="labels" projectId={projectScope ? projectId ?? undefined : undefined} onClose={() => { setManageTags(false); setRevision(v => v + 1); }}/>}
     {references && <ModalShell title="外部引用" width="lg" onClose={() => setReferences(false)}><LocalFileBrowser initialTab="references" onClose={() => setReferences(false)} onCreateProject={() => void onCreateProject?.()}/></ModalShell>}
     {editor && <CollectionEditorDialog {...editor} collections={catalog.collections} onClose={() => setEditor(null)} onSaved={id => { setActive(id); setRevision(v => v + 1); }}/>}

@@ -3,6 +3,7 @@ mod douyin;
 mod cases;
 mod poster;
 mod local;
+pub mod collection;
 use crate::{
     cloud::{AuthClient, CloudClient},
     core::paths::LibraryPaths,

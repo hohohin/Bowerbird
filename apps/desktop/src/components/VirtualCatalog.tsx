@@ -190,7 +190,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
             if (renderItem) return renderItem(asset, { width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }, cell.ratio, { section: section.id, index: block.offset + index });
             return <FileMediaCard key={asset.id} style={{ width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }}
               entry={{ path: asset.store_path ?? "", name: asset.name, directory: false, preview: asset.thumb_path, version: `${asset.id}:${asset.file_mtime ?? 0}:${asset.thumb_path}` }}
-              aspectRatio={cell.ratio} selected={selected.has(asset.id)} revision={revision} labels={[]} assetId={asset.id} generated={asset.generation_session_id != null}
+              aspectRatio={cell.ratio} selected={selected.has(asset.id)} revision={revision} labels={[]} assetId={asset.id} generated={asset.generation_session_id != null} duration={asset.duration}
               onSelect={(additive, range) => onSelect(asset, additive, range, { section: section.id, index: block.offset + index })}
               onActivate={onActivate ? () => onActivate(asset) : undefined} onOpen={() => onOpen(asset)} onContextMenu={(x,y) => onContextMenu(asset,x,y)}
               onDragStart={event => { const ids = selected.has(asset.id) ? [...selected] : [asset.id]; setDragAssets(ids, asset.name, event.currentTarget.querySelector("img")?.src); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", ids.join(",")); }} onDragEnd={() => setDragAssets(null)}/>;

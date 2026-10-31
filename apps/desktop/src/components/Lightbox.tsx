@@ -21,18 +21,27 @@ export function Lightbox({
   onClose,
   onIndexChange,
   onAddVideoFrame,
+  onAddFrameToCanvas,
   onSaveVideoTrim,
+  videoFrameTarget,
+  videoSourceKey,
 }: {
   images: string[];
   index: number;
   onClose: () => void;
   onIndexChange: (i: number) => void;
   onAddVideoFrame?: (frame: VideoFrame) => Promise<void>;
+  onAddFrameToCanvas?: (frame: VideoFrame) => Promise<void>;
   onSaveVideoTrim?: SaveVideoTrim;
+  videoFrameTarget?: "canvas" | "reference" | "library";
+  videoSourceKey?: string;
 }) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape" && e.target instanceof Element && e.target.closest('[role="slider"], input, textarea, select')) return;
+      // Video arrows belong to time seeking; previous/next media keep explicit buttons.
+      if (isVideoPath(images[index]) && e.key !== "Escape") return;
+      if (e.key === "Escape" && document.fullscreenElement) return;
       if (["Escape", "ArrowLeft", "ArrowRight"].includes(e.key)) e.stopPropagation();
       if (e.key === "Escape") {
         e.preventDefault();
@@ -63,7 +72,7 @@ export function Lightbox({
       aria-modal="true"
       aria-label={`媒体预览，${index + 1} / ${images.length}`}
     >
-      {isVideoPath(images[index]) ? <VideoPlayer key={images[index]} path={images[index]} onAddFrame={onAddVideoFrame} onSaveTrim={onSaveVideoTrim} /> : <img
+      {isVideoPath(images[index]) ? <VideoPlayer key={`${images[index]}:${videoSourceKey ?? ""}`} path={images[index]} sourceKey={videoSourceKey} frameTarget={videoFrameTarget} onAddFrame={onAddVideoFrame} onAddFrameToCanvas={onAddFrameToCanvas} onSaveTrim={onSaveVideoTrim} /> : <img
         ref={zoom.imgRef}
         src={imagePath ? convertFileSrc(imagePath) : undefined}
         alt={`预览图 ${index + 1}`}

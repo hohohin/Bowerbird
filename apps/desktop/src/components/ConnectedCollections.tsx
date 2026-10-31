@@ -17,6 +17,7 @@ import { VirtualCatalog, type CatalogLocation } from "./VirtualCatalog";
 import { FileMediaCard } from "./FileMediaCard";
 import type { CategorizedLibrary } from "./CategorizedLibrary";
 import { LibraryFloatingControls } from "./LibraryFloatingControls";
+import { VideoCollectionEntry } from "./VideoCollectionEntry";
 import { LibraryMediaSwitch } from "./LibraryMediaSwitch";
 import { LibraryTacticalBackdrop } from "./LibraryTacticalBackdrop";
 import { LibraryMotion } from "./LibraryMotion";
@@ -25,7 +26,8 @@ import { OverlayScrollArea } from "./CollectionScrollArea";
 import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { ContextMenu } from "./ContextMenu";
 import { ModalShell } from "./ModalShell";
-import { Lightbox } from "./Lightbox";
+import { LibraryVideoPreview } from "./LibraryVideoPreview";
+import { videoSourceKey } from "../lib/videoSourceKey";
 import { CollectionEditorDialog, CollectionAssignDialog } from "./CollectionDialogs";
 import "./CategorizedLibrary.css";
 import "./ConnectedCollections.css";
@@ -56,7 +58,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   const [editor, setEditor] = useState<{ item?: FolderConnection; parentId: string | null } | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);
   const [assign, setAssign] = useState<string[] | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ path: string; sourceKey: string } | null>(null);
   const [jump, setJump] = useState<{ id: string; sequence: number } | null>(null);
   const [drop, setDrop] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(208);
@@ -174,7 +176,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     const state = useStore.getState();
     if (projectId && state.activeProjectId !== projectId) return;
     if (projectId && (state.boardOpen || state.genEditing)) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
-    else void run(async () => { if (!asset.store_path) throw new Error("原文件暂不可用"); const path = await externalFiles.media(asset.store_path); if (alive.current) setPreview(path); });
+    else void run(async () => { if (!asset.store_path) throw new Error("原文件暂不可用"); const path = await externalFiles.media(asset.store_path); if (alive.current) setPreview({ path, sourceKey: entryOf(asset).version ?? videoSourceKey(asset)! }); });
   }
   function context(asset: Asset, x: number, y: number) {
     const entry = entryOf(asset), key = filterRef.current;
@@ -237,7 +239,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
       </aside>
       <div ref={pinch} className="catalog-gallery">
         <LibraryTacticalBackdrop/>
-        <div className="file-view-heading">{navigation}<LibraryFloatingControls><LibraryMediaSwitch/><button className="library-filter-trigger" aria-label="刷新集合" onClick={refresh}><RefreshCw size={14} className={folders.some(folder => folder.scanning) ? "connected-refreshing" : undefined}/></button>{toolbarActions}</LibraryFloatingControls></div>
+        <div className="file-view-heading">{navigation}<LibraryFloatingControls><LibraryMediaSwitch/><VideoCollectionEntry projectId={projectId} onCloseLibrary={onClose} onCreateProject={onCreateProject} onAssetsChange={onAssetsChange}/><button className="library-filter-trigger" aria-label="刷新集合" onClick={refresh}><RefreshCw size={14} className={folders.some(folder => folder.scanning) ? "connected-refreshing" : undefined}/></button>{toolbarActions}</LibraryFloatingControls></div>
         {error && <p className="catalog-error" role="alert">{error}<button onClick={() => setRevision(value => value + 1)}>重试</button></p>}
         {current && (!current.available || current.error) && <div className="connected-status"><Unlink size={14}/><span>{current.error ? userErrorMessage(current.error, "文件夹暂时无法读取，请重试。") : "文件夹暂不可用"}</span>{!current.available ? <button onClick={() => void run(() => relocate(current), true)}>重新定位</button> : <button onClick={refresh}>刷新</button>}</div>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none", scrollPaddingTop: 48 }}>
@@ -246,7 +248,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
             readPage={readPage} itemKey={entryKey} emptySection={id => folders.find(folder => folder.id === id)?.scanning ? "正在检查文件夹…" : "暂无素材"}
             onAssetsChange={onAssetsChange} onSelect={select} onActivate={activate} onOpen={asset => useStore.getState().openDetail(asset.id)} onContextMenu={context}
             renderItem={(asset, style, ratio, location) => { const entry = entryOf(asset); return <div key={entry.id} data-connection-entry={entry.id} data-reference={entry.is_reference || undefined} className="connected-media" style={style}>
-              <FileMediaCard entry={{ path: asset.store_path ?? "", name: entry.name, directory: false, preview: asset.thumb_path, version: `${asset.id}:${asset.file_mtime}:${asset.thumb_path}` }} style={{ width: "100%", height: "100%" }} aspectRatio={ratio} selected={selected.has(entry.id)} revision={revision} labels={[]} assetId={asset.id} generated={!!asset.generation_session_id}
+              <FileMediaCard entry={{ path: asset.store_path ?? "", name: entry.name, directory: false, preview: asset.thumb_path, version: `${asset.id}:${asset.file_mtime}:${asset.thumb_path}` }} style={{ width: "100%", height: "100%" }} aspectRatio={ratio} selected={selected.has(entry.id)} revision={revision} labels={[]} assetId={asset.id} generated={!!asset.generation_session_id} duration={asset.duration}
                 onSelect={(additive, range) => select(asset, additive, range, location)} onActivate={!multiple ? () => activate(asset) : undefined} onOpen={() => useStore.getState().openDetail(asset.id)} onContextMenu={(x, y) => context(asset, x, y)}
                 onDragStart={event => { const entries = selected.has(entry.id) ? dragSelection.current : [entry]; if (!entry.available || !entries.length || (selected.has(entry.id) && entries.length !== selected.size)) { event.preventDefault(); return; } const ids = assetsOf(entries).map(asset => asset.id); setDragAssets(ids, asset.name, event.currentTarget.querySelector("img")?.src); event.dataTransfer.effectAllowed = "copyLink"; event.dataTransfer.setData("text/plain", ids.join(",")); }} onDragEnd={() => setDragAssets(null)}/>
               {entry.is_reference && <span className="connected-reference" aria-label="素材分身"><Link2 size={13}/></span>}{!entry.available && <span className="connected-missing"><Unlink size={18}/>原文件失联</span>}
@@ -267,7 +269,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     {editor && <CollectionEditorDialog collections={folders} {...editor} projectId={scope} onClose={() => setEditor(null)} onSaved={id => { pendingJump.current = id; setRevision(value => value + 1); }}/ >}
     {assign && <CollectionAssignDialog assetIds={assign} onClose={() => setAssign(null)} onSaved={() => { finishSelection(); setRevision(value => value + 1); }}/ >}
     {operation && <ConnectionOperation key={operation.kind} operation={operation} folders={folders} onClose={() => setOperation(null)} onSaved={() => { finishSelection(); setRevision(value => value + 1); }}/ >}
-    {preview && <Lightbox images={[preview]} index={0} onIndexChange={() => {}} onClose={() => setPreview(null)}/ >}
+    {preview && <LibraryVideoPreview {...preview} projectId={projectId} onClose={() => setPreview(null)}/>}
   </section>;
 }
 

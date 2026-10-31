@@ -21,6 +21,10 @@ use crate::core::settings::SettingsState;
 use crate::db::Database;
 use crate::error::AppError;
 
+#[path = "library_video_frame.rs"]
+mod video_frame;
+use video_frame::VideoFrameOrigin;
+
 /// 「在全局素材中隐藏项目素材」：仅全局视图（project_id = None）生效——项目视图本来就只显示项目素材。
 /// 开关来自设置面板（settings.json），命令层每次现读，改设置后无需重启即生效。
 fn hide_in_global(settings: &SettingsState, project_id: &Option<String>) -> bool {
@@ -238,6 +242,7 @@ pub async fn import_image_bytes(
     file_name: Option<String>,
     project_id: Option<String>,
     source: String,
+    video_frame: Option<VideoFrameOrigin>,
 ) -> Result<Asset, AppError> {
     if source == "imported" {
         return Err(AppError::Other("请选择原文件建立连接".into()));
@@ -248,6 +253,10 @@ pub async fn import_image_bytes(
     let db = db.inner().clone();
     let db_for_ingest = db.clone();
     let asset = tokio::task::spawn_blocking(move || {
+        if let Some(origin) = video_frame {
+            if source != "video-frame" { return Err(AppError::Media("视频来源仅用于截帧保存".into())); }
+            return video_frame::ingest_frame(&paths, &db_for_ingest, &bytes, file_name.as_deref(), &origin);
+        }
         ingest::ingest_from_bytes(
             &paths,
             &db_for_ingest,

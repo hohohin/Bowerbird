@@ -37,6 +37,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/研究报告-服务器化CLI与API化改造可行性.md` | 服务器套壳 CLI vs 官方 API 可行性结论（推荐火山方舟官方 API） | 托管算力 / 远程化方向决策前必读 |
 | `dev-doc/LAYER-EDITING.md` | Seedream 5.0 Pro 分层编辑、独立面板、本地工程、Cloud 图层包与隔离验证 | 分层拆分、透明图层修改、图层工程保存或分层服务启价前必读 |
 | `dev-doc/SEEDANCE-2.5-INTEGRATION.md` | 即梦 Seedance 2.5 视频接入、官方 CLI 四模式契约与验收证据 | 视频生成、参数、任务恢复、视频入库与播放相关工作前必读 |
+| `dev-doc/VIDEO-MEDIA.md` | 统一播放器、悬停预览、截帧来源、独立抖音／直链采集及验证 | 视频浏览、播放、截帧或独立采集相关工作前必读 |
 | `dev-doc/VIDEO-REPLICATION.md` | 画板工具箱、视频分析与改写、插入画板生成、抖音获取、Cloud 独立计费与验证 | 视频复刻、抖音参考视频获取或分析/改写启价相关工作前必读 |
 | `spikes/video-replication-demo/README.md` | 应用外复刻 Demo 的启动、豆包语音、Codex 分镜、本机即梦订阅、零视频输入与字幕合成恢复 | 接续抖音→转写及视觉分析→替换分镜文本／图片→生成合成的独立路径验证前必读 |
 | `dev-doc/FILMCRAFT-RESEARCH.md` | FilmCraft 剪辑交互、时间线、变速、音频波形源码调研及 Bowerbird 轻剪辑建议（未定案） | 轻量视频剪辑方案、时间模型、波形缓存或 FilmCraft 复用评估前读 |

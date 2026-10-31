@@ -604,6 +604,7 @@ pub fn run() {
             commands::comfy_video::comfy_video_check,
             commands::comfy_setup::comfy_video_environment,
             commands::video_replication::video_replication,
+            commands::video_replication::collection::video_collection,
             commands::library::count_assets,
             commands::library::list_folders,
             commands::library::create_folder,

@@ -1,4 +1,9 @@
 import { TacticalSelect } from "./TacticalSelect";
+import { VideoPlayer } from "./VideoPlayer";
+import { saveVideoFrame } from "../lib/saveVideoFrame";
+import { saveVideoFrameToCanvas } from "../lib/videoFrameCanvas";
+import { videoSourceKey } from "../lib/videoSourceKey";
+import { prepareVideoCollectionProject } from "../lib/videoCollectionCanvas";
 import { LearningHint } from "./OnboardingTour";
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -134,7 +139,7 @@ function Meta({ label, value }: { label: string; value: ReactNode }) {
 
 /**
  * 资产详情页（浏览模式下覆盖主区）：大图 + 元信息 + 反推描述 + 提示词板块 + 来源外链。
- * 大图走 store_path（原图全尺寸）；视频用 <video>；SVG/图片用 <img>。
+ * 大图走 store_path（原图全尺寸）；视频复用 VideoPlayer；SVG/图片用 <img>。
  */
 export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string) => void }) {
   const id = useStore((s) => s.detailAssetId);
@@ -718,7 +723,15 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
           <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
             {src &&
               (isVideo(asset.ext) ? (
-                <video src={src} controls preload="none" className="max-h-full max-w-full" />
+                <VideoPlayer key={videoSourceKey(asset)} path={asset.store_path!} sourceKey={videoSourceKey(asset)}
+                  embedded fitContainer showTrim frameTarget="library" onAddFrame={async frame => {
+                    if (activeProjectId) await prepareVideoCollectionProject(activeProjectId);
+                    await saveVideoFrame(frame, activeProjectId);
+                  }} onSaveTrim={async request => {
+                    if (activeProjectId) await prepareVideoCollectionProject(activeProjectId);
+                    return api.trimVideo(request, activeProjectId ?? undefined);
+                  }}
+                  onAddFrameToCanvas={activeProjectId ? frame => saveVideoFrameToCanvas(frame, activeProjectId) : undefined} />
               ) : (
                 <img
                   ref={zoom.imgRef}

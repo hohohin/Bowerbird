@@ -43,7 +43,7 @@ pub(super) fn media_url(raw: &str) -> AppResult<Url> {
     }
     Ok(url)
 }
-pub(super) fn public_ip(ip: IpAddr) -> bool {
+pub fn public_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(ip) => {
             let [a, b, c, _] = ip.octets();
@@ -74,6 +74,7 @@ pub(super) async fn download(
     target: &Path,
     canonical: &str,
     user_agent: &str,
+    mut progress: impl FnMut(u64,Option<u64>),
 ) -> AppResult<()> {
     let mut url = media_url(raw)?;
     for _ in 0..6 {
@@ -145,6 +146,9 @@ pub(super) async fn download(
         {
             return Err(error("视频超过 200 MiB 或返回了验证页面"));
         }
+        let total = response.content_length();
+        progress(0,total);
+        let mut last = std::time::Instant::now();
         let mut file = tokio::fs::File::create(target).await?;
         let mut stream = response.bytes_stream();
         let mut size = 0usize;
@@ -155,10 +159,14 @@ pub(super) async fn download(
                 return Err(error("参考视频超过 200 MiB"));
             }
             file.write_all(&chunk).await?;
+            if last.elapsed() >= Duration::from_millis(400) {
+                progress(size as u64,total); last = std::time::Instant::now();
+            }
         }
-        if size == 0 {
-            return Err(error("抖音返回了空视频"));
+        if size == 0 || total.is_some_and(|expected| expected != size as u64) {
+            return Err(error("视频下载不完整，请重新获取"));
         }
+        progress(size as u64,total);
         file.sync_all().await?;
         return Ok(());
     }
