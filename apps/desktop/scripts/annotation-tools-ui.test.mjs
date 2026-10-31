@@ -210,7 +210,7 @@ try {
     const croppedFlipped = await capture(saveButton);
     await compareTransform(cropped, croppedFlipped, "vertical");
     if (mode === "asset") {
-      const temp = await capture("插入创作板 · 不入库");
+      const temp = await capture("插入创作板");
       assert.deepEqual(temp, croppedFlipped, "both material annotation outputs preserve every tool and mirror");
     }
     await dialog.getByRole("button", { name: "清空", exact: true }).click();

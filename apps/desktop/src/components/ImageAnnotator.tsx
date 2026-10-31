@@ -1,3 +1,4 @@
+import "./ImageAnnotator.css";
 import { AnnotationTextEditor, finishTextShape } from "./AnnotationTextEditor";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -384,7 +385,7 @@ export function ImageAnnotator() {
   const [cropRect, setCropRect] = useState<CropRect | null>(null);
   const cropDragRef = useRef<CropDrag | null>(null);
   const [color, setColor] = useState(COLORS[0]);
-  const [pen, setPen] = useState(4); // 线宽（显示像素，提交时按显示宽换算 strokeRatio）
+  const wheelEditRef = useRef<{ index: number; time: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [textEdit, setTextEdit] = useState<{ index: number | null; shape: DrawShape } | null>(null);
 
@@ -471,10 +472,12 @@ export function ImageAnnotator() {
   }, [base, box]);
 
   function pushUndo() {
+    wheelEditRef.current = null;
     setUndoStack((s) => [...s, { shapes, ops }]);
   }
 
   function undo() {
+    wheelEditRef.current = null;
     const last = undoStack[undoStack.length - 1];
     if (!last) return;
     setUndoStack(undoStack.slice(0, -1));
@@ -658,7 +661,7 @@ export function ImageAnnotator() {
       x2: p.x,
       y2: p.y,
       color,
-      strokeRatio: pen / displaySize.w,
+      strokeRatio: 4 / displaySize.w,
       ...(tool === "pencil" ? { points: [p] } : {}),
     });
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
@@ -848,6 +851,32 @@ export function ImageAnnotator() {
     }
   }
 
+  // 原生非 passive 监听：命中标注才消费滚轮，不让页面同时滚动。
+  useEffect(() => {
+    const overlay = overlayRef.current;
+    if (!overlay || !displaySize) return;
+    const onWheel = (event: WheelEvent) => {
+      if (busy || draft || textEdit || tool === "crop" || event.ctrlKey || !event.deltaY) return;
+      const target = event.target instanceof Element ? event.target.closest("[data-annotation-index]") : null;
+      if (!target) return;
+      const index = Number(target.getAttribute("data-annotation-index"));
+      const shape = shapes[index];
+      if (!shape || shape.type === "text") return;
+      event.preventDefault();
+      event.stopPropagation();
+      const width = Math.max(1, Math.min(32, shape.strokeRatio * displaySize.w + (event.deltaY < 0 ? 1 : -1)));
+      const ratio = width / displaySize.w;
+      if (Math.abs(ratio - shape.strokeRatio) < 1e-9) return;
+      const now = performance.now();
+      const previous = wheelEditRef.current;
+      if (!previous || previous.index !== index || now - previous.time > 400) pushUndo();
+      wheelEditRef.current = { index, time: now };
+      setShapes(current => current.map((item, i) => i === index ? { ...item, strokeRatio: ratio } : item));
+    };
+    overlay.addEventListener("wheel", onWheel, { passive: false });
+    return () => overlay.removeEventListener("wheel", onWheel);
+  }, [annotator, shapes, ops, displaySize, busy, draft, textEdit, tool]);
+
   if (!annotator) return null;
 
   const dw = displaySize?.w ?? 0;
@@ -1030,24 +1059,25 @@ export function ImageAnnotator() {
       aria-label={isDraft ? "草稿" : "图片标注"}
     >
       {/* 工具条 */}
-      <fieldset disabled={busy} className="flex flex-wrap items-center gap-1.5 border-b border-white/10 px-3 py-2 text-xs text-white">
-        <button type="button" className={toolBtn(tool === "rect")} onClick={() => setTool("rect")}>
-          <Square size={14} /> 画框
+      <fieldset disabled={busy} className="annotation-toolbar border-b border-white/10 px-3 py-2 text-xs text-white">
+        <div className="annotation-toolbar-tools">
+        <button type="button" aria-label="画框" className={toolBtn(tool === "rect")} onClick={() => setTool("rect")} title="画框">
+          <Square size={14} /> <span>画框</span>
         </button>
-        <button type="button" className={toolBtn(tool === "arrow")} onClick={() => setTool("arrow")}>
-          <MoveUpRight size={14} /> 箭头
+        <button type="button" aria-label="箭头" className={toolBtn(tool === "arrow")} onClick={() => setTool("arrow")} title="箭头">
+          <MoveUpRight size={14} /> <span>箭头</span>
         </button>
-        <button type="button" className={toolBtn(tool === "ellipse")} onClick={() => setTool("ellipse")} title="拖动画椭圆，按住 Shift 画正圆">
-          <Circle size={14} /> 画圆
+        <button type="button" aria-label="画圆" className={toolBtn(tool === "ellipse")} onClick={() => setTool("ellipse")} title="拖动画椭圆，按住 Shift 画正圆">
+          <Circle size={14} /> <span>画圆</span>
         </button>
-        <button type="button" className={toolBtn(tool === "pencil")} onClick={() => setTool("pencil")}>
-          <Pencil size={14} /> 铅笔
+        <button type="button" aria-label="铅笔" className={toolBtn(tool === "pencil")} onClick={() => setTool("pencil")} title="铅笔">
+          <Pencil size={14} /> <span>铅笔</span>
         </button>
-        <button type="button" className={toolBtn(tool === "text")} onClick={() => setTool("text")}>
-          <Type size={14} /> 文字
+        <button type="button" aria-label="文字" className={toolBtn(tool === "text")} onClick={() => setTool("text")} title="文字">
+          <Type size={14} /> <span>文字</span>
         </button>
-        <button type="button" className={toolBtn(tool === "crop")} onClick={enterCropMode} title="裁剪：拖手柄调范围，框内拖动移动，Enter 应用">
-          <Crop size={14} /> 裁剪
+        <button type="button" aria-label="裁剪" className={toolBtn(tool === "crop")} onClick={enterCropMode} title="裁剪：拖手柄调范围，框内拖动移动，Enter 应用">
+          <Crop size={14} /> <span>裁剪</span>
         </button>
         <div className="mx-1 h-4 w-px bg-white/15" />
         <button
@@ -1104,65 +1134,58 @@ export function ImageAnnotator() {
           </button>
         ))}
         <div className="mx-1 h-4 w-px bg-white/15" />
-        <label className="flex items-center gap-2 text-white/70">
-          粗细
-          <input
-            type="range"
-            min={2}
-            max={16}
-            step={1}
-            value={pen}
-            onChange={(e) => setPen(Number(e.target.value))}
-            className="w-24 accent-[#4868ff]"
-          />
-        </label>
-        <div className="mx-1 h-4 w-px bg-white/15" />
         <button
           type="button"
           className={toolBtn(false)}
           disabled={!canUndo}
+          aria-label="撤销"
           onClick={undo}
           title="撤销上一步（Ctrl+Z）"
         >
-          <Undo2 size={14} /> 撤销
+          <Undo2 size={14} /> <span>撤销</span>
         </button>
         <button
           type="button"
           className={toolBtn(false)}
           disabled={shapes.length === 0}
+          aria-label="清空"
           onClick={clearAll}
           title="清空全部标注"
         >
-          <Eraser size={14} /> 清空
+          <Eraser size={14} /> <span>清空</span>
         </button>
 
-        <div className="ml-auto flex items-center gap-2">
+        </div>
+        <div className="annotation-toolbar-actions">
           {!isDraft && <button
             type="button"
             disabled={!hasEdits || busy || !annotator.saveToCanvas}
+            aria-label="添加到画板"
             onClick={addToCanvas}
             title={!annotator.saveToCanvas ? "请先打开项目画板" : hasEdits ? "将标注图添加到当前画板，同时保存到素材库" : "请先画标注或裁剪/旋转"}
             className="flex items-center gap-1.5 rounded border border-white/25 px-3 py-1.5 text-white transition-colors hover:bg-white/10 disabled:opacity-40"
           >
-            <LayoutDashboard size={14} /> 添加到画板
+            <LayoutDashboard size={14} /> <span>添加到画板</span>
           </button>}
           <button
             type="button"
             disabled={!hasEdits || busy}
+            aria-label={busy ? "保存中…" : isDraft ? "保存到画板" : "保存到素材库"}
             onClick={saveToLibrary}
-            title={hasEdits ? undefined : "请先画标注或裁剪/旋转"}
+            title={hasEdits ? (isDraft ? "保存到画板" : "保存到素材库") : "请先画标注或裁剪/旋转"}
             className="flex items-center gap-1.5 rounded bg-accent px-3 py-1.5 font-medium text-white transition-colors hover:bg-accent/85 disabled:opacity-40"
           >
-            <Save size={14} /> {busy ? "保存中…" : isDraft ? "保存到画板" : "保存到素材库"}
+            <Save size={14} /> <span>{busy ? "保存中…" : isDraft ? "保存到画板" : "保存到素材库"}</span>
           </button>
           {!isDraft && <button
             type="button"
             disabled={!hasEdits || busy}
+            aria-label="插入创作板"
             onClick={insertToBoard}
-            title={hasEdits ? "标注图不进入素材库，仅插入当前创作板编辑器" : "请先画标注或裁剪/旋转"}
+            title="插入创作板：标注图不进入素材库，仅插入当前创作板编辑器"
             className="flex items-center gap-1.5 rounded border border-white/25 px-3 py-1.5 text-white transition-colors hover:bg-white/10 disabled:opacity-40"
           >
-            <TextCursorInput size={14} /> 插入创作板 · 不入库
+            <TextCursorInput size={14} /> <span>插入创作板</span>
           </button>}
           <button
             type="button"
@@ -1209,13 +1232,13 @@ export function ImageAnnotator() {
               }}
               onContextMenu={(e) => e.preventDefault()}
             >
-              <g pointerEvents="none">{shapes.map((s, i) => textEdit?.index === i ? null : <g key={i}
-                pointerEvents={tool === "text" && s.type === "text" ? "auto" : "none"}
+              <g pointerEvents="none">{shapes.map((s, i) => textEdit?.index === i ? null : <g key={i} data-annotation-index={i}
+                pointerEvents={s.type === "text" ? (tool === "text" ? "auto" : "none") : tool === "crop" ? "none" : "visibleStroke"}
                 onPointerDown={event => {
                   if (tool !== "text" || s.type !== "text") return;
                   event.stopPropagation();
                   setTextEdit({ index: i, shape: s });
-                }}>{renderShape(s, `s${i}`)}</g>)}</g>
+                }}>{s.type !== "text" && <title>滚轮调整粗细</title>}{renderShape(s, `s${i}`)}</g>)}</g>
               {draft && renderShape(draft, "draft")}
               {tool === "crop" && cropRect && renderCropUI(cropRect)}
             </svg>
