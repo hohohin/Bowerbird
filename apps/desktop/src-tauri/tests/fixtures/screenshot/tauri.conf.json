@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Bowerbird Screenshot Test",
+  "version": "0.0.0",
+  "identifier": "com.bowerbird.screenshot-test",
+  "build": { "devUrl": "http://127.0.0.1:17961", "frontendDist": "../../../../dist" },
+  "bundle": { "active": false, "icon": ["../../../icons/icon.png"] },
+  "app": {
+    "windows": [{ "label": "main", "url": "about:blank", "visible": false, "dragDropEnabled": false }],
+    "security": { "capabilities": [{ "identifier": "screenshot-test", "webviews": ["main", "snip-*", "pin-*"], "permissions": ["core:default", "core:window:allow-close", "core:window:allow-start-dragging", "core:window:allow-set-size", "core:window:allow-set-cursor-position"] }] }
+  }
+}

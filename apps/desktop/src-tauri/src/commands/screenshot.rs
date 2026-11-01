@@ -367,54 +367,7 @@ pub async fn start_capture(app: AppHandle) -> Result<(), String> {
                 ))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let session = ulid::Ulid::new().to_string();
-        // Remove spare warm windows when displays have been disconnected.
-        for (label, window) in capture_app.webview_windows() {
-            if label
-                .strip_prefix("snip-")
-                .and_then(|s| s.parse::<usize>().ok())
-                .is_some_and(|index| index >= frames.len())
-            {
-                let _ = window.destroy();
-            }
-        }
-        for (index, (x, y, width, height, image)) in frames.into_iter().enumerate() {
-            let window = capture_window(&capture_app, index)?;
-            #[cfg(target_os = "macos")]
-            {
-                window
-                    .set_position(tauri::LogicalPosition::new(x as f64, y as f64))
-                    .map_err(|e| e.to_string())?;
-                window
-                    .set_size(tauri::LogicalSize::new(width as f64, height as f64))
-                    .map_err(|e| e.to_string())?;
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                window
-                    .set_position(tauri::PhysicalPosition::new(x, y))
-                    .map_err(|e| e.to_string())?;
-                window
-                    .set_size(tauri::PhysicalSize::new(width, height))
-                    .map_err(|e| e.to_string())?;
-            }
-            capture_app
-                .state::<ScreenshotState>()
-                .images
-                .lock()
-                .unwrap()
-                .insert(
-                    window.label().to_string(),
-                    ScreenshotFrame {
-                        session: session.clone(),
-                        png: encode(&image)?,
-                    },
-                );
-            window
-                .emit_to(window.label(), "screenshot-session", Some(&session))
-                .map_err(|e| e.to_string())?;
-        }
-        Ok(())
+        deliver_capture_frames(&capture_app, frames)
     })
     .await
     .map_err(|e| e.to_string())
@@ -424,6 +377,62 @@ pub async fn start_capture(app: AppHandle) -> Result<(), String> {
     }
     result
 }
+// The frozen pixels and native presentation share one path, including isolated tests.
+pub(crate) fn deliver_capture_frames(
+    app: &AppHandle,
+    frames: Vec<(i32, i32, u32, u32, image::RgbaImage)>,
+) -> Result<(), String> {
+    let session = ulid::Ulid::new().to_string();
+    // Remove spare warm windows when displays have been disconnected.
+    for (label, window) in app.webview_windows() {
+        if label
+            .strip_prefix("snip-")
+            .and_then(|s| s.parse::<usize>().ok())
+            .is_some_and(|index| index >= frames.len())
+        {
+            let _ = window.destroy();
+        }
+    }
+    for (index, (x, y, width, height, image)) in frames.into_iter().enumerate() {
+        let window = capture_window(app, index)?;
+        #[cfg(target_os = "macos")]
+        {
+            window
+                .set_position(tauri::LogicalPosition::new(x as f64, y as f64))
+                .map_err(|e| e.to_string())?;
+            window
+                .set_size(tauri::LogicalSize::new(width as f64, height as f64))
+                .map_err(|e| e.to_string())?;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            window
+                .set_position(tauri::PhysicalPosition::new(x, y))
+                .map_err(|e| e.to_string())?;
+            window
+                .set_size(tauri::PhysicalSize::new(width, height))
+                .map_err(|e| e.to_string())?;
+        }
+        // Encoding must not hold the frame mutex: show/image IPC runs on the UI thread.
+        let png = encode(&image)?;
+        app.state::<ScreenshotState>()
+            .images
+            .lock()
+            .unwrap()
+            .insert(
+                window.label().to_string(),
+                ScreenshotFrame {
+                    session: session.clone(),
+                    png,
+                },
+            );
+        window
+            .emit_to(window.label(), "screenshot-session", Some(&session))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn close_capture_windows(app: &AppHandle) {
     // Invalidate pending image loads before hiding; retain only empty webviews.
     app.state::<ScreenshotState>()
@@ -538,25 +547,38 @@ fn pin(app: &AppHandle, png: Vec<u8>, width: u32, height: u32) -> Result<(), Str
                 png,
             },
         );
-    let result = WebviewWindowBuilder::new(
+    let builder = WebviewWindowBuilder::new(
         app,
         &label,
         WebviewUrl::App("screenshot.html?screenshot=pin".into()),
     )
     .title("园丁鸟贴图")
     .decorations(false)
+    .shadow(false)
+    .resizable(false)
     .always_on_top(true)
+    .visible_on_all_workspaces(true)
     .skip_taskbar(true)
-    .inner_size(
-        (width as f64 * scale).max(180.0),
-        (height as f64 * scale + 40.0).max(120.0),
-    )
+    .min_inner_size(1.0, 1.0)
+    .inner_size(width as f64 * scale, height as f64 * scale)
     .center()
-    .visible(false)
-    .build();
+    .visible(false);
+    // macOS transparency requires a private API feature; do not add that dependency here.
+    #[cfg(not(target_os = "macos"))]
+    let builder = builder.transparent(true);
+    let result = builder.build();
     match result {
         Ok(window) => {
             cleanup_on_close(app, &window);
+            // Windows clamps CreateWindowEx to its default minimum before Tao's
+            // size-constraint handler is installed. Apply the image size after build.
+            if let Err(error) = window
+                .set_size(tauri::LogicalSize::new(width as f64 * scale, height as f64 * scale))
+                .and_then(|_| window.center())
+            {
+                let _ = window.destroy();
+                return Err(error.to_string());
+            }
             Ok(())
         }
         Err(error) => {

@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as Reac
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
-import { ArrowUpRight, Circle, Copy, Crop, Maximize, Minus, Pencil, Pin, Plus, Redo2, Save, Square, Type, Undo2, X, Grid2X2 } from "lucide-react";
+import { ArrowUpRight, Circle, Copy, Crop, Pencil, Pin, Redo2, Save, Square, Type, Undo2, X, Grid2X2 } from "lucide-react";
 import { drawMarks, moveRect, nudgeRect, rectBetween, samplePixel, type Mark, type Point, type Rect, type SnipTool } from "../lib/screenshot";
 import "./ScreenshotWindow.css";
 
@@ -63,6 +63,7 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const draftCanvas = useRef<HTMLCanvasElement>(null);
   const gesture = useRef<Gesture | null>(null);
+  const pinDrag = useRef<Point | null>(null);
   const [viewport, setViewport] = useState({ width: innerWidth, height: innerHeight });
   useEffect(() => {
     let disposed = false, revision = 0;
@@ -95,8 +96,13 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
         const url = URL.createObjectURL(new Blob([bytes instanceof ArrayBuffer ? bytes : new Uint8Array(bytes)], { type: "image/png" }));
         imageUrl = url;
         const loaded = new Image();
-        loaded.src = url;
-        await loaded.decode();
+        // decode() may wait for a rendering opportunity in a hidden WebView.
+        // The load event makes pixels available without waiting for it to show.
+        await new Promise<void>((resolve, reject) => {
+          loaded.onload = () => resolve();
+          loaded.onerror = () => reject(new Error("截图图片无法读取，请重新截图。"));
+          loaded.src = url;
+        });
         if (disposed || revision !== request) return;
         setViewport({ width: innerWidth, height: innerHeight });
         setSession(next); setImage(loaded);
@@ -148,12 +154,12 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
     });
     return () => cancelAnimationFrame(frame);
   }, [image, draft, pinned]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     // Layout effects have painted the fresh frame before the native window appears.
     if (image && session) void invoke("screenshot_show", { session }).catch(e => { if (activeSession.current === session) setError(String(e)); });
   }, [image, session]);
   useEffect(() => {
-    if (pinned && image) setZoom(Math.min(viewport.width / image.naturalWidth, (viewport.height - 40) / image.naturalHeight));
+    if (pinned && image) setZoom(Math.min(viewport.width / image.naturalWidth, viewport.height / image.naturalHeight));
   }, [pinned, image, viewport]);
   const ratio = image ? image.naturalWidth / viewport.width : 1;
   const ratioY = image ? image.naturalHeight / viewport.height : 1;
@@ -194,7 +200,7 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
   async function changeZoom(next: number) {
     if (!image) return;
     const value = Math.max(.1, Math.min(4, next));
-    try { await getCurrentWindow().setSize(new LogicalSize(Math.max(180, image.naturalWidth * value), Math.max(120, image.naturalHeight * value + 40))); setZoom(value); }
+    try { await getCurrentWindow().setSize(new LogicalSize(Math.max(1, image.naturalWidth * value), Math.max(1, image.naturalHeight * value))); setZoom(value); }
     catch (e) { setError(String(e)); }
   }
   useEffect(() => {
@@ -288,15 +294,21 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
   }
   const s = selection && image ? { left: selection.x / image.naturalWidth * 100 + '%', top: selection.y / image.naturalHeight * 100 + '%', width: selection.width / image.naturalWidth * 100 + '%', height: selection.height / image.naturalHeight * 100 + '%' } : null;
   if (pinned) return <main className="snip-pin" onWheel={event => { event.preventDefault(); void changeZoom(zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1)); }}>
-    <div className="snip-pin-bar"><span onPointerDown={() => void getCurrentWindow().startDragging()}>贴图</span>
-      <button title="缩小" onClick={() => void changeZoom(zoom / 1.2)}><Minus size={14} /></button>
-      <button title="原始尺寸" onClick={() => void changeZoom(1)}><Maximize size={14} /></button>
-      <button title="放大" onClick={() => void changeZoom(zoom * 1.2)}><Plus size={14} /></button>
-      <button title="复制" disabled={busy} onClick={() => void output('copy')}><Copy size={14} /></button>
-      <button title="保存" disabled={busy} onClick={() => void output('save')}><Save size={14} /></button>
-      <button title="关闭贴图" disabled={busy} onClick={() => void close()}><X size={14} /></button>
-    </div>
-    {image && <img draggable={false} src={image.src} alt="置顶截图" onPointerDown={event => { if (event.button === 0) void getCurrentWindow().startDragging(); }} onDoubleClick={() => void close()} />}
+    {image && <img draggable={false} src={image.src} alt="置顶截图"
+      onPointerDown={event => {
+        if (event.button !== 0) return;
+        pinDrag.current = { x: event.clientX, y: event.clientY };
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }}
+      onPointerMove={event => {
+        if (!pinDrag.current || Math.hypot(event.clientX - pinDrag.current.x, event.clientY - pinDrag.current.y) < 4) return;
+        pinDrag.current = null;
+        event.currentTarget.releasePointerCapture(event.pointerId);
+        void getCurrentWindow().startDragging().catch(e => setError(String(e)));
+      }}
+      onPointerUp={() => { pinDrag.current = null; }} onPointerCancel={() => { pinDrag.current = null; }}
+      onAuxClick={event => { if (event.button === 1) { event.preventDefault(); void changeZoom(1); } }}
+      onDoubleClick={() => void close()} />}
     {error && <p className="snip-error" role="alert">{userErrorMessage(error, "截图操作未完成，请关闭截图窗口后重试。")}</p>}
   </main>;
   return <main className="snip-root">

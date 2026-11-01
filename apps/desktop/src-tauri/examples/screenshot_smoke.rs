@@ -6,11 +6,44 @@ mod error;
 pub mod settings;
 mod core {
     pub use crate::settings;
+    // This fixture never opens a database or uses canvas preferences.
+    pub mod canvas_frequent_assets {
+        pub type CanvasFrequentAssetsPreferences = serde_json::Value;
+    }
 }
 #[path = "../src/commands/screenshot.rs"]
 pub mod screenshot;
 mod commands {
     pub use crate::screenshot;
+}
+
+#[cfg(windows)]
+async fn verify_background_hotkey(app: &tauri::AppHandle) -> Result<(), String> {
+    use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+    #[link(name = "user32")]
+    extern "system" {
+        fn keybd_event(key: u8, scan: u8, flags: u32, extra: usize);
+    }
+    let received = Arc::new(AtomicBool::new(false));
+    let signal = received.clone();
+    let key = "Control+Alt+Shift+F10";
+    app.global_shortcut().on_shortcut(key, move |_, _, event| {
+        if event.state() == ShortcutState::Pressed { signal.store(true, Ordering::SeqCst); }
+    }).map_err(|e| e.to_string())?;
+    // Exercise the OS keyboard path while every application window is hidden.
+    // This test handler does not capture pixels, read/write the clipboard or focus main.
+    unsafe {
+        for vk in [0x11, 0x12, 0x10, 0x79] { keybd_event(vk, 0, 0, 0); }
+        for vk in [0x79, 0x10, 0x12, 0x11] { keybd_event(vk, 0, 2, 0); }
+    }
+    for _ in 0..100 {
+        if received.load(Ordering::SeqCst) { break; }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    app.global_shortcut().unregister(key).map_err(|e| e.to_string())?;
+    assert!(received.load(Ordering::SeqCst), "global shortcut must dispatch without main-window focus");
+    Ok(())
 }
 
 fn main() {
@@ -34,6 +67,12 @@ fn main() {
             app.manage(settings);
             screenshot::initialize(app.handle());
             let app = app.handle().clone();
+            let watchdog = app.clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+                eprintln!("FAIL: native screenshot fixture timed out");
+                watchdog.exit(1);
+            });
             tauri::async_runtime::spawn(async move {
                 let result: Result<(), String> = async {
                     let main = app.get_webview_window("main").unwrap();
@@ -64,6 +103,12 @@ fn main() {
                     assert!(!app.global_shortcut().is_registered(keys.capture.as_str()));
                     assert!(!app.global_shortcut().is_registered(keys.paste.as_str()));
                     println!("PASS native global registration, swap, rejected duplicate, persistence, failed registration/write rollback and disable");
+                    #[cfg(windows)]
+                    {
+                        assert!(!main.is_visible().unwrap());
+                        verify_background_hotkey(&app).await?;
+                        println!("PASS OS keyboard shortcut dispatch while main window is hidden");
+                    }
                     let image = image::RgbaImage::from_pixel(32, 24, image::Rgba([42, 127, 220, 255]));
                     let mut bytes = std::io::Cursor::new(Vec::new());
                     image.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
@@ -71,6 +116,10 @@ fn main() {
                     screenshot::screenshot_output(main.clone(), app.clone(), data.clone(), "pin".into(), None).await?;
                     let pinned = app.webview_windows().into_iter().find(|(label, _)| label.starts_with("pin-")).unwrap().1;
                     assert!(!pinned.is_decorated().unwrap()); assert!(pinned.is_always_on_top().unwrap()); assert!(!pinned.is_visible().unwrap());
+                    let size = pinned.inner_size().unwrap().to_logical::<f64>(pinned.scale_factor().unwrap());
+                    assert!((size.width - 32.0).abs() <= 1.0 && (size.height - 24.0).abs() <= 1.0,
+                        "pin window must fit its image without toolbar space or minimum-size padding: {size:?}");
+                    assert!(!pinned.is_resizable().unwrap(), "OS resize borders must not frame the image");
                     let session = screenshot::screenshot_session(pinned.clone(), app.clone())?.unwrap();
                     use tauri::ipc::IpcResponse;
                     let body = screenshot::screenshot_image(pinned.clone(), app.clone(), session.clone())?.body().unwrap();

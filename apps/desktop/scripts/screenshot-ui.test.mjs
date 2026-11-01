@@ -23,6 +23,28 @@ async function pixels(data) {
   }, data);
 }
 try {
+  await page.goto(url + '?pendingDecode');
+  await page.waitForFunction(() => window.calls.some(c => c.command === 'screenshot_show'), null, { timeout: 5000 });
+  assert.ok(await page.evaluate(() => window.basePaints > 0), 'hidden frame is drawn before showing without awaiting decode');
+  await page.goto(url + '?mode=pin'); await page.getByAltText('置顶截图').waitFor();
+  assert.equal(await page.locator('.snip-pin-bar').count(), 0, 'pinned screenshot has no permanent toolbar');
+  assert.deepEqual(await page.locator('.snip-pin').evaluate(el => ({ border: getComputedStyle(el).borderWidth, background: getComputedStyle(el).backgroundColor })), { border: '0px', background: 'rgba(0, 0, 0, 0)' });
+  const pinImage = page.getByAltText('置顶截图');
+  assert.deepEqual(await pinImage.boundingBox(), { x: 0, y: 0, width: 800, height: 600 });
+  assert.equal(await page.evaluate(() => [document.documentElement, document.body, document.querySelector('#root')].every(el => getComputedStyle(el).backgroundColor === 'rgba(0, 0, 0, 0)')), true, 'pin page has no opaque application backdrop');
+  await pinImage.hover(); await page.mouse.wheel(0, -100);
+  await page.waitForFunction(() => window.calls.some(c => c.command === 'plugin:window|set_size'));
+  const scaled = await page.evaluate(() => window.calls.find(c => c.command === 'plugin:window|set_size').args.value.size);
+  assert.ok(Math.abs(scaled.width / scaled.height - 4 / 3) < .001, 'wheel zoom preserves the image aspect ratio');
+  await page.setViewportSize({ width: 80, height: 60 });
+  assert.deepEqual(await pinImage.boundingBox(), { x: 0, y: 0, width: 80, height: 60 }, 'small pins retain image-only geometry');
+  await page.setViewportSize({ width: 800, height: 600 });
+  await pinImage.click();
+  assert.equal(await page.evaluate(() => window.calls.some(c => c.command === 'plugin:window|start_dragging')), false, 'a click must not enter the native move loop');
+  await drag(100, 100, 110, 110);
+  assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === 'plugin:window|start_dragging').length), 1, 'one native drag starts after moving past the threshold');
+  await pinImage.dblclick();
+  assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === 'plugin:window|close').length), 1, 'double click closes the pin');
   await page.goto(url); await page.waitForFunction(() => window.calls.some(c => c.command === 'plugin:window|show'));
   // Odd-sized nearest-neighbour loupe: the labelled source pixel is its exact centre.
   await page.mouse.move(500, 150); await page.getByText('1000, 300 px', { exact: true }).waitFor();
@@ -150,17 +172,19 @@ try {
   await page.keyboard.press('Enter');
   assert.equal(await page.evaluate(async data => { const img = new Image(); img.src = data; await img.decode(); return img.width * img.height; }, (await output()).data), 1);
   await page.goto(url + '?mode=pin'); await page.getByAltText('置顶截图').waitFor();
-  await page.getByTitle('原始尺寸', { exact: true }).click();
-  assert.ok(await page.evaluate(() => window.calls.some(c => c.command === 'plugin:window|set_size' && c.args.value.size.width === 1600)));
-  await page.getByTitle('复制', { exact: true }).click();
+  await page.getByAltText('置顶截图').click({ button: 'middle' });
+  assert.ok(await page.evaluate(() => window.calls.some(c => c.command === 'plugin:window|set_size' && c.args.value.size.width === 1600 && c.args.value.size.height === 1200)), 'middle click restores image dimensions without toolbar padding');
+  await page.keyboard.press('Control+c');
   await page.waitForFunction(() => window.calls.some(c => c.command === 'screenshot_output'));
   assert.equal((await pixels((await output()).data)).width, 1600);
-  await page.getByTitle('关闭贴图', { exact: true }).click(); assert.ok(await page.evaluate(() => window.calls.some(c => c.command === 'plugin:window|close')));
+  await page.keyboard.press('Control+s');
+  await page.waitForFunction(() => window.calls.some(c => c.command === 'screenshot_output' && c.args.action === 'save'));
+  await page.keyboard.press('Escape'); assert.ok(await page.evaluate(() => window.calls.some(c => c.command === 'plugin:window|close')));
   await page.goto(url + '?mode=settings'); const capture = page.getByRole('button', { name: '区域截图快捷键' });
   await capture.waitFor(); assert.equal(await capture.textContent(), 'F1');
   await capture.click(); await page.keyboard.press('Control+Shift+S'); await page.waitForFunction(() => window.settings.screenshot_shortcuts.capture === 'Control+Shift+KeyS');
   await page.evaluate(() => { window.conflict = true; }); await capture.click(); await page.keyboard.press('F6');
-  await page.getByRole('alert').filter({ hasText: '已被占用' }).waitFor(); assert.equal(await capture.textContent(), 'Ctrl + Shift + S');
+  await page.getByRole('alert').filter({ hasText: '请换一个组合键' }).waitFor(); assert.equal(await capture.textContent(), 'Ctrl + Shift + S');
   await page.evaluate(() => { window.conflict = false; });
   await page.getByRole('button', { name: '停用', exact: true }).first().click(); await page.waitForFunction(() => window.settings.screenshot_shortcuts.capture === '');
   await page.getByRole('button', { name: '恢复默认', exact: true }).click(); await page.waitForFunction(() => window.settings.screenshot_shortcuts.capture === 'F1');
