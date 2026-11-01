@@ -34,3 +34,13 @@
 最终完整 TypeScript 检查通过；独立 Vite 构建至 `apps/desktop/.tmp/review-fixes-build/`，主窗口与截图入口均生成，仅有既有大 chunk 提示。7 组 Chromium 回归为 `annotation-tools-ui`、`annotation-toolbar-ui`、`screenshot-ui`、`screenshot-history-ui`、`connected-collections-ui`、`catalog-paging-ui`、`project-rename-ui`；完整 Rust crate 历史专项 9 项通过。未把合成 IPC 结果写成原生屏幕捕获／Mac 验收。
 
 第二个提交单元包含公共标注核心、两窗口适配、正式回归与本次文档，提交说明记录修复原因及验证方法；与首个提交一起按 `ub-mode` 推送当前开发主线 `dev`。测试产物与工具证据留在临时目录，不进入版本库；保留原有未提交工作，不清理未知归属的目录或工作树。
+
+## 回访修正：右键选择后的首次 Shift
+
+用户补充了此前回归遗漏的入口：右键第 1 张 →「选择」→ Shift 点击第 10 张，只得到第 1 与第 10 张，再次 Shift 才执行范围。两个视图的菜单选择回调都只写选中集合与多选状态，没有设置范围起点；第一次 Shift 因起点为空退回单项选择，并把第 10 张当作后续起点。此前直接 Shift 起选的测试不能覆盖此路径。
+
+1. 共用浏览器回归 helper 在两个真实视图执行该序列；全部视图夹具挂载正式 `AssetContextMenu`，不直接调用菜单回调绕过交互。修改生产代码前，两套测试均在「首次 Shift 应恰好选中 1–10」断言失败，集合界面实际显示「已选 2 项」。
+2. `VirtualCatalog` 的菜单回调传递已有的 `CatalogLocation`（分组 ID 与分页绝对下标）；连接集合的自定义卡片传递同一位置。只有用户执行菜单「选择」才更新对应起点，沿用原有范围读取和共用点击规则，不新增选择算法。
+3. 同一回归还验证：菜单选择另一个目标会替换旧起点；仅右键其他素材后按 Esc，不改变原起点。`connected-collections-ui` 与 `catalog-paging-ui` 全部转绿，后者原有 30 万项分页／范围选择仍通过；完整 TypeScript 检查通过，独立只读复核无本次新增阻断问题。
+
+本次只修正菜单入口的位置传递，前述五个共享核心未修改，不把此前质量指标重复记作新扫描。代码、测试与本记录同一提交，继续推送开发主线；未发布安装包、重启原生应用或操作用户素材库。

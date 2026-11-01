@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+import { checkContextRangeSelection } from './helpers/catalog-context-selection.mjs';
 const server=await createServer({cacheDir:'.tmp/catalog-paging/vite',server:{host:'127.0.0.1',port:17893,strictPort:true,hmr:false,watch:null}});
 await server.listen();
 const browser=await chromium.launch({channel:'chrome',headless:true});
@@ -14,6 +15,7 @@ try {
   await mkdir('.tmp/catalog-paging',{recursive:true});
   await page.goto('http://127.0.0.1:17893/scripts/fixtures/catalog-paging/preview.html');
   await ready();
+  await checkContextRangeSelection(page, index => page.locator(`[data-asset-id="asset-${index}"]`), page.getByRole('button', { name: '取消选择', exact: true }));
   await page.locator('[data-asset-id="asset-0"]').click({modifiers:['Shift']});
   await page.locator('[data-asset-id="asset-1"]').click();
   assert.equal(await page.locator('[data-asset-id="asset-1"]').getAttribute('aria-pressed'),'true','the first Shift selection must keep subsequent clicks in selection mode');

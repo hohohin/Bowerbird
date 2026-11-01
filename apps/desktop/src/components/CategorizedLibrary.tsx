@@ -287,7 +287,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
       if (alive.current && version === previewVersion.current) setPreview({ path, sourceKey: videoSourceKey(asset)! });
     } catch (error) { if (alive.current && version === previewVersion.current) notifyError(error, "无法预览素材"); }
   }
-  function context(asset: Asset, x: number, y: number) {
+  function context(asset: Asset, x: number, y: number, location: CatalogLocation) {
     if (working) return;
     const ids = selected.has(asset.id) ? [...selected] : [asset.id];
     const key = filterKey;
@@ -295,7 +295,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
       const targets = ids.length === 1 ? [asset] : await resolveSelection(ids);
       if (!alive.current || filterKeyRef.current !== key) return;
       useStore.getState().openContextMenu(x, y, asset.id, { asset, libraryProjectId: projectScope ? projectId ?? undefined : undefined, fileSelection: { assets: targets, openReferences: () => setReferences(true),
-        onComplete: finishSelection, select: () => { setMultiple(true); setSelected(previous => new Set([...previous, asset.id])); } } });
+        onComplete: finishSelection, select: () => { anchor.current = location; setMultiple(true); setSelected(previous => new Set([...previous, asset.id])); } } });
     });
   }
   async function run(action: () => Promise<void>) {

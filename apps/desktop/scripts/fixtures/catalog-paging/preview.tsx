@@ -5,6 +5,7 @@ import { FileDropImport } from "../../../src/components/FileDropImport";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { LibraryHome } from "../../../src/components/LibraryHome";
 import { CategorizedLibrary } from "../../../src/components/CategorizedLibrary";
+import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { useLocalFileMode } from "../../../src/lib/localFileMode";
 import { useStore } from "../../../src/store";
 import "../../../src/styles.css";
@@ -80,7 +81,7 @@ function Fixture() {
   w.changeKind=setKind; w.changeProject=setProject;
   return <div style={{position:"fixed",inset:0}}><CategorizedLibrary key={`${kind}:${project}`} kind={kind} projectId={project?"p":null} projectScope={project}
     navigation={<input aria-label="搜索素材" onChange={e=>useLocalFileMode.getState().setQuery(e.target.value)}/>}
-    onClose={()=>{}} onCreateProject={async ids=>{w.created=ids;}}/></div>;
+    onClose={()=>{}} onCreateProject={async ids=>{w.created=ids;}}/><AssetContextMenu/></div>;
 }
 function SplitFixture() {
   const [open, setOpen] = React.useState(false);

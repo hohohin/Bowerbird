@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+import { checkContextRangeSelection } from './helpers/catalog-context-selection.mjs';
 
 const server = await createServer({ cacheDir: '.tmp/connected-collections/vite', server: { host: '127.0.0.1', port: 17951, strictPort: true, hmr: false, watch: null } });
 await server.listen();
@@ -19,6 +20,7 @@ try {
   await mkdir('.tmp/connected-collections', { recursive: true });
   await page.goto('http://127.0.0.1:17951/scripts/fixtures/connected-collections/preview.html');
   await card('root-0').waitFor();
+  await checkContextRangeSelection(page, index => card(`root-${index}`), page.locator('.connected-selection').getByRole('button', { name: '取消', exact: true }));
   await card('root-0').click({ modifiers: ['Shift'] });
   await card('root-1').click();
   assert.equal(await card('root-1').getAttribute('aria-pressed'), 'true', 'the first Shift selection must keep subsequent clicks in selection mode');

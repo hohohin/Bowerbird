@@ -16,7 +16,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   scroll: RefObject<HTMLDivElement>; selected: Set<string>; jump: { id: string; sequence: number } | null; initialTop?: number;
   onActive: (id: string | null) => void; onAssetsChange?: (assets: Asset[]) => void;
   onSelect: (asset: Asset, additive: boolean, range: boolean, location: CatalogLocation) => void;
-  onActivate?: (asset: Asset) => void; onOpen: (asset: Asset) => void; onContextMenu: (asset: Asset, x: number, y: number) => void;
+  onActivate?: (asset: Asset) => void; onOpen: (asset: Asset) => void; onContextMenu: (asset: Asset, x: number, y: number, location: CatalogLocation) => void;
   readPage?: (sectionId: string, offset: number, limit: number) => Promise<Asset[]>;
   itemKey?: (asset: Asset) => string;
   renderItem?: (asset: Asset, style: CSSProperties, ratio: number, location: CatalogLocation) => ReactNode;
@@ -210,7 +210,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
               entry={{ path: asset.store_path ?? "", name: asset.name, directory: false, preview: asset.thumb_path, version: `${asset.id}:${asset.file_mtime ?? 0}:${asset.thumb_path && asset.thumb_path !== asset.store_path ? asset.thumb_path : revision}` }}
               aspectRatio={cell.ratio} selected={selected.has(asset.id)} revision={revision} labels={[]} assetId={asset.id} generated={asset.generation_session_id != null} duration={asset.duration}
               onSelect={(additive, range) => onSelect(asset, additive, range, { section: section.id, index: block.offset + index })}
-              onActivate={onActivate ? () => onActivate(asset) : undefined} onOpen={() => onOpen(asset)} onContextMenu={(x,y) => onContextMenu(asset,x,y)}
+              onActivate={onActivate ? () => onActivate(asset) : undefined} onOpen={() => onOpen(asset)} onContextMenu={(x,y) => onContextMenu(asset,x,y,{ section: section.id, index: block.offset + index })}
               onDragStart={event => { const ids = selected.has(asset.id) ? [...selected] : [asset.id]; setDragAssets(ids, asset.name, event.currentTarget.querySelector("img")?.src); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", ids.join(",")); }} onDragEnd={() => setDragAssets(null)}/>;
           })}
         </div>;
