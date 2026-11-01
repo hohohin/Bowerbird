@@ -1,123 +1,96 @@
-import { useCallback, useId, useLayoutEffect, useRef, useState, type ComponentProps } from "react";
+import { useCallback, useLayoutEffect, useRef, useState, type ComponentProps, type RefObject } from "react";
 import { CategorizedLibrary } from "./CategorizedLibrary";
 import { ConnectedCollections } from "./ConnectedCollections";
 import type { CatalogKind } from "../lib/materialCatalog";
 import "./LibraryCatalogTransition.css";
 
 type Props = ComponentProps<typeof CategorizedLibrary>;
-const DURATION = 600;
-const clamp = (value: number) => Math.max(0, Math.min(1, value));
-const easeOut = (value: number) => 1 - Math.pow(1 - clamp(value), 3);
-const ease = (value: number) => {
-  const t = clamp(value);
-  return t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-};
+const DURATION = 790;
+const EASE = "cubic-bezier(.65,0,.35,1)";
+const at = (time: number, values: Keyframe, easing = EASE): Keyframe => ({ ...values, offset: time / DURATION, easing });
 
-/** Keep the outgoing view until the wipe covers it; load the destination immediately underneath. */
 export function LibraryCatalogTransition(props: Props) {
-  const [view, setView] = useState({ kind: props.kind, previous: null as CatalogKind | null, covered: true, running: false, sequence: 0 });
+  const root = useRef<HTMLDivElement>(null);
+  const [view, setView] = useState({ kind: props.kind, previous: null as CatalogKind | null, sequence: 0 });
   if (view.kind !== props.kind) {
-    const visible = view.covered ? view.kind : view.previous!;
-    const animate = visible !== props.kind && !matchMedia("(prefers-reduced-motion: reduce)").matches;
-    setView({ kind: props.kind, previous: animate ? visible : null, covered: !animate, running: animate, sequence: view.sequence + 1 });
+    const animate = view.kind !== "all" && props.kind !== "all" && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+    setView({ kind: props.kind, previous: animate ? view.kind : null, sequence: view.sequence + 1 });
   }
-  const cover = useCallback(() => setView(value => ({ ...value, previous: null, covered: true })), []);
-  const finish = useCallback(() => setView(value => ({ ...value, previous: null, covered: true, running: false })), []);
-  return <div className="library-catalog-transition" aria-busy={view.running}>
+  const finish = useCallback(() => setView(value => ({ ...value, previous: null })), []);
+  return <div ref={root} className="library-catalog-transition" aria-busy={view.previous !== null}>
     {(["all", "tags", "collections"] as const).filter(kind => kind === view.kind || kind === view.previous).map(kind => {
       const outgoing = kind === view.previous;
-      return <div key={kind} className="library-catalog-layer" data-outgoing={outgoing || undefined}
-        style={{ visibility: !outgoing && !view.covered ? "hidden" : undefined }} aria-hidden={outgoing || !view.covered || undefined}
-        ref={element => { if (element) element.inert = outgoing || !view.covered; }}>
+      return <div key={kind} className="library-catalog-layer" data-outgoing={outgoing || undefined} aria-hidden={outgoing || undefined}
+        ref={element => { if (element) element.inert = outgoing; }}>
         {kind === "collections" ? <ConnectedCollections {...props} kind={kind} onAssetsChange={outgoing ? undefined : props.onAssetsChange}/> : <CategorizedLibrary {...props} kind={kind} onAssetsChange={outgoing ? undefined : props.onAssetsChange}/>}
       </div>;
     })}
-    {view.running && <CatalogWipe key={view.sequence} label={`切换至${view.kind === "all" ? "全部" : view.kind === "collections" ? "集合" : props.media === "videos" ? "平铺" : "标签"}视图`}
-      onCovered={cover} onFinish={finish}/>}
+    {view.previous && <SidebarInstall key={view.sequence} root={root} onFinish={finish}/>}
   </div>;
 }
 
-function CatalogWipe({ label, onCovered, onFinish }: { label: string; onCovered: () => void; onFinish: () => void }) {
-  const root = useRef<SVGSVGElement>(null);
-  const id = useId().replace(/:/g, "");
+/** Promote the real sidebar, preserving React state and late-loading rows, above clipping ancestors. */
+function floatSidebar(sidebar: HTMLElement, direction: "incoming" | "outgoing") {
+  const originalStyle = sidebar.getAttribute("style");
+  const originalInert = sidebar.inert;
+  const slot = sidebar.cloneNode(false) as HTMLElement;
+  slot.removeAttribute("id"); slot.removeAttribute("aria-label");
+  slot.dataset.sidebarSlot = ""; slot.setAttribute("aria-hidden", "true"); slot.inert = true;
+  sidebar.before(slot);
+  sidebar.dataset.sidebarMotion = direction;
+  sidebar.setAttribute("popover", "manual"); sidebar.inert = true;
+  const measure = () => {
+    const rect = slot.getBoundingClientRect();
+    Object.assign(sidebar.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
+  };
+  measure(); sidebar.showPopover();
+  const observer = new ResizeObserver(measure); observer.observe(slot);
+  window.addEventListener("resize", measure);
+  window.addEventListener("scroll", measure, true);
+  return () => {
+    observer.disconnect(); window.removeEventListener("resize", measure); window.removeEventListener("scroll", measure, true);
+    if (sidebar.isConnected && sidebar.matches(":popover-open")) sidebar.hidePopover();
+    sidebar.removeAttribute("popover"); delete sidebar.dataset.sidebarMotion;
+    if (originalStyle === null) sidebar.removeAttribute("style"); else sidebar.setAttribute("style", originalStyle);
+    sidebar.inert = originalInert; slot.remove();
+  };
+}
+
+function animateSidebars(old: HTMLElement, next: HTMLElement) {
+  const play = (element: HTMLElement, frames: Keyframe[]) => element.animate(frames, { duration: DURATION, fill: "both" });
+  const shadow = "0 12px 22px -8px rgb(0 0 0 / .336), inset 0 1px 0 rgb(128 128 128 / .18)";
+  const move = (x: number, y: number) => ({ transform: `translate(${x}px,${y}px)`, clipPath: `inset(-32px -32px -32px ${-x}px)` });
+  return [
+    play(old, [at(0, { filter: "blur(0px)" }), at(180, { filter: "blur(3px)" }), at(790, { filter: "blur(3px)" })]),
+    play(old, [at(0, { visibility: "visible" }, "steps(1,end)"), at(390, { visibility: "hidden" }), at(790, { visibility: "hidden" })]),
+    play(next, [at(0, move(-48,-20)), at(90, move(-48,-20)), at(330, move(0,-20)), at(390, move(0,-20)), at(590, move(0,0)), at(790, move(0,0))]),
+    play(next, [at(0, { opacity: 0 }), at(90, { opacity: 0 }), at(330, { opacity: 1 }, "steps(1,end)"),
+      ...[[590,.58],[640,1],[690,.58],[740,1],[790,1]].map(([time, opacity]) => at(time, { opacity }, "steps(1,end)"))]),
+    play(next, [at(0, { boxShadow: shadow }), at(390, { boxShadow: shadow }), at(590, { boxShadow: "none" }), at(790, { boxShadow: "none" })]),
+  ];
+}
+
+function SidebarInstall({ root, onFinish }: { root: RefObject<HTMLDivElement>; onFinish: () => void }) {
   useLayoutEffect(() => {
-    const svg = root.current!;
-    const ns = "http://www.w3.org/2000/svg";
-    function make<K extends keyof SVGElementTagNameMap>(tag: K, attributes: Record<string, string | number> = {}) {
-      const element = document.createElementNS(ns, tag);
-      Object.entries(attributes).forEach(([key, value]) => element.setAttribute(key, String(value)));
-      return element;
-    }
-    const defs = make("defs"), strips = make("g");
-    svg.replaceChildren(defs, strips);
-    const tapes = Array.from({ length: 6 }, (_, row) => {
-      const group = make("g", { class: "catalog-wipe-tape" });
-      const clip = make("clipPath", { id: `${id}-tape-${row}`, clipPathUnits: "userSpaceOnUse" }), shape = make("path");
-      clip.append(shape); defs.append(clip); strips.append(group);
-      const pieces = ["#293f9c", "#8da6ff", row % 2 ? "#5272ff" : "#4868ff", "#a1b5ff", "#304ab5"].map((fill, index) => {
-        const path = make("path", { fill, class: index === 2 ? "catalog-wipe-body" : "catalog-wipe-cap" });
-        group.append(path); return path;
-      });
-      const clipped = make("g", { "clip-path": `url(#${id}-tape-${row})` });
-      const text = make("g", { class: "catalog-wipe-text" });
-      clipped.append(text); group.append(clipped);
-      return { group, shape, pieces, text, row };
-    });
-    let travel = 0, period = 0, frame = 0, progress = 0, covered = false, disposed = false;
-    function draw() {
-      // Original approved choreography, scaled uniformly to 600 ms.
-      const time = progress * 1100;
-      tapes.forEach(({ group, text, row }) => {
-        const delay = row * 20;
-        const position = -travel * (1 - easeOut((time - delay) / 260)) + travel * ease((time - 650 - delay) / 300);
-        group.setAttribute("transform", `translate(${position} 0)`);
-        text.setAttribute("transform", `translate(${time * .075 - row * period * .32} 0)`);
-      });
-    }
-    function measure() {
-      const { width, height } = svg.getBoundingClientRect();
-      if (!width || !height) return;
-      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-      const angle = 22 * Math.PI / 180;
-      const length = width * Math.cos(angle) + height * Math.sin(angle), breadth = width * Math.sin(angle) + height * Math.cos(angle);
-      const rowHeight = breadth / 6, slant = rowHeight * .28, bodyLength = length + 160, cap = Math.min(100, Math.max(48, width * .11));
-      const fontSize = Math.min(38, Math.max(22, rowHeight * .30));
-      travel = (length + bodyLength) / 2 + cap * 2 + slant;
-      strips.setAttribute("transform", `translate(${width / 2} ${height / 2}) rotate(-22)`);
-      const sample = make("text"); sample.textContent = label;
-      tapes[0].text.setAttribute("font-size", String(fontSize)); tapes[0].text.append(sample);
-      period = sample.getComputedTextLength() * 2; sample.remove();
-      tapes.forEach(({ pieces, shape, text, row }) => {
-        const y = -breadth / 2 + row * rowHeight, bottom = y + rowHeight + 1;
-        const edges = [-bodyLength / 2 - 2 * cap, -bodyLength / 2 - cap, -bodyLength / 2, bodyLength / 2, bodyLength / 2 + cap, bodyLength / 2 + 2 * cap];
-        pieces.forEach((path, index) => {
-          const d = `M${edges[index]} ${y}H${edges[index + 1]}L${edges[index + 1] + slant} ${bottom}H${edges[index] + slant}Z`;
-          path.setAttribute("d", d); if (index === 2) shape.setAttribute("d", d);
-        });
-        text.setAttribute("font-size", String(fontSize));
-        text.replaceChildren(...Array.from({ length: Math.ceil((bodyLength + 1200) / period) + 3 }, (_, index) => {
-          const word = make("text", { x: -bodyLength / 2 - 2 * period + index * period, y: y + rowHeight / 2, "dominant-baseline": "central" });
-          word.textContent = label; return word;
-        }));
-      });
-      draw();
-    }
+    const old = root.current?.querySelector<HTMLElement>('[data-outgoing] .catalog-sidebar');
+    const next = root.current?.querySelector<HTMLElement>('.library-catalog-layer:not([data-outgoing]) .catalog-sidebar');
     const reduced = matchMedia("(prefers-reduced-motion: reduce)");
-    const stop = () => { cancelAnimationFrame(frame); onFinish(); };
-    const preferenceChanged = () => { if (reduced.matches) stop(); };
-    measure();
-    const observer = new ResizeObserver(measure); observer.observe(svg);
+    if (!old || !next || !next.showPopover || reduced.matches || root.current?.closest('[inert], [aria-hidden="true"]')) { onFinish(); return; }
+    const restoreOld = floatSidebar(old, "outgoing"), restoreNext = floatSidebar(next, "incoming");
+    const animations = animateSidebars(old, next);
+    let disposed = false;
+    void animations[0].finished.then(() => { if (!disposed) onFinish(); }, () => {});
+    const preferenceChanged = () => { if (reduced.matches) onFinish(); };
     reduced.addEventListener("change", preferenceChanged);
-    const start = performance.now();
-    function tick(now: number) {
-      progress = clamp((now - start) / DURATION); draw();
-      // All six strips are opaque here, before any strip starts to leave.
-      if (!covered && progress >= 400 / 1100) { covered = true; onCovered(); }
-      if (progress < 1) frame = requestAnimationFrame(tick); else onFinish();
+    // A collapsed canvas drawer remains mounted; it must not leave a top-layer sidebar behind.
+    const hidden = new MutationObserver(() => { if (root.current?.closest('[inert], [aria-hidden="true"]')) onFinish(); });
+    for (let ancestor: HTMLElement | null = root.current; ancestor; ancestor = ancestor.parentElement) {
+      hidden.observe(ancestor, { attributes: true, attributeFilter: ["inert", "aria-hidden"] });
     }
-    if (reduced.matches) stop(); else frame = requestAnimationFrame(tick);
-    void document.fonts.ready.then(() => { if (!disposed) measure(); });
-    return () => { disposed = true; cancelAnimationFrame(frame); observer.disconnect(); reduced.removeEventListener("change", preferenceChanged); };
-  }, [id, label, onCovered, onFinish]);
-  return <svg ref={root} className="catalog-view-wipe" aria-hidden="true"/>;
+    return () => {
+      disposed = true; hidden.disconnect(); reduced.removeEventListener("change", preferenceChanged);
+      animations.forEach(animation => animation.cancel()); restoreNext(); restoreOld();
+    };
+  }, [root, onFinish]);
+  return null;
 }

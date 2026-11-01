@@ -48,7 +48,7 @@ try {
   for(const name of ['按集合浏览素材','平铺浏览全部图片','按标签浏览素材']) {
     await page.getByRole('tab',{selected:true}).click();
     await page.getByRole('region',{name,exact:true}).waitFor();
-    await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+    await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
   }
   assert.equal(await page.getByRole('group',{name:'文件夹地址栏'}).count(),0);
   const aggregateCalls = await page.evaluate(() => window.aggregateCalls);
@@ -72,14 +72,14 @@ try {
   assert.equal(await page.locator('.local-file-workspace').count(),0,'late file responses cannot replace category view');
   await tab('全局素材').focus(); await page.keyboard.press('Tab');
   await page.getByRole('region',{name:'按集合浏览素材',exact:true}).waitFor();
-  await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+  await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
   assert.equal(await page.getByRole('tab',{name:'集合分类',exact:true}).getAttribute('aria-selected'),'true');
   await page.keyboard.press('Shift+Tab');
   await page.getByRole('region',{name:'平铺浏览全部图片',exact:true}).waitFor();
-  await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+  await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
   await page.keyboard.press('Tab');
   await page.getByRole('region',{name:'按标签浏览素材',exact:true}).waitFor();
-  await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+  await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
   assert.equal(await tab('全局素材').getAttribute('aria-selected'),'true');
   assert.equal(await page.locator('.local-file-workspace').count(),0,'Tab never enters file browser');
   await page.getByRole('button',{name:'我的项目',exact:true}).click();
@@ -133,7 +133,7 @@ try {
     await page.getByRole('region',{name,exact:true}).waitFor();
     assert.equal(await tab('全局素材').getAttribute('aria-selected'),'true','reselecting cycles views without changing source');
     assert.equal(await sources.locator('.library-catalog-layer:not([data-outgoing]) .library-tab-view-label').textContent(),label,'click reuses Tab feedback');
-    await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+    await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
   }
   await tab('全局素材').press('Home');
   await page.getByRole('region',{name:'按标签浏览素材',exact:true}).waitFor();
@@ -236,7 +236,7 @@ try {
   await page.keyboard.press('e'); await region('collections').waitFor();
   assert.equal(await tab('项目素材').getAttribute('aria-selected'),'true','each source remembers its own view');
   await page.keyboard.press('Tab'); await page.getByRole('region',{name:'平铺浏览全部图片',exact:true}).waitFor();
-  await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+  await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
   await page.keyboard.press('Tab'); await region('tags').waitFor();
   const search=page.getByRole('textbox',{name:'搜索分类素材'});
   await search.fill('qe'); await search.press('q'); await search.press('e');
@@ -258,7 +258,7 @@ try {
   await tab('项目素材').focus(); await page.keyboard.press('Tab'); await region('collections').waitFor();
   assert.equal(await sources.locator('.local-file-workspace').count(),0);
   await page.keyboard.press('Tab'); await page.getByRole('region',{name:'平铺浏览全部图片',exact:true}).waitFor();
-  await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+  await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
   await page.keyboard.press('Tab'); await region('tags').waitFor();
   await sources.getByRole('button',{name:'管理标签',exact:true}).click();
   const classification=page.getByRole('dialog',{name:'管理分类数据',exact:true});
@@ -326,7 +326,7 @@ try {
       if(mode==='files') {
         await clickControl('文件浏览器'); await sources.focus(); await page.keyboard.press('Tab');
         await page.getByRole('region',{name:'平铺浏览全部图片',exact:true}).waitFor();
-        await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+        await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
         await page.keyboard.press('Tab'); await region('tags').waitFor();
       }
     }
@@ -355,14 +355,14 @@ try {
   await clickControl('视频'); await closeControls();
   await page.getByRole('region',{name:'平铺浏览视频',exact:true}).waitFor();
   await tab('全局素材').click(); await region('collections').waitFor();
-  await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+  await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
   await tab('全局素材').click();
   await page.getByRole('region',{name:'平铺浏览视频',exact:true}).waitFor();
-  await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+  await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
   await tab('项目素材').click();
   await page.getByRole('region',{name:'平铺浏览视频',exact:true}).waitFor();
   await tab('项目素材').click(); await region('collections').waitFor();
-  await page.locator('.catalog-view-wipe').waitFor({state:'detached'});
+  await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
   await tab('项目素材').press('e'); await region('collections').waitFor();
   assert.equal(await tab('项目素材').getAttribute('aria-selected'),'true','Q/E still select sources without cycling views');
   assert.deepEqual(errors,[]);

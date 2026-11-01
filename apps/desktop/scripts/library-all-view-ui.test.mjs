@@ -13,7 +13,7 @@ const names = { all: '平铺浏览全部图片', tags: '按标签浏览素材', 
 const region = kind => page.getByRole('region', { name: names[kind], exact: true });
 async function settled(kind) {
   await region(kind).waitFor();
-  await page.locator('.catalog-view-wipe').waitFor({ state: 'detached' });
+  await page.locator('[data-sidebar-motion]').first().waitFor({ state: 'detached' });
 }
 async function expectIds(expected) {
   await page.waitForFunction(expected => JSON.stringify([...document.querySelectorAll('.categorized-library [data-asset-id]')].map(el => el.dataset.assetId).sort()) === JSON.stringify(expected), [...expected].sort());

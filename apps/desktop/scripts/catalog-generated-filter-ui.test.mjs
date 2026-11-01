@@ -72,7 +72,7 @@ try {
     await clickFilter('不看生成图'); await expectIds(['imported', 'generated', 'outside', 'source-only']);
     await clickFilter('只看生成图');
     await page.evaluate(() => window.catalogMode.getState().toggleCatalog());
-    await page.locator('.catalog-view-wipe').waitFor({ state: 'detached' });
+    await page.locator('[data-sidebar-motion]').first().waitFor({ state: 'detached' });
     await expectIds(['generated']);
     assert.equal(await page.getByRole('button', { name: '只看生成图', exact: true }).getAttribute('aria-pressed'), 'true', 'filter survives view switching');
     await clickFilter('不看生成图'); await expectIds(['imported']);
