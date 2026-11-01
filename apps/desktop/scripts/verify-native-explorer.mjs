@@ -139,6 +139,24 @@ try {
   await videoDrag.session.send('Input.dispatchMouseEvent', {type:'mouseReleased',x:0,y:0,button:'left',buttons:0});
   await videoDrag.session.detach();
   await source.locator('[data-explorer-drag-visual]').waitFor({state:'detached'});
+  // Dragging text in a note above the feed must remain native text selection.
+  const dragStartsBeforeSelection = await main.evaluate(() => window.nativeDragEvents.filter(event => event.phase === 'start').length);
+  await source.evaluate(() => {
+    const note = document.createElement('section');
+    note.id = 'selection-note'; note.setAttribute('role', 'dialog');
+    note.style.cssText = 'position:fixed;inset:0;background:white;z-index:100;padding:100px 20px;font:18px/28px sans-serif';
+    note.innerHTML = '<span id="selection-text">Note text should remain selectable above the feed image.</span>';
+    document.body.append(note);
+  });
+  const textRect = await source.locator('#selection-text').boundingBox();
+  await source.mouse.move(textRect.x + 2, textRect.y + 10);
+  await source.mouse.down();
+  assert.equal(await source.locator('#selection-text').getAttribute('draggable'), null);
+  await source.mouse.move(textRect.x + 210, textRect.y + 10, {steps:12});
+  await source.mouse.up();
+  assert.ok((await source.evaluate(() => String(window.getSelection()))).length > 5, 'note text is selectable in native WebView2');
+  assert.equal(await main.evaluate(() => window.nativeDragEvents.filter(event => event.phase === 'start').length), dragStartsBeforeSelection, 'text selection never enters native capture');
+  await source.evaluate(() => { document.querySelector('#selection-note').remove(); window.getSelection().removeAllRanges(); });
   await source.evaluate(() => {
     window.explorerDocumentToken = "same-live-document";
     const input = document.createElement("input"); input.id = "draft"; input.value = "unsaved web form"; document.body.append(input);
@@ -193,7 +211,7 @@ try {
   const restored = await main.evaluate(() => window.__TAURI_INTERNALS__.invoke("smoke_capture", { url: "http://127.0.0.1:1559/protected.png" }));
   assert.deepEqual(Buffer.from(restored, "base64"), png);
   await stop(main);
-  console.log(JSON.stringify({ ok: true, nativeWebView2: true, spotlightDimRestoresWithoutReload: true, spotlightSurvivesPageReload: true, browserGeneratedDragTransferredViaCdp: true, crossOriginImageWithoutCors: true, authenticatedVideoDragTransferredWithoutPosterFallback: true, partialVideoRejected: true,
+  console.log(JSON.stringify({ ok: true, nativeWebView2: true, noteTextSelectionWithoutCapture: true, spotlightDimRestoresWithoutReload: true, spotlightSurvivesPageReload: true, browserGeneratedDragTransferredViaCdp: true, crossOriginImageWithoutCors: true, authenticatedVideoDragTransferredWithoutPosterFallback: true, partialVideoRejected: true,
     httpOnlyCookiePersistedAcrossRestart: true, reopenPreservesDocumentFormAndScroll: true, remoteIpcDenied: true, dragMetadata: payload, imageRequests, profiles: directory }));
 } finally {
   if (child && child.exitCode === null) await new Promise(resolve => {
