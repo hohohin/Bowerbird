@@ -4687,8 +4687,6 @@ export function CanvasWorkspace({
             </small>}
           </div>
           <div className="canvas-zoom-controls" aria-label="画布缩放">
-            <button type="button" aria-label="项目对话记录" title="项目对话记录" aria-expanded={chatHistoryOpen}
-              onClick={() => setChatHistoryOpen(open => !open)}><MessageCircle size={14} /></button>
             {viewMode === "timeline" && threads.length > 0 && (
               <TacticalSelect
                 aria-label="时间线范围"

@@ -21,13 +21,13 @@ html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: r
 .composer-mode-picker {
   --library-floating-height: 38px;
   position: relative; display: grid; grid-template-columns: repeat(var(--switch-count), minmax(0, 1fr));
-  width: calc(var(--switch-count) * 88px); height: 38px; padding: 3px; flex-shrink: 0;
+  width: calc(var(--switch-count) * 88px); height: 38px; padding: 3px; flex-shrink: 0; margin-right: auto;
 }
 .composer-mode-picker > button { position: relative; display: flex; align-items: center; justify-content: center; gap: 5px; border-radius: 999px; font-size: 12px; color: var(--bb-muted); white-space: nowrap; }
 .composer-mode-picker > button[aria-pressed="true"] { font-weight: 600; color: var(--bb-ink); }
 .composer-mode-picker > button[aria-pressed="true"] svg { color: var(--bb-blue); }
 .composer-mode-thumb { position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / var(--switch-count)); border-radius: 999px; background: var(--library-glass-selected); box-shadow: var(--library-glass-selected-shadow); pointer-events: none; transform: translateX(calc(var(--switch-index) * 100%)); transition: transform 320ms cubic-bezier(.2,.85,.2,1); }
-.composer-profile { margin-left: auto; min-width: 0; }
+.composer-profile { min-width: 0; }
 .composer-profile label { border-color: transparent; background: transparent; }
 .composer-profile :is(select, .tactical-select-trigger) { max-width: 140px; }
 .composer-profile button { border-radius: 999px; }
