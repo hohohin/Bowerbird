@@ -1,0 +1,306 @@
+{
+  "platform": "win32",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+  "sourceRun": "run-1793498004666",
+  "interaction": "hover-pointer-only; waveform click at current coordinate; separate zero-start play/pause button",
+  "success": true,
+  "samples": [
+    {
+      "durationSeconds": 12,
+      "actualClick": {
+        "at": 946.6000000238419,
+        "target": "audio-wave",
+        "x": 189,
+        "y": 246,
+        "rect": {
+          "left": 48,
+          "width": 282.66668701171875
+        },
+        "ratio": 0.49882071881415035,
+        "expectedTime": 5.985848625769805
+      },
+      "observedTimeSeconds": 6.197768,
+      "clickToSeekedMs": 3.600000023841858,
+      "clickToPlayingMs": 3.600000023841858,
+      "clickToObservedProgressMs": 278.38779999999997,
+      "hover": {
+        "assetRequests": 0,
+        "firstPosition": "25%",
+        "secondPosition": "50%"
+      },
+      "buttonStart": {
+        "currentTime": 0.113335,
+        "paused": false
+      },
+      "buttonPaused": {
+        "currentTime": 0,
+        "paused": true
+      },
+      "buttonRestart": {
+        "currentTime": 0.115441,
+        "paused": false
+      },
+      "afterLeave": {
+        "paused": true,
+        "src": null
+      },
+      "sameSourceSeek": {
+        "loadStarts": 0,
+        "sourceChanges": 0
+      }
+    },
+    {
+      "durationSeconds": 3600,
+      "actualClick": {
+        "at": 2560.600000023842,
+        "target": "audio-wave",
+        "x": 810,
+        "y": 490,
+        "rect": {
+          "left": 669.3333740234375,
+          "width": 282.66668701171875
+        },
+        "ratio": 0.49764132966517827,
+        "expectedTime": 1791.5087867946418
+      },
+      "observedTimeSeconds": 1791.71533,
+      "clickToSeekedMs": 32.10000002384186,
+      "clickToPlayingMs": 32.10000002384186,
+      "clickToObservedProgressMs": 311.7608,
+      "hover": {
+        "assetRequests": 0,
+        "firstPosition": "25%",
+        "secondPosition": "50%"
+      },
+      "buttonStart": {
+        "currentTime": 0.113288,
+        "paused": false
+      },
+      "buttonPaused": {
+        "currentTime": 0,
+        "paused": true
+      },
+      "buttonRestart": {
+        "currentTime": 0.117785,
+        "paused": false
+      },
+      "afterLeave": {
+        "paused": true,
+        "src": null
+      },
+      "sameSourceSeek": {
+        "loadStarts": 0,
+        "sourceChanges": 0
+      }
+    }
+  ],
+  "protocol": {
+    "requests": [
+      {
+        "url": "http://asset.localhost/D%3A%5CH%5CProject%5CBowerbird%5C.tmp%5Caudio-preview-fixtures%5Cchime.wav",
+        "method": "GET",
+        "headers": {
+          "sec-ch-ua-platform": "\"Windows\"",
+          "Referer": "http://127.0.0.1:52628/",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+          "sec-ch-ua": "\"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\", \"Not:A-Brand\";v=\"8\", \"Microsoft Edge WebView2\";v=\"156\"",
+          "Range": "bytes=0-",
+          "sec-ch-ua-mobile": "?0"
+        },
+        "status": 206,
+        "responseHeaders": {
+          "accept-ranges": "bytes",
+          "access-control-allow-origin": "http://127.0.0.1:52628",
+          "access-control-expose-headers": "content-range",
+          "content-length": "1024000",
+          "content-type": "audio/x-wav",
+          "content-range": "bytes 0-1023999/2304078"
+        },
+        "mimeType": "audio/x-wav",
+        "encodedDataLength": 1024231
+      },
+      {
+        "url": "http://asset.localhost/D%3A%5CH%5CProject%5CBowerbird%5C.tmp%5Caudio-preview-fixtures%5Cchime.wav",
+        "method": "GET",
+        "headers": {
+          "sec-ch-ua-platform": "\"Windows\"",
+          "Referer": "http://127.0.0.1:52628/",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+          "sec-ch-ua": "\"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\", \"Not:A-Brand\";v=\"8\", \"Microsoft Edge WebView2\";v=\"156\"",
+          "Range": "bytes=1024000-",
+          "sec-ch-ua-mobile": "?0"
+        },
+        "status": 206,
+        "responseHeaders": {
+          "accept-ranges": "bytes",
+          "access-control-allow-origin": "http://127.0.0.1:52628",
+          "access-control-expose-headers": "content-range",
+          "content-length": "1024000",
+          "content-type": "audio/x-wav",
+          "content-range": "bytes 1024000-2047999/2304078"
+        },
+        "mimeType": "audio/x-wav",
+        "encodedDataLength": 1024237
+      },
+      {
+        "url": "http://asset.localhost/D%3A%5CH%5CProject%5CBowerbird%5C.tmp%5Caudio-preview-fixtures%5Cchime.wav",
+        "method": "GET",
+        "headers": {
+          "sec-ch-ua-platform": "\"Windows\"",
+          "Referer": "http://127.0.0.1:52628/",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+          "sec-ch-ua": "\"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\", \"Not:A-Brand\";v=\"8\", \"Microsoft Edge WebView2\";v=\"156\"",
+          "Range": "bytes=2048000-",
+          "sec-ch-ua-mobile": "?0"
+        },
+        "status": 206,
+        "responseHeaders": {
+          "accept-ranges": "bytes",
+          "access-control-allow-origin": "http://127.0.0.1:52628",
+          "access-control-expose-headers": "content-range",
+          "content-length": "256078",
+          "content-type": "audio/x-wav",
+          "content-range": "bytes 2048000-2304077/2304078"
+        },
+        "mimeType": "audio/x-wav",
+        "encodedDataLength": 256314
+      },
+      {
+        "url": "http://asset.localhost/D%3A%5CH%5CProject%5CBowerbird%5C.tmp%5Caudio-preview-fixtures%5Clong-vbr.mp3",
+        "method": "GET",
+        "headers": {
+          "sec-ch-ua-platform": "\"Windows\"",
+          "Referer": "http://127.0.0.1:52628/",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+          "sec-ch-ua": "\"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\", \"Not:A-Brand\";v=\"8\", \"Microsoft Edge WebView2\";v=\"156\"",
+          "Range": "bytes=0-",
+          "sec-ch-ua-mobile": "?0"
+        },
+        "status": 206,
+        "responseHeaders": {
+          "accept-ranges": "bytes",
+          "access-control-allow-origin": "http://127.0.0.1:52628",
+          "access-control-expose-headers": "content-range",
+          "content-length": "1024000",
+          "content-type": "audio/mpeg",
+          "content-range": "bytes 0-1023999/14401028"
+        },
+        "mimeType": "audio/mpeg",
+        "encodedDataLength": 1024231
+      },
+      {
+        "url": "http://asset.localhost/D%3A%5CH%5CProject%5CBowerbird%5C.tmp%5Caudio-preview-fixtures%5Clong-vbr.mp3",
+        "method": "GET",
+        "headers": {
+          "sec-ch-ua-platform": "\"Windows\"",
+          "Referer": "http://127.0.0.1:52628/",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+          "sec-ch-ua": "\"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\", \"Not:A-Brand\";v=\"8\", \"Microsoft Edge WebView2\";v=\"156\"",
+          "Range": "bytes=1024000-",
+          "sec-ch-ua-mobile": "?0"
+        },
+        "status": 206,
+        "responseHeaders": {
+          "accept-ranges": "bytes",
+          "access-control-allow-origin": "http://127.0.0.1:52628",
+          "access-control-expose-headers": "content-range",
+          "content-length": "1024000",
+          "content-type": "audio/mpeg",
+          "content-range": "bytes 1024000-2047999/14401028"
+        },
+        "mimeType": "audio/mpeg",
+        "encodedDataLength": 1024237
+      },
+      {
+        "url": "http://asset.localhost/D%3A%5CH%5CProject%5CBowerbird%5C.tmp%5Caudio-preview-fixtures%5Clong-vbr.mp3",
+        "method": "GET",
+        "headers": {
+          "sec-ch-ua-platform": "\"Windows\"",
+          "Referer": "http://127.0.0.1:52628/",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+          "sec-ch-ua": "\"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\", \"Not:A-Brand\";v=\"8\", \"Microsoft Edge WebView2\";v=\"156\"",
+          "Range": "bytes=2048000-",
+          "sec-ch-ua-mobile": "?0"
+        },
+        "status": 206,
+        "responseHeaders": {
+          "accept-ranges": "bytes",
+          "access-control-allow-origin": "http://127.0.0.1:52628",
+          "access-control-expose-headers": "content-range",
+          "content-length": "1024000",
+          "content-type": "audio/mpeg",
+          "content-range": "bytes 2048000-3071999/14401028"
+        },
+        "mimeType": "audio/mpeg",
+        "encodedDataLength": 1024237
+      },
+      {
+        "url": "http://asset.localhost/D%3A%5CH%5CProject%5CBowerbird%5C.tmp%5Caudio-preview-fixtures%5Clong-vbr.mp3",
+        "method": "GET",
+        "headers": {
+          "sec-ch-ua-platform": "\"Windows\"",
+          "Referer": "http://127.0.0.1:52628/",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+          "sec-ch-ua": "\"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\", \"Not:A-Brand\";v=\"8\", \"Microsoft Edge WebView2\";v=\"156\"",
+          "Range": "bytes=3072000-",
+          "sec-ch-ua-mobile": "?0"
+        },
+        "status": 206,
+        "responseHeaders": {
+          "accept-ranges": "bytes",
+          "access-control-allow-origin": "http://127.0.0.1:52628",
+          "access-control-expose-headers": "content-range",
+          "content-length": "1024000",
+          "content-type": "audio/mpeg",
+          "content-range": "bytes 3072000-4095999/14401028"
+        },
+        "mimeType": "audio/mpeg"
+      },
+      {
+        "url": "http://asset.localhost/D%3A%5CH%5CProject%5CBowerbird%5C.tmp%5Caudio-preview-fixtures%5Clong-vbr.mp3",
+        "method": "GET",
+        "headers": {
+          "sec-ch-ua-platform": "\"Windows\"",
+          "Referer": "http://127.0.0.1:52628/",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+          "sec-ch-ua": "\"Chromium\";v=\"156\", \"Microsoft Edge\";v=\"156\", \"Not:A-Brand\";v=\"8\", \"Microsoft Edge WebView2\";v=\"156\"",
+          "Range": "bytes=7012352-",
+          "sec-ch-ua-mobile": "?0"
+        },
+        "status": 206,
+        "responseHeaders": {
+          "accept-ranges": "bytes",
+          "access-control-allow-origin": "http://127.0.0.1:52628",
+          "access-control-expose-headers": "content-range",
+          "content-length": "1024000",
+          "content-type": "audio/mpeg",
+          "content-range": "bytes 7012352-8036351/14401028"
+        },
+        "mimeType": "audio/mpeg"
+      }
+    ],
+    "requestCount": 8,
+    "rangeRequestCount": 8,
+    "partialResponses": 8,
+    "responseBodyBytesFromContentLength": 7424078
+  },
+  "correction": {
+    "historicalRuns": [
+      "run-1793497530316",
+      "run-1793497794685"
+    ],
+    "observedWaitMs": [
+      8809.8403,
+      8801.7131
+    ],
+    "reason": "Integer MouseEvent coordinates mapped to 1791.5087868 seconds; old assertion incorrectly waited for nominal midpoint 1800.2 seconds. Seek/playing events occurred within about 36 ms. This measurement correction is not an optimization speedup.",
+    "currentAssertion": "Compute expected seek time independently from delivered click coordinates and waveform bounds; wait for real playback beyond expected time + 0.2 seconds, unchanged 12000 ms timeout."
+  },
+  "limitations": [
+    "play() resolution/currentTime are not acoustic output or first-audible-sample measurements",
+    "Content-Length sums protocol payloads, not physical disk I/O; cancelled requests may be incomplete",
+    "process-tree working sets can double-count shared pages; snapshots are not continuous peak private memory",
+    "UI-only click interaction verification; earlier hover and memory pressure numbers are historical baselines, not rerun here",
+    "Windows only; no macOS result"
+  ]
+}

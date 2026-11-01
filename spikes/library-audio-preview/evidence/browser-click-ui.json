@@ -1,0 +1,41 @@
+{
+  "passed": true,
+  "browser": "155.0.8059.85",
+  "viewport": {
+    "width": 1280,
+    "height": 820
+  },
+  "interaction": "hover-pointer-only; click-to-seek-and-play; separate zero-start play/pause button",
+  "source": {
+    "format": "PCM WAV",
+    "duration": 12,
+    "sampleRate": 16000,
+    "channels": 1
+  },
+  "sameSourceSeek": {
+    "loadStartsBefore": 1,
+    "originalRequestsBefore": 1,
+    "loadStartsAfter": 1,
+    "originalRequestsAfter": 1
+  },
+  "clickSwitches": 100,
+  "hoverSwitches": 100,
+  "hoverOriginalRequests": 0,
+  "delayedRequests": 1,
+  "playersCreated": 1,
+  "stressCount": 1200,
+  "distinctSources": 6,
+  "scrollMetrics": {
+    "measuredMs": 2506.1999999046325,
+    "frames": 151,
+    "medianIntervalMs": 16.699999999999932,
+    "p95IntervalMs": 16.899999999999977,
+    "maximumIntervalMs": 17,
+    "maximumMounted": 21,
+    "longTaskCount": 0,
+    "longestTaskMs": 0
+  },
+  "measurementScope": "Synthetic 1200-card browser list reusing six WAV fixtures; rAF intervals are not native FPS or indexing measurements",
+  "mountedAtEnd": 15,
+  "mediaRequests": 8
+}

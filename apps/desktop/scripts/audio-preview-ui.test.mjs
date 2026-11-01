@@ -53,12 +53,29 @@ await page.addInitScript(() => {
   if (window.AudioContext) window.AudioContext.prototype.decodeAudioData = () => { throw new Error('Waveform must not decode audio in the UI'); };
 });
 const url = preview.url;
-const audio = () => page.locator('audio').evaluate(element => ({ paused: element.paused, time: element.currentTime, src: element.currentSrc }));
+const audio = () => page.locator('audio').evaluate(element => ({ paused: element.paused, time: element.currentTime, src: element.currentSrc, sourceAttribute: element.getAttribute('src') }));
 const wave = index => page.locator('.audio-wave').nth(index);
+const playButton = index => page.locator('.audio-play').nth(index);
 const moveAway = () => page.mouse.move(10, 10);
 async function hoverAt(index, ratio) {
   const rect = await wave(index).boundingBox();
   await page.mouse.move(rect.x + rect.width * ratio, rect.y + rect.height / 2);
+}
+async function clickAt(index, ratio) {
+  const rect = await wave(index).boundingBox();
+  await page.mouse.click(rect.x + rect.width * ratio, rect.y + rect.height / 2);
+}
+async function assertHoverAt(index, ratio, expectedTime) {
+  const card = page.locator('.audio-card').nth(index);
+  const position = await card.evaluate(element => {
+    const waveform = element.querySelector('.audio-wave').getBoundingClientRect();
+    const cursor = element.querySelector('.wave-hover-cursor');
+    return { ratio: (cursor.getBoundingClientRect().x - waveform.x) / waveform.width,
+      opacity: Number(getComputedStyle(cursor).opacity), time: element.querySelector('.wave-position').textContent };
+  });
+  assert.ok(Math.abs(position.ratio - ratio) < .02, 'hover cursor follows the current pointer position');
+  assert.ok(position.opacity > 0, 'hover cursor is visibly drawn');
+  assert.equal(position.time, expectedTime, 'hover time describes the pointer, independently of playback progress');
 }
 async function waitPlaying(minimumTime = .05) {
   await page.waitForFunction(time => { const element = document.querySelector('audio'); return element && !element.paused && element.currentTime >= time && document.querySelector('.audio-card[data-playing="true"]'); }, minimumTime);
@@ -90,61 +107,128 @@ try {
   assert.equal(await page.locator('audio').evaluate(element => element.volume), 1, 'display normalization never changes playback gain');
   await page.screenshot({ path: `${output}/audio-dark.png` });
 
-  // CDP evaluation explicitly sets userGesture:false: Playwright evaluation can
-  // otherwise activate a document and accidentally bypass the autoplay test.
-  const blockedPage = await browser.newPage({ viewport: { width: 1280, height: 820 } });
-  const cdp = await blockedPage.context().newCDPSession(blockedPage);
-  const readWithoutGesture = async expression => (await cdp.send('Runtime.evaluate', { expression, userGesture: false, returnByValue: true })).result.value;
-  await blockedPage.goto(url);
-  for (let i = 0; i < 100 && !await readWithoutGesture("document.querySelector('.audio-card')?.dataset.waveReady === 'true'"); i++) await new Promise(resolve => setTimeout(resolve, 20));
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 140, y: 245 });
-  for (let i = 0; i < 100 && !await readWithoutGesture("document.querySelector('.audio-card')?.dataset.blocked === 'true'"); i++) await new Promise(resolve => setTimeout(resolve, 20));
-  assert.equal(await readWithoutGesture("document.querySelector('.audio-card').dataset.blocked"), 'true', 'real browser policy must reject gesture-free hover');
-  assert.equal(await readWithoutGesture("document.querySelector('audio').paused"), true);
-  assert.equal(await blockedPage.locator('.wave-action-label').first().textContent(), '播放');
-  await blockedPage.locator('.audio-wave').first().click();
-  await blockedPage.waitForFunction(() => !document.querySelector('audio').paused && document.querySelector('audio').currentTime > 0);
-  await blockedPage.close();
+  // First grant a real user gesture. Hover must stay silent even when browser
+  // policy would allow playback; rejection by autoplay policy is not a pass.
+  await page.locator('.audio-topbar').click({ position: { x: 100, y: 30 } });
+  await hoverAt(0, .25); await page.waitForTimeout(250);
+  assert.equal((await audio()).paused, true, 'hover must not play audio after user activation');
+  assert.equal((await audio()).sourceAttribute, null, 'hover must not assign a media source');
+  assert.equal((await audio()).time, 0, 'hover must not seek the native player');
+  assert.equal(requests.filter(value => value.endsWith('.wav')).length, 0, 'hover must not request original media');
+  await assertHoverAt(0, .25, '0:03');
+  await hoverAt(0, .75); await assertHoverAt(0, .75, '0:09');
+  assert.equal(await page.locator('.audio-preview > .audio-wave').count(), 6);
+  assert.equal(await page.locator('.audio-preview > .audio-play').count(), 6, 'play control is a real sibling button');
+  assert.equal(await page.locator('button button').count(), 0, 'interactive buttons must not be nested');
+  await page.screenshot({ path: `${output}/audio-hover.png` });
 
-  // A real gesture enables audible previews under ordinary browser autoplay rules.
-  await wave(0).focus(); await page.keyboard.press('Space'); await waitPlaying();
-  const started = (await audio()).time; await page.waitForTimeout(250);
-  assert.ok((await audio()).time > started + .1, 'real media clock must advance');
-  await page.keyboard.press('Space'); assert.equal((await audio()).paused, true);
-  await moveAway(); await hoverAt(0, .5); await waitPlaying(5.8);
-  assert.ok((await audio()).time < 7, 'hover must seek to pointer time, not begin at zero');
+  // A user starts with the dedicated play button, then jumps within that same
+  // audio. Seeking may legitimately issue Range reads, but must not reload src.
+  await page.locator('audio').evaluate(element => {
+    window.audioLoadStarts = 0;
+    element.addEventListener('loadstart', () => { window.audioLoadStarts++; });
+  });
+  await playButton(0).click(); await waitPlaying();
+  assert.ok((await audio()).time < 1.2, 'initial dedicated playback starts at zero');
+  const sameSourceSeek = {
+    loadStartsBefore: await page.evaluate(() => window.audioLoadStarts),
+    originalRequestsBefore: requests.filter(value => value.endsWith('.wav')).length,
+  };
+  assert.ok(sameSourceSeek.loadStartsBefore >= 1, 'the native source genuinely loaded before seeking');
+  await clickAt(0, .5); await waitPlaying(5.8);
+  sameSourceSeek.loadStartsAfter = await page.evaluate(() => window.audioLoadStarts);
+  sameSourceSeek.originalRequestsAfter = requests.filter(value => value.endsWith('.wav')).length;
+  assert.equal(sameSourceSeek.loadStartsAfter, sameSourceSeek.loadStartsBefore,
+    `same-card seek must reuse the loaded source; native observations: ${JSON.stringify(sameSourceSeek)}`);
+  assert.ok((await audio()).time < 7, 'waveform click seeks to its horizontal coordinate');
+  const started = (await audio()).time; await page.waitForTimeout(200);
+  assert.ok((await audio()).time > started + .1, 'native audio clock must advance');
+  await hoverAt(0, .8); await assertHoverAt(0, .8, '0:09');
+  const afterHover = (await audio()).time;
+  assert.ok(afterHover >= started && afterHover < started + 1.5, 'moving the hover cursor during playback must not seek');
+
+  // Dispatch a click with its own coordinate without a preceding pointermove.
+  // This pins the browser event contract: a stale hover ratio is insufficient.
+  await hoverAt(0, .2);
+  const rect = await wave(0).boundingBox();
+  await wave(0).dispatchEvent('click', { detail: 1, clientX: rect.x + rect.width * .7, clientY: rect.y + rect.height / 2 });
+  await waitPlaying(8.2);
+  assert.ok((await audio()).time < 9.2, 'click uses its current coordinate rather than the previous hover coordinate');
   assert.equal(await page.locator('.audio-card[data-playing="true"]').count(), 1);
-  await moveAway(); assert.equal((await audio()).paused, true);
+
+  // Moving from waveform to its separate play button stays inside the preview.
+  await playButton(0).hover();
+  assert.equal((await audio()).paused, false, 'moving onto the sibling play button must not stop playback');
+  await page.locator('.audio-preview').first().evaluate(element => {
+    window.previewBubbleClicks = 0; window.waveClickCount = 0;
+    element.addEventListener('click', () => { window.previewBubbleClicks++; });
+    element.querySelector('.audio-wave').addEventListener('click', () => { window.waveClickCount++; });
+  });
+  await playButton(0).click();
+  assert.equal((await audio()).paused, true, 'the separate button pauses currently playing audio');
+  await playButton(0).click(); await waitPlaying();
+  assert.ok((await audio()).time < 1.2, 'the separate play button always starts at zero');
+  await playButton(0).click(); await playButton(0).click(); await waitPlaying();
+  assert.ok((await audio()).time < 1.2, 'play after pause restarts at zero instead of resuming');
+  assert.deepEqual(await page.evaluate(() => [window.previewBubbleClicks, window.waveClickCount]), [0, 0], 'play control stops bubbling and never triggers waveform seek');
+  await moveAway();
+  assert.equal((await audio()).paused, true, 'leaving the whole preview stops playback');
+  assert.equal((await audio()).sourceAttribute, null);
+
+  // Keyboard chooses a location, then explicitly starts playback there.
+  await wave(0).focus(); await page.keyboard.press('Home');
+  for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight');
+  assert.equal((await audio()).sourceAttribute, null, 'arrow navigation alone must not load or play media');
+  await page.keyboard.press('Enter'); await waitPlaying(2.3);
+  assert.ok((await audio()).time < 3.1, 'Enter plays the keyboard-selected location');
+  await page.keyboard.press('ArrowRight');
+  assert.ok((await audio()).time < 2.9, 'arrow selection during playback does not seek until activation');
+  await page.keyboard.press('Space'); await waitPlaying(2.9);
+  assert.ok((await audio()).time < 3.8, 'Space seeks and plays rather than toggling pause');
+  await page.keyboard.press('Escape'); assert.equal((await audio()).paused, true);
+  await playButton(0).focus(); await page.keyboard.press('Space'); await waitPlaying();
+  assert.ok((await audio()).time < 1.2, 'keyboard play button starts at zero');
+  await page.keyboard.press('Enter'); assert.equal((await audio()).paused, true);
 
   // Delay real source delivery, then abandon that source while a newer one starts.
   let delayedRequests = 0;
-  await page.route('**/sound-1.wav', async route => { delayedRequests++; await new Promise(resolve => setTimeout(resolve, 350)); await route.continue().catch(() => {}); });
-  await hoverAt(1, .4);
-  await page.waitForFunction(() => document.querySelector('audio').getAttribute('src')?.endsWith('sound-1.wav'));
-  await hoverAt(0, .2); await waitPlaying(2);
+  let reportDelayedRequest;
+  const delayedRequestStarted = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Expected a real pending media request before switching cards')), 5000);
+    reportDelayedRequest = () => { clearTimeout(timeout); resolve(); };
+  });
+  await page.route('**/sound-1.wav', async route => { delayedRequests++; reportDelayedRequest(); await new Promise(resolve => setTimeout(resolve, 350)); await route.continue().catch(() => {}); });
+  await clickAt(1, .4);
+  await delayedRequestStarted;
+  await clickAt(0, .2); await waitPlaying(2);
   await page.waitForTimeout(450);
   assert.ok((await audio()).src.endsWith('sound-0.wav'), 'delayed old source cannot replace active source');
   assert.ok(delayedRequests > 0, 'race uses an actual pending media request');
   await moveAway(); await page.unroute('**/sound-1.wav');
 
-  // Exercise rapid switches using real pointer events, retaining a single native player.
-  for (let index = 0; index < 100; index++) await hoverAt(index % 2, .3 + (index % 3) * .1);
+  // Real click requests race across cards but retain one native player.
+  for (let index = 0; index < 100; index++) await clickAt(index % 2, .3 + (index % 3) * .1);
   await moveAway(); await page.waitForTimeout(350);
   assert.equal((await audio()).paused, true, 'a late play result must not resume after exit');
   assert.equal(await page.evaluate(() => window.audioConstructorCount), 1);
   assert.equal(await page.locator('audio').count(), 1);
+  assert.equal((await audio()).sourceAttribute, null, 'late completion cannot retain a source after exit');
+  const requestsBeforeHover = requests.filter(value => value.endsWith('.wav')).length;
+  for (let index = 0; index < 100; index++) await hoverAt(index % 2, .3 + (index % 3) * .1);
+  await moveAway(); await page.waitForTimeout(100);
+  assert.equal(requests.filter(value => value.endsWith('.wav')).length, requestsBeforeHover, '100 hover transitions never read an original');
 
-  await hoverAt(0, .2); await waitPlaying(2);
+  await clickAt(0, .2); await waitPlaying(2);
   await page.evaluate(() => window.dispatchEvent(new Event('blur')));
   assert.equal((await audio()).paused, true, 'window blur stops audition');
-  await moveAway(); await hoverAt(0, .2); await waitPlaying(2);
+  await moveAway(); await clickAt(0, .2); await waitPlaying(2);
   await page.evaluate(() => {
     Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
     document.dispatchEvent(new Event('visibilitychange'));
   });
   assert.equal((await audio()).paused, true, 'hidden document stops audition');
   await page.evaluate(() => { delete document.hidden; });
-  await moveAway(); await hoverAt(0, .2); await waitPlaying(2);
+  await moveAway(); await clickAt(0, .2); await waitPlaying(2);
   await page.evaluate(() => document.querySelector('.audio-card').remove());
   await page.waitForFunction(() => document.querySelector('audio').paused);
 
@@ -185,10 +269,12 @@ try {
   await page.screenshot({ path: `${output}/audio-light.png` });
   assert.deepEqual(errors, []);
   await writeFile(`${output}/results.json`, JSON.stringify({ passed: true, browser: await browser.version(), viewport: { width: 1280, height: 820 },
-    source: { format: 'PCM WAV', duration, sampleRate, channels: 1 }, switches: 100, delayedRequests,
+    interaction: 'hover-pointer-only; click-to-seek-and-play; separate zero-start play/pause button',
+    source: { format: 'PCM WAV', duration, sampleRate, channels: 1 }, sameSourceSeek,
+    clickSwitches: 100, hoverSwitches: 100, hoverOriginalRequests: 0, delayedRequests,
     playersCreated: await page.evaluate(() => window.audioConstructorCount),
     stressCount: 1200, distinctSources: 6, scrollMetrics,
     measurementScope: 'Synthetic 1200-card browser list reusing six WAV fixtures; rAF intervals are not native FPS or indexing measurements',
     mountedAtEnd: await page.locator('.audio-card').count(), mediaRequests: requests.filter(value => value.endsWith('.wav')).length }, null, 2));
-  console.log('PASS: real audio clock/seek/autoplay fallback, delayed-source race, 100 switches, singleton player, exit/blur/hidden/unmount/scroll stop, 1200-item virtual list, cached peaks, no frontend decode, Range/path boundary');
+  console.log('PASS: silent hover cursor, current-coordinate click seek/play, separate zero-start play/pause, keyboard positions, real clock, delayed-source race, 100 clicks + 100 hovers, singleton/cleanup, virtual list/cache/no frontend decode');
 } finally { await browser.close(); await preview.close(); }

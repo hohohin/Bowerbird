@@ -250,42 +250,106 @@ try {
   }
   if (study) {
     await page.addInitScript(() => {
+      window.__audioMediaEvents = []; window.__audioSourceChanges = []; window.__audioClicks = [];
       const NativeAudio = window.Audio;
-      window.Audio = new Proxy(NativeAudio, { construct(target, args, constructor) { const audio = Reflect.construct(target, args, constructor); audio.volume = 0.03; return audio; } });
+      window.Audio = new Proxy(NativeAudio, { construct(target, args, constructor) {
+        const audio = Reflect.construct(target, args, constructor); audio.volume = 0.03;
+        for (const type of ['loadstart', 'loadedmetadata', 'seeking', 'seeked', 'playing', 'waiting', 'pause', 'emptied', 'error']) audio.addEventListener(type, () => {
+          window.__audioMediaEvents.push({ type, at: performance.now(), time: audio.currentTime, readyState: audio.readyState, src: audio.getAttribute('src'), currentSrc: audio.currentSrc });
+        });
+        new MutationObserver(records => {
+          for (const record of records) window.__audioSourceChanges.push({ at: performance.now(), oldValue: record.oldValue, value: audio.getAttribute('src') });
+        }).observe(audio, { attributes: true, attributeFilter: ['src'], attributeOldValue: true });
+        return audio;
+      } });
+      document.addEventListener('click', event => {
+        const target = event.target.closest('.audio-wave, .audio-play');
+        if (target) {
+          const rect = target.getBoundingClientRect();
+          const ratio = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+          const duration = document.querySelector('audio').duration;
+          window.__audioClicks.push({ at: performance.now(), target: target.className, x: event.clientX, y: event.clientY,
+            rect: { left: rect.left, width: rect.width }, ratio, expectedTime: target.classList.contains('audio-wave') ? ratio * duration : 0 });
+        }
+      }, true);
       window.__audioPointerEvents = [];
       for (const type of ['pointerenter', 'pointerleave']) document.addEventListener(type, event => {
-        if (event.target?.classList?.contains('audio-wave')) window.__audioPointerEvents.push({ type, target: event.target.getAttribute('aria-label'), x: event.clientX, y: event.clientY });
+        if (event.target?.classList?.contains('audio-preview')) window.__audioPointerEvents.push({ type, target: event.target.closest('.audio-card')?.querySelector('.audio-name')?.textContent, x: event.clientX, y: event.clientY });
       }, true);
     });
     await page.goto(new URL(new URL(study.url).pathname, url).href);
     await page.waitForSelector('.audio-card[data-wave-ready="true"]');
     await session.send('Runtime.evaluate', { expression: 'document.querySelector("audio").volume = 0.03', userGesture: false });
-    results.ui = { documentHidden: (await session.send('Runtime.evaluate', { expression: 'document.hidden', userGesture: false })).result.value, hoverDwellMs: 90, samples: [] };
-    assert.equal(results.ui.documentHidden, false, 'native hidden host must expose visible document for real hover lifecycle');
-    const firstWave = page.locator('.audio-wave').first();
-    const longWave = page.getByRole('button', { name: '试听 一小时环境录音.mp3', exact: true });
-    for (const wave of [firstWave, longWave]) {
-      await page.mouse.move(5, 5); await wave.scrollIntoViewIfNeeded();
-      const bounds = await wave.boundingBox(); const started = performance.now();
+    results.ui = { interaction: 'click-to-preview', documentHidden: (await session.send('Runtime.evaluate', { expression: 'document.hidden', userGesture: false })).result.value, samples: [] };
+    assert.equal(results.ui.documentHidden, false, 'native hidden host must expose visible document for the real preview lifecycle');
+    const firstCard = page.locator('.audio-card').first();
+    const longCard = page.locator('.audio-card').filter({ has: page.locator('.audio-name', { hasText: '一小时环境录音.mp3' }) });
+    for (const card of process.env.BOWERBIRD_AUDIO_NATIVE_SAME_SOURCE ? [longCard] : [firstCard, longCard]) {
+      const preview = card.locator('.audio-preview'); const wave = preview.locator('.audio-wave'); const play = preview.locator('.audio-play');
+      await page.mouse.move(5, 5); await preview.scrollIntoViewIfNeeded();
+      const bounds = await wave.boundingBox(); const hoverBefore = requests.size;
+      await page.mouse.move(bounds.x + bounds.width * 0.25, bounds.y + bounds.height * 0.5);
+      await page.waitForTimeout(120);
+      const firstHoverPosition = await card.locator('.wave-hover-cursor').evaluate(cursor => cursor.style.left);
       await page.mouse.move(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5);
-      await page.waitForFunction(() => { const audio = document.querySelector('audio'); return document.querySelector('.audio-card[data-playing="true"]') && !audio.paused && audio.currentTime > audio.duration * 0.5 + 0.2; }, null, { timeout: 12000 });
+      await page.waitForTimeout(200);
+      const hover = { assetRequests: requests.size - hoverBefore, firstPosition: firstHoverPosition, secondPosition: await card.locator('.wave-hover-cursor').evaluate(cursor => cursor.style.left) };
+      assert.equal(hover.assetRequests, 0, 'hover must not request audio');
+      assert.notEqual(hover.firstPosition, hover.secondPosition, 'hover cursor follows the pointer');
+      assert.equal(await page.locator('audio').evaluate(audio => audio.paused && !audio.hasAttribute('src')), true, 'hover remains silent and unloaded');
+      assert.equal(await card.evaluate(node => node.querySelector('.wave-hover-cursor') !== node.querySelector('.wave-cursor')), true, 'hover and playback cursors are separate elements');
+
+      await play.click();
+      await page.waitForFunction(() => { const audio = document.querySelector('audio'); return !audio.paused && audio.currentTime > 0.1 && audio.currentTime < 1; }, null, { timeout: 12000 });
+      const buttonStart = await page.locator('audio').evaluate(audio => ({ currentTime: audio.currentTime, paused: audio.paused }));
+      await page.mouse.move(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5);
+      await page.waitForTimeout(100);
+      assert.equal(await page.locator('audio').evaluate(audio => audio.paused), false, 'moving inside the preview keeps playback active');
+      const traceStart = await page.evaluate(() => ({ at: performance.now(), eventCount: window.__audioMediaEvents.length, sourceChanges: window.__audioSourceChanges.length, src: document.querySelector('audio').getAttribute('src') }));
+      const requestsBeforeSeek = requests.size;
+      const started = performance.now();
+      await page.mouse.click(bounds.x + bounds.width * 0.5, bounds.y + bounds.height * 0.5);
+      const deliveredClick = await page.evaluate(() => window.__audioClicks.at(-1));
+      assert.ok(Number.isFinite(deliveredClick.expectedTime));
+      assert.ok(Math.abs(deliveredClick.ratio - 0.5) <= 1 / deliveredClick.rect.width, 'native click must land within one CSS pixel of the requested midpoint');
+      let progressError;
+      try {
+        await page.waitForFunction(target => { const audio = document.querySelector('audio'); return document.querySelector('.audio-card[data-playing="true"]') && !audio.paused && !audio.seeking && audio.currentTime > target + 0.2; }, deliveredClick.expectedTime, { timeout: 12000 });
+      } catch (error) { progressError = error; }
       const sample = await page.locator('audio').evaluate(audio => ({ src: audio.currentSrc, currentTime: audio.currentTime, duration: audio.duration, paused: audio.paused, muted: audio.muted, volume: audio.volume, elements: document.querySelectorAll('audio').length }));
-      sample.pointerToObservedProgressMs = performance.now() - started; results.ui.samples.push(sample);
+      sample.hover = hover; sample.buttonStart = buttonStart;
+      sample.clickToObservedProgressMs = performance.now() - started; results.ui.samples.push(sample);
+      sample.sameSourceSeek = await page.evaluate(start => {
+        const click = window.__audioClicks.at(-1); const events = window.__audioMediaEvents.slice(start.eventCount);
+        return { beforeSrc: start.src, afterSrc: document.querySelector('audio').getAttribute('src'), click,
+          events: events.map(event => ({ ...event, afterClickMs: event.at - click.at })), loadStarts: events.filter(event => event.type === 'loadstart').length,
+          sourceChanges: window.__audioSourceChanges.slice(start.sourceChanges), allEvents: window.__audioMediaEvents, allClicks: window.__audioClicks };
+      }, traceStart);
+      sample.sameSourceSeek.assetRequests = [...requests.values()].slice(requestsBeforeSeek);
+      sample.sameSourceSeek.clickToSeekedMs = sample.sameSourceSeek.events.find(event => event.type === 'seeked')?.afterClickMs;
+      sample.sameSourceSeek.clickToPlayingMs = sample.sameSourceSeek.events.find(event => event.type === 'playing')?.afterClickMs;
+      if (progressError) sample.progressError = String(progressError);
+      assert.equal(sample.sameSourceSeek.loadStarts, 0, 'seeking within the loaded card must reuse the media resource, not start a new load');
+      assert.equal(sample.sameSourceSeek.sourceChanges.length, 0, 'same-source seeks must not clear or reassign src');
+      assert.equal(sample.sameSourceSeek.afterSrc, sample.sameSourceSeek.beforeSrc);
+      if (progressError) throw progressError;
       assert.ok(sample.src.startsWith('http://asset.localhost/')); assert.equal(sample.elements, 1);
       assert.equal(sample.muted, false); assert.ok(sample.volume > 0 && sample.volume <= 0.03); assert.equal(sample.paused, false);
+      await play.hover(); await page.waitForTimeout(100);
+      assert.equal(await page.locator('audio').evaluate(audio => audio.paused), false, 'moving from waveform to its sibling play button stays inside the preview');
+      await play.click();
+      await page.waitForFunction(() => document.querySelector('audio').paused);
+      sample.buttonPaused = await page.locator('audio').evaluate(audio => ({ currentTime: audio.currentTime, paused: audio.paused }));
+      await play.click();
+      await page.waitForFunction(() => { const audio = document.querySelector('audio'); return !audio.paused && audio.currentTime > 0.1 && audio.currentTime < 1; }, null, { timeout: 12000 });
+      sample.buttonRestart = await page.locator('audio').evaluate(audio => ({ currentTime: audio.currentTime, paused: audio.paused }));
       await page.mouse.move(5, 5); await page.waitForTimeout(150);
       const left = await page.evaluate(() => ({ paused: document.querySelector('audio').paused, src: document.querySelector('audio').getAttribute('src'), hit: document.elementFromPoint(5, 5)?.outerHTML.slice(0, 500), events: window.__audioPointerEvents }));
       sample.afterLeave = left;
       assert.equal(left.paused && !left.src, true);
     }
-    await memorySnapshot('actual-ui-after-two-previews');
-    const uiBefore = requests.size;
-    const waves = page.locator('.audio-wave'); const boxes = [await waves.nth(0).boundingBox(), await waves.nth(1).boundingBox()];
-    for (let i = 0; i < 100; i++) { const box = boxes[i % 2]; await page.mouse.move(box.x + box.width * 0.5, box.y + box.height * 0.5); }
-    await page.mouse.move(5, 5); await page.waitForTimeout(5000);
-    results.ui.quickPointerMoves = 100; results.ui.quickPointerAssetRequests = requests.size - uiBefore;
     results.ui.stopped = await page.locator('audio').evaluate(audio => audio.paused && !audio.hasAttribute('src'));
-    assert.equal(results.ui.stopped, true); await memorySnapshot('actual-ui-100-pointer-settled-5s');
+    assert.equal(results.ui.stopped, true);
     await page.screenshot({ path: resolve(root, 'ui.png') });
   }
   const rows = [...requests.values()];
@@ -295,8 +359,8 @@ try {
   assert.ok(results.protocol.rangeRequestCount > 0, 'native media must request byte ranges');
   assert.ok(results.protocol.partialResponses > 0, 'unmodified Tauri asset protocol must return 206');
   results.memory = memory; results.success = true;
-  results.limitations = ['play() resolution/currentTime are not acoustic output or first-audible-sample measurements', 'Content-Length sums protocol payloads, not physical disk I/O; cancelled requests may be incomplete', 'process-tree working sets can double-count shared pages; snapshots are not continuous peak private memory', '100 CDP pointer moves exercise browser pointer events, not physical hardware input; an additional 100 programmatic pending starts test cancellation races', 'Windows only; no macOS result'];
-  await log('Passed native unmuted playback/time progression, cursor midpoint seeks, source release, 100 stale starts, and actual asset Range observation.');
+  results.limitations = ['play() resolution/currentTime are not acoustic output or first-audible-sample measurements', 'Content-Length sums protocol payloads, not physical disk I/O; cancelled requests may be incomplete', 'process-tree working sets can double-count shared pages; snapshots are not continuous peak private memory', process.env.BOWERBIRD_AUDIO_NATIVE_UI_ONLY ? 'UI-only click interaction verification; earlier hover and memory pressure numbers are historical baselines, not rerun here' : '100 CDP pointer moves exercise browser pointer events, not physical hardware input; an additional 100 programmatic pending starts test cancellation races', 'Windows only; no macOS result'];
+  await log(process.env.BOWERBIRD_AUDIO_NATIVE_UI_ONLY ? 'Passed native click UI: hover cursor with zero audio requests, independent play from zero, midpoint click, pause/restart from zero, and whole-preview leave release; no full-format or memory-pressure rerun.' : 'Passed native unmuted playback/time progression, cursor midpoint seeks, source release, 100 stale starts, and actual asset Range observation.');
   }
 } catch (error) {
   results.success = false; results.error = String(error.stack || error); await log(`Failure: ${results.error}`);

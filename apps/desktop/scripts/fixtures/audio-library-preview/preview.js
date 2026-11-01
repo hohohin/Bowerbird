@@ -9,7 +9,7 @@ document.body.append(media);
 const peakCache = new Map();
 const cards = new Map();
 const ROW_HEIGHT = 244, GAP = 28, CACHE_LIMIT = 32;
-let items = [], columns = 3, cardWidth = 0, active = null, generation = 0, hoverTimer = 0, progressFrame = 0;
+let items = [], columns = 3, cardWidth = 0, active = null, generation = 0, progressFrame = 0;
 
 function localUrl(value) {
   const url = new URL(value, location.href);
@@ -83,15 +83,19 @@ function drawCard(card) {
 
 function stop() {
   generation++;
-  clearTimeout(hoverTimer); hoverTimer = 0;
   cancelAnimationFrame(progressFrame); progressFrame = 0;
   media.pause();
   if (media.hasAttribute('src')) { media.removeAttribute('src'); media.load(); }
-  if (active) {
-    active.node.dataset.playing = 'false';
-    active.wave.setAttribute('aria-pressed', 'false');
-  }
+  if (active) setPlaying(active, false);
   active = null;
+}
+
+function setPlaying(card, playing) {
+  card.node.dataset.playing = String(playing);
+  card.playButton.setAttribute('aria-pressed', String(playing));
+  const action = playing ? '暂停' : '从头播放';
+  card.playButton.setAttribute('aria-label', `${action} ${card.item.name}`);
+  card.playButton.title = action;
 }
 
 function animateProgress() {
@@ -99,27 +103,29 @@ function animateProgress() {
   if (!active.node.isConnected || document.hidden) { stop(); return; }
   const ratio = media.currentTime / (Number.isFinite(media.duration) ? media.duration : active.item.duration);
   active.cursor.style.transform = `translateX(${Math.min(1, ratio) * active.wave.clientWidth}px)`;
-  active.position.textContent = formatTime(media.currentTime);
   progressFrame = requestAnimationFrame(animateProgress);
 }
 
 function play(card, ratio) {
-  stop();
-  active = card;
-  card.ratio = Math.min(.999, Math.max(0, ratio));
+  if (active === card && media.hasAttribute('src')) {
+    // Seeking within the loaded file keeps its decoder and buffered data.
+    generation++;
+    cancelAnimationFrame(progressFrame); progressFrame = 0;
+  } else {
+    stop();
+    active = card;
+    // Isolated Tauri harness maps synthetic IDs to their original fixture files.
+    const nativePath = window.__BOWERBIRD_AUDIO_NATIVE_SOURCES__?.[card.item.id];
+    media.src = nativePath && window.__TAURI_INTERNALS__?.convertFileSrc
+      ? window.__TAURI_INTERNALS__.convertFileSrc(nativePath) : card.item.url;
+  }
   card.node.dataset.blocked = 'false'; card.action.textContent = '';
   const request = generation;
-  // Isolated Tauri harness can map these synthetic IDs to original fixture files.
-  // This seam exists only in the study, never in the application entry.
-  const nativePath = window.__BOWERBIRD_AUDIO_NATIVE_SOURCES__?.[card.item.id];
-  media.src = nativePath && window.__TAURI_INTERNALS__?.convertFileSrc
-    ? window.__TAURI_INTERNALS__.convertFileSrc(nativePath) : card.item.url;
-  // Set the native default playback start before metadata is available. Calling
-  // play synchronously retains user activation for the keyboard/click fallback.
-  media.currentTime = card.ratio * card.item.duration;
+  // Both controls call synchronously from a real click/keyboard activation.
+  media.currentTime = Math.min(Math.max(0, card.item.duration - .01), Math.max(0, ratio) * card.item.duration);
   media.play().then(() => {
     if (request !== generation || active !== card) return;
-    card.node.dataset.playing = 'true'; card.wave.setAttribute('aria-pressed', 'true');
+    setPlaying(card, true);
     animateProgress();
   }).catch(error => {
     if (request !== generation || active !== card) return;
@@ -131,42 +137,50 @@ function play(card, ratio) {
 
 function pointerRatio(card, event) {
   const rect = card.wave.getBoundingClientRect();
-  return Math.max(0, Math.min(.999, (event.clientX - rect.left) / rect.width));
+  return Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+}
+
+function showPointer(card, ratio) {
+  card.ratio = ratio;
+  card.hoverCursor.style.left = `${ratio * 100}%`;
+  card.position.textContent = formatTime(ratio * card.item.duration);
 }
 
 function bindCard(card) {
-  card.wave.addEventListener('pointerenter', event => {
-    if (event.pointerType !== 'mouse') return;
-    stop();
-    const entryRatio = pointerRatio(card, event);
-    card.ratio = entryRatio;
-    hoverTimer = setTimeout(() => { hoverTimer = 0; if (card.node.isConnected && !document.hidden) play(card, entryRatio); }, 90);
+  const previewPointer = event => {
+    if (event.pointerType !== 'touch') showPointer(card, pointerRatio(card, event));
+  };
+  card.wave.addEventListener('pointerenter', previewPointer);
+  card.wave.addEventListener('pointermove', previewPointer);
+  card.wave.addEventListener('click', event => {
+    const ratio = event.detail === 0 ? card.ratio : pointerRatio(card, event);
+    showPointer(card, ratio);
+    play(card, ratio);
   });
-  card.wave.addEventListener('pointermove', event => {
-    if (active === card && !media.paused) return;
-    card.ratio = pointerRatio(card, event);
-    card.position.textContent = formatTime(card.ratio * card.item.duration);
+  card.playButton.addEventListener('click', event => {
+    event.stopPropagation();
+    if (active === card && !media.paused) stop(); else play(card, 0);
   });
-  card.wave.addEventListener('pointerleave', () => { clearTimeout(hoverTimer); if (active === card) stop(); });
-  card.wave.addEventListener('click', () => { if (active === card && !media.paused) stop(); else play(card, card.ratio); });
-  card.wave.addEventListener('blur', () => { if (active === card) stop(); });
+  card.preview.addEventListener('pointerleave', () => { if (active === card) stop(); });
+  card.preview.addEventListener('focusout', event => {
+    if (active === card && !card.preview.contains(event.relatedTarget)) stop();
+  });
   card.wave.addEventListener('keydown', event => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') return;
     event.preventDefault();
-    card.ratio = event.key === 'Home' ? 0 : event.key === 'End' ? .95 : Math.min(.95, Math.max(0, card.ratio + (event.key === 'ArrowRight' ? .05 : -.05)));
-    card.position.textContent = formatTime(card.ratio * card.item.duration);
-    if (active === card) play(card, card.ratio);
+    showPointer(card, event.key === 'Home' ? 0 : event.key === 'End' ? 1 : Math.min(1, Math.max(0, card.ratio + (event.key === 'ArrowRight' ? .05 : -.05))));
   });
 }
 
 function createCard(item, index) {
   const node = document.createElement('article');
   node.className = 'audio-card'; node.dataset.index = String(index); node.setAttribute('role', 'listitem');
-  node.innerHTML = '<button class="audio-wave" type="button" aria-pressed="false"><canvas aria-hidden="true"></canvas><span class="wave-cursor"></span><span class="wave-position" aria-hidden="true">0:00</span><span class="wave-action" aria-hidden="true"><svg class="play-icon" viewBox="0 0 12 12"><path d="m3 1 8 5-8 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12"><path d="M2 1h3v10H2zm5 0h3v10H7z"/></svg><span class="wave-action-label"></span></span></button><div class="audio-meta"><span class="audio-name"></span><span class="audio-duration"></span></div>';
+  node.innerHTML = '<div class="audio-preview"><button class="audio-wave" type="button"><canvas aria-hidden="true"></canvas><span class="wave-cursor" aria-hidden="true"></span><span class="wave-hover-cursor" aria-hidden="true"></span><span class="wave-position" aria-hidden="true">0:00</span></button><button class="audio-play" type="button" aria-pressed="false"><svg class="play-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="m3 1 8 5-8 5z"/></svg><svg class="pause-icon" viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zm5 0h3v10H7z"/></svg></button><span class="wave-action-label" role="status"></span></div><div class="audio-meta"><span class="audio-name"></span><span class="audio-duration"></span></div>';
   const wave = node.querySelector('.audio-wave'); wave.setAttribute('aria-label', `试听 ${item.name}`);
   node.querySelector('.audio-name').textContent = item.name; node.querySelector('.audio-name').title = item.name;
   node.querySelector('.audio-duration').textContent = formatTime(item.duration);
-  const card = { item, node, wave, ratio: 0, canvas: node.querySelector('canvas'), cursor: node.querySelector('.wave-cursor'), position: node.querySelector('.wave-position'), action: node.querySelector('.wave-action-label') };
+  const card = { item, node, wave, ratio: 0, preview: node.querySelector('.audio-preview'), playButton: node.querySelector('.audio-play'), canvas: node.querySelector('canvas'), cursor: node.querySelector('.wave-cursor'), hoverCursor: node.querySelector('.wave-hover-cursor'), position: node.querySelector('.wave-position'), action: node.querySelector('.wave-action-label') };
+  setPlaying(card, false);
   bindCard(card);
   return card;
 }

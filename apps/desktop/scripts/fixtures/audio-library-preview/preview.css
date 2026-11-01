@@ -15,6 +15,7 @@ button:focus-visible { outline: 1px solid var(--bb-blue); outline-offset: 4px; }
 .audio-count { color: var(--bb-muted); font: 11px ui-monospace, Consolas, monospace; }
 .audio-grid { position: relative; width: 100%; min-height: 220px; }
 .audio-card { position: absolute; height: 216px; }
+.audio-preview { position: relative; height: 166px; }
 .audio-wave { position: relative; display: block; width: 100%; height: 166px; padding: 0; border: 0; overflow: visible; background: var(--lt-panel); color: var(--bb-muted); cursor: crosshair; }
 .audio-wave::before, .audio-wave::after { content: ""; position: absolute; z-index: 1; width: 4px; height: 4px; background: var(--bb-blue); opacity: 0; pointer-events: none; }
 .audio-wave::before { left: -2px; bottom: -2px; }
@@ -24,12 +25,16 @@ button:focus-visible { outline: 1px solid var(--bb-blue); outline-offset: 4px; }
 .audio-wave:focus-visible { outline-offset: 5px; }
 .wave-cursor { position: absolute; pointer-events: none; top: 18px; bottom: 18px; left: 0; width: 1px; background: var(--bb-blue); opacity: 0; }
 .audio-card[data-playing="true"] .wave-cursor { opacity: 1; }
-.wave-position { position: absolute; pointer-events: none; top: 10px; right: 12px; color: var(--bb-blue); font: 10px ui-monospace, Consolas, monospace; opacity: 0; }
-.audio-wave:is(:hover, :focus-visible) .wave-position, .audio-card[data-playing="true"] .wave-position { opacity: 1; }
-.wave-action { position: absolute; bottom: 10px; left: 12px; display: flex; align-items: center; gap: 6px; color: var(--bb-blue); opacity: 0; font-size: 11px; pointer-events: none; }
-.wave-action svg { width: 12px; height: 12px; fill: currentColor; }
-.audio-wave:is(:hover, :focus-visible) .wave-action, .audio-card:is([data-blocked="true"], [data-playing="true"]) .wave-action { opacity: 1; }
+.wave-hover-cursor { position: absolute; pointer-events: none; top: 18px; bottom: 18px; left: 0; width: 1px; background: var(--lt-ink); opacity: 0; }
+.wave-hover-cursor::before { content: ""; position: absolute; top: -3px; left: -2px; width: 5px; height: 5px; background: inherit; clip-path: polygon(0 0, 100% 0, 50% 100%); }
+.audio-wave:is(:hover, :focus-visible) .wave-hover-cursor { opacity: .75; }
+.wave-position { position: absolute; pointer-events: none; top: 10px; right: 12px; color: var(--lt-ink); font: 10px ui-monospace, Consolas, monospace; opacity: 0; }
+.audio-wave:is(:hover, :focus-visible) .wave-position { opacity: 1; }
+.audio-play { position: absolute; z-index: 2; bottom: 8px; left: 8px; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; background: var(--lt-panel); color: var(--bb-muted); cursor: pointer; }
+.audio-play:hover, .audio-play:focus-visible, .audio-card[data-playing="true"] .audio-play { color: var(--bb-blue); }
+.audio-play svg { width: 12px; height: 12px; fill: currentColor; }
 .audio-card[data-playing="true"] .play-icon, .audio-card:not([data-playing="true"]) .pause-icon { display: none; }
+.wave-action-label { position: absolute; pointer-events: none; bottom: 15px; left: 44px; color: var(--bb-muted); font-size: 11px; }
 .wave-action-label:empty { display: none; }
 .audio-meta { display: flex; align-items: baseline; gap: 16px; padding: 14px 1px 0; }
 .audio-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 400; }
