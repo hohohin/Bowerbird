@@ -550,6 +550,7 @@ export type AppTheme = "light" | "dark";
 /** 应用设置（后端 settings.json 持久化） */
 export interface AppSettings {
   screenshot_shortcuts?: { capture: string; paste: string };
+  screenshot_auto_save?: boolean;
   /** 应用外观；现有黑色界面为 dark。 */
   theme: AppTheme;
   auto_analyze_on_ingest: boolean;

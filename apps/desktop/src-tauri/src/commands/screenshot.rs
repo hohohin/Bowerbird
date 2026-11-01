@@ -20,6 +20,25 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindow, WebviewWindo
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
+#[path = "screenshot_history.rs"]
+mod history;
+pub use history::HistoryEntry;
+
+/// Supplied by application setup; the screenshot module never opens another library.
+pub struct ScreenshotLibrarySaver(pub Box<dyn Fn(&[u8]) -> Result<(), String> + Send + Sync>);
+
+#[derive(Clone)]
+struct CompletedScreenshot {
+    session: String,
+    action: String,
+    png: Vec<u8>,
+    width: u32,
+    height: u32,
+    auto_save: bool,
+    history_saved: bool,
+    library_saved: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ScreenshotShortcuts {
@@ -42,6 +61,9 @@ pub struct ScreenshotState {
     lifecycle: tokio::sync::Mutex<()>,
     shortcuts: Mutex<ShortcutStatus>,
     clipboard: Mutex<Option<arboard::Clipboard>>,
+    output: tokio::sync::Mutex<()>,
+    history: Mutex<()>,
+    completed: Mutex<Option<CompletedScreenshot>>,
 }
 struct ScreenshotFrame {
     session: String,
@@ -454,6 +476,7 @@ fn close_capture_windows(app: &AppHandle) {
     app.state::<ScreenshotState>()
         .active
         .store(false, Ordering::SeqCst);
+    *app.state::<ScreenshotState>().completed.lock().unwrap() = None;
 }
 async fn close_capture(app: &AppHandle, session: Option<&str>) -> Result<(), String> {
     let state = app.state::<ScreenshotState>();
@@ -522,7 +545,11 @@ pub fn screenshot_show(
         return Ok(()); // A cancelled/replaced decode must never resurrect the overlay.
     }
     window.show().map_err(|e| e.to_string())?;
-    window.set_focus().map_err(|e| e.to_string())
+    window.set_focus().map_err(|e| e.to_string())?;
+    if let Some(webview) = app.get_webview(window.label()) {
+        webview.set_focus().map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 #[tauri::command]
 pub async fn screenshot_cancel(
@@ -531,6 +558,8 @@ pub async fn screenshot_cancel(
     session: Option<String>,
 ) -> Result<(), String> {
     local_window(&window)?;
+    let state = app.state::<ScreenshotState>();
+    let _output = state.output.lock().await;
     close_capture(&app, session.as_deref()).await
 }
 fn pin(app: &AppHandle, png: Vec<u8>, width: u32, height: u32) -> Result<(), String> {
@@ -554,7 +583,7 @@ fn pin(app: &AppHandle, png: Vec<u8>, width: u32, height: u32) -> Result<(), Str
     )
     .title("园丁鸟贴图")
     .decorations(false)
-    .shadow(false)
+    .shadow(true)
     .resizable(false)
     .always_on_top(true)
     .visible_on_all_workspaces(true)
@@ -620,78 +649,195 @@ pub async fn screenshot_paste(window: WebviewWindow, app: AppHandle) -> Result<(
     local_window(&window)?;
     paste_clipboard(app).await
 }
+fn history_store(app: &AppHandle) -> Result<history::HistoryStore, String> {
+    Ok(history::HistoryStore::new(app.path().app_data_dir().map_err(|e| e.to_string())?.join("screenshot-history")))
+}
+
+async fn history_task<T: Send + 'static>(
+    app: AppHandle,
+    work: impl FnOnce(&history::HistoryStore) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<ScreenshotState>();
+        let _guard = state.history.lock().unwrap();
+        work(&history_store(&app)?)
+    }).await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn screenshot_history_list(window: WebviewWindow, app: AppHandle) -> Result<Vec<HistoryEntry>, String> {
+    local_window(&window)?;
+    history_task(app, |store| store.list()).await
+}
+
+#[tauri::command]
+pub async fn screenshot_history_image(window: WebviewWindow, app: AppHandle, id: String, thumbnail: Option<bool>) -> Result<tauri::ipc::Response, String> {
+    local_window(&window)?;
+    history_task(app, move |store| store.image(&id, thumbnail.unwrap_or(false)).map(tauri::ipc::Response::new)).await
+}
+
+#[tauri::command]
+pub async fn screenshot_history_delete(window: WebviewWindow, app: AppHandle, id: String) -> Result<(), String> {
+    local_window(&window)?;
+    history_task(app.clone(), move |store| store.delete(&id)).await?;
+    let _ = app.emit("screenshot-history-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn screenshot_history_clear(window: WebviewWindow, app: AppHandle) -> Result<(), String> {
+    local_window(&window)?;
+    history_task(app.clone(), |store| store.clear()).await?;
+    let _ = app.emit("screenshot-history-changed", ());
+    Ok(())
+}
+
+fn output_image(app: &AppHandle, window: &WebviewWindow, image: &image::RgbaImage, png: &[u8], action: &str) -> Result<bool, String> {
+    match action {
+        "copy" => {
+            let state = app.state::<ScreenshotState>();
+            let mut clipboard = state.clipboard.lock().unwrap();
+            if clipboard.is_none() { *clipboard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?); }
+            clipboard.as_mut().unwrap().set_image(arboard::ImageData {
+                width: image.width() as usize, height: image.height() as usize,
+                bytes: Cow::Borrowed(image.as_raw()),
+            }).map_err(|e| e.to_string())?;
+        }
+        "pin" => pin(app, png.to_vec(), image.width(), image.height())?,
+        "save" => {
+            let path = app.dialog().file().set_parent(window).add_filter("PNG 图片", &["png"])
+                .set_file_name(format!("截图-{}.png", chrono::Local::now().format("%Y%m%d-%H%M%S"))).blocking_save_file();
+            let Some(path) = path else { return Ok(false); };
+            std::fs::write(path.into_path().map_err(|e| e.to_string())?, png).map_err(|e| e.to_string())?;
+        }
+        _ => return Err("未知截图操作".into()),
+    }
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn screenshot_history_output(window: WebviewWindow, app: AppHandle, id: String, action: String) -> Result<bool, String> {
+    local_window(&window)?;
+    let png = history_task(app.clone(), move |store| store.image(&id, false)).await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let image = image::load_from_memory(&png).map_err(|e| e.to_string())?.to_rgba8();
+        output_image(&app, &window, &image, &png, &action)
+    }).await.map_err(|e| e.to_string())?
+}
+
+fn finish_record(
+    completed: &mut CompletedScreenshot,
+    mut save_history: impl FnMut(&CompletedScreenshot) -> Result<(), String>,
+    mut save_library: impl FnMut(&CompletedScreenshot) -> Result<(), String>,
+) -> Result<(), String> {
+    if !completed.history_saved {
+        save_history(completed)?;
+        completed.history_saved = true;
+    }
+    if completed.auto_save && !completed.library_saved {
+        save_library(completed)?;
+        completed.library_saved = true;
+    }
+    Ok(())
+}
+
+fn finish_capture(app: &AppHandle, completed: &mut CompletedScreenshot) -> Result<(), String> {
+    finish_record(completed, |completed| {
+        let state = app.state::<ScreenshotState>();
+        let _history = state.history.lock().unwrap();
+        history_store(app)?.save(&completed.session, &completed.png, completed.width, completed.height).map_err(|error| {
+            tracing::warn!("Screenshot history save failed: {error}");
+            "截图已输出，但历史尚未保存。请检查磁盘空间后重试。".to_string()
+        })?;
+        let _ = app.emit("screenshot-history-changed", ());
+        Ok(())
+    }, |completed| {
+        let saver = app.try_state::<ScreenshotLibrarySaver>().ok_or("截图已输出，但尚未存入素材库。请重试保存。")?;
+        (saver.0)(&completed.png).map_err(|error| {
+            tracing::warn!("Screenshot library save failed: {error}");
+            "截图已输出，但尚未存入素材库。请检查存储位置后重试。".to_string()
+        })
+    })
+}
+
 #[tauri::command]
 pub async fn screenshot_output(
-    window: WebviewWindow,
-    app: AppHandle,
-    data: String,
-    action: String,
-    session: Option<String>,
+    window: WebviewWindow, app: AppHandle, data: String, action: String, session: Option<String>,
 ) -> Result<bool, String> {
     local_window(&window)?;
+    let state = app.state::<ScreenshotState>();
+    let _output = state.output.lock().await;
     if window.label().starts_with("snip-") || window.label().starts_with("pin-") {
         let current = screenshot_session(window.clone(), app.clone())?;
-        if current.is_none() || current != session {
-            return Err("截图已结束".into());
-        }
+        if current.is_none() || current != session { return Err("截图已结束".into()); }
     }
+    let capture = window.label().starts_with("snip-");
     let output_app = app.clone();
     let output_window = window.clone();
+    let output_session = session.clone();
     let completed = tauri::async_runtime::spawn_blocking(move || -> Result<bool, String> {
-        let app = output_app;
-        let window = output_window;
-        let image = decode(&data)?;
-        match action.as_str() {
-            "copy" => {
-                let state = app.state::<ScreenshotState>();
-                let mut clipboard = state.clipboard.lock().unwrap();
-                if clipboard.is_none() {
-                    *clipboard = Some(arboard::Clipboard::new().map_err(|e| e.to_string())?);
-                }
-                clipboard
-                    .as_mut()
-                    .unwrap()
-                    .set_image(arboard::ImageData {
-                        width: image.width() as usize,
-                        height: image.height() as usize,
-                        bytes: Cow::Borrowed(image.as_raw()),
-                    })
-                    .map_err(|e| e.to_string())?;
+        let state = output_app.state::<ScreenshotState>();
+        let existing = state.completed.lock().unwrap().as_ref()
+            .filter(|saved| Some(&saved.session) == output_session.as_ref()).cloned();
+        let mut completed = if capture { existing } else { None };
+        if let Some(saved) = &completed {
+            if saved.action != action || encode(&decode(&data)?)? != saved.png {
+                return Err("上次截图尚未保存完成，请重试原操作，或关闭后重新截图。".into());
             }
-            "pin" => pin(&app, encode(&image)?, image.width(), image.height())?,
-            "save" => {
-                let path = app
-                    .dialog()
-                    .file()
-                    .set_parent(&window)
-                    .add_filter("PNG 图片", &["png"])
-                    .set_file_name(format!(
-                        "截图-{}.png",
-                        chrono::Local::now().format("%Y%m%d-%H%M%S")
-                    ))
-                    .blocking_save_file();
-                let Some(path) = path else {
-                    return Ok(false);
-                };
-                let path = path.into_path().map_err(|e| e.to_string())?;
-                image
-                    .save_with_format(path, image::ImageFormat::Png)
-                    .map_err(|e| e.to_string())?;
-            }
-            _ => return Err("未知截图操作".into()),
         }
-        Ok(true)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-    if completed && window.label().starts_with("snip-") {
-        close_capture(&app, session.as_deref()).await?;
-    }
+        if completed.is_none() {
+            let image = decode(&data)?;
+            let png = encode(&image)?;
+            if !output_image(&output_app, &output_window, &image, &png, &action)? { return Ok(false); }
+            if !capture { return Ok(true); }
+            completed = Some(CompletedScreenshot {
+                session: output_session.ok_or("截图已结束")?, action, png,
+                width: image.width(), height: image.height(),
+                auto_save: output_app.state::<SettingsState>().get().screenshot_auto_save,
+                history_saved: false, library_saved: false,
+            });
+        }
+        let mut completed = completed.unwrap();
+        let result = finish_capture(&output_app, &mut completed);
+        *state.completed.lock().unwrap() = Some(completed);
+        result.map(|_| true)
+    }).await.map_err(|e| e.to_string())??;
+    if completed && capture { close_capture(&app, session.as_deref()).await?; }
     Ok(completed)
 }
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn retry_only_finishes_missing_persistence_and_respects_opt_out() {
+        let temp = tempfile::tempdir().unwrap();
+        let history = history::HistoryStore::new(temp.path().to_path_buf());
+        let mut completed = CompletedScreenshot {
+            session: ulid::Ulid::new().to_string(),
+            action: "pin".into(),
+            png: encode(&image::RgbaImage::from_pixel(7, 9, image::Rgba([1, 2, 3, 255]))).unwrap(),
+            width: 7, height: 9, auto_save: true, history_saved: false, library_saved: false,
+        };
+        let mut history_writes = 0;
+        let mut library_writes = 0;
+        for attempt in 0..3 {
+            let result = finish_record(&mut completed, |capture| {
+                history_writes += 1;
+                history.save(&capture.session, &capture.png, capture.width, capture.height)?;
+                Ok(())
+            }, |_| {
+                library_writes += 1;
+                if attempt == 0 { Err("disk unavailable".into()) } else { Ok(()) }
+            });
+            assert_eq!(result.is_err(), attempt == 0);
+        }
+        assert_eq!(history_writes, 1);
+        assert_eq!(library_writes, 2);
+        assert_eq!(history.list().unwrap().len(), 1);
+        completed.auto_save = false;
+        completed.library_saved = false;
+        finish_record(&mut completed, |_| panic!("history already saved"), |_| panic!("auto save disabled")).unwrap();
+    }
     #[test]
     fn shortcut_duplicates_and_disabled() {
         assert!(parse_shortcuts(&ScreenshotShortcuts {

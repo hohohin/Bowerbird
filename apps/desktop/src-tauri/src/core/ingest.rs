@@ -422,6 +422,8 @@ pub fn ingest_from_bytes(
         let mut asset = ingest_file_with_dedup(paths, db, &source_path, !source_url.is_empty())?;
         let has_temporary_origin =
             asset.origin_path.as_deref() == Some(source_path.to_string_lossy().as_ref());
+        // An identical screenshot reuses the existing asset without replacing its provenance.
+        if source == "screenshot" && !has_temporary_origin { return Ok(asset); }
         let conn = db.conn.lock().unwrap();
         if has_temporary_origin {
             conn.execute(
@@ -719,6 +721,33 @@ mod tests {
         let mut bytes = Cursor::new(Vec::new());
         image.write_to(&mut bytes, ImageFormat::Png).unwrap();
         bytes.into_inner()
+    }
+
+    #[test]
+    fn screenshot_bytes_are_persisted_in_library_and_retry_reuses_asset() {
+        let (_tmp, paths, db) = setup();
+        let bytes = png_bytes(48, 32, [18, 85, 140]);
+        let save = || ingest_from_bytes(&paths, &db, &bytes, "", Some("截图.png"), Some("image/png"), "screenshot").unwrap();
+        let first = save();
+        let retry = save();
+        assert_eq!(first.id, retry.id);
+        assert_eq!(db.count_assets(None).unwrap(), 1);
+        assert_eq!(first.source.as_deref(), Some("screenshot"));
+        assert_eq!(first.origin_path, None);
+        assert_eq!(std::fs::read(first.store_path.as_ref().unwrap()).unwrap(), bytes);
+        assert!(Path::new(first.store_path.as_ref().unwrap()).starts_with(&paths.root));
+    }
+
+    #[test]
+    fn screenshot_duplicate_keeps_existing_source() {
+        let (_tmp, paths, db) = setup();
+        let bytes = png_bytes(48, 32, [18, 85, 140]);
+        let original = ingest_from_bytes(&paths, &db, &bytes, "https://example.com/original.png", Some("原图.png"), Some("image/png"), "extension").unwrap();
+        let screenshot = ingest_from_bytes(&paths, &db, &bytes, "", Some("截图.png"), Some("image/png"), "screenshot").unwrap();
+        assert_eq!(screenshot.id, original.id);
+        assert_eq!(screenshot.source, original.source);
+        assert_eq!(screenshot.source_url, original.source_url);
+        assert_eq!(db.get_asset(&original.id).unwrap().unwrap().source_url, original.source_url);
     }
 
     #[test]

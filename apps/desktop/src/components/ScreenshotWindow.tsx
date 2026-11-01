@@ -3,14 +3,16 @@ import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as Reac
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
-import { ArrowUpRight, Circle, Copy, Crop, Pencil, Pin, Redo2, Save, Square, Type, Undo2, X, Grid2X2 } from "lucide-react";
+import { ArrowUpRight, Circle, Copy, Crop, Pencil, Pin, Redo2, Save, Square, Type, Undo2, X, Grid2X2, Minus, Highlighter, Droplets, Eraser, History } from "lucide-react";
 import { drawMarks, moveRect, nudgeRect, rectBetween, samplePixel, type Mark, type Point, type Rect, type SnipTool } from "../lib/screenshot";
 import "./ScreenshotWindow.css";
+import { ScreenshotHistoryPanel } from "./ScreenshotHistoryPanel";
 
 type Gesture = { kind: "select" | "move" | "resize" | "draw"; start: Point; rect: Rect | null; anchor?: Point; mark?: Mark };
 const TOOLS = [
   ["select", "调整选区", Crop], ["rect", "矩形", Square], ["ellipse", "椭圆", Circle],
-  ["arrow", "箭头", ArrowUpRight], ["pen", "画笔", Pencil], ["text", "文字", Type], ["mosaic", "马赛克", Grid2X2],
+  ["line", "直线／折线", Minus], ["arrow", "箭头", ArrowUpRight], ["pen", "画笔", Pencil], ["marker", "荧光笔", Highlighter],
+  ["text", "文字", Type], ["mosaic", "马赛克", Grid2X2], ["blur", "高斯模糊", Droplets], ["eraser", "橡皮擦", Eraser],
 ] as const;
 const COLORS = ["#ff4d4f", "#ffc53d", "#52c41a", "#4096ff", "#ffffff", "#171717"];
 const DIRECTIONS: Record<string, Point> = { arrowleft: { x: -1, y: 0 }, arrowright: { x: 1, y: 0 }, arrowup: { x: 0, y: -1 }, arrowdown: { x: 0, y: 1 }, a: { x: -1, y: 0 }, d: { x: 1, y: 0 }, w: { x: 0, y: -1 }, s: { x: 0, y: 1 } };
@@ -54,7 +56,11 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
   const [tool, setTool] = useState<SnipTool>("select");
   const [color, setColor] = useState(COLORS[0]);
   const [size, setSize] = useState(3);
-  const [text, setText] = useState("");
+  const [textEdit, setTextEdit] = useState<Mark | null>(null);
+  const [filled, setFilled] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const root = useRef<HTMLElement>(null);
+  const polyline = useRef<Mark | null>(null);
   const [cursor, setCursor] = useState<Point | null>(null);
   const cursorRef = useRef<Point | null>(null);
   const cursorFrame = useRef<number | null>(null);
@@ -73,7 +79,7 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
     const reset = () => {
       setImage(null); setSession(null); setError(""); setSelection(null);
       setMarks([]); setRedo([]); setDraft(null); setTool("select");
-      setColor(COLORS[0]); setSize(3); setText(""); setCursor(null); setInspect(false);
+      setColor(COLORS[0]); setSize(3); setTextEdit(null); setFilled(false); setCursor(null); setInspect(false); setHistoryOpen(false); polyline.current = null;
       gesture.current = null; cursorRef.current = null;
       if (cursorFrame.current !== null) cancelAnimationFrame(cursorFrame.current);
       cursorFrame.current = null;
@@ -138,7 +144,7 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
     const ctx = target.getContext("2d")!;
     ctx.clearRect(0, 0, target.width, target.height);
     ctx.drawImage(image, 0, 0);
-    drawMarks(ctx, marks);
+    drawMarks(ctx, marks, target, image);
   }, [image, marks, pinned]);
   useLayoutEffect(() => {
     const target = draftCanvas.current;
@@ -150,13 +156,13 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
       if (target.width !== image.naturalWidth || target.height !== image.naturalHeight) { target.width = image.naturalWidth; target.height = image.naturalHeight; }
       const ctx = target.getContext('2d')!;
       ctx.clearRect(0, 0, target.width, target.height);
-      drawMarks(ctx, [draft], canvas.current!);
+      drawMarks(ctx, [draft], canvas.current!, image);
     });
     return () => cancelAnimationFrame(frame);
   }, [image, draft, pinned]);
   useLayoutEffect(() => {
     // Layout effects have painted the fresh frame before the native window appears.
-    if (image && session) void invoke("screenshot_show", { session }).catch(e => { if (activeSession.current === session) setError(String(e)); });
+    if (image && session) void invoke("screenshot_show", { session }).then(() => { if (activeSession.current === session) root.current?.focus({ preventScroll: true }); }).catch(e => { if (activeSession.current === session) setError(String(e)); });
   }, [image, session]);
   useEffect(() => {
     if (pinned && image) setZoom(Math.min(viewport.width / image.naturalWidth, viewport.height / image.naturalHeight));
@@ -168,10 +174,21 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
     if (cursorFrame.current === null) cursorFrame.current = requestAnimationFrame(() => { cursorFrame.current = null; setCursor(cursorRef.current); });
   }
   async function close() {
-    if (busyRef.current) return;
+    gesture.current = null; polyline.current = null; setDraft(null); setTextEdit(null);
     try { if (pinned) await getCurrentWindow().close(); else await invoke("screenshot_cancel", { session }); }
     catch (e) { setError(String(e)); }
   }
+  function finishText() {
+    if (!textEdit) return;
+    if (textEdit.text.trim()) { setMarks(current => [...current, textEdit]); setRedo([]); }
+    setTextEdit(null);
+  }
+  function finishPolyline() {
+    const mark = polyline.current;
+    if (mark && mark.points.length > 1) { setMarks(current => [...current, { ...mark, end: mark.points[mark.points.length - 1] }]); setRedo([]); }
+    polyline.current = null; setDraft(null);
+  }
+  function chooseTool(next: SnipTool) { finishText(); finishPolyline(); setTool(next); }
   function undo() { if (!marks.length) return; setRedo([...redo, marks[marks.length - 1]]); setMarks(marks.slice(0, -1)); }
   function redoMark() { if (!redo.length) return; setMarks([...marks, redo[redo.length - 1]]); setRedo(redo.slice(0, -1)); }
   async function output(action: "copy" | "save" | "pin") {
@@ -190,7 +207,15 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
       } else {
         // The committed canvas already contains the full-resolution composition.
         const crop = document.createElement('canvas'); crop.width = selection!.width; crop.height = selection!.height;
-        crop.getContext('2d')!.drawImage(canvas.current!, selection!.x, selection!.y, selection!.width, selection!.height, 0, 0, crop.width, crop.height);
+        const ctx = crop.getContext('2d')!;
+        ctx.drawImage(canvas.current!, selection!.x, selection!.y, selection!.width, selection!.height, 0, 0, crop.width, crop.height);
+        // Include confirmed draft content without committing it: cancelling Save
+        // must leave the line/text editor intact for continued editing.
+        const pending: Mark[] = [];
+        if (polyline.current && polyline.current.points.length > 1) pending.push(polyline.current);
+        if (textEdit?.text.trim()) pending.push(textEdit);
+        ctx.translate(-selection!.x, -selection!.y);
+        drawMarks(ctx, pending, canvas.current!, image);
         data = crop.toDataURL('image/png');
       }
       await invoke<boolean>("screenshot_output", { data, action, session });
@@ -205,8 +230,9 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
   }
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      if (historyOpen) return;
+      if (event.key === "Escape" && !event.isComposing) { event.preventDefault(); event.stopPropagation(); void close(); return; }
       if (event.isComposing || busyRef.current) return;
-      if (event.key === "Escape") { event.preventDefault(); void close(); return; }
       if (event.target instanceof HTMLElement && (event.target.closest('input, textarea, select') || event.target.isContentEditable)) return;
       const mod = event.ctrlKey || event.metaKey;
       const key = event.key.toLowerCase();
@@ -228,21 +254,26 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
         }
         return;
       }
+      if (!pinned && !mod && selection && (key === '1' || key === '2' || key === '[' || key === ']')) {
+        event.preventDefault(); setSize(value => Math.max(1, Math.min(12, value + (key === '1' || key === '[' ? -1 : 1)))); return;
+      }
+      if (!pinned && event.key === 'Tab' && (tool === 'line' || tool === 'arrow')) { event.preventDefault(); chooseTool(tool === 'line' ? 'arrow' : 'line'); return; }
+      if (!pinned && !mod && (key === 'h' || key === ',' || key === '.')) { event.preventDefault(); finishText(); finishPolyline(); setHistoryOpen(true); return; }
       if (event.repeat || gesture.current) return;
       if (event.target instanceof HTMLElement && event.target.closest('button') && (event.key === 'Enter' || event.key === ' ')) return;
       if (mod && key === "z") { event.preventDefault(); if (event.shiftKey) redoMark(); else undo(); }
       if (mod && key === "y") { event.preventDefault(); redoMark(); }
       if ((mod && key === "c") || event.key === "Enter") { event.preventDefault(); void output("copy"); }
       if (mod && key === "s") { event.preventDefault(); void output("save"); }
-      if (!mod && key === "p" && selection) { event.preventDefault(); void output("pin"); }
+      if (((!mod && key === "p") || (mod && key === "t")) && selection) { event.preventDefault(); void output("pin"); }
       if (!pinned && !mod && key === 'c' && cursorRef.current && image && canvas.current) {
         event.preventDefault(); setColor(samplePixel(canvas.current, cursorRef.current));
       }
     };
     const onKeyUp = (event: KeyboardEvent) => { if (event.key === 'Alt') setInspect(false); };
     const onBlur = () => setInspect(false);
-    window.addEventListener('keydown', onKey); window.addEventListener('keyup', onKeyUp); window.addEventListener('blur', onBlur);
-    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('blur', onBlur); };
+    window.addEventListener('keydown', onKey, true); window.addEventListener('keyup', onKeyUp); window.addEventListener('blur', onBlur);
+    return () => { window.removeEventListener('keydown', onKey, true); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('blur', onBlur); };
   });
   function point(event: ReactPointerEvent): Point {
     // Read the current layout: a pointer event can precede React's resize commit.
@@ -251,6 +282,8 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
   }
   function down(event: ReactPointerEvent<HTMLDivElement>) {
     if (!image || busy || event.button !== 0) return;
+    // Keep the browser's default pointer focus from immediately blurring a new text editor.
+    event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const p = point(event); updateCursor(p);
     if (tool === "select" || !selection) {
@@ -263,10 +296,12 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
       } else { gesture.current = { kind: 'select', start: p, rect: selection }; setSelection(null); }
     } else {
       if (p.x < selection.x || p.x > selection.x + selection.width || p.y < selection.y || p.y > selection.y + selection.height) return;
-      const mark: Mark = { tool, start: p, end: p, color, size: size * ratio, points: [p], text };
+      const mark: Mark = { tool, start: p, end: p, color, size: size * ratio, points: [p], text: "", filled };
       if (tool === 'text') {
-        if (!text.trim()) { setError('先在工具栏输入文字，再点击选区放置。'); return; }
-        setMarks([...marks, mark]); setRedo([]); setError(''); return;
+        finishText(); setTextEdit(mark); setError(''); return;
+      }
+      if (tool === 'line' && polyline.current) {
+        polyline.current = { ...polyline.current, end: p, points: [...polyline.current.points, p] }; setDraft(polyline.current); return;
       }
       gesture.current = { kind: 'draw', start: p, rect: selection, mark }; setDraft(mark);
     }
@@ -274,26 +309,35 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
   function move(event: ReactPointerEvent<HTMLDivElement>) {
     if (!image) return;
     const p = point(event); updateCursor(p);
+    if (polyline.current) { setDraft({ ...polyline.current, end: p }); return; }
     const current = gesture.current; if (!current) return;
     if (current.kind === 'select' || current.kind === 'resize') setSelection(rectBetween(current.anchor ?? current.start, p));
     if (current.kind === 'move' && current.rect) setSelection(moveRect(current.rect, p.x - current.start.x, p.y - current.start.y, image.naturalWidth, image.naturalHeight));
     if (current.mark) {
-      const mark = { ...current.mark, end: p, points: [...current.mark.points, p] };
-      if (event.shiftKey && mark.tool === 'ellipse') {
+      const mark = { ...current.mark, end: p, points: ['pen', 'marker', 'eraser'].includes(current.mark.tool) ? [...current.mark.points, p] : current.mark.points };
+      if (event.shiftKey && (mark.tool === 'ellipse' || mark.tool === 'rect')) {
         const d = Math.min(Math.abs(p.x - mark.start.x), Math.abs(p.y - mark.start.y));
         mark.end = { x: mark.start.x + Math.sign(p.x - mark.start.x) * d, y: mark.start.y + Math.sign(p.y - mark.start.y) * d };
+      }
+      if (event.shiftKey && (mark.tool === 'line' || mark.tool === 'arrow')) {
+        const length = Math.hypot(p.x - mark.start.x, p.y - mark.start.y), angle = Math.round(Math.atan2(p.y - mark.start.y, p.x - mark.start.x) / (Math.PI / 4)) * Math.PI / 4;
+        mark.end = { x: mark.start.x + length * Math.cos(angle), y: mark.start.y + length * Math.sin(angle) };
       }
       current.mark = mark; setDraft(mark);
     }
   }
   function up() {
     const current = gesture.current; gesture.current = null;
-    if (current?.mark) { setMarks([...marks, current.mark]); setRedo([]); }
+    if (current?.mark) {
+      if (current.mark.tool === 'line' && Math.hypot(current.mark.end.x - current.mark.start.x, current.mark.end.y - current.mark.start.y) < 3 * ratio) { polyline.current = current.mark; setDraft(current.mark); return; }
+      setMarks([...marks, current.mark]); setRedo([]);
+    }
+    if (polyline.current) return;
     if (selection && (!selection.width || !selection.height)) setSelection(null);
     setDraft(null);
   }
   const s = selection && image ? { left: selection.x / image.naturalWidth * 100 + '%', top: selection.y / image.naturalHeight * 100 + '%', width: selection.width / image.naturalWidth * 100 + '%', height: selection.height / image.naturalHeight * 100 + '%' } : null;
-  if (pinned) return <main className="snip-pin" onWheel={event => { event.preventDefault(); void changeZoom(zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1)); }}>
+  if (pinned) return <main ref={root} tabIndex={-1} className="snip-pin" onWheel={event => { event.preventDefault(); void changeZoom(zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1)); }}>
     {image && <img draggable={false} src={image.src} alt="置顶截图"
       onPointerDown={event => {
         if (event.button !== 0) return;
@@ -311,21 +355,27 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
       onDoubleClick={() => void close()} />}
     {error && <p className="snip-error" role="alert">{userErrorMessage(error, "截图操作未完成，请关闭截图窗口后重试。")}</p>}
   </main>;
-  return <main className="snip-root">
+  return <main ref={root} tabIndex={-1} className="snip-root">
     <div className={`snip-stage ${tool === 'select' ? 'is-select' : ''}`} onPointerDown={down} onPointerMove={move} onPointerUp={up}
       onPointerCancel={() => { if (gesture.current) setSelection(gesture.current.rect); gesture.current = null; setDraft(null); }}
-      onContextMenu={event => { event.preventDefault(); if (selection) { setSelection(null); setMarks([]); setRedo([]); setTool('select'); } else void close(); }}
-      onDoubleClick={() => { if (selection && tool === 'select') void output('copy'); }}>
+      onContextMenu={event => { event.preventDefault(); if (polyline.current) { finishPolyline(); return; } if (textEdit) { finishText(); return; } if (tool !== 'select') { chooseTool('select'); return; } if (selection) { setSelection(null); setMarks([]); setRedo([]); setTool('select'); } else void close(); }}
+      onWheel={event => { if (selection && tool !== 'select' && !textEdit) { event.preventDefault(); setSize(value => Math.max(1, Math.min(12, value + (event.deltaY < 0 ? 1 : -1)))); } }}
+      onDoubleClick={() => { if (polyline.current) finishPolyline(); else if (selection && tool === 'select') void output('copy'); }}>
+
       <canvas ref={canvas} />
       <canvas ref={draftCanvas} className="snip-draft" width={0} height={0} />
       {s ? <div className="snip-selection" style={s}><span className="snip-dimensions">{selection!.width} × {selection!.height}</span>
         {tool === 'select' && ['nw', 'ne', 'sw', 'se'].map(handle => <i key={handle} data-handle={handle} className={`snip-handle ${handle}`} />)}
       </div> : <div className="snip-shade" />}
     </div>
-    {!selection && <div className="snip-hint">拖动选区 · 方向键 / WASD 微调光标 · C 取色 · Esc 退出<button title="取消截图" onClick={() => void close()}><X size={16} /></button></div>}
+    {textEdit && <textarea className="snip-inline-text" aria-label="标注文字" autoFocus rows={Math.max(2, textEdit.text.split('\n').length)}
+      style={{ left: textEdit.start.x / ratio, top: textEdit.start.y / ratioY, color: textEdit.color, fontSize: Math.max(16, textEdit.size * 6) / ratio, maxWidth: Math.max(32, viewport.width - textEdit.start.x / ratio - 8) }}
+      value={textEdit.text} onChange={event => setTextEdit({ ...textEdit, text: event.target.value })} onBlur={finishText}
+      onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); finishText(); } }} />}
+    {!selection && <div className="snip-hint">拖动选区 · 方向键 / WASD 微调光标 · C 取色 · Esc 退出<button title="历史截图" aria-label="历史截图" onClick={() => setHistoryOpen(true)}><History size={16} /></button><button title="取消截图" onClick={() => void close()}><X size={16} /></button></div>}
     {image && cursor && canvas.current && (!selection || tool === 'select' || inspect) && <ScreenshotLoupe source={canvas.current} cursor={cursor} viewport={viewport} marks={marks} />}
     {selection && <div className="snip-toolbar" role="toolbar" aria-label="截图工具">
-      <div className="snip-tools">{TOOLS.map(([value, label, Icon]) => <button key={value} title={label} aria-label={label} aria-pressed={tool === value} disabled={busy} className={tool === value ? 'active' : ''} onClick={() => setTool(value)}><Icon size={18} /></button>)}
+      <div className="snip-tools">{TOOLS.map(([value, label, Icon]) => <button key={value} title={label} aria-label={label} aria-pressed={tool === value} disabled={busy} className={tool === value ? 'active' : ''} onClick={() => chooseTool(value)}><Icon size={18} /></button>)}
         <span className="snip-divider" />
         <button title="撤销（Ctrl/⌘ Z）" aria-label="撤销" disabled={!marks.length || busy} onClick={undo}><Undo2 size={18} /></button>
         <button title="重做" aria-label="重做" disabled={!redo.length || busy} onClick={redoMark}><Redo2 size={18} /></button>
@@ -333,16 +383,18 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
         <button title="置顶贴图（P）" aria-label="置顶贴图" disabled={busy} onClick={() => void output('pin')}><Pin size={18} /></button>
         <button title="保存（Ctrl/⌘ S）" aria-label="保存截图" disabled={busy} onClick={() => void output('save')}><Save size={18} /></button>
         <button title="复制（Enter）" aria-label="复制截图" disabled={busy} className="snip-confirm" onClick={() => void output('copy')}><Copy size={18} /></button>
+        <button title="历史截图（H）" aria-label="历史截图" onClick={() => setHistoryOpen(true)}><History size={18} /></button>
         <button title="取消（Esc）" aria-label="取消截图" disabled={busy} onClick={() => void close()}><X size={18} /></button>
       </div>
       {tool !== 'select' && <div className="snip-options">
         {COLORS.map(value => <button key={value} aria-label={`颜色 ${value}`} className={color === value ? 'selected' : ''} style={{ background: value }} onClick={() => setColor(value)} />)}
         <input aria-label="自定义颜色" type="color" value={color} onChange={event => setColor(event.target.value)} />
         <label>{tool === 'text' ? '字号' : '粗细'} <input aria-label="标注粗细" type="range" min="1" max="12" value={size} onChange={event => setSize(+event.target.value)} /></label>
-        {tool === 'text' && <textarea aria-label="标注文字" placeholder="输入文字，再点击选区放置" value={text} onChange={event => setText(event.target.value)} rows={2} />}
+        {(tool === 'rect' || tool === 'ellipse') && <label><input type="checkbox" checked={filled} onChange={event => setFilled(event.target.checked)} />实心</label>}
       </div>}
-      <p className="snip-tip">{tool === 'select' ? '方向键移动 1 px · Ctrl/⌘ 扩边 · Shift 缩边 · 双击复制' : tool === 'text' ? '点击选区放置文字 · Alt 放大镜 · C 取色' : '在选区中拖动标注 · Alt 放大镜 · C 取色'}{busy ? ' · 正在处理…' : ''}</p>
+      <p className="snip-tip">{tool === 'select' ? '方向键移动 1 px · Ctrl/⌘ 扩边 · Shift 缩边 · 双击复制' : tool === 'text' ? '点击选区输入文字 · Ctrl/⌘ Enter 完成' : tool === 'line' ? '拖动直线 · 连续点击折线 · 右键完成 · Tab 切换箭头' : '拖动标注 · 滚轮调粗细 · Shift 约束 · 右键完成'}{busy ? ' · 正在处理…' : ''}</p>
     </div>}
+    {historyOpen && <ScreenshotHistoryPanel onClose={() => { setHistoryOpen(false); root.current?.focus(); }} />}
     {error && <p className="snip-error" role="alert">{userErrorMessage(error, "截图操作未完成，请关闭截图窗口后重试。")}</p>}
   </main>;
 }

@@ -111,8 +111,20 @@ fn main() {
                         assert!(overlay.is_visible().unwrap(), "hidden warm frontend must show the fresh capture");
                         println!("CAPTURE_4K_READY_MS_ROUND_{round}={}", started.elapsed().as_millis());
                         assert!(!main.is_visible().unwrap());
-                        let session = screenshot::screenshot_session(overlay.clone(), app.clone())?.unwrap();
-                        screenshot::screenshot_cancel(overlay.clone(), app.clone(), Some(session)).await?;
+                        let _session = screenshot::screenshot_session(overlay.clone(), app.clone())?.unwrap();
+                        #[cfg(windows)]
+                        {
+                            #[link(name = "user32")]
+                            extern "system" { fn keybd_event(key: u8, scan: u8, flags: u32, extra: usize); }
+                            // No pointer click: keyboard focus must arrive with the visible capture.
+                            unsafe { keybd_event(0x1b, 0, 0, 0); keybd_event(0x1b, 0, 2, 0); }
+                            for _ in 0..200 {
+                                if !overlay.is_visible().unwrap() { break; }
+                                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+                            }
+                        }
+                        #[cfg(not(windows))]
+                        screenshot::screenshot_cancel(overlay.clone(), app.clone(), Some(_session)).await?;
                         assert!(!overlay.is_visible().unwrap());
                         assert!(screenshot::screenshot_session(overlay, app.clone())?.is_none());
                     }

@@ -23,6 +23,10 @@ async function pixels(data) {
   }, data);
 }
 try {
+  await page.goto(url); await page.waitForFunction(() => window.calls.some(c => c.command === 'screenshot_show'));
+  await page.evaluate(() => document.addEventListener('keydown', event => event.stopPropagation(), { once: true }));
+  await page.keyboard.press('Escape');
+  assert.ok(await page.evaluate(() => window.calls.some(c => c.command === 'screenshot_cancel')), 'Esc must exit even when a child layer consumes bubbling keys');
   await page.goto(url + '?pendingDecode');
   await page.waitForFunction(() => window.calls.some(c => c.command === 'screenshot_show'), null, { timeout: 5000 });
   assert.ok(await page.evaluate(() => window.basePaints > 0), 'hidden frame is drawn before showing without awaiting decode');
@@ -84,7 +88,7 @@ try {
   let exported = await output(); assert.equal(exported.action, 'copy');
   const base = exported.data; assert.deepEqual(await pixels(base), { width: 800, height: 600, pixel: [255, 255, 255, 255] });
   // All annotation tools produce pixels, undo returns byte-identical crop, redo restores them.
-  for (const name of ['矩形', '椭圆', '箭头', '画笔', '马赛克']) {
+  for (const name of ['矩形', '椭圆', '直线／折线', '箭头', '画笔', '荧光笔', '马赛克', '高斯模糊']) {
     await page.getByRole('button', { name, exact: true }).click();
     const before = await page.evaluate(() => window.basePaints);
     await page.mouse.move(150, 160); await page.mouse.down(); await page.mouse.move(340, 260, { steps: 8 });
@@ -110,11 +114,43 @@ try {
     await page.getByRole('button', { name: '复制截图', exact: true }).click(); assert.equal((await output()).data, drawn, `${name} redo`);
     await page.getByRole('button', { name: '撤销', exact: true }).click();
   }
+  // Filled shapes, erasing annotations and undo restore actual pixels.
+  await page.getByRole('button', { name: '矩形', exact: true }).click();
+  await page.getByRole('checkbox', { name: '实心' }).check(); await drag(150, 160, 340, 260);
+  await page.getByRole('button', { name: '复制截图', exact: true }).click(); const filled = (await output()).data;
+  await page.getByRole('button', { name: '橡皮擦', exact: true }).click(); await drag(180, 200, 300, 200);
+  await page.getByRole('button', { name: '复制截图', exact: true }).click(); assert.notEqual((await output()).data, filled, 'eraser restores screenshot under brush');
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await page.getByRole('button', { name: '复制截图', exact: true }).click(); assert.equal((await output()).data, filled, 'erase undo restores annotation');
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await page.getByRole('button', { name: '矩形', exact: true }).click(); await page.getByRole('checkbox', { name: '实心' }).uncheck();
+  // Line strip ends on right click without losing the screenshot selection.
+  await page.getByRole('button', { name: '直线／折线', exact: true }).click();
+  await page.mouse.click(160, 180); await page.mouse.click(240, 260); await page.mouse.click(330, 180);
+  await page.evaluate(() => { window.cancelSave = true; });
+  await page.getByRole('button', { name: '保存截图', exact: true }).click();
+  const pendingLine = (await output()).data;
+  assert.notEqual(pendingLine, base, 'direct save includes confirmed points of the unfinished line strip');
+  assert.ok(await page.locator('.snip-draft').evaluate(el => el.width > 0), 'cancelled save preserves the pending line strip');
+  await page.evaluate(() => { window.cancelSave = false; });
+  await page.mouse.click(330, 180, { button: 'right' });
+  assert.equal(await page.locator('.snip-selection').count(), 1);
+  await page.getByRole('button', { name: '复制截图', exact: true }).click(); assert.equal((await output()).data, pendingLine, 'pending and committed line strips export identical pixels');
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await page.keyboard.press('Tab'); assert.equal(await page.getByRole('button', { name: '箭头', exact: true }).getAttribute('aria-pressed'), 'true');
+  const widthBefore = Number(await page.getByLabel('标注粗细').inputValue());
+  await page.keyboard.press('2'); assert.equal(Number(await page.getByLabel('标注粗细').inputValue()), widthBefore + 1);
+  await page.keyboard.press('1'); assert.equal(Number(await page.getByLabel('标注粗细').inputValue()), widthBefore);
   await page.getByRole('button', { name: '文字', exact: true }).click();
-  await page.getByRole('textbox', { name: '标注文字' }).fill('中文标注\nScreenshot'); await page.mouse.click(160, 190);
-  await page.getByRole('button', { name: '复制截图', exact: true }).click(); assert.notEqual((await output()).data, base);
+  await page.mouse.click(160, 190); await page.getByRole('textbox', { name: '标注文字' }).fill('中文标注\nScreenshot');
+  await page.getByRole('button', { name: '保存截图', exact: true }).evaluate(el => el.click());
+  const pendingText = (await output()).data;
+  assert.notEqual(pendingText, base, 'direct output includes text even before the editor blurs');
+  await page.getByRole('textbox', { name: '标注文字' }).waitFor();
+  await page.keyboard.press('Control+Enter');
+  await page.getByRole('button', { name: '复制截图', exact: true }).click(); assert.equal((await output()).data, pendingText, 'pending and committed text export identical pixels');
   const beforeTyping = await selectionRect();
-  await page.getByRole('textbox', { name: '标注文字' }).focus(); await page.keyboard.press('ArrowLeft'); await page.keyboard.press('Control+ArrowRight'); await page.keyboard.type('wasd');
+  await page.mouse.click(180, 220); await page.getByRole('textbox', { name: '标注文字' }).focus(); await page.keyboard.press('ArrowLeft'); await page.keyboard.press('Control+ArrowRight'); await page.keyboard.type('wasd');
   assert.deepEqual(await selectionRect(), beforeTyping, 'text editing must not move selection');
   await page.getByRole('button', { name: '文字', exact: true }).click();
   await page.keyboard.down('Alt'); await page.locator('.snip-loupe').waitFor(); await page.keyboard.up('Alt'); await page.locator('.snip-loupe').waitFor({ state: 'hidden' });
@@ -171,7 +207,21 @@ try {
   assert.deepEqual(await selectionRect(), { x: 0, y: 0, width: 1, height: 1 });
   await page.keyboard.press('Enter');
   assert.equal(await page.evaluate(async data => { const img = new Image(); img.src = data; await img.decode(); return img.width * img.height; }, (await output()).data), 1);
+  for (const state of ['empty', 'input', 'drawing', 'loading']) {
+    await page.goto(url); await page.waitForFunction(() => window.calls.some(c => c.command === 'screenshot_show'));
+    if (state === 'input' || state === 'drawing') {
+      await drag(100, 80, 500, 380);
+      await page.getByRole('button', { name: state === 'input' ? '文字' : '画笔', exact: true }).click();
+      await page.mouse.move(160, 190); await page.mouse.down();
+      if (state === 'input') { await page.mouse.up(); await page.getByLabel('标注文字').fill('输入中'); }
+    }
+    if (state === 'loading') { await page.evaluate(async () => { window.imageDelay = 300; await window.nextSession('loading'); }); }
+    await page.keyboard.press('Escape');
+    assert.ok(await page.evaluate(() => window.calls.some(c => c.command === 'screenshot_cancel')), `Esc closes ${state}`);
+    await page.mouse.up();
+  }
   await page.goto(url + '?mode=pin'); await page.getByAltText('置顶截图').waitFor();
+  for (const dot of await page.locator('.snip-pin').evaluate(el => ['::before', '::after'].map(pseudo => ({ width: parseFloat(getComputedStyle(el, pseudo).width), pointer: getComputedStyle(el, pseudo).pointerEvents })))) { assert.ok(Math.abs(dot.width - 4.8) < .02); assert.equal(dot.pointer, 'none'); }
   await page.getByAltText('置顶截图').click({ button: 'middle' });
   assert.ok(await page.evaluate(() => window.calls.some(c => c.command === 'plugin:window|set_size' && c.args.value.size.width === 1600 && c.args.value.size.height === 1200)), 'middle click restores image dimensions without toolbar padding');
   await page.keyboard.press('Control+c');
@@ -192,7 +242,7 @@ try {
   await page.getByRole('button', { name: '立即截图', exact: true }).click();
   assert.ok(await page.evaluate(() => window.calls.some(c => c.command === 'screenshot_start')));
   await page.screenshot({ path: '.tmp/screenshot/settings.png' });
-  assert.deepEqual(errors, []); console.log('Screenshot UI passed: pixel-exact loupe/colour, edge flipping, Retina/fractional/unequal scales, native cursor IPC, repeated pixel nudges, expand/shrink/bounds/minimum size, text focus, cached base/draft rendering, Retina export, 6 tools, undo/redo, cancellation/retry, warm-window reuse/reset, stale-load rejection, pin, shortcut persistence/conflict.');
+  assert.deepEqual(errors, []); console.log('Screenshot UI passed: pixel-exact loupe/colour, edge flipping, Retina/fractional/unequal scales, native cursor IPC, repeated pixel nudges, expand/shrink/bounds/minimum size, text focus, cached base/draft rendering, Retina export, 10 annotation tools, filled shapes, line strips, in-place text, Esc capture, undo/redo, cancellation/retry, warm-window reuse/reset, stale-load rejection, pin, shortcut persistence/conflict.');
 } catch (error) {
   await mkdir('.tmp/screenshot', { recursive: true });
   await page.screenshot({ path: '.tmp/screenshot/failure.png' });

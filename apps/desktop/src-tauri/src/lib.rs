@@ -387,6 +387,16 @@ pub fn run() {
             app.manage(extension_status);
             app.manage(active_project);
             app.manage(settings_state);
+            let screenshot_paths = paths.clone();
+            let screenshot_db = db.clone();
+            let screenshot_app = app.handle().clone();
+            app.manage(commands::screenshot::ScreenshotLibrarySaver(Box::new(move |png| {
+                let name = format!("截图-{}.png", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+                core::ingest::ingest_from_bytes(&screenshot_paths, &screenshot_db, png, "", Some(&name), Some("image/png"), "screenshot")
+                    .map_err(|error| error.to_string())?;
+                let _ = screenshot_app.emit("library://assets-changed", ());
+                Ok(())
+            })));
             commands::screenshot::initialize(app.handle());
             app.manage(cloud_client);
             app.manage(auth_client);
@@ -441,6 +451,11 @@ pub fn run() {
             commands::screenshot::screenshot_paste,
             commands::screenshot::screenshot_set_shortcuts,
             commands::screenshot::screenshot_shortcut_status,
+            commands::screenshot::screenshot_history_list,
+            commands::screenshot::screenshot_history_image,
+            commands::screenshot::screenshot_history_output,
+            commands::screenshot::screenshot_history_delete,
+            commands::screenshot::screenshot_history_clear,
             commands::ping,
             commands::db_health,
             commands::project_canvas::project_canvas_materialize,
