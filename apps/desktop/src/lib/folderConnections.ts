@@ -10,14 +10,14 @@ export interface ConnectionEntry {
   id: string; folder_id: string; asset_id: string; name: string; path: string;
   is_reference: boolean; available: boolean; version?: string | null; asset: Asset;
 }
-export type ConnectionMedia = "images" | "videos" | null;
+export type ConnectionMedia = "images" | "videos" | "audios" | null;
 async function entryBatches(command: string, ids: string[], key: string, args: Record<string, unknown> = {}) {
   for (let offset = 0; offset < ids.length; offset += 2000) await invoke<void>(command, { ...args, [key]: ids.slice(offset, offset + 2000) });
 }
 export const folderConnections = {
   list: (projectId: string | null = null, media: ConnectionMedia = null) => invoke<FolderConnection[]>("folder_connections", { projectId, media }),
   connect: (path: string, projectId: string | null = null) => invoke<string>("connect_folder", { path, projectId }),
-  refresh: () => invoke<void>("refresh_folder_connections"),
+  refresh: (folderId: string | null = null) => invoke<void>("refresh_folder_connections", { folderId }),
   page: (folderId: string, offset: number, limit: number, media: ConnectionMedia = null, projectId: string | null = null) => invoke<ConnectionEntry[]>("connection_entries", { folderId, offset, limit, media, projectId }),
   ids: async (folderId: string | null = null, media: ConnectionMedia = null, projectId: string | null = null, start = 0, count = Infinity) => {
     const result: string[] = [];

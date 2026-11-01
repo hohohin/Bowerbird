@@ -14,12 +14,49 @@ const CLOUD_CONCURRENCY: usize = 4;
 pub(super) struct PendingClassification {
     pub cloud_request: Option<(jev::Judge, String, Vec<u8>)>,
     pub id: String,
+    pub image_version: Option<data::ImageVersion>,
     pub revision: i64,
     pub prediction: data::Prediction,
     pub record_observation: bool,
     pub evaluated: Vec<String>,
     pub needs_discovery: bool,
     pub preview: Vec<jev::PreviewLabel>,
+}
+
+#[cfg(test)]
+mod source_change_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn changed_source_skips_cloud_and_keeps_the_replacement_queued() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.set_local_enabled(true).unwrap();
+        db.conn.lock().unwrap().execute_batch("INSERT INTO assets(id,name,ext,store_path) VALUES('image','image','png','image.png');
+            INSERT INTO external_assets(asset_id,fingerprint) VALUES('image','before');").unwrap();
+        let pending = PendingClassification {
+            id: "image".into(),
+            image_version: db.classification_image_version("image").unwrap(),
+            revision: db.local_revision().unwrap(),
+            cloud_request: None,
+            prediction: data::Prediction { description: String::new(), tags: vec![], matches: vec![] },
+            record_observation: true,
+            evaluated: vec![],
+            needs_discovery: true,
+            preview: vec![],
+        };
+        db.conn.lock().unwrap().execute("UPDATE external_assets SET fingerprint='after'", []).unwrap();
+        let classifier = LocalClassifier::new(std::path::PathBuf::new());
+        let result = classifier.finish_jev(&db, None, pending).await;
+        assert_eq!(result.as_ref().unwrap_err(), super::super::SOURCE_CHANGED, "must stop before requiring or calling Cloud");
+        classifier.complete_jev_asset(&db, "image", &result);
+        assert_eq!(db.local_auto_targets(data::MODEL_ID).unwrap(), vec!["image"]);
+        let state = classifier.status.lock().unwrap();
+        assert_eq!(state.failed, 1);
+        assert_eq!(state.source_changes, state.failed, "changed sources do not trigger the automatic failure pause");
+        assert!(state.recent_results[0].tags.is_empty());
+        assert!(state.recent_results[0].error.is_some(), "old classification is never displayed as saved");
+    }
 }
 
 impl LocalClassifier {
@@ -208,6 +245,7 @@ impl LocalClassifier {
         }
         if let Err(error) = result {
             status.failed += 1;
+            if error == super::SOURCE_CHANGED { status.source_changes += 1; }
             status.last_error = format!("素材 {id}：{error}");
         }
         drop(status);

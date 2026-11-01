@@ -13,10 +13,27 @@ export interface CanvasConversationCard {
 }
 
 /** Presentation only: keep exact turn identities and execution history intact. */
-export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Record<string, Pick<GenJob, "conversationId">>, excluded: ReadonlySet<string> = new Set(), contained: ReadonlySet<string> = new Set(), routed: ReadonlySet<string> = new Set()) {
+export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Record<string, Pick<GenJob, "conversationId"> & Partial<Pick<GenJob, "turns">>>, excluded: ReadonlySet<string> = new Set(), contained: ReadonlySet<string> = new Set(), routed: ReadonlySet<string> = new Set()) {
   const groups = new Map<string, CanvasConversationCard>();
   const aliases = new Map<string, string>();
+  // Native timestamps have second precision. A fast failed retry can share its
+  // timestamp with the previous turn; UUID order must not change the card anchor.
   const ordered = [...nodes].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  const tiedTurns = new Map<string, { slot: number; rank: number }[]>();
+  ordered.forEach((node, slot) => {
+    if (node.kind !== "prompt") return;
+    const turn = payload(node);
+    const rank = jobs[turn.job_id]?.turns?.findIndex(item => item.turnKey === turn.turn_key) ?? -1;
+    if (rank < 0) return;
+    const key = JSON.stringify([node.projectId, turn.job_id, node.createdAt]);
+    const tied = tiedTurns.get(key) ?? [];
+    tied.push({ slot, rank });
+    tiedTurns.set(key, tied);
+  });
+  for (const tied of tiedTurns.values()) {
+    const sorted = [...tied].sort((a, b) => a.rank - b.rank).map(item => ordered[item.slot]);
+    tied.forEach((item, index) => { ordered[item.slot] = sorted[index]; });
+  }
   for (const node of ordered) {
     if (node.kind !== "prompt" || node.hiddenAt != null || excluded.has(node.id)) continue;
     const turn = payload(node);

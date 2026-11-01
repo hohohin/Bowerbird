@@ -1,4 +1,4 @@
-import { userErrorMessage } from "../lib/userError";
+import { generationErrorMessage, userErrorMessage } from "../lib/userError";
 import { DreaminaTaskCredit } from "./creation/DreaminaCredits";
 import { DreaminaTaskDiagnostics } from "./creation/DreaminaTaskDiagnostics";
 import { GenerationSessionSurface } from "./GenerationSessionSurface";
@@ -139,7 +139,7 @@ export function GenerationPanel({
           ? "积分不足"
           : "Bowerbird Cloud 不可用"
       : userErrorMessage(targetHealth?.reason, "当前生成服务暂不可用，请在设置中检查登录状态。");
-  // 重试要新开 job（版本分支），与「重新编辑」同过并行上限门。
+  // 失败重试续轮与成功结果的新版本都遵守并行上限。
   const canStartAnother = canStartAnotherJob(cloudEntitlement, runningJobCount);
 
   const imageCount = useMemo(
@@ -159,7 +159,7 @@ export function GenerationPanel({
   }, [activeJob]);
 
   // 首轮参考图完整 asset：传给 TurnView——chip 视图还原参考图节点用；纯文本回退时在气泡上方展示缩略图「附件」。
-  const firstRefAssets = useMemo(() => activeJob?.refAssets ?? [], [activeJob]);
+  const firstRefAssets = useMemo(() => activeJob?.turns[0]?.refAssets ?? activeJob?.refAssets ?? [], [activeJob]);
   // 会话最近一次产出（最后一个有图的轮）：编辑坞左侧「上次结果」缩略图，组稿时对照参考；
   // offset = 该轮在 allImages 拍平序列中的起始下标（点开放大后可跨全轮导航）。
   const lastImageTurn = useMemo(() => {
@@ -239,14 +239,20 @@ export function GenerationPanel({
   }
 
   // 续轮气泡的「重试」（与首轮同款：原样重发该轮组稿，旧结果保留）。失败末轮走既有
-  // retryLastGenTurn（移除失败轮原位顶替）；其余轮 = 追加重发——参考图**精确重放**该轮
+  // retryLastGenTurn（保留失败历史并追加续轮）；其余轮同样追加重发——参考图**精确重放**该轮
   // 当时实际下发的完整列表（含当时的基图，非会话最新产出），prompt 原样。
+  function historicalCloudVideoFailure(turn: GenTurn | undefined): boolean {
+    return !!activeJob && !!turn?.error && (turn.media ?? activeJob.media) === "video"
+      && (turn.provider ?? activeJob.provider).startsWith("bowerbird-cloud")
+      && activeJob.turns[activeJob.turns.length - 1]?.id !== turn.id;
+  }
+
   function retryTurn(turn: GenTurn) {
+    if (running || !activeJob || historicalCloudVideoFailure(turn)) return;
     if (activeJob && turn.error && (turn.media ?? activeJob.media) === "video" && (turn.provider ?? activeJob.provider).startsWith("bowerbird-cloud")) {
       void api.recoverCloudVideo(activeJob.id).catch(error => notifyError(error, "原视频取回失败"));
       return;
     }
-    if (running || !activeJob?.sessionId) return;
     const isLast = activeJob.turns[activeJob.turns.length - 1]?.id === turn.id;
     if (turn.error && isLast) {
       retryLastGenTurn(assets);
@@ -265,11 +271,13 @@ export function GenerationPanel({
       rawPrompt: turn.promptRaw ?? undefined,
       references: turn.refAssets,
       referenceNodeIds: turn.referenceNodeIds,
-      exactReferences: (turn.media ?? activeJob.media) === "video" ? turn.refs ?? turn.refAssets?.flatMap((asset) => asset.store_path ? [asset.store_path] : []) ?? activeJob.lastRefs : turn.refs?.length ? turn.refs : undefined,
+      exactReferences: turn.refs ?? (!activeJob.sessionId || (turn.media ?? activeJob.media) === "video"
+        ? turn.refAssets?.flatMap((asset) => asset.store_path ? [asset.store_path] : []) ?? activeJob.lastRefs
+        : undefined),
       parentNodeId: parent.nodeId,
       parentAssetPath: parent.storePath,
       creativeRelation: "retry",
-      // 失败轮的追加重发同样叠放在原失败卡位置；成功轮重发保持脑图式落位。
+      // 保留轮次投影位置；同一 job 的轮次在画板归并为一张会话卡。
       retryAnchorNodeId: turn.error && turn.turnKey
         ? generationPromptNodeId(activeJob.id, turn.turnKey)
         : null,
@@ -281,8 +289,8 @@ export function GenerationPanel({
   function retryFirstTurn() {
     if (running || !activeJob) return;
     const first = activeJob.turns[0];
-    if (first?.error && (first.media ?? activeJob.media) === "video" && (first.provider ?? activeJob.provider).startsWith("bowerbird-cloud")) {
-      void api.recoverCloudVideo(activeJob.id).catch(error => notifyError(error, "原视频取回失败"));
+    if (first?.error) {
+      retryTurn(first);
       return;
     }
     const parent = generationParentLocator(
@@ -315,11 +323,6 @@ export function GenerationPanel({
             parentAssetPath: parent.storePath,
             relation: "retry",
             referenceNodeIds: first?.referenceNodeIds,
-            // 首轮失败的重试：新卡叠放在原失败卡位置（原卡保留）；首轮成功的版本分支
-            // 仍走参考图旁的脑图式落位。
-            retryAnchorNodeId: first?.error && first.turnKey
-              ? generationPromptNodeId(activeJob.id, first.turnKey)
-              : null,
           }
         : undefined,
       false,
@@ -390,16 +393,17 @@ export function GenerationPanel({
           <button
             type="button"
             onClick={retryFirstTurn}
-            disabled={!!snapshot || !targetReady || !canStartAnother}
+            disabled={!!snapshot || !targetReady || !canStartAnother || historicalCloudVideoFailure(activeJob.turns[0])}
             className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent disabled:opacity-40"
             title={
               snapshot
                 ? "请复用提示词后生成"
+                : historicalCloudVideoFailure(activeJob.turns[0]) ? "旧视频任务不支持在此取回"
                 : !targetReady
                 ? lockedReason
                 : !canStartAnother
                   ? "已达当前档位的并行生成上限"
-                  : "重试：首轮组稿原样重发，结果作为同一会话的新版本（←/→ 切换）"
+                  : activeJob.turns[0]?.error ? "重试：在当前会话追加一轮" : "重试：首轮组稿原样重发，结果作为同一会话的新版本（←/→ 切换）"
             }
           >
             <RotateCcw size={13} />
@@ -485,11 +489,12 @@ export function GenerationPanel({
         <button
           type="button"
           onClick={() => retryTurn(turn)}
-          disabled={!targetReady}
+          disabled={!targetReady || historicalCloudVideoFailure(turn)}
           className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent disabled:opacity-40"
           title={
             !targetReady
               ? lockedReason
+              : historicalCloudVideoFailure(turn) ? "旧视频任务不支持在此取回"
               : "重试：这一轮的组稿原样重发（接在会话下方，原轮保留）"
           }
         >
@@ -603,6 +608,7 @@ export function GenerationPanel({
               <TurnView
                 key={turn.id}
                 turn={turn}
+                provider={turn.provider ?? activeJob.provider}
                 index={i}
                 busy={running && i === turnsWithOffset.length - 1}
                 streaming={running && i === turnsWithOffset.length - 1 ? activeJob.streaming : ""}
@@ -617,9 +623,9 @@ export function GenerationPanel({
                 }
                 onOpenTurnRefs={(imgs, i) => setLightbox({ images: imgs, index: i })}
                 onAgentRetry={readOnly || snapshot || (turn.media ?? activeJob.media) === "video" ? undefined : () => retryWithAgent(turn)}
-                onRetry={() => retryLastGenTurn(assets)}
-                canRetry={!readOnly && !snapshot && targetReady && !running}
-                retryReason={readOnly ? "旧会话回退只读；请完成迁移后在创作中继续" : lockedReason}
+                onRetry={() => retryTurn(turn)}
+                canRetry={!readOnly && !snapshot && targetReady && !running && !historicalCloudVideoFailure(turn)}
+                retryReason={readOnly ? "旧会话回退只读；请完成迁移后在创作中继续" : historicalCloudVideoFailure(turn) ? "旧视频任务不支持在此取回" : lockedReason}
               />
             ))}
           </div>
@@ -715,6 +721,7 @@ export function GenerationPanel({
  */
 function TurnView({
   turn,
+  provider,
   index,
   busy,
   streaming,
@@ -732,6 +739,7 @@ function TurnView({
   retryReason,
 }: {
   turn: GenTurn;
+  provider: GenJob["provider"];
   index: number;
   busy: boolean;
   streaming: string;
@@ -966,7 +974,7 @@ function TurnView({
           ) : turn.error ? (
             <div className="space-y-1.5 rounded border border-red-500/40 bg-red-500/10 p-2">
               <div className="text-[11px] font-semibold text-red-300">❌ 生成失败</div>
-              <pre className="whitespace-pre-wrap break-all text-[11px] text-red-200/90">{userErrorMessage(turn.error, "本次生成未完成，请稍后重试。")}</pre>
+              <pre role="alert" className="select-text whitespace-pre-wrap break-all text-[11px] text-red-200/90">{generationErrorMessage(turn.error, { provider })}</pre>
               {turn.media === "video" && turn.provider === "jimeng" && <DreaminaTaskDiagnostics submitId={turn.submitId} />}
               <button
                 onClick={onRetry}

@@ -27,6 +27,20 @@ function job(overrides = {}) {
   };
 }
 
+test("running retry hydration restores failed history before live chunks without duplicating rounds", () => {
+  const failed = { id: 1, turnKey: "failed", prompt: "original", images: [], error: "saved failure" };
+  const live = job({turns: [{id: 9, turnKey:"retry", prompt:"retry", images:["live.png"], error:null}], running:false});
+  const saved = job({turns:[failed,{id:2,turnKey:"retry",prompt:"retry",images:[]}],running:true});
+  let merged = mergeRecoveredGenJobs({"job-1":live}, ["job-1"], [saved]);
+  merged = mergeRecoveredGenJobs(merged.jobs, merged.order, [saved]);
+  const restored = merged.jobs["job-1"];
+  assert.deepEqual(restored.turns.map(t=>t.turnKey),["failed","retry"]);
+  assert.equal(restored.turns[0].error,"saved failure");
+  assert.deepEqual(restored.turns[1].images,["live.png"]);
+  assert.equal(restored.turns[1].error,null);
+  assert.equal(restored.running,false);
+});
+
 test("a deferred generation list hydrates a recover_started placeholder without rolling back live state", async () => {
   const listed = deferred();
   const laterTurn = {

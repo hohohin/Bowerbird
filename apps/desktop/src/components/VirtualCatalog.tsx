@@ -31,7 +31,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   const pending = useRef(new Set<string>());
   const alive = useRef(true);
   const version = useRef(revision); version.current = revision;
-  const anchor = useRef<{ key: string; delta: number; asset?: { id: string; delta: number } } | null>(null);
+  const anchor = useRef<{ key: string; delta: number; asset?: { id: string; delta: number } } | { section: string; delta: number } | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
   const geometryKey = JSON.stringify(filter);
   const oldGeometry = useRef("");
@@ -51,13 +51,17 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
       layout.groups.forEach((group, index) => {
         offsets[index] = extra;
         group.top += extra;
-        if (!sections[index].count) { group.height += 72; extra += 72; }
+        if (!sections[index].count) { extra += 40 - group.height; group.height = 40; }
       });
       for (const block of layout.blocks) { block.top += offsets[block.section]; block.maxBottom += offsets[block.section]; }
       layout.height += extra;
     }
     const last = layout.groups[layout.groups.length - 1];
-    if (headings && last) { last.height = Math.max(last.height, viewport.height); layout.height = last.top + last.height; }
+    if (headings && last) {
+      // Leave scroll room for the final collection without stretching its empty row.
+      if (!showEmpty || sections[sections.length - 1].count) last.height = Math.max(last.height, viewport.height);
+      layout.height = last.top + Math.max(last.height, viewport.height);
+    }
     return layout;
   }, [sections, viewport.width, viewport.height, width, headings, tick, showEmpty]);
   const layoutRef = useRef(layout); layoutRef.current = layout;
@@ -72,6 +76,11 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
     const view = scroll.current;
     if (!view || anchor.current) return;
     const top = view.scrollTop / catalogScrollScale(layoutRef.current.height + 100, view.clientHeight);
+    const emptyIndex = showEmpty ? layoutRef.current.groups.findIndex((group, index) => !sections[index].count && group.top <= top + 1 && group.top + group.height > top) : -1;
+    if (emptyIndex >= 0) {
+      anchor.current = { section: sections[emptyIndex].id, delta: top - layoutRef.current.groups[emptyIndex].top };
+      return;
+    }
     const visible = visibleCatalogBlocks(layoutRef.current.blocks, top, view.clientHeight, 0);
     let distance = Infinity;
     // Overlapping pages can include a much earlier portrait. Anchor the nearest
@@ -142,6 +151,16 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   useLayoutEffect(() => {
     if (anchor.current && scroll.current) {
       const saved = anchor.current;
+      if ("section" in saved) {
+        const group = layout.groups[sections.findIndex(section => section.id === saved.section)];
+        if (group) {
+          scroll.current.scrollTop = (group.top + saved.delta) * scale;
+          const scrollTop = scroll.current.scrollTop;
+          setViewport(current => current.top === scrollTop ? current : { ...current, top: scrollTop });
+        }
+        anchor.current = null;
+        return;
+      }
       const block = layout.blocks.find(item => item.key === saved.key);
       if (block) {
         const page = cache.current.get(block.key);
@@ -169,10 +188,9 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   if (headings) sections.forEach((section, index) => { if (layout.groups[index].top <= logicalTop + 1) current = section.id; });
   useEffect(() => { onActive(current); }, [current, onActive]);
   return <div ref={root} className={`catalog-sections catalog-virtual${filter.kind === "tags" ? " catalog-tag-sections" : ""}`} aria-label="分类素材" style={{ height: Math.min(layout.height + 100, 8_000_000), position: "relative", overflow: "clip", overflowAnchor: "none" }} data-cached-pages={cache.current.size}>
-    {sections.map((section, index) => <section key={section.id} data-catalog-section={section.id} data-tag-section={section.tagId ?? undefined}
-      aria-label={headings ? `${section.name}${section.tagId ? "图片" : "素材"}` : undefined} style={{ position: "absolute", top: layout.groups[index].top * scale, height: layout.groups[index].height * scale, width: "100%" }}>
-      {headings && (current === section.id || visible.some(block => block.section === index)) && <h3 style={{ position: "absolute", width: "100%", top: Math.min(Math.max(layout.groups[index].top, logicalTop), layout.groups[index].top + layout.groups[index].height - 40) - logicalTop + viewport.top - layout.groups[index].top * scale }} className={`catalog-section-heading${current === section.id && viewport.top > 0 ? " is-pinned" : ""}`}><span title={section.name} data-library-count={`${String(section.count).padStart(2, "0")} 项`} className={`catalog-section-title${current === section.id && viewport.top > 0 ? " library-floating-surface" : ""}`}>{section.name}</span></h3>}
-      {!section.count && emptySection && <div className="connected-empty-section" style={{ top: layout.groups[index].top + 48 - logicalTop + viewport.top - layout.groups[index].top * scale }}>{emptySection(section.id)}</div>}
+    {sections.map((section, index) => <section key={section.id} data-catalog-section={section.id} data-tag-section={section.tagId ?? undefined} className={showEmpty && !section.count ? "is-empty" : undefined}
+      aria-label={headings ? `${section.name}${section.tagId && filter.media === "images" ? "图片" : "素材"}` : undefined} style={{ position: "absolute", top: layout.groups[index].top * scale, height: layout.groups[index].height * scale, width: "100%" }}>
+      {headings && (current === section.id || visible.some(block => block.section === index) || (showEmpty && !section.count && layout.groups[index].top + layout.groups[index].height >= logicalTop - 500 && layout.groups[index].top <= logicalTop + viewport.height + 500)) && <h3 style={{ position: "absolute", width: "100%", top: Math.min(Math.max(layout.groups[index].top, logicalTop), layout.groups[index].top + layout.groups[index].height - 40) - logicalTop + viewport.top - layout.groups[index].top * scale }} className={`catalog-section-heading${current === section.id && viewport.top > 0 ? " is-pinned" : ""}`}><span title={section.name} data-library-count={`${String(section.count).padStart(2, "0")} 项`} className={`catalog-section-title${current === section.id && viewport.top > 0 ? " library-floating-surface" : ""}`}>{section.name}</span>{!section.count && emptySection && <span className="connected-empty-section">{emptySection(section.id)}</span>}</h3>}
       {visible.filter(block => block.section === index).map(block => {
         const page = cache.current.get(block.key), error = errors.current.get(block.key);
         const geometry = page ? masonryGeometry(page.assets, viewport.width, width, block.columnTops) : null;
@@ -189,7 +207,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
             }
             if (renderItem) return renderItem(asset, { width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }, cell.ratio, { section: section.id, index: block.offset + index });
             return <FileMediaCard key={asset.id} style={{ width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }}
-              entry={{ path: asset.store_path ?? "", name: asset.name, directory: false, preview: asset.thumb_path, version: `${asset.id}:${asset.file_mtime ?? 0}:${asset.thumb_path}` }}
+              entry={{ path: asset.store_path ?? "", name: asset.name, directory: false, preview: asset.thumb_path, version: `${asset.id}:${asset.file_mtime ?? 0}:${asset.thumb_path && asset.thumb_path !== asset.store_path ? asset.thumb_path : revision}` }}
               aspectRatio={cell.ratio} selected={selected.has(asset.id)} revision={revision} labels={[]} assetId={asset.id} generated={asset.generation_session_id != null} duration={asset.duration}
               onSelect={(additive, range) => onSelect(asset, additive, range, { section: section.id, index: block.offset + index })}
               onActivate={onActivate ? () => onActivate(asset) : undefined} onOpen={() => onOpen(asset)} onContextMenu={(x,y) => onContextMenu(asset,x,y)}

@@ -14,11 +14,14 @@ async function sources(dir) {
   }))).flat();
 }
 
-const safeCalls = new Set(['userErrorMessage', 'accountErrorMessage']);
+const safeCalls = new Set(['userErrorMessage', 'generationErrorMessage', 'accountErrorMessage']);
 // Reviewed sources: these values contain local validation / already sanitized text.
 // Keep exemptions at the exact field + component, not at a directory or filename pattern.
 const reviewed = new Set([
   'components/CanvasAssetDeleteDialog.tsx:error', // Each per-file failure is sanitized before joining.
+  'components/ConnectedCollections.tsx:error', // Both state producers sanitize errors before assignment.
+  'components/LocalChatPanel.tsx:error', // Card action errors are sanitized before assignment.
+  'components/VideoCollectionDialog.tsx:error', // Load, collect and save errors are sanitized before assignment.
   'components/CreationBoard.tsx:referenceError', // Local image-input validation + user asset names.
   'components/GenerationPanel.tsx:referenceError', // Same local validation helper.
   'components/OnboardingTour.tsx:error', // Fixed Chinese instructions only.
@@ -61,7 +64,7 @@ test('JSX error text and tooltip boundaries do not render raw errors', async () 
 });
 
 test('boundary guard recognizes direct fields, fallback expressions and safe wrappers', () => {
-  const source = ts.createSourceFile('example.tsx', '<p>{task.error || "失败"}{userErrorMessage(task.error, "任务失败")}{error && <b>{error}</b>}</p>', ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const source = ts.createSourceFile('example.tsx', '<p>{task.error || "失败"}{userErrorMessage(task.error, "任务失败")}{generationErrorMessage(task.error)}{error && <b>{error}</b>}</p>', ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const findings = [];
   function visit(node) {
     if (ts.isJsxExpression(node) && node.expression) findings.push(...rawFields(node.expression, source));

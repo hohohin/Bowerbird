@@ -28,6 +28,8 @@ import { ContextMenu } from "./ContextMenu";
 import { ModalShell } from "./ModalShell";
 import { LibraryVideoPreview } from "./LibraryVideoPreview";
 import { videoSourceKey } from "../lib/videoSourceKey";
+import { isAudioAsset } from "../lib/audioMedia";
+import { stopAudioPreview, stopAudioPreviewInFolder } from "../lib/audioPreview";
 import { CollectionEditorDialog, CollectionAssignDialog } from "./CollectionDialogs";
 import "./CategorizedLibrary.css";
 import "./ConnectedCollections.css";
@@ -80,8 +82,10 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   const filterKey = JSON.stringify(filter);
   const filterRef = useRef(filterKey); filterRef.current = filterKey;
   const readPage = useCallback(async (id: string, offset: number, limit: number) => (await folderConnections.page(id, offset, limit, media, scope)).map(entry => ({ ...entry.asset, connectionEntry: entry })), [media, scope]);
-  const refresh = useCallback(() => { void folderConnections.refresh().catch(reason => notifyError(reason, "无法检查文件夹")); }, []);
   const activeRef = useRef(active); activeRef.current = active;
+  const checkedScope = useRef<string | null>(null);
+  const checkFolders = useCallback((folderId: string | null) => { void folderConnections.refresh(folderId).catch(reason => notifyError(reason, "无法检查文件夹")); }, []);
+  const refresh = useCallback(() => checkFolders(activeRef.current), [checkFolders]);
   useLayoutEffect(() => {
     const view = scroll.current;
     const save = () => positions.set(positionKey, { active: activeRef.current, top: view?.scrollTop ?? 0, alphabetic: false, color: null, query: "", generatedFilter: null });
@@ -91,17 +95,21 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   useEffect(() => {
     alive.current = true; let timer: number | undefined;
     const unlisten = listen("library://assets-changed", () => { window.clearTimeout(timer); timer = window.setTimeout(() => setRevision(value => value + 1), 100); });
-    const focused = () => refresh(); window.addEventListener("focus", focused); refresh();
+    const focused = () => refresh(); window.addEventListener("focus", focused);
     return () => { alive.current = false; window.clearTimeout(timer); void unlisten.then(stop => stop()); window.removeEventListener("focus", focused); };
   }, [refresh]);
   useEffect(() => {
     let current = true;
     folderConnections.list(scope, media).then(value => {
       if (!current) return;
-      setFolders(value); setError(""); setActive(id => value.some(folder => folder.id === id) ? id : connectedRows(value)[0]?.item.id ?? null);
+      const selectedFolder = value.some(folder => folder.id === activeRef.current) ? activeRef.current : connectedRows(value)[0]?.item.id ?? null;
+      setFolders(value); setError(""); setActive(selectedFolder);
+      // Show the cached tree first, then check the folder the user is viewing.
+      const key = JSON.stringify([scope, media]);
+      if (checkedScope.current !== key) { checkedScope.current = key; checkFolders(selectedFolder); }
     }).catch(reason => { if (current) setError(userErrorMessage(reason, "集合暂时无法读取，请重试。")); }).finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
-  }, [scope, media, revision]);
+  }, [scope, media, revision, checkFolders]);
   function finishSelection() { selectionVersion.current++; setSelected(new Set()); setMultiple(false); dragSelection.current = []; anchor.current = null; }
   useEffect(() => { finishSelection(); setMenu(null); setPreview(null); }, [filterKey]);
   useEffect(() => {
@@ -173,6 +181,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   }, [media, scope, busy]);
   function activate(asset: Asset) {
     if (busy || !entryOf(asset).available) return;
+    if (isAudioAsset(asset)) { useStore.getState().openDetail(asset.id); return; }
     const state = useStore.getState();
     if (projectId && state.activeProjectId !== projectId) return;
     if (projectId && (state.boardOpen || state.genEditing)) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
@@ -215,7 +224,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     {glass.definition}<LibraryMotion/>
     <div className="catalog-body">
       <aside className="catalog-sidebar" aria-label="集合目录">
-        <div className="catalog-sidebar-heading"><strong>集合</strong><button aria-label="新建集合" title="新建集合" onClick={() => setEditor({ parentId: null })}><Plus size={16}/></button></div>
+        <div className="catalog-sidebar-heading"><strong>集合</strong><button aria-label="新建集合" title="新建集合" onClick={() => setEditor({ parentId: null })}><Plus size={12}/></button></div>
         <OverlayScrollArea className="catalog-tree-scroll" viewportClassName="catalog-index" label="集合目录滚动条">
           <div role="tree" aria-label="集合层级">{visibleRows.map(({ item, depth }) => {
             const children = folders.some(folder => folder.parent_id === item.id);
@@ -226,7 +235,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
               onDrop={event => { const ids = getDragAssets(); setDrop(null); if (!ids?.length) return; event.preventDefault(); event.stopPropagation(); void run(() => folderConnections.references([...new Set(ids)], item.id), true); }}>
               {children && <button className="catalog-tree-toggle" tabIndex={-1} aria-label={`${collapsed.has(item.id) ? "展开" : "收起"}${item.name}`} onClick={event => { event.stopPropagation(); toggle(item.id); }}>{collapsed.has(item.id) ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</button>}
               <Folder className="catalog-tree-icon" size={14}/><span className="catalog-tree-name">{item.name}</span>{!item.available && <Unlink size={12} aria-label="连接不可用"/>}
-              <div className="catalog-tree-row-actions" onKeyDown={event => event.stopPropagation()}><button className="catalog-tree-add" aria-label={`在「${item.name}」中新建集合`} title="新建集合" disabled={!item.available} onClick={event => { event.stopPropagation(); setEditor({ parentId: item.id }); }}><Plus size={14}/></button>
+              <div className="catalog-tree-row-actions" onKeyDown={event => event.stopPropagation()}><button className="catalog-tree-add" aria-label={`在「${item.name}」中新建集合`} title="新建集合" disabled={!item.available} onClick={event => { event.stopPropagation(); setEditor({ parentId: item.id }); }}><Plus size={12}/></button>
                 <button aria-label={`「${item.name}」的更多操作`} title="更多操作" onClick={event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); setMenu({ folder: item, x: rect.right, y: rect.bottom }); }}><MoreHorizontal size={14}/></button></div>
             </div>;
           })}</div>
@@ -239,16 +248,16 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
       </aside>
       <div ref={pinch} className="catalog-gallery">
         <LibraryTacticalBackdrop/>
-        <div className="file-view-heading">{navigation}<div className="video-collection-controls"><VideoCollectionEntry projectId={projectId} onCloseLibrary={onClose} onCreateProject={onCreateProject} onAssetsChange={onAssetsChange}/><LibraryFloatingControls><LibraryMediaSwitch/><button className="library-filter-trigger" aria-label="刷新集合" onClick={refresh}><RefreshCw size={14} className={folders.some(folder => folder.scanning) ? "connected-refreshing" : undefined}/></button>{toolbarActions}</LibraryFloatingControls></div></div>
+        <div className="file-view-heading">{navigation}<div className="video-collection-controls">{media !== "audios" && <VideoCollectionEntry projectId={projectId} onCloseLibrary={onClose} onCreateProject={onCreateProject} onAssetsChange={onAssetsChange}/>}<LibraryFloatingControls><LibraryMediaSwitch/><button className="library-filter-trigger" aria-label="刷新集合" onClick={refresh}><RefreshCw size={14} className={folders.some(folder => folder.scanning) ? "connected-refreshing" : undefined}/></button>{toolbarActions}</LibraryFloatingControls></div></div>
         {error && <p className="catalog-error" role="alert">{error}<button onClick={() => setRevision(value => value + 1)}>重试</button></p>}
         {current && (!current.available || current.error) && <div className="connected-status"><Unlink size={14}/><span>{current.error ? userErrorMessage(current.error, "文件夹暂时无法读取，请重试。") : "文件夹暂不可用"}</span>{!current.available ? <button onClick={() => void run(() => relocate(current), true)}>重新定位</button> : <button onClick={refresh}>刷新</button>}</div>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none", scrollPaddingTop: 48 }}>
           {!loading && !folders.length && !error && <p className="catalog-hint catalog-empty">点击「建立连接」选择素材文件夹。</p>}
           {!loading && <VirtualCatalog key={`${pane?.id ?? "main"}:${filterKey}`} filter={filter} sections={sections} headings width={width} revision={revision} scroll={scroll} selected={selected} jump={jump} initialTop={savedPosition?.top} onActive={onActive}
-            readPage={readPage} itemKey={entryKey} emptySection={id => folders.find(folder => folder.id === id)?.scanning ? "正在检查文件夹…" : "暂无素材"}
+            readPage={readPage} itemKey={entryKey} emptySection={id => folders.find(folder => folder.id === id)?.scanning ? "正在检查文件夹…" : null}
             onAssetsChange={onAssetsChange} onSelect={select} onActivate={activate} onOpen={asset => useStore.getState().openDetail(asset.id)} onContextMenu={context}
             renderItem={(asset, style, ratio, location) => { const entry = entryOf(asset); return <div key={entry.id} data-connection-entry={entry.id} data-reference={entry.is_reference || undefined} className="connected-media" style={style}>
-              <FileMediaCard entry={{ path: asset.store_path ?? "", name: entry.name, directory: false, preview: asset.thumb_path, version: `${asset.id}:${asset.file_mtime}:${asset.thumb_path}` }} style={{ width: "100%", height: "100%" }} aspectRatio={ratio} selected={selected.has(entry.id)} revision={revision} labels={[]} assetId={asset.id} generated={!!asset.generation_session_id} duration={asset.duration}
+              <FileMediaCard entry={{ path: asset.store_path ?? "", name: entry.name, directory: false, preview: asset.thumb_path, version: entry.version ?? `${asset.id}:${asset.file_mtime}:${asset.thumb_path ?? revision}` }} expectedVersion={entry.version ?? undefined} style={{ width: "100%", height: "100%" }} aspectRatio={ratio} selected={selected.has(entry.id)} revision={revision} labels={[]} assetId={asset.id} generated={!!asset.generation_session_id} duration={asset.duration}
                 onSelect={(additive, range) => select(asset, additive, range, location)} onActivate={!multiple ? () => activate(asset) : undefined} onOpen={() => useStore.getState().openDetail(asset.id)} onContextMenu={(x, y) => context(asset, x, y)}
                 onDragStart={event => { const entries = selected.has(entry.id) ? dragSelection.current : [entry]; if (!entry.available || !entries.length || (selected.has(entry.id) && entries.length !== selected.size)) { event.preventDefault(); return; } const ids = assetsOf(entries).map(asset => asset.id); setDragAssets(ids, asset.name, event.currentTarget.querySelector("img")?.src); event.dataTransfer.effectAllowed = "copyLink"; event.dataTransfer.setData("text/plain", ids.join(",")); }} onDragEnd={() => setDragAssets(null)}/>
               {entry.is_reference && <span className="connected-reference" aria-label="素材分身"><Link2 size={13}/></span>}{!entry.available && <span className="connected-missing"><Unlink size={18}/>原文件失联</span>}
@@ -257,14 +266,14 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
         <ThumbnailSizeSlider scope="library"/>
         {!!selected.size && <div className="connected-selection"><span>已选 {selected.size} 项</span>
           <button disabled={busy} onClick={() => void run(async () => { setAssign(assetsOf(await resolve([...selected])).map(asset => asset.id)); })}>添加到集合</button>
-          <button disabled={busy} onClick={() => void run(async () => { await addMaterialAssets(assetsOf(await resolve([...selected])), projectId, onClose, onCreateProject); })}>添加到画板</button>
+          {media !== "audios" && <button disabled={busy} onClick={() => void run(async () => { await addMaterialAssets(assetsOf(await resolve([...selected])), projectId, onClose, onCreateProject); })}>添加到画板</button>}
           <button disabled={busy} onClick={() => void run(async () => { setOperation({ kind: "trash-entries", entries: await resolve([...selected]) }); })}>移到回收站</button><button onClick={finishSelection}>取消</button>
         </div>}
       </div>
     </div>
     {menu && <ContextMenu x={menu.x} y={menu.y} label={"folder" in menu ? "集合操作" : "素材操作"} onClose={() => setMenu(null)}>
       {"folder" in menu ? <>{menuButton("重命名集合", () => setEditor({ item: menu.folder, parentId: menu.folder.parent_id }), !menu.folder.available)}{menuButton("移动文件夹", () => setOperation({ kind: "move-folder", folder: menu.folder }), !menu.folder.available)}{menuButton("移到回收站", () => setOperation({ kind: "trash-folder", folder: menu.folder }), !menu.folder.available)}{!menu.folder.available && menuButton("重新定位", () => void run(() => relocate(menu.folder), true))}{!menu.folder.parent_id && menuButton("断开连接", () => setOperation({ kind: "disconnect", folder: menu.folder }))}</>
-        : <>{menu.entries.length === 1 && menuButton("查看详情", () => useStore.getState().openDetail(menu.entries[0].asset_id))}{menuButton("选择", () => { setSelected(new Set(menu.entries.map(entry => entry.id))); setMultiple(true); })}{menuButton("添加到集合", () => setAssign(assetsOf(menu.entries).map(asset => asset.id)))}{menuButton("添加到画板", () => void run(() => addMaterialAssets(assetsOf(menu.entries), projectId, onClose, onCreateProject)), menu.entries.some(entry => !entry.available))}{menuButton("移动到文件夹", () => setOperation({ kind: "move-entries", entries: menu.entries }))}{menu.entries.length === 1 && menuButton(menu.entries[0].is_reference ? "重命名分身" : "重命名原文件", () => setOperation({ kind: "rename-entry", entries: menu.entries }))}{menuButton(menu.entries.every(entry => entry.is_reference) ? "删除分身" : "移到回收站", () => setOperation({ kind: "trash-entries", entries: menu.entries }))}</>}
+        : <>{menu.entries.length === 1 && menuButton("查看详情", () => useStore.getState().openDetail(menu.entries[0].asset_id))}{menuButton("选择", () => { setSelected(new Set(menu.entries.map(entry => entry.id))); setMultiple(true); })}{menuButton("添加到集合", () => setAssign(assetsOf(menu.entries).map(asset => asset.id)))}{media !== "audios" && menuButton("添加到画板", () => void run(() => addMaterialAssets(assetsOf(menu.entries), projectId, onClose, onCreateProject)), menu.entries.some(entry => !entry.available))}{menuButton("移动到文件夹", () => setOperation({ kind: "move-entries", entries: menu.entries }))}{menu.entries.length === 1 && menuButton(menu.entries[0].is_reference ? "重命名分身" : "重命名原文件", () => setOperation({ kind: "rename-entry", entries: menu.entries }))}{menuButton(menu.entries.every(entry => entry.is_reference) ? "删除分身" : "移到回收站", () => setOperation({ kind: "trash-entries", entries: menu.entries }))}</>}
     </ContextMenu>}
     {editor && <CollectionEditorDialog collections={folders} {...editor} projectId={scope} onClose={() => setEditor(null)} onSaved={id => { pendingJump.current = id; setRevision(value => value + 1); }}/ >}
     {assign && <CollectionAssignDialog assetIds={assign} onClose={() => setAssign(null)} onSaved={() => { finishSelection(); setRevision(value => value + 1); }}/ >}
@@ -292,6 +301,8 @@ function ConnectionOperation({ operation, folders, onClose, onSaved }: { operati
   async function save() {
     if (lock.current) return; lock.current = true; setBusy(true); setError("");
     try {
+      if ("folder" in operation) stopAudioPreviewInFolder(operation.folder.path);
+      else operation.entries.filter(entry => !entry.is_reference).forEach(entry => stopAudioPreview(entry.asset_id));
       switch (operation.kind) {
         case "rename-entry": await folderConnections.renameEntry(operation.entries[0].id, name); break;
         case "move-folder": await folderConnections.moveFolder(operation.folder.id, target); break;

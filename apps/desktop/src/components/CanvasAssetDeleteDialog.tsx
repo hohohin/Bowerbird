@@ -9,6 +9,9 @@ import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
 import { VideoPoster } from "./VideoPoster";
 import { externalFiles } from "../lib/externalFiles";
+import { isAudioAsset } from "../lib/audioMedia";
+import { stopAudioPreview } from "../lib/audioPreview";
+import { Music2 } from "lucide-react";
 
 /** Freeze the canvas selection before loading previews; deletion never reads the library selection. */
 export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
@@ -56,7 +59,10 @@ export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
     for (const [index, asset] of assets.entries()) {
       try {
         if (target.localPaths) await externalFiles.delete(asset.id, target.localPaths[asset.id]);
-        else await api.deleteAssetWithMode(asset.id, "delete", target.projectId);
+        else {
+          if (asset.source !== "external") stopAudioPreview(asset.id);
+          await api.deleteAssetWithMode(asset.id, "delete", target.projectId);
+        }
       } catch (error) {
         remaining.push(asset);
         console.error("Asset deletion failed", error);
@@ -98,7 +104,7 @@ export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
       {assets && <ul aria-label="待删除素材" className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {assets.map(asset => <li key={asset.id} data-delete-asset-id={asset.id} className="min-w-0 rounded-lg border border-edge bg-panel2 p-2">
           <div className="flex aspect-square items-center justify-center overflow-hidden rounded bg-panel">
-            {isVideoPath(asset.store_path)
+            {isAudioAsset(asset) ? <Music2 size={28} aria-label="音频"/> : isVideoPath(asset.store_path)
               ? <VideoPoster path={asset.store_path} poster={asset.thumb_path} alt={asset.name} className="h-full w-full object-contain" />
               : asset.thumb_path || asset.store_path
                 ? <img src={convertFileSrc((asset.thumb_path || asset.store_path)!)} alt={asset.name} loading="lazy" className="h-full w-full object-contain" />

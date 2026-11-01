@@ -2,8 +2,9 @@ import { create } from "zustand";
 import type { CatalogKind } from "./materialCatalog";
 
 export type LibrarySource = "global" | "project";
-export type LibraryMedia = "images" | "videos";
-export const catalogViews = (media: LibraryMedia): CatalogKind[] => media === "images" ? ["all", "tags", "collections"] : ["tags", "collections"];
+export type LibraryMedia = "images" | "videos" | "audios";
+export const catalogViews = (media: LibraryMedia): CatalogKind[] => media !== "videos" ? ["all", "tags", "collections"] : ["tags", "collections"];
+const viewKey = (media: LibraryMedia) => media === "audios" ? "audioViews" : media === "videos" ? "videoViews" : "views";
 export const catalogViewName = (kind: CatalogKind, media: LibraryMedia) => kind === "all" ? "全部" : kind === "collections" ? "集合分类" : media === "videos" ? "视频平铺" : "标签分类";
 // "global" here is the file browser's aggregate directory, not a source tab.
 type FileMode = CatalogKind | "files" | "global";
@@ -15,6 +16,7 @@ export const createLocalFileMode = () => create<{
   generatedFilter: "source:generated" | "source:!generated" | null;
   setGeneratedFilter: (filter: "source:generated" | "source:!generated" | null) => void;
   videoViews: Record<LibrarySource, CatalogKind>;
+  audioViews: Record<LibrarySource, CatalogKind>;
   setMedia: (media: LibraryMedia) => void;
   globalRequest: number;
   mode: FileMode;
@@ -33,25 +35,26 @@ export const createLocalFileMode = () => create<{
 }>((set, get) => ({
   open: false, query: "", source: "global", views: { global: "tags", project: "tags" },
   media: "images", videoViews: { global: "tags", project: "tags" },
+  audioViews: { global: "all", project: "all" },
   generatedFilter: null,
   setGeneratedFilter: generatedFilter => set({ generatedFilter }),
   navigationHost: null, globalRequest: 0, mode: "tags", viewTransition: null,
   setMode: mode => set({ mode }),
-  openSource: source => set(state => ({ open: true, source, mode: (state.media === "images" ? state.views : state.videoViews)[source], query: "", viewTransition: null })),
-  setMedia: media => set(state => ({ media, mode: (media === "images" ? state.views : state.videoViews)[state.source], viewTransition: null })),
+  openSource: source => set(state => ({ open: true, source, mode: state[viewKey(state.media)][source], query: "", viewTransition: null })),
+  setMedia: media => set(state => ({ media, mode: state[viewKey(media)][state.source], generatedFilter: media === "audios" ? null : state.generatedFilter, viewTransition: null })),
   setCatalogView: view => set(state => {
     if (state.mode === view || !catalogViews(state.media).includes(view)) return state;
-    const key = state.media === "images" ? "views" : "videoViews";
+    const key = viewKey(state.media);
     return { open: true, mode: view, [key]: { ...state[key], [state.source]: view },
       viewTransition: { source: state.source, kind: view, startedAt: Date.now() } };
   }),
   toggleCatalog: () => {
     const state = get();
     const views = catalogViews(state.media);
-    const current = (state.media === "images" ? state.views : state.videoViews)[state.source];
+    const current = state[viewKey(state.media)][state.source];
     state.setCatalogView(views[(views.indexOf(current) + 1) % views.length]);
   },
-  closeBrowser: () => set(state => ({ mode: (state.media === "images" ? state.views : state.videoViews)[state.source], query: "" })),
+  closeBrowser: () => set(state => ({ mode: state[viewKey(state.media)][state.source], query: "" })),
   openGlobal: () => get().openSource("global"),
   openBrowser: () => { get().setCatalogView("collections"); set({ open: true }); },
   setNavigationHost: navigationHost => set({ navigationHost }),

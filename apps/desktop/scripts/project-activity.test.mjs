@@ -103,6 +103,7 @@ test("task center keeps only running or failed generation jobs", () => {
     { id: "running", projectId: "p1", threadId: "t1", running: true, turns: [] },
     { id: "failed", projectId: null, threadId: null, running: false, turns: [{ error: "boom" }] },
     { id: "succeeded", projectId: "p1", threadId: "t1", running: false, turns: [{ images: ["out.png"] }] },
+    { id: "retry-succeeded", projectId: "p1", threadId: "t1", running: false, turns: [{ error: "historical failure" }, { images: ["out.png"] }] },
     { id: "cancelled", projectId: null, threadId: null, running: false, turns: [] },
   ];
 

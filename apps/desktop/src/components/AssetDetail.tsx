@@ -1,5 +1,9 @@
 import { TacticalSelect } from "./TacticalSelect";
 import { VideoPlayer } from "./VideoPlayer";
+import { AudioWaveform } from "./AudioWaveform";
+import { isAudioAsset } from "../lib/audioMedia";
+import { videoDurationLabel } from "./VideoHoverPreview";
+import "./AudioFileMediaCard.css";
 import { saveVideoFrame } from "../lib/saveVideoFrame";
 import { saveVideoFrameToCanvas } from "../lib/videoFrameCanvas";
 import { videoSourceKey } from "../lib/videoSourceKey";
@@ -175,7 +179,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
     api.getAssetsByIds([id]).then(([asset]) => {
       if (alive) setResolvedAsset(asset ?? null);
     }).catch(error => {
-      if (alive) notifyError(error, "无法读取图片详情");
+      if (alive) notifyError(error, "无法读取素材详情");
     });
     return () => { alive = false; };
   }, [id, listedAsset]);
@@ -587,7 +591,10 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
     });
   }
 
-  const imagePath = useCompatibleImagePath(asset?.store_path);
+  const audioAsset = !!asset && isAudioAsset(asset);
+  const [audioDuration, setAudioDuration] = useState<number | null | undefined>(asset?.duration);
+  useEffect(() => setAudioDuration(asset?.duration), [asset?.id, asset?.duration, asset?.file_mtime]);
+  const imagePath = useCompatibleImagePath(audioAsset ? null : asset?.store_path);
   const src = imagePath ? convertFileSrc(imagePath) : undefined;
   const zoom = useImageZoom(src);
 
@@ -721,6 +728,8 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
       <div className="flex flex-1 overflow-hidden">
         <div className="asset-detail-stage flex flex-1 flex-col overflow-hidden bg-canvas">
           <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
+            {audioAsset && asset.store_path && <AudioWaveform assetId={asset.id} path={asset.store_path} name={asset.name}
+              version={`${asset.file_mtime ?? 0}:${asset.size ?? 0}`} duration={audioDuration} onDuration={setAudioDuration} className="audio-detail-waveform"/>}
             {src &&
               (isVideo(asset.ext) ? (
                 <VideoPlayer key={videoSourceKey(asset)} path={asset.store_path!} sourceKey={videoSourceKey(asset)}
@@ -794,7 +803,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
                 <Info size={13} />
                 信息
               </button>
-              <button
+              {!audioAsset && <button
                 type="button"
                 role="tab"
                 aria-selected={detailTab === "create"}
@@ -803,7 +812,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
               >
                 <Sparkles size={13} />
                 再创作
-              </button>
+              </button>}
             </div>
           </div>
 
@@ -919,14 +928,14 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             <div className="text-xs font-medium uppercase tracking-wide text-muted">
               信息
             </div>
-            <Meta
+            {audioAsset ? <Meta label="时长" value={videoDurationLabel(audioDuration) ?? "-"}/> : <Meta
               label="尺寸"
               value={
                 asset.width && asset.height
                   ? `${asset.width} × ${asset.height}`
                   : "-"
               }
-            />
+            />}
             <Meta label="大小" value={fmtSize(asset.size)} />
             <Meta label="导入时间" value={fmtTime(asset.created_at)} />
             <Meta label="文件修改" value={fmtTime(asset.file_mtime)} />
@@ -945,7 +954,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             </>
           )}
 
-          {detailTab === "create" && (
+          {!audioAsset && detailTab === "create" && (
             <>
 
           {/* 生成来源：只读还原首次生成时的原始创作板输入，而不是铺开发 provider 的 prompt。 */}
@@ -1009,7 +1018,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
           {detailTab === "info" && (
             <>
           {/* 反推：点击后选引擎（Bowerbird Cloud / 本机 codex）；全部引擎不可用时置灰。 */}
-          <div className="asset-detail-card space-y-2">
+          {!audioAsset && <div className="asset-detail-card space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-medium uppercase tracking-wide text-muted">
                 反推
@@ -1283,13 +1292,14 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             )}
           </div>
 
+          }
           {/* 分类标签支持本地识别与人工纠正。 */}
           <div className="asset-detail-card space-y-2">
             <div className="text-xs font-medium uppercase tracking-wide text-muted">类别</div>
             <div className="flex flex-wrap items-center gap-1.5">
               {tags.length === 0 && !addingTag && (
                 <span className="text-xs text-muted">
-                  暂无标签，可手动添加或在侧栏开启自动分类
+                  {audioAsset ? "暂无标签，可手动添加" : "暂无标签，可手动添加或在侧栏开启自动分类"}
                 </span>
               )}
               {tags.map((t) => (

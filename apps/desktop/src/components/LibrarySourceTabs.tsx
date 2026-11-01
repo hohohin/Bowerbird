@@ -9,7 +9,7 @@ const duration = 1000;
 export function LibrarySourceTabs({ value, onChange, project = false }: { value: string; onChange: (value: string) => void; project?: boolean }) {
   const useLocalFileMode = useLibraryModeStore();
   const media = useLocalFileMode(s => s.media);
-  const view = useLocalFileMode(s => (s.media === "images" ? s.views : s.videoViews).global);
+  const view = useLocalFileMode(s => (s.media === "audios" ? s.audioViews : s.media === "images" ? s.views : s.videoViews).global);
   const transition = useLocalFileMode(s => s.viewTransition);
   const [expired, setExpired] = useState<number | null>(null);
   useEffect(() => {
@@ -19,7 +19,7 @@ export function LibrarySourceTabs({ value, onChange, project = false }: { value:
   }, [transition]);
   const feedback = transition?.source === value && transition.startedAt !== expired && Date.now() - transition.startedAt < duration
     ? { key: transition.startedAt, label: catalogViewName(transition.kind, media) } : undefined;
-  const hint = media === "images" ? "点击当前标签或 Tab 切换全部／标签／集合" : "点击当前标签或 Tab 切换平铺／集合";
+  const hint = media !== "videos" ? "点击当前标签或 Tab 切换全部／标签／集合" : "点击当前标签或 Tab 切换平铺／集合";
   const cycleView = () => useLocalFileMode.getState().toggleCatalog();
   if (!project) return <LibraryViewSwitch value={view} label="素材视图切换条" hint={hint}
     onReselect={cycleView}

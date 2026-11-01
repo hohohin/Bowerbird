@@ -94,6 +94,9 @@ pub struct Analysis {
 /// ReadonlyPrompt 用，与首轮对齐）。旧 meta 无此语义（早期只记首版），缺省为空。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenerationHistoryTurn {
+    /// 原始失败诊断，仅由展示边界转换；成功产物优先于同轮的迟到错误。
+    #[serde(default)]
+    pub error: Option<String>,
     #[serde(default)]
     pub submit_id: Option<String>,
     #[serde(default)]
@@ -118,6 +121,10 @@ pub struct GenerationHistoryTurn {
     pub images: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<String>,
+    /// None retains legacy successful-history semantics; false means the
+    /// failure occurred before continuation references were fully resolved.
+    #[serde(default)]
+    pub references_resolved: Option<bool>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ref_assets: Vec<PromptedAsset>,
 }
@@ -1602,7 +1609,7 @@ impl Database {
                 visual_profile: None,
             });
         };
-        Self::history_for_session(&conn, &session_id, project_id, annotations_dir)
+        Self::history_for_session(&conn, Some(&session_id), None, project_id, annotations_dir)
     }
 
     /// 首轮任务 payload 可能尚无 session_id；从已入库产物找回实际簿记会话。
@@ -1622,7 +1629,8 @@ impl Database {
             [job_id],
             |row| row.get(0),
         ).optional()?;
-        session_id.map(|sid| Self::history_for_session(&conn, &sid, None, annotations_dir)).transpose()
+        let history = Self::history_for_session(&conn, session_id.as_deref(), Some(job_id), None, annotations_dir)?;
+        Ok((session_id.is_some() || !history.turns.is_empty()).then_some(history))
     }
 
     /// 按 session_id 直取完整生成时间线（会话面板历史恢复用，全局不过滤项目）。
@@ -1633,7 +1641,7 @@ impl Database {
         annotations_dir: Option<&Path>,
     ) -> AppResult<GenerationHistory> {
         let conn = self.conn.lock().unwrap();
-        Self::history_for_session(&conn, session_id, None, annotations_dir)
+        Self::history_for_session(&conn, Some(session_id), None, None, annotations_dir)
     }
 
     /// 从 generation_meta 重建某 session 的各轮 prompt + 产出图（「回看生成对话」与
@@ -1642,12 +1650,13 @@ impl Database {
     /// `first_references` 取首版 generation_meta 的参考图，供前端「新会话重新生成」复用。
     fn history_for_session(
         conn: &Connection,
-        session_id: &str,
+        session_id: Option<&str>,
+        job_id: Option<&str>,
         project_id: Option<&str>,
         annotations_dir: Option<&Path>,
     ) -> AppResult<GenerationHistory> {
         let mut stmt = conn.prepare(
-            "SELECT json_extract(an.payload, '$.prompt'), json_extract(an.payload, '$.prompt_raw'), a.store_path, an.payload \
+            "SELECT json_extract(an.payload, '$.prompt'), json_extract(an.payload, '$.prompt_raw'), a.store_path, an.payload, an.created_at \
              FROM analyses an JOIN assets a ON a.id = an.asset_id \
              WHERE an.kind = 'generation_meta' \
                AND json_extract(an.payload, '$.session_id') = ?1 \
@@ -1656,6 +1665,7 @@ impl Database {
              ORDER BY an.created_at ASC, an.id ASC",
         )?;
         let mut turns: Vec<GenerationHistoryTurn> = Vec::new();
+        let mut turn_times = Vec::new();
         let mut first_references: Vec<String> = Vec::new();
         let mut first_dimension_sources: Vec<String> = Vec::new();
         let mut first_provider: Option<String> = None;
@@ -1667,10 +1677,11 @@ impl Database {
                 r.get::<_, Option<String>>(1)?, // prompt_raw
                 r.get::<_, Option<String>>(2)?, // store_path
                 r.get::<_, String>(3)?,         // payload
+                r.get::<_, i64>(4)?,            // created_at (seconds)
             ))
         })?;
         for row in rows {
-            let (prompt, prompt_raw, store_path, payload) = row?;
+            let (prompt, prompt_raw, store_path, payload, created_at) = row?;
             let payload_value = serde_json::from_str::<serde_json::Value>(&payload).ok();
             // 首版 generation_meta 的参考图 / 借用维度源图与 provider（供「新会话重新生成」
             // 复用、复用回绑车牌、续轮坞初值）。
@@ -1739,6 +1750,7 @@ impl Database {
                 turns.last_mut().unwrap().images.push(path);
             } else {
                 turns.push(GenerationHistoryTurn {
+                    error: None,
                     submit_id: row_submit_id,
                     project_id: payload_value.as_ref().and_then(|v| v.get("project_id")).and_then(|v| v.as_str()).map(String::from),
                     provider: payload_value.as_ref().and_then(|v| v.get("provider")).and_then(|v| v.as_str()).map(String::from),
@@ -1752,10 +1764,13 @@ impl Database {
                     prompt_raw,
                     images: vec![path],
                     references: row_refs,
+                    references_resolved: None,
                     ref_assets: Vec::new(),
                 });
+                turn_times.push((created_at.saturating_mul(1000), 0));
             }
         }
+        Self::merge_failed_generation_attempts(conn, session_id, job_id, project_id, &mut turns, &mut turn_times)?;
         // 首版参考图：按 store_path 反查完整 asset（复用还原参考图用；图已删则该项缺失、被跳过）。
         // 反查未命中的路径若位于标注缓存目录，从临时文件 + sidecar 合成「不入库」标注图，
         // 复用提示词时参考图与「标注」维度都不丢。按 first_references 原顺序输出。
@@ -1809,7 +1824,7 @@ impl Database {
                 .collect()
         };
         Ok(GenerationHistory {
-            session_id: Some(session_id.to_string()),
+            session_id: session_id.map(String::from),
             media: turns.first().map(|turn| turn.media.clone()).unwrap_or_else(|| "image".into()),
             video_options: turns.first().and_then(|turn| turn.video_options.clone()),
             ratio: turns.first().and_then(|turn| turn.ratio.clone()),
@@ -1819,6 +1834,78 @@ impl Database {
             provider: first_provider,
             visual_profile: first_visual_profile,
         })
+    }
+
+    /// Failure has no generation_meta asset. Restore only explicitly failed
+    /// diagnostics, never infer failure from an interrupted/unknown request.
+    fn merge_failed_generation_attempts(
+        conn: &Connection,
+        session_id: Option<&str>,
+        job_id: Option<&str>,
+        project_id: Option<&str>,
+        turns: &mut Vec<GenerationHistoryTurn>,
+        times: &mut Vec<(i64, i64)>,
+    ) -> AppResult<()> {
+        let mut stmt = conn.prepare(
+            "SELECT d.turn_key,d.request_json,d.resolved_references_json,d.status,d.error,d.created_at,d.rowid,d.phase \
+             FROM generation_diagnostics d WHERE d.turn_key IS NOT NULL AND \
+               (d.job_id=?1 OR (?2 IS NOT NULL AND (json_extract(d.request_json,'$.sessionId')=?2 OR d.job_id IN (\
+                 SELECT json_extract(an.payload,'$.job_id') FROM analyses an WHERE an.kind='generation_meta' \
+                 AND json_extract(an.payload,'$.session_id')=?2)))) \
+               AND (?3 IS NULL OR json_extract(d.request_json,'$.projectId')=?3) \
+             ORDER BY d.created_at,d.rowid",
+        )?;
+        let rows = stmt.query_map(rusqlite::params![job_id, session_id, project_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, i64>(5)?, row.get::<_, i64>(6)?, row.get::<_, String>(7)?))
+        })?;
+        let mut seen = std::collections::HashSet::new();
+        for row in rows {
+            let (turn_key, request, resolved_refs, status, error, created, ordinal, phase) = row?;
+            if turn_key.trim().is_empty() { continue; }
+            if let Some(index) = turns.iter().position(|turn| turn.turn_key.as_deref() == Some(&turn_key)) {
+                if seen.insert(turn_key) { times[index] = (created, ordinal); }
+                continue;
+            }
+            if status != "failed" { continue; }
+            let Ok(request) = serde_json::from_str::<serde_json::Value>(&request) else { continue; };
+            let Some(prompt) = request["prompt"].as_str() else { continue; };
+            let resolved = resolved_refs.as_deref().and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok());
+            let references_resolved = request["exactReferences"].as_bool() == Some(true)
+                || request["sessionId"].as_str().is_none_or(|session| session.trim().is_empty())
+                || (resolved.as_ref().is_some_and(|value| value.is_array())
+                    && matches!(phase.as_str(), "preflight" | "entitlement" | "task_setup" | "provider" | "ingestion"));
+            let references: Vec<String> = resolved.as_ref().and_then(|value| value.as_array()).map(|items| {
+                items.iter().filter_map(|item| item["path"].as_str().map(String::from)).collect()
+            }).unwrap_or_else(|| request["referenceImages"].as_array().into_iter().flatten()
+                .filter_map(|item| item.as_str().map(String::from)).collect());
+            let reference_node_ids = request["referenceNodeIds"].as_array().filter(|ids| !ids.is_empty()).map(|ids| {
+                references.iter().map(|path| request["referenceImages"].as_array()
+                    .and_then(|paths| paths.iter().position(|value| value.as_str() == Some(path)))
+                    .and_then(|index| ids.get(index)).and_then(|id| id.as_str()).map(String::from)).collect()
+            }).unwrap_or_default();
+            turns.push(GenerationHistoryTurn {
+                error: Some(error.unwrap_or_else(|| "生成失败".into())),
+                submit_id: None,
+                project_id: request["projectId"].as_str().map(String::from),
+                provider: request["provider"].as_str().map(String::from),
+                reference_node_ids,
+                prompt: prompt.into(),
+                media: request["media"].as_str().unwrap_or("image").into(),
+                video_options: request.get("videoOptions").filter(|value| !value.is_null()).cloned(),
+                ratio: request["ratio"].as_str().map(String::from),
+                turn_key: Some(turn_key.clone()),
+                applied_prompt: None,
+                prompt_raw: request["promptRaw"].as_str().map(String::from),
+                images: Vec::new(), references, references_resolved: Some(references_resolved), ref_assets: Vec::new(),
+            });
+            seen.insert(turn_key);
+            times.push((created, ordinal));
+        }
+        let mut ordered = times.drain(..).zip(turns.drain(..)).collect::<Vec<_>>();
+        ordered.sort_by_key(|(time, _)| *time);
+        for (time, turn) in ordered { times.push(time); turns.push(turn); }
+        Ok(())
     }
 
     /// 按 store_path 反查完整 asset → PromptedAsset 映射（generation_meta 参考图共用）：
@@ -1886,7 +1973,7 @@ impl Database {
         let Ok(conn) = self.conn.lock() else {
             return Vec::new();
         };
-        Self::history_for_session(&conn, session_id, None, None)
+        Self::history_for_session(&conn, Some(session_id), None, None, None)
             .map(|h| {
                 h.turns
                     .into_iter()
@@ -2935,6 +3022,105 @@ mod tests {
         );
         db.delete_analysis(&an_id).unwrap();
         assert_eq!(db.list_analyses_by_asset(&aid).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn generation_history_preserves_unresolved_continuation_reference_semantics() {
+        let db = db();
+        for (name, phase, exact, session, expected) in [
+            ("ipc", None, false, Some("old-session"), false),
+            ("validation", Some("validation"), false, Some("old-session"), false),
+            ("reference-resolution", Some("reference_resolution"), false, Some("old-session"), false),
+            ("preflight", Some("preflight"), false, Some("old-session"), true),
+            ("exact", Some("validation"), true, Some("old-session"), true),
+            ("first", None, false, None, true),
+        ] {
+            let attempt = db.begin_generation_diagnostic(&serde_json::json!({
+                "jobId":name,"turnKey":name,"prompt":"test","sessionId":session,"exactReferences":exact,
+                "referenceImages":["/picked.png"]
+            })).unwrap();
+            if let Some(phase) = phase {
+                db.generation_diagnostic_phase(&attempt, name, phase, Some(&["/picked.png".into()])).unwrap();
+            }
+            db.finish_generation_diagnostic(&attempt, name, Some("failed before provider")).unwrap();
+            let history = db.generation_history_by_job(name, None).unwrap().unwrap();
+            assert_eq!(history.turns[0].references_resolved, Some(expected), "{name}");
+            assert_eq!(history.turns[0].references, vec!["/picked.png"]);
+        }
+    }
+
+    #[test]
+    fn generation_history_failed_references_keep_resolved_order_and_node_alignment() {
+        let db = db();
+        let attempt = db.begin_generation_diagnostic(&serde_json::json!({
+            "jobId":"failed-with-merged-refs","turnKey":"failed-turn","prompt":"change background",
+            "referenceImages":["/picked.png"],"referenceNodeIds":["picked-node"]
+        })).unwrap();
+        db.generation_diagnostic_phase(&attempt, "failed-with-merged-refs", "provider", Some(&["/base.png".into(), "/picked.png".into()])).unwrap();
+        db.finish_generation_diagnostic(&attempt, "failed-with-merged-refs", Some("failed")).unwrap();
+        let history = db.generation_history_by_job("failed-with-merged-refs", None).unwrap().unwrap();
+        assert_eq!(history.turns[0].references, vec!["/base.png", "/picked.png"]);
+        assert_eq!(history.turns[0].reference_node_ids, vec![None, Some("picked-node".into())]);
+    }
+
+    #[test]
+    fn generation_history_restores_failed_retry_turns_after_reopen() {
+        let path = std::env::temp_dir().join(format!("bowerbird-retry-history-{}.db", ulid::Ulid::new()));
+        let db = Database::open(&path).unwrap();
+        db.migrate().unwrap();
+        let attempt = |job: &str, turn: &str, session: Option<&str>, order: i64, error: Option<&str>| {
+            let id = db.begin_generation_diagnostic(&serde_json::json!({
+                "jobId":job,"turnKey":turn,"sessionId":session,"prompt":"same prompt",
+                "promptRaw":"original prompt","provider":"codex-cli","projectId":"project-retry",
+                "referenceImages":["/ref/base.png"],"referenceNodeIds":["ref-node"],"ratio":"16:9"
+            })).unwrap();
+            db.finish_generation_diagnostic(&id, job, error).unwrap();
+            db.conn.lock().unwrap().execute("UPDATE generation_diagnostics SET created_at=?2 WHERE attempt_id=?1", rusqlite::params![id, order * 1000]).unwrap();
+        };
+        attempt("same-job", "failed-first", None, 1, Some("first failure"));
+        db.begin_generation_diagnostic(&serde_json::json!({"jobId":"same-job","turnKey":"unknown","prompt":"interrupted"})).unwrap();
+        attempt("other-job", "other-failure", None, 2, Some("other failure"));
+        let before = db.generation_history_by_job("same-job", None).unwrap().unwrap();
+        assert!(before.session_id.is_none());
+        assert_eq!(before.turns.len(), 1);
+        assert_eq!(before.turns[0].error.as_deref(), Some("first failure"));
+
+        for (turn, asset, order) in [("success-retry", "first-image", 3), ("success-again", "second-image", 5)] {
+            attempt("same-job", turn, (order > 3).then_some("retry-session"), order, None);
+            db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,store_path,generation_session_id) VALUES(?1,?1,?2,'retry-session')", rusqlite::params![asset, format!("/result/{asset}.png")]).unwrap();
+            db.insert_analysis(&Analysis {
+                id: format!("meta-{asset}"), asset_id: asset.into(), kind: "generation_meta".into(),
+                payload: serde_json::json!({"job_id":"same-job","turn_key":turn,"prompt":"same prompt","session_id":"retry-session","provider":"codex-cli"}).to_string(),
+                provider: Some("codex-cli".into()), created_at: Some(order),
+            }).unwrap();
+        }
+        attempt("same-job", "failed-continuation", Some("retry-session"), 4, Some("continuation failure"));
+        // A later duplicate diagnostic must neither replace success nor split/reorder its turn.
+        attempt("same-job", "success-retry", Some("retry-session"), 6, Some("late transport failure"));
+        drop(db);
+        let reopened = Database::open(&path).unwrap();
+        for history in [
+            reopened.generation_history_by_job("same-job", None).unwrap().unwrap(),
+            reopened.generation_history_by_session("retry-session", None).unwrap(),
+            reopened.generation_history("first-image", None, None).unwrap(),
+        ] {
+            assert_eq!(history.session_id.as_deref(), Some("retry-session"));
+            assert_eq!(history.turns.iter().map(|turn| turn.turn_key.as_deref().unwrap()).collect::<Vec<_>>(),
+                vec!["failed-first", "success-retry", "failed-continuation", "success-again"]);
+            assert_eq!(history.turns[0].error.as_deref(), Some("first failure"));
+            assert!(history.turns[1].error.is_none());
+            assert_eq!(history.turns[2].error.as_deref(), Some("continuation failure"));
+            assert!(history.turns[3].error.is_none());
+            assert_eq!(history.turns[0].references, vec!["/ref/base.png"]);
+            assert_eq!(history.turns[0].reference_node_ids, vec![Some("ref-node".into())]);
+            assert_eq!(history.turns[0].prompt_raw.as_deref(), Some("original prompt"));
+            assert_eq!(history.turns[1].images, vec!["/result/first-image.png"]);
+        }
+        assert!(crate::core::task_queue::Task::list_running(&reopened).unwrap().is_empty());
+        drop(reopened);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
     }
 
     #[test]

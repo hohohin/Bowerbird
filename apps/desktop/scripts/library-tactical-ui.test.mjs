@@ -217,41 +217,12 @@ try {
   assert.equal(await firstTitle.getAttribute('data-library-count'), '16 项', 'clearing color restores the actual total');
 
   await card.hover();
-  const motion = await card.evaluate(element => {
-    const animations = element.getAnimations({ subtree: true });
-    const clockwise = animations.find(item => item.animationName === "library-tactical-card-clockwise");
-    const flash = animations.find(item => item.animationName === "library-tactical-card-contact");
-    if (!clockwise || !flash) return null;
-    const running = clockwise.playState === "running" && flash.playState === "running";
-    clockwise.pause(); flash.pause(); flash.currentTime = 0;
-    clockwise.currentTime = 0; const start = getComputedStyle(element, "::after").backgroundPosition;
-    clockwise.currentTime = 40; const appeared = getComputedStyle(element, "::after").backgroundPosition;
-    clockwise.currentTime = 200; const middle = getComputedStyle(element, "::after").backgroundPosition;
-    clockwise.currentTime = 400; const end = getComputedStyle(element, "::after").backgroundPosition;
-    clockwise.currentTime = 900; const held = getComputedStyle(element, "::after").backgroundPosition;
-    clockwise.finish();
-    const opacity = [350, 410, 450, 490, 530].map(time => { flash.currentTime = time; return Number(getComputedStyle(element, "::after").opacity); });
-    flash.finish();
-    const marker = getComputedStyle(element, "::after"), preview = element.querySelector(".folder-media-preview");
-    return { running, start, appeared, middle, end, held, opacity, duration: clockwise.effect.getTiming().duration, flash: flash.effect.getTiming(), size: marker.backgroundSize,
-      inset: marker.inset, pointer: marker.pointerEvents, overflow: getComputedStyle(element).overflow, previewOverflow: getComputedStyle(preview).overflow,
-      imageCorners: preview.offsetLeft === 0 && preview.offsetTop === 0 && preview.offsetWidth === element.clientWidth && preview.offsetHeight === element.clientHeight };
-  });
-  assert.ok(motion, "hover starts both position and delayed flicker animations");
-  assert.ok(motion.running, "visible unfocused page runs clockwise corner motion and delayed flashes");
-  assert.equal(motion.duration, 400); assert.equal(motion.flash.duration, 160); assert.equal(motion.flash.delay, 400);
-  assert.equal(motion.start, "0% 0%, 100% 0%, 100% 100%, 0% 100%");
-  assert.equal(motion.appeared, motion.start, "markers first appear at all four corners before moving");
-  assert.equal(motion.end, "100% 0%, 100% 100%, 0% 100%, 0% 0%");
-  assert.equal(motion.held, motion.end, "markers remain at their next clockwise vertices after 400ms");
-  const midpoints = motion.middle.split(",").map(point => point.trim().split(/\s+/).map(parseFloat));
-  assert.ok(midpoints[0][0] > 0 && midpoints[0][0] < 100 && midpoints[0][1] === 0, "top-left marker travels along the top edge");
-  assert.ok(midpoints[1][0] === 100 && midpoints[1][1] > 0 && midpoints[1][1] < 100, "top-right marker travels along the right edge");
-  assert.ok(midpoints[2][0] > 0 && midpoints[2][0] < 100 && midpoints[2][1] === 100, "bottom-right marker travels along the bottom edge");
-  assert.ok(midpoints[3][0] === 0 && midpoints[3][1] > 0 && midpoints[3][1] < 100, "bottom-left marker travels along the left edge");
-  assert.ok(motion.opacity[0] >= .8); assert.deepEqual(motion.opacity.slice(1), [0, 1, 0, 1], "two full dark/bright pulses occur only after arrival");
-  assert.equal(motion.size, "4px 4px, 4px 4px, 4px 4px, 4px 4px");
-  assert.equal(motion.inset, "-2px"); assert.equal(motion.pointer, "none"); assert.equal(motion.overflow, "visible"); assert.equal(motion.previewOverflow, "hidden"); assert.ok(motion.imageCorners, "4px markers centered at image vertices, not inside the image");
+  const mark = card.locator('.library-hover-mark');
+  await mark.waitFor();
+  assert.equal(await mark.locator('path').count(), 2);
+  assert.ok(await mark.evaluate(el => Math.abs(parseFloat(getComputedStyle(el, '::before').width)-4.8)<.01));
+  assert.equal(await mark.evaluate(el => getComputedStyle(el).pointerEvents), 'none');
+  assert.equal(await card.evaluate(el => getComputedStyle(el, '::after').content), 'none');
   await page.screenshot({ path: `${output}/hover.png` });
   await card.click({ modifiers: ["Control"] }); await page.mouse.move(0, 0);
   assert.equal(await card.getAttribute("aria-pressed"), "true");
@@ -275,7 +246,7 @@ try {
   await page.getByRole("button", { name: "视频", exact: true }).click();
   await page.locator('[data-asset-id="video-0"]').waitFor();
   await card.hover();
-  assert.equal(await card.evaluate(element => getComputedStyle(element, "::after").inset), "-2px", "video card uses the same markers");
+  assert.ok(await card.locator(".library-hover-mark").evaluate(element => Math.abs(parseFloat(getComputedStyle(element, "::before").width)-4.8)<.01), "video card uses the same markers");
   await page.getByRole("button", { name: "图片", exact: true }).click();
   await page.locator('[data-asset-id="tactical-0"]').waitFor();
 
@@ -307,5 +278,5 @@ try {
   await page.emulateMedia({ forcedColors: "active" });
   assert.equal(await page.locator(".library-tactical-backdrop").first().evaluate(element => getComputedStyle(element).display), "none");
   assert.deepEqual(errors, []);
-  console.log("PASS production tactical library: unchanged 1500/900/390 shell/gallery and CSS scope; unclipped import menus; neutral header groups and low-contrast project entry; real filtered tag counts and safe sidebar marks; isolated tab flashes; visible-unfocused control/point flashes and 400ms clockwise motion + 160ms two flashes; media selection/video; keyboard, hidden/offscreen, reduced-motion/transparency and forced colors.");
+  console.log("PASS production tactical library: unchanged 1500/900/390 shell/gallery and CSS scope; unclipped import menus; neutral header groups and low-contrast project entry; real filtered tag counts and safe sidebar marks; isolated tab flashes; visible-unfocused control/point flashes and 420ms diagonal motion + 270ms delayed flashes; media selection/video; keyboard, hidden/offscreen, reduced-motion/transparency and forced colors.");
 } finally { await browser.close(); await server.close(); }

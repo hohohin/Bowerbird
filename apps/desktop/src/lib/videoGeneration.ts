@@ -1,4 +1,5 @@
 import type { Asset } from "./types";
+import { isAudioPath } from "./audioMedia.ts";
 import type { ComfyVideoOptions } from "./comfyVideo";
 
 export type GenerationMedia = "image" | "video";
@@ -53,8 +54,9 @@ export function isVideoPath(path?: string | null): boolean {
 }
 /** Match the submitted original file, never its thumbnail or source video's metadata. */
 export function imageInputError(references: readonly Pick<Asset, "name" | "store_path">[]): string | null {
-  const index = references.findIndex(asset => isVideoPath(asset.store_path));
+  const index = references.findIndex(asset => isVideoPath(asset.store_path) || isAudioPath(asset.store_path));
   if (index < 0) return null;
+  if (isAudioPath(references[index].store_path)) return `第 ${index + 1} 个参考「${references[index].name}」是音频，不能用于图片生成。请替换为图片。`;
   return `第 ${index + 1} 个参考「${references[index].name}」是视频，不能用于图片生成。请替换为图片，或先从视频中截取所需画面再引用。`;
 }
 export function videoSupportsRatio(options: VideoOptions): boolean {

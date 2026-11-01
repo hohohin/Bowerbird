@@ -1335,20 +1335,36 @@ pub struct GenJobSummary {
     pub reference_node_ids: Vec<Option<String>>,
     pub created_at: i64,
     pub running: bool,
+    pub turns: Vec<GenerationHistoryTurn>,
 }
 
 /// 列出未完成的生成 job（queued/running），供前端启动时重建 genJobs（恢复中 job 可见）。
 /// done/failed 不返回（已是资产或显失败）。codex job 也返回（前端展示「app 重启中断」失败态）。
 #[tauri::command]
-pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSummary>, AppError> {
+pub async fn list_gen_jobs(paths: State<'_, Arc<LibraryPaths>>, db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSummary>, AppError> {
     let dbw = db.inner().clone();
-    tokio::task::spawn_blocking(move || -> Result<Vec<GenJobSummary>, AppError> {
-        let tasks = crate::core::task_queue::Task::list_running(&dbw)?;
-        Ok(tasks
-            .into_iter()
-            .filter_map(|t| t.gen_job())
-            .filter(|j| !j.internal_agent)
-            .map(|j| GenJobSummary {
+    let annotations_dir = paths.inner().root.join("annotations");
+    tokio::task::spawn_blocking(move || running_generation_summaries(&dbw, Some(&annotations_dir)))
+        .await.map_err(|e| AppError::Other(e.to_string()))?
+}
+
+fn running_generation_summaries(db: &Database, annotations_dir: Option<&std::path::Path>) -> Result<Vec<GenJobSummary>, AppError> {
+    let tasks = crate::core::task_queue::Task::list_running(db)?;
+    Ok(tasks
+        .into_iter()
+        .filter_map(|t| t.gen_job())
+        .filter(|j| !j.internal_agent)
+        .map(|j| {
+            let turns = match db.generation_history_by_job(&j.id, annotations_dir) {
+                Ok(Some(history)) => history.turns,
+                Ok(None) => Vec::new(),
+                Err(error) => {
+                    tracing::warn!(job_id = %j.id, %error, "failed to restore generation attempt history");
+                    Vec::new()
+                }
+            };
+            GenJobSummary {
+                turns,
                 running: matches!(
                     j.status.as_str(),
                     "running" | "querying" | "downloading" | "ingesting" | "submitting" | "queued"
@@ -1375,11 +1391,9 @@ pub async fn list_gen_jobs(db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSum
                 references: j.references,
                 reference_node_ids: j.reference_node_ids,
                 created_at: j.created_at,
-            })
-            .collect())
-    })
-    .await
-    .map_err(|e| AppError::Other(e.to_string()))?
+            }
+        })
+        .collect())
 }
 
 /// 会话面板历史恢复项：终态生成 job 摘要 + 从 generation_meta 重建的各轮时间线。
@@ -1441,12 +1455,12 @@ pub async fn recent_gen_sessions(
             if j.internal_agent || (t.status == "cancelled" && j.media != "video") { continue; }
             // 首轮 payload 保存于 provider 返回前，session_id 可能为空；按 job_id
             // 从产物元数据找回会话，兼容已安装版本写出的历史任务。
-            let history = match &j.session_id {
-                Some(sid) => db.generation_history_by_session(sid, Some(&annotations_dir)).map(Some),
-                None => db.generation_history_by_job(&j.id, Some(&annotations_dir)),
-            };
+            let history = db.generation_history_by_job(&j.id, Some(&annotations_dir)).and_then(|history| {
+                if history.is_some() { return Ok(history); }
+                j.session_id.as_deref().map(|sid| db.generation_history_by_session(sid, Some(&annotations_dir))).transpose()
+            });
             let (session_id, turns, mut ref_assets) = match history {
-                Ok(Some(h)) => (h.session_id, h.turns, h.references),
+                Ok(Some(h)) => (h.session_id.or_else(|| j.session_id.clone()), h.turns, h.references),
                 Ok(None) => (j.session_id.clone(), Vec::new(), Vec::new()),
                 Err(e) => {
                     tracing::warn!("recent_gen_sessions: history for {} failed: {e}", j.id);
@@ -1745,6 +1759,37 @@ mod generation_task_tests {
             started_at: Some(now),
             finished_at: None,
         }
+    }
+
+    #[test]
+    fn running_retry_summary_preserves_failed_history_without_reexecuting() {
+        let path = std::env::temp_dir().join(format!("bowerbird-running-retry-{}.db", ulid::Ulid::new()));
+        let db = Database::open(&path).unwrap();
+        db.migrate().unwrap();
+        let mut job = running_job("same-job");
+        job.turn_key = Some("failed-first".into());
+        Task::upsert_gen_job(&db, &job).unwrap();
+        Task::mark_failed(&db, &job.id, "first failure").unwrap();
+        let first = db.begin_generation_diagnostic(&serde_json::json!({"jobId":job.id,"turnKey":"failed-first","prompt":"test"})).unwrap();
+        db.finish_generation_diagnostic(&first, &job.id, Some("first failure")).unwrap();
+        job.turn_key = Some("running-retry".into());
+        Task::upsert_gen_job(&db, &job).unwrap();
+        db.begin_generation_diagnostic(&serde_json::json!({"jobId":job.id,"turnKey":"running-retry","prompt":"test"})).unwrap();
+        drop(db);
+        let db = Database::open(&path).unwrap();
+        let summaries = super::running_generation_summaries(&db, None).unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].id, "same-job");
+        assert!(summaries[0].session_id.is_none());
+        assert_eq!(summaries[0].turn_key.as_deref(), Some("running-retry"));
+        assert_eq!(summaries[0].turns.len(), 1);
+        assert_eq!(summaries[0].turns[0].error.as_deref(), Some("first failure"));
+        assert_eq!(Task::list_running(&db).unwrap().len(), 1);
+        assert_eq!(db.generation_diagnostics(&job.id).unwrap().len(), 2);
+        drop(db);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
     }
 
     #[test]

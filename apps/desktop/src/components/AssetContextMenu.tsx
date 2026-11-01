@@ -4,6 +4,8 @@ import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
 import { CANVAS_ARTBOARD_FROM_IMAGE } from "../lib/canvasArtboard";
 import { ContextMenu, ContextSubmenu, DeleteSubmenu } from "./ContextMenu";
 import { isVideoPath } from "../lib/videoGeneration";
+import { isAudioAsset } from "../lib/audioMedia";
+import { stopAudioPreview } from "../lib/audioPreview";
 import { Archive, ClipboardCopy, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Ungroup } from "lucide-react";
 import { exportAssetArchive } from "../lib/assetArchive";
 import { understandEngineUsable, useStore } from "../store";
@@ -151,7 +153,8 @@ export function AssetContextMenu() {
   const targets = targetIds.map(id => id === assetId ? asset ?? knownAssets.find(a => a.id === id) : knownAssets.find(a => a.id === id));
   const targetsReady = targets.every((item): item is Asset => !!item);
   const batchMovable = targetsReady && targets.every(canMoveAssetOut);
-  const allImages = targetIds.length > 0 && targetsReady && targets.every(item => !!item.store_path && !isVideoPath(item.store_path));
+  const allImages = targetIds.length > 0 && targetsReady && targets.every(item => !!item.store_path && !isVideoPath(item.store_path) && !isAudioAsset(item));
+  const audio = !!asset && isAudioAsset(asset);
   const projectId = menu.canvasSelection?.projectId ?? (menu.workspaceProjectId !== undefined ? menu.workspaceProjectId : activeProjectId);
   const onComplete = menu.fileSelection?.onComplete ?? (!menu.canvasSelection && multiIds ? exitManage : undefined);
   const storePath = asset?.store_path ?? null;
@@ -159,7 +162,7 @@ export function AssetContextMenu() {
   const canvasLibraryAvailable = canvasLibraryCheck?.menu === menu && canvasLibraryCheck.available;
   const canChangeLibraryVisibility = !!asset?.store_path && CANVAS_IMAGE_EXTS.includes((asset.ext ?? "").toLowerCase());
   // 仅生成图显示「复用生成提示词」：generation_session_id 非 null 即任意 provider 的生成图。
-  const isGenerated = !!asset?.generation_session_id;
+  const isGenerated = !audio && !!asset?.generation_session_id;
   // 「图片标注」可用：本地有文件且为浏览器可解码位图（视频 / SVG / TIFF 不可标注）。
   const annotatable =
     !!storePath && ANNOTATABLE_EXTS.includes((asset?.ext ?? "").toLowerCase());
@@ -285,6 +288,7 @@ export function AssetContextMenu() {
   async function runDelete(id: string, mode: "keep" | "move_out") {
     setBusy(true);
     try {
+      if (mode === "move_out") stopAudioPreview(id);
       const result = await api.deleteAssetWithMode(id, mode, projectId);
       await reloadProjects();
       if (result.failed_moves.length > 0) {
@@ -321,6 +325,7 @@ export function AssetContextMenu() {
 
   /** 反推二级菜单选定引擎后直接入队（单图 / 多选批量同链路，批量与选择浮层一致退出管理态）。 */
   function runDescribeWith(engine: DescribeEngineOption["key"]) {
+    if (!allImages) return;
     const instruction = loadDescribePrompt();
     const st = useStore.getState();
     if (multiIds) {
@@ -344,6 +349,7 @@ export function AssetContextMenu() {
       } else {
         for (const id of ids) {
           try {
+            stopAudioPreview(id);
             const result = await api.deleteAssetWithMode(id, deleteMode, projectId);
             if (
               result.failed_moves.length > 0
@@ -359,7 +365,7 @@ export function AssetContextMenu() {
       }
       await reloadProjects();
       if (failedCount > 0) {
-        notifyError(null, `${failedCount} 张删除失败，已保留在全局`);
+        notifyError(null, `${failedCount} 项删除失败，已保留在全局`);
         setBusy(false);
         return;
       }
@@ -389,7 +395,7 @@ export function AssetContextMenu() {
       <span>{engine.label}{engine.reason && <small className="context-menu-reason">{userErrorMessage(engine.reason, "此方式暂不可用，请在设置中重新登录。")}</small>}</span>
     </button>)}
   </ContextSubmenu>;
-  const canvasActions = menu.canvasSelection && <>
+  const canvasActions = menu.canvasSelection && !targets.some(item => item && isAudioAsset(item)) && <>
     <CanvasLayerMenuItem {...menu.canvasSelection} disabled={busy} className={itemClass} />
     {menu.canvasSelection.nodeIds.length > 1 && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
       window.dispatchEvent(new CustomEvent<CanvasArrangeNodesEventDetail>(CANVAS_ARRANGE_NODES_EVENT, { detail: menu.canvasSelection })); closeContextMenu();
@@ -434,9 +440,9 @@ export function AssetContextMenu() {
     <div className="asset-context-column">
       <div className="app-context-label">常用</div>
       {canvasActions}
-      {mode === "browse" && detailAssetId !== null && <button role="menuitem" className={itemClass} disabled={busy}
+      {!audio && mode === "browse" && detailAssetId !== null && <button role="menuitem" className={itemClass} disabled={busy}
         onClick={() => { addAssetToBoardFromDetail(assetId); closeContextMenu(); }}>添加到对话框</button>}
-      <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); if (menu.fileSelection) useStore.setState({ mode: "browse" }); openDetail(assetId); }}>{isVideoPath(storePath) ? "打开视频详情" : "打开图片详情"}</button>
+      <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); if (menu.fileSelection) useStore.setState({ mode: "browse" }); openDetail(assetId); }}>{audio ? "打开音频详情" : isVideoPath(storePath) ? "打开视频详情" : "打开图片详情"}</button>
       {!menu.canvasSelection && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
         if (menu.fileSelection) menu.fileSelection.select(); else { if (mode !== "manage") enterManage(); toggleSelect(assetId); } closeContextMenu();
       }}>{menu.fileSelection ? "选择" : mode === "manage" ? "选择/取消选择" : "选择"}</button>}
@@ -464,7 +470,7 @@ export function AssetContextMenu() {
         {annotatable && <button role="menuitem" className={itemClass} disabled={busy} onClick={copyImage}>复制图片</button>}
         <button role="menuitem" className={itemClass} disabled={busy} onClick={async () => { setBusy(true); try { await navigator.clipboard.writeText(storePath); notifySuccess("文件路径已复制"); closeContextMenu(); } catch (e) { notifyError(e, "复制文件路径失败"); setBusy(false); } }}>复制文件路径</button>
       </>}
-      {asset?.source === "external" && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); if (menu.fileSelection) menu.fileSelection.openReferences(); else window.dispatchEvent(new Event(OPEN_LOCAL_FILES)); }}>管理外部引用 · 原图保留</button>}
+      {asset?.source === "external" && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); if (menu.fileSelection) menu.fileSelection.openReferences(); else window.dispatchEvent(new Event(OPEN_LOCAL_FILES)); }}>管理外部引用 · 原文件保留</button>}
       {menu.canvasSelection && asset?.library_hidden && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => void setLibraryVisibility(true)}>加入素材库</button>}
       <div className="app-context-divider" />{deleteMenu}
     </div>
@@ -516,7 +522,7 @@ function BatchAddToProjectsDialog({ ids, onClose, onComplete }: SelectionOperati
     <ModalShell
       title="加入项目"
       eyebrow="Add to projects"
-      description={`勾选要放入所选 ${ids.length} 张素材的项目（可多选）。`}
+      description={`勾选要放入所选 ${ids.length} 项素材的项目（可多选）。`}
       onClose={onClose}
       preventClose={busy}
       footer={

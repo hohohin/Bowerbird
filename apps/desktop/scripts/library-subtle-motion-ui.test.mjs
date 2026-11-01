@@ -73,10 +73,11 @@ try {
     await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'))});
     assert.equal(await root.getAttribute('data-library-motion-paused'),'true');
     assert.equal(await card.evaluate(el=>getComputedStyle(el,'::after').animationName),'none');
-    assert.deepEqual(await card.evaluate(el=>getComputedStyle(el,'::after').backgroundPosition.split(',').map(point=>point.trim()).sort()),['0% 0%','0% 100%','100% 0%','100% 100%'],'hidden page leaves one marker at each corner');
+    assert.equal(await card.locator('.library-hover-mark path').first().evaluate(el=>getComputedStyle(el).strokeDashoffset), '-1px', 'hidden page removes rays');
+    assert.ok(await card.locator('.library-hover-mark').evaluate(el=>Math.abs(parseFloat(getComputedStyle(el,'::before').width)-4.8)<.01));
     await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});
     assert.equal(await root.getAttribute('data-library-motion-paused'),'false');
-    assert.ok(await card.evaluate(el=>getComputedStyle(el,'::after').animationName.includes('library-tactical-card-clockwise')));
+    assert.ok(await card.evaluate(el=>el.querySelector('.library-hover-mark path') && getComputedStyle(el.querySelector('.library-hover-mark path')).animationName === 'library-hover-ray'));
     await page.mouse.move(5,5);
     if(scene==='project') { await page.setViewportSize({width:900,height:650}); await page.getByRole('separator',{name:'调整素材库宽度',exact:true}).focus();await page.keyboard.press('Home');await page.waitForTimeout(350); }
     for(const theme of ['light','dark']) {await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);await page.waitForTimeout(250);await page.screenshot({path:`.tmp/library-subtle-motion/${scene}-${theme}.png`});}

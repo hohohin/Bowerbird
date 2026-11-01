@@ -1,4 +1,5 @@
 import type { Asset } from "./types";
+import { isAudioAsset } from "./audioMedia";
 
 export const EXPLORER_CANVAS_DROP_EVENT = "bowerbird:prepare-explorer-canvas-drop";
 export interface ExplorerCanvasDropDetail {
@@ -14,5 +15,9 @@ export function prepareExplorerCanvasDrop(target: EventTarget | null, projectId:
   if (!projectId || !(target instanceof Element)) return null;
   const detail: ExplorerCanvasDropDetail = { projectId, clientX, clientY, place: null };
   target.dispatchEvent(new CustomEvent(EXPLORER_CANVAS_DROP_EVENT, { bubbles: true, detail }));
-  return detail.place;
+  const place = detail.place;
+  return place ? async (asset: Asset) => {
+    if (isAudioAsset(asset)) throw new Error("音频暂不支持添加到画板，请在素材库中播放");
+    return place(asset);
+  } : null;
 }

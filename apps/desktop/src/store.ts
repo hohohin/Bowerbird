@@ -453,7 +453,7 @@ interface State {
   cancelGeneration: (jobId?: string) => void; // 默认取消 activeJob
   loadGenJobs: () => Promise<void>;
   applyGenChunk: (c: CodexChunk) => void;
-  // 重试 activeJob 末尾失败轮：首轮失败 → startGeneration（新建 job 重发），续轮失败 → sendGenRevise（resume 续接）。
+  // 重试 activeJob 末尾失败轮：保留失败历史，在原 job 追加轮次；provider 尚无 session 时新建 provider 会话。
   retryLastGenTurn: (assetsOverride?: Asset[]) => void;
   // 「回看生成对话」：拉某生成图所在会话的历史时间线 → 新建 running=false 的 job 并选中，
   // 复用 GenerationPanel 展示 + 续轮 resume（sessionId=历史 sid）。
@@ -1834,7 +1834,8 @@ export const useStore = create<State>((set, get) => {
             appliedPrompt: t.applied_prompt ?? null,
             promptRaw: t.prompt_raw ?? null,
             images: t.images,
-            refs: t.references ?? undefined,
+            error: t.error ?? null,
+            refs: t.references_resolved === false ? undefined : t.references ?? undefined,
             referenceNodeIds: t.reference_node_ids, provider: t.provider ?? undefined,
             refAssets: t.ref_assets,
           }));
@@ -1843,7 +1844,7 @@ export const useStore = create<State>((set, get) => {
             turns.push({ id: nextGenTurnId(), turnKey: r.turn_key ?? undefined, submitId: r.submit_id, prompt: r.prompt, promptRaw: null, images: [], provider: r.provider, media: r.media, videoOptions: r.video_options, ratio: r.ratio, refs: r.references, referenceNodeIds: r.reference_node_ids, refAssets: r.ref_assets });
           }
           if (failed) {
-            // 失败态标记在最后一轮：面板 ❌ + 生成面板重试入口（错误文本只活在内存，不入库）。
+            // 最新任务终态补齐最后一轮；早期失败由持久诊断历史恢复。
             const err = r.error ?? "生成失败";
             turns[turns.length - 1] = { ...turns[turns.length - 1], error: err };
           }
@@ -1877,19 +1878,27 @@ export const useStore = create<State>((set, get) => {
           // 同 session 已有另一条终态行时不重复展示；同 id 的 recover_started 占位必须
           // 继续进入 field-wise hydrate，不能因 seenSessions / 已存在而永久保留稀疏字段。
           if (j.session_id && seenSessions.has(j.session_id) && !genJobs[j.id]) continue;
+          const turns: GenTurn[] = (j.turns ?? []).map(t => ({
+            id: nextGenTurnId(), turnKey: t.turn_key ?? undefined, submitId: t.submit_id,
+            prompt: t.prompt, appliedPrompt: t.applied_prompt ?? null, promptRaw: t.prompt_raw ?? null,
+            images: t.images, error: t.error ?? null, media: t.media, videoOptions: t.video_options,
+            ratio: t.ratio, refs: t.references_resolved === false ? undefined : t.references, referenceNodeIds: t.reference_node_ids,
+            provider: t.provider ?? undefined, refAssets: t.ref_assets,
+          }));
+          const currentIndex = j.turn_key ? turns.findIndex(turn => turn.turnKey === j.turn_key) : -1;
+          if (currentIndex >= 0) {
+            // A resumed original task can still have a previous failure diagnostic.
+            turns[currentIndex] = { ...turns[currentIndex], error: null };
+          } else turns.push({
+            id: nextGenTurnId(), turnKey: j.turn_key ?? undefined, submitId: j.submit_id,
+            prompt: j.prompt, appliedPrompt: j.applied_prompt ?? null,
+            images: [], media: j.media === "video" ? "video" : "image", videoOptions: j.video_options,
+            ratio: j.ratio, refs: j.references, referenceNodeIds: j.reference_node_ids, provider: j.provider,
+          });
           persistedJobs.push({
             id: j.id,
             media: j.media === "video" ? "video" : "image", videoOptions: j.video_options,
-            turns: [{
-              id: nextGenTurnId(),
-              turnKey: j.turn_key ?? undefined,
-              submitId: j.submit_id,
-              prompt: j.prompt,
-              appliedPrompt: j.applied_prompt ?? null,
-              images: [],
-              media: j.media === "video" ? "video" : "image", videoOptions: j.video_options, ratio: j.ratio, refs: j.references, referenceNodeIds: j.reference_node_ids,
-              provider: j.provider,
-            }],
+            turns,
             sessionId: j.session_id ?? j.submit_id ?? null,
             conversationId: j.conversation_id ?? undefined,
             threadId: j.thread_id ?? j.creative_session_id,
@@ -2055,7 +2064,7 @@ export const useStore = create<State>((set, get) => {
   sendGenRevise: async (jobId, instruction, provider, opts) => {
     const job = get().genJobs[jobId];
     const text = instruction.trim();
-    if (!job || !job.sessionId || !text) return;
+    if (!job || job.running || (!job.sessionId && opts?.creativeRelation !== "retry") || !text) return;
     const prov = normalizeGenerationProvider(
       provider ?? job.provider ?? get().activeGenProvider ?? get().defaultProvider,
     );
@@ -2164,7 +2173,7 @@ export const useStore = create<State>((set, get) => {
     const id = s.activeJobId;
     if (!id) return;
     const job = s.genJobs[id];
-    if (!job) return;
+    if (!job || job.running) return;
     const provider = normalizeGenerationProvider(job.provider);
     const targetHealthy = isCloudProvider(provider)
       ? !!s.cloudAuth?.cloud_available && !!s.cloudAuth.logged_in
@@ -2178,56 +2187,30 @@ export const useStore = create<State>((set, get) => {
       void api.recoverCloudVideo(job.id).then(() => get().loadGenJobs()).catch(error => genHandleError(job.id, taskErrorMessage(error)));
       return;
     }
-    if (job.sessionId) {
-      const parent = generationParentLocator(
-        job.id,
-        job.turns,
-        assetsOverride ?? s.assets,
-        { beforeTurnId: last.id },
-      );
-      // 续轮失败：先移除失败轮再 resume，重试轮顶替原位（避免同 prompt 编号递增的重复轮）。
-      // 参考图精确重放该轮当时实际下发的完整列表（started 事件已记录，含当时的基图）；
-      // 恢复重建的失败轮无 refs 时退回正常合并路径。
-      updateJob(id, (j) => ({ ...j, turns: j.turns.slice(0, -1) }));
-      void s.sendGenRevise(id, last.prompt, provider, {
-        generation: { media: last.media ?? job.media, videoOptions: last.videoOptions ?? job.videoOptions },
-        ratio: last.ratio ?? job.lastRatio,
-        rawPrompt: last.promptRaw ?? undefined,
-        references: last.refAssets,
-        referenceNodeIds: last.referenceNodeIds,
-        exactReferences: (last.media ?? job.media) === "video" ? last.refs ?? last.refAssets?.flatMap((asset) => asset.store_path ? [asset.store_path] : []) ?? job.lastRefs : last.refs?.length ? last.refs : undefined,
-        parentNodeId: parent.nodeId,
-        parentAssetPath: parent.storePath,
-        creativeRelation: "retry",
-        // 重试轮的新卡叠放在被重试失败轮的原卡位置（原卡保留在下方）。
-        retryAnchorNodeId: last.turnKey ? generationPromptNodeId(id, last.turnKey) : null,
-      });
-    } else {
-      // 首轮失败：startGeneration 新建 job 重发（旧失败 job 保留可切回查看）。
-      void s.startGeneration(
-        job.lastPrompt,
-        job.refAssets,
-        job.lastRatio,
-        provider,
-        job.turns[0]?.promptRaw ?? undefined,
-        undefined,
-        undefined,
-        undefined,
-        job.visualProfileId ?? job.visualProfile?.profileId ?? null,
-        job.projectId && job.threadId
-          ? {
-              projectId: job.projectId,
-              threadId: job.threadId,
-              relation: "retry",
-              referenceNodeIds: job.turns[0]?.referenceNodeIds,
-              // 新建 job 的重试卡同样叠放在原失败卡位置，不按参考图重新落位。
-              retryAnchorNodeId: last.turnKey ? generationPromptNodeId(job.id, last.turnKey) : null,
-            }
-          : undefined,
-        false,
-        { media: job.media, videoOptions: job.videoOptions },
-      );
-    }
+    const parent = generationParentLocator(
+      job.id,
+      job.turns,
+      assetsOverride ?? s.assets,
+      { beforeTurnId: last.id },
+    );
+    // 失败轮保留为历史，重试作为原 job 的新一轮；尚无 provider session 时也不新建画板会话。
+    // 参考图精确重放该轮当时实际下发的完整列表（started 事件已记录，含当时的基图）；
+    // 恢复重建的失败轮无 refs 时退回正常合并路径。
+    void s.sendGenRevise(id, last.prompt, provider, {
+      generation: { media: last.media ?? job.media, videoOptions: last.videoOptions ?? job.videoOptions },
+      ratio: last.ratio ?? job.lastRatio,
+      rawPrompt: last.promptRaw ?? undefined,
+      references: last.refAssets,
+      referenceNodeIds: last.referenceNodeIds,
+      exactReferences: last.refs ?? (!job.sessionId || (last.media ?? job.media) === "video"
+        ? last.refAssets?.flatMap((asset) => asset.store_path ? [asset.store_path] : []) ?? job.lastRefs
+        : undefined),
+      parentNodeId: parent.nodeId,
+      parentAssetPath: parent.storePath,
+      creativeRelation: "retry",
+      // 轮次投影保留原锚点，画板按同一 job 合并成一张会话卡。
+      retryAnchorNodeId: last.turnKey ? generationPromptNodeId(id, last.turnKey) : null,
+    }).catch(error => genHandleError(id, taskErrorMessage(error)));
   },
   applyGenChunk: (c) => {
     if (c.kind === "started") {
@@ -2430,7 +2413,8 @@ export const useStore = create<State>((set, get) => {
           appliedPrompt: t.applied_prompt ?? null,
           promptRaw: t.prompt_raw ?? null,
           images: t.images,
-          refs: t.references ?? undefined,
+          error: t.error ?? null,
+          refs: t.references_resolved === false ? undefined : t.references ?? undefined,
             referenceNodeIds: t.reference_node_ids, provider: t.provider ?? undefined,
           refAssets: t.ref_assets,
         })),

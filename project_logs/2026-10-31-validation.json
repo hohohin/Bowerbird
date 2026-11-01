@@ -1,0 +1,30 @@
+{
+  "date": "2026-10-31",
+  "scope": "Local document verification only; no application tests or production checks",
+  "original_sha256": "b6ec5858fe86d233b053e3e8146b5496232dc3bff38f036812a9b1a67cb3898b",
+  "pre_rewrite_sha256": "6f84110597a47d9f0a0bde315d72278c55ad8170c1612be7399f6dabe0f5c820",
+  "original_lines": 2035,
+  "pre_rewrite_lines": 2037,
+  "current_lines": 118,
+  "current_bytes": 27429,
+  "current_sha256": "879ecf768942d0757031efa0b9a183aabd536c93e1dba8fcc0f67552e9ab455a",
+  "preserved_blocks": 702,
+  "dated_files": 91,
+  "undated_blocks": 38,
+  "exact_archive_reconstruction": true,
+  "concurrent_addition_preserved": true,
+  "local_links_checked": 888,
+  "broken_local_links": [],
+  "milestones": 3,
+  "audit_groups": 42,
+  "tracked_paths_changed_since_initial_backup": [
+    ".gitignore",
+    "AGENTS.md",
+    "PROJECT.md",
+    "dev-doc/进展归档.md"
+  ],
+  "other_tracked_changes_observed": [
+    ".gitignore"
+  ],
+  "tracked_document_diff_check": "passed"
+}

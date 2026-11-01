@@ -5,6 +5,7 @@ import ts from "typescript";
 import { generationPromptNodeId } from "../src/lib/projectNodeIds.ts";
 import { DEFAULT_VIDEO_OPTIONS, videoInputError, videoRatio, isVideoPath } from "../src/lib/videoGeneration.ts";
 import { mergeRecoveredGenJobs } from "../src/lib/generationRecovery.ts";
+import { canvasConversationCards } from "../src/lib/canvasConversationCards.ts";
 import { parseCreativeComposerDraft, serializeCreativeComposerDraft } from "../src/lib/creativeDraft.ts";
 const image = (name) => ({ id: name, store_path: `C:/assets/${name}.png`, duration: null });
 const video = (duration = 5) => ({ id: "video", store_path: "C:/assets/clip.mp4", duration });
@@ -161,6 +162,119 @@ test("Cloud failed retry recovers original job after lost create response or dow
   }
 });
 
+test("failed image retries append history in one job and one canvas card, with or without a provider session", async () => {
+  for (const provider of ["codex", "jimeng", "bowerbird-cloud-image_standard"]) {
+    for (const sessionId of [null, "provider-session"]) {
+      const h = harness();
+      h.state.codexHealth = { ok: true };
+      h.state.cloudAuth = { cloud_available: true, logged_in: true };
+      await h.state.startGeneration("original prompt", [image("ref")], "3:4", provider, "raw prompt",
+        undefined, undefined, [], null, { projectId: "project-a", threadId: "thread-a", referenceNodeIds: ["ref-node"] });
+      const job = h.state.genJobs[h.requests[0].jobId];
+      Object.assign(job, { sessionId, running: false });
+      Object.assign(job.turns[0], { error: "original failure", refs: [image("ref").store_path] });
+      const failed = structuredClone(job.turns[0]);
+      h.state.retryLastGenTurn();
+      h.state.retryLastGenTurn();
+      await new Promise(done => setImmediate(done));
+      assert.equal(h.requests.length, 2, "a repeated click while running must not submit again");
+      assert.deepEqual(Object.keys(h.state.genJobs), [job.id], "retry keeps the original job");
+      assert.deepEqual(h.state.genJobOrder, [job.id]);
+      const next = h.state.genJobs[job.id];
+      assert.equal(next.turns.length, 2, "failed round remains in history");
+      assert.deepEqual(next.turns[0], failed);
+      assert.notEqual(next.turns[1].turnKey, failed.turnKey);
+      assert.equal(h.requests[1].jobId, job.id);
+      assert.equal(h.requests[1].conversationId, job.conversationId);
+      assert.equal(h.requests[1].sessionId, sessionId);
+      assert.equal(h.requests[1].prompt, failed.prompt);
+      assert.deepEqual(h.requests[1].referenceImages, failed.refs);
+      assert.deepEqual(h.requests[1].referenceNodeIds, ["ref-node"]);
+      const nodes = next.turns.map((turn, index) => ({ id: generationPromptNodeId(job.id, turn.turnKey),
+        projectId: job.projectId, kind: "prompt", createdAt: index + 1, hiddenAt: null,
+        payloadJson: JSON.stringify({ job_id: job.id, turn_key: turn.turnKey }) }));
+      // Card identity survives even before the recovered job metadata is loaded.
+      for (const jobs of [h.state.genJobs, {}]) {
+        const cards = canvasConversationCards(nodes, jobs);
+        assert.equal(cards.cards.size, 1);
+        assert.equal(cards.cards.get(nodes[0].id).latest.id, nodes[1].id);
+        assert.equal(cards.hiddenIds.has(nodes[1].id), true);
+      }
+    }
+  }
+});
+
+test("startup restores earlier failures without marking the successful latest round failed", async () => {
+  const h = harness();
+  h.api.listGenJobs = async () => [];
+  h.api.recentGenSessions = async () => [{ id: "restored", status: "done", session_id: "session",
+    provider: "jimeng", references: [], ref_assets: [], turns: [
+      { turn_key: "failed", prompt: "first", images: [], error: "saved failure" },
+      { turn_key: "retry", prompt: "first", images: ["/result.png"], error: null },
+    ] }];
+  await h.state.loadGenJobs();
+  assert.equal(h.state.genJobs.restored.turns[0].error, "saved failure");
+  assert.equal(h.state.genJobs.restored.turns[1].error, null);
+  assert.deepEqual(h.state.genJobs.restored.turns[1].images, ["/result.png"]);
+});
+
+test("startup keeps failed history while a new retry round is still running", async () => {
+  const h = harness();
+  h.api.recentGenSessions = async () => [];
+  h.api.listGenJobs = async () => [{ id: "restored", running: true, turn_key: "retry", prompt: "retry",
+    media: "image", provider: "jimeng", references: [], turns: [
+      { turn_key: "failed", prompt: "first", images: [], error: "saved failure" },
+    ] }];
+  await h.state.loadGenJobs();
+  const restored = h.state.genJobs.restored;
+  assert.deepEqual(restored.turns.map(t => t.turnKey), ["failed", "retry"]);
+  assert.equal(restored.turns[0].error, "saved failure");
+  assert.equal(restored.turns[1].error, undefined);
+  assert.equal(restored.running, true);
+});
+
+test("an explicitly empty image reference list stays empty when retrying a failed continuation", async () => {
+  const h = harness();
+  await h.state.startGeneration("prompt", [], "1:1", "jimeng");
+  const job = h.state.genJobs[h.requests[0].jobId];
+  Object.assign(job, { sessionId: "session", running: false });
+  Object.assign(job.turns[0], { error: "failed", refs: [] });
+  h.state.retryLastGenTurn();
+  await new Promise(done => setImmediate(done));
+  assert.deepEqual(h.requests[1].referenceImages, []);
+  assert.equal(h.requests[1].exactReferences, true);
+});
+
+test("retry before started keeps implicit previous-output merging when references were not frozen", async () => {
+  for (const selected of [[], [image("selected")]]) {
+    const h = harness();
+    await h.state.startGeneration("prompt", [], "1:1", "jimeng");
+    const job = h.state.genJobs[h.requests[0].jobId];
+    Object.assign(job, { sessionId: "session", running: false });
+    Object.assign(job.turns[0], { error: "pre-start failure", refAssets: selected });
+    h.state.retryLastGenTurn();
+    await new Promise(done => setImmediate(done));
+    assert.deepEqual(h.requests[1].referenceImages, selected.map(asset => asset.store_path));
+    assert.equal(h.requests[1].exactReferences, false);
+  }
+});
+
+test("restored pre-start failure keeps unfrozen references eligible for backend merging", async () => {
+  const h = harness();
+  h.api.listGenJobs = async () => [];
+  h.api.recentGenSessions = async () => [{ id: "restored", status: "failed", session_id: "session",
+    provider: "jimeng", references: [], ref_assets: [], prompt: "retry", error: "failed", turns: [
+      { turn_key: "failed", prompt: "retry", images: [], references: [], references_resolved: false,
+        ref_assets: [], error: "failed" },
+    ] }];
+  await h.state.loadGenJobs();
+  h.state.activeJobId = "restored";
+  assert.equal(h.state.genJobs.restored.turns[0].refs, undefined);
+  h.state.retryLastGenTurn();
+  await new Promise(done => setImmediate(done));
+  assert.equal(h.requests[0].exactReferences, false);
+});
+
 test("edited reference identity survives production revision, started event, and retry", async () => {
   const h = harness(); await h.start("image2video", [image("first")]);
   const job = h.state.genJobs[h.requests[0].jobId]; job.sessionId = "remote"; job.running = false;
@@ -232,7 +346,7 @@ test("a recovery event creates a complete video placeholder before the task list
 test("a video mode change updates the next composer defaults but preserves the first turn", async () => {
   const h = harness();
   await h.start("text2video", []);
-  const job = h.state.genJobs[h.requests[0].jobId]; job.sessionId = "prior";
+  const job = h.state.genJobs[h.requests[0].jobId]; job.sessionId = "prior"; job.running = false;
   await h.state.sendGenRevise(job.id, "frames", "jimeng", { references: [image("first"), image("last")], generation: { media: "video", videoOptions: options("frames2video") } });
   const current = h.state.genJobs[job.id];
   assert.equal(current.videoOptions.kind, "frames2video");

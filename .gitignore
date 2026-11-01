@@ -48,6 +48,11 @@ my-library/
 
 # 开发计划，文件
 dev-doc/*
+!dev-doc/UI-DESIGN-SPEC.md
+!dev-doc/ui-design-spec/
+dev-doc/ui-design-spec/*
+!dev-doc/ui-design-spec/canvas-dark.png
+!dev-doc/ui-design-spec/canvas-light.png
 !dev-doc/HTML-RENDER-PLAN.md
 !dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md
 !dev-doc/PROJECT-CANVAS-PLAN.md

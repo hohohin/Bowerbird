@@ -1,14 +1,15 @@
-.connected-collections .catalog-tree-row-actions { opacity: 1; visibility: visible; pointer-events: auto; }
+.connected-collections .catalog-sidebar-heading button { width: 30px; height: 30px; display: grid; place-items: center; opacity: 0; pointer-events: none; }
+.connected-collections .catalog-sidebar-heading:is(:hover,:focus-within) button { opacity: 1; pointer-events: auto; }
 .connected-collections .catalog-tree-name { padding-right: 48px; }
-.connected-collections .catalog-tree-row-actions > button:last-child { opacity: 0; }
-.connected-collections .catalog-tree-row:is(:hover,:focus-within) .catalog-tree-row-actions > button:last-child { opacity: 1; }
 .connected-collections .catalog-tree-add { color: var(--bb-muted); }
 .connected-collections .catalog-tree-row.is-offline { color: var(--bb-muted); }
 .connected-media { position: absolute; left: 0; top: 0; }
 .connected-media > .folder-media-card { position: relative; margin: 0; }
 .connected-reference { position: absolute; bottom: 8px; left: 8px; padding: 4px 6px; display: flex; background: rgb(20 20 20 / .78); color: #eee; pointer-events: none; }
 .connected-missing { position: absolute; inset: 0; background: rgb(20 20 20 / .6); color: #eee; display: flex; flex-direction: column; gap: 8px; align-items: center; justify-content: center; font-size: 11px; pointer-events: none; }
-.connected-empty-section { position: absolute; top: 48px; left: 8px; font-size: 12px; color: var(--bb-muted); }
+.connected-collections .catalog-sections > .is-empty { min-height: 0; }
+.connected-collections .is-empty .catalog-section-heading { display: flex; align-items: center; }
+.connected-empty-section { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 400; color: var(--bb-muted); }
 .connected-status { position: absolute; right: 12px; bottom: 58px; z-index: 5; padding: 8px 12px; display: flex; gap: 10px; align-items: center; max-width: calc(100% - 24px); background: var(--bb-surface); font-size: 11px; }
 .connected-status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connected-status button { color: var(--bb-blue); white-space: nowrap; }

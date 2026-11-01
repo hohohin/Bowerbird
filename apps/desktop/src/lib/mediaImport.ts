@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { api } from "./api";
 import type { Asset } from "./types";
 import { isVideoPath } from "./videoGeneration";
+import { isAudioAsset } from "./audioMedia";
 import { useStore } from "../store";
 import { useLocalFileMode } from "./localFileMode";
 
@@ -60,7 +61,8 @@ export function showImportedMedia(assets: Asset[], mode = useLocalFileMode) {
   const library = mode.getState();
   if (!library.open) return;
   const videos = assets.every(asset => isVideoPath(asset.store_path));
-  library.setMedia(videos ? "videos" : "images");
+  const audios = assets.every(isAudioAsset);
+  library.setMedia(audios ? "audios" : videos ? "videos" : "images");
   library.setCatalogView(videos ? "tags" : "all");
   library.setQuery("");
   library.setGeneratedFilter(null);

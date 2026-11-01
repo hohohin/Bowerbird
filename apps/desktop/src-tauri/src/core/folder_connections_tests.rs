@@ -56,6 +56,98 @@ fn connects_without_copy_and_keeps_identity_on_incremental_refresh() {
     assert_eq!(fs::read(f.source.join("one.png")).unwrap(), bytes);
 }
 #[test]
+fn refresh_checks_selected_directory_before_other_cached_directories() {
+    let f = Fixture::new();
+    let child = f.source.join("selected");
+    fs::create_dir(&child).unwrap();
+    let root = f.connect(&f.source);
+    let selected =
+        f.db.connection_folders(None, None)
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.path == string(&child))
+            .unwrap()
+            .id;
+    fs::copy(f.source.join("one.png"), f.source.join("root-new.png")).unwrap();
+    fs::copy(f.source.join("one.png"), child.join("selected-new.png")).unwrap();
+    let mut selected_seen_first = false;
+    f.db.scan_connection_prioritized(&f.paths, &root, Some(&selected), || {
+        let selected_count = f.entries(&selected).len();
+        let root_count = f.entries(&root).len();
+        if selected_count == 1 && root_count == 1 {
+            selected_seen_first = true;
+        }
+    })
+    .unwrap();
+    assert!(selected_seen_first);
+    assert_eq!(f.entries(&root).len(), 2);
+    assert_eq!(f.entries(&selected).len(), 1);
+}
+#[test]
+fn scan_excludes_only_its_own_generated_cache_and_database_paths() {
+    let f = Fixture::new();
+    let library = fs::canonicalize(&f.paths.root).unwrap();
+    let preview = library.join("external-previews");
+    fs::create_dir(&preview).unwrap();
+    fs::copy(f.source.join("one.png"), preview.join("cache.png")).unwrap();
+    fs::copy(
+        f.source.join("one.png"),
+        f.paths.thumbnails.join("cache.png"),
+    )
+    .unwrap();
+    fs::copy(f.source.join("one.png"), library.join("original.png")).unwrap();
+    let ignored = generated_connection_paths(&f.paths);
+    assert!(ignored.contains(&library.join("library.db-wal")));
+    assert!(!ignored
+        .iter()
+        .any(|path| library.join("images").starts_with(path)));
+    let root = f.connect(&library);
+    assert_eq!(f.entries(&root).len(), 1);
+    assert!(!f
+        .db
+        .connection_folders(None, None)
+        .unwrap()
+        .iter()
+        .any(|folder| folder.path == string(&preview)));
+    let user_named_cache = f.source.join("external-previews");
+    fs::create_dir(&user_named_cache).unwrap();
+    fs::copy(
+        f.source.join("one.png"),
+        user_named_cache.join("original.png"),
+    )
+    .unwrap();
+    f.connect(&f.source);
+    let user_folder =
+        f.db.connection_folders(None, None)
+            .unwrap()
+            .into_iter()
+            .find(|folder| folder.path == string(&user_named_cache))
+            .unwrap();
+    assert_eq!(f.entries(&user_folder.id).len(), 1);
+}
+#[test]
+fn cached_reference_tracks_changed_original_outside_connected_roots() {
+    let f = Fixture::new();
+    let source = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let original = f.entries(&source).pop().unwrap();
+    f.db.create_material_references(&f.paths, &[original.asset_id.clone()], &target)
+        .unwrap();
+    f.db.scan_connection(&f.paths, &target).unwrap();
+    f.db.disconnect_directory(&source).unwrap();
+    image::RgbImage::from_pixel(11, 6, image::Rgb([90, 70, 25]))
+        .save(f.source.join("one.png"))
+        .unwrap();
+    f.db.scan_connection(&f.paths, &target).unwrap();
+    let updated = f.entries(&target).pop().unwrap();
+    assert!(updated.available);
+    assert_eq!(updated.asset_id, original.asset_id);
+    assert_ne!(updated.version, original.version);
+    assert_eq!(updated.asset.width, Some(11));
+    let reference = load_reference(Path::new(&updated.path)).unwrap();
+    assert_eq!(Some(reference.sha256), updated.version);
+}
+#[test]
 fn references_have_independent_entries_and_reference_deletion_preserves_original() {
     let f = Fixture::new();
     let root = f.connect(&f.source);

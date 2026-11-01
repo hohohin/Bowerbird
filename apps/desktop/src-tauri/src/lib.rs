@@ -380,6 +380,7 @@ pub fn run() {
             )));
             core::local_classification::watch(app.handle().clone(), db.clone(), paths.clone());
             core::creative_files::watch(db.clone(), file_config_root.join("creative-records"));
+            commands::folder_connections::watch(app.handle().clone(), db.clone(), paths.clone());
             app.manage(core::local_classification::explorer::ExplorerAnalysis::default());
             app.manage(commands::source_browser::SourceDragHandler(core::local_classification::explorer::handle_notice));
 
@@ -415,11 +416,13 @@ pub fn run() {
             for value in std::env::args() {
                 forward_auth_callback(app.handle(), &value);
             }
+            codex::update::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             commands::external_files::external_files_browse,
             commands::external_files::external_files_media,
+            commands::audio::audio_waveform,
             commands::external_files::external_files_preview,
             commands::file_colors::file_colors,
             commands::external_files::external_files_index,

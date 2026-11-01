@@ -506,6 +506,8 @@ export interface JimengOrphanTask {
 
 /** 「回看生成对话」：某生成图所在 codex 会话的完整时间线（后端 generation_history 返回）。 */
 export interface GenerationHistoryTurn {
+  error?: string | null;
+  references_resolved?: boolean | null;
   submit_id?: string | null;
   project_id?: string | null;
   provider?: string | null;
@@ -678,6 +680,7 @@ export interface MigrateProgress {
 
 /** 未完成生成 job 摘要（list_gen_jobs 命令返回，前端启动重建 genJobs 用）。字段对齐后端 GenJobSummary。 */
 export interface GenJobSummary {
+  turns?: GenerationHistoryTurn[];
   reference_node_ids?: Array<string | null>;
   video_options?: VideoOptions | null;
   id: string;

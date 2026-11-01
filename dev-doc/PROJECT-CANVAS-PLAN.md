@@ -1,5 +1,14 @@
 # Bowerbird「项目即画板」开发专项计划
 
+## 2026-10-31：生成失败重试保留同一会话
+
+- `retryLastGenTurn` 统一复用原 job、conversation、project、thread，保留失败轮并创建新 turnKey；无 provider session 的首轮重试可在原 job 内启动 provider。GenerationPanel 的错误按钮及首轮失败重试图标共用续轮路径，历史轮重试针对实际选中的轮。运行中拒绝重复提交；成功结果的显式版本分支保持原行为。
+- 画板仍保留每轮独立执行投影，但按同一会话显示一张卡；同秒生成的节点以 job 的轮次顺序修正排序，避免随机 UUID 让卡片锚点或最新状态反转。任务中心／项目状态／失败提醒按最后轮判断，旧错误不污染重试成功后的状态。
+- 历史读取结合 `generation_meta` 与已有 `generation_diagnostics`，只补 `failed` 且有 turnKey 的诊断，成功产物优先、同轮去重；无 session 首轮、终态及运行中重启均可恢复失败历史。`GenJobSummary.turns` 供启动补齐，迟到列表只补历史及缺失元数据，不覆盖新轮和实时状态。未增加数据库表或迁移，也不重放模型请求。
+- 失败诊断返回 `references_resolved`，区分 validation／reference_resolution 前的显式输入与 preflight 后完整输入；未冻结时继续后端合并，已知空列表也精确保留。已解析引用按路径匹配原节点身份、自动补图填 null；首轮展示优先自身参考图。Cloud 视频当前轮仍取回原任务，历史失败轮的取回入口禁用，避免错误操作最新轮。
+- 验证：新增断言先复现无 session 重试新建 job；最终前端逻辑 **51 passed**、Rust generation 专项 **55 passed**、TypeScript 检查与真实组件 Chromium 点击回归通过。UI 覆盖无 session 首轮／连续失败／两个重试入口、同卡原位置、历史保留、成功提醒清除及历史 Cloud 视频零恢复调用；后端临时库覆盖重开恢复、诊断去重、未知任务排除、参考图合并边界及运行中摘要只读。测试入口 `scripts/generation-retry-session-ui.test.mjs`，截图 `apps/desktop/.tmp/retry-session/`；日志 `.tmp/retry-session-*.log`、`.tmp/retry-history-rust-final.log` 与 `apps/desktop/.tmp/retry-session-ui.log`。
+- 仅修改源码，未打包发布或操作真实任务；前后端需配套加载。已由旧实现拆成不同 job 的记录不批量合并，原历史与素材保持。
+
 ## 2026-10-30：画布交互与连线计算优化
 
 用户确认处理高频整层更新、拖动与连线的重复计算。保持交互与持久化契约，改动位于前端，未打包发布。

@@ -15,8 +15,8 @@ pub async fn external_files_media(app: AppHandle, paths: State<'_, Arc<LibraryPa
     let paths = paths.inner().clone();
     let path = tokio::task::spawn_blocking(move || -> Result<_, AppError> {
         let path = std::fs::canonicalize(path)?;
-        if !path.is_file() || !(external_files::image_path(&path) || external_files::video_path(&path)) {
-            return Err(AppError::Other("请选择支持的图片或视频".into()));
+        if !path.is_file() || !(external_files::image_path(&path) || external_files::video_path(&path) || external_files::audio_path(&path)) {
+            return Err(AppError::Other("请选择支持的图片、视频或音频".into()));
         }
         external_files::compatible_image(&paths, &path)
     }).await.map_err(|e| AppError::Other(e.to_string()))??;
@@ -35,6 +35,18 @@ fn allow(app: &AppHandle, asset: &Asset) -> Result<(), AppError> {
 fn changed(app: &AppHandle) {
     let _ = app.emit("library://assets-changed", ());
     let _ = app.emit("external-files://changed", ());
+}
+
+fn preview_completed(app: AppHandle) {
+    // Several visible items finish together. Publish their new dimensions as one
+    // gallery refresh instead of invalidating every page for every thumbnail.
+    static PENDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if PENDING.swap(true, std::sync::atomic::Ordering::AcqRel) { return; }
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        PENDING.store(false, std::sync::atomic::Ordering::Release);
+        changed(&app);
+    });
 }
 
 #[tauri::command]
@@ -75,6 +87,7 @@ pub async fn external_files_browse(
 }
 #[tauri::command]
 pub async fn external_files_preview(
+    app: AppHandle,
     paths: State<'_, Arc<LibraryPaths>>,
     db: State<'_, Arc<Database>>,
     path: String,
@@ -82,14 +95,33 @@ pub async fn external_files_preview(
     static GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
     let paths = paths.inner().clone();
     let db = db.inner().clone();
-    let cached_paths = paths.clone(); let cached_path = path.clone();
-    let cached = tokio::task::spawn_blocking(move || external_files::cached_preview(&cached_paths, &PathBuf::from(cached_path)))
+    let cached_paths = paths.clone(); let cached_path = path.clone(); let cached_db = db.clone();
+    let cached = tokio::task::spawn_blocking(move || -> Result<_, AppError> {
+        let source = PathBuf::from(cached_path);
+        let cached = external_files::cached_preview(&cached_paths, &source)?;
+        if let Some(preview) = &cached {
+            if cached_db.connected_preview_pending(&source, preview)? { return Ok(None); }
+        }
+        Ok(cached)
+    })
         .await.map_err(|e| AppError::Other(e.to_string()))??;
-    if let Some(cached) = cached { return Ok(cached); }
+    if let Some(cached) = cached {
+        app.asset_protocol_scope().allow_file(&cached).map_err(|e| AppError::Other(e.to_string()))?;
+        return Ok(cached);
+    }
     let permit = GATE.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
-    tokio::task::spawn_blocking(move || { let _permit = permit; external_files::preview_with_index(&paths, Some(&db), &PathBuf::from(path)) })
+    let (preview, updated) = tokio::task::spawn_blocking(move || -> Result<_, AppError> {
+        let _permit = permit;
+        let path = PathBuf::from(path);
+        let preview = external_files::preview_with_index(&paths, Some(&db), &path)?;
+        let updated = db.complete_connected_preview(&paths, &path, &preview)?.is_some();
+        Ok((preview, updated))
+    })
         .await
-        .map_err(|e| AppError::Other(e.to_string()))?
+        .map_err(|e| AppError::Other(e.to_string()))??;
+    app.asset_protocol_scope().allow_file(&preview).map_err(|e| AppError::Other(e.to_string()))?;
+    if updated { preview_completed(app); }
+    Ok(preview)
 }
 #[tauri::command]
 pub async fn external_files_index(

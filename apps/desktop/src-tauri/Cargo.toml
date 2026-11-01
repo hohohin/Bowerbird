@@ -29,6 +29,7 @@ tauri-plugin-process = "2"
 tauri-plugin-global-shortcut = "=2.3.1"
 xcap = "0.9"
 arboard = "3"
+notify = "=8.2.0"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
@@ -70,6 +71,8 @@ heic-rs = "=0.1.4"
 palette = "0.7"
 # 视频元数据（宽高/时长）进程内解析 ISO BMFF：创作/入库不要求本机 ffprobe，webm/mkv/avi 等罕见格式仍回退 ffprobe
 mp4 = "0.14.0"
+# Built-in audio waveform decoding; no external FFmpeg installation required.
+symphonia = { version = "=0.5.5", features = ["all", "opt-simd"] }
 
 # 网络（Phase 1 扩展采集下载用；rustls 避免系统 openssl 链接）
 #   multipart：OpenAI Images /v1/images/edits 带参考图生图（spike）需要。

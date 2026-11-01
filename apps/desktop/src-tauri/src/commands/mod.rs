@@ -1,6 +1,7 @@
 //! Tauri commands（前端 invoke 入口）。
 
 pub mod agent;
+pub mod audio;
 pub mod agent_ds;
 pub mod agent_z;
 pub mod cloud;

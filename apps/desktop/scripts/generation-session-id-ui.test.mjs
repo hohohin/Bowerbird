@@ -22,6 +22,7 @@ const surface = page.locator('[aria-label="生成会话详情"]');
 const menu = page.getByRole('menu', { name: '生成会话操作' });
 const copy = menu.getByRole('menuitem', { name: '复制本次会话 ID', exact: true });
 const open = () => surface.click({ button: 'right', position: { x: 3, y: 3 } });
+const unknownGenerationError = '生成未完成，暂时无法确定具体原因。请稍后重试；若反复出现，可复制会话诊断信息联系支持。';
 try {
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/canvas-reference/preview.html`);
   await page.locator('[data-canvas-node-id="old"]').waitFor();
@@ -32,7 +33,7 @@ try {
     window.store.setState({ genJobs: { [job.id]: job }, genJobOrder: [job.id], activeJobId: job.id,
       activeSessionKind: 'generation', genPanelOpen: true, boardOpen: false, genEditing: null });
   });
-  await surface.getByText('本次生成未完成，请稍后重试。', { exact: true }).waitFor();
+  await surface.getByText(unknownGenerationError, { exact: true }).waitFor();
   assert.doesNotMatch(await surface.innerText(), /synthetic startup failure/);
   await open();
   await copy.click();
@@ -51,6 +52,37 @@ try {
   assert.equal(diagnostic.attempts[0].phase, 'preflight');
   assert.equal(diagnostic.memorySnapshot.turns[0].error, 'synthetic startup failure');
 
+  // Production TurnView translates actionable failures without destroying diagnosis evidence.
+  const failureCases = [
+    { provider: 'codex', media: 'image', raw: "You've hit your usage limit. https://private.example/usage?token=secret at C:\\private\\worker.ts:42",
+      expected: '当前 ChatGPT 账号的使用额度已用完，请等待额度恢复，或切换生成方式。' },
+    { provider: 'jimeng', media: 'image', raw: 'ExceedConcurrencyLimit: request_id=private-request https://private.example/queue',
+      expected: '即梦同时生成的任务数已达上限，请等待已有任务完成后再试。' },
+    { provider: 'bowerbird-cloud-video_seedance25_720p', media: 'video', raw: JSON.stringify({ code: 'outcome_unknown', message: 'upstream result unavailable https://private.example/result' }),
+      expected: '生成请求已提交，但暂时无法确认结果。请稍后查看或取回原任务，请勿重复提交。' },
+    { provider: 'codex', media: 'image', raw: 'TypeError: provider_token_missing at C:\\private\\worker.ts:42 https://private.example/error',
+      expected: unknownGenerationError },
+  ];
+  for (const failure of failureCases) {
+    await page.evaluate(async ({ provider, media, raw }) => {
+      const { api } = await import('/src/lib/api.ts');
+      const state = window.store.getState(), job = state.genJobs[state.activeJobId];
+      window.store.setState({ genJobs: { [job.id]: { ...job, provider, media,
+        turns: [{ ...job.turns[0], provider, media, error: raw }] } } });
+      api.generationDiagnostics = async jobId => ({ schemaVersion: 1, jobId,
+        attempts: [{ phase: 'provider', status: 'failed', error: raw }], task: null });
+    }, failure);
+    await surface.getByText(failure.expected, { exact: true }).waitFor();
+    const display = `${await surface.innerText()} ${await surface.locator('[title], [aria-label]').evaluateAll(nodes => nodes.map(node => `${node.title ?? ''} ${node.getAttribute('aria-label') ?? ''}`).join(' '))}`;
+    assert.doesNotMatch(display, /https?:\/\/|C:\\private|TypeError|provider_token_missing|ExceedConcurrencyLimit|outcome_unknown|usage limit|private-request/);
+    assert.equal(await page.evaluate(() => window.store.getState().genJobs[window.store.getState().activeJobId].turns[0].error), failure.raw);
+    await open();
+    await menu.getByRole('menuitem', { name: '复制本次会话诊断信息', exact: true }).click();
+    const copiedDiagnostic = JSON.parse(await page.evaluate(() => window.copied.pop()));
+    assert.equal(copiedDiagnostic.attempts[0].error, failure.raw);
+    assert.equal(copiedDiagnostic.memorySnapshot.turns[0].error, failure.raw);
+  }
+
   // Persist raw diagnostics, but never expose paths, stack traces or CLI output by default.
   await page.evaluate(() => {
     const state = window.store.getState(), job = state.genJobs[state.activeJobId];
@@ -58,7 +90,7 @@ try {
     window.rawGenerationFailure = raw;
     window.store.setState({ genJobs: { [job.id]: { ...job, turns: [{ ...job.turns[0], error: raw }] } } });
   });
-  await surface.getByText('本次生成未完成，请稍后重试。', { exact: true }).waitFor();
+  await surface.getByText(unknownGenerationError, { exact: true }).waitFor();
   assert.doesNotMatch(await surface.innerText(), /TypeError|provider_token_missing|private/);
   assert.equal(await page.evaluate(() => window.store.getState().genJobs[window.store.getState().activeJobId].turns[0].error), await page.evaluate(() => window.rawGenerationFailure));
   await page.evaluate(() => {
@@ -164,7 +196,7 @@ try {
   assert.match(await menu.innerText(), /未记录任务 ID/);
   assert.deepEqual(await page.evaluate(() => window.copied), []);
   assert.deepEqual(errors, []);
-  console.log('PASS: failed/running/image/video IDs, task switch, history, missing ID, clipboard errors, native menus, keyboard and bounds');
+  console.log('PASS: actionable quota/concurrency/unknown-outcome generation errors, honest unknown cause, display redaction, intact raw diagnostics, failed/running/image/video IDs, task switch, history, missing ID, clipboard errors, native menus, keyboard and bounds');
 } finally {
   await browser.close();
   await server.close();

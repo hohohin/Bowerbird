@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { notifySuccess } from "../lib/notify";
 import { ModalShell } from "./ModalShell";
 import { externalFiles } from "../lib/externalFiles";
+import { stopAudioPreview } from "../lib/audioPreview";
 
 /**
  * 素材重命名弹窗（约定 13 全屏 Modal 形态，照 ConfirmDialog 范式 + 单 input）。
@@ -55,7 +56,7 @@ export function RenameDialog({
     setError(null);
     try {
       if (localPath) await externalFiles.rename(assetId, localPath, trimmed);
-      else await api.renameAsset(assetId, trimmed);
+      else { stopAudioPreview(assetId); await api.renameAsset(assetId, trimmed); }
       notifySuccess("素材名称已更新");
       onClose();
     } catch (e) {

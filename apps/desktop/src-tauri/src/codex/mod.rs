@@ -19,6 +19,7 @@ pub(crate) mod jimeng_diagnostics;
 pub mod openai_api;
 pub mod types;
 pub mod understand;
+pub(crate) mod update;
 
 /// 生成 provider。理解引擎另由 UnderstandProvider 选择。
 /// 命令层经 [`resolve_gen_provider`] 按 `provider` 参数取实现（PROJECT.md 约定 1）。

@@ -39,6 +39,9 @@ pub fn probe(path: &Path) -> AppResult<ProbeMeta> {
     if is_video(&ext) {
         return probe_video(path, ext, size);
     }
+    if super::audio::is_audio(&ext) {
+        return Ok(ProbeMeta { ext, width: 0, height: 0, size, duration: 0.0 });
+    }
 
     // 图片 / SVG / PSD：用 image crate（SVG/PSD 解码失败 → 0×0，前端占位）
     let (width, height) = match ImageReader::open(path).and_then(|r| r.with_guessed_format()) {

@@ -8,6 +8,7 @@ import type { Folder } from "../lib/types";
 import { ModalShell } from "./ModalShell";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import { useStore } from "../store";
+import { stopAudioPreviewInFolder } from "../lib/audioPreview";
 
 export function CollectionEditorDialog({ collections, item, parentId, projectId = null, onClose, onSaved }: {
   collections: Folder[]; item?: Folder; parentId: string | null; projectId?: string | null; onClose: () => void; onSaved: (id: string) => void;
@@ -24,7 +25,10 @@ export function CollectionEditorDialog({ collections, item, parentId, projectId 
     lock.current = true; setBusy(true); setError("");
     try {
       let id = item?.id;
-      if (id) await folderConnections.renameFolder(id, name);
+      if (id) {
+        if (item && "path" in item && typeof item.path === "string") stopAudioPreviewInFolder(item.path);
+        await folderConnections.renameFolder(id, name);
+      }
       else {
         const path = parent ? null : location || await api.pickFolder();
         if (!parent && !path) return;

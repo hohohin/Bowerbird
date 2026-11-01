@@ -1,3 +1,5 @@
+// Shared library layout must load before component and theme overrides.
+import "./components/LocalFileWorkspace.css";
 import { useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useLocalFileMode } from "./lib/localFileMode";

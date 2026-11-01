@@ -7,6 +7,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 use std::{
+    collections::HashSet,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -14,8 +15,19 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 // Serialize walks and physical mutations so a refresh cannot reconcile a half-finished move.
 static GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
-static REFRESH_RUNNING: Mutex<bool> = Mutex::new(false);
-static REFRESH_AGAIN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[path = "connection_watch.rs"]
+mod watcher;
+pub use watcher::watch;
+
+#[derive(Default)]
+struct RefreshQueue {
+    running: bool,
+    all: bool,
+    roots: HashSet<String>,
+    priority: Option<String>,
+}
+static REFRESH: std::sync::LazyLock<Mutex<RefreshQueue>> =
+    std::sync::LazyLock::new(|| Mutex::new(RefreshQueue::default()));
 fn changed(app: &AppHandle) {
     let _ = app.emit("library://assets-changed", ());
     let _ = app.emit("external-files://changed", ());
@@ -34,47 +46,86 @@ pub(super) async fn mutation<T: Send + 'static>(
     changed(&app);
     value
 }
-fn refresh(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>, _root: Option<String>) {
-    let mut running = REFRESH_RUNNING.lock().unwrap();
-    if *running {
-        REFRESH_AGAIN.store(true, std::sync::atomic::Ordering::Release);
+fn refresh(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>, folder: Option<String>) {
+    queue_refresh(app, db, paths, None, folder);
+}
+fn queue_refresh(
+    app: AppHandle,
+    db: Arc<Database>,
+    paths: Arc<LibraryPaths>,
+    roots: Option<HashSet<String>>,
+    priority: Option<String>,
+) {
+    let mut queue = REFRESH.lock().unwrap();
+    if let Some(roots) = roots {
+        queue.roots.extend(roots);
+    } else {
+        queue.all = true;
+    }
+    if priority.is_some() {
+        queue.priority = priority;
+    }
+    if queue.running {
         return;
     }
-    *running = true;
-    drop(running);
+    queue.running = true;
+    drop(queue);
     tauri::async_runtime::spawn(async move {
         loop {
+            // Multiple panes/focus events and bursts of writes share one background walk.
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let (all, requested, priority) = {
+                let mut queue = REFRESH.lock().unwrap();
+                (
+                    std::mem::take(&mut queue.all),
+                    std::mem::take(&mut queue.roots),
+                    queue.priority.clone(),
+                )
+            };
             if let Ok(_permit) = GATE.acquire().await {
                 let (app2, db2, paths2) = (app.clone(), db.clone(), paths.clone());
                 let result = tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
-                    for id in db2.connected_root_ids()? {
-                        let mut last =
-                            std::time::Instant::now() - std::time::Duration::from_secs(1);
-                        let value = db2.scan_connection_with_progress(&paths2, &id, || {
-                            if last.elapsed() >= std::time::Duration::from_millis(500) {
-                                changed(&app2);
-                                last = std::time::Instant::now();
-                            }
-                        });
+                    let priority_root = priority
+                        .as_deref()
+                        .and_then(|id| db2.connected_folder(id).ok())
+                        .map(|f| f.root_id);
+                    let mut ids = db2.connected_root_ids()?;
+                    if !all {
+                        ids.retain(|id| requested.contains(id));
+                    }
+                    ids.sort_by_key(|id| Some(id) != priority_root.as_ref());
+                    let mut last = std::time::Instant::now() - std::time::Duration::from_secs(1);
+                    for id in ids {
+                        let value = db2.scan_connection_prioritized(
+                            &paths2,
+                            &id,
+                            priority.as_deref(),
+                            || {
+                                if last.elapsed() >= std::time::Duration::from_millis(500) {
+                                    changed(&app2);
+                                    last = std::time::Instant::now();
+                                }
+                            },
+                        );
                         if let Err(error) = value {
                             tracing::warn!("connection scan {id}: {error}");
                         }
-                        changed(&app2);
                     }
                     Ok(())
                 })
                 .await;
-                if let Err(error) = result {
-                    tracing::warn!("connection refresh: {error}");
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => tracing::warn!("connection refresh: {error}"),
+                    Err(error) => tracing::warn!("connection refresh worker: {error}"),
                 }
                 changed(&app);
             }
-            let mut running = REFRESH_RUNNING.lock().unwrap();
-            if REFRESH_AGAIN.swap(false, std::sync::atomic::Ordering::AcqRel) {
-                drop(running);
+            let mut queue = REFRESH.lock().unwrap();
+            if queue.all || !queue.roots.is_empty() {
                 continue;
             }
-            *running = false;
+            queue.running = false;
             break;
         }
     });
@@ -119,8 +170,9 @@ pub async fn refresh_folder_connections(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
+    folder_id: Option<String>,
 ) -> AppResult<()> {
-    refresh(app, db.inner().clone(), paths.inner().clone(), None);
+    refresh(app, db.inner().clone(), paths.inner().clone(), folder_id);
     Ok(())
 }
 fn allow_entries(app: &AppHandle, entries: &[ConnectionEntry]) -> AppResult<()> {

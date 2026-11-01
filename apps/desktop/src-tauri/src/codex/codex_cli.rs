@@ -9,7 +9,7 @@
 //! 可用 `codex resume <id>` 在 TUI 回看完整对话），从 `item.completed` 取
 //! `agent_message` 正文作为最终答案。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -490,20 +490,54 @@ pub(crate) fn app_data_dir() -> Option<PathBuf> {
     None
 }
 
-/// 托管安装的 codex 二进制（一键直装解压到 `{app_data}/codex-cli/vendor/<triple>/bin/`）。
-/// triple 由安装时的平台包决定，这里扫 `vendor/*/bin/` 定位，不对目录名做硬编码。
-pub(crate) fn managed_codex_binary() -> Option<PathBuf> {
-    let vendor = app_data_dir()?.join("codex-cli").join("vendor");
+/// 兼容平台包的 `bin/codex` 和 `codex/codex` 两种布局，triple 由安装包决定。
+pub(crate) fn codex_binary_in(root: &Path) -> Option<PathBuf> {
     let name = if cfg!(target_os = "windows") {
         "codex.exe"
     } else {
         "codex"
     };
-    std::fs::read_dir(&vendor)
-        .ok()?
-        .flatten()
-        .map(|e| e.path().join("bin").join(name))
-        .find(|p| p.is_file())
+    for entry in std::fs::read_dir(root.join("vendor")).ok()?.flatten() {
+        for layout in ["bin", "codex"] {
+            let binary = entry.path().join(layout).join(name);
+            if binary.is_file() {
+                return Some(binary);
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn stable_version(version: &str) -> Option<[u64; 3]> {
+    let parts: Vec<_> = version.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let mut parsed = [0; 3];
+    for (index, part) in parts.iter().enumerate() {
+        if part.is_empty() || !part.bytes().all(|c| c.is_ascii_digit())
+            || (part.len() > 1 && part.starts_with('0'))
+        {
+            return None;
+        }
+        parsed[index] = part.parse().ok()?;
+    }
+    Some(parsed)
+}
+
+fn managed_codex_binary_in(root: &Path) -> Option<PathBuf> {
+    let current = std::fs::read(root.join("current.json"))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<String>(&bytes).ok())
+        .filter(|version| stable_version(version).is_some())
+        .and_then(|version| codex_binary_in(&root.join("versions").join(version)));
+    // 旧目录不迁移或删除，已有 provider / 活动进程仍可继续使用之前解析的路径。
+    current.or_else(|| codex_binary_in(root))
+}
+
+/// 新安装经 current.json 选择版本目录；指针缺失、损坏或目标不可用时兼容旧安装。
+pub(crate) fn managed_codex_binary() -> Option<PathBuf> {
+    managed_codex_binary_in(&app_data_dir()?.join("codex-cli"))
 }
 
 /// 在候选目录中按顺序查找可执行入口；返回完整路径，避免依赖 GUI 进程的 PATH。
@@ -753,6 +787,99 @@ mod tests {
     use super::*;
     use std::fs;
     use ulid::Ulid;
+
+    fn write_managed_binary(root: &Path, layout: &str) -> PathBuf {
+        let name = if cfg!(target_os = "windows") { "codex.exe" } else { "codex" };
+        let binary = root.join("vendor/test-platform").join(layout).join(name);
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fs::write(&binary, b"isolated binary fixture").unwrap();
+        binary
+    }
+
+    #[test]
+    fn stable_version_requires_canonical_release_numbers() {
+        assert_eq!(stable_version("0.147.0"), Some([0, 147, 0]));
+        assert_eq!(stable_version("12.34.56"), Some([12, 34, 56]));
+        for version in ["01.2.3", "1.02.3", "1.2.03", "18446744073709551616.0.0", "0.148.0-beta", "../0.148.0"] {
+            assert_eq!(stable_version(version), None, "{version:?}");
+        }
+    }
+
+    #[test]
+    fn managed_binary_supports_both_vendor_layouts_and_only_files() {
+        let root = std::env::temp_dir().join(format!("bb-codex-layout-{}", Ulid::new()));
+        assert!(codex_binary_in(&root).is_none());
+        for layout in ["bin", "codex"] {
+            let install = root.join(layout);
+            let binary = write_managed_binary(&install, layout);
+            assert_eq!(codex_binary_in(&install), Some(binary.clone()));
+            fs::remove_file(&binary).unwrap();
+            fs::create_dir(&binary).unwrap();
+            assert!(codex_binary_in(&install).is_none(), "a directory is not an executable");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_binary_prefers_current_version_and_keeps_old_paths() {
+        let root = std::env::temp_dir().join(format!("bb-codex-current-{}", Ulid::new()));
+        let legacy = write_managed_binary(&root, "bin");
+        let first = write_managed_binary(&root.join("versions/0.147.0"), "bin");
+        let second = write_managed_binary(&root.join("versions/0.148.0"), "codex");
+        fs::write(root.join("current.json"), r#""0.147.0""#).unwrap();
+        assert_eq!(managed_codex_binary_in(&root), Some(first.clone()));
+        fs::write(root.join("current.json"), r#""0.148.0""#).unwrap();
+        assert_eq!(managed_codex_binary_in(&root), Some(second));
+        assert!(first.is_file());
+        assert!(legacy.is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_binary_uses_legacy_for_missing_or_unavailable_current() {
+        let root = std::env::temp_dir().join(format!("bb-codex-legacy-{}", Ulid::new()));
+        let legacy = write_managed_binary(&root, "bin");
+        write_managed_binary(&root.join("versions/0.148.0"), "codex");
+        assert_eq!(managed_codex_binary_in(&root), Some(legacy.clone()));
+        fs::write(root.join("current.json"), r#""0.149.0""#).unwrap();
+        assert_eq!(managed_codex_binary_in(&root), Some(legacy.clone()));
+        fs::remove_file(legacy).unwrap();
+        assert!(managed_codex_binary_in(&root).is_none(), "never guess an unselected version");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_binary_rejects_corrupt_or_nonstable_version_pointers() {
+        let root = std::env::temp_dir().join(format!("bb-codex-invalid-{}", Ulid::new()));
+        let legacy = write_managed_binary(&root, "bin");
+        for value in ["", "{", "null", "123", r#"{"version":"0.148.0"}"#, r#"["0.148.0"]"#] {
+            fs::write(root.join("current.json"), value).unwrap();
+            assert_eq!(managed_codex_binary_in(&root), Some(legacy.clone()));
+        }
+        for version in ["", "0.148", "0.148.0.1", "0..0", "0.148.0-beta.1", "0.148.0+build", "v0.148.0", " 0.148.0", "０.148.0"] {
+            // These directories can exist, but must never be selected by an invalid pointer.
+            if !version.is_empty() {
+                write_managed_binary(&root.join("versions").join(version), "codex");
+            }
+            fs::write(root.join("current.json"), serde_json::to_vec(version).unwrap()).unwrap();
+            assert_eq!(managed_codex_binary_in(&root), Some(legacy.clone()), "{version:?}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn managed_binary_rejects_pointer_paths_even_when_target_exists() {
+        let sandbox = std::env::temp_dir().join(format!("bb-codex-escape-{}", Ulid::new()));
+        let root = sandbox.join("managed");
+        fs::create_dir_all(root.join("versions")).unwrap();
+        let outside = sandbox.join("outside");
+        write_managed_binary(&outside, "bin");
+        for version in ["../../outside".to_string(), "..\\..\\outside".to_string(), outside.to_string_lossy().into_owned()] {
+            fs::write(root.join("current.json"), serde_json::to_vec(&version).unwrap()).unwrap();
+            assert!(managed_codex_binary_in(&root).is_none(), "{version:?}");
+        }
+        fs::remove_dir_all(sandbox).unwrap();
+    }
 
     #[test]
     fn terminal_jsonl_failure_rejects_partial_answer_even_with_zero_exit() {

@@ -1,0 +1,19 @@
+.audio-waveform { position: relative; width: 100%; height: 166px; min-height: 64px; overflow: visible; background: var(--lt-panel, var(--bb-surface)); color: var(--bb-muted); }
+.audio-waveform-wave { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; border-radius: 0; padding: 0; background: transparent; color: inherit; cursor: crosshair; }
+.audio-waveform-wave canvas { display: block; width: 100%; height: 100%; pointer-events: none; }
+.audio-waveform-wave:disabled { cursor: default; }
+.audio-waveform :is(button):focus-visible { outline: 1px solid var(--bb-blue); outline-offset: 3px; }
+.audio-waveform-progress, .audio-waveform-hover { position: absolute; left: 0; top: 18px; bottom: 18px; width: 1px; pointer-events: none; opacity: 0; }
+.audio-waveform-progress { background: var(--bb-blue); }
+.audio-waveform[data-playing="true"] .audio-waveform-progress { opacity: 1; }
+.audio-waveform-hover { background: var(--bb-muted); }
+.audio-waveform-hover::before { content: ""; position: absolute; top: -3px; left: -2px; width: 5px; height: 5px; background: currentColor; clip-path: polygon(0 0,100% 0,50% 100%); }
+.audio-waveform-time { position: absolute; top: 10px; right: 12px; color: var(--bb-muted); font: 10px ui-monospace, Consolas, monospace; opacity: 0; pointer-events: none; }
+.audio-waveform-wave:is(:hover, :focus-visible):not(:disabled) :is(.audio-waveform-hover, .audio-waveform-time) { opacity: 1; }
+.audio-waveform-play { position: absolute; left: 4px; bottom: 4px; display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 0; background: transparent; color: var(--bb-muted); cursor: pointer; }
+.audio-waveform-play:is(:hover, :focus-visible), .audio-waveform-play[aria-pressed="true"] { color: var(--bb-blue); }
+.audio-waveform-play:disabled { opacity: .45; cursor: default; }
+.audio-waveform-error { position: absolute; bottom: 10px; right: 10px; left: 44px; color: var(--bb-muted); font-size: 11px; line-height: 1.4; text-align: right; }
+.audio-waveform-error button { border: 0; padding: 4px; margin-left: 4px; background: transparent; color: var(--bb-blue); cursor: pointer; }
+.audio-waveform[data-interactive="false"] { pointer-events: none; }
+.audio-waveform[data-interactive="false"] .audio-waveform-play[aria-pressed="true"] { pointer-events: auto; }

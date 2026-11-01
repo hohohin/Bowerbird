@@ -28,14 +28,17 @@ pub fn image_path(path: &Path) -> bool {
 }
 fn original(path: &Path) -> AppResult<PathBuf> {
     let path =
-        fs::canonicalize(path).map_err(|_| invalid("原图片不可用，请检查文件权限或重新定位"))?;
-    if !path.is_file() || !(image_path(&path) || video_path(&path)) {
-        return Err(invalid("请选择支持的图片或视频"));
+        fs::canonicalize(path).map_err(|_| invalid("原素材不可用，请检查文件权限或重新定位"))?;
+    if !path.is_file() || !(image_path(&path) || video_path(&path) || audio_path(&path)) {
+        return Err(invalid("请选择支持的图片、视频或音频"));
     }
     Ok(path)
 }
 pub fn video_path(path: &Path) -> bool {
     crate::media::probe::is_video(path.extension().and_then(|s| s.to_str()).unwrap_or(""))
+}
+pub fn audio_path(path: &Path) -> bool {
+    crate::media::audio::is_audio(path.extension().and_then(|s| s.to_str()).unwrap_or(""))
 }
 pub fn fingerprint(path: &Path) -> AppResult<String> {
     let mut file = fs::File::open(path)?;
@@ -88,7 +91,7 @@ pub fn browse_page(path: Option<&str>, offset: usize, all: bool) -> AppResult<Di
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
-        if metadata.is_dir() || (metadata.is_file() && (image_path(&entry.path()) || video_path(&entry.path()))) {
+        if metadata.is_dir() || (metadata.is_file() && (image_path(&entry.path()) || video_path(&entry.path()) || audio_path(&entry.path()))) {
             entries.push(FileEntry {
                 path: entry.path().to_string_lossy().into_owned(),
                 name,
@@ -175,6 +178,7 @@ pub fn preview(paths: &LibraryPaths, path: &Path) -> AppResult<String> {
 
 pub fn preview_with_index(paths: &LibraryPaths, db: Option<&Database>, path: &Path) -> AppResult<String> {
     let path = original(path)?;
+    if audio_path(&path) { return Err(invalid("音频请使用波形预览")); }
     let hash = preview_key(&path, &fs::metadata(&path)?)?;
     let folder = paths.root.join("external-previews");
     fs::create_dir_all(&folder)?;
@@ -218,6 +222,9 @@ pub fn preview_with_index(paths: &LibraryPaths, db: Option<&Database>, path: &Pa
 mod shell_thumbnail;
 use shell_thumbnail::cached as shell_thumbnail;
 
+#[path = "connected_media.rs"]
+mod connected_media;
+
 impl Database {
     pub fn link_external_to_library(&self, id: &str) -> AppResult<Asset> {
         let conn = self.conn.lock().unwrap();
@@ -248,6 +255,7 @@ impl Database {
         self.index_external_with_id(paths, path, None)
     }
     pub fn index_external_with_id(&self, paths: &LibraryPaths, path: &Path, preferred_id: Option<&str>) -> AppResult<Asset> {
+        if audio_path(path) { return self.index_connected_file(paths, path, preferred_id); }
         let supplied = path.to_string_lossy().into_owned();
         let path = original(path)?;
         // Files created in BowerbirdLibrary keep their existing image identity when browsed.
@@ -269,7 +277,8 @@ impl Database {
             return Err(invalid("无法读取这张图片，请确认文件完整"));
         }
         let dimensions = (media.width, media.height);
-        let thumb = if media.ext == "svg" { Some(path.to_string_lossy().into_owned()) }
+        let thumb = if audio_path(&path) { None }
+            else if media.ext == "svg" { Some(path.to_string_lossy().into_owned()) }
             else if video_path(&path) || media.ext == "psd" { preview(paths, &path).ok() }
             else { Some(preview(paths, &path)?) };
         if fingerprint(&path)? != hash {
@@ -324,16 +333,23 @@ impl Database {
     }
     fn resolve_external_files(&self, references: &[String], compatible: bool) -> AppResult<Vec<String>> {
         references.iter().map(|path| {
+            if compatible && audio_path(Path::new(path)) { return Err(invalid("音频暂不支持作为图片模型参考")); }
             let row: Option<(String, Option<String>, Option<String>)> = self.conn.lock().unwrap().query_row(
                 "SELECT a.store_path,e.fingerprint,a.thumb_path FROM external_asset_paths p JOIN assets a ON a.id=p.asset_id LEFT JOIN external_assets e ON e.asset_id=a.id WHERE p.path=?1", [path], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
             if let Some((current, expected, thumb)) = row {
+                if compatible && audio_path(Path::new(&current)) { return Err(invalid("音频暂不支持作为图片模型参考")); }
                 if let Some(expected) = expected {
                     let p = original(Path::new(&current))?;
                     if fingerprint(&p)? != expected { return Err(invalid("外部参考图已修改，请先确认更新引用")); }
                     if compatible && crate::media::heic::is_path(&p) {
-                        if let Some(folder) = thumb.as_deref().and_then(|value| Path::new(value).parent()) {
-                            return Ok(compatible_image_in(folder, &p)?.to_string_lossy().into_owned());
-                        }
+                        // A lazily indexed HEIC may be used as a creative reference before
+                        // it has ever appeared on screen. Resolve the cache from the library
+                        // database rather than depending on an already rendered thumbnail.
+                        // LibraryPaths::init keeps library.db directly inside its root.
+                        let folder = thumb.as_deref().and_then(|value| Path::new(value).parent()).map(Path::to_path_buf)
+                            .or_else(|| self.conn.lock().unwrap().path().and_then(|value| Path::new(value).parent()).map(|folder| folder.join("external-previews")))
+                            .ok_or_else(|| invalid("请先预览这张图片，再使用它作为参考图"))?;
+                        return Ok(compatible_image_in(&folder, &p)?.to_string_lossy().into_owned());
                     }
                 }
                 Ok(current)
@@ -359,7 +375,8 @@ impl Database {
         let mut media = crate::media::probe::probe(&input)?;
         media.ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
         let dimensions = (media.width, media.height);
-        let thumb = if media.ext == "svg" { Some(path.to_string_lossy().into_owned()) }
+        let thumb = if audio_path(&path) { None }
+            else if media.ext == "svg" { Some(path.to_string_lossy().into_owned()) }
             else if video_path(&path) || media.ext == "psd" { preview(paths, &path).ok() }
             else { Some(preview(paths, &path)?) };
         if fingerprint(&path)? != hash {

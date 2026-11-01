@@ -19,6 +19,8 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/DESKTOP-UPDATES.md` | 双端自动更新协议、密钥与发布流程、部署/回滚证据、验收边界及 Mac 协作共识 | 自动更新、更新包签名/清单发布、更新失败或双端上线状态核验前必读 |
 | `dev-doc/USER-FACING-ERRORS.md` | 全应用错误提示展示边界、中文转换、诊断保留与故障注入验证 | 新增或修改错误提示、任务失败展示、通知、安装授权及生产错误排查前必读 |
 | `PROJECT.md` | **活文档（项目内容唯一权威）**：项目说明 / 目前进展 / 关键约定 / 踩坑记录 | 每次开工前先读「目前进展」与「关键约定」 |
+| `project_logs/README.md` | PROJECT 详细历史的日期日志、2026-10-31 整理前原件、行号与哈希索引及审计处理记录 | 追溯被替代约定、完整故障过程或本次文档整理时；现行结论仍读 PROJECT.md |
+| `dev-doc/UI-DESIGN-SPEC.md` | 当前工业制图视觉与交互规范、深浅色 tokens、卡片／控件／菜单／动效及验收规则 | 设计、修改或审查任何桌面界面前读；产品决策与实装状态仍以 PROJECT.md 为准 |
 | `apps/code-reader-mcp/README.md` | GPT 网页端只读代码 MCP、脱敏快照、Node 权限限制与官方私有 HTTPS 隧道接入 | 代码只读分享、快照更新、MCP 接入或撤销权限前必读 |
 | `dev-doc/Bowerbird开发计划.md` | 当前架构与代码入口（技术栈 / 数据身份 / 生成与理解 provider），已合并旧 provider 草案 | 任何实现工作之前必读；产品决策以 PROJECT.md 为准 |
 | `dev-doc/Bowerbird定价方案v2-订阅积分制.md` | Bcoin 当前定价、Pro 功能订阅、价格快照、迁移／回退与验证边界；末尾保留历史 v2 草案 | 商业化、定价、积分、功能门控相关工作前必读 |
@@ -41,6 +43,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/VIDEO-REPLICATION.md` | 画板工具箱、视频分析与改写、插入画板生成、抖音获取、Cloud 独立计费与验证 | 视频复刻、抖音参考视频获取或分析/改写启价相关工作前必读 |
 | `spikes/video-replication-demo/README.md` | 应用外复刻 Demo 的启动、豆包语音、Codex 分镜、本机即梦订阅、零视频输入与字幕合成恢复 | 接续抖音→转写及视觉分析→替换分镜文本／图片→生成合成的独立路径验证前必读 |
 | `dev-doc/FILMCRAFT-RESEARCH.md` | FilmCraft 剪辑交互、时间线、变速、音频波形源码调研及 Bowerbird 轻剪辑建议（未定案） | 轻量视频剪辑方案、时间模型、波形缓存或 FilmCraft 复用评估前读 |
+| `dev-doc/AUDIO-LIBRARY.md` | 音频素材原位连接、流式波形缓存、共享播放器、正式组件与隔离验证 | 音频收集、波形、试听交互或音频格式支持相关工作前必读 |
 | `dev-doc/COMFYUI-LOCAL-VIDEO.md` | 本机 ComfyUI H3 视频卡片、环境检测与一键安装、固定工作流参数、账号门控、任务恢复与隔离验证 | 本机 H3 视频、首尾帧或 ComfyUI 接入/安装相关工作前必读 |
 | `dev-doc/Eagle类创意收集工具调查报告.html` | 前序竞品调研，计划的依据 | 需要背景/对标时 |
 | `reference/theory.md` | 早期素材分类（A–F 类）草稿 | 仅在追溯原始意图时 |

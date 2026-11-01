@@ -1,4 +1,5 @@
 // Page reads and mounted cards stay bounded; visited pages retain only aspect ratios.
+import { isAudioPath } from "./audioMedia.ts";
 export const CATALOG_PAGE_SIZE = 60;
 export const CATALOG_CACHE_PAGES = 16;
 export const CATALOG_GAP = 8;
@@ -12,10 +13,10 @@ export interface CatalogBlock {
   key: string; section: number; page: number; offset: number; count: number; top: number; height: number;
   columnTops: number[]; maxBottom: number;
 }
-type Dimensions = { width?: number | null; height?: number | null };
+type Dimensions = { width?: number | null; height?: number | null; store_path?: string | null };
 
 export function masonryRatios(items: readonly Dimensions[]) {
-  return items.map(item => item.width && item.height ? item.width / item.height : 1);
+  return items.map(item => isAudioPath(item.store_path) ? 2 : item.width && item.height ? item.width / item.height : 1);
 }
 
 function masonryDimensions(available: number, target: number) {

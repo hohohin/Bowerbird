@@ -10,16 +10,18 @@ import "../../../src/components/LocalFileWorkspace.css";
 import "../../../src/components/IndustrialTheme.css";
 
 const w = window as any, listeners = new Map<number, (event: unknown) => void>();
+const cold = new URLSearchParams(location.search).has("cold");
 let callbackId = 0, nextId = 0;
 const thumb = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="180"><rect width="240" height="180" fill="#7b9eaa"/><path d="M0 150L90 30l100 140" stroke="#d1d7c8" fill="none" stroke-width="12"/></svg>');
 function folder(id: string, parent_id: string | null, name: string, available = true) {
   return { id, parent_id, root_id: parent_id ? "root" : id, name, path: `/fixture/${id}`, available, count: 0, scanning: false, error: null };
 }
 w.folders = [folder("root", null, "素材目录"), folder("child", "root", "风景"), folder("nested", "child", "晨间"), folder("empty", "root", "空集合"), folder("second", null, "另一目录"), folder("offline", null, "离线目录", false)];
-function asset(id: string, video = false) { return { id, name: `${id}.${video ? "mp4" : "png"}`, ext: video ? "mp4" : "png", source: "external", width: 240, height: 180, store_path: `/fixture/${id}.${video ? "mp4" : "png"}`, thumb_path: thumb, file_mtime: 1, generation_session_id: null }; }
-function entry(id: string, folder_id: string, asset_id = id, is_reference = false, video = false) { return { id, folder_id, asset_id, name: `${id}.${is_reference ? "bowerbird" : video ? "mp4" : "png"}`, path: `/fixture/${folder_id}/${id}`, is_reference, available: true, asset: asset(asset_id, video) }; }
+function asset(id: string, video = false) { return { id, name: `${id}.${video ? "mp4" : "png"}`, ext: video ? "mp4" : "png", source: "external", width: 240, height: 180, store_path: `/fixture/${id}.${video ? "mp4" : "png"}`, thumb_path: cold ? null : thumb, file_mtime: 1, generation_session_id: null }; }
+function entry(id: string, folder_id: string, asset_id = id, is_reference = false, video = false) { return { id, folder_id, asset_id, name: `${id}.${is_reference ? "bowerbird" : video ? "mp4" : "png"}`, path: `/fixture/${folder_id}/${id}`, is_reference, available: true, version: "1", asset: asset(asset_id, video) }; }
 w.entries = [...Array.from({ length: 125 }, (_, i) => entry(`root-${i}`, "root")), entry("child-0", "child"), entry("ref-one", "child", "root-0", true), entry("ref-two", "child", "root-0", true), entry("nested-0", "nested"), entry("second-0", "second"), entry("video-0", "second", "video-0", false, true)];
 w.requests = []; w.picker = null; w.store = useStore; w.mode = useLocalFileMode; w.connections = folderConnections;
+w.previewActive = 0; w.previewPeak = 0; w.previewByPath = {}; w.previewDelay = cold ? 60 : 0;
 w.changed = () => listeners.forEach(fn => fn({ payload: null }));
 function entries(args: any) { return w.entries.filter((item: any) => (!args.folderId || item.folder_id === args.folderId) && (!args.media || (item.asset.ext === "mp4") === (args.media === "videos"))); }
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
@@ -45,7 +47,12 @@ w.__TAURI_INTERNALS__ = {
     if (command === "move_connection_entries") { for (const item of w.entries) if (args.ids.includes(item.id)) item.folder_id = args.folderId; return; }
     if (command === "disconnect_folder") { w.folders = w.folders.filter((item: any) => item.root_id !== args.id); return; }
     if (command === "relocate_folder") { w.folders.find((item: any) => item.id === args.id).available = true; return; }
-    if (command === "external_files_preview" || command === "external_files_media") return thumb;
+    if (command === "external_files_preview") {
+      w.previewActive++; w.previewPeak = Math.max(w.previewPeak, w.previewActive);
+      try { await new Promise(resolve => setTimeout(resolve, w.previewDelay)); return w.previewByPath[args.path] ?? thumb; }
+      finally { w.previewActive--; }
+    }
+    if (command === "external_files_media") return thumb;
     if (command === "catalog_overview") return { total: 1, untagged: 0, catalog: { tags: [{ id: "tag", name: "测试标签", description: "", count: 1, projectCount: 0 }], collections: [], prompts: [], tag_asset_ids: {} } };
     if (command === "catalog_page") return [asset("root-0")];
     if (command === "catalog_prepare_colors") return { after: null, more: false, failed: 0, updated: 0 };

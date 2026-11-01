@@ -135,7 +135,7 @@ export function CollectionPanel({ folder, onClose }: { folder: Folder; onClose: 
       <Plus size={14} />添加素材
     </button></>}
     description={<span className="flex items-center gap-2.5">
-      <span>{importing ? "正在导入…" : loading ? "正在加载素材…" : error ? "素材加载失败" : `${assets.length} 张素材`}</span>
+      <span>{importing ? "正在导入…" : loading ? "正在加载素材…" : error ? "素材加载失败" : `${assets.length} 项素材`}</span>
       <button type="button" className="collection-profile-button text-ink" disabled={busy} onClick={openProfile}><Palette size={14} />提炼视觉规范</button>
     </span>}
     onClose={onClose}>
@@ -154,7 +154,7 @@ export function CollectionPanel({ folder, onClose }: { folder: Folder; onClose: 
         <button type="button" className="mb-3 flex items-center gap-2 text-sm text-muted" onClick={() => setPreviewId(null)}>
           <ArrowLeft size={14} />返回集合
         </button>
-        <MediaPreview playback src={convertFileSrc(preview.store_path ?? preview.thumb_path ?? "")} alt={preview.name}
+        <MediaPreview playback asset={preview} src={convertFileSrc(preview.store_path ?? preview.thumb_path ?? "")} alt={preview.name}
           className="mx-auto max-h-[58vh] max-w-full object-contain" />
         <p className="mt-3 break-words text-center text-sm">{preview.name}</p>
       </div>
