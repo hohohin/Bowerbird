@@ -42,7 +42,7 @@ export const folderConnections = {
   trashFolder: (id: string) => invoke<void>("trash_connected_collection", { id }),
   renameEntry: (id: string, name: string) => invoke<void>("rename_connection_entry", { id, name }),
   moveEntries: (ids: string[], folderId: string) => entryBatches("move_connection_entries", ids, "ids", { folderId }),
-  trashEntries: (ids: string[]) => entryBatches("trash_connection_entries", ids, "ids"),
+  removeReferences: (ids: string[]) => entryBatches("remove_connection_references", ids, "ids"),
 };
 
 // Retain a connect request while the destination view is still mounting.

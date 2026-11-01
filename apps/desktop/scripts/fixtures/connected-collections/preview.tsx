@@ -8,6 +8,7 @@ import { folderConnections } from "../../../src/lib/folderConnections";
 import "../../../src/styles.css";
 import "../../../src/components/LocalFileWorkspace.css";
 import "../../../src/components/IndustrialTheme.css";
+import "../../../src/components/IndustrialMenus.css";
 
 const w = window as any, listeners = new Map<number, (event: unknown) => void>();
 const cold = new URLSearchParams(location.search).has("cold");
@@ -43,7 +44,15 @@ w.__TAURI_INTERNALS__ = {
     if (command === "rename_connected_collection") { w.folders.find((item: any) => item.id === args.id).name = args.name; return; }
     if (command === "create_material_references") { for (const id of args.assetIds) w.entries.push(entry(`ref-${++nextId}`, args.folderId, id, true)); return; }
     if (command === "rename_connection_entry") { w.entries.find((item: any) => item.id === args.id).name = args.name; return; }
-    if (command === "trash_connection_entries") { w.entries = w.entries.filter((item: any) => !args.ids.includes(item.id)); return; }
+    if (command === "remove_connection_references") { if (w.failReference) throw new Error(w.failReference); if (w.entries.some((item: any) => args.ids.includes(item.id) && !item.is_reference)) throw new Error("只能移出分身"); w.entries = w.entries.filter((item: any) => !args.ids.includes(item.id)); return; }
+    if (command === "get_assets_by_ids") return [...new Map(w.entries.map((item: any) => [item.asset_id, item.asset])).values()].filter((item: any) => args.assetIds.includes(item.id));
+    if (command === "preview_asset_originals") return [...new Set(args.assetIds)].map(id => { const original = w.entries.find((item: any) => item.asset_id === id)!.asset; return { asset_id: id, name: original.name, path: original.store_path, fingerprint: `fingerprint-${id}` }; });
+    if (command === "trash_asset_original") {
+      if (w.failOriginal) throw new Error(w.failOriginal);
+      w.entries = w.entries.filter((item: any) => item.is_reference || item.asset_id !== args.original.asset_id).map((item: any) => item.asset_id === args.original.asset_id ? { ...item, available: false } : item);
+      return;
+    }
+    if (command === "list_projects") return [];
     if (command === "move_connection_entries") { for (const item of w.entries) if (args.ids.includes(item.id)) item.folder_id = args.folderId; return; }
     if (command === "disconnect_folder") { w.folders = w.folders.filter((item: any) => item.root_id !== args.id); return; }
     if (command === "relocate_folder") { w.folders.find((item: any) => item.id === args.id).available = true; return; }

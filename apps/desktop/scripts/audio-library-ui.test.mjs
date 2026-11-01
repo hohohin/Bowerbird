@@ -100,15 +100,16 @@ async function mutations() {
   mutation = await page.evaluate(() => window.mutations.at(-1)); assert.equal(mutation.command, 'rename_asset'); assert.equal(mutation.paused, true); assert.equal(mutation.src, null);
   await play.click(); await progressBeyond(.2);
   await page.evaluate(() => window.openMutationDialog('delete'));
-  await page.getByRole('button', { name: '物理删除', exact: true }).click();
+  await page.getByRole('button', { name: '删除原文件', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'detached' });
-  mutation = await page.evaluate(() => window.mutations.at(-1)); assert.equal(mutation.command, 'delete_asset_with_mode'); assert.equal(mutation.paused, true); assert.equal(mutation.src, null);
+  mutation = await page.evaluate(() => window.mutations.at(-1)); assert.equal(mutation.command, 'trash_asset_original'); assert.equal(mutation.paused, true); assert.equal(mutation.src, null);
   await play.click(); await progressBeyond(.2);
   await page.evaluate(() => window.openMutationDialog('delete-reference'));
-  await page.getByRole('button', { name: '移除引用', exact: true }).click();
+  await page.getByRole('button', { name: '删除原文件', exact: true }).click();
   await page.getByRole('dialog').waitFor({ state: 'detached' });
-  mutation = await page.evaluate(() => window.mutations.at(-1)); assert.equal(mutation.paused, false, 'removing only an external reference does not mutate the playing original');
-  await play.click(); await stopped();
+  mutation = await page.evaluate(() => window.mutations.at(-1)); assert.equal(mutation.command, 'trash_asset_original');
+  assert.equal(mutation.paused, true, 'explicitly recycling an external original also stops its player'); assert.equal(mutation.src, null);
+  await stopped();
   return page.evaluate(() => window.mutations);
 }
 async function selection() {

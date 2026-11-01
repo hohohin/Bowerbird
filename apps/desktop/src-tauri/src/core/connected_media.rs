@@ -3,7 +3,7 @@ use super::*;
 
 // Windows canonicalization adds a verbatim prefix; older assets keep ordinary
 // drive/UNC paths. Match both spellings without rewriting their saved paths.
-fn connection_path_spellings(source: &Path, canonical: &Path) -> [String; 3] {
+pub(crate) fn connection_path_spellings(source: &Path, canonical: &Path) -> [String; 3] {
     let canonical = canonical.to_string_lossy().into_owned();
     #[cfg(target_os = "windows")]
     let ordinary = canonical
@@ -86,6 +86,7 @@ impl Database {
             "SELECT a.id,COALESCE(e.fingerprint,f.sha256),e.asset_id IS NOT NULL FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path IN (?1,?2,?3)",
             params![names[0],names[1],names[2]], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
         let id = if let Some((id, expected, external)) = existing {
+            restore_trashed_original(&tx, &id)?;
             if expected.as_deref().is_some_and(|value| value != hash) {
                 // Creative records belong to the stable asset, not to one content revision.
                 // Only derived visual data is invalidated; manual text/analysis stays intact.

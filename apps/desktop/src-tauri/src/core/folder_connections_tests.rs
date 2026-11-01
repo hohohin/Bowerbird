@@ -1,4 +1,346 @@
 use super::*;
+
+#[test]
+fn original_trash_preview_resolves_registered_original_once_without_copying() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let asset = f.entries(&root).pop().unwrap().asset;
+    let bytes = fs::read(f.source.join("one.png")).unwrap();
+    let preview =
+        f.db.preview_asset_originals(&[asset.id.clone(), asset.id.clone()])
+            .unwrap();
+    assert_eq!(preview.len(), 1);
+    assert_eq!(preview[0].asset_id, asset.id);
+    assert_eq!(preview[0].name, "one.png");
+    assert_eq!(preview[0].path, string(&f.source.join("one.png")));
+    assert_eq!(
+        preview[0].fingerprint,
+        external_files::fingerprint(&f.source.join("one.png")).unwrap()
+    );
+    assert_eq!(fs::read(f.source.join("one.png")).unwrap(), bytes);
+    assert_eq!(fs::read_dir(&f.paths.images).unwrap().count(), 0);
+}
+
+#[test]
+fn original_trash_preview_rejects_unknown_missing_and_non_media_targets() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let asset = f.entries(&root).pop().unwrap().asset;
+    assert!(f.db.preview_asset_originals(&[]).is_err());
+    assert!(f
+        .db
+        .preview_asset_originals(&[asset.id.clone(), "unknown".into()])
+        .is_err());
+    let invalid_file = f.source.join("reference.bowerbird");
+    fs::write(&invalid_file, b"{}").unwrap();
+    for path in [&f.source, &invalid_file, &f.source.join("missing.png")] {
+        f.db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE assets SET store_path=?2 WHERE id=?1",
+                params![asset.id, string(path)],
+            )
+            .unwrap();
+        assert!(f.db.preview_asset_originals(&[asset.id.clone()]).is_err());
+    }
+}
+
+#[test]
+fn original_trash_keeps_creative_identity_and_reference_files_but_marks_them_missing() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let original = f.entries(&root).pop().unwrap();
+    f.db.create_material_references(&f.paths, &[original.asset_id.clone()], &target)
+        .unwrap();
+    f.db.create_project(
+        "trash-project",
+        "project",
+        f.source.to_str().unwrap(),
+        "project",
+        "user",
+    )
+    .unwrap();
+    f.db.add_assets_to_project("trash-project", &[original.asset_id.clone()])
+        .unwrap();
+    let reference = f.entries(&target).pop().unwrap();
+    let expected = fs::read(&original.path).unwrap();
+    let preview =
+        f.db.preview_asset_originals(&[reference.asset_id.clone()])
+            .unwrap();
+    let recycled = f._temp.path().join("recycled.png");
+    f.db.trash_asset_original_with(&preview[0], |path| {
+        fs::rename(path, &recycled)?;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(fs::read(&recycled).unwrap(), expected);
+    assert!(Path::new(&reference.path).is_file());
+    assert!(f.db.get_asset(&original.asset_id).unwrap().is_some());
+    assert!(!f.entries(&target)[0].available);
+    assert!(f.entries(&root).is_empty());
+    let membership: i64 = f
+        .db
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM project_assets WHERE project_id='trash-project' AND asset_id=?1",
+            [&original.asset_id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(membership, 1);
+}
+
+#[test]
+fn original_trash_rechecks_the_confirmed_path_and_bytes() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let preview =
+        f.db.preview_asset_originals(&[entry.asset_id.clone()])
+            .unwrap();
+    f.db.rename_connection_entry(&entry.id, "moved.png")
+        .unwrap();
+    assert!(f
+        .db
+        .trash_asset_original_with(&preview[0], |_| panic!("stale path must not recycle"))
+        .is_err());
+    let preview =
+        f.db.preview_asset_originals(&[entry.asset_id.clone()])
+            .unwrap();
+    fs::write(&preview[0].path, b"replaced while confirming").unwrap();
+    assert!(f
+        .db
+        .trash_asset_original_with(&preview[0], |_| panic!("stale bytes must not recycle"))
+        .is_err());
+    assert!(Path::new(&preview[0].path).is_file());
+}
+
+#[test]
+fn original_trash_failure_preserves_files_and_connection_availability() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let preview =
+        f.db.preview_asset_originals(&[entry.asset_id.clone()])
+            .unwrap();
+    assert!(f
+        .db
+        .trash_asset_original_with(&preview[0], |_| Err(invalid("recycle unavailable")))
+        .is_err());
+    assert!(Path::new(&entry.path).is_file());
+    assert!(f.entries(&root)[0].available);
+    assert!(f.db.get_asset(&entry.asset_id).unwrap().is_some());
+}
+
+#[test]
+fn original_trash_sql_preflight_failure_never_touches_the_file() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let preview =
+        f.db.preview_asset_originals(&[entry.asset_id.clone()])
+            .unwrap();
+    f.db.conn.lock().unwrap().execute_batch("CREATE TRIGGER refuse_original_trash BEFORE UPDATE OF library_hidden ON assets BEGIN SELECT RAISE(ABORT,'synthetic SQL failure'); END;").unwrap();
+    assert!(f
+        .db
+        .trash_asset_original_with(&preview[0], |_| panic!("SQL failure must precede recycle"))
+        .is_err());
+    assert!(Path::new(&entry.path).is_file());
+    assert!(f.entries(&root)[0].available);
+    assert_eq!(
+        f.db.conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM trashed_asset_originals", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn original_trash_commit_failure_reports_that_the_original_is_already_recycled() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let preview =
+        f.db.preview_asset_originals(&[entry.asset_id.clone()])
+            .unwrap();
+    f.db.conn.lock().unwrap().execute_batch("CREATE TABLE fail_commit(id TEXT REFERENCES assets(id) DEFERRABLE INITIALLY DEFERRED); CREATE TRIGGER defer_original_trash_failure AFTER INSERT ON trashed_asset_originals BEGIN INSERT INTO fail_commit VALUES('absent'); END;").unwrap();
+    let recycled = f._temp.path().join("recycled.png");
+    let error =
+        f.db.trash_asset_original_with(&preview[0], |path| {
+            fs::rename(path, &recycled)?;
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("原文件已放入回收站"));
+    assert!(!Path::new(&entry.path).exists());
+    assert!(recycled.is_file());
+    assert!(f.db.get_asset(&entry.asset_id).unwrap().is_some());
+}
+
+#[test]
+fn original_trash_updates_all_registered_identities_for_the_same_file() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let entry = f.entries(&root).pop().unwrap();
+    let mut duplicate = entry.asset.clone();
+    duplicate.id = "same-original".into();
+    f.db.insert_asset(&duplicate).unwrap();
+    f.db.create_material_references(&f.paths, &[duplicate.id.clone()], &target)
+        .unwrap();
+    let preview =
+        f.db.preview_asset_originals(&[entry.asset_id.clone()])
+            .unwrap();
+    f.db.trash_asset_original_with(&preview[0], |path| {
+        fs::rename(path, f._temp.path().join("recycled.png"))?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(
+        f.db.get_asset(&entry.asset_id)
+            .unwrap()
+            .unwrap()
+            .library_hidden
+    );
+    assert!(
+        f.db.get_asset(&duplicate.id)
+            .unwrap()
+            .unwrap()
+            .library_hidden
+    );
+    assert!(!f.entries(&target)[0].available);
+    assert_eq!(
+        f.db.conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM trashed_asset_originals", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn original_trash_supports_unconnected_registered_files() {
+    let f = Fixture::new();
+    let asset =
+        f.db.index_connected_file(&f.paths, &f.source.join("one.png"), None)
+            .unwrap();
+    assert!(!f.db.has_connected_asset(&asset.id).unwrap());
+    let preview = f.db.preview_asset_originals(&[asset.id.clone()]).unwrap();
+    f.db.trash_asset_original_with(&preview[0], |path| {
+        fs::rename(path, f._temp.path().join("recycled.png"))?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(!f.source.join("one.png").exists());
+    assert!(f.db.get_asset(&asset.id).unwrap().is_some());
+}
+
+#[test]
+fn original_trash_supports_managed_generated_assets_without_external_registration() {
+    let f = Fixture::new();
+    let asset =
+        f.db.index_connected_file(&f.paths, &f.source.join("one.png"), None)
+            .unwrap();
+    f.db.conn
+        .lock()
+        .unwrap()
+        .execute("DELETE FROM external_assets WHERE asset_id=?1", [&asset.id])
+        .unwrap();
+    f.db.conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE assets SET source='generated' WHERE id=?1",
+            [&asset.id],
+        )
+        .unwrap();
+    let preview = f.db.preview_asset_originals(&[asset.id.clone()]).unwrap();
+    f.db.trash_asset_original_with(&preview[0], |path| {
+        fs::rename(path, f._temp.path().join("recycled.png"))?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(!f.source.join("one.png").exists());
+    assert!(f.db.get_asset(&asset.id).unwrap().unwrap().library_hidden);
+}
+
+#[test]
+fn reference_removal_rejects_originals_before_touching_any_selected_file() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let original = f.entries(&root).pop().unwrap();
+    f.db.create_material_references(&f.paths, &[original.asset_id.clone()], &target)
+        .unwrap();
+    let reference = f.entries(&target).pop().unwrap();
+    assert!(f
+        .db
+        .remove_connection_references_with(&[reference.id.clone(), original.id], |_| panic!(
+            "mixed removal must not recycle"
+        ))
+        .is_err());
+    assert!(Path::new(&reference.path).is_file());
+    assert!(Path::new(&original.path).is_file());
+    f.db.remove_connection_references_with(&[reference.id.clone(), reference.id], |path| {
+        fs::rename(path, f._temp.path().join("recycled.bowerbird"))?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(f.entries(&target).is_empty());
+    assert!(Path::new(&original.path).is_file());
+    assert!(f.db.get_asset(&original.asset_id).unwrap().is_some());
+}
+
+#[test]
+fn reference_removal_can_retry_after_partial_failure_without_touching_originals() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let original = f.entries(&root).pop().unwrap();
+    f.db.create_material_references(&f.paths, &[original.asset_id.clone()], &target)
+        .unwrap();
+    fs::copy(
+        &f.entries(&target)[0].path,
+        f.target.join("second.bowerbird"),
+    )
+    .unwrap();
+    f.db.scan_connection(&f.paths, &target).unwrap();
+    let entries = f.entries(&target);
+    let ids = entries
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(ids.len(), 2);
+    let count = std::cell::Cell::new(0);
+    assert!(f
+        .db
+        .remove_connection_references_with(&ids, |path| {
+            count.set(count.get() + 1);
+            if count.get() == 2 {
+                return Err(invalid("synthetic locked file"));
+            }
+            fs::rename(path, f._temp.path().join("first.bowerbird"))?;
+            Ok(())
+        })
+        .is_err());
+    assert_eq!(f.entries(&target).len(), 1);
+    f.db.remove_connection_references_with(&ids, |path| {
+        fs::rename(path, f._temp.path().join("second.bowerbird"))?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(f.entries(&target).is_empty());
+    assert!(Path::new(&original.path).is_file());
+}
 struct Fixture {
     _temp: tempfile::TempDir,
     db: Database,

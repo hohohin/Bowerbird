@@ -330,6 +330,16 @@ w.__TAURI_INTERNALS__ = {
       w.emitAssetsChanged();
       return null;
     }
+    if (command === "preview_asset_originals") return assets.filter(asset => args.assetIds.includes(asset.id)).map(asset => ({ asset_id: asset.id, name: asset.name, path: `/synthetic/${asset.id}.png`, fingerprint: "fixture-original" }));
+    if (command === "trash_asset_original") {
+      if (w.failAssetDelete) throw "模拟删除失败";
+      const asset = assets.find(asset => asset.id === args.original.asset_id);
+      if (!asset) throw "素材已不存在";
+      Object.assign(asset, { library_hidden: true });
+      useStore.setState({ assets: assets.filter((asset: any) => !asset.library_hidden) as any });
+      w.emitAssetsChanged();
+      return null;
+    }
     if (command === "delete_asset_with_mode") {
       if (w.failAssetDelete) throw "模拟删除失败";
       if (args.mode === "delete") {

@@ -224,6 +224,15 @@ use shell_thumbnail::cached as shell_thumbnail;
 
 #[path = "connected_media.rs"]
 mod connected_media;
+pub(crate) use connected_media::connection_path_spellings;
+
+fn restore_trashed_original(conn: &rusqlite::Connection, id: &str) -> AppResult<()> {
+    if conn.execute("DELETE FROM trashed_asset_originals WHERE asset_id=?1", [id])? > 0 {
+        conn.execute("UPDATE external_assets SET library_member=1 WHERE asset_id=?1", [id])?;
+        conn.execute("UPDATE assets SET library_hidden=0 WHERE id=?1", [id])?;
+    }
+    Ok(())
+}
 
 impl Database {
     pub fn link_external_to_library(&self, id: &str) -> AppResult<Asset> {
@@ -263,6 +272,11 @@ impl Database {
             "SELECT id FROM assets WHERE store_path IN (?1,?2) AND NOT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=assets.id)",
             params![path.to_string_lossy(), supplied], |row| row.get(0)).optional()?;
         if let Some(id) = managed {
+            let conn = self.conn.lock().unwrap();
+            let tx = conn.unchecked_transaction()?;
+            restore_trashed_original(&tx, &id)?;
+            tx.commit()?;
+            drop(conn);
             return self.get_asset(&id)?.ok_or_else(|| invalid("素材已不存在"));
         }
         // Never treat a managed library file as an external original.
@@ -297,6 +311,10 @@ impl Database {
                 return Err(invalid(
                     "原图片内容已变化，请在「外部引用」中确认更新后再使用",
                 ));
+            }
+            // A historical alias can still exist while the current original is missing.
+            if fs::canonicalize(&current).ok().is_some_and(|current| current == Path::new(&path)) {
+                restore_trashed_original(&tx, &id)?;
             }
             id
         } else {

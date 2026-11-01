@@ -101,6 +101,13 @@ pub struct ConnectionEntry {
     pub asset: Asset,
     pub version: Option<String>,
 }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AssetOriginal {
+    pub asset_id: String,
+    pub name: String,
+    pub path: String,
+    pub fingerprint: String,
+}
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MaterialReference {
@@ -1080,6 +1087,135 @@ impl Database {
     }
     pub fn trash_connection_entries(&self, ids: &[String]) -> AppResult<()> {
         self.trash_entries_with(ids, recycle)
+    }
+    pub fn preview_asset_originals(&self, ids: &[String]) -> AppResult<Vec<AssetOriginal>> {
+        if ids.is_empty() || ids.len() > 2000 {
+            return Err(invalid("请选择素材，一次最多操作 2000 项"));
+        }
+        let mut seen = HashSet::new();
+        ids.iter()
+            .filter(|id| seen.insert(id.as_str()))
+            .map(|id| self.asset_original(id))
+            .collect()
+    }
+    fn asset_original(&self, id: &str) -> AppResult<AssetOriginal> {
+        let asset = self
+            .get_asset(id)?
+            .ok_or_else(|| invalid("素材记录已变化，请刷新后重新选择"))?;
+        let stored = Path::new(
+            asset
+                .store_path
+                .as_deref()
+                .ok_or_else(|| invalid("原文件暂不可用，请重新定位后重试"))?,
+        );
+        if fs::symlink_metadata(stored)?.file_type().is_symlink() {
+            return Err(invalid("文件已变为链接，请刷新后重试"));
+        }
+        let path = fs::canonicalize(stored)?;
+        if !path.is_file() || !media(&path) {
+            return Err(invalid("原文件暂不可用，请重新定位后重试"));
+        }
+        let before = stamp(&path)?;
+        let fingerprint = external_files::fingerprint(&path)?;
+        if stamp(&path)? != before {
+            return Err(invalid("原文件正在变化，请稍后重新确认"));
+        }
+        let expected: Option<String> = self.conn.lock().unwrap().query_row(
+            "SELECT COALESCE(e.fingerprint,f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1", [id], |row| row.get(0))?;
+        if expected.is_some_and(|value| value != fingerprint) {
+            return Err(invalid("原文件内容已变化，请刷新后重新确认"));
+        }
+        Ok(AssetOriginal {
+            asset_id: asset.id,
+            name: name(&path),
+            path: string(&path),
+            fingerprint,
+        })
+    }
+    pub fn trash_asset_original(&self, original: &AssetOriginal) -> AppResult<()> {
+        self.trash_asset_original_with(original, recycle)
+    }
+    fn trash_asset_original_with(
+        &self,
+        original: &AssetOriginal,
+        trash: impl Fn(&Path) -> AppResult<()>,
+    ) -> AppResult<()> {
+        let current = self.asset_original(&original.asset_id)?;
+        if current.path != original.path || current.fingerprint != original.fingerprint {
+            return Err(invalid("原文件的位置或内容已变化，请重新打开确认窗口"));
+        }
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let stored: String = tx.query_row(
+            "SELECT store_path FROM assets WHERE id=?1",
+            [&original.asset_id],
+            |row| row.get(0),
+        )?;
+        if fs::canonicalize(&stored)? != Path::new(&current.path) {
+            return Err(invalid("原文件的位置已变化，请重新打开确认窗口"));
+        }
+        let names =
+            external_files::connection_path_spellings(Path::new(&stored), Path::new(&current.path));
+        // Preflight SQL before touching the file; recycle failure rolls all metadata back.
+        tx.execute("INSERT OR REPLACE INTO trashed_asset_originals(asset_id,path,fingerprint) SELECT id,?5,?6 FROM assets WHERE id=?4 OR store_path IN (?1,?2,?3)",
+            params![names[0],names[1],names[2],current.asset_id,current.path,current.fingerprint])?;
+        tx.execute("UPDATE assets SET library_hidden=1 WHERE id IN (SELECT asset_id FROM trashed_asset_originals WHERE path=?1)", [&current.path])?;
+        tx.execute(
+            "DELETE FROM connected_entries WHERE is_reference=0 AND path IN (?1,?2,?3)",
+            params![names[0], names[1], names[2]],
+        )?;
+        tx.execute("UPDATE connected_entries SET available=0 WHERE asset_id IN (SELECT asset_id FROM trashed_asset_originals WHERE path=?1)", [&current.path])?;
+        trash(Path::new(&current.path))?;
+        tx.commit().map_err(|error| {
+            tracing::error!("original recycled but metadata commit failed: {error}");
+            invalid("原文件已放入回收站，但列表更新失败，请刷新后核对")
+        })
+    }
+    pub fn remove_connection_references(&self, ids: &[String]) -> AppResult<()> {
+        self.remove_connection_references_with(ids, recycle)
+    }
+    fn remove_connection_references_with(
+        &self,
+        ids: &[String],
+        trash: impl Fn(&Path) -> AppResult<()>,
+    ) -> AppResult<()> {
+        if ids.is_empty() {
+            return Err(invalid("请选择要移出的分身"));
+        }
+        let mut seen = HashSet::new();
+        let ids = ids
+            .iter()
+            .filter(|id| seen.insert(id.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        let entries = self.resolve_connection_entries(&ids)?;
+        // Already removed entries are harmless on retry after a partial failure.
+        for entry in &entries {
+            if !entry.is_reference || !reference(Path::new(&entry.path)) {
+                return Err(invalid("只能将分身移出集合；原文件请使用删除原文件"));
+            }
+            self.writable_connection(&entry.folder_id)?;
+            if load_reference(Path::new(&entry.path))?.asset_id != entry.asset_id {
+                return Err(invalid("分身已变化，请刷新后重新选择"));
+            }
+        }
+        for entry in entries {
+            if load_reference(Path::new(&entry.path))?.asset_id != entry.asset_id {
+                return Err(invalid("分身已变化，请刷新后重新选择"));
+            }
+            let conn = self.conn.lock().unwrap();
+            let tx = conn.unchecked_transaction()?;
+            tx.execute(
+                "DELETE FROM connected_entries WHERE id=?1 AND is_reference=1",
+                [&entry.id],
+            )?;
+            trash(Path::new(&entry.path))?;
+            tx.commit().map_err(|error| {
+                tracing::error!("reference recycled but metadata commit failed: {error}");
+                invalid("分身已移到回收站，但集合更新失败，请刷新后核对")
+            })?;
+        }
+        Ok(())
     }
     fn trash_entries_with(
         &self,

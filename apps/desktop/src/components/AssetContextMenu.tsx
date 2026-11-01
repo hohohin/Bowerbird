@@ -6,7 +6,6 @@ import { ContextMenu, ContextSubmenu, DeleteSubmenu } from "./ContextMenu";
 import { canSearchPinterest, requestPinterestSearch } from "../lib/pinterestSearch";
 import { isVideoPath } from "../lib/videoGeneration";
 import { isAudioAsset } from "../lib/audioMedia";
-import { stopAudioPreview } from "../lib/audioPreview";
 import { Archive, ClipboardCopy, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Ungroup } from "lucide-react";
 import { exportAssetArchive } from "../lib/assetArchive";
 import { understandEngineUsable, useStore } from "../store";
@@ -19,9 +18,8 @@ import { RenameDialog } from "./RenameDialog";
 import { canUseByo } from "../lib/entitlement";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { isWorkspaceOperationCurrent } from "../lib/workspaceRoute";
-import type { Asset, AssetDeleteResult } from "../lib/types";
+import type { Asset } from "../lib/types";
 import { externalFiles, OPEN_LOCAL_FILES } from "../lib/externalFiles";
-import { canMoveAssetOut } from "../lib/assetDeletion";
 import {
   CANVAS_REMOVE_NODES_EVENT,
   CANVAS_ARRANGE_NODES_EVENT,
@@ -34,15 +32,6 @@ const ANNOTATABLE_EXTS = ["jpg", "jpeg", "png", "webp", "gif", "bmp"];
 const CANVAS_IMAGE_EXTS = [...ANNOTATABLE_EXTS, "avif", "svg", "ico", "tif", "tiff"];
 
 type SelectionOperation = { ids: string[]; onComplete?: () => void };
-
-function resultMessage(mode: "keep" | "move_out", result: AssetDeleteResult): string {
-  if (mode === "keep") {
-    return result.removed_members > 0 ? "已移出当前项目，素材留在全局" : "素材已在全局";
-  }
-  return result.deleted_assets > 0
-    ? "文件已回到原始位置，并从素材库移除"
-    : "文件已在原始位置，素材仍保留在全局";
-}
 
 /** 右键「反推」二级菜单的引擎选项；reason 为空表示该引擎当前可用。 */
 interface DescribeEngineOption {
@@ -153,13 +142,11 @@ export function AssetContextMenu() {
   const knownAssets = menu.fileSelection?.assets ?? (selectionAssets?.menu === menu ? selectionAssets.assets : assets);
   const targets = targetIds.map(id => id === assetId ? asset ?? knownAssets.find(a => a.id === id) : knownAssets.find(a => a.id === id));
   const targetsReady = targets.every((item): item is Asset => !!item);
-  const batchMovable = targetsReady && targets.every(canMoveAssetOut);
   const allImages = targetIds.length > 0 && targetsReady && targets.every(item => !!item.store_path && !isVideoPath(item.store_path) && !isAudioAsset(item));
   const audio = !!asset && isAudioAsset(asset);
   const projectId = menu.canvasSelection?.projectId ?? (menu.workspaceProjectId !== undefined ? menu.workspaceProjectId : activeProjectId);
   const onComplete = menu.fileSelection?.onComplete ?? (!menu.canvasSelection && multiIds ? exitManage : undefined);
   const storePath = asset?.store_path ?? null;
-  const moveOutAvailable = canMoveAssetOut(asset);
   const canvasLibraryAvailable = canvasLibraryCheck?.menu === menu && canvasLibraryCheck.available;
   const canChangeLibraryVisibility = !!asset?.store_path && CANVAS_IMAGE_EXTS.includes((asset.ext ?? "").toLowerCase());
   // 仅生成图显示「复用生成提示词」：generation_session_id 非 null 即任意 provider 的生成图。
@@ -286,26 +273,6 @@ export function AssetContextMenu() {
     }
   }
 
-  async function runDelete(id: string, mode: "keep" | "move_out") {
-    setBusy(true);
-    try {
-      if (mode === "move_out") stopAudioPreview(id);
-      const result = await api.deleteAssetWithMode(id, mode, projectId);
-      await reloadProjects();
-      if (result.failed_moves.length > 0) {
-        notifyError(null, `移出失败：${result.failed_moves.join("、")}，素材保留在全局`);
-        setBusy(false);
-        return;
-      }
-      if (useStore.getState().contextMenu === menu) onComplete?.();
-      notifySuccess(resultMessage(mode, result));
-      closeContextMenu();
-    } catch (e) {
-      notifyError(e, "删除失败");
-      setBusy(false);
-    }
-  }
-
   async function setLibraryVisibility(visible: boolean) {
     const projectId = visible ? menu?.canvasSelection?.projectId : menu?.libraryProjectId;
     if (!projectId) return;
@@ -339,46 +306,17 @@ export function AssetContextMenu() {
     closeContextMenu();
   }
 
-  /** 多选移除：keep 数组一次，move_out 循环单条。
-   *  move_out 的文件恢复失败是结构化结果而非 rejected promise；有失败留在原地反馈，全成功退出管理。 */
-  async function runBatchDelete(ids: string[], deleteMode: "keep" | "move_out") {
+  async function removeFromProject(ids: string[]) {
+    if (!projectId) return;
     setBusy(true);
-    let failedCount = 0;
     try {
-      if (deleteMode === "keep") {
-        if (projectId) await api.removeAssetsFromProject(projectId, ids);
-      } else {
-        for (const id of ids) {
-          try {
-            stopAudioPreview(id);
-            const result = await api.deleteAssetWithMode(id, deleteMode, projectId);
-            if (
-              result.failed_moves.length > 0
-              || (!projectId && result.deleted_assets === 0)
-            ) {
-              failedCount += 1;
-            }
-          } catch (e) {
-            failedCount += 1;
-            console.error("delete one failed", e);
-          }
-        }
-      }
+      await api.removeAssetsFromProject(projectId, ids);
       await reloadProjects();
-      if (failedCount > 0) {
-        notifyError(null, `${failedCount} 项删除失败，已保留在全局`);
-        setBusy(false);
-        return;
-      }
-      notifySuccess(
-        deleteMode === "keep"
-          ? "素材已移出当前项目"
-          : "素材已移出园丁鸟"
-      );
+      notifySuccess("素材已移出当前项目");
       if (useStore.getState().contextMenu === menu) onComplete?.();
       closeContextMenu();
     } catch (e) {
-      notifyError(e, "删除失败");
+      notifyError(e, "移出项目失败");
       setBusy(false);
     }
   }
@@ -414,14 +352,12 @@ export function AssetContextMenu() {
     {menu.canvasSelection && <button role="menuitem" className={itemClass} onClick={() => {
       window.dispatchEvent(new CustomEvent<CanvasRemoveNodesEventDetail>(CANVAS_REMOVE_NODES_EVENT, { detail: menu.canvasSelection })); closeContextMenu();
     }}>{canvasMulti ? `从画布移出所选 ${menu.canvasSelection.nodeIds.length} 项` : "从画布移出"}</button>}
-    {projectId && targetIds.length > 0 && <button role="menuitem" className={itemClass} title="仅移出当前项目 · 素材留在全局" onClick={() => multiIds ? void runBatchDelete(multiIds, "keep") : void runDelete(assetId, "keep")}>移出当前项目</button>}
-    {(multiIds ? batchMovable : moveOutAvailable) && <button role="menuitem" className={itemClass} title="不会删除文件，文件回到原始位置"
-      onClick={() => multiIds ? void runBatchDelete(multiIds, "move_out") : void runDelete(assetId, "move_out")}>移出园丁鸟</button>}
+    {projectId && targetIds.length > 0 && <button role="menuitem" className={itemClass} title="仅移出当前项目 · 原文件保留" onClick={() => void removeFromProject(targetIds)}>移出当前项目</button>}
     {targetIds.length > 0 && <button role="menuitem" className={itemClass + " is-danger"} onClick={() => confirmDelete(targetIds)}>
-      {menu.fileSelection?.localPaths ? "删除本机文件" : targetsReady && targets.every(item => item.source === "external") ? multiIds ? "移除引用 · 原文件保留" : "移除外部引用记录" : "物理删除"}
+      删除原文件
     </button>}
     {!multiIds && groupIds && groupIds.length > 1 && <button role="menuitem" className={itemClass + " is-danger"}
-      title="删除这组同流程生成图的全部成员（含当前显示的这张）" onClick={() => confirmDelete(groupIds)}>物理删除整组 · {groupIds.length} 张</button>}
+      title="将这组生成图的原文件放入回收站" onClick={() => confirmDelete(groupIds)}>删除整组原文件 · {groupIds.length} 张</button>}
   </DeleteSubmenu>;
   function assign() { setAssignCollectionIds({ ids: targetIds, onComplete }); closeContextMenu(); }
   if (multiIds) return <ContextMenu key={`${assetId}:${menu.x}:${menu.y}:multi`} x={menu.x} y={menu.y} label={`已选 ${canvasMulti ? menu.canvasSelection!.nodeIds.length : multiIds.length} 项素材的操作`}

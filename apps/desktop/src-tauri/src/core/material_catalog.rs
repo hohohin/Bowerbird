@@ -8,11 +8,15 @@ use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+#[path = "original_trash_visibility_tests.rs"]
+mod original_trash_visibility_tests;
+
 pub(super) const IMAGE: &str = "lower(COALESCE(a.ext,'')) IN ('png','jpg','jpeg','webp','gif','bmp','svg','avif','tif','tiff')";
 pub(super) const VIDEO: &str = "lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','m4v','avi','mkv')";
 pub(super) const AUDIO: &str = "lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg')";
 pub(super) const VISIBLE: &str =
-    "(a.library_hidden=0 OR EXISTS(SELECT 1 FROM external_assets e WHERE e.asset_id=a.id))";
+    "(a.library_hidden=0 OR EXISTS(SELECT 1 FROM external_assets e WHERE e.asset_id=a.id)) AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=a.id)";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

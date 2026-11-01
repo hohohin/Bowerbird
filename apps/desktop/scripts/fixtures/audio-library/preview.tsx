@@ -47,7 +47,8 @@ w.__TAURI_INTERNALS__ = {
     if (command === "plugin:event|listen") return args.handler;
     if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return; }
     w.calls.push({ command, args });
-    if (["local_file_rename", "local_file_delete", "rename_asset", "delete_asset_with_mode"].includes(command)) {
+    if (command === "preview_asset_originals") return w.assets.filter((asset: Asset) => args.assetIds.includes(asset.id)).map((asset: Asset) => ({ asset_id: asset.id, name: asset.name, path: asset.store_path, fingerprint: "fixture-original" }));
+    if (["local_file_rename", "local_file_delete", "rename_asset", "delete_asset_with_mode", "trash_asset_original"].includes(command)) {
       const player = document.querySelector<HTMLAudioElement>('audio[data-audio-preview]');
       w.mutations.push({ command, args, paused: player?.paused ?? true, src: player?.getAttribute("src") ?? null });
       return { deleted_assets: 1, removed_members: 1, failed_moves: [] };

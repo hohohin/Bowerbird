@@ -23,6 +23,8 @@ w.__TAURI_INTERNALS__ = {
     w.calls.push({ command, args });
     if (command === "plugin:event|listen") return args.handler;
     if (command === "get_assets_by_ids") return assets.filter(a => args.assetIds.includes(a.id));
+    if (command === "preview_asset_originals") return assets.filter(a => args.assetIds.includes(a.id)).map(a => ({ asset_id: a.id, name: a.name, path: a.store_path, fingerprint: "fixture-original" }));
+    if (command === "trash_asset_original") { if (w.failDelete === args.original.asset_id) throw new Error('模拟失败'); return null; }
     if (command === "list_collections") return [{ id: "c1", name: "参考", kind: "collection" }];
     if (command === "list_generation_group") return assets.slice(0, 2);
     if (command === "project_canvas_get") return { nodes: [{ kind: "asset", assetId: "a1" }] };

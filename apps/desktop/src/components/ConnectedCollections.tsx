@@ -26,7 +26,8 @@ import { LibraryMotion } from "./LibraryMotion";
 import { useLibraryGlass } from "./useLibraryGlass";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
-import { ContextMenu } from "./ContextMenu";
+import { ContextMenu, DeleteSubmenu } from "./ContextMenu";
+import { CanvasAssetDeleteDialog } from "./CanvasAssetDeleteDialog";
 import { ModalShell } from "./ModalShell";
 import { LibraryVideoPreview } from "./LibraryVideoPreview";
 import { videoSourceKey } from "../lib/videoSourceKey";
@@ -37,9 +38,10 @@ import "./CategorizedLibrary.css";
 import "./ConnectedCollections.css";
 
 type EntryAsset = Asset & { connectionEntry: ConnectionEntry };
-type Menu = { x: number; y: number; folder: FolderConnection } | { x: number; y: number; entries: ConnectionEntry[]; target: ConnectionEntry; location: CatalogLocation };
+type Menu = { x: number; y: number; folder: FolderConnection } | { x: number; y: number; entries: ConnectionEntry[]; target: ConnectionEntry; location: CatalogLocation }
+  | { x: number; y: number; entries: ConnectionEntry[]; deleteOnly: true };
 type Operation = { kind: "disconnect" | "trash-folder" | "move-folder"; folder: FolderConnection }
-  | { kind: "rename-entry" | "move-entries" | "trash-entries"; entries: ConnectionEntry[] };
+  | { kind: "rename-entry" | "move-entries" | "remove-references"; entries: ConnectionEntry[] };
 const entryOf = (asset: Asset) => (asset as EntryAsset).connectionEntry;
 const entryKey = (asset: Asset) => entryOf(asset).id;
 const assetsOf = (entries: ConnectionEntry[]) => [...new Map(entries.map(entry => [entry.asset_id, entry.asset])).values()];
@@ -61,6 +63,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   const [menu, setMenu] = useState<Menu | null>(null);
   const [editor, setEditor] = useState<{ item?: FolderConnection; parentId: string | null } | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ assetIds: string[]; projectId: string | null } | null>(null);
   const [assign, setAssign] = useState<string[] | null>(null);
   const [preview, setPreview] = useState<{ path: string; sourceKey: string } | null>(null);
   const [jump, setJump] = useState<{ id: string; sequence: number } | null>(null);
@@ -125,7 +128,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     setCollapsed(previous => { if (![...ancestors].some(id => previous.has(id))) return previous; return new Set([...previous].filter(id => !ancestors.has(id))); });
   }, [foldersById]);
   const navigate = useCallback((id: string) => { reveal(id); setActive(id); setJump(previous => ({ id, sequence: (previous?.sequence ?? 0) + 1 })); }, [reveal]);
-  const onActive = useCallback((id: string | null) => { if (editor || operation || assign || preview || menu) return; setActive(id); if (id) reveal(id); }, [editor, operation, assign, preview, menu, reveal]);
+  const onActive = useCallback((id: string | null) => { if (editor || operation || deleteTarget || assign || preview || menu) return; setActive(id); if (id) reveal(id); }, [editor, operation, deleteTarget, assign, preview, menu, reveal]);
   useEffect(() => {
     if (request.paneId && request.paneId !== pane?.id) return;
     if (request.id && request.sequence !== lastRequest.current) {
@@ -221,6 +224,12 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   }
   async function relocate(folder: FolderConnection) { const path = await api.pickFolder(folder.path); if (path) await folderConnections.relocate(folder.root_id, path); }
   const menuButton = (label: string, action: () => void, disabled = false) => <button type="button" role="menuitem" className="app-context-item" disabled={disabled || busy} onClick={() => { setMenu(null); action(); }}>{label}</button>;
+  const deleteActions = (entries: ConnectionEntry[]) => <>
+    {entries.every(entry => entry.is_reference) && menuButton("移出该集合", () => setOperation({ kind: "remove-references", entries }))}
+    <button type="button" role="menuitem" className="app-context-item is-danger" disabled={busy} onClick={() => {
+      setMenu(null); setDeleteTarget({ assetIds: [...new Set(entries.map(entry => entry.asset_id))], projectId: scope });
+    }}>删除原文件</button>
+  </>;
   return <section ref={root} className="categorized-library library-tactical connected-collections" aria-label="按集合浏览素材" data-file-import-project-id={scope ?? ""} data-file-import-collection-id={active ?? undefined} data-file-import-collection-name={current?.name}
     style={{ ...glass.style, "--catalog-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
     {glass.definition}<LibraryMotion/>
@@ -269,17 +278,22 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
         {!!selected.size && <div className="connected-selection"><span>已选 {selected.size} 项</span>
           <button disabled={busy} onClick={() => void run(async () => { setAssign(assetsOf(await resolve([...selected])).map(asset => asset.id)); })}>添加到集合</button>
           {media !== "audios" && <button disabled={busy} onClick={() => void run(async () => { await addMaterialAssets(assetsOf(await resolve([...selected])), projectId, onClose, onCreateProject); })}>添加到画板</button>}
-          <button disabled={busy} onClick={() => void run(async () => { setOperation({ kind: "trash-entries", entries: await resolve([...selected]) }); })}>移到回收站</button><button onClick={finishSelection}>取消</button>
+          <button disabled={busy} onClick={event => {
+            const rect = event.currentTarget.getBoundingClientRect(), key = filterRef.current;
+            void run(async () => { const entries = await resolve([...selected]); if (alive.current && filterRef.current === key) setMenu({ x: rect.left, y: rect.top, entries, deleteOnly: true }); });
+          }}>删除</button><button onClick={finishSelection}>取消</button>
         </div>}
       </div>
     </div>
     {menu && <ContextMenu x={menu.x} y={menu.y} label={"folder" in menu ? "集合操作" : "素材操作"} onClose={() => setMenu(null)}>
       {"folder" in menu ? <>{menuButton("重命名集合", () => setEditor({ item: menu.folder, parentId: menu.folder.parent_id }), !menu.folder.available)}{menuButton("移动文件夹", () => setOperation({ kind: "move-folder", folder: menu.folder }), !menu.folder.available)}{menuButton("移到回收站", () => setOperation({ kind: "trash-folder", folder: menu.folder }), !menu.folder.available)}{!menu.folder.available && menuButton("重新定位", () => void run(() => relocate(menu.folder), true))}{!menu.folder.parent_id && menuButton("断开连接", () => setOperation({ kind: "disconnect", folder: menu.folder }))}</>
-        : <>{menu.entries.length === 1 && menuButton("查看详情", () => useStore.getState().openDetail(menu.entries[0].asset_id))}{canSearchPinterest(menu.target.asset) && menuButton("Pinterest 以图搜图", () => requestPinterestSearch(menu.target.asset_id), !menu.target.available)}{menuButton("选择", () => { anchor.current = menu.location; setSelected(new Set(menu.entries.map(entry => entry.id))); setMultiple(true); })}{menuButton("添加到集合", () => setAssign(assetsOf(menu.entries).map(asset => asset.id)))}{media !== "audios" && menuButton("添加到画板", () => void run(() => addMaterialAssets(assetsOf(menu.entries), projectId, onClose, onCreateProject)), menu.entries.some(entry => !entry.available))}{menuButton("移动到文件夹", () => setOperation({ kind: "move-entries", entries: menu.entries }))}{menu.entries.length === 1 && menuButton(menu.entries[0].is_reference ? "重命名分身" : "重命名原文件", () => setOperation({ kind: "rename-entry", entries: menu.entries }))}{menuButton(menu.entries.every(entry => entry.is_reference) ? "删除分身" : "移到回收站", () => setOperation({ kind: "trash-entries", entries: menu.entries }))}</>}
+        : "deleteOnly" in menu ? deleteActions(menu.entries)
+        : <>{menu.entries.length === 1 && menuButton("查看详情", () => useStore.getState().openDetail(menu.entries[0].asset_id))}{canSearchPinterest(menu.target.asset) && menuButton("Pinterest 以图搜图", () => requestPinterestSearch(menu.target.asset_id), !menu.target.available)}{menuButton("选择", () => { anchor.current = menu.location; setSelected(new Set(menu.entries.map(entry => entry.id))); setMultiple(true); })}{menuButton("添加到集合", () => setAssign(assetsOf(menu.entries).map(asset => asset.id)))}{media !== "audios" && menuButton("添加到画板", () => void run(() => addMaterialAssets(assetsOf(menu.entries), projectId, onClose, onCreateProject)), menu.entries.some(entry => !entry.available))}{menuButton("移动到文件夹", () => setOperation({ kind: "move-entries", entries: menu.entries }))}{menu.entries.length === 1 && menuButton(menu.entries[0].is_reference ? "重命名分身" : "重命名原文件", () => setOperation({ kind: "rename-entry", entries: menu.entries }))}<DeleteSubmenu disabled={busy}>{deleteActions(menu.entries)}</DeleteSubmenu></>}
     </ContextMenu>}
     {editor && <CollectionEditorDialog collections={folders} {...editor} projectId={scope} onClose={() => setEditor(null)} onSaved={id => { pendingJump.current = id; setRevision(value => value + 1); }}/ >}
     {assign && <CollectionAssignDialog assetIds={assign} onClose={() => setAssign(null)} onSaved={() => { finishSelection(); setRevision(value => value + 1); }}/ >}
     {operation && <ConnectionOperation key={operation.kind} operation={operation} folders={folders} onClose={() => setOperation(null)} onSaved={() => { finishSelection(); setRevision(value => value + 1); }}/ >}
+    {deleteTarget && <CanvasAssetDeleteDialog target={deleteTarget} onClose={() => setDeleteTarget(null)} onComplete={() => { finishSelection(); setRevision(value => value + 1); }}/ >}
     {preview && <LibraryVideoPreview {...preview} projectId={projectId} onClose={() => setPreview(null)}/>}
   </section>;
 }
@@ -299,7 +313,7 @@ function ConnectionOperation({ operation, folders, onClose, onSaved }: { operati
     return true;
   }
   const references = "entries" in operation && operation.entries.every(entry => entry.is_reference);
-  const title = operation.kind === "rename-entry" ? references ? "重命名分身" : "重命名原文件" : operation.kind === "disconnect" ? "断开连接" : moving ? "移动到文件夹" : references ? "删除分身" : "移到回收站";
+  const title = operation.kind === "rename-entry" ? references ? "重命名分身" : "重命名原文件" : operation.kind === "disconnect" ? "断开连接" : moving ? "移动到文件夹" : operation.kind === "remove-references" ? "移出该集合" : "移到回收站";
   async function save() {
     if (lock.current) return; lock.current = true; setBusy(true); setError("");
     try {
@@ -309,7 +323,7 @@ function ConnectionOperation({ operation, folders, onClose, onSaved }: { operati
         case "rename-entry": await folderConnections.renameEntry(operation.entries[0].id, name); break;
         case "move-folder": await folderConnections.moveFolder(operation.folder.id, target); break;
         case "move-entries": await folderConnections.moveEntries(operation.entries.map(entry => entry.id), target); break;
-        case "trash-entries": await folderConnections.trashEntries(operation.entries.map(entry => entry.id)); break;
+        case "remove-references": await folderConnections.removeReferences(operation.entries.map(entry => entry.id)); break;
         case "trash-folder": await folderConnections.trashFolder(operation.folder.id); break;
         case "disconnect": await folderConnections.disconnect(operation.folder.id); break;
       }
@@ -319,7 +333,7 @@ function ConnectionOperation({ operation, folders, onClose, onSaved }: { operati
   }
   return <ModalShell title={title} onClose={onClose} preventClose={busy}><form className="catalog-form" onSubmit={event => { event.preventDefault(); void save(); }}>
     {operation.kind === "rename-entry" ? <label>名称<input data-modal-autofocus value={name} onChange={event => setName(event.target.value)} disabled={busy}/></label> : moving ? <fieldset className="connected-destinations" disabled={busy}><legend>目标集合</legend>{connectedRows(folders).filter(row => allowed(row.item)).map(({ item, depth }) => <label key={item.id} style={{ paddingLeft: depth * 16 }}><input type="radio" name="connection-destination" checked={target === item.id} onChange={() => setTarget(item.id)}/><Folder size={14}/>{item.name}</label>)}</fieldset>
-      : <><p>{"folder" in operation ? operation.folder.name : `${operation.entries.length} 项`}</p><p>{operation.kind === "disconnect" ? "原文件和创作资料保留。" : references ? "只删除分身，原文件和创作资料保留。" : "将文件移到回收站；原文件的其他分身将显示失联，创作资料保留。"}</p></>}
+      : <><p>{"folder" in operation ? operation.folder.name : `${operation.entries.length} 项`}</p><p>{operation.kind === "disconnect" ? "原文件和创作资料保留。" : operation.kind === "remove-references" ? "只移除所选分身，原文件、其他集合中的分身和创作资料保留。" : "将文件移到回收站；原文件的其他分身将显示失联，创作资料保留。"}</p></>}
     {moving && <p>移动文件，保留素材身份和创作资料。</p>}{error && <p role="alert">{error}</p>}
     <div className="connected-dialog-actions"><button type="button" disabled={busy} onClick={onClose}>取消</button><button className="app-button-accent" type="submit" disabled={busy || (moving && !target) || (operation.kind === "rename-entry" && !name.trim())}>{busy ? "处理中…" : title}</button></div>
   </form></ModalShell>;

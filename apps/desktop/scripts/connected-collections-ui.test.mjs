@@ -83,7 +83,7 @@ try {
   assert.deepEqual(await page.evaluate(() => window.requests.find(r => r.command === 'create_material_references').args), { assetIds: ['root-0'], folderId: 'second' });
   await context('ref-one'); await menu('重命名分身').click(); await dialog().getByRole('textbox').fill('新分身'); await dialog().getByRole('button', { name: '重命名分身', exact: true }).click();
   assert.equal(await page.evaluate(() => window.entries.find(e => e.id === 'root-0').name), 'root-0.png');
-  await context('ref-one'); await menu('删除分身').click(); await dialog().getByRole('button', { name: '删除分身', exact: true }).click();
+  await context('ref-one'); await menu('删除').click(); await menu('移出该集合').click(); await dialog().getByRole('button', { name: '移出该集合', exact: true }).click();
   assert.ok(await page.evaluate(() => window.entries.some(e => e.id === 'root-0') && !window.entries.some(e => e.id === 'ref-one')));
   await row('child').hover(); await plus.click(); await dialog().getByRole('textbox').fill('新集合'); await dialog().getByRole('button', { name: '保存', exact: true }).click();
   const created = await page.evaluate(() => window.folders.find(f => f.name === '新集合').id); await active(created);
@@ -121,16 +121,16 @@ try {
   await page.screenshot({ path: '.tmp/connected-collections/production-light.png' });
   const batching = await page.evaluate(async () => {
     const sample = window.entries[0], start = window.requests.length;
-    window.entries.push(...Array.from({ length: 2505 }, (_, i) => ({ ...sample, id: `bulk-${i}`, folder_id: 'bulk' })));
+    window.entries.push(...Array.from({ length: 2505 }, (_, i) => ({ ...sample, id: `bulk-${i}`, folder_id: 'bulk', is_reference: true })));
     const ids = await window.connections.ids('bulk');
     const resolved = await window.connections.resolve(ids);
     await window.connections.moveEntries(ids, 'empty');
-    await window.connections.trashEntries(ids);
+    await window.connections.removeReferences(ids);
     return { ids: ids.length, resolved: resolved.length, requests: window.requests.slice(start) };
   });
   assert.equal(batching.ids, 2505); assert.equal(batching.resolved, 2505);
   assert.deepEqual(batching.requests.filter(r => r.command === 'connection_entry_ids').map(r => r.args.offset), [0, 2000]);
-  for (const command of ['resolve_connection_entries', 'move_connection_entries', 'trash_connection_entries']) assert.deepEqual(batching.requests.filter(r => r.command === command).map(r => r.args.ids.length), [2000, 505]);
+  for (const command of ['resolve_connection_entries', 'move_connection_entries', 'remove_connection_references']) assert.deepEqual(batching.requests.filter(r => r.command === command).map(r => r.args.ids.length), [2000, 505]);
   assert.deepEqual(errors, []);
   console.log('PASS production connected collections: DFS, paging, sticky title, entry selection, references, rename/trash, create, collapse/scroll, disconnect, picker cancel/connect, view routing');
 } catch (error) {

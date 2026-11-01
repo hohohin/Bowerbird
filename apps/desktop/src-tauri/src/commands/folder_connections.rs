@@ -1,6 +1,6 @@
 use crate::{
     core::{
-        folder_connections::{ConnectionEntry, FolderConnection},
+        folder_connections::{AssetOriginal, ConnectionEntry, FolderConnection},
         paths::LibraryPaths,
     },
     db::Database,
@@ -372,4 +372,37 @@ pub async fn trash_connection_entries(
 ) -> AppResult<()> {
     let db = db.inner().clone();
     mutation(app, move || db.trash_connection_entries(&ids)).await
+}
+
+#[tauri::command]
+pub async fn preview_asset_originals(
+    db: State<'_, Arc<Database>>,
+    asset_ids: Vec<String>,
+) -> AppResult<Vec<AssetOriginal>> {
+    let db = db.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || db.preview_asset_originals(&asset_ids))
+        .await
+        .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn trash_asset_original(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    original: AssetOriginal,
+) -> AppResult<()> {
+    let db = db.inner().clone();
+    let result = mutation(app.clone(), move || db.trash_asset_original(&original)).await;
+    let _ = app.emit("projects://changed", ());
+    result
+}
+
+#[tauri::command]
+pub async fn remove_connection_references(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    ids: Vec<String>,
+) -> AppResult<()> {
+    let db = db.inner().clone();
+    mutation(app, move || db.remove_connection_references(&ids)).await
 }

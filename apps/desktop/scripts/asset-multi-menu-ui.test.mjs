@@ -31,7 +31,7 @@ try {
   await mkdir('.tmp/context-menu', { recursive: true });
   await page.goto('http://127.0.0.1:1796/scripts/fixtures/asset-multi-menu/preview.html', { waitUntil: 'domcontentloaded' });
   await page.locator('#trigger').click();
-  assert.equal(await root().getByRole('menuitem', { name: '物理删除', exact: true }).count(), 0);
+  assert.equal(await root().getByRole('menuitem', { name: '删除原文件', exact: true }).count(), 0);
   // ArrowRight never changes column. Down traverses DOM order, left column then right.
   await root().getByRole('menuitem', { name: '打开图片详情', exact: true }).focus();
   await page.keyboard.press('ArrowRight'); assert.equal(await focused(), '打开图片详情');
@@ -59,7 +59,7 @@ try {
     await page.getByRole('menuitem', { name: 'Bowerbird Cloud', exact: true }).click();
     assert.deepEqual(await page.evaluate(() => window.describe.splice(0).map(v => v.id)), ['a1', 'a2']);
     await open(kind); await menu.getByRole('menuitem', { name: '删除', exact: true }).click();
-    await deletion().getByRole('menuitem', { name: '物理删除', exact: true }).click();
+    await deletion().getByRole('menuitem', { name: '删除原文件', exact: true }).click();
     await page.getByRole('dialog').waitFor();
     assert.deepEqual(await page.locator('[data-delete-asset-id]').evaluateAll(els => els.map(el => el.dataset.deleteAssetId)), ['a1', 'a2']);
     await page.getByRole('button', { name: '取消', exact: true }).click();
@@ -82,7 +82,7 @@ try {
     { projectId: 'p1', nodeIds: ['n1'], direction: -1 },
   ]);
   await root().getByRole('menuitem', { name: '删除', exact: true }).click();
-  await deletion().getByRole('menuitem', { name: '物理删除', exact: true }).click();
+  await deletion().getByRole('menuitem', { name: '删除原文件', exact: true }).click();
   await page.getByRole('dialog').waitFor();
   assert.deepEqual(await page.locator('[data-delete-asset-id]').evaluateAll(els => els.map(el => el.dataset.deleteAssetId)), ['a1'], 'single canvas target ignores library multiselect');
   await page.getByRole('button', { name: '取消', exact: true }).click();
