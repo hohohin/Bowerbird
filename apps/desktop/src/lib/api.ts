@@ -470,6 +470,10 @@ export const api = {
     invoke<CreationPack>("assemble_pack", { assetIds }),
   openSourceBrowser: (url: string, bounds: SourceBrowserBounds) =>
     invoke<void>("open_source_browser", { url, bounds }),
+  startPinterestImageSearch: (assetId: string, requestId: string) =>
+    invoke<void>("start_pinterest_image_search", { assetId, requestId }),
+  cancelPinterestImageSearch: (requestId: string) =>
+    invoke<void>("cancel_pinterest_image_search", { requestId }),
   resizeSourceBrowser: (bounds: SourceBrowserBounds, visible?: boolean, dimmed?: boolean) =>
     invoke<void>("resize_source_browser", { bounds, visible, dimmed }),
   captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null, dragId?: string, mediaKind?: "image" | "video") =>

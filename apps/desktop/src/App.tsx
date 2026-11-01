@@ -28,6 +28,7 @@ import { CloudAgentRuntimeCoordinator } from "./components/CloudAgentRuntimeCoor
 import { COLLECTIONS_FEATURE_ENABLED, LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED } from "./lib/featureFlags";
 import { ExploreWorkspace } from "./components/ExploreWorkspace";
 import { DEFAULT_EXPLORER_URL } from "./lib/explorer";
+import { cancelPinterestSearch, isPinterestSearchCurrent, PINTEREST_SEARCH_URL, usePinterestSearch } from "./lib/pinterestSearch";
 import { CodexOnboarding } from "./components/CodexOnboarding";
 import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
 import { DreaminaOnboarding } from "./components/DreaminaOnboarding";
@@ -99,6 +100,14 @@ function App() {
   const [sourceBrowserOpen, setSourceBrowserOpen] = useState(false);
   useEffect(() => { if (localFilesOpen) setSourceBrowserOpen(false); }, [localFilesOpen]);
   const [sourceBrowserNavigation, setSourceBrowserNavigation] = useState(0);
+  const pinterestSearch = usePinterestSearch(state => state.request);
+  useEffect(() => {
+    if (!pinterestSearch || !isPinterestSearchCurrent(pinterestSearch)) return;
+    setLocalFilesOpen(false);
+    setSourceBrowserUrl(PINTEREST_SEARCH_URL);
+    setSourceBrowserNavigation(id => id + 1);
+    setSourceBrowserOpen(true);
+  }, [pinterestSearch, setLocalFilesOpen]);
   const setAssets = useStore((s) => s.setAssets);
   const setTotal = useStore((s) => s.setTotal);
   const setPromptedAssets = useStore((s) => s.setPromptedAssets);
@@ -116,6 +125,9 @@ function App() {
   const activeProjectId = useStore((s) => s.activeProjectId);
   const projectRoutePending = useStore((s) => s.projectRoutePending);
   const projectRouteRevision = useStore((s) => s.projectRouteRevision);
+  useEffect(() => {
+    if (pinterestSearch && !isPinterestSearchCurrent(pinterestSearch)) cancelPinterestSearch(pinterestSearch.requestId);
+  }, [pinterestSearch, projectRoutePending, projectRouteRevision, activeProjectId]);
   const projects = useStore((s) => s.projects);
   const currentCollectionId = useStore((s) => s.currentCollectionId);
   const searchQuery = useStore((s) => s.searchQuery);
@@ -949,7 +961,7 @@ function App() {
           <CollectionAddMode />
           </PreservedWorkspace>
           {showDetail && <div className="absolute inset-0 z-30 bg-canvas">
-            <AssetDetail onExploreSource={url => { setSourceBrowserUrl(url); setSourceBrowserNavigation(id => id + 1); setSourceBrowserOpen(true); }} />
+            <AssetDetail onExploreSource={url => { cancelPinterestSearch(); setSourceBrowserUrl(url); setSourceBrowserNavigation(id => id + 1); setSourceBrowserOpen(true); }} />
           </div>}
           </ExploreWorkspace>
         </main>

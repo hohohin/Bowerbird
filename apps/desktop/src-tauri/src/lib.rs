@@ -18,6 +18,12 @@ pub use media::thumb::video_thumbnail_worker;
 pub use media::probe::video_probe_worker;
 pub use agent_generation_wait::agent_generation_wait_worker;
 
+#[cfg(debug_assertions)]
+#[path = "../tests/pinterest_native_fixture.rs"]
+mod pinterest_native_fixture;
+#[cfg(debug_assertions)]
+pub use pinterest_native_fixture::run_pinterest_search_fixture;
+
 use std::sync::Arc;
 use std::{path::Path, path::PathBuf};
 
@@ -384,6 +390,11 @@ pub fn run() {
             commands::folder_connections::watch(app.handle().clone(), db.clone(), paths.clone());
             app.manage(core::local_classification::explorer::ExplorerAnalysis::default());
             app.manage(commands::source_browser::SourceDragHandler(core::local_classification::explorer::handle_notice));
+            app.manage(commands::pinterest_search::PinterestSearchState::default());
+            app.manage(commands::source_browser::SourcePinterestHooks {
+                loaded: commands::pinterest_search::on_page_finished,
+                notice: commands::pinterest_search::on_notice,
+            });
 
             app.manage(extension_status);
             app.manage(active_project);
@@ -741,6 +752,8 @@ pub fn run() {
             commands::settings::migrate_library_root,
             commands::settings::restart_app,
             commands::source_browser::open_source_browser,
+            commands::pinterest_search::start_pinterest_image_search,
+            commands::pinterest_search::cancel_pinterest_image_search,
             commands::source_browser::resize_source_browser,
             commands::source_browser::navigate_source_browser,
             commands::source_browser::source_browser_back,

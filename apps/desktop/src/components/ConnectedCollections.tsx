@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { listen } from "@tauri-apps/api/event";
 import { ChevronDown, ChevronRight, Folder, Link2, MoreHorizontal, Plus, RefreshCw, Unlink } from "lucide-react";
 import { api } from "../lib/api";
+import { canSearchPinterest, requestPinterestSearch } from "../lib/pinterestSearch";
 import { connectedRows, folderConnections, useConnectedNavigation, type ConnectionEntry, type FolderConnection } from "../lib/folderConnections";
 import { useLibraryThumbnail, useLibraryPane, type LibraryBrowsePosition } from "../lib/libraryPane";
 import { useThumbnailPinch } from "../lib/useThumbnailPinch";
@@ -35,7 +36,7 @@ import "./CategorizedLibrary.css";
 import "./ConnectedCollections.css";
 
 type EntryAsset = Asset & { connectionEntry: ConnectionEntry };
-type Menu = { x: number; y: number; folder: FolderConnection } | { x: number; y: number; entries: ConnectionEntry[] };
+type Menu = { x: number; y: number; folder: FolderConnection } | { x: number; y: number; entries: ConnectionEntry[]; target: ConnectionEntry };
 type Operation = { kind: "disconnect" | "trash-folder" | "move-folder"; folder: FolderConnection }
   | { kind: "rename-entry" | "move-entries" | "trash-entries"; entries: ConnectionEntry[] };
 const entryOf = (asset: Asset) => (asset as EntryAsset).connectionEntry;
@@ -191,7 +192,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     const entry = entryOf(asset), key = filterRef.current;
     void run(async () => {
       const entries = selected.has(entry.id) ? await resolve([...selected]) : [entry];
-      if (alive.current && filterRef.current === key) setMenu({ x, y, entries });
+      if (alive.current && filterRef.current === key) setMenu({ x, y, entries, target: entry });
     });
   }
   function hidden(folder: FolderConnection) {
@@ -273,7 +274,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     </div>
     {menu && <ContextMenu x={menu.x} y={menu.y} label={"folder" in menu ? "集合操作" : "素材操作"} onClose={() => setMenu(null)}>
       {"folder" in menu ? <>{menuButton("重命名集合", () => setEditor({ item: menu.folder, parentId: menu.folder.parent_id }), !menu.folder.available)}{menuButton("移动文件夹", () => setOperation({ kind: "move-folder", folder: menu.folder }), !menu.folder.available)}{menuButton("移到回收站", () => setOperation({ kind: "trash-folder", folder: menu.folder }), !menu.folder.available)}{!menu.folder.available && menuButton("重新定位", () => void run(() => relocate(menu.folder), true))}{!menu.folder.parent_id && menuButton("断开连接", () => setOperation({ kind: "disconnect", folder: menu.folder }))}</>
-        : <>{menu.entries.length === 1 && menuButton("查看详情", () => useStore.getState().openDetail(menu.entries[0].asset_id))}{menuButton("选择", () => { setSelected(new Set(menu.entries.map(entry => entry.id))); setMultiple(true); })}{menuButton("添加到集合", () => setAssign(assetsOf(menu.entries).map(asset => asset.id)))}{media !== "audios" && menuButton("添加到画板", () => void run(() => addMaterialAssets(assetsOf(menu.entries), projectId, onClose, onCreateProject)), menu.entries.some(entry => !entry.available))}{menuButton("移动到文件夹", () => setOperation({ kind: "move-entries", entries: menu.entries }))}{menu.entries.length === 1 && menuButton(menu.entries[0].is_reference ? "重命名分身" : "重命名原文件", () => setOperation({ kind: "rename-entry", entries: menu.entries }))}{menuButton(menu.entries.every(entry => entry.is_reference) ? "删除分身" : "移到回收站", () => setOperation({ kind: "trash-entries", entries: menu.entries }))}</>}
+        : <>{menu.entries.length === 1 && menuButton("查看详情", () => useStore.getState().openDetail(menu.entries[0].asset_id))}{canSearchPinterest(menu.target.asset) && menuButton("Pinterest 以图搜图", () => requestPinterestSearch(menu.target.asset_id), !menu.target.available)}{menuButton("选择", () => { setSelected(new Set(menu.entries.map(entry => entry.id))); setMultiple(true); })}{menuButton("添加到集合", () => setAssign(assetsOf(menu.entries).map(asset => asset.id)))}{media !== "audios" && menuButton("添加到画板", () => void run(() => addMaterialAssets(assetsOf(menu.entries), projectId, onClose, onCreateProject)), menu.entries.some(entry => !entry.available))}{menuButton("移动到文件夹", () => setOperation({ kind: "move-entries", entries: menu.entries }))}{menu.entries.length === 1 && menuButton(menu.entries[0].is_reference ? "重命名分身" : "重命名原文件", () => setOperation({ kind: "rename-entry", entries: menu.entries }))}{menuButton(menu.entries.every(entry => entry.is_reference) ? "删除分身" : "移到回收站", () => setOperation({ kind: "trash-entries", entries: menu.entries }))}</>}
     </ContextMenu>}
     {editor && <CollectionEditorDialog collections={folders} {...editor} projectId={scope} onClose={() => setEditor(null)} onSaved={id => { pendingJump.current = id; setRevision(value => value + 1); }}/ >}
     {assign && <CollectionAssignDialog assetIds={assign} onClose={() => setAssign(null)} onSaved={() => { finishSelection(); setRevision(value => value + 1); }}/ >}

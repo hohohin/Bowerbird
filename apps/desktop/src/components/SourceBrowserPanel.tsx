@@ -16,6 +16,7 @@ import {
 import { api, type SourceBrowserBounds } from "../lib/api";
 import { normalizeSourceAddress, sourceDiscoveryFor } from "../lib/sourceDiscovery";
 import { EXPLORER_SITES, queueBrowserOperation } from "../lib/explorer";
+import { cancelPinterestSearch, isPinterestSearchCurrent, PINTEREST_SEARCH_EVENT, receivePinterestSearchStatus, usePinterestSearch, type PinterestSearchStatus } from "../lib/pinterestSearch";
 import { useStore } from "../store";
 import "./BrowserExtension.css";
 
@@ -61,19 +62,30 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
   const [loading, setLoading] = useState(true);
   const [occluded, setOccluded] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const search = usePinterestSearch(state => state.request);
+  const searchProgress = usePinterestSearch(state => state.progress);
+  const submittedSearchRef = useRef<string | null>(null);
+  const listenersReadyRef = useRef<Promise<void>>(Promise.resolve());
+  const wasVisibleRef = useRef(visible);
+  useEffect(() => {
+    if (wasVisibleRef.current && !visible) cancelPinterestSearch();
+    wasVisibleRef.current = visible;
+  }, [visible]);
   const discovery = useMemo(() => sourceDiscoveryFor(currentUrl), [currentUrl]);
   const suspendedRef = useRef(suspended);
   suspendedRef.current = suspended;
   const browserAction = useCallback((operation: () => Promise<void>) => {
+    cancelPinterestSearch();
     void queueBrowserOperation(operation).catch(cause => setError(String(cause)));
   }, []);
 
-  const navigate = useCallback(async (nextUrl: string) => {
+  const navigate = useCallback(async (nextUrl: string, manual = true) => {
     const normalized = normalizeSourceAddress(nextUrl);
     if (!normalized) {
       setError("网址格式不正确，请复制浏览器地址栏中的完整网址。");
       return;
     }
+    if (manual) cancelPinterestSearch();
     setError(null);
     setLoading(true);
     try {
@@ -93,7 +105,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
   useEffect(() => {
     let alive = true;
     let unlisteners: UnlistenFn[] = [];
-    Promise.all([
+    listenersReadyRef.current = Promise.all([
       listen<BrowserStatus>(STATUS_EVENT, ({ payload }) => {
         setCurrentUrl(payload.url);
         if (!addressFocusedRef.current) setAddress(payload.url);
@@ -101,7 +113,8 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
         if (!payload.loading) setError(null);
       }),
       listen<string>(TITLE_EVENT, ({ payload }) => setTitle(payload)),
-      listen<string>(NEW_WINDOW_EVENT, ({ payload }) => void navigate(payload)),
+      listen<string>(NEW_WINDOW_EVENT, ({ payload }) => void navigate(payload, false)),
+      listen<PinterestSearchStatus>(PINTEREST_SEARCH_EVENT, ({ payload }) => receivePinterestSearchStatus(payload)),
     ]).then((registered) => {
       if (alive) unlisteners = registered;
       else registered.forEach((unlisten) => unlisten());
@@ -168,6 +181,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
 
     openFrame = window.requestAnimationFrame(() => {
       void queueBrowserOperation(async () => {
+        if (!alive || !visibleRef.current) return;
         if (!openedRef.current) {
           await api.openSourceBrowser(url, boundsFor(viewport));
           openedRef.current = true;
@@ -176,6 +190,14 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
         if (previous.url !== url || previous.navigationId !== navigationId) {
           await api.navigateSourceBrowser(url);
           requestedUrlRef.current = { url, navigationId };
+        }
+        if (search && submittedSearchRef.current !== search.requestId) {
+          await listenersReadyRef.current;
+          if (!alive || !visibleRef.current || !isPinterestSearchCurrent(search)) return;
+          submittedSearchRef.current = search.requestId;
+          void api.startPinterestImageSearch(search.assetId, search.requestId).catch(cause => {
+            receivePinterestSearchStatus({ requestId: search.requestId, status: "error", message: String(cause) });
+          });
         }
       }).then(resize).catch((cause) => {
         if (alive) {
@@ -195,7 +217,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
       window.cancelAnimationFrame(resizeFrame);
       void queueBrowserOperation(() => api.hideSourceBrowser()).catch(() => {});
     };
-  }, [visible, url, navigationId]);
+  }, [visible, url, navigationId, search?.requestId]);
 
   useEffect(() => { window.dispatchEvent(new Event("explorer:layout")); }, [suspended]);
 
@@ -285,6 +307,11 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
       </nav>
 
       {error && <div className="source-browser-error" role="alert">{userErrorMessage(error, "网页暂时无法打开，请检查网络和网址后重试。")}</div>}
+      {searchProgress && searchProgress.status !== "submitted" && <div className={searchProgress.status === "error" ? "source-browser-error" : "shrink-0 border-b border-edge px-3.5 py-1.5 text-xs text-muted"} role={searchProgress.status === "error" ? "alert" : "status"}>
+        {searchProgress.status === "waiting-login" ? "请在 Pinterest 登录，完成后继续搜图。" : searchProgress.status === "error"
+          ? userErrorMessage(searchProgress.message, "以图搜图暂时无法完成，请重试。")
+          : searchProgress.status === "searching" ? "正在将图片交给 Pinterest…" : "正在准备搜图…"}
+      </div>}
       <div ref={viewportRef} className="source-browser-viewport" data-source-browser-viewport>
         <div className="source-browser-placeholder" aria-hidden>
           {occluded ? "网页暂时隐藏，操作结束后恢复" : loading ? <><LoaderCircle size={20} className="animate-spin" />正在打开 {host}</> : "网页已就绪"}

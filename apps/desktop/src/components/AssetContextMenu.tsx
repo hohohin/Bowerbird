@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
 import { CANVAS_ARTBOARD_FROM_IMAGE } from "../lib/canvasArtboard";
 import { ContextMenu, ContextSubmenu, DeleteSubmenu } from "./ContextMenu";
+import { canSearchPinterest, requestPinterestSearch } from "../lib/pinterestSearch";
 import { isVideoPath } from "../lib/videoGeneration";
 import { isAudioAsset } from "../lib/audioMedia";
 import { stopAudioPreview } from "../lib/audioPreview";
@@ -428,6 +429,7 @@ export function AssetContextMenu() {
     <div className="asset-context-column">
       <div className="app-context-label">已选 {canvasMulti ? menu.canvasSelection!.nodeIds.length : multiIds.length} 项</div>
       {canvasActions}
+      {canSearchPinterest(asset) && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); requestPinterestSearch(assetId); }}>Pinterest 以图搜图</button>}
       {targetIds.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={assign}><FolderPlus size={13} />添加到集合</button>}
       {menu.canvasSelection && targetIds.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); void exportAssetArchive(targetIds); }}><Archive size={13} />将所选内容打包</button>}
       {!projectId && projects.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { setProjectPickIds({ ids: targetIds, onComplete }); closeContextMenu(); }}><FolderTree size={13} />加入项目</button>}
@@ -443,6 +445,7 @@ export function AssetContextMenu() {
       {!audio && mode === "browse" && detailAssetId !== null && <button role="menuitem" className={itemClass} disabled={busy}
         onClick={() => { addAssetToBoardFromDetail(assetId); closeContextMenu(); }}>添加到对话框</button>}
       <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); if (menu.fileSelection) useStore.setState({ mode: "browse" }); openDetail(assetId); }}>{audio ? "打开音频详情" : isVideoPath(storePath) ? "打开视频详情" : "打开图片详情"}</button>
+      {canSearchPinterest(asset) && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); requestPinterestSearch(assetId); }}>Pinterest 以图搜图</button>}
       {!menu.canvasSelection && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
         if (menu.fileSelection) menu.fileSelection.select(); else { if (mode !== "manage") enterManage(); toggleSelect(assetId); } closeContextMenu();
       }}>{menu.fileSelection ? "选择" : mode === "manage" ? "选择/取消选择" : "选择"}</button>}

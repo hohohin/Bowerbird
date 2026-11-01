@@ -32,6 +32,7 @@ import { canUseByo } from "../lib/entitlement";
 import { api } from "../lib/api";
 import { COLLECTIONS_FEATURE_ENABLED, SMART_REFINE_ENABLED } from "../lib/featureFlags";
 import { sourceDiscoveryFor } from "../lib/sourceDiscovery";
+import { canSearchPinterest, requestPinterestSearch } from "../lib/pinterestSearch";
 import { useImageZoom } from "../lib/useImageZoom";
 import { useCompatibleImagePath } from "../lib/useCompatibleImagePath";
 import { notifyError, notifySuccess } from "../lib/notify";
@@ -694,11 +695,14 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             {asset.source}
           </span>
         ) : null}
+        {canSearchPinterest(asset) && <button type="button" className="asset-detail-collect ml-auto" onClick={() => requestPinterestSearch(asset.id)}>
+          <Compass size={14} />Pinterest 以图搜图
+        </button>}
         {sourceDiscovery && asset.source_url && (
           <button
             type="button"
             onClick={() => onExploreSource(asset.source_url!)}
-            className="asset-detail-collect ml-auto"
+            className={`asset-detail-collect ${canSearchPinterest(asset) ? "" : "ml-auto"}`}
             title={sourceDiscovery.actionLabel}
           >
             <Compass size={14} />
@@ -710,7 +714,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             setDetailTab("info");
             setCollectionPanelOpen((v) => !v);
           }}
-          className={`asset-detail-collect ${sourceDiscovery ? "" : "ml-auto"} ${
+          className={`asset-detail-collect ${sourceDiscovery || canSearchPinterest(asset) ? "" : "ml-auto"} ${
             assetCollections.length > 0 ? "is-active" : ""
           }`}
           title={

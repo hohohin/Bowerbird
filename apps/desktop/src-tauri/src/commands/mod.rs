@@ -30,6 +30,7 @@ pub mod prompt;
 pub mod settings;
 pub mod screenshot;
 pub mod source_browser;
+pub mod pinterest_search;
 pub mod source_browser_capture;
 pub mod source_browser_network;
 pub mod visual_profile;

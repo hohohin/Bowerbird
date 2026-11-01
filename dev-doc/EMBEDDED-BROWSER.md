@@ -6,6 +6,20 @@
 
 ## 交互与范围
 
+### 2026-11-01：Pinterest 以图搜图（源码未发布）
+
+素材详情操作栏、共用素材右键菜单和连接集合素材菜单提供「Pinterest 以图搜图」。多选时只搜索本次右键命中的图片，连接分身按底层素材 ID 解析原件。支持 JPEG／PNG／WebP／GIF／BMP／HEIC，视频与音频不提供入口；不依赖素材来源链接，原「发现更多」保留。
+
+点击后在当前项目展开探索，保留详情、选区、画板及相机。单次请求冻结 `requestId + assetId + projectId + routeRevision`；关闭探索、切项目及手动地址／站点／前后退／刷新立即取消，图片准备不占浏览器导航队列。旧状态不能覆盖新请求，取消不撤回已经交给 Pinterest 的图片。
+
+原生只接受主 WebView 的素材 ID，从已登记原件经既有兼容读取解析图片；原件上限 50 MiB，普通解码限制 16384 边长／256 MiB，按 EXIF 方向转正并生成长边至多 1600 的内存 PNG，不修改原件、不使用缩略图、不上传到公共图床、不导出 Cookie。HEIC 沿既有兼容解码与缓存。每次准备完成后导航 Pinterest 首页并等待新文档，`documentAfter`／`performance.timeOrigin` 拒绝旧文档的迟到加载事件，避免上一张上传中的网页吞掉新图片。
+
+页面适配器仅运行在顶层、精确 `https://pinterest.com`／`https://www.pinterest.com`；点击官方 `button[aria-label="Lens"]`，只向 `input#lens-file-upload[type=file][data-test-id=lens-file-upload]` 交付单个 File 和 change 事件。Pinterest 自行预处理、上传并导航 `/lens-search/`；不调用内部上传接口，不创建 Pin。`submitted` 仅确认交给网页，后续上传／搜索结果与失败由 Pinterest 页面呈现。未登录等待登录，站外认证期间保留待办但不注入图片，返回 Pinterest 后继续；待办十分钟过期。缺少上传控件给出错误，不回退到创建 Pin 的文件输入框。
+
+一手协议核对：[官方 Lens 帮助](https://help.pinterest.com/en/article/pinterest-lens)、官方公开 `60329-466c563d30b4c62c.js`／`48228-4acf6afe41899d7a.js`。其中 `/upload-lens-image/` 是 POST 服务地址，不是页面入口；不能拼接本机路径直达结果。账号差异、中文控件名称与网站变更仍可能使适配失效。
+
+验证入口为 `scripts/pinterest-search-ui.test.mjs`、`scripts/pinterest-adapter.test.mjs`、Rust `commands::pinterest_search::tests`、`scripts/pinterest-search-native.test.mjs`。正式组件和隐藏 WebView2 均使用临时库／合成图片／隔离资料；原生测试拦截 Pinterest 响应为合成页面，不计为真实账号上传验收。操作、红绿证据、剩余边界见 [开发记录](../project_logs/2026-11-01-pinterest-search.md)。
+
 ### 2026-11-01：视频直接拖入（源码未发布）
 
 探索站点栏删除“登录状态保存在本机”提示与“采集视频”按钮。网页视频与图片共用现有拖拽：拖到素材库直接入库，拖到画板直接落在松手处，无额外采集弹窗。独立前景图片保持图片身份；视频封面／遮罩仅在明确属于同一视频时识别，不能把邻近背景视频当作当前素材。

@@ -14,6 +14,12 @@ const SOURCE_BROWSER_TITLE_EVENT: &str = "source-browser://title";
 const SOURCE_BROWSER_NEW_WINDOW_EVENT: &str = "source-browser://new-window";
 static SOURCE_BROWSER_DIMMED: AtomicBool = AtomicBool::new(false);
 
+// Optional hooks keep the isolated explorer fixture independent of the library.
+pub struct SourcePinterestHooks {
+    pub loaded: fn(&tauri::Webview, &Url, &str),
+    pub notice: fn(&AppHandle, &Url, &str),
+}
+
 fn spotlight_script() -> String {
     include_str!("source_browser_spotlight.js").replace(
         "__BOWERBIRD_DIMMED__",
@@ -138,6 +144,7 @@ pub async fn open_source_browser(
     let drag_script = include_str!("source_browser_drag.js")
         .replace("__BOWERBIRD_DRAG_BRIDGE__", &format!("bowerbird-explorer://{drag_token}"));
     let popup_drag_token = drag_token.clone();
+    let page_search_token = drag_token.clone();
     let builder = WebviewBuilder::new(SOURCE_BROWSER_LABEL, WebviewUrl::External(url))
         .data_directory(data_directory)
         .disable_drag_drop_handler()
@@ -145,6 +152,12 @@ pub async fn open_source_browser(
         .initialization_script(include_str!("../../../src/lib/explorerDragVisual.js"))
         .initialization_script(&drag_script)
         .on_navigation(move |url| {
+            if url.scheme() == "bowerbird-pinterest" {
+                if let Some(hooks) = navigation_app.try_state::<SourcePinterestHooks>() {
+                    (hooks.notice)(&navigation_app, url, &drag_token);
+                }
+                return false;
+            }
             if url.scheme() == "bowerbird-explorer" {
                 handle_drag_notice(&navigation_app, url, &drag_token);
                 return false;
@@ -158,6 +171,9 @@ pub async fn open_source_browser(
         .on_page_load(move |webview, payload| {
             if matches!(payload.event(), PageLoadEvent::Finished) {
                 let _ = webview.eval(&spotlight_script());
+                if let Some(hooks) = page_load_app.try_state::<SourcePinterestHooks>() {
+                    (hooks.loaded)(&webview, payload.url(), &page_search_token);
+                }
             }
             emit_status(
                 &page_load_app,
@@ -169,6 +185,12 @@ pub async fn open_source_browser(
             let _ = title_app.emit_to(MAIN_WEBVIEW_LABEL, SOURCE_BROWSER_TITLE_EVENT, title);
         })
         .on_new_window(move |url, _| {
+            if url.scheme() == "bowerbird-pinterest" {
+                if let Some(hooks) = new_window_app.try_state::<SourcePinterestHooks>() {
+                    (hooks.notice)(&new_window_app, &url, &popup_drag_token);
+                }
+                return NewWindowResponse::Deny;
+            }
             if url.scheme() == "bowerbird-explorer" {
                 handle_drag_notice(&new_window_app, &url, &popup_drag_token);
                 return NewWindowResponse::Deny;
