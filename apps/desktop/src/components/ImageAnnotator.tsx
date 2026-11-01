@@ -1,5 +1,8 @@
+import { useAnnotationStrokeWheel } from "../lib/useAnnotationStrokeWheel";
+import { useAnnotationHistory } from "../lib/useAnnotationHistory";
 import "./ImageAnnotator.css";
-import { AnnotationTextEditor, finishTextShape } from "./AnnotationTextEditor";
+import { AnnotationTextEditor } from "./AnnotationTextEditor";
+import { ANNOTATION_COLORS as COLORS, ANNOTATION_FONT, arrowWings, drawShapeCanvas, applyTextEdit, type DrawShape as AnnotationDrawing, type TextEdit } from "../lib/annotation";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -56,24 +59,7 @@ import type {
  */
 
 /** 面板内绘制形状：坐标 0-1 相对当前底图；strokeRatio = 线宽/底图宽（分辨率无关）。 */
-export type DrawShape = {
-  type: "rect" | "arrow" | "ellipse" | "pencil" | "text";
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  color: string;
-  strokeRatio: number;
-  points?: Array<{ x: number; y: number }>;
-  text?: string;
-  textSource?: string;
-  textWidthRatio?: number;
-  fontRatio?: number;
-  fontFamily?: string;
-  fontWeight?: number;
-  rotation?: number;
-  mirrored?: boolean;
-};
+type DrawShape = AnnotationDrawing<"rect" | "arrow" | "ellipse" | "pencil" | "text">;
 
 type BaseOp = AnnotationTransformOp;
 type Tool = DrawShape["type"] | "crop";
@@ -86,7 +72,7 @@ type CropDrag =
   | { kind: "move"; sx: number; sy: number; rect: CropRect }
   | { kind: "resize"; handle: string; rect: CropRect };
 
-const COLORS = ["#ff4d4d", "#ffd21e", "#3ddc84", "#4d9fff", "#ffffff", "#111111"];
+
 
 
 function shapeBounds(s: DrawShape) {
@@ -215,84 +201,6 @@ function buildBaseCanvas(img: HTMLImageElement, ops: BaseOp[]): HTMLCanvasElemen
   return src as HTMLCanvasElement;
 }
 
-/** 箭头头部两翼端点（随线宽缩放的等腰翼，预览 SVG 与导出 canvas 共用）。 */
-function arrowWings(
-  x1: number,
-  y1: number,
-  x2: number,
-  y2: number,
-  w: number
-): [[number, number], [number, number]] {
-  const ang = Math.atan2(y2 - y1, x2 - x1);
-  const len = Math.max(w * 3, w + 6);
-  const wing = (offset: number): [number, number] => [
-    x2 + Math.cos(ang + offset) * len,
-    y2 + Math.sin(ang + offset) * len,
-  ];
-  return [wing(Math.PI * 0.82), wing(-Math.PI * 0.82)];
-}
-
-/** 把形状按目标尺寸 (w,h) 画进 canvas（导出烧录用）。 */
-function drawShapeCanvas(
-  ctx: CanvasRenderingContext2D,
-  s: DrawShape,
-  w: number,
-  h: number
-) {
-  const lw = Math.max(1, s.strokeRatio * w);
-  ctx.strokeStyle = s.color;
-  ctx.lineWidth = lw;
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  if (s.type === "text") {
-    const size = s.fontRatio! * w;
-    ctx.save();
-    ctx.translate(s.x1 * w, s.y1 * h);
-    ctx.rotate((s.rotation ?? 0) * Math.PI / 180);
-    ctx.scale(s.mirrored ? -1 : 1, 1);
-    ctx.font = `${s.fontWeight} ${size}px ${s.fontFamily}`;
-    ctx.fillStyle = s.color;
-    ctx.textBaseline = "alphabetic";
-    s.text!.split("\n").forEach((line, index) => ctx.fillText(line, 0, size * (1 + index * 1.25)));
-    ctx.restore();
-    return;
-  }
-  if (s.type === "ellipse") {
-    ctx.beginPath();
-    ctx.ellipse((s.x1 + s.x2) * w / 2, (s.y1 + s.y2) * h / 2,
-      Math.abs(s.x2 - s.x1) * w / 2, Math.abs(s.y2 - s.y1) * h / 2, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    return;
-  }
-  if (s.type === "pencil") {
-    ctx.beginPath();
-    s.points!.forEach((point, index) => index === 0 ? ctx.moveTo(point.x * w, point.y * h) : ctx.lineTo(point.x * w, point.y * h));
-    ctx.stroke();
-    return;
-  }
-  if (s.type === "rect") {
-    ctx.strokeRect(
-      Math.min(s.x1, s.x2) * w,
-      Math.min(s.y1, s.y2) * h,
-      Math.abs(s.x2 - s.x1) * w,
-      Math.abs(s.y2 - s.y1) * h
-    );
-    return;
-  }
-  const x1 = s.x1 * w;
-  const y1 = s.y1 * h;
-  const x2 = s.x2 * w;
-  const y2 = s.y2 * h;
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  const [p1, p2] = arrowWings(x1, y1, x2, y2, lw);
-  ctx.moveTo(p1[0], p1[1]);
-  ctx.lineTo(x2, y2);
-  ctx.lineTo(p2[0], p2[1]);
-  ctx.stroke();
-}
-
 export function ImageAnnotator() {
   const annotator = useStore((s) => s.annotator);
   const closeAnnotator = useStore((s) => s.closeAnnotator);
@@ -379,33 +287,31 @@ export function ImageAnnotator() {
   // 形状 / 底图变换 / 撤销快照栈；换图重置。
   const [shapes, setShapes] = useState<DrawShape[]>([]);
   const [ops, setOps] = useState<BaseOp[]>([]);
-  const [undoStack, setUndoStack] = useState<{ shapes: DrawShape[]; ops: BaseOp[] }[]>([]);
+  const history = useAnnotationHistory<{ shapes: DrawShape[]; ops: BaseOp[] }>();
   const [draft, setDraft] = useState<DrawShape | null>(null);
   const [tool, setTool] = useState<Tool>("rect");
   const [cropRect, setCropRect] = useState<CropRect | null>(null);
   const cropDragRef = useRef<CropDrag | null>(null);
   const [color, setColor] = useState(COLORS[0]);
-  const wheelEditRef = useRef<{ index: number; time: number } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [textEdit, setTextEdit] = useState<{ index: number | null; shape: DrawShape } | null>(null);
+  const [textEdit, setTextEdit] = useState<TextEdit<DrawShape["type"]> | null>(null);
 
   function commitText() {
-    if (!textEdit || !base) return;
-    const shape = finishTextShape(textEdit.shape, base.w, base.h);
-    if (shape || textEdit.index !== null) {
+    if (!textEdit || !base) return shapes;
+    const next = applyTextEdit(shapes, textEdit, base.w, base.h);
+    if (next !== shapes) {
       pushUndo();
-      setShapes(current => textEdit.index === null
-        ? [...current, ...(shape ? [shape] : [])]
-        : current.flatMap((item, index) => index === textEdit.index ? (shape ? [shape] : []) : [item]));
+      setShapes(next);
     }
     setTextEdit(null);
+    return next;
   }
 
 
   useEffect(() => {
     setShapes([]);
     setOps([]);
-    setUndoStack([]);
+    history.reset();
     setDraft(null);
     setCropRect(null);
     cropDragRef.current = null;
@@ -472,15 +378,12 @@ export function ImageAnnotator() {
   }, [base, box]);
 
   function pushUndo() {
-    wheelEditRef.current = null;
-    setUndoStack((s) => [...s, { shapes, ops }]);
+    history.record({ shapes, ops });
   }
 
   function undo() {
-    wheelEditRef.current = null;
-    const last = undoStack[undoStack.length - 1];
+    const last = history.undo({ shapes, ops });
     if (!last) return;
-    setUndoStack(undoStack.slice(0, -1));
     setShapes(last.shapes);
     setOps(last.ops);
   }
@@ -507,7 +410,7 @@ export function ImageAnnotator() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, closeAnnotator, undoStack, shapes, ops, tool, cropRect, base, busy]);
+  }, [open, closeAnnotator, history.past, shapes, ops, tool, cropRect, base, busy]);
 
   function rotate(dir: 1 | -1) {
     if (!base) return;
@@ -643,7 +546,7 @@ export function ImageAnnotator() {
         type: "text", x1: p.x, y1: p.y, x2: p.x, y2: p.y,
         text: "", textSource: "", textWidthRatio: Math.min(0.35, Math.max(0.08, 1 - p.x)),
         color, strokeRatio: 0, fontRatio: 32 / displaySize.w,
-        fontFamily: '"Microsoft YaHei", "PingFang SC", sans-serif', fontWeight: 400,
+        fontFamily: ANNOTATION_FONT, fontWeight: 400,
       } });
       return;
     }
@@ -737,6 +640,7 @@ export function ImageAnnotator() {
     canvas.height = h;
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("无法创建画布上下文");
+    const outputShapes = commitText();
     const jpeg = asset?.ext === "jpg" || asset?.ext === "jpeg";
     if (jpeg) {
       // 透明底画进 JPEG 会变黑，先铺白。
@@ -744,7 +648,7 @@ export function ImageAnnotator() {
       ctx.fillRect(0, 0, w, h);
     }
     ctx.drawImage(baseCanvasRef.current ?? img, 0, 0, w, h);
-    for (const s of shapes) drawShapeCanvas(ctx, s, w, h);
+    for (const s of outputShapes) drawShapeCanvas(ctx, s, w, h);
     const dataUrl = jpeg
       ? canvas.toDataURL("image/jpeg", 0.92)
       : canvas.toDataURL("image/png");
@@ -754,7 +658,7 @@ export function ImageAnnotator() {
       source_store_path: asset?.store_path ?? "",
       image: { width: w, height: h },
       transform: ops.length > 0 ? ops : undefined,
-      shapes: shapes.map<AnnotationShape>((s) => ({
+      shapes: outputShapes.map<AnnotationShape>((s) => ({
         type: s.type,
         x1: v999(s.type === "rect" || s.type === "ellipse" ? Math.min(s.x1, s.x2) : s.x1),
         y1: v999(s.type === "rect" || s.type === "ellipse" ? Math.min(s.y1, s.y2) : s.y1),
@@ -851,31 +755,19 @@ export function ImageAnnotator() {
     }
   }
 
-  // 原生非 passive 监听：命中标注才消费滚轮，不让页面同时滚动。
+  const editStroke = useAnnotationStrokeWheel(shapes, setShapes, pushUndo);
+  // Native non-passive input lets the shared object edit consume the wheel only on a hit.
   useEffect(() => {
     const overlay = overlayRef.current;
     if (!overlay || !displaySize) return;
     const onWheel = (event: WheelEvent) => {
-      if (busy || draft || textEdit || tool === "crop" || event.ctrlKey || !event.deltaY) return;
-      const target = event.target instanceof Element ? event.target.closest("[data-annotation-index]") : null;
-      if (!target) return;
-      const index = Number(target.getAttribute("data-annotation-index"));
-      const shape = shapes[index];
-      if (!shape || shape.type === "text") return;
-      event.preventDefault();
-      event.stopPropagation();
-      const width = Math.max(1, Math.min(32, shape.strokeRatio * displaySize.w + (event.deltaY < 0 ? 1 : -1)));
-      const ratio = width / displaySize.w;
-      if (Math.abs(ratio - shape.strokeRatio) < 1e-9) return;
-      const now = performance.now();
-      const previous = wheelEditRef.current;
-      if (!previous || previous.index !== index || now - previous.time > 400) pushUndo();
-      wheelEditRef.current = { index, time: now };
-      setShapes(current => current.map((item, i) => i === index ? { ...item, strokeRatio: ratio } : item));
+      if (busy || draft || textEdit || tool === "crop") return;
+      const bounds = overlay.getBoundingClientRect();
+      editStroke(event, { x: event.clientX - bounds.left, y: event.clientY - bounds.top }, displaySize.w, displaySize.h);
     };
     overlay.addEventListener("wheel", onWheel, { passive: false });
     return () => overlay.removeEventListener("wheel", onWheel);
-  }, [annotator, shapes, ops, displaySize, busy, draft, textEdit, tool]);
+  }, [annotator, editStroke, displaySize, busy, draft, textEdit, tool]);
 
   if (!annotator) return null;
 
@@ -1042,7 +934,7 @@ export function ImageAnnotator() {
       active ? "bg-white/20 text-white" : "text-white/70 hover:bg-white/10 hover:text-white"
     }`;
 
-  const canUndo = undoStack.length > 0;
+  const canUndo = history.canUndo;
   // 有任一编辑（标注 / 裁剪 / 旋转 / 镜像）即可输出，无形状时没有「标注」维度。
   const hasEdits = shapes.length > 0 || ops.length > 0 || !!textEdit?.shape.textSource?.trim();
 

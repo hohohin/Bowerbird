@@ -11,12 +11,26 @@
 1. 阅读 `ub-mode`、PROJECT 当前约定、开发计划及截图／文件夹／画板／UI 专项，确认当前分支和工作区已有修改。将标注共享核心、选择逻辑、历史清理分给互不重叠的工作单元，主线程处理输入法、集成与文档。
 2. 在正式 `project-rename-ui.test.mjs` 增加画板标题的输入法回归。修复前 `isComposing` Enter 使标题失焦并提交，新断言实际失败。抽出 `useImeGuard`，与重命名弹窗共用 composition 状态、原生 isComposing 和旧式 keyCode 229 判断；组词期间保持焦点，普通 Enter 完成后只提交一次。完整改名回归转绿。
 3. 两套素材视图补相同的首次 Shift 行为回归。连接集合修复前第二项实际未选中；抽出 `catalogSelection` 统一单次点击的选择转移和持续多选状态，两视图各自保留素材／连接条目身份和异步范围读取。连接集合与 30 万项分页回归转绿。
-4. 截图历史增加 PNG 被占用、缩略图被占用、重开后旧孤儿文件回收三个正式测试；修复前新增三项均失败、原有六项通过。像素先删、清单后删，并由 `clear` 与 `prune` 共用合法 ULID／固定后缀扫描，处理缺 PNG／JSON 的半删记录；只把 NotFound 判为缺失，其他 IO 错误供重试。正式模块 9 项全绿（直接引用生产模块、锁定依赖的 Rust 测试）；完整 crate 集成测试另行核对。不因已有 JSON 内容损坏直接自动删图。
-5. 标注先补键盘保存的失败测试，再统一输出快照和公共绘图核心；具体结果随最终验收补充。
+4. 截图历史增加 PNG 被占用、缩略图被占用、重开后旧孤儿文件回收三个正式测试；修复前新增三项均失败、原有六项通过。像素先删、清单后删，并由 `clear` 与 `prune` 共用合法 ULID／固定后缀扫描，处理缺 PNG／JSON 的半删记录；只把 NotFound 判为缺失，其他 IO 错误供重试。正式模块 9 项全绿（直接引用生产模块、锁定依赖的 Rust 测试）；随后完整 crate `cargo test --locked --offline --lib commands::screenshot::history` 同样 9 项通过，957 项过滤未执行，5 条既有编译警告未作无关清理。不因已有 JSON 内容损坏直接自动删图。
+5. 标注先补键盘保存的失败测试，观察输出仍为旧文字，修复为所有输出先结算同一文字快照后转绿。提取 `annotation.ts` 统一相对当前图片的 0–1 坐标、按图宽归一化的描边／字号、公共色板、箭头几何、绘制和文字布局；`AnnotationTextEditor`、`useAnnotationHistory` 及 `useAnnotationStrokeWheel` 由两窗口共同使用，每个窗口独立持有状态。截图已有对象滚轮测试先失败（像素不变），共享 Path2D 命中、1–32px 边界与一次手势一条撤销后转绿；截图空白处调下一笔保留为捕获外壳职责。删除原 `Mark`／`drawMarks` 与重复文字输入、撤销实现。
 6. 查询本机及工具目录未找到 crapper／dryer／mutator。根据技能指向的官方仓库将三者下载至 `.tmp/ub-tools` 并创建独立 Python 环境，避免修改项目依赖或系统环境；实际工具范围与结果随验收记录，不把人工检查写成工具评分。
+7. 选择、输入法与历史清理经过独立复核后，连同 PROJECT 约定及本日志提交为 `ac2bb196`。其余标注工作继续独立验证；没有夹带原工作区的截图和测试文件改动。
+8. 独立集成复核实际点击截图工具发现两项迁移回归：实心状态误传给直线导致不可见；未完成折线期间滚轮可修改旧对象。用真实组件、合成图像对比 PNG 确认后交回标注单元补红绿回归。连续文字双结算的静态疑点经实际撤销验证未复现，撤回，不列为修复成果。
+9. 将填充规则限定为矩形／椭圆，并共用到绘制和命中；未完成折线加入绘制保护。两项正式回归均先红后绿，独立复跑确认直线可见、折线期间旧对象像素不变。原文字、旋转、镜像、裁剪、透明度、十种截图工具、会话缓存／恢复及撤销回归保持通过。
+10. 质量采集发现页面多次导航会丢失前页的脚本命中，先修正为导航前收集、最后合并覆盖，未把错误的零覆盖结果当成代码问题。准确报告显示文字提交函数 CRAP 17；提取实时编辑器与提交排版共有的 `annotationTextLayout` 后，默认回退仍未被真实流程触达。核对两个文字构造入口都完整设置原文、字号和文本框宽度，打开／新会话重置形状，没有旧持久化元数据恢复为编辑对象的路径；删除此次抽取中的不可达回退，保留空文本取消行为，未为指标制造兼容测试。最终源码重新通过三组标注回归与质量采集。
+
+## 质量工具记录
+
+- 官方来源与冻结版本：[crapper](https://github.com/unclebob/crapper) `6fd92c4c9bcc56efb64a2f8743d5a2993bcfd42d`；[dryer](https://github.com/unclebob/dryer) `66ff6d21a42c04afcad89c78a80066176d1294b0`；[mutator](https://github.com/unclebob/mutator) `a5a0cb803b66e0cdb8bf471b3b08af701d424a41`。
+- 本机未预装工具，使用工作区临时 venv。language-pack 下载语法超时后，用官方 `tree-sitter-typescript` 的预编译 TS／TSX 语法替换加载层，未改变分析算法。Windows 的官方符号链接 worker 返回 WinError 1314；变异改在独立源码副本单次应用／恢复，继续使用官方变异执行与报告逻辑，不改正在开发的源码。
+- `catalogSelection`：CC 6，真实 Chromium V8 → LCOV 分支覆盖 83.3%，CRAP 6.2；`useImeGuard`：CC 3，覆盖 100%，CRAP 3.0。官方变异共 9 项全部被行为断言捕获（选择 3、输入法 6），无幸存。首次缺夹具依赖导致的基线失败修正后重跑，不计为变异捕获。
+- 最终五个共享核心合计行覆盖 100%、分支覆盖 93.04%、函数覆盖 100%；各模块最高 CRAP 为 `annotation` 7.1、`useAnnotationStrokeWheel` 8.0、`useAnnotationHistory` 3.0、`catalogSelection` 6.2、`useImeGuard` 3.0。`crapper --threshold 9.99` 退出 0；`dryer` 在 0.8 阈值没有重复候选。文字布局助手 CC／CRAP 均为 1，文字提交函数 CRAP 5.3。
+- 汇总、源码哈希及工具适配边界位于 `.tmp/ub-tools/REPORT.md`；原始证据位于 `.tmp/ub-tools/logs/`、`.tmp/ub-tools/validation/apps/desktop/.metrics/` 与 `.tmp/ub-tools/annotation-metrics/.metrics/`。只评价本次新增／抽取核心，变异范围为选择及输入法，不把这些数字推断成全仓覆盖或已有大组件全部达标。
 
 ## 验证与交付边界
 
 验证使用合成 IPC、临时合成图片与独立资料目录。浏览器回归不代替 Windows／Mac 原生体验验收。现有工作树另有用户修改，本次不清理或提交；未创建新 worktree，旧 worktree 的使用者与未提交状态未证实，不执行删除。
 
-最终回归、工具结果、提交及清理记录在完成后补入本页。
+最终完整 TypeScript 检查通过；独立 Vite 构建至 `apps/desktop/.tmp/review-fixes-build/`，主窗口与截图入口均生成，仅有既有大 chunk 提示。7 组 Chromium 回归为 `annotation-tools-ui`、`annotation-toolbar-ui`、`screenshot-ui`、`screenshot-history-ui`、`connected-collections-ui`、`catalog-paging-ui`、`project-rename-ui`；完整 Rust crate 历史专项 9 项通过。未把合成 IPC 结果写成原生屏幕捕获／Mac 验收。
+
+第二个提交单元包含公共标注核心、两窗口适配、正式回归与本次文档，提交说明记录修复原因及验证方法；与首个提交一起按 `ub-mode` 推送当前开发主线 `dev`。测试产物与工具证据留在临时目录，不进入版本库；保留原有未提交工作，不清理未知归属的目录或工作树。

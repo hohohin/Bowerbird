@@ -1,7 +1,5 @@
 export type Point = { x: number; y: number };
 export type Rect = { x: number; y: number; width: number; height: number };
-export type SnipTool = "select" | "rect" | "ellipse" | "line" | "arrow" | "pen" | "marker" | "text" | "mosaic" | "blur" | "eraser";
-export type Mark = { tool: Exclude<SnipTool, "select">; start: Point; end: Point; color: string; size: number; points: Point[]; text: string; filled?: boolean };
 export const DEFAULT_SCREENSHOT_SHORTCUTS = { capture: "F1", paste: "F3" };
 export function rectBetween(a: Point, b: Point): Rect {
   const x = Math.round(Math.min(a.x, b.x)), y = Math.round(Math.min(a.y, b.y));
@@ -35,55 +33,4 @@ export function shortcutFromEvent(event: Pick<KeyboardEvent, "code" | "metaKey" 
 }
 export function displayShortcut(value: string): string {
   return value ? value.replace(/Super/g, "⌘").replace(/Control/g, "Ctrl").replace(/Key([A-Z])/g, "$1").replace(/Digit(\d)/g, "$1").replace(/\+/g, " + ") : "未设置";
-}
-export function drawMarks(ctx: CanvasRenderingContext2D, marks: Mark[], background: HTMLCanvasElement = ctx.canvas, original: CanvasImageSource = background) {
-  for (const mark of marks) {
-    const { start: a, end: b, size } = mark;
-    const box = rectBetween(a, b);
-    ctx.save(); ctx.strokeStyle = mark.color; ctx.fillStyle = mark.color; ctx.lineWidth = size; ctx.lineCap = "round"; ctx.lineJoin = "round";
-    ctx.beginPath();
-    if (mark.tool === "rect") { if (mark.filled) ctx.fillRect(box.x, box.y, box.width, box.height); else ctx.strokeRect(box.x, box.y, box.width, box.height); }
-    if (mark.tool === "ellipse") { ctx.ellipse(box.x + box.width / 2, box.y + box.height / 2, box.width / 2, box.height / 2, 0, 0, Math.PI * 2); if (mark.filled) ctx.fill(); else ctx.stroke(); }
-    if (mark.tool === "pen" || mark.tool === "line" || mark.tool === "marker") {
-      if (mark.tool === "marker") { ctx.globalAlpha = .3; ctx.lineWidth = size * 6; ctx.lineCap = 'butt'; }
-      ctx.moveTo(a.x, a.y); for (const p of mark.points) ctx.lineTo(p.x, p.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-    }
-    if (mark.tool === "arrow") {
-      ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
-      const angle = Math.atan2(b.y - a.y, b.x - a.x), length = Math.max(12, size * 4);
-      ctx.beginPath(); ctx.moveTo(b.x, b.y);
-      ctx.lineTo(b.x - length * Math.cos(angle - .45), b.y - length * Math.sin(angle - .45));
-      ctx.lineTo(b.x - length * Math.cos(angle + .45), b.y - length * Math.sin(angle + .45)); ctx.closePath(); ctx.fill();
-    }
-    if (mark.tool === "text") {
-      const fontSize = Math.max(16, size * 6); ctx.font = `600 ${fontSize}px sans-serif`; ctx.textBaseline = "top";
-      mark.text.split("\n").forEach((line, i) => ctx.fillText(line, a.x, a.y + i * fontSize * 1.3));
-    }
-    if (mark.tool === "mosaic" && box.width && box.height) {
-      const sample = document.createElement("canvas"), cell = Math.max(10, size * 5);
-      sample.width = Math.max(1, Math.ceil(box.width / cell)); sample.height = Math.max(1, Math.ceil(box.height / cell));
-      sample.getContext("2d")!.drawImage(background, box.x, box.y, box.width, box.height, 0, 0, sample.width, sample.height);
-      ctx.imageSmoothingEnabled = false; ctx.drawImage(sample, 0, 0, sample.width, sample.height, box.x, box.y, box.width, box.height);
-    }
-    if (mark.tool === 'blur' && box.width && box.height) {
-      // Snapshot before drawing: never read from the canvas while filtering onto itself.
-      const radius = Math.max(2, size * 2), padding = Math.ceil(radius * 3);
-      const x = Math.max(0, box.x - padding), y = Math.max(0, box.y - padding);
-      const sample = document.createElement('canvas');
-      sample.width = Math.min(background.width, box.x + box.width + padding) - x;
-      sample.height = Math.min(background.height, box.y + box.height + padding) - y;
-      sample.getContext('2d')!.drawImage(background, x, y, sample.width, sample.height, 0, 0, sample.width, sample.height);
-      ctx.rect(box.x, box.y, box.width, box.height); ctx.clip(); ctx.filter = `blur(${radius}px)`; ctx.drawImage(sample, x, y);
-    }
-    if (mark.tool === 'eraser') {
-      // Restore the frozen source under the brush, preserving the screenshot's alpha.
-      const points = [a, ...mark.points, b], radius = size * 4;
-      for (let i = 1; i < points.length; i++) {
-        const from = points[i - 1], to = points[i], steps = Math.max(1, Math.ceil(Math.hypot(to.x - from.x, to.y - from.y) / radius));
-        for (let n = 0; n <= steps; n++) { const x = from.x + (to.x - from.x) * n / steps, y = from.y + (to.y - from.y) * n / steps; ctx.moveTo(x + radius, y); ctx.arc(x, y, radius, 0, Math.PI * 2); }
-      }
-      ctx.clip(); ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height); ctx.drawImage(original, 0, 0);
-    }
-    ctx.restore();
-  }
 }

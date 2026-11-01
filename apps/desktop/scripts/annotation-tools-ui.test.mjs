@@ -126,6 +126,17 @@ try {
     await page.screenshot({ path: `.tmp/annotation-tools-${mode}.png` });
     const saveButton = mode === "draft" ? "保存到画板" : "保存到素材库";
     const original = await capture(saveButton);
+    // Keyboard activation has no pointerdown: every export must settle the text draft itself.
+    await overlay.locator("text").click();
+    await input.fill("键盘保存不能丢失");
+    const keyboardCount = await page.evaluate(() => window.outputs.length);
+    await dialog.getByRole("button", { name: saveButton, exact: true }).focus();
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(count => window.outputs.length > count, keyboardCount);
+    assert.equal(await page.evaluate(() => window.outputs.at(-1).meta.shapes.at(-1).text), "键盘保存不能丢失");
+    assert.equal(await input.count(), 0, "keyboard save commits current text editing");
+    await dialog.getByRole("button", { name: "撤销", exact: true }).click();
+    assert.equal((await capture(saveButton)).dataUrl, original.dataUrl, "keyboard edit is one undo step");
     await overlay.locator("text").click();
     const beforeResize = await input.boundingBox();
     const handle = await dialog.getByRole("button", { name: "调整文本框宽度" }).boundingBox();

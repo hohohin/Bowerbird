@@ -1,23 +1,27 @@
+import { useAnnotationStrokeWheel } from "../lib/useAnnotationStrokeWheel";
+import { useAnnotationHistory } from "../lib/useAnnotationHistory";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, LogicalPosition, LogicalSize } from "@tauri-apps/api/window";
 import { ArrowUpRight, Circle, Copy, Crop, Pencil, Pin, Redo2, Save, Square, Type, Undo2, X, Grid2X2, Minus, Highlighter, Droplets, Eraser, History } from "lucide-react";
-import { drawMarks, moveRect, nudgeRect, rectBetween, samplePixel, type Mark, type Point, type Rect, type SnipTool } from "../lib/screenshot";
+import { moveRect, nudgeRect, rectBetween, samplePixel, type Point, type Rect } from "../lib/screenshot";
+import { ANNOTATION_COLORS as COLORS, ANNOTATION_FONT, annotationStrokeWidth, drawShapes, applyTextEdit, type DrawShape, type AnnotationTool, type TextEdit } from "../lib/annotation";
+import { AnnotationTextEditor } from "./AnnotationTextEditor";
+type SnipTool = AnnotationTool | "select";
 import "./ScreenshotWindow.css";
 import { ScreenshotHistoryPanel } from "./ScreenshotHistoryPanel";
 
-type Gesture = { kind: "select" | "move" | "resize" | "draw"; start: Point; rect: Rect | null; anchor?: Point; mark?: Mark };
+type Gesture = { kind: "select" | "move" | "resize" | "draw"; start: Point; rect: Rect | null; anchor?: Point; mark?: DrawShape };
 const TOOLS = [
   ["select", "调整选区", Crop], ["rect", "矩形", Square], ["ellipse", "椭圆", Circle],
-  ["line", "直线／折线", Minus], ["arrow", "箭头", ArrowUpRight], ["pen", "画笔", Pencil], ["marker", "荧光笔", Highlighter],
+  ["line", "直线／折线", Minus], ["arrow", "箭头", ArrowUpRight], ["pencil", "画笔", Pencil], ["marker", "荧光笔", Highlighter],
   ["text", "文字", Type], ["mosaic", "马赛克", Grid2X2], ["blur", "高斯模糊", Droplets], ["eraser", "橡皮擦", Eraser],
 ] as const;
-const COLORS = ["#ff4d4f", "#ffc53d", "#52c41a", "#4096ff", "#ffffff", "#171717"];
 const DIRECTIONS: Record<string, Point> = { arrowleft: { x: -1, y: 0 }, arrowright: { x: 1, y: 0 }, arrowup: { x: 0, y: -1 }, arrowdown: { x: 0, y: 1 }, a: { x: -1, y: 0 }, d: { x: 1, y: 0 }, w: { x: 0, y: -1 }, s: { x: 0, y: 1 } };
 
-function ScreenshotLoupe({ source, cursor, viewport, marks }: { source: HTMLCanvasElement; cursor: Point; viewport: { width: number; height: number }; marks: Mark[] }) {
+function ScreenshotLoupe({ source, cursor, viewport, marks }: { source: HTMLCanvasElement; cursor: Point; viewport: { width: number; height: number }; marks: DrawShape[] }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [hex, setHex] = useState('');
   const x = Math.max(0, Math.min(source.width - 1, Math.floor(cursor.x)));
@@ -50,17 +54,18 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [selection, setSelection] = useState<Rect | null>(null);
-  const [marks, setMarks] = useState<Mark[]>([]);
-  const [redo, setRedo] = useState<Mark[]>([]);
-  const [draft, setDraft] = useState<Mark | null>(null);
+  const [marks, setMarks] = useState<DrawShape[]>([]);
+  const history = useAnnotationHistory<DrawShape[]>();
+  const [draft, setDraft] = useState<DrawShape | null>(null);
   const [tool, setTool] = useState<SnipTool>("select");
   const [color, setColor] = useState(COLORS[0]);
   const [size, setSize] = useState(3);
-  const [textEdit, setTextEdit] = useState<Mark | null>(null);
+  const [textEdit, setTextEdit] = useState<TextEdit | null>(null);
   const [filled, setFilled] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const root = useRef<HTMLElement>(null);
-  const polyline = useRef<Mark | null>(null);
+  const stage = useRef<HTMLDivElement>(null);
+  const polyline = useRef<DrawShape | null>(null);
   const [cursor, setCursor] = useState<Point | null>(null);
   const cursorRef = useRef<Point | null>(null);
   const cursorFrame = useRef<number | null>(null);
@@ -78,7 +83,7 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
     let unlisten: (() => void) | undefined;
     const reset = () => {
       setImage(null); setSession(null); setError(""); setSelection(null);
-      setMarks([]); setRedo([]); setDraft(null); setTool("select");
+      setMarks([]); history.reset(); setDraft(null); setTool("select");
       setColor(COLORS[0]); setSize(3); setTextEdit(null); setFilled(false); setCursor(null); setInspect(false); setHistoryOpen(false); polyline.current = null;
       gesture.current = null; cursorRef.current = null;
       if (cursorFrame.current !== null) cancelAnimationFrame(cursorFrame.current);
@@ -144,7 +149,7 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
     const ctx = target.getContext("2d")!;
     ctx.clearRect(0, 0, target.width, target.height);
     ctx.drawImage(image, 0, 0);
-    drawMarks(ctx, marks, target, image);
+    drawShapes(ctx, marks, image.naturalWidth, image.naturalHeight, target, image);
   }, [image, marks, pinned]);
   useLayoutEffect(() => {
     const target = draftCanvas.current;
@@ -156,7 +161,7 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
       if (target.width !== image.naturalWidth || target.height !== image.naturalHeight) { target.width = image.naturalWidth; target.height = image.naturalHeight; }
       const ctx = target.getContext('2d')!;
       ctx.clearRect(0, 0, target.width, target.height);
-      drawMarks(ctx, [draft], canvas.current!, image);
+      drawShapes(ctx, [draft], image.naturalWidth, image.naturalHeight, canvas.current!, image);
     });
     return () => cancelAnimationFrame(frame);
   }, [image, draft, pinned]);
@@ -179,18 +184,22 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
     catch (e) { setError(String(e)); }
   }
   function finishText() {
-    if (!textEdit) return;
-    if (textEdit.text.trim()) { setMarks(current => [...current, textEdit]); setRedo([]); }
+    if (!textEdit || !image) return;
+    const next = applyTextEdit(marks, textEdit, image.naturalWidth, image.naturalHeight);
+    if (next !== marks) { history.record(marks); setMarks(next); }
     setTextEdit(null);
   }
   function finishPolyline() {
     const mark = polyline.current;
-    if (mark && mark.points.length > 1) { setMarks(current => [...current, { ...mark, end: mark.points[mark.points.length - 1] }]); setRedo([]); }
+    if (mark && mark.points!.length > 1) {
+      const end = mark.points![mark.points!.length - 1];
+      history.record(marks); setMarks(current => [...current, { ...mark, x2: end.x, y2: end.y }]);
+    }
     polyline.current = null; setDraft(null);
   }
   function chooseTool(next: SnipTool) { finishText(); finishPolyline(); setTool(next); }
-  function undo() { if (!marks.length) return; setRedo([...redo, marks[marks.length - 1]]); setMarks(marks.slice(0, -1)); }
-  function redoMark() { if (!redo.length) return; setMarks([...marks, redo[redo.length - 1]]); setRedo(redo.slice(0, -1)); }
+  function undo() { const previous = history.undo(marks); if (previous) setMarks(previous); }
+  function redoMark() { const next = history.redo(marks); if (next) setMarks(next); }
   async function output(action: "copy" | "save" | "pin") {
     if (!image || busyRef.current || gesture.current || (!pinned && !selection)) return;
     busyRef.current = true; setBusy(true); setError("");
@@ -211,11 +220,11 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
         ctx.drawImage(canvas.current!, selection!.x, selection!.y, selection!.width, selection!.height, 0, 0, crop.width, crop.height);
         // Include confirmed draft content without committing it: cancelling Save
         // must leave the line/text editor intact for continued editing.
-        const pending: Mark[] = [];
-        if (polyline.current && polyline.current.points.length > 1) pending.push(polyline.current);
-        if (textEdit?.text.trim()) pending.push(textEdit);
+        const pending: DrawShape[] = [];
+        if (polyline.current && polyline.current.points!.length > 1) pending.push(polyline.current);
+        pending.push(...applyTextEdit([], textEdit, image.naturalWidth, image.naturalHeight));
         ctx.translate(-selection!.x, -selection!.y);
-        drawMarks(ctx, pending, canvas.current!, image);
+        drawShapes(ctx, pending, image.naturalWidth, image.naturalHeight, canvas.current!, image);
         data = crop.toDataURL('image/png');
       }
       await invoke<boolean>("screenshot_output", { data, action, session });
@@ -255,7 +264,7 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
         return;
       }
       if (!pinned && !mod && selection && (key === '1' || key === '2' || key === '[' || key === ']')) {
-        event.preventDefault(); setSize(value => Math.max(1, Math.min(12, value + (key === '1' || key === '[' ? -1 : 1)))); return;
+        event.preventDefault(); setSize(value => annotationStrokeWidth(value + (key === '1' || key === '[' ? -1 : 1))); return;
       }
       if (!pinned && event.key === 'Tab' && (tool === 'line' || tool === 'arrow')) { event.preventDefault(); chooseTool(tool === 'line' ? 'arrow' : 'line'); return; }
       if (!pinned && !mod && (key === 'h' || key === ',' || key === '.')) { event.preventDefault(); finishText(); finishPolyline(); setHistoryOpen(true); return; }
@@ -296,12 +305,17 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
       } else { gesture.current = { kind: 'select', start: p, rect: selection }; setSelection(null); }
     } else {
       if (p.x < selection.x || p.x > selection.x + selection.width || p.y < selection.y || p.y > selection.y + selection.height) return;
-      const mark: Mark = { tool, start: p, end: p, color, size: size * ratio, points: [p], text: "", filled };
+      const relative = { x: p.x / image.naturalWidth, y: p.y / image.naturalHeight };
+      const mark: DrawShape = { type: tool, x1: relative.x, y1: relative.y, x2: relative.x, y2: relative.y,
+        color, strokeRatio: size / viewport.width, points: [relative], filled };
       if (tool === 'text') {
-        finishText(); setTextEdit(mark); setError(''); return;
+        setTextEdit({ index: null, shape: { ...mark, text: "", textSource: "",
+          textWidthRatio: Math.min(0.35, Math.max(0.08, 1 - relative.x)),
+          fontRatio: Math.max(16, size * 6) / viewport.width, fontFamily: ANNOTATION_FONT, fontWeight: 400,
+        } }); setError(''); return;
       }
       if (tool === 'line' && polyline.current) {
-        polyline.current = { ...polyline.current, end: p, points: [...polyline.current.points, p] }; setDraft(polyline.current); return;
+        polyline.current = { ...polyline.current, x2: relative.x, y2: relative.y, points: [...polyline.current.points!, relative] }; setDraft(polyline.current); return;
       }
       gesture.current = { kind: 'draw', start: p, rect: selection, mark }; setDraft(mark);
     }
@@ -309,33 +323,51 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
   function move(event: ReactPointerEvent<HTMLDivElement>) {
     if (!image) return;
     const p = point(event); updateCursor(p);
-    if (polyline.current) { setDraft({ ...polyline.current, end: p }); return; }
+    if (polyline.current) { setDraft({ ...polyline.current, x2: p.x / image.naturalWidth, y2: p.y / image.naturalHeight }); return; }
     const current = gesture.current; if (!current) return;
     if (current.kind === 'select' || current.kind === 'resize') setSelection(rectBetween(current.anchor ?? current.start, p));
     if (current.kind === 'move' && current.rect) setSelection(moveRect(current.rect, p.x - current.start.x, p.y - current.start.y, image.naturalWidth, image.naturalHeight));
     if (current.mark) {
-      const mark = { ...current.mark, end: p, points: ['pen', 'marker', 'eraser'].includes(current.mark.tool) ? [...current.mark.points, p] : current.mark.points };
-      if (event.shiftKey && (mark.tool === 'ellipse' || mark.tool === 'rect')) {
-        const d = Math.min(Math.abs(p.x - mark.start.x), Math.abs(p.y - mark.start.y));
-        mark.end = { x: mark.start.x + Math.sign(p.x - mark.start.x) * d, y: mark.start.y + Math.sign(p.y - mark.start.y) * d };
+      let end = p;
+      const start = { x: current.mark.x1 * image.naturalWidth, y: current.mark.y1 * image.naturalHeight };
+      if (event.shiftKey && (current.mark.type === 'ellipse' || current.mark.type === 'rect')) {
+        const d = Math.min(Math.abs(p.x - start.x), Math.abs(p.y - start.y));
+        end = { x: start.x + Math.sign(p.x - start.x) * d, y: start.y + Math.sign(p.y - start.y) * d };
       }
-      if (event.shiftKey && (mark.tool === 'line' || mark.tool === 'arrow')) {
-        const length = Math.hypot(p.x - mark.start.x, p.y - mark.start.y), angle = Math.round(Math.atan2(p.y - mark.start.y, p.x - mark.start.x) / (Math.PI / 4)) * Math.PI / 4;
-        mark.end = { x: mark.start.x + length * Math.cos(angle), y: mark.start.y + length * Math.sin(angle) };
+      if (event.shiftKey && (current.mark.type === 'line' || current.mark.type === 'arrow')) {
+        const length = Math.hypot(p.x - start.x, p.y - start.y), angle = Math.round(Math.atan2(p.y - start.y, p.x - start.x) / (Math.PI / 4)) * Math.PI / 4;
+        end = { x: start.x + length * Math.cos(angle), y: start.y + length * Math.sin(angle) };
       }
+      const relative = { x: end.x / image.naturalWidth, y: end.y / image.naturalHeight };
+      const mark = { ...current.mark, x2: relative.x, y2: relative.y,
+        points: ['pencil', 'marker', 'eraser'].includes(current.mark.type) ? [...current.mark.points!, relative] : current.mark.points };
       current.mark = mark; setDraft(mark);
     }
   }
   function up() {
     const current = gesture.current; gesture.current = null;
     if (current?.mark) {
-      if (current.mark.tool === 'line' && Math.hypot(current.mark.end.x - current.mark.start.x, current.mark.end.y - current.mark.start.y) < 3 * ratio) { polyline.current = current.mark; setDraft(current.mark); return; }
-      setMarks([...marks, current.mark]); setRedo([]);
+      if (current.mark.type === 'line' && Math.hypot((current.mark.x2 - current.mark.x1) * image!.naturalWidth, (current.mark.y2 - current.mark.y1) * image!.naturalHeight) < 3 * ratio) { polyline.current = current.mark; setDraft(current.mark); return; }
+      history.record(marks); setMarks([...marks, current.mark]);
     }
     if (polyline.current) return;
     if (selection && (!selection.width || !selection.height)) setSelection(null);
     setDraft(null);
   }
+  const editStroke = useAnnotationStrokeWheel(marks, setMarks, () => history.record(marks));
+  useEffect(() => {
+    const element = stage.current;
+    if (!element || !selection || pinned) return;
+    const onWheel = (event: WheelEvent) => {
+      if (busy || gesture.current || polyline.current || textEdit || tool === "select" || event.ctrlKey || !event.deltaY) return;
+      const bounds = element.getBoundingClientRect();
+      if (editStroke(event, { x: event.clientX - bounds.left, y: event.clientY - bounds.top }, bounds.width, bounds.height)) return;
+      // Empty capture space adjusts the next brush stroke; existing objects use the shared edit above.
+      event.preventDefault(); setSize(value => annotationStrokeWidth(value + (event.deltaY < 0 ? 1 : -1)));
+    };
+    element.addEventListener("wheel", onWheel, { passive: false });
+    return () => element.removeEventListener("wheel", onWheel);
+  }, [selection, pinned, busy, textEdit, tool, editStroke]);
   const s = selection && image ? { left: selection.x / image.naturalWidth * 100 + '%', top: selection.y / image.naturalHeight * 100 + '%', width: selection.width / image.naturalWidth * 100 + '%', height: selection.height / image.naturalHeight * 100 + '%' } : null;
   if (pinned) return <main ref={root} tabIndex={-1} className="snip-pin" onWheel={event => { event.preventDefault(); void changeZoom(zoom * (event.deltaY < 0 ? 1.1 : 1 / 1.1)); }}>
     {image && <img draggable={false} src={image.src} alt="置顶截图"
@@ -355,11 +387,12 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
       onDoubleClick={() => void close()} />}
     {error && <p className="snip-error" role="alert">{userErrorMessage(error, "截图操作未完成，请关闭截图窗口后重试。")}</p>}
   </main>;
-  return <main ref={root} tabIndex={-1} className="snip-root">
-    <div className={`snip-stage ${tool === 'select' ? 'is-select' : ''}`} onPointerDown={down} onPointerMove={move} onPointerUp={up}
+  return <main ref={root} tabIndex={-1} className="snip-root" onPointerDownCapture={event => {
+    if (textEdit && !(event.target instanceof Element && event.target.closest('[data-annotation-text-editor]'))) finishText();
+  }}>
+    <div ref={stage} className={`snip-stage ${tool === 'select' ? 'is-select' : ''}`} onPointerDown={down} onPointerMove={move} onPointerUp={up}
       onPointerCancel={() => { if (gesture.current) setSelection(gesture.current.rect); gesture.current = null; setDraft(null); }}
-      onContextMenu={event => { event.preventDefault(); if (polyline.current) { finishPolyline(); return; } if (textEdit) { finishText(); return; } if (tool !== 'select') { chooseTool('select'); return; } if (selection) { setSelection(null); setMarks([]); setRedo([]); setTool('select'); } else void close(); }}
-      onWheel={event => { if (selection && tool !== 'select' && !textEdit) { event.preventDefault(); setSize(value => Math.max(1, Math.min(12, value + (event.deltaY < 0 ? 1 : -1)))); } }}
+      onContextMenu={event => { event.preventDefault(); if (polyline.current) { finishPolyline(); return; } if (textEdit) { finishText(); return; } if (tool !== 'select') { chooseTool('select'); return; } if (selection) { setSelection(null); setMarks([]); history.reset(); setTool('select'); } else void close(); }}
       onDoubleClick={() => { if (polyline.current) finishPolyline(); else if (selection && tool === 'select') void output('copy'); }}>
 
       <canvas ref={canvas} />
@@ -368,17 +401,15 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
         {tool === 'select' && ['nw', 'ne', 'sw', 'se'].map(handle => <i key={handle} data-handle={handle} className={`snip-handle ${handle}`} />)}
       </div> : <div className="snip-shade" />}
     </div>
-    {textEdit && <textarea className="snip-inline-text" aria-label="标注文字" autoFocus rows={Math.max(2, textEdit.text.split('\n').length)}
-      style={{ left: textEdit.start.x / ratio, top: textEdit.start.y / ratioY, color: textEdit.color, fontSize: Math.max(16, textEdit.size * 6) / ratio, maxWidth: Math.max(32, viewport.width - textEdit.start.x / ratio - 8) }}
-      value={textEdit.text} onChange={event => setTextEdit({ ...textEdit, text: event.target.value })} onBlur={finishText}
-      onKeyDown={event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); finishText(); } }} />}
+    {textEdit && <AnnotationTextEditor shape={textEdit.shape} width={viewport.width} height={viewport.height} label="标注文字"
+      onChange={shape => setTextEdit({ ...textEdit, shape })} onCommit={finishText} onCancel={() => setTextEdit(null)} />}
     {!selection && <div className="snip-hint">拖动选区 · 方向键 / WASD 微调光标 · C 取色 · Esc 退出<button title="历史截图" aria-label="历史截图" onClick={() => setHistoryOpen(true)}><History size={16} /></button><button title="取消截图" onClick={() => void close()}><X size={16} /></button></div>}
     {image && cursor && canvas.current && (!selection || tool === 'select' || inspect) && <ScreenshotLoupe source={canvas.current} cursor={cursor} viewport={viewport} marks={marks} />}
     {selection && <div className="snip-toolbar" role="toolbar" aria-label="截图工具">
       <div className="snip-tools">{TOOLS.map(([value, label, Icon]) => <button key={value} title={label} aria-label={label} aria-pressed={tool === value} disabled={busy} className={tool === value ? 'active' : ''} onClick={() => chooseTool(value)}><Icon size={18} /></button>)}
         <span className="snip-divider" />
-        <button title="撤销（Ctrl/⌘ Z）" aria-label="撤销" disabled={!marks.length || busy} onClick={undo}><Undo2 size={18} /></button>
-        <button title="重做" aria-label="重做" disabled={!redo.length || busy} onClick={redoMark}><Redo2 size={18} /></button>
+        <button title="撤销（Ctrl/⌘ Z）" aria-label="撤销" disabled={!history.canUndo || busy} onClick={undo}><Undo2 size={18} /></button>
+        <button title="重做" aria-label="重做" disabled={!history.canRedo || busy} onClick={redoMark}><Redo2 size={18} /></button>
         <span className="snip-divider" />
         <button title="置顶贴图（P）" aria-label="置顶贴图" disabled={busy} onClick={() => void output('pin')}><Pin size={18} /></button>
         <button title="保存（Ctrl/⌘ S）" aria-label="保存截图" disabled={busy} onClick={() => void output('save')}><Save size={18} /></button>
@@ -389,7 +420,7 @@ export function ScreenshotWindow({ pinned = false }: { pinned?: boolean }) {
       {tool !== 'select' && <div className="snip-options">
         {COLORS.map(value => <button key={value} aria-label={`颜色 ${value}`} className={color === value ? 'selected' : ''} style={{ background: value }} onClick={() => setColor(value)} />)}
         <input aria-label="自定义颜色" type="color" value={color} onChange={event => setColor(event.target.value)} />
-        <label>{tool === 'text' ? '字号' : '粗细'} <input aria-label="标注粗细" type="range" min="1" max="12" value={size} onChange={event => setSize(+event.target.value)} /></label>
+        <label>{tool === 'text' ? '字号' : '粗细'} <input aria-label="标注粗细" type="range" min="1" max="32" value={size} onChange={event => setSize(+event.target.value)} /></label>
         {(tool === 'rect' || tool === 'ellipse') && <label><input type="checkbox" checked={filled} onChange={event => setFilled(event.target.checked)} />实心</label>}
       </div>}
       <p className="snip-tip">{tool === 'select' ? '方向键移动 1 px · Ctrl/⌘ 扩边 · Shift 缩边 · 双击复制' : tool === 'text' ? '点击选区输入文字 · Ctrl/⌘ Enter 完成' : tool === 'line' ? '拖动直线 · 连续点击折线 · 右键完成 · Tab 切换箭头' : '拖动标注 · 滚轮调粗细 · Shift 约束 · 右键完成'}{busy ? ' · 正在处理…' : ''}</p>

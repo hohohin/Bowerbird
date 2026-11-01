@@ -98,7 +98,7 @@ try {
     if (name === '矩形') {
       await page.mouse.move(200, 160); await page.keyboard.down('Alt');
       await page.getByText('#FF0000', { exact: true }).waitFor(); await page.keyboard.up('Alt');
-      await page.getByRole('button', { name: '颜色 #4096ff', exact: true }).click(); await page.keyboard.press('c');
+      await page.getByRole('button', { name: '颜色 #4d9fff', exact: true }).click(); await page.keyboard.press('c');
       assert.equal(await page.getByLabel('自定义颜色', { exact: true }).inputValue(), '#ff0000', 'C samples committed annotations as shown by the loupe');
     }
     const beforeExport = await page.evaluate(() => window.basePaints);
@@ -114,6 +114,21 @@ try {
     await page.getByRole('button', { name: '复制截图', exact: true }).click(); assert.equal((await output()).data, drawn, `${name} redo`);
     await page.getByRole('button', { name: '撤销', exact: true }).click();
   }
+  // The same hovered-object wheel rule as the image annotator; a burst is one undo step.
+  await page.getByRole('button', { name: '矩形', exact: true }).click(); await drag(150, 160, 340, 260);
+  await page.getByRole('button', { name: '复制截图', exact: true }).click(); const thin = (await output()).data;
+  await page.getByRole('button', { name: '直线／折线', exact: true }).click(); await page.mouse.click(220, 300);
+  await page.mouse.move(150, 200); await page.mouse.wheel(0, -100);
+  await page.getByRole('button', { name: '复制截图', exact: true }).click();
+  assert.ok((await output()).data === thin, 'pending polyline prevents edits to existing objects');
+  await page.getByRole('button', { name: '矩形', exact: true }).click();
+  await page.mouse.move(150, 200); await page.mouse.wheel(0, -100); await page.mouse.wheel(0, -100);
+  await page.getByRole('button', { name: '复制截图', exact: true }).click();
+  assert.notEqual((await output()).data, thin, 'wheel changes the existing hovered stroke');
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await page.getByRole('button', { name: '复制截图', exact: true }).click();
+  assert.equal((await output()).data, thin, 'one undo restores the whole thickness gesture');
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
   // Filled shapes, erasing annotations and undo restore actual pixels.
   await page.getByRole('button', { name: '矩形', exact: true }).click();
   await page.getByRole('checkbox', { name: '实心' }).check(); await drag(150, 160, 340, 260);
@@ -123,6 +138,17 @@ try {
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await page.getByRole('button', { name: '复制截图', exact: true }).click(); assert.equal((await output()).data, filled, 'erase undo restores annotation');
   await page.getByRole('button', { name: '撤销', exact: true }).click();
+  for (const name of ['直线／折线', '箭头', '画笔', '荧光笔']) {
+    await page.getByRole('button', { name, exact: true }).click(); await drag(170, 280, 320, 280);
+    await page.getByRole('button', { name: '复制截图', exact: true }).click();
+    const stroke = (await output()).data;
+    assert.ok(stroke !== base, `${name} remains a visible stroke after filled rectangle`);
+    await page.mouse.move(240, 280); await page.mouse.wheel(0, -100);
+    await page.getByRole('button', { name: '复制截图', exact: true }).click();
+    assert.ok((await output()).data !== stroke, `${name} remains editable after filled rectangle`);
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+    await page.getByRole('button', { name: '撤销', exact: true }).click();
+  }
   await page.getByRole('button', { name: '矩形', exact: true }).click(); await page.getByRole('checkbox', { name: '实心' }).uncheck();
   // Line strip ends on right click without losing the screenshot selection.
   await page.getByRole('button', { name: '直线／折线', exact: true }).click();
@@ -143,6 +169,14 @@ try {
   await page.keyboard.press('1'); assert.equal(Number(await page.getByLabel('标注粗细').inputValue()), widthBefore);
   await page.getByRole('button', { name: '文字', exact: true }).click();
   await page.mouse.click(160, 190); await page.getByRole('textbox', { name: '标注文字' }).fill('中文标注\nScreenshot');
+  await page.getByRole('combobox', { name: '字体', exact: true }).selectOption({ label: '宋体' });
+  await page.getByLabel('字号', { exact: true }).fill('26');
+  await page.getByRole('button', { name: '粗体', exact: true }).click();
+  const textWidth = (await page.getByRole('textbox', { name: '标注文字' }).boundingBox()).width;
+  const textHandle = await page.getByRole('button', { name: '调整文本框宽度', exact: true }).boundingBox();
+  await drag(textHandle.x + 8, textHandle.y + 8, textHandle.x - 160, textHandle.y + 8);
+  assert.ok((await page.getByRole('textbox', { name: '标注文字' }).boundingBox()).width < textWidth - 100, 'shared text editor resizes and wraps capture text');
+  assert.equal(await page.getByRole('textbox', { name: '标注文字' }).inputValue(), '中文标注\nScreenshot', 'style edits retain text');
   await page.getByRole('button', { name: '保存截图', exact: true }).evaluate(el => el.click());
   const pendingText = (await output()).data;
   assert.notEqual(pendingText, base, 'direct output includes text even before the editor blurs');
