@@ -10,6 +10,7 @@ const peakCache = new Map();
 const cards = new Map();
 const ROW_HEIGHT = 244, GAP = 28, CACHE_LIMIT = 32;
 let items = [], columns = 3, cardWidth = 0, active = null, generation = 0, progressFrame = 0;
+let continuous = false;
 
 function localUrl(value) {
   const url = new URL(value, location.href);
@@ -88,6 +89,11 @@ function stop() {
   if (media.hasAttribute('src')) { media.removeAttribute('src'); media.load(); }
   if (active) setPlaying(active, false);
   active = null;
+  continuous = false;
+}
+
+function stopPreview() {
+  if (!continuous) stop();
 }
 
 function setPlaying(card, playing) {
@@ -99,14 +105,15 @@ function setPlaying(card, playing) {
 }
 
 function animateProgress() {
+  cancelAnimationFrame(progressFrame); progressFrame = 0;
   if (!active || media.paused) return;
-  if (!active.node.isConnected || document.hidden) { stop(); return; }
+  if (!active.node.isConnected || document.hidden) { stopPreview(); return; }
   const ratio = media.currentTime / (Number.isFinite(media.duration) ? media.duration : active.item.duration);
   active.cursor.style.transform = `translateX(${Math.min(1, ratio) * active.wave.clientWidth}px)`;
   progressFrame = requestAnimationFrame(animateProgress);
 }
 
-function play(card, ratio) {
+function play(card, ratio, keepPlaying = false) {
   if (active === card && media.hasAttribute('src')) {
     // Seeking within the loaded file keeps its decoder and buffered data.
     generation++;
@@ -119,6 +126,7 @@ function play(card, ratio) {
     media.src = nativePath && window.__TAURI_INTERNALS__?.convertFileSrc
       ? window.__TAURI_INTERNALS__.convertFileSrc(nativePath) : card.item.url;
   }
+  continuous = keepPlaying;
   card.node.dataset.blocked = 'false'; card.action.textContent = '';
   const request = generation;
   // Both controls call synchronously from a real click/keyboard activation.
@@ -159,11 +167,11 @@ function bindCard(card) {
   });
   card.playButton.addEventListener('click', event => {
     event.stopPropagation();
-    if (active === card && !media.paused) stop(); else play(card, 0);
+    if (active === card && !media.paused) stop(); else play(card, 0, true);
   });
-  card.preview.addEventListener('pointerleave', () => { if (active === card) stop(); });
+  card.preview.addEventListener('pointerleave', () => { if (active === card) stopPreview(); });
   card.preview.addEventListener('focusout', event => {
-    if (active === card && !card.preview.contains(event.relatedTarget)) stop();
+    if (active === card && !card.preview.contains(event.relatedTarget)) stopPreview();
   });
   card.wave.addEventListener('keydown', event => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight' && event.key !== 'Home' && event.key !== 'End') return;
@@ -190,15 +198,20 @@ function renderRange() {
   const first = Math.max(0, Math.floor(top / ROW_HEIGHT) - 1) * columns;
   const end = Math.min(items.length, (Math.ceil((top + scroll.clientHeight) / ROW_HEIGHT) + 1) * columns);
   for (const [index, card] of cards) {
-    if (index < first || index >= end) { if (active === card) stop(); card.node.remove(); cards.delete(index); }
+    if (index < first || index >= end) { if (active === card) stopPreview(); card.node.remove(); cards.delete(index); }
   }
   for (let index = first; index < end; index++) {
     let card = cards.get(index);
-    if (!card) { card = createCard(items[index], index); cards.set(index, card); grid.append(card.node); drawCard(card); }
+    if (!card) {
+      // Retain only the playing card while offscreen, then restore its controls.
+      card = active?.node.dataset.index === String(index) ? active : createCard(items[index], index);
+      cards.set(index, card); grid.append(card.node); drawCard(card);
+    }
     card.node.style.width = `${cardWidth}px`;
     card.node.style.left = `${index % columns * (cardWidth + GAP)}px`;
     card.node.style.top = `${Math.floor(index / columns) * ROW_HEIGHT}px`;
   }
+  if (active) animateProgress();
 }
 
 function layout() {
@@ -211,12 +224,12 @@ function layout() {
 }
 
 media.addEventListener('ended', stop);
-scroll.addEventListener('scroll', () => { stop(); renderRange(); }, { passive: true });
-window.addEventListener('blur', stop);
+scroll.addEventListener('scroll', () => { stopPreview(); renderRange(); }, { passive: true });
+window.addEventListener('blur', stopPreview);
 window.addEventListener('pagehide', stop);
-document.addEventListener('visibilitychange', () => { if (document.hidden) stop(); });
+document.addEventListener('visibilitychange', animateProgress);
 document.addEventListener('keydown', event => { if (event.key === 'Escape') stop(); });
-new MutationObserver(() => { if (active && !active.node.isConnected) stop(); }).observe(grid, { childList: true });
+new MutationObserver(() => { if (active && !active.node.isConnected) animateProgress(); }).observe(grid, { childList: true });
 new ResizeObserver(layout).observe(grid);
 document.querySelector('.theme-toggle').addEventListener('click', event => {
   const theme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';

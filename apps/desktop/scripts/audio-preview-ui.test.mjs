@@ -130,6 +130,30 @@ try {
   });
   await playButton(0).click(); await waitPlaying();
   assert.ok((await audio()).time < 1.2, 'initial dedicated playback starts at zero');
+  const persistentStartTime = (await audio()).time;
+  await moveAway(); await page.waitForTimeout(200);
+  assert.equal((await audio()).paused, false, 'button-started playback continues after the pointer leaves');
+  assert.ok((await audio()).time > persistentStartTime + .1, 'continuous playback advances the real media clock outside the preview');
+  await page.locator('.audio-topbar').click({ position: { x: 100, y: 30 } });
+  assert.equal((await audio()).paused, false, 'moving focus outside does not pause button-started playback');
+  const beforeVisibility = await audio();
+  const loadStartsBeforeVisibility = await page.evaluate(() => window.audioLoadStarts);
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  assert.equal((await audio()).paused, false, 'window blur does not stop continuous button playback');
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.waitForTimeout(200);
+  assert.equal((await audio()).paused, false, 'document visibility changes preserve continuous playback');
+  assert.equal((await audio()).sourceAttribute, beforeVisibility.sourceAttribute, 'hidden continuous playback retains its original source');
+  assert.ok((await audio()).time > beforeVisibility.time + .1, 'the native clock advances while the continuous visibility handler is hidden');
+  await page.evaluate(() => { delete document.hidden; document.dispatchEvent(new Event('visibilitychange')); });
+  assert.equal((await audio()).paused, false);
+  assert.equal(await page.evaluate(() => window.audioLoadStarts), loadStartsBeforeVisibility, 'restoring visibility must not reload the continuous source');
+  await hoverAt(1, .6); await page.waitForTimeout(100);
+  assert.ok((await audio()).src.endsWith('sound-0.wav'), 'hovering another card never replaces continuous playback');
+  assert.equal((await audio()).paused, false);
   const sameSourceSeek = {
     loadStartsBefore: await page.evaluate(() => window.audioLoadStarts),
     originalRequestsBefore: requests.filter(value => value.endsWith('.wav')).length,
@@ -141,6 +165,10 @@ try {
   assert.equal(sameSourceSeek.loadStartsAfter, sameSourceSeek.loadStartsBefore,
     `same-card seek must reuse the loaded source; native observations: ${JSON.stringify(sameSourceSeek)}`);
   assert.ok((await audio()).time < 7, 'waveform click seeks to its horizontal coordinate');
+  await moveAway();
+  assert.equal((await audio()).paused, true, 'clicking the same waveform converts continuous playback into temporary audition');
+  assert.equal((await audio()).sourceAttribute, null);
+  await clickAt(0, .5); await waitPlaying(5.8);
   const started = (await audio()).time; await page.waitForTimeout(200);
   assert.ok((await audio()).time > started + .1, 'native audio clock must advance');
   await hoverAt(0, .8); await assertHoverAt(0, .8, '0:09');
@@ -172,7 +200,18 @@ try {
   assert.ok((await audio()).time < 1.2, 'play after pause restarts at zero instead of resuming');
   assert.deepEqual(await page.evaluate(() => [window.previewBubbleClicks, window.waveClickCount]), [0, 0], 'play control stops bubbling and never triggers waveform seek');
   await moveAway();
-  assert.equal((await audio()).paused, true, 'leaving the whole preview stops playback');
+  assert.equal((await audio()).paused, false, 'the dedicated button keeps playing outside the preview');
+  await playButton(1).click(); await waitPlaying();
+  assert.ok((await audio()).src.endsWith('sound-1.wav'), 'a new play button replaces the previous continuous source');
+  assert.ok((await audio()).time < 1.2, 'replacement button playback starts at zero');
+  assert.equal(await page.locator('.audio-card[data-playing="true"]').count(), 1, 'the previous source is no longer marked playing');
+  await moveAway(); await page.waitForTimeout(150);
+  assert.equal((await audio()).paused, false);
+  assert.ok((await audio()).src.endsWith('sound-1.wav'), 'the old source cannot revive after replacement');
+  await clickAt(0, .25); await waitPlaying(2.9);
+  assert.ok((await audio()).src.endsWith('sound-0.wav'), 'a new waveform audition replaces continuous playback');
+  await moveAway();
+  assert.equal((await audio()).paused, true, 'leaving a waveform-started audition still stops playback');
   assert.equal((await audio()).sourceAttribute, null);
 
   // Keyboard chooses a location, then explicitly starts playback there.
@@ -197,14 +236,40 @@ try {
     const timeout = setTimeout(() => reject(new Error('Expected a real pending media request before switching cards')), 5000);
     reportDelayedRequest = () => { clearTimeout(timeout); resolve(); };
   });
-  await page.route('**/sound-1.wav', async route => { delayedRequests++; reportDelayedRequest(); await new Promise(resolve => setTimeout(resolve, 350)); await route.continue().catch(() => {}); });
-  await clickAt(1, .4);
+  await page.route('**/sound-2.wav', async route => { delayedRequests++; reportDelayedRequest(); await new Promise(resolve => setTimeout(resolve, 350)); await route.continue().catch(() => {}); });
+  await clickAt(2, .4);
   await delayedRequestStarted;
   await clickAt(0, .2); await waitPlaying(2);
   await page.waitForTimeout(450);
   assert.ok((await audio()).src.endsWith('sound-0.wav'), 'delayed old source cannot replace active source');
   assert.ok(delayedRequests > 0, 'race uses an actual pending media request');
-  await moveAway(); await page.unroute('**/sound-1.wav');
+  await moveAway(); await page.unroute('**/sound-2.wav');
+
+  // Hold an actual button-started source until after pointer exit. The mode
+  // applies while play() is pending, not only after its promise resolves.
+  let deliverContinuousSource, reportContinuousRequest;
+  const continuousResponseGate = new Promise(resolve => { deliverContinuousSource = resolve; });
+  const continuousRequestStarted = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Expected a real pending continuous source')), 5000);
+    reportContinuousRequest = () => { clearTimeout(timeout); resolve(); };
+  });
+  await page.route('**/sound-3.wav', async route => { reportContinuousRequest(); await continuousResponseGate; await route.continue().catch(() => {}); });
+  await playButton(3).click(); await continuousRequestStarted;
+  await moveAway();
+  assert.ok((await audio()).sourceAttribute?.endsWith('sound-3.wav'), 'leaving during pending button playback retains its requested source');
+  deliverContinuousSource();
+  await waitPlaying();
+  const continuousAfterPending = (await audio()).time;
+  await page.waitForTimeout(200);
+  assert.equal((await audio()).paused, false, 'pending button playback starts after delivery even though the pointer is outside');
+  assert.ok((await audio()).time > continuousAfterPending + .1, 'delivered continuous source advances the real clock');
+  await playButton(0).click(); await waitPlaying();
+  await moveAway(); await page.waitForTimeout(150);
+  assert.ok((await audio()).src.endsWith('sound-0.wav'), 'a new play replaces the delivered continuous source without resurrection');
+  assert.equal(await page.locator('.audio-card[data-playing="true"]').count(), 1);
+  await playButton(0).click();
+  assert.equal((await audio()).paused, true);
+  await page.unroute('**/sound-3.wav');
 
   // Real click requests race across cards but retain one native player.
   for (let index = 0; index < 100; index++) await clickAt(index % 2, .3 + (index % 3) * .1);
@@ -240,6 +305,26 @@ try {
   await page.waitForFunction(() => document.querySelector('audio').paused);
   await page.waitForFunction(() => Number(document.querySelector('.audio-card')?.dataset.index) > 200);
   assert.ok(await page.locator('.audio-card').count() <= 24);
+  await page.locator('.audio-scroll').evaluate(element => { element.scrollTop = 0; });
+  await page.locator('.audio-card[data-index="0"] .audio-play').waitFor();
+  await playButton(0).click(); await waitPlaying();
+  await moveAway();
+  const beforeUnmount = await audio();
+  await page.locator('.audio-scroll').evaluate(element => { element.scrollTop = 25000; });
+  await page.waitForFunction(() => !document.querySelector('.audio-card[data-index="0"]'));
+  await page.waitForTimeout(200);
+  assert.equal((await audio()).paused, false, 'virtual unmount must not stop button-started playback');
+  assert.equal((await audio()).src, beforeUnmount.src, 'virtual unmount retains the current original source');
+  assert.ok((await audio()).time > beforeUnmount.time + .1, 'offscreen playback keeps advancing');
+  await page.locator('.audio-scroll').evaluate(element => { element.scrollTop = 0; });
+  const restoredPlayButton = page.locator('.audio-card[data-index="0"] .audio-play');
+  await restoredPlayButton.waitFor();
+  assert.equal(await restoredPlayButton.getAttribute('aria-pressed'), 'true', 'returning to the card restores its pause state');
+  assert.match(await restoredPlayButton.getAttribute('aria-label'), /^暂停 /);
+  assert.equal(await page.locator('.audio-card[data-playing="true"]').count(), 1);
+  assert.equal(await page.evaluate(() => window.audioConstructorCount), 1, 'virtual remount does not create a second player');
+  await restoredPlayButton.click();
+  assert.equal((await audio()).paused, true, 'the remounted pause button controls the existing playback');
   const scrollMetrics = await page.evaluate(async () => {
     const scroller = document.querySelector('.audio-scroll');
     const intervals = [], longTasks = [];
@@ -269,12 +354,13 @@ try {
   await page.screenshot({ path: `${output}/audio-light.png` });
   assert.deepEqual(errors, []);
   await writeFile(`${output}/results.json`, JSON.stringify({ passed: true, browser: await browser.version(), viewport: { width: 1280, height: 820 },
-    interaction: 'hover-pointer-only; click-to-seek-and-play; separate zero-start play/pause button',
+    interaction: 'hover-pointer-only; temporary waveform audition; persistent zero-start button playback across pointer/focus/virtual unmount',
     source: { format: 'PCM WAV', duration, sampleRate, channels: 1 }, sameSourceSeek,
     clickSwitches: 100, hoverSwitches: 100, hoverOriginalRequests: 0, delayedRequests,
+    continuousPendingSourcePassed: true, continuousBlurVisibilityPassed: true,
     playersCreated: await page.evaluate(() => window.audioConstructorCount),
     stressCount: 1200, distinctSources: 6, scrollMetrics,
     measurementScope: 'Synthetic 1200-card browser list reusing six WAV fixtures; rAF intervals are not native FPS or indexing measurements',
     mountedAtEnd: await page.locator('.audio-card').count(), mediaRequests: requests.filter(value => value.endsWith('.wav')).length }, null, 2));
-  console.log('PASS: silent hover cursor, current-coordinate click seek/play, separate zero-start play/pause, keyboard positions, real clock, delayed-source race, 100 clicks + 100 hovers, singleton/cleanup, virtual list/cache/no frontend decode');
+  console.log('PASS: persistent button playback across leave/focus/virtual unmount, temporary waveform audition, unique replacement, pause-state restoration, silent hover, real clock, stale-source cancellation, singleton/cache/no frontend decode');
 } finally { await browser.close(); await preview.close(); }
