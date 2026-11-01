@@ -6,7 +6,7 @@ import { ContextMenu, ContextSubmenu, DeleteSubmenu } from "./ContextMenu";
 import { isVideoPath } from "../lib/videoGeneration";
 import { isAudioAsset } from "../lib/audioMedia";
 import { stopAudioPreview } from "../lib/audioPreview";
-import { Archive, ArrowUpRight, ClipboardCopy, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Ungroup } from "lucide-react";
+import { Archive, ClipboardCopy, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Ungroup } from "lucide-react";
 import { exportAssetArchive } from "../lib/assetArchive";
 import { understandEngineUsable, useStore } from "../store";
 import { api } from "../lib/api";
@@ -21,7 +21,6 @@ import { isWorkspaceOperationCurrent } from "../lib/workspaceRoute";
 import type { Asset, AssetDeleteResult } from "../lib/types";
 import { externalFiles, OPEN_LOCAL_FILES } from "../lib/externalFiles";
 import { canMoveAssetOut } from "../lib/assetDeletion";
-import { startExternalDrag } from "../lib/externalDrag";
 import {
   CANVAS_REMOVE_NODES_EVENT,
   CANVAS_ARRANGE_NODES_EVENT,
@@ -406,11 +405,6 @@ export function AssetContextMenu() {
       {menu.addCanvasImagesToBoard.count > 1 ? `添加所选 ${menu.addCanvasImagesToBoard.count} 张图片到对话框` : "添加到对话框"}
     </button>}
   </>;
-  const externalDragAction = menu.canvasSelection && <button role="menuitem" className={itemClass}
-    disabled={busy || !targetIds.length || !targetsReady || targets.some(item => !item?.store_path)}
-    onClick={() => { closeContextMenu(); void startExternalDrag(targetIds, "pickup"); }}>
-    <ArrowUpRight size={13} />拖入到其他应用
-  </button>;
   const deleteMenu = <DeleteSubmenu disabled={busy}>
     {menu.ungroupCanvasFolder && !canvasMulti && <button role="menuitem" className={itemClass} onClick={() => { closeContextMenu(); menu.ungroupCanvasFolder!(); }}><Ungroup size={13} />解散素材组</button>}
     {!multiIds && menu.libraryProjectId && canChangeLibraryVisibility && !asset?.library_hidden && <button role="menuitem" className={itemClass}
@@ -435,7 +429,6 @@ export function AssetContextMenu() {
       <div className="app-context-label">已选 {canvasMulti ? menu.canvasSelection!.nodeIds.length : multiIds.length} 项</div>
       {canvasActions}
       {targetIds.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={assign}><FolderPlus size={13} />添加到集合</button>}
-      {externalDragAction}
       {menu.canvasSelection && targetIds.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); void exportAssetArchive(targetIds); }}><Archive size={13} />将所选内容打包</button>}
       {!projectId && projects.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { setProjectPickIds({ ids: targetIds, onComplete }); closeContextMenu(); }}><FolderTree size={13} />加入项目</button>}
       {allImages && <><div className="app-context-divider" />{describeMenu}</>}
@@ -470,7 +463,6 @@ export function AssetContextMenu() {
     <div className="asset-context-column">
       <div className="app-context-label">文件</div>
       <button role="menuitem" className={itemClass} disabled={busy} onClick={assign}><FolderPlus size={13} />添加到集合</button>
-      {externalDragAction}
       {menu.canvasSelection && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); void exportAssetArchive(targetIds); }}><Archive size={13} />将所选内容打包</button>}
       {storePath && <>
         <button role="menuitem" className={itemClass} disabled={busy} onClick={reveal}>打开所在文件夹</button>

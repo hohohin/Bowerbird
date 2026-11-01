@@ -58,10 +58,10 @@ import {
 } from "react";
 import { ContextMenu, DeleteSubmenu } from "./ContextMenu";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { isTauri } from "@tauri-apps/api/core";
 import {
   Archive,
   ArchiveRestore,
-  ArrowUpRight,
   Copy,
   ChevronUp,
   Folder,
@@ -118,6 +118,7 @@ import { externalFiles } from "../lib/externalFiles";
 import { countCloudAgentResultImages, selectCloudAgentResultArtifacts } from "../lib/cloudAgentResult";
 import { getDragAssets, isNativeAssetDrag } from "../lib/dragPayload";
 import { EXTERNAL_DRAG_ENDED, startExternalDrag } from "../lib/externalDrag";
+import { createCanvasDragHold } from "../lib/canvasDragHold";
 import {
   supersededProjectTaskIds,
   isProjectNodeNavigable,
@@ -380,19 +381,21 @@ function agentGroupSummary(node: ProjectGraphNode) {
 function FolderPreview({
   node,
   onAssetContextMenu,
+  onAssetPointerDown,
   filterState,
 }: {
   node: CanvasFolderNode;
   filterState: (asset: CanvasAssetSnapshot) => CanvasMaterialFilterState;
   onAssetContextMenu: (event: React.MouseEvent<HTMLElement>, asset: CanvasAssetSnapshot) => void;
+  onAssetPointerDown: (event: PointerEvent<HTMLElement>, asset: CanvasAssetSnapshot) => void;
 }) {
   const layerWorkspaceIds = useStore((state) => state.layerWorkspaceIds);
   return (
     <div className="canvas-folder-grid" aria-hidden="true">
       {node.assets.slice(0, 4).map((asset) => {
         const path = canvasAssetMediaPath(asset);
-        return isVideoPath(asset.storePath) ? <VideoPoster key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} path={asset.storePath} poster={asset.thumbPath} alt={asset.name} onContextMenu={event => onAssetContextMenu(event, asset)} /> : path ? (
-          <div key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} className="relative min-h-0" onContextMenu={(event) => onAssetContextMenu(event, asset)}>
+        return isVideoPath(asset.storePath) ? <VideoPoster key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} path={asset.storePath} poster={asset.thumbPath} alt={asset.name} draggable={false} onPointerDown={event => onAssetPointerDown(event, asset)} onContextMenu={event => onAssetContextMenu(event, asset)} /> : path ? (
+          <div key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} className="relative min-h-0" onPointerDown={event => onAssetPointerDown(event, asset)} onContextMenu={(event) => onAssetContextMenu(event, asset)}>
             <CanvasImage
               path={asset.storePath} thumbPath={asset.thumbPath} sourceWidth={asset.width} sourceHeight={asset.height}
               alt=""
@@ -402,7 +405,7 @@ function FolderPreview({
             {asset.assetId && layerWorkspaceIds.has(asset.assetId) && <span className="pointer-events-none absolute left-1 top-1 z-10 rounded-full bg-black/70 px-1.5 py-1 text-white backdrop-blur" title="有分层工程" aria-label="有分层工程"><Layers size={12} /></span>}
           </div>
         ) : (
-          <span key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} onContextMenu={(event) => onAssetContextMenu(event, asset)}>
+          <span key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} onPointerDown={event => onAssetPointerDown(event, asset)} onContextMenu={(event) => onAssetContextMenu(event, asset)}>
             {asset.name.slice(0, 1)}
           </span>
         );
@@ -626,6 +629,8 @@ export function CanvasWorkspace({
   const externalInstancesRef = useRef<{ signature: string; assets: CanvasAssetSnapshot[] } | null>(null);
   const spacePressedRef = useRef(false);
   const suppressNodeClickRef = useRef(false);
+  const canvasDragHold = useRef(createCanvasDragHold());
+  const canvasExportRef = useRef<AbortController | null>(null);
   const nodeDragRef = useRef<{
     nodeId: string;
     toggleSelection: boolean;
@@ -754,6 +759,25 @@ export function CanvasWorkspace({
   const graphNodeFrame = useCanvasFrame(updateGraphNodeDrag);
   const panFrame = useCanvasFrame(updatePan);
   const cameraFrame = useCanvasFrame<void>(paintCamera);
+  useEffect(() => {
+    const hold = canvasDragHold.current;
+    const move = (event: globalThis.PointerEvent) => hold.move(event.pointerId, { x: event.clientX, y: event.clientY }, event.buttons);
+    const end = (event: globalThis.PointerEvent) => hold.end(event.pointerId);
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape" || event.code === "Space") hold.cancel(); };
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", end, true);
+    window.addEventListener("pointercancel", end, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("blur", hold.cancel);
+    return () => {
+      hold.cancel(); canvasExportRef.current?.abort();
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", end, true);
+      window.removeEventListener("pointercancel", end, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("blur", hold.cancel);
+    };
+  }, [projectId, projectRouteRevision, projectRoutePending, viewMode, exploring]);
   const readCanvasZoom = useCallback(() => { cameraFrame.flush(); return zoomRef.current; }, [cameraFrame]);
   // The refs own the live camera during gestures; React catches up when input settles.
   useLayoutEffect(paintCamera);
@@ -2304,7 +2328,13 @@ export function CanvasWorkspace({
       if (sourceDragFrame.current !== null) cancelAnimationFrame(sourceDragFrame.current);
       sourceDragFrame.current = null;
       setLibraryDragging(false);
-      clearExternalDrag();
+      externalInstancesRef.current = null;
+      setExternalDragOver(false);
+      // Native preparation can finish after a newer ordinary canvas gesture has begun.
+      if (!nodeDragRef.current && !graphNodeDragRef.current) {
+        setHover(null);
+        setFolderDropTargetId(null);
+      }
     };
     window.addEventListener("dragend", end);
     window.addEventListener(EXTERNAL_DRAG_ENDED, end);
@@ -2664,8 +2694,44 @@ export function CanvasWorkspace({
     });
   }
 
-  function beginNodeDrag(event: PointerEvent<HTMLDivElement>, node: CanvasNode) {
+  function armCanvasAssetHold(event: PointerEvent<HTMLElement>, nodeId: string, asset: CanvasAssetSnapshot, member = false) {
+    const route = useStore.getState();
+    if (!isTauri() || event.button !== 0 || isNativeAssetDrag() || !asset.assetId || !asset.storePath
+      || isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")
+      || loadingRef.current || route.projectRoutePending || frequentPickingRef.current) return;
+    const element = event.currentTarget, pointerId = event.pointerId;
+    const expectedProject = activeCanvasRef.current.id, revision = route.projectRouteRevision;
+    const selection = nodeDragRef.current?.pointerId === pointerId ? nodeDragRef.current.selectedIds
+      : graphNodeDragRef.current?.pointerId === pointerId ? graphNodeDragRef.current.selectedIds : new Set([nodeId]);
+    const assets = member || selection.size === 1 ? [asset] : [...selection].flatMap(id => {
+      const shown = selectedConversationImage(id, conversationImages(id));
+      if (shown) return [shown];
+      const node = nodesRef.current.find(item => item.id === id);
+      return node ? node.kind === "asset" ? [node.asset] : node.assets : [];
+    });
+    const ids = [...new Set(assets.flatMap(item => item.assetId && item.storePath ? [item.assetId] : []))];
+    if (!ids.length) return;
+    element.setPointerCapture(pointerId);
+    canvasDragHold.current.start(pointerId, { x: event.clientX, y: event.clientY }, () => {
+      const current = useStore.getState();
+      if (!element.isConnected || !element.hasPointerCapture(pointerId) || loadingRef.current || isNativeAssetDrag()
+        || !isWorkspaceOperationCurrent(expectedProject, current.activeProjectId, current.projectRoutePending, revision, current.projectRouteRevision)) return;
+      // Nothing has moved: relinquish the pending canvas gesture before the OS takes the pointer.
+      nodeFrame.cancel(); graphNodeFrame.cancel();
+      nodeDragRef.current = null; graphNodeDragRef.current = null;
+      cancelConversationImageClick(); suppressNodeClickRef.current = true;
+      setActiveDragId(null); setGuides([]); setHover(null); setFolderDropTargetId(null);
+      element.releasePointerCapture(pointerId);
+      const controller = new AbortController(); canvasExportRef.current = controller;
+      void startExternalDrag(ids, "hold", { source: "canvas", signal: controller.signal }).finally(() => {
+        if (canvasExportRef.current === controller) canvasExportRef.current = null;
+      });
+    });
+  }
+
+  function beginNodeDrag(event: PointerEvent<HTMLElement>, node: CanvasNode) {
     if (isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan") || event.button !== 0) return;
+    suppressNodeClickRef.current = false;
     event.preventDefault();
     event.stopPropagation();
     window.getSelection()?.removeAllRanges();
@@ -2694,10 +2760,12 @@ export function CanvasWorkspace({
       if (!selectedCanvasNodeIdsRef.current.has(node.id)) setSelectedCanvasNodeIds(new Set());
     }
     event.currentTarget.setPointerCapture(event.pointerId);
+    if (node.kind === "asset") armCanvasAssetHold(event, node.id, node.asset);
   }
 
   function beginGraphNodeDrag(event: PointerEvent<HTMLElement>, node: { id: string; x: number; y: number; kind: string }) {
     if (isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan") || event.button !== 0) return;
+    suppressNodeClickRef.current = false;
     setPendingNewCards(pending => pending.filter(id => id !== node.id));
     // Readonly rich text can opt back into selection inside a draggable card.
     event.preventDefault();
@@ -3593,10 +3661,10 @@ export function CanvasWorkspace({
     }
   }
 
-  function consumeSuppressedNodeClick() {
+  function consumeSuppressedNodeClick(event: React.MouseEvent<HTMLElement>) {
     if (!suppressNodeClickRef.current) return false;
     suppressNodeClickRef.current = false;
-    return true;
+    return event.detail !== 0;
   }
 
   function zoomAround(clientX: number, clientY: number, requested: number) {
@@ -4896,7 +4964,7 @@ export function CanvasWorkspace({
                 onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
                 onContextMenu={event => openCanvasNodeMenu(event, node.id)}
                 onClick={event => {
-                  if (consumeSuppressedNodeClick() || event.ctrlKey || event.metaKey || spacePressedRef.current || drawingTool === "pan") return;
+                  if (consumeSuppressedNodeClick(event) || event.ctrlKey || event.metaKey || spacePressedRef.current || drawingTool === "pan") return;
                   openLocalChat(chatId);
                 }}
                 onKeyDown={event => {
@@ -4949,7 +5017,7 @@ export function CanvasWorkspace({
                   onPointerUp={endGraphNodeDrag}
                   onPointerCancel={(event) => endGraphNodeDrag(event, true)}
                   onClick={(event) => {
-                    if (consumeSuppressedNodeClick()) return;
+                    if (consumeSuppressedNodeClick(event)) return;
                     if (imageOnly) { event.currentTarget.querySelector<HTMLElement>(".canvas-conversation-images")?.click(); return; }
                     openConversation();
                   }}
@@ -4967,8 +5035,10 @@ export function CanvasWorkspace({
                     cancelConversationImageClick();
                     // Capture on the image region so a click is not retargeted to the conversation card.
                     beginGraphNodeDrag(event, node);
+                    const shown = selectedConversationImage(node.id, images);
+                    if (shown) armCanvasAssetHold(event, node.id, shown);
                   }} onClick={(event, asset) => {
-                    if (consumeSuppressedNodeClick()) return;
+                    if (consumeSuppressedNodeClick(event)) return;
                     if (isVideoPath(asset.storePath) && asset.storePath) {
                       cancelConversationImageClick();
                       setCanvasLightbox({ images: [asset.storePath], index: 0 });
@@ -5030,8 +5100,8 @@ export function CanvasWorkspace({
                   onPointerMove={moveGraphNode}
                   onPointerUp={endGraphNodeDrag}
                   onPointerCancel={(event) => endGraphNodeDrag(event, true)}
-                  onClick={() => {
-                    if (consumeSuppressedNodeClick()) return;
+                  onClick={event => {
+                    if (consumeSuppressedNodeClick(event)) return;
                     focusGraphNode(node.id);
                     if (run) openCloudAgentRun(run, { navigate: false });
                   }}
@@ -5154,9 +5224,9 @@ export function CanvasWorkspace({
                             return <button type="button" key={asset.id} data-canvas-folder-asset-id={asset.id} data-frequent-asset-id={asset.assetId ?? undefined}
                               data-canvas-filter={materialFilterState(asset)}
                               className="canvas-folder-asset" aria-label={asset.name}
-                              onPointerDown={(event) => { if (!isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) event.stopPropagation(); }}
+                              onPointerDown={(event) => { if (!isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) { event.stopPropagation(); if (event.button === 0) suppressNodeClickRef.current = false; armCanvasAssetHold(event, node.id, asset, true); } }}
                               onKeyDown={(event) => { if (event.key === "Enter" || event.key === " " || event.key.startsWith("Arrow")) event.stopPropagation(); }}
-                              onClick={(event) => { if (!consumeSuppressedNodeClick()) activateCanvasMaterial(groupedAssetNode(asset, node, index), event.currentTarget); }}
+                              onClick={(event) => { if (!consumeSuppressedNodeClick(event)) activateCanvasMaterial(groupedAssetNode(asset, node, index), event.currentTarget); }}
                               onContextMenu={(event) => openCanvasAssetContextMenu(event, node, asset)}>
                               {isVideoPath(asset.storePath) ? <VideoPoster path={asset.storePath} poster={asset.thumbPath} alt={asset.name} draggable={false} /> : assetPath ? <CanvasImage path={asset.storePath} thumbPath={asset.thumbPath} sourceWidth={asset.width} sourceHeight={asset.height} alt="" draggable={false} />
                                 : <span className="canvas-folder-asset-placeholder">{asset.name.slice(0, 1)}</span>}
@@ -5165,7 +5235,7 @@ export function CanvasWorkspace({
                           })}
                         </div>
                       </> : <>
-                        <FolderPreview node={node} filterState={materialFilterState} onAssetContextMenu={(event, asset) => openCanvasAssetContextMenu(event, node, asset)} />
+                        <FolderPreview node={node} filterState={materialFilterState} onAssetPointerDown={(event, asset) => { beginNodeDrag(event, node); armCanvasAssetHold(event, node.id, asset, true); }} onAssetContextMenu={(event, asset) => openCanvasAssetContextMenu(event, node, asset)} />
                         <span className="canvas-folder-name"><Folder size={13} /> 素材组 · {node.assets.length}</span>
                       </>}
                     </>
@@ -5319,12 +5389,6 @@ export function CanvasWorkspace({
                 setPromptMenu(null);
                 void exportAssetArchive(ids);
               }}><Archive size={14} /> 将所选内容打包</button>}
-            {canvasImagesForSelection(promptMenu.nodeIds, true).length > 0 && <button type="button" role="menuitem"
-              className="app-context-item px-2 py-1.5" onClick={() => {
-                const ids = canvasImagesForSelection(promptMenu.nodeIds, true).map(asset => asset.assetId);
-                setPromptMenu(null);
-                void startExternalDrag(ids, "pickup");
-              }}><ArrowUpRight size={14} /> 拖入到其他应用</button>}
             {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               workflowRef.current?.saveTemplate(promptMenu.nodeIds, "container"); setPromptMenu(null);
             }}><Frame size={14} /> 封装为容器</button>}

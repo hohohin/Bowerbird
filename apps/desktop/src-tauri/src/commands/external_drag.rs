@@ -21,12 +21,14 @@ pub struct DragResult {
 static SESSIONS: Sessions = Sessions::new();
 
 #[tauri::command]
-pub fn cancel_pending_external_drag(webview: Webview, session_id: String) -> Result<(), AppError> {
+pub fn cancel_pending_external_drag(
+    webview: Webview,
+    session_id: String,
+) -> Result<bool, AppError> {
     if webview.label() != "main" {
         return Err(AppError::Other("请从素材库或画布拖出素材".into()));
     }
-    SESSIONS.cancel_pending(&session_id);
-    Ok(())
+    Ok(SESSIONS.cancel_pending(&session_id))
 }
 
 #[tauri::command]

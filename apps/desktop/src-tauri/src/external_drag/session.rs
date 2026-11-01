@@ -65,14 +65,18 @@ impl Sessions {
             intent,
         })
     }
-    pub fn cancel_pending(&self, id: &str) {
+    /// True acknowledges that this request cannot enter a native drag anymore.
+    pub fn cancel_pending(&self, id: &str) -> bool {
         let mut registry = self.0.lock().unwrap();
         if let Some(active) = registry.active.as_ref().filter(|active| active.id == id) {
-            let _ = active.phase.compare_exchange(
-                PREPARING,
-                CANCELLED,
-                Ordering::AcqRel,
-                Ordering::Acquire,
+            return matches!(
+                active.phase.compare_exchange(
+                    PREPARING,
+                    CANCELLED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ),
+                Ok(_) | Err(CANCELLED)
             );
         } else if !registry.cancelled.iter().any(|value| value == id) {
             if registry.cancelled.len() == 64 {
@@ -80,6 +84,7 @@ impl Sessions {
             }
             registry.cancelled.push_back(id.into());
         }
+        true
     }
 }
 pub struct Session<'a> {
@@ -126,5 +131,25 @@ mod tests {
         assert!(sessions.start("second".into()).is_err());
         drop(active);
         assert!(sessions.start("second".into()).is_ok());
+    }
+    #[test]
+    fn preparation_cancel_ack_can_clear_backdrop_only_before_native_start() {
+        let sessions = Sessions::new();
+        let preparing = sessions.start("preparing".into()).unwrap();
+        assert!(sessions.cancel_pending("preparing"));
+        assert!(sessions.cancel_pending("preparing"));
+        assert!(!preparing.intent.begin());
+        drop(preparing);
+        let native = sessions.start("native".into()).unwrap();
+        assert!(native.intent.begin());
+        assert!(!sessions.cancel_pending("native"));
+        assert!(!native.intent.cancelled());
+    }
+    #[test]
+    fn early_cancel_ack_keeps_the_same_request_from_starting() {
+        let sessions = Sessions::new();
+        assert!(sessions.cancel_pending("early"));
+        assert!(sessions.cancel_pending("early"));
+        assert!(!sessions.start("early".into()).unwrap().intent.begin());
     }
 }
