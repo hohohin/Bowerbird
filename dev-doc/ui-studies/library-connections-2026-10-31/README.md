@@ -10,6 +10,8 @@
 node apps/desktop/scripts/library-connections-preview.mjs
 ```
 
+保持启动终端运行；父进程退出后预览会自动关闭，避免留下后台 Node。此确认稿不监听文件变化，修改源码后重启预览服务。退出与监听回归见 [记录](../../../project_logs/2026-11-01-preview-lifecycle.md)。
+
 打开 [本机预览](http://127.0.0.1:17871/scripts/fixtures/library-connections/preview.html)。默认深色，可用右上角切换浅色；底部 Windows／macOS 仅切换示例路径展示，「重置预览」恢复内存示例。
 
 源文件位于 `apps/desktop/scripts/fixtures/library-connections/`。预览复用现有工业主题、`LibrarySelectionMark` 和瀑布流几何；示例图片直接使用仓库已有 UI 研究素材，不依赖外部图片地址。无 Tauri 桥接、生产 store、数据库或真实文件写入；刷新网页会重置所有模拟操作。

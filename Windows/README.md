@@ -108,6 +108,8 @@ cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml 
 powershell -ExecutionPolicy Bypass -File .\Windows\dev.ps1
 ```
 
+开发／Vite 预览服务跟随启动父进程退出，并清理文件监听与端口；不要用退出即结束的临时 PowerShell 启动长期预览。正常源码热更新保留，`.tmp` 生成目录不参与监听。独立确认稿关闭文件监听，改稿后需重启对应服务。修复及验证见 [预览服务生命周期](../project_logs/2026-11-01-preview-lifecycle.md)。
+
 ## 构建安装包
 
 后续 NSIS 安装包必须保留 `src-tauri/windows/installer-hooks.nsh`。2026-10-09 新约定：应用内 `/UPDATE` 保留 Bowerbird 账号、权益缓存及独立 CLI 登录；普通手动安装/同版本重装（含静默安装）仍重置。重置失败时安装报错并保留待重置标记；更新不删除此前失败标记，下次启动在恢复账号和启动后台任务前重试。系统 Codex/Dreamina 原登录保留。此调整已通过隔离 NSIS 夹具并随 26.10.904 签名包发布；应用内更新到本版即可生效。
