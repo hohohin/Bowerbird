@@ -39,6 +39,7 @@ import { arrangeCanvasNodes } from "../lib/canvasArrangement";
 import { canvasCardSourceRects, placeCanvasCardNearSource, newReferencesForCanvasCard, placeNewCanvasReferences, trackNewCanvasReferences } from "../lib/canvasReferencePlacement";
 import { DEFAULT_VIDEO_OPTIONS, isVideoPath, videoModelLabel } from "../lib/videoGeneration";
 import { VideoPoster } from "./VideoPoster";
+import { CanvasMediaHover } from "./CanvasMediaHover";
 import { CanvasImage, CanvasMediaProvider } from "./CanvasImage";
 import { useCanvasFrame, useLatestCallback } from "../lib/useCanvasFrame";
 import { createCanvasCellHitCache } from "../lib/canvasCellHitCache";
@@ -5262,7 +5263,7 @@ export function CanvasWorkspace({
                 </div>
               );
             })}
-          </div></CanvasMediaProvider>
+          <CanvasMediaHover root={stageRef}/></div></CanvasMediaProvider>
 
           <CanvasTacticalOverlay key={projectId} stageRef={stageRef} active={viewMode === "canvas" && !loading && !projectRoutePending} />
           {canvasMarquee && (

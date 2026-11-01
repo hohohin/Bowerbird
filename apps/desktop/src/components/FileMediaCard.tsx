@@ -5,7 +5,7 @@ import { externalFiles, type LocalFileEntry } from "../lib/externalFiles";
 import { createFilePreviewQueue } from "../lib/filePreviewQueue";
 import { isVideoPath } from "../lib/videoGeneration";
 import { LibrarySelectionMark } from "./LibrarySelectionMark";
-import { LibraryHoverMark } from "./LibraryHoverMark";
+import { MediaHoverMark } from "./MediaHoverMark";
 import { VideoHoverPreview, videoDurationLabel } from "./VideoHoverPreview";
 import { isAudioPath } from "../lib/audioMedia";
 import { AudioFileMediaCard } from "./AudioFileMediaCard";
@@ -97,7 +97,7 @@ function VisualFileMediaCard({ entry, selected, revision, labels, onSelect, onAc
       {!entry.directory && generated && <span className="folder-media-generated" title="生成图" aria-label="生成图"><Sparkles size={12} aria-hidden="true"/></span>}
     </span>
     <LibrarySelectionMark selected={selected && !entry.directory} previewKey={preview ?? previewKey}/>
-    {hovered && !selected && !entry.directory && <LibraryHoverMark previewKey={preview ?? previewKey}/>}
+    {hovered && !selected && !entry.directory && <MediaHoverMark previewKey={preview ?? previewKey}/>}
     {entry.directory && <span className="folder-media-name">{entry.name}</span>}
   </button>;
 }

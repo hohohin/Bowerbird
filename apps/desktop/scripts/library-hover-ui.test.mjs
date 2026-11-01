@@ -19,7 +19,7 @@ try {
   await card.waitFor();
   await card.locator('img').evaluate(img => img.decode());
   await card.hover();
-  const mark = card.locator('.library-hover-mark');
+  const mark = card.locator('.media-hover-mark');
   await mark.waitFor();
   const result = await mark.evaluate(el => {
     const animations = el.getAnimations({ subtree: true });
@@ -59,7 +59,7 @@ try {
   }
   await page.mouse.move(0, 0); await mark.waitFor({ state: 'detached' });
   await card.hover(); await mark.waitFor();
-  assert.equal(await page.locator('.library-hover-mark').count(), 1, 'only the active card mounts a marker');
+  assert.equal(await page.locator('.media-hover-mark').count(), 1, 'only the active card mounts a marker');
   const root = card.locator('xpath=ancestor::*[contains(@class,"library-motion-root")][1]');
   await root.evaluate(el => el.dataset.libraryMotionPaused = 'true');
   assert.equal(await mark.locator('path').first().evaluate(el => getComputedStyle(el).opacity), '0');

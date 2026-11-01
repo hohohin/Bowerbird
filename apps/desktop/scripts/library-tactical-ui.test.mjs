@@ -217,7 +217,7 @@ try {
   assert.equal(await firstTitle.getAttribute('data-library-count'), '16 项', 'clearing color restores the actual total');
 
   await card.hover();
-  const mark = card.locator('.library-hover-mark');
+  const mark = card.locator('.media-hover-mark');
   await mark.waitFor();
   assert.equal(await mark.locator('path').count(), 2);
   assert.ok(await mark.evaluate(el => Math.abs(parseFloat(getComputedStyle(el, '::before').width)-4.8)<.01));
@@ -246,7 +246,7 @@ try {
   await page.getByRole("button", { name: "视频", exact: true }).click();
   await page.locator('[data-asset-id="video-0"]').waitFor();
   await card.hover();
-  assert.ok(await card.locator(".library-hover-mark").evaluate(element => Math.abs(parseFloat(getComputedStyle(element, "::before").width)-4.8)<.01), "video card uses the same markers");
+  assert.ok(await card.locator(".media-hover-mark").evaluate(element => Math.abs(parseFloat(getComputedStyle(element, "::before").width)-4.8)<.01), "video card uses the same markers");
   await page.getByRole("button", { name: "图片", exact: true }).click();
   await page.locator('[data-asset-id="tactical-0"]').waitFor();
 
