@@ -1,0 +1,257 @@
+{
+  "platform": "win32",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36 Edg/156.0.0.0",
+  "bareRun": "run-1793496852579",
+  "observationMode": "bare Node WebSocket CDP; never enables Network; no Playwright connection",
+  "formats": [
+    {
+      "entry": {
+        "id": "chime",
+        "ratio": 0.5,
+        "started": 908.7999999523163,
+        "userActivation": {
+          "hasBeenActive": false,
+          "isActive": false
+        },
+        "metadataMs": 12.899999976158142,
+        "duration": 12,
+        "target": 6,
+        "playResolvedMs": 79.70000004768372
+      },
+      "currentTime": 6.204451,
+      "muted": false,
+      "volume": 0.03,
+      "failures": []
+    },
+    {
+      "entry": {
+        "id": "rain",
+        "ratio": 0.5,
+        "started": 1308.1999999284744,
+        "userActivation": {
+          "hasBeenActive": false,
+          "isActive": false
+        },
+        "metadataMs": 9.800000071525574,
+        "duration": 24,
+        "target": 12,
+        "playResolvedMs": 33.60000002384186
+      },
+      "currentTime": 12.236826,
+      "muted": false,
+      "volume": 0.03,
+      "failures": []
+    },
+    {
+      "entry": {
+        "id": "rhythm",
+        "ratio": 0.5,
+        "started": 1641.6000000238419,
+        "userActivation": {
+          "hasBeenActive": false,
+          "isActive": false
+        },
+        "metadataMs": 4.5,
+        "duration": 18,
+        "target": 9,
+        "playResolvedMs": 15.099999904632568
+      },
+      "currentTime": 9.242808,
+      "muted": false,
+      "volume": 0.03,
+      "failures": []
+    },
+    {
+      "entry": {
+        "id": "space",
+        "ratio": 0.5,
+        "started": 1975,
+        "userActivation": {
+          "hasBeenActive": false,
+          "isActive": false
+        },
+        "metadataMs": 5.899999976158142,
+        "duration": 36,
+        "target": 18,
+        "playResolvedMs": 19
+      },
+      "currentTime": 18.242832,
+      "muted": false,
+      "volume": 0.03,
+      "failures": []
+    },
+    {
+      "entry": {
+        "id": "steps",
+        "ratio": 0.5,
+        "started": 2308.399999976158,
+        "userActivation": {
+          "hasBeenActive": false,
+          "isActive": false
+        },
+        "metadataMs": 10.700000047683716,
+        "duration": 8,
+        "target": 4,
+        "playResolvedMs": 20.100000023841858
+      },
+      "currentTime": 4.258096,
+      "muted": false,
+      "volume": 0.03,
+      "failures": []
+    },
+    {
+      "entry": {
+        "id": "long-mp3",
+        "ratio": 0.5,
+        "started": 2658.399999976158,
+        "userActivation": {
+          "hasBeenActive": false,
+          "isActive": false
+        },
+        "metadataMs": 9.799999952316284,
+        "duration": 3600,
+        "target": 1800,
+        "playResolvedMs": 51.60000002384186
+      },
+      "currentTime": 1800.26143,
+      "muted": false,
+      "volume": 0.03,
+      "failures": []
+    },
+    {
+      "entry": {
+        "id": "long-flac",
+        "ratio": 0.5,
+        "started": 3058.1999999284744,
+        "userActivation": {
+          "hasBeenActive": false,
+          "isActive": false
+        },
+        "metadataMs": 10.400000095367432,
+        "duration": 3600,
+        "target": 1800,
+        "playResolvedMs": 33.200000047683716
+      },
+      "currentTime": 1800.233879,
+      "muted": false,
+      "volume": 0.03,
+      "failures": []
+    },
+    {
+      "entry": {
+        "id": "ten-minute-wav",
+        "ratio": 0.5,
+        "started": 3408.399999976158,
+        "userActivation": {
+          "hasBeenActive": false,
+          "isActive": false
+        },
+        "metadataMs": 12,
+        "duration": 600,
+        "target": 300,
+        "playResolvedMs": 31.899999976158142
+      },
+      "currentTime": 300.235353,
+      "muted": false,
+      "volume": 0.03,
+      "failures": []
+    }
+  ],
+  "pointerCancellation": [
+    {
+      "round": 1,
+      "pointerMoves": 100,
+      "settleMs": 5000,
+      "lateStartsAfterLeave": 0,
+      "paused": true,
+      "src": null,
+      "audioElements": 1
+    },
+    {
+      "round": 2,
+      "pointerMoves": 100,
+      "settleMs": 5000,
+      "lateStartsAfterLeave": 0,
+      "paused": true,
+      "src": null,
+      "audioElements": 1
+    },
+    {
+      "round": 3,
+      "pointerMoves": 100,
+      "settleMs": 5000,
+      "lateStartsAfterLeave": 0,
+      "paused": true,
+      "src": null,
+      "audioElements": 1
+    }
+  ],
+  "privateMemory": [
+    {
+      "stage": "bare-idle",
+      "privateBytes": 171577344
+    },
+    {
+      "stage": "bare-after-format-seeks",
+      "privateBytes": 283324416
+    },
+    {
+      "stage": "bare-pointer-round-1-settled-5s",
+      "privateBytes": 252006400
+    },
+    {
+      "stage": "bare-pointer-round-2-settled-5s",
+      "privateBytes": 263385088
+    },
+    {
+      "stage": "bare-pointer-round-3-settled-5s",
+      "privateBytes": 261144576
+    }
+  ],
+  "uiRun": "run-1793496942523",
+  "ui": {
+    "documentHidden": false,
+    "hoverDwellMs": 90,
+    "samples": [
+      {
+        "duration": 12,
+        "currentTime": 6.215107,
+        "muted": false,
+        "elements": 1,
+        "pointerToObservedProgressMs": 482.70550000000003,
+        "pausedAfterLeave": true,
+        "srcAfterLeave": null
+      },
+      {
+        "duration": 3600,
+        "currentTime": 1800.217494,
+        "muted": false,
+        "elements": 1,
+        "pointerToObservedProgressMs": 431.4154000000003,
+        "pausedAfterLeave": true,
+        "srcAfterLeave": null
+      }
+    ],
+    "quickPointerMoves": 100,
+    "quickPointerAssetRequests": 0,
+    "stopped": true
+  },
+  "protocol": {
+    "requestCount": 8,
+    "rangeRequestCount": 8,
+    "partialResponses": 8,
+    "responseBodyBytesFromContentLength": 7424078
+  },
+  "success": true,
+  "limitations": [
+    "no Network domain: this run has no response-byte measurements",
+    "private memory samples include the full test WebView2 tree",
+    "no acoustic/first-audible-sample measurement",
+    "Windows only",
+    "play() resolution/currentTime are not acoustic output or first-audible-sample measurements",
+    "Content-Length sums protocol payloads, not physical disk I/O; cancelled requests may be incomplete",
+    "process-tree working sets can double-count shared pages; snapshots are not continuous peak private memory",
+    "100 CDP pointer moves exercise browser pointer events, not physical hardware input; an additional 100 programmatic pending starts test cancellation races",
+    "Windows only; no macOS result"
+  ]
+}

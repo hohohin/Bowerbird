@@ -1,0 +1,1114 @@
+{
+  "measuredAt": "2026-11-01T09:27:53.3552956+08:00",
+  "os": "Microsoft Windows NT 10.0.26100.0",
+  "logicalProcessors": 16,
+  "coldMeaning": "Application waveform-cache miss; OS filesystem caches are not flushed.",
+  "memoryMeaning": "Process PeakWorkingSet64 observed while running, 10 ms polling; null means process exited before a usable observation. Includes decoder process only.",
+  "timingMeaning": "elapsedMs includes process startup and the polling interval; diagnostics.timingsMs is in-process work.",
+  "results": [
+    {
+      "file": "chime.wav",
+      "sourceBytes": 2304078,
+      "cold": {
+        "elapsedMs": 227.788,
+        "peakWorkingSetBytes": 5087232,
+        "memorySamples": 1,
+        "duration": 12.0,
+        "groups": 1125,
+        "outputBytes": 42128,
+        "diagnostics": {
+          "cacheHit": false,
+          "decodedFrames": 576000,
+          "maxDecodedBlockFrames": 1152,
+          "peakBytes": 9000,
+          "peakCapacityBytes": 16384,
+          "sourceBytes": 2304078,
+          "sourceBytesRead": 2304090,
+          "timingsMs": {
+            "decode": 5.5803,
+            "total": 6.8604,
+            "validation": 0.0773
+          }
+        }
+      },
+      "warm": [
+        {
+          "elapsedMs": 41.449,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 12.0,
+          "groups": 1125,
+          "outputBytes": 42110,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 9000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 2304078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.4372,
+              "validation": 0.1339
+            }
+          }
+        },
+        {
+          "elapsedMs": 41.593,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 12.0,
+          "groups": 1125,
+          "outputBytes": 42110,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 9000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 2304078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.2926,
+              "validation": 0.0644
+            }
+          }
+        },
+        {
+          "elapsedMs": 44.176,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 12.0,
+          "groups": 1125,
+          "outputBytes": 42123,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 9000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 2304078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.2964,
+              "validation": 0.06499999999999999
+            }
+          }
+        },
+        {
+          "elapsedMs": 34.321,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 12.0,
+          "groups": 1125,
+          "outputBytes": 42123,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 9000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 2304078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.35359999999999997,
+              "validation": 0.0699
+            }
+          }
+        },
+        {
+          "elapsedMs": 29.16,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 12.0,
+          "groups": 1125,
+          "outputBytes": 42110,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 9000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 2304078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3088,
+              "validation": 0.0757
+            }
+          }
+        }
+      ]
+    },
+    {
+      "file": "rain.flac",
+      "sourceBytes": 1877014,
+      "cold": {
+        "elapsedMs": 37.897,
+        "peakWorkingSetBytes": 2682880,
+        "memorySamples": 1,
+        "duration": 24.0,
+        "groups": 1125,
+        "outputBytes": 50136,
+        "diagnostics": {
+          "cacheHit": false,
+          "decodedFrames": 1152000,
+          "maxDecodedBlockFrames": 4608,
+          "peakBytes": 9000,
+          "peakCapacityBytes": 16384,
+          "sourceBytes": 1877014,
+          "sourceBytesRead": 1877026,
+          "timingsMs": {
+            "decode": 13.0678,
+            "total": 14.2818,
+            "validation": 0.0708
+          }
+        }
+      },
+      "warm": [
+        {
+          "elapsedMs": 27.122,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 24.0,
+          "groups": 1125,
+          "outputBytes": 50115,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 9000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 1877014,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3942,
+              "validation": 0.0698
+            }
+          }
+        },
+        {
+          "elapsedMs": 27.332,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 24.0,
+          "groups": 1125,
+          "outputBytes": 50115,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 9000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 1877014,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.2932,
+              "validation": 0.0653
+            }
+          }
+        },
+        {
+          "elapsedMs": 29.18,
+          "peakWorkingSetBytes": 2686976,
+          "memorySamples": 1,
+          "duration": 24.0,
+          "groups": 1125,
+          "outputBytes": 50128,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 9000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 1877014,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.36069999999999997,
+              "validation": 0.0775
+            }
+          }
+        },
+        {
+          "elapsedMs": 28.986,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 24.0,
+          "groups": 1125,
+          "outputBytes": 50115,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 9000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 1877014,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3029,
+              "validation": 0.0672
+            }
+          }
+        },
+        {
+          "elapsedMs": 26.923,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 24.0,
+          "groups": 1125,
+          "outputBytes": 50115,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 9000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 1877014,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.2972,
+              "validation": 0.0663
+            }
+          }
+        }
+      ]
+    },
+    {
+      "file": "rhythm.mp3",
+      "sourceBytes": 75668,
+      "cold": {
+        "elapsedMs": 58.429,
+        "peakWorkingSetBytes": 2682880,
+        "memorySamples": 2,
+        "duration": 18.0,
+        "groups": 1688,
+        "outputBytes": 77839,
+        "diagnostics": {
+          "cacheHit": false,
+          "decodedFrames": 864000,
+          "maxDecodedBlockFrames": 1152,
+          "peakBytes": 13504,
+          "peakCapacityBytes": 16384,
+          "sourceBytes": 75668,
+          "sourceBytesRead": 75680,
+          "timingsMs": {
+            "decode": 9.609,
+            "total": 10.8837,
+            "validation": 0.0678
+          }
+        }
+      },
+      "warm": [
+        {
+          "elapsedMs": 27.188,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 18.0,
+          "groups": 1688,
+          "outputBytes": 77823,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 13504,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 75668,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.4001,
+              "validation": 0.0688
+            }
+          }
+        },
+        {
+          "elapsedMs": 27.452,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 18.0,
+          "groups": 1688,
+          "outputBytes": 77835,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 13504,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 75668,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.408,
+              "validation": 0.06380000000000001
+            }
+          }
+        },
+        {
+          "elapsedMs": 37.17,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 18.0,
+          "groups": 1688,
+          "outputBytes": 77836,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 13504,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 75668,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3702,
+              "validation": 0.06770000000000001
+            }
+          }
+        },
+        {
+          "elapsedMs": 28.018,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 18.0,
+          "groups": 1688,
+          "outputBytes": 77836,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 13504,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 75668,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3696,
+              "validation": 0.06509999999999999
+            }
+          }
+        },
+        {
+          "elapsedMs": 26.921,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 18.0,
+          "groups": 1688,
+          "outputBytes": 77836,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 13504,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 75668,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.39540000000000003,
+              "validation": 0.0669
+            }
+          }
+        }
+      ]
+    },
+    {
+      "file": "space.m4a",
+      "sourceBytes": 338917,
+      "cold": {
+        "elapsedMs": 59.402,
+        "peakWorkingSetBytes": 5201920,
+        "memorySamples": 2,
+        "duration": 36.032,
+        "groups": 1689,
+        "outputBytes": 74497,
+        "diagnostics": {
+          "cacheHit": false,
+          "decodedFrames": 1729536,
+          "maxDecodedBlockFrames": 1024,
+          "peakBytes": 13512,
+          "peakCapacityBytes": 16384,
+          "sourceBytes": 338917,
+          "sourceBytesRead": 420849,
+          "timingsMs": {
+            "decode": 19.7887,
+            "total": 21.1967,
+            "validation": 0.0675
+          }
+        }
+      },
+      "warm": [
+        {
+          "elapsedMs": 27.739,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 36.032,
+          "groups": 1689,
+          "outputBytes": 74477,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 13512,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 338917,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3618,
+              "validation": 0.0641
+            }
+          }
+        },
+        {
+          "elapsedMs": 42.419,
+          "peakWorkingSetBytes": 2678784,
+          "memorySamples": 1,
+          "duration": 36.032,
+          "groups": 1689,
+          "outputBytes": 74490,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 13512,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 338917,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.49779999999999996,
+              "validation": 0.0969
+            }
+          }
+        },
+        {
+          "elapsedMs": 27.329,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 36.032,
+          "groups": 1689,
+          "outputBytes": 74477,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 13512,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 338917,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3671,
+              "validation": 0.0669
+            }
+          }
+        },
+        {
+          "elapsedMs": 27.176,
+          "peakWorkingSetBytes": 2686976,
+          "memorySamples": 1,
+          "duration": 36.032,
+          "groups": 1689,
+          "outputBytes": 74477,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 13512,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 338917,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3765,
+              "validation": 0.0675
+            }
+          }
+        },
+        {
+          "elapsedMs": 26.882,
+          "peakWorkingSetBytes": 2686976,
+          "memorySamples": 1,
+          "duration": 36.032,
+          "groups": 1689,
+          "outputBytes": 74477,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 13512,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 338917,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.4093,
+              "validation": 0.1093
+            }
+          }
+        }
+      ]
+    },
+    {
+      "file": "steps.wav",
+      "sourceBytes": 1536078,
+      "cold": {
+        "elapsedMs": 41.143,
+        "peakWorkingSetBytes": 2682880,
+        "memorySamples": 1,
+        "duration": 8.0,
+        "groups": 1500,
+        "outputBytes": 35344,
+        "diagnostics": {
+          "cacheHit": false,
+          "decodedFrames": 384000,
+          "maxDecodedBlockFrames": 1152,
+          "peakBytes": 12000,
+          "peakCapacityBytes": 16384,
+          "sourceBytes": 1536078,
+          "sourceBytesRead": 1536090,
+          "timingsMs": {
+            "decode": 2.9943,
+            "total": 4.200200000000001,
+            "validation": 0.06430000000000001
+          }
+        }
+      },
+      "warm": [
+        {
+          "elapsedMs": 28.428,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 8.0,
+          "groups": 1500,
+          "outputBytes": 35315,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 12000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 1536078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.4329,
+              "validation": 0.13119999999999998
+            }
+          }
+        },
+        {
+          "elapsedMs": 27.245,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 8.0,
+          "groups": 1500,
+          "outputBytes": 35301,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 12000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 1536078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3366,
+              "validation": 0.066
+            }
+          }
+        },
+        {
+          "elapsedMs": 27.385,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 8.0,
+          "groups": 1500,
+          "outputBytes": 35302,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 12000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 1536078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3341,
+              "validation": 0.0742
+            }
+          }
+        },
+        {
+          "elapsedMs": 28.828,
+          "peakWorkingSetBytes": 2678784,
+          "memorySamples": 1,
+          "duration": 8.0,
+          "groups": 1500,
+          "outputBytes": 35301,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 12000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 1536078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3494,
+              "validation": 0.081
+            }
+          }
+        },
+        {
+          "elapsedMs": 26.809,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 8.0,
+          "groups": 1500,
+          "outputBytes": 35302,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 12000,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 1536078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3341,
+              "validation": 0.0718
+            }
+          }
+        }
+      ]
+    },
+    {
+      "file": "long-vbr.mp3",
+      "sourceBytes": 14401028,
+      "cold": {
+        "elapsedMs": 2081.502,
+        "peakWorkingSetBytes": 5414912,
+        "memorySamples": 67,
+        "duration": 3600.0,
+        "groups": 1319,
+        "outputBytes": 57104,
+        "diagnostics": {
+          "cacheHit": false,
+          "decodedFrames": 172800000,
+          "maxDecodedBlockFrames": 1152,
+          "peakBytes": 10552,
+          "peakCapacityBytes": 16384,
+          "sourceBytes": 14401028,
+          "sourceBytesRead": 14401040,
+          "timingsMs": {
+            "decode": 2037.1218,
+            "total": 2038.3368000000003,
+            "validation": 0.066
+          }
+        }
+      },
+      "warm": [
+        {
+          "elapsedMs": 39.507,
+          "peakWorkingSetBytes": 2686976,
+          "memorySamples": 1,
+          "duration": 3600.0,
+          "groups": 1319,
+          "outputBytes": 57068,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 10552,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 14401028,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3375,
+              "validation": 0.0706
+            }
+          }
+        },
+        {
+          "elapsedMs": 41.787,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 3600.0,
+          "groups": 1319,
+          "outputBytes": 57068,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 10552,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 14401028,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3166,
+              "validation": 0.0678
+            }
+          }
+        },
+        {
+          "elapsedMs": 39.208,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 3600.0,
+          "groups": 1319,
+          "outputBytes": 57068,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 10552,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 14401028,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3136,
+              "validation": 0.0653
+            }
+          }
+        },
+        {
+          "elapsedMs": 40.938,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 3600.0,
+          "groups": 1319,
+          "outputBytes": 57081,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 10552,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 14401028,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.34249999999999997,
+              "validation": 0.0697
+            }
+          }
+        },
+        {
+          "elapsedMs": 41.994,
+          "peakWorkingSetBytes": 2686976,
+          "memorySamples": 1,
+          "duration": 3600.0,
+          "groups": 1319,
+          "outputBytes": 57067,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 10552,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 14401028,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.315,
+              "validation": 0.0653
+            }
+          }
+        }
+      ]
+    },
+    {
+      "file": "long.flac",
+      "sourceBytes": 48016610,
+      "cold": {
+        "elapsedMs": 1666.43,
+        "peakWorkingSetBytes": 4734976,
+        "memorySamples": 53,
+        "duration": 3600.0,
+        "groups": 1319,
+        "outputBytes": 41277,
+        "diagnostics": {
+          "cacheHit": false,
+          "decodedFrames": 172800000,
+          "maxDecodedBlockFrames": 4608,
+          "peakBytes": 10552,
+          "peakCapacityBytes": 16384,
+          "sourceBytes": 48016610,
+          "sourceBytesRead": 48016622,
+          "timingsMs": {
+            "decode": 1633.1734999999999,
+            "total": 1634.3874,
+            "validation": 0.0673
+          }
+        }
+      },
+      "warm": [
+        {
+          "elapsedMs": 28.705,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 3600.0,
+          "groups": 1319,
+          "outputBytes": 41240,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 10552,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 48016610,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3359,
+              "validation": 0.0674
+            }
+          }
+        },
+        {
+          "elapsedMs": 30.355,
+          "peakWorkingSetBytes": 2686976,
+          "memorySamples": 1,
+          "duration": 3600.0,
+          "groups": 1319,
+          "outputBytes": 41238,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 10552,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 48016610,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.448,
+              "validation": 0.087
+            }
+          }
+        },
+        {
+          "elapsedMs": 30.154,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 3600.0,
+          "groups": 1319,
+          "outputBytes": 41239,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 10552,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 48016610,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3568,
+              "validation": 0.077
+            }
+          }
+        },
+        {
+          "elapsedMs": 42.709,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 3600.0,
+          "groups": 1319,
+          "outputBytes": 41253,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 10552,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 48016610,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.32670000000000005,
+              "validation": 0.0717
+            }
+          }
+        },
+        {
+          "elapsedMs": 29.373,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 3600.0,
+          "groups": 1319,
+          "outputBytes": 41240,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 10552,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 48016610,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3142,
+              "validation": 0.0655
+            }
+          }
+        }
+      ]
+    },
+    {
+      "file": "ten-minute.wav",
+      "sourceBytes": 115200078,
+      "cold": {
+        "elapsedMs": 247.532,
+        "peakWorkingSetBytes": 4616192,
+        "memorySamples": 8,
+        "duration": 600.0,
+        "groups": 1758,
+        "outputBytes": 54883,
+        "diagnostics": {
+          "cacheHit": false,
+          "decodedFrames": 28800000,
+          "maxDecodedBlockFrames": 1152,
+          "peakBytes": 14064,
+          "peakCapacityBytes": 16384,
+          "sourceBytes": 115200078,
+          "sourceBytesRead": 115200090,
+          "timingsMs": {
+            "decode": 219.7722,
+            "total": 221.38369999999998,
+            "validation": 0.0703
+          }
+        }
+      },
+      "warm": [
+        {
+          "elapsedMs": 29.91,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 600.0,
+          "groups": 1758,
+          "outputBytes": 54860,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 14064,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 115200078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.36210000000000003,
+              "validation": 0.0679
+            }
+          }
+        },
+        {
+          "elapsedMs": 28.443,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 600.0,
+          "groups": 1758,
+          "outputBytes": 54846,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 14064,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 115200078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.4106,
+              "validation": 0.112
+            }
+          }
+        },
+        {
+          "elapsedMs": 29.963,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 600.0,
+          "groups": 1758,
+          "outputBytes": 54847,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 14064,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 115200078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3524,
+              "validation": 0.0663
+            }
+          }
+        },
+        {
+          "elapsedMs": 29.468,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 600.0,
+          "groups": 1758,
+          "outputBytes": 54860,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 14064,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 115200078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.3678,
+              "validation": 0.06810000000000001
+            }
+          }
+        },
+        {
+          "elapsedMs": 29.045,
+          "peakWorkingSetBytes": 2682880,
+          "memorySamples": 1,
+          "duration": 600.0,
+          "groups": 1758,
+          "outputBytes": 54860,
+          "diagnostics": {
+            "cacheHit": true,
+            "decodedFrames": 0,
+            "maxDecodedBlockFrames": 0,
+            "peakBytes": 14064,
+            "peakCapacityBytes": 16384,
+            "sourceBytes": 115200078,
+            "sourceBytesRead": 0,
+            "timingsMs": {
+              "decode": 0.0,
+              "total": 0.39530000000000004,
+              "validation": 0.0798
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
