@@ -5,7 +5,7 @@ import { api } from "../lib/api";
 import { connectedRows, folderConnections, useConnectedNavigation, type ConnectionEntry, type FolderConnection } from "../lib/folderConnections";
 import { useLibraryThumbnail, useLibraryPane, type LibraryBrowsePosition } from "../lib/libraryPane";
 import { useThumbnailPinch } from "../lib/useThumbnailPinch";
-import { setDragAssets, getDragAssets } from "../lib/dragPayload";
+import { setDragAssets, getDragAssets, isNativeAssetDrag } from "../lib/dragPayload";
 import { externalFiles } from "../lib/externalFiles";
 import { addMaterialAssets } from "../lib/materialActions";
 import { notifyError } from "../lib/notify";
@@ -231,7 +231,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
             return <div key={item.id} role="treeitem" aria-label={item.name} aria-level={depth + 1} aria-selected={active === item.id} aria-expanded={children ? !collapsed.has(item.id) : undefined}
               data-collection-id={item.id} data-file-import-collection-id={item.id} data-file-import-collection-name={item.name} tabIndex={active === item.id || !active ? 0 : -1} title={item.path} className={`catalog-row catalog-tree-row${!item.available ? " is-offline" : ""}${drop === item.id ? " is-drop-target" : ""}`}
               style={{ paddingLeft: 4 + Math.min(depth, 8) * 17 }} onClick={() => navigate(item.id)} onKeyDown={event => treeKey(event, item)} onContextMenu={event => { event.preventDefault(); setMenu({ folder: item, x: event.clientX, y: event.clientY }); }}
-              onDragOver={event => { if (getDragAssets()?.length && item.available) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "link"; setDrop(item.id); } }} onDragLeave={() => setDrop(null)}
+              onDragOver={event => { if (getDragAssets()?.length && item.available) { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = isNativeAssetDrag() ? "copy" : "link"; setDrop(item.id); } }} onDragLeave={() => setDrop(null)}
               onDrop={event => { const ids = getDragAssets(); setDrop(null); if (!ids?.length) return; event.preventDefault(); event.stopPropagation(); void run(() => folderConnections.references([...new Set(ids)], item.id), true); }}>
               {children && <button className="catalog-tree-toggle" tabIndex={-1} aria-label={`${collapsed.has(item.id) ? "展开" : "收起"}${item.name}`} onClick={event => { event.stopPropagation(); toggle(item.id); }}>{collapsed.has(item.id) ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</button>}
               <Folder className="catalog-tree-icon" size={14}/><span className="catalog-tree-name">{item.name}</span>{!item.available && <Unlink size={12} aria-label="连接不可用"/>}

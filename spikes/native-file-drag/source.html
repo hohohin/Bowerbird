@@ -1,0 +1,17 @@
+<!doctype html><meta charset="utf-8"><title>Native Drag Test</title>
+<style>body{font:16px system-ui;background:#202020;color:#eee;padding:30px}button,#card{padding:24px;margin:8px;border:1px solid #aaa;background:#303030;color:white}#card{cursor:grab}#target{padding:60px;border:2px dashed #799;color:#bdf;margin-top:36px}pre{white-space:pre-wrap;font-size:13px}</style>
+<h2>Isolated synthetic file drag</h2>
+<div id="card" draggable="true">Hold and drag two synthetic files</div><button id="pickup">Pick up, then click destination</button>
+<div id="target">Same-window HTML drop target</div><pre id="log"></pre>
+<script>
+const invoke=(name,args)=>window.__TAURI_INTERNALS__.invoke(name,args);
+const record=event=>{document.querySelector('#log').textContent+=JSON.stringify(event)+'\n';invoke('test_report',{event});};
+window.currentIds=[]; let active=false;
+async function start(pickup){if(active)return;active=true;window.currentIds=['synthetic-image','synthetic-audio'];record({phase:'start',pickup});try{record({phase:'complete',dropped:await invoke('test_drag',{pickup})});}catch(e){record({error:String(e)})}finally{active=false;window.currentIds=[];}}
+document.querySelector('#card').addEventListener('dragstart',e=>{e.preventDefault();start(false)});
+document.querySelector('#card').addEventListener('dragend',()=>record({phase:'dom-dragend',active}));
+document.querySelector('#pickup').onclick=()=>start(true);
+const target=document.querySelector('#target');
+target.ondragover=e=>{e.preventDefault();e.dataTransfer.dropEffect='copy'};
+target.ondrop=e=>{e.preventDefault();record({phase:'dom-drop',names:[...e.dataTransfer.files].map(f=>f.name),ids:window.currentIds.slice()})};
+</script>

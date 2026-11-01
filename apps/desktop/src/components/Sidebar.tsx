@@ -3,7 +3,7 @@ import { useEffect, useRef, useState, type CSSProperties, type FocusEvent, type 
 import { FolderOpen, FolderPlus, PanelLeftClose, PanelLeftOpen, Search, Star } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
-import { getDragAssets } from "../lib/dragPayload";
+import { getDragAssets, isNativeAssetDrag } from "../lib/dragPayload";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { COLLECTIONS_FEATURE_ENABLED } from "../lib/featureFlags";
 import { SidebarAccount } from "./SidebarAccount";
@@ -537,7 +537,7 @@ function FolderRow({ folder, onOpen, panelOpen = false }: { folder: Folder; onOp
       onDragOver={(e) => {
         if (isCollection || isSmart) return;
         e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
+        e.dataTransfer.dropEffect = isNativeAssetDrag() ? "copy" : "move";
       }}
       onDragEnter={(e) => {
         if (isCollection || isSmart || !getDragAssets()) return;

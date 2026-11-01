@@ -61,6 +61,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   Archive,
   ArchiveRestore,
+  ArrowUpRight,
   Copy,
   ChevronUp,
   Folder,
@@ -115,7 +116,8 @@ import { CreativeTimeline, generationStatusLabel } from "./CreativeTimeline";
 import { api } from "../lib/api";
 import { externalFiles } from "../lib/externalFiles";
 import { countCloudAgentResultImages, selectCloudAgentResultArtifacts } from "../lib/cloudAgentResult";
-import { getDragAssets } from "../lib/dragPayload";
+import { getDragAssets, isNativeAssetDrag } from "../lib/dragPayload";
+import { EXTERNAL_DRAG_ENDED, startExternalDrag } from "../lib/externalDrag";
 import {
   supersededProjectTaskIds,
   isProjectNodeNavigable,
@@ -2298,14 +2300,17 @@ export function CanvasWorkspace({
 
   useEffect(() => {
     const end = () => {
+      if (isNativeAssetDrag()) return;
       if (sourceDragFrame.current !== null) cancelAnimationFrame(sourceDragFrame.current);
       sourceDragFrame.current = null;
       setLibraryDragging(false);
       clearExternalDrag();
     };
     window.addEventListener("dragend", end);
+    window.addEventListener(EXTERNAL_DRAG_ENDED, end);
     return () => {
       window.removeEventListener("dragend", end);
+      window.removeEventListener(EXTERNAL_DRAG_ENDED, end);
       if (sourceDragFrame.current !== null) cancelAnimationFrame(sourceDragFrame.current);
     };
   }, []);
@@ -5314,6 +5319,12 @@ export function CanvasWorkspace({
                 setPromptMenu(null);
                 void exportAssetArchive(ids);
               }}><Archive size={14} /> 将所选内容打包</button>}
+            {canvasImagesForSelection(promptMenu.nodeIds, true).length > 0 && <button type="button" role="menuitem"
+              className="app-context-item px-2 py-1.5" onClick={() => {
+                const ids = canvasImagesForSelection(promptMenu.nodeIds, true).map(asset => asset.assetId);
+                setPromptMenu(null);
+                void startExternalDrag(ids, "pickup");
+              }}><ArrowUpRight size={14} /> 拖入到其他应用</button>}
             {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               workflowRef.current?.saveTemplate(promptMenu.nodeIds, "container"); setPromptMenu(null);
             }}><Frame size={14} /> 封装为容器</button>}

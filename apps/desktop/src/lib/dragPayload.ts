@@ -6,11 +6,28 @@
 let assetPreview: string | null = null; // Rendered thumbnail URL, including lazily loaded file previews.
 let assetName: string | null = null;
 let payload: string[] | null = null;
+let nativeDrag = false;
 
 export function setDragAssets(ids: string[] | null, name?: string, preview?: string | null) {
+  // Cancelling HTML dragstart can immediately fire dragend while the OS still owns the drag.
+  if (nativeDrag) return;
   payload = ids;
   assetPreview = ids ? preview ?? null : null;
   assetName = ids ? name ?? null : null;
+}
+
+export function isNativeAssetDrag(): boolean {
+  return nativeDrag;
+}
+
+export function holdNativeDragAssets(ids: string[], name?: string, preview?: string | null): (() => void) | null {
+  if (nativeDrag || !ids.length) return null;
+  setDragAssets([...ids], name, preview);
+  nativeDrag = true;
+  return () => {
+    nativeDrag = false;
+    setDragAssets(null);
+  };
 }
 
 export function getDragAssets(): string[] | null {

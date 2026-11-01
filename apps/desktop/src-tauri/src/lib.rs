@@ -9,6 +9,7 @@ mod commands;
 mod core;
 mod db;
 mod error;
+mod external_drag;
 mod installation;
 mod media;
 mod prompt;
@@ -431,6 +432,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::external_files::external_files_browse,
+            commands::external_drag::start_external_drag,
+            commands::external_drag::cancel_pending_external_drag,
             commands::external_files::external_files_media,
             commands::audio::audio_waveform,
             commands::external_files::external_files_preview,

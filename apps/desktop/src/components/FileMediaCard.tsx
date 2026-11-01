@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type DragEventHandler, type CSSProperties } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import { Folder, Image, Play, Sparkles } from "lucide-react";
 import { externalFiles, type LocalFileEntry } from "../lib/externalFiles";
 import { createFilePreviewQueue } from "../lib/filePreviewQueue";
@@ -9,6 +9,8 @@ import { LibraryHoverMark } from "./LibraryHoverMark";
 import { VideoHoverPreview, videoDurationLabel } from "./VideoHoverPreview";
 import { isAudioPath } from "../lib/audioMedia";
 import { AudioFileMediaCard } from "./AudioFileMediaCard";
+import { getDragAssets, isNativeAssetDrag } from "../lib/dragPayload";
+import { startExternalDrag } from "../lib/externalDrag";
 const previews = createFilePreviewQueue(externalFiles.preview);
 export type FileMediaCardProps = {
   entry: LocalFileEntry; selected: boolean; revision: number; labels: string[];
@@ -23,7 +25,17 @@ export type FileMediaCardProps = {
   assetId?: string; onDragStart?: DragEventHandler<HTMLElement>; onDragEnd?: DragEventHandler<HTMLElement>;
 };
 export function FileMediaCard(props: FileMediaCardProps) {
-  return !props.entry.directory && isAudioPath(props.entry.path) ? <AudioFileMediaCard {...props}/> : <VisualFileMediaCard {...props}/>;
+  const onDragStart: DragEventHandler<HTMLElement> | undefined = props.onDragStart && (event => {
+    if (isNativeAssetDrag()) { event.preventDefault(); return; }
+    props.onDragStart?.(event);
+    const ids = getDragAssets();
+    if (event.defaultPrevented || !isTauri() || props.entry.directory || !props.assetId || !ids?.length) return;
+    event.preventDefault();
+    void startExternalDrag(ids, "hold");
+  });
+  return !props.entry.directory && isAudioPath(props.entry.path)
+    ? <AudioFileMediaCard {...props} onDragStart={onDragStart}/>
+    : <VisualFileMediaCard {...props} onDragStart={onDragStart}/>;
 }
 function VisualFileMediaCard({ entry, selected, revision, labels, onSelect, onActivate, onOpen, onContextMenu, aspectRatio, assetId, generated = false, onDragStart, onDragEnd, style, duration }: FileMediaCardProps) {
   const ref = useRef<HTMLButtonElement>(null);
