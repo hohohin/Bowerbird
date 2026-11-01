@@ -166,11 +166,19 @@ html {
 
 body {
   @apply bg-canvas text-ink antialiased;
+  /* 界面文字不参与拖选；输入、编辑与可复制正文在下方恢复。 */
+  -webkit-user-select: none;
+  user-select: none;
   min-width: 760px;
   overflow: hidden;
   font-family: Inter, "Noto Sans SC", "PingFang SC", "Microsoft YaHei",
     -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 14px;
+}
+
+:where(input, textarea, [contenteditable=""], [contenteditable="true"], [contenteditable="plaintext-only"], .local-chat-text) {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 button,
