@@ -86,6 +86,13 @@ impl HistoryStore {
     }
 
     fn prune(&self, max_records: usize, max_bytes: u64) -> Result<(), String> {
+        // A previous deletion or interrupted publication can be absent from list().
+        // The history mutex serializes these scans with all publishing operations.
+        for id in self.owned_ids()? {
+            if missing_file(&self.path(&id, "json")?)? || missing_file(&self.path(&id, "png")?)? {
+                self.delete(&id)?;
+            }
+        }
         let mut total = 0u64;
         for (index, record) in self.list()?.into_iter().enumerate() {
             total = total.saturating_add(record.bytes);
@@ -95,7 +102,9 @@ impl HistoryStore {
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
-        for suffix in ["json", "png", "thumb.png"] {
+        // Keep the record until both pixel files have been removed. If only the
+        // PNG removal succeeds, prune finds the remaining files through owned_ids.
+        for suffix in ["png", "thumb.png", "json"] {
             match fs::remove_file(self.path(id, suffix)?) {
                 Ok(()) => {},
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
@@ -106,18 +115,30 @@ impl HistoryStore {
     }
 
     pub fn clear(&self) -> Result<(), String> {
-        if !self.root.exists() { return Ok(()); }
+        for id in self.owned_ids()? { self.delete(&id)?; }
+        Ok(())
+    }
+
+    fn owned_ids(&self) -> Result<std::collections::HashSet<String>, String> {
         let mut ids = std::collections::HashSet::new();
+        if !self.root.exists() { return Ok(ids); }
         for file in fs::read_dir(&self.root).map_err(|e| e.to_string())? {
             let file = file.map_err(|e| e.to_string())?;
+            if !file.file_type().map_err(|e| e.to_string())?.is_file() { continue; }
             let name = file.file_name();
             let Some(name) = name.to_str() else { continue; };
             let id = name.strip_suffix(".thumb.png").or_else(|| name.strip_suffix(".png")).or_else(|| name.strip_suffix(".json"));
             if let Some(id) = id.filter(|id| self.path(id, "png").is_ok()) { ids.insert(id.to_string()); }
         }
-        // Include interrupted writes/deletes without touching arbitrary files in this directory.
-        for id in ids { self.delete(&id)?; }
-        Ok(())
+        Ok(ids)
+    }
+}
+
+fn missing_file(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -211,6 +232,74 @@ mod tests {
         }
         assert_eq!(store.list().unwrap().len(), 1);
         assert_eq!(store.list().unwrap()[0].id, ulid::Ulid::from(2u128).to_string());
+    }
+
+    #[cfg(windows)]
+    fn assert_retention_retries_after_reopen(locked_suffix: &str) {
+        use std::os::windows::fs::OpenOptionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let store = HistoryStore::new(temp.path().to_path_buf());
+        let old_id = ulid::Ulid::from(1u128).to_string();
+        let next_id = ulid::Ulid::from(2u128).to_string();
+        let data = png();
+        store.save_with_limits(&old_id, &data, 320, 120, 1, MAX_BYTES).unwrap();
+        // Permit reads and writes, but make Windows reject deletion until released.
+        let locked = fs::OpenOptions::new().read(true).share_mode(3)
+            .open(store.path(&old_id, locked_suffix).unwrap()).unwrap();
+        assert!(store.save_with_limits(&next_id, &data, 320, 120, 1, MAX_BYTES).is_err());
+        drop(locked);
+        drop(store);
+        let reopened = HistoryStore::new(temp.path().to_path_buf());
+        reopened.save_with_limits(&next_id, &data, 320, 120, 1, MAX_BYTES).unwrap();
+        assert_eq!(reopened.list().unwrap().len(), 1);
+        for suffix in ["png", "thumb.png", "json"] {
+            assert!(!reopened.path(&old_id, suffix).unwrap().exists(), "{locked_suffix} deletion must resume after reopening: {suffix}");
+        }
+        assert_eq!(reopened.image(&next_id, false).unwrap(), data);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retention_retries_locked_pixels_after_reopen() {
+        assert_retention_retries_after_reopen("png");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retention_retries_locked_thumbnails_after_reopen() {
+        assert_retention_retries_after_reopen("thumb.png");
+    }
+
+    #[test]
+    fn retention_cleans_old_partial_deletions_without_touching_other_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = HistoryStore::new(temp.path().to_path_buf());
+        let data = png();
+        let ids = [ulid::Ulid::from(1u128).to_string(), ulid::Ulid::from(2u128).to_string()];
+        for id in &ids { store.save(id, &data, 320, 120).unwrap(); }
+        // Both deletion orders can leave pixels outside the visible history list.
+        fs::remove_file(store.path(&ids[0], "json").unwrap()).unwrap();
+        fs::remove_file(store.path(&ids[1], "png").unwrap()).unwrap();
+        let unrelated = temp.path().join("user-image.png");
+        let unknown_suffix = temp.path().join(format!("{}.txt", ids[0]));
+        let unrelated_directory = store.path(&ulid::Ulid::from(4u128).to_string(), "json").unwrap();
+        fs::write(&unrelated, &data).unwrap();
+        fs::write(&unknown_suffix, "keep").unwrap();
+        fs::create_dir(&unrelated_directory).unwrap();
+        drop(store);
+        let reopened = HistoryStore::new(temp.path().to_path_buf());
+        let next_id = ulid::Ulid::from(3u128).to_string();
+        reopened.save(&next_id, &data, 320, 120).unwrap();
+        for id in &ids {
+            for suffix in ["png", "thumb.png", "json"] {
+                assert!(!reopened.path(id, suffix).unwrap().exists(), "orphan {id}.{suffix} must not escape the retention budget");
+            }
+        }
+        assert_eq!(reopened.image(&next_id, false).unwrap(), data);
+        reopened.clear().unwrap();
+        assert_eq!(fs::read(unrelated).unwrap(), data);
+        assert_eq!(fs::read_to_string(unknown_suffix).unwrap(), "keep");
+        assert!(unrelated_directory.is_dir());
     }
 
     #[test]

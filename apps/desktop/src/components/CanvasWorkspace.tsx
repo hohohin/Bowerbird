@@ -1,4 +1,5 @@
 import { userErrorMessage } from "../lib/userError";
+import { useImeGuard } from "../lib/useImeGuard";
 import { useLocalFileMode } from "../lib/localFileMode";
 import type { LibrarySource } from "../lib/localFileMode";
 import { ProjectInspectorShell } from "./ProjectInspectorShell";
@@ -2034,6 +2035,7 @@ export function CanvasWorkspace({
       .catch((reason) => console.error("project canvas unmount flush failed", reason));
   }, []);
 
+  const titleIme = useImeGuard();
   function commitProjectTitle() {
     const draft = activeCanvasRef.current;
     const title = draft.title.trim();
@@ -4656,7 +4658,10 @@ export function CanvasWorkspace({
                   replaceActive(draft);
                 }}
                 onBlur={commitProjectTitle}
+                onCompositionStart={titleIme.onCompositionStart}
+                onCompositionEnd={titleIme.onCompositionEnd}
                 onKeyDown={(event) => {
+                  if (titleIme.isComposing(event.nativeEvent)) { event.stopPropagation(); return; }
                   if (event.key === "Enter") event.currentTarget.blur();
                 }}
               />

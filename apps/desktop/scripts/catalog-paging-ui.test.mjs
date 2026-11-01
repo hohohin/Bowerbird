@@ -14,6 +14,14 @@ try {
   await mkdir('.tmp/catalog-paging',{recursive:true});
   await page.goto('http://127.0.0.1:17893/scripts/fixtures/catalog-paging/preview.html');
   await ready();
+  await page.locator('[data-asset-id="asset-0"]').click({modifiers:['Shift']});
+  await page.locator('[data-asset-id="asset-1"]').click();
+  assert.equal(await page.locator('[data-asset-id="asset-1"]').getAttribute('aria-pressed'),'true','the first Shift selection must keep subsequent clicks in selection mode');
+  assert.equal(await page.getByRole('dialog').count(),0,'selection must not open a media preview');
+  assert.equal(await page.evaluate(()=>window.requests.some(r=>r.command==='external_files_media')),false);
+  await page.locator('[data-asset-id="asset-0"]').click();
+  assert.equal(await page.locator('[data-asset-id="asset-0"]').getAttribute('aria-pressed'),'false','plain clicks toggle items while selecting');
+  await page.getByRole('button',{name:'取消选择',exact:true}).click();
   const initial=await page.evaluate(()=>({cards:document.querySelectorAll('[data-asset-id]').length,requests:window.requests.filter(r=>r.command==='catalog_page').length,height:document.querySelector('.catalog-scroller').scrollHeight}));
   assert.ok(initial.cards<180,JSON.stringify(initial)); assert.ok(initial.requests<=3);
   assert.ok(initial.height>1000000);

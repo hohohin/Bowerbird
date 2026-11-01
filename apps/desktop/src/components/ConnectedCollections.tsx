@@ -9,6 +9,7 @@ import { useThumbnailPinch } from "../lib/useThumbnailPinch";
 import { setDragAssets, getDragAssets, isNativeAssetDrag } from "../lib/dragPayload";
 import { externalFiles } from "../lib/externalFiles";
 import { addMaterialAssets } from "../lib/materialActions";
+import { selectCatalogItem } from "../lib/catalogSelection";
 import { notifyError } from "../lib/notify";
 import { userErrorMessage } from "../lib/userError";
 import { useStore } from "../store";
@@ -168,8 +169,8 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
       }); return;
     }
     anchor.current = location;
-    setSelected(previous => { const next = additive || multiple ? new Set(previous) : new Set<string>(); next.has(id) ? next.delete(id) : next.add(id); return next; });
-    if (additive) setMultiple(true);
+    const next = selectCatalogItem(selected, id, { additive, range, multiple });
+    setSelected(next.selected); setMultiple(next.multiple);
   }
   useEffect(() => {
     const key = (event: KeyboardEvent) => {

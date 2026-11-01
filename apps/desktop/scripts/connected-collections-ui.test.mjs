@@ -19,6 +19,16 @@ try {
   await mkdir('.tmp/connected-collections', { recursive: true });
   await page.goto('http://127.0.0.1:17951/scripts/fixtures/connected-collections/preview.html');
   await card('root-0').waitFor();
+  await card('root-0').click({ modifiers: ['Shift'] });
+  await card('root-1').click();
+  assert.equal(await card('root-1').getAttribute('aria-pressed'), 'true', 'the first Shift selection must keep subsequent clicks in selection mode');
+  assert.equal(await page.getByRole('dialog').count(), 0, 'selection must not open a media preview');
+  assert.equal(await page.evaluate(() => window.requests.some(r => r.command === 'external_files_media')), false);
+  await card('root-0').click();
+  assert.equal(await card('root-0').getAttribute('aria-pressed'), 'false', 'plain clicks toggle items while selecting');
+  await card('root-3').click({ modifiers: ['Shift'] });
+  await page.waitForFunction(() => document.querySelector('[data-connection-entry="root-2"] .folder-media-card')?.getAttribute('aria-pressed') === 'true');
+  await page.locator('.connected-selection').getByRole('button', { name: '取消', exact: true }).click();
   assert.deepEqual(await page.locator('[data-catalog-section]').evaluateAll(items => items.map(item => item.dataset.catalogSection)), ['root', 'child', 'nested', 'empty', 'second', 'offline']);
   assert.equal(await page.getByText(/父集合|子集合|全部展开/).count(), 0);
   const plus = row('child').getByRole('button', { name: /新建集合/ });

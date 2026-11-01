@@ -14,6 +14,7 @@ import { VirtualCatalog, type CatalogLocation } from "./VirtualCatalog";
 import type { CatalogSectionInfo } from "../lib/catalogVirtualLayout";
 import { useThumbnailPinch } from "../lib/useThumbnailPinch";
 import { addMaterialAssets } from "../lib/materialActions";
+import { selectCatalogItem } from "../lib/catalogSelection";
 import { externalFiles } from "../lib/externalFiles";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { useStore } from "../store";
@@ -260,9 +261,8 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
       }
     }
     anchor.current = location;
-    if (additive || range || multiple) setSelected(previous => { const next = new Set(previous); if (next.has(asset.id)) next.delete(asset.id); else next.add(asset.id); return next; });
-    else setSelected(new Set([asset.id]));
-    if (additive || range) setMultiple(true);
+    const next = selectCatalogItem(selected, asset.id, { additive, range, multiple });
+    setSelected(next.selected); setMultiple(next.multiple);
   }
   function activate(asset: Asset) {
     if (working) return;
