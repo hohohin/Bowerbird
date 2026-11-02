@@ -38,9 +38,7 @@ html[data-theme] .canvas-tactical .canvas-stage {
   /* CanvasWorkspace supplies a zoom-scaled size inline; this surface uses the approved fixed spacing. */
   background-size:80px 80px !important;
 }
-html[data-theme] .app-topbar.canvas-tactical { background:var(--cs-console);border-bottom:1px solid var(--cs-rule); }
-html[data-theme] .app-topbar.canvas-tactical .topbar-account-trigger { background:transparent; }
-html[data-theme] .canvas-tactical :is(.canvas-board-toolbar>div,.canvas-drawing-tools) {
+html[data-theme] .canvas-tactical .canvas-drawing-tools {
   border:1px solid var(--cs-rule);border-radius:0;background:var(--cs-console);
   box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;
 }
@@ -257,3 +255,18 @@ html[data-theme] :is(.local-chat-reply-box,.local-chat-search):focus-within {
   html[data-theme] .canvas-tactical .canvas-drawing-tools button[aria-pressed="true"],
   html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"] { outline:1px solid Highlight; }
 }
+
+/* The canvas title and view controls remain in their existing positions. */
+html[data-theme] .canvas-tactical .canvas-board-toolbar { top: 8px; }
+html[data-theme] .canvas-tactical .canvas-board-toolbar > div {
+  height: 32px; border: 0; background: transparent; box-shadow: none; backdrop-filter: none;
+}
+html[data-theme] .canvas-tactical .canvas-board-toolbar > div:first-child::before {
+  width: 4px; height: 4px; background: var(--bb-blue); box-shadow: none; margin-right: 4px;
+}
+html[data-theme] .canvas-tactical .canvas-board-toolbar .canvas-board-title { background: transparent; }
+html[data-theme] .canvas-tactical .canvas-board-toolbar .canvas-zoom-controls { padding: 0; gap: 4px; }
+html[data-theme] .canvas-tactical .canvas-board-toolbar .canvas-zoom-controls button {
+  width: 30px; height: 30px; background: transparent !important; box-shadow: none; border: 0;
+}
+html[data-theme] .canvas-tactical .canvas-board-toolbar .canvas-zoom-controls button:nth-child(2) { margin-right: 8px; }
