@@ -16,7 +16,7 @@ export function creditTransactionView(tx: CreditTransaction) {
     confirm: amount != null && amount > 0 ? ["多余预留返还", "实际用量低于预留，多余积分已返还。"]
       : amount === 0 ? ["结算完成", "本条仅记录结算，不会再次扣减余额。"] : ["结算调整", "本次结算产生的余额调整。"],
     rollback: ["积分退回", "本次任务预留的积分已退回；可用余额以最新权益为准。"],
-    expire: ["积分到期", "有有效期的历史积分到期后扣除。"],
+    expire: ["积分到期", "有有效期的积分到期后扣除。"],
     refund: amount != null && amount < 0 ? ["退款回收积分", "订单退款后回收对应积分，并非任务消费。"] : ["退款调整", "退款产生的积分余额调整。"],
     adjust: ["余额调整", "账号积分余额发生调整。"],
   };

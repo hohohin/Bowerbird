@@ -22,7 +22,7 @@ Deno.serve(async (request) => {
     userId = user.id;
     const body = (await request.json()) as CheckoutRequest;
     const { data: sku, error: catalogError } = await admin.from("billing_products")
-      .select("product,kind,amount_minor,credits,months,pricing_version")
+      .select("product,kind,amount_minor,credits,months,pricing_version,monthly_bonus_credits,bonus_valid_days")
       .eq("product", body.product).eq("active", true).maybeSingle();
     if (catalogError) throw new ApiError("internal_error", "价格目录暂不可用", true);
     if (!sku) throw new ApiError("invalid_request", "未知商品");

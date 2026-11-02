@@ -10,7 +10,7 @@ export function CreditDetails({ entitlement }: { entitlement: EntitlementSnapsho
       <span className="text-xs text-muted">可用余额 <strong className="text-ink">{balances ? (balances.daily + balances.sub + balances.topup).toLocaleString("zh-CN") : "—"}</strong> Bcoin</span>
     </div>
     <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
-      {([['daily', '历史每日赠送'], ['sub', '历史赠送积分'], ['topup', '充值积分']] as const).map(([key, label]) => <div key={key} className="rounded-lg border border-edge bg-canvas/70 p-2">
+      {([['daily', '历史每日赠送'], ['sub', '赠送积分'], ['topup', '充值积分']] as const).map(([key, label]) => <div key={key} className="rounded-lg border border-edge bg-canvas/70 p-2">
         <div className="text-muted">{label}</div><div className="mt-1 font-semibold tabular-nums text-ink">{balances?.[key]?.toLocaleString("zh-CN") ?? "—"}</div>
       </div>)}
     </div>

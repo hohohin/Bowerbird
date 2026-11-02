@@ -49,6 +49,11 @@ try {
       assert.match(cells[0], /^(?:不支持|—|需 Pro)$/);
       assert.equal(cells[1], '支持');
     }
+    const text = await section.innerText();
+    assert.match(text, /新注册账号赠 200 Bcoin/);
+    assert.match(text, /新订阅或续费 Pro，每订阅月赠 800 Bcoin，年付分 12 次发放/);
+    assert.match(text, /赠送积分到账后 30 天有效/);
+    assert.doesNotMatch(text, /Pro 不含 Bcoin/);
   };
   const assertSingleRechargeRow = async (section, requireScroll = false) => {
     const group = section.getByRole('group', { name: '充值金额', exact: true });
@@ -92,7 +97,6 @@ try {
   assert.match(await plan.innerText(), /自有订阅/);
   assert.match(await plan.innerText(), /工作流/);
   assert.match(await plan.innerText(), /本地生成/);
-  assert.match(await plan.innerText(), /不含|不赠/);
   await assertComparison(plan);
   await yearly.click();
   assert.equal(await yearly.isChecked(), true);

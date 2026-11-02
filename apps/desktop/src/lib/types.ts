@@ -1209,5 +1209,7 @@ export interface CodeRedemption {
   period_end: string;
   credits: number;
   credits_expires_at: string;
+  scheduled_credits?: number | null;
+  credits_scheduled_at?: string | null;
   entitlement: EntitlementSnapshot | null;
 }

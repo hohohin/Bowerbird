@@ -17,6 +17,7 @@ const free: any = { user_id: "test-user", tier: "free", balances: { daily: 30, s
   recent_transactions: [], generation_services: [], prompt_configs: [], is_test_account: false };
 const pro = { ...free, tier: "pro", balances: { daily: 30, sub: 1100, topup: 0 },
   policy: { ...policy, can_use_byo: true, max_parallel_jobs: 4, understand_daily_limit: null } };
+const monthlyPro = { ...pro, balances: { daily: 0, sub: 1000, topup: 400 } };
 w.free = free;
 const callbacks = new Map();
 w.__TAURI_INTERNALS__ = {
@@ -39,11 +40,16 @@ w.__TAURI_INTERNALS__ = {
     if (command === "library_root") return "synthetic-library";
     if (command === "codex_health" || command === "dreamina_health") return { ok: false };
     if (command === "cloud_sync_entitlement") return pro;
-    if (command === "cloud_start_pro_trial") return { ...pro, balances: { daily: 0, sub: 0, topup: 0 } };
+    if (command === "cloud_start_pro_trial") return { ...pro, balances: useStore.getState().cloudEntitlement?.balances ?? { daily: 0, sub: 0, topup: 0 } };
     if (command === "cloud_redeem_code") {
       if (w.mode === "error") throw "兑换码无效、已过期或已被使用";
       if (w.mode === "hold") await new Promise((resolve) => { w.release = resolve; });
-      return { already_redeemed: w.mode === "replay", period_end: "2026-10-14T00:00:00Z", credits: w.mode === "new" ? 0 : 1100,
+      if (w.mode === "new") return { already_redeemed: false, period_end: "2026-12-02T00:00:00Z", credits: 800,
+        credits_expires_at: "2026-12-02T00:00:00Z", scheduled_credits: null, credits_scheduled_at: null, entitlement: monthlyPro };
+      if (w.mode === "scheduled" || w.mode === "scheduled-replay") return { already_redeemed: w.mode === "scheduled-replay",
+        period_end: "2027-01-02T00:00:00Z", credits: 0, credits_expires_at: "2027-01-01T00:00:00Z",
+        scheduled_credits: 800, credits_scheduled_at: "2026-12-02T00:00:00Z", entitlement: monthlyPro };
+      return { already_redeemed: w.mode === "replay", period_end: "2026-10-14T00:00:00Z", credits: w.mode === "empty" ? 0 : 1100,
         credits_expires_at: "2026-10-14T00:00:00Z", entitlement: w.mode === "pending" ? null : pro };
     }
     throw new Error(`Unexpected synthetic IPC: ${command}`);

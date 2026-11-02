@@ -2,6 +2,28 @@
 
 本页集中维护自动更新的技术约定、发布操作和部署证据；[PROJECT.md](../PROJECT.md) 只保留项目级摘要及入口。更新代码、构建签名包、发布清单、排查双端差异前先读本页。
 
+## Windows 26.11.202 发布准备（2026-11-02）
+
+经用户确认，完整发布 工业主题与平级首页、连接式素材库／真实目录集合／分身与原件回收、文本 Plate 编辑和音频试听、统一视频浏览与采集、截图历史及共用标注、跨应用拖出与 Pinterest 搜图、画布性能／建卡／文字定位，并纳入 201 已上线赠币文案与回执。SQLite 0050；DeepSeek Cloud 保持未启用，不部署 Edge／Worker／迁移或更改价格与服务开关。源码、测试及文档先同次存档推送，再冻结构建。
+
+完整 TypeScript、Rust 967 passed／28 ignored、12 组桌面 Chromium 和官网网关回归通过。保留中文／English、原 updater 公钥和 UPDATE 登录保留钩子。待完成签名、包内回归和 CDN 完整下载后切通道。候选复制现役 20261102-bcoin-gifts-windows-26.11.201，仅更新 Windows 下载相关五个文件；保留赠币后台、账号／Cloud 网关、Nginx、Mac 清单及旧包。
+
+本机证据 .tmp/release-windows-26.11.202/；真实用户库升级、跨应用原生拖放、Mac 与真实模型质量不计入本轮隔离验收。
+
+## Windows 26.11.201 已发布（2026-11-02）
+
+北京时间 **09:36:15** 完成公网验收。基于公开 26.10.2801 的 **`be4a3f11427034dbe1af1d7a4f01f27935965430`** 冻结构建，只叠加 6 个赠币产品文件、3 个版本文件及 5 个测试／夹具：Plan 显示新注册 200、新订阅／续费每订阅月 800、年付 12 次及到账后 30 天有效；赠送积分分类、即时／未来兑换回执及 Rust 兼容字段同步。**SQLite 保持 0047**，没有夹带当前 dev 的工业主题、连接式素材库、DeepSeek Cloud 等后续增量。Mac ARM 26.10.801／Intel 26.10.1501 保持。
+
+1064 个冻结输入逐一与实际 Git blob／目标补丁核对，14 个目标文件变化，1050 个保持；精确补丁重放后哈希一致。冻结副本补回基线 Comfy manifest 后，Rust 权益 12 项、前端单元 4 项、账号／兑换／设置 3 组 Chromium、完整 TypeScript／Vite 与签名构建通过。首次缺失测试输入的失败日志保留，不计为通过。包内 70 个资源、PE x64／版本、NSIS 中文／English 与 UPDATE 保留登录钩子、原官网网关、新回执字段、正式 bundle 文案通过；独立复核再次验证原公钥签名及篡改拒绝。未执行安装器或生产应用。
+
+安装包 **`Bowerbird_26.11.201_x64-setup.exe`**：**84,934,286 bytes**；SHA-256 **`6d4cd50dba44c6bf4143e3d24e3d16ab51c8cdf1a05e380776d9076f14f30fa0`**。先发布到 TOS／CDN 不可变路径并核对完整下载哈希、Range 206、签名文件及 CDN 包原公钥验签，再切 Windows 更新清单和双首页下载。候选／现役／公网三平台清单、签名、下载配置、旧包、后台、账号与 Cloud 网关鉴权拒绝均通过。
+
+现役官网 **`/opt/bowerbird/website-releases/20261102-bcoin-gifts-windows-26.11.201`**，回滚 **`/opt/bowerbird/website-releases/20261102-bcoin-gifts-admin`**；实际更新 Windows 下载涉及的 5 个文件，后台保持本日已验证内容，80 个其他文件保留原 inode／哈希。环境配置仅改 Windows 下载 URL，账号／Cloud 代理、Nginx、Mac 和旧包保持。回滚脚本为 VPS `/tmp/bowerbird-bcoin-gifts-20261102/rollback-windows.sh`，保留新赠币后台并恢复 2801 更新清单，不自动降级已安装客户端，也不回退赠币账本。
+
+构建与范围证据在 `.tmp/bcoin-gifts-desktop-20261102/`（`source-manifest.json`、`release.patch`／`release-readable.patch`、`input-hashes.json`、`package-verification.json`、`evidence/independent-*-review.json`）；发布证据在 `.tmp/bcoin-gifts-rollout-20261102/`（CDN／签名核对、`site-prepared.json`、候选／现役／公网报告）。这是基线加精确补丁的隔离发布，不声称整个当前工作区都已上线；正式工作区版本文件保持原样，后续发版必须高于 26.11.201。
+
+Cloud 0078／两个接口／后台／真实 Cron 已配套上线，23 项真实隔离赠币检查通过，见 [Cloud 部署](../apps/cloud/DEPLOY.md#2026-11-02-注册及-pro-月度赠币已上线)。真实微信支付仍未开放。用户需要升级 Windows 包才能获得新固定文案；未替用户安装／重启、迁移真实素材库，旧客户端原生升级与 Mac 新界面仍需各自验收。
+
 ## Windows 26.10.2801 已发布（2026-10-28）
 
 2026-10-28 15:29:20（北京时间）完成公网验收。源码 **be4a3f11** 已存档推送 dev 后冻结构建，包含素材库分栏／Tactical 样式与多选、浏览器插件 0.2.0 与采集、连续瀑布流、本机图文对话／历史及受控建卡、常用素材／手动固定、HEIC／HEIF 导入、按区域拖放／粘贴、账号展示与微信回跳，以及 Cloud 生成／签名文件官网网关的 10054 修复。SQLite **0047**；独立复刻 Demo／只读 MCP 仅源码存档，不打入桌面包。Mac ARM 801／Intel 1501 保持，未部署 Edge／Worker、启用 Cloud 视频／价格或真实支付。

@@ -296,7 +296,7 @@ $("copy-codes").addEventListener("click", async () => {
 });
 $("download-codes").addEventListener("click", () => {
   const csvCell = (value) => { let text = String(value); if (/^\s*[=+@-]/.test(text)) text = `'${text}`; return `"${text.replaceAll('"', '""')}"`; };
-  const lines = [["兑换码", "批次", "兑换截止时间", "权益"], ...exportRows.map((r) => [r.code, r.batch_label, date(r.expires_at), "1个月Pro + 1100积分"])];
+  const lines = [["兑换码", "批次", "兑换截止时间", "权益"], ...exportRows.map((r) => [r.code, r.batch_label, date(r.expires_at), Number.isSafeInteger(r.bonus_credits) && r.bonus_credits > 0 ? `1个月Pro + ${r.bonus_credits} Bcoin` : "1个月Pro"])];
   const url = URL.createObjectURL(new Blob(["\uFEFF", lines.map((r) => r.map(csvCell).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" }));
   const link = document.createElement("a"); link.href = url; link.download = `Bowerbird-Pro-${new Date().toISOString().slice(0, 10)}.csv`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 });

@@ -61,6 +61,10 @@ pub struct CodeRedemption {
     pub credits: i32,
     pub credits_expires_at: DateTime<Utc>,
     #[serde(default)]
+    pub scheduled_credits: i32,
+    #[serde(default)]
+    pub credits_scheduled_at: Option<DateTime<Utc>>,
+    #[serde(default)]
     pub entitlement: Option<EntitlementSnapshot>,
 }
 
@@ -457,8 +461,8 @@ fn format_iso_ms(value: DateTime<Utc>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_json, CreditBalance, EntitlementService, EntitlementSnapshot, GenerationService,
-        OfflineState, PromptConfig,
+        canonical_json, CodeRedemption, CreditBalance, EntitlementService, EntitlementSnapshot,
+        GenerationService, OfflineState, PromptConfig,
     };
     use crate::cloud::policy::FeaturePolicy;
     use base64::Engine as _;
@@ -483,6 +487,34 @@ mod tests {
             last_trusted_server_time: now,
             offline_state: None,
             signature_valid: true,
+        }
+    }
+
+    #[test]
+    fn redemption_receipts_preserve_legacy_and_scheduled_gifts_over_ipc() {
+        let mut receipt = serde_json::json!({
+            "already_redeemed": false,
+            "period_end": "2027-01-01T00:00:00Z",
+            "credits": 1100,
+            "credits_expires_at": "2026-12-01T00:00:00Z"
+        });
+        let legacy: CodeRedemption = serde_json::from_value(receipt.clone()).unwrap();
+        assert_eq!(legacy.credits, 1100);
+        assert_eq!(legacy.scheduled_credits, 0);
+        assert!(legacy.credits_scheduled_at.is_none());
+        for (credits, scheduled) in [(800, 0), (0, 800)] {
+            receipt["credits"] = credits.into();
+            receipt["scheduled_credits"] = scheduled.into();
+            receipt["credits_scheduled_at"] = if scheduled > 0 {
+                "2026-12-01T00:00:00Z".into()
+            } else {
+                serde_json::Value::Null
+            };
+            let parsed: CodeRedemption = serde_json::from_value(receipt.clone()).unwrap();
+            let ipc = serde_json::to_value(parsed).unwrap();
+            assert_eq!(ipc["credits"], credits);
+            assert_eq!(ipc["scheduled_credits"], scheduled);
+            assert_eq!(ipc["credits_scheduled_at"], receipt["credits_scheduled_at"]);
         }
     }
 

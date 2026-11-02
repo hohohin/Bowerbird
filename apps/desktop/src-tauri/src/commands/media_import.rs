@@ -162,10 +162,14 @@ mod tests {
         std::fs::write(input.join("ignore.txt"), "text").unwrap();
         assert!(ingest::walk_images(&input).is_empty(), "image generation scans must exclude videos");
         let imported = ingest::ingest_dir(&paths, &db, &input).unwrap();
-        assert_eq!(imported.len(), 1);
-        assert_ne!(imported[0].id, asset.id);
-        assert_eq!(PathBuf::from(imported[0].store_path.as_deref().unwrap()), input.join("same.MP4").canonicalize().unwrap());
-        assert!(db.is_external_asset(&imported[0].id).unwrap());
-        assert_eq!(db.count_assets(None).unwrap(), 2);
+        assert_eq!(imported.len(), 2);
+        let video = imported.iter().find(|item| item.ext.as_deref() == Some("mp4")).unwrap();
+        let text = imported.iter().find(|item| item.ext.as_deref() == Some("txt")).unwrap();
+        assert_ne!(video.id, asset.id);
+        assert_eq!(PathBuf::from(video.store_path.as_deref().unwrap()), input.join("same.MP4").canonicalize().unwrap());
+        assert_eq!(PathBuf::from(text.store_path.as_deref().unwrap()), input.join("ignore.txt").canonicalize().unwrap());
+        assert!(db.is_external_asset(&video.id).unwrap());
+        assert!(db.is_external_asset(&text.id).unwrap());
+        assert_eq!(db.count_assets(None).unwrap(), 3);
     }
 }

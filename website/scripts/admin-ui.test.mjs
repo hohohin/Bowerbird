@@ -12,7 +12,7 @@ try {
   const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1512, height: 1040 } });
   const page = await context.newPage();
   const errors = []; page.on("pageerror", (e) => errors.push(e.message));
-  let denied = false, failIssue = false, issues = 0, exports = 0;
+  let denied = false, failIssue = false, issues = 0, exports = 0, omitExportBonus = false;
   let failUserUpdate = false, userUpdates = 0, lastUpdatedUserId;
   let holdUserList = false, releaseUserList;
   const users = Array.from({ length: 52 }, (_, i) => ({ id: `33333333-3333-4333-8333-${String(i + 1).padStart(12, "0")}`,
@@ -22,13 +22,18 @@ try {
   let batches = [{ id: "11111111-1111-4111-8111-111111111111", label: "九月内测 · 创作者邀请", code_count: 4 }];
   let rows = ["unused", "redeemed", "disabled", "expired"].map((status, i) => ({
     id: `22222222-2222-4222-8222-${String(i + 1).padStart(12, "0")}`, batch_id: batches[0].id, batch_label: batches[0].label,
-    code_suffix: ["F72A803B", "B45C291E", "AD915E73", "820CB663"][i], status, can_reveal: true,
+    code_suffix: ["F72A803B", "B45C291E", "AD915E73", "820CB663"][i], status, can_reveal: true, bonus_credits: 1100,
     created_at: "2026-09-14T00:00:00Z", expires_at: "2026-12-31T15:59:00Z",
     redeemed_by: i === 1 ? "test-recipient" : null, redeemed_email: i === 1 ? "creator@example.test" : null,
     redeemed_at: i === 1 ? "2026-09-14T03:12:00Z" : null,
   }));
   const issuedBatches = new Set();
   const plain = "A1B2C3D4-E5F60718-293A4B5C-6D7E8F90";
+  async function downloadCsv() {
+    const wait = page.waitForEvent("download");
+    await page.getByRole("button", { name: "下载 CSV", exact: true }).click();
+    return readFile(await (await wait).path(), "utf8");
+  }
   await context.addInitScript(() => {
     let listener;
     let current = { access_token: "synthetic-token", user: { id: "admin-user", email: "admin@example.test" } };
@@ -73,7 +78,7 @@ try {
       if (created) {
         issues++; issuedBatches.add(body.batch_id);
         const batch = { id: body.batch_id, label: body.label, code_count: body.count }; batches.unshift(batch);
-        for (let i = 0; i < body.count; i++) rows.unshift({ ...rows[0], id: crypto.randomUUID(), batch_id: batch.id, batch_label: batch.label, code_suffix: "6D7E8F90", status: "unused" });
+        for (let i = 0; i < body.count; i++) rows.unshift({ ...rows[0], id: crypto.randomUUID(), batch_id: batch.id, batch_label: batch.label, code_suffix: "6D7E8F90", status: "unused", bonus_credits: 800 });
       }
       if (failIssue) { failIssue = false; return route.abort("failed"); }
       return route.fulfill({ json: { batch_id: body.batch_id, count: body.count, created } });
@@ -81,7 +86,7 @@ try {
     if (body.action === "reveal" || body.action === "export") {
       exports++;
       const available = rows.filter((r) => r.status === "unused" && (body.code_id ? r.id === body.code_id : r.batch_id === body.batch_id));
-      return route.fulfill({ json: { codes: available.map((r) => ({ id: r.id, code: plain, expires_at: r.expires_at, batch_label: r.batch_label })) } });
+      return route.fulfill({ json: { codes: available.map((r) => ({ id: r.id, code: plain, expires_at: r.expires_at, batch_label: r.batch_label, ...(!omitExportBonus ? { bonus_credits: r.bonus_credits } : {}) })) } });
     }
     if (body.action === "disable") {
       rows.find((r) => r.id === body.code_id).status = "disabled";
@@ -95,12 +100,29 @@ try {
   await page.locator("#code-rows tr").first().waitFor();
   assert.equal(await page.locator("#code-rows tr").count(), 4);
   assert.equal(await page.locator("#export").isDisabled(), true);
+  assert.match(await page.locator(".issue-intro").textContent(), /800 Bcoin/);
+  assert.doesNotMatch(await page.locator(".issue-intro").textContent(), /1100/);
   await mkdir(".tmp/pro-code-admin", { recursive: true });
   await page.screenshot({ path: ".tmp/pro-code-admin/dashboard.png", fullPage: true });
   await page.getByLabel("状态筛选").selectOption("redeemed");
   await page.waitForFunction(() => document.querySelectorAll("#code-rows tr").length === 1);
   assert.equal((await page.locator("#code-rows").textContent()).includes("creator@example.test"), true);
   await page.getByLabel("状态筛选").selectOption("");
+  await page.getByLabel("批次筛选").selectOption(batches[0].id);
+  await page.locator("#export").click();
+  await page.locator("#codes-dialog[open]").waitFor();
+  const legacyCsv = await downloadCsv();
+  assert.match(legacyCsv, /1个月Pro \+ 1100 Bcoin/);
+  assert.doesNotMatch(legacyCsv, /800 Bcoin/);
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  omitExportBonus = true;
+  await page.locator("#export").click();
+  await page.locator("#codes-dialog[open]").waitFor();
+  const unknownCsv = await downloadCsv();
+  assert.match(unknownCsv, /"1个月Pro"/);
+  assert.doesNotMatch(unknownCsv, /800|1100|Bcoin/);
+  await page.getByRole("button", { name: "关闭", exact: true }).click();
+  omitExportBonus = false;
   await page.locator("#batch-label").fill("=内测新批次 <img src=x onerror=alert(1)>");
   await page.locator("#batch-count").fill("2");
   failIssue = true;
@@ -112,12 +134,11 @@ try {
   await page.locator("#codes-dialog[open]").waitFor();
   assert.equal(issues, 1, "lost issue response must retry the same batch ID");
   assert.equal(await page.locator("#codes-output").inputValue(), `${plain}\n${plain}`);
-  const downloadWait = page.waitForEvent("download");
-  await page.getByRole("button", { name: "下载 CSV", exact: true }).click();
-  const download = await downloadWait;
-  const csv = await readFile(await download.path(), "utf8");
+  const csv = await downloadCsv();
   assert.equal(csv.includes("'="), true, "spreadsheet formula prefix is escaped");
   assert.equal(csv.includes(plain), true);
+  assert.match(csv, /1个月Pro \+ 800 Bcoin/);
+  assert.doesNotMatch(csv, /1100/);
   await page.getByRole("button", { name: "关闭", exact: true }).click();
   await page.waitForFunction(() => document.getElementById("codes-output").value === "");
   assert.equal(await page.locator("#codes-output").inputValue(), "");
@@ -236,5 +257,5 @@ try {
   assert.equal(await page.locator("#user-rows tr").count(), 0, "late user response cannot repopulate data after logout");
   assert.equal(await page.locator("#users-console").isHidden(), true);
   assert.equal(exports >= 2, true); assert.deepEqual(errors, []);
-  console.log("PASS: /admin redirect, vouchers, user search/filter/pagination, test access confirmation/cancel, lost response recovery, XSS safety, mobile navigation, revocation and logout clearing");
+  console.log("PASS: /admin redirect, new 800 and legacy 1100 voucher CSVs with missing-field fallback, user search/filter/pagination, test access confirmation/cancel, lost response recovery, XSS safety, mobile navigation, revocation and logout clearing");
 } finally { await browser.close(); await new Promise((resolve) => server.close(resolve)); }

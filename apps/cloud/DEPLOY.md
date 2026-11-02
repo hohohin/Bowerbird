@@ -3,6 +3,40 @@
 > 目标：把 `apps/cloud/` 的 Supabase 迁移 + Edge Functions 推上云端，完成 Auth/积分/算力的真实联调。
 > 前提：你已在 Supabase 控制台拿到 Project URL / publishable key / secret key，并已在 `apps/cloud/.env` 填好方舟 key 与 endpoint id。
 
+## 2026-11-02 注册及 Pro 月度赠币已上线
+
+北京时间 **09:18:31** 完成定向 **0078** 迁移与 pg_cron 1.6.4 安装，**09:19:33** 恢复新下单／发码／兑换；Cloud 新注册 200、新订阅／续期每订阅月 800、年付 12 期、实际到账后 30 天有效已生效。迁移提交为新注册边界，已有账号／订阅／订单快照及已兑换回执不补发；旧零赠币未用码在新规则下兑换安排 800，旧 1100 码保留即时承诺且不叠加。
+
+部署前下载现役候选依赖并备份 6 个被替换函数、账本／商品及触发器，在真实库回滚事务演练通过后上线。`create-checkout` **v30** 只增加赠币快照字段，`code-admin` **v6** 只透传逐码赠币金额；两者 JWT 保持开启，发布后下载源码与候选逐文件一致。`redeem-code v4`、`payment-webhook v30`、其余 Edge／Worker／价格配置保持；**0068／0077 未应用，支付仍 Mock**。切换时临时触发器仅暂停新订单／发码／核销，现已全部撤除。
+
+月度任务 `bowerbird-pro-monthly-bcoin` 由 postgres 每 5 分钟执行 `issue_due_subscription_credit_grants_batch(100)`，并保留权益刷新的到期补发。**09:25:00** 真实定时执行为隔离测试计划到账 800，记录 `succeeded`；未通过手动调用 batch 冒充定时验收。
+
+**09:22:36** 后台两文件上线，现役阶段目录 `/opt/bowerbird/website-releases/20261102-bcoin-gifts-admin`，回滚 `/opt/bowerbird/website-releases/20261028-windows-26.10.2801`。只变新码 800 文案及逐码 CSV 金额；85 个其他文件、网关、配置及三平台更新清单保持，现役和公网哈希通过。配套 Windows 包发布证据以 [桌面自动更新](../../dev-doc/DESKTOP-UPDATES.md) 最新记录为准；旧桌面固定兑换文案不会随 Cloud 更新而改变。
+
+**09:36:15** 配套 **Windows 26.11.201** 已完成 TOS／CDN 哈希、原签名及公网验收。官网现役更新为 `/opt/bowerbird/website-releases/20261102-bcoin-gifts-windows-26.11.201`，网站回滚至上述赠币 admin 目录；Windows 只含 2801 基线加本次赠币增量，Mac 保持。该阶段仅更新 Windows 下载／清单及相同后台内容，账号／Cloud 网关和其他配置保留，完整记录见桌面专项。
+
+**验收**：23 项真实隔离账号检查通过，包含注册、带签名权益、月付／年付／续期、同单／同码／同账号 issuer 并发重放、真实 Cron、旧零码／1100、7 天试用、已预留／消费退款阻断及完整退款。6 个测试 Auth 全部删除，账本审计保留、未用测试券停用，未发送真实邮件或调用模型。该验收使用 Mock 订单与原子 RPC，不代表微信收款回调链路验收。独立只读复核确认原 225 个钱包、346 个 lot 的余额与有效期、18 笔订单、225 个订阅及 9 个旧回执逐字段保持；owner／ACL／注册触发器及其他函数版本保持。
+
+证据在 `.tmp/bcoin-gifts-rollout-20261102/`：`database-deployed.json`、`edges-verified.json`、`smoke-latest.json`、`independent-review.json`、`admin-published.json`、`rollback/` 和原函数／财务快照。官网脚本与报告在 VPS `/tmp/bowerbird-bcoin-gifts-20261102/`。财务快照仅存私有本机证据，不入库。Cloud 回退按下方前向兼容约定，保留已发赠币、原回执及应发计划；后台不能长期退回固定 1100 的旧文案。
+
+## 2026-11-02 注册及 Pro 月度赠币（源码，未部署）
+
+> 以下为本轮发布前准备记录；实际结果以上方已上线记录为准。
+
+本轮为可审核源码与本地验证，未应用生产迁移、启用定时任务、发放真实赠币或发布桌面。规则启用后新注册 200，新订阅／续期及兑换每订阅月 800，年付 12 期，实际到账后 30 天有效；旧账号／已有订阅不回填。具体兼容及退款约定见 [定价方案](../../dev-doc/Bowerbird定价方案v2-订阅积分制.md#2026-11-02-注册及每订阅月赠币源码未部署)。
+
+后续发布批次按下列范围准备并核验：
+
+1. 保存现役初始化、入账、退款、兑换、余额刷新及管理员读码函数，商品默认值、相关账本与 Edge／后台源码；核验 0060、0070、0072 已应用。只定向应用 **0078** 并记录迁移历史，**不运行全量 db push，不夹带 0068／0077**。迁移不扫描旧用户、不改变已有余额和兑换回执。
+2. 配套 `create-checkout` 冻结 `monthly_bonus_credits`／`bonus_valid_days`，`code-admin` 透传每码金额，均保留 JWT 和 Mock 开关；`redeem-code` 原接口可透传新回执字段，无需改支付或 Worker。切换期间暂停新下单／兑换入口，避免旧 checkout 在新规则启用后创建缺少赠币承诺的快照。迁移提交是注册触发器的新旧边界；已有 pending 订单仍按其原快照执行。
+3. 在数据库所有者权限下启用 Supabase Cron，再执行 [bcoin-gifts-cron.sql](scripts/bcoin-gifts-cron.sql)。任务 `bowerbird-pro-monthly-bcoin` 每 5 分钟调用 `issue_due_subscription_credit_grants_batch(100)`；同名重跑更新任务，不新增重复任务。核对 `cron.job` 和实际 `cron.job_run_details` 成功记录、到期计划积压，而不只检查任务存在。安装与命名行为依据 [Supabase Cron 安装](https://supabase.com/docs/guides/cron/install)、[调度文档](https://supabase.com/docs/guides/cron/quickstart)。本地 PGlite 不包含 pg_cron，真实调度须上线隔离账号验收。
+4. 发布管理员 `admin/index.html`／`admin.js`，以及包含新 Plan／赠送积分／兑换安排展示的桌面版本。**旧公开桌面会忽略未来安排字段，把即时 0 误写成不含 Bcoin，把即时 800 误写成旧码承诺**；不能把仅部署 SQL 当作完整界面上线。新版本号在实际构建发布时记录，旧包用户需升级，刷新权益只更新余额、不更新固定文案。
+5. 仅用隔离新账号及测试码验证注册 200／30 天、首月 800、提前续期不提前发、回执重放、旧零码与 1100 兼容、试用不赠 800；用隔离已到期计划验证定时与刷新均不重复发放。对比老账号无补发、匿名／普通用户无法调用发放 RPC。测试账号清理后保留财务记录。支付继续 Mock，真实渠道与真实收款不属于这次验收。
+
+回退采用兼容前向修复：保留 0078 表列、已发 lot／流水、原回执与未履约的月份计划，不删除或重算资金。若需紧急暂停定时任务，按名称 `cron.unschedule('bowerbird-pro-monthly-bcoin')`，不要删除整个 pg_cron 扩展；注意请求兜底仍会发放，暂停全部赠币还需在维护窗口定向修复 issuer／注册触发器并暂缓新承诺。**不能简单恢复 0070 整份函数或只回滚 checkout**，否则会漏发已承诺月份或造成新订单无赠币。修复后恢复定时并按实际到账日给足 30 天。
+
+隔离验证：新增赠币 PGlite 16 组先红后绿，原 Bcoin 历史回归仍通过；Deno 兑换／签名／管理员协议 13 项及三个入口类型检查、Rust 回执兼容测试、桌面三组及后台 Chromium 回归通过。真实多连接并发、生产 pg_cron 与公开包原生升级需在发布时验收，本轮不将其计为已完成。
+
 ## 2026-10-25 后台昵称已上线／微信收款只读核验
 
 仅定向应用 **0076** 并登记迁移历史，`admin_list_users` 新增昵称返回及搜索，鉴权与目标 UUID 保持；0068 未应用。官网在 2401 现役基础上只替换 admin 两个静态文件，现役 `20261025-admin-nickname`，回滚 `20261024-windows-26.10.2401`；所有 Edge（含 `code-admin` v5）、Worker、价格、环境及桌面更新通道未变。本地回归、公网文件、真实同名临时账号 API／浏览器操作及会员积分不变验证通过，临时账号已全部清理。实现、证据和回退见 [后台昵称记录](PRO-REDEMPTION.md#2026-10-25-昵称展示与搜索已上线)。

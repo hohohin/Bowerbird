@@ -34,6 +34,9 @@ try {
   await page.getByRole('button', { name: '账号管理', exact: true }).click();
   const panel = page.getByRole('region', { name: '积分明细', exact: true });
   await page.getByText('暂无积分记录', { exact: true }).waitFor();
+  await panel.getByText('赠送积分', { exact: true }).waitFor();
+  await panel.getByText('历史每日赠送', { exact: true }).waitFor();
+  assert.equal(await panel.getByText('历史赠送积分', { exact: true }).count(), 0);
   assert.doesNotMatch(await page.getByRole('dialog').innerText(), /每码可兑换/);
   await page.getByRole('region', { name: 'Plan', exact: true }).waitFor();
   await page.getByRole('region', { name: 'Bcoin 充值', exact: true }).waitFor();
@@ -44,6 +47,7 @@ try {
   await panel.getByText('余额不变', { exact: true }).waitFor();
   await panel.getByText('多余预留返还', { exact: true }).waitFor();
   await panel.getByText('退款回收积分', { exact: true }).waitFor();
+  await panel.getByText('有有效期的积分到期后扣除。', { exact: true }).waitFor();
   assert.doesNotMatch(await panel.innerText(), /hold|confirm|rollback|image_hd|future_kind|future_service/);
   await panel.getByText('如何看懂积分记录', { exact: true }).click();
   await panel.getByText(/不会再扣一次/).waitFor();

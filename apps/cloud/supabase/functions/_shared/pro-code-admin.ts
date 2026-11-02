@@ -125,8 +125,9 @@ export async function handleCodeAdmin(request: Request, authenticate: (request: 
         const key = await codeEncryptionKey();
         const rows = await rpc("admin_read_pro_codes", { p_batch_id: body.action === "export" ? adminUuid(body.batch_id) : null,
           p_code_id: body.action === "reveal" ? adminUuid(body.code_id) : null });
-        const codes = await Promise.all((rows as { id: string; ciphertext: string; expires_at: string; batch_label: string }[]).map(async (row) => ({
+        const codes = await Promise.all((rows as { id: string; ciphertext: string; expires_at: string; batch_label: string; bonus_credits?: number }[]).map(async (row) => ({
           id: row.id, code: await decryptCode(key, row.id, row.ciphertext), expires_at: row.expires_at, batch_label: row.batch_label,
+          bonus_credits: row.bonus_credits,
         })));
         result = { codes };
         break;

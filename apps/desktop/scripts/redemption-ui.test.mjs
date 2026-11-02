@@ -31,6 +31,9 @@ try {
   assert.equal(await page.evaluate(() => window.calls.filter((c) => c.command === "cloud_redeem_code").length), calls);
   await page.evaluate(() => { window.mode = "success"; window.release(); });
   await page.getByRole("status").filter({ hasText: "兑换成功！" }).waitFor();
+  const receipt = page.locator('#pro-redemption-result');
+  assert.match(await receipt.innerText(), /到账 1100 Bcoin/);
+  assert.doesNotMatch(await receipt.innerText(), /旧码承诺|800 Bcoin/);
   assert.equal(await input.inputValue(), "");
   assert.deepEqual(await page.evaluate(() => ({ tier: window.store.getState().cloudEntitlement.tier,
     credits: window.store.getState().cloudEntitlement.balances.sub,
@@ -39,6 +42,7 @@ try {
   await page.evaluate(() => { window.mode = "replay"; });
   await input.fill("01234567-89abcdef-01234567-89abcdef"); await input.press("Enter");
   await page.getByRole("status").filter({ hasText: "未重复发放" }).waitFor();
+  assert.match(await receipt.innerText(), /原到账 1100 Bcoin/);
   await page.evaluate(() => { window.mode = "pending"; });
   await input.fill("01234567-89abcdef-01234567-89abcdef"); await button.click();
   await page.getByRole("status").filter({ hasText: "权益暂未同步" }).waitFor();
@@ -46,16 +50,38 @@ try {
   await page.waitForFunction(() => window.store.getState().cloudBusy === false);
   await page.evaluate(() => { window.mode = "new"; });
   await input.fill("new-pro-code"); await button.click();
-  await page.getByRole("status").filter({ hasText: "本兑换码不含 Bcoin" }).waitFor();
-  await page.evaluate(() => window.store.setState({ cloudEntitlement: window.free }));
+  await receipt.filter({ hasText: "到账 800 Bcoin" }).waitFor();
+  assert.match(await receipt.innerText(), /有效期至 2026\/12\/2/);
+  assert.doesNotMatch(await receipt.innerText(), /旧码承诺|不含 Bcoin|已安排/);
+  assert.deepEqual(await page.evaluate(() => window.store.getState().cloudEntitlement.balances), { daily: 0, sub: 1000, topup: 400 });
+
+  const beforeScheduled = await page.evaluate(() => window.store.getState().cloudEntitlement.balances);
+  await page.evaluate(() => { window.mode = "scheduled"; });
+  await input.fill("future-pro-code"); await button.click();
+  await receipt.filter({ hasText: "已安排 800 Bcoin" }).waitFor();
+  assert.match(await receipt.innerText(), /于 2026\/12\/2 到账，到账后 30 天有效/);
+  assert.doesNotMatch(await receipt.innerText(), /不含 Bcoin|暂无 Bcoin|到账 800 Bcoin/);
+  assert.deepEqual(await page.evaluate(() => window.store.getState().cloudEntitlement.balances), beforeScheduled);
+  await page.evaluate(() => { window.mode = "scheduled-replay"; });
+  await input.fill("future-pro-code"); await button.click();
+  await receipt.filter({ hasText: "原安排 800 Bcoin" }).waitFor();
+  assert.match(await receipt.innerText(), /未重复发放/);
+  assert.deepEqual(await page.evaluate(() => window.store.getState().cloudEntitlement.balances), beforeScheduled);
+
+  await page.evaluate(() => { window.mode = "empty"; });
+  await input.fill("legacy-no-bonus-code"); await button.click();
+  await receipt.filter({ hasText: "本次暂无 Bcoin 到账" }).waitFor();
+  assert.doesNotMatch(await receipt.innerText(), /不含 Bcoin|已安排/);
+  await page.evaluate(() => window.store.setState({ cloudEntitlement: { ...window.free, balances: { daily: 0, sub: 200, topup: 400 } } }));
+  const beforeTrial = await page.evaluate(() => window.store.getState().cloudEntitlement.balances);
   await page.getByRole("button", { name: "领取一次 7 天 Pro 功能体验" }).click();
   await page.getByRole("status").filter({ hasText: "到期不会自动扣款" }).waitFor();
-  assert.deepEqual(await page.evaluate(() => window.store.getState().cloudEntitlement.balances), { daily: 0, sub: 0, topup: 0 });
+  assert.deepEqual(await page.evaluate(() => window.store.getState().cloudEntitlement.balances), beforeTrial, 'the feature trial neither grants 800 nor clears registration/purchased credits');
   await mkdir(".tmp", { recursive: true });
   await page.screenshot({ path: ".tmp/redemption-settings.png" });
   await page.evaluate(() => window.store.setState({ cloudAuth: { ...window.store.getState().cloudAuth, logged_in: false } }));
   await input.waitFor({ state: "hidden" });
   await assert.rejects(page.evaluate(() => window.store.getState().redeemCloudCode("unused")), /请先登录/);
   assert.deepEqual(errors, []);
-  console.log("PASS: settings UI, validation, failure retention, double-submit guard, Pro/balance/provider refresh, replay, pending sync and login gate");
+  console.log("PASS: redemption validation, double-submit guard, legacy 1100, immediate 800, scheduled 800 and replay, zero legacy receipts, trial balance preservation, pending sync and login gate");
 } finally { await browser.close(); await server.close(); }

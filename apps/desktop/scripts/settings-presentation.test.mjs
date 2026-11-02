@@ -11,6 +11,7 @@ test('reserved credits, settlement and refunds are never presented as double cha
   assert.equal(creditTransactionView(tx('rollback', 20)).title, '积分退回');
   assert.equal(creditTransactionView(tx('refund', -100)).title, '退款回收积分');
   assert.equal(creditTransactionView(tx('refund', -100)).amount, '−100 Bcoin');
+  assert.equal(creditTransactionView(tx('expire', -200)).description, '有有效期的积分到期后扣除。');
 });
 test('known services and agent status use Chinese; unknown values never leak machine labels', () => {
   assert.equal(creditTransactionView(tx('hold', -20, 'image_layer_decompose')).usage, '图片分层');

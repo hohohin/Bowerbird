@@ -2,6 +2,22 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## Windows 26.11.202 发布准备（2026-11-02）
+
+经用户确认，完整发布 工业主题与平级首页、连接式素材库／真实目录集合／分身与原件回收、文本 Plate 编辑和音频试听、统一视频浏览与采集、截图历史及共用标注、跨应用拖出与 Pinterest 搜图、画布性能／建卡／文字定位，并纳入 201 已上线赠币文案与回执。SQLite 0050；DeepSeek Cloud 保持未启用，不部署 Edge／Worker／迁移或更改价格与服务开关。源码、测试及文档先同次存档推送，再冻结构建。
+
+完整 TypeScript、Rust 967 passed／28 ignored、12 组桌面 Chromium 和官网网关回归通过。保留中文／English、原 updater 公钥和 UPDATE 登录保留钩子。待完成签名、包内回归和 CDN 完整下载后切通道。候选复制现役 20261102-bcoin-gifts-windows-26.11.201，仅更新 Windows 下载相关五个文件；保留赠币后台、账号／Cloud 网关、Nginx、Mac 清单及旧包。
+
+本机证据 .tmp/release-windows-26.11.202/；真实用户库升级、跨应用原生拖放、Mac 与真实模型质量不计入本轮隔离验收。
+
+## Windows 26.11.201 已发布（2026-11-02）
+
+09:36:15（北京时间）公网验收通过。以公开 2801 的 `be4a3f11` 为基线，仅叠加本次赠币 Plan／积分明细／兑换即时与未来安排、原生回执兼容及版本／测试，SQLite 保持 **0047**。Cloud 注册 200／Pro 每订阅月 800 已配套上线，旧用户不补发，真实支付仍 Mock；没有发布当前 dev 的其他后续功能。
+
+1064 冻结输入、精确补丁重放、Rust 权益 12 项、3 组 UI、TypeScript／Vite／签名构建、70 包资源、原公钥验签与篡改拒绝通过。安装包 `Bowerbird_26.11.201_x64-setup.exe`：84,934,286 bytes，SHA-256 `6d4cd50dba44c6bf4143e3d24e3d16ab51c8cdf1a05e380776d9076f14f30fa0`。TOS／CDN 完整下载与 Range 核验后，官网及 Windows 更新清单已切换；Mac 保持。
+
+本轮隔离产物在 `.tmp/bcoin-gifts-desktop-20261102/artifacts/`，没有覆盖正式工作区版本文件或替用户安装／重启。后续 Windows 发版需使用高于 26.11.201 的版本。完整现役／回滚、来源及未验收边界见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md#windows-2611201-已发布2026-11-02)。
+
 ## Windows 26.10.2801 已发布（2026-10-28）
 
 2026-10-28 15:29:20（北京时间）完成公网验收。源码 **be4a3f11** 已存档推送 dev 后冻结构建，包含素材库分栏／Tactical 样式与多选、浏览器插件 0.2.0 与采集、连续瀑布流、本机图文对话／历史及受控建卡、常用素材／手动固定、HEIC／HEIF 导入、按区域拖放／粘贴、账号展示与微信回跳，以及 Cloud 生成／签名文件官网网关的 10054 修复。SQLite **0047**；独立复刻 Demo／只读 MCP 仅源码存档，不打入桌面包。Mac ARM 801／Intel 1501 保持，未部署 Edge／Worker、启用 Cloud 视频／价格或真实支付。

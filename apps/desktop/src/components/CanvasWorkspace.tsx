@@ -601,6 +601,12 @@ export function CanvasWorkspace({
   const stageRef = useRef<HTMLDivElement>(null);
   const planeRef = useRef<HTMLDivElement>(null);
   const zoomLabelRef = useRef<HTMLSpanElement>(null);
+  const centeredEditorRef = useRef<HTMLElement | null>(null);
+  const editorCenterTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => {
+    clearTimeout(editorCenterTimerRef.current);
+    centeredEditorRef.current = null;
+  }, [projectId, viewMode]);
   const cameraSettleRef = useRef<ReturnType<typeof setTimeout>>();
   const snapSizeObserverRef = useRef<ResizeObserver | null>(null);
   const cellHitCacheRef = useRef<ReturnType<typeof createCanvasCellHitCache> | null>(null);
@@ -3687,6 +3693,57 @@ export function CanvasWorkspace({
     scheduleCamera();
   }
 
+  function centerCanvasEditor(event: React.MouseEvent<HTMLDivElement>) {
+    const stage = stageRef.current;
+    if (!stage || event.button !== 0 || event.defaultPrevented || spacePressedRef.current
+      || drawingTool !== "select" || loadingRef.current || useStore.getState().projectRoutePending) return;
+    const target = event.target;
+    const editor = target instanceof HTMLElement ? target.closest<HTMLElement>('input,textarea,[contenteditable]') : null;
+    if (!editor || !stage.contains(editor) || !editor.closest('[data-canvas-node],[data-card-name]')
+      || editor.closest('[role="toolbar"]') || editor === centeredEditorRef.current
+      || !editor.contains(document.activeElement)) return;
+    if (editor instanceof HTMLInputElement || editor instanceof HTMLTextAreaElement) {
+      if (editor.readOnly || editor.matches(':disabled')
+        || editor instanceof HTMLInputElement && !["text", "search", "url", "tel", "email"].includes(editor.type)) return;
+    } else if (!editor.isContentEditable) return;
+
+    clearTimeout(editorCenterTimerRef.current);
+    // Let double/triple clicks finish selecting text before moving their target.
+    editorCenterTimerRef.current = setTimeout(() => {
+      if (!stage.contains(editor) || !editor.contains(document.activeElement)
+        || loadingRef.current || useStore.getState().projectRoutePending) return;
+      cameraFrame.flush();
+      const bounds = stage.getBoundingClientRect();
+      const field = editor.getBoundingClientRect();
+      if (!field.width || !field.height) return;
+      // These panels overlay the stage rather than reducing its layout size.
+      let left = bounds.left + 64, right = bounds.right - 24, bottom = bounds.bottom - 24;
+      const top = bounds.top + 72;
+      const library = useStore.getState().canvasLibraryOpen && sourcePanelRef.current?.getBoundingClientRect();
+      if (library && library.right > bounds.left && library.left < bounds.right) left = Math.max(left, library.right + 16);
+      const inspector = boardShellRef.current?.querySelector('.project-inspector-shell:not(.is-editing)')?.getBoundingClientRect();
+      if (inspector && inspector.width > 0) right = Math.min(right, inspector.left - 16);
+      const composer = boardShellRef.current?.querySelector('.canvas-composer-host')?.getBoundingClientRect();
+      if (composer && composer.height > 0) bottom = Math.min(bottom, composer.top - 16);
+      if (right <= left || bottom <= top) return;
+      const currentZoom = zoomRef.current;
+      const center = {
+        x: (field.left + field.width / 2 - bounds.left - panRef.current.x) / currentZoom,
+        y: (field.top + field.height / 2 - bounds.top - panRef.current.y) / currentZoom,
+      };
+      const nextZoom = clampCanvasZoom(Math.max(currentZoom, Math.min(1.2,
+        (right - left) * currentZoom / field.width, (bottom - top) * currentZoom / field.height)));
+      zoomRef.current = nextZoom;
+      panRef.current = {
+        x: (left + right) / 2 - bounds.left - center.x * nextZoom,
+        y: (top + bottom) / 2 - bounds.top - center.y * nextZoom,
+      };
+      centeredEditorRef.current = editor;
+      markViewDirty(false);
+      settleCamera();
+    }, 500);
+  }
+
   function onCanvasWheel(event: WheelEvent<HTMLDivElement>) {
     event.preventDefault();
     if (event.ctrlKey || event.metaKey) {
@@ -4787,6 +4844,7 @@ export function CanvasWorkspace({
             backgroundSize: `${72 * zoom}px ${72 * zoom}px`,
           }}
           onPointerDownCapture={event => {
+            clearTimeout(editorCenterTimerRef.current);
             cameraFrame.flush();
             if (event.button === 0 && !(event.target as HTMLElement).closest('button,input,textarea,select,[contenteditable="true"]')) {
               lastImportPointRef.current = { projectId: activeCanvasRef.current.id, x: event.clientX, y: event.clientY };
@@ -4794,6 +4852,12 @@ export function CanvasWorkspace({
             beginDrawing(event);
           }}
           onPointerDown={beginPan}
+          onClickCapture={centerCanvasEditor}
+          onBlurCapture={event => {
+            clearTimeout(editorCenterTimerRef.current);
+            if (centeredEditorRef.current?.contains(event.target as Node)) centeredEditorRef.current = null;
+          }}
+          onWheelCapture={() => clearTimeout(editorCenterTimerRef.current)}
           onKeyDown={(event) => {
             // Mac's backward Delete reports Backspace; also support forward Delete keyboards.
             const deleteKey = event.key === "Delete" && !event.metaKey;
