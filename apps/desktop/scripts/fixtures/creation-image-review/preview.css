@@ -1,0 +1,37 @@
+html, body, #root { width: 100%; height: 100%; margin: 0; }
+body { overflow: hidden; }
+.image-review-page { position: relative; width: 100%; height: 100%; color: var(--bb-ink); background: var(--bb-bg); }
+.image-review-topbar { position: fixed; z-index: 100; left: 24px; right: 24px; top: 13px; height: 28px; display: flex; align-items: center; justify-content: space-between; }
+.image-review-badge { color: var(--bb-muted); font-size: 11px; letter-spacing: .05em; }
+.image-review-topbar nav { display: flex; gap: 20px; }
+.image-review-topbar button { display: inline-flex; align-items: center; gap: 7px; color: var(--bb-ink); font-size: 12px; min-height: 28px; }
+.image-review-topbar button:hover { color: var(--bb-blue); }
+.image-review-topbar button:focus-visible, .image-review-card:focus-visible, .image-review-card button:focus-visible { outline: 1px solid var(--bb-blue); outline-offset: 4px; }
+.image-review-canvas { position: absolute; inset: 50px 0 0; background-image: var(--industrial-cross-pattern); }
+.image-review-canvas-title { position: absolute; top: 26px; left: 36px; display: flex; align-items: center; gap: 10px; font-size: 13px; }
+.image-review-canvas-title > span, .image-review-composer-head > span { width: 4px; height: 4px; display: inline-block; background: var(--bb-blue); }
+.image-review-cards { height: calc(100% - 180px); display: flex; justify-content: center; align-items: center; gap: clamp(35px, 8vw, 120px); padding-top: 25px; }
+.image-review-card { width: min(240px, 26vw); background: var(--bb-surface); border: 1px solid var(--bb-line); cursor: zoom-in; }
+.image-review-card:nth-child(2) { width: min(300px, 30vw); }
+.image-review-card-name { display: block; font-size: 11px; padding: 10px 12px; color: var(--bb-muted); }
+.image-review-card-copy { font-size: 12px; line-height: 1.7; margin: 0; padding: 12px; }
+.image-review-card > button { display: block; width: 100%; position: relative; background: var(--bb-surface); cursor: zoom-in; border: 0; padding: 0; }
+.image-review-card img { display: block; width: 100%; max-height: 45vh; object-fit: contain; }
+.image-review-number { position: absolute; right: 7px; bottom: 7px; padding: 2px 5px; background: rgb(0 0 0 / .65); color: #fff; font: 10px ui-monospace, monospace; }
+.image-review-gesture { position: absolute; left: 36px; bottom: 27px; font-size: 11px; color: var(--bb-muted); }
+.image-review-composer { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); width: min(760px, calc(100% - 80px)); padding: 12px 18px; border: 1px solid var(--bb-line); background: var(--bb-surface); }
+.image-review-composer-head { display: flex; align-items: center; gap: 8px; color: var(--bb-muted); font-size: 11px; margin-bottom: 12px; }
+.image-review-composer textarea { display: block; resize: none; width: calc(100% - 36px); height: 48px; padding: 0; background: transparent; color: var(--bb-ink); font-family: inherit; font-size: 13px; line-height: 1.7; outline: none; }
+.image-review-composer textarea:focus-visible { box-shadow: 0 1px var(--bb-blue); }
+.image-review-send { position: absolute; right: 14px; bottom: 18px; width: 26px; height: 26px; display: grid; place-items: center; color: var(--bb-muted); opacity: .5; }
+.image-review-references { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.image-review-reference { display: flex; align-items: center; gap: 7px; border: 1px solid var(--bb-line); padding: 3px 6px 3px 3px; font-size: 11px; animation: review-reference-enter 180ms ease-out; }
+.image-review-reference img { width: 26px; height: 26px; object-fit: cover; }
+.image-review-reference button { color: var(--bb-muted); }
+@keyframes review-reference-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 1100px) { .image-review-gesture { left: auto; right: 24px; bottom: 160px; } }
+@media (max-height: 700px) { .image-review-card img { max-height: 45vh; } }
+@media (prefers-reduced-motion: reduce) { .image-review-reference { animation: none; } }
+
+/* The review toolbar remains available above the shared production preview. */
+.creation-image-preview { top: 50px; z-index: 50; }

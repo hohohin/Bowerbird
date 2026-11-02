@@ -1,5 +1,7 @@
 import { userErrorMessage } from "../lib/userError";
 import { isTextAsset } from "../lib/textMedia";
+import { isAudioAsset } from "../lib/audioMedia";
+import { CreationImagePreview } from "./CreationImagePreview";
 import { useImeGuard } from "../lib/useImeGuard";
 import { useLocalFileMode } from "../lib/localFileMode";
 import type { LibrarySource } from "../lib/localFileMode";
@@ -580,6 +582,14 @@ export function CanvasWorkspace({
   const activeGenerationJob = activeJobId ? genJobs[activeJobId] ?? null : null;
   const activeAgentRun = activeCloudAgentRunId ? cloudAgentRuns[activeCloudAgentRunId] ?? null : null;
   const snapshotPrompt = !activeGenerationJob && !activeAgentRun && genPanelOpen
+  const [creationImagePreview, setCreationImagePreview] = useState<{ asset: Asset; jobId?: string } | null>(null);
+  const creationImageClickRef = useRef<ReturnType<typeof setTimeout>>();
+  const creationImagePressRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  function cancelCreationImageClick() { clearTimeout(creationImageClickRef.current); }
+  useEffect(() => {
+    setCreationImagePreview(null);
+    return cancelCreationImageClick;
+  }, [projectId, boardOpen, genEditing, viewMode]);
     ? graphNodes.find(node => node.id === snapshotPromptId && node.hiddenAt == null) ?? null : null;
   useEffect(() => {
     if (!genPanelOpen || activeJobId || activeCloudAgentRunId) setSnapshotPromptId(null);
@@ -3200,7 +3210,7 @@ export function CanvasWorkspace({
     return asset;
   }
 
-  function activateCanvasMaterial(node: CanvasNode, assetAnchor?: HTMLElement) {
+  function activateCanvasMaterial(node: CanvasNode) {
     if (node.kind === "folder") {
       setFolderExpanded(node.id, true);
       return;
@@ -3211,23 +3221,7 @@ export function CanvasWorkspace({
     }
     const state = useStore.getState();
     if (canvasPrimaryMaterialAction(state.boardOpen, !!state.genEditing) === "compose") {
-      const assetIds = [node.asset]
-        .flatMap((asset) => asset.assetId ? [{ assetId: asset.assetId, canvasNodeId: asset.id }] : []);
-      if (assetIds.length === 1 && state.promptedAssets.some(
-        (asset) => asset.id === assetIds[0].assetId && asset.sections && asset.sections.length > 0,
-      )) {
-        const anchor = assetAnchor ?? Array.from(stageRef.current?.querySelectorAll<HTMLElement>("[data-canvas-node-id]") ?? [])
-          .find((element) => element.dataset.canvasNodeId === node.id);
-        if (anchor) {
-          window.dispatchEvent(new CustomEvent("bowerbird://board-asset-peek", {
-            detail: { assetId: assetIds[0].assetId, anchor },
-          }));
-        }
-      } else {
-        for (const asset of assetIds) {
-          window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: asset }));
-        }
-      }
+      // Creation image clicks are arbitrated once at the workspace boundary.
       return;
     }
 
@@ -4676,13 +4670,14 @@ export function CanvasWorkspace({
         if (event.button === 0 && !isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) captureFrequentMaterial(event);
       }}
       onClickCapture={event => {
-        if (event.button !== 0 || spacePressedRef.current || drawingTool === "pan") return;
+        if (event.button !== 0) return;
+        if (spacePressedRef.current || drawingTool === "pan") { captureCreationImage(event); return; }
         const material = captureFrequentMaterial(event);
         if (material && event.detail < 2) void pinFrequentMaterial(material);
       }}
-      onDoubleClickCapture={captureFrequentMaterial}
-      onDragStartCapture={captureFrequentMaterial}
-      onContextMenuCapture={captureFrequentMaterial}
+      onDoubleClickCapture={event => { if (!captureFrequentMaterial(event)) captureCreationImage(event, true); }}
+      onDragStartCapture={event => { cancelCreationImageClick(); captureFrequentMaterial(event); }}
+      onContextMenuCapture={event => { cancelCreationImageClick(); captureFrequentMaterial(event); }}
       onKeyDownCapture={event => {
         if (!["Enter", " ", "Delete", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
         const material = captureFrequentMaterial(event);
@@ -4713,6 +4708,63 @@ export function CanvasWorkspace({
         <div><strong>正在添加常用素材</strong><span>点击素材库或画板中的素材，可连续添加</span></div>
         <button type="button" onClick={() => setFrequentPicking(false)}>完成添加</button>
       </div>}
+  function creationImageTarget(target: EventTarget | null, double = false) {
+    const state = useStore.getState();
+    if (!(state.boardOpen || state.genEditing) || frequentPickingRef.current || loadingRef.current
+      || state.projectRoutePending
+      || !(target instanceof Element) || !workspaceRef.current?.contains(target)) return null;
+    const media = target.closest<HTMLElement>('[data-conversation-image],[data-asset-id],[data-frequent-asset-id],[data-creation-conversation]');
+    if (double && media?.hasAttribute('data-creation-conversation')) return null;
+    if (!media || media.closest('[data-creation-pick-disabled="true"],[inert],[aria-disabled="true"]')
+      || media.matches(':disabled') || media.closest('.connected-media')?.querySelector('.connected-missing')) return null;
+    const control = target.closest('button,input,textarea,select,a,[contenteditable="true"],[role="combobox"]');
+    if (control && control !== media) return null;
+    const onCanvas = !!stageRef.current?.contains(media);
+    if (onCanvas && (spacePressedRef.current || drawingTool !== "select")) return null;
+    if (!onCanvas && (state.mode === "manage" || state.collectionAddTargetId)) return null;
+    const nodeId = media.closest<HTMLElement>('[data-canvas-node-id]')?.dataset.canvasNodeId;
+    const node = nodesRef.current.find(item => item.id === nodeId);
+    const assetId = media.dataset.conversationImage ?? media.dataset.assetId ?? media.dataset.frequentAssetId;
+    const material = node?.kind === "asset" ? node.asset : node?.kind === "folder"
+      ? node.assets.find(item => media.dataset.canvasFolderAssetId ? item.id === media.dataset.canvasFolderAssetId : item.assetId === assetId)
+      : nodeId ? selectedConversationImage(nodeId, conversationImages(nodeId)) : undefined;
+    // Content cells and workflow ports retain their own editing/connection gestures.
+    if (onCanvas && !material) return null;
+    const asset = assetByIdRef.current.get(assetId ?? material?.assetId ?? "") ?? (material ? {
+      id: material.assetId ?? material.id, name: material.name, store_path: material.storePath,
+      thumb_path: material.thumbPath, width: material.width, height: material.height,
+    } : assetId && media.dataset.filePath ? { id: assetId, name: media.getAttribute('aria-label') ?? "图片", store_path: media.dataset.filePath } : null);
+    if (!asset || isVideoPath(asset.store_path) || isAudioAsset(asset) || isTextAsset(asset)) return null;
+    return { asset, onCanvas, canvasNodeId: onCanvas ? material?.id : undefined };
+  }
+
+  function previewCreationImage(asset: Asset) {
+    const job = Object.values(useStore.getState().genJobs).find(item => item.turns.some(turn =>
+      !!asset.store_path && turn.images.includes(asset.store_path)));
+    setCreationImagePreview({ asset, jobId: job?.id });
+  }
+
+  function captureCreationImage(event: React.MouseEvent<HTMLDivElement>, double = false) {
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+    const image = creationImageTarget(event.target, double);
+    if (!image) return;
+    event.preventDefault(); event.stopPropagation();
+    cancelCreationImageClick(); cancelConversationImageClick();
+    if (creationImagePressRef.current?.moved || image.onCanvas && suppressNodeClickRef.current) return;
+    if (double) {
+      window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, {
+        detail: image.canvasNodeId ? { assetId: image.asset.id, canvasNodeId: image.canvasNodeId } : image.asset.id,
+      }));
+    } else if (event.detail === 0) previewCreationImage(image.asset);
+    else if (event.detail === 1) {
+      const project = activeCanvasRef.current.id;
+      creationImageClickRef.current = setTimeout(() => {
+        const state = useStore.getState();
+        if (state.activeProjectId === project && !state.projectRoutePending && (state.boardOpen || state.genEditing)) previewCreationImage(image.asset);
+      }, 500);
+    }
+  }
+
 
       <section ref={boardShellRef} className={`canvas-board-shell${(selectedChatId || scopedInspectorOpen && !inspectorEditing || workflowAgentDetail?.projectId === projectId && !loading && !genPanelOpen) ? " has-project-inspector" : ""}`}>
         <button
@@ -4720,17 +4772,29 @@ export function CanvasWorkspace({
           className={`canvas-source-toggle ${sourceCollapsed ? "canvas-source-expand" : "canvas-source-collapse"}`}
           aria-label={sourceCollapsed ? "展开画板素材库" : "收起画板素材库"}
           title={sourceCollapsed ? "展开素材库" : "收起素材库"}
+        cancelCreationImageClick();
+        creationImagePressRef.current = { x: event.clientX, y: event.clientY, moved: false };
           aria-expanded={!sourceCollapsed}
           aria-controls={`${sourcePanelId}-content`}
+      onPointerMoveCapture={event => {
+        const press = creationImagePressRef.current;
+        if (press && event.buttons && Math.hypot(event.clientX - press.x, event.clientY - press.y) >= 4) press.moved = true;
+      }}
           onClick={() => {
             if (sourceCollapsed) changeSource("global");
             setSourceCollapsed(!sourceCollapsed);
             if (sourceCollapsed) beginOnboardingOperation("expand-source", projectId)();
+        if (!material) captureCreationImage(event);
           }}
         >{sourceCollapsed ? <PanelLeftOpen size={16} aria-hidden="true" /> : <PanelLeftClose size={16} aria-hidden="true" />}</button>
         {(boardOpen || genEditing) && (
           <>
             <div className="canvas-creation-mode-frame" aria-hidden="true" />
+        if (event.key === "Escape") cancelCreationImageClick();
+        if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.nativeEvent.isComposing) {
+          const image = creationImageTarget(event.target);
+          if (image) { event.preventDefault(); event.stopPropagation(); cancelCreationImageClick(); previewCreationImage(image.asset); return; }
+        }
             <div className="creation-mode-notch canvas-creation-mode-notch" aria-hidden="true">
               创作模式
             </div>
@@ -5104,7 +5168,7 @@ export function CanvasWorkspace({
                   data-canvas-filter={images.length ? materialFilterState(selectedConversationImage(node.id, images)!) : undefined}
                   tabIndex={0}
                   aria-busy={running}
-                  aria-label={imageOnly ? `${selectedConversationImage(node.id, images)?.name ?? "生成图片"}，${selectedVideo ? "点击播放视频" : `${boardOpen || genEditing ? "单击加入创作" : "单击查看生成会话"}，双击放大`}` : undefined}
+                  aria-label={imageOnly ? `${selectedConversationImage(node.id, images)?.name ?? "生成图片"}，${selectedVideo ? "点击播放视频" : boardOpen || genEditing ? "单击预览，双击添加引用" : "单击查看生成会话，双击放大"}` : undefined}
                   className={`canvas-prompt-node ${imageOnly ? "is-image-only" : ""} ${conversation?.outputs.length ? "has-conversation-images" : ""} ${running ? "canvas-card-running" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} is-${summary.status} ${focusedNodeId === node.id ? "is-focused" : ""} ${activeDragId === node.id || (activeDragId != null && selectedCanvasNodeIds.has(node.id)) ? "is-moving" : ""} ${supersededTaskIds.has(latest.id) ? "is-superseded" : ""}`}
                   onContextMenu={(event) => openCanvasNodeMenu(event, node.id, latest)}
                   style={{
@@ -5148,16 +5212,16 @@ export function CanvasWorkspace({
                       setCanvasLightbox({ images: [asset.storePath], index: 0 });
                       return;
                     }
-                    const anchor = event.currentTarget;
                     const activate = () => {
                       if (!graphNodesRef.current.some(item => item.id === node.id && item.hiddenAt == null)) return;
                       const state = useStore.getState();
+                  data-creation-conversation
                       if (imageOnly && canvasPrimaryMaterialAction(state.boardOpen, !!state.genEditing) === "compose") {
                         if (asset.assetId) window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: { assetId: asset.assetId, canvasNodeId: asset.id } }));
                       } else if (imageOnly) openConversation();
                       else {
                         const material = nodes.find(item => item.kind === "asset" && item.asset.id === asset.id);
-                        if (material?.kind === "asset") activateCanvasMaterial(material, anchor);
+                        if (material?.kind === "asset") activateCanvasMaterial(material);
                       }
                     };
                     cancelConversationImageClick();
@@ -5256,7 +5320,7 @@ export function CanvasWorkspace({
                   role="group"
                   data-frequent-asset-id={node.kind === "asset" ? node.asset.assetId ?? undefined : undefined}
                   tabIndex={0}
-                  aria-label={`${node.kind === "asset" ? `${node.asset.name}，${boardOpen || genEditing ? "点击加入创作" : "点击放大"}` : `素材组，${node.assets.length} 个素材，${expanded ? "已展开" : "点击展开"}`}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
+                  aria-label={`${node.kind === "asset" ? `${node.asset.name}，${boardOpen || genEditing ? "单击查看，双击添加引用" : "点击放大"}` : `素材组，${node.assets.length} 个素材，${expanded ? "已展开" : "点击展开"}`}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
                   aria-expanded={node.kind === "folder" ? expanded : undefined}
                   data-canvas-filter={node.kind === "asset" ? materialFilterState(node.asset) : undefined}
                   className={`canvas-node is-${node.kind} ${node.kind === "asset" && isVideoPath(node.asset.storePath) ? "is-video" : ""} ${expanded ? "is-expanded" : ""} ${!showAssetNames ? "is-name-hidden" : ""} ${focusedNodeId === node.id ? "is-focused" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} ${movingWithSelection ? "is-moving" : ""} ${holding ? "is-folder-target" : ""} ${directFolderTarget ? "is-folder-drop-target" : ""} `}
@@ -5330,7 +5394,7 @@ export function CanvasWorkspace({
                               className="canvas-folder-asset" aria-label={asset.name}
                               onPointerDown={(event) => { if (!isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) { event.stopPropagation(); if (event.button === 0) suppressNodeClickRef.current = false; armCanvasAssetHold(event, node.id, asset, true); } }}
                               onKeyDown={(event) => { if (event.key === "Enter" || event.key === " " || event.key.startsWith("Arrow")) event.stopPropagation(); }}
-                              onClick={(event) => { if (!consumeSuppressedNodeClick(event)) activateCanvasMaterial(groupedAssetNode(asset, node, index), event.currentTarget); }}
+                              onClick={(event) => { if (!consumeSuppressedNodeClick(event)) activateCanvasMaterial(groupedAssetNode(asset, node, index)); }}
                               onContextMenu={(event) => openCanvasAssetContextMenu(event, node, asset)}>
                               {isVideoPath(asset.storePath) ? <VideoPoster path={asset.storePath} poster={asset.thumbPath} alt={asset.name} draggable={false} /> : assetPath ? <CanvasImage path={asset.storePath} thumbPath={asset.thumbPath} sourceWidth={asset.width} sourceHeight={asset.height} alt="" draggable={false} />
                                 : <span className="canvas-folder-asset-placeholder">{asset.name.slice(0, 1)}</span>}
@@ -5630,3 +5694,6 @@ export function CanvasWorkspace({
     </div>
   );
 }
+        {creationImagePreview && <CreationImagePreview asset={creationImagePreview.asset} projectId={projectId}
+          job={creationImagePreview.jobId ? genJobs[creationImagePreview.jobId] : undefined}
+          onClose={() => setCreationImagePreview(null)} />}

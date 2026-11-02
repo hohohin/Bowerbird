@@ -1,5 +1,5 @@
 import { isVideoPath } from "../lib/videoGeneration";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
@@ -36,6 +36,15 @@ export function Lightbox({
   videoFrameTarget?: "canvas" | "reference" | "library";
   videoSourceKey?: string;
 }) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
+    return () => {
+      cancelAnimationFrame(frame);
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, []);
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape" && e.target instanceof Element && e.target.closest('[role="slider"], input, textarea, select')) return;
@@ -71,6 +80,15 @@ export function Lightbox({
       role="dialog"
       aria-modal="true"
       aria-label={`媒体预览，${index + 1} / ${images.length}`}
+      onKeyDown={event => {
+        event.stopPropagation();
+        if (event.key !== "Tab") return;
+        const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]'))
+          .filter(item => item.getClientRects().length && !item.closest('[inert], [aria-hidden="true"]'));
+        const first = items[0], last = items[items.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }}
     >
       {isVideoPath(images[index]) ? <VideoPlayer key={`${images[index]}:${videoSourceKey ?? ""}`} path={images[index]} sourceKey={videoSourceKey} frameTarget={videoFrameTarget} onAddFrame={onAddVideoFrame} onAddFrameToCanvas={onAddFrameToCanvas} onSaveTrim={onSaveVideoTrim} /> : <img
         ref={zoom.imgRef}
@@ -87,6 +105,7 @@ export function Lightbox({
         style={zoom.style}
       />}
       <button
+        ref={closeButtonRef}
         type="button"
         onClick={(e) => {
           e.stopPropagation();

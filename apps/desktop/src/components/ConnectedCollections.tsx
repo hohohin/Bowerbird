@@ -235,7 +235,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
       setMenu(null); setDeleteTarget({ assetIds: [...new Set(entries.map(entry => entry.asset_id))], projectId: scope });
     }}>删除原文件</button>
   </>;
-  return <section ref={root} className="categorized-library library-tactical connected-collections" aria-label="按集合浏览素材" data-file-import-project-id={scope ?? ""} data-file-import-collection-id={active ?? undefined} data-file-import-collection-name={current?.name}
+  return <section ref={root} className="categorized-library library-tactical connected-collections" aria-label="按集合浏览素材" data-creation-pick-disabled={multiple || busy} data-file-import-project-id={scope ?? ""} data-file-import-collection-id={active ?? undefined} data-file-import-collection-name={current?.name}
     style={{ ...glass.style, "--catalog-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
     {glass.definition}<LibraryMotion/>
     <div className="catalog-body">

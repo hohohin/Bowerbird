@@ -616,7 +616,7 @@ export function GenerationPanel({
                 visualProfile={activeJob.visualProfile}
                 refAssets={i === 0 ? firstRefAssets : undefined}
                 actions={readOnly ? undefined : i === 0 ? firstTurnActions : turnActions(turn)}
-                variantNav={i === 0 ? variantNav : undefined}
+                variantNav={!readOnly && !snapshot && i === 0 ? variantNav : undefined}
                 onOpenLightbox={(g) => setLightbox({ images: allImages, index: g })}
                 onOpenRefLightbox={(r) =>
                   setLightbox({ images: refLightboxImages, index: r })
@@ -633,7 +633,7 @@ export function GenerationPanel({
       </div>
 
       {/* 续轮就地在详情底部编辑，详情与历史始终可见。 */}
-      <div className="shrink-0 border-t border-edge bg-panel p-4">
+      {!(snapshot && readOnly) && <div className="shrink-0 border-t border-edge bg-panel p-4">
         {snapshot ? (
           <button type="button" onClick={() => snapshot.onReuse(snapshot.job.turns[snapshot.job.turns.length - 1])}
             className="w-full rounded bg-panel2 px-2.5 py-2 text-left text-xs text-muted ring-1 ring-edge transition-colors hover:text-ink hover:ring-accent">
@@ -690,7 +690,7 @@ export function GenerationPanel({
             取回已提交的视频（继续查询，不重新生成）
           </button>
         )}
-      </div>
+      </div>}
           </div>
         </GenerationSessionSurface>
       )}
