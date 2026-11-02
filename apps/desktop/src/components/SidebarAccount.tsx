@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronUp, Coins, LogIn, LogOut, Settings, Zap } from "lucide-react";
+import { ChevronDown, ChevronUp, CircleArrowUp, Coins, LogIn, LogOut, Settings, Zap } from "lucide-react";
 import { useStore } from "../store";
 import { understandReady } from "../lib/entitlement";
 import { SettingsDialog } from "./SettingsDialog";
+import { useAppUpdater } from "../lib/appUpdater";
 
 /**
  * 共用账号入口：顶栏将头像与 Bcoin 合为账号面板入口，旧侧栏保留菜单。
@@ -17,6 +18,9 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   const topbar = placement === "topbar";
   const compact = topbar || collapsed;
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const updateTriggerRef = useRef<HTMLButtonElement>(null);
+  const update = useAppUpdater(s => s.update);
+  const updatePhase = useAppUpdater(s => s.phase);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudBusy = useStore((s) => s.cloudBusy);
@@ -25,7 +29,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   const codexHealth = useStore((s) => s.codexHealth);
   const [open, setOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<"system" | "account">("system");
+  const [settingsSection, setSettingsSection] = useState<"system" | "account" | "about">("system");
   const rootRef = useRef<HTMLDivElement>(null);
 
   const loggedIn = cloudAuth?.logged_in === true;
@@ -38,6 +42,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   const tier = cloudEntitlement?.tier?.toUpperCase() ?? "";
   // 旧版本浏览器扩展不再参与未就绪提醒。
   const hasIssue = !understandReady({ entitlement: cloudEntitlement, codexHealth, cloudAuth });
+  const updateLabel = `${updatePhase === "downloading" ? "正在下载更新" : updatePhase === "ready" ? "更新已就绪" : updatePhase === "installing" ? "正在安装更新" : updatePhase === "installed" ? "重启完成更新" : "发现新版本"} ${update?.version ?? ""}`;
 
   useEffect(() => {
     onInteractionChange?.(open || settingsOpen);
@@ -69,6 +74,13 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
 
   return (
     <div ref={rootRef} className={topbar ? "topbar-account" : `relative border-t border-edge px-1 pb-1 pt-2 ${collapsed ? "mt-auto w-full" : "mt-2"}`}>
+      {topbar && <span className="topbar-update-slot">
+        {update && <button ref={updateTriggerRef} type="button" className="topbar-update-button"
+          title={updateLabel} aria-label={updateLabel} aria-haspopup="dialog" aria-expanded={settingsOpen && settingsSection === "about"}
+          onClick={() => { setSettingsSection("about"); setSettingsOpen(true); }}>
+          <CircleArrowUp size={18} aria-hidden="true" />
+        </button>}
+      </span>}
       {open && (
         <div className={`app-popover mb-1.5 flex flex-col gap-0.5 ${topbar ? "topbar-account-menu" : collapsed ? "absolute bottom-full left-1 z-[60] w-56" : "relative"}`} role="menu" aria-label="账号与设置">
           {loggedIn ? (
@@ -187,7 +199,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
         {open ? <ChevronUp size={13} className="shrink-0 text-muted" /> : <ChevronDown size={13} className="shrink-0 text-muted" />}</>}
       </button>
 
-      {settingsOpen && <SettingsDialog initialSection={settingsSection} onClose={() => { setSettingsOpen(false); triggerRef.current?.focus(); }} />}
+      {settingsOpen && <SettingsDialog initialSection={settingsSection} onClose={() => { setSettingsOpen(false); (settingsSection === "about" ? updateTriggerRef.current ?? triggerRef.current : triggerRef.current)?.focus(); }} />}
     </div>
   );
 }

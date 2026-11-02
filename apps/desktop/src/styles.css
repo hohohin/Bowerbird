@@ -501,7 +501,11 @@ html[data-theme="light"] [role="button"]:focus-visible {
 }
 .library-home { position: relative; flex: 1; min-height: 0; height: 100%; --library-footer-space: 34px; }
 .library-home .masonry-layout { padding:4px; }
-.topbar-account { position:relative; flex-shrink:0; }
+.topbar-account { position:relative; display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.topbar-update-slot { display:grid; place-items:center; width:36px; height:40px; flex-shrink:0; }
+.topbar-update-button { display:grid; place-items:center; width:36px; height:36px; color:var(--bb-blue); background:transparent; }
+.topbar-update-button:hover { background:var(--bb-surface-hover); }
+.topbar-update-button:focus-visible { outline:2px solid var(--bb-blue); outline-offset:2px; }
 .topbar-account-trigger { display:flex; align-items:center; gap:8px; height:36px; padding:2px 3px 2px 10px; border-radius:999px; background:rgb(var(--bb-ink-rgb) / 4%); }
 .topbar-account-trigger .app-topbar-credits { height:auto; padding:0; }
 .topbar-account-trigger:hover { background:var(--bb-surface-hover); }

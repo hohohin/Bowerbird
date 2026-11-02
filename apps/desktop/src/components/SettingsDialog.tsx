@@ -109,7 +109,7 @@ const DEVELOPER_SECTION = { key: "developer", label: "开发者选项" } as cons
  */
 export function SettingsDialog({ onClose, initialSection = "system" }: {
   onClose: () => void;
-  initialSection?: "system" | "account";
+  initialSection?: "system" | "account" | "about";
 }) {
   const codexHealth = useStore((s) => s.codexHealth);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
