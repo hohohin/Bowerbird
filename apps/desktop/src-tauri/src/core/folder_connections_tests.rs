@@ -378,6 +378,19 @@ impl Fixture {
         let ids = self.db.every_entry_id(Some(id)).unwrap();
         self.db.resolve_connection_entries(&ids).unwrap()
     }
+    fn duplicate_folder_path(&self, folder: &FolderConnection, duplicate: &str) {
+        let conn = self.db.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE connected_folders SET path=?2,available=0 WHERE id=?1",
+            params![folder.id, string(&Path::new(&folder.path).join(""))],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO connected_folders(id,root_id,parent_id,path,name) VALUES(?1,?2,?3,?4,?5)",
+            params![duplicate, folder.root_id, folder.parent_id, folder.path, folder.name],
+        )
+        .unwrap();
+    }
 }
 #[test]
 fn connects_without_copy_and_keeps_identity_on_incremental_refresh() {
@@ -558,6 +571,13 @@ fn cached_entries_survive_offline_and_disconnect_does_not_delete_assets() {
     assert!(!f.db.connected_folder(&root).unwrap().available);
     f.db.relocate_connected_directory(&root, &moved).unwrap();
     assert!(f.entries(&root)[0].available);
+    for _ in 0..2 {
+        f.db.scan_connection(&f.paths, &root).unwrap();
+        assert_eq!(f.db.connection_folders(None, None).unwrap().len(), 1);
+        assert_eq!(f.db.connected_folder(&root).unwrap().path, string(&moved));
+        assert_eq!(f.entries(&root)[0].id, original.id);
+        assert_eq!(f.entries(&root)[0].asset_id, original.asset_id);
+    }
     f.db.disconnect_directory(&root).unwrap();
     assert!(moved.join("one.png").is_file());
     assert!(f.db.get_asset(&original.asset_id).unwrap().is_some());
@@ -584,6 +604,154 @@ fn nested_directories_are_direct_only_and_move_as_a_subtree() {
     assert_eq!(before.asset_id, after.asset_id);
     assert!(f.target.join("child/two.png").is_file());
     assert_eq!(f.db.connected_folder(&child.id).unwrap().root_id, target);
+    for _ in 0..2 {
+        f.db.scan_connection(&f.paths, &root).unwrap();
+        f.db.scan_connection(&f.paths, &target).unwrap();
+        assert_eq!(f.db.connection_folders(None, None).unwrap().len(), 3);
+        assert_eq!(f.entries(&child.id)[0].id, before.id);
+        assert_eq!(f.entries(&child.id)[0].asset_id, before.asset_id);
+        assert!(f.entries(&child.id)[0].available);
+    }
+}
+#[test]
+fn renamed_collection_keeps_one_identity_after_repeated_refreshes() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.source.join("child/nested")).unwrap();
+    fs::copy(f.source.join("one.png"), f.source.join("child/nested/two.png")).unwrap();
+    let root = f.connect(&f.source);
+    let folders = f.db.connection_folders(None, None).unwrap();
+    let child = folders.iter().find(|v| v.name == "child").unwrap();
+    let nested = folders.iter().find(|v| v.name == "nested").unwrap();
+    let original = f.entries(&nested.id).pop().unwrap();
+
+    f.db.rename_connected_directory(&child.id, "改名后").unwrap();
+    for _ in 0..2 {
+        f.db.scan_connection(&f.paths, &root).unwrap();
+        let after = f.db.connection_folders(None, None).unwrap();
+        assert_eq!(after.len(), folders.len(), "rename must not create an offline duplicate");
+        assert!(after.iter().all(|folder| folder.available));
+        let renamed = after.iter().find(|folder| folder.id == child.id).unwrap();
+        assert_eq!(renamed.name, "改名后");
+        assert_eq!(renamed.path, string(&f.source.join("改名后")));
+        assert_eq!(f.entries(&nested.id)[0].id, original.id);
+        assert_eq!(f.entries(&nested.id)[0].asset_id, original.asset_id);
+    }
+}
+#[test]
+fn refresh_repairs_duplicate_ancestor_paths_without_losing_entries_or_projects() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.source.join("child/nested/leaf")).unwrap();
+    for folder in ["child", "child/nested"] {
+        for file in ["first.png", "second.png"] {
+            fs::copy(f.source.join("one.png"), f.source.join(folder).join(file)).unwrap();
+        }
+    }
+    let root = f.connect(&f.source);
+    let folders = f.db.connection_folders(None, None).unwrap();
+    let child = folders.iter().find(|v| v.name == "child").unwrap();
+    let nested = folders.iter().find(|v| v.name == "nested").unwrap();
+    let leaf = folders.iter().find(|v| v.name == "leaf").unwrap();
+    for project in ["old-project", "new-project"] {
+        f.db.create_project(project, project, project, project, "project").unwrap();
+    }
+    let mut originals = Vec::new();
+    for (folder, duplicate) in [(child, "duplicate-child"), (nested, "duplicate-nested")] {
+        let entries = f.entries(&folder.id);
+        f.duplicate_folder_path(folder, duplicate);
+        let conn = f.db.conn.lock().unwrap();
+        conn.execute("UPDATE connected_entries SET folder_id=?2 WHERE id=?1", params![entries[0].id, duplicate]).unwrap();
+        for (id, project) in [(&folder.id[..], "old-project"), (duplicate, "new-project"), (duplicate, "old-project")] {
+            conn.execute("INSERT INTO connected_folder_projects(folder_id,project_id) VALUES(?1,?2)", params![id, project]).unwrap();
+        }
+        originals.push((folder.id.clone(), entries));
+    }
+    f.db.conn.lock().unwrap().execute(
+        "UPDATE connected_folders SET parent_id=CASE WHEN id=?1 THEN 'duplicate-child' ELSE 'duplicate-nested' END WHERE id IN (?1,?2)",
+        params![nested.id, leaf.id],
+    ).unwrap();
+
+    for _ in 0..2 {
+        f.db.scan_connection_prioritized(&f.paths, &root, Some(&nested.id), || {}).unwrap();
+        let after = f.db.connection_folders(None, None).unwrap();
+        assert_eq!(after.len(), folders.len());
+        assert!(after.iter().all(|folder| folder.available));
+        assert_eq!(f.db.connected_folder(&nested.id).unwrap().parent_id.as_deref(), Some(child.id.as_str()));
+        assert_eq!(f.db.connected_folder(&leaf.id).unwrap().parent_id.as_deref(), Some(nested.id.as_str()));
+        for (folder_id, before) in &originals {
+            let entries = f.entries(folder_id);
+            assert_eq!(entries.len(), before.len());
+            for entry in before {
+                let current = entries.iter().find(|value| value.id == entry.id).unwrap();
+                assert_eq!(current.asset_id, entry.asset_id);
+                assert_eq!(current.path, entry.path);
+                assert!(current.available);
+                assert!(Path::new(&current.path).is_file());
+            }
+            let conn = f.db.conn.lock().unwrap();
+            let mut stmt = conn.prepare("SELECT project_id FROM connected_folder_projects WHERE folder_id=?1 ORDER BY project_id").unwrap();
+            let projects = stmt.query_map([folder_id], |r| r.get::<_, String>(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+            assert_eq!(projects, ["new-project", "old-project"]);
+        }
+    }
+}
+#[test]
+fn refresh_repairs_only_equal_paths_and_keeps_offline_collections() {
+    let f = Fixture::new();
+    for path in ["first/same", "second/same"] {
+        fs::create_dir_all(f.source.join(path)).unwrap();
+        fs::copy(f.source.join("one.png"), f.source.join(path).join("item.png")).unwrap();
+    }
+    let root = f.connect(&f.source);
+    let folders = f.db.connection_folders(None, None).unwrap();
+    let affected = folders.iter().find(|v| v.path == string(&f.source.join("first/same"))).unwrap();
+    let other = folders.iter().find(|v| v.path == string(&f.source.join("second/same"))).unwrap();
+    let original = f.entries(&affected.id).pop().unwrap();
+    f.duplicate_folder_path(affected, "duplicate-offline");
+    fs::rename(&f.source, f.source.with_file_name("offline")).unwrap();
+
+    for _ in 0..2 {
+        assert!(f.db.scan_connection(&f.paths, &root).is_err());
+        let after = f.db.connection_folders(None, None).unwrap();
+        assert_eq!(after.len(), folders.len());
+        assert_eq!(after.iter().filter(|v| v.name == "same").count(), 2);
+        assert_eq!(f.db.connected_folder(&affected.id).unwrap().path, affected.path);
+        assert_eq!(f.db.connected_folder(&other.id).unwrap().path, other.path);
+        assert!(after.iter().all(|folder| !folder.available));
+        assert_eq!(f.entries(&affected.id)[0].id, original.id);
+        assert_eq!(f.entries(&affected.id)[0].asset_id, original.asset_id);
+        assert!(!f.entries(&affected.id)[0].available);
+    }
+}
+#[test]
+fn duplicate_path_repair_failure_rolls_back_all_relationships() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.source.join("child/leaf")).unwrap();
+    fs::copy(f.source.join("one.png"), f.source.join("child/item.png")).unwrap();
+    let root = f.connect(&f.source);
+    let folders = f.db.connection_folders(None, None).unwrap();
+    let child = folders.iter().find(|v| v.name == "child").unwrap();
+    let leaf = folders.iter().find(|v| v.name == "leaf").unwrap();
+    let entry = f.entries(&child.id).pop().unwrap();
+    f.db.create_project("repair-project", "project", "project", "project", "project").unwrap();
+    f.duplicate_folder_path(child, "duplicate-rollback");
+    {
+        let conn = f.db.conn.lock().unwrap();
+        conn.execute("UPDATE connected_entries SET folder_id='duplicate-rollback' WHERE id=?1", [&entry.id]).unwrap();
+        conn.execute("UPDATE connected_folders SET parent_id='duplicate-rollback' WHERE id=?1", [&leaf.id]).unwrap();
+        conn.execute("INSERT INTO connected_folder_projects(folder_id,project_id) VALUES('duplicate-rollback','repair-project')", []).unwrap();
+        conn.execute_batch("CREATE TRIGGER reject_repair BEFORE UPDATE OF path ON connected_folders BEGIN SELECT RAISE(ABORT,'test repair failure'); END;").unwrap();
+    }
+    assert!(f.db.scan_connection(&f.paths, &root).is_err());
+    assert_eq!(f.db.connection_folders(None, None).unwrap().len(), folders.len() + 1);
+    assert_eq!(f.db.connected_folder(&child.id).unwrap().path, string(&Path::new(&child.path).join("")));
+    assert_eq!(f.db.connected_folder("duplicate-rollback").unwrap().path, child.path);
+    assert_eq!(f.db.connected_folder(&leaf.id).unwrap().parent_id.as_deref(), Some("duplicate-rollback"));
+    assert!(f.entries(&child.id).is_empty());
+    assert_eq!(f.entries("duplicate-rollback")[0].id, entry.id);
+    let conn = f.db.conn.lock().unwrap();
+    let project_folder: String = conn.query_row("SELECT folder_id FROM connected_folder_projects WHERE project_id='repair-project'", [], |r| r.get(0)).unwrap();
+    assert_eq!(project_folder, "duplicate-rollback");
+    assert!(Path::new(&entry.path).is_file());
 }
 #[test]
 fn deleted_original_keeps_creative_record_and_other_references_are_missing() {
@@ -700,11 +868,19 @@ fn moving_a_root_under_another_root_preserves_every_descendant() {
     assert_eq!(f.db.connected_root_ids().unwrap(), vec![target.clone()]);
     assert_eq!(
         f.db.connected_folder(&root).unwrap().parent_id,
-        Some(target)
+        Some(target.clone())
     );
     assert_eq!(f.entries(&child.id)[0].id, before.id);
     assert!(f.entries(&child.id)[0].available);
     assert!(f.target.join("source/child/two.png").exists());
+    for _ in 0..2 {
+        f.db.scan_connection(&f.paths, &target).unwrap();
+        assert_eq!(f.db.connection_folders(None, None).unwrap().len(), 3);
+        assert!(f.db.connected_folder(&root).unwrap().available);
+        assert_eq!(f.entries(&child.id)[0].id, before.id);
+        assert_eq!(f.entries(&child.id)[0].asset_id, before.asset_id);
+        assert!(f.entries(&child.id)[0].available);
+    }
 }
 #[test]
 fn directory_database_failure_rolls_back_the_disk_rename_and_all_paths() {

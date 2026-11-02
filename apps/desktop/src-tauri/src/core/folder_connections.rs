@@ -512,6 +512,7 @@ impl Database {
         priority_folder: Option<&str>,
         mut progress: impl FnMut(),
     ) -> AppResult<()> {
+        self.repair_connected_folder_paths(root_id)?;
         let root = self.connected_folder(root_id)?;
         self.conn.lock().unwrap().execute(
             "UPDATE connected_roots SET scanning=1,error=NULL WHERE id=?1",
@@ -530,6 +531,44 @@ impl Database {
             ],
         )?;
         result
+    }
+    fn repair_connected_folder_paths(&self, root_id: &str) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let folders: Vec<(String, String)> = {
+            let mut stmt = tx.prepare("SELECT id,path FROM connected_folders WHERE root_id=?1")?;
+            let rows = stmt.query_map([root_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        for (folder_id, path) in folders {
+            // Old repoint_tree joined an empty suffix for the renamed directory itself.
+            // Compare only that lexical difference, including when the disk is offline.
+            if Path::new(&path).file_name().is_none() {
+                continue;
+            }
+            let normalized = path.trim_end_matches(std::path::is_separator);
+            if normalized == path {
+                continue;
+            }
+            let duplicate: Option<(String, String)> = tx.query_row(
+                "SELECT id,root_id FROM connected_folders WHERE path=?1",
+                [normalized], |r| Ok((r.get(0)?, r.get(1)?)),
+            ).optional()?;
+            if let Some((duplicate_id, duplicate_root)) = duplicate {
+                if duplicate_root != root_id || duplicate_id == root_id {
+                    continue;
+                }
+                // Keep the original ID; transfer every dependent row before CASCADE deletion.
+                tx.execute("UPDATE connected_entries SET folder_id=?1 WHERE folder_id=?2", params![folder_id, duplicate_id])?;
+                tx.execute("UPDATE connected_folders SET parent_id=?1 WHERE parent_id=?2", params![folder_id, duplicate_id])?;
+                tx.execute("INSERT OR IGNORE INTO connected_folder_projects(folder_id,project_id) SELECT ?1,project_id FROM connected_folder_projects WHERE folder_id=?2", params![folder_id, duplicate_id])?;
+                tx.execute("DELETE FROM connected_folders WHERE id=?1", [&duplicate_id])?;
+            }
+            tx.execute("UPDATE connected_folders SET path=?2 WHERE id=?1", params![folder_id, normalized])?;
+        }
+        tx.commit()?;
+        Ok(())
     }
     fn scan_connection_inner(
         &self,
@@ -822,11 +861,18 @@ impl Database {
             .connection_folders(None, None)?
             .into_iter()
             .filter(|f| Path::new(&f.path).starts_with(&source.path))
+            .map(|folder| {
+                let suffix = Path::new(&folder.path).strip_prefix(&source.path).unwrap();
+                let next = if suffix.as_os_str().is_empty() {
+                    destination.to_path_buf()
+                } else {
+                    destination.join(suffix)
+                };
+                (folder, next)
+            })
             .collect();
         let mut updates = Vec::new();
-        for folder in &folders {
-            let next =
-                destination.join(Path::new(&folder.path).strip_prefix(&source.path).unwrap());
+        for (folder, next) in &folders {
             let ids = self.every_entry_id(Some(&folder.id))?;
             for batch in ids.chunks(2000) {
                 for entry in self.resolve_connection_entries(batch)? {
@@ -846,9 +892,7 @@ impl Database {
                 params![entry.id, string(&next_file)],
             )?;
         }
-        for folder in folders {
-            let next =
-                destination.join(Path::new(&folder.path).strip_prefix(&source.path).unwrap());
+        for (folder, next) in folders {
             tx.execute(
                 "UPDATE connected_folders SET path=?2,root_id=?3,available=1 WHERE id=?1",
                 params![
