@@ -574,14 +574,6 @@ export function CanvasWorkspace({
   const [canvasMarquee, setCanvasMarquee] = useState<CanvasMarquee | null>(null);
   const [selectedCanvasNodeIds, setSelectedCanvasNodeIds] = useState<Set<string>>(() => new Set());
   const [canvasLightbox, setCanvasLightbox] = useState<{ images: string[]; index: number } | null>(null);
-  const videoFrameSaves = useRef(new Map<string, () => Promise<void>>());
-  const videoTrimSaves = useRef(new Map<string, () => Promise<Asset>>());
-  const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; section?: { id: string; name: string } | null; x: number; y: number; point: CanvasPoint | null } | null>(null);
-  useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
-  const [viewRevision, setViewRevision] = useState(0);
-  const activeGenerationJob = activeJobId ? genJobs[activeJobId] ?? null : null;
-  const activeAgentRun = activeCloudAgentRunId ? cloudAgentRuns[activeCloudAgentRunId] ?? null : null;
-  const snapshotPrompt = !activeGenerationJob && !activeAgentRun && genPanelOpen
   const [creationImagePreview, setCreationImagePreview] = useState<{ asset: Asset; jobId?: string } | null>(null);
   const creationImageClickRef = useRef<ReturnType<typeof setTimeout>>();
   const creationImagePressRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
@@ -590,6 +582,14 @@ export function CanvasWorkspace({
     setCreationImagePreview(null);
     return cancelCreationImageClick;
   }, [projectId, boardOpen, genEditing, viewMode]);
+  const videoFrameSaves = useRef(new Map<string, () => Promise<void>>());
+  const videoTrimSaves = useRef(new Map<string, () => Promise<Asset>>());
+  const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; section?: { id: string; name: string } | null; x: number; y: number; point: CanvasPoint | null } | null>(null);
+  useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
+  const [viewRevision, setViewRevision] = useState(0);
+  const activeGenerationJob = activeJobId ? genJobs[activeJobId] ?? null : null;
+  const activeAgentRun = activeCloudAgentRunId ? cloudAgentRuns[activeCloudAgentRunId] ?? null : null;
+  const snapshotPrompt = !activeGenerationJob && !activeAgentRun && genPanelOpen
     ? graphNodes.find(node => node.id === snapshotPromptId && node.hiddenAt == null) ?? null : null;
   useEffect(() => {
     if (!genPanelOpen || activeJobId || activeCloudAgentRunId) setSnapshotPromptId(null);
@@ -4660,54 +4660,6 @@ export function CanvasWorkspace({
     if (assetId) await frequentLibrary.pinAsset(assetId);
   }
 
-  return (
-    <div
-      ref={workspaceRef}
-      data-onboarding-project={projectId ?? undefined}
-      className={`canvas-workspace canvas-tactical${sourceCollapsed ? " is-source-collapsed" : " is-library-open"}${libraryDragging ? " is-library-dragging" : ""}${frequentPicking ? " is-picking-frequent" : ""}${loading || projectRoutePending ? " is-route-pending" : ""}`}
-      aria-busy={loading || projectRoutePending}
-      onPointerDownCapture={event => {
-        if (event.button === 0 && !isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) captureFrequentMaterial(event);
-      }}
-      onClickCapture={event => {
-        if (event.button !== 0) return;
-        if (spacePressedRef.current || drawingTool === "pan") { captureCreationImage(event); return; }
-        const material = captureFrequentMaterial(event);
-        if (material && event.detail < 2) void pinFrequentMaterial(material);
-      }}
-      onDoubleClickCapture={event => { if (!captureFrequentMaterial(event)) captureCreationImage(event, true); }}
-      onDragStartCapture={event => { cancelCreationImageClick(); captureFrequentMaterial(event); }}
-      onContextMenuCapture={event => { cancelCreationImageClick(); captureFrequentMaterial(event); }}
-      onKeyDownCapture={event => {
-        if (!["Enter", " ", "Delete", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
-        const material = captureFrequentMaterial(event);
-        if (material && !event.repeat && (event.key === "Enter" || event.key === " ")) void pinFrequentMaterial(material);
-      }}
-    >
-      <aside ref={sourcePanelRef} id={sourcePanelId} className="canvas-source-panel library-browser" aria-label="画板素材库"
-        data-file-import-project-id={sourceScope === "project" ? projectId ?? "" : ""}
-        aria-hidden={sourceCollapsed} tabIndex={-1} onDragStart={event => {
-          if (!(event.target as HTMLElement).closest('[data-asset-id]') || !getDragAssets()?.length) return;
-          if (sourceDragFrame.current !== null) cancelAnimationFrame(sourceDragFrame.current);
-          // Wait only for the browser to capture the source thumbnail; never animate over the drop target.
-          sourceDragFrame.current = requestAnimationFrame(() => {
-            sourceDragFrame.current = null;
-            if (!getDragAssets()?.length) return;
-            setLibraryDragging(true);
-            setSourceCollapsed(true);
-          });
-        }}>
-        <div id={`${sourcePanelId}-content`} className="canvas-source-content">
-          <LibraryCatalogTransition key={`${projectId}:${sourceScope}:${libraryMedia}`} kind={fileMode === "all" || fileMode === "tags" ? fileMode : "collections"} media={libraryMedia} projectId={projectId}
-            projectScope={sourceScope === "project"} navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>
-        </div>
-        <CanvasFrequentAssets library={frequentLibrary} projectId={projectId} picking={frequentPicking} onPickingChange={setFrequentPicking}/>
-      </aside>
-      <CanvasLibraryResize panelId={sourcePanelId} collapsed={sourceCollapsed} onClose={closeSource} />
-      {frequentPicking && <div className="canvas-frequent-pick-banner" role="status">
-        <div><strong>正在添加常用素材</strong><span>点击素材库或画板中的素材，可连续添加</span></div>
-        <button type="button" onClick={() => setFrequentPicking(false)}>完成添加</button>
-      </div>}
   function creationImageTarget(target: EventTarget | null, double = false) {
     const state = useStore.getState();
     if (!(state.boardOpen || state.genEditing) || frequentPickingRef.current || loadingRef.current
@@ -4765,6 +4717,66 @@ export function CanvasWorkspace({
     }
   }
 
+  return (
+    <div
+      ref={workspaceRef}
+      data-onboarding-project={projectId ?? undefined}
+      className={`canvas-workspace canvas-tactical${sourceCollapsed ? " is-source-collapsed" : " is-library-open"}${libraryDragging ? " is-library-dragging" : ""}${frequentPicking ? " is-picking-frequent" : ""}${loading || projectRoutePending ? " is-route-pending" : ""}`}
+      aria-busy={loading || projectRoutePending}
+      onPointerDownCapture={event => {
+        cancelCreationImageClick();
+        creationImagePressRef.current = { x: event.clientX, y: event.clientY, moved: false };
+        if (event.button === 0 && !isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) captureFrequentMaterial(event);
+      }}
+      onPointerMoveCapture={event => {
+        const press = creationImagePressRef.current;
+        if (press && event.buttons && Math.hypot(event.clientX - press.x, event.clientY - press.y) >= 4) press.moved = true;
+      }}
+      onClickCapture={event => {
+        if (event.button !== 0) return;
+        if (spacePressedRef.current || drawingTool === "pan") { captureCreationImage(event); return; }
+        const material = captureFrequentMaterial(event);
+        if (material && event.detail < 2) void pinFrequentMaterial(material);
+        if (!material) captureCreationImage(event);
+      }}
+      onDoubleClickCapture={event => { if (!captureFrequentMaterial(event)) captureCreationImage(event, true); }}
+      onDragStartCapture={event => { cancelCreationImageClick(); captureFrequentMaterial(event); }}
+      onContextMenuCapture={event => { cancelCreationImageClick(); captureFrequentMaterial(event); }}
+      onKeyDownCapture={event => {
+        if (event.key === "Escape") cancelCreationImageClick();
+        if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.nativeEvent.isComposing) {
+          const image = creationImageTarget(event.target);
+          if (image) { event.preventDefault(); event.stopPropagation(); cancelCreationImageClick(); previewCreationImage(image.asset); return; }
+        }
+        if (!["Enter", " ", "Delete", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
+        const material = captureFrequentMaterial(event);
+        if (material && !event.repeat && (event.key === "Enter" || event.key === " ")) void pinFrequentMaterial(material);
+      }}
+    >
+      <aside ref={sourcePanelRef} id={sourcePanelId} className="canvas-source-panel library-browser" aria-label="画板素材库"
+        data-file-import-project-id={sourceScope === "project" ? projectId ?? "" : ""}
+        aria-hidden={sourceCollapsed} tabIndex={-1} onDragStart={event => {
+          if (!(event.target as HTMLElement).closest('[data-asset-id]') || !getDragAssets()?.length) return;
+          if (sourceDragFrame.current !== null) cancelAnimationFrame(sourceDragFrame.current);
+          // Wait only for the browser to capture the source thumbnail; never animate over the drop target.
+          sourceDragFrame.current = requestAnimationFrame(() => {
+            sourceDragFrame.current = null;
+            if (!getDragAssets()?.length) return;
+            setLibraryDragging(true);
+            setSourceCollapsed(true);
+          });
+        }}>
+        <div id={`${sourcePanelId}-content`} className="canvas-source-content">
+          <LibraryCatalogTransition key={`${projectId}:${sourceScope}:${libraryMedia}`} kind={fileMode === "all" || fileMode === "tags" ? fileMode : "collections"} media={libraryMedia} projectId={projectId}
+            projectScope={sourceScope === "project"} navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>
+        </div>
+        <CanvasFrequentAssets library={frequentLibrary} projectId={projectId} picking={frequentPicking} onPickingChange={setFrequentPicking}/>
+      </aside>
+      <CanvasLibraryResize panelId={sourcePanelId} collapsed={sourceCollapsed} onClose={closeSource} />
+      {frequentPicking && <div className="canvas-frequent-pick-banner" role="status">
+        <div><strong>正在添加常用素材</strong><span>点击素材库或画板中的素材，可连续添加</span></div>
+        <button type="button" onClick={() => setFrequentPicking(false)}>完成添加</button>
+      </div>}
 
       <section ref={boardShellRef} className={`canvas-board-shell${(selectedChatId || scopedInspectorOpen && !inspectorEditing || workflowAgentDetail?.projectId === projectId && !loading && !genPanelOpen) ? " has-project-inspector" : ""}`}>
         <button
@@ -4772,29 +4784,17 @@ export function CanvasWorkspace({
           className={`canvas-source-toggle ${sourceCollapsed ? "canvas-source-expand" : "canvas-source-collapse"}`}
           aria-label={sourceCollapsed ? "展开画板素材库" : "收起画板素材库"}
           title={sourceCollapsed ? "展开素材库" : "收起素材库"}
-        cancelCreationImageClick();
-        creationImagePressRef.current = { x: event.clientX, y: event.clientY, moved: false };
           aria-expanded={!sourceCollapsed}
           aria-controls={`${sourcePanelId}-content`}
-      onPointerMoveCapture={event => {
-        const press = creationImagePressRef.current;
-        if (press && event.buttons && Math.hypot(event.clientX - press.x, event.clientY - press.y) >= 4) press.moved = true;
-      }}
           onClick={() => {
             if (sourceCollapsed) changeSource("global");
             setSourceCollapsed(!sourceCollapsed);
             if (sourceCollapsed) beginOnboardingOperation("expand-source", projectId)();
-        if (!material) captureCreationImage(event);
           }}
         >{sourceCollapsed ? <PanelLeftOpen size={16} aria-hidden="true" /> : <PanelLeftClose size={16} aria-hidden="true" />}</button>
         {(boardOpen || genEditing) && (
           <>
             <div className="canvas-creation-mode-frame" aria-hidden="true" />
-        if (event.key === "Escape") cancelCreationImageClick();
-        if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.nativeEvent.isComposing) {
-          const image = creationImageTarget(event.target);
-          if (image) { event.preventDefault(); event.stopPropagation(); cancelCreationImageClick(); previewCreationImage(image.asset); return; }
-        }
             <div className="creation-mode-notch canvas-creation-mode-notch" aria-hidden="true">
               创作模式
             </div>
@@ -5164,6 +5164,7 @@ export function CanvasWorkspace({
                   key={node.id}
                   data-canvas-node
                   data-canvas-node-id={node.id}
+                  data-creation-conversation
                   role="button"
                   data-canvas-filter={images.length ? materialFilterState(selectedConversationImage(node.id, images)!) : undefined}
                   tabIndex={0}
@@ -5215,7 +5216,6 @@ export function CanvasWorkspace({
                     const activate = () => {
                       if (!graphNodesRef.current.some(item => item.id === node.id && item.hiddenAt == null)) return;
                       const state = useStore.getState();
-                  data-creation-conversation
                       if (imageOnly && canvasPrimaryMaterialAction(state.boardOpen, !!state.genEditing) === "compose") {
                         if (asset.assetId) window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: { assetId: asset.assetId, canvasNodeId: asset.id } }));
                       } else if (imageOnly) openConversation();
@@ -5679,6 +5679,9 @@ export function CanvasWorkspace({
             if (!draft || draft.id !== replicationProjectId) throw new Error("项目已切换，请重新打开工具");
             await ensureMaterialized(draft);
           }} />}
+        {creationImagePreview && <CreationImagePreview asset={creationImagePreview.asset} projectId={projectId}
+          job={creationImagePreview.jobId ? genJobs[creationImagePreview.jobId] : undefined}
+          onClose={() => setCreationImagePreview(null)} />}
         {canvasLightbox && (
           <Lightbox
             onAddVideoFrame={addVideoFrame}
@@ -5694,6 +5697,3 @@ export function CanvasWorkspace({
     </div>
   );
 }
-        {creationImagePreview && <CreationImagePreview asset={creationImagePreview.asset} projectId={projectId}
-          job={creationImagePreview.jobId ? genJobs[creationImagePreview.jobId] : undefined}
-          onClose={() => setCreationImagePreview(null)} />}
