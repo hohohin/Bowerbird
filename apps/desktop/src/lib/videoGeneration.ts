@@ -53,6 +53,17 @@ export function cloudVideoOptions(options: VideoOptions): VideoOptions {
 export function isVideoPath(path?: string | null): boolean {
   return !!path && /\.(mp4|mov|webm|m4v|avi|mkv)(?:[?#].*)?$/i.test(path);
 }
+function isVideoImagePath(path?: string | null): boolean {
+  return !!path && /\.(png|jpe?g|webp|bmp)(?:[?#].*)?$/i.test(path);
+}
+/** Only first/last frames is an explicit choice; other modes follow the current inputs. */
+export function resolveVideoOptions(options: VideoOptions, references: readonly Pick<Asset, "store_path">[]): VideoOptions {
+  const kind = options.kind === "frames2video" ? "frames2video"
+    : references.length === 0 ? "text2video"
+    : references.length === 1 && isVideoImagePath(references[0].store_path) ? "image2video"
+    : "multimodal2video";
+  return { ...options, kind };
+}
 /** Match the submitted original file, never its thumbnail or source video's metadata. */
 export function imageInputError(references: readonly Pick<Asset, "name" | "store_path">[]): string | null {
   const index = references.findIndex(asset => isVideoPath(asset.store_path) || isAudioPath(asset.store_path) || isTextPath(asset.store_path));
@@ -80,7 +91,7 @@ export function videoInputError(options: VideoOptions, references: readonly Pick
   if (references.some((asset) => !asset.store_path)) return "参考素材尚未就绪，请重新选择";
   const videos = references.filter((asset) => isVideoPath(asset.store_path));
   if (cloud && videos.some(asset => !/\.(mp4|mov)$/i.test(asset.store_path ?? ""))) return "方舟视频参考仅支持 MP4 / MOV";
-  const images = references.filter((asset) => /\.(png|jpe?g|webp|bmp)(?:[?#].*)?$/i.test(asset.store_path ?? ""));
+  const images = references.filter((asset) => isVideoImagePath(asset.store_path));
   if (images.length + videos.length !== references.length) return "视频参考仅支持 PNG、JPEG、WebP、BMP 图片及视频，不支持音频或文本文件";
   switch (options.kind) {
     case "text2video": return references.length ? "文生视频不使用参考素材，请移除素材或切换生成模式" : null;

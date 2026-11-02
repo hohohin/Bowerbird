@@ -3,13 +3,30 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { generationPromptNodeId } from "../src/lib/projectNodeIds.ts";
-import { DEFAULT_VIDEO_OPTIONS, videoInputError, videoRatio, isVideoPath } from "../src/lib/videoGeneration.ts";
+import { DEFAULT_VIDEO_OPTIONS, resolveVideoOptions, videoInputError, videoRatio, isVideoPath } from "../src/lib/videoGeneration.ts";
 import { mergeRecoveredGenJobs } from "../src/lib/generationRecovery.ts";
 import { canvasConversationCards } from "../src/lib/canvasConversationCards.ts";
 import { parseCreativeComposerDraft, serializeCreativeComposerDraft } from "../src/lib/creativeDraft.ts";
 const image = (name) => ({ id: name, store_path: `C:/assets/${name}.png`, duration: null });
 const video = (duration = 5) => ({ id: "video", store_path: "C:/assets/clip.mp4", duration });
 const options = (kind) => ({ ...DEFAULT_VIDEO_OPTIONS, kind });
+
+test("automatic video mode follows input media while explicit frames remain explicit", () => {
+  const audio = { store_path: "C:/assets/audio.wav", duration: 5 };
+  for (const previous of ["text2video", "image2video", "multimodal2video"]) {
+    const selected = Object.freeze({ ...options(previous), duration: 8 });
+    for (const [references, kind] of [
+      [[], "text2video"], [[image("a")], "image2video"],
+      [[image("a"), image("b")], "multimodal2video"],
+      [[video()], "multimodal2video"], [[audio], "multimodal2video"],
+    ]) assert.deepEqual(resolveVideoOptions(selected, references), { ...selected, kind });
+    assert.equal(selected.kind, previous);
+  }
+  for (const references of [[], [image("a")], [image("a"), image("b")], [video()]]) {
+    assert.equal(resolveVideoOptions(options("frames2video"), references).kind, "frames2video");
+  }
+  assert.match(videoInputError(resolveVideoOptions(DEFAULT_VIDEO_OPTIONS, [audio]), [audio]), /不支持音频/);
+});
 
 test("Seedance 2.5 validates all four explicit modes without silently dropping references", () => {
   assert.equal(videoInputError(options("text2video"), []), null);
@@ -54,7 +71,7 @@ function harness() {
     taskErrorMessage: String, reconcileRejectedCloudSession: async () => {},
     genHandleError: (jobId, message) => errors.push({ jobId, message }),
     updateJob: (jobId, update) => { state.genJobs[jobId] = update(state.genJobs[jobId]); },
-    videoInputError, videoRatio, generationPromptNodeId, isCloudProvider: value => value?.startsWith("bowerbird-cloud"),
+    resolveVideoOptions, videoInputError, videoRatio, generationPromptNodeId, isCloudProvider: value => value?.startsWith("bowerbird-cloud"),
     generationParentLocator: () => ({ storePath: "C:/assets/previous.mp4", nodeId: "parent-node" }),
     mergeRecoveredGenJobs, taskCenterGenerationJobs: () => [],
   };
@@ -94,10 +111,42 @@ test("production store sends exact first/last order and project/thread identity 
   assert.deepEqual(job.turns[0].videoOptions, options("frames2video"));
 });
 
+test("new video submissions derive their mode and ratio from current references", async () => {
+  for (const [refs, kind, ratio] of [
+    [[], "text2video", "9:16"],
+    [[image("a")], "image2video", null],
+    [[image("a"), image("b")], "multimodal2video", "9:16"],
+    [[video()], "multimodal2video", "9:16"],
+  ]) {
+    const h = harness();
+    await h.start("text2video", refs);
+    assert.equal(h.requests[0].videoOptions.kind, kind);
+    assert.equal(h.requests[0].ratio, ratio);
+    assert.equal(h.state.genJobs[h.requests[0].jobId].turns[0].videoOptions.kind, kind);
+  }
+});
+
+test("new video revisions derive their mode from exact submitted references, including clearing", async () => {
+  const h = harness();
+  await h.start("text2video", []);
+  const id = h.requests[0].jobId;
+  Object.assign(h.state.genJobs[id], { sessionId: "prior", running: false });
+  await h.state.sendGenRevise(id, "single image", "jimeng", {
+    references: [image("ignored"), image("also-ignored")], exactReferences: [image("selected").store_path],
+  });
+  assert.equal(h.requests[1].videoOptions.kind, "image2video");
+  assert.equal(h.requests[1].ratio, null);
+  h.state.genJobs[id].running = false;
+  await h.state.sendGenRevise(id, "text only", "jimeng", { references: [] });
+  assert.equal(h.requests[2].videoOptions.kind, "text2video");
+  assert.deepEqual(h.requests[2].referenceImages, []);
+  assert.equal(h.state.genJobs[id].turns[0].videoOptions.kind, "text2video");
+});
+
 test("production store rejects unsupported provider and inputs before calling the backend", async () => {
   const h = harness();
   await assert.rejects(h.start("text2video", [], "16:9", "codex"), /即梦/);
-  await assert.rejects(h.start("image2video", [video()]), /1 张图片/);
+  await assert.rejects(h.start("frames2video", [video()]), /2 张图片/);
   assert.equal(h.requests.length, 0);
 });
 
@@ -108,12 +157,15 @@ test("video revision uses explicit references and never borrows the preceding MP
   job.sessionId = "submitted-video";
   job.running = false;
   job.turns[0].images = ["C:/assets/previous.mp4"];
-  await assert.rejects(h.state.sendGenRevise(job.id, "revision", "jimeng", { references: [] }), /1 张图片/);
+  await h.state.sendGenRevise(job.id, "revision", "jimeng", { references: [] });
+  assert.equal(h.requests[1].videoOptions.kind, "text2video");
+  assert.deepEqual(h.requests[1].referenceImages, []);
+  h.state.genJobs[job.id].running = false;
   await h.state.sendGenRevise(job.id, "revision", "jimeng", { references: [image("new-first")], generation: { media: "video", videoOptions: options("image2video") } });
-  assert.deepEqual(h.requests[1].referenceImages, ["C:/assets/new-first.png"]);
-  assert.equal(h.requests[1].exactReferences, true);
-  assert.equal(h.requests[1].media, "video");
-  assert.equal(h.requests[1].parentAssetPath, "C:/assets/previous.mp4");
+  assert.deepEqual(h.requests[2].referenceImages, ["C:/assets/new-first.png"]);
+  assert.equal(h.requests[2].exactReferences, true);
+  assert.equal(h.requests[2].media, "video");
+  assert.equal(h.requests[2].parentAssetPath, "C:/assets/previous.mp4");
 });
 
 test("switching a video session to image generation sends only the selected images", async () => {
@@ -304,6 +356,21 @@ test("retry preserves an empty text2video reference list, duration, and original
   assert.equal(h.requests[1].videoOptions.duration, 12);
   assert.equal(h.requests[1].ratio, "9:16");
   assert.equal(h.requests[1].creativeRelation, "retry");
+});
+
+test("retry preserves a historical single-image multi-reference mode", async () => {
+  const h = harness();
+  await h.start("image2video", [image("a")]);
+  const job = h.state.genJobs[h.requests[0].jobId];
+  job.sessionId = "existing-video";
+  job.running = false;
+  Object.assign(job.turns[0], { error: "interrupted", refs: [image("a").store_path], videoOptions: options("multimodal2video"), ratio: "21:9" });
+  h.state.activeJobId = job.id;
+  h.state.retryLastGenTurn();
+  await new Promise(done => setImmediate(done));
+  assert.equal(h.requests[1].videoOptions.kind, "multimodal2video");
+  assert.equal(h.requests[1].ratio, "21:9");
+  assert.deepEqual(h.requests[1].referenceImages, [image("a").store_path]);
 });
 
 test("project composer serialization retains video mode and immutable options", () => {

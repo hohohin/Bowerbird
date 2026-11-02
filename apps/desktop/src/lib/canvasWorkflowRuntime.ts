@@ -6,7 +6,7 @@ import { api } from "./api";
 import type { Asset, CanvasNode, NewCanvasNode } from "./types";
 import { placeCanvasCardNearSource } from "./canvasReferencePlacement";
 import { assetPayloadJson, canvasAssetNodeSize, createCanvasAssetSnapshot } from "./creativeCanvas";
-import { DEFAULT_VIDEO_OPTIONS, isVideoPath, videoInputError, videoProvider } from "./videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS, isVideoPath, resolveVideoOptions, videoInputError, videoProvider } from "./videoGeneration";
 import { autoRatioFromReferences } from "../components/creation/ratios";
 import { canonicalProviderKey } from "./genProviders";
 import { workflowLoopScope, workflowLoopRows, workflowLoopOutputs, workflowLoopItems, validateLoopItems, validateLoopStart } from "./workflowLoop";
@@ -1614,7 +1614,7 @@ export class CanvasWorkflowController {
         if (!Number.isFinite(options.seconds) || options.seconds < 1 || options.seconds > 15) throw new Error("视频时长需为 1–15 秒");
         await this.runComfyVideo(runId, node, halted, { ...options, firstFrame: first[0], lastFrame: last[0], prompt });
       } else if (node.kind === "generation") {
-        const generation = video ? { ...node.generation, media: "video" as const, videoOptions: node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS } : undefined;
+        const generation = video ? { ...node.generation, media: "video" as const, videoOptions: resolveVideoOptions(node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS, orderedAssets) } : undefined;
         const provider = generation ? videoProvider(generation.videoChannel, generation.videoOptions) : node.provider;
         const ratio = generation ? generation.ratio ?? "16:9" : node.ratio;
         const sessionOutput = !video && (!step.jobId || !!step.generationSubmission);

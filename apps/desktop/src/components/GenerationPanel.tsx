@@ -5,7 +5,7 @@ import { GenerationSessionSurface } from "./GenerationSessionSurface";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { DEFAULT_VIDEO_OPTIONS, imageInputError, videoInputError, videoModelLabel, videoProvider, type VideoOptions } from "../lib/videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS, imageInputError, resolveVideoOptions, videoInputError, videoModelLabel, videoProvider, type VideoOptions } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { MediaPreview } from "./MediaPreview";
 import { useStore, type GenEditingMode } from "../store";
@@ -1141,13 +1141,13 @@ function GenEditComposer({
   const selectedProvider = useStore((s) => s.activeGenProvider);
   const sourceTurn = preloadTurn ?? (isRevise ? job.turns[job.turns.length - 1] : job.turns[0]);
   const isVideo = (sourceTurn?.media ?? job.media) === "video";
-  const [videoOptions, setVideoOptions] = useState<VideoOptions>(sourceTurn?.videoOptions ?? job.videoOptions ?? DEFAULT_VIDEO_OPTIONS);
+  const [selectedVideoOptions, setVideoOptions] = useState<VideoOptions>(sourceTurn?.videoOptions ?? job.videoOptions ?? DEFAULT_VIDEO_OPTIONS);
   const [videoChannel, setVideoChannel] = useState<"jimeng" | "cloud">((sourceTurn?.provider ?? job.provider).startsWith("bowerbird-cloud") ? "cloud" : "jimeng");
   const sourceProvider = sourceTurn?.provider ?? job.provider;
   const continuationProvider = isCloudProvider(sourceProvider)
     ? canonicalProviderKey(sourceProvider)
     : sourceProvider === "jimeng" ? "jimeng" : "codex";
-  const activeGenProvider = isVideo ? videoProvider(videoChannel, videoOptions) : isRevise ? continuationProvider : selectedProvider;
+  const activeGenProvider = isVideo ? videoProvider(videoChannel, selectedVideoOptions) : isRevise ? continuationProvider : selectedProvider;
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
   const defaultProvider = useStore((s) => s.defaultProvider);
   const setDefaultProvider = useStore((s) => s.setDefaultProvider);
@@ -1174,6 +1174,7 @@ function GenEditComposer({
     // 维度环点扇区插进本坞（与创作板互斥挂载，任意时刻只有一个实例消费）。
     consumePendingKeyword: true,
   });
+  const videoOptions = resolveVideoOptions(selectedVideoOptions, references);
   // 比例初值取会话首轮的值；编辑坞内改动不持久化（创作板有自己的记忆）。
   const [ratio, setRatio] = useState<string | null>(sourceTurn?.ratio ?? job.lastRatio ?? null);
   // Agent 方案开关（与创作板同款三态）：off = 直发；a = 方案A（子句挑选）；b = 方案B（skill 审查修复）。

@@ -4,7 +4,7 @@ import { filterAssetsByMediaType, type MediaFilter } from "./lib/mediaFilter";
 import { readThumbnailWidth, saveThumbnailWidth, type ThumbnailScope } from "./lib/thumbnailSize";
 import { beginOnboardingOperation } from "./lib/onboardingStore";
 import type { ProjectMembership } from "./lib/libraryView";
-import { videoInputError, videoRatio, type GenerationSettings } from "./lib/videoGeneration";
+import { resolveVideoOptions, videoInputError, videoRatio, type GenerationSettings } from "./lib/videoGeneration";
 import { api } from "./lib/api";
 import { loadProjectOrder, reconcileProjectOrder, saveProjectOrder } from "./lib/projectOrder";
 import { acknowledgeCreativeContinuation, generationParentLocator } from "./lib/creativeGeneration";
@@ -1959,7 +1959,9 @@ export const useStore = create<State>((set, get) => {
     // 即梦 omit --ratio 会固定回退 16:9（竖屏参考图也被横切）；解析不了（无参考图/无尺寸）
     // 维持「自动」交引擎默认。落 lastRatio 供续轮坞与重试继承。
     const media = generation?.media ?? "image";
-    const videoOptions = media === "video" ? generation?.videoOptions : null;
+    const selectedVideoOptions = media === "video" ? generation?.videoOptions : null;
+    const videoOptions = selectedVideoOptions && creativeContext?.relation !== "retry"
+      ? resolveVideoOptions(selectedVideoOptions, references) : selectedVideoOptions;
     if (media === "video") {
       if ((prov !== "jimeng" && !prov.startsWith("bowerbird-cloud-video_seedance25_")) || !videoOptions) throw new Error("请选择方舟或即梦 Seedance 2.5 视频参数");
       const error = videoInputError(videoOptions, references, ratio, prov);
@@ -2082,7 +2084,13 @@ export const useStore = create<State>((set, get) => {
       .filter((p): p is string => !!p);
     const exactRefs = opts?.exactReferences;
     const media = opts?.generation?.media ?? job.media ?? "image";
-    const videoOptions = media === "video" ? opts?.generation?.videoOptions ?? job.videoOptions : null;
+    const videoReferences = (exactRefs ?? reviseRefs).map(store_path => ({
+      store_path, duration: opts?.references?.find(reference => reference.store_path === store_path)?.duration ?? null,
+    }));
+    const selectedVideoOptions = media === "video" ? opts?.generation?.videoOptions ?? job.videoOptions : null;
+    // A retry replays the frozen mode, including historical single-image multi-reference tasks.
+    const videoOptions = selectedVideoOptions && opts?.creativeRelation !== "retry"
+      ? resolveVideoOptions(selectedVideoOptions, videoReferences) : selectedVideoOptions;
     const sentRatio = videoOptions ? videoRatio(videoOptions, opts?.ratio ?? job.lastRatio) : opts?.ratio?.trim() ? opts.ratio : null;
     // 生成数量（1–4）：仅即梦 / Cloud 生图引擎；其余 provider 固定 1（后端同样校验）。
     const count = media === "image" && (prov === "jimeng" || prov === "dreamina" || prov.startsWith("bowerbird-cloud"))
@@ -2094,7 +2102,7 @@ export const useStore = create<State>((set, get) => {
       : false;
     if (media === "video") {
       if ((prov !== "jimeng" && !prov.startsWith("bowerbird-cloud-video_seedance25_")) || !videoOptions) throw new Error("请选择方舟或即梦 Seedance 2.5 视频参数");
-      const error = videoInputError(videoOptions, (exactRefs ?? reviseRefs).map((store_path) => ({ store_path, duration: null })), sentRatio, prov);
+      const error = videoInputError(videoOptions, videoReferences, sentRatio, prov);
       if (error) throw new Error(error);
     }
     const fallbackParent = generationParentLocator(job.id, job.turns, get().assets);

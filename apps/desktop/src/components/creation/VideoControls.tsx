@@ -70,8 +70,8 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
       {!resolutions.includes(options.video_resolution) && <option value={options.video_resolution}>{options.video_resolution} · 待核验</option>}
       {resolutions.map(value => <option key={value} value={value}>{value}</option>)}
     </TacticalSelect>
-    <TacticalSelect aria-label="视频生成模式" className={control} value={options.kind} onValueChange={value => onChange({ ...options, kind: value as VideoOptions["kind"] })}>
-      <option value="text2video">文生视频</option><option value="image2video">单图生视频</option><option value="frames2video">首尾帧</option><option value="multimodal2video">多参考</option>
+    <TacticalSelect aria-label="视频生成模式" title={options.kind === "frames2video" ? "按参考顺序使用首帧、尾帧" : `自动识别：${options.kind === "text2video" ? "文生视频" : options.kind === "image2video" ? "单图生视频" : "多参考"}`} className={control} value={options.kind === "frames2video" ? "frames2video" : "auto"} onValueChange={value => onChange({ ...options, kind: value === "frames2video" ? "frames2video" : "text2video" })}>
+      <option value="auto">自动识别</option><option value="frames2video">首尾帧</option>
     </TacticalSelect>
     <label className="flex items-center gap-1 text-xs text-muted">时长<input aria-label="视频时长（秒）" type="number" min={minDuration} max={maxDuration} step={1} className={`${control} w-16`}
       value={options.duration} onChange={event => onChange({ ...options, duration: Number(event.target.value) })} />秒</label>

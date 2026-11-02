@@ -2,7 +2,7 @@ import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, videoInputError, videoModelLabel, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, resolveVideoOptions, videoInputError, videoModelLabel, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { LocalVideoFrames } from "./creation/LocalVideoFrames";
 import { ComfyEnvironmentControl, type ComfyEnvironmentState } from "./ComfyVideoCard";
@@ -167,8 +167,7 @@ export function CreationBoard({
   const isLocalVideo = isVideo && !!generation.localVideo;
   const localAllowed = canUseComfyVideo(cloudAuth, cloudEntitlement);
   const [localEnvironment, setLocalEnvironment] = useState<ComfyEnvironmentState>({ ready: false, checking: true, message: "正在检测环境…" });
-  const videoOptions = generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS;
-  const activeGenProvider = isChat ? "codex" : isLocalVideo ? "comfy-video" : isVideo ? videoProvider(generation.videoChannel, videoOptions) : selectedImageProvider;
+  const activeGenProvider = isChat ? "codex" : isLocalVideo ? "comfy-video" : isVideo ? videoProvider(generation.videoChannel, generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS) : selectedImageProvider;
   const draftRef = useRef<CreationEditorDraft | null>(initialDraft ?? null);
   const generationRef = useRef(generation);
   generationRef.current = generation;
@@ -219,6 +218,7 @@ export function CreationBoard({
     initialDraft,
     onDraftChange: persistGenerationDraft,
   });
+  const videoOptions = resolveVideoOptions(generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS, references);
   const localFrames = useMemo(() => localVideoFrames(references), [references]);
 
   useEffect(() => {
