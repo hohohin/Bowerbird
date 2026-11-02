@@ -11,6 +11,13 @@ page.setDefaultTimeout(10000);
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+async function selectMedia(pane, name) {
+  const controls = pane.locator('.library-controls-host');
+  await controls.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  if (await controls.evaluate(element => element.classList.contains('is-compact') && !element.classList.contains('is-open')))
+    await pane.getByRole('button', { name: '更多素材库控件', exact: true }).click();
+  await pane.getByRole('button', { name, exact: true }).click();
+}
 try {
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-library/preview.html`);
   await page.waitForFunction(() => !!window.mode && !!window.store);
@@ -43,10 +50,8 @@ try {
   const secondPane = page.locator('.library-split-pane').nth(1);
   await secondPane.locator('.text-file-card').first().waitFor();
   assert.equal(await secondPane.getByRole('tab', { name: '标签分类', exact: true }).getAttribute('aria-selected'), 'true');
-  await secondPane.getByRole('button', { name: '更多素材库控件', exact: true }).click();
-  await secondPane.getByRole('button', { name: '图片', exact: true }).click();
-  await secondPane.getByRole('button', { name: '更多素材库控件', exact: true }).click();
-  await secondPane.getByRole('button', { name: '文本', exact: true }).click();
+  await selectMedia(secondPane, '图片');
+  await selectMedia(secondPane, '文本');
   assert.equal(await secondPane.getByRole('tab', { name: '标签分类', exact: true }).getAttribute('aria-selected'), 'true', 'copied panes preserve the independent text browsing view');
   await secondPane.getByRole('button', { name: '关闭此栏', exact: true }).click();
   await cards.first().click();
