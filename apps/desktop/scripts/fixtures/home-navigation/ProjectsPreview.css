@@ -1,0 +1,62 @@
+/* Full-page candidate: retain the existing card theme, remove only its modal shell. */
+html[data-theme] .home-projects-page {
+  position: relative;
+  isolation: isolate;
+  z-index: 0;
+  display: flex;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  gap: 28px;
+  padding: 28px 32px 0;
+  overflow: hidden;
+  background: var(--pm-base);
+  color: var(--pm-ink);
+  backdrop-filter: none;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 16px;
+  line-height: normal;
+}
+.home-projects-page .project-manager-index { padding-top: 0; }
+.home-projects-page .project-manager-count { margin-top: 0; }
+.home-projects-page .project-manager-views { margin-top: 32px; }
+.home-projects-page .project-manager-toolbar { margin-bottom: 8px; }
+.home-projects-page .project-manager-create { min-height: 42px; flex-shrink: 0; white-space: nowrap; }
+.home-projects-page .project-manager-card .project-manager-open {
+  pointer-events: none;
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--pm-ink);
+}
+.home-projects-page .home-projects-footer {
+  display: flex;
+  flex-shrink: 0;
+  justify-content: flex-end;
+  align-items: center;
+  min-height: 56px;
+  padding: 12px 0 20px;
+}
+.home-projects-page .project-manager-ambient { opacity: .5; }
+.home-projects-page .pm-signal-top { display: none; }
+@media (max-width: 950px) {
+  html[data-theme] .home-projects-page { gap: 20px; padding: 24px 24px 0; }
+  .home-projects-page .project-manager-index { flex-basis: 112px; }
+  .home-projects-page .project-manager-toolbar { gap: 6px; }
+  .home-projects-page .project-manager-create { padding-inline: 12px; }
+}
+@media (max-width: 700px) {
+  html[data-theme] .home-projects-page { flex-direction: column; gap: 16px; padding: 20px 16px 0; }
+  .home-projects-page .project-manager-index { flex-basis: auto; }
+  .home-projects-page .project-manager-views { margin-top: 0; }
+}
