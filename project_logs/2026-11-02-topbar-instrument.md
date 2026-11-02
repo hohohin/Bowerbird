@@ -22,3 +22,10 @@
 - 截图：`apps/desktop/.tmp/topbar-instrument/`；正式组件预览：`http://127.0.0.1:17864/.tmp/canvas-structure-preview/index.html?theme=dark`。
 
 这是主应用源码接入，不是安装包发布；未替用户安装、重启桌面应用或改动真实素材库。公开安装包版本与发布流程仍以 DESKTOP-UPDATES.md 为准。
+
+## 同日补修：建立连接／探索外层白框
+
+- 用户指出素材库中仍有白框。回看正式 App 的浅色验收截图，确认按钮本身透明，但 `LibraryTactical.css` 的旧 `.app-topbar.library-tactical .app-topbar-leading` 仍铺设分组背景；其选择器优先级高于共用工业主题规则。上轮回归只检查按钮，遗漏父容器。
+- 先扩充现有测试，检查分组背景色、背景图、阴影，明确复现 `library/dark/900` 的非透明分组背景。删除该条旧分组规则，让正式工业主题统一管理分组；产品源码仅删除一行。
+- 增加左侧每个按钮的悬浮检查，覆盖按钮与所属分组。深浅色、画布／素材库／项目页、900–1920px 的 `topbar-instrument-ui` 通过，`home-navigation-ui` 通过；浅色正式 App 截图已确认分组底框消失。
+- 未操作真实素材或重启应用。远端同步仍待上一轮确认，本轮未发起推送。

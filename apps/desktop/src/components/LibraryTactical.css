@@ -81,7 +81,6 @@ html[data-theme="light"] .app-topbar.library-tactical {
   .library-filter-trigger, :where(.catalog-sidebar-heading button)):hover:not(:disabled) {
   background-color: var(--lt-hover-screen); border-color: transparent; box-shadow: none;
 }
-.app-topbar.library-tactical .app-topbar-leading { padding: 4px; gap: 2px; background: var(--lt-topbar-group); }
 .app-topbar.library-tactical .app-topbar-leading :is(.app-button-dark, .library-projects-trigger) {
   min-height: 32px; height: 32px; padding-inline: 9px; background: transparent; color: var(--lt-ink); font-size: 12px; box-shadow: none;
 }

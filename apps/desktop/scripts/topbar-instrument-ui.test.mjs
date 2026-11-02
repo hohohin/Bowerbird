@@ -27,15 +27,18 @@ try {
           const bar = el.getBoundingClientRect();
           const buttons = [...el.querySelectorAll('button')].filter(button => button.getBoundingClientRect().width);
           const boxes = buttons.map(button => button.getBoundingClientRect());
+          const surfaces = [...el.querySelectorAll('.app-topbar-leading, .app-topbar-import, .app-topbar-view-controls, .library-view-segments, .home-page-navigation')];
           return {
             height: bar.height,
             transparent: buttons.every(button => getComputedStyle(button).backgroundColor === 'rgba(0, 0, 0, 0)'),
+            groupSurfaces: surfaces.map(surface => ({ name: surface.className, background: getComputedStyle(surface).backgroundColor, image: getComputedStyle(surface).backgroundImage, shadow: getComputedStyle(surface).boxShadow })),
             contained: boxes.every(box => box.left >= bar.left && box.right <= bar.right && box.top >= bar.top && box.bottom <= bar.bottom),
             overlap: boxes.some((a, i) => boxes.slice(i + 1).some(b => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top)),
           };
         });
         assert.equal(state.height, 44, `${view}/${theme}/${width}: compact header`);
         assert.ok(state.transparent && state.contained && !state.overlap, JSON.stringify({ view, theme, width, state }));
+        assert.ok(state.groupSurfaces.every(surface => surface.background === 'rgba(0, 0, 0, 0)' && surface.image === 'none' && surface.shadow === 'none'), `${view}/${theme}/${width}: button groups have no background boxes: ${JSON.stringify(state.groupSurfaces)}`);
       }
       const button = header.locator('.topbar-account-trigger');
       const neighbour = header.locator('button').first();
@@ -48,6 +51,12 @@ try {
       assert.equal(final.color, theme === 'dark' ? 'rgb(143, 170, 184)' : 'rgb(73, 103, 117)');
       assert.equal(final.opacity, '1');
       assert.equal(await neighbour.evaluate(el => getComputedStyle(el).color), idle, 'neighbours do not change');
+      for (const action of await header.locator('.app-topbar-leading button').all()) {
+        await action.hover();
+        await page.waitForTimeout(240);
+        const surfaces = await action.evaluate(el => [el, el.closest('.app-topbar-leading')].map(surface => ({ background: getComputedStyle(surface).backgroundColor, image: getComputedStyle(surface).backgroundImage, shadow: getComputedStyle(surface).boxShadow })));
+        assert.ok(surfaces.every(surface => surface.background === 'rgba(0, 0, 0, 0)' && surface.image === 'none' && surface.shadow === 'none'), `${view}/${theme}: hovered action and its group stay transparent`);
+      }
       if (view === 'canvas') {
         const filter = header.getByRole('button', { name: '只看图片', exact: true });
         await filter.click();
