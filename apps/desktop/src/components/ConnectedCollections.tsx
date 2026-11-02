@@ -184,19 +184,22 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     };
     window.addEventListener("keydown", key); return () => window.removeEventListener("keydown", key);
   }, [media, scope, busy]);
+  function canShowOverlay() {
+    return alive.current && !!root.current?.isConnected && !root.current.closest('[inert], [aria-hidden="true"]');
+  }
   function activate(asset: Asset) {
     if (busy || !entryOf(asset).available) return;
     if (isAudioAsset(asset)) { useStore.getState().openDetail(asset.id); return; }
     const state = useStore.getState();
     if (projectId && state.activeProjectId !== projectId) return;
     if (projectId && (state.boardOpen || state.genEditing)) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
-    else void run(async () => { if (!asset.store_path) throw new Error("原文件暂不可用"); const path = await externalFiles.media(asset.store_path); if (alive.current) setPreview({ path, sourceKey: entryOf(asset).version ?? videoSourceKey(asset)! }); });
+    else void run(async () => { if (!asset.store_path) throw new Error("原文件暂不可用"); const path = await externalFiles.media(asset.store_path); if (canShowOverlay()) setPreview({ path, sourceKey: entryOf(asset).version ?? videoSourceKey(asset)! }); });
   }
   function context(asset: Asset, x: number, y: number, location: CatalogLocation) {
     const entry = entryOf(asset), key = filterRef.current;
     void run(async () => {
       const entries = selected.has(entry.id) ? await resolve([...selected]) : [entry];
-      if (alive.current && filterRef.current === key) setMenu({ x, y, entries, target: entry, location });
+      if (canShowOverlay() && filterRef.current === key) setMenu({ x, y, entries, target: entry, location });
     });
   }
   function hidden(folder: FolderConnection) {
@@ -276,11 +279,11 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
         </OverlayScrollArea>
         <ThumbnailSizeSlider scope="library"/>
         {!!selected.size && <div className="connected-selection"><span>已选 {selected.size} 项</span>
-          <button disabled={busy} onClick={() => void run(async () => { setAssign(assetsOf(await resolve([...selected])).map(asset => asset.id)); })}>添加到集合</button>
+          <button disabled={busy} onClick={() => void run(async () => { const entries = await resolve([...selected]); if (canShowOverlay()) setAssign(assetsOf(entries).map(asset => asset.id)); })}>添加到集合</button>
           {media !== "audios" && <button disabled={busy} onClick={() => void run(async () => { await addMaterialAssets(assetsOf(await resolve([...selected])), projectId, onClose, onCreateProject); })}>添加到画板</button>}
           <button disabled={busy} onClick={event => {
             const rect = event.currentTarget.getBoundingClientRect(), key = filterRef.current;
-            void run(async () => { const entries = await resolve([...selected]); if (alive.current && filterRef.current === key) setMenu({ x: rect.left, y: rect.top, entries, deleteOnly: true }); });
+            void run(async () => { const entries = await resolve([...selected]); if (canShowOverlay() && filterRef.current === key) setMenu({ x: rect.left, y: rect.top, entries, deleteOnly: true }); });
           }}>删除</button><button onClick={finishSelection}>取消</button>
         </div>}
       </div>

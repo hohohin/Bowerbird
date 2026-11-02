@@ -1,6 +1,6 @@
 # 首页平级导航候选
 
-2026-11-02 独立预览，等待界面确认；未接入正式 App／Toolbar／ProjectManagerPanel。
+2026-11-02 独立确认稿，用户已确认顶部居中布局并授权实装。正式 App／Toolbar／ProjectManagerPanel 已接入，源码待发布；本目录保留独立示意与假路由，不作为生产实现。
 
 - 顶部栏中央的「素材库」「项目」同级切换，位置相对整窗居中；项目管理占满主内容区，没有遮罩或关闭按钮。
 - 不新增 Tab 切页：素材库内部继续使用现有 Tab 切换素材视图，项目页正常移动焦点。
@@ -12,4 +12,4 @@
 
 验证：`node scripts/home-navigation-preview-ui.test.mjs`。旧界面 RED 用 `HOME_NAVIGATION_BASELINE=1`；截图保存在 `.tmp/home-navigation/`。
 
-正式接入需要处理：`libraryHomeView` setter 清筛选、LibraryHome 挂载强制重置、Toolbar 弹层状态及 localFilesOpen 与探索互斥；复用现有 enterProject / provisional 创建流程，不能使用预览的内存假路由。详见行动日志。
+正式接入已修正 `libraryHomeView` 清筛选和 LibraryHome 挂载重置，移除 Toolbar 项目弹层，使用 HomeWorkspace 保留两页状态；项目打开与创建复用真实 enterProject / provisional 链路。正式 App 隔离回归为 `node scripts/home-navigation-ui.test.mjs`，示例数据入口为 `/scripts/fixtures/home-navigation-live/preview.html?source-library&detail-route&canvas-library`，点击「返回主页」查看首页。验证边界及行动见 [日志](../../../../../project_logs/2026-11-02-home-navigation.md)。

@@ -8,7 +8,7 @@ import { OPEN_LOCAL_FILES } from "./lib/externalFiles";
 import { Toolbar } from "./components/Toolbar";
 import { WindowTitlebar } from "./components/WindowTitlebar";
 import { Sidebar } from "./components/Sidebar";
-import { LibraryHome } from "./components/LibraryHome";
+import { HomeWorkspace } from "./components/HomeWorkspace";
 import { CanvasWorkspace } from "./components/CanvasWorkspace";
 import { AssetDetail } from "./components/AssetDetail";
 import { AssetContextMenu } from "./components/AssetContextMenu";
@@ -85,7 +85,7 @@ function App() {
   const localFilesOpen = useLocalFileMode(s => s.open);
   const setLocalFilesOpen = useLocalFileMode(s => s.setOpen);
   useEffect(() => {
-    const show = () => { useLocalFileMode.getState().openBrowser(); setSourceBrowserOpen(false); };
+    const show = () => { useStore.getState().setLibraryHomeView("library"); useLocalFileMode.getState().openBrowser(); setSourceBrowserOpen(false); };
     window.addEventListener(OPEN_LOCAL_FILES, show);
     return () => window.removeEventListener(OPEN_LOCAL_FILES, show);
   }, []);
@@ -386,7 +386,7 @@ function App() {
     // 依赖 currentFolderId / searchQuery / boardOpen / genEditing / settings：切换文件夹、搜索、
     // 开关创作板/进入会话编辑、或改了影响列表的设置（如隐藏项目素材）时重拉
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProjectId, activeProjectIsProvisional, projectRoutePending, projectRouteRevision, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, genEditing, settings, libraryHomeView]);
+  }, [activeProjectId, activeProjectIsProvisional, projectRoutePending, projectRouteRevision, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, genEditing, settings]);
 
   // 有反推的资产 id 集合（project 级，缩略图标 🏷️ 用）：只随项目切换重拉，切 folder/filter 不重拉。
   useEffect(() => {
@@ -893,7 +893,7 @@ function App() {
         localFilesOpen={localFilesOpen}
         canvasMode={projectWorkspaceActive}
         onCanvasModeChange={(active) => { setLocalFilesOpen(false); return active ? createCreative(false) : exitCreative(); }}
-        onCreateCreative={(blank) => { const local = localFilesOpen; setLocalFilesOpen(false); return createCreative(local || blank); }}
+        onHomeViewChange={view => { setSourceBrowserOpen(false); useStore.getState().setLibraryHomeView(view); }}
         exploring={sourceBrowserOpen}
         onExplore={() => {
           setLocalFilesOpen(false);
@@ -911,37 +911,23 @@ function App() {
         <main className="app-workspace relative flex flex-1 flex-col overflow-hidden bg-canvas">
           <ExploreWorkspace url={sourceBrowserUrl} navigationId={sourceBrowserNavigation} open={sourceBrowserOpen && !collectionAddTargetId} onClose={() => setSourceBrowserOpen(false)}>
           <PreservedWorkspace suspended={showDetail}>
-          {projectWorkspaceActive ? (
-            initializing ? <LibraryLoadingState /> : (
-              <CanvasWorkspace
-                key={workspaceProjectId}
-                projectId={workspaceProjectId}
-                exploring={sourceBrowserOpen && !collectionAddTargetId}
-                focusThreadId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.threadId : null}
-                focusNodeId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.nodeId : null}
-                focusRequestId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.requestId : null}
-                onFocusConsumed={acknowledgeCreativeTarget}
-                launchRequest={creativeLaunchTargetsProject(creativeLaunch, workspaceProjectId) ? creativeLaunch : null}
-                onLaunchConsumed={acknowledgeCreativeLaunch}
-                onExit={exitCreative}
-              />
-            )
-          ) : (
-            <>
+          <div className="relative flex min-h-0 flex-1">
+            <div className="home-workspace-route" data-suspended={projectWorkspaceActive}>
+              <PreservedWorkspace suspended={projectWorkspaceActive}>
               {libraryHomeView === "library" && mode === "manage" && !collectionAddTargetId && <BatchBar />}
               <div className={`relative min-h-0 flex-1 overflow-clip ${collectionAddTargetId ? "collection-add-workspace" : ""}`}>
                 {initializing ? (
                   <LibraryLoadingState />
                 ) : (
-                  <LibraryHome onCreateProject={createProjectFromAssets}
-                    shortcutsEnabled={!sourceBrowserOpen && !collectionAddTargetId && !legacyInspectorOpen} />
+                  <HomeWorkspace active={!projectWorkspaceActive} onCreateProject={createProjectFromAssets}
+                    shortcutsEnabled={!sourceBrowserOpen && !showDetail && !collectionAddTargetId && !legacyInspectorOpen} />
                 )}
                 {/* 生成结果面板：主区覆盖层（像详情页） */}
-                {!collectionAddTargetId && legacyInspectorOpen && activeSessionKind === "generation" && <GenerationPanel readOnly />}
-                {!collectionAddTargetId && legacyInspectorOpen && activeSessionKind === "agent" && <CloudAgentSession readOnly />}
+                {!projectWorkspaceActive && libraryHomeView === "library" && !collectionAddTargetId && legacyInspectorOpen && activeSessionKind === "generation" && <GenerationPanel readOnly />}
+                {!projectWorkspaceActive && libraryHomeView === "library" && !collectionAddTargetId && legacyInspectorOpen && activeSessionKind === "agent" && <CloudAgentSession readOnly />}
                 {/* 创作模式视觉标记：瀑布流区品牌蓝线框 + 顶部居中刘海「创作模式」。
                     仅在挑图面（瀑布流）实际可见时呈现：被会话面板/详情页盖住时不显示。 */}
-                {boardOpen && !genEditing && !genPanelOpen && !showDetail && (
+                {!projectWorkspaceActive && libraryHomeView === "library" && boardOpen && !genEditing && !genPanelOpen && !showDetail && (
                   <>
                     <div
                       aria-hidden="true"
@@ -956,8 +942,23 @@ function App() {
                   </>
                 )}
               </div>
-            </>
-          )}
+              </PreservedWorkspace>
+            </div>
+            {projectWorkspaceActive && (initializing ? <LibraryLoadingState /> : (
+              <CanvasWorkspace
+                key={workspaceProjectId}
+                projectId={workspaceProjectId}
+                exploring={sourceBrowserOpen && !collectionAddTargetId}
+                focusThreadId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.threadId : null}
+                focusNodeId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.nodeId : null}
+                focusRequestId={creativeTarget?.projectId === workspaceProjectId ? creativeTarget.requestId : null}
+                onFocusConsumed={acknowledgeCreativeTarget}
+                launchRequest={creativeLaunchTargetsProject(creativeLaunch, workspaceProjectId) ? creativeLaunch : null}
+                onLaunchConsumed={acknowledgeCreativeLaunch}
+                onExit={exitCreative}
+              />
+            ))}
+          </div>
           <CollectionAddMode />
           </PreservedWorkspace>
           {showDetail && <div className="absolute inset-0 z-30 bg-canvas">

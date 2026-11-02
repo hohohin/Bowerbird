@@ -3,6 +3,8 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { LibraryHome } from "../../../src/components/LibraryHome";
+import { HomeWorkspace } from "../../../src/components/HomeWorkspace";
+import { ProjectContextMenu } from "../../../src/components/ProjectContextMenu";
 import { BatchBar } from "../../../src/components/BatchBar";
 import { Sidebar } from "../../../src/components/Sidebar";
 import { ToastViewport } from "../../../src/components/ToastViewport";
@@ -99,6 +101,25 @@ function TestToolbar() {
   const localFilesOpen=useLocalFileMode(s=>s.open);
   return <Toolbar localFilesOpen={localFilesOpen} canvasMode={new URL(location.href).searchParams.has("canvas-toolbar")} onExplore={()=>{}} onCanvasModeChange={()=>{}} onCreateCreative={()=>{w.createdProjects=(w.createdProjects||0)+1;}} onRefresh={async()=>{}}/>;
 }
+function HomeLayout() {
+  const boardOpen = useStore(s => s.boardOpen);
+  const canvas = boardOpen || new URL(location.href).searchParams.has("canvas-toolbar");
+  async function createProject(ids?: string[]) {
+    w.createdProjects = (w.createdProjects || 0) + 1;
+    w.catalogCreatedProjectAssets = ids;
+    useStore.setState({ boardOpen: true });
+  }
+  return <div className="app-shell" style={{ display: "flex", flexDirection: "column", height: "100vh" }}>
+    <FileDropImport />
+    <Toolbar localFilesOpen canvasMode={canvas} onExplore={() => {}} onCanvasModeChange={boardOpen => useStore.setState({ boardOpen })}
+      onCreateCreative={() => void createProject()} onRefresh={async () => {}}/>
+    <main className="app-workspace" style={{ position: "relative", display: "flex", flexDirection: "column", flex: 1, minWidth: 0, minHeight: 0 }}>
+      <HomeWorkspace active={!boardOpen} onCreateProject={createProject}/>
+      {boardOpen && <section aria-label="项目画布测试" style={{ position: "absolute", inset: 0 }}>项目画布测试</section>}
+    </main>
+    <ProjectContextMenu/><ToastViewport/>
+  </div>;
+}
 function FileDropSurface() {
   const assets = useStore(s => s.assets), memberships = useStore(s => s.libraryMemberships), projects = useStore(s => s.projects);
   const [expanded, setExpanded] = React.useState(false);
@@ -116,7 +137,13 @@ function FileDropSurface() {
   </div>;
 }
 const fileDrop = new URL(location.href).searchParams.has("file-drop");
+const layout = new URL(location.href).searchParams.has("layout") && !fileDrop;
+if (layout) {
+  document.documentElement.dataset.theme = "dark";
+  await import("../../../src/components/IndustrialTheme.css");
+  await import("../../../src/components/IndustrialMenus.css");
+}
 installCatalogPagingMock(window);
-createRoot(document.getElementById("root")!).render(<div className="app-shell" style={{ display: "flex", height: "100vh" }}>
+createRoot(document.getElementById("root")!).render(layout ? <HomeLayout/> : <div className="app-shell" style={{ display: "flex", height: "100vh" }}>
   <FileDropImport />{!fileDrop && <Sidebar/>}<main className="explore-main" style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0 }}><header data-test-topbar>测试工具栏 <input aria-label="测试搜索框" /></header>{new URL(location.href).searchParams.has("layout") && <TestToolbar/>}{fileDrop ? <FileDropSurface/> : <Library/>}</main><ToastViewport />
 </div>);

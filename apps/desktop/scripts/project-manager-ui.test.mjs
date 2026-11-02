@@ -3,7 +3,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
-// Exercise the production panel through the toolbar, using the closed IPC fixture.
+// Exercise the production home workspace through its toolbar, using closed IPC.
 const server = await createServer({ server: { host: "127.0.0.1", port: 0, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
@@ -13,10 +13,13 @@ const errors = [];
 page.on("pageerror", e => errors.push(e.message));
 await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
 const panel = page.locator(".project-manager-panel");
+const homeNavigation = page.getByRole("navigation", { name: "首页", exact: true });
+const projectsTab = homeNavigation.getByRole("button", { name: "项目", exact: true });
+const libraryTab = homeNavigation.getByRole("button", { name: "素材库", exact: true });
 try {
   await mkdir(".tmp/project-manager", { recursive: true });
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/project-drop/preview.html?layout`);
-  await page.getByRole("button", { name: "我的项目", exact: true }).waitFor();
+  await projectsTab.waitFor();
   const images = await Promise.all(Array.from({ length: 6 }, async (_, i) =>
     "data:image/webp;base64," + (await readFile(`src-tauri/resources/samples/preset-${String(i + 1).padStart(2, "0")}.webp`)).toString("base64")));
   await page.evaluate(images => {
@@ -35,29 +38,33 @@ try {
     };
     window.store.setState({ projects: [...projects, { ...projects[0], id: "draft", provisional: true }, { ...projects[0], id: "archived", archived_at: now }],
       activeProjectId: "design-0", projectsThumbnailWidth: 200,
-      enterProject: async id => { window.openedProject = id; } });
+      enterProject: async id => { window.openedProject = id; window.store.setState({ activeProjectId: id, boardOpen: true }); } });
   }, images);
-  await page.getByRole("button", { name: "我的项目", exact: true }).click();
+  await projectsTab.click();
   await panel.locator(".project-manager-card img").first().waitFor();
   assert.equal(await panel.locator(".project-manager-card").count(), 6);
   assert.equal(await panel.locator(".project-manager-count").textContent(), "06");
   assert.equal(await panel.locator(".project-manager-count").getAttribute("aria-label"), "6 个项目");
   assert.equal(await panel.locator(".project-manager-meta").first().textContent(), "12 个素材·刚刚更新");
-  const compactPanel = await panel.locator('.app-modal').boundingBox();
+  assert.equal(await page.getByRole('dialog').count(), 0, 'project directory is a page, not a dialog');
+  assert.equal(await panel.locator('.app-modal-close').count(), 0);
+  assert.equal(await projectsTab.getAttribute('aria-current'), 'page');
+  const compactPanel = await panel.boundingBox();
   const compactColumns = await panel.locator('.project-manager-grid').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length);
   for (const viewport of [{ width: 1920, height: 1080 }, { width: 2560, height: 1440 }]) {
     await page.setViewportSize(viewport);
-    const bounds = await panel.locator('.app-modal').boundingBox();
-    assert.equal(bounds.width, viewport.width - 64);
-    assert.equal(bounds.height, viewport.height - 80);
-    assert.ok(bounds.width > compactPanel.width && bounds.height > compactPanel.height, 'panel grows in both dimensions with the window');
+    const bounds = await panel.boundingBox(), workspace = await page.locator('.app-workspace').boundingBox();
+    assert.equal(bounds.width, viewport.width);
+    assert.equal(bounds.height, workspace.height);
+    assert.equal(bounds.y, workspace.y);
+    assert.ok(bounds.width > compactPanel.width && bounds.height > compactPanel.height, 'page grows in both dimensions with the window');
     assert.ok(await panel.locator('.project-manager-grid').evaluate(el => getComputedStyle(el).gridTemplateColumns.split(' ').length) > compactColumns, 'wider windows show more project columns');
-    const footer = await panel.locator('.app-modal-footer').boundingBox();
+    const footer = await panel.locator('.home-projects-footer').boundingBox();
     assert.ok(footer.y + footer.height <= bounds.y + bounds.height + 1, 'footer remains inside the resized panel');
   }
   await page.screenshot({ path: '.tmp/project-manager/wide.png' });
   await page.setViewportSize({ width: 1440, height: 1000 });
-  assert.equal(await panel.locator(".app-modal").evaluate(el => getComputedStyle(el).fontFamily), '"Segoe UI", "Microsoft YaHei", sans-serif');
+  assert.equal(await panel.evaluate(el => getComputedStyle(el).fontFamily), '"Segoe UI", "Microsoft YaHei", sans-serif');
   assert.equal(await panel.locator(".project-manager-empty-cover").textContent(), "开始你的创作");
   const covers = await panel.locator(".library-project-mosaic").evaluateAll(nodes => nodes.map(node => {
     return node.offsetHeight;
@@ -77,7 +84,7 @@ try {
   const beforeHover = await slot.boundingBox();
   await card.hover({ position: { x: 50, y: 50 } }); await page.waitForTimeout(350);
   const depth = await card.evaluate(el => ({ transform: getComputedStyle(el).transform, cover: getComputedStyle(el.querySelector('.library-project-mosaic')).transform,
-    title: getComputedStyle(el.querySelector('strong')).color, ink: getComputedStyle(el.closest('.app-modal')).color,
+    title: getComputedStyle(el.querySelector('strong')).color, ink: getComputedStyle(el.closest('.project-manager-panel')).color,
     edge: getComputedStyle(el.querySelector('.library-project-enter'), '::after').content }));
   assert.match(depth.transform, /matrix3d/); assert.match(depth.cover, /matrix3d/);
   assert.equal(depth.title, depth.ink); assert.equal(depth.edge, 'none');
@@ -85,10 +92,10 @@ try {
   assert.deepEqual(await slot.boundingBox(), beforeHover, 'depth does not move grid slots');
   const current = panel.locator('.project-manager-card[data-active="true"]');
   assert.ok((await current.boundingBox()).y < (await panel.locator('.project-manager-slot').first().boundingBox()).y - 4, 'current project stays lifted');
-  const heading = await panel.locator('.project-manager-section').boundingBox();
-  assert.ok((await card.boundingBox()).y > heading.y + heading.height, 'lifted card clears the section heading');
+  const heading = await panel.locator('.project-manager-toolbar').boundingBox();
+  assert.ok((await card.boundingBox()).y > heading.y + heading.height, 'lifted card clears the search and creation toolbar');
   assert.equal(await panel.getByRole('button', { name: '打开项目 山野护肤 · 品牌视觉', exact: true }).getAttribute('aria-current'), 'true');
-  const signal = panel.locator('.pm-signal').first();
+  const signal = panel.locator('.pm-signal').nth(1);
   const signalValues = await signal.evaluate(el => {
     const animation = el.getAnimations()[0]; animation.pause();
     return animation.effect.getKeyframes().map(frame => { animation.currentTime = frame.offset * 7180; return Number(getComputedStyle(el).opacity); });
@@ -105,10 +112,12 @@ try {
   await panel.getByRole("textbox", { name: "搜索项目" }).fill("找不到");
   await panel.getByText("没有匹配的项目").waitFor();
   await panel.getByRole("textbox", { name: "搜索项目" }).fill("");
-  await panel.getByRole("combobox", { name: "项目排序" }).selectOption("name");
+  await panel.getByRole("combobox", { name: "项目排序" }).click();
+  await page.getByRole("option", { name: "项目名称", exact: true }).click();
   const names = await panel.locator(".library-project-folder-title strong").allTextContents();
   assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b, "zh-CN")));
-  await panel.getByRole("combobox", { name: "项目排序" }).selectOption("recent");
+  await panel.getByRole("combobox", { name: "项目排序" }).click();
+  await page.getByRole("option", { name: "最近更新", exact: true }).click();
   const size = panel.getByRole("slider", { name: "项目卡片大小", exact: true });
   await size.fill("0");
   const small = await panel.locator(".project-manager-card").first().boundingBox();
@@ -143,7 +152,8 @@ try {
   assert.equal(await panel.locator('.project-manager-activate[aria-current="true"]').getAttribute('aria-label'), selectedBeforeMenu, 'menu does not also select the card');
   assert.equal(await page.evaluate(() => window.openedProject), undefined, 'menu does not open the project');
   await page.keyboard.press("Escape");
-  assert.equal(await panel.count(), 1, "Escape does not close the manager while a project menu owns focus");
+  assert.equal(await panel.isVisible(), true, "Escape closes the project menu without leaving the page");
+  assert.equal(await page.evaluate(() => window.store.getState().projectContextMenu), null);
   await page.evaluate(() => window.store.setState({ projectContextMenu: null }));
   await panel.locator('.project-manager-card').first().click({ button: 'right' });
   assert.equal(await page.evaluate(() => window.store.getState().projectContextMenu.projectId), 'design-0', 'right click and title menu use the same project menu');
@@ -152,23 +162,29 @@ try {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await page.mouse.move(10, 10);
     await page.waitForTimeout(300);
-    const createColors = await panel.getByRole('button', { name: '新建项目', exact: true }).evaluate(el => ({ color: getComputedStyle(el).color, ink: getComputedStyle(el.closest('.app-modal')).color, background: getComputedStyle(el).backgroundColor }));
+    const createColors = await panel.getByRole('button', { name: '新建项目', exact: true }).evaluate(el => ({ color: getComputedStyle(el).color, ink: getComputedStyle(el.closest('.project-manager-panel')).color, background: getComputedStyle(el).backgroundColor }));
     assert.equal(createColors.color, createColors.ink, 'creation button uses neutral text in both themes');
-    assert.equal(await panel.locator('.app-modal').evaluate(el => getComputedStyle(el).backgroundColor.endsWith('0.88)')), true);
-    assert.equal(await panel.locator('.app-modal-title').evaluate(el => getComputedStyle(el).fontSize), '26px');
+    const surface = await panel.evaluate(el => ({ filter: getComputedStyle(el).backdropFilter, background: getComputedStyle(el).backgroundColor }));
+    assert.equal(surface.filter, 'none', 'full page has no modal backdrop blur');
+    assert.match(surface.background, /^rgb\(/, 'page surface is opaque in both themes');
+    assert.equal(await homeNavigation.isVisible(), true, 'top-level navigation remains available');
     await panel.locator(".project-manager-card img").evaluateAll(images => Promise.all(images.map(img => img.decode())));
     await page.screenshot({ path: `.tmp/project-manager/${theme}.png` });
   }
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.waitForFunction(() => document.querySelector('.pm-signal').getAnimations().length === 0);
+  await page.waitForFunction(() => document.querySelectorAll('.pm-signal')[1].getAnimations().length === 0);
   assert.equal(await signal.evaluate(el => el.getAnimations().length), 0);
   await card.hover();
   assert.equal(await card.evaluate(el => getComputedStyle(el).transform), 'none');
-  for (const width of [736, 375, 320]) {
+  for (const width of [900, 800]) {
     await page.setViewportSize({ width, height: 800 });
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    const bounds = await panel.locator(".app-modal").evaluate(el => ({ width: el.clientWidth, scroll: el.scrollWidth, left: el.getBoundingClientRect().left, right: el.getBoundingClientRect().right }));
+    const bounds = await panel.evaluate(el => ({ width: el.clientWidth, scroll: el.scrollWidth, left: el.getBoundingClientRect().left, right: el.getBoundingClientRect().right }));
     assert.ok(bounds.scroll <= bounds.width + 1 && bounds.left >= 0 && bounds.right <= width, JSON.stringify(bounds));
+    for (const control of [homeNavigation, panel.getByRole('textbox', { name: '搜索项目' }), panel.getByRole('combobox', { name: '项目排序' }), panel.getByRole('button', { name: '新建项目', exact: true })]) {
+      const controlBounds = await control.boundingBox();
+      assert.ok(controlBounds.width > 0 && controlBounds.x >= 0 && controlBounds.x + controlBounds.width <= width, 'navigation and project actions fit the desktop window');
+    }
     await panel.getByRole("button", { name: "列表视图" }).click();
     assert.equal(await arrowsAtCorner(), true, 'entry arrows stay top-right in narrow list view');
     assert.equal(await panel.locator(".project-manager-grid").evaluate(el => el.scrollWidth <= el.clientWidth + 1), true);
@@ -177,40 +193,66 @@ try {
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await page.screenshot({ path: ".tmp/project-manager/narrow.png" });
   await page.setViewportSize({ width: 1440, height: 1000 });
+  await panel.getByRole('textbox', { name: '搜索项目' }).fill('咖啡');
+  await panel.getByRole('combobox', { name: '项目排序' }).click();
+  await page.getByRole('option', { name: '项目名称', exact: true }).click();
+  await panel.getByRole('button', { name: '列表视图' }).click();
+  await libraryTab.click();
+  await panel.waitFor({ state: 'hidden' });
+  assert.equal(await panel.isVisible(), false);
+  assert.equal(await page.locator('.project-manager-ambient').count(), 0, 'hidden project page releases its WAAPI backdrop');
+  await projectsTab.click();
+  assert.equal(await panel.getByRole('textbox', { name: '搜索项目' }).inputValue(), '咖啡');
+  assert.equal(await panel.getByRole('combobox', { name: '项目排序' }).innerText(), '项目名称');
+  assert.equal(await panel.getByRole('button', { name: '列表视图' }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await size.inputValue(), '46', 'card size survives page switches');
+  await panel.getByRole('textbox', { name: '搜索项目' }).fill('');
+  await panel.getByRole('combobox', { name: '项目排序' }).click();
+  await page.getByRole('option', { name: '最近更新', exact: true }).click();
+  await panel.getByRole('button', { name: '网格视图' }).click();
   await panel.getByRole("button", { name: "打开项目 山野护肤 · 品牌视觉", exact: true }).click();
-  await panel.waitFor({ state: "detached" });
+  await panel.waitFor({ state: "hidden" });
   assert.equal(await page.evaluate(() => window.openedProject), "design-0");
-  await page.getByRole("button", { name: "我的项目", exact: true }).click();
-  assert.equal(await size.inputValue(), "46", "size survives closing and reopening");
+  await page.getByRole('button', { name: '返回主页', exact: true }).click();
+  await panel.waitFor({ state: 'visible' });
+  assert.equal(await size.inputValue(), "46", "size survives project entry and return");
   await page.evaluate(() => window.openedProject = null);
   const directOpen = panel.getByRole('button', { name: '打开项目 理想居所 · 空间灵感', exact: true });
   assert.equal(await panel.getByRole('button', { name: /^进入项目/ }).count(), 0, 'arrow is decorative, not a second action');
   const directBounds = await directOpen.boundingBox();
   await directOpen.click({ position: { x: directBounds.width - 16, y: 15 } });
-  await panel.waitFor({ state: 'detached' });
+  await panel.waitFor({ state: 'hidden' });
   assert.equal(await page.evaluate(() => window.openedProject), 'design-4', 'arrow area activates the same full-card entry');
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  await page.getByRole('button', { name: '返回主页', exact: true }).click();
   const keyboardProject = panel.getByRole('button', { name: '打开项目 秋日系列 · 电商海报', exact: true });
   await keyboardProject.focus(); await keyboardProject.press('Space');
 
-  await panel.waitFor({ state: 'detached' });
+  await panel.waitFor({ state: 'hidden' });
   assert.equal(await page.evaluate(() => window.openedProject), 'design-1');
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  await page.getByRole('button', { name: '返回主页', exact: true }).click();
+  await page.evaluate(() => window.store.setState({ projectRoutePending: true }));
+  assert.equal(await panel.getByRole('button', { name: '新建项目', exact: true }).isDisabled(), true);
+  await page.evaluate(() => window.store.setState({ projectRoutePending: false }));
   await panel.getByRole("button", { name: "新建项目", exact: true }).click();
-  await panel.waitFor({ state: "detached" });
+  await panel.waitFor({ state: "hidden" });
   assert.equal(await page.evaluate(() => window.createdProjects), 1);
-  await page.evaluate(() => window.failProjectCovers = true);
-  await page.getByRole("button", { name: "我的项目", exact: true }).click();
+  await page.evaluate(() => { window.failProjectCovers = true; window.store.setState(s => ({ projects: [...s.projects] })); });
+  await page.getByRole('button', { name: '返回主页', exact: true }).click();
   await panel.getByRole("alert").waitFor();
   await page.evaluate(() => window.failProjectCovers = false);
   await panel.getByRole("button", { name: "重试" }).click();
+  await panel.getByRole("alert").waitFor({ state: "detached" });
   await panel.locator(".project-manager-card img").first().waitFor();
   await page.keyboard.press("Escape");
-  await panel.waitFor({ state: "detached" });
-  assert.equal(await page.getByRole("button", { name: "我的项目", exact: true }).evaluate(el => document.activeElement === el), true);
+  assert.equal(await panel.isVisible(), true, 'Escape does not navigate away from a full page');
+  await libraryTab.click();
+  await panel.waitFor({ state: 'hidden' });
+  assert.equal(await panel.isVisible(), false);
+  assert.equal(await libraryTab.evaluate(el => document.activeElement === el), true, 'clicked navigation retains focus');
   // Use a closed IPC stub to verify dropping onto the redesigned card still targets
   // its project, without opening it or touching files.
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  await projectsTab.click();
+  await panel.waitFor({ state: 'visible' });
   await page.evaluate(async () => {
     const { setDragAssets } = await import('/src/lib/dragPayload.ts');
     const invoke = window.__TAURI_INTERNALS__.invoke;
@@ -230,5 +272,5 @@ try {
   assert.equal(await panel.isVisible(), true);
   await page.keyboard.press('Escape');
   assert.deepEqual(errors, []);
-  console.log("PASS: project manager search/sort/views, 3D current/hover and single-click entry, cover layouts, empty/retry, persistent slider/keyboard/pinch, menu guard, enter/create/close, light/dark and 320px layout.");
+  console.log("PASS: inline project page, search/sort/views and state retention, 3D cards and entry, covers, empty/retry, slider/keyboard/pinch, menu guard, project creation, light/dark and 800-2560px desktop layouts.");
 } finally { await browser.close(); await server.close(); }

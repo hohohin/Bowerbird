@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState } from "react";
-import { ArrowLeft, Compass, LayoutDashboard, Link2, LoaderCircle } from "lucide-react";
+import { useEffect, useRef } from "react";
+import { ArrowLeft, Compass, Images, LayoutDashboard, Link2, LoaderCircle } from "lucide-react";
 import { SidebarAccount } from "./SidebarAccount";
-import { ProjectManagerPanel } from "./ProjectManagerPanel";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { MediaTypeFilter } from "./MediaTypeFilter";
 import { useStore } from "../store";
@@ -12,13 +11,14 @@ import { prepareMediaImport } from "../lib/mediaImport";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore";
 import "./LibraryTactical.css";
+import "./HomeNavigation.css";
 
 /** 顶部工具栏：建立连接 + 项目/主页入口 + 用户中心。 */
 export function Toolbar({
   onRefresh,
   canvasMode,
   onCanvasModeChange,
-  onCreateCreative,
+  onHomeViewChange,
   onExplore,
   exploring = false,
   localFilesOpen = false,
@@ -26,7 +26,8 @@ export function Toolbar({
   onRefresh: () => Promise<void>;
   canvasMode: boolean;
   onCanvasModeChange: (active: boolean) => void;
-  onCreateCreative: (blank: boolean) => void;
+  onCreateCreative?: (blank: boolean) => void;
+  onHomeViewChange?: (view: "library" | "projects") => void;
   onExplore?: () => void;
   exploring?: boolean;
   localFilesOpen?: boolean;
@@ -44,10 +45,13 @@ export function Toolbar({
   const setCurrentCollection = useStore((s) => s.setCurrentCollection);
   const setSmartFilter = useStore((s) => s.setSmartFilter);
   const homeView = useStore(s => s.libraryHomeView);
+  const projectRoutePending = useStore(s => s.projectRoutePending);
   const setColorFilter = useStore((s) => s.setColorFilter);
-  const [projectsOpen, setProjectsOpen] = useState(false);
   const toolbarRef = useRef<HTMLElement>(null);
-  const tactical = !canvasMode && localFilesOpen && !exploring;
+  const homeNavigation = !canvasMode && !exploring;
+  const tactical = homeNavigation;
+  const showLibraryActions = canvasMode || exploring || homeView === "library";
+  const changeHomeView = onHomeViewChange ?? useStore.getState().setLibraryHomeView;
 
   useEffect(() => {
     if (!tactical) return;
@@ -61,8 +65,6 @@ export function Toolbar({
     };
   }, [tactical]);
 
-  // Hidden search must not leave an invisible filter behind after a view change.
-  useEffect(() => { setLibraryQuery(""); setFolderQuery(""); }, [setLibraryQuery, setFolderQuery]);
   // 扩展采集入根库；清空当前范围让用户立刻看见新素材。
   function showCollectedAsset() {
     setCurrentCollection(null);
@@ -126,18 +128,18 @@ export function Toolbar({
   }
 
   return (
-    <header ref={toolbarRef} className={`app-topbar is-search-hidden${canvasMode ? " canvas-tactical" : " is-library"}${tactical ? " library-tactical" : ""}${localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
+    <header ref={toolbarRef} className={`app-topbar is-search-hidden${canvasMode ? " canvas-tactical" : " is-library"}${tactical ? " library-tactical" : ""}${homeNavigation ? " has-home-navigation" : ""}${localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
       <div className="app-topbar-leading">
-        <div className="app-topbar-import">
+        {showLibraryActions && <div className="app-topbar-import">
           <button type="button" data-import-trigger data-tour="import-folder" onClick={connectFolder} disabled={busy}
             className="app-button-dark disabled:opacity-50" aria-label={busy ? "连接中" : "建立连接"} title="建立连接">
             {busy ? <LoaderCircle size={15} className="animate-spin" /> : <Link2 size={15} />}
             <span className="app-topbar-button-label">{busy ? "连接中" : "建立连接"}</span>
           </button>
-        </div>
-        {onExplore && <button type="button" data-tour="explore" className="app-button-dark" aria-pressed={exploring}
+        </div>}
+        {showLibraryActions && onExplore && <button type="button" data-tour="explore" className="app-button-dark" aria-pressed={exploring}
           onClick={onExplore} aria-label="探索" title="浏览灵感网站，拖图采集到素材库"><Compass size={15} /><span className="app-topbar-button-label">探索</span></button>}
-        {canvasMode ? (
+        {canvasMode && (
           <button
             type="button"
             className="app-button-dark canvas-mode-toggle is-active"
@@ -148,24 +150,17 @@ export function Toolbar({
             <ArrowLeft size={15} />
             <span className="app-topbar-button-label">返回主页</span>
           </button>
-        ) : (
-          <button
-            type="button"
-            className="app-button-accent library-projects-trigger"
-            data-tour="new-creation"
-            title="打开项目管理"
-            aria-label="我的项目"
-            aria-haspopup="dialog"
-            aria-expanded={projectsOpen}
-            onClick={() => setProjectsOpen(true)}
-          >
-            <LayoutDashboard size={15} />
-            <span className="app-topbar-button-label">我的项目</span>
-          </button>
         )}
       </div>
 
-      {tactical && <span className="library-toolbar-context"><i aria-hidden="true"/><span>素材库<small>ASSET LIBRARY</small></span></span>}
+      {homeNavigation && <nav aria-label="首页" className="home-page-navigation">
+        <button type="button" aria-current={homeView === "library" ? "page" : undefined} disabled={projectRoutePending} onClick={() => changeHomeView("library")}>
+          <Images size={15} aria-hidden="true"/><span>素材库</span>
+        </button>
+        <button type="button" data-tour="new-creation" aria-current={homeView === "projects" ? "page" : undefined} disabled={projectRoutePending} onClick={() => changeHomeView("projects")}>
+          <LayoutDashboard size={15} aria-hidden="true"/><span>项目</span>
+        </button>
+      </nav>}
 
       <div className="app-topbar-actions" aria-label="视图与账号">
         {!localFilesOpen && (canvasMode || homeView === "library") && <div className="app-topbar-view-controls" role="group" aria-label="素材视图">
@@ -185,7 +180,6 @@ export function Toolbar({
         </button>
       )}
       {busy && <div className="app-progress-line" aria-hidden="true" />}
-      {projectsOpen && <ProjectManagerPanel onClose={() => setProjectsOpen(false)} onCreate={() => onCreateCreative(true)} />}
     </header>
   );
 }

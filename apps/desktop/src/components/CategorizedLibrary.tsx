@@ -279,13 +279,16 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     setPreview(null);
     useStore.getState().openDetail(asset.id);
   }
+  function canShowOverlay() {
+    return alive.current && !!root.current?.isConnected && !root.current.closest('[inert], [aria-hidden="true"]');
+  }
   async function openPreview(asset: Asset) {
     const version = ++previewVersion.current;
     try {
       if (!asset.store_path) throw new Error("素材原文件不可用");
       const path = await externalFiles.media(asset.store_path);
-      if (alive.current && version === previewVersion.current) setPreview({ path, sourceKey: videoSourceKey(asset)! });
-    } catch (error) { if (alive.current && version === previewVersion.current) notifyError(error, "无法预览素材"); }
+      if (canShowOverlay() && version === previewVersion.current) setPreview({ path, sourceKey: videoSourceKey(asset)! });
+    } catch (error) { if (canShowOverlay() && version === previewVersion.current) notifyError(error, "无法预览素材"); }
   }
   function context(asset: Asset, x: number, y: number, location: CatalogLocation) {
     if (working) return;
@@ -293,7 +296,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     const key = filterKey;
     void run(async () => {
       const targets = ids.length === 1 ? [asset] : await resolveSelection(ids);
-      if (!alive.current || filterKeyRef.current !== key) return;
+      if (!canShowOverlay() || filterKeyRef.current !== key) return;
       useStore.getState().openContextMenu(x, y, asset.id, { asset, libraryProjectId: projectScope ? projectId ?? undefined : undefined, fileSelection: { assets: targets, openReferences: () => setReferences(true),
         onComplete: finishSelection, select: () => { anchor.current = location; setMultiple(true); setSelected(previous => new Set([...previous, asset.id])); } } });
     });

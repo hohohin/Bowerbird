@@ -8,17 +8,29 @@ import { copyLibraryPane, createLibraryPane, LibraryPaneContext, registerLibrary
 import "./LibrarySplit.css";
 import "./LibraryTactical.css";
 
-export function LibraryHome({ onCreateProject, shortcutsEnabled = true }: { onCreateProject?: (assetIds?: string[]) => Promise<unknown>; shortcutsEnabled?: boolean } = {}) {
+export function LibraryHome({ onCreateProject, active = true, shortcutsEnabled = true }: { onCreateProject?: (assetIds?: string[]) => Promise<unknown>; active?: boolean; shortcutsEnabled?: boolean } = {}) {
   const [panes, setPanes] = useState(() => [{ pane: createLibraryPane("home-left", useLocalFileMode), weight: 1 }]);
   const body = useRef<HTMLDivElement>(null);
   const nextId = useRef(1);
   const focusPane = useRef<string | null>(null);
+  const lastActive = useRef(panes[0].pane);
+  const currentPanes = useRef(panes);
+  currentPanes.current = panes;
   useEffect(() => {
-    useStore.getState().setLibraryHomeView("library");
     useLocalFileMode.getState().openSource("global");
-    useActiveLibraryPane.getState().activate(panes[0].pane);
-    return () => useActiveLibraryPane.getState().activate(null);
   }, []);
+  useEffect(() => {
+    if (!active) return;
+    const state = useActiveLibraryPane.getState();
+    state.activate(currentPanes.current.some(item => item.pane === lastActive.current) ? lastActive.current : currentPanes.current[0].pane);
+    return () => {
+      const current = useActiveLibraryPane.getState();
+      if (currentPanes.current.some(item => item.pane === current.pane)) {
+        lastActive.current = current.pane!;
+        current.activate(null);
+      }
+    };
+  }, [active]);
   useLayoutEffect(() => {
     if (!focusPane.current) return;
     const element = body.current?.querySelector<HTMLElement>(`[data-library-pane="${focusPane.current}"]`);
@@ -51,7 +63,7 @@ export function LibraryHome({ onCreateProject, shortcutsEnabled = true }: { onCr
       {panes.map(({ pane, weight }, index) => <Fragment key={pane.id}>
         {index > 0 && <PaneDivider index={index} ratio={panes[index - 1].weight / (panes[index - 1].weight + weight)} onResize={ratio => resizePair(panes[index - 1].pane, pane, ratio)}/>}
         <div className="library-split-pane" style={{ flexGrow: weight }} aria-label={`素材库第 ${index + 1} 栏`}>
-          <LibraryPaneContext.Provider value={pane}><HomePane pane={pane} split={panes.length > 1} onSplit={() => splitPane(pane)} onClose={() => closePane(pane)} onCreateProject={onCreateProject} shortcutsEnabled={shortcutsEnabled}/></LibraryPaneContext.Provider>
+          <LibraryPaneContext.Provider value={pane}><HomePane pane={pane} split={panes.length > 1} onSplit={() => splitPane(pane)} onClose={() => closePane(pane)} onCreateProject={onCreateProject} shortcutsEnabled={active && shortcutsEnabled}/></LibraryPaneContext.Provider>
         </div>
       </Fragment>)}
     </div>
