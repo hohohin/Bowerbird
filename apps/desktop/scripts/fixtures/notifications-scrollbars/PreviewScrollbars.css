@@ -1,0 +1,50 @@
+html.preview-overlay-scrollbars,
+html.preview-overlay-scrollbars * {
+  scrollbar-width: none !important;
+  scrollbar-gutter: auto !important;
+}
+html.preview-overlay-scrollbars::-webkit-scrollbar,
+html.preview-overlay-scrollbars *::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+html.preview-overlay-scrollbars .collection-scroll-rail { display: none !important; }
+.preview-scrollbar-origin {
+  position: fixed !important;
+  left: 0 !important; top: 0 !important;
+  width: 100px !important; height: 100px !important;
+  visibility: hidden !important; pointer-events: none !important;
+  contain: strict;
+}
+button.preview-scrollbar {
+  position: fixed !important;
+  z-index: 100060;
+  display: block;
+  min-width: 0 !important; min-height: 0 !important;
+  max-width: none !important; max-height: none !important;
+  padding: 0 !important; margin: 0 !important;
+  border: 0 !important; border-radius: 0 !important;
+  box-shadow: none !important; background: transparent !important;
+  color: var(--bb-muted, #929292) !important;
+  appearance: none; touch-action: none; user-select: none;
+  cursor: default; opacity: 0; pointer-events: none;
+  transition: opacity 120ms linear !important;
+  animation: none !important;
+  transform: none !important;
+}
+button.preview-scrollbar[hidden] { display: none !important; }
+button.preview-scrollbar::before, button.preview-scrollbar::after { content: none !important; }
+button.preview-scrollbar[data-visible="true"],
+button.preview-scrollbar[data-dragging="true"] { opacity: .5; pointer-events: auto; }
+button.preview-scrollbar:focus { outline: none; }
+button.preview-scrollbar:focus-visible .preview-scrollbar-thumb { outline: 1px solid currentColor; outline-offset: 1px; }
+.preview-scrollbar-thumb {
+  position: absolute; display: block; pointer-events: inherit;
+  border-radius: 0; background: repeating-linear-gradient(-45deg, transparent 0 2px, currentColor 2px 3px);
+}
+@media (prefers-reduced-motion: reduce) { button.preview-scrollbar { transition: none !important; } }
+@media (forced-colors: active) {
+  button.preview-scrollbar { color: ButtonText !important; }
+  .preview-scrollbar-thumb { background: ButtonText; }
+}

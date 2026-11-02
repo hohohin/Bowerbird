@@ -31,3 +31,4 @@
 @keyframes library-drop-preview-enter { from { opacity:0; transform:translate(-50%, 6px); } to { opacity:1; transform:translate(-50%, 0); } }
 @media (prefers-reduced-motion:reduce) { .library-drop-preview { animation:none; } }
 .library-pane-content .local-file-workspace > .folder-navigation { flex:0 0 38px; margin:48px 8px 4px; }
+.library-home .thumbnail-size-slider { display:none; }
