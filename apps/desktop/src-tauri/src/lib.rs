@@ -13,6 +13,7 @@ mod external_drag;
 mod installation;
 mod media;
 mod prompt;
+mod quick_transfer;
 
 pub use media::thumb::video_thumbnail_worker;
 pub use media::probe::video_probe_worker;
@@ -397,6 +398,7 @@ pub fn run() {
             });
 
             app.manage(extension_status);
+            app.manage(quick_transfer::QuickTransfer::default());
             app.manage(active_project);
             app.manage(settings_state);
             let screenshot_paths = paths.clone();
@@ -442,6 +444,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::quick_transfer::quick_transfer_addresses,
+            commands::quick_transfer::quick_transfer_status,
+            commands::quick_transfer::quick_transfer_start,
+            commands::quick_transfer::quick_transfer_stop,
+            commands::quick_transfer::quick_transfer_retry,
             commands::external_files::external_files_browse,
             commands::external_drag::start_external_drag,
             commands::external_drag::cancel_pending_external_drag,

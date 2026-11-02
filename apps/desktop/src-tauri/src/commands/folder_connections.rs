@@ -14,7 +14,7 @@ use std::{
 use tauri::{AppHandle, Emitter, Manager, State};
 
 // Serialize walks and physical mutations so a refresh cannot reconcile a half-finished move.
-static GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+pub(crate) static GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 #[path = "connection_watch.rs"]
 mod watcher;
 pub use watcher::watch;

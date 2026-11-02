@@ -37,6 +37,7 @@ pub mod source_browser_network;
 pub mod source_browser_jobs;
 pub mod source_browser_stream;
 pub mod visual_profile;
+pub mod quick_transfer;
 
 use std::sync::Arc;
 

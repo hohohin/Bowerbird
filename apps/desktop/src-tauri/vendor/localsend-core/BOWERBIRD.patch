@@ -1,0 +1,184 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -47,10 +47,6 @@
+ # `accept_resilience` test to lower this process' descriptor limit.
+ libc = "0.2"
+ 
+-[[example]]
+-name = "stress_send"
+-required-features = ["http"]
+-
+ [features]
+ default = []
+ crypto = ["ed25519-dalek", "rcgen", "rsa", "sha2", "tokio-util"]
+@@ -60,3 +56,5 @@
+ webrtc-signaling = ["tokio-tungstenite"]
+ webrtc = ["crypto", "flate2", "dep:webrtc", "webrtc-signaling", "x509-parser"]
+ full = ["crypto", "discovery", "http", "multicast", "webrtc"]
++
++[workspace]
+--- a/src/http/server/mod.rs
++++ b/src/http/server/mod.rs
+@@ -68,6 +68,8 @@
+ 
+ #[derive(Clone)]
+ pub struct AppState {
++    // Bowerbird's explicitly bound listener only serves its receiving surface.
++    receive_scope: Option<SocketAddr>,
+     /// Information about server's device.
+     info: Arc<Mutex<ClientInfo>>,
+ 
+@@ -125,6 +127,7 @@
+         let internal = internal_config.map(|config| Arc::new(InternalState::new(config)));
+ 
+         Self {
++            receive_scope: None,
+             info,
+             web,
+             web_upload,
+@@ -238,25 +241,42 @@
+     web_config: Option<WebConfig>,
+     stop_rx: oneshot::Receiver<()>,
+ ) -> anyhow::Result<ServerHandle> {
++    start_with_ipv4(Ipv4Addr::UNSPECIFIED, port, tls_config, info, internal_config, v2_config, web_config, stop_rx).await
++}
++
++/// Bowerbird: bind a single explicitly selected IPv4 interface for scoped reception.
++pub async fn start_with_ipv4(
++    bind_ip: Ipv4Addr,
++    port: u16,
++    tls_config: Option<TlsConfig>,
++    info: ClientInfo,
++    internal_config: Option<InternalConfig>,
++    v2_config: Option<ServerConfigV2>,
++    web_config: Option<WebConfig>,
++    stop_rx: oneshot::Receiver<()>,
++) -> anyhow::Result<ServerHandle> {
+     // Installed before returning, so that a client built right after (which
+     // skips the install when a provider exists) does not race the accept task.
+     let _ = rustls::crypto::ring::default_provider().install_default();
+ 
+-    let ipv4_socket_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
++    let ipv4_socket_addr = SocketAddr::new(bind_ip.into(), port);
+     let info = Arc::new(Mutex::new(info));
+-    let state = AppState::new(info.clone(), internal_config, v2_config, web_config);
++    let mut state = AppState::new(info.clone(), internal_config, v2_config, web_config);
+ 
+     let ipv4_listener = tokio::net::TcpListener::bind(ipv4_socket_addr).await?;
+     // With port 0, the IPv6 listener must reuse the port the IPv4 listener got.
+     let bound_port = ipv4_listener.local_addr()?.port();
++    if !bind_ip.is_unspecified() {
++        state.receive_scope = Some(SocketAddr::new(bind_ip.into(), bound_port));
++    }
+     let ipv6_socket_addr = SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), bound_port);
+-    let ipv6_listener = match bind_ipv6_only(ipv6_socket_addr) {
++    let ipv6_listener = if !bind_ip.is_unspecified() { None } else { match bind_ipv6_only(ipv6_socket_addr) {
+         Ok(listener) => Some(listener),
+         Err(err) => {
+             tracing::warn!("Failed to start server on {}: {err:#}", ipv6_socket_addr);
+             None
+         }
+-    };
++    }};
+     let ipv6_bound = ipv6_listener.is_some();
+ 
+     let cancel = CancellationToken::new();
+@@ -586,10 +606,21 @@
+ }
+ 
+ async fn handle_request(req: Request<Incoming>) -> Result<Response<BoxedBody>, hyper::Error> {
+-    Ok(handle_request_inner(req).await.unwrap_or_else(|err| {
++    let scoped = req.extensions().get::<AppState>().is_some_and(|state| state.receive_scope.is_some());
++    let mut response = handle_request_inner(req).await.unwrap_or_else(|err| {
+         tracing::error!("Error handling request: {err:?}");
+         err.to_response()
+-    }))
++    });
++    if scoped {
++        for (name,value) in [
++            ("referrer-policy", "no-referrer"),
++            ("cache-control", "no-store"),
++            ("x-content-type-options", "nosniff"),
++            ("x-frame-options", "DENY"),
++            ("content-security-policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"),
++        ] { response.headers_mut().insert(hyper::header::HeaderName::from_static(name),hyper::header::HeaderValue::from_static(value)); }
++    }
++    Ok(response)
+ }
+ 
+ async fn handle_request_inner(mut req: Request<Incoming>) -> Result<Response<BoxedBody>, AppError> {
+@@ -602,6 +633,24 @@
+     };
+ 
+     let v2_enabled = state.v2.is_some();
++
++    if let Some(address) = state.receive_scope {
++        let host = address.to_string();
++        let origin = format!("http://{host}");
++        if req.headers().get(hyper::header::HOST).and_then(|h|h.to_str().ok()) != Some(host.as_str())
++            || req.headers().get(hyper::header::ORIGIN).is_some_and(|h|h.to_str().ok() != Some(origin.as_str())) {
++            return Err(AppError::Status(StatusCode::FORBIDDEN));
++        }
++        if !matches!((req.method(),req.uri().path()),
++            (&Method::GET,"/" | "/i18n.json") |
++            (&Method::POST,"/api/localsend/v2/prepare-upload" | "/api/localsend/v2/upload" | "/api/localsend/v2/cancel")) {
++            return Err(AppError::Status(StatusCode::NOT_FOUND));
++        }
++        if req.uri().path() == "/api/localsend/v2/cancel" {
++            let Some(v2)=&state.v2 else {return Err(AppError::Status(StatusCode::NOT_FOUND))};
++            common::pin::check_pin(v2.pin.as_deref(),&v2.pin_attempts,&common::query::parse_query(req.uri().query()),client_info.ip.ip).await?;
++        }
++    }
+ 
+     match (req.method(), req.uri().path()) {
+         (&Method::GET, "/") => Ok(web::index(&state)),
+--- a/src/http/server/common/collect_to_json.rs
++++ b/src/http/server/common/collect_to_json.rs
+@@ -9,7 +9,9 @@
+ 
+ impl CollectToJson for Incoming {
+     async fn collect_to_json<T: DeserializeOwned>(self) -> Result<T, AppError> {
+-        let bytes = self.collect().await?.to_bytes();
++        // Bowerbird: metadata must never consume unbounded memory before validation.
++        let bytes = http_body_util::Limited::new(self, 256 * 1024)
++            .collect().await.map_err(|_| AppError::BadRequest("JSON body exceeds 256 KiB".to_string()))?.to_bytes();
+         serde_json::from_slice::<T>(&bytes).map_err(|err| {
+             tracing::warn!("Failed to parse JSON body: {err:#}");
+             AppError::BadRequest("Invalid JSON body".to_string())
+--- a/src/http/server/common/save.rs
++++ b/src/http/server/common/save.rs
+@@ -116,7 +116,7 @@
+     // For [FileUploadTarget::Path] and [FileUploadTarget::Fd], the application's
+     // result channel is answered by this function once the complete outcome
+     // (including the checksum verification) is known.
+-    let (binary_tx, result_rx, app_result_tx) = match target {
++    let (binary_tx, mut result_rx, app_result_tx) = match target {
+         FileUploadTarget::Stream {
+             binary_tx,
+             result_rx,
+@@ -165,7 +165,24 @@
+     let mut hasher = expected_sha256.map(|_| Sha256::new());
+     let mut body = req.into_body();
+     let mut stream_error = false;
+-    while let Some(frame) = body.frame().await {
++    // Bowerbird: a stalled body must end the protocol session, not only its writer.
++    loop {
++        let next = tokio::select! {
++            frame = tokio::time::timeout(std::time::Duration::from_secs(60), body.frame()) => frame,
++            result = &mut result_rx => {
++                // Bowerbird: cancellation/failed writers terminate the request immediately.
++                if let Some(app_result_tx) = app_result_tx {
++                    let error = match result { Ok(Err(error))=>error, _=>"Upload target stopped".to_string() };
++                    let _=app_result_tx.send(Err(error));
++                }
++                return SaveResult::Failed;
++            }
++        };
++        let frame = match next {
++            Ok(Some(frame)) => frame,
++            Ok(None) => break,
++            Err(_) => { stream_error = true; break; }
++        };
+         match frame {
+             Ok(frame) => {
+                 let Ok(data) = frame.into_data() else {

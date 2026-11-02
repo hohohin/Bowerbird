@@ -59,6 +59,8 @@
     "createUpdaterArtifacts": true,
     "targets": "all",
     "resources": {
+      "vendor/localsend-core/LICENSE": "licenses/localsend/LICENSE",
+      "vendor/localsend-core/README.bowerbird.md": "licenses/localsend/README.bowerbird.md",
       "../../extension/": "extension/",
       "resources/samples/*": "samples/",
       "resources/onboarding-v0917/*": "onboarding-v0917/"

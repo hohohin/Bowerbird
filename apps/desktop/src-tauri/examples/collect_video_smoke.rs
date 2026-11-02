@@ -9,9 +9,11 @@
 #[path = "../src/core/mod.rs"] mod core;
 #[path = "../src/db/mod.rs"] mod db;
 #[path = "../src/error.rs"] mod error;
+#[path = "../src/external_drag.rs"] mod external_drag;
 #[path = "../src/installation.rs"] mod installation;
 #[path = "../src/media/mod.rs"] mod media;
 #[path = "../src/prompt/mod.rs"] mod prompt;
+#[path = "../src/quick_transfer/mod.rs"] mod quick_transfer;
 use std::{path::PathBuf, sync::Arc};
 
 fn main() {

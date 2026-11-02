@@ -12,6 +12,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/VIDEO-API-INTEGRATION.md` | 国内方舟视频 Cloud 实现、恢复/结算、离线验收与 CLI 前置归因 | 接续视频 API 接入、核验 2.5 模型与异步任务/计费边界时必读 |
 | `dev-doc/VIDEO-API-INTEGRATION-V3.md`、`dev-doc/VIDEO-API-INTEGRATION-V3.json` | 视频与 FFmpeg 历史集成、0058 迁移归属及阶段哈希 | 追溯 9 月 6 日集成；当前部署/回滚读 VIDEO-API-INTEGRATION.md |
 | `dev-doc/FOLDER-MODE.md` | 文件优先工作区、独立分类、随图资料恢复、BowerbirdLibrary/历史素材迁移及共享文件转存 | 本机目录、文件夹分类、随图资料、资料迁移或项目删除文件归属相关工作前必读 |
+| `dev-doc/QUICK-TRANSFER.md` | LocalSend 局域网扫码接收、原件持久化、入库恢复、权限边界与验证 | 手机／其他设备快传、LocalSend 接入或局域网接收相关工作前必读 |
 | `dev-doc/EXTERNAL-DRAG.md` | 素材库／画布拖出、原件解析、Windows OLE 与 Mac AppKit 适配及验收边界 | 跨应用文件拖动、菜单抓起或内部拖动兼容相关工作前必读 |
 | `dev-doc/LOCAL-CLASSIFICATION.md` | 自动分类、Jev 图片匹配与 Cloud 补标签、本地模型包、人工保护与验证记录 | 自动/本地分类、Jev 图片判断、自动标签、分类模型下载与运行时相关工作前必读 |
 | `dev-doc/EMBEDDED-BROWSER.md` | 探索内置浏览器、登录资料持久化、网页拖图入库/画板落点、素材栏折叠与隔离 WebView2 验证 | 内置浏览器、探索工作区、网页拖图、探索联动画板素材栏与登录状态相关工作前必读 |

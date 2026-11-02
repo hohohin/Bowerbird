@@ -1,0 +1,87 @@
+import assert from 'node:assert/strict';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { chromium } from '../../../../html-renderer/node_modules/playwright/index.mjs';
+
+const output = fileURLToPath(new URL('../../../.tmp/quick-transfer-preview/', import.meta.url));
+await mkdir(output, { recursive: true });
+const browser = await chromium.launch({ channel: 'chrome', headless: true });
+const page = await browser.newPage({ viewport: { width: 1280, height: 920 } });
+page.setDefaultTimeout(3500);
+const errors = [];
+const remoteRequests = [];
+page.on('pageerror', error => errors.push(error.message));
+page.on('request', request => { if (/^https?:/.test(request.url())) remoteRequests.push(request.url()); });
+const entry = new URL('./preview.html', import.meta.url).href;
+try {
+  await page.goto(entry);
+  assert.equal(await page.getByText('交互示意 · 不会上传文件', { exact: false }).count(), 1);
+  assert.equal(await page.locator('#desktop-queue .file').count(), 0);
+  assert.equal(await page.locator('#mobile-queue .file').count(), 3);
+  await page.screenshot({ path: `${output}/ready-dark.png`, fullPage: true });
+
+  await page.getByRole('button', { name: '更改', exact: true }).click();
+  await page.getByRole('button', { name: '旅行参考', exact: true }).click();
+  assert.equal(await page.locator('#folder-path').textContent(), 'D:\\素材\\旅行参考');
+  assert.equal(await page.locator('#change-folder').getAttribute('aria-expanded'), 'false');
+  await page.getByRole('button', { name: '发送 3 个文件', exact: true }).click();
+  assert.equal(await page.locator('#state').inputValue(), 'sending');
+  assert.equal(await page.locator('#change-folder').isDisabled(), true);
+  assert.equal(await page.getByRole('progressbar').count(), 2);
+  assert.equal(await page.locator('#desktop-count').textContent(), '1 / 3 已入库');
+  await page.locator('#message').evaluate(element => element.hidden = true);
+  await page.screenshot({ path: `${output}/sending-dark.png`, fullPage: true });
+  await page.getByRole('button', { name: '切换为浅色', exact: true }).click();
+  await page.waitForTimeout(200);
+  await page.screenshot({ path: `${output}/sending-light.png`, fullPage: true });
+
+  await page.getByRole('button', { name: '收起快传面板', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: '打开快传', exact: false }).isVisible(), true);
+  assert.equal(await page.locator('#state').inputValue(), 'sending', 'dismissing the panel does not stop receiving');
+  await page.getByRole('button', { name: '打开快传', exact: false }).click();
+  await page.getByRole('switch', { name: '接收开关' }).click();
+  assert.equal(await page.getByRole('switch').getAttribute('aria-checked'), 'false');
+  assert.equal(await page.locator('#send').isDisabled(), true);
+  assert.equal(await page.locator('#pick').isDisabled(), true);
+  await page.getByRole('switch').click();
+  assert.equal(await page.locator('#state').inputValue(), 'ready');
+  await page.locator('#change-folder').click();
+  await page.keyboard.press('Escape');
+  assert.equal(await page.locator('#folder-menu').isVisible(), false);
+  assert.equal(await page.locator('#change-folder').evaluate(element => element === document.activeElement), true);
+
+  await page.locator('#state').selectOption('interrupted');
+  assert.match(await page.locator('#mobile-notice').textContent(), /已完成的文件保留/);
+  assert.match(await page.locator('#send-label').textContent(), /重新发送/);
+  await page.locator('#send').click();
+  assert.equal(await page.locator('#state').inputValue(), 'sending');
+  await page.locator('#state').selectOption('complete');
+  assert.equal(await page.locator('#desktop-count').textContent(), '3 / 3 已入库');
+  assert.equal(await page.locator('#mobile-notice').textContent(), '全部文件已存入 Bowerbird。');
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator('#view').selectOption('mobile');
+  await page.locator('#message').evaluate(element => element.hidden = true);
+  await page.screenshot({ path: `${output}/mobile-complete-light.png`, fullPage: true });
+  await page.getByRole('button', { name: '切换为深色' }).click();
+  await page.waitForTimeout(200);
+  await page.locator('#state').selectOption('interrupted');
+  await page.screenshot({ path: `${output}/mobile-interrupted-dark.png`, fullPage: true });
+  await page.locator('#state').selectOption('ready');
+  await page.locator('#file-input').setInputFiles({ name: '很长的手机照片名称_拍摄于海边_2026_原始素材.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('fixture only') });
+  assert.equal(await page.locator('#mobile-queue .file').count(), 1);
+  await page.locator('#send').click();
+  assert.equal(await page.locator('#desktop-count').textContent(), '0 / 1 已入库');
+  assert.equal(await page.locator('#mobile-queue [role=progressbar]').count(), 1);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'mobile has no horizontal overflow');
+  await page.locator('#view').selectOption('desktop');
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'desktop panel fits a narrow viewport');
+  await page.locator('#message').evaluate(element => element.hidden = true);
+  await page.screenshot({ path: `${output}/desktop-narrow-dark.png`, fullPage: true });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  assert.equal(await page.locator('#toggle').evaluate(element => getComputedStyle(element).transitionDuration), '0s');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(remoteRequests, [], 'preview never starts HTTP requests or uploads');
+  await writeFile(`${output}/verification.json`, JSON.stringify({ browser: await browser.version(), entry, errors, remoteRequests, verified: ['dark/light', '390px viewport', 'file-name-only selection', 'single-file progress', 'frozen destination while sending', 'close panel preserves receiving', 'stop disables mobile actions', 'interrupted resend', 'complete status', 'Escape focus', 'reduced motion'], boundary: 'Synthetic states; no real LAN receiver, transfer, disk import or iOS/Android device validation' }, null, 2));
+  console.log('PASS: isolated quick-transfer preview interactions, responsive layout, dark/light and zero network requests');
+} finally { await browser.close(); }

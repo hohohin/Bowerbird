@@ -4,7 +4,7 @@ version = "26.11.202"
 description = "Bowerbird desktop app"
 authors = ["Bowerbird"]
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.90"
 default-run = "bowerbird-desktop"
 
 [lib]
@@ -94,6 +94,10 @@ zip = { version = "4.6.1", default-features = false, features = ["deflate-flate2
 tempfile = "3"
 # WS Server（接收浏览器扩展采集消息）
 axum = { version = "0.7", features = ["ws"] }
+# Explicit LocalSend browser receive sessions; upstream source and notices are bundled locally.
+localsend = { path = "vendor/localsend-core", features = ["http"] }
+bytes = "1"
+if-addrs = "0.15"
 
 # ID / 时间
 ulid = { version = "1", features = ["serde"] }
