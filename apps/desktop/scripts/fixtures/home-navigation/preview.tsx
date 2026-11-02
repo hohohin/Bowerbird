@@ -28,16 +28,16 @@ function Preview() {
   return <div className="app-shell home-navigation-preview flex h-full w-full flex-col">
     <header className="app-topbar is-search-hidden is-library library-tactical is-global-materials">
       <div className="app-topbar-leading">
-        {canvas ? <button className="app-button-dark" aria-label="返回主页" onClick={() => setCanvas(false)}><ArrowLeft size={15}/><span>返回主页</span></button>
-          : <nav aria-label="首页" className="home-page-navigation">
-            <button type="button" aria-current={view === 'library' ? 'page' : undefined} onClick={() => navigate('library')}><Images size={15}/><span>素材库</span></button>
-            <button type="button" aria-current={view === 'projects' ? 'page' : undefined} onClick={() => navigate('projects')}><LayoutDashboard size={15}/><span>项目</span></button>
-          </nav>}
+        {canvas && <button className="app-button-dark" aria-label="返回主页" onClick={() => setCanvas(false)}><ArrowLeft size={15}/><span>返回主页</span></button>}
         {!canvas && view === 'library' && <div className="home-library-actions">
           <button className="app-button-dark" title="预览中的文件选择已隔离" onClick={() => {}}><Link2 size={15}/><span>建立连接</span></button>
           <button className="app-button-dark" title="预览不连接外部网站" onClick={() => {}}><Compass size={15}/><span>探索</span></button>
         </div>}
       </div>
+      {!canvas && <nav aria-label="首页" className="home-page-navigation">
+        <button type="button" aria-current={view === 'library' ? 'page' : undefined} onClick={() => navigate('library')}><Images size={15}/><span>素材库</span></button>
+        <button type="button" aria-current={view === 'projects' ? 'page' : undefined} onClick={() => navigate('projects')}><LayoutDashboard size={15}/><span>项目</span></button>
+      </nav>}
       <div className="app-topbar-actions"><SidebarAccount placement="topbar"/></div>
     </header>
     <main className="app-workspace relative flex min-h-0 flex-1 flex-col overflow-hidden bg-canvas">
