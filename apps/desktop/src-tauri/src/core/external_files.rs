@@ -350,6 +350,14 @@ impl Database {
     pub fn resolve_external_image_paths(&self, references: &[String]) -> AppResult<Vec<String>> {
         self.resolve_external_files(references, true)
     }
+    pub fn resolve_external_video_paths(&self, references: &[String]) -> AppResult<Vec<String>> {
+        // Keep original audio bytes, while images retain existing compatible-image handling.
+        references.iter().map(|path| {
+            let resolved = self.resolve_external_paths(std::slice::from_ref(path))?;
+            if audio_path(Path::new(&resolved[0])) { Ok(resolved[0].clone()) }
+            else { Ok(self.resolve_external_image_paths(std::slice::from_ref(path))?.remove(0)) }
+        }).collect()
+    }
     fn resolve_external_files(&self, references: &[String], compatible: bool) -> AppResult<Vec<String>> {
         references.iter().map(|path| {
             if compatible && (audio_path(Path::new(path)) || crate::core::text_documents::text_path(Path::new(path))) { return Err(invalid("此类素材暂不支持作为图片模型参考")); }

@@ -57,7 +57,7 @@ export function createCloudProxy({
       if (!rawPath.startsWith(`${PREFIX}/`) || request.url.length > 8192) throw fail(404);
       const path = rawPath.slice(PREFIX.length);
       const control = request.method === "POST" && ["/functions/v1/generate-proxy", "/functions/v1/chat-proxy"].includes(path);
-      const upload = request.method === "PUT" && /^\/storage\/v1\/object\/upload\/sign\/generation-temp\/jobs\/[a-f0-9-]{36}\/inputs\/video-\d+\.(mp4|mov)$/.test(path);
+      const upload = request.method === "PUT" && /^\/storage\/v1\/object\/upload\/sign\/generation-temp\/jobs\/[a-f0-9-]{36}\/inputs\/(video-\d+\.(mp4|mov)|audio-\d+\.(mp3|wav))$/.test(path);
       const download = request.method === "GET" && /^\/storage\/v1\/object\/sign\/generation-temp\/jobs\/[a-f0-9-]{36}\/outputs\/result\.(png|jpg|webp|mp4|json)$/.test(path);
       if (!control && !upload && !download) throw fail(404);
       const url = new URL(request.url, "http://localhost");
@@ -101,9 +101,11 @@ export function createCloudProxy({
         headers["Content-Type"] = "application/json";
       } else if (upload) {
         const mime = request.headers["content-type"];
-        if (!["video/mp4", "video/quicktime"].includes(mime)) throw fail(415);
+        const audio = /\/audio-\d+\.(mp3|wav)$/.test(path);
+        const allowedMime = audio ? (path.endsWith(".wav") ? "audio/wav" : "audio/mpeg") : (path.endsWith(".mov") ? "video/quicktime" : "video/mp4");
+        if (mime !== allowedMime) throw fail(415);
         const length = Number(request.headers["content-length"]);
-        if (!Number.isSafeInteger(length) || length <= 0 || length > UPLOAD_LIMIT) throw fail(413);
+        if (!Number.isSafeInteger(length) || length <= 0 || length > (audio ? 15 * 1024 * 1024 : UPLOAD_LIMIT)) throw fail(413);
         headers["Content-Type"] = mime; headers["Content-Length"] = String(length);
         body = (async function* () {
           let bytes = 0;

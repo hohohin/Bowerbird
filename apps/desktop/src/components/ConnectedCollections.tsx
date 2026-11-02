@@ -190,10 +190,11 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   }
   function activate(asset: Asset) {
     if (busy || !entryOf(asset).available) return;
-    if (isAudioAsset(asset) || isTextAsset(asset)) { useStore.getState().openDetail(asset.id); return; }
+    if (isTextAsset(asset)) { useStore.getState().openDetail(asset.id); return; }
     const state = useStore.getState();
     if (projectId && state.activeProjectId !== projectId) return;
     if (projectId && (state.boardOpen || state.genEditing)) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
+    else if (isAudioAsset(asset)) useStore.getState().openDetail(asset.id);
     else void run(async () => { if (!asset.store_path) throw new Error("原文件暂不可用"); const path = await externalFiles.media(asset.store_path); if (canShowOverlay()) setPreview({ path, sourceKey: entryOf(asset).version ?? videoSourceKey(asset)! }); });
   }
   function context(asset: Asset, x: number, y: number, location: CatalogLocation) {

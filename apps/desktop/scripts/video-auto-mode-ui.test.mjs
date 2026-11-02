@@ -65,8 +65,13 @@ try {
   await load(['/mock/a.mp3']);
   assert.match(await mode.getAttribute('title'), /多参考/);
   const beforeAudio = await page.evaluate(() => window.requests.length);
+  assert.equal(await dock.locator('[data-media-kind="audio"]').count(), 1);
   await dock.locator('.generation-send-button').click();
-  assert.equal(await page.evaluate(() => window.requests.length), beforeAudio, 'unsupported audio is not discarded or submitted');
+  await page.waitForFunction(count => window.requests.length === count + 1, beforeAudio);
+  assert.deepEqual(await page.evaluate(() => window.requests.at(-1)[1].map(a => a.store_path)), ['/mock/a.mp3']);
+  await load(['/mock/a.flac']);
+  await dock.locator('.generation-send-button').click();
+  assert.equal(await page.evaluate(() => window.requests.length), beforeAudio + 1, 'unsupported format is not discarded or submitted');
   await mkdir('.tmp/video-auto-mode', { recursive: true });
   await load(['/mock/a.png', '/mock/b.jpg']);
   for (const theme of ['light', 'dark']) {
@@ -98,5 +103,20 @@ try {
     await page.waitForFunction(count => window.revisions.length === count, nextCount);
     assert.equal(await page.evaluate(() => window.revisions.at(-1)[3].generation.videoOptions.kind), kind);
   }
-  console.log('PASS composer and detail automatic modes, explicit frames, return to auto, audio guard, one footer row');
+  await page.goto('http://127.0.0.1:17896/scripts/fixtures/audio-library/preview.html?reference');
+  await page.waitForFunction(() => !!window.mountLibrary);
+  for (const connected of [false, true]) {
+    await page.evaluate(connected => window.mountLibrary(connected), connected);
+    const library = page.locator(connected ? '.connected-collections' : '.categorized-library:not(.connected-collections)');
+    const name = library.locator('.audio-file-card[data-asset-id="wav"]').first();
+    if (connected) { await name.focus(); await name.press('Enter'); }
+    else await name.locator('.audio-file-meta').dblclick();
+    await page.waitForFunction(count => window.picks.length === count, connected ? 2 : 1);
+    assert.equal(await page.evaluate(() => window.picks.at(-1)), 'wav');
+    assert.equal(await page.evaluate(() => window.store.getState().detailAssetId), null);
+  }
+  console.log('PASS composer/detail modes, audio chips, library audio selection, unsupported format guard, one footer row');
+} catch (error) {
+  console.error(await page.evaluate(() => ({ text: document.body.innerText.slice(-1200), calls: window.calls?.slice(-5), unexpected: window.unexpected })));
+  throw error;
 } finally { await browser.close(); await server.close(); }

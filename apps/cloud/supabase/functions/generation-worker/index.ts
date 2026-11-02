@@ -158,7 +158,9 @@ async function actionVideoInputUrl(admin: SupabaseClient, body: Record<string, u
   const job = await assertLease(admin, String(body.jobId ?? ""), String(body.leaseId ?? ""));
   const key = String(body.objectKey ?? "");
   const bytes = Number(body.bytes);
-  if (!job.service.startsWith("video_") || !new RegExp(`^jobs/${job.id}/inputs/video-[0-9]+\\.(mp4|mov)$`).test(key) || !Number.isSafeInteger(bytes) || bytes <= 0 || bytes > 200 * 1024 * 1024) throw new ApiError("invalid_request", "视频引用无效");
+  const audio = new RegExp(`^jobs/${job.id}/inputs/audio-[0-9]+\\.(mp3|wav)$`).test(key);
+  const video = new RegExp(`^jobs/${job.id}/inputs/video-[0-9]+\\.(mp4|mov)$`).test(key);
+  if (!job.service.startsWith("video_") || (!audio && !video) || !Number.isSafeInteger(bytes) || bytes <= 0 || bytes > (audio ? 15 : 200) * 1024 * 1024) throw new ApiError("invalid_request", "视频参考素材无效");
   await assertUploadedObject(admin, key, bytes);
   const signed = await admin.storage.from(BUCKET).createSignedUrl(key, 86400);
   if (signed.error || !signed.data) throw new ApiError("internal_error", "视频引用签名失败", true);

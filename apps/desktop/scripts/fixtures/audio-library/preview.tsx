@@ -2,6 +2,8 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { LibraryHome } from "../../../src/components/LibraryHome";
+import { CategorizedLibrary } from "../../../src/components/CategorizedLibrary";
+import { ConnectedCollections } from "../../../src/components/ConnectedCollections";
 import { AssetDetail } from "../../../src/components/AssetDetail";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { FileDropImport } from "../../../src/components/FileDropImport";
@@ -90,6 +92,11 @@ w.__TAURI_INTERNALS__ = {
   },
 };
 useStore.setState({ assets: w.assets, activeProjectId: null, libraryHomeView: "library", libraryThumbnailWidth: 230, projects: [], mode: "browse" });
+if (params.has("reference")) {
+  useStore.setState({ activeProjectId: "p", boardOpen: true, canvasLibraryOpen: true });
+  w.picks = [];
+  window.addEventListener("bowerbird://board-asset-picked", event => w.picks.push((event as CustomEvent).detail));
+}
 w.guardResults = async () => {
   const results: any = {};
   try { await addMaterialAssets([image, originals[0]], null, () => w.libraryCloseCount++, async ids => { w.createdAssets.push(ids); }); results.add = null; }
@@ -103,10 +110,15 @@ w.guardResults = async () => {
 };
 function Fixture() {
   const detail = useStore(state => state.detailAssetId);
+  const [connected, setConnected] = React.useState(false);
+  w.mountLibrary = setConnected;
   const [mutationDialog, setMutationDialog] = React.useState<string | null>(null);
   w.openMutationDialog = (kind: string) => { w.assets[0].source = kind === "delete-reference" ? "external" : "imported"; setMutationDialog(kind); };
   return <>
-    {!params.has("guards") && <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
+    {params.has("reference") && <div style={{ position: "fixed", inset: 0, display: "flex" }}>
+      {connected ? <ConnectedCollections kind="all" media="audios" projectId="p" onClose={() => {}}/> : <CategorizedLibrary kind="all" media="audios" projectId="p" onClose={() => {}}/>}
+    </div>}
+    {!params.has("guards") && !params.has("reference") && <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
       <Toolbar localFilesOpen canvasMode={false} onCanvasModeChange={() => {}} onRefresh={async () => {}} onCreateCreative={() => {}}/>
       {detail ? <AssetDetail onExploreSource={() => {}}/> : <LibraryHome onCreateProject={async ids => { w.createdAssets.push(ids); }}/>}<FileDropImport/>
     </div>}

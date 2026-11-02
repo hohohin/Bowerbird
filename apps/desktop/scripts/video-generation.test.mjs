@@ -25,7 +25,21 @@ test("automatic video mode follows input media while explicit frames remain expl
   for (const references of [[], [image("a")], [image("a"), image("b")], [video()]]) {
     assert.equal(resolveVideoOptions(options("frames2video"), references).kind, "frames2video");
   }
-  assert.match(videoInputError(resolveVideoOptions(DEFAULT_VIDEO_OPTIONS, [audio]), [audio]), /不支持音频/);
+  assert.equal(videoInputError(resolveVideoOptions(DEFAULT_VIDEO_OPTIONS, [audio]), [audio]), null);
+});
+
+test("audio references follow model limits without entering image or frames modes", () => {
+  const audio = { store_path: "C:/assets/music.mp3", duration: 5 };
+  const multi = options("multimodal2video");
+  assert.equal(videoInputError(multi, [audio]), null);
+  assert.equal(videoInputError(multi, [image("a"), audio], null, "bowerbird-cloud-video_seedance25_720p"), null);
+  assert.match(videoInputError(options("frames2video"), [image("a"), image("b"), audio]), /2 张图片/);
+  assert.match(videoInputError(multi, [{ ...audio, store_path: "a.flac" }]), /MP3.*WAV/);
+  assert.match(videoInputError(multi, [{ ...audio, duration: 31 }]), /2–30/);
+  assert.match(videoInputError(multi, [{ ...audio, duration: 16 }, { ...audio, duration: 16 }]), /总时长/);
+  assert.match(videoInputError(multi, Array(11).fill({ ...audio, duration: 2 })), /10/);
+  assert.match(videoInputError({ ...multi, model_version: "seedance2.0" }, [audio]), /图片或视频/);
+  assert.equal(videoInputError({ ...multi, model_version: "seedance2.0" }, [image("a"), audio]), null);
 });
 
 test("Seedance 2.5 validates all four explicit modes without silently dropping references", () => {

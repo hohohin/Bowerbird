@@ -13,11 +13,11 @@ export function AudioFileMediaCard({ entry, assetId, expectedVersion, selected, 
     style={style} data-positioned={style ? "true" : undefined} data-asset-id={assetId} data-file-path={entry.path} aria-label={entry.name}
     draggable={!!onDragStart} onDragStart={onDragStart} onDragEnd={onDragEnd}
     onClick={event => { if (!event.defaultPrevented) onSelect(event.ctrlKey || event.metaKey, event.shiftKey); }}
-    onDoubleClick={event => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey) onOpen(); }}
+    onDoubleClick={event => { if (!event.ctrlKey && !event.metaKey && !event.shiftKey) (onActivate ?? onOpen)(); }}
     onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onContextMenu(event.clientX, event.clientY); }}
     onKeyDown={event => {
       if (event.target !== event.currentTarget) return;
-      if (event.key === "Enter") { event.preventDefault(); onOpen(); }
+      if (event.key === "Enter") { event.preventDefault(); (onActivate ?? onOpen)(); }
       if (event.key === " ") { event.preventDefault(); onSelect(event.ctrlKey || event.metaKey, event.shiftKey); }
       if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
         event.preventDefault(); event.stopPropagation();

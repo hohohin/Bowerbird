@@ -2,6 +2,15 @@
 
 > 当前状态（2026-10-28）：用户明确授权后已启用 Cloud Seedance 2.5 的 480p／720p／1080p，沿用 0073／20261023 Bcoin 固定报价。一次真实 5 秒、16:9、480p 文生视频经官网提交／下载／接收确认及 110 Bcoin 单次结算通过；其他分辨率／参考模式、原故障电脑入库和供应商账单仍未实测。完整证据与回退见 [Cloud 部署记录](../apps/cloud/DEPLOY.md#2026-10-28-seedance-25-三档启用与真实验收)。下方 9 月部署／价格内容是历史记录，历史集成哈希见 [v3 记录](VIDEO-API-INTEGRATION-V3.md)。
 
+## 2026-11-03 音频参考（源码未部署）
+
+- [官方创建接口](https://docs.volcengine.com/docs/ark/create-video-generation-task-api?lang=zh)确认 2.5 可纯音频或混合参考，`audio_url` 配合 `role: reference_audio`。仅 MP3／WAV，最多 10 段，每段 2–30 秒、音频合计至多 30 秒、每段至多 15 MB。应用按 15 MiB 字节上限校验；完整图／视频／音频素材上限为 50。音频输入与输出声音是两件事：有音频参考且未指定时开启 `generate_audio`，显式 false 仍优先；无音频保持原来的默认静音，未增加界面开关。
+- 新 manifest 的可选 `reference_audios` 存 `{object_key, bytes, mime, duration}`。Edge 忽略客户端对象路径，分配当前任务的 `inputs/audio-N.mp3|wav`；返回带 `kind: audio` 的签名上传槽位。桌面经既有官网网关 PUT 原件，再用同一幂等键及 manifest 完成上传。无音频时省略字段，避免改变旧任务哈希；重放不重复入队，修改输入仍 409。
+- Worker 签名读取检查当前任务、有效租约和实际对象大小；网关仅允许固定路径、匹配 MIME、15 MiB 上传。Worker 下载后用 ffprobe 核验实际容器、音轨、每段及总时长，全部合格后才跨过提交边界并进行一次上游 POST。客户端解码与 MP3 容器时长可能因编码填充略有差异，Worker 以实际文件探测为准，不要求二者毫秒一致。已保存 task ID 的恢复只查原任务，不重新上传／生成。
+- 音频没有被记作参考视频；现有 `p_has_video`、Bcoin 预授权及结算不变。[官方计费说明](https://docs.volcengine.com/docs/ark/model-pricing?lang=zh&redirect=1)的输入视频／输出视频 token 维度与此一致。本轮未执行付费验收或修改价格。
+- 新客户端含音频时先调用已鉴权、只读的 `video_capabilities`，只有返回 `reference_audio: true` 才创建任务，避免旧 Edge 忽略未知字段。此响应代表整条服务链已准备好，因此上线必须按顺序：**0079 迁移 → VPS Worker（含共享 contract）、generation-worker Edge 与官网网关 → generate-proxy 最后开启能力响应 → 桌面发布**。0079 仅把素材计数上限改为 50、给私有 bucket 增加两种音频 MIME。
+- 回退先停止新音频任务／撤回能力响应，等已有音频任务处理完成再回退 Worker；兼容迁移可保留。当前仅源码与离线验证，不能把此节当作部署完成证据。测试和剩余真实验收见 [行动记录](../project_logs/2026-11-03-video-audio.md)。
+
 ## 2026-10-28 Windows 连接重置修复（网关与 Windows 2801 已发布）
 
 Cloud 视频及图片的 `generate-proxy` 和签名文件传输改经官网 `/api/cloud`，避免故障环境直接访问 Supabase 的连接重置路径。参考视频 PUT、结果 GET 流式传输；提交／查询／恢复／取消／接收确认保留原任务 ID 与幂等键，网关不自动重发请求，也不改预授权或结算。共用生成接口的分层包兼容。代码、测试、Nginx 配置与先官网后客户端的部署顺序见 [Cloud 部署 §5.7](../apps/cloud/DEPLOY.md#57-生成与签名文件官网网关2026-10-28已部署客户端待发布)。
@@ -47,7 +56,7 @@ Cloud 视频及图片的 `generate-proxy` 和签名文件传输改经官网 `/ap
 
 用户选择 Bowerbird Cloud 托管、扣应用积分，与即梦 Dreamina CLI 并存。仅使用国内方舟模型 **doubao-seedance-2-5-260628**，地址 https://ark.cn-beijing.volces.com/api/v3；复用现有服务端 ARK_API_KEY，桌面不接收 Key。没有 BYOK 或海外回退。
 
-四模式：文生视频、单首帧、首尾帧、多模态参考。Cloud 支持 480p/720p/1080p、整数 4–30 秒；CLI 保留其 480p/720p 契约。首尾帧采用 adaptive；其他模式支持六个明确比例及 adaptive。MVP 固定 MP4、24fps、无音频生成，多模态显式 reference，不扩展编辑/续写/音频输入/工具搜索。
+四模式：文生视频、单首帧、首尾帧、多模态参考。Cloud 支持 480p/720p/1080p、整数 4–30 秒。首尾帧采用 adaptive；其他模式支持六个明确比例及 adaptive。MVP 固定 MP4、24fps，多模态显式 reference，不扩展编辑/续写/工具搜索。原 MVP 无音频输入、默认静音；11 月 3 日音频参考增量与声音规则见上方，尚未部署。
 
 复用现有创作板、项目/线程、历史、重试、视频素材入库与播放器。没有新增 Agent/Harness。视频渠道与每轮参数持久化；历史复用保留 provider 与引用次序。同项目精确节点跟随编辑器→任务→元数据→历史；跨项目复用保留素材并清除源项目节点绑定。
 

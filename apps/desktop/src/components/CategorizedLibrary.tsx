@@ -267,12 +267,13 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   }
   function activate(asset: Asset) {
     if (working) return;
-    if (isAudioAsset(asset) || isTextAsset(asset)) { openDetail(asset); return; }
+    if (isTextAsset(asset)) { openDetail(asset); return; }
     const state = useStore.getState();
     if (projectId && (state.activeProjectId !== projectId || !state.canvasLibraryOpen)) return;
     if (projectId && (state.boardOpen || state.genEditing)) {
       window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
-    } else void openPreview(asset);
+    } else if (isAudioAsset(asset)) openDetail(asset);
+    else void openPreview(asset);
   }
   function openDetail(asset: Pick<Asset, "id">) {
     if (working) return;

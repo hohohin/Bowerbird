@@ -72,6 +72,8 @@ fn audio_catalog_count_and_pages_are_separate_from_images_and_videos() {
 fn audio_originals_cannot_be_sent_as_image_model_references() {
     let f = Fixture::new();
     let asset = f.index();
+    let original = asset.store_path.clone().unwrap();
+    assert_eq!(f.db.resolve_external_video_paths(&[original.clone()]).unwrap(), vec![original]);
     assert!(f
         .db
         .resolve_external_image_paths(&[asset.store_path.unwrap()])

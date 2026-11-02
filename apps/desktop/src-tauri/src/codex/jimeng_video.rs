@@ -19,6 +19,25 @@ fn reference_is_video(path: &Path) -> bool {
         .and_then(|e| e.to_str())
         .is_some_and(crate::media::probe::is_video)
 }
+pub(crate) fn reference_is_audio(path: &Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(crate::media::audio::is_audio)
+}
+
+pub(crate) fn audio_duration(path: &Path) -> AppResult<f64> {
+    if std::fs::metadata(path)?.len() > 15 * 1024 * 1024 {
+        return Err(AppError::Jimeng("每段参考音频不能超过 15 MB".into()));
+    }
+    use std::io::Read;
+    let mut header = [0u8; 12];
+    std::fs::File::open(path)?.read_exact(&mut header).map_err(|_| AppError::Jimeng("参考音频文件不完整".into()))?;
+    let wav = path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("wav"));
+    if if wav { &header[..4] != b"RIFF" || &header[8..12] != b"WAVE" } else { &header[..3] != b"ID3" && !(header[0] == 0xff && header[1] & 0xe0 == 0xe0) } {
+        return Err(AppError::Jimeng("参考音频内容与 MP3 / WAV 格式不符，请重新导出".into()));
+    }
+    let duration = crate::media::audio::decode(path)
+        .map_err(|_| AppError::Jimeng("无法读取参考音频，请使用可播放的 MP3 / WAV 文件".into()))?.duration;
+    Ok(duration)
+}
 
 /// 参数验证与命令编译共用，调用前端不能绕过模型、引用数及比例约束。
 pub(crate) fn arguments(req: &CodexRequest, options: &VideoOptions) -> AppResult<Vec<OsString>> {
@@ -42,7 +61,8 @@ pub(crate) fn arguments(req: &CodexRequest, options: &VideoOptions) -> AppResult
     let (max_images, max_videos) = if options.model_version == "seedance2.5" { (30, 10) } else { (9, 3) };
     let refs = &req.reference_images;
     let videos = refs.iter().filter(|p| reference_is_video(p)).count();
-    let images = refs.len() - videos;
+    let audios = refs.iter().filter(|p| reference_is_audio(p)).count();
+    let images = refs.len() - videos - audios;
     for path in refs {
         let ext = path
             .extension()
@@ -50,26 +70,29 @@ pub(crate) fn arguments(req: &CodexRequest, options: &VideoOptions) -> AppResult
             .unwrap_or("")
             .to_ascii_lowercase();
         if !reference_is_video(path)
-            && !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "bmp")
+            && !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "bmp" | "mp3" | "wav")
         {
-            return Err(error("视频参考仅支持图片或视频文件；首版不支持音频"));
+            return Err(error("视频参考仅支持图片、视频及 MP3 / WAV 音频"));
         }
+    }
+    if audios > 0 && options.model_version != "seedance2.5" && images + videos == 0 {
+        return Err(error("此模型的音频参考须搭配图片或视频；纯音频请选择 Seedance 2.5"));
     }
     let mut args = vec![OsString::from(&options.kind)];
     match options.kind.as_str() {
         "text2video" if refs.is_empty() => {}
-        "image2video" if images == 1 && videos == 0 => {
+        "image2video" if images == 1 && videos == 0 && audios == 0 => {
             args.extend(["--image".into(), refs[0].as_os_str().to_owned()]);
         }
-        "frames2video" if images == 2 && videos == 0 => {
+        "frames2video" if images == 2 && videos == 0 && audios == 0 => {
             args.extend(["--first".into(), refs[0].as_os_str().to_owned(), "--last".into(), refs[1].as_os_str().to_owned()]);
         }
-        "multimodal2video" if !refs.is_empty() && images <= max_images && videos <= max_videos => {
+        "multimodal2video" if !refs.is_empty() && images <= max_images && videos <= max_videos && audios <= max_videos && refs.len() <= if options.model_version == "seedance2.5" { 50 } else { 12 } => {
             for path in refs {
-                args.extend([if reference_is_video(path) { "--video" } else { "--image" }.into(), path.as_os_str().to_owned()]);
+                args.extend([if reference_is_video(path) { "--video" } else if reference_is_audio(path) { "--audio" } else { "--image" }.into(), path.as_os_str().to_owned()]);
             }
         }
-        _ => return Err(error(&format!("视频模式与参考素材不匹配：文生无参考，图生一图，首尾帧两图，多参考最多 {max_images} 图 / {max_videos} 视频"))),
+        _ => return Err(error(&format!("视频模式与参考素材不匹配：文生无参考，图生一图，首尾帧两图，多参考最多 {max_images} 图 / {max_videos} 视频 / {max_videos} 音频"))),
     }
     if req.instruction.trim().is_empty()
         && matches!(options.kind.as_str(), "text2video" | "image2video")
@@ -109,6 +132,7 @@ pub(crate) fn preflight(req: &CodexRequest, options: &VideoOptions) -> AppResult
     arguments(req, options)?;
     let max_duration = if options.model_version == "seedance2.5" { 30.0 } else { 15.0 };
     let mut video_duration = 0.0;
+    let mut total_audio_duration = 0.0;
     for path in &req.reference_images {
         if !path.is_file() {
             return Err(AppError::Jimeng(format!(
@@ -122,10 +146,19 @@ pub(crate) fn preflight(req: &CodexRequest, options: &VideoOptions) -> AppResult
                 return Err(AppError::Jimeng(format!("每条参考视频须为 2–{max_duration} 秒")));
             }
             video_duration += meta.duration;
+        } else if reference_is_audio(path) {
+            let duration = audio_duration(path)?;
+            if !(2.0..=max_duration).contains(&duration) {
+                return Err(AppError::Jimeng(format!("每段参考音频须为 2–{max_duration} 秒")));
+            }
+            total_audio_duration += duration;
         }
     }
     if video_duration > max_duration {
         return Err(AppError::Jimeng(format!("参考视频总时长不得超过 {max_duration} 秒")));
+    }
+    if total_audio_duration > max_duration {
+        return Err(AppError::Jimeng(format!("参考音频总时长不得超过 {max_duration} 秒")));
     }
     Ok(())
 }
@@ -381,6 +414,35 @@ mod tests {
         }
     }
     #[test]
+    fn audio_arguments_preserve_order_and_model_limits() {
+        let opts = options("multimodal2video");
+        let args = arguments(&req(&["a.mp3", "a.png", "b.wav"]), &opts).unwrap();
+        let args: Vec<_> = args.iter().map(|s| s.to_string_lossy().to_string()).collect();
+        assert_eq!(&args[1..7], &["--audio", "a.mp3", "--image", "a.png", "--audio", "b.wav"]);
+        assert!(arguments(&req(&["a.mp3"]), &opts).is_ok());
+        assert!(arguments(&req(&["a.mp3"; 11]), &opts).is_err());
+        assert!(arguments(&req(&["a.flac"]), &opts).is_err());
+        assert!(arguments(&req(&["a.png", "b.png", "a.mp3"]), &options("frames2video")).is_err());
+        let old = VideoOptions { model_version: "seedance2.0".into(), ..opts };
+        assert!(arguments(&req(&["a.mp3"]), &old).is_err());
+        assert!(arguments(&req(&["a.png", "a.mp3"]), &old).is_ok());
+    }
+    #[test]
+    fn audio_preflight_uses_real_bytes_and_duration() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join("reference.wav");
+        let mut request = req(&[]); request.reference_images = vec![path.clone()];
+        let opts = options("multimodal2video");
+        for (seconds, valid) in [(1, false), (2, true), (30, true), (31, false)] {
+            crate::media::audio::tests::write_wav(&path, 8000 * seconds, false);
+            assert_eq!(preflight(&request, &opts).is_ok(), valid, "{seconds}s");
+        }
+        std::fs::write(&path, b"not a wave file").unwrap();
+        assert!(preflight(&request, &opts).is_err());
+        let file = std::fs::File::create(&path).unwrap(); file.set_len(15 * 1024 * 1024 + 1).unwrap();
+        assert!(preflight(&request, &opts).unwrap_err().to_string().contains("15 MB"));
+    }
+    #[test]
     fn four_modes_use_explicit_seedance25_and_ordered_references() {
         for (kind, refs) in [
             ("text2video", vec![]),
@@ -446,7 +508,7 @@ mod tests {
         assert!(arguments(&req(&["a.mp4"]), &options("image2video")).is_err());
         assert!(arguments(&req(&["a.png"]), &options("frames2video")).is_err());
         assert!(arguments(&req(&["a.png"; 31]), &options("multimodal2video")).is_err());
-        assert!(arguments(&req(&["a.mp3"]), &options("multimodal2video")).is_err());
+        assert!(arguments(&req(&["a.flac"]), &options("multimodal2video")).is_err());
         let mut request = req(&[]);
         request.ratio = Some("2:3".into());
         assert!(arguments(&request, &options("text2video")).is_err());

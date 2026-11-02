@@ -41,14 +41,15 @@ export const creationSchema = new Schema({
       toDOM(node) {
         const { assetId, silent, thumb } = node.attrs;
         const video = /^(mp4|mov|webm|m4v|avi|mkv)$/i.test(node.attrs.ext ?? "");
-        const label = `${video ? "视频" : "图片"}参考：${node.attrs.name || assetId}`;
+        const audio = /^(mp3|wav|flac|m4a|ogg)$/i.test(node.attrs.ext ?? "");
+        const label = `${audio ? "音频" : video ? "视频" : "图片"}参考：${node.attrs.name || assetId}`;
         const klass = silent
           ? "border-edge bg-panel2 text-muted"
           : "border-accent/40 bg-accent/10 text-accent";
         const children: Array<[string, Record<string, string>, ...unknown[]]> = [];
         if (silent) children.push(["span", { class: "text-[9px]" }, "📎"]);
         children.push(
-          thumb
+          thumb && !audio
             ? [
                 "img",
                 { src: convertFileSrc(thumb), alt: "", class: "h-6 w-8 rounded object-cover" },
@@ -59,17 +60,18 @@ export const creationSchema = new Schema({
                   class:
                     "flex h-6 w-8 items-center justify-center rounded bg-panel2 text-[10px]",
                 },
-                video ? "▶" : "IMG",
+                audio ? "♫" : video ? "▶" : "IMG",
               ]
         );
         if (video) children.push(["span", { class: "text-[10px]", "aria-hidden": "true" }, "视频"]);
+        if (audio) children.push(["span", { class: "max-w-28 truncate text-[10px]", "aria-hidden": "true" }, node.attrs.name || "音频"]);
         // 只显缩略图不出图名（采集图名多为 hash/ulid 噪音）；hover 由 BoardChipPreview 弹放大图。
         return [
           "span",
           {
             class: `mx-1 inline-flex items-center gap-1 rounded border px-1 py-0.5 align-middle text-xs ${klass}`,
             "data-asset-id": assetId,
-            "data-media-kind": video ? "video" : "image",
+            "data-media-kind": audio ? "audio" : video ? "video" : "image",
             "aria-label": label,
             title: label,
             contentEditable: "false",

@@ -150,6 +150,21 @@ test("uploads enforce media and size limits before contacting storage", async t 
   assert.equal(calls.length, 0);
 });
 
+test("signed audio upload streams originals and enforces format and 15 MB before storage", async t => {
+  for (const [extension, mime] of [["mp3", "audio/mpeg"], ["wav", "audio/wav"]]) {
+    const path = UPLOAD.replace("video-0.mp4", `audio-0.${extension}`);
+    let received;
+    const { send } = await fixture(t, { fetchImpl: async (_url, options) => {
+      const chunks = []; for await (const chunk of options.body) chunks.push(chunk);
+      received = Buffer.concat(chunks); return Response.json({ Key: "synthetic" });
+    } });
+    assert.equal((await send(path, "PUT", "test", { "Content-Type": mime })).status, 200);
+    assert.equal(received.toString(), "test");
+    assert.equal((await send(path, "PUT", "test", { "Content-Type": "video/mp4" })).status, 415);
+    assert.equal((await send(path, "PUT", undefined, { "Content-Type": mime, "Content-Length": 15 * 1024 * 1024 + 1 })).status, 413);
+  }
+});
+
 test("image, video and layer package downloads preserve bytes and do not forward credentials", async t => {
   const bytes = Buffer.from([0, 255, 123, 10]);
   for (const [extension, mime] of [["png", "image/png"], ["mp4", "video/mp4"], ["json", "application/json"]]) {

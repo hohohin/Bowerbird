@@ -43,6 +43,7 @@ try {
         ['multimodal2video', ['a'], 'image2video'],
         ['text2video', ['b', 'a'], 'multimodal2video'],
         ['image2video', ['v'], 'multimodal2video'],
+        ['text2video', ['audio'], 'multimodal2video'],
         ['frames2video', ['b', 'a'], 'frames2video'],
       ]) {
         await setup(stored, refs, channel); await active.start('gen', true);
@@ -58,14 +59,14 @@ try {
     await setup('text2video', ['a'], 'jimeng', ['b']); await active.start('gen', true);
     check(active.document.run.status === 'done' && calls.at(-1)[11].videoOptions.kind === 'image2video', 'unreferenced connections do not change mode'); count++;
     const beforeInvalid = calls.length;
-    for (const [kind, refs] of [['frames2video', ['a']], ['text2video', ['audio']]]) {
+    for (const [kind, refs] of [['frames2video', ['a']], ['frames2video', ['audio']]]) {
       await setup(kind, refs); await active.start('gen', true);
       check(active.document.run.status === 'failed' && !active.document.run.steps.gen.jobId, 'unsupported inputs rejected before submission identity'); count++;
     }
     check(calls.length === beforeInvalid, 'invalid explicit frames and unsupported audio never submit');
     return count;
   });
-  assert.equal(checks, 13);
+  assert.equal(checks, 15);
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const { newWorkflowNode, workflowReferenceToken } = await import('/src/lib/canvasWorkflow.ts');

@@ -689,7 +689,7 @@ pub async fn codex_create_image(
     let mut reference_images = {
         db.generation_diagnostic_phase(&diagnostic_id, &job_id, "reference_resolution", None)?;
         let db = db.inner().clone();
-        tokio::task::spawn_blocking(move || db.resolve_external_image_paths(&reference_images))
+        tokio::task::spawn_blocking(move || if is_video { db.resolve_external_video_paths(&reference_images) } else { db.resolve_external_image_paths(&reference_images) })
             .await.map_err(|e| AppError::Other(e.to_string()))??
     };
     let supplied_reference_node_ids = reference_node_ids.unwrap_or_default();

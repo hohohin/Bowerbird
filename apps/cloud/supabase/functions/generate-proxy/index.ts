@@ -6,7 +6,7 @@ import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_s
 import { assertBodySize, assertReferenceImages, corsHeaders } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
 import { LAYER_SERVICES, validateLayerRequest, type LayerOptions } from "../_shared/layer-contract.ts";
-import { validateVideoInput, videoService, type CloudVideoOptions, type VideoReference, type VideoInput } from "../_shared/video-contract.ts";
+import { validateVideoInput, videoService, type CloudVideoOptions, type VideoReference, type AudioReference, type VideoInput } from "../_shared/video-contract.ts";
 
 const BUCKET = "generation-temp";
 const CONTENT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -24,6 +24,7 @@ interface GenerateRequest {
   mock_scenario?: MockScenario;
   video_options?: CloudVideoOptions;
   reference_videos?: VideoReference[];
+  reference_audios?: AudioReference[];
   layer_options?: LayerOptions;
 }
 
@@ -67,7 +68,7 @@ function validate(body: unknown): GenerateRequest {
     if (Deno.env.get("BOWERBIRD_CLOUD_MOCK") !== "false") throw new ApiError("not_configured", "视频服务尚未启用真实生成");
     try { validateVideoInput({ ...value, schema_version: 1, ratio: value.ratio ?? null, reference_images: value.reference_images ?? [], reference_videos: value.reference_videos ?? [] } as unknown as VideoInput); }
     catch { throw new ApiError("invalid_request", "视频参数或参考素材无效，请检查模式、时长和比例"); }
-  } else if (value.video_options || (Array.isArray(value.reference_videos) && value.reference_videos.length)) {
+  } else if (value.video_options || value.reference_audios !== undefined || (Array.isArray(value.reference_videos) && value.reference_videos.length)) {
     throw new ApiError("invalid_request", "图片生成不能携带视频参数");
   }
   if (value.transparent !== undefined && (typeof value.transparent !== "boolean" || value.media !== "image")) {
@@ -225,6 +226,10 @@ async function createJob(
     bytes: reference.bytes, mime: reference.mime ?? "video/mp4",
     ...(reference.duration !== undefined ? { duration: reference.duration } : {}),
   }));
+  const audioReferences = (body.reference_audios ?? []).map((reference, index) => ({
+    object_key: `jobs/${jobId}/inputs/audio-${index}.${reference.mime === "audio/wav" ? "wav" : "mp3"}`,
+    bytes: reference.bytes, mime: reference.mime, duration: reference.duration,
+  }));
   const requestPayload = JSON.stringify({
     schema_version: 1,
     media: body.media,
@@ -233,6 +238,7 @@ async function createJob(
     ratio: body.ratio ?? null,
     mock_scenario: body.mock_scenario ?? null,
     ...(body.media === "video" ? { video_options: body.video_options, reference_videos: videoReferences } : {}),
+    ...(audioReferences.length ? { reference_audios: audioReferences } : {}),
     ...(body.media === "image" ? { transparent: body.transparent === true } : {}),
     ...(body.layer_options ? { layer_options: body.layer_options } : {}),
     ...(priceSnapshot?.data?.billing_snapshot ? { billing: priceSnapshot.data.billing_snapshot } : {}),
@@ -255,7 +261,7 @@ async function createJob(
       status: "uploading",
       request_object_key: requestObjectKey,
       input_manifest_hash: manifestHash,
-      input_count: (body.reference_images?.length ?? 0) + videoReferences.length,
+      input_count: (body.reference_images?.length ?? 0) + videoReferences.length + audioReferences.length,
       hold_id: held.holdId,
       estimated_credits: held.estimated,
       pricing_version: held.pricingVersion,
@@ -284,15 +290,16 @@ async function createJob(
     });
     if (upload.error) throw new ApiError("internal_error", "暂存云生成输入失败", true);
     const missingUploads = [];
-    for (const [index, reference] of videoReferences.entries()) {
-      const listed = await admin.storage.from(BUCKET).list(`jobs/${job.id}/inputs`, { search: `video-${index}.`, limit: 10 });
-      if (listed.error) throw new ApiError("internal_error", "读取视频上传状态失败", true);
+    const uploads = [...videoReferences.map((reference, index) => ({ reference, index, kind: "video" })), ...audioReferences.map((reference, index) => ({ reference, index, kind: "audio" }))];
+    for (const { reference, index, kind } of uploads) {
+      const listed = await admin.storage.from(BUCKET).list(`jobs/${job.id}/inputs`, { search: `${kind}-${index}.`, limit: 10 });
+      if (listed.error) throw new ApiError("internal_error", "读取参考素材上传状态失败", true);
       const existing = listed.data?.find(file => reference.object_key.endsWith(`/${file.name}`));
-      if (existing && Number(existing.metadata?.size) !== reference.bytes) throw new ApiError("invalid_request", "参考视频大小与声明不符");
+      if (existing && Number(existing.metadata?.size) !== reference.bytes) throw new ApiError("invalid_request", "参考素材大小与声明不符");
       if (!existing) {
         const signed = await admin.storage.from(BUCKET).createSignedUploadUrl(reference.object_key, { upsert: false });
-        if (signed.error || !signed.data) throw new ApiError("internal_error", "签发参考视频上传地址失败", true);
-        missingUploads.push({ index, object_key: reference.object_key, upload_url: signed.data.signedUrl });
+        if (signed.error || !signed.data) throw new ApiError("internal_error", "签发参考素材上传地址失败", true);
+        missingUploads.push({ index, kind, object_key: reference.object_key, upload_url: signed.data.signedUrl });
       }
     }
     if (missingUploads.length) return jsonResponse({ status: "uploading", remote_task_id: job.id, reference_uploads: missingUploads }, 202, cors);
@@ -329,7 +336,8 @@ Deno.serve(async (request) => {
       : typeof raw.remote_task_id === "string" ? raw.remote_task_id : "";
 
     let response: Response;
-    if (action === "layer_quote") {
+    if (action === "video_capabilities") response = jsonResponse({ reference_audio: true }, 200, cors);
+    else if (action === "layer_quote") {
       const prices = await admin.from("service_costs").select("service,unit_cost,active,parameters").in("service", [...LAYER_SERVICES]);
       if (prices.error) throw new ApiError("internal_error", "分层价格读取失败", true);
       response = jsonResponse({ status: "quoted", services: LAYER_SERVICES.map(service => {

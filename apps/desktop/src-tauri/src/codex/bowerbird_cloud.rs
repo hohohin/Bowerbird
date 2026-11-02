@@ -160,7 +160,7 @@ pub(crate) struct GenerateResponse {
 }
 
 #[derive(Deserialize)]
-struct ReferenceUpload { index: usize, upload_url: String }
+struct ReferenceUpload { index: usize, upload_url: String, #[serde(default)] kind: Option<String> }
 
 /// Persisted local job + turn identify exactly one Cloud video request, including recovery.
 pub(crate) fn video_idempotency_key(job: &str, turn: &str) -> String {
@@ -184,7 +184,7 @@ pub(crate) fn video_preflight(req: &CodexRequest, options: &VideoOptions) -> Res
         if matches!(ext.as_str(), "mp4" | "mov") && std::fs::metadata(path)?.len() > 200 * 1024 * 1024 {
             return Err(AppError::Cloud("每条参考视频不能超过 200 MiB".into()));
         }
-        if !crate::media::probe::is_video(&ext) {
+        if !crate::media::probe::is_video(&ext) && !crate::codex::jimeng_video::reference_is_audio(path) {
             let meta = crate::media::probe::probe(path)?;
             let ratio = meta.width as f64 / meta.height as f64;
             if meta.width < 300 || meta.height < 300 || !(0.4..=2.5).contains(&ratio) {
@@ -259,35 +259,54 @@ impl GenProvider for BowerbirdCloudProvider {
         }
         let started = Instant::now();
         let endpoint = self.cloud.config().endpoint("generate-proxy").ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
+        if req.reference_images.iter().any(|path| crate::codex::jimeng_video::reference_is_audio(path)) {
+            // Older servers ignore unknown reference fields. Check before creating any charged job.
+            let response = self.auth.send_authorized(self.cloud.http().post(&endpoint)
+                .json(&serde_json::json!({ "action": "video_capabilities" })), "无法确认云视频音频支持，请稍后重试").await?;
+            let supported = response.status().is_success() && response.json::<serde_json::Value>().await.ok().is_some_and(|body| body["reference_audio"] == true);
+            if !supported { return Err(AppError::Cloud("当前云视频服务尚未支持音频参考，请稍后重试或选择自有订阅渠道".into())); }
+        }
         let key = req.job_id.as_deref().ok_or_else(|| AppError::Cloud("缺少视频轮次幂等键".into()))?;
         let mut images = Vec::new();
         let mut videos = Vec::new();
         let mut video_paths = Vec::new();
+        let mut audios = Vec::new();
+        let mut audio_paths = Vec::new();
         for path in &req.reference_images {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
             if crate::media::probe::is_video(&ext) {
                 let duration = crate::media::probe::probe(path)?.duration;
                 videos.push(serde_json::json!({ "object_key": "", "bytes": std::fs::metadata(path)?.len(), "duration": duration, "mime": if ext == "mov" { "video/quicktime" } else { "video/mp4" } }));
                 video_paths.push(path);
+            } else if crate::codex::jimeng_video::reference_is_audio(path) {
+                let duration = crate::codex::jimeng_video::audio_duration(path)?;
+                audios.push(serde_json::json!({ "object_key": "", "bytes": std::fs::metadata(path)?.len(), "duration": duration, "mime": if ext == "wav" { "audio/wav" } else { "audio/mpeg" } }));
+                audio_paths.push(path);
             } else { images.push(read_cloud_jpeg(path, true).await?); }
         }
-        let payload = serde_json::json!({ "idempotency_key": key, "media": "video", "prompt": req.instruction, "reference_images": images, "reference_videos": videos, "video_options": options, "ratio": req.ratio, "service": self.service });
+        let mut payload = serde_json::json!({ "idempotency_key": key, "media": "video", "prompt": req.instruction, "reference_images": images, "reference_videos": videos, "video_options": options, "ratio": req.ratio, "service": self.service });
+        if !audios.is_empty() { payload["reference_audios"] = serde_json::json!(audios); }
         let result = send_video_request(&self.cloud, &self.auth, &endpoint, &payload).await?;
         let remote = result.remote_task_id.ok_or_else(|| AppError::Cloud("云视频任务缺少任务 ID；不会自动重新生成".into()))?;
         let _ = tx.send(Chunk::Submit { submit_id: remote.clone() }).await;
         if !result.reference_uploads.is_empty() {
             for upload in result.reference_uploads {
-                let path = video_paths.get(upload.index).ok_or_else(|| AppError::Cloud("参考视频上传序号无效".into()))?;
+                let (paths, references) = match upload.kind.as_deref() {
+                    None | Some("video") => (&video_paths, &videos),
+                    Some("audio") => (&audio_paths, &audios),
+                    _ => return Err(AppError::Cloud("参考素材上传类型无效".into())),
+                };
+                let path = paths.get(upload.index).ok_or_else(|| AppError::Cloud("参考素材上传序号无效".into()))?;
                 let upload_url = self.cloud.config().generation_transfer_url(&upload.upload_url, true)
-                    .ok_or_else(|| AppError::Cloud("参考视频上传地址无效".into()))?;
+                    .ok_or_else(|| AppError::Cloud("参考素材上传地址无效".into()))?;
                 let bytes = tokio::fs::read(path).await?;
-                if bytes.len() as u64 != videos[upload.index]["bytes"].as_u64().unwrap_or(0) { return Err(AppError::Cloud("参考视频在上传前已变化，请重新选择".into())); }
-                let response = self.cloud.http().put(upload_url).header("content-type", videos[upload.index]["mime"].as_str().unwrap_or("video/mp4")).body(bytes).send().await.map_err(|_| AppError::Cloud("参考视频上传失败；原任务保留待恢复".into()))?;
-                if !response.status().is_success() { return Err(AppError::Cloud("参考视频上传失败；原任务保留待恢复".into())); }
+                if bytes.len() as u64 != references[upload.index]["bytes"].as_u64().unwrap_or(0) { return Err(AppError::Cloud("参考素材在上传前已变化，请重新选择".into())); }
+                let response = self.cloud.http().put(upload_url).header("content-type", references[upload.index]["mime"].as_str().unwrap_or("application/octet-stream")).body(bytes).send().await.map_err(|_| AppError::Cloud("参考素材上传失败；原任务保留待恢复".into()))?;
+                if !response.status().is_success() { return Err(AppError::Cloud("参考素材上传失败；原任务保留待恢复".into())); }
             }
             // Same key and exact manifest finalize uploads; this is never another provider POST.
             let finalized = send_video_request(&self.cloud, &self.auth, &endpoint, &payload).await?;
-            if !finalized.reference_uploads.is_empty() { return Err(AppError::Cloud("参考视频尚未上传完整".into())); }
+            if !finalized.reference_uploads.is_empty() { return Err(AppError::Cloud("参考素材尚未上传完整".into())); }
         }
         let (paths, temp_dir) = wait_for_cloud_job(&self.cloud, &self.auth, &endpoint, &remote).await?;
         Ok(GenOutcome { text: String::new(), session_id: Some(remote.clone()), submit_id: Some(remote), elapsed_ms: started.elapsed().as_millis() as u64, source_images: paths, temp_dir: Some(temp_dir) })
