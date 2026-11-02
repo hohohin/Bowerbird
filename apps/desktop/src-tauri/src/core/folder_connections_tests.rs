@@ -583,6 +583,40 @@ fn cached_entries_survive_offline_and_disconnect_does_not_delete_assets() {
     assert!(f.db.get_asset(&original.asset_id).unwrap().is_some());
 }
 #[test]
+fn disconnected_child_can_be_removed_without_deleting_originals_or_assets() {
+    let f = Fixture::new();
+    fs::create_dir_all(f.source.join("child/nested")).unwrap();
+    fs::copy(f.source.join("one.png"), f.source.join("child/nested/item.png")).unwrap();
+    let root = f.connect(&f.source);
+    let folders = f.db.connection_folders(None, None).unwrap();
+    let child = folders.iter().find(|v| v.name == "child").unwrap();
+    let nested = folders.iter().find(|v| v.name == "nested").unwrap();
+    let asset = f.entries(&nested.id)[0].asset_id.clone();
+    assert!(f.db.disconnect_directory(&child.id).is_err());
+    let offline = f.target.join("offline");
+    fs::rename(f.source.join("child"), &offline).unwrap();
+    f.db.scan_connection(&f.paths, &root).unwrap();
+    f.db.disconnect_directory(&child.id).unwrap();
+    f.db.scan_connection(&f.paths, &root).unwrap();
+    assert_eq!(f.db.connection_folders(None, None).unwrap().len(), 1);
+    assert!(f.db.get_asset(&asset).unwrap().is_some());
+    assert!(offline.join("nested/item.png").is_file());
+    assert!(f.source.join("one.png").is_file());
+}
+#[test]
+fn disconnected_child_rechecks_disk_before_removing_cached_collection() {
+    let f = Fixture::new();
+    fs::create_dir(f.source.join("child")).unwrap();
+    let root = f.connect(&f.source);
+    let child = f.db.connection_folders(None, None).unwrap().into_iter().find(|v| v.name == "child").unwrap();
+    let offline = f.target.join("offline");
+    fs::rename(f.source.join("child"), &offline).unwrap();
+    f.db.scan_connection(&f.paths, &root).unwrap();
+    fs::rename(&offline, f.source.join("child")).unwrap();
+    assert!(f.db.disconnect_directory(&child.id).is_err());
+    assert!(f.db.connected_folder(&child.id).is_ok());
+}
+#[test]
 fn nested_directories_are_direct_only_and_move_as_a_subtree() {
     let f = Fixture::new();
     fs::create_dir(f.source.join("child")).unwrap();

@@ -813,7 +813,11 @@ impl Database {
     pub fn disconnect_directory(&self, id: &str) -> AppResult<()> {
         let folder = self.connected_folder(id)?;
         if folder.parent_id.is_some() {
-            return Err(invalid("请从连接的根目录断开"));
+            if folder.available || Path::new(&folder.path).try_exists()? {
+                return Err(invalid("集合仍可访问，请刷新后使用移到回收站"));
+            }
+            self.conn.lock().unwrap().execute("DELETE FROM connected_folders WHERE id=?1", [id])?;
+            return Ok(());
         }
         self.conn
             .lock()

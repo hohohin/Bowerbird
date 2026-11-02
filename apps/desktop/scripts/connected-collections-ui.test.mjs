@@ -119,6 +119,16 @@ try {
   await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
   await page.waitForTimeout(250);
   await page.screenshot({ path: '.tmp/connected-collections/production-light.png' });
+  await row('offline').click({ button: 'right' });
+  assert.equal(await menu('删除集合').isEnabled(), true);
+  assert.equal(await menu('移到回收站').count(), 0);
+  await menu('删除集合').click();
+  await dialog().getByRole('button', { name: '取消', exact: true }).click();
+  assert.equal(await row('offline').count(), 1);
+  await row('offline').click({ button: 'right' }); await menu('删除集合').click();
+  await dialog().getByRole('button', { name: '删除集合', exact: true }).click();
+  await row('offline').waitFor({ state: 'detached' });
+  assert.ok(await page.evaluate(() => window.requests.some(r => r.command === 'disconnect_folder' && r.args.id === 'offline')));
   const batching = await page.evaluate(async () => {
     const sample = window.entries[0], start = window.requests.length;
     window.entries.push(...Array.from({ length: 2505 }, (_, i) => ({ ...sample, id: `bulk-${i}`, folder_id: 'bulk', is_reference: true })));

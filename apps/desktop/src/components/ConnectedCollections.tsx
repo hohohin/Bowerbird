@@ -291,7 +291,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
       </div>
     </div>
     {menu && <ContextMenu x={menu.x} y={menu.y} label={"folder" in menu ? "集合操作" : "素材操作"} onClose={() => setMenu(null)}>
-      {"folder" in menu ? <>{menuButton("重命名集合", () => setEditor({ item: menu.folder, parentId: menu.folder.parent_id }), !menu.folder.available)}{menuButton("移动文件夹", () => setOperation({ kind: "move-folder", folder: menu.folder }), !menu.folder.available)}{menuButton("移到回收站", () => setOperation({ kind: "trash-folder", folder: menu.folder }), !menu.folder.available)}{!menu.folder.available && menuButton("重新定位", () => void run(() => relocate(menu.folder), true))}{!menu.folder.parent_id && menuButton("断开连接", () => setOperation({ kind: "disconnect", folder: menu.folder }))}</>
+      {"folder" in menu ? <>{menuButton("重命名集合", () => setEditor({ item: menu.folder, parentId: menu.folder.parent_id }), !menu.folder.available)}{menuButton("移动文件夹", () => setOperation({ kind: "move-folder", folder: menu.folder }), !menu.folder.available)}{menu.folder.available ? menuButton("移到回收站", () => setOperation({ kind: "trash-folder", folder: menu.folder })) : menuButton("删除集合", () => setOperation({ kind: "disconnect", folder: menu.folder }))}{!menu.folder.available && menuButton("重新定位", () => void run(() => relocate(menu.folder), true))}{!menu.folder.parent_id && menu.folder.available && menuButton("断开连接", () => setOperation({ kind: "disconnect", folder: menu.folder }))}</>
         : "deleteOnly" in menu ? deleteActions(menu.entries)
         : <>{menu.entries.length === 1 && menuButton("查看详情", () => useStore.getState().openDetail(menu.entries[0].asset_id))}{canSearchPinterest(menu.target.asset) && menuButton("Pinterest 以图搜图", () => requestPinterestSearch(menu.target.asset_id), !menu.target.available)}{menuButton("选择", () => { anchor.current = menu.location; setSelected(new Set(menu.entries.map(entry => entry.id))); setMultiple(true); })}{menuButton("添加到集合", () => setAssign(assetsOf(menu.entries).map(asset => asset.id)))}{(media === "images" || media === "videos") && menuButton("添加到画板", () => void run(() => addMaterialAssets(assetsOf(menu.entries), projectId, onClose, onCreateProject)), menu.entries.some(entry => !entry.available))}{menuButton("移动到文件夹", () => setOperation({ kind: "move-entries", entries: menu.entries }))}{menu.entries.length === 1 && menuButton(menu.entries[0].is_reference ? "重命名分身" : "重命名原文件", () => setOperation({ kind: "rename-entry", entries: menu.entries }))}<DeleteSubmenu disabled={busy}>{deleteActions(menu.entries)}</DeleteSubmenu></>}
     </ContextMenu>}
@@ -318,7 +318,7 @@ function ConnectionOperation({ operation, folders, onClose, onSaved }: { operati
     return true;
   }
   const references = "entries" in operation && operation.entries.every(entry => entry.is_reference);
-  const title = operation.kind === "rename-entry" ? references ? "重命名分身" : "重命名原文件" : operation.kind === "disconnect" ? "断开连接" : moving ? "移动到文件夹" : operation.kind === "remove-references" ? "移出该集合" : "移到回收站";
+  const title = operation.kind === "rename-entry" ? references ? "重命名分身" : "重命名原文件" : operation.kind === "disconnect" ? operation.folder.available ? "断开连接" : "删除集合" : moving ? "移动到文件夹" : operation.kind === "remove-references" ? "移出该集合" : "移到回收站";
   async function save() {
     if (lock.current) return; lock.current = true; setBusy(true); setError("");
     try {
@@ -338,7 +338,7 @@ function ConnectionOperation({ operation, folders, onClose, onSaved }: { operati
   }
   return <ModalShell title={title} onClose={onClose} preventClose={busy}><form className="catalog-form" onSubmit={event => { event.preventDefault(); void save(); }}>
     {operation.kind === "rename-entry" ? <label>名称<input data-modal-autofocus value={name} onChange={event => setName(event.target.value)} disabled={busy}/></label> : moving ? <fieldset className="connected-destinations" disabled={busy}><legend>目标集合</legend>{connectedRows(folders).filter(row => allowed(row.item)).map(({ item, depth }) => <label key={item.id} style={{ paddingLeft: depth * 16 }}><input type="radio" name="connection-destination" checked={target === item.id} onChange={() => setTarget(item.id)}/><Folder size={14}/>{item.name}</label>)}</fieldset>
-      : <><p>{"folder" in operation ? operation.folder.name : `${operation.entries.length} 项`}</p><p>{operation.kind === "disconnect" ? "原文件和创作资料保留。" : operation.kind === "remove-references" ? "只移除所选分身，原文件、其他集合中的分身和创作资料保留。" : "将文件移到回收站；原文件的其他分身将显示失联，创作资料保留。"}</p></>}
+      : <><p>{"folder" in operation ? operation.folder.name : `${operation.entries.length} 项`}</p><p>{operation.kind === "disconnect" ? !operation.folder.available ? `移除该集合及其下级集合，原文件和创作资料保留。${operation.folder.parent_id ? "目录恢复可访问后，刷新会重新显示。" : ""}` : "原文件和创作资料保留。" : operation.kind === "remove-references" ? "只移除所选分身，原文件、其他集合中的分身和创作资料保留。" : "将文件移到回收站；原文件的其他分身将显示失联，创作资料保留。"}</p></>}
     {moving && <p>移动文件，保留素材身份和创作资料。</p>}{error && <p role="alert">{error}</p>}
     <div className="connected-dialog-actions"><button type="button" disabled={busy} onClick={onClose}>取消</button><button className="app-button-accent" type="submit" disabled={busy || (moving && !target) || (operation.kind === "rename-entry" && !name.trim())}>{busy ? "处理中…" : title}</button></div>
   </form></ModalShell>;
