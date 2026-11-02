@@ -8,13 +8,13 @@ const page=await browser.newPage({viewport:{width:1200,height:900}});page.setDef
 const errors=[];page.on('pageerror',e=>errors.push(e.message));
 await page.route('**/*',route=>new URL(route.request().url()).hostname==='127.0.0.1'?route.continue():route.abort());
 try{
- await page.route('**/scrollbar-test',route=>route.fulfill({contentType:'text/html',body:`<html><head><style>body{margin:10px;font:14px sans-serif}#grid{display:grid;grid-template-columns:280px 280px 280px;gap:20px}.box{box-sizing:border-box;width:260px;height:180px;overflow:auto;border:2px solid #777}.tall{height:1000px;width:100%}.wide{width:700px;height:900px;background:linear-gradient(#ccc,#eee)}textarea{width:250px;height:160px;overflow:auto;white-space:pre}#scaled-host{transform:translate(18px,12px) scale(.6);transform-origin:0 0;width:400px;height:160px}.menu{position:fixed;top:460px;left:500px;width:230px;height:160px;overflow:auto;border:1px solid;background:white}#editor p{height:30px}#clip{width:210px;height:130px;overflow:hidden}</style></head><body><div id="mount"></div><div id="grid"><div id="plain" data-overlay-scroll-label="Original scroll label" class="box" tabindex="0" aria-label="普通区域"><div class="tall">Normal content</div></div><div id="dual" class="box" tabindex="0" aria-label="双轴区域"><div class="wide">Wide content</div></div><div><textarea id="text" aria-label="文本区域"></textarea></div><div id="scaled-host"><div id="scaled" class="box" tabindex="0" aria-label="缩放区域"><div class="tall">Scaled content</div></div></div><div id="editor" class="box" contenteditable="true" aria-label="编辑区域">${'<p>Editor content</p>'.repeat(20)}</div><div id="clip"><div id="clipped" class="box" tabindex="0"><div class="tall">Clipped</div></div></div></div></body></html>`}));
+ await page.route('**/scrollbar-test',route=>route.fulfill({contentType:'text/html',body:`<html><head><meta charset="utf-8"><style>body{margin:10px;font:14px sans-serif}#grid{display:grid;grid-template-columns:280px 280px 280px;gap:20px}.box{box-sizing:border-box;width:260px;height:180px;overflow:auto;border:2px solid #777}.tall{height:1000px;width:100%}.wide{width:700px;height:900px;background:linear-gradient(#ccc,#eee)}textarea{width:250px;height:160px;overflow:auto;white-space:pre}#scaled-host{transform:translate(18px,12px) scale(.6);transform-origin:0 0;width:400px;height:160px}.menu{position:fixed;top:460px;left:500px;width:230px;height:160px;overflow:auto;border:1px solid;background:white}#editor p{height:30px}#clip{width:210px;height:130px;overflow:hidden}</style></head><body><div id="mount"></div><div id="grid"><div id="plain" data-overlay-scroll-label="Original scroll label" class="box" tabindex="0" aria-label="普通区域"><div class="tall">Normal content</div></div><div id="dual" class="box" tabindex="0" aria-label="双轴区域"><div class="wide">Wide content</div></div><div><textarea id="text" aria-label="文本区域"></textarea></div><div id="scaled-host"><div id="scaled" class="box" tabindex="0" aria-label="缩放区域"><div class="tall">Scaled content</div></div></div><div id="editor" class="box" contenteditable="true" aria-label="编辑区域">${'<p>Editor content</p>'.repeat(20)}</div><div id="clip"><div id="clipped" class="box" tabindex="0"><div class="tall">Clipped</div></div></div></div></body></html>`}));
  await page.goto(`${server.resolvedUrls.local[0]}scrollbar-test`);
- await page.evaluate(async()=>{await import('/src/styles.css');document.querySelector('#text').value=Array.from({length:40},(_,i)=>`Line ${i}: ${'wide '.repeat(15)}`).join('\n');const[{default:React},{default:{createRoot}}]=await Promise.all([import('/.tmp/scrollbar-candidate-vite/deps/react.js'),import('/.tmp/scrollbar-candidate-vite/deps/react-dom_client.js')]);try{const{PreviewScrollbars}=await import('/scripts/fixtures/notifications-scrollbars/PreviewScrollbars.tsx');window.previewComponent=PreviewScrollbars;window.React=React;window.createRoot=createRoot;window.root=createRoot(document.querySelector('#mount'));window.root.render(React.createElement(PreviewScrollbars));}catch(error){window.candidateImportError=String(error)}});
+ await page.evaluate(async()=>{await import('/src/styles.css');document.querySelector('#text').value=Array.from({length:40},(_,i)=>`Line ${i}: ${'wide '.repeat(15)}`).join('\n');const[{default:React},{default:{createRoot}}]=await Promise.all([import('/.tmp/scrollbar-candidate-vite/deps/react.js'),import('/.tmp/scrollbar-candidate-vite/deps/react-dom_client.js')]);try{const{OverlayScrollbars}=await import('/src/components/OverlayScrollbars.tsx');window.previewComponent=OverlayScrollbars;window.React=React;window.createRoot=createRoot;window.root=createRoot(document.querySelector('#mount'));window.root.render(React.createElement(OverlayScrollbars));}catch(error){window.candidateImportError=String(error)}});
  await page.waitForTimeout(150);
  const gutter=await page.locator('#dual').evaluate(el=>{const s=getComputedStyle(el);return{x:el.offsetWidth-el.clientWidth-parseFloat(s.borderLeftWidth)-parseFloat(s.borderRightWidth),y:el.offsetHeight-el.clientHeight-parseFloat(s.borderTopWidth)-parseFloat(s.borderBottomWidth)}});
- assert.deepEqual(gutter,{x:0,y:0},'candidate removes actual native layout gutters on BOTH axes');
- const rail=(id,axis='y')=>page.locator(`.preview-scrollbar[data-axis="${axis}"][aria-controls="${id}"]`);
+ assert.deepEqual(gutter,{x:0,y:0},'formal manager removes actual native layout gutters on BOTH axes');
+ const rail=(id,axis='y')=>page.locator(`.industrial-scrollbar[data-axis="${axis}"][aria-controls="${id}"]`);
  await page.locator('#plain').hover();
   await rail('plain').waitFor();
   assert.equal(await rail('plain').getAttribute('aria-label'),'Original scroll label','wrapper label remains accessible');
@@ -22,13 +22,13 @@ try{
   assert.equal(await rail('plain').getAttribute('tabindex'),'-1','hidden rails are not tab stops');
   await page.locator('#plain').focus();
   await page.keyboard.press('End');
-  await page.waitForFunction(()=>getComputedStyle(document.querySelector('.preview-scrollbar[data-axis="y"][aria-controls="plain"]')).opacity==='0.5');
+  await page.waitForFunction(()=>getComputedStyle(document.querySelector('.industrial-scrollbar[data-axis="y"][aria-controls="plain"]')).opacity==='0.5');
   assert.equal(await rail('plain').evaluate(el=>getComputedStyle(el).opacity),'0.5','scroll reveals at 50 percent');
   await rail('plain').focus();
   await page.keyboard.press('End');
   assert.ok(await page.locator('#plain').evaluate(el=>Math.abs(el.scrollTop-(el.scrollHeight-el.clientHeight))<2));
   await page.keyboard.press('Home');
- let b=await rail('plain').locator('.preview-scrollbar-thumb').boundingBox();
+ let b=await rail('plain').locator('.industrial-scrollbar-thumb').boundingBox();
   await page.mouse.move(b.x+b.width/2,b.y+b.height/2);
   await page.mouse.down();
   await page.mouse.move(b.x+b.width/2,b.y+75);
@@ -43,13 +43,13 @@ try{
  await page.locator('#text').focus();
   await page.locator('#text').evaluate(el=>el.scrollTop=20);
   await rail('text').waitFor();
-  assert.equal(await page.locator('#text .preview-scrollbar').count(),0,'textarea content DOM untouched');
+  assert.equal(await page.locator('#text .industrial-scrollbar').count(),0,'textarea content DOM untouched');
   await rail('text').focus();
   await page.keyboard.press('End');
   assert.ok(await page.locator('#text').evaluate(el=>el.scrollTop>0));
  await page.locator('#editor').focus();
   await rail('editor').waitFor();
-  assert.equal(await page.locator('#editor .preview-scrollbar').count(),0,'contenteditable DOM untouched');
+  assert.equal(await page.locator('#editor .industrial-scrollbar').count(),0,'contenteditable DOM untouched');
  await page.evaluate(()=>{document.activeElement.blur();window.menuClosed=0;const menu=document.createElement('div');menu.id='menu';menu.className='menu';menu.setAttribute('role','listbox');menu.setAttribute('aria-label','测试菜单');menu.innerHTML='<div style="height:850px">Menu items</div>';document.body.append(menu);document.addEventListener('pointerdown',event=>{if(!menu.contains(event.target)){window.menuClosed++;menu.remove()}},{capture:true,once:true})});
   await page.locator('#menu').hover();
   await page.locator('#menu').evaluate(el=>el.scrollTop=20);
@@ -107,7 +107,7 @@ try{
  await page.locator('#plain').hover();
   await page.locator('#plain').evaluate(el=>el.scrollTop=el.scrollTop>100?50:100);
   await page.waitForTimeout(40);
-  await rail('plain').waitFor();const cancelBox=await rail('plain').locator('.preview-scrollbar-thumb').boundingBox();
+  await rail('plain').waitFor();const cancelBox=await rail('plain').locator('.industrial-scrollbar-thumb').boundingBox();
   await page.mouse.move(cancelBox.x+2,cancelBox.y+2);
   await page.mouse.down();
   await rail('plain').dispatchEvent('pointercancel',{pointerId:1});
@@ -122,7 +122,7 @@ try{
   assert.equal(await page.evaluate(()=>window.styleReads),idleReads,'idle active viewport must not continuously paint/read layout');
   assert.equal(await rail('plain').evaluate(el=>getComputedStyle(el).opacity),'0','idle rail fades');
   assert.equal(await rail('plain').evaluate(el=>getComputedStyle(el).pointerEvents),'none','invisible rail cannot cover right-edge controls');
-  assert.equal(await rail('plain').locator('.preview-scrollbar-thumb').evaluate(el=>{const r=el.getBoundingClientRect();return !!document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest('.preview-scrollbar')}),false,'hidden thumb cannot intercept content hit testing');
+  assert.equal(await rail('plain').locator('.industrial-scrollbar-thumb').evaluate(el=>{const r=el.getBoundingClientRect();return !!document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest('.industrial-scrollbar')}),false,'hidden thumb cannot intercept content hit testing');
   await page.evaluate(()=>{window.getComputedStyle=window.originalStyle});const edge=await page.locator('#plain').boundingBox();
   await page.mouse.move(edge.x+edge.width-6,edge.y+55);
   await page.waitForTimeout(40);
@@ -131,7 +131,7 @@ try{
  await page.evaluate(()=>{const node=document.createElement('div');node.id='remove-drag';node.className='box';node.style.cssText='position:fixed;left:850px;top:450px';node.innerHTML='<div style="height:900px">Remove while dragging</div>';document.body.append(node)});
   await page.locator('#remove-drag').hover();
   await page.locator('#remove-drag').evaluate(el=>el.scrollTop=30);
-  await rail('remove-drag').waitFor();const removedThumb=await rail('remove-drag').locator('.preview-scrollbar-thumb').boundingBox();
+  await rail('remove-drag').waitFor();const removedThumb=await rail('remove-drag').locator('.industrial-scrollbar-thumb').boundingBox();
   await page.mouse.move(removedThumb.x+2,removedThumb.y+4);
   await page.mouse.down();
   await page.evaluate(()=>document.querySelector('#remove-drag').remove());
@@ -149,16 +149,16 @@ try{
   await page.waitForTimeout(80);
   assert.equal(await rail('plain').count(),1,'two mounts share one manager and one rail per axis');
   await page.evaluate(()=>window.root.unmount());
-  assert.equal(await page.evaluate(()=>document.documentElement.classList.contains('preview-overlay-scrollbars')),true,'first unmount preserves remaining owner');
+  assert.equal(await page.evaluate(()=>document.documentElement.classList.contains('industrial-overlay-scrollbars')),true,'first unmount preserves remaining owner');
   await page.locator('#plain').evaluate(el=>el.scrollTop=200);
   await page.waitForTimeout(50);
   assert.equal(await rail('plain').count(),1);
   await page.evaluate(()=>window.secondRoot.unmount());
  await page.evaluate(()=>window.root.unmount());
   await page.waitForTimeout(30);
-  assert.equal(await page.locator('.preview-scrollbar').count(),0);
-  assert.equal(await page.evaluate(()=>document.documentElement.classList.contains('preview-overlay-scrollbars')),false);
-  assert.equal(await page.locator('[data-preview-scrollbar-layer]').count(),0,'all probes/rails removed');
+  assert.equal(await page.locator('.industrial-scrollbar').count(),0);
+  assert.equal(await page.evaluate(()=>document.documentElement.classList.contains('industrial-overlay-scrollbars')),false);
+  assert.equal(await page.locator('[data-industrial-scrollbar-layer]').count(),0,'all probes/rails removed');
  assert.deepEqual(errors,[]);console.log('PASS: real no-gutter, both axes, drag/track/keyboard, textarea/editor, portal owner, scale/clip, virtual wheel mapping, inert and cleanup');
 }finally{await browser.close();
   await server.close()}

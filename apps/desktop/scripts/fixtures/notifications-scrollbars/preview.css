@@ -4,7 +4,6 @@ html, body, #root { width:100%; height:100%; margin:0; overflow:hidden; }
 .notifications-preview-app > .app-topbar { flex:none; }
 .notifications-preview-main { position:relative; flex:1; min-height:0; overflow:hidden; }
 .notifications-preview-main > .library-home { height:100%; }
-.preview-bell-mount { display:flex; align-items:center; }
 .notifications-preview-controls { display:flex; justify-content:center; gap:10px; height:40px; flex:none; align-items:center; border-top:1px solid var(--bb-line); background:var(--bb-surface); }
 .notifications-preview-controls button { padding:4px 12px; font-size:11px; color:var(--bb-muted); }
 .notifications-preview-controls button:is(:hover,[aria-pressed="true"]) { color:var(--bb-blue); background:rgb(var(--bb-blue-rgb) / .06); }

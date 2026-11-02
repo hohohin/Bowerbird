@@ -54,6 +54,11 @@ try {
   await latest.getByRole('button',{name:'快速生成 · 第四张完成，查看画板'}).focus();
   await page.clock.runFor(4500);assert.equal(await latest.count(),1,'keyboard interaction pins automatic message');
   await page.keyboard.press('Escape');
+  await page.evaluate(()=>window.notice('键盘关闭新通知'));
+  await latest.getByRole('button',{name:'关闭通知面板',exact:true}).focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await latest.count(),0,'close button dismisses the new notification');
+  assert.equal(await bell.evaluate(element=>document.activeElement===element),true,'closing the new notification restores keyboard focus to its bell');
   await page.evaluate(()=>window.notify('已保存','success'));
   await page.getByRole('status').filter({hasText:'已保存'}).waitFor();
   assert.equal(await page.getByRole('dialog').count(),0,'ordinary notices keep original toast behavior');

@@ -1,6 +1,5 @@
 import '../home-navigation/fixture';
-import { useLayoutEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Toolbar } from '../../../src/components/Toolbar';
 import { LibraryHome } from '../../../src/components/LibraryHome';
@@ -8,7 +7,6 @@ import { LibraryComposer } from '../../../src/components/LibraryComposer';
 import { ProjectManagerPanel } from '../../../src/components/ProjectManagerPanel';
 import { useStore } from '../../../src/store';
 import { notify } from '../../../src/lib/notify';
-import { NotificationBell } from './NotificationBell';
 import { emitPreviewGenerationNotice, PreviewToastViewport } from './notification-preview';
 import { PreviewScrollbars } from './PreviewScrollbars';
 import '../../../src/styles.css';
@@ -43,20 +41,6 @@ function completePreviewGeneration() {
   void emitPreviewGenerationNotice({ onOpen: () => { w.openedPreviewTask = 'preview-job-0'; } });
 }
 
-function TopbarBell() {
-  const [host, setHost] = useState<HTMLSpanElement | null>(null);
-  useLayoutEffect(() => {
-    const target = document.querySelector('.topbar-account-trigger');
-    if (!target) return;
-    const mount = document.createElement('span');
-    mount.className = 'preview-bell-mount';
-    target.before(mount);
-    setHost(mount);
-    return () => mount.remove();
-  }, []);
-  return host ? createPortal(<NotificationBell/>, host) : null;
-}
-
 export function ScrollbarGallery({ onClose }: { onClose: () => void }) {
   return <section className="preview-scroll-gallery" aria-label="滚动条演示">
     <header><span>滚动条演示</span><button onClick={onClose} aria-label="关闭滚动条演示">×</button></header>
@@ -82,7 +66,6 @@ function Preview() {
   return <div className="notifications-preview-shell">
     <div className="app-shell notifications-preview-app">
       <Toolbar canvasMode={false} localFilesOpen onRefresh={async () => {}} onCanvasModeChange={() => {}} onExplore={() => {}}/>
-      <TopbarBell/>
       <main className="notifications-preview-main">
         {view === 'library' ? <><LibraryHome/><LibraryComposer/></> : <ProjectManagerPanel active onCreate={() => {}}/>}
         {gallery && <ScrollbarGallery onClose={() => setGallery(false)}/>}

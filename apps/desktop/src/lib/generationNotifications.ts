@@ -71,6 +71,7 @@ export async function notifyGenerationComplete(
       notifySuccess(
         target?.projectName ? `${target.projectName} · ${message}` : message,
         target ? { label: "查看画板", onClick: target.onOpen } : undefined,
+        "generation",
       );
     }
     if (preferences.generation_completion_sound ?? true) {

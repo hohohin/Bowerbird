@@ -42,7 +42,7 @@ export function TagIndex({ tags: sourceTags, active, onSelect, onManage, manageB
       const { clientX, clientY, buttons } = event as PointerEvent;
       // The transparent scroll rail shares the reveal strip. Hover should reveal
       // tags too; only an active scrollbar drag keeps them out of the way.
-      if (buttons !== 0 && (event.target as Element).closest(".collection-scroll-rail")) {
+      if (buttons !== 0 && (event.target as Element).closest(".industrial-scrollbar")) {
         setRevealed(false);
         setHovered(null);
         return;

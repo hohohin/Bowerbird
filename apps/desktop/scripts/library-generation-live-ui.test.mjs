@@ -37,6 +37,8 @@ try {
   await editor.fill('保留在素材库的下一条草稿');
   const first = await page.evaluate(() => window.completeGeneration(0));
   const toast = page.getByRole('status').filter({ hasText: '快速生成 · 图片生成完成' });
+  await page.getByRole('dialog', { name: '新通知' }).waitFor();
+  assert.equal(await page.locator('.app-toast').count(), 0, 'completion uses the topbar bell only');
   await toast.getByRole('button', { name: /查看画板$/ }).click();
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   const prompt = page.locator(`[data-canvas-node-id="${first.promptId}"]`);
@@ -67,9 +69,11 @@ try {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await editor.click();
-    const activity = await page.locator('.library-home-activity summary').boundingBox();
-    const heading = await page.locator('.library-home .file-view-heading').boundingBox();
-    assert.ok(activity.y >= heading.y + heading.height, 'recent tasks stay below media and catalog controls');
+    assert.equal(await page.locator('.library-home-activity').count(), 0, 'tasks no longer cover library controls');
+    assert.equal(await page.locator('.notification-bell-panel').count(), 0, 'task history stays collapsed while browsing');
+    const bell = await page.locator('.notification-bell-button').boundingBox();
+    const account = await page.locator('.topbar-account-trigger').boundingBox();
+    assert.ok(bell.x >= 0 && bell.x + bell.width <= account.x + 1, 'bell stays before Bcoin within the viewport');
     const scroller = page.locator('.library-home .catalog-scroller');
     await scroller.evaluate(element => { element.scrollTop = element.scrollHeight; });
     const lastAssetId = await page.evaluate(() => window.lastLibraryAssetId);
@@ -92,7 +96,7 @@ try {
   }
   assert.deepEqual(errors, []);
   assert.deepEqual(remote, []);
-  console.log('PASS: actual App library submission, frozen native scope, completion toast routing, restored draft, hidden-editor lifecycle and responsive themes');
+  console.log('PASS: actual App library submission, frozen native scope, completion bell routing, restored draft, hidden-editor lifecycle and responsive themes');
 } catch (error) {
   console.log('UI errors', errors);
   console.log((await page.locator('body').innerText()).slice(-3500));

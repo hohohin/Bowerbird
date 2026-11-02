@@ -30,7 +30,9 @@ function Toast({ notice, dismiss }: { notice: NoticeDetail; dismiss: (id: number
 export function ToastViewport() {
   const [notices, setNotices] = useState<NoticeDetail[]>([]);
   const dismiss = useCallback((id: number) => setNotices(current => current.filter(item => item.id !== id)), []);
-  useEffect(() => listenForNotices(notice => setNotices(current => [...current.slice(-2), notice])), []);
+  useEffect(() => listenForNotices(notice => {
+    if (notice.channel !== "generation") setNotices(current => [...current.slice(-2), notice]);
+  }), []);
   return <div className="toast-viewport" aria-live="polite" aria-atomic="false">
     {notices.map(notice => <Toast key={notice.id} notice={notice} dismiss={dismiss} />)}
   </div>;

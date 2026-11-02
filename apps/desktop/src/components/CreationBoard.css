@@ -100,7 +100,7 @@ html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: r
 .composer-agent-menu > div { width: 100%; }
 .composer-glass .app-popover { max-width: min(280px, calc(100vw - 48px)); }
 .creation-dock.composer-glass.is-collapsed { margin-bottom: 0; border-radius: 20px 20px 0 0; transform: none; outline: none; }
-.composer-glass.is-collapsed .composer-heading, .composer-glass.is-collapsed .composer-toolbar, .composer-glass.is-collapsed .collection-scroll-rail { display: none; }
+.composer-glass.is-collapsed .composer-heading, .composer-glass.is-collapsed .composer-toolbar { display: none; }
 .composer-glass.is-collapsed .composer-description-heading { padding-top: 8px; height: 29px; }
 .composer-glass.is-collapsed .composer-editor-scroll .collection-scroll-viewport { height: 36px; max-height: 36px; overflow: hidden; }
 .composer-glass.is-collapsed .composer-description { padding-bottom: 0; }

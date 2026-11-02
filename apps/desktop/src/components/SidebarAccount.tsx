@@ -4,6 +4,7 @@ import { useStore } from "../store";
 import { understandReady } from "../lib/entitlement";
 import { SettingsDialog } from "./SettingsDialog";
 import { useAppUpdater } from "../lib/appUpdater";
+import { NotificationBell } from "./NotificationBell";
 
 /**
  * 共用账号入口：顶栏将头像与 Bcoin 合为账号面板入口，旧侧栏保留菜单。
@@ -81,6 +82,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
           <CircleArrowUp size={18} aria-hidden="true" />
         </button>}
       </span>}
+      {topbar && <NotificationBell />}
       {open && (
         <div className={`app-popover mb-1.5 flex flex-col gap-0.5 ${topbar ? "topbar-account-menu" : collapsed ? "absolute bottom-full left-1 z-[60] w-56" : "relative"}`} role="menu" aria-label="账号与设置">
           {loggedIn ? (

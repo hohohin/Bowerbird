@@ -6,7 +6,6 @@ import { ProjectManagerPanel } from "./ProjectManagerPanel";
 import { PreservedWorkspace } from "./PreservedWorkspace";
 import "./HomeWorkspace.css";
 import { LibraryComposer } from "./LibraryComposer";
-import { LibraryGenerationActivity } from "./LibraryGenerationActivity";
 import { registerLibraryLocalVideo } from "../lib/libraryGenerationRuntime";
 import "./LibraryHomeGeneration.css";
 
@@ -41,10 +40,7 @@ export function HomeWorkspace({ active = true, shortcutsEnabled = true, onCreate
     <div ref={libraryPage} className="home-workspace-page library-generation-page" data-suspended={!libraryActive}>
       <PreservedWorkspace suspended={!libraryActive}>
         {active && <LibraryHome active={libraryActive} onCreateProject={onCreateProject} shortcutsEnabled={shortcutsEnabled}/>}
-        {libraryActive && <>
-          <LibraryComposer onLocalVideoStarted={registerLibraryLocalVideo}/>
-          <aside className="library-home-activity"><LibraryGenerationActivity/></aside>
-        </>}
+        {libraryActive && <LibraryComposer onLocalVideoStarted={registerLibraryLocalVideo}/>}
       </PreservedWorkspace>
     </div>
     {visitedProjects && <div className="home-workspace-page" data-suspended={!projectsActive}>

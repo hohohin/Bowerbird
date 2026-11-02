@@ -12,21 +12,22 @@ export interface NoticeDetail {
   message: string;
   tone: NoticeTone;
   action?: NoticeAction;
+  channel?: "generation";
 }
 
 const NOTICE_EVENT = "bowerbird://notify";
 let noticeId = 0;
 
-export function notify(message: string, tone: NoticeTone = "info", action?: NoticeAction) {
+export function notify(message: string, tone: NoticeTone = "info", action?: NoticeAction, channel?: NoticeDetail["channel"]) {
   window.dispatchEvent(
     new CustomEvent<NoticeDetail>(NOTICE_EVENT, {
-      detail: { id: ++noticeId, message: tone === "error" ? userErrorMessage(message) : message, tone, action },
+      detail: { id: ++noticeId, message: tone === "error" ? userErrorMessage(message) : message, tone, action, channel },
     })
   );
 }
 
-export function notifySuccess(message: string, action?: NoticeAction) {
-  notify(message, "success", action);
+export function notifySuccess(message: string, action?: NoticeAction, channel?: NoticeDetail["channel"]) {
+  notify(message, "success", action, channel);
 }
 
 export function notifyError(error: unknown, fallback: string) {

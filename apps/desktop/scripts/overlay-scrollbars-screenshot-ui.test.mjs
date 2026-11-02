@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import {mkdir} from 'node:fs/promises';
+import {createServer} from 'vite';
+import {chromium} from '../../html-renderer/node_modules/playwright/index.mjs';
+const server=await createServer({cacheDir:'.tmp/overlay-scrollbars-screenshot-vite',server:{host:'127.0.0.1',port:17958,strictPort:true,hmr:false,watch:null}});await server.listen();
+const browser=await chromium.launch({channel:'chrome',headless:true,ignoreDefaultArgs:['--hide-scrollbars']});
+const page=await browser.newPage({viewport:{width:1000,height:800}});page.setDefaultTimeout(8000);
+page.setDefaultNavigationTimeout(30000);
+const errors=[];page.on('pageerror',error=>errors.push(error.message));
+try{
+  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/overlay-scrollbar-screenshot/preview.html`);
+  await page.waitForFunction(()=>window.calls.some(call=>call.command==='screenshot_show'));
+  assert.ok(await page.evaluate(()=>[document.documentElement,document.body,document.querySelector('#root')].every(node=>getComputedStyle(node).backgroundColor==='rgba(0, 0, 0, 0)')),'capture entry keeps transparent independent background');
+  await page.getByRole('button',{name:'历史截图',exact:true}).click();
+  const history=page.getByRole('dialog',{name:'历史截图',exact:true});
+  await history.getByAltText('历史截图预览').first().waitFor();
+  const view=history.locator('.app-modal-body');
+  const gutters=await view.evaluate(node=>{const style=getComputedStyle(node);return{x:node.offsetWidth-node.clientWidth-parseFloat(style.borderLeftWidth)-parseFloat(style.borderRightWidth),y:node.offsetHeight-node.clientHeight-parseFloat(style.borderTopWidth)-parseFloat(style.borderBottomWidth)}});
+  assert.deepEqual(gutters,{x:0,y:0},'independent screenshot history has no native layout gutter');
+  await view.evaluate(node=>{node.scrollTop=120;});
+  const rail=history.locator('.industrial-scrollbar[data-axis="y"]');
+  await rail.waitFor();await page.waitForTimeout(150);
+  assert.equal(await rail.evaluate(node=>getComputedStyle(node).opacity),'0.5');
+  await mkdir('.tmp/overlay-scrollbars-production',{recursive:true});
+  await page.screenshot({path:'.tmp/overlay-scrollbars-production/screenshot-history.png'});
+  await page.keyboard.press('Escape');await history.waitFor({state:'detached'});
+  assert.equal(await page.evaluate(()=>window.calls.some(call=>call.command==='screenshot_cancel')),false,'closing history does not cancel capture');
+  assert.deepEqual(errors,[]);
+  console.log('PASS: actual independent screenshot entry keeps capture theme and zero-gutter history with new scrollbars');
+}finally{await browser.close();await server.close();}

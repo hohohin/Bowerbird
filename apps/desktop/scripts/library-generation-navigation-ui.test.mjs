@@ -11,14 +11,14 @@ try {
   await page.addInitScript(() => { window.__TAURI_INTERNALS__ = { invoke: async () => null, transformCallback: () => 1 }; });
   await page.goto(`${server.resolvedUrls.local[0]}notice-navigation`);
   await page.evaluate(async () => {
-    const [{ useStore }, { default: React }, { default: { createRoot } }, { ToastViewport }, { generationTaskNavigation }] = await Promise.all([
+    const [{ useStore }, { default: React }, { default: { createRoot } }, { ToastViewport }, { generationTaskNavigation }, { NotificationBell }] = await Promise.all([
       import('/src/store.ts'), import('/.tmp/library-generation/navigation-vite/deps/react.js'), import('/.tmp/library-generation/navigation-vite/deps/react-dom_client.js'),
-      import('/src/components/ToastViewport.tsx'), import('/src/lib/projectActivity.ts'),
+      import('/src/components/ToastViewport.tsx'), import('/src/lib/projectActivity.ts'), import('/src/components/NotificationBell.tsx'),
     ]);
     window.store = useStore;
     window.React = React;
     window.taskNavigation = generationTaskNavigation;
-    createRoot(document.getElementById('root')).render(React.createElement(ToastViewport));
+    createRoot(document.getElementById('root')).render(React.createElement(React.Fragment, null, React.createElement(ToastViewport), React.createElement(NotificationBell)));
     useStore.setState({ projects: [{ id: 'quick', name: '快速生成' }], activeProjectId: null, projectRouteRevision: 3,
       settings: { generation_completion_popup: true, generation_completion_sound: false }, genJobs: {}, genJobOrder: [] });
   });
@@ -32,6 +32,7 @@ try {
   });
   const notice = page.getByRole('button', { name: /快速生成.*查看画板/ });
   await notice.waitFor();
+  assert.equal(await page.locator('.app-toast').count(), 0, 'completion belongs only to the bell');
   await page.evaluate(() => window.store.setState(state => ({ activeProjectId: 'other', genJobs: {
     ...state.genJobs, job: { ...state.genJobs.job, running: true, turns: [...state.genJobs.job.turns, { id: 2, turnKey: 'second', prompt: '新版', images: [] }] },
   } })));

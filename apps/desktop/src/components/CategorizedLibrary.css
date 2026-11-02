@@ -12,7 +12,6 @@
 .catalog-alphabet button[aria-disabled=true] { color:var(--bb-muted); opacity:.35; cursor:default; }
 .catalog-tag-list { min-width:0; padding:0 4px 16px 0; scroll-behavior:auto; }
 .catalog-tag-scroll { flex:1; min-width:0; }
-.catalog-tag-scroll .collection-scroll-rail:not([data-visible=true]):not(:focus-visible) { opacity:0; pointer-events:none; }
 .catalog-tag-list .catalog-row > svg { flex-shrink:0; margin-left:auto; color:var(--bb-muted); }
 .library-media-switch { display:flex; height:var(--library-floating-height, 28px); border-radius:999px; padding:2px; gap:2px; flex-shrink:0; }
 .library-media-switch button { display:flex; align-items:center; justify-content:center; width:26px; padding:0; border-radius:999px; color:var(--bb-ink-soft); }

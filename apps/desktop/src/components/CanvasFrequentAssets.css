@@ -17,7 +17,7 @@
 .canvas-frequent-threshold input:disabled { opacity:.5; }
 .canvas-frequent-label button { margin-left:-4px; color:var(--bb-blue); }
 .canvas-frequent-label button[aria-pressed=true] { color:var(--bb-blue); background:var(--bb-selection-bg); box-shadow:inset 0 0 0 1px var(--bb-blue); }
-.canvas-frequent-scroll { display:flex; flex:1; gap:8px; min-width:0; padding:6px 2px; overflow-x:auto; overflow-y:hidden; overscroll-behavior:contain; scrollbar-width:thin; scrollbar-color:var(--bb-line) transparent; }
+.canvas-frequent-scroll { display:flex; flex:1; gap:8px; min-width:0; padding:6px 2px; overflow-x:auto; overflow-y:hidden; overscroll-behavior:contain; }
 .canvas-frequent-row.is-empty { min-height:34px; }
 .canvas-frequent-row.is-empty .canvas-frequent-label { flex:0 0 auto; flex-direction:row; align-items:center; gap:10px; }
 .canvas-frequent-row.is-empty .canvas-frequent-label button { margin-left:0; }

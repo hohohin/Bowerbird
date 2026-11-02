@@ -12,10 +12,8 @@
   gap: 6px;
   min-width: 0;
   overflow-x: auto;
-  scrollbar-width: none;
 }
 
-.annotation-toolbar-tools::-webkit-scrollbar { display: none; }
 .annotation-toolbar-tools > * { flex-shrink: 0; }
 .annotation-toolbar button { white-space: nowrap; }
 .annotation-toolbar button svg { flex-shrink: 0; }

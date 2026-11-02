@@ -15,10 +15,10 @@ try {
   });
   await page.goto('http://127.0.0.1:1568/notification-test');
   await page.evaluate(async () => {
-    const [{ useStore }, { api }, notifications, { default: React }, { default: { createRoot } }, { ToastViewport }, { SettingsDialog }] = await Promise.all([
+    const [{ useStore }, { api }, notifications, { default: React }, { default: { createRoot } }, { ToastViewport }, { SettingsDialog }, { NotificationBell }] = await Promise.all([
       import('/src/store.ts'), import('/src/lib/api.ts'), import('/src/lib/generationNotifications.ts'),
       import('/node_modules/.vite/deps/react.js'), import('/node_modules/.vite/deps/react-dom_client.js'),
-      import('/src/components/ToastViewport.tsx'), import('/src/components/SettingsDialog.tsx'),
+      import('/src/components/ToastViewport.tsx'), import('/src/components/SettingsDialog.tsx'), import('/src/components/NotificationBell.tsx'),
     ]);
     await import('/src/styles.css');
     window.store = useStore;
@@ -42,7 +42,7 @@ try {
     }
     document.body.innerHTML = '<div id="notification-test"></div>';
     createRoot(document.getElementById('notification-test')).render(React.createElement(React.Fragment, null,
-      React.createElement(SoundLifecycle), React.createElement(ToastViewport), React.createElement(SettingsDialog, {onClose:()=>{}})));
+      React.createElement(SoundLifecycle), React.createElement(ToastViewport), React.createElement(NotificationBell), React.createElement(SettingsDialog, {onClose:()=>{}})));
     window.complete = (id, media='image') => {
       const job = { id, media, running:true, turns:[{id:1, prompt:'test', images:[]}], streaming:'', sessionId:null, projectId:'original-project' };
       useStore.setState(s => ({ genJobs:{...s.genJobs,[id]:job},genJobOrder:[...s.genJobOrder,id] }));
@@ -54,6 +54,7 @@ try {
   assert.equal(await page.getByRole('switch', {name:'弹窗提示',exact:true}).getAttribute('aria-checked'), 'true');
   await page.evaluate(() => window.complete('image'));
   await page.getByRole('status').filter({hasText:'图片生成完成'}).waitFor();
+  assert.equal(await page.locator('.app-toast').count(), 0, 'generation popup is routed only to the bell');
   assert.equal(await page.evaluate(() => window.sounds), 2);
   await page.evaluate(() => window.store.getState().applyGenChunk({kind:'done',job_id:'image',images:['result.png'],provider:'codex'}));
   assert.equal(await page.evaluate(() => window.notices.length), 1);
