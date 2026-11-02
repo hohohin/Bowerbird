@@ -41,7 +41,8 @@ import { ImageGenOptions } from "./creation/ImageGenOptions";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
-import { ArrowUp, ChevronDown, History, Image, Info, MessageCircle, Plus, Sparkles, Video } from "lucide-react";
+import { ArrowUp, ChevronDown, History, Image, Info, Maximize2, MessageCircle, Plus, Sparkles, Video } from "lucide-react";
+import { useTextWorkspace } from "./useTextWorkspace";
 import { useLibraryGlass } from "./useLibraryGlass";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import "./CreationBoard.css";
@@ -210,6 +211,7 @@ export function CreationBoard({
     focus,
     flushDraft,
     loadPrompt,
+    getDraft,
     finalPrompt,
     rawPrompt,
     references,
@@ -225,6 +227,7 @@ export function CreationBoard({
     initialDraft,
     onDraftChange: persistGenerationDraft,
   });
+  const textWorkspace = useTextWorkspace({ scopeKey: `${embedded ? projectId ?? "library" : "board"}:${composerMode ?? generation.media}`, projectId, getDraft, loadPrompt, focus });
   const videoOptions = resolveVideoOptions(generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS, references);
   const localFrames = useMemo(() => localVideoFrames(references), [references]);
 
@@ -1001,6 +1004,7 @@ export function CreationBoard({
     // z-20：盖过瀑布流与生成会话面板（z-10，发送后面板弹出、板仍可继续组稿），
     // 让位右键菜单(60)/维度环(65)/tour(70)。
     <div className={`composer-host-glass pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center ${embedded ? "canvas-composer-host" : ""}`}>
+      {textWorkspace.workspace}
       <section
         ref={dockRef}
         onPointerDown={(e) => {
@@ -1353,6 +1357,7 @@ export function CreationBoard({
         <div className="composer-description-heading">
           <span id={editorLabelId}>{isChat ? "聊聊你的创作想法" : "创作描述"}</span>
           <div className="composer-description-actions">
+            <button type="button" className="composer-text-expand" aria-label="放大编辑文本" title="放大编辑文本" onMouseDown={event => event.preventDefault()} onClick={textWorkspace.openEditor}><Maximize2 size={16}/></button>
             {isChat && onOpenChatHistory && <button type="button" className="composer-chat-history" aria-label="打开对话记录" aria-expanded={chatHistoryOpen} aria-controls="project-chat-history"
               onClick={() => { flushDraft(); onOpenChatHistory(); }}><History size={13} aria-hidden="true" />对话记录</button>}
             {isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}

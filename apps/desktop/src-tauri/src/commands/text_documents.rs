@@ -10,6 +10,19 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
+pub async fn create_text_document(
+    app: AppHandle,
+    paths: State<'_, Arc<LibraryPaths>>,
+    db: State<'_, Arc<Database>>,
+    input: text_documents::CreateTextDocument,
+) -> Result<text_documents::CreatedTextDocument, AppError> {
+    let db = db.inner().clone(); let paths = paths.inner().clone();
+    let result = super::folder_connections::mutation(app.clone(), move || text_documents::create(&paths, &db, &input)).await;
+    let _ = app.emit("projects://changed", ());
+    result
+}
+
+#[tauri::command]
 pub async fn read_text_document(
     db: State<'_, Arc<Database>>,
     asset_id: String,

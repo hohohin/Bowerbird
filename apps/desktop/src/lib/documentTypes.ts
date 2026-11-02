@@ -19,3 +19,8 @@ export interface TextDocumentSnapshot {
   version: string;
   format: "markdown" | "text";
 }
+
+export interface TextWorkspaceDocument { title: string; markdown: string }
+export type TextDocumentDestination = { kind: "collection"; folderId: string } | { kind: "project"; projectId: string };
+export interface CreateTextDocumentInput { requestId: string; title: string; text: string; destination: TextDocumentDestination }
+export type CreatedTextDocument = ({ kind: "collection" } & TextDocumentSnapshot) | { kind: "project"; nodeId: string };

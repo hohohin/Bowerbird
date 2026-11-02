@@ -10,7 +10,8 @@ import { normalizeDocument } from "../lib/documentCodec";
 import { getDragAssets } from "../lib/dragPayload";
 import { AudioWaveform } from "./AudioWaveform";
 
-export interface TextPlateHandle { insertMedia(media: DocumentMedia[]): void }
+export interface TextPlateInsertion { insert(media: DocumentMedia[]): void; cancel(): void }
+export interface TextPlateHandle { insertMedia(media: DocumentMedia[]): void; reserveInsertion(): TextPlateInsertion }
 interface Props {
   value: DocumentValue;
   media: DocumentMedia[];
@@ -61,7 +62,22 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
       assetId: item.asset.id, sourcePath: item.path, caption: "", children: [{ text: "" }] });
     editor.tf.focus();
   }
-  useImperativeHandle(ref, () => ({ insertMedia }));
+  function reserveInsertion(): TextPlateInsertion {
+    const end = editor.api.end([]);
+    const selection = editor.selection ?? (end ? { anchor: end, focus: end } : null);
+    if (!selection) return { insert() {}, cancel() {} };
+    const bookmark = editor.api.rangeRef(selection, { affinity: "forward" });
+    let used = false;
+    const cancel = () => { if (!used) { used = true; bookmark.unref(); } };
+    return { cancel, insert(items) {
+      if (used) return;
+      const range = bookmark.current;
+      cancel();
+      if (!mounted.current || !range) return;
+      editor.tf.select(range); insertMedia(items);
+    } };
+  }
+  useImperativeHandle(ref, () => ({ insertMedia, reserveInsertion }));
   return <MediaContext.Provider value={media}><Plate editor={editor} onValueChange={({ value: changed }) => {
     const next = normalizeDocument(changed); emitted.current = next; onChange(next);
   }}>
@@ -82,7 +98,9 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
         if (!ids?.length) { if (event.dataTransfer.files.length) { event.preventDefault(); onRejectedPaste(); } return; }
         event.preventDefault(); event.stopPropagation();
         const range = editor.api.findEventRange(event);
-        void onDropAssets(ids).then(items => { if (!mounted.current) return; if (range) editor.tf.select(range); insertMedia(items); });
+        if (range) editor.tf.select(range);
+        const insertion = reserveInsertion();
+        void onDropAssets(ids).then(insertion.insert, insertion.cancel);
       }} />
   </Plate></MediaContext.Provider>;
 });

@@ -27,12 +27,57 @@ pub const PROJECT_CANVAS_DRAFT_SCHEMA_VERSION: u64 = 1;
 pub const MIN_PROJECT_CANVAS_ZOOM: f64 = 0.1;
 pub const MAX_PROJECT_CANVAS_ZOOM: f64 = 2.4;
 
+fn decode_document_asset_id(encoded: &str) -> Option<String> {
+    let bytes = encoded.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            decoded.push(u8::from_str_radix(encoded.get(index + 1..index + 3)?, 16).ok()?);
+            index += 3;
+        } else { decoded.push(bytes[index]); index += 1; }
+    }
+    String::from_utf8(decoded).ok().filter(|id| !id.is_empty())
+}
+
+// Keep the same whole-block boundaries as documentProjection.ts; source examples are not attachments.
+fn document_asset_ids(source: &str) -> Vec<String> {
+    static MEDIA: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(
+        r#"^(?:<(?:img|audio|video) data-bowerbird-asset="([^"]+)" data-caption="[^"]*"(?: data-source="[^"]*")? />|!\[[^\]]*\]\(bowerbird-asset:([^\s)]+)\))$"#).unwrap());
+    static FENCE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^ {0,3}(`{3,}|~{3,})").unwrap());
+    let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
+    let lines: Vec<_> = normalized.lines().collect();
+    let frontmatter_end = (lines.first().map(|line| line.trim()) == Some("---"))
+        .then(|| lines.iter().enumerate().skip(1).find(|(_, line)| matches!(line.trim(), "---" | "...")).map(|(index, _)| index)).flatten();
+    let mut fence: Option<&str> = None;
+    let mut ids = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let in_fence = fence.is_some();
+        let marker = FENCE.captures(line).and_then(|value| value.get(1)).map(|value| value.as_str());
+        if let Some(marker) = marker {
+            if let Some(open) = fence {
+                if marker.starts_with(open.chars().next().unwrap()) && marker.len() >= open.len() && line.trim() == marker { fence = None; }
+            } else { fence = Some(marker); }
+        }
+        let isolated = (index == 0 || lines[index - 1].trim().is_empty()) && lines.get(index + 1).is_none_or(|line| line.trim().is_empty());
+        if frontmatter_end.is_some_and(|end| index <= end) || in_fence || marker.is_some() || !isolated || line.starts_with("    ") || line.starts_with('\t') { continue; }
+        if let Some(id) = MEDIA.captures(line.trim()).and_then(|reference| reference.get(1).or_else(|| reference.get(2))).and_then(|id| decode_document_asset_id(id.as_str())) { ids.push(id); }
+    }
+    ids
+}
+
 fn record_image_container_assets(tx: &Transaction<'_>, project_id: &str, payload: &str, now: i64) -> AppResult<()> {
     let value: serde_json::Value = serde_json::from_str(payload)?;
     if let Some(id) = value["artboard"]["base_asset_id"].as_str() {
         let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)", [id], |row| row.get(0))?;
         if !exists { return Err(AppError::NotFound(format!("artboard base {id}"))); }
         tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) VALUES (?1,?2,?3)", params![project_id,id,now])?;
+    }
+    if value["note_type"] == "document" {
+        for id in document_asset_ids(value["text"].as_str().unwrap_or("")) {
+            tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) SELECT ?1,id,?3 FROM assets WHERE id=?2", params![project_id,id,now])?;
+        }
+        return Ok(());
     }
     if value["note_type"] != "images" && value["note_type"] != "text" { return Ok(()); }
     for row in value["cells"].as_array().into_iter().flatten() {
@@ -3244,6 +3289,35 @@ mod tests {
         let snapshot = db.project_canvas_snapshot("p1").unwrap();
         assert_eq!(snapshot.nodes.len(), 2);
         assert!(snapshot.nodes.iter().all(|node| node.payload_json == payload));
+    }
+
+    #[test]
+    fn document_note_source_examples_do_not_register_project_media() {
+        let db = db();
+        materialize(&db, "p1");
+        for id in ["frontmatter", "fenced", "indented", "adjacent", "valid"] {
+            db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,created_at) VALUES(?1,?1,1)", [id]).unwrap();
+        }
+        let markdown = "---\n<img data-bowerbird-asset=\"frontmatter\" data-caption=\"\" />\n---\n\n```html\n\n<img data-bowerbird-asset=\"fenced\" data-caption=\"\" />\n\n```\n\n    <img data-bowerbird-asset=\"indented\" data-caption=\"\" />\n\n<div>\n<img data-bowerbird-asset=\"adjacent\" data-caption=\"\" />\n</div>\n\n<img data-bowerbird-asset=\"valid\" data-caption=\"\" />\n";
+        let payload = serde_json::json!({"schema_version":1,"note_type":"document","text":markdown,"cells":[],"member_ids":[]}).to_string();
+        db.create_canvas_node(&NewCanvasNode { payload_json: payload, ..note("p1", "document") }).unwrap();
+        let registered: Vec<String> = db.conn.lock().unwrap().prepare("SELECT asset_id FROM project_assets WHERE project_id='p1' ORDER BY asset_id").unwrap().query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect();
+        assert_eq!(registered, vec!["valid"]);
+    }
+
+    #[test]
+    fn document_note_round_trip_protects_registered_media_without_reinterpreting_text() {
+        let db = db();
+        materialize(&db, "p1");
+        db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,created_at) VALUES('photo','reference',1),('audio','audio',1),('legacy','legacy',1)", []).unwrap();
+        let markdown = "# 剧本\n\n**第一幕**\n\n<img data-bowerbird-asset=\"%70hoto\" data-caption=\"\" />\n\n<audio data-bowerbird-asset=\"audio\" data-caption=\"\" />\n\n![旧引用](bowerbird-asset:legacy)\n";
+        let payload = serde_json::json!({"schema_version":1,"note_type":"document","title":"剧本","text":markdown,"cells":[],"member_ids":[]}).to_string();
+        db.create_canvas_node(&NewCanvasNode { payload_json: payload.clone(), ..note("p1", "document") }).unwrap();
+        assert_eq!(db.project_canvas_snapshot("p1").unwrap().nodes[0].payload_json, payload);
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM project_assets WHERE project_id='p1' AND asset_id IN ('photo','audio','legacy')", [], |row| row.get::<_,i64>(0)).unwrap(), 3);
+        db.update_canvas_note_payload("document", &payload.replace("第一幕", "第二幕")).unwrap();
+        db.remove_canvas_node("document").unwrap();
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM assets", [], |row| row.get::<_,i64>(0)).unwrap(), 3);
     }
 
     #[test]

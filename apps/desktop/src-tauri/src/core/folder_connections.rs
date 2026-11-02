@@ -260,7 +260,7 @@ impl Database {
         tx.commit()?;
         Ok(())
     }
-    fn connect_entry_projects(&self, folder: &str, asset: &str) -> AppResult<()> {
+    pub(crate) fn connect_entry_projects(&self, folder: &str, asset: &str) -> AppResult<()> {
         self.conn.lock().unwrap().execute("WITH RECURSIVE parents(id,parent_id) AS (SELECT id,parent_id FROM connected_folders WHERE id=?1 UNION ALL SELECT f.id,f.parent_id FROM connected_folders f JOIN parents p ON f.id=p.parent_id) INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) SELECT p.project_id,?2,strftime('%s','now') FROM connected_folder_projects p JOIN parents f ON f.id=p.folder_id",params![folder,asset])?;
         Ok(())
     }
@@ -370,7 +370,7 @@ impl Database {
         }
         Ok(result)
     }
-    fn writable_connection(&self, id: &str) -> AppResult<FolderConnection> {
+    pub(crate) fn writable_connection(&self, id: &str) -> AppResult<FolderConnection> {
         let folder = self.connected_folder(id)?;
         if !folder.available || !Path::new(&folder.path).is_dir() {
             return Err(invalid("文件夹暂不可用，请重新连接后重试"));

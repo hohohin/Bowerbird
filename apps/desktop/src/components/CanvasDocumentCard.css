@@ -1,0 +1,21 @@
+.is-document-card .canvas-document-heading { display:flex; align-items:center; gap:8px; height:48px; padding:0 16px; border-bottom:1px solid var(--bb-line); color:var(--bb-ink); font-size:13px; }
+.canvas-document-heading > span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.canvas-document-heading > button { display:flex; align-items:center; justify-content:center; width:32px; height:32px; border:0; background:transparent; color:var(--bb-muted); cursor:pointer; }
+.canvas-document-heading > button:hover { color:var(--bb-blue); }
+.canvas-document-heading > button:focus-visible { outline:1px solid var(--bb-blue); }
+.is-document-card .canvas-document-scroll { height:calc(100% - 48px); min-height:0; }
+.canvas-document-body { padding:24px 30px 36px; font-size:14px; line-height:1.85; color:var(--bb-ink); overflow-wrap:anywhere; cursor:text; }
+.canvas-document-body p { margin:0 0 16px; }
+.canvas-document-body h1 { font-size:24px; font-weight:500; line-height:1.5; margin:0 0 26px; }
+.canvas-document-body h2 { font-size:18px; font-weight:500; margin:24px 0 14px; }
+.canvas-document-body h3 { font-size:16px; margin:20px 0 12px; }
+.canvas-document-body blockquote { border-left:2px solid var(--bb-line); padding-left:12px; margin:18px 0; color:var(--bb-muted); }
+.canvas-document-body pre { white-space:pre-wrap; font:12px/1.7 ui-monospace,Consolas,monospace; }
+.canvas-document-body figure { margin:20px 0; }
+.canvas-document-body figure img { display:block; width:100%; height:auto; max-height:230px; object-fit:contain; }
+.canvas-document-body figcaption { font-size:11px; color:var(--bb-muted); text-align:center; }
+.canvas-document-body .is-list-item { padding-left:16px; }
+.canvas-document-body .is-list-item:before { content:"•"; margin-left:-16px; width:16px; display:inline-block; }
+.canvas-note.is-document-card .workflow-cell-port.workflow-image-output { top:72px; opacity:1; pointer-events:auto; }
+.canvas-note.is-document-card .workflow-cell-port.workflow-content-text-output { top:112px; opacity:1; pointer-events:auto; }
+.is-document-card .workflow-cell-port > span { position:absolute; right:20px; top:50%; transform:translateY(-50%); white-space:nowrap; font-size:11px; color:var(--bb-muted); background:var(--bb-surface); pointer-events:none; }

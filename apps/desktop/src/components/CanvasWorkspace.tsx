@@ -9,6 +9,10 @@ import { ProjectInspectorShell } from "./ProjectInspectorShell";
 import { WorkflowAgentDetail } from "./WorkflowAgentDetail";
 import { WORKFLOW_SKILL_ENABLED, WORKFLOW_PLANNER_ENABLED, WORKFLOW_TEMPLATE_LIBRARY_ENABLED } from "../lib/featureFlags";
 import { CanvasTextCard } from "./CanvasTextCard";
+import { CanvasDocumentCard } from "./CanvasDocumentCard";
+import type { TextWorkspaceDocument } from "../lib/documentTypes";
+import { documentToPromptLoad } from "../lib/documentComposer";
+import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import { CanvasArtboardDialog } from "./CanvasArtboardDialog";
 import { CANVAS_ARTBOARD_FROM_IMAGE, artboardComposition, containArtboardImage, intersectArtboard, type ArtboardComposition, type ArtboardImage } from "../lib/canvasArtboard";
 import { CanvasToolbox } from "./CanvasToolbox";
@@ -49,6 +53,8 @@ import { useCanvasFrame, useLatestCallback } from "../lib/useCanvasFrame";
 import { createCanvasCellHitCache } from "../lib/canvasCellHitCache";
 import {
   useCallback,
+  lazy,
+  Suspense,
   useEffect,
   useId,
   useLayoutEffect,
@@ -71,6 +77,7 @@ import {
   Copy,
   ChevronUp,
   Folder,
+  FileText,
   Images,
   LayoutDashboard,
   Layers,
@@ -214,6 +221,7 @@ import type {
   CreativeViewMode,
 } from "../lib/types";
 
+const TextWorkspace = lazy(() => import("./TextWorkspace").then(module => ({ default: module.TextWorkspace })));
 const ASSET_WIDTH = 190;
 let canvasClipboardText = "";
 const FOLDER_WIDTH = 204;
@@ -587,6 +595,14 @@ export function CanvasWorkspace({
   const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; section?: { id: string; name: string } | null; x: number; y: number; point: CanvasPoint | null } | null>(null);
   useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
   const [viewRevision, setViewRevision] = useState(0);
+  const [documentEditor, setDocumentEditor] = useState<{ nodeId: string; projectId: string; initialDocument: TextWorkspaceDocument } | null>(null);
+  const documentEditorSession = useRef(0);
+  const documentEditorRevision = useRef(0);
+  const [documentPromptLoad, setDocumentPromptLoad] = useState<CreativePromptLoadRequest | null>(null);
+  const documentSaveRef = useRef<{ nodeId: string; payloadJson: string } | null>(null);
+  const documentSaveTimer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => { setDocumentEditor(null); return () => { documentEditorSession.current++; flushDocumentCard(); }; }, [projectId, viewMode]);
+  useEffect(() => { setDocumentPromptLoad(null); }, [projectId]);
   const activeGenerationJob = activeJobId ? genJobs[activeJobId] ?? null : null;
   const activeAgentRun = activeCloudAgentRunId ? cloudAgentRuns[activeCloudAgentRunId] ?? null : null;
   const snapshotPrompt = !activeGenerationJob && !activeAgentRun && genPanelOpen
@@ -693,7 +709,7 @@ export function CanvasWorkspace({
   } | null>(null);
   const marqueePressRef = useRef<CanvasMarqueePress | null>(null);
   const selectedCanvasNodeIdsRef = useRef(selectedCanvasNodeIds);
-  const [drawingTool, setDrawingTool] = useState<"select" | "pan" | "section" | "artboard" | "bubble" | Exclude<WorkflowKind, "trigger">>("select");
+  const [drawingTool, setDrawingTool] = useState<"select" | "pan" | "section" | "artboard" | "bubble" | "document" | Exclude<WorkflowKind, "trigger">>("select");
   const [artboardDialog, setArtboardDialog] = useState<{ nodeId: string; projectId: string; revision: number; composition: ArtboardComposition } | null>(null);
   useEffect(() => { setArtboardDialog(null); }, [projectId]);
   const workflowRef = useRef<WorkflowLayerHandle>(null);
@@ -749,7 +765,7 @@ export function CanvasWorkspace({
     workflowRef.current?.cancelPlacement();
     setDrawingTool(tool);
   }
-  function canvasCardTool(kind: "bubble" | Exclude<WorkflowKind, "trigger">) {
+  function canvasCardTool(kind: "bubble" | "document" | Exclude<WorkflowKind, "trigger">) {
     return {
       draggable: true,
       "aria-pressed": drawingTool === kind,
@@ -991,6 +1007,7 @@ export function CanvasWorkspace({
     // Pull the editor's latest in-memory ProseMirror document through the
     // persistence callback before waiting on the queue.
     composerDraftFlushRef.current?.();
+    flushDocumentCard();
     await writeQueueRef.current;
     await retryPendingWrites();
     if (includeView) {
@@ -2423,7 +2440,7 @@ export function CanvasWorkspace({
       if (loadingRef.current || useStore.getState().projectRoutePending || (event.target as HTMLElement).closest(".canvas-drawing-tools")) return;
       try {
         const value = JSON.parse(event.dataTransfer.getData(WORKFLOW_CARD_DRAG_TYPE));
-        if (value.projectId !== projectId || !["text", "bubble", "instruction", "generation", "skill", "agent", "visual-profile", "loop", ...(import.meta.env.DEV ? ["planner"] : [])].includes(value.kind)) return;
+        if (value.projectId !== projectId || !["text", "document", "bubble", "instruction", "generation", "skill", "agent", "visual-profile", "loop", ...(import.meta.env.DEV ? ["planner"] : [])].includes(value.kind)) return;
         const point = toBoardPoint(event.clientX, event.clientY);
         placeCanvasCard(value.kind, point);
       } catch { /* Ignore unrelated or malformed external drag payloads. */ }
@@ -3381,7 +3398,7 @@ export function CanvasWorkspace({
     const payloadJson = JSON.stringify(value);
     const node = graphNodesRef.current.find(candidate => candidate.id === nodeId);
     if (!node) return;
-    const minimum = value.note_type !== "section" ? canvasTextMinSize(value.cells, value.note_type === "images", value.note_type === "bubble") : node;
+    const minimum = value.note_type === "document" ? { width: 280, height: 200 } : value.note_type !== "section" ? canvasTextMinSize(value.cells, value.note_type === "images", value.note_type === "bubble") : node;
     const updated = { ...node, payloadJson, width: Math.max(size?.width ?? node.width, minimum.width), height: Math.max(size?.height ?? node.height, minimum.height) };
     graphNodesRef.current = graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate);
     setGraphNodes(graphNodesRef.current);
@@ -3407,6 +3424,33 @@ export function CanvasWorkspace({
         if (value.note_type === "section" && !value.workflow_container && !value.artboard) updateCanvasNote(nodeId, { ...value, member_ids: claimSectionMembers(updated, nodeId) });
       }
     }
+  }
+
+  function saveDocumentCard(document: TextWorkspaceDocument) {
+    stageDocumentCard(document);
+    flushDocumentCard();
+  }
+
+  function flushDocumentCard() {
+    clearTimeout(documentSaveTimer.current);
+    const pending = documentSaveRef.current;
+    documentSaveRef.current = null;
+    if (pending) void enqueueWrite(async () => { await api.projectCanvasNoteUpdate(pending.nodeId, pending.payloadJson); });
+  }
+
+  function stageDocumentCard(document: TextWorkspaceDocument) {
+    if (!documentEditor || activeCanvasRef.current.id !== documentEditor.projectId) throw new Error("项目已切换，请重新打开文本卡片");
+    const node = graphNodesRef.current.find(node => node.id === documentEditor.nodeId && node.hiddenAt == null);
+    if (!node) throw new Error("文本卡片已删除，内容仍保留在编辑器中");
+    const note = readCanvasNote(node);
+    if (note.title === document.title && note.text === document.markdown) return;
+    documentEditorRevision.current++;
+    const payloadJson = JSON.stringify({ ...note, title: document.title, text: document.markdown });
+    graphNodesRef.current = graphNodesRef.current.map(item => item.id === node.id ? { ...item, payloadJson } : item);
+    setGraphNodes(graphNodesRef.current);
+    documentSaveRef.current = { nodeId: node.id, payloadJson };
+    clearTimeout(documentSaveTimer.current);
+    documentSaveTimer.current = setTimeout(flushDocumentCard, 450);
   }
 
   function resizeCanvasMaterial(nodeId: string, size: { width: number; height: number }, finished: boolean, cancelled = false) {
@@ -3508,12 +3552,13 @@ export function CanvasWorkspace({
     return () => window.removeEventListener(CANVAS_ARTBOARD_FROM_IMAGE, createFromImage);
   });
 
-  function createCanvasNote(rect: CanvasRect, noteType: "text" | "section" | "bubble", artboard?: { base_asset_id: string | null }) {
+  function createCanvasNote(rect: CanvasRect, noteType: "text" | "section" | "bubble" | "document", artboard?: { base_asset_id: string | null }) {
     const draft = activeCanvasRef.current;
     const members = noteType === "section" && !artboard ? claimSectionMembers(rect) : [];
     const value: CanvasNotePayload = { schema_version: 1, text: artboard ? "画板" : noteType === "section" ? "分区" : "", note_type: noteType,
       ...(artboard ? { artboard } : {}),
-      cells: noteType !== "section" ? [[emptyCanvasCell()]] : [], member_ids: members,
+      cells: noteType !== "section" && noteType !== "document" ? [[emptyCanvasCell()]] : [], member_ids: members,
+      ...(noteType === "document" ? { title: "文本" } : {}),
       ...(noteType === "bubble" ? { bubble_tail: { side: "bottom" as const, position: 25 } } : {}) };
     const node: ProjectGraphNode = { id: canvasId(noteType), projectId: draft.id, threadId: null, kind: "note", assetId: null, role: null,
       payloadJson: JSON.stringify(value), ...rect, zIndex: Math.max(0, ...selectionAnchors().map(anchor => anchor.order)) + 1, positionLocked: false, hiddenAt: null, createdAt: Date.now(), updatedAt: Date.now() };
@@ -3528,9 +3573,11 @@ export function CanvasWorkspace({
     setDrawingTool("select");
   }
 
-  function placeCanvasCard(kind: "bubble" | Exclude<WorkflowKind, "trigger">, point: CanvasPoint) {
+  function placeCanvasCard(kind: "bubble" | "document" | Exclude<WorkflowKind, "trigger">, point: CanvasPoint) {
     chooseCanvasTool("select");
-    if (kind === "text" || kind === "bubble") {
+    if (kind === "document") {
+      createCanvasNote({ ...point, width: 420, height: 420 }, "document");
+    } else if (kind === "text" || kind === "bubble") {
       createCanvasNote({ ...point, width: kind === "bubble" ? 240 : 320,
         height: kind === "bubble" ? 120 : canvasTextMinSize([[emptyCanvasCell()]]).height }, kind);
     } else {
@@ -5004,6 +5051,7 @@ export function CanvasWorkspace({
             <button data-tip="画板 · 拖框后拼放图片" aria-label="画板工具" aria-pressed={drawingTool === "artboard"} onClick={() => chooseCanvasTool("artboard")}><Scan size={18} /></button>
             <hr />
             <button data-tip="内容卡片 · 拖入画布或选中后点击放置" aria-label="内容卡片工具" {...canvasCardTool("text")}><Table2 size={18} /></button>
+            <button data-tip="文本卡片 · 拖入画布或选中后点击放置" aria-label="文本卡片工具" {...canvasCardTool("document")}><FileText size={18} /></button>
             <button data-tip="气泡便签 · 拖入画布或选中后点击放置" aria-label="气泡便签工具" {...canvasCardTool("bubble")}><MessageCircle size={18} /></button>
             <button data-tip="指令卡片 · 拖入画布或选中后点击放置" aria-label="新增指令卡片" {...canvasCardTool("instruction")}><List size={18} /></button>
             <button data-tip="循环卡片 · 拖入画布或选中后点击放置" aria-label="新增循环卡片" {...canvasCardTool("loop")}><Repeat2 size={18} /></button>
@@ -5052,7 +5100,7 @@ export function CanvasWorkspace({
               const failedWriter = workflowController?.document.nodes.some(writer => (writer.textTarget?.nodeId === node.id || writer.textSource === node.id)
                 && (workflowController.issue?.nodeId === writer.id || workflowNodeRun(workflowController.document, writer.id)?.steps[writer.id]?.status === "failed"));
               return <div key={node.id} data-canvas-node data-canvas-node-id={node.id} data-workflow-container={value.workflow_container ? node.id : undefined} tabIndex={0}
-                className={`canvas-note ${section ? "is-section" : value.note_type === "bubble" ? "is-bubble" : "is-text is-content-card"} ${value.artboard ? "is-artboard" : ""} ${selected ? "is-selected" : ""} ${failedWriter ? "canvas-card-error" : ""}`}
+                className={`canvas-note ${section ? "is-section" : value.note_type === "bubble" ? "is-bubble" : "is-text is-content-card"} ${value.note_type === "document" ? "is-document-card" : ""} ${value.artboard ? "is-artboard" : ""} ${selected ? "is-selected" : ""} ${failedWriter ? "canvas-card-error" : ""}`}
                 style={{ width: node.width, height: node.height, transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: section ? 0 : activeDragId === node.id || (activeDragId != null && selected) ? 10000 + node.zIndex : node.zIndex }}
                 onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
                 onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
@@ -5071,7 +5119,11 @@ export function CanvasWorkspace({
                     <CanvasResizeHandle key={corner} label={`调整${value.artboard ? "画板" : "分区"}大小（${label}）`} corner={corner} size={node} position={{ x: node.x, y: node.y }} zoom={zoomRef.current} getZoom={readCanvasZoom}
                       minimum={{ width: 120, height: 80 }} onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} />
                   ))}
-                </> : <CanvasTextCard value={value} selected={selected} width={node.width} height={node.height} zoom={zoomRef.current} getZoom={readCanvasZoom}
+                </> : value.note_type === "document" ? <CanvasDocumentCard value={value} selected={selected} width={node.width} height={node.height} zoom={zoomRef.current} getZoom={readCanvasZoom}
+                  onEdit={() => { documentEditorSession.current++; setDocumentEditor({ nodeId: node.id, projectId: node.projectId, initialDocument: { title: value.title || "文本", markdown: value.text } }); }}
+                  onConnect={(port, x, y) => workflowRef.current?.connectCell(node.id, port, x, y)}
+                  onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)}/>
+                : <CanvasTextCard value={value} selected={selected} width={node.width} height={node.height} zoom={zoomRef.current} getZoom={readCanvasZoom}
                   onOpenPreview={openCanvasSourcePreview}
                   onMediaContextMenu={(event, asset) => {
                     setPromptMenu(null);
@@ -5470,8 +5522,8 @@ export function CanvasWorkspace({
             continuationCandidates={continuationCandidates}
             focusedContinuationNodeId={focusedNodeId}
             focusedContinuationThreadId={focusedThreadId}
-            promptLoadRequest={promptLoadRequest}
-            onPromptLoadConsumed={onLaunchConsumed}
+            promptLoadRequest={documentPromptLoad ?? promptLoadRequest}
+            onPromptLoadConsumed={id => { if (documentPromptLoad?.id === id) setDocumentPromptLoad(null); else onLaunchConsumed?.(id); }}
             onDraftChange={draftJson => { if (activeCanvasRef.current.id === activeCanvas.id) persistComposerDraft(draftJson); }}
             onOpenLibrary={() => {
               if (!useStore.getState().canvasLibraryOpen) {
@@ -5679,6 +5731,19 @@ export function CanvasWorkspace({
             if (!draft || draft.id !== replicationProjectId) throw new Error("项目已切换，请重新打开工具");
             await ensureMaterialized(draft);
           }} />}
+        {documentEditor && <Suspense fallback={null}><TextWorkspace key={documentEditor.nodeId} initialDocument={documentEditor.initialDocument} projectId={documentEditor.projectId}
+          onChange={stageDocumentCard}
+          onClose={document => { saveDocumentCard(document); documentEditorSession.current++; setDocumentEditor(null); }}
+          onAddToComposer={async document => {
+            const expected = documentEditor.projectId;
+            const session = documentEditorSession.current, revision = documentEditorRevision.current;
+            const prompt = await documentToPromptLoad(document);
+            if (documentEditorSession.current !== session || activeCanvasRef.current.id !== expected) return;
+            if (documentEditorRevision.current !== revision) throw new Error("文本已有新的更改，请再次添加；当前内容已保留。");
+            saveDocumentCard(document);
+            setDocumentPromptLoad({ ...prompt, id: canvasId("document-prompt") });
+            setSelectedChatId(null); useStore.getState().setBoardActive(true); documentEditorSession.current++; setDocumentEditor(null);
+          }}/></Suspense>}
         {creationImagePreview && <CreationImagePreview asset={creationImagePreview.asset} projectId={projectId}
           job={creationImagePreview.jobId ? genJobs[creationImagePreview.jobId] : undefined}
           onClose={() => setCreationImagePreview(null)} />}

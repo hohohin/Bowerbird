@@ -15,6 +15,9 @@ use std::{
 };
 
 const MAX_BYTES: usize = 2 * 1024 * 1024;
+#[path = "text_document_create.rs"]
+mod creation;
+pub use creation::{create, CreateTextDocument, CreatedTextDocument};
 static WRITERS: LazyLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 pub fn is_text(ext: &str) -> bool {

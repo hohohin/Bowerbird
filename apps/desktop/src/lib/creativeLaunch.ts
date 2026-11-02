@@ -1,6 +1,13 @@
 import type { PromptedAsset } from "./types";
 
+export type CreativeDocumentInline = { type: "text"; text: string } | { type: "image"; attrs: {
+  assetId: string; canvasNodeId: string | null; name: string | null; ext: string | null; thumb: string | null;
+} };
+export interface CreativeDocument { type: "doc"; content: Array<{ type: "paragraph"; content: CreativeDocumentInline[] }> }
+
 export interface CreativePromptLoad {
+  /** Explicit document imports preserve literal text and media identity without parsing asset names. */
+  document?: CreativeDocument;
   referenceNodeIds?: Array<string | null>;
   generation?: import("./videoGeneration").GenerationSettings;
   prompt: string;

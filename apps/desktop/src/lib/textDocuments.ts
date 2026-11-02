@@ -1,10 +1,11 @@
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { Asset } from "./types";
-import type { DocumentMedia, DocumentValue, TextDocumentSnapshot } from "./documentTypes";
+import type { CreateTextDocumentInput, CreatedTextDocument, DocumentMedia, DocumentValue, TextDocumentSnapshot } from "./documentTypes";
 import { isAudioAsset } from "./audioMedia";
 import { isVideoPath } from "./videoGeneration";
 
 export const textDocuments = {
+  create: (input: CreateTextDocumentInput) => invoke<CreatedTextDocument>("create_text_document", { input }),
   read: (assetId: string) => invoke<TextDocumentSnapshot>("read_text_document", { assetId }),
   save: (assetId: string, expectedVersion: string, text: string) => invoke<TextDocumentSnapshot>("save_text_document", { assetId, expectedVersion, text }),
 };

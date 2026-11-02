@@ -455,6 +455,7 @@ pub fn run() {
             commands::external_files::external_files_media,
             commands::audio::audio_waveform,
             commands::text_documents::read_text_document,
+            commands::text_documents::create_text_document,
             commands::text_documents::save_text_document,
             commands::external_files::external_files_preview,
             commands::file_colors::file_colors,

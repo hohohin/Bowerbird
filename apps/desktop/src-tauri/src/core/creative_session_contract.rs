@@ -276,6 +276,7 @@ pub enum CanvasBubbleSide { Top, Right, Bottom, Left }
 #[serde(rename_all = "snake_case")]
 pub enum CanvasNoteType {
     Text,
+    Document,
     Images,
     Section,
     Bubble,
@@ -663,6 +664,11 @@ fn parse_node_payload_value(
         }
         CreativeNodeKind::Note => {
             let note: NoteNodePayloadV1 = serde_json::from_value(value)?;
+            if note.note_type == Some(CanvasNoteType::Document)
+                && (!note.cells.is_empty() || !note.member_ids.is_empty() || note.text.len() > 2 * 1024 * 1024
+                    || note.text.contains('\0') || note.column_widths.is_some() || note.row_heights.is_some()) {
+                return Err(CreativeContractError::InvalidNoteGrid);
+            }
             if (note.note_type == Some(CanvasNoteType::Chat)) != note.conversation_id.as_ref().is_some_and(|id| !id.trim().is_empty()) {
                 return Err(CreativeContractError::InvalidNoteGrid);
             }
@@ -1233,6 +1239,22 @@ mod tests {
             )
             .unwrap();
         assert_eq!(project_id, None, "项目删除后创作必须转为全局");
+    }
+
+    #[test]
+    fn document_note_preserves_markdown_and_rejects_a_second_grid_source() {
+        let payload = serde_json::json!({ "schema_version": 1, "note_type": "document", "title": "剧本",
+            "text": "# 第一幕\n\n**开场**\n", "cells": [], "member_ids": [] });
+        let parsed = parse_node_payload(CreativeNodeKind::Note, &payload.to_string()).unwrap();
+        let CreativeNodePayload::Note(note) = parsed else { panic!("expected document note"); };
+        assert_eq!(note.text, "# 第一幕\n\n**开场**\n");
+        assert!(note.cells.is_empty());
+        let mut invalid = payload.clone();
+        invalid["cells"] = serde_json::json!([[{ "text": "second copy", "bold": false, "italic": false, "align": "left" }]]);
+        assert!(parse_node_payload(CreativeNodeKind::Note, &invalid.to_string()).is_err());
+        invalid = payload;
+        invalid["text"] = serde_json::Value::String("x".repeat(2 * 1024 * 1024 + 1));
+        assert!(parse_node_payload(CreativeNodeKind::Note, &invalid.to_string()).is_err());
     }
 
     #[test]

@@ -27,11 +27,12 @@ import { videoSourceKey } from "../lib/videoSourceKey";
 import type { VideoFrame } from "../lib/videoFrame";
 import type { SaveVideoTrim } from "../lib/videoTrim";
 import { useCreationEditor } from "./creation/useCreationEditor";
+import { useTextWorkspace } from "./useTextWorkspace";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
-import { Bookmark, Copy, Images, Info, Pencil, RotateCcw, Send, Sparkles, X } from "lucide-react";
+import { Bookmark, Copy, Images, Info, Maximize2, Pencil, RotateCcw, Send, Sparkles, X } from "lucide-react";
 
 /** 生成用时格式：<60s 取整秒，否则 m:ss。 */
 function fmtDuration(ms: number): string {
@@ -1161,6 +1162,8 @@ function GenEditComposer({
   const {
     hostRef,
     focus,
+    getDraft,
+    loadPrompt,
     finalPrompt,
     rawPrompt,
     references,
@@ -1174,6 +1177,7 @@ function GenEditComposer({
     // 维度环点扇区插进本坞（与创作板互斥挂载，任意时刻只有一个实例消费）。
     consumePendingKeyword: true,
   });
+  const textWorkspace = useTextWorkspace({ scopeKey: `generation:${job.id}:${mode}:${preloadTurn?.turnKey ?? "current"}`, projectId: job.projectId ?? undefined, getDraft, loadPrompt, focus });
   const videoOptions = resolveVideoOptions(selectedVideoOptions, references);
   // 比例初值取会话首轮的值；编辑坞内改动不持久化（创作板有自己的记忆）。
   const [ratio, setRatio] = useState<string | null>(sourceTurn?.ratio ?? job.lastRatio ?? null);
@@ -1428,6 +1432,7 @@ function GenEditComposer({
     // 配色深灰蓝（.session-dock）区分会话上下文。高度随内容收缩；dockRef 高度经
     // ResizeObserver 写入 --gen-dock-h，瀑布流据此留底部空隙。
     <div ref={dockRef} data-generation-composer={inline ? "inline" : "floating"} className={inline ? "w-full" : "gen-dock-in session-dock w-full rounded-t-2xl p-2.5 pb-2"}>
+      {textWorkspace.workspace}
       <div className="flex items-start gap-2.5">
         {/* 左侧「上次结果」缩略图：露瀑布流选图的同时对照会话最近产出编辑/续写；点击放大。 */}
         {recentImages.length > 0 && (
@@ -1481,6 +1486,8 @@ function GenEditComposer({
           <X size={14} />
         </button>
       </div>}
+      <div className="generation-text-editor-shell">
+      <button type="button" className="composer-text-expand" aria-label="放大编辑文本" title="放大编辑文本" onMouseDown={event => event.preventDefault()} onClick={textWorkspace.openEditor}><Maximize2 size={16}/></button>
       <div
         ref={hostRef}
         onClick={(event) => {
@@ -1491,6 +1498,7 @@ function GenEditComposer({
         data-tour="creation-editor"
         className="creation-editor generation-input min-h-16 max-h-56 cursor-text overflow-y-auto px-3 py-2 text-sm leading-8 text-ink"
       />
+      </div>
       {/* 编辑框内 chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
       <BoardChipPreview hostRef={hostRef} />
       {referenceError && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
