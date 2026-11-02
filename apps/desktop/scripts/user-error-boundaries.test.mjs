@@ -22,6 +22,7 @@ const reviewed = new Set([
   'components/ConnectedCollections.tsx:error', // Both state producers sanitize errors before assignment.
   'components/LocalChatPanel.tsx:error', // Card action errors are sanitized before assignment.
   'components/VideoCollectionDialog.tsx:error', // Load, collect and save errors are sanitized before assignment.
+  'components/ExplorerCaptureHistory.tsx:item.error', // Session store sanitizes every failure and cancellation error; persistence never restores raw errors.
   'components/CreationBoard.tsx:referenceError', // Local image-input validation + user asset names.
   'components/GenerationPanel.tsx:referenceError', // Same local validation helper.
   'components/OnboardingTour.tsx:error', // Fixed Chinese instructions only.

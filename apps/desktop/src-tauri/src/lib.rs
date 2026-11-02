@@ -766,6 +766,7 @@ pub fn run() {
             commands::source_browser::reload_source_browser,
             commands::source_browser::hide_source_browser,
             commands::source_browser_capture::capture_source_browser_image,
+            commands::source_browser_jobs::cancel_source_browser_capture,
             commands::source_browser_capture::claim_source_browser_analysis,
             commands::source_browser_capture::release_source_browser_analysis,
             commands::source_browser_capture::finish_source_browser_analysis,

@@ -2580,9 +2580,15 @@ export function CanvasWorkspace({
       const frozenProject = activeCanvasRef.current;
       const point = toBoardPoint(detail.clientX, detail.clientY);
       const order = nodesRef.current.reduce((max, node) => Math.max(max, node.order), 0) + 1;
-      let placedCount = 0;
+      const placements = new Map<string, { node: CanvasAssetNode; saved: boolean }>();
       detail.place = async (asset) => {
-        const index = placedCount++;
+        const previous = placements.get(asset.id);
+        if (previous) {
+          if (!previous.saved) await retryPendingWrites();
+          if (!previous.saved) throw new Error("画板卡片尚未保存，请重试");
+          return previous.node.id;
+        }
+        const index = placements.size;
         const snapshot = createCanvasAssetSnapshot(asset, canvasId("asset"));
         const size = assetNodeSize(snapshot);
         const node: CanvasAssetNode = {
@@ -2590,10 +2596,15 @@ export function CanvasWorkspace({
           x: point.x - size.width / 2 + index * 24, y: point.y - size.height / 2 + index * 24,
           ...size, order: order + index,
         };
+        const placement = { node, saved: false };
+        placements.set(asset.id, placement);
         // Persist to the frozen project even when indexing finishes after navigation.
         await enqueueWrite(async () => {
           await ensureMaterialized(frozenProject);
-          await api.projectCanvasNodeCreate(newProjectCanvasAssetNode(projectId, node));
+          if (!placement.saved) {
+            await api.projectCanvasNodeCreate(newProjectCanvasAssetNode(projectId, node));
+            placement.saved = true;
+          }
           const route = useStore.getState();
           if (stage?.isConnected && activeCanvasRef.current.id === projectId
             && route.activeProjectId === projectId && !route.projectRoutePending) {

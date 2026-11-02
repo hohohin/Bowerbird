@@ -1,6 +1,6 @@
 import { userErrorMessage } from "../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
-import { GripVertical, LoaderCircle } from "lucide-react";
+import { GripVertical } from "lucide-react";
 import { SourceBrowserPanel } from "./SourceBrowserPanel";
 import { useStore } from "../store";
 import { api } from "../lib/api";
@@ -15,10 +15,10 @@ import { getDragAssets } from "../lib/dragPayload";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ExplorerClassificationDock, type ExplorerClassificationItem } from "./ExplorerClassificationDock";
 import { folderConnections } from "../lib/folderConnections";
+import { enqueueExplorerCapture } from "../lib/explorerCaptureHistory";
+import type { Asset } from "../lib/types";
 
 export function ExploreWorkspace({ url, open, navigationId = 0, onClose, children }: { url: string | null; open: boolean; navigationId?: number; onClose: () => void; children: ReactNode }) {
-  const [busy, setBusy] = useState(false);
-  const busyRef = useRef(false);
   const [over, setOver] = useState(false);
   const [width, setWidth] = useState(460);
   const [resizing, setResizing] = useState(false);
@@ -59,8 +59,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
     const isVideo = image.mediaKind === "video";
     const mediaName = isVideo ? "视频" : "图片";
     const state = useStore.getState();
-    if (busyRef.current || state.projectRoutePending) return;
-    busyRef.current = true; setBusy(true);
+    if (state.projectRoutePending) { notifyError(null, "项目正在切换，请稍后重新拖入"); return; }
     const operation = ++sequence.current;
     setFeedback(null);
     const point = { x: event.clientX, y: event.clientY };
@@ -75,6 +74,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
     const completeLesson = beginOnboardingOperation("explore", target);
     const revision = state.projectRouteRevision;
     const placeOnCanvas = prepareExplorerCanvasDrop(event.target, target, event.clientX, event.clientY);
+    const droppedOnCanvas = event.target instanceof Element && !!event.target.closest("[data-canvas-stage]");
     // Older/incomplete page injections can lack a drag ID; start on drop then.
     const dragId = image.dragId ?? crypto.randomUUID().replaceAll("-", "");
     const previewUrl = dragMotion.drop(image, dragId, point.x, point.y);
@@ -88,13 +88,15 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
     };
     let capturedId: string | undefined;
     let placedNodeId: string | undefined;
+    let capturedAsset: Asset | undefined;
+    let collectionDelivered = false;
+    const discard = () => { dragMotion.finish(dragId); if (!isVideo) void api.releaseSourceBrowserAnalysis(dragId).catch(() => {}); };
+    try { enqueueExplorerCapture({ mediaKind: image.mediaKind, pageUrl: image.pageUrl, thumbnail: previewUrl }, async attempt => {
     let handedOff = false;
     try {
-      if (!placeOnCanvas && event.target instanceof Element && event.target.closest("[data-canvas-stage]")) {
-        notifyError(null, "画布尚未准备好，请稍后重新拖入"); return;
-      }
+      if (!placeOnCanvas && droppedOnCanvas) throw new Error("画布尚未准备好，请稍后重新拖入");
       let analysisIssue = "";
-      const analysing = !isVideo && await api.claimSourceBrowserAnalysis(dragId, image.imageUrl, image.pageUrl).catch(error => {
+      const analysing = !capturedAsset && !isVideo && await api.claimSourceBrowserAnalysis(dragId, image.imageUrl, image.pageUrl).catch(error => {
         const reason = error instanceof Error ? error.message : typeof error === "string" ? error : "";
         console.error("Capture classification unavailable", error);
         analysisIssue = /not found|unknown command/i.test(reason) ? "分类暂不可用，请更新应用后重试" : userErrorMessage(error, "分类暂不可用，可稍后重新分类");
@@ -105,12 +107,9 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
         setClassifications(items => [...items, { id: classificationId, imageUrl, origin: point }]);
       }
       // Flush existing composer state before materializing a still-empty project.
-      if (target) {
-        if (target === contextProjectId) await state.projectCanvasFlush?.();
+      if (target && !capturedAsset) {
+        if (target === contextProjectId && useStore.getState().activeProjectId === contextProjectId) await state.projectCanvasFlush?.();
         const current = useStore.getState();
-        if (current.projectRoutePending || current.projectRouteRevision !== revision || current.activeProjectId !== contextProjectId) {
-          throw new Error(`项目正在切换，请重新拖入${mediaName}`);
-        }
         const selected = current.projects.find(p => p.id === target);
         if (!selected) throw new Error("项目已不存在");
         if (selected.provisional) {
@@ -122,17 +121,21 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
           if (!route.projectRoutePending && route.projectRouteRevision === revision && route.activeProjectId === target) await api.setActiveProject(target);
         }
       }
-      const asset = await api.captureSourceBrowserImage(image.imageUrl, image.pageUrl, target, dragId, image.mediaKind);
+      if (!capturedAsset) {
+        attempt.beforeCapture();
+        capturedAsset = await api.captureSourceBrowserImage(image.imageUrl, image.pageUrl, target, dragId, image.mediaKind, attempt.captureId);
+      }
+      const asset = capturedAsset;
+      attempt.saved(asset);
       capturedId = asset.id;
       if (asset.thumb_path) updateClassification({ imageUrl: convertFileSrc(asset.thumb_path) });
-      if (collectionId) {
-        try { await folderConnections.references([asset.id], collectionId); }
-        catch (error) { notifyError(error, `${mediaName}已入库，但加入集合失败，请重新添加`); return; }
+      if (collectionId && !collectionDelivered) {
+        await folderConnections.references([asset.id], collectionId);
+        collectionDelivered = true;
       }
       let nodeId: string | void = undefined;
       if (placeOnCanvas) {
-        try { nodeId = await placeOnCanvas(asset); }
-        catch (error) { notifyError(error, `${mediaName}已入库，但画板卡片保存失败`); return; }
+        nodeId = await placeOnCanvas(asset);
       }
       if (placeOnCanvas) completeLesson();
       placedNodeId = nodeId || undefined;
@@ -153,15 +156,14 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       }
       // Retain a global acknowledgement if the user has navigated away from the target.
       if (useStore.getState().activeProjectId !== contextProjectId) notifySuccess(placeOnCanvas ? `${mediaName}已采集并添加到画板` : `${mediaName}已采集`);
-    } catch (error) { notifyError(error, "采集失败，请重试"); }
-    finally {
+    } finally {
       dragMotion.finish(dragId, capturedId, placedNodeId);
       if (!handedOff) {
         if (mounted.current) removeClassification(classificationId);
         if (!isVideo) void api.releaseSourceBrowserAnalysis(dragId).catch(() => {});
       }
-      busyRef.current = false; setBusy(false);
     }
+    }, discard); } catch (error) { discard(); notifyError(error, "采集任务未加入，请重试"); }
   }
 
   return <div ref={root} className={`explore-workspace ${open ? "is-open" : ""}`} aria-label="主工作区">
@@ -179,8 +181,8 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       onDragOverCapture={event => {
         if (getDragAssets()?.length) { setOver(false); return; }
         if (Array.from(event.dataTransfer.types).some(type => type === EXPLORER_MIME || type === "text/plain")) {
-          event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = busy ? "none" : "copy"; setOver(!busy);
-          if (!busy) dragMotion.over(event.clientX, event.clientY);
+          event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = "copy"; setOver(true);
+          dragMotion.over(event.clientX, event.clientY);
         }
       }}
       onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) { setOver(false); dragMotion.leave(); } }}
@@ -189,7 +191,6 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       {children}
       <ExplorerClassificationDock items={classifications} onDone={removeClassification} />
       {open && feedback && feedback.projectId === activeProjectId && <ExplorerCaptureFeedback value={feedback} onDone={clearFeedback} />}
-      {busy && <div className="explore-capture-status pointer-events-none" role="status"><LoaderCircle size={13} className="animate-spin" />采集中…</div>}
       {over && <div className="explore-drop-hint">松开采集</div>}
     </section>
   </div>;

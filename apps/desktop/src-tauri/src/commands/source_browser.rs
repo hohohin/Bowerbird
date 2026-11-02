@@ -150,6 +150,7 @@ pub async fn open_source_browser(
         .disable_drag_drop_handler()
         .initialization_script(include_str!("../../../../extension/candidate-utils.js"))
         .initialization_script(include_str!("../../../src/lib/explorerDragVisual.js"))
+        .initialization_script(include_str!("source_browser_video.js"))
         .initialization_script(&drag_script)
         .on_navigation(move |url| {
             if url.scheme() == "bowerbird-pinterest" {
@@ -253,8 +254,8 @@ fn parse_drag_notice(url: &Url, token: &str) -> Option<DragNotice> {
         let media = notice.image_url.as_deref()?;
         let page = notice.page_url.as_deref()?;
         if page.len() > 8192 || parse_http_source_url(page).is_err() || media.len() > 8192 { return None; }
-        // A blob video remains a video drag so the drop can explain unsupported
-        // streams; it is never downloaded here or substituted with its poster.
+        // Blob metadata stays in the drag bridge; the authorized drop resolves
+        // bytes or an associated manifest in its source document, never a poster.
         let checked = if notice.media_kind == Some(SourceMediaKind::Video) { media.strip_prefix("blob:").unwrap_or(media) } else { media };
         if parse_http_source_url(checked).is_err() { return None; }
         if let Some(poster) = &notice.poster_url {

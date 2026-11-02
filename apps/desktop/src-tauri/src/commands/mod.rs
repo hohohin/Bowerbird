@@ -34,6 +34,8 @@ pub mod source_browser;
 pub mod pinterest_search;
 pub mod source_browser_capture;
 pub mod source_browser_network;
+pub mod source_browser_jobs;
+pub mod source_browser_stream;
 pub mod visual_profile;
 
 use std::sync::Arc;

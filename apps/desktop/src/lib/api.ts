@@ -476,8 +476,9 @@ export const api = {
     invoke<void>("cancel_pinterest_image_search", { requestId }),
   resizeSourceBrowser: (bounds: SourceBrowserBounds, visible?: boolean, dimmed?: boolean) =>
     invoke<void>("resize_source_browser", { bounds, visible, dimmed }),
-  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null, dragId?: string, mediaKind?: "image" | "video") =>
-    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId, ...(dragId ? { dragId } : {}), ...(mediaKind ? { mediaKind } : {}) }),
+  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null, dragId?: string, mediaKind?: "image" | "video", captureId?: string) =>
+    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId, ...(dragId ? { dragId } : {}), ...(mediaKind ? { mediaKind } : {}), ...(captureId ? { captureId } : {}) }),
+  cancelSourceBrowserCapture: (captureId: string) => invoke<boolean>("cancel_source_browser_capture", { captureId }),
   claimSourceBrowserAnalysis: (dragId: string, imageUrl: string, pageUrl: string) =>
     invoke<boolean>("claim_source_browser_analysis", { dragId, imageUrl, pageUrl }),
   releaseSourceBrowserAnalysis: (dragId: string) => invoke<void>("release_source_browser_analysis", { dragId }),

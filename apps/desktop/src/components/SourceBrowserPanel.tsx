@@ -19,6 +19,7 @@ import { EXPLORER_SITES, queueBrowserOperation } from "../lib/explorer";
 import { cancelPinterestSearch, isPinterestSearchCurrent, PINTEREST_SEARCH_EVENT, receivePinterestSearchStatus, usePinterestSearch, type PinterestSearchStatus } from "../lib/pinterestSearch";
 import { useStore } from "../store";
 import "./BrowserExtension.css";
+import { ExplorerCaptureHistory } from "./ExplorerCaptureHistory";
 
 const STATUS_EVENT = "source-browser://status";
 const TITLE_EVENT = "source-browser://title";
@@ -293,6 +294,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
           <button type="button" onClick={openExternal} title="用系统浏览器打开" aria-label="用系统浏览器打开">
             <ExternalLink size={15} />
           </button>
+          <ExplorerCaptureHistory visible={visible} />
           <button type="button" onClick={onClose} title="收起浏览器" aria-label="收起浏览器">
             <X size={16} />
           </button>
