@@ -1,0 +1,22 @@
+.plate-document-content { outline: none; min-height: 420px; font-size: 15px; line-height: 1.85; overflow-wrap: anywhere; padding: 0 0 100px; }
+.plate-block { position: relative; margin: 0 0 14px; }
+.plate-block > h1 { font-size: 32px; line-height: 1.35; margin: 16px 0 24px; font-weight: 600; letter-spacing: -.035em; }
+.plate-block > h2 { font-size: 21px; line-height: 1.45; margin: 32px 0 14px; font-weight: 550; }
+.plate-block > h3 { font-size: 18px; margin: 24px 0 10px; }
+.plate-block blockquote { margin: 16px 0; padding: 6px 18px; border-left: 2px solid var(--bb-line, #505155); color: var(--bb-muted, #a4a5a9); }
+.plate-block.is-selected { background: color-mix(in srgb, var(--bb-blue, #5299ef) 10%, transparent); box-shadow: -3px 0 0 var(--bb-blue, #5299ef); }
+.plate-block-selector { position: absolute; left: -32px; top: 5px; width: 24px; display: flex; justify-content: center; opacity: 0; }
+.plate-block:hover > .plate-block-selector, .plate-block:focus-within > .plate-block-selector, .plate-block.is-selected > .plate-block-selector { opacity: 1; }
+.plate-block-selector input { appearance: none; width: 14px; height: 14px; padding: 0; border: 1px solid var(--bb-muted, #93959a); border-radius: 0; background: transparent; cursor: pointer; }
+.plate-block-selector input:checked { background: var(--bb-blue, #5299ef); border-color: var(--bb-blue, #5299ef); }
+.plate-block-selector input:focus-visible { outline: 2px solid var(--bb-blue, #5299ef); outline-offset: 3px; }
+.plate-block figure { margin: 18px 0; }
+.plate-block img, .plate-block video { display: block; max-width: 100%; max-height: 340px; width: 100%; object-fit: contain; background: var(--bb-bg, #101112); }
+.plate-block audio { width: 100%; }
+.plate-media-caption { width: 100%; display: block; text-align: center; font: inherit; font-size: 12px; line-height: 1.5; color: var(--bb-muted, #a4a5a9); background: transparent; border: 0; padding: 9px 4px; outline: none; }
+.plate-media-caption:focus-visible { box-shadow: inset 0 -1px 0 var(--bb-blue, #5299ef); }
+.plate-media-missing { padding: 36px; border: 1px dashed var(--bb-line, #505155); color: var(--bb-muted, #a4a5a9); text-align: center; }
+.plate-raw { white-space: pre-wrap; font: 12px/1.7 ui-monospace, monospace; color: var(--bb-muted, #a4a5a9); padding: 14px; border: 1px solid var(--bb-line, #505155); }
+.plate-list-item { position: relative; }
+.plate-list-marker { position: absolute; left: 0; color: var(--bb-muted, #a4a5a9); }
+.plate-document-content code { font-family: ui-monospace, monospace; font-size: .9em; padding: 2px 5px; background: var(--bb-bg, #101112); }
