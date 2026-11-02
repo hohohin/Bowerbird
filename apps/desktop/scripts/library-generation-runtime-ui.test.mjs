@@ -1,0 +1,96 @@
+import assert from 'node:assert/strict';
+import { createServer } from 'vite';
+import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+
+const server = await createServer({ cacheDir: '.tmp/library-generation-runtime-vite', optimizeDeps: { entries: [] }, server: {host:'127.0.0.1',port:1589,strictPort:true,hmr:false,watch:null} });
+await server.listen();
+const browser = await chromium.launch({channel:'chrome',headless:true});
+const page = await browser.newPage();
+const errors=[];
+page.on('pageerror',error=>errors.push(error.message));
+try {
+  await page.route('**/runtime-test',route=>route.fulfill({contentType:'text/html',body:'<html><body></body></html>'}));
+  await page.goto(`${server.resolvedUrls.local[0]}runtime-test`);
+  const result = await page.evaluate(async () => {
+    const [{api},{useStore},{useLocalChatStore},runtime,{canvasWorkflowController},{newWorkflowNode}] = await Promise.all([
+      import('/src/lib/api.ts'),import('/src/store.ts'),import('/src/lib/localChatStore.ts'),import('/src/lib/libraryGenerationRuntime.ts'),
+      import('/src/lib/canvasWorkflowRuntime.ts'),import('/src/lib/canvasWorkflow.ts'),
+    ]);
+    const notices=[]; window.addEventListener('bowerbird://notify',event=>notices.push(event.detail));
+    useStore.setState({projects:[{id:'p',name:'快速生成'}],settings:{generation_completion_popup:true,generation_completion_sound:false},projectUnreadThreads:{}});
+    const stopChat=runtime.observeLibraryChatCompletion();
+    const chat={id:'chat',projectId:'p',threadId:'ct',nodeId:'cn',title:'聊天',status:'idle',revision:1,turnCount:1,updatedAt:1};
+    useLocalChatStore.setState({summaries:{chat}});
+    const historyNotices=notices.length;
+    useLocalChatStore.setState({summaries:{chat:{...chat,status:'running',revision:2}}});
+    useLocalChatStore.setState({summaries:{chat:{...chat,status:'idle',revision:3}}});
+    useLocalChatStore.setState({summaries:{chat:{...chat,status:'idle',revision:4}}});
+    await Promise.resolve();
+    const chatNotices=notices.length;
+    notices[0].action.onClick();
+    const chatLocation=useStore.getState().creativeNavigation;
+    stopChat();
+    let starts=0, writes=0;
+    const node={...newWorkflowNode('comfy-video',0,0,'comfy-video'),id:'h3',prompt:'花朵绽放'};
+    api.canvasWorkflowGet=async()=>({revision:0,document:{schema_version:1,nodes:[node],runs:[],run:null}});
+    api.projectCanvasGet=async()=>({nodes:[],edges:[],threads:[]});
+    api.canvasWorkflowSave=async()=>++writes;
+    const controller=canvasWorkflowController('p');
+    controller.start=async()=>{starts++;};
+    await controller.load();
+    const run={id:'run-one',startId:'h3',threadId:'ht',order:['h3'],status:'running',steps:{h3:{status:'running',jobId:'native-existing'}}};
+    await controller.save({...controller.document,runs:[run],run});
+    runtime.registerLibraryLocalVideo('p','h3');
+    const locator=runtime.useLibraryGenerationRuntime.getState().locators[0];
+    const stopVideo=runtime.observeLibraryLocalVideo(locator);
+    const initialStatus=runtime.useLibraryGenerationRuntime.getState().tasks['p:h3'].status;
+    let releaseWrite;
+    api.canvasWorkflowSave=async()=>{await new Promise(resolve=>{releaseWrite=resolve;});return ++writes;};
+    const done={...run,status:'done',steps:{h3:{status:'done',jobId:'native-existing'}}};
+    const saving=controller.save({...controller.document,nodes:[{...node,outputs:{image:{type:'image',assetIds:['asset-video']}},resultNodeIds:['video-node']}],runs:[done],run:done});
+    await new Promise(resolve=>setTimeout(resolve,20));
+    const beforeDurable=notices.length;
+    releaseWrite(); await saving;
+    await new Promise(resolve=>setTimeout(resolve,20));
+    const completed=runtime.useLibraryGenerationRuntime.getState().tasks['p:h3'];
+    const afterDurable=notices.length;
+    notices[1].action.onClick();
+    const videoLocation=useStore.getState().creativeNavigation;
+    stopVideo();
+    const stopHistory=runtime.observeLibraryLocalVideo(locator);
+    await new Promise(resolve=>setTimeout(resolve,20));
+    const afterHistory=notices.length;
+    const saved=JSON.parse(localStorage.getItem('bowerbird.libraryLocalVideo.v1'));
+    api.canvasWorkflowSave=async()=>++writes;
+    const completedDocument=structuredClone(controller.document);
+    await controller.save({...controller.document,nodes:[]});
+    const afterNodeRemoval=runtime.useLibraryGenerationRuntime.getState().tasks['p:h3'] ?? null;
+    await controller.save(completedDocument);
+    await new Promise(resolve=>setTimeout(resolve,20));
+    await controller.save({...controller.document,runs:[],run:null});
+    const afterRunRemoval=runtime.useLibraryGenerationRuntime.getState().tasks['p:h3'] ?? null;
+    stopHistory();
+    runtime.useLibraryGenerationRuntime.setState({tasks:{'p:h3':completed}});
+    for(let index=0;index<51;index++) runtime.registerLibraryLocalVideo('p',`new-${index}`);
+    const afterLocatorTrim={locators:runtime.useLibraryGenerationRuntime.getState().locators.length,hasOldTask:'p:h3' in runtime.useLibraryGenerationRuntime.getState().tasks};
+    return {historyNotices,chatNotices,chatLocation,initialStatus,beforeDurable,afterDurable,completed,videoLocation,afterHistory,starts,
+      saved,afterNodeRemoval,afterRunRemoval,afterLocatorTrim,unread:useStore.getState().projectUnreadThreads};
+  });
+  assert.equal(result.historyNotices,0,'loading completed chat history is silent');
+  assert.equal(result.chatNotices,1,'only fresh running→idle transition notifies');
+  assert.deepEqual(result.chatLocation,{projectId:'p',threadId:'ct',nodeId:'cn'});
+  assert.equal(result.initialStatus,'running');
+  assert.equal(result.beforeDurable,1,'optimistic workflow done must not notify until saved');
+  assert.equal(result.afterDurable,2);
+  assert.equal(result.completed.status,'completed');
+  assert.deepEqual(result.videoLocation,{projectId:'p',threadId:'ht',nodeId:'video-node'});
+  assert.equal(result.afterHistory,2,'remount/history does not replay completion notice');
+  assert.equal(result.starts,0,'observer never starts or resubmits a workflow');
+  assert.equal(result.afterNodeRemoval,null,'deleting the H3 card removes its recent task');
+  assert.equal(result.afterRunRemoval,null,'removing its run removes the recent task');
+  assert.deepEqual(result.afterLocatorTrim,{locators:50,hasOldTask:false},'trimmed locators cannot leave stale unobserved tasks');
+  assert.deepEqual(Object.keys(result.saved[0]).sort(),['createdAt','nodeId','projectId']);
+  assert.deepEqual(result.unread.p,['ct','ht']);
+  assert.deepEqual(errors,[]);
+  console.log('PASS H3/chat runtime: durable completion, no duplicate/history notice, locator-only persistence, exact navigation, no submissions');
+} finally {await browser.close();await server.close();}

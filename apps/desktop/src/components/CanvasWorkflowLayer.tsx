@@ -6,7 +6,8 @@ import { shallow } from "zustand/shallow";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { Clapperboard, Images, List, Palette, Play, Repeat2, Sparkles, Square, TextCursorInput, Timer, Workflow, X, Copy, ImagePlus } from "lucide-react";
 import { api } from "../lib/api";
-import { canUseComfyVideo, DEFAULT_COMFY_VIDEO } from "../lib/comfyVideo";
+import { DEFAULT_COMFY_VIDEO } from "../lib/comfyVideo";
+import { startComposerLocalVideo } from "../lib/composerLocalVideo";
 import { assignCanvasCardNames, canvasCardNameError } from "../lib/canvasCardNames";
 import { CanvasCardName } from "./CanvasCardName";
 import { TacticalSelect } from "./TacticalSelect";
@@ -540,14 +541,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   }, [projectId]);
   useImperativeHandle(ref, () => ({
     async startLocalVideo(request, point) {
-      if (!controller.ready) throw new Error("工作流正在载入，请稍后重试");
-      const account = useStore.getState();
-      if (!canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) throw new Error("本地 H3 需要有效的 Pro／Studio 权益或测试账号资格");
       await ensureMaterialized();
-      const node = { ...newWorkflowNode("comfy-video", point.x, point.y, "comfy-video"), prompt: request.prompt, comfyVideo: { ...request.options },
-        inputs: { "first-frame": [{ assetId: request.firstFrame }], ...(request.lastFrame ? { "last-frame": [{ assetId: request.lastFrame }] } : {}) } };
-      await edit([...controller.document.nodes, node]);
-      await controller.start(node.id, true, true);
+      const node = await startComposerLocalVideo(controller, request, point, edit);
       onSelect(node.id);
     },
     templates(importPackage = false) { setTemplateLibrary({ importPackage }); },

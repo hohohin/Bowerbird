@@ -1,6 +1,6 @@
 import { CreationBoard } from "./CreationBoard";
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { parseCreativeComposerState, serializeCreativeComposerState, type CreativeComposerMode } from "../lib/creativeDraft";
 import type { CreationEditorDraft } from "./creation/useCreationEditor";
 import type { CreativeParentCandidate, CreativeThreadResolution } from "../lib/creativeGeneration";
@@ -9,6 +9,7 @@ import type { ChatComposeRequest, ChatProvider } from "../lib/localChat";
 
 export function CreativeComposer({
   projectId,
+  header,
   draftJson,
   initialAssetIds = [],
   continuationCandidates = [],
@@ -20,6 +21,7 @@ export function CreativeComposer({
   onOpenLibrary,
   registerDraftFlush,
   beforeGenerate,
+  prepareProject,
   onGenerateLocalVideo,
   onSendChat,
   onChatDraftSent,
@@ -27,7 +29,8 @@ export function CreativeComposer({
   chatHistoryOpen,
   resolveCreativeThread,
 }: {
-  projectId: string;
+  projectId?: string;
+  header?: ReactNode;
   draftJson: string;
   initialAssetIds?: string[];
   continuationCandidates?: CreativeParentCandidate[];
@@ -39,8 +42,9 @@ export function CreativeComposer({
   onOpenLibrary?: () => void;
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
-  onGenerateLocalVideo?: (request: ComposerLocalVideoRequest) => Promise<void>;
-  onSendChat?: (request: ChatComposeRequest) => Promise<void>;
+  prepareProject?: () => Promise<string>;
+  onGenerateLocalVideo?: (request: ComposerLocalVideoRequest, projectId?: string) => Promise<void>;
+  onSendChat?: (request: ChatComposeRequest, projectId?: string) => Promise<void>;
   onChatDraftSent?: (sentDraftJson: string) => void;
   onOpenChatHistory?: () => void;
   chatHistoryOpen?: boolean;
@@ -50,6 +54,7 @@ export function CreativeComposer({
     routeRevision?: number,
     continuationRequestId?: string | null,
     parentNodeId?: string | null,
+    projectId?: string,
   ) => Promise<CreativeThreadResolution>;
 }) {
   const stateRef = useRef(parseCreativeComposerState(draftJson));
@@ -79,6 +84,7 @@ export function CreativeComposer({
     <CreationBoard
       key={mode}
       embedded
+      header={header}
       projectId={projectId}
       initialDraft={seedDraft}
       initialAssetIds={currentDraft ? [] : initialAssetIds}
@@ -97,12 +103,11 @@ export function CreativeComposer({
       chatHistoryOpen={chatHistoryOpen}
       registerDraftFlush={(flush) => { flushRef.current = flush; registerDraftFlush?.(flush); }}
       beforeGenerate={beforeGenerate}
+      prepareProject={prepareProject}
       onGenerateLocalVideo={onGenerateLocalVideo}
-      onSendChat={onSendChat ? async request => {
-        flushRef.current?.();
-        const sentDraft = JSON.stringify(stateRef.current.drafts.chat);
-        await onSendChat(request);
-        onChatDraftSent?.(sentDraft);
+      onSendChat={onSendChat ? async (request, targetProjectId, sentDraft) => {
+        await onSendChat(request, targetProjectId);
+        if (sentDraft) onChatDraftSent?.(sentDraft);
       } : undefined}
       resolveCreativeThread={resolveCreativeThread}
     />

@@ -56,13 +56,23 @@ async function playCompletionSound() {
 }
 
 /** Called only when fresh results have landed, never when merely opening history. */
-export async function notifyGenerationComplete(key: string, message: string, settings: AppSettings | null) {
+export async function notifyGenerationComplete(
+  key: string,
+  message: string,
+  settings: AppSettings | null,
+  target?: { projectName?: string; onOpen: () => void },
+) {
   if (notified.has(key)) return;
   notified.add(key);
   try {
     // Recovery can finish before the initial settings load. Respect saved opt-outs then too.
     const preferences = settings ?? await api.getSettings();
-    if (preferences.generation_completion_popup ?? true) notifySuccess(message);
+    if (preferences.generation_completion_popup ?? true) {
+      notifySuccess(
+        target?.projectName ? `${target.projectName} · ${message}` : message,
+        target ? { label: "查看画板", onClick: target.onOpen } : undefined,
+      );
+    }
     if (preferences.generation_completion_sound ?? true) {
       await playCompletionSound().catch((error) => console.warn("Generation sound unavailable", error));
     }

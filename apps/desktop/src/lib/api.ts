@@ -190,6 +190,8 @@ export const api = {
     invoke<ProjectCreateResult>("create_project", { workspacePath }),
   createBlankProject: (name: string) =>
     invoke<ProjectCreateResult>("create_blank_project", { name }),
+  prepareLibraryGenerationProject: (projectId?: string | null) =>
+    invoke<Project>("prepare_library_generation_project", { projectId: projectId ?? null }),
   listProjects: () => invoke<Project[]>("list_projects"),
   setActiveProject: (projectId?: string | null) =>
     invoke<void>("set_active_project", { projectId: projectId ?? null }),

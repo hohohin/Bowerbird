@@ -288,7 +288,62 @@ fn project_from_row(row: &rusqlite::Row) -> rusqlite::Result<Project> {
     })
 }
 
+// System identity is independent of the editable title and never inferred from a name match.
+const QUICK_GENERATION_WORKSPACE_KEY: &str = "system:quick-generation";
+
+fn quick_generation_project_id(
+    tx: &rusqlite::Transaction<'_>,
+    workspace_for: impl FnOnce(&str, &str) -> AppResult<String>,
+) -> AppResult<String> {
+    if let Some(id) = tx.query_row(
+        "SELECT id FROM projects WHERE workspace_key=?1",
+        [QUICK_GENERATION_WORKSPACE_KEY],
+        |row| row.get::<_, String>(0),
+    ).optional()? {
+        return Ok(id);
+    }
+    let id = ulid::Ulid::new().to_string();
+    let name = "快速生成";
+    let workspace = workspace_for(&id, name)?;
+    tx.execute(
+        "INSERT INTO projects (id,name,workspace_path,workspace_key,kind,created_at,title_source,updated_at,last_opened_at) \
+         VALUES (?1,?2,?3,?4,'blank',strftime('%s','now'),'manual',strftime('%s','now'),strftime('%s','now'))",
+        rusqlite::params![id, name, workspace, QUICK_GENERATION_WORKSPACE_KEY],
+    )?;
+    Ok(id)
+}
+
 impl Database {
+    /// Resolve the frozen target at submission time without changing the active workspace.
+    pub fn prepare_library_generation_project(
+        &self,
+        project_id: Option<&str>,
+        workspace_for: impl FnOnce(&str, &str) -> AppResult<String>,
+    ) -> AppResult<Project> {
+        let conn = self.conn.lock().unwrap();
+        let tx = rusqlite::Transaction::new_unchecked(&conn, rusqlite::TransactionBehavior::Immediate)?;
+        let id = match project_id {
+            Some(id) => id.to_string(),
+            None => quick_generation_project_id(&tx, workspace_for)?,
+        };
+        let project = tx.query_row(
+            "SELECT p.*, COUNT(pa.asset_id) AS asset_count FROM projects p \
+             LEFT JOIN project_assets pa ON pa.project_id=p.id AND pa.asset_id IN (SELECT id FROM assets WHERE library_hidden=0) \
+             WHERE p.id=?1 GROUP BY p.id",
+            [&id], project_from_row,
+        ).optional()?.ok_or_else(|| AppError::Other("所选项目已不存在，请重新选择项目".into()))?;
+        if project.archived_at.is_some() {
+            return Err(AppError::Other("项目已归档，请选择其他项目".into()));
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO project_canvases (project_id,draft_json,created_at,updated_at) \
+             VALUES (?1,'{\"schema_version\":1}',strftime('%s','now'),strftime('%s','now'))",
+            [&id],
+        )?;
+        tx.commit()?;
+        Ok(project)
+    }
+
     pub fn project_delete_impact(&self, project_id: &str) -> AppResult<ProjectDeleteImpact> {
         let conn = self.conn.lock().unwrap();
         let exists: bool = conn.query_row(
@@ -785,6 +840,107 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
         db
+    }
+
+    fn prepare_quick_project(db: &Database) -> Project {
+        db.prepare_library_generation_project(None, |id, _| Ok(format!("/tmp/{id}"))).unwrap()
+    }
+
+    #[test]
+    fn library_generation_default_is_lazy_unique_and_not_matched_by_name() {
+        let db = db();
+        assert!(db.list_projects().unwrap().is_empty());
+        db.create_project("user-project", "快速生成", "/tmp/user-project", "blank:user-project", "blank").unwrap();
+        let first = prepare_quick_project(&db);
+        let second = db.prepare_library_generation_project(None, |_, _| panic!("must reuse directory")).unwrap();
+        assert_ne!(first.id, "user-project");
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.name, "快速生成");
+        assert_eq!(db.list_projects().unwrap().len(), 2);
+        assert_eq!(db.get_project_canvas(&first.id).unwrap().unwrap().project_id, first.id);
+        assert!(!db.title_canvas_project_from_first_prompt(&first.id, "a prompt").unwrap());
+    }
+
+    #[test]
+    fn library_generation_default_survives_rename_and_recreates_after_delete() {
+        let db = db();
+        let first = prepare_quick_project(&db);
+        db.rename_canvas_project(&first.id, "我的快速作品").unwrap();
+        let renamed = prepare_quick_project(&db);
+        assert_eq!(renamed.id, first.id);
+        assert_eq!(renamed.name, "我的快速作品");
+        db.delete_project(&first.id, ProjectDeleteMode::Keep).unwrap();
+        let replacement = prepare_quick_project(&db);
+        assert_ne!(replacement.id, first.id);
+        assert_eq!(replacement.name, "快速生成");
+        assert!(db.get_project_canvas(&first.id).unwrap().is_none());
+    }
+
+    #[test]
+    fn library_generation_selected_project_preserves_draft_and_rejects_missing() {
+        let db = db();
+        put_project(&db, "selected");
+        db.ensure_project_canvas("selected").unwrap();
+        let draft = r#"{"schema_version":1,"composer":{"text":"keep me"}}"#;
+        db.update_project_canvas_draft("selected", draft).unwrap();
+        let selected = db.prepare_library_generation_project(Some("selected"), |_, _| panic!("must not create directory")).unwrap();
+        assert_eq!(selected.id, "selected");
+        assert_eq!(db.get_project_canvas("selected").unwrap().unwrap().draft_json, draft);
+        for missing in ["", "deleted"] {
+            assert!(db.prepare_library_generation_project(Some(missing), |_, _| panic!("must not fall back")).is_err());
+        }
+        assert_eq!(db.list_projects().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn library_generation_creation_rolls_back_when_directory_or_canvas_fails() {
+        let db = db();
+        assert!(db.prepare_library_generation_project(None, |_, _| Err(AppError::Other("directory unavailable".into()))).is_err());
+        assert!(db.list_projects().unwrap().is_empty());
+        db.conn.lock().unwrap().execute_batch("CREATE TRIGGER reject_canvas BEFORE INSERT ON project_canvases BEGIN SELECT RAISE(ABORT, 'injected canvas failure'); END;").unwrap();
+        assert!(db.prepare_library_generation_project(None, |id, _| Ok(format!("/tmp/{id}"))).is_err());
+        assert!(db.list_projects().unwrap().is_empty());
+        db.conn.lock().unwrap().execute_batch("DROP TRIGGER reject_canvas;").unwrap();
+        prepare_quick_project(&db);
+        assert_eq!(db.list_projects().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn library_generation_concurrent_requests_share_one_project() {
+        let db = Arc::new(db());
+        let created = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let requests: Vec<_> = (0..8).map(|_| {
+            let db = db.clone();
+            let created = created.clone();
+            std::thread::spawn(move || db.prepare_library_generation_project(None, |id, _| {
+                created.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(format!("/tmp/{id}"))
+            }).unwrap().id)
+        }).collect();
+        let ids: Vec<_> = requests.into_iter().map(|request| request.join().unwrap()).collect();
+        assert!(ids.iter().all(|id| id == &ids[0]));
+        assert_eq!(created.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(db.list_projects().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn library_generation_reopen_keeps_project_and_real_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let database_path = directory.path().join("library.sqlite");
+        let config_path = directory.path().join("files.json");
+        let root = directory.path().join("files");
+        let create = || {
+            let db = Database::open(&database_path).unwrap();
+            db.migrate().unwrap();
+            let files = crate::core::file_workspace::FileWorkspace::open(config_path.clone(), root.clone()).unwrap();
+            db.prepare_library_generation_project(None, |id, name| Ok(files.project_directory(id, name)?.to_string_lossy().into_owned())).unwrap()
+        };
+        let first = create();
+        let reopened = create();
+        assert_eq!(reopened.id, first.id);
+        assert_eq!(reopened.workspace_path, first.workspace_path);
+        assert!(Path::new(&reopened.workspace_path).is_dir());
+        assert_eq!(std::fs::read_dir(root.join("项目")).unwrap().count(), 1);
     }
 
     fn put_asset(db: &Database, id: &str) {

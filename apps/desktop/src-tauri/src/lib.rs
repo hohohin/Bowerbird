@@ -475,6 +475,7 @@ pub fn run() {
             commands::ping,
             commands::db_health,
             commands::project_canvas::project_canvas_materialize,
+            commands::projects::prepare_library_generation_project,
             commands::project_canvas::project_canvas_ensure,
             commands::project_canvas::project_canvas_get,
             commands::project_canvas::project_canvas_rename,

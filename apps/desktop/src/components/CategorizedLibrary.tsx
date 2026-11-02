@@ -270,7 +270,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
     if (isTextAsset(asset)) { openDetail(asset); return; }
     const state = useStore.getState();
     if (projectId && (state.activeProjectId !== projectId || !state.canvasLibraryOpen)) return;
-    if (projectId && (state.boardOpen || state.genEditing)) {
+    if (state.boardOpen || state.genEditing) {
       window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
     } else if (isAudioAsset(asset)) openDetail(asset);
     else void openPreview(asset);

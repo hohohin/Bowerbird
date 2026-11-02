@@ -60,6 +60,7 @@ import {
   markThreadUnread,
   taskCenterAgentRuns,
   taskCenterGenerationJobs,
+  type CreativeTaskNavigation,
 } from "./lib/projectActivity";
 import { mergeRecoveredCloudAgentRuns } from "./lib/cloudAgentRuntime";
 import { agentApprovalScope, loadAgentApprovalModes, saveAgentApprovalModes, type AgentApprovalMode, type AgentApprovalModes } from "./lib/cloudAgentApproval";
@@ -421,7 +422,7 @@ interface State {
   retrieveJimengOrphan: (submitId: string) => Promise<void>;
   dismissJimengOrphan: (submitId: string) => void;
   setActiveJob: (id: string) => void;
-  openGenerationJob: (id: string, options?: { navigate?: boolean }) => void;
+  openGenerationJob: (id: string, options?: { navigate?: boolean; location?: CreativeTaskNavigation }) => void;
   openCloudAgentRun: (run: CloudAgentRunRecord, options?: { navigate?: boolean }) => void;
   updateCloudAgentRun: (run: CloudAgentRunRecord) => void;
   loadCloudAgentRuns: () => Promise<void>;
@@ -1745,7 +1746,7 @@ export const useStore = create<State>((set, get) => {
       genEditing: null,
       detailAssetId: null,
       genUnread: false,
-      creativeNavigation: options?.navigate === false ? null : generationTaskNavigation(job),
+      creativeNavigation: options?.navigate === false ? null : options?.location ?? generationTaskNavigation(job),
     };
   }),
   openCloudAgentRun: (run, options) => set((s) => ({
@@ -2344,12 +2345,17 @@ export const useStore = create<State>((set, get) => {
       );
       if (completedJob?.running && imgs.length > 0) {
         const turn = completedJob.turns[completedJob.turns.length - 1];
+        const location = generationTaskNavigation(completedJob);
         void notifyGenerationComplete(
           `generation:${id}:${turn?.id}`,
           completedJob.media === "video"
             ? `视频生成完成，已生成 ${imgs.length} 个视频`
             : `图片生成完成，已生成 ${imgs.length} 张图片`,
           get().settings,
+          location ? {
+            projectName: get().projects.find(project => project.id === completedJob.projectId)?.name,
+            onOpen: () => get().openGenerationJob(id, { location }),
+          } : undefined,
         );
       }
     } else if (c.kind === "error") {

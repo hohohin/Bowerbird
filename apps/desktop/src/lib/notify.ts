@@ -2,25 +2,31 @@ import { userErrorMessage } from "./userError";
 
 export type NoticeTone = "success" | "error" | "info";
 
+export interface NoticeAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface NoticeDetail {
   id: number;
   message: string;
   tone: NoticeTone;
+  action?: NoticeAction;
 }
 
 const NOTICE_EVENT = "bowerbird://notify";
 let noticeId = 0;
 
-export function notify(message: string, tone: NoticeTone = "info") {
+export function notify(message: string, tone: NoticeTone = "info", action?: NoticeAction) {
   window.dispatchEvent(
     new CustomEvent<NoticeDetail>(NOTICE_EVENT, {
-      detail: { id: ++noticeId, message: tone === "error" ? userErrorMessage(message) : message, tone },
+      detail: { id: ++noticeId, message: tone === "error" ? userErrorMessage(message) : message, tone, action },
     })
   );
 }
 
-export function notifySuccess(message: string) {
-  notify(message, "success");
+export function notifySuccess(message: string, action?: NoticeAction) {
+  notify(message, "success", action);
 }
 
 export function notifyError(error: unknown, fallback: string) {

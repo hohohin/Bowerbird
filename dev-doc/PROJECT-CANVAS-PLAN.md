@@ -1,5 +1,11 @@
 # Bowerbird「项目即画板」开发专项计划
 
+## 2026-11-03：素材库创作与任务回看
+
+- `LibraryComposer` 复用 `CreativeComposer`／`CreationBoard`，在实际发送前冻结项目、输入及引用；主屏草稿独立持久化。`prepare_library_generation_project` 以唯一 `system:quick-generation` 身份事务创建或复用默认项目，不改变当前工作区范围，不以显示名称识别系统项目。
+- 普通生成及 Agent 完成通知复用原导航；通知捕获原轮次位置，后续续轮不会改变旧通知目标。近期任务投影既有生成、Agent、对话与 H3 状态；全局协调器只观察原运行时，不重放生成。H3 完成须保存完成后才提醒，工作流定位核验实际线程归属。
+- 源码接入、测试入口、红绿记录与未验收范围见 [本次行动记录](../project_logs/2026-11-03-library-generation.md)。产品交互决策以 PROJECT.md 为准；前后端需配套重建，不代表安装包已经发布。
+
 ## 2026-10-31：生成失败重试保留同一会话
 
 - `retryLastGenTurn` 统一复用原 job、conversation、project、thread，保留失败轮并创建新 turnKey；无 provider session 的首轮重试可在原 job 内启动 provider。GenerationPanel 的错误按钮及首轮失败重试图标共用续轮路径，历史轮重试针对实际选中的轮。运行中拒绝重复提交；成功结果的显式版本分支保持原行为。

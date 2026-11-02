@@ -193,7 +193,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     if (isTextAsset(asset)) { useStore.getState().openDetail(asset.id); return; }
     const state = useStore.getState();
     if (projectId && state.activeProjectId !== projectId) return;
-    if (projectId && (state.boardOpen || state.genEditing)) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
+    if (state.boardOpen || state.genEditing) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
     else if (isAudioAsset(asset)) useStore.getState().openDetail(asset.id);
     else void run(async () => { if (!asset.store_path) throw new Error("原文件暂不可用"); const path = await externalFiles.media(asset.store_path); if (canShowOverlay()) setPreview({ path, sourceKey: entryOf(asset).version ?? videoSourceKey(asset)! }); });
   }

@@ -1,7 +1,7 @@
 import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, resolveVideoOptions, videoInputError, videoModelLabel, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { LocalVideoFrames } from "./creation/LocalVideoFrames";
@@ -91,6 +91,7 @@ export const AGENT_DS_DONE_EVENT = "bowerbird://agent-ds-done";
 export interface CreationBoardProps {
   embedded?: boolean;
   projectId?: string;
+  header?: ReactNode;
   initialDraft?: CreationEditorDraft | null;
   initialAssetIds?: string[];
   continuationCandidates?: CreativeParentCandidate[];
@@ -102,10 +103,11 @@ export interface CreationBoardProps {
   onOpenLibrary?: () => void;
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
-  onGenerateLocalVideo?: (request: ComposerLocalVideoRequest) => Promise<void>;
+  prepareProject?: () => Promise<string>;
+  onGenerateLocalVideo?: (request: ComposerLocalVideoRequest, projectId?: string) => Promise<void>;
   composerMode?: CreativeComposerMode;
   onComposerModeChange?: (mode: CreativeComposerMode) => void;
-  onSendChat?: (request: ChatComposeRequest) => Promise<void>;
+  onSendChat?: (request: ChatComposeRequest, projectId?: string, sentDraftJson?: string) => Promise<void>;
   chatProvider?: ChatProvider;
   onChatProviderChange?: (provider: ChatProvider) => void;
   onOpenChatHistory?: () => void;
@@ -116,12 +118,14 @@ export interface CreationBoardProps {
     routeRevision?: number,
     continuationRequestId?: string | null,
     parentNodeId?: string | null,
+    projectId?: string,
   ) => Promise<CreativeThreadResolution>;
 }
 
 export function CreationBoard({
   embedded = false,
   projectId,
+  header,
   initialDraft,
   initialAssetIds = [],
   continuationCandidates = [],
@@ -133,6 +137,7 @@ export function CreationBoard({
   onOpenLibrary,
   registerDraftFlush,
   beforeGenerate,
+  prepareProject,
   onGenerateLocalVideo,
   composerMode,
   onComposerModeChange,
@@ -150,6 +155,8 @@ export function CreationBoard({
   const agentTriggerRef = useRef<HTMLButtonElement>(null);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const codexHealth = useStore((s) => s.codexHealth);
   const creating = useStore((s) => s.boardOpen);
   const setBoardActive = useStore((s) => s.setBoardActive);
@@ -529,7 +536,7 @@ export function CreationBoard({
     canUseAgentRun(cloudEntitlement, UNIFIED_AGENT_SKILL);
   const cloudAgentHasCapacity = canStartAnotherAgentRun(cloudEntitlement, activeCloudAgentRunCount, UNIFIED_AGENT_SKILL);
   const cloudAgentRequiredBalance = 30;
-  const projectAgentContextReady = !!projectId && !!resolveCreativeThread;
+  const projectAgentContextReady = (!!projectId || !!prepareProject) && !!resolveCreativeThread;
   const cloudAgentReady =
     projectAgentContextReady &&
     cloudAgentEntitled &&
@@ -590,15 +597,21 @@ export function CreationBoard({
     if (isChat) {
       if (sendDisabledReason || !onSendChat) return;
       const origin = useStore.getState();
-      const originId = projectId ?? origin.activeProjectId;
+      const originId = prepareProject ? origin.activeProjectId : projectId ?? origin.activeProjectId;
       const claim = acquireCreativeSubmission(originId);
       if (!claim) return;
       setSubmitting(true);
       flushDraft();
+      const sentDraft = JSON.stringify({ ...draftRef.current, generation: generationRef.current });
       try {
-        await onSendChat({ prompt: finalPrompt.trim(), references: [...references], provider: chatProvider });
+        const targetProjectId = prepareProject ? await prepareProject() : projectId;
+        const route = useStore.getState();
+        if ((prepareProject && (!mounted.current || route.libraryHomeView !== origin.libraryHomeView))
+          || !isWorkspaceOperationCurrent(originId, route.activeProjectId, route.projectRoutePending, origin.projectRouteRevision, route.projectRouteRevision)) return;
+        await onSendChat({ prompt: finalPrompt.trim(), references: [...references], provider: chatProvider }, targetProjectId, sentDraft);
         const current = useStore.getState();
-        if (claim.isCurrent() && isWorkspaceOperationCurrent(originId, current.activeProjectId, current.projectRoutePending, origin.projectRouteRevision, current.projectRouteRevision)) exitCreationMode();
+        if (mounted.current && (!prepareProject || current.libraryHomeView === origin.libraryHomeView)
+          && claim.isCurrent() && isWorkspaceOperationCurrent(originId, current.activeProjectId, current.projectRoutePending, origin.projectRouteRevision, current.projectRouteRevision)) exitCreationMode();
       } catch (error) { notifyError(error, "对话未能发送，请检查连接后重试。"); }
       finally { claim.release(); setSubmitting(false); }
       return;
@@ -606,6 +619,7 @@ export function CreationBoard({
     if (isLocalVideo && sendDisabledReason) { notifyError(sendDisabledReason, "本地生成暂不可用"); return; }
     const originRoute = useStore.getState();
     const originProjectId = projectId ?? originRoute.activeProjectId;
+    const routeProjectId = prepareProject ? originRoute.activeProjectId : originProjectId;
     const originRouteRevision = originRoute.projectRouteRevision;
     const submissionClaim = acquireCreativeSubmission(originProjectId);
     if (!submissionClaim) {
@@ -618,26 +632,32 @@ export function CreationBoard({
       provider: isVideo ? activeGenProvider : originRoute.activeGenProvider,
       visualProfileId: originRoute.activeVisualProfileId,
     });
-    const originContinuation = originRoute.pendingCreativeContinuation?.projectId === originProjectId
+    const originContinuation = !prepareProject && originRoute.pendingCreativeContinuation?.projectId === originProjectId
       ? { ...originRoute.pendingCreativeContinuation }
       : null;
     const isCurrentWorkspace = () => {
       const state = useStore.getState();
       return isWorkspaceOperationCurrent(
-        originProjectId,
+        routeProjectId,
         state.activeProjectId,
         state.projectRoutePending,
         originRouteRevision,
         state.projectRouteRevision,
       );
     };
-    const isCurrentSubmission = () => submissionClaim.isCurrent() && isCurrentWorkspace();
+    const isCurrentSubmission = () => submissionClaim.isCurrent() && isCurrentWorkspace()
+      && (!prepareProject || (mounted.current && useStore.getState().libraryHomeView === originRoute.libraryHomeView));
+    let submissionProjectId = projectId;
+    const prepareSubmissionProject = async () => {
+      await beforeGenerate?.();
+      if (prepareProject) submissionProjectId = await prepareProject();
+    };
     if (!isCurrentSubmission()) return;
     if (referenceError) { notifyError(referenceError, "参考素材不适用"); return; }
     if (isLocalVideo) {
       const options = { ...generation.localVideo! };
       const request: ComposerLocalVideoRequest = { prompt: finalPrompt, firstFrame: localFrames[0].id, lastFrame: localFrames[1]?.id, options };
-      await beforeGenerate?.();
+      await prepareSubmissionProject();
       if (!isCurrentSubmission()) return;
       const environment = await comfyEnvironment("detect", options.endpoint);
       if (!isCurrentSubmission()) return;
@@ -645,7 +665,7 @@ export function CreationBoard({
       if (account.cloudAuth?.user_id !== originRoute.cloudAuth?.user_id || !canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) throw new Error("账号或本地生成权限已变化，请重新检查。");
       if (!comfyEnvironmentReady(environment)) { setLocalEnvironment({ ready: false, checking: false, message: environment.message }); throw new Error(environment.message || "当前环境未设置好，点击配置。"); }
       request.options.endpoint = environment.endpoint;
-      await onGenerateLocalVideo!(request);
+      await onGenerateLocalVideo!(request, submissionProjectId);
       if (isCurrentSubmission()) exitCreationMode();
       return;
     }
@@ -659,7 +679,7 @@ export function CreationBoard({
       if (!body || cloudAgentBusy || !cloudAgentReady) return;
       setCloudAgentBusy(true);
       try {
-        await beforeGenerate?.();
+        await prepareSubmissionProject();
         if (!isCurrentSubmission()) return;
         const parentSelection = resolveContinuationParent(
           references,
@@ -677,6 +697,7 @@ export function CreationBoard({
           originRouteRevision,
           originContinuation?.requestId ?? null,
           parentSelection?.nodeId ?? null,
+          submissionProjectId,
         ) ?? null;
         if (!isCurrentSubmission()) return;
         const currentAccount = useStore.getState();
@@ -697,7 +718,7 @@ export function CreationBoard({
             promptToken: agentPromptReferences.find((item) => item.assetId === reference.id)?.name ?? reference.name,
           })),
           ratio,
-          projectId: originProjectId,
+          projectId: submissionProjectId ?? originProjectId,
           threadId,
           parentNodeId: continuation?.parentNodeId ?? null,
           parentAssetId: parentAsset?.id ?? null,
@@ -841,7 +862,7 @@ export function CreationBoard({
       }
     }
     try {
-      await beforeGenerate?.();
+      await prepareSubmissionProject();
     } catch (error) {
       if (isCurrentSubmission()) notifyError(error, "无法准备项目画板");
       return;
@@ -867,6 +888,7 @@ export function CreationBoard({
         originRouteRevision,
         originContinuation?.requestId ?? null,
         parentSelection?.nodeId ?? null,
+        submissionProjectId,
       ) ?? null;
     } catch (error) {
       if (isCurrentSubmission()) notifyError(error, "无法确定要继续的画板结果");
@@ -885,8 +907,8 @@ export function CreationBoard({
       undefined,
       dimensionSources,
       submissionAuthority.visualProfileId,
-      projectId && threadId ? {
-        projectId,
+      submissionProjectId && threadId ? {
+        projectId: submissionProjectId,
         threadId,
         parentNodeId: continuation?.parentNodeId ?? null,
         parentAssetPath: parentAsset?.store_path ?? null,
@@ -1008,6 +1030,8 @@ export function CreationBoard({
       >
         {glass.definition}
         <div className="composer-heading">
+          {header}
+          {header && isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
           <div className="composer-mode-picker library-floating-surface" role="group" aria-label="创作方式"
             style={{ "--switch-count": 2 + (onSendChat ? 1 : 0) + (showAgent ? 1 : 0), "--switch-index": selectedMode } as CSSProperties}>
             <span className="composer-mode-thumb" aria-hidden="true" />

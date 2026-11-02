@@ -8,11 +8,12 @@ export interface TacticalSelectProps extends Omit<ButtonHTMLAttributes<HTMLButto
   value?: string | number;
   defaultValue?: string | number;
   onValueChange?: (value: string) => void;
+  menuClassName?: string;
 }
 
 export const TacticalSelect = forwardRef<HTMLButtonElement, TacticalSelectProps>(function TacticalSelect({
   children, value, defaultValue, onValueChange, disabled, className = "", id, name, form,
-  onClick, onKeyDown, onPointerDown, onMouseDown, ...buttonProps
+  onClick, onKeyDown, onPointerDown, onMouseDown, menuClassName = "", ...buttonProps
 }, forwardedRef) {
   const options = useMemo(() => parseTacticalOptions(children), [children]);
   const first = options.find(option => !option.disabled && !option.hidden);
@@ -194,7 +195,7 @@ export const TacticalSelect = forwardRef<HTMLButtonElement, TacticalSelectProps>
       <span className="tactical-select-value">{selected?.label ?? ""}</span><ChevronDown size={12} className="tactical-select-chevron" aria-hidden="true" />
     </button>
     {name && <input type="hidden" name={name} form={form} value={currentValue} disabled={disabled} />}
-    {open && createPortal(<div ref={menu} id={listId} className="app-popover tactical-select-menu" role="listbox"
+    {open && createPortal(<div ref={menu} id={listId} className={`app-popover tactical-select-menu ${menuClassName}`} role="listbox"
       aria-label={buttonProps["aria-labelledby"] ? undefined : menuLabel} aria-labelledby={buttonProps["aria-labelledby"]}
       style={{ position: "fixed", ...position, visibility: position ? "visible" : "hidden" }}
       onPointerDown={event => { event.preventDefault(); event.stopPropagation(); }} onPointerUp={event => event.stopPropagation()}

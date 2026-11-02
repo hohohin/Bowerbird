@@ -1,0 +1,4 @@
+.library-generation-page .catalog-scroller { padding-bottom:calc(var(--library-composer-height, 64px) + 32px) !important; }
+.library-generation-page:has(.catalog-selection, .connected-selection) .catalog-scroller { padding-bottom:calc(var(--library-composer-height, 64px) + 128px) !important; }
+.library-home-activity { position:absolute; z-index:40; top:58px; right:48px; max-width:calc(100% - 64px); }
+@media (max-width:700px) { .library-generation-page:not(:has(.catalog-selection, .connected-selection)) .catalog-scroller { padding-bottom:calc(var(--library-composer-height, 64px) + 24px) !important; } }

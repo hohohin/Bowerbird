@@ -17,9 +17,10 @@ import { CanvasConversationImages } from "./CanvasConversationImages";
 import { canvasMaterialFilterState, type CanvasMaterialFilterState } from "../lib/canvasMaterialFilter";
 import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkflowSessionIds, resolveGenerationCells, canvasSessionImages } from "../lib/canvasSessionOutputs";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
+import { resolveWorkflowTaskFocus } from "../lib/workflowTaskFocus";
 import { restoreWorkflowEdit, workflowEditUndo, type WorkflowEditUndo } from "../lib/workflowUndo";
 import { removeWorkflowNodes } from "../lib/workflowRemoval";
-import { WORKFLOW_CARD_DRAG_TYPE, workflowNodeRun, type WorkflowInput, type WorkflowKind } from "../lib/canvasWorkflow";
+import { WORKFLOW_CARD_DRAG_TYPE, workflowCardWidth, workflowNodeRun, type WorkflowInput, type WorkflowKind } from "../lib/canvasWorkflow";
 import { replicationWorkflow } from "../lib/replicationWorkflow";
 import { captureCanvasClipboard, cloneCanvasClipboard, parseCanvasClipboard, serializeCanvasClipboard, type CanvasClipboard } from "../lib/canvasClipboard";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
@@ -1787,6 +1788,29 @@ export function CanvasWorkspace({
       archived,
       focusThreadId,
     );
+    const workflow = projectId ? canvasWorkflowController(projectId) : null;
+    if (resolution.state === "pending" && workflow?.ready) {
+      const workflowResolution = resolveWorkflowTaskFocus(workflow.document, focusNodeId ?? null, focusThreadId ?? null, threadResolution === "ready");
+      if (workflowResolution.state === "ready" && stageRef.current) {
+        const node = workflowResolution.node;
+        const target = workflowRef.current?.bounds().find(bounds => bounds.id === node.id)
+          ?? { ...node, width: workflowCardWidth(node), height: 400 };
+        const rect = stageRef.current.getBoundingClientRect();
+        const nextPan = { x: rect.width / 2 - (target.x + target.width / 2), y: rect.height / 2 - (target.y + target.height / 2) };
+        panRef.current = nextPan; zoomRef.current = 1;
+        setPan(nextPan); setZoom(1);
+        setSelectedCanvasNodeIds(new Set([node.id]));
+        setFocusedNodeId(node.id); setFocusedThreadId(focusThreadId);
+        viewModeRef.current = "canvas"; setViewMode("canvas");
+        if (projectId && focusThreadId) useStore.getState().clearProjectThreadUnread(projectId, focusThreadId);
+        markViewDirty();
+      }
+      if (workflowResolution.state !== "pending") {
+        appliedFocusRequestRef.current = requestKey;
+        onFocusConsumed?.(focusRequestId);
+        return;
+      }
+    }
     if (resolution.state === "pending") return;
     const target = resolution.state === "ready" ? resolution.node : null;
     const stage = stageRef.current;
@@ -1809,7 +1833,7 @@ export function CanvasWorkspace({
     }
     appliedFocusRequestRef.current = requestKey;
     onFocusConsumed?.(focusRequestId);
-  }, [focusNodeId, focusRequestId, focusThreadId, graphNodes, graphEdges, loadFailed, loading, onFocusConsumed, projectId, threads]);
+  }, [focusNodeId, focusRequestId, focusThreadId, graphNodes, graphEdges, loadFailed, loading, onFocusConsumed, projectId, threads, workflowRevision]);
 
   useEffect(() => { setCanvasLibraryOpen(false); }, [projectId, setCanvasLibraryOpen]);
 
