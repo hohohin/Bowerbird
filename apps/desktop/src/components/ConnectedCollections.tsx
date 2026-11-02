@@ -32,6 +32,7 @@ import { ModalShell } from "./ModalShell";
 import { LibraryVideoPreview } from "./LibraryVideoPreview";
 import { videoSourceKey } from "../lib/videoSourceKey";
 import { isAudioAsset } from "../lib/audioMedia";
+import { isTextAsset } from "../lib/textMedia";
 import { stopAudioPreview, stopAudioPreviewInFolder } from "../lib/audioPreview";
 import { CollectionEditorDialog, CollectionAssignDialog } from "./CollectionDialogs";
 import "./CategorizedLibrary.css";
@@ -189,7 +190,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   }
   function activate(asset: Asset) {
     if (busy || !entryOf(asset).available) return;
-    if (isAudioAsset(asset)) { useStore.getState().openDetail(asset.id); return; }
+    if (isAudioAsset(asset) || isTextAsset(asset)) { useStore.getState().openDetail(asset.id); return; }
     const state = useStore.getState();
     if (projectId && state.activeProjectId !== projectId) return;
     if (projectId && (state.boardOpen || state.genEditing)) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
@@ -262,7 +263,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
       </aside>
       <div ref={pinch} className="catalog-gallery">
         <LibraryTacticalBackdrop/>
-        <div className="file-view-heading">{navigation}<div className="video-collection-controls">{media !== "audios" && <VideoCollectionEntry projectId={projectId} onCloseLibrary={onClose} onCreateProject={onCreateProject} onAssetsChange={onAssetsChange}/>}<LibraryFloatingControls><LibraryMediaSwitch/><button className="library-filter-trigger" aria-label="刷新集合" onClick={refresh}><RefreshCw size={14} className={folders.some(folder => folder.scanning) ? "connected-refreshing" : undefined}/></button>{toolbarActions}</LibraryFloatingControls></div></div>
+        <div className="file-view-heading">{navigation}<div className="video-collection-controls">{(media === "images" || media === "videos") && <VideoCollectionEntry projectId={projectId} onCloseLibrary={onClose} onCreateProject={onCreateProject} onAssetsChange={onAssetsChange}/>}<LibraryFloatingControls><LibraryMediaSwitch/><button className="library-filter-trigger" aria-label="刷新集合" onClick={refresh}><RefreshCw size={14} className={folders.some(folder => folder.scanning) ? "connected-refreshing" : undefined}/></button>{toolbarActions}</LibraryFloatingControls></div></div>
         {error && <p className="catalog-error" role="alert">{error}<button onClick={() => setRevision(value => value + 1)}>重试</button></p>}
         {current && (!current.available || current.error) && <div className="connected-status"><Unlink size={14}/><span>{current.error ? userErrorMessage(current.error, "文件夹暂时无法读取，请重试。") : "文件夹暂不可用"}</span>{!current.available ? <button onClick={() => void run(() => relocate(current), true)}>重新定位</button> : <button onClick={refresh}>刷新</button>}</div>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none", scrollPaddingTop: 48 }}>
@@ -280,7 +281,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
         <ThumbnailSizeSlider scope="library"/>
         {!!selected.size && <div className="connected-selection"><span>已选 {selected.size} 项</span>
           <button disabled={busy} onClick={() => void run(async () => { const entries = await resolve([...selected]); if (canShowOverlay()) setAssign(assetsOf(entries).map(asset => asset.id)); })}>添加到集合</button>
-          {media !== "audios" && <button disabled={busy} onClick={() => void run(async () => { await addMaterialAssets(assetsOf(await resolve([...selected])), projectId, onClose, onCreateProject); })}>添加到画板</button>}
+          {(media === "images" || media === "videos") && <button disabled={busy} onClick={() => void run(async () => { await addMaterialAssets(assetsOf(await resolve([...selected])), projectId, onClose, onCreateProject); })}>添加到画板</button>}
           <button disabled={busy} onClick={event => {
             const rect = event.currentTarget.getBoundingClientRect(), key = filterRef.current;
             void run(async () => { const entries = await resolve([...selected]); if (canShowOverlay() && filterRef.current === key) setMenu({ x: rect.left, y: rect.top, entries, deleteOnly: true }); });
@@ -291,7 +292,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     {menu && <ContextMenu x={menu.x} y={menu.y} label={"folder" in menu ? "集合操作" : "素材操作"} onClose={() => setMenu(null)}>
       {"folder" in menu ? <>{menuButton("重命名集合", () => setEditor({ item: menu.folder, parentId: menu.folder.parent_id }), !menu.folder.available)}{menuButton("移动文件夹", () => setOperation({ kind: "move-folder", folder: menu.folder }), !menu.folder.available)}{menuButton("移到回收站", () => setOperation({ kind: "trash-folder", folder: menu.folder }), !menu.folder.available)}{!menu.folder.available && menuButton("重新定位", () => void run(() => relocate(menu.folder), true))}{!menu.folder.parent_id && menuButton("断开连接", () => setOperation({ kind: "disconnect", folder: menu.folder }))}</>
         : "deleteOnly" in menu ? deleteActions(menu.entries)
-        : <>{menu.entries.length === 1 && menuButton("查看详情", () => useStore.getState().openDetail(menu.entries[0].asset_id))}{canSearchPinterest(menu.target.asset) && menuButton("Pinterest 以图搜图", () => requestPinterestSearch(menu.target.asset_id), !menu.target.available)}{menuButton("选择", () => { anchor.current = menu.location; setSelected(new Set(menu.entries.map(entry => entry.id))); setMultiple(true); })}{menuButton("添加到集合", () => setAssign(assetsOf(menu.entries).map(asset => asset.id)))}{media !== "audios" && menuButton("添加到画板", () => void run(() => addMaterialAssets(assetsOf(menu.entries), projectId, onClose, onCreateProject)), menu.entries.some(entry => !entry.available))}{menuButton("移动到文件夹", () => setOperation({ kind: "move-entries", entries: menu.entries }))}{menu.entries.length === 1 && menuButton(menu.entries[0].is_reference ? "重命名分身" : "重命名原文件", () => setOperation({ kind: "rename-entry", entries: menu.entries }))}<DeleteSubmenu disabled={busy}>{deleteActions(menu.entries)}</DeleteSubmenu></>}
+        : <>{menu.entries.length === 1 && menuButton("查看详情", () => useStore.getState().openDetail(menu.entries[0].asset_id))}{canSearchPinterest(menu.target.asset) && menuButton("Pinterest 以图搜图", () => requestPinterestSearch(menu.target.asset_id), !menu.target.available)}{menuButton("选择", () => { anchor.current = menu.location; setSelected(new Set(menu.entries.map(entry => entry.id))); setMultiple(true); })}{menuButton("添加到集合", () => setAssign(assetsOf(menu.entries).map(asset => asset.id)))}{(media === "images" || media === "videos") && menuButton("添加到画板", () => void run(() => addMaterialAssets(assetsOf(menu.entries), projectId, onClose, onCreateProject)), menu.entries.some(entry => !entry.available))}{menuButton("移动到文件夹", () => setOperation({ kind: "move-entries", entries: menu.entries }))}{menu.entries.length === 1 && menuButton(menu.entries[0].is_reference ? "重命名分身" : "重命名原文件", () => setOperation({ kind: "rename-entry", entries: menu.entries }))}<DeleteSubmenu disabled={busy}>{deleteActions(menu.entries)}</DeleteSubmenu></>}
     </ContextMenu>}
     {editor && <CollectionEditorDialog collections={folders} {...editor} projectId={scope} onClose={() => setEditor(null)} onSaved={id => { pendingJump.current = id; setRevision(value => value + 1); }}/ >}
     {assign && <CollectionAssignDialog assetIds={assign} onClose={() => setAssign(null)} onSaved={() => { finishSelection(); setRevision(value => value + 1); }}/ >}

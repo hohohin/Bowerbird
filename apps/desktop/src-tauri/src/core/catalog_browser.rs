@@ -1,7 +1,7 @@
 //! Bounded catalog reads. Counts and pages share exactly the same filter contract.
 use super::{
     library::{asset_from_row, Asset},
-    material_catalog::{catalog_prompts, CatalogTag, MaterialCatalog, AUDIO, IMAGE, VIDEO, VISIBLE},
+    material_catalog::{catalog_prompts, CatalogTag, MaterialCatalog, AUDIO, IMAGE, VIDEO, TEXT, VISIBLE},
 };
 use crate::{
     db::Database,
@@ -62,6 +62,7 @@ impl CatalogFilter {
                 "images" => IMAGE.to_string(),
                 "videos" => VIDEO.to_string(),
                 "audios" => AUDIO.to_string(),
+                "texts" => TEXT.to_string(),
                 _ => return Err(AppError::Other("未知素材类型".into())),
             },
         ];
@@ -174,7 +175,7 @@ impl Database {
         filter: &CatalogFilter,
         after: Option<&str>,
     ) -> AppResult<CatalogColorBatch> {
-        if filter.media == "audios" { return Ok(CatalogColorBatch { after: None, more: false, failed: 0, updated: 0 }); }
+        if matches!(filter.media.as_str(), "audios" | "texts") { return Ok(CatalogColorBatch { after: None, more: false, failed: 0, updated: 0 }); }
         let mut filter = filter.clone();
         filter.color = None;
         let (condition, mut values) = filter.sql()?;

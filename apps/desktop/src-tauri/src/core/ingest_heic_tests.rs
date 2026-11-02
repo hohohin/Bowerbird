@@ -67,7 +67,7 @@ fn heic_folder_import_decodes_grid_and_heif_extension() {
     fs::create_dir_all(input.join("nested")).unwrap();
     fs::write(input.join("phone.HEIC"), STRIPS).unwrap();
     fs::write(input.join("nested/grid.HeIf"), GRID).unwrap();
-    fs::write(input.join("ignored.txt"), STRIPS).unwrap();
+    fs::write(input.join("ignored.bin"), STRIPS).unwrap();
     assert_eq!(walk_media(&input).len(), 2);
     let assets = ingest_dir(&paths, &db, &input).unwrap();
     assert_eq!(assets.len(), 2);

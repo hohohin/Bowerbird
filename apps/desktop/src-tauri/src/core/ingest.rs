@@ -25,6 +25,7 @@ use crate::media;
 /// Existing local media stays at its original path. Only previews are cached.
 pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppResult<Asset> {
     let mut asset = db.index_external(paths, source)?;
+    if crate::core::text_documents::text_path(source) { return Ok(asset); }
     if db.is_external_asset(&asset.id)? {
         let input = crate::core::external_files::compatible_image(paths, Path::new(asset.store_path.as_deref().unwrap()))?;
         if asset.phash.is_none() && !media::probe::is_video(asset.ext.as_deref().unwrap_or("")) && !media::audio::is_audio(asset.ext.as_deref().unwrap_or("")) {
@@ -338,7 +339,7 @@ fn walk_supported(dir: &Path, include_videos: bool) -> Vec<PathBuf> {
                 if p.is_dir() {
                     stack.push(p);
                 } else if let Some(ext) = p.extension().and_then(|x| x.to_str()) {
-                    if media::is_image_ext(ext) || (include_videos && (media::probe::is_video(ext) || media::audio::is_audio(ext))) {
+                    if media::is_image_ext(ext) || (include_videos && (media::probe::is_video(ext) || media::audio::is_audio(ext) || crate::core::text_documents::is_text(ext))) {
                         out.push(p);
                     }
                 }
@@ -1210,5 +1211,8 @@ mod tests {
         assert!(exts.contains(&"gif".to_string()));
         assert!(!exts.contains(&"txt".to_string()));
         assert!(!exts.contains(&"md".to_string()));
+        let media = walk_media(&tmp.dir);
+        assert!(media.iter().any(|path| path.ends_with("c.txt")));
+        assert!(media.iter().any(|path| path.ends_with("e.md")));
     }
 }

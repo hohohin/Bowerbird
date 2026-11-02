@@ -1,6 +1,7 @@
 //! 核心运行时：库路径 / 导入流水线 / 资源库 CRUD / 任务队列。
 
 pub mod audio;
+pub mod text_documents;
 pub mod autoname;
 pub mod caption;
 pub mod creative_session_contract;

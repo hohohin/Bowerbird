@@ -3,6 +3,7 @@ import { api } from "./api";
 import type { Asset } from "./types";
 import { isVideoPath } from "./videoGeneration";
 import { isAudioAsset } from "./audioMedia";
+import { isTextAsset } from "./textMedia";
 import { useStore } from "../store";
 import { useLocalFileMode } from "./localFileMode";
 
@@ -62,7 +63,8 @@ export function showImportedMedia(assets: Asset[], mode = useLocalFileMode) {
   if (!library.open) return;
   const videos = assets.every(asset => isVideoPath(asset.store_path));
   const audios = assets.every(isAudioAsset);
-  library.setMedia(audios ? "audios" : videos ? "videos" : "images");
+  const texts = assets.every(isTextAsset);
+  library.setMedia(texts ? "texts" : audios ? "audios" : videos ? "videos" : "images");
   library.setCatalogView(videos ? "tags" : "all");
   library.setQuery("");
   library.setGeneratedFilter(null);

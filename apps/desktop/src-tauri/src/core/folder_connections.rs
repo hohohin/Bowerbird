@@ -49,7 +49,7 @@ fn directory(path: &Path) -> AppResult<PathBuf> {
     Ok(path)
 }
 fn media(path: &Path) -> bool {
-    external_files::image_path(path) || external_files::video_path(path) || external_files::audio_path(path)
+    external_files::image_path(path) || external_files::video_path(path) || external_files::audio_path(path) || crate::core::text_documents::text_path(path)
 }
 fn reference(path: &Path) -> bool {
     path.extension()
@@ -279,7 +279,7 @@ impl Database {
         let mut stmt = conn.prepare("SELECT f.id,f.parent_id,f.root_id,f.name,f.path,f.available AND r.available,r.scanning,r.error,
           (SELECT COUNT(*) FROM connected_entries e JOIN assets a ON a.id=e.asset_id WHERE e.folder_id=f.id
             AND (?1 IS NULL OR EXISTS(SELECT 1 FROM project_assets p WHERE p.asset_id=a.id AND p.project_id=?1))
-            AND (?2 IS NULL OR ?2='all' OR (?2='videos' AND (lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','mkv','avi','m4v'))) OR (?2='audios' AND (lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg'))) OR (?2='images' AND NOT ((lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','mkv','avi','m4v')) OR (lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg'))))))
+            AND (?2 IS NULL OR ?2='all' OR (?2='videos' AND (lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','mkv','avi','m4v'))) OR (?2='audios' AND (lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg'))) OR (?2='texts' AND (lower(COALESCE(a.ext,'')) IN ('md','markdown','txt'))) OR (?2='images' AND NOT ((lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','mkv','avi','m4v')) OR (lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg')) OR (lower(COALESCE(a.ext,'')) IN ('md','markdown','txt'))))))
           FROM connected_folders f JOIN connected_roots r ON r.id=f.root_id ORDER BY r.rowid,lower(f.name),f.id")?;
         let values = stmt
             .query_map(params![project, media_filter], |r| {
@@ -309,7 +309,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT e.id FROM connected_entries e JOIN assets a ON a.id=e.asset_id
           WHERE (?1 IS NULL OR e.folder_id=?1) AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets p WHERE p.asset_id=a.id AND p.project_id=?2))
-          AND (?3 IS NULL OR ?3='all' OR (?3='videos' AND (lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','mkv','avi','m4v'))) OR (?3='audios' AND (lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg'))) OR (?3='images' AND NOT ((lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','mkv','avi','m4v')) OR (lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg')))))
+          AND (?3 IS NULL OR ?3='all' OR (?3='videos' AND (lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','mkv','avi','m4v'))) OR (?3='audios' AND (lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg'))) OR (?3='texts' AND (lower(COALESCE(a.ext,'')) IN ('md','markdown','txt'))) OR (?3='images' AND NOT ((lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','mkv','avi','m4v')) OR (lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg')) OR (lower(COALESCE(a.ext,'')) IN ('md','markdown','txt')))))
           ORDER BY lower(e.name),e.id LIMIT ?4 OFFSET ?5")?;
         let values = stmt
             .query_map(

@@ -10,8 +10,9 @@ import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
 import { VideoPoster } from "./VideoPoster";
 import { isAudioAsset } from "../lib/audioMedia";
+import { isTextAsset } from "../lib/textMedia";
 import { stopAudioPreview } from "../lib/audioPreview";
-import { Music2 } from "lucide-react";
+import { FileText, Music2 } from "lucide-react";
 
 type Target = { original: AssetOriginal; asset: Asset };
 
@@ -92,7 +93,7 @@ export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
       </div>}
       {items && <ul aria-label="待删除素材" className="grid grid-cols-2 gap-3 sm:grid-cols-3">{items.map(({ original, asset }) => <li key={original.asset_id} data-delete-asset-id={original.asset_id} className="min-w-0 rounded-lg border border-edge bg-panel2 p-2">
         <div className="flex aspect-square items-center justify-center overflow-hidden rounded bg-panel">
-          {isAudioAsset(asset) ? <Music2 size={28} aria-label="音频"/> : isVideoPath(original.path)
+          {isTextAsset(asset) ? <FileText size={28} aria-label="文本"/> : isAudioAsset(asset) ? <Music2 size={28} aria-label="音频"/> : isVideoPath(original.path)
             ? <VideoPoster path={original.path} poster={asset.thumb_path} alt={original.name} className="h-full w-full object-contain"/>
             : <img src={convertFileSrc(asset.thumb_path || original.path)} alt={original.name} loading="lazy" className="h-full w-full object-contain"/>}
         </div>

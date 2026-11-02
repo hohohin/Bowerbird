@@ -29,8 +29,8 @@ pub fn image_path(path: &Path) -> bool {
 fn original(path: &Path) -> AppResult<PathBuf> {
     let path =
         fs::canonicalize(path).map_err(|_| invalid("原素材不可用，请检查文件权限或重新定位"))?;
-    if !path.is_file() || !(image_path(&path) || video_path(&path) || audio_path(&path)) {
-        return Err(invalid("请选择支持的图片、视频或音频"));
+    if !path.is_file() || !(image_path(&path) || video_path(&path) || audio_path(&path) || crate::core::text_documents::text_path(&path)) {
+        return Err(invalid("请选择支持的图片、视频、音频或文本"));
     }
     Ok(path)
 }
@@ -91,7 +91,7 @@ pub fn browse_page(path: Option<&str>, offset: usize, all: bool) -> AppResult<Di
         let Ok(metadata) = entry.metadata() else {
             continue;
         };
-        if metadata.is_dir() || (metadata.is_file() && (image_path(&entry.path()) || video_path(&entry.path()) || audio_path(&entry.path()))) {
+        if metadata.is_dir() || (metadata.is_file() && (image_path(&entry.path()) || video_path(&entry.path()) || audio_path(&entry.path()) || crate::core::text_documents::text_path(&entry.path()))) {
             entries.push(FileEntry {
                 path: entry.path().to_string_lossy().into_owned(),
                 name,
@@ -178,6 +178,7 @@ pub fn preview(paths: &LibraryPaths, path: &Path) -> AppResult<String> {
 
 pub fn preview_with_index(paths: &LibraryPaths, db: Option<&Database>, path: &Path) -> AppResult<String> {
     let path = original(path)?;
+    if crate::core::text_documents::text_path(&path) { return Err(invalid("文本请使用文档编辑器打开")); }
     if audio_path(&path) { return Err(invalid("音频请使用波形预览")); }
     let hash = preview_key(&path, &fs::metadata(&path)?)?;
     let folder = paths.root.join("external-previews");
@@ -264,7 +265,7 @@ impl Database {
         self.index_external_with_id(paths, path, None)
     }
     pub fn index_external_with_id(&self, paths: &LibraryPaths, path: &Path, preferred_id: Option<&str>) -> AppResult<Asset> {
-        if audio_path(path) { return self.index_connected_file(paths, path, preferred_id); }
+        if audio_path(path) || crate::core::text_documents::text_path(path) { return self.index_connected_file(paths, path, preferred_id); }
         let supplied = path.to_string_lossy().into_owned();
         let path = original(path)?;
         // Files created in BowerbirdLibrary keep their existing image identity when browsed.
@@ -351,11 +352,11 @@ impl Database {
     }
     fn resolve_external_files(&self, references: &[String], compatible: bool) -> AppResult<Vec<String>> {
         references.iter().map(|path| {
-            if compatible && audio_path(Path::new(path)) { return Err(invalid("音频暂不支持作为图片模型参考")); }
+            if compatible && (audio_path(Path::new(path)) || crate::core::text_documents::text_path(Path::new(path))) { return Err(invalid("此类素材暂不支持作为图片模型参考")); }
             let row: Option<(String, Option<String>, Option<String>)> = self.conn.lock().unwrap().query_row(
                 "SELECT a.store_path,e.fingerprint,a.thumb_path FROM external_asset_paths p JOIN assets a ON a.id=p.asset_id LEFT JOIN external_assets e ON e.asset_id=a.id WHERE p.path=?1", [path], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
             if let Some((current, expected, thumb)) = row {
-                if compatible && audio_path(Path::new(&current)) { return Err(invalid("音频暂不支持作为图片模型参考")); }
+                if compatible && (audio_path(Path::new(&current)) || crate::core::text_documents::text_path(Path::new(&current))) { return Err(invalid("此类素材暂不支持作为图片模型参考")); }
                 if let Some(expected) = expected {
                     let p = original(Path::new(&current))?;
                     if fingerprint(&p)? != expected { return Err(invalid("外部参考图已修改，请先确认更新引用")); }
@@ -563,7 +564,7 @@ mod tests {
     fn directory_browser_lists_media_and_folders_without_indexing() {
         let f = Fixture::new();
         fs::write(f.root.join("video.MP4"), b"listed without decoding").unwrap();
-        fs::write(f.root.join("notes.txt"), b"not media").unwrap();
+        fs::write(f.root.join("notes.txt"), b"text document").unwrap();
         for i in 0..130 { fs::write(f.root.join(format!("image-{i}.jpg")), b"listed without decoding").unwrap(); }
         let page = browse(Some(f.root.to_str().unwrap()),0).unwrap();
         assert_eq!(page.entries.len(),120);
@@ -571,7 +572,7 @@ mod tests {
         assert_eq!(all.entries.len(),all.total);
         assert!(all.entries[0].directory);
         assert!(all.entries.iter().any(|e| e.name == "video.MP4"));
-        assert!(!all.entries.iter().any(|e| e.name == "notes.txt"));
+        assert!(all.entries.iter().any(|e| e.name == "notes.txt"));
         assert_eq!(f.db.count_assets(None).unwrap(),0);
     }
     #[test]
@@ -764,14 +765,16 @@ mod tests {
     #[test]
     fn browsing_is_read_only_filtered_and_paginated() {
         let f = Fixture::new();
-        fs::write(f.root.join("private.txt"), "ignore").unwrap();
+        fs::write(f.root.join("private.txt"), "text document").unwrap();
+        fs::write(f.root.join("unsupported.bin"), "ignore").unwrap();
         fs::create_dir(f.root.join("album")).unwrap();
         let page = browse(Some(f.root.to_str().unwrap()), 0).unwrap();
         assert!(page
             .entries
             .iter()
             .any(|e| e.name == "album" && e.directory));
-        assert!(!page.entries.iter().any(|e| e.name == "private.txt"));
+        assert!(page.entries.iter().any(|e| e.name == "private.txt"));
+        assert!(!page.entries.iter().any(|e| e.name == "unsupported.bin"));
         assert_eq!(f.db.external_paths().unwrap().len(), 0);
         assert!(browse(Some(f.original.to_str().unwrap()), 0).is_err());
         assert!(browse(Some(f.root.to_str().unwrap()), 9999)

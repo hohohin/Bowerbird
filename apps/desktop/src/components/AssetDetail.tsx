@@ -2,6 +2,7 @@ import { TacticalSelect } from "./TacticalSelect";
 import { VideoPlayer } from "./VideoPlayer";
 import { AudioWaveform } from "./AudioWaveform";
 import { isAudioAsset } from "../lib/audioMedia";
+import { isTextAsset } from "../lib/textMedia";
 import { videoDurationLabel } from "./VideoHoverPreview";
 import "./AudioFileMediaCard.css";
 import { saveVideoFrame } from "../lib/saveVideoFrame";
@@ -9,7 +10,7 @@ import { saveVideoFrameToCanvas } from "../lib/videoFrameCanvas";
 import { videoSourceKey } from "../lib/videoSourceKey";
 import { prepareVideoCollectionProject } from "../lib/videoCollectionCanvas";
 import { LearningHint } from "./OnboardingTour";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
@@ -50,6 +51,7 @@ import {
 } from "../lib/describePrompt";
 
 const VIDEO_EXTS = ["mp4", "mov", "webm", "mkv", "avi", "m4v"];
+const TextDocumentEditor = lazy(() => import("./TextDocumentEditor").then(module => ({ default: module.TextDocumentEditor })));
 
 function isVideo(ext?: string | null) {
   return !!ext && VIDEO_EXTS.includes(ext.toLowerCase());
@@ -593,9 +595,10 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
   }
 
   const audioAsset = !!asset && isAudioAsset(asset);
+  const textAsset = !!asset && isTextAsset(asset);
   const [audioDuration, setAudioDuration] = useState<number | null | undefined>(asset?.duration);
   useEffect(() => setAudioDuration(asset?.duration), [asset?.id, asset?.duration, asset?.file_mtime]);
-  const imagePath = useCompatibleImagePath(audioAsset ? null : asset?.store_path);
+  const imagePath = useCompatibleImagePath(audioAsset || textAsset ? null : asset?.store_path);
   const src = imagePath ? convertFileSrc(imagePath) : undefined;
   const zoom = useImageZoom(src);
 
@@ -732,6 +735,15 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
       <div className="flex flex-1 overflow-hidden">
         <div className="asset-detail-stage flex flex-1 flex-col overflow-hidden bg-canvas">
           <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
+            {textAsset && <Suspense fallback={<span className="text-sm text-muted">正在打开文档…</span>}>
+              <TextDocumentEditor key={asset.id} asset={asset} onSaved={() => {
+                void api.getAssetsByIds([asset.id]).then(([saved]) => {
+                  if (!saved) return;
+                  setResolvedAsset(saved);
+                  useStore.setState(state => ({ assets: state.assets.map(item => item.id === saved.id ? saved : item) }));
+                }).catch(error => notifyError(error, "文件已保存，素材信息暂未刷新"));
+              }}/>
+            </Suspense>}
             {audioAsset && asset.store_path && <AudioWaveform assetId={asset.id} path={asset.store_path} name={asset.name}
               version={`${asset.file_mtime ?? 0}:${asset.size ?? 0}`} duration={audioDuration} onDuration={setAudioDuration} className="audio-detail-waveform"/>}
             {src &&
@@ -807,7 +819,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
                 <Info size={13} />
                 信息
               </button>
-              {!audioAsset && <button
+              {!audioAsset && !textAsset && <button
                 type="button"
                 role="tab"
                 aria-selected={detailTab === "create"}
@@ -932,7 +944,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             <div className="text-xs font-medium uppercase tracking-wide text-muted">
               信息
             </div>
-            {audioAsset ? <Meta label="时长" value={videoDurationLabel(audioDuration) ?? "-"}/> : <Meta
+            {audioAsset ? <Meta label="时长" value={videoDurationLabel(audioDuration) ?? "-"}/> : textAsset ? <Meta label="格式" value={asset.ext?.toUpperCase() ?? "文本"}/> : <Meta
               label="尺寸"
               value={
                 asset.width && asset.height
@@ -958,7 +970,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             </>
           )}
 
-          {!audioAsset && detailTab === "create" && (
+          {!audioAsset && !textAsset && detailTab === "create" && (
             <>
 
           {/* 生成来源：只读还原首次生成时的原始创作板输入，而不是铺开发 provider 的 prompt。 */}
@@ -1022,7 +1034,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
           {detailTab === "info" && (
             <>
           {/* 反推：点击后选引擎（Bowerbird Cloud / 本机 codex）；全部引擎不可用时置灰。 */}
-          {!audioAsset && <div className="asset-detail-card space-y-2">
+          {!audioAsset && !textAsset && <div className="asset-detail-card space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-medium uppercase tracking-wide text-muted">
                 反推
@@ -1303,7 +1315,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             <div className="flex flex-wrap items-center gap-1.5">
               {tags.length === 0 && !addingTag && (
                 <span className="text-xs text-muted">
-                  {audioAsset ? "暂无标签，可手动添加" : "暂无标签，可手动添加或在侧栏开启自动分类"}
+                  {audioAsset || textAsset ? "暂无标签，可手动添加" : "暂无标签，可手动添加或在侧栏开启自动分类"}
                 </span>
               )}
               {tags.map((t) => (

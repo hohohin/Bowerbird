@@ -2,9 +2,9 @@ import { create } from "zustand";
 import type { CatalogKind } from "./materialCatalog";
 
 export type LibrarySource = "global" | "project";
-export type LibraryMedia = "images" | "videos" | "audios";
+export type LibraryMedia = "images" | "videos" | "audios" | "texts";
 export const catalogViews = (media: LibraryMedia): CatalogKind[] => media !== "videos" ? ["all", "tags", "collections"] : ["tags", "collections"];
-const viewKey = (media: LibraryMedia) => media === "audios" ? "audioViews" : media === "videos" ? "videoViews" : "views";
+const viewKey = (media: LibraryMedia) => media === "texts" ? "textViews" : media === "audios" ? "audioViews" : media === "videos" ? "videoViews" : "views";
 export const catalogViewName = (kind: CatalogKind, media: LibraryMedia) => kind === "all" ? "全部" : kind === "collections" ? "集合分类" : media === "videos" ? "视频平铺" : "标签分类";
 // "global" here is the file browser's aggregate directory, not a source tab.
 type FileMode = CatalogKind | "files" | "global";
@@ -17,6 +17,7 @@ export const createLocalFileMode = () => create<{
   setGeneratedFilter: (filter: "source:generated" | "source:!generated" | null) => void;
   videoViews: Record<LibrarySource, CatalogKind>;
   audioViews: Record<LibrarySource, CatalogKind>;
+  textViews: Record<LibrarySource, CatalogKind>;
   setMedia: (media: LibraryMedia) => void;
   globalRequest: number;
   mode: FileMode;
@@ -36,12 +37,13 @@ export const createLocalFileMode = () => create<{
   open: false, query: "", source: "global", views: { global: "tags", project: "tags" },
   media: "images", videoViews: { global: "tags", project: "tags" },
   audioViews: { global: "all", project: "all" },
+  textViews: { global: "all", project: "all" },
   generatedFilter: null,
   setGeneratedFilter: generatedFilter => set({ generatedFilter }),
   navigationHost: null, globalRequest: 0, mode: "tags", viewTransition: null,
   setMode: mode => set({ mode }),
   openSource: source => set(state => ({ open: true, source, mode: state[viewKey(state.media)][source], query: "", viewTransition: null })),
-  setMedia: media => set(state => ({ media, mode: state[viewKey(media)][state.source], generatedFilter: media === "audios" ? null : state.generatedFilter, viewTransition: null })),
+  setMedia: media => set(state => ({ media, mode: state[viewKey(media)][state.source], generatedFilter: media === "audios" || media === "texts" ? null : state.generatedFilter, viewTransition: null })),
   setCatalogView: view => set(state => {
     if (state.mode === view || !catalogViews(state.media).includes(view)) return state;
     const key = viewKey(state.media);

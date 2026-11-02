@@ -1,5 +1,6 @@
 import type { Asset } from "./types";
 import { isAudioPath } from "./audioMedia.ts";
+import { isTextPath } from "./textMedia.ts";
 import type { ComfyVideoOptions } from "./comfyVideo";
 
 export type GenerationMedia = "image" | "video";
@@ -54,8 +55,9 @@ export function isVideoPath(path?: string | null): boolean {
 }
 /** Match the submitted original file, never its thumbnail or source video's metadata. */
 export function imageInputError(references: readonly Pick<Asset, "name" | "store_path">[]): string | null {
-  const index = references.findIndex(asset => isVideoPath(asset.store_path) || isAudioPath(asset.store_path));
+  const index = references.findIndex(asset => isVideoPath(asset.store_path) || isAudioPath(asset.store_path) || isTextPath(asset.store_path));
   if (index < 0) return null;
+  if (isTextPath(references[index].store_path)) return `第 ${index + 1} 个参考「${references[index].name}」是文本文件，不能作为图片参考。请在素材库中打开编辑。`;
   if (isAudioPath(references[index].store_path)) return `第 ${index + 1} 个参考「${references[index].name}」是音频，不能用于图片生成。请替换为图片。`;
   return `第 ${index + 1} 个参考「${references[index].name}」是视频，不能用于图片生成。请替换为图片，或先从视频中截取所需画面再引用。`;
 }
@@ -79,7 +81,7 @@ export function videoInputError(options: VideoOptions, references: readonly Pick
   const videos = references.filter((asset) => isVideoPath(asset.store_path));
   if (cloud && videos.some(asset => !/\.(mp4|mov)$/i.test(asset.store_path ?? ""))) return "方舟视频参考仅支持 MP4 / MOV";
   const images = references.filter((asset) => /\.(png|jpe?g|webp|bmp)(?:[?#].*)?$/i.test(asset.store_path ?? ""));
-  if (images.length + videos.length !== references.length) return "视频参考仅支持 PNG、JPEG、WebP、BMP 图片及视频，不支持音频";
+  if (images.length + videos.length !== references.length) return "视频参考仅支持 PNG、JPEG、WebP、BMP 图片及视频，不支持音频或文本文件";
   switch (options.kind) {
     case "text2video": return references.length ? "文生视频不使用参考素材，请移除素材或切换生成模式" : null;
     case "image2video": return images.length === 1 && !videos.length ? null : "单图生视频需要且只能选择 1 张图片";

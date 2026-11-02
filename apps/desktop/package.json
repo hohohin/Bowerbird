@@ -69,6 +69,10 @@
     "test:onboarding:pack": "node scripts/onboarding-pack-ui.test.mjs"
   },
   "dependencies": {
+    "@platejs/basic-nodes": "53.0.0",
+    "@platejs/list": "53.3.13",
+    "@platejs/markdown": "53.3.18",
+    "@platejs/media": "53.1.4",
     "@tanstack/react-virtual": "^3.10.7",
     "@tauri-apps/api": "^2.1.1",
     "@tauri-apps/plugin-dialog": "^2.0.1",
@@ -78,6 +82,7 @@
     "@tauri-apps/plugin-updater": "^2.11.0",
     "ag-psd": "^31.0.2",
     "lucide-react": "^0.453.0",
+    "platejs": "53.5.2",
     "prosemirror-commands": "^1.7.1",
     "prosemirror-history": "^1.5.0",
     "prosemirror-inputrules": "^1.5.1",
@@ -87,6 +92,8 @@
     "prosemirror-view": "^1.42.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "remark-frontmatter": "5.0.0",
+    "remark-gfm": "4.0.1",
     "zustand": "^4.5.5"
   },
   "devDependencies": {

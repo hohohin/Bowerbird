@@ -61,7 +61,7 @@ impl Database {
             .to_lowercase();
         // Header reads do not render images. HEIC and video metadata are completed with
         // their requested preview, without starting decoders/processes for a whole tree.
-        let dimensions = if video_path(&path) || audio_path(&path) || crate::media::heic::is_path(&path) {
+        let dimensions = if video_path(&path) || audio_path(&path) || crate::core::text_documents::text_path(&path) || crate::media::heic::is_path(&path) {
             (0, 0)
         } else {
             let meta = crate::media::probe::probe(&path)?;
@@ -92,7 +92,7 @@ impl Database {
                 // Only derived visual data is invalidated; manual text/analysis stays intact.
                 tx.execute("UPDATE assets SET thumb_path=?4,width=?2,height=?3,duration=0,phash=NULL,colors=NULL WHERE id=?1", params![id,dimensions.0,dimensions.1,direct_thumb])?;
                 tx.execute("DELETE FROM asset_colors WHERE asset_id=?1", [&id])?;
-                if !audio_path(&path) {
+                if !audio_path(&path) && !crate::core::text_documents::text_path(&path) {
                     crate::core::local_classification::data::requeue_changed_connected_asset(&tx, &id)?;
                 }
             }

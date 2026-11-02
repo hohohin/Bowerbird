@@ -1,0 +1,27 @@
+.text-document-editor { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: 280px; min-width: 0; color: var(--bb-ink); background: var(--bb-surface); text-align: left; }
+.text-document-toolbar, .text-document-format { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--bb-line); flex-shrink: 0; }
+.text-document-toolbar button, .text-document-format button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 28px; min-height: 28px; padding: 4px 7px; border: 0; border-radius: 0; background: transparent; color: var(--bb-secondary); font-size: 12px; cursor: pointer; }
+.text-document-toolbar button:hover:not(:disabled), .text-document-format button:hover { color: var(--bb-blue); background: var(--bb-surface-hover); }
+.text-document-toolbar button:disabled { opacity: .45; cursor: default; }
+.text-document-editor button:focus-visible, .text-document-editor input:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 2px; }
+.text-document-modes { display: flex; gap: 3px; margin-right: 8px; }
+.text-document-modes button[aria-pressed=true] { color: var(--bb-blue); background: var(--bb-surface-hover); }
+.text-document-save-state { margin-left: auto; font-size: 11px; color: var(--bb-muted); }
+.text-document-error, .text-document-notice { padding: 7px 16px; font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
+.text-document-error { color: var(--bb-danger); }
+.text-document-notice { color: var(--bb-muted); }
+.text-document-loading { padding: 30px; color: var(--bb-muted); font-size: 13px; }
+.text-document-body { flex: 1; min-height: 0; overflow: auto; outline: none; padding: 24px clamp(16px, 4vw, 46px) 60px; font-size: 14px; line-height: 1.85; overflow-wrap: anywhere; }
+.text-document-source { display: block; flex: 1; width: 100%; min-height: 200px; resize: none; padding: 24px; border: 0; outline: none; color: var(--bb-ink); background: transparent; font: 13px/1.8 ui-monospace, Consolas, monospace; tab-size: 2; white-space: pre-wrap; overflow-wrap: anywhere; }
+.text-document-source.is-plain { font-family: inherit; font-size: 14px; }
+.text-document-block { position: relative; margin: 0 0 14px; }
+.text-document-block h1 { font-size: 27px; line-height: 1.4; margin: 12px 0 22px; }
+.text-document-block h2 { font-size: 21px; margin: 24px 0 12px; }
+.text-document-block h3 { font-size: 18px; margin: 20px 0 10px; }
+.text-document-block blockquote { margin: 12px 0; border-left: 2px solid var(--bb-line); padding: 4px 14px; color: var(--bb-muted); }
+.text-document-block figure { margin: 16px 0; }
+.text-document-block img, .text-document-block video { display: block; width: 100%; max-width: 100%; max-height: 340px; object-fit: contain; background: var(--bb-bg); }
+.text-document-block figure > input { display: block; width: 100%; font: inherit; font-size: 12px; color: var(--bb-muted); text-align: center; background: transparent; border: 0; padding: 7px 2px; }
+.text-document-block .audio-waveform { min-height: 130px; }
+.text-document-missing { padding: 24px; border: 1px dashed var(--bb-line); color: var(--bb-muted); font-size: 12px; }
+.text-document-raw { white-space: pre-wrap; font: 12px/1.8 ui-monospace, Consolas, monospace; padding: 12px; border: 1px solid var(--bb-line); color: var(--bb-muted); }

@@ -33,6 +33,7 @@ import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { LibraryVideoPreview } from "./LibraryVideoPreview";
 import { videoSourceKey } from "../lib/videoSourceKey";
 import { isAudioAsset } from "../lib/audioMedia";
+import { isTextAsset } from "../lib/textMedia";
 import { LocalClassificationDialog } from "./LocalClassificationDialog";
 import { LocalFileBrowser } from "./LocalFileBrowser";
 import { CollectionAssignDialog, CollectionEditorDialog } from "./CollectionDialogs";
@@ -107,7 +108,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   const currentCollection = catalog.collections.find(c => c.id === active);
   const scope = kind === "collections" ? currentCollection?.id ?? null : null;
   const filter = useMemo<CatalogFilter>(() => ({ kind: flat ? "all" : kind, id: scope, projectId: projectScope ? projectId : null, media,
-    query, generated: media !== "audios" && generatedFilter ? generatedFilter === "source:generated" : null, color: media === "images" ? color : null }), [kind, flat, scope, projectScope, projectId, media, query, generatedFilter, color]);
+    query, generated: (media === "images" || media === "videos") && generatedFilter ? generatedFilter === "source:generated" : null, color: media === "images" ? color : null }), [kind, flat, scope, projectScope, projectId, media, query, generatedFilter, color]);
   const filterKey = JSON.stringify([filter, projectId]);
   const filterKeyRef = useRef(filterKey); filterKeyRef.current = filterKey;
   const reading = catalogLoading;
@@ -266,7 +267,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
   }
   function activate(asset: Asset) {
     if (working) return;
-    if (isAudioAsset(asset)) { openDetail(asset); return; }
+    if (isAudioAsset(asset) || isTextAsset(asset)) { openDetail(asset); return; }
     const state = useStore.getState();
     if (projectId && (state.activeProjectId !== projectId || !state.canvasLibraryOpen)) return;
     if (projectId && (state.boardOpen || state.genEditing)) {
@@ -416,10 +417,10 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
         <div className="file-view-heading">
           {navigation}
           <div className="video-collection-controls">
-            {media !== "audios" && <VideoCollectionEntry projectId={projectId} onCloseLibrary={onClose} onCreateProject={onCreateProject} onAssetsChange={onAssetsChange}/>}
+            {(media === "images" || media === "videos") && <VideoCollectionEntry projectId={projectId} onCloseLibrary={onClose} onCreateProject={onCreateProject} onAssetsChange={onAssetsChange}/>}
           <LibraryFloatingControls>
             <LibraryMediaSwitch/>
-            {media !== "audios" && <GeneratedImageFilter floating value={generatedFilter} onChange={useLocalFileMode.getState().setGeneratedFilter}/>}
+            {(media === "images" || media === "videos") && <GeneratedImageFilter floating value={generatedFilter} onChange={useLocalFileMode.getState().setGeneratedFilter}/>}
             <LibraryBrowserButton/>
             {media === "images" && <FileColorFilter open={colorsOpen} onOpenChange={setColorsOpen} color={color} onColorChange={setColor} palette={palette}/>}
             {toolbarActions}
@@ -439,7 +440,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
           <span>{working ? "正在处理…" : `${selected.size} 项`}</span><button disabled={working} onClick={() => void selectAll()}>全选</button>
           <button disabled={working || !selected.size} onClick={() => setAssign([...selected])}>添加到集合</button>
           {kind === "collections" && active && <button disabled={working || !selected.size} onClick={() => void run(async () => { await materialCatalog.members(active, [...selected], false); finishSelection(); setRevision(v => v + 1); })}>移出集合</button>}
-          {media !== "audios" && <button disabled={working || !selected.size} onClick={() => void run(async () => { const key = filterKey; const assets = await resolveSelection(); if (!alive.current || filterKeyRef.current !== key) return; await addMaterialAssets(assets, projectId, onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); })}>{projectId ? "添加到画板" : "添加到新项目"}</button>}
+          {(media === "images" || media === "videos") && <button disabled={working || !selected.size} onClick={() => void run(async () => { const key = filterKey; const assets = await resolveSelection(); if (!alive.current || filterKeyRef.current !== key) return; await addMaterialAssets(assets, projectId, onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); })}>{projectId ? "添加到画板" : "添加到新项目"}</button>}
         </div>}
       </div>
     </div>

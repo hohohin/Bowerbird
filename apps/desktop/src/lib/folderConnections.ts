@@ -10,7 +10,7 @@ export interface ConnectionEntry {
   id: string; folder_id: string; asset_id: string; name: string; path: string;
   is_reference: boolean; available: boolean; version?: string | null; asset: Asset;
 }
-export type ConnectionMedia = "images" | "videos" | "audios" | null;
+export type ConnectionMedia = "images" | "videos" | "audios" | "texts" | null;
 async function entryBatches(command: string, ids: string[], key: string, args: Record<string, unknown> = {}) {
   for (let offset = 0; offset < ids.length; offset += 2000) await invoke<void>(command, { ...args, [key]: ids.slice(offset, offset + 2000) });
 }

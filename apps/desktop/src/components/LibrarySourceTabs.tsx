@@ -9,7 +9,7 @@ const duration = 1000;
 export function LibrarySourceTabs({ value, onChange, project = false }: { value: string; onChange: (value: string) => void; project?: boolean }) {
   const useLocalFileMode = useLibraryModeStore();
   const media = useLocalFileMode(s => s.media);
-  const view = useLocalFileMode(s => (s.media === "audios" ? s.audioViews : s.media === "images" ? s.views : s.videoViews).global);
+  const view = useLocalFileMode(s => (s.media === "texts" ? s.textViews : s.media === "audios" ? s.audioViews : s.media === "images" ? s.views : s.videoViews).global);
   const transition = useLocalFileMode(s => s.viewTransition);
   const [expired, setExpired] = useState<number | null>(null);
   useEffect(() => {

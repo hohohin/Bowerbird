@@ -1,7 +1,7 @@
 const DEFAULT_MESSAGE = "操作未完成，请稍后重试。";
 // English product names, keys and file formats can be useful in a Chinese instruction.
 // Everything else (including unfamiliar upstream prose) uses the caller's action-specific fallback.
-const DISPLAY_WORDS = /^(?:Bowerbird|Bcoin|Pro|Studio|Cloud|Codex|ChatGPT|ComfyUI|Jev|Jimeng|Dreamina|Seedream|Seedance|GPT|OpenAI|Agent|CLI|API|DSH|MCP|FFmpeg|Python|tar|x64|Windows|macOS|Mac|Apple|Intel|NVIDIA|AMD|GPU|CPU|RAM|H3|F\d{1,2}|Ctrl|Control|Alt|Shift|Command|Cmd|Option|Esc|Escape|Enter|Tab|Space|Backspace|Delete|PNG|JPE?G|WebP|GIF|AVIF|HEIC|SVG|PDF|PSD|MP4|MOV|WebM|MKV|MP3|WAV|ZIP|JSON|GB|MB|MiB|KB|TB|px|fps|\d{3,4}p|x)$/i;
+const DISPLAY_WORDS = /^(?:Bowerbird|Bcoin|Pro|Studio|Cloud|Codex|ChatGPT|ComfyUI|Jev|Jimeng|Dreamina|Seedream|Seedance|GPT|OpenAI|Agent|CLI|API|DSH|MCP|FFmpeg|Python|tar|x64|Windows|macOS|Mac|Apple|Intel|NVIDIA|AMD|GPU|CPU|RAM|H3|F\d{1,2}|Ctrl|Control|Alt|Shift|Command|Cmd|Option|Esc|Escape|Enter|Tab|Space|Backspace|Delete|PNG|JPE?G|WebP|GIF|AVIF|HEIC|SVG|PDF|PSD|MP4|MOV|WebM|MKV|MP3|WAV|ZIP|JSON|UTF|Markdown|GB|MB|MiB|KB|TB|px|fps|\d{3,4}p|x)$/i;
 
 function clearChineseMessage(message: string): boolean {
   return /[\u3400-\u9fff]/.test(message) && message.length <= 240

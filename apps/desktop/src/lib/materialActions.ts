@@ -2,8 +2,10 @@ import type { Asset } from "./types";
 import { useStore } from "../store";
 import { prepareExplorerCanvasDrop } from "./explorerCanvasDrop";
 import { isAudioAsset } from "./audioMedia";
+import { isTextAsset } from "./textMedia";
 
 export async function addMaterialAssets(assets: Asset[], projectId: string | null, onClose: () => void, onCreateProject?: (ids?: string[]) => Promise<unknown>) {
+  if (assets.some(isTextAsset)) throw new Error("文本文件请在素材库中打开编辑，暂不支持添加到画板");
   if (assets.some(isAudioAsset)) throw new Error("音频暂不支持添加到画板，请在素材库中播放");
   if (useStore.getState().activeProjectId !== projectId) throw new Error("项目已切换，请重新选择目标画板");
   if (!projectId) {

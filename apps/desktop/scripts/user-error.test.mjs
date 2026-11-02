@@ -65,6 +65,14 @@ test('fallbacks cannot accidentally reintroduce diagnostics', () => {
   assert.equal(userErrorMessage('unexpected', fallback), fallback);
 });
 
+test('document format guidance survives without exposing technical diagnostics', () => {
+  for (const message of [
+    '此文件的编码暂不支持，请先在外部编辑器另存为 UTF-8',
+    '此文件暂不支持编辑，请选择 Markdown 或文本文件。',
+  ]) assert.equal(userErrorMessage(message, fallback), message);
+  assert.equal(userErrorMessage('UTF-8 解码失败：invalid byte offset 17', fallback), fallback);
+});
+
 test('a future task status is presented without exposing its protocol code', () => {
   assert.equal(cloudAgentStatusLabel('future_internal_stage'), '正在确认任务状态');
   assert.equal(cloudAgentStatusLabel('awaiting_approval'), '等待你批准计划');

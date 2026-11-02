@@ -9,6 +9,8 @@ import { MediaHoverMark } from "./MediaHoverMark";
 import { VideoHoverPreview, videoDurationLabel } from "./VideoHoverPreview";
 import { isAudioPath } from "../lib/audioMedia";
 import { AudioFileMediaCard } from "./AudioFileMediaCard";
+import { isTextPath } from "../lib/textMedia";
+import { TextFileMediaCard } from "./TextFileMediaCard";
 import { getDragAssets, isNativeAssetDrag } from "../lib/dragPayload";
 import { startExternalDrag } from "../lib/externalDrag";
 const previews = createFilePreviewQueue(externalFiles.preview);
@@ -33,7 +35,9 @@ export function FileMediaCard(props: FileMediaCardProps) {
     event.preventDefault();
     void startExternalDrag(ids, "hold");
   });
-  return !props.entry.directory && isAudioPath(props.entry.path)
+  return !props.entry.directory && isTextPath(props.entry.path)
+    ? <TextFileMediaCard {...props} onDragStart={onDragStart}/>
+    : !props.entry.directory && isAudioPath(props.entry.path)
     ? <AudioFileMediaCard {...props} onDragStart={onDragStart}/>
     : <VisualFileMediaCard {...props} onDragStart={onDragStart}/>;
 }

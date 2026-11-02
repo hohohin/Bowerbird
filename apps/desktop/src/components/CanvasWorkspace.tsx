@@ -1,4 +1,5 @@
 import { userErrorMessage } from "../lib/userError";
+import { isTextAsset } from "../lib/textMedia";
 import { useImeGuard } from "../lib/useImeGuard";
 import { useLocalFileMode } from "../lib/localFileMode";
 import type { LibrarySource } from "../lib/localFileMode";
@@ -1238,7 +1239,7 @@ export function CanvasWorkspace({
   function seedInitialAssets(assetIds: string[]) {
     const snapshots = assetIds.flatMap((assetId) => {
       const asset = assetById.get(assetId);
-      return asset ? [createCanvasAssetSnapshot(asset, canvasId("asset"))] : [];
+      return asset && !isTextAsset(asset) ? [createCanvasAssetSnapshot(asset, canvasId("asset"))] : [];
     });
     const created = snapshots.map((asset, index): CanvasAssetNode => {
       const size = assetNodeSize(asset);
@@ -2312,7 +2313,7 @@ export function CanvasWorkspace({
     }
     const incoming = ids.flatMap((id) => {
       const asset = assetById.get(id);
-      return asset ? [createCanvasAssetSnapshot(asset, canvasId("asset"))] : [];
+      return asset && !isTextAsset(asset) ? [createCanvasAssetSnapshot(asset, canvasId("asset"))] : [];
     });
     externalInstancesRef.current = { signature, assets: incoming };
     return incoming;

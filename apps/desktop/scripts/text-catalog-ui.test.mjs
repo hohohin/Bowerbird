@@ -1,0 +1,58 @@
+import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
+import { createServer } from 'vite';
+import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+
+const server = await createServer({ server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false, watch: null }, cacheDir: '.tmp/text-catalog-vite' });
+await server.listen();
+const browser = await chromium.launch({ channel: 'chrome', headless: true });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+page.setDefaultTimeout(10000);
+const errors = [];
+page.on('pageerror', error => errors.push(error.message));
+await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
+try {
+  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-library/preview.html`);
+  await page.waitForFunction(() => !!window.mode && !!window.store);
+  await page.evaluate(() => {
+    window.store.setState({ detailAssetId: null });
+    window.mode.getState().setMedia('texts');
+    window.calls = [];
+  });
+  const cards = page.locator('.text-file-card');
+  await cards.first().waitFor();
+  assert.equal(await cards.count(), 2);
+  assert.equal(await page.getByRole('button', { name: '文本', exact: true }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.locator('[data-text-document-editor]').count(), 0);
+  assert.equal(await cards.locator('img, video, audio, textarea').count(), 0);
+  assert.deepEqual((await cards.locator('.text-file-format').allTextContents()).sort(), ['Markdown', 'TXT']);
+  const calls = await page.evaluate(() => window.calls);
+  assert.ok(calls.some(call => call.command === 'catalog_page' && call.args.filter.media === 'texts'));
+  assert.ok(!calls.some(call => ['read_text_document', 'external_files_media', 'external_files_preview'].includes(call.command)), 'browsing text tiles must not load file contents or visual previews');
+  const size = await cards.first().boundingBox();
+  assert.ok(size.width > 0 && size.height > 0);
+  await cards.first().click({ modifiers: ['Control'] });
+  assert.equal(await cards.first().getAttribute('aria-pressed'), 'true');
+  assert.equal(await page.getByRole('button', { name: '添加到新项目', exact: true }).count(), 0);
+  await page.getByRole('button', { name: '取消选择', exact: true }).click();
+  await mkdir('.tmp/text-catalog', { recursive: true });
+  await page.screenshot({ path: '.tmp/text-catalog/text-tiles.png' });
+  await page.getByRole('tab', { name: '标签分类', exact: true }).click();
+  await page.waitForFunction(() => window.calls.some(call => call.command === 'catalog_page' && call.args.filter.kind === 'tags' && call.args.filter.media === 'texts'));
+  await page.getByRole('button', { name: '向右分栏', exact: true }).click();
+  const secondPane = page.locator('.library-split-pane').nth(1);
+  await secondPane.locator('.text-file-card').first().waitFor();
+  assert.equal(await secondPane.getByRole('tab', { name: '标签分类', exact: true }).getAttribute('aria-selected'), 'true');
+  await secondPane.getByRole('button', { name: '更多素材库控件', exact: true }).click();
+  await secondPane.getByRole('button', { name: '图片', exact: true }).click();
+  await secondPane.getByRole('button', { name: '更多素材库控件', exact: true }).click();
+  await secondPane.getByRole('button', { name: '文本', exact: true }).click();
+  assert.equal(await secondPane.getByRole('tab', { name: '标签分类', exact: true }).getAttribute('aria-selected'), 'true', 'copied panes preserve the independent text browsing view');
+  await secondPane.getByRole('button', { name: '关闭此栏', exact: true }).click();
+  await cards.first().click();
+  await page.locator('[data-text-document-editor]').waitFor();
+  assert.ok(await page.evaluate(() => window.calls.some(call => call.command === 'read_text_document')), 'opening text loads the editor only on demand');
+  assert.equal(await page.locator('.asset-detail-panel').count(), 1);
+  assert.deepEqual(errors, []);
+  console.log('PASS lightweight text tiles, all/tag text queries, selection, split view state and on-demand detail in existing library layout');
+} finally { await browser.close(); await server.close(); }

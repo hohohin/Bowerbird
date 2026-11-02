@@ -22,7 +22,7 @@ export type LibraryPaneState = ReturnType<typeof createLibraryPane>;
 export function copyLibraryPane(id: string, source: LibraryPaneState) {
   const pane = createLibraryPane(id), state = source.mode.getState(), preferences = source.preferences.getState();
   pane.mode.setState({ open: true, mode: state.mode, source: state.source, media: state.media,
-    views: { ...state.views }, videoViews: { ...state.videoViews }, audioViews: { ...state.audioViews }, generatedFilter: state.generatedFilter, query: "" });
+    views: { ...state.views }, videoViews: { ...state.videoViews }, audioViews: { ...state.audioViews }, textViews: { ...state.textViews }, generatedFilter: state.generatedFilter, query: "" });
   pane.preferences.setState({ width: preferences.width, pins: [...preferences.pins] });
   source.positions.forEach((position, key) => pane.positions.set(key, { ...position }));
   for (const key of ["bowerbird.localFiles.lastDirectory", "bowerbird.catalog.tagSidebarWidth"]) {

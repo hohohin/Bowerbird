@@ -6,6 +6,7 @@ import { ContextMenu, ContextSubmenu, DeleteSubmenu } from "./ContextMenu";
 import { canSearchPinterest, requestPinterestSearch } from "../lib/pinterestSearch";
 import { isVideoPath } from "../lib/videoGeneration";
 import { isAudioAsset } from "../lib/audioMedia";
+import { isTextAsset } from "../lib/textMedia";
 import { Archive, ClipboardCopy, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Ungroup } from "lucide-react";
 import { exportAssetArchive } from "../lib/assetArchive";
 import { understandEngineUsable, useStore } from "../store";
@@ -142,15 +143,16 @@ export function AssetContextMenu() {
   const knownAssets = menu.fileSelection?.assets ?? (selectionAssets?.menu === menu ? selectionAssets.assets : assets);
   const targets = targetIds.map(id => id === assetId ? asset ?? knownAssets.find(a => a.id === id) : knownAssets.find(a => a.id === id));
   const targetsReady = targets.every((item): item is Asset => !!item);
-  const allImages = targetIds.length > 0 && targetsReady && targets.every(item => !!item.store_path && !isVideoPath(item.store_path) && !isAudioAsset(item));
+  const allImages = targetIds.length > 0 && targetsReady && targets.every(item => !!item.store_path && !isVideoPath(item.store_path) && !isAudioAsset(item) && !isTextAsset(item));
   const audio = !!asset && isAudioAsset(asset);
+  const text = !!asset && isTextAsset(asset);
   const projectId = menu.canvasSelection?.projectId ?? (menu.workspaceProjectId !== undefined ? menu.workspaceProjectId : activeProjectId);
   const onComplete = menu.fileSelection?.onComplete ?? (!menu.canvasSelection && multiIds ? exitManage : undefined);
   const storePath = asset?.store_path ?? null;
   const canvasLibraryAvailable = canvasLibraryCheck?.menu === menu && canvasLibraryCheck.available;
   const canChangeLibraryVisibility = !!asset?.store_path && CANVAS_IMAGE_EXTS.includes((asset.ext ?? "").toLowerCase());
   // 仅生成图显示「复用生成提示词」：generation_session_id 非 null 即任意 provider 的生成图。
-  const isGenerated = !audio && !!asset?.generation_session_id;
+  const isGenerated = !audio && !text && !!asset?.generation_session_id;
   // 「图片标注」可用：本地有文件且为浏览器可解码位图（视频 / SVG / TIFF 不可标注）。
   const annotatable =
     !!storePath && ANNOTATABLE_EXTS.includes((asset?.ext ?? "").toLowerCase());
@@ -334,7 +336,7 @@ export function AssetContextMenu() {
       <span>{engine.label}{engine.reason && <small className="context-menu-reason">{userErrorMessage(engine.reason, "此方式暂不可用，请在设置中重新登录。")}</small>}</span>
     </button>)}
   </ContextSubmenu>;
-  const canvasActions = menu.canvasSelection && !targets.some(item => item && isAudioAsset(item)) && <>
+  const canvasActions = menu.canvasSelection && !targets.some(item => item && (isAudioAsset(item) || isTextAsset(item))) && <>
     <CanvasLayerMenuItem {...menu.canvasSelection} disabled={busy} className={itemClass} />
     {menu.canvasSelection.nodeIds.length > 1 && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
       window.dispatchEvent(new CustomEvent<CanvasArrangeNodesEventDetail>(CANVAS_ARRANGE_NODES_EVENT, { detail: menu.canvasSelection })); closeContextMenu();
@@ -378,9 +380,9 @@ export function AssetContextMenu() {
     <div className="asset-context-column">
       <div className="app-context-label">常用</div>
       {canvasActions}
-      {!audio && mode === "browse" && detailAssetId !== null && <button role="menuitem" className={itemClass} disabled={busy}
+      {!audio && !text && mode === "browse" && detailAssetId !== null && <button role="menuitem" className={itemClass} disabled={busy}
         onClick={() => { addAssetToBoardFromDetail(assetId); closeContextMenu(); }}>添加到对话框</button>}
-      <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); if (menu.fileSelection) useStore.setState({ mode: "browse" }); openDetail(assetId); }}>{audio ? "打开音频详情" : isVideoPath(storePath) ? "打开视频详情" : "打开图片详情"}</button>
+      <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); if (menu.fileSelection) useStore.setState({ mode: "browse" }); openDetail(assetId); }}>{text ? "打开文本编辑器" : audio ? "打开音频详情" : isVideoPath(storePath) ? "打开视频详情" : "打开图片详情"}</button>
       {canSearchPinterest(asset) && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); requestPinterestSearch(assetId); }}>Pinterest 以图搜图</button>}
       {!menu.canvasSelection && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
         if (menu.fileSelection) menu.fileSelection.select(); else { if (mode !== "manage") enterManage(); toggleSelect(assetId); } closeContextMenu();
