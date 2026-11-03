@@ -1,3 +1,5 @@
+import "../../../src/components/IndustrialTheme.css";
+document.documentElement.dataset.theme = "dark";
 // Reuse the closed real-CanvasWorkspace harness; no application database or native filesystem.
 const w = window as any;
 const sample = new URLSearchParams(location.search).get("case") ?? "plain";

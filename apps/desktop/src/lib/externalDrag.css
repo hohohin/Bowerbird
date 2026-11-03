@@ -1,9 +1,20 @@
-.external-drag-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 2147483000;
-  pointer-events: none;
-  background: transparent;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-}
+.external-drag-backdrop { position:fixed; inset:0; z-index:2147483000; pointer-events:none; backdrop-filter:blur(6px); -webkit-backdrop-filter:blur(6px); }
+/* Approved projection appearance; media itself remains unchanged. */
+.external-drag-backdrop { overflow:hidden; isolation:isolate; display:grid; place-items:end center; padding-bottom:68px; color:var(--bb-ink); background:rgba(12,15,17,.6); animation:drag-veil-in 240ms ease-out both; }
+.external-drag-backdrop:before { content:""; position:absolute; inset:0; pointer-events:none; background:radial-gradient(ellipse at 46% 36%,rgba(197,220,228,.07),transparent 46%); }
+.external-drag-projection { position:absolute; inset:0; width:100%; height:100%; color:var(--bb-blue); pointer-events:none; }
+.external-drag-source { animation:source-lift-in 420ms ease-out both; }
+.external-drag-source .external-drag-glint { stroke:var(--bb-ink); }
+.external-drag-hud { position:relative; max-width:90%; text-align:left; color:var(--bb-ink); animation:drag-hud-in 320ms ease-out both; pointer-events:none; }
+.external-drag-hud-mark { display:flex; align-items:center; justify-content:space-between; margin-bottom:20px; height:20px; color:var(--bb-ink); }
+.external-drag-hud-mark i { position:relative; height:1px; width:68px; background:linear-gradient(90deg,var(--bb-ink),transparent); box-shadow:0 0 5px #d7e9ee30; }
+.external-drag-hud-mark i:before { content:""; position:absolute; left:0; top:-1px; width:3px; height:3px; background:var(--bb-ink); }
+.external-drag-hud h2 { font-size:23px; font-weight:400; line-height:1.5; letter-spacing:1px; text-shadow:0 0 14px #d7e9ee20; }
+.external-drag-hud p { font-size:13px; line-height:1.7; color:var(--bb-secondary); margin:12px 0 24px; }
+.external-drag-hud-foot { font-size:11px; color:var(--bb-muted); }
+[data-theme=light] .external-drag-backdrop { background:rgba(233,235,236,.67); }
+[data-theme=light] .external-drag-backdrop:before { background:radial-gradient(ellipse at 46% 36%,rgba(85,104,114,.08),transparent 46%); }
+@keyframes drag-veil-in { from {opacity:0} to {opacity:1} }
+@keyframes drag-hud-in { from {opacity:0;transform:translateY(6px)} to {opacity:1;transform:none} }
+@keyframes source-lift-in { from {opacity:0;transform:translateY(6px)} to {opacity:1;transform:none} }
+@media(prefers-reduced-motion:reduce) { .external-drag-backdrop,.external-drag-hud,.external-drag-source {animation:none;} }

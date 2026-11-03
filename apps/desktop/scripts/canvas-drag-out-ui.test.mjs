@@ -42,6 +42,9 @@ try {
   await open(); const original = await snapshot();
   await press(node('first')); await page.waitForTimeout(350); assert.equal(await count(), 0);
   await exported(['existing'], original);
+  await page.waitForTimeout(500);
+  await page.getByRole('status').filter({hasText:'拖到其他应用中使用'}).waitFor();
+  assert.equal(await page.locator('.external-drag-source').count(), 1);
   await page.screenshot({ path: '.tmp/canvas-drag-out-ui/canvas-hold-dark.png' });
   await page.locator('[data-canvas-stage]').evaluate(element => {
     const dataTransfer = new DataTransfer(); dataTransfer.items.add(new File(['synthetic'], 'existing.png', { type: 'image/png' }));

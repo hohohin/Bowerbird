@@ -38,6 +38,7 @@ pub async fn start_external_drag(
     asset_ids: Vec<String>,
     mode: DragMode,
     session_id: String,
+    light_theme: Option<bool>,
 ) -> Result<DragResult, AppError> {
     if webview.label() != "main" {
         return Err(AppError::Other("请从素材库或画布拖出素材".into()));
@@ -49,9 +50,33 @@ pub async fn start_external_drag(
         return Ok(DragResult { dropped: false });
     }
     let db = db.inner().clone();
-    let files = tokio::task::spawn_blocking(move || external_drag::files(&db, &asset_ids))
-        .await
-        .map_err(|error| AppError::Other(error.to_string()))??;
+    let scale = webview
+        .window()
+        .scale_factor()
+        .unwrap_or(1.0)
+        .clamp(1.0, 3.0);
+    let (files, preview) = tokio::task::spawn_blocking(move || {
+        let files = external_drag::files(&db, &asset_ids)?;
+        let preview = db
+            .get_assets_by_ids(&asset_ids)
+            .ok()
+            .and_then(|assets| assets.into_iter().next())
+            .and_then(|asset| {
+                asset
+                    .thumb_path
+                    .filter(|path| Some(path) != asset.store_path.as_ref())
+            })
+            .and_then(|path| {
+                crate::external_drag::preview::load(
+                    std::path::Path::new(&path),
+                    scale,
+                    light_theme.unwrap_or(false),
+                )
+            });
+        Ok::<_, AppError>((files, preview))
+    })
+    .await
+    .map_err(|error| AppError::Other(error.to_string()))??;
     if session.intent.cancelled() {
         return Ok(DragResult { dropped: false });
     }
@@ -65,18 +90,28 @@ pub async fn start_external_drag(
             let pickup = matches!(mode, DragMode::Pickup);
             #[cfg(windows)]
             {
-                let result = crate::external_drag::windows::drag(&files, pickup, || intent.begin())
-                    .map(|(dropped, _)| dropped)
-                    .map_err(|error| error.to_string());
+                let result = crate::external_drag::windows::drag_with_image(
+                    &files,
+                    pickup,
+                    preview.as_ref(),
+                    || intent.begin(),
+                )
+                .map(|(dropped, _)| dropped)
+                .map_err(|error| error.to_string());
                 let _ = sender.send(result);
             }
             #[cfg(target_os = "macos")]
-            crate::external_drag::macos::start(&source_window, &files, pickup, sender, move || {
-                intent.begin()
-            });
+            crate::external_drag::macos::start(
+                &source_window,
+                &files,
+                pickup,
+                preview.as_ref(),
+                sender,
+                move || intent.begin(),
+            );
             #[cfg(not(any(windows, target_os = "macos")))]
             {
-                let _ = (files, pickup, intent);
+                let _ = (files, preview, pickup, intent);
                 let _ = sender.send(Err("当前系统暂不支持拖出素材".into()));
             }
         })

@@ -4,7 +4,10 @@ use windows::{
     core::*,
     Win32::{
         Foundation::*,
-        Graphics::Gdi::{DeleteObject, HBITMAP},
+        Graphics::Gdi::{
+            CreateDIBSection, DeleteObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+            HBITMAP,
+        },
         System::{Com::*, Ole::*, SystemServices::*},
         UI::{
             Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON},
@@ -112,9 +115,20 @@ pub fn drag(
     pickup: bool,
     before_start: impl FnOnce() -> bool,
 ) -> Result<(bool, POINT)> {
+    drag_with_image(paths, pickup, None, before_start)
+}
+
+pub fn drag_with_image(
+    paths: &[PathBuf],
+    pickup: bool,
+    preview: Option<&super::preview::DragImage>,
+    before_start: impl FnOnce() -> bool,
+) -> Result<(bool, POINT)> {
     let _ole = Ole::enter()?;
     let data = files_data_object(paths)?;
-    let _image = paths.first().and_then(|path| drag_image(&data, path).ok());
+    let _image = preview
+        .and_then(|image| thumbnail_image(&data, image).ok())
+        .or_else(|| paths.first().and_then(|path| drag_image(&data, path).ok()));
     let source: IDropSource = Source {
         gesture: RefCell::new(Gesture::new(pickup)),
     }
@@ -147,31 +161,127 @@ impl Drop for Bitmap {
         }
     }
 }
-fn drag_image(data: &IDataObject, path: &std::path::Path) -> Result<Bitmap> {
-    // Shell icon only: do not decode a large original just to initiate a drag.
+// InitializeFromBitmap consumes the HBITMAP on success; never retain a stale GDI handle.
+fn attach_image(data: &IDataObject, bitmap: Bitmap, size: SIZE, offset: POINT) -> Result<()> {
     unsafe {
-        let item: IShellItemImageFactory =
-            SHCreateItemFromParsingName(&HSTRING::from(shell_path(path).as_os_str()), None)?;
-        let size = SIZE { cx: 48, cy: 48 };
-        let bitmap = Bitmap(item.GetImage(size, SIIGBF_ICONONLY)?);
         let helper: IDragSourceHelper =
             CoCreateInstance(&CLSID_DragDropHelper, None, CLSCTX_INPROC_SERVER)?;
         helper.InitializeFromBitmap(
             &SHDRAGIMAGE {
                 sizeDragImage: size,
-                ptOffset: POINT { x: 12, y: 12 },
+                ptOffset: offset,
                 hbmpDragImage: bitmap.0,
                 crColorKey: COLORREF(0xFFFFFFFF),
             },
             data,
         )?;
+    }
+    std::mem::forget(bitmap);
+    Ok(())
+}
+fn drag_image(data: &IDataObject, path: &std::path::Path) -> Result<()> {
+    unsafe {
+        let item: IShellItemImageFactory =
+            SHCreateItemFromParsingName(&HSTRING::from(shell_path(path).as_os_str()), None)?;
+        let size = SIZE { cx: 48, cy: 48 };
+        let bitmap = Bitmap(item.GetImage(size, SIIGBF_ICONONLY)?);
+        attach_image(data, bitmap, size, POINT { x: 12, y: 12 })
+    }
+}
+fn thumbnail_bitmap(image: &super::preview::DragImage) -> Result<Bitmap> {
+    unsafe {
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: image.width as i32,
+                biHeight: -(image.height as i32),
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut pixels = std::ptr::null_mut();
+        let bitmap = Bitmap(CreateDIBSection(
+            None,
+            &info,
+            DIB_RGB_COLORS,
+            &mut pixels,
+            None,
+            0,
+        )?);
+        let target = std::slice::from_raw_parts_mut(pixels.cast::<u8>(), image.rgba.len());
+        for (rgba, bgra) in image.rgba.chunks_exact(4).zip(target.chunks_exact_mut(4)) {
+            bgra.copy_from_slice(&[rgba[2], rgba[1], rgba[0], rgba[3]]);
+        }
         Ok(bitmap)
     }
+}
+fn thumbnail_image(data: &IDataObject, image: &super::preview::DragImage) -> Result<()> {
+    attach_image(
+        data,
+        thumbnail_bitmap(image)?,
+        SIZE {
+            cx: image.width as i32,
+            cy: image.height as i32,
+        },
+        POINT {
+            x: -(18.0 * image.scale) as i32,
+            y: -(18.0 * image.scale) as i32,
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_thumbnail_initializes_shell_helper_with_real_bitmap_dimensions() {
+        use windows::Win32::Graphics::Gdi::{GetObjectW, DIBSECTION};
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("preview.png");
+        image::RgbaImage::from_pixel(80, 120, image::Rgba([10, 30, 90, 255]))
+            .save(&path)
+            .unwrap();
+        let preview = super::super::preview::load(&path, 1.0, false).unwrap();
+        let _ole = Ole::enter().unwrap();
+        let object = files_data_object(&[path]).unwrap();
+        let bitmap = thumbnail_bitmap(&preview).unwrap();
+        let mut info = DIBSECTION::default();
+        let read = unsafe {
+            GetObjectW(
+                bitmap.0.into(),
+                std::mem::size_of::<DIBSECTION>() as i32,
+                Some((&mut info as *mut DIBSECTION).cast()),
+            )
+        };
+        assert!(read > 0);
+        assert_eq!((info.dsBm.bmWidth, info.dsBm.bmHeight), (80, 120));
+        let bytes = unsafe {
+            std::slice::from_raw_parts(info.dsBm.bmBits.cast::<u8>(), preview.rgba.len())
+        };
+        assert_eq!(
+            &bytes[(20 * 80 + 20) * 4..][..4],
+            &[90, 30, 10, 255],
+            "top-down native BGRA retains original color"
+        );
+        thumbnail_image(&object, &preview).unwrap();
+        let format = FORMATETC {
+            cfFormat: unsafe {
+                windows::Win32::System::DataExchange::RegisterClipboardFormatW(w!("DragImageBits"))
+            } as u16,
+            dwAspect: DVASPECT_CONTENT.0,
+            tymed: TYMED_HGLOBAL.0 as u32,
+            ..Default::default()
+        };
+        let mut medium = unsafe { object.GetData(&format) }
+            .expect("Shell stores thumbnail pixels in the drag data object");
+        unsafe {
+            ReleaseStgMedium(&mut medium);
+        }
+    }
+
     #[test]
     fn shell_paths_preserve_unc_server_and_share() {
         assert_eq!(

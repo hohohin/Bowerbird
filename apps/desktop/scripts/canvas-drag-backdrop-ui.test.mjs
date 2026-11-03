@@ -41,6 +41,14 @@ async function scenario(name, test) {
 
 try {
   await mkdir('.tmp/canvas-drag-backdrop', { recursive: true });
+  await scenario('confirmed holographic HUD is readable and respects reduced motion', async page => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.evaluate(() => window.begin());
+    await page.waitForFunction(() => window.nativeCalls().length === 1);
+    assert.equal(await page.getByRole('status').filter({hasText:'拖到其他应用中使用'}).count(), 1);
+    assert.equal(await overlay(page).evaluate(el => getComputedStyle(el).animationName), 'none');
+    await finish(page);
+  });
   await scenario('canvas paints the full-window backdrop for two frames before native start', async page => {
     const now = new Date(); await page.clock.install({ time: now }); await page.clock.pauseAt(now);
     const before = await page.locator('#fixed-reference').boundingBox();

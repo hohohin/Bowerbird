@@ -1,13 +1,14 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { getDragAssetName, getDragAssetPreview, holdNativeDragAssets } from "./dragPayload";
 import { notifyError } from "./notify";
+import { mountExternalDragHud } from "./externalDragHud";
 import "./externalDrag.css";
 
 export const EXTERNAL_DRAG_ENDED = "bowerbird:external-drag-ended";
 
 /** The backend resolves registered IDs to originals; no temporary copies or renderer paths. */
 export async function startExternalDrag(assetIds: string[], mode: "hold" | "pickup",
-  { source = "library", signal }: { source?: "library" | "canvas"; signal?: AbortSignal } = {}): Promise<void> {
+  { source = "library", signal, sourceRect }: { source?: "library" | "canvas"; signal?: AbortSignal; sourceRect?: DOMRect } = {}): Promise<void> {
   if (!isTauri() || signal?.aborted) return;
   const ids = [...new Set(assetIds.filter(Boolean))];
   const release = holdNativeDragAssets(ids, getDragAssetName() ?? undefined, getDragAssetPreview());
@@ -17,12 +18,14 @@ export async function startExternalDrag(assetIds: string[], mode: "hold" | "pick
   let preparationCancelled = false;
   let invoked = false;
   let backdrop: HTMLDivElement | null = null;
+  let unmountHud: (() => void) | undefined;
   let cancelPaint: (() => void) | undefined;
   const blockInternalDrop = (event: DragEvent) => {
     event.preventDefault(); event.stopImmediatePropagation();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
   };
   const clearAppearance = () => {
+    unmountHud?.(); unmountHud = undefined;
     backdrop?.remove(); backdrop = null;
     window.removeEventListener("dragover", blockInternalDrop, true);
     window.removeEventListener("drop", blockInternalDrop, true);
@@ -58,8 +61,9 @@ export async function startExternalDrag(assetIds: string[], mode: "hold" | "pick
       window.addEventListener("drop", blockInternalDrop, true);
       backdrop = document.createElement("div");
       backdrop.className = "external-drag-backdrop";
-      backdrop.setAttribute("aria-hidden", "true");
+
       document.body.append(backdrop);
+      unmountHud = mountExternalDragHud(backdrop, sourceRect);
       await new Promise<void>(resolve => {
         let first = 0, second = 0;
         const done = () => {
@@ -75,7 +79,7 @@ export async function startExternalDrag(assetIds: string[], mode: "hold" | "pick
     }
     if (cancelled || signal?.aborted) return;
     invoked = true;
-    await invoke<{ dropped: boolean }>("start_external_drag", { assetIds: ids, mode, sessionId });
+    await invoke<{ dropped: boolean }>("start_external_drag", { assetIds: ids, mode, sessionId, lightTheme: document.documentElement.dataset.theme === "light" });
   } catch (error) {
     if (!preparationCancelled) notifyError(error, "无法拖出素材，请重试");
   } finally {

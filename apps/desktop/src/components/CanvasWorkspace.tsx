@@ -2789,7 +2789,8 @@ export function CanvasWorkspace({
       setActiveDragId(null); setGuides([]); setHover(null); setFolderDropTargetId(null);
       element.releasePointerCapture(pointerId);
       const controller = new AbortController(); canvasExportRef.current = controller;
-      void startExternalDrag(ids, "hold", { source: "canvas", signal: controller.signal }).finally(() => {
+      void startExternalDrag(ids, "hold", { source: "canvas", signal: controller.signal,
+        sourceRect: (element.querySelector("img, video") ?? element).getBoundingClientRect() }).finally(() => {
         if (canvasExportRef.current === controller) canvasExportRef.current = null;
       });
     });

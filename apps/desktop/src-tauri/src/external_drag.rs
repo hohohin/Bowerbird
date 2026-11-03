@@ -68,3 +68,5 @@ pub mod session;
 #[cfg(windows)]
 #[path = "external_drag/windows.rs"]
 pub mod windows;
+#[path = "external_drag/preview.rs"]
+pub mod preview;

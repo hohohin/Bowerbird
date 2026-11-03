@@ -2,6 +2,14 @@
 
 画布长按与整窗模糊交互已于 2026-11-01 通过独立网页确认，替代先前右键抓起方案；产品约定以 `PROJECT.md` 为准。本页记录原生实现和验收边界，源码接入不代表安装包更新。
 
+## 2026-11-03：全息反馈与系统缩略图
+
+用户已确认透明投影方案并授权实装。正式桥挂载 `externalDragHud.tsx`，240ms opacity 渐显固定 6px 模糊，源素材轮廓按屏幕实际尺寸定位；提示无底板，减少动态效果时直接显示终态。原两帧绘制、取消 ACK、同窗拦截与子 WebView 显隐契约保留。
+
+后端在 worker 中读取首项素材登记的独立 `thumb_path`，不生成缓存或读取大原件；输入最多 8 MiB、4096×4096／64 MiB 解码预算，输出上限 144×180 逻辑像素并支持 1–3 倍 DPI。无缓存、损坏或超限回退系统图标。拖影 RGBA 保留原比例与透明度，贴边短线／方点，无底板；文件交付仍是原件。Windows 使用顶向下 BGRA DIB 交给 Shell，交接成功后不再保留已由 Shell 消费的 HBITMAP；Mac 将 RGBA 复制进 NSBitmapImageRep，再交给 NSDraggingItem。
+
+验证：18 项原生、17 项正式桥及正式 Canvas 回归通过，包含实际 Shell 缩略图数据写入；Mac 编译／真机、真实跨应用视觉仍待验，未更新安装包。详细失败／修复与类型检查边界见 [日志](../project_logs/2026-11-03-external-drag-hud.md)。
+
 ## 画布长按
 
 - 原地按住鼠标主键 600ms 后，将普通画布手势交给系统文件拖动；保持按住移到其他应用，松手投放，Esc 取消。按下后达到既有 4px 屏幕移动阈值立即走画布移动；即使回到原位或途中停顿，本次按压也不再触发长按。
@@ -13,7 +21,7 @@
 ## 接口与原件
 
 - `start_external_drag({ assetIds, mode, sessionId })` 仅接受主 WebView 调用。素材库和画布长按均使用 `hold`；后台保留旧 `pickup` 协议以兼容既有调用，正式画布已无该入口。每次 sessionId 独立。
-- 前端 `startExternalDrag(ids, mode, { source, signal })` 默认来源为素材库，保持立即起拖；画布来源增加模糊、绘制等待、同窗投递拦截及生命周期取消。
+- 前端 `startExternalDrag(ids, mode, { source, signal, sourceRect })` 默认来源为素材库，保持立即起拖；画布来源增加模糊、绘制等待、同窗投递拦截及生命周期取消。
 - `cancel_pending_external_drag` 返回 bool：true 确认该请求不会再进入原生拖动，可提前恢复界面；false 表示已经交给系统，模糊持续到原生完成。只取消对应尚未开始的手势，支持取消先到、启动后到；不干预已交给系统的拖放。确认取消后不再吞掉新操作的 Esc，不弹出旧准备请求迟到的错误；载荷锁仍等待原启动调用终态释放。
 - `core/external_drag.rs` 从数据库解析所选素材的当前原件，保留选择顺序、合并重复路径。失效身份、缺失原件或非法文件拒绝整个拖动。
 - 连接分身使用现有 Asset ID，因此输出原件，不输出 `.bowerbird` 描述文件。缩略图不作为交付内容。解析不解码媒体、不复制、不移动或删除原文件。
@@ -26,7 +34,7 @@
 
 从 `fs::canonicalize` 得到的 `\\?\` 路径不能直接交给 Shell。本次实际复现 E_INVALIDARG 后，按 `std::path::Prefix` 转换磁盘及 UNC 共享路径，不使用丢失 Unicode 或破坏共享前缀的字符串截取。起拖前最后一次检查实际鼠标按钮，避免准备期间已经松手后误投递。
 
-拖影取系统小图标，不解码原始图片、视频或音频。OLE、PIDL、位图均按作用域释放。
+拖影优先使用登记的缓存缩略图；无缓存保留系统小图标。不在起拖时解码原始图片、视频或音频。OLE、PIDL 按作用域释放，位图在 Shell 初始化成功时转交所有权，失败时本地释放。
 
 依据：[QueryContinueDrag](https://learn.microsoft.com/en-us/windows/win32/api/oleidl/nf-oleidl-idropsource-querycontinuedrag)、[DoDragDrop](https://learn.microsoft.com/en-us/windows/win32/api/ole2/nf-ole2-dodragdrop)。当前 Wry 的普通窗口宿主不采用 CompositionController 专属 DragStarting 接口。
 
