@@ -53,7 +53,7 @@ try {
   await hold(); await page.mouse.up(); await page.waitForTimeout(700); assert.equal(await blurred(), false, 'release before threshold cancels the timer');
   const library = page.locator('[data-library-asset="video"]'); await move(await center(library)); await page.mouse.down();
   await page.mouse.move((await center(library)).x + 20, (await center(library)).y);
-  await page.locator('[data-carrying="library"]').waitFor(); assert.equal(await blurred(), false, 'ordinary library drag never blurs the app');
+  await page.locator('[data-carrying="library"]').waitFor(); assert.equal(await blurred(), true, 'library drag shares the outgoing HUD');
   await move(await center(page.locator('.receiver-target'))); await page.mouse.up(); await page.locator('[data-received="video"]').waitFor();
   await page.getByRole('button', { name: '切换明暗主题', exact: true }).click();
   await page.waitForTimeout(200);

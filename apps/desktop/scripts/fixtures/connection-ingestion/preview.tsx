@@ -22,6 +22,9 @@ w.__TAURI_INTERNALS__ = {
     }
     if (command === "import_files") return args.sources.map((path: string) => ({ id: path, name: path.split(/[\\/]/).pop(), store_path: path, source: "external" }));
     if (command === "import_image_bytes") return { id: "first-save", name: args.fileName, source: "clipboard" };
+    if (command === "video_import_begin") return "loose-upload";
+    if (command === "video_import_append") return null;
+    if (command === "video_import_finish") return { id: "collected-file", name: "drop.png", source: "imported", store_path: "/BowerbirdLibrary/收集箱/drop.png" };
     if (command === "create_material_references") return null;
     if (command === "external_files_media") return "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="red"/></svg>');
     throw new Error("Unexpected IPC: " + command);

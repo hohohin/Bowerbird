@@ -49,8 +49,8 @@ export function FileDropImport() {
       const project = useStore.getState().projects.find(project => project.id === id);
       const collectionName = targetCollection(event)?.dataset.fileImportCollectionName;
       const canvas = event.target instanceof Element && event.target.closest("[data-canvas-stage]");
-      setHint(canvas ? "松开放到画布当前位置" : collectionName ? `松开连接到集合「${collectionName}」`
-        : project ? `松开连接到「${project.name}」素材库` : "松开连接到全局素材库");
+      setHint(canvas ? "松开放到画布当前位置" : collectionName ? `松开添加到集合「${collectionName}」`
+        : project ? `松开添加到「${project.name}」素材库` : "松开添加到全局素材库");
     }
     function clear() { setHint(null); }
     function leave(event: DragEvent) {
@@ -87,7 +87,7 @@ export function FileDropImport() {
             if (collectionId) await folderConnections.references([asset.id], collectionId);
             if (place) await place(asset);
             imported.push(asset);
-          } catch (error) { console.error("File connection failed", file.name, error); failures.push(`${ingested ? "已加入素材库，但放置未完成。" : ""}${userErrorMessage(error, "连接未完成，请检查文件是否可用后重试。")}`); }
+          } catch (error) { console.error("File intake failed", file.name, error); failures.push(`${ingested ? "已加入素材库，但放置未完成。" : ""}${userErrorMessage(error, "添加未完成，请检查文件是否可用后重试。")}`); }
         }
         if (imported.length) {
           const current = useStore.getState();
@@ -97,10 +97,10 @@ export function FileDropImport() {
             current.setSearchQuery(""); current.setSmartFilter(null); current.setColorFilter(null);
             showImportedMedia(imported, libraryMode);
           }
-          notifySuccess(`已连接 ${imported.length} 个素材`);
+          notifySuccess(`已添加 ${imported.length} 个素材`);
         }
         if (failures.length) notifyError(null, `${failures.length > 1 ? `${failures.length} 项未完成。` : ""}${failures[0]}`);
-      } catch (error) { notifyError(error, "素材连接失败"); }
+      } catch (error) { notifyError(error, "素材添加失败"); }
       finally { if (alive) setPending(count => count - 1); }
     }
     window.addEventListener("dragenter", over, true);
@@ -123,6 +123,6 @@ export function FileDropImport() {
     {hint && <div className="pointer-events-none fixed inset-0 z-[250] flex items-center justify-center bg-accent/10 ring-2 ring-inset ring-accent" data-file-drop-overlay>
       <div role="status" className="file-drop-feedback rounded-full border border-accent/30 bg-panel px-5 py-3 text-sm text-ink shadow-panel">{hint}</div>
     </div>}
-    {pending > 0 && !hint && <div role="status" className="file-drop-feedback pointer-events-none fixed right-5 top-16 z-[250] rounded-full border border-edge bg-panel px-4 py-2 text-xs text-ink">正在连接素材…</div>}
+    {pending > 0 && !hint && <div role="status" className="file-drop-feedback pointer-events-none fixed right-5 top-16 z-[250] rounded-full border border-edge bg-panel px-4 py-2 text-xs text-ink">正在添加素材…</div>}
   </>;
 }

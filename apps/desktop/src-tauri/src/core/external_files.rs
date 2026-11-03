@@ -239,6 +239,8 @@ impl Database {
     pub fn link_external_to_library(&self, id: &str) -> AppResult<Asset> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
+        tx.execute("INSERT OR IGNORE INTO independent_library_assets(asset_id) SELECT id FROM assets WHERE id=?1", [id])?;
+        tx.execute("DELETE FROM disconnected_library_assets WHERE asset_id=?1", [id])?;
         tx.execute("UPDATE external_assets SET library_member=1 WHERE asset_id=?1", [id])?;
         tx.execute("UPDATE assets SET library_hidden=0 WHERE id=?1", [id])?;
         tx.commit()?;

@@ -16,7 +16,7 @@ function readDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-/** Existing files need their original path; only bitmap-only paste creates an original. */
+/** Loose drops use the shared inbox; an accessible connected path can stay in place. */
 export async function importDroppedMedia(file: File, projectId: string | null, source = "imported"): Promise<Asset> {
   let path = (file as File & { path?: string }).path;
   if (!path && source === "clipboard") {
@@ -28,14 +28,28 @@ export async function importDroppedMedia(file: File, projectId: string | null, s
     }
   }
   if (path) {
-    const [asset] = await api.importFiles([path], projectId);
+    const [asset] = await api.importFiles([path], projectId, source === "imported");
     if (!asset) throw new Error("未能连接原文件，请检查文件是否可访问");
     return asset;
   }
-  if (source !== "clipboard") throw new Error("无法取得原文件位置，请使用「建立连接」选择素材文件夹");
-  if (!file.type.startsWith("image/")) throw new Error("请选择素材文件夹建立连接");
+  if (source !== "clipboard" || !file.type.startsWith("image/")) return receiveDroppedFile(file, projectId);
+
   if (file.size > 50 * 1024 * 1024) throw new Error("图片不能超过 50 MB");
   return api.importImageBytes({ dataUrl: await readDataUrl(file), fileName: file.name || "clipboard.png", projectId, source: "clipboard" });
+}
+
+async function receiveDroppedFile(file: File, projectId: string | null): Promise<Asset> {
+  const uploadId = await invoke<string>("video_import_begin", { fileName: file.name, size: file.size, projectId });
+  try {
+    for (let offset = 0; offset < file.size; offset += 1024 * 1024) {
+      const dataUrl = await readDataUrl(file.slice(offset, offset + 1024 * 1024));
+      await invoke("video_import_append", { uploadId, offset, data: dataUrl.slice(dataUrl.indexOf(",") + 1) });
+    }
+    return await invoke<Asset>("video_import_finish", { uploadId });
+  } catch (error) {
+    await invoke("video_import_cancel", { uploadId }).catch(() => {});
+    throw error;
+  }
 }
 
 export async function prepareMediaImport(projectId: string | null, revision: number) {

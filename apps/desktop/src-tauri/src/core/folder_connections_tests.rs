@@ -489,7 +489,7 @@ fn cached_reference_tracks_changed_original_outside_connected_roots() {
     f.db.create_material_references(&f.paths, &[original.asset_id.clone()], &target)
         .unwrap();
     f.db.scan_connection(&f.paths, &target).unwrap();
-    f.db.disconnect_directory(&source).unwrap();
+    f.db.disconnect_directory(&f.paths, &source).unwrap();
     image::RgbImage::from_pixel(11, 6, image::Rgb([90, 70, 25]))
         .save(f.source.join("one.png"))
         .unwrap();
@@ -578,7 +578,7 @@ fn cached_entries_survive_offline_and_disconnect_does_not_delete_assets() {
         assert_eq!(f.entries(&root)[0].id, original.id);
         assert_eq!(f.entries(&root)[0].asset_id, original.asset_id);
     }
-    f.db.disconnect_directory(&root).unwrap();
+    f.db.disconnect_directory(&f.paths, &root).unwrap();
     assert!(moved.join("one.png").is_file());
     assert!(f.db.get_asset(&original.asset_id).unwrap().is_some());
 }
@@ -592,11 +592,11 @@ fn disconnected_child_can_be_removed_without_deleting_originals_or_assets() {
     let child = folders.iter().find(|v| v.name == "child").unwrap();
     let nested = folders.iter().find(|v| v.name == "nested").unwrap();
     let asset = f.entries(&nested.id)[0].asset_id.clone();
-    assert!(f.db.disconnect_directory(&child.id).is_err());
+    assert!(f.db.disconnect_directory(&f.paths, &child.id).is_err());
     let offline = f.target.join("offline");
     fs::rename(f.source.join("child"), &offline).unwrap();
     f.db.scan_connection(&f.paths, &root).unwrap();
-    f.db.disconnect_directory(&child.id).unwrap();
+    f.db.disconnect_directory(&f.paths, &child.id).unwrap();
     f.db.scan_connection(&f.paths, &root).unwrap();
     assert_eq!(f.db.connection_folders(None, None).unwrap().len(), 1);
     assert!(f.db.get_asset(&asset).unwrap().is_some());
@@ -613,7 +613,7 @@ fn disconnected_child_rechecks_disk_before_removing_cached_collection() {
     fs::rename(f.source.join("child"), &offline).unwrap();
     f.db.scan_connection(&f.paths, &root).unwrap();
     fs::rename(&offline, f.source.join("child")).unwrap();
-    assert!(f.db.disconnect_directory(&child.id).is_err());
+    assert!(f.db.disconnect_directory(&f.paths, &child.id).is_err());
     assert!(f.db.connected_folder(&child.id).is_ok());
 }
 #[test]
@@ -1187,4 +1187,168 @@ fn refresh_preserves_project_removal_until_explicit_reconnect() {
     );
     assert_eq!(project_entries().len(), 2);
     assert!(project_entries().contains(&original.id));
+}
+#[test]
+fn disconnect_hides_global_catalog_but_keeps_original_identity_and_project_membership() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let bytes = fs::read(&entry.path).unwrap();
+    f.db.create_project("kept-project", "project", f.source.to_str().unwrap(), "project", "user").unwrap();
+    f.db.add_assets_to_project("kept-project", &[entry.asset_id.clone()]).unwrap();
+    f.db.disconnect_directory(&f.paths, &root).unwrap();
+    assert!(f.db.material_catalog_assets("tags", None, None).unwrap().is_empty(), "disconnected source must leave global catalog");
+    assert_eq!(f.db.material_catalog_assets("tags", None, Some("kept-project")).unwrap().len(), 1, "explicit project membership remains available there");
+    assert!(f.db.list_assets(None, None, 100, 0).unwrap().is_empty());
+    assert_eq!(f.db.list_assets(None, Some("kept-project"), 100, 0).unwrap().len(), 1);
+    f.db.conn.lock().unwrap().execute("UPDATE assets SET library_hidden=0 WHERE id=?1", [&entry.asset_id]).unwrap();
+    assert!(f.db.material_catalog_assets("tags", None, None).unwrap().is_empty(), "last canvas removal must not revive global membership");
+    assert_eq!(f.db.get_asset(&entry.asset_id).unwrap().unwrap().store_path.as_deref(), Some(entry.path.as_str()));
+    assert_eq!(fs::read(&entry.path).unwrap(), bytes);
+    let reconnected = f.connect(&f.source);
+    assert_eq!(f.entries(&reconnected)[0].asset_id, entry.asset_id);
+    assert_eq!(f.db.material_catalog_assets("tags", None, None).unwrap().len(), 1);
+}
+
+#[test]
+fn disconnect_preserves_other_connections_and_explicitly_collected_originals() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let target = f.connect(&f.target);
+    f.db.create_material_references(&f.paths, &[entry.asset_id.clone()], &target).unwrap();
+    f.db.disconnect_directory(&f.paths, &root).unwrap();
+    assert_eq!(f.db.material_catalog_assets("tags", None, None).unwrap().len(), 1);
+    f.db.link_external_to_library(&entry.asset_id).unwrap();
+    f.db.disconnect_directory(&f.paths, &target).unwrap();
+    assert_eq!(f.db.material_catalog_assets("tags", None, None).unwrap().len(), 1, "independent collection remains after last directory disconnects");
+}
+
+#[test]
+fn disconnect_filters_all_catalog_reads_and_retains_metadata_until_reconnected() {
+    use crate::core::catalog_browser::CatalogFilter;
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let tag = f.db.get_or_create_tag("disconnect-tag", "manual").unwrap();
+    f.db.set_asset_tags(&entry.asset_id, &[tag.clone()], "manual").unwrap();
+    f.db.conn.lock().unwrap().execute("INSERT INTO analyses(id,asset_id,kind,payload) VALUES('disconnect-analysis',?1,'caption','kept caption')", [&entry.asset_id]).unwrap();
+    let filter = CatalogFilter { kind: "tags".into(), media: "images".into(), ..Default::default() };
+    assert_eq!(f.db.catalog_page(&filter, 0, 50).unwrap().len(), 1);
+    assert_eq!(f.db.search_assets("one", None, 10).unwrap().len(), 1);
+    f.db.disconnect_directory(&f.paths, &root).unwrap();
+    assert_eq!(f.db.catalog_overview(&filter, None).unwrap().total, 0);
+    assert!(f.db.catalog_page(&filter, 0, 50).unwrap().is_empty());
+    assert!(f.db.catalog_ids(&filter, 0, 50).unwrap().is_empty());
+    assert!(f.db.catalog_graph_page(&filter, None, 50).unwrap().assets.is_empty());
+    assert_eq!(f.db.count_assets(None).unwrap(), 0);
+    assert!(f.db.search_assets("one", None, 10).unwrap().is_empty());
+    for query in ["tag:disconnect-tag", "source:!generated", "ext:png"] {
+        assert!(f.db.list_assets_smart(query, None, 50, 0).unwrap().is_empty(), "{query}");
+    }
+    assert!(f.db.palette_overview(None).unwrap().is_empty());
+    assert_eq!(f.db.list_tags_with_count("all", None).unwrap().iter().find(|t| t.id == tag).unwrap().count, 0);
+    assert_eq!(f.db.list_asset_tags(&entry.asset_id).unwrap().len(), 1);
+    let caption: String = f.db.conn.lock().unwrap().query_row("SELECT payload FROM analyses WHERE id='disconnect-analysis'", [], |r| r.get(0)).unwrap();
+    assert_eq!(caption, "kept caption");
+    // Reading an original for an existing canvas must not silently collect it again.
+    f.db.index_external(&f.paths, Path::new(&entry.path)).unwrap();
+    assert!(f.db.catalog_page(&filter, 0, 50).unwrap().is_empty());
+    f.db.link_external_to_library(&entry.asset_id).unwrap();
+    assert_eq!(f.db.catalog_page(&filter, 0, 50).unwrap().len(), 1);
+    let root = f.connect(&f.source);
+    f.db.disconnect_directory(&f.paths, &root).unwrap();
+    assert_eq!(f.db.catalog_page(&filter, 0, 50).unwrap().len(), 1, "explicitly collected identity keeps its membership");
+}
+
+#[test]
+fn disconnect_visibility_and_directory_removal_commit_together() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    f.db.conn.lock().unwrap().execute_batch("CREATE TEMP TRIGGER fail_disconnect BEFORE INSERT ON disconnected_library_assets BEGIN SELECT RAISE(FAIL,'injected'); END;").unwrap();
+    assert!(f.db.disconnect_directory(&f.paths, &root).is_err());
+    assert_eq!(f.entries(&root).len(), 1);
+    assert_eq!(f.db.material_catalog_assets("tags", None, None).unwrap().len(), 1);
+    assert!(f.source.join("one.png").is_file());
+}
+
+#[test]
+fn disconnect_visibility_migration_0051_preserves_v50_records_and_independent_evidence() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("migration.db");
+    let db = Database::open(&path).unwrap();
+    crate::db::migrations::migrations().to_version(&mut db.conn.lock().unwrap(), 50).unwrap();
+    db.conn.lock().unwrap().execute_batch(
+        "INSERT INTO assets(id,name,ext,source,store_path,library_hidden,name_manual) VALUES('connected','手动命名','png','external','original.png',0,1),('independent','独立素材','png','external','other.png',0,0);
+         INSERT INTO external_assets(asset_id,fingerprint,library_member) VALUES('connected','hash-1',1),('independent','hash-2',1);
+         INSERT INTO connected_roots(id,path) VALUES('root','folder');
+         INSERT INTO connected_folders(id,root_id,path,name) VALUES('root','root','folder','folder');
+         INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference) VALUES('entry','root','connected','original.png','original.png',0);
+         INSERT INTO tags(id,name) VALUES('tag','保留标签');
+         INSERT INTO asset_tags(asset_id,tag_id) VALUES('connected','tag');
+         INSERT INTO analyses(id,asset_id,kind,payload) VALUES('analysis','connected','caption','retained');"
+    ).unwrap();
+    let before = serde_json::to_value(db.get_asset("connected").unwrap()).unwrap();
+    db.migrate().unwrap();
+    db.disconnect_directory(&LibraryPaths::init(temp.path().join("data")).unwrap(), "root").unwrap();
+    drop(db);
+    for _ in 0..2 {
+        let db = Database::open(&path).unwrap();
+        db.migrate().unwrap();
+        assert_eq!(serde_json::to_value(db.get_asset("connected").unwrap()).unwrap(), before);
+        let catalog = db.material_catalog_assets("tags", None, None).unwrap();
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].id, "independent");
+        assert_eq!(db.list_asset_tags("connected").unwrap().len(), 1);
+        let conn = db.conn.lock().unwrap();
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM independent_library_assets", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1, "upgrade must not infer independent membership for connected assets");
+        let payload: String = conn.query_row("SELECT payload FROM analyses WHERE id='analysis'", [], |r| r.get(0)).unwrap();
+        assert_eq!(payload, "retained");
+    }
+}
+
+#[test]
+fn disconnect_visibility_survives_last_canvas_instance_removal() {
+    use crate::core::{creative_session_contract::{CreativeNodeKind, CreativeNodeRole}, project_canvas::NewCanvasNode};
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    f.db.create_project("canvas-project", "project", "blank:project", "project", "blank").unwrap();
+    f.db.ensure_project_canvas("canvas-project").unwrap();
+    f.db.create_canvas_node(&NewCanvasNode {
+        id: "kept-node".into(), project_id: "canvas-project".into(), thread_id: None,
+        kind: CreativeNodeKind::Asset, asset_id: Some(entry.asset_id.clone()), role: Some(CreativeNodeRole::Reference),
+        payload_json: r#"{"schema_version":1,"snapshot":{"name":"one"}}"#.into(),
+        x: 10., y: 20., width: 100., height: 80., z_index: 1, position_locked: false,
+    }).unwrap();
+    let nodes = serde_json::to_value(f.db.list_canvas_nodes("canvas-project").unwrap()).unwrap();
+    f.db.disconnect_directory(&f.paths, &root).unwrap();
+    assert_eq!(serde_json::to_value(f.db.list_canvas_nodes("canvas-project").unwrap()).unwrap(), nodes);
+    assert!(f.db.material_catalog_assets("tags", None, None).unwrap().is_empty(), "canvas references are not global membership");
+    f.db.remove_canvas_node("kept-node").unwrap();
+    assert!(f.db.material_catalog_assets("tags", None, None).unwrap().is_empty());
+    assert!(f.db.list_assets(None, None, 10, 0).unwrap().is_empty());
+    assert!(Path::new(&entry.path).is_file());
+}
+
+#[test]
+fn disconnect_keeps_existing_workspace_inbox_original_without_independent_marker() {
+    use crate::core::file_workspace::FileWorkspace;
+    use std::sync::Arc;
+    let mut f = Fixture::new();
+    let workspace = f._temp.path().join("BowerbirdLibrary");
+    f.paths.files = Some(Arc::new(FileWorkspace::open(f._temp.path().join("files.json"), workspace.clone()).unwrap()));
+    f.paths.files.as_ref().unwrap().ensure_root().unwrap();
+    let inbox = workspace.join("收集箱");
+    fs::create_dir_all(&inbox).unwrap();
+    fs::copy(f.source.join("one.png"), inbox.join("kept.png")).unwrap();
+    let root = f.connect(&inbox);
+    let entry = f.entries(&root).pop().unwrap();
+    assert!(f.db.is_external_asset(&entry.asset_id).unwrap(), "managed folder scans still use external indexing");
+    let independent: i64 = f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM independent_library_assets WHERE asset_id=?1", [&entry.asset_id], |r| r.get(0)).unwrap();
+    assert_eq!(independent, 0, "legacy workspace original has no explicit collection fact");
+    f.db.disconnect_directory(&f.paths, &root).unwrap();
+    assert_eq!(f.db.material_catalog_assets("tags", None, None).unwrap().len(), 1);
+    assert!(Path::new(&entry.path).is_file());
 }

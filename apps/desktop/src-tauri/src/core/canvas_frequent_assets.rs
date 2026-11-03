@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::core::library::{asset_from_row, Asset};
-use crate::core::material_catalog::VISIBLE;
+use crate::core::material_catalog::catalog_visibility;
 use crate::core::settings::SettingsState;
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
@@ -58,10 +58,11 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         // Scope only filters the shared lists. Reference counts remain global.
         // JSON parameters avoid a variable-count limit for large manual collections.
+        let visible = catalog_visibility(false);
         let mut stmt = conn.prepare(&format!(
-            "SELECT a.*, {VISIBLE} AS frequent_visible FROM assets a
+            "SELECT a.*, {visible} AS frequent_visible FROM assets a
              WHERE (:project IS NULL OR a.id IN ({PROJECT_ASSET_IDS})) AND (
-                ({VISIBLE} AND a.reference_count>:threshold AND a.id NOT IN (SELECT value FROM json_each(:excluded)))
+                ({visible} AND a.reference_count>:threshold AND a.id NOT IN (SELECT value FROM json_each(:excluded)))
                 OR a.id IN (SELECT value FROM json_each(:pinned))
              ) ORDER BY a.reference_count DESC, a.created_at DESC, a.id ASC",
         ))?;

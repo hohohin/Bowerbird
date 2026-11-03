@@ -24,9 +24,17 @@ export async function startExternalDrag(assetIds: string[], mode: "hold" | "pick
     event.preventDefault(); event.stopImmediatePropagation();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
   };
+  // Keep library-to-canvas/collection targets readable while preserving native ownership.
+  const showInternalTargets = () => { if (backdrop) backdrop.style.visibility = "hidden"; };
+  const leaveInternalTargets = (event: DragEvent) => {
+    if (!event.relatedTarget && backdrop) backdrop.style.visibility = "";
+  };
   const clearAppearance = () => {
     unmountHud?.(); unmountHud = undefined;
     backdrop?.remove(); backdrop = null;
+    window.removeEventListener("dragenter", showInternalTargets, true);
+    window.removeEventListener("dragover", showInternalTargets, true);
+    window.removeEventListener("dragleave", leaveInternalTargets, true);
     window.removeEventListener("dragover", blockInternalDrop, true);
     window.removeEventListener("drop", blockInternalDrop, true);
   };
@@ -43,7 +51,7 @@ export async function startExternalDrag(assetIds: string[], mode: "hold" | "pick
   };
   const escape = (event: KeyboardEvent) => {
     if (event.key !== "Escape") return;
-    if (source === "canvas" && backdrop) { event.preventDefault(); event.stopImmediatePropagation(); }
+    if (backdrop) { event.preventDefault(); event.stopImmediatePropagation(); }
     cancelPending();
   };
   window.addEventListener("keydown", escape, true);
@@ -59,24 +67,29 @@ export async function startExternalDrag(assetIds: string[], mode: "hold" | "pick
     if (source === "canvas") {
       window.addEventListener("dragover", blockInternalDrop, true);
       window.addEventListener("drop", blockInternalDrop, true);
-      backdrop = document.createElement("div");
-      backdrop.className = "external-drag-backdrop";
-
-      document.body.append(backdrop);
-      unmountHud = mountExternalDragHud(backdrop, sourceRect);
-      await new Promise<void>(resolve => {
-        let first = 0, second = 0;
-        const done = () => {
-          cancelAnimationFrame(first); cancelAnimationFrame(second);
-          clearTimeout(timeout); cancelPaint = undefined; resolve();
-        };
-        // A hidden WebView may suspend rAF. Cancel rather than enter native drag
-        // before the promised appearance has had a chance to paint.
-        const timeout = window.setTimeout(cancelPending, 150);
-        cancelPaint = done;
-        first = requestAnimationFrame(() => { second = requestAnimationFrame(done); });
-      });
     }
+    backdrop = document.createElement("div");
+    backdrop.className = "external-drag-backdrop";
+
+    document.body.append(backdrop);
+    unmountHud = mountExternalDragHud(backdrop, sourceRect);
+    if (source === "library") {
+      window.addEventListener("dragenter", showInternalTargets, true);
+      window.addEventListener("dragover", showInternalTargets, true);
+      window.addEventListener("dragleave", leaveInternalTargets, true);
+    }
+    await new Promise<void>(resolve => {
+      let first = 0, second = 0;
+      const done = () => {
+        cancelAnimationFrame(first); cancelAnimationFrame(second);
+        clearTimeout(timeout); cancelPaint = undefined; resolve();
+      };
+      // A hidden WebView may suspend rAF. Cancel rather than enter native drag
+      // before the promised appearance has had a chance to paint.
+      const timeout = window.setTimeout(cancelPending, 150);
+      cancelPaint = done;
+      first = requestAnimationFrame(() => { second = requestAnimationFrame(done); });
+    });
     if (cancelled || signal?.aborted) return;
     invoked = true;
     await invoke<{ dropped: boolean }>("start_external_drag", { assetIds: ids, mode, sessionId, lightTheme: document.documentElement.dataset.theme === "light" });

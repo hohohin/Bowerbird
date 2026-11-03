@@ -12,12 +12,17 @@ const errors = []; page.on('pageerror', error => errors.push(error.message));
 const remote = [];
 await page.route('**/*', route => { if (new URL(route.request().url()).hostname === '127.0.0.1') return route.continue(); remote.push(route.request().url()); return route.abort(); });
 const nativeCalls = () => page.evaluate(() => window.calls.filter(call => call.command === 'start_external_drag'));
-const request = async () => { const { sessionId, ...args } = (await nativeCalls()).at(-1).args; assert.match(sessionId, /^[0-9a-f-]{36}$/); return args; };
+const request = async () => { const { sessionId, lightTheme, ...args } = (await nativeCalls()).at(-1).args; assert.match(sessionId, /^[0-9a-f-]{36}$/); assert.equal(typeof lightTheme, "boolean"); return args; };
 const payload = () => page.evaluate(() => window.payload());
-const drag = (id = 'image') => page.locator(`.folder-media-card[data-asset-id="${id}"]`).evaluate(element => {
+const drag = async (id = 'image') => {
+  const before = await page.evaluate(() => ({ count: window.calls.filter(call => call.command === 'start_external_drag').length, active: !!document.querySelector('.external-drag-backdrop'), desktop: window.isTauri }));
+  const result = await page.locator(`.folder-media-card[data-asset-id="${id}"]`).evaluate(element => {
   const dataTransfer = new DataTransfer(); const event = new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer }); element.dispatchEvent(event);
   return { prevented: event.defaultPrevented, text: dataTransfer.getData('text/plain') };
 });
+  if (before.desktop && !before.active) await page.waitForFunction(count => window.calls.filter(call => call.command === 'start_external_drag').length > count, before.count);
+  return result;
+};
 const finish = async (dropped = false) => { await page.evaluate(dropped => window.resolveDrag({ dropped }), dropped); await page.waitForFunction(() => window.payload() === null); };
 try {
   await mkdir('.tmp/external-drag-ui', { recursive: true });
@@ -25,6 +30,11 @@ try {
   await page.locator('[data-asset-id="image"]').waitFor();
   assert.equal((await drag()).prevented, true, 'desktop library gesture starts native file drag');
   assert.deepEqual(await request(), { assetIds: ['image', 'offscreen'], mode: 'hold' });
+  await page.getByRole('status').filter({hasText:'拖到其他应用中使用'}).waitFor();
+  assert.equal(await page.locator('.external-drag-source').count(), 1, 'library card supplies its source bounds');
+  await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
+  await page.waitForTimeout(500);
+  await page.screenshot({path:'.tmp/external-drag-ui/library-hud-dark.png'});
   await page.locator('[data-asset-id="image"]').dispatchEvent('dragend');
   await page.evaluate(() => window.clearPayload());
   assert.deepEqual(await payload(), ['image', 'offscreen'], 'early HTML dragend cannot clear native IDs');

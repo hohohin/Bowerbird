@@ -713,7 +713,13 @@ impl Database {
                     } else {
                         (size, mtime)
                     };
-                    self.conn.lock().unwrap().execute("INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference,size,mtime) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(path) DO UPDATE SET asset_id=excluded.asset_id,available=1,size=excluded.size,mtime=excluded.mtime",params![id(),folder_id,asset.id,string(&file),file_name,reference(&file),size,mtime])?;
+                    {
+                        let conn = self.conn.lock().unwrap();
+                        let tx = conn.unchecked_transaction()?;
+                        tx.execute("INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference,size,mtime) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(path) DO UPDATE SET asset_id=excluded.asset_id,available=1,size=excluded.size,mtime=excluded.mtime",params![id(),folder_id,asset.id,string(&file),file_name,reference(&file),size,mtime])?;
+                        tx.execute("DELETE FROM disconnected_library_assets WHERE asset_id=?1", [&asset.id])?;
+                        tx.commit()?;
+                    }
                     // Refresh preserves explicit project removals. A new entry/identity joins
                     // connected projects; explicitly reconnecting a folder restores cached members.
                     if old
@@ -810,19 +816,31 @@ impl Database {
             result
         }
     }
-    pub fn disconnect_directory(&self, id: &str) -> AppResult<()> {
+    pub fn disconnect_directory(&self, paths: &LibraryPaths, id: &str) -> AppResult<()> {
         let folder = self.connected_folder(id)?;
-        if folder.parent_id.is_some() {
-            if folder.available || Path::new(&folder.path).try_exists()? {
-                return Err(invalid("集合仍可访问，请刷新后使用移到回收站"));
-            }
-            self.conn.lock().unwrap().execute("DELETE FROM connected_folders WHERE id=?1", [id])?;
-            return Ok(());
+        if folder.parent_id.is_some() && (folder.available || Path::new(&folder.path).try_exists()?) {
+            return Err(invalid("集合仍可访问，请刷新后使用移到回收站"));
         }
-        self.conn
-            .lock()
-            .unwrap()
-            .execute("DELETE FROM connected_roots WHERE id=?1", [id])?;
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let affected: Vec<(String, Option<String>)> = {
+            let mut stmt = tx.prepare("WITH RECURSIVE tree(id) AS (SELECT ?1 UNION ALL SELECT f.id FROM connected_folders f JOIN tree t ON f.parent_id=t.id) SELECT DISTINCT e.asset_id,a.store_path FROM connected_entries e JOIN tree t ON t.id=e.folder_id JOIN assets a ON a.id=e.asset_id")?;
+            let ids = stmt.query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<Result<Vec<_>,_>>()?;
+            ids
+        };
+        if folder.parent_id.is_some() {
+            tx.execute("DELETE FROM connected_folders WHERE id=?1", [id])?;
+        } else {
+            tx.execute("DELETE FROM connected_roots WHERE id=?1", [id])?;
+        }
+        for (asset_id, original) in affected {
+            if original.as_deref().is_some_and(|path| paths.managed_file_root(Path::new(path)).is_some()) { continue; }
+            tx.execute("INSERT OR IGNORE INTO disconnected_library_assets(asset_id)
+                SELECT asset_id FROM external_assets WHERE asset_id=?1
+                AND NOT EXISTS(SELECT 1 FROM connected_entries WHERE asset_id=?1)
+                AND NOT EXISTS(SELECT 1 FROM independent_library_assets WHERE asset_id=?1)", [&asset_id])?;
+        }
+        tx.commit()?;
         Ok(())
     }
     fn repoint_asset(&self, id: &str, old: &Path, new: &Path) -> AppResult<()> {
@@ -1280,11 +1298,11 @@ impl Database {
         }
         Ok(())
     }
-    pub fn trash_connected_directory(&self, id: &str) -> AppResult<()> {
+    pub fn trash_connected_directory(&self, paths: &LibraryPaths, id: &str) -> AppResult<()> {
         let folder = self.writable_connection(id)?;
         recycle(Path::new(&folder.path))?;
         if folder.parent_id.is_none() {
-            self.disconnect_directory(id)
+            self.disconnect_directory(paths, id)
         } else {
             self.conn
                 .lock()

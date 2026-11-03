@@ -33,7 +33,9 @@ export function FileMediaCard(props: FileMediaCardProps) {
     const ids = getDragAssets();
     if (event.defaultPrevented || !isTauri() || props.entry.directory || !props.assetId || !ids?.length) return;
     event.preventDefault();
-    void startExternalDrag(ids, "hold");
+    void startExternalDrag(ids, "hold", {
+      sourceRect: (event.currentTarget.querySelector("img, video") ?? event.currentTarget).getBoundingClientRect(),
+    });
   });
   return !props.entry.directory && isTextPath(props.entry.path)
     ? <TextFileMediaCard {...props} onDragStart={onDragStart}/>

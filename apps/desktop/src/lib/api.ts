@@ -272,8 +272,8 @@ export const api = {
     invoke<ProjectCanvasLocation>("project_canvas_for_node", { projectId, threadId, nodeId }),
 
   // 导入
-  importFiles: (sources: string[], projectId?: string | null) =>
-    invoke<Asset[]>("import_files", { sources, projectId: projectId ?? null }),
+  importFiles: (sources: string[], projectId?: string | null, collect = false) =>
+    invoke<Asset[]>("import_files", { sources, projectId: projectId ?? null, ...(collect ? { collect: true } : {}) }),
   importFolder: (path: string, projectId?: string | null) =>
     invoke<number>("import_folder", { path, projectId: projectId ?? null }),
   // 拖拽（source=imported）/ 剪切板粘贴（source=clipboard）图片入库：data URL（base64）传后端解码。

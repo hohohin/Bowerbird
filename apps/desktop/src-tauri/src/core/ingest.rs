@@ -25,7 +25,7 @@ use crate::media;
 /// Existing local media stays at its original path. Only previews are cached.
 pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppResult<Asset> {
     let mut asset = db.index_external(paths, source)?;
-    if crate::core::text_documents::text_path(source) { return Ok(asset); }
+    if crate::core::text_documents::text_path(source) { return db.link_external_to_library(&asset.id); }
     if db.is_external_asset(&asset.id)? {
         let input = crate::core::external_files::compatible_image(paths, Path::new(asset.store_path.as_deref().unwrap()))?;
         if asset.phash.is_none() && !media::probe::is_video(asset.ext.as_deref().unwrap_or("")) && !media::audio::is_audio(asset.ext.as_deref().unwrap_or("")) {
@@ -42,6 +42,7 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
         asset.library_hidden = false;
         link_colors(db, &asset.id, asset.colors.as_deref());
     }
+    asset = db.link_external_to_library(&asset.id)?;
     preset::recognize_and_prefill(db, source, &mut asset)?;
     Ok(asset)
 }

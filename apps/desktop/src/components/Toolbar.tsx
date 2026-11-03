@@ -14,7 +14,7 @@ import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore"
 import "./LibraryTactical.css";
 import "./HomeNavigation.css";
 
-/** 顶部工具栏：建立连接 + 项目/主页入口 + 用户中心。 */
+/** 顶部工具栏：素材库入口、建立连接、项目/主页入口与用户中心。 */
 export function Toolbar({
   onRefresh,
   canvasMode,
@@ -36,6 +36,8 @@ export function Toolbar({
   const useLocalFileMode = useActiveLibraryModeStore();
   const setLoading = useStore((s) => s.setLoading);
   const busy = useStore((s) => s.loading);
+  const canvasLibraryOpen = useStore(s => s.canvasLibraryOpen);
+  const setCanvasLibraryOpen = useStore(s => s.setCanvasLibraryOpen);
   const activeProjectId = useStore((s) => s.activeProjectId);
   const setLibraryQuery = useStore((s) => s.setSearchQuery);
   const setFolderQuery = useLocalFileMode(s => s.setQuery);
@@ -98,6 +100,16 @@ export function Toolbar({
     }
   }
 
+  function toggleCanvasLibrary() {
+    if (canvasLibraryOpen) useLocalFileMode.getState().setOpen(false);
+    else {
+      useLocalFileMode.getState().openSource("global");
+      useStore.getState().clearSelect();
+      beginOnboardingOperation("expand-source", activeProjectId)();
+    }
+    setCanvasLibraryOpen(!canvasLibraryOpen);
+  }
+
   function connectFolder() {
     const routeRevision = useStore.getState().projectRouteRevision;
     const guide = useOnboarding.getState().guide;
@@ -131,7 +143,12 @@ export function Toolbar({
   return (
     <header ref={toolbarRef} className={`app-topbar is-search-hidden${canvasMode ? " canvas-tactical" : " is-library"}${tactical ? " library-tactical" : ""}${homeNavigation ? " has-home-navigation" : ""}${exploring ? " is-exploring" : ""}${localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
       <div className="app-topbar-leading">
-        {showLibraryActions && <div className="app-topbar-import">
+        {canvasMode && !exploring && <button type="button" className="app-button-dark"
+          aria-label={canvasLibraryOpen ? "收起素材库" : "打开素材库"} title={canvasLibraryOpen ? "收起素材库" : "打开素材库"}
+          aria-expanded={canvasLibraryOpen} disabled={projectRoutePending} onClick={toggleCanvasLibrary}>
+          <Images size={15} aria-hidden="true"/><span className="app-topbar-button-label">素材库</span>
+        </button>}
+        {showLibraryActions && (!canvasMode || exploring || canvasLibraryOpen) && <div className="app-topbar-import">
           <button type="button" data-import-trigger data-tour="import-folder" onClick={connectFolder} disabled={busy}
             className="app-button-dark disabled:opacity-50" aria-label={busy ? "连接中" : "建立连接"} title="建立连接">
             {busy ? <LoaderCircle size={15} className="animate-spin" /> : <Link2 size={15} />}

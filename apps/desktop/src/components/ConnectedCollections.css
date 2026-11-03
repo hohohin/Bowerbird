@@ -1,6 +1,5 @@
 .connected-collections .catalog-sidebar-heading button { width: 30px; height: 30px; display: grid; place-items: center; opacity: 0; pointer-events: none; }
 .connected-collections .catalog-sidebar-heading:is(:hover,:focus-within) button { opacity: 1; pointer-events: auto; }
-.connected-collections .catalog-tree-name { padding-right: 48px; }
 .connected-collections .catalog-tree-add { color: var(--bb-muted); }
 .connected-collections .catalog-tree-row.is-offline { color: var(--bb-muted); }
 .connected-media { position: absolute; left: 0; top: 0; }

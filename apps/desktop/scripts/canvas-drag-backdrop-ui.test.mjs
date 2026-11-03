@@ -200,12 +200,28 @@ try {
     await page.waitForFunction(() => window.browserVisible() === true);
   });
 
-  await scenario('library source keeps immediate native start and internal copy delivery', async page => {
+  await scenario('library source paints the shared HUD and preserves internal copy delivery', async page => {
     await page.evaluate(() => { window.pauseFrames(); window.begin('library'); });
-    assert.equal((await calls(page)).length, 1);
-    assert.equal(await overlay(page).count(), 0);
+    assert.equal(await overlay(page).count(), 1, 'library drag uses the same feedback');
+    assert.equal((await calls(page)).length, 0, 'native drag waits for feedback to paint');
+    await page.evaluate(() => { window.stepFrame(); window.stepFrame(); window.restoreFrames(); });
+    await page.waitForFunction(() => window.nativeCalls().length === 1);
+    await page.getByRole('status').filter({hasText:'拖到其他应用中使用'}).waitFor();
     assert.deepEqual(await page.evaluate(() => window.fireInternalDrop()), { effect: 'copy', prevented: true, count: 1 });
     assert.deepEqual(await page.evaluate(() => window.drops), [['image', 'video']]);
+    assert.equal(await overlay(page).evaluate(el => getComputedStyle(el).visibility), 'hidden', 'internal targets stay readable');
+    await page.waitForFunction(() => window.browserVisible() === true);
+    await page.evaluate(() => document.getElementById('internal-target').dispatchEvent(new DragEvent('dragleave', {bubbles:true,relatedTarget:document.body,clientX:200,clientY:100})));
+    assert.equal(await overlay(page).evaluate(el => getComputedStyle(el).visibility), 'hidden', 'moving between internal targets does not restore the veil');
+    await page.evaluate(() => window.dispatchEvent(new DragEvent('dragleave', {clientX:-1,clientY:100})));
+    assert.equal(await overlay(page).evaluate(el => getComputedStyle(el).visibility), 'visible');
+    await page.waitForFunction(() => window.browserVisible() === false);
+    await page.evaluate(() => {
+      const target = document.getElementById('internal-target');
+      target.addEventListener('dragenter', event => event.stopPropagation(), { once: true });
+      target.dispatchEvent(new DragEvent('dragenter', { bubbles: true }));
+    });
+    assert.equal(await overlay(page).evaluate(el => getComputedStyle(el).visibility), 'hidden', 'a target handling its own drag event still becomes readable');
     await finish(page);
     await page.evaluate(() => window.restoreFrames());
   });

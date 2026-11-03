@@ -16,8 +16,20 @@ pub(super) const IMAGE: &str = "lower(COALESCE(a.ext,'')) IN ('png','jpg','jpeg'
 pub(super) const VIDEO: &str = "lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','m4v','avi','mkv')";
 pub(super) const AUDIO: &str = "lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg')";
 pub(super) const TEXT: &str = "lower(COALESCE(a.ext,'')) IN ('md','markdown','txt')";
-pub(super) const VISIBLE: &str =
+pub(super) const PROJECT_VISIBLE: &str =
     "(a.library_hidden=0 OR EXISTS(SELECT 1 FROM external_assets e WHERE e.asset_id=a.id)) AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=a.id)";
+
+pub(super) fn library_membership_sql(asset_id: &str, project: Option<&str>) -> String {
+    let connected = format!("NOT EXISTS(SELECT 1 FROM disconnected_library_assets d WHERE d.asset_id={asset_id})");
+    match project {
+        Some(parameter) => format!("({parameter} IS NOT NULL OR {connected})"),
+        None => connected,
+    }
+}
+pub(super) fn catalog_visibility(project: bool) -> String {
+    if project { PROJECT_VISIBLE.to_owned() }
+    else { format!("{PROJECT_VISIBLE} AND {}", library_membership_sql("a.id", None)) }
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,9 +51,10 @@ pub struct MaterialCatalog {
 impl Database {
     pub fn material_catalog(&self, project: Option<&str>) -> AppResult<MaterialCatalog> {
         let collections = self.list_collections()?;
+        let visible = catalog_visibility(false);
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(&format!("SELECT t.id,t.name,t.classification_description,
-            (SELECT COUNT(*) FROM asset_tags at JOIN assets a ON a.id=at.asset_id WHERE at.tag_id=t.id AND {IMAGE} AND {VISIBLE}),
+            (SELECT COUNT(*) FROM asset_tags at JOIN assets a ON a.id=at.asset_id WHERE at.tag_id=t.id AND {IMAGE} AND {visible}),
             (SELECT COUNT(*) FROM asset_tags at JOIN assets a ON a.id=at.asset_id JOIN project_assets pa ON pa.asset_id=a.id
              WHERE at.tag_id=t.id AND pa.project_id=?1 AND {IMAGE}) FROM tags t"))?;
         let tags = stmt
@@ -58,7 +71,7 @@ impl Database {
         let mut tag_asset_ids = BTreeMap::<String, Vec<String>>::new();
         let mut stmt = conn.prepare(&format!(
             "SELECT at.tag_id,a.id FROM asset_tags at JOIN assets a ON a.id=at.asset_id
-            WHERE {IMAGE} AND {VISIBLE} ORDER BY a.created_at DESC,a.id"
+            WHERE {IMAGE} AND {visible} ORDER BY a.created_at DESC,a.id"
         ))?;
         for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
             let (tag, asset) = row?;
@@ -75,19 +88,20 @@ impl Database {
 
     pub fn material_catalog_assets(&self, kind: &str, id: Option<&str>, project: Option<&str>) -> AppResult<Vec<Asset>> {
         let conn = self.conn.lock().unwrap();
+        let visible = catalog_visibility(project.is_some());
         // Project browsing uses visible project membership, never unrelated canvas references.
         let project_scope = "(?2 IS NULL OR (a.library_hidden=0 AND EXISTS(
             SELECT 1 FROM project_assets pa WHERE pa.asset_id=a.id AND pa.project_id=?2)))";
         let sql = match kind {
             // Videos are a separate UI section, not tag members or relevance signals.
-            "tags" => format!("SELECT a.* FROM assets a WHERE ({IMAGE} OR (?1 IS NULL AND {VIDEO})) AND {VISIBLE}
+            "tags" => format!("SELECT a.* FROM assets a WHERE ({IMAGE} OR (?1 IS NULL AND {VIDEO})) AND {visible}
                 AND (?1 IS NULL OR EXISTS(SELECT 1 FROM asset_tags at WHERE at.asset_id=a.id AND at.tag_id=?1))
                 AND {project_scope}
                 ORDER BY a.created_at DESC,a.id"),
             "collections" => format!("WITH RECURSIVE scope(id) AS (
                 SELECT id FROM folders WHERE kind='collection' AND (?1 IS NULL OR id=?1)
                 UNION SELECT f.id FROM folders f JOIN scope s ON f.parent_id=s.id WHERE f.kind='collection')
-                SELECT a.* FROM assets a WHERE {VISIBLE}
+                SELECT a.* FROM assets a WHERE {visible}
                 AND EXISTS(SELECT 1 FROM asset_collections ac JOIN scope s ON s.id=ac.folder_id WHERE ac.asset_id=a.id)
                 AND {project_scope}
                 ORDER BY a.created_at DESC,a.id"),

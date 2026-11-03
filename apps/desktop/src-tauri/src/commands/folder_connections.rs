@@ -293,10 +293,12 @@ pub async fn move_connected_collection(
 pub async fn disconnect_folder(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
+    paths: State<'_, Arc<LibraryPaths>>,
     id: String,
 ) -> AppResult<()> {
     let db = db.inner().clone();
-    mutation(app, move || db.disconnect_directory(&id)).await
+    let paths = paths.inner().clone();
+    mutation(app, move || db.disconnect_directory(&paths, &id)).await
 }
 #[tauri::command]
 pub async fn relocate_folder(
@@ -324,10 +326,12 @@ pub async fn relocate_folder(
 pub async fn trash_connected_collection(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
+    paths: State<'_, Arc<LibraryPaths>>,
     id: String,
 ) -> AppResult<()> {
     let db = db.inner().clone();
-    mutation(app, move || db.trash_connected_directory(&id)).await
+    let paths = paths.inner().clone();
+    mutation(app, move || db.trash_connected_directory(&paths, &id)).await
 }
 #[tauri::command]
 pub async fn create_material_references(

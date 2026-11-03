@@ -99,6 +99,7 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0048_folder_connections.sql")),
         M::up(include_str!("../../sql/0049_chat_providers.sql")),
         M::up(include_str!("../../sql/0050_asset_original_trash.sql")),
+        M::up(include_str!("../../sql/0051_disconnected_library_assets.sql")),
     ])
 }
 
