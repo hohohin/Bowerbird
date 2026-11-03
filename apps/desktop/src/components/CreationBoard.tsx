@@ -1033,6 +1033,7 @@ export function CreationBoard({
         }`}
       >
         {glass.definition}
+        <span className="composer-hud-surface" aria-hidden="true" />
         <div className="composer-heading">
           {header}
           {header && isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}

@@ -47,11 +47,15 @@ try {
     await home.locator('.ProseMirror').fill('清晨的薄雾掠过山脊，镜头缓慢推进。'); await settle();
     assert.ok(await bottomGap(home) >= 12, 'expanded composer floats above the edge');
     await page.screenshot({ path: `${output}/home-${theme}.png` });
+    const bounds = await home.boundingBox();
+    await page.screenshot({ path: `${output}/hud-tabs-${theme}.png`, clip: { x: bounds.x - 20, y: bounds.y - 20, width: bounds.width + 40, height: Math.min(bounds.height + 40, 900 - bounds.y + 20) } });
     await home.getByRole('button', { name: '视频', exact: true }).click(); await settle();
     await home.locator('.ProseMirror').fill('清晨的薄雾掠过山脊，镜头缓慢推进。');
     for (const width of [1440, 900]) {
       await page.setViewportSize({ width, height: 900 }); await settle(); await singleRow(home);
       assert.ok(await home.evaluate(element => { const rect = element.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth; }));
+      const headings = await home.locator('.composer-heading').evaluate(element => [...element.children].map(child => child.getBoundingClientRect()).filter(rect => rect.width && rect.height).map(rect => rect.y + rect.height / 2));
+      assert.ok(headings.every(center => Math.abs(center - headings[0]) < 1), 'HUD tabs, project, profile and collapse control share one center line');
     }
     await home.locator('.model-select-trigger').click();
     const menu = page.getByRole('dialog', { name: '视频模型', exact: true });
@@ -59,6 +63,7 @@ try {
     assert.ok(await menu.evaluate(element => { const rect = element.getBoundingClientRect(); return rect.top >= 0 && rect.right <= innerWidth; }));
     await page.keyboard.press('Escape'); await menu.waitFor({ state: 'detached' });
     assert.equal(await home.locator('.model-select-trigger').evaluate(element => element === document.activeElement), true);
+    await home.locator('.ProseMirror').focus();
     await page.mouse.move(20, 160); await settle();
     await home.screenshot({ path: `${output}/video-${theme}.png` });
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -78,7 +83,7 @@ try {
   assert.equal(await canvas.evaluate(element => getComputedStyle(element).animationName), 'composer-hud-rise');
   await page.screenshot({ path: `${output}/canvas.png` });
   await page.evaluate(() => document.documentElement.dataset.theme = 'light');
-  assert.match(await canvas.evaluate(element => getComputedStyle(element).boxShadow), /37, 48, 55/, 'canvas also uses the lighter directional shadow');
+  assert.match(await canvas.locator('.composer-hud-surface').evaluate(element => getComputedStyle(element).filter), /37, 48, 55/, 'only the decorative plane casts the lighter directional shadow');
   await page.screenshot({ path: `${output}/canvas-light.png` });
   assert.deepEqual(errors, []);
   console.log('PASS HUD home/canvas, bottom attachment, first-line draft, video single row, clear text and reduced motion');
