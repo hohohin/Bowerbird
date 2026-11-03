@@ -26,4 +26,5 @@
 - 质量证据在 `.tmp/pinterest-current/quality/`；真实未登录原生诊断在 `.tmp/pinterest-current/live-*`。这些临时目录没有加入 Git。
 - 仅本次明确源文件、测试和文档提交；其他聊天的创作预览／素材库修改保持原归属。检查已有 worktree，本轮未新建，无可确认属于本轮的废弃 worktree；不清理其他任务工作区。
 - 当前修复已通过隔离原生验证，真实用户账号完整上传、其他本地化名称、Mac 原生尚未验收。未发布安装包；JavaScript 通过 Rust `include_str!` 编入 EXE，前端热更新不能使运行中的旧脚本生效，需要重建并重启开发程序。
-- 已完成开发主程序构建：`apps/desktop/src-tauri/target-local-classification/debug/bowerbird-desktop.exe`，2026-11-04 01:38:33、104972800 bytes。当前使用中的实例尚未替换；已询问是否现在更新并重启，因为用户仍在当前工作界面输入。未把等待回复当成重启授权。
+- 已完成开发主程序构建：`apps/desktop/src-tauri/target-local-classification/debug/bowerbird-desktop.exe`，2026-11-04 01:38:33、104972800 bytes。当时询问是否更新并重启，未把等待回复当成重启授权；后续实际运行状态见下条。
+- 用户回复「现在更新并重启」后重新核验，发现开发监视器已在 01:34:44 自动重建默认 `target/debug/bowerbird-desktop.exe`，01:34:47 启动新 PID 48124（父进程为 `cargo run --no-default-features`），原 PID 24196 已退出。运行文件完整包含本次已验证适配器，SHA256 `22875f70ef0de67ffc0733c8a7ddfa1f8cc91f6993f725851d194adb82c85337`；与独立构建目录的二进制哈希不同，不据此误判为旧脚本。Vite 1420 端口正常，原生窗口与素材库内容已打开。前次回复“当前程序尚未更新”没有重新核对自动重启，现更正为开发实例已加载修复；无需再替换和重复中断。真实账号上传的验收边界仍保持。
