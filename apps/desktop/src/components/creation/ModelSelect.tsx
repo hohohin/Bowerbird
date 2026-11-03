@@ -5,6 +5,7 @@ import { Check, ChevronDown, CircleHelp, Coins, Monitor, Star, UserRound } from 
 import { OverlayScrollArea } from "../CollectionScrollArea";
 import "./ModelSelect.css";
 import { useStore } from "../../store";
+import { usePortalTarget } from "../../lib/portalTarget";
 
 export type ModelSource = "personal" | "cloud" | "local";
 export interface ModelOption {
@@ -23,6 +24,7 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
   onChange: (key: string) => void; defaultKey?: string; onSetDefault?: (key: string) => void;
   kind?: string; quotaDetail?: string; cloudBalance?: number | null; cloudLoggedIn?: boolean; footer?: ReactNode; menuClassName?: string;
 }) {
+  const portalTarget = usePortalTarget();
   const [open, setOpen] = useState(false);
   const prices = useStore(state => state.cloudEntitlement?.generation_services);
   const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number; height: number }>();
@@ -137,6 +139,6 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
         {kind === "图像" && <div className="model-select-footer">Cloud 按张计费；第 2 张起每增加一张参考图，每张输出加 1 Bcoin。</div>}
         {footer && <div className="model-select-footer">{footer}</div>}
       </OverlayScrollArea>
-    </div>, document.body)}
+    </div>, portalTarget)}
   </div>;
 }

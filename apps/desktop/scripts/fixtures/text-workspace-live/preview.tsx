@@ -4,6 +4,7 @@ import { TextWorkspace } from '../../../src/components/TextWorkspace';
 import { useStore } from '../../../src/store';
 import { useLocalFileMode } from '../../../src/lib/localFileMode';
 import { workspaceCatalogResponse } from './catalogMock';
+import { setupAgentMock, agentMock } from './agentMock';
 import '../../../src/styles.css';
 import '../../../src/components/IndustrialTheme.css';
 const w = window as any;
@@ -16,11 +17,13 @@ assets.push(...Array.from({ length: 140 }, (_, index) => ({ ...assets[0], id: `p
 w.store = useStore; w.backgroundMode = useLocalFileMode;
 useLocalFileMode.setState({ source: 'global', mode: 'all', query: '背景搜索' });
 useStore.setState({ activeProjectId: 'background-project', canvasLibraryOpen: false, detailAssetId: null, mode: 'manage', selectedIds: new Set(['img1', 'background-selected']) });
+setupAgentMock();
 let callbackId = 0;
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 w.calls = []; w.saveDelay = 0; w.mediaDelay = 0; w.saveError = false; w.mediaMissing = false; w.pinnedIds = [];
 w.__TAURI_INTERNALS__ = { transformCallback: () => ++callbackId, convertFileSrc: (path: string) => path, invoke: async (command: string, args: any = {}) => {
   w.calls.push({ command, args });
+  const agent = agentMock(command,args); if(agent!==undefined)return agent;
   if (command === 'generation_history' && new URLSearchParams(location.search).has('blocks')) return { turns: [{ prompt: '复用的提示词', prompt_raw: '复用的提示词' }], references: [], dimension_assets: [] };
   if (command === 'plugin:event|listen') return args.handler;
   if (command === 'plugin:event|unlisten') return;

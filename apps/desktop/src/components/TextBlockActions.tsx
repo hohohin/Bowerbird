@@ -1,7 +1,8 @@
 import { createContext, useContext, useState, type DragEvent, type MutableRefObject } from "react";
 import { GripVertical } from "lucide-react";
-import type { PlateElementProps } from "platejs/react";
+import { useEditorSelector, type PlateElementProps } from "platejs/react";
 import { ContextMenu } from "./ContextMenu";
+import { TextAgentContext } from "./TextAgent";
 
 export const BlockDragContext = createContext<MutableRefObject<string | null>>({ current: null });
 const blockMime = "application/x-bowerbird-document-block";
@@ -29,6 +30,8 @@ export function useBlockDrop({ editor, element }: PlateElementProps) {
 }
 export function TextBlockActions({ editor, element }: PlateElementProps) {
   const drag = useContext(BlockDragContext);
+  const openAgent = useContext(TextAgentContext);
+  const active = useEditorSelector(editor => !!editor.selection && editor.children[editor.selection.focus.path[0]]?.id === element.id, [element.id]);
   const [menu, setMenu] = useState<{x:number;y:number} | null>(null);
   function action(kind: "copy" | "delete" | "after") {
     const path = editor.api.findPath(element);
@@ -42,7 +45,8 @@ export function TextBlockActions({ editor, element }: PlateElementProps) {
     }
     requestAnimationFrame(() => editor.tf.focus());
   }
-  return <span contentEditable={false} className="text-block-actions">
+  return <span contentEditable={false} className={`text-block-actions${active && openAgent ? " has-agent" : ""}`}>
+    {active && openAgent && <button type="button" className="text-block-agent" onMouseDown={event => event.preventDefault()} onClick={event => openAgent(String(element.id), event.currentTarget.getBoundingClientRect())}>Agent</button>}
     <button type="button" tabIndex={-1} aria-label="段落操作" title="拖动排序 · 点击操作" draggable
       onDragStart={event => { drag.current = String(element.id); event.dataTransfer.setData(blockMime, String(element.id)); event.dataTransfer.effectAllowed = "move"; event.stopPropagation(); }}
       onDragEnd={() => { drag.current = null; }} onClick={event => { const rect = event.currentTarget.getBoundingClientRect(); setMenu({x:rect.left,y:rect.bottom}); }}><GripVertical size={14}/></button>

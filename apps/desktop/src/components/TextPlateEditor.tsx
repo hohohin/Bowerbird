@@ -10,10 +10,12 @@ import { normalizeDocument, parseMarkdown } from "../lib/documentCodec";
 import { getDragAssets } from "../lib/dragPayload";
 import { BlockDragContext, TextBlockActions, useBlockDrop } from "./TextBlockActions";
 import { AudioWaveform } from "./AudioWaveform";
+import { TextAgentScope } from "./TextAgent";
 
 export interface TextPlateInsertion { insert(media: DocumentMedia[]): void; cancel(): void }
 export interface TextPlateHandle { insertMedia(media: DocumentMedia[]): void; insertMarkdown(text: string): void; reserveInsertion(): TextPlateInsertion }
 interface Props {
+  agent?: { projectId?: string };
   toolbarStart?: ReactNode;
   toolbarEnd?: ReactNode;
   value: DocumentValue;
@@ -52,7 +54,7 @@ function DocumentElement(props: PlateElementProps) {
   return <PlateElement {...props} className="text-document-block" attributes={{ ...props.attributes, ...drop }}><TextBlockActions {...props}/>{content}</PlateElement>;
 }
 
-export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextPlateEditor({ value, media, onChange, onDropAssets, onRejectedPaste, toolbarStart, toolbarEnd }, ref) {
+export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextPlateEditor({ value, media, onChange, onDropAssets, onRejectedPaste, toolbarStart, toolbarEnd, agent }, ref) {
   const editor = usePlateEditor({
     plugins: [BasicBlocksPlugin, BasicMarksPlugin, ListPlugin, ImagePlugin.configure({ options: { disableUploadInsert: true, disableEmbedInsert: true } }), AudioPlugin, VideoPlugin, createPlatePlugin({ key: "raw", node: { isElement: true } })],
     value: plateValue(value),
@@ -85,9 +87,7 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
   }
   function insertMarkdown(text: string) { editor.tf.insertNodes(parseMarkdown(text), { select: true }); editor.tf.focus(); }
   useImperativeHandle(ref, () => ({ insertMedia, insertMarkdown, reserveInsertion }));
-  return <BlockDragContext.Provider value={blockDrag}><MediaContext.Provider value={media}><Plate editor={editor} onValueChange={({ value: changed }) => {
-    const next = normalizeDocument(changed); emitted.current = next; onChange(next);
-  }}>
+  const content = <>
     <div className="text-document-format" role="toolbar" aria-label="文字格式" onMouseDown={event => { if (!(event.target as Element).closest("input")) event.preventDefault(); }}>
       {toolbarStart}
       <button aria-label="撤销" title="撤销" onClick={() => editor.tf.undo()}><Undo2 size={14}/></button>
@@ -104,7 +104,7 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
         if (event.altKey && event.key === "Enter" && !event.nativeEvent.isComposing) {
           const anchor = window.getSelection()?.anchorNode;
           const block = anchor?.parentElement?.closest('[data-block-id]');
-          const handle = block?.querySelector<HTMLButtonElement>('.text-block-actions button');
+          const handle = block?.querySelector<HTMLButtonElement>('.text-block-actions button[aria-label="段落操作"]');
           if (handle) { event.preventDefault(); handle.click(); }
         }
       }}
@@ -119,5 +119,8 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
         const insertion = reserveInsertion();
         void onDropAssets(ids).then(insertion.insert, insertion.cancel);
       }} />
-  </Plate></MediaContext.Provider></BlockDragContext.Provider>;
+  </>;
+  return <BlockDragContext.Provider value={blockDrag}><MediaContext.Provider value={media}><Plate editor={editor} onValueChange={({ value: changed }) => {
+    const next = normalizeDocument(changed); emitted.current = next; onChange(next);
+  }}>{agent ? <TextAgentScope editor={editor} projectId={agent.projectId}>{content}</TextAgentScope> : content}</Plate></MediaContext.Provider></BlockDragContext.Provider>;
 });

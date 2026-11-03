@@ -159,7 +159,7 @@ function useToolbarHeight(panel: { current: HTMLDivElement | null }) {
 
 export function TextWorkspace({ initialDocument, projectId, onChange, onClose, onAddToComposer }: Props) {
   const document = useWorkspaceDraft(initialDocument, onChange);
-  const [library, setLibrary] = useState(false), [menu, setMenu] = useState<"collection" | "project" | null>(null);
+  const [library, setLibrary] = useState(true), [menu, setMenu] = useState<"collection" | "project" | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [portalTarget, setPortalTarget] = useState<HTMLDivElement | null>(null);
   const mounted = useRef(true), pending = useRef(false), panel = useRef<HTMLDivElement>(null), plate = useRef<TextPlateHandle>(null);
@@ -183,7 +183,7 @@ export function TextWorkspace({ initialDocument, projectId, onChange, onClose, o
     {error && <div className="text-workspace-feedback is-error" role="alert">{error}</div>}{notice && <div className="text-workspace-feedback" role="status">{notice}</div>}
     <div className={`text-workspace-layout canvas-workspace canvas-tactical${library ? "" : " is-source-collapsed"}`}><TextWorkspaceLibrary open={library} projectId={projectId} onInsert={insertAsset} onClose={() => setLibrary(false)} onNavigate={close} onReusePrompt={text => plate.current?.insertMarkdown(text)}/>
       <main className="text-workspace-writing">
-        <section className="text-document-editor"><TextPlateEditor ref={plate} value={value} media={media} onChange={changeValue} onDropAssets={resolveMedia} onRejectedPaste={() => setNotice("请从素材库插入已连接的素材。")}
+        <section className="text-document-editor"><TextPlateEditor ref={plate} agent={{ projectId }} value={value} media={media} onChange={changeValue} onDropAssets={resolveMedia} onRejectedPaste={() => setNotice("请从素材库插入已连接的素材。")}
           toolbarStart={<div className="text-workspace-name"><button className="text-workspace-icon" aria-label="返回" title="返回" onClick={close}><ArrowLeft size={18}/></button><FileText size={16}/><input aria-label="文档名称" title="重命名文档" value={draft.title} placeholder="空白文档" onChange={event => update({ ...draft, title: event.target.value })}/>{!library && <button className="text-workspace-icon" aria-label="打开素材库" title="打开素材库" onClick={() => setLibrary(true)}><PanelLeft size={16}/></button>}</div>}
           toolbarEnd={<WorkspaceActions projectId={projectId} busy={busy} menu={menu} setMenu={setMenu} save={save} add={() => void addWorkspace(activity, onAddToComposer)}/>}/></section>
       </main>

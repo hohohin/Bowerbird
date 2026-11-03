@@ -33,7 +33,6 @@ await check('block controls and drag reorder',async()=>{
 await check('continue typing after final image',async()=>{
  const editor=page.getByRole('textbox',{name:'文档正文',exact:true});
  await editor.click(); await page.keyboard.press('Control+End');
- await page.getByRole('button',{name:'打开素材库',exact:true}).click();
  await page.locator('.library-catalog-transition [data-asset-id="img1"]').dblclick();
  await page.waitForFunction(()=>window.draft?.markdown.includes('img1'));
  await page.keyboard.type('after image');
@@ -41,7 +40,6 @@ await check('continue typing after final image',async()=>{
  assert.match(await page.evaluate(()=>window.draft.markdown),/img1[\s\S]*after image/);
 });
 await check('reuse prompt stays in editor',async()=>{
- await page.getByRole('button',{name:'打开素材库',exact:true}).click();
  await page.locator('.library-catalog-transition [data-asset-id="img1"]').click({button:'right'});
  await page.getByRole('menuitem',{name:'复用生成提示词',exact:true}).click();
  await page.waitForFunction(()=>window.draft?.markdown.includes('复用的提示词'));
