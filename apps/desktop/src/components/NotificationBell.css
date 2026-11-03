@@ -3,6 +3,13 @@
 .notification-bell-button > i { position:absolute; right:4px; top:4px; width:4px; height:4px; background:var(--bb-blue); }
 .notification-bell-button:focus-visible { outline:1px solid var(--bb-blue); outline-offset:2px; }
 .notification-bell-panel { z-index:150; color:var(--bb-ink); background:var(--bb-surface); border:1px solid var(--bb-line); box-shadow:4px 4px 0 rgb(var(--bb-bg-rgb) / .7); font-size:12px; transform-origin:top right; animation:notification-bell-open 180ms ease-out; }
+.notification-bell-panel.is-latest { animation:notification-bell-insert 420ms cubic-bezier(.2,.75,.25,1) both; }
+.notification-bell-panel.is-latest::after {
+  content:""; position:absolute; inset:0; pointer-events:none; opacity:0;
+  background:linear-gradient(var(--bb-blue),var(--bb-blue)) 0 50%/2px calc(100% - 12px) no-repeat;
+  box-shadow:inset 0 0 0 1px rgb(var(--bb-ink-rgb) / .35);
+  animation:notification-bell-contact 170ms steps(1,end) 250ms;
+}
 .notification-bell-heading { height:36px; display:flex; align-items:center; justify-content:space-between; padding:0 10px; border-bottom:1px solid var(--bb-line); }
 .notification-bell-heading button,.notification-bell-close { display:grid; place-items:center; width:24px; height:24px; flex:none; color:var(--bb-muted); }
 .notification-bell-latest { display:flex; align-items:center; gap:6px; min-height:54px; padding:9px 8px 9px 12px; }
@@ -27,5 +34,16 @@
 .notification-bell-task.is-running > svg:first-child { color:var(--bb-blue); animation:notification-bell-spin 1.2s linear infinite; }
 .notification-bell-task.is-failed > svg:first-child,.notification-bell-task.is-attention > svg:first-child { color:var(--bb-danger); }
 @keyframes notification-bell-open { from { opacity:0; transform:translateY(-5px) scaleY(.96); } to { opacity:1; transform:none; } }
+@keyframes notification-bell-insert {
+  0% { opacity:0; transform:translateX(48px); }
+  18% { opacity:1; }
+  62% { opacity:1; transform:translateX(-3px); }
+  82% { opacity:1; transform:translateX(1px); }
+  100% { opacity:1; transform:none; }
+}
+@keyframes notification-bell-contact {
+  0%,20%,52%,72% { opacity:1; }
+  21%,51%,73%,100% { opacity:0; }
+}
 @keyframes notification-bell-spin { to { transform:rotate(360deg); } }
-@media (prefers-reduced-motion:reduce) { .notification-bell-panel,.notification-bell-task.is-running > svg:first-child { animation:none; } }
+@media (prefers-reduced-motion:reduce) { .notification-bell-panel,.notification-bell-panel.is-latest,.notification-bell-panel.is-latest::after,.notification-bell-task.is-running > svg:first-child { animation:none; } }

@@ -134,7 +134,7 @@ export function NotificationBell() {
       onClick={() => dispatch({ type: state.view === 'history' ? 'close' : 'history' })}>
       <Bell size={17} strokeWidth={1.6} aria-hidden/>{unread && <i aria-hidden/>}
     </button>
-    {state.view !== 'closed' && createPortal(<div ref={panel} className={`notification-bell-panel is-${state.view}`} role="dialog"
+    {state.view !== 'closed' && createPortal(<div key={state.view === 'latest' ? state.latest?.id : state.view} ref={panel} className={`notification-bell-panel is-${state.view}`} role="dialog"
       aria-label={{ latest: '新通知', history: '通知历史' }[state.view]} style={{ position: 'fixed', ...position }}
       onMouseEnter={interact} onFocusCapture={interact} onPointerDownCapture={interact}>
       <BellContents state={state} recent={recent} close={close} dismiss={dismiss}/>
