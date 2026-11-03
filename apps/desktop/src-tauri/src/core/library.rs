@@ -1559,7 +1559,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
             "SELECT {ASSET_COLS} FROM assets \
-             WHERE library_hidden=0 AND generation_session_id IN ( \
+             WHERE library_hidden=0 AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=assets.id) AND generation_session_id IN ( \
                SELECT gc.session_id FROM generation_conversations gc \
                  WHERE gc.conversation_id = ( \
                    SELECT conversation_id FROM generation_conversations \

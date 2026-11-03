@@ -10,6 +10,7 @@ fn original_trash_preview_resolves_registered_original_once_without_copying() {
         f.db.preview_asset_originals(&[asset.id.clone(), asset.id.clone()])
             .unwrap();
     assert_eq!(preview.len(), 1);
+    assert!(!preview[0].missing);
     assert_eq!(preview[0].asset_id, asset.id);
     assert_eq!(preview[0].name, "one.png");
     assert_eq!(preview[0].path, string(&f.source.join("one.png")));
@@ -22,7 +23,7 @@ fn original_trash_preview_resolves_registered_original_once_without_copying() {
 }
 
 #[test]
-fn original_trash_preview_rejects_unknown_missing_and_non_media_targets() {
+fn original_trash_preview_rejects_unknown_and_non_media_targets() {
     let f = Fixture::new();
     let root = f.connect(&f.source);
     let asset = f.entries(&root).pop().unwrap().asset;
@@ -33,7 +34,7 @@ fn original_trash_preview_rejects_unknown_missing_and_non_media_targets() {
         .is_err());
     let invalid_file = f.source.join("reference.bowerbird");
     fs::write(&invalid_file, b"{}").unwrap();
-    for path in [&f.source, &invalid_file, &f.source.join("missing.png")] {
+    for path in [&f.source, &invalid_file] {
         f.db.conn
             .lock()
             .unwrap()
@@ -44,6 +45,8 @@ fn original_trash_preview_rejects_unknown_missing_and_non_media_targets() {
             .unwrap();
         assert!(f.db.preview_asset_originals(&[asset.id.clone()]).is_err());
     }
+    f.db.conn.lock().unwrap().execute("UPDATE assets SET store_path=NULL WHERE id=?1", [&asset.id]).unwrap();
+    assert!(f.db.preview_asset_originals(&[asset.id]).is_err());
 }
 
 #[test]
@@ -1351,4 +1354,195 @@ fn disconnect_keeps_existing_workspace_inbox_original_without_independent_marker
     f.db.disconnect_directory(&f.paths, &root).unwrap();
     assert_eq!(f.db.material_catalog_assets("tags", None, None).unwrap().len(), 1);
     assert!(Path::new(&entry.path).is_file());
+}
+
+#[test]
+fn missing_original_cleanup_preserves_identity_metadata_cache_and_project_membership() {
+    use crate::core::catalog_browser::CatalogFilter;
+    use crate::core::canvas_frequent_assets::CanvasFrequentAssetsPreferences;
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let cached = f.paths.thumbnails.join("retained.jpg");
+    fs::write(&cached, b"cached preview").unwrap();
+    f.db.conn.lock().unwrap().execute("UPDATE assets SET thumb_path=?2 WHERE id=?1", params![entry.asset_id, string(&cached)]).unwrap();
+    let tag = f.db.get_or_create_tag("kept missing tag", "manual").unwrap();
+    f.db.set_asset_tags(&entry.asset_id, &[tag], "manual").unwrap();
+    f.db.create_project("missing-project", "project", "blank:missing", "project", "blank").unwrap();
+    f.db.add_assets_to_project("missing-project", &[entry.asset_id.clone()]).unwrap();
+    f.db.conn.lock().unwrap().execute("UPDATE assets SET generation_session_id='missing-session' WHERE id=?1", [&entry.asset_id]).unwrap();
+    let pins = CanvasFrequentAssetsPreferences { pinned_asset_ids: vec![entry.asset_id.clone()], ..Default::default() };
+    assert_eq!(f.db.list_generation_group(&entry.asset_id, None).unwrap().len(), 1);
+    assert_eq!(f.db.canvas_frequent_assets(&pins, None).unwrap().pinned.len(), 1);
+    let before = serde_json::to_value(f.db.get_asset(&entry.asset_id).unwrap()).unwrap();
+    let moved = f.target.join("moved.png");
+    fs::rename(&entry.path, &moved).unwrap();
+    let preview = f.db.preview_asset_originals(&[entry.asset_id.clone()]).unwrap();
+    assert_eq!(serde_json::to_value(&preview[0]).unwrap()["missing"], true);
+    assert_eq!(preview[0].path, entry.path);
+    f.db.trash_asset_original_with(&preview[0], |_| panic!("missing original must never invoke recycling")).unwrap();
+    assert_eq!(serde_json::to_value(f.db.get_asset(&entry.asset_id).unwrap()).unwrap(), before);
+    assert!(f.db.material_catalog_assets("tags", None, None).unwrap().is_empty());
+    assert!(f.db.list_assets(None, None, 50, 0).unwrap().is_empty());
+    assert!(f.db.list_generation_group(&entry.asset_id, None).unwrap().is_empty());
+    assert!(f.db.list_generation_group(&entry.asset_id, Some("missing-project")).unwrap().is_empty());
+    assert!(f.db.canvas_frequent_assets(&pins, None).unwrap().pinned.is_empty());
+    assert_eq!(f.db.get_assets_by_ids(&[entry.asset_id.clone()]).unwrap().len(), 1);
+    let filter = CatalogFilter { kind: "all".into(), media: "images".into(), ..Default::default() };
+    assert_eq!(f.db.catalog_overview(&filter, None).unwrap().total, 0);
+    assert!(f.db.catalog_page(&filter, 0, 50).unwrap().is_empty());
+    assert!(f.db.material_catalog_assets("tags", None, Some("missing-project")).unwrap().is_empty());
+    assert!(f.db.list_assets(None, Some("missing-project"), 50, 0).unwrap().is_empty());
+    let project_filter = CatalogFilter { project_id: Some("missing-project".into()), ..filter.clone() };
+    let overview = f.db.catalog_overview(&project_filter, Some("missing-project")).unwrap();
+    assert_eq!(overview.total, 0);
+    assert!(overview.catalog.tags.iter().all(|tag| tag.count == 0 && tag.project_count == 0));
+    assert!(f.db.material_catalog(Some("missing-project")).unwrap().tags.iter().all(|tag| tag.count == 0 && tag.project_count == 0));
+    let member: i64 = f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM project_assets WHERE project_id='missing-project' AND asset_id=?1", [&entry.asset_id], |r| r.get(0)).unwrap();
+    assert_eq!(member, 1);
+    assert_eq!(f.db.list_asset_tags(&entry.asset_id).unwrap().len(), 1);
+    assert_eq!(fs::read(&cached).unwrap(), b"cached preview");
+    assert!(moved.is_file());
+    let recycled: i64 = f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM trashed_asset_originals WHERE asset_id=?1", [&entry.asset_id], |r| r.get(0)).unwrap();
+    assert_eq!(recycled, 0, "cleaned missing original is not a recycled file");
+    f.db.link_external_to_library(&entry.asset_id).unwrap();
+    assert!(f.db.material_catalog_assets("tags", None, None).unwrap().is_empty(), "membership alone cannot verify a returned original");
+    fs::rename(&moved, &entry.path).unwrap();
+    let restored = f.db.index_connected_file(&f.paths, Path::new(&entry.path), None).unwrap();
+    assert_eq!(restored.id, entry.asset_id);
+    assert_eq!(f.db.material_catalog_assets("tags", None, None).unwrap().len(), 1);
+}
+
+#[test]
+fn missing_original_cleanup_rechecks_recovery_and_registered_path_before_hiding() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let moved = f.target.join("moved.png");
+    fs::rename(&entry.path, &moved).unwrap();
+    let preview = f.db.preview_asset_originals(&[entry.asset_id.clone()]).unwrap();
+    fs::rename(&moved, &entry.path).unwrap();
+    assert!(f.db.trash_asset_original_with(&preview[0], |_| panic!("recovered original requires a new confirmation")).is_err());
+    assert!(Path::new(&entry.path).is_file());
+    assert_eq!(f.db.material_catalog_assets("tags", None, None).unwrap().len(), 1);
+    fs::rename(&entry.path, &moved).unwrap();
+    f.db.conn.lock().unwrap().execute("UPDATE assets SET store_path=?2 WHERE id=?1", params![entry.asset_id, string(&f.target.join("another-missing.png"))]).unwrap();
+    assert!(f.db.trash_asset_original_with(&preview[0], |_| panic!("changed original requires a new confirmation")).is_err());
+    assert_eq!(f.db.material_catalog_assets("tags", None, None).unwrap().len(), 1);
+}
+
+#[test]
+fn missing_original_cleanup_matches_registered_path_duplicates_and_scan_restores_original() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let target = f.connect(&f.target);
+    f.db.create_material_references(&f.paths, &[entry.asset_id.clone()], &target).unwrap();
+    let reference = f.entries(&target).pop().unwrap();
+    let ordinary = external_files::connection_path_spellings(Path::new(&entry.path), Path::new(&entry.path))[2].clone();
+    let hash = external_files::fingerprint(Path::new(&entry.path)).unwrap();
+    f.db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,ext,store_path,source) VALUES('missing-duplicate','duplicate','png',?1,'external')", [&ordinary]).unwrap();
+    f.db.conn.lock().unwrap().execute("INSERT INTO external_assets(asset_id,fingerprint,library_member) VALUES('missing-duplicate',?1,1)", [&hash]).unwrap();
+    let moved = f._temp.path().join("moved.png");
+    fs::rename(&entry.path, &moved).unwrap();
+    // Confirm through an ordinary path; its verbatim spelling must be included too.
+    let preview = f.db.preview_asset_originals(&["missing-duplicate".into()]).unwrap();
+    f.db.trash_asset_original_with(&preview[0], |_| panic!("missing path must not reach recycle")).unwrap();
+    assert!(f.db.material_catalog_assets("tags", None, None).unwrap().is_empty());
+    assert!(f.entries(&root).is_empty());
+    let missing_ref = f.entries(&target).pop().unwrap();
+    assert_eq!(missing_ref.id, reference.id);
+    assert!(!missing_ref.available);
+    assert!(Path::new(&reference.path).is_file());
+    let removed: i64 = f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM removed_missing_asset_originals", [], |r| r.get(0)).unwrap();
+    assert_eq!(removed, 2);
+    // Rename back preserves bytes/mtime. The invalidated reference stamp must force re-indexing.
+    fs::rename(&moved, &entry.path).unwrap();
+    f.db.scan_connection(&f.paths, &target).unwrap();
+    assert!(f.entries(&target)[0].available);
+    let restored: i64 = f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM removed_missing_asset_originals WHERE asset_id=?1", [&entry.asset_id], |r| r.get(0)).unwrap();
+    assert_eq!(restored, 0);
+    f.db.scan_connection(&f.paths, &root).unwrap();
+    assert_eq!(f.entries(&root)[0].asset_id, entry.asset_id);
+}
+
+#[test]
+fn missing_original_cleanup_sql_failure_keeps_visibility_entries_and_cached_bytes() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let cached = f.paths.thumbnails.join("kept.jpg");
+    fs::write(&cached, b"preview bytes").unwrap();
+    let moved = f.target.join("moved.png");
+    fs::rename(&entry.path, &moved).unwrap();
+    let preview = f.db.preview_asset_originals(&[entry.asset_id.clone()]).unwrap();
+    f.db.conn.lock().unwrap().execute_batch("CREATE TEMP TRIGGER fail_missing_cleanup BEFORE INSERT ON removed_missing_asset_originals BEGIN SELECT RAISE(FAIL,'injected'); END;").unwrap();
+    assert!(f.db.trash_asset_original_with(&preview[0], |_| panic!("no physical operation for missing originals")).is_err());
+    assert_eq!(f.db.material_catalog_assets("tags", None, None).unwrap().len(), 1);
+    assert_eq!(f.entries(&root).len(), 1);
+    assert_eq!(fs::read(cached).unwrap(), b"preview bytes");
+    assert!(moved.is_file());
+    let removed: i64 = f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM removed_missing_asset_originals", [], |r| r.get(0)).unwrap();
+    assert_eq!(removed, 0);
+}
+
+#[test]
+fn missing_original_cleanup_migration_0052_preserves_v51_identity_and_reopens() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("migration.db");
+    let db = Database::open(&path).unwrap();
+    crate::db::migrations::migrations().to_version(&mut db.conn.lock().unwrap(), 51).unwrap();
+    db.conn.lock().unwrap().execute_batch(
+        "INSERT INTO assets(id,name,ext,source,store_path,library_hidden,name_manual) VALUES('missing','保留名称','png','external','missing-original.png',0,1);
+         INSERT INTO external_assets(asset_id,fingerprint,library_member) VALUES('missing','registered-fingerprint',1);
+         INSERT INTO tags(id,name) VALUES('kept-tag','保留标签');
+         INSERT INTO asset_tags(asset_id,tag_id) VALUES('missing','kept-tag');
+         INSERT INTO analyses(id,asset_id,kind,payload) VALUES('kept-analysis','missing','caption','retained');"
+    ).unwrap();
+    let before = serde_json::to_value(db.get_asset("missing").unwrap()).unwrap();
+    db.migrate().unwrap();
+    assert_eq!(db.material_catalog_assets("tags", None, None).unwrap().len(), 1, "migration alone cannot hide existing assets");
+    let preview = db.preview_asset_originals(&["missing".into()]).unwrap();
+    assert!(preview[0].missing);
+    assert_eq!(preview[0].fingerprint, "registered-fingerprint");
+    db.trash_asset_original_with(&preview[0], |_| panic!("missing cleanup is metadata only")).unwrap();
+    drop(db);
+    for _ in 0..2 {
+        let db = Database::open(&path).unwrap();
+        db.migrate().unwrap();
+        assert_eq!(serde_json::to_value(db.get_asset("missing").unwrap()).unwrap(), before);
+        assert!(db.material_catalog_assets("tags", None, None).unwrap().is_empty());
+        assert_eq!(db.list_asset_tags("missing").unwrap().len(), 1);
+        let conn = db.conn.lock().unwrap();
+        let payload: String = conn.query_row("SELECT payload FROM analyses WHERE id='kept-analysis'", [], |r| r.get(0)).unwrap();
+        assert_eq!(payload, "retained");
+        let removed: i64 = conn.query_row("SELECT COUNT(*) FROM removed_missing_asset_originals WHERE asset_id='missing'", [], |r| r.get(0)).unwrap();
+        assert_eq!(removed, 1);
+    }
+}
+
+#[test]
+fn missing_original_cleanup_preserves_canvas_nodes_and_cannot_revive_on_last_node_removal() {
+    use crate::core::{creative_session_contract::{CreativeNodeKind, CreativeNodeRole}, project_canvas::NewCanvasNode};
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    f.db.create_project("missing-canvas", "project", "blank:missing-canvas", "project", "blank").unwrap();
+    f.db.ensure_project_canvas("missing-canvas").unwrap();
+    f.db.create_canvas_node(&NewCanvasNode {
+        id: "missing-node".into(), project_id: "missing-canvas".into(), thread_id: None,
+        kind: CreativeNodeKind::Asset, asset_id: Some(entry.asset_id.clone()), role: Some(CreativeNodeRole::Reference),
+        payload_json: r#"{"schema_version":1,"snapshot":{"name":"one"}}"#.into(),
+        x: 10., y: 20., width: 100., height: 80., z_index: 1, position_locked: false,
+    }).unwrap();
+    let before = serde_json::to_value(f.db.list_canvas_nodes("missing-canvas").unwrap()).unwrap();
+    let moved = f.target.join("moved.png");
+    fs::rename(&entry.path, &moved).unwrap();
+    let preview = f.db.preview_asset_originals(&[entry.asset_id.clone()]).unwrap();
+    f.db.trash_asset_original_with(&preview[0], |_| panic!("missing original cannot be recycled")).unwrap();
+    assert_eq!(serde_json::to_value(f.db.list_canvas_nodes("missing-canvas").unwrap()).unwrap(), before);
+    f.db.remove_canvas_node("missing-node").unwrap();
+    assert!(f.db.material_catalog_assets("tags", None, None).unwrap().is_empty());
+    assert!(f.db.get_asset(&entry.asset_id).unwrap().is_some());
+    assert!(moved.is_file());
 }

@@ -17,18 +17,21 @@ pub(super) const VIDEO: &str = "lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm'
 pub(super) const AUDIO: &str = "lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg')";
 pub(super) const TEXT: &str = "lower(COALESCE(a.ext,'')) IN ('md','markdown','txt')";
 pub(super) const PROJECT_VISIBLE: &str =
-    "(a.library_hidden=0 OR EXISTS(SELECT 1 FROM external_assets e WHERE e.asset_id=a.id)) AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=a.id)";
+    "(a.library_hidden=0 OR EXISTS(SELECT 1 FROM external_assets e WHERE e.asset_id=a.id)) AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=a.id) AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)";
 
-pub(super) fn library_membership_sql(asset_id: &str, project: Option<&str>) -> String {
+fn connection_membership_sql(asset_id: &str, project: Option<&str>) -> String {
     let connected = format!("NOT EXISTS(SELECT 1 FROM disconnected_library_assets d WHERE d.asset_id={asset_id})");
     match project {
         Some(parameter) => format!("({parameter} IS NOT NULL OR {connected})"),
         None => connected,
     }
 }
+pub(super) fn library_membership_sql(asset_id: &str, project: Option<&str>) -> String {
+    format!("{} AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id={asset_id})", connection_membership_sql(asset_id, project))
+}
 pub(super) fn catalog_visibility(project: bool) -> String {
     if project { PROJECT_VISIBLE.to_owned() }
-    else { format!("{PROJECT_VISIBLE} AND {}", library_membership_sql("a.id", None)) }
+    else { format!("{PROJECT_VISIBLE} AND {}", connection_membership_sql("a.id", None)) }
 }
 
 #[derive(Serialize)]
@@ -56,7 +59,7 @@ impl Database {
         let mut stmt = conn.prepare(&format!("SELECT t.id,t.name,t.classification_description,
             (SELECT COUNT(*) FROM asset_tags at JOIN assets a ON a.id=at.asset_id WHERE at.tag_id=t.id AND {IMAGE} AND {visible}),
             (SELECT COUNT(*) FROM asset_tags at JOIN assets a ON a.id=at.asset_id JOIN project_assets pa ON pa.asset_id=a.id
-             WHERE at.tag_id=t.id AND pa.project_id=?1 AND {IMAGE}) FROM tags t"))?;
+             WHERE at.tag_id=t.id AND pa.project_id=?1 AND {IMAGE} AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)) FROM tags t"))?;
         let tags = stmt
             .query_map([project], |r| {
                 Ok(CatalogTag {

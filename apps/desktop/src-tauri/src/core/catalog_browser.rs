@@ -267,7 +267,7 @@ impl Database {
         }
         let mut project_counts = BTreeMap::new();
         if let Some(project) = context_project {
-            let mut stmt = conn.prepare(&format!("SELECT t.tag_id,COUNT(*) FROM project_assets pa JOIN assets a ON a.id=pa.asset_id JOIN asset_tags t ON t.asset_id=a.id WHERE pa.project_id=? AND {IMAGE} GROUP BY t.tag_id"))?;
+            let mut stmt = conn.prepare(&format!("SELECT t.tag_id,COUNT(*) FROM project_assets pa JOIN assets a ON a.id=pa.asset_id JOIN asset_tags t ON t.asset_id=a.id WHERE pa.project_id=? AND {IMAGE} AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id) GROUP BY t.tag_id"))?;
             for row in stmt.query_map([project], |r| {
                 Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
             })? {

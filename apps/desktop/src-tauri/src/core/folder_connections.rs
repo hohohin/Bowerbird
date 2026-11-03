@@ -19,6 +19,16 @@ fn invalid(value: impl Into<String>) -> AppError {
 fn string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
+fn registered_path_spelling(path: &Path) -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let raw = string(path).replace('/', "\\");
+        if raw.starts_with(r"\\?\") { return PathBuf::from(raw); }
+        if let Some(unc) = raw.strip_prefix(r"\\") { return PathBuf::from(format!(r"\\?\UNC\{unc}")); }
+        if path.is_absolute() { return PathBuf::from(format!(r"\\?\{raw}")); }
+    }
+    path.to_owned()
+}
 fn id() -> String {
     ulid::Ulid::new().to_string()
 }
@@ -107,6 +117,8 @@ pub struct AssetOriginal {
     pub name: String,
     pub path: String,
     pub fingerprint: String,
+    #[serde(default)]
+    pub missing: bool,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1174,28 +1186,39 @@ impl Database {
                 .as_deref()
                 .ok_or_else(|| invalid("原文件暂不可用，请重新定位后重试"))?,
         );
-        if fs::symlink_metadata(stored)?.file_type().is_symlink() {
-            return Err(invalid("文件已变为链接，请刷新后重试"));
-        }
-        let path = fs::canonicalize(stored)?;
-        if !path.is_file() || !media(&path) {
-            return Err(invalid("原文件暂不可用，请重新定位后重试"));
-        }
-        let before = stamp(&path)?;
-        let fingerprint = external_files::fingerprint(&path)?;
-        if stamp(&path)? != before {
-            return Err(invalid("原文件正在变化，请稍后重新确认"));
-        }
         let expected: Option<String> = self.conn.lock().unwrap().query_row(
             "SELECT COALESCE(e.fingerprint,f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1", [id], |row| row.get(0))?;
-        if expected.is_some_and(|value| value != fingerprint) {
-            return Err(invalid("原文件内容已变化，请刷新后重新确认"));
-        }
+        let checked = (|| -> AppResult<(PathBuf, String)> {
+            if fs::symlink_metadata(stored)?.file_type().is_symlink() {
+                return Err(invalid("文件已变为链接，请刷新后重试"));
+            }
+            let path = fs::canonicalize(stored)?;
+            if !path.is_file() || !media(&path) {
+                return Err(invalid("原文件暂不可用，请重新定位后重试"));
+            }
+            let before = stamp(&path)?;
+            let fingerprint = external_files::fingerprint(&path)?;
+            if stamp(&path)? != before {
+                return Err(invalid("原文件正在变化，请稍后重新确认"));
+            }
+            if expected.as_deref().is_some_and(|value| value != fingerprint) {
+                return Err(invalid("原文件内容已变化，请刷新后重新确认"));
+            }
+            Ok((path, fingerprint))
+        })();
+        let (path, fingerprint, missing) = match checked {
+            Ok((path, fingerprint)) => (path, fingerprint, false),
+            Err(AppError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound && media(stored) => {
+                (stored.to_owned(), expected.unwrap_or_default(), true)
+            }
+            Err(error) => return Err(error),
+        };
         Ok(AssetOriginal {
             asset_id: asset.id,
             name: name(&path),
             path: string(&path),
             fingerprint,
+            missing,
         })
     }
     pub fn trash_asset_original(&self, original: &AssetOriginal) -> AppResult<()> {
@@ -1207,7 +1230,7 @@ impl Database {
         trash: impl Fn(&Path) -> AppResult<()>,
     ) -> AppResult<()> {
         let current = self.asset_original(&original.asset_id)?;
-        if current.path != original.path || current.fingerprint != original.fingerprint {
+        if current.missing != original.missing || current.path != original.path || current.fingerprint != original.fingerprint {
             return Err(invalid("原文件的位置或内容已变化，请重新打开确认窗口"));
         }
         let conn = self.conn.lock().unwrap();
@@ -1217,6 +1240,27 @@ impl Database {
             [&original.asset_id],
             |row| row.get(0),
         )?;
+        if original.missing {
+            if stored != current.path {
+                return Err(invalid("原文件的位置已变化，请重新打开确认窗口"));
+            }
+            match fs::symlink_metadata(&stored) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+                Err(error) => return Err(error.into()),
+                Ok(_) => return Err(invalid("原文件已恢复，请重新打开确认窗口")),
+            }
+            // Missing originals cannot be canonicalized. Normalize only Windows path spelling;
+            // never discover a replacement file or follow historical aliases during deletion.
+            let canonical = registered_path_spelling(Path::new(&stored));
+            let names = external_files::connection_path_spellings(Path::new(&stored), &canonical);
+            tx.execute("INSERT OR REPLACE INTO removed_missing_asset_originals(asset_id,path) SELECT id,?5 FROM assets WHERE id=?4 OR store_path IN (?1,?2,?3)",
+                params![names[0],names[1],names[2],current.asset_id,current.path])?;
+            tx.execute("DELETE FROM connected_entries WHERE is_reference=0 AND path IN (?1,?2,?3)", params![names[0],names[1],names[2]])?;
+            // Invalidate the reference stamp so an unchanged original returning between scans
+            // still runs the verified index path and restores its cleaned-up library entry.
+            tx.execute("UPDATE connected_entries SET available=0,mtime=NULL WHERE asset_id IN (SELECT asset_id FROM removed_missing_asset_originals WHERE path=?1)", [&current.path])?;
+            return tx.commit().map_err(Into::into);
+        }
         if fs::canonicalize(&stored)? != Path::new(&current.path) {
             return Err(invalid("原文件的位置已变化，请重新打开确认窗口"));
         }

@@ -227,7 +227,8 @@ use shell_thumbnail::cached as shell_thumbnail;
 mod connected_media;
 pub(crate) use connected_media::connection_path_spellings;
 
-fn restore_trashed_original(conn: &rusqlite::Connection, id: &str) -> AppResult<()> {
+fn restore_present_original(conn: &rusqlite::Connection, id: &str) -> AppResult<()> {
+    conn.execute("DELETE FROM removed_missing_asset_originals WHERE asset_id=?1", [id])?;
     if conn.execute("DELETE FROM trashed_asset_originals WHERE asset_id=?1", [id])? > 0 {
         conn.execute("UPDATE external_assets SET library_member=1 WHERE asset_id=?1", [id])?;
         conn.execute("UPDATE assets SET library_hidden=0 WHERE id=?1", [id])?;
@@ -277,7 +278,7 @@ impl Database {
         if let Some(id) = managed {
             let conn = self.conn.lock().unwrap();
             let tx = conn.unchecked_transaction()?;
-            restore_trashed_original(&tx, &id)?;
+            restore_present_original(&tx, &id)?;
             tx.commit()?;
             drop(conn);
             return self.get_asset(&id)?.ok_or_else(|| invalid("素材已不存在"));
@@ -317,7 +318,7 @@ impl Database {
             }
             // A historical alias can still exist while the current original is missing.
             if fs::canonicalize(&current).ok().is_some_and(|current| current == Path::new(&path)) {
-                restore_trashed_original(&tx, &id)?;
+                restore_present_original(&tx, &id)?;
             }
             id
         } else {
@@ -448,6 +449,7 @@ impl Database {
         tx.execute("UPDATE assets SET origin_path=?2,store_path=?2,thumb_path=?3,size=?4,width=?5,height=?6 WHERE id=?1",params![id,path,thumb,fs::metadata(&path)?.len() as i64,dimensions.0,dimensions.1])?;
         let mtime = fs::metadata(&path)?.modified().ok().and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok()).map(|time| time.as_secs() as i64);
         tx.execute("UPDATE assets SET duration=?2,ext=?3,file_mtime=?4 WHERE id=?1", params![id,media.duration,media.ext,mtime])?;
+        tx.execute("DELETE FROM removed_missing_asset_originals WHERE asset_id=?1", [id])?;
         tx.commit()?;
         drop(conn);
         self.get_asset(id)?.ok_or_else(|| invalid("引用不存在"))
