@@ -1233,6 +1233,7 @@ impl Database {
         if current.missing != original.missing || current.path != original.path || current.fingerprint != original.fingerprint {
             return Err(invalid("原文件的位置或内容已变化，请重新打开确认窗口"));
         }
+        if current.missing { return self.cleanup_missing_original(&current).map(|_| ()); }
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let stored: String = tx.query_row(
@@ -1240,27 +1241,6 @@ impl Database {
             [&original.asset_id],
             |row| row.get(0),
         )?;
-        if original.missing {
-            if stored != current.path {
-                return Err(invalid("原文件的位置已变化，请重新打开确认窗口"));
-            }
-            match fs::symlink_metadata(&stored) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
-                Err(error) => return Err(error.into()),
-                Ok(_) => return Err(invalid("原文件已恢复，请重新打开确认窗口")),
-            }
-            // Missing originals cannot be canonicalized. Normalize only Windows path spelling;
-            // never discover a replacement file or follow historical aliases during deletion.
-            let canonical = registered_path_spelling(Path::new(&stored));
-            let names = external_files::connection_path_spellings(Path::new(&stored), &canonical);
-            tx.execute("INSERT OR REPLACE INTO removed_missing_asset_originals(asset_id,path) SELECT id,?5 FROM assets WHERE id=?4 OR store_path IN (?1,?2,?3)",
-                params![names[0],names[1],names[2],current.asset_id,current.path])?;
-            tx.execute("DELETE FROM connected_entries WHERE is_reference=0 AND path IN (?1,?2,?3)", params![names[0],names[1],names[2]])?;
-            // Invalidate the reference stamp so an unchanged original returning between scans
-            // still runs the verified index path and restores its cleaned-up library entry.
-            tx.execute("UPDATE connected_entries SET available=0,mtime=NULL WHERE asset_id IN (SELECT asset_id FROM removed_missing_asset_originals WHERE path=?1)", [&current.path])?;
-            return tx.commit().map_err(Into::into);
-        }
         if fs::canonicalize(&stored)? != Path::new(&current.path) {
             return Err(invalid("原文件的位置已变化，请重新打开确认窗口"));
         }
@@ -1280,6 +1260,37 @@ impl Database {
             tracing::error!("original recycled but metadata commit failed: {error}");
             invalid("原文件已放入回收站，但列表更新失败，请刷新后核对")
         })
+    }
+    /// Metadata-only cleanup. Existing files can never reach a recycle callback here.
+    pub(crate) fn cleanup_missing_original(&self, original: &AssetOriginal) -> AppResult<usize> {
+        if !original.missing { return Err(invalid("原文件仍存在，不能清理为失效条目")); }
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let (stored, fingerprint): (String, Option<String>) = tx.query_row(
+            "SELECT a.store_path,COALESCE(e.fingerprint,f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1",
+            [&original.asset_id], |row| Ok((row.get(0)?,row.get(1)?)))?;
+        if fingerprint.as_deref().unwrap_or("") != original.fingerprint { return Err(invalid("素材记录已变化，请重新确认")); }
+        if stored != original.path {
+            return Err(invalid("原文件的位置已变化，请重新打开确认窗口"));
+        }
+        match fs::symlink_metadata(&stored) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
+            Ok(_) => return Err(invalid("原文件已恢复，请重新打开确认窗口")),
+        }
+        // Missing originals cannot be canonicalized. Normalize only Windows path spelling;
+        // never discover a replacement file or follow historical aliases during deletion.
+        let canonical = registered_path_spelling(Path::new(&stored));
+        let names = external_files::connection_path_spellings(Path::new(&stored), &canonical);
+        let added: usize = tx.query_row("SELECT COUNT(*) FROM assets a WHERE (a.id=?4 OR a.store_path IN (?1,?2,?3)) AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)", params![names[0],names[1],names[2],original.asset_id], |row| row.get(0))?;
+        tx.execute("INSERT OR REPLACE INTO removed_missing_asset_originals(asset_id,path) SELECT id,?5 FROM assets WHERE id=?4 OR store_path IN (?1,?2,?3)",
+            params![names[0],names[1],names[2],original.asset_id,original.path])?;
+        tx.execute("DELETE FROM connected_entries WHERE is_reference=0 AND path IN (?1,?2,?3)", params![names[0],names[1],names[2]])?;
+        // Invalidate the reference stamp so an unchanged original returning between scans
+        // still runs the verified index path and restores its cleaned-up library entry.
+        tx.execute("UPDATE connected_entries SET available=0,mtime=NULL WHERE asset_id IN (SELECT asset_id FROM removed_missing_asset_originals WHERE path=?1)", [&original.path])?;
+        tx.commit()?;
+        Ok(added)
     }
     pub fn remove_connection_references(&self, ids: &[String]) -> AppResult<()> {
         self.remove_connection_references_with(ids, recycle)

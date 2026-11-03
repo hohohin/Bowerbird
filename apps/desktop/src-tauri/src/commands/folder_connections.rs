@@ -1,6 +1,7 @@
 use crate::{
     core::{
         folder_connections::{AssetOriginal, ConnectionEntry, FolderConnection},
+        missing_originals::MissingOriginalSweep,
         paths::LibraryPaths,
     },
     db::Database,
@@ -10,6 +11,7 @@ use std::{
     collections::HashSet,
     path::PathBuf,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -25,9 +27,39 @@ struct RefreshQueue {
     all: bool,
     roots: HashSet<String>,
     priority: Option<String>,
+    originals: bool,
+    schedule: OriginalCheckSchedule,
+}
+impl RefreshQueue {
+    fn has_work(&self) -> bool {
+        self.all || !self.roots.is_empty() || self.originals
+    }
+}
+#[derive(Default)]
+struct OriginalCheckSchedule {
+    running: bool,
+    completed: Option<Instant>,
+    pending: bool,
+}
+impl OriginalCheckSchedule {
+    fn request(&mut self, now: Instant, focused: bool) -> bool {
+        let interval = Duration::from_secs(if focused || self.pending { 30 } else { 300 });
+        if self.running || self.completed.is_some_and(|last| now.duration_since(last) < interval) {
+            return false;
+        }
+        self.running = true;
+        true
+    }
+    fn complete(&mut self, now: Instant, pending: bool) {
+        self.running = false;
+        self.completed = Some(now);
+        self.pending = pending;
+    }
 }
 static REFRESH: std::sync::LazyLock<Mutex<RefreshQueue>> =
     std::sync::LazyLock::new(|| Mutex::new(RefreshQueue::default()));
+static ORIGINALS: std::sync::LazyLock<Mutex<MissingOriginalSweep>> =
+    std::sync::LazyLock::new(|| Mutex::new(MissingOriginalSweep::default()));
 fn changed(app: &AppHandle) {
     let _ = app.emit("library://assets-changed", ());
     let _ = app.emit("external-files://changed", ());
@@ -49,6 +81,19 @@ pub(super) async fn mutation<T: Send + 'static>(
 fn refresh(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>, folder: Option<String>) {
     queue_refresh(app, db, paths, None, folder);
 }
+fn request_originals_check(
+    app: AppHandle,
+    db: Arc<Database>,
+    paths: Arc<LibraryPaths>,
+    focused: bool,
+) {
+    let mut queue = REFRESH.lock().unwrap();
+    if !queue.schedule.request(Instant::now(), focused) {
+        return;
+    }
+    queue.originals = true;
+    start_refresh(app, db, paths, queue);
+}
 fn queue_refresh(
     app: AppHandle,
     db: Arc<Database>,
@@ -65,6 +110,77 @@ fn queue_refresh(
     if priority.is_some() {
         queue.priority = priority;
     }
+    if queue.schedule.request(Instant::now(), true) {
+        queue.originals = true;
+    }
+    start_refresh(app, db, paths, queue);
+}
+fn check_originals(db: &Database, paths: &LibraryPaths) -> AppResult<bool> {
+    let batch = ORIGINALS.lock().unwrap().check_batch(db, paths, Instant::now())?;
+    let mut queue = REFRESH.lock().unwrap();
+    if batch.more {
+        queue.originals = true;
+    } else {
+        queue.schedule.complete(Instant::now(), batch.pending);
+    }
+    let changed = batch.removed + batch.restored > 0;
+    if changed {
+        tracing::info!(removed = batch.removed, restored = batch.restored, "missing originals reconciled");
+    }
+    Ok(changed)
+}
+fn scan_requested_roots(
+    app: &AppHandle,
+    db: &Database,
+    paths: &LibraryPaths,
+    all: bool,
+    requested: &HashSet<String>,
+    priority: Option<&str>,
+) -> AppResult<()> {
+    let priority_root = priority
+        .and_then(|id| db.connected_folder(id).ok())
+        .map(|f| f.root_id);
+    let mut ids = db.connected_root_ids()?;
+    if !all {
+        ids.retain(|id| requested.contains(id));
+    }
+    ids.sort_by_key(|id| Some(id) != priority_root.as_ref());
+    let mut last = Instant::now() - Duration::from_secs(1);
+    for id in ids {
+        let value = db.scan_connection_prioritized(paths, &id, priority, || {
+            if last.elapsed() >= Duration::from_millis(500) {
+                changed(app);
+                last = Instant::now();
+            }
+        });
+        if let Err(error) = value {
+            tracing::warn!("connection scan {id}: {error}");
+        }
+    }
+    Ok(())
+}
+fn finish_refresh(app: &AppHandle, scanned_roots: bool, originals: bool, result: AppResult<bool>) {
+    let originals_changed = match result {
+        Ok(changed) => changed,
+        Err(error) => {
+            if originals {
+                REFRESH.lock().unwrap().schedule.complete(Instant::now(), true);
+            }
+            tracing::warn!("connection refresh: {error}");
+            false
+        }
+    };
+    // A failed originals check must not swallow the final directory refresh.
+    if scanned_roots || originals_changed {
+        changed(app);
+    }
+}
+fn start_refresh(
+    app: AppHandle,
+    db: Arc<Database>,
+    paths: Arc<LibraryPaths>,
+    mut queue: std::sync::MutexGuard<'_, RefreshQueue>,
+) {
     if queue.running {
         return;
     }
@@ -74,55 +190,35 @@ fn queue_refresh(
         loop {
             // Multiple panes/focus events and bursts of writes share one background walk.
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            let (all, requested, priority) = {
+            let (all, requested, priority, originals) = {
                 let mut queue = REFRESH.lock().unwrap();
                 (
                     std::mem::take(&mut queue.all),
                     std::mem::take(&mut queue.roots),
                     queue.priority.clone(),
+                    std::mem::take(&mut queue.originals),
                 )
             };
             if let Ok(_permit) = GATE.acquire().await {
                 let (app2, db2, paths2) = (app.clone(), db.clone(), paths.clone());
-                let result = tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
-                    let priority_root = priority
-                        .as_deref()
-                        .and_then(|id| db2.connected_folder(id).ok())
-                        .map(|f| f.root_id);
-                    let mut ids = db2.connected_root_ids()?;
-                    if !all {
-                        ids.retain(|id| requested.contains(id));
+                let scanned_roots = all || !requested.is_empty();
+                let result = tauri::async_runtime::spawn_blocking(move || -> AppResult<bool> {
+                    if scanned_roots {
+                        scan_requested_roots(&app2, &db2, &paths2, all, &requested, priority.as_deref())?;
                     }
-                    ids.sort_by_key(|id| Some(id) != priority_root.as_ref());
-                    let mut last = std::time::Instant::now() - std::time::Duration::from_secs(1);
-                    for id in ids {
-                        let value = db2.scan_connection_prioritized(
-                            &paths2,
-                            &id,
-                            priority.as_deref(),
-                            || {
-                                if last.elapsed() >= std::time::Duration::from_millis(500) {
-                                    changed(&app2);
-                                    last = std::time::Instant::now();
-                                }
-                            },
-                        );
-                        if let Err(error) = value {
-                            tracing::warn!("connection scan {id}: {error}");
-                        }
+                    if originals {
+                        check_originals(&db2, &paths2)
+                    } else {
+                        Ok(false)
                     }
-                    Ok(())
                 })
-                .await;
-                match result {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => tracing::warn!("connection refresh: {error}"),
-                    Err(error) => tracing::warn!("connection refresh worker: {error}"),
-                }
-                changed(&app);
+                .await
+                .map_err(|error| AppError::Other(format!("connection refresh worker: {error}")))
+                .and_then(|value| value);
+                finish_refresh(&app, scanned_roots, originals, result);
             }
             let mut queue = REFRESH.lock().unwrap();
-            if queue.all || !queue.roots.is_empty() {
+            if queue.has_work() {
                 continue;
             }
             queue.running = false;
@@ -409,4 +505,39 @@ pub async fn remove_connection_references(
 ) -> AppResult<()> {
     let db = db.inner().clone();
     mutation(app, move || db.remove_connection_references(&ids)).await
+}
+
+#[cfg(test)]
+mod maintenance_tests {
+    use super::*;
+
+    #[test]
+    fn checks_on_startup_without_roots_then_waits_between_healthy_sweeps() {
+        let now = Instant::now();
+        let mut queue = RefreshQueue::default();
+        assert!(queue.roots.is_empty());
+        queue.originals = queue.schedule.request(now, false);
+        assert!(queue.has_work());
+        assert!(std::mem::take(&mut queue.originals));
+        assert!(!queue.has_work());
+        assert!(!queue.schedule.request(now + Duration::from_secs(600), true));
+        queue.schedule.complete(now, false);
+        assert!(!queue.schedule.request(now + Duration::from_secs(299), false));
+        assert!(queue.schedule.request(now + Duration::from_secs(300), false));
+    }
+
+    #[test]
+    fn missing_confirmation_and_focus_share_throttle_without_duplicate_workers() {
+        let now = Instant::now();
+        let mut schedule = OriginalCheckSchedule::default();
+        schedule.complete(now, true);
+        assert!(!schedule.request(now + Duration::from_secs(29), false));
+        assert!(schedule.request(now + Duration::from_secs(30), false));
+        assert!(!schedule.request(now + Duration::from_secs(31), true));
+        schedule.complete(now + Duration::from_secs(40), false);
+        assert!(!schedule.request(now + Duration::from_secs(69), true));
+        assert!(schedule.request(now + Duration::from_secs(70), true));
+        schedule.complete(now + Duration::from_secs(80), false);
+        assert!(!schedule.request(now + Duration::from_secs(110), false));
+    }
 }
