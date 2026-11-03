@@ -42,10 +42,23 @@ try {
   }, images);
   await projectsTab.click();
   await panel.locator(".project-manager-card img").first().waitFor();
-  assert.equal(await panel.locator(".project-manager-card").count(), 6);
+  assert.equal(await panel.locator(".project-manager-card").count(), 7);
+  assert.equal(await panel.locator('.project-manager-grid > :first-child .project-create-card').count(), 1);
+  const createCard = panel.locator('.project-create-card');
+  await createCard.hover();
+  await page.waitForTimeout(350);
+  const createLayers = await createCard.evaluate(el => ({
+    art: getComputedStyle(el.querySelector('.project-create-art')).backgroundColor,
+    base: getComputedStyle(el.querySelector('.is-base')).backgroundColor,
+    depths: [...el.querySelectorAll('.project-create-layer')].map(layer => new DOMMatrixReadOnly(getComputedStyle(layer).transform).m43),
+  }));
+  assert.equal(createLayers.art, 'rgba(0, 0, 0, 0)');
+  assert.notEqual(createLayers.base, 'rgba(0, 0, 0, 0)');
+  assert.deepEqual(createLayers.depths, [8, 24, 36]);
+  await page.mouse.move(10, 10);
   assert.equal(await panel.locator(".project-manager-count").textContent(), "06");
   assert.equal(await panel.locator(".project-manager-count").getAttribute("aria-label"), "6 个项目");
-  assert.equal(await panel.locator(".project-manager-meta").first().textContent(), "12 个素材·刚刚更新");
+  assert.equal(await panel.locator(".project-manager-card:not(.project-create-card) .project-manager-meta").first().textContent(), "12 个素材·刚刚更新");
   assert.equal(await page.getByRole('dialog').count(), 0, 'project directory is a page, not a dialog');
   assert.equal(await panel.locator('.app-modal-close').count(), 0);
   assert.equal(await projectsTab.getAttribute('aria-current'), 'page');
@@ -79,8 +92,8 @@ try {
     const image = img.getBoundingClientRect(), cell = img.parentElement.getBoundingClientRect();
     return ['x', 'y', 'width', 'height'].every(key => Math.abs(image[key] - cell[key]) < .1) && getComputedStyle(img).objectFit === 'cover';
   })), true, 'images fill their cells without intrinsic grid overflow or displaced cropping');
-  const card = panel.locator(".project-manager-card").nth(1);
-  const slot = panel.locator('.project-manager-slot').nth(1);
+  const card = panel.locator(".project-manager-card:not(.project-create-card)").nth(1);
+  const slot = card.locator('..');
   const beforeHover = await slot.boundingBox();
   await card.hover({ position: { x: 50, y: 50 } }); await page.waitForTimeout(350);
   const depth = await card.evaluate(el => ({ transform: getComputedStyle(el).transform, cover: getComputedStyle(el.querySelector('.library-project-mosaic')).transform,
@@ -108,13 +121,13 @@ try {
   await page.evaluate(() => { delete document.hidden; document.dispatchEvent(new Event('visibilitychange')); });
   await page.waitForFunction(() => document.querySelector('.project-manager-ambient').dataset.paused === 'false');
   await panel.getByRole("textbox", { name: "搜索项目" }).fill("咖啡");
-  assert.equal(await panel.locator(".project-manager-card").count(), 1);
+  assert.equal(await panel.locator(".project-manager-card").count(), 2);
   await panel.getByRole("textbox", { name: "搜索项目" }).fill("找不到");
   await panel.getByText("没有匹配的项目").waitFor();
   await panel.getByRole("textbox", { name: "搜索项目" }).fill("");
   await panel.getByRole("combobox", { name: "项目排序" }).click();
   await page.getByRole("option", { name: "项目名称", exact: true }).click();
-  const names = await panel.locator(".library-project-folder-title strong").allTextContents();
+  const names = await panel.locator(".project-manager-card:not(.project-create-card) .library-project-folder-title strong").allTextContents();
   assert.deepEqual(names, [...names].sort((a, b) => a.localeCompare(b, "zh-CN")));
   await panel.getByRole("combobox", { name: "项目排序" }).click();
   await page.getByRole("option", { name: "最近更新", exact: true }).click();
@@ -144,7 +157,7 @@ try {
   const arrowsAtCorner = () => panel.locator('.project-manager-open').evaluateAll(buttons => buttons.every(button =>
     getComputedStyle(button).position === 'absolute' && button.offsetTop === 2 && Math.abs(button.offsetLeft + button.offsetWidth + 4 - button.offsetParent.clientWidth) < 1));
   assert.equal(await arrowsAtCorner(), true, 'entry arrows occupy the top-right corner');
-  const titleRow = panel.locator('.library-project-folder-title').first();
+  const titleRow = panel.locator('.project-manager-card:not(.project-create-card) .library-project-folder-title').first();
   assert.equal(await titleRow.getByRole('button', { name: '项目操作 山野护肤 · 品牌视觉', exact: true }).count(), 1);
   const selectedBeforeMenu = await panel.locator('.project-manager-activate[aria-current="true"]').getAttribute('aria-label');
   await panel.getByRole("button", { name: "项目操作 山野护肤 · 品牌视觉", exact: true }).click();
@@ -155,15 +168,14 @@ try {
   assert.equal(await panel.isVisible(), true, "Escape closes the project menu without leaving the page");
   assert.equal(await page.evaluate(() => window.store.getState().projectContextMenu), null);
   await page.evaluate(() => window.store.setState({ projectContextMenu: null }));
-  await panel.locator('.project-manager-card').first().click({ button: 'right' });
+  await panel.locator('.project-manager-card:not(.project-create-card)').first().click({ button: 'right' });
   assert.equal(await page.evaluate(() => window.store.getState().projectContextMenu.projectId), 'design-0', 'right click and title menu use the same project menu');
   await page.evaluate(() => window.store.setState({ projectContextMenu: null }));
   for (const theme of ["light", "dark"]) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await page.mouse.move(10, 10);
     await page.waitForTimeout(300);
-    const createColors = await panel.getByRole('button', { name: '新建项目', exact: true }).evaluate(el => ({ color: getComputedStyle(el).color, ink: getComputedStyle(el.closest('.project-manager-panel')).color, background: getComputedStyle(el).backgroundColor }));
-    assert.equal(createColors.color, createColors.ink, 'creation button uses neutral text in both themes');
+    assert.equal(await panel.locator('.project-create-card').count(), 1, 'creation card remains available in both themes');
     const surface = await panel.evaluate(el => ({ filter: getComputedStyle(el).backdropFilter, background: getComputedStyle(el).backgroundColor }));
     assert.equal(surface.filter, 'none', 'full page has no modal backdrop blur');
     assert.match(surface.background, /^rgb\(/, 'page surface is opaque in both themes');

@@ -9,7 +9,7 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, reducedMotion: 'reduce' });
 page.setDefaultTimeout(10000);
 const errors = [];
-page.on('pageerror', error => errors.push(error.message));
+page.on('pageerror', error => { errors.push(error.message); console.error(error.message); });
 await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
 const ids = () => page.locator('[data-library-pane]').evaluateAll(elements => elements.map(el => el.dataset.libraryPane));
 const pane = id => page.locator(`[data-library-pane="${id}"]`);
@@ -34,7 +34,7 @@ async function checkControls() {
       return [.25, .75].every(fraction => document.elementFromPoint(r.left + r.width * fraction, r.top + r.height / 2)?.closest('button') === button);
     });
     assert.ok(bothHalves, 'both halves of the split button must be clickable');
-    const previousClose = await boundary.evaluate(element => element.previousElementSibling.querySelector('.library-pane-close').getBoundingClientRect().right);
+    const previousClose = await boundary.locator('xpath=preceding-sibling::*[@class="library-split-pane"][1]').locator('.library-pane-close').evaluate(element => element.getBoundingClientRect().right);
     assert.ok(previousClose < add.x, 'close and split click targets must not overlap');
   }
 }
@@ -67,11 +67,13 @@ try {
   assert.deepEqual(await ids(), ['home-pane-1', 'home-pane-4']);
   const divider = page.getByRole('separator');
   await divider.focus(); await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => Number(document.querySelector('[role="separator"]')?.getAttribute('aria-valuenow')) > 50);
   assert.ok(Number(await divider.getAttribute('aria-valuenow')) > 50);
   await page.keyboard.press('Home');
   const dividerBox = await divider.boundingBox();
   await page.mouse.move(dividerBox.x + dividerBox.width / 2, dividerBox.y + 100);
   await page.mouse.down(); await page.mouse.move(dividerBox.x + dividerBox.width / 2 + 40, dividerBox.y + 100); await page.mouse.up();
+  await page.waitForFunction(() => Number(document.querySelector('[role="separator"]')?.getAttribute('aria-valuenow')) > 50);
   assert.ok(Number(await divider.getAttribute('aria-valuenow')) > 50);
   await divider.dblclick({ position: { x: 3, y: 120 } });
   await page.setViewportSize({ width: 900, height: 700 });

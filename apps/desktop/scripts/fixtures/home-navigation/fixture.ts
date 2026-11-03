@@ -1,5 +1,6 @@
 import { useStore } from '../../../src/store';
 import { useLocalFileMode } from '../../../src/lib/localFileMode';
+import { EMPTY_QUICK_TRANSFER } from '../../../src/lib/quickTransferState';
 import { installCatalogPagingMock } from '../catalogPagingMock';
 
 // Closed fixture: no user database, native filesystem, login or network writes.
@@ -24,6 +25,7 @@ w.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: 'main' }, currentWebview: { label: 'main' } }, transformCallback: () => ++callbackId, convertFileSrc: (path: string) => path,
   invoke: async (command: string, args: any = {}) => {
     w.calls.push({ command, args });
+    if (command === 'quick_transfer_status') return EMPTY_QUICK_TRANSFER;
     if (command === 'plugin:event|listen') return args.handler;
     if (command === 'plugin:event|unlisten' || command === 'set_setting' || command === 'refresh_folder_connections') return;
     if (command === 'material_catalog') return catalog;

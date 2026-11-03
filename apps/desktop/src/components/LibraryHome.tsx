@@ -74,8 +74,11 @@ function PaneDivider({ index, ratio, onResize, onSplit }: { index: number; ratio
   const drag = useRef<{ x: number; left: number; total: number } | null>(null);
   function bounds(element: HTMLElement) {
     const boundary = element.parentElement!;
-    const left = boundary.previousElementSibling!.getBoundingClientRect().width;
-    return { left, total: left + boundary.nextElementSibling!.getBoundingClientRect().width };
+    let previous = boundary.previousElementSibling, next = boundary.nextElementSibling;
+    while (previous && !previous.classList.contains("library-split-pane")) previous = previous.previousElementSibling;
+    while (next && !next.classList.contains("library-split-pane")) next = next.nextElementSibling;
+    const left = previous!.getBoundingClientRect().width;
+    return { left, total: left + next!.getBoundingClientRect().width };
   }
   function resize(value: number, total: number) {
     const min = Math.min(.5, 400 / total);

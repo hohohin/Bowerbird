@@ -1,6 +1,6 @@
 import { TacticalSelect } from "./TacticalSelect";
-import { type CSSProperties, useEffect, useMemo, useState } from "react";
-import { LayoutGrid, List, Plus, Search } from "lucide-react";
+import { type CSSProperties, type PointerEvent, useEffect, useMemo, useState } from "react";
+import { LayoutGrid, List, Search } from "lucide-react";
 import { api } from "../lib/api";
 import type { LibraryView } from "../lib/libraryView";
 import { useStore } from "../store";
@@ -9,7 +9,19 @@ import { ProjectFolder } from "./ProjectFolder";
 import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import { ProjectManagerBackdrop } from "./ProjectManagerBackdrop";
+import { ProjectCreateCard } from "./ProjectCreateCard";
 import "./ProjectManagerPanel.css";
+import "./ProjectCreateCard.css";
+
+function tiltProjectCard(event: PointerEvent<HTMLDivElement>) {
+  if (event.pointerType !== "mouse") return;
+  const slot = event.currentTarget, bounds = slot.getBoundingClientRect();
+  const x = (event.clientX - bounds.left) / bounds.width, y = (event.clientY - bounds.top) / bounds.height;
+  slot.style.setProperty("--pm-tilt-x", `${((.5 - y) * 7).toFixed(2)}deg`);
+  slot.style.setProperty("--pm-tilt-y", `${((x - .5) * 7).toFixed(2)}deg`);
+  slot.style.setProperty("--pm-pointer-x", `${x * 100}%`);
+  slot.style.setProperty("--pm-pointer-y", `${y * 100}%`);
+}
 
 export function ProjectManagerPanel({ active, onCreate, onOpen }: { active: boolean; onCreate: () => void; onOpen?: () => void }) {
   const projects = useStore(s => s.projects);
@@ -50,24 +62,18 @@ export function ProjectManagerPanel({ active, onCreate, onOpen }: { active: bool
     <div className="project-manager-main"><div className="project-manager-toolbar">
       <div className="project-manager-search"><Search size={18} aria-hidden="true"/><input aria-label="搜索项目" placeholder="搜索项目…" value={search} onChange={e => setSearch(e.target.value)}/></div>
       <TacticalSelect aria-label="项目排序" value={sort} disabled={!active || projectRoutePending} onValueChange={value => setSort(value)}><option value="recent">最近更新</option><option value="name">项目名称</option></TacticalSelect>
-      <button type="button" className="project-manager-create" disabled={projectRoutePending} onClick={onCreate}><Plus size={17} aria-hidden="true"/>新建项目</button>
     </div>
     {error && <p className="project-manager-error" role="alert">项目封面加载失败 <button type="button" onClick={() => setRevision(r => r + 1)}>重试</button></p>}
     <div ref={pinchRef} className="project-manager-gallery">
       <OverlayScrollArea className="library-browser-scroll" viewportClassName="library-project-page" label="项目滚动条">
-        {groups.length ? <div className={`project-manager-grid is-${view}`} style={{ "--project-card-width": `${width + 100}px` } as CSSProperties}>{groups.map((group, index) =>
-          <div key={group.project.id} className="project-manager-slot" onPointerMove={event => {
-            if (event.pointerType !== "mouse") return;
-            const slot = event.currentTarget, bounds = slot.getBoundingClientRect();
-            const x = (event.clientX - bounds.left) / bounds.width, y = (event.clientY - bounds.top) / bounds.height;
-            slot.style.setProperty("--pm-tilt-x", `${((.5 - y) * 7).toFixed(2)}deg`);
-            slot.style.setProperty("--pm-tilt-y", `${((x - .5) * 7).toFixed(2)}deg`);
-            slot.style.setProperty("--pm-pointer-x", `${x * 100}%`);
-            slot.style.setProperty("--pm-pointer-y", `${y * 100}%`);
-          }} onPointerLeave={event => event.currentTarget.removeAttribute("style")}>
+        <div className={`project-manager-grid is-${view}`} style={{ "--project-card-width": `${width + 100}px` } as CSSProperties}>
+          <div className="project-manager-slot" onPointerMove={tiltProjectCard} onPointerLeave={event => event.currentTarget.removeAttribute("style")}><ProjectCreateCard onCreate={onCreate} disabled={projectRoutePending}/></div>
+          {groups.map((group, index) =>
+          <div key={group.project.id} className="project-manager-slot" onPointerMove={tiltProjectCard} onPointerLeave={event => event.currentTarget.removeAttribute("style")}>
             <ProjectFolder group={group} detailed serial={index + 1} onOpen={onOpen}/>
           </div>
-        )}</div> : <div className="library-page-empty">{search ? "没有匹配的项目" : "还没有项目，创建一个开始创作"}</div>}
+        )}</div>
+        {!!search && !groups.length && <div className="library-page-empty">没有匹配的项目</div>}
       </OverlayScrollArea>
     </div>
     <footer className="home-projects-footer"><ThumbnailSizeSlider scope="projects" appearance="project-manager"/></footer>

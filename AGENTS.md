@@ -25,6 +25,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/UI-DESIGN-SPEC.md` | 当前工业制图视觉与交互规范、深浅色 tokens、卡片／控件／菜单／动效及验收规则 | 设计、修改或审查任何桌面界面前读；产品决策与实装状态仍以 PROJECT.md 为准 |
 | `apps/code-reader-mcp/README.md` | GPT 网页端只读代码 MCP、脱敏快照、Node 权限限制与官方私有 HTTPS 隧道接入 | 代码只读分享、快照更新、MCP 接入或撤销权限前必读 |
 | `dev-doc/Bowerbird开发计划.md` | 当前架构与代码入口（技术栈 / 数据身份 / 生成与理解 provider），已合并旧 provider 草案 | 任何实现工作之前必读；产品决策以 PROJECT.md 为准 |
+| `dev-doc/Bowerbird开发计划.md#复用地图` | 按用途查找 UI、桌面逻辑与服务接口；分类页记录源码、调用、依赖边界及覆盖缺口 | 新增功能或 UI 前先查，再核实当前源码与调用方式 |
 | `dev-doc/Bowerbird定价方案v2-订阅积分制.md` | Bcoin 当前定价、Pro 功能订阅、价格快照、迁移／回退与验证边界；末尾保留历史 v2 草案 | 商业化、定价、积分、功能门控相关工作前必读 |
 | `dev-doc/ARCH-ADJUST-PLAN.md` | 收费化架构调整开发计划（账号 / 积分 / 托管 provider / 支付 / 门控，P0–P9 阶段任务卡 + 验收标准；agent 执行用） | 收费化 / 账号 / 积分 / 云端任何实现工作前必读 |
 | `dev-doc/ARCH-ADJUST-PROGRESS.md` | 收费化当前进度、最近部署证据入口与剩余验收 | 接续收费化任务或核对已记录线上基线时必读 |
@@ -94,6 +95,14 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 ## Working principles
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+### 复用检查
+
+- 涉及新增功能或 UI 时，先查[复用地图](dev-doc/Bowerbird开发计划.md#复用地图)，再核实当前源码、导出入口和实际调用方式。
+- 地图未收录不代表仓库不存在；仍须按相关功能词和同义词跨板块检索，不限于 `shared`、`common` 或 `lib` 目录。
+- 实现前简要说明相关候选路径、复用决定，以及确需新建的原因。
+- 优先使用合适的公共接口，遵守模块和运行时依赖边界；不强行抽象，不直接跨模块导入内部专用实现。
+- 修改公共实现后检查现有调用方；新增、迁移或废弃公共能力时同步更新地图。
 
 ### 1. Think Before Coding
 
