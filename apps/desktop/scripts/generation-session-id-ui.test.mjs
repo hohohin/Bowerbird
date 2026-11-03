@@ -12,10 +12,18 @@ page.on('pageerror', error => errors.push(error.message));
 await page.addInitScript(() => {
   window.copied = [];
   window.notices = [];
-  Object.defineProperty(navigator, 'clipboard', { value: { writeText: async text => {
-    if (window.clipboardFails) throw new Error('denied');
-    window.copied.push(text);
-  } } });
+  window.clipboardWrites = 0;
+  const checkClipboard = () => {
+    if (window.clipboardFails || (window.requireEarlyClipboard && window.diagnosticsResolved)) throw new Error('denied');
+    window.clipboardWrites++;
+  };
+  Object.defineProperty(navigator, 'clipboard', { value: {
+    writeText: async text => { checkClipboard(); window.copied.push(text); },
+    write: async items => {
+      checkClipboard();
+      window.copied.push(await (await items[0].getType('text/plain')).text());
+    },
+  } });
   window.addEventListener('bowerbird://notify', event => window.notices.push(event.detail));
 });
 const surface = page.locator('[aria-label="生成会话详情"]');
@@ -41,15 +49,50 @@ try {
   assert.equal(await page.evaluate(() => window.notices.at(-1).tone), 'success');
   await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
-    api.generationDiagnostics = async jobId => ({ schemaVersion: 1, jobId,
-      attempts: [{ phase: 'preflight', status: 'failed', error: 'synthetic startup failure' }], task: null });
+    window.requireEarlyClipboard = true;
+    api.generationDiagnostics = async jobId => {
+      await new Promise(resolve => { window.resolveDiagnostics = resolve; });
+      window.diagnosticsResolved = true;
+      return { schemaVersion: 1, jobId,
+        attempts: [{ phase: 'preflight', status: 'failed', error: 'synthetic startup failure' }], task: null };
+    };
   });
   await open();
   await menu.getByRole('menuitem', { name: '复制本次会话诊断信息', exact: true }).click();
+  assert.equal(await page.evaluate(() => window.clipboardWrites), 2, 'clipboard write must begin during the click, before diagnostic IPC completes');
+  assert.equal(await page.evaluate(() => window.copied.length), 1, 'report content is not ready yet');
+  await page.evaluate(() => {
+    window.originalGenState = window.store.getState();
+    const next = { ...window.originalGenState.genJobs[window.originalGenState.activeJobId], id: 'switched-while-reading' };
+    window.store.setState({ genJobs: { [next.id]: next }, genJobOrder: [next.id], activeJobId: next.id });
+    window.resolveDiagnostics();
+  });
+  await page.waitForFunction(() => window.copied.length === 2);
   const diagnostic = JSON.parse(await page.evaluate(() => window.copied.pop()));
   assert.equal(diagnostic.jobId, 'failed-before-provider-session');
   assert.equal(diagnostic.attempts[0].phase, 'preflight');
+  assert.equal(diagnostic.memorySnapshot.id, 'failed-before-provider-session', 'pending copy keeps the requested session');
   assert.equal(diagnostic.memorySnapshot.turns[0].error, 'synthetic startup failure');
+  await page.evaluate(() => { window.requireEarlyClipboard = false; window.store.setState(window.originalGenState); });
+
+  // A failed report lookup or clipboard denial must not announce success or copy partial data.
+  for (const [clipboardFails, lookupFails] of [[false, true], [true, false], [true, true]]) {
+    await page.evaluate(async ({ clipboardFails, lookupFails }) => {
+      const { api } = await import('/src/lib/api.ts');
+      window.notices = [];
+      window.clipboardFails = clipboardFails;
+      api.generationDiagnostics = async jobId => {
+        if (lookupFails) { await new Promise(resolve => setTimeout(resolve, 30)); throw new Error('synthetic database failure'); }
+        return { schemaVersion: 1, jobId, attempts: [], task: null };
+      };
+    }, { clipboardFails, lookupFails });
+    await open();
+    await menu.getByRole('menuitem', { name: '复制本次会话诊断信息', exact: true }).click();
+    await page.waitForFunction(() => window.notices.at(-1)?.tone === 'error');
+    assert.equal(await page.evaluate(() => window.copied.length), 1);
+    assert.equal(await page.evaluate(() => window.notices.some(n => n.tone === 'success')), false);
+  }
+  await page.evaluate(() => { window.clipboardFails = false; });
 
   // Persist raw diagnostics, but never expose paths, stack traces or CLI output by default.
   await page.evaluate(() => {
@@ -90,6 +133,7 @@ try {
   await surface.focus();
   await page.keyboard.press('Shift+F10');
   await copy.waitFor();
+  await page.waitForFunction(() => document.activeElement?.textContent?.includes('复制本次会话 ID'));
   assert.equal(await copy.evaluate(el => el === document.activeElement), true);
   await page.keyboard.press('ArrowDown');
   assert.equal(await menu.getByRole('menuitem', { name: '复制本次会话诊断信息', exact: true }).evaluate(el => el === document.activeElement), true);

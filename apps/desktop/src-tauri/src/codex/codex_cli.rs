@@ -25,7 +25,7 @@ use crate::error::AppError;
 pub struct CodexCliProvider {
     /// 可执行文件名/路径，默认 "codex"。
     pub binary: String,
-    /// 模型覆盖；空时生图使用 gpt-6-luna，理解任务沿用 CLI 默认。
+    /// 模型覆盖；空时生图使用 gpt-5.6-luna，理解任务沿用 CLI 默认。
     pub model: String,
     pub enabled: bool,
 }
@@ -310,7 +310,7 @@ impl GenProvider for CodexCliProvider {
             }
         }
         // 首轮与续轮均显式指定生图编排模型及思考强度。
-        let model = if self.model.is_empty() { "gpt-6-luna" } else { &self.model };
+        let model = if self.model.is_empty() { "gpt-5.6-luna" } else { &self.model };
         cmd.arg("-m").arg(model)
             .arg("-c").arg(r#"model_reasoning_effort="low""#);
         cmd.stdin(Stdio::piped())
@@ -841,6 +841,44 @@ exit 1
         for name in ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "CODEX_AUTH_JSON"] {
             assert_eq!(environment[OsStr::new(name)], None);
         }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn image_cli_uses_supported_luna_for_first_and_resumed_turns_and_keeps_overrides() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("bb-codex-image-model-{}", Ulid::new()));
+        fs::create_dir_all(&root).unwrap();
+        let binary = root.join("codex");
+        fs::write(&binary, r#"#!/bin/sh
+printf '%s\n' "$@" > "$0.args"
+cat >/dev/null
+echo '{"type":"turn.failed","error":{"message":"isolated stop before generation"}}'
+exit 1
+"#).unwrap();
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+        for model in ["", "explicit-model"] {
+            for session in [None, Some("existing-session".to_string())] {
+                let provider = CodexCliProvider { binary: binary.to_string_lossy().into_owned(), model: model.into(), enabled: true };
+                let request: CodexRequest = serde_json::from_value(serde_json::json!({
+                    "instruction": "isolated test", "reference_images": ["/test/reference with spaces.png"]
+                })).unwrap();
+                let (tx, _rx) = mpsc::channel(8);
+                let error = provider.generate_image(request, &tx, session.clone()).await.unwrap_err();
+                assert!(error.to_string().contains("isolated stop before generation"));
+                let args = fs::read_to_string(root.join("codex.args")).unwrap();
+                let args: Vec<_> = args.lines().collect();
+                let expected_model = if model.is_empty() { "gpt-5.6-luna" } else { model };
+                assert!(args.windows(2).any(|pair| pair == ["-m", expected_model]));
+                assert!(args.windows(2).any(|pair| pair == ["-c", r#"model_reasoning_effort="low""#]));
+                assert!(args.windows(2).any(|pair| pair == ["--image", "/test/reference with spaces.png"]));
+                assert_eq!(args.contains(&"resume"), session.is_some());
+                if session.is_some() {
+                    assert!(args.windows(2).any(|pair| pair == ["existing-session", "-"]));
+                }
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

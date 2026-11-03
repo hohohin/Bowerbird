@@ -47,6 +47,15 @@ test('ambiguous responses never encourage submitting a second paid task', () => 
   }
 });
 
+test('unsupported Codex model errors explain the failure without hiding it as a generic error', () => {
+  const message = "The 'gpt-6-luna' model is not supported when using Codex with a ChatGPT account.";
+  const expected = '当前账号无法使用所选模型，请更新应用或更换可用模型后重试。';
+  for (const error of [message, { code: 'model_not_found' }, `codex: codex 执行失败（exit status: 1） | error: ${JSON.stringify({ error: { type: 'invalid_request_error', code: 'model_not_found', message } })}`]) {
+    assert.equal(userErrorMessage(error, fallback), expected);
+  }
+  assert.equal(userErrorMessage(expected), expected);
+});
+
 test('clear Chinese validations and product names remain useful', () => {
   for (const message of ['文件名不能为空', '兑换码无效、已过期或已被使用', '需要 Pro 订阅，请前往账号开通。', '请使用 PNG 或 WebP 图片。', '请更换 Ctrl + F2 快捷键。', 'Agent 结果尚未保存，请稍后查看。']) {
     assert.equal(userErrorMessage(message, fallback), message);
