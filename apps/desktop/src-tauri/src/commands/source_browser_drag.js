@@ -54,24 +54,39 @@
       return [...range.getClientRects()].some(rect => containsPoint(rect, point));
     });
   }
-  function passThrough(element, point) {
+  function pinterestHoverCard(target) {
+    if (location.origin !== "https://www.pinterest.com" && location.origin !== "https://pinterest.com") return null;
+    return target.closest('[data-test-id="pin-card-hover-overlay"]')?.closest('[data-test-id="pinWrapper"]') || null;
+  }
+  function pinHoverDecoration(element, pinCard) {
+    // These are Pinterest's image washes, not a general translucent-panel bypass.
+    return !!pinCard && element.closest('[data-test-id="pinWrapper"]') === pinCard
+      && element.matches('[data-test-id="pin-card-hover-overlay-top-wash"], [data-test-id="pin-card-hover-overlay-gradient-full"]');
+  }
+  function transparentColor(color) {
+    return color === "transparent" || ((color.startsWith("rgba(") || color.includes("/")) && /[,/]\s*0(?:\.0*)?%?\)$/.test(color));
+  }
+  function passThrough(element, point, pinCard) {
     if (textAtPoint(element, point) || element.matches('button,input,textarea,select,[contenteditable],dialog,[role="dialog"],[aria-modal="true"]')) return false;
     const style = getComputedStyle(element);
-    const color = style.backgroundColor;
-    const transparent = color === "transparent" || ((color.startsWith("rgba(") || color.includes("/")) && /[,/]\s*0(?:\.0*)?%?\)$/.test(color));
     return style.position !== "fixed" && (Number(style.opacity) === 0
-      || (style.backgroundImage === "none" && transparent));
+      || (style.backgroundImage === "none" && transparentColor(style.backgroundColor)) || pinHoverDecoration(element, pinCard));
   }
-  function reachableMedia(target, media, stack, point) {
+  function layersExposeMedia(media, stack, point, pinCard) {
     // Keep foreground layers: opaque panels and text cannot expose the feed behind them.
     for (const layer of stack) {
       if (layer === media) break;
-      if (!layer.contains(media) && !passThrough(layer, point)) return false;
+      if (!layer.contains(media) && !passThrough(layer, point, pinCard)) return false;
     }
+    return true;
+  }
+  function reachableMedia(target, media, stack, point, pinCard) {
+    if (pinCard && media.closest('[data-test-id="pinWrapper"]') !== pinCard) return false;
+    if (!layersExposeMedia(media, stack, point, pinCard)) return false;
     // Only empty overlays in the same local card may stand in for its media.
     for (let card = target, depth = 0; card && card !== document.body && depth < 4; card = card.parentElement, depth++) {
       if (card.contains(media)) return true;
-      if (!passThrough(card, point)) return false;
+      if (!passThrough(card, point, pinCard)) return false;
     }
     return false;
   }
@@ -92,12 +107,13 @@
     if (!(target instanceof Element) || textAtPoint(target, event) || target.closest("button,input,textarea,select,[contenteditable]:not([contenteditable=false])")) return null;
     const direct = event.composedPath().find(node => node instanceof HTMLVideoElement && visibleMedia(node));
     if (direct) return direct;
+    const pinCard = pinterestHoverCard(target);
     // Note pages with stacked carousels (e.g. Xiaohongshu) keep every slide
     // under the pointer; pick the topmost visible image instead of giving up.
     const stack = document.elementsFromPoint(event.clientX, event.clientY);
     const media = stack.filter(visibleMedia);
     const top = media[0];
-    if (top && reachableMedia(target, top, stack, event)) {
+    if (top && reachableMedia(target, top, stack, event, pinCard)) {
       return media.find(element => element.tagName === "VIDEO" && isPosterFor(top, element)) || top;
     }
     // Cards often put a link or transparent div above the image. Resolve only
@@ -105,14 +121,14 @@
     for (let card = target, depth = 0; card && card !== document.body && depth < 4; card = card.parentElement, depth++) {
       const images = [...card.querySelectorAll("video,img")].filter(image => {
         const rect = image.getBoundingClientRect();
-        return visibleMedia(image) && containsPoint(rect, event) && reachableMedia(target, image, fallbackStack(image, event, stack), event);
+        return visibleMedia(image) && containsPoint(rect, event) && reachableMedia(target, image, fallbackStack(image, event, stack), event, pinCard);
       });
       const videos = images.filter(image => image.tagName === "VIDEO" && visibleMedia(image));
       if (videos.length === 1) return videos[0];
       if (videos.length > 1) return null;
       if (images.length === 1) return images[0];
       if (images.length > 1) return images.filter(visibleMedia).pop() || null;
-      if (!passThrough(card, event)) break;
+      if (!passThrough(card, event, pinCard)) break;
     }
     return null;
   }

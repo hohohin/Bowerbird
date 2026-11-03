@@ -30,6 +30,12 @@ Windows 同源／Blob 用原文档读取，跨源用 CDP 浏览器网络栈。�
 
 验证入口：`scripts/explorer-selection-drag.test.mjs` 使用 Chromium 真实鼠标／原生拖放，检查正文选区、已选文字的原生文本载荷、不生成采集通知，以及笔记图片、轮播、视频和透明覆盖层的图片载荷；`verify-native-explorer.mjs` 增加原生 WebView2 笔记拖选断言。实际结果、旧拖图脚本挂起的基线对照及未覆盖边界见 [修复记录](../project_logs/2026-11-01-explorer-selection.md)。不将合成页面验证记为真实小红书账号或 OS 物理拖放验收。
 
+### 2026-11-04：Pinterest 瀑布流覆盖层直接拖图（源码未发布）
+
+Pinterest 普通 Pin 的图片区域有半透明顶层 wash 和渐变 hover 层，原先通用防穿透规则会将它们视为独立遮挡，导致必须进入详情才能拖图。现仅在精确 Pinterest HTTPS 域名、官方 `pin-card-hover-overlay` 内识别其最近 `pinWrapper`，允许其中两个官方装饰层代理图片命中；图片必须属于同一个最近 wrapper，仍按指针位置与完整绘制顺序确认。
+
+普通遮罩规则、四层祖先边界、正文／按钮／输入框／固定面板与弹窗阻断保持；不放行任意半透明层，不修改站点样式。复用既有清晰图片地址、Pin 来源、拖动通知与采集流程。覆盖源代码依据、红绿与原生验证见 [修复记录](../project_logs/2026-11-04-pinterest-feed-drag.md)。
+
 ### 2026-11-03：Pinterest 以图搜图自动交付修复（本次修复源码未发布）
 
 素材详情操作栏、共用素材右键菜单和连接集合素材菜单提供「Pinterest 以图搜图」。多选时只搜索本次右键命中的图片，连接分身按底层素材 ID 解析原件。支持 JPEG／PNG／WebP／GIF／BMP／HEIC，视频与音频不提供入口；不依赖素材来源链接，原「发现更多」保留。
