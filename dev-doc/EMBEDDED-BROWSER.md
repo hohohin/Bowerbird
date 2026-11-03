@@ -54,6 +54,12 @@ Pinterest 普通 Pin 的图片区域有半透明顶层 wash 和渐变 hover 层�
 
 验证入口为 `scripts/pinterest-search-ui.test.mjs`、`scripts/pinterest-adapter.test.mjs`、Rust `commands::pinterest_search::tests`、`scripts/pinterest-search-native.test.mjs` 与 `scripts/pinterest-search-loading-native.test.mjs`。正式组件和隐藏 WebView2 均使用临时库／合成图片／隔离资料；原生测试拦截 Pinterest 响应为合成页面，不计为真实账号上传验收。操作、红绿证据、剩余边界见 [修复记录](../project_logs/2026-11-03-pinterest-search-fix.md)，初次接入见 [开发记录](../project_logs/2026-11-01-pinterest-search.md)。
 
+### 2026-11-04：中文 Pinterest 自动交图修复（源码未发布）
+
+只读查看用户真实网页，确认当前中文搜索栏的无障碍名称是 `Pinterest 镜头`。原适配器仅定位 `Lens`，导致中文入口无点击、无文件交付；并非运行实例遗漏了上次源码修复。按钮查找与登录恢复判断共用精确中英文选择器，继续限定 Lens 专属文件输入，不扩大到 Pin 创建等上传控件。
+
+适配器回归增加中文及登录 JSON 尚未更新的场景，HTML 明确声明 UTF-8；原生慢资源测试改用实际观察到的中文按钮，旧 EXE 收到零次文件，新 EXE 交付一次 PNG 并进入 `/lens-search/`。合成网页回归、真实未登录站点诊断及真实账号上传的边界分别见 [行动记录](../project_logs/2026-11-04-pinterest-localized-search.md)。
+
 ### 2026-11-03：Pinterest 搜图结果纵向布局（源码未发布）
 
 探索内的 Lens 结果按上下结构呈现：原图完整缩放至最高 160px，随页面滚动；下方继续由 Pinterest 的流式 Masonry 排列与加载结果。适配只改变原图、占位和结果共同父级的布局，以及原图内部固定尺寸／比例占位，不移动或克隆原节点，不改结果卡片宽度与定位，不新增滚动容器。原生固定 520px 坐标的裁剪层和源图操作隐藏，顶部为只读预览。

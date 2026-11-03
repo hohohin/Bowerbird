@@ -6,6 +6,8 @@
   // A late load event must not feed a new image to an old, still-busy uploader.
   if (performance.timeOrigin < request.documentAfter) return;
   const bridge = "__BOWERBIRD_PINTEREST_BRIDGE__";
+  // Pinterest localizes the search-bar button in the Chinese site.
+  const lensSelector = 'button[aria-label="Lens"], button[aria-label="Pinterest 镜头"]';
   const previous = window.__bowerbirdPinterestSearch;
   if (previous?.requestId === request.requestId) return;
   previous?.cancel();
@@ -37,7 +39,7 @@
   function loggedOut() {
     if (document.querySelector('input[type="password"]')) return true;
     // Pinterest can log in without replacing the initial JSON document.
-    if (document.querySelector('button[aria-label="Lens"]')) return false;
+    if (document.querySelector(lensSelector)) return false;
     try {
       return JSON.parse(document.getElementById("__PWS_DATA__")?.textContent || "{}").context?.is_authenticated === false;
     } catch { return false; }
@@ -69,7 +71,7 @@
   }
   function openLens() {
     if (document.querySelector('[aria-label="Lens popover"], [data-test-id="lens-file-upload"]')) return;
-    const lens = document.querySelector('button[aria-label="Lens"]');
+    const lens = document.querySelector(lensSelector);
     if (!lens || lens.disabled || !lens.getClientRects().length) return;
     // A server-rendered button may precede its React click handler.
     if (lensClickedAt !== null && Date.now() - lensClickedAt < 1000) return;
