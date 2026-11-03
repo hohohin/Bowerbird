@@ -215,3 +215,78 @@ async fn late_cancellation_keeps_durable_library_success() {
     );
     assert!(context.db.get_asset(&asset_id).unwrap().is_some());
 }
+
+fn revision(snapshot: &Snapshot) -> u64 {
+    serde_json::to_value(snapshot).unwrap()["revision"]
+        .as_u64()
+        .expect("every IPC/event snapshot needs an ordering revision")
+}
+
+#[tokio::test]
+async fn snapshot_revision_never_resets_when_receive_session_reopens() {
+    let (_root, receive, paths, db) = fixture();
+    let runtime = QuickTransfer::default();
+    assert_eq!(revision(&runtime.snapshot()), 0);
+    let started = runtime
+        .start(
+            &receive,
+            Ipv4Addr::LOCALHOST,
+            paths.clone(),
+            db.clone(),
+            Arc::new(|_| {}),
+        )
+        .await
+        .unwrap();
+    let stopped = runtime.stop().await.unwrap();
+    let reopened = runtime
+        .start(&receive, Ipv4Addr::LOCALHOST, paths, db, Arc::new(|_| {}))
+        .await
+        .unwrap();
+    assert!(revision(&started) > 0);
+    assert!(revision(&stopped) > revision(&started));
+    assert!(revision(&reopened) > revision(&stopped));
+    assert_eq!(revision(&reopened), revision(&runtime.snapshot()));
+    runtime.stop().await.unwrap();
+}
+
+#[test]
+fn snapshot_revision_identifies_out_of_order_notifications() {
+    let (_root, receive, paths, db) = fixture();
+    let delivered = Arc::new(Mutex::new(Vec::<Snapshot>::new()));
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let release_rx = Mutex::new(release_rx);
+    let deliveries = delivered.clone();
+    let context = Arc::new(Context {
+        store: Arc::new(Mutex::new(QuickTransferStore::open(&receive).unwrap())),
+        paths,
+        db,
+        view: Arc::new(Mutex::new(Snapshot::default())),
+        notify: Arc::new(move |snapshot| {
+            if snapshot.active {
+                entered_tx.send(()).unwrap();
+                release_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap();
+            }
+            deliveries.lock().unwrap().push(snapshot.clone());
+        }),
+    });
+    let earlier = context.clone();
+    let worker = std::thread::spawn(move || earlier.update(|view| view.active = true));
+    entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    context.update(|view| view.active = false);
+    release_tx.send(()).unwrap();
+    worker.join().unwrap();
+    let delivered = delivered.lock().unwrap();
+    assert_eq!(delivered.len(), 2);
+    assert!(!delivered[0].active);
+    assert!(delivered[1].active);
+    assert!(revision(&delivered[0]) > revision(&delivered[1]));
+    assert_eq!(
+        revision(&context.view.lock().unwrap()),
+        revision(&delivered[0])
+    );
+}

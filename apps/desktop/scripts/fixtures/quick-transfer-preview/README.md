@@ -6,7 +6,7 @@
 - URL 支持 `?view=mobile&theme=light&state=complete`；`view` 可为 `both/desktop/mobile`，`state` 可为 `ready/sending/complete/interrupted/off`。
 - 选择文件仅读取名称、大小和 MIME，状态／进度是示意值。地址按钮不写剪贴板；更改目录只切换示意文字。
 - 电脑收起面板保持接收状态，关闭接收才停用手机动作；传输中接收目录固定。中断显示重新发送，不宣称断点续传。
-- 当前为待确认候选，未接入正式 App／组件。
+- 2026-11-03 用户已确认此稿可以接入。本页保留为冻结示意；正式入口与接收状态以 `QuickTransferPanel` 和内嵌 `quick_transfer/upload.html` 为准。
 
 验证：在仓库根目录运行 `node apps/desktop/scripts/fixtures/quick-transfer-preview/capture.mjs`，使用已有 `apps/html-renderer/node_modules/playwright`。浏览器在 `finally` 关闭，无预览服务、文件监听或常驻进程。截图及报告位于 `apps/desktop/.tmp/quick-transfer-preview/`。
 

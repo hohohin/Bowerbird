@@ -646,6 +646,16 @@ async fn handle_request_inner(mut req: Request<Incoming>) -> Result<Response<Box
             (&Method::POST,"/api/localsend/v2/prepare-upload" | "/api/localsend/v2/upload" | "/api/localsend/v2/cancel")) {
             return Err(AppError::Status(StatusCode::NOT_FOUND));
         }
+        if req.method() == Method::GET && req.uri().path() == "/" {
+            let Some(v2)=&state.v2 else {return Err(AppError::Status(StatusCode::NOT_FOUND))};
+            if let Err(error) = common::pin::check_pin(v2.pin.as_deref(),&v2.pin_attempts,&common::query::parse_query(req.uri().query()),client_info.ip.ip).await {
+                // The static page contains no secret. Keep it readable for an expired QR,
+                // while its authenticated probe sees the failing HTTP status.
+                let mut response = web::index(&state);
+                *response.status_mut() = error.to_response().status();
+                return Ok(response);
+            }
+        }
         if req.uri().path() == "/api/localsend/v2/cancel" {
             let Some(v2)=&state.v2 else {return Err(AppError::Status(StatusCode::NOT_FOUND))};
             common::pin::check_pin(v2.pin.as_deref(),&v2.pin_attempts,&common::query::parse_query(req.uri().query()),client_info.ip.ip).await?;

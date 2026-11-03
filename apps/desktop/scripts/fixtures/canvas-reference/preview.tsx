@@ -254,6 +254,8 @@ w.__TAURI_INTERNALS__ = {
     if (command === "project_thread_create") return args.value;
     if (command === "get_settings") return JSON.parse(sessionStorage.getItem("canvas-settings") || "{}");
     if (command === "update_settings") { sessionStorage.setItem("canvas-settings", JSON.stringify(args.settings)); return null; }
+    if (command === "quick_transfer_status") return { revision: 0, active: false, directory: null, url: null, transfers: [] };
+    if (command === "quick_transfer_addresses") return [];
     if (command === "plugin:event|listen") { listeners.set(args.handler, args.event); return args.handler; }
     if (command === "plugin:event|emit") {
       for (const [handler, event] of listeners) if (event === args.event) callbacks.get(handler)?.({ event, id: handler, payload: args.payload });

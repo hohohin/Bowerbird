@@ -634,7 +634,7 @@ mod tests {
         let (handle, observed, dir) = fixture().await;
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let base = format!("http://{}", handle.address());
-        assert_eq!(client.get(&base).send().await.unwrap().status(), 200);
+        assert_eq!(client.get(format!("{base}/?pin=test-secret-0000000000000000000000")).send().await.unwrap().status(), 200);
         let response = client
             .post(format!(
                 "{base}/api/localsend/v2/prepare-upload?pin=test-secret-0000000000000000000000"
@@ -945,6 +945,22 @@ mod tests {
         );
         receipt.send(Err("disk full".into())).unwrap();
         assert_eq!(upload.await.unwrap().status(), 500);
+        handle.stop().await;
+    }
+
+    #[tokio::test]
+    async fn page_probe_requires_current_pairing_secret() {
+        let (handle, _, _) = fixture().await;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let base = format!("http://{}", handle.address());
+        for suffix in ["/", "/?pin=previous-session"] {
+            let response = client.get(format!("{base}{suffix}")).send().await.unwrap();
+            assert_eq!(response.status(), 401);
+            assert!(response.headers()["content-type"].to_str().unwrap().contains("text/html"));
+        }
+        let response = client.get(format!("{base}/?pin=test-secret-0000000000000000000000")).send().await.unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["cache-control"], "no-store");
         handle.stop().await;
     }
 

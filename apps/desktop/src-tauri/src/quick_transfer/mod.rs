@@ -21,6 +21,7 @@ use transport::{StartConfig, TransportEvent, TransportHandle};
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Snapshot {
+    pub revision: u64,
     pub active: bool,
     pub directory: Option<String>,
     pub url: Option<String>,
@@ -108,7 +109,7 @@ impl QuickTransfer {
                 bind_ip: ip,
                 port: 0,
                 session_secret: secret.clone(),
-                upload_page: None,
+                upload_page: Some(include_str!("upload.html").into()),
                 allowed_extensions: ALLOWED_EXTENSIONS
                     .iter()
                     .map(|extension| (*extension).into())
@@ -121,6 +122,7 @@ impl QuickTransfer {
         let url = format!("http://{}/?pin={secret}", transport.address());
         context.update(|view| {
             *view = Snapshot {
+                revision: 0,
                 active: true,
                 directory: Some(directory.to_string_lossy().into_owned()),
                 url: Some(url),
@@ -178,7 +180,9 @@ impl Context {
     fn update(&self, update: impl FnOnce(&mut Snapshot)) {
         let snapshot = {
             let mut view = self.view.lock().unwrap();
+            let revision = view.revision + 1;
             update(&mut view);
+            view.revision = revision;
             view.clone()
         };
         (self.notify)(&snapshot);

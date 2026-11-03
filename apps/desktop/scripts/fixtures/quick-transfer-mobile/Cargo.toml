@@ -1,0 +1,20 @@
+[package]
+name = "quick-transfer-mobile-check"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+path = "harness.rs"
+
+[dependencies]
+localsend = { path = "../../../src-tauri/vendor/localsend-core", features = ["http"] }
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+serde_json = "1"
+bytes = "1"
+sha2 = "0.10"
+if-addrs = "0.15"
+tempfile = "3"
+
+[workspace]

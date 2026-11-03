@@ -7,7 +7,7 @@ Tag `v1.18.2`, commit `af0416be50770a97760f7070684bc667b759a15c`; Apache-2.0. Th
 Local modifications:
 
 - `Cargo.toml`: an empty workspace allows standalone verification, and the omitted example declaration is removed; product dependencies and features otherwise retain upstream values.
-- `src/http/server/mod.rs`: add explicit IPv4 binding. The explicitly bound receiving listener disables the wildcard IPv6 listener, permits only the receiving webpage/i18n/upload/cancel routes, checks Host and Origin, requires the pairing PIN for cancellation, and adds no-store/no-referrer/CSP headers. Original `start_with_port` retains its wildcard behavior; Bowerbird uses only `start_with_ipv4`.
+- `src/http/server/mod.rs`: add explicit IPv4 binding. The explicitly bound receiving listener disables the wildcard IPv6 listener, permits only the receiving webpage/i18n/upload/cancel routes, checks Host and Origin, requires the pairing PIN for the root webpage/probe and cancellation, and adds no-store/no-referrer/CSP headers. An expired root request returns the static page with the failing authentication HTTP status, so the page can explain that a fresh QR is required without exposing a secret. Original `start_with_port` retains its wildcard behavior; Bowerbird uses only `start_with_ipv4`.
 - `src/http/server/common/collect_to_json.rs`: cap metadata bodies at 256 KiB before deserialization.
 - `src/http/server/common/save.rs`: fail stalled bodies after 60 seconds and observe an application's failed/cancelled writer immediately, so the protocol session does not remain occupied after the writer has stopped.
 

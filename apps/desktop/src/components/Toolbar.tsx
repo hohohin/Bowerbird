@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { ArrowLeft, Compass, Images, LayoutDashboard, Link2, LoaderCircle } from "lucide-react";
 import { SidebarAccount } from "./SidebarAccount";
+import { QuickTransfer } from "./QuickTransferPanel";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { MediaTypeFilter } from "./MediaTypeFilter";
 import { useStore } from "../store";
@@ -137,6 +138,7 @@ export function Toolbar({
             <span className="app-topbar-button-label">{busy ? "连接中" : "建立连接"}</span>
           </button>
         </div>}
+        <QuickTransfer />
         {showLibraryActions && onExplore && <button type="button" data-tour="explore" className="app-button-dark" aria-pressed={exploring}
           onClick={onExplore} aria-label="探索" title="浏览灵感网站，拖图采集到素材库"><Compass size={15} /><span className="app-topbar-button-label">探索</span></button>}
         {canvasMode && (

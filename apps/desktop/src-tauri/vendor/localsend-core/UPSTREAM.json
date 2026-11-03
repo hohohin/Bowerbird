@@ -248,5 +248,15 @@
       "path": "tests/v2_web_send.rs",
       "sha256": "e5bac71a114c56eac46b1ff9ec2d9a2cba0c47e0d02529dc71f3609cfc6d6f7a"
     }
-  ]
+  ],
+  "localPatch": {
+    "path": "BOWERBIRD.patch",
+    "sha256": "1939fb85ed350f1b0594de1d075f4b6c966137c6b8b56e7bd98035dfc92807c5",
+    "modifiedFiles": [
+      "Cargo.toml",
+      "src/http/server/mod.rs",
+      "src/http/server/common/collect_to_json.rs",
+      "src/http/server/common/save.rs"
+    ]
+  }
 }
