@@ -151,6 +151,7 @@ pub async fn open_source_browser(
         .initialization_script(include_str!("../../../../extension/candidate-utils.js"))
         .initialization_script(include_str!("../../../src/lib/explorerDragVisual.js"))
         .initialization_script(include_str!("source_browser_video.js"))
+        .initialization_script(include_str!("source_browser_pinterest_layout.js"))
         .initialization_script(&drag_script)
         .on_navigation(move |url| {
             if url.scheme() == "bowerbird-pinterest" {

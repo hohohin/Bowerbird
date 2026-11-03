@@ -44,6 +44,14 @@ Windows 同源／Blob 用原文档读取，跨源用 CDP 浏览器网络栈。�
 
 验证入口为 `scripts/pinterest-search-ui.test.mjs`、`scripts/pinterest-adapter.test.mjs`、Rust `commands::pinterest_search::tests`、`scripts/pinterest-search-native.test.mjs` 与 `scripts/pinterest-search-loading-native.test.mjs`。正式组件和隐藏 WebView2 均使用临时库／合成图片／隔离资料；原生测试拦截 Pinterest 响应为合成页面，不计为真实账号上传验收。操作、红绿证据、剩余边界见 [修复记录](../project_logs/2026-11-03-pinterest-search-fix.md)，初次接入见 [开发记录](../project_logs/2026-11-01-pinterest-search.md)。
 
+### 2026-11-03：Pinterest 搜图结果纵向布局（源码未发布）
+
+探索内的 Lens 结果按上下结构呈现：原图完整缩放至最高 160px，随页面滚动；下方继续由 Pinterest 的流式 Masonry 排列与加载结果。适配只改变原图、占位和结果共同父级的布局，以及原图内部固定尺寸／比例占位，不移动或克隆原节点，不改结果卡片宽度与定位，不新增滚动容器。原生固定 520px 坐标的裁剪层和源图操作隐藏，顶部为只读预览。
+
+`source_browser_pinterest_layout.js` 通过现有 WebView 初始化链安装，与上传适配器分离；仅精确 `https://pinterest.com`／`https://www.pinterest.com` 顶层的 `/lens-search` 或 `/lens-search/` 生效。验证原图／占位／唯一结果三兄弟结构后添加自有属性与样式；MutationObserver、History 和 popstate 处理首次加载、SPA 导航及 React 重建。离开搜图页或结构不匹配即移除自有标记，保留原内联样式。普通网页、Pin 详情及子 frame 不适配。
+
+结构依据为 2026-11-03 Pinterest 当前公开 Lens／Gestalt bundle，测试夹具保留固定原图、比例 wrapper、绝对定位图片、流式列宽和窗口滚动关系。验证入口为 `scripts/pinterest-layout.test.mjs` 与 `scripts/pinterest-layout-native.test.mjs`，覆盖窄宽、侧栏、真实浏览器拖图、Pin 返回、分页、换图及原生初始化／resize／上传联动。隔离合成网页不代表真实登录账号、完整站点虚拟化或 Mac 原生验收；网站结构变化仍可能需要同步适配。证据与复跑入口见 [布局记录](../project_logs/2026-11-03-pinterest-results-layout.md)。
+
 ### 2026-11-01：视频直接拖入（源码未发布）
 
 探索站点栏删除“登录状态保存在本机”提示与“采集视频”按钮。网页视频与图片共用现有拖拽：拖到素材库直接入库，拖到画板直接落在松手处，无额外采集弹窗。独立前景图片保持图片身份；视频封面／遮罩仅在明确属于同一视频时识别，不能把邻近背景视频当作当前素材。
