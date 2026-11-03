@@ -195,6 +195,8 @@ html[data-theme] .composer-glass .composer-parameters .model-select .model-selec
 /* Shared writing HUD: a clear foreground and a soft, local background plane. */
 html[data-theme] .creation-dock.composer-glass {
   --composer-rim:rgb(var(--industrial-muted-rgb) / .32);
+  --composer-pixels:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='6'%3E%3Cpath d='M0 0h1v1H0z' fill='%23949494' fill-opacity='.28'/%3E%3C/svg%3E");
+  --composer-tab-fill:linear-gradient(180deg,transparent,rgb(var(--industrial-panel-rgb) / .2) 7px,rgb(var(--industrial-panel-rgb) / .96) 15px,rgb(var(--industrial-panel-rgb)));
   --composer-shadow:drop-shadow(0 5px 5px rgb(0 0 0 / .18)) drop-shadow(0 18px 18px rgb(0 0 0 / .32));
   isolation:isolate;border:0;border-radius:0;outline:none;
   background:transparent;box-shadow:none;
@@ -212,6 +214,7 @@ html[data-theme] .composer-hud-surface::before {
   clip-path:polygon(0 0,calc(100% - 18px) 0,100% 18px,100% 100%,12px 100%,0 calc(100% - 12px));
   background:linear-gradient(var(--composer-rim),var(--composer-rim)) 18px 0/calc(100% - 54px) 1px no-repeat,
     linear-gradient(45deg,transparent calc(50% - .5px),var(--composer-rim) 50%,transparent calc(50% + .5px)) 100% 0/18px 18px no-repeat,
+    var(--composer-pixels) 0 0/6px 6px repeat,
     radial-gradient(ellipse at 12% 0,rgb(var(--industrial-ink-rgb) / .045),transparent 65%),
     linear-gradient(155deg,rgb(var(--industrial-panel-rgb)),rgb(var(--industrial-chrome-rgb)));
 }
@@ -264,32 +267,51 @@ html[data-theme] .creation-dock.composer-glass.is-collapsed::after { display:non
 @keyframes composer-hud-dock { from { opacity:.7;transform:translateY(4px); } to { opacity:1;transform:none; } }
 @keyframes composer-hud-tab-in { from { opacity:.35;transform:translateY(2px); } to { opacity:1;transform:none; } }
 @media (prefers-reduced-transparency:reduce), (forced-colors:active) {
+  html[data-theme] .creation-dock.composer-glass { --composer-pixels:none;--composer-tab-fill:linear-gradient(var(--bb-surface),var(--bb-surface)); }
   html[data-theme] .composer-host-glass::before { display:none; }
   html[data-theme] .creation-dock.composer-glass::after { filter:none; }
 }
 /* Labels sit on the upper edge of the reading plane; their hit/focus boxes stay intact. */
-html[data-theme] .composer-glass:not(.is-collapsed) .composer-heading { position:relative;top:-2px;min-height:44px;padding:0 18px;gap:12px; }
+html[data-theme] .composer-glass:not(.is-collapsed) .composer-heading { position:relative;top:-2px;min-height:44px;padding:0 47px 0 18px;gap:12px; }
 html[data-theme] .composer-glass .composer-mode-picker { height:38px;padding:0;gap:4px;width:calc(var(--switch-count) * 84px);background:none;border:0;box-shadow:none;backdrop-filter:none; }
 html[data-theme] .composer-glass .composer-mode-thumb { display:none; }
 html[data-theme] .composer-glass .composer-mode-picker>button { isolation:isolate;padding:0 12px;height:38px;letter-spacing:.06em;transition:color 160ms ease; }
-html[data-theme] .composer-glass .composer-mode-picker>button::before {
+html[data-theme] .composer-glass .composer-mode-picker>button::before,
+html[data-theme] .composer-glass:not(.is-collapsed) .library-composer-target::before {
   content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;
   clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%);
-  background:linear-gradient(var(--composer-rim),var(--composer-rim)) 10px 100%/calc(100% - 20px) 1px no-repeat,rgb(var(--industrial-panel-rgb));
+  background:linear-gradient(var(--composer-rim),var(--composer-rim)) 10px 100%/calc(100% - 20px) 1px no-repeat,
+    var(--composer-pixels) 0 0/6px 6px repeat,var(--composer-tab-fill);
 }
 html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"],
 html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"] svg { color:rgb(var(--industrial-accent-rgb)); }
-html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"]::before {
+html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"]::before,
+html[data-theme] .composer-glass:not(.is-collapsed) .library-composer-target:has([aria-expanded="true"])::before {
   clip-path:polygon(0 0,calc(100% - 10px) 0,100% 10px,100% 100%,0 100%);
   background:linear-gradient(var(--bb-blue),var(--bb-blue)) 0 0/calc(100% - 10px) 1px no-repeat,
     linear-gradient(45deg,transparent calc(50% - .5px),var(--bb-blue) 50%,transparent calc(50% + .5px)) 100% 0/10px 10px no-repeat,
-    linear-gradient(rgb(var(--industrial-accent-rgb) / .1),transparent),rgb(var(--industrial-panel-rgb));
+    var(--composer-pixels) 0 0/6px 6px repeat,
+    linear-gradient(180deg,transparent 8px,rgb(var(--industrial-accent-rgb) / .1)),var(--composer-tab-fill);
 }
 html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"]::after {
   content:"";position:absolute;right:5px;bottom:5px;width:3px;height:3px;background:var(--bb-blue);box-shadow:0 0 7px rgb(var(--industrial-accent-rgb) / .3);pointer-events:none;
 }
-html[data-theme] .composer-glass:not(.is-collapsed) .library-composer-target { height:32px;padding:0 8px;border-left:1px solid var(--composer-rim);background:rgb(var(--industrial-panel-rgb)); }
-html[data-theme] .composer-glass:not(.is-collapsed) :is(.composer-profile,.composer-collapse) { background:rgb(var(--industrial-panel-rgb)); }
+html[data-theme] .composer-glass:not(.is-collapsed) .library-composer-target { position:relative;isolation:isolate;height:38px;padding:0;border:0;background:none; }
+html[data-theme] .composer-glass:not(.is-collapsed) .library-composer-target>svg { position:absolute;left:12px;pointer-events:none; }
+html[data-theme] .composer-glass:not(.is-collapsed) .library-composer-target .tactical-select-trigger { height:100%;max-width:160px;padding:0 12px 0 32px;background:none; }
+html[data-theme] .composer-glass:not(.is-collapsed) .composer-profile { background:var(--composer-tab-fill); }
+/* Same corner footprint as the workflow close control; only its decorative plate is clipped. */
+html[data-theme] .composer-glass:not(.is-collapsed) .composer-collapse.creation-exit-tab {
+  position:absolute;right:0;top:5px;width:35px;height:34px;padding:0;isolation:isolate;background:none;
+}
+html[data-theme] .composer-glass .composer-collapse::before { content:"";position:absolute;left:0;top:0;width:3px;height:3px;background:var(--bb-muted);pointer-events:none; }
+html[data-theme] .composer-glass .composer-collapse::after {
+  content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;
+  clip-path:polygon(0 0,calc(100% - 13px) 0,100% 13px,100% 100%,8px 100%,0 calc(100% - 8px));
+  background:var(--composer-pixels) 0 0/6px 6px repeat,var(--composer-tab-fill);
+}
+html[data-theme] .composer-glass .composer-collapse:is(:hover,:focus-visible)::after { background:rgb(var(--industrial-hover-rgb)); }
+html[data-theme] .composer-glass .composer-collapse svg { margin:0;align-self:center;justify-self:center; }
 html[data-theme] .composer-glass .generation-send-button:not(:disabled) {
   color:rgb(var(--industrial-accent-rgb));background:transparent;border-color:rgb(var(--industrial-muted-rgb) / .3);box-shadow:none;
 }
@@ -316,7 +338,9 @@ html[data-theme] :is(.local-chat-reply-box,.local-chat-search):focus-within {
   html[data-theme] .canvas-tactical .canvas-stage { background-image:none; }
   html[data-theme] .creation-dock.composer-glass { background:Canvas;border:1px solid ButtonText; }
   html[data-theme] .creation-dock.composer-glass .composer-hud-surface { display:none; }
-  html[data-theme] .composer-glass .composer-mode-picker>button::before { background:Canvas; }
+  html[data-theme] .composer-glass .composer-mode-picker>button::before,
+  html[data-theme] .composer-glass:not(.is-collapsed) .library-composer-target::before,
+  html[data-theme] .composer-glass .composer-collapse::after { background:Canvas; }
   html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"]::before { background:Highlight; }
   html[data-theme] .canvas-tactical .canvas-plane :is(.canvas-node,.canvas-note.is-bubble,.canvas-prompt-node,.canvas-agent-node),
   html[data-theme] .canvas-tactical .canvas-chat-node::before { box-shadow:none !important;background:Canvas;border-color:CanvasText; }

@@ -45,6 +45,22 @@ try {
     await settle();
     await home.getByRole('button', { name: '图片', exact: true }).click();
     await home.locator('.ProseMirror').fill('清晨的薄雾掠过山脊，镜头缓慢推进。'); await settle();
+    const project = home.getByRole('combobox', { name: '选择项目', exact: true });
+    await project.click({ position: { x: 12, y: 6 } });
+    const projects = page.getByRole('listbox', { name: '选择项目', exact: true });
+    await projects.waitFor();
+    assert.ok(await projects.evaluate(element => { const rect = element.getBoundingClientRect(); return rect.top >= 0 && rect.right <= innerWidth; }));
+    await page.keyboard.press('Escape'); await projects.waitFor({ state: 'detached' });
+    assert.equal(await project.evaluate(element => element === document.activeElement), true, 'project tab restores focus');
+    await project.press('Enter'); await projects.waitFor();
+    const destination = await projects.getByRole('option').nth(1).innerText();
+    await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
+    await projects.waitFor({ state: 'detached' });
+    assert.equal(await project.innerText(), destination, 'project tab selects the keyboard destination');
+    await project.press('Home'); await projects.waitFor(); await page.keyboard.press('Enter');
+    await projects.waitFor({ state: 'detached' });
+    assert.equal(await project.innerText(), '选择项目');
+    await home.locator('.ProseMirror').focus(); await settle();
     assert.ok(await bottomGap(home) >= 12, 'expanded composer floats above the edge');
     await page.screenshot({ path: `${output}/home-${theme}.png` });
     const bounds = await home.boundingBox();
@@ -86,5 +102,5 @@ try {
   assert.match(await canvas.locator('.composer-hud-surface').evaluate(element => getComputedStyle(element).filter), /37, 48, 55/, 'only the decorative plane casts the lighter directional shadow');
   await page.screenshot({ path: `${output}/canvas-light.png` });
   assert.deepEqual(errors, []);
-  console.log('PASS HUD home/canvas, bottom attachment, first-line draft, video single row, clear text and reduced motion');
+  console.log('PASS HUD home/canvas, project tab pointer/keyboard/Escape, bottom attachment, first-line draft, video single row, clear text and reduced motion');
 } finally { await browser.close(); await server.close(); }

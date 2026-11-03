@@ -41,7 +41,7 @@ import { ImageGenOptions } from "./creation/ImageGenOptions";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
-import { ArrowUp, ChevronDown, History, Image, Info, Maximize2, MessageCircle, Plus, Sparkles, Video } from "lucide-react";
+import { ArrowUp, ChevronDown, History, Image, Info, Maximize2, MessageCircle, Plus, Sparkles, Video, X } from "lucide-react";
 import { useTextWorkspace } from "./useTextWorkspace";
 import { useLibraryGlass } from "./useLibraryGlass";
 import { OverlayScrollArea } from "./CollectionScrollArea";
@@ -1208,7 +1208,7 @@ export function CreationBoard({
           </div>
           {!isChat && <div className="composer-profile"><VisualProfileSelect value={activeVisualProfileId} onChange={setActiveVisualProfile} /></div>}
           <button type="button" className="composer-collapse creation-exit-tab" data-tour="board-exit"
-            title="退出创作模式，收起并保留草稿" aria-label="退出创作模式" onClick={exitCreationMode}><ChevronDown size={16} aria-hidden="true" /></button>
+            title="退出创作模式，收起并保留草稿" aria-label="退出创作模式" onClick={exitCreationMode}><X size={14} aria-hidden="true" /></button>
         </div>
         {/* 用途（preset）：发送时作为基底注入；登记=把当前编辑框内容存为用途（只需用途名）。
             功能未完成，PRESET_FEATURE_ENABLED 关闭整块 UI（store 注入逻辑随之不可达）。 */}

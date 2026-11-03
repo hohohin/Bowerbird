@@ -98,7 +98,7 @@ function LibraryProjectPicker({ value, onChange }: { value: string; onChange: (i
 
   return <div className="library-composer-target">
       <Folder size={14} aria-hidden/>
-      <TacticalSelect aria-label="选择项目" menuClassName="library-project-menu" value={value} onMouseDown={event => event.preventDefault()} onValueChange={onChange}>
+      <TacticalSelect aria-label="选择项目" menuClassName="library-project-menu" value={value} onValueChange={onChange}>
         <option value="">选择项目</option>
         {missingSelection && <option value={value}>项目已不可用，请重新选择</option>}
         {availableProjects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}

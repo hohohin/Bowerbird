@@ -67,7 +67,7 @@
 
 ## 在新创作入口保留统一编辑框与参数
 
-- **共用表面与动效：** [IndustrialCanvas.css](../../apps/desktop/src/components/IndustrialCanvas.css) 的 `.creation-dock.composer-glass`、`.composer-host-glass` 控制 HUD 标签、局部景深与展开／收起；`CreationBoard` 的 `.composer-hud-surface` 仅承载裁角底面与阴影，不在含按钮／菜单的根元素裁切。[LibraryComposer.css](../../apps/desktop/src/components/LibraryComposer.css) 仅负责主屏收起贴底及原多选避让。复用时保留这层宿主结构和减少动态效果／透明度分支；不为每个入口复制一份浮层。正式 App 验证入口 `scripts/composer-hud-ui.test.mjs`。
+- **共用表面与动效：** [IndustrialCanvas.css](../../apps/desktop/src/components/IndustrialCanvas.css) 的 `.creation-dock.composer-glass`、`.composer-host-glass` 控制 HUD 标签、局部景深与展开／收起；模式与 `.library-composer-target` 共用透明上沿、点阵及切角装饰，项目仍使用 `TacticalSelect`。关闭区仅复用工作流卡片的几何风格，不依赖其删除逻辑。`CreationBoard` 的 `.composer-hud-surface` 仅承载裁角底面与阴影，不在含按钮／菜单的根元素裁切。[LibraryComposer.css](../../apps/desktop/src/components/LibraryComposer.css) 仅负责主屏收起贴底及原多选避让。复用时保留这层宿主结构和减少动态效果／透明度分支；不为每个入口复制一份浮层。正式 App 验证入口 `scripts/composer-hud-ui.test.mjs`。
 - **用途／关键词：** 创作输入、composer、图片／视频／对话、草稿、继续生成。
 - **入口：** [CreativeComposer.tsx](../../apps/desktop/src/components/CreativeComposer.tsx) 的 `CreativeComposer` 管理三种模式各自草稿，内部嵌入 [CreationBoard.tsx](../../apps/desktop/src/components/CreationBoard.tsx) 的 `CreationBoard`。优先按完整创作契约接入，而不是复制输入框 DOM。
 - **实用证据：** [LibraryComposer.tsx](../../apps/desktop/src/components/LibraryComposer.tsx) 与 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 都使用 `CreativeComposer`；[GenerationPanel.tsx](../../apps/desktop/src/components/GenerationPanel.tsx) 的继续编辑另用 [useCreationEditor.ts](../../apps/desktop/src/components/creation/useCreationEditor.ts) 的 `useCreationEditor`，与 `CreationBoard` 共用编辑核心。
