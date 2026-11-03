@@ -14,4 +14,6 @@ Chrome 执行 `scripts/quick-transfer-mobile.test.mjs`，使用正式 `src-tauri
 
 跟进补充：公共短地址仅展示配对表单，8 位码保留前导零、接受带空格粘贴；错误码原地提示、正确码才进入上传页。三次错误后的真实 HTTP 429 由 Rust 测试覆盖；浏览器注入 429 检查停用与不自动重试。Safari/微信 User-Agent 及触屏/窄视口在 Chromium 中实际渲染并上传，检查 Content-Type UTF-8、CSP、no-store、no-referrer、DENY；这不是 WebKit/iOS 真机。
 
+相册跟进：浏览器实际点击“相册”与“文件”并检查 filechooser；相册请求 `image/*,video/*` 多选、无 capture，文件入口无 accept，保留音频/文本。空选择保留队列，同文件重选重置待发送，PNG/MP4 与 TXT/MP3 都通过真实临时上传。此事件验证不代表 Android 系统相册真机已测；具体选取 UI 由系统/浏览器提供。
+
 截图及 JSON 报告写入 `apps/desktop/.tmp/quick-transfer-mobile/`。浏览器与接收句柄均在结束时关闭。这里只是 Chrome 窄视口、临时数据，未代表真实 iOS/Android、局域网防火墙、手机后台或安装包验收。传输自身的其他单测也由该 harness 执行。

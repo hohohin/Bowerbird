@@ -57,7 +57,7 @@ async fn mobile_page_uses_real_localsend_http() {
         port: 0,
         session_secret: pairing_pin.into(),
         upload_page: page,
-        allowed_extensions: vec!["png".into()],
+        allowed_extensions: ["png", "mp4", "txt", "mp3"].map(String::from).to_vec(),
     }, tx).await.unwrap();
     let address = handle.address();
     let stop_path = directory.path().join("close-listener.signal");

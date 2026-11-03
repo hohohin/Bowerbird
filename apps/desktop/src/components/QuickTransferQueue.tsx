@@ -1,6 +1,14 @@
+import { useState } from "react";
 import { File, Image, Video } from "lucide-react";
 import { userErrorMessage } from "../lib/userError";
+import { externalFiles } from "../lib/externalFiles";
+import { createFilePreviewQueue } from "../lib/filePreviewQueue";
+import { useQuickTransferAssets, useQuickTransferThumbnail } from "../lib/quickTransferThumbnails";
+import { useMediaVisibility } from "../lib/useMediaVisibility";
 import type { QuickTransferFile } from "../lib/quickTransferState";
+import type { Asset } from "../lib/types";
+
+type PreviewQueue = ReturnType<typeof createFilePreviewQueue>;
 
 function fileSize(bytes: number) {
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
@@ -29,11 +37,22 @@ function TransferFailure({ file }: { file: QuickTransferFile }) {
     {!file.retryable && <span>请在手机重新发送这个文件。</span>}</p>;
 }
 
-function TransferRow({ file, canRetry, retry }: { file: QuickTransferFile; canRetry: boolean; retry: (id: string) => void }) {
-  const percent = file.size > 0 ? Math.min(100, Math.floor(file.received / file.size * 100)) : 0;
+function TransferThumbnail({ file, asset, previews }: { file: QuickTransferFile; asset?: Asset; previews: PreviewQueue }) {
+  const { ref, visible } = useMediaVisibility<HTMLSpanElement>();
+  const { source, onError } = useQuickTransferThumbnail(asset, visible, previews);
   const Icon = fileIcon(file.name);
+  return <span ref={ref} className="quick-transfer-thumbnail">
+    {source ? <img src={source} alt={`${file.name} 缩略图`} draggable={false} decoding="async" onError={onError} />
+      : <Icon size={20} aria-hidden="true" />}
+  </span>;
+}
+
+function TransferRow({ file, asset, previews, canRetry, retry }: {
+  file: QuickTransferFile; asset?: Asset; previews: PreviewQueue; canRetry: boolean; retry: (id: string) => void;
+}) {
+  const percent = file.size > 0 ? Math.min(100, Math.floor(file.received / file.size * 100)) : 0;
   return <li className="quick-transfer-file" data-status={file.status}>
-    <Icon size={20} aria-hidden="true" />
+    <TransferThumbnail file={file} asset={asset} previews={previews} />
     <div className="quick-transfer-file-info">
       <p className="quick-transfer-file-name" title={file.name}>{file.name}</p>
       <p className="quick-transfer-file-meta">{fileSize(file.size)}</p>
@@ -51,11 +70,13 @@ function TransferRow({ file, canRetry, retry }: { file: QuickTransferFile; canRe
 export function QuickTransferQueue({ files, active, canRetry, retry }: {
   files: QuickTransferFile[]; active: boolean; canRetry: boolean; retry: (id: string) => void;
 }) {
+  const assets = useQuickTransferAssets(files);
+  const [previews] = useState(() => createFilePreviewQueue(externalFiles.preview));
   const completed = files.filter(file => file.status === "complete").length;
   return <>
     <div className="quick-transfer-queue-heading"><h3>本次接收</h3><span>{files.length ? `${completed} / ${files.length} 已入库` : "0 个文件"}</span></div>
     {files.length ? <ul className="quick-transfer-queue" aria-label="接收队列">{files.map(file =>
-      <TransferRow key={file.id} file={file} canRetry={canRetry} retry={retry} />)}</ul>
+      <TransferRow key={file.id} file={file} asset={assets.get(file.assetId ?? "")} previews={previews} canRetry={canRetry} retry={retry} />)}</ul>
       : <p className="quick-transfer-empty">{active ? "等待手机上传" : "本次没有正在接收的文件"}</p>}
   </>;
 }

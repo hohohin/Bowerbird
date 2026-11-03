@@ -11,12 +11,13 @@
 *{box-sizing:border-box}body{margin:0;padding:24px 16px;min-height:100vh}button,input{font:inherit;color:inherit}button{background:transparent;border:0;border-radius:0;min-height:44px;cursor:pointer;transition:color 160ms ease}button:hover,button:focus-visible{color:var(--accent)}button:focus-visible{outline:1px solid var(--accent);outline-offset:3px}button:disabled{opacity:.45;cursor:default;color:var(--muted)}svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:square;stroke-linejoin:miter;flex-shrink:0}h1,p{margin:0}[hidden]{display:none!important}.phone{max-width:420px;margin:auto;min-height:calc(100vh - 48px);min-height:calc(100svh - 48px);padding:26px 24px max(24px,env(safe-area-inset-bottom));background:var(--panel);display:flex;flex-direction:column;position:relative;box-shadow:0 4px 6px -3px #0003,0 20px 32px -11px #0003}.phone:before{content:"";position:absolute;top:0;left:24px;width:28px;height:1px;background:var(--secondary)}.phone-brand{font-size:13px;letter-spacing:.035em;color:var(--secondary);margin-bottom:38px}h1{font-size:27px;font-weight:500;letter-spacing:.02em;margin-bottom:10px}.receiver{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:7px;margin-bottom:28px}.receiver svg{width:16px;height:16px}.pick-area{width:100%;min-height:116px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--accent);font-size:15px}.pick-area svg{width:24px;height:24px}.queue{list-style:none;padding:0;margin:14px 0 0}.file{display:grid;grid-template-columns:29px minmax(0,1fr) auto;gap:10px;padding:13px 0;align-items:center}.file+.file{border-top:1px solid var(--line)}.file-icon{width:29px;height:38px;display:grid;place-items:center;border-left:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--secondary)}.file-name{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.file-meta{font-size:12px;color:var(--muted);margin-top:3px}.file-state{font-size:12px;text-align:right;color:var(--muted);min-width:40px}.file-state.done{color:var(--accent)}.file-state.error{color:var(--danger)}.progress{height:2px;background:var(--line);margin-top:9px;overflow:hidden}.progress i{display:block;height:100%;transform-origin:left;background:var(--accent)}.mobile-footer{margin-top:auto;padding-top:28px}.send-button{width:100%;height:48px;border-top:1px solid var(--accent);border-bottom:1px solid var(--accent);font-size:15px;display:flex;align-items:center;justify-content:space-between;text-align:left;padding:0 12px;color:var(--accent);font-weight:600;position:relative}.send-button:after{content:"";position:absolute;width:3px;height:3px;background:currentColor;right:5px;bottom:6px}.send-button:disabled:after{display:none}.mobile-note{font-size:12px;color:var(--muted);margin-top:16px;line-height:1.8}.mobile-notice{font-size:13px;margin-top:18px;line-height:1.7;color:var(--muted);overflow-wrap:anywhere}.mobile-notice.error{color:var(--danger)}.secondary-actions{display:flex;justify-content:flex-end;gap:8px}.secondary-actions button{font-size:13px;padding:0 4px;color:var(--accent)}
 @media(max-width:360px){body{padding:16px 12px}.phone{padding:24px 20px;min-height:calc(100svh - 32px)}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}}
+.pickers{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .pairing{margin:4px 0 12px}.pairing label{display:block;font-size:13px;color:var(--secondary);margin-bottom:12px}.pairing input{width:100%;height:52px;border:0;border-bottom:1px solid var(--line);border-radius:0;background:transparent;font-size:24px;letter-spacing:.14em;padding:8px 0;margin-bottom:28px;outline-offset:4px}.pairing input:focus-visible{outline:1px solid var(--accent)}.pairing input::placeholder{font-size:16px;letter-spacing:0;color:var(--muted)}
 </style>
 </head>
 <body>
 <svg style="display:none" aria-hidden="true"><defs>
-<symbol id="upload-icon" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v6h16v-6"/></symbol>
+<symbol id="photo-icon" viewBox="0 0 24 24"><path d="M3 3h18v18H3Zm0 14 5-5 5 5 3-3 5 5"/><circle cx="15" cy="8" r="2"/></symbol>
 <symbol id="file-icon" viewBox="0 0 24 24"><path d="M5 3h9l5 5v13H5Zm9 0v5h5M8 13h8M8 17h6"/></symbol>
 <symbol id="monitor-icon" viewBox="0 0 24 24"><path d="M3 4h18v13H3Zm9 13v4m-5 0h10"/></symbol>
 <symbol id="arrow-icon" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
@@ -31,7 +32,11 @@
     <button class="send-button" id="pair" type="submit"><span>连接</span><svg aria-hidden="true"><use href="#arrow-icon"/></svg></button>
   </form>
   <input id="file-input" type="file" multiple hidden>
-  <button class="pick-area" id="pick" disabled><svg aria-hidden="true"><use href="#upload-icon"/></svg><span>选择照片或文件</span></button>
+  <input id="album-input" type="file" accept="image/*,video/*" multiple hidden>
+  <div class="pickers" id="pickers">
+    <button class="pick-area" id="pick-album" disabled><svg aria-hidden="true"><use href="#photo-icon"/></svg><span>相册</span></button>
+    <button class="pick-area" id="pick" disabled><svg aria-hidden="true"><use href="#file-icon"/></svg><span>文件</span></button>
+  </div>
   <ul class="queue" id="mobile-queue" aria-label="发送队列"></ul>
   <p class="mobile-notice" id="mobile-notice" role="status" aria-live="polite"></p>
   <div class="secondary-actions"><button id="reconnect" hidden>重新连接</button><button id="cancel" hidden>停止发送</button></div>
@@ -105,7 +110,9 @@ function render() {
   const pending = pendingFiles();
   const connected = state.connection === 'ready';
   state.files.forEach(renderItem);
-  byId('pick').disabled = state.busy || !connected;
+  const selectionDisabled = state.busy || !connected;
+  byId('pick').disabled = selectionDisabled;
+  byId('pick-album').disabled = selectionDisabled;
   byId('send').disabled = state.busy || !connected || !pending.length;
   byId('send-label').textContent = sendLabel(pending);
   byId('cancel').hidden = !state.busy || !state.batch;
@@ -118,7 +125,7 @@ function showPairing() {
   state.connection = 'pairing';
   byId('heading').textContent = '配对电脑';
   byId('pairing').hidden = false;
-  byId('pick').hidden = true;
+  byId('pickers').hidden = true;
   byId('send').hidden = true;
   render();
 }
@@ -155,9 +162,10 @@ async function pairComputer(event) {
   }
 }
 
-function chooseFiles() {
-  const files = Array.from(byId('file-input').files);
-  byId('file-input').value = '';
+function chooseFiles(event) {
+  const input = event.currentTarget;
+  const files = Array.from(input.files);
+  input.value = '';
   if (state.busy || !files.length) return;
   state.files = files.map(createItem);
   byId('mobile-queue').replaceChildren(...state.files.map(item => item.row));
@@ -316,8 +324,10 @@ function lostConnection() {
 }
 
 byId('pick').onclick = () => byId('file-input').click();
+byId('pick-album').onclick = () => byId('album-input').click();
 byId('pairing').onsubmit = pairComputer;
 byId('file-input').onchange = chooseFiles;
+byId('album-input').onchange = chooseFiles;
 byId('send').onclick = sendFiles;
 byId('cancel').onclick = stopSending;
 byId('reconnect').onclick = checkConnection;

@@ -33,6 +33,42 @@ async function waitDone(page, count) {
   await page.waitForFunction(expected => document.querySelectorAll('.file-state.done').length === expected, count);
 }
 
+async function openChooser(page, button) {
+  const [event] = await Promise.all([page.waitForEvent('filechooser'), page.locator(button).click()]);
+  return event;
+}
+
+async function albumAndFileChoices(context) {
+  const page = await openPage(context);
+  const album = await openChooser(page, '#pick-album');
+  assert.equal(album.isMultiple(), true);
+  assert.equal(await album.element().getAttribute('accept'), 'image/*,video/*');
+  assert.equal(await album.element().getAttribute('capture'), null);
+  await album.setFiles([file('相册照片.png'), { name: '相册视频.mp4', mimeType: 'video/mp4', buffer: Buffer.from('test video') }]);
+  assert.deepEqual(await page.locator('.file-name').allTextContents(), ['相册照片.png', '相册视频.mp4']);
+  const cancelled = await openChooser(page, '#pick-album');
+  await cancelled.setFiles([]);
+  assert.deepEqual(await page.locator('.file-name').allTextContents(), ['相册照片.png', '相册视频.mp4'], 'cancel keeps the selected queue');
+  await page.locator('#send').click();
+  await waitDone(page, 2);
+  const repeated = await openChooser(page, '#pick-album');
+  await repeated.setFiles(file('相册照片.png'));
+  assert.equal(await page.locator('.file-state').innerText(), '待发送');
+  assert.equal(await page.locator('#send').isDisabled(), false);
+  assert.equal(await page.locator('#album-input').inputValue(), '', 'reset allows a subsequent identical selection');
+  const ordinary = await openChooser(page, '#pick');
+  assert.equal(ordinary.isMultiple(), true);
+  assert.equal(await ordinary.element().getAttribute('accept'), null);
+  assert.equal(await ordinary.element().getAttribute('capture'), null);
+  await ordinary.setFiles([{ name: '笔记.txt', mimeType: 'text/plain', buffer: Buffer.from('test note') }, { name: '声音.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('test audio') }]);
+  assert.deepEqual(await page.locator('.file-name').allTextContents(), ['笔记.txt', '声音.mp3']);
+  await page.screenshot({ path: `${output}/album-files-390.png`, fullPage: true });
+  await page.locator('#send').click();
+  await waitDone(page, 2);
+  results.push('Album chooser requests images/videos without capture; generic chooser retains audio/text; cancellation/reselection preserve queue semantics');
+  await page.close();
+}
+
 async function successfulBatch(context) {
   const page = await openPage(context);
   const uploads = [];
@@ -271,6 +307,7 @@ async function smallScreens(context) {
 
 try {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: 'dark' });
+  await albumAndFileChoices(context);
   await pairWithoutCamera(context);
   await pairingThrottle(context);
   await phoneUserAgents();

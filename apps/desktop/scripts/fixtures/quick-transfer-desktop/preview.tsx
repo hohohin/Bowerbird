@@ -15,12 +15,34 @@ w.addresses = params.has("offline") ? [] : ["192.168.1.23", "10.0.0.9"];
 w.holdStatus = params.has("holdStatus");
 Object.defineProperty(navigator, "clipboard", { value: { writeText: async (value: string) => { w.copiedAddress = value; } } });
 w.snapshot = { revision: 0, active: false, directory: null, url: null, transfers: [] };
+function thumbnail(color: string) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 32; canvas.height = 24;
+  const context = canvas.getContext("2d")!;
+  context.fillStyle = color; context.fillRect(0, 0, 32, 24);
+  context.fillStyle = "#ffffff"; context.fillRect(24, 0, 8, 8);
+  return canvas.toDataURL("image/png");
+}
+w.assets = {
+  "asset-red": { id: "asset-red", name: "红色照片.heic", ext: "heic", store_path: "D:\\快传\\红色照片.heic", thumb_path: null, file_mtime: 1, size: 100 },
+  "asset-blue": { id: "asset-blue", name: "蓝色视频.mp4", ext: "mp4", store_path: "D:\\快传\\蓝色视频.mp4", thumb_path: null, file_mtime: 1, size: 100 },
+  "asset-text": { id: "asset-text", name: "笔记.txt", ext: "txt", store_path: "D:\\快传\\笔记.txt", thumb_path: null },
+  "asset-broken": { id: "asset-broken", name: "坏图.jpg", ext: "jpg", store_path: "D:\\快传\\坏图.jpg", thumb_path: null },
+};
+w.previewResults = { "D:\\快传\\红色照片.heic": "D:\\cache\\red.jpg", "D:\\快传\\蓝色视频.mp4": "D:\\cache\\blue.jpg", "D:\\快传\\坏图.jpg": "D:\\cache\\broken.jpg" };
+w.previewImages = { "D:\\cache\\red.jpg": thumbnail("#e32636"), "D:\\cache\\blue.jpg": thumbnail("#2555d9"), "D:\\cache\\broken.jpg": "data:image/png;base64,bm90LWEtcG5n" };
+w.assetWaiters = [];
+w.previewWaiters = [];
+w.activePreviews = 0;
+w.maxPreviews = 0;
+w.convertedPaths = [];
 w.emit = (patch: any) => {
   w.snapshot = { ...w.snapshot, ...patch, revision: patch.revision ?? w.snapshot.revision + 1 };
   callbacks.get(eventHandler)?.({ event: "quick-transfer://changed", payload: { ...w.snapshot } });
 };
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 w.__TAURI_INTERNALS__ = {
+  convertFileSrc: (path: string) => { w.convertedPaths.push(path); return w.previewImages[path] ?? "data:image/png;base64,bm90LWEtcG5n"; },
   transformCallback: (callback: (event: unknown) => void) => { callbacks.set(++callbackId, callback); return callbackId; },
   unregisterCallback: (id: number) => callbacks.delete(id),
   invoke: async (command: string, args: any) => {
@@ -30,6 +52,19 @@ w.__TAURI_INTERNALS__ = {
     if (command === "plugin:event|unlisten") { callbacks.delete(args.eventId); return; }
     if (command === "quick_transfer_addresses") return w.addresses;
     if (command === "quick_transfer_directory") return "D:\\BowerbirdLibrary\\快传";
+    if (command === "get_assets_by_ids") {
+      const assets = args.assetIds.map((id: string) => w.assets[id]).filter(Boolean).reverse();
+      if (w.holdAssetIds?.some((id: string) => args.assetIds.includes(id))) await new Promise<void>(resolve => w.assetWaiters.push({ ids: args.assetIds, resolve }));
+      return assets;
+    }
+    if (command === "external_files_preview") {
+      w.activePreviews++; w.maxPreviews = Math.max(w.maxPreviews, w.activePreviews);
+      try {
+        if (w.holdPreviewPaths?.includes(args.path)) await new Promise<void>(resolve => w.previewWaiters.push({ path: args.path, resolve }));
+        if (w.failedPreviewPaths?.includes(args.path)) throw "预览生成失败";
+        return w.previewResults[args.path];
+      } finally { w.activePreviews--; }
+    }
     if (command === "quick_transfer_status") {
       const snapshot = { ...w.snapshot };
       if (w.holdStatus) await new Promise<void>(resolve => { w.releaseStatus = resolve; });

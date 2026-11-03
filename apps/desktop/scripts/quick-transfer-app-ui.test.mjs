@@ -62,6 +62,14 @@ try {
   await trigger.click();
   await dialog.getByText('手机照片.heic', { exact: true }).waitFor();
   await dialog.getByText('已入库', { exact: true }).waitFor();
+  const receivedImage = dialog.locator('.quick-transfer-file').filter({ hasText: '手机照片.heic' }).locator('img');
+  await receivedImage.waitFor();
+  assert.deepEqual(await receivedImage.evaluate(async image => {
+    await image.decode();
+    const canvas = document.createElement('canvas'); canvas.width = 80; canvas.height = 60;
+    const context = canvas.getContext('2d'); context.drawImage(image, 0, 0, 80, 60);
+    return [...context.getImageData(60, 40, 1, 1).data];
+  }), [198, 75, 55, 255], 'the received HEIC row renders its generated preview pixels');
   assert.equal(await page.evaluate(() => window.transferCalls.filter(call => call.command === 'quick_transfer_start').length), 1, 'route changes and reopening reuse the same session');
   await mkdir('.tmp/quick-transfer-app', { recursive: true });
   await page.screenshot({ path: '.tmp/quick-transfer-app/desktop-dark.png', animations: 'disabled' });

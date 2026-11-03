@@ -29,6 +29,10 @@ HEIC保留接收原件，PNG仅用于兼容验证/预览；不走旧 `ingest_new
 
 支持图片、视频、音频以及UTF-8 Markdown/TXT；具体格式单一清单在 `core/quick_transfer.rs`。文本最大2 MiB；媒体内容和解码限制沿现有本机能力，扩展名不能代替内容验证。
 
+手机网页提供“相册”和“文件”两个入口：相册使用独立`accept="image/*,video/*" multiple`输入且不加capture，向Android Chrome请求媒体选择器；文件入口保留音频、文本等类型。二者共用发送队列，取消选择保留当前队列，发送中和失连均禁用。`accept`是浏览器选择界面的类型提示，不能强制任意厂商相册App，服务端素材校验不变。
+
+桌面“本次接收”根据已入库assetId批量读取素材，复用现有本机文件预览生成图片缩略图／视频封面。连接式入库完成时thumb_path可能为空，不能直接以该字段是否存在判定没有预览；HEIC沿既有兼容预览路径保留原件。音频、文本、尚未入库或预览失败保留类型图标，预览失败不撤销收件/入库成功。该能力只使用本机IPC，不增加局域网文件读取接口。实现与边界见[相册与缩略图日志](../project_logs/2026-11-03-quick-transfer-media.md)。
+
 ## 源码与验证入口
 
 - `src-tauri/vendor/localsend-core/`：固定上游及最小接收边界修订，许可证与来源记录随目录分发；Tauri resources 将 LICENSE 与本地修改说明纳入 `licenses/localsend/`，安装包仍须在发版时核验。
