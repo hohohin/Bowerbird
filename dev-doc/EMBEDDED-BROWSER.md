@@ -30,19 +30,19 @@ Windows 同源／Blob 用原文档读取，跨源用 CDP 浏览器网络栈。�
 
 验证入口：`scripts/explorer-selection-drag.test.mjs` 使用 Chromium 真实鼠标／原生拖放，检查正文选区、已选文字的原生文本载荷、不生成采集通知，以及笔记图片、轮播、视频和透明覆盖层的图片载荷；`verify-native-explorer.mjs` 增加原生 WebView2 笔记拖选断言。实际结果、旧拖图脚本挂起的基线对照及未覆盖边界见 [修复记录](../project_logs/2026-11-01-explorer-selection.md)。不将合成页面验证记为真实小红书账号或 OS 物理拖放验收。
 
-### 2026-11-01：Pinterest 以图搜图（源码未发布）
+### 2026-11-03：Pinterest 以图搜图自动交付修复（本次修复源码未发布）
 
 素材详情操作栏、共用素材右键菜单和连接集合素材菜单提供「Pinterest 以图搜图」。多选时只搜索本次右键命中的图片，连接分身按底层素材 ID 解析原件。支持 JPEG／PNG／WebP／GIF／BMP／HEIC，视频与音频不提供入口；不依赖素材来源链接，原「发现更多」保留。
 
 点击后在当前项目展开探索，保留详情、选区、画板及相机。单次请求冻结 `requestId + assetId + projectId + routeRevision`；关闭探索、切项目及手动地址／站点／前后退／刷新立即取消，图片准备不占浏览器导航队列。旧状态不能覆盖新请求，取消不撤回已经交给 Pinterest 的图片。
 
-原生只接受主 WebView 的素材 ID，从已登记原件经既有兼容读取解析图片；原件上限 50 MiB，普通解码限制 16384 边长／256 MiB，按 EXIF 方向转正并生成长边至多 1600 的内存 PNG，不修改原件、不使用缩略图、不上传到公共图床、不导出 Cookie。HEIC 沿既有兼容解码与缓存。每次准备完成后导航 Pinterest 首页并等待新文档，`documentAfter`／`performance.timeOrigin` 拒绝旧文档的迟到加载事件，避免上一张上传中的网页吞掉新图片。
+原生只接受主 WebView 的素材 ID，从已登记原件经既有兼容读取解析图片；原件上限 50 MiB，普通解码限制 16384 边长／256 MiB，按 EXIF 方向转正并生成长边至多 1600 的内存 PNG，不修改原件、不使用缩略图、不上传到公共图床、不导出 Cookie。HEIC 沿既有兼容解码与缓存。每次准备完成后导航 Pinterest 首页并等待新文档，`documentAfter`／`performance.timeOrigin` 拒绝旧文档的迟到加载事件，避免上一张上传中的网页吞掉新图片。11 月 3 日定位到仅在 Finished 注入会被无关图片请求阻塞；改为新文档 Started 即尝试注入、Finished 兜底，适配器自行等待 Lens 就绪。
 
-页面适配器仅运行在顶层、精确 `https://pinterest.com`／`https://www.pinterest.com`；点击官方 `button[aria-label="Lens"]`，只向 `input#lens-file-upload[type=file][data-test-id=lens-file-upload]` 交付单个 File 和 change 事件。Pinterest 自行预处理、上传并导航 `/lens-search/`；不调用内部上传接口，不创建 Pin。`submitted` 仅确认交给网页，后续上传／搜索结果与失败由 Pinterest 页面呈现。未登录等待登录，站外认证期间保留待办但不注入图片，返回 Pinterest 后继续；待办十分钟过期。缺少上传控件给出错误，不回退到创建 Pin 的文件输入框。
+页面适配器仅运行在顶层、精确 `https://pinterest.com`／`https://www.pinterest.com`；点击官方 `button[aria-label="Lens"]`，只向 `input#lens-file-upload[type=file][data-test-id=lens-file-upload]` 交付单个 File 和 change 事件。Pinterest 自行预处理、上传并导航 `/lens-search/`；不调用内部上传接口，不创建 Pin。按钮早于 React 事件绑定出现时有界重试，已打开的 Lens 弹层不反复点击。交付后进入 searching，只有网站进入 `/lens-search/` 才 submitted；网站拒绝图片或两分钟未进入搜索页给出失败，之后具体搜索结果仍由网站呈现。原生记录已交付状态并释放待传图片，跨文档继续跟踪结果而不重复上传。未登录等待登录，站外认证期间保留待办但不注入图片，返回 Pinterest 后继续；待办十分钟过期。缺少上传控件给出错误，不回退到创建 Pin 的文件输入框。
 
 一手协议核对：[官方 Lens 帮助](https://help.pinterest.com/en/article/pinterest-lens)、官方公开 `60329-466c563d30b4c62c.js`／`48228-4acf6afe41899d7a.js`。其中 `/upload-lens-image/` 是 POST 服务地址，不是页面入口；不能拼接本机路径直达结果。账号差异、中文控件名称与网站变更仍可能使适配失效。
 
-验证入口为 `scripts/pinterest-search-ui.test.mjs`、`scripts/pinterest-adapter.test.mjs`、Rust `commands::pinterest_search::tests`、`scripts/pinterest-search-native.test.mjs`。正式组件和隐藏 WebView2 均使用临时库／合成图片／隔离资料；原生测试拦截 Pinterest 响应为合成页面，不计为真实账号上传验收。操作、红绿证据、剩余边界见 [开发记录](../project_logs/2026-11-01-pinterest-search.md)。
+验证入口为 `scripts/pinterest-search-ui.test.mjs`、`scripts/pinterest-adapter.test.mjs`、Rust `commands::pinterest_search::tests`、`scripts/pinterest-search-native.test.mjs` 与 `scripts/pinterest-search-loading-native.test.mjs`。正式组件和隐藏 WebView2 均使用临时库／合成图片／隔离资料；原生测试拦截 Pinterest 响应为合成页面，不计为真实账号上传验收。操作、红绿证据、剩余边界见 [修复记录](../project_logs/2026-11-03-pinterest-search-fix.md)，初次接入见 [开发记录](../project_logs/2026-11-01-pinterest-search.md)。
 
 ### 2026-11-01：视频直接拖入（源码未发布）
 
@@ -108,6 +108,7 @@ Windows 同源／Blob 用原文档读取，跨源用 CDP 浏览器网络栈。�
 - **2026-09-14 引导调整：** 本次启动首次打开探索默认进入小红书，不再从上次网址决定首页；设计师路线的探索步骤明确导航到小红书。普通隐藏/重开继续保留当前网页，站点登录资料持久化不变。设计师在真实网页旁查看关闭登录框提示和拖图示意，原生网页上的关闭按钮由用户操作；详见 `ONBOARDING.md`。
 - 快捷入口为 Pinterest、花瓣、小红书、即梦（`https://jimeng.jianying.com/ai-tool/home`）；支持地址输入、前进、后退、刷新、系统浏览器打开。再次点击探索或关闭按钮返回原工作区，新建创作也会退出探索。
 - 主页面和浏览器组件保持挂载，展开/收起只变更可见性和尺寸。再次展开不导航、不刷新，保留网页实例、表单、滚动位置与浏览历史；只有显式点击站点、输入网址、来源链接或刷新才发起对应导航。素材沿用原主页面的详情、挑图、右键等交互。
+- **2026-11-03 导航修复：** 探索打开时顶部仍显示「素材库／项目」，画板中也可通过这两个入口返回主屏；退出画板先完成已有保存屏障，失败留在当前画板及网页。切换集合／标签／全部素材不关闭探索，探索开关不改右侧目录视图。现有 WebView 不因这些切换重建、隐藏或导航；必要浮层遮挡规则仍保留。正式 App 行为与窄窗验证入口为 `scripts/explore-navigation-ui.test.mjs`，见 [行动记录](../project_logs/2026-11-03-pinterest-search-fix.md)。
 - 拖动网页图片或覆盖图片的卡片链接/遮罩，在右侧主页面松开才采集。遮罩只匹配同一卡片中指针位置下唯一的图片，不把普通网页链接当成图片。数据包含图片地址与同站卡片链接（找不到卡片链接时记录当前页面）；沿扩展候选工具选择 `srcset` 高清版本与常见懒加载地址。一次拖入只采一张。
 - 松手时冻结项目身份。临时项目先刷新草稿写入并物化；下载期间切换项目不会把结果转存新项目；目标项目已删除则拒绝导入。没有活动项目时进入中央素材库。
 - **画板落点（2026-09-10 增量）：** 拖到画板舞台时，松手即按当前平移/缩放换算并冻结画板坐标；采集成功后创建以该点为中心的素材卡片并持久化。重复采集同一资产仍创建独立卡片实例。下载中调整视口不改变落点，切换项目后仍保存到原项目，返回或重开可见；素材栏、工具栏等非画板区域松手只入库。采集失败不创建卡片，卡片保存失败另行提示。

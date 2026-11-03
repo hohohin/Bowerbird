@@ -172,9 +172,11 @@ pub async fn open_source_browser(
         .on_page_load(move |webview, payload| {
             if matches!(payload.event(), PageLoadEvent::Finished) {
                 let _ = webview.eval(&spotlight_script());
-                if let Some(hooks) = page_load_app.try_state::<SourcePinterestHooks>() {
-                    (hooks.loaded)(&webview, payload.url(), &page_search_token);
-                }
+            }
+            // Started is new-document ContentLoading/didCommit; Lens must not wait
+            // for unrelated images to finish. The adapter polls and deduplicates.
+            if let Some(hooks) = page_load_app.try_state::<SourcePinterestHooks>() {
+                (hooks.loaded)(&webview, payload.url(), &page_search_token);
             }
             emit_status(
                 &page_load_app,

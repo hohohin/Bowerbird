@@ -312,7 +312,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
       {searchProgress && searchProgress.status !== "submitted" && <div className={searchProgress.status === "error" ? "source-browser-error" : "shrink-0 border-b border-edge px-3.5 py-1.5 text-xs text-muted"} role={searchProgress.status === "error" ? "alert" : "status"}>
         {searchProgress.status === "waiting-login" ? "请在 Pinterest 登录，完成后继续搜图。" : searchProgress.status === "error"
           ? userErrorMessage(searchProgress.message, "以图搜图暂时无法完成，请重试。")
-          : searchProgress.status === "searching" ? "正在将图片交给 Pinterest…" : "正在准备搜图…"}
+          : searchProgress.status === "searching" ? "正在搜索相似图片…" : "正在准备搜图…"}
       </div>}
       <div ref={viewportRef} className="source-browser-viewport" data-source-browser-viewport>
         <div className="source-browser-placeholder" aria-hidden>

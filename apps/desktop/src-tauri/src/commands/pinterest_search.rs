@@ -16,7 +16,7 @@ struct SearchImage { base64: String, mime: &'static str, name: &'static str }
 
 #[derive(Default)]
 struct Searches { pending: Option<Pending>, bridge_token: Option<String>, recent_requests: VecDeque<String> }
-struct Pending { request_id: String, image: Option<SearchImage>, document_after: Option<u64> }
+struct Pending { request_id: String, image: Option<SearchImage>, document_after: Option<u64>, handed_off: bool }
 
 #[derive(Default)]
 pub struct PinterestSearchState(Mutex<Searches>);
@@ -25,7 +25,7 @@ impl Searches {
     fn begin(&mut self, request_id: &str) -> bool {
         if self.matches(request_id) || self.recent_requests.iter().any(|id| id == request_id) { return false; }
         self.remember(request_id);
-        self.pending = Some(Pending { request_id: request_id.into(), image: None, document_after: None });
+        self.pending = Some(Pending { request_id: request_id.into(), image: None, document_after: None, handed_off: false });
         true
     }
     fn prepare(&mut self, request_id: &str, image: SearchImage) -> bool {
@@ -45,6 +45,16 @@ impl Searches {
     fn navigate(&mut self, request_id: &str, document_after: u64) -> bool {
         let Some(pending) = self.pending.as_mut().filter(|p| p.request_id == request_id && p.image.is_some()) else { return false; };
         pending.document_after = Some(document_after);
+        true
+    }
+    fn receive(&mut self, notice: &Notice) -> bool {
+        if !self.matches(&notice.request_id) { return false; }
+        if matches!(notice.status, SearchStatus::Searching) {
+            let pending = self.pending.as_mut().expect("matching request");
+            pending.handed_off = true;
+            pending.image = None;
+        }
+        if matches!(notice.status, SearchStatus::Submitted | SearchStatus::Error) { self.cancel(&notice.request_id); }
         true
     }
     fn remember(&mut self, request_id: &str) {
@@ -202,11 +212,15 @@ fn inject(browser: &Webview) {
     let state = app.state::<PinterestSearchState>();
     let searches = state.0.lock().unwrap();
     let Some(pending) = &searches.pending else { return; };
-    let Some(image) = &pending.image else { return; };
+    let image = pending.image.as_ref();
+    if image.is_none() && !pending.handed_off { return; }
     let Some(document_after) = pending.document_after else { return; };
     let Some(token) = &searches.bridge_token else { return; };
     if !browser.url().is_ok_and(|url| pinterest_origin(&url)) { return; }
-    let payload = serde_json::json!({"requestId": pending.request_id, "base64": image.base64, "mime": image.mime, "name": image.name, "documentAfter": document_after});
+    let payload = serde_json::json!({"requestId": pending.request_id,
+        "base64": image.map_or("", |image| image.base64.as_str()),
+        "mime": image.map_or("image/png", |image| image.mime), "name": image.map_or("search.png", |image| image.name),
+        "documentAfter": document_after, "handedOff": pending.handed_off});
     let script = include_str!("source_browser_pinterest.js")
         .replace("__BOWERBIRD_PINTEREST_REQUEST__", &payload.to_string())
         .replace("__BOWERBIRD_PINTEREST_BRIDGE__", &format!("bowerbird-pinterest://{token}"));
@@ -236,8 +250,7 @@ pub fn on_notice(app: &AppHandle, url: &Url, token: &str) {
     if !browser.url().is_ok_and(|url| pinterest_origin(&url)) { return; }
     let state = app.state::<PinterestSearchState>();
     let mut searches = state.0.lock().unwrap();
-    if !searches.matches(&notice.request_id) { return; }
-    if matches!(notice.status, SearchStatus::Submitted | SearchStatus::Error) { searches.cancel(&notice.request_id); }
+    if !searches.receive(&notice) { return; }
     drop(searches);
     // Remote-page messages are untrusted diagnostics, never user-facing HTML or paths.
     let message = matches!(notice.status, SearchStatus::Error).then_some("图片搜索未完成，请重试");
@@ -269,6 +282,27 @@ mod tests {
         assert!(!state.cancel("second"));
         assert!(!state.prepare("second", image()));
         assert!(!state.navigate("second", 3));
+    }
+
+    #[test]
+    fn handed_off_search_survives_navigation_without_retaining_upload_pixels() {
+        let mut state = Searches::default();
+        assert!(state.begin("one"));
+        assert!(state.prepare("one", image()));
+        assert!(state.navigate("one", 1));
+        let notice = |request_id: &str, status| Notice { request_id: request_id.into(), status, message: None };
+        assert!(!state.receive(&notice("old", SearchStatus::Searching)));
+        assert!(state.pending.as_ref().unwrap().image.is_some());
+        assert!(state.receive(&notice("one", SearchStatus::Searching)));
+        assert!(state.matches("one"), "handoff waits for a real results route");
+        assert!(state.pending.as_ref().unwrap().image.is_none(), "a new document must not receive the same upload again");
+        assert!(state.pending.as_ref().unwrap().handed_off);
+        assert!(state.receive(&notice("one", SearchStatus::Searching)), "duplicate handoff is harmless");
+        assert!(state.receive(&notice("one", SearchStatus::Submitted)));
+        assert!(state.pending.is_none());
+        assert!(!state.begin("one"));
+        assert!(state.begin("two"));
+        assert!(!state.pending.as_ref().unwrap().handed_off, "a new request must receive its own image");
     }
 
     #[test]

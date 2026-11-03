@@ -49,7 +49,7 @@ export function Toolbar({
   const projectRoutePending = useStore(s => s.projectRoutePending);
   const setColorFilter = useStore((s) => s.setColorFilter);
   const toolbarRef = useRef<HTMLElement>(null);
-  const homeNavigation = !canvasMode && !exploring;
+  const homeNavigation = !canvasMode || exploring;
   const tactical = homeNavigation;
   const showLibraryActions = canvasMode || exploring || homeView === "library";
   const changeHomeView = onHomeViewChange ?? useStore.getState().setLibraryHomeView;
@@ -129,7 +129,7 @@ export function Toolbar({
   }
 
   return (
-    <header ref={toolbarRef} className={`app-topbar is-search-hidden${canvasMode ? " canvas-tactical" : " is-library"}${tactical ? " library-tactical" : ""}${homeNavigation ? " has-home-navigation" : ""}${localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
+    <header ref={toolbarRef} className={`app-topbar is-search-hidden${canvasMode ? " canvas-tactical" : " is-library"}${tactical ? " library-tactical" : ""}${homeNavigation ? " has-home-navigation" : ""}${exploring ? " is-exploring" : ""}${localFilesOpen ? " is-global-materials" : ""}`} aria-busy={busy}>
       <div className="app-topbar-leading">
         {showLibraryActions && <div className="app-topbar-import">
           <button type="button" data-import-trigger data-tour="import-folder" onClick={connectFolder} disabled={busy}
@@ -156,10 +156,10 @@ export function Toolbar({
       </div>
 
       {homeNavigation && <nav aria-label="首页" className="home-page-navigation">
-        <button type="button" aria-current={homeView === "library" ? "page" : undefined} disabled={projectRoutePending} onClick={() => changeHomeView("library")}>
+        <button type="button" aria-current={!canvasMode && homeView === "library" ? "page" : undefined} disabled={projectRoutePending} onClick={() => changeHomeView("library")}>
           <Images size={15} aria-hidden="true"/><span>素材库</span>
         </button>
-        <button type="button" data-tour="new-creation" aria-current={homeView === "projects" ? "page" : undefined} disabled={projectRoutePending} onClick={() => changeHomeView("projects")}>
+        <button type="button" data-tour="new-creation" aria-current={!canvasMode && homeView === "projects" ? "page" : undefined} disabled={projectRoutePending} onClick={() => changeHomeView("projects")}>
           <LayoutDashboard size={15} aria-hidden="true"/><span>项目</span>
         </button>
       </nav>}

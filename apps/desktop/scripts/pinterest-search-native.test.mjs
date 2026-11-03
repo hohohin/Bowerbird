@@ -11,7 +11,7 @@ await mkdir(directory, { recursive: true });
 const server = createServer((_, res) => { res.setHeader("Content-Type", "text/html"); res.end("<html><body>Isolated native fixture</body></html>"); });
 await new Promise((resolve, reject) => { server.once("error", reject); server.listen(1557, "127.0.0.1", resolve); });
 let child; let browser; let sourceBrowser; let main;
-let loggedIn = false; const blockedRequests = [];
+let loggedIn = false; let fullNavigation = false; const blockedRequests = [];
 const fixture = () => `<html><head><title>Lens native fixture</title></head><body>
 <script id="__PWS_DATA__" type="application/json">${JSON.stringify({ context: { is_authenticated: loggedIn } })}</script>
 ${loggedIn ? "" : '<input type="password" aria-label="Password">'}
@@ -22,7 +22,8 @@ ${loggedIn ? "" : '<input type="password" aria-label="Password">'}
  const file=event.target.files[0]; if(!file)return;
  const bytes=Array.from(new Uint8Array(await file.arrayBuffer()));
  window.received.push({name:file.name,type:file.type,bytes});
- history.pushState({},'', '/lens-search/?synthetic=1');
+ sessionStorage.setItem('syntheticUploads', String(Number(sessionStorage.getItem('syntheticUploads')||0)+1));
+ ${fullNavigation ? "location.assign('/lens-search/?synthetic=full-navigation');" : "history.pushState({},'', '/lens-search/?synthetic=1');"}
 });};</script></body></html>`;
 
 async function poll(check, message) {
@@ -96,6 +97,16 @@ try {
   await start("login-first");
   assert.equal(await source.evaluate(() => window.received.length), 1, "completed request ID is not replayed");
 
+  fullNavigation = true;
+  await source.evaluate(() => sessionStorage.removeItem("syntheticUploads"));
+  await start("full-navigation");
+  await poll(() => hasStatus("full-navigation", "submitted"), "full-page results navigation did not finish the pending search");
+  await poll(() => source.evaluate(() => location.pathname === "/lens-search/" && window.received?.length === 0), "results must be a fresh document");
+  await new Promise(resolve => setTimeout(resolve, 500));
+  assert.equal(await source.evaluate(() => sessionStorage.getItem("syntheticUploads")), "1", "results documents must not receive a second File/change upload");
+  assert.equal(await hasStatus("full-navigation", "searching"), true, "native handoff precedes the results navigation");
+  fullNavigation = false;
+
   loggedIn = false;
   await source.goto("https://www.pinterest.com/");
   const oldDocument = await source.evaluate(() => performance.timeOrigin);
@@ -126,7 +137,7 @@ try {
   const original = await readFile(path.join(directory, "synthetic.png"));
   assert.ok(original.length > 0);
   assert.equal(blockedRequests.length, 0, "no outside network requests from the synthetic pages: " + JSON.stringify(blockedRequests));
-  console.log("PASS native Pinterest login resume, File delivery, request idempotence/replacement, cancel, external login origin boundary, synthetic session");
+  console.log("PASS native Pinterest login resume, File delivery, full-page result without reupload, request idempotence/replacement, cancel, external login origin boundary, synthetic session");
 } finally {
   if (child && child.exitCode == null && main) {
     const exited = new Promise(resolve => child.once("exit", resolve));

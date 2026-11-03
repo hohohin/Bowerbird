@@ -100,7 +100,6 @@ function App() {
   } | null>(null);
   const [sourceBrowserUrl, setSourceBrowserUrl] = useState<string | null>(null);
   const [sourceBrowserOpen, setSourceBrowserOpen] = useState(false);
-  useEffect(() => { if (localFilesOpen) setSourceBrowserOpen(false); }, [localFilesOpen]);
   const [sourceBrowserNavigation, setSourceBrowserNavigation] = useState(0);
   const pinterestSearch = usePinterestSearch(state => state.request);
   useEffect(() => {
@@ -855,13 +854,15 @@ function App() {
     await state.enterProject(project.id);
   }
 
-  function exitCreative() {
-    setSourceBrowserOpen(false);
-    setCreativeLaunch(null);
-    setCreativeTarget(null);
-    void useStore.getState().exitProject().catch((error) => {
+  async function exitCreative(homeView?: "library" | "projects") {
+    try {
+      await useStore.getState().exitProject();
+      setCreativeLaunch(null);
+      setCreativeTarget(null);
+      if (homeView) useStore.getState().setLibraryHomeView(homeView);
+    } catch (error) {
       notifyError(error, "项目仍有未保存修改，已留在当前画板");
-    });
+    }
   }
 
   return (
@@ -896,10 +897,9 @@ function App() {
         localFilesOpen={localFilesOpen}
         canvasMode={projectWorkspaceActive}
         onCanvasModeChange={(active) => { setLocalFilesOpen(false); return active ? createCreative(false) : exitCreative(); }}
-        onHomeViewChange={view => { setSourceBrowserOpen(false); useStore.getState().setLibraryHomeView(view); }}
+        onHomeViewChange={view => { if (projectWorkspaceActive) void exitCreative(view); else useStore.getState().setLibraryHomeView(view); }}
         exploring={sourceBrowserOpen}
         onExplore={() => {
-          setLocalFilesOpen(false);
           const guide = useOnboarding.getState().guide;
           const designerExplore = guide.status === "active" && guide.role === "designer" && guide.sessions.designer?.step === 3;
           if (!sourceBrowserUrl || designerExplore) {
@@ -946,7 +946,7 @@ function App() {
                 onFocusConsumed={acknowledgeCreativeTarget}
                 launchRequest={creativeLaunchTargetsProject(creativeLaunch, workspaceProjectId) ? creativeLaunch : null}
                 onLaunchConsumed={acknowledgeCreativeLaunch}
-                onExit={exitCreative}
+                onExit={() => void exitCreative()}
               />
             ))}
           </div>

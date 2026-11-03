@@ -63,9 +63,9 @@ try {
     return getComputedStyle(element).color === neutral;
   }), true, "waiting for login uses the neutral theme color");
   await emit(first.requestId, "searching");
-  await page.getByRole("status").filter({ hasText: "正在将图片交给 Pinterest" }).waitFor();
+  await page.getByRole("status").filter({ hasText: "正在搜索相似图片" }).waitFor();
   await emit(first.requestId, "submitted");
-  await page.getByRole("status").filter({ hasText: "正在将图片交给 Pinterest" }).waitFor({ state: "hidden" });
+  await page.getByRole("status").filter({ hasText: "正在搜索相似图片" }).waitFor({ state: "hidden" });
   await emit(first.requestId, "preparing");
   assert.equal(await page.getByRole("status").filter({ hasText: "正在准备搜图" }).count(), 0, "terminal events cannot regress");
   await detailSearch.click(); await waitStart(2);
@@ -93,7 +93,7 @@ try {
   await page.evaluate(() => window.store.setState(state => ({ projectRouteRevision: state.projectRouteRevision + 1 })));
   await page.waitForFunction(id => window.calls.some(call => call.command === "cancel_pinterest_image_search" && call.args.requestId === id), changing.requestId);
   await emit(changing.requestId, "searching");
-  assert.equal(await page.getByRole("status").filter({ hasText: "正在将图片交给 Pinterest" }).count(), 0);
+  assert.equal(await page.getByRole("status").filter({ hasText: "正在搜索相似图片" }).count(), 0);
   // Cancelling must reach native code even while image preparation has not returned.
   await page.evaluate(() => {
     const invoke = window.__TAURI_INTERNALS__.invoke;

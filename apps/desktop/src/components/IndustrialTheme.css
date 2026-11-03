@@ -286,6 +286,9 @@ html[data-theme] .app-topbar :is(button, input):focus-visible { outline: 1px sol
 }
 @media (max-width: 1100px) {
   html[data-theme] .app-topbar-leading::after { display: none; }
+  html[data-theme] .app-topbar.has-home-navigation.is-exploring .app-topbar-actions { gap: 0; }
+  html[data-theme] .app-topbar.has-home-navigation.is-exploring .app-topbar-view-controls { gap: 0; padding-right: 4px; }
+  html[data-theme] .app-topbar.has-home-navigation.is-exploring .library-view-segments { gap: 0; }
 }
 @media (max-width: 900px) {
   html[data-theme] .app-topbar[class] { padding-inline: 12px; gap: 8px; }
