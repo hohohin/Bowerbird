@@ -1034,6 +1034,8 @@ export function CreationBoard({
       >
         {glass.definition}
         <span className="composer-hud-surface" aria-hidden="true" />
+        <span className="composer-hud-optics" aria-hidden="true" />
+        <span className="composer-hud-acquire" aria-hidden="true" />
         <div className="composer-heading">
           {header}
           {header && isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
@@ -1207,6 +1209,7 @@ export function CreationBoard({
             </div>}
           </div>
           {!isChat && <div className="composer-profile"><VisualProfileSelect value={activeVisualProfileId} onChange={setActiveVisualProfile} /></div>}
+          <span className="composer-mode-status">创作模式</span>
           <button type="button" className="composer-collapse creation-exit-tab" data-tour="board-exit"
             title="退出创作模式，收起并保留草稿" aria-label="退出创作模式" onClick={exitCreationMode}><X size={14} aria-hidden="true" /></button>
         </div>
@@ -1355,6 +1358,7 @@ export function CreationBoard({
         )}
         {/* 编辑框：随主题切换的独立输入区；超高后内部滚动（不触发主区滚动收起）。
             获得焦点（contenteditable 冒泡）= 激活创作模式（等同旧「创作板」按钮）。 */}
+        <div className="composer-writing">
         <div className="composer-description-heading">
           <span id={editorLabelId}>{isChat ? "聊聊你的创作想法" : "创作描述"}</span>
           <div className="composer-description-actions">
@@ -1386,6 +1390,7 @@ export function CreationBoard({
           className="creation-editor composer-description cursor-text text-ink"
         />
         </OverlayScrollArea>
+        </div>
         {isChat && !isCollapsed && <p className="composer-chat-key-hint">Enter 换行 · Ctrl / ⌘ + Enter 发送</p>}
         {isChat && chatProvider === "deepseek-cloud" && references.length > 0 && <p className="composer-chat-key-hint">图片仅用于建卡引用；看图分析请选择本机 Codex。</p>}
         {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}

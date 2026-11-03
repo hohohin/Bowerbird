@@ -45,6 +45,16 @@ try {
     await settle();
     await home.getByRole('button', { name: '图片', exact: true }).click();
     await home.locator('.ProseMirror').fill('清晨的薄雾掠过山脊，镜头缓慢推进。'); await settle();
+    const writingGap = await home.evaluate(element => element.querySelector('.ProseMirror').getBoundingClientRect().top - element.querySelector('.composer-heading').getBoundingClientRect().bottom);
+    assert.ok(writingGap >= 0 && writingGap <= 18, `no extra decoration/title row above writing: ${writingGap}`);
+    assert.equal(await home.locator('.composer-mode-status').isVisible(), true);
+    if (theme === 'dark') {
+      await home.getByRole('button', { name: '放大编辑文本', exact: true }).click();
+      const document = page.getByRole('textbox', { name: '文档正文', exact: true });
+      await document.waitFor(); assert.match(await document.innerText(), /清晨的薄雾/);
+      await page.getByRole('button', { name: '返回', exact: true }).click();
+      await document.waitFor({ state: 'detached' });
+    }
     const project = home.getByRole('combobox', { name: '选择项目', exact: true });
     await project.click({ position: { x: 12, y: 6 } });
     const projects = page.getByRole('listbox', { name: '选择项目', exact: true });
@@ -88,6 +98,7 @@ try {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await home.getByRole('button', { name: '展开创作描述', exact: true }).click();
   assert.equal(await home.evaluate(element => getComputedStyle(element).animationName), 'none');
+  assert.equal(await home.locator('.composer-hud-acquire').evaluate(element => getComputedStyle(element).animationName), 'none');
   await home.getByRole('button', { name: '退出创作模式', exact: true }).click();
   assert.ok(Math.abs(await bottomGap(home)) < 1);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -99,8 +110,13 @@ try {
   assert.equal(await canvas.evaluate(element => getComputedStyle(element).animationName), 'composer-hud-rise');
   await page.screenshot({ path: `${output}/canvas.png` });
   await page.evaluate(() => document.documentElement.dataset.theme = 'light');
-  assert.match(await canvas.locator('.composer-hud-surface').evaluate(element => getComputedStyle(element).filter), /37, 48, 55/, 'only the decorative plane casts the lighter directional shadow');
+  assert.match(await canvas.locator('.composer-hud-surface').evaluate(element => getComputedStyle(element).filter), /52, 70, 78/, 'only the decorative plane casts the lighter directional shadow');
   await page.screenshot({ path: `${output}/canvas-light.png` });
+  await canvas.getByRole('button', { name: '视频', exact: true }).click();
+  await page.setViewportSize({ width: 900, height: 900 }); await settle(); await singleRow(canvas);
+  assert.ok(await canvas.locator('.composer-toolbar').evaluate(element => element.scrollWidth <= element.clientWidth), 'canvas footer does not overflow at 900px');
+  await page.waitForTimeout(200);
+  assert.equal(await canvas.locator('.composer-hud-acquire').evaluate(element => getComputedStyle(element).opacity), '0', 'edge motion settles without looping');
   assert.deepEqual(errors, []);
   console.log('PASS HUD home/canvas, project tab pointer/keyboard/Escape, bottom attachment, first-line draft, video single row, clear text and reduced motion');
 } finally { await browser.close(); await server.close(); }
