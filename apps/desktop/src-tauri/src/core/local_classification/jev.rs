@@ -455,9 +455,14 @@ fn prepare_image(image: &image::DynamicImage) -> Result<Vec<u8>, String> {
     Ok(out.into_inner())
 }
 
-/// Preview input has not entered the library yet. Apply the same bounded decode
-/// and orientation handling as library thumbnails, without creating an asset.
-pub fn preview_image(bytes: &[u8]) -> Result<Vec<u8>, String> {
+/// Model input and display thumbnail share one decode but have different pixel contracts.
+pub struct PreviewImage {
+    pub model_jpeg: Vec<u8>,
+    pub thumbnail_png: Vec<u8>,
+}
+
+/// Apply bounded decoding and orientation without creating an asset.
+pub fn preview_image(bytes: &[u8]) -> Result<PreviewImage, String> {
     let mut reader = ImageReader::new(std::io::Cursor::new(bytes))
         .with_guessed_format().map_err(|e| e.to_string())?;
     let mut limits = image::Limits::default();
@@ -469,7 +474,11 @@ pub fn preview_image(bytes: &[u8]) -> Result<Vec<u8>, String> {
     let orientation = decoder.orientation().map_err(|e| e.to_string())?;
     let mut image = image::DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
     image.apply_orientation(orientation);
-    prepare_image(&image)
+    let model_jpeg = prepare_image(&image)?;
+    // Display the image itself, including alpha, rather than the model's white padding.
+    let mut thumbnail = std::io::Cursor::new(Vec::new());
+    image.thumbnail(512, 512).write_to(&mut thumbnail, ImageFormat::Png).map_err(|e| e.to_string())?;
+    Ok(PreviewImage { model_jpeg, thumbnail_png: thumbnail.into_inner() })
 }
 
 #[cfg(test)]

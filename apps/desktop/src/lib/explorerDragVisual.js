@@ -1,6 +1,16 @@
 // Shared by the trusted workspace and the isolated source WebView. No IPC here.
 // Source pages only draw their own image; library labels stay in the main view.
 (() => {
+  function previewSize(width, height) {
+    const scale = Math.min(96 / width, 112 / height, 1);
+    return { width: width * scale, height: height * scale };
+  }
+  function animatePickup(card, sourceRect) {
+    const rect = card.getBoundingClientRect();
+    const from = sourceRect ? `translate(${sourceRect.left - rect.left}px,${sourceRect.top - rect.top}px) scale(${sourceRect.width / rect.width},${sourceRect.height / rect.height})` : "translateY(6px)";
+    card.animate([{ transform: from, opacity: .65, transformOrigin: "0 0" },
+      { transform: "none", opacity: 1, transformOrigin: "0 0" }], { duration: 180, easing: "ease-out" });
+  }
   window.createBowerbirdDragVisual = (parent = document.body) => {
     let host, root, card, picture, chips, caption, id, landing = false, timer, landedAt = 0;
     let pointer, hasPreview = false;
@@ -14,10 +24,11 @@
       pointer = { x, y };
       const bounds = parent === document.body ? { left: 0, top: 0, right: innerWidth, bottom: innerHeight } : parent.getBoundingClientRect();
       // Leave room for the carried card and its surrounding chips at panel edges.
-      const width = Math.max(80, Math.min(164, (bounds.right - bounds.left - 152) / 2));
+      const previewWidth = card.offsetWidth, previewHeight = card.offsetHeight;
+      const width = Math.max(40, Math.min(164, (bounds.right - bounds.left - previewWidth - 56) / 2));
       chips.style.setProperty("--fan-width", `${width}px`);
-      x = Math.max(bounds.left + (hasPreview ? width + 10 : 18), Math.min(bounds.right - (hasPreview ? 130 + width : 124), x));
-      y = Math.max(bounds.top + (hasPreview ? 220 + width * .28 : 116), Math.min(bounds.bottom - (hasPreview ? 120 + width * .28 : 84), y));
+      x = Math.max(bounds.left + (hasPreview ? width + 8 : 6), Math.min(bounds.right - previewWidth - 20 - (hasPreview ? width + 12 : 0), x));
+      y = Math.max(bounds.top + previewHeight + (hasPreview ? 48 : 18), Math.min(bounds.bottom - (hasPreview ? 68 : 18), y));
       host.style.visibility = "visible";
       host.style.transform = `translate3d(${x}px,${y}px,0)`;
     };
@@ -32,26 +43,28 @@
       shadow.innerHTML = `<style>
         :host { pointer-events:none!important; }
         * { box-sizing:border-box; }
-        .root { font:12px/1.35 system-ui,sans-serif; color:#26342f; pointer-events:none; }
-        .card { position:absolute;left:14px;top:-104px;width:96px;height:112px;padding:5px;border-radius:14px;
-          background:#fff;box-shadow:0 18px 32px #172e3933,0 3px 7px #172e3926;transform:rotate(-7deg);transform-origin:12px 100%; }
-        .paper { width:100%;height:100%;border-radius:10px;overflow:hidden;background:linear-gradient(135deg,#d8e7e2,#b0c9c1); }
+        .root { --preview-width:96px;--preview-height:112px;--surface:var(--bb-surface,#F7F7F7);--ink:var(--bb-ink,#2B2B2B);--muted:var(--bb-muted,#646464);
+          --line:var(--bb-line,#C5C5C5);--accent:var(--bb-blue,#496775);--shadow:0 3px 5px -3px rgb(33 39 43 / .23),0 18px 28px -10px rgb(33 39 43 / .26);
+          font:12px/1.35 Inter,"Noto Sans SC","Microsoft YaHei",system-ui,sans-serif;color:var(--ink);pointer-events:none; }
+        .card { position:absolute;left:14px;top:calc(-1 * var(--preview-height) - 12px);
+          width:var(--preview-width);height:var(--preview-height);padding:0;border-radius:0;background:transparent;box-shadow:var(--shadow); }
+        .card:not([data-ready]) { visibility:hidden; }
+        .card::before,.card::after { content:"";position:absolute;width:4.8px;height:4.8px;background:var(--accent);z-index:1; }
+        .card::before { top:-2.4px;right:-2.4px; }.card::after { bottom:-2.4px;left:-2.4px; }
+        .paper { width:100%;height:100%;background:transparent; }
         img { width:100%;height:100%;object-fit:contain;display:block; }
-        .grip { position:absolute;left:-10px;top:-14px;width:30px;height:30px;border-radius:50%;background:#253b33;
-          color:white;display:grid;place-items:center;box-shadow:0 3px 10px #142a3840;border:2px solid white; }
-        .grip svg { width:18px;height:18px; }
         .chips { position:absolute;left:0;top:0; }
         .chip { position:absolute;width:0;height:0;transform-origin:0 0;
           animation:pop 340ms cubic-bezier(.2,.9,.25,1.3) both; }
         .chip:nth-child(odd) { left:2px;--direction:1; }
-        .chip:nth-child(even) { left:120px;--direction:-1; }
-        .chip:nth-child(-n+2) { top:-112px;--vertical:-1; }
-        .chip:nth-child(n+3) { top:16px;--vertical:1; }
+        .chip:nth-child(even) { left:calc(var(--preview-width) + 24px);--direction:-1; }
+        .chip:nth-child(-n+2) { top:calc(-1 * var(--preview-height) - 20px);--vertical:-1; }
+        .chip:nth-child(n+3) { top:4px;--vertical:1; }
         .chip:nth-child(2) { animation-delay:90ms; }
         .chip:nth-child(3) { animation-delay:180ms; }
         .chip:nth-child(4) { animation-delay:270ms; }
         .candidate,.empty { position:absolute;width:var(--fan-width);height:28px;padding:5px 9px;
-          border:1px solid #dce9e3;border-radius:14px;background:#fff;color:#24483a;box-shadow:0 4px 12px #173d3118; }
+          border:1px solid var(--line);border-radius:2px;background:var(--surface);color:var(--ink);box-shadow:var(--shadow); }
         .candidate { display:flex;gap:8px;align-items:baseline;line-height:16px; }
         .chip:nth-child(odd) > * { right:0;transform-origin:100% 50%; }
         .chip:nth-child(even) > * { left:0;transform-origin:0 50%; }
@@ -61,36 +74,37 @@
         .candidate[data-selected=false] { font-weight:400;opacity:.62; }
         .name { flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
         .probability { flex:none;font-variant-numeric:tabular-nums; }
-        .caption { position:absolute;left:0;top:38px;white-space:nowrap;color:#5b7066;background:#fffffff0;border-radius:10px;padding:3px 7px; }
+        .caption { position:absolute;left:calc(14px + var(--preview-width) / 2);top:40px;transform:translateX(-50%);
+          width:max-content;max-width:calc(var(--preview-width) + 2 * var(--fan-width));overflow:hidden;text-overflow:ellipsis;
+          white-space:nowrap;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:2px;padding:3px 7px; }
         .caption:empty { display:none; }
-        .ring { display:none;position:absolute;left:-68px;top:36px;width:136px;height:30px;border:2px solid #729b88;border-radius:50%; }
-        .root[data-phase=landing] .card { left:-48px;top:-56px;transform:rotate(0);transform-origin:50% 100%; }
-        .root[data-phase=landing] .grip,.root[data-phase=landing] .chips { display:none; }
-        .root[data-phase=landing] .caption { left:0;top:68px;transform:translateX(-50%); }
-        .root[data-phase=landing] .ring { display:block;animation:impact 650ms ease-out both; }
+        .root[data-phase=landing] .card { left:calc(-1 * var(--preview-width) / 2);top:calc(-1 * var(--preview-height) / 2); }
+        .root[data-phase=landing] .chips { display:none; }
+        .root[data-phase=landing] .caption { left:0;top:calc(var(--preview-height) / 2 + 12px); }
         @keyframes pop { from { opacity:0;transform:translateY(10px) scale(.6); } to { opacity:1;transform:none; } }
-        @keyframes impact { 0%,35% { opacity:0;transform:scale(.4); } 45% { opacity:.65; } 100% { opacity:0;transform:scale(1.6); } }
-        :host([data-theme=dark]) .card,:host([data-theme=dark]) .candidate,:host([data-theme=dark]) .empty { background:#25352f;color:#e5f2eb;border-color:#496056; }
-        :host([data-theme=dark]) .caption { background:#25352ff0;color:#d1e5d9; }
-        @media(prefers-reduced-motion:reduce) { .chip,.root[data-phase=landing] .ring { animation:none; } .ring { visibility:hidden; } }
-      </style><div class="root" data-phase="carry"><div class="ring"></div><div class="card"><div class="paper"><img alt="" draggable="false"></div></div>
-        <div class="grip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12V8a2 2 0 0 1 4 0v3-5a2 2 0 0 1 4 0v5-3a2 2 0 0 1 4 0v7c0 4-2 6-6 6h-1c-3 0-4-2-6-4l-3-4a2 2 0 0 1 3-2l1 1Z"/></svg></div>
+        :host([data-theme=dark]) .root { --surface:var(--bb-surface,#1E1E1E);--ink:var(--bb-ink,#DCDCDC);--muted:var(--bb-muted,#949494);--line:var(--bb-line,#3D3D3D);--accent:var(--bb-blue,#8FAAB8);
+          --shadow:0 4px 6px -3px rgb(0 0 0 / .70),0 20px 32px -11px rgb(0 0 0 / .62); }
+        @media(prefers-reduced-motion:reduce) { .chip { animation:none; } }
+      </style><div class="root" data-phase="carry"><div class="card"><div class="paper"><img alt="" draggable="false"></div></div>
         <div class="chips"></div><div class="caption"></div></div>`;
       root = shadow.querySelector(".root"); card = shadow.querySelector(".card"); picture = shadow.querySelector("img");
       chips = shadow.querySelector(".chips"); caption = shadow.querySelector(".caption");
-      picture.onerror = () => { picture.style.opacity = "0"; };
-      picture.onload = () => { picture.style.opacity = "1"; };
+      const currentPicture = picture;
+      picture.onerror = () => { if (picture === currentPicture) card.removeAttribute("data-ready"); };
+      picture.onload = () => {
+        if (picture !== currentPicture || !host) return;
+        const firstFrame = !card.hasAttribute("data-ready");
+        const size = previewSize(picture.naturalWidth, picture.naturalHeight);
+        root.style.setProperty("--preview-width", `${size.width}px`);
+        root.style.setProperty("--preview-height", `${size.height}px`);
+        card.dataset.ready = "";
+        if (pointer) move(pointer.x, pointer.y);
+        if (firstFrame && !landing && !reduced()) animatePickup(card, sourceRect);
+      };
       if (value.imageUrl) picture.src = value.imageUrl;
       parent.append(host);
       if (Number.isFinite(x) && Number.isFinite(y)) {
         move(x, y);
-        if (!reduced()) {
-          const position = new DOMMatrixReadOnly(getComputedStyle(host).transform);
-          const from = sourceRect ? `translate(${sourceRect.left - position.m41 - 14}px,${sourceRect.top - position.m42 + 104}px) scale(${sourceRect.width / 96},${sourceRect.height / 112})` : "rotate(-12deg) scale(.85)";
-          card.animate([{ transform: from, opacity: .65, transformOrigin: "0 0" },
-            { transform: "rotate(-7deg) scale(1)", opacity: 1, transformOrigin: "0 0" }],
-          { duration: sourceRect ? 340 : 140, easing: "cubic-bezier(.18,.85,.25,1)" });
-        }
       }
       timer = setTimeout(clear, 180000);
     };
@@ -129,12 +143,9 @@
         host.style.transform = `translate3d(${x}px,${y}px,0)`;
         root.dataset.phase = "landing"; caption.textContent = "采集中…";
         if (!reduced()) card.animate([
-          { transform: "translate(62px,-48px) rotate(-7deg) scale(.95)" },
-          { offset: .45, transform: "translateY(7px) scale(1.13,.82)" },
-          { offset: .67, transform: "translateY(-8px) scale(.97,1.04)" },
-          { offset: .85, transform: "translateY(2px) scale(1.025,.97)" },
+          { transform: "translateY(-8px)" },
           { transform: "none" },
-        ], { duration: 560, easing: "cubic-bezier(.3,.05,.65,1)" });
+        ], { duration: 180, easing: "ease-out" });
       },
       settle(element) {
         if (!host) return;
@@ -145,7 +156,7 @@
             { offset: .64, translate: "0 -4px", scale: ".99 1.01" }, { translate: "0 0", scale: "1" },
           ], { duration: 430, easing: "ease-out" });
           clear();
-        }, reduced() ? 0 : Math.max(0, 560 - (performance.now() - landedAt)));
+        }, reduced() ? 0 : Math.max(0, 180 - (performance.now() - landedAt)));
       },
     };
   };
