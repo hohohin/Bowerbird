@@ -66,7 +66,7 @@ export function AccountBilling({ loggedIn, entitlement, trialAction }: {
             </label>
           ))}
         </fieldset>
-        <p className="account-billing-note">Pro 不含 Bcoin，Cloud 按用量另计。素材管理与普通画布可免费使用。</p>
+        <p className="account-billing-note">新注册账号赠 200 Bcoin；新订阅或续费 Pro，每订阅月赠 800 Bcoin，年付分 12 次发放。赠送积分到账后 30 天有效。</p>
         <div className="account-billing-checkout">
           <div className="account-billing-summary" aria-live="polite"><span>Pro {selectedPlan.title}</span><strong>¥{selectedPlan.price}</strong></div>
           <button type="button" className="app-modal-button" disabled aria-describedby={`${id}-plan-payment`}>购买暂未开放</button>

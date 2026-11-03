@@ -48,6 +48,11 @@ my-library/
 
 # 开发计划，文件
 dev-doc/*
+!dev-doc/UI-DESIGN-SPEC.md
+!dev-doc/ui-design-spec/
+dev-doc/ui-design-spec/*
+!dev-doc/ui-design-spec/canvas-dark.png
+!dev-doc/ui-design-spec/canvas-light.png
 !dev-doc/HTML-RENDER-PLAN.md
 !dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md
 !dev-doc/PROJECT-CANVAS-PLAN.md
@@ -59,6 +64,7 @@ dev-doc/performance/*/*
 !dev-doc/performance/*/before.json
 !dev-doc/performance/*/after.json
 !dev-doc/CANVAS-WORKFLOW.md
+!dev-doc/CHAT-PROVIDERS.md
 !dev-doc/LOCAL-CLASSIFICATION.md
 !dev-doc/FOLDER-MODE.md
 !dev-doc/EMBEDDED-BROWSER.md
@@ -68,6 +74,7 @@ dev-doc/performance/*/*
 !dev-doc/CREATIVE-MEMORY-PLAN.md
 !dev-doc/ARCH-ADJUST-PROGRESS.md
 !dev-doc/SEEDANCE-2.5-INTEGRATION.md
+!dev-doc/VIDEO-MEDIA.md
 !dev-doc/COMFYUI-LOCAL-VIDEO.md
 !dev-doc/VIDEO-API-INTEGRATION.md
 !dev-doc/FILMCRAFT-RESEARCH.md
@@ -77,6 +84,7 @@ dev-doc/ui-studies/*
 !dev-doc/ui-studies/library-tactical-2026-10-26/
 !dev-doc/ui-studies/library-selection-2026-10-26/
 !dev-doc/ui-studies/industrial-hud-2026-10-29/
+!dev-doc/ui-studies/library-connections-2026-10-31/
 
 # Agent Z（dev-only）：MCP 桥 + inbox 回传事件（Bowerbird × Claude Code TUI）
 .agent-z/

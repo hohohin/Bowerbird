@@ -1,0 +1,2 @@
+# Preserve the byte hash recorded in UPSTREAM.json on Windows checkouts.
+BOWERBIRD.patch text eol=lf

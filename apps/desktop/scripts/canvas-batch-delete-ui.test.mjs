@@ -15,7 +15,7 @@ const deleteCalls = () => page.evaluate(() => window.deleteCalls ?? []);
 async function openDelete(id = "a") {
   await node(id).click({ button: "right", position: { x: 30, y: 30 } });
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
-  await page.getByRole("menuitem", { name: "物理删除", exact: true }).click();
+  await page.getByRole("menuitem", { name: "删除原文件", exact: true }).click();
   await dialog().getByRole("list", { name: "待删除素材" }).waitFor();
 }
 async function marquee() {
@@ -37,12 +37,12 @@ async function reset() {
     window.deleteCalls = [];
     const original = window.__TAURI_INTERNALS__.invoke;
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
-      if (command === "delete_asset_with_mode") {
+      if (command === "trash_asset_original") {
         window.deleteCalls.push(args);
         if (window.holdDelete) await new Promise(resolve => { window.releaseDelete = resolve; });
-        if (args.id === window.failDeleteId) throw "模拟单图删除失败";
+        if (args.original.asset_id === window.failDeleteId) throw "模拟单图删除失败";
       }
-      if (command === "get_assets_by_ids" && window.failPreview) throw "模拟预览读取失败";
+      if (command === "preview_asset_originals" && window.failPreview) throw "模拟预览读取失败";
       const result = await original(command, args);
       if (command === "get_assets_by_ids" && window.externalPreview) return result.map(asset => ({ ...asset, source: "external" }));
       return result;
@@ -89,7 +89,7 @@ try {
   await marquee();
   await openDelete();
   await page.evaluate(() => { window.failDeleteId = "a"; window.holdDelete = true; });
-  await dialog().getByRole("button", { name: "物理删除", exact: true }).click();
+  await dialog().getByRole("button", { name: "删除原文件", exact: true }).click();
   await page.waitForFunction(() => window.releaseDelete);
   await page.keyboard.press("Escape");
   assert.equal(await dialog().isVisible(), true, "cannot dismiss during deletion");
@@ -98,32 +98,33 @@ try {
   await dialog().getByRole("alert").filter({ hasText: "1 项失败" }).waitFor();
   assert.equal(await dialog().locator("[data-delete-asset-id]").count(), 1);
   assert.equal(await dialog().locator("[data-delete-asset-id]").getAttribute("data-delete-asset-id"), "a");
-  await node("old").waitFor({ state: "detached" });
+  assert.equal(await node("old").count(), 1, "recycling an original keeps its canvas instance and creative identity");
   assert.equal(await node("a").count(), 1);
   assert.equal(await node("outside").count(), 1);
   await page.evaluate(() => { window.failDeleteId = null; });
   await dialog().getByRole("button", { name: "重试失败项" }).click();
   await dialog().waitFor({ state: "detached" });
-  await node("a").waitFor({ state: "detached" });
-  await node("duplicate-a").waitFor({ state: "detached" });
-  assert.deepEqual((await deleteCalls()).map(call => [call.id, call.projectId, call.mode]), [["existing", "p", "delete"], ["a", "p", "delete"], ["a", "p", "delete"]]);
+  assert.equal(await node("a").count(), 1);
+  assert.equal(await node("duplicate-a").count(), 1, "shared canvas instances are retained");
+  assert.deepEqual((await deleteCalls()).map(call => call.original.asset_id), ["existing", "a", "a"], "retry only attempts failed originals");
   await page.evaluate(() => window.save());
   await page.reload();
   await node("outside").waitFor();
-  assert.equal(await node("a").count(), 0);
+  assert.equal(await node("a").count(), 1, "saved canvas still contains its original reference");
 
-  // Preview errors block confirmation; external references clearly retain the original files.
+  // Preview errors block confirmation; external and managed sources share explicit original recycling.
   await reset();
   await page.evaluate(() => { window.failPreview = true; });
   await node("outside").click({ button: "right", position: { x: 30, y: 30 } });
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
-  await page.getByRole("menuitem", { name: "物理删除", exact: true }).click();
+  await page.getByRole("menuitem", { name: "删除原文件", exact: true }).click();
   await dialog().getByRole("alert").waitFor();
-  assert.equal(await dialog().getByRole("button", { name: "物理删除", exact: true }).isDisabled(), true);
+  assert.equal(await dialog().getByRole("button", { name: "删除原文件", exact: true }).isDisabled(), true);
   await page.evaluate(() => { window.failPreview = false; window.externalPreview = true; });
   await dialog().getByRole("button", { name: "重新读取" }).click();
-  await dialog().getByRole("button", { name: "移除引用", exact: true }).waitFor();
-  await dialog().getByText("仅移除引用 · 保留原文件").waitFor();
+  await dialog().getByRole("button", { name: "删除原文件", exact: true }).waitFor();
+  await dialog().getByText(/系统回收站/).waitFor();
+  assert.equal(await dialog().getByText("仅移除引用 · 保留原文件").count(), 0);
   assert.deepEqual(await deleteCalls(), []);
 
   // The library batch menu keeps its own scope through the same confirmation flow.
@@ -131,10 +132,10 @@ try {
   await page.waitForFunction(() => window.openMenu);
   await page.evaluate(() => window.openMenu('multi'));
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
-  await page.getByRole("menuitem", { name: "物理删除", exact: true }).click();
-  await dialog().getByRole("button", { name: "物理删除", exact: true }).click();
+  await page.getByRole("menuitem", { name: "删除原文件", exact: true }).click();
+  await dialog().getByRole("button", { name: "删除原文件", exact: true }).click();
   await dialog().waitFor({ state: 'detached' });
-  assert.deepEqual(await page.evaluate(() => window.calls.filter(c => c.command === 'delete_asset_with_mode').map(c => c.args.id)), ['a1','a2']);
+  assert.deepEqual(await page.evaluate(() => window.calls.filter(c => c.command === 'trash_asset_original').map(c => c.args.original.asset_id)), ['a1','a2']);
   assert.deepEqual(errors, []);
   console.log("PASS canvas batch delete: marquee, frozen previews, deduplication, library-selection isolation, cancel/outside selection, partial failure/retry, busy guard, reload, preview error, external reference, themes/narrow layout");
 } catch (error) {

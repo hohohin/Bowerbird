@@ -1,3 +1,5 @@
+// Shared library layout must load before component and theme overrides.
+import "./components/LocalFileWorkspace.css";
 import { useCallback, useEffect, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { useLocalFileMode } from "./lib/localFileMode";
@@ -6,7 +8,8 @@ import { OPEN_LOCAL_FILES } from "./lib/externalFiles";
 import { Toolbar } from "./components/Toolbar";
 import { WindowTitlebar } from "./components/WindowTitlebar";
 import { Sidebar } from "./components/Sidebar";
-import { LibraryHome } from "./components/LibraryHome";
+import { HomeWorkspace } from "./components/HomeWorkspace";
+import { CreationModeIndicator } from "./components/CreationModeIndicator";
 import { CanvasWorkspace } from "./components/CanvasWorkspace";
 import { AssetDetail } from "./components/AssetDetail";
 import { AssetContextMenu } from "./components/AssetContextMenu";
@@ -23,10 +26,12 @@ import { AGENT_DS_DONE_EVENT } from "./components/CreationBoard";
 import { APPEND_TEXT_EVENT } from "./components/creation/useCreationEditor";
 import { GenerationPanel } from "./components/GenerationPanel";
 import { CloudAgentSession } from "./components/CloudAgentPanel";
+import { LibraryGenerationCoordinator } from "./components/LibraryGenerationCoordinator";
 import { CloudAgentRuntimeCoordinator } from "./components/CloudAgentRuntimeCoordinator";
 import { COLLECTIONS_FEATURE_ENABLED, LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED } from "./lib/featureFlags";
 import { ExploreWorkspace } from "./components/ExploreWorkspace";
 import { DEFAULT_EXPLORER_URL } from "./lib/explorer";
+import { cancelPinterestSearch, isPinterestSearchCurrent, PINTEREST_SEARCH_URL, usePinterestSearch } from "./lib/pinterestSearch";
 import { CodexOnboarding } from "./components/CodexOnboarding";
 import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
 import { DreaminaOnboarding } from "./components/DreaminaOnboarding";
@@ -40,6 +45,7 @@ import { prepareGenerationSound } from "./lib/generationNotifications";
 import { useStore } from "./store";
 import { api } from "./lib/api";
 import { prepareFileWorkspace } from "./lib/fileWorkspace";
+import { importDroppedMedia, prepareMediaImport } from "./lib/mediaImport";
 import { notify, notifyError, notifySuccess } from "./lib/notify";
 import { userErrorMessage } from "./lib/userError";
 import {
@@ -82,7 +88,7 @@ function App() {
   const localFilesOpen = useLocalFileMode(s => s.open);
   const setLocalFilesOpen = useLocalFileMode(s => s.setOpen);
   useEffect(() => {
-    const show = () => { useLocalFileMode.getState().openBrowser(); setSourceBrowserOpen(false); };
+    const show = () => { useStore.getState().setLibraryHomeView("library"); useLocalFileMode.getState().openBrowser(); setSourceBrowserOpen(false); };
     window.addEventListener(OPEN_LOCAL_FILES, show);
     return () => window.removeEventListener(OPEN_LOCAL_FILES, show);
   }, []);
@@ -95,8 +101,15 @@ function App() {
   } | null>(null);
   const [sourceBrowserUrl, setSourceBrowserUrl] = useState<string | null>(null);
   const [sourceBrowserOpen, setSourceBrowserOpen] = useState(false);
-  useEffect(() => { if (localFilesOpen) setSourceBrowserOpen(false); }, [localFilesOpen]);
   const [sourceBrowserNavigation, setSourceBrowserNavigation] = useState(0);
+  const pinterestSearch = usePinterestSearch(state => state.request);
+  useEffect(() => {
+    if (!pinterestSearch || !isPinterestSearchCurrent(pinterestSearch)) return;
+    setLocalFilesOpen(false);
+    setSourceBrowserUrl(PINTEREST_SEARCH_URL);
+    setSourceBrowserNavigation(id => id + 1);
+    setSourceBrowserOpen(true);
+  }, [pinterestSearch, setLocalFilesOpen]);
   const setAssets = useStore((s) => s.setAssets);
   const setTotal = useStore((s) => s.setTotal);
   const setPromptedAssets = useStore((s) => s.setPromptedAssets);
@@ -114,6 +127,9 @@ function App() {
   const activeProjectId = useStore((s) => s.activeProjectId);
   const projectRoutePending = useStore((s) => s.projectRoutePending);
   const projectRouteRevision = useStore((s) => s.projectRouteRevision);
+  useEffect(() => {
+    if (pinterestSearch && !isPinterestSearchCurrent(pinterestSearch)) cancelPinterestSearch(pinterestSearch.requestId);
+  }, [pinterestSearch, projectRoutePending, projectRouteRevision, activeProjectId]);
   const projects = useStore((s) => s.projects);
   const currentCollectionId = useStore((s) => s.currentCollectionId);
   const searchQuery = useStore((s) => s.searchQuery);
@@ -372,7 +388,7 @@ function App() {
     // 依赖 currentFolderId / searchQuery / boardOpen / genEditing / settings：切换文件夹、搜索、
     // 开关创作板/进入会话编辑、或改了影响列表的设置（如隐藏项目素材）时重拉
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeProjectId, activeProjectIsProvisional, projectRoutePending, projectRouteRevision, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, genEditing, settings, libraryHomeView]);
+  }, [activeProjectId, activeProjectIsProvisional, projectRoutePending, projectRouteRevision, currentFolderId, currentCollectionId, searchQuery, smartFilter, colorFilter, boardOpen, genEditing, settings]);
 
   // 有反推的资产 id 集合（project 级，缩略图标 🏷️ 用）：只随项目切换重拉，切 folder/filter 不重拉。
   useEffect(() => {
@@ -695,23 +711,14 @@ function App() {
       e.preventDefault();
       const file = imageFile;
       const projectId = useStore.getState().activeProjectId;
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = reader.result as string;
-        api
-          .importImageBytes({
-            dataUrl,
-            fileName: file.name || "clipboard.png",
-            projectId,
-            source: "clipboard",
-          })
-          .then(() => notifySuccess("剪贴板图片已加入素材库"))
-          .catch((err) => {
-            console.error("paste import failed", err);
-            notifyError(err, "粘贴图片导入失败");
-          });
-      };
-      reader.readAsDataURL(file);
+      const revision = useStore.getState().projectRouteRevision;
+      void prepareMediaImport(projectId, revision)
+        .then(() => importDroppedMedia(file, projectId, "clipboard"))
+        .then(() => notifySuccess("剪贴板图片已加入素材库"))
+        .catch(err => {
+          console.error("paste failed", err);
+          notifyError(err, "粘贴图片失败");
+        });
     }
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
@@ -848,18 +855,21 @@ function App() {
     await state.enterProject(project.id);
   }
 
-  function exitCreative() {
-    setSourceBrowserOpen(false);
-    setCreativeLaunch(null);
-    setCreativeTarget(null);
-    void useStore.getState().exitProject().catch((error) => {
+  async function exitCreative(homeView?: "library" | "projects") {
+    try {
+      await useStore.getState().exitProject();
+      setCreativeLaunch(null);
+      setCreativeTarget(null);
+      if (homeView) useStore.getState().setLibraryHomeView(homeView);
+    } catch (error) {
       notifyError(error, "项目仍有未保存修改，已留在当前画板");
-    });
+    }
   }
 
   return (
     <div className="app-shell flex h-full w-full flex-col">
       <CloudAgentRuntimeCoordinator />
+      <LibraryGenerationCoordinator />
       <ToastViewport />
       <StartupUpdateDialog ready={!initializing} />
       <FileDropImport />
@@ -889,10 +899,9 @@ function App() {
         localFilesOpen={localFilesOpen}
         canvasMode={projectWorkspaceActive}
         onCanvasModeChange={(active) => { setLocalFilesOpen(false); return active ? createCreative(false) : exitCreative(); }}
-        onCreateCreative={(blank) => { const local = localFilesOpen; setLocalFilesOpen(false); return createCreative(local || blank); }}
+        onHomeViewChange={view => { if (projectWorkspaceActive) void exitCreative(view); else useStore.getState().setLibraryHomeView(view); }}
         exploring={sourceBrowserOpen}
         onExplore={() => {
-          setLocalFilesOpen(false);
           const guide = useOnboarding.getState().guide;
           const designerExplore = guide.status === "active" && guide.role === "designer" && guide.sessions.designer?.step === 3;
           if (!sourceBrowserUrl || designerExplore) {
@@ -907,8 +916,28 @@ function App() {
         <main className="app-workspace relative flex flex-1 flex-col overflow-hidden bg-canvas">
           <ExploreWorkspace url={sourceBrowserUrl} navigationId={sourceBrowserNavigation} open={sourceBrowserOpen && !collectionAddTargetId} onClose={() => setSourceBrowserOpen(false)}>
           <PreservedWorkspace suspended={showDetail}>
-          {projectWorkspaceActive ? (
-            initializing ? <LibraryLoadingState /> : (
+          <div className="relative flex min-h-0 flex-1">
+            <div className="home-workspace-route" data-suspended={projectWorkspaceActive}>
+              <PreservedWorkspace suspended={projectWorkspaceActive}>
+              {libraryHomeView === "library" && mode === "manage" && !collectionAddTargetId && <BatchBar />}
+              <div className={`relative min-h-0 flex-1 overflow-clip ${collectionAddTargetId ? "collection-add-workspace" : ""}`}>
+                {initializing ? (
+                  <LibraryLoadingState />
+                ) : (
+                  <HomeWorkspace active={!projectWorkspaceActive} onCreateProject={createProjectFromAssets}
+                    shortcutsEnabled={!sourceBrowserOpen && !showDetail && !collectionAddTargetId && !legacyInspectorOpen} />
+                )}
+                {/* 生成结果面板：主区覆盖层（像详情页） */}
+                {!projectWorkspaceActive && libraryHomeView === "library" && !collectionAddTargetId && legacyInspectorOpen && activeSessionKind === "generation" && <GenerationPanel readOnly />}
+                {!projectWorkspaceActive && libraryHomeView === "library" && !collectionAddTargetId && legacyInspectorOpen && activeSessionKind === "agent" && <CloudAgentSession readOnly />}
+                {/* 主屏与画板共用创作状态标记；会话面板或详情覆盖时隐藏。 */}
+                {!projectWorkspaceActive && libraryHomeView === "library" && boardOpen && !genEditing && !genPanelOpen && !showDetail && (
+                  <CreationModeIndicator className="library-creation-mode-indicator"/>
+                )}
+              </div>
+              </PreservedWorkspace>
+            </div>
+            {projectWorkspaceActive && (initializing ? <LibraryLoadingState /> : (
               <CanvasWorkspace
                 key={workspaceProjectId}
                 projectId={workspaceProjectId}
@@ -919,45 +948,14 @@ function App() {
                 onFocusConsumed={acknowledgeCreativeTarget}
                 launchRequest={creativeLaunchTargetsProject(creativeLaunch, workspaceProjectId) ? creativeLaunch : null}
                 onLaunchConsumed={acknowledgeCreativeLaunch}
-                onExit={exitCreative}
+                onExit={() => void exitCreative()}
               />
-            )
-          ) : (
-            <>
-              {libraryHomeView === "library" && mode === "manage" && !collectionAddTargetId && <BatchBar />}
-              <div className={`relative min-h-0 flex-1 overflow-clip ${collectionAddTargetId ? "collection-add-workspace" : ""}`}>
-                {initializing ? (
-                  <LibraryLoadingState />
-                ) : (
-                  <LibraryHome onCreateProject={createProjectFromAssets}
-                    shortcutsEnabled={!sourceBrowserOpen && !collectionAddTargetId && !legacyInspectorOpen} />
-                )}
-                {/* 生成结果面板：主区覆盖层（像详情页） */}
-                {!collectionAddTargetId && legacyInspectorOpen && activeSessionKind === "generation" && <GenerationPanel readOnly />}
-                {!collectionAddTargetId && legacyInspectorOpen && activeSessionKind === "agent" && <CloudAgentSession readOnly />}
-                {/* 创作模式视觉标记：瀑布流区品牌蓝线框 + 顶部居中刘海「创作模式」。
-                    仅在挑图面（瀑布流）实际可见时呈现：被会话面板/详情页盖住时不显示。 */}
-                {boardOpen && !genEditing && !genPanelOpen && !showDetail && (
-                  <>
-                    <div
-                      aria-hidden="true"
-                      className="pointer-events-none absolute inset-0 z-20 ring-2 ring-inset ring-[#4868ff] shadow-[inset_0_0_24px_rgba(72,104,255,0.18)]"
-                    />
-                    <div
-                      aria-hidden="true"
-                      className="creation-mode-notch pointer-events-none absolute left-1/2 top-0 z-20"
-                    >
-                      创作模式
-                    </div>
-                  </>
-                )}
-              </div>
-            </>
-          )}
+            ))}
+          </div>
           <CollectionAddMode />
           </PreservedWorkspace>
           {showDetail && <div className="absolute inset-0 z-30 bg-canvas">
-            <AssetDetail onExploreSource={url => { setSourceBrowserUrl(url); setSourceBrowserNavigation(id => id + 1); setSourceBrowserOpen(true); }} />
+            <AssetDetail onExploreSource={url => { cancelPinterestSearch(); setSourceBrowserUrl(url); setSourceBrowserNavigation(id => id + 1); setSourceBrowserOpen(true); }} />
           </div>}
           </ExploreWorkspace>
         </main>

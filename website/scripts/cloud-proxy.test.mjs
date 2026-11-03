@@ -11,6 +11,22 @@ const UPLOAD = `/storage/v1/object/upload/sign/generation-temp/jobs/${JOB}/input
 const DOWNLOAD = `/storage/v1/object/sign/generation-temp/jobs/${JOB}/outputs/result.mp4?token=test%2Bsigned`;
 const AUTH = { Authorization: "Bearer user-token" };
 
+test("chat quote, create and recovery use the authenticated fixed Cloud gateway", async t => {
+  const { send, calls } = await fixture(t);
+  for (const action of ["quote", "create", "get"]) {
+    const body = JSON.stringify({ action, idempotency_key: "chat-request-1", job_id: JOB });
+    const response = await send("/functions/v1/chat-proxy", "POST", body, AUTH);
+    assert.equal(response.status, 200);
+    assert.equal(calls.at(-1).url.href, "https://project.supabase.co/functions/v1/chat-proxy?forceFunctionRegion=ap-northeast-1");
+    assert.equal(calls.at(-1).body.toString(), body);
+    assert.equal(calls.at(-1).headers.Authorization, AUTH.Authorization);
+  }
+  assert.equal((await send("/functions/v1/chat-proxy", "POST", "{}")).status, 401);
+  assert.equal((await send("/functions/v1/chat-worker", "POST", "{}", AUTH)).status, 404);
+  assert.equal((await send("/functions/v1/chat-proxy", "GET")).status, 404);
+  assert.equal(calls.length, 3);
+});
+
 async function fixture(t, overrides = {}) {
   const calls = [];
   const proxy = createCloudProxy({ upstream: "https://project.supabase.co", publicKey: "public-key",
@@ -132,6 +148,21 @@ test("uploads enforce media and size limits before contacting storage", async t 
     assert.equal((await send(UPLOAD, "PUT", undefined, { "Content-Type": "video/mp4", "Content-Length": length })).status, 413);
   }
   assert.equal(calls.length, 0);
+});
+
+test("signed audio upload streams originals and enforces format and 15 MB before storage", async t => {
+  for (const [extension, mime] of [["mp3", "audio/mpeg"], ["wav", "audio/wav"]]) {
+    const path = UPLOAD.replace("video-0.mp4", `audio-0.${extension}`);
+    let received;
+    const { send } = await fixture(t, { fetchImpl: async (_url, options) => {
+      const chunks = []; for await (const chunk of options.body) chunks.push(chunk);
+      received = Buffer.concat(chunks); return Response.json({ Key: "synthetic" });
+    } });
+    assert.equal((await send(path, "PUT", "test", { "Content-Type": mime })).status, 200);
+    assert.equal(received.toString(), "test");
+    assert.equal((await send(path, "PUT", "test", { "Content-Type": "video/mp4" })).status, 415);
+    assert.equal((await send(path, "PUT", undefined, { "Content-Type": mime, "Content-Length": 15 * 1024 * 1024 + 1 })).status, 413);
+  }
 });
 
 test("image, video and layer package downloads preserve bytes and do not forward credentials", async t => {

@@ -4,6 +4,8 @@
 mod error;
 #[path = "../src/media/tools.rs"]
 mod tools;
+#[path = "../src/media/audio.rs"]
+mod audio;
 #[path = "../src/media/probe.rs"]
 mod probe;
 

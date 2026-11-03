@@ -1,0 +1,9 @@
+.library-pane-actions { position:absolute; top:12px; right:8px; z-index:36; display:flex; align-items:center; gap:4px; }
+.library-pane-actions .library-filter-trigger { width:28px; height:28px; flex:none; }
+.library-pane-actions .library-pane-close.library-filter-trigger { position:relative; inset:auto; z-index:auto; }
+.library-pane-content[data-split="true"] .library-pane-actions { right:16px; }
+.library-pane-content[data-split="true"] .file-view-heading { right:52px; }
+.library-split-boundary { position:relative; flex:0 0 6px; z-index:37; }
+.library-split-boundary > .library-split-divider { position:absolute; inset:0; }
+.library-tactical .library-split-boundary .library-pane-insert.library-filter-trigger { position:absolute; top:12px; left:50%; transform:translateX(-50%); width:28px; height:28px; }
+.library-pane-actions button:focus-visible, .library-pane-insert:focus-visible { outline:1px solid var(--bb-blue); outline-offset:2px; }

@@ -81,7 +81,7 @@ const NAME_SOURCE_TEXT_MAX_CHARS: usize = 2000;
 /// 采集/导入入库后调用：后台让 codex 看图 → 产出命名 + caption，写回 DB 并 emit 刷新。
 /// 立即返回（不阻塞导入）；任一失败静默降级。
 pub fn spawn_auto_analyze(app: AppHandle, db: Arc<Database>, asset: Asset) {
-    if asset.ext.as_deref().is_some_and(crate::media::probe::is_video) { return; }
+    if asset.ext.as_deref().is_some_and(|ext| crate::media::probe::is_video(ext) || crate::media::audio::is_audio(ext) || crate::core::text_documents::is_text(ext)) { return; }
     tokio::spawn(async move {
         if let Err(e) = auto_analyze(&app, &db, asset).await {
             tracing::warn!("auto-name: {e}");
@@ -112,6 +112,8 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
     let Some(store_path) = asset.store_path.clone() else {
         return Ok(()); // 无 store_path 无法看图
     };
+    let store_path = db_call(db, move |db| db.resolve_external_image_paths(&[store_path]))
+        .await?.remove(0);
 
     let _permit = AUTO_SEM.acquire().await.map_err(|e| e.to_string())?;
     // 拿到信号量（即将真正调 codex）才计入在途，emit 让前端状态圈反映导入基础分析。

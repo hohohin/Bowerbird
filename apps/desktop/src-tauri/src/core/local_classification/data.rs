@@ -6,6 +6,45 @@ use crate::error::{AppError, AppResult};
 
 pub const MODEL_ID: &str = "qwen3.5-0.8b-q4km-f16/b10809/v1";
 
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct ImageVersion {
+    path: Option<String>,
+    size: Option<i64>,
+    mtime: Option<i64>,
+    fingerprint: Option<String>,
+}
+
+fn image_version(conn: &rusqlite::Connection, id: &str) -> AppResult<Option<ImageVersion>> {
+    Ok(conn.query_row(
+        "SELECT a.store_path,a.size,a.file_mtime,COALESCE(e.fingerprint,f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1",
+        [id], |r| {
+            let fingerprint: Option<String> = r.get(3)?;
+            // A metadata-only touch or rename must not invalidate a prediction
+            // of identical content. Older non-connection assets use metadata.
+            Ok(ImageVersion {
+                path: if fingerprint.is_some() { None } else { r.get(0)? },
+                size: if fingerprint.is_some() { None } else { r.get(1)? },
+                mtime: if fingerprint.is_some() { None } else { r.get(2)? },
+                fingerprint,
+            })
+        },
+    ).optional()?)
+}
+
+/// Called in the same transaction as the new source fingerprint. Human and
+/// historical records survive; only obsolete automatic classification is reset.
+pub(crate) fn requeue_changed_connected_asset(tx: &rusqlite::Transaction<'_>, id: &str) -> AppResult<()> {
+    let manual: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM asset_tags WHERE asset_id=?1 AND origin='manual')", [id], |r| r.get(0))?;
+    if manual { return Ok(()); }
+    tx.execute(
+        "DELETE FROM asset_tags WHERE asset_id=?1 AND origin='local' \
+         AND NOT (tag_id IN (SELECT id FROM tags WHERE name='#ai生成') \
+           AND EXISTS(SELECT 1 FROM analyses WHERE asset_id=?1 AND kind='replication_source'))", [id])?;
+    tx.execute("DELETE FROM local_visual_observations WHERE asset_id=?1", [id])?;
+    tx.execute("INSERT OR IGNORE INTO local_auto_classification_pending(asset_id) SELECT ?1 WHERE (SELECT enabled FROM local_classification_state WHERE id=1)=1", [id])?;
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct EnglishLabel {
     pub name: String,
@@ -139,6 +178,13 @@ pub fn parse_prediction(raw: &str, allowed: &[Label], discover: bool) -> AppResu
 }
 
 impl Database {
+    pub(super) fn classification_image_version(&self, id: &str) -> AppResult<Option<ImageVersion>> {
+        image_version(&self.conn.lock().unwrap(), id)
+    }
+
+    pub(super) fn classification_image_unchanged(&self, id: &str, expected: &ImageVersion) -> AppResult<bool> {
+        Ok(self.classification_image_version(id)?.as_ref() == Some(expected))
+    }
     /// Translation metadata does not change user rules, classification results,
     /// revision guards, or scan queues. Late replies cannot overwrite an edit.
     pub fn cache_label_english(&self, label: &Label, english: &EnglishLabel) -> AppResult<bool> {
@@ -443,11 +489,13 @@ impl Database {
 
     fn classification_targets(&self, pending_only: bool, model: &str, automatic: bool) -> AppResult<Vec<String>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT a.id FROM assets a WHERE a.thumb_path IS NOT NULL \
+        let mut stmt = conn.prepare("SELECT a.id FROM assets a WHERE (a.thumb_path IS NOT NULL \
+            OR (a.store_path IS NOT NULL AND (EXISTS(SELECT 1 FROM external_assets e WHERE e.asset_id=a.id) \
+              OR EXISTS(SELECT 1 FROM connected_entries e WHERE e.asset_id=a.id)))) \
             AND (?3=0 OR ((SELECT enabled FROM local_classification_state WHERE id=1)=1 \
               AND EXISTS(SELECT 1 FROM local_auto_classification_pending p WHERE p.asset_id=a.id) \
               AND NOT EXISTS(SELECT 1 FROM asset_tags t WHERE t.asset_id=a.id AND t.origin='manual'))) \
-            AND lower(COALESCE(a.ext,'')) IN ('jpg','jpeg','png','webp','gif','bmp') \
+            AND lower(COALESCE(a.ext,'')) IN ('jpg','jpeg','png','webp','gif','bmp','heic','heif') \
             AND (?1=0 OR NOT EXISTS(SELECT 1 FROM local_visual_observations o WHERE o.asset_id=a.id AND (o.model=?2 OR (?2 IN ('jev-choice-dimensions/cloud-discovery-v6','jev-choice-flat-top4-30/cloud-discovery-v7','jev-choice-flat-top3-42/cloud-discovery-v8') AND o.model IN ('jev-choice-dimensions/cloud-discovery-v5','jev-choice-dimensions/cloud-discovery-v6','jev-choice-flat-top4-30/cloud-discovery-v7'))))) \
             ORDER BY a.created_at,a.id")?;
         let rows = stmt.query_map(params![pending_only, model, automatic], |r| r.get(0))?;
@@ -555,8 +603,25 @@ impl Database {
         model: &str,
         definitions: &[super::cloud::NewLabel],
     ) -> AppResult<bool> {
+        self.apply_classification_for_image(asset, revision, prediction, record_observation, evaluated, model, definitions, None)
+    }
+
+    pub(super) fn apply_classification_for_image(
+        &self,
+        asset: &str,
+        revision: i64,
+        prediction: &Prediction,
+        record_observation: bool,
+        evaluated: &[String],
+        model: &str,
+        definitions: &[super::cloud::NewLabel],
+        expected: Option<&ImageVersion>,
+    ) -> AppResult<bool> {
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction()?;
+        if let Some(expected) = expected {
+            if image_version(&tx, asset)?.as_ref() != Some(expected) { return Ok(false); }
+        }
         let current: i64 = tx.query_row(
             "SELECT revision FROM local_classification_state WHERE id=1",
             [],

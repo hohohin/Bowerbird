@@ -36,9 +36,24 @@ function fixture(storage = new Map()) {
     execute(localRequire, module, module.exports); return module.exports;
   }
   const module = load(storePath);
-  return { store: module.useLocalChatStore, events: module.ensureLocalChatEvents, calls, handlers, storage,
+  return { store: module.useLocalChatStore, events: module.ensureLocalChatEvents, calls, handlers, storage, chatApi: load(resolve(dirname(storePath), 'localChat.ts')),
     emit: value => listeners.get('local-chat://updated')?.({ payload: value }), draft: module.localChatDraft };
 }
+
+test('Cloud chat uses its live quote, allows zero balance at zero cost and ignores local CLI eligibility', () => {
+  const { chatProviderUnavailable } = fixture().chatApi;
+  const state = { cloudAvailable: true, loggedIn: true, cloudAllowed: true, localAllowed: false, codexReady: false, balance: 0 };
+  const quote = { provider: 'deepseek-cloud', service: 'chat_deepseek', available: true, unit_cost: 0, currency: 'Bcoin', pricing_version: 1 };
+  assert.equal(chatProviderUnavailable('deepseek-cloud', state, quote), null);
+  assert.match(chatProviderUnavailable('codex-local', state, quote), /Pro/);
+  assert.match(chatProviderUnavailable('deepseek-cloud', state, null), /报价/);
+  for (const unit_cost of [1, -1, null, undefined, NaN]) {
+    assert.match(chatProviderUnavailable('deepseek-cloud', { ...state, balance: 100 }, { ...quote, unit_cost }), /开放/);
+  }
+  assert.match(chatProviderUnavailable('deepseek-cloud', state, { ...quote, available: false, unit_cost: null, pricing_version: null }), /开放/);
+  assert.match(chatProviderUnavailable('deepseek-cloud', { ...state, loggedIn: false }, quote), /登录/);
+  assert.match(chatProviderUnavailable('deepseek-cloud', state, { ...quote, available: false }), /开放/);
+});
 
 test('a newer streamed event wins over an older delayed send acknowledgement', async () => {
   const f = fixture(); let resolveSend;
@@ -82,6 +97,18 @@ test('changed input after an uncertain send has a different request identity', a
   assert.equal(new Set(f.calls.map(call => call.args.input.requestId)).size, 3);
 });
 
+test('switching chat provider after an uncertain send starts a distinct native request', async () => {
+  const f = fixture();
+  f.handlers.set('local_chat_send', () => { throw new Error('connection lost'); });
+  const input = { projectId: 'p', text: '同一个问题', referenceAssetIds: [] };
+  for (const provider of ['codex-local', 'deepseek-cloud', 'deepseek-cloud']) {
+    await assert.rejects(f.store.getState().send({ ...input, provider }), /connection lost/);
+  }
+  assert.notEqual(f.calls[0].args.input.requestId, f.calls[1].args.input.requestId);
+  assert.equal(f.calls[1].args.input.requestId, f.calls[2].args.input.requestId);
+  assert.equal(f.calls[1].args.input.provider, 'deepseek-cloud');
+});
+
 test('concurrent send to the same conversation is rejected before a second IPC', async () => {
   const f = fixture(); let resolveSend;
   f.handlers.set('local_chat_send', () => new Promise(resolve => { resolveSend = resolve; }));
@@ -115,6 +142,25 @@ test('failed stop preserves running state, partial response and unsent draft', a
   assert.equal(f.store.getState().summaries['chat-p'].status, 'running');
   assert.equal(f.store.getState().conversations['chat-p'].messages.at(-1).text, '回复 3');
   assert.deepEqual(plain(f.draft('chat-p')), { text: '下一条草稿', referenceAssetIds: ['ref'] });
+});
+
+test('recovering Cloud replies queries only the existing conversation and cannot rewind a newer event', async () => {
+  const f = fixture(); await f.events();
+  f.emit({ ...chat(2, 'p', 'cloud', 'interrupted'), provider: 'deepseek-cloud' });
+  f.store.getState().setDraft('cloud', { text: '稍后继续', referenceAssetIds: [] });
+  let resolveRecover;
+  f.handlers.set('local_chat_recover', () => new Promise(resolve => { resolveRecover = resolve; }));
+  const pending = f.store.getState().recover('cloud'); await settle();
+  f.emit({ ...chat(4, 'p', 'cloud'), provider: 'deepseek-cloud' });
+  resolveRecover({ ...chat(3, 'p', 'cloud'), provider: 'deepseek-cloud' });
+  await pending;
+  assert.deepEqual(f.calls, [{ command: 'local_chat_recover', args: { conversationId: 'cloud' } }]);
+  assert.equal(f.store.getState().conversations.cloud.revision, 4);
+  assert.equal(f.draft('cloud').text, '稍后继续');
+  f.handlers.set('local_chat_recover', () => { throw new Error('still processing'); });
+  await assert.rejects(f.store.getState().recover('cloud'), /still processing/);
+  assert.equal(f.store.getState().conversations.cloud.messages.at(-1).text, '回复 4');
+  assert.equal(f.draft('cloud').text, '稍后继续');
 });
 
 test('conversation drafts survive reload separately and clearing one never clears another', () => {

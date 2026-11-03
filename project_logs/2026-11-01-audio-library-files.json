@@ -1,0 +1,443 @@
+{
+  "head": "6437e1e0b2ca0e01c4e1215bc8ca84d5d6b8885c",
+  "scope": "Incremental audio changes against per-file task-start snapshots, NOT a patch for clean HEAD. Existing step-6 prerequisites are intentionally excluded.",
+  "prerequisites": [
+    "core/connected_media.rs baseline",
+    "local_classification/data.rs requeue_changed_connected_asset",
+    "folder_connections.rs generated_connection_paths and scan wiring"
+  ],
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "baseline": ".tmp/audio-library-integration-baseline/isolated-AGENTS.md",
+      "baselineSha256": "77dfd68b97c1d0fe9cc84550c8d021dea66be215f422d3ae26a3e8766998ea1f",
+      "finalSha256": "95df3a5a0a58b6ffd568b66c5810ea7b9d99b0acc56a67a7e4761299665ffcd8"
+    },
+    {
+      "path": "apps/desktop/scripts/audio-library-ui.test.mjs",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "819461294297cbe89a74948c1185600a0c4dbcd4413cf56ea222654a53baaeb2"
+    },
+    {
+      "path": "apps/desktop/scripts/audio-media.test.mjs",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "57feb8dfcab9b8d6709a1872b2680fad88f43fefd29341d068ba580508de39e0"
+    },
+    {
+      "path": "apps/desktop/scripts/audio-waveform-ui.test.mjs",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "0d00e107c2fa50ac3dea1ab7825ad011e83f72ee15918008de16289c274f3b9b"
+    },
+    {
+      "path": "apps/desktop/scripts/fixtures/audio-library/preview.html",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "5e88d6a43887af92f03a57980d6af09594ec782be394967a23657c6565059ced"
+    },
+    {
+      "path": "apps/desktop/scripts/fixtures/audio-library/preview.tsx",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "1d7645d710918b50698431ad283e8724eb0779adb9d2578488cb83e828059f13"
+    },
+    {
+      "path": "apps/desktop/scripts/fixtures/audio-library/README.md",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "c83b856c814b1630488d518bac46acc08edb220a981abb1aa12f51c947775089"
+    },
+    {
+      "path": "apps/desktop/scripts/fixtures/audio-waveform-production/AGENT-LOG.md",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "ff4226686fe303eec118cb67b022f583ca7bd870e81749c28c011889cae1c915"
+    },
+    {
+      "path": "apps/desktop/scripts/fixtures/audio-waveform-production/preview.html",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "f113fccb47a65cf592c199b6b9e0fa79382b453ba04e45838115045ba0e258ee"
+    },
+    {
+      "path": "apps/desktop/scripts/fixtures/audio-waveform-production/preview.tsx",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "792e76262a93227b715bf8819ee24e51bee31dd4304a40e82dfcaea1ce22a94e"
+    },
+    {
+      "path": "apps/desktop/scripts/fixtures/audio-waveform-production/README.md",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "53e72071e1909585133c35d2b570ed384168719b8cbb955d81cefc18a26a6642"
+    },
+    {
+      "path": "apps/desktop/src-tauri/Cargo.lock",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/Cargo.lock",
+      "baselineSha256": "ab96511dc1b165c09bf588f951a25eb606c5a0fb7e7bc3f86d68461415ea8089",
+      "finalSha256": "775c12a351b79ee2c2283a4b7f0c30c2e14bf09349bf84272bc561900a8df734"
+    },
+    {
+      "path": "apps/desktop/src-tauri/Cargo.toml",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/Cargo.toml",
+      "baselineSha256": "beb2d681d6299fc9d4d227c0f1215b94bee4168ba6603a8a4908c31d937720e9",
+      "finalSha256": "45d53265fe41e7bbdbb98c9e8e45935a78109729f2d73b5998516c9f9a1768b7"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/commands/audio.rs",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "43d07bc4f1ac6bdc73daf4c175cb1ff91d579a144caaf3f379c5e3d11b787ca1"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/commands/external_files.rs",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/src/commands/external_files.rs",
+      "baselineSha256": "2ef21d31b5070d891d1755961652442e1727ec003d8a37cd3bb9412c78a1b0f8",
+      "finalSha256": "7bd183432d3d9137aea609f2aea34adeae3be81fa1bcc663035fb2364609eae7"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/commands/mod.rs",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/src/commands/mod.rs",
+      "baselineSha256": "21743ef204a8a696efa4708cab1fcb5afb87a34af427b92b4ebc6d3df94582e5",
+      "finalSha256": "98a841253ce1e88d19408570b88ddafc317f9f53926054a09fba84e88f43f355"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/audio_tests.rs",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "eedd3f3a5d6a7ffcf3bd1290339eacf157f1c56a102a72180a99937fc89c01ec"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/audio.rs",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "7f14d5ec8dd78cf753886453a545664c7ec485c0fc02fd9a6357277660ec20cf"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/autoname.rs",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/src/core/autoname.rs",
+      "baselineSha256": "ec4cddc9b4a09faac936fb5fe94787902b2088d4f09f13eaf6c29a915bb15b60",
+      "finalSha256": "848fe6d38ffed8dec7f6f1f523e6a3dd08b8ed90dabe5ba64d722d252133ca5b"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/catalog_browser.rs",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/src/core/catalog_browser.rs",
+      "baselineSha256": "dbc6af1113f748c392b6f6db5be6b64a6e4ab813630d270414d64b2393ade895",
+      "finalSha256": "bc585023147205eccb10c6df6867df0196e56590c7f07fce11217ad4ed702625"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/connected_media.rs",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/src/core/connected_media.rs",
+      "baselineSha256": "a79afaaa3dca5ff64646be310101778e335b03268eea74445313bf5336479707",
+      "finalSha256": "647c69b408679ae2f41feea56852ebd6845dd77c5a655caa1d801a5282ee1bfc"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/external_files.rs",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/src/core/external_files.rs",
+      "baselineSha256": "047348122eb3705d35ce622cce1f2a739ee6cb5d54c607c1fb8e8a6108f8b3ab",
+      "finalSha256": "4210a5e4900de0def57e80b07b966761cf51bddc57d8d6da01173803ded08716"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/folder_connections.rs",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/src/core/folder_connections.rs",
+      "baselineSha256": "fef50bd5411635e4f221b9d43a8a817ca218b9cf2643f05156cafac8340cbe9a",
+      "finalSha256": "8b1eed9ef553da8dff991bafd8c8df827dc35ea412d3ca30a88bd865f698ea46"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/ingest.rs",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/src/core/ingest.rs",
+      "baselineSha256": "52719e70f3e5c6c5933d90b0f47c0b21b37df31aa121a86f2171aaee4303827d",
+      "finalSha256": "2dc399fc8e085ba89d697aa3e8d140381a7c5fc961bb8a1f44f7153e53ee1b3a"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/material_catalog.rs",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/src/core/material_catalog.rs",
+      "baselineSha256": "ffe797912fe7ea258aa919df017087f36049796f59e96d4cdc8f3f86e487b4d6",
+      "finalSha256": "e129b9ce0dfd04db248c58585105017020b436224308b001aa3f5bb882d92ed4"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/core/mod.rs",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/src/core/mod.rs",
+      "baselineSha256": "5666f8aeb65319a2cb1d70b940efbd45395067efe4dca464bc847e621017725e",
+      "finalSha256": "89f1eeb8e7501082b35e87f485896c9bac11d50c8c4d36571a830ee777bca51a"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/lib.rs",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/src/lib.rs",
+      "baselineSha256": "34ca600414942be84a351ebea983ee758c1647f2f5507efd735fbce3de426c05",
+      "finalSha256": "eee76c62edb26dff520c09d136023de6a8f147557b162fcc026a4cd17ff8fdcf"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/audio_tests.rs",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "4281d3091b04a1d988194ee6d2ceb0d2ad67e4de080521e5ae836ec32eb051ef"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/audio.rs",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "4c63063163a1253dbcf26725f95e828853fcdd6936dfce88adf2314aaa76edbe"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/mod.rs",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/src/media/mod.rs",
+      "baselineSha256": "93d8fc0096a03abaa3e04090c1d8c0058c36ac711dec3a6aa6f0b34d56f1b64b",
+      "finalSha256": "4b043410b7b0fcd60b9b91d5d437890f885ce512eda6505b45e8978d2f035ae6"
+    },
+    {
+      "path": "apps/desktop/src-tauri/src/media/probe.rs",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src-tauri/src/media/probe.rs",
+      "baselineSha256": "85d9e52b92be26874da2d8d087e54d599034be3ee66f56cbcc60df516465e2d6",
+      "finalSha256": "4fbb679298bd64e7a7c0a7dc5be476cd41b34df7cc98588d73b036af51c859fc"
+    },
+    {
+      "path": "apps/desktop/src-tauri/tests/fixtures/media/audio-preview-flac.flac",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "ff57fd945e877d06266b92695a8ee61e771d1a03f4d45416e5d1e2a44a56b243"
+    },
+    {
+      "path": "apps/desktop/src-tauri/tests/fixtures/media/audio-preview-m4a.m4a",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "be51d5a67cc66cee5db7684c9c0cb4b91e47494360dc6b09fb930c1341d287c9"
+    },
+    {
+      "path": "apps/desktop/src-tauri/tests/fixtures/media/audio-preview-mp3.mp3",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "14842e910ab60bbb233f976966a0d516a728c721eee150f026d661bd43e27626"
+    },
+    {
+      "path": "apps/desktop/src-tauri/tests/fixtures/media/audio-preview-ogg.ogg",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "334d67a19aefd4a7ae07b939a28971fd14d0158ac896f8ccdec218bee68f0de2"
+    },
+    {
+      "path": "apps/desktop/src-tauri/tests/fixtures/media/audio-preview-wav.wav",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "ecb6c63a40a4ed0329d67d91fd7df985d14cc1d41c41cfda3b2ae6b68ce0c9be"
+    },
+    {
+      "path": "apps/desktop/src/components/AssetContextMenu.tsx",
+      "baseline": ".tmp/audio-library/baseline/AssetContextMenu.tsx",
+      "baselineSha256": "7074d00da7bf923d526c7050f6e733d2ba8dc9abcaf89c7098f933a6fc6582d7",
+      "finalSha256": "51f9f11b797ec140dc5165083e86fc32862f7d139d89d4e20c4c6da6e05fa42a"
+    },
+    {
+      "path": "apps/desktop/src/components/AssetDetail.tsx",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/components/AssetDetail.tsx",
+      "baselineSha256": "d68aee89bbd76b5614df6905e774d8778738524c50d470931f977e1fd01c10e8",
+      "finalSha256": "24c24acb069330ddbe2fda2f62e6609c26d1bf546b0473763fc48b64b93834eb"
+    },
+    {
+      "path": "apps/desktop/src/components/AudioFileMediaCard.css",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "acc7df2fe94499d645006acc841d808a75094ff69fb9c9c7f37679bbf1a81213"
+    },
+    {
+      "path": "apps/desktop/src/components/AudioFileMediaCard.tsx",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "5168c983a4c8da03c8b90ac64f73dd25fd289fd075361cebbb7ebb06857aed27"
+    },
+    {
+      "path": "apps/desktop/src/components/AudioWaveform.css",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "a225b72171db19e8e73a1c0442bb5559ae1b8b919419dd0d76d7b64644fa5b4f"
+    },
+    {
+      "path": "apps/desktop/src/components/AudioWaveform.tsx",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "beb09f7ef074b88c186db14691adee9cfd1b57dc63f228b1080db5e58e5f18b1"
+    },
+    {
+      "path": "apps/desktop/src/components/CanvasAssetDeleteDialog.tsx",
+      "baseline": ".tmp/audio-library/baseline/CanvasAssetDeleteDialog.tsx",
+      "baselineSha256": "aa467548b8515571dd8cca5fc51eb6b43b2683b0a05632a0ab85ab06d3517d46",
+      "finalSha256": "f708a4b730f1f956f7a6e0ade7a96c9d3946d4e39eb2ca9862f987e8a44700cb"
+    },
+    {
+      "path": "apps/desktop/src/components/CategorizedLibrary.tsx",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/components/CategorizedLibrary.tsx",
+      "baselineSha256": "239475e5722eafd5adb15d1e3d6830fa082c6114977fb2a337bce97b4e676e22",
+      "finalSha256": "b3cd51fca3dc750c189b66114bbeedfa1f660e0800b98be6f011ec71191e7550"
+    },
+    {
+      "path": "apps/desktop/src/components/CollectionDialogs.tsx",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/components/CollectionDialogs.tsx",
+      "baselineSha256": "65e4d9dabe26d9fb2c3bf359691d16f8e51b7c196ad3dcda94e9eabe653659b4",
+      "finalSha256": "36d9a9cafd2d555193d21d7023b4132b3afc5a7c9f18a3f9cd1285399569a7f8"
+    },
+    {
+      "path": "apps/desktop/src/components/CollectionPanel.tsx",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/components/CollectionPanel.tsx",
+      "baselineSha256": "930dc55f4482975d09036608d7a462b035c147d99eb851b40db176b2033598cf",
+      "finalSha256": "ee33936bd853ab8ba08081ecc0b71b7515c52582df2ad1e720868bd493d9c7cb"
+    },
+    {
+      "path": "apps/desktop/src/components/ConnectedCollections.tsx",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/components/ConnectedCollections.tsx",
+      "baselineSha256": "d7ed9614545c9facfe6507c6f9a3c518a8490b01fbb5537f08efafff922dd8d0",
+      "finalSha256": "92f0f864b7c4d81be8ed067f21f0a84320e9d2088accb9aae44240ef2dd38df2"
+    },
+    {
+      "path": "apps/desktop/src/components/FileMediaCard.tsx",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/components/FileMediaCard.tsx",
+      "baselineSha256": "0d44a24c63fe382a001e25ee2f374e7fc596ccbfe74032ecf5571fd5d5be18e3",
+      "finalSha256": "54dd14099222c552516b7dc91e6c6c4735eb0b13d67e95c83c0f8d289e5a4f29"
+    },
+    {
+      "path": "apps/desktop/src/components/LibraryMediaSwitch.tsx",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/components/LibraryMediaSwitch.tsx",
+      "baselineSha256": "6cbca0f0931cc4df933fa4834ace04be8159573d565236dd693ae848e1d3e165",
+      "finalSha256": "8238ca5ccd00f331bd4d4e9e14c58da38071839a3bee289b2f65ac45bc71f26d"
+    },
+    {
+      "path": "apps/desktop/src/components/LibrarySourceTabs.tsx",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/components/LibrarySourceTabs.tsx",
+      "baselineSha256": "8c0dc2ec5c5b45123cbc0d80f27160dfe0d1f522fca026d50dc99afd7957868c",
+      "finalSha256": "aa1926092972a19324a10290c4e42ba6ed18ab944b0012fc91f35eb048b141fe"
+    },
+    {
+      "path": "apps/desktop/src/components/MediaPreview.tsx",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/components/MediaPreview.tsx",
+      "baselineSha256": "205e3886e40eea03fddb76bd8fbaccb9beb2ed660cc0701bd873f9c0cd42ce20",
+      "finalSha256": "f1de5f7dc99c9bcc9186353c3a64dbd4b921619153cee87b98b57a646b4abaf5"
+    },
+    {
+      "path": "apps/desktop/src/components/MediaTypeFilter.tsx",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/components/MediaTypeFilter.tsx",
+      "baselineSha256": "1f013e6637a833d2a110c2a4401ca17c74645066bb8820578392aed413b6a24f",
+      "finalSha256": "38e7d93e11800eb436439d299ff0ac24dc9d9ae27afa549c655e3527aad27857"
+    },
+    {
+      "path": "apps/desktop/src/components/RenameDialog.tsx",
+      "baseline": ".tmp/audio-library/baseline/RenameDialog.tsx",
+      "baselineSha256": "8a7b4dd5e5e10095da802c57d6733535885440d385a3a9de28375efc08a467e7",
+      "finalSha256": "923b3104d82f1d5f23661cde120e2391f5cbdf7ee5a8c3cbc340eded2c9e21cf"
+    },
+    {
+      "path": "apps/desktop/src/components/VirtualCatalog.tsx",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/components/VirtualCatalog.tsx",
+      "baselineSha256": "4bdbc9ea88a92e7883eb73a274b43ce66a62bc0dac9bedd581218fd304088084",
+      "finalSha256": "5467dcd4a0e3f9638db67d60b24afda1a55eb5acc776f83e06884b39b0170b3f"
+    },
+    {
+      "path": "apps/desktop/src/lib/audioMedia.ts",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "af1e307a095b78edb1e5714938b8c76b7475c39352afc504edad2abdc77a7ad2"
+    },
+    {
+      "path": "apps/desktop/src/lib/audioPreview.ts",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "0c25c92679ea2913aaa595cfcea69fb760649da78ccbbd5e5edd17b283e74ee7"
+    },
+    {
+      "path": "apps/desktop/src/lib/audioPreviewPeaks.ts",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "597c9d23d7418ecb140887baca167ad929b6d9a21fe655d3d4d371f365ac39a3"
+    },
+    {
+      "path": "apps/desktop/src/lib/canvasMaterialFilter.ts",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/lib/canvasMaterialFilter.ts",
+      "baselineSha256": "58acedafc1705af84fcdfb450c29138f7b472634940502574999a2f370998ce6",
+      "finalSha256": "1064c0eb144d16bf9afa0396cb6e788bcd018d3f88722a7a9ec0bb71c54ad667"
+    },
+    {
+      "path": "apps/desktop/src/lib/catalogVirtualLayout.ts",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/lib/catalogVirtualLayout.ts",
+      "baselineSha256": "9c8ce0c6838c2ca5b1b13060107b1e43c9cf28e2eae109bf75c8332b211b7c55",
+      "finalSha256": "1d4c3c8cb3bbfff8e96c39bf115e5393fc071a959f7acd826b384abd1745ef9d"
+    },
+    {
+      "path": "apps/desktop/src/lib/explorerCanvasDrop.ts",
+      "baseline": ".tmp/audio-library/baseline/explorerCanvasDrop.ts",
+      "baselineSha256": "28c15aac0bd31dd3f76118d084e570957d5a6f6b2b6209c20d5e837971f1b528",
+      "finalSha256": "39472e93b29306bd57f3c12fdeebc54b0a7fbcb8633eee881f6782e3f4124267"
+    },
+    {
+      "path": "apps/desktop/src/lib/externalFiles.ts",
+      "baseline": ".tmp/audio-library/baseline/externalFiles.ts",
+      "baselineSha256": "d5fde2b704c83ffe35831cca0a848eef7b78e6b36a7c48027eb470782bd27be5",
+      "finalSha256": "030358fadbd2a8c7305439f52a8d44a870e03010f4f36d3806c7334e5647ac8c"
+    },
+    {
+      "path": "apps/desktop/src/lib/folderConnections.ts",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/lib/folderConnections.ts",
+      "baselineSha256": "8ec87bdd85a45b6b78107ce0688417a159f6084b54e25454b54c49b990cf3ab0",
+      "finalSha256": "5ab1eca951182fe677eeae8c52e2f78392f3f1d69f25f5f85996a25c3b8fdd20"
+    },
+    {
+      "path": "apps/desktop/src/lib/libraryPane.tsx",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/lib/libraryPane.tsx",
+      "baselineSha256": "bec0d5eeaefc213bfd3fca244df19c088d04f9ea19f3f9aa7199f13f121f612c",
+      "finalSha256": "06082dcffc5d80f4daf8010165062e935a1a720e3e8e8b786de101b665983cb1"
+    },
+    {
+      "path": "apps/desktop/src/lib/localFileMode.ts",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/lib/localFileMode.ts",
+      "baselineSha256": "950acc1d411bf8fe143cfa6fe3bb2459bfab7e0dab9d380d66a3cae04b6e4bbf",
+      "finalSha256": "d288b105e50ae3d9b2c1447d7d913112ce5edc406c3071d9f362c8d0c87a6783"
+    },
+    {
+      "path": "apps/desktop/src/lib/materialActions.ts",
+      "baseline": ".tmp/audio-library/baseline/materialActions.ts",
+      "baselineSha256": "1f43536f64e111138434e6983bec5a29ff0b9a37f5f96f7fa6711c980de0d2d3",
+      "finalSha256": "d90197fe370658f12115c8e03a5903ce4150a1de8cd36a099c3b07626097fba7"
+    },
+    {
+      "path": "apps/desktop/src/lib/materialCatalog.ts",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/lib/materialCatalog.ts",
+      "baselineSha256": "f16484c6d0ca31655f87d77e5903436d1b1121eb89b82339a1a5c6ee4aed8481",
+      "finalSha256": "a933bfdcbedec3eca1b5b703e47028c3d13398381b0e39aa77bd680a42042397"
+    },
+    {
+      "path": "apps/desktop/src/lib/mediaFilter.ts",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/lib/mediaFilter.ts",
+      "baselineSha256": "a1c6754f9694bcb80823476f4ed091bc15fd0e3061a5a1ab5628fd1f629e36bd",
+      "finalSha256": "5540205f18e2ee2956594ca2e3585e175a87c5c47c5b3b79b78dd7a9e94d27ef"
+    },
+    {
+      "path": "apps/desktop/src/lib/mediaImport.ts",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/lib/mediaImport.ts",
+      "baselineSha256": "7bb7f9449ca18aedb0d09aedeaa018b85ac6597cb6b9667e4b678f8e34d383ff",
+      "finalSha256": "b17855266786c1eae78cf236aa78ef47c3523d24ef6a2f1d02b763d7597b9c19"
+    },
+    {
+      "path": "apps/desktop/src/lib/videoGeneration.ts",
+      "baseline": ".tmp/audio-library-integration-baseline/apps/desktop/src/lib/videoGeneration.ts",
+      "baselineSha256": "d3c508d5ca83509aeaf58ee48bc245c85f223e67e1a6ac1c141c5cc37babcd77",
+      "finalSha256": "5bbd78067608ca4d773da2b8016a756cb37a74ed8c375dc247894062e2b400eb"
+    },
+    {
+      "path": "dev-doc/AUDIO-LIBRARY.md",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "5019467372a984786e204d6266f62ab47652051750b39595e9df466d29474c43"
+    },
+    {
+      "path": "project_logs/2026-11-01-audio-library.md",
+      "baseline": null,
+      "baselineSha256": null,
+      "finalSha256": "85ec509e463d67443827a226a1754ac57cc96df6b8cb2bf52d0dc98bc7be9591"
+    },
+    {
+      "path": "PROJECT.md",
+      "baseline": ".tmp/audio-library-integration-baseline/isolated-PROJECT.md",
+      "baselineSha256": "e27855375fafb12d74081850f87b727bafdc724b2a5a3d5bbd4d665580d8a6e7",
+      "finalSha256": "e0633491f44bbe8b3f7840bf72f27f10b5f66571d15fd21f8009bc22d105f27b"
+    }
+  ]
+}

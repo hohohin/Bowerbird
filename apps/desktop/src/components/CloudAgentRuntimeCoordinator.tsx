@@ -136,6 +136,10 @@ export function CloudAgentRuntimeCoordinator() {
             `agent:${next.runId}:${nextFingerprint ?? fingerprint}`,
             `Agent 生成完成，${assets.length} 张产物已加入素材库`,
             useStore.getState().settings,
+            next.projectId && next.threadId ? {
+              projectName: useStore.getState().projects.find(project => project.id === next.projectId)?.name,
+              onOpen: () => useStore.getState().openCloudAgentRun(useStore.getState().cloudAgentRuns[next.runId] ?? next),
+            } : undefined,
           );
         })
         .catch((error) => {

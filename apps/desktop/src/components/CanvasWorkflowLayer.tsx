@@ -25,14 +25,15 @@ import { notifyError, notifySuccess } from "../lib/notify";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { workflowDiagnosticReport } from "../lib/workflowDiagnostics";
 import { removeWorkflowNodes, retryWorkflowSave } from "../lib/workflowRemoval";
-import { WORKFLOW_CARD_DRAG_TYPE, workflowBindingKey } from "../lib/canvasWorkflow";
+import { WORKFLOW_CARD_DRAG_TYPE, workflowBindingKey, compileGenerationPrompt, generationInputNode, workflowInputValues } from "../lib/canvasWorkflow";
 import { assertWorkflowAcyclic, invalidateWorkflow, newWorkflowNode, workflowNodeRun, workflowRuns, workflowInputProducers, workflowConnectionError, workflowInputs, workflowOutputs,
   workflowPortY, workflowTitle, WORKFLOW_CARD_WIDTH, workflowCardWidth, WORKFLOW_SKILLS, type CanvasWorkflow, type WorkflowInput, type WorkflowKind, type WorkflowLoopItem, type WorkflowNode, type WorkflowPort } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode, VisualProfileSummary } from "../lib/types";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { RatioSelect } from "./creation/RatioSelect";
 import { VideoControls } from "./creation/VideoControls";
-import { DEFAULT_VIDEO_OPTIONS, isVideoPath } from "../lib/videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS, isVideoPath, resolveVideoOptions } from "../lib/videoGeneration";
+import { videoFrameInputValues } from "../lib/workflowVideoFrames";
 import { VideoPoster } from "./VideoPoster";
 import { CloudAgentSession } from "./CloudAgentPanel";
 import { ModalShell } from "./ModalShell";
@@ -177,7 +178,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   const videoCardIds = new Set(materials.filter(item => item.video).map(item => item.id));
   const nameCards = [
     ...document.nodes.filter(node => !node.textTarget && !node.textSource).map(node => ({ id: node.id, title: workflowTitle(node) })),
-    ...graphNodes.map(node => ({ id: node.id, title: node.kind === "note" ? (readCanvasNote(node).artboard ? "画板" : { text: "内容卡片", images: "内容卡片", bubble: "气泡", section: "分区" }[readCanvasNote(node).note_type] ?? "内容卡片") : node.kind === "asset" ? videoCardIds.has(node.id) ? "视频卡片" : "图片卡片" : "会话卡片" })),
+    ...graphNodes.map(node => ({ id: node.id, title: node.kind === "note" ? (readCanvasNote(node).artboard ? "画板" : { text: "内容卡片", images: "内容卡片", document: "文本卡片", bubble: "气泡", section: "分区" }[readCanvasNote(node).note_type] ?? "内容卡片") : node.kind === "asset" ? videoCardIds.has(node.id) ? "视频卡片" : "图片卡片" : "会话卡片" })),
     ...materials.filter(item => item.groupId).map(item => ({ id: item.groupId!, title: "素材组" })),
   ];
   const cardNames = assignCanvasCardNames(document.cardNames, nameCards);
@@ -377,11 +378,15 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     const missing = (node.kind === "generation" || node.kind === "agent")
       ? current.filter(input => canvasWorkflowInputState(input, graphNodes, nodes) === "missing").sort((a, b) => (a.slot ?? 0) - (b.slot ?? 0))[0] : undefined;
     const connected = missing ? current.map(input => input === missing ? { ...binding, slot: missing.slot } : input) : [...current, binding];
+    const documentSource = source.canvasNodeId && graphNodes.find(card => card.id === source.canvasNodeId && card.kind === "note" && readCanvasNote(card).note_type === "document");
+    const reference = !missing && documentSource && node.kind === "generation" && (source.type === "text" || source.type === "image")
+      ? { id: crypto.randomUUID(), type: source.type, input: binding, label: source.type === "text" ? "文档文本" : "文档图片" } : null;
     if (latest) {
       try { assertWorkflowAcyclic(nodes.map(item => item.id === toId ? { ...item, inputs: { ...item.inputs, [inputId]: connected } } : item), toId); }
       catch (error) { notifyError(error, "这条连接会形成循环"); return; }
     }
-    patch(toId, { ...(sessionCompletion ? { completionSeen: [...new Set([...(node.completionSeen ?? []), ...completedCanvasSessions([binding], graphNodes, useStore.getState().genJobs)])] } : {}),
+    patch(toId, { ...(reference ? { prompt: `${node.prompt}${node.prompt ? "\n" : ""}@[${reference.id}]`, promptReferences: [...(node.promptReferences ?? []), reference] } : {}),
+      ...(sessionCompletion ? { completionSeen: [...new Set([...(node.completionSeen ?? []), ...completedCanvasSessions([binding], graphNodes, useStore.getState().genJobs)])] } : {}),
       inputs: { ...node.inputs, [inputId]: (node.kind === "comfy-video" && inputId !== "text") || (node.kind === "instruction" && node.action !== "describe") || (inputId === "visual-profile" || node.kind === "loop" && node.loopMode === "rows") ? [binding] : connected } });
     setConnection(null); connectionRef.current = null;
   }
@@ -779,6 +784,23 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const profileId = node.profileId || node.profileCache?.profileId || step?.profileId;
       const inputIds = node.kind === "trigger" ? [] : Object.values(node.inputs).flat().flatMap(inputImages);
       const selectedImages = [...new Set(node.kind !== "agent" && images.length ? images : inputIds)].map(id => assets.find(asset => asset.id === id)).filter((asset): asset is Asset => !!asset);
+      let videoOptions = resolveVideoOptions(node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS, []);
+      if (node.kind === "generation" && node.generation?.media === "video") {
+        try {
+          const inputNode = generationInputNode({ ...node, inputs: { text: node.inputs.text ?? [],
+            image: (node.inputs.image ?? []).map(input => input.groupId ? { ...input, assetIds: inputImages(input) } : input) } });
+          const values = workflowInputValues(document.nodes, inputNode, (id, cell) => {
+            const source = graphById.get(id); return source ? canvasInputValue(source, cell, graphNodes) : undefined;
+          });
+          const frameIds = new Set(videoFrameInputValues(inputNode, values, graphNodes).flatMap(value => value.assetIds ?? []));
+          const references = compileGenerationPrompt(inputNode, values).assetIds.map(id => {
+            const asset = assets.find(asset => asset.id === id);
+            // These sockets submit a PNG tail frame, not the source video.
+            return frameIds.has(id) && isVideoPath(asset?.store_path) ? { store_path: "__video_tail__.png" } : { store_path: asset?.store_path };
+          });
+          videoOptions = resolveVideoOptions(videoOptions, references);
+        } catch { /* Draft references can be incomplete; execution validates them after upstream results arrive. */ }
+      }
       const presentation = WORKFLOW_CARD_PRESENTATION[node.kind], CardIcon = presentation.icon;
       return <article key={node.id} data-canvas-node data-workflow-card={node.id} ref={element => { if (element) cardElements.current.set(node.id, element); else cardElements.current.delete(node.id); }} aria-busy={run?.status === "running" && step?.status === "running"} className={`workflow-card ${run?.status === "running" && step?.status === "running" ? "canvas-card-running" : step?.status === "failed" || nodeDiagnostic(node.id) ? "canvas-card-error" : ""} is-${node.kind} ${selectedIds.has(node.id) ? "is-selected" : ""} ${armed ? "is-key-target" : ""}`}
         onMouseEnter={event => { if (node.kind === "trigger" && !event.buttons) showProgress(node.id, event.currentTarget, true); }}
@@ -904,7 +926,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           {node.kind === "instruction" && node.action === "describe" && <WorkflowDescribeOption node={node} assetIds={inputIds} checked={!!node.overwriteDescribe} disabled={busy} onChange={overwriteDescribe => patch(node.id, { overwriteDescribe })} />}
           {node.kind === "visual-profile" && !node.profileId && <input className="workflow-profile-name" aria-label="规范名称" disabled={busy} maxLength={80} placeholder="画板视觉规范" value={node.profileName ?? ""} onChange={event => patch(node.id, { profileName: event.target.value }, false)} />}
           {node.kind === "generation" && node.generation?.media === "video" && <fieldset className="workflow-video-controls" disabled={busy} onPointerDown={event => event.stopPropagation()}>
-            <VideoControls menuClassName="canvas-tactical-model-menu" options={node.generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS} channel={node.generation.videoChannel ?? "jimeng"}
+            <VideoControls menuClassName="canvas-tactical-model-menu" options={videoOptions} channel={node.generation.videoChannel ?? "jimeng"}
               onChange={(videoOptions, videoChannel = node.generation?.videoChannel) => patch(node.id, { generation: { ...node.generation, videoChannel, videoOptions } })}
               ratio={node.generation.ratio ?? "16:9"} onRatioChange={ratio => patch(node.id, { generation: { ...node.generation, ratio } })} />
             <p>按 @ 引用顺序传入素材；首尾帧模式依次为首帧、尾帧。</p>

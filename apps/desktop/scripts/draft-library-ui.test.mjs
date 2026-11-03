@@ -136,6 +136,28 @@ try {
   await dialog.getByRole("button", { name: "撤销", exact: true }).click();
   assert.equal(await layers(), 3, "a multi-image import is undone as a single operation");
 
+  // Connected collections must retain the Mac draft's explicit image picker contract.
+  await openLibrary();
+  await library.getByRole("tab", { name: "集合", exact: true }).click();
+  await library.locator('[data-connection-entry="entry-library-red"]').waitFor();
+  assert.equal(await library.getByRole("button", { name: "视频", exact: true }).count(), 0);
+  await library.locator('[data-asset-id="library-red"]').dblclick();
+  await page.waitForFunction(() => document.querySelectorAll(".draft-layer-row").length === 4);
+  await selectedImportedLayer("红色样片");
+  await dialog.getByRole("button", { name: "撤销", exact: true }).click();
+  await openLibrary();
+  await library.locator('[data-asset-id="library-red"]').click();
+  await library.locator('[data-asset-id="library-blue"]').click({ modifiers: ["Meta"] });
+  assert.equal(await library.getByRole("button", { name: "删除", exact: true }).count(), 0);
+  await library.getByRole("button", { name: "添加到草稿", exact: true }).click();
+  await page.waitForFunction(() => document.querySelectorAll(".draft-layer-row").length === 5);
+  await selectedImportedLayer("蓝色样片");
+  await dialog.getByRole("button", { name: "撤销", exact: true }).click();
+  assert.equal(await layers(), 3);
+  await openLibrary();
+  await library.getByRole("tab", { name: "全部", exact: true }).click();
+  await page.keyboard.press("Escape"); await hiddenLibrary();
+
   // A failed read is atomic: preserve the current tool, pixel selection and active layer.
   await dialog.locator(".draft-layer-select").first().click();
   await makeSelection();
@@ -171,6 +193,7 @@ try {
   });
   assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === "read_image_data_url").length), readsBefore);
   assert.equal(await page.evaluate(() => window.backgroundDrops), 0);
+  assert.equal(await page.evaluate(() => window.calls.some(call => call.command === "start_external_drag")), false, "draft library drag stays within its editor even in Tauri");
   assert.equal(await page.evaluate(() => window.calls.some(call => /project_canvas_node_create|draft_workspace_canvas_upsert/.test(call.command))), false);
   await mkdir("/private/tmp/bowerbird-draft-library-ui", { recursive: true });
   await openLibrary();

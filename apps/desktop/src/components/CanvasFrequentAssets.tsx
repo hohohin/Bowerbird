@@ -3,6 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { Check, ChevronDown, ChevronRight, Pin, Plus, RefreshCw, X } from "lucide-react";
 import { api, type CanvasFrequentAssetsResult } from "../lib/api";
 import type { Asset } from "../lib/types";
+import { isAudioAsset } from "../lib/audioMedia";
+import { isTextAsset } from "../lib/textMedia";
 import { setDragAssets } from "../lib/dragPayload";
 import { externalFiles } from "../lib/externalFiles";
 import { notifyError, notifySuccess } from "../lib/notify";
@@ -97,9 +99,11 @@ export function useCanvasFrequentAssets(active: boolean, projectId: string | nul
   return { items, scope, setScope, loading, busy, error, read, pinAsset, remove, retrieve, changeThreshold };
 }
 
-export function CanvasFrequentAssets({ library, projectId, picking, onPickingChange }: {
+export function CanvasFrequentAssets({ library, projectId, picking, onPickingChange, onInsertAsset, onOpenAsset, onAssetContextMenu }: {
   library: ReturnType<typeof useCanvasFrequentAssets>; projectId: string | null;
   picking: boolean; onPickingChange: (value: boolean) => void;
+  onInsertAsset?: (asset: Asset) => void; onOpenAsset?: (asset: Pick<Asset, "id">) => void;
+  onAssetContextMenu?: ReturnType<typeof useStore.getState>["openContextMenu"];
 }) {
   const { items, scope, setScope, loading, busy, error, read, remove, retrieve, changeThreshold } = library;
   const [thresholdDraft, setThresholdDraft] = useState(String(items.threshold));
@@ -120,9 +124,11 @@ export function CanvasFrequentAssets({ library, projectId, picking, onPickingCha
   }
   async function activate(asset: Asset) {
     if (picking) return;
+    if (onInsertAsset && isAudioAsset(asset)) { onInsertAsset(asset); return; }
+    if (onOpenAsset && isTextAsset(asset)) { onOpenAsset(asset); return; }
     const state = useStore.getState();
-    if (state.activeProjectId !== projectId || !state.canvasLibraryOpen) return;
-    if (state.boardOpen || state.genEditing) {
+    if (!onInsertAsset && (state.activeProjectId !== projectId || !state.canvasLibraryOpen)) return;
+    if (!onInsertAsset && (state.boardOpen || state.genEditing)) {
       window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
       return;
     }
@@ -134,7 +140,8 @@ export function CanvasFrequentAssets({ library, projectId, picking, onPickingCha
     } catch (reason) { if (alive.current && request === previewVersion.current) notifyError(reason, "无法预览素材"); }
   }
   function openDetail(asset: Asset) {
-    previewVersion.current++; setPreview(null); useStore.getState().openDetail(asset.id);
+    previewVersion.current++; setPreview(null);
+    if (onOpenAsset) onOpenAsset(asset); else useStore.getState().openDetail(asset.id);
   }
   async function saveThreshold(value: string, retrieveAfter = false) {
     thresholdEditing.current = false;
@@ -203,8 +210,8 @@ export function CanvasFrequentAssets({ library, projectId, picking, onPickingCha
           {items[row].map(asset => <div className="canvas-frequent-card" key={asset.id} title={asset.name}>
             <FileMediaCard entry={{ path: asset.store_path ?? "", name: asset.name, directory: false, preview: asset.thumb_path, version: `${asset.id}:${asset.file_mtime ?? 0}:${asset.thumb_path}` }}
               selected={false} revision={0} labels={[]} assetId={asset.id} aspectRatio={1}
-              onSelect={() => void activate(asset)} onActivate={() => void activate(asset)} onOpen={() => openDetail(asset)}
-              onContextMenu={(x,y) => useStore.getState().openContextMenu(x,y,asset.id,{ asset, singleAsset: true })}
+              onSelect={() => { if (!onInsertAsset) void activate(asset); }} onActivate={() => void activate(asset)} onOpen={() => onInsertAsset ? onInsertAsset(asset) : openDetail(asset)}
+              onContextMenu={(x,y) => (onAssetContextMenu ?? useStore.getState().openContextMenu)(x,y,asset.id,{ asset, singleAsset: true })}
               onDragStart={event => { setDragAssets([asset.id], asset.name, event.currentTarget.querySelector("img")?.src); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", asset.id); }}
               onDragEnd={() => setDragAssets(null)}/>
             <button type="button" className="canvas-frequent-remove" disabled={busy}

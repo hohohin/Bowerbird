@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { notifySuccess } from "../lib/notify";
 import { ModalShell } from "./ModalShell";
 import { externalFiles } from "../lib/externalFiles";
+import { stopAudioPreview } from "../lib/audioPreview";
 
 /**
  * 素材重命名弹窗（约定 13 全屏 Modal 形态，照 ConfirmDialog 范式 + 单 input）。
@@ -15,7 +16,6 @@ export function RenameDialog({
   open,
   assetId,
   currentName,
-  external = false,
   localPath,
   onClose,
 }: {
@@ -56,7 +56,7 @@ export function RenameDialog({
     setError(null);
     try {
       if (localPath) await externalFiles.rename(assetId, localPath, trimmed);
-      else await api.renameAsset(assetId, trimmed);
+      else { stopAudioPreview(assetId); await api.renameAsset(assetId, trimmed); }
       notifySuccess("素材名称已更新");
       onClose();
     } catch (e) {
@@ -69,7 +69,7 @@ export function RenameDialog({
     <ModalShell
       title="重命名素材"
       eyebrow="Asset name"
-      description={localPath ? "直接修改本机文件名，保留扩展名，并同步素材引用。同名文件不会被覆盖。" : external ? "仅更新园丁鸟中的引用名称，电脑中的原文件名保持不变。" : "同时更新素材库中的本地文件名；扩展名会保留，同名文件不会被覆盖。"}
+      description={localPath ? "直接修改本机文件名，保留扩展名，并同步素材引用。同名文件不会被覆盖。" : undefined}
       onClose={onClose}
       preventClose={busy}
       footer={

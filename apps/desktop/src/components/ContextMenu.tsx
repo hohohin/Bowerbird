@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type Dispatch, type SetStateAction } from "react";
 import { createPortal } from "react-dom";
+import { usePortalTarget } from "../lib/portalTarget";
 import { ChevronRight, Trash2 } from "lucide-react";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 
@@ -17,6 +18,7 @@ export function ContextMenu({ x, y, label, children, onClose, className = "", co
   className?: string; contentClassName?: string; trigger?: HTMLElement | null;
 }) {
   const owner = useId();
+  const portalTarget = usePortalTarget();
   const root = useRef<HTMLDivElement>(null);
   const origin = useRef(trigger ?? document.elementFromPoint(x, y)?.closest<HTMLElement>('button, [tabindex]') ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null));
   const close = useRef(onClose); close.current = onClose;
@@ -89,13 +91,14 @@ export function ContextMenu({ x, y, label, children, onClose, className = "", co
       className={`app-context-menu context-menu-surface ${className}`} style={{ left: x, top: y }}
       onPointerDown={event => event.stopPropagation()} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); }}>
       <OverlayScrollArea className="context-menu-scroll" contentClassName={`context-menu-content ${contentClassName}`} label="菜单滚动条">{children}</OverlayScrollArea>
-    </div>, document.body)}</MenuContext.Provider>;
+    </div>, portalTarget)}</MenuContext.Provider>;
 }
 
 export function ContextSubmenu({ label, children, icon, disabled = false, title, menuLabel = label }: {
   label: string; children: ReactNode; icon?: ReactNode; disabled?: boolean; title?: string; menuLabel?: string;
 }) {
   const context = useContext(MenuContext)!;
+  const portalTarget = usePortalTarget();
   const id = useId(), panelId = useId();
   const button = useRef<HTMLButtonElement>(null), panel = useRef<HTMLDivElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout>>();
@@ -136,7 +139,7 @@ export function ContextSubmenu({ label, children, icon, disabled = false, title,
       className="app-context-menu context-menu-surface context-submenu" onPointerEnter={cancel} onPointerLeave={leave}
       onPointerDown={event => event.stopPropagation()} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); }}>
       <OverlayScrollArea className="context-menu-scroll" contentClassName="context-menu-content" label="子菜单滚动条">{children}</OverlayScrollArea>
-    </div>, document.body)}
+    </div>, portalTarget)}
   </>;
 }
 

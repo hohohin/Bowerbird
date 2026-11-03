@@ -47,9 +47,20 @@ function hydrateRecoveredGenJob(live: GenJob, persisted: GenJob): GenJob {
         ? 0
         : -1;
     if (matchingIndex >= 0) {
-      turns = live.turns.map((turn, index) => (
-        index === matchingIndex ? hydrateMatchingTurn(turn, persistedTurn) : turn
-      ));
+      turns = [...live.turns];
+      let missing: GenTurn[] = [];
+      for (const saved of persisted.turns) {
+        const index = saved.turnKey
+          ? turns.findIndex(turn => turn.turnKey === saved.turnKey)
+          : saved === persistedTurn ? matchingIndex : -1;
+        if (index < 0) missing.push(saved);
+        else {
+          // Insert older history before the matching live turn, retaining newer
+          // chunks/rounds and their authoritative runtime state.
+          turns.splice(index, 1, ...missing, hydrateMatchingTurn(turns[index], saved));
+          missing = [];
+        }
+      }
     }
   }
 

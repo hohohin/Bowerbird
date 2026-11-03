@@ -353,7 +353,7 @@ export function useCreationEditor(opts?: {
       setExtraAssets([...refAssets, ...dimRefs]);
       // 传 assetByIdRef.current（含已反推图的 sections）；parsePromptToDoc 内部按「只补充」并入 refs，
       // 不让 refs（无 sections）覆盖已反推图，以保证【维度】能按 sections 精确匹配 fragment。
-      const doc = parsePromptToDoc(body, refAssets, assetByIdRef.current, undefined, dimRefs, detail.referenceNodeIds,
+      const doc = detail.document ? creationSchema.nodeFromJSON(detail.document) : parsePromptToDoc(body, refAssets, assetByIdRef.current, undefined, dimRefs, detail.referenceNodeIds,
         new Map((detail.refs ?? []).map(asset => [asset.id, [asset.name ?? "", ...(asset.referenceNames ?? [])]])));
       const v = viewRef.current;
       if (!v) return false;
@@ -452,6 +452,13 @@ export function useCreationEditor(opts?: {
   const focus = useCallback(() => viewRef.current?.focus(), []);
   const flushDraft = useCallback(() => flushDraftRef.current(), []);
   const loadPrompt = useCallback((request: CreativePromptLoad) => loadPromptRef.current(request), []);
+  const getDraft = useCallback((): CreationEditorDraft => {
+    const doc = viewRef.current?.state.doc;
+    const ids = new Set<string>();
+    doc?.descendants(node => { if (node.attrs.assetId) ids.add(node.attrs.assetId); });
+    const available = new Map([...assetByIdRef.current, ...extraAssetsRef.current.map(asset => [asset.id, asset] as const)]);
+    return { doc: doc?.toJSON(), refs: [...ids].flatMap(id => available.has(id) ? [available.get(id)!] : []) };
+  }, []);
 
   // 环点扇区待插的维度：板已开 → 本 effect 即时插；板未开点扇区 → store 先开板再挂载本 hook，
   // 挂载 commit 内本 effect 排在建 view 的 effect 之后运行，同样能消费。
@@ -490,6 +497,7 @@ export function useCreationEditor(opts?: {
     focus,
     flushDraft,
     loadPrompt,
+    getDraft,
     finalPrompt: serialized.finalPrompt,
     rawPrompt,
     references: serialized.references,

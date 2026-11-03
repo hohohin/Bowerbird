@@ -35,7 +35,7 @@ export async function ensureDailyCredits(
 ): Promise<Balance> {
   const { data, error } = await admin.rpc("ensure_daily_credits", {
     p_user_id: userId,
-    p_amount: 0, // 0070 keeps the legacy RPC name but only refreshes existing balances.
+    p_amount: 0, // Legacy name: issue due Pro monthly gifts, then refresh; no daily allowance.
   });
   if (error) rpcError(error);
   const row = data?.[0] as Record<string, unknown> | undefined;

@@ -154,3 +154,32 @@ fn prefix_matching_never_changes_neighbor_folder_or_prompt_text() {
     assert!(remap(&format!("使用 {}/a.png",source.display()),&source,&target).is_none());
     assert_eq!(remap(source.to_str().unwrap(),&source,&target),Some(target.to_string_lossy().into_owned()));
 }
+
+#[test]
+fn migration_rewrites_quick_transfer_receipts_and_recovers_ready_files() {
+    use crate::core::{paths::LibraryPaths, quick_transfer::QuickTransferStore};
+    let f = Fixture::new();
+    let receive = f.files.ensure_root().unwrap().join("快传");
+    fs::create_dir(&receive).unwrap();
+    let mut store = QuickTransferStore::open(&receive).unwrap();
+    let bytes = "已经确认收件的手机资料".as_bytes();
+    let record = store.prepare("ready-before-move", "资料.txt", bytes.len() as u64).unwrap();
+    fs::write(&record.staging_path, bytes).unwrap();
+    store.mark_received("ready-before-move").unwrap();
+    drop(store);
+
+    let view = f.schedule();
+    resume(&f.files, &f.db).unwrap();
+    assert_eq!(status(&f.files).unwrap().unwrap().state, "completed");
+    let moved_receive = view.target.join("快传");
+    let mut moved = QuickTransferStore::open(&moved_receive).expect("migrated receipt paths stay inside the new receive directory");
+    let paths = LibraryPaths::init(f.index.clone()).unwrap();
+    let results = moved.recover(&paths, &f.db);
+    assert_eq!(results.len(), 1);
+    let asset = results[0].1.as_ref().unwrap();
+    let stored = Path::new(asset.store_path.as_ref().unwrap());
+    assert!(stored.starts_with(&moved_receive));
+    assert_eq!(fs::read(stored).unwrap(), bytes);
+    assert_eq!(fs::read(&record.staging_path).unwrap(), bytes);
+    assert!(moved.recover(&paths, &f.db).is_empty());
+}

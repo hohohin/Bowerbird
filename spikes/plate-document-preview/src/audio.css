@@ -1,0 +1,17 @@
+.document-audio { --audio-muted: var(--bb-muted, #949494); --audio-accent: var(--bb-blue, #8faab8); color: var(--bb-ink, #dcdcdc); width: 100%; padding: 12px 0 0; }
+.document-audio-wave { position: relative; height: 64px; cursor: crosshair; touch-action: none; overflow: visible; }
+.document-audio-wave svg { display: block; width: 100%; height: 64px; color: var(--audio-muted); }
+.document-audio-wave path { fill: none; stroke: currentColor; stroke-width: 1.3; vector-effect: non-scaling-stroke; }
+.document-audio-wave:focus-visible { outline: 2px solid var(--audio-accent); outline-offset: 3px; }
+.document-audio-track { position: absolute; top: 31px; left: 0; right: 0; height: 2px; background: var(--audio-muted); opacity: .6; }
+.document-audio-progress { position: absolute; left: 0; top: 0; bottom: 0; background: var(--audio-accent); opacity: .1; pointer-events: none; }
+.document-audio-needle { position: absolute; top: -4px; bottom: 0; width: 1px; background: var(--audio-accent); pointer-events: none; }
+.document-audio-needle > span { position: absolute; left: 4px; top: -12px; font: 11px/1.2 monospace; color: var(--audio-accent); white-space: nowrap; }
+.document-audio-controls { display: flex; align-items: center; gap: 10px; min-height: 38px; border-bottom: 1px solid var(--bb-line, #3d3d3d); }
+.document-audio-controls button { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; padding: 6px; color: inherit; background: transparent; border: 0; cursor: pointer; }
+.document-audio-controls button:hover { color: var(--audio-accent); }
+.document-audio-controls button:focus-visible { outline: 2px solid var(--audio-accent); }
+.document-audio-controls button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.document-audio-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.document-audio-duration { color: var(--audio-muted); font: 11px/1.4 monospace; white-space: nowrap; }
+.document-audio-error { margin-top: 8px; color: var(--bb-danger, #d89a91); font-size: 12px; }

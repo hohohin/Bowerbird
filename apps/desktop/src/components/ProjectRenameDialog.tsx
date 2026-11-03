@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { notifySuccess } from "../lib/notify";
 import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
+import { useImeGuard } from "../lib/useImeGuard";
 
 export function ProjectRenameDialog({ projectId, currentName, onClose }: {
   projectId: string;
@@ -14,11 +15,11 @@ export function ProjectRenameDialog({ projectId, currentName, onClose }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const saving = useRef(false);
-  const composing = useRef(false);
+  const ime = useImeGuard();
   const trimmed = name.trim();
 
   async function submit() {
-    if (!trimmed || saving.current || composing.current) return;
+    if (!trimmed || saving.current || ime.composing.current) return;
     saving.current = true;
     setBusy(true);
     setError(null);
@@ -58,11 +59,11 @@ export function ProjectRenameDialog({ projectId, currentName, onClose }: {
       data-modal-autofocus value={name} disabled={busy}
       onFocus={(event) => event.currentTarget.select()}
       onChange={(event) => setName(event.target.value)}
-      onCompositionStart={() => { composing.current = true; }}
-      onCompositionEnd={() => { composing.current = false; }}
+      onCompositionStart={ime.onCompositionStart}
+      onCompositionEnd={ime.onCompositionEnd}
       onKeyDown={(event) => {
         // Stop IME Escape before ModalShell's window listener can close it.
-        if (composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) {
+        if (ime.isComposing(event.nativeEvent)) {
           event.stopPropagation();
           return;
         }

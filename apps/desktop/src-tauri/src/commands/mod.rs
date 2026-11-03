@@ -1,6 +1,8 @@
 //! Tauri commands（前端 invoke 入口）。
 
 pub mod agent;
+pub mod audio;
+pub mod text_documents;
 pub mod agent_ds;
 pub mod agent_z;
 pub mod cloud;
@@ -30,9 +32,13 @@ pub mod prompt;
 pub mod settings;
 pub mod screenshot;
 pub mod source_browser;
+pub mod pinterest_search;
 pub mod source_browser_capture;
 pub mod source_browser_network;
+pub mod source_browser_jobs;
+pub mod source_browser_stream;
 pub mod visual_profile;
+pub mod quick_transfer;
 
 use std::sync::Arc;
 
@@ -76,5 +82,8 @@ pub mod comfy_setup;
 pub mod video_replication;
 
 pub mod external_files;
+pub mod external_drag;
+pub mod folder_connections;
+pub mod connection_clipboard;
 pub mod file_colors;
 pub mod file_workspace;

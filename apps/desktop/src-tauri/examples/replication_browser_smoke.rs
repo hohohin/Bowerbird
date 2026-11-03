@@ -2,6 +2,8 @@
 use tauri::{WebviewUrl, WebviewWindowBuilder};
 #[path = "../src/error.rs"]
 mod error;
+#[path = "../src/commands/source_browser_jobs.rs"]
+mod source_browser_jobs;
 #[path = "../src/commands/source_browser_network.rs"]
 pub mod source_browser_network;
 mod commands {
@@ -78,7 +80,7 @@ fn main() {
                             let mut success = false;
                             for url in value["urls"].as_array().unwrap() {
                                 if media::download(&window, url.as_str().unwrap(), &target,
-                                    &format!("https://www.douyin.com/video/{}", value["videoId"].as_str().unwrap()), value["userAgent"].as_str().unwrap()).await.is_ok() { success = true; break; }
+                                    &format!("https://www.douyin.com/video/{}", value["videoId"].as_str().unwrap()), value["userAgent"].as_str().unwrap(), |_,_| {}).await.is_ok() { success = true; break; }
                             }
                             std::fs::write(capture_output.with_file_name("download.json"), serde_json::json!({"success":success,"bytes":std::fs::metadata(&target).map(|v|v.len()).unwrap_or(0)}).to_string()).unwrap();
                             #[cfg(windows)]

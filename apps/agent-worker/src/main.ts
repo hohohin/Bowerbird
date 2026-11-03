@@ -4,6 +4,7 @@ import { configFromEnv as generationConfigFromEnv, runGenerationWorker } from ".
 import { configFromEnv as understandConfigFromEnv, runUnderstandWorker } from "./cloud-understand/runtime.ts";
 import { configFromEnv as visualConfigFromEnv, runVisualProfileWorker } from "./cloud-visual/runtime.ts";
 import { runControlledAgentWorker } from "./cloud-agent/main.ts";
+import { runChatWorker } from "./cloud-chat/runtime.ts";
 
 let loops = 0;
 
@@ -33,6 +34,11 @@ if (process.env.AGENT_CONTROL_URL?.trim()) {
 if (process.env.VISUAL_PROFILE_CONTROL_URL?.trim()) {
   loops += 1;
   runVisualProfileWorker(visualConfigFromEnv(process.env)).catch(fatal("visual_worker_fatal"));
+}
+
+if (process.env.CHAT_CONTROL_URL?.trim()) {
+  loops += 1;
+  runChatWorker(process.env).catch(fatal("chat_worker_fatal"));
 }
 
 if (!loops) {

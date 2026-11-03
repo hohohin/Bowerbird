@@ -1,0 +1,4 @@
+.annotation-text-editor .annotation-text-style { position: absolute; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; border: 1px solid; padding: 8px; font-size: 12px; line-height: 16px; box-shadow: 0 10px 15px -3px #0003; }
+.annotation-text-editor :is(input, select, button) { font: inherit; color: inherit; }
+.annotation-text-editor .annotation-text-style button { padding: 0; border: 0; background: transparent; cursor: pointer; }
+.annotation-text-editor .annotation-text-resize { position: absolute; right: -8px; bottom: -8px; height: 16px; width: 16px; padding: 0; border: 1px solid; cursor: ew-resize; }

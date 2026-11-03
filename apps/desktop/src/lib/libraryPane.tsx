@@ -22,7 +22,7 @@ export type LibraryPaneState = ReturnType<typeof createLibraryPane>;
 export function copyLibraryPane(id: string, source: LibraryPaneState) {
   const pane = createLibraryPane(id), state = source.mode.getState(), preferences = source.preferences.getState();
   pane.mode.setState({ open: true, mode: state.mode, source: state.source, media: state.media,
-    views: { ...state.views }, videoViews: { ...state.videoViews }, generatedFilter: state.generatedFilter, query: "" });
+    views: { ...state.views }, videoViews: { ...state.videoViews }, audioViews: { ...state.audioViews }, textViews: { ...state.textViews }, generatedFilter: state.generatedFilter, query: "" });
   pane.preferences.setState({ width: preferences.width, pins: [...preferences.pins] });
   source.positions.forEach((position, key) => pane.positions.set(key, { ...position }));
   for (const key of ["bowerbird.localFiles.lastDirectory", "bowerbird.catalog.tagSidebarWidth"]) {
@@ -46,6 +46,10 @@ export function libraryPaneAt(target: EventTarget | null) {
 export const LibraryPaneContext = createContext<LibraryPaneState | null>(null);
 export const useLibraryPane = () => useContext(LibraryPaneContext);
 export const useLibraryModeStore = () => useLibraryPane()?.mode ?? useLocalFileMode;
+export function libraryHasOverlay(root: HTMLElement | null) {
+  const owner = root?.closest('[role="dialog"]');
+  return [...document.querySelectorAll('[role="dialog"], [role="menu"]')].some(element => element !== owner && !element.closest('[inert]'));
+}
 export const useActiveLibraryPane = create<{ pane: LibraryPaneState | null; activate: (pane: LibraryPaneState | null) => void }>(set => ({ pane: null, activate: pane => set({ pane }) }));
 export const useActiveLibraryModeStore = () => useActiveLibraryPane(s => s.pane)?.mode ?? useLocalFileMode;
 

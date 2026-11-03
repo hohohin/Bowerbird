@@ -10,6 +10,7 @@ import { notifyError } from "../lib/notify";
 import {
   creativeTaskOwnerState,
   isAgentTaskActive,
+  isGenerationTaskFailed,
   taskCenterAgentRuns,
   taskCenterGenerationJobs,
 } from "../lib/projectActivity";
@@ -194,7 +195,7 @@ export function SidebarStatus() {
   const waitingStatuses = waitingReminderStatuses;
   const waiting = agentTasks.filter((run) => waitingStatuses.has(run.status) || run.status === "succeeded").length + jimengOrphans.length
     + visualTasks.filter((task) => task.status === "succeeded").length;
-  const failed = genGroups.filter((g) => !g.running && g.latest.turns.some((t) => t.error)).length
+  const failed = genGroups.filter((g) => !g.running && isGenerationTaskFailed(g.latest)).length
     + agentTasks.filter((run) => run.status === "failed").length + failures.length + visualTasks.filter((task) => task.status === "failed").length;
   const running = genGroups.filter((g) => g.running).length
     + agentTasks.filter((run) => isAgentTaskActive(run.status) && !waitingStatuses.has(run.status)).length
@@ -251,7 +252,7 @@ export function SidebarStatus() {
     const refThumbPaths = (j.refAssets ?? [])
       .map((a) => a.thumb_path ?? a.store_path ?? "")
       .filter(Boolean);
-    const failed = j.turns.some((t) => t.error);
+    const failed = isGenerationTaskFailed(j);
     const ownerState = creativeTaskOwnerState(j);
     const unowned = ownerState === "unowned";
     const invalidOwner = ownerState === "invalid";

@@ -3,12 +3,44 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 import { generationPromptNodeId } from "../src/lib/projectNodeIds.ts";
-import { DEFAULT_VIDEO_OPTIONS, videoInputError, videoRatio, isVideoPath } from "../src/lib/videoGeneration.ts";
+import { DEFAULT_VIDEO_OPTIONS, resolveVideoOptions, videoInputError, videoRatio, isVideoPath } from "../src/lib/videoGeneration.ts";
 import { mergeRecoveredGenJobs } from "../src/lib/generationRecovery.ts";
+import { canvasConversationCards } from "../src/lib/canvasConversationCards.ts";
 import { parseCreativeComposerDraft, serializeCreativeComposerDraft } from "../src/lib/creativeDraft.ts";
 const image = (name) => ({ id: name, store_path: `C:/assets/${name}.png`, duration: null });
 const video = (duration = 5) => ({ id: "video", store_path: "C:/assets/clip.mp4", duration });
 const options = (kind) => ({ ...DEFAULT_VIDEO_OPTIONS, kind });
+
+test("automatic video mode follows input media while explicit frames remain explicit", () => {
+  const audio = { store_path: "C:/assets/audio.wav", duration: 5 };
+  for (const previous of ["text2video", "image2video", "multimodal2video"]) {
+    const selected = Object.freeze({ ...options(previous), duration: 8 });
+    for (const [references, kind] of [
+      [[], "text2video"], [[image("a")], "image2video"],
+      [[image("a"), image("b")], "multimodal2video"],
+      [[video()], "multimodal2video"], [[audio], "multimodal2video"],
+    ]) assert.deepEqual(resolveVideoOptions(selected, references), { ...selected, kind });
+    assert.equal(selected.kind, previous);
+  }
+  for (const references of [[], [image("a")], [image("a"), image("b")], [video()]]) {
+    assert.equal(resolveVideoOptions(options("frames2video"), references).kind, "frames2video");
+  }
+  assert.equal(videoInputError(resolveVideoOptions(DEFAULT_VIDEO_OPTIONS, [audio]), [audio]), null);
+});
+
+test("audio references follow model limits without entering image or frames modes", () => {
+  const audio = { store_path: "C:/assets/music.mp3", duration: 5 };
+  const multi = options("multimodal2video");
+  assert.equal(videoInputError(multi, [audio]), null);
+  assert.equal(videoInputError(multi, [image("a"), audio], null, "bowerbird-cloud-video_seedance25_720p"), null);
+  assert.match(videoInputError(options("frames2video"), [image("a"), image("b"), audio]), /2 张图片/);
+  assert.match(videoInputError(multi, [{ ...audio, store_path: "a.flac" }]), /MP3.*WAV/);
+  assert.match(videoInputError(multi, [{ ...audio, duration: 31 }]), /2–30/);
+  assert.match(videoInputError(multi, [{ ...audio, duration: 16 }, { ...audio, duration: 16 }]), /总时长/);
+  assert.match(videoInputError(multi, Array(11).fill({ ...audio, duration: 2 })), /10/);
+  assert.match(videoInputError({ ...multi, model_version: "seedance2.0" }, [audio]), /图片或视频/);
+  assert.equal(videoInputError({ ...multi, model_version: "seedance2.0" }, [image("a"), audio]), null);
+});
 
 test("Seedance 2.5 validates all four explicit modes without silently dropping references", () => {
   assert.equal(videoInputError(options("text2video"), []), null);
@@ -53,7 +85,7 @@ function harness() {
     taskErrorMessage: String, reconcileRejectedCloudSession: async () => {},
     genHandleError: (jobId, message) => errors.push({ jobId, message }),
     updateJob: (jobId, update) => { state.genJobs[jobId] = update(state.genJobs[jobId]); },
-    videoInputError, videoRatio, generationPromptNodeId, isCloudProvider: value => value?.startsWith("bowerbird-cloud"),
+    resolveVideoOptions, videoInputError, videoRatio, generationPromptNodeId, isCloudProvider: value => value?.startsWith("bowerbird-cloud"),
     generationParentLocator: () => ({ storePath: "C:/assets/previous.mp4", nodeId: "parent-node" }),
     mergeRecoveredGenJobs, taskCenterGenerationJobs: () => [],
   };
@@ -93,10 +125,42 @@ test("production store sends exact first/last order and project/thread identity 
   assert.deepEqual(job.turns[0].videoOptions, options("frames2video"));
 });
 
+test("new video submissions derive their mode and ratio from current references", async () => {
+  for (const [refs, kind, ratio] of [
+    [[], "text2video", "9:16"],
+    [[image("a")], "image2video", null],
+    [[image("a"), image("b")], "multimodal2video", "9:16"],
+    [[video()], "multimodal2video", "9:16"],
+  ]) {
+    const h = harness();
+    await h.start("text2video", refs);
+    assert.equal(h.requests[0].videoOptions.kind, kind);
+    assert.equal(h.requests[0].ratio, ratio);
+    assert.equal(h.state.genJobs[h.requests[0].jobId].turns[0].videoOptions.kind, kind);
+  }
+});
+
+test("new video revisions derive their mode from exact submitted references, including clearing", async () => {
+  const h = harness();
+  await h.start("text2video", []);
+  const id = h.requests[0].jobId;
+  Object.assign(h.state.genJobs[id], { sessionId: "prior", running: false });
+  await h.state.sendGenRevise(id, "single image", "jimeng", {
+    references: [image("ignored"), image("also-ignored")], exactReferences: [image("selected").store_path],
+  });
+  assert.equal(h.requests[1].videoOptions.kind, "image2video");
+  assert.equal(h.requests[1].ratio, null);
+  h.state.genJobs[id].running = false;
+  await h.state.sendGenRevise(id, "text only", "jimeng", { references: [] });
+  assert.equal(h.requests[2].videoOptions.kind, "text2video");
+  assert.deepEqual(h.requests[2].referenceImages, []);
+  assert.equal(h.state.genJobs[id].turns[0].videoOptions.kind, "text2video");
+});
+
 test("production store rejects unsupported provider and inputs before calling the backend", async () => {
   const h = harness();
   await assert.rejects(h.start("text2video", [], "16:9", "codex"), /即梦/);
-  await assert.rejects(h.start("image2video", [video()]), /1 张图片/);
+  await assert.rejects(h.start("frames2video", [video()]), /2 张图片/);
   assert.equal(h.requests.length, 0);
 });
 
@@ -107,12 +171,15 @@ test("video revision uses explicit references and never borrows the preceding MP
   job.sessionId = "submitted-video";
   job.running = false;
   job.turns[0].images = ["C:/assets/previous.mp4"];
-  await assert.rejects(h.state.sendGenRevise(job.id, "revision", "jimeng", { references: [] }), /1 张图片/);
+  await h.state.sendGenRevise(job.id, "revision", "jimeng", { references: [] });
+  assert.equal(h.requests[1].videoOptions.kind, "text2video");
+  assert.deepEqual(h.requests[1].referenceImages, []);
+  h.state.genJobs[job.id].running = false;
   await h.state.sendGenRevise(job.id, "revision", "jimeng", { references: [image("new-first")], generation: { media: "video", videoOptions: options("image2video") } });
-  assert.deepEqual(h.requests[1].referenceImages, ["C:/assets/new-first.png"]);
-  assert.equal(h.requests[1].exactReferences, true);
-  assert.equal(h.requests[1].media, "video");
-  assert.equal(h.requests[1].parentAssetPath, "C:/assets/previous.mp4");
+  assert.deepEqual(h.requests[2].referenceImages, ["C:/assets/new-first.png"]);
+  assert.equal(h.requests[2].exactReferences, true);
+  assert.equal(h.requests[2].media, "video");
+  assert.equal(h.requests[2].parentAssetPath, "C:/assets/previous.mp4");
 });
 
 test("switching a video session to image generation sends only the selected images", async () => {
@@ -161,6 +228,119 @@ test("Cloud failed retry recovers original job after lost create response or dow
   }
 });
 
+test("failed image retries append history in one job and one canvas card, with or without a provider session", async () => {
+  for (const provider of ["codex", "jimeng", "bowerbird-cloud-image_standard"]) {
+    for (const sessionId of [null, "provider-session"]) {
+      const h = harness();
+      h.state.codexHealth = { ok: true };
+      h.state.cloudAuth = { cloud_available: true, logged_in: true };
+      await h.state.startGeneration("original prompt", [image("ref")], "3:4", provider, "raw prompt",
+        undefined, undefined, [], null, { projectId: "project-a", threadId: "thread-a", referenceNodeIds: ["ref-node"] });
+      const job = h.state.genJobs[h.requests[0].jobId];
+      Object.assign(job, { sessionId, running: false });
+      Object.assign(job.turns[0], { error: "original failure", refs: [image("ref").store_path] });
+      const failed = structuredClone(job.turns[0]);
+      h.state.retryLastGenTurn();
+      h.state.retryLastGenTurn();
+      await new Promise(done => setImmediate(done));
+      assert.equal(h.requests.length, 2, "a repeated click while running must not submit again");
+      assert.deepEqual(Object.keys(h.state.genJobs), [job.id], "retry keeps the original job");
+      assert.deepEqual(h.state.genJobOrder, [job.id]);
+      const next = h.state.genJobs[job.id];
+      assert.equal(next.turns.length, 2, "failed round remains in history");
+      assert.deepEqual(next.turns[0], failed);
+      assert.notEqual(next.turns[1].turnKey, failed.turnKey);
+      assert.equal(h.requests[1].jobId, job.id);
+      assert.equal(h.requests[1].conversationId, job.conversationId);
+      assert.equal(h.requests[1].sessionId, sessionId);
+      assert.equal(h.requests[1].prompt, failed.prompt);
+      assert.deepEqual(h.requests[1].referenceImages, failed.refs);
+      assert.deepEqual(h.requests[1].referenceNodeIds, ["ref-node"]);
+      const nodes = next.turns.map((turn, index) => ({ id: generationPromptNodeId(job.id, turn.turnKey),
+        projectId: job.projectId, kind: "prompt", createdAt: index + 1, hiddenAt: null,
+        payloadJson: JSON.stringify({ job_id: job.id, turn_key: turn.turnKey }) }));
+      // Card identity survives even before the recovered job metadata is loaded.
+      for (const jobs of [h.state.genJobs, {}]) {
+        const cards = canvasConversationCards(nodes, jobs);
+        assert.equal(cards.cards.size, 1);
+        assert.equal(cards.cards.get(nodes[0].id).latest.id, nodes[1].id);
+        assert.equal(cards.hiddenIds.has(nodes[1].id), true);
+      }
+    }
+  }
+});
+
+test("startup restores earlier failures without marking the successful latest round failed", async () => {
+  const h = harness();
+  h.api.listGenJobs = async () => [];
+  h.api.recentGenSessions = async () => [{ id: "restored", status: "done", session_id: "session",
+    provider: "jimeng", references: [], ref_assets: [], turns: [
+      { turn_key: "failed", prompt: "first", images: [], error: "saved failure" },
+      { turn_key: "retry", prompt: "first", images: ["/result.png"], error: null },
+    ] }];
+  await h.state.loadGenJobs();
+  assert.equal(h.state.genJobs.restored.turns[0].error, "saved failure");
+  assert.equal(h.state.genJobs.restored.turns[1].error, null);
+  assert.deepEqual(h.state.genJobs.restored.turns[1].images, ["/result.png"]);
+});
+
+test("startup keeps failed history while a new retry round is still running", async () => {
+  const h = harness();
+  h.api.recentGenSessions = async () => [];
+  h.api.listGenJobs = async () => [{ id: "restored", running: true, turn_key: "retry", prompt: "retry",
+    media: "image", provider: "jimeng", references: [], turns: [
+      { turn_key: "failed", prompt: "first", images: [], error: "saved failure" },
+    ] }];
+  await h.state.loadGenJobs();
+  const restored = h.state.genJobs.restored;
+  assert.deepEqual(restored.turns.map(t => t.turnKey), ["failed", "retry"]);
+  assert.equal(restored.turns[0].error, "saved failure");
+  assert.equal(restored.turns[1].error, undefined);
+  assert.equal(restored.running, true);
+});
+
+test("an explicitly empty image reference list stays empty when retrying a failed continuation", async () => {
+  const h = harness();
+  await h.state.startGeneration("prompt", [], "1:1", "jimeng");
+  const job = h.state.genJobs[h.requests[0].jobId];
+  Object.assign(job, { sessionId: "session", running: false });
+  Object.assign(job.turns[0], { error: "failed", refs: [] });
+  h.state.retryLastGenTurn();
+  await new Promise(done => setImmediate(done));
+  assert.deepEqual(h.requests[1].referenceImages, []);
+  assert.equal(h.requests[1].exactReferences, true);
+});
+
+test("retry before started keeps implicit previous-output merging when references were not frozen", async () => {
+  for (const selected of [[], [image("selected")]]) {
+    const h = harness();
+    await h.state.startGeneration("prompt", [], "1:1", "jimeng");
+    const job = h.state.genJobs[h.requests[0].jobId];
+    Object.assign(job, { sessionId: "session", running: false });
+    Object.assign(job.turns[0], { error: "pre-start failure", refAssets: selected });
+    h.state.retryLastGenTurn();
+    await new Promise(done => setImmediate(done));
+    assert.deepEqual(h.requests[1].referenceImages, selected.map(asset => asset.store_path));
+    assert.equal(h.requests[1].exactReferences, false);
+  }
+});
+
+test("restored pre-start failure keeps unfrozen references eligible for backend merging", async () => {
+  const h = harness();
+  h.api.listGenJobs = async () => [];
+  h.api.recentGenSessions = async () => [{ id: "restored", status: "failed", session_id: "session",
+    provider: "jimeng", references: [], ref_assets: [], prompt: "retry", error: "failed", turns: [
+      { turn_key: "failed", prompt: "retry", images: [], references: [], references_resolved: false,
+        ref_assets: [], error: "failed" },
+    ] }];
+  await h.state.loadGenJobs();
+  h.state.activeJobId = "restored";
+  assert.equal(h.state.genJobs.restored.turns[0].refs, undefined);
+  h.state.retryLastGenTurn();
+  await new Promise(done => setImmediate(done));
+  assert.equal(h.requests[0].exactReferences, false);
+});
+
 test("edited reference identity survives production revision, started event, and retry", async () => {
   const h = harness(); await h.start("image2video", [image("first")]);
   const job = h.state.genJobs[h.requests[0].jobId]; job.sessionId = "remote"; job.running = false;
@@ -190,6 +370,21 @@ test("retry preserves an empty text2video reference list, duration, and original
   assert.equal(h.requests[1].videoOptions.duration, 12);
   assert.equal(h.requests[1].ratio, "9:16");
   assert.equal(h.requests[1].creativeRelation, "retry");
+});
+
+test("retry preserves a historical single-image multi-reference mode", async () => {
+  const h = harness();
+  await h.start("image2video", [image("a")]);
+  const job = h.state.genJobs[h.requests[0].jobId];
+  job.sessionId = "existing-video";
+  job.running = false;
+  Object.assign(job.turns[0], { error: "interrupted", refs: [image("a").store_path], videoOptions: options("multimodal2video"), ratio: "21:9" });
+  h.state.activeJobId = job.id;
+  h.state.retryLastGenTurn();
+  await new Promise(done => setImmediate(done));
+  assert.equal(h.requests[1].videoOptions.kind, "multimodal2video");
+  assert.equal(h.requests[1].ratio, "21:9");
+  assert.deepEqual(h.requests[1].referenceImages, [image("a").store_path]);
 });
 
 test("project composer serialization retains video mode and immutable options", () => {
@@ -232,7 +427,7 @@ test("a recovery event creates a complete video placeholder before the task list
 test("a video mode change updates the next composer defaults but preserves the first turn", async () => {
   const h = harness();
   await h.start("text2video", []);
-  const job = h.state.genJobs[h.requests[0].jobId]; job.sessionId = "prior";
+  const job = h.state.genJobs[h.requests[0].jobId]; job.sessionId = "prior"; job.running = false;
   await h.state.sendGenRevise(job.id, "frames", "jimeng", { references: [image("first"), image("last")], generation: { media: "video", videoOptions: options("frames2video") } });
   const current = h.state.genJobs[job.id];
   assert.equal(current.videoOptions.kind, "frames2video");

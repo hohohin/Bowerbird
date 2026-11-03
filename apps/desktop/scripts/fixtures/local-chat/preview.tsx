@@ -12,7 +12,7 @@ import "./preview.css";
 
 install(window);
 installCatalogPagingMock(window);
-const entitlement = (enabled: boolean) => ({ plan: enabled ? "pro" : "free", policy: { can_use_byo: enabled, can_use_cloud: true, max_parallel_jobs: 3 }, balances: { daily: 0, sub: 0, topup: 100 } });
+const entitlement = (enabled: boolean) => ({ plan: enabled ? "pro" : "free", policy: { can_use_byo: enabled, can_use_cloud: true, max_parallel_jobs: 3 }, balances: { daily: 0, sub: 0, topup: 0 } });
 useStore.setState({ projects: projects as any, activeProjectId: inspect().activeProjectId, assets: assets as any, boardOpen: false,
   settings: inspect().settings, cloudAuth: { logged_in: true, cloud_available: true } as any, cloudEntitlement: entitlement(true) as any,
   activeGenProvider: "codex", codexHealth: { ok: true, reason: "" }, dreaminaHealth: { ok: true, reason: "" } });
@@ -22,6 +22,7 @@ function Fixture() {
   const [snapshot, setSnapshot] = useState(inspect);
   const [authenticated, setAuthenticated] = useState(true);
   const [entitled, setEntitled] = useState(true);
+  const [cloudAuthenticated, setCloudAuthenticated] = useState(true);
   const [hold, updateHold] = useState(controls.hold);
   const [fault, updateFault] = useState(controls.fault);
   const [delayReply, updateDelayReply] = useState(controls.delayReply);
@@ -56,10 +57,11 @@ function Fixture() {
         <label><input type="checkbox" checked={delayReply} onChange={event => { updateDelayReply(event.target.checked); setDelayReply(event.target.checked); }} />延迟发送回执</label>
         <button type="button" disabled={!snapshot.pendingReplies} onClick={releaseReplies}>释放发送回执（{snapshot.pendingReplies}）</button>
         <label>故障 <select aria-label="测试故障" value={fault} onChange={event => { updateFault(event.target.value); setFault(event.target.value); }}>
-          <option value="none">无</option><option value="send">发送失败</option><option value="stop">停止失败</option><option value="read">读取失败</option>
+          <option value="none">无</option><option value="send">发送失败</option><option value="stop">停止失败</option><option value="read">读取失败</option><option value="quote">Cloud 报价失败</option><option value="recover">云端仍处理中</option>
         </select></label>
         <label><input type="checkbox" checked={authenticated} onChange={event => { const value = event.target.checked; setAuthenticated(value); controls.authenticated = value; useStore.setState({ codexHealth: { ok: value, reason: value ? "" : "尚未登录" } }); }} />Codex 已登录</label>
         <label><input type="checkbox" checked={entitled} onChange={event => { const value = event.target.checked; setEntitled(value); controls.entitled = value; useStore.setState({ cloudEntitlement: entitlement(value) as any }); }} />本机权益</label>
+        <label><input type="checkbox" checked={cloudAuthenticated} onChange={event => { const value = event.target.checked; setCloudAuthenticated(value); controls.cloudAuthenticated = value; useStore.setState({ cloudAuth: { ...useStore.getState().cloudAuth!, logged_in: value } }); }} />Cloud 已登录</label>
       </div>
       <details className="chat-fixture-evidence"><summary>IPC 记录（{localCalls.length}）</summary><pre aria-label="合成 IPC 记录">{JSON.stringify(localCalls, null, 2)}</pre></details>
     </details>

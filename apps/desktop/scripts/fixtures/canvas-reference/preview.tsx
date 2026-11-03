@@ -258,6 +258,9 @@ w.__TAURI_INTERNALS__ = {
     if (command === "project_thread_create") return args.value;
     if (command === "get_settings") return JSON.parse(sessionStorage.getItem("canvas-settings") || "{}");
     if (command === "update_settings") { sessionStorage.setItem("canvas-settings", JSON.stringify(args.settings)); return null; }
+    if (command === "quick_transfer_status") return { revision: 0, active: false, directory: null, url: null, transfers: [] };
+    if (command === "quick_transfer_addresses") return [];
+    if (command === "quick_transfer_directory") return "D:\\BowerbirdLibrary\\快传";
     if (command === "plugin:event|listen") { listeners.set(args.handler, args.event); return args.handler; }
     if (command === "plugin:event|emit") {
       for (const [handler, event] of listeners) if (event === args.event) callbacks.get(handler)?.({ event, id: handler, payload: args.payload });
@@ -339,6 +342,16 @@ w.__TAURI_INTERNALS__ = {
       if (!asset || !snapshot.nodes.some((node: any) => node.projectId === args.projectId && node.assetId === args.assetId && node.hiddenAt == null)) throw "请先将图片拖到当前画布";
       Object.assign(asset, { library_hidden: !args.visible });
       sessionStorage.setItem("canvas-only-assets", JSON.stringify(assets.filter((asset: any) => asset.library_hidden).map(asset => asset.id)));
+      useStore.setState({ assets: assets.filter((asset: any) => !asset.library_hidden) as any });
+      w.emitAssetsChanged();
+      return null;
+    }
+    if (command === "preview_asset_originals") return assets.filter(asset => args.assetIds.includes(asset.id)).map(asset => ({ asset_id: asset.id, name: asset.name, path: `/synthetic/${asset.id}.png`, fingerprint: "fixture-original" }));
+    if (command === "trash_asset_original") {
+      if (w.failAssetDelete) throw "模拟删除失败";
+      const asset = assets.find(asset => asset.id === args.original.asset_id);
+      if (!asset) throw "素材已不存在";
+      Object.assign(asset, { library_hidden: true });
       useStore.setState({ assets: assets.filter((asset: any) => !asset.library_hidden) as any });
       w.emitAssetsChanged();
       return null;

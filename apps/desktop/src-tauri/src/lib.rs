@@ -9,14 +9,22 @@ mod commands;
 mod core;
 mod db;
 mod error;
+mod external_drag;
 mod installation;
 mod media;
 mod prompt;
+mod quick_transfer;
 
 pub use core::canvas_frequent_assets::CanvasFrequentAssetsPreferences;
 pub use media::thumb::video_thumbnail_worker;
 pub use media::probe::video_probe_worker;
 pub use agent_generation_wait::agent_generation_wait_worker;
+
+#[cfg(debug_assertions)]
+#[path = "../tests/support/pinterest_native_fixture.rs"]
+mod pinterest_native_fixture;
+#[cfg(debug_assertions)]
+pub use pinterest_native_fixture::run_pinterest_search_fixture;
 
 use std::sync::Arc;
 use std::{path::Path, path::PathBuf};
@@ -381,12 +389,29 @@ pub fn run() {
             )));
             core::local_classification::watch(app.handle().clone(), db.clone(), paths.clone());
             core::creative_files::watch(db.clone(), file_config_root.join("creative-records"));
+            commands::folder_connections::watch(app.handle().clone(), db.clone(), paths.clone());
             app.manage(core::local_classification::explorer::ExplorerAnalysis::default());
             app.manage(commands::source_browser::SourceDragHandler(core::local_classification::explorer::handle_notice));
+            app.manage(commands::pinterest_search::PinterestSearchState::default());
+            app.manage(commands::source_browser::SourcePinterestHooks {
+                loaded: commands::pinterest_search::on_page_finished,
+                notice: commands::pinterest_search::on_notice,
+            });
 
             app.manage(extension_status);
+            app.manage(quick_transfer::QuickTransfer::default());
             app.manage(active_project);
             app.manage(settings_state);
+            let screenshot_paths = paths.clone();
+            let screenshot_db = db.clone();
+            let screenshot_app = app.handle().clone();
+            app.manage(commands::screenshot::ScreenshotLibrarySaver(Box::new(move |png| {
+                let name = format!("截图-{}.png", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+                core::ingest::ingest_from_bytes(&screenshot_paths, &screenshot_db, png, "", Some(&name), Some("image/png"), "screenshot")
+                    .map_err(|error| error.to_string())?;
+                let _ = screenshot_app.emit("library://assets-changed", ());
+                Ok(())
+            })));
             commands::screenshot::initialize(app.handle());
             app.manage(cloud_client);
             app.manage(auth_client);
@@ -416,11 +441,24 @@ pub fn run() {
             for value in std::env::args() {
                 forward_auth_callback(app.handle(), &value);
             }
+            codex::update::start(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::quick_transfer::quick_transfer_addresses,
+            commands::quick_transfer::quick_transfer_directory,
+            commands::quick_transfer::quick_transfer_status,
+            commands::quick_transfer::quick_transfer_start,
+            commands::quick_transfer::quick_transfer_stop,
+            commands::quick_transfer::quick_transfer_retry,
             commands::external_files::external_files_browse,
+            commands::external_drag::start_external_drag,
+            commands::external_drag::cancel_pending_external_drag,
             commands::external_files::external_files_media,
+            commands::audio::audio_waveform,
+            commands::text_documents::read_text_document,
+            commands::text_documents::create_text_document,
+            commands::text_documents::save_text_document,
             commands::external_files::external_files_preview,
             commands::file_colors::file_colors,
             commands::external_files::external_files_index,
@@ -439,9 +477,15 @@ pub fn run() {
             commands::screenshot::screenshot_paste,
             commands::screenshot::screenshot_set_shortcuts,
             commands::screenshot::screenshot_shortcut_status,
+            commands::screenshot::screenshot_history_list,
+            commands::screenshot::screenshot_history_image,
+            commands::screenshot::screenshot_history_output,
+            commands::screenshot::screenshot_history_delete,
+            commands::screenshot::screenshot_history_clear,
             commands::ping,
             commands::db_health,
             commands::project_canvas::project_canvas_materialize,
+            commands::projects::prepare_library_generation_project,
             commands::project_canvas::project_canvas_ensure,
             commands::project_canvas::project_canvas_get,
             commands::project_canvas::project_canvas_rename,
@@ -576,6 +620,26 @@ pub fn run() {
             commands::library::canvas_frequent_assets_remove,
             commands::material_catalog::material_catalog,
             commands::material_catalog::catalog_overview,
+            commands::folder_connections::folder_connections,
+            commands::folder_connections::connect_folder,
+            commands::folder_connections::refresh_folder_connections,
+            commands::folder_connections::connection_entries,
+            commands::folder_connections::connection_entry_ids,
+            commands::folder_connections::resolve_connection_entries,
+            commands::folder_connections::create_material_references,
+            commands::folder_connections::create_connected_collection,
+            commands::folder_connections::rename_connected_collection,
+            commands::folder_connections::move_connected_collection,
+            commands::folder_connections::disconnect_folder,
+            commands::folder_connections::relocate_folder,
+            commands::folder_connections::trash_connected_collection,
+            commands::folder_connections::rename_connection_entry,
+            commands::folder_connections::move_connection_entries,
+            commands::folder_connections::trash_connection_entries,
+            commands::folder_connections::preview_asset_originals,
+            commands::folder_connections::trash_asset_original,
+            commands::folder_connections::remove_connection_references,
+            commands::connection_clipboard::clipboard_file_paths,
             commands::material_catalog::catalog_page,
             commands::material_catalog::catalog_graph_page,
             commands::material_catalog::catalog_ids,
@@ -592,6 +656,7 @@ pub fn run() {
             commands::comfy_video::comfy_video_check,
             commands::comfy_setup::comfy_video_environment,
             commands::video_replication::video_replication,
+            commands::video_replication::collection::video_collection,
             commands::library::count_assets,
             commands::library::list_folders,
             commands::library::create_folder,
@@ -663,6 +728,8 @@ pub fn run() {
             commands::codex::codex_health,
             commands::local_chat::local_chat_list,
             commands::local_chat::local_chat_get,
+            commands::local_chat::local_chat_quote,
+            commands::local_chat::local_chat_recover,
             commands::local_chat::local_chat_send,
             commands::local_chat::local_chat_stop,
             commands::local_chat_cards::local_chat_cards_undo,
@@ -705,6 +772,8 @@ pub fn run() {
             commands::settings::migrate_library_root,
             commands::settings::restart_app,
             commands::source_browser::open_source_browser,
+            commands::pinterest_search::start_pinterest_image_search,
+            commands::pinterest_search::cancel_pinterest_image_search,
             commands::source_browser::resize_source_browser,
             commands::source_browser::navigate_source_browser,
             commands::source_browser::source_browser_back,
@@ -712,6 +781,7 @@ pub fn run() {
             commands::source_browser::reload_source_browser,
             commands::source_browser::hide_source_browser,
             commands::source_browser_capture::capture_source_browser_image,
+            commands::source_browser_jobs::cancel_source_browser_capture,
             commands::source_browser_capture::claim_source_browser_analysis,
             commands::source_browser_capture::release_source_browser_analysis,
             commands::source_browser_capture::finish_source_browser_analysis,

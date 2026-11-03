@@ -8,6 +8,22 @@ use crate::{
     error::{AppError, AppResult},
 };
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChatProvider {
+    #[default]
+    CodexLocal,
+    DeepseekCloud,
+}
+impl ChatProvider {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::CodexLocal => "codex-local",
+            Self::DeepseekCloud => "deepseek-cloud",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChatPlacement {
@@ -21,6 +37,7 @@ pub struct ChatPlacement {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChatSendInput {
+    pub provider: Option<ChatProvider>,
     pub project_id: String,
     pub conversation_id: Option<String>,
     pub request_id: String,
@@ -134,14 +151,40 @@ fn read(conn: &Connection, id: &str) -> AppResult<Option<ChatConversation>> {
     }))
 }
 
-fn request_fingerprint(input: &ChatSendInput) -> AppResult<String> {
+fn request_fingerprint(input: &ChatSendInput, provider: ChatProvider) -> AppResult<String> {
     // Placement belongs to the first projection, not the identity of a replayed send.
     let mut fingerprint =
         serde_json::json!({"text":input.text.trim(),"referenceAssetIds":input.reference_asset_ids});
     if let Some(defaults) = &input.card_defaults {
         fingerprint["cardDefaults"] = serde_json::to_value(defaults)?;
     }
+    // Preserve pre-provider Codex request identities across the migration.
+    if provider != ChatProvider::CodexLocal {
+        fingerprint["provider"] = serde_json::json!(provider);
+    }
     Ok(serde_json::to_string(&fingerprint)?)
+}
+
+fn provider_for(conn: &Connection, input: &ChatSendInput) -> AppResult<ChatProvider> {
+    let Some(id) = &input.conversation_id else {
+        return Ok(input.provider.unwrap_or_default());
+    };
+    let current = read(conn, id)?.ok_or_else(|| error("对话记录不存在"))?;
+    if current.summary.project_id != input.project_id {
+        return Err(error("该对话不属于当前项目"));
+    }
+    let provider = match current.summary.provider.as_str() {
+        "codex-local" => ChatProvider::CodexLocal,
+        "deepseek-cloud" => ChatProvider::DeepseekCloud,
+        _ => return Err(error("对话服务无效，请新建对话")),
+    };
+    if input
+        .provider
+        .is_some_and(|requested| requested != provider)
+    {
+        return Err(error("此对话的服务已固定，请新建对话以切换服务"));
+    }
+    Ok(provider)
 }
 
 fn replay(conn: &Connection, input: &ChatSendInput) -> AppResult<Option<StartedChat>> {
@@ -161,7 +204,7 @@ fn replay(conn: &Connection, input: &ChatSendInput) -> AppResult<Option<StartedC
             .conversation_id
             .as_ref()
             .is_some_and(|value| value != &id)
-        || request != request_fingerprint(input)?
+        || request != request_fingerprint(input, provider_for(conn, input)?)?
     {
         return Err(error("发送编号已用于其他内容，请保留草稿并重新发送"));
     }
@@ -173,6 +216,9 @@ fn replay(conn: &Connection, input: &ChatSendInput) -> AppResult<Option<StartedC
 }
 
 impl Database {
+    pub fn local_chat_provider(&self, input: &ChatSendInput) -> AppResult<ChatProvider> {
+        provider_for(&self.conn.lock().unwrap(), input)
+    }
     pub fn list_local_chats(&self, project: &str) -> AppResult<Vec<ChatSummary>> {
         let conn = self.conn.lock().unwrap();
         let mut statement = conn.prepare(&format!(
@@ -209,6 +255,7 @@ impl Database {
         if let Some(previous) = replay(&tx, input)? {
             return Ok(previous);
         }
+        let provider = provider_for(&tx, input)?;
         let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM projects p JOIN project_canvases c ON p.id=c.project_id WHERE p.id=?1 AND p.archived_at IS NULL)",[&input.project_id],|row|row.get(0))?;
         if !exists {
             return Err(error("项目不存在或已归档，请重新打开项目"));
@@ -257,12 +304,12 @@ impl Database {
                 tx.execute("INSERT INTO creative_threads(id,project_id,title,origin,created_at,updated_at) VALUES(?1,?2,?3,'direct',?4,?4)",params![thread_id,input.project_id,title,now/1000])?;
                 let payload = serde_json::json!({"schema_version":1,"note_type":"chat","text":title,"conversation_id":id}).to_string();
                 tx.execute("INSERT INTO canvas_nodes(id,project_id,thread_id,kind,payload_json,x,y,width,height,z_index,created_at,updated_at) VALUES(?1,?2,?3,'note',?4,?5,?6,?7,?8,?9,?10,?10)",params![node_id,input.project_id,thread_id,payload,placement.x,placement.y,placement.width,placement.height,placement.z_index,now/1000])?;
-                tx.execute("INSERT INTO local_chat_conversations(id,project_id,thread_id,node_id,title,status,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,'idle',?6,?6)",params![id,input.project_id,thread_id,node_id,title,now])?;
+                tx.execute("INSERT INTO local_chat_conversations(id,project_id,thread_id,node_id,title,status,created_at,updated_at,provider) VALUES(?1,?2,?3,?4,?5,'idle',?6,?6,?7)",params![id,input.project_id,thread_id,node_id,title,now,provider.as_str()])?;
                 id
             }
         };
         let turn_id = ulid::Ulid::new().to_string();
-        tx.execute("INSERT INTO local_chat_turns(id,conversation_id,request_id,request_json,status,created_at,updated_at) VALUES(?1,?2,?3,?4,'running',?5,?5)",params![turn_id,id,input.request_id,request_fingerprint(input)?,now])?;
+        tx.execute("INSERT INTO local_chat_turns(id,conversation_id,request_id,request_json,status,created_at,updated_at) VALUES(?1,?2,?3,?4,'running',?5,?5)",params![turn_id,id,input.request_id,request_fingerprint(input,provider)?,now])?;
         if let Some(defaults) = &input.card_defaults {
             tx.execute(
                 "UPDATE local_chat_turns SET card_defaults_json=?2 WHERE id=?1",
@@ -302,6 +349,32 @@ impl Database {
             "UPDATE local_chat_turns SET provider_turn_id=?2 WHERE id=?1",
             params![turn, provider_id],
         )?;
+        Ok(())
+    }
+    pub fn local_chat_recovery(&self, id: &str) -> AppResult<(String, String)> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row("SELECT t.id,t.provider_turn_id FROM local_chat_turns t JOIN local_chat_conversations c ON c.id=t.conversation_id WHERE c.id=?1 AND c.provider='deepseek-cloud' AND c.status IN ('stopped','interrupted','failed') AND t.provider_turn_id IS NOT NULL ORDER BY t.created_at DESC,t.id DESC LIMIT 1",[id],|row| Ok((row.get(0)?,row.get(1)?)))
+            .map_err(|_| error("此对话暂无可取回的 Cloud 任务"))
+    }
+    pub fn restore_local_chat_reply(
+        &self,
+        id: &str,
+        turn: &str,
+        checkpoint: &str,
+        text: &str,
+        complete: bool,
+    ) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let latest: Option<String> = tx.query_row("SELECT id FROM local_chat_turns WHERE conversation_id=?1 ORDER BY created_at DESC,id DESC LIMIT 1",[id],|row|row.get(0)).optional()?;
+        let status = if complete { "done" } else { "interrupted" };
+        if latest.as_deref()!=Some(turn) || tx.execute("UPDATE local_chat_turns SET status=?4 WHERE id=?2 AND conversation_id=?1 AND provider_turn_id=?3 AND status IN ('stopped','interrupted','failed')",params![id,turn,checkpoint,status])? != 1 {
+            return Err(error("对话已有新进展，请重新打开对话后查看"));
+        }
+        let now = Utc::now().timestamp_millis();
+        tx.execute("UPDATE local_chat_messages SET text=?3,status=?4,updated_at=?5 WHERE conversation_id=?1 AND turn_id=?2 AND role='assistant'",params![id,turn,text,status,now])?;
+        tx.execute("UPDATE local_chat_conversations SET status=?2,error=NULL,revision=revision+1,updated_at=?3 WHERE id=?1",params![id,if complete {"idle"} else {"interrupted"},now])?;
+        tx.commit()?;
         Ok(())
     }
     pub fn update_local_chat_text(&self, id: &str, turn: &str, text: &str) -> AppResult<()> {

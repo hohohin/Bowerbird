@@ -453,6 +453,7 @@ export class DeepSeekBackend implements ModelBackend {
     messages: ChatMessage[],
     tools: ChatTool[],
     signal: AbortSignalLike,
+    maxOutputTokens?: number,
   ): Promise<ChatTurnResult> {
     if (signal.aborted) {
       throw new DeepSeekBackendError("deepseek_aborted");
@@ -466,6 +467,7 @@ export class DeepSeekBackend implements ModelBackend {
       // Disabling thinking keeps the multi-turn tool protocol complete and replayable.
       thinking: { type: "disabled" },
       stream: false,
+      ...(maxOutputTokens === undefined ? {} : { max_tokens: maxOutputTokens }),
     });
     if (!isRecord(body)) throw new DeepSeekBackendError("deepseek_invalid_response");
     const usage = usageFromResponse(body);

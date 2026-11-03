@@ -37,6 +37,21 @@ fn workspace_identity(path: &str) -> AppResult<(PathBuf, String, String)> {
 }
 
 #[tauri::command]
+pub async fn prepare_library_generation_project(
+    db: State<'_, Arc<Database>>,
+    files: State<'_, Arc<crate::core::file_workspace::FileWorkspace>>,
+    project_id: Option<String>,
+) -> AppResult<Project> {
+    let db = db.inner().clone();
+    let files = files.inner().clone();
+    tokio::task::spawn_blocking(move || {
+        db.prepare_library_generation_project(project_id.as_deref(), |id, name| {
+            Ok(files.project_directory(id, name)?.to_string_lossy().into_owned())
+        })
+    }).await.map_err(|error| AppError::Other(error.to_string()))?
+}
+
+#[tauri::command]
 pub async fn create_project(
     app: AppHandle,
     paths: State<'_, Arc<LibraryPaths>>,

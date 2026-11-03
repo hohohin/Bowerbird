@@ -1,6 +1,7 @@
 import type { CanvasNode } from "./types";
 import type { CanvasRect } from "./canvasLogic";
 import { contentTableText, type ContentTable } from "./contentTable.ts";
+import { documentMediaReferences, documentWorkflowValue } from "./documentProjection.ts";
 
 export interface CanvasTextCell {
   content_type?: "text" | "image";
@@ -22,7 +23,7 @@ export function canvasCellValue(cell: CanvasTextCell) {
 export interface CanvasNotePayload {
   schema_version: 1;
   text: string;
-  note_type: "text" | "section" | "bubble" | "images";
+  note_type: "text" | "section" | "bubble" | "images" | "document";
   cells: CanvasTextCell[][];
   member_ids: string[];
   workflow_container?: boolean;
@@ -41,6 +42,11 @@ export interface CanvasBubbleTail {
 }
 
 export function canvasNoteValue(note: CanvasNotePayload, cellId: string) {
+  if (note.note_type === "document") {
+    const value = documentWorkflowValue(note.text);
+    if (cellId === "*") return { type: "image" as const, assetIds: [...new Set(documentMediaReferences(note.text).filter(ref => ref.kind === "image").map(ref => ref.assetId))] };
+    return cellId === "*text" ? value : undefined;
+  }
   if (cellId === "*" || cellId === "*latest-image") {
     const cells = (cellId === "*latest-image" ? note.cells.slice(-1) : note.cells).flat();
     return { type: "image" as const, assetIds: [...new Set(cells.flatMap(cell => canvasCellValue(cell).assetIds))] };
@@ -114,8 +120,8 @@ export function readCanvasNote(node: Pick<CanvasNode, "payloadJson">): CanvasNot
   return {
     schema_version: 1,
     text: value.text ?? "",
-    note_type: value.note_type === "images" ? "images" : value.note_type === "section" ? "section" : value.note_type === "bubble" ? "bubble" : "text",
-    cells: (value.note_type === "section" ? [] : value.cells?.length ? value.cells : [[{ ...emptyCanvasCell(), text: value.text ?? "" }]])
+    note_type: value.note_type === "document" ? "document" : value.note_type === "images" ? "images" : value.note_type === "section" ? "section" : value.note_type === "bubble" ? "bubble" : "text",
+    cells: (value.note_type === "section" || value.note_type === "document" ? [] : value.cells?.length ? value.cells : [[{ ...emptyCanvasCell(), text: value.text ?? "" }]])
       .map((row: CanvasTextCell[], r: number) => row.map((cell, c) => ({ ...cell, ...(value.note_type === "images" && !cell.content_type ? { content_type: "image" } : {}), id: cell.id ?? `cell-${r}-${c}` }))),
     member_ids: value.member_ids ?? [],
     ...(value.note_type === "section" && value.workflow_container === true ? { workflow_container: true } : {}),

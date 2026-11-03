@@ -1,4 +1,4 @@
-import { Film, Image } from "lucide-react";
+import { Film, Image, Music2 } from "lucide-react";
 import { useStore } from "../store";
 
 export function MediaTypeFilter() {
@@ -13,6 +13,10 @@ export function MediaTypeFilter() {
       <button type="button" aria-label="只看视频" aria-pressed={filter === "video"}
         title="只看视频；再点一次显示全部类型" onClick={() => setFilter(filter === "video" ? null : "video")}>
         <Film size={14} aria-hidden="true" />
+      </button>
+      <button type="button" aria-label="只看音频" aria-pressed={filter === "audio"}
+        title="只看音频；再点一次显示全部类型" onClick={() => setFilter(filter === "audio" ? null : "audio")}>
+        <Music2 size={14} aria-hidden="true" />
       </button>
     </div>
   </div>;

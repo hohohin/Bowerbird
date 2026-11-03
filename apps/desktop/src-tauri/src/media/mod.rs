@@ -1,6 +1,7 @@
 //! 媒体处理：探测 / 缩略图 / pHash（去重）。
 //! Phase 1 覆盖常见光栅图；视频/PSD/SVG 在 Phase 2 接入。
 
+pub mod audio;
 pub mod color;
 pub(crate) mod heic;
 pub mod phash;

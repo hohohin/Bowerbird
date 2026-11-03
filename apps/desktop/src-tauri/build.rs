@@ -63,6 +63,9 @@ fn main() {
             .file("macos/screenshot_focus.m")
             .flag("-fobjc-arc")
             .compile("bowerbird_screenshot_focus");
+        println!("cargo:rerun-if-changed=macos/external_drag.m");
+        cc::Build::new().file("macos/external_drag.m").flag("-fobjc-arc")
+            .compile("bowerbird_external_drag");
         println!("cargo:rustc-link-lib=framework=AppKit");
         println!("cargo:rerun-if-changed=macos/browser_capture.m");
         cc::Build::new()

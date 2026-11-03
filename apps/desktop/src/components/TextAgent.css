@@ -1,0 +1,16 @@
+.text-block-actions.has-agent { opacity:1; }
+.text-block-actions > .text-block-agent { position:absolute; right:28px; width:48px; font-size:11px; cursor:pointer!important; color:var(--bb-blue); }
+.text-agent-bubble { position:fixed; z-index:55; width:min(400px,calc(100vw - 24px)); max-height:calc(100vh - 24px); overflow:auto; display:flex; flex-direction:column; padding:12px; gap:10px; border:1px solid var(--bb-line); background:var(--bb-surface); color:var(--bb-ink); box-shadow:0 12px 32px #0004; font-size:13px; }
+.text-agent-heading, .text-agent-footer { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.text-agent-footer { justify-content:flex-end; }
+.text-agent-bubble button { display:inline-flex; align-items:center; justify-content:center; border:0; background:transparent; color:var(--bb-ink-soft); cursor:pointer; min-height:30px; padding:5px 8px; font:inherit; }
+.text-agent-bubble button:hover:not(:disabled) { color:var(--bb-blue); background:var(--bb-surface-hover); }
+.text-agent-bubble button:disabled { opacity:.45; cursor:default; }
+.text-agent-bubble .model-select .model-select-trigger { color:var(--bb-ink); background:var(--bb-surface); border:1px solid var(--bb-line); box-shadow:none; }
+.text-agent-bubble :is(button,textarea):focus-visible { outline:1px solid var(--bb-blue); outline-offset:2px; }
+.text-agent-bubble textarea { width:100%; min-height:76px; max-height:140px; resize:vertical; padding:8px; border:1px solid var(--bb-line); background:transparent; color:var(--bb-ink); font:inherit; line-height:1.7; }
+.text-agent-messages { max-height:180px; min-height:0; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; }
+.text-agent-messages p { margin:0 0 12px; line-height:1.7; }
+.text-agent-messages [data-role=user] { color:var(--bb-muted); padding-left:12px; border-left:1px solid var(--bb-line); }
+.text-agent-bubble > p { margin:0; font-size:12px; color:var(--bb-muted); }
+.text-agent-bubble > [role=alert] { color:var(--bb-danger); }

@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import { createServer } from 'vite';
+import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+const server = await createServer({cacheDir:'.tmp/overlay-scrollbar-adapter-vite',server:{host:'127.0.0.1',port:17956,strictPort:true,hmr:false,watch:null}});
+await server.listen();
+const browser = await chromium.launch({channel:'chrome',headless:true,ignoreDefaultArgs:['--hide-scrollbars']});
+const page = await browser.newPage({viewport:{width:900,height:700}});
+const errors=[];page.on('pageerror',error=>errors.push(error.message));
+try {
+  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/overlay-scrollbar-adapter/preview.html`);
+  await page.locator('.review-one').waitFor();
+  assert.ok(await page.evaluate(()=>window.callbackView===document.querySelector('.review-one')&&window.objectRef.current===document.querySelector('.review-two')),'callback and object refs still point at native viewport');
+  await page.locator('.review-one').evaluate(view=>{view.scrollTop=100;});
+  await page.waitForTimeout(180);
+  const namedRail=page.getByRole('scrollbar',{name:'品牌素材滚动条',exact:true});
+  assert.equal(await namedRail.count(),1,'caller label is preserved on the one shared vertical rail');
+  assert.equal(await page.locator('.collection-scroll-rail').count(),0,'legacy rails removed from wrappers');
+  await page.evaluate(()=>window.removeRoot());
+  await page.locator('.review-two').evaluate(view=>{view.scrollTop=100;});
+  await page.getByRole('scrollbar',{name:'项目素材滚动条',exact:true}).waitFor();
+  assert.ok(await page.evaluate(()=>document.documentElement.classList.contains('industrial-overlay-scrollbars')),'wrapper alone keeps shared manager active');
+  await page.evaluate(()=>window.removeOne());
+  await page.waitForFunction(()=>window.callbackView===null);
+  assert.ok(await page.evaluate(()=>document.documentElement.classList.contains('industrial-overlay-scrollbars')));
+  await page.evaluate(()=>window.removeTwo());
+  await page.waitForFunction(()=>window.objectRef.current===null&&!document.documentElement.classList.contains('industrial-overlay-scrollbars'));
+  assert.equal(await page.locator('.industrial-scrollbar').count(),0,'last owner removes all rails');
+  assert.deepEqual(errors,[]);
+  console.log('PASS: production adapter labels, refs, legacy-rail removal and StrictMode shared-owner lifecycle');
+} finally {await browser.close();await server.close();}

@@ -1,0 +1,3 @@
+.text-file-card .text-file-preview { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; gap: 12px; padding: 18px; width: 100%; height: 100%; background: var(--lt-panel, var(--bb-surface-2)); color: var(--bb-muted); }
+.text-file-title { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; text-align: left; font-size: 13px; line-height: 1.6; color: var(--bb-ink); }
+.text-file-format { font-size: 10px; line-height: 1.4; }

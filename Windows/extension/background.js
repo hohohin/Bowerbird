@@ -1,4 +1,4 @@
-importScripts("collection-utils.js");
+importScripts("collection-utils.js", "video-utils.js");
 const S = globalThis.BowerbirdCollection;
 const MAX_IMAGE_BYTES = S.MAX_IMAGE_BYTES;
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
@@ -7,12 +7,39 @@ const FETCH_TIMEOUT_MS = S.FETCH_TIMEOUT_MS;
 // content script 把候选交给 service worker；background 在浏览器会话内 fetch（自动走浏览器
 // 系统代理 + Cookie / 登录态），再把真实图片字节经 WS save_blob 两帧协议上传桌面端。
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-  if (message?.type !== "save_image") return false;
-  fetchCandidate(message)
+  if (!["save_image","save_video"].includes(message?.type)) return false;
+  (message.type==="save_video" ? fetchVideo(message) : fetchCandidate(message))
     .then(sendResponse)
     .catch((error) => sendResponse({ ok: false, error: readableError(error) }));
   return true;
 });
+
+async function fetchVideo(message) {
+  const V=globalThis.BowerbirdVideo;
+  const candidate=V.candidate(message.url,message.pageUrl,{source:message.candidateSource});
+  if(!candidate || !/^https?:/.test(candidate.media_url)) return {ok:false,code:"invalid_video"};
+  if(candidate.blocked) return {ok:false,code:candidate.blocked};
+  const support=await S.checkVideoSupport();
+  if(!support.ok) return support;
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),S.VIDEO_FETCH_TIMEOUT_MS);
+  try {
+    const response=await fetch(candidate.media_url,{credentials:"include",referrer:message.pageUrl || undefined,signal:controller.signal});
+    if(response.status===206) return {ok:false,code:"incomplete_video"};
+    if(!response.ok) return {ok:false,code:"fetch_failed"};
+    const contentType=response.headers.get("content-type") || "";
+    if(/mpegurl|dash\+xml/i.test(contentType)) return {ok:false,code:"unsupported_stream"};
+    if(/text\/html|application\/json/i.test(contentType)) return {ok:false,code:"invalid_video"};
+    const bytes=await V.read(response,support.maxBytes);
+    if(V.stream(bytes)) return {ok:false,code:"unsupported_stream"};
+    const ext=V.format(bytes);
+    if(!ext) return {ok:false,code:"invalid_video"};
+    clearTimeout(timer);
+    return S.uploadBytes(bytes.buffer,{media_kind:"video",requested_url:candidate.media_url,effective_url:response.url || candidate.media_url,
+      page_url:message.pageUrl || "",url:response.url || candidate.media_url,file_name:`video.${ext}`,content_type:contentType,candidate_source:candidate.candidate_source});
+  } catch(error) {return {ok:false,code:error?.code || (error?.name==="AbortError" ? "fetch_timeout" : "fetch_failed")};}
+  finally {clearTimeout(timer);}
+}
 
 async function fetchCandidate(message) {
   const controller = new AbortController();

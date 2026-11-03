@@ -30,6 +30,7 @@ fn fixture() -> Database {
 }
 fn input(request: &str) -> ChatSendInput {
     ChatSendInput {
+        provider: None,
         project_id: "project-a".into(),
         conversation_id: None,
         request_id: request.into(),
@@ -53,6 +54,127 @@ fn count(db: &Database, table: &str) -> i64 {
             row.get(0)
         })
         .unwrap()
+}
+
+#[test]
+fn local_chat_provider_is_durable_inherited_and_part_of_request_identity() {
+    let db = fixture();
+    let mut value = serde_json::to_value(input("cloud-provider")).unwrap();
+    value["provider"] = serde_json::json!("deepseek-cloud");
+    let cloud: ChatSendInput = serde_json::from_value(value.clone()).unwrap();
+    let started = db.begin_local_chat(&cloud).unwrap();
+    assert_eq!(started.conversation.summary.provider, "deepseek-cloud");
+    assert!(!db.begin_local_chat(&cloud).unwrap().is_new);
+    value["provider"] = serde_json::json!("codex-local");
+    let changed = serde_json::from_value(value).unwrap();
+    assert!(db.begin_local_chat(&changed).is_err());
+    db.finish_local_chat(
+        &started.conversation.summary.id,
+        &started.turn_id,
+        "done",
+        None,
+    )
+    .unwrap();
+    let mut follow = input("cloud-follow");
+    follow.conversation_id = Some(started.conversation.summary.id.clone());
+    assert_eq!(
+        db.begin_local_chat(&follow)
+            .unwrap()
+            .conversation
+            .summary
+            .provider,
+        "deepseek-cloud"
+    );
+    let mut mismatch = serde_json::to_value(input("cloud-mismatch")).unwrap();
+    mismatch["conversationId"] = serde_json::json!(started.conversation.summary.id);
+    mismatch["provider"] = serde_json::json!("codex-local");
+    assert!(db
+        .begin_local_chat(&serde_json::from_value(mismatch).unwrap())
+        .is_err());
+    assert_eq!(count(&db, "local_chat_turns"), 2);
+}
+
+#[test]
+fn local_chat_explicit_codex_replays_legacy_request_and_rejects_unknown_provider() {
+    let db = fixture();
+    let request = input("legacy-provider");
+    db.begin_local_chat(&request).unwrap();
+    let mut value = serde_json::to_value(request).unwrap();
+    value["provider"] = serde_json::json!("codex-local");
+    assert!(
+        !db.begin_local_chat(&serde_json::from_value(value.clone()).unwrap())
+            .unwrap()
+            .is_new
+    );
+    value["provider"] = serde_json::json!("untrusted-provider");
+    assert!(serde_json::from_value::<ChatSendInput>(value).is_err());
+}
+
+#[test]
+fn local_chat_provider_migration_preserves_history_actions_and_foreign_keys() {
+    let db = Database::open_in_memory().unwrap();
+    crate::db::migrations::migrations()
+        .to_version(&mut db.conn.lock().unwrap(), 48)
+        .unwrap();
+    db.materialize_project_canvas(
+        &ProjectCanvasMaterializeInput {
+            project_id: "project-a".into(),
+            name: "Legacy".into(),
+            workspace_path: "blank:legacy".into(),
+            workspace_key: "blank:legacy".into(),
+            kind: "blank".into(),
+            title_source: ProjectTitleSource::Default,
+            draft_json: r#"{"schema_version":1}"#.into(),
+        },
+        &[],
+        &[],
+        None,
+    )
+    .unwrap();
+    let mut request = input("before-provider-migration");
+    request.card_defaults = Some(Default::default());
+    let started = db.begin_local_chat(&request).unwrap();
+    let action = db.create_local_chat_cards(&started.conversation.summary.id, &started.turn_id,"legacy-call",&serde_json::json!({"cards":[{"id":"text","kind":"content","title":"旧卡片","text":"保留"}]})).unwrap();
+    db.update_local_chat_text(&started.conversation.summary.id, &started.turn_id, "旧回复")
+        .unwrap();
+    db.set_local_chat_provider_thread(&started.conversation.summary.id, "legacy-codex-thread")
+        .unwrap();
+    db.finish_local_chat(
+        &started.conversation.summary.id,
+        &started.turn_id,
+        "done",
+        None,
+    )
+    .unwrap();
+    db.migrate().unwrap();
+    let chat = db
+        .get_local_chat(&started.conversation.summary.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(chat.summary.provider, "codex-local");
+    assert_eq!(chat.messages[1].text, "旧回复");
+    assert_eq!(chat.actions[0].id, action.id);
+    assert_eq!(
+        db.local_chat_provider_thread(&chat.summary.id)
+            .unwrap()
+            .as_deref(),
+        Some("legacy-codex-thread")
+    );
+    assert!(!db.begin_local_chat(&request).unwrap().is_new);
+    let conn = db.conn.lock().unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .unwrap(),
+        0
+    );
+    assert!(conn
+        .execute(
+            "UPDATE local_chat_conversations SET provider='arbitrary'",
+            []
+        )
+        .is_err());
 }
 
 #[test]

@@ -8,6 +8,10 @@ import { useStore } from "../../../src/store";
 import "../../../src/screenshot.css";
 const w = window as any;
 const mode = new URL(location.href).searchParams.get('mode');
+if (new URL(location.href).searchParams.has('pendingDecode')) {
+  // Hidden WebViews may defer decode promises until a rendering opportunity.
+  HTMLImageElement.prototype.decode = () => new Promise(() => {});
+}
 if (mode === 'settings') await import('../../../src/styles.css');
 w.calls = []; w.failOutput = false; w.cancelSave = false; w.conflict = false;
 w.session = mode === "warm" ? null : "initial";

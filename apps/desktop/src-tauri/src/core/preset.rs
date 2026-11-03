@@ -317,13 +317,13 @@ mod tests {
         assert!(db.has_analysis(&asset.id, "generation_meta").unwrap());
     }
 
-    /// 普通文件名不识别：source=imported，无 caption / generation_meta。
+    /// 普通文件名连接：source=external，无 caption / generation_meta。
     #[test]
     fn ingest_normal_filename_not_recognized() {
         let (tmp, paths, db) = setup();
         let img = make_photo_file(&tmp.dir, "my-photo.png", 256, 3);
         let asset = ingest_file(&paths, &db, &img).unwrap();
-        assert_eq!(asset.source.as_deref(), Some("imported"));
+        assert_eq!(asset.source.as_deref(), Some("external"));
         assert!(!db.has_analysis(&asset.id, "caption").unwrap());
         assert!(!db.has_analysis(&asset.id, "generation_meta").unwrap());
     }
@@ -367,11 +367,11 @@ mod tests {
         // 第一步：hash 名先导入 → 无 caption、source=imported。
         let alias = tmp.dir.join("94f8bdba-alias.png");
         std::fs::copy(&img, &alias).unwrap();
-        let first = ingest_file(&paths, &db, &alias).unwrap();
+        let first = crate::core::ingest::ingest_new_file(&paths, &db, &alias).unwrap();
         assert!(!db.has_analysis(&first.id, "caption").unwrap());
         assert_eq!(first.source.as_deref(), Some("imported"));
         // 第二步：preset 名导入同一图 → dedup 命中 existing → 识别补上。
-        let second = ingest_file(&paths, &db, &img).unwrap();
+        let second = crate::core::ingest::ingest_new_file(&paths, &db, &img).unwrap();
         assert_eq!(first.id, second.id, "dedup 应返回同一 asset");
         assert!(
             db.has_analysis(&second.id, "caption").unwrap(),

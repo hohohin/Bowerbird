@@ -11,7 +11,7 @@ await db.exec(`create role anon; create role authenticated; create role service_
 create table auth.users(id uuid primary key); create function auth.uid() returns uuid language sql as $$ select null::uuid $$;
 create function extensions.gen_random_uuid() returns uuid language sql as $$ select gen_random_uuid() $$;
 create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);`);
-for (const prefix of ['0001','0002','0003','0004','0009','0015','0023','0058']) {
+for (const prefix of ['0001','0002','0003','0004','0009','0015','0023','0058','0079']) {
  const file=fs.readdirSync('apps/cloud/supabase/migrations').find(f=>f.startsWith(prefix));
  const sql=fs.readFileSync('apps/cloud/supabase/migrations/'+file,'utf8').replace('create extension if not exists pgcrypto with schema extensions;','-- Test adapter: core gen_random_uuid supplies the extension wrapper.');
  try { await db.exec(sql); } catch(e) { console.error('migration',file,e.message);process.exit(1); }
@@ -32,6 +32,10 @@ async function create(key='case-'+Math.random()) {
 async function claim(id) { await q('select enqueue_generation_job($1,$2)',[id,user]); return (await q(`select * from claim_generation_job('offline-test',90)`))[0]; }
 async function submit(j,id='ark-test') { await q('select mark_generation_job_submitted($1,$2,$3)',[j.id,j.lease_id,id]); }
 const a=await create('idempotency');
+await q('update generation_jobs set input_count=50 where id=$1', [a.id]);
+await assert.rejects(() => q('update generation_jobs set input_count=51 where id=$1', [a.id]));
+const audioBucket = (await q("select allowed_mime_types from storage.buckets where id='generation-temp'"))[0];
+assert.ok(audioBucket.allowed_mime_types.includes('audio/mpeg') && audioBucket.allowed_mime_types.includes('audio/wav'));
 assert.equal((await q(`select * from credit_hold_video($1,'idempotency','video_seedance25_480p',4,false)`,[user]))[0].hold_id,a.id);
 await assert.rejects(()=>q(`select * from credit_hold_video($1,'idempotency','video_seedance25_480p',30,false)`,[user]));
 let j=await claim(a.id); await submit(j);

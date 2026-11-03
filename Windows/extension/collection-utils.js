@@ -8,6 +8,24 @@
   const UPLOAD_TIMEOUT_MS = 60000;
   // 后台可能先取图 45 秒，再等待桌面入库 60 秒；页面必须等完整链路。
   const MESSAGE_TIMEOUT_MS = FETCH_TIMEOUT_MS + UPLOAD_TIMEOUT_MS + 5000;
+  const VIDEO_FETCH_TIMEOUT_MS = 120000;
+  const VIDEO_UPLOAD_TIMEOUT_MS = 180000;
+  const videoLimit = capabilities => Number.isSafeInteger(capabilities?.video_max_bytes) && capabilities.video_max_bytes > 0
+    ? Math.min(209715200,capabilities.video_max_bytes) : 209715200;
+
+  function checkVideoSupport() {
+    return new Promise(resolve => {
+      let ws, finished=false;
+      const done=result=>{if(finished)return;finished=true;clearTimeout(timer);try{ws?.close();}catch{}resolve(result);};
+      const timer=setTimeout(()=>done({ok:false,code:"desktop_unavailable"}),3000);
+      try {
+        ws=new WebSocket("ws://127.0.0.1:39871/ws");
+        ws.onopen=()=>ws.send(JSON.stringify({type:"ping"}));
+        ws.onmessage=event=>{try{const reply=JSON.parse(event.data);done(reply.capabilities?.video_blob===true ? {ok:true,maxBytes:videoLimit(reply.capabilities)} : {ok:false,code:"desktop_upgrade"});}catch{done({ok:false,code:"desktop_upgrade"});}};
+        ws.onerror=()=>done({ok:false,code:"desktop_unavailable"});ws.onclose=ws.onerror;
+      } catch {done({ok:false,code:"desktop_unavailable"});}
+    });
+  }
 
   function limitBatch(batch) {
     const items = batch.items.slice(0, MAX_ITEMS);
@@ -25,6 +43,7 @@
       let finished = false;
       let sent = false;
       let ws;
+      const video = metadata.media_kind === "video";
       const finish = (result) => {
         if (finished) return;
         finished = true;
@@ -37,21 +56,31 @@
         code: sent ? "result_unknown" : "desktop_unavailable",
         error: sent ? "桌面入库回执尚未确认" : "无法连接 Bowerbird 桌面端",
       });
-      const timer = setTimeout(disconnected, UPLOAD_TIMEOUT_MS);
+      const timer = setTimeout(disconnected, video ? VIDEO_UPLOAD_TIMEOUT_MS : UPLOAD_TIMEOUT_MS);
+      const send = () => {
+        ws.send(JSON.stringify({ type: "save_blob", ...metadata, ...(video ? {byte_length:bytes.byteLength} : {}) }));
+        ws.send(bytes);
+        sent = true;
+      };
       try {
         ws = new WebSocket("ws://127.0.0.1:39871/ws");
         ws.binaryType = "arraybuffer";
         ws.onopen = () => {
           try {
-            ws.send(JSON.stringify({ type: "save_blob", ...metadata }));
-            ws.send(bytes);
-            sent = true;
+            if(video) ws.send(JSON.stringify({type:"ping"}));
+            else send();
           } catch { disconnected(); }
         };
         ws.onmessage = (event) => {
           try {
             const result = JSON.parse(event.data);
+            if(video && !sent) {
+              if(result.capabilities?.video_blob !== true) {finish({ok:false,code:"desktop_upgrade"});return;}
+              if(bytes.byteLength > videoLimit(result.capabilities)) {finish({ok:false,code:"too_large"});return;}
+              send();return;
+            }
             if (typeof result?.ok !== "boolean") throw new Error("invalid receipt");
+            if(video && result.ok && result.media_kind!=="video") {finish({ok:false,code:"result_unknown"});return;}
             finish(result);
           } catch {
             finish({ ok: false, code: "result_unknown", error: "桌面入库回执无法解析" });
@@ -72,14 +101,16 @@
         clearTimeout(timer);
         resolve(result);
       };
-      const timer = setTimeout(() => finish({ ok: false, code: "result_unknown" }), MESSAGE_TIMEOUT_MS);
+      const video=item.media_kind==="video";
+      const timer = setTimeout(() => finish({ ok: false, code: "result_unknown" }), video ? VIDEO_FETCH_TIMEOUT_MS+VIDEO_UPLOAD_TIMEOUT_MS+5000 : MESSAGE_TIMEOUT_MS);
       try {
         chrome.runtime.sendMessage({
-          type: "save_image",
+          type: video ? "save_video" : "save_image",
           url: item.media_url,
           pageUrl: item.source_url || "",
           candidateKind: item.candidate_kind || "image-url",
           candidateSource: item.candidate_source || "unknown",
+          mediaKind: item.media_kind || "image",
         }, (response) => {
           const error = chrome.runtime.lastError?.message;
           if (error) finish({ ok: false, code: "result_unknown", error });
@@ -115,7 +146,21 @@
     return summary;
   }
 
-  function failureMessage(result) {
+  function failureMessage(result, mediaKind = "image") {
+    if(mediaKind==="video") {
+      if(result?.saved===true) return result.code==="preview_unavailable" ? "视频已保存，预览暂不可用，请在素材库重新打开。" : "视频已保存，请在素材库查看。";
+      if(result?.code==="desktop_upgrade") return "当前桌面端尚不支持插件视频采集，请更新并重启 Bowerbird 后再试。";
+      if(result?.code==="desktop_unavailable") return "请先启动 Bowerbird 桌面应用，再采集视频。";
+      if(result?.code==="unsupported_stream") return "该视频使用分段播放或直播，暂不支持直接采集，请使用视频文件链接。";
+      if(result?.code==="protected_video") return "该视频受播放保护，暂不支持采集。";
+      if(result?.code==="too_large") return "视频超过 200 MiB，请选择较小的视频。";
+      if(result?.code==="result_unknown") return "视频保存结果尚未确认，请先查看桌面素材库，不要重复采集。";
+      if(result?.code==="reload_extension") return "扩展已更新或失效，请重新加载扩展并刷新网页后再试。";
+      if(result?.code==="fetch_timeout") return "读取视频超时，请检查网络后再试。";
+      if(result?.code==="invalid_video") return "未读取到完整的视频文件，请刷新网页或使用视频文件链接。";
+      if(result?.code==="incomplete_video") return "网站只返回了部分视频，请使用完整视频文件链接。";
+      return "视频未能采集，请确认网页中可以播放、桌面应用正常运行后再试。";
+    }
     if (result?.code === "result_unknown") return "部分图片的保存结果尚未确认，请先查看桌面素材库，不要重复采集。";
     if (result?.code === "reload_extension") return "扩展已更新或失效，请重新加载扩展并刷新网页后再试。";
     const error = String(result?.error || "");
@@ -143,6 +188,7 @@
 
   root.BowerbirdCollection = {
     MAX_ITEMS, MAX_IMAGE_BYTES, MAX_INLINE_BYTES, FETCH_TIMEOUT_MS, UPLOAD_TIMEOUT_MS, MESSAGE_TIMEOUT_MS,
+    VIDEO_FETCH_TIMEOUT_MS, VIDEO_UPLOAD_TIMEOUT_MS, checkVideoSupport,
     limitBatch, uploadBytes, requestBackground, runBatch, failureMessage, progressMessage,
   };
 })(globalThis);

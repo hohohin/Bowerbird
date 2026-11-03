@@ -1,13 +1,14 @@
 import { CreationBoard } from "./CreationBoard";
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { parseCreativeComposerState, serializeCreativeComposerState, type CreativeComposerMode } from "../lib/creativeDraft";
 import type { CreationEditorDraft } from "./creation/useCreationEditor";
-import type { Asset } from "../lib/types";
 import type { CreativeParentCandidate, CreativeThreadResolution } from "../lib/creativeGeneration";
+import type { ChatComposeRequest, ChatProvider } from "../lib/localChat";
 
 export function CreativeComposer({
   projectId,
+  header,
   draftJson,
   initialAssetIds = [],
   continuationCandidates = [],
@@ -19,13 +20,15 @@ export function CreativeComposer({
   onOpenLibrary,
   registerDraftFlush,
   beforeGenerate,
+  prepareProject,
   onSendChat,
   onChatDraftSent,
   onOpenChatHistory,
   chatHistoryOpen,
   resolveCreativeThread,
 }: {
-  projectId: string;
+  projectId?: string;
+  header?: ReactNode;
   draftJson: string;
   initialAssetIds?: string[];
   continuationCandidates?: CreativeParentCandidate[];
@@ -37,7 +40,8 @@ export function CreativeComposer({
   onOpenLibrary?: () => void;
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
-  onSendChat?: (request: { prompt: string; references: Asset[] }) => Promise<void>;
+  prepareProject?: () => Promise<string>;
+  onSendChat?: (request: ChatComposeRequest, projectId?: string) => Promise<void>;
   onChatDraftSent?: (sentDraftJson: string) => void;
   onOpenChatHistory?: () => void;
   chatHistoryOpen?: boolean;
@@ -47,10 +51,12 @@ export function CreativeComposer({
     routeRevision?: number,
     continuationRequestId?: string | null,
     parentNodeId?: string | null,
+    projectId?: string,
   ) => Promise<CreativeThreadResolution>;
 }) {
   const stateRef = useRef(parseCreativeComposerState(draftJson));
   const [mode, setMode] = useState(stateRef.current.mode);
+  const [chatProvider, setChatProvider] = useState<ChatProvider>(stateRef.current.chatProvider ?? "codex-local");
   const flushRef = useRef<(() => void) | null>(null);
   function persist(draft: CreationEditorDraft) {
     stateRef.current.drafts[mode] = draft;
@@ -75,11 +81,14 @@ export function CreativeComposer({
     <CreationBoard
       key={mode}
       embedded
+      header={header}
       projectId={projectId}
       initialDraft={seedDraft}
       initialAssetIds={currentDraft ? [] : initialAssetIds}
       composerMode={mode}
       onComposerModeChange={selectMode}
+      chatProvider={chatProvider}
+      onChatProviderChange={provider => { flushRef.current?.(); stateRef.current.chatProvider = provider; setChatProvider(provider); onDraftChange(serializeCreativeComposerState(stateRef.current)); }}
       continuationCandidates={continuationCandidates}
       focusedContinuationNodeId={focusedContinuationNodeId}
       focusedContinuationThreadId={focusedContinuationThreadId}
@@ -91,11 +100,10 @@ export function CreativeComposer({
       chatHistoryOpen={chatHistoryOpen}
       registerDraftFlush={(flush) => { flushRef.current = flush; registerDraftFlush?.(flush); }}
       beforeGenerate={beforeGenerate}
-      onSendChat={onSendChat ? async request => {
-        flushRef.current?.();
-        const sentDraft = JSON.stringify(stateRef.current.drafts.chat);
-        await onSendChat(request);
-        onChatDraftSent?.(sentDraft);
+      prepareProject={prepareProject}
+      onSendChat={onSendChat ? async (request, targetProjectId, sentDraft) => {
+        await onSendChat(request, targetProjectId);
+        if (sentDraft) onChatDraftSent?.(sentDraft);
       } : undefined}
       resolveCreativeThread={resolveCreativeThread}
     />

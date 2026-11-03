@@ -1,0 +1,15 @@
+# 2026-11-03 快传正式客户端集成复核
+
+- 范围：审核现有 runtime 与已确认桌面／手机界面的契约，不接触真实用户库或对外开放测试服务。公共 App 挂载、构建与存档由主代理负责。
+- 读取现行项目、文件连接、错误展示与 UI 规范；使用 ui-ux-pro-max 查询异步反馈／避免重复提交／状态播报建议，只用于核验已有确认稿，不引入新视觉方向。
+- 发现快照乱序：Context.update 释放 view 锁后发通知，线程调度可使较旧通知晚到；首次 status 和 start／stop IPC 返回也可迟到。向根与桌面代理报告后，根授权在 Snapshot 增加全局单调 revision，客户端统一比较版本；会话重开不能重置。
+- 先新增两项真实行为测试：会话启动／关闭／重开版本单调，以及阻塞第一次 notify 后令第二次通知先到，验证版本能识别旧事件。先记录红灯后改实现。
+- 红灯已观察：两项测试均因 IPC／事件快照缺少 revision 失败（0 passed / 2 failed），测试副本 `.tmp/quick-transfer-integration/revision-red.exe`。随后仅给 Snapshot 增加 revision，并在 Context.update 锁内保存递增版本，更新闭包替换整张快照也不会重置版本；不把通知回调移进锁内。
+- 绿灯：`cargo test --locked --offline --lib quick_transfer::tests --no-run` 构建后，将测试 exe 复制到 `.tmp/quick-transfer-integration/revision-green.exe`，仅在副本注入 Windows Common Controls v6 manifest，再执行 `quick_transfer --nocapture`：25 passed / 0 failed（11 storage、9 transport、5 runtime，含上述两项乱序回归）。这次结果发生在后续手机页面／鉴权探测增量之前，不替代最终统一构建。构建曾等待其他 Cargo 锁，未停止未知进程；没有修改项目 build.rs 或正式测试 exe。
+- 根代理随后统一最终编译并报告 `ui-final.exe` 26 / 26 passed，包含手机 `page_probe` PIN 鉴权回归；手机独立真实 HTTP harness 11 / 11 passed，正式浏览器测试 10 行为组 passed（包括服务器已收件但发送端丢失回执，界面保持未确认、不自动重发）。最终发布／原生真手机验收边界以根代理专项记录为准。
+- 临时产物清理：根代理在确认无进程占用后删除历史中间测试副本（含 revision-red／revision-green），保留 23 项旧最终版 `tests-final.exe` 与 26 项新最终版 `ui-final.exe`；上面的红绿路径用于描述当时实跑证据，不表示当前仍存在。测试源码与质量报告保留，清理清单见根代理行动记录。
+- 手机上传 HTTP 200 仅代表 Ready 持久收件，后续索引异步；已提醒手机代理使用“已传到电脑”，不承诺“已入素材库”。最终约定 prepare 401 为链接失效、403 为文件拒收；页面不能回显原始响应、路径或服务错误。手机空闲时带 PIN 探测当前会话，接收关闭、旧二维码与端口复用不能被无鉴权 HTTP 200 误判为仍可发送。
+- 桌面复核：先订阅事件后读取状态，事件、初始查询和所有 mutation 返回统一经过 revision 筛选；选择目录由系统 picker 给出，取消不变更；无局域网网卡时不回退 loopback；开启后冻结目录／地址；收起面板不停止接收；关闭后隐藏旧 URL。用户可见错误（含文件错误）统一经 `userErrorMessage`，原始内部诊断不进入提示或 title。上述 UI 行为由桌面代理的真实组件测试覆盖。
+- 初轮最终客户端静态工具：`.tmp/quick-transfer-integration/run-quality.py` 复制本次 7 个 Rust／TS／TSX 生产文件，并从 `upload.html` 提取唯一内联 script；官方 crapper `--no-coverage`、dryer `--threshold 0.8`、mutator `--scan --no-coverage` 均实际运行、退出 0。报告与源码哈希位于 `.tmp/quick-transfer-integration/quality/`。Rust 最大 CC 9、手机脚本最大 CC 8；桌面 `QuickTransfer` 70、`TransferRow` 14、`useQuickTransfer` 11，已通知负责代理按职责收敛。无重复候选；没有覆盖率，CRAP 为 N/A，扫描不等于执行变异。
+- 纯 TS helper 真实变异执行：`.tmp/quick-transfer-integration/run-state-mutation.py` 复制 `quickTransferState.ts` 与实际两项 Node 测试到隔离目录，基线 2 passed。官方 mutator 唯一候选 `>=` → `>` 存活（CLI exit 3；有效同版本快照内容相同，边界变异不影响可见行为），未添加只比较对象引用的凑数测试。另用同一官方执行引擎补充 `<=` 排序反向变异，两项行为断言均失败，判定 killed；此补充不计入官方候选评分。隔离源码已恢复、正式源码 SHA256 未改变。证据在 `.tmp/quick-transfer-integration/state-mutation/` 的 result.json、run-1/2/3.log 与 `.metrics/mutate/`。首次 Python 子进程使用 GBK 解码导致环境异常，设置 UTF-8 后重跑；不将首次异常计为杀死变异。
+- 职责拆分后最终复扫：新增目录／网卡、二维码／复制、队列三个组件文件与目录／网卡 hook 文件一并纳入，共 12 个正式源文件（含 HTML 抽取脚本）；三项官方工具均 exit 0。桌面 `QuickTransfer`、`QuickTransferNetwork` 各 CC 14，其余桌面 <= 8；Rust <= 9、手机 <= 8。两处 CC 14 保留实际状态／禁用／错误展示分支，根同意不为数字增加无意义抽象。dryer 无重复，mutator 仅扫描 386 个候选。最终快照与源文件哈希 0 mismatch；报告见 `.tmp/quick-transfer-integration/quality/REPORT.md`。独立复核新 hooks 保留原有请求序列、目录取消、订阅释放和安全错误契约，未发现新增阻断问题。桌面代理报告拆分后真实组件测试、state 两项测试与 TSC 继续通过；正式 App、打包构建和存档由根统一完成。

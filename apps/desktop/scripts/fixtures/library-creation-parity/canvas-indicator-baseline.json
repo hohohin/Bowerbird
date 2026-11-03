@@ -1,0 +1,101 @@
+{
+  "sourceCommit": "8fead52287cf47d72e23ef6eea284c2c9a54f2f2",
+  "themes": {
+    "dark": {
+      "frame": {
+        "boxShadow": "rgba(148, 148, 148, 0.3) 0px 0px 0px 1px inset",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "borderTopWidth": "0px"
+      },
+      "before": {
+        "content": "\"\"",
+        "top": "3px",
+        "right": "3px",
+        "bottom": "3px",
+        "left": "3px",
+        "backgroundImage": "repeating-linear-gradient(135deg, rgba(148, 148, 148, 0.5) 0px, rgba(148, 148, 148, 0.5) 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 6px), repeating-linear-gradient(135deg, rgba(148, 148, 148, 0.5) 0px, rgba(148, 148, 148, 0.5) 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 6px), repeating-linear-gradient(135deg, rgba(148, 148, 148, 0.5) 0px, rgba(148, 148, 148, 0.5) 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 6px), repeating-linear-gradient(135deg, rgba(148, 148, 148, 0.5) 0px, rgba(148, 148, 148, 0.5) 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 6px)",
+        "backgroundSize": "clamp(72px, 14%, 180px) 6px, clamp(72px, 14%, 180px) 6px, clamp(72px, 14%, 180px) 6px, clamp(72px, 14%, 180px) 6px",
+        "backgroundPosition": "0px 0px, 100% 0px, 0px 100%, 100% 100%",
+        "backgroundRepeat": "no-repeat, no-repeat, no-repeat, no-repeat"
+      },
+      "after": {
+        "content": "\"\"",
+        "top": "0px",
+        "right": "0px",
+        "bottom": "0px",
+        "left": "0px",
+        "backgroundImage": "linear-gradient(rgb(185, 185, 185), rgb(185, 185, 185)), linear-gradient(rgb(185, 185, 185), rgb(185, 185, 185)), linear-gradient(rgb(185, 185, 185), rgb(185, 185, 185)), linear-gradient(rgb(185, 185, 185), rgb(185, 185, 185)), linear-gradient(rgb(185, 185, 185), rgb(185, 185, 185)), linear-gradient(rgb(185, 185, 185), rgb(185, 185, 185))",
+        "backgroundSize": "3px 3px, 3px 3px, 3px 3px, 3px 3px, 1px 52px, 1px 52px",
+        "backgroundPosition": "0px 0px, 100% 0px, 0px 100%, 100% 100%, 0px 50%, 100% 50%",
+        "backgroundRepeat": "no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat"
+      },
+      "label": {
+        "color": "rgb(143, 170, 184)",
+        "backgroundColor": "rgb(24, 24, 24)",
+        "padding": "5px 12px 6px",
+        "fontSize": "10px",
+        "fontWeight": "500",
+        "letterSpacing": "1px",
+        "lineHeight": "15px",
+        "borderRadius": "0px",
+        "boxShadow": "none"
+      },
+      "labelBefore": {
+        "content": "\"\"",
+        "width": "3px",
+        "height": "3px",
+        "backgroundColor": "rgb(143, 170, 184)",
+        "boxShadow": "none"
+      }
+    },
+    "light": {
+      "frame": {
+        "boxShadow": "rgba(100, 100, 100, 0.3) 0px 0px 0px 1px inset",
+        "backgroundColor": "rgba(0, 0, 0, 0)",
+        "backgroundImage": "none",
+        "borderTopWidth": "0px"
+      },
+      "before": {
+        "content": "\"\"",
+        "top": "3px",
+        "right": "3px",
+        "bottom": "3px",
+        "left": "3px",
+        "backgroundImage": "repeating-linear-gradient(135deg, rgba(100, 100, 100, 0.5) 0px, rgba(100, 100, 100, 0.5) 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 6px), repeating-linear-gradient(135deg, rgba(100, 100, 100, 0.5) 0px, rgba(100, 100, 100, 0.5) 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 6px), repeating-linear-gradient(135deg, rgba(100, 100, 100, 0.5) 0px, rgba(100, 100, 100, 0.5) 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 6px), repeating-linear-gradient(135deg, rgba(100, 100, 100, 0.5) 0px, rgba(100, 100, 100, 0.5) 2px, rgba(0, 0, 0, 0) 2px, rgba(0, 0, 0, 0) 6px)",
+        "backgroundSize": "clamp(72px, 14%, 180px) 6px, clamp(72px, 14%, 180px) 6px, clamp(72px, 14%, 180px) 6px, clamp(72px, 14%, 180px) 6px",
+        "backgroundPosition": "0px 0px, 100% 0px, 0px 100%, 100% 100%",
+        "backgroundRepeat": "no-repeat, no-repeat, no-repeat, no-repeat"
+      },
+      "after": {
+        "content": "\"\"",
+        "top": "0px",
+        "right": "0px",
+        "bottom": "0px",
+        "left": "0px",
+        "backgroundImage": "linear-gradient(rgb(120, 190, 233), rgb(120, 190, 233)), linear-gradient(rgb(120, 190, 233), rgb(120, 190, 233)), linear-gradient(rgb(120, 190, 233), rgb(120, 190, 233)), linear-gradient(rgb(120, 190, 233), rgb(120, 190, 233)), linear-gradient(rgb(120, 190, 233), rgb(120, 190, 233)), linear-gradient(rgb(120, 190, 233), rgb(120, 190, 233))",
+        "backgroundSize": "3px 3px, 3px 3px, 3px 3px, 3px 3px, 1px 52px, 1px 52px",
+        "backgroundPosition": "0px 0px, 100% 0px, 0px 100%, 100% 100%, 0px 50%, 100% 50%",
+        "backgroundRepeat": "no-repeat, no-repeat, no-repeat, no-repeat, no-repeat, no-repeat"
+      },
+      "label": {
+        "color": "rgb(73, 103, 117)",
+        "backgroundColor": "rgb(239, 239, 239)",
+        "padding": "5px 12px 6px",
+        "fontSize": "10px",
+        "fontWeight": "500",
+        "letterSpacing": "1px",
+        "lineHeight": "15px",
+        "borderRadius": "0px",
+        "boxShadow": "none"
+      },
+      "labelBefore": {
+        "content": "\"\"",
+        "width": "3px",
+        "height": "3px",
+        "backgroundColor": "rgb(73, 103, 117)",
+        "boxShadow": "none"
+      }
+    }
+  }
+}

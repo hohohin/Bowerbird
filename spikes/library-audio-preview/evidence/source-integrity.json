@@ -1,0 +1,42 @@
+[
+  {
+    "file": "chime.wav",
+    "unchanged": true,
+    "sha256": "3E10BCE7D590BF041A3ABA7539575187C09199A94D52CC679582C041F71258FD"
+  },
+  {
+    "file": "long-vbr.mp3",
+    "unchanged": true,
+    "sha256": "541A08B2125E5981FA308A0A4A0B09EC298733B3470233199F9B2FDA8D9C0841"
+  },
+  {
+    "file": "long.flac",
+    "unchanged": true,
+    "sha256": "64EE69DE7E2FD5522540B43FB1D99EA0CF37C642F6EA32A755778B7F20970A52"
+  },
+  {
+    "file": "rain.flac",
+    "unchanged": true,
+    "sha256": "F68FC307032F541BF6FCE7604FE1AB000FDD86C17A645BC28691A7197A5F71E7"
+  },
+  {
+    "file": "rhythm.mp3",
+    "unchanged": true,
+    "sha256": "560FC139E2641C0E006C1E946710D4D099F7F2986F1E8E3A72130A30297A5CE3"
+  },
+  {
+    "file": "space.m4a",
+    "unchanged": true,
+    "sha256": "DDB1B82A1BA028AA6EA22BC4C03E6CB7EC6E4E2571FB7A3B0795070501CFE369"
+  },
+  {
+    "file": "steps.wav",
+    "unchanged": true,
+    "sha256": "6B31E6A5A007C6AD0FE5924F94C5C2369A3C25E8D866A0EC5B003D68D0DCBD29"
+  },
+  {
+    "file": "ten-minute.wav",
+    "unchanged": true,
+    "sha256": "1031F59712CF593754A2551D38CCB9FC2F5B2F721B119FC28C4D3831D82789EF"
+  }
+]

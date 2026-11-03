@@ -2,6 +2,40 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## Windows 26.11.301 已发布（2026-11-03）
+
+2026-11-03 10:43:55（北京时间）本机公网复核通过。源码 **510e0cdd** 已与文档同次存档推送后冻结构建，发布LocalSend 局域网快传、素材库直接创作、Plate 放大文本工作区与画板文档卡、创作框 HUD 标签／开放框体／收起贴底、独立图片会话预览、任务铃铛与悬浮滚动条、探索视频流采集及历史、集合改名／断联删除、积分明细、视频自动模式及自有 CLI 音频参考、新建项目卡片。SQLite **0050**，插件 **0.3.1**；Cloud 音频参考 0079／Edge／Worker／网关未部署，桌面在创建音频任务前检测服务端能力并拒绝不支持的请求；DeepSeek Cloud 未启用。Mac 保持 ARM 801／Intel 1501，现有视频及赠币服务和 Mock 支付保持。
+
+TypeScript／Vite、Rust 1047 passed／29 ignored、23 组桌面专项、72 项前端测试及 29 项官网回归通过；1600 个冻结输入与 Git 核对、76 个资源（含 LocalSend 许可证与修改说明）、x64／双语安装器／更新登录保留钩子、原公钥验签及篡改拒绝、包内原生媒体／等待和生产 bundle 检查通过。Rust 测试仅向独立测试 EXE 副本嵌入 Common Controls v6 清单，正式构建未修改。未替用户安装／重启应用、迁移真实素材库或调用付费模型；用户库原生升级、真手机端到端、真实站点采集和 Mac 原生仍需各自验收。
+
+安装包 `Bowerbird_26.11.301_x64-setup.exe`：**87237827 bytes**，SHA-256 `a7668088080d5e35e043d1f0a90aab927cfdc87fe82ac88f1477d4a3f8d132b4`。TOS／CDN 完整回读、Range 206、CDN 包原公钥验签通过后才切更新。候选／现役／公网三平台清单、签名、双首页下载、旧包、后台及账号／Cloud 网关拒绝边界通过。
+
+现役 `/opt/bowerbird/website-releases/20261103-windows-26.11.301`，回滚 `/opt/bowerbird/website-releases/20261102-windows-26.11.202`；只改 Windows 下载与清单相关 5 个文件，82 个其他文件保持，后台、账号／Cloud 代理、Nginx、Mac 清单及旧包保留。
+
+证据：本机 `.tmp/release-windows-26.11.301/`，VPS `/tmp/bowerbird-release-windows-26.11.301/`；`rollback.sh` 恢复 202 官网，不自动降级客户端或回退账本。
+
+构建期间的后续 HUD 样式及关闭控件改动已另行提交为 `71604393` 并随源码推送，未进入此包。安装包的 1600 个冻结输入逐文件匹配 `510e0cdd`；不能把当前 dev 的后续提交视为本版产物。
+
+## Windows 26.11.202 已发布（2026-11-02）
+
+2026-11-02 19:18:08（北京时间）本机公网复核通过。源码 **50dfa646** 已与文档同次存档推送后冻结构建，完整发布工业主题与素材库／项目平级导航、连接式素材库与真实目录集合／分身／原件回收、文本 Plate 编辑与音频试听、统一视频播放／采集、截图历史与共用标注、跨应用拖出与 Pinterest 搜图、画布性能／建卡／文字编辑定位，保留 201 的注册／Pro 赠币展示及回执。SQLite **0050**，插件 **0.3.1**；DeepSeek Cloud 不部署不开启，Mac 保持 ARM 801／Intel 1501。现有 Cloud 视频及赠币服务开关不变，真实支付仍 Mock。
+
+TypeScript／Vite、Rust 967 passed／28 ignored、12 组桌面 Chromium 和官网网关回归通过；1366 个冻结输入与 Git 核对、74 个资源、x64／双语安装器／更新保留登录钩子、原公钥验签及篡改拒绝、包内原生媒体／等待和生产 bundle 检查通过。未替用户安装／重启应用或迁移真实素材库；用户库原生升级、跨应用／跨 WebView 真机体验、Mac 和真实模型质量仍待各自实机验收。
+
+安装包 `Bowerbird_26.11.202_x64-setup.exe`：**86336574 bytes**，SHA-256 `81ac0c3fd3d5b56e8b5157474b0c6ca52d529fec3c53481fed10a83d61f4c2f1`。TOS／CDN 完整回读、Range 206、CDN 包原公钥验签后才切换更新。候选／现役／公网三平台清单、签名、双首页下载、旧包、后台及账号／Cloud 网关拒绝边界通过。
+
+现役 `/opt/bowerbird/website-releases/20261102-windows-26.11.202`，回滚 `/opt/bowerbird/website-releases/20261102-bcoin-gifts-windows-26.11.201`；只改 Windows 下载与清单相关 5 个文件，82 个其他文件保持，赠币后台、账号／Cloud 代理、Nginx、Mac 清单及旧包保留。本轮没有部署迁移、Edge 或 Worker，没有创建真实模型任务。
+
+证据：本机 `.tmp/release-windows-26.11.202/`，VPS `/tmp/bowerbird-release-windows-26.11.202/`；`rollback.sh` 恢复 201 官网，不自动降级客户端或回退账本。
+
+## Windows 26.11.201 已发布（2026-11-02）
+
+09:36:15（北京时间）公网验收通过。以公开 2801 的 `be4a3f11` 为基线，仅叠加本次赠币 Plan／积分明细／兑换即时与未来安排、原生回执兼容及版本／测试，SQLite 保持 **0047**。Cloud 注册 200／Pro 每订阅月 800 已配套上线，旧用户不补发，真实支付仍 Mock；没有发布当前 dev 的其他后续功能。
+
+1064 冻结输入、精确补丁重放、Rust 权益 12 项、3 组 UI、TypeScript／Vite／签名构建、70 包资源、原公钥验签与篡改拒绝通过。安装包 `Bowerbird_26.11.201_x64-setup.exe`：84,934,286 bytes，SHA-256 `6d4cd50dba44c6bf4143e3d24e3d16ab51c8cdf1a05e380776d9076f14f30fa0`。TOS／CDN 完整下载与 Range 核验后，官网及 Windows 更新清单已切换；Mac 保持。
+
+本轮隔离产物在 `.tmp/bcoin-gifts-desktop-20261102/artifacts/`，没有覆盖正式工作区版本文件或替用户安装／重启。后续 Windows 发版需使用高于 26.11.201 的版本。完整现役／回滚、来源及未验收边界见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md#windows-2611201-已发布2026-11-02)。
+
 ## Windows 26.10.2801 已发布（2026-10-28）
 
 2026-10-28 15:29:20（北京时间）完成公网验收。源码 **be4a3f11** 已存档推送 dev 后冻结构建，包含素材库分栏／Tactical 样式与多选、浏览器插件 0.2.0 与采集、连续瀑布流、本机图文对话／历史及受控建卡、常用素材／手动固定、HEIC／HEIF 导入、按区域拖放／粘贴、账号展示与微信回跳，以及 Cloud 生成／签名文件官网网关的 10054 修复。SQLite **0047**；独立复刻 Demo／只读 MCP 仅源码存档，不打入桌面包。Mac ARM 801／Intel 1501 保持，未部署 Edge／Worker、启用 Cloud 视频／价格或真实支付。
@@ -107,6 +141,8 @@ cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\Windows\dev.ps1
 ```
+
+开发／Vite 预览服务跟随启动父进程退出，并清理文件监听与端口；不要用退出即结束的临时 PowerShell 启动长期预览。正常源码热更新保留，`.tmp` 生成目录不参与监听。独立确认稿关闭文件监听，改稿后需重启对应服务。修复及验证见 [预览服务生命周期](../project_logs/2026-11-01-preview-lifecycle.md)。
 
 ## 构建安装包
 

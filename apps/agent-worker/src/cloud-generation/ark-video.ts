@@ -33,8 +33,8 @@ export class ArkVideoClient {
     this.apiKey = apiKey; this.fetch = fetch;
   }
   private headers() { return { authorization: `Bearer ${this.apiKey}`, "content-type": "application/json" }; }
-  async submit(input: VideoInput, urls: string[] = []): Promise<string> {
-    const body = JSON.stringify(arkVideoBody(input, urls));
+  async submit(input: VideoInput, urls: string[] = [], audioUrls: string[] = []): Promise<string> {
+    const body = JSON.stringify(arkVideoBody(input, urls, audioUrls));
     let response: VideoHttpResponse;
     try { response = await this.fetch(BASE, { method: "POST", headers: this.headers(), body, redirect: "error" }); }
     catch { throw new ArkVideoError("video_submit_outcome_unknown", false); }

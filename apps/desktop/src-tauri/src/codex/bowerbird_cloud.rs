@@ -70,15 +70,11 @@ impl BowerbirdCloudProvider {
             .await
             .map_err(|error| AppError::Cloud(format!("读取云生成响应失败: {error}")))?;
         if !status.is_success() {
+            let fallback = format!("云生成失败（HTTP {}）", status.as_u16());
             let message = serde_json::from_str::<serde_json::Value>(&body)
                 .ok()
-                .and_then(|value| {
-                    value
-                        .pointer("/error/message")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string)
-                })
-                .unwrap_or_else(|| format!("云生成失败（HTTP {}）", status.as_u16()));
+                .map(|value| cloud_response_error(&value, &fallback))
+                .unwrap_or(fallback);
             return Err(AppError::Cloud(message));
         }
         let result: GenerateResponse = serde_json::from_str(&body)
@@ -107,7 +103,7 @@ impl BowerbirdCloudProvider {
                 return Ok((paths, temp_dir, Some(remote)));
             }
         } else if let Some(error) = result.error {
-            return Err(AppError::Cloud(error.message));
+            return Err(AppError::Cloud(error.diagnostic_message()));
         }
         let inline_images = result.images;
 
@@ -164,7 +160,7 @@ pub(crate) struct GenerateResponse {
 }
 
 #[derive(Deserialize)]
-struct ReferenceUpload { index: usize, upload_url: String }
+struct ReferenceUpload { index: usize, upload_url: String, #[serde(default)] kind: Option<String> }
 
 /// Persisted local job + turn identify exactly one Cloud video request, including recovery.
 pub(crate) fn video_idempotency_key(job: &str, turn: &str) -> String {
@@ -188,7 +184,7 @@ pub(crate) fn video_preflight(req: &CodexRequest, options: &VideoOptions) -> Res
         if matches!(ext.as_str(), "mp4" | "mov") && std::fs::metadata(path)?.len() > 200 * 1024 * 1024 {
             return Err(AppError::Cloud("每条参考视频不能超过 200 MiB".into()));
         }
-        if !crate::media::probe::is_video(&ext) {
+        if !crate::media::probe::is_video(&ext) && !crate::codex::jimeng_video::reference_is_audio(path) {
             let meta = crate::media::probe::probe(path)?;
             let ratio = meta.width as f64 / meta.height as f64;
             if meta.width < 300 || meta.height < 300 || !(0.4..=2.5).contains(&ratio) {
@@ -216,6 +212,24 @@ struct CloudArtifact {
 #[derive(Deserialize)]
 pub(crate) struct CloudJobError {
     pub(crate) message: String,
+    #[serde(default)]
+    code: Option<String>,
+}
+
+impl CloudJobError {
+    fn diagnostic_message(&self) -> String {
+        match self.code.as_deref().map(str::trim).filter(|code| !code.is_empty()) {
+            Some(code) => format!("{} [code: {code}]", self.message),
+            None => self.message.clone(),
+        }
+    }
+}
+
+fn cloud_response_error(body: &serde_json::Value, fallback: &str) -> String {
+    CloudJobError {
+        message: body.pointer("/error/message").and_then(|value| value.as_str()).unwrap_or(fallback).into(),
+        code: body.pointer("/error/code").and_then(|value| value.as_str()).map(String::from),
+    }.diagnostic_message()
 }
 
 #[async_trait]
@@ -245,35 +259,54 @@ impl GenProvider for BowerbirdCloudProvider {
         }
         let started = Instant::now();
         let endpoint = self.cloud.config().endpoint("generate-proxy").ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
+        if req.reference_images.iter().any(|path| crate::codex::jimeng_video::reference_is_audio(path)) {
+            // Older servers ignore unknown reference fields. Check before creating any charged job.
+            let response = self.auth.send_authorized(self.cloud.http().post(&endpoint)
+                .json(&serde_json::json!({ "action": "video_capabilities" })), "无法确认云视频音频支持，请稍后重试").await?;
+            let supported = response.status().is_success() && response.json::<serde_json::Value>().await.ok().is_some_and(|body| body["reference_audio"] == true);
+            if !supported { return Err(AppError::Cloud("当前云视频服务尚未支持音频参考，请稍后重试或选择自有订阅渠道".into())); }
+        }
         let key = req.job_id.as_deref().ok_or_else(|| AppError::Cloud("缺少视频轮次幂等键".into()))?;
         let mut images = Vec::new();
         let mut videos = Vec::new();
         let mut video_paths = Vec::new();
+        let mut audios = Vec::new();
+        let mut audio_paths = Vec::new();
         for path in &req.reference_images {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
             if crate::media::probe::is_video(&ext) {
                 let duration = crate::media::probe::probe(path)?.duration;
                 videos.push(serde_json::json!({ "object_key": "", "bytes": std::fs::metadata(path)?.len(), "duration": duration, "mime": if ext == "mov" { "video/quicktime" } else { "video/mp4" } }));
                 video_paths.push(path);
+            } else if crate::codex::jimeng_video::reference_is_audio(path) {
+                let duration = crate::codex::jimeng_video::audio_duration(path)?;
+                audios.push(serde_json::json!({ "object_key": "", "bytes": std::fs::metadata(path)?.len(), "duration": duration, "mime": if ext == "wav" { "audio/wav" } else { "audio/mpeg" } }));
+                audio_paths.push(path);
             } else { images.push(read_cloud_jpeg(path, true).await?); }
         }
-        let payload = serde_json::json!({ "idempotency_key": key, "media": "video", "prompt": req.instruction, "reference_images": images, "reference_videos": videos, "video_options": options, "ratio": req.ratio, "service": self.service });
+        let mut payload = serde_json::json!({ "idempotency_key": key, "media": "video", "prompt": req.instruction, "reference_images": images, "reference_videos": videos, "video_options": options, "ratio": req.ratio, "service": self.service });
+        if !audios.is_empty() { payload["reference_audios"] = serde_json::json!(audios); }
         let result = send_video_request(&self.cloud, &self.auth, &endpoint, &payload).await?;
         let remote = result.remote_task_id.ok_or_else(|| AppError::Cloud("云视频任务缺少任务 ID；不会自动重新生成".into()))?;
         let _ = tx.send(Chunk::Submit { submit_id: remote.clone() }).await;
         if !result.reference_uploads.is_empty() {
             for upload in result.reference_uploads {
-                let path = video_paths.get(upload.index).ok_or_else(|| AppError::Cloud("参考视频上传序号无效".into()))?;
+                let (paths, references) = match upload.kind.as_deref() {
+                    None | Some("video") => (&video_paths, &videos),
+                    Some("audio") => (&audio_paths, &audios),
+                    _ => return Err(AppError::Cloud("参考素材上传类型无效".into())),
+                };
+                let path = paths.get(upload.index).ok_or_else(|| AppError::Cloud("参考素材上传序号无效".into()))?;
                 let upload_url = self.cloud.config().generation_transfer_url(&upload.upload_url, true)
-                    .ok_or_else(|| AppError::Cloud("参考视频上传地址无效".into()))?;
+                    .ok_or_else(|| AppError::Cloud("参考素材上传地址无效".into()))?;
                 let bytes = tokio::fs::read(path).await?;
-                if bytes.len() as u64 != videos[upload.index]["bytes"].as_u64().unwrap_or(0) { return Err(AppError::Cloud("参考视频在上传前已变化，请重新选择".into())); }
-                let response = self.cloud.http().put(upload_url).header("content-type", videos[upload.index]["mime"].as_str().unwrap_or("video/mp4")).body(bytes).send().await.map_err(|_| AppError::Cloud("参考视频上传失败；原任务保留待恢复".into()))?;
-                if !response.status().is_success() { return Err(AppError::Cloud("参考视频上传失败；原任务保留待恢复".into())); }
+                if bytes.len() as u64 != references[upload.index]["bytes"].as_u64().unwrap_or(0) { return Err(AppError::Cloud("参考素材在上传前已变化，请重新选择".into())); }
+                let response = self.cloud.http().put(upload_url).header("content-type", references[upload.index]["mime"].as_str().unwrap_or("application/octet-stream")).body(bytes).send().await.map_err(|_| AppError::Cloud("参考素材上传失败；原任务保留待恢复".into()))?;
+                if !response.status().is_success() { return Err(AppError::Cloud("参考素材上传失败；原任务保留待恢复".into())); }
             }
             // Same key and exact manifest finalize uploads; this is never another provider POST.
             let finalized = send_video_request(&self.cloud, &self.auth, &endpoint, &payload).await?;
-            if !finalized.reference_uploads.is_empty() { return Err(AppError::Cloud("参考视频尚未上传完整".into())); }
+            if !finalized.reference_uploads.is_empty() { return Err(AppError::Cloud("参考素材尚未上传完整".into())); }
         }
         let (paths, temp_dir) = wait_for_cloud_job(&self.cloud, &self.auth, &endpoint, &remote).await?;
         Ok(GenOutcome { text: String::new(), session_id: Some(remote.clone()), submit_id: Some(remote), elapsed_ms: started.elapsed().as_millis() as u64, source_images: paths, temp_dir: Some(temp_dir) })
@@ -375,7 +408,7 @@ async fn send_video_request(cloud: &CloudClient, auth: &AuthClient, endpoint: &s
     let response = auth.send_authorized(cloud.http().post(endpoint).json(payload), "云视频请求失败；不会自动重新生成").await?;
     let status = response.status();
     let body: serde_json::Value = response.json().await.map_err(|_| AppError::Cloud("云视频响应无法解析；请通过原任务恢复".into()))?;
-    if !status.is_success() { return Err(AppError::Cloud(body.pointer("/error/message").and_then(|v| v.as_str()).unwrap_or("云视频请求失败").into())); }
+    if !status.is_success() { return Err(AppError::Cloud(cloud_response_error(&body, "云视频请求失败"))); }
     serde_json::from_value(body).map_err(|_| AppError::Cloud("云视频响应格式无效".into()))
 }
 
@@ -400,15 +433,11 @@ async fn poll_remote(
         .await
         .map_err(|error| AppError::Cloud(format!("读取云任务响应失败: {error}")))?;
     if !status.is_success() {
+        let fallback = format!("云任务轮询失败（HTTP {}）", status.as_u16());
         let message = serde_json::from_str::<serde_json::Value>(&body)
             .ok()
-            .and_then(|value| {
-                value
-                    .pointer("/error/message")
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string)
-            })
-            .unwrap_or_else(|| format!("云任务轮询失败（HTTP {}）", status.as_u16()));
+            .map(|value| cloud_response_error(&value, &fallback))
+            .unwrap_or(fallback);
         return Err(AppError::Cloud(message));
     }
     serde_json::from_str(&body)
@@ -434,7 +463,8 @@ pub(crate) async fn wait_for_cloud_job(
                             "action": "abandon_video_upload", "job_id": remote_task_id,
                         })).await?;
                         if result.status == "failed" {
-                            return Err(AppError::Cloud("视频参考上传中断，原任务已结束并释放预留积分；请重新发起生成".into()));
+                            let message = "视频参考上传中断，原任务已结束并释放预留积分；请重新发起生成";
+                            return Err(AppError::Cloud(result.error.map(|error| format!("{message}: {}", error.diagnostic_message())).unwrap_or_else(|| message.into())));
                         }
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                     }
@@ -454,7 +484,7 @@ pub(crate) async fn wait_for_cloud_job(
                         let message =
                             result
                                 .error
-                                .map(|error| error.message)
+                                .map(|error| error.diagnostic_message())
                                 .unwrap_or_else(|| match result.status.as_str() {
                                     "outcome_unknown" => {
                                         "请求已提交方舟，但结果状态暂时无法确认".into()
@@ -573,7 +603,59 @@ pub(crate) async fn find_video_job(cloud: &CloudClient, auth: &AuthClient, job: 
         "action": "get_by_key", "idempotency_key": video_idempotency_key(job, turn),
     })), "查询原视频任务失败").await?;
     if response.status().as_u16() == 404 { return Ok(None); }
-    if !response.status().is_success() { return Err(AppError::Cloud("原视频任务状态尚无法确认，不会重新生成".into())); }
+    if !response.status().is_success() {
+        let message = "原视频任务状态尚无法确认，不会重新生成";
+        let detail = response.json::<serde_json::Value>().await.ok().map(|body| cloud_response_error(&body, message));
+        return Err(AppError::Cloud(match detail {
+            Some(detail) if detail != message => format!("{message}: {detail}"),
+            _ => message.into(),
+        }));
+    }
     let result: GenerateResponse = response.json().await.map_err(|_| AppError::Cloud("原视频任务响应无效".into()))?;
     Ok(result.remote_task_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cloud_response_error, CloudJobError, GenerateResponse};
+    use serde_json::json;
+
+    #[test]
+    fn http_errors_preserve_code_and_original_message() {
+        let body = json!({"error":{"code":"image_content_rejected","message":"云生成未完成"}});
+        for fallback in ["云生成失败（HTTP 400）", "云任务轮询失败（HTTP 400）", "云视频请求失败"] {
+            assert_eq!(cloud_response_error(&body, fallback), "云生成未完成 [code: image_content_rejected]");
+        }
+        assert_eq!(cloud_response_error(&json!({"error":{"code":"quota_exceeded"}}), "请求失败"),
+            "请求失败 [code: quota_exceeded]");
+        assert_eq!(cloud_response_error(&json!({}), "云生成失败（HTTP 502）"), "云生成失败（HTTP 502）");
+    }
+
+    #[test]
+    fn asynchronous_task_errors_keep_status_and_recovery_message() {
+        for (status, code, message) in [
+            ("failed", "image_content_rejected", "参考图片审核未通过"),
+            ("outcome_unknown", "upstream_outcome_unknown", "请求已提交方舟，但结果状态暂时无法确认"),
+            ("cancelled", "cancelled", "云任务已取消"),
+            ("artifact_expired", "artifact_expired", "视频产物已超过保留期限；用量和结算记录仍保留"),
+        ] {
+            let response: GenerateResponse = serde_json::from_value(json!({
+                "status":status,"remote_task_id":"original-job","error":{"code":code,"message":message}
+            })).unwrap();
+            assert_eq!(response.status, status);
+            assert_eq!(response.remote_task_id.as_deref(), Some("original-job"));
+            assert_eq!(response.error.unwrap().diagnostic_message(), format!("{message} [code: {code}]"));
+        }
+        let login: CloudJobError = serde_json::from_value(json!({"message":"请先登录","code":"unauthorized"})).unwrap();
+        assert!(login.diagnostic_message().starts_with("请先登录"));
+    }
+
+    #[test]
+    fn legacy_errors_without_codes_are_unchanged() {
+        for error in [json!({"message":"original failure"}), json!({"message":"original failure","code":null}), json!({"message":"original failure","code":"  "})] {
+            let parsed: CloudJobError = serde_json::from_value(error.clone()).unwrap();
+            assert_eq!(parsed.diagnostic_message(), "original failure");
+            assert_eq!(cloud_response_error(&json!({"error":error}), "fallback"), "original failure");
+        }
+    }
 }

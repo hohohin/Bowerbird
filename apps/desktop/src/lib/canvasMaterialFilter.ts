@@ -1,5 +1,5 @@
 import type { MediaFilter } from "./mediaFilter";
-import { isVideoPath } from "./videoGeneration";
+import { mediaType } from "./mediaFilter";
 
 export type CanvasMaterialFilterState = "all" | "match" | "dim";
 
@@ -9,5 +9,5 @@ export function canvasMaterialFilterState(
   const generatedFilter = source === "source:generated" ? true : source === "source:!generated" ? false : null;
   if (generatedFilter === null && media === null) return "all";
   return (generatedFilter === null || generated === generatedFilter)
-    && (media === null || isVideoPath(path) === (media === "video")) ? "match" : "dim";
+    && (media === null || mediaType(path) === media) ? "match" : "dim";
 }

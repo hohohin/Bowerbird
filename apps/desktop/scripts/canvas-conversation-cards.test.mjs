@@ -5,6 +5,17 @@ import { canvasConversationCards } from '../src/lib/canvasConversationCards.ts';
 const prompt = (id, job, turn, time = 1, projectId = 'p') => ({ id, projectId, kind: 'prompt', createdAt: time, hiddenAt: null, payloadJson: JSON.stringify({job_id: job, turn_key: turn}) });
 const output = (id, job, turn, time = 1) => ({...prompt(id, job, turn, time), kind: 'asset', role: 'output', assetId: id, payloadJson: JSON.stringify({execution: {job_id: job, turn_key: turn}})});
 
+test('same-second retries follow durable turn order instead of random node ids', () => {
+  const nodes = [prompt('z-original','job','failed'), prompt('a-retry','job','retry')];
+  const jobs = {job: {conversationId:'conversation',turns:[{turnKey:'failed'},{turnKey:'retry'}]}};
+  for (const input of [nodes, [...nodes].reverse()]) {
+    const result = canvasConversationCards(input,jobs);
+    assert.equal(result.cards.size,1);
+    assert.equal(result.cards.get('z-original').latest.id,'a-retry');
+    assert.deepEqual(result.cards.get('z-original').sessions.map(n=>n.id),['z-original','a-retry']);
+  }
+});
+
 test('continuations and provider handoffs share one stable card, independent conversations stay separate', () => {
   const first = prompt('first','job','one');
   const next = prompt('next','job','two',2);

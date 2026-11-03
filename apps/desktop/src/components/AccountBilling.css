@@ -18,7 +18,7 @@
 .account-billing-comparison th:last-child, .account-billing-comparison td:last-child { background: rgb(var(--bb-blue-rgb) / 5%); color: var(--bb-ink); }
 .account-billing-plans, .account-billing-topups { margin: 0; padding: 0; border: 0; min-width: 0; }
 .account-billing-plans { display: grid; gap: 8px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.account-billing-topup-options { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; padding: 4px; scrollbar-width: thin; }
+.account-billing-topup-options { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto; padding: 4px; }
 .account-billing-topup-options > .account-billing-option { flex: 1 0 auto; min-width: 52px; min-height: 40px; padding: 8px; justify-content: center; white-space: nowrap; }
 .account-billing-topup-options .account-billing-option-heading { justify-content: center; gap: 4px; font-size: 12px; }
 .account-billing-option { position: relative; display: flex; flex-direction: column; gap: 5px; min-width: 0; padding: 11px 12px; border: 1px solid var(--bb-line-strong); border-radius: 6px; cursor: pointer; transition: border-color 150ms, background 150ms; }

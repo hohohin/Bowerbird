@@ -43,6 +43,9 @@ pub struct AppSettings {
     #[serde(default)]
     pub screenshot_shortcuts: crate::commands::screenshot::ScreenshotShortcuts,
 
+    #[serde(default = "default_true")]
+    pub screenshot_auto_save: bool,
+
     /// 应用外观。新配置及未设置主题的旧配置默认日间；保留已保存的主题选择。
     #[serde(default)]
     pub theme: AppTheme,
@@ -131,6 +134,7 @@ impl Default for AppSettings {
         Self {
             theme: AppTheme::Light,
             screenshot_shortcuts: Default::default(),
+            screenshot_auto_save: true,
             auto_analyze_on_ingest: false,
             auto_analyze_prompt: DEFAULT_AUTO_ANALYZE_PROMPT.to_string(),
             library_root: None,
@@ -230,6 +234,14 @@ impl SettingsState {
 #[cfg(test)]
 mod tests {
     use super::{AppSettings, AppTheme, SettingsState};
+
+    #[test]
+    fn screenshots_default_to_library_and_keep_opt_out() {
+        let old: AppSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(serde_json::to_value(old).unwrap()["screenshot_auto_save"], true);
+        let chosen: AppSettings = serde_json::from_str(r#"{"screenshot_auto_save":false}"#).unwrap();
+        assert_eq!(serde_json::to_value(chosen).unwrap()["screenshot_auto_save"], false);
+    }
 
     #[test]
     fn screenshot_shortcuts_default_persist_and_failed_write_keeps_memory() {

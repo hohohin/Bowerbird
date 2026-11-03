@@ -3,23 +3,34 @@ import { Columns2, X } from "lucide-react";
 import { useStore } from "../store";
 import { LibrarySourceTabs } from "./LibrarySourceTabs";
 import { LibraryCatalogTransition } from "./LibraryCatalogTransition";
-import { LocalFileWorkspace } from "./LocalFileWorkspace";
 import { useLocalFileMode } from "../lib/localFileMode";
 import { copyLibraryPane, createLibraryPane, LibraryPaneContext, registerLibraryPane, useActiveLibraryPane, type LibraryPaneState } from "../lib/libraryPane";
 import "./LibrarySplit.css";
 import "./LibraryTactical.css";
 
-export function LibraryHome({ onCreateProject, shortcutsEnabled = true }: { onCreateProject?: (assetIds?: string[]) => Promise<unknown>; shortcutsEnabled?: boolean } = {}) {
+export function LibraryHome({ onCreateProject, active = true, shortcutsEnabled = true }: { onCreateProject?: (assetIds?: string[]) => Promise<unknown>; active?: boolean; shortcutsEnabled?: boolean } = {}) {
   const [panes, setPanes] = useState(() => [{ pane: createLibraryPane("home-left", useLocalFileMode), weight: 1 }]);
   const body = useRef<HTMLDivElement>(null);
   const nextId = useRef(1);
   const focusPane = useRef<string | null>(null);
+  const lastActive = useRef(panes[0].pane);
+  const currentPanes = useRef(panes);
+  currentPanes.current = panes;
   useEffect(() => {
-    useStore.getState().setLibraryHomeView("library");
     useLocalFileMode.getState().openSource("global");
-    useActiveLibraryPane.getState().activate(panes[0].pane);
-    return () => useActiveLibraryPane.getState().activate(null);
   }, []);
+  useEffect(() => {
+    if (!active) return;
+    const state = useActiveLibraryPane.getState();
+    state.activate(currentPanes.current.some(item => item.pane === lastActive.current) ? lastActive.current : currentPanes.current[0].pane);
+    return () => {
+      const current = useActiveLibraryPane.getState();
+      if (currentPanes.current.some(item => item.pane === current.pane)) {
+        lastActive.current = current.pane!;
+        current.activate(null);
+      }
+    };
+  }, [active]);
   useLayoutEffect(() => {
     if (!focusPane.current) return;
     const element = body.current?.querySelector<HTMLElement>(`[data-library-pane="${focusPane.current}"]`);
@@ -50,26 +61,30 @@ export function LibraryHome({ onCreateProject, shortcutsEnabled = true }: { onCr
   return <div className="library-home library-browser library-tactical">
     <div ref={body} className={`library-split-body${panes.length > 1 ? " is-split" : ""}`}>
       {panes.map(({ pane, weight }, index) => <Fragment key={pane.id}>
-        {index > 0 && <PaneDivider index={index} ratio={panes[index - 1].weight / (panes[index - 1].weight + weight)} onResize={ratio => resizePair(panes[index - 1].pane, pane, ratio)}/>}
+        {index > 0 && <PaneDivider index={index} ratio={panes[index - 1].weight / (panes[index - 1].weight + weight)} onResize={ratio => resizePair(panes[index - 1].pane, pane, ratio)} onSplit={() => splitPane(panes[index - 1].pane)}/>}
         <div className="library-split-pane" style={{ flexGrow: weight }} aria-label={`素材库第 ${index + 1} 栏`}>
-          <LibraryPaneContext.Provider value={pane}><HomePane pane={pane} split={panes.length > 1} onSplit={() => splitPane(pane)} onClose={() => closePane(pane)} onCreateProject={onCreateProject} shortcutsEnabled={shortcutsEnabled}/></LibraryPaneContext.Provider>
+          <LibraryPaneContext.Provider value={pane}><HomePane pane={pane} split={panes.length > 1} onSplit={() => splitPane(pane)} onClose={() => closePane(pane)} onCreateProject={onCreateProject} shortcutsEnabled={active && shortcutsEnabled}/></LibraryPaneContext.Provider>
         </div>
       </Fragment>)}
     </div>
   </div>;
 }
 
-function PaneDivider({ index, ratio, onResize }: { index: number; ratio: number; onResize: (ratio: number) => void }) {
+function PaneDivider({ index, ratio, onResize, onSplit }: { index: number; ratio: number; onResize: (ratio: number) => void; onSplit: () => void }) {
   const drag = useRef<{ x: number; left: number; total: number } | null>(null);
   function bounds(element: HTMLElement) {
-    const left = element.previousElementSibling!.getBoundingClientRect().width;
-    return { left, total: left + element.nextElementSibling!.getBoundingClientRect().width };
+    const boundary = element.parentElement!;
+    let previous = boundary.previousElementSibling, next = boundary.nextElementSibling;
+    while (previous && !previous.classList.contains("library-split-pane")) previous = previous.previousElementSibling;
+    while (next && !next.classList.contains("library-split-pane")) next = next.nextElementSibling;
+    const left = previous!.getBoundingClientRect().width;
+    return { left, total: left + next!.getBoundingClientRect().width };
   }
   function resize(value: number, total: number) {
     const min = Math.min(.5, 400 / total);
     onResize(Math.max(min, Math.min(1 - min, value)));
   }
-  return <div className="library-split-divider" role="separator" aria-label={`调整第 ${index}、${index + 1} 栏宽度`} aria-orientation="vertical" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(ratio * 100)} tabIndex={0}
+  return <div className="library-split-boundary"><div className="library-split-divider" role="separator" aria-label={`调整第 ${index}、${index + 1} 栏宽度`} aria-orientation="vertical" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(ratio * 100)} tabIndex={0}
     onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); drag.current = { x: event.clientX, ...bounds(event.currentTarget) }; event.currentTarget.setPointerCapture(event.pointerId); }}
     onPointerMove={event => { const start = drag.current; if (start) resize((start.left + event.clientX - start.x) / start.total, start.total); }}
     onPointerUp={() => { drag.current = null; }} onPointerCancel={() => { drag.current = null; }} onLostPointerCapture={() => { drag.current = null; }}
@@ -77,7 +92,7 @@ function PaneDivider({ index, ratio, onResize }: { index: number; ratio: number;
       if (!["ArrowLeft", "ArrowRight", "Home"].includes(event.key)) return;
       event.preventDefault(); const { left, total } = bounds(event.currentTarget);
       resize(event.key === "Home" ? .5 : (left + (event.key === "ArrowLeft" ? -24 : 24)) / total, total);
-    }}/>;
+    }}/><button type="button" className="library-pane-insert library-filter-trigger" aria-label={`在第 ${index}、${index + 1} 栏之间分栏`} title="在此分栏" onClick={onSplit}><Columns2 size={15} aria-hidden="true"/></button></div>;
 }
 
 function HomePane({ pane, split, onSplit, onClose, onCreateProject, shortcutsEnabled }: {
@@ -89,11 +104,10 @@ function HomePane({ pane, split, onSplit, onClose, onCreateProject, shortcutsEna
   const mode = pane.mode(s => s.mode);
   const media = pane.mode(s => s.media);
   const active = useActiveLibraryPane(s => s.pane === pane);
-  const actions = <button className="library-filter-trigger" type="button" aria-label="向右分栏" title="向右复制当前素材库" onClick={onSplit}><Columns2 size={14} aria-hidden="true"/></button>;
   const navigation = <header className="library-browser-heading"><div className="library-floating-navigation">
     <LibrarySourceTabs value="global" onChange={() => pane.mode.getState().openSource("global")}/>
   </div></header>;
-  return <div ref={root} className="library-pane-content" data-library-pane={pane.id} data-active={active || undefined} tabIndex={-1}
+  return <div ref={root} className="library-pane-content" data-library-pane={pane.id} data-split={split || undefined} data-active={active || undefined} tabIndex={-1}
     onPointerDownCapture={() => useActiveLibraryPane.getState().activate(pane)} onFocusCapture={() => useActiveLibraryPane.getState().activate(pane)}
     onKeyDownCapture={event => {
       const state = useStore.getState(), target = event.target as HTMLElement;
@@ -102,10 +116,11 @@ function HomePane({ pane, split, onSplit, onClose, onCreateProject, shortcutsEna
         || document.querySelector('[role="dialog"], [role="menu"]') || target.isContentEditable || target.closest('input, textarea, select, [role="combobox"]')) return;
       event.preventDefault(); event.stopPropagation(); pane.mode.getState().toggleCatalog(); root.current?.focus({ preventScroll: true });
     }}>
-    <button type="button" className="library-pane-close library-filter-trigger" aria-label="关闭此栏" title={split ? "关闭此栏" : "至少保留一个素材库"} disabled={!split} onClick={onClose}><X size={15} aria-hidden="true"/></button>
-    {mode === "all" || mode === "tags" || mode === "collections"
-      ? <LibraryCatalogTransition key={media} kind={mode} media={media} positionId={pane.id} showEmptyTags={split} dropPreview={split} toolbarActions={actions} navigation={navigation}
-          onClose={() => pane.mode.getState().setOpen(false)} onCreateProject={onCreateProject}/>
-      : <LocalFileWorkspace toolbarActions={actions} navigation={navigation} onClose={() => pane.mode.getState().closeBrowser()} onCreateProject={onCreateProject}/>}
+    <div className="library-pane-actions">
+      {split ? <button type="button" className="library-pane-close library-filter-trigger" aria-label="关闭此栏" title="关闭此栏" onClick={onClose}><X size={15} aria-hidden="true"/></button>
+        : <button type="button" className="library-filter-trigger" aria-label="向右分栏" title="分栏" onClick={onSplit}><Columns2 size={15} aria-hidden="true"/></button>}
+    </div>
+    <LibraryCatalogTransition key={media} kind={mode === "all" || mode === "tags" ? mode : "collections"} media={media} positionId={pane.id} showEmptyTags={split} dropPreview={split} navigation={navigation}
+      onClose={() => pane.mode.getState().setOpen(false)} onCreateProject={onCreateProject}/>
   </div>;
 }

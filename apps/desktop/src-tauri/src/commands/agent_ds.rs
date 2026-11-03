@@ -823,7 +823,7 @@ pub async fn agent_ds_workflow_ingest_images(
 fn ingest_workflow_images(root: &Path, request_id: &str, paths: &crate::core::paths::LibraryPaths, db: &crate::db::Database) -> Result<Vec<crate::core::library::Asset>, AppError> {
     let images = workflow_result_images(root, request_id)?;
     // Exact-byte dedup makes recovery after a partial import idempotent.
-    images.iter().map(|path| crate::core::ingest::ingest_file(paths, db, path)).collect()
+    images.iter().map(|path| crate::core::ingest::ingest_new_file(paths, db, path)).collect()
 }
 
 fn read_workflow_result(root: &Path, request_id: &str) -> Result<Option<Value>, AppError> {
@@ -1322,7 +1322,7 @@ mod tests {
         assert!(ingest_workflow_images(&root, id, &paths, &db).is_err());
         assert_eq!(db.count_assets(None).unwrap(), 0);
         image::RgbImage::from_pixel(4, 3, image::Rgb([150, 60, 20])).save(images.join("two.png")).unwrap();
-        let partial = crate::core::ingest::ingest_file(&paths, &db, &images.join("one.png")).unwrap();
+        let partial = crate::core::ingest::ingest_new_file(&paths, &db, &images.join("one.png")).unwrap();
         let first = ingest_workflow_images(&root, id, &paths, &db).unwrap();
         let again = ingest_workflow_images(&root, id, &paths, &db).unwrap();
         assert_eq!(first[0].id, partial.id);

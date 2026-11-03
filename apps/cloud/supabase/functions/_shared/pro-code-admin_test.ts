@@ -29,6 +29,29 @@ Deno.test("issue validation bounds count, label and expiry", () => {
     assertThrows(() => issueParameters({ ...body, ...override }, now), ApiError);
   }
 });
+Deno.test("export preserves each voucher bonus without guessing legacy amounts", async () => {
+  const previous = Deno.env.get("PRO_CODE_ENCRYPTION_KEY");
+  Deno.env.set("PRO_CODE_ENCRYPTION_KEY", btoa("t".repeat(32)));
+  try {
+    const key = await codeEncryptionKey();
+    const rows = await Promise.all([800, 1100, undefined].map(async (bonus_credits) => {
+      const id = crypto.randomUUID();
+      return { id, bonus_credits, ciphertext: await encryptCode(key, id, "TEST-CODE"),
+        expires_at: "2027-01-01T00:00:00Z", batch_label: "isolated test" };
+    }));
+    const authenticate = async () => ({ user: { id: crypto.randomUUID(), app_metadata: { bowerbird_admin: true } },
+      admin: { rpc: () => Promise.resolve({ data: rows, error: null }) } }) as unknown as AuthContext;
+    const result = await handleCodeAdmin(new Request("https://example.test", { method: "POST",
+      body: JSON.stringify({ action: "export", batch_id: crypto.randomUUID() }) }), authenticate);
+    assertEquals(result.status, 200);
+    const { codes } = await result.json();
+    assertEquals(codes.map((row: { bonus_credits?: number }) => row.bonus_credits), [800, 1100, undefined]);
+    assertEquals(codes.every((row: Record<string, unknown>) => row.code === "TEST-CODE" && !("ciphertext" in row)), true);
+  } finally {
+    if (previous === undefined) Deno.env.delete("PRO_CODE_ENCRYPTION_KEY");
+    else Deno.env.set("PRO_CODE_ENCRYPTION_KEY", previous);
+  }
+});
 Deno.test("admin HTTP rejects callers before RPC and overrides supplied actor", async () => {
   const calls: unknown[] = [];
   const actor = crypto.randomUUID();

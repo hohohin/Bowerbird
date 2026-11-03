@@ -2,6 +2,46 @@
 
 本页集中维护自动更新的技术约定、发布操作和部署证据；[PROJECT.md](../PROJECT.md) 只保留项目级摘要及入口。更新代码、构建签名包、发布清单、排查双端差异前先读本页。
 
+## Windows 26.11.301 已发布（2026-11-03）
+
+2026-11-03 10:43:55（北京时间）本机公网复核通过。源码 **510e0cdd** 已与文档同次存档推送后冻结构建，发布LocalSend 局域网快传、素材库直接创作、Plate 放大文本工作区与画板文档卡、创作框 HUD 标签／开放框体／收起贴底、独立图片会话预览、任务铃铛与悬浮滚动条、探索视频流采集及历史、集合改名／断联删除、积分明细、视频自动模式及自有 CLI 音频参考、新建项目卡片。SQLite **0050**，插件 **0.3.1**；Cloud 音频参考 0079／Edge／Worker／网关未部署，桌面在创建音频任务前检测服务端能力并拒绝不支持的请求；DeepSeek Cloud 未启用。Mac 保持 ARM 801／Intel 1501，现有视频及赠币服务和 Mock 支付保持。
+
+TypeScript／Vite、Rust 1047 passed／29 ignored、23 组桌面专项、72 项前端测试及 29 项官网回归通过；1600 个冻结输入与 Git 核对、76 个资源（含 LocalSend 许可证与修改说明）、x64／双语安装器／更新登录保留钩子、原公钥验签及篡改拒绝、包内原生媒体／等待和生产 bundle 检查通过。Rust 测试仅向独立测试 EXE 副本嵌入 Common Controls v6 清单，正式构建未修改。未替用户安装／重启应用、迁移真实素材库或调用付费模型；用户库原生升级、真手机端到端、真实站点采集和 Mac 原生仍需各自验收。
+
+安装包 `Bowerbird_26.11.301_x64-setup.exe`：**87237827 bytes**，SHA-256 `a7668088080d5e35e043d1f0a90aab927cfdc87fe82ac88f1477d4a3f8d132b4`。TOS／CDN 完整回读、Range 206、CDN 包原公钥验签通过后才切更新。候选／现役／公网三平台清单、签名、双首页下载、旧包、后台及账号／Cloud 网关拒绝边界通过。
+
+现役 `/opt/bowerbird/website-releases/20261103-windows-26.11.301`，回滚 `/opt/bowerbird/website-releases/20261102-windows-26.11.202`；只改 Windows 下载与清单相关 5 个文件，82 个其他文件保持，后台、账号／Cloud 代理、Nginx、Mac 清单及旧包保留。
+
+证据：本机 `.tmp/release-windows-26.11.301/`，VPS `/tmp/bowerbird-release-windows-26.11.301/`；`rollback.sh` 恢复 202 官网，不自动降级客户端或回退账本。
+
+构建期间的后续 HUD 样式及关闭控件改动已另行提交为 `71604393` 并随源码推送，未进入此包。安装包的 1600 个冻结输入逐文件匹配 `510e0cdd`；不能把当前 dev 的后续提交视为本版产物。
+
+## Windows 26.11.202 已发布（2026-11-02）
+
+2026-11-02 19:18:08（北京时间）本机公网复核通过。源码 **50dfa646** 已与文档同次存档推送后冻结构建，完整发布工业主题与素材库／项目平级导航、连接式素材库与真实目录集合／分身／原件回收、文本 Plate 编辑与音频试听、统一视频播放／采集、截图历史与共用标注、跨应用拖出与 Pinterest 搜图、画布性能／建卡／文字编辑定位，保留 201 的注册／Pro 赠币展示及回执。SQLite **0050**，插件 **0.3.1**；DeepSeek Cloud 不部署不开启，Mac 保持 ARM 801／Intel 1501。现有 Cloud 视频及赠币服务开关不变，真实支付仍 Mock。
+
+TypeScript／Vite、Rust 967 passed／28 ignored、12 组桌面 Chromium 和官网网关回归通过；1366 个冻结输入与 Git 核对、74 个资源、x64／双语安装器／更新保留登录钩子、原公钥验签及篡改拒绝、包内原生媒体／等待和生产 bundle 检查通过。未替用户安装／重启应用或迁移真实素材库；用户库原生升级、跨应用／跨 WebView 真机体验、Mac 和真实模型质量仍待各自实机验收。
+
+安装包 `Bowerbird_26.11.202_x64-setup.exe`：**86336574 bytes**，SHA-256 `81ac0c3fd3d5b56e8b5157474b0c6ca52d529fec3c53481fed10a83d61f4c2f1`。TOS／CDN 完整回读、Range 206、CDN 包原公钥验签后才切换更新。候选／现役／公网三平台清单、签名、双首页下载、旧包、后台及账号／Cloud 网关拒绝边界通过。
+
+现役 `/opt/bowerbird/website-releases/20261102-windows-26.11.202`，回滚 `/opt/bowerbird/website-releases/20261102-bcoin-gifts-windows-26.11.201`；只改 Windows 下载与清单相关 5 个文件，82 个其他文件保持，赠币后台、账号／Cloud 代理、Nginx、Mac 清单及旧包保留。本轮没有部署迁移、Edge 或 Worker，没有创建真实模型任务。
+
+证据：本机 `.tmp/release-windows-26.11.202/`，VPS `/tmp/bowerbird-release-windows-26.11.202/`；`rollback.sh` 恢复 201 官网，不自动降级客户端或回退账本。
+
+## Windows 26.11.201 已发布（2026-11-02）
+
+北京时间 **09:36:15** 完成公网验收。基于公开 26.10.2801 的 **`be4a3f11427034dbe1af1d7a4f01f27935965430`** 冻结构建，只叠加 6 个赠币产品文件、3 个版本文件及 5 个测试／夹具：Plan 显示新注册 200、新订阅／续费每订阅月 800、年付 12 次及到账后 30 天有效；赠送积分分类、即时／未来兑换回执及 Rust 兼容字段同步。**SQLite 保持 0047**，没有夹带当前 dev 的工业主题、连接式素材库、DeepSeek Cloud 等后续增量。Mac ARM 26.10.801／Intel 26.10.1501 保持。
+
+1064 个冻结输入逐一与实际 Git blob／目标补丁核对，14 个目标文件变化，1050 个保持；精确补丁重放后哈希一致。冻结副本补回基线 Comfy manifest 后，Rust 权益 12 项、前端单元 4 项、账号／兑换／设置 3 组 Chromium、完整 TypeScript／Vite 与签名构建通过。首次缺失测试输入的失败日志保留，不计为通过。包内 70 个资源、PE x64／版本、NSIS 中文／English 与 UPDATE 保留登录钩子、原官网网关、新回执字段、正式 bundle 文案通过；独立复核再次验证原公钥签名及篡改拒绝。未执行安装器或生产应用。
+
+安装包 **`Bowerbird_26.11.201_x64-setup.exe`**：**84,934,286 bytes**；SHA-256 **`6d4cd50dba44c6bf4143e3d24e3d16ab51c8cdf1a05e380776d9076f14f30fa0`**。先发布到 TOS／CDN 不可变路径并核对完整下载哈希、Range 206、签名文件及 CDN 包原公钥验签，再切 Windows 更新清单和双首页下载。候选／现役／公网三平台清单、签名、下载配置、旧包、后台、账号与 Cloud 网关鉴权拒绝均通过。
+
+现役官网 **`/opt/bowerbird/website-releases/20261102-bcoin-gifts-windows-26.11.201`**，回滚 **`/opt/bowerbird/website-releases/20261102-bcoin-gifts-admin`**；实际更新 Windows 下载涉及的 5 个文件，后台保持本日已验证内容，80 个其他文件保留原 inode／哈希。环境配置仅改 Windows 下载 URL，账号／Cloud 代理、Nginx、Mac 和旧包保持。回滚脚本为 VPS `/tmp/bowerbird-bcoin-gifts-20261102/rollback-windows.sh`，保留新赠币后台并恢复 2801 更新清单，不自动降级已安装客户端，也不回退赠币账本。
+
+构建与范围证据在 `.tmp/bcoin-gifts-desktop-20261102/`（`source-manifest.json`、`release.patch`／`release-readable.patch`、`input-hashes.json`、`package-verification.json`、`evidence/independent-*-review.json`）；发布证据在 `.tmp/bcoin-gifts-rollout-20261102/`（CDN／签名核对、`site-prepared.json`、候选／现役／公网报告）。这是基线加精确补丁的隔离发布，不声称整个当前工作区都已上线；正式工作区版本文件保持原样，后续发版必须高于 26.11.201。
+
+Cloud 0078／两个接口／后台／真实 Cron 已配套上线，23 项真实隔离赠币检查通过，见 [Cloud 部署](../apps/cloud/DEPLOY.md#2026-11-02-注册及-pro-月度赠币已上线)。真实微信支付仍未开放。用户需要升级 Windows 包才能获得新固定文案；未替用户安装／重启、迁移真实素材库，旧客户端原生升级与 Mac 新界面仍需各自验收。
+
 ## Windows 26.10.2801 已发布（2026-10-28）
 
 2026-10-28 15:29:20（北京时间）完成公网验收。源码 **be4a3f11** 已存档推送 dev 后冻结构建，包含素材库分栏／Tactical 样式与多选、浏览器插件 0.2.0 与采集、连续瀑布流、本机图文对话／历史及受控建卡、常用素材／手动固定、HEIC／HEIF 导入、按区域拖放／粘贴、账号展示与微信回跳，以及 Cloud 生成／签名文件官网网关的 10054 修复。SQLite **0047**；独立复刻 Demo／只读 MCP 仅源码存档，不打入桌面包。Mac ARM 801／Intel 1501 保持，未部署 Edge／Worker、启用 Cloud 视频／价格或真实支付。
@@ -371,6 +411,8 @@ Mac `darwin-aarch64` 26.9.1901 更新包（mac 同步 dev `3f089bf` + 本地分�
 - 网络、哈希、验签通过只代表发布链路通过；双方都应补做原生升级验收。Mac 接续重点是 Intel 构建、Apple 签名/公证及旧版到新版替换重启，不再重复补已上线的路由。
 
 ## 客户端行为与代码入口
+
+**顶栏入口（2026-11-02，源码待发布）：** `SidebarAccount` 顶栏模式在 Bcoin 左侧预留 36px 图标位，有 `useAppUpdater.update` 时显示更新图标，未检测到新版则留空。按钮直达设置「关于我们」，沿用 `AppUpdateCard` 的下载／验签／安装保护；跳过启动提醒、下载失败或下载完成后仍保留入口。没有新增检测请求或轮询。验证见 [记录](../project_logs/2026-11-02-topbar-update.md)。
 
 **启动检测（Windows 26.9.1803 已发布；Mac 26.9.1901 发布说明包含此功能，原生验收待补）：** 应用初始化完成后，每次启动在后台检查一次。只有发现更高版本才弹出“发现新版本”，提供“立即更新”和“暂不更新”；前者开始下载，下载与验签完成后由用户确认“安装并重启”。跳过、关闭或 Esc 只影响本次运行，下次启动重新检查；已是最新版或自动检查失败时不弹窗，手动检查失败仍显示原因。不定时轮询、不自动下载或强制安装。
 

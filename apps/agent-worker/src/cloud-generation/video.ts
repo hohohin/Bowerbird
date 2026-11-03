@@ -11,15 +11,19 @@ import type { WorkerFetch } from "./runtime.ts";
 type Control = (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
 const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
 
-export async function probeVideo(bytes: Uint8Array, image = false): Promise<{ duration: number; width: number; height: number; fps: number }> {
+export async function probeVideo(bytes: Uint8Array, image: boolean | "audio" = false): Promise<{ duration: number; width: number; height: number; fps: number }> {
   const folder = await mkdtemp(join(tmpdir(), "bowerbird-video-probe-"));
   try {
     const path = join(folder, "video.mp4");
     await writeFile(path, bytes);
     const output = await new Promise<string>((resolve, reject) => {
-      execFile("ffprobe", ["-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries", "format=duration:stream=codec_type,width,height,avg_frame_rate", "-of", "json", path], { timeout: 30_000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout) => error ? reject(new Error("video_probe_failed")) : resolve(String(stdout)));
+      execFile("ffprobe", ["-v", "error", "-protocol_whitelist", "file,pipe", "-show_entries", "format=duration,format_name:stream=codec_type,width,height,avg_frame_rate", "-of", "json", path], { timeout: 30_000, maxBuffer: 1024 * 1024, windowsHide: true }, (error, stdout) => error ? reject(new Error("video_probe_failed")) : resolve(String(stdout)));
     });
     const info = JSON.parse(output);
+    if (image === "audio") {
+      if (!["wav", "mp3"].includes(info.format?.format_name) || !info.streams?.some((item: { codec_type?: string }) => item.codec_type === "audio") || !Number.isFinite(Number(info.format?.duration)) || Number(info.format.duration) <= 0) throw new Error("video_audio_probe_invalid");
+      return { duration: Number(info.format.duration), width: 0, height: 0, fps: 0 };
+    }
     const stream = info.streams?.find((item: { codec_type?: string }) => item.codec_type === "video");
     const [num, den] = String(stream?.avg_frame_rate).split("/").map(Number);
     const result = { duration: Number(info.format?.duration), width: Number(stream?.width), height: Number(stream?.height), fps: num / den };
@@ -85,12 +89,26 @@ export async function executeVideo(input: VideoInput, job: { id: string; leaseId
         if (totalSeconds > 30) throw new Error("video_reference_duration_limit");
         urls.push(signed.url);
       }
+      const audioUrls: string[] = [];
+      let audioSeconds = 0;
+      for (const reference of input.reference_audios ?? []) {
+        const signed = await control({ action: "video_input_url", ...identity, objectKey: reference.object_key, bytes: reference.bytes });
+        if (typeof signed.url !== "string") throw new Error("video_audio_url_invalid");
+        const bytes = await download(fetch, signed.url, reference.bytes);
+        if (bytes.length !== reference.bytes) throw new Error("video_audio_size_mismatch");
+        const info = await probe(bytes, "audio");
+        // Decoder gapless duration and MP3 container duration may differ; enforce actual bytes here.
+        if (!Number.isFinite(info.duration) || info.duration < 2 || info.duration > 30) throw new Error("video_audio_duration_invalid");
+        audioSeconds += info.duration;
+        if (audioSeconds > 30) throw new Error("video_audio_duration_limit");
+        audioUrls.push(signed.url);
+      }
       const heartbeat = await control({ action: "heartbeat", ...identity });
       if (heartbeat.cancelRequested) { await control({ action: "cancelled", ...identity }); return; }
       // Durable submitting boundary precedes the one and only chargeable POST.
       await control({ action: "submitted", ...identity });
       submitting = true;
-      taskId = await client.submit(input, urls);
+      taskId = await client.submit(input, urls, audioUrls);
       console.log(JSON.stringify({ event: "video_upstream_created", job_id: job.id, task_id: taskId, model: SEEDANCE_MODEL }));
       await control({ action: "submitted", ...identity, providerRequestId: taskId });
     }

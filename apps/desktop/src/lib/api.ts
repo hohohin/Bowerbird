@@ -190,6 +190,8 @@ export const api = {
     invoke<ProjectCreateResult>("create_project", { workspacePath }),
   createBlankProject: (name: string) =>
     invoke<ProjectCreateResult>("create_blank_project", { name }),
+  prepareLibraryGenerationProject: (projectId?: string | null) =>
+    invoke<Project>("prepare_library_generation_project", { projectId: projectId ?? null }),
   listProjects: () => invoke<Project[]>("list_projects"),
   setActiveProject: (projectId?: string | null) =>
     invoke<void>("set_active_project", { projectId: projectId ?? null }),
@@ -280,12 +282,14 @@ export const api = {
     fileName?: string | null;
     projectId?: string | null;
     source: string;
+    videoFrame?: { sourcePath: string; time: number };
   }) =>
     invoke<Asset>("import_image_bytes", {
       dataUrl: req.dataUrl,
       fileName: req.fileName ?? null,
       projectId: req.projectId ?? null,
       source: req.source,
+      videoFrame: req.videoFrame ?? null,
     }),
   // 图片标注「保存到素材库」：入库 + 坐标元数据落 analyses(kind=annotation)，跳过 auto-analyze。
   saveAnnotatedImage: (req: {
@@ -474,10 +478,15 @@ export const api = {
     invoke<CreationPack>("assemble_pack", { assetIds }),
   openSourceBrowser: (url: string, bounds: SourceBrowserBounds) =>
     invoke<void>("open_source_browser", { url, bounds }),
+  startPinterestImageSearch: (assetId: string, requestId: string) =>
+    invoke<void>("start_pinterest_image_search", { assetId, requestId }),
+  cancelPinterestImageSearch: (requestId: string) =>
+    invoke<void>("cancel_pinterest_image_search", { requestId }),
   resizeSourceBrowser: (bounds: SourceBrowserBounds, visible?: boolean, dimmed?: boolean) =>
     invoke<void>("resize_source_browser", { bounds, visible, dimmed }),
-  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null, dragId?: string) =>
-    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId, ...(dragId ? { dragId } : {}) }),
+  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null, dragId?: string, mediaKind?: "image" | "video", captureId?: string) =>
+    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId, ...(dragId ? { dragId } : {}), ...(mediaKind ? { mediaKind } : {}), ...(captureId ? { captureId } : {}) }),
+  cancelSourceBrowserCapture: (captureId: string) => invoke<boolean>("cancel_source_browser_capture", { captureId }),
   claimSourceBrowserAnalysis: (dragId: string, imageUrl: string, pageUrl: string) =>
     invoke<boolean>("claim_source_browser_analysis", { dragId, imageUrl, pageUrl }),
   releaseSourceBrowserAnalysis: (dragId: string) => invoke<void>("release_source_browser_analysis", { dragId }),

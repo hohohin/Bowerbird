@@ -23,7 +23,14 @@ export function RedeemCodeCard() {
       setCode("");
       const end = new Date(result.period_end).toLocaleDateString("zh-CN");
       const creditEnd = new Date(result.credits_expires_at).toLocaleDateString("zh-CN");
-      setMessage(`${result.already_redeemed ? "此码已兑换成功，未重复发放。" : "兑换成功！"}本次兑换后 Pro 到期日：${end}。${result.credits > 0 ? `按旧码承诺发放 ${result.credits} Bcoin，有效期至 ${creditEnd}。` : "本兑换码不含 Bcoin。"}${result.entitlement ? "" : "权益暂未同步，请点击上方「刷新权益」。"}`);
+      const credits = [];
+      if (result.credits > 0) credits.push(`${result.already_redeemed ? "原到账" : "到账"} ${result.credits} Bcoin，有效期至 ${creditEnd}。`);
+      if ((result.scheduled_credits ?? 0) > 0 && result.credits_scheduled_at) {
+        const scheduledAt = new Date(result.credits_scheduled_at).toLocaleDateString("zh-CN");
+        credits.push(`${result.already_redeemed ? "原安排" : "已安排"} ${result.scheduled_credits} Bcoin 于 ${scheduledAt} 到账，到账后 30 天有效。`);
+      }
+      if (!credits.length) credits.push("本次暂无 Bcoin 到账。");
+      setMessage(`${result.already_redeemed ? "此码已兑换成功，未重复发放。" : "兑换成功！"}本次兑换后 Pro 到期日：${end}。${credits.join("")}${result.entitlement ? "" : "权益暂未同步，请点击上方「刷新权益」。"}`);
     } catch (error) {
       setFailed(true);
       setMessage(userErrorMessage(error, "兑换请求未完成，请使用同一码重试。"));

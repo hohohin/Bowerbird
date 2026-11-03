@@ -12,6 +12,8 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/VIDEO-API-INTEGRATION.md` | 国内方舟视频 Cloud 实现、恢复/结算、离线验收与 CLI 前置归因 | 接续视频 API 接入、核验 2.5 模型与异步任务/计费边界时必读 |
 | `dev-doc/VIDEO-API-INTEGRATION-V3.md`、`dev-doc/VIDEO-API-INTEGRATION-V3.json` | 视频与 FFmpeg 历史集成、0058 迁移归属及阶段哈希 | 追溯 9 月 6 日集成；当前部署/回滚读 VIDEO-API-INTEGRATION.md |
 | `dev-doc/FOLDER-MODE.md` | 文件优先工作区、独立分类、随图资料恢复、BowerbirdLibrary/历史素材迁移及共享文件转存 | 本机目录、文件夹分类、随图资料、资料迁移或项目删除文件归属相关工作前必读 |
+| `dev-doc/QUICK-TRANSFER.md` | LocalSend 局域网扫码接收、原件持久化、入库恢复、权限边界与验证 | 手机／其他设备快传、LocalSend 接入或局域网接收相关工作前必读 |
+| `dev-doc/EXTERNAL-DRAG.md` | 素材库／画布拖出、原件解析、Windows OLE 与 Mac AppKit 适配及验收边界 | 跨应用文件拖动、菜单抓起或内部拖动兼容相关工作前必读 |
 | `dev-doc/LOCAL-CLASSIFICATION.md` | 自动分类、Jev 图片匹配与 Cloud 补标签、本地模型包、人工保护与验证记录 | 自动/本地分类、Jev 图片判断、自动标签、分类模型下载与运行时相关工作前必读 |
 | `dev-doc/EMBEDDED-BROWSER.md` | 探索内置浏览器、登录资料持久化、网页拖图入库/画板落点、素材栏折叠与隔离 WebView2 验证 | 内置浏览器、探索工作区、网页拖图、探索联动画板素材栏与登录状态相关工作前必读 |
 | `apps/extension/README.md` | 浏览器插件安装／更新、探索页配置入口、浏览器取图与本机入库协议、独立副本及隔离测试 | 浏览器插件采集、配置教程、扩展打包或 Windows 独立加载副本相关工作前必读 |
@@ -19,8 +21,11 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/DESKTOP-UPDATES.md` | 双端自动更新协议、密钥与发布流程、部署/回滚证据、验收边界及 Mac 协作共识 | 自动更新、更新包签名/清单发布、更新失败或双端上线状态核验前必读 |
 | `dev-doc/USER-FACING-ERRORS.md` | 全应用错误提示展示边界、中文转换、诊断保留与故障注入验证 | 新增或修改错误提示、任务失败展示、通知、安装授权及生产错误排查前必读 |
 | `PROJECT.md` | **活文档（项目内容唯一权威）**：项目说明 / 目前进展 / 关键约定 / 踩坑记录 | 每次开工前先读「目前进展」与「关键约定」 |
+| `project_logs/README.md` | PROJECT 详细历史的日期日志、2026-10-31 整理前原件、行号与哈希索引及审计处理记录 | 追溯被替代约定、完整故障过程或本次文档整理时；现行结论仍读 PROJECT.md |
+| `dev-doc/UI-DESIGN-SPEC.md` | 当前工业制图视觉与交互规范、深浅色 tokens、卡片／控件／菜单／动效及验收规则 | 设计、修改或审查任何桌面界面前读；产品决策与实装状态仍以 PROJECT.md 为准 |
 | `apps/code-reader-mcp/README.md` | GPT 网页端只读代码 MCP、脱敏快照、Node 权限限制与官方私有 HTTPS 隧道接入 | 代码只读分享、快照更新、MCP 接入或撤销权限前必读 |
 | `dev-doc/Bowerbird开发计划.md` | 当前架构与代码入口（技术栈 / 数据身份 / 生成与理解 provider），已合并旧 provider 草案 | 任何实现工作之前必读；产品决策以 PROJECT.md 为准 |
+| `dev-doc/Bowerbird开发计划.md#复用地图` | 按用途查找 UI、桌面逻辑与服务接口；分类页记录源码、调用、依赖边界及覆盖缺口 | 新增功能或 UI 前先查，再核实当前源码与调用方式 |
 | `dev-doc/Bowerbird定价方案v2-订阅积分制.md` | Bcoin 当前定价、Pro 功能订阅、价格快照、迁移／回退与验证边界；末尾保留历史 v2 草案 | 商业化、定价、积分、功能门控相关工作前必读 |
 | `dev-doc/ARCH-ADJUST-PLAN.md` | 收费化架构调整开发计划（账号 / 积分 / 托管 provider / 支付 / 门控，P0–P9 阶段任务卡 + 验收标准；agent 执行用） | 收费化 / 账号 / 积分 / 云端任何实现工作前必读 |
 | `dev-doc/ARCH-ADJUST-PROGRESS.md` | 收费化当前进度、最近部署证据入口与剩余验收 | 接续收费化任务或核对已记录线上基线时必读 |
@@ -32,21 +37,26 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/HTML-RENDER-PLAN.md` | 受限 HTML 离线排版、整页/切片截图、独立 renderer 容器与内置 Skill 接入开发计划（H0–H6） | HTML 排版/截图、Chromium/Playwright renderer、`render_html` 工具或第二个官方 Skill 实现前必读 |
 | `dev-doc/PROJECT-CANVAS-PLAN.md` | **项目即画板当前专项**（一项目一块无限画板 / 项目内多创作线程 / 普通生成与 Agent Run 归属 / 历史合并，PB0–PB7） | 画板、项目、创作入口、生成时间线、版本分支、历史迁移或相关 SQLite 模型实现前必读；当前执行权威 |
 | `dev-doc/CANVAS-WORKFLOW.md` | 画板工作流卡片、发条起点、端口、持久化与执行恢复契约及验收边界 | 指令/生成/技能卡片、工作流编排或运行恢复相关工作前必读 |
+| `dev-doc/CHAT-PROVIDERS.md` | 对话 provider、本机 Codex／DeepSeek Cloud、零价 Bcoin 测试、恢复与验证记录 | 对话模型选择、Cloud 聊天、原请求取回或相关计费工作前必读 |
 | `dev-doc/进展归档.md` | PROJECT.md「目前进展」历史里程碑全量归档（append-only 只进不改；PROJECT.md 只留最近 3 条） | 追溯旧里程碑 / 查历史实现细节时 |
 | `dev-doc/研究报告-服务器化CLI与API化改造可行性.md` | 服务器套壳 CLI vs 官方 API 可行性结论（推荐火山方舟官方 API） | 托管算力 / 远程化方向决策前必读 |
 | `dev-doc/LAYER-EDITING.md` | Seedream 5.0 Pro 分层编辑、独立面板、本地工程、Cloud 图层包与隔离验证 | 分层拆分、透明图层修改、图层工程保存或分层服务启价前必读 |
 | `dev-doc/PHOTOSUITE-DRAFT-RESEARCH.md` | PhotoSuite / PhotoSplice 画笔与交互源码研究、草稿现状差距及最简 PS 分期建议 | 追溯草稿编辑器设计依据时读；当前实现读 DRAFT-EDITOR.md |
 | `dev-doc/DRAFT-EDITOR.md` | 最简草稿编辑器、画笔压感／惯性、图层／文字／自由选区／颜色板、工程快照、画板重试与隔离验证 | 新建草稿、画笔内核、草稿工程保存或删除清理相关工作前必读 |
 | `dev-doc/SEEDANCE-2.5-INTEGRATION.md` | 即梦 Seedance 2.5 视频接入、官方 CLI 四模式契约与验收证据 | 视频生成、参数、任务恢复、视频入库与播放相关工作前必读 |
+| `dev-doc/VIDEO-MEDIA.md` | 统一播放器、悬停预览、截帧来源、独立抖音／直链采集及验证 | 视频浏览、播放、截帧或独立采集相关工作前必读 |
 | `dev-doc/VIDEO-REPLICATION.md` | 画板工具箱、视频分析与改写、插入画板生成、抖音获取、Cloud 独立计费与验证 | 视频复刻、抖音参考视频获取或分析/改写启价相关工作前必读 |
 | `spikes/video-replication-demo/README.md` | 应用外复刻 Demo 的启动、豆包语音、Codex 分镜、本机即梦订阅、零视频输入与字幕合成恢复 | 接续抖音→转写及视觉分析→替换分镜文本／图片→生成合成的独立路径验证前必读 |
 | `dev-doc/FILMCRAFT-RESEARCH.md` | FilmCraft 剪辑交互、时间线、变速、音频波形源码调研及 Bowerbird 轻剪辑建议（未定案） | 轻量视频剪辑方案、时间模型、波形缓存或 FilmCraft 复用评估前读 |
+| `dev-doc/AUDIO-LIBRARY.md` | 音频素材原位连接、流式波形缓存、共享播放器、正式组件与隔离验证 | 音频收集、波形、试听交互或音频格式支持相关工作前必读 |
+| `dev-doc/TEXT-LIBRARY.md` | 文本原位连接、Plate 正文／源码、媒资引用、冲突保存及验证边界 | 文本文件支持、文档编辑、Markdown 转换或原件保存相关工作前必读 |
 | `dev-doc/COMFYUI-LOCAL-VIDEO.md` | 本机 ComfyUI H3 视频卡片、环境检测与一键安装、固定工作流参数、账号门控、任务恢复与隔离验证 | 本机 H3 视频、首尾帧或 ComfyUI 接入/安装相关工作前必读 |
 | `dev-doc/Eagle类创意收集工具调查报告.html` | 前序竞品调研，计划的依据 | 需要背景/对标时 |
 | `reference/theory.md` | 早期素材分类（A–F 类）草稿 | 仅在追溯原始意图时 |
 | `dev-doc/桌面端UI设计.html` | 早期三区外壳与创作板设计稿 | 仅作设计背景；当前 UI 契约读 PROJECT.md 与对应专项 |
 | `dev-doc/ui-studies/library-tactical-2026-10-26/README.md` | 素材库实装前样式、Tactical 确认稿、独立冻结预览及增量撤回补丁 | 恢复素材库旧样式、复现确认稿或核对本次接入范围时 |
 | `dev-doc/ui-studies/library-selection-2026-10-26/README.md` | 素材多选动效确认稿、独立预览、共用组件接入及验证记录 | 调整素材多选标记、核对图片边界／动效或恢复确认稿时 |
+| `dev-doc/ui-studies/library-connections-2026-10-31/README.md` | 建立连接与真实文件夹集合的确认稿、正式组件隔离预览和验证入口 | 接续连接式素材库、目录集合和 `.bowerbird` 分身改造时 |
 | `dev-doc/ui-studies/industrial-hud-2026-10-29/README.md` | 工业制图主题实装、旧版源码与冻结预览、可逆恢复补丁 | 恢复实装前样式、核对工业制图主题接入范围与深浅色验证时 |
 | `Windows/README.md` | Windows x64 开发、构建 NSIS 安装包与环境要求 | Windows 运行 / 打包前 |
 | `Windows/MAC-SYNC-2026-10-16.md` | Windows 接收 mac@300124d 的差异、0034/分类/工作流/截图同步与验证 | 接续本轮 Mac 同步、核对 Windows 平台保留项及未发版边界时 |
@@ -61,6 +71,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `macOS/DEV-SYNC-2026-10-19.md` | Windows dev 文件优先工作区、素材导航、分类／视频增量的 Apple Silicon 接收与系统路径别名修复 | 接续 10 月 19 日 M 系列 Mac 同步、核对 SQLite 0040 与 ARM64 验证边界时 |
 | `macOS/DEV-SYNC-2026-10-22.md` | Windows 2201 共享增量的 Apple Silicon 接收、H3 暂缓清单与验证 | 接续本轮 Mac 同步、恢复 H3 增量或核对 SQLite 0042 与本机颜色缓存保留时 |
 | `macOS/DEV-SYNC-2026-10-25.md` | Windows 2202–2401 共享增量的 Apple Silicon 接收、H3 延续暂缓与工作流异步授权兼容修复 | 接续 10 月 25 日同步、恢复 H3 或核对 SQLite 0045、Bcoin／Pro 门控与原生媒体验证时 |
+| `macOS/DEV-SYNC-2026-11-03.md` | 连接目录、文本工作区、媒体／快传与 HUD 的 Apple Silicon 接收，H3 延续暂缓及隔离验证 | 接续本轮同步、核对 SQLite 0050、Mac 原生接缝和未发布边界时 |
 | `macOS/DEV-SYNC-2026-10-31.md` | 工业主题、常用素材／HEIC、分区建卡、图片中继与恢复的 Apple Silicon 接收，H3 延续暂缓 | 接续 10 月 31 日同步、核对 CLI v3、输入重新编号及隔离验证边界时 |
 | `macOS/DEV-SYNC-2026-10-28.md` | Windows 素材分栏／本机对话／受控建卡的 Apple Silicon 接收、H3 暂缓及 CLI 版本前提 | 接续 10 月 28 日同步、核对 SQLite 0047、独立同步工作区及原生验收边界时 |
 | `macOS/README.md` | Intel / Apple Silicon 开发运行、DMG 固定拖动安装规范、重打包脚本与交付检查 | macOS 开发 / 构建 / 重打包 / 交付 / 排障前必读 |
@@ -97,6 +108,14 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 ## Working principles
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+
+### 复用检查
+
+- 涉及新增功能或 UI 时，先查[复用地图](dev-doc/Bowerbird开发计划.md#复用地图)，再核实当前源码、导出入口和实际调用方式。
+- 地图未收录不代表仓库不存在；仍须按相关功能词和同义词跨板块检索，不限于 `shared`、`common` 或 `lib` 目录。
+- 实现前简要说明相关候选路径、复用决定，以及确需新建的原因。
+- 优先使用合适的公共接口，遵守模块和运行时依赖边界；不强行抽象，不直接跨模块导入内部专用实现。
+- 修改公共实现后检查现有调用方；新增、迁移或废弃公共能力时同步更新地图。
 
 ### 1. Think Before Coding
 

@@ -26,6 +26,30 @@ function fixture(options: { failSave?: boolean; timeout?: boolean; status?: stri
 }
 const probe = async () => ({ duration: 4, width: 864, height: 480, fps: 24 });
 
+test("audio is downloaded and probed before one submission; invalid duration never submits", async () => {
+  for (const duration of [4, 4.08, 31]) {
+    const value = input(); value.video_options.kind = "multimodal2video";
+    value.reference_audios = [{ object_key: "jobs/local/inputs/audio-0.mp3", bytes: 4, mime: "audio/mpeg", duration: 4 }];
+    const f = fixture(); const modes: unknown[] = []; let posted: Record<string, unknown> | undefined;
+    await executeVideo(value, { id: "local", leaseId: "lease" }, "fake", async body => {
+      if (body.action === "video_input_url") { f.actions.push(body); return { url: "https://storage.example/audio" }; }
+      return f.control(body);
+    }, async (url, request) => {
+      if (request?.method === "POST") posted = JSON.parse(String(request.body));
+      return f.fetch(url, request);
+    }, async (_bytes, mode) => { modes.push(mode); return { ...await probe(), duration }; });
+    assert.deepEqual(modes, ["audio"]);
+    if (duration < 30) {
+      assert.deepEqual(f.http.map(call => call.method), ["GET", "POST", "GET"]);
+      assert.equal(posted?.generate_audio, true);
+      assert.deepEqual((posted?.content as Array<{ type: string }>).map(item => item.type), ["text", "audio_url"]);
+    } else {
+      assert.deepEqual(f.http.map(call => call.method), ["GET"]);
+      assert.equal(f.actions.at(-1)?.action, "fail");
+    }
+  }
+});
+
 test("durable submit boundary precedes exactly one POST; pending result defers", async () => {
   const f = fixture();
   await executeVideo(input(), { id: "local", leaseId: "lease" }, "fake", f.control, f.fetch, probe);

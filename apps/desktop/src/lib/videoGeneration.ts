@@ -1,4 +1,6 @@
 import type { Asset } from "./types";
+import { isAudioPath } from "./audioMedia.ts";
+import { isTextPath } from "./textMedia.ts";
 
 export type GenerationMedia = "image" | "video";
 export interface VideoOptions {
@@ -48,10 +50,23 @@ export function cloudVideoOptions(options: VideoOptions): VideoOptions {
 export function isVideoPath(path?: string | null): boolean {
   return !!path && /\.(mp4|mov|webm|m4v|avi|mkv)(?:[?#].*)?$/i.test(path);
 }
+function isVideoImagePath(path?: string | null): boolean {
+  return !!path && /\.(png|jpe?g|webp|bmp)(?:[?#].*)?$/i.test(path);
+}
+/** Only first/last frames is an explicit choice; other modes follow the current inputs. */
+export function resolveVideoOptions(options: VideoOptions, references: readonly Pick<Asset, "store_path">[]): VideoOptions {
+  const kind = options.kind === "frames2video" ? "frames2video"
+    : references.length === 0 ? "text2video"
+    : references.length === 1 && isVideoImagePath(references[0].store_path) ? "image2video"
+    : "multimodal2video";
+  return { ...options, kind };
+}
 /** Match the submitted original file, never its thumbnail or source video's metadata. */
 export function imageInputError(references: readonly Pick<Asset, "name" | "store_path">[]): string | null {
-  const index = references.findIndex(asset => isVideoPath(asset.store_path));
+  const index = references.findIndex(asset => isVideoPath(asset.store_path) || isAudioPath(asset.store_path) || isTextPath(asset.store_path));
   if (index < 0) return null;
+  if (isTextPath(references[index].store_path)) return `第 ${index + 1} 个参考「${references[index].name}」是文本文件，不能作为图片参考。请在素材库中打开编辑。`;
+  if (isAudioPath(references[index].store_path)) return `第 ${index + 1} 个参考「${references[index].name}」是音频，不能用于图片生成。请替换为图片。`;
   return `第 ${index + 1} 个参考「${references[index].name}」是视频，不能用于图片生成。请替换为图片，或先从视频中截取所需画面再引用。`;
 }
 export function videoSupportsRatio(options: VideoOptions): boolean {
@@ -73,16 +88,21 @@ export function videoInputError(options: VideoOptions, references: readonly Pick
   if (references.some((asset) => !asset.store_path)) return "参考素材尚未就绪，请重新选择";
   const videos = references.filter((asset) => isVideoPath(asset.store_path));
   if (cloud && videos.some(asset => !/\.(mp4|mov)$/i.test(asset.store_path ?? ""))) return "方舟视频参考仅支持 MP4 / MOV";
-  const images = references.filter((asset) => /\.(png|jpe?g|webp|bmp)(?:[?#].*)?$/i.test(asset.store_path ?? ""));
-  if (images.length + videos.length !== references.length) return "视频参考仅支持 PNG、JPEG、WebP、BMP 图片及视频，不支持音频";
+  const images = references.filter((asset) => isVideoImagePath(asset.store_path));
+  const audios = references.filter((asset) => isAudioPath(asset.store_path));
+  if (audios.some(asset => !/\.(mp3|wav)(?:[?#].*)?$/i.test(asset.store_path ?? ""))) return "参考音频仅支持 MP3 / WAV，请先转换格式";
+  if (images.length + videos.length + audios.length !== references.length) return "视频参考仅支持图片、视频及 MP3 / WAV 音频，不支持文本文件";
   switch (options.kind) {
     case "text2video": return references.length ? "文生视频不使用参考素材，请移除素材或切换生成模式" : null;
-    case "image2video": return images.length === 1 && !videos.length ? null : "单图生视频需要且只能选择 1 张图片";
-    case "frames2video": return images.length === 2 && !videos.length ? null : "首尾帧模式需要 2 张图片，按编辑框顺序分别作为首帧、尾帧";
+    case "image2video": return images.length === 1 && !videos.length && !audios.length ? null : "单图生视频需要且只能选择 1 张图片";
+    case "frames2video": return images.length === 2 && !videos.length && !audios.length ? null : "首尾帧模式需要 2 张图片，按编辑框顺序分别作为首帧、尾帧";
     case "multimodal2video": {
-      if (!references.length) return "多参考模式至少需要 1 张图片或 1 个视频";
+      if (!references.length) return "多参考模式至少需要 1 个参考素材";
       const is25 = options.model_version === "seedance2.5";
-      if (images.length > (is25 ? 30 : 9) || videos.length > (is25 ? 10 : 3)) return `多参考模式最多使用 ${is25 ? 30 : 9} 张图片和 ${is25 ? 10 : 3} 个视频`;
+      if (!is25 && !images.length && !videos.length) return "此模型的音频参考须搭配图片或视频；纯音频请选择 Seedance 2.5";
+      if (images.length > (is25 ? 30 : 9) || videos.length > (is25 ? 10 : 3) || audios.length > (is25 ? 10 : 3) || references.length > (is25 ? 50 : 12)) return `多参考最多 ${is25 ? 30 : 9} 张图片、${is25 ? 10 : 3} 段视频、${is25 ? 10 : 3} 段音频，合计 ${is25 ? 50 : 12} 个素材`;
+      if (audios.some(asset => asset.duration != null && (!Number.isFinite(asset.duration) || asset.duration < 2 || asset.duration > max))) return `每段参考音频须为 2–${max} 秒`;
+      if (audios.reduce((total, asset) => total + (asset.duration ?? 0), 0) > max) return `参考音频总时长不能超过 ${max} 秒`;
       if (videos.some((asset) => asset.duration != null && (asset.duration < 2 || asset.duration > max))) return `每段参考视频须为 2–${max} 秒`;
       if (videos.reduce((total, asset) => total + (asset.duration ?? 0), 0) > max) return `参考视频总时长不能超过 ${max} 秒`;
       return null;

@@ -1,0 +1,24 @@
+.media-hover-mark { display:none; position:absolute; pointer-events:none; color:var(--lt-ink, var(--bb-ink)); z-index:2; }
+@media (hover:hover) and (pointer:fine) {
+  .canvas-plane .media-hover-mark { display:block; }
+  .library-tactical.library-motion-root:not([data-library-dragging]) .folder-media-card:not(.is-selected):hover > .media-hover-mark { display:block; }
+}
+.media-hover-mark svg { display:block; width:100%; height:100%; overflow:visible; }
+.media-hover-mark path { fill:none; stroke:currentColor; stroke-width:1; vector-effect:non-scaling-stroke; opacity:0; stroke-dasharray:1 1; stroke-dashoffset:-1; animation:media-hover-ray 420ms cubic-bezier(.65,0,.35,1) both; }
+.media-hover-mark::before, .media-hover-mark::after { content:""; position:absolute; width:var(--media-hover-point-size, 4.8px); height:var(--media-hover-point-size, 4.8px); background:currentColor; translate:-50% -50%; animation:media-hover-appear 24ms linear 240ms both, media-hover-blink 150ms steps(1,end) 270ms forwards; }
+.media-hover-mark::before { left:100%; top:0; }
+.media-hover-mark::after { left:0; top:100%; }
+@keyframes media-hover-ray {
+  0% { stroke-dasharray:0 1; stroke-dashoffset:0; opacity:.65; }
+  57.142857%,64.285714% { stroke-dasharray:1 1; stroke-dashoffset:0; }
+  99.999% { opacity:.65; }
+  100% { stroke-dasharray:1 1; stroke-dashoffset:-1; opacity:0; }
+}
+@keyframes media-hover-appear { from { opacity:0; } to { opacity:1; } }
+@keyframes media-hover-blink { 0%,50% { opacity:.15; } 25%,75%,100% { opacity:1; } }
+[data-library-motion-paused="true"] .media-hover-mark path { animation:none; }
+@media (prefers-reduced-motion:reduce) { .media-hover-mark path, .media-hover-mark::before, .media-hover-mark::after { animation:none; } }
+@media (forced-colors:active) { .media-hover-mark { display:none !important; } }
+
+.canvas-plane :is(.is-selected, .is-moving, [inert]) .media-hover-mark { display:none; }
+.canvas-conversation-images:has(> .media-hover-mark) { overflow:visible; }

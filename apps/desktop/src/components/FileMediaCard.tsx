@@ -1,12 +1,20 @@
 import { useEffect, useRef, useState, type DragEventHandler, type CSSProperties } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import { Folder, Image, Play, Sparkles } from "lucide-react";
 import { externalFiles, type LocalFileEntry } from "../lib/externalFiles";
 import { createFilePreviewQueue } from "../lib/filePreviewQueue";
 import { isVideoPath } from "../lib/videoGeneration";
 import { LibrarySelectionMark } from "./LibrarySelectionMark";
+import { MediaHoverMark } from "./MediaHoverMark";
+import { VideoHoverPreview, videoDurationLabel } from "./VideoHoverPreview";
+import { isAudioPath } from "../lib/audioMedia";
+import { AudioFileMediaCard } from "./AudioFileMediaCard";
+import { isTextPath } from "../lib/textMedia";
+import { TextFileMediaCard } from "./TextFileMediaCard";
+import { getDragAssets, isNativeAssetDrag } from "../lib/dragPayload";
+import { startExternalDrag } from "../lib/externalDrag";
 const previews = createFilePreviewQueue(externalFiles.preview);
-export function FileMediaCard({ entry, selected, revision, labels, onSelect, onActivate, onOpen, onContextMenu, aspectRatio, assetId, generated = false, onDragStart, onDragEnd, style }: {
+export type FileMediaCardProps = {
   entry: LocalFileEntry; selected: boolean; revision: number; labels: string[];
   onSelect: (additive: boolean, range: boolean) => void; onOpen: () => void;
   onActivate?: () => void;
@@ -14,18 +22,42 @@ export function FileMediaCard({ entry, selected, revision, labels, onSelect, onA
   aspectRatio?: number;
   style?: CSSProperties;
   generated?: boolean;
-  assetId?: string; onDragStart?: DragEventHandler<HTMLButtonElement>; onDragEnd?: DragEventHandler<HTMLButtonElement>;
-}) {
+  duration?: number | null;
+  expectedVersion?: string;
+  assetId?: string; onDragStart?: DragEventHandler<HTMLElement>; onDragEnd?: DragEventHandler<HTMLElement>;
+};
+export function FileMediaCard(props: FileMediaCardProps) {
+  const onDragStart: DragEventHandler<HTMLElement> | undefined = props.onDragStart && (event => {
+    if (isNativeAssetDrag()) { event.preventDefault(); return; }
+    props.onDragStart?.(event);
+    const ids = getDragAssets();
+    // Draft layers use the existing in-window drag payload and must not enter OS file drag.
+    if (event.defaultPrevented || event.currentTarget.closest("[data-draft-library]") || !isTauri() || props.entry.directory || !props.assetId || !ids?.length) return;
+    event.preventDefault();
+    void startExternalDrag(ids, "hold");
+  });
+  return !props.entry.directory && isTextPath(props.entry.path)
+    ? <TextFileMediaCard {...props} onDragStart={onDragStart}/>
+    : !props.entry.directory && isAudioPath(props.entry.path)
+    ? <AudioFileMediaCard {...props} onDragStart={onDragStart}/>
+    : <VisualFileMediaCard {...props} onDragStart={onDragStart}/>;
+}
+function VisualFileMediaCard({ entry, selected, revision, labels, onSelect, onActivate, onOpen, onContextMenu, aspectRatio, assetId, generated = false, onDragStart, onDragEnd, style, duration }: FileMediaCardProps) {
   const ref = useRef<HTMLButtonElement>(null);
+  const [hovered, setHovered] = useState(false);
   const clickTimer = useRef<number>();
   function cancelClick() { window.clearTimeout(clickTimer.current); clickTimer.current = undefined; }
   useEffect(() => cancelClick, [entry.path, onActivate === undefined]);
   const previewKey = `${entry.path}:${entry.version ?? revision}`;
+  const video = !entry.directory && isVideoPath(entry.path);
+  const durationLabel = video ? videoDurationLabel(duration) : null;
   const [preview, setPreview] = useState<string | null>(() => entry.preview ?? previews.peek(previewKey) ?? null);
   const [failedPreview, setFailedPreview] = useState<string | null>(null);
+  // SVG and other directly displayed originals keep their path after an edit.
+  const source = preview ? convertFileSrc(preview) + (preview === entry.path && !preview.startsWith("data:") ? `?preview=${encodeURIComponent(entry.version ?? revision)}` : "") : "";
   useEffect(() => {
     if (entry.directory) return;
-    const cached = (entry.preview !== failedPreview ? entry.preview : null) ?? previews.peek(previewKey);
+    const cached = (`${previewKey}:${entry.preview}` !== failedPreview ? entry.preview : null) ?? previews.peek(previewKey);
     if (cached) { previews.remember(previewKey, cached); setPreview(cached); return; }
     let alive = true; let priority = 1;
     let request: ReturnType<typeof previews.request> | undefined;
@@ -45,6 +77,7 @@ export function FileMediaCard({ entry, selected, revision, labels, onSelect, onA
     return () => { alive = false; request?.cancel(); visible.disconnect(); observer.disconnect(); };
   }, [entry.path, entry.directory, entry.preview, previewKey, failedPreview]);
   return <button ref={ref} type="button" style={style} data-positioned={style ? "true" : undefined} className={`folder-media-card${selected ? " is-selected" : ""}`} aria-pressed={selected}
+    onPointerEnter={event => { if (event.pointerType !== "touch") setHovered(true); }} onPointerLeave={() => setHovered(false)}
     data-asset-id={assetId} data-file-path={!entry.directory ? entry.path : undefined} draggable={!!onDragStart} onDragStart={event => { cancelClick(); onDragStart?.(event); }} onDragEnd={onDragEnd}
     aria-label={entry.directory ? `文件夹 ${entry.name}` : entry.name} title={[entry.path, labels.map(name => `#${name}`).join(" · ")].filter(Boolean).join("\n")}
     onClick={e => {
@@ -62,11 +95,14 @@ export function FileMediaCard({ entry, selected, revision, labels, onSelect, onA
       }
     }}>
     <span className={`folder-media-preview${entry.directory ? " is-folder" : ""}`} style={aspectRatio ? { aspectRatio, minHeight: 0 } : undefined}>
-      {entry.directory ? <Folder size={52} strokeWidth={1.3} /> : preview ? <img src={convertFileSrc(preview)} style={aspectRatio ? { position: "absolute", inset: 0, height: "100%", objectFit: "contain" } : undefined} alt="" draggable={false} loading="lazy" decoding="async" onError={() => { previews.forget(previewKey); setFailedPreview(preview); setPreview(null); }} /> : isVideoPath(entry.path) ? <Play size={32} /> : <Image size={32} />}
-      {!entry.directory && isVideoPath(entry.path) && <span className="folder-media-kind"><Play size={11} />视频</span>}
+      {entry.directory ? <Folder size={52} strokeWidth={1.3} /> : preview ? <img src={source} style={aspectRatio ? { position: "absolute", inset: 0, height: "100%", objectFit: "contain" } : undefined} alt="" draggable={false} loading="lazy" decoding="async" onError={() => { previews.forget(previewKey); setFailedPreview(`${previewKey}:${preview}`); setPreview(null); }} /> : isVideoPath(entry.path) ? <Play size={32} /> : <Image size={32} />}
+      {video && <VideoHoverPreview path={entry.path} version={entry.version ?? revision} enabled={!!onActivate && !selected}/>}
+      {durationLabel && <span className="folder-media-duration">{durationLabel}</span>}
+      {video && <span className="folder-media-kind"><Play size={11} />视频</span>}
       {!entry.directory && generated && <span className="folder-media-generated" title="生成图" aria-label="生成图"><Sparkles size={12} aria-hidden="true"/></span>}
     </span>
     <LibrarySelectionMark selected={selected && !entry.directory} previewKey={preview ?? previewKey}/>
+    {hovered && !selected && !entry.directory && <MediaHoverMark previewKey={preview ?? previewKey}/>}
     {entry.directory && <span className="folder-media-name">{entry.name}</span>}
   </button>;
 }

@@ -1,0 +1,8 @@
+html, body, #root { width:100%; height:100%; margin:0; }
+.preview-shell { display:flex; flex-direction:column; height:100%; }
+.preview-shell .app-topbar { display:flex; align-items:center; justify-content:space-between; height:44px; padding:0 20px; flex-shrink:0; }
+.preview-shell nav { display:flex; gap:26px; }
+.preview-shell nav button:first-child { color:var(--bb-blue); }
+.preview-main { position:relative; flex:1; min-height:0; overflow:hidden; }
+.preview-main > .library-home { height:100%; }
+.preview-main > .library-generation-activity { position:absolute; z-index:40; top:58px; right:24px; }

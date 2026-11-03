@@ -4,12 +4,14 @@ import { GripVertical, X } from "lucide-react";
 const widthKey = "bowerbird.canvasLibraryWidth";
 
 /** Resize only the material panel; the canvas keeps its viewport and camera. */
-export function CanvasLibraryResize({ panelId, collapsed, onClose }: { panelId: string; collapsed: boolean; onClose: () => void }) {
+export function CanvasLibraryResize({ panelId, collapsed, onClose, onEscape, reserveWidth = 0, storageKey = widthKey, initialWidth }: {
+  panelId: string; collapsed: boolean; onClose: () => void; onEscape?: () => void; reserveWidth?: number; storageKey?: string; initialWidth?: number;
+}) {
   const handle = useRef<HTMLDivElement>(null);
   const drag = useRef<{ pointer: number; x: number; width: number } | null>(null);
   const [preferredWidth, setPreferredWidth] = useState<number | null>(() => {
-    try { const raw = localStorage.getItem(widthKey), saved = Number(raw); return raw !== null && Number.isFinite(saved) && saved >= 0 ? saved : null; }
-    catch { return null; }
+    try { const raw = localStorage.getItem(storageKey), saved = Number(raw); return raw !== null && Number.isFinite(saved) && saved >= 0 ? saved : initialWidth ?? null; }
+    catch { return initialWidth ?? null; }
   });
   const [maximum, setMaximum] = useState(480);
   const [requiredWidth, setRequiredWidth] = useState(480);
@@ -24,14 +26,14 @@ export function CanvasLibraryResize({ panelId, collapsed, onClose }: { panelId: 
       // Read the resolved gap, including clamp() at narrow window widths.
       const panel = document.getElementById(panelId)!;
       const bottom = parseFloat(getComputedStyle(panel).bottom);
-      const outsideSpace = Math.max(bottom, handle.current!.offsetWidth + 4);
+      const outsideSpace = Math.max(bottom, handle.current!.offsetWidth + 4, reserveWidth);
       setMaximum(Math.max(0, workspace.clientWidth - outsideSpace));
     };
     const observer = new ResizeObserver(measure);
     observer.observe(workspace);
     measure();
     return () => { observer.disconnect(); workspace.style.removeProperty("--canvas-source-width"); };
-  }, [panelId]);
+  }, [panelId, reserveWidth]);
 
   useLayoutEffect(() => {
     const panel = document.getElementById(panelId)!;
@@ -71,12 +73,14 @@ export function CanvasLibraryResize({ panelId, collapsed, onClose }: { panelId: 
   function resize(next: number | null) {
     const value = next === null ? null : Math.min(maximum, Math.max(0, next));
     setPreferredWidth(value);
-    try { if (value === null) localStorage.removeItem(widthKey); else localStorage.setItem(widthKey, String(value)); }
+    try { if (value === null) localStorage.removeItem(storageKey); else localStorage.setItem(storageKey, String(value)); }
     catch { /* Keep the session width when browser storage is unavailable. */ }
   }
   function finish() { drag.current = null; setDragging(false); }
 
-  return <div ref={handle} className="canvas-library-resize" aria-hidden={collapsed}>
+  return <div ref={handle} className="canvas-library-resize" aria-hidden={collapsed} onKeyDown={event => {
+    if (event.key === "Escape" && onEscape) { event.preventDefault(); event.stopPropagation(); onEscape(); }
+  }}>
     <svg className="canvas-library-tab-shape" viewBox="0 0 32 96" aria-hidden="true">
       <path className="canvas-library-tab-fill" d="M0 0H20Q32 0 32 12V74Q32 86 20 86H18C12 86 8 88 8 96H0Z" />
       <path className="canvas-library-tab-edge" d="M8 0H20Q32 0 32 12V74Q32 86 20 86H18C12 86 8 88 8 96" />

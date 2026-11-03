@@ -155,7 +155,7 @@ html[data-theme] :is(.app-popover, .app-context-menu)[class] .app-context-item.i
 html[data-theme] :is(.tactical-select-trigger, .tactical-menu-trigger)[class] { border-color: transparent; border-radius: 0; background: transparent; color: var(--bb-ink-soft); box-shadow: none; }
 html[data-theme] :is(.tactical-select-trigger, .tactical-menu-trigger)[class]:not(:disabled):is(:hover, [aria-expanded="true"]) { background: rgb(var(--bb-ink-rgb) / .035); color: var(--bb-ink); }
 html[data-theme] :is(.tactical-select-trigger, .tactical-menu-trigger)[class]:focus-visible { outline: 1px solid rgb(var(--bb-ink-rgb) / .3); outline-offset: 2px; }
-html[data-theme] .tactical-select-menu[class] { z-index: 100050; padding: 14px 6px 7px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; font-size: 12px; }
+html[data-theme] .tactical-select-menu[class] { z-index: 100050; padding: 14px 6px 7px; overflow: auto; overscroll-behavior: contain; font-size: 12px; }
 html[data-theme] .tactical-select-option { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 7px 10px 7px 24px; text-align: left; line-height: 1.5; }
 .tactical-select-option > span { min-width: 0; overflow-wrap: anywhere; }
 .tactical-select-group-label { padding: 8px 10px 5px; }

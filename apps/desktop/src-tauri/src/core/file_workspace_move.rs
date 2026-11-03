@@ -186,7 +186,7 @@ fn local_classification(files:&FileWorkspace,source:&Path,target:&Path)->AppResu
     } Ok(())
 }
 fn rewrite_sidecars(source:&Path,target:&Path,entries:&[Entry])->AppResult<()> {
-    for entry in entries.iter().filter(|e|!e.directory && e.path.extension().is_some_and(|e|e=="json") && e.path.components().any(|c|c.as_os_str()==".bowerbird")) {
+    for entry in entries.iter().filter(|e|!e.directory && e.path.extension().is_some_and(|e|e=="json") && e.path.components().any(|c|c.as_os_str()==".bowerbird" || c.as_os_str()==".bowerbird-quick-transfer")) {
         if entry.size>32*1024*1024 {return Err(invalid("随图资料超过 32 MB，未切换位置"));}
         let path=target.join(&entry.path);
         if let Ok(mut value)=serde_json::from_slice::<serde_json::Value>(&fs::read(&path)?) {

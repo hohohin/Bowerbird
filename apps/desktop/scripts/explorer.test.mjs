@@ -25,3 +25,14 @@ test("closing during a slow native open cannot leave an orphaned view", async ()
   await queueBrowserOperation(async () => { calls.push("reopen"); });
   assert.equal(calls.at(-1), "reopen");
 });
+
+test("video drags keep media separate from their poster and reject untrusted URL schemes", () => {
+  const video = { version: 1, mediaKind: "video", imageUrl: "https://cdn.example/clip.mp4", pageUrl: "https://site.example/watch", posterUrl: "https://cdn.example/poster.png" };
+  assert.deepEqual(parseExplorerImage(data(video)), video);
+  const blob = { ...video, imageUrl: "blob:https://site.example/media" };
+  assert.deepEqual(parseExplorerImage(data(blob)), blob, "unsupported page blobs remain video so capture can explain their limit");
+  for (const invalid of [{ ...blob, pageUrl: blob.imageUrl }, { ...video, mediaKind: "audio" }, { ...video, posterUrl: "file:///private.png" },
+    { ...video, imageUrl: "blob:file:///private" }, { ...video, imageUrl: "blob:https://name:password@site.example/media" }, { ...video, mediaKind: "image" }]) {
+    assert.equal(parseExplorerImage(data(invalid)), null);
+  }
+});

@@ -1,5 +1,6 @@
 import { type HTMLAttributes, type ReactNode, useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
+import { usePortalTarget } from "../lib/portalTarget";
 import { X } from "lucide-react";
 
 const FOCUSABLE = [
@@ -39,6 +40,7 @@ export function ModalShell({
   onClose: () => void;
 }) {
   const titleId = useId();
+  const portalTarget = usePortalTarget();
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   const preventCloseRef = useRef(preventClose);
@@ -50,7 +52,7 @@ export function ModalShell({
     const panel = panelRef.current;
     const preferred = panel?.querySelector<HTMLElement>("[data-modal-autofocus]");
     const first = panel?.querySelector<HTMLElement>(FOCUSABLE);
-    window.requestAnimationFrame(() => (preferred ?? first)?.focus());
+    window.requestAnimationFrame(() => (preferred ?? first)?.focus({ preventScroll: true }));
 
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape" && !preventCloseRef.current) {
@@ -76,7 +78,7 @@ export function ModalShell({
     window.addEventListener("keydown", onKeyDown);
     return () => {
       window.removeEventListener("keydown", onKeyDown);
-      previous?.focus();
+      previous?.focus({ preventScroll: true });
     };
   }, []);
 
@@ -115,6 +117,6 @@ export function ModalShell({
         {footer && <footer className="app-modal-footer">{footer}</footer>}
       </div>
     </div>,
-    document.body
+    portalTarget
   );
 }

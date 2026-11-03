@@ -50,9 +50,9 @@ impl CloudConfig {
         if !self.is_available() {
             return None;
         }
-        if function == "generate-proxy" && self.account_api_url.is_some() {
+        if matches!(function, "generate-proxy" | "chat-proxy") && self.account_api_url.is_some() {
             let mut url = self.generation_gateway()?;
-            url.set_path("/api/cloud/functions/v1/generate-proxy");
+            url.set_path(&format!("/api/cloud/functions/v1/{function}"));
             url.set_query(Some(&format!("forceFunctionRegion={FUNCTION_REGION}")));
             return Some(url.into());
         }
@@ -150,6 +150,7 @@ mod tests {
         }
         assert_eq!(config.account_endpoint("generate-proxy"), None);
         assert_eq!(config.endpoint("generate-proxy").unwrap(), "https://bowerbird.cn/api/cloud/functions/v1/generate-proxy?forceFunctionRegion=ap-northeast-1");
+        assert_eq!(config.endpoint("chat-proxy").unwrap(), "https://bowerbird.cn/api/cloud/functions/v1/chat-proxy?forceFunctionRegion=ap-northeast-1");
         assert!(config.endpoint("understand-proxy").unwrap().starts_with("https://example.supabase.co/"));
         assert_eq!(config.auth_base_url(), Some("https://bowerbird.cn/api/account/"));
         let direct = CloudConfig { account_api_url: None, ..config };

@@ -1,11 +1,11 @@
-import { userErrorMessage } from "../lib/userError";
+import { generationErrorMessage, userErrorMessage } from "../lib/userError";
 import { DreaminaTaskCredit } from "./creation/DreaminaCredits";
 import { DreaminaTaskDiagnostics } from "./creation/DreaminaTaskDiagnostics";
 import { GenerationSessionSurface } from "./GenerationSessionSurface";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight } from "lucide-react";
-import { DEFAULT_VIDEO_OPTIONS, imageInputError, videoInputError, videoModelLabel, videoProvider, type VideoOptions } from "../lib/videoGeneration";
+import { DEFAULT_VIDEO_OPTIONS, imageInputError, resolveVideoOptions, videoInputError, videoModelLabel, videoProvider, type VideoOptions } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { MediaPreview } from "./MediaPreview";
 import { useStore, type GenEditingMode } from "../store";
@@ -23,14 +23,16 @@ import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/
 import { imageProviderLabel, canonicalProviderKey, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import type { Asset, GenJob, GenTurn, VisualProfileCapsule, VisualProfileRuleValue } from "../lib/types";
 import { Lightbox } from "./Lightbox";
+import { videoSourceKey } from "../lib/videoSourceKey";
 import type { VideoFrame } from "../lib/videoFrame";
 import type { SaveVideoTrim } from "../lib/videoTrim";
 import { useCreationEditor } from "./creation/useCreationEditor";
+import { useTextWorkspace } from "./useTextWorkspace";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
-import { Bookmark, Copy, Images, Info, Pencil, RotateCcw, Send, Sparkles, X } from "lucide-react";
+import { Bookmark, Copy, Images, Info, Maximize2, Pencil, RotateCcw, Send, Sparkles, X } from "lucide-react";
 
 /** 生成用时格式：<60s 取整秒，否则 m:ss。 */
 function fmtDuration(ms: number): string {
@@ -138,7 +140,7 @@ export function GenerationPanel({
           ? "积分不足"
           : "Bowerbird Cloud 不可用"
       : userErrorMessage(targetHealth?.reason, "当前生成服务暂不可用，请在设置中检查登录状态。");
-  // 重试要新开 job（版本分支），与「重新编辑」同过并行上限门。
+  // 失败重试续轮与成功结果的新版本都遵守并行上限。
   const canStartAnother = canStartAnotherJob(cloudEntitlement, runningJobCount);
 
   const imageCount = useMemo(
@@ -158,7 +160,7 @@ export function GenerationPanel({
   }, [activeJob]);
 
   // 首轮参考图完整 asset：传给 TurnView——chip 视图还原参考图节点用；纯文本回退时在气泡上方展示缩略图「附件」。
-  const firstRefAssets = useMemo(() => activeJob?.refAssets ?? [], [activeJob]);
+  const firstRefAssets = useMemo(() => activeJob?.turns[0]?.refAssets ?? activeJob?.refAssets ?? [], [activeJob]);
   // 会话最近一次产出（最后一个有图的轮）：编辑坞左侧「上次结果」缩略图，组稿时对照参考；
   // offset = 该轮在 allImages 拍平序列中的起始下标（点开放大后可跨全轮导航）。
   const lastImageTurn = useMemo(() => {
@@ -238,14 +240,20 @@ export function GenerationPanel({
   }
 
   // 续轮气泡的「重试」（与首轮同款：原样重发该轮组稿，旧结果保留）。失败末轮走既有
-  // retryLastGenTurn（移除失败轮原位顶替）；其余轮 = 追加重发——参考图**精确重放**该轮
+  // retryLastGenTurn（保留失败历史并追加续轮）；其余轮同样追加重发——参考图**精确重放**该轮
   // 当时实际下发的完整列表（含当时的基图，非会话最新产出），prompt 原样。
+  function historicalCloudVideoFailure(turn: GenTurn | undefined): boolean {
+    return !!activeJob && !!turn?.error && (turn.media ?? activeJob.media) === "video"
+      && (turn.provider ?? activeJob.provider).startsWith("bowerbird-cloud")
+      && activeJob.turns[activeJob.turns.length - 1]?.id !== turn.id;
+  }
+
   function retryTurn(turn: GenTurn) {
+    if (running || !activeJob || historicalCloudVideoFailure(turn)) return;
     if (activeJob && turn.error && (turn.media ?? activeJob.media) === "video" && (turn.provider ?? activeJob.provider).startsWith("bowerbird-cloud")) {
       void api.recoverCloudVideo(activeJob.id).catch(error => notifyError(error, "原视频取回失败"));
       return;
     }
-    if (running || !activeJob?.sessionId) return;
     const isLast = activeJob.turns[activeJob.turns.length - 1]?.id === turn.id;
     if (turn.error && isLast) {
       retryLastGenTurn(assets);
@@ -264,11 +272,13 @@ export function GenerationPanel({
       rawPrompt: turn.promptRaw ?? undefined,
       references: turn.refAssets,
       referenceNodeIds: turn.referenceNodeIds,
-      exactReferences: (turn.media ?? activeJob.media) === "video" ? turn.refs ?? turn.refAssets?.flatMap((asset) => asset.store_path ? [asset.store_path] : []) ?? activeJob.lastRefs : turn.refs?.length ? turn.refs : undefined,
+      exactReferences: turn.refs ?? (!activeJob.sessionId || (turn.media ?? activeJob.media) === "video"
+        ? turn.refAssets?.flatMap((asset) => asset.store_path ? [asset.store_path] : []) ?? activeJob.lastRefs
+        : undefined),
       parentNodeId: parent.nodeId,
       parentAssetPath: parent.storePath,
       creativeRelation: "retry",
-      // 失败轮的追加重发同样叠放在原失败卡位置；成功轮重发保持脑图式落位。
+      // 保留轮次投影位置；同一 job 的轮次在画板归并为一张会话卡。
       retryAnchorNodeId: turn.error && turn.turnKey
         ? generationPromptNodeId(activeJob.id, turn.turnKey)
         : null,
@@ -280,8 +290,8 @@ export function GenerationPanel({
   function retryFirstTurn() {
     if (running || !activeJob) return;
     const first = activeJob.turns[0];
-    if (first?.error && (first.media ?? activeJob.media) === "video" && (first.provider ?? activeJob.provider).startsWith("bowerbird-cloud")) {
-      void api.recoverCloudVideo(activeJob.id).catch(error => notifyError(error, "原视频取回失败"));
+    if (first?.error) {
+      retryTurn(first);
       return;
     }
     const parent = generationParentLocator(
@@ -314,11 +324,6 @@ export function GenerationPanel({
             parentAssetPath: parent.storePath,
             relation: "retry",
             referenceNodeIds: first?.referenceNodeIds,
-            // 首轮失败的重试：新卡叠放在原失败卡位置（原卡保留）；首轮成功的版本分支
-            // 仍走参考图旁的脑图式落位。
-            retryAnchorNodeId: first?.error && first.turnKey
-              ? generationPromptNodeId(activeJob.id, first.turnKey)
-              : null,
           }
         : undefined,
       false,
@@ -389,16 +394,17 @@ export function GenerationPanel({
           <button
             type="button"
             onClick={retryFirstTurn}
-            disabled={!!snapshot || !targetReady || !canStartAnother}
+            disabled={!!snapshot || !targetReady || !canStartAnother || historicalCloudVideoFailure(activeJob.turns[0])}
             className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent disabled:opacity-40"
             title={
               snapshot
                 ? "请复用提示词后生成"
+                : historicalCloudVideoFailure(activeJob.turns[0]) ? "旧视频任务不支持在此取回"
                 : !targetReady
                 ? lockedReason
                 : !canStartAnother
                   ? "已达当前档位的并行生成上限"
-                  : "重试：首轮组稿原样重发，结果作为同一会话的新版本（←/→ 切换）"
+                  : activeJob.turns[0]?.error ? "重试：在当前会话追加一轮" : "重试：首轮组稿原样重发，结果作为同一会话的新版本（←/→ 切换）"
             }
           >
             <RotateCcw size={13} />
@@ -484,11 +490,12 @@ export function GenerationPanel({
         <button
           type="button"
           onClick={() => retryTurn(turn)}
-          disabled={!targetReady}
+          disabled={!targetReady || historicalCloudVideoFailure(turn)}
           className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent disabled:opacity-40"
           title={
             !targetReady
               ? lockedReason
+              : historicalCloudVideoFailure(turn) ? "旧视频任务不支持在此取回"
               : "重试：这一轮的组稿原样重发（接在会话下方，原轮保留）"
           }
         >
@@ -602,6 +609,7 @@ export function GenerationPanel({
               <TurnView
                 key={turn.id}
                 turn={turn}
+                provider={turn.provider ?? activeJob.provider}
                 index={i}
                 busy={running && i === turnsWithOffset.length - 1}
                 streaming={running && i === turnsWithOffset.length - 1 ? activeJob.streaming : ""}
@@ -609,16 +617,16 @@ export function GenerationPanel({
                 visualProfile={activeJob.visualProfile}
                 refAssets={i === 0 ? firstRefAssets : undefined}
                 actions={readOnly ? undefined : i === 0 ? firstTurnActions : turnActions(turn)}
-                variantNav={i === 0 ? variantNav : undefined}
+                variantNav={!readOnly && !snapshot && i === 0 ? variantNav : undefined}
                 onOpenLightbox={(g) => setLightbox({ images: allImages, index: g })}
                 onOpenRefLightbox={(r) =>
                   setLightbox({ images: refLightboxImages, index: r })
                 }
                 onOpenTurnRefs={(imgs, i) => setLightbox({ images: imgs, index: i })}
                 onAgentRetry={readOnly || snapshot || (turn.media ?? activeJob.media) === "video" ? undefined : () => retryWithAgent(turn)}
-                onRetry={() => retryLastGenTurn(assets)}
-                canRetry={!readOnly && !snapshot && targetReady && !running}
-                retryReason={readOnly ? "旧会话回退只读；请完成迁移后在创作中继续" : lockedReason}
+                onRetry={() => retryTurn(turn)}
+                canRetry={!readOnly && !snapshot && targetReady && !running && !historicalCloudVideoFailure(turn)}
+                retryReason={readOnly ? "旧会话回退只读；请完成迁移后在创作中继续" : historicalCloudVideoFailure(turn) ? "旧视频任务不支持在此取回" : lockedReason}
               />
             ))}
           </div>
@@ -626,7 +634,7 @@ export function GenerationPanel({
       </div>
 
       {/* 续轮就地在详情底部编辑，详情与历史始终可见。 */}
-      <div className="shrink-0 border-t border-edge bg-panel p-4">
+      {!(snapshot && readOnly) && <div className="shrink-0 border-t border-edge bg-panel p-4">
         {snapshot ? (
           <button type="button" onClick={() => snapshot.onReuse(snapshot.job.turns[snapshot.job.turns.length - 1])}
             className="w-full rounded bg-panel2 px-2.5 py-2 text-left text-xs text-muted ring-1 ring-edge transition-colors hover:text-ink hover:ring-accent">
@@ -683,7 +691,7 @@ export function GenerationPanel({
             取回已提交的视频（继续查询，不重新生成）
           </button>
         )}
-      </div>
+      </div>}
           </div>
         </GenerationSessionSurface>
       )}
@@ -691,6 +699,7 @@ export function GenerationPanel({
         <Lightbox
           onAddVideoFrame={onAddVideoFrame}
           onSaveVideoTrim={onSaveVideoTrim}
+          videoSourceKey={videoSourceKey(assets.find(asset => asset.store_path === lightbox.images[lightbox.index]))}
           images={lightbox.images}
           index={lightbox.index}
           onClose={() => setLightbox(null)}
@@ -713,6 +722,7 @@ export function GenerationPanel({
  */
 function TurnView({
   turn,
+  provider,
   index,
   busy,
   streaming,
@@ -730,6 +740,7 @@ function TurnView({
   retryReason,
 }: {
   turn: GenTurn;
+  provider: GenJob["provider"];
   index: number;
   busy: boolean;
   streaming: string;
@@ -964,7 +975,7 @@ function TurnView({
           ) : turn.error ? (
             <div className="space-y-1.5 rounded border border-red-500/40 bg-red-500/10 p-2">
               <div className="text-[11px] font-semibold text-red-300">❌ 生成失败</div>
-              <pre className="whitespace-pre-wrap break-all text-[11px] text-red-200/90">{userErrorMessage(turn.error, "本次生成未完成，请稍后重试。")}</pre>
+              <pre role="alert" className="select-text whitespace-pre-wrap break-all text-[11px] text-red-200/90">{generationErrorMessage(turn.error, { provider })}</pre>
               {turn.media === "video" && turn.provider === "jimeng" && <DreaminaTaskDiagnostics submitId={turn.submitId} />}
               <button
                 onClick={onRetry}
@@ -1131,13 +1142,13 @@ function GenEditComposer({
   const selectedProvider = useStore((s) => s.activeGenProvider);
   const sourceTurn = preloadTurn ?? (isRevise ? job.turns[job.turns.length - 1] : job.turns[0]);
   const isVideo = (sourceTurn?.media ?? job.media) === "video";
-  const [videoOptions, setVideoOptions] = useState<VideoOptions>(sourceTurn?.videoOptions ?? job.videoOptions ?? DEFAULT_VIDEO_OPTIONS);
+  const [selectedVideoOptions, setVideoOptions] = useState<VideoOptions>(sourceTurn?.videoOptions ?? job.videoOptions ?? DEFAULT_VIDEO_OPTIONS);
   const [videoChannel, setVideoChannel] = useState<"jimeng" | "cloud">((sourceTurn?.provider ?? job.provider).startsWith("bowerbird-cloud") ? "cloud" : "jimeng");
   const sourceProvider = sourceTurn?.provider ?? job.provider;
   const continuationProvider = isCloudProvider(sourceProvider)
     ? canonicalProviderKey(sourceProvider)
     : sourceProvider === "jimeng" ? "jimeng" : "codex";
-  const activeGenProvider = isVideo ? videoProvider(videoChannel, videoOptions) : isRevise ? continuationProvider : selectedProvider;
+  const activeGenProvider = isVideo ? videoProvider(videoChannel, selectedVideoOptions) : isRevise ? continuationProvider : selectedProvider;
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
   const defaultProvider = useStore((s) => s.defaultProvider);
   const setDefaultProvider = useStore((s) => s.setDefaultProvider);
@@ -1151,6 +1162,8 @@ function GenEditComposer({
   const {
     hostRef,
     focus,
+    getDraft,
+    loadPrompt,
     finalPrompt,
     rawPrompt,
     references,
@@ -1164,6 +1177,8 @@ function GenEditComposer({
     // 维度环点扇区插进本坞（与创作板互斥挂载，任意时刻只有一个实例消费）。
     consumePendingKeyword: true,
   });
+  const textWorkspace = useTextWorkspace({ scopeKey: `generation:${job.id}:${mode}:${preloadTurn?.turnKey ?? "current"}`, projectId: job.projectId ?? undefined, getDraft, loadPrompt, focus });
+  const videoOptions = resolveVideoOptions(selectedVideoOptions, references);
   // 比例初值取会话首轮的值；编辑坞内改动不持久化（创作板有自己的记忆）。
   const [ratio, setRatio] = useState<string | null>(sourceTurn?.ratio ?? job.lastRatio ?? null);
   // Agent 方案开关（与创作板同款三态）：off = 直发；a = 方案A（子句挑选）；b = 方案B（skill 审查修复）。
@@ -1417,6 +1432,7 @@ function GenEditComposer({
     // 配色深灰蓝（.session-dock）区分会话上下文。高度随内容收缩；dockRef 高度经
     // ResizeObserver 写入 --gen-dock-h，瀑布流据此留底部空隙。
     <div ref={dockRef} data-generation-composer={inline ? "inline" : "floating"} className={inline ? "w-full" : "gen-dock-in session-dock w-full rounded-t-2xl p-2.5 pb-2"}>
+      {textWorkspace.workspace}
       <div className="flex items-start gap-2.5">
         {/* 左侧「上次结果」缩略图：露瀑布流选图的同时对照会话最近产出编辑/续写；点击放大。 */}
         {recentImages.length > 0 && (
@@ -1470,6 +1486,8 @@ function GenEditComposer({
           <X size={14} />
         </button>
       </div>}
+      <div className="generation-text-editor-shell">
+      <button type="button" className="composer-text-expand" aria-label="放大编辑文本" title="放大编辑文本" onMouseDown={event => event.preventDefault()} onClick={textWorkspace.openEditor}><Maximize2 size={16}/></button>
       <div
         ref={hostRef}
         onClick={(event) => {
@@ -1480,6 +1498,7 @@ function GenEditComposer({
         data-tour="creation-editor"
         className="creation-editor generation-input min-h-16 max-h-56 cursor-text overflow-y-auto px-3 py-2 text-sm leading-8 text-ink"
       />
+      </div>
       {/* 编辑框内 chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
       <BoardChipPreview hostRef={hostRef} />
       {referenceError && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}

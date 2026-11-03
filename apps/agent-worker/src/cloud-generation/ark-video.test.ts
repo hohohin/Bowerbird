@@ -4,6 +4,18 @@ import { ArkVideoClient, ArkVideoError, type VideoFetch } from "./ark-video.ts";
 import { arkVideoBody, SEEDANCE_MODEL, validateVideoInput, videoReservationTokens, type VideoInput } from "../../../cloud/supabase/functions/_shared/video-contract.ts";
 
 const input = (): VideoInput => ({ schema_version: 1, media: "video", prompt: "蓝色玻璃球在白色桌面缓慢旋转，无文字", ratio: "16:9", reference_images: [], reference_videos: [], video_options: { model_version: "seedance2.5", kind: "text2video", duration: 4, video_resolution: "480p", generate_audio: false } });
+
+test("audio-only references use signed audio URLs and enable sound without video pricing", () => {
+  const value = input(); value.video_options.kind = "multimodal2video"; delete value.video_options.generate_audio;
+  value.reference_audios = [{ object_key: "jobs/test/inputs/audio-0.wav", bytes: 32044, duration: 2, mime: "audio/wav" }];
+  const body = arkVideoBody(value, [], ["https://trusted.example/audio"]);
+  assert.deepEqual(body.content[1], { type: "audio_url", audio_url: { url: "https://trusted.example/audio" }, role: "reference_audio" });
+  assert.equal(body.generate_audio, true);
+  assert.equal(videoReservationTokens(value), videoReservationTokens(input()));
+  assert.throws(() => arkVideoBody(value), /audio.*urls/);
+  value.reference_audios[0].duration = 31;
+  assert.throws(() => validateVideoInput(value), /audio/);
+});
 function fixture(replies: Array<{ status: number; value: unknown } | Error>) {
   const calls: Array<{ url: string; method: string; body?: string }> = [];
   const fetch: VideoFetch = async (url, options) => {

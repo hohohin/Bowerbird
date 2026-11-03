@@ -1,0 +1,12 @@
+.app-topbar.has-home-navigation.is-search-hidden { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
+.app-topbar.has-home-navigation .app-topbar-leading { grid-column: 1; grid-row: 1; }
+.app-topbar.has-home-navigation .app-topbar-actions { grid-column: 3; grid-row: 1; justify-self: end; }
+.app-topbar.has-home-navigation .app-topbar-leading:empty { padding: 0; background: transparent; }
+.app-topbar.has-home-navigation .home-page-navigation { grid-column: 2; grid-row: 1; justify-self: center; display: flex; gap: 4px; align-items: center; padding: 4px; background: var(--lt-topbar-group); }
+.app-topbar.has-home-navigation .home-page-navigation button { position: relative; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 8px 14px; color: var(--bb-muted); background: transparent; font-size: 13px; white-space: nowrap; }
+.app-topbar.has-home-navigation .home-page-navigation button:hover:not(:disabled) { color: var(--bb-ink); background: var(--bb-surface-hover); }
+.app-topbar.has-home-navigation .home-page-navigation button[aria-current="page"] { color: var(--bb-blue); background: var(--bb-surface-hover); font-weight: 600; }
+.app-topbar.has-home-navigation .home-page-navigation button[aria-current="page"]::after { content: ''; position: absolute; right: 4px; bottom: 4px; width: 3px; height: 3px; background: currentColor; }
+.app-topbar.has-home-navigation .home-page-navigation button:focus-visible { outline: 1px solid var(--bb-blue); outline-offset: 2px; }
+.app-topbar.has-home-navigation .home-page-navigation button:disabled { opacity: .5; cursor: wait; }
+@media (max-width: 900px) { .app-topbar.has-home-navigation .home-page-navigation button { padding-inline: 10px; } }

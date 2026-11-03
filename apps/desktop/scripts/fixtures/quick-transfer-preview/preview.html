@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bowerbird 快传 · 交互示意</title>
+<style>
+:root{color-scheme:dark;--canvas:#141414;--chrome:#181818;--panel:#1e1e1e;--hover:#282828;--line:#3d3d3d;--muted:#949494;--secondary:#b9b9b9;--ink:#dcdcdc;--accent:#8faab8;--danger:#e79c98;--shadow:0 4px 6px -3px #000b,0 20px 32px -11px #0009;font-family:Inter,"Noto Sans SC","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.5;color:var(--ink);background:var(--canvas)}
+:root[data-theme=light]{color-scheme:light;--canvas:#e7e7e7;--chrome:#efefef;--panel:#f7f7f7;--hover:#e1e1e1;--line:#c5c5c5;--muted:#646464;--secondary:#4d4d4d;--ink:#2b2b2b;--accent:#496775;--danger:#a83932;--shadow:0 3px 5px -3px #21272b3b,0 18px 28px -10px #21272b42}
+*{box-sizing:border-box}body{margin:0}button,select,input{font:inherit;color:inherit}button,select{cursor:pointer}button{background:transparent;border:0;border-radius:0;padding:0 12px;min-height:36px}button:hover,button:focus-visible{color:var(--accent)}button:focus-visible,select:focus-visible{outline:1px solid var(--accent);outline-offset:3px}button:disabled{opacity:.45;cursor:default;color:var(--muted)}svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:square;stroke-linejoin:miter;flex-shrink:0}button svg{width:18px;height:18px;vertical-align:middle}button,select{transition:color 160ms ease,background 160ms ease}h1,h2,p{margin:0}h1{font-size:24px;font-weight:500;letter-spacing:.02em}h2{font-size:16px;font-weight:500}.hidden,[hidden]{display:none!important}.muted{color:var(--muted)}.mono{font-family:Consolas,monospace;font-size:12px}.icon-button{padding:0;width:36px;min-width:36px;display:grid;place-items:center}.primary{color:var(--accent);font-weight:600;position:relative}.primary:after{content:"";position:absolute;width:3px;height:3px;background:currentColor;right:5px;bottom:6px}.primary:disabled:after{display:none}.text-button{padding:0 4px}.preview-tools{padding:16px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;border-bottom:1px solid var(--line);background:var(--chrome)}.preview-title{font-size:13px;color:var(--secondary);margin-right:auto}.preview-title b{font-weight:500;color:var(--ink);margin-right:12px}.preview-tools select{background:var(--chrome);border:0;border-bottom:1px solid var(--line);padding:8px 24px 8px 8px;font-size:12px;max-width:100%}.preview-tools label{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}.preview-tools button{font-size:12px}.stage{max-width:1200px;margin:auto;display:grid;grid-template-columns:minmax(0,1fr);gap:56px;padding:48px 24px 64px;align-items:start}.surface-label{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px;margin:0 0 16px}.surface-label:after{content:"";flex:1;height:1px;background:var(--line);max-width:72px}.desktop-wrap{min-width:0}.desktop-card{position:relative;background:var(--panel);box-shadow:var(--shadow);padding:24px 28px 20px;width:100%;max-width:600px;margin:auto}.desktop-card:before{content:"";position:absolute;top:-1px;left:28px;width:36px;height:1px;background:var(--secondary)}.desktop-card:after{content:"";position:absolute;pointer-events:none;inset:12px -9px -10px 12px;border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.panel-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:24px}.panel-heading .icon-button{margin-right:-12px;margin-top:-8px}.status-line{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:13px;margin-bottom:20px}.live-status{display:flex;gap:9px;align-items:center}.status-dot{width:5px;height:5px;background:var(--accent)}.off .status-dot{background:var(--muted)}.switch{display:flex;align-items:center;gap:8px;padding-right:0;font-size:12px;color:var(--secondary)}.switch-box{width:25px;height:13px;border:1px solid var(--line);padding:2px;display:flex;justify-content:flex-end}.switch-box:after{content:"";width:7px;height:7px;background:var(--accent)}.off .switch-box{justify-content:flex-start}.off .switch-box:after{background:var(--muted)}.folder-row{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:13px 0;display:flex;align-items:center;gap:12px;margin-bottom:28px}.folder-value{flex:1;min-width:0}.field-label{font-size:12px;color:var(--muted);display:block;margin-bottom:3px}.folder-path{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.folder-row button{font-size:12px}.connect{display:grid;grid-template-columns:156px minmax(0,1fr);gap:24px;align-items:center;padding:0 0 28px}.qr-box{background:#fafafa;padding:10px;position:relative;aspect-ratio:1;width:156px;color:#262626}.qr-box svg{width:100%;height:100%;stroke:none;fill:currentColor}.qr-label{position:absolute;inset:calc(50% - 15px) calc(50% - 25px);width:50px;height:30px;display:grid;place-items:center;background:#fafafa;color:#333;font-size:12px}.connect h2{font-size:18px;margin-bottom:8px}.connect p{font-size:13px;color:var(--muted);margin-bottom:18px}.address-row{display:flex;align-items:center;gap:3px;flex-wrap:wrap}.address-row code{font-size:12px;overflow-wrap:anywhere}.address-row button{width:30px;min-width:30px}.address-row small{display:block;width:100%;color:var(--muted);font-size:11px}.offline-box{padding:30px 0 44px;text-align:center;color:var(--muted)}.offline-box svg{width:28px;height:28px;margin-bottom:8px}.offline-box p{font-size:13px;margin-top:6px}.queue-head{display:flex;align-items:baseline;justify-content:space-between;padding:16px 0 4px;border-top:1px solid var(--line);gap:12px}.queue-head h2{font-size:13px}.queue-head span{font-size:12px;color:var(--muted)}.empty{font-size:13px;color:var(--muted);padding:25px 0 30px}.queue{list-style:none;margin:0;padding:0}.file{display:grid;grid-template-columns:36px minmax(0,1fr) auto;gap:12px;padding:13px 0;align-items:center}.file+.file{border-top:1px solid color-mix(in srgb,var(--line),transparent 55%)}.file-icon{width:36px;height:44px;display:grid;place-items:center;border-left:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--secondary)}.file-name{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.file-meta{font-size:11px;color:var(--muted);margin-top:3px}.file-state{font-size:12px;text-align:right;color:var(--muted);min-width:48px}.file-state.done{color:var(--accent)}.file-state.error{color:var(--danger)}.progress{height:2px;background:var(--line);margin-top:9px;overflow:hidden}.progress i{display:block;height:100%;width:46%;background:var(--accent)}.file-error{font-size:12px;color:var(--danger);margin-top:6px;line-height:1.6}.retry{font-size:12px;padding:0;min-height:32px;color:var(--accent)}.bottom-note{font-size:11px;color:var(--muted);padding-top:20px;margin-top:8px;border-top:1px solid var(--line);display:flex;align-items:flex-start;gap:7px}.bottom-note svg{width:13px;height:13px;margin-top:2px}.desktop-reopen{display:grid;place-items:center;min-height:480px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.desktop-reopen button{font-size:16px}.mobile-wrap{max-width:370px;width:100%;margin:auto}.phone{background:var(--panel);box-shadow:var(--shadow);min-height:660px;padding:26px 24px 24px;display:flex;flex-direction:column;position:relative}.phone:before{content:"";position:absolute;top:0;left:24px;width:28px;height:1px;background:var(--secondary)}.phone-brand{font-size:13px;letter-spacing:.035em;color:var(--secondary);margin-bottom:38px}.phone h1{font-size:27px;margin-bottom:10px}.receiver{font-size:13px;color:var(--muted);display:flex;align-items:center;gap:7px;margin-bottom:28px}.receiver svg{width:16px;height:16px}.pick-area{width:100%;min-height:116px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:var(--accent);font-size:15px}.pick-area svg{width:24px;height:24px}.phone .queue{margin-top:14px}.phone .file{grid-template-columns:29px minmax(0,1fr) auto;gap:10px}.phone .file-icon{width:29px;height:38px}.phone .file-name{font-size:13px}.phone .file-state{font-size:11px;min-width:40px}.phone .file-meta{font-size:11px}.mobile-footer{margin-top:auto;padding-top:28px}.send-button{width:100%;height:48px;border-top:1px solid var(--accent);border-bottom:1px solid var(--accent);font-size:15px;display:flex;align-items:center;justify-content:space-between;text-align:left;padding:0 12px}.mobile-note{font-size:11px;color:var(--muted);margin-top:16px;line-height:1.8}.mobile-notice{font-size:13px;margin-top:18px;line-height:1.7;color:var(--muted)}.mobile-notice.error{color:var(--danger)}.folder-menu{position:absolute;z-index:3;top:166px;left:28px;right:28px;background:var(--panel);box-shadow:var(--shadow);border:1px solid var(--line);padding:6px}.folder-menu button{display:block;width:100%;text-align:left;min-height:44px;font-size:13px}.folder-menu button:hover{background:var(--hover)}.folder-menu p{font-size:11px;color:var(--muted);padding:5px 12px}.live-message{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--panel);border-left:2px solid var(--accent);padding:12px 20px;box-shadow:var(--shadow);font-size:13px;max-width:calc(100% - 32px);z-index:5}.stage[data-view=desktop]{display:block;max-width:720px}.stage[data-view=desktop] .mobile-wrap,.stage[data-view=mobile] .desktop-wrap{display:none}.stage[data-view=mobile]{display:block;max-width:440px}.stage[data-view=mobile] .mobile-wrap{max-width:370px}
+@media(min-width:940px){.stage[data-view=both]{grid-template-columns:minmax(0,600px) minmax(310px,370px);gap:64px;justify-content:center}}
+@media(max-width:600px){.preview-tools{padding:12px 16px;gap:8px 12px}.preview-title{width:100%;font-size:11px}.preview-tools label{font-size:11px}.preview-tools select{font-size:11px;padding-right:4px}.stage{padding:28px 16px 48px;gap:40px}.desktop-card{padding:22px 20px 18px}.desktop-card:after{right:-5px;bottom:-7px}.connect{grid-template-columns:120px minmax(0,1fr);gap:16px}.qr-box{width:120px;padding:8px}.connect h2{font-size:16px}.connect p{font-size:12px}.connect code{font-size:11px}.folder-menu{left:20px;right:20px}.phone{padding:24px 20px;min-height:640px}.mobile-wrap{max-width:370px}.phone button{min-height:44px}.stage[data-view=mobile]{padding:24px 16px 36px}.preview-tools button{min-height:44px}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<svg style="display:none" aria-hidden="true"><defs>
+<symbol id="folder" viewBox="0 0 24 24"><path d="M3 19V5h7l2 3h9v11Z"/></symbol>
+<symbol id="x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+<symbol id="upload" viewBox="0 0 24 24"><path d="M12 16V3m-5 5 5-5 5 5M4 15v6h16v-6"/></symbol>
+<symbol id="photo" viewBox="0 0 24 24"><path d="M3 3h18v18H3Zm0 14 5-5 5 5 3-3 5 5"/><circle cx="15" cy="8" r="2"/></symbol>
+<symbol id="video" viewBox="0 0 24 24"><path d="M3 4h18v16H3Zm7 4 6 4-6 4Z"/></symbol>
+<symbol id="file" viewBox="0 0 24 24"><path d="M5 3h9l5 5v13H5Zm9 0v5h5M8 13h8M8 17h6"/></symbol>
+<symbol id="monitor" viewBox="0 0 24 24"><path d="M3 4h18v13H3Zm9 13v4m-5 0h10"/></symbol>
+<symbol id="copy" viewBox="0 0 24 24"><path d="M8 8h13v13H8ZM3 16V3h13"/></symbol>
+<symbol id="arrow" viewBox="0 0 24 24"><path d="M4 12h16m-6-6 6 6-6 6"/></symbol>
+<symbol id="info" viewBox="0 0 24 24"><path d="M4 4h16v16H4Zm8 6v7m0-10v1"/></symbol>
+</defs></svg>
+<header class="preview-tools">
+  <p class="preview-title"><b>快传</b>交互示意 · 不会上传文件</p>
+  <label>视图 <select id="view"><option value="both">电脑与手机</option><option value="desktop">电脑</option><option value="mobile">手机</option></select></label>
+  <label>状态 <select id="state"><option value="ready">等待上传</option><option value="sending">接收中</option><option value="complete">已入库</option><option value="interrupted">传输中断</option><option value="off">已关闭</option></select></label>
+  <button id="theme" aria-label="切换为浅色">浅色</button>
+</header>
+<main class="stage" data-view="both">
+<section class="desktop-wrap" aria-label="电脑端示意">
+  <p class="surface-label">电脑</p>
+  <div class="desktop-card" id="desktop-panel" role="region" aria-labelledby="desktop-heading">
+    <div class="panel-heading"><h1 id="desktop-heading">快传</h1><button class="icon-button" id="dismiss" aria-label="收起快传面板" title="收起面板，继续接收"><svg><use href="#x"/></svg></button></div>
+    <div class="status-line" id="status-line"><span class="live-status"><i class="status-dot"></i><span id="desktop-status">接收已开启</span></span><button class="switch" id="toggle" role="switch" aria-checked="true" aria-label="接收开关"><span id="toggle-label">关闭接收</span><i class="switch-box" aria-hidden="true"></i></button></div>
+    <div class="folder-row"><svg aria-hidden="true"><use href="#folder"/></svg><div class="folder-value"><span class="field-label">接收到</span><p class="folder-path" id="folder-path" title="D:\素材\手机快传">D:\素材\手机快传</p></div><button class="text-button" id="change-folder" aria-expanded="false">更改</button></div>
+    <div class="folder-menu" id="folder-menu" hidden><button data-folder="D:\素材\手机快传">手机快传</button><button data-folder="D:\素材\旅行参考">旅行参考</button><p>示意目录，不会创建或移动文件</p></div>
+    <div class="connect" id="connect"><div class="qr-box" role="img" aria-label="二维码位置示意，不可用于连接"><svg id="qr" viewBox="0 0 29 29" aria-hidden="true"></svg><span class="qr-label">示意</span></div><div><h2>手机扫码上传</h2><p>连接同一 Wi-Fi</p><div class="address-row"><code>192.168.1.23:53317</code><button class="icon-button" id="copy-address" aria-label="复制地址示意"><svg><use href="#copy"/></svg></button><small>也可在其他设备的浏览器打开</small></div></div></div>
+    <div class="offline-box" id="offline" hidden><svg><use href="#monitor"/></svg><h2>接收已关闭</h2><p>开启后，手机可以重新扫码上传</p></div>
+    <div class="queue-head"><h2>本次接收</h2><span id="desktop-count">0 个文件</span></div>
+    <p class="empty" id="desktop-empty">等待手机上传</p><ul class="queue" id="desktop-queue" aria-label="电脑接收队列"></ul>
+    <p class="bottom-note"><svg aria-hidden="true"><use href="#info"/></svg><span>仅在可信局域网使用 · HTTP 未加密</span></p>
+  </div>
+  <div class="desktop-reopen" id="desktop-reopen" hidden><button class="primary" id="reopen">打开快传 <svg><use href="#arrow"/></svg></button></div>
+</section>
+<section class="mobile-wrap" aria-label="手机端示意">
+  <p class="surface-label">手机</p>
+  <div class="phone">
+    <div class="phone-brand">Bowerbird</div>
+    <h1>发送素材</h1><p class="receiver"><svg aria-hidden="true"><use href="#monitor"/></svg><span id="mobile-receiver">发送到 Hins 的电脑</span></p>
+    <input id="file-input" type="file" multiple hidden>
+    <button class="pick-area" id="pick"><svg aria-hidden="true"><use href="#upload"/></svg><span>选择照片或文件</span></button>
+    <ul class="queue" id="mobile-queue" aria-label="手机发送队列"></ul>
+    <p class="mobile-notice" id="mobile-notice" aria-live="polite"></p>
+    <div class="mobile-footer"><button class="send-button primary" id="send"><span id="send-label">发送 3 个文件</span><svg aria-hidden="true"><use href="#arrow"/></svg></button><p class="mobile-note">传输时请保持页面打开。<br>仅在可信局域网使用 · HTTP 未加密</p></div>
+  </div>
+</section>
+</main>
+<p class="live-message" id="message" role="status" hidden></p>
+<script>
+const $=id=>document.getElementById(id);
+const sampleFiles=[{name:'山间晨雾.jpg',size:4.8,type:'photo'},{name:'海边散步.mp4',size:38.6,type:'video'},{name:'拍摄笔记.txt',size:.003,type:'file'}];
+let files=sampleFiles.map(file=>({...file}));
+let state='ready';
+let messageTimer;
+const icon=kind=>`<svg aria-hidden="true"><use href="#${kind}"/></svg>`;
+function notify(text){$('message').textContent=text;$('message').hidden=false;clearTimeout(messageTimer);messageTimer=setTimeout(()=>$('message').hidden=true,2500)}
+function completedCount(){return state==='complete'?files.length:files.length>1?1:0}
+function fileStatus(index){if(state==='complete')return 'done';if(state==='sending'||state==='interrupted')return index<completedCount()?'done':index===completedCount()?(state==='sending'?'sending':'error'):'queued';return 'queued'}
+function fileRow(file,index,desktop){
+  const status=fileStatus(index);const item=document.createElement('li');item.className='file';
+  item.innerHTML=`<div class="file-icon">${icon(file.type)}</div><div class="file-info"><p class="file-name"></p><p class="file-meta"></p></div><span class="file-state"></span>`;
+  item.querySelector('.file-name').textContent=file.name;item.querySelector('.file-name').title=file.name;
+  item.querySelector('.file-meta').textContent=file.size<.1?`${Math.max(1,Math.round(file.size*1024))} KB`:`${file.size.toFixed(1)} MB`;
+  const statusNode=item.querySelector('.file-state');
+  statusNode.textContent={done:desktop?'已入库':'已发送',sending:'46%',error:'已中断',queued:state==='ready'?'待发送':'等待中'}[status];statusNode.classList.add(status==='done'?'done':status==='error'?'error':'neutral');
+  if(status==='sending'){const progress=document.createElement('div');progress.className='progress';progress.role='progressbar';progress.setAttribute('aria-valuenow','46');progress.setAttribute('aria-valuemin','0');progress.setAttribute('aria-valuemax','100');progress.setAttribute('aria-label',`${file.name} 传输进度示意`);progress.innerHTML='<i></i>';item.querySelector('.file-info').append(progress)}
+  return item;
+}
+function render(){
+  $('state').value=state;const enabled=state!=='off';const busy=state==='sending';
+  $('status-line').classList.toggle('off',!enabled);$('desktop-status').textContent=enabled?'接收已开启':'接收已关闭';$('toggle').setAttribute('aria-checked',String(enabled));$('toggle-label').textContent=enabled?'关闭接收':'开启接收';
+  $('connect').hidden=!enabled;$('offline').hidden=enabled;$('change-folder').disabled=busy;$('change-folder').title=busy?'本次传输完成后可更改接收目录':'';
+  $('desktop-empty').hidden=!['ready','off'].includes(state);$('desktop-empty').textContent=enabled?'等待手机上传':'本次没有正在接收的文件';
+  $('desktop-count').textContent=['ready','off'].includes(state)?'0 个文件':`${completedCount()} / ${files.length} 已入库`;
+  $('desktop-queue').replaceChildren(...(['ready','off'].includes(state)?[]:files.map((file,index)=>fileRow(file,index,true))));
+  $('mobile-queue').replaceChildren(...(state==='off'?[]:files.map((file,index)=>fileRow(file,index,false))));
+  $('pick').disabled=busy||!enabled;$('mobile-receiver').textContent=enabled?'发送到 Hins 的电脑':'电脑已关闭接收';
+  const notice={ready:'',sending:'',complete:'全部文件已存入 Bowerbird。',interrupted:'连接中断。已完成的文件保留，请重新发送未完成的文件。',off:'请在电脑上开启快传，再重新扫码。'}[state];
+  $('mobile-notice').textContent=notice;$('mobile-notice').classList.toggle('error',state==='interrupted');
+  $('send-label').textContent={ready:`发送 ${files.length} 个文件`,sending:'正在发送',complete:'继续添加',interrupted:'重新发送未完成的文件',off:'接收已关闭'}[state];
+  $('send').disabled=busy||!enabled||files.length===0;
+}
+function setState(next){state=next;$('folder-menu').hidden=true;$('change-folder').setAttribute('aria-expanded','false');render()}
+$('state').addEventListener('change',event=>setState(event.target.value));
+$('view').addEventListener('change',event=>document.querySelector('.stage').dataset.view=event.target.value);
+$('theme').addEventListener('click',()=>{const light=document.documentElement.dataset.theme!=='light';document.documentElement.dataset.theme=light?'light':'dark';$('theme').textContent=light?'深色':'浅色';$('theme').setAttribute('aria-label',light?'切换为深色':'切换为浅色')});
+$('toggle').addEventListener('click',()=>{setState(state==='off'?'ready':'off');notify(state==='off'?'接收已关闭（示意）':'接收已开启（示意）')});
+$('dismiss').addEventListener('click',()=>{$('desktop-panel').hidden=true;$('desktop-reopen').hidden=false;$('reopen').focus()});
+$('reopen').addEventListener('click',()=>{$('desktop-panel').hidden=false;$('desktop-reopen').hidden=true;$('dismiss').focus()});
+$('change-folder').addEventListener('click',()=>{$('folder-menu').hidden=!$('folder-menu').hidden;$('change-folder').setAttribute('aria-expanded',String(!$('folder-menu').hidden));if(!$('folder-menu').hidden)$('folder-menu').querySelector('button').focus()});
+$('folder-menu').addEventListener('click',event=>{const button=event.target.closest('[data-folder]');if(!button)return;$('folder-path').textContent=button.dataset.folder;$('folder-path').title=button.dataset.folder;$('folder-menu').hidden=true;$('change-folder').setAttribute('aria-expanded','false');$('change-folder').focus()});
+document.addEventListener('keydown',event=>{if(event.key!=='Escape')return;if(!$('folder-menu').hidden){$('folder-menu').hidden=true;$('change-folder').setAttribute('aria-expanded','false');$('change-folder').focus()}else if(!$('desktop-panel').hidden&&document.querySelector('.stage').dataset.view!=='mobile')$('dismiss').click()});
+$('copy-address').addEventListener('click',()=>notify('地址为示意，未复制到剪贴板'));
+$('pick').addEventListener('click',()=>$('file-input').click());
+$('file-input').addEventListener('change',event=>{if(!event.target.files.length)return;files=[...event.target.files].map(file=>({name:file.name,size:file.size/1024/1024,type:file.type.startsWith('image/')?'photo':file.type.startsWith('video/')?'video':'file'}));setState('ready');notify('仅预览文件名，不会读取或上传内容');event.target.value=''});
+$('send').addEventListener('click',()=>{if(state==='complete'){$('file-input').click();return}setState('sending');notify('接收中状态示意，可在顶部切换为“已入库”')});
+// Deliberately non-functional QR-like artwork: the fixture has no network receiver.
+const squares=[];for(let y=0;y<29;y++)for(let x=0;x<29;x++){const corner=(x<8&&y<8)||(x>20&&y<8)||(x<8&&y>20);if(!corner&&((x*17+y*23+x*y)%7<3))squares.push(`<rect x="${x}" y="${y}" width="1" height="1"/>`)}
+for(const [x,y] of [[0,0],[22,0],[0,22]])squares.push(`<path d="M${x} ${y}h7v7h-7ZM${x+1} ${y+1}v5h5v-5Z" fill-rule="evenodd"/><rect x="${x+2}" y="${y+2}" width="3" height="3"/>`);$('qr').innerHTML=squares.join('');
+const params=new URLSearchParams(location.search);if(['desktop','mobile','both'].includes(params.get('view'))){$('view').value=params.get('view');document.querySelector('.stage').dataset.view=params.get('view')}if(params.get('theme')==='light')$('theme').click();setState(['ready','sending','complete','interrupted','off'].includes(params.get('state'))?params.get('state'):'ready');
+</script>
+</body>
+</html>

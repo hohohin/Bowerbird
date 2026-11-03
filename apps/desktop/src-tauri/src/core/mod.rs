@@ -1,5 +1,7 @@
 //! 核心运行时：库路径 / 导入流水线 / 资源库 CRUD / 任务队列。
 
+pub mod audio;
+pub mod text_documents;
 pub mod autoname;
 pub mod caption;
 pub mod creative_session_contract;
@@ -27,6 +29,8 @@ pub mod visual_profile;
 pub mod project_deletion;
 
 pub mod external_files;
+pub mod external_drag;
+pub mod folder_connections;
 pub mod local_file_operations;
 pub mod file_workspace;
 pub mod file_workspace_move;
@@ -35,3 +39,4 @@ pub mod creative_restore;
 pub mod generation_diagnostics;
 pub mod local_chat;
 pub mod local_chat_cards;
+pub mod quick_transfer;

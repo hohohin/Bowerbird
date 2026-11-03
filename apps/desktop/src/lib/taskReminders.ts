@@ -11,7 +11,7 @@ export const waitingReminderStatuses = new Set([
 
 // Receipt identities use persisted event data, never poll timestamps or local turn ids.
 export function generationReminderKey(job: GenJob): string | null {
-  if (job.running || !job.turns.some((turn) => turn.error)) return null;
+  if (job.running || !job.turns[job.turns.length - 1]?.error) return null;
   return JSON.stringify(["generation", job.id, job.turns.map((turn, index) => [
     turn.turnKey ?? index, turn.error ?? null,
   ])]);

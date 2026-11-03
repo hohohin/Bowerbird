@@ -12,6 +12,7 @@ export interface CloudVideoOptions {
 }
 export interface VideoImage { mime: "image/jpeg" | "image/png"; base64: string }
 export interface VideoReference { object_key: string; bytes: number; mime?: "video/mp4" | "video/quicktime"; duration?: number }
+export interface AudioReference { object_key: string; bytes: number; mime: "audio/mpeg" | "audio/wav"; duration: number }
 export interface VideoInput {
   schema_version: 1;
   media: "video";
@@ -20,6 +21,7 @@ export interface VideoInput {
   ratio: string | null;
   reference_images: VideoImage[];
   reference_videos: VideoReference[];
+  reference_audios?: AudioReference[];
 }
 
 export function videoService(resolution: VideoResolution): string {
@@ -39,19 +41,28 @@ export function validateVideoInput(value: VideoInput): void {
   if (!Array.isArray(value.reference_images) || !Array.isArray(value.reference_videos)) throw new Error("video_references_invalid");
   const images = value.reference_images.length;
   const videos = value.reference_videos.length;
-  if (images > 30 || videos > 10) throw new Error("video_references_limit");
+  if (value.reference_audios !== undefined && !Array.isArray(value.reference_audios)) throw new Error("video_audio_references_invalid");
+  const audios = value.reference_audios ?? [];
+  if (images > 30 || videos > 10 || audios.length > 10) throw new Error("video_references_limit");
+  let audioSeconds = 0;
+  for (const audio of audios) {
+    if (!audio || typeof audio.object_key !== "string" || !["audio/mpeg", "audio/wav"].includes(audio.mime) || !Number.isSafeInteger(audio.bytes) || audio.bytes <= 0 || audio.bytes > 15 * 1024 * 1024) throw new Error("video_audio_reference_invalid");
+    if (!Number.isFinite(audio.duration) || audio.duration < 2 || audio.duration > 30) throw new Error("video_audio_duration_invalid");
+    audioSeconds += audio.duration;
+  }
+  if (audioSeconds > 30) throw new Error("video_audio_duration_limit");
   for (const image of value.reference_images) {
     if (!image || !["image/jpeg", "image/png"].includes(image.mime) || typeof image.base64 !== "string" || !image.base64 || image.base64.length % 4 !== 0 || image.base64.length >= 40 * 1024 * 1024 || !/^[A-Za-z0-9+/]*={0,2}$/.test(image.base64)) throw new Error("video_image_invalid");
   }
   if (value.ratio !== null && !VIDEO_RATIOS.includes(value.ratio)) throw new Error("video_ratio_invalid");
   switch (options.kind) {
-    case "text2video": if (images || videos) throw new Error("video_text_references_forbidden"); break;
+    case "text2video": if (images || videos || audios.length) throw new Error("video_text_references_forbidden"); break;
     case "image2video":
     case "frames2video":
-      if (videos || images !== (options.kind === "image2video" ? 1 : 2)) throw new Error("video_frame_count_invalid");
+      if (videos || audios.length || images !== (options.kind === "image2video" ? 1 : 2)) throw new Error("video_frame_count_invalid");
       if (value.ratio !== null && value.ratio !== "adaptive") throw new Error("video_frames_require_adaptive");
       break;
-    case "multimodal2video": if (!images && !videos) throw new Error("video_references_required"); break;
+    case "multimodal2video": if (!images && !videos && !audios.length) throw new Error("video_references_required"); break;
     default: throw new Error("video_kind_invalid");
   }
   for (const video of value.reference_videos) {
@@ -61,9 +72,10 @@ export function validateVideoInput(value: VideoInput): void {
 }
 
 /** URLs are issued by the control plane after checking ownership; never accept client URLs. */
-export function arkVideoBody(input: VideoInput, referenceVideoUrls: string[] = []) {
+export function arkVideoBody(input: VideoInput, referenceVideoUrls: string[] = [], referenceAudioUrls: string[] = []) {
   validateVideoInput(input);
   if (referenceVideoUrls.length !== input.reference_videos.length || referenceVideoUrls.some(url => !url.startsWith("https://"))) throw new Error("video_reference_urls_invalid");
+  if (referenceAudioUrls.length !== (input.reference_audios?.length ?? 0) || referenceAudioUrls.some(url => !url.startsWith("https://"))) throw new Error("video_audio_urls_invalid");
   const kind = input.video_options.kind;
   const body = {
     model: SEEDANCE_MODEL,
@@ -74,11 +86,12 @@ export function arkVideoBody(input: VideoInput, referenceVideoUrls: string[] = [
         role: kind === "image2video" ? "first_frame" : kind === "frames2video" ? (index === 0 ? "first_frame" : "last_frame") : "reference_image",
       })),
       ...referenceVideoUrls.map(url => ({ type: "video_url", video_url: { url }, role: "reference_video" })),
+      ...referenceAudioUrls.map(url => ({ type: "audio_url", audio_url: { url }, role: "reference_audio" })),
     ],
     duration: input.video_options.duration,
     resolution: input.video_options.video_resolution,
     ratio: input.ratio ?? "adaptive",
-    generate_audio: input.video_options.generate_audio ?? false,
+    generate_audio: input.video_options.generate_audio ?? (referenceAudioUrls.length > 0),
     output_format: "mp4",
     // MVP multimodal mode creates a new video; editing/extension needs separate duration semantics.
     ...(kind === "multimodal2video" ? { omni_reference_task_type: "reference" } : {}),

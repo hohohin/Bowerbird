@@ -4,7 +4,7 @@ version = "26.10.1502"
 description = "Bowerbird desktop app"
 authors = ["Bowerbird"]
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.90"
 default-run = "bowerbird-desktop"
 
 [lib]
@@ -29,6 +29,7 @@ tauri-plugin-process = "2"
 tauri-plugin-global-shortcut = "=2.3.1"
 xcap = "0.9"
 arboard = "3"
+notify = "=8.2.0"
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
@@ -37,6 +38,7 @@ tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
+quick-xml = "=0.41.0"
 thiserror = "1"
 anyhow = "1"
 tracing = "0.1"
@@ -69,6 +71,8 @@ heic-rs = "=0.1.4"
 palette = "0.7"
 # 视频元数据（宽高/时长）进程内解析 ISO BMFF：创作/入库不要求本机 ffprobe，webm/mkv/avi 等罕见格式仍回退 ffprobe
 mp4 = "0.14.0"
+# Built-in audio waveform decoding; no external FFmpeg installation required.
+symphonia = { version = "=0.5.5", features = ["all", "opt-simd"] }
 
 # 网络（Phase 1 扩展采集下载用；rustls 避免系统 openssl 链接）
 #   multipart：OpenAI Images /v1/images/edits 带参考图生图（spike）需要。
@@ -89,6 +93,10 @@ zip = { version = "4.6.1", default-features = false, features = ["deflate-flate2
 tempfile = "3"
 # WS Server（接收浏览器扩展采集消息）
 axum = { version = "0.7", features = ["ws"] }
+# Explicit LocalSend browser receive sessions; upstream source and notices are bundled locally.
+localsend = { path = "vendor/localsend-core", features = ["http"] }
+bytes = "1"
+if-addrs = "0.15"
 
 # ID / 时间
 ulid = { version = "1", features = ["serde"] }
@@ -112,6 +120,7 @@ reqwest = { version = "0.12", default-features = false, features = ["system-prox
 
 # Agent Z（dev-only）：向唤起的 zcode TUI 终端注入按键（AttachConsole + WriteConsoleInput）
 [target.'cfg(windows)'.dependencies]
+windows-core = "0.61"
 webview2-com = "0.38.2"
 windows = { version = "0.61", features = [
   "Win32_System_Console",
@@ -119,12 +128,17 @@ windows = { version = "0.61", features = [
   "Win32_System_Registry",
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
   "Win32_Storage_FileSystem",
   "Win32_Security",
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
   "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Ole",
+  "Win32_System_SystemServices",
   "Win32_UI_Shell",
+  "Win32_UI_Shell_Common",
 ] }
 
 # --- 发布优化 ---

@@ -1,0 +1,6 @@
+.composer-text-expand { display:inline-flex; align-items:center; justify-content:center; width:32px; height:28px; flex-shrink:0; padding:0; color:var(--bb-muted); border:0; background:transparent; cursor:pointer; }
+.composer-text-expand:hover { color:var(--bb-blue); background:var(--bb-surface-hover); }
+.composer-text-expand:focus-visible { outline:1px solid var(--bb-blue); outline-offset:2px; }
+.generation-text-editor-shell { position:relative; }
+.generation-text-editor-shell > .composer-text-expand { position:absolute; top:4px; right:8px; z-index:1; }
+.generation-text-editor-shell .creation-editor { padding-right:42px; }

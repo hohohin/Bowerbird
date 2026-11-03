@@ -1,0 +1,7 @@
+.audio-file-card { display: flex; flex-direction: column; overflow: visible; padding: 0; }
+.audio-file-card .audio-waveform { flex: 1; min-height: 0; height: auto; }
+.audio-file-placeholder { display: grid; place-items: center; flex: 1; color: var(--bb-muted); background: var(--lt-panel, var(--bb-surface-2)); }
+.audio-file-meta { display: flex; align-items: center; gap: 12px; height: 28px; flex: 0 0 28px; color: var(--bb-ink); font-size: 11px; }
+.audio-file-meta > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.audio-file-meta > time { color: var(--bb-muted); font: 10px ui-monospace, Consolas, monospace; }
+.audio-detail-waveform { width: 100%; max-width: 960px; min-height: 220px; }

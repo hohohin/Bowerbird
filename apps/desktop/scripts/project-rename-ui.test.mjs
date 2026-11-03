@@ -20,6 +20,30 @@ async function renameCalls() { return page.evaluate(() => window.calls.filter(c 
 try {
   await page.goto(base);
   await page.waitForFunction(() => window.fixtureStore?.getState().projectCanvasRename && document.querySelector(".canvas-board-title")?.value === "测试项目");
+  const canvasTitle = page.locator(".canvas-board-title");
+  await canvasTitle.fill("中文候选");
+  await canvasTitle.dispatchEvent("compositionstart");
+  for (const event of [
+    { key: "Enter", isComposing: true },
+    { key: "Enter" },
+  ]) {
+    await canvasTitle.dispatchEvent("keydown", { ...event, bubbles: true });
+    assert.equal(await canvasTitle.evaluate(element => document.activeElement === element), true, "IME candidate confirmation keeps the canvas title focused");
+    assert.equal(await renameCalls(), 0, "composition must not persist an unfinished project title");
+  }
+  await canvasTitle.dispatchEvent("compositionend");
+  await canvasTitle.dispatchEvent("keydown", { key: "Enter", isComposing: true, bubbles: true });
+  assert.equal(await canvasTitle.evaluate(element => document.activeElement === element), true, "native composition events protect an input even without compositionstart");
+  assert.equal(await renameCalls(), 0);
+  await canvasTitle.dispatchEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true });
+  assert.equal(await canvasTitle.evaluate(element => document.activeElement === element), true, "legacy IME confirmation keeps focus");
+  assert.equal(await renameCalls(), 0);
+  await canvasTitle.fill("完整项目名称");
+  await canvasTitle.press("Enter");
+  await page.waitForFunction(() => window.persistedProject().name === "完整项目名称");
+  assert.equal(await renameCalls(), 1, "ordinary Enter commits the completed title once");
+  await page.goto(base);
+  await page.waitForFunction(() => window.fixtureStore?.getState().projectCanvasRename && document.querySelector(".canvas-board-title")?.value === "测试项目");
   await open(page.locator(".project-name"));
   assert.equal(await input.inputValue(), "测试项目");
   await input.fill("   ");

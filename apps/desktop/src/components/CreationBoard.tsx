@@ -1,8 +1,8 @@
 import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, videoInputError, videoModelLabel, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, resolveVideoOptions, videoInputError, videoModelLabel, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { ProviderQuota } from "./creation/ProviderQuota";
 import { useStore } from "../store";
@@ -30,14 +30,16 @@ import {
 } from "./creation/useCreationEditor";
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import type { CreativeComposerMode } from "../lib/creativeDraft";
-import { localChatInputError } from "../lib/localChat";
+import { CHAT_PROVIDER_LABELS, localChatInputError, type ChatComposeRequest, type ChatProvider } from "../lib/localChat";
+import { ChatProviderSelect, useChatProviderAccess } from "./creation/ChatProviderSelect";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ImageGenOptions } from "./creation/ImageGenOptions";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
-import { ArrowUp, ChevronDown, History, Image, Info, MessageCircle, Plus, Sparkles, UserRound, Video } from "lucide-react";
+import { ArrowUp, ChevronDown, History, Image, Info, Maximize2, MessageCircle, Plus, Sparkles, Video, X } from "lucide-react";
+import { useTextWorkspace } from "./useTextWorkspace";
 import { useLibraryGlass } from "./useLibraryGlass";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import "./CreationBoard.css";
@@ -66,13 +68,13 @@ function saveBoardRatio(v: string | null) {
 export const AGENT_DS_DONE_EVENT = "bowerbird://agent-ds-done";
 
 /**
- * 创作板 UI 外壳：沿用素材库液态玻璃材质，顶部选择图片／视频／Agent 与品牌规范，
+ * 主屏素材库与画板共用的工业制图创作框，顶部选择图片／视频／对话与视觉规范，
  * 正文保留句中引用，输出参数和发送集中在底部。编辑器
  * 内核（ProseMirror doc / 光标 / 序列化）下沉到 useCreationEditor + creation/* 模块，
  * 本组件只管「组稿周边」：用途（preset）CRUD / 复制 / 发送 / 预览。
  *
- * 两态：常驻未激活（普通浏览：点图开详情、筛选生效）⇄ 创作模式激活（store.boardOpen，
- * 等同旧「创作板」按钮：点图插参考图、瀑布流蓝线框 + 顶部「创作模式」刘海）。编辑框
+ * 两态：常驻未激活（普通浏览）⇄ 创作模式激活（store.boardOpen）；宿主用
+ * CreationModeIndicator 呈现共用的边框与状态标签。编辑框
  * 获得焦点（onFocus，ProseMirror contenteditable 冒泡）即激活；右上角收起按钮退出。
  * 本框不提供续轮入口，续轮由绘画详情承载。会话「重新编辑」坞期间本组件整体让位
  * （App 按 !genEditing 挂载）。
@@ -80,13 +82,14 @@ export const AGENT_DS_DONE_EVENT = "bowerbird://agent-ds-done";
  * 非创作模式未聚焦时只露出正文首行（复用原编辑器，不复制文本）；点击或键盘聚焦后展开。
  * 在工具栏与内部菜单间操作保持展开，草稿与创作模式不因失焦被清空。
  *
- * 参考图入口：创作模式激活时点瀑布流任意图即在光标处插 image chip；也可手输 @图名，
+ * 参考图入口：宿主处理图片预览与引用手势，引用事件在光标处插 image chip；也可手输 @图名，
  * 空格/标点后自动识别为 image chip。维度环（CaptionRing）为全局组件（长按图片呼出），
  * 点环上扇区经 store.pendingKeyword 由本板编辑器消费插入 keyword chip。
  */
 export interface CreationBoardProps {
   embedded?: boolean;
   projectId?: string;
+  header?: ReactNode;
   initialDraft?: CreationEditorDraft | null;
   initialAssetIds?: string[];
   continuationCandidates?: CreativeParentCandidate[];
@@ -98,9 +101,12 @@ export interface CreationBoardProps {
   onOpenLibrary?: () => void;
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
+  prepareProject?: () => Promise<string>;
   composerMode?: CreativeComposerMode;
   onComposerModeChange?: (mode: CreativeComposerMode) => void;
-  onSendChat?: (request: { prompt: string; references: Asset[] }) => Promise<void>;
+  onSendChat?: (request: ChatComposeRequest, projectId?: string, sentDraftJson?: string) => Promise<void>;
+  chatProvider?: ChatProvider;
+  onChatProviderChange?: (provider: ChatProvider) => void;
   onOpenChatHistory?: () => void;
   chatHistoryOpen?: boolean;
   resolveCreativeThread?: (
@@ -109,12 +115,14 @@ export interface CreationBoardProps {
     routeRevision?: number,
     continuationRequestId?: string | null,
     parentNodeId?: string | null,
+    projectId?: string,
   ) => Promise<CreativeThreadResolution>;
 }
 
 export function CreationBoard({
   embedded = false,
   projectId,
+  header,
   initialDraft,
   initialAssetIds = [],
   continuationCandidates = [],
@@ -126,9 +134,12 @@ export function CreationBoard({
   onOpenLibrary,
   registerDraftFlush,
   beforeGenerate,
+  prepareProject,
   composerMode,
   onComposerModeChange,
   onSendChat,
+  chatProvider = "codex-local",
+  onChatProviderChange,
   onOpenChatHistory,
   chatHistoryOpen,
   resolveCreativeThread,
@@ -140,6 +151,8 @@ export function CreationBoard({
   const agentTriggerRef = useRef<HTMLButtonElement>(null);
   const [agentMenuOpen, setAgentMenuOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const codexHealth = useStore((s) => s.codexHealth);
   const creating = useStore((s) => s.boardOpen);
   const setBoardActive = useStore((s) => s.setBoardActive);
@@ -152,9 +165,9 @@ export function CreationBoard({
   const selectedImageProvider = useStore((s) => s.activeGenProvider);
   const [generation, setGeneration] = useState<GenerationSettings>(() => initialDraft?.generation ?? { media: "image" });
   const isChat = composerMode === "chat";
+  const chatAccess = useChatProviderAccess(isChat);
   const isVideo = generation.media === "video";
-  const videoOptions = generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS;
-  const activeGenProvider = isChat ? "codex" : isVideo ? videoProvider(generation.videoChannel, videoOptions) : selectedImageProvider;
+  const activeGenProvider = isChat ? "codex" : isVideo ? videoProvider(generation.videoChannel, generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS) : selectedImageProvider;
   const draftRef = useRef<CreationEditorDraft | null>(initialDraft ?? null);
   const generationRef = useRef(generation);
   generationRef.current = generation;
@@ -190,6 +203,7 @@ export function CreationBoard({
     focus,
     flushDraft,
     loadPrompt,
+    getDraft,
     finalPrompt,
     rawPrompt,
     references,
@@ -205,6 +219,8 @@ export function CreationBoard({
     initialDraft,
     onDraftChange: persistGenerationDraft,
   });
+  const textWorkspace = useTextWorkspace({ scopeKey: `${embedded ? projectId ?? "library" : "board"}:${composerMode ?? generation.media}`, projectId, getDraft, loadPrompt, focus });
+  const videoOptions = resolveVideoOptions(generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS, references);
 
   useEffect(() => {
     registerDraftFlush?.(flushDraft);
@@ -390,7 +406,7 @@ export function CreationBoard({
   }, [agentMenuOpen]);
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
-      const menu = event.target instanceof Element ? event.target.closest(".model-select-menu, .composer-local-frames, .comfy-environment-panel, .tactical-select-menu, .ratio-select-menu, .image-options-menu") : null;
+      const menu = event.target instanceof Element ? event.target.closest(".model-select-menu, .tactical-select-menu, .ratio-select-menu, .image-options-menu") : null;
       const ownMenu = menu && dockRef.current?.querySelector(`[aria-controls="${menu.id}"]`);
       if (event.target instanceof Node && !dockRef.current?.contains(event.target) && !ownMenu) setCollapsed(true);
     }
@@ -510,7 +526,7 @@ export function CreationBoard({
     canUseAgentRun(cloudEntitlement, UNIFIED_AGENT_SKILL);
   const cloudAgentHasCapacity = canStartAnotherAgentRun(cloudEntitlement, activeCloudAgentRunCount, UNIFIED_AGENT_SKILL);
   const cloudAgentRequiredBalance = 30;
-  const projectAgentContextReady = !!projectId && !!resolveCreativeThread;
+  const projectAgentContextReady = (!!projectId || !!prepareProject) && !!resolveCreativeThread;
   const cloudAgentReady =
     projectAgentContextReady &&
     cloudAgentEntitled &&
@@ -523,7 +539,7 @@ export function CreationBoard({
   const referenceError = !isVideo && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode
     ? imageInputError(references) : null;
   const sendDisabledReason = isChat
-    ? submitting ? "正在发送消息，请稍候。" : targetUnavailableReason
+    ? submitting ? "正在发送消息，请稍候。" : chatAccess.reason(chatProvider)
       ?? (references.some(asset => /\.(mp4|mov|webm|mkv)$/i.test(asset.store_path ?? "")) ? "对话暂时只支持图片参考，请移除视频。" : null)
       ?? localChatInputError(finalPrompt, references.map(asset => asset.id))
     : submitting
@@ -571,21 +587,28 @@ export function CreationBoard({
     if (isChat) {
       if (sendDisabledReason || !onSendChat) return;
       const origin = useStore.getState();
-      const originId = projectId ?? origin.activeProjectId;
+      const originId = prepareProject ? origin.activeProjectId : projectId ?? origin.activeProjectId;
       const claim = acquireCreativeSubmission(originId);
       if (!claim) return;
       setSubmitting(true);
       flushDraft();
+      const sentDraft = JSON.stringify({ ...draftRef.current, generation: generationRef.current });
       try {
-        await onSendChat({ prompt: finalPrompt.trim(), references: [...references] });
+        const targetProjectId = prepareProject ? await prepareProject() : projectId;
+        const route = useStore.getState();
+        if ((prepareProject && (!mounted.current || route.libraryHomeView !== origin.libraryHomeView))
+          || !isWorkspaceOperationCurrent(originId, route.activeProjectId, route.projectRoutePending, origin.projectRouteRevision, route.projectRouteRevision)) return;
+        await onSendChat({ prompt: finalPrompt.trim(), references: [...references], provider: chatProvider }, targetProjectId, sentDraft);
         const current = useStore.getState();
-        if (claim.isCurrent() && isWorkspaceOperationCurrent(originId, current.activeProjectId, current.projectRoutePending, origin.projectRouteRevision, current.projectRouteRevision)) exitCreationMode();
+        if (mounted.current && (!prepareProject || current.libraryHomeView === origin.libraryHomeView)
+          && claim.isCurrent() && isWorkspaceOperationCurrent(originId, current.activeProjectId, current.projectRoutePending, origin.projectRouteRevision, current.projectRouteRevision)) exitCreationMode();
       } catch (error) { notifyError(error, "对话未能发送，请检查连接后重试。"); }
       finally { claim.release(); setSubmitting(false); }
       return;
     }
     const originRoute = useStore.getState();
     const originProjectId = projectId ?? originRoute.activeProjectId;
+    const routeProjectId = prepareProject ? originRoute.activeProjectId : originProjectId;
     const originRouteRevision = originRoute.projectRouteRevision;
     const submissionClaim = acquireCreativeSubmission(originProjectId);
     if (!submissionClaim) {
@@ -598,20 +621,26 @@ export function CreationBoard({
       provider: isVideo ? activeGenProvider : originRoute.activeGenProvider,
       visualProfileId: originRoute.activeVisualProfileId,
     });
-    const originContinuation = originRoute.pendingCreativeContinuation?.projectId === originProjectId
+    const originContinuation = !prepareProject && originRoute.pendingCreativeContinuation?.projectId === originProjectId
       ? { ...originRoute.pendingCreativeContinuation }
       : null;
     const isCurrentWorkspace = () => {
       const state = useStore.getState();
       return isWorkspaceOperationCurrent(
-        originProjectId,
+        routeProjectId,
         state.activeProjectId,
         state.projectRoutePending,
         originRouteRevision,
         state.projectRouteRevision,
       );
     };
-    const isCurrentSubmission = () => submissionClaim.isCurrent() && isCurrentWorkspace();
+    const isCurrentSubmission = () => submissionClaim.isCurrent() && isCurrentWorkspace()
+      && (!prepareProject || (mounted.current && useStore.getState().libraryHomeView === originRoute.libraryHomeView));
+    let submissionProjectId = projectId;
+    const prepareSubmissionProject = async () => {
+      await beforeGenerate?.();
+      if (prepareProject) submissionProjectId = await prepareProject();
+    };
     if (!isCurrentSubmission()) return;
     if (referenceError) { notifyError(referenceError, "参考素材不适用"); return; }
     if (isVideo) {
@@ -624,7 +653,7 @@ export function CreationBoard({
       if (!body || cloudAgentBusy || !cloudAgentReady) return;
       setCloudAgentBusy(true);
       try {
-        await beforeGenerate?.();
+        await prepareSubmissionProject();
         if (!isCurrentSubmission()) return;
         const parentSelection = resolveContinuationParent(
           references,
@@ -642,6 +671,7 @@ export function CreationBoard({
           originRouteRevision,
           originContinuation?.requestId ?? null,
           parentSelection?.nodeId ?? null,
+          submissionProjectId,
         ) ?? null;
         if (!isCurrentSubmission()) return;
         const currentAccount = useStore.getState();
@@ -662,7 +692,7 @@ export function CreationBoard({
             promptToken: agentPromptReferences.find((item) => item.assetId === reference.id)?.name ?? reference.name,
           })),
           ratio,
-          projectId: originProjectId,
+          projectId: submissionProjectId ?? originProjectId,
           threadId,
           parentNodeId: continuation?.parentNodeId ?? null,
           parentAssetId: parentAsset?.id ?? null,
@@ -806,7 +836,7 @@ export function CreationBoard({
       }
     }
     try {
-      await beforeGenerate?.();
+      await prepareSubmissionProject();
     } catch (error) {
       if (isCurrentSubmission()) notifyError(error, "无法准备项目画板");
       return;
@@ -832,6 +862,7 @@ export function CreationBoard({
         originRouteRevision,
         originContinuation?.requestId ?? null,
         parentSelection?.nodeId ?? null,
+        submissionProjectId,
       ) ?? null;
     } catch (error) {
       if (isCurrentSubmission()) notifyError(error, "无法确定要继续的画板结果");
@@ -850,8 +881,8 @@ export function CreationBoard({
       undefined,
       dimensionSources,
       submissionAuthority.visualProfileId,
-      projectId && threadId ? {
-        projectId,
+      submissionProjectId && threadId ? {
+        projectId: submissionProjectId,
         threadId,
         parentNodeId: continuation?.parentNodeId ?? null,
         parentAssetPath: parentAsset?.store_path ?? null,
@@ -944,10 +975,12 @@ export function CreationBoard({
     // z-20：盖过瀑布流与生成会话面板（z-10，发送后面板弹出、板仍可继续组稿），
     // 让位右键菜单(60)/维度环(65)/tour(70)。
     <div className={`composer-host-glass pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-center ${embedded ? "canvas-composer-host" : ""}`}>
+      {textWorkspace.workspace}
       <section
         ref={dockRef}
+        // 选择项目保持折叠态，避免 pointerdown 展开导致按钮在 click 前移位。
         onPointerDown={(e) => {
-          if (!(e.target instanceof Element && e.target.closest(".creation-exit-tab, .composer-expand"))) {
+          if (!(e.target instanceof Element && e.target.closest(".creation-exit-tab, .composer-expand, .library-composer-target"))) {
             setCollapsed(false);
           }
         }}
@@ -955,7 +988,7 @@ export function CreationBoard({
           if (e.target === e.currentTarget) focus();
         }}
         onFocusCapture={event => {
-          if (!(event.target instanceof Element && event.target.closest(".composer-expand"))) setCollapsed(false);
+          if (!(event.target instanceof Element && event.target.closest(".composer-expand, .library-composer-target"))) setCollapsed(false);
         }}
         onBlurCapture={(e) => {
           const modelMenu = e.relatedTarget instanceof Element ? e.relatedTarget.closest(".model-select-menu, .tactical-select-menu, .ratio-select-menu, .image-options-menu") : null;
@@ -972,7 +1005,10 @@ export function CreationBoard({
         }`}
       >
         {glass.definition}
+        <span className="composer-hud-surface" aria-hidden="true" />
         <div className="composer-heading">
+          {header}
+          {header && isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
           <div className="composer-mode-picker library-floating-surface" role="group" aria-label="创作方式"
             style={{ "--switch-count": 2 + (onSendChat ? 1 : 0) + (showAgent ? 1 : 0), "--switch-index": selectedMode } as CSSProperties}>
             <span className="composer-mode-thumb" aria-hidden="true" />
@@ -1144,7 +1180,7 @@ export function CreationBoard({
           </div>
           {!isChat && <div className="composer-profile"><VisualProfileSelect value={activeVisualProfileId} onChange={setActiveVisualProfile} /></div>}
           <button type="button" className="composer-collapse creation-exit-tab" data-tour="board-exit"
-            title="退出创作模式，收起并保留草稿" aria-label="退出创作模式" onClick={exitCreationMode}><ChevronDown size={16} aria-hidden="true" /></button>
+            title="退出创作模式，收起并保留草稿" aria-label="退出创作模式" onClick={exitCreationMode}><X size={14} aria-hidden="true" /></button>
         </div>
         {/* 用途（preset）：发送时作为基底注入；登记=把当前编辑框内容存为用途（只需用途名）。
             功能未完成，PRESET_FEATURE_ENABLED 关闭整块 UI（store 注入逻辑随之不可达）。 */}
@@ -1294,6 +1330,7 @@ export function CreationBoard({
         <div className="composer-description-heading">
           <span id={editorLabelId}>{isChat ? "聊聊你的创作想法" : "创作描述"}</span>
           <div className="composer-description-actions">
+            <button type="button" className="composer-text-expand" aria-label="放大编辑文本" title="放大编辑文本" onMouseDown={event => event.preventDefault()} onClick={textWorkspace.openEditor}><Maximize2 size={16}/></button>
             {isChat && onOpenChatHistory && <button type="button" className="composer-chat-history" aria-label="打开对话记录" aria-expanded={chatHistoryOpen} aria-controls="project-chat-history"
               onClick={() => { flushDraft(); onOpenChatHistory(); }}><History size={13} aria-hidden="true" />对话记录</button>}
             {isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
@@ -1322,6 +1359,7 @@ export function CreationBoard({
         />
         </OverlayScrollArea>
         {isChat && !isCollapsed && <p className="composer-chat-key-hint">Enter 换行 · Ctrl / ⌘ + Enter 发送</p>}
+        {isChat && chatProvider === "deepseek-cloud" && references.length > 0 && <p className="composer-chat-key-hint">图片仅用于建卡引用；看图分析请选择本机 Codex。</p>}
         {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
         <BoardChipPreview hostRef={hostRef} />
         {!isChat && referenceError && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
@@ -1348,9 +1386,7 @@ export function CreationBoard({
             </div>
           </div>}
           <div className="composer-parameters">
-          {isChat ? <span className="composer-chat-provider" title="使用 Bowerbird 内独立登录的 Codex，自有订阅额度">
-            <span><UserRound size={13} aria-hidden="true" /></span>Codex · 本机
-          </span> : <>
+          {isChat ? <ChatProviderSelect value={chatProvider} onChange={onChatProviderChange} access={chatAccess} disabled={submitting} /> : <>
           {isVideo && <VideoControls composer channel={generation.videoChannel} options={videoOptions} onChange={(options, videoChannel = generation.videoChannel) => setGeneration({ ...generation, media: "video", videoChannel, videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio} />}
           {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。
               flex：比例 / 生成选项两个选择器水平并排（外层缺 flex 时 block 根会竖着叠成
@@ -1401,7 +1437,7 @@ export function CreationBoard({
               onClick={() => void send()}
               disabled={sendDisabledReason !== null}
               aria-describedby={sendDisabledReason ? sendTooltipId : undefined}
-              title={sendDisabledReason ? undefined : isChat ? "发送到本机 Codex，使用自有订阅额度" : cloudAgentMode
+              title={sendDisabledReason ? undefined : isChat ? `发送到${CHAT_PROVIDER_LABELS[chatProvider]}` : cloudAgentMode
                 ? "创建 Bowerbird Agent 会话：明确目标并获得授权后执行"
                 : agentZMode
                   ? "发送到 Agent Z 终端（Claude Code TUI）"

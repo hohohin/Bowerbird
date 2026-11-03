@@ -24,7 +24,7 @@ const library = () => page.locator('.categorized-library');
 const media = id => library().locator(`[data-asset-id="selection-${id}"]`);
 const slots = root => root.locator('.folder-media-card').evaluateAll(elements => elements.slice(0, 12).map(element => ({ id: element.dataset.assetId ?? element.getAttribute('aria-label'), width: element.offsetWidth, height: element.offsetHeight, transform: element.style.transform })));
 async function waitForMedia() {
-  await page.locator('.catalog-view-wipe').waitFor({ state: 'detached' });
+  await page.locator('[data-sidebar-motion]').first().waitFor({ state: 'detached' });
   await media(0).waitFor();
   await page.waitForTimeout(500);
 }

@@ -8,8 +8,12 @@
   const WS_URL = "ws://127.0.0.1:39871/ws";
   const XHS_HOST = "www.xiaohongshu.com";
   const S = globalThis.BowerbirdCollection;
+  const V = globalThis.BowerbirdVideo;
   let collecting = false;
   let scanning = false;
+  let draggedVideo = null;
+  let temporaryDraggable = null;
+  const handledDrops = new WeakSet();
 
   // 心跳：让桌面端知道扩展已安装且当前浏览器可连接（每 15s 建短连发 ping）。
   // 不影响采集（采集走独立的 save_blob 连接）；桌面端据此显示「扩展已连接」。
@@ -33,7 +37,7 @@
   btnLogo.alt = "";
   btnLogo.style.cssText = "width:100%;height:100%;display:block;pointer-events:none";
   btn.appendChild(btnLogo);
-  btn.title = "Bowerbird：拖拽图片到此处采集，或点击后确认批量采集本页素材";
+  btn.title = "Bowerbird：拖拽图片或视频到此处采集，或点击后确认批量采集本页图片";
   btn.style.cssText = [
     "position:fixed",
     "bottom:24px",
@@ -84,7 +88,10 @@
   btn.addEventListener("drop", async (e) => {
     e.preventDefault();
     resetBtnStyle();
-    if (collecting || scanning) return;
+    if (collecting || scanning || handledDrops.has(e.dataTransfer)) return;
+    handledDrops.add(e.dataTransfer);
+    const video = videoFromDrop(e);
+    if (video) { void saveVideo(video); return; }
     const candidates = candidatesFromDropEvent(e);
     if (candidates.length === 0) {
       showToast("未识别到图片地址", false);
@@ -93,6 +100,152 @@
     saveBatch(makeGenericBatch(candidates));
   });
   document.documentElement.appendChild(btn);
+
+  const videoBtn = document.createElement("button");
+  videoBtn.type="button";
+  videoBtn.textContent="视频";
+  videoBtn.setAttribute("aria-label","采集网页视频");
+  videoBtn.title="选择本页视频采集，也可 Alt 点击视频";
+  videoBtn.style.cssText="position:fixed;bottom:30px;right:80px;z-index:2147483647;border:1px solid #747474;border-radius:6px;padding:8px 12px;background:#1e1e1e;color:#dcdcdc;font:13px -apple-system,sans-serif;cursor:pointer";
+  videoBtn.addEventListener("click",async()=>{
+    if(collecting || scanning) return;
+    scanning=true; videoBtn.disabled=true;
+    try {showVideos(await collectVideos());}
+    catch {showToast("未能读取页面视频，请刷新网页后再试。",false,10000);}
+    finally {scanning=false;videoBtn.disabled=collecting;}
+  });
+  videoBtn.addEventListener("dragover",e=>{e.preventDefault();e.dataTransfer.dropEffect="copy";});
+  videoBtn.addEventListener("drop",e=>{
+    e.preventDefault();if(collecting || scanning || handledDrops.has(e.dataTransfer))return;
+    handledDrops.add(e.dataTransfer);
+    const item=videoFromDrop(e);
+    if(item) void saveVideo(item);else showToast("未识别到视频，请点击“视频”选择或 Alt 点击网页播放器。",false,10000);
+  });
+  document.documentElement.appendChild(videoBtn);
+  function restoreVideoDraggable() {
+    if(!temporaryDraggable)return;
+    const {video,attribute}=temporaryDraggable;
+    if(video.getAttribute("draggable")==="true") {
+      if(attribute===null)video.removeAttribute("draggable");else video.setAttribute("draggable",attribute);
+    }
+    temporaryDraggable=null;
+  }
+  document.addEventListener("pointerdown",e=>{
+    restoreVideoDraggable();
+    if(e.button!==0 || e.isPrimary===false || e.pointerType==="touch")return;
+    const video=(e.composedPath?.() || [e.target]).find(node=>node?.tagName==="VIDEO");
+    if(!video || video.draggable)return;
+    // Leave the native control strip to seeking/volume/fullscreen; never prevent normal playback clicks.
+    const rect=video.getBoundingClientRect();
+    if(video.controls && e.clientY>=rect.bottom-Math.min(64,rect.height/2))return;
+    temporaryDraggable={video,attribute:video.getAttribute("draggable")};
+    video.draggable=true;
+  },true);
+  document.addEventListener("pointerup",restoreVideoDraggable,true);
+  document.addEventListener("pointercancel",restoreVideoDraggable,true);
+  window.addEventListener?.("blur",restoreVideoDraggable);
+  document.addEventListener("dragstart",e=>{
+    const video=(e.composedPath?.() || [e.target]).find(node=>node?.tagName==="VIDEO");
+    draggedVideo=video ? V.element(video,location.href) : null;
+  },true);
+  document.addEventListener("dragend",()=>{draggedVideo=null;restoreVideoDraggable();},true);
+
+  function videoFromDrop(event) {
+    if(draggedVideo) return draggedVideo;
+    const html=event.dataTransfer.getData("text/html");
+    // Preserve image drops even when a surrounding page/link happens to contain video markup or a video URL.
+    if(/<(?:img|picture)\b/i.test(html))return null;
+    if(/<video\b/i.test(html)) {
+      const doc=new DOMParser().parseFromString(html,"text/html");
+      const element=doc.querySelector("video");
+      if(element) return V.element(element,location.href);
+    }
+    const raw=event.dataTransfer.getData("text/uri-list") || event.dataTransfer.getData("text/plain");
+    const url=raw.split(/\r?\n/).find(line=>line && !line.startsWith("#"));
+    return /\.(mp4|mov|m4v|webm|mkv|avi|m3u8|mpd)(?:$|[?#])/i.test(url || "") ? V.candidate(url,location.href,{source:"video-drop"}) : null;
+  }
+
+  async function collectVideos() {
+    const items=[];
+    for(const root of collectRoots()) root.querySelectorAll?.("video").forEach(video=>items.push(V.element(video,location.href)));
+    for(const meta of document.querySelectorAll('meta[property="og:video"],meta[property="og:video:url"],meta[property="og:video:secure_url"]')) {
+      items.push(V.candidate(meta.getAttribute("content"),location.href,{source:"video-metadata",name:document.title || "页面视频"}));
+    }
+    let totalJson=0;
+    for(const script of document.querySelectorAll('script[type="application/ld+json"]')) {
+      const text=script.textContent || ""; totalJson+=text.length;if(totalJson>1024*1024)break;
+      try {
+        const visit=(value,depth=0)=>{
+          if(!value || depth>8)return;
+          if(Array.isArray(value)) {value.slice(0,100).forEach(item=>visit(item,depth+1));return;}
+          if(typeof value!=="object")return;
+          if([value["@type"]].flat().includes("VideoObject")) items.push(V.candidate(value.contentUrl,location.href,{source:"video-jsonld",name:value.name || "页面视频"}));
+          for(const key of ["@graph","mainEntity","itemListElement","video"])visit(value[key],depth+1);
+        };
+        visit(JSON.parse(text));
+      }catch{}
+    }
+    if(location.hostname===XHS_HOST) {
+      const detailId=location.pathname.match(/^\/explore\/([^/]+)/)?.[1];
+      let state=readXhsInitialState();
+      if(detailId && !state?.note?.noteDetailMap?.[detailId]) state=(await fetchXhsDetailState()) || state;
+      const detail=state?.note?.noteDetailMap?.[detailId];
+      const note=detail?.note || detail;
+      const xhs=V.xhs(note,canonicalXhsNoteUrl(detailId));
+      if(xhs) items.unshift(xhs);
+    }
+    return dedupeBy(items.filter(Boolean),item=>item.media_url).slice(0,50);
+  }
+
+  function showVideos(items) {
+    hideConfirm();document.getElementById("__bowerbird_videos")?.remove();
+    document.getElementById("__bowerbird_toast")?.remove();
+    if(!items.length) {showToast("未发现可采集视频，请先打开视频详情或开始播放后再试。",false,10000);return;}
+    const card=document.createElement("section");card.id="__bowerbird_videos";
+    card.setAttribute("role","dialog");card.setAttribute("aria-label","选择视频");
+    card.style.cssText="position:fixed;bottom:88px;right:24px;width:min(340px,calc(100vw - 48px));max-height:60vh;overflow:auto;padding:16px;background:#1e1e1e;color:#dcdcdc;border:1px solid #747474;border-radius:6px;font:13px -apple-system,sans-serif;box-shadow:0 4px 16px #0006;z-index:2147483647";
+    const heading=document.createElement("div");heading.style.cssText="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px";
+    const title=document.createElement("strong");title.textContent="选择视频";
+    const close=document.createElement("button");close.textContent="关闭";close.style.cssText="background:none;border:0;color:inherit;cursor:pointer;padding:6px";close.onclick=()=>{card.remove();videoBtn.focus?.();};
+    heading.append(title,close);card.append(heading);
+    items.forEach((item,index)=>{
+      const row=document.createElement("div");row.style.cssText="display:flex;gap:12px;align-items:center;border-top:1px solid #3d3d3d;padding:12px 0";
+      const name=document.createElement("span");name.textContent=item.name==="视频" || item.name==="页面视频" ? `视频 ${index+1}` : item.name;name.style.cssText="min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+      const action=document.createElement("button");action.textContent="采集视频";action.style.cssText="flex-shrink:0;padding:8px;background:none;color:#8faab8;border:1px solid #747474;border-radius:4px;cursor:pointer";
+      action.onclick=()=>{card.remove();void saveVideo(item);};row.append(name,action);card.append(row);
+    });
+    card.addEventListener("keydown",event=>{if(event.key==="Escape") {event.preventDefault();card.remove();videoBtn.focus?.();}});
+    card.addEventListener("mousedown",event=>event.stopPropagation());
+    document.documentElement.appendChild(card);close.focus?.();
+  }
+
+  async function savePageVideo(item) {
+    const support=await S.checkVideoSupport();if(!support.ok)return support;
+    const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),S.VIDEO_FETCH_TIMEOUT_MS);
+    try {
+      const response=await fetch(item.media_url,{signal:controller.signal});
+      if(!response.ok)return {ok:false,code:"unsupported_stream"};
+      const bytes=await V.read(response,support.maxBytes);if(V.stream(bytes))return {ok:false,code:"unsupported_stream"};const ext=V.format(bytes);
+      if(!ext)return {ok:false,code:"invalid_video"};
+      clearTimeout(timer);
+      return S.uploadBytes(bytes.buffer,{media_kind:"video",requested_url:location.href,effective_url:location.href,page_url:item.source_url,
+        url:location.href,file_name:`video.${ext}`,content_type:response.headers.get("content-type") || "",candidate_source:"page-video"});
+    }catch(error){return {ok:false,code:error?.code || (error?.name==="AbortError" ? "fetch_timeout" : "unsupported_stream")};}
+    finally {clearTimeout(timer);}
+  }
+
+  async function saveVideo(item) {
+    if(collecting || scanning)return;
+    if(item.blocked){showToast(S.failureMessage({code:item.blocked},"video"),false,12000);return;}
+    collecting=true;btn.disabled=true;videoBtn.disabled=true;videoBtn.textContent="采集中";hideConfirm();
+    document.getElementById("__bowerbird_videos")?.remove();
+    showToast("正在采集视频，请保持网页打开…",true,0);
+    try {
+      const result=/^(blob:|data:)/i.test(item.media_url) ? await savePageVideo(item) : await S.requestBackground(item);
+      showToast(result.ok ? "视频已保存到素材库" : S.failureMessage(result,"video"),result.ok || result.saved,12000);
+    }catch {showToast("视频未能采集，请刷新网页后再试。",false,12000);}
+    finally {collecting=false;btn.disabled=false;videoBtn.disabled=false;videoBtn.textContent="视频";}
+  }
 
   function resetBtnStyle() {
     btn.style.transform = "";
@@ -480,6 +633,7 @@
           if (Array.isArray(value)) return value.forEach((v) => visit(v, depth + 1));
           if (typeof value !== "object") return;
           for (const key of ["image", "contentUrl", "thumbnailUrl"]) {
+            if(key==="contentUrl" && [value["@type"]].flat().includes("VideoObject"))continue;
             const image = value[key];
             const add = (v) => {
               const url = typeof v === "string" ? v : v?.url || v?.contentUrl;
@@ -676,6 +830,13 @@
       if (!e.altKey) return;
       if (collecting || scanning) return;
       const path = typeof e.composedPath === "function" ? e.composedPath() : [e.target];
+      const video=path.find(node=>node?.tagName==="VIDEO");
+      if(video) {
+        e.preventDefault();e.stopPropagation();
+        const item=V.element(video,location.href);
+        if(item)showVideos([item]);else showToast("未读取到视频地址，请先开始播放后再试。",false,10000);
+        return;
+      }
       const canvas = path.find((node) => node?.tagName === "CANVAS");
       if (canvas) {
         e.preventDefault();
@@ -710,6 +871,7 @@
     if (collecting || batch.items.length === 0) return;
     collecting = true;
     btn.disabled = true;
+    videoBtn.disabled = true;
     btn.setAttribute("aria-busy", "true");
     hideConfirm();
     try {
@@ -723,6 +885,7 @@
     } finally {
       collecting = false;
       btn.disabled = false;
+      videoBtn.disabled = false;
       btn.setAttribute("aria-busy", "false");
     }
   }

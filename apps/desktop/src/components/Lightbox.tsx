@@ -1,9 +1,11 @@
 import { isVideoPath } from "../lib/videoGeneration";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { usePortalTarget } from "../lib/portalTarget";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useImageZoom } from "../lib/useImageZoom";
+import { useCompatibleImagePath } from "../lib/useCompatibleImagePath";
 import { VideoPlayer } from "./VideoPlayer";
 import type { VideoFrame } from "../lib/videoFrame";
 import type { SaveVideoTrim } from "../lib/videoTrim";
@@ -20,18 +22,37 @@ export function Lightbox({
   onClose,
   onIndexChange,
   onAddVideoFrame,
+  onAddFrameToCanvas,
   onSaveVideoTrim,
+  videoFrameTarget,
+  videoSourceKey,
 }: {
   images: string[];
   index: number;
   onClose: () => void;
   onIndexChange: (i: number) => void;
   onAddVideoFrame?: (frame: VideoFrame) => Promise<void>;
+  onAddFrameToCanvas?: (frame: VideoFrame) => Promise<void>;
   onSaveVideoTrim?: SaveVideoTrim;
+  videoFrameTarget?: "canvas" | "reference" | "library";
+  videoSourceKey?: string;
 }) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const portalTarget = usePortalTarget();
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const frame = requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
+    return () => {
+      cancelAnimationFrame(frame);
+      if (previous?.isConnected) previous.focus({ preventScroll: true });
+    };
+  }, []);
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape" && e.target instanceof Element && e.target.closest('[role="slider"], input, textarea, select')) return;
+      // Video arrows belong to time seeking; previous/next media keep explicit buttons.
+      if (isVideoPath(images[index]) && e.key !== "Escape") return;
+      if (e.key === "Escape" && document.fullscreenElement) return;
       if (["Escape", "ArrowLeft", "ArrowRight"].includes(e.key)) e.stopPropagation();
       if (e.key === "Escape") {
         e.preventDefault();
@@ -48,10 +69,11 @@ export function Lightbox({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [images.length, index, onClose, onIndexChange]);
 
-  const zoom = useImageZoom(images[index]);
+  const imagePath = useCompatibleImagePath(images[index]);
+  const zoom = useImageZoom(imagePath);
   const multi = images.length > 1;
 
-  // createPortal 到 document.body：脱离 GenerationPanel 父链（多层 overflow-hidden），
+  // Portal escapes the preview's clipping parents while respecting an embedded workspace.
   // 确保 fixed 全屏遮罩不受任何祖先层叠上下文/transform 影响，一定盖住整屏。
   return createPortal(
     <div
@@ -60,10 +82,19 @@ export function Lightbox({
       role="dialog"
       aria-modal="true"
       aria-label={`媒体预览，${index + 1} / ${images.length}`}
+      onKeyDown={event => {
+        event.stopPropagation();
+        if (event.key !== "Tab") return;
+        const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex="0"]'))
+          .filter(item => item.getClientRects().length && !item.closest('[inert], [aria-hidden="true"]'));
+        const first = items[0], last = items[items.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }}
     >
-      {isVideoPath(images[index]) ? <VideoPlayer key={images[index]} path={images[index]} onAddFrame={onAddVideoFrame} onSaveTrim={onSaveVideoTrim} /> : <img
+      {isVideoPath(images[index]) ? <VideoPlayer key={`${images[index]}:${videoSourceKey ?? ""}`} path={images[index]} sourceKey={videoSourceKey} frameTarget={videoFrameTarget} onAddFrame={onAddVideoFrame} onAddFrameToCanvas={onAddFrameToCanvas} onSaveTrim={onSaveVideoTrim} /> : <img
         ref={zoom.imgRef}
-        src={convertFileSrc(images[index])}
+        src={imagePath ? convertFileSrc(imagePath) : undefined}
         alt={`预览图 ${index + 1}`}
         draggable={false}
         onClick={(e) => e.stopPropagation()}
@@ -76,6 +107,7 @@ export function Lightbox({
         style={zoom.style}
       />}
       <button
+        ref={closeButtonRef}
         type="button"
         onClick={(e) => {
           e.stopPropagation();
@@ -118,6 +150,6 @@ export function Lightbox({
         </>
       )}
     </div>,
-    document.body
+    portalTarget
   );
 }

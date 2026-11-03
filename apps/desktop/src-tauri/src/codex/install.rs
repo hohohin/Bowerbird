@@ -1,15 +1,13 @@
-//! codex CLI 一键安装（免 Node 直装 + npm 回退）。
-//!
-//! `@openai/codex` 的 npm 主包只是 Node 启动器，CLI 本体是 Rust 二进制，随平台子包
-//! `@openai/codex@{version}-{platform}` 发布——tarball 内 `package/vendor/<triple>/`
-//! 即完整发行版（含 rg / sandbox 工具），解出即可独立运行，实测不依赖 Node。
-//! 因此一键安装直接从 npm registry（npmmirror 优先、npmjs 兜底）下载平台包
-//! tarball，sha512 校验后解压到 `{app_data}/codex-cli/`，`resolve_codex_binary`
-//! 优先取该托管副本：用户全程无需安装 Node.js / npm，不改系统 PATH、不弹 UAC。
-//! 直装失败（如内网只剩 npm 镜像可达）且本机有 npm 时，回退原 `npm install -g`。
+//! Codex CLI 的独立安装与静默更新。所有入口共用锁；新版本先在独立目录校验，
+//! 再原子切换 current.json。已运行任务持有的旧路径和私有登录资料始终保留。
 
-use std::io::Read;
-use std::path::Path;
+use std::future::Future;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::time::Duration;
 
 use base64::Engine;
@@ -17,18 +15,25 @@ use futures_util::StreamExt;
 use sha2::{Digest, Sha512};
 use tauri::{AppHandle, Emitter};
 use tokio::io::AsyncWriteExt;
-use tokio::sync::oneshot;
+use tokio::sync::{oneshot, Mutex};
 
 use super::codex_cli::{
-    app_data_dir, codex_command, npm_command, resolve_codex_binary, resolve_npm_binary,
+    app_data_dir, codex_binary_in, codex_command, npm_command, resolve_codex_binary,
+    resolve_npm_binary, stable_version,
 };
 use crate::error::AppError;
 
-/// npmmirror（国内快）在前，npmjs 官方源兜底。
+static INSTALL_LOCK: Mutex<()> = Mutex::const_new(());
+
+/// 优先官方源，仅在不可用时尝试镜像；同一次安装始终请求相同版本。
 const REGISTRIES: [&str; 2] = [
-    "https://registry.npmmirror.com",
     "https://registry.npmjs.org",
+    "https://registry.npmmirror.com",
 ];
+
+const METADATA_TIMEOUT: Duration = Duration::from_secs(30);
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(600);
+const VERSION_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// npm dist 平台后缀（平台子包版本形如 `0.147.0-win32-x64`）。`env::consts` 是编译期
 /// 常量，match 会被整体折叠，不支持的架构返回 None。
@@ -56,23 +61,85 @@ fn emit_progress(app: &AppHandle, line: &str, percent: Option<u32>) {
     );
 }
 
-/// 一键安装入口：先免 Node 直装独立版；失败且本机有 npm 时回退 `npm install -g`。
-/// `cancel` 由命令层（SETUP_CANCEL）传入，下载流 / npm 等待处响应取消。
+fn progress(app: Option<&AppHandle>, line: &str, percent: Option<u32>) {
+    if let Some(app) = app {
+        emit_progress(app, line, percent);
+    }
+}
+
+fn is_cancelled(error: &AppError) -> bool {
+    matches!(error, AppError::Codex(message) if message == "已取消")
+}
+
+fn check_cancel(cancel: &mut oneshot::Receiver<()>) -> Result<(), AppError> {
+    match cancel.try_recv() {
+        Err(oneshot::error::TryRecvError::Empty) => Ok(()),
+        _ => Err(cancelled()),
+    }
+}
+
+async fn cancellable<T>(
+    cancel: &mut oneshot::Receiver<()>,
+    operation: impl Future<Output = Result<T, AppError>>,
+) -> Result<T, AppError> {
+    tokio::select! {
+        biased;
+        _ = &mut *cancel => Err(cancelled()),
+        result = operation => result,
+    }
+}
+
+fn managed_root() -> Result<PathBuf, AppError> {
+    app_data_dir()
+        .map(|data| data.join("codex-cli"))
+        .ok_or_else(|| AppError::Codex("无法定位应用数据目录".into()))
+}
+
+fn client() -> Result<reqwest::Client, AppError> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(DOWNLOAD_TIMEOUT)
+        .build()
+        .map_err(|error| AppError::Codex(format!("初始化下载失败: {error}")))
+}
+
+/// 一键安装与后台更新共用版本安装流程。只有首次未托管安装保留旧 npm 回退。
 pub(crate) async fn install_codex(
     app: &AppHandle,
     cancel: &mut oneshot::Receiver<()>,
 ) -> Result<(), AppError> {
-    match install_codex_standalone(app, cancel).await {
+    let _guard = match INSTALL_LOCK.try_lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            emit_progress(app, "正在等待当前更新完成…", None);
+            cancellable(cancel, async { Ok(INSTALL_LOCK.lock().await) }).await?
+        }
+    };
+    let root = managed_root()?;
+    let was_managed = root.join("current.json").exists() || root.join("vendor").exists();
+    let result = async {
+        let client = client()?;
+        progress(Some(app), "正在获取最新版本…", None);
+        let version = latest_version(&client, cancel).await?;
+        if let Some(binary) = resolve_codex_binary() {
+            if let Ok(installed) = cancellable(cancel, binary_version(&binary)).await {
+                if !newer_version(&version, &installed)? {
+                    progress(Some(app), "已是最新版本", Some(100));
+                    return Ok(());
+                }
+            }
+            check_cancel(cancel)?;
+        }
+        install_version(&root, &version, &client, Some(app), cancel).await
+    }
+    .await;
+    match result {
         Ok(()) => Ok(()),
-        // 用户取消不回退、不重试。
-        Err(e) if matches!(&e, AppError::Codex(m) if m == "已取消") => Err(e),
+        Err(error) if is_cancelled(&error) || was_managed => Err(error),
         Err(standalone_err) => match resolve_npm_binary() {
             Some(npm) => {
-                emit_progress(
-                    app,
-                    &format!("独立版下载失败，回退 npm 安装…（{standalone_err}）"),
-                    None,
-                );
+                tracing::warn!("Codex 独立安装失败，将尝试 npm: {standalone_err}");
+                emit_progress(app, "正在尝试另一种安装方式…", None);
                 npm_install(app, &npm, cancel).await
             }
             None => Err(standalone_err),
@@ -80,127 +147,213 @@ pub(crate) async fn install_codex(
     }
 }
 
-/// 免 Node 直装：依次尝试 REGISTRIES，任一源成功即返回。
-async fn install_codex_standalone(
-    app: &AppHandle,
-    cancel: &mut oneshot::Receiver<()>,
-) -> Result<(), AppError> {
-    let tag = platform_tag().ok_or_else(|| {
-        AppError::Codex("当前系统/架构暂不支持一键直装，请手动安装 codex CLI".into())
-    })?;
-    let client = reqwest::Client::builder()
-        // 单请求超时（含 tarball 下载；元数据请求共用长超时，慢点无妨）。
-        .timeout(Duration::from_secs(600))
-        .build()
-        .map_err(|e| AppError::Codex(format!("初始化下载失败: {e}")))?;
-
-    let mut last_err = String::new();
-    for registry in REGISTRIES {
-        match install_from_registry(app, &client, registry, tag, cancel).await {
-            Ok(()) => return Ok(()),
-            Err(e) if matches!(&e, AppError::Codex(m) if m == "已取消") => return Err(e),
-            Err(e) => last_err = format!("{registry}: {e}"),
-        }
+/// 静默更新只接管现有 CLI 的后续版本，不触碰系统安装或用户指定入口。
+pub(crate) async fn update_codex(_app: &AppHandle) -> Result<bool, AppError> {
+    if std::env::var("BOWERBIRD_CODEX_BINARY").is_ok_and(|value| !value.trim().is_empty()) {
+        return Ok(false);
     }
-    Err(AppError::Codex(format!("独立版下载安装失败（{last_err}）")))
+    let _guard = INSTALL_LOCK
+        .try_lock()
+        .map_err(|_| AppError::Codex("安装正在进行，稍后再检查更新".into()))?;
+    let Some(binary) = resolve_codex_binary() else {
+        return Ok(false);
+    };
+    let installed = binary_version(&binary).await?;
+    let client = client()?;
+    // 发送端存活到本次检查结束，后台任务不会被误判为用户取消。
+    let (_cancel_tx, mut cancel) = oneshot::channel();
+    let latest = latest_version(&client, &mut cancel).await?;
+    if !newer_version(&latest, &installed)? {
+        return Ok(false);
+    }
+    install_version(&managed_root()?, &latest, &client, None, &mut cancel).await?;
+    Ok(true)
 }
 
-async fn install_from_registry(
-    app: &AppHandle,
+fn newer_version(latest: &str, installed: &str) -> Result<bool, AppError> {
+    let latest =
+        stable_version(latest).ok_or_else(|| AppError::Codex("更新版本不是稳定发行版".into()))?;
+    let installed = stable_version(installed)
+        .ok_or_else(|| AppError::Codex("无法确认当前版本，已保留原安装".into()))?;
+    Ok(latest > installed)
+}
+
+async fn metadata(
     client: &reqwest::Client,
-    registry: &str,
-    tag: &str,
+    url: String,
     cancel: &mut oneshot::Receiver<()>,
-) -> Result<(), AppError> {
-    emit_progress(app, "正在获取最新版本…", None);
-    let latest: serde_json::Value = client
-        .get(format!("{registry}/@openai/codex/latest"))
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| AppError::Codex(format!("获取版本信息失败: {e}")))?
-        .json()
-        .await
-        .map_err(|e| AppError::Codex(format!("解析版本信息失败: {e}")))?;
-    let version = latest["version"]
-        .as_str()
-        .ok_or_else(|| AppError::Codex("版本信息缺少 version 字段".into()))?
-        .to_string();
-
-    // 平台子包元数据：tarball 地址 + sha512 integrity（个别源缺 integrity 则跳过校验）。
-    let meta: serde_json::Value = client
-        .get(format!("{registry}/@openai/codex/{version}-{tag}"))
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| AppError::Codex(format!("获取平台包信息失败: {e}")))?
-        .json()
-        .await
-        .map_err(|e| AppError::Codex(format!("解析平台包信息失败: {e}")))?;
-    let tarball = meta["dist"]["tarball"]
-        .as_str()
-        .ok_or_else(|| AppError::Codex("平台包信息缺少 tarball 地址".into()))?
-        .to_string();
-    let integrity = meta["dist"]["integrity"].as_str().map(str::to_string);
-
-    let data = app_data_dir().ok_or_else(|| AppError::Codex("无法定位应用数据目录".into()))?;
-    std::fs::create_dir_all(data.join("codex-cli.download"))?;
-    let tgz_path = data.join("codex-cli.download").join("codex.tgz");
-
-    download_tarball(app, client, &tarball, &tgz_path, cancel).await?;
-
-    emit_progress(app, "下载完成，校验中…", Some(99));
-    // 校验 + 解压换入是纯阻塞 IO（354MB 解压），放 blocking 线程池避免卡 async 运行时。
-    tokio::task::spawn_blocking(move || {
-        if let Some(integrity) = integrity.as_deref() {
-            verify_sha512(&tgz_path, integrity)?;
-        }
-        extract_and_swap(&data)
+) -> Result<serde_json::Value, AppError> {
+    cancellable(cancel, async {
+        client
+            .get(url)
+            .timeout(METADATA_TIMEOUT)
+            .send()
+            .await
+            .and_then(|response| response.error_for_status())
+            .map_err(|error| AppError::Codex(format!("获取版本信息失败: {error}")))?
+            .json()
+            .await
+            .map_err(|error| AppError::Codex(format!("解析版本信息失败: {error}")))
     })
     .await
-    .map_err(|e| AppError::Codex(format!("安装任务异常退出: {e}")))??;
+}
 
-    // 复查托管二进制可执行（resolve 优先托管目录，--version 走完整路径不依赖 PATH）。
-    let binary = resolve_codex_binary()
-        .ok_or_else(|| AppError::Codex("安装完成但未找到 codex 二进制".into()))?;
-    let version_ok = codex_command(&binary)
-        .arg("--version")
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    if !version_ok {
-        return Err(AppError::Codex(
-            "安装的 codex 无法执行（--version 失败）".into(),
-        ));
+async fn latest_version(
+    client: &reqwest::Client,
+    cancel: &mut oneshot::Receiver<()>,
+) -> Result<String, AppError> {
+    let mut last_error = None;
+    for registry in REGISTRIES {
+        let result = async {
+            let meta = metadata(client, format!("{registry}/@openai/codex/latest"), cancel).await?;
+            let version = meta["version"]
+                .as_str()
+                .filter(|value| stable_version(value).is_some())
+                .ok_or_else(|| AppError::Codex("未找到有效的稳定版本".into()))?;
+            Ok(version.to_owned())
+        }
+        .await;
+        match result {
+            Ok(version) => return Ok(version),
+            Err(error) if is_cancelled(&error) => return Err(error),
+            Err(error) => last_error = Some(error),
+        }
     }
-    emit_progress(app, &format!("codex {version} 安装完成"), Some(100));
+    Err(last_error.unwrap())
+}
+
+async fn binary_version(binary: &str) -> Result<String, AppError> {
+    let output = tokio::time::timeout(
+        VERSION_TIMEOUT,
+        codex_command(binary)
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| AppError::Codex("检查版本超时，已保留原安装".into()))?
+    .map_err(|error| AppError::Codex(format!("检查版本失败: {error}")))?;
+    if !output.status.success() {
+        return Err(AppError::Codex("无法运行此版本，已保留原安装".into()));
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let version = text
+        .trim()
+        .strip_prefix("codex-cli ")
+        .filter(|value| stable_version(value).is_some())
+        .ok_or_else(|| AppError::Codex("无法确认版本，已保留原安装".into()))?;
+    Ok(version.to_owned())
+}
+
+fn require_version(actual: &str, expected: &str) -> Result<(), AppError> {
+    if actual != expected {
+        return Err(AppError::Codex(format!(
+            "下载版本与预期不符（{actual} / {expected}），已保留原安装"
+        )));
+    }
     Ok(())
+}
+
+async fn install_version(
+    root: &Path,
+    version: &str,
+    client: &reqwest::Client,
+    app: Option<&AppHandle>,
+    cancel: &mut oneshot::Receiver<()>,
+) -> Result<(), AppError> {
+    if stable_version(version).is_none() {
+        return Err(AppError::Codex("安装版本无效".into()));
+    }
+    let tag = platform_tag().ok_or_else(|| AppError::Codex("当前系统暂不支持自动安装".into()))?;
+    let versions = root.join("versions");
+    std::fs::create_dir_all(&versions)?;
+    let destination = versions.join(version);
+    // 中断于发布指针之前的完整版本可以复用；绝不覆盖可能仍被任务使用的目录。
+    if destination.exists() {
+        let binary = codex_binary_in(&destination)
+            .ok_or_else(|| AppError::Codex("已有版本文件不完整，已保留原安装".into()))?;
+        let actual = cancellable(cancel, binary_version(&binary.to_string_lossy())).await?;
+        check_cancel(cancel)?;
+        activate_version(root, version, &actual, None)?;
+        progress(app, "安装完成", Some(100));
+        return Ok(());
+    }
+    let mut last_error = None;
+    for registry in REGISTRIES {
+        let result = async {
+            let meta = metadata(client, format!("{registry}/@openai/codex/{version}-{tag}"), cancel).await?;
+            let tarball = meta["dist"]["tarball"].as_str()
+                .ok_or_else(|| AppError::Codex("版本信息缺少下载地址".into()))?;
+            let integrity = meta["dist"]["integrity"].as_str()
+                .ok_or_else(|| AppError::Codex("缺少安装包校验信息，已停止安装".into()))?.to_owned();
+            expected_sha512(&integrity)?;
+            let staging = tempfile::Builder::new().prefix(".install-").tempdir_in(root)?;
+            let tgz = staging.path().join("codex.tgz");
+            download_tarball(app, client, tarball, &tgz, cancel).await?;
+            progress(app, "下载完成，正在检查…", Some(99));
+            let stop = Arc::new(AtomicBool::new(false));
+            let worker_stop = stop.clone();
+            let mut worker = tokio::task::spawn_blocking(move || {
+                verify_sha512(&tgz, &integrity, &worker_stop)?;
+                extract_package(&tgz, staging.path(), &worker_stop)?;
+                Ok::<_, AppError>(staging)
+            });
+            let staging = tokio::select! {
+                result = &mut worker => result.map_err(|error| AppError::Codex(format!("安装任务异常退出: {error}")))??,
+                _ = &mut *cancel => {
+                    stop.store(true, Ordering::Relaxed);
+                    // 等待 blocking 清理完成再释放安装锁，取消后绝不继续发布。
+                    let _ = worker.await;
+                    return Err(cancelled());
+                }
+            };
+            let package = staging.path().join("package");
+            let binary = codex_binary_in(&package)
+                .ok_or_else(|| AppError::Codex("安装包缺少可执行文件".into()))?;
+            let actual = cancellable(cancel, binary_version(&binary.to_string_lossy())).await?;
+            check_cancel(cancel)?;
+            activate_version(root, version, &actual, Some(&package))?;
+            Ok(())
+        }.await;
+        match result {
+            Ok(()) => {
+                progress(app, "安装完成", Some(100));
+                return Ok(());
+            }
+            Err(error) if is_cancelled(&error) => return Err(error),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap())
 }
 
 /// 流式下载 tarball 到 `dest`，按 content-length 节流推进度；随时可取消。
 async fn download_tarball(
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     client: &reqwest::Client,
     url: &str,
     dest: &Path,
     cancel: &mut oneshot::Receiver<()>,
 ) -> Result<(), AppError> {
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .and_then(|r| r.error_for_status())
-        .map_err(|e| AppError::Codex(format!("下载失败: {e}")))?;
+    let resp = cancellable(cancel, async {
+        client
+            .get(url)
+            .send()
+            .await
+            .and_then(|r| r.error_for_status())
+            .map_err(|e| AppError::Codex(format!("下载失败: {e}")))
+    })
+    .await?;
     let total = resp.content_length();
     if let Some(t) = total {
-        emit_progress(
+        progress(
             app,
             &format!("开始下载，约 {:.0} MB", t as f64 / 1048576.0),
             Some(0),
         );
     } else {
-        emit_progress(app, "开始下载…", None);
+        progress(app, "开始下载…", None);
     }
 
     let mut file = tokio::fs::File::create(dest)
@@ -221,7 +374,7 @@ async fn download_tarball(
             // 每变 1% 推一行，避免事件刷屏；封顶 99（100 留给校验/解压完成）。
             if last_pct != Some(pct) && pct < 100 {
                 last_pct = Some(pct);
-                emit_progress(
+                progress(
                     app,
                     &format!(
                         "下载中 {pct}%（{:.0}/{:.0} MB）",
@@ -238,22 +391,35 @@ async fn download_tarball(
 }
 
 /// sha512 校验（integrity 形如 `sha512-<base64>`；分块读避免整包进内存）。
-fn verify_sha512(path: &Path, integrity: &str) -> Result<(), AppError> {
+fn expected_sha512(integrity: &str) -> Result<Vec<u8>, AppError> {
     let expected = integrity
         .strip_prefix("sha512-")
         .ok_or_else(|| AppError::Codex("integrity 算法不是 sha512".into()))?;
+    let digest = base64::engine::general_purpose::STANDARD
+        .decode(expected)
+        .map_err(|_| AppError::Codex("安装包校验信息无效".into()))?;
+    if digest.len() != 64 {
+        return Err(AppError::Codex("安装包校验信息无效".into()));
+    }
+    Ok(digest)
+}
+
+fn verify_sha512(path: &Path, integrity: &str, stop: &AtomicBool) -> Result<(), AppError> {
+    let expected = expected_sha512(integrity)?;
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha512::new();
     let mut buf = vec![0u8; 8 * 1024 * 1024];
     loop {
+        if stop.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
         let n = file.read(&mut buf)?;
         if n == 0 {
             break;
         }
         hasher.update(&buf[..n]);
     }
-    let got = base64::engine::general_purpose::STANDARD.encode(hasher.finalize());
-    if got != expected {
+    if hasher.finalize().as_slice() != expected {
         return Err(AppError::Codex(
             "sha512 校验失败，下载可能不完整，请重试".into(),
         ));
@@ -261,43 +427,73 @@ fn verify_sha512(path: &Path, integrity: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-/// 解压 tarball 并把 `package/vendor/` 换入 `{app_data}/codex-cli/`（解析方
-/// `managed_codex_binary` 扫描的布局）。旧版先挪到 `codex-cli.old` 让位，失败回滚；
-/// 结尾清理 tmp / old（Windows 上删除失败不致命，残留由下次安装清理）。
-fn extract_and_swap(data: &Path) -> Result<(), AppError> {
-    let tgz = data.join("codex-cli.download").join("codex.tgz");
-    let tmp = data.join("codex-cli.tmp");
-    let old = data.join("codex-cli.old");
-    let final_dir = data.join("codex-cli");
-    let _ = std::fs::remove_dir_all(&tmp);
-    let _ = std::fs::remove_dir_all(&old);
-    std::fs::create_dir_all(&tmp)?;
-
-    let file = std::fs::File::open(&tgz)?;
+/// 只解包普通文件/目录；拒绝链接和路径逃逸，避免归档写出独立 staging。
+fn extract_package(tgz: &Path, destination: &Path, stop: &AtomicBool) -> Result<(), AppError> {
+    let file = std::fs::File::open(tgz)?;
     let gz = flate2::read::GzDecoder::new(file);
-    // tar crate 的 unpack 自带 `..` 路径穿越防护。
-    tar::Archive::new(gz).unpack(&tmp)?;
-    let vendor = tmp.join("package").join("vendor");
+    for entry in tar::Archive::new(gz).entries()? {
+        if stop.load(Ordering::Relaxed) {
+            return Err(cancelled());
+        }
+        let mut entry = entry?;
+        let entry_type = entry.header().entry_type();
+        let path = entry.path()?;
+        let safe_path = path.starts_with("package")
+            && path.components().all(|component| {
+                matches!(
+                    component,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
+            });
+        if !safe_path
+            || !(entry_type.is_file() || entry_type.is_dir())
+            || !entry.unpack_in(destination)?
+        {
+            return Err(AppError::Codex("安装包包含不支持的文件路径或链接".into()));
+        }
+    }
+    let vendor = destination.join("package/vendor");
     if !vendor.is_dir() {
         return Err(AppError::Codex(
             "tarball 结构异常（缺 package/vendor）".into(),
         ));
     }
 
-    if final_dir.exists() {
-        std::fs::rename(&final_dir, &old)?;
-    }
-    if let Err(e) = std::fs::create_dir(&final_dir)
-        .and_then(|()| std::fs::rename(&vendor, final_dir.join("vendor")))
-    {
-        let _ = std::fs::rename(&old, &final_dir);
-        return Err(AppError::Io(e));
-    }
     #[cfg(unix)]
-    make_vendor_executable(&final_dir.join("vendor"))?;
+    make_vendor_executable(&vendor)?;
+    Ok(())
+}
 
-    let _ = std::fs::remove_dir_all(&tmp);
-    let _ = std::fs::remove_dir_all(&old);
+fn activate_version(
+    root: &Path,
+    version: &str,
+    actual: &str,
+    package: Option<&Path>,
+) -> Result<(), AppError> {
+    require_version(actual, version)?;
+    if stable_version(version).is_none() {
+        return Err(AppError::Codex("安装版本无效".into()));
+    }
+    if let Some(package) = package {
+        std::fs::rename(package, root.join("versions").join(version))?;
+    }
+    publish_current(root, version)
+}
+
+/// 同文件系统临时文件 + persist 原子替换；失败时原指针和旧版本保持可用。
+fn publish_current(root: &Path, version: &str) -> Result<(), AppError> {
+    if stable_version(version).is_none()
+        || codex_binary_in(&root.join("versions").join(version)).is_none()
+    {
+        return Err(AppError::Codex("版本文件不完整，已保留原安装".into()));
+    }
+    let mut pointer = tempfile::NamedTempFile::new_in(root)?;
+    serde_json::to_writer(pointer.as_file_mut(), version)?;
+    pointer.flush()?;
+    pointer.as_file().sync_all()?;
+    pointer
+        .persist(root.join("current.json"))
+        .map_err(|error| AppError::Io(error.error))?;
     Ok(())
 }
 
@@ -320,7 +516,7 @@ fn make_vendor_executable(vendor: &Path) -> Result<(), AppError> {
 }
 
 /// npm 回退安装（原 codex_install 主体）：spawn `npm install -g @openai/codex`，
-/// 逐行 stdout/stderr 推进度，180s 超时 + 可取消（`kill_on_drop`）。
+/// 收集 stdout/stderr 供诊断，180s 超时 + 可取消（`kill_on_drop`）。
 async fn npm_install(
     app: &AppHandle,
     npm: &str,
@@ -335,30 +531,27 @@ async fn npm_install(
         .spawn()
         .map_err(|e| AppError::Codex(format!("启动 npm 失败: {e}")))?;
 
-    // 逐行读 stdout + stderr → emit 进度（两个 task 并发读，互不阻塞）。
+    // 并发收集 stdout/stderr，工程信息不直接送入安装进度。
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
-    let app_out = app.clone();
+    emit_progress(app, "正在安装，请稍候…", None);
     let stdout_task = tokio::spawn(async move {
         use tokio::io::{AsyncBufReadExt, BufReader};
         let mut lines: Vec<String> = Vec::new();
         if let Some(out) = stdout {
             let mut r = BufReader::new(out).lines();
             while let Ok(Some(line)) = r.next_line().await {
-                emit_progress(&app_out, &line, None);
                 lines.push(line);
             }
         }
         lines
     });
-    let app_err = app.clone();
     let stderr_task = tokio::spawn(async move {
         use tokio::io::{AsyncBufReadExt, BufReader};
         let mut lines: Vec<String> = Vec::new();
         if let Some(e) = stderr {
             let mut r = BufReader::new(e).lines();
             while let Ok(Some(line)) = r.next_line().await {
-                emit_progress(&app_err, &line, None);
                 lines.push(line);
             }
         }
@@ -393,20 +586,49 @@ async fn npm_install(
     Ok(())
 }
 
-/// extract_and_swap 依赖的临时目录布局（测试与实现共用）。
-#[cfg(test)]
-pub(crate) fn install_dirs_for_test(data: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
-    (
-        data.join("codex-cli.download").join("codex.tgz"),
-        data.join("codex-cli"),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
-    use ulid::Ulid;
+
+    fn fake_binary(root: &Path, contents: &[u8]) -> PathBuf {
+        let name = if cfg!(windows) { "codex.exe" } else { "codex" };
+        let binary = root.join("vendor/test-triple/bin").join(name);
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fs::write(&binary, contents).unwrap();
+        binary
+    }
+
+    fn tarball(root: &Path, link: bool) -> PathBuf {
+        let archive_path = root.join("fixture.tgz");
+        let file = fs::File::create(&archive_path).unwrap();
+        let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_mode(0o755);
+        if link {
+            header.set_entry_type(tar::EntryType::Symlink);
+            header.set_size(0);
+            header.set_link_name("../../outside").unwrap();
+            header.set_cksum();
+            archive
+                .append_data(&mut header, "package/vendor/unsafe-link", std::io::empty())
+                .unwrap();
+        } else {
+            let name = if cfg!(windows) { "codex.exe" } else { "codex" };
+            header.set_size(4);
+            header.set_cksum();
+            archive
+                .append_data(
+                    &mut header,
+                    format!("package/vendor/test-triple/bin/{name}"),
+                    &b"fake"[..],
+                )
+                .unwrap();
+        }
+        archive.into_inner().unwrap().finish().unwrap();
+        archive_path
+    }
 
     #[test]
     fn platform_tag_matches_build_target() {
@@ -420,45 +642,112 @@ mod tests {
         assert_eq!(platform_tag(), Some("darwin-x64"));
     }
 
-    /// 构造与官方 tarball 同构的最小 tgz（package/vendor/<triple>/bin/codex.exe），
-    /// 验证 extract_and_swap 换入后落在 `codex-cli/vendor/` 布局（managed_codex_binary
-    /// 扫描的位置），且重复安装（旧版让位）也能成功。
     #[test]
-    fn extract_and_swap_installs_vendor_layout() {
-        let data =
-            std::env::temp_dir().join(format!("bowerbird-codex-install-test-{}", Ulid::new()));
-        let (tgz, final_dir) = install_dirs_for_test(&data);
-        fs::create_dir_all(tgz.parent().unwrap()).unwrap();
+    fn stable_updates_never_downgrade_or_install_prereleases() {
+        assert!(newer_version("0.147.0", "0.99.0").unwrap());
+        assert!(newer_version("1.0.0", "0.999.999").unwrap());
+        assert!(!newer_version("0.147.0", "0.147.0").unwrap());
+        assert!(!newer_version("0.146.9", "0.147.0").unwrap());
+        assert!(newer_version("0.148.0-alpha.1", "0.147.0").is_err());
+        assert!(newer_version("0.148.0", "unknown").is_err());
+    }
 
-        let src = data.join("fake-codex.exe");
-        fs::write(&src, b"fake").unwrap();
-        {
-            let file = fs::File::create(&tgz).unwrap();
-            let enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
-            let mut archive = tar::Builder::new(enc);
-            archive
-                .append_path_with_name(&src, "package/vendor/x86_64-pc-windows-msvc/bin/codex.exe")
-                .unwrap();
-            archive
-                .append_path_with_name(&src, "package/package.json")
-                .unwrap();
-            archive.into_inner().unwrap().finish().unwrap();
+    #[test]
+    fn sha512_is_required_and_rejects_tampering() {
+        let fixture = tempfile::tempdir().unwrap();
+        let path = fixture.path().join("package.tgz");
+        fs::write(&path, b"original").unwrap();
+        let integrity = format!(
+            "sha512-{}",
+            base64::engine::general_purpose::STANDARD.encode(Sha512::digest(b"original"))
+        );
+        let stop = AtomicBool::new(false);
+        verify_sha512(&path, &integrity, &stop).unwrap();
+        fs::write(&path, b"changed").unwrap();
+        assert!(verify_sha512(&path, &integrity, &stop).is_err());
+        for invalid in ["", "sha1-abc", "sha512-abc", "sha512-!!!!"] {
+            assert!(verify_sha512(&path, invalid, &stop).is_err());
         }
+        assert!(!fixture.path().join("current.json").exists());
+    }
 
-        extract_and_swap(&data).unwrap();
-        assert!(final_dir
-            .join("vendor/x86_64-pc-windows-msvc/bin/codex.exe")
-            .is_file());
-        // 不相关的 package/package.json 不应进入最终目录。
-        assert!(!final_dir.join("package.json").is_file());
+    #[test]
+    fn extraction_is_isolated_and_rejects_links() {
+        let fixture = tempfile::tempdir().unwrap();
+        let archive = tarball(fixture.path(), false);
+        let destination = fixture.path().join("unpacked");
+        fs::create_dir(&destination).unwrap();
+        extract_package(&archive, &destination, &AtomicBool::new(false)).unwrap();
+        assert!(codex_binary_in(&destination.join("package")).is_some());
+        assert!(!fixture.path().join("current.json").exists());
+        let unsafe_archive = tarball(fixture.path(), true);
+        assert!(extract_package(&unsafe_archive, &destination, &AtomicBool::new(false)).is_err());
+        assert!(!fixture.path().join("outside").exists());
+    }
 
-        // 二次安装：旧版挪 .old 让位后仍成功。
-        extract_and_swap(&data).unwrap();
-        assert!(final_dir
-            .join("vendor/x86_64-pc-windows-msvc/bin/codex.exe")
-            .is_file());
-        assert!(!data.join("codex-cli.old").exists());
+    #[test]
+    fn activation_requires_matching_version_and_preserves_old_files() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        let old = fake_binary(&root.join("versions/0.146.0"), b"old");
+        let legacy = fake_binary(root, b"legacy");
+        publish_current(root, "0.146.0").unwrap();
+        let package = root.join("staging/package");
+        fake_binary(&package, b"new");
+        assert!(activate_version(root, "0.147.0", "0.146.0", Some(&package)).is_err());
+        assert_eq!(
+            fs::read_to_string(root.join("current.json")).unwrap(),
+            "\"0.146.0\""
+        );
+        assert!(!root.join("versions/0.147.0").exists());
+        activate_version(root, "0.147.0", "0.147.0", Some(&package)).unwrap();
+        assert_eq!(
+            fs::read_to_string(root.join("current.json")).unwrap(),
+            "\"0.147.0\""
+        );
+        assert_eq!(fs::read(&old).unwrap(), b"old");
+        assert_eq!(fs::read(&legacy).unwrap(), b"legacy");
+        assert!(publish_current(root, "0.148.0").is_err());
+        assert!(publish_current(root, "../outside").is_err());
+        assert_eq!(
+            fs::read_to_string(root.join("current.json")).unwrap(),
+            "\"0.147.0\""
+        );
+    }
 
-        fs::remove_dir_all(&data).ok();
+    #[test]
+    fn failed_pointer_replace_keeps_old_version_and_valid_download() {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        let old = fake_binary(&root.join("versions/0.146.0"), b"old");
+        let package = root.join("staging/package");
+        fake_binary(&package, b"new");
+        // 目录占位模拟 Windows 指针替换失败；旧目录始终不移动或删除。
+        fs::create_dir(root.join("current.json")).unwrap();
+        assert!(activate_version(root, "0.147.0", "0.147.0", Some(&package)).is_err());
+        assert_eq!(fs::read(old).unwrap(), b"old");
+        assert!(codex_binary_in(&root.join("versions/0.147.0")).is_some());
+        assert!(root.join("current.json").is_dir());
+    }
+
+    #[tokio::test]
+    async fn install_lock_and_cancellation_prevent_concurrent_work() {
+        let guard = INSTALL_LOCK.lock().await;
+        assert!(INSTALL_LOCK.try_lock().is_err());
+        let (sender, mut cancel) = oneshot::channel();
+        sender.send(()).unwrap();
+        let result = cancellable(&mut cancel, async { Ok(INSTALL_LOCK.lock().await) }).await;
+        assert!(matches!(result, Err(error) if is_cancelled(&error)));
+        drop(guard);
+        assert!(INSTALL_LOCK.try_lock().is_ok());
+    }
+
+    #[test]
+    fn cancelled_verification_does_not_unpack() {
+        let fixture = tempfile::tempdir().unwrap();
+        let archive = tarball(fixture.path(), false);
+        let stop = AtomicBool::new(true);
+        assert!(extract_package(&archive, fixture.path(), &stop).is_err());
+        assert!(!fixture.path().join("package").exists());
     }
 }

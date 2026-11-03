@@ -1,12 +1,20 @@
 import { userErrorMessage } from "../lib/userError";
 import type { DraftDocument } from "../lib/draftDocument";
+import { isTextAsset } from "../lib/textMedia";
+import { CreationImagePreview } from "./CreationImagePreview";
+import { CreationModeIndicator } from "./CreationModeIndicator";
+import { creationImageAssetId, useCreationImageInteraction } from "./useCreationImageInteraction";
+import { useImeGuard } from "../lib/useImeGuard";
 import { useLocalFileMode } from "../lib/localFileMode";
 import type { LibrarySource } from "../lib/localFileMode";
-import { LocalFileWorkspace } from "./LocalFileWorkspace";
 import { ProjectInspectorShell } from "./ProjectInspectorShell";
 import { WorkflowAgentDetail } from "./WorkflowAgentDetail";
 import { WORKFLOW_SKILL_ENABLED, WORKFLOW_PLANNER_ENABLED, WORKFLOW_TEMPLATE_LIBRARY_ENABLED } from "../lib/featureFlags";
 import { CanvasTextCard } from "./CanvasTextCard";
+import { CanvasDocumentCard } from "./CanvasDocumentCard";
+import type { TextWorkspaceDocument } from "../lib/documentTypes";
+import { documentToPromptLoad } from "../lib/documentComposer";
+import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import { CanvasArtboardDialog } from "./CanvasArtboardDialog";
 import { CANVAS_ARTBOARD_FROM_IMAGE, artboardComposition, containArtboardImage, intersectArtboard, type ArtboardComposition, type ArtboardImage } from "../lib/canvasArtboard";
 import { CanvasToolbox } from "./CanvasToolbox";
@@ -17,9 +25,10 @@ import { CanvasConversationImages } from "./CanvasConversationImages";
 import { canvasMaterialFilterState, type CanvasMaterialFilterState } from "../lib/canvasMaterialFilter";
 import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkflowSessionIds, resolveGenerationCells, canvasSessionImages } from "../lib/canvasSessionOutputs";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
+import { resolveWorkflowTaskFocus } from "../lib/workflowTaskFocus";
 import { restoreWorkflowEdit, workflowEditUndo, type WorkflowEditUndo } from "../lib/workflowUndo";
 import { removeWorkflowNodes } from "../lib/workflowRemoval";
-import { WORKFLOW_CARD_DRAG_TYPE, workflowNodeRun, type WorkflowInput, type WorkflowKind } from "../lib/canvasWorkflow";
+import { WORKFLOW_CARD_DRAG_TYPE, workflowCardWidth, workflowNodeRun, type WorkflowInput, type WorkflowKind } from "../lib/canvasWorkflow";
 import { replicationWorkflow } from "../lib/replicationWorkflow";
 import { captureCanvasClipboard, cloneCanvasClipboard, parseCanvasClipboard, serializeCanvasClipboard, type CanvasClipboard } from "../lib/canvasClipboard";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
@@ -40,11 +49,14 @@ import { arrangeCanvasNodes } from "../lib/canvasArrangement";
 import { canvasCardSourceRects, placeCanvasCardNearSource, newReferencesForCanvasCard, placeNewCanvasReferences, trackNewCanvasReferences } from "../lib/canvasReferencePlacement";
 import { DEFAULT_VIDEO_OPTIONS, isVideoPath, videoModelLabel } from "../lib/videoGeneration";
 import { VideoPoster } from "./VideoPoster";
+import { CanvasMediaHover } from "./CanvasMediaHover";
 import { CanvasImage, CanvasMediaProvider } from "./CanvasImage";
 import { useCanvasFrame, useLatestCallback } from "../lib/useCanvasFrame";
 import { createCanvasCellHitCache } from "../lib/canvasCellHitCache";
 import {
   useCallback,
+  lazy,
+  Suspense,
   useEffect,
   useId,
   useLayoutEffect,
@@ -60,12 +72,14 @@ import {
 } from "react";
 import { ContextMenu, DeleteSubmenu } from "./ContextMenu";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { isTauri } from "@tauri-apps/api/core";
 import {
   Archive,
   ArchiveRestore,
   Copy,
   ChevronUp,
   Folder,
+  FileText,
   Images,
   LayoutDashboard,
   Layers,
@@ -97,13 +111,17 @@ import { LibrarySourceTabs } from "./LibrarySourceTabs";
 import { LibraryCatalogTransition } from "./LibraryCatalogTransition";
 import { CanvasFrequentAssets, useCanvasFrequentAssets } from "./CanvasFrequentAssets";
 import { Lightbox } from "./Lightbox";
-import { videoTime, type VideoFrame } from "../lib/videoFrame";
+import type { VideoFrame } from "../lib/videoFrame";
+import { saveVideoFrame } from "../lib/saveVideoFrame";
+import { videoSourceKey } from "../lib/videoSourceKey";
+import { VIDEO_FRAME_CANVAS_EVENT, type VideoFrameCanvasDetail } from "../lib/videoFrameCanvas";
+import { VIDEO_COLLECTION_CANVAS_EVENT, VIDEO_COLLECTION_PROJECT_EVENT, type VideoCollectionProjectDetail, type VideoCollectionCanvasDetail } from "../lib/videoCollectionCanvas";
 import type { VideoTrimRequest } from "../lib/videoTrim";
 import { CreativeComposer } from "./CreativeComposer";
 import { CanvasConversation } from "./CanvasConversation";
 import { LocalChatPanel, LocalChatCard, LocalChatHistory } from "./LocalChatPanel";
 import { useLocalChatStore } from "../lib/localChatStore";
-import { LOCAL_CHAT_CARDS_CHANGED_EVENT, LOCAL_CHAT_UPDATED_EVENT, localChat, localChatRunning, type ChatCardAction, type ChatCardDefaults, type ChatConversation } from "../lib/localChat";
+import { LOCAL_CHAT_CARDS_CHANGED_EVENT, LOCAL_CHAT_UPDATED_EVENT, localChat, localChatRunning, type ChatCardAction, type ChatCardDefaults, type ChatConversation, type ChatComposeRequest } from "../lib/localChat";
 import { canvasChatId } from "../lib/canvasChat";
 import { canvasConversationTurn, canvasConversationTurns } from "../lib/canvasConversation";
 import { GenerationPanel } from "./GenerationPanel";
@@ -113,7 +131,9 @@ import { CreativeTimeline, generationStatusLabel } from "./CreativeTimeline";
 import { api } from "../lib/api";
 import { externalFiles } from "../lib/externalFiles";
 import { countCloudAgentResultImages, selectCloudAgentResultArtifacts } from "../lib/cloudAgentResult";
-import { getDragAssets } from "../lib/dragPayload";
+import { getDragAssets, isNativeAssetDrag } from "../lib/dragPayload";
+import { EXTERNAL_DRAG_ENDED, startExternalDrag } from "../lib/externalDrag";
+import { createCanvasDragHold } from "../lib/canvasDragHold";
 import {
   supersededProjectTaskIds,
   isProjectNodeNavigable,
@@ -203,6 +223,7 @@ import type {
   CreativeViewMode,
 } from "../lib/types";
 
+const TextWorkspace = lazy(() => import("./TextWorkspace").then(module => ({ default: module.TextWorkspace })));
 const ASSET_WIDTH = 190;
 let canvasClipboardText = "";
 const FOLDER_WIDTH = 204;
@@ -376,19 +397,21 @@ function agentGroupSummary(node: ProjectGraphNode) {
 function FolderPreview({
   node,
   onAssetContextMenu,
+  onAssetPointerDown,
   filterState,
 }: {
   node: CanvasFolderNode;
   filterState: (asset: CanvasAssetSnapshot) => CanvasMaterialFilterState;
   onAssetContextMenu: (event: React.MouseEvent<HTMLElement>, asset: CanvasAssetSnapshot) => void;
+  onAssetPointerDown: (event: PointerEvent<HTMLElement>, asset: CanvasAssetSnapshot) => void;
 }) {
   const layerWorkspaceIds = useStore((state) => state.layerWorkspaceIds);
   return (
     <div className="canvas-folder-grid" aria-hidden="true">
       {node.assets.slice(0, 4).map((asset) => {
         const path = canvasAssetMediaPath(asset);
-        return isVideoPath(asset.storePath) ? <VideoPoster key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} path={asset.storePath} poster={asset.thumbPath} alt={asset.name} onContextMenu={event => onAssetContextMenu(event, asset)} /> : path ? (
-          <div key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} className="relative min-h-0" onContextMenu={(event) => onAssetContextMenu(event, asset)}>
+        return isVideoPath(asset.storePath) ? <VideoPoster key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} path={asset.storePath} poster={asset.thumbPath} alt={asset.name} draggable={false} onPointerDown={event => onAssetPointerDown(event, asset)} onContextMenu={event => onAssetContextMenu(event, asset)} /> : path ? (
+          <div key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} className="relative min-h-0" onPointerDown={event => onAssetPointerDown(event, asset)} onContextMenu={(event) => onAssetContextMenu(event, asset)}>
             <CanvasImage
               path={asset.storePath} thumbPath={asset.thumbPath} sourceWidth={asset.width} sourceHeight={asset.height}
               alt=""
@@ -398,7 +421,7 @@ function FolderPreview({
             {asset.assetId && layerWorkspaceIds.has(asset.assetId) && <span className="pointer-events-none absolute left-1 top-1 z-10 rounded-full bg-black/70 px-1.5 py-1 text-white backdrop-blur" title="有分层工程" aria-label="有分层工程"><Layers size={12} /></span>}
           </div>
         ) : (
-          <span key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} onContextMenu={(event) => onAssetContextMenu(event, asset)}>
+          <span key={asset.id} data-frequent-asset-id={asset.assetId ?? undefined} data-canvas-filter={filterState(asset)} onPointerDown={event => onAssetPointerDown(event, asset)} onContextMenu={(event) => onAssetContextMenu(event, asset)}>
             {asset.name.slice(0, 1)}
           </span>
         );
@@ -566,6 +589,14 @@ export function CanvasWorkspace({
   const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; section?: { id: string; name: string } | null; x: number; y: number; point: CanvasPoint | null } | null>(null);
   useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
   const [viewRevision, setViewRevision] = useState(0);
+  const [documentEditor, setDocumentEditor] = useState<{ nodeId: string; projectId: string; initialDocument: TextWorkspaceDocument } | null>(null);
+  const documentEditorSession = useRef(0);
+  const documentEditorRevision = useRef(0);
+  const [documentPromptLoad, setDocumentPromptLoad] = useState<CreativePromptLoadRequest | null>(null);
+  const documentSaveRef = useRef<{ nodeId: string; payloadJson: string } | null>(null);
+  const documentSaveTimer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => { setDocumentEditor(null); return () => { documentEditorSession.current++; flushDocumentCard(); }; }, [projectId, viewMode]);
+  useEffect(() => { setDocumentPromptLoad(null); }, [projectId]);
   const activeGenerationJob = activeJobId ? genJobs[activeJobId] ?? null : null;
   const activeAgentRun = activeCloudAgentRunId ? cloudAgentRuns[activeCloudAgentRunId] ?? null : null;
   const snapshotPrompt = !activeGenerationJob && !activeAgentRun && genPanelOpen
@@ -591,6 +622,12 @@ export function CanvasWorkspace({
   const stageRef = useRef<HTMLDivElement>(null);
   const planeRef = useRef<HTMLDivElement>(null);
   const zoomLabelRef = useRef<HTMLSpanElement>(null);
+  const centeredEditorRef = useRef<HTMLElement | null>(null);
+  const editorCenterTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => {
+    clearTimeout(editorCenterTimerRef.current);
+    centeredEditorRef.current = null;
+  }, [projectId, viewMode]);
   const cameraSettleRef = useRef<ReturnType<typeof setTimeout>>();
   const snapSizeObserverRef = useRef<ResizeObserver | null>(null);
   const cellHitCacheRef = useRef<ReturnType<typeof createCanvasCellHitCache> | null>(null);
@@ -622,6 +659,8 @@ export function CanvasWorkspace({
   const externalInstancesRef = useRef<{ signature: string; assets: CanvasAssetSnapshot[] } | null>(null);
   const spacePressedRef = useRef(false);
   const suppressNodeClickRef = useRef(false);
+  const canvasDragHold = useRef(createCanvasDragHold());
+  const canvasExportRef = useRef<AbortController | null>(null);
   const nodeDragRef = useRef<{
     nodeId: string;
     toggleSelection: boolean;
@@ -664,7 +703,7 @@ export function CanvasWorkspace({
   } | null>(null);
   const marqueePressRef = useRef<CanvasMarqueePress | null>(null);
   const selectedCanvasNodeIdsRef = useRef(selectedCanvasNodeIds);
-  const [drawingTool, setDrawingTool] = useState<"select" | "pan" | "section" | "artboard" | "bubble" | Exclude<WorkflowKind, "trigger">>("select");
+  const [drawingTool, setDrawingTool] = useState<"select" | "pan" | "section" | "artboard" | "bubble" | "document" | Exclude<WorkflowKind, "trigger">>("select");
   const [artboardDialog, setArtboardDialog] = useState<{ nodeId: string; projectId: string; revision: number; composition: ArtboardComposition } | null>(null);
   useEffect(() => { setArtboardDialog(null); }, [projectId]);
   const workflowRef = useRef<WorkflowLayerHandle>(null);
@@ -720,7 +759,7 @@ export function CanvasWorkspace({
     workflowRef.current?.cancelPlacement();
     setDrawingTool(tool);
   }
-  function canvasCardTool(kind: "bubble" | Exclude<WorkflowKind, "trigger">) {
+  function canvasCardTool(kind: "bubble" | "document" | Exclude<WorkflowKind, "trigger">) {
     return {
       draggable: true,
       "aria-pressed": drawingTool === kind,
@@ -750,6 +789,25 @@ export function CanvasWorkspace({
   const graphNodeFrame = useCanvasFrame(updateGraphNodeDrag);
   const panFrame = useCanvasFrame(updatePan);
   const cameraFrame = useCanvasFrame<void>(paintCamera);
+  useEffect(() => {
+    const hold = canvasDragHold.current;
+    const move = (event: globalThis.PointerEvent) => hold.move(event.pointerId, { x: event.clientX, y: event.clientY }, event.buttons);
+    const end = (event: globalThis.PointerEvent) => hold.end(event.pointerId);
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape" || event.code === "Space") hold.cancel(); };
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", end, true);
+    window.addEventListener("pointercancel", end, true);
+    window.addEventListener("keydown", escape, true);
+    window.addEventListener("blur", hold.cancel);
+    return () => {
+      hold.cancel(); canvasExportRef.current?.abort();
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", end, true);
+      window.removeEventListener("pointercancel", end, true);
+      window.removeEventListener("keydown", escape, true);
+      window.removeEventListener("blur", hold.cancel);
+    };
+  }, [projectId, projectRouteRevision, projectRoutePending, viewMode, exploring]);
   const readCanvasZoom = useCallback(() => { cameraFrame.flush(); return zoomRef.current; }, [cameraFrame]);
   // The refs own the live camera during gestures; React catches up when input settles.
   useLayoutEffect(paintCamera);
@@ -943,6 +1001,7 @@ export function CanvasWorkspace({
     // Pull the editor's latest in-memory ProseMirror document through the
     // persistence callback before waiting on the queue.
     composerDraftFlushRef.current?.();
+    flushDocumentCard();
     await writeQueueRef.current;
     await retryPendingWrites();
     if (includeView) {
@@ -1208,7 +1267,7 @@ export function CanvasWorkspace({
   function seedInitialAssets(assetIds: string[]) {
     const snapshots = assetIds.flatMap((assetId) => {
       const asset = assetById.get(assetId);
-      return asset ? [createCanvasAssetSnapshot(asset, canvasId("asset"))] : [];
+      return asset && !isTextAsset(asset) ? [createCanvasAssetSnapshot(asset, canvasId("asset"))] : [];
     });
     const created = snapshots.map((asset, index): CanvasAssetNode => {
       const size = assetNodeSize(asset);
@@ -1352,7 +1411,7 @@ export function CanvasWorkspace({
     viewModeRef.current = "canvas"; setViewMode("canvas"); markViewDirty();
   }
 
-  async function startLocalChat(request: { prompt: string; references: Asset[] }) {
+  async function startLocalChat(request: ChatComposeRequest) {
     const id = activeCanvasRef.current.id;
     const revision = useStore.getState().projectRouteRevision;
     await prepareForGeneration();
@@ -1363,7 +1422,7 @@ export function CanvasWorkspace({
     const bounds = stageRef.current?.getBoundingClientRect();
     const point = bounds ? toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 3) : { x: 80, y: 80 };
     const placement = placeCanvasCardNearSource({ x: point.x - 160, y: point.y, width: 320, height: 190 }, selectionAnchors().map(anchor => anchor.rect));
-    const chat = await useLocalChatStore.getState().send({ projectId: id, text: request.prompt,
+    const chat = await useLocalChatStore.getState().send({ projectId: id, text: request.prompt, provider: request.provider,
       referenceAssetIds: request.references.map(asset => asset.id), cardDefaults: chatCardDefaults(), placement: { ...placement, width: 320, height: 190, zIndex: Date.now() % 1000000 } });
     if (activeCanvasRef.current.id === id && useStore.getState().projectRouteRevision === revision) openLocalChat(chat.id);
   }
@@ -1750,6 +1809,29 @@ export function CanvasWorkspace({
       archived,
       focusThreadId,
     );
+    const workflow = projectId ? canvasWorkflowController(projectId) : null;
+    if (resolution.state === "pending" && workflow?.ready) {
+      const workflowResolution = resolveWorkflowTaskFocus(workflow.document, focusNodeId ?? null, focusThreadId ?? null, threadResolution === "ready");
+      if (workflowResolution.state === "ready" && stageRef.current) {
+        const node = workflowResolution.node;
+        const target = workflowRef.current?.bounds().find(bounds => bounds.id === node.id)
+          ?? { ...node, width: workflowCardWidth(node), height: 400 };
+        const rect = stageRef.current.getBoundingClientRect();
+        const nextPan = { x: rect.width / 2 - (target.x + target.width / 2), y: rect.height / 2 - (target.y + target.height / 2) };
+        panRef.current = nextPan; zoomRef.current = 1;
+        setPan(nextPan); setZoom(1);
+        setSelectedCanvasNodeIds(new Set([node.id]));
+        setFocusedNodeId(node.id); setFocusedThreadId(focusThreadId);
+        viewModeRef.current = "canvas"; setViewMode("canvas");
+        if (projectId && focusThreadId) useStore.getState().clearProjectThreadUnread(projectId, focusThreadId);
+        markViewDirty();
+      }
+      if (workflowResolution.state !== "pending") {
+        appliedFocusRequestRef.current = requestKey;
+        onFocusConsumed?.(focusRequestId);
+        return;
+      }
+    }
     if (resolution.state === "pending") return;
     const target = resolution.state === "ready" ? resolution.node : null;
     const stage = stageRef.current;
@@ -1772,7 +1854,7 @@ export function CanvasWorkspace({
     }
     appliedFocusRequestRef.current = requestKey;
     onFocusConsumed?.(focusRequestId);
-  }, [focusNodeId, focusRequestId, focusThreadId, graphNodes, graphEdges, loadFailed, loading, onFocusConsumed, projectId, threads]);
+  }, [focusNodeId, focusRequestId, focusThreadId, graphNodes, graphEdges, loadFailed, loading, onFocusConsumed, projectId, threads, workflowRevision]);
 
   useEffect(() => { setCanvasLibraryOpen(false); }, [projectId, setCanvasLibraryOpen]);
 
@@ -2006,6 +2088,7 @@ export function CanvasWorkspace({
       .catch((reason) => console.error("project canvas unmount flush failed", reason));
   }, []);
 
+  const titleIme = useImeGuard();
   function commitProjectTitle() {
     const draft = activeCanvasRef.current;
     const title = draft.title.trim();
@@ -2149,6 +2232,7 @@ export function CanvasWorkspace({
     }
     if (node.kind === "note" && "payloadJson" in node) {
       const note = readCanvasNote(node);
+      if (note.note_type === "document") return { x: node.x, y: node.y, width: node.width, height: 56 };
       if (note.note_type === "text" || note.note_type === "images") {
         const minimum = canvasTextMinSize(note.cells);
         return { x: node.x, y: node.y, width: Math.max(node.width, minimum.width), height: Math.max(node.height, minimum.height) };
@@ -2281,7 +2365,7 @@ export function CanvasWorkspace({
     }
     const incoming = ids.flatMap((id) => {
       const asset = assetById.get(id);
-      return asset ? [createCanvasAssetSnapshot(asset, canvasId("asset"))] : [];
+      return asset && !isTextAsset(asset) ? [createCanvasAssetSnapshot(asset, canvasId("asset"))] : [];
     });
     externalInstancesRef.current = { signature, assets: incoming };
     return incoming;
@@ -2296,14 +2380,23 @@ export function CanvasWorkspace({
 
   useEffect(() => {
     const end = () => {
+      if (isNativeAssetDrag()) return;
       if (sourceDragFrame.current !== null) cancelAnimationFrame(sourceDragFrame.current);
       sourceDragFrame.current = null;
       setLibraryDragging(false);
-      clearExternalDrag();
+      externalInstancesRef.current = null;
+      setExternalDragOver(false);
+      // Native preparation can finish after a newer ordinary canvas gesture has begun.
+      if (!nodeDragRef.current && !graphNodeDragRef.current) {
+        setHover(null);
+        setFolderDropTargetId(null);
+      }
     };
     window.addEventListener("dragend", end);
+    window.addEventListener(EXTERNAL_DRAG_ENDED, end);
     return () => {
       window.removeEventListener("dragend", end);
+      window.removeEventListener(EXTERNAL_DRAG_ENDED, end);
       if (sourceDragFrame.current !== null) cancelAnimationFrame(sourceDragFrame.current);
     };
   }, []);
@@ -2342,7 +2435,7 @@ export function CanvasWorkspace({
       if (loadingRef.current || useStore.getState().projectRoutePending || (event.target as HTMLElement).closest(".canvas-drawing-tools")) return;
       try {
         const value = JSON.parse(event.dataTransfer.getData(WORKFLOW_CARD_DRAG_TYPE));
-        if (value.projectId !== projectId || !["text", "bubble", "instruction", "generation", "skill", "agent", "visual-profile", "loop", ...(import.meta.env.DEV ? ["planner"] : [])].includes(value.kind)) return;
+        if (value.projectId !== projectId || !["text", "document", "bubble", "instruction", "generation", "skill", "agent", "visual-profile", "loop", ...(import.meta.env.DEV ? ["planner"] : [])].includes(value.kind)) return;
         const point = toBoardPoint(event.clientX, event.clientY);
         placeCanvasCard(value.kind, point);
       } catch { /* Ignore unrelated or malformed external drag payloads. */ }
@@ -2533,9 +2626,15 @@ export function CanvasWorkspace({
       const frozenProject = activeCanvasRef.current;
       const point = toBoardPoint(detail.clientX, detail.clientY);
       const order = nodesRef.current.reduce((max, node) => Math.max(max, node.order), 0) + 1;
-      let placedCount = 0;
+      const placements = new Map<string, { node: CanvasAssetNode; saved: boolean }>();
       detail.place = async (asset) => {
-        const index = placedCount++;
+        const previous = placements.get(asset.id);
+        if (previous) {
+          if (!previous.saved) await retryPendingWrites();
+          if (!previous.saved) throw new Error("画板卡片尚未保存，请重试");
+          return previous.node.id;
+        }
+        const index = placements.size;
         const snapshot = createCanvasAssetSnapshot(asset, canvasId("asset"));
         const size = assetNodeSize(snapshot);
         const node: CanvasAssetNode = {
@@ -2543,10 +2642,15 @@ export function CanvasWorkspace({
           x: point.x - size.width / 2 + index * 24, y: point.y - size.height / 2 + index * 24,
           ...size, order: order + index,
         };
+        const placement = { node, saved: false };
+        placements.set(asset.id, placement);
         // Persist to the frozen project even when indexing finishes after navigation.
         await enqueueWrite(async () => {
           await ensureMaterialized(frozenProject);
-          await api.projectCanvasNodeCreate(newProjectCanvasAssetNode(projectId, node));
+          if (!placement.saved) {
+            await api.projectCanvasNodeCreate(newProjectCanvasAssetNode(projectId, node));
+            placement.saved = true;
+          }
           const route = useStore.getState();
           if (stage?.isConnected && activeCanvasRef.current.id === projectId
             && route.activeProjectId === projectId && !route.projectRoutePending) {
@@ -2728,8 +2832,45 @@ export function CanvasWorkspace({
     });
   }
 
-  function beginNodeDrag(event: PointerEvent<HTMLDivElement>, node: CanvasNode) {
+  function armCanvasAssetHold(event: PointerEvent<HTMLElement>, nodeId: string, asset: CanvasAssetSnapshot, member = false) {
+    const route = useStore.getState();
+    if (!isTauri() || event.button !== 0 || isNativeAssetDrag() || !asset.assetId || !asset.storePath
+      || isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")
+      || loadingRef.current || route.projectRoutePending || frequentPickingRef.current) return;
+    const element = event.currentTarget, pointerId = event.pointerId;
+    const expectedProject = activeCanvasRef.current.id, revision = route.projectRouteRevision;
+    const selection = nodeDragRef.current?.pointerId === pointerId ? nodeDragRef.current.selectedIds
+      : graphNodeDragRef.current?.pointerId === pointerId ? graphNodeDragRef.current.selectedIds : new Set([nodeId]);
+    const assets = member || selection.size === 1 ? [asset] : [...selection].flatMap(id => {
+      const shown = selectedConversationImage(id, conversationImages(id));
+      if (shown) return [shown];
+      const node = nodesRef.current.find(item => item.id === id);
+      return node ? node.kind === "asset" ? [node.asset] : node.assets : [];
+    });
+    const ids = [...new Set(assets.flatMap(item => item.assetId && item.storePath ? [item.assetId] : []))];
+    if (!ids.length) return;
+    element.setPointerCapture(pointerId);
+    canvasDragHold.current.start(pointerId, { x: event.clientX, y: event.clientY }, () => {
+      const current = useStore.getState();
+      if (!element.isConnected || !element.hasPointerCapture(pointerId) || loadingRef.current || isNativeAssetDrag()
+        || !isWorkspaceOperationCurrent(expectedProject, current.activeProjectId, current.projectRoutePending, revision, current.projectRouteRevision)) return;
+      // Nothing has moved: relinquish the pending canvas gesture before the OS takes the pointer.
+      nodeFrame.cancel(); graphNodeFrame.cancel();
+      nodeDragRef.current = null; graphNodeDragRef.current = null;
+      cancelConversationImageClick(); suppressNodeClickRef.current = true;
+      setActiveDragId(null); setGuides([]); setHover(null); setFolderDropTargetId(null);
+      element.releasePointerCapture(pointerId);
+      const controller = new AbortController(); canvasExportRef.current = controller;
+      void startExternalDrag(ids, "hold", { source: "canvas", signal: controller.signal,
+        sourceRect: (element.querySelector("img, video") ?? element).getBoundingClientRect() }).finally(() => {
+        if (canvasExportRef.current === controller) canvasExportRef.current = null;
+      });
+    });
+  }
+
+  function beginNodeDrag(event: PointerEvent<HTMLElement>, node: CanvasNode) {
     if (isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan") || event.button !== 0) return;
+    suppressNodeClickRef.current = false;
     event.preventDefault();
     event.stopPropagation();
     window.getSelection()?.removeAllRanges();
@@ -2758,10 +2899,12 @@ export function CanvasWorkspace({
       if (!selectedCanvasNodeIdsRef.current.has(node.id)) setSelectedCanvasNodeIds(new Set());
     }
     event.currentTarget.setPointerCapture(event.pointerId);
+    if (node.kind === "asset") armCanvasAssetHold(event, node.id, node.asset);
   }
 
   function beginGraphNodeDrag(event: PointerEvent<HTMLElement>, node: { id: string; x: number; y: number; kind: string }) {
     if (isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan") || event.button !== 0) return;
+    suppressNodeClickRef.current = false;
     setPendingNewCards(pending => pending.filter(id => id !== node.id));
     // Readonly rich text can opt back into selection inside a draggable card.
     event.preventDefault();
@@ -3006,8 +3149,7 @@ export function CanvasWorkspace({
           queued = true;
           await enqueueWrite(async () => {
             await ensureMaterialized(project);
-            savedAsset ??= await api.importImageBytes({ dataUrl, projectId: project.id, source: "video-frame",
-              fileName: `${path.split(/[\\/]/).pop()?.replace(/\.[^.]+$/, "") || "视频"}-${videoTime(time).replace(/:/g, "-")}.png` });
+            savedAsset ??= await saveVideoFrame({ path, time, dataUrl }, project.id);
             dataUrl = "";
             const snapshot = createCanvasAssetSnapshot(savedAsset, nodeId);
             const size = assetNodeSize(snapshot);
@@ -3032,6 +3174,72 @@ export function CanvasWorkspace({
     await save();
     videoFrameSaves.current.delete(key);
   }
+
+  const collectedVideoSaves = useRef(new Map<string, () => Promise<void>>());
+  async function addCollectedVideo({ asset, projectId, operationId }: VideoCollectionCanvasDetail) {
+    let save = collectedVideoSaves.current.get(operationId);
+    if (!save) {
+      const stage = stageRef.current, project = activeCanvas;
+      if (!stage || project.id !== projectId || loadingRef.current || useStore.getState().projectRoutePending) throw new Error("请等待目标画板加载完成");
+      const bounds = stage.getBoundingClientRect(), center = toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+      const snapshot = createCanvasAssetSnapshot(asset, canvasId("asset")), size = assetNodeSize(snapshot);
+      const position = placeCanvasCardNearSource({ x: center.x - size.width / 2, y: center.y - size.height / 2, ...size }, nodesRef.current.map(nodeRect));
+      const node: CanvasAssetNode = { kind: "asset", id: snapshot.id, asset: snapshot, ...position, ...size,
+        order: nodesRef.current.reduce((max, node) => Math.max(max, node.order), 0) + 1 };
+      let queued = false, completed = false;
+      save = async () => {
+        await retryPendingWrites();
+        if (completed) return;
+        if (!queued) {
+          queued = true;
+          await enqueueWrite(async () => {
+            await ensureMaterialized(project);
+            await api.projectCanvasNodeCreate(newProjectCanvasAssetNode(projectId, node));
+            completed = true;
+            const current = useStore.getState();
+            if (stage.isConnected && activeCanvasRef.current.id === projectId && current.activeProjectId === projectId && !current.projectRoutePending) {
+              setCanvasAssets(assets => [...assets.filter(item => item.id !== asset.id), asset]);
+              commitNodes([...nodesRef.current.filter(item => item.id !== node.id), node]);
+            }
+          });
+        }
+        if (writeJournalRef.current.failure != null) throw writeJournalRef.current.failure;
+      };
+      collectedVideoSaves.current.set(operationId, save);
+    }
+    await save();
+    collectedVideoSaves.current.delete(operationId);
+  }
+
+  const saveCollectedRef = useRef(addCollectedVideo);
+  saveCollectedRef.current = addCollectedVideo;
+  const saveFrameRef = useRef(addVideoFrame);
+  saveFrameRef.current = addVideoFrame;
+  useEffect(() => {
+    const save = (event: Event) => {
+      const detail = (event as CustomEvent<VideoFrameCanvasDetail>).detail;
+      if (detail.projectId === activeCanvasRef.current.id && useStore.getState().activeProjectId === detail.projectId) {
+        detail.result = saveFrameRef.current(detail.frame);
+      }
+    };
+    window.addEventListener(VIDEO_FRAME_CANVAS_EVENT, save);
+    const saveCollected = (event: Event) => {
+      const detail = (event as CustomEvent<VideoCollectionCanvasDetail>).detail;
+      if (detail.projectId === activeCanvasRef.current.id && useStore.getState().activeProjectId === detail.projectId) detail.result = saveCollectedRef.current(detail);
+    };
+    window.addEventListener(VIDEO_COLLECTION_CANVAS_EVENT, saveCollected);
+    const prepareCollection = (event: Event) => {
+      const detail = (event as CustomEvent<VideoCollectionProjectDetail>).detail;
+      if (detail.projectId === activeCanvasRef.current.id && useStore.getState().activeProjectId === detail.projectId && !useStore.getState().projectRoutePending) {
+        detail.result = ensureMaterialized(activeCanvasRef.current).then(() => {});
+      }
+    };
+    window.addEventListener(VIDEO_COLLECTION_PROJECT_EVENT, prepareCollection);
+    return () => {
+      window.removeEventListener(VIDEO_FRAME_CANVAS_EVENT, save); window.removeEventListener(VIDEO_COLLECTION_CANVAS_EVENT, saveCollected);
+      window.removeEventListener(VIDEO_COLLECTION_PROJECT_EVENT, prepareCollection);
+    };
+  }, []);
 
   async function saveVideoTrim(request: VideoTrimRequest): Promise<Asset> {
     const project = activeCanvas;
@@ -3087,7 +3295,7 @@ export function CanvasWorkspace({
     return asset;
   }
 
-  function activateCanvasMaterial(node: CanvasNode, assetAnchor?: HTMLElement) {
+  function activateCanvasMaterial(node: CanvasNode) {
     if (node.kind === "folder") {
       setFolderExpanded(node.id, true);
       return;
@@ -3098,23 +3306,7 @@ export function CanvasWorkspace({
     }
     const state = useStore.getState();
     if (canvasPrimaryMaterialAction(state.boardOpen, !!state.genEditing) === "compose") {
-      const assetIds = [node.asset]
-        .flatMap((asset) => asset.assetId ? [{ assetId: asset.assetId, canvasNodeId: asset.id }] : []);
-      if (assetIds.length === 1 && state.promptedAssets.some(
-        (asset) => asset.id === assetIds[0].assetId && asset.sections && asset.sections.length > 0,
-      )) {
-        const anchor = assetAnchor ?? Array.from(stageRef.current?.querySelectorAll<HTMLElement>("[data-canvas-node-id]") ?? [])
-          .find((element) => element.dataset.canvasNodeId === node.id);
-        if (anchor) {
-          window.dispatchEvent(new CustomEvent("bowerbird://board-asset-peek", {
-            detail: { assetId: assetIds[0].assetId, anchor },
-          }));
-        }
-      } else {
-        for (const asset of assetIds) {
-          window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: asset }));
-        }
-      }
+      // Creation image clicks are arbitrated once at the workspace boundary.
       return;
     }
 
@@ -3274,7 +3466,7 @@ export function CanvasWorkspace({
     const payloadJson = JSON.stringify(value);
     const node = graphNodesRef.current.find(candidate => candidate.id === nodeId);
     if (!node) return;
-    const minimum = value.note_type !== "section" ? canvasTextMinSize(value.cells, value.note_type === "images", value.note_type === "bubble") : node;
+    const minimum = value.note_type === "document" ? { width: 280, height: 56 } : value.note_type !== "section" ? canvasTextMinSize(value.cells, value.note_type === "images", value.note_type === "bubble") : node;
     const updated = { ...node, payloadJson, width: Math.max(size?.width ?? node.width, minimum.width), height: Math.max(size?.height ?? node.height, minimum.height) };
     graphNodesRef.current = graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate);
     setGraphNodes(graphNodesRef.current);
@@ -3300,6 +3492,33 @@ export function CanvasWorkspace({
         if (value.note_type === "section" && !value.workflow_container && !value.artboard) updateCanvasNote(nodeId, { ...value, member_ids: claimSectionMembers(updated, nodeId) });
       }
     }
+  }
+
+  function saveDocumentCard(document: TextWorkspaceDocument) {
+    stageDocumentCard(document);
+    flushDocumentCard();
+  }
+
+  function flushDocumentCard() {
+    clearTimeout(documentSaveTimer.current);
+    const pending = documentSaveRef.current;
+    documentSaveRef.current = null;
+    if (pending) void enqueueWrite(async () => { await api.projectCanvasNoteUpdate(pending.nodeId, pending.payloadJson); });
+  }
+
+  function stageDocumentCard(document: TextWorkspaceDocument) {
+    if (!documentEditor || activeCanvasRef.current.id !== documentEditor.projectId) throw new Error("项目已切换，请重新打开文本卡片");
+    const node = graphNodesRef.current.find(node => node.id === documentEditor.nodeId && node.hiddenAt == null);
+    if (!node) throw new Error("文本卡片已删除，内容仍保留在编辑器中");
+    const note = readCanvasNote(node);
+    if (note.title === document.title && note.text === document.markdown) return;
+    documentEditorRevision.current++;
+    const payloadJson = JSON.stringify({ ...note, title: document.title, text: document.markdown });
+    graphNodesRef.current = graphNodesRef.current.map(item => item.id === node.id ? { ...item, payloadJson } : item);
+    setGraphNodes(graphNodesRef.current);
+    documentSaveRef.current = { nodeId: node.id, payloadJson };
+    clearTimeout(documentSaveTimer.current);
+    documentSaveTimer.current = setTimeout(flushDocumentCard, 450);
   }
 
   function resizeCanvasMaterial(nodeId: string, size: { width: number; height: number }, finished: boolean, cancelled = false) {
@@ -3401,12 +3620,13 @@ export function CanvasWorkspace({
     return () => window.removeEventListener(CANVAS_ARTBOARD_FROM_IMAGE, createFromImage);
   });
 
-  function createCanvasNote(rect: CanvasRect, noteType: "text" | "section" | "bubble", artboard?: { base_asset_id: string | null }) {
+  function createCanvasNote(rect: CanvasRect, noteType: "text" | "section" | "bubble" | "document", artboard?: { base_asset_id: string | null }) {
     const draft = activeCanvasRef.current;
     const members = noteType === "section" && !artboard ? claimSectionMembers(rect) : [];
     const value: CanvasNotePayload = { schema_version: 1, text: artboard ? "画板" : noteType === "section" ? "分区" : "", note_type: noteType,
       ...(artboard ? { artboard } : {}),
-      cells: noteType !== "section" ? [[emptyCanvasCell()]] : [], member_ids: members,
+      cells: noteType !== "section" && noteType !== "document" ? [[emptyCanvasCell()]] : [], member_ids: members,
+      ...(noteType === "document" ? { title: "文本" } : {}),
       ...(noteType === "bubble" ? { bubble_tail: { side: "bottom" as const, position: 25 } } : {}) };
     const node: ProjectGraphNode = { id: canvasId(noteType), projectId: draft.id, threadId: null, kind: "note", assetId: null, role: null,
       payloadJson: JSON.stringify(value), ...rect, zIndex: Math.max(0, ...selectionAnchors().map(anchor => anchor.order)) + 1, positionLocked: false, hiddenAt: null, createdAt: Date.now(), updatedAt: Date.now() };
@@ -3421,9 +3641,11 @@ export function CanvasWorkspace({
     setDrawingTool("select");
   }
 
-  function placeCanvasCard(kind: "bubble" | Exclude<WorkflowKind, "trigger">, point: CanvasPoint) {
+  function placeCanvasCard(kind: "bubble" | "document" | Exclude<WorkflowKind, "trigger">, point: CanvasPoint) {
     chooseCanvasTool("select");
-    if (kind === "text" || kind === "bubble") {
+    if (kind === "document") {
+      createCanvasNote({ ...point, width: 420, height: 56 }, "document");
+    } else if (kind === "text" || kind === "bubble") {
       createCanvasNote({ ...point, width: kind === "bubble" ? 240 : 320,
         height: kind === "bubble" ? 120 : canvasTextMinSize([[emptyCanvasCell()]]).height }, kind);
     } else {
@@ -3593,10 +3815,10 @@ export function CanvasWorkspace({
     }
   }
 
-  function consumeSuppressedNodeClick() {
+  function consumeSuppressedNodeClick(event: React.MouseEvent<HTMLElement>) {
     if (!suppressNodeClickRef.current) return false;
     suppressNodeClickRef.current = false;
-    return true;
+    return event.detail !== 0;
   }
 
   function zoomAround(clientX: number, clientY: number, requested: number) {
@@ -3613,6 +3835,57 @@ export function CanvasWorkspace({
     panRef.current = nextPan;
     markViewDirty(false);
     scheduleCamera();
+  }
+
+  function centerCanvasEditor(event: React.MouseEvent<HTMLDivElement>) {
+    const stage = stageRef.current;
+    if (!stage || event.button !== 0 || event.defaultPrevented || spacePressedRef.current
+      || drawingTool !== "select" || loadingRef.current || useStore.getState().projectRoutePending) return;
+    const target = event.target;
+    const editor = target instanceof HTMLElement ? target.closest<HTMLElement>('input,textarea,[contenteditable]') : null;
+    if (!editor || !stage.contains(editor) || !editor.closest('[data-canvas-node],[data-card-name]')
+      || editor.closest('[role="toolbar"]') || editor === centeredEditorRef.current
+      || !editor.contains(document.activeElement)) return;
+    if (editor instanceof HTMLInputElement || editor instanceof HTMLTextAreaElement) {
+      if (editor.readOnly || editor.matches(':disabled')
+        || editor instanceof HTMLInputElement && !["text", "search", "url", "tel", "email"].includes(editor.type)) return;
+    } else if (!editor.isContentEditable) return;
+
+    clearTimeout(editorCenterTimerRef.current);
+    // Let double/triple clicks finish selecting text before moving their target.
+    editorCenterTimerRef.current = setTimeout(() => {
+      if (!stage.contains(editor) || !editor.contains(document.activeElement)
+        || loadingRef.current || useStore.getState().projectRoutePending) return;
+      cameraFrame.flush();
+      const bounds = stage.getBoundingClientRect();
+      const field = editor.getBoundingClientRect();
+      if (!field.width || !field.height) return;
+      // These panels overlay the stage rather than reducing its layout size.
+      let left = bounds.left + 64, right = bounds.right - 24, bottom = bounds.bottom - 24;
+      const top = bounds.top + 72;
+      const library = useStore.getState().canvasLibraryOpen && sourcePanelRef.current?.getBoundingClientRect();
+      if (library && library.right > bounds.left && library.left < bounds.right) left = Math.max(left, library.right + 16);
+      const inspector = boardShellRef.current?.querySelector('.project-inspector-shell:not(.is-editing)')?.getBoundingClientRect();
+      if (inspector && inspector.width > 0) right = Math.min(right, inspector.left - 16);
+      const composer = boardShellRef.current?.querySelector('.canvas-composer-host')?.getBoundingClientRect();
+      if (composer && composer.height > 0) bottom = Math.min(bottom, composer.top - 16);
+      if (right <= left || bottom <= top) return;
+      const currentZoom = zoomRef.current;
+      const center = {
+        x: (field.left + field.width / 2 - bounds.left - panRef.current.x) / currentZoom,
+        y: (field.top + field.height / 2 - bounds.top - panRef.current.y) / currentZoom,
+      };
+      const nextZoom = clampCanvasZoom(Math.max(currentZoom, Math.min(1.2,
+        (right - left) * currentZoom / field.width, (bottom - top) * currentZoom / field.height)));
+      zoomRef.current = nextZoom;
+      panRef.current = {
+        x: (left + right) / 2 - bounds.left - center.x * nextZoom,
+        y: (top + bottom) / 2 - bounds.top - center.y * nextZoom,
+      };
+      centeredEditorRef.current = editor;
+      markViewDirty(false);
+      settleCamera();
+    }, 500);
   }
 
   function onCanvasWheel(event: WheelEvent<HTMLDivElement>) {
@@ -4447,6 +4720,11 @@ export function CanvasWorkspace({
     await ensureMaterialized(draft); await flushCanvasWrites(false);
   });
 
+  const { gesture: creationImage, preview: creationImagePreview } = useCreationImageInteraction({
+    root: workspaceRef, enabled: !loading && !loadFailed, scope: `${projectId}:${viewMode}`,
+    resolve: creationImageTarget, onCapture: cancelConversationImageClick,
+  });
+
   if (loadFailed) {
     return (
       <div className="canvas-load-failure" role="alert">
@@ -4502,6 +4780,29 @@ export function CanvasWorkspace({
     if (assetId) await frequentLibrary.pinAsset(assetId);
   }
 
+  function creationImageTarget(media: HTMLElement) {
+    const state = useStore.getState();
+    if (frequentPickingRef.current || loadingRef.current) return null;
+    const onCanvas = !!stageRef.current?.contains(media);
+    if (onCanvas && (spacePressedRef.current || drawingTool !== "select")) return null;
+    if (!onCanvas && (state.mode === "manage" || state.collectionAddTargetId)) return null;
+    const nodeId = media.closest<HTMLElement>('[data-canvas-node-id]')?.dataset.canvasNodeId;
+    const node = nodesRef.current.find(item => item.id === nodeId);
+    const assetId = creationImageAssetId(media);
+    const material = node?.kind === "asset" ? node.asset : node?.kind === "folder"
+      ? node.assets.find(item => media.dataset.canvasFolderAssetId ? item.id === media.dataset.canvasFolderAssetId : item.assetId === assetId)
+      : nodeId ? selectedConversationImage(nodeId, conversationImages(nodeId)) : undefined;
+    // Content cells and workflow ports retain their own editing/connection gestures.
+    if (onCanvas && !material) return null;
+    const asset = assetByIdRef.current.get(assetId ?? material?.assetId ?? "") ?? (material ? {
+      id: material.assetId ?? material.id, name: material.name, store_path: material.storePath,
+      thumb_path: material.thumbPath, width: material.width, height: material.height,
+    } : undefined);
+    const id = asset?.id ?? assetId;
+    return id ? { assetId: id, asset, canvasNodeId: onCanvas ? material?.id : undefined,
+      suppressClick: onCanvas && suppressNodeClickRef.current } : null;
+  }
+
   return (
     <div
       ref={workspaceRef}
@@ -4509,17 +4810,22 @@ export function CanvasWorkspace({
       className={`canvas-workspace canvas-tactical${sourceCollapsed ? " is-source-collapsed" : " is-library-open"}${libraryDragging ? " is-library-dragging" : ""}${frequentPicking ? " is-picking-frequent" : ""}${loading || projectRoutePending ? " is-route-pending" : ""}`}
       aria-busy={loading || projectRoutePending}
       onPointerDownCapture={event => {
+        creationImage.pointerDown(event);
         if (event.button === 0 && !isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) captureFrequentMaterial(event);
       }}
+      onPointerMoveCapture={creationImage.pointerMove}
       onClickCapture={event => {
-        if (event.button !== 0 || spacePressedRef.current || drawingTool === "pan") return;
+        if (event.button !== 0) return;
+        if (spacePressedRef.current || drawingTool === "pan") { creationImage.click(event); return; }
         const material = captureFrequentMaterial(event);
         if (material && event.detail < 2) void pinFrequentMaterial(material);
+        if (!material) creationImage.click(event);
       }}
-      onDoubleClickCapture={captureFrequentMaterial}
-      onDragStartCapture={captureFrequentMaterial}
-      onContextMenuCapture={captureFrequentMaterial}
+      onDoubleClickCapture={event => { if (!captureFrequentMaterial(event)) creationImage.click(event, true); }}
+      onDragStartCapture={event => { creationImage.cancel(); captureFrequentMaterial(event); }}
+      onContextMenuCapture={event => { creationImage.cancel(); captureFrequentMaterial(event); }}
       onKeyDownCapture={event => {
+        if (creationImage.keyDown(event)) return;
         if (!["Enter", " ", "Delete", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
         const material = captureFrequentMaterial(event);
         if (material && !event.repeat && (event.key === "Enter" || event.key === " ")) void pinFrequentMaterial(material);
@@ -4539,10 +4845,8 @@ export function CanvasWorkspace({
           });
         }}>
         <div id={`${sourcePanelId}-content`} className="canvas-source-content">
-          {fileMode === "all" || fileMode === "tags" || fileMode === "collections"
-            ? <LibraryCatalogTransition key={`${projectId}:${sourceScope}:${libraryMedia}`} kind={fileMode} media={libraryMedia} projectId={projectId}
-                projectScope={sourceScope === "project"} navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>
-            : <LocalFileWorkspace navigation={sourceNavigation} onClose={closeSource}/>}
+          <LibraryCatalogTransition key={`${projectId}:${sourceScope}:${libraryMedia}`} kind={fileMode === "all" || fileMode === "tags" ? fileMode : "collections"} media={libraryMedia} projectId={projectId}
+            projectScope={sourceScope === "project"} navigation={sourceNavigation} onClose={closeSource} onAssetsChange={setCatalogAssets}/>
         </div>
         <CanvasFrequentAssets library={frequentLibrary} projectId={projectId} picking={frequentPicking} onPickingChange={setFrequentPicking}/>
       </aside>
@@ -4566,14 +4870,7 @@ export function CanvasWorkspace({
             if (sourceCollapsed) beginOnboardingOperation("expand-source", projectId)();
           }}
         >{sourceCollapsed ? <PanelLeftOpen size={16} aria-hidden="true" /> : <PanelLeftClose size={16} aria-hidden="true" />}</button>
-        {(boardOpen || genEditing) && (
-          <>
-            <div className="canvas-creation-mode-frame" aria-hidden="true" />
-            <div className="creation-mode-notch canvas-creation-mode-notch" aria-hidden="true">
-              创作模式
-            </div>
-          </>
-        )}
+        {(boardOpen || genEditing) && <CreationModeIndicator className="canvas-creation-mode-indicator"/>}
         <div className="canvas-board-toolbar">
           <div>
             <span className="canvas-board-title-field" data-title={activeCanvas.title || " "}>
@@ -4590,7 +4887,10 @@ export function CanvasWorkspace({
                   replaceActive(draft);
                 }}
                 onBlur={commitProjectTitle}
+                onCompositionStart={titleIme.onCompositionStart}
+                onCompositionEnd={titleIme.onCompositionEnd}
                 onKeyDown={(event) => {
+                  if (titleIme.isComposing(event.nativeEvent)) { event.stopPropagation(); return; }
                   if (event.key === "Enter") event.currentTarget.blur();
                 }}
               />
@@ -4615,8 +4915,6 @@ export function CanvasWorkspace({
             </small>}
           </div>
           <div className="canvas-zoom-controls" aria-label="画布缩放">
-            <button type="button" aria-label="项目对话记录" title="项目对话记录" aria-expanded={chatHistoryOpen}
-              onClick={() => setChatHistoryOpen(open => !open)}><MessageCircle size={14} /></button>
             {viewMode === "timeline" && threads.length > 0 && (
               <TacticalSelect
                 aria-label="时间线范围"
@@ -4716,6 +5014,7 @@ export function CanvasWorkspace({
             backgroundSize: `${72 * zoom}px ${72 * zoom}px`,
           }}
           onPointerDownCapture={event => {
+            clearTimeout(editorCenterTimerRef.current);
             cameraFrame.flush();
             if (event.button === 0 && !(event.target as HTMLElement).closest('button,input,textarea,select,[contenteditable="true"]')) {
               lastImportPointRef.current = { projectId: activeCanvasRef.current.id, x: event.clientX, y: event.clientY };
@@ -4723,6 +5022,12 @@ export function CanvasWorkspace({
             beginDrawing(event);
           }}
           onPointerDown={beginPan}
+          onClickCapture={centerCanvasEditor}
+          onBlurCapture={event => {
+            clearTimeout(editorCenterTimerRef.current);
+            if (centeredEditorRef.current?.contains(event.target as Node)) centeredEditorRef.current = null;
+          }}
+          onWheelCapture={() => clearTimeout(editorCenterTimerRef.current)}
           onKeyDown={(event) => {
             // Mac's backward Delete reports Backspace; also support forward Delete keyboards.
             const deleteKey = event.key === "Delete" && !event.metaKey;
@@ -4770,6 +5075,7 @@ export function CanvasWorkspace({
             <button data-tip="画板 · 拖框后拼放图片" aria-label="画板工具" aria-pressed={drawingTool === "artboard"} onClick={() => chooseCanvasTool("artboard")}><Scan size={18} /></button>
             <hr />
             <button data-tip="内容卡片 · 拖入画布或选中后点击放置" aria-label="内容卡片工具" {...canvasCardTool("text")}><Table2 size={18} /></button>
+            <button data-tip="文本卡片 · 拖入画布或选中后点击放置" aria-label="文本卡片工具" {...canvasCardTool("document")}><FileText size={18} /></button>
             <button data-tip="气泡便签 · 拖入画布或选中后点击放置" aria-label="气泡便签工具" {...canvasCardTool("bubble")}><MessageCircle size={18} /></button>
             <button data-tip="指令卡片 · 拖入画布或选中后点击放置" aria-label="新增指令卡片" {...canvasCardTool("instruction")}><List size={18} /></button>
             <button data-tip="循环卡片 · 拖入画布或选中后点击放置" aria-label="新增循环卡片" {...canvasCardTool("loop")}><Repeat2 size={18} /></button>
@@ -4811,14 +5117,14 @@ export function CanvasWorkspace({
             {graphNodes.filter(node => node.kind === "note" && node.hiddenAt == null && !canvasChatId(node)).map(savedNode => {
               const value = resolveGenerationCells(readCanvasNote(savedNode), graphNodes);
               const minimum = value.note_type === "text" || value.note_type === "images" ? canvasTextMinSize(value.cells) : savedNode;
-              const node = { ...savedNode, width: Math.max(savedNode.width, minimum.width), height: Math.max(savedNode.height, minimum.height) };
+              const node = { ...savedNode, width: Math.max(savedNode.width, minimum.width), height: value.note_type === "document" ? 56 : Math.max(savedNode.height, minimum.height) };
               const section = value.note_type === "section";
               const selected = selectedCanvasNodeIds.has(node.id);
               const workflowController = projectId ? canvasWorkflowController(projectId) : null;
               const failedWriter = workflowController?.document.nodes.some(writer => (writer.textTarget?.nodeId === node.id || writer.textSource === node.id)
                 && (workflowController.issue?.nodeId === writer.id || workflowNodeRun(workflowController.document, writer.id)?.steps[writer.id]?.status === "failed"));
               return <div key={node.id} data-canvas-node data-canvas-node-id={node.id} data-workflow-container={value.workflow_container ? node.id : undefined} tabIndex={0}
-                className={`canvas-note ${section ? "is-section" : value.note_type === "bubble" ? "is-bubble" : "is-text is-content-card"} ${value.artboard ? "is-artboard" : ""} ${selected ? "is-selected" : ""} ${failedWriter ? "canvas-card-error" : ""}`}
+                className={`canvas-note ${section ? "is-section" : value.note_type === "bubble" ? "is-bubble" : "is-text is-content-card"} ${value.note_type === "document" ? "is-document-card" : ""} ${value.artboard ? "is-artboard" : ""} ${selected ? "is-selected" : ""} ${failedWriter ? "canvas-card-error" : ""}`}
                 style={{ width: node.width, height: node.height, transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: section ? 0 : activeDragId === node.id || (activeDragId != null && selected) ? 10000 + node.zIndex : node.zIndex }}
                 onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
                 onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
@@ -4837,7 +5143,10 @@ export function CanvasWorkspace({
                     <CanvasResizeHandle key={corner} label={`调整${value.artboard ? "画板" : "分区"}大小（${label}）`} corner={corner} size={node} position={{ x: node.x, y: node.y }} zoom={zoomRef.current} getZoom={readCanvasZoom}
                       minimum={{ width: 120, height: 80 }} onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} />
                   ))}
-                </> : <CanvasTextCard value={value} selected={selected} width={node.width} height={node.height} zoom={zoomRef.current} getZoom={readCanvasZoom}
+                </> : value.note_type === "document" ? <CanvasDocumentCard value={value}
+                  onEdit={() => { documentEditorSession.current++; setDocumentEditor({ nodeId: node.id, projectId: node.projectId, initialDocument: { title: value.title || "文本", markdown: value.text } }); }}
+                  onConnect={(port, x, y) => workflowRef.current?.connectCell(node.id, port, x, y)}/>
+                : <CanvasTextCard value={value} selected={selected} width={node.width} height={node.height} zoom={zoomRef.current} getZoom={readCanvasZoom}
                   onOpenPreview={openCanvasSourcePreview}
                   onMediaContextMenu={(event, asset) => {
                     setPromptMenu(null);
@@ -4891,20 +5200,20 @@ export function CanvasWorkspace({
               const chatId = canvasChatId(node)!;
               const chat = chatSummaries[chatId];
               return <div key={node.id} data-canvas-node data-canvas-node-id={node.id} data-local-chat-id={chatId}
-                role="button" tabIndex={0} aria-label={`对话 · ${chat?.title ?? "本机 Codex"}`} aria-busy={localChatRunning(chat)}
+                role="button" tabIndex={0} aria-label={`对话 · ${chat?.title ?? "正在读取"}`} aria-busy={localChatRunning(chat)}
                 className={`canvas-chat-node${selectedCanvasNodeIds.has(node.id) ? " is-selected" : ""}${selectedChatId === chatId ? " is-focused" : ""}${localChatRunning(chat) ? " canvas-card-running" : ""}`}
                 style={{ width: node.width, minHeight: node.height, transform: `translate3d(${node.x}px, ${node.y}px, 0)`, zIndex: activeDragId === node.id ? 10000 + node.zIndex : node.zIndex }}
                 onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
                 onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
                 onContextMenu={event => openCanvasNodeMenu(event, node.id)}
                 onClick={event => {
-                  if (consumeSuppressedNodeClick() || event.ctrlKey || event.metaKey || spacePressedRef.current || drawingTool === "pan") return;
+                  if (consumeSuppressedNodeClick(event) || event.ctrlKey || event.metaKey || spacePressedRef.current || drawingTool === "pan") return;
                   openLocalChat(chatId);
                 }}
                 onKeyDown={event => {
                   if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) { event.preventDefault(); openLocalChat(chatId); }
                 }}>
-                {chat ? <LocalChatCard conversation={chat} /> : <div className="local-chat-card-content"><strong>本机 Codex 对话</strong><p>打开对话详情</p></div>}
+                {chat ? <LocalChatCard conversation={chat} /> : <div className="local-chat-card-content"><strong>对话</strong><p>打开对话详情</p></div>}
               </div>;
             })}
             {promptGraphNodes.map((node) => {
@@ -4930,11 +5239,12 @@ export function CanvasWorkspace({
                   key={node.id}
                   data-canvas-node
                   data-canvas-node-id={node.id}
+                  data-creation-conversation
                   role="button"
                   data-canvas-filter={images.length ? materialFilterState(selectedConversationImage(node.id, images)!) : undefined}
                   tabIndex={0}
                   aria-busy={running}
-                  aria-label={imageOnly ? `${selectedConversationImage(node.id, images)?.name ?? "生成图片"}，${selectedVideo ? "点击播放视频" : `${boardOpen || genEditing ? "单击加入创作" : "单击查看生成会话"}，双击放大`}` : undefined}
+                  aria-label={imageOnly ? `${selectedConversationImage(node.id, images)?.name ?? "生成图片"}，${selectedVideo ? "点击播放视频" : boardOpen || genEditing ? "单击预览，双击添加引用" : "单击查看生成会话，双击放大"}` : undefined}
                   className={`canvas-prompt-node ${imageOnly ? "is-image-only" : ""} ${conversation?.outputs.length ? "has-conversation-images" : ""} ${running ? "canvas-card-running" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} is-${summary.status} ${focusedNodeId === node.id ? "is-focused" : ""} ${activeDragId === node.id || (activeDragId != null && selectedCanvasNodeIds.has(node.id)) ? "is-moving" : ""} ${supersededTaskIds.has(latest.id) ? "is-superseded" : ""}`}
                   onContextMenu={(event) => openCanvasNodeMenu(event, node.id, latest)}
                   style={{
@@ -4951,7 +5261,7 @@ export function CanvasWorkspace({
                   onPointerUp={endGraphNodeDrag}
                   onPointerCancel={(event) => endGraphNodeDrag(event, true)}
                   onClick={(event) => {
-                    if (consumeSuppressedNodeClick()) return;
+                    if (consumeSuppressedNodeClick(event)) return;
                     if (imageOnly) { event.currentTarget.querySelector<HTMLElement>(".canvas-conversation-images")?.click(); return; }
                     openConversation();
                   }}
@@ -4969,14 +5279,15 @@ export function CanvasWorkspace({
                     cancelConversationImageClick();
                     // Capture on the image region so a click is not retargeted to the conversation card.
                     beginGraphNodeDrag(event, node);
+                    const shown = selectedConversationImage(node.id, images);
+                    if (shown) armCanvasAssetHold(event, node.id, shown);
                   }} onClick={(event, asset) => {
-                    if (consumeSuppressedNodeClick()) return;
+                    if (consumeSuppressedNodeClick(event)) return;
                     if (isVideoPath(asset.storePath) && asset.storePath) {
                       cancelConversationImageClick();
                       setCanvasLightbox({ images: [asset.storePath], index: 0 });
                       return;
                     }
-                    const anchor = event.currentTarget;
                     const activate = () => {
                       if (!graphNodesRef.current.some(item => item.id === node.id && item.hiddenAt == null)) return;
                       const state = useStore.getState();
@@ -4985,7 +5296,7 @@ export function CanvasWorkspace({
                       } else if (imageOnly) openConversation();
                       else {
                         const material = nodes.find(item => item.kind === "asset" && item.asset.id === asset.id);
-                        if (material?.kind === "asset") activateCanvasMaterial(material, anchor);
+                        if (material?.kind === "asset") activateCanvasMaterial(material);
                       }
                     };
                     cancelConversationImageClick();
@@ -5032,8 +5343,8 @@ export function CanvasWorkspace({
                   onPointerMove={moveGraphNode}
                   onPointerUp={endGraphNodeDrag}
                   onPointerCancel={(event) => endGraphNodeDrag(event, true)}
-                  onClick={() => {
-                    if (consumeSuppressedNodeClick()) return;
+                  onClick={event => {
+                    if (consumeSuppressedNodeClick(event)) return;
                     focusGraphNode(node.id);
                     if (run) openCloudAgentRun(run, { navigate: false });
                   }}
@@ -5084,7 +5395,7 @@ export function CanvasWorkspace({
                   role="group"
                   data-frequent-asset-id={node.kind === "asset" ? node.asset.assetId ?? undefined : undefined}
                   tabIndex={0}
-                  aria-label={`${node.kind === "asset" ? `${node.asset.name}，${boardOpen || genEditing ? "点击加入创作" : "点击放大"}` : `素材组，${node.assets.length} 个素材，${expanded ? "已展开" : "点击展开"}`}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
+                  aria-label={`${node.kind === "asset" ? `${node.asset.name}，${boardOpen || genEditing ? "单击查看，双击添加引用" : "点击放大"}` : `素材组，${node.assets.length} 个素材，${expanded ? "已展开" : "点击展开"}`}${selectedCanvasNodeIds.has(node.id) ? "，已选中" : ""}`}
                   aria-expanded={node.kind === "folder" ? expanded : undefined}
                   data-canvas-filter={node.kind === "asset" ? materialFilterState(node.asset) : undefined}
                   className={`canvas-node is-${node.kind} ${node.kind === "asset" && isVideoPath(node.asset.storePath) ? "is-video" : ""} ${expanded ? "is-expanded" : ""} ${!showAssetNames ? "is-name-hidden" : ""} ${focusedNodeId === node.id ? "is-focused" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} ${movingWithSelection ? "is-moving" : ""} ${holding ? "is-folder-target" : ""} ${directFolderTarget ? "is-folder-drop-target" : ""} `}
@@ -5156,9 +5467,9 @@ export function CanvasWorkspace({
                             return <button type="button" key={asset.id} data-canvas-folder-asset-id={asset.id} data-frequent-asset-id={asset.assetId ?? undefined}
                               data-canvas-filter={materialFilterState(asset)}
                               className="canvas-folder-asset" aria-label={asset.name}
-                              onPointerDown={(event) => { if (!isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) event.stopPropagation(); }}
+                              onPointerDown={(event) => { if (!isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) { event.stopPropagation(); if (event.button === 0) suppressNodeClickRef.current = false; armCanvasAssetHold(event, node.id, asset, true); } }}
                               onKeyDown={(event) => { if (event.key === "Enter" || event.key === " " || event.key.startsWith("Arrow")) event.stopPropagation(); }}
-                              onClick={(event) => { if (!consumeSuppressedNodeClick()) activateCanvasMaterial(groupedAssetNode(asset, node, index), event.currentTarget); }}
+                              onClick={(event) => { if (!consumeSuppressedNodeClick(event)) activateCanvasMaterial(groupedAssetNode(asset, node, index)); }}
                               onContextMenu={(event) => openCanvasAssetContextMenu(event, node, asset)}>
                               {isVideoPath(asset.storePath) ? <VideoPoster path={asset.storePath} poster={asset.thumbPath} alt={asset.name} draggable={false} /> : assetPath ? <CanvasImage path={asset.storePath} thumbPath={asset.thumbPath} sourceWidth={asset.width} sourceHeight={asset.height} alt="" draggable={false} />
                                 : <span className="canvas-folder-asset-placeholder">{asset.name.slice(0, 1)}</span>}
@@ -5167,7 +5478,7 @@ export function CanvasWorkspace({
                           })}
                         </div>
                       </> : <>
-                        <FolderPreview node={node} filterState={materialFilterState} onAssetContextMenu={(event, asset) => openCanvasAssetContextMenu(event, node, asset)} />
+                        <FolderPreview node={node} filterState={materialFilterState} onAssetPointerDown={(event, asset) => { beginNodeDrag(event, node); armCanvasAssetHold(event, node.id, asset, true); }} onAssetContextMenu={(event, asset) => openCanvasAssetContextMenu(event, node, asset)} />
                         <span className="canvas-folder-name"><Folder size={13} /> 素材组 · {node.assets.length}</span>
                       </>}
                     </>
@@ -5189,7 +5500,7 @@ export function CanvasWorkspace({
                 </div>
               );
             })}
-          </div></CanvasMediaProvider>
+          <CanvasMediaHover root={stageRef}/></div></CanvasMediaProvider>
 
           <CanvasTacticalOverlay key={projectId} stageRef={stageRef} active={viewMode === "canvas" && !loading && !projectRoutePending} />
           {canvasMarquee && (
@@ -5234,8 +5545,8 @@ export function CanvasWorkspace({
             continuationCandidates={continuationCandidates}
             focusedContinuationNodeId={focusedNodeId}
             focusedContinuationThreadId={focusedThreadId}
-            promptLoadRequest={promptLoadRequest}
-            onPromptLoadConsumed={onLaunchConsumed}
+            promptLoadRequest={documentPromptLoad ?? promptLoadRequest}
+            onPromptLoadConsumed={id => { if (documentPromptLoad?.id === id) setDocumentPromptLoad(null); else onLaunchConsumed?.(id); }}
             onDraftChange={draftJson => { if (activeCanvasRef.current.id === activeCanvas.id) persistComposerDraft(draftJson); }}
             onOpenLibrary={() => {
               if (!useStore.getState().canvasLibraryOpen) {
@@ -5435,10 +5746,26 @@ export function CanvasWorkspace({
             if (!draft || draft.id !== replicationProjectId) throw new Error("项目已切换，请重新打开工具");
             await ensureMaterialized(draft);
           }} />}
+        {documentEditor && <Suspense fallback={null}><TextWorkspace key={documentEditor.nodeId} initialDocument={documentEditor.initialDocument} projectId={documentEditor.projectId}
+          onChange={stageDocumentCard}
+          onClose={document => { saveDocumentCard(document); documentEditorSession.current++; setDocumentEditor(null); }}
+          onAddToComposer={async document => {
+            const expected = documentEditor.projectId;
+            const session = documentEditorSession.current, revision = documentEditorRevision.current;
+            const prompt = await documentToPromptLoad(document);
+            if (documentEditorSession.current !== session || activeCanvasRef.current.id !== expected) return;
+            if (documentEditorRevision.current !== revision) throw new Error("文本已有新的更改，请再次添加；当前内容已保留。");
+            saveDocumentCard(document);
+            setDocumentPromptLoad({ ...prompt, id: canvasId("document-prompt") });
+            setSelectedChatId(null); useStore.getState().setBoardActive(true); documentEditorSession.current++; setDocumentEditor(null);
+          }}/></Suspense>}
+        {creationImagePreview && <CreationImagePreview asset={creationImagePreview.asset} projectId={projectId}
+          job={creationImagePreview.job} onClose={creationImage.close} />}
         {canvasLightbox && (
           <Lightbox
             onAddVideoFrame={addVideoFrame}
             onSaveVideoTrim={saveVideoTrim}
+            videoSourceKey={videoSourceKey([...assetById.values()].find(asset => asset.store_path === canvasLightbox.images[canvasLightbox.index]))}
             images={canvasLightbox.images}
             index={canvasLightbox.index}
             onClose={() => setCanvasLightbox(null)}

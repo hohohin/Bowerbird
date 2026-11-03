@@ -23,6 +23,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use super::paths::LibraryPaths;
 use crate::db::Database;
 
+const SOURCE_CHANGED: &str = "素材内容已变化，旧结果已忽略";
+static PREVIEW_GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
+
 #[derive(Clone, Serialize)]
 pub struct CurrentAsset {
     pub id: String,
@@ -56,6 +59,8 @@ pub struct Status {
     pub done: usize,
     pub total: usize,
     pub failed: usize,
+    #[serde(skip)]
+    source_changes: usize,
     pub jev_done: usize,
     pub cloud_running: usize,
     pub cloud_queued: usize,
@@ -261,7 +266,9 @@ impl LocalClassifier {
                 }.await
             };
             let cancelled = this.cancel.load(Ordering::Relaxed);
-            let pause_automatic = background && (result.is_err() || this.status.lock().unwrap().failed > 0);
+            let status = this.status.lock().unwrap();
+            let pause_automatic = background && (result.is_err() || status.failed > status.source_changes);
+            drop(status);
             // Record this run's failure before handing the gate to a queued drag;
             // a later owner's status must not be mistaken for this scan's result.
             if pause_automatic { let _ = db.set_local_enabled(false); }
@@ -325,6 +332,7 @@ impl LocalClassifier {
     }
 
     async fn image(db: &Database, library: &LibraryPaths, id: &str) -> Result<String, String> {
+        Self::prepare_image(db, library, id).await?;
         let path = db
             .local_image_path(id)
             .map_err(|e| e.to_string())?
@@ -333,6 +341,16 @@ impl LocalClassifier {
         tokio::task::spawn_blocking(move || runtime::image_data(std::path::Path::new(&path), &root))
             .await
             .map_err(|e| e.to_string())?
+    }
+
+    async fn prepare_image(db: &Database, library: &LibraryPaths, id: &str) -> Result<(), String> {
+        // Classification is itself a preview consumer, independent of which
+        // collection is visible. Its existing opt-in and provider gates apply.
+        if db.local_image_path(id).map_err(|e| e.to_string())?.is_some_and(|path| std::path::Path::new(&path).is_file()) { return Ok(()); }
+        let _permit = PREVIEW_GATE.acquire().await.map_err(|e| e.to_string())?;
+        tokio::task::block_in_place(|| db.ensure_connected_preview(library, id))
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// Installs the optional vector pack. The download shares the busy gate so
@@ -615,6 +633,7 @@ impl LocalClassifier {
                 s.done = index + 1;
                 if let Err(error) = &result {
                     s.failed += 1;
+                    if error == SOURCE_CHANGED { s.source_changes += 1; }
                     s.message = error.clone();
                     s.last_error = error.clone();
                 }
@@ -679,6 +698,7 @@ impl LocalClassifier {
                 )
                 .await;
         }
+        let image_version = db.classification_image_version(id).map_err(|e| e.to_string())?;
         let image = Self::image(db, library, id).await?;
         let mut combined = data::Prediction {
             description: String::new(),
@@ -781,14 +801,18 @@ impl LocalClassifier {
             return Err("已停止分类".into());
         }
         if !db
-            .apply_local_prediction(id, revision, &combined, tag.is_none(), &evaluated)
+            .apply_classification_for_image(id, revision, &combined, tag.is_none(), &evaluated, data::MODEL_ID, &[], image_version.as_ref())
             .map_err(|e| e.to_string())?
         {
+            if let Some(expected) = &image_version {
+                if !db.classification_image_unchanged(id, expected).map_err(|e| e.to_string())? { return Err(SOURCE_CHANGED.into()); }
+            }
             return Err("标签已被人工修改，已忽略旧结果；请重试此素材".into());
         }
         Ok(())
     }
     async fn jev_image(db: &Database, library: &LibraryPaths, id: &str) -> Result<Vec<u8>, String> {
+        Self::prepare_image(db, library, id).await?;
         let path = db
             .local_image_path(id)
             .map_err(|e| e.to_string())?
@@ -828,8 +852,14 @@ impl LocalClassifier {
     ) -> Result<pipeline::PendingClassification, String> {
         #[cfg(debug_assertions)]
         self.diagnostics.begin(id, &db.get_asset(id).ok().flatten().map(|a| a.name).unwrap_or_else(|| id.into()));
+        let version = db.classification_image_version(id).map_err(|e| e.to_string())?;
         let image = Self::jev_image(db, library, id).await?;
-        self.prepare_jev_image(judge, db, library, id, revision, labels, record_observation, image).await
+        if let Some(expected) = &version {
+            if !db.classification_image_unchanged(id, expected).map_err(|e| e.to_string())? { return Err(SOURCE_CHANGED.into()); }
+        }
+        let mut pending = self.prepare_jev_image(judge, db, library, id, revision, labels, record_observation, image).await?;
+        pending.image_version = version;
+        Ok(pending)
     }
 
     async fn prepare_jev_image(
@@ -843,6 +873,7 @@ impl LocalClassifier {
         record_observation: bool,
         image: Vec<u8>,
     ) -> Result<pipeline::PendingClassification, String> {
+        let image_version = db.classification_image_version(id).map_err(|e| e.to_string())?;
         let evaluated = labels.iter().map(|label| label.id.clone()).collect();
         let current_labels = db.local_labels().map_err(|e| e.to_string())?;
         // Legacy dimension caches, including `other`, never exclude an enabled label.
@@ -910,6 +941,7 @@ impl LocalClassifier {
             cloud_request: ticket.map(|ticket| (judge.clone(), ticket, image)),
             preview,
             id: id.into(),
+            image_version,
             revision,
             prediction,
             record_observation,
@@ -925,6 +957,9 @@ impl LocalClassifier {
         mut pending: pipeline::PendingClassification,
     ) -> Result<(), String> {
         let mut definitions = Vec::new();
+        if let Some(expected) = &pending.image_version {
+            if !db.classification_image_unchanged(&pending.id, expected).map_err(|e| e.to_string())? { return Err(SOURCE_CHANGED.into()); }
+        }
         if pending.needs_discovery {
             self.diagnostics.step(&pending.id, "discover", "Cloud 补标签请求（含网络和服务端处理）");
             if db.local_revision().map_err(|e| e.to_string())? != pending.revision {
@@ -951,7 +986,7 @@ impl LocalClassifier {
         }
         self.diagnostics.step(&pending.id, "save", "保存标签和分类观察记录");
         if !db
-            .apply_classification_with_definitions(
+            .apply_classification_for_image(
                 &pending.id,
                 pending.revision,
                 &pending.prediction,
@@ -959,9 +994,13 @@ impl LocalClassifier {
                 &pending.evaluated,
                 jev::OBSERVATION_MODEL,
                 &definitions,
+                pending.image_version.as_ref(),
             )
             .map_err(|e| e.to_string())?
         {
+            if let Some(expected) = &pending.image_version {
+                if !db.classification_image_unchanged(&pending.id, expected).map_err(|e| e.to_string())? { return Err(SOURCE_CHANGED.into()); }
+            }
             return Err("标签已被人工修改，已忽略旧结果；请重试此素材".into());
         }
         Ok(())

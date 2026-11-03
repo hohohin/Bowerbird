@@ -9,6 +9,126 @@ fn db() -> Database {
 }
 
 #[test]
+fn connected_content_changes_requeue_only_automatic_results_and_reject_old_inference() {
+    let db = db();
+    db.set_local_enabled(true).unwrap();
+    let automatic = db.save_local_label(None, "原自动标签", "", true).unwrap();
+    let legacy = db.save_local_label(None, "历史标签", "", true).unwrap();
+    let rejected = db.save_local_label(None, "排除", "", true).unwrap();
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute_batch("UPDATE assets SET store_path=id||'.png',size=100,file_mtime=10;
+            INSERT INTO external_assets(asset_id,fingerprint) VALUES('a','old'),('b','other');
+            INSERT INTO analyses(id,asset_id,kind,payload) VALUES('creative','a','caption','{\"text\":\"保留\"}');
+            INSERT INTO local_visual_observations(asset_id,model,description,created_at) VALUES('a','old-model','old',0);").unwrap();
+        conn.execute("INSERT INTO asset_tags VALUES('a',?1,'local'),('a',?2,'legacy')", rusqlite::params![automatic,legacy]).unwrap();
+        conn.execute("INSERT INTO local_tag_rejections VALUES('a',?1)", [&rejected]).unwrap();
+    }
+    let revision = db.local_revision().unwrap();
+    let old = db.classification_image_version("a").unwrap().unwrap();
+    let other = db.classification_image_version("b").unwrap().unwrap();
+    db.conn.lock().unwrap().execute("UPDATE assets SET store_path='renamed.png',file_mtime=11 WHERE id='a'", []).unwrap();
+    assert!(db.classification_image_unchanged("a", &old).unwrap(), "metadata-only changes retain a content-identical inference");
+    {
+        let mut conn = db.conn.lock().unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute("UPDATE external_assets SET fingerprint='new' WHERE asset_id='a'", []).unwrap();
+        tx.execute("UPDATE assets SET thumb_path=NULL WHERE id='a'", []).unwrap();
+        requeue_changed_connected_asset(&tx, "a").unwrap();
+        tx.commit().unwrap();
+    }
+    assert_eq!(db.local_revision().unwrap(), revision, "unrelated in-flight images remain valid");
+    assert_eq!(db.local_auto_targets(MODEL_ID).unwrap(), vec!["a"], "classification requests its own lazy thumbnail");
+    assert_eq!(db.list_asset_tags("a").unwrap().iter().map(|t| t.name.clone()).collect::<Vec<_>>(), vec!["历史标签"]);
+    let prediction = Prediction { description: "old result".into(), tags: vec!["不应创建".into()], matches: vec![] };
+    assert!(!db.apply_classification_for_image("a", revision, &prediction, true, &[], MODEL_ID, &[], Some(&old)).unwrap());
+    assert!(!db.local_labels().unwrap().iter().any(|t| t.name == "不应创建"));
+    assert_eq!(db.local_auto_targets(MODEL_ID).unwrap(), vec!["a"], "stale completion cannot consume the new queue entry");
+    let current = db.classification_image_version("a").unwrap().unwrap();
+    let valid = Prediction { description: "new result".into(), tags: vec![], matches: vec![rejected.clone()] };
+    assert!(db.apply_classification_for_image("a", revision, &valid, true, &[], MODEL_ID, &[], Some(&current)).unwrap());
+    assert!(db.apply_classification_for_image("b", revision, &valid, true, &[], MODEL_ID, &[], Some(&other)).unwrap());
+    assert!(db.local_auto_targets(MODEL_ID).unwrap().is_empty());
+    let conn = db.conn.lock().unwrap();
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM analyses WHERE id='creative'", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM local_tag_rejections WHERE asset_id='a'", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM asset_tags WHERE asset_id='a' AND tag_id=?1", [rejected], |r| r.get::<_,i64>(0)).unwrap(), 0);
+}
+
+#[test]
+fn connected_content_refresh_respects_disabled_switch_and_manual_image_protection() {
+    let db = db();
+    let label = db.save_local_label(None, "人工", "", true).unwrap();
+    let auto = db.save_local_label(None, "自动", "", true).unwrap();
+    db.local_example(&label, &["a".into()], true).unwrap();
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute("INSERT INTO asset_tags VALUES('a',?1,'local'),('b',?1,'local')", [&auto]).unwrap();
+        conn.execute_batch("INSERT INTO local_visual_observations VALUES('a','old','keep',0),('b','old','reset',0)").unwrap();
+    }
+    {
+        let mut conn = db.conn.lock().unwrap();
+        let tx = conn.transaction().unwrap();
+        requeue_changed_connected_asset(&tx, "a").unwrap();
+        requeue_changed_connected_asset(&tx, "b").unwrap();
+        tx.commit().unwrap();
+    }
+    assert_eq!(db.list_asset_tags("a").unwrap().len(), 2, "manually classified image stays untouched");
+    assert!(db.list_asset_tags("b").unwrap().is_empty());
+    let conn = db.conn.lock().unwrap();
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM local_visual_observations WHERE asset_id='a'", [], |r| r.get::<_,i64>(0)).unwrap(), 1);
+    assert_eq!(conn.query_row("SELECT COUNT(*) FROM local_auto_classification_pending", [], |r| r.get::<_,i64>(0)).unwrap(), 0);
+}
+
+#[test]
+fn connected_heic_without_preview_is_an_automatic_target_only_after_opt_in() {
+    let db = db();
+    db.set_local_enabled(true).unwrap();
+    db.conn.lock().unwrap().execute_batch("INSERT INTO assets(id,name,ext,store_path) VALUES('heic','heic','heic','image.heic');
+        INSERT INTO external_assets(asset_id,fingerprint) VALUES('heic','hash');").unwrap();
+    assert_eq!(db.local_auto_targets(MODEL_ID).unwrap(), vec!["heic"]);
+    db.set_local_enabled(false).unwrap();
+    db.set_local_enabled(true).unwrap();
+    assert!(db.local_auto_targets(MODEL_ID).unwrap().is_empty());
+}
+
+#[test]
+fn managed_connection_fingerprint_also_guards_in_flight_results() {
+    let db = db();
+    db.conn.lock().unwrap().execute("INSERT INTO creative_file_fingerprints(asset_id,sha256) VALUES('a','before')", []).unwrap();
+    let version = db.classification_image_version("a").unwrap().unwrap();
+    db.conn.lock().unwrap().execute("UPDATE creative_file_fingerprints SET sha256='after' WHERE asset_id='a'", []).unwrap();
+    let p = Prediction { description: "stale".into(), tags: vec!["旧内容".into()], matches: vec![] };
+    assert!(!db.apply_classification_for_image("a", db.local_revision().unwrap(), &p, true, &[], MODEL_ID, &[], Some(&version)).unwrap());
+    assert!(db.list_asset_tags("a").unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn classification_requests_only_its_connected_image_preview_and_rebuilds_missing_cache() {
+    let temp = tempfile::tempdir().unwrap();
+    let paths = crate::core::paths::LibraryPaths::init(temp.path().join("cache")).unwrap();
+    let db = db();
+    let make = |name: &str| {
+        let path = temp.path().join(name);
+        image::RgbImage::from_pixel(16, 12, image::Rgb([45, 120, 180])).save(&path).unwrap();
+        db.index_connected_file(&paths, &path, None).unwrap()
+    };
+    let requested = make("requested.png");
+    let untouched = make("untouched.png");
+    assert!(requested.thumb_path.is_none());
+    let encoded = super::LocalClassifier::image(&db, &paths, &requested.id).await.unwrap();
+    assert!(!encoded.is_empty());
+    let ready = db.get_asset(&requested.id).unwrap().unwrap();
+    let thumbnail = ready.thumb_path.unwrap();
+    assert!(std::path::Path::new(&thumbnail).is_file());
+    assert!(db.get_asset(&untouched.id).unwrap().unwrap().thumb_path.is_none());
+    std::fs::remove_file(&thumbnail).unwrap();
+    assert!(!super::LocalClassifier::image(&db, &paths, &requested.id).await.unwrap().is_empty());
+    assert!(std::path::Path::new(&thumbnail).is_file());
+    assert!(db.get_asset(&untouched.id).unwrap().unwrap().thumb_path.is_none());
+}
+
+#[test]
 fn automatic_classification_only_accepts_inserts_during_current_opt_in() {
     let db = db();
     let model = super::jev::OBSERVATION_MODEL;

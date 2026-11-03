@@ -18,6 +18,21 @@ const { serializeDoc } = await import("../src/components/creation/serialize.ts")
 const { parsePromptToDoc } = await import("../src/components/creation/parse.ts");
 const { imageInputError } = await import("../src/lib/videoGeneration.ts");
 
+test("audio chips retain their name and media identity through prompt serialization", () => {
+  const audio = { id: "audio", name: "配乐", ext: "mp3", store_path: "/music.mp3", duration: 5 };
+  const node = schema.nodes.image.create(imageAttrs(audio.id, audio, false));
+  const dom = schema.nodes.image.spec.toDOM(node);
+  assert.equal(dom[1]["data-media-kind"], "audio");
+  assert.match(dom[1]["aria-label"], /音频.*配乐/);
+  const doc = schema.topNodeType.create(null, schema.nodes.paragraph.create(null, [node, schema.text("按节奏生成")]));
+  const assets = new Map([[audio.id, audio]]);
+  const saved = serializeDoc(doc, assets);
+  assert.deepEqual(saved.references.map(a => a.store_path), ["/music.mp3"]);
+  const restored = serializeDoc(parsePromptToDoc(saved.finalPrompt, [audio], assets), assets);
+  assert.deepEqual(restored.references.map(a => a.id), ["audio"]);
+  assert.match(imageInputError([audio]), /音频.*不能用于图片生成/);
+});
+
 test("video references keep a visible type label even when they have an image poster", () => {
   globalThis.window = { __TAURI_INTERNALS__: { convertFileSrc: path => path } };
   try {

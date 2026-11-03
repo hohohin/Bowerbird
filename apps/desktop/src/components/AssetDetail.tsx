@@ -1,6 +1,16 @@
 import { TacticalSelect } from "./TacticalSelect";
+import { VideoPlayer } from "./VideoPlayer";
+import { AudioWaveform } from "./AudioWaveform";
+import { isAudioAsset } from "../lib/audioMedia";
+import { isTextAsset } from "../lib/textMedia";
+import { videoDurationLabel } from "./VideoHoverPreview";
+import "./AudioFileMediaCard.css";
+import { saveVideoFrame } from "../lib/saveVideoFrame";
+import { saveVideoFrameToCanvas } from "../lib/videoFrameCanvas";
+import { videoSourceKey } from "../lib/videoSourceKey";
+import { prepareVideoCollectionProject } from "../lib/videoCollectionCanvas";
 import { LearningHint } from "./OnboardingTour";
-import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-shell";
@@ -23,7 +33,9 @@ import { canUseByo } from "../lib/entitlement";
 import { api } from "../lib/api";
 import { COLLECTIONS_FEATURE_ENABLED, SMART_REFINE_ENABLED } from "../lib/featureFlags";
 import { sourceDiscoveryFor } from "../lib/sourceDiscovery";
+import { canSearchPinterest, requestPinterestSearch } from "../lib/pinterestSearch";
 import { useImageZoom } from "../lib/useImageZoom";
+import { useCompatibleImagePath } from "../lib/useCompatibleImagePath";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { RenameDialog } from "./RenameDialog";
 import { LocalAgentPanel } from "./LocalAgentPanel";
@@ -39,6 +51,7 @@ import {
 } from "../lib/describePrompt";
 
 const VIDEO_EXTS = ["mp4", "mov", "webm", "mkv", "avi", "m4v"];
+const TextDocumentEditor = lazy(() => import("./TextDocumentEditor").then(module => ({ default: module.TextDocumentEditor })));
 
 function isVideo(ext?: string | null) {
   return !!ext && VIDEO_EXTS.includes(ext.toLowerCase());
@@ -133,21 +146,29 @@ function Meta({ label, value }: { label: string; value: ReactNode }) {
 
 /**
  * 资产详情页（浏览模式下覆盖主区）：大图 + 元信息 + 反推描述 + 提示词板块 + 来源外链。
- * 大图走 store_path（原图全尺寸）；视频用 <video>；SVG/图片用 <img>。
+ * 大图走 store_path（原图全尺寸）；视频复用 VideoPlayer；SVG/图片用 <img>。
  */
-export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string) => void }) {
-  const id = useStore((s) => s.detailAssetId);
+export function AssetDetail({ onExploreSource = (url) => { void open(url); }, selection }: {
+  onExploreSource?: (url: string) => void;
+  selection?: { assetId: string; onClose: () => void; onOpen: (id: string) => void; onContextMenu?: ReturnType<typeof useStore.getState>["openContextMenu"]; onNavigate?: () => void };
+}) {
+  const selectedId = useStore((s) => s.detailAssetId);
+  const id = selection?.assetId ?? selectedId;
+  const detailRoot = useRef<HTMLDivElement>(null);
   const assets = useStore((s) => s.assets);
   const activeProjectId = useStore((s) => s.activeProjectId);
-  const closeDetail = useStore((s) => s.closeDetail);
-  const openDetail = useStore((s) => s.openDetail);
+  const closeGlobalDetail = useStore((s) => s.closeDetail);
+  const openGlobalDetail = useStore((s) => s.openDetail);
+  const closeDetail = selection?.onClose ?? closeGlobalDetail;
+  const openDetail = selection?.onOpen ?? openGlobalDetail;
   const openDescribePicker = useStore((s) => s.openDescribePicker);
   const cancelDescribe = useStore((s) => s.cancelDescribe);
   const describeStartedAt = useStore((s) => s.describeStartedAt);
   const folders = useStore((s) => s.folders);
   const reloadFolders = useStore((s) => s.reloadFolders);
   const viewGenerationHistory = useStore((s) => s.viewGenerationHistory);
-  const openContextMenu = useStore((s) => s.openContextMenu);
+  const openGlobalContextMenu = useStore((s) => s.openContextMenu);
+  const openContextMenu = selection?.onContextMenu ?? openGlobalContextMenu;
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
@@ -169,7 +190,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
     api.getAssetsByIds([id]).then(([asset]) => {
       if (alive) setResolvedAsset(asset ?? null);
     }).catch(error => {
-      if (alive) notifyError(error, "无法读取图片详情");
+      if (alive) notifyError(error, "无法读取素材详情");
     });
     return () => { alive = false; };
   }, [id, listedAsset]);
@@ -382,6 +403,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
     if (group.length <= 1 || groupPos < 0) return;
     function onKey(e: KeyboardEvent) {
       const t = e.target as HTMLElement | null;
+      if (t?.closest('[role="dialog"]') !== detailRoot.current?.closest('[role="dialog"]')) return;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))
         return;
       if (e.key === "ArrowLeft" && groupPos > 0) {
@@ -488,6 +510,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
     rememberDescribePrompt(instruction);
     // 弹反推引擎选择浮层（Bowerbird Cloud / 本机 codex）；选定后 store 执行入队。
     const r = e.currentTarget.getBoundingClientRect();
+    selection?.onNavigate?.();
     openDescribePicker(
       { kind: "single", assetId: id, instruction },
       { x: r.left, y: r.bottom },
@@ -529,6 +552,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
   // 反推面板 P2：送到创作板——正文进编辑器（用户可继续编辑后生成）。
   function sendCaptionToBoard(text: string) {
     if (!text.trim()) return;
+    selection?.onNavigate?.();
     reusePromptToBoard(text);
   }
 
@@ -581,7 +605,12 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
     });
   }
 
-  const src = asset?.store_path ? convertFileSrc(asset.store_path) : undefined;
+  const audioAsset = !!asset && isAudioAsset(asset);
+  const textAsset = !!asset && isTextAsset(asset);
+  const [audioDuration, setAudioDuration] = useState<number | null | undefined>(asset?.duration);
+  useEffect(() => setAudioDuration(asset?.duration), [asset?.id, asset?.duration, asset?.file_mtime]);
+  const imagePath = useCompatibleImagePath(audioAsset || textAsset ? null : asset?.store_path);
+  const src = imagePath ? convertFileSrc(imagePath) : undefined;
   const zoom = useImageZoom(src);
 
   // 注意：下面两个 useMemo 必须在「资产不存在」提前 return 之前——Hook 不能落在条件
@@ -644,7 +673,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
   const availableCollections = collections.filter((f) => !collectedIds.has(f.id));
 
   return (
-    <div className="asset-detail flex h-full w-full flex-col">
+    <div className="asset-detail flex h-full w-full flex-col" ref={detailRoot}>
       <header className="asset-detail-toolbar">
         <button
           onClick={closeDetail}
@@ -666,7 +695,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
           onClick={() => setRenameOpen(true)}
           disabled={!asset.store_path}
           className="asset-detail-icon-button"
-          title={asset.store_path ? "重命名（同步改磁盘文件名）" : "该素材没有本地文件，无法重命名"}
+          title={asset.store_path ? "重命名素材" : "该素材没有本地文件，无法重命名"}
           aria-label="重命名素材"
         >
           <Edit3 size={14} />
@@ -680,11 +709,14 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             {asset.source}
           </span>
         ) : null}
+        {canSearchPinterest(asset) && <button type="button" className="asset-detail-collect ml-auto" onClick={() => requestPinterestSearch(asset.id)}>
+          <Compass size={14} />Pinterest 以图搜图
+        </button>}
         {sourceDiscovery && asset.source_url && (
           <button
             type="button"
             onClick={() => onExploreSource(asset.source_url!)}
-            className="asset-detail-collect ml-auto"
+            className={`asset-detail-collect ${canSearchPinterest(asset) ? "" : "ml-auto"}`}
             title={sourceDiscovery.actionLabel}
           >
             <Compass size={14} />
@@ -696,7 +728,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             setDetailTab("info");
             setCollectionPanelOpen((v) => !v);
           }}
-          className={`asset-detail-collect ${sourceDiscovery ? "" : "ml-auto"} ${
+          className={`asset-detail-collect ${sourceDiscovery || canSearchPinterest(asset) ? "" : "ml-auto"} ${
             assetCollections.length > 0 ? "is-active" : ""
           }`}
           title={
@@ -714,9 +746,28 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
       <div className="flex flex-1 overflow-hidden">
         <div className="asset-detail-stage flex flex-1 flex-col overflow-hidden bg-canvas">
           <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
+            {textAsset && <Suspense fallback={<span className="text-sm text-muted">正在打开文档…</span>}>
+              <TextDocumentEditor key={asset.id} asset={asset} onSaved={() => {
+                void api.getAssetsByIds([asset.id]).then(([saved]) => {
+                  if (!saved) return;
+                  setResolvedAsset(saved);
+                  useStore.setState(state => ({ assets: state.assets.map(item => item.id === saved.id ? saved : item) }));
+                }).catch(error => notifyError(error, "文件已保存，素材信息暂未刷新"));
+              }}/>
+            </Suspense>}
+            {audioAsset && asset.store_path && <AudioWaveform assetId={asset.id} path={asset.store_path} name={asset.name}
+              version={`${asset.file_mtime ?? 0}:${asset.size ?? 0}`} duration={audioDuration} onDuration={setAudioDuration} className="audio-detail-waveform"/>}
             {src &&
               (isVideo(asset.ext) ? (
-                <video src={src} controls preload="none" className="max-h-full max-w-full" />
+                <VideoPlayer key={videoSourceKey(asset)} path={asset.store_path!} sourceKey={videoSourceKey(asset)}
+                  embedded fitContainer showTrim frameTarget="library" onAddFrame={async frame => {
+                    if (activeProjectId) await prepareVideoCollectionProject(activeProjectId);
+                    await saveVideoFrame(frame, activeProjectId);
+                  }} onSaveTrim={async request => {
+                    if (activeProjectId) await prepareVideoCollectionProject(activeProjectId);
+                    return api.trimVideo(request, activeProjectId ?? undefined);
+                  }}
+                  onAddFrameToCanvas={activeProjectId ? frame => saveVideoFrameToCanvas(frame, activeProjectId) : undefined} />
               ) : (
                 <img
                   ref={zoom.imgRef}
@@ -779,7 +830,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
                 <Info size={13} />
                 信息
               </button>
-              <button
+              {!audioAsset && !textAsset && <button
                 type="button"
                 role="tab"
                 aria-selected={detailTab === "create"}
@@ -788,7 +839,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
               >
                 <Sparkles size={13} />
                 再创作
-              </button>
+              </button>}
             </div>
           </div>
 
@@ -904,14 +955,14 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             <div className="text-xs font-medium uppercase tracking-wide text-muted">
               信息
             </div>
-            <Meta
+            {audioAsset ? <Meta label="时长" value={videoDurationLabel(audioDuration) ?? "-"}/> : textAsset ? <Meta label="格式" value={asset.ext?.toUpperCase() ?? "文本"}/> : <Meta
               label="尺寸"
               value={
                 asset.width && asset.height
                   ? `${asset.width} × ${asset.height}`
                   : "-"
               }
-            />
+            />}
             <Meta label="大小" value={fmtSize(asset.size)} />
             <Meta label="导入时间" value={fmtTime(asset.created_at)} />
             <Meta label="文件修改" value={fmtTime(asset.file_mtime)} />
@@ -930,7 +981,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             </>
           )}
 
-          {detailTab === "create" && (
+          {!audioAsset && !textAsset && detailTab === "create" && (
             <>
 
           {/* 生成来源：只读还原首次生成时的原始创作板输入，而不是铺开发 provider 的 prompt。 */}
@@ -950,7 +1001,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
               {genMeta.session_id && (
                 <div className="flex flex-wrap items-center gap-2">
                   <button
-                    onClick={() => viewGenerationHistory(asset.id)}
+                    onClick={() => { selection?.onNavigate?.(); void viewGenerationHistory(asset.id); }}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
                     title="像回看对话一样，看这张图生成时的各轮 prompt 与产出图，并可继续提修改意见"
                   >
@@ -980,6 +1031,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
                 const instruction = describePrompt.trim();
                 if (!id || !instruction) return;
                 rememberDescribePrompt(instruction);
+                selection?.onNavigate?.();
                 openDescribePicker(
                   { kind: "single", assetId: id, instruction },
                   { x: Math.max(12, window.innerWidth - 420), y: 260 },
@@ -994,7 +1046,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
           {detailTab === "info" && (
             <>
           {/* 反推：点击后选引擎（Bowerbird Cloud / 本机 codex）；全部引擎不可用时置灰。 */}
-          <div className="asset-detail-card space-y-2">
+          {!audioAsset && !textAsset && <div className="asset-detail-card space-y-2">
             <div className="flex items-center justify-between gap-2">
               <div className="text-xs font-medium uppercase tracking-wide text-muted">
                 反推
@@ -1268,13 +1320,14 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
             )}
           </div>
 
+          }
           {/* 分类标签支持本地识别与人工纠正。 */}
           <div className="asset-detail-card space-y-2">
             <div className="text-xs font-medium uppercase tracking-wide text-muted">类别</div>
             <div className="flex flex-wrap items-center gap-1.5">
               {tags.length === 0 && !addingTag && (
                 <span className="text-xs text-muted">
-                  暂无标签，可手动添加或在侧栏开启自动分类
+                  {audioAsset || textAsset ? "暂无标签，可手动添加" : "暂无标签，可手动添加或在侧栏开启自动分类"}
                 </span>
               )}
               {tags.map((t) => (

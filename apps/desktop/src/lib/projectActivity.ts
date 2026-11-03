@@ -74,7 +74,7 @@ function cloneUnread(current: Readonly<Record<string, readonly string[]>>): Reco
 const TERMINAL_AGENT_STATUSES = new Set(["succeeded", "failed", "cancelled"]);
 
 export function isGenerationTaskFailed(job: GenerationTaskProjectionInput): boolean {
-  return !job.running && job.turns.some((turn) => !!turn.error);
+  return !job.running && !!job.turns[job.turns.length - 1]?.error;
 }
 
 export function taskCenterGenerationJobs<T extends GenerationTaskProjectionInput>(jobs: readonly T[]): T[] {

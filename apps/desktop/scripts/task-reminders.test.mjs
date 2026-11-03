@@ -15,6 +15,7 @@ test('generation receipts survive recovered ephemeral ids and identify a new fai
   assert.notEqual(generationReminderKey(job), generationReminderKey({ ...job, id: 'retry-job' }));
   assert.equal(generationReminderKey({ ...job, running: true }), null);
   assert.equal(generationReminderKey({ ...job, turns: [{ turnKey: 'turn-1' }] }), null);
+  assert.equal(generationReminderKey({ ...job, turns: [...job.turns, { turnKey: 'retry-success', images: ['out.png'] }] }), null);
 });
 
 test('approval replay and poll timestamps do not revive receipts; a new approval does', () => {

@@ -31,6 +31,7 @@ interface LocalChatState {
   loadConversation: (conversationId: string) => Promise<ChatConversation | null>;
   send: (input: Omit<LocalChatSendInput, "requestId"> & { requestId?: string }) => Promise<ChatConversation>;
   stop: (conversationId: string) => Promise<void>;
+  recover: (conversationId: string) => Promise<void>;
   setDraft: (conversationId: string, draft: LocalChatDraft) => void;
 }
 
@@ -120,7 +121,7 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
       await ensureLocalChatEvents();
       // Retrying an uncertain IPC result must reuse its native idempotency key.
       // An accepted response clears it so a later intentional identical message is a new turn.
-      const fingerprint = JSON.stringify([input.projectId, input.conversationId ?? null, input.text, input.referenceAssetIds, input.cardDefaults ?? null]);
+      const fingerprint = JSON.stringify([input.projectId, input.conversationId ?? null, input.provider ?? "codex-local", input.text, input.referenceAssetIds, input.cardDefaults ?? null]);
       const pending = pendingSubmissions.get(key);
       const requestId = input.requestId || (pending?.fingerprint === fingerprint ? pending.requestId : crypto.randomUUID());
       pendingSubmissions.set(key, { fingerprint, requestId });
@@ -136,6 +137,10 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
   stop: async conversationId => {
     const chat = await localChat.stop(conversationId);
     if (chat) get().applyConversation(chat);
+  },
+  recover: async conversationId => {
+    const chat = await localChat.recover(conversationId);
+    get().applyConversation(chat);
   },
   setDraft: (conversationId, draft) => {
     const drafts = { ...get().drafts };

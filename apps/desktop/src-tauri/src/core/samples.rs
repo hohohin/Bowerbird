@@ -451,9 +451,9 @@ fn seed_one(
     caption_text: &str,
     tag_names: &[String],
 ) -> AppResult<()> {
-    // 1) 入库（完整 probe/copy/thumb/pHash/colors/dedup）。ingest_file 硬编码 source="imported"，
+    // 1) 内置样例首次保存（probe/save/thumb/pHash/colors/dedup），默认 source="imported"，
     //    仿 ingest_from_bytes 在其后手写 UPDATE 改成 sample。
-    let asset = ingest::ingest_file(paths, db, source)?;
+    let asset = ingest::ingest_new_file(paths, db, source)?;
     {
         let conn = db.conn.lock().unwrap();
         conn.execute(
