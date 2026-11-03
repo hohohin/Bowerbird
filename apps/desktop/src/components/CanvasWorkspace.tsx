@@ -1,7 +1,8 @@
 import { userErrorMessage } from "../lib/userError";
 import { isTextAsset } from "../lib/textMedia";
-import { isAudioAsset } from "../lib/audioMedia";
 import { CreationImagePreview } from "./CreationImagePreview";
+import { CreationModeIndicator } from "./CreationModeIndicator";
+import { creationImageAssetId, useCreationImageInteraction } from "./useCreationImageInteraction";
 import { useImeGuard } from "../lib/useImeGuard";
 import { useLocalFileMode } from "../lib/localFileMode";
 import type { LibrarySource } from "../lib/localFileMode";
@@ -582,14 +583,6 @@ export function CanvasWorkspace({
   const [canvasMarquee, setCanvasMarquee] = useState<CanvasMarquee | null>(null);
   const [selectedCanvasNodeIds, setSelectedCanvasNodeIds] = useState<Set<string>>(() => new Set());
   const [canvasLightbox, setCanvasLightbox] = useState<{ images: string[]; index: number } | null>(null);
-  const [creationImagePreview, setCreationImagePreview] = useState<{ asset: Asset; jobId?: string } | null>(null);
-  const creationImageClickRef = useRef<ReturnType<typeof setTimeout>>();
-  const creationImagePressRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
-  function cancelCreationImageClick() { clearTimeout(creationImageClickRef.current); }
-  useEffect(() => {
-    setCreationImagePreview(null);
-    return cancelCreationImageClick;
-  }, [projectId, boardOpen, genEditing, viewMode]);
   const videoFrameSaves = useRef(new Map<string, () => Promise<void>>());
   const videoTrimSaves = useRef(new Map<string, () => Promise<Asset>>());
   const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; section?: { id: string; name: string } | null; x: number; y: number; point: CanvasPoint | null } | null>(null);
@@ -4652,6 +4645,11 @@ export function CanvasWorkspace({
     await ensureMaterialized(draft); await flushCanvasWrites(false);
   });
 
+  const { gesture: creationImage, preview: creationImagePreview } = useCreationImageInteraction({
+    root: workspaceRef, enabled: !loading && !loadFailed, scope: `${projectId}:${viewMode}`,
+    resolve: creationImageTarget, onCapture: cancelConversationImageClick,
+  });
+
   if (loadFailed) {
     return (
       <div className="canvas-load-failure" role="alert">
@@ -4707,23 +4705,15 @@ export function CanvasWorkspace({
     if (assetId) await frequentLibrary.pinAsset(assetId);
   }
 
-  function creationImageTarget(target: EventTarget | null, double = false) {
+  function creationImageTarget(media: HTMLElement) {
     const state = useStore.getState();
-    if (!(state.boardOpen || state.genEditing) || frequentPickingRef.current || loadingRef.current
-      || state.projectRoutePending
-      || !(target instanceof Element) || !workspaceRef.current?.contains(target)) return null;
-    const media = target.closest<HTMLElement>('[data-conversation-image],[data-asset-id],[data-frequent-asset-id],[data-creation-conversation]');
-    if (double && media?.hasAttribute('data-creation-conversation')) return null;
-    if (!media || media.closest('[data-creation-pick-disabled="true"],[inert],[aria-disabled="true"]')
-      || media.matches(':disabled') || media.closest('.connected-media')?.querySelector('.connected-missing')) return null;
-    const control = target.closest('button,input,textarea,select,a,[contenteditable="true"],[role="combobox"]');
-    if (control && control !== media) return null;
+    if (frequentPickingRef.current || loadingRef.current) return null;
     const onCanvas = !!stageRef.current?.contains(media);
     if (onCanvas && (spacePressedRef.current || drawingTool !== "select")) return null;
     if (!onCanvas && (state.mode === "manage" || state.collectionAddTargetId)) return null;
     const nodeId = media.closest<HTMLElement>('[data-canvas-node-id]')?.dataset.canvasNodeId;
     const node = nodesRef.current.find(item => item.id === nodeId);
-    const assetId = media.dataset.conversationImage ?? media.dataset.assetId ?? media.dataset.frequentAssetId;
+    const assetId = creationImageAssetId(media);
     const material = node?.kind === "asset" ? node.asset : node?.kind === "folder"
       ? node.assets.find(item => media.dataset.canvasFolderAssetId ? item.id === media.dataset.canvasFolderAssetId : item.assetId === assetId)
       : nodeId ? selectedConversationImage(nodeId, conversationImages(nodeId)) : undefined;
@@ -4732,36 +4722,10 @@ export function CanvasWorkspace({
     const asset = assetByIdRef.current.get(assetId ?? material?.assetId ?? "") ?? (material ? {
       id: material.assetId ?? material.id, name: material.name, store_path: material.storePath,
       thumb_path: material.thumbPath, width: material.width, height: material.height,
-    } : assetId && media.dataset.filePath ? { id: assetId, name: media.getAttribute('aria-label') ?? "图片", store_path: media.dataset.filePath } : null);
-    if (!asset || isVideoPath(asset.store_path) || isAudioAsset(asset) || isTextAsset(asset)) return null;
-    return { asset, onCanvas, canvasNodeId: onCanvas ? material?.id : undefined };
-  }
-
-  function previewCreationImage(asset: Asset) {
-    const job = Object.values(useStore.getState().genJobs).find(item => item.turns.some(turn =>
-      !!asset.store_path && turn.images.includes(asset.store_path)));
-    setCreationImagePreview({ asset, jobId: job?.id });
-  }
-
-  function captureCreationImage(event: React.MouseEvent<HTMLDivElement>, double = false) {
-    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
-    const image = creationImageTarget(event.target, double);
-    if (!image) return;
-    event.preventDefault(); event.stopPropagation();
-    cancelCreationImageClick(); cancelConversationImageClick();
-    if (creationImagePressRef.current?.moved || image.onCanvas && suppressNodeClickRef.current) return;
-    if (double) {
-      window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, {
-        detail: image.canvasNodeId ? { assetId: image.asset.id, canvasNodeId: image.canvasNodeId } : image.asset.id,
-      }));
-    } else if (event.detail === 0) previewCreationImage(image.asset);
-    else if (event.detail === 1) {
-      const project = activeCanvasRef.current.id;
-      creationImageClickRef.current = setTimeout(() => {
-        const state = useStore.getState();
-        if (state.activeProjectId === project && !state.projectRoutePending && (state.boardOpen || state.genEditing)) previewCreationImage(image.asset);
-      }, 500);
-    }
+    } : undefined);
+    const id = asset?.id ?? assetId;
+    return id ? { assetId: id, asset, canvasNodeId: onCanvas ? material?.id : undefined,
+      suppressClick: onCanvas && suppressNodeClickRef.current } : null;
   }
 
   return (
@@ -4771,30 +4735,22 @@ export function CanvasWorkspace({
       className={`canvas-workspace canvas-tactical${sourceCollapsed ? " is-source-collapsed" : " is-library-open"}${libraryDragging ? " is-library-dragging" : ""}${frequentPicking ? " is-picking-frequent" : ""}${loading || projectRoutePending ? " is-route-pending" : ""}`}
       aria-busy={loading || projectRoutePending}
       onPointerDownCapture={event => {
-        cancelCreationImageClick();
-        creationImagePressRef.current = { x: event.clientX, y: event.clientY, moved: false };
+        creationImage.pointerDown(event);
         if (event.button === 0 && !isCanvasPanGesture(event.button, spacePressedRef.current, drawingTool === "pan")) captureFrequentMaterial(event);
       }}
-      onPointerMoveCapture={event => {
-        const press = creationImagePressRef.current;
-        if (press && event.buttons && Math.hypot(event.clientX - press.x, event.clientY - press.y) >= 4) press.moved = true;
-      }}
+      onPointerMoveCapture={creationImage.pointerMove}
       onClickCapture={event => {
         if (event.button !== 0) return;
-        if (spacePressedRef.current || drawingTool === "pan") { captureCreationImage(event); return; }
+        if (spacePressedRef.current || drawingTool === "pan") { creationImage.click(event); return; }
         const material = captureFrequentMaterial(event);
         if (material && event.detail < 2) void pinFrequentMaterial(material);
-        if (!material) captureCreationImage(event);
+        if (!material) creationImage.click(event);
       }}
-      onDoubleClickCapture={event => { if (!captureFrequentMaterial(event)) captureCreationImage(event, true); }}
-      onDragStartCapture={event => { cancelCreationImageClick(); captureFrequentMaterial(event); }}
-      onContextMenuCapture={event => { cancelCreationImageClick(); captureFrequentMaterial(event); }}
+      onDoubleClickCapture={event => { if (!captureFrequentMaterial(event)) creationImage.click(event, true); }}
+      onDragStartCapture={event => { creationImage.cancel(); captureFrequentMaterial(event); }}
+      onContextMenuCapture={event => { creationImage.cancel(); captureFrequentMaterial(event); }}
       onKeyDownCapture={event => {
-        if (event.key === "Escape") cancelCreationImageClick();
-        if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.nativeEvent.isComposing) {
-          const image = creationImageTarget(event.target);
-          if (image) { event.preventDefault(); event.stopPropagation(); cancelCreationImageClick(); previewCreationImage(image.asset); return; }
-        }
+        if (creationImage.keyDown(event)) return;
         if (!["Enter", " ", "Delete", "Backspace", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) return;
         const material = captureFrequentMaterial(event);
         if (material && !event.repeat && (event.key === "Enter" || event.key === " ")) void pinFrequentMaterial(material);
@@ -4839,14 +4795,7 @@ export function CanvasWorkspace({
             if (sourceCollapsed) beginOnboardingOperation("expand-source", projectId)();
           }}
         >{sourceCollapsed ? <PanelLeftOpen size={16} aria-hidden="true" /> : <PanelLeftClose size={16} aria-hidden="true" />}</button>
-        {(boardOpen || genEditing) && (
-          <>
-            <div className="canvas-creation-mode-frame" aria-hidden="true" />
-            <div className="creation-mode-notch canvas-creation-mode-notch" aria-hidden="true">
-              创作模式
-            </div>
-          </>
-        )}
+        {(boardOpen || genEditing) && <CreationModeIndicator className="canvas-creation-mode-indicator"/>}
         <div className="canvas-board-toolbar">
           <div>
             <span className="canvas-board-title-field" data-title={activeCanvas.title || " "}>
@@ -5745,8 +5694,7 @@ export function CanvasWorkspace({
             setSelectedChatId(null); useStore.getState().setBoardActive(true); documentEditorSession.current++; setDocumentEditor(null);
           }}/></Suspense>}
         {creationImagePreview && <CreationImagePreview asset={creationImagePreview.asset} projectId={projectId}
-          job={creationImagePreview.jobId ? genJobs[creationImagePreview.jobId] : undefined}
-          onClose={() => setCreationImagePreview(null)} />}
+          job={creationImagePreview.job} onClose={creationImage.close} />}
         {canvasLightbox && (
           <Lightbox
             onAddVideoFrame={addVideoFrame}

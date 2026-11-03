@@ -24,13 +24,13 @@ try {
   await editor.fill('主屏直接生成一张海报');
   const libraryAsset = page.locator('.library-home [data-asset-id]').first();
   const referenceId = await libraryAsset.getAttribute('data-asset-id');
-  await libraryAsset.click();
+  await libraryAsset.dblclick();
   await editor.locator(`[data-asset-id="${referenceId}"]`).waitFor();
   const scopeBefore = await page.evaluate(() => window.calls.filter(call => call.command === 'set_active_project').length);
   await composer.locator('.composer-send button').click();
   await page.waitForFunction(() => window.generationCalls.length === 1);
   assert.equal(await page.evaluate(() => window.generationCalls[0].projectId), 'quick-live');
-  assert.equal(await page.evaluate(() => window.generationCalls[0].referenceImages.length), 1, 'clicked library asset reaches the real generation request');
+  assert.equal(await page.evaluate(() => window.generationCalls[0].referenceImages.length), 1, 'double-clicked library asset reaches the real generation request');
   assert.equal(await page.evaluate(() => window.store.getState().activeProjectId), null);
   assert.equal(await page.evaluate(() => window.nativeProject), null);
   assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'set_active_project').length), scopeBefore, 'background send does not change native scope');
@@ -83,7 +83,7 @@ try {
     const composerBounds = await composer.boundingBox();
     assert.ok(bottomAsset.y + bottomAsset.height <= composerBounds.y, 'last library row can scroll above the composer');
     const referencesBefore = await editor.locator(`[data-asset-id="${lastAssetId}"]`).count();
-    await lastAsset.click();
+    await lastAsset.dblclick();
     await page.waitForFunction(({ id, count }) => document.querySelectorAll(`.library-composer .ProseMirror [data-asset-id="${id}"]`).length > count, { id: lastAssetId, count: referencesBefore });
     await scroller.evaluate(element => { element.scrollTop = 0; });
     await composer.getByRole('combobox', { name: '选择项目', exact: true }).click();

@@ -71,13 +71,13 @@ function saveBoardRatio(v: string | null) {
 export const AGENT_DS_DONE_EVENT = "bowerbird://agent-ds-done";
 
 /**
- * 创作板 UI 外壳：沿用素材库液态玻璃材质，顶部选择图片／视频／Agent 与品牌规范，
+ * 主屏素材库与画板共用的工业制图创作框，顶部选择图片／视频／对话与视觉规范，
  * 正文保留句中引用，输出参数和发送集中在底部。编辑器
  * 内核（ProseMirror doc / 光标 / 序列化）下沉到 useCreationEditor + creation/* 模块，
  * 本组件只管「组稿周边」：用途（preset）CRUD / 复制 / 发送 / 预览。
  *
- * 两态：常驻未激活（普通浏览：点图开详情、筛选生效）⇄ 创作模式激活（store.boardOpen，
- * 等同旧「创作板」按钮：点图插参考图、瀑布流蓝线框 + 顶部「创作模式」刘海）。编辑框
+ * 两态：常驻未激活（普通浏览）⇄ 创作模式激活（store.boardOpen）；宿主用
+ * CreationModeIndicator 呈现共用的边框与状态标签。编辑框
  * 获得焦点（onFocus，ProseMirror contenteditable 冒泡）即激活；右上角收起按钮退出。
  * 本框不提供续轮入口，续轮由绘画详情承载。会话「重新编辑」坞期间本组件整体让位
  * （App 按 !genEditing 挂载）。
@@ -85,7 +85,7 @@ export const AGENT_DS_DONE_EVENT = "bowerbird://agent-ds-done";
  * 非创作模式未聚焦时只露出正文首行（复用原编辑器，不复制文本）；点击或键盘聚焦后展开。
  * 在工具栏与内部菜单间操作保持展开，草稿与创作模式不因失焦被清空。
  *
- * 参考图入口：创作模式激活时点瀑布流任意图即在光标处插 image chip；也可手输 @图名，
+ * 参考图入口：宿主处理图片预览与引用手势，引用事件在光标处插 image chip；也可手输 @图名，
  * 空格/标点后自动识别为 image chip。维度环（CaptionRing）为全局组件（长按图片呼出），
  * 点环上扇区经 store.pendingKeyword 由本板编辑器消费插入 keyword chip。
  */

@@ -112,7 +112,10 @@ function openChat(id: string) {
 }
 
 /** The library draft and destination are independent of the visible project route. */
-export function LibraryComposer({ onLocalVideoStarted }: { onLocalVideoStarted?: (projectId: string, nodeId: string) => void }) {
+export function LibraryComposer({ onLocalVideoStarted, onOpenLibrary }: {
+  onLocalVideoStarted?: (projectId: string, nodeId: string) => void;
+  onOpenLibrary?: () => void;
+}) {
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [preparedProjectId, setPreparedProjectId] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -128,6 +131,7 @@ export function LibraryComposer({ onLocalVideoStarted }: { onLocalVideoStarted?:
     <CreativeComposer key={draftRevision} projectId={selectedProjectId || undefined} draftJson={draftJson}
       header={<LibraryProjectPicker value={selectedProjectId} onChange={id => { setSelectedProjectId(id); setHistoryOpen(false); }}/>}
       onDraftChange={saveDraft} registerDraftFlush={value => { flush.current = value; }} prepareProject={prepareProject}
+      onOpenLibrary={onOpenLibrary}
       resolveCreativeThread={(_parent, prompt, _revision, _continuation, _parentNode, target) => startLibraryThread(prompt, target)}
       onGenerateLocalVideo={async (request, target) => {
         const projectId = requireProject(target);

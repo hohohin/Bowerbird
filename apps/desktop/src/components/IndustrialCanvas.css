@@ -219,13 +219,6 @@ html[data-theme] .composer-glass .generation-send-button:not(:disabled) {
   color:rgb(var(--industrial-accent-rgb));background:transparent;border-color:rgb(var(--industrial-muted-rgb) / .3);box-shadow:none;
 }
 html[data-theme] .composer-glass .generation-send-button:hover:not(:disabled) { color:rgb(var(--industrial-accent-rgb));background:rgb(var(--industrial-ink-rgb) / .035); }
-html[data-theme] .canvas-tactical .canvas-creation-mode-frame {
-  --creation-mode-line:rgb(var(--industrial-muted-rgb) / .3);
-  --creation-mode-stripe:rgb(var(--industrial-muted-rgb) / .5);
-  background:none;box-shadow:inset 0 0 0 1px var(--creation-mode-line);
-}
-html[data-theme] .canvas-tactical .creation-mode-notch.canvas-creation-mode-notch { color:rgb(var(--industrial-accent-rgb));background:var(--cs-console);clip-path:none; }
-html[data-theme] .canvas-tactical .creation-mode-notch.canvas-creation-mode-notch::before { background:rgb(var(--industrial-accent-rgb));box-shadow:none; }
 
 /* Visible focus stays local and continuous; status-specific error and warning colors remain native. */
 html[data-theme] .canvas-tactical .workflow-card :is(textarea,.ProseMirror):focus,
@@ -242,8 +235,7 @@ html[data-theme] :is(.local-chat-reply-box,.local-chat-search):focus-within {
 }
 @media (forced-colors:active) {
   html[data-theme] .composer-glass .composer-mode-thumb,
-  html[data-theme] .composer-glass .generation-send-button:not(:disabled),
-  html[data-theme] .canvas-tactical .creation-mode-notch.canvas-creation-mode-notch { background:Highlight;color:HighlightText; }
+  html[data-theme] .composer-glass .generation-send-button:not(:disabled) { background:Highlight;color:HighlightText; }
   html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"],
   html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"] svg { color:HighlightText; }
   html[data-theme] .canvas-tactical .canvas-stage { background-image:none; }

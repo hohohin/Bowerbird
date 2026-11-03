@@ -7,6 +7,8 @@ import { PreservedWorkspace } from "./PreservedWorkspace";
 import "./HomeWorkspace.css";
 import { LibraryComposer } from "./LibraryComposer";
 import { registerLibraryLocalVideo } from "../lib/libraryGenerationRuntime";
+import { CreationImagePreview } from "./CreationImagePreview";
+import { useHomeCreationImage } from "./useHomeCreationImage";
 import "./LibraryHomeGeneration.css";
 
 export function HomeWorkspace({ active = true, shortcutsEnabled = true, onCreateProject }: {
@@ -26,6 +28,7 @@ export function HomeWorkspace({ active = true, shortcutsEnabled = true, onCreate
   }
   const libraryActive = active && view === "library";
   const projectsActive = active && view === "projects";
+  const { gesture: creationImage, preview, openLibrary, keyDown } = useHomeCreationImage(libraryPage, libraryActive && shortcutsEnabled);
   useEffect(() => {
     const page = libraryPage.current;
     const composer = page?.querySelector<HTMLElement>(".library-composer");
@@ -37,11 +40,15 @@ export function HomeWorkspace({ active = true, shortcutsEnabled = true, onCreate
     return () => { observer.disconnect(); page.style.removeProperty("--library-composer-height"); };
   }, [libraryActive]);
   return <div className="home-workspace">
-    <div ref={libraryPage} className="home-workspace-page library-generation-page" data-suspended={!libraryActive}>
+    <div ref={libraryPage} className="home-workspace-page library-generation-page" data-suspended={!libraryActive}
+      onPointerDownCapture={creationImage.pointerDown} onPointerMoveCapture={creationImage.pointerMove}
+      onClickCapture={creationImage.click} onDoubleClickCapture={event => creationImage.click(event, true)}
+      onDragStartCapture={creationImage.cancel} onContextMenuCapture={creationImage.cancel} onKeyDownCapture={keyDown}>
       <PreservedWorkspace suspended={!libraryActive}>
         {active && <LibraryHome active={libraryActive} onCreateProject={onCreateProject} shortcutsEnabled={shortcutsEnabled}/>}
-        {libraryActive && <LibraryComposer onLocalVideoStarted={registerLibraryLocalVideo}/>}
+        {libraryActive && <LibraryComposer onLocalVideoStarted={registerLibraryLocalVideo} onOpenLibrary={openLibrary}/>}
       </PreservedWorkspace>
+      {preview && <CreationImagePreview asset={preview.asset} projectId={null} job={preview.job} onClose={creationImage.close}/>}
     </div>
     {visitedProjects && <div className="home-workspace-page" data-suspended={!projectsActive}>
       <PreservedWorkspace suspended={!projectsActive}>

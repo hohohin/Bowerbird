@@ -9,6 +9,7 @@ import { Toolbar } from "./components/Toolbar";
 import { WindowTitlebar } from "./components/WindowTitlebar";
 import { Sidebar } from "./components/Sidebar";
 import { HomeWorkspace } from "./components/HomeWorkspace";
+import { CreationModeIndicator } from "./components/CreationModeIndicator";
 import { CanvasWorkspace } from "./components/CanvasWorkspace";
 import { AssetDetail } from "./components/AssetDetail";
 import { AssetContextMenu } from "./components/AssetContextMenu";
@@ -927,21 +928,9 @@ function App() {
                 {/* 生成结果面板：主区覆盖层（像详情页） */}
                 {!projectWorkspaceActive && libraryHomeView === "library" && !collectionAddTargetId && legacyInspectorOpen && activeSessionKind === "generation" && <GenerationPanel readOnly />}
                 {!projectWorkspaceActive && libraryHomeView === "library" && !collectionAddTargetId && legacyInspectorOpen && activeSessionKind === "agent" && <CloudAgentSession readOnly />}
-                {/* 创作模式视觉标记：瀑布流区品牌蓝线框 + 顶部居中刘海「创作模式」。
-                    仅在挑图面（瀑布流）实际可见时呈现：被会话面板/详情页盖住时不显示。 */}
+                {/* 主屏与画板共用创作状态标记；会话面板或详情覆盖时隐藏。 */}
                 {!projectWorkspaceActive && libraryHomeView === "library" && boardOpen && !genEditing && !genPanelOpen && !showDetail && (
-                  <>
-                    <div
-                      aria-hidden="true"
-                      className="pointer-events-none absolute inset-0 z-20 ring-2 ring-inset ring-[#4868ff] shadow-[inset_0_0_24px_rgba(72,104,255,0.18)]"
-                    />
-                    <div
-                      aria-hidden="true"
-                      className="creation-mode-notch pointer-events-none absolute left-1/2 top-0 z-20"
-                    >
-                      创作模式
-                    </div>
-                  </>
+                  <CreationModeIndicator className="library-creation-mode-indicator"/>
                 )}
               </div>
               </PreservedWorkspace>

@@ -29,46 +29,12 @@
     linear-gradient(105deg,rgb(var(--holo-rgb) / 12%),transparent) 0 2px/44% 10px;
   background-repeat:no-repeat;
 }
-.canvas-tactical .canvas-creation-mode-frame {
-  --creation-mode-line:rgb(var(--holo-rgb) / 42%);
-  --creation-mode-stripe:rgb(var(--holo-rgb) / 55%);
-  box-shadow:inset 0 0 0 1px var(--creation-mode-line);
-  background:linear-gradient(rgb(var(--holo-rgb) / 6%),transparent) 0 0/100% 20px,
-    linear-gradient(0deg,rgb(var(--holo-rgb) / 6%),transparent) 0 100%/100% 20px;
-  background-repeat:no-repeat;
-}
-/* Narrow warning lanes stay at the canvas edge, away from cards and controls. */
-.canvas-tactical .canvas-creation-mode-frame::before {
-  content:"";position:absolute;inset:3px;pointer-events:none;
-  background:repeating-linear-gradient(135deg,var(--creation-mode-stripe) 0 2px,transparent 2px 6px) 0 0/clamp(72px,14%,180px) 6px,
-    repeating-linear-gradient(135deg,var(--creation-mode-stripe) 0 2px,transparent 2px 6px) 100% 0/clamp(72px,14%,180px) 6px,
-    repeating-linear-gradient(135deg,var(--creation-mode-stripe) 0 2px,transparent 2px 6px) 0 100%/clamp(72px,14%,180px) 6px,
-    repeating-linear-gradient(135deg,var(--creation-mode-stripe) 0 2px,transparent 2px 6px) 100% 100%/clamp(72px,14%,180px) 6px;
-  background-repeat:no-repeat;
-}
-.canvas-tactical .canvas-creation-mode-frame::after {
-  content:"";position:absolute;inset:0;pointer-events:none;
-  background:linear-gradient(var(--holo-pixel),var(--holo-pixel)) 0 0/3px 3px,
-    linear-gradient(var(--holo-pixel),var(--holo-pixel)) 100% 0/3px 3px,
-    linear-gradient(var(--holo-pixel),var(--holo-pixel)) 0 100%/3px 3px,
-    linear-gradient(var(--holo-pixel),var(--holo-pixel)) 100% 100%/3px 3px,
-    linear-gradient(var(--holo-pixel),var(--holo-pixel)) 0 50%/1px 52px,
-    linear-gradient(var(--holo-pixel),var(--holo-pixel)) 100% 50%/1px 52px;
-  background-repeat:no-repeat;
-}
-.canvas-workspace.canvas-tactical:has(.canvas-creation-mode-frame):has(.creation-editor:focus-within)>.canvas-source-panel::after {
+.canvas-workspace.canvas-tactical:has(.canvas-creation-mode-indicator):has(.creation-editor:focus-within)>.canvas-source-panel::after {
   box-shadow:none;
   background:linear-gradient(var(--cs-muted),var(--cs-muted)) 12px 0/48px 1px,
     linear-gradient(var(--cs-muted),var(--cs-muted)) calc(100% - 12px) 100%/48px 1px;
   background-repeat:no-repeat;
 }
-.canvas-tactical .creation-mode-notch.canvas-creation-mode-notch {
-  display:flex;align-items:center;gap:7px;padding:5px 12px 6px;border-radius:0;
-  background:var(--cs-selected);color:var(--cs-selected-ink);box-shadow:none;
-  clip-path:polygon(0 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%);
-  font-size:10px;font-weight:500;letter-spacing:1px;text-indent:0;
-}
-.canvas-tactical .creation-mode-notch.canvas-creation-mode-notch::before { content:"";width:3px;height:3px;flex-shrink:0;background:var(--holo-pixel);box-shadow:var(--holo-glow); }
 .composer-glass .composer-mode-picker {
   border:1px solid transparent;border-radius:0;background:transparent;
   box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;
@@ -335,9 +301,6 @@ html .app-popover.model-select-menu { border:1px solid var(--bb-line);border-rad
   html .app-popover.model-select-menu,.model-select .model-select-trigger,
   .composer-glass .composer-parameters .model-select .model-select-trigger { background:Canvas;color:CanvasText;border-color:ButtonText;box-shadow:none; }
   .model-select-menu :is(.model-select-option,.model-select-local)[aria-pressed="true"] { color:CanvasText;outline:1px solid Highlight; }
-  .canvas-tactical .creation-mode-notch.canvas-creation-mode-notch { background:Highlight;color:HighlightText;forced-color-adjust:none; }
   .creation-dock.composer-glass.is-creating { outline:1px solid Highlight;outline-offset:3px; }
-  .canvas-tactical .canvas-creation-mode-frame { outline:1px solid Highlight;outline-offset:-1px; }
-  .creation-dock.composer-glass.is-creating::before,.creation-dock.composer-glass.is-creating::after,
-  .canvas-tactical .canvas-creation-mode-frame::before,.canvas-tactical .canvas-creation-mode-frame::after { display:none; }
+  .creation-dock.composer-glass.is-creating::before,.creation-dock.composer-glass.is-creating::after { display:none; }
 }

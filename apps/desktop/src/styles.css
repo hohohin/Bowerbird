@@ -1237,31 +1237,6 @@ html .generation-mode-button:focus-visible {
   min-height: 4rem;
 }
 
-/* 创作模式顶部刘海（瀑布流顶部居中，App 挂载）：品牌蓝小胶囊自顶边垂下、只圆下方两角，
-   与 iOS 灵动岛同构。translate 独立属性定位居中，避免与入场动画的 transform 打架。 */
-.creation-mode-notch {
-  translate: -50% 0;
-  padding: 4px 16px 6px;
-  border-radius: 0 0 12px 12px;
-  background: #4868ff;
-  color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 3px;
-  text-indent: 3px; /* 抵消 letter-spacing 尾隙，视觉居中 */
-  box-shadow: 0 6px 20px rgb(72 104 255 / 35%);
-  animation: creation-notch-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-@keyframes creation-notch-in {
-  from {
-    transform: translateY(-100%);
-  }
-  to {
-    transform: translateY(0);
-  }
-}
-
 /* 退出创作模式页签（CreationBoard 激活态）：对话框右上角向上突出的档案标签——
    贴对话框顶边、只圆上方两角、底边融入对话框，品牌蓝呼应线框与刘海。 */
 .creation-exit-tab {
@@ -3434,17 +3409,7 @@ html[data-theme="light"] .app-form-input:focus {
   background: var(--bb-bg);
 }
 
-.canvas-creation-mode-frame {
-  position: absolute;
-  z-index: 40;
-  inset: 0;
-  box-shadow:
-    inset 0 0 0 2px var(--bb-blue),
-    inset 0 0 28px rgb(var(--bb-blue-rgb) / 18%);
-  pointer-events: none;
-}
-
-.canvas-workspace:has(.canvas-creation-mode-frame):has(.creation-editor:focus-within) > .canvas-source-panel::after {
+.canvas-workspace:has(.canvas-creation-mode-indicator):has(.creation-editor:focus-within) > .canvas-source-panel::after {
   content: "";
   position: absolute;
   z-index: 40;
@@ -3453,14 +3418,6 @@ html[data-theme="light"] .app-form-input:focus {
   box-shadow:
     inset 0 0 0 2px var(--bb-blue),
     inset 0 0 28px rgb(var(--bb-blue-rgb) / 18%);
-  pointer-events: none;
-}
-
-.canvas-creation-mode-notch {
-  position: absolute;
-  z-index: 41;
-  top: 0;
-  left: 50%;
   pointer-events: none;
 }
 

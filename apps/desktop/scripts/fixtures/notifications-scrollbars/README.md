@@ -6,6 +6,8 @@
 
 复用封闭本地素材 fixture，不读取用户数据库、不运行模型、不访问远程服务。
 
+本页验收范围为铃铛、滚动条及相关布局；独立外壳没有装入 HomeWorkspace 的图片手势。当前创作模式、预览与添加引用的完整行为见 [正式 App 回归](../library-creation-parity/README.md)，不以本页组件拼装替代。
+
 运行 `node scripts/notifications-scrollbars-preview-ui.test.mjs` 检查现有 17922 页面：顶部实际顺序、生成通知单一显示、普通 toast、12 条历史与 900/1440 深浅色菜单边界。截图位于 `.tmp/notifications-scrollbars/`。滚动条专项行为和通知自动收起时序由正式组件的独立测试覆盖。
 
 独立行为测试：`node scripts/notification-bell-preview-ui.test.mjs` 与 `node scripts/overlay-scrollbars-preview-ui.test.mjs`。后者显式开启 Chromium 原生滚动条，避免无头模式默认隐藏滚动条造成零占宽假通过。

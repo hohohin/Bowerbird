@@ -4,6 +4,8 @@
 
 在 apps/desktop 运行 Vite 后打开 `/scripts/fixtures/library-composer/preview.html`。
 
+本页保留项目选择与布局确认时的独立外壳，不包含 HomeWorkspace 的完整图片手势。当前主屏／画板外观和引用操作以 [正式 App 回归](../library-creation-parity/README.md) 为准，不应从本页的组件拼装推导产品交互。
+
 - 项目入口与图片／视频／对话位于同一工具行，不额外占用一行。
 - 项目菜单只对本入口使用紧凑单层样式；其他共用选择器保持原样。
 - 素材库草稿与目标画板草稿独立；未选项目时首次实际发送才准备「快速生成」。
