@@ -14,7 +14,7 @@ TypeScript／Vite、Rust 1047 passed／29 ignored、23 组桌面专项、72 项�
 
 证据：本机 `.tmp/release-windows-26.11.301/`，VPS `/tmp/bowerbird-release-windows-26.11.301/`；`rollback.sh` 恢复 202 官网，不自动降级客户端或回退账本。
 
-构建期间并行修改 `apps/desktop/src/components/IndustrialCanvas.css`，冻结副本已逐文件与存档 Git blob 核对；这些后续编辑保留在工作区，未进入此包。
+构建期间的后续 HUD 样式及关闭控件改动已另行提交为 `71604393` 并随源码推送，未进入此包。安装包的 1600 个冻结输入逐文件匹配 `510e0cdd`；不能把当前 dev 的后续提交视为本版产物。
 
 ## Windows 26.11.202 已发布（2026-11-02）
 
