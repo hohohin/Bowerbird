@@ -51,6 +51,7 @@ export function AssetContextMenu({ selection }: { selection?: {
   onOpen(id: string): void;
   detailAssetId: string | null;
   onNavigate?(): void;
+  onReusePrompt?(prompt: string): void;
 } } = {}) {
   const globalMenu = useStore((s) => s.contextMenu);
   const menu = selection ? selection.menu : globalMenu;
@@ -274,6 +275,7 @@ export function AssetContextMenu({ selection }: { selection?: {
       }
       // 复用首轮 prompt + 首版参考图 + 借用维度源图（车牌 sidecar，与 GenerationPanel 一致）
       // → 打开创作板载入。
+      if (selection?.onReusePrompt) { selection.onReusePrompt(prompt); closeContextMenu(); return; }
       selection?.onNavigate?.();
       reusePromptToBoard(prompt, hist.references, hist.dimension_assets, undefined, { media: hist.media, videoOptions: hist.video_options, ratio: hist.ratio, videoChannel: hist.provider?.startsWith("bowerbird-cloud") ? "cloud" : "jimeng" }, expectedProjectId && hist.turns[0]?.project_id === expectedProjectId ? hist.references.map(asset => hist.turns[0]?.reference_node_ids?.[hist.turns[0]?.references?.indexOf(asset.store_path ?? "") ?? -1] ?? null) : undefined);
       notifySuccess("生成提示词已载入创作板");

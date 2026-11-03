@@ -133,7 +133,7 @@ async function insertWorkspaceAsset(activity: WorkspaceActivity, plate: TextPlat
   finally { insertion?.cancel(); }
 }
 function trapWorkspaceFocus(event: React.KeyboardEvent, panel: HTMLDivElement) {
-  const controls = [...panel.querySelectorAll<HTMLElement>('button:not(:disabled),input,textarea,[contenteditable="true"],[tabindex="0"]')].filter(element => element.getClientRects().length);
+  const controls = [...panel.querySelectorAll<HTMLElement>('button:not(:disabled),input,textarea,[contenteditable="true"],[tabindex="0"]')].filter(element => (element.isContentEditable || element.tabIndex >= 0) && element.getClientRects().length);
   const last = controls[controls.length - 1], target = event.shiftKey ? last : controls[0];
   if (document.activeElement === (event.shiftKey ? controls[0] : last) || document.activeElement === panel) { event.preventDefault(); target?.focus(); }
 }
@@ -175,7 +175,7 @@ export function TextWorkspace({ initialDocument, projectId, onChange, onClose, o
     <PortalTargetContext.Provider value={portalTarget}>
     <WorkspaceHeader draft={draft} update={update} close={close} projectId={projectId} busy={busy} menu={menu} setMenu={setMenu} save={save} add={() => void addWorkspace(activity, onAddToComposer)}/>
     {error && <div className="text-workspace-feedback is-error" role="alert">{error}</div>}{notice && <div className="text-workspace-feedback" role="status">{notice}</div>}
-    <div className={`text-workspace-layout canvas-workspace canvas-tactical${library ? "" : " is-source-collapsed"}`}><TextWorkspaceLibrary open={library} projectId={projectId} onInsert={insertAsset} onClose={() => setLibrary(false)} onNavigate={close}/>
+    <div className={`text-workspace-layout canvas-workspace canvas-tactical${library ? "" : " is-source-collapsed"}`}><TextWorkspaceLibrary open={library} projectId={projectId} onInsert={insertAsset} onClose={() => setLibrary(false)} onNavigate={close} onReusePrompt={text => { if (mode === "body") plate.current?.insertMarkdown(text); else update({ ...document.current.current, markdown: document.current.current.markdown + "\n\n" + text }); }}/>
       <main className="text-workspace-writing"><div className="text-workspace-controls">{!library && <button className="text-workspace-icon" aria-label="打开素材库" title="打开素材库" onMouseDown={event => event.preventDefault()} onClick={() => setLibrary(true)}><PanelLeft size={16}/></button>}<div><button aria-pressed={mode === "body"} onClick={() => switchMode("body")}>正文</button><button aria-pressed={mode === "source"} onClick={() => switchMode("source")}>源码</button></div></div>
         <section className="text-document-editor">{mode === "body" ? <TextPlateEditor ref={plate} value={value} media={media} onChange={changeValue} onDropAssets={resolveMedia} onRejectedPaste={() => setNotice("请从素材库插入已连接的素材。")} /> : <textarea className="text-document-source" aria-label="Markdown 源码" spellCheck={false} value={draft.markdown} onChange={event => update({ ...document.current.current, markdown: event.target.value })}/>}</section>
       </main>

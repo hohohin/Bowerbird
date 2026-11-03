@@ -18,7 +18,7 @@ import "./LocalFileWorkspace.css";
 
 function trapDetailTab(event: KeyboardEvent<HTMLElement>) {
   const panel = event.currentTarget;
-  const controls = [...panel.querySelectorAll<HTMLElement>('button:not(:disabled),input,textarea,[tabindex="0"],[contenteditable="true"]')].filter(element => element.getClientRects().length);
+  const controls = [...panel.querySelectorAll<HTMLElement>('button:not(:disabled),input,textarea,[tabindex="0"],[contenteditable="true"]')].filter(element => (element.isContentEditable || element.tabIndex >= 0) && element.getClientRects().length);
   const first = controls[0], last = controls[controls.length - 1];
   if (document.activeElement === panel || document.activeElement === (event.shiftKey ? first : last)) {
     event.preventDefault(); (event.shiftKey ? last : first)?.focus();
@@ -76,8 +76,8 @@ function useWorkspaceLibraryPane(projectId?: string) {
   return { pane, source, media, kind, query, scopeId };
 }
 
-export function TextWorkspaceLibrary({ open, projectId, onInsert, onClose, onNavigate }: {
-  open: boolean; projectId?: string; onInsert(asset: Asset): void; onClose(): void; onNavigate(): void;
+export function TextWorkspaceLibrary({ open, projectId, onInsert, onClose, onNavigate, onReusePrompt }: {
+  open: boolean; projectId?: string; onInsert(asset: Asset): void; onClose(): void; onNavigate(): void; onReusePrompt(prompt: string): void;
 }) {
   const { pane, source, media, kind, query, scopeId } = useWorkspaceLibraryPane(projectId);
   const id = useId();
@@ -104,6 +104,6 @@ export function TextWorkspaceLibrary({ open, projectId, onInsert, onClose, onNav
     </aside>
     <CanvasLibraryResize panelId={id} collapsed={!open} onClose={onClose} onEscape={closeLibrary} reserveWidth={360} initialWidth={600} storageKey="bowerbird.textWorkspaceLibraryWidth"/>
     {detail && <WorkspaceAssetDetail assetId={detail} onClose={() => setDetail(null)} onOpen={setDetail} onContextMenu={openContextMenu} onNavigate={onNavigate}/>}
-    <AssetContextMenu selection={{ menu, onClose: () => setMenu(null), onOpen: setDetail, detailAssetId: detail, onNavigate }}/>
+    <AssetContextMenu selection={{ menu, onClose: () => setMenu(null), onOpen: setDetail, detailAssetId: detail, onNavigate, onReusePrompt }}/>
   </LibraryPaneContext.Provider>;
 }

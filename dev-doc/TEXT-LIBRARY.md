@@ -14,6 +14,13 @@
 
 验证入口：`document-projection.test.mjs`、`document-composer.test.mjs`、`canvas-document.test.mjs`；正式组件 `text-workspace-live-ui.test.mjs`、`text-composer-entry-ui.test.mjs`、`canvas-document-ui.test.mjs`；原生创建／恢复 10 项、原文本 10 项及文档卡协议 3 项。完整 TypeScript 与独立 Vite 构建通过。所有测试使用合成 IPC 或临时文件／数据库，无真实生成或用户库写入；前后端需配套重建，未发布安装包、未验收 Mac 原生。质量工具与行动记录见 [本轮日志](../project_logs/2026-11-03-text-workspace.md)。
 
+## 段落操作与输入修复（2026-11-03）
+
+- 段落左侧手柄拖动排序，点击可复制、删除或在下方插入段落；编辑正文时 Alt+Enter 打开当前段落菜单。沿用 Plate 节点变换与撤销记录，并非完整 BlockNote 功能集。
+- 图片／音频／视频插入后附加可编辑段落并定位光标，允许直接继续输入。
+- 编辑器内素材菜单的复用提示词只插入当前文档；正文按 Markdown 插入，源码模式追加文本，不改背景对话框或自动发送。
+- 真实浏览器专项、原工作区与文本详情回归、类型检查和独立构建通过；过程及质量边界见 [日志](../project_logs/2026-11-03-text-block-editing.md)。
+
 ## 接入范围
 
 - `.md`、`.markdown`、`.txt` 复用「建立连接」及文件夹扫描，登记原路径，不复制已有文件。

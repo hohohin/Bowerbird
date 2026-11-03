@@ -8,7 +8,7 @@ import '../../../src/styles.css';
 import '../../../src/components/IndustrialTheme.css';
 const w = window as any;
 const assets = [
-  { id: 'img1', name: '画面参考', store_path: '/fixture/reference.png', thumb_path: '/fixture/reference.png', ext: 'png' },
+  { id: 'img1', generation_session_id: new URLSearchParams(location.search).has('blocks') ? 'generated' : null, name: '画面参考', store_path: '/fixture/reference.png', thumb_path: '/fixture/reference.png', ext: 'png' },
   { id: 'video1', name: '视频参考', store_path: '/fixture/reference.mp4', ext: 'mp4' },
   { id: 'audio1', name: '声音参考', store_path: '/fixture/reference.wav', ext: 'wav' },
 ];
@@ -21,6 +21,7 @@ w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 w.calls = []; w.saveDelay = 0; w.mediaDelay = 0; w.saveError = false; w.mediaMissing = false; w.pinnedIds = [];
 w.__TAURI_INTERNALS__ = { transformCallback: () => ++callbackId, convertFileSrc: (path: string) => path, invoke: async (command: string, args: any = {}) => {
   w.calls.push({ command, args });
+  if (command === 'generation_history' && new URLSearchParams(location.search).has('blocks')) return { turns: [{ prompt: '复用的提示词', prompt_raw: '复用的提示词' }], references: [], dimension_assets: [] };
   if (command === 'plugin:event|listen') return args.handler;
   if (command === 'plugin:event|unlisten') return;
   if (command === 'folder_connections') return [{ id: 'f', root_id: 'f', parent_id: null, name: '创作笔记', path: '/fixture/notes', available: true, count: 1, scanning: false, error: null }];
