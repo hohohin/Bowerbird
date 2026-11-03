@@ -12,7 +12,7 @@ if (coverage) await page.coverage.startJSCoverage({ resetOnNavigation: false });
 page.setDefaultTimeout(10000);
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
-await page.route('**/fixture/text-reference.png', route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><rect width="160" height="100" fill="#698c91"/></svg>' }));
+await page.route('**/fixture/text-reference.png*', route => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="100"><rect width="160" height="100" fill="#698c91"/></svg>' }));
 const button = name => page.getByRole('button', { name, exact: true });
 const base = `${server.resolvedUrls.local[0]}scripts/fixtures/text-composer-live/preview.html`;
 async function checkpointCoverage() {

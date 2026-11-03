@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { convertFileSrc } from "@tauri-apps/api/core";
-import { ArrowLeft, ArrowUp, ChevronDown, FileText, Folder, Music, PanelLeft, Search, Video } from "lucide-react";
+import { ArrowLeft, ArrowUp, ChevronDown, FileText, Folder, PanelLeft } from "lucide-react";
 import { api } from "../lib/api";
 import { parseMarkdown, serializeMarkdown } from "../lib/documentCodec";
 import type { DocumentMedia, DocumentValue, TextDocumentDestination, TextWorkspaceDocument } from "../lib/documentTypes";
 import { connectedRows, folderConnections, type FolderConnection } from "../lib/folderConnections";
-import { materialCatalog } from "../lib/materialCatalog";
-import type { LibraryMedia } from "../lib/localFileMode";
 import { documentMedia, documentReferenceIds, textDocuments } from "../lib/textDocuments";
 import { textWorkspaceRequestId } from "../lib/textWorkspaceSave";
 import type { Asset, Project } from "../lib/types";
 import { userErrorMessage } from "../lib/userError";
 import { TextPlateEditor, type TextPlateHandle } from "./TextPlateEditor";
+import { TextWorkspaceLibrary } from "./TextWorkspaceLibrary";
+import { PortalTargetContext } from "../lib/portalTarget";
 import "./TextDocumentEditor.css";
 import "./TextWorkspace.css";
 
@@ -22,52 +21,6 @@ interface Props {
   onChange?(document: TextWorkspaceDocument): void;
   onClose(document: TextWorkspaceDocument): void;
   onAddToComposer(document: TextWorkspaceDocument): void | Promise<void>;
-}
-
-function useLibraryPage() {
-  const [query, setQuery] = useState("");
-  const [kind, setKind] = useState<LibraryMedia>("images");
-  const [assets, setAssets] = useState<Asset[]>([]);
-  const [offset, setOffset] = useState(0);
-  const [more, setMore] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    let live = true;
-    setLoading(true); setError("");
-    const timer = setTimeout(() => {
-      void materialCatalog.page({ kind: "all", id: null, projectId: null, media: kind, query, generated: null, color: null }, offset, 60).then(items => {
-        if (!live) return;
-        setAssets(previous => offset ? [...previous, ...items] : items); setMore(items.length === 60);
-      }).catch(reason => { if (live) setError(userErrorMessage(reason, "素材库暂时无法读取，请稍后重试。")); })
-        .finally(() => { if (live) setLoading(false); });
-    }, 160);
-    return () => { live = false; clearTimeout(timer); };
-  }, [kind, query, offset]);
-  return { query, setQuery, kind, setKind, assets, offset, setOffset, more, loading, error };
-}
-
-function LibraryAsset({ asset, onInsert }: { asset: Asset; onInsert(asset: Asset): void }) {
-  const item = documentMedia(asset);
-  if (!item) return null;
-  return <button className="text-workspace-asset" aria-label={`插入${asset.name}`} title={`双击插入${asset.name}`} onMouseDown={event => event.preventDefault()} onDoubleClick={() => onInsert(asset)} onKeyDown={event => { if (event.key === "Enter") { event.preventDefault(); onInsert(asset); } }}>
-    {item.kind === "image" ? <img src={convertFileSrc(asset.thumb_path || item.path)} alt={asset.name} loading="lazy" draggable={false}/> : <span className="text-workspace-media-icon">{item.kind === "video" ? <Video size={25}/> : <Music size={25}/>}</span>}<span>{asset.name}</span>
-  </button>;
-}
-
-function WorkspaceLibrary({ onInsert, onClose }: { onInsert(asset: Asset): void; onClose(): void }) {
-  const { query, setQuery, kind, setKind, assets, offset, setOffset, more, loading, error } = useLibraryPage();
-  return <aside className="text-workspace-library" aria-label="素材库">
-    <div className="text-workspace-library-title"><span>素材库</span><button className="text-workspace-icon" aria-label="收起素材库" title="收起素材库" onClick={onClose}><PanelLeft size={16}/></button></div>
-    <label className="text-workspace-search"><Search size={14}/><input aria-label="搜索素材" placeholder="搜索素材" value={query} onChange={event => { setQuery(event.target.value); setOffset(0); }}/></label>
-    <div className="text-workspace-media-tabs">{([['images', '图片'], ['videos', '视频'], ['audios', '音频']] as const).map(([id, label]) => <button key={id} aria-pressed={kind === id} onClick={() => { setKind(id); setOffset(0); }}>{label}</button>)}</div>
-    <div className="text-workspace-library-scroll">
-      {error && <p role="alert">{error}</p>}
-      <div className="text-workspace-assets">{assets.map(asset => <LibraryAsset key={asset.id} asset={asset} onInsert={onInsert}/>)}</div>
-      {!loading && !assets.length && !error && <p className="text-workspace-empty">暂无素材</p>}
-      {loading ? <p className="text-workspace-empty" role="status">正在读取…</p> : more && <button className="text-workspace-more" onClick={() => setOffset(offset + 60)}>加载更多</button>}
-    </div>
-  </aside>;
 }
 
 interface DestinationOption { id: string; label: string; title: string; depth: number; available: boolean; destination: TextDocumentDestination }
@@ -185,8 +138,9 @@ function trapWorkspaceFocus(event: React.KeyboardEvent, panel: HTMLDivElement) {
   if (document.activeElement === (event.shiftKey ? controls[0] : last) || document.activeElement === panel) { event.preventDefault(); target?.focus(); }
 }
 function workspaceKeyDown(event: React.KeyboardEvent, panel: HTMLDivElement, close: () => void) {
-  event.stopPropagation();
+  if (event.defaultPrevented || (event.target as Element).closest('[role="dialog"], [role="menu"]') !== panel) return;
   if (event.nativeEvent.isComposing) return;
+  if (!(event.target as Element).closest(".text-workspace-library")) event.stopPropagation();
   if (event.key === "Escape") { event.preventDefault(); close(); }
   if (event.key === "Tab") trapWorkspaceFocus(event, panel);
 }
@@ -205,7 +159,9 @@ export function TextWorkspace({ initialDocument, projectId, onChange, onClose, o
   const document = useWorkspaceDraft(initialDocument, onChange);
   const [library, setLibrary] = useState(true), [menu, setMenu] = useState<"collection" | "project" | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
+  const [portalTarget, setPortalTarget] = useState<HTMLDivElement | null>(null);
   const mounted = useRef(true), pending = useRef(false), panel = useRef<HTMLDivElement>(null), plate = useRef<TextPlateHandle>(null);
+  useEffect(() => { setPortalTarget(panel.current); }, []);
   useWorkspaceFocus(panel, mounted);
   const { media, resolveMedia } = useWorkspaceMedia(document.value, mounted, setNotice);
   const activity = { current: document.current, mounted, pending, setBusy, setError, setNotice };
@@ -216,12 +172,14 @@ export function TextWorkspace({ initialDocument, projectId, onChange, onClose, o
   const { draft, value, mode, update, changeValue, switchMode } = document;
   const keyDown = (event: React.KeyboardEvent) => workspaceKeyDown(event, panel.current!, closeTop);
   return createPortal(<div className="text-workspace" ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label="文本编辑器" onKeyDown={keyDown} onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
+    <PortalTargetContext.Provider value={portalTarget}>
     <WorkspaceHeader draft={draft} update={update} close={close} projectId={projectId} busy={busy} menu={menu} setMenu={setMenu} save={save} add={() => void addWorkspace(activity, onAddToComposer)}/>
     {error && <div className="text-workspace-feedback is-error" role="alert">{error}</div>}{notice && <div className="text-workspace-feedback" role="status">{notice}</div>}
-    <div className={`text-workspace-layout${library ? "" : " is-library-closed"}`}>{library && <WorkspaceLibrary onInsert={asset => void insertAsset(asset)} onClose={() => setLibrary(false)}/>}
+    <div className={`text-workspace-layout canvas-workspace canvas-tactical${library ? "" : " is-source-collapsed"}`}><TextWorkspaceLibrary open={library} projectId={projectId} onInsert={insertAsset} onClose={() => setLibrary(false)} onNavigate={close}/>
       <main className="text-workspace-writing"><div className="text-workspace-controls">{!library && <button className="text-workspace-icon" aria-label="打开素材库" title="打开素材库" onMouseDown={event => event.preventDefault()} onClick={() => setLibrary(true)}><PanelLeft size={16}/></button>}<div><button aria-pressed={mode === "body"} onClick={() => switchMode("body")}>正文</button><button aria-pressed={mode === "source"} onClick={() => switchMode("source")}>源码</button></div></div>
         <section className="text-document-editor">{mode === "body" ? <TextPlateEditor ref={plate} value={value} media={media} onChange={changeValue} onDropAssets={resolveMedia} onRejectedPaste={() => setNotice("请从素材库插入已连接的素材。")} /> : <textarea className="text-document-source" aria-label="Markdown 源码" spellCheck={false} value={draft.markdown} onChange={event => update({ ...document.current.current, markdown: event.target.value })}/>}</section>
       </main>
     </div>
+    </PortalTargetContext.Provider>
   </div>, window.document.body);
 }

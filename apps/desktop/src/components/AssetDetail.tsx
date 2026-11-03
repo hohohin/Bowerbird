@@ -148,19 +148,27 @@ function Meta({ label, value }: { label: string; value: ReactNode }) {
  * 资产详情页（浏览模式下覆盖主区）：大图 + 元信息 + 反推描述 + 提示词板块 + 来源外链。
  * 大图走 store_path（原图全尺寸）；视频复用 VideoPlayer；SVG/图片用 <img>。
  */
-export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string) => void }) {
-  const id = useStore((s) => s.detailAssetId);
+export function AssetDetail({ onExploreSource = (url) => { void open(url); }, selection }: {
+  onExploreSource?: (url: string) => void;
+  selection?: { assetId: string; onClose: () => void; onOpen: (id: string) => void; onContextMenu?: ReturnType<typeof useStore.getState>["openContextMenu"]; onNavigate?: () => void };
+}) {
+  const selectedId = useStore((s) => s.detailAssetId);
+  const id = selection?.assetId ?? selectedId;
+  const detailRoot = useRef<HTMLDivElement>(null);
   const assets = useStore((s) => s.assets);
   const activeProjectId = useStore((s) => s.activeProjectId);
-  const closeDetail = useStore((s) => s.closeDetail);
-  const openDetail = useStore((s) => s.openDetail);
+  const closeGlobalDetail = useStore((s) => s.closeDetail);
+  const openGlobalDetail = useStore((s) => s.openDetail);
+  const closeDetail = selection?.onClose ?? closeGlobalDetail;
+  const openDetail = selection?.onOpen ?? openGlobalDetail;
   const openDescribePicker = useStore((s) => s.openDescribePicker);
   const cancelDescribe = useStore((s) => s.cancelDescribe);
   const describeStartedAt = useStore((s) => s.describeStartedAt);
   const folders = useStore((s) => s.folders);
   const reloadFolders = useStore((s) => s.reloadFolders);
   const viewGenerationHistory = useStore((s) => s.viewGenerationHistory);
-  const openContextMenu = useStore((s) => s.openContextMenu);
+  const openGlobalContextMenu = useStore((s) => s.openContextMenu);
+  const openContextMenu = selection?.onContextMenu ?? openGlobalContextMenu;
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
@@ -395,6 +403,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
     if (group.length <= 1 || groupPos < 0) return;
     function onKey(e: KeyboardEvent) {
       const t = e.target as HTMLElement | null;
+      if (t?.closest('[role="dialog"]') !== detailRoot.current?.closest('[role="dialog"]')) return;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable))
         return;
       if (e.key === "ArrowLeft" && groupPos > 0) {
@@ -501,6 +510,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
     rememberDescribePrompt(instruction);
     // 弹反推引擎选择浮层（Bowerbird Cloud / 本机 codex）；选定后 store 执行入队。
     const r = e.currentTarget.getBoundingClientRect();
+    selection?.onNavigate?.();
     openDescribePicker(
       { kind: "single", assetId: id, instruction },
       { x: r.left, y: r.bottom },
@@ -542,6 +552,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
   // 反推面板 P2：送到创作板——正文进编辑器（用户可继续编辑后生成）。
   function sendCaptionToBoard(text: string) {
     if (!text.trim()) return;
+    selection?.onNavigate?.();
     reusePromptToBoard(text);
   }
 
@@ -662,7 +673,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
   const availableCollections = collections.filter((f) => !collectedIds.has(f.id));
 
   return (
-    <div className="asset-detail flex h-full w-full flex-col">
+    <div className="asset-detail flex h-full w-full flex-col" ref={detailRoot}>
       <header className="asset-detail-toolbar">
         <button
           onClick={closeDetail}
@@ -990,7 +1001,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
               {genMeta.session_id && (
                 <div className="flex flex-wrap items-center gap-2">
                   <button
-                    onClick={() => viewGenerationHistory(asset.id)}
+                    onClick={() => { selection?.onNavigate?.(); void viewGenerationHistory(asset.id); }}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
                     title="像回看对话一样，看这张图生成时的各轮 prompt 与产出图，并可继续提修改意见"
                   >
@@ -1020,6 +1031,7 @@ export function AssetDetail({ onExploreSource }: { onExploreSource: (url: string
                 const instruction = describePrompt.trim();
                 if (!id || !instruction) return;
                 rememberDescribePrompt(instruction);
+                selection?.onNavigate?.();
                 openDescribePicker(
                   { kind: "single", assetId: id, instruction },
                   { x: Math.max(12, window.innerWidth - 420), y: 260 },

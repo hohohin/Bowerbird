@@ -4,7 +4,7 @@ import { ChevronDown, ChevronRight, Folder, Link2, MoreHorizontal, Plus, Refresh
 import { api } from "../lib/api";
 import { canSearchPinterest, requestPinterestSearch } from "../lib/pinterestSearch";
 import { connectedRows, folderConnections, useConnectedNavigation, type ConnectionEntry, type FolderConnection } from "../lib/folderConnections";
-import { useLibraryThumbnail, useLibraryPane, type LibraryBrowsePosition } from "../lib/libraryPane";
+import { useLibraryThumbnail, useLibraryPane, libraryHasOverlay, type LibraryBrowsePosition } from "../lib/libraryPane";
 import { useThumbnailPinch } from "../lib/useThumbnailPinch";
 import { setDragAssets, getDragAssets, isNativeAssetDrag } from "../lib/dragPayload";
 import { externalFiles } from "../lib/externalFiles";
@@ -48,7 +48,7 @@ const entryKey = (asset: Asset) => entryOf(asset).id;
 const assetsOf = (entries: ConnectionEntry[]) => [...new Map(entries.map(entry => [entry.asset_id, entry.asset])).values()];
 const browsePositions = new Map<string, LibraryBrowsePosition>();
 
-export function ConnectedCollections({ media = "images", projectId = null, projectScope = false, positionId = "default", navigation, onClose, onCreateProject, onAssetsChange, toolbarActions }: ComponentProps<typeof CategorizedLibrary>) {
+export function ConnectedCollections({ media = "images", projectId = null, projectScope = false, positionId = "default", navigation, onClose, onNavigate, onCreateProject, onAssetsChange, toolbarActions, onInsertAsset, onOpenAsset }: ComponentProps<typeof CategorizedLibrary>) {
   const pane = useLibraryPane(), positions = pane?.positions ?? browsePositions;
   const positionKey = JSON.stringify([pane ? "pane" : positionId, projectId, projectScope, media, "connections"]);
   const [savedPosition] = useState(() => positions.get(positionKey));
@@ -179,7 +179,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      if (event.key.toLowerCase() !== "a" || !(event.ctrlKey || event.metaKey) || !root.current?.contains(target) || target.closest('input,textarea,[contenteditable="true"]') || document.querySelector('[role="dialog"], [role="menu"]')) return;
+      if (event.key.toLowerCase() !== "a" || !(event.ctrlKey || event.metaKey) || !root.current?.contains(target) || target.closest('input,textarea,[contenteditable="true"]') || libraryHasOverlay(root.current)) return;
       event.preventDefault(); const version = selectionVersion.current;
       void run(async () => { const ids = await folderConnections.ids(null, media, scope); if (version === selectionVersion.current) { setSelected(new Set(ids)); setMultiple(true); } });
     };
@@ -188,13 +188,16 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   function canShowOverlay() {
     return alive.current && !!root.current?.isConnected && !root.current.closest('[inert], [aria-hidden="true"]');
   }
+  function openDetail(asset: Pick<Asset, "id">) { if (onOpenAsset) onOpenAsset(asset); else useStore.getState().openDetail(asset.id); }
+  function openAsset(asset: Asset) { if (busy || !entryOf(asset).available) return; if (onInsertAsset) onInsertAsset(asset); else openDetail(asset); }
   function activate(asset: Asset) {
     if (busy || !entryOf(asset).available) return;
-    if (isTextAsset(asset)) { useStore.getState().openDetail(asset.id); return; }
+    if (onInsertAsset && isAudioAsset(asset)) { onInsertAsset(asset); return; }
+    if (isTextAsset(asset)) { openDetail(asset); return; }
     const state = useStore.getState();
-    if (projectId && state.activeProjectId !== projectId) return;
-    if (state.boardOpen || state.genEditing) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
-    else if (isAudioAsset(asset)) useStore.getState().openDetail(asset.id);
+    if (!onInsertAsset && projectId && state.activeProjectId !== projectId) return;
+    if (!onInsertAsset && (state.boardOpen || state.genEditing)) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
+    else if (isAudioAsset(asset)) openDetail(asset);
     else void run(async () => { if (!asset.store_path) throw new Error("原文件暂不可用"); const path = await externalFiles.media(asset.store_path); if (canShowOverlay()) setPreview({ path, sourceKey: entryOf(asset).version ?? videoSourceKey(asset)! }); });
   }
   function context(asset: Asset, x: number, y: number, location: CatalogLocation) {
@@ -264,17 +267,17 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
       </aside>
       <div ref={pinch} className="catalog-gallery">
         <LibraryTacticalBackdrop/>
-        <div className="file-view-heading">{navigation}<div className="video-collection-controls">{(media === "images" || media === "videos") && <VideoCollectionEntry projectId={projectId} onCloseLibrary={onClose} onCreateProject={onCreateProject} onAssetsChange={onAssetsChange}/>}<LibraryFloatingControls><LibraryMediaSwitch/><button className="library-filter-trigger" aria-label="刷新集合" onClick={refresh}><RefreshCw size={14} className={folders.some(folder => folder.scanning) ? "connected-refreshing" : undefined}/></button>{toolbarActions}</LibraryFloatingControls></div></div>
+        <div className="file-view-heading">{navigation}<div className="video-collection-controls">{(media === "images" || media === "videos") && <VideoCollectionEntry projectId={projectId} onCloseLibrary={onNavigate ?? onClose} onCreateProject={onCreateProject} onAssetsChange={onAssetsChange}/>}<LibraryFloatingControls><LibraryMediaSwitch/><button className="library-filter-trigger" aria-label="刷新集合" onClick={refresh}><RefreshCw size={14} className={folders.some(folder => folder.scanning) ? "connected-refreshing" : undefined}/></button>{toolbarActions}</LibraryFloatingControls></div></div>
         {error && <p className="catalog-error" role="alert">{error}<button onClick={() => setRevision(value => value + 1)}>重试</button></p>}
         {current && (!current.available || current.error) && <div className="connected-status"><Unlink size={14}/><span>{current.error ? userErrorMessage(current.error, "文件夹暂时无法读取，请重试。") : "文件夹暂不可用"}</span>{!current.available ? <button onClick={() => void run(() => relocate(current), true)}>重新定位</button> : <button onClick={refresh}>刷新</button>}</div>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none", scrollPaddingTop: 48 }}>
           {!loading && !folders.length && !error && <p className="catalog-hint catalog-empty">点击「建立连接」选择素材文件夹。</p>}
           {!loading && <VirtualCatalog key={`${pane?.id ?? "main"}:${filterKey}`} filter={filter} sections={sections} headings width={width} revision={revision} scroll={scroll} selected={selected} jump={jump} initialTop={savedPosition?.top} onActive={onActive}
             readPage={readPage} itemKey={entryKey} emptySection={id => folders.find(folder => folder.id === id)?.scanning ? "正在检查文件夹…" : null}
-            onAssetsChange={onAssetsChange} onSelect={select} onActivate={activate} onOpen={asset => useStore.getState().openDetail(asset.id)} onContextMenu={context}
+            onAssetsChange={onAssetsChange} onSelect={select} onActivate={activate} onOpen={openAsset} onContextMenu={context}
             renderItem={(asset, style, ratio, location) => { const entry = entryOf(asset); return <div key={entry.id} data-connection-entry={entry.id} data-reference={entry.is_reference || undefined} className="connected-media" style={style}>
               <FileMediaCard entry={{ path: asset.store_path ?? "", name: entry.name, directory: false, preview: asset.thumb_path, version: entry.version ?? `${asset.id}:${asset.file_mtime}:${asset.thumb_path ?? revision}` }} expectedVersion={entry.version ?? undefined} style={{ width: "100%", height: "100%" }} aspectRatio={ratio} selected={selected.has(entry.id)} revision={revision} labels={[]} assetId={asset.id} generated={!!asset.generation_session_id} duration={asset.duration}
-                onSelect={(additive, range) => select(asset, additive, range, location)} onActivate={!multiple ? () => activate(asset) : undefined} onOpen={() => useStore.getState().openDetail(asset.id)} onContextMenu={(x, y) => context(asset, x, y, location)}
+                onSelect={(additive, range) => select(asset, additive, range, location)} onActivate={!multiple ? () => activate(asset) : undefined} onOpen={() => openAsset(asset)} onContextMenu={(x, y) => context(asset, x, y, location)}
                 onDragStart={event => { const entries = selected.has(entry.id) ? dragSelection.current : [entry]; if (!entry.available || !entries.length || (selected.has(entry.id) && entries.length !== selected.size)) { event.preventDefault(); return; } const ids = assetsOf(entries).map(asset => asset.id); setDragAssets(ids, asset.name, event.currentTarget.querySelector("img")?.src); event.dataTransfer.effectAllowed = "copyLink"; event.dataTransfer.setData("text/plain", ids.join(",")); }} onDragEnd={() => setDragAssets(null)}/>
               {entry.is_reference && <span className="connected-reference" aria-label="素材分身"><Link2 size={13}/></span>}{!entry.available && <span className="connected-missing"><Unlink size={18}/>原文件失联</span>}
             </div>; }}/>}
@@ -282,7 +285,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
         <ThumbnailSizeSlider scope="library"/>
         {!!selected.size && <div className="connected-selection"><span>已选 {selected.size} 项</span>
           <button disabled={busy} onClick={() => void run(async () => { const entries = await resolve([...selected]); if (canShowOverlay()) setAssign(assetsOf(entries).map(asset => asset.id)); })}>添加到集合</button>
-          {(media === "images" || media === "videos") && <button disabled={busy} onClick={() => void run(async () => { await addMaterialAssets(assetsOf(await resolve([...selected])), projectId, onClose, onCreateProject); })}>添加到画板</button>}
+          {(media === "images" || media === "videos") && <button disabled={busy} onClick={() => void run(async () => { await addMaterialAssets(assetsOf(await resolve([...selected])), projectId, onNavigate ?? onClose, onCreateProject); })}>添加到画板</button>}
           <button disabled={busy} onClick={event => {
             const rect = event.currentTarget.getBoundingClientRect(), key = filterRef.current;
             void run(async () => { const entries = await resolve([...selected]); if (canShowOverlay() && filterRef.current === key) setMenu({ x: rect.left, y: rect.top, entries, deleteOnly: true }); });
@@ -293,7 +296,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     {menu && <ContextMenu x={menu.x} y={menu.y} label={"folder" in menu ? "集合操作" : "素材操作"} onClose={() => setMenu(null)}>
       {"folder" in menu ? <>{menuButton("重命名集合", () => setEditor({ item: menu.folder, parentId: menu.folder.parent_id }), !menu.folder.available)}{menuButton("移动文件夹", () => setOperation({ kind: "move-folder", folder: menu.folder }), !menu.folder.available)}{menu.folder.available ? menuButton("移到回收站", () => setOperation({ kind: "trash-folder", folder: menu.folder })) : menuButton("删除集合", () => setOperation({ kind: "disconnect", folder: menu.folder }))}{!menu.folder.available && menuButton("重新定位", () => void run(() => relocate(menu.folder), true))}{!menu.folder.parent_id && menu.folder.available && menuButton("断开连接", () => setOperation({ kind: "disconnect", folder: menu.folder }))}</>
         : "deleteOnly" in menu ? deleteActions(menu.entries)
-        : <>{menu.entries.length === 1 && menuButton("查看详情", () => useStore.getState().openDetail(menu.entries[0].asset_id))}{canSearchPinterest(menu.target.asset) && menuButton("Pinterest 以图搜图", () => requestPinterestSearch(menu.target.asset_id), !menu.target.available)}{menuButton("选择", () => { anchor.current = menu.location; setSelected(new Set(menu.entries.map(entry => entry.id))); setMultiple(true); })}{menuButton("添加到集合", () => setAssign(assetsOf(menu.entries).map(asset => asset.id)))}{(media === "images" || media === "videos") && menuButton("添加到画板", () => void run(() => addMaterialAssets(assetsOf(menu.entries), projectId, onClose, onCreateProject)), menu.entries.some(entry => !entry.available))}{menuButton("移动到文件夹", () => setOperation({ kind: "move-entries", entries: menu.entries }))}{menu.entries.length === 1 && menuButton(menu.entries[0].is_reference ? "重命名分身" : "重命名原文件", () => setOperation({ kind: "rename-entry", entries: menu.entries }))}<DeleteSubmenu disabled={busy}>{deleteActions(menu.entries)}</DeleteSubmenu></>}
+        : <>{menu.entries.length === 1 && menuButton("查看详情", () => openDetail({ id: menu.entries[0].asset_id }))}{canSearchPinterest(menu.target.asset) && menuButton("Pinterest 以图搜图", () => { onNavigate?.(); requestPinterestSearch(menu.target.asset_id); }, !menu.target.available)}{menuButton("选择", () => { anchor.current = menu.location; setSelected(new Set(menu.entries.map(entry => entry.id))); setMultiple(true); })}{menuButton("添加到集合", () => setAssign(assetsOf(menu.entries).map(asset => asset.id)))}{(media === "images" || media === "videos") && menuButton("添加到画板", () => void run(() => addMaterialAssets(assetsOf(menu.entries), projectId, onNavigate ?? onClose, onCreateProject)), menu.entries.some(entry => !entry.available))}{menuButton("移动到文件夹", () => setOperation({ kind: "move-entries", entries: menu.entries }))}{menu.entries.length === 1 && menuButton(menu.entries[0].is_reference ? "重命名分身" : "重命名原文件", () => setOperation({ kind: "rename-entry", entries: menu.entries }))}<DeleteSubmenu disabled={busy}>{deleteActions(menu.entries)}</DeleteSubmenu></>}
     </ContextMenu>}
     {editor && <CollectionEditorDialog collections={folders} {...editor} projectId={scope} onClose={() => setEditor(null)} onSaved={id => { pendingJump.current = id; setRevision(value => value + 1); }}/ >}
     {assign && <CollectionAssignDialog assetIds={assign} onClose={() => setAssign(null)} onSaved={() => { finishSelection(); setRevision(value => value + 1); }}/ >}

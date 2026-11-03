@@ -6,7 +6,7 @@ import { catalogViews, catalogViewName } from "../lib/localFileMode";
 const duration = 1000;
 
 /** Shared navigation in the homepage and project drawer. */
-export function LibrarySourceTabs({ value, onChange, project = false }: { value: string; onChange: (value: string) => void; project?: boolean }) {
+export function LibrarySourceTabs({ value, onChange, project = false, tabShortcut = true }: { value: string; onChange: (value: string) => void; project?: boolean; tabShortcut?: boolean }) {
   const useLocalFileMode = useLibraryModeStore();
   const media = useLocalFileMode(s => s.media);
   const view = useLocalFileMode(s => (s.media === "texts" ? s.textViews : s.media === "audios" ? s.audioViews : s.media === "images" ? s.views : s.videoViews).global);
@@ -19,7 +19,8 @@ export function LibrarySourceTabs({ value, onChange, project = false }: { value:
   }, [transition]);
   const feedback = transition?.source === value && transition.startedAt !== expired && Date.now() - transition.startedAt < duration
     ? { key: transition.startedAt, label: catalogViewName(transition.kind, media) } : undefined;
-  const hint = media !== "videos" ? "点击当前标签或 Tab 切换全部／标签／集合" : "点击当前标签或 Tab 切换平铺／集合";
+  const gesture = tabShortcut ? "点击当前标签或 Tab" : "点击当前标签";
+  const hint = media !== "videos" ? `${gesture}切换全部／标签／集合` : `${gesture}切换平铺／集合`;
   const cycleView = () => useLocalFileMode.getState().toggleCatalog();
   if (!project) return <LibraryViewSwitch value={view} label="素材视图切换条" hint={hint}
     onReselect={cycleView}

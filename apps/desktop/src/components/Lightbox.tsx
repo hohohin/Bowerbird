@@ -1,6 +1,7 @@
 import { isVideoPath } from "../lib/videoGeneration";
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
+import { usePortalTarget } from "../lib/portalTarget";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useImageZoom } from "../lib/useImageZoom";
@@ -37,6 +38,7 @@ export function Lightbox({
   videoSourceKey?: string;
 }) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const portalTarget = usePortalTarget();
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const frame = requestAnimationFrame(() => closeButtonRef.current?.focus({ preventScroll: true }));
@@ -71,7 +73,7 @@ export function Lightbox({
   const zoom = useImageZoom(imagePath);
   const multi = images.length > 1;
 
-  // createPortal 到 document.body：脱离 GenerationPanel 父链（多层 overflow-hidden），
+  // Portal escapes the preview's clipping parents while respecting an embedded workspace.
   // 确保 fixed 全屏遮罩不受任何祖先层叠上下文/transform 影响，一定盖住整屏。
   return createPortal(
     <div
@@ -148,6 +150,6 @@ export function Lightbox({
         </>
       )}
     </div>,
-    document.body
+    portalTarget
   );
 }

@@ -46,6 +46,10 @@ export function libraryPaneAt(target: EventTarget | null) {
 export const LibraryPaneContext = createContext<LibraryPaneState | null>(null);
 export const useLibraryPane = () => useContext(LibraryPaneContext);
 export const useLibraryModeStore = () => useLibraryPane()?.mode ?? useLocalFileMode;
+export function libraryHasOverlay(root: HTMLElement | null) {
+  const owner = root?.closest('[role="dialog"]');
+  return [...document.querySelectorAll('[role="dialog"], [role="menu"]')].some(element => element !== owner && !element.closest('[inert]'));
+}
 export const useActiveLibraryPane = create<{ pane: LibraryPaneState | null; activate: (pane: LibraryPaneState | null) => void }>(set => ({ pane: null, activate: pane => set({ pane }) }));
 export const useActiveLibraryModeStore = () => useActiveLibraryPane(s => s.pane)?.mode ?? useLocalFileMode;
 
