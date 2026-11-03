@@ -1,4 +1,4 @@
-import { createContext, forwardRef, useContext, useEffect, useImperativeHandle, useRef } from "react";
+import { createContext, forwardRef, useContext, useEffect, useImperativeHandle, useRef, type ReactNode } from "react";
 import { Plate, PlateContent, PlateElement, createPlatePlugin, usePlateEditor, type PlateElementProps } from "platejs/react";
 import type { Value } from "platejs";
 import { BasicBlocksPlugin, BasicMarksPlugin } from "@platejs/basic-nodes/react";
@@ -14,6 +14,8 @@ import { AudioWaveform } from "./AudioWaveform";
 export interface TextPlateInsertion { insert(media: DocumentMedia[]): void; cancel(): void }
 export interface TextPlateHandle { insertMedia(media: DocumentMedia[]): void; insertMarkdown(text: string): void; reserveInsertion(): TextPlateInsertion }
 interface Props {
+  toolbarStart?: ReactNode;
+  toolbarEnd?: ReactNode;
   value: DocumentValue;
   media: DocumentMedia[];
   onChange(value: DocumentValue): void;
@@ -50,7 +52,7 @@ function DocumentElement(props: PlateElementProps) {
   return <PlateElement {...props} className="text-document-block" attributes={{ ...props.attributes, ...drop }}><TextBlockActions {...props}/>{content}</PlateElement>;
 }
 
-export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextPlateEditor({ value, media, onChange, onDropAssets, onRejectedPaste }, ref) {
+export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextPlateEditor({ value, media, onChange, onDropAssets, onRejectedPaste, toolbarStart, toolbarEnd }, ref) {
   const editor = usePlateEditor({
     plugins: [BasicBlocksPlugin, BasicMarksPlugin, ListPlugin, ImagePlugin.configure({ options: { disableUploadInsert: true, disableEmbedInsert: true } }), AudioPlugin, VideoPlugin, createPlatePlugin({ key: "raw", node: { isElement: true } })],
     value: plateValue(value),
@@ -86,7 +88,8 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
   return <BlockDragContext.Provider value={blockDrag}><MediaContext.Provider value={media}><Plate editor={editor} onValueChange={({ value: changed }) => {
     const next = normalizeDocument(changed); emitted.current = next; onChange(next);
   }}>
-    <div className="text-document-format" role="toolbar" aria-label="文字格式" onMouseDown={event => event.preventDefault()}>
+    <div className="text-document-format" role="toolbar" aria-label="文字格式" onMouseDown={event => { if (!(event.target as Element).closest("input")) event.preventDefault(); }}>
+      {toolbarStart}
       <button aria-label="撤销" title="撤销" onClick={() => editor.tf.undo()}><Undo2 size={14}/></button>
       <button aria-label="重做" title="重做" onClick={() => editor.tf.redo()}><Redo2 size={14}/></button>
       <button aria-label="标题" title="标题" onClick={() => { editor.tf.toggleBlock("h2"); editor.tf.focus(); }}>H₂</button>
@@ -94,6 +97,7 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
       <button aria-label="斜体" title="斜体" onClick={() => { editor.tf.toggleMark("italic"); editor.tf.focus(); }}><Italic size={14}/></button>
       <button aria-label="列表" title="列表" onClick={() => { editor.tf.setNodes({ listStyleType: "disc", indent: 1 }); editor.tf.focus(); }}><List size={14}/></button>
       <button aria-label="引用" title="引用" onClick={() => { editor.tf.toggleBlock("blockquote"); editor.tf.focus(); }}><Quote size={14}/></button>
+      {toolbarEnd}
     </div>
     <PlateContent className="text-document-body" aria-label="文档正文" spellCheck={false} placeholder="开始写作…"
       onKeyDown={event => {

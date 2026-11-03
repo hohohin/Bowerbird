@@ -56,16 +56,10 @@ function SaveDestinations({ kind, projectId, busy, onSelect }: { kind: "collecti
 function useWorkspaceDraft(initialDocument: TextWorkspaceDocument, onChange: Props["onChange"]) {
   const [draft, setDraft] = useState(initialDocument);
   const [value, setValue] = useState(() => parseMarkdown(initialDocument.markdown));
-  const [mode, setMode] = useState<"body" | "source">("body");
   const current = useRef(initialDocument), changed = useRef(onChange); changed.current = onChange;
   function update(next: TextWorkspaceDocument) { current.current = next; setDraft(next); changed.current?.(next); }
   function changeValue(next: DocumentValue) { setValue(next); update({ ...current.current, markdown: serializeMarkdown(next) }); }
-  function switchMode(next: "body" | "source") {
-    if (next === mode) return;
-    if (next === "body") setValue(parseMarkdown(current.current.markdown));
-    setMode(next);
-  }
-  return { draft, value, current, mode, update, changeValue, switchMode };
+  return { draft, value, current, update, changeValue };
 }
 
 function useWorkspaceMedia(value: DocumentValue, mounted: { current: boolean }, setNotice: (text: string) => void) {
@@ -145,39 +139,53 @@ function workspaceKeyDown(event: React.KeyboardEvent, panel: HTMLDivElement, clo
   if (event.key === "Tab") trapWorkspaceFocus(event, panel);
 }
 
-function WorkspaceHeader({ draft, update, close, projectId, busy, menu, setMenu, save, add }: {
-  draft: TextWorkspaceDocument; update(value: TextWorkspaceDocument): void; close(): void; projectId?: string; busy: boolean;
-  menu: "collection" | "project" | null; setMenu(kind: "collection" | "project" | null): void;
+function WorkspaceActions({ projectId, busy, menu, setMenu, save, add }: {
+  projectId?: string; busy: boolean; menu: "collection" | "project" | null;
+  setMenu(kind: "collection" | "project" | null): void;
   save(destination: TextDocumentDestination, label: string): void; add(): void;
 }) {
-  return <header className="text-workspace-header"><div className="text-workspace-name"><button className="text-workspace-icon" aria-label="返回" title="返回" onClick={close}><ArrowLeft size={18}/></button><FileText size={17}/><input aria-label="文档名称" value={draft.title} placeholder="未命名文本" onChange={event => update({ ...draft, title: event.target.value })}/></div>
-    <div className="text-workspace-actions">{([['collection', '保存到集合'], ['project', '保存到项目']] as const).map(([kind, label]) => <div className="text-workspace-action" key={kind}><button disabled={busy} aria-expanded={menu === kind} onClick={() => setMenu(menu === kind ? null : kind)}>{label}<ChevronDown size={12}/></button>{menu === kind && <SaveDestinations kind={kind} projectId={projectId} busy={busy} onSelect={save}/>}</div>)}<button className="text-workspace-primary" disabled={busy} onClick={add}>添加到生成对话框<ArrowUp size={14}/></button></div>
-  </header>;
+  return <div className="text-workspace-actions">{([['collection', '保存到集合'], ['project', '保存到项目']] as const).map(([kind, label]) => <div className="text-workspace-action" key={kind}><button disabled={busy} aria-expanded={menu === kind} onClick={() => setMenu(menu === kind ? null : kind)}>{label}<ChevronDown size={12}/></button>{menu === kind && <SaveDestinations kind={kind} projectId={projectId} busy={busy} onSelect={save}/>}</div>)}<button className="text-workspace-primary" disabled={busy} onClick={add}>添加到生成对话框<ArrowUp size={14}/></button></div>;
+}
+
+function useToolbarHeight(panel: { current: HTMLDivElement | null }) {
+  useEffect(() => {
+    const toolbar = panel.current?.querySelector('.text-document-format');
+    if (!toolbar) return;
+    const measure = () => panel.current?.style.setProperty('--text-toolbar-height', `${toolbar.getBoundingClientRect().height}px`);
+    const observer = new ResizeObserver(measure); observer.observe(toolbar); measure();
+    return () => observer.disconnect();
+  }, [panel]);
 }
 
 export function TextWorkspace({ initialDocument, projectId, onChange, onClose, onAddToComposer }: Props) {
   const document = useWorkspaceDraft(initialDocument, onChange);
-  const [library, setLibrary] = useState(true), [menu, setMenu] = useState<"collection" | "project" | null>(null);
+  const [library, setLibrary] = useState(false), [menu, setMenu] = useState<"collection" | "project" | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [portalTarget, setPortalTarget] = useState<HTMLDivElement | null>(null);
   const mounted = useRef(true), pending = useRef(false), panel = useRef<HTMLDivElement>(null), plate = useRef<TextPlateHandle>(null);
-  useEffect(() => { setPortalTarget(panel.current); }, []);
+  useEffect(() => {
+    setPortalTarget(panel.current);
+
+  }, []);
   useWorkspaceFocus(panel, mounted);
+  useToolbarHeight(panel);
   const { media, resolveMedia } = useWorkspaceMedia(document.value, mounted, setNotice);
   const activity = { current: document.current, mounted, pending, setBusy, setError, setNotice };
   const close = () => onClose(document.current.current);
   const closeTop = () => { if (menu) setMenu(null); else close(); };
-  const insertAsset = (asset: Asset) => { if (document.mode === "body") void insertWorkspaceAsset(activity, plate.current, resolveMedia, asset); else setNotice("切换到正文后插入素材。"); };
+  const insertAsset = (asset: Asset) => { void insertWorkspaceAsset(activity, plate.current, resolveMedia, asset); };
   const save = (destination: TextDocumentDestination, label: string) => { setMenu(null); void saveWorkspace(activity, destination, label); };
-  const { draft, value, mode, update, changeValue, switchMode } = document;
+  const { draft, value, update, changeValue } = document;
   const keyDown = (event: React.KeyboardEvent) => workspaceKeyDown(event, panel.current!, closeTop);
   return createPortal(<div className="text-workspace" ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label="文本编辑器" onKeyDown={keyDown} onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
     <PortalTargetContext.Provider value={portalTarget}>
-    <WorkspaceHeader draft={draft} update={update} close={close} projectId={projectId} busy={busy} menu={menu} setMenu={setMenu} save={save} add={() => void addWorkspace(activity, onAddToComposer)}/>
+
     {error && <div className="text-workspace-feedback is-error" role="alert">{error}</div>}{notice && <div className="text-workspace-feedback" role="status">{notice}</div>}
-    <div className={`text-workspace-layout canvas-workspace canvas-tactical${library ? "" : " is-source-collapsed"}`}><TextWorkspaceLibrary open={library} projectId={projectId} onInsert={insertAsset} onClose={() => setLibrary(false)} onNavigate={close} onReusePrompt={text => { if (mode === "body") plate.current?.insertMarkdown(text); else update({ ...document.current.current, markdown: document.current.current.markdown + "\n\n" + text }); }}/>
-      <main className="text-workspace-writing"><div className="text-workspace-controls">{!library && <button className="text-workspace-icon" aria-label="打开素材库" title="打开素材库" onMouseDown={event => event.preventDefault()} onClick={() => setLibrary(true)}><PanelLeft size={16}/></button>}<div><button aria-pressed={mode === "body"} onClick={() => switchMode("body")}>正文</button><button aria-pressed={mode === "source"} onClick={() => switchMode("source")}>源码</button></div></div>
-        <section className="text-document-editor">{mode === "body" ? <TextPlateEditor ref={plate} value={value} media={media} onChange={changeValue} onDropAssets={resolveMedia} onRejectedPaste={() => setNotice("请从素材库插入已连接的素材。")} /> : <textarea className="text-document-source" aria-label="Markdown 源码" spellCheck={false} value={draft.markdown} onChange={event => update({ ...document.current.current, markdown: event.target.value })}/>}</section>
+    <div className={`text-workspace-layout canvas-workspace canvas-tactical${library ? "" : " is-source-collapsed"}`}><TextWorkspaceLibrary open={library} projectId={projectId} onInsert={insertAsset} onClose={() => setLibrary(false)} onNavigate={close} onReusePrompt={text => plate.current?.insertMarkdown(text)}/>
+      <main className="text-workspace-writing">
+        <section className="text-document-editor"><TextPlateEditor ref={plate} value={value} media={media} onChange={changeValue} onDropAssets={resolveMedia} onRejectedPaste={() => setNotice("请从素材库插入已连接的素材。")}
+          toolbarStart={<div className="text-workspace-name"><button className="text-workspace-icon" aria-label="返回" title="返回" onClick={close}><ArrowLeft size={18}/></button><FileText size={16}/><input aria-label="文档名称" title="重命名文档" value={draft.title} placeholder="空白文档" onChange={event => update({ ...draft, title: event.target.value })}/>{!library && <button className="text-workspace-icon" aria-label="打开素材库" title="打开素材库" onClick={() => setLibrary(true)}><PanelLeft size={16}/></button>}</div>}
+          toolbarEnd={<WorkspaceActions projectId={projectId} busy={busy} menu={menu} setMenu={setMenu} save={save} add={() => void addWorkspace(activity, onAddToComposer)}/>}/></section>
       </main>
     </div>
     </PortalTargetContext.Provider>

@@ -24,9 +24,9 @@ try {
   });
   await page.reload();
   const document = page.locator('.is-document-card'); await document.waitFor();
-  assert.equal(await document.locator('h1').innerText(), '开场');
-  assert.equal(await document.locator('strong').innerText(), '镜头');
-  await document.locator('figure img').waitFor();
+  assert.equal(await document.locator('.canvas-document-heading > span').innerText(), '长剧本');
+  assert.equal(await document.locator('.canvas-document-body').count(), 0);
+  assert.equal(await document.evaluate(el => el.style.height), '56px');
   const generator = page.locator('[data-workflow-card="generator"]');
   await page.getByRole('button', { name: '适应内容', exact: true }).click();
   await document.getByRole('button', { name: '输出文档文本', exact: true }).click();
@@ -89,7 +89,8 @@ try {
   await page.waitForFunction(() => window.snapshot().nodes[0].payloadJson.includes('已编辑'));
   await page.evaluate(() => sessionStorage.setItem('reference-fixture', JSON.stringify(window.snapshot())));
   await page.reload(); await page.locator('.is-document-card').waitFor();
-  assert.match(await page.locator('.is-document-card h1').innerText(), /已编辑/);
+  assert.match(await page.evaluate(() => JSON.parse(window.snapshot().nodes[0].payloadJson).text), /已编辑/);
+  assert.equal(await page.locator('.canvas-document-heading > span').innerText(), '重新打开的剧本');
   assert.equal((await page.evaluate(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0])).promptReferences.length, 2);
   await mkdir('.tmp/canvas-document', { recursive: true });
   for (const theme of ['dark', 'light']) { await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme); await page.screenshot({ path: `.tmp/canvas-document/${theme}.png` }); }
@@ -99,6 +100,8 @@ try {
   await page.waitForFunction(() => window.snapshot().nodes.filter(node => JSON.parse(node.payloadJson).note_type === 'document').length === 2);
   const created = await page.evaluate(() => window.snapshot().nodes.find(node => node.id !== 'script'));
   assert.deepEqual(JSON.parse(created.payloadJson).cells, []);
+  assert.equal(created.height, 56);
+  assert.equal(await page.locator(`[data-canvas-node-id="${created.id}"] .canvas-document-heading > span`).innerText(), "空白文档");
   assert.deepEqual(errors, []);
   console.log('PASS document canvas: real card, typed wires, explicit prompt references, formatted generation compile, edit and reload, stale reference-load protection');
 } finally { await browser.close(); await server.close(); }

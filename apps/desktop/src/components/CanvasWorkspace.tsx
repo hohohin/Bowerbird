@@ -2231,6 +2231,7 @@ export function CanvasWorkspace({
     }
     if (node.kind === "note" && "payloadJson" in node) {
       const note = readCanvasNote(node);
+      if (note.note_type === "document") return { x: node.x, y: node.y, width: node.width, height: 56 };
       if (note.note_type === "text" || note.note_type === "images") {
         const minimum = canvasTextMinSize(note.cells);
         return { x: node.x, y: node.y, width: Math.max(node.width, minimum.width), height: Math.max(node.height, minimum.height) };
@@ -3391,7 +3392,7 @@ export function CanvasWorkspace({
     const payloadJson = JSON.stringify(value);
     const node = graphNodesRef.current.find(candidate => candidate.id === nodeId);
     if (!node) return;
-    const minimum = value.note_type === "document" ? { width: 280, height: 200 } : value.note_type !== "section" ? canvasTextMinSize(value.cells, value.note_type === "images", value.note_type === "bubble") : node;
+    const minimum = value.note_type === "document" ? { width: 280, height: 56 } : value.note_type !== "section" ? canvasTextMinSize(value.cells, value.note_type === "images", value.note_type === "bubble") : node;
     const updated = { ...node, payloadJson, width: Math.max(size?.width ?? node.width, minimum.width), height: Math.max(size?.height ?? node.height, minimum.height) };
     graphNodesRef.current = graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate);
     setGraphNodes(graphNodesRef.current);
@@ -3569,7 +3570,7 @@ export function CanvasWorkspace({
   function placeCanvasCard(kind: "bubble" | "document" | Exclude<WorkflowKind, "trigger">, point: CanvasPoint) {
     chooseCanvasTool("select");
     if (kind === "document") {
-      createCanvasNote({ ...point, width: 420, height: 420 }, "document");
+      createCanvasNote({ ...point, width: 420, height: 56 }, "document");
     } else if (kind === "text" || kind === "bubble") {
       createCanvasNote({ ...point, width: kind === "bubble" ? 240 : 320,
         height: kind === "bubble" ? 120 : canvasTextMinSize([[emptyCanvasCell()]]).height }, kind);
@@ -5042,7 +5043,7 @@ export function CanvasWorkspace({
             {graphNodes.filter(node => node.kind === "note" && node.hiddenAt == null && !canvasChatId(node)).map(savedNode => {
               const value = resolveGenerationCells(readCanvasNote(savedNode), graphNodes);
               const minimum = value.note_type === "text" || value.note_type === "images" ? canvasTextMinSize(value.cells) : savedNode;
-              const node = { ...savedNode, width: Math.max(savedNode.width, minimum.width), height: Math.max(savedNode.height, minimum.height) };
+              const node = { ...savedNode, width: Math.max(savedNode.width, minimum.width), height: value.note_type === "document" ? 56 : Math.max(savedNode.height, minimum.height) };
               const section = value.note_type === "section";
               const selected = selectedCanvasNodeIds.has(node.id);
               const workflowController = projectId ? canvasWorkflowController(projectId) : null;
@@ -5068,10 +5069,9 @@ export function CanvasWorkspace({
                     <CanvasResizeHandle key={corner} label={`调整${value.artboard ? "画板" : "分区"}大小（${label}）`} corner={corner} size={node} position={{ x: node.x, y: node.y }} zoom={zoomRef.current} getZoom={readCanvasZoom}
                       minimum={{ width: 120, height: 80 }} onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} />
                   ))}
-                </> : value.note_type === "document" ? <CanvasDocumentCard value={value} selected={selected} width={node.width} height={node.height} zoom={zoomRef.current} getZoom={readCanvasZoom}
+                </> : value.note_type === "document" ? <CanvasDocumentCard value={value}
                   onEdit={() => { documentEditorSession.current++; setDocumentEditor({ nodeId: node.id, projectId: node.projectId, initialDocument: { title: value.title || "文本", markdown: value.text } }); }}
-                  onConnect={(port, x, y) => workflowRef.current?.connectCell(node.id, port, x, y)}
-                  onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)}/>
+                  onConnect={(port, x, y) => workflowRef.current?.connectCell(node.id, port, x, y)}/>
                 : <CanvasTextCard value={value} selected={selected} width={node.width} height={node.height} zoom={zoomRef.current} getZoom={readCanvasZoom}
                   onOpenPreview={openCanvasSourcePreview}
                   onMediaContextMenu={(event, asset) => {
