@@ -2,13 +2,19 @@
 
 本页集中维护自动更新的技术约定、发布操作和部署证据；[PROJECT.md](../PROJECT.md) 只保留项目级摘要及入口。更新代码、构建签名包、发布清单、排查双端差异前先读本页。
 
-## Windows 26.11.301 发布准备（2026-11-03）
+## Windows 26.11.301 已发布（2026-11-03）
 
-经用户要求纳入最新修改继续发版，发布 LocalSend 局域网快传、素材库直接创作、Plate 放大文本工作区与画板文档卡、创作框 HUD 标签／开放框体／收起贴底、独立图片会话预览、任务铃铛与悬浮滚动条、探索视频流采集及历史、集合改名／断联删除、积分明细、视频自动模式及自有 CLI 音频参考、新建项目卡片。SQLite 0050；Cloud 音频参考及 DeepSeek Cloud 保持未启用，不部署 Edge／Worker／迁移或更改价格。
+2026-11-03 10:43:55（北京时间）本机公网复核通过。源码 **510e0cdd** 已与文档同次存档推送后冻结构建，发布LocalSend 局域网快传、素材库直接创作、Plate 放大文本工作区与画板文档卡、创作框 HUD 标签／开放框体／收起贴底、独立图片会话预览、任务铃铛与悬浮滚动条、探索视频流采集及历史、集合改名／断联删除、积分明细、视频自动模式及自有 CLI 音频参考、新建项目卡片。SQLite **0050**，插件 **0.3.1**；Cloud 音频参考 0079／Edge／Worker／网关未部署，桌面在创建音频任务前检测服务端能力并拒绝不支持的请求；DeepSeek Cloud 未启用。Mac 保持 ARM 801／Intel 1501，现有视频及赠币服务和 Mock 支付保持。
 
-完整 TypeScript、Rust 1047 passed／29 ignored、23 组桌面专项、72 项前端测试及 29 项官网测试通过。Rust 测试仅向独立 EXE 副本嵌入 Common Controls v6 清单。源码与文档同次存档推送后冻结构建，保留中文／English、原 updater 公钥和 UPDATE 登录保留钩子。待签名、包内回归和 CDN 完整下载后切通道。
+TypeScript／Vite、Rust 1047 passed／29 ignored、23 组桌面专项、72 项前端测试及 29 项官网回归通过；1600 个冻结输入与 Git 核对、76 个资源（含 LocalSend 许可证与修改说明）、x64／双语安装器／更新登录保留钩子、原公钥验签及篡改拒绝、包内原生媒体／等待和生产 bundle 检查通过。Rust 测试仅向独立测试 EXE 副本嵌入 Common Controls v6 清单，正式构建未修改。未替用户安装／重启应用、迁移真实素材库或调用付费模型；用户库原生升级、真手机端到端、真实站点采集和 Mac 原生仍需各自验收。
 
-候选复制现役 20261102-windows-26.11.202，只更新 Windows 下载相关五个文件；保留后台、账号／Cloud 网关、Nginx、Mac 清单和旧包。证据 .tmp/release-windows-26.11.301/；未安装／重启用户应用或验收真实用户库升级、真手机和 Mac 原生。
+安装包 `Bowerbird_26.11.301_x64-setup.exe`：**87237827 bytes**，SHA-256 `a7668088080d5e35e043d1f0a90aab927cfdc87fe82ac88f1477d4a3f8d132b4`。TOS／CDN 完整回读、Range 206、CDN 包原公钥验签通过后才切更新。候选／现役／公网三平台清单、签名、双首页下载、旧包、后台及账号／Cloud 网关拒绝边界通过。
+
+现役 `/opt/bowerbird/website-releases/20261103-windows-26.11.301`，回滚 `/opt/bowerbird/website-releases/20261102-windows-26.11.202`；只改 Windows 下载与清单相关 5 个文件，82 个其他文件保持，后台、账号／Cloud 代理、Nginx、Mac 清单及旧包保留。
+
+证据：本机 `.tmp/release-windows-26.11.301/`，VPS `/tmp/bowerbird-release-windows-26.11.301/`；`rollback.sh` 恢复 202 官网，不自动降级客户端或回退账本。
+
+构建期间并行修改 `apps/desktop/src/components/IndustrialCanvas.css`，冻结副本已逐文件与存档 Git blob 核对；这些后续编辑保留在工作区，未进入此包。
 
 ## Windows 26.11.202 已发布（2026-11-02）
 
