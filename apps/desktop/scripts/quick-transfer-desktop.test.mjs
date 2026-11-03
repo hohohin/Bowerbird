@@ -21,12 +21,9 @@ try {
   await button("快传").click();
   await dialog.waitFor();
   assert.equal(await commandCount("quick_transfer_start"), 0, "opening the panel never starts a listener");
-  assert.equal(await page.getByRole("switch", { name: "接收开关" }).isDisabled(), true, "a destination is required");
-  await page.evaluate(() => { window.cancelPicker = true; });
-  await button("选择文件夹").click();
-  assert.equal(await page.getByRole("switch", { name: "接收开关" }).isDisabled(), true, "cancelling the folder picker does not invent a destination");
-  await page.evaluate(() => { window.cancelPicker = false; });
-  await button("选择文件夹").click();
+  await page.getByText("D:\\BowerbirdLibrary\\快传", { exact: true }).waitFor();
+  assert.equal(await button("选择文件夹").count(), 0, "the managed default destination needs no picker");
+  assert.equal(await page.getByRole("switch", { name: "接收开关" }).isDisabled(), false);
   await page.getByLabel("局域网地址").selectOption("10.0.0.9");
   await page.evaluate(() => { window.holdStart = true; });
   await page.getByRole("switch", { name: "接收开关" }).click();
@@ -34,10 +31,10 @@ try {
   assert.equal(await commandCount("quick_transfer_start"), 1);
   await page.evaluate(() => window.releaseStart());
   await page.getByText("接收已开启", { exact: true }).waitFor();
-  assert.equal(await button("更改").isDisabled(), true);
   assert.equal(await page.getByLabel("局域网地址").isDisabled(), true);
   const request = await page.evaluate(() => window.calls.find(call => call.command === "quick_transfer_start").args);
-  assert.deepEqual(request, { directory: "D:\\素材\\手机快传", address: "10.0.0.9" });
+  assert.deepEqual(request, { address: "10.0.0.9" }, "the backend resolves the current library root at start time");
+  assert.equal(await commandCount("plugin:dialog|open"), 0);
 
   const qr = page.getByRole("img", { name: "扫码上传到 Bowerbird" });
   await qr.waitFor();
@@ -49,9 +46,12 @@ try {
     return { data: [...context.getImageData(0, 0, canvas.width, canvas.height).data], width: canvas.width, height: canvas.height };
   });
   assert.equal(jsQR(new Uint8ClampedArray(pixels.data), pixels.width, pixels.height)?.data,
-    "http://10.0.0.9:53317/?pin=fixture-session-secret", "real QR carries the complete authenticated URL");
+    "http://10.0.0.9:53317/?pin=01234567", "real QR carries the complete authenticated URL");
+  await page.getByText("电脑浏览器打开", { exact: true }).waitFor();
+  await page.getByText("http://10.0.0.9:53317", { exact: true }).waitFor();
+  await page.getByText("01234567", { exact: true }).waitFor();
   await button("复制上传地址").click();
-  assert.equal(await page.evaluate(() => window.copiedAddress), "http://10.0.0.9:53317/?pin=fixture-session-secret");
+  assert.equal(await page.evaluate(() => window.copiedAddress), "http://10.0.0.9:53317/?pin=01234567");
   await page.getByText("已复制完整地址", { exact: true }).waitFor();
 
   await button("收起快传面板").click();
@@ -107,7 +107,6 @@ try {
   await page.goto(`${fixture}?offline`);
   await button("快传").click();
   await page.getByText("未找到可用的局域网地址，请连接 Wi-Fi 或有线网络后刷新。", { exact: true }).waitFor();
-  await button("选择文件夹").click();
   assert.equal(await page.getByRole("switch", { name: "接收开关" }).isDisabled(), true);
   await page.evaluate(() => { window.addresses = ["192.168.1.23"]; });
   await button("刷新地址").click();
@@ -138,5 +137,5 @@ try {
   await page.evaluate(() => window.emit({ revision: window.snapshot.revision - 1, active: true, url: "http://192.168.1.23:53317/?pin=old-session" }));
   assert.equal(await page.getByRole("switch", { name: "接收开关" }).getAttribute("aria-checked"), "false", "out-of-order event cannot reopen the receiver");
   assert.deepEqual(errors, []);
-  console.log("PASS quick transfer: explicit start, destination/picker cancel/address, single IPC, true QR decode/copy, hide/reopen, progress/indexing, stop, retry, safe errors, offline refresh, Tab/Esc, themes/narrow scroll, stale status/start/event replies");
+  console.log("PASS quick transfer: default library folder, no picker, explicit start/address, manual browser address/code, single IPC, true QR decode/copy, hide/reopen, progress/indexing, stop, retry, safe errors, offline refresh, Tab/Esc, themes/narrow scroll, stale status/start/event replies");
 } finally { await browser.close(); await server.close(); }

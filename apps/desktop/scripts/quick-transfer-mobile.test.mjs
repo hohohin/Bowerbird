@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+import { chromium, devices } from '../../html-renderer/node_modules/playwright/index.mjs';
 
 const url = process.argv[2];
 assert.ok(url, 'Run through fixtures/quick-transfer-mobile/Cargo.toml');
@@ -53,6 +53,76 @@ async function successfulBatch(context) {
   assert.deepEqual(uploads, [200, 200, 200]);
   results.push('Chinese names, sequential batch, durable acknowledgement, explicit repeated selection');
   await page.close();
+}
+
+async function pairWithoutCamera(context) {
+  const address = new URL('/', url).href;
+  const page = await openPage(context, address);
+  const observed = [];
+  page.on('request', request => observed.push(request.url()));
+  await page.locator('#pairing-code').waitFor();
+  assert.equal(await page.locator('#pick').isVisible(), false);
+  await page.screenshot({ path: `${output}/pairing-390.png`, fullPage: true });
+  const attemptsBefore = observed.length;
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await page.waitForTimeout(150);
+  assert.equal(observed.length, attemptsBefore, 'unpaired page does not automatically try a code');
+  await page.locator('#pairing-code').fill('87654321');
+  await page.locator('#pair').click();
+  await page.locator('#mobile-notice').filter({ hasText: '配对码不正确' }).waitFor();
+  assert.equal(new URL(page.url()).searchParams.has('pin'), false);
+  const code = new URL(url).searchParams.get('pin');
+  await page.locator('#pairing-code').fill(`${code.slice(0, 4)} ${code.slice(4)}`);
+  await page.locator('#pair').click();
+  await page.waitForURL(url);
+  await page.locator('#mobile-receiver').filter({ hasText: '接收已开启' }).waitFor();
+  assert.equal(await page.locator('#pick').isDisabled(), false);
+  await selectAndSend(page, file('手输配对.png'));
+  await waitDone(page, 1);
+  results.push('Short address shows a non-upload pairing form; wrong code stays local, valid code uploads');
+  await page.close();
+}
+
+async function pairingThrottle(context) {
+  const page = await openPage(context, new URL('/', url).href);
+  let attempts = 0;
+  await page.route('**/?pin=*', async route => {
+    attempts++;
+    await route.fulfill({ status: 429, contentType: 'text/html', body: '' });
+  });
+  await page.locator('#pairing-code').fill('87654321');
+  await page.locator('#pair').click();
+  await page.locator('#mobile-notice').filter({ hasText: '尝试次数过多' }).waitFor();
+  assert.equal(await page.locator('#pair').isDisabled(), true);
+  assert.equal(await page.locator('#pairing-code').isDisabled(), true);
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await page.waitForTimeout(150);
+  assert.equal(attempts, 1, 'blocked form never retries automatically');
+  await page.close();
+  results.push('429 pairing response explains reopening on desktop, disables retries and stops probes');
+}
+
+async function phoneUserAgents() {
+  const agents = [
+    ['Safari UA', devices['iPhone 13'].userAgent],
+    ['WeChat UA', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.50 NetType/WIFI Language/zh_CN'],
+  ];
+  for (const [name, userAgent] of agents) {
+    const context = await browser.newContext({ userAgent, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+    const page = await openPage(context);
+    const response = await page.request.get(url);
+    assert.equal(response.status(), 200);
+    const headers = response.headers();
+    assert.match(headers['content-type'], /text\/html.*utf-8/i);
+    assert.equal(headers['cache-control'], 'no-store');
+    assert.equal(headers['referrer-policy'], 'no-referrer');
+    assert.equal(headers['x-frame-options'], 'DENY');
+    assert.ok(headers['content-security-policy'].includes("connect-src 'self'"));
+    await selectAndSend(page, file(`${name}.png`));
+    await waitDone(page, 1);
+    await context.close();
+  }
+  results.push(`Safari/WeChat user agents render and upload on ${new URL(url).hostname}; Chromium emulation, not iOS engine`);
 }
 
 async function refusalAndPartialRetry(context) {
@@ -201,6 +271,9 @@ async function smallScreens(context) {
 
 try {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, colorScheme: 'dark' });
+  await pairWithoutCamera(context);
+  await pairingThrottle(context);
+  await phoneUserAgents();
   await successfulBatch(context);
   await refusalAndPartialRetry(context);
   await literalFileName(context);
@@ -213,7 +286,7 @@ try {
   await closedReceiver(context);
   assert.deepEqual(errors, []);
   assert.deepEqual(remote, []);
-  await writeFile(`${output}/report.json`, JSON.stringify({ results, errors, remote, scope: 'Chrome loopback, temporary directory; not a physical phone or production library' }, null, 2));
+  await writeFile(`${output}/report.json`, JSON.stringify({ results, errors, remote, scope: `Chrome via ${new URL(url).hostname}, temporary directory; Safari/WeChat UA emulation, not a physical phone, WebKit, or production library` }, null, 2));
   console.log(JSON.stringify({ results, errors, remote }));
 } finally {
   await browser.close();

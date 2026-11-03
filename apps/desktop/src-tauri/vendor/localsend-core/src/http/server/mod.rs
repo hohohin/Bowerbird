@@ -648,7 +648,12 @@ async fn handle_request_inner(mut req: Request<Incoming>) -> Result<Response<Box
         }
         if req.method() == Method::GET && req.uri().path() == "/" {
             let Some(v2)=&state.v2 else {return Err(AppError::Status(StatusCode::NOT_FOUND))};
-            if let Err(error) = common::pin::check_pin(v2.pin.as_deref(),&v2.pin_attempts,&common::query::parse_query(req.uri().query()),client_info.ip.ip).await {
+            let query = common::query::parse_query(req.uri().query());
+            // The public root only contains a pairing form; no upload authority is granted.
+            if !query.contains_key("pin") {
+                return Ok(web::index(&state));
+            }
+            if let Err(error) = common::pin::check_pin(v2.pin.as_deref(),&v2.pin_attempts,&query,client_info.ip.ip).await {
                 // The static page contains no secret. Keep it readable for an expired QR,
                 // while its authenticated probe sees the failing HTTP status.
                 let mut response = web::index(&state);

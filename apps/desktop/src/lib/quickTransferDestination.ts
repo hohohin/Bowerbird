@@ -1,26 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
 import { userErrorMessage } from "./userError";
 
-export function useQuickTransferDirectory(savedDirectory: string | null, blocked: boolean, onError: (message: string) => void) {
+export function useQuickTransferDirectory(visible: boolean, onError: (message: string) => void) {
   const [directory, setDirectory] = useState("");
-  const [choosing, setChoosing] = useState(false);
-  const selecting = useRef(false);
-  useEffect(() => { if (savedDirectory) setDirectory(savedDirectory); }, [savedDirectory]);
-
-  async function choose() {
-    if (selecting.current || blocked) return;
-    selecting.current = true;
-    setChoosing(true);
-    onError("");
-    try {
-      const selected = await open({ directory: true, multiple: false, title: "选择快传接收文件夹", defaultPath: directory || undefined });
-      if (typeof selected === "string") setDirectory(selected);
-    } catch (error) { onError(userErrorMessage(error, "无法选择文件夹，请检查权限后重试。")); }
-    finally { selecting.current = false; setChoosing(false); }
-  }
-  return { directory, choosing, choose };
+  useEffect(() => {
+    let disposed = false;
+    if (visible) void invoke<string>("quick_transfer_directory")
+      .then(path => { if (!disposed) setDirectory(path); })
+      .catch(error => { if (!disposed) onError(userErrorMessage(error, "暂时无法读取资料目录，请重新打开快传。")); });
+    return () => { disposed = true; };
+  }, [visible, onError]);
+  return directory;
 }
 
 export function useQuickTransferAddresses(visible: boolean, onError: (message: string) => void) {

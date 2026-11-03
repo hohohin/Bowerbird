@@ -29,6 +29,7 @@ w.__TAURI_INTERNALS__ = {
     if (command === "plugin:event|listen") { eventHandler = args.handler; return eventHandler; }
     if (command === "plugin:event|unlisten") { callbacks.delete(args.eventId); return; }
     if (command === "quick_transfer_addresses") return w.addresses;
+    if (command === "quick_transfer_directory") return "D:\\BowerbirdLibrary\\快传";
     if (command === "quick_transfer_status") {
       const snapshot = { ...w.snapshot };
       if (w.holdStatus) await new Promise<void>(resolve => { w.releaseStatus = resolve; });
@@ -37,7 +38,7 @@ w.__TAURI_INTERNALS__ = {
     if (command === "plugin:dialog|open") return w.cancelPicker ? null : "D:\\素材\\手机快传";
     if (command === "quick_transfer_start") {
       const snapshot = { ...w.snapshot, revision: w.snapshot.revision + 1, active: true,
-        directory: args.directory, url: `http://${args.address}:53317/?pin=fixture-session-secret` };
+        directory: "D:\\BowerbirdLibrary\\快传", url: `http://${args.address}:53317/?pin=01234567` };
       w.emit(snapshot);
       if (w.holdStart) await new Promise<void>(resolve => { w.releaseStart = resolve; });
       return snapshot;

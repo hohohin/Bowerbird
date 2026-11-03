@@ -41,9 +41,11 @@ try {
   await trigger.click();
   const dialog = page.getByRole('dialog', { name: '快传', exact: true });
   await dialog.waitFor();
-  await page.getByRole('button', { name: /选择.*文件夹|更改/ }).click();
+  await dialog.getByText('D:\\BowerbirdLibrary\\快传', { exact: true }).waitFor();
   await page.getByRole('switch', { name: /接收/ }).click();
   await dialog.getByText('手机扫码上传', { exact: true }).waitFor();
+  await dialog.getByText('电脑浏览器打开', { exact: true }).waitFor();
+  await dialog.getByText('01234567', { exact: true }).waitFor();
   const qr = page.getByRole('img', { name: '扫码上传到 Bowerbird' });
   await qr.waitFor();
   const pixels = PNG.sync.read(await qr.screenshot({ animations: 'disabled' }));

@@ -1,4 +1,5 @@
 //! Explicit, local-only receive sessions; no listener is started during application setup.
+pub mod addresses;
 pub mod transport;
 
 use crate::{
@@ -102,7 +103,7 @@ impl QuickTransfer {
             notify,
         });
         let transfers = context.recover().await?;
-        let secret = uuid::Uuid::new_v4().simple().to_string();
+        let secret = format!("{:08}", uuid::Uuid::new_v4().as_u128() % 100_000_000);
         let (tx, rx) = mpsc::channel(64);
         let transport = transport::start(
             StartConfig {

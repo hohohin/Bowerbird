@@ -1,15 +1,11 @@
 import { Folder } from "lucide-react";
-import type { useQuickTransferAddresses, useQuickTransferDirectory } from "../lib/quickTransferDestination";
+import type { useQuickTransferAddresses } from "../lib/quickTransferDestination";
 
-export type QuickTransferDirectory = ReturnType<typeof useQuickTransferDirectory>;
 export type QuickTransferAddresses = ReturnType<typeof useQuickTransferAddresses>;
 
-export function QuickTransferFolder({ folder, active, disabled }: { folder: QuickTransferDirectory; active: boolean; disabled: boolean }) {
+export function QuickTransferFolder({ directory }: { directory: string | null }) {
   return <div className="quick-transfer-folder">
-    <Folder size={18} aria-hidden="true" /><div><span>接收到</span><p title={folder.directory}>{folder.directory || "选择文件夹保存收到的素材"}</p></div>
-    <button type="button" disabled={disabled || active} onClick={() => void folder.choose()} title={active ? "关闭接收后可更改文件夹" : undefined}>
-      {folder.choosing ? "选择中…" : folder.directory ? "更改" : "选择文件夹"}
-    </button>
+    <Folder size={18} aria-hidden="true" /><div><span>接收到</span><p title={directory || undefined}>{directory || "Bowerbird Library / 快传"}</p></div>
   </div>;
 }
 

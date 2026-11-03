@@ -1,5 +1,7 @@
 #[path = "../../../src-tauri/src/quick_transfer/transport.rs"]
 mod transport;
+#[path = "../../../src-tauri/src/quick_transfer/addresses.rs"]
+mod addresses;
 
 use std::{collections::HashMap, net::Ipv4Addr, sync::Arc};
 use tokio::sync::{mpsc, Mutex};
@@ -46,10 +48,14 @@ async fn mobile_page_uses_real_localsend_http() {
     });
     let page_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../src-tauri/src/quick_transfer/upload.html");
     let page = std::fs::read_to_string(page_path).ok();
+    let bind_ip = std::env::var("BOWERBIRD_TEST_BIND_IP")
+        .map(|value| value.parse::<Ipv4Addr>().expect("valid test bind IP"))
+        .unwrap_or(Ipv4Addr::LOCALHOST);
+    let pairing_pin = "01234567";
     let handle = transport::start(StartConfig {
-        bind_ip: Ipv4Addr::LOCALHOST,
+        bind_ip,
         port: 0,
-        session_secret: "test-secret-0000000000000000000000".into(),
+        session_secret: pairing_pin.into(),
         upload_page: page,
         allowed_extensions: vec!["png".into()],
     }, tx).await.unwrap();
@@ -64,7 +70,7 @@ async fn mobile_page_uses_real_localsend_http() {
     });
     let result = tokio::process::Command::new("node")
         .arg(concat!(env!("CARGO_MANIFEST_DIR"), "/../../quick-transfer-mobile.test.mjs"))
-        .arg(format!("http://{address}/?pin=test-secret-0000000000000000000000"))
+        .arg(format!("http://{address}/?pin={pairing_pin}"))
         .arg(&stop_path)
         .output().await.unwrap();
     std::fs::write(stop_path, "stop").unwrap();

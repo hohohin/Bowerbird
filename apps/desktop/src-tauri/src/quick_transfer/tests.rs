@@ -39,6 +39,8 @@ async fn browser_upload_is_saved_and_indexed_before_reporting_library_success() 
         .unwrap()
         .1
         .into_owned();
+    assert_eq!(pin.len(), 8, "manual entry uses an eight-digit pairing code");
+    assert!(pin.bytes().all(|byte| byte.is_ascii_digit()));
     let base = format!("http://{}:{}", url.host_str().unwrap(), url.port().unwrap());
     let client = reqwest::Client::builder().no_proxy().build().unwrap();
     let mut png = std::io::Cursor::new(Vec::new());

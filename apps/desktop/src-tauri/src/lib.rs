@@ -445,6 +445,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::quick_transfer::quick_transfer_addresses,
+            commands::quick_transfer::quick_transfer_directory,
             commands::quick_transfer::quick_transfer_status,
             commands::quick_transfer::quick_transfer_start,
             commands::quick_transfer::quick_transfer_stop,

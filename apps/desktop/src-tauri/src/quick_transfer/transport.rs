@@ -84,21 +84,7 @@ impl Drop for TransportHandle {
 }
 
 pub fn available_ipv4_addresses() -> Vec<Ipv4Addr> {
-    let mut ips = if_addrs::get_if_addrs()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|i| match i.ip() {
-            std::net::IpAddr::V4(ip)
-                if ip.is_private() && !ip.is_loopback() && !ip.is_link_local() =>
-            {
-                Some(ip)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    ips.sort();
-    ips.dedup();
-    ips
+    super::addresses::available_ipv4_addresses()
 }
 
 pub async fn start(
@@ -165,16 +151,18 @@ fn validate_start_config(config: &StartConfig) -> Result<(), String> {
     {
         return Err("请选择本机有效的局域网地址".into());
     }
-    if config.session_secret.len() < 32
-        || config.session_secret.len() > 128
-        || !config
-            .session_secret
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
-    {
+    if !valid_pairing_secret(&config.session_secret) {
         return Err("快传配对令牌无效".into());
     }
     Ok(())
+}
+
+fn valid_pairing_secret(secret: &str) -> bool {
+    if secret.len() == 8 {
+        return secret.bytes().all(|byte| byte.is_ascii_digit());
+    }
+    (32..=128).contains(&secret.len())
+        && secret.bytes().all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
 struct Receiver {
@@ -953,7 +941,9 @@ mod tests {
         let (handle, _, _) = fixture().await;
         let client = reqwest::Client::builder().no_proxy().build().unwrap();
         let base = format!("http://{}", handle.address());
-        for suffix in ["/", "/?pin=previous-session"] {
+        let pairing_page = client.get(&base).send().await.unwrap();
+        assert_eq!(pairing_page.status(), 200, "the address without a secret is a pairing entry, not upload authority");
+        for suffix in ["/?pin=previous-session"] {
             let response = client.get(format!("{base}{suffix}")).send().await.unwrap();
             assert_eq!(response.status(), 401);
             assert!(response.headers()["content-type"].to_str().unwrap().contains("text/html"));
@@ -961,6 +951,40 @@ mod tests {
         let response = client.get(format!("{base}/?pin=test-secret-0000000000000000000000")).send().await.unwrap();
         assert_eq!(response.status(), 200);
         assert_eq!(response.headers()["cache-control"], "no-store");
+        handle.stop().await;
+    }
+
+    #[test]
+    fn accepts_eight_digit_pairing_codes_and_rejects_other_short_secrets() {
+        let mut config = StartConfig {
+            bind_ip: Ipv4Addr::LOCALHOST,
+            port: 0,
+            session_secret: "01234567".into(),
+            upload_page: None,
+            allowed_extensions: vec!["png".into()],
+        };
+        assert!(validate_start_config(&config).is_ok());
+        for invalid in ["", "1234567", "123456789", "abcdefgh", "1234567x", "１２３４５６７８", "1234 678"] {
+            config.session_secret = invalid.into();
+            assert!(validate_start_config(&config).is_err(), "invalid code: {invalid}");
+        }
+    }
+
+    #[tokio::test]
+    async fn pairing_attempt_limit_does_not_grant_upload_authority() {
+        let (handle, _, _) = fixture().await;
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let base = format!("http://{}", handle.address());
+        for _ in 0..3 {
+            let response = client.get(format!("{base}/?pin=wrong-code")).send().await.unwrap();
+            assert_eq!(response.status(), 401);
+        }
+        assert_eq!(client.get(&base).send().await.unwrap().status(), 200);
+        let response = client.get(format!("{base}/?pin=test-secret-0000000000000000000000")).send().await.unwrap();
+        assert_eq!(response.status(), 429);
+        let response = client.post(format!("{base}/api/localsend/v2/prepare-upload?pin=test-secret-0000000000000000000000"))
+            .json(&manifest(4, "photo.png")).send().await.unwrap();
+        assert_eq!(response.status(), 429);
         handle.stop().await;
     }
 

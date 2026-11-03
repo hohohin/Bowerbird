@@ -12,9 +12,9 @@ w.__TAURI_INTERNALS__.invoke = async (command: string, args: any = {}) => {
   if (command.startsWith('quick_transfer_')) w.transferCalls.push({ command, args });
   if (command === 'quick_transfer_status') return structuredClone(w.transferSnapshot);
   if (command === 'quick_transfer_addresses') return ['192.168.1.23'];
-  if (command === 'plugin:dialog|open') return 'D:\\素材\\手机快传';
+  if (command === 'quick_transfer_directory') return 'D:\\BowerbirdLibrary\\快传';
   if (command === 'quick_transfer_start') {
-    await w.transferUpdate({ active: true, directory: args.directory, url: `http://${args.address}:53317/?pin=0123456789abcdef0123456789abcdef` });
+    await w.transferUpdate({ active: true, directory: 'D:\\BowerbirdLibrary\\快传', url: `http://${args.address}:53317/?pin=01234567` });
     return structuredClone(w.transferSnapshot);
   }
   if (command === 'quick_transfer_stop') {

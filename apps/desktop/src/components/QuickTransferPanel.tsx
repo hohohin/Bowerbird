@@ -45,17 +45,17 @@ export function QuickTransfer() {
   const [visible, setVisible] = useState(false);
   const [localError, setLocalError] = useState("");
   const blocked = !!busy || !ready;
-  const folder = useQuickTransferDirectory(snapshot.directory, blocked || snapshot.active, setLocalError);
+  const directory = useQuickTransferDirectory(visible, setLocalError);
   const network = useQuickTransferAddresses(visible, setLocalError);
-  const disabled = blocked || folder.choosing;
+  const disabled = blocked;
   const activeUrl = snapshot.active ? snapshot.url : null;
   const activeAddress = activeUrl ? new URL(activeUrl).hostname : "";
-  const cannotStart = !folder.directory || !network.address || network.loading;
+  const cannotStart = !network.address || network.loading;
 
   function toggle() {
     setLocalError("");
     if (snapshot.active) void transfer.stop();
-    else void transfer.start(folder.directory, network.address);
+    else void transfer.start(network.address);
   }
 
   return <>
@@ -64,7 +64,7 @@ export function QuickTransfer() {
       headerActions={<button type="button" className="app-modal-close" aria-label="收起快传面板" title="收起面板，继续接收" onClick={() => setVisible(false)}><X size={17} /></button>}>
       <OverlayScrollArea className="quick-transfer-scroll" contentClassName="quick-transfer-content" label="快传接收列表滚动条">
         <QuickTransferSwitch active={snapshot.active} ready={ready} busy={busy} disabled={disabled || (!snapshot.active && cannotStart)} onToggle={toggle} />
-        <QuickTransferFolder folder={folder} active={snapshot.active} disabled={disabled} />
+        <QuickTransferFolder directory={snapshot.active ? snapshot.directory : directory} />
         <QuickTransferNetwork network={network} activeAddress={activeAddress} active={snapshot.active} disabled={disabled} />
         <QuickTransferError error={localError || transfer.error} ready={ready} reconnect={transfer.reconnect} />
         <QuickTransferConnection url={activeUrl} onError={setLocalError} />

@@ -61,7 +61,7 @@ export function useQuickTransfer() {
   return {
     snapshot, ready, busy, error,
     reconnect: () => setConnection(value => value + 1),
-    start: (directory: string, address: string) => run("quick_transfer_start", { directory, address }, "未能开启接收，请检查所选文件夹和网络后重试。"),
+    start: (address: string) => run("quick_transfer_start", { address }, "未能开启接收，请检查资料目录和网络后重试。"),
     stop: () => run("quick_transfer_stop", undefined, "暂时无法确认接收已关闭，请查看状态后重试。"),
     retry: (id: string) => run("quick_transfer_retry", { id }, "文件仍保留在接收目录中，请稍后重试入库。"),
   };
