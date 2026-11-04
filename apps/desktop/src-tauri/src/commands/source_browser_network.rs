@@ -217,9 +217,9 @@ async fn renderer_resource(webview: &Webview, url: &str, max_bytes: usize, contr
 }
 
 #[cfg(windows)]
-async fn confirm_manifest_base(webview: &Webview, url: &str, control: &CaptureControl) -> AppResult<()> {
+async fn confirm_manifest_base(webview: &Webview, url: &str, include_credentials: bool, control: &CaptureControl) -> AppResult<()> {
     let id = uuid::Uuid::new_v4().to_string();
-    let result = checked(control, renderer_call(webview, "manifestBase", serde_json::json!([url, id]))).await;
+    let result = checked(control, renderer_call(webview, "manifestBase", serde_json::json!([url, id, include_credentials]))).await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), renderer_call(webview, "close", serde_json::json!([id]))).await;
     control.check()?;
     let value = result.unwrap_or_default();
@@ -230,13 +230,26 @@ async fn confirm_manifest_base(webview: &Webview, url: &str, control: &CaptureCo
     }
 }
 
+fn include_media_credentials(page: &tauri::Url, media: &tauri::Url) -> bool {
+    // Pinterest's public video CDN rejects credentialed CORS requests. Keep the
+    // byte fetch and redirect guard on the same policy; never prove an anonymous
+    // URL and then download a potentially different authenticated response.
+    !(page.scheme() == "https" && matches!(page.host_str(), Some("pinterest.com" | "www.pinterest.com"))
+        && media.scheme() == "https"
+        && media.host_str().is_some_and(|host| host == "pinimg.com" || host.ends_with(".pinimg.com")))
+}
+
 #[cfg(windows)]
 async fn capture_network_resource(webview: &Webview, url: &str, max_bytes: usize, control: &CaptureControl, report: bool) -> AppResult<CaptureResource> {
     use serde_json::json;
+    let include_credentials = match (webview.url(), tauri::Url::parse(url)) {
+        (Ok(page), Ok(media)) => include_media_credentials(&page, &media),
+        _ => true,
+    };
     let tree = checked(control, cdp(webview, "Page.getFrameTree", json!({}))).await?;
     let frame = tree["frameTree"]["frame"]["id"].as_str().ok_or_else(|| AppError::Other("网页尚未就绪。".into()))?;
     let response = checked(control, cdp_timed(webview, "Network.loadNetworkResource", json!({
-        "frameId":frame, "url":url, "options":{"disableCache":false,"includeCredentials":true}
+        "frameId":frame, "url":url, "options":{"disableCache":false,"includeCredentials":include_credentials}
     }), std::time::Duration::from_secs(120), "视频")).await?;
     let resource = &response["resource"];
     let stream = resource["stream"].as_str();
@@ -263,7 +276,7 @@ async fn capture_network_resource(webview: &Webview, url: &str, max_bytes: usize
         let captured = CaptureResource {url:url.into(),bytes,content_type:header("content-type").unwrap_or("").into(),total_bytes:total};
         // CDP omits the final response URL. Never resolve relative fragments
         // against an unverified pre-redirect URL, even if those files exist.
-        if captured.is_manifest() { confirm_manifest_base(webview, url, control).await?; }
+        if captured.is_manifest() { confirm_manifest_base(webview, url, include_credentials, control).await?; }
         Ok(captured)
     }.await;
     if let Some(stream) = stream { let _ = cdp_timed(webview, "IO.close", json!({"handle":stream}), std::time::Duration::from_secs(2), "视频").await; }
@@ -549,6 +562,22 @@ pub(crate) async fn browser_video_bytes(_: &Webview, _: &str) -> AppResult<Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pinterest_public_media_uses_the_same_anonymous_request_policy() {
+        for (page, media, expected) in [
+            ("https://www.pinterest.com/pin/123/", "https://v1.pinimg.com/video.m3u8", false),
+            ("https://pinterest.com/", "https://pinimg.com/video.mp4", false),
+            ("https://www.pinterest.com/", "https://www.pinterest.com/resource/feed", true),
+            ("https://www.pinterest.com/", "https://v1.pinimg.com.evil.test/video.m3u8", true),
+            ("https://www.pinterest.com/", "https://notpinimg.com/video.mp4", true),
+            ("https://www.pinterest.com/", "http://v1.pinimg.com/video.m3u8", true),
+            ("http://www.pinterest.com/", "https://v1.pinimg.com/video.m3u8", true),
+            ("https://www.pinterest.com.evil.test/", "https://v1.pinimg.com/video.m3u8", true),
+            ("https://www.xiaohongshu.com/", "https://v1.pinimg.com/video.mp4", true),
+        ] {
+            assert_eq!(include_media_credentials(&page.parse().unwrap(), &media.parse().unwrap()), expected, "{page} -> {media}");
+        }
+    }
     #[test]
     fn source_browser_video_response_requires_complete_bounded_file() {
         use serde_json::json;

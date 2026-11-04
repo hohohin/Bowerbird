@@ -23,7 +23,51 @@ async function resolve(page){return page.evaluate(async()=>{
 });}
 const xhsRecord={id:'note-a',note_card:{type:'video',video:{media:{stream:{h264:[{master_url:'https://cdn.example/right.mp4'}]}}}}};
 const pinRecord={id:'123456789',videos:{video_list:{V_720P:{url:'https://cdn.example/right.mp4'}}}};
+const pinGraphRecord=JSON.parse(await readFile('scripts/fixtures/explorer/pinterest-video-graphql.json','utf8'));
 try{
+  await check('Pinterest first-load Relay responses expose the complete MP4 beside legacy HLS',async()=>{
+    const page=await fixture('https://www.pinterest.com/pin/123456789/');
+    try{
+      await page.evaluate(record=>{
+        const response=pin=>({response:{data:{v3GetPinQueryv2:{data:pin}}}});
+        const partial=structuredClone(record);partial.storyPinData.pages[0].blocks[0].videoDataV2.videoList720P=null;
+        window.__PWS_INITIAL_PROPS__={initialReduxState:{pins:{'123456789':{id:'123456789',videos:{video_list:{V_HLS:{url:'https://cdn.example/right.m3u8'}}}}}}};
+        window.__PWS_RELAY_SSR_REQUESTS__={summary:response(partial),complete:response(record),unrelated:response({...record,entityId:'987654321'})};
+      },pinGraphRecord);
+      assert.equal(await resolve(page),'https://cdn.example/right.mp4');
+      await page.evaluate(()=>{const r=window.__PWS_RELAY_SSR_REQUESTS__;r.complete.response.data.v3GetPinQueryv2.data.entityId='987654321';});
+      assert.equal(await resolve(page),'https://cdn.example/right.m3u8','unrelated Relay entities cannot supply this video');
+    }finally{await page.close();}
+  });
+  await check('Pinterest GraphQL SPA response identifies the Pin entity and story video variants',async()=>{
+    const page=await fixture('https://www.pinterest.com/');
+    try{
+      await page.route('**/_/graphql/',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({data:{v3GetPinQueryv2:{data:pinGraphRecord}}})}));
+      await page.evaluate(async()=>{await(await fetch('/_/graphql/')).json();history.pushState({},'','/pin/123456789/');});
+      assert.equal(await resolve(page),'https://cdn.example/right.mp4');
+      await page.evaluate(()=>history.pushState({},'','/pin/987654321/'));
+      await assert.rejects(resolve(page),/尚未找到/,'the GraphQL entity must belong to the current Pin');
+    }finally{await page.close();}
+  });
+  await check('Pinterest GraphQL direct video and multi-video identity stay bounded',async()=>{
+    const page=await fixture('https://www.pinterest.com/pin/123456789/');
+    try{
+      await page.evaluate(record=>{
+        const video=record.storyPinData.pages[0].blocks[0].videoDataV2;
+        window.__PWS_DATA__={pins:{[record.entityId]:{...record,storyPinData:null,videos:video}}};
+      },pinGraphRecord);
+      assert.equal(await resolve(page),'https://cdn.example/right.mp4');
+      await page.evaluate(record=>{
+        const other={videoDataV2:{videoListMobile:{vHLSV3MOBILE:{url:'https://cdn.example/other.m3u8',thumbnail:'https://cdn.example/other.jpg'}}}};
+        record.storyPinData.pages[0].blocks.push(other);window.__PWS_DATA__={pins:{[record.entityId]:record}};
+      },pinGraphRecord);
+      await assert.rejects(resolve(page),/多个视频/);
+      await page.evaluate(()=>{target.poster='https://cdn.example/other.jpg';});
+      assert.equal(await resolve(page),'https://cdn.example/other.m3u8');
+      await page.evaluate(()=>{window.__PWS_DATA__.pins['123456789'].entityId='987654321';});
+      await assert.rejects(resolve(page),/尚未找到/,'the index cannot override an explicit different GraphQL entity');
+    }finally{await page.close();}
+  });
   for(const [site,origin,start,end,record] of [
     ['xhs','https://www.xiaohongshu.com','/explore','/explore/note-a',xhsRecord],
     ['pin','https://www.pinterest.com','/','/pin/123456789/',pinRecord],

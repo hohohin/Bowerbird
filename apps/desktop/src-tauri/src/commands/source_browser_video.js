@@ -152,8 +152,9 @@
     acceptIdentified('xhs', id, note, accept);
   }
   function acceptPin(node, keyId, accept) {
-    if (!node.videos && !node.story_pin_data) return;
-    const id = node.id || keyId;
+    if (!node.videos && !node.story_pin_data && !node.storyPinData) return;
+    // GraphQL id is an opaque Relay ID; entityId is the numeric Pin permalink.
+    const id = node.entityId || node.id || keyId;
     acceptIdentified('pin', id, node, accept);
   }
   function visitRecords(value, accept) {
@@ -197,18 +198,44 @@
     const urls = variants.flatMap(item => [item?.masterUrl, item?.master_url, item?.url]);
     return [...urls, video.url, video.playUrl].map(http).filter(Boolean).slice(0, 1);
   }
-  function videoUrls(record, kind, video) {
-    if (record.is_drm || record.drm || record.video?.is_drm || record.video?.drm_type) fail('此视频受播放保护，无法采集。');
-    if (kind === 'xhs') return noteVideoUrls(record.video);
-    const groups = [];
-    if (record.videos?.video_list) groups.push(record.videos);
-    for (const page of record.story_pin_data?.pages || []) for (const block of page.blocks || []) if (block.video?.video_list) groups.push(block.video);
-    const matching = groups.filter(group => Object.values(group.video_list).some(item => item.thumbnail === video.poster || item.url && sources(video).includes(item.url)));
+  function pinVariants(group) {
+    if (!group) return [];
+    // REST has video_list; GraphQL splits the same variants into videoList* fields.
+    const lists = group.video_list ? [group.video_list] : Object.entries(group).filter(([key]) => /^videoList(?:[A-Z0-9]|$)/.test(key)).map(([,list]) => list);
+    return lists.flatMap(list => Object.values(list || {})).filter(item => item && http(item.url));
+  }
+  function pinGroups(record) {
+    const groups = [record.videos];
+    const story = record.story_pin_data || record.storyPinData;
+    for (const page of story?.pages || []) for (const block of page.blocks || []) groups.push(block.video || block.videoDataV2);
+    return groups.map(pinVariants).filter(group => group.length);
+  }
+  function pinVideoUrls(record, video) {
+    const groups = pinGroups(record);
+    const matching = groups.filter(group => group.some(item => item.thumbnail === video.poster || sources(video).includes(item.url)));
     const chosen = matching.length === 1 ? matching : groups;
     if (chosen.length > 1) fail('此笔记包含多个视频，暂时无法确认本次拖动的视频。');
-    const variants = Object.values(chosen[0]?.video_list || {}).filter(item => http(item.url));
-    variants.sort((a,b) => Number(/\.mp4(?:[?#]|$)/i.test(b.url)) - Number(/\.mp4(?:[?#]|$)/i.test(a.url)) || (b.width || 0)*(b.height || 0) - (a.width || 0)*(a.height || 0));
+    const variants = chosen[0] || [];
+    variants.sort(preferPinVariant);
     return variants.slice(0,1).map(item => http(item.url));
+  }
+  function preferPinVariant(a, b) {
+    return Number(isMp4(b.url)) - Number(isMp4(a.url)) || (b.width || 0)*(b.height || 0) - (a.width || 0)*(a.height || 0);
+  }
+  function isMp4(url) { return /\.mp4(?:[?#]|$)/i.test(url); }
+  function preferredPinUrls(urls) {
+    const files = urls.filter(isMp4);
+    return [...new Set(files.length ? files : urls)];
+  }
+  function pinInitialUrls(id, video) {
+    // Pinterest keeps first-load GraphQL responses outside the legacy Redux
+    // bootstrap. Read only the known Pin result, not the surrounding account data.
+    const requests = Object.values(window.__PWS_RELAY_SSR_REQUESTS__ || {}).slice(0, 128);
+    return requests.flatMap(request => records(request?.response?.data?.v3GetPinQueryv2?.data, 'pin', id)).flatMap(record => videoUrls(record, 'pin', video));
+  }
+  function videoUrls(record, kind, video) {
+    if (record.is_drm || record.drm || record.video?.is_drm || record.video?.drm_type) fail('此视频受播放保护，无法采集。');
+    return kind === 'xhs' ? noteVideoUrls(record.video) : pinVideoUrls(record, video);
   }
   async function resolve(source, pageUrl) {
     if (http(source)) return source;
@@ -225,7 +252,8 @@
         if (node.textContent.length <= MAX_TEXT) { try { states.push(JSON.parse(node.textContent)); } catch {} }
       }
       const latest = metadata.get(kind + ':' + id);
-      const cached = latest ? videoUrls(latest,kind,gesture.video) : [];
+      const recent = latest ? videoUrls(latest,kind,gesture.video) : [];
+      const cached = kind === 'pin' ? preferredPinUrls([...recent, ...pinInitialUrls(id,gesture.video)]) : recent;
       const urls = [...new Set(cached.length ? cached : states.flatMap(state => stateRecords(state,kind,id)).flatMap(record => videoUrls(record,kind,gesture.video)))];
       if (urls.length === 1) return urls[0];
       if (urls.length > 1) fail('网页提供了多个视频来源，暂时无法确认本次拖动的视频。');
@@ -241,14 +269,14 @@
     const state = reads.get(id); if (!state) return;
     reads.delete(id); clearTimeout(state.timer); state.abort.abort(); await state.reader?.cancel().catch(() => {});
   }
-  async function manifestBase(url, requestId) {
+  async function manifestBase(url, requestId, includeCredentials = true) {
     if (!http(url) || reads.size >= 4) return {type:'unknown'};
     const abort = new AbortController();
     reads.set(requestId, {abort, reader:null, timer:setTimeout(() => { void close(requestId); },15000)});
     try {
       // no-cors + manual is forbidden by Fetch. A CORS/CSP failure cannot
       // establish the manifest base, so native code must reject that result.
-      const response = await fetchResource(url, {mode:'cors',redirect:'manual',credentials:'include',signal:abort.signal});
+      const response = await fetchResource(url, {mode:'cors',redirect:'manual',credentials:includeCredentials ? 'include' : 'omit',signal:abort.signal});
       return {type:response.type,ok:response.ok};
     } catch { return {type:'unknown'}; }
     finally { await close(requestId); }

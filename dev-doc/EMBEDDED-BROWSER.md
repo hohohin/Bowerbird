@@ -36,6 +36,8 @@ Pinterest 适配只隐藏原生 `PinBetterSaveDropdown` 与 `PinBetterSaveButton
 
 ### 2026-11-03：视频流与采集记录（源码未发布）
 
+**2026-11-05 Pinterest GraphQL 与公开 CDN 修复：** 真实 Pin 使用 `entityId` 作为数字身份，`id` 为不透明 Relay ID；视频位于 `storyPinData.pages[].blocks[].videoDataV2.videoList*`。来源解析同时支持既有 REST 与这些 GraphQL 字段，并读取首屏 `__PWS_RELAY_SSR_REQUESTS__` 中已完成的 Pin 响应；同一 Pin 有明确完整 MP4 时优先选用，仍拒绝身份冲突和无法定位的多视频。Windows 对精确 HTTPS Pinterest 页面到 HTTPS pinimg.com 媒体采用无凭据请求，下载字节与清单无跳转检查共用该策略；其他来源保持原策略。真实页面拖动脚本已选中完整 MP4，原生生产采集通路下载、音轨与全片解码通过。此前 11 月 4 日的验证未覆盖 GraphQL／Relay 全部入口；本次未向用户库实际落盘。只有字节范围 HLS、没有明确完整文件的情况仍不支持。详见 [修复与验证记录](../project_logs/2026-11-05-pinterest-video.md)。
+
 **2026-11-04 真实站点复测后的修复：** 小红书网页接口实际将流分组及 videoCodec 命名为 `EF4`／`EF5` 等不透明标记，不能把它们限定为 h264／h265／av1。现对已匹配笔记的所有数组流分组读取地址，仍只交付一个明确视频；该页面的 Blob／MSE 背后是完整 MP4 的范围播放，不必有 HLS 清单。初始状态优先按 `note.noteDetailMap[id]`／Pinterest pins 索引定位，有界解包 Vue Ref，避免响应式依赖图和整个信息流耗尽通用扫描预算；显式媒体 ID 冲突仍拒绝。真实小红书及 Pinterest Blob 视频已沿当前登录 WebView2 网络栈取回完整文件并全片解码；原生夹具同时覆盖 API 响应和大状态索引两条路径。实际证据、临时诊断移除及真实入库验收边界见 [复核记录](../project_logs/2026-11-04-explorer-video-live.md)。
 
 **2026-11-04 来源识别修复：** 站点响应不再按发起请求时的 SPA 地址丢弃；JSON XHR 以实际解码内容（最多 1,048,576 个字符）检查大小，接受压缩和无 Content-Length 响应。提取有明确笔记／Pin ID 的视频记录，缓存最多 128 条，无关统计响应不占缓存；本次拖动仍检查当前文档地址、元素连接和视频来源未变化。支持小红书 `note_card`／`noteCard` 包装及 `search_result` 路径、Pinterest 带 slug 的 Pin 路径和初始数据脚本；瀑布流只从当前卡片内的唯一笔记／Pin 链接确定来源。近期网络记录优先，没有播放地址的简略记录可回到同一身份的初始数据。MSE 清单沿实际 MediaSource 与追加字节的关系跨 SPA 保留，不靠最后一个网络视频猜测。红绿及原生端到端验证见 [行动记录](../project_logs/2026-11-04-explorer-video-source.md)；真实账号页面仍需实机验收。

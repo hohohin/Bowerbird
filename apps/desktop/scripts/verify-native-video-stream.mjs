@@ -9,6 +9,7 @@ import {chromium} from '../../html-renderer/node_modules/playwright/index.mjs';
 const directory=path.resolve('.tmp/video-stream-native-'+Date.now());
 await mkdir(directory,{recursive:true});
 const bytes=await readFile('src-tauri/tests/fixtures/media/fragmented.mp4');
+const graphPin=JSON.parse((await readFile('scripts/fixtures/explorer/pinterest-video-graphql.json','utf8')).replaceAll('https://cdn.example/right.mp4','/clip.mp4').replaceAll('https://cdn.example/right.m3u8','/hls/index.m3u8'));
 const ffmpeg=path.resolve(process.env.BOWERBIRD_FFMPEG_BINARY||'../../.tmp/video-integration/tools/local/ffmpeg.exe');
 const ffprobe=path.resolve(process.env.BOWERBIRD_FFPROBE_BINARY||'../../.tmp/video-integration/tools/local/ffprobe.exe');
 const research=path.join(directory,'media');
@@ -127,18 +128,21 @@ try{
     ['xhs','https://www.xiaohongshu.com','/explore/note-a',{id:'note-a',note_card:{video:{media:{stream:{EF7:[],EF4:[{videoCodec:'EF4',master_url:'/clip.mp4'}],EF6:[]}}}}}],
     ['pin','https://www.pinterest.com','/pin/123456789/',{id:'123456789',videos:{video_list:{V_HLS:{url:'/hls/index.m3u8'}}}}],
   ]){
+    let activeRecord=record;
     await source.route(origin+'/**',route=>{
       const pathname=new URL(route.request().url()).pathname;
-      if(pathname==='/feed')return route.fulfill({headers:{'content-type':'application/json','content-encoding':'gzip','content-length':'40'},body:JSON.stringify({data:{items:[record]}})});
+      if(pathname==='/feed')return route.fulfill({headers:{'content-type':'application/json','content-encoding':'gzip','content-length':'40'},body:JSON.stringify({data:{items:[activeRecord]}})});
       if(pathname==='/clip.mp4')return route.fulfill({contentType:'video/mp4',body:bytes});
       if(resources.has(pathname))return route.fulfill({contentType:type(pathname),body:resources.get(pathname)});
       return route.fulfill({contentType:'text/html',body:'<video id="target"></video>'});
     });
-    for(const mode of ['response','index']){
+    for(const mode of ['response','index',...(site==='pin'?['graphql','relay']:[])]){
+      activeRecord=['graphql','relay'].includes(mode)?graphPin:record;
       await main.evaluate(url=>window.__TAURI_INTERNALS__.invoke('navigate_source_browser',{url}),origin+'/');
       await source.waitForURL(origin+'/');
       const sourceUrl=await source.evaluate(async({detail,site,record,mode})=>{
-        if(mode==='response')await new Promise(resolve=>{const xhr=new XMLHttpRequest();xhr.open('GET','/feed');xhr.responseType='json';xhr.onload=resolve;xhr.send();});
+        if(mode==='response'||mode==='graphql')await new Promise(resolve=>{const xhr=new XMLHttpRequest();xhr.open('GET','/feed');xhr.responseType='json';xhr.onload=resolve;xhr.send();});
+        else if(mode==='relay')window.__PWS_RELAY_SSR_REQUESTS__={pin:{response:{data:{v3GetPinQueryv2:{data:record}}}}};
         else{
           const noise=Object.fromEntries(Array.from({length:100},(_,i)=>['r'+i,{dep:{subs:Array.from({length:100},()=>({sub:{active:true}}))}}]));
           const ref=value=>({__v_isRef:true,dep:noise,value});
@@ -148,9 +152,9 @@ try{
         history.pushState({},'',detail);
         target.src=URL.createObjectURL(new MediaSource());
         window.__bbSourceVideo.remember(target,target.src,location.href);return target.src;
-      },{detail,site,record,mode});
+      },{detail,site,record:activeRecord,mode});
       const captured=Buffer.from(await main.evaluate(({url,pageUrl,captureId})=>window.__TAURI_INTERNALS__.invoke('smoke_capture_resource',{url,pageUrl,captureId}),{url:sourceUrl,pageUrl:origin+detail,captureId:site+'-'+mode+'-native'}),'base64');
-      if(site==='xhs')assert.deepEqual(captured,bytes,'Xiaohongshu blob resolves to complete original MP4 bytes');
+      if(site==='xhs'||mode==='graphql'||mode==='relay')assert.deepEqual(captured,bytes,'site blob resolves to complete original MP4 bytes');
       else{
         const output=path.join(directory,'pin-spa.mp4');await writeFile(output,captured);
         const probe=JSON.parse(execFileSync(ffprobe,['-v','error','-show_entries','format=duration:stream=codec_type','-of','json',output],{encoding:'utf8',windowsHide:true}));
@@ -160,6 +164,19 @@ try{
       }
       console.log('native site source passed: '+site+' '+mode+' blob → metadata → full video');
     }
+  }
+  // Opt-in real public CDN verification; the default suite remains offline.
+  const livePinterest=process.argv.find(arg=>arg.startsWith('--live-pinterest='))?.slice('--live-pinterest='.length);
+  if(livePinterest){
+    const media=new URL(livePinterest);
+    assert.ok(media.protocol==='https:'&&/^(?:[a-z0-9-]+\.)*pinimg\.com$/.test(media.hostname)&&!media.username&&!media.password);
+    const publicCapture=await main.evaluate(url=>window.__TAURI_INTERNALS__.invoke('smoke_capture_resource',{url,pageUrl:'https://www.pinterest.com/pin/123456789/',captureId:'pin-public-live'}),livePinterest);
+    const publicOutput=path.join(directory,'pin-public.mp4');const publicBytes=Buffer.from(publicCapture,'base64');await writeFile(publicOutput,publicBytes);
+    const publicProbe=JSON.parse(execFileSync(ffprobe,['-v','error','-show_entries','format=duration:stream=codec_type,width,height','-of','json',publicOutput],{encoding:'utf8',windowsHide:true}));
+    assert.ok(Number(publicProbe.format.duration)>0);
+    assert.ok(publicProbe.streams.some(stream=>stream.codec_type==='video'));
+    execFileSync(ffmpeg,['-hide_banner','-loglevel','error','-i',publicOutput,'-f','null','-'],{windowsHide:true,timeout:120000});
+    console.log(JSON.stringify({pinterestLive:true,bytes:publicBytes.length,probe:publicProbe,fullDecode:true}));
   }
   console.log(JSON.stringify({ok:true,blobBytes:true,crossOriginCookiesWithoutCors:true,gzipDecodedLength:true,hls:!process.argv.includes('--transport-only'),separateAudio:!process.argv.includes('--transport-only'),dash:!process.argv.includes('--transport-only'),manifestBaseVerified:true,redirectedManifestRejected:true,unverifiedManifestRejected:true,manifestGuardCancelled:true,missingSegmentRejected:true,partialRejected:true,pendingHeadersCancelled:true,staleDocumentRejected:true,profiles:directory}));
 }catch(error){console.error(JSON.stringify({recentRequests:requests.slice(-18),directory}));throw error;}finally{
