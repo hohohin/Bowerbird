@@ -1,4 +1,5 @@
 import { TacticalSelect } from "./TacticalSelect";
+import { AssetTagPicker } from "./AssetTagPicker";
 import { userErrorMessage } from "../lib/userError";
 import { VideoPlayer } from "./VideoPlayer";
 import { AudioWaveform } from "./AudioWaveform";
@@ -215,8 +216,6 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const [sectionDraft, setSectionDraft] = useState("");
   const [codexHealth, setCodexHealth] = useState<CodexHealth | null>(null);
   const [tags, setTags] = useState<AssetTag[]>([]);
-  const [addingTag, setAddingTag] = useState(false);
-  const [tagDraft, setTagDraft] = useState("");
   const [assetCollections, setAssetCollections] = useState<Folder[]>([]);
   const [collectionPanelOpen, setCollectionPanelOpen] = useState(false);
   const [targetCollectionId, setTargetCollectionId] = useState("");
@@ -246,36 +245,6 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
       setTags(await api.listAssetTags(id));
     } catch (e) {
       console.error(e);
-    }
-  }
-
-  async function removeTag(t: AssetTag) {
-    if (!id) return;
-    // 按 source 全量替换：移除该 tag，同 source 的其余保留。
-    const keep = tags.filter((x) => x.source === t.source && x.name !== t.name).map((x) => x.name);
-    try {
-      await api.setAssetTags(id, keep, t.source);
-      await loadTags();
-      notifySuccess("类别已移除");
-    } catch (e) {
-      console.error(e);
-      notifyError(e, "移除类别失败");
-    }
-  }
-
-  async function addTag() {
-    const n = tagDraft.trim();
-    if (!id || !n) return;
-    const manuals = tags.filter((x) => x.source === "manual").map((x) => x.name);
-    try {
-      await api.setAssetTags(id, [...manuals, n], "manual");
-      setAddingTag(false);
-      setTagDraft("");
-      await loadTags();
-      notifySuccess("类别已添加");
-    } catch (e) {
-      console.error(e);
-      notifyError(e, "添加类别失败");
     }
   }
 
@@ -1320,76 +1289,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
           </div>
 
           }
-          {/* 分类标签支持本地识别与人工纠正。 */}
-          <div className="asset-detail-card space-y-2">
-            <div className="text-xs font-medium uppercase tracking-wide text-muted">类别</div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {tags.length === 0 && !addingTag && (
-                <span className="text-xs text-muted">
-                  {audioAsset || textAsset ? "暂无标签，可手动添加" : "暂无标签，可手动添加或在侧栏开启自动分类"}
-                </span>
-              )}
-              {tags.map((t) => (
-                <span
-                  key={`${t.source}:${t.name}`}
-                  className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] ${
-                    t.source === "auto" ? "bg-panel2 text-muted" : "bg-accent/15 text-accent"
-                  }`}
-                  title={t.origin === "local" ? "本地自动匹配" : t.origin === "manual" ? "手动添加" : "历史标签"}
-                >
-                  <span className="opacity-50">#</span> {t.name}
-                  <button
-                    onClick={() => removeTag(t)}
-                    className="text-[10px] opacity-60 hover:opacity-100"
-                    title="移除"
-                  >
-                    ✕
-                  </button>
-                </span>
-              ))}
-            </div>
-            {addingTag ? (
-              <div className="flex items-center gap-1">
-                <input
-                  autoFocus
-                  value={tagDraft}
-                  onChange={(e) => setTagDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") addTag();
-                    if (e.key === "Escape") {
-                      setAddingTag(false);
-                      setTagDraft("");
-                    }
-                  }}
-                  placeholder="新类别名"
-                  className="w-32 rounded bg-panel2 px-2 py-1 text-xs outline-none ring-1 ring-edge focus:ring-accent"
-                />
-                <button
-                  onClick={addTag}
-                  disabled={!tagDraft.trim()}
-                  className="rounded bg-accent px-2 py-1 text-xs text-black disabled:opacity-50"
-                >
-                  加
-                </button>
-                <button
-                  onClick={() => {
-                    setAddingTag(false);
-                    setTagDraft("");
-                  }}
-                  className="text-xs text-muted hover:text-ink"
-                >
-                  取消
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setAddingTag(true)}
-                className="text-xs text-accent hover:opacity-80"
-              >
-                + 加类别
-              </button>
-            )}
-          </div>
+          {id && <AssetTagPicker key={id} assetId={id} tags={tags} onChange={setTags}/>}
 
             </>
           )}

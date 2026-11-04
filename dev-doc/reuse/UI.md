@@ -23,6 +23,8 @@
 
 ## 添加普通单选下拉
 
+多选标签使用 [AssetTagPicker.tsx](../../apps/desktop/src/components/AssetTagPicker.tsx)：详情领域组件，接素材 ID、当前 `AssetTag[]` 与刷新回调；宿主按素材 ID 设置 key。复用 `localClassification.labels/save/example`、`api.listAssetTags`、`OverlayScrollArea` 与工业菜单。字母归组与比较统一来自 [materialCatalogOrder.ts](../../apps/desktop/src/lib/materialCatalogOrder.ts) 的 `catalogInitial/compareTagNames`，不要重建拼音边界。包含新建／归属写入，不作为无业务通用下拉。
+
 - **用途／关键词：** select、listbox、选项组、方向键、输入定位、禁用。
 - **入口：** [TacticalSelect.tsx](../../apps/desktop/src/components/TacticalSelect.tsx) 的 `TacticalSelect`／`TacticalSelectProps`；传 `<option>`／`<optgroup>`，接 `onValueChange`，值统一为字符串。解析、方向导航与定位由同目录 [tacticalSelectLogic.ts](../../apps/desktop/src/components/tacticalSelectLogic.ts) 提供，消费者优先用组件。
 - **实用证据：** [LibraryComposer.tsx](../../apps/desktop/src/components/LibraryComposer.tsx) 的项目选择；[AssetDetail.tsx](../../apps/desktop/src/components/AssetDetail.tsx) 的详情选择；[CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 的画板选择。

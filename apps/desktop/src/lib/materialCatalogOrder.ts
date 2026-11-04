@@ -15,7 +15,7 @@ export function catalogInitial(name: string): string {
   }
   return "#";
 }
-function compareTagNames(a: string, b: string) {
+export function compareTagNames(a: string, b: string) {
   return catalogLetters.indexOf(catalogInitial(a)) - catalogLetters.indexOf(catalogInitial(b))
     || alphabetic.compare(indexName(a), indexName(b));
 }
