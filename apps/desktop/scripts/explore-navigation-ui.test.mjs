@@ -16,6 +16,7 @@ async function openWorkspace(page, canvas = false) {
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   if (!canvas) {
     await page.getByRole('button', { name: '返回主页', exact: true }).click();
+    await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '素材库', exact: true }).click();
     await page.locator('.library-home').waitFor();
   }
   const catalog = await page.evaluate(() => ({ open: window.mode.getState().open, mode: window.mode.getState().mode }));
@@ -137,7 +138,7 @@ const cases = {
     assert.equal(await page.evaluate(() => window.calls.slice(window.exploreCallsStart).some(call => call.command === 'set_active_project')), false, 'failed save never changes native capture scope');
     await page.evaluate(() => window.store.getState().registerProjectCanvasFlush(null));
     await page.getByRole('button', { name: '返回主页', exact: true }).click();
-    await page.locator('.library-home').waitFor();
+    await page.getByRole('region', { name: '项目管理' }).waitFor();
     await unchangedBrowser(page);
   },
 };

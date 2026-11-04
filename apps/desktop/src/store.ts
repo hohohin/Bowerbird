@@ -73,6 +73,16 @@ import {
 // —— 默认出图 provider（localStorage，照 GEN_PROVIDERS 枚举校验；收藏星标写它）——
 const DEFAULT_PROVIDER_KEY = "bowerbird.defaultProvider";
 const VISUAL_PROFILE_KEY = "bowerbird.visualProfile.selected";
+const LIBRARY_HOME_VIEW_KEY = "bowerbird.libraryHomeView";
+
+function loadLibraryHomeView(): "library" | "projects" {
+  try {
+    return localStorage.getItem(LIBRARY_HOME_VIEW_KEY) === "projects" ? "projects" : "library";
+  } catch {
+    return "library";
+  }
+}
+
 let projectRouteQueue: Promise<unknown> = Promise.resolve();
 let projectRouteRequestId = 0;
 let projectReloadQueue: Promise<unknown> = Promise.resolve();
@@ -719,7 +729,7 @@ export const useStore = create<State>((set, get) => {
   searchQuery: "",
   smartFilter: null,
   mediaFilter: null,
-  libraryHomeView: "library",
+  libraryHomeView: loadLibraryHomeView(),
   setLibraryHomeView: (libraryHomeView) => set({ libraryHomeView, detailAssetId: null, contextMenu: null, projectContextMenu: null }),
   canvasLibraryOpen: false,
   librarySelectionIds: null,
@@ -1006,6 +1016,7 @@ export const useStore = create<State>((set, get) => {
         ? get().projects.filter((project) => project.id !== active.id)
         : get().projects,
       activeProjectId: null,
+      libraryHomeView: get().activeProjectId ? "projects" : get().libraryHomeView,
       boardOpen: false,
       focusedThreadId: null,
       currentFolderId: null,
@@ -2553,4 +2564,14 @@ export const useStore = create<State>((set, get) => {
   openVisualProfile: (visualProfileFolder) => set({ visualProfileFolder }),
   closeVisualProfile: () => set({ visualProfileFolder: null }),
   };
+});
+
+// Canvas material filters also update libraryHomeView. Only the visible home
+// destination is remembered; leaving an open project returns to its directory.
+useStore.subscribe((state, previous) => {
+  const view = state.activeProjectId ? "projects" : state.libraryHomeView;
+  const previousView = previous.activeProjectId ? "projects" : previous.libraryHomeView;
+  if (view === previousView) return;
+  try { localStorage.setItem(LIBRARY_HOME_VIEW_KEY, view); }
+  catch { /* Keep navigation usable when preference storage is unavailable. */ }
 });

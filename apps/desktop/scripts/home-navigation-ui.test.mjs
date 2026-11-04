@@ -18,18 +18,29 @@ try {
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/home-navigation-live/preview.html?source-library&detail-route&canvas-library`);
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
+  await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '素材库', exact: true }).click();
   await page.locator('.library-home').waitFor();
   assert.equal(await page.getByRole('navigation', { name: '首页' }).count(), 1, 'production home exposes peer library and project navigation');
   const nav = page.getByRole('navigation', { name: '首页' });
   const library = nav.getByRole('button', { name: '素材库', exact: true });
   const projects = nav.getByRole('button', { name: '项目', exact: true });
   await page.locator('.library-home [data-asset-id]').first().waitFor();
-  await page.evaluate(() => { window.holdHomeMedia = true; });
+  await page.evaluate(() => {
+    window.homeAssetCache = window.store.getState().assets;
+    window.store.setState({ assets: [], promptedAssets: [] });
+    window.holdHomeSelection = true;
+  });
   await page.locator('.library-home [data-asset-id]').first().click();
-  await page.waitForFunction(() => !!window.releaseHomeMedia);
+  await page.waitForFunction(() => !!window.releaseHomeSelection);
   await projects.click();
-  await page.evaluate(async () => { window.holdHomeMedia = false; window.releaseHomeMedia(); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); });
-  assert.equal(await page.getByRole('dialog', { name: /媒体预览/ }).count(), 0, 'late media resolution never opens a hidden library portal over projects');
+  await page.evaluate(async () => {
+    window.holdHomeSelection = false;
+    window.releaseHomeSelection();
+    window.releaseHomeSelection = null;
+    window.store.setState({ assets: window.homeAssetCache });
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
+  assert.equal(await page.getByRole('dialog').count(), 0, 'late media resolution never opens a hidden library portal over projects');
   await library.click();
   const cards = page.locator('.library-home [data-asset-id]');
   await cards.nth(0).click({ modifiers: ['Control'] });
@@ -56,7 +67,7 @@ try {
   await projects.click();
   const projectPage = page.getByRole('region', { name: '项目管理' });
   await projectPage.locator('.project-manager-card').first().waitFor();
-  assert.equal(await projectPage.locator('.project-manager-card').count(), 18);
+  assert.equal(await projectPage.getByRole('button', { name: /^打开项目 / }).count(), 18);
   assert.equal(await page.getByRole('dialog').count(), 0, 'project management is not modal');
   assert.equal(await page.locator('.app-modal-backdrop').count(), 0);
   await page.keyboard.press('Tab');
@@ -64,7 +75,7 @@ try {
   assert.equal(await page.evaluate(() => window.mode.getState().mode), 'all', 'hidden library ignores project keyboard input');
   const search = page.getByRole('textbox', { name: '搜索项目' });
   await search.fill('品牌');
-  assert.equal(await projectPage.locator('.project-manager-card').count(), 6);
+  assert.equal(await projectPage.getByRole('button', { name: /^打开项目 / }).count(), 6);
   await page.getByRole('combobox', { name: '项目排序' }).click();
   await page.getByRole('option', { name: '项目名称', exact: true }).click();
   await page.getByRole('button', { name: '列表视图', exact: true }).click();

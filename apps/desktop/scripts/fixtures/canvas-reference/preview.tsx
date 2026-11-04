@@ -439,12 +439,11 @@ w.__TAURI_INTERNALS__ = {
   },
 };
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-useStore.setState({ projects: (explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project]) as any, activeProjectId: "p", folders: sourceLibrary ? [{ id: "source-folder", name: "测试文件夹", kind: "folder" }] as any : [], assets: assets.filter((asset: any) => !asset.library_hidden) as any, boardOpen: false, settings: JSON.parse(sessionStorage.getItem("canvas-settings") || "{}") });
+useStore.setState({ projects: (explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project]) as any, activeProjectId: mediaHome ? null : "p", folders: sourceLibrary ? [{ id: "source-folder", name: "测试文件夹", kind: "folder" }] as any : [], assets: assets.filter((asset: any) => !asset.library_hidden) as any, boardOpen: false, settings: JSON.parse(sessionStorage.getItem("canvas-settings") || "{}") });
 if (detailRoute) {
   useStore.setState({ loadSettings: async () => {}, loadCloudAccount: async () => {}, loadGenJobs: async () => {}, loadCloudAgentRuns: async () => {} });
   useOnboarding.setState(state => ({ guide: { ...state.guide, status: "skipped" }, progress: { ...state.progress, updateSeen: true } }));
 }
-if (mediaHome) useStore.setState({ activeProjectId: null });
 function Fixture() {
   const folderMode = useLocalFileMode(s => s.open);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
