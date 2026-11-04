@@ -63,8 +63,11 @@ fn main() {
             .compile("bowerbird_external_drag");
         println!("cargo:rustc-link-lib=framework=AppKit");
         println!("cargo:rerun-if-changed=macos/browser_capture.m");
+        println!("cargo:rerun-if-changed=macos/browser_overlay.m");
+        println!("cargo:rustc-link-lib=framework=QuartzCore");
         cc::Build::new()
             .file("macos/browser_capture.m")
+            .file("macos/browser_overlay.m")
             .flag("-fobjc-arc")
             .flag("-fblocks")
             .compile("bowerbird_browser_capture");

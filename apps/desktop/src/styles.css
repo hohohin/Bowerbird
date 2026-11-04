@@ -868,8 +868,6 @@ html[data-theme="light"] .task-state-failed { color: #ba3c3c; }
 .explore-panel-handle :is(.canvas-library-close, .canvas-library-grip) > svg { width: 11px; }
 .explore-panel-handle .canvas-library-close-hint { font-size: 6.4px; letter-spacing: 0; }
 .explore-browser :is(.source-browser-panel, .source-browser-viewport) { background: var(--explore-panel-surface); }
-/* Reserve native WebView space for the inward tab, including its curved edge. */
-.explore-browser .source-browser-viewport { margin-right: 20px; }
 .explore-browser .source-browser-header { flex-wrap: wrap; gap: 5px; padding: 6px 8px; }
 .explore-browser .source-browser-heading { width: 100%; }
 .explore-sites { display: flex; flex-wrap: wrap; flex-shrink: 0; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--bb-line); font-size: 11px; }

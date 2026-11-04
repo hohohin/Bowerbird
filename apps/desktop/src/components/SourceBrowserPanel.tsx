@@ -32,12 +32,19 @@ interface BrowserStatus {
 
 function boundsFor(element: HTMLElement): SourceBrowserBounds {
   const rect = element.getBoundingClientRect();
-  return {
+  const bounds: SourceBrowserBounds = {
     x: Math.round(rect.left),
     y: Math.round(rect.top),
     width: Math.round(rect.width),
     height: Math.round(rect.height),
   };
+  const tab = element.closest(".explore-browser")?.querySelector(".explore-panel-handle .canvas-library-tab-shape")?.getBoundingClientRect();
+  if (tab) {
+    const x = Math.max(0, Math.floor(tab.left - 1) - bounds.x), y = Math.max(0, Math.floor(tab.top - 1) - bounds.y);
+    const right = Math.min(bounds.width, Math.ceil(tab.right + 1) - bounds.x), bottom = Math.min(bounds.height, Math.ceil(tab.bottom + 1) - bounds.y);
+    if (right > x && bottom > y) bounds.overlay = { x, y, width: right - x, height: bottom - y };
+  }
+  return bounds;
 }
 
 function hostnameFor(url: string) {

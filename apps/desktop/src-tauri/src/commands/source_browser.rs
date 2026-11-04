@@ -7,6 +7,9 @@ use tauri::{
 
 use crate::error::{AppError, AppResult};
 
+#[path = "source_browser_overlay.rs"]
+mod overlay;
+
 const MAIN_WEBVIEW_LABEL: &str = "main";
 const SOURCE_BROWSER_LABEL: &str = "source-discovery";
 const SOURCE_BROWSER_STATUS_EVENT: &str = "source-browser://status";
@@ -35,6 +38,8 @@ pub struct SourceBrowserBounds {
     y: f64,
     width: f64,
     height: f64,
+    #[serde(default)]
+    overlay: Option<overlay::OverlayBounds>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -71,17 +76,20 @@ fn validate_bounds(bounds: SourceBrowserBounds) -> AppResult<SourceBrowserBounds
     {
         return Err(AppError::Other("素材发现面板尺寸无效".to_string()));
     }
+    if bounds.overlay.is_some_and(|rect| !rect.valid(bounds.width, bounds.height)) {
+        return Err(AppError::Other("素材发现面板尺寸无效".into()));
+    }
     Ok(bounds)
 }
 
-fn set_bounds(webview: &tauri::Webview, bounds: SourceBrowserBounds) -> AppResult<()> {
+async fn set_bounds(webview: &tauri::Webview, bounds: SourceBrowserBounds) -> AppResult<()> {
     webview
         .set_position(LogicalPosition::new(bounds.x, bounds.y))
         .map_err(|error| tauri_error("定位素材发现面板失败", error))?;
     webview
         .set_size(LogicalSize::new(bounds.width, bounds.height))
         .map_err(|error| tauri_error("调整素材发现面板失败", error))?;
-    Ok(())
+    overlay::apply(webview, bounds).await
 }
 
 fn emit_status(app: &AppHandle, url: &Url, loading: bool) {
@@ -130,7 +138,7 @@ pub async fn open_source_browser(
     let bounds = validate_bounds(bounds)?;
 
     if let Some(webview) = app.get_webview(SOURCE_BROWSER_LABEL) {
-        set_bounds(&webview, bounds)?;
+        set_bounds(&webview, bounds).await?;
         // Reopening resumes the live document. Explicit navigation has its own command.
         webview
             .show()
@@ -248,6 +256,7 @@ pub async fn open_source_browser(
         )
         .map_err(|error| tauri_error("创建素材发现面板失败", error))?;
     watch_source_location(app.clone());
+    overlay::apply(&webview, bounds).await?;
     webview
         .set_focus()
         .map_err(|error| tauri_error("聚焦素材发现面板失败", error))?;
@@ -316,7 +325,7 @@ pub async fn resize_source_browser(app: AppHandle, bounds: SourceBrowserBounds, 
             webview.eval(&spotlight_script())
                 .map_err(|error| tauri_error("更新探索引导遮罩失败", error))?;
         }
-        set_bounds(&webview, bounds)?;
+        set_bounds(&webview, bounds).await?;
         if let Some(visible) = visible {
             if visible { webview.show() } else { webview.hide() }
                 .map_err(|error| tauri_error("更新探索面板显示失败", error))?;
@@ -442,6 +451,7 @@ mod tests {
             y: 112.0,
             width: 900.0,
             height: 620.0,
+            overlay: None,
         };
         assert!(validate_bounds(valid).is_ok());
         assert!(validate_bounds(SourceBrowserBounds {

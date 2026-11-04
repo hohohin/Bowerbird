@@ -22,6 +22,8 @@ try{
  assert.ok(await page.waitForFunction(()=>document.documentElement.hasAttribute('data-bowerbird-pin-nav'),null,{timeout:3000}).then(()=>true,()=>false),'Pinterest chrome initializes on its allowed origin');
  for(const id of ['PinBetterSaveDropdown','PinBetterSaveButton'])assert.equal(await page.locator(`[data-test-id="${id}"]`).isVisible(),false,'hide oversized native board/save controls');
  assert.equal(await page.locator('#unrelated-save').isVisible(),true,'unrelated buttons are preserved');
+ assert.equal((await page.locator('#nav-icon').boundingBox()).width,16,'navigation glyphs shrink with the narrow sidebar');
+ assert.equal((await page.getByRole('button',{name:'消息',exact:true}).boundingBox()).width,32,'the clickable button keeps its existing width');
  for(const width of [320,460,900]){
   await page.setViewportSize({width,height:700});await page.waitForTimeout(200);
   const size=await page.evaluate(()=>({width:innerWidth,client:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,nav:document.querySelector('#VerticalNavContent').getBoundingClientRect().width,inset:document.querySelector('.mainContainer').getBoundingClientRect().left}));
@@ -71,6 +73,7 @@ try{
  if(coverageOutput){await writeFile(coverageOutput,JSON.stringify(await page.coverage.stopJSCoverage()));coverageStopped=true;}
  await page.goto('https://pinterest.com.evil.test/');assert.equal(await page.locator('.industrial-scrollbar').count(),0);
  assert.equal(await page.locator('#VerticalNavContent').evaluate(n=>n.getBoundingClientRect().width),72);
+ assert.equal((await page.locator('#nav-icon').boundingBox()).width,24,'other origins keep their original icon size');
  assert.equal(await page.locator('[data-test-id="PinBetterSaveDropdown"]').isVisible(),true,'other origins keep native controls');
  assert.deepEqual(errors,[]);
  console.log('PASS Pinterest zero-gutter overlay scrolling, 36px navigation, native sidebar, nested scroll and origin isolation');

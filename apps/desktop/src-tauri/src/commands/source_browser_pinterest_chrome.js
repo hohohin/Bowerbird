@@ -17,6 +17,10 @@
     html[data-bowerbird-pin-nav] #VerticalNavContent :is(a, button) {
       max-width: 32px !important; min-width: 0 !important; padding-inline: 4px !important; box-sizing: border-box !important;
     }
+    html[data-bowerbird-pin-nav] #VerticalNavContent svg,
+    html[data-bowerbird-pin-nav] #VerticalNavContent [data-test-id="vertical-nav-icon"] img {
+      width: 16px !important; height: 16px !important; flex-shrink: 0 !important; object-fit: contain !important;
+    }
     html[data-bowerbird-pin-nav] [data-bowerbird-pin-inset] { padding-inline-start: var(--bowerbird-pin-inset) !important; }
     html[data-bowerbird-pin-nav] [data-test-id="sidebar-container"] { margin-inline-start: 36px !important; }
   `;

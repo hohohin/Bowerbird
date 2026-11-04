@@ -10,6 +10,27 @@ fn smoke_asset(asset: tauri::State<'_, FixtureAsset>) -> String { asset.0.clone(
 #[tauri::command]
 fn smoke_exit(app: tauri::AppHandle) { app.exit(0); }
 
+#[tauri::command]
+async fn smoke_region(app: tauri::AppHandle, points: Vec<(f64, f64)>) -> Result<Vec<bool>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use tauri::Manager;
+        use windows::Win32::{Foundation::{HWND, RECT}, Graphics::Gdi::{CreateRectRgn, GetWindowRgn, PtInRegion, DeleteObject, HGDIOBJ}, UI::WindowsAndMessaging::GetClientRect};
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.get_webview("source-discovery").ok_or("missing source")?.with_webview(move |view| unsafe {
+            let mut hwnd = HWND::default(); view.controller().ParentWindow(&mut hwnd).unwrap();
+            let mut rect = RECT::default(); GetClientRect(hwnd, &mut rect).unwrap();
+            let region = CreateRectRgn(0, 0, 0, 0);
+            let clipped = GetWindowRgn(hwnd, region).0 != 0;
+            let points = points.into_iter().map(|(x,y)| !clipped || PtInRegion(region, (x * rect.right as f64) as i32, (y * rect.bottom as f64) as i32).as_bool()).collect();
+            let _ = DeleteObject(HGDIOBJ(region.0)); let _ = tx.send(points);
+        }).map_err(|error| error.to_string())?;
+        rx.await.map_err(|error| error.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    { let _ = (app, points); Err("Windows-only region probe".into()) }
+}
+
 pub fn run_pinterest_search_fixture() {
     assert!(cfg!(debug_assertions), "fixture must never run in a release build");
     let root = std::path::PathBuf::from(std::env::var_os("BOWERBIRD_PINTEREST_TEST_ROOT").expect("isolated test root required"));
@@ -40,7 +61,7 @@ pub fn run_pinterest_search_fixture() {
             source_browser::reload_source_browser,
             pinterest_search::start_pinterest_image_search,
             pinterest_search::cancel_pinterest_image_search,
-            smoke_asset, smoke_exit,
+            smoke_asset, smoke_exit, smoke_region,
         ])
         .run(context).expect("isolated Pinterest native fixture failed");
 }

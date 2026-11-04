@@ -69,6 +69,7 @@ export interface SourceBrowserBounds {
   y: number;
   width: number;
   height: number;
+  overlay?: { x: number; y: number; width: number; height: number };
 }
 
 export interface CanvasFrequentAssetsResult {

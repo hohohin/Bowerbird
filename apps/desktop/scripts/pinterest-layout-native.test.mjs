@@ -63,6 +63,7 @@ async function assertLayout(name) {
   checks.push({ name, ...value });
   assert.equal(value.availableWidth, value.width, `${name}: scrollbar must not reserve native width`);
   assert.equal(await source.locator('#VerticalNavContent').evaluate(node => node.getBoundingClientRect().width), 36, `${name}: native navigation is half-width`);
+  assert.ok(Math.abs((await source.locator('#nav-icon').boundingBox()).width-16)<0.1, `${name}: navigation icons fit the compact sidebar`);
   assert.equal(await source.locator('[data-test-id="PinBetterSaveDropdown"]').isVisible(), false, `${name}: board selector hidden`);
   assert.equal(await source.locator('[data-test-id="PinBetterSaveButton"]').isVisible(), false, `${name}: native save hidden`);
   assert.ok(value.source.height <= 161, `${name}: reference preview exceeds 160px (${value.source.height})`);
@@ -87,7 +88,8 @@ try {
   mainBrowser = await poll(() => chromium.connectOverCDP('http://127.0.0.1:9567', { timeout: 1000 }), 'main native CDP missing');
   main = await poll(async () => mainBrowser.contexts()[0].pages().find(page => page.url().startsWith('http://127.0.0.1:1557')), 'main page missing');
   await main.waitForFunction(() => window.__TAURI_INTERNALS__?.invoke);
-  await invoke('open_source_browser', { url: 'http://127.0.0.1:1557/source', bounds: { x: 250, y: 100, width: 360, height: 600 } });
+  await invoke('open_source_browser', { url: 'http://127.0.0.1:1557/source', bounds: { x: 250, y: 100, width: 360, height: 600, overlay: { x:340,y:220,width:20,height:98 } } });
+  if(process.platform==='win32')assert.deepEqual(await invoke('smoke_region',{points:[[.99,.4],[.99,.1],[.99,.8],[.2,.4]]}),[false,true,true,true],'the first native frame already exposes the overlay');
   sourceBrowser = await poll(() => chromium.connectOverCDP('http://127.0.0.1:9568', { timeout: 1000 }), 'source native CDP missing');
   source = await poll(async () => sourceBrowser.contexts()[0].pages().find(page => page.url().includes('/source')), 'source page missing');
   source.setDefaultTimeout(8000);
@@ -132,8 +134,15 @@ try {
   await resize(720, false); await resize(720);
   await poll(() => source.evaluate(() => innerWidth === 720 && window.layoutRuns.at(-1)?.columns >= 2), 'native resize did not reach site masonry');
   const wide = await assertLayout('native hidden-resize-show at 720px');
+  await invoke('resize_source_browser', { bounds: { x:250,y:100,width:720,height:600,overlay:{x:700,y:220,width:20,height:98} }, visible:true });
+  assert.equal(await source.evaluate(()=>innerWidth),720,'floating tab never narrows the native page');
+  const regionPoints=[[.99,.4],[.99,.1],[.99,.8],[.2,.4]];
+  if(process.platform==='win32')assert.deepEqual(await invoke('smoke_region',{points:regionPoints}),[false,true,true,true],'only the tab footprint reveals the main webview; page above and below stays full-width');
+  checks.push({name:'floating handle excludes only its footprint',width:await source.evaluate(()=>innerWidth),points:process.platform==='win32'?await invoke('smoke_region',{points:regionPoints}):null});
+  await assert.rejects(invoke('resize_source_browser',{bounds:{x:250,y:100,width:720,height:600,overlay:{x:700,y:220,width:65,height:98}}}),/尺寸无效/);
   await source.screenshot({ path: path.join(directory, 'wide.png') });
   await resize(320);
+  if(process.platform==='win32')assert.deepEqual(await invoke('smoke_region',{points:regionPoints}),[true,true,true,true],'removing the overlay clears its native region');
   await poll(() => source.evaluate(() => innerWidth === 320 && window.layoutRuns.at(-1)?.columns === 1), 'native narrow resize did not reach site masonry');
   const narrow = await assertLayout('native resize back to 320px');
   assert.ok(wide.nativeLayout.columns > narrow.nativeLayout.columns);

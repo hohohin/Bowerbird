@@ -20,13 +20,13 @@
 
 WebView2 的 `pushState`／`replaceState` 不触发原有加载通知。创建原生浏览器时启动唯一地址观察任务，每 500ms 读取其真实 URL，仅变化时向主窗口发送 `source-browser://location`，不改变加载状态；复用／隐藏不新增观察任务，WebView 关闭或读取失败后退出。沿用 HTTP(S) 与无内嵌凭据边界，不给远程网页增加 IPC 权限。该通知驱动地址栏及已有本机记忆，也覆盖搜图结果、Pin 和后退。
 
-Pinterest 适配只隐藏原生 `PinBetterSaveDropdown` 与 `PinBetterSaveButton`，包括后续 SPA 动态插入；其他按钮保持。探索页签位于面板右边缘内侧并垂直居中，24px 缩为 14.4px，页签／面板外壳／加载占位区共用 `--explore-panel-surface`；网页 viewport 在面板内部让出 20px，现有 ResizeObserver 同步收进原生边界，保证内侧把手可见可点，且不覆盖相邻标签索引；外形同步朝内。素材库页签尺寸和位置保持。内收回归见 [记录](../project_logs/2026-11-04-explore-handle-inward.md)。验证与当前开发实例生效证据见 [行动记录](../project_logs/2026-11-04-explore-memory-controls.md)。
+Pinterest 适配只隐藏原生 `PinBetterSaveDropdown` 与 `PinBetterSaveButton`，包括后续 SPA 动态插入；其他按钮保持。探索页签位于面板右边缘内侧并垂直居中，24px 缩为 14.4px，页签／面板外壳／加载占位区共用 `--explore-panel-surface`；网页 viewport 铺满面板，不为把手保留独立宽度。SourceBrowserPanel 根据页签实际屏幕矩形传递可选 overlay 局部区域；Windows 仅在该足迹内裁剪原生子窗口并透出主窗口把手，其上下网页保持完整宽度，移除 overlay 恢复完整窗口。范围受 64×128 上限及 viewport 边界校验，按实际客户区尺寸适配 DPI。Mac 接入透明父视图的命中穿透与图层遮罩，保留原 WKWebView 身份和坐标，尚未原生编译／实机验收。素材库页签尺寸和位置保持。浮动回归见 [记录](../project_logs/2026-11-04-explore-overlay-icons.md)。验证与当前开发实例生效证据见 [行动记录](../project_logs/2026-11-04-explore-memory-controls.md)。
 
 ### 2026-11-04：Pinterest 滚动条、侧栏与探索把手（源码未发布）
 
 探索面板右边缘改用素材库同款紧凑页签，包含退出按钮和调宽握柄，移除贯穿高度的 10px 拖动条。两处共用 `PanelEdgeHandle`，各自保留宽度与关闭逻辑；探索支持左右键、Home／End、双击恢复默认宽度及 Esc。
 
-精确 Pinterest 顶层页面注入主应用同一 `overlayScrollbars.js`／`OverlayScrollbars.css`，包括 Lens 结果和普通页面：原生轨道不占宽高，4px 斜纹滑块只在滚动时以 50% 透明度显现，800ms 后淡出。支持文档根与嵌套滚动，保留滑块拖动、滚轮和键盘操作。原生导航从 72px 缩到 36px，正文与展开侧栏同步前移 36px；仍使用 Pinterest 自己的按钮、内容与分页。
+精确 Pinterest 顶层页面注入主应用同一 `overlayScrollbars.js`／`OverlayScrollbars.css`，包括 Lens 结果和普通页面：原生轨道不占宽高，4px 斜纹滑块只在滚动时以 50% 透明度显现，800ms 后淡出。支持文档根与嵌套滚动，保留滑块拖动、滚轮和键盘操作。原生导航从 72px 缩到 36px，正文与展开侧栏同步前移 36px；导航 SVG 和图标容器内图片缩到 16px，按钮保持现有 32px 点击宽度。仍使用 Pinterest 自己的按钮、内容与分页。
 
 浏览器及原生 WebView2 合成站点测试通过，当前开发 EXE 已自动重建并包含最终脚本；未发布安装包，真实账号的全部页面变体和 Mac 未验收。结构依据、红绿验证、质量工具及原有测试的边界见 [行动记录](../project_logs/2026-11-04-pinterest-chrome.md)。
 
