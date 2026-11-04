@@ -28,3 +28,14 @@
 - 截图位于 `apps/desktop/.tmp/composer-hud/`：`references-dark.png`、`references-light.png`、`home-rest.png`、`video-dark.png`、`canvas.png`；本机未就绪压力图位于 `.tmp/composer-local-video/unavailable-900.png`。
 
 这些验证使用正式 React/CSS 与合成 IPC，证明本轮呈现和交互，不替代 Windows WebView2／Mac 原生视觉及真实服务验收。未改全局最小窗口宽度；没有处理其他会话的未提交代码。无推送、发版或生产部署。
+
+## 同日后续：线框标签、宽扁比例与提示迁移
+
+用户要求左侧选中标签与右上 X 同款、整体高度降低 30%／宽度增加 40%，并把双击参考提示从顶部移入对话框。本轮按这一明确调整直接实装，沿用 UI UX Pro Max 与 ub-mode，不新增设计方向。
+
+- 先在旧版运行选中透明线框断言，明确失败于原实心蓝色底；随后让模式与关闭共用 `::before`／`::after` 的线框、切角及轻微偏振。文字保持清晰，标签点击高度仍为 44px，高对比与减少透明度沿用现有回退。
+- 主屏／画板共用 `--composer-max-width:1238px`，由前版 884px 增加约 40%，窄窗口保留宿主限宽。通过缩减空白、输入区最小高度和缩略图尺寸，常规高度 393→275px、双参考 421→295px，约降低 30%；字体及底部控件不整体缩放。缩略图变为 60px，输入区长内容仍内部滚动，条件 Agent 第四项能够容纳。
+- `composer-reference-hint` 放在输入区已有操作留白，只有「双击」加粗；不增加参数行、不遮挡正文或编辑操作。移除工作区顶部已有提示，保留顶部创作状态及原双击行为。
+- `composer-hud-ui` 加入宽高比例、选中线框同源、提示归属断言；`composer-header-ui`、本机视频 1600／1240／900px 单行与禁用发送检查、完整 TypeScript 检查通过。提示迁移同步更新 `library-creation-parity-ui` 对应断言。
+- 验证中旧手势脚本默认返回主页即进入素材库，但当前工作区返回项目页；改为显式点素材库导航后再验证，未修改产品路由。禁用按钮检查等待现有样式过渡完成，避免读取中间态。截图继续输出 `.tmp/composer-hud/references-dark.png`、`references-light.png`。
+- 同步当前 PROJECT／UI 规范／复用地图；文档与既有手势测试只暂存本轮相关片段，其他会话的图片预览、导航及滚动等改动保留。crapper／dryer／mutator 仍不可用；本轮未调用真实生成、未打包发布。

@@ -1383,6 +1383,7 @@ export function CreationBoard({
         </div>
         <BoardChipPreview hostRef={referenceStripRef} extraAssets={references} />
         <div className="composer-writing">
+        {!isCollapsed && <span className="composer-reference-hint"><strong>双击</strong>添加参考图</span>}
         <div className="composer-description-heading">
           <span id={editorLabelId}>{isChat ? "聊聊你的创作想法" : "创作描述"}</span>
           <div className="composer-description-actions">

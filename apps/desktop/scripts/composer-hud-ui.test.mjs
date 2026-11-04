@@ -42,6 +42,7 @@ async function leftRail(dock, hasProject = false) {
   assert.equal(await dock.locator('.composer-mode-status').count(), 0, 'redundant creation status is removed');
 }
 async function opticalSurface(dock) {
+  await page.mouse.move(20, 160); await settle();
   const material = await dock.evaluate(element => {
     const surface = element.querySelector('.composer-hud-surface');
     const close = element.querySelector('.composer-collapse');
@@ -53,6 +54,15 @@ async function opticalSurface(dock) {
   assert.ok(material.masks.some(mask => /\b19px\b/.test(mask)), 'only the narrow outer 19px feathers into the canvas');
   assert.equal(material.closeBackground, 'rgba(0, 0, 0, 0)', 'HUD close control has a transparent face');
   assert.ok(material.textFilters.every(filter => filter === 'none'), 'optical blur does not affect the input text');
+  const selected = dock.locator('.composer-mode-picker > button[aria-pressed="true"]');
+  assert.equal(await selected.evaluate(button => getComputedStyle(button).backgroundColor), 'rgba(0, 0, 0, 0)', 'selected mode uses the transparent HUD face');
+  assert.equal(await selected.evaluate(button => getComputedStyle(button, '::before').backgroundImage),
+    await dock.locator('.composer-collapse').evaluate(button => getComputedStyle(button, '::before').backgroundImage), 'selected mode and close share the cut-corner wireframe');
+  assert.equal(await page.locator('.creation-mode-indicator-hint').count(), 0, 'double-click hint is removed from the canvas and home top marking');
+  const hint = dock.locator('.composer-reference-hint');
+  assert.equal(await hint.innerText(), '双击添加参考图');
+  assert.equal(await hint.locator('strong').innerText(), '双击');
+  assert.ok(await hint.evaluate(element => element.closest('.composer-writing') !== null), 'hint belongs to the composer writing area');
 }
 async function referenceProjection(dock, theme) {
   const editor = dock.locator('.ProseMirror');
@@ -76,7 +86,9 @@ async function referenceProjection(dock, theme) {
     const rect = image.getBoundingClientRect();
     return image.naturalWidth > 0 && rect.height >= 40 && rect.height <= 90 && rect.width <= 123;
   })), 'small reference images render without displacing the large writing area');
-  assert.ok((await editor.boundingBox()).height >= 180, 'reference thumbnails preserve a large editable area');
+  assert.ok((await editor.boundingBox()).height >= 96, 'references retain at least three lines of editable space');
+  const referenceHeight = (await dock.boundingBox()).height;
+  assert.ok(referenceHeight >= 421 * .68 && referenceHeight <= 421 * .72, `reference composer is 30% shorter: ${referenceHeight}`);
   await page.waitForFunction(({ element, lastId }) => {
     const selection = getSelection();
     if (!selection?.isCollapsed || !selection.anchorNode || !element.contains(selection.anchorNode)) return false;
@@ -107,6 +119,7 @@ try {
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
+  await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '素材库', exact: true }).click();
   const home = page.locator('.library-composer .creation-dock');
   await home.waitFor(); await settle();
   assert.ok(Math.abs(await bottomGap(home)) < 1, 'inactive home composer touches the window bottom');
@@ -128,13 +141,19 @@ try {
     await home.locator('.ProseMirror').fill('');
     const disabledSend = home.locator('.generation-send-button:disabled');
     await disabledSend.waitFor();
-    assert.ok(await disabledSend.evaluate(button => Number(getComputedStyle(button).opacity) < 1
-      && getComputedStyle(button, '::before').display === 'none' && getComputedStyle(button, '::after').display === 'none'
-      && getComputedStyle(button.querySelector('svg')).filter === 'none'), 'unavailable sending is dimmed and loses the active optical glow');
+    await settle();
+    const disabledStyle = await disabledSend.evaluate(button => ({ opacity: getComputedStyle(button).opacity,
+      before: getComputedStyle(button, '::before').display, after: getComputedStyle(button, '::after').display,
+      filter: getComputedStyle(button.querySelector('svg')).filter }));
+    assert.ok(Number(disabledStyle.opacity) < 1 && disabledStyle.before === 'none' && disabledStyle.after === 'none'
+      && disabledStyle.filter === 'none', `unavailable sending is dimmed and loses the active optical glow: ${JSON.stringify(disabledStyle)}`);
     await home.locator('.ProseMirror').fill('清晨的薄雾掠过山脊，镜头缓慢推进。'); await settle();
     await leftRail(home, true); await opticalSurface(home);
     const writing = await home.locator('.ProseMirror').boundingBox();
-    assert.ok(writing.height >= 180, `expanded input provides a large editable area: ${writing.height}`);
+    assert.ok(writing.height >= 160, `expanded input retains five lines of editable space: ${writing.height}`);
+    const compact = await home.boundingBox();
+    assert.ok(Math.abs(compact.width - 884 * 1.4) < 1, `composer is 40% wider when space permits: ${compact.width}`);
+    assert.ok(compact.height >= 393 * .68 && compact.height <= 393 * .72, `composer is 30% shorter: ${compact.height}`);
     if (theme === 'dark') {
       await home.getByRole('button', { name: '放大编辑文本', exact: true }).click();
       const document = page.getByRole('textbox', { name: '文档正文', exact: true });
