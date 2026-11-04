@@ -99,18 +99,16 @@ async function referenceProjection(dock, theme) {
     return paragraph?.textContent === '' && selection?.isCollapsed && paragraph.contains(selection.anchorNode);
   }, await editor.elementHandle());
   for (const id of ids) await page.evaluate(id => window.dispatchEvent(new CustomEvent('bowerbird://board-asset-picked', { detail: id })), id);
-  const strip = dock.locator('.composer-references');
-  await strip.locator('.composer-reference').nth(1).waitFor();
-  assert.deepEqual(await strip.locator('.composer-reference').evaluateAll(buttons => buttons.map(button => button.dataset.assetId)), ids, 'thumbnail order follows the editor references, not the library order');
-  assert.deepEqual(await strip.locator('.composer-reference-index').allTextContents(), ['01', '02']);
+  await editor.locator('[data-asset-id]').nth(1).waitFor();
+  assert.equal(await dock.locator('.composer-references').count(), 0, 'references are shown only inside the text editor, without a duplicate strip');
   assert.deepEqual(await editor.locator('[data-asset-id]').evaluateAll(chips => chips.map(chip => chip.dataset.assetId)), ids, 'inline chips remain the source of the references');
-  const images = strip.locator('img');
+  const images = editor.locator('[data-asset-id] img');
   assert.equal(await images.count(), 2);
   await images.evaluateAll(images => Promise.all(images.map(image => image.decode().catch(() => {}))));
   assert.ok(await images.evaluateAll(images => images.every(image => {
     const rect = image.getBoundingClientRect();
-    return image.naturalWidth > 0 && rect.height >= 40 && rect.height <= 90 && rect.width <= 123;
-  })), 'small reference images render without displacing the large writing area');
+    return image.naturalWidth > 0 && rect.height > 0;
+  })), 'inline reference images remain visible');
   assert.ok((await editor.boundingBox()).height >= 32, 'references retain editable text');
   const referenceHeight = (await dock.boundingBox()).height;
   assert.ok(referenceHeight < 320, `references use a compact content-driven composer: ${referenceHeight}`);
@@ -125,17 +123,14 @@ async function referenceProjection(dock, theme) {
   }, { element: await editor.elementHandle(), lastId: ids[1] });
   for (let count = 0; count < 3 && await editor.locator(`[data-asset-id="${ids[1]}"]`).count(); count++) await page.keyboard.press('Backspace');
   assert.equal(await editor.locator(`[data-asset-id="${ids[1]}"]`).count(), 0, 'Backspace removes the inline reference after the verified caret');
-  await strip.locator(`[data-asset-id="${ids[1]}"]`).waitFor({ state: 'detached' });
-  assert.deepEqual(await strip.locator('.composer-reference').evaluateAll(buttons => buttons.map(button => button.dataset.assetId)), [ids[0]], 'Backspace removes the same reference from the thumbnail strip');
-  assert.deepEqual(await strip.locator('.composer-reference-index').allTextContents(), ['01']);
+  assert.deepEqual(await editor.locator('[data-asset-id]').evaluateAll(chips => chips.map(chip => chip.dataset.assetId)), [ids[0]], 'Backspace leaves the other inline reference intact');
   await page.evaluate(id => window.dispatchEvent(new CustomEvent('bowerbird://board-asset-picked', { detail: id })), ids[1]);
-  await strip.locator('.composer-reference').nth(1).waitFor();
+  await editor.locator('[data-asset-id]').nth(1).waitFor();
   await dock.getByRole('button', { name: '退出创作模式', exact: true }).click();
   await waitCollapsed(dock);
-  assert.equal(await strip.isVisible(), false, 'collapsed composer hides reference previews');
   assert.equal(await editor.locator('[data-asset-id]').count(), 2, 'collapse keeps editor references');
   await dock.getByRole('button', { name: '展开创作描述', exact: true }).click();
-  await strip.waitFor(); await settle();
+  await editor.locator('[data-asset-id]').nth(1).waitFor(); await settle();
   await page.mouse.move(20, 160);
   await dock.screenshot({ path: `${output}/references-${theme}.png` });
 }
@@ -279,5 +274,5 @@ try {
   }), 'high-contrast selection keeps a distinct filled background and readable text');
   await page.emulateMedia({ forcedColors: 'none' });
   assert.deepEqual(errors, []);
-  console.log('PASS optical HUD home/canvas, vertical project/mode rail, project and brand menus, content-sized clear input, ordered reference thumbnails and Backspace, first-line draft, video single row and reduced motion');
+  console.log('PASS optical HUD home/canvas, vertical project/mode rail, project and brand menus, content-sized clear input, inline-only references and Backspace, first-line draft, video single row and reduced motion');
 } finally { await browser.close(); await server.close(); }

@@ -260,13 +260,6 @@ html[data-theme] .composer-glass .composer-profile-trigger { display:grid;place-
 html[data-theme] .composer-glass .composer-profile-panel { position:absolute;right:0;top:34px;width:max-content;max-width:calc(100vw - 110px);padding:10px; }
 html[data-theme] .composer-glass .composer-collapse.creation-exit-tab { position:absolute;right:8px;top:10px;width:26px;height:26px;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;color:var(--composer-muted);z-index:4; }
 html[data-theme] .composer-glass .composer-collapse::before,html[data-theme] .composer-glass .composer-collapse::after { content:none; }
-html[data-theme] .composer-references { display:flex;align-items:flex-start;gap:12px;margin-left:var(--composer-rail);padding:0 64px 14px 24px;overflow-x:auto;scrollbar-width:thin; }
-html[data-theme] .composer-references[hidden] { display:none; }
-html[data-theme] .composer-reference { position:relative;display:block;flex:none;padding:0 0 7px;max-width:123px;color:var(--composer-muted); }
-html[data-theme] .composer-reference>:first-child { display:flex;align-items:center;justify-content:center;width:auto;height:60px;max-width:123px;object-fit:contain;border:1px solid color-mix(in srgb,var(--composer-ink) 23%,transparent); }
-html[data-theme] .composer-reference>span:first-child { width:72px; }
-html[data-theme] .composer-reference::after { content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:linear-gradient(90deg,var(--composer-muted),transparent);opacity:.45; }
-html[data-theme] .composer-reference-index { position:absolute;right:5px;bottom:12px;font:11px/1.4 var(--bb-font-mono);background:#172023c4;color:#e8eff0;padding:0 3px; }
 .composer-writing { position:relative; }
 html[data-theme] .composer-glass:not(.is-collapsed) .composer-writing { margin-left:var(--composer-rail);padding:0; }
 html[data-theme] .composer-glass:not(.is-collapsed) .composer-description-heading { position:absolute;right:76px;top:-38px;height:26px;padding:0;z-index:2; }
@@ -342,7 +335,7 @@ html[data-theme] .composer-glass.is-collapsed :is(.composer-collapse,.composer-p
 }
 @container composer (max-width:620px) {
   html[data-theme] .composer-glass:not(.is-collapsed) .composer-heading { left:-80px; }
-  html[data-theme] .composer-glass :is(.composer-writing,.composer-toolbar,.composer-references,.composer-chat-key-hint) { --composer-rail:0px; }
+  html[data-theme] .composer-glass :is(.composer-writing,.composer-toolbar,.composer-chat-key-hint) { --composer-rail:0px; }
   html[data-theme] .composer-glass .composer-toolbar { margin-inline:calc(var(--composer-rail) + 12px) 12px;gap:4px; }
   html[data-theme] .composer-glass .composer-parameters,.composer-image-options { gap:8px; }
   html[data-theme] .composer-glass .composer-video-fields { gap:2px; }

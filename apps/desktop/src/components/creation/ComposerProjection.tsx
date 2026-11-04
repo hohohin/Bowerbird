@@ -64,8 +64,8 @@ export function ComposerProjection({ dockRef, collapsed }: { dockRef: RefObject<
       const arcSvg = arc.closest("svg")!;
       arcSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
       arcSvg.style.maskImage = `linear-gradient(90deg,transparent ${arcLeft}px,#000 ${arcLeft + 72}px,#000 ${arcRight - 72}px,transparent ${arcRight}px)`;
-      // Feather inward from the local arc; the elliptical field has no vertical side boundary.
-      const curveY = (x: number) => { const position = (x - arcLeft) / span; return y - 4 * bow * position * (1 - position) + 22; };
+      // Center the feather on the local arc; the elliptical field has no vertical side boundary.
+      const curveY = (x: number) => { const position = (x - arcLeft) / span; return y - 4 * bow * position * (1 - position); };
       const edgeLeft = curveY(-50), edgeRight = curveY(width + 50);
       const cap = `M-50 ${edgeLeft} Q${width / 2} ${2 * curveY(width / 2) - (edgeLeft + edgeRight) / 2} ${width + 50} ${edgeRight} L${width + 50} ${height + 50} L-50 ${height + 50}Z`;
       const cx = (arcLeft + arcRight) / 2, cy = (y - bow + height) / 2 + 20;

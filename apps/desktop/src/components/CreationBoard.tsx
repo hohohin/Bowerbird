@@ -2,7 +2,6 @@ import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { convertFileSrc } from "@tauri-apps/api/core";
 import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, resolveVideoOptions, videoInputError, videoModelLabel, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { LocalVideoFrames } from "./creation/LocalVideoFrames";
@@ -43,7 +42,6 @@ import { ProviderSelect } from "./creation/ProviderSelect";
 import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { ArrowUp, ChevronDown, History, Image, Info, Maximize2, MessageCircle, Palette, Sparkles, Video, X } from "lucide-react";
-import { MediaPreview } from "./MediaPreview";
 import { useTextWorkspace } from "./useTextWorkspace";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import "./CreationBoard.css";
@@ -155,7 +153,6 @@ export function CreationBoard({
   const profilePanelId = useId();
   const [profileOpen, setProfileOpen] = useState(false);
   const profileTriggerRef = useRef<HTMLButtonElement>(null);
-  const referenceStripRef = useRef<HTMLDivElement>(null);
   const editorScrollRef = useRef<HTMLDivElement>(null);
   const agentMenuRef = useRef<HTMLDivElement>(null);
   const agentTriggerRef = useRef<HTMLButtonElement>(null);
@@ -1375,17 +1372,6 @@ export function CreationBoard({
         )}
         {/* 编辑框：随主题切换的独立输入区；超高后内部滚动（不触发主区滚动收起）。
             获得焦点（contenteditable 冒泡）= 激活创作模式（等同旧「创作板」按钮）。 */}
-        <div ref={referenceStripRef} className="composer-references" aria-label="参考素材" hidden={isCollapsed || references.length === 0}>
-          {references.map((asset, index) => {
-            const previewPath = asset.thumb_path || asset.store_path;
-            return <button key={asset.id} type="button" className="composer-reference" data-asset-id={asset.id}
-              aria-label={`定位参考素材 ${index + 1}：${asset.name}`} title={asset.name}>
-              <MediaPreview src={previewPath ? convertFileSrc(previewPath) : undefined} videoPath={asset.store_path} asset={asset} alt={asset.name} />
-              <span className="composer-reference-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
-            </button>;
-          })}
-        </div>
-        <BoardChipPreview hostRef={referenceStripRef} extraAssets={references} />
         <div className="composer-writing">
         <div className="composer-description-heading">
           <span id={editorLabelId}>{isChat ? "聊聊你的创作想法" : "创作描述"}</span>

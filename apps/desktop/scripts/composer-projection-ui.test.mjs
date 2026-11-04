@@ -48,6 +48,7 @@ try {
       center: alpha(writing.left + writing.width / 2 - field.left),
       tags: tags.map(box => alpha(box.left + box.width / 2 - field.left, box.top + box.height / 2 - field.top)),
       above: [railX, middleX, element.getBoundingClientRect().right - field.left - 50].map(x => alpha(x, arcY(x) - 24)),
+      atArc: alpha(middleX, arcY(middleX)),
       arcLeft: arc.getPointAtLength(0).x + field.left, arcRight: arc.getPointAtLength(arc.getTotalLength()).x + field.left,
       tagLeft: tags[0].left, dockRight: element.getBoundingClientRect().right,
       writingGap: writing.left - Math.max(...tags.slice(1).map(box => box.right)),
@@ -58,6 +59,7 @@ try {
   assert.ok(projection.left < 8 && projection.right < 8, `materials beside the composer remain clear: ${JSON.stringify(projection)}`);
   assert.ok(projection.center > 240, 'feathering preserves the reading area');
   assert.ok(projection.above.every(alpha => alpha < 8), `blur stays below the arc: ${JSON.stringify(projection)}`);
+  assert.ok(projection.atArc > 95 && projection.atArc < 160, `feathering meets the arc without a clear gap: ${projection.atArc}`);
   assert.ok(projection.arcLeft >= projection.tagLeft - 50 && projection.arcRight <= projection.dockRight + 40, 'HUD arc stays local to the composer');
   assert.ok(projection.writingGap >= 16 && projection.writingGap <= 48, `mode tags sit close to the input: ${projection.writingGap}`);
   assert.ok(projection.sideFade.some(alpha => alpha > 30 && alpha < 220)
