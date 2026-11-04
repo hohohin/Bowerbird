@@ -24,6 +24,25 @@ try {
   await editor.fill('');
   await page.waitForTimeout(350);
   await page.screenshot({ path: `${output}/initial.png` });
+  const projection = await dock.evaluate(async element => {
+    const surface = element.querySelector('.composer-projection-surface');
+    const field = surface.getBoundingClientRect();
+    const writing = element.querySelector('.ProseMirror').getBoundingClientRect();
+    const image = new Image();
+    image.src = getComputedStyle(surface).maskImage.slice(5, -2);
+    await image.decode();
+    const probe = document.createElement('canvas'); probe.width = field.width; probe.height = field.height;
+    const ctx = probe.getContext('2d'); ctx.drawImage(image, 0, 0);
+    const alpha = x => ctx.getImageData(Math.max(0, Math.min(probe.width - 1, Math.round(x))), probe.height - 30, 1, 1).data[3];
+    return { blur: getComputedStyle(surface).backdropFilter,
+      left: alpha(writing.left - field.left - 110), right: alpha(element.getBoundingClientRect().right - field.left + 110),
+      center: alpha(writing.left + writing.width / 2 - field.left),
+      gap: parseFloat(getComputedStyle(element.querySelector('.composer-mode-picker')).gap) };
+  });
+  assert.equal(projection.blur, 'blur(14.4px) saturate(0.72)', 'background blur is reduced by 20%');
+  assert.ok(projection.left < 8 && projection.right < 8, `materials beside the composer remain clear: ${JSON.stringify(projection)}`);
+  assert.ok(projection.center > 240, 'feathering preserves the reading area');
+  assert.ok(Math.abs(projection.gap - 3.312) < .1, 'rail spacing matches the approved preview');
   assert.ok((await editor.boundingBox()).height <= 36, 'empty input has one line, with no reserved reference height');
   const oneLine = (await dock.boundingBox()).height;
   await editor.fill('第一行\n第二行\n第三行');
@@ -82,6 +101,7 @@ try {
     assert.notDeepEqual(afterMove, beforeMove, 'depth layers respond to pointer');
     assert.equal(new Set(afterMove).size, 3, 'layers move at different depths');
     await page.screenshot({ path: `${output}/${theme}.png` });
+    await page.screenshot({ path: `${output}/${theme}-detail.png`, clip: { x: 0, y: 590, width: 1440, height: 310 } });
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.waitForTimeout(180);
@@ -90,4 +110,8 @@ try {
   assert.equal(await dock.locator('.composer-projection-dots').evaluate(canvas => canvas.toDataURL()), still, 'reduced motion keeps the dot field still');
   assert.deepEqual(errors, []);
   console.log('PASS: real composer projection, themes, modes, menu, caret and reduced motion');
+} catch (error) {
+  await page.screenshot({ path: `${output}/failure.png` });
+  console.log({ errors });
+  throw error;
 } finally { await browser.close(); await server.close(); }

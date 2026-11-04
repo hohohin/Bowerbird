@@ -10,12 +10,11 @@
 .library-composer .is-collapsed .composer-heading > .composer-expand { margin-left:auto; }
 .library-composer .is-collapsed .composer-description-heading { display:none; }
 .library-composer-target .tactical-select-trigger::before, .library-composer-target .tactical-select-trigger::after { display:none; }
-html[data-theme] body .library-project-menu.tactical-select-menu[class] { min-width:min(260px,calc(100vw - 24px)); padding:8px; clip-path:none;border:0;border-radius:0;background:#1b202ded;backdrop-filter:blur(20px);color:#e7ecf9;box-shadow:inset 1px 0 #dce7ff59,0 12px 32px #0004; }
+html[data-theme] body .library-project-menu.tactical-select-menu[class] { min-width:min(206px,calc(100vw - 24px)); padding:6px;clip-path:none;border:0;border-top:1px solid #e5eff647;border-bottom:1px solid #e5eff61f;border-radius:0;background:#1b1e20f2;backdrop-filter:blur(20px);color:#e7ecf9;box-shadow:inset 1px 0 #dce7ff59,0 12px 32px #0004; }
 html[data-theme="light"] body .library-project-menu.tactical-select-menu[class] { background:#f5f7fdf5;color:#303b57;box-shadow:inset 1px 0 #fff,0 12px 32px #303f611f; }
-html[data-theme] body .library-project-menu.tactical-select-menu[class]::before, html[data-theme] body .library-project-menu.tactical-select-menu[class]::after { display:block;content:"";position:absolute;width:3px;height:3px;background:currentColor;filter:drop-shadow(0 0 3px currentColor);pointer-events:none; }
-html[data-theme] body .library-project-menu.tactical-select-menu[class]::before { inset:0 auto auto 0; }
-html[data-theme] body .library-project-menu.tactical-select-menu[class]::after { inset:auto 0 0 auto; }
-html[data-theme] .library-project-menu .tactical-select-option { min-height:34px; padding:7px 12px 7px 26px; }
+html[data-theme] body .library-project-menu.tactical-select-menu[class]::before { display:block;content:"";position:absolute;inset:-1px;pointer-events:none;background:linear-gradient(#e8f0f5,#e8f0f5) left top/2px 2px no-repeat,linear-gradient(#e8f0f5,#e8f0f5) right top/2px 2px no-repeat,linear-gradient(#e8f0f5,#e8f0f5) left bottom/2px 2px no-repeat,linear-gradient(#e8f0f5,#e8f0f5) right bottom/2px 2px no-repeat;filter:drop-shadow(0 0 4px #e6f1fa66); }
+html[data-theme] body .library-project-menu.tactical-select-menu[class]::after { display:none; }
+html[data-theme] .library-project-menu .tactical-select-option { min-height:36px;padding:7px 10px 7px 26px;font-size:12px; }
 html[data-theme] .library-project-menu .tactical-select-option-label { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
 html[data-theme] .library-project-menu .tactical-select-option[aria-selected="true"] { color:inherit;background:linear-gradient(90deg,#a6bcff30,transparent);box-shadow:inset 2px 0 #9eafff; }
 .library-composer .canvas-composer-host { position:static; padding:0; width:100%; }

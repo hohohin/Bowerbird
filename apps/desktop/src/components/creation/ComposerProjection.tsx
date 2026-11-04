@@ -1,7 +1,7 @@
 import { useEffect, useRef, type RefObject } from "react";
 
 const depths = [-.42, .35, 1];
-const crosses = Array.from({ length: 28 }, (_, index) => ({ x: 6 + index % 7 * 17, y: 6 + Math.floor(index / 7) * 17 }));
+const matrices = [{ columns: 5, rows: 3, size: 2.1 }, { columns: 5, rows: 3, size: 1.8 }, { columns: 3, rows: 3, size: 3.2 }];
 
 /** Decorative projection only; no draft, pointer target or generation state. */
 export function ComposerProjection({ dockRef }: { dockRef: RefObject<HTMLElement> }) {
@@ -37,26 +37,42 @@ export function ComposerProjection({ dockRef }: { dockRef: RefObject<HTMLElement
       drift.y += (pointer.y - drift.y) * .14;
       clusters.forEach((cluster, index) => {
         const depth = reduced.matches ? 0 : depths[index];
-        cluster.style.transform = `translate(${drift.x * depth * .035}px,${drift.y * depth * .035}px)`;
+        cluster.style.transform = `translate(${Math.max(-16, Math.min(16, drift.x * .035)) * depth}px,${Math.max(-11, Math.min(11, drift.y * .035)) * depth}px)`;
+        const slot = Math.floor(time / 3200), age = time % 3200 - 600 - (slot * 347 % 1100);
+        const blink = !reduced.matches && index === slot % 3 && age >= 0 && age < 320;
+        cluster.style.visibility = blink && (age < 80 || age >= 160 && age < 240) ? "hidden" : "visible";
       });
     }
     function measure() {
       const bounds = region.getBoundingClientRect(), box = dock!.getBoundingClientRect();
-      const project = (dock!.querySelector(".library-composer-target") ?? dock!.querySelector(".composer-mode-picker"))!.getBoundingClientRect();
+      const project = (dock!.querySelector(".library-composer-target") ?? dock!.querySelector(".composer-mode-picker > button"))!.getBoundingClientRect();
+      // This child effect can run before the parent mounts EditorView on a mode switch.
+      const writingHost = dock!.querySelector<HTMLElement>(".composer-description")!;
+      const writingLeft = writingHost.getBoundingClientRect().left + parseFloat(getComputedStyle(writingHost).paddingLeft);
       left = bounds.left; top = Math.min(box.top, project.top) - 70;
       width = bounds.width; height = Math.max(1, Math.min(innerHeight, bounds.bottom + 24) - top);
       Object.assign(root!.style, { left: `${left - box.left}px`, top: `${top - box.top}px`, width: `${width}px`, height: `${height}px` });
       canvas.width = width * scale; canvas.height = height * scale;
       context.setTransform(scale, 0, 0, scale, 0, 0);
       const t = (project.left + project.width / 2 - left) / width;
-      const bow = Math.min(60, width * .05);
-      const y = project.top + Math.min(project.height, 27) / 2 - top + 4 * bow * t * (1 - t);
+      const bow = Math.min(36, width * .05);
+      const y = project.top + project.height / 2 - top + 4 * bow * t * (1 - t);
       const path = `M0 ${y} Q${width / 2} ${y - 2 * bow} ${width} ${y}`;
       arc.setAttribute("d", path);
       arc.closest("svg")!.setAttribute("viewBox", `0 0 ${width} ${height}`);
-      const mask = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><defs><filter id="f"><feGaussianBlur stdDeviation="12.5"/></filter></defs><path d="${path} L${width + 50} ${height + 50} L-50 ${height + 50}Z" fill="white" filter="url(#f)"/></svg>`;
+      // The same mask softens blur, tint and dots; outside the writing area the library stays visible.
+      const start = writingLeft - left - 72, end = box.right - left + 56;
+      const span = end - start;
+      const mask = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><defs><filter id="f"><feGaussianBlur stdDeviation="12.5"/></filter><linearGradient id="s" gradientUnits="userSpaceOnUse" x1="${start}" x2="${end}"><stop stop-color="white" stop-opacity="0"/><stop offset="${96 / span}" stop-color="white"/><stop offset="${1 - 96 / span}" stop-color="white"/><stop offset="1" stop-color="white" stop-opacity="0"/></linearGradient><mask id="v"><path d="${path} L${width + 50} ${height + 50} L-50 ${height + 50}Z" fill="white" filter="url(#f)"/></mask></defs><rect width="100%" height="100%" fill="url(#s)" mask="url(#v)"/></svg>`;
       surface.style.maskImage = canvas.style.maskImage = `url("data:image/svg+xml,${encodeURIComponent(mask)}")`;
       hint.style.top = `${y - bow + 9}px`;
+      const writingTop = writingHost.getBoundingClientRect().top - top;
+      const groups = [
+        { x: Math.max(26, project.left - left - 105), y: writingTop + 72 },
+        { x: box.right - left - 180, y: writingTop + 60 },
+        { x: Math.min(width - 60, box.right - left + 25), y: writingTop + 96 },
+      ];
+      clusters.forEach((cluster, index) => Object.assign(cluster.style, { left: `${groups[index].x}px`, top: `${groups[index].y}px` }));
       color = getComputedStyle(root!).getPropertyValue("--projection-dot").trim();
       draw();
     }
@@ -64,7 +80,6 @@ export function ComposerProjection({ dockRef }: { dockRef: RefObject<HTMLElement
       if (timer) clearInterval(timer);
       timer = undefined;
       const paused = document.hidden || !visible || reduced.matches;
-      root!.classList.toggle("is-paused", paused);
       if (!paused) timer = setInterval(draw, 70);
       if (visible && !document.hidden) draw();
     }
@@ -92,8 +107,11 @@ export function ComposerProjection({ dockRef }: { dockRef: RefObject<HTMLElement
   return <div ref={rootRef} className="composer-projection" aria-hidden="true">
     <div className="composer-projection-surface" />
     <canvas className="composer-projection-dots" />
-    {depths.map((depth, index) => <svg key={depth} className={`composer-cross-matrix depth-${index}`} viewBox="0 0 118 65">
-      {crosses.map(({ x, y }) => <path key={`${x}-${y}`} d={`M${x - 2} ${y - 2}l4 4m0 -4l-4 4`} />)}
+    {matrices.map(({ columns, rows, size }, index) => <svg key={index} className={`composer-cross-matrix depth-${index}`} width={columns * 13} height={rows * 13} viewBox={`0 0 ${columns * 13} ${rows * 13}`}>
+      {Array.from({ length: columns * rows }, (_, point) => {
+        const x = 6 + point % columns * 13, y = 6 + Math.floor(point / columns) * 13;
+        return <path key={point} d={`M${x - size} ${y - size}l${size * 2} ${size * 2}m0 ${-size * 2}l${-size * 2} ${size * 2}`} />;
+      })}
     </svg>)}
     <svg className="composer-projection-arc" preserveAspectRatio="none"><path /></svg>
     <span className="composer-reference-hint">双击添加素材</span>

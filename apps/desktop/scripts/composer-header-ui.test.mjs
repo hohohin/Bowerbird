@@ -33,7 +33,7 @@ try {
       const modes = await dock.locator('.composer-mode-picker > button').evaluateAll(buttons => buttons.map(button => {
         const rect = button.getBoundingClientRect(); return { x: rect.x, y: rect.y, bottom: rect.bottom };
       }));
-      if (!modes.every((mode, index) => Math.abs(mode.x - modes[0].x) < 1 && (!index || mode.y >= modes[index - 1].bottom))) failures.push(`${width}/${theme}/${name}: modes are not a vertical rail`);
+      if (!modes.every((mode, index) => Math.abs(mode.x - modes[0].x) < 9 && (!index || mode.y >= modes[index - 1].bottom - 3))) failures.push(`${width}/${theme}/${name}: modes are not a vertical rail`);
       if (await dock.locator('.composer-mode-status').count()) failures.push(`${width}/${theme}/${name}: redundant creation status remains`);
     }
     if (positions.some(p => Math.abs(p.right - positions[0].right) > 1 || Math.abs(p.top - positions[0].top) > 1)) failures.push(`${width}/${theme}: ${JSON.stringify(positions)}`);

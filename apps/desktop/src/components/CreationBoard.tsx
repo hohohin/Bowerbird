@@ -1453,7 +1453,7 @@ export function CreationBoard({
           {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。
               flex：比例 / 生成选项两个选择器水平并排（外层缺 flex 时 block 根会竖着叠成
               两行，按钮挤在同一列）。 */}
-          {!terminalAgent && !isVideo && <div className="flex shrink-0 items-center gap-2">
+          {!terminalAgent && !isVideo && <div className="composer-image-options flex shrink-0 items-center gap-2">
             {!isVideo && <RatioSelect value={ratio} onChange={selectRatio} />}
             {countSupported && (
               <ImageGenOptions

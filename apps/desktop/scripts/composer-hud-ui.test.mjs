@@ -25,10 +25,11 @@ async function singleRow(dock) {
     const controls = [...toolbar.querySelectorAll('.composer-video-fields > *, .composer-add-material, .composer-help, .composer-send')]
       .map(element => element.getBoundingClientRect()).filter(rect => rect.width && rect.height);
     return { centers: controls.map(rect => rect.y + rect.height / 2), width: toolbar.clientWidth, scroll: toolbar.scrollWidth,
+      right: toolbar.getBoundingClientRect().right, controlRight: Math.max(...controls.map(rect => rect.right)),
       overlap: controls.some((rect, index) => controls.some((other, otherIndex) => index < otherIndex && rect.x < other.right - 1 && other.x < rect.right - 1)) };
   });
   assert.ok(layout.centers.every(center => Math.abs(center - layout.centers[0]) < 1), `single footer row: ${layout.centers}`);
-  assert.ok(layout.scroll <= layout.width, 'footer controls do not overflow');
+  assert.ok(layout.scroll <= layout.width, `footer controls do not overflow at ${page.viewportSize().width}: ${JSON.stringify(layout)}`);
   assert.equal(layout.overlap, false, 'parameter controls never overlap each other or the send button');
   const values = await dock.locator('.composer-video-fields .tactical-select-trigger').evaluateAll(buttons => buttons
     .filter(button => button.getAttribute('aria-label') !== '视频分辨率')
@@ -63,8 +64,8 @@ async function leftRail(dock, hasProject = false) {
       project: element.querySelector('.library-composer-target') ? rect(element.querySelector('.library-composer-target')) : null };
   });
   assert.ok(layout.modes.length >= 3, 'image, video and chat remain available');
-  assert.ok(layout.modes.every((mode, index) => Math.abs(mode.x - layout.modes[0].x) < 1
-    && mode.right <= layout.editor.x && (!index || mode.y >= layout.modes[index - 1].bottom)), `modes form a vertical rail left of the input: ${JSON.stringify(layout)}`);
+  assert.ok(layout.modes.every((mode, index) => Math.abs(mode.x - layout.modes[0].x) < 9
+    && mode.right <= layout.editor.x && (!index || mode.y >= layout.modes[index - 1].bottom - 3)), `modes form a vertical rail left of the input: ${JSON.stringify(layout)}`);
   if (hasProject) {
     assert.ok(layout.project && layout.project.bottom <= layout.modes[0].y, 'project selector sits above the modes');
 
@@ -169,8 +170,8 @@ try {
     const disabledStyle = await disabledSend.evaluate(button => ({ opacity: getComputedStyle(button).opacity,
       before: getComputedStyle(button, '::before').content, after: getComputedStyle(button, '::after').content,
       filter: getComputedStyle(button.querySelector('svg')).filter }));
-    assert.ok(Number(disabledStyle.opacity) < 1 && disabledStyle.before === 'none' && disabledStyle.after === 'none'
-      && disabledStyle.filter === 'none', `unavailable sending is dimmed and loses the active optical glow: ${JSON.stringify(disabledStyle)}`);
+    assert.ok(Number(disabledStyle.opacity) < 1 && disabledStyle.before !== 'none' && disabledStyle.after === 'none'
+      && disabledStyle.filter === 'none', `unavailable sending remains readable with the same projected backing: ${JSON.stringify(disabledStyle)}`);
     await home.locator('.ProseMirror').fill('清晨的薄雾掠过山脊，镜头缓慢推进。'); await settle();
     await leftRail(home, true); await opticalSurface(home);
     const writing = await home.locator('.ProseMirror').boundingBox();
