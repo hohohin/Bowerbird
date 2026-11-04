@@ -20,7 +20,7 @@
 
 WebView2 的 `pushState`／`replaceState` 不触发原有加载通知。创建原生浏览器时启动唯一地址观察任务，每 500ms 读取其真实 URL，仅变化时向主窗口发送 `source-browser://location`，不改变加载状态；复用／隐藏不新增观察任务，WebView 关闭或读取失败后退出。沿用 HTTP(S) 与无内嵌凭据边界，不给远程网页增加 IPC 权限。该通知驱动地址栏及已有本机记忆，也覆盖搜图结果、Pin 和后退。
 
-Pinterest 适配只隐藏原生 `PinBetterSaveDropdown` 与 `PinBetterSaveButton`，包括后续 SPA 动态插入；其他按钮保持。探索页签改到面板垂直中央，24px 缩为 14.4px，页签／面板外壳／加载占位区共用 `--explore-panel-surface`；素材库页签尺寸保持。验证与当前开发实例生效证据见 [行动记录](../project_logs/2026-11-04-explore-memory-controls.md)。
+Pinterest 适配只隐藏原生 `PinBetterSaveDropdown` 与 `PinBetterSaveButton`，包括后续 SPA 动态插入；其他按钮保持。探索页签位于面板右边缘内侧并垂直居中，24px 缩为 14.4px，页签／面板外壳／加载占位区共用 `--explore-panel-surface`；网页 viewport 在面板内部让出 20px，现有 ResizeObserver 同步收进原生边界，保证内侧把手可见可点，且不覆盖相邻标签索引；外形同步朝内。素材库页签尺寸和位置保持。内收回归见 [记录](../project_logs/2026-11-04-explore-handle-inward.md)。验证与当前开发实例生效证据见 [行动记录](../project_logs/2026-11-04-explore-memory-controls.md)。
 
 ### 2026-11-04：Pinterest 滚动条、侧栏与探索把手（源码未发布）
 

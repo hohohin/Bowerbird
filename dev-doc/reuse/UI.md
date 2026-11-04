@@ -59,7 +59,7 @@
 ## 面板边缘把手与退出按钮
 
 - **入口／用途：** [PanelEdgeHandle.tsx](../../apps/desktop/src/components/PanelEdgeHandle.tsx) 提供与素材库一致的窄页签、ESC／退出按钮、拖动握柄和 separator 语义。
-- **实用证据：** `CanvasLibraryResize` 与 `ExploreWorkspace` 共用该组件和 `.canvas-library-*` 样式。前者仍拥有素材库的宽度、动画与持久化；后者拥有探索宽度、原生网页遮挡和关闭状态。
+- **实用证据：** `CanvasLibraryResize` 与 `ExploreWorkspace` 共用该组件和 `.canvas-library-*` 样式。前者仍拥有素材库的宽度、动画与持久化；后者拥有探索宽度、原生网页遮挡和关闭状态；探索页签由宿主 CSS 放在面板内侧，viewport 预留 20px 并沿现有尺寸观察同步原生边界。
 - **范围／状态：可跨模块复用。** 宿主提供 `grip` 的鼠标／键盘行为、宽度 ARIA 值与 `onClose`，不共用业务状态；关闭的页签通过宿主隐藏或 `collapsed` 退出 Tab 顺序。
 
 ## 记忆探索浏览器的上次网址

@@ -20,14 +20,21 @@ try{
  const tabBox=await tab.boundingBox();const panelBox=await panel.boundingBox();
  assert.ok(Math.abs(tabBox.width-14.4)<0.1,'exploration tab is 40% narrower than the 24px library tab');
  assert.ok(Math.abs(tabBox.y+tabBox.height/2-panelBox.y-panelBox.height/2)<1,'exploration tab is vertically centered');
+ assert.ok(tabBox.x+tabBox.width<=panelBox.x+panelBox.width,'the handle stays inside exploration, clear of the library letter index');
+ const shapeBox=await tab.locator('.canvas-library-tab-shape').boundingBox();
+ assert.ok(shapeBox.x+shapeBox.width<=panelBox.x+panelBox.width+0.1,'the decorative tab also stays inside');
+ const viewport=await page.locator('.source-browser-viewport').boundingBox();
+ assert.ok(viewport.x+viewport.width<=shapeBox.x+1,'the native webpage leaves the inward handle visible and clickable');
  const width=async()=>(await panel.boundingBox()).width;
  const before=await width();
  await grip.focus();await page.keyboard.press('ArrowRight');assert.equal(await width(),before+20);
  const box=await grip.boundingBox();
  await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
  await page.mouse.move(box.x+box.width/2+80,box.y+box.height/2,{steps:4});await page.mouse.up();
- assert.equal(await width(),before+100,'drag uses the initial width without a jump from the external tab');
+ assert.equal(await width(),before+100,'drag uses the initial width without a jump from the inward tab');
  await page.waitForFunction(()=>window.calls.filter(c=>c.command==='resize_source_browser').at(-1)?.args.visible===true);
+ const nativeBounds=await page.evaluate(()=>window.calls.filter(c=>c.command==='resize_source_browser').at(-1).args.bounds);
+ assert.ok(nativeBounds.x+nativeBounds.width<=(await tab.locator('.canvas-library-tab-shape').boundingBox()).x+1,'the native resize command respects the handle boundary');
  assert.equal(await page.getByRole('button',{name:'收起浏览器',exact:true}).count(),1);
  assert.equal(await page.evaluate(()=>document.querySelector('.explore-main').getBoundingClientRect().left-document.querySelector('.explore-browser').getBoundingClientRect().right),0,'no full-height strip occupies width');
  for(const theme of ['light','dark']){

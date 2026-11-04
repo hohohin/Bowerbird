@@ -861,13 +861,15 @@ html[data-theme="light"] .task-state-failed { color: #ba3c3c; }
 .explore-drop-hint { position: absolute; inset: 0; z-index: 40; pointer-events: none; display: grid; place-items: center; background: rgb(72 104 255 / 12%); color: var(--bb-blue); font-size: 14px; }
 .explore-browser { --explore-panel-surface: var(--bb-surface); position: relative; flex-shrink: 0; min-width: 320px; max-width: calc(100% - 280px); }
 .explore-browser[hidden] { display: none; }
-.explore-browser > .explore-panel-handle { left: 100%; top: 50%; width: 14.4px; transform: translateY(-50%); transition: none; }
-.explore-panel-handle .canvas-library-tab-shape { left: -4.8px; transform: scaleX(.6); transform-origin: left top; }
+.explore-browser > .explore-panel-handle { left: auto; right: 0; top: 50%; width: 14.4px; transform: translateY(-50%); transition: none; }
+.explore-panel-handle .canvas-library-tab-shape { left: 14.4px; transform: scaleX(-.6); transform-origin: left top; }
 .explore-panel-handle .canvas-library-tab-fill { fill: var(--explore-panel-surface); }
 .explore-panel-handle :is(.canvas-library-close, .canvas-library-grip) { width: 100%; }
 .explore-panel-handle :is(.canvas-library-close, .canvas-library-grip) > svg { width: 11px; }
 .explore-panel-handle .canvas-library-close-hint { font-size: 6.4px; letter-spacing: 0; }
 .explore-browser :is(.source-browser-panel, .source-browser-viewport) { background: var(--explore-panel-surface); }
+/* Reserve native WebView space for the inward tab, including its curved edge. */
+.explore-browser .source-browser-viewport { margin-right: 20px; }
 .explore-browser .source-browser-header { flex-wrap: wrap; gap: 5px; padding: 6px 8px; }
 .explore-browser .source-browser-heading { width: 100%; }
 .explore-sites { display: flex; flex-wrap: wrap; flex-shrink: 0; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--bb-line); font-size: 11px; }
