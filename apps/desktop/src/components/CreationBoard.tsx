@@ -1,7 +1,8 @@
 import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, resolveVideoOptions, videoInputError, videoModelLabel, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { LocalVideoFrames } from "./creation/LocalVideoFrames";
@@ -41,9 +42,9 @@ import { ImageGenOptions } from "./creation/ImageGenOptions";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
-import { ArrowUp, ChevronDown, History, Image, Info, Maximize2, MessageCircle, Plus, Sparkles, Video, X } from "lucide-react";
+import { ArrowUp, ChevronDown, History, Image, Info, Maximize2, MessageCircle, Palette, Plus, Sparkles, Video, X } from "lucide-react";
+import { MediaPreview } from "./MediaPreview";
 import { useTextWorkspace } from "./useTextWorkspace";
-import { useLibraryGlass } from "./useLibraryGlass";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import "./CreationBoard.css";
 
@@ -149,8 +150,11 @@ export function CreationBoard({
   chatHistoryOpen,
   resolveCreativeThread,
 }: CreationBoardProps = {}) {
-  const glass = useLibraryGlass();
   const editorLabelId = useId();
+  const profilePanelId = useId();
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileTriggerRef = useRef<HTMLButtonElement>(null);
+  const referenceStripRef = useRef<HTMLDivElement>(null);
   const editorScrollRef = useRef<HTMLDivElement>(null);
   const agentMenuRef = useRef<HTMLDivElement>(null);
   const agentTriggerRef = useRef<HTMLButtonElement>(null);
@@ -417,7 +421,10 @@ export function CreationBoard({
     function onPointerDown(event: PointerEvent) {
       const menu = event.target instanceof Element ? event.target.closest(".model-select-menu, .composer-local-frames, .comfy-environment-panel, .tactical-select-menu, .ratio-select-menu, .image-options-menu") : null;
       const ownMenu = menu && dockRef.current?.querySelector(`[aria-controls="${menu.id}"]`);
-      if (event.target instanceof Node && !dockRef.current?.contains(event.target) && !ownMenu) setCollapsed(true);
+      if (event.target instanceof Node && !dockRef.current?.contains(event.target) && !ownMenu) {
+        setCollapsed(true);
+        setProfileOpen(false);
+      }
     }
     const onWindowBlur = () => setCollapsed(true);
     window.addEventListener("pointerdown", onPointerDown, true);
@@ -429,6 +436,7 @@ export function CreationBoard({
   }, []);
   function exitCreationMode() {
     setAgentMenuOpen(false);
+    setProfileOpen(false);
     setBoardActive(false);
     const focused = document.activeElement;
     if (focused instanceof HTMLElement && dockRef.current?.contains(focused)) focused.blur();
@@ -995,7 +1003,6 @@ export function CreationBoard({
   const showAgent = !isChat && (agentSelected || (agentModeOn && cloudAgentEntitled)
     || (agentAvailable && (agentAOn || agentBOn)) || (agentZAvailable && agentZOn)
     || (agentZAvailable && codexHealth?.ok && agentGOn) || (agentDsAvailable && agentDsOn));
-  const selectedMode = isChat ? 2 : agentSelected ? (onSendChat ? 3 : 2) : isVideo ? 1 : 0;
   const agentLabel = cloudAgentMode ? "Agent" : agentZMode ? "Agent Z" : agentGMode ? "Agent G"
     : agentDsMode ? "Agent DS" : agentMode === "a" ? "Agent A" : agentMode === "b" ? "Agent B" : "Agent";
 
@@ -1008,6 +1015,7 @@ export function CreationBoard({
       <section
         ref={dockRef}
         onPointerDown={(e) => {
+          if (e.target instanceof Element && !e.target.closest(".composer-profile")) setProfileOpen(false);
           if (!(e.target instanceof Element && e.target.closest(".creation-exit-tab, .composer-expand"))) {
             setCollapsed(false);
           }
@@ -1024,24 +1032,20 @@ export function CreationBoard({
           if (!e.currentTarget.contains(e.relatedTarget as Node | null) && !ownModelMenu) {
             setCollapsed(true);
             setAgentMenuOpen(false);
+            setProfileOpen(false);
           }
         }}
         aria-label="创作板"
-        style={glass.style}
         className={`creation-dock composer-glass pointer-events-auto relative ${creating ? "is-creating" : ""} ${embedded ? "is-canvas-composer" : ""} ${
           isCollapsed ? "is-collapsed" : ""
         }`}
       >
-        {glass.definition}
         <span className="composer-hud-surface" aria-hidden="true" />
         <span className="composer-hud-optics" aria-hidden="true" />
-        <span className="composer-hud-acquire" aria-hidden="true" />
         <div className="composer-heading">
           {header}
           {header && isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
-          <div className="composer-mode-picker library-floating-surface" role="group" aria-label="创作方式"
-            style={{ "--switch-count": 2 + (onSendChat ? 1 : 0) + (showAgent ? 1 : 0), "--switch-index": selectedMode } as CSSProperties}>
-            <span className="composer-mode-thumb" aria-hidden="true" />
+          <div className="composer-mode-picker" role="group" aria-label="创作方式">
             <button type="button" aria-pressed={!isChat && !isVideo && !agentSelected} onClick={() => selectMedia("image")}><Image size={15} aria-hidden="true" />图片</button>
             <button type="button" aria-pressed={!isChat && isVideo && !agentSelected} onClick={() => selectMedia("video")}><Video size={15} aria-hidden="true" />视频</button>
             {onSendChat && <button type="button" aria-pressed={isChat} onClick={() => onComposerModeChange?.("chat")}><MessageCircle size={15} aria-hidden="true" />对话</button>}
@@ -1208,11 +1212,20 @@ export function CreationBoard({
 
             </div>}
           </div>
-          {!isChat && <div className="composer-profile"><VisualProfileSelect value={activeVisualProfileId} onChange={setActiveVisualProfile} /></div>}
-          <span className="composer-mode-status">创作模式</span>
+        </div>
+        {!isChat && !isCollapsed && <div className="composer-profile" onKeyDown={event => {
+            if (event.key === "Escape" && profileOpen) {
+              event.stopPropagation();
+              setProfileOpen(false);
+              profileTriggerRef.current?.focus();
+            }
+          }}>
+            <button ref={profileTriggerRef} type="button" className="composer-profile-trigger" aria-label="品牌规范" title="品牌规范"
+              aria-haspopup="dialog" aria-expanded={profileOpen} aria-controls={profilePanelId} onClick={() => setProfileOpen(open => !open)}><Palette size={16} aria-hidden="true" /></button>
+            {profileOpen && <div id={profilePanelId} className="composer-profile-panel app-popover" role="dialog" aria-label="品牌规范设置"><VisualProfileSelect value={activeVisualProfileId} onChange={setActiveVisualProfile} /></div>}
+          </div>}
           <button type="button" className="composer-collapse creation-exit-tab" data-tour="board-exit"
             title="退出创作模式，收起并保留草稿" aria-label="退出创作模式" onClick={exitCreationMode}><X size={14} aria-hidden="true" /></button>
-        </div>
         {/* 用途（preset）：发送时作为基底注入；登记=把当前编辑框内容存为用途（只需用途名）。
             功能未完成，PRESET_FEATURE_ENABLED 关闭整块 UI（store 注入逻辑随之不可达）。 */}
         {PRESET_FEATURE_ENABLED && (
@@ -1358,6 +1371,17 @@ export function CreationBoard({
         )}
         {/* 编辑框：随主题切换的独立输入区；超高后内部滚动（不触发主区滚动收起）。
             获得焦点（contenteditable 冒泡）= 激活创作模式（等同旧「创作板」按钮）。 */}
+        <div ref={referenceStripRef} className="composer-references" aria-label="参考素材" hidden={isCollapsed || references.length === 0}>
+          {references.map((asset, index) => {
+            const previewPath = asset.thumb_path || asset.store_path;
+            return <button key={asset.id} type="button" className="composer-reference" data-asset-id={asset.id}
+              aria-label={`定位参考素材 ${index + 1}：${asset.name}`} title={asset.name}>
+              <MediaPreview src={previewPath ? convertFileSrc(previewPath) : undefined} videoPath={asset.store_path} asset={asset} alt={asset.name} />
+              <span className="composer-reference-index" aria-hidden="true">{String(index + 1).padStart(2, "0")}</span>
+            </button>;
+          })}
+        </div>
+        <BoardChipPreview hostRef={referenceStripRef} extraAssets={references} />
         <div className="composer-writing">
         <div className="composer-description-heading">
           <span id={editorLabelId}>{isChat ? "聊聊你的创作想法" : "创作描述"}</span>
