@@ -15,7 +15,10 @@ import "../../../src/components/IndustrialMenus.css";
 
 const w = window as any;
 const picture = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="180"><rect width="240" height="180" fill="#8797b5"/></svg>');
-const assets = ["image", "offscreen", "audio"].map(id => ({ id, name: id, store_path: `C:/original/${id}.${id === "audio" ? "wav" : "png"}`, ext: id === "audio" ? "wav" : "png", source: "external", width: 240, height: 180, thumb_path: picture })) as Asset[];
+const assets = ["image", "offscreen", "audio", "text", "video"].map(id => {
+  const ext = ({ audio: "wav", text: "md", video: "mp4" } as Record<string, string>)[id] ?? "png";
+  return { id, name: id, store_path: `C:/original/${id}.${ext}`, ext, source: "external", width: 240, height: 180, thumb_path: picture };
+}) as Asset[];
 w.calls = []; w.drops = []; w.ended = 0; w.selected = ["image", "offscreen", "image"];
 w.isTauri = true;
 const callbacks = new Map(); let callbackId = 0;
@@ -48,16 +51,18 @@ function Preview() {
     <div style={{ width: 240 }}>
       {assets.filter(asset => asset.id !== "offscreen").map(asset => <FileMediaCard key={asset.id} assetId={asset.id}
         entry={{ path: asset.store_path!, name: asset.name, directory: false, preview: picture }} selected={false} revision={0} labels={[]}
-        onOpen={() => {}} onSelect={() => {}} onContextMenu={() => w.openMenu([asset.id])}
-        onDragStart={event => { const ids = asset.id === "image" ? w.selected : [asset.id]; setDragAssets(ids, asset.name, picture); event.dataTransfer.setData("text/plain", ids.join(",")); }}
+        onOpen={() => { w.opened = (w.opened ?? 0) + 1; }} onSelect={() => { w.selectedClicks = (w.selectedClicks ?? 0) + 1; }} onContextMenu={() => w.openMenu([asset.id])}
+        dragAssetIds={() => asset.id === "image" ? w.selected : [asset.id]}
         onDragEnd={() => setDragAssets(null)}/>) }
       <FileMediaCard entry={{ path: "C:/original", name: "folder", directory: true }} selected={false} revision={0} labels={[]}
         onOpen={() => {}} onSelect={() => {}} onContextMenu={() => {}}/>
     </div>
     <div id="internal-target" style={{ padding: 40 }} onDragOver={event => { if (getDragAssets()?.length) event.preventDefault(); }}
       onDrop={event => { const ids = getDragAssets(); if (!ids?.length) return; event.preventDefault(); w.drops.push([...ids]); setDragAssets(null); }}>内部放置</div>
-    <div style={{ height: 300 }}><ConnectedCollections/></div>
+    <div style={{ height: 300, position: "relative" }}><ConnectedCollections/></div>
     <AssetContextMenu/><FileDropImport/><ToastViewport/>
   </div>;
 }
-createRoot(document.getElementById("root")!).render(<Preview/>);
+const root = createRoot(document.getElementById("root")!);
+w.unmount = () => root.unmount();
+root.render(<Preview/>);

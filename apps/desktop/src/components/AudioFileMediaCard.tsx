@@ -6,10 +6,11 @@ import { LibrarySelectionMark } from "./LibrarySelectionMark";
 import { videoDurationLabel } from "./VideoHoverPreview";
 import "./AudioFileMediaCard.css";
 
-export function AudioFileMediaCard({ entry, assetId, expectedVersion, selected, revision, onActivate, onSelect, onOpen, onContextMenu, onDragStart, onDragEnd, style, duration }: FileMediaCardProps) {
+export function AudioFileMediaCard({ entry, assetId, expectedVersion, selected, revision, onActivate, onSelect, onOpen, onContextMenu, onPointerDown, onDragStart, onDragEnd, style, duration }: FileMediaCardProps) {
   const [seconds, setSeconds] = useState(duration);
   useEffect(() => setSeconds(duration), [duration, entry.path, entry.version]);
   return <div role="group" tabIndex={0} className={`folder-media-card audio-file-card${selected ? " is-selected" : ""}`}
+    onPointerDown={onPointerDown}
     style={style} data-positioned={style ? "true" : undefined} data-asset-id={assetId} data-file-path={entry.path} aria-label={entry.name}
     draggable={!!onDragStart} onDragStart={onDragStart} onDragEnd={onDragEnd}
     onClick={event => { if (!event.defaultPrevented) onSelect(event.ctrlKey || event.metaKey, event.shiftKey); }}

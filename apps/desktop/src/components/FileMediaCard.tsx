@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEventHandler, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type DragEventHandler, type PointerEventHandler, type CSSProperties } from "react";
 import { convertFileSrc, isTauri } from "@tauri-apps/api/core";
 import { Folder, Image, Play, Sparkles } from "lucide-react";
 import { externalFiles, type LocalFileEntry } from "../lib/externalFiles";
@@ -11,8 +11,9 @@ import { isAudioPath } from "../lib/audioMedia";
 import { AudioFileMediaCard } from "./AudioFileMediaCard";
 import { isTextPath } from "../lib/textMedia";
 import { TextFileMediaCard } from "./TextFileMediaCard";
-import { getDragAssets, isNativeAssetDrag } from "../lib/dragPayload";
+import { getDragAssets, isNativeAssetDrag, setDragAssets } from "../lib/dragPayload";
 import { startExternalDrag } from "../lib/externalDrag";
+import { useLibraryDragHold } from "../lib/useLibraryDragHold";
 const previews = createFilePreviewQueue(externalFiles.preview);
 export type FileMediaCardProps = {
   entry: LocalFileEntry; selected: boolean; revision: number; labels: string[];
@@ -24,12 +25,28 @@ export type FileMediaCardProps = {
   generated?: boolean;
   duration?: number | null;
   expectedVersion?: string;
+  dragAssetIds?: () => string[];
+  onPointerDown?: PointerEventHandler<HTMLElement>;
   assetId?: string; onDragStart?: DragEventHandler<HTMLElement>; onDragEnd?: DragEventHandler<HTMLElement>;
 };
 export function FileMediaCard(props: FileMediaCardProps) {
-  const onDragStart: DragEventHandler<HTMLElement> | undefined = props.onDragStart && (event => {
+  function prepareDrag(element: HTMLElement) {
+    if (isNativeAssetDrag()) return null;
+    const ids = props.dragAssetIds?.();
+    if (!ids?.length) return null;
+    setDragAssets(ids, props.entry.name, element.querySelector("img")?.src);
+    return ids;
+  }
+  const hold = useLibraryDragHold(`${props.assetId}:${props.entry.path}`, isTauri() && !props.entry.directory && !isTextPath(props.entry.path) && props.assetId && props.dragAssetIds ? prepareDrag : undefined);
+  const onDragStart: DragEventHandler<HTMLElement> | undefined = (props.dragAssetIds || props.onDragStart) && (event => {
+    if (hold.deferDragStart(event)) return;
     if (isNativeAssetDrag()) { event.preventDefault(); return; }
-    props.onDragStart?.(event);
+    if (props.dragAssetIds) {
+      const ids = prepareDrag(event.currentTarget);
+      if (!ids) { event.preventDefault(); return; }
+      event.dataTransfer.effectAllowed = "copyLink";
+      event.dataTransfer.setData("text/plain", ids.join(","));
+    } else props.onDragStart?.(event);
     const ids = getDragAssets();
     if (event.defaultPrevented || !isTauri() || props.entry.directory || !props.assetId || !ids?.length) return;
     event.preventDefault();
@@ -40,10 +57,10 @@ export function FileMediaCard(props: FileMediaCardProps) {
   return !props.entry.directory && isTextPath(props.entry.path)
     ? <TextFileMediaCard {...props} onDragStart={onDragStart}/>
     : !props.entry.directory && isAudioPath(props.entry.path)
-    ? <AudioFileMediaCard {...props} onDragStart={onDragStart}/>
-    : <VisualFileMediaCard {...props} onDragStart={onDragStart}/>;
+    ? <AudioFileMediaCard {...props} onPointerDown={hold.onPointerDown} onDragStart={onDragStart}/>
+    : <VisualFileMediaCard {...props} onPointerDown={hold.onPointerDown} onDragStart={onDragStart}/>;
 }
-function VisualFileMediaCard({ entry, selected, revision, labels, onSelect, onActivate, onOpen, onContextMenu, aspectRatio, assetId, generated = false, onDragStart, onDragEnd, style, duration }: FileMediaCardProps) {
+function VisualFileMediaCard({ entry, selected, revision, labels, onSelect, onActivate, onOpen, onContextMenu, aspectRatio, assetId, generated = false, onPointerDown, onDragStart, onDragEnd, style, duration }: FileMediaCardProps) {
   const ref = useRef<HTMLButtonElement>(null);
   const [hovered, setHovered] = useState(false);
   const clickTimer = useRef<number>();
@@ -78,6 +95,7 @@ function VisualFileMediaCard({ entry, selected, revision, labels, onSelect, onAc
     return () => { alive = false; request?.cancel(); visible.disconnect(); observer.disconnect(); };
   }, [entry.path, entry.directory, entry.preview, previewKey, failedPreview]);
   return <button ref={ref} type="button" style={style} data-positioned={style ? "true" : undefined} className={`folder-media-card${selected ? " is-selected" : ""}`} aria-pressed={selected}
+    onPointerDown={onPointerDown}
     onPointerEnter={event => { if (event.pointerType !== "touch") setHovered(true); }} onPointerLeave={() => setHovered(false)}
     data-asset-id={assetId} data-file-path={!entry.directory ? entry.path : undefined} draggable={!!onDragStart} onDragStart={event => { cancelClick(); onDragStart?.(event); }} onDragEnd={onDragEnd}
     aria-label={entry.directory ? `文件夹 ${entry.name}` : entry.name} title={[entry.path, labels.map(name => `#${name}`).join(" · ")].filter(Boolean).join("\n")}

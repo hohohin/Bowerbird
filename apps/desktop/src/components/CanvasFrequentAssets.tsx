@@ -212,7 +212,7 @@ export function CanvasFrequentAssets({ library, projectId, picking, onPickingCha
               selected={false} revision={0} labels={[]} assetId={asset.id} aspectRatio={1}
               onSelect={() => { if (!onInsertAsset) void activate(asset); }} onActivate={() => void activate(asset)} onOpen={() => onInsertAsset ? onInsertAsset(asset) : openDetail(asset)}
               onContextMenu={(x,y) => (onAssetContextMenu ?? useStore.getState().openContextMenu)(x,y,asset.id,{ asset, singleAsset: true })}
-              onDragStart={event => { setDragAssets([asset.id], asset.name, event.currentTarget.querySelector("img")?.src); event.dataTransfer.effectAllowed = "copy"; event.dataTransfer.setData("text/plain", asset.id); }}
+              dragAssetIds={() => [asset.id]}
               onDragEnd={() => setDragAssets(null)}/>
             <button type="button" className="canvas-frequent-remove" disabled={busy}
               aria-label={`${row === "frequent" ? "移除常用素材" : "移除固定素材"} ${asset.name}`}

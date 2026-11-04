@@ -3,7 +3,7 @@ import { exceedsCanvasDragThreshold, type CanvasPoint } from "./canvasLogic.ts";
 export const CANVAS_DRAG_HOLD_MS = 600;
 
 /** One stationary press can become an outgoing drag; movement ends that eligibility. */
-export function createCanvasDragHold() {
+export function createCanvasDragHold(exceedsThreshold = exceedsCanvasDragThreshold) {
   let pending: { pointerId: number; point: CanvasPoint } | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const cancel = () => {
@@ -24,7 +24,7 @@ export function createCanvasDragHold() {
     },
     move(pointerId: number, point: CanvasPoint, buttons = 1) {
       if (pending?.pointerId === pointerId
-        && (!(buttons & 1) || exceedsCanvasDragThreshold(pending.point, point))) cancel();
+        && (!(buttons & 1) || exceedsThreshold(pending.point, point))) cancel();
     },
     end(pointerId: number) { if (pending?.pointerId === pointerId) cancel(); },
     cancel,

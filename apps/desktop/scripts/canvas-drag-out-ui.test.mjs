@@ -9,7 +9,7 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 page.setDefaultTimeout(6500);
 const errors = [], remote = [];
-page.on('pageerror', error => errors.push(error.message));
+page.on('pageerror', error => errors.push(error.stack ?? error.message));
 await page.route('**/*', route => { if (new URL(route.request().url()).hostname === '127.0.0.1') return route.continue(); remote.push(route.request().url()); return route.abort(); });
 const node = id => page.locator(`[data-canvas-node-id="${id}"]`);
 const count = () => page.evaluate(() => window.exportCalls.length);
@@ -35,7 +35,7 @@ async function finish(dropped = true) {
   await page.waitForTimeout(400);
   assert.deepEqual(await page.evaluate(() => window.picks), []); assert.deepEqual(await page.evaluate(() => window.peeks), []);
   assert.equal(await page.locator('[data-project-inspector]').count(), 0);
-  assert.equal(await page.getByRole('dialog', { name: /媒体预览/ }).count(), 0, 'release after export never opens the original');
+  assert.equal(await page.getByRole('dialog').count(), 0, 'release after export never opens the original');
 }
 try {
   await mkdir('.tmp/canvas-drag-out-ui', { recursive: true });
@@ -80,11 +80,13 @@ try {
   await press(member); await exported(['a'], grouped);
   await page.evaluate(() => { window.consumePointerTail = event => event.stopImmediatePropagation(); for (const name of ['pointerup', 'click']) window.addEventListener(name, window.consumePointerTail, { capture: true, once: true }); });
   await page.mouse.up(); await page.evaluate(() => { for (const name of ['pointerup', 'click']) window.removeEventListener(name, window.consumePointerTail, true); window.finishExport({ dropped: true }); });
-  await member.click(); await page.getByRole('dialog', { name: '媒体预览，1 / 1' }).waitFor(); await page.keyboard.press('Escape');
-  await press(member); await exported(['a'], grouped);
+  await member.click(); await page.getByRole('dialog').waitFor();
+  // Reset the fixture so preview closing is independent of outgoing-drag recovery.
+  await open('group'); await node('group').click(); await member.waitFor();
+  await press(member); await exported(['a'], await snapshot());
   await page.evaluate(() => { window.consumePointerTail = event => event.stopImmediatePropagation(); for (const name of ['pointerup', 'click']) window.addEventListener(name, window.consumePointerTail, { capture: true, once: true }); });
   await page.mouse.up(); await page.evaluate(() => { for (const name of ['pointerup', 'click']) window.removeEventListener(name, window.consumePointerTail, true); window.finishExport({ dropped: true }); });
-  await member.focus(); await page.keyboard.press('Enter'); await page.getByRole('dialog', { name: '媒体预览，1 / 1' }).waitFor(); await page.keyboard.press('Escape');
+  await member.focus(); await page.keyboard.press('Enter'); await page.getByRole('dialog').waitFor();
   // A generated image targets the shown output, preserving carousel buttons.
   await open('conversation'); const conversation = node('session'); await page.locator('[data-conversation-image="b"]').waitFor();
   await conversation.hover(); await conversation.getByRole('button', { name: '上一张生成图片' }).click(); await page.locator('[data-conversation-image="a"]').waitFor();

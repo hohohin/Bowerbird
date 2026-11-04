@@ -10,6 +10,14 @@
 
 验证：18 项原生、17 项正式桥及正式 Canvas 回归通过，包含实际 Shell 缩略图数据写入；Mac 编译／真机、真实跨应用视觉仍待验，未更新安装包。详细失败／修复与类型检查边界见 [日志](../project_logs/2026-11-03-external-drag-hud.md)。
 
+## 2026-11-04：素材库原地长按反馈
+
+- 图片、视频和音频卡片非播放控件区域，主键原地按住 600ms、位移不超过 4px 时立即进入外拖状态；共用已确认 HUD 与两帧绘制等待，无需先移动到窗口外。新手势不新增文件复制、预览解码或原生协议；文本目前不在后台允许的外拖类型中，不展示这项长按状态。
+- `FileMediaCard.dragAssetIds` 在手势交接时取得当前完整选择；`VirtualCatalog`、`ConnectedCollections`、`CanvasFrequentAssets` 共用。集合仍拒绝失联条目或尚未完整读取的多选，不退化成仅拖出可见部分。`useLibraryDragHold` 复用原 600ms 控制器，仅库内将 4px 本身视为可接受微抖；画板原有达到 4px 取消规则保留。
+- 浏览器可能在恰好 4px 时提前发出 HTML dragstart；此时延迟该事件，继续等待长按。若之后移动超过 4px，直接交给已有普通原生拖动，不要求松开重试，也不会再触发本次长按。
+- 长按显式传 `externalOnly: true`，停留在本窗也持续显示 HUD，投回本应用取消。普通直接拖动保持自动隐藏提示以展示内部落点的行为。松手、Esc、失焦、滚动、丢失按键、隐藏／卸载等取消规则复用原会话边界；尾随鼠标点击被拦截，下一次新按压和键盘激活保持可用。
+- 实现与验证见 [记录](../project_logs/2026-11-04-library-drag-hold.md)。浏览器使用真实组件与控制 IPC；Windows／Mac 原生投放仍须分别验收，未重启或更新用户程序。
+
 ## 画布长按
 
 - 原地按住鼠标主键 600ms 后，将普通画布手势交给系统文件拖动；保持按住移到其他应用，松手投放，Esc 取消。按下后达到既有 4px 屏幕移动阈值立即走画布移动；即使回到原位或途中停顿，本次按压也不再触发长按。
@@ -21,7 +29,7 @@
 ## 接口与原件
 
 - `start_external_drag({ assetIds, mode, sessionId })` 仅接受主 WebView 调用。素材库和画布长按均使用 `hold`；后台保留旧 `pickup` 协议以兼容既有调用，正式画布已无该入口。每次 sessionId 独立。
-- 前端 `startExternalDrag(ids, mode, { source, signal, sourceRect })` 默认来源为素材库；`FileMediaCard` 与画布均传入源素材边界，共用 HUD 和两帧绘制等待。画布另传 `source: "canvas"`、生命周期取消 signal，并拦截同窗投递。
+- 前端 `startExternalDrag(ids, mode, { source, signal, sourceRect, externalOnly })` 默认来源为素材库；`FileMediaCard` 与画布均传入源素材边界，共用 HUD 和两帧绘制等待。画布传 `source: "canvas"`，素材库长按传 `externalOnly: true`，两者均拦截同窗投递；素材库普通直接拖动保留同窗目标及清晰显示。生命周期取消仍传 signal。
 - `cancel_pending_external_drag` 返回 bool：true 确认该请求不会再进入原生拖动，可提前恢复界面；false 表示已经交给系统，外拖反馈生命周期持续到原生完成（素材库同窗悬停期间暂时隐藏）。只取消对应尚未开始的手势，支持取消先到、启动后到；不干预已交给系统的拖放。确认取消后不再吞掉新操作的 Esc，不弹出旧准备请求迟到的错误；载荷锁仍等待原启动调用终态释放。松手、Esc、失焦和终态的取消／清理规则不因两种来源共用 HUD 而改变。
 - `core/external_drag.rs` 从数据库解析所选素材的当前原件，保留选择顺序、合并重复路径。失效身份、缺失原件或非法文件拒绝整个拖动。
 - 连接分身使用现有 Asset ID，因此输出原件，不输出 `.bowerbird` 描述文件。缩略图不作为交付内容。解析不解码媒体、不复制、不移动或删除原文件。
@@ -48,9 +56,9 @@
 
 库内继续沿用 `dragPayload` 的 Asset IDs，HTML 自定义 MIME 不是身份来源。系统拖动期间不得因 HTML 早期 `dragend` 清掉身份；原生结束后才清理临时状态，保留素材栏既有收起偏好。Windows 已实测原生 Files 拖回同一 WebView 的 DOM drop 先于 IPC complete，身份能保留到投放完成。集合树和旧侧栏在原生拖动时接受 Copy 协议，内部建立分身／集合的业务不变。
 
-素材库来源在同窗 `dragenter`／`dragover` 时将现有遮罩设为 `visibility:hidden`，使集合名称、画板目标及落点提示清晰；离窗 `dragleave`（无 `relatedTarget`）恢复反馈。不销毁 HUD、不释放载荷或改变投递事件。`SourceBrowserPanel` 已忽略不可见遮罩并观察样式变化，探索子 WebView 随之恢复；只设 `opacity:0` 不满足该契约。
+素材库普通直接拖动在同窗 `dragenter`／`dragover` 时将现有遮罩设为 `visibility:hidden`，使集合名称、画板目标及落点提示清晰；离窗 `dragleave`（无 `relatedTarget`）恢复反馈。不销毁 HUD、不释放载荷或改变投递事件。原地长按显式进入外拖时不隐藏遮罩。`SourceBrowserPanel` 已忽略不可见遮罩并观察样式变化，探索子 WebView 随之恢复；只设 `opacity:0` 不满足该契约。
 
-画布长按触发后，通过 window capture 拒绝投回 Bowerbird 的 dragover/drop（dropEffect:none），不走素材库的内部分身／画布插入逻辑。该拦截不影响素材库直接拖出的内部投递。第三方拒绝文件、用户取消或原件失效都不改变画布和素材库记录。旧原生请求迟到完成时，不清掉用户之后开始的普通画布移动目标。
+画布或素材库原地长按触发后，通过 window capture 拒绝投回 Bowerbird 的 dragover/drop（dropEffect:none），不走素材库的内部分身／画布插入逻辑。该拦截不影响素材库直接拖出的内部投递。第三方拒绝文件、用户取消或原件失效都不改变画布和素材库记录。旧原生请求迟到完成时，不清掉用户之后开始的普通画布移动目标。
 
 ## 验证记录
 

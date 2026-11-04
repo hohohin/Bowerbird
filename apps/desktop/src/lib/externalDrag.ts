@@ -8,7 +8,7 @@ export const EXTERNAL_DRAG_ENDED = "bowerbird:external-drag-ended";
 
 /** The backend resolves registered IDs to originals; no temporary copies or renderer paths. */
 export async function startExternalDrag(assetIds: string[], mode: "hold" | "pickup",
-  { source = "library", signal, sourceRect }: { source?: "library" | "canvas"; signal?: AbortSignal; sourceRect?: DOMRect } = {}): Promise<void> {
+  { source = "library", signal, sourceRect, externalOnly = false }: { source?: "library" | "canvas"; signal?: AbortSignal; sourceRect?: DOMRect; externalOnly?: boolean } = {}): Promise<void> {
   if (!isTauri() || signal?.aborted) return;
   const ids = [...new Set(assetIds.filter(Boolean))];
   const release = holdNativeDragAssets(ids, getDragAssetName() ?? undefined, getDragAssetPreview());
@@ -20,6 +20,7 @@ export async function startExternalDrag(assetIds: string[], mode: "hold" | "pick
   let backdrop: HTMLDivElement | null = null;
   let unmountHud: (() => void) | undefined;
   let cancelPaint: (() => void) | undefined;
+  const internalTargets = source === "library" && !externalOnly;
   const blockInternalDrop = (event: DragEvent) => {
     event.preventDefault(); event.stopImmediatePropagation();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
@@ -64,7 +65,7 @@ export async function startExternalDrag(assetIds: string[], mode: "hold" | "pick
     window.addEventListener("blur", cancelPending);
   }
   try {
-    if (source === "canvas") {
+    if (!internalTargets) {
       window.addEventListener("dragover", blockInternalDrop, true);
       window.addEventListener("drop", blockInternalDrop, true);
     }
@@ -73,7 +74,7 @@ export async function startExternalDrag(assetIds: string[], mode: "hold" | "pick
 
     document.body.append(backdrop);
     unmountHud = mountExternalDragHud(backdrop, sourceRect);
-    if (source === "library") {
+    if (internalTargets) {
       window.addEventListener("dragenter", showInternalTargets, true);
       window.addEventListener("dragover", showInternalTargets, true);
       window.addEventListener("dragleave", leaveInternalTargets, true);
