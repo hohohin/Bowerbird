@@ -37,7 +37,6 @@ try {
     const alpha = (x, y = probe.height - 30) => ctx.getImageData(Math.max(0, Math.min(probe.width - 1, Math.round(x))), Math.max(0, Math.min(probe.height - 1, Math.round(y))), 1, 1).data[3];
     const railX = tags[0].left + tags[0].width / 2 - field.left;
     const middleX = (tags[0].left + element.getBoundingClientRect().right) / 2 - field.left;
-    const boundary = x => Array.from({ length: probe.height }, (_, y) => y).find(y => alpha(x, y) >= 128);
     const arc = element.querySelector('.composer-projection-arc path');
     const arcY = x => {
       let low = 0, high = arc.getTotalLength();
@@ -48,14 +47,21 @@ try {
       left: alpha(tags[0].left - field.left - 140), right: alpha(element.getBoundingClientRect().right - field.left + 140),
       center: alpha(writing.left + writing.width / 2 - field.left),
       tags: tags.map(box => alpha(box.left + box.width / 2 - field.left, box.top + box.height / 2 - field.top)),
-      maskRise: boundary(railX) - boundary(middleX), lineRise: arcY(railX) - arcY(middleX),
+      above: [railX, middleX, element.getBoundingClientRect().right - field.left - 50].map(x => alpha(x, arcY(x) - 24)),
+      arcLeft: arc.getPointAtLength(0).x + field.left, arcRight: arc.getPointAtLength(arc.getTotalLength()).x + field.left,
+      tagLeft: tags[0].left, dockRight: element.getBoundingClientRect().right,
+      writingGap: writing.left - Math.max(...tags.slice(1).map(box => box.right)),
+      sideFade: Array.from({ length: 12 }, (_, i) => alpha(tags[0].left - field.left - 80 + i * 20)),
       gap: parseFloat(getComputedStyle(element.querySelector('.composer-mode-picker')).gap) };
   });
   assert.equal(projection.blur, 'blur(14.4px) saturate(0.72)', 'background blur is reduced by 20%');
   assert.ok(projection.left < 8 && projection.right < 8, `materials beside the composer remain clear: ${JSON.stringify(projection)}`);
   assert.ok(projection.center > 240, 'feathering preserves the reading area');
-  assert.ok(projection.tags.every(alpha => alpha > 210), `curved blur covers all left tags: ${JSON.stringify(projection)}`);
-  assert.ok(projection.maskRise > projection.lineRise + 20, 'blur bends more deeply than the upper HUD line');
+  assert.ok(projection.above.every(alpha => alpha < 8), `blur stays below the arc: ${JSON.stringify(projection)}`);
+  assert.ok(projection.arcLeft >= projection.tagLeft - 50 && projection.arcRight <= projection.dockRight + 40, 'HUD arc stays local to the composer');
+  assert.ok(projection.writingGap >= 16 && projection.writingGap <= 48, `mode tags sit close to the input: ${projection.writingGap}`);
+  assert.ok(projection.sideFade.some(alpha => alpha > 30 && alpha < 220)
+    && projection.sideFade.every((alpha, i, values) => !i || Math.abs(alpha - values[i - 1]) < 70), 'side blur dissolves gradually rather than ending at a vertical edge');
   assert.ok(Math.abs(projection.gap - 3.312) < .1, 'rail spacing matches the approved preview');
   assert.ok((await editor.boundingBox()).height <= 36, 'empty input has one line, with no reserved reference height');
   const oneLine = (await dock.boundingBox()).height;

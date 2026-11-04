@@ -211,10 +211,10 @@ html[data-theme] .library-composer .creation-dock.composer-glass { margin-bottom
 .composer-projection { position:absolute;z-index:-1;pointer-events:none; }
 .composer-projection-surface,.composer-projection-dots,.composer-projection-arc { position:absolute;inset:0;width:100%;height:100%;pointer-events:none; }
 .composer-projection-surface {
-  background:linear-gradient(180deg,color-mix(in srgb,var(--composer-paper) 32%,transparent),color-mix(in srgb,var(--composer-paper) 88%,transparent));
+  background:linear-gradient(180deg,color-mix(in srgb,var(--composer-paper) 12%,transparent),color-mix(in srgb,var(--composer-paper) 68%,transparent));
   backdrop-filter:blur(14.4px) saturate(.72);-webkit-backdrop-filter:blur(14.4px) saturate(.72);
 }
-.composer-projection-arc { fill:none;stroke:var(--projection-line);stroke-width:.65;opacity:.48;filter:drop-shadow(0 0 3px #4868ff55); }
+.composer-projection-arc { fill:none;stroke:var(--projection-line);stroke-width:.65;opacity:.48;filter:drop-shadow(0 0 3px rgba(var(--projection-glow),.24)); }
 .composer-cross-matrix { position:absolute;fill:none;stroke:var(--projection-line);stroke-width:.85; }
 .composer-cross-matrix.depth-0 { filter:blur(.7px);opacity:.48; }
 .composer-cross-matrix.depth-1 { filter:blur(.2px);opacity:.23; }
@@ -223,12 +223,12 @@ html[data-theme="light"] .composer-cross-matrix.depth-0,html[data-theme="light"]
 html[data-theme="light"] .composer-cross-matrix.depth-1 { opacity:.5; }
 html[data-theme] .composer-projection .composer-reference-hint { position:absolute;left:50%;bottom:auto;transform:translateX(-50%);font:400 10px/16px var(--bb-font-mono,ui-monospace,Consolas,monospace);letter-spacing:.06em;color:var(--composer-muted);opacity:.78;text-shadow:none;white-space:nowrap; }
 .composer-reference-hint::before,.composer-reference-hint::after { content:"";display:inline-block;width:10px;height:2px;margin:0 7px 1px;background:linear-gradient(currentColor,currentColor) left center/5px 1px no-repeat,linear-gradient(currentColor,currentColor) right center/1px 1px no-repeat;opacity:.45; }
-html[data-theme] .composer-glass:not(.is-collapsed) .composer-heading { position:absolute;left:0;top:20px;bottom:auto;width:104px;display:flex;flex-direction:column;align-items:flex-start;flex-wrap:nowrap;gap:3.312px;padding:0;transform:perspective(520px) rotateY(18deg) rotateZ(-3deg);transform-origin:right center; }
+html[data-theme] .composer-glass:not(.is-collapsed) .composer-heading { position:absolute;left:36px;top:20px;bottom:auto;width:104px;display:flex;flex-direction:column;align-items:flex-start;flex-wrap:nowrap;gap:3.312px;padding:0;transform:perspective(520px) rotateY(18deg) rotateZ(-3deg);transform-origin:right center; }
 html[data-theme] .composer-glass .composer-mode-picker { display:flex;flex-direction:column;gap:3.312px;width:100%;height:auto;padding:0;margin:0;background:none;border:0;box-shadow:none;backdrop-filter:none; }
 html[data-theme] .composer-glass .composer-mode-picker>button,
 html[data-theme] .composer-glass .library-composer-target {
   position:relative;isolation:isolate;flex:none;display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:8px;height:25.56px;min-height:0;padding:3.78px 0;
-  border:0;border-radius:0;box-shadow:none;color:#e3e8ec;background:transparent;transform:none;
+  border:0;border-radius:0;box-shadow:none;color:#e3e8ec;background:transparent;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);transform:none;
   font-size:11.2px;line-height:18px;font-weight:400;letter-spacing:2px;text-shadow:0 0 7px #ecf4fa40;
 }
 html[data-theme] .composer-glass .composer-mode-picker>button { width:72px;opacity:1;color:#b9c3ca;text-shadow:none; }
@@ -341,7 +341,7 @@ html[data-theme] .composer-glass.is-collapsed :is(.composer-collapse,.composer-p
   html[data-theme] .composer-glass .composer-environment .environment-short { display:inline; }
 }
 @container composer (max-width:620px) {
-  html[data-theme] .composer-glass:not(.is-collapsed) .composer-heading { left:-104px; }
+  html[data-theme] .composer-glass:not(.is-collapsed) .composer-heading { left:-80px; }
   html[data-theme] .composer-glass :is(.composer-writing,.composer-toolbar,.composer-references,.composer-chat-key-hint) { --composer-rail:0px; }
   html[data-theme] .composer-glass .composer-toolbar { margin-inline:calc(var(--composer-rail) + 12px) 12px;gap:4px; }
   html[data-theme] .composer-glass .composer-parameters,.composer-image-options { gap:8px; }
@@ -354,7 +354,6 @@ html[data-theme] .composer-glass.is-collapsed :is(.composer-collapse,.composer-p
 @media (max-width:700px) {
   html[data-theme] .creation-dock.composer-glass:not(.is-collapsed) { --composer-rail:112px; }
   html[data-theme] .composer-glass:not(.is-collapsed) .composer-heading { width:98px; }
-  html[data-theme] .composer-glass:not(.is-collapsed) .library-composer-target .tactical-select-trigger { width:48px;max-width:98px; }
   html[data-theme] .composer-glass .composer-toolbar { margin-right:12px;margin-left:calc(var(--composer-rail) + 12px);gap:4px; }
   html[data-theme] .composer-glass .composer-parameters { overflow-x:auto;scrollbar-width:thin; }
 }

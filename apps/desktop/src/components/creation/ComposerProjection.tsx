@@ -49,25 +49,31 @@ export function ComposerProjection({ dockRef, collapsed }: { dockRef: RefObject<
       // This child effect can run before the parent mounts EditorView on a mode switch.
       const writingHost = dock!.querySelector<HTMLElement>(".composer-description")!;
       const project = (dock!.querySelector(".library-composer-target") ?? (collapsed ? writingHost : dock!.querySelector(".composer-mode-picker > button")))!.getBoundingClientRect();
-      left = bounds.left; top = Math.min(box.top, project.top) - 128;
+      left = bounds.left; top = Math.min(box.top, project.top) - 40;
       width = bounds.width; height = Math.max(1, Math.min(innerHeight, bounds.bottom + 24) - top);
       Object.assign(root!.style, { left: `${left - box.left}px`, top: `${top - box.top}px`, width: `${width}px`, height: `${height}px` });
       canvas.width = width * scale; canvas.height = height * scale;
       context.setTransform(scale, 0, 0, scale, 0, 0);
-      const t = (project.left + project.width / 2 - left) / width;
-      const bow = collapsed ? 10 : Math.min(36, width * .05);
+      const arcLeft = collapsed ? box.left - left - 16 : project.left - left - 36;
+      const arcRight = box.right - left + (collapsed ? 16 : 28), span = arcRight - arcLeft;
+      const t = (project.left + project.width / 2 - left - arcLeft) / span;
+      const bow = collapsed ? 8 : Math.min(32, span * .04);
       const y = collapsed ? box.top - top + 8 : project.top + project.height / 2 - top + 4 * bow * t * (1 - t);
-      const arcLeft = collapsed ? box.left - left - 24 : 0, arcRight = collapsed ? box.right - left + 24 : width;
       const path = `M${arcLeft} ${y} Q${(arcLeft + arcRight) / 2} ${y - 2 * bow} ${arcRight} ${y}`;
       arc.setAttribute("d", path);
-      arc.closest("svg")!.setAttribute("viewBox", `0 0 ${width} ${height}`);
-      // A single curved, feathered silhouette covers the rail too, without rectangular side fades.
-      const start = Math.min(project.left, box.left) - left - 72, end = box.right - left + 72;
-      const shoulder = project.top - top - 18, rise = collapsed ? 20 : Math.min(78, width * .07);
-      const cap = `M${start} ${height + 50} C${start} ${shoulder + 64} ${start + 24} ${shoulder} ${start + 48} ${shoulder} Q${(start + end) / 2} ${shoulder - 2 * rise} ${end - 48} ${shoulder} C${end - 24} ${shoulder} ${end} ${shoulder + 64} ${end} ${height + 50}Z`;
-      const mask = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><defs><filter id="f" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="12.5"/></filter></defs><path d="${cap}" fill="white" filter="url(#f)"/></svg>`;
+      const arcSvg = arc.closest("svg")!;
+      arcSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      arcSvg.style.maskImage = `linear-gradient(90deg,transparent ${arcLeft}px,#000 ${arcLeft + 72}px,#000 ${arcRight - 72}px,transparent ${arcRight}px)`;
+      // Feather inward from the local arc; the elliptical field has no vertical side boundary.
+      const curveY = (x: number) => { const position = (x - arcLeft) / span; return y - 4 * bow * position * (1 - position) + 22; };
+      const edgeLeft = curveY(-50), edgeRight = curveY(width + 50);
+      const cap = `M-50 ${edgeLeft} Q${width / 2} ${2 * curveY(width / 2) - (edgeLeft + edgeRight) / 2} ${width + 50} ${edgeRight} L${width + 50} ${height + 50} L-50 ${height + 50}Z`;
+      const cx = (arcLeft + arcRight) / 2, cy = (y - bow + height) / 2 + 20;
+      const rx = span / 2 + 110, ry = height - (y - bow) + 36;
+      const mask = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><defs><filter id="f" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="12.5"/></filter><mask id="top"><path d="${cap}" fill="white" filter="url(#f)"/></mask><radialGradient id="field" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="translate(${cx} ${cy}) scale(${rx} ${ry})"><stop stop-color="white"/><stop offset=".56" stop-color="white"/><stop offset=".78" stop-color="white" stop-opacity=".6"/><stop offset="1" stop-color="white" stop-opacity="0"/></radialGradient></defs><rect width="100%" height="100%" fill="url(#field)" mask="url(#top)"/></svg>`;
       surface.style.maskImage = canvas.style.maskImage = `url("data:image/svg+xml,${encodeURIComponent(mask)}")`;
       hint.style.top = `${y - bow + 9}px`;
+      hint.style.left = `${cx}px`;
       const writingTop = writingHost.getBoundingClientRect().top - top;
       const groups = [
         { x: Math.max(26, project.left - left - 105), y: writingTop + 72 },
