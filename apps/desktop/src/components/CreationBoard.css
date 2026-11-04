@@ -1,5 +1,5 @@
 /* Canvas composer: library glass material, with a denser writing surface. */
-:root { --composer-max-width: 1238px; --composer-width: 82%; }
+:root { --composer-max-width: 1080px; --composer-width: 68%; }
 .canvas-composer-host.composer-host-glass { padding-left: 64px; padding-right: 8px; }
 .creation-dock.composer-glass {
   --composer-fill: rgb(30 35 44 / 75%);

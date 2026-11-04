@@ -21,30 +21,39 @@ async function waitCollapsed(dock) {
   await page.waitForFunction(element => element.classList.contains('is-collapsed'), await dock.elementHandle());
 }
 async function singleRow(dock) {
-  const layout = await dock.locator('.composer-toolbar').evaluate(toolbar => ({
-    centers: [...toolbar.querySelectorAll('.composer-video-fields > *, .composer-add-material, .composer-help, .composer-send')]
-      .map(element => element.getBoundingClientRect()).filter(rect => rect.width && rect.height).map(rect => rect.y + rect.height / 2),
-    width: toolbar.clientWidth, scroll: toolbar.scrollWidth,
-  }));
+  const layout = await dock.locator('.composer-toolbar').evaluate(toolbar => {
+    const controls = [...toolbar.querySelectorAll('.composer-video-fields > *, .composer-add-material, .composer-help, .composer-send')]
+      .map(element => element.getBoundingClientRect()).filter(rect => rect.width && rect.height);
+    return { centers: controls.map(rect => rect.y + rect.height / 2), width: toolbar.clientWidth, scroll: toolbar.scrollWidth,
+      overlap: controls.some((rect, index) => controls.some((other, otherIndex) => index < otherIndex && rect.x < other.right - 1 && other.x < rect.right - 1)) };
+  });
   assert.ok(layout.centers.every(center => Math.abs(center - layout.centers[0]) < 1), `single footer row: ${layout.centers}`);
   assert.ok(layout.scroll <= layout.width, 'footer controls do not overflow');
+  assert.equal(layout.overlap, false, 'parameter controls never overlap each other or the send button');
   const values = await dock.locator('.composer-video-fields .tactical-select-trigger').evaluateAll(buttons => buttons
     .filter(button => button.getAttribute('aria-label') !== '视频分辨率')
     .map(button => { const value = button.querySelector('.tactical-select-value'); return { label: button.getAttribute('aria-label'), width: value.clientWidth, content: value.scrollWidth }; }));
   assert.ok(values.every(value => value.content <= value.width + 1), `core parameter values remain readable: ${JSON.stringify(values)}`);
+  const model = dock.locator('.composer-video-fields .model-select-name');
+  if (await model.count()) assert.ok(await model.evaluate(label => label.scrollWidth <= label.clientWidth + 1), 'the selected video model remains readable');
 }
 async function responsiveWidth(dock) {
   const widths = [];
   for (const width of [900, 1100, 1440, 1920]) {
     await page.setViewportSize({ width, height: 900 }); await settle();
     const bounds = await dock.boundingBox();
-    assert.ok(bounds.width <= Math.min(1238, width * .84) + 1, `composer keeps side space and respects its maximum: ${width} / ${bounds.width}`);
+    const available = await dock.evaluate(element => {
+      const host = element.closest('.library-composer')?.parentElement ?? element.parentElement;
+      const style = getComputedStyle(host);
+      return host.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    });
+    assert.ok(Math.abs(bounds.width - Math.min(1080, available * .68)) < 1, `composer uses 68% of available space, capped at 1080: ${available} / ${bounds.width}`);
     assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width, 'composer stays inside the resized window');
     await singleRow(dock);
     widths.push(bounds.width);
   }
   assert.ok(widths[0] < widths[1] && widths[1] < widths[2] && widths[2] <= widths[3], `composer follows window size: ${widths}`);
-  assert.ok(Math.abs(widths[3] - 1238) < 1, 'large windows stop expanding at the maximum');
+  assert.ok(Math.abs(widths[3] - 1080) < 1, 'large windows stop expanding at the maximum');
   await page.setViewportSize({ width: 1440, height: 900 }); await settle();
 }
 async function leftRail(dock, hasProject = false) {
@@ -56,7 +65,15 @@ async function leftRail(dock, hasProject = false) {
   assert.ok(layout.modes.length >= 3, 'image, video and chat remain available');
   assert.ok(layout.modes.every((mode, index) => Math.abs(mode.x - layout.modes[0].x) < 1
     && mode.right <= layout.editor.x && (!index || mode.y >= layout.modes[index - 1].bottom)), `modes form a vertical rail left of the input: ${JSON.stringify(layout)}`);
-  if (hasProject) assert.ok(layout.project && layout.project.bottom <= layout.modes[0].y, 'project selector sits above the modes');
+  if (hasProject) {
+    assert.ok(layout.project && layout.project.bottom <= layout.modes[0].y, 'project selector sits above the modes');
+    const offset = await dock.locator('.library-composer-target .tactical-select-value').evaluate(label => {
+      const range = document.createRange(); range.selectNodeContents(label);
+      const text = range.getBoundingClientRect(), tab = label.closest('.library-composer-target').getBoundingClientRect();
+      return text.x + text.width / 2 - (tab.x + tab.width / 2);
+    });
+    assert.ok(Math.abs(offset) < 1, `project text is centered in its tab: ${offset}`);
+  }
   assert.equal(await dock.locator('.composer-mode-status').count(), 0, 'redundant creation status is removed');
 }
 async function opticalSurface(dock) {
@@ -73,9 +90,15 @@ async function opticalSurface(dock) {
   assert.equal(material.closeBackground, 'rgba(0, 0, 0, 0)', 'HUD close control has a transparent face');
   assert.ok(material.textFilters.every(filter => filter === 'none'), 'optical blur does not affect the input text');
   const selected = dock.locator('.composer-mode-picker > button[aria-pressed="true"]');
-  assert.equal(await selected.evaluate(button => getComputedStyle(button).backgroundColor), 'rgba(0, 0, 0, 0)', 'selected mode uses the transparent HUD face');
-  assert.equal(await selected.evaluate(button => getComputedStyle(button, '::before').backgroundImage),
-    await dock.locator('.composer-collapse').evaluate(button => getComputedStyle(button, '::before').backgroundImage), 'selected mode and close share the cut-corner wireframe');
+  const defaults = dock.locator('.composer-mode-picker > button[aria-pressed="false"]');
+  assert.ok((await defaults.evaluateAll(buttons => buttons.map(button => getComputedStyle(button).backgroundColor))).every(color => color === 'rgba(0, 0, 0, 0)'), 'default tabs have the transparent HUD face');
+  const closeWire = await dock.locator('.composer-collapse').evaluate(button => getComputedStyle(button, '::before').backgroundImage);
+  assert.ok((await defaults.evaluateAll(buttons => buttons.map(button => getComputedStyle(button, '::before').backgroundImage))).every(wire => wire === closeWire), 'default tabs and close share the cut-corner wireframe');
+  const selectedStyle = await selected.evaluate(button => ({ background: getComputedStyle(button).backgroundImage, color: getComputedStyle(button).color, clip: getComputedStyle(button).clipPath }));
+  const sendStyle = await dock.locator('.generation-send-button').evaluate(button => ({ background: getComputedStyle(button).backgroundColor, color: getComputedStyle(button).color }));
+  assert.ok(selectedStyle.background.includes(sendStyle.background) && selectedStyle.background.startsWith('linear-gradient(225deg'), 'selected tab uses the send-button tint with its upper-right corner cut away');
+  assert.equal(selectedStyle.color, sendStyle.color, 'selected tab uses the send-button foreground');
+  assert.equal(selectedStyle.clip, 'none', 'the cut corner does not clip the keyboard focus outline');
   assert.equal(await page.locator('.creation-mode-indicator-hint').count(), 0, 'double-click hint is removed from the canvas and home top marking');
   const hint = dock.locator('.composer-reference-hint');
   assert.equal(await hint.innerText(), '双击添加参考图');
@@ -86,7 +109,8 @@ async function referenceProjection(dock, theme) {
   const editor = dock.locator('.ProseMirror');
   const ids = await page.evaluate(() => window.store.getState().assets.slice(0, 2).map(asset => asset.id).reverse());
   await editor.fill('清晨的薄雾掠过山脊，镜头缓慢推进。');
-  await editor.press('End'); await editor.press('Enter');
+  await settle();
+  await editor.press('Control+End'); await editor.press('Enter');
   await page.waitForFunction(element => {
     const paragraph = element.lastElementChild, selection = getSelection();
     return paragraph?.textContent === '' && selection?.isCollapsed && paragraph.contains(selection.anchorNode);
@@ -170,7 +194,7 @@ try {
     const writing = await home.locator('.ProseMirror').boundingBox();
     assert.ok(writing.height >= 160, `expanded input retains five lines of editable space: ${writing.height}`);
     const compact = await home.boundingBox();
-    assert.ok(compact.width <= 1440 * .84 && compact.width <= 1238, `composer leaves proportional side space: ${compact.width}`);
+    assert.ok(compact.width <= 1440 * .68 + 1 && compact.width <= 1080, `composer leaves proportional side space: ${compact.width}`);
     assert.ok(compact.height >= 393 * .68 && compact.height <= 393 * .72, `composer is 30% shorter: ${compact.height}`);
     if (theme === 'dark') {
       await home.getByRole('button', { name: '放大编辑文本', exact: true }).click();
@@ -261,6 +285,7 @@ try {
   await page.setViewportSize({ width: 900, height: 900 }); await settle(); await singleRow(canvas);
   assert.ok(await canvas.locator('.composer-toolbar').evaluate(element => element.scrollWidth <= element.clientWidth), 'canvas footer does not overflow at 900px');
   await page.emulateMedia({ forcedColors: 'active' });
+  await settle();
   assert.ok(await canvas.locator('.composer-mode-picker').evaluate(picker => {
     const selected = getComputedStyle(picker.querySelector('button[aria-pressed="true"]'));
     const other = getComputedStyle(picker.querySelector('button[aria-pressed="false"]'));

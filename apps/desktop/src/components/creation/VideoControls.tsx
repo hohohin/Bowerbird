@@ -58,7 +58,7 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
     {current?.error && <button type="button" title={userErrorMessage(current.error, "暂时无法查询可用模型，请点击重试。")} className="text-[11px] text-muted underline" onClick={() => setRefresh(value => value + 1)}>模型查询失败，重试</button>}
   </>;
   const fields = <>
-    <ModelSelect kind="视频" menuClassName={menuClassName} value={local?.options ? "local:h3" : `${channel}:${options.model_version}`} label={local?.options ? "本地部署 · H3" : videoModelLabel(options.model_version)} source={local?.options ? "local" : channel === "cloud" ? "cloud" : "personal"}
+    <ModelSelect kind="视频" menuClassName={menuClassName} value={local?.options ? "local:h3" : `${channel}:${options.model_version}`} label={local?.options ? (composer ? "H3" : "本地部署 · H3") : videoModelLabel(options.model_version)} source={local?.options ? "local" : channel === "cloud" ? "cloud" : "personal"}
       cloudBalance={entitlement ? balance : null} cloudLoggedIn={auth?.logged_in}
       options={modelOptions} onChange={selectModel} footer={composer ? status : undefined} quotaDetail={local?.options ? "本地 H3 视频，不消耗积分" : channel === "cloud" ? "使用 Bowerbird 账号积分" : "使用自有即梦账号额度，不扣 Bowerbird 积分"} />
     {local?.options ? <>
@@ -71,7 +71,7 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
       {resolutions.map(value => <option key={value} value={value}>{value}</option>)}
     </TacticalSelect>
     <TacticalSelect aria-label="视频生成模式" title={options.kind === "frames2video" ? "按参考顺序使用首帧、尾帧" : `自动识别：${options.kind === "text2video" ? "文生视频" : options.kind === "image2video" ? "单图生视频" : "多参考"}`} className={control} value={options.kind === "frames2video" ? "frames2video" : "auto"} onValueChange={value => onChange({ ...options, kind: value === "frames2video" ? "frames2video" : "text2video" })}>
-      <option value="auto">自动识别</option><option value="frames2video">首尾帧</option>
+      <option value="auto">{composer ? "自动" : "自动识别"}</option><option value="frames2video">首尾帧</option>
     </TacticalSelect>
     <label className="flex items-center gap-1 text-xs text-muted"><span className="video-duration-label">时长</span><input aria-label="视频时长（秒）" type="number" min={minDuration} max={maxDuration} step={1} className={`${control} w-16`}
       value={options.duration} onChange={event => onChange({ ...options, duration: Number(event.target.value) })} />秒</label>
