@@ -70,6 +70,29 @@ try{
       assert.equal(await resolve(page),'https://cdn.example/right.mp4');
     }finally{await page.close();}
   });
+  for(const site of ['xhs','pin'])await check(site+': indexed video survives a large reactive application state',async()=>{
+    const page=await fixture(site==='xhs'?'https://www.xiaohongshu.com/explore/note-a':'https://www.pinterest.com/pin/123456789/');
+    try{
+      await page.evaluate(({site,xhsRecord,pinRecord})=>{
+        const noise=Object.fromEntries(Array.from({length:100},(_,i)=>['r'+i,{dep:{subs:Array.from({length:100},()=>({sub:{active:true}}))}}]));
+        const ref=value=>({__v_isRef:true,dep:noise,value});
+        if(site==='xhs')window.__INITIAL_STATE__={global:noise,note:ref({noteDetailMap:ref({'note-a':{note:xhsRecord.note_card}})})};
+        else window.__PWS_DATA__={context:noise,props:{initialReduxState:{pins:{[pinRecord.id]:pinRecord}}}};
+      },{site,xhsRecord,pinRecord});
+      assert.equal(await resolve(page),'https://cdn.example/right.mp4');
+    }finally{await page.close();}
+  });
+  await check('Xiaohongshu live API codec groups use EF keys, not codec names',async()=>{
+    const page=await fixture('https://www.xiaohongshu.com/explore/note-a');
+    try{
+      await page.evaluate(()=>{
+        window.__INITIAL_STATE__={note:{noteDetailMap:{'note-a':{note:{noteId:'note-a',video:{media:{stream:{
+          EF7:[],EF4:[{videoCodec:'EF4',masterUrl:'https://cdn.example/right.mp4'}],EF5:[{videoCodec:'EF5',masterUrl:'https://cdn.example/hevc.mp4'}],EF6:[],
+        }}}}}}}};
+      });
+      assert.equal(await resolve(page),'https://cdn.example/right.mp4');
+    }finally{await page.close();}
+  });
   await check('Pinterest sibling permalink identifies only the dragged card',async()=>{
     const page=await fixture('https://www.pinterest.com/search/pins/?q=origami');
     try{
@@ -91,6 +114,8 @@ try{
   await check('unrelated note and oversized JSON never supply this video',async()=>{
     const page=await fixture('https://www.xiaohongshu.com/explore/note-a');
     try{
+      await page.evaluate(record=>{window.__INITIAL_STATE__={note:{noteDetailMap:{'note-a':{note:{...record.note_card,noteId:'note-b'}}}}};},xhsRecord);
+      await assert.rejects(resolve(page),/尚未找到/,'an indexed entry cannot override a conflicting explicit note ID');
       await page.route('**/api/feed',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({data:{items:[{...xhsRecord,id:'note-b'}]}})}));
       await page.evaluate(async()=>{await(await fetch('/api/feed')).json();});
       await assert.rejects(resolve(page),/尚未找到/);

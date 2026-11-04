@@ -138,20 +138,28 @@
     if (gesture.video.mediaKeys) fail('此视频受播放保护，无法采集。');
     return gesture;
   }
+  function unref(value) {
+    for (let depth = 0; depth < 4 && value?.__v_isRef === true; depth++) value = value.value;
+    return value;
+  }
+  function acceptIdentified(kind, id, record, accept) {
+    if (id) accept(kind, String(id), record);
+  }
   function acceptNote(node, keyId, accept) {
-    const note = node.note || node.note_card || node.noteCard || node;
-    if (!note.video) return;
+    const note = unref(node.note || node.note_card || node.noteCard || node);
+    if (!note?.video) return;
     const id = note.noteId || note.note_id || node.id || keyId;
-    if (id) accept('xhs', String(id), note);
+    acceptIdentified('xhs', id, note, accept);
   }
   function acceptPin(node, keyId, accept) {
     if (!node.videos && !node.story_pin_data) return;
     const id = node.id || keyId;
-    if (id) accept('pin', String(id), node);
+    acceptIdentified('pin', id, node, accept);
   }
   function visitRecords(value, accept) {
     const seen = new WeakSet(); let remaining = 3000;
     function visit(node, depth, keyId) {
+      node = unref(node);
       if (!node || typeof node !== 'object' || seen.has(node) || depth > 12 || remaining-- <= 0) return;
       seen.add(node);
       acceptNote(node, keyId, accept);
@@ -165,18 +173,33 @@
     visitRecords(value, (site, key, record) => { if (site === kind && key === id) result.add(record); });
     return [...result];
   }
+  function stateRecords(value, kind, id) {
+    const state = unref(value);
+    if (!state) return [];
+    // Live app state includes reactive dependency graphs and the entire feed.
+    // Read the known ID index before the bounded generic response traversal.
+    const maps = kind === 'xhs'
+      ? [unref(unref(state.note)?.noteDetailMap)]
+      : [state.pins, state.initialReduxState?.pins, state.props?.initialReduxState?.pins];
+    const indexed = maps.flatMap(map => records({[id]:unref(map)?.[id]},kind,id));
+    return indexed.length ? indexed : records(state,kind,id);
+  }
   function cacheMetadata(value) {
     // SPA routes can change before a response finishes. Index by explicit note /
     // Pin identity, not the URL at request time; analytics cannot evict videos.
     visitRecords(value, (kind, id, record) => bounded(metadata, kind + ':' + id, record, 128));
   }
+  function noteVideoUrls(video) {
+    const stream = video.media?.stream || {};
+    // The API also uses opaque codec keys (EF4/EF5). The URLs belong to the
+    // already identified note; group names are not a media format contract.
+    const variants = Object.values(stream).flatMap(group => Array.isArray(group) ? group : []);
+    const urls = variants.flatMap(item => [item?.masterUrl, item?.master_url, item?.url]);
+    return [...urls, video.url, video.playUrl].map(http).filter(Boolean).slice(0, 1);
+  }
   function videoUrls(record, kind, video) {
     if (record.is_drm || record.drm || record.video?.is_drm || record.video?.drm_type) fail('此视频受播放保护，无法采集。');
-    if (kind === 'xhs') {
-      const stream = record.video?.media?.stream || {};
-      const variants = ['h264','h265','av1'].flatMap(key => Array.isArray(stream[key]) ? stream[key] : []);
-      return [...variants.map(item => item.masterUrl || item.master_url || item.url), record.video?.url, record.video?.playUrl].map(http).filter(Boolean).slice(0, 1);
-    }
+    if (kind === 'xhs') return noteVideoUrls(record.video);
     const groups = [];
     if (record.videos?.video_list) groups.push(record.videos);
     for (const page of record.story_pin_data?.pages || []) for (const block of page.blocks || []) if (block.video?.video_list) groups.push(block.video);
@@ -203,7 +226,7 @@
       }
       const latest = metadata.get(kind + ':' + id);
       const cached = latest ? videoUrls(latest,kind,gesture.video) : [];
-      const urls = [...new Set(cached.length ? cached : states.flatMap(state => records(state,kind,id)).flatMap(record => videoUrls(record,kind,gesture.video)))];
+      const urls = [...new Set(cached.length ? cached : states.flatMap(state => stateRecords(state,kind,id)).flatMap(record => videoUrls(record,kind,gesture.video)))];
       if (urls.length === 1) return urls[0];
       if (urls.length > 1) fail('网页提供了多个视频来源，暂时无法确认本次拖动的视频。');
     }

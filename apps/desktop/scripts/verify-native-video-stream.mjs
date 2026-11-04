@@ -124,7 +124,7 @@ try{
   await source.evaluate(()=>history.pushState({},'','/changed'));
   await assert.rejects(capture(url,'stale-native'),/切换/);
   for(const [site,origin,detail,record] of [
-    ['xhs','https://www.xiaohongshu.com','/explore/note-a',{id:'note-a',note_card:{video:{media:{stream:{h264:[{master_url:'/clip.mp4'}]}}}}}],
+    ['xhs','https://www.xiaohongshu.com','/explore/note-a',{id:'note-a',note_card:{video:{media:{stream:{EF7:[],EF4:[{videoCodec:'EF4',master_url:'/clip.mp4'}],EF6:[]}}}}}],
     ['pin','https://www.pinterest.com','/pin/123456789/',{id:'123456789',videos:{video_list:{V_HLS:{url:'/hls/index.m3u8'}}}}],
   ]){
     await source.route(origin+'/**',route=>{
@@ -134,24 +134,32 @@ try{
       if(resources.has(pathname))return route.fulfill({contentType:type(pathname),body:resources.get(pathname)});
       return route.fulfill({contentType:'text/html',body:'<video id="target"></video>'});
     });
-    await main.evaluate(url=>window.__TAURI_INTERNALS__.invoke('navigate_source_browser',{url}),origin+'/');
-    await source.waitForURL(origin+'/');
-    const sourceUrl=await source.evaluate(async detail=>{
-      await new Promise(resolve=>{const xhr=new XMLHttpRequest();xhr.open('GET','/feed');xhr.responseType='json';xhr.onload=resolve;xhr.send();});
-      history.pushState({},'',detail);
-      target.src=URL.createObjectURL(new MediaSource());
-      window.__bbSourceVideo.remember(target,target.src,location.href);return target.src;
-    },detail);
-    const captured=Buffer.from(await main.evaluate(({url,pageUrl,captureId})=>window.__TAURI_INTERNALS__.invoke('smoke_capture_resource',{url,pageUrl,captureId}),{url:sourceUrl,pageUrl:origin+detail,captureId:site+'-spa-native'}),'base64');
-    if(site==='xhs')assert.deepEqual(captured,bytes,'Xiaohongshu blob resolves to complete original MP4 bytes');
-    else{
-      const output=path.join(directory,'pin-spa.mp4');await writeFile(output,captured);
-      const probe=JSON.parse(execFileSync(ffprobe,['-v','error','-show_entries','format=duration:stream=codec_type','-of','json',output],{encoding:'utf8',windowsHide:true}));
-      assert.ok(Number(probe.format.duration)>3.8&&Number(probe.format.duration)<4.2);
-      assert.deepEqual(new Set(probe.streams.map(stream=>stream.codec_type)),new Set(['video','audio']));
-      execFileSync(ffmpeg,['-hide_banner','-loglevel','error','-i',output,'-f','null','-'],{windowsHide:true});
+    for(const mode of ['response','index']){
+      await main.evaluate(url=>window.__TAURI_INTERNALS__.invoke('navigate_source_browser',{url}),origin+'/');
+      await source.waitForURL(origin+'/');
+      const sourceUrl=await source.evaluate(async({detail,site,record,mode})=>{
+        if(mode==='response')await new Promise(resolve=>{const xhr=new XMLHttpRequest();xhr.open('GET','/feed');xhr.responseType='json';xhr.onload=resolve;xhr.send();});
+        else{
+          const noise=Object.fromEntries(Array.from({length:100},(_,i)=>['r'+i,{dep:{subs:Array.from({length:100},()=>({sub:{active:true}}))}}]));
+          const ref=value=>({__v_isRef:true,dep:noise,value});
+          if(site==='xhs')window.__INITIAL_STATE__={global:noise,note:ref({noteDetailMap:ref({'note-a':{note:record.note_card}})})};
+          else window.__PWS_DATA__={context:noise,props:{initialReduxState:{pins:{[record.id]:record}}}};
+        }
+        history.pushState({},'',detail);
+        target.src=URL.createObjectURL(new MediaSource());
+        window.__bbSourceVideo.remember(target,target.src,location.href);return target.src;
+      },{detail,site,record,mode});
+      const captured=Buffer.from(await main.evaluate(({url,pageUrl,captureId})=>window.__TAURI_INTERNALS__.invoke('smoke_capture_resource',{url,pageUrl,captureId}),{url:sourceUrl,pageUrl:origin+detail,captureId:site+'-'+mode+'-native'}),'base64');
+      if(site==='xhs')assert.deepEqual(captured,bytes,'Xiaohongshu blob resolves to complete original MP4 bytes');
+      else{
+        const output=path.join(directory,'pin-spa.mp4');await writeFile(output,captured);
+        const probe=JSON.parse(execFileSync(ffprobe,['-v','error','-show_entries','format=duration:stream=codec_type','-of','json',output],{encoding:'utf8',windowsHide:true}));
+        assert.ok(Number(probe.format.duration)>3.8&&Number(probe.format.duration)<4.2);
+        assert.deepEqual(new Set(probe.streams.map(stream=>stream.codec_type)),new Set(['video','audio']));
+        execFileSync(ffmpeg,['-hide_banner','-loglevel','error','-i',output,'-f','null','-'],{windowsHide:true});
+      }
+      console.log('native site source passed: '+site+' '+mode+' blob → metadata → full video');
     }
-    console.log('native site source passed: '+site+' blob → metadata → full video');
   }
   console.log(JSON.stringify({ok:true,blobBytes:true,crossOriginCookiesWithoutCors:true,gzipDecodedLength:true,hls:!process.argv.includes('--transport-only'),separateAudio:!process.argv.includes('--transport-only'),dash:!process.argv.includes('--transport-only'),manifestBaseVerified:true,redirectedManifestRejected:true,unverifiedManifestRejected:true,manifestGuardCancelled:true,missingSegmentRejected:true,partialRejected:true,pendingHeadersCancelled:true,staleDocumentRejected:true,profiles:directory}));
 }catch(error){console.error(JSON.stringify({recentRequests:requests.slice(-18),directory}));throw error;}finally{
