@@ -28,20 +28,34 @@ try {
     const surface = element.querySelector('.composer-projection-surface');
     const field = surface.getBoundingClientRect();
     const writing = element.querySelector('.ProseMirror').getBoundingClientRect();
+    const tags = [...element.querySelectorAll('.library-composer-target, .composer-mode-picker > button')].map(node => node.getBoundingClientRect());
     const image = new Image();
     image.src = getComputedStyle(surface).maskImage.slice(5, -2);
     await image.decode();
     const probe = document.createElement('canvas'); probe.width = field.width; probe.height = field.height;
     const ctx = probe.getContext('2d'); ctx.drawImage(image, 0, 0);
-    const alpha = x => ctx.getImageData(Math.max(0, Math.min(probe.width - 1, Math.round(x))), probe.height - 30, 1, 1).data[3];
+    const alpha = (x, y = probe.height - 30) => ctx.getImageData(Math.max(0, Math.min(probe.width - 1, Math.round(x))), Math.max(0, Math.min(probe.height - 1, Math.round(y))), 1, 1).data[3];
+    const railX = tags[0].left + tags[0].width / 2 - field.left;
+    const middleX = (tags[0].left + element.getBoundingClientRect().right) / 2 - field.left;
+    const boundary = x => Array.from({ length: probe.height }, (_, y) => y).find(y => alpha(x, y) >= 128);
+    const arc = element.querySelector('.composer-projection-arc path');
+    const arcY = x => {
+      let low = 0, high = arc.getTotalLength();
+      for (let i = 0; i < 20; i++) { const mid = (low + high) / 2; if (arc.getPointAtLength(mid).x < x) low = mid; else high = mid; }
+      return arc.getPointAtLength((low + high) / 2).y;
+    };
     return { blur: getComputedStyle(surface).backdropFilter,
-      left: alpha(writing.left - field.left - 110), right: alpha(element.getBoundingClientRect().right - field.left + 110),
+      left: alpha(tags[0].left - field.left - 140), right: alpha(element.getBoundingClientRect().right - field.left + 140),
       center: alpha(writing.left + writing.width / 2 - field.left),
+      tags: tags.map(box => alpha(box.left + box.width / 2 - field.left, box.top + box.height / 2 - field.top)),
+      maskRise: boundary(railX) - boundary(middleX), lineRise: arcY(railX) - arcY(middleX),
       gap: parseFloat(getComputedStyle(element.querySelector('.composer-mode-picker')).gap) };
   });
   assert.equal(projection.blur, 'blur(14.4px) saturate(0.72)', 'background blur is reduced by 20%');
   assert.ok(projection.left < 8 && projection.right < 8, `materials beside the composer remain clear: ${JSON.stringify(projection)}`);
   assert.ok(projection.center > 240, 'feathering preserves the reading area');
+  assert.ok(projection.tags.every(alpha => alpha > 210), `curved blur covers all left tags: ${JSON.stringify(projection)}`);
+  assert.ok(projection.maskRise > projection.lineRise + 20, 'blur bends more deeply than the upper HUD line');
   assert.ok(Math.abs(projection.gap - 3.312) < .1, 'rail spacing matches the approved preview');
   assert.ok((await editor.boundingBox()).height <= 36, 'empty input has one line, with no reserved reference height');
   const oneLine = (await dock.boundingBox()).height;

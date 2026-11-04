@@ -155,6 +155,8 @@ try {
   assert.ok(Math.abs(await bottomGap(home)) < 1);
   assert.equal(await home.locator('.composer-editor-scroll .collection-scroll-viewport').evaluate(element => element.clientHeight), 36);
   assert.match(await home.locator('.ProseMirror').innerText(), /清晨的薄雾/);
+  assert.equal(await home.locator('.composer-projection-surface').count(), 1, 'collapsed entry shares the feathered projection instead of a rectangular panel');
+  assert.ok((await home.boundingBox()).height <= 56, 'collapsed project, draft and expand control form a compact single row');
   await page.screenshot({ path: `${output}/home-rest.png` });
   for (const theme of ['dark', 'light']) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);

@@ -1045,7 +1045,7 @@ export function CreationBoard({
           isCollapsed ? "is-collapsed" : ""
         }`}
       >
-        {isCollapsed ? <span className="composer-hud-surface" aria-hidden="true" /> : <ComposerProjection dockRef={dockRef} />}
+        <ComposerProjection dockRef={dockRef} collapsed={isCollapsed} />
         <div className="composer-heading">
           {header}
           {header && isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
