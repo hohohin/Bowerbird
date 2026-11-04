@@ -97,10 +97,11 @@ try {
     const bytes = await (await fetch('/clip.mp4')).arrayBuffer();
     sb.appendBuffer(bytes);
     await new Promise(resolve => sb.addEventListener('updateend', resolve, {once:true}));
+    history.pushState({}, '', '/watch/playing');
     window.__bbSourceVideo.remember(target, source, location.href);
     return window.__bbSourceVideo.resolve(source, location.href);
   });
-  assert.equal(resolved, 'https://example.com/clip.m3u8', 'the appended segment links its MSE, never the last manifest on the page');
+  assert.equal(resolved, 'https://example.com/clip.m3u8', 'the appended segment links its MSE across SPA navigation, never the last manifest on the page');
   await mse.route('**/ambiguous.m3u8', route => route.fulfill({contentType:'application/vnd.apple.mpegurl',body:'#EXTM3U\n#EXTINF:4,\nclip.mp4\n#EXT-X-ENDLIST\n'}));
   assert.match(await mse.evaluate(async () => {
     await (await fetch('/ambiguous.m3u8')).text();

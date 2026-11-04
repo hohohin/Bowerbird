@@ -175,7 +175,10 @@
     if (link) {
       try { const target = new URL(link.href); if (target.origin === location.origin) pageUrl = target.href; } catch { /* use current page */ }
     }
-    if (video) window.__bbSourceVideo?.remember(image, imageUrl, pageUrl);
+    if (video) {
+      pageUrl = window.__bbSourceVideo?.pageUrl(image, pageUrl) || pageUrl;
+      window.__bbSourceVideo?.remember(image, imageUrl, pageUrl);
+    }
     dragId = event.isTrusted && bridge.startsWith("bowerbird-explorer://")
       ? [...crypto.getRandomValues(new Uint8Array(16))].map(n => n.toString(16).padStart(2, "0")).join("") : null;
     const media = { imageUrl, pageUrl, ...(video ? { mediaKind: "video", ...(posterUrl ? { posterUrl } : {}) } : {}) };

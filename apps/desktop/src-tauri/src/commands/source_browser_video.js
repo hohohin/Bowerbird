@@ -4,7 +4,7 @@
   const fetchResource = window.fetch.bind(window);
   const objectUrls = new Map(), gestures = new Map(), manifests = new Map(), reads = new Map();
   const buffers = new WeakMap(), sourceBuffers = new WeakMap(), appended = new WeakMap();
-  const metadata = [], pending = new Set();
+  const metadata = new Map(), pending = new Set();
   const MAX_TEXT = 1024 * 1024, CHUNK = 64 * 1024;
   const fail = message => { throw new Error(message); };
   const http = raw => {
@@ -14,12 +14,13 @@
   const identity = raw => {
     try {
       const url = new URL(raw);
-      if (/(^|\.)xiaohongshu\.com$/.test(url.hostname)) return ['xhs', url.pathname.match(/\/(?:explore|discovery\/item)\/([^/]+)/)?.[1]];
-      if (/(^|\.)pinterest\.[a-z.]+$/.test(url.hostname)) return ['pin', url.pathname.match(/\/pin\/(\d+)/)?.[1]];
+      if (/(^|\.)xiaohongshu\.com$/.test(url.hostname)) return ['xhs', url.pathname.match(/\/(?:explore|search_result|discovery\/item)\/([^/]+)/)?.[1]];
+      if (/(^|\.)pinterest\.[a-z.]+$/.test(url.hostname)) return ['pin', url.pathname.match(/\/pin\/(?:[\w-]+--)?(\d+)(?:\/|$)/)?.[1]];
     } catch { /* not a supported detail page */ }
     return [];
   };
   function bounded(map, key, value, maximum = 64) {
+    map.delete(key);
     map.set(key, value);
     if (map.size > maximum) map.delete(map.keys().next().value);
   }
@@ -37,8 +38,8 @@
       return new TextDecoder().decode(bytes);
     } finally { await reader.cancel().catch(() => {}); }
   }
-  function observe(url, body, documentUrl) {
-    if (!body || location.href !== documentUrl) return;
+  function observe(url, body) {
+    if (!body) return;
     if (/^\s*#EXTM3U/.test(body) || /^\s*(?:<\?xml[^>]*>\s*)?<MPD[\s>]/i.test(body)) {
       const links = [];
       if (/^\s*#EXTM3U/.test(body)) {
@@ -67,38 +68,36 @@
           return new RegExp('^' + escaped.replace(/\\\$[^$]+\\\$/g, '[^/?]+') + '$');
         } catch { return null; }
       }).filter(Boolean);
-      bounded(manifests, url, { documentUrl, patterns }, 24);
+      bounded(manifests, url, { patterns }, 24);
     } else if (/^\s*[\[{]/.test(body)) {
-      try { metadata.push({documentUrl, value:JSON.parse(body)}); if (metadata.length > 12) metadata.shift(); } catch {}
+      try { cacheMetadata(JSON.parse(body)); } catch {}
     }
   }
-  function watch(response, documentUrl) {
+  function watch(response) {
     if (pending.size >= 8) return;
     const mime = response.headers.get('content-type') || '';
     if (!/json|mpegurl|dash\+xml/i.test(mime) && !/\.(?:m3u8|mpd)(?:[?#]|$)/i.test(response.url)) return;
-    const work = text(response.clone()).then(body => observe(response.url, body, documentUrl)).catch(() => {});
+    const work = text(response.clone()).then(body => observe(response.url, body)).catch(() => {});
     pending.add(work); void work.finally(() => pending.delete(work));
   }
   const responseBytes = Response.prototype.arrayBuffer;
   Response.prototype.arrayBuffer = async function(...args) {
-    const value = await responseBytes.apply(this, args); buffers.set(value, {url:this.url, documentUrl:location.href}); return value;
+    const value = await responseBytes.apply(this, args); buffers.set(value, {url:this.url}); return value;
   };
   window.fetch = function(...args) {
-    const documentUrl = location.href;
-    return fetchResource(...args).then(response => { try { watch(response, documentUrl); } catch {} return response; });
+    return fetchResource(...args).then(response => { try { watch(response); } catch {} return response; });
   };
   const xhrOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function(...args) {
-    const documentUrl = location.href;
     this.addEventListener('load', () => {
       try {
-        if (this.responseType === 'arraybuffer' && this.response) buffers.set(this.response, {url:this.responseURL, documentUrl});
-        if ((!this.responseType || this.responseType === 'text') && this.responseText.length <= MAX_TEXT) observe(this.responseURL, this.responseText, documentUrl);
+        if (this.responseType === 'arraybuffer' && this.response) buffers.set(this.response, {url:this.responseURL});
+        if ((!this.responseType || this.responseType === 'text') && this.responseText.length <= MAX_TEXT) observe(this.responseURL, this.responseText);
         if (this.responseType === 'json') {
-          const length = this.getResponseHeader('content-length');
-          if (length && /^\d+$/.test(length) && Number(length) <= MAX_TEXT && !this.getResponseHeader('content-encoding')) {
-            metadata.push({documentUrl, value:this.response}); if (metadata.length > 12) metadata.shift();
-          }
+          // XHR has already decoded gzip/br. Wire length is neither required
+          // nor a bound on the JSON object returned to the site.
+          const body = JSON.stringify(this.response);
+          if (body && body.length <= MAX_TEXT) cacheMetadata(this.response);
         }
       } catch {}
     }, {once:true});
@@ -122,6 +121,14 @@
     };
   }
   function sources(video) { return [video.currentSrc, video.src, ...[...video.querySelectorAll('source[src]')].map(node => node.src)]; }
+  function pageUrl(video, fallback) {
+    const [kind] = identity(location.href);
+    const card = video.closest(kind === 'pin' ? '[data-test-id="pinWrapper"]' : kind === 'xhs' ? '.note-item' : 'a[href]');
+    if (!card) return fallback;
+    const links = [...card.querySelectorAll('a[href]')].map(link => link.href).filter(url => new URL(url).origin === location.origin && identity(url)[0] === kind && identity(url)[1]);
+    const ids = new Set(links.map(url => identity(url)[1]));
+    return ids.size === 1 ? links[0] : fallback;
+  }
   function remember(video, source, pageUrl) {
     if (video instanceof HTMLVideoElement && sources(video).includes(source)) bounded(gestures, source, {video, pageUrl, documentUrl:location.href}, 8);
   }
@@ -131,22 +138,37 @@
     if (gesture.video.mediaKeys) fail('此视频受播放保护，无法采集。');
     return gesture;
   }
-  function records(value, kind, id) {
-    const result = []; const seen = new WeakSet(); let remaining = 3000;
-    function visit(node, depth) {
+  function acceptNote(node, keyId, accept) {
+    const note = node.note || node.note_card || node.noteCard || node;
+    if (!note.video) return;
+    const id = note.noteId || note.note_id || node.id || keyId;
+    if (id) accept('xhs', String(id), note);
+  }
+  function acceptPin(node, keyId, accept) {
+    if (!node.videos && !node.story_pin_data) return;
+    const id = node.id || keyId;
+    if (id) accept('pin', String(id), node);
+  }
+  function visitRecords(value, accept) {
+    const seen = new WeakSet(); let remaining = 3000;
+    function visit(node, depth, keyId) {
       if (!node || typeof node !== 'object' || seen.has(node) || depth > 12 || remaining-- <= 0) return;
       seen.add(node);
-      const same = String(kind === 'xhs' ? node.noteId || node.note_id || node.id || '' : node.id || '') === id;
-      if (same && (kind === 'xhs' ? node.video : node.videos || node.story_pin_data)) result.push(node);
-      for (const [key, child] of Object.entries(node).slice(0, 300)) {
-        if (key === id && child && typeof child === 'object') {
-          const item = child.note || child;
-          if (kind === 'xhs' ? item.video : item.videos || item.story_pin_data) result.push(item);
-        }
-        visit(child, depth + 1);
-      }
+      acceptNote(node, keyId, accept);
+      acceptPin(node, keyId, accept);
+      for (const [key, child] of Object.entries(node).slice(0, 300)) visit(child, depth + 1, key);
     }
-    visit(value, 0); return [...new Set(result)];
+    visit(value, 0);
+  }
+  function records(value, kind, id) {
+    const result = new Set();
+    visitRecords(value, (site, key, record) => { if (site === kind && key === id) result.add(record); });
+    return [...result];
+  }
+  function cacheMetadata(value) {
+    // SPA routes can change before a response finishes. Index by explicit note /
+    // Pin identity, not the URL at request time; analytics cannot evict videos.
+    visitRecords(value, (kind, id, record) => bounded(metadata, kind + ':' + id, record, 128));
   }
   function videoUrls(record, kind, video) {
     if (record.is_drm || record.drm || record.video?.is_drm || record.video?.drm_type) fail('此视频受播放保护，无法采集。');
@@ -176,16 +198,17 @@
     const [kind,id] = identity(pageUrl);
     if (id) {
       const states = [window.__INITIAL_STATE__, window.__PWS_DATA__, window.__PWS_INITIAL_PROPS__];
-      for (const node of document.querySelectorAll('script#__PWS_DATA__,script#__NEXT_DATA__')) {
+      for (const node of document.querySelectorAll('script#__PWS_DATA__,script#__PWS_INITIAL_PROPS__,script#__NEXT_DATA__')) {
         if (node.textContent.length <= MAX_TEXT) { try { states.push(JSON.parse(node.textContent)); } catch {} }
       }
-      states.push(...metadata.filter(item => item.documentUrl === location.href).map(item => item.value));
-      const urls = [...new Set(states.flatMap(state => records(state,kind,id)).flatMap(record => videoUrls(record,kind,gesture.video)))];
+      const latest = metadata.get(kind + ':' + id);
+      const cached = latest ? videoUrls(latest,kind,gesture.video) : [];
+      const urls = [...new Set(cached.length ? cached : states.flatMap(state => records(state,kind,id)).flatMap(record => videoUrls(record,kind,gesture.video)))];
       if (urls.length === 1) return urls[0];
       if (urls.length > 1) fail('网页提供了多个视频来源，暂时无法确认本次拖动的视频。');
     }
     const segments = appended.get(object) || [];
-    const matches = [...manifests].filter(([,entry]) => entry.documentUrl === location.href && segments.some(segment => segment.documentUrl === location.href && entry.patterns.some(pattern => pattern.test(segment.url))));
+    const matches = [...manifests].filter(([,entry]) => segments.some(segment => entry.patterns.some(pattern => pattern.test(segment.url))));
     if (matches.length === 1) return matches[0][0];
     if (matches.length > 1) fail('检测到多个分段清单，暂时无法确认本次拖动的视频。');
     if (object && !(object instanceof Blob)) fail('尚未找到当前视频的分段清单，请播放视频后重新拖入。');
@@ -243,6 +266,6 @@
       return {data:btoa(String.fromCharCode(...bytes)),eof:false};
     } catch (error) { await close(id); throw error; }
   }
-  window.__bbSourceVideo = Object.freeze({remember, resolve, open, read, close, manifestBase});
+  window.__bbSourceVideo = Object.freeze({pageUrl, remember, resolve, open, read, close, manifestBase});
   window.addEventListener('pagehide', () => { for (const id of reads.keys()) void close(id); });
 })();
