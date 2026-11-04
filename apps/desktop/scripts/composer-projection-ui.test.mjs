@@ -80,6 +80,9 @@ try {
       assert.equal(await dock.locator('.composer-mode-picker > button[aria-pressed="true"]').count(), 1);
       await dock.locator('.composer-reference-hint').waitFor({ state: 'visible' });
       assert.equal(await dock.locator('.composer-reference-hint').innerText(), '双击添加素材');
+      const hintSize = await dock.locator('.composer-reference-hint').evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+      const inputSize = await dock.locator('.ProseMirror').evaluate(node => parseFloat(getComputedStyle(node).fontSize));
+      assert.ok(hintSize <= 12 && hintSize < inputSize, `${theme}/${mode}: material hint stays smaller than input text (${hintSize}px / ${inputSize}px)`);
     }
     await dock.getByRole('button', { name: '图片', exact: true }).click();
     await page.screenshot({ path: `${output}/before-menu.png` });
