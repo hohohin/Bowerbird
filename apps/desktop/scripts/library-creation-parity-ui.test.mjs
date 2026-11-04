@@ -55,17 +55,17 @@ try {
   }
   assert.ok(baseline.dark && baseline.light, 'actual canvas creation indicator is present');
   const hint = page.locator('.canvas-workspace .composer-reference-hint');
-  assert.equal(await hint.innerText(), '双击添加参考图');
-  assert.equal(await hint.locator('strong').innerText(), '双击');
+  assert.equal(await hint.innerText(), '双击添加素材');
+  assert.equal(await hint.isVisible(), true);
   assert.equal(await hint.evaluate(element => {
-    return element.closest('.composer-writing') !== null;
+    return element.closest('.composer-projection') !== null;
   }), true, 'reference hint belongs to the composer, not the top marking');
   assert.equal(await page.locator('.creation-mode-indicator-hint').count(), 0);
   assert.deepEqual(baseline, frozen.themes, 'canvas retains its frozen pre-change deep/light painted appearance');
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
   await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '素材库', exact: true }).click();
   await editor.fill('主屏保留的草稿');
-  assert.equal(await page.locator('.library-composer .composer-reference-hint').innerText(), '双击添加参考图');
+  assert.equal(await page.locator('.library-composer .composer-reference-hint').innerText(), '双击添加素材');
   const observed = {};
   for (const theme of ['dark', 'light']) {
     await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
@@ -87,13 +87,8 @@ try {
     await writeFile(`${output}/red-observed.json`, JSON.stringify(findings, null, 2));
     await page.screenshot({ path: `${output}/red-home.png` });
   }
-  assert.deepEqual({ observed, addButtonCount, firstClick }, { observed: baseline, addButtonCount: 1, firstClick: { preview: 1, references: 0, picks: 0, prepared: 0 } }, 'home must keep canvas appearance, material action and single-click preview without inserting or creating a project');
+  assert.deepEqual({ observed, addButtonCount, firstClick }, { observed: baseline, addButtonCount: 0, firstClick: { preview: 1, references: 0, picks: 0, prepared: 0 } }, 'home must keep canvas appearance, material action and single-click preview without inserting or creating a project');
   await closePreview();
-  const add = composer.getByRole('button', { name:'添加参考素材', exact:true });
-  assert.ok(await add.evaluate(element => element.tabIndex >= 0), 'material action belongs to keyboard tab order');
-  await add.focus(); await page.keyboard.press('Enter');
-  await page.waitForFunction(() => !!document.activeElement?.closest('.library-home'));
-  await unchangedDraft();
   await editor.focus(); await page.keyboard.press('Tab');
   await page.waitForFunction(() => !!document.activeElement?.closest('.library-pane-content[data-active="true"]'));
   assert.equal(await page.evaluate(() => window.store.getState().boardOpen), true);

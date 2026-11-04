@@ -42,11 +42,13 @@ import { ImageGenOptions } from "./creation/ImageGenOptions";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
-import { ArrowUp, ChevronDown, History, Image, Info, Maximize2, MessageCircle, Palette, Plus, Sparkles, Video, X } from "lucide-react";
+import { ArrowUp, ChevronDown, History, Image, Info, Maximize2, MessageCircle, Palette, Sparkles, Video, X } from "lucide-react";
 import { MediaPreview } from "./MediaPreview";
 import { useTextWorkspace } from "./useTextWorkspace";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import "./CreationBoard.css";
+import { ComposerProjection } from "./creation/ComposerProjection";
+import { useTerminalCaret } from "./creation/useTerminalCaret";
 
 // 画面比例偏好记忆（照 AssetDetail 的 localStorage 范式：bowerbird.<name> 前缀、try/catch 兜底）。
 const BOARD_RATIO_KEY = "bowerbird.boardRatio";
@@ -136,7 +138,6 @@ export function CreationBoard({
   promptLoadRequest = null,
   onPromptLoadConsumed,
   onDraftChange,
-  onOpenLibrary,
   registerDraftFlush,
   beforeGenerate,
   prepareProject,
@@ -212,6 +213,7 @@ export function CreationBoard({
   // 取代旧「请参考」预填——提示职责交给占位文字。
   const {
     hostRef,
+    viewRef,
     focus,
     flushDraft,
     loadPrompt,
@@ -232,6 +234,7 @@ export function CreationBoard({
     onDraftChange: persistGenerationDraft,
   });
   const textWorkspace = useTextWorkspace({ scopeKey: `${embedded ? projectId ?? "library" : "board"}:${composerMode ?? generation.media}`, projectId, getDraft, loadPrompt, focus });
+  useTerminalCaret(viewRef, hostRef);
   const videoOptions = resolveVideoOptions(generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS, references);
   const localFrames = useMemo(() => localVideoFrames(references), [references]);
 
@@ -1040,8 +1043,7 @@ export function CreationBoard({
           isCollapsed ? "is-collapsed" : ""
         }`}
       >
-        <span className="composer-hud-surface" aria-hidden="true" />
-        <span className="composer-hud-optics" aria-hidden="true" />
+        {isCollapsed ? <span className="composer-hud-surface" aria-hidden="true" /> : <ComposerProjection dockRef={dockRef} />}
         <div className="composer-heading">
           {header}
           {header && isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
@@ -1383,7 +1385,6 @@ export function CreationBoard({
         </div>
         <BoardChipPreview hostRef={referenceStripRef} extraAssets={references} />
         <div className="composer-writing">
-        {!isCollapsed && <span className="composer-reference-hint"><strong>双击</strong>添加参考图</span>}
         <div className="composer-description-heading">
           <span id={editorLabelId}>{isChat ? "聊聊你的创作想法" : "创作描述"}</span>
           <div className="composer-description-actions">
@@ -1423,8 +1424,6 @@ export function CreationBoard({
         {!isChat && referenceError && !isLocalVideo && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
         {/* 素材、模型参数、帮助与发送保持同一条底栏。 */}
         <div className={`generation-toolbar composer-toolbar${isVideo ? " is-video" : ""}`}>
-          {onOpenLibrary && <button type="button" className="composer-add-material" aria-label="添加参考素材" title="打开素材库（Tab）"
-            onMouseDown={event => event.preventDefault()} onClick={() => { setBoardActive(true); onOpenLibrary(); }}><Plus size={16} aria-hidden="true" />素材<kbd>Tab</kbd></button>}
           {!isChat && <div className="group relative flex shrink-0 items-center composer-help">
             <button
               type="button"

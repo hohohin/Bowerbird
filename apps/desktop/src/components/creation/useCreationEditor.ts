@@ -494,6 +494,7 @@ export function useCreationEditor(opts?: {
 
   return {
     hostRef,
+    viewRef,
     focus,
     flushDraft,
     loadPrompt,
