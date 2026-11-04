@@ -22,6 +22,7 @@ w.__TAURI_INTERNALS__ = {
   unregisterCallback: (id: number) => delete w.callbacks[id],
   invoke: async (command: string, args: any = {}) => {
     w.calls.push({ command, args });
+    if (command === "quick_transfer_status") return { revision: 0, active: false, directory: null, url: null, transfers: [] };
     if (command === "plugin:event|listen") return w.calls.length;
     if (command === "claim_source_browser_analysis") {
       if (w.holdClaim) await new Promise(resolve => { w.claimResolvers[args.dragId] = resolve; });

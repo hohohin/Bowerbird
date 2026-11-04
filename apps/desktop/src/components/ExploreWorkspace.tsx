@@ -1,6 +1,6 @@
 import { userErrorMessage } from "../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
-import { GripVertical } from "lucide-react";
+import { PanelEdgeHandle } from "./PanelEdgeHandle";
 import { SourceBrowserPanel } from "./SourceBrowserPanel";
 import { useStore } from "../store";
 import { api } from "../lib/api";
@@ -22,7 +22,19 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
   const [over, setOver] = useState(false);
   const [width, setWidth] = useState(460);
   const [resizing, setResizing] = useState(false);
+  const [maximumWidth, setMaximumWidth] = useState(1000);
   const root = useRef<HTMLDivElement>(null);
+  const resizeStart = useRef<{ pointer: number; x: number; width: number } | null>(null);
+  const browserWidth = Math.min(width, maximumWidth);
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    const measure = () => setMaximumWidth(Math.max(320, element.clientWidth - 280));
+    const observer = new ResizeObserver(measure); observer.observe(element); measure();
+    return () => observer.disconnect();
+  }, []);
+  const resize = (next: number) => setWidth(Math.max(320, Math.min(maximumWidth, next)));
+  const finishResize = () => { resizeStart.current = null; setResizing(false); };
   const [feedback, setFeedback] = useState<CaptureFeedback | null>(null);
   const [classifications, setClassifications] = useState<ExplorerClassificationItem[]>([]);
   const completionOrder = useRef(0);
@@ -167,16 +179,35 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
   }
 
   return <div ref={root} className={`explore-workspace ${open ? "is-open" : ""}`} aria-label="主工作区">
-    <aside className="explore-browser" style={{ width }} hidden={!open} aria-label="探索面板">
+    <aside id="explore-browser-panel" className="explore-browser" style={{ width: browserWidth }} hidden={!open} aria-label="探索面板">
       {url && <SourceBrowserPanel url={url} navigationId={navigationId} onClose={onClose} visible={open} suspended={resizing} />}
+      <PanelEdgeHandle className={`explore-panel-handle ${resizing ? "is-library-resizing" : ""}`} closeLabel="收起浏览器" onClose={onClose} onEscape={onClose} grip={{
+        "aria-label": "调整浏览器宽度", "aria-controls": "explore-browser-panel",
+        "aria-valuemin": 320, "aria-valuemax": maximumWidth, "aria-valuenow": browserWidth,
+        title: "拖动调整浏览器宽度 · 左右方向键微调 · 双击恢复默认宽度",
+        onKeyDown: event => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault(); event.stopPropagation();
+          resize(event.key === "Home" ? 320 : event.key === "End" ? maximumWidth : browserWidth + (event.key === "ArrowLeft" ? -20 : 20));
+        },
+        onPointerDown: event => {
+          if (event.button !== 0 || resizeStart.current) return;
+          event.preventDefault(); event.stopPropagation(); event.currentTarget.focus({ preventScroll: true });
+          resizeStart.current = { pointer: event.pointerId, x: event.clientX, width: browserWidth };
+          event.currentTarget.setPointerCapture(event.pointerId); setResizing(true);
+        },
+        onPointerMove: event => {
+          const start = resizeStart.current;
+          if (start?.pointer === event.pointerId) resize(start.width + event.clientX - start.x);
+        },
+        onPointerUp: event => {
+          if (resizeStart.current?.pointer !== event.pointerId) return;
+          finishResize(); event.currentTarget.releasePointerCapture(event.pointerId);
+        },
+        onPointerCancel: finishResize, onLostPointerCapture: finishResize,
+        onDoubleClick: () => resize(460),
+      }} />
     </aside>
-    <div className="explore-resizer" hidden={!open} role="separator" aria-label="调整浏览器宽度" aria-orientation="vertical" tabIndex={0}
-      onKeyDown={event => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        event.preventDefault(); setWidth(w => Math.max(320, Math.min((root.current?.clientWidth || 900) - 280, w + (event.key === "ArrowLeft" ? -20 : 20))));
-      } }}
-      onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); setResizing(true); }}
-      onPointerMove={event => { if (resizing && root.current) setWidth(Math.max(320, Math.min(root.current.clientWidth - 280, event.clientX - root.current.getBoundingClientRect().left))); }}
-      onPointerUp={() => setResizing(false)} onLostPointerCapture={() => setResizing(false)}><GripVertical size={12} /></div>
     <section className={`explore-main ${over ? "is-drop-target" : ""}`} aria-label="探索采集素材"
       onDragOverCapture={event => {
         if (getDragAssets()?.length) { setOver(false); return; }

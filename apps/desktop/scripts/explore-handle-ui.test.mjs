@@ -1,0 +1,57 @@
+import assert from 'node:assert/strict';
+import {mkdir} from 'node:fs/promises';
+import {createServer} from 'vite';
+import {chromium} from '../../html-renderer/node_modules/playwright/index.mjs';
+const server=await createServer({cacheDir:'.tmp/explore-handle-vite',server:{host:'127.0.0.1',port:17961,strictPort:true,hmr:false,watch:null}});
+await server.listen();
+const browser=await chromium.launch({channel:'chrome',headless:true});
+const page=await browser.newPage({viewport:{width:1280,height:800}});
+const errors=[];page.on('pageerror',e=>errors.push(e.message));
+await mkdir('.tmp/explore-handle',{recursive:true});
+try{
+ await page.goto(server.resolvedUrls.local[0]+'scripts/fixtures/explorer/preview.html');
+ await page.addStyleTag({path:'src/components/IndustrialTheme.css'});
+ await page.getByRole('button',{name:'探索',exact:true}).click();
+ const grip=page.getByRole('separator',{name:'调整浏览器宽度'});
+ const initial=await grip.boundingBox();
+ assert.ok(initial.height<100,'exploration uses the compact library grip instead of a full-height strip');
+ const panel=page.getByRole('complementary',{name:'探索面板'});
+ const width=async()=>(await panel.boundingBox()).width;
+ const before=await width();
+ await grip.focus();await page.keyboard.press('ArrowRight');assert.equal(await width(),before+20);
+ const box=await grip.boundingBox();
+ await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
+ await page.mouse.move(box.x+box.width/2+80,box.y+box.height/2,{steps:4});await page.mouse.up();
+ assert.equal(await width(),before+100,'drag uses the initial width without a jump from the external tab');
+ await page.waitForFunction(()=>window.calls.filter(c=>c.command==='resize_source_browser').at(-1)?.args.visible===true);
+ assert.equal(await page.getByRole('button',{name:'收起浏览器',exact:true}).count(),1);
+ assert.equal(await page.evaluate(()=>document.querySelector('.explore-main').getBoundingClientRect().left-document.querySelector('.explore-browser').getBoundingClientRect().right),0,'no full-height strip occupies width');
+ for(const theme of ['light','dark']){
+  await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
+  await page.screenshot({path:'.tmp/explore-handle/'+theme+'.png'});
+ }
+ await page.getByRole('button',{name:'收起浏览器',exact:true}).click();await panel.waitFor({state:'hidden'});
+ await page.getByRole('button',{name:'探索',exact:true}).click();assert.equal(await width(),before+100);
+ await grip.focus();await page.keyboard.press('Escape');await panel.waitFor({state:'hidden'});
+ await page.goto(server.resolvedUrls.local[0]+'scripts/fixtures/canvas-reference/preview.html?source-library&canvas-library&detail-route');
+ await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
+ await page.waitForFunction(()=>document.activeElement?.classList.contains('canvas-stage'));
+ await page.keyboard.press('Tab');
+ const library=page.locator('.canvas-source-panel');
+ const libraryGrip=page.getByRole('separator',{name:'调整素材库宽度',exact:true});
+ await libraryGrip.waitFor();
+ await library.evaluate(async el=>Promise.all(el.getAnimations().map(a=>a.finished)));
+ await libraryGrip.focus();await page.keyboard.press('Home');
+ const minimum=(await library.boundingBox()).width;
+ await page.keyboard.press('ArrowRight');
+ assert.equal((await library.boundingBox()).width,minimum+32,'shared tab preserves library keyboard resizing');
+ const libraryBox=await libraryGrip.boundingBox();
+ await page.mouse.move(libraryBox.x+12,libraryBox.y+12);await page.mouse.down();
+ await page.mouse.move(libraryBox.x+92,libraryBox.y+12,{steps:5});await page.mouse.up();
+ assert.equal((await library.boundingBox()).width,minimum+112,'shared tab preserves library pointer resizing');
+ assert.ok(Math.abs(await library.evaluate(el=>el.parentElement.querySelector('.canvas-library-resize').getBoundingClientRect().left-el.getBoundingClientRect().right))<1);
+ await page.getByRole('button',{name:'关闭素材库',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('.canvas-source-panel').getAttribute('aria-hidden')==='true');
+ assert.deepEqual(errors,[]);
+ console.log('PASS exploration and library compact grips, pointer/keyboard resize, single close, Escape and preserved width');
+}finally{await browser.close();await server.close();}

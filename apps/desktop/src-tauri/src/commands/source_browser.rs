@@ -145,6 +145,9 @@ pub async fn open_source_browser(
         .replace("__BOWERBIRD_DRAG_BRIDGE__", &format!("bowerbird-explorer://{drag_token}"));
     let popup_drag_token = drag_token.clone();
     let page_search_token = drag_token.clone();
+    let pinterest_chrome = include_str!("source_browser_pinterest_chrome.js")
+        .replace("__BOWERBIRD_SCROLLBAR_RUNTIME__", include_str!("../../../src/lib/overlayScrollbars.js"))
+        .replace("__BOWERBIRD_SCROLLBAR_CSS__", &serde_json::to_string(include_str!("../../../src/components/OverlayScrollbars.css")).expect("static CSS"));
     let builder = WebviewBuilder::new(SOURCE_BROWSER_LABEL, WebviewUrl::External(url))
         .data_directory(data_directory)
         .disable_drag_drop_handler()
@@ -152,6 +155,7 @@ pub async fn open_source_browser(
         .initialization_script(include_str!("../../../src/lib/explorerDragVisual.js"))
         .initialization_script(include_str!("source_browser_video.js"))
         .initialization_script(include_str!("source_browser_pinterest_layout.js"))
+        .initialization_script(&pinterest_chrome)
         .initialization_script(&drag_script)
         .on_navigation(move |url| {
             if url.scheme() == "bowerbird-pinterest" {

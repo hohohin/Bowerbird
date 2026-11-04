@@ -11,7 +11,6 @@ import {
   LockKeyhole,
   Puzzle,
   RefreshCw,
-  X,
 } from "lucide-react";
 import { api, type SourceBrowserBounds } from "../lib/api";
 import { normalizeSourceAddress, sourceDiscoveryFor } from "../lib/sourceDiscovery";
@@ -295,9 +294,6 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
             <ExternalLink size={15} />
           </button>
           <ExplorerCaptureHistory visible={visible} />
-          <button type="button" onClick={onClose} title="收起浏览器" aria-label="收起浏览器">
-            <X size={16} />
-          </button>
         </div>
       </header>
 

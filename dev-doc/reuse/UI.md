@@ -47,9 +47,15 @@
 ## 添加不占内容宽高的滚动区域
 
 - **用途／关键词：** scrollbar、悬浮滚动条、横向滚动、虚拟列表、scrollRef。
-- **入口：** [OverlayScrollbars.tsx](../../apps/desktop/src/components/OverlayScrollbars.tsx) 的 `OverlayScrollbars`／`enableOverlayScrollbars` 是唯一管理器；需要现成 viewport／content 结构时用 [CollectionScrollArea.tsx](../../apps/desktop/src/components/CollectionScrollArea.tsx) 的 `OverlayScrollArea`，集合特化包装为 `CollectionScrollArea`。
+- **入口：** [OverlayScrollbars.tsx](../../apps/desktop/src/components/OverlayScrollbars.tsx) 的 `OverlayScrollbars`／`enableOverlayScrollbars` 是 React 接入层，DOM 管理器唯一实现为 [overlayScrollbars.js](../../apps/desktop/src/lib/overlayScrollbars.js)；需要现成 viewport／content 结构时用 [CollectionScrollArea.tsx](../../apps/desktop/src/components/CollectionScrollArea.tsx) 的 `OverlayScrollArea`，集合特化包装为 `CollectionScrollArea`。
 - **实用证据：** [main.tsx](../../apps/desktop/src/main.tsx) 挂载全局 `OverlayScrollbars`；[ContextMenu.tsx](../../apps/desktop/src/components/ContextMenu.tsx) 和 [CanvasDocumentCard.tsx](../../apps/desktop/src/components/CanvasDocumentCard.tsx) 使用 `OverlayScrollArea`。
-- **范围／状态：可跨模块复用。** 根入口与包装器引用计数共享 manager，普通滚动元素在主应用中无需每处另挂管理器；独立包装器会自行启用。`scrollRef` 指向真实 viewport，保留虚拟列表绑定；包装器不负责虚拟化。共用 CSS 由管理器文件导入；不能把它理解为控制原生 WebView／外部网页滚动条的接口。
+- **范围／状态：可跨模块复用。** 根入口与包装器引用计数共享 manager，普通滚动元素在主应用中无需每处另挂管理器；独立包装器会自行启用。`scrollRef` 指向真实 viewport，保留虚拟列表绑定；包装器不负责虚拟化。原生 Pinterest 由 [source_browser_pinterest_chrome.js](../../apps/desktop/src-tauri/src/commands/source_browser_pinterest_chrome.js) 注入同一 DOM 实现和 `OverlayScrollbars.css`，支持文档根滚动；React 接入层本身不能跨 WebView 控制网页，其他站点未启用。
+
+## 面板边缘把手与退出按钮
+
+- **入口／用途：** [PanelEdgeHandle.tsx](../../apps/desktop/src/components/PanelEdgeHandle.tsx) 提供与素材库一致的窄页签、ESC／退出按钮、拖动握柄和 separator 语义。
+- **实用证据：** `CanvasLibraryResize` 与 `ExploreWorkspace` 共用该组件和 `.canvas-library-*` 样式。前者仍拥有素材库的宽度、动画与持久化；后者拥有探索宽度、原生网页遮挡和关闭状态。
+- **范围／状态：可跨模块复用。** 宿主提供 `grip` 的鼠标／键盘行为、宽度 ARIA 值与 `onClose`，不共用业务状态；关闭的页签通过宿主隐藏或 `collapsed` 退出 Tab 顺序。
 
 ## 给图片加统一悬浮定位动效
 

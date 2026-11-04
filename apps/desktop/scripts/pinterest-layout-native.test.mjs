@@ -6,7 +6,8 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-import { lensFixture, imageFor } from './fixtures/pinterest-layout/page.mjs';
+import { imageFor } from './fixtures/pinterest-layout/page.mjs';
+import { chromeFixture } from './fixtures/pinterest-layout/chrome.mjs';
 
 const directory = path.resolve('.tmp/pinterest-layout-native-' + Date.now());
 await mkdir(directory, { recursive: true });
@@ -19,7 +20,7 @@ await new Promise((resolve, reject) => { server.once('error', reject); server.li
 let child, mainBrowser, sourceBrowser, main, source, diagnostic = '';
 const errors = [], unexpected = [], checks = [];
 function nativeFixture() {
-  return lensFixture().replace('</body>', `<button id="fixture-lens" aria-label="Lens">Lens</button><div id="fixture-uploader"></div>
+  return chromeFixture().replace('</body>', `<button id="fixture-lens" aria-label="Lens">Lens</button><div id="fixture-uploader"></div>
 <script>window.layoutUploads=[];document.querySelector('#fixture-lens').onclick=()=>{
  document.querySelector('#fixture-uploader').innerHTML='<input id="lens-file-upload" data-test-id="lens-file-upload" type="file">';
  document.querySelector('#lens-file-upload').onchange=async event=>{
@@ -60,6 +61,8 @@ async function ready() {
 async function assertLayout(name) {
   const value = await geometry();
   checks.push({ name, ...value });
+  assert.equal(value.availableWidth, value.width, `${name}: scrollbar must not reserve native width`);
+  assert.equal(await source.locator('#VerticalNavContent').evaluate(node => node.getBoundingClientRect().width), 36, `${name}: native navigation is half-width`);
   assert.ok(value.source.height <= 161, `${name}: reference preview exceeds 160px (${value.source.height})`);
   assert.ok(value.image.height > 0 && value.image.height <= 161, `${name}: reference image is visible`);
   assert.equal(value.fit, 'contain', name);
