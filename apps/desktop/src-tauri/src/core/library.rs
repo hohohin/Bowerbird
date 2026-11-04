@@ -480,8 +480,13 @@ fn rename_file(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 impl Database {
     pub fn insert_asset(&self, a: &Asset) -> AppResult<()> {
+        self.insert_asset_with_auto_classification(a, true)
+    }
+
+    pub(crate) fn insert_asset_with_auto_classification(&self, a: &Asset, automatic: bool) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO assets (id, name, ext, origin_path, store_path, thumb_path, size, width, \
              height, duration, phash, colors, rating, source, source_url, folder_id, created_at, \
              file_mtime, generation_session_id, library_hidden) \
@@ -509,6 +514,9 @@ impl Database {
                 a.library_hidden,
             ],
         )?;
+        // A manual drop must never become visible to the background classifier.
+        if !automatic { tx.execute("DELETE FROM local_auto_classification_pending WHERE asset_id=?1", [&a.id])?; }
+        tx.commit()?;
         Ok(())
     }
 

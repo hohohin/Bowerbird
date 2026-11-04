@@ -50,7 +50,7 @@ pub fn ingest_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppRes
 /// First durable save of newly received/generated content from a temporary workspace.
 /// Never use this for the user's existing local files; those use ingest_file.
 pub fn ingest_new_file(paths: &LibraryPaths, db: &Database, source: &Path) -> AppResult<Asset> {
-    ingest_file_with_dedup(paths, db, source, false)
+    ingest_file_with_dedup(paths, db, source, false, true)
 }
 
 fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<Asset>> {
@@ -83,7 +83,7 @@ fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<
     Ok(None)
 }
 
-fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, approximate: bool) -> AppResult<Asset> {
+fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, approximate: bool, automatic: bool) -> AppResult<Asset> {
     // Keep the user's HEIC untouched. All consumers receive a full-size PNG,
     // including previews, classification and providers that cannot read HEIC.
     let normalized = if media::heic::is_path(source) {
@@ -201,7 +201,7 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         reference_count: 0,
         library_hidden: false,
     };
-    db.insert_asset(&asset)?;
+    db.insert_asset_with_auto_classification(&asset, automatic)?;
     link_colors(db, &asset.id, asset.colors.as_deref());
     // 预设图识别：文件名命中内置 manifest → 预填 generation 身份 + meta（不调 codex）。
     preset::recognize_and_prefill(db, source, &mut asset)?;
@@ -391,6 +391,13 @@ pub fn ingest_from_bytes(
     content_type: Option<&str>,
     source: &str,
 ) -> AppResult<Asset> {
+    ingest_from_bytes_with_classification(paths, db, bytes, source_url, file_name, content_type, source, true)
+}
+
+pub(crate) fn ingest_from_bytes_with_classification(
+    paths: &LibraryPaths, db: &Database, bytes: &[u8], source_url: &str,
+    file_name: Option<&str>, content_type: Option<&str>, source: &str, automatic: bool,
+) -> AppResult<Asset> {
     if bytes.is_empty() {
         return Err(AppError::Media("extension uploaded an empty image".into()));
     }
@@ -421,12 +428,15 @@ pub fn ingest_from_bytes(
     fs::write(&source_path, bytes)?;
 
     let result = (|| -> AppResult<Asset> {
-        let mut asset = ingest_file_with_dedup(paths, db, &source_path, !source_url.is_empty())?;
+        let mut asset = ingest_file_with_dedup(paths, db, &source_path, !source_url.is_empty(), automatic)?;
         let has_temporary_origin =
             asset.origin_path.as_deref() == Some(source_path.to_string_lossy().as_ref());
         // An identical screenshot reuses the existing asset without replacing its provenance.
         if source == "screenshot" && !has_temporary_origin { return Ok(asset); }
         let conn = db.conn.lock().unwrap();
+        // Also remove an existing duplicate from the pending queue; its manual
+        // tag is delivered by the capture retry journal using the same asset ID.
+        if !automatic { conn.execute("DELETE FROM local_auto_classification_pending WHERE asset_id=?1", [&asset.id])?; }
         if has_temporary_origin {
             conn.execute(
                 "UPDATE assets SET source=?1, source_url=?2, origin_path=NULL WHERE id=?3",
@@ -1025,11 +1035,11 @@ mod tests {
         );
         small_img.save(&small_path).unwrap();
 
-        let first = ingest_file_with_dedup(&paths, &db, &full, true).unwrap();
+        let first = ingest_file_with_dedup(&paths, &db, &full, true, true).unwrap();
         assert_eq!(db.count_assets(None).unwrap(), 1);
 
         // 导入低清变体：应被模糊去重归并到高分图，不新增。
-        let merged = ingest_file_with_dedup(&paths, &db, &small_path, true).unwrap();
+        let merged = ingest_file_with_dedup(&paths, &db, &small_path, true, true).unwrap();
         assert_eq!(
             db.count_assets(None).unwrap(),
             1,

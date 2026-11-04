@@ -2,6 +2,11 @@
 
 [返回复用地图](../Bowerbird开发计划.md#复用地图)。本页按 2026-11-03 当前工作区源码核对，包含未提交实现；状态表示可用边界，不表示已发版。视觉规则和样式加载顺序仍以 [UI-DESIGN-SPEC 第 11 节](../UI-DESIGN-SPEC.md#11-实现入口与使用顺序) 为入口，不在这里复制色值与动效规范。
 
+## 探索采集直接落入标签
+
+- **入口：** [ExploreWorkspace.tsx](../../apps/desktop/src/components/ExploreWorkspace.tsx) 读取标签目录／分组的 `data-tag-id`／`data-tag-section`，复用 [localClassification.ts](../../apps/desktop/src/lib/localClassification.ts) 的全局／项目 `example` 人工归属接口；不另建标签体系。
+- **边界：** 明确标签落点冻结项目和标签，沿现有采集队列重试；传 `skipClassification` 到原生采集，内部 `ingest_from_bytes_with_classification` 控制单次自动入队，普通 `ingest_from_bytes` 默认保持自动处理。只用于明确的人工落点，不修改全局开关。未分类分组继续原流程。契约与验证见 [探索浏览器](../EMBEDDED-BROWSER.md#2026-11-04标签落点直接归类源码待发布)。
+
 ## 让新界面沿用主题、按钮和字段
 
 - **用途／关键词：** 深浅色、tokens、工程蓝、button、input、Tailwind。

@@ -27,6 +27,7 @@ fn import_capture(
     bytes: &[u8],
     page_url: &str,
     project_id: Option<&str>,
+    skip_classification: bool,
 ) -> AppResult<Asset> {
     // The drop's project ID is frozen; switching projects never retargets a download.
     if let Some(id) = project_id {
@@ -35,7 +36,7 @@ fn import_capture(
         }
     }
     let paths = paths.for_project(db, project_id)?;
-    let asset = ingest::ingest_from_bytes(&paths, db, bytes, page_url, None, None, "extension")?;
+    let asset = ingest::ingest_from_bytes_with_classification(&paths, db, bytes, page_url, None, None, "extension", !skip_classification)?;
     if let Some(id) = project_id {
         db.add_assets_to_project(id, std::slice::from_ref(&asset.id))?;
     }
@@ -72,6 +73,7 @@ pub async fn capture_source_browser_image(
     drag_id: Option<String>,
     media_kind: Option<SourceMediaKind>,
     capture_id: Option<String>,
+    skip_classification: Option<bool>,
 ) -> AppResult<Asset> {
     if webview.label() != "main" {
         return Err(AppError::Other("只允许从素材库接收拖入图片".into()));
@@ -79,6 +81,7 @@ pub async fn capture_source_browser_image(
     let original_image = image_url.clone();
     let original_page = page_url.clone();
     let is_video = media_kind == Some(SourceMediaKind::Video);
+    let skip_classification = skip_classification.unwrap_or(false);
     let image_url = if is_video { video_capture_url(&image_url)? } else { capture_url(&image_url)? };
     let page_url = capture_url(&page_url)?;
     if image_url.scheme() == "blob" && image_url.origin() != page_url.origin() {
@@ -121,7 +124,10 @@ pub async fn capture_source_browser_image(
         return Ok(asset);
     }
     let analysis = app.state::<ExplorerAnalysis>();
-    let preview = if let Some(id) = &drag_id {
+    if skip_classification {
+        if let Some(id) = &drag_id { analysis.release(id); }
+    }
+    let preview = if skip_classification { None } else if let Some(id) = &drag_id {
         analysis.claim(id, &original_image, &original_page);
         super::source_browser_network::checked(&control, async {
             Ok(analysis.bytes(id, &original_image, &original_page).await.ok().flatten())
@@ -142,11 +148,14 @@ pub async fn capture_source_browser_image(
             bytes.as_slice(),
             page_url.as_str(),
             project_id.as_deref(),
+            skip_classification,
         )
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
-    if let Some(id) = &drag_id { analysis.bind(id, &asset.id); }
+    if !skip_classification {
+        if let Some(id) = &drag_id { analysis.bind(id, &asset.id); }
+    }
     crate::core::autoname::spawn_auto_analyze(app.clone(), db, asset.clone());
     let _ = app.emit("library://assets-changed", ());
     Ok(asset)
@@ -242,6 +251,33 @@ mod tests {
         }
     }
     #[test]
+    fn explicit_tag_capture_skips_auto_queue_for_new_and_duplicate_images() {
+        let temporary = tempfile::tempdir().unwrap();
+        let paths = LibraryPaths::init(temporary.path().to_owned()).unwrap();
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.set_local_enabled(true).unwrap();
+        let url = "https://example.com/pin/123";
+        let ordinary_bytes = std::fs::read(crate::media::phash::testutil::make_photo_file(temporary.path(), "ordinary.png", 128, 42)).unwrap();
+        let tagged_bytes = std::fs::read(crate::media::phash::testutil::make_photo_file(temporary.path(), "tagged.png", 128, 98)).unwrap();
+        let ordinary = import_capture(&paths, &db, &ordinary_bytes, url, None, false).unwrap();
+        let tagged = import_capture(&paths, &db, &tagged_bytes, url, None, true).unwrap();
+        assert_ne!(ordinary.id, tagged.id);
+        assert_eq!(db.local_auto_targets("test").unwrap(), vec![ordinary.id.clone()]);
+        let pending: Vec<String> = db.conn.lock().unwrap().prepare("SELECT asset_id FROM local_auto_classification_pending").unwrap()
+            .query_map([], |row| row.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
+        assert_eq!(pending, vec![ordinary.id.clone()], "manual capture is never queued before tag delivery");
+        let tag = db.save_local_label(None, "指定标签", "", true).unwrap();
+        db.local_example(&tag, std::slice::from_ref(&tagged.id), true).unwrap();
+        let origin: String = db.conn.lock().unwrap().query_row("SELECT origin FROM asset_tags WHERE asset_id=?1 AND tag_id=?2",
+            rusqlite::params![tagged.id, tag], |row| row.get(0)).unwrap();
+        assert_eq!(origin, "manual");
+        let repeated = import_capture(&paths, &db, &ordinary_bytes, url, None, true).unwrap();
+        assert_eq!(repeated.id, ordinary.id);
+        assert!(db.local_auto_targets("test").unwrap().is_empty());
+        assert!(db.local_enabled().unwrap(), "a tag drop does not change the global opt-in");
+    }
+
+    #[test]
     fn capture_import_preserves_extension_provenance_and_project_membership() {
         let root = std::env::temp_dir().join(format!("bb-explorer-test-{}", ulid::Ulid::new()));
         let paths = LibraryPaths::init(root.clone()).unwrap();
@@ -254,9 +290,9 @@ mod tests {
         let image = crate::media::phash::testutil::make_photo_file(&root, "fixture.png", 128, 42);
         let bytes = std::fs::read(image).unwrap();
         let url = "https://example.com/pin/123";
-        assert!(import_capture(&paths, &db, &bytes, url, Some("deleted")).is_err());
+        assert!(import_capture(&paths, &db, &bytes, url, Some("deleted"), false).is_err());
         assert_eq!(db.count_assets(None).unwrap(), 0);
-        let asset = import_capture(&paths, &db, &bytes, url, Some("target")).unwrap();
+        let asset = import_capture(&paths, &db, &bytes, url, Some("target"), false).unwrap();
         assert_eq!(asset.source.as_deref(), Some("extension"));
         assert_eq!(asset.source_url.as_deref(), Some(url));
         assert_eq!(asset.origin_path, None);
@@ -266,7 +302,7 @@ mod tests {
             .is_some_and(|path| std::path::Path::new(path).is_file()));
         assert_eq!(db.get_project("target").unwrap().unwrap().asset_count, 1);
         assert_eq!(db.get_project("other").unwrap().unwrap().asset_count, 0);
-        let repeated = import_capture(&paths, &db, &bytes, url, Some("target")).unwrap();
+        let repeated = import_capture(&paths, &db, &bytes, url, Some("target"), false).unwrap();
         assert_eq!(repeated.id, asset.id);
         assert_eq!(db.count_assets(None).unwrap(), 1);
         std::fs::remove_dir_all(root).unwrap();

@@ -25,7 +25,7 @@ try {
     document.querySelector(".explore-main").append(root);
     const invoke = window.__TAURI_INTERNALS__.invoke;
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
-      if (command === "set_collection_members") {
+      if (command === "create_material_references") {
         window.calls.push({ command, args });
         if (window.failMembers) throw new Error("collection membership failed");
         return null;
@@ -68,7 +68,7 @@ try {
   await page.evaluate(() => { document.querySelector("#drop-collection").dataset.fileImportCollectionId = "collection-second"; });
   await release();
   assert.equal((await calls("capture_source_browser_image")).at(-1).args.projectId, null);
-  assert.deepEqual((await calls("set_collection_members")).at(-1).args, { id: "collection-first", assetIds: ["captured"], added: true });
+  assert.deepEqual((await calls("create_material_references")).at(-1).args, { folderId: "collection-first", assetIds: ["captured"] });
   await page.waitForFunction(id => window.analysisResolvers[id], dragId(4));
   await page.evaluate(id => window.analysisResolvers[id].resolve(["插画"]), dragId(4));
   await page.waitForFunction(id => document.querySelector(`[data-classification-id^="${id}:"]`)?.dataset.outcome === "matched", dragId(4));
@@ -82,7 +82,7 @@ try {
     document.querySelector("#drop-collection").dataset.fileImportCollectionId = "collection-third";
   });
   await card(5).waitFor({ state: "detached" }); await release();
-  assert.equal((await calls("set_collection_members")).at(-1).args.id, "collection-second");
+  assert.equal((await calls("create_material_references")).at(-1).args.folderId, "collection-second");
   await page.waitForFunction(id => window.analysisResolvers[id], dragId(5));
   await page.evaluate(id => window.analysisResolvers[id].resolve(["插画"]), dragId(5));
   assert.equal(await card(5).count(), 0);
@@ -90,12 +90,15 @@ try {
   // A missing collection reports the partial import and releases the pending analysis.
   await page.evaluate(() => { window.failMembers = true; });
   await drop("#drop-collection", 6); await settled();
-  await page.getByText("图片已入库，但加入集合失败，请重新添加", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "采集记录", exact: true }).click();
+  await page.locator('.explorer-capture-row[data-capture-state="failed"]').filter({ hasText: "已入库，交付未完成" }).waitFor();
   assert.equal((await calls("finish_source_browser_analysis")).filter(call => call.args.dragId === dragId(6)).length, 0);
   assert.equal((await calls("release_source_browser_analysis")).filter(call => call.args.dragId === dragId(6)).length, 1);
   assert.equal(await card(6).count(), 0);
+  await page.keyboard.press("Escape");
   const captures = (await calls("capture_source_browser_image")).length;
   await drop("#drop-unready", 7); await settled();
+  await page.getByRole("button", { name: "采集记录", exact: true }).click();
   await page.getByText("画布尚未准备好，请稍后重新拖入", { exact: true }).waitFor();
   assert.equal((await calls("capture_source_browser_image")).length, captures);
   assert.deepEqual(errors, []);
