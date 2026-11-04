@@ -21,6 +21,19 @@ export function normalizeSourceAddress(value: string): string | null {
   }
 }
 
+const lastSourceAddressKey = "bowerbird.explorer.lastUrl";
+
+export function readLastSourceAddress(): string | null {
+  try { return normalizeSourceAddress(localStorage.getItem(lastSourceAddressKey) ?? ""); }
+  catch { return null; }
+}
+
+export function rememberSourceAddress(value: string) {
+  const address = normalizeSourceAddress(value);
+  if (!address) return;
+  try { localStorage.setItem(lastSourceAddressKey, address); } catch { /* unavailable storage */ }
+}
+
 /**
  * Turns an asset source URL into honest discovery copy. Only Pinterest currently
  * promises a recommendation feed; generic sites are presented as source pages.

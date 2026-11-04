@@ -13,7 +13,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { api, type SourceBrowserBounds } from "../lib/api";
-import { normalizeSourceAddress, sourceDiscoveryFor } from "../lib/sourceDiscovery";
+import { normalizeSourceAddress, rememberSourceAddress, sourceDiscoveryFor } from "../lib/sourceDiscovery";
 import { EXPLORER_SITES, queueBrowserOperation } from "../lib/explorer";
 import { cancelPinterestSearch, isPinterestSearchCurrent, PINTEREST_SEARCH_EVENT, receivePinterestSearchStatus, usePinterestSearch, type PinterestSearchStatus } from "../lib/pinterestSearch";
 import { useStore } from "../store";
@@ -21,6 +21,7 @@ import "./BrowserExtension.css";
 import { ExplorerCaptureHistory } from "./ExplorerCaptureHistory";
 
 const STATUS_EVENT = "source-browser://status";
+const LOCATION_EVENT = "source-browser://location";
 const TITLE_EVENT = "source-browser://title";
 const NEW_WINDOW_EVENT = "source-browser://new-window";
 
@@ -99,7 +100,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
   }, []);
 
   useEffect(() => {
-    try { if (normalizeSourceAddress(currentUrl)) localStorage.setItem("bowerbird.explorer.lastUrl", currentUrl); } catch { /* unavailable storage */ }
+    rememberSourceAddress(currentUrl);
   }, [currentUrl]);
 
   useEffect(() => {
@@ -111,6 +112,10 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
         if (!addressFocusedRef.current) setAddress(payload.url);
         setLoading(payload.loading);
         if (!payload.loading) setError(null);
+      }),
+      listen<string>(LOCATION_EVENT, ({ payload }) => {
+        setCurrentUrl(payload);
+        if (!addressFocusedRef.current) setAddress(payload);
       }),
       listen<string>(TITLE_EVENT, ({ payload }) => setTitle(payload)),
       listen<string>(NEW_WINDOW_EVENT, ({ payload }) => void navigate(payload, false)),

@@ -63,6 +63,8 @@ async function assertLayout(name) {
   checks.push({ name, ...value });
   assert.equal(value.availableWidth, value.width, `${name}: scrollbar must not reserve native width`);
   assert.equal(await source.locator('#VerticalNavContent').evaluate(node => node.getBoundingClientRect().width), 36, `${name}: native navigation is half-width`);
+  assert.equal(await source.locator('[data-test-id="PinBetterSaveDropdown"]').isVisible(), false, `${name}: board selector hidden`);
+  assert.equal(await source.locator('[data-test-id="PinBetterSaveButton"]').isVisible(), false, `${name}: native save hidden`);
   assert.ok(value.source.height <= 161, `${name}: reference preview exceeds 160px (${value.source.height})`);
   assert.ok(value.image.height > 0 && value.image.height <= 161, `${name}: reference image is visible`);
   assert.equal(value.fit, 'contain', name);
@@ -107,15 +109,23 @@ try {
   await source.waitForURL('https://www.pinterest.com/'); await ready();
   await assertOriginal('homepage');
   const originalDocument = await source.evaluate(() => performance.timeOrigin);
+  await main.evaluate(async () => {
+    window.locationEvents = [];
+    const handler = window.__TAURI_INTERNALS__.transformCallback(event => window.locationEvents.push(event.payload));
+    await window.__TAURI_INTERNALS__.invoke('plugin:event|listen', { event: 'source-browser://location', target: { kind: 'Any' }, handler });
+  });
   await source.evaluate(() => history.pushState({}, '', '/lens-search/?synthetic=spa'));
   await pause(300); await assertLayout('homepage to Lens SPA without DOM changes');
+  await poll(() => main.evaluate(() => window.locationEvents.at(-1) === 'https://www.pinterest.com/lens-search/?synthetic=spa'), 'SPA address was not reported for memory');
   await source.locator('[data-grid-item="1"] a').click();
   await source.waitForURL('**/pin/1001/'); await pause(300);
   await assertOriginal('Pin detail');
   assert.deepEqual(await source.evaluate(() => window.pinClicks), ['/pin/1001/']);
+  await poll(() => main.evaluate(() => window.locationEvents.at(-1) === 'https://www.pinterest.com/pin/1001/'), 'Pin address was not reported for memory');
   await invoke('source_browser_back');
   await source.waitForURL('**/lens-search/**'); await pause(300);
   const back = await assertLayout('native Back returns to Lens');
+  await poll(() => main.evaluate(() => window.locationEvents.at(-1) === 'https://www.pinterest.com/lens-search/?synthetic=spa'), 'native Back did not update remembered address');
   assert.equal(back.timeOrigin, originalDocument, 'SPA navigation keeps the same document');
 
   const resize = async (width, visible = true) => invoke('resize_source_browser', { bounds: { x: 250, y: 100, width, height: 600 }, visible });
@@ -150,7 +160,7 @@ try {
   assert.deepEqual(errors, []); assert.deepEqual(unexpected, []);
   const executableBytes = await readFile(executable);
   const hashes = {};
-  for (const file of [executable, 'src-tauri/src/commands/source_browser.rs', 'src-tauri/src/commands/source_browser_pinterest_layout.js', 'src-tauri/src/commands/source_browser_pinterest.js']) {
+  for (const file of [executable, 'src-tauri/src/commands/source_browser.rs', 'src-tauri/src/commands/source_browser_pinterest_layout.js', 'src-tauri/src/commands/source_browser_pinterest.js', 'src-tauri/src/commands/source_browser_pinterest_chrome.js']) {
     const bytes = file === executable ? executableBytes : await readFile(file);
     if (file.endsWith('.js')) assert.ok(executableBytes.includes(bytes), `rebuild the native fixture: current ${file} is not embedded`);
     hashes[file] = createHash('sha256').update(bytes).digest('hex');

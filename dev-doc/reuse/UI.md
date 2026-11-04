@@ -57,6 +57,11 @@
 - **实用证据：** `CanvasLibraryResize` 与 `ExploreWorkspace` 共用该组件和 `.canvas-library-*` 样式。前者仍拥有素材库的宽度、动画与持久化；后者拥有探索宽度、原生网页遮挡和关闭状态。
 - **范围／状态：可跨模块复用。** 宿主提供 `grip` 的鼠标／键盘行为、宽度 ARIA 值与 `onClose`，不共用业务状态；关闭的页签通过宿主隐藏或 `collapsed` 退出 Tab 顺序。
 
+## 记忆探索浏览器的上次网址
+
+- 入口：[sourceDiscovery.ts](../../apps/desktop/src/lib/sourceDiscovery.ts) 的 `readLastSourceAddress`／`rememberSourceAddress`，共用 `normalizeSourceAddress` 与既有本机存储键。`App` 在首次显式打开探索时读取，`SourceBrowserPanel` 随真实地址变化保存。
+- 边界：只存最新的有效 HTTP(S) 网址，不是历史列表、页面快照或跨窗口路由状态。原生 `source-browser://location` 补齐 SPA 地址变化，加载状态继续由原 status 事件负责；存储不可用不阻断浏览。
+
 ## 给图片加统一悬浮定位动效
 
 - **用途／关键词：** hover、方点、对角定位、contain、画布缩放。

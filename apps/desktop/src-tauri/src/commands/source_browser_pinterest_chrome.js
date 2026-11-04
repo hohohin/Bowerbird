@@ -7,6 +7,7 @@
   const style = document.createElement("style");
   style.dataset.bowerbirdPinterestChrome = "";
   style.textContent = __BOWERBIRD_SCROLLBAR_CSS__ + `
+    [data-test-id="PinBetterSaveDropdown"], [data-test-id="PinBetterSaveButton"] { display: none !important; }
     button.industrial-scrollbar { --bb-muted: var(--sema-color-text-subtle, #646464); }
     html[data-bowerbird-pin-nav] #VerticalNavContent { width: 36px !important; min-width: 0 !important; }
     html[data-bowerbird-pin-nav] #VerticalNavContent > div { padding-inline: 0 !important; }

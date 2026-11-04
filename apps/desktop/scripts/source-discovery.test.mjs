@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { normalizeSourceAddress, sourceDiscoveryFor } from "../src/lib/sourceDiscovery.ts";
+import { normalizeSourceAddress, readLastSourceAddress, rememberSourceAddress, sourceDiscoveryFor } from "../src/lib/sourceDiscovery.ts";
 
 test("Pinterest sources expose the native recommendation action", () => {
   const result = sourceDiscoveryFor("https://www.pinterest.com/pin/123456/");
@@ -34,4 +34,31 @@ test("typed addresses stay inside the HTTP(S)-only browser boundary", () => {
   assert.equal(normalizeSourceAddress("https://example.com/path"), "https://example.com/path");
   assert.equal(normalizeSourceAddress("file:///tmp/private.png"), null);
   assert.equal(normalizeSourceAddress("https://user:secret@example.com"), null);
+});
+
+test("exploration memory keeps validated addresses and tolerates unavailable storage", () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const stored = new Map();
+  let unavailable = false;
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: {
+    getItem: key => { if (unavailable) throw new Error("unavailable"); return stored.get(key) ?? null; },
+    setItem: (key, value) => { if (unavailable) throw new Error("unavailable"); stored.set(key, value); },
+  } });
+  try {
+    assert.equal(readLastSourceAddress(), null);
+    rememberSourceAddress("  pinterest.com/pin/123/?q=ceramics  ");
+    assert.equal(readLastSourceAddress(), "https://pinterest.com/pin/123/?q=ceramics");
+    for (const invalid of ["", "file:///private", "javascript:alert(1)", "https://user:secret@example.com/"]) {
+      rememberSourceAddress(invalid);
+      assert.equal(readLastSourceAddress(), "https://pinterest.com/pin/123/?q=ceramics", "invalid locations do not replace the last page");
+    }
+    stored.set("bowerbird.explorer.lastUrl", "file:///private");
+    assert.equal(readLastSourceAddress(), null);
+    unavailable = true;
+    assert.equal(readLastSourceAddress(), null);
+    assert.doesNotThrow(() => rememberSourceAddress("https://example.com/"));
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "localStorage", previous);
+    else delete globalThis.localStorage;
+  }
 });

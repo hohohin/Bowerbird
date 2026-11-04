@@ -10,6 +10,7 @@ use crate::error::{AppError, AppResult};
 const MAIN_WEBVIEW_LABEL: &str = "main";
 const SOURCE_BROWSER_LABEL: &str = "source-discovery";
 const SOURCE_BROWSER_STATUS_EVENT: &str = "source-browser://status";
+const SOURCE_BROWSER_LOCATION_EVENT: &str = "source-browser://location";
 const SOURCE_BROWSER_TITLE_EVENT: &str = "source-browser://title";
 const SOURCE_BROWSER_NEW_WINDOW_EVENT: &str = "source-browser://new-window";
 static SOURCE_BROWSER_DIMMED: AtomicBool = AtomicBool::new(false);
@@ -92,6 +93,23 @@ fn emit_status(app: &AppHandle, url: &Url, loading: bool) {
             loading,
         },
     );
+}
+
+// SPA history changes do not emit page-load events. Read the native location
+// without granting the remote page IPC or changing the loading indicator.
+fn watch_source_location(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut previous = None;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let Some(webview) = app.get_webview(SOURCE_BROWSER_LABEL) else { break; };
+            let Ok(url) = webview.url() else { break; };
+            if previous.as_ref() != Some(&url) && navigation_allowed(&url) {
+                let _ = app.emit_to(MAIN_WEBVIEW_LABEL, SOURCE_BROWSER_LOCATION_EVENT, url.as_str());
+                previous = Some(url);
+            }
+        }
+    });
 }
 
 fn tauri_error(context: &str, error: tauri::Error) -> AppError {
@@ -229,6 +247,7 @@ pub async fn open_source_browser(
             LogicalSize::new(bounds.width, bounds.height),
         )
         .map_err(|error| tauri_error("创建素材发现面板失败", error))?;
+    watch_source_location(app.clone());
     webview
         .set_focus()
         .map_err(|error| tauri_error("聚焦素材发现面板失败", error))?;

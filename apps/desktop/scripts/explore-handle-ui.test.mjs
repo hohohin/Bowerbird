@@ -16,6 +16,10 @@ try{
  const initial=await grip.boundingBox();
  assert.ok(initial.height<100,'exploration uses the compact library grip instead of a full-height strip');
  const panel=page.getByRole('complementary',{name:'探索面板'});
+ const tab=page.locator('.explore-panel-handle');
+ const tabBox=await tab.boundingBox();const panelBox=await panel.boundingBox();
+ assert.ok(Math.abs(tabBox.width-14.4)<0.1,'exploration tab is 40% narrower than the 24px library tab');
+ assert.ok(Math.abs(tabBox.y+tabBox.height/2-panelBox.y-panelBox.height/2)<1,'exploration tab is vertically centered');
  const width=async()=>(await panel.boundingBox()).width;
  const before=await width();
  await grip.focus();await page.keyboard.press('ArrowRight');assert.equal(await width(),before+20);
@@ -28,6 +32,7 @@ try{
  assert.equal(await page.evaluate(()=>document.querySelector('.explore-main').getBoundingClientRect().left-document.querySelector('.explore-browser').getBoundingClientRect().right),0,'no full-height strip occupies width');
  for(const theme of ['light','dark']){
   await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
+  assert.equal(await tab.locator('.canvas-library-tab-fill').evaluate(el=>getComputedStyle(el).fill),await page.locator('.source-browser-panel').evaluate(el=>getComputedStyle(el).backgroundColor),'tab and exploration shell share their surface color');
   await page.screenshot({path:'.tmp/explore-handle/'+theme+'.png'});
  }
  await page.getByRole('button',{name:'收起浏览器',exact:true}).click();await panel.waitFor({state:'hidden'});
