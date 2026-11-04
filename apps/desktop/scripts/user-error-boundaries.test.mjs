@@ -28,6 +28,10 @@ const reviewed = new Set([
   'components/OnboardingTour.tsx:error', // Fixed Chinese instructions only.
   'components/ProjectDeleteDialog.tsx:previewError', // Fixed scan failure instructions only.
   'components/ScreenshotSettings.tsx:error', // Every IPC failure sanitized on assignment.
+  'components/ScreenshotHistoryPanel.tsx:error', // Load and history actions sanitize on assignment.
+  'components/TextAgent.tsx:c.state.error', // TextAgentTask and submit failures both sanitize on assignment.
+  'components/TextDocumentEditor.tsx:error', // File operations sanitize; format validation uses fixed Chinese.
+  'components/TextWorkspace.tsx:error', // Location, save, insert and composer actions sanitize on assignment.
   'components/SettingsDialog.tsx:migrateError', // Sanitized on assignment.
   'components/WorkflowAgentDetail.tsx:progressError', // Fixed Chinese status only.
 ]);
@@ -37,8 +41,8 @@ function rawFields(node, source) {
   if (ts.isConditionalExpression(node)) return [...rawFields(node.whenTrue, source), ...rawFields(node.whenFalse, source)];
   if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken) return rawFields(node.right, source);
   if (ts.isArrowFunction(node) || ts.isPrefixUnaryExpression(node)) return [];
-  if (ts.isPropertyAccessExpression(node) && /^(?:error|last_error|error_code|safe_message|stderr)$/.test(node.name.text)) return [node.getText(source)];
-  if (ts.isIdentifier(node) && /^(?:error|\w+Error|failedNotice|failureMessage|errorText)$/.test(node.text)) return [node.text];
+  if (ts.isPropertyAccessExpression(node) && /^(?:err|error|last_error|error_code|safe_message|stderr)$/.test(node.name.text)) return [node.getText(source)];
+  if (ts.isIdentifier(node) && /^(?:err|error|\w+Error|failedNotice|failureMessage|errorText)$/.test(node.text)) return [node.text];
   return node.getChildren(source).flatMap(child => rawFields(child, source));
 }
 
@@ -65,12 +69,12 @@ test('JSX error text and tooltip boundaries do not render raw errors', async () 
 });
 
 test('boundary guard recognizes direct fields, fallback expressions and safe wrappers', () => {
-  const source = ts.createSourceFile('example.tsx', '<p>{task.error || "失败"}{userErrorMessage(task.error, "任务失败")}{generationErrorMessage(task.error)}{error && <b>{error}</b>}</p>', ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const source = ts.createSourceFile('example.tsx', '<p>{task.error || "失败"}{userErrorMessage(task.error, "任务失败")}{generationErrorMessage(task.error)}{error && <b>{error}</b>}{err}{task.err}{userErrorMessage(err)}</p>', ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const findings = [];
   function visit(node) {
     if (ts.isJsxExpression(node) && node.expression) findings.push(...rawFields(node.expression, source));
     ts.forEachChild(node, visit);
   }
   visit(source);
-  assert.deepEqual(findings, ['task.error', 'error']);
+  assert.deepEqual(findings, ['task.error', 'error', 'err', 'task.err']);
 });

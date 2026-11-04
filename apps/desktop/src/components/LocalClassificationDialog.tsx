@@ -19,13 +19,12 @@ function JevResults({ progress }: { progress: NonNullable<LocalClassificationSta
       <h5 className="font-medium">Jev 返回结果</h5>
       <p className="text-xs text-muted break-all">素材：{progress.asset.name}</p>
       <p className="text-xs" role="status">{userErrorMessage(progress.message, progress.report?.error ? "这张图片未完成分类，请稍后重试。" : "正在识别图片…")}</p>
-      <p className="text-xs text-muted">所有启用标签统一按原始概率排序，最多取 3 个且每个不低于 42%；「无明显匹配项」参与判断，不保存为标签。</p>
       {!report && <p className="text-xs text-muted">暂无 Jev 返回内容</p>}
     </div>
     {report && <>
       <section aria-label="Jev 标签排名" className="border-t border-edge">
         <div className="space-y-1 bg-panel2 px-3 py-2 text-xs">
-          <h6 className="font-medium">全部候选 · Choice</h6>
+          <h6 className="font-medium">候选标签</h6>
           <p>{report.no_match === null ? "结果不完整，未采用" : report.no_match ? "没有真实标签达到 42%，转 Cloud 补充" : "已按概率与 42% 门槛选出标签"}</p>
           <p className="text-muted">{report.model}{report.confidence !== null && ` · 置信度 ${(report.confidence * 100).toFixed(2)}%`}</p>
         </div>
@@ -58,7 +57,6 @@ function JevResults({ progress }: { progress: NonNullable<LocalClassificationSta
         </div>
       </section>
       <div className="space-y-2 p-3">
-        <p className="text-xs text-muted">使用候选原始概率，不重新归一化，也不以 Choice 整体置信度代替。只有没有合格标签时才由 Cloud 补充。</p>
         {report.error && <p className="text-xs text-red-400">本图未采用：{userErrorMessage(report.error, "未能识别这张图片，请稍后重新分类。")}</p>}
         {import.meta.env.DEV && <details className="text-xs">
           <summary className="cursor-pointer text-muted">查看 Jev 原始返回</summary>
@@ -237,7 +235,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
             onChange={(e) => { const enabled = e.target.checked; void action(async () => { if (enabled) await ensureCloud(); await localClassification.enable(enabled); }); }} />
           自动处理新素材
         </label>
-        <p className="text-xs text-muted">全库设置：自动分类新采集、导入及生成的图片，也会补处理库内尚未分类的图片。</p>
+        <p className="text-xs text-muted">全库设置：自动分类新采集、导入及生成的图片。</p>
         <p className="text-xs text-muted">使用云端分类，每张成功获得标签扣 1 Bcoin，包含必要的补标签；无法判断或请求失败不收费。</p>
       </section>}
       <ClassificationPlayback status={showProgress ? status : null} />
@@ -246,7 +244,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
         <div className="space-y-1">
           <h3 className="classification-heading font-medium"><Cloud size={15} aria-hidden="true" />云端分类</h3>
           <p className="text-xs text-muted">优先匹配已有标签，没有合适类别时再补充新标签。</p>
-          <p className="text-xs text-muted">每张成功获得标签扣 1 Bcoin，技术重试不重复收费；无法判断或请求失败退回预留。</p>
+          <p className="text-xs text-muted">每张成功分类扣 1 Bcoin；无法判断或失败会退回积分。</p>
         </div>
         {runControls}
         {folder && <p className="text-xs text-muted">按需扫描当前文件夹，关闭面板后任务继续。</p>}

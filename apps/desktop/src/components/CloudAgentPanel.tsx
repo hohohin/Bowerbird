@@ -732,7 +732,7 @@ export function CloudAgentSession({
         <div className="shrink-0 border-t border-edge bg-panel p-4">
           {!readOnly && <div className="mx-auto mb-3 flex max-w-3xl justify-start"><AgentApprovalToggle run={run} /></div>}
           {readOnly ? (
-            <div className="mx-auto max-w-3xl text-center text-[10px] text-muted">旧 Agent 会话仅供核对；不会批准、回答澄清、执行本机工具、反馈、取消或入库。</div>
+            <div className="mx-auto max-w-3xl text-center text-[10px] text-muted">此会话仅供查看，无法继续操作。</div>
           ) : run.status === "awaiting_result_feedback" && automaticApproval ? (
             <div className="mx-auto flex max-w-3xl items-center gap-2 text-xs text-muted">
               <RefreshCw size={13} className="animate-spin" /> 正在自动接受结果并入库…
@@ -745,7 +745,7 @@ export function CloudAgentSession({
                 placeholder={unifiedRun ? "说明需要修改的内容。Agent 会结合上一轮结果重新规划，提交修订计划供你批准。" : "可选：具体说明哪里不满意。Agent 会先诊断，再提交新的修订计划供你批准。"}
                 className="min-h-16 w-full resize-y rounded-md bg-black/25 px-3 py-2 text-xs text-ink outline-none ring-1 ring-edge focus:ring-accent"
               />}
-              {renderedDocumentRun && <p className="text-xs leading-5 text-muted">请检查整图与切片。接受后会按会话、角色和切片顺序幂等入库；放弃则不会继续导出。</p>}
+              {renderedDocumentRun && <p className="text-xs leading-5 text-muted">接受后，整图与切片将保存到素材库。</p>}
               <div className="mt-2 flex gap-2">
                 <button disabled={busy} onClick={() => void submitFeedback("accept")} className="flex items-center gap-1.5 rounded-md bg-lime/90 px-4 py-2 text-xs font-semibold text-black disabled:opacity-50">
                   <Check size={13} /> 接受结果
@@ -766,7 +766,7 @@ export function CloudAgentSession({
               <span className="text-[10px] text-muted">收起会话不会中断任务；可从侧栏生成会话列表重新打开。</span>
               {canCancel && (
                 <button disabled={busy} onClick={() => void cancel()} className="flex items-center gap-1.5 text-xs text-muted hover:text-red-300 disabled:opacity-50">
-                  <XCircle size={13} /> 取消 Run
+                  <XCircle size={13} /> 取消任务
                 </button>
               )}
             </div>

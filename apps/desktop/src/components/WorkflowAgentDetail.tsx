@@ -92,7 +92,7 @@ export function WorkflowAgentDetail({ projectId, nodeId, graphNodes, onOpenGener
         <option value="latest">最新执行</option>{entries.map(entry => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
       </TacticalSelect></label>}
       <section className="workflow-agent-input"><h3>输入</h3>
-        <p>{step?.agentInput?.prompt || (active || step?.status === "pending" ? "正在准备本次输入。" : "此历史任务未保存输入快照。")}</p>
+        <p>{step?.agentInput?.prompt || (active || step?.status === "pending" ? "正在准备本次输入。" : "这次任务的输入内容未保存。")}</p>
         {Object.entries(sources).filter(([key]) => key !== "__outputTargets").map(([key, value]) => <div key={key}><h4>{key}</h4><p>{typeof value === "string" ? value : JSON.stringify(value, null, 2)}</p></div>)}
         {pictures(inputIds)}
       </section>

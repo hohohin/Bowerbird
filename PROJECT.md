@@ -33,7 +33,7 @@
 
 | 事项 | 当前缺口及完成条件 | 入口 |
 |---|---|---|
-| 自动分类文案 | 面板仍写“也会补处理库内尚未分类的图片”，与新增队列不符；需修正文案并核对同类提示，同时说明连接原件内容变化按既有开关重排的边界。本次未修改产品代码 | [面板](apps/desktop/src/components/LocalClassificationDialog.tsx)、[分类](dev-doc/LOCAL-CLASSIFICATION.md) |
+| 自动分类文案 | 11 月 4 日已删除“也会补处理库内尚未分类的图片”的错误说明；连接原件内容变化按既有开关重排的范围仍待在设置中明确。本轮只改提示，不改分类调度 | [面板](apps/desktop/src/components/LocalClassificationDialog.tsx)、[分类](dev-doc/LOCAL-CLASSIFICATION.md) |
 | 理解／视觉任务 TTL | 清理将 `result_text` 置空，但迁移仍约束 `succeeded` 必有结果。当前源码与迁移链静态核对仍冲突；须隔离验证清理、状态与财务历史保留，再核对生产 schema。本次未证明现网仍复现 | [理解清理](apps/cloud/supabase/functions/understand-worker/index.ts)、[视觉清理](apps/cloud/supabase/functions/visual-profile-worker/index.ts)、[0019](apps/cloud/supabase/migrations/0019_understand_jobs.sql)、[0041](apps/cloud/supabase/migrations/0041_visual_profile_jobs.sql) |
 | 迁移与开发服务生命周期 | 10 月 19 日真实迁移已有 751 个目标文件及身份核验；同步 `setup` 阻塞界面、EXE 重启不保活 Vite 的问题未闭环。需要启动进度、服务跨重启及界面恢复验收，不能据白屏重复迁移 | [文件工作区](dev-doc/FOLDER-MODE.md)、[原诊断](project_logs/2026-10-19.md) |
 | 连接式素材库 | 第 7 步跨设备随图资料恢复待接入；真实回收站、跨磁盘操作、Mac 原生与大型 NAS 性能待对应环境验收 | [连接实现与第 6 步验证](dev-doc/FOLDER-MODE.md#文件夹连接与连续集合视图2026-10-31源码未发布) |
@@ -146,6 +146,7 @@
 
 ### 界面、平台与交付
 
+- **界面提示精简（2026-11-04，源码待发布）。** 图片详情删除重复反推说明，tooltip 改为「用默认反推引擎进行反推」；精简反推、生成记录、标注、生成选项、分类、Agent 的实现用语，保留必要费用与恢复信息。删除反推结果失败在显示边界转换成中文，原始诊断保留；错误扫描新增 `err` 字段。369 个桌面 TS／TSX 文件静态检索及命中核验、详情故障注入、分类回归、9 项错误检查、类型与构建完成；生成选项旧文案断言与适配验证边界见 [记录](project_logs/2026-11-04-ui-copy.md)。
 - **紧凑仪器顶栏（2026-11-02，源码待发布）。** 按确认稿将素材库、项目页与画布共用顶栏收为 44px、按钮 32px，取消按钮／筛选组／账号的底框，使用断续细线、短分隔线和局部方点阵；工程蓝与右下方点表示交互，160ms 透明度短闪结束保留真实状态色。画布项目名和缩放区同步取消外框。保留首页切换居中、积分与账号整合，以及更新入口的 36px 预留位。深浅色、900–1920px、导航、更新和账号回归通过，实施与构建边界见 [记录](project_logs/2026-11-02-topbar-instrument.md)。
 
 - **顶栏更新入口（2026-11-02，源码待发布）。** Bcoin 左侧预留固定图标位，检测到新版后显示工程蓝更新图标，点击直达设置「关于我们」的更新区域；跳过启动提醒后仍可进入，下载／安装状态与进度复用现有更新状态，提示出现不推动账号位置。保持原检查频率和用户确认下载／安装流程。专项、更新与首页回归、类型与构建通过，[记录](project_logs/2026-11-02-topbar-update.md)。

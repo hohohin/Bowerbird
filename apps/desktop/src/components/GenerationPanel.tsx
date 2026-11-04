@@ -387,7 +387,7 @@ export function GenerationPanel({
             type="button"
             onClick={startEdit}
             className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent"
-            title="重新编辑：会话收起为底部编辑器，点瀑布流图片可换参考图；发送后为同一会话的新版本"
+            title="重新编辑：生成新版本"
           >
             <Pencil size={13} />
           </button>
@@ -483,7 +483,7 @@ export function GenerationPanel({
           type="button"
           onClick={() => startTurnEdit(turn)}
           className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent"
-          title="编辑这一轮：载入该轮组稿（原文 + 参考图），改后发送 = 修改意见作为新一轮接在会话下方（原轮保留）"
+          title="编辑这一轮并继续生成"
         >
           <Pencil size={13} />
         </button>
@@ -963,7 +963,7 @@ function TurnView({
                   <button
                     type="button"
                     onClick={onAgentRetry}
-                    title="回到创作板并开启 Agent 模式，本次会话的首轮组稿原样保留，可直接再试"
+                    title="沿用当前内容，以 Agent 模式重试"
                     className="mx-0.5 text-accent hover:underline"
                   >
                     开启 Agent 模式
@@ -1048,7 +1048,7 @@ function GenerationControlDetails({
             <p className="whitespace-pre-wrap leading-4 text-muted">{profile.summary}</p>
           )}
           <p className="rounded bg-panel2 px-2 py-1.5 text-[10px] leading-4 text-muted">
-            这些规则只控制任务未明确指定的部分；发生冲突时，以本次任务描述为准。内容主题未作为画面元素注入。
+            与视觉规范冲突时，以本次创作要求为准。
           </p>
           <div className="grid gap-2 sm:grid-cols-3">
             {sections.map((section) => (

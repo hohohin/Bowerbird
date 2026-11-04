@@ -1,4 +1,5 @@
 import { TacticalSelect } from "./TacticalSelect";
+import { userErrorMessage } from "../lib/userError";
 import { VideoPlayer } from "./VideoPlayer";
 import { AudioWaveform } from "./AudioWaveform";
 import { isAudioAsset } from "../lib/audioMedia";
@@ -1003,7 +1004,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                   <button
                     onClick={() => { selection?.onNavigate?.(); void viewGenerationHistory(asset.id); }}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
-                    title="像回看对话一样，看这张图生成时的各轮 prompt 与产出图，并可继续提修改意见"
+                    title="查看生成记录并继续创作"
                   >
                     <MessageSquare size={13} />
                     回看所属创作
@@ -1012,7 +1013,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                     <button
                       onClick={() => void openSession(genMeta.session_id!)}
                       className="text-[10px] text-accent hover:underline"
-                      title="在 Terminal 里 codex resume，看这次生成的完整对话含图"
+                      title="在 Codex 中继续这次对话"
                     >
                       在 codex 中打开会话 <ExternalLink size={11} className="inline" />
                     </button>
@@ -1081,7 +1082,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                   title={
                     !understandReady
                       ? understandReason
-                      : "选择反推引擎（Bowerbird Cloud / 本机 codex）按当前反推指令分析这张图片"
+                      : "用默认反推引擎进行反推"
                   }
                 >
                   {describing ? "反推中…" : queued ? "排队中…" : "反推"}
@@ -1103,7 +1104,6 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                   placeholder={DEFAULT_DESCRIBE_PROMPT}
                 />
                 <div className="flex flex-col gap-2 text-[10px] text-muted">
-                  <span>编辑后直接「反推」即用本次内容；「保存为默认」才作为下次默认指令。</span>
                   <div className="flex justify-end gap-3">
                     <button
                       onClick={() => {
@@ -1148,17 +1148,16 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
             )}
             {err && (
               <div className="whitespace-pre-wrap rounded bg-red-500/15 p-2 text-xs text-red-300">
-                {err}
+                {userErrorMessage(err, "删除反推结果失败，请重试。")}
               </div>
             )}
             <LearningHint topic="dimensions" />
-            {captions.length === 0 ? (
+            {captions.length === 0 && !understandReady && (
               <div className="text-xs text-muted">
-                {!understandReady
-                  ? understandReason
-                  : "点「反推」选择引擎（Bowerbird Cloud / 本机 codex）按当前指令分析这张图。"}
+                {understandReason}
               </div>
-            ) : (
+            )}
+            {
               captions.map((a) => {
                 const caption = parseCaptionPayload(a.payload);
                 const hasSections = caption.sections.length > 0;
@@ -1226,7 +1225,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                                     onClick={() => startEditSection(a.id, sidx, section.body)}
                                     disabled={describing || queued || !!editingSection}
                                     className="shrink-0 text-muted hover:text-accent disabled:opacity-50"
-                                    title="修改这个维度的内容（创作板发送时用新内容）"
+                                    title="修改维度内容"
                                     aria-label={`修改维度 ${section.title}`}
                                   >
                                     <Edit3 size={11} />
@@ -1271,7 +1270,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                           <div className="rounded border border-edge bg-panel px-2 py-1 text-[10px] text-muted">
                             {caption.parseStatus === "raw_fallback"
                               ? "没有按维度分段，可作为整段描述使用，或调整指令后重新反推。"
-                              : "这是较早的反推结果（未分段），重新反推可得到分维度描述。"}
+                              : "重新反推可按构图、光影等维度拆分描述。"}
                           </div>
                         </>
                       ))}
@@ -1283,14 +1282,14 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                           }
                           disabled={describing || queued}
                           className="text-accent hover:underline disabled:opacity-50"
-                          title="把这条反推正文登记为这张图的提示词（desc 角色）"
+                          title="将反推结果保存为提示词"
                         >
                           存为提示词
                         </button>
                         <button
                           onClick={() => sendCaptionToBoard(caption.text)}
                           className="text-accent hover:underline"
-                          title="把这条反推正文送进创作板编辑器"
+                          title="将反推结果用于创作"
                         >
                           送到创作板
                         </button>
@@ -1307,7 +1306,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                           <button
                             onClick={() => void openSession(caption.sessionId!)}
                             className="text-[10px] text-accent hover:underline"
-                            title="在 Terminal 里跑 codex resume，看这次反推的完整对话（含图）"
+                            title="在 Codex 中继续这次对话"
                           >
                             在 codex 中打开 ↗
                           </button>
@@ -1317,7 +1316,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                   </div>
                 );
               })
-            )}
+            }
           </div>
 
           }

@@ -1153,10 +1153,7 @@ export function ImageAnnotator() {
               }${ops.length > 0 ? " · 已裁剪/旋转" : ""}`}
         </span>
         {isDraft ? <span>支持画框、箭头、画圆、铅笔和文字，保存后可作为参考图使用</span> : <span>
-          坐标按火山 Seedream 归一化（0-999）记录，相对最终输出图；创作板选「标注」维度即注入
-          <code className="mx-1 rounded bg-white/10 px-1">&lt;bbox&gt;</code>/
-          <code className="mx-1 rounded bg-white/10 px-1">&lt;point&gt;</code>
-          坐标
+          在创作板选择「标注」维度，可使用这些标注
         </span>}
       </div>
     </div>,
