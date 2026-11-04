@@ -300,6 +300,16 @@ html[data-theme] .composer-glass .generation-send-button:disabled svg { filter:n
 html[data-theme] .creation-dock.composer-glass.is-collapsed { --composer-rail:0px;border:0;box-shadow:none; }
 html[data-theme] .composer-glass.is-collapsed .composer-hud-surface { inset:0;filter:none;mask-image:none; }
 html[data-theme] .composer-glass.is-collapsed :is(.composer-hud-optics,.composer-collapse,.composer-profile) { display:none; }
+@media (max-width:1100px) {
+  html[data-theme] .composer-glass .composer-video-fields { flex:1 1 0;gap:4px; }
+  html[data-theme] .composer-glass .composer-video-fields>:not(.model-select) { flex-shrink:0; }
+  html[data-theme] .composer-glass .composer-video-fields .model-select { flex:1 1 0;min-width:116px; }
+  html[data-theme] .composer-glass .composer-video-fields .video-duration-label { display:none; }
+  html[data-theme] .composer-glass .composer-video-fields input[type="number"] { width:44px;padding-inline:4px; }
+  html[data-theme] .composer-glass .composer-video-fields .tactical-select-trigger[aria-label="视频分辨率"] { max-width:90px; }
+  html[data-theme] .composer-glass .composer-toolbar.is-video .generation-send-button { width:32px;padding-inline:0; }
+  html[data-theme] .composer-glass .composer-toolbar.is-video .generation-button-content { font-size:0;gap:0; }
+}
 @media (max-width:700px) {
   html[data-theme] .creation-dock.composer-glass:not(.is-collapsed) { --composer-rail:60px; }
   html[data-theme] .composer-glass:not(.is-collapsed) .composer-heading { width:48px; }

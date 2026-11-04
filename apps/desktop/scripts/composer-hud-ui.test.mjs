@@ -28,6 +28,24 @@ async function singleRow(dock) {
   }));
   assert.ok(layout.centers.every(center => Math.abs(center - layout.centers[0]) < 1), `single footer row: ${layout.centers}`);
   assert.ok(layout.scroll <= layout.width, 'footer controls do not overflow');
+  const values = await dock.locator('.composer-video-fields .tactical-select-trigger').evaluateAll(buttons => buttons
+    .filter(button => button.getAttribute('aria-label') !== '视频分辨率')
+    .map(button => { const value = button.querySelector('.tactical-select-value'); return { label: button.getAttribute('aria-label'), width: value.clientWidth, content: value.scrollWidth }; }));
+  assert.ok(values.every(value => value.content <= value.width + 1), `core parameter values remain readable: ${JSON.stringify(values)}`);
+}
+async function responsiveWidth(dock) {
+  const widths = [];
+  for (const width of [900, 1100, 1440, 1920]) {
+    await page.setViewportSize({ width, height: 900 }); await settle();
+    const bounds = await dock.boundingBox();
+    assert.ok(bounds.width <= Math.min(1238, width * .84) + 1, `composer keeps side space and respects its maximum: ${width} / ${bounds.width}`);
+    assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width, 'composer stays inside the resized window');
+    await singleRow(dock);
+    widths.push(bounds.width);
+  }
+  assert.ok(widths[0] < widths[1] && widths[1] < widths[2] && widths[2] <= widths[3], `composer follows window size: ${widths}`);
+  assert.ok(Math.abs(widths[3] - 1238) < 1, 'large windows stop expanding at the maximum');
+  await page.setViewportSize({ width: 1440, height: 900 }); await settle();
 }
 async function leftRail(dock, hasProject = false) {
   const layout = await dock.evaluate(element => {
@@ -152,7 +170,7 @@ try {
     const writing = await home.locator('.ProseMirror').boundingBox();
     assert.ok(writing.height >= 160, `expanded input retains five lines of editable space: ${writing.height}`);
     const compact = await home.boundingBox();
-    assert.ok(Math.abs(compact.width - 884 * 1.4) < 1, `composer is 40% wider when space permits: ${compact.width}`);
+    assert.ok(compact.width <= 1440 * .84 && compact.width <= 1238, `composer leaves proportional side space: ${compact.width}`);
     assert.ok(compact.height >= 393 * .68 && compact.height <= 393 * .72, `composer is 30% shorter: ${compact.height}`);
     if (theme === 'dark') {
       await home.getByRole('button', { name: '放大编辑文本', exact: true }).click();
@@ -196,6 +214,7 @@ try {
     await home.screenshot({ path: `${output}/hud-rail-${theme}.png` });
     await home.getByRole('button', { name: '视频', exact: true }).click(); await settle();
     await home.locator('.ProseMirror').fill('清晨的薄雾掠过山脊，镜头缓慢推进。');
+    if (theme === 'dark') await responsiveWidth(home);
     for (const width of [1440, 900]) {
       await page.setViewportSize({ width, height: 900 }); await settle(); await singleRow(home);
       assert.ok(await home.evaluate(element => { const rect = element.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth; }));
@@ -238,6 +257,7 @@ try {
   await opticalSurface(canvas);
   await page.screenshot({ path: `${output}/canvas-light.png` });
   await canvas.getByRole('button', { name: '视频', exact: true }).click();
+  await responsiveWidth(canvas);
   await page.setViewportSize({ width: 900, height: 900 }); await settle(); await singleRow(canvas);
   assert.ok(await canvas.locator('.composer-toolbar').evaluate(element => element.scrollWidth <= element.clientWidth), 'canvas footer does not overflow at 900px');
   await page.emulateMedia({ forcedColors: 'active' });

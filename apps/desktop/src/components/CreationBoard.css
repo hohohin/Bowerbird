@@ -1,9 +1,9 @@
 /* Canvas composer: library glass material, with a denser writing surface. */
-:root { --composer-max-width: 1238px; }
+:root { --composer-max-width: 1238px; --composer-width: 82%; }
 .canvas-composer-host.composer-host-glass { padding-left: 64px; padding-right: 8px; }
 .creation-dock.composer-glass {
   --composer-fill: rgb(30 35 44 / 75%);
-  width: min(var(--composer-max-width), calc(100% - 28px));
+  width: min(var(--composer-max-width), var(--composer-width));
   margin-bottom: 20px;
   padding: 0;
   border: 1px solid var(--library-glass-edge);
@@ -16,7 +16,7 @@
   transition: margin-bottom 180ms ease, border-radius 180ms ease;
 }
 html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: rgb(255 255 255 / 56%); }
-.creation-dock.composer-glass.is-canvas-composer { width: min(var(--composer-max-width), calc(100% - 28px)); }
+.creation-dock.composer-glass.is-canvas-composer { width: min(var(--composer-max-width), var(--composer-width)); }
 .creation-dock.composer-glass.is-creating { outline: 1px solid rgb(var(--bb-blue-rgb) / 30%); }
 .composer-heading { display: flex; align-items: center; gap: 10px; padding: 12px 16px 0; }
 .composer-mode-picker {
