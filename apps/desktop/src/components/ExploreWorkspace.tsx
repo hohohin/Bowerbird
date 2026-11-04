@@ -193,7 +193,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
   return <div ref={root} className={`explore-workspace ${open ? "is-open" : ""}`} aria-label="主工作区">
     <aside id="explore-browser-panel" className="explore-browser" style={{ width: browserWidth }} hidden={!open} aria-label="探索面板">
       {url && <SourceBrowserPanel url={url} navigationId={navigationId} onClose={onClose} visible={open} suspended={resizing} />}
-      <PanelEdgeHandle className={`explore-panel-handle ${resizing ? "is-library-resizing" : ""}`} closeLabel="收起浏览器" onClose={onClose} onEscape={onClose} grip={{
+      <PanelEdgeHandle variant="overlay" className={`explore-panel-handle ${resizing ? "is-library-resizing" : ""}`} closeLabel="收起浏览器" onClose={onClose} onEscape={onClose} grip={{
         "aria-label": "调整浏览器宽度", "aria-controls": "explore-browser-panel",
         "aria-valuemin": 320, "aria-valuemax": maximumWidth, "aria-valuenow": browserWidth,
         title: "拖动调整浏览器宽度 · 左右方向键微调 · 双击恢复默认宽度",

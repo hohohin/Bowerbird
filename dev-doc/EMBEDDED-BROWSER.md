@@ -20,7 +20,7 @@
 
 WebView2 的 `pushState`／`replaceState` 不触发原有加载通知。创建原生浏览器时启动唯一地址观察任务，每 500ms 读取其真实 URL，仅变化时向主窗口发送 `source-browser://location`，不改变加载状态；复用／隐藏不新增观察任务，WebView 关闭或读取失败后退出。沿用 HTTP(S) 与无内嵌凭据边界，不给远程网页增加 IPC 权限。该通知驱动地址栏及已有本机记忆，也覆盖搜图结果、Pin 和后退。
 
-Pinterest 适配只隐藏原生 `PinBetterSaveDropdown` 与 `PinBetterSaveButton`，包括后续 SPA 动态插入；其他按钮保持。探索页签位于面板右边缘内侧并垂直居中，24px 缩为 14.4px，页签／面板外壳／加载占位区共用 `--explore-panel-surface`；网页 viewport 铺满面板，不为把手保留独立宽度。SourceBrowserPanel 根据页签实际屏幕矩形传递可选 overlay 局部区域；Windows 仅在该足迹内裁剪原生子窗口并透出主窗口把手，其上下网页保持完整宽度，移除 overlay 恢复完整窗口。范围受 64×128 上限及 viewport 边界校验，按实际客户区尺寸适配 DPI。Mac 接入透明父视图的命中穿透与图层遮罩，保留原 WKWebView 身份和坐标，尚未原生编译／实机验收。素材库页签尺寸和位置保持。浮动回归见 [记录](../project_logs/2026-11-04-explore-overlay-icons.md)。验证与当前开发实例生效证据见 [行动记录](../project_logs/2026-11-04-explore-memory-controls.md)。
+Pinterest 适配只隐藏原生 `PinBetterSaveDropdown` 与 `PinBetterSaveButton`，包括后续 SPA 动态插入；其他按钮保持。探索页签位于面板右边缘内侧并垂直居中，24px 缩为 14.4px，页签／面板外壳／加载占位区共用 `--explore-panel-surface`；网页 viewport 铺满面板，不为把手保留独立宽度。PanelEdgeHandle 的 overlay 外观为 14.4×76px 窄切角控件，上方关闭、下方拖动，无 ESC 小字与旧尾部；切角值由实际 SVG 提供。SourceBrowserPanel 传递精确边界和 cut，不加矩形余量；Windows 用同轮廓多边形裁剪原生子窗口并透出主窗口把手，其上下网页保持完整宽度，移除 overlay 恢复完整窗口。范围受 64×128 上限、viewport 边界和切角不超过短边一半校验，按实际客户区尺寸适配 DPI。Mac 命中和遮罩同步采用该多边形；缺省 cut 为零兼容原矩形协议。设计与直角残留红绿回归见 [记录](../project_logs/2026-11-04-explore-handle-redesign.md)。Mac 接入透明父视图的命中穿透与图层遮罩，保留原 WKWebView 身份和坐标，尚未原生编译／实机验收。素材库页签尺寸和位置保持。浮动回归见 [记录](../project_logs/2026-11-04-explore-overlay-icons.md)。验证与当前开发实例生效证据见 [行动记录](../project_logs/2026-11-04-explore-memory-controls.md)。
 
 ### 2026-11-04：Pinterest 滚动条、侧栏与探索把手（源码未发布）
 

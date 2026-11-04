@@ -861,12 +861,15 @@ html[data-theme="light"] .task-state-failed { color: #ba3c3c; }
 .explore-drop-hint { position: absolute; inset: 0; z-index: 40; pointer-events: none; display: grid; place-items: center; background: rgb(72 104 255 / 12%); color: var(--bb-blue); font-size: 14px; }
 .explore-browser { --explore-panel-surface: var(--bb-surface); position: relative; flex-shrink: 0; min-width: 320px; max-width: calc(100% - 280px); }
 .explore-browser[hidden] { display: none; }
-.explore-browser > .explore-panel-handle { left: auto; right: 0; top: 50%; width: 14.4px; transform: translateY(-50%); transition: none; }
-.explore-panel-handle .canvas-library-tab-shape { left: 14.4px; transform: scaleX(-.6); transform-origin: left top; }
+.explore-browser > .explore-panel-handle { left: auto; right: 0; top: 50%; width: 14.4px; height: 76px; padding: 0; transform: translateY(-50%); transition: none; }
+.explore-panel-handle .canvas-library-tab-shape { inset: 0; width: 100%; height: 100%; transform: none; }
 .explore-panel-handle .canvas-library-tab-fill { fill: var(--explore-panel-surface); }
-.explore-panel-handle :is(.canvas-library-close, .canvas-library-grip) { width: 100%; }
+.explore-panel-handle :is(.canvas-library-close, .canvas-library-grip) { width: 100%; border-radius: 0; background: transparent; }
+.explore-panel-handle .canvas-library-close { height: 28px; }
+.explore-panel-handle .canvas-library-grip::before { content: ""; position: absolute; top: 0; left: 3px; right: 3px; height: 1px; background: var(--bb-line); pointer-events: none; }
+.explore-panel-handle:is(:hover, :focus-within, .is-library-resizing) .canvas-library-tab-edge { stroke: var(--bb-blue); }
+.explore-panel-handle :is(.canvas-library-close, .canvas-library-grip):active { color: var(--bb-blue); }
 .explore-panel-handle :is(.canvas-library-close, .canvas-library-grip) > svg { width: 11px; }
-.explore-panel-handle .canvas-library-close-hint { font-size: 6.4px; letter-spacing: 0; }
 .explore-browser :is(.source-browser-panel, .source-browser-viewport) { background: var(--explore-panel-surface); }
 .explore-browser .source-browser-header { flex-wrap: wrap; gap: 5px; padding: 6px 8px; }
 .explore-browser .source-browser-heading { width: 100%; }

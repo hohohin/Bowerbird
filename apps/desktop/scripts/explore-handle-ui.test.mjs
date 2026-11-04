@@ -18,6 +18,8 @@ try{
  const panel=page.getByRole('complementary',{name:'探索面板'});
  const tab=page.locator('.explore-panel-handle');
  const tabBox=await tab.boundingBox();const panelBox=await panel.boundingBox();
+ assert.equal(tabBox.height,76,'the overlay uses a compact two-action rail without the old tail');
+ assert.equal(await tab.locator('.canvas-library-close-hint').count(),0,'no tiny secondary ESC label');
  assert.ok(Math.abs(tabBox.width-14.4)<0.1,'exploration tab is 40% narrower than the 24px library tab');
  assert.ok(Math.abs(tabBox.y+tabBox.height/2-panelBox.y-panelBox.height/2)<1,'exploration tab is vertically centered');
  assert.ok(tabBox.x+tabBox.width<=panelBox.x+panelBox.width,'the handle stays inside exploration, clear of the library letter index');
@@ -34,6 +36,7 @@ try{
  assert.equal(await width(),before+100,'drag uses the initial width without a jump from the inward tab');
  await page.waitForFunction(()=>window.calls.filter(c=>c.command==='resize_source_browser').at(-1)?.args.visible===true);
  const nativeBounds=await page.evaluate(()=>window.calls.filter(c=>c.command==='resize_source_browser').at(-1).args.bounds);
+ assert.equal(nativeBounds.overlay.cut,4,'native clipping follows the visible chamfer, not a rectangular hole');
  assert.ok(Math.abs(nativeBounds.x+nativeBounds.width-(await panel.boundingBox()).x-(await panel.boundingBox()).width)<1,'native webpage retains the full panel width');
  const overlayShape=await tab.locator('.canvas-library-tab-shape').boundingBox();
  assert.ok(nativeBounds.overlay.width<22&&nativeBounds.overlay.height<100,'native exclusion is limited to the floating tab footprint');
@@ -44,6 +47,23 @@ try{
   await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
   assert.equal(await tab.locator('.canvas-library-tab-fill').evaluate(el=>getComputedStyle(el).fill),await page.locator('.source-browser-panel').evaluate(el=>getComputedStyle(el).backgroundColor),'tab and exploration shell share their surface color');
   await page.screenshot({path:'.tmp/explore-handle/'+theme+'.png'});
+  // Reproduce the native layer above the main DOM for a readable contour review.
+  await page.evaluate(()=>{
+   const viewport=document.querySelector('.source-browser-viewport'),v=viewport.getBoundingClientRect();
+   const shape=document.querySelector('.explore-panel-handle .canvas-library-tab-shape'),s=shape.getBoundingClientRect();
+   const x=s.left-v.left,y=s.top-v.top,r=x+s.width,b=y+s.height,c=Number(shape.dataset.overlayCut);
+   const layer=document.createElement('div');layer.dataset.handleReview='';
+   Object.assign(layer.style,{position:'absolute',inset:'0',zIndex:'48',pointerEvents:'none',background:'repeating-linear-gradient(135deg,#a7bbba 0 18px,#c2cebd 18px 36px)',
+    clipPath:`path(evenodd, "M0 0H${v.width}V${v.height}H0Z M${x+c} ${y}H${r}V${b}H${x+c}L${x} ${b-c}V${y+c}Z")`});
+   viewport.append(layer);
+  });
+  await page.mouse.move(900,100);await grip.evaluate(el=>el.blur());
+  const reviewBox=await tab.boundingBox();
+  const cdp=await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setDeviceMetricsOverride',{width:1280,height:800,deviceScaleFactor:3,mobile:false});
+  await page.screenshot({path:'.tmp/explore-handle/'+theme+'-contour.png',clip:{x:reviewBox.x-36,y:reviewBox.y-24,width:74,height:124}});
+  await cdp.send('Emulation.clearDeviceMetricsOverride');await cdp.detach();
+  await page.locator('[data-handle-review]').evaluate(el=>el.remove());
  }
  await page.getByRole('button',{name:'收起浏览器',exact:true}).click();await panel.waitFor({state:'hidden'});
  await page.getByRole('button',{name:'探索',exact:true}).click();assert.equal(await width(),before+100);

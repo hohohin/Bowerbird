@@ -38,11 +38,12 @@ function boundsFor(element: HTMLElement): SourceBrowserBounds {
     width: Math.round(rect.width),
     height: Math.round(rect.height),
   };
-  const tab = element.closest(".explore-browser")?.querySelector(".explore-panel-handle .canvas-library-tab-shape")?.getBoundingClientRect();
+  const shape = element.closest(".explore-browser")?.querySelector(".explore-panel-handle .canvas-library-tab-shape");
+  const tab = shape?.getBoundingClientRect();
   if (tab) {
-    const x = Math.max(0, Math.floor(tab.left - 1) - bounds.x), y = Math.max(0, Math.floor(tab.top - 1) - bounds.y);
-    const right = Math.min(bounds.width, Math.ceil(tab.right + 1) - bounds.x), bottom = Math.min(bounds.height, Math.ceil(tab.bottom + 1) - bounds.y);
-    if (right > x && bottom > y) bounds.overlay = { x, y, width: right - x, height: bottom - y };
+    const x = Math.max(0, tab.left - bounds.x), y = Math.max(0, tab.top - bounds.y);
+    const right = Math.min(bounds.width, tab.right - bounds.x), bottom = Math.min(bounds.height, tab.bottom - bounds.y);
+    if (right > x && bottom > y) bounds.overlay = { x, y, width: right - x, height: bottom - y, cut: Number(shape?.getAttribute("data-overlay-cut") || 0) };
   }
   return bounds;
 }

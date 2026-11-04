@@ -88,7 +88,8 @@ try {
   mainBrowser = await poll(() => chromium.connectOverCDP('http://127.0.0.1:9567', { timeout: 1000 }), 'main native CDP missing');
   main = await poll(async () => mainBrowser.contexts()[0].pages().find(page => page.url().startsWith('http://127.0.0.1:1557')), 'main page missing');
   await main.waitForFunction(() => window.__TAURI_INTERNALS__?.invoke);
-  await invoke('open_source_browser', { url: 'http://127.0.0.1:1557/source', bounds: { x: 250, y: 100, width: 360, height: 600, overlay: { x:340,y:220,width:20,height:98 } } });
+  await invoke('open_source_browser', { url: 'http://127.0.0.1:1557/source', bounds: { x: 250, y: 100, width: 360, height: 600, overlay: { x:340,y:220,width:20,height:98,cut:4 } } });
+  if(process.platform==='win32')assert.deepEqual(await invoke('smoke_region',{points:[[341/360,221/600],[343/360,223/600],[341/360,317/600]]}),[true,false,true],'chamfer corners remain webpage pixels, with no rectangular background residue');
   if(process.platform==='win32')assert.deepEqual(await invoke('smoke_region',{points:[[.99,.4],[.99,.1],[.99,.8],[.2,.4]]}),[false,true,true,true],'the first native frame already exposes the overlay');
   sourceBrowser = await poll(() => chromium.connectOverCDP('http://127.0.0.1:9568', { timeout: 1000 }), 'source native CDP missing');
   source = await poll(async () => sourceBrowser.contexts()[0].pages().find(page => page.url().includes('/source')), 'source page missing');
