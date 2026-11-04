@@ -9,6 +9,12 @@ import { contentTableRows } from "../lib/contentTable";
 import type { Asset, CanvasNode } from "../lib/types";
 import { ProjectInspectorShell } from "./ProjectInspectorShell";
 import { ModalShell } from "./ModalShell";
+import { VideoPlayer } from "./VideoPlayer";
+import { isVideoPath } from "../lib/videoGeneration";
+import { notifyError } from "../lib/notify";
+import { AudioWaveform } from "./AudioWaveform";
+import { isAudioPath } from "../lib/audioMedia";
+import { VideoStudioPanel } from "./VideoStudioPanel";
 import "./WorkflowAgentDetail.css";
 
 const statusLabels: Record<string, string> = { pending: "等待执行", running: "运行中", waiting: "等待继续", done: "已完成", failed: "失败", stopped: "已停止" };
@@ -24,6 +30,7 @@ export function WorkflowAgentDetail({ projectId, nodeId, graphNodes, onOpenGener
   const [progressError, setProgressError] = useState("");
   const [assets, setAssets] = useState<Asset[]>([]);
   const [preview, setPreview] = useState<Asset | null>(null);
+  const [studio, setStudio] = useState<string | null>(null);
   useEffect(() => controller.subscribe(() => redraw(value => value + 1)), [controller]);
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
@@ -75,9 +82,10 @@ export function WorkflowAgentDetail({ projectId, nodeId, graphNodes, onOpenGener
   }, [assetKey]);
   const pictures = (ids: string[]) => <div className="workflow-agent-detail-images">{ids.map((id, index) => {
     const asset = assets.find(asset => asset.id === id);
-    return <button key={`${id}:${index}`} type="button" disabled={!asset?.store_path} onClick={() => asset && setPreview(asset)} aria-label={`查看图片 ${index + 1}`}>
-      {asset?.store_path ? <img src={convertFileSrc(asset.thumb_path || asset.store_path)} alt={`图片 ${index + 1}`} /> : <span>图片 {index + 1} 暂不可用</span>}
-      <small>图片 {index + 1}</small>
+    if (asset?.store_path && isAudioPath(asset.store_path)) return <AudioWaveform key={`${id}:${index}`} assetId={id} path={asset.store_path} name={asset.name} version={asset.file_mtime ?? 0} />;
+    return <button key={`${id}:${index}`} type="button" disabled={!asset?.store_path} onClick={() => asset && setPreview(asset)} aria-label={`查看${isVideoPath(asset?.store_path) ? "视频" : "图片"} ${index + 1}`}>
+      {asset?.store_path && (!isVideoPath(asset.store_path) || asset.thumb_path) ? <img src={convertFileSrc(asset.thumb_path || asset.store_path)} alt={`素材 ${index + 1}`} /> : <span>{asset?.name || `素材 ${index + 1} 暂不可用`}</span>}
+      <small>{isVideoPath(asset?.store_path) ? "视频" : "图片"} {index + 1}</small>
     </button>;
   })}</div>;
   const events = journal && journal.requestId === requestId ? journal.events : [];
@@ -115,12 +123,19 @@ export function WorkflowAgentDetail({ projectId, nodeId, graphNodes, onOpenGener
         {step?.error && <p role="alert">{userErrorMessage(step.error, "助手任务未完成，请检查输入后重试。")}</p>}
       </section>
       <section><h3>输出</h3>
+        {step?.videoProjectPath && <>
+          <button type="button" className="workflow-agent-session" disabled={active || !requestId} onClick={() => requestId && setStudio(requestId)}>打开 Studio</button>
+          <button type="button" className="workflow-agent-session" onClick={() => void api.openWithSystem(step.videoProjectPath!).catch(error => notifyError(error, "无法打开视频工程目录"))}>工程目录</button>
+        </>}
         {Object.entries(outputs).filter(([, value]) => value.type === "text").map(([port, value]) => <p key={port}>{valueText(value)}</p>)}
         {pictures(outputIds)}
         {!Object.keys(outputs).length && <p>{active ? "结果将在完成后显示。" : "本次没有已交付结果。"}</p>}
         {sessionIds.map((id, index) => { const card = graphNodes.find(node => node.id === id && node.hiddenAt == null); return <button className="workflow-agent-session" key={id} disabled={!card} onClick={() => { if (card) { onClose(); onOpenGeneration(card); } }}>查看生成会话 {index + 1}</button>; })}
       </section>
     </div>
-    {preview && <ModalShell title="Agent 图片" width="lg" onClose={() => setPreview(null)}><img className="workflow-agent-detail-preview" src={convertFileSrc(preview.store_path!)} alt="Agent 图片" /></ModalShell>}
+    {preview && <ModalShell title="Agent 素材" width="lg" onClose={() => setPreview(null)}>{isVideoPath(preview.store_path)
+      ? <VideoPlayer path={preview.store_path!} />
+      : <img className="workflow-agent-detail-preview" src={convertFileSrc(preview.store_path!)} alt="Agent 图片" />}</ModalShell>}
+    {studio && <VideoStudioPanel requestId={studio} onClose={() => setStudio(null)} />}
   </ProjectInspectorShell>;
 }

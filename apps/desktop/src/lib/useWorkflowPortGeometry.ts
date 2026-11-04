@@ -36,6 +36,14 @@ export function useWorkflowPortGeometry(root: RefObject<SVGSVGElement>, targets:
           kind === "input" && port.dataset.contentInputType === "image"]);
         if (wanted.has(key) && !elements.has(key)) elements.set(key, { card, port });
       }
+      // Old whole-card bindings keep their identity while sharing the new socket.
+      for (const [key, target] of wanted) {
+        if (target.node.id !== id || elements.has(key) || target.kind === "cell") continue;
+        if (target.kind === "output" && !["*", "*text", "*latest", "*latest-image", "*auto"].includes(target.port)) continue;
+        if (target.kind === "input" && !["", "*auto"].includes(target.port)) continue;
+        const port = card.querySelector<HTMLElement>(`[data-canvas-connect-side="${target.kind}"]`);
+        if (port) elements.set(key, { card, port });
+      }
     }
     let frame = 0;
     const measure = () => {
@@ -49,6 +57,10 @@ export function useWorkflowPortGeometry(root: RefObject<SVGSVGElement>, targets:
         let cardRect = bounds.get(card);
         if (!cardRect) { cardRect = card.getBoundingClientRect(); bounds.set(card, cardRect); }
         if (!scale || !Number.isFinite(scale)) continue;
+        if (port.hasAttribute("data-canvas-connect-side")) {
+          next.set(key, { x: port.dataset.canvasConnectSide === "output" ? card.offsetWidth : 0, y: card.offsetHeight / 2, width: 0, height: 0 });
+          continue;
+        }
         const rect = port.getBoundingClientRect();
         next.set(key, { x: (rect.left - cardRect.left) / scale, y: (rect.top - cardRect.top) / scale,
           width: rect.width / scale, height: rect.height / scale });

@@ -1,6 +1,9 @@
 import { useId, useState, type ReactNode } from "react";
 import { Check, Coins, Sparkles } from "lucide-react";
 import type { EntitlementSnapshot } from "../lib/types";
+import { useStore } from "../store";
+import { useCheckout } from "./useCheckout";
+import { CheckoutDialog } from "./CheckoutDialog";
 import "./AccountBilling.css";
 
 const TOPUP_AMOUNTS = [5, 10, 20, 50, 100, 500] as const;
@@ -27,6 +30,8 @@ export function AccountBilling({ loggedIn, entitlement, trialAction }: {
   const [topup, setTopup] = useState<number | "custom">(20);
   const [custom, setCustom] = useState("");
   const [customTouched, setCustomTouched] = useState(false);
+  const auth = useStore(s => s.cloudAuth);
+  const checkout = useCheckout(loggedIn ? auth?.user_id ?? null : null);
   const needsRefresh = entitlement?.offline_state === "expired" || entitlement?.offline_state === "invalid";
   const current = loggedIn && !needsRefresh ? entitlement : null;
   const tierName = current ? { free: "Free", pro: "Pro", studio: "Studio" }[current.tier] : null;
@@ -34,7 +39,7 @@ export function AccountBilling({ loggedIn, entitlement, trialAction }: {
   const balance = current ? current.balances.daily + current.balances.sub + current.balances.topup : null;
   const selectedPlan = PLANS.find((item) => item.id === plan)!;
   const customAmount = Number(custom.trim());
-  const validCustom = /^\d+$/.test(custom.trim()) && customAmount > 0
+  const validCustom = /^\d+$/.test(custom.trim()) && customAmount > 0 && customAmount <= checkout.maxAmount
     && Number.isSafeInteger(customAmount * 100) && Number.isSafeInteger(customAmount * 20);
   const amount = topup === "custom" ? (validCustom ? customAmount : null) : topup;
   const customError = customTouched && !validCustom;
@@ -69,12 +74,12 @@ export function AccountBilling({ loggedIn, entitlement, trialAction }: {
         <p className="account-billing-note">新注册账号赠 200 Bcoin；新订阅或续费 Pro，每订阅月赠 800 Bcoin，年付分 12 次发放。赠送积分到账后 30 天有效。</p>
         <div className="account-billing-checkout">
           <div className="account-billing-summary" aria-live="polite"><span>Pro {selectedPlan.title}</span><strong>¥{selectedPlan.price}</strong></div>
-          <button type="button" className="app-modal-button" disabled aria-describedby={`${id}-plan-payment`}>购买暂未开放</button>
+          <button type="button" className="app-modal-button" disabled={!checkout.enabled || checkout.busy || checkout.restoring || checkout.recoveryFailed || current?.tier === "studio"} onClick={() => void checkout.begin(`pro_${plan}`)} aria-describedby={`${id}-plan-payment`}>{checkout.busy ? "正在处理…" : checkout.enabled ? "微信支付" : "购买暂未开放"}</button>
         </div>
         <p id={`${id}-plan-payment`} className="account-billing-note">
           {current?.tier === "studio" && "当前 Studio 权益继续保留。"}
           {!loggedIn && "登录后可查看账号权益。"}
-          微信支付接入中，暂不能在线购买。已有兑换码可在账号管理中兑换。
+          {checkout.enabled ? "一次购买对应所选周期，不自动扣款。" : "微信支付尚未开放。已有兑换码可在账号管理中兑换。"}
         </p>
         {trialAction && <div className="account-billing-trial">{trialAction}</div>}
       </section>
@@ -106,17 +111,19 @@ export function AccountBilling({ loggedIn, entitlement, trialAction }: {
         {topup === "custom" && <div className="account-billing-custom">
           <label htmlFor={`${id}-custom`}>自定义充值金额（元）</label>
           <div className="account-billing-input"><span aria-hidden="true">¥</span><input id={`${id}-custom`} className="app-form-input" type="text" inputMode="numeric" placeholder="输入整数金额" value={custom} onChange={(event) => setCustom(event.target.value)} onBlur={() => setCustomTouched(true)} aria-invalid={customError} aria-describedby={`${id}-custom-help`} /></div>
-          <p id={`${id}-custom-help`} className={`account-billing-note${customError ? " is-error" : ""}`} role={customError ? "alert" : undefined}>{customError ? "请输入有效的正整数金额。" : "输入整数元，按 ¥1 = 20 Bcoin 换算。"}</p>
+          <p id={`${id}-custom-help`} className={`account-billing-note${customError ? " is-error" : ""}`} role={customError ? "alert" : undefined}>{customError ? `请输入 1 至 ${formatNumber(checkout.maxAmount)} 之间的整数金额。` : "输入整数元，按 ¥1 = 20 Bcoin 换算。"}</p>
         </div>}
         <div className="account-billing-checkout">
           <div className="account-billing-topup-summary" aria-live="polite" aria-atomic="true">
             <span>支付 <strong>{amount === null ? "—" : `¥${formatNumber(amount)}`}</strong></span>
             <span>到账 <output aria-label="充值到账 Bcoin">{amount === null ? "—" : formatNumber(amount * 20)}</output> Bcoin</span>
           </div>
-          <button type="button" className="app-modal-button" disabled aria-describedby={`${id}-topup-payment`}>充值暂未开放</button>
+          <button type="button" className="app-modal-button" disabled={!checkout.enabled || checkout.busy || checkout.restoring || checkout.recoveryFailed || amount === null} onClick={() => void checkout.begin(topup === "custom" ? "bcoin_custom" : `bcoin_${topup * 20}`, topup === "custom" ? amount! : undefined)} aria-describedby={`${id}-topup-payment`}>{checkout.busy ? "正在处理…" : checkout.enabled ? "微信充值" : "充值暂未开放"}</button>
         </div>
-        <p id={`${id}-topup-payment`} className="account-billing-note">{!loggedIn && "登录后可查看账号余额。"}微信支付接入中，当前可查看充值金额与到账 Bcoin。</p>
+        {!checkout.enabled && <p id={`${id}-topup-payment`} className="account-billing-note">{!loggedIn && "登录后可查看账号余额。"}微信支付尚未开放，当前可查看充值金额与到账 Bcoin。</p>}
       </section>
+      {checkout.recoveryFailed ? <button className="app-modal-button" disabled={checkout.busy} onClick={() => void checkout.query()}>重试查询订单</button> : checkout.hasAttempt && <button className="app-modal-button" disabled={checkout.busy || checkout.restoring} onClick={() => { checkout.setOpen(true); void checkout.query(); }}>查看待支付订单</button>}
+      {checkout.open && <CheckoutDialog order={checkout.order} account={auth?.display_name || auth?.email || auth?.user_id || ""} busy={checkout.busy} error={checkout.error} onClose={() => checkout.setOpen(false)} onQuery={() => void checkout.query()} onRetry={() => void checkout.begin(`pro_${plan}`)} />}
     </div>
   );
 }

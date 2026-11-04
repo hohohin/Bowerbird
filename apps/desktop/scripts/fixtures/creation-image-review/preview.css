@@ -1,7 +1,7 @@
 html, body, #root { width: 100%; height: 100%; margin: 0; }
 body { overflow: hidden; }
 .image-review-page { position: relative; width: 100%; height: 100%; color: var(--bb-ink); background: var(--bb-bg); }
-.image-review-topbar { position: fixed; z-index: 100; left: 24px; right: 24px; top: 13px; height: 28px; display: flex; align-items: center; justify-content: space-between; }
+.image-review-topbar { position: fixed; z-index: 60; left: 24px; right: 24px; top: 13px; height: 28px; display: flex; align-items: center; justify-content: space-between; }
 .image-review-badge { color: var(--bb-muted); font-size: 11px; letter-spacing: .05em; }
 .image-review-topbar nav { display: flex; gap: 20px; }
 .image-review-topbar button { display: inline-flex; align-items: center; gap: 7px; color: var(--bb-ink); font-size: 12px; min-height: 28px; }

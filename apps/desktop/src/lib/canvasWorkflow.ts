@@ -1,4 +1,5 @@
 import { contentTableRows, type ContentTable } from "./contentTable.ts";
+import { comfyVideoMode } from "./comfyVideo.ts";
 
 export class WorkflowNodeError extends Error {
   node: WorkflowNode;
@@ -19,7 +20,7 @@ export type WorkflowAction = "describe" | "reuse" | "layers";
 export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" | "signal";
 export interface WorkflowValue { type: WorkflowPortType; text?: string; table?: ContentTable; assetIds?: string[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[]; deliveries?: Record<string, { nodeId: string; cellId: string; append: boolean; value: WorkflowValue }> }
 export interface WorkflowPort { id: string; label: string; type: WorkflowPortType }
-export interface WorkflowInput { slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string }
+export interface WorkflowInput { slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string; autoConnect?: string; mediaFilter?: ("image" | "video" | "audio")[] }
 export interface WorkflowPromptReference { slot?: number; id: string; type: "text" | "image"; input: WorkflowInput; assetId?: string; label: string; direction?: "output" }
 export interface WorkflowNode {
   id: string; kind: WorkflowKind; x: number; y: number;
@@ -65,7 +66,9 @@ export interface WorkflowStep {
   agentSessionDeliveries?: Record<string, { target: NonNullable<WorkflowNode["textTarget"]>; done?: boolean }>;
   retrySafe?: boolean;
   localDsRequestId?: string;
+  videoProjectPath?: string;
   localAgentTransport?: "local-ds" | "codex-cli";
+  localAgentSkill?: "hyperframes";
   localDsImageProvider?: string;
   localDsGenerationMode?: "session";
   localDsGenerations?: Record<string, { request: WorkflowAgentGenerationRequest; jobId: string; turnKey: string; response?: WorkflowAgentGenerationResponse }>;
@@ -132,6 +135,7 @@ export function normalizeWorkflowLocalVideo(node: WorkflowNode): WorkflowNode {
     if (!ref) return token;
     if (ref.type === "text") return ""; // The H3 text port supplies its current contents at execution.
     const index = ordered.findIndex(input => workflowReferenceMatchesInput(ref, input));
+    if (comfyVideoMode(node.generation!.localVideo) === "reference" && index === 0) return "<Picture 1>";
     return index < 0 ? ref.label : `@图片${index + 1}`;
   }).trim();
   const { image: _image, "visual-profile": _profile, ...inputs } = node.inputs;
@@ -143,7 +147,11 @@ export function normalizeWorkflowLocalVideo(node: WorkflowNode): WorkflowNode {
 export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
   if (node.kind === "trigger") return [{ id: "completion", label: "完成触发", type: "signal" }];
   if (node.textSource) return [];
-  if (node.kind === "comfy-video") return [{ id: "first-frame", label: "首帧", type: "image" }, { id: "last-frame", label: "尾帧（可选）", type: "image" }, { id: "text", label: "文本", type: "text" }];
+  if (node.kind === "comfy-video") {
+    const mode = comfyVideoMode(node.comfyVideo);
+    return [...(mode !== "text" ? [{ id: "first-frame", label: mode === "reference" ? "参考图" : "首帧", type: "image" as const }] : []),
+      ...(mode === "frames" ? [{ id: "last-frame", label: "尾帧（可选）", type: "image" as const }] : []), { id: "text", label: "文本", type: "text" }];
+  }
   if (node.kind === "loop") return node.loopMode === "count" ? [] : node.loopMode === "rows" ? [{ id: "text", label: "内容行", type: "text" }] : [{ id: "image", label: "图片列表", type: "image" }];
   if (node.kind === "instruction") return [{ id: "image", label: "图片", type: "image" }];
   const ports: WorkflowPort[] = [{ id: "text", label: "文本", type: "text" }, { id: "image", label: node.kind === "generation" && node.generation?.media === "video" ? "参考素材" : "图片", type: "image" }];
@@ -157,7 +165,7 @@ export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
     ? [{ id: "text", label: "当前行文字", type: "text" }, { id: "image", label: "当前行图片", type: "image" }, { id: "iteration", label: "当前轮次", type: "text" }]
     : [{ id: "image", label: "当前图片", type: "image" }, { id: "iteration", label: "当前轮次", type: "text" }];
   if (node.kind === "agent") return [{ id: "text", label: "返回文字", type: "text" },
-    ...(usesConnectedAgentInputs(node) ? [{ id: "image", label: "返回图片", type: "image" as const }] : [])];
+    ...(usesConnectedAgentInputs(node) ? [{ id: "image", label: node.skill === "hyperframes" ? "返回视频" : "返回图片", type: "image" as const }] : [])];
   if (node.kind === "trigger") return [{ id: "signal", label: "触发", type: "signal" }];
   if (node.kind === "text") return node.textTarget?.image ? [{ id: "image", label: "图片", type: "image" }] : [{ id: "text", label: "文本", type: "text" }];
   if (node.kind === "generation") return [{ id: "image", label: node.generation?.media === "video" ? "视频" : "图片", type: "image" }];
@@ -293,6 +301,10 @@ export function workflowExecutionNodes(nodes: WorkflowNode[], startId: string): 
 
 /** Completion wires are events, never data prerequisites or an ordinary graph cycle. */
 function workflowExecutionInputs(node: WorkflowNode): WorkflowNode["inputs"] {
+  if (node.kind === "comfy-video") {
+    const active = new Set([...workflowInputs(node).map(port => port.id), "signal"]);
+    return Object.fromEntries(Object.entries(node.inputs).filter(([id]) => active.has(id)));
+  }
   return node.kind === "trigger" ? {} : node.inputs;
 }
 export function workflowCompletionTriggers(nodes: WorkflowNode[], sourceId: string): WorkflowNode[] {
@@ -350,12 +362,13 @@ export function rebindGenerationReferences(node: WorkflowNode): WorkflowNode {
 export const workflowReferenceMatchesInput = (ref: Pick<WorkflowPromptReference, "direction" | "slot" | "input">, input: WorkflowInput) =>
   ref.direction !== "output" && (ref.slot !== undefined ? ref.slot === input.slot : workflowBindingKey(ref.input) === workflowBindingKey(input));
 export function generationInputNode(node: WorkflowNode): WorkflowNode {
+  if (node.kind === "comfy-video") return { ...node, inputs: workflowExecutionInputs(node) };
   if (node.kind !== "generation" && node.kind !== "agent") return node;
   node = rebindGenerationReferences(node);
   if (usesConnectedAgentInputs(node)) return node;
   const refs = activePromptReferences(node);
   return { ...node, inputs: { ...node.inputs, ...Object.fromEntries((["text", "image"] as const).map(type =>
-    [type, (node.inputs[type] ?? []).filter(input => refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input)))])) } };
+    [type, (node.inputs[type] ?? []).filter(input => input.autoConnect || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input)))])) } };
 }
 function usesConnectedAgentInputs(node: WorkflowNode) {
   return node.kind === "agent" && node.agentTransport !== "cloud";
@@ -375,12 +388,31 @@ export function compileGenerationPrompt(node: WorkflowNode, values: Record<strin
   }
   const assetIds: string[] = [];
   for (const match of node.prompt.matchAll(/@\[([^\]]+)\]/g)) for (const id of resolved.get(match[1])?.assetIds ?? []) if (!assetIds.includes(id)) assetIds.push(id);
-  const prompt = node.prompt.replace(/@\[([^\]]+)\]/g, (token, id: string) => {
+  // New card-level connections are active without @. Explicit mentions still
+  // control placement, so the same source is never appended a second time.
+  const automaticText: WorkflowValue[] = [];
+  for (const type of ["text", "image"] as const) for (const [index, input] of (inputs[type] ?? []).entries()) {
+    if (!input.autoConnect || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input))) continue;
+    const value = values[type]?.[index];
+    const label = `${type === "text" ? "文字" : "素材"}输入 ${input.slot ?? index + 1}`;
+    if (!value || (type === "text" ? !value.text?.trim() : !value.assetIds?.length))
+      throw new WorkflowInputError(`已连接的${label}没有可用内容，请检查来源输出`, node, input, label);
+    for (const id of value.assetIds ?? []) if (!assetIds.includes(id)) assetIds.push(id);
+    if (type === "text") automaticText.push(value);
+  }
+  const renderText = (value: WorkflowValue) => (value.text ?? "").replace(/@图片\d+/g, token => {
+    const ref = value.imageRefs?.find(ref => ref.token === token);
+    const index = ref ? assetIds.indexOf(ref.asset_id) : -1;
+    return index >= 0 ? `@图片${index + 1}` : token;
+  });
+  const instruction = node.prompt.replace(/@\[([^\]]+)\]/g, (token, id: string) => {
     const value = resolved.get(id);
     if (!value) return token;
     if (value.type === "image") return (value.assetIds ?? []).map(id => `@图片${assetIds.indexOf(id) + 1}`).join(" ");
-    return (value.text ?? "").replace(/@图片\d+/g, token => { const ref = value.imageRefs?.find(ref => ref.token === token); return ref ? `@图片${assetIds.indexOf(ref.asset_id) + 1}` : token; });
+    return renderText(value);
   });
+  const context = automaticText.map(renderText).join("\n\n");
+  const prompt = [instruction, context && (instruction.trim() ? `【参考文本】\n${context}` : context)].filter(Boolean).join("\n\n");
   if (!prompt.trim()) throw new Error("请在生成卡片文本框中填写指令，或通过 @ 引入内容");
   return { prompt, assetIds };
 }
@@ -391,8 +423,15 @@ export function compileAgentPrompt(node: WorkflowNode, values: Record<string, Wo
   const inputs = generationInputNode(node).inputs;
   const assetIds: string[] = [];
   const sources: Record<string, string | { format: "bowerbird-table"; rows: string[][] }> = {};
-  const sourceValue = (value: WorkflowValue) => {
-    if (!value.table) return value.text!;
+  const sourceValue = (value: WorkflowValue, automatic = false) => {
+    if (!value.table) {
+      if (automatic) for (const id of value.assetIds ?? []) if (!assetIds.includes(id)) assetIds.push(id);
+      return value.text!.replace(/@图片\d+/g, token => {
+        const ref = value.imageRefs?.find(ref => ref.token === token);
+        const index = ref ? assetIds.indexOf(ref.asset_id) : -1;
+        return index >= 0 ? `@图片${index + 1}` : token;
+      });
+    }
     if (!usesConnectedAgentInputs(node) && value.assetIds?.length) throw new WorkflowNodeError("表格包含图片，请使用本机 Agent DS 或 Codex CLI 读取完整图文表格", node);
     // Table image tokens share the same attachment numbering as explicit image inputs.
     if (usesConnectedAgentInputs(node)) for (const id of value.assetIds ?? []) if (!assetIds.includes(id)) assetIds.push(id);
@@ -426,10 +465,11 @@ export function compileAgentPrompt(node: WorkflowNode, values: Record<string, Wo
     }
     if (!value?.text?.trim()) throw new WorkflowInputError(`上游处理结束后，引用「${ref.label}」仍没有可用文本，请检查来源输出`, node, ref.input, ref.label);
     const label = `引用文本 ${Object.keys(sources).length + 1}`;
-    labels.set(ref.id, label); sources[label] = sourceValue(value);
+    labels.set(ref.id, label); sources[label] = sourceValue(value, !!inputs[ref.type]?.[index]?.autoConnect);
   }
-  if (usesConnectedAgentInputs(node)) {
+  {
     for (const type of ["text", "image"] as const) for (const [index, input] of (inputs[type] ?? []).entries()) {
+      if (!usesConnectedAgentInputs(node) && !input.autoConnect) continue;
       const value = values[type]?.[index];
       const label = `${type === "text" ? "文字" : "图片"}输入 ${index + 1}`;
       if (type === "image") {
@@ -437,7 +477,8 @@ export function compileAgentPrompt(node: WorkflowNode, values: Record<string, Wo
         for (const id of value.assetIds) if (!assetIds.includes(id)) assetIds.push(id);
       } else {
         if (!value?.text?.trim()) throw new WorkflowInputError(`已连接的${label}没有可用文字，请检查来源输出`, node, input, label);
-        if (!activePromptReferences(node).some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input))) sources[`引用文本 ${Object.keys(sources).length + 1}`] = sourceValue(value);
+        if (input.autoConnect) for (const id of value.assetIds ?? []) if (!assetIds.includes(id)) assetIds.push(id);
+        if (!activePromptReferences(node).some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input))) sources[`引用文本 ${Object.keys(sources).length + 1}`] = sourceValue(value, !!input.autoConnect);
       }
     }
   }
@@ -482,7 +523,7 @@ export function workflowInputValues(nodes: WorkflowNode[], node: WorkflowNode, c
   }
   const images = result.image?.flatMap(value => value.assetIds ?? []) ?? [];
   if ((result["visual-profile"]?.length ?? 0) > 1) throw new Error("每张卡片只能使用一份视觉规范");
-  if (node.kind === "instruction" && !result.image?.some(value => value.nodeIds?.length) && (node.action === "describe" ? images.length < 1 : images.length !== 1)) throw new Error(node.action === "describe" ? "反推需要至少一张输入图片" : "指令卡片需要恰好一张输入图片");
+  if (node.kind === "instruction" && !node.inputs.image?.some(input => input.mediaFilter) && !result.image?.some(value => value.nodeIds?.length) && (node.action === "describe" ? images.length < 1 : images.length !== 1)) throw new Error(node.action === "describe" ? "反推需要至少一张输入图片" : "指令卡片需要恰好一张输入图片");
   return result;
 }
 
@@ -528,6 +569,6 @@ export function workflowCardWidth(node: Pick<WorkflowNode, "kind">) {
 export function workflowPortY(node: WorkflowNode, side: "input" | "output", portId: string): number {
   const ports = side === "input" ? workflowInputs(node) : workflowOutputs(node);
   // H3: two 4:3 frame previews above the prompt (34px card inset, 8px gap, 10px row gap).
-  const frameRowOffset = node.kind === "comfy-video" ? (workflowCardWidth(node) - 42) * 3 / 8 + 10 : 0;
+  const frameRowOffset = node.kind === "comfy-video" && comfyVideoMode(node.comfyVideo) !== "text" ? (workflowCardWidth(node) - 42) * 3 / 8 + 10 : 0;
   return node.y + frameRowOffset + (node.kind === "comfy-video" ? 74 : 94) + Math.max(0, ports.findIndex(port => port.id === portId)) * (node.kind === "comfy-video" ? 24 : 30);
 }

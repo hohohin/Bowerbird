@@ -237,7 +237,7 @@ try {
   assert.equal(await standalone.getByRole('button', { name: '购买暂未开放', exact: true }).isDisabled(), true);
   assert.equal(await standalone.getByRole('button', { name: '充值暂未开放', exact: true }).isDisabled(), true);
   assert.deepEqual(await page.evaluate(() => window.store.getState().cloudEntitlement.balances), { daily: 0, sub: 0, topup: 400 });
-  assert.equal(await page.evaluate(() => window.calls.some(call => /checkout|payment|topup|purchase/.test(call.command))), false);
+  assert.equal(await page.evaluate(() => window.calls.some(call => /cloud_create_checkout|payment|topup|purchase/.test(call.command))), false);
   for (const width of [1100, 600]) {
     await page.setViewportSize({ width, height: 1100 });
     await assertSingleRechargeRow(standaloneRecharge);

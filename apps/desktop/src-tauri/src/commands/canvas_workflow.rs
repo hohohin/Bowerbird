@@ -49,6 +49,24 @@ pub struct WorkflowSnapshot { revision: i64, document: Value }
 
 fn invalid() -> AppError { AppError::Other("工作流数据无效".into()) }
 
+fn validate_binding_metadata(binding: &Value) -> AppResult<()> {
+    if binding.get("autoConnect").is_some_and(|id| id.as_str().is_none_or(str::is_empty)) { return Err(invalid()); }
+    if let Some(filter) = binding.get("mediaFilter") {
+        let media = filter.as_array().filter(|items| !items.is_empty() && items.len() <= 3).ok_or_else(invalid)?;
+        let mut seen = HashSet::new();
+        for kind in media {
+            let kind = kind.as_str().filter(|kind| matches!(*kind, "image" | "video" | "audio")).ok_or_else(invalid)?;
+            if !seen.insert(kind) { return Err(invalid()); }
+        }
+    }
+    Ok(())
+}
+
+fn control_binding_fields(binding: &Value) -> bool {
+    binding.get("mediaFilter").is_none() && binding.as_object().is_some_and(|value|
+        value.keys().filter(|key| key.as_str() != "autoConnect").count() == 2)
+}
+
 fn validate_image_output(value: &Value, assets: &mut HashSet<String>) -> AppResult<()> {
     // An asynchronous image output may contain only exact generation-session references.
     if value.get("assetIds").is_none() && value.get("nodeIds").is_none() { return Err(invalid()); }
@@ -185,24 +203,26 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
             if port == "completion" {
                 if node["kind"] != "trigger" { return Err(invalid()); }
                 for binding in bindings.as_array().ok_or_else(invalid)? {
+                    validate_binding_metadata(binding)?;
                     if binding.get("canvasNodeId").is_some() {
                         if binding["canvasNodeId"].as_str().is_none_or(str::is_empty) || binding["cellId"] != "image"
-                            || binding.as_object().is_none_or(|value| value.len() != 2) { return Err(invalid()); }
+                            || !control_binding_fields(binding) { return Err(invalid()); }
                         continue;
                     }
                     let producer = nodes.iter().find(|source| source["id"] == binding["nodeId"]).ok_or_else(invalid)?;
                     if matches!(producer["kind"].as_str(), Some("trigger" | "planner")) || producer.get("textSource").is_some()
                         || !matches!(binding["portId"].as_str(), Some("text" | "image" | "visual-profile" | "iteration"))
-                        || binding.as_object().is_none_or(|value| value.len() != 2) { return Err(invalid()); }
+                        || !control_binding_fields(binding) { return Err(invalid()); }
                 }
                 continue; // Completion events do not participate in the data dependency DAG.
             }
             let image_port = port == "image" || node["kind"] == "comfy-video" && matches!(port.as_str(), "first-frame" | "last-frame");
             if !image_port && !matches!(port.as_str(), "text" | "visual-profile" | "signal") { return Err(invalid()); }
             for binding in bindings.as_array().ok_or_else(invalid)? {
+                validate_binding_metadata(binding)?;
                 if port == "signal" {
                     let producer = nodes.iter().find(|node| node["id"] == binding["nodeId"]).ok_or_else(invalid)?;
-                    if producer["kind"] != "trigger" || binding["portId"] != "signal" || binding.as_object().is_none_or(|value| value.len() != 2) { return Err(invalid()); }
+                    if producer["kind"] != "trigger" || binding["portId"] != "signal" || !control_binding_fields(binding) { return Err(invalid()); }
                     deps.push(producer["id"].as_str().ok_or_else(invalid)?);
                     continue;
                 }
@@ -562,6 +582,24 @@ mod tests {
         assert!(validate(&doc).is_err());
         doc["nodes"][0]["inputs"] = json!({"image":[{"groupId":"folder","assetIds":[12]}]});
         assert!(validate(&doc).is_err());
+    }
+    #[test]
+    fn automatic_binding_metadata_is_validated_and_survives_storage() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let doc = json!({"schema_version":1,"nodes":[node("target",json!({"image":[{
+            "assetId":"photo", "autoConnect":"connection", "mediaFilter":["image"]
+        }]}))],"run":null});
+        assert!(validate(&doc).is_ok());
+        for metadata in [json!({"autoConnect":""}), json!({"autoConnect":2}), json!({"mediaFilter":[]}),
+            json!({"mediaFilter":["image","image"]}), json!({"mediaFilter":["unknown"]})] {
+            let mut invalid_doc = doc.clone();
+            for (key, value) in metadata.as_object().unwrap() { invalid_doc["nodes"][0]["inputs"]["image"][0][key] = value.clone(); }
+            assert!(validate(&invalid_doc).is_err());
+        }
+        // Storage keeps the versioned JSON, including the automatic connection identity.
+        assert_eq!(db.workflow_save("p", 0, doc.clone()).unwrap(), 1);
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
     }
     #[test]
     fn completion_trigger_allows_bounded_feedback_but_not_data_cycles() {

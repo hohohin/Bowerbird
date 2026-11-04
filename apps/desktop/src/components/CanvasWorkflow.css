@@ -25,7 +25,7 @@
 .workflow-caption-preview section { margin-top:12px; }
 .workflow-caption-preview p { white-space:pre-wrap; overflow-wrap:anywhere; margin:6px 0; line-height:1.6; }
 .workflow-prompt-editor .ProseMirror p { margin:0; }
-.workflow-prompt-editor .ProseMirror > p:only-child:has(> br:only-child)::before { content:"输入创作要求，按 @ 引入收到的图片或文字…"; float:left; height:0; color:var(--bb-muted); pointer-events:none; }
+.workflow-prompt-editor .ProseMirror:has(> p:only-child > br:only-child)::before { content:attr(data-placeholder); float:left; height:0; color:var(--bb-muted); pointer-events:none; }
 .workflow-prompt-reference { display:inline-flex; align-items:center; max-width:100%; gap:4px; margin:0 2px; padding:1px 4px; border:1px solid #b58ce866; border-radius:4px; color:var(--bb-blue); vertical-align:middle; white-space:nowrap; }
 .workflow-prompt-reference img { width:30px; height:24px; object-fit:contain; }
 .workflow-reference-menu { position:fixed; z-index:99999; width:288px; max-height:264px; overflow:auto; padding:8px; border:1px solid var(--bb-line); border-radius:10px; background:var(--bb-surface); box-shadow:0 8px 28px #0003; color:var(--bb-ink); font-size:12px; }
@@ -82,6 +82,10 @@
 .workflow-profile-summary { font-size:12px; line-height:1.6; max-height:100px; overflow:auto; margin:8px 0; user-select:text; }
 .workflow-wires path.is-draft { stroke:var(--bb-blue); stroke-dasharray:6 4; }
 .workflow-wires path.is-error { stroke:rgb(239 68 68); }
+.workflow-wires path.is-automatic { stroke:var(--bb-blue); pointer-events:stroke; cursor:pointer; }
+.canvas-connection-target { position:absolute; z-index:10002; pointer-events:none; outline:1px solid var(--bb-blue); outline-offset:3px; }
+.canvas-connection-target.is-invalid { outline-color:var(--bb-danger); }
+.canvas-connection-notice { position:fixed; z-index:99999; pointer-events:none; max-width:240px; padding:6px 9px; background:var(--bb-surface); color:var(--bb-ink); border:1px solid var(--bb-line); font-size:12px; }
 .workflow-wires path:not(.is-selected):not(.is-draft) { stroke:var(--bb-line-strong); }
 .workflow-key { position:absolute; right:16px; top:-34px; color:#b9883e; filter:drop-shadow(0 2px 2px #0003); transform:rotate(-18deg); transform-origin:50% 85%; }
 .workflow-key:hover { color:var(--bb-ink); }
@@ -140,7 +144,6 @@
 .workflow-waiting { color:var(--bb-muted); font-size:12px; }
 .workflow-error button { margin-left:8px; text-decoration:underline; }
 .workflow-planner .workflow-prompt-editor .ProseMirror { min-height: 120px; }
-.workflow-planner .workflow-prompt-editor .ProseMirror > p:only-child:has(> br:only-child)::before { content:"按 @ 引用输入，说明版式、产品或文字的用途…"; }
 .workflow-planner .workflow-planner-inputs { display: block; min-height: 80px; margin: 0 0 10px; }
 .workflow-planner-summary { white-space: pre-wrap; font-size: 12px; line-height: 1.6; }
 .workflow-planner-actions { display: flex; gap: 8px; margin-top: 8px; }

@@ -35,8 +35,8 @@ fn content(value: &Value, kind: &Value) -> AppResult<()> {
 }
 fn validate(value: &Value) -> AppResult<()> {
     fields(value, &["format", "schemaVersion", "id", "revision", "name", "description", "plan", "inputs", "parameters", "outputs", "layout"])?;
-    if value.get("layout").is_some() && !matches!(value["schemaVersion"].as_i64(), Some(3 | 4)) { return Err(invalid()); }
-    if value.to_string().len() > 32_000_000 || value["format"] != "bowerbird-workflow-template" || !matches!(value["schemaVersion"].as_i64(), Some(1 | 2 | 3 | 4))
+    if value.get("layout").is_some() && !matches!(value["schemaVersion"].as_i64(), Some(3 | 4 | 5)) { return Err(invalid()); }
+    if value.to_string().len() > 32_000_000 || value["format"] != "bowerbird-workflow-template" || !matches!(value["schemaVersion"].as_i64(), Some(1 | 2 | 3 | 4 | 5))
         || !text(&value["id"], 80) || !text(&value["name"], 120) || value["revision"].as_i64().is_none_or(|n| !(0..9_007_199_254_740_991).contains(&n))
         || value["description"].as_str().is_none_or(|s| s.encode_utf16().count() > 2000) { return Err(invalid()); }
     let plan = &value["plan"]; fields(plan, &["summary", "nodes", "edges"])?;
@@ -45,7 +45,8 @@ fn validate(value: &Value) -> AppResult<()> {
     let edges = plan["edges"].as_array().ok_or_else(invalid)?;
     if nodes.len() < 2 || nodes.len() > 24 || edges.len() > 64 { return Err(invalid()); }
     let mut ids = std::collections::HashSet::new();
-    let v4 = value["schemaVersion"] == 4;
+    let v4 = value["schemaVersion"].as_i64().is_some_and(|version| version >= 4);
+    let v5 = value["schemaVersion"] == 5;
     for node in nodes {
         let mut node_fields = vec!["id", "kind", "action", "skill", "prompt", "ratio", "overwriteDescribe"];
         if v4 { node_fields.extend(["loopMode", "loopCount", "loopStartItem", "agentTransport"]); }
@@ -100,10 +101,22 @@ fn validate(value: &Value) -> AppResult<()> {
         }
     }
     for edge in edges {
-        fields(edge, &["from", "output", "to", "input"])?;
+        let mut edge_fields = vec!["from", "output", "to", "input"];
+        if v5 { edge_fields.extend(["autoConnect", "mediaFilter"]); }
+        fields(edge, &edge_fields)?;
+        if edge.get("autoConnect").is_some_and(|group| !alias(group)) { return Err(invalid()); }
+        if let Some(filter) = edge.get("mediaFilter") {
+            let media = filter.as_array().ok_or_else(invalid)?;
+            let mut seen = std::collections::HashSet::new();
+            if !matches!(edge["input"].as_str(), Some("text" | "image")) || media.is_empty() || media.len() > 3
+                || media.iter().any(|kind| !matches!(kind.as_str(), Some("image" | "video" | "audio")) || !seen.insert(kind.as_str().unwrap())) { return Err(invalid()); }
+        }
         let iteration = v4 && edge["output"] == "iteration" && edge["input"] == "text" && nodes.iter().any(|node| node["id"] == edge["from"] && node["kind"] == "loop");
+        let completion = v5 && edge["input"] == "completion" && nodes.iter().any(|node| node["id"] == edge["to"] && node["kind"] == "trigger")
+            && nodes.iter().any(|node| node["id"] == edge["from"] && node["kind"] != "trigger")
+            && (matches!(edge["output"].as_str(), Some("text" | "image" | "visual-profile")) || edge["output"] == "iteration" && nodes.iter().any(|node| node["id"] == edge["from"] && node["kind"] == "loop"));
         if !nodes.iter().any(|node| node["id"] == edge["to"]) || !nodes.iter().chain(value["inputs"].as_array().unwrap()).any(|node| node["id"] == edge["from"])
-            || !(iteration || matches!(edge["output"].as_str(), Some("signal" | "text" | "image" | "visual-profile")) && edge["input"] == edge["output"]) { return Err(invalid()); }
+            || !(completion || iteration || matches!(edge["output"].as_str(), Some("signal" | "text" | "image" | "visual-profile")) && edge["input"] == edge["output"]) { return Err(invalid()); }
     }
     Ok(())
 }
@@ -252,6 +265,24 @@ mod tests {
             let mut bad = original.clone(); bad["plan"]["nodes"][1][field] = json!("private"); assert!(validate(&bad).is_err());
         }
         let mut bad = original; bad["inputs"] = json!([{"id":"source1","label":"素材","type":"image","assetId":"private"}]); assert!(validate(&bad).is_err());
+    }
+    #[test]
+    fn automatic_template_edges_round_trip_with_portable_groups_and_media_filters() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        let mut doc = template(); doc["schemaVersion"] = json!(5);
+        doc["inputs"] = json!([{"id":"copy","label":"文案","type":"text"},{"id":"photo","label":"图片","type":"image"}]);
+        doc["plan"]["edges"].as_array_mut().unwrap().extend([
+            json!({"from":"copy","output":"text","to":"draw","input":"text","autoConnect":"connection1","mediaFilter":["image"]}),
+            json!({"from":"photo","output":"image","to":"draw","input":"image","autoConnect":"connection1","mediaFilter":["image","video"]}),
+            json!({"from":"draw","output":"image","to":"start","input":"completion","autoConnect":"connection2"}),
+        ]);
+        let saved = db.workflow_template_save(doc.clone(), 0).unwrap();
+        assert_eq!(db.workflow_templates_list().unwrap()[0], saved);
+        assert_eq!(saved["plan"]["edges"], doc["plan"]["edges"]);
+        for version in [1, 2, 3, 4] { let mut bad = doc.clone(); bad["schemaVersion"] = json!(version); assert!(validate(&bad).is_err()); }
+        for group in [json!(""), json!("private-id"), json!(true)] { let mut bad = doc.clone(); bad["plan"]["edges"][1]["autoConnect"] = group; assert!(validate(&bad).is_err()); }
+        for filter in [json!([]), json!(["image", "image"]), json!(["unknown"]), json!("image")] { let mut bad = doc.clone(); bad["plan"]["edges"][1]["mediaFilter"] = filter; assert!(validate(&bad).is_err()); }
+        let mut bad = doc; bad["plan"]["edges"][0]["mediaFilter"] = json!(["image"]); assert!(validate(&bad).is_err());
     }
     #[test]
     fn selection_exports_without_saving_a_library_template() {

@@ -19,7 +19,7 @@ export function templateInputValue(binding: WorkflowInput, type: "text" | "image
 
 export async function includeTemplateContent(template: WorkflowTemplate, values: Record<string, WorkflowValue | undefined>, images: boolean, text: boolean) {
   const result = structuredClone(template);
-  result.schemaVersion = result.schemaVersion >= 4 ? 4 : result.layout ? 3 : 2;
+  result.schemaVersion = result.schemaVersion >= 4 ? result.schemaVersion : result.layout ? 3 : 2;
   const files = new Map<string, string>();
   const targets: { id: string; label?: string; type?: "text" | "image"; content?: TemplateContent; whole?: boolean; latest?: boolean }[] = [...result.inputs, ...(result.layout ?? []).filter(card => !card.node && !card.inputs?.length)];
   for (const input of targets) {

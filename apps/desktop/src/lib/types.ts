@@ -1213,3 +1213,22 @@ export interface CodeRedemption {
   credits_scheduled_at?: string | null;
   entitlement: EntitlementSnapshot | null;
 }
+
+export interface CheckoutRequest {
+  product: string;
+  idempotency_key: string;
+  custom_amount_yuan?: number;
+}
+
+export interface CheckoutOrder {
+  order_id: string;
+  provider: "wechatpay";
+  product: string;
+  amount_minor: number;
+  currency: "CNY";
+  status: "pending" | "paid" | "closed" | "refunding" | "refunded";
+  code_url: string | null;
+  expires_at: string;
+  credits: number;
+  months: number;
+}

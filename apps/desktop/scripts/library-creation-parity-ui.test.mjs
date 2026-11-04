@@ -28,8 +28,10 @@ async function singlePreview(target) {
   assert.equal(await pickCount(), before.picks); assert.equal(await chipCount(), before.chips);
   assert.equal(await page.locator('.media-lightbox').count(), 0, 'creation preview is separate from ordinary media detail');
   const image = await preview.getByRole('region', {name:'放大图片'}).boundingBox();
-  const detail = await preview.getByRole('region', {name:'独立会话面板'}).boundingBox();
-  assert.ok(image.width > 100 && detail.width > 100 && image.x + image.width <= detail.x + 2, 'home uses the same image/conversation layout');
+  const detail = await preview.getByRole('region', {name:'独立会话面板'}).count();
+  const info = await preview.getByRole('region', {name:'图片详情', exact:true}).boundingBox();
+  assert.ok(info.width >= 200 && info.x + info.width <= image.x, 'home also shows image details on the left');
+  assert.ok(image.width > 100 && !detail, 'imported home images open the large image and details without an empty conversation');
   await closePreview(); await unchangedDraft();
 }
 async function doubleReference(target) {
@@ -104,9 +106,11 @@ try {
     await page.locator('.catalog-selection').getByRole('button',{name:/取消/}).click();
   }
   await composer.getByRole('button',{name:'退出创作模式',exact:true}).click();
-  await asset.click(); await page.getByRole('dialog',{name:/^媒体预览/}).waitFor();
-  assert.equal(await pickCount(), beforeControl, 'ordinary browsing keeps media preview behavior');
-  await page.keyboard.press('Escape'); await page.locator('.media-lightbox').waitFor({state:'detached'});
+  await asset.click(); await preview.waitFor();
+  assert.equal(await page.locator('.media-lightbox').count(), 0, 'ordinary browsing also opens the shared image HUD');
+  assert.equal(await pickCount(), beforeControl, 'ordinary browsing never adds a reference');
+  assert.equal(await page.evaluate(() => window.store.getState().boardOpen), false, 'preview does not activate creation mode');
+  await closePreview();
   await editor.focus();
 
   // The visible virtual page can contain assets absent from the shared store cache.

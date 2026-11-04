@@ -169,12 +169,33 @@ mod tests {
         assert!(discover(&[], Some(&root), &[])[0].can_start);
     }
     #[test]
+    fn h3_discovery_counts_only_models_for_requested_mode() {
+        use super::super::comfy_video::{Mode, model_names_for_mode};
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("ComfyUI");
+        fs::create_dir_all(source.join("models")).unwrap();
+        fs::write(source.join("main.py"), "fixture").unwrap();
+        fs::write(source.join("folder_paths.py"), "fixture").unwrap();
+        for name in model_names_for_mode(Mode::Frames) { fs::write(source.join("models").join(name), "model").unwrap(); }
+        for mode in [Mode::Frames, Mode::Text] {
+            assert_eq!(discover(&[], Some(root.path()), model_names_for_mode(mode))[0].models_found, 5);
+        }
+        let names = model_names_for_mode(Mode::Reference);
+        assert_eq!(discover(&[], Some(root.path()), names)[0].models_found, 3, "original DiT and Turbo LoRA must not satisfy reference mode");
+        for name in names { fs::write(source.join("models").join(name), "model").unwrap(); }
+        assert_eq!(discover(&[], Some(root.path()), names)[0].models_found, 4);
+        assert_eq!(discover(&[], Some(root.path()), model_names_for_mode(Mode::Frames))[0].models_found, 5, "reference model must not change old mode's count");
+    }
+    #[test]
     #[ignore = "Read-only check of the current user's actual Desktop registry; no HTTP or process launch"]
     fn h3_discovery_local_desktop_read_only() {
-        let names = super::super::comfy_video::model_names();
-        let found = discover(&desktop_config_dirs(), None, &names);
-        assert!(!found.is_empty(), "No Desktop installations registered");
-        for item in &found { println!("{} | {} | models {}/{} | python {}", item.name, item.path.display(), item.models_found, names.len(), item.can_start); }
-        assert!(found.iter().any(|i| i.models_found == names.len() && i.can_start));
+        use super::super::comfy_video::{Mode, model_names_for_mode};
+        for mode in [Mode::Frames, Mode::Text, Mode::Reference] {
+            let names = model_names_for_mode(mode);
+            let found = discover(&desktop_config_dirs(), None, names);
+            assert!(!found.is_empty(), "No Desktop installations registered");
+            for item in &found { println!("{mode:?} | {} | {} | models {}/{} | python {}", item.name, item.path.display(), item.models_found, names.len(), item.can_start); }
+            assert!(found.iter().any(|i| i.models_found == names.len() && i.can_start));
+        }
     }
 }

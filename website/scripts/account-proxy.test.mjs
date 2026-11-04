@@ -84,6 +84,25 @@ test("Comfy download authorizes POST only, preserves bearer and never caches gra
   assert.equal(calls.at(-1).redirect, "manual");
 });
 
+test("payment capability, create and recovery require the user's bearer and preserve idempotency", async t => {
+  const { send, calls } = await fixture(t);
+  for (const [path, method, body] of [
+    ["/functions/v1/create-checkout", "GET", undefined],
+    ["/functions/v1/create-checkout", "POST", '{"product":"pro_monthly","idempotency_key":"test-key"}'],
+    ["/functions/v1/checkout-status", "POST", '{"order_id":"test-order"}'],
+  ]) {
+    assert.equal((await send(path, method, body)).status, 401);
+    const response = await send(path, method, body, { Authorization: "Bearer user-token" });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers["cache-control"], "no-store");
+    assert.equal(calls.at(-1).headers.Authorization, "Bearer user-token");
+    assert.equal(calls.at(-1).body?.toString(), body);
+  }
+  for (const path of ["payment-reconcile", "payment-admin", "payment-webhook"]) {
+    assert.equal((await send(`/functions/v1/${path}`, "POST", "{}", { Authorization: "Bearer user-token" })).status, 404);
+  }
+});
+
 test("PKCE, refresh and email requests preserve bodies without privilege elevation", async t => {
   const { send, calls } = await fixture(t);
   for (const grant of ["pkce", "refresh_token"]) {

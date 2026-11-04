@@ -27,7 +27,9 @@ apps/desktop/src-tauri/gen/
 .env.*
 !website/.env.example
 !apps/cloud/.env.example
+!apps/cloud/.env.wechatpay.example
 !apps/html-renderer/.env.renderer.example
+.secrets/
 
 # library data (created at runtime when user opens a library)
 *.db
@@ -65,6 +67,7 @@ dev-doc/performance/*/*
 !dev-doc/performance/*/after.json
 !dev-doc/CANVAS-WORKFLOW.md
 !dev-doc/CHAT-PROVIDERS.md
+!dev-doc/VIDEO-SKILL.md
 !dev-doc/LOCAL-CLASSIFICATION.md
 !dev-doc/FOLDER-MODE.md
 !dev-doc/EMBEDDED-BROWSER.md

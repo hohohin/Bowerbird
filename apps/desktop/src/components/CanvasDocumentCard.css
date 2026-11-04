@@ -3,6 +3,3 @@
 .canvas-document-heading > button { display:flex; align-items:center; justify-content:center; width:32px; height:32px; border:0; background:transparent; color:var(--bb-muted); cursor:pointer; }
 .canvas-document-heading > button:hover { color:var(--bb-blue); }
 .canvas-document-heading > button:focus-visible { outline:1px solid var(--bb-blue); }
-.canvas-note.is-document-card .workflow-cell-port.workflow-image-output { top:16px; opacity:1; pointer-events:auto; }
-.canvas-note.is-document-card .workflow-cell-port.workflow-content-text-output { top:40px; opacity:1; pointer-events:auto; }
-.is-document-card .workflow-cell-port > span { position:absolute; right:20px; top:50%; transform:translateY(-50%); white-space:nowrap; font-size:11px; color:var(--bb-muted); background:var(--bb-surface); pointer-events:none; }

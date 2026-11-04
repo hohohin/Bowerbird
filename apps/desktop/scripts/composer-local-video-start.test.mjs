@@ -43,5 +43,19 @@ try {
   assert.equal(result.failed, 'save refused', 'failed persistence never starts a video');
   assert.match(result.denied, /Pro/);
   assert.equal(result.count, result.finalCount, 'permission rejection does not create a card');
+  const modes = await page.evaluate(async () => {
+    const { startComposerLocalVideo } = await import('/src/lib/composerLocalVideo.ts');
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    window.store.setState({ cloudEntitlement: { user_id: 'test', tier: 'pro', offline_state: 'fresh' } });
+    const controller = canvasWorkflowController('p');
+    const options = { endpoint: 'http://127.0.0.1:8000', seconds: 5, ratio: '16:9', resolution: .98 };
+    const text = await startComposerLocalVideo(controller, { prompt: '海边日落', firstFrame: '', options: { ...options, mode: 'text' } }, { x: 0, y: 0 });
+    const reference = await startComposerLocalVideo(controller, { prompt: '<Picture 1> 沿海岸行走', firstFrame: 'a', options: { ...options, mode: 'reference' } }, { x: 0, y: 0 });
+    return { text, reference };
+  });
+  assert.deepEqual(modes.text.inputs, {}, 'text mode persists no empty image binding');
+  assert.deepEqual(modes.reference.inputs, { 'first-frame': [{ assetId: 'a' }] });
+  assert.equal(modes.text.comfyVideo.mode, 'text');
+  assert.equal(modes.reference.comfyVideo.mode, 'reference');
   console.log('PASS: shared H3 card submission persists before execution, preserves home, rejects save and entitlement failures');
 } finally { await browser.close(); await server.close(); }

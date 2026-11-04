@@ -212,19 +212,35 @@ export function buildWorkflowPlan(text: string, owner: WorkflowNode, sources: Pl
     if (mode === "planner" && ["agent", "generation", "skill"].includes(node.kind)) string(node.prompt, 4000);
     aliases.set(id, node);
   }
-  const nodes = [...aliases.values()], edges = new Set<string>();
+  const nodes = [...aliases.values()], edges = new Set<string>(), automaticConnections = new Map<string, string>();
   const referenceBindings = new Map<string, Map<string, { type: "text" | "image"; input: WorkflowInput }>>();
   for (const raw of plan.edges) {
-    const edge = record(raw); keys(edge, ["from", "output", "to", "input"]);
+    const edge = record(raw); keys(edge, ["from", "output", "to", "input", ...(mode === "template" ? ["autoConnect", "mediaFilter"] : [])]);
     const from = string(edge.from, 32), output = string(edge.output, 32), to = string(edge.to, 32), input = string(edge.input, 32);
     const target = aliases.get(to), upstream = aliases.get(from), source = sources.find(source => source.id === from);
     if (!target || from === to || (!upstream && !source)) throw new Error("连线指向未知卡片或来源");
     const outType = upstream ? workflowOutputs(upstream).find(port => port.id === output)?.type : source?.type === output ? source.type : undefined;
     const inType: WorkflowPortType | undefined = input === "signal" && target.kind !== "trigger" ? "signal" : workflowInputs(target).find(port => port.id === input)?.type;
-    if (!outType || inType !== outType) throw new Error("连线端口类型不匹配");
+    const completion = mode === "template" && target.kind === "trigger" && input === "completion" && upstream && upstream.kind !== "trigger";
+    if (!outType || !completion && inType !== outType) throw new Error("连线端口类型不匹配");
     const key = JSON.stringify([from, output, to, input]);
     if (edges.has(key)) throw new Error("方案包含重复连线"); edges.add(key);
-    const binding = upstream ? { nodeId: upstream.id, portId: output } : structuredClone(source!.input);
+    const binding: WorkflowInput = upstream ? { nodeId: upstream.id, portId: output } : structuredClone(source!.input);
+    if (mode === "template") {
+      // Public material bindings never reuse a connection identity from another graph.
+      delete binding.autoConnect; delete binding.mediaFilter;
+      if (edge.autoConnect !== undefined) {
+        const group = string(edge.autoConnect, 32);
+        if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(group)) throw new Error("模板自动连接标识无效");
+        if (!automaticConnections.has(group)) automaticConnections.set(group, crypto.randomUUID());
+        binding.autoConnect = automaticConnections.get(group)!;
+      }
+      if (edge.mediaFilter !== undefined) {
+        if (!["text", "image"].includes(input) || !Array.isArray(edge.mediaFilter) || !edge.mediaFilter.length || edge.mediaFilter.length > 3
+          || edge.mediaFilter.some(media => !["image", "video", "audio"].includes(String(media))) || new Set(edge.mediaFilter).size !== edge.mediaFilter.length) throw new Error("模板媒体接收类型无效");
+        binding.mediaFilter = [...edge.mediaFilter] as WorkflowInput["mediaFilter"];
+      }
+    }
     (target.inputs[input] ??= []).push(binding);
     if (input === "text" || input === "image") {
       const bindings = referenceBindings.get(to) ?? new Map(); bindings.set(`${from}.${output}`, { type: input, input: binding }); referenceBindings.set(to, bindings);
@@ -259,7 +275,7 @@ export function buildWorkflowPlan(text: string, owner: WorkflowNode, sources: Pl
   const depths = new Map<string, number>();
   const depth = (node: WorkflowNode): number => {
     if (depths.has(node.id)) return depths.get(node.id)!;
-    const parents = nodes.filter(parent => Object.values(node.inputs).flat().some(input => input.nodeId === parent.id));
+    const parents = node.kind === "trigger" ? [] : nodes.filter(parent => Object.values(node.inputs).flat().some(input => input.nodeId === parent.id));
     const value = parents.length ? Math.max(...parents.map(depth)) + 1 : 0; depths.set(node.id, value); return value;
   };
   const columns = new Map<number, number>(), x = Math.max(owner.x + 380, ...existing.map(node => node.x + 380));

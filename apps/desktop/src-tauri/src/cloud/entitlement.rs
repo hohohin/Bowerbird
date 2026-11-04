@@ -173,13 +173,15 @@ impl EntitlementService {
     }
 
     pub async fn sync(&self, auth: &AuthClient) -> AppResult<EntitlementSnapshot> {
+        let user_id = auth.snapshot().user_id
+            .ok_or_else(|| AppError::Cloud("请先登录 Bowerbird 账号".into()))?;
         let endpoint = self
             .cloud
             .config()
             .account_endpoint("entitlement")
             .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
         let response = auth
-            .send_authorized(self.cloud.http().get(endpoint), "同步权益失败")
+            .send_authorized_for_user(self.cloud.http().get(endpoint), "同步权益失败", &user_id)
             .await?;
         if !response.status().is_success() {
             return Err(AppError::Cloud(format!(
@@ -191,6 +193,9 @@ impl EntitlementService {
             .json()
             .await
             .map_err(|error| AppError::Cloud(format!("解析权益响应失败: {error}")))?;
+        if snapshot.user_id != user_id {
+            return Err(AppError::Cloud("权益账号不一致，请重新刷新权益".into()));
+        }
         // v1 响应必须通过内置公钥验签才可作为离线可信凭证；验签失败（或本构建未
         // 内置公钥）时降级为 v0 在线可信，与历史 unsigned 行为一致，不中断在线使用。
         snapshot.signature_valid = Self::verify_signature(&snapshot);
@@ -207,15 +212,21 @@ impl EntitlementService {
         } else {
             Self::evaluate(&snapshot, Utc::now())
         });
-        self.persist(&snapshot)?;
-        *self.snapshot.write().unwrap() = Some(snapshot.clone());
-        *self.online_trusted.write().unwrap() = true;
+        auth.with_current_user(&user_id, || {
+            self.persist(&snapshot)?;
+            *self.snapshot.write().unwrap() = Some(snapshot.clone());
+            *self.online_trusted.write().unwrap() = true;
+            Ok(())
+        })?;
         Ok(snapshot)
     }
 
     /// 优先使用仍有效的本地权益；无可信缓存时在线同步一次。
     pub async fn current_or_sync(&self, auth: &AuthClient) -> EntitlementSnapshot {
-        let current = self.current(Utc::now());
+        let mut current = self.current(Utc::now());
+        if auth.snapshot().user_id.is_some_and(|user_id| user_id != current.user_id) {
+            current = Self::free_snapshot(Utc::now(), OfflineState::Invalid);
+        }
         if matches!(
             current.offline_state,
             Some(OfflineState::Fresh | OfflineState::Grace)
@@ -467,6 +478,50 @@ mod tests {
     use crate::cloud::policy::FeaturePolicy;
     use base64::Engine as _;
     use chrono::{Duration, TimeZone, Utc};
+
+    #[tokio::test]
+    async fn sync_keeps_the_original_account_and_never_caches_a_late_response() {
+        use crate::cloud::{AuthClient, CloudClient, config::CloudConfig};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        for scenario in ["normal", "wrong-subject", "switched"] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let cloud = CloudClient::new(CloudConfig {
+                supabase_url: Some(format!("http://{}", listener.local_addr().unwrap())),
+                supabase_publishable_key: Some("sb_publishable_test".into()), account_api_url: None,
+            }).unwrap();
+            let auth = AuthClient::with_test_session(cloud.clone());
+            let directory = tempfile::tempdir().unwrap();
+            let cache = directory.path().join("entitlement.json");
+            let service = EntitlementService::new(cloud, cache.clone());
+            let server = async {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 2048];
+                socket.read(&mut request).await.unwrap();
+                let mut response = signed(Utc::now());
+                response.user_id = if scenario == "wrong-subject" { "other-user" } else { "test-user" }.into();
+                response.signature_version = 0;
+                response.signature = None;
+                if scenario == "switched" { auth.set_test_user("other-user"); }
+                let body = serde_json::to_string(&response).unwrap();
+                let head = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+                socket.write_all(head.as_bytes()).await.unwrap();
+                socket.write_all(body.as_bytes()).await.unwrap();
+            };
+            let (result, _) = tokio::join!(service.sync(&auth), server);
+            if scenario == "normal" {
+                assert_eq!(result.unwrap().user_id, "test-user");
+                assert!(cache.exists());
+                auth.set_test_user("other-user");
+                drop(listener);
+                // A failed refresh for B may never fall back to A's fresh Pro cache.
+                assert_eq!(service.current_or_sync(&auth).await.tier, "free");
+            } else {
+                assert!(result.is_err(), "{scenario}");
+                assert!(!cache.exists(), "{scenario}");
+                assert!(service.snapshot.read().unwrap().is_none(), "{scenario}");
+            }
+        }
+    }
 
     fn signed(now: chrono::DateTime<Utc>) -> EntitlementSnapshot {
         EntitlementSnapshot {

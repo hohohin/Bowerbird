@@ -52,6 +52,19 @@ inspector_port = 8083
 [functions.payment-webhook]
 verify_jwt = false
 
+[functions.create-checkout]
+verify_jwt = true
+
+[functions.checkout-status]
+verify_jwt = true
+
+[functions.payment-admin]
+verify_jwt = true
+
+# A separate server-only scheduler token is checked by the handler.
+[functions.payment-reconcile]
+verify_jwt = false
+
 # WeChat login arrives with a one-time WeChat code, not a Supabase token. The function
 # shape-checks code/state itself and is the only holder of WECHAT_APP_SECRET.
 [functions.wechat-login]

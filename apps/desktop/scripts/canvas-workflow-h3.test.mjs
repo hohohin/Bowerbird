@@ -64,8 +64,9 @@ try {
   assert.equal(selected.inputs['last-frame'][0].assetId, 'b');
   assert.equal(selected.prompt, '镜头推进', 'H3 does not require image mentions');
   assert.equal(await card.locator('.comfy-frame-slot').count(), 2);
-  assert.equal(await card.getByRole('button', { name: '输入：首帧', exact: true }).count(), 1);
-  assert.equal(await card.getByRole('button', { name: '输入：尾帧（可选）', exact: true }).count(), 1);
+  assert.equal(await card.getByLabel('首帧输入', { exact: true }).count(), 1);
+  assert.equal(await card.getByLabel('尾帧输入', { exact: true }).count(), 1);
+  assert.equal(await card.getByRole('button', { name: '添加上游', exact: true }).count(), 1);
   assert.equal(await card.evaluate(el => parseFloat(el.style.width)), 416);
   // Actual slot drop must replace the first frame, not create a generic image reference.
   await page.evaluate(async () => (await import('/src/lib/dragPayload.ts')).setDragAssets(['c']));

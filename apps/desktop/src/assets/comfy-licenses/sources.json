@@ -3,5 +3,6 @@
   "Comfy-Org-MiniMax-H3-README.md": "https://huggingface.co/Comfy-Org/MiniMax-H3/raw/e5eb578a89295337b8ff433a035929ce0279e0b6/README.md",
   "Qwen3-VL-LICENSE.txt": "https://raw.githubusercontent.com/QwenLM/Qwen3-VL/main/LICENSE",
   "ComfyUI-v0.42.1-LICENSE.txt": "https://raw.githubusercontent.com/Comfy-Org/ComfyUI/v0.42.1/LICENSE",
-  "LightX2V-README.md": "https://huggingface.co/lightx2v/Minimax-h3-Turbo/raw/a29e57d195f80ead07c89f89e55ecf2911e893c5/README.md"
+  "LightX2V-README.md": "https://huggingface.co/lightx2v/Minimax-h3-Turbo/raw/a29e57d195f80ead07c89f89e55ecf2911e893c5/README.md",
+  "minimax_h3_ref2va_pruned_int8_convrot.safetensors": "https://modelscope.cn/models/Comfy-Org/MiniMax-H3/resolve/d51b9ec4bf7d7af1ce11bcbbd1a809aadb38011e/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors"
 }

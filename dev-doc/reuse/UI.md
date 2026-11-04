@@ -37,6 +37,14 @@
 - **实用证据：** [AssetContextMenu.tsx](../../apps/desktop/src/components/AssetContextMenu.tsx) 使用子菜单和删除分组；[ProjectContextMenu.tsx](../../apps/desktop/src/components/ProjectContextMenu.tsx) 使用同一菜单壳。
 - **范围／状态：可跨模块复用。** 共用边缘定位、菜单家族互斥、键盘／外部点击关闭和滚动包装；`ContextSubmenu` 必须位于该菜单 Context 内。`AssetContextMenu`／`ProjectContextMenu` 自身绑定素材、项目和 store 行为，是领域入口，不作其他业务的通用菜单模板。
 
+## 给画布卡片添加统一连接加号
+
+- **用途／关键词：** 端口、加号、输入输出、磁吸、整卡接收、自动连接、热区。
+- **入口：** [CanvasConnectionHandle.tsx](../../apps/desktop/src/components/CanvasConnectionHandle.tsx) 的 `CanvasConnectionHandle`／`CanvasConnectionHandleProps` 兼容原生 button 属性，提供 `side: "input" | "output"`、`active`、可选 `zoom` 及转发 ref；宿主提供事件回调。固定热区、视觉磁吸、重叠热区就近选择及减少动态效果均由组件与同名 CSS 共用，尺寸与动效见 [端口规范](../UI-DESIGN-SPEC.md#8-输入输出端口)。
+- **实用证据：** [CanvasWorkflowLayer.tsx](../../apps/desktop/src/components/CanvasWorkflowLayer.tsx) 用于工作流／素材数据连接，[CanvasTextCard.tsx](../../apps/desktop/src/components/CanvasTextCard.tsx) 与 [CanvasDocumentCard.tsx](../../apps/desktop/src/components/CanvasDocumentCard.tsx) 用于原生卡片。画布容器提供 `--canvas-zoom` 和草稿期间的 `data-canvas-connecting`，按钮输出 `data-canvas-connect-side`；键盘激活由宿主按按钮中心打开连接菜单。
+- **范围／状态：画布领域共用。** 组件只管理命中与可见反馈，不提交连接或解释媒体类型。交互状态统一归 `CanvasWorkflowLayer`（单击牵线／按住拖放、整卡命中、空白菜单、右键取消），类型交集归 [workflowAutoConnect.ts](../../apps/desktop/src/lib/workflowAutoConnect.ts) 的 `planAutomaticConnection`，持久化归 [canvasWorkflowRuntime.ts](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 的 `connectAutomatic`／`disconnectAutomatic`；消费者不复制手势层或直接写入多条 typed 绑定。菜单复用 `ContextMenu`／`ContextSubmenu`，旧精确端口位置仍由 [useWorkflowPortGeometry.ts](../../apps/desktop/src/lib/useWorkflowPortGeometry.ts) 缓存。
+- **验证：** `canvas-connection-handle-ui.test.mjs` 验证固定屏幕尺寸、磁吸／取消、编辑与键盘及重叠命中；`canvas-auto-connect-ui.test.mjs` 验证实际交互层。运行、原子保存与兼容边界见 [工作流协议](../CANVAS-WORKFLOW.md#2026-11-04统一加号与自动内容连接源码未发布)。
+
 ## 选择生成模型或图片比例
 
 - **用途／关键词：** provider、模型、比例、ratio、默认模型、Bcoin。
@@ -96,7 +104,11 @@
 - **用途／关键词：** 创作状态、单击预览、双击引用、拖动抑制、迟到回包。
 - **入口：** [CreationModeIndicator.tsx](../../apps/desktop/src/components/CreationModeIndicator.tsx) 的 `CreationModeIndicator`；行为用 [useCreationImageInteraction.ts](../../apps/desktop/src/components/useCreationImageInteraction.ts) 的 `useCreationImageInteraction`／`CreationImageTarget`，宿主只负责解析媒体归属与绑定 gesture。
 - **实用证据：** [App.tsx](../../apps/desktop/src/App.tsx) 与 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 都挂标记；后者调用手势 Hook，[useHomeCreationImage.ts](../../apps/desktop/src/components/useHomeCreationImage.ts) 适配主屏并由 [HomeWorkspace.tsx](../../apps/desktop/src/components/HomeWorkspace.tsx) 绑定事件。
-- **范围／状态：可跨模块复用（创作模式图片）。** 标记不管理业务状态；Hook 依赖 `useStore`、素材 API、`BOARD_ASSET_PICK_EVENT` 及 `data-asset-id` 等媒体属性，并校验当前项目路由。只处理图片，保留修饰键和拖动语义；普通浏览／音视频操作不应接管到此 Hook。主屏适配 `useHomeCreationImage` 本身不是其他板块的通用入口。
+- **范围／状态：可跨模块复用（普通浏览与创作模式图片）。** 标记不管理业务状态；Hook 依赖 `useStore`、素材 API、`BOARD_ASSET_PICK_EVENT` 及 `data-asset-id` 等媒体属性，并校验当前项目路由。普通模式图片立即预览，创作模式保留双击一次引用；只处理图片，保留修饰键、拖动、普通会话正文编辑和音视频原行为。主屏适配 `useHomeCreationImage` 本身不是其他板块的通用入口。
+- **图片详情复用：** [CreationImagePreview.tsx](../../apps/desktop/src/components/CreationImagePreview.tsx) 左侧使用 [AssetDetail.tsx](../../apps/desktop/src/components/AssetDetail.tsx) 的 `panelOnly` 与显式 `selection`，`initialAsset` 支持不在当前列表中的图片先显示元信息；详情数据和编辑仍走原接口。该模式不挂载详情页工具栏、原图或组内导航，中间原图及右侧会话由预览宿主管理。「双击添加参考图」由共用 `CreationBoard` 的输入区底部留白展示，仅「双击」加粗；`CreationModeIndicator` 保留顶部创作状态。
+- **预览续轮：** 私有 [ImagePreviewContinuation.tsx](../../apps/desktop/src/components/ImagePreviewContinuation.tsx) 保留独立文本草稿，复用 store 的显式 `sendGenRevise(jobId, ...)`／`cancelGeneration(jobId)`，不接管主创作编辑器。[imagePreviewContinuation.ts](../../apps/desktop/src/lib/imagePreviewContinuation.ts) 共用历史轮映射，发送时恢复真实任务与原项目／线程归属；歧义拒绝、路由／关闭作废及权益门控保持。预览订阅目标实时任务，继续用 `GenerationPanel` 的只读历史视图屏蔽依赖全局任务的操作，显式 `followLatest` 在续轮、图片加载及失败时跟随底部；其他调用默认保留原滚动行为。两侧收起均保持挂载以保留草稿与阅读位置。
+- **自由图片舞台：** 同一预览支持普通导入图片，没有会话时只显示图片和详情。详情／会话均可独立收起，工具栏保留重开入口；详情保持挂载以保留未完成编辑和滚动位置。`CreationImagePreview.css` 仅在窗口边界裁切，图片与角标共同变换；预览私有 [useImagePreviewHud.ts](../../apps/desktop/src/components/useImagePreviewHud.ts) 按图片边界定位四组标题／控制，维持屏幕尺寸、窗口安全边距及侧面板避让，并将预览中心换算成每侧局部坐标作为共同旋转／透视原点，不作为跨模块布局接口。拖拽／滚轮只从图片开始，空白单击退出，按下／松手来源和移动距离防止拖图误关。外围投影线保留，面板及图片后层沿用 `ProjectManagerPanel.css`／`ProjectCreateCard.css` 的层叠与短闪语汇，不导入项目卡片内部逻辑；两侧正文与底板同属一个虚拟平面，选取／输入／键盘聚焦时共享姿态锁定，原图保持平面。缩放复用 [useImageZoom.ts](../../apps/desktop/src/lib/useImageZoom.ts) 的 `zoomBy`／`reset`；宿主显式允许 0.1–16 倍，原灯箱与普通详情仍默认 1–8 倍。已移除没有消费者的空白舞台滚轮参数。
+- **渐进加载：** 图片先绘制，缩略图可先于原件显示；`AssetDetail.onReady(assetId)` 在首次分析、标签、集合与来源读取全部 settled 后通知宿主，不等待 CLI 健康检查。宿主按请求身份及图片入场状态显现两侧，`GenerationPanel` 的只读提示词视图延后挂载，固定投影区避免资料加载后重排。`useCompatibleImagePath(path, onError?)` 可选回调用于转换失败时释放图片加载门控，原调用保持兼容；旧详情页仍逐项呈现初始数据。
 
 ## 切换全部、标签和集合视图
 

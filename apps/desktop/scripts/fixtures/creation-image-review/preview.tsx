@@ -19,6 +19,7 @@ const assets: Asset[] = [
   { id: "review-one", name: "城市肖像 · 画面一", store_path: "/src-tauri/resources/samples/preset-13.png", width: 941, height: 1672, ext: "png", generation_session_id: "review-session" },
   { id: "review-two", name: "花影 · 画面二", store_path: "/src-tauri/resources/samples/preset-14.png", width: 1086, height: 1448, ext: "png", generation_session_id: "review-session" },
 ];
+if (new URLSearchParams(location.search).has("thumbnail")) assets[1].thumb_path = `${assets[1].store_path}?thumbnail=1`;
 const job: GenJob = {
   id: "review-job", projectId: "review-project", sessionId: "review-session", provider: "codex",
   running: false, streaming: "", createdAt: 1, lastPrompt: "黑色衣装的城市肖像，自然光，安静的街角。", lastRefs: [], refAssets: [],
@@ -28,16 +29,26 @@ const job: GenJob = {
   ],
 };
 const host = window as any;
+const deferred = new URLSearchParams(location.search).has("deferred");
+host.__reviewHold = new Set(deferred ? ["generation_history", "list_analyses_by_asset", "list_asset_tags", "list_asset_collections"] : []);
+host.__reviewPending = [];
 const callbacks = new Map<number, unknown>();
 host.__TAURI_INTERNALS__ = {
   convertFileSrc: (path: string) => path,
   transformCallback: (callback: unknown) => { const id = callbacks.size + 1; callbacks.set(id, callback); return id; },
   metadata: { currentWindow: { label: "review" }, currentWebview: { label: "review" } },
   invoke: async (command: string) => {
+    if (host.__reviewHold.has(command)) await new Promise<void>((resolve, reject) => host.__reviewPending.push({ command, resolve, reject }));
     if (command === "plugin:event|listen") return 1;
     if (command === "plugin:event|unlisten") return;
     if (command === "get_assets_by_ids") return assets;
-    if (command === "generation_history") return { session_id: null, references: [], turns: [] };
+    if (command === "generation_history") return {
+      session_id: deferred ? job.sessionId : null, references: [], dimension_assets: [],
+      turns: deferred ? job.turns.map(turn => ({ ...turn, prompt_raw: turn.promptRaw, references: [], ref_assets: [] })) : [],
+    };
+    if (command === "list_asset_tags") return [{ name: "时装", source: "manual", origin: "manual" }];
+    if (command === "list_analyses_by_asset" || command === "list_asset_collections") return [];
+    if (command === "codex_health") return { ok: false };
     throw new Error(`示意页不执行原生操作：${command}`);
   },
 };
@@ -48,6 +59,7 @@ function Review() {
   const [theme, setTheme] = useState("dark");
   const [shown, setShown] = useState<Asset | null>(assets[1]);
   const [version, setVersion] = useState(0);
+  const [showHistory, setShowHistory] = useState(true);
   const [references, setReferences] = useState<Asset[]>([]);
   const [draft, setDraft] = useState("沿用这张图的光线与配色，尝试一个新的构图。");
   const timer = useRef<ReturnType<typeof setTimeout>>();
@@ -71,6 +83,7 @@ function Review() {
     <header className="image-review-topbar">
       <span className="image-review-badge">正式组件 · 交互示意</span>
       <nav aria-label="示意选项">
+        <button type="button" onClick={() => setShowHistory(value => !value)}>{showHistory ? "查看普通图片" : "查看生成图片"}</button>
         <button type="button" onClick={replay} title="重播展开动效"><RotateCcw size={14}/>重播</button>
         <button type="button" onClick={() => setTheme(value => value === "dark" ? "light" : "dark")} aria-label={theme === "dark" ? "切换浅色" : "切换深色"}>
           {theme === "dark" ? <Sun size={15}/> : <Moon size={15}/>} {theme === "dark" ? "浅色" : "深色"}
@@ -105,7 +118,7 @@ function Review() {
         <button className="image-review-send" type="button" disabled title="示意页不提交生成任务" aria-label="发送（示意页不可用）"><ArrowUp size={16}/></button>
       </section>
     </section>
-    {shown && <CreationImagePreview key={`${shown.id}:${version}`} asset={shown} projectId="review-project" job={job} onClose={() => setShown(null)}/>}
+    {shown && <CreationImagePreview key={`${shown.id}:${version}:${showHistory}`} asset={showHistory ? shown : { ...shown, generation_session_id: null }} projectId="review-project" job={showHistory && !deferred ? job : undefined} onClose={() => setShown(null)}/>}
   </main>;
 }
 

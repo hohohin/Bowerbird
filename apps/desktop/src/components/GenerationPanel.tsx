@@ -59,6 +59,7 @@ function fmtDuration(ms: number): string {
 export function GenerationPanel({
   readOnly = false,
   embedded = false,
+  followLatest = false,
   hydratedAssets = [],
   snapshot,
   onAddVideoFrame,
@@ -66,6 +67,7 @@ export function GenerationPanel({
 }: {
   readOnly?: boolean;
   embedded?: boolean;
+  followLatest?: boolean;
   hydratedAssets?: Asset[];
   snapshot?: { job: GenJob; sourceJobId: string | null; selectedTurnKey: string; onReuse: (turn: GenTurn) => void };
   onAddVideoFrame?: (frame: VideoFrame) => Promise<void>;
@@ -211,13 +213,14 @@ export function GenerationPanel({
   // 刷字不触发；turnCount 覆盖底部对话框发送：坞内发送后回会话视图（滚动体重挂载），
   // 新一轮用户气泡 + 生成中占位需滚到可见（imageCount 要等图落地才变）。
   const turnCount = activeJob?.turns.length ?? 0;
+  const latestError = followLatest ? activeJob?.turns[turnCount - 1]?.error : undefined;
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    if (snapshot) {
+    if (snapshot && !followLatest) {
       el.querySelector<HTMLElement>(`[data-generation-turn-key="${CSS.escape(snapshot.selectedTurnKey)}"]`)?.scrollIntoView({ block: "nearest" });
-    } else el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
-  }, [imageCount, turnCount, activeJobId, snapshot?.selectedTurnKey]);
+    } else el.scrollTo({ top: el.scrollHeight, behavior: followLatest ? "auto" : "smooth" });
+  }, [imageCount, turnCount, activeJobId, snapshot?.selectedTurnKey, followLatest, latestError]);
 
   const running = !!activeJob?.running;
 
@@ -598,7 +601,14 @@ export function GenerationPanel({
       )}
 
       {/* 会话主体：用户消息（右）↔ 助手产出（左），纵向时间线 */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-5">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-5" onLoadCapture={event => {
+        // A new image acquires its height after the turn has already been appended.
+        if (followLatest && event.target instanceof HTMLImageElement &&
+          event.target.closest<HTMLElement>("[data-generation-turn-key]")?.dataset.generationTurnKey === snapshot?.selectedTurnKey) {
+          const el = scrollRef.current;
+          el?.scrollTo({ top: el.scrollHeight });
+        }
+      }}>
         {!activeJob || turnsWithOffset.length === 0 ? (
           <div className="flex h-full items-center justify-center text-sm text-muted">
             尚未开始会话。在创作板组稿后点「✓ 发送」生成。

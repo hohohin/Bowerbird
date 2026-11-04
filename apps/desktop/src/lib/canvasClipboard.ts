@@ -42,8 +42,13 @@ export function cloneCanvasClipboard(value: CanvasClipboard, projectId: string, 
   const dx = x - Math.min(...cards.map(node => node.x)), dy = y - Math.min(...cards.map(node => node.y));
   const ids = new Map([...cards, ...value.workflow].map(node => [node.id, crypto.randomUUID()]));
   const sameProject = projectId === value.projectId;
+  const connections = new Map<string, string>();
   const remap = (input: WorkflowInput): WorkflowInput | null => {
     const next = { ...input };
+    if (input.autoConnect) {
+      if (!connections.has(input.autoConnect)) connections.set(input.autoConnect, crypto.randomUUID());
+      next.autoConnect = connections.get(input.autoConnect);
+    }
     for (const key of ["nodeId", "canvasNodeId", "assetNodeId", "groupId"] as const) {
       const old = input[key]; if (!old) continue;
       const id = ids.get(old);

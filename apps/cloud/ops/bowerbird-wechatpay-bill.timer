@@ -1,0 +1,11 @@
+[Unit]
+Description=Reconcile Bowerbird WeChat Pay bill at 10:30 Beijing time
+
+[Timer]
+OnCalendar=*-*-* 10:30:00 Asia/Shanghai
+Persistent=true
+AccuracySec=1m
+Unit=bowerbird-wechatpay-bill.service
+
+[Install]
+WantedBy=timers.target

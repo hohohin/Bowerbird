@@ -8,6 +8,9 @@ const ROUTES = new Map([
   ["GET /functions/v1/entitlement", ["forceFunctionRegion"]],
   ["POST /functions/v1/redeem-code", ["forceFunctionRegion"]],
   ["POST /functions/v1/comfy-download", ["forceFunctionRegion"]],
+  ["GET /functions/v1/create-checkout", ["forceFunctionRegion"]],
+  ["POST /functions/v1/create-checkout", ["forceFunctionRegion"]],
+  ["POST /functions/v1/checkout-status", ["forceFunctionRegion"]],
   ["POST /auth/v1/otp", ["redirect_to"]],
   ["POST /auth/v1/token", ["grant_type"]],
   ["GET /auth/v1/verify", ["token", "type", "redirect_to"]],
@@ -96,7 +99,8 @@ export function createAccountProxy({
       target.search = url.search;
       if (path.startsWith("/functions/")) target.searchParams.set("forceFunctionRegion", REGION);
       const headers = { apikey: publicKey, "Content-Type": "application/json" };
-      if (["/functions/v1/entitlement", "/functions/v1/redeem-code", "/functions/v1/comfy-download"].includes(path)) {
+      if (["/functions/v1/entitlement", "/functions/v1/redeem-code", "/functions/v1/comfy-download",
+        "/functions/v1/create-checkout", "/functions/v1/checkout-status"].includes(path)) {
         const bearer = request.headers.authorization;
         if (typeof bearer !== "string" || !/^Bearer [^\s]{1,8192}$/.test(bearer)) throw fail(401);
         headers.Authorization = bearer;

@@ -33,6 +33,7 @@
 .creation-mode-indicator-label::before {
   content:"";width:3px;height:3px;flex-shrink:0;background:rgb(var(--industrial-accent-rgb));box-shadow:none;
 }
+.creation-mode-indicator-label { white-space:nowrap; }
 .library-creation-mode-indicator > * { z-index:20; }
 @keyframes creation-mode-indicator-in {
   from { transform:translateY(-100%); }

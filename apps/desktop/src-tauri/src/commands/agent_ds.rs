@@ -30,6 +30,8 @@
 // `ds-session.json` 已不参与投递，代码保留待必要时回收。
 
 mod codex;
+mod video;
+pub(crate) mod video_studio;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -589,16 +591,19 @@ pub async fn agent_ds_workflow_start(
 }
 
 async fn workflow_start(request_id: String, instruction: String, source: String, purpose: Option<String>, images: Option<Vec<String>>, session_scope: Option<WorkflowSessionScope>, image_provider: Option<String>, transport: Option<String>, isolated_session: Option<bool>, session_generation: Option<bool>, visual_profile: Option<crate::core::visual_profile::VisualProfileCapsule>) -> Result<DeliveryOutcome, AppError> {
-    if purpose.as_deref() != Some("agent-text") { ensure_preview_enabled()?; }
+    let video_task = purpose.as_deref() == Some("agent-video");
+    if !matches!(purpose.as_deref(), Some("agent-text" | "agent-video")) { ensure_preview_enabled()?; }
     let use_codex = match transport.as_deref() {
         None | Some("local-ds") => false,
-        Some("codex-cli") if purpose.as_deref() == Some("agent-text") => true,
+        Some("codex-cli") if matches!(purpose.as_deref(), Some("agent-text" | "agent-video")) => true,
         _ => return Err(AppError::Other("不支持的本机 Agent 通道".into())),
     };
-    let task = workflow_task(purpose.as_deref())?;
+    if video_task && !use_codex { return Err(AppError::Other("视频制作目前仅支持本机 Codex".into())); }
+    if video_task && isolated_session.unwrap_or(false) { return Err(AppError::Other("视频制作暂不支持循环，请单独运行卡片".into())); }
+    let task = if video_task { "根据本次要求制作或修改视频，交付真实 MP4，并保留可编辑工程。" } else { workflow_task(purpose.as_deref())? };
     let images = images.unwrap_or_default();
     let native_images = purpose.as_deref() == Some("agent-text");
-    if !native_images && !images.is_empty() {
+    if !native_images && !video_task && !images.is_empty() {
         return Err(AppError::Other("仅本机文字 Agent 支持图片附件".into()));
     }
     let root = if use_codex { codex::request_root(&request_id)? } else { delivery_root() };
@@ -609,14 +614,22 @@ async fn workflow_start(request_id: String, instruction: String, source: String,
         return Err(AppError::Other("修改要求须为 1–4000 字，引用原文须为 1–16000 字".into()));
     }
     // A repeated IPC call never queues the same model request twice.
-    if path.exists() || archived.exists() || reply.exists() {
+    if path.exists() || archived.exists() || reply.exists() || use_codex && root.join("request.json").exists() {
         return Ok(DeliveryOutcome { path: path.to_string_lossy().into_owned(), session_id: None, session_title: None,
             auto_delivered: false, notice: Some("请求已投递，等待原请求结果；未重复发送".into()) });
     }
     std::fs::create_dir_all(root.join("results"))?;
     std::fs::create_dir_all(root.join("archive"))?;
     let reply = std::fs::canonicalize(root.join("results"))?.join(reply.file_name().unwrap());
-    let protocol = if native_images {
+    let protocol = if video_task {
+        let scope = session_scope.as_ref().ok_or_else(|| AppError::Other("视频制作缺少卡片身份".into()))?;
+        let scope = workflow_session_id(&normalized_local_path(&repo_root()), scope)?;
+        video_studio::ensure_closed(&scope)?;
+        let artifacts = root.join("artifacts").join(&request_id);
+        std::fs::create_dir_all(&artifacts)?;
+        let guide = video::request(&root, &request_id, &scope, &images)?;
+        format!("{guide}\n完成后原子写回 {{\"schemaVersion\":1,\"requestId\":\"{request_id}\",\"text\":\"简短交付说明\",\"videos\":[\"result.mp4\"]}}。成片须保存到 {}，最多 512 MiB，仅列文件名。失败只写 error，不写 videos；检查成片之后才提交结果。引用文字 JSON 含 __outputTargets 时，外层 text 必须改为序列化 JSON {{\"format\":\"bowerbird-deliveries\",\"deliveries\":[{{\"target\":\"output1\",\"generatedImages\":[1]}}]}}。每个指定 target 恰好一次，不发明目标；generatedImages 的 1 表示本次唯一视频，inputImages 是素材清单的 1 起始编号；图片目标省略 text，文字目标可包含 text。", std::fs::canonicalize(artifacts)?.display())
+    } else if native_images {
         let images_dir = root.join("artifacts").join(&request_id);
         std::fs::create_dir_all(&images_dir)?;
         let images_dir = std::fs::canonicalize(images_dir)?;
@@ -632,9 +645,11 @@ async fn workflow_start(request_id: String, instruction: String, source: String,
         workflow_generation_protocol(&root, &request_id, image_provider.as_deref(), use_codex, session_generation.unwrap_or(false))?
     } else { String::new() };
     if use_codex {
-        generation_protocol.push_str("\n最终图片和结果 JSON 写完即结束本轮，仅回复‘已完成’；不要重复输出报告或在提交后追加检查。需要的质量检查须在写最终结果前完成。");
+        generation_protocol.push_str("\n最终产物和结果 JSON 写完即结束本轮，仅回复‘已完成’；不要重复输出报告或在提交后追加检查。需要的质量检查须在写最终结果前完成。");
     }
-    let boundary = if native_images {
+    let boundary = if video_task {
+        "只修改本卡视频工程和本次任务文件，不修改来源素材或其他卡片；输出完成后结束本轮。"
+    } else if native_images {
         "按用户要求使用当前 harness 已有的工具与权限。最终可返回文字、表格、图片或图文组合，并按上述约定写回结果文件；不要仅在会话中回复。"
     } else {
         "只允许写这个结果文件及其临时文件，不要修改素材库、源代码、其他任务文件或执行生图。"
@@ -645,8 +660,10 @@ async fn workflow_start(request_id: String, instruction: String, source: String,
         reply.display()
     );
     let names: Vec<_> = (1..=images.len()).map(|index| format!("图片 {index}")).collect();
-    let text = if native_images { workflow_profile_prompt(&message, visual_profile.as_ref()) } else { message.clone() };
-    let mut payload = build_delivery_payload(&message, &text, &images, &names, visual_profile.as_ref().map(|profile| profile.profile_id.as_str()), chrono::Local::now().to_rfc3339());
+    let text = if native_images || video_task { workflow_profile_prompt(&message, visual_profile.as_ref()) } else { message.clone() };
+    // Video skill references are immutable project snapshots inspected with local tools.
+    let attachments = if video_task { Vec::new() } else { images.clone() };
+    let mut payload = build_delivery_payload(&message, &text, &attachments, &names, visual_profile.as_ref().map(|profile| profile.profile_id.as_str()), chrono::Local::now().to_rfc3339());
     payload.visual_profile = visual_profile;
     let scope = session_scope.as_ref().ok_or_else(|| AppError::Other("缺少工作流卡片会话身份，请刷新桌面后重新运行".into()))?;
     std::fs::create_dir_all(repo_root())?;
@@ -821,9 +838,12 @@ pub async fn agent_ds_workflow_ingest_images(
 }
 
 fn ingest_workflow_images(root: &Path, request_id: &str, paths: &crate::core::paths::LibraryPaths, db: &crate::db::Database) -> Result<Vec<crate::core::library::Asset>, AppError> {
-    let images = workflow_result_images(root, request_id)?;
+    let result = read_workflow_result(root, request_id)?.ok_or_else(|| AppError::Other("Agent 结果尚未就绪".into()))?;
+    let images = if result.get("videos").is_some() { video::result_paths(root, request_id, &result)? } else { workflow_result_images(root, request_id)? };
     // Exact-byte dedup makes recovery after a partial import idempotent.
-    images.iter().map(|path| crate::core::ingest::ingest_new_file(paths, db, path)).collect()
+    let assets = images.iter().map(|path| crate::core::ingest::ingest_new_file(paths, db, path)).collect::<Result<Vec<_>, _>>()?;
+    if result.get("videos").is_some() { video::accept_revision(root)?; }
+    Ok(assets)
 }
 
 fn read_workflow_result(root: &Path, request_id: &str) -> Result<Option<Value>, AppError> {
@@ -834,6 +854,9 @@ fn read_workflow_result(root: &Path, request_id: &str) -> Result<Option<Value>, 
     let text = result.get("text").and_then(Value::as_str);
     let error = result.get("error").and_then(Value::as_str);
     let images = result.get("images");
+    let videos = result.get("videos");
+    let videos_valid = videos.is_none_or(|value| root.join("video-request.json").is_file() && value.as_array().is_some_and(|items| items.len() == 1
+        && items[0].as_str().is_some_and(|name| valid_result_image_name(name) && name.to_ascii_lowercase().ends_with(".mp4"))));
     let images_valid = images.is_none_or(|value| value.as_array().is_some_and(|items| !items.is_empty()
         && items.iter().all(|item| item.as_str().is_some_and(valid_result_image_name))));
     let version = result["schemaVersion"].as_u64();
@@ -841,8 +864,9 @@ fn read_workflow_result(root: &Path, request_id: &str) -> Result<Option<Value>, 
         && result["revision"].as_u64().is_some_and(|r| (1..=3).contains(&r))
         && (result["phase"] != "commit" || result["digest"].as_str().is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))));
     if !matches!(version, Some(1 | 2)) || (version == Some(2) && !v2_valid) || result["requestId"] != request_id
-        || !images_valid || (version == Some(2) && images.is_some())
-        || ((text.is_some() || images.is_some()) == error.is_some())
+        || !images_valid || !videos_valid || (images.is_some() && videos.is_some()) || (version == Some(2) && (images.is_some() || videos.is_some()))
+        || (root.join("video-request.json").is_file() && error.is_none() && videos.is_none())
+        || ((text.is_some() || images.is_some() || videos.is_some()) == error.is_some())
         || (result.get("text").is_some() && text.is_none()) || (result.get("error").is_some() && error.is_none())
         || text.is_some_and(|s| s.trim().is_empty() || s.encode_utf16().count() > 16000)
         || error.is_some_and(|s| s.trim().is_empty() || s.encode_utf16().count() > 2000) {
@@ -861,7 +885,17 @@ pub fn agent_ds_workflow_progress(request_id: String) -> Result<Vec<codex::Publi
 #[tauri::command]
 pub fn agent_ds_workflow_result(request_id: String) -> Result<Option<Value>, AppError> {
     let root = workflow_root(&request_id)?;
-    if codex::is_request(&root) { return codex::result(&root, &request_id); }
+    if codex::is_request(&root) {
+        let mut result = codex::result(&root, &request_id)?;
+        if root.join("video-request.json").is_file() {
+            if let Some(value) = &mut result {
+                let request: Value = serde_json::from_slice(&std::fs::read(root.join("video-request.json"))?)?;
+                let scope = request["scope"].as_str().ok_or_else(|| AppError::Other("视频工程身份缺失".into()))?;
+                value["projectPath"] = json!(video::revision_root(&root, scope)?);
+            }
+        }
+        return Ok(result);
+    }
     read_workflow_result(&root, &request_id)
 }
 

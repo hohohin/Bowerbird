@@ -8,7 +8,7 @@ import { SELECTABLE_VIDEO_MODELS, VIDEO_RATIOS, videoDurationRange, videoModelLa
 import { DreaminaBalance } from "./DreaminaCredits";
 import { ModelSelect, type ModelOption } from "./ModelSelect";
 import { TacticalSelect } from "../TacticalSelect";
-import { canUseComfyVideo, type ComfyVideoOptions } from "../../lib/comfyVideo";
+import { canUseComfyVideo, comfyVideoMode, comfyVideoOptionsForMode, type ComfyVideoMode, type ComfyVideoOptions } from "../../lib/comfyVideo";
 
 type VideoChannel = "jimeng" | "cloud";
 export function VideoControls({ options, onChange, ratio, onRatioChange, channel = "jimeng", composer = false, local, menuClassName }: {
@@ -62,9 +62,10 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
       cloudBalance={entitlement ? balance : null} cloudLoggedIn={auth?.logged_in}
       options={modelOptions} onChange={selectModel} footer={composer ? status : undefined} quotaDetail={local?.options ? "本地 H3 视频，不消耗积分" : channel === "cloud" ? "使用 Bowerbird 账号积分" : "使用自有即梦账号额度，不扣 Bowerbird 积分"} />
     {local?.options ? <>
-      <TacticalSelect aria-label="本地视频分辨率" value={local.options.resolution} onValueChange={value => local.onChange({ ...local.options!, resolution: Number(value) as ComfyVideoOptions["resolution"] })}>{[0.6, 0.8, 1].map(value => <option key={value} value={value}>{value} MP</option>)}</TacticalSelect>
+      <TacticalSelect aria-label="本地视频模式" value={comfyVideoMode(local.options)} onValueChange={value => local.onChange(comfyVideoOptionsForMode(local.options!, value as ComfyVideoMode))}><option value="frames">首尾帧</option><option value="reference">单图</option><option value="text">文生视频</option></TacticalSelect>
+      <TacticalSelect aria-label="本地视频分辨率" value={local.options.resolution} onValueChange={value => local.onChange({ ...local.options!, resolution: Number(value) as ComfyVideoOptions["resolution"] })}>{(comfyVideoMode(local.options) === "frames" ? [0.6, 0.8, 1] : [0.6, 0.8, 0.98, 1]).map(value => <option key={value} value={value}>{value === 0.98 ? "768p" : `${value} MP`}</option>)}</TacticalSelect>
       <label className="flex items-center gap-1 text-xs text-muted"><input aria-label="本地视频时长（秒）" type="number" min={1} max={15} step={1} className={`${control} w-12`} value={local.options.seconds} onChange={event => local.onChange({ ...local.options!, seconds: Number(event.target.value) })} />秒</label>
-      <TacticalSelect aria-label="本地视频比例" value={local.options.ratio} onValueChange={value => local.onChange({ ...local.options!, ratio: value as ComfyVideoOptions["ratio"] })}>{["auto", "9:16", "16:9", "4:3", "3:4", "1:1"].map(value => <option key={value} value={value}>{value === "auto" ? "自动" : value}</option>)}</TacticalSelect>
+      <TacticalSelect aria-label="本地视频比例" value={local.options.ratio} onValueChange={value => local.onChange({ ...local.options!, ratio: value as ComfyVideoOptions["ratio"] })}>{[...(comfyVideoMode(local.options) === "text" ? [] : ["auto"]), "9:16", "16:9", "4:3", "3:4", "1:1"].map(value => <option key={value} value={value}>{value === "auto" ? "自动" : value}</option>)}</TacticalSelect>
     </> : <>
     <TacticalSelect aria-label="视频分辨率" className={control} value={options.video_resolution} onValueChange={value => onChange({ ...options, video_resolution: value as VideoOptions["video_resolution"] })}>
       {!resolutions.includes(options.video_resolution) && <option value={options.video_resolution}>{options.video_resolution} · 待核验</option>}
@@ -81,7 +82,7 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
     </>}
   </>;
   return <>
-    {composer ? <div className="composer-video-fields">{fields}</div> : fields}
+    {composer ? <div className={`composer-video-fields${local?.options ? " is-local" : ""}`}>{fields}</div> : fields}
     {composer ? current?.error && <button type="button" className="composer-video-retry" aria-label="模型查询失败，重试" title={userErrorMessage(current.error, "模型查询失败，请点击重试。")} onClick={() => setRefresh(value => value + 1)}><RotateCw size={14} aria-hidden="true" /></button>
       : status && <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1">{status}</div>}
   </>;

@@ -543,6 +543,9 @@ pub fn run() {
             commands::cloud::cloud_entitlement,
             commands::cloud::cloud_sync_entitlement,
             commands::cloud::cloud_redeem_code,
+            commands::cloud::cloud_checkout_capability,
+            commands::cloud::cloud_create_checkout,
+            commands::cloud::cloud_checkout_status,
             commands::cloud::cloud_start_pro_trial,
             commands::cloud_agent::cloud_agent_start,
             commands::cloud_agent::cloud_agent_latest,
@@ -767,6 +770,9 @@ pub fn run() {
             commands::settings::migrate_library_root,
             commands::settings::restart_app,
             commands::source_browser::open_source_browser,
+            commands::agent_ds::video_studio::agent_video_studio_open,
+            commands::agent_ds::video_studio::agent_video_studio_resize,
+            commands::agent_ds::video_studio::agent_video_studio_close,
             commands::pinterest_search::start_pinterest_image_search,
             commands::pinterest_search::cancel_pinterest_image_search,
             commands::source_browser::resize_source_browser,
@@ -796,6 +802,9 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|_app, _event| {
+            if matches!(&_event, tauri::RunEvent::Exit) {
+                tauri::async_runtime::block_on(commands::agent_ds::video_studio::shutdown());
+            }
             #[cfg(target_os = "macos")]
             forward_opened_urls(_event, |value| forward_auth_callback(_app, value));
         });

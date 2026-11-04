@@ -5,6 +5,8 @@ import { canvasAssetMediaPath } from "../lib/creativeCanvas";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
 import { CanvasBubbleTail } from "./CanvasBubbleTail";
+import { CanvasConnectionHandle } from "./CanvasConnectionHandle";
+import "./CanvasTextCard.css";
 import { VideoPoster } from "./VideoPoster";
 import { CanvasImage } from "./CanvasImage";
 import { isVideoPath } from "../lib/videoGeneration";
@@ -20,9 +22,9 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
   renderGeneration?: (cell: CanvasTextCell) => ReactNode;
   onOpenGeneration?: (cell: CanvasTextCell) => void;
   onOpenPreview?: (asset: Asset, group?: Asset[]) => void;
-  onInput?: (cellId?: string, disconnect?: boolean, type?: "text" | "image", point?: { x: number; y: number }) => void;
+  onInput?: (cellId?: string, disconnect?: boolean, type?: "text" | "image" | "auto", point?: { x: number; y: number }, keyboard?: boolean) => void;
   inputLocked?: boolean;
-  onConnectCell?: (cellId: string, clientX: number, clientY: number) => void;
+  onConnectCell?: (cellId: string, clientX: number, clientY: number, keyboard?: boolean) => void;
   value: CanvasNotePayload;
   selected: boolean;
   width: number;
@@ -239,15 +241,13 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
       }}><Undo2 size={16} /></button></>}
     </div>}
     <div className="canvas-text-handle" title={bubble ? "拖动气泡便签" : "拖动内容卡片"}><GripHorizontal size={15} />{bubble ? <MessageCircle size={14} aria-hidden="true" /> : <Table2 size={14} aria-hidden="true" />}<span className="canvas-tactical-note-title">{bubble ? "气泡便签" : "内容卡片"}</span></div>
-    {!bubble && onConnectCell && <button className="workflow-cell-port workflow-image-output" data-workflow-cell="*" aria-label="输出容器图片" title="输出全部图片"
-      onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell("*", event.clientX, event.clientY); }}
-      onClick={event => { if (event.detail === 0) onConnectCell("*", event.clientX, event.clientY); }} />}
-    {!bubble && onConnectCell && <button className="workflow-cell-port workflow-content-text-output" data-workflow-cell="*text" aria-label="输出全部文本" title="输出完整表格，保留行列和空单元格"
-      onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell("*text", event.clientX, event.clientY); }}
-      onClick={event => { if (event.detail === 0) onConnectCell("*text", event.clientX, event.clientY); }} />}
-    {!bubble && onConnectCell && <button className="workflow-cell-port workflow-latest-output" data-workflow-cell="*latest" aria-label="输出最新" title="输出最下一行；新增行后自动跟随，空行输出为空"
-      onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell("*latest", event.clientX, event.clientY); }}
-      onClick={event => { if (event.detail === 0) onConnectCell("*latest", event.clientX, event.clientY); }}><span>输出最新</span></button>}
+    {onConnectCell && <CanvasConnectionHandle side="output" data-workflow-cell="*auto"
+      onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); onConnectCell("*auto", event.clientX, event.clientY); }}
+      onClick={event => { if (event.detail === 0) { const rect = event.currentTarget.getBoundingClientRect(); onConnectCell("*auto", rect.left + rect.width / 2, rect.top + rect.height / 2, true); } }} />}
+    {!bubble && onInput && <CanvasConnectionHandle side="input" data-workflow-text-input="" data-content-input-type="auto" disabled={inputLocked}
+      onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); onInput(undefined, false, "auto", { x: event.clientX, y: event.clientY }); }}
+      onClick={event => { if (event.detail === 0) { const rect = event.currentTarget.getBoundingClientRect(); onInput(undefined, false, "auto", { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }, true); } }}
+      onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(undefined, true, "auto", { x: event.clientX, y: event.clientY }); }} />}
     {images && removed && selected && <div className="canvas-text-spacing"><button aria-label="撤销删除行列" onClick={() => { onChange(removed.value); setActive(removed.active); setRemoved(null); }}><Undo2 size={14} /></button></div>}
     {!images && <div className="canvas-text-spacing" role="group" aria-label="文本工具"
       onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }} onKeyDown={event => event.stopPropagation()}>
@@ -265,7 +265,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
           const label = `第 ${index + 1} ${axis === "row" ? "行" : "列"}${type === "image" ? "图片" : "文字"}输入`;
           return <button key={`${id}:${type}`} className={`workflow-cell-port workflow-axis-input is-${axis}${type === "image" ? " is-image-output" : ""}`}
             style={axis === "row" ? { top: `calc(${middle}% + ${type === "image" ? 9 : -9}px)` } : { left: `calc(${middle}% + ${type === "image" ? 9 : -9}px)` }}
-            data-workflow-text-input={id} data-content-input-type={type} aria-label={label} disabled={inputLocked}
+            data-workflow-text-input={id} data-content-input-type={type} aria-label={label} aria-hidden="true" tabIndex={-1} disabled={inputLocked}
             title={`${label}，${axis === "row" ? "向右" : "向下"}逐格追加；右键断开`}
             onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
             onClick={event => { event.stopPropagation(); if (event.detail === 0) onInput(id, false, type); }}
@@ -274,17 +274,17 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
       })}
       {value.cells.map((line, row) => <div role={bubble ? undefined : "row"} className="canvas-text-row" key={row} style={{ flexGrow: rowWeights[row] }}>
         {line.map((item, column) => { const images = item.content_type === "image"; return <div role={bubble ? undefined : "cell"} data-canvas-cell={bubble ? undefined : item.id} className={`canvas-text-cell ${images ? "is-image-cell" : ""} ${canvasCellValue(item).imageRefs.length ? "has-image-refs" : ""} ${removing && (removing.axis === "row" ? removing.index === row : removing.index === column) ? "is-removing" : ""}`} key={column} style={{ flexGrow: columnWeights[column] }} onPointerDown={() => setActive([row, column])}>
-          {!bubble && onInput && <button className="workflow-cell-port is-input" data-workflow-text-input={item.id} aria-label={`输入第 ${row + 1} 行第 ${column + 1} 列`}
+          {!bubble && onInput && <button className="workflow-cell-port is-input" data-workflow-text-input={item.id} aria-label={`输入第 ${row + 1} 行第 ${column + 1} 列`} aria-hidden="true" tabIndex={-1}
             disabled={inputLocked} title="输入文本或图片，替换此单元格；右键断开输入"
             onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
             onClick={event => { event.stopPropagation(); if (event.detail === 0) onInput(item.id); }}
             onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(item.id, true, undefined, { x: event.clientX, y: event.clientY }); }} />}
-          {!bubble && onInput && <button className="workflow-cell-port is-input is-image-output workflow-cell-image-input" data-workflow-text-input={item.id} data-content-input-type="image" aria-label={`输入第 ${row + 1} 行第 ${column + 1} 列图片`}
+          {!bubble && onInput && <button className="workflow-cell-port is-input is-image-output workflow-cell-image-input" data-workflow-text-input={item.id} data-content-input-type="image" aria-label={`输入第 ${row + 1} 行第 ${column + 1} 列图片`} aria-hidden="true" tabIndex={-1}
             disabled={inputLocked} title="输入图片，替换此单元格；右键断开图片输入"
             onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
             onClick={event => { event.stopPropagation(); if (event.detail === 0) onInput(item.id, false, "image"); }}
             onContextMenu={event => { event.preventDefault(); event.stopPropagation(); onInput(item.id, true, "image", { x: event.clientX, y: event.clientY }); }} />}
-          {onConnectCell && <button className={`workflow-cell-port ${images ? "is-image-output" : ""}`} data-workflow-cell={item.id} aria-label={`输出第 ${row + 1} 行第 ${column + 1} 列${images ? "图片" : "文本"}`}
+          {!bubble && onConnectCell && <button className={`workflow-cell-port ${images ? "is-image-output" : ""}`} data-workflow-cell={item.id} aria-label={`输出第 ${row + 1} 行第 ${column + 1} 列${images ? "图片" : "文本"}`} aria-hidden="true" tabIndex={-1}
             title={images ? "拖动连接图片输入" : "拖动连接文本输入"} onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell(item.id!, event.clientX, event.clientY); }}
             onClick={event => { if (event.detail === 0) onConnectCell(item.id!, event.clientX, event.clientY); }} />}
           {!images && <textarea aria-label={bubble ? "气泡便签内容" : `第 ${row + 1} 行第 ${column + 1} 列`} placeholder={bubble ? "添加说明或标签…" : "输入文本…"} value={item.text}

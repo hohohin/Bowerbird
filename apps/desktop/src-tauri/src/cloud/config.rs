@@ -38,7 +38,7 @@ impl CloudConfig {
 
     pub fn account_endpoint(&self, function: &str) -> Option<String> {
         if !self.is_available()
-            || !matches!(function, "wechat-login" | "entitlement" | "redeem-code" | "comfy-download")
+            || !matches!(function, "wechat-login" | "entitlement" | "redeem-code" | "comfy-download" | "create-checkout" | "checkout-status")
         {
             return None;
         }
@@ -143,7 +143,7 @@ mod tests {
             supabase_publishable_key: Some("sb_publishable_test".into()),
             account_api_url: Some("https://bowerbird.cn/api/account/".into()),
         };
-        for function in ["wechat-login", "entitlement", "redeem-code"] {
+        for function in ["wechat-login", "entitlement", "redeem-code", "create-checkout", "checkout-status"] {
             assert_eq!(config.account_endpoint(function).unwrap(), format!(
                 "https://bowerbird.cn/api/account/functions/v1/{function}?forceFunctionRegion=ap-northeast-1"
             ));

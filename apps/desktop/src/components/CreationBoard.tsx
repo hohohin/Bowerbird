@@ -7,7 +7,7 @@ import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, resolveVideoOptio
 import { VideoControls } from "./creation/VideoControls";
 import { LocalVideoFrames } from "./creation/LocalVideoFrames";
 import { ComfyEnvironmentControl, type ComfyEnvironmentState } from "./ComfyVideoCard";
-import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, DEFAULT_COMFY_VIDEO, localVideoFrames, localVideoInputError, type ComposerLocalVideoRequest } from "../lib/comfyVideo";
+import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, DEFAULT_COMFY_VIDEO, localVideoFrames, localVideoInputError, type ComposerLocalVideoRequest } from "../lib/comfyVideo";
 import { ProviderQuota } from "./creation/ProviderQuota";
 import { useStore } from "../store";
 import { canStartAnotherAgentRun, canStartAnotherJob, canUseAgentRun, canUseByo } from "../lib/entitlement";
@@ -237,6 +237,8 @@ export function CreationBoard({
   useTerminalCaret(viewRef, hostRef);
   const videoOptions = resolveVideoOptions(generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS, references);
   const localFrames = useMemo(() => localVideoFrames(references), [references]);
+  const localMode = comfyVideoMode(generation.localVideo ?? DEFAULT_COMFY_VIDEO);
+  const localFrameCount = localMode === "text" ? 0 : localMode === "reference" ? 1 : 2;
 
   useEffect(() => {
     registerDraftFlush?.(flushDraft);
@@ -670,10 +672,10 @@ export function CreationBoard({
     if (referenceError) { notifyError(referenceError, "参考素材不适用"); return; }
     if (isLocalVideo) {
       const options = { ...generation.localVideo! };
-      const request: ComposerLocalVideoRequest = { prompt: finalPrompt, firstFrame: localFrames[0].id, lastFrame: localFrames[1]?.id, options };
+      const request: ComposerLocalVideoRequest = { prompt: finalPrompt, firstFrame: localMode === "text" ? "" : localFrames[0].id, lastFrame: localMode === "frames" ? localFrames[1]?.id : undefined, options };
       await prepareSubmissionProject();
       if (!isCurrentSubmission()) return;
-      const environment = await comfyEnvironment("detect", options.endpoint);
+      const environment = await comfyEnvironment("detect", options.endpoint, undefined, undefined, localMode);
       if (!isCurrentSubmission()) return;
       const account = useStore.getState();
       if (account.cloudAuth?.user_id !== originRoute.cloudAuth?.user_id || !canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) throw new Error("账号或本地生成权限已变化，请重新检查。");
@@ -1446,7 +1448,7 @@ export function CreationBoard({
           {isChat ? <ChatProviderSelect value={chatProvider} onChange={onChatProviderChange} access={chatAccess} disabled={submitting} /> : <>
           {isVideo && <VideoControls composer channel={generation.videoChannel} options={videoOptions} onChange={(options, videoChannel = generation.videoChannel) => setGeneration({ ...generation, localVideo: undefined, media: "video", videoChannel, videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio}
             local={onGenerateLocalVideo ? { options: generation.localVideo, onSelect: () => { setLocalEnvironment({ ready: false, checking: true, message: "正在检测环境…" }); setGeneration({ ...generation, localVideo: { ...DEFAULT_COMFY_VIDEO } }); }, onChange: localVideo => setGeneration({ ...generation, localVideo }) } : undefined} />}
-          {isLocalVideo && !isCollapsed && <LocalVideoFrames frames={localFrames.slice(0, 2)} ignored={references.length - Math.min(2, localFrames.length)} />}
+          {isLocalVideo && !isCollapsed && localMode !== "text" && <LocalVideoFrames mode={localMode} frames={localFrames.slice(0, localFrameCount)} ignored={references.length - Math.min(localFrameCount, localFrames.length)} />}
           {isLocalVideo && localAllowed && <ComfyEnvironmentControl key={cloudAuth?.user_id} composer node={{ comfyVideo: generation.localVideo }} disabled={submitting} onChange={patch => { if (patch.comfyVideo) setGeneration(current => ({ ...current, localVideo: patch.comfyVideo })); }} onStatusChange={setLocalEnvironment} />}
           {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。
               flex：比例 / 生成选项两个选择器水平并排（外层缺 flex 时 block 根会竖着叠成

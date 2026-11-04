@@ -150,12 +150,19 @@ function Meta({ label, value }: { label: string; value: ReactNode }) {
  * 资产详情页（浏览模式下覆盖主区）：大图 + 元信息 + 反推描述 + 提示词板块 + 来源外链。
  * 大图走 store_path（原图全尺寸）；视频复用 VideoPlayer；SVG/图片用 <img>。
  */
-export function AssetDetail({ onExploreSource = (url) => { void open(url); }, selection }: {
+export function AssetDetail({ onExploreSource = (url) => { void open(url); }, selection, panelOnly = false, initialAsset, onReady }: {
   onExploreSource?: (url: string) => void;
+  /** Reuse the inspector alongside a host-owned image preview, without page navigation. */
+  panelOnly?: boolean;
+  initialAsset?: Asset;
+  /** Initial inspector content has settled; the host can reveal it without empty sections flashing. */
+  onReady?: (assetId: string) => void;
   selection?: { assetId: string; onClose: () => void; onOpen: (id: string) => void; onContextMenu?: ReturnType<typeof useStore.getState>["openContextMenu"]; onNavigate?: () => void };
 }) {
   const selectedId = useStore((s) => s.detailAssetId);
   const id = selection?.assetId ?? selectedId;
+  const readyCallback = useRef(onReady);
+  readyCallback.current = onReady;
   const detailRoot = useRef<HTMLDivElement>(null);
   const assets = useStore((s) => s.assets);
   const activeProjectId = useStore((s) => s.activeProjectId);
@@ -187,7 +194,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const listedAsset = assets.find((a) => a.id === id);
   // 画板独有、中央来源或被筛选掉的素材不一定在当前列表中，按身份读取而不切换工作区。
   useEffect(() => {
-    if (!id || listedAsset) return;
+    if (!id || listedAsset || initialAsset?.id === id) return;
     let alive = true;
     api.getAssetsByIds([id]).then(([asset]) => {
       if (alive) setResolvedAsset(asset ?? null);
@@ -195,10 +202,11 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
       if (alive) notifyError(error, "无法读取素材详情");
     });
     return () => { alive = false; };
-  }, [id, listedAsset]);
+  }, [id, listedAsset, initialAsset?.id]);
   // 同流程轮播：生成图取整组过程图。sibling 可能被合并出主列表，故从 group 解析后再回退 assets。
   const asset: Asset | undefined = group.find((a) => a.id === id) ?? listedAsset
-    ?? (resolvedAsset?.id === id ? resolvedAsset : undefined);
+    ?? (resolvedAsset?.id === id ? resolvedAsset : undefined)
+    ?? (initialAsset?.id === id ? initialAsset : undefined);
   // 同流程轮播位置（生成图组内第几张；-1 = 不在组 / 非生成图）。
   const groupPos = asset ? group.findIndex((a) => a.id === asset.id) : -1;
 
@@ -233,16 +241,6 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
     if (!id) return;
     try {
       setAnalyses(await api.listAnalysesByAsset(id));
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
-  // source describes the label creator; origin records who assigned it to this image.
-  async function loadTags() {
-    if (!id) return;
-    try {
-      setTags(await api.listAssetTags(id));
     } catch (e) {
       console.error(e);
     }
@@ -311,31 +309,33 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
     }
   }
   useEffect(() => {
-    loadAnalyses();
-    loadTags();
-    loadCollections();
     setCollectionPanelOpen(false);
     setTargetCollectionId("");
     setCreatingCollection(false);
     setCollectionName("");
     setDetailTab("info");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
     let alive = true;
+    setAnalyses([]);
+    setTags([]);
+    setAssetCollections([]);
     setGenerationSource(null);
     if (!id) return;
-    api
-      .generationHistory(id, activeProjectId)
-      .then((history) => {
-        if (alive && (history.turns.length > 0 || history.references.length > 0)) {
-          setGenerationSource(history);
-        }
-      })
-      .catch(() => {
-        // 普通导入素材没有生成历史，详情页保持无来源卡片即可。
-      });
+    // Keep ordinary details progressive; an embedded host reveals after the initial requests settle.
+    void Promise.allSettled([
+      api.listAnalysesByAsset(id).then(value => { if (alive) setAnalyses(value); }),
+      api.listAssetTags(id).then(value => { if (alive) setTags(value); }),
+      api.listAssetCollections(id).then(value => { if (alive) setAssetCollections(value); }),
+      api.generationHistory(id, activeProjectId).then(value => {
+        if (alive && (value.turns.length || value.references.length)) setGenerationSource(value);
+      }),
+    ]).then(results => {
+      if (!alive) return;
+      for (const result of results.slice(0, 3)) if (result.status === "rejected") console.error(result.reason);
+      readyCallback.current?.(id);
+    });
     return () => {
       alive = false;
     };
@@ -345,7 +345,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   // sibling 不在主列表 → assets.find 落空 → 仍走 listGenerationGroup 取组。
   // 组已含 id（轮播切 sibling）→ 跳过，免每次切换都 fetch。
   useEffect(() => {
-    if (!id) {
+    if (!id || panelOnly) {
       setGroup([]);
       return;
     }
@@ -366,11 +366,11 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, activeProjectId]);
+  }, [id, activeProjectId, panelOnly]);
 
   // 左右方向键切换过程图（输入框内不拦截，留给光标移动）。
   useEffect(() => {
-    if (group.length <= 1 || groupPos < 0) return;
+    if (panelOnly || group.length <= 1 || groupPos < 0) return;
     function onKey(e: KeyboardEvent) {
       const t = e.target as HTMLElement | null;
       if (t?.closest('[role="dialog"]') !== detailRoot.current?.closest('[role="dialog"]')) return;
@@ -386,16 +386,17 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [group, groupPos, openDetail]);
+  }, [group, groupPos, openDetail, panelOnly]);
 
   // 反推后台化：本图在别处（或本页点反推后离开再回来）跑完落地时，
   // 后端 emit analyses://changed；命中本图则自动刷新 analyses。
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
+    let alive = true;
     listen<{ asset_id: string }>("analyses://changed", (e) => {
       if (e.payload.asset_id === id) loadAnalyses();
-    }).then((u) => (unlisten = u));
-    return () => unlisten?.();
+    }).then((u) => (alive ? (unlisten = u) : u()));
+    return () => { alive = false; unlisten?.(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -579,7 +580,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const textAsset = !!asset && isTextAsset(asset);
   const [audioDuration, setAudioDuration] = useState<number | null | undefined>(asset?.duration);
   useEffect(() => setAudioDuration(asset?.duration), [asset?.id, asset?.duration, asset?.file_mtime]);
-  const imagePath = useCompatibleImagePath(audioAsset || textAsset ? null : asset?.store_path);
+  const imagePath = useCompatibleImagePath(panelOnly || audioAsset || textAsset ? null : asset?.store_path);
   const src = imagePath ? convertFileSrc(imagePath) : undefined;
   const zoom = useImageZoom(src);
 
@@ -643,8 +644,8 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const availableCollections = collections.filter((f) => !collectedIds.has(f.id));
 
   return (
-    <div className="asset-detail flex h-full w-full flex-col" ref={detailRoot}>
-      <header className="asset-detail-toolbar">
+    <div className={`asset-detail flex h-full w-full flex-col${panelOnly ? " asset-detail-panel-only" : ""}`} ref={detailRoot}>
+      {!panelOnly && <><header className="asset-detail-toolbar">
         <button
           onClick={closeDetail}
           className="asset-detail-back"
@@ -711,10 +712,10 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
           {assetCollections.length > 0 ? `已收藏 ${assetCollections.length}` : "收藏"}
         </button>}
       </header>
-      <div className="hatch-divider is-compact" aria-hidden="true"><span /></div>
+      <div className="hatch-divider is-compact" aria-hidden="true"><span /></div></>}
 
       <div className="flex flex-1 overflow-hidden">
-        <div className="asset-detail-stage flex flex-1 flex-col overflow-hidden bg-canvas">
+        {!panelOnly && <div className="asset-detail-stage flex flex-1 flex-col overflow-hidden bg-canvas">
           <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
             {textAsset && <Suspense fallback={<span className="text-sm text-muted">正在打开文档…</span>}>
               <TextDocumentEditor key={asset.id} asset={asset} onSaved={() => {
@@ -781,14 +782,14 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
               </button>
             </div>
           )}
-        </div>
+        </div>}
 
         <aside className="asset-detail-panel">
           <div className="asset-detail-panel-header">
-            <div>
+            {!panelOnly && <div>
               <div className="panel-kicker">Asset intelligence</div>
               <div className="mt-1 text-sm font-semibold text-ink">素材洞察</div>
-            </div>
+            </div>}
             <div className="asset-detail-tabs" role="tablist" aria-label="详情内容">
               <button
                 type="button"
@@ -811,6 +812,10 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                 再创作
               </button>}
             </div>
+            {panelOnly && COLLECTIONS_FEATURE_ENABLED && <button type="button" className="asset-detail-collect"
+              onClick={() => { setDetailTab("info"); setCollectionPanelOpen(value => !value); }}>
+              <Bookmark size={14}/>{assetCollections.length ? `已收藏 ${assetCollections.length}` : "收藏"}
+            </button>}
           </div>
 
           {detailTab === "info" && (
@@ -860,6 +865,8 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                     onKeyDown={(e) => {
                       if (e.key === "Enter") createAndAddCollection();
                       if (e.key === "Escape") {
+                        e.preventDefault();
+                        e.stopPropagation();
                         setCreatingCollection(false);
                         setCollectionName("");
                       }

@@ -17,6 +17,7 @@ const node = id => page.locator(`[data-canvas-node-id="${id}"]`);
 const modal = page.locator('.creation-image-preview');
 const imageRegion = modal.getByRole('region', { name: '放大图片' });
 const detailsRegion = modal.getByRole('region', { name: '独立会话面板' });
+const inspector = modal.getByRole('region', { name: '图片详情', exact: true });
 const mainImage = imageRegion.getByRole('img', { name: /^合成参考 / });
 const picks = () => page.evaluate(() => window.picks);
 const idle = () => page.waitForTimeout(750);
@@ -39,8 +40,19 @@ const reset = async ({ empty = false } = {}) => {
     const assets = state.assets;
     const previous = window.__TAURI_INTERNALS__.invoke;
     window.picks = [];
+    window.inspectorTags = {};
+    window.inspectorWrites = [];
     window.addEventListener('bowerbird://board-asset-picked', event => window.picks.push(event.detail));
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command === 'list_asset_tags') return (window.inspectorTags[args.assetId] ?? ['参考分类']).map(name => ({ name, source: 'manual', origin: 'manual' }));
+      if (command === 'local_classification_labels') return ['参考分类','新增参考'].map(name => ({ id: name, name }));
+      if (command === 'local_classification_example') {
+        window.inspectorWrites.push(args);
+        window.inspectorTags[args.assetIds[0]] = ['参考分类', args.tagId];
+        return;
+      }
+      if (command === 'list_analyses_by_asset') return [{ id: 'caption-' + args.assetId, kind: 'caption',
+        payload: JSON.stringify({ sections: [{ title: '构图', body: '图片详情中的构图描述' }] }), created_at: 1 }];
       if (command === 'material_catalog') return { tags: [], collections: [], prompts: [], tag_asset_ids: {} };
       if (command === 'material_catalog_assets') return assets;
       if (command === 'external_files_media') return args.path;
@@ -76,8 +88,10 @@ const preview = async target => {
   await idle();
   assert.deepEqual(await picks(), before, 'single click previews without inserting a reference');
   const left = await imageRegion.boundingBox();
-  const right = await detailsRegion.boundingBox();
-  assert.ok(left.width > 100 && right.width > 100 && left.x + left.width <= right.x + 2,
+  const right = await detailsRegion.count() ? await detailsRegion.boundingBox() : null;
+  const info = await inspector.boundingBox();
+  assert.ok(info.width >= 200 && info.x + info.width <= left.x, 'reused image inspector is left of the enlarged image');
+  assert.ok(left.width > 100 && (!right || right.width > 100 && left.x + left.width <= right.x + 2),
     'image and details form a left/right layout');
   assert.equal(await modal.locator('.app-modal').count(), 0, 'image and conversation have no common modal panel');
   assert.deepEqual(await imageRegion.evaluate(element => {
@@ -135,7 +149,7 @@ try {
   const closedParentWithEscape = await modal.count() === 0;
 
   await reset();
-  await preview(node('old'));
+  await preview(page.locator('[data-conversation-image="b"]'));
   await modal.getByRole('button', { name: '收起会话', exact: true }).focus();
   await page.keyboard.down('Space');
   const backgroundPan = await page.locator('.canvas-stage.is-pan-ready').count() > 0;
@@ -185,19 +199,39 @@ try {
   const editor = page.locator('.creation-dock .ProseMirror').first();
   await editor.fill('保留创作草稿');
   await preview(node('old'));
+  assert.equal(await detailsRegion.count(), 0, 'imported images open image and inspector without an empty conversation');
+  assert.equal(await modal.getByRole('button', { name: /显示会话|收起会话/ }).count(), 0);
+  assert.match(await inspector.innerText(), /导入时间/);
+  assert.match(await inspector.innerText(), /参考分类/);
+  assert.match(await inspector.innerText(), /图片详情中的构图描述/);
+  assert.equal(await inspector.locator('.asset-detail-stage, .asset-detail-toolbar').count(), 0, 'inspector reuses details without another image or page toolbar');
+  await inspector.getByRole('button', { name: '添加标签', exact: true }).click();
+  const tagMenu = page.getByRole('dialog', { name: '添加标签', exact: true });
+  await tagMenu.getByRole('checkbox', { name: '新增参考', exact: true }).waitFor();
+  await tagMenu.getByPlaceholder('搜索或新建标签').fill('新增参考');
+  await page.keyboard.press('Enter');
+  await inspector.getByText('新增参考', { exact: false }).waitFor();
+  assert.deepEqual(await page.evaluate(() => window.inspectorWrites), [{ assetIds: ['existing'], tagId: '新增参考', positive: true }]);
+  await tagMenu.getByPlaceholder('搜索或新建标签').fill('取消编辑');
+  await page.keyboard.press('Escape');
+  assert.equal(await modal.isVisible(), true, 'Escape in tag editor cancels editing before closing the preview');
+  assert.equal(await tagMenu.count(), 0);
+  await inspector.getByRole('tab', { name: '再创作', exact: true }).click();
+  await inspector.getByRole('tab', { name: '信息', exact: true }).click();
+  console.log('PASS reused inspector content, tag persistence, tabs and local Escape handling');
   const enlarged = await mainImage.evaluate(image => {
     const box = image.getBoundingClientRect();
     const scale = Math.min(box.width / image.naturalWidth, box.height / image.naturalHeight);
     return { width: image.naturalWidth * scale, height: image.naturalHeight * scale };
   });
   assert.ok(enlarged.width > 285 && enlarged.height > 225, 'the image itself enlarges, not just its surrounding panel');
-  for (const surface of [imageRegion.locator('figure'), detailsRegion]) {
+  for (const surface of [imageRegion.locator('figure'), inspector]) {
     const motion = await surface.evaluate(element => {
       const style = getComputedStyle(element);
       return { name: style.animationName, duration: Number.parseFloat(style.animationDuration) };
     });
-    assert.ok(motion.name !== 'none' && motion.duration > 0 && motion.duration <= 0.35,
-      'the two independent surfaces use short opening motions');
+    assert.ok(motion.name !== 'none' && motion.duration > 0 && motion.duration <= 0.5,
+      'the image and ready projection use short opening motions');
   }
   assert.equal(await page.evaluate(() => window.store.getState().boardOpen), true);
   const closing = await modal.evaluate(element => {
@@ -320,13 +354,31 @@ try {
   await reset();
   await page.evaluate(() => window.store.setState({ boardOpen: false }));
   await node('old').click();
-  await page.locator('.media-lightbox').waitFor();
-  assert.equal(await modal.count(), 0, 'ordinary browsing keeps its image lightbox');
-  await page.keyboard.press('Escape');
+  await modal.waitFor({ timeout: 400 });
+  assert.equal(await page.locator('.media-lightbox').count(), 0, 'ordinary image browsing opens the shared HUD immediately');
+  assert.equal(await page.evaluate(() => window.store.getState().boardOpen), false);
+  await close();
   await page.locator('[data-conversation-image="b"]').click();
-  await page.locator('[data-project-inspector]').waitFor();
+  await modal.waitFor();
+  await detailsRegion.waitFor();
+  assert.equal(await page.locator('[data-project-inspector]').count(), 0, 'the generated image uses the shared HUD without opening its editor');
   assert.deepEqual(await picks(), [], 'ordinary browsing does not insert references');
-  console.log('PASS non-creation image and conversation behavior remains intact');
+  await close();
+  await node('old').click({ modifiers: ['Control'] });
+  await assertNoPreview();
+  assert.match(await node('old').getAttribute('class'), /is-selected/, 'ordinary modified clicks keep canvas selection');
+  const ordinaryDrag = await node('old').boundingBox();
+  await page.mouse.move(ordinaryDrag.x + 60, ordinaryDrag.y + 60); await page.mouse.down();
+  await page.mouse.move(ordinaryDrag.x + 90, ordinaryDrag.y + 80, { steps: 6 }); await page.mouse.up();
+  await assertNoPreview();
+  await node('group').click();
+  await node('group').locator('[data-canvas-folder-asset-id="member-c"]').click();
+  await modal.waitFor(); await close();
+  await page.evaluate(() => window.store.getState().setCanvasLibraryOpen(true));
+  await libraryImage.click(); await modal.waitFor();
+  assert.deepEqual(await picks(), [], 'ordinary canvas library image also previews without inserting');
+  await close();
+  console.log('PASS ordinary canvas, generated and library images share the HUD without activating creation');
 
   for (const region of ['title', 'body']) {
     await reset();
@@ -358,7 +410,7 @@ try {
   await page.setViewportSize({ width: 800, height: 760 });
   await page.evaluate(() => document.documentElement.dataset.theme = 'light');
   await preview(node('old'));
-  for (const surface of [imageRegion, detailsRegion]) {
+  for (const surface of [inspector, imageRegion]) {
     const panel = await surface.boundingBox();
     assert.ok(panel.x >= 0 && panel.x + panel.width <= 801 && panel.y >= 0 && panel.y + panel.height <= 761);
   }
@@ -366,7 +418,7 @@ try {
   await close();
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await preview(node('old'));
-  for (const surface of [imageRegion.locator('figure'), detailsRegion]) {
+  for (const surface of [inspector, imageRegion.locator('figure')]) {
     assert.equal(await surface.evaluate(element => getComputedStyle(element).animationName), 'none',
       'reduced motion disables the independent surface animations');
   }

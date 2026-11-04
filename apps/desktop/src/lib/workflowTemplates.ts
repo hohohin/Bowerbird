@@ -3,14 +3,14 @@ import { buildWorkflowPlan, planningSnapshotKey, type PlanningSource } from "./w
 
 type CardKind = "trigger" | "instruction" | "agent" | "generation" | "skill" | "visual-profile" | "loop";
 interface CardSpec { id: string; kind: CardKind; prompt?: string; action?: string; skill?: string; ratio?: string | null; overwriteDescribe?: boolean; loopMode?: WorkflowNode["loopMode"]; loopCount?: number; loopStartItem?: number; agentTransport?: WorkflowNode["agentTransport"] }
-interface EdgeSpec { from: string; output: string; to: string; input: string }
+interface EdgeSpec { from: string; output: string; to: string; input: string; autoConnect?: string; mediaFilter?: WorkflowInput["mediaFilter"] }
 export interface TemplateContent { text?: string; images?: { dataUrl: string; token?: string }[] }
 export interface TemplateInput { id: string; label: string; type: "text" | "image"; content?: TemplateContent; whole?: boolean; latest?: boolean }
 export interface TemplateParameter { id: string; label: string; node: string; field: "suffix" | "ratio"; defaultValue: string }
 export interface TemplateOutput { id: string; label: string; node: string; port: string }
 export interface TemplateLayoutCard { id: string; node?: string; inputs?: string[]; type?: "text" | "image"; content?: TemplateContent; x: number; y: number; width: number; height: number; enclosed: boolean }
 export interface WorkflowTemplate {
-  format: "bowerbird-workflow-template"; schemaVersion: 1 | 2 | 3 | 4; id: string; revision: number;
+  format: "bowerbird-workflow-template"; schemaVersion: 1 | 2 | 3 | 4 | 5; id: string; revision: number;
   name: string; description: string;
   plan: { summary: string; nodes: CardSpec[]; edges: EdgeSpec[] };
   inputs: TemplateInput[]; parameters: TemplateParameter[]; outputs: TemplateOutput[];
@@ -56,7 +56,7 @@ export function parseWorkflowTemplate(raw: string): WorkflowTemplate {
   if (new TextEncoder().encode(raw).length > TEMPLATE_MAX_BYTES) fail("模板超过 32 MB，请减少携带的素材");
   const value = JSON.parse(raw) as WorkflowTemplate;
   keys(value, ["format", "schemaVersion", "id", "revision", "name", "description", "plan", "inputs", "parameters", "outputs", ...(value.schemaVersion >= 3 ? ["layout"] : [])]);
-  if (value.format !== "bowerbird-workflow-template" || ![1, 2, 3, 4].includes(value.schemaVersion) || !label(value.id, 80) || !Number.isSafeInteger(value.revision) || value.revision < 0
+  if (value.format !== "bowerbird-workflow-template" || ![1, 2, 3, 4, 5].includes(value.schemaVersion) || !label(value.id, 80) || !Number.isSafeInteger(value.revision) || value.revision < 0
     || !label(value.name) || typeof value.description !== "string" || value.description.length > 2000) fail("模板版本或基本信息无效");
   if (!Array.isArray(value.inputs) || value.inputs.length > 48 || !Array.isArray(value.parameters) || value.parameters.length > 48 || !Array.isArray(value.outputs) || !value.outputs.length || value.outputs.length > 48) fail("模板接口数量无效");
   keys(value.plan, ["summary", "nodes", "edges"]);
@@ -74,6 +74,11 @@ export function parseWorkflowTemplate(raw: string): WorkflowTemplate {
     keys(node, ["id", "kind", "action", "skill", "prompt", "ratio", "overwriteDescribe", ...(value.schemaVersion >= 4 ? ["loopMode", "loopCount", "loopStartItem", "agentTransport"] : [])]);
     if (node.kind === "loop" && value.schemaVersion < 4) fail("循环卡片需要新版工作流数据包");
     if (node?.overwriteDescribe !== undefined && (typeof node.overwriteDescribe !== "boolean" || node.kind !== "instruction" || node.action !== "describe")) fail("仅反推步骤可以配置覆盖已有描述");
+  }
+  if (!Array.isArray(value.plan.edges)) fail("模板连线无效");
+  for (const edge of value.plan.edges) {
+    keys(edge, ["from", "output", "to", "input", ...(value.schemaVersion >= 5 ? ["autoConnect", "mediaFilter"] : [])]);
+    if (edge.input === "completion" && value.schemaVersion < 5) fail("完成触发连接需要新版工作流数据包");
   }
   const built = buildWorkflowPlan(JSON.stringify(executablePlan(value.plan)), newWorkflowNode("planner", 0, 0, ""), dummySources(value), [], [], value.schemaVersion >= 4 ? "template" : "planner");
   for (const node of value.plan.nodes) ids.add(node.id);
@@ -123,10 +128,18 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
   const cards = nodes.filter(node => selected.has(node.id)).map(node => normalizeWorkflowInputSlots(node));
   if (!cards.length || cards.filter(node => node.kind !== "trigger").length > 23 || cards.some(node => node.kind === "text" || node.kind === "planner")) fail("请选择 1–23 张执行卡片，可包含触发器；内容卡作为外部输入接入");
   if (cards.some(node => node.kind === "generation" && node.generation?.media === "video")) fail("视频生成卡片暂不支持存为模板或导出，请在画板上复制卡片");
+  if (cards.some(node => node.kind === "agent" && node.skill === "hyperframes")) fail("视频制作卡片暂不支持存为模板或导出，请在画板上复制卡片");
   const work = cards.filter(node => node.kind !== "trigger");
   if (!work.length) fail("模板需要至少一张执行卡片");
   const aliases = new Map(work.map((node, i) => [node.id, `card${i + 1}`]));
+  const trigger = cards.find(node => node.kind === "trigger");
+  if (trigger) aliases.set(trigger.id, "start");
   const inputs: TemplateInput[] = [], external = new Map<string, string>(), edges: EdgeSpec[] = [];
+  const connections = new Map<string, string>();
+  const connectionMetadata = (binding: WorkflowInput): Pick<EdgeSpec, "autoConnect" | "mediaFilter"> => {
+    if (binding.autoConnect && !connections.has(binding.autoConnect)) connections.set(binding.autoConnect, `connection${connections.size + 1}`);
+    return { ...(binding.autoConnect ? { autoConnect: connections.get(binding.autoConnect)! } : {}), ...(binding.mediaFilter ? { mediaFilter: [...binding.mediaFilter] } : {}) };
+  };
   const bindingAlias = (binding: WorkflowInput, type: string) => {
     if (binding.nodeId && aliases.has(binding.nodeId)) return `${aliases.get(binding.nodeId)}.${binding.portId}`;
     if (type !== "text" && type !== "image") fail("外部视觉规范需要一并选入子流程，不能保存为他人账号的引用");
@@ -153,11 +166,11 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
     if (prompt.includes("@[")) fail("卡片存在失效引用，请先重新选择输入");
     for (const [port, bindings] of Object.entries(node.inputs)) for (const binding of bindings) {
       if (port === "signal") {
-        if (binding.nodeId && aliases.has(binding.nodeId)) edges.push({ from: aliases.get(binding.nodeId)!, output: binding.portId ?? "signal", to: id, input: port });
+        if (binding.nodeId && aliases.has(binding.nodeId)) edges.push({ from: aliases.get(binding.nodeId)!, output: binding.portId ?? "signal", to: id, input: port, ...connectionMetadata(binding) });
         continue;
       }
       const [from, output] = bindingAlias(binding, port).split(".");
-      edges.push({ from, output, to: id, input: port });
+      edges.push({ from, output, to: id, input: port, ...connectionMetadata(binding) });
     }
     if (!Object.values(node.inputs).flat().some(input => input.nodeId && aliases.has(input.nodeId))) edges.push({ from: "start", output: "signal", to: id, input: "signal" });
     specs.push({ id, kind: node.kind as CardKind, prompt, ...(node.kind === "instruction" ? { action: node.action, ...(node.action === "describe" ? { overwriteDescribe: !!node.overwriteDescribe } : {}) } : {}), ...(node.kind === "skill" ? { skill: node.skill } : {}), ...(node.kind === "generation" ? { ratio: node.ratio } : {}),
@@ -165,7 +178,9 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
   }
   const outputs = work.filter(node => !work.some(other => Object.values(other.inputs).flat().some(input => input.nodeId === node.id)))
     .flatMap(node => workflowOutputs(node).filter(port => port.type !== "signal").map(port => ({ id: `out${aliases.get(node.id)}_${port.id.replaceAll("-", "_")}`, label: `${workflowTitle(node)} · ${port.label}`, node: aliases.get(node.id)!, port: port.id })));
-  return parseWorkflowTemplate(JSON.stringify({ format: "bowerbird-workflow-template", schemaVersion: 4, id: crypto.randomUUID(), revision: 0, name, description: "",
+  for (const binding of trigger?.inputs.completion ?? []) if (binding.nodeId && aliases.has(binding.nodeId))
+    edges.push({ from: aliases.get(binding.nodeId)!, output: binding.portId!, to: "start", input: "completion", ...connectionMetadata(binding) });
+  return parseWorkflowTemplate(JSON.stringify({ format: "bowerbird-workflow-template", schemaVersion: edges.some(edge => edge.autoConnect || edge.mediaFilter || edge.input === "completion") ? 5 : 4, id: crypto.randomUUID(), revision: 0, name, description: "",
     plan: { summary: name, nodes: specs, edges }, inputs, parameters: [], outputs }));
 }
 
