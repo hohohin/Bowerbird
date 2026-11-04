@@ -41,7 +41,7 @@ HEIC保留接收原件，PNG仅用于兼容验证/预览；不走旧 `ingest_new
 - `src-tauri/src/quick_transfer/addresses.rs`：本机LAN网卡推荐与纯排序回归。
 - `src-tauri/src/core/quick_transfer.rs`：原件、持久记录与索引。
 - `src-tauri/src/quick_transfer/mod.rs`、`commands/quick_transfer.rs`：单会话生命周期、IPC和状态事件。
-- `src/components/QuickTransferPanel.tsx`、`src/lib/useQuickTransfer.ts`：正式桌面入口、收件面板和会话状态客户端；Toolbar持续挂载，收起不中止接收，只有显式关闭才停止。
+- `src/components/QuickTransferPanel.tsx`、`src/lib/useQuickTransfer.ts`：正式桌面入口、收件面板和会话状态客户端；Toolbar 持续挂载，通过 `showTrigger={showLibraryActions}` 在项目管理页隐藏按钮，不卸载接收状态。收起或切页不中止接收，只有显式关闭才停止。入口范围回归见 [2026-11-04 记录](../project_logs/2026-11-04-project-quick-transfer.md)。
 - `src-tauri/src/quick_transfer/upload.html`：手机同源接收页面，进度由真实上传驱动，网络成功表示已传到电脑；入库完成以桌面状态为准。
 - `scripts/fixtures/quick-transfer-preview/preview.html`：已确认并冻结的电脑/手机独立示意，二维码和进度不连接真实服务。正式App隔离验证入口为 `scripts/fixtures/quick-transfer-live/preview.html`。
 - `cargo test --locked --offline --lib quick_transfer`：临时目录与SQLite、真实loopback HTTP专项。Windows测试EXE需要按既有验证流程在副本嵌入Common Controls v6清单。

@@ -39,7 +39,7 @@ function QuickTransferError({ error, ready, reconnect }: { error: string; ready:
 }
 
 /** One persistent toolbar owner: closing the modal never changes the native receiver. */
-export function QuickTransfer() {
+export function QuickTransfer({ showTrigger = true }: { showTrigger?: boolean }) {
   const transfer = useQuickTransfer();
   const { snapshot, ready, busy } = transfer;
   const [visible, setVisible] = useState(false);
@@ -59,7 +59,7 @@ export function QuickTransfer() {
   }
 
   return <>
-    <QuickTransferTrigger active={snapshot.active} visible={visible} onOpen={() => setVisible(true)} />
+    {showTrigger && <QuickTransferTrigger active={snapshot.active} visible={visible} onOpen={() => setVisible(true)} />}
     {visible && <ModalShell title="快传" width="md" className="quick-transfer-panel" showCloseButton={false} onClose={() => setVisible(false)}
       headerActions={<button type="button" className="app-modal-close" aria-label="收起快传面板" title="收起面板，继续接收" onClick={() => setVisible(false)}><X size={17} /></button>}>
       <OverlayScrollArea className="quick-transfer-scroll" contentClassName="quick-transfer-content" label="快传接收列表滚动条">
