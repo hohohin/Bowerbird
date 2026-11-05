@@ -39,7 +39,11 @@ export function normalizeDocument(value: unknown): DocumentValue {
 function safeSyntax(node: unknown): boolean {
   if (!isRecord(node) || !supported.has(String(node.type))) return false;
   if (node.type === "list" && node.spread) return false;
-  if (node.type === "listItem" && (typeof node.checked === "boolean" || !Array.isArray(node.children) || node.children.length !== 1)) return false;
+  if (node.type === "listItem") {
+    if (typeof node.checked === "boolean" || !Array.isArray(node.children)) return false;
+    // A paragraph followed by nested lists maps to Plate's flat indent model.
+    if (!node.children.every((child, index) => isRecord(child) && child.type === (index === 0 ? "paragraph" : "list"))) return false;
+  }
   return !Array.isArray(node.children) || node.children.every(safeSyntax);
 }
 

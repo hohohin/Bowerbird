@@ -70,6 +70,7 @@
   },
   "dependencies": {
     "@platejs/basic-nodes": "53.0.0",
+    "@platejs/indent": "53.0.0",
     "@platejs/list": "53.3.13",
     "@platejs/markdown": "53.3.18",
     "@platejs/media": "53.1.4",

@@ -6,7 +6,7 @@ import { OverlayScrollArea } from "./CollectionScrollArea";
 
 const OPEN_MENU = "bowerbird:context-menu-open";
 const MenuContext = createContext<{ owner: string; submenu: string | null; setSubmenu: Dispatch<SetStateAction<string | null>> } | null>(null);
-const items = (menu: Element) => [...menu.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)')];
+const items = (menu: Element) => [...menu.querySelectorAll<HTMLButtonElement>('button:is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]):not(:disabled)')];
 function focusItem(item?: HTMLElement) {
   item?.focus({ preventScroll: true });
   item?.scrollIntoView({ block: "nearest", inline: "nearest" });

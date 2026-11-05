@@ -3,16 +3,18 @@ import { Plate, PlateContent, PlateElement, createPlatePlugin, usePlateEditor, t
 import type { Value } from "platejs";
 import { BasicBlocksPlugin, BasicMarksPlugin } from "@platejs/basic-nodes/react";
 import { ListPlugin } from "@platejs/list/react";
+import { IndentPlugin } from "@platejs/indent/react";
 import { AudioPlugin, ImagePlugin, VideoPlugin } from "@platejs/media/react";
 import { Redo2, Undo2 } from "lucide-react";
 import type { DocumentMedia, DocumentValue } from "../lib/documentTypes";
 import { normalizeDocument, parseMarkdown } from "../lib/documentCodec";
 import { getDragAssets } from "../lib/dragPayload";
-import { BlockDragContext, TextBlockActions, useBlockDrop } from "./TextBlockActions";
+import { BlockDragContext, TextBlockShell } from "./TextBlockActions";
 import { AudioWaveform } from "./AudioWaveform";
 import { TextAgentScope } from "./TextAgent";
 import { TextInputRules } from "./TextInputRules";
 import { TextFormatButtons, TextSelectionToolbar } from "./TextFormatToolbar";
+import { readTextSelection } from "./textBlockTransforms";
 
 export interface TextPlateInsertion { insert(media: DocumentMedia[]): void; cancel(): void }
 export interface TextPlateHandle { insertMedia(media: DocumentMedia[]): void; insertMarkdown(text: string): void; reserveInsertion(): TextPlateInsertion }
@@ -31,7 +33,6 @@ function plateValue(value: DocumentValue): Value { return value; }
 
 function DocumentElement(props: PlateElementProps) {
   const { element, editor, children } = props;
-  const drop = useBlockDrop(props);
   const media = useContext(MediaContext).find(item => item.asset.id === element.assetId);
   const expectedKind = element.type === "img" ? "image" : element.type;
   const linked = media?.kind === expectedKind ? media : undefined;
@@ -53,12 +54,18 @@ function DocumentElement(props: PlateElementProps) {
       <input aria-label="素材说明" value={caption} placeholder="添加说明…" onChange={event => { if (path) editor.tf.setNodes({ caption: event.target.value }, { at: path }); }} />
     </figure>{children}
   </>;
-  return <PlateElement {...props} className="text-document-block" attributes={{ ...props.attributes, ...drop }}><TextBlockActions {...props}/>{content}</PlateElement>;
+  return <PlateElement {...props} className="text-document-node">{content}</PlateElement>;
 }
+
+const DocumentBlocks = createPlatePlugin({ key: "documentBlocks", render: {
+  aboveNodes: ({ editor, element }) => editor.api.findPath(element)?.length === 1 ? props => <TextBlockShell {...props}/> : undefined,
+} });
+const DocumentIndent = IndentPlugin.configure({ options: { offset: 32 }, inject: { targetPlugins: ["p", "h1", "h2", "h3", "h4", "h5", "h6"] } })
+  .overrideEditor(({ editor, tf: { tab } }) => ({ transforms: { tab: options => editor.api.block()?.[0].listStyleType ? tab(options) : false } }));
 
 export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextPlateEditor({ value, media, onChange, onDropAssets, onRejectedPaste, toolbarStart, toolbarEnd, agent }, ref) {
   const editor = usePlateEditor({
-    plugins: [BasicBlocksPlugin, BasicMarksPlugin, ListPlugin, TextInputRules, ImagePlugin.configure({ options: { disableUploadInsert: true, disableEmbedInsert: true } }), AudioPlugin, VideoPlugin, createPlatePlugin({ key: "raw", node: { isElement: true } })],
+    plugins: [BasicBlocksPlugin, BasicMarksPlugin, DocumentIndent, ListPlugin, TextInputRules, DocumentBlocks, ImagePlugin.configure({ options: { disableUploadInsert: true, disableEmbedInsert: true } }), AudioPlugin, VideoPlugin, createPlatePlugin({ key: "raw", node: { isElement: true } })],
     value: plateValue(value),
     override: { components: Object.fromEntries(["p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "hr", "img", "audio", "video", "raw"].map(key => [key, DocumentElement])) },
   });
@@ -101,9 +108,13 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
     <TextSelectionToolbar bodyRef={bodyRef}/>
     <PlateContent ref={bodyRef} className="text-document-body" aria-label="文档正文" spellCheck={false} placeholder="开始写作…"
       onKeyDown={event => {
+        if (event.key === "Tab" && !event.nativeEvent.isComposing) {
+          const range = readTextSelection(editor);
+          if (range) editor.tf.select(range);
+        }
         if (event.altKey && event.key === "Enter" && !event.nativeEvent.isComposing) {
           const anchor = window.getSelection()?.anchorNode;
-          const block = anchor?.parentElement?.closest('[data-block-id]');
+          const block = anchor?.parentElement?.closest('.text-document-block');
           const handle = block?.querySelector<HTMLButtonElement>('.text-block-actions button[aria-label="段落操作"]');
           if (handle) { event.preventDefault(); handle.click(); }
         }

@@ -1,7 +1,7 @@
 Bowerbird text editor — third-party license notices
 
 Collected 2026-11-02 from the installed packages used by the text editor.
-Scope: platejs, @platejs/basic-nodes, @platejs/list, @platejs/markdown, @platejs/media, remark-frontmatter, remark-gfm, their installed dependencies, optional dependencies, and peers. devDependencies are excluded.
+Scope: platejs, @platejs/basic-nodes, @platejs/indent, @platejs/list, @platejs/markdown, @platejs/media, remark-frontmatter, remark-gfm, their installed dependencies, optional dependencies, and peers. devDependencies are excluded.
 Repeated package versions are listed once. Existing shared peers may also appear.
 Where an npm distribution omitted the license file, the exact source commit from official npm version metadata is identified below.
 format@0.2.2 instead names an author-hosted license URL; its original README copyright and the referenced license text are both retained.

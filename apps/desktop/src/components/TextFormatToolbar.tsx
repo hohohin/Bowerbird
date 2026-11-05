@@ -4,9 +4,9 @@ import { useEditorRef, useEditorSelector, type PlateEditor } from "platejs/react
 import { toggleList } from "@platejs/list";
 import { Bold, Code, Italic, List, ListOrdered, Quote } from "lucide-react";
 import { usePortalTarget } from "../lib/portalTarget";
+import { TextBlockType } from "./TextBlockType";
 
 const formats = [
-  { key: "h2", label: "标题", icon: <>H₂</>, kind: "block" },
   { key: "bold", label: "加粗", icon: <Bold size={14}/>, kind: "mark" },
   { key: "italic", label: "斜体", icon: <Italic size={14}/>, kind: "mark" },
   { key: "code", label: "行内代码", icon: <Code size={14}/>, kind: "mark" },
@@ -21,7 +21,7 @@ export function TextFormatButtons() {
     const block = editor.api.block()?.[0], marks = editor.api.marks();
     return formats.map(format => format.kind === "mark" ? !!marks?.[format.key] : format.kind === "list" ? block?.listStyleType === format.key : editor.api.some({ match: { type: format.key } }));
   }, [], { equalityFn: (a, b) => a.every((item, index) => item === b[index]) });
-  return <>{formats.map((format, index) => <button key={format.key} type="button" aria-label={format.label} title={format.label} aria-pressed={active[index]} onClick={() => {
+  return <><TextBlockType/>{formats.map((format, index) => <button key={format.key} type="button" aria-label={format.label} title={format.label} aria-pressed={active[index]} onClick={() => {
     if (format.kind === "mark") editor.tf.toggleMark(format.key);
     else if (format.kind === "list") toggleList(editor, { listStyleType: format.key });
     else editor.tf.toggleBlock(format.key, { wrap: format.key === "blockquote" });

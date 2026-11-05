@@ -18,7 +18,7 @@ const floating=page.getByRole('toolbar',{name:'选中文字格式',exact:true});
 async function check(name,action){try{
   if(coverage && page.url()!=='about:blank'){coverageEntries.push(...await page.coverage.stopJSCoverage());await page.coverage.startJSCoverage({resetOnNavigation:false});}
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-workspace-live/preview.html?markdown`);
-  await editor.waitFor(); await editor.locator('.text-document-block').first().click();
+  await editor.waitFor({timeout:15000}); await editor.locator('.text-document-block').first().click();
   await action(); console.log('PASS',name);
 }catch(error){failures.push(name+': '+error.stack); if(process.env.BOWERBIRD_TEXT_DEBUG)console.log(await page.evaluate(()=>({html:document.querySelector('.text-document-body')?.innerHTML,selection:window.getSelection()?.toString(),draft:window.draft,bar:document.querySelector('.text-selection-toolbar')?.getBoundingClientRect().toJSON(),body:document.querySelector('.text-document-body')?.getBoundingClientRect().toJSON()})));}}
 try {
@@ -94,7 +94,7 @@ await check('keyboard selection across blocks; keyboard toolbar; scroll hides of
   for(let n=0;n<24;n++){await page.keyboard.type('paragraph '+n);await page.keyboard.press('Enter');}
   await page.keyboard.press('Control+Home'); await page.keyboard.press('Shift+End');
   await floating.waitFor();
-  await editor.evaluate(element=>{element.scrollTop=element.scrollHeight;});
+  await editor.hover(); await page.mouse.wheel(0,1500);
   await floating.waitFor({state:'hidden'});
 });
 await check('Chinese composition and literal mid-line Markdown',async()=>{
@@ -110,9 +110,11 @@ await check('Chinese composition and literal mid-line Markdown',async()=>{
 await check('shared heading and quote buttons toggle; bold and italic keyboard shortcuts',async()=>{
   await page.keyboard.type('format me'); await page.keyboard.press('Home'); await page.keyboard.press('Shift+End');
   await floating.waitFor();
-  await floating.getByRole('button',{name:'标题',exact:true}).click();
+  await floating.getByRole('button',{name:'段落类型',exact:true}).click();
+  await page.getByRole('menuitemradio',{name:'标题 2',exact:true}).click();
   assert.equal(await editor.locator('h2').innerText(),'format me');
-  await floating.getByRole('button',{name:'标题',exact:true}).click();
+  await floating.getByRole('button',{name:'段落类型',exact:true}).click();
+  await page.getByRole('menuitemradio',{name:'正文',exact:true}).click();
   assert.equal(await editor.locator('h2').count(),0);
   await floating.getByRole('button',{name:'引用',exact:true}).click();
   assert.equal(await editor.locator('blockquote').innerText(),'format me');

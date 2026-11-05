@@ -32,6 +32,8 @@
 
 ## 添加右键菜单与动作子菜单
 
+2026-11-06：公共 `ContextMenu` 的首焦点与方向键导航同时覆盖普通菜单项、单选菜单项和多选菜单项（`menuitem`／`menuitemradio`／`menuitemcheckbox`）；文本编辑器的 `TextBlockType` 使用此入口，并由调用方保留 Plate 选区书签。
+
 - **用途／关键词：** context menu、右键、操作、删除子菜单、焦点恢复。
 - **入口：** [ContextMenu.tsx](../../apps/desktop/src/components/ContextMenu.tsx) 的 `ContextMenu`、`ContextSubmenu`、`DeleteSubmenu`；宿主提供坐标、关闭回调、`button[role="menuitem"]` 与禁用状态。
 - **实用证据：** [AssetContextMenu.tsx](../../apps/desktop/src/components/AssetContextMenu.tsx) 使用子菜单和删除分组；[ProjectContextMenu.tsx](../../apps/desktop/src/components/ProjectContextMenu.tsx) 使用同一菜单壳。
