@@ -910,7 +910,7 @@ function App() {
       <div className="relative flex flex-1 overflow-hidden">
         {COLLECTIONS_FEATURE_ENABLED && !projectWorkspaceActive && !localFilesOpen && <Sidebar />}
         <main className="app-workspace relative flex flex-1 flex-col overflow-hidden bg-canvas">
-          <ExploreWorkspace url={sourceBrowserUrl} navigationId={sourceBrowserNavigation} open={sourceBrowserOpen && !collectionAddTargetId} onClose={() => setSourceBrowserOpen(false)}>
+          <ExploreWorkspace onCreateProject={createProjectFromAssets} url={sourceBrowserUrl} navigationId={sourceBrowserNavigation} open={sourceBrowserOpen && !collectionAddTargetId} onClose={() => setSourceBrowserOpen(false)}>
           <PreservedWorkspace suspended={showDetail}>
           <div className="relative flex min-h-0 flex-1">
             <div className="home-workspace-route" data-suspended={projectWorkspaceActive}>

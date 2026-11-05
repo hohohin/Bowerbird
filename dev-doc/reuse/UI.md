@@ -132,3 +132,5 @@
 - **范围／状态：可跨模块复用（同构素材侧栏）。** 强依赖 `.canvas-workspace`、目录导航 DOM、`--canvas-source-width` 和已有侧栏 CSS；其他布局不能仅导入组件就获得通用 splitter。[LibraryHome.tsx](../../apps/desktop/src/components/LibraryHome.tsx) 的私有 `PaneDivider` 按相邻两栏比例调整，双击均分；本组件按像素调侧栏、双击恢复最大宽度。`PaneDivider` 为**模块内部专用**，两者不是可直接合并的重复实现。
 
 覆盖及后续候选统一见 [核验记录](REVIEW.md)。本页未审计所有弹层／独立窗口，也未枚举每个 CSS 选择器；新增能力仍需按关键词跨板块查调用。
+
+- 视频链接采集入口：`VideoCollectionEntry` 由 `SourceBrowserPanel` 在探索工具栏使用；`ExploreWorkspace` 传递主应用的新建项目回调。素材库不再挂载入口，采集与画板交付继续复用原实现。

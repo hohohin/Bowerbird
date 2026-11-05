@@ -18,6 +18,7 @@ import { EXPLORER_SITES, queueBrowserOperation } from "../lib/explorer";
 import { cancelPinterestSearch, isPinterestSearchCurrent, PINTEREST_SEARCH_EVENT, receivePinterestSearchStatus, usePinterestSearch, type PinterestSearchStatus } from "../lib/pinterestSearch";
 import { useStore } from "../store";
 import "./BrowserExtension.css";
+import { VideoCollectionEntry } from "./VideoCollectionEntry";
 import { ExplorerCaptureHistory } from "./ExplorerCaptureHistory";
 
 const STATUS_EVENT = "source-browser://status";
@@ -56,7 +57,8 @@ function hostnameFor(url: string) {
   }
 }
 
-export function SourceBrowserPanel({ url, onClose, visible = true, suspended = false, navigationId = 0 }: { url: string; onClose: () => void; visible?: boolean; suspended?: boolean; navigationId?: number }) {
+export function SourceBrowserPanel({ url, onClose, onCreateProject, visible = true, suspended = false, navigationId = 0 }: { url: string; onClose: () => void; visible?: boolean; suspended?: boolean; navigationId?: number; onCreateProject?: (ids?: string[]) => Promise<unknown> }) {
+  const projectId = useStore(state => state.activeProjectId);
   const openExtension = useStore((state) => state.setExtensionOnboardingForceOpen);
   const viewportRef = useRef<HTMLDivElement>(null);
   const addressFocusedRef = useRef(false);
@@ -306,6 +308,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
           <button type="button" onClick={openExternal} title="用系统浏览器打开" aria-label="用系统浏览器打开">
             <ExternalLink size={15} />
           </button>
+          <VideoCollectionEntry projectId={projectId} onCloseLibrary={onClose} onCreateProject={onCreateProject}/>
           <ExplorerCaptureHistory visible={visible} />
         </div>
       </header>

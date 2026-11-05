@@ -4,3 +4,5 @@
 .library-filter-trigger.video-collection-entry { display:inline-flex; width:auto; gap:5px; padding:0 8px; border-radius:0; font-size:12px; white-space:nowrap; pointer-events:auto; }
 .library-filter-trigger.video-collection-entry > span { margin:0; font-size:inherit; color:inherit; }
 .library-filter-trigger.video-collection-entry > svg { flex-shrink:0; }
+
+.source-browser-actions .video-collection-entry { width:auto; flex-shrink:0; }

@@ -21,7 +21,6 @@ import { useStore } from "../store";
 import type { Asset, Folder as Collection } from "../lib/types";
 import { FileColorFilter } from "./FileColorFilter";
 import { LibraryFloatingControls } from "./LibraryFloatingControls";
-import { VideoCollectionEntry } from "./VideoCollectionEntry";
 import { LibraryBrowserButton } from "./LibraryBrowserButton";
 import { LibraryMediaSwitch } from "./LibraryMediaSwitch";
 import { GeneratedImageFilter } from "./GeneratedImageFilter";
@@ -426,7 +425,6 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, p
         <div className="file-view-heading">
           {navigation}
           <div className="video-collection-controls">
-            {(media === "images" || media === "videos") && <VideoCollectionEntry projectId={projectId} onCloseLibrary={onNavigate ?? onClose} onCreateProject={onCreateProject} onAssetsChange={onAssetsChange}/>}
           <LibraryFloatingControls>
             <LibraryMediaSwitch/>
             {(media === "images" || media === "videos") && <GeneratedImageFilter floating value={generatedFilter} onChange={useLocalFileMode.getState().setGeneratedFilter}/>}
