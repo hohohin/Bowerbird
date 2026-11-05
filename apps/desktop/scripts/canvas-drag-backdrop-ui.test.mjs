@@ -200,14 +200,43 @@ try {
     await page.waitForFunction(() => window.browserVisible() === true);
   });
 
-  await scenario('library source keeps immediate native start and internal copy delivery', async page => {
+  await scenario('library paints feedback before native start and keeps internal copy delivery', async page => {
+    const now = new Date(); await page.clock.install({ time: now }); await page.clock.pauseAt(now);
     await page.evaluate(() => { window.pauseFrames(); window.begin('library'); });
-    assert.equal((await calls(page)).length, 1);
-    assert.equal(await overlay(page).count(), 0);
+    assert.equal(await overlay(page).count(), 1);
+    assert.equal(await page.getByRole('status').filter({ hasText: '拖到其他应用中使用' }).count(), 1);
+    assert.equal(await overlay(page).evaluate(el => getComputedStyle(el).backdropFilter), 'blur(6px)');
+    assert.equal((await calls(page)).length, 0, 'library feedback gets a paint opportunity too');
+    await page.evaluate(() => window.stepFrame());
+    assert.equal((await calls(page)).length, 0);
+    await page.evaluate(() => { window.stepFrame(); window.restoreFrames(); });
+    await page.waitForFunction(() => window.nativeCalls().length === 1);
     assert.deepEqual(await page.evaluate(() => window.fireInternalDrop()), { effect: 'copy', prevented: true, count: 1 });
     assert.deepEqual(await page.evaluate(() => window.drops), [['image', 'video']]);
     await finish(page);
-    await page.evaluate(() => window.restoreFrames());
+  });
+
+  await scenario('library release during paint cancels without a late native drag', async page => {
+    await page.evaluate(() => { window.pauseFrames(); window.begin('library'); window.dispatchEvent(new MouseEvent('mouseup')); });
+    await page.waitForFunction(() => window.finished === 1);
+    assert.equal((await calls(page)).length, 0);
+    assert.equal(await overlay(page).count(), 0);
+    assert.equal(await page.evaluate(() => window.payload()), null);
+    await page.evaluate(() => { window.stepFrame(); window.restoreFrames(); });
+    assert.equal((await calls(page)).length, 0);
+  });
+
+  await scenario('library feedback survives native target activation and clears on Escape completion', async page => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.evaluate(() => window.begin('library'));
+    await page.waitForFunction(() => window.nativeCalls().length === 1 && window.browserVisible() === false);
+    assert.equal(await overlay(page).evaluate(el => getComputedStyle(el).animationName), 'none');
+    await page.evaluate(() => { window.nativePhase = 'started'; window.dispatchEvent(new Event('blur')); });
+    await page.waitForFunction(() => window.cancelCalls().length === 1);
+    assert.equal(await overlay(page).count(), 1);
+    await page.keyboard.press('Escape');
+    await finish(page);
+    await page.waitForFunction(() => window.browserVisible() === true);
   });
 
   for (const theme of ['light', 'dark']) {

@@ -43,7 +43,7 @@ export async function startExternalDrag(assetIds: string[], mode: "hold" | "pick
   };
   const escape = (event: KeyboardEvent) => {
     if (event.key !== "Escape") return;
-    if (source === "canvas" && backdrop) { event.preventDefault(); event.stopImmediatePropagation(); }
+    if (backdrop) { event.preventDefault(); event.stopImmediatePropagation(); }
     cancelPending();
   };
   window.addEventListener("keydown", escape, true);
@@ -59,24 +59,24 @@ export async function startExternalDrag(assetIds: string[], mode: "hold" | "pick
     if (source === "canvas") {
       window.addEventListener("dragover", blockInternalDrop, true);
       window.addEventListener("drop", blockInternalDrop, true);
-      backdrop = document.createElement("div");
-      backdrop.className = "external-drag-backdrop";
-
-      document.body.append(backdrop);
-      unmountHud = mountExternalDragHud(backdrop, sourceRect);
-      await new Promise<void>(resolve => {
-        let first = 0, second = 0;
-        const done = () => {
-          cancelAnimationFrame(first); cancelAnimationFrame(second);
-          clearTimeout(timeout); cancelPaint = undefined; resolve();
-        };
-        // A hidden WebView may suspend rAF. Cancel rather than enter native drag
-        // before the promised appearance has had a chance to paint.
-        const timeout = window.setTimeout(cancelPending, 150);
-        cancelPaint = done;
-        first = requestAnimationFrame(() => { second = requestAnimationFrame(done); });
-      });
     }
+    // Both entry points share feedback; only canvas exports reject internal drops.
+    backdrop = document.createElement("div");
+    backdrop.className = "external-drag-backdrop";
+    document.body.append(backdrop);
+    unmountHud = mountExternalDragHud(backdrop, sourceRect);
+    await new Promise<void>(resolve => {
+      let first = 0, second = 0;
+      const done = () => {
+        cancelAnimationFrame(first); cancelAnimationFrame(second);
+        clearTimeout(timeout); cancelPaint = undefined; resolve();
+      };
+      // A hidden WebView may suspend rAF. Cancel rather than enter native drag
+      // before the promised appearance has had a chance to paint.
+      const timeout = window.setTimeout(cancelPending, 150);
+      cancelPaint = done;
+      first = requestAnimationFrame(() => { second = requestAnimationFrame(done); });
+    });
     if (cancelled || signal?.aborted) return;
     invoked = true;
     await invoke<{ dropped: boolean }>("start_external_drag", { assetIds: ids, mode, sessionId, lightTheme: document.documentElement.dataset.theme === "light" });

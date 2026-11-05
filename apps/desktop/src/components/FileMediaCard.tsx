@@ -34,7 +34,9 @@ export function FileMediaCard(props: FileMediaCardProps) {
     // Draft layers use the existing in-window drag payload and must not enter OS file drag.
     if (event.defaultPrevented || event.currentTarget.closest("[data-draft-library]") || !isTauri() || props.entry.directory || !props.assetId || !ids?.length) return;
     event.preventDefault();
-    void startExternalDrag(ids, "hold");
+    void startExternalDrag(ids, "hold", {
+      sourceRect: (event.currentTarget.querySelector("img, video") ?? event.currentTarget).getBoundingClientRect(),
+    });
   });
   return !props.entry.directory && isTextPath(props.entry.path)
     ? <TextFileMediaCard {...props} onDragStart={onDragStart}/>

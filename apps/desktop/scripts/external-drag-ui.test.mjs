@@ -14,16 +14,33 @@ await page.route('**/*', route => { if (new URL(route.request().url()).hostname 
 const nativeCalls = () => page.evaluate(() => window.calls.filter(call => call.command === 'start_external_drag'));
 const request = async () => { const { sessionId, ...args } = (await nativeCalls()).at(-1).args; assert.match(sessionId, /^[0-9a-f-]{36}$/); return args; };
 const payload = () => page.evaluate(() => window.payload());
-const drag = (id = 'image') => page.locator(`.folder-media-card[data-asset-id="${id}"]`).evaluate(element => {
-  const dataTransfer = new DataTransfer(); const event = new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer }); element.dispatchEvent(event);
-  return { prevented: event.defaultPrevented, text: dataTransfer.getData('text/plain') };
-});
-const finish = async (dropped = false) => { await page.evaluate(dropped => window.resolveDrag({ dropped }), dropped); await page.waitForFunction(() => window.payload() === null); };
+const drag = async (id = 'image') => {
+  const result = await page.locator(`.folder-media-card[data-asset-id="${id}"]`).evaluate(element => {
+    const dataTransfer = new DataTransfer(); const event = new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer }); element.dispatchEvent(event);
+    return { prevented: event.defaultPrevented, text: dataTransfer.getData('text/plain') };
+  });
+  if (result.prevented) await page.waitForFunction(() => typeof window.resolveDrag === 'function' && window.calls.some(call => call.command === 'start_external_drag'));
+  return result;
+};
+const finish = async (dropped = false) => {
+  await page.evaluate(dropped => { window.resolveDrag({ dropped }); window.resolveDrag = undefined; }, dropped);
+  await page.waitForFunction(() => window.payload() === null);
+  assert.equal(await page.locator('.external-drag-backdrop').count(), 0);
+};
 try {
   await mkdir('.tmp/external-drag-ui', { recursive: true });
   await page.goto('http://127.0.0.1:17894/scripts/fixtures/external-drag/production.html', { waitUntil: 'domcontentloaded' });
   await page.locator('[data-asset-id="image"]').waitFor();
   assert.equal((await drag()).prevented, true, 'desktop library gesture starts native file drag');
+  assert.equal(await page.getByRole('status').filter({ hasText: '拖到其他应用中使用' }).count(), 1);
+  assert.equal(await page.locator('.external-drag-source').count(), 1, 'library forwards the source rectangle to the shared projection');
+  assert.equal(await page.locator('.external-drag-backdrop').evaluate(el => getComputedStyle(el).backdropFilter), 'blur(6px)');
+  for (const theme of ['dark', 'light']) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    await page.waitForFunction(() => [...document.querySelectorAll('.external-drag-backdrop, .external-drag-hud')].every(el => Number(getComputedStyle(el).opacity) === 1));
+    await page.screenshot({ path: `.tmp/external-drag-ui/library-${theme}.png` });
+  }
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   assert.deepEqual(await request(), { assetIds: ['image', 'offscreen'], mode: 'hold', lightTheme: false });
   await page.locator('[data-asset-id="image"]').dispatchEvent('dragend');
   await page.evaluate(() => window.clearPayload());
@@ -63,6 +80,7 @@ try {
   await page.evaluate(() => window.rejectDrag('internal_native_error C:/private/path'));
   await page.getByText('无法拖出素材，请重试', { exact: true }).waitFor();
   assert.equal(await payload(), null);
+  await page.evaluate(() => { window.resolveDrag = undefined; });
   assert.equal(await page.getByText('internal_native_error', { exact: false }).count(), 0);
   await page.evaluate(() => window.openMenu(['missing']));
   assert.equal(await page.getByRole('menuitem', { name: '拖入到其他应用', exact: true }).count(), 0);
@@ -112,6 +130,7 @@ try {
   await canvasSource.waitFor();
   await canvasSource.evaluate(element => element.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() })));
   await page.locator('.canvas-workspace.is-library-dragging').waitFor();
+  await page.waitForFunction(() => typeof window.resolveDrag === 'function');
   await canvasSource.dispatchEvent('dragend');
   assert.deepEqual(await payload(), ['a']);
   assert.equal(await page.locator('.canvas-workspace.is-library-dragging').count(), 1);

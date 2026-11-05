@@ -65,6 +65,12 @@
 - **实用证据：** [ConnectedCollections.tsx](../../apps/desktop/src/components/ConnectedCollections.tsx) 与 [CanvasFrequentAssets.tsx](../../apps/desktop/src/components/CanvasFrequentAssets.tsx) 均调用 `FileMediaCard`；[AudioFileMediaCard.tsx](../../apps/desktop/src/components/AudioFileMediaCard.tsx) 复用 `LibrarySelectionMark`。
 - **范围／状态：可跨模块复用（文件素材展示）。** 卡片依赖 `LocalFileEntry`、预览队列及本机拖出接口；选区由回调归宿主管理，不能当作纯图片组件。装饰依赖 `.folder-media-preview` DOM 和对应 CSS，只负责几何与进入动画，不负责选择、键盘或列表布局；画布节点选中、hover 与多选不可混成同一状态。
 
+## 素材拖出到其他应用的反馈
+
+- **入口：** [externalDrag.ts](../../apps/desktop/src/lib/externalDrag.ts) 的 `startExternalDrag` 共用原生会话、body 模糊层、两帧绘制等待和取消清理；`externalDragHud.tsx` 与 `externalDrag.css` 提供源位置投影及操作提示。
+- **调用方：** `FileMediaCard` 在素材库原生拖动阈值后调用并传入源媒体矩形；`CanvasWorkspace` 在 600ms 长按后传 `source: canvas`、矩形及项目取消信号。
+- **边界：** 两种来源共用视觉，只有画布来源拦截同窗投递；素材库保留集合／画板投递，草稿图层不进入原生外拖。复用前必须先登记 `dragPayload` 身份；原件由后台解析，HUD 不承担文件传输。原生验收范围见 [素材拖出](../EXTERNAL-DRAG.md)。
+
 ## 在新创作入口保留统一编辑框与参数
 
 - **共用表面与动效：** [IndustrialCanvas.css](../../apps/desktop/src/components/IndustrialCanvas.css) 的 `.creation-dock.composer-glass`、`.composer-host-glass` 控制 HUD 标签、局部景深与展开／收起；模式与 `.library-composer-target` 共用透明上沿、点阵及切角装饰，项目仍使用 `TacticalSelect`。关闭区仅复用工作流卡片的几何风格，不依赖其删除逻辑。`CreationBoard` 的 `.composer-hud-surface` 仅承载裁角底面与阴影，不在含按钮／菜单的根元素裁切。[LibraryComposer.css](../../apps/desktop/src/components/LibraryComposer.css) 仅负责主屏收起贴底及原多选避让。复用时保留这层宿主结构和减少动态效果／透明度分支；不为每个入口复制一份浮层。正式 App 验证入口 `scripts/composer-hud-ui.test.mjs`。
