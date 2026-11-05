@@ -45,7 +45,7 @@ w.__TAURI_INTERNALS__ = { transformCallback: () => ++callbackId, convertFileSrc:
 } };
 function App() {
   const [opened, setOpened] = useState(true);
-  const [draft, setDraft] = useState({ title: '剧本', markdown: '# 剧本\n\n窗外的光落在桌面上。\n\n第二段内容。\n' });
+  const [draft, setDraft] = useState({ title: '剧本', markdown: new URLSearchParams(location.search).has('markdown') ? '' : '# 剧本\n\n窗外的光落在桌面上。\n\n第二段内容。\n' });
   return <><button onClick={() => setOpened(true)}>放大编辑</button>{opened && <TextWorkspace initialDocument={draft} projectId="p" onChange={next => { w.draft = next; setDraft(next); }} onClose={next => { setDraft(next); setOpened(false); }} onAddToComposer={next => { w.composer = next; setDraft(next); setOpened(false); }}/>}</>;
 }
 document.documentElement.dataset.theme = 'dark';
