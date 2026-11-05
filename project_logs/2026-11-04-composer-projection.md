@@ -58,3 +58,12 @@
 - 移除 `CreationBoard` 上方 `.composer-references`、其预览宿主和已孤立导入／样式；正文引用 chip、`BoardChipPreview`、引用数据与发送路径保留，未删除任何素材或正文图片。
 - RED：弧线处旧 mask alpha 为 12，独立展示条数量为 1，两项新验收分别失败。GREEN：贴线透明度进入羽化中段，上方 24px 仍接近透明；引用只在正文中显示，图片解码、顺序、Backspace 删除和收起恢复通过现有真实组件回归。TypeScript 通过。
 - 继续使用 `composer-projection-ui` 与 `composer-hud-ui` 核验深浅色、素材库／画板和响应式布局。工作区已有其他任务的 PROJECT／规范／复用地图修改；提交仅取本轮开工副本到最终文件的差异，不包含其他任务。
+
+## 2026-11-05 激活后底部露缝与留白修正
+
+- 按用户反馈检查共用投影与素材库／画板宿主。真实隔离界面复现：900px 高窗口中，底栏距底部 36px，投影／点阵止于 890px，留下 10px 露底缝。根因是 `composer-optical-rise` 入场平移被计入高度测量，动画结束不改变元素尺寸，因此 ResizeObserver 不会补回这 10px。
+- 先在既有 `composer-hud-ui` 中加入激活后底边覆盖与 8–16px 底栏间距检查；旧代码按预期失败（surfaceGap=10、dotsGap=10、footerGap=36）。
+- 测量时从实际 transform 读取纵向入场位移并补回投影高度，不写死动画的 10px。模糊和点阵继续共用同一边界，上缘贴线与两侧羽化保持。素材库和画板改用共用 `--composer-bottom-gap`：常规 12px，700px 及以下 8px；收起贴底和素材多选避让保留。
+- GREEN：`composer-hud-ui`、`composer-projection-ui`、完整 TypeScript 通过。覆盖重复激活、深浅色、素材库／画板、900／1100／1440／1920px、减少动态、引用与草稿恢复。收起检查等待实际布局稳定，避免仅看到 class 改变就读取前一帧位置。
+- 补充实际截图与测量：深浅色主屏、画板均为 footerGap=12、surfaceGap=0、dotsGap=0；640×700 窗口为 8／0／0。截图在 `apps/desktop/.tmp/composer-bottom/` 的 `*-after.png`，已人工查看边界。隔离浏览器受沙箱本机访问限制后使用获准执行权限重跑；未操作真实素材库、发送生成或打包发布。
+- 沿用 UB Mode／UI/UX Pro Max，复用现有组件与验证入口；本轮没有可用的 crapper／dryer／mutator 工具，以类型检查、回归及限定 diff 复核。仅提交本轮代码、测试和文档差异；其他任务的工作区修改保留，远程推送仍不重试。

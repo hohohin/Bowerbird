@@ -1,4 +1,4 @@
-.library-composer { position:absolute; z-index:25; bottom:4vh; left:50%; transform:translateX(-50%); width:min(var(--composer-max-width),var(--composer-width)); pointer-events:none; }
+.library-composer { position:absolute; z-index:25; bottom:var(--composer-bottom-gap); left:50%; transform:translateX(-50%); width:min(var(--composer-max-width),var(--composer-width)); pointer-events:none; }
 .library-composer:has(.creation-dock.is-collapsed) { bottom:0; }
 .library-composer-target { display:flex; align-items:center; gap:6px; flex:0 1 auto; min-width:0; max-width:160px; color:var(--bb-muted); }
 .library-composer-target > * { pointer-events:auto; }
@@ -20,5 +20,4 @@ html[data-theme] .library-project-menu .tactical-select-option[aria-selected="tr
 .library-composer .canvas-composer-host { position:static; padding:0; width:100%; }
 .library-composer .creation-dock.composer-glass { width:100%; margin:0; }
 .library-composer-history { position:absolute; right:0; bottom:100%; width:min(360px,100%); max-height:440px; overflow:auto; padding:12px; border:1px solid var(--bb-line-strong); background:var(--bb-surface); color:var(--bb-muted); pointer-events:auto; }
-@media (max-width:700px) { .library-composer { bottom:8px; } }
 .library-home:has(.catalog-selection, .connected-selection) ~ .library-composer { bottom:112px; }

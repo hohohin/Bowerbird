@@ -17,6 +17,16 @@ const settle = () => page.waitForTimeout(400);
 async function bottomGap(dock) {
   return dock.evaluate(element => innerHeight - element.getBoundingClientRect().bottom);
 }
+async function bottomCoverage(dock) {
+  const layout = await dock.evaluate(element => {
+    const surface = element.querySelector('.composer-projection-surface').getBoundingClientRect();
+    const dots = element.querySelector('.composer-projection-dots').getBoundingClientRect();
+    const footer = element.querySelector('.composer-toolbar').getBoundingClientRect();
+    return { surfaceGap: innerHeight - surface.bottom, dotsGap: innerHeight - dots.bottom, footerGap: innerHeight - footer.bottom };
+  });
+  assert.ok(layout.surfaceGap <= 1 && layout.dotsGap <= 1, `blur and dots reach the bottom after opening: ${JSON.stringify(layout)}`);
+  assert.ok(layout.footerGap >= 8 && layout.footerGap <= 16, `footer stays close to the window bottom: ${JSON.stringify(layout)}`);
+}
 async function waitCollapsed(dock) {
   await page.waitForFunction(element => element.classList.contains('is-collapsed'), await dock.elementHandle());
 }
@@ -43,6 +53,7 @@ async function responsiveWidth(dock) {
   for (const width of [900, 1100, 1440, 1920]) {
     await page.setViewportSize({ width, height: 900 }); await settle();
     const bounds = await dock.boundingBox();
+    await bottomCoverage(dock);
     const available = await dock.evaluate(element => {
       const host = element.closest('.library-composer')?.parentElement ?? element.parentElement;
       const style = getComputedStyle(host);
@@ -144,6 +155,7 @@ try {
   await home.waitFor(); await settle();
   assert.ok(Math.abs(await bottomGap(home)) < 1, 'inactive home composer touches the window bottom');
   await home.getByRole('button', { name: '展开创作描述', exact: true }).click();
+  await settle(); await bottomCoverage(home);
   await home.locator('.ProseMirror').fill('清晨的薄雾掠过山脊，镜头缓慢推进。\n第二行内容仍保留在草稿中。');
   await home.getByRole('button', { name: '退出创作模式', exact: true }).click(); await settle();
   await waitCollapsed(home);
@@ -159,6 +171,7 @@ try {
     const motion = await home.evaluate(element => ({ name: getComputedStyle(element).animationName, filter: getComputedStyle(element).filter }));
     assert.notEqual(motion.name, 'none', 'opening has a transition'); assert.equal(motion.filter, 'none', 'text is never blurred');
     await settle();
+    await bottomCoverage(home);
     await home.getByRole('button', { name: '图片', exact: true }).click();
     await home.locator('.ProseMirror').fill('');
     const disabledSend = home.locator('.generation-send-button:disabled');
@@ -213,7 +226,7 @@ try {
     assert.equal(await home.evaluate(element => element.classList.contains('is-collapsed')), false, 'clicking the text closes only the brand menu');
     await referenceProjection(home, theme);
     await home.locator('.ProseMirror').focus(); await settle();
-    assert.ok(await bottomGap(home) >= 12, 'expanded composer floats above the edge');
+    await bottomCoverage(home);
     await page.screenshot({ path: `${output}/home-${theme}.png` });
     await home.screenshot({ path: `${output}/hud-rail-${theme}.png` });
     await home.getByRole('button', { name: '视频', exact: true }).click(); await settle();
@@ -240,15 +253,17 @@ try {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await home.getByRole('button', { name: '展开创作描述', exact: true }).click();
   assert.equal(await home.evaluate(element => getComputedStyle(element).animationName), 'none');
+  await settle(); await bottomCoverage(home);
   await home.getByRole('button', { name: '退出创作模式', exact: true }).click();
-  await waitCollapsed(home);
-  assert.ok(Math.abs(await bottomGap(home)) < 1);
+  await waitCollapsed(home); await settle();
+  assert.ok(Math.abs(await bottomGap(home)) < 1, `collapsed entry stays at the edge: ${await bottomGap(home)}`);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.goto(url);
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
   const canvas = page.locator('.canvas-workspace .creation-dock');
   await canvas.locator('.ProseMirror').fill('将光线、留白与材质组织成一个安静的镜头。'); await settle();
+  await bottomCoverage(canvas);
   await canvas.getByRole('button', { name: '品牌规范', exact: true }).click();
   await canvas.locator('.composer-profile-panel').waitFor();
   const canvasStage = await page.locator('.canvas-workspace .canvas-stage').boundingBox();

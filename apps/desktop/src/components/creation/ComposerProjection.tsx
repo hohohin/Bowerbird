@@ -50,7 +50,9 @@ export function ComposerProjection({ dockRef, collapsed }: { dockRef: RefObject<
       const writingHost = dock!.querySelector<HTMLElement>(".composer-description")!;
       const project = (dock!.querySelector(".library-composer-target") ?? (collapsed ? writingHost : dock!.querySelector(".composer-mode-picker > button")))!.getBoundingClientRect();
       left = bounds.left; top = Math.min(box.top, project.top) - 40;
-      width = bounds.width; height = Math.max(1, Math.min(innerHeight, bounds.bottom + 24) - top);
+      // The opening translation must not shorten the field once the dock settles.
+      const openingOffset = new DOMMatrixReadOnly(getComputedStyle(dock!).transform).m42;
+      width = bounds.width; height = Math.max(1, Math.min(innerHeight, bounds.bottom + 24) - top + openingOffset);
       Object.assign(root!.style, { left: `${left - box.left}px`, top: `${top - box.top}px`, width: `${width}px`, height: `${height}px` });
       canvas.width = width * scale; canvas.height = height * scale;
       context.setTransform(scale, 0, 0, scale, 0, 0);
