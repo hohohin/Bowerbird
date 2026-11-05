@@ -99,7 +99,8 @@ function pixelRect(shape: DrawShape, w: number, h: number) {
 
 function drawRegionEffect(ctx: CanvasRenderingContext2D, shape: DrawShape, w: number, h: number, background: HTMLCanvasElement) {
   const box = pixelRect(shape, w, h);
-  if (!box.width || !box.height) return;
+  // Image crops can leave complete annotations outside the new image bounds.
+  if (!box.width || !box.height || box.x >= w || box.y >= h || box.x + box.width <= 0 || box.y + box.height <= 0) return;
   const sample = document.createElement("canvas");
   if (shape.type === "mosaic") {
     const cell = Math.max(10, ctx.lineWidth * 5);

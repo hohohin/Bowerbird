@@ -73,7 +73,7 @@ try {
   await dialog.getByText("素材不存在或已删除", { exact: true }).waitFor();
 
   await page.evaluate(() => { window.deferAssets = false; window.failAssets = true; window.store.getState().openAnnotator("failure"); });
-  await dialog.getByText("素材加载失败：模拟素材读取失败", { exact: true }).waitFor();
+  await dialog.getByText("模拟素材读取失败", { exact: true }).waitFor();
   assert.equal(await dialog.getByText("素材不存在或已删除", { exact: true }).count(), 0);
   assert.deepEqual(errors, []);
   console.log("PASS annotation loading: canvas context menu with empty library list, export source identity, loading/missing/error states, switching images and close/reopen races");

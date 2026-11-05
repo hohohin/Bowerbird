@@ -92,10 +92,10 @@ try {
   assert.ok((await output()).meta.shapes.at(-1).width > burstBefore.meta.shapes.at(-1).width);
   await dialog.getByRole("button", { name: "撤销", exact: true }).click();
   assert.deepEqual(await output(), burstBefore, "one undo reverses a continuous wheel gesture");
-  const consumed = await overlay.locator('polyline').last().evaluate(el => {
+  const consumed = await overlay.evaluate(el => {
     const box = el.getBoundingClientRect();
-    return !el.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, clientX: box.x + box.width / 2,
-      clientY: box.y + box.height / 2, bubbles: true, cancelable: true }));
+    return !el.dispatchEvent(new WheelEvent("wheel", { deltaY: -120, clientX: box.x + box.width * .5,
+      clientY: box.y + box.height * .6, bubbles: true, cancelable: true }));
   });
   assert.equal(consumed, true, "hovered wheel prevents page scroll");
   await dialog.getByRole("button", { name: "撤销", exact: true }).click();

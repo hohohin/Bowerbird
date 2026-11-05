@@ -35,6 +35,15 @@
   .annotation-toolbar-tools .annotation-tool { padding-inline: 6px; }
 }
 
+@media (max-width: 900px) {
+  .image-annotator .annotation-toolbar { gap: 8px; padding-inline: 8px; }
+  .annotation-toolbar-tools { gap: 3px; }
+  .annotation-toolbar-tools .annotation-tool { padding-inline: 4px; }
+  .annotation-toolbar-tools > .mx-1 { margin-inline: 0; }
+  .annotation-toolbar-actions { gap: 4px; }
+  .annotation-toolbar-actions button { padding-inline: 6px; }
+}
+
 @media (max-width: 1100px) {
   .annotation-toolbar-tools button span { display: none; }
 }

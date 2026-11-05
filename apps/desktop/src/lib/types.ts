@@ -1,4 +1,5 @@
 import type { GenerationMedia, VideoOptions } from "./videoGeneration";
+import type { AnnotationTool } from "./annotation";
 export interface Asset {
   id: string;
   name: string;
@@ -342,7 +343,7 @@ export interface PromptedAsset extends Asset {
  *  arrow 用起终点两个 point 表达方向；圆/自由线条/文字使用说明 + bbox，
  *  不引入模型未知的标记。text 的端点为旋转后的锚点与对角点，token 中为包围框。 */
 export interface AnnotationShape {
-  type: "rect" | "arrow" | "ellipse" | "pencil" | "text";
+  type: AnnotationTool;
   x1: number;
   y1: number;
   x2: number;
@@ -352,6 +353,7 @@ export interface AnnotationShape {
   /** 线宽（烧录进输出图的像素，随导出图分辨率）。 */
   width: number;
   token: string;
+  filled?: boolean;
   /** 自由线条的完整轨迹，坐标同为 0-999。 */
   points?: Array<{ x: number; y: number }>;
   text?: string;
