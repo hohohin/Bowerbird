@@ -1,5 +1,6 @@
 import { assignCanvasCardNames } from "./canvasCardNames";
 import { mergeWorkflowChanges } from "./workflowExternalChanges";
+import { activeTriggerSchedule, advanceTriggerSchedule, triggerScheduleOccurrence, workflowTriggerMode } from "./workflowTriggerSchedule";
 import { normalizeWorkflowLocalVideo, workflowTitle, workflowCardWidth, workflowCompletionTriggers, workflowTriggerScope } from "./canvasWorkflow";
 import { resolveVideoCardOutputs } from "./workflowVideoFrames";
 import { automaticInputMedia, planAutomaticConnection, type AutomaticOutput } from "./workflowAutoConnect";
@@ -68,6 +69,7 @@ export async function filterAutomaticMediaValues(node: WorkflowNode, values: Rec
     }
   }
 }
+const scheduleSessionStartedAt = Date.now();
 export function canvasWorkflowController(projectId: string) {
   let controller = controllers.get(projectId);
   if (!controller) { controller = new CanvasWorkflowController(projectId); controllers.set(projectId, controller); }
@@ -105,9 +107,49 @@ export class CanvasWorkflowController {
   private dispatchingSessionCompletions = new Set<string>();
   private sessionCompletionFailures = new Set<string>();
   private historicalSessionCompletions = new Set<string>();
+  private triggerTimer: ReturnType<typeof setTimeout> | undefined;
+  private triggerTimersEnabled = true;
+  private dispatchingSchedule = false;
+  setTriggerTimersEnabled(enabled: boolean) {
+    this.triggerTimersEnabled = enabled;
+    this.scheduleTriggers();
+  }
+  private scheduleTriggers() {
+    clearTimeout(this.triggerTimer);
+    this.triggerTimer = undefined;
+    if (!this.triggerTimersEnabled || !this.ready || this.error || this.dispatchingSchedule) return;
+    const pending = this.document.nodes.flatMap(node => { const schedule = activeTriggerSchedule(node); return schedule?.status === "armed" ? [schedule.at] : []; });
+    if (!pending.length) return;
+    // Short bounded waits tolerate system-clock changes and resume from sleep.
+    const remaining = Math.min(...pending) - Date.now();
+    this.triggerTimer = setTimeout(() => {
+      this.triggerTimer = undefined;
+      void this.checkScheduledTriggers();
+    }, remaining > 0 ? Math.min(1000, remaining) : 1000);
+  }
+  private async checkScheduledTriggers() {
+    if (!this.triggerTimersEnabled || !this.ready || this.error || this.dispatchingSchedule || this.encapsulating) { this.scheduleTriggers(); return; }
+    this.dispatchingSchedule = true;
+    try {
+      for (const node of this.document.nodes) {
+        const schedule = activeTriggerSchedule(node);
+        if (node.kind !== "trigger" || schedule?.status !== "armed" || schedule.at > Date.now() || this.isLocked(node.id)) continue;
+        try { await this.startRun(node.id, false, undefined, true, triggerScheduleOccurrence(schedule)); }
+        catch (error) {
+          this.showIssue(workflowDiagnostic(error, node, "validation"));
+          // Never retry the same occurrence after validation failure. Daily schedules keep tomorrow.
+          if (!this.error && this.document.nodes.find(current => current.id === node.id)?.triggerSchedule?.id === schedule.id) {
+            await this.save({ ...this.document, nodes: this.document.nodes.map(current => current.id === node.id && current.triggerSchedule?.status === "armed"
+              ? { ...current, triggerSchedule: schedule.dailyAt ? advanceTriggerSchedule(schedule) : { ...schedule, status: "failed" } } : current) });
+          }
+        }
+      }
+    } catch (error) { console.warn("保存定时触发状态失败", error); }
+    finally { this.dispatchingSchedule = false; this.scheduleTriggers(); }
+  }
   private scheduleSessionCompletions() {
     if (this.sessionCompletionTimer || !this.ready || this.error || !this.document.nodes.some(node =>
-      node.kind === "trigger" && (node.triggerCount ?? 0) > 0 && node.inputs.completion?.some(input => input.canvasNodeId))) return;
+      node.kind === "trigger" && workflowTriggerMode(node) === "completion" && (node.triggerCount ?? 0) > 0 && node.inputs.completion?.some(input => input.canvasNodeId))) return;
     this.sessionCompletionTimer = setTimeout(() => {
       this.sessionCompletionTimer = undefined;
       void this.checkSessionCompletions();
@@ -117,11 +159,11 @@ export class CanvasWorkflowController {
     if (!this.ready || this.error || this.checkingSessionCompletions || this.encapsulating) return;
     this.checkingSessionCompletions = true;
     try {
-      if (!this.document.nodes.some(node => node.kind === "trigger" && node.inputs.completion?.some(input => input.canvasNodeId))) return;
+      if (!this.document.nodes.some(node => node.kind === "trigger" && workflowTriggerMode(node) === "completion" && node.inputs.completion?.some(input => input.canvasNodeId))) return;
       const canvas = await api.projectCanvasGet(this.projectId);
       for (const id of this.document.nodes.filter(node => node.kind === "trigger").map(node => node.id)) {
         const node = this.document.nodes.find(node => node.id === id);
-        if (!node || this.isLocked(id) || this.dispatchingSessionCompletions.has(id)) continue;
+        if (!node || workflowTriggerMode(node) !== "completion" || this.isLocked(id) || this.dispatchingSessionCompletions.has(id)) continue;
         const completed = completedCanvasSessions(node.inputs.completion ?? [], canvas.nodes, useStore.getState().genJobs);
         const unseen = completed.filter(id => !node.completionSeen?.includes(id) && !this.historicalSessionCompletions.has(id));
         if (!unseen.length) continue;
@@ -234,6 +276,13 @@ export class CanvasWorkflowController {
         }
         this.ready = true;
         this.error = "";
+        const scheduledNodes = this.document.nodes.map<WorkflowNode>(node => activeTriggerSchedule(node)?.status === "armed" && node.triggerSchedule!.at <= scheduleSessionStartedAt
+          ? { ...node, triggerSchedule: node.triggerSchedule!.dailyAt ? advanceTriggerSchedule(node.triggerSchedule!) : { ...node.triggerSchedule!, status: "missed" } } : node);
+        if (scheduledNodes.some((node, index) => node !== this.document.nodes[index])) {
+          // Persist skipped occurrences before the next daily claim is compared with SQLite.
+          await this.save({ ...this.document, nodes: scheduledNodes });
+        }
+        this.scheduleTriggers();
         this.scheduleSessionCompletions();
       } catch (error) { this.error = String(error); }
       this.emit();
@@ -280,7 +329,7 @@ export class CanvasWorkflowController {
       if (this.writing === write) this.pendingEditAuthorization = false;
     }
     catch (error) { this.error = `工作流未保存：${String(error)}`; throw error; }
-    finally { this.emit(); this.scheduleSessionCompletions(); }
+    finally { this.emit(); this.scheduleSessionCompletions(); this.scheduleTriggers(); }
   }
   async flush() {
     await this.load();
@@ -306,7 +355,7 @@ export class CanvasWorkflowController {
     this.writing = refresh;
     try { await refresh; }
     catch (error) { this.error = `工作流未保存：${String(error)}`; throw error; }
-    finally { this.emit(); }
+    finally { this.emit(); this.scheduleTriggers(); }
     // A transient read failure is reported without blocking unrelated run checkpoints.
     if (readFailure) throw readFailure.error;
   }
@@ -328,7 +377,18 @@ export class CanvasWorkflowController {
     this.sessionCompletionFailures.clear();
     // Undoing a configuration edit must not replay an already consumed session.
     nodes = nodes.map(node => {
-      const seen = this.document.nodes.find(previous => previous.id === node.id)?.completionSeen;
+      const previous = this.document.nodes.find(previous => previous.id === node.id);
+      const seen = previous?.completionSeen;
+      if (node.triggerSchedule?.status === "armed") {
+        const consumed = [...currentRuns, ...(history?.removedRuns ?? [])].some(run => run.scheduleId === triggerScheduleOccurrence(node.triggerSchedule!));
+        if (node.triggerSchedule.dailyAt && previous?.triggerSchedule?.id === node.triggerSchedule.id && previous.triggerSchedule.at > node.triggerSchedule.at) {
+          node = { ...node, triggerSchedule: previous.triggerSchedule };
+        } else if (consumed || previous?.triggerSchedule?.id === node.triggerSchedule.id && previous.triggerSchedule.status !== "armed") {
+          node = { ...node, triggerSchedule: consumed ? advanceTriggerSchedule(node.triggerSchedule) : { ...node.triggerSchedule, status: previous!.triggerSchedule!.status } };
+        } else if (node.triggerSchedule.id !== previous?.triggerSchedule?.id && node.triggerSchedule.at <= Date.now()) {
+          node = { ...node, triggerSchedule: node.triggerSchedule.dailyAt ? advanceTriggerSchedule(node.triggerSchedule) : { ...node.triggerSchedule, status: "missed" } };
+        }
+      }
       return node.kind === "trigger" && (node.completionSeen || seen) ? { ...node,
         completionSeen: [...new Set([...(seen ?? []), ...(node.completionSeen ?? [])])] } : node;
     });
@@ -456,6 +516,8 @@ export class CanvasWorkflowController {
         });
         const plan = planAutomaticConnection(nodes, candidates, receiver.id);
         if (plan.error) throw new Error(plan.error);
+        if (receiver.kind === "trigger" && plan.bindings.some(({ binding }) => binding.canvasNodeId
+          && !canvas.nodes.some(node => node.id === binding.canvasNodeId && node.kind === "prompt"))) throw new Error("请连接执行卡片或绘画会话的输出端口");
         const inputs = { ...receiver.inputs };
         for (const item of plan.bindings) {
           let binding: WorkflowInput = { ...item.binding, autoConnect: connectionId };
@@ -475,7 +537,10 @@ export class CanvasWorkflowController {
           inputs[item.inputId] = [...current, binding];
           changedIds.push(receiver.id);
         }
-        nodes = nodes.map(node => node.id === receiver.id ? { ...node, inputs } : node);
+        if (receiver.kind === "trigger" && workflowTriggerMode(receiver) !== "completion") changedIds.push(receiver.id);
+        nodes = nodes.map(node => node.id === receiver.id ? { ...node, inputs,
+          ...(receiver.kind === "trigger" ? { triggerMode: "completion" as const, triggerSchedule: undefined,
+            completionSeen: [...new Set([...(node.completionSeen ?? []), ...completedCanvasSessions(inputs.completion ?? [], canvas.nodes, useStore.getState().genJobs)])] } : {}) } : node);
       } else if (target.canvasNodeId) {
         const card = canvas.nodes.find(node => node.id === target.canvasNodeId && node.kind === "note" && node.hiddenAt == null);
         if (!card) throw new Error("接收卡片已不存在");
@@ -719,7 +784,7 @@ export class CanvasWorkflowController {
       throw error;
     }
   }
-  private async startRun(startId: string, single = false, completionSessionId?: string, background = false) {
+  private async startRun(startId: string, single = false, completionSessionId?: string, background = false, scheduleId?: string) {
     if (this.document.nodes.some(node => node.kind !== "text")) await api.canvasWorkflowAuthorize();
     if (this.encapsulating) throw new Error("正在封装卡片，请稍后再运行");
     if (!this.ready) throw new Error("工作流尚未载入");
@@ -794,16 +859,21 @@ export class CanvasWorkflowController {
       })), ...this.reservations.values(),
     ];
     if (accesses.some(item => workflowAccessConflict(lockedNodeIds, writeNodeIds, item.access, item.writes))) {
-      if (completionSessionId) return; // Leave the event unconsumed until the downstream cards are free.
+      if (completionSessionId || scheduleId) return; // Leave the event unconsumed until the downstream cards are free.
       throw new Error("此运行会修改其他工作流正在使用的卡片，请等待对应流程完成");
     }
     const runId = crypto.randomUUID(), threadId = crypto.randomUUID();
     this.reservations.set(runId, { access: lockedNodeIds, writes: writeNodeIds }); this.emit();
     try {
     await this.writing;
+    if (scheduleId) {
+      const owner = this.document.nodes.find(node => node.id === startId);
+      const schedule = owner && activeTriggerSchedule(owner);
+      if (!this.triggerTimersEnabled || !schedule || triggerScheduleOccurrence(schedule) !== scheduleId || schedule.status !== "armed" || schedule.at > Date.now()) return;
+    }
     if (completionSessionId) {
       const trigger = this.document.nodes.find(node => node.id === startId)!;
-      if (!(trigger.triggerCount! > 0) || trigger.completionSeen?.includes(completionSessionId)
+      if (workflowTriggerMode(trigger) !== "completion" || !(trigger.triggerCount! > 0) || trigger.completionSeen?.includes(completionSessionId)
         || !completedCanvasSessions(trigger.inputs.completion ?? [], snapshot.nodes, useStore.getState().genJobs).includes(completionSessionId)) return;
     }
     // Validate configuration and snapshot fixed inputs; cell values are checked by their consumers.
@@ -897,8 +967,10 @@ export class CanvasWorkflowController {
     const nodes = this.document.nodes.map(node => invalidated.has(node.id) ? { ...node, outputs: {} } : node).map(node => this.isLocked(node.id) && !writeNodeIds.includes(node.id) ? this.document.nodes.find(item => item.id === node.id)! : triggerScope.includes(node.id) ? {
       ...node, ...(node.kind === "generation" ? { activeSessionNodeId: null } : {}), inputs: Object.fromEntries(Object.entries(node.inputs).map(([port, bindings]) => [port, bindings.map(input => input.groupId && groupAssets.has(input.groupId) ? { ...input, assetIds: groupAssets.get(input.groupId)![input.autoConnect ? "media" : "image"] } : input)])),
     } : node).map(node => node.id === startId && completionSessionId ? { ...node, triggerCount: (node.triggerCount ?? 0) - 1,
-      completionSeen: [...(node.completionSeen ?? []), completionSessionId] } : node);
+      completionSeen: [...(node.completionSeen ?? []), completionSessionId] } : node)
+      .map(node => node.id === startId && scheduleId ? { ...node, triggerSchedule: advanceTriggerSchedule(node.triggerSchedule!) } : node);
     await this.saveRun({ id: runId, startId, threadId, order, lockedNodeIds, writeNodeIds, cellTexts, cellValues, status: "running",
+      ...(scheduleId ? { scheduleId } : {}),
       ...(loop ? { loop } : {}),
       accountId: useStore.getState().cloudAuth?.user_id ?? null,
       steps: Object.fromEntries(order.map(id => [id, { status: "pending" as const }])) }, nodes);
@@ -906,6 +978,19 @@ export class CanvasWorkflowController {
     const execution = this.continue(runId);
     if (background) void execution.catch(error => { this.error = String(error); this.emit(); });
     else await execution;
+  }
+  canDiscardLocalVideo(nodeId: string) {
+    const node = this.document.nodes.find(node => node.id === nodeId);
+    const run = workflowRuns(this.document).find(run => run.status === "waiting" && run.steps[nodeId]?.status === "waiting");
+    return node?.kind === "comfy-video" && !!run && !this.executing.has(run.id) && !this.stopping.has(run.id);
+  }
+  async discardLocalVideo(nodeId: string) {
+    if (!this.canDiscardLocalVideo(nodeId)) throw new Error("当前视频仍在处理，请等待进入中断状态后删除");
+    const run = workflowRuns(this.document).find(run => run.status === "waiting" && run.steps[nodeId]?.status === "waiting")!;
+    // Abandon the local wait only. An unavailable ComfyUI must not block card removal.
+    // This is not cancellation confirmation and does not retrieve or import an output.
+    this.stopped.add(run.id);
+    await this.saveRun({ ...run, status: "stopped", triggerQueue: [] });
   }
   async stop(runId = this.document.run?.id) {
     if (!runId) return;
@@ -1918,7 +2003,7 @@ export class CanvasWorkflowController {
           if (!completed.order.every(id => completed.steps[id].status === "done") || !completed.triggerQueue?.length) break;
           const [triggerId, ...triggerQueue] = completed.triggerQueue;
           const trigger = this.document.nodes.find(node => node.id === triggerId && node.kind === "trigger");
-          if (!trigger || !(trigger.triggerCount! > 0)) {
+          if (!trigger || workflowTriggerMode(trigger) !== "completion" || !(trigger.triggerCount! > 0)) {
             await this.saveRun({ ...completed, triggerQueue });
             continue;
           }

@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ configFile: false, cacheDir: '.tmp/workflow-h3/vite', server: { host: '127.0.0.1', port: 1697, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ configFile: false, cacheDir: '.tmp/workflow-h3/vite', server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
@@ -31,7 +31,7 @@ async function mock() {
   });
 }
 try {
-  await page.goto('http://127.0.0.1:1697/scripts/fixtures/canvas-reference/preview.html');
+  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/canvas-reference/preview.html`);
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   await mock();
   await page.evaluate(async () => {

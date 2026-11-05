@@ -4,7 +4,7 @@ import { forwardRef, memo, useEffect, useImperativeHandle, useLayoutEffect, useM
 import { createPortal } from "react-dom";
 import { shallow } from "zustand/shallow";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Clapperboard, Images, List, Palette, Play, Repeat2, Sparkles, Square, TextCursorInput, Timer, Workflow, X, Copy, ImagePlus } from "lucide-react";
+import { Clapperboard, Images, List, Palette, Play, Repeat2, Sparkles, Square, TextCursorInput, Timer, Workflow, X, Copy, ImagePlus, MousePointer2, CalendarClock, CheckCheck } from "lucide-react";
 import { api } from "../lib/api";
 import { DEFAULT_COMFY_VIDEO } from "../lib/comfyVideo";
 import { startComposerLocalVideo } from "../lib/composerLocalVideo";
@@ -46,6 +46,8 @@ import { CloudAgentSession } from "./CloudAgentPanel";
 import { ModalShell } from "./ModalShell";
 import { WorkflowPromptEditor } from "./WorkflowPromptEditor";
 import { WorkflowDescribeOption } from "./WorkflowDescribeOption";
+import { WorkflowTriggerSchedule } from "./WorkflowTriggerSchedule";
+import { workflowTriggerMode } from "../lib/workflowTriggerSchedule";
 import { WorkflowGenerationHistory } from "./WorkflowGenerationHistory";
 import { ComfyEnvironmentControl, ComfyGenerationProgress, ComfyVideoCard } from "./ComfyVideoCard";
 import { WorkflowPlannerCard } from "./WorkflowPlannerCard";
@@ -59,12 +61,18 @@ const WORKFLOW_CARD_PRESENTATION = {
   agent: { icon: TextCursorInput, code: "AGT", title: "Agent 执行" },
   loop: { icon: Repeat2, code: "LOOP", title: "循环处理" },
   "visual-profile": { icon: Palette, code: "VIS", title: "视觉规范" },
-  trigger: { icon: Timer, code: "TRG", title: "触发模块" },
+  trigger: { icon: Timer, code: "TRG", title: "触发器" },
   "comfy-video": { icon: Clapperboard, code: "VID", title: "本地 H3 视频" },
   skill: { icon: Sparkles, code: "MOD", title: "技能卡片" },
   planner: { icon: Sparkles, code: "MOD", title: "工作流助手" },
   text: { icon: Workflow, code: "MOD", title: "工作流" },
 };
+const TRIGGER_MODES = [
+  { id: "manual", label: "手动点击", icon: MousePointer2 },
+  { id: "daily", label: "每天定时", icon: CalendarClock },
+  { id: "once", label: "一次定时", icon: Timer },
+  { id: "completion", label: "上游完成", icon: CheckCheck },
+] as const;
 
 export function WindingKey({ size = 20 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -548,6 +556,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       catch (error) { notifyError(error, "这条连接会形成循环"); return; }
     }
     patch(toId, { ...(reference ? { prompt: `${node.prompt}${node.prompt ? "\n" : ""}@[${reference.id}]`, promptReferences: [...(node.promptReferences ?? []), reference] } : {}),
+      ...(node.kind === "trigger" && inputId === "completion" ? { triggerMode: "completion", triggerSchedule: undefined } : {}),
       ...(sessionCompletion ? { completionSeen: [...new Set([...(node.completionSeen ?? []), ...completedCanvasSessions([binding], graphNodes, useStore.getState().genJobs)])] } : {}),
       inputs: { ...node.inputs, [inputId]: (node.kind === "comfy-video" && inputId !== "text") || (node.kind === "instruction" && node.action !== "describe") || (inputId === "visual-profile" || node.kind === "loop" && node.loopMode === "rows") ? [binding] : connected } });
     setConnection(null); connectionRef.current = null;
@@ -745,7 +754,10 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   useEffect(() => {
     const plane = wireElement.current?.closest(".canvas-plane");
     if (automatic) plane?.setAttribute("data-canvas-connecting", "");
-    return () => { plane?.removeAttribute("data-canvas-connecting"); };
+    const id = automatic && CSS.escape(automatic.id);
+    const sources = id ? plane?.querySelectorAll(`[data-canvas-node-id="${id}"], [data-workflow-card="${id}"], [data-workflow-material="${id}"]`) : undefined;
+    sources?.forEach(source => source.setAttribute("data-canvas-connection-source", automatic!.side));
+    return () => { plane?.removeAttribute("data-canvas-connecting"); sources?.forEach(source => source.removeAttribute("data-canvas-connection-source")); };
   }, [automatic]);
   useEffect(() => {
     let cancelledByRightClick = false;
@@ -908,7 +920,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   useLayoutEffect(() => updateCursor.current());
 
   function automaticButton(id: string, side: "input" | "output", disabled = false) {
-    return <CanvasConnectionHandle side={side} disabled={disabled || panReady} active={automatic?.id === id}
+    return <CanvasConnectionHandle side={side} disabled={disabled || panReady} active={automatic?.id === id && automatic.side === side}
       aria-label={side === "input" ? "添加上游" : "添加下游"}
       data-workflow-node={id} data-workflow-input={side === "input" ? "*auto" : undefined}
       onPointerDown={event => { if (event.button !== 0) return; event.stopPropagation(); event.preventDefault(); beginAutomatic(id, side, { x: event.clientX, y: event.clientY }); }}
@@ -926,7 +938,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       }}
       onClick={event => {
         if (event.detail !== 0 || (busy && side === "input") || port.type === "session") return;
-        if (side === "input") connect(node.id, port.id);
+        if (side === "input" && automaticRef.current?.side === "output") commitAutomatic(automaticRef.current.outputs, { nodeId: node.id });
+        else if (side === "input") connect(node.id, port.id);
         else { const value = { nodeId: node.id, portId: port.id, type: port.type }; connectionRef.current = value; setConnection(value); }
       }}
       onContextMenu={event => { event.preventDefault(); event.stopPropagation(); if (!busy && side === "input") disconnectPort(node.id, port.id, { x: event.clientX, y: event.clientY }); }}>
@@ -996,6 +1009,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
         return result && <path key={id} className={`is-${type}${wireSelected(node.id) || wireSelected(id) ? " is-selected" : ""}`} data-workflow-result-link={id} d={path(cardPoint(node.id, "output")!, cardPoint(result.id, "input")!)} />;
       }))}
       {document.nodes.flatMap(node => Object.entries(node.kind === "comfy-video" ? generationInputNode(node).inputs : node.inputs).flatMap(([port, inputs]) => inputs.map((binding, index) => {
+        if (node.kind === "trigger" && port === "completion" && workflowTriggerMode(node) !== "completion") return null;
         const automaticKey = binding.autoConnect && `${binding.autoConnect}:${node.textTarget?.nodeId ?? node.id}`;
         if (automaticKey && automaticWires.has(automaticKey)) return null;
         if (automaticKey) automaticWires.add(automaticKey);
@@ -1030,10 +1044,10 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       return card && <div key={node.id} className="workflow-material-hotspot workflow-text-key" data-workflow-text-key={card.id} style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>{node.inputs.signal?.length ? gearButton(node) : keyButton(node)}</div>;
     })}
     {graphNodes.filter(card => card.kind === "prompt" && card.hiddenAt == null && !sessionIds.has(card.id) && !conversationCards?.hiddenIds.has(card.id)).map(card =>
-      <div key={`session-${card.id}`} data-workflow-material={card.id} className={`workflow-material-hotspot ${imageOnlyConversationIds?.has(card.id) ? "is-image-session" : ""} ${hoveredMaterial === card.id ? "is-hovered" : ""}`} style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>
+      <div key={`session-${card.id}`} data-workflow-material={card.id} className={`workflow-material-hotspot ${imageOnlyConversationIds?.has(card.id) ? "is-image-session" : ""} ${hoveredMaterial === card.id ? "is-hovered" : ""} ${selectedIds.has(card.id) ? "is-selected" : ""}`} style={{ left: card.x, top: card.y, width: card.width, height: card.height }}>
         {automaticButton(card.id, "output")}
       </div>)}
-    {materials.map(material => <div key={material.id} data-workflow-material={material.id} className={`workflow-material-hotspot ${hoveredMaterial === material.id ? "is-hovered" : ""}`} style={{ left: material.x, top: material.y, width: material.width, height: material.height }}>
+    {materials.map(material => <div key={material.id} data-workflow-material={material.id} className={`workflow-material-hotspot ${hoveredMaterial === material.id ? "is-hovered" : ""} ${selectedIds.has(material.id) ? "is-selected" : ""}`} style={{ left: material.x, top: material.y, width: material.width, height: material.height }}>
       {automaticButton(material.id, "output")}
     </div>)}
     {document.nodes.filter(node => node.kind !== "text").map(node => {
@@ -1041,14 +1055,16 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const step = run?.steps[node.id];
       const loop = run?.loop?.nodeId === node.id ? run.loop : undefined;
       const busy = controller.isLocked(node.id);
+      const removableLocalVideo = controller.canDiscardLocalVideo(node.id);
       const removableWaitingVideo = node.kind === "generation" && node.generation?.media === "video"
         && run?.status === "waiting" && step?.status === "waiting" && !!step.jobId;
       const loopItems = loopPreviews.get(node.id)?.items, loopInputNotice = loopPreviews.get(node.id)?.notice ?? "";
       const loopStartInvalid = !busy && !!loopItems && (node.loopStartItem ?? 1) > loopItems.length;
       const loopInputChanged = !!loop?.items && !!loopItems && JSON.stringify(loop.items) !== JSON.stringify(loopItems);
-      const inputPorts = workflowInputs(node), outputPorts = workflowOutputs(node);
-      const visibleInputs = node.kind === "comfy-video" ? generationInputNode(node).inputs : node.inputs;
-      const height = node.kind === "generation" ? 210 : node.kind === "trigger" ? 220 : node.kind === "loop" ? 260 : Math.max(330, 130 + Math.max(inputPorts.length, outputPorts.length) * 30);
+      const triggerMode = workflowTriggerMode(node);
+      const inputPorts = node.kind === "trigger" && triggerMode !== "completion" ? [] : workflowInputs(node), outputPorts = workflowOutputs(node);
+      const visibleInputs = node.kind === "comfy-video" ? generationInputNode(node).inputs : node.kind === "trigger" && triggerMode !== "completion" ? {} : node.inputs;
+      const height = node.kind === "generation" ? 210 : node.kind === "trigger" ? 0 : node.kind === "loop" ? 260 : Math.max(330, 130 + Math.max(inputPorts.length, outputPorts.length) * 30);
       const images = Object.values(node.outputs).flatMap(value => value.assetIds ?? []);
       const profileId = node.profileId || node.profileCache?.profileId || step?.profileId;
       const inputIds = node.kind === "trigger" ? [] : Object.values(visibleInputs).flat().flatMap(inputImages);
@@ -1070,7 +1086,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           videoOptions = resolveVideoOptions(videoOptions, references);
         } catch { /* Draft references can be incomplete; execution validates them after upstream results arrive. */ }
       }
-      const presentation = WORKFLOW_CARD_PRESENTATION[node.kind], CardIcon = presentation.icon;
+      const presentation = WORKFLOW_CARD_PRESENTATION[node.kind], CardIcon = node.kind === "trigger" ? TRIGGER_MODES.find(mode => mode.id === triggerMode)!.icon : presentation.icon;
       return <article key={node.id} data-canvas-node data-workflow-card={node.id} ref={element => { if (element) cardElements.current.set(node.id, element); else cardElements.current.delete(node.id); }} aria-busy={run?.status === "running" && step?.status === "running"} className={`workflow-card ${run?.status === "running" && step?.status === "running" ? "canvas-card-running" : step?.status === "failed" || nodeDiagnostic(node.id) ? "canvas-card-error" : ""} is-${node.kind} ${selectedIds.has(node.id) ? "is-selected" : ""} ${armed ? "is-key-target" : ""}`}
         onMouseEnter={event => { if (node.kind === "trigger" && !event.buttons) showProgress(node.id, event.currentTarget, true); }}
         onMouseLeave={() => { if (node.kind === "trigger") setKeyHover(null); }}
@@ -1115,12 +1131,13 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           {node.kind === "generation" && <WorkflowGenerationHistory node={node} graphNodes={graphNodes} onOpen={onOpenGeneration} />}
           {node.kind === "comfy-video" && <ComfyEnvironmentControl node={node} disabled={busy} onChange={changes => patch(node.id, changes, false)} />}
           <button aria-label="复制卡片" disabled={busy} onClick={() => {
-            const copy = { ...structuredClone(node), id: crypto.randomUUID(), x: node.x + 350, outputs: {}, activeSessionNodeId: null, sessionNodeIds: [], resultNodeIds: [], resultGroupId: undefined, planning: undefined, templateInstance: undefined, trigger: false };
+            const copy = { ...structuredClone(node), id: crypto.randomUUID(), x: node.x + 350, outputs: {}, activeSessionNodeId: null, sessionNodeIds: [], resultNodeIds: [], resultGroupId: undefined, planning: undefined, templateInstance: undefined, triggerSchedule: undefined, trigger: false };
             handle(edit([...document.nodes, copy])); onSelect(copy.id);
           }}><Copy size={13} /></button>
-          <button aria-label="删除卡片" disabled={busy && !removableWaitingVideo}
-            title={removableWaitingVideo ? "停止此工作流的等待并删除卡片；已生成素材保留" : "删除卡片"}
+          <button aria-label="删除卡片" disabled={busy && !removableWaitingVideo && !removableLocalVideo}
+            title={removableWaitingVideo || removableLocalVideo ? "停止此工作流的等待并删除卡片；已生成素材保留" : "删除卡片"}
             onClick={() => {
+              if (removableLocalVideo) { handle(controller.discardLocalVideo(node.id).then(() => { if (!controller.isLocked(node.id)) onRemove(node.id); })); return; }
               if (!removableWaitingVideo) { onRemove(node.id); return; }
               handle(controller.stop(run.id).then(() => { if (!controller.isLocked(node.id)) onRemove(node.id); }));
             }}><X size={15} /></button>
@@ -1173,7 +1190,6 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
             {node.profileId && !profiles.some(p => p.id === node.profileId) && <option value={node.profileId}>已选规范不可用</option>}
             {profiles.map(p => <option key={p.id} value={p.id}>{p.name} · v{p.version}</option>)}
           </TacticalSelect>}
-          {node.kind === "trigger" && <div className="workflow-port-space" style={{ height: Math.max(inputPorts.length, outputPorts.length, 2) * 30 }} />}
           {node.kind === "comfy-video" && <ComfyVideoCard node={node} disabled={busy} assets={assets} inputImages={inputImages} onChange={changes => patch(node.id, changes)} />}
           {node.kind === "loop" && <section className="workflow-loop" aria-label="循环设置">
             {node.loopMode === "count" && <label>循环次数 <input aria-label="循环次数" type="number" min={1} max={100} step={1} disabled={busy} value={node.loopCount ?? 1} onChange={event => {
@@ -1217,10 +1233,25 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
             return <CanvasImage key={asset.id} title={asset.name} alt={asset.name} path={asset.store_path} thumbPath={asset.thumb_path} sourceWidth={asset.width} sourceHeight={asset.height} />;
           })}</div>
             : node.kind !== "planner" && node.kind !== "loop" && !(node.kind === "agent" && node.skill === "hyperframes") && <p className="workflow-hint">{node.kind === "agent" ? (node.agentTransport !== "cloud" ? `${node.agentTransport === "codex-cli" ? "Codex CLI" : "本机 Agent DS"} · 自动接收已连接图文，@ 指定用途 · 每卡独立会话` : Object.values(node.inputs).flat().some(input => input.autoConnect) ? "Cloud DSH · 描述修改要求" : "Cloud DSH · 按 @ 引用原文，再描述修改要求") : node.kind === "trigger" ? <>上游成功完成后，扣 1 次并触发下游；为 0 时停止自动触发。</> : <><ImagePlus size={14} />{node.kind === "visual-profile" ? "图片可选 · 规范只影响连接的下游" : "拖入图片，或连接上游卡片"}</>}</p>}
-          {node.kind === "trigger" && <label className="workflow-trigger-count">剩余触发次数
-            <input type="number" min={0} max={9999} step={1} value={node.triggerCount ?? 0} disabled={busy}
+          {node.kind === "trigger" && <div className="workflow-trigger-mode" onPointerDown={event => event.stopPropagation()}>
+            <svg className="workflow-trigger-circuit" width="40" height="24" viewBox="0 0 40 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+              <path d="M0 15h9m21 0h10M13 13l13-9" /><circle cx="11" cy="15" r="2" /><circle cx="28" cy="15" r="2" />
+              <path className="workflow-trigger-contact" d="M13 15h13" />
+            </svg>
+            <TacticalSelect aria-label="触发方式" value={triggerMode} disabled={busy} onValueChange={value => {
+              const id = value as NonNullable<WorkflowNode["triggerMode"]>;
+              if (triggerMode === id) return;
+              patch(node.id, { triggerMode: id, triggerSchedule: undefined,
+                ...(id === "completion" ? { completionSeen: [...new Set([...(node.completionSeen ?? []), ...completedCanvasSessions(node.inputs.completion ?? [], graphNodes, useStore.getState().genJobs)])] } : {}) }, false);
+            }}>{TRIGGER_MODES.map(({ id, label }) => <option key={id} value={id}>{label}</option>)}</TacticalSelect>
+          </div>}
+          {node.kind === "trigger" && (triggerMode === "daily" || triggerMode === "once") && <WorkflowTriggerSchedule key={triggerMode} mode={triggerMode} schedule={node.triggerSchedule} disabled={busy}
+            onChange={triggerSchedule => patch(node.id, { triggerMode, triggerSchedule }, false)} />}
+          {node.kind === "trigger" && triggerMode === "completion" && <label className="workflow-trigger-count" title="上游成功完成后扣 1 次；为 0 时停止完成触发。">剩余
+            <input aria-label="剩余触发次数" type="number" min={0} max={9999} step={1} value={node.triggerCount ?? 0} disabled={busy}
               onChange={event => { const value = event.currentTarget.valueAsNumber; if (Number.isInteger(value) && value >= 0 && value <= 9999) patch(node.id, { triggerCount: value,
                 ...(value > (node.triggerCount ?? 0) ? { completionSeen: [...new Set([...(node.completionSeen ?? []), ...completedCanvasSessions(node.inputs.completion ?? [], graphNodes, useStore.getState().genJobs)])] } : {}) }, false); }} />
+            <span>次</span>
           </label>}
           {node.kind === "visual-profile" && <>
             {!node.profileId && <p className="workflow-hint">提炼 2 积分 · 图片分析另用账号额度 · 保存后继续</p>}
@@ -1257,7 +1288,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           {step?.error && <p className={step.status === "failed" ? "workflow-error" : "workflow-waiting"} role={step.status === "failed" ? "alert" : "status"}>{userErrorMessage(step.error, step.error.startsWith("尚未确认停止") ? "尚未确认停止，请稍后重试停止或查询原任务。" : step.status === "waiting" ? "任务状态尚未确认，请继续查询原任务，勿重复提交。" : "这一步未完成，请查看问题并重试。")}
             {step.diagnostic && <button onClick={() => controller.showIssue(step.diagnostic!)}>查看问题</button>}
           </p>}
-          {node.kind !== "planner" && <footer>
+          {node.kind !== "planner" && (node.kind !== "trigger" || triggerMode === "manual" || busy || run?.status === "failed") && <footer>
             <span>{node.kind === "comfy-video" && run?.status === "stopped" ? step?.comfyCancelled ? "已取消" : "已停止" : node.kind === "loop" && run ? ({ running: "运行中", waiting: "等待继续", done: "已完成", stopped: "已停止", failed: "失败" }[run.status]) : node.kind === "trigger" && busy ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>
             {busy && run?.order.includes(node.id) ? <>
               {deliveryRunIds.has(run.id) && node.id === run.startId && <button onClick={() => handle(controller.continue(run.id))}>重试写入内容卡</button>}
@@ -1265,7 +1296,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
                 && (run.order.find(id => run!.steps[id].status !== "done") ?? (run.triggerQueue?.length ? run.startId : null)) === node.id
                 && <button aria-label="继续工作流" onClick={() => handle(controller.continue(run?.id))}><Play size={13} />继续</button>}
               <button disabled={!!step?.comfyStopping} aria-label="停止工作流" title={node.kind === "comfy-video" ? "取消排队或中断本次生成" : "停止工作流"} onClick={() => handle(controller.stop(run?.id))}><Square size={12} /></button>
-            </> : <button disabled={busy || loopStartInvalid} aria-label={node.kind === "loop" ? "开始循环" : node.kind === "trigger" ? "触发下游" : "运行此卡片"} onClick={() => handle(controller.start(node.id, node.kind !== "trigger" && node.kind !== "loop"))}><Play size={13} />{node.kind === "loop" ? "开始循环" : node.kind === "trigger" ? "触发下游" : "运行此卡片"}</button>}
+            </> : (node.kind !== "trigger" || triggerMode === "manual") && <button disabled={busy || loopStartInvalid} aria-label={node.kind === "loop" ? "开始循环" : node.kind === "trigger" ? "触发下游" : "运行此卡片"} onClick={() => handle(controller.start(node.id, node.kind !== "trigger" && node.kind !== "loop"))}><Play size={13} />{node.kind === "loop" ? "开始循环" : node.kind === "trigger" ? "触发下游" : "运行此卡片"}</button>}
           </footer>}
           {node.kind === "comfy-video" && run?.status === "stopped" && step?.jobId && !step.comfyCancelled && step.status !== "done" && <button disabled={busy} className="workflow-detail" onClick={() => handle(controller.recoverComfyVideo(run.id, node.id))}>取回上次视频</button>}
           {node.kind === "agent" && step && <button className="workflow-detail" onClick={() => onOpenAgent(node.id)}>查看 Agent 详情</button>}

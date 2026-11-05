@@ -47,14 +47,17 @@ export function planAutomaticConnection(nodes: WorkflowNode[], outputs: Automati
     if (target.kind !== "trigger" && output.type === "image" && knownMedia && !knownMedia.some(media => acceptedMedia.includes(media as AutomaticMedia))) continue;
     let candidates = workflowInputs(target).filter(port => port.type === output.type);
     if (target.kind === "trigger") {
-      if (!producer || producer.kind === "trigger" || producer.textSource) continue;
+      const session = source.canvasNodeId && source.cellId === "image" && output.type === "image";
+      if (!session && (!producer || producer.kind === "trigger" || producer.textSource)) continue;
       candidates = [{ id: "completion", label: "完成触发", type: "signal" }];
     } else if (output.type === "signal" && target.kind !== "planner") {
       candidates = [{ id: "signal", label: "触发", type: "signal" }];
     }
     if (!candidates.length) continue;
     // One image source fills one frame; reconnecting it never occupies the other.
-    if (candidates.some(port => (inputs[port.id] ?? []).some(input => target.kind === "trigger" ? input.nodeId === source.nodeId : workflowBindingKey(input) === workflowBindingKey(source)))) {
+    if (candidates.some(port => (inputs[port.id] ?? []).some(input => target.kind === "trigger"
+      ? source.nodeId ? input.nodeId === source.nodeId : input.canvasNodeId === source.canvasNodeId
+      : workflowBindingKey(input) === workflowBindingKey(source)))) {
       compatible = true;
       if (target.kind === "trigger") break;
       continue;

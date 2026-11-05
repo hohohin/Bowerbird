@@ -152,7 +152,7 @@ function Meta({ label, value }: { label: string; value: ReactNode }) {
  */
 export function AssetDetail({ onExploreSource = (url) => { void open(url); }, selection, panelOnly = false, initialAsset, onReady }: {
   onExploreSource?: (url: string) => void;
-  /** Reuse the inspector alongside a host-owned image preview, without page navigation. */
+  /** Information-only inspector; the host owns the image and generation conversation. */
   panelOnly?: boolean;
   initialAsset?: Asset;
   /** Initial inspector content has settled; the host can reveal it without empty sections flashing. */
@@ -231,7 +231,8 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const [collectionName, setCollectionName] = useState("");
   const [collectionBusy, setCollectionBusy] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
-  const [detailTab, setDetailTab] = useState<"create" | "info">("info");
+  const [selectedTab, setDetailTab] = useState<"create" | "info">("info");
+  const detailTab = panelOnly ? "info" : selectedTab;
   const [generationSource, setGenerationSource] = useState<GenerationHistory | null>(null);
   const timerRef = useRef<number | null>(null);
   // caption id 集合快照：区分「新增/删除了一条反推」（重置展开态）与「编辑维度触发的重拉」（保持展开）。
@@ -328,9 +329,9 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
       api.listAnalysesByAsset(id).then(value => { if (alive) setAnalyses(value); }),
       api.listAssetTags(id).then(value => { if (alive) setTags(value); }),
       api.listAssetCollections(id).then(value => { if (alive) setAssetCollections(value); }),
-      api.generationHistory(id, activeProjectId).then(value => {
+      ...(!panelOnly ? [api.generationHistory(id, activeProjectId).then(value => {
         if (alive && (value.turns.length || value.references.length)) setGenerationSource(value);
-      }),
+      })] : []),
     ]).then(results => {
       if (!alive) return;
       for (const result of results.slice(0, 3)) if (result.status === "rejected") console.error(result.reason);
@@ -339,7 +340,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
     return () => {
       alive = false;
     };
-  }, [id, activeProjectId]);
+  }, [id, activeProjectId, panelOnly]);
 
   // 同流程轮播：本图是生成图（或被合并掉的 sibling）时取整组过程图。非生成图置空。
   // sibling 不在主列表 → assets.find 落空 → 仍走 listGenerationGroup 取组。
@@ -785,12 +786,12 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
         </div>}
 
         <aside className="asset-detail-panel">
-          <div className="asset-detail-panel-header">
+          {(!panelOnly || COLLECTIONS_FEATURE_ENABLED) && <div className="asset-detail-panel-header">
             {!panelOnly && <div>
               <div className="panel-kicker">Asset intelligence</div>
               <div className="mt-1 text-sm font-semibold text-ink">素材洞察</div>
             </div>}
-            <div className="asset-detail-tabs" role="tablist" aria-label="详情内容">
+            {!panelOnly && <div className="asset-detail-tabs" role="tablist" aria-label="详情内容">
               <button
                 type="button"
                 role="tab"
@@ -811,12 +812,12 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                 <Sparkles size={13} />
                 再创作
               </button>}
-            </div>
+            </div>}
             {panelOnly && COLLECTIONS_FEATURE_ENABLED && <button type="button" className="asset-detail-collect"
               onClick={() => { setDetailTab("info"); setCollectionPanelOpen(value => !value); }}>
               <Bookmark size={14}/>{assetCollections.length ? `已收藏 ${assetCollections.length}` : "收藏"}
             </button>}
-          </div>
+          </div>}
 
           {detailTab === "info" && (
             <>
@@ -958,7 +959,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
             </>
           )}
 
-          {!audioAsset && !textAsset && detailTab === "create" && (
+          {!panelOnly && !audioAsset && !textAsset && detailTab === "create" && (
             <>
 
           {/* 生成来源：只读还原首次生成时的原始创作板输入，而不是铺开发 provider 的 prompt。 */}

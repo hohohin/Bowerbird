@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ cacheDir: '.tmp/canvas-auto-connect-vite', server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: '.tmp/canvas-auto-connect-vite', server: { host: '127.0.0.1', port: 17958, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1100 } });
@@ -40,6 +40,13 @@ const target = id => page.locator(`[data-workflow-card="${id}"]`);
 const card = id => page.locator(`[data-workflow-card="${id}"],[data-canvas-node-id="${id}"]`).first();
 const handle = (id, side) => page.locator(`[data-workflow-card="${id}"] [data-canvas-connect-side="${side}"],[data-canvas-node-id="${id}"] [data-canvas-connect-side="${side}"],[data-workflow-material="${id}"] [data-canvas-connect-side="${side}"]`).first();
 const output = () => page.locator('[data-canvas-node-id="script"] [data-canvas-connect-side="output"]');
+async function assertHandleVisible(id, side, shown) {
+  await page.waitForFunction(({ id, side, shown }) => {
+    const button = document.querySelector(`[data-workflow-card="${id}"] [data-canvas-connect-side="${side}"],[data-canvas-node-id="${id}"] [data-canvas-connect-side="${side}"],[data-workflow-material="${id}"] [data-canvas-connect-side="${side}"]`);
+    return button && getComputedStyle(button).opacity === (shown ? '1' : '0') && getComputedStyle(button).pointerEvents === 'auto';
+  }, { id, side, shown });
+}
+async function clickOutput() { await card('script').hover(); await output().click(); }
 async function dragHandleToCard(sourceId, side, targetId) {
   await card(sourceId).hover();
   const from = await handle(sourceId, side).boundingBox(), to = await card(targetId).boundingBox();
@@ -82,9 +89,40 @@ try {
   assert.equal(await page.locator('[data-canvas-node-id="script"] [data-canvas-connect-side="output"]').count(), 1);
   assert.equal(await page.locator('[data-canvas-node-id="script"]').getByRole('button', { name: '输出文档图片', exact: true }).count(), 0);
 
-  await output().click();
+  await page.mouse.move(1200, 80);
+  await assertHandleVisible('script', 'output', false);
+  await assertHandleVisible('generator', 'input', false);
+  for (const [id, side] of [['script', 'output'], ['generator', 'input']]) {
+    const box = await handle(id, side).boundingBox();
+    await page.mouse.move(box.x + box.width / 2 + (side === 'output' ? 35 : -35), box.y + box.height / 2);
+    await assertHandleVisible(id, side, true);
+    await page.mouse.move(1200, 80);
+    await assertHandleVisible(id, side, false);
+  }
+  await card('script').hover();
+  await assertHandleVisible('script', 'output', true);
+  await assertHandleVisible('generator', 'input', false);
+  await card('script').click({ position: { x: 60, y: 25 } });
+  await page.mouse.move(1200, 80);
+  await assertHandleVisible('script', 'output', true);
+  await page.mouse.click(1200, 80);
+  await assertHandleVisible('script', 'output', false);
+  await target('generator').hover();
+  await assertHandleVisible('generator', 'input', true);
+  await assertHandleVisible('generator', 'output', true);
+  await page.mouse.move(1200, 80);
+  await assertHandleVisible('generator', 'input', false);
+  await handle('generator', 'input').focus();
+  await assertHandleVisible('generator', 'input', true);
+  await handle('generator', 'input').evaluate(element => element.blur());
+  await assertHandleVisible('generator', 'input', false);
+
+  await clickOutput();
   assert.equal(await page.getByRole('menu', { name: '添加下游', exact: true }).count(), 0, 'a short click starts a wire without requiring a hold');
   const initialDraft = await page.locator('.workflow-wires .is-draft').getAttribute('d');
+  await page.mouse.move(1200, 80);
+  await assertHandleVisible('script', 'output', true);
+  await assertHandleVisible('generator', 'input', false);
   const describeBox = await target('describe').boundingBox();
   await page.mouse.move(describeBox.x + describeBox.width / 2, describeBox.y + 100, { steps: 12 });
   assert.notEqual(await page.locator('.workflow-wires .is-draft').getAttribute('d'), initialDraft, 'released pointer continues moving the wire');
@@ -139,16 +177,17 @@ try {
 
   await page.locator('[data-canvas-node-id="script"]').hover();
   const beforeMenu = await state();
-  await output().click();
+  await clickOutput();
   await target('generator').getByRole('button', { name: '运行此卡片', exact: true }).click();
   await page.locator('.workflow-wires .is-draft').waitFor({ state: 'detached' });
   assert.deepEqual(await state(), beforeMenu, 'finishing on a card button only connects; it does not run the card');
-  await output().click();
+  await clickOutput();
   await page.mouse.move(1100, 180, { steps: 10 });
   await page.mouse.click(1100, 180, { button: 'right' });
   await page.locator('.workflow-wires .is-draft').waitFor({ state: 'detached' });
   assert.equal(await page.getByRole('menu').count(), 0, 'right-click cancels without opening a canvas menu');
   assert.deepEqual(await state(), beforeMenu, 'right-click does not change any saved connection');
+  await card('script').hover();
   const held = await output().boundingBox();
   await page.mouse.move(held.x + held.width / 2, held.y + held.height / 2);
   await page.mouse.down();
@@ -263,6 +302,15 @@ try {
   await page.reload();
   await card('movie-card').waitFor();
   await target('video-generator').waitFor();
+  await page.mouse.move(1200, 80);
+  await assertHandleVisible('movie-card', 'output', false);
+  await card('movie-card').hover();
+  await assertHandleVisible('movie-card', 'output', true);
+  await card('movie-card').click({ modifiers: ['Control'] });
+  await page.mouse.move(1200, 80);
+  await assertHandleVisible('movie-card', 'output', true);
+  await page.mouse.click(1200, 80);
+  await assertHandleVisible('movie-card', 'output', false);
   const beforeVideo = await state();
   assert.match(await dragHandleToCard('movie-card', 'output', 'image-only'), /没有可接收|无法接收|不支持|不能接收/);
   assert.deepEqual(await state(), beforeVideo, 'video cannot silently become an image input');

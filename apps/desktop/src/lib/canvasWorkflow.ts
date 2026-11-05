@@ -1,5 +1,6 @@
 import { contentTableRows, type ContentTable } from "./contentTable.ts";
 import { comfyVideoMode } from "./comfyVideo.ts";
+import { workflowTriggerMode } from "./workflowTriggerSchedule.ts";
 
 export class WorkflowNodeError extends Error {
   node: WorkflowNode;
@@ -41,6 +42,8 @@ export interface WorkflowNode {
   outputPorts: WorkflowPort[];
   trigger: boolean;
   triggerCount?: number;
+  triggerMode?: "manual" | "daily" | "once" | "completion";
+  triggerSchedule?: { id: string; at: number; dailyAt?: string; status: "armed" | "fired" | "missed" | "failed" };
   /** Native session turns already observed; prevents duplicate completion events. */
   completionSeen?: string[];
   sessionNodeIds?: string[];
@@ -85,6 +88,7 @@ export interface WorkflowAgentGenerationRequest { id: string; prompt: string; im
 export interface WorkflowAgentGenerationResponse { images?: string[]; error?: string; submitted?: { jobId: string; turnKey: string; sessionNodeId: string } }
 export interface WorkflowRun {
   id: string; startId: string; threadId: string; order: string[];
+  scheduleId?: string;
   accountId?: string | null;
   status: "running" | "waiting" | "done" | "failed" | "stopped";
   steps: Record<string, WorkflowStep>;
@@ -308,7 +312,7 @@ function workflowExecutionInputs(node: WorkflowNode): WorkflowNode["inputs"] {
   return node.kind === "trigger" ? {} : node.inputs;
 }
 export function workflowCompletionTriggers(nodes: WorkflowNode[], sourceId: string): WorkflowNode[] {
-  return nodes.filter(node => node.kind === "trigger" && (node.triggerCount ?? 0) > 0
+  return nodes.filter(node => node.kind === "trigger" && workflowTriggerMode(node) === "completion" && (node.triggerCount ?? 0) > 0
     && node.inputs.completion?.some(input => input.nodeId === sourceId));
 }
 /** Reserve all possible repeat targets before running; unrelated runs cannot race a repeat. */
@@ -564,9 +568,10 @@ export function workflowActiveSession(node: WorkflowNode): string | null {
 }
 export const WORKFLOW_CARD_WIDTH = 320;
 export function workflowCardWidth(node: Pick<WorkflowNode, "kind">) {
-  return node.kind === "comfy-video" ? WORKFLOW_CARD_WIDTH * 1.3 : WORKFLOW_CARD_WIDTH;
+  return node.kind === "trigger" ? 196 : node.kind === "comfy-video" ? WORKFLOW_CARD_WIDTH * 1.3 : WORKFLOW_CARD_WIDTH;
 }
 export function workflowPortY(node: WorkflowNode, side: "input" | "output", portId: string): number {
+  if (node.kind === "trigger") return node.y + 46;
   const ports = side === "input" ? workflowInputs(node) : workflowOutputs(node);
   // H3: two 4:3 frame previews above the prompt (34px card inset, 8px gap, 10px row gap).
   const frameRowOffset = node.kind === "comfy-video" && comfyVideoMode(node.comfyVideo) !== "text" ? (workflowCardWidth(node) - 42) * 3 / 8 + 10 : 0;

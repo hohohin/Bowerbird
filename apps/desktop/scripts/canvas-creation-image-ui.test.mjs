@@ -216,9 +216,9 @@ try {
   await page.keyboard.press('Escape');
   assert.equal(await modal.isVisible(), true, 'Escape in tag editor cancels editing before closing the preview');
   assert.equal(await tagMenu.count(), 0);
-  await inspector.getByRole('tab', { name: '再创作', exact: true }).click();
-  await inspector.getByRole('tab', { name: '信息', exact: true }).click();
-  console.log('PASS reused inspector content, tag persistence, tabs and local Escape handling');
+  assert.equal(await inspector.getByRole('tablist').count(), 0, 'the preview directly displays information without redundant tabs');
+  assert.equal(await inspector.getByText('生成来源', { exact: true }).count(), 0);
+  console.log('PASS direct inspector content, tag persistence and local Escape handling');
   const enlarged = await mainImage.evaluate(image => {
     const box = image.getBoundingClientRect();
     const scale = Math.min(box.width / image.naturalWidth, box.height / image.naturalHeight);

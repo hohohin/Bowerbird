@@ -17,6 +17,16 @@ const connect = (target, outputs) => {
   return { ...target, inputs };
 };
 
+test('completion accepts separate native conversations, deduplicates each and rejects content cards', () => {
+  const first = { type: 'image', binding: { canvasNodeId: 'conversation-1', cellId: 'image' } };
+  const second = { type: 'image', binding: { canvasNodeId: 'conversation-2', cellId: 'image' } };
+  const target = connect(node('trigger', 'trigger'), [first]);
+  assert.equal(target.inputs.completion[0].canvasNodeId, 'conversation-1');
+  assert.deepEqual(planAutomaticConnection([target], [first], target.id), { bindings: [], error: null });
+  assert.equal(planAutomaticConnection([target], [second], target.id).bindings[0].binding.canvasNodeId, 'conversation-2');
+  assert.match(planAutomaticConnection([target], documentOutputs, target.id).error, /不能接收/);
+});
+
 test('whole card graph plans only the intersection and never mutates the document', () => {
   const target = node('target', 'instruction');
   const before = JSON.stringify(target);

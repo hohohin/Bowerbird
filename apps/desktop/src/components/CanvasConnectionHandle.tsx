@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useRef, type ButtonHTMLAttributes, type CSSProperties, type PointerEvent } from "react";
+import { forwardRef, useCallback, useEffect, useId, useRef, type ButtonHTMLAttributes, type CSSProperties, type PointerEvent } from "react";
 import "./CanvasConnectionHandle.css";
 
 export interface CanvasConnectionHandleProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -80,6 +80,7 @@ export const CanvasConnectionHandle = forwardRef<HTMLButtonElement, CanvasConnec
   side, active = false, zoom, className = "", style, disabled, onPointerEnter, onPointerMove, onPointerLeave,
   onPointerDown, onPointerUp, onPointerCancel, onBlur, children: _children, ...props
 }, forwardedRef) {
+  const hatchId = `connection-hatch-${useId().replaceAll(":", "")}`;
   const glyph = useRef<HTMLSpanElement | null>(null);
   const button = useRef<HTMLButtonElement | null>(null);
   const frame = useRef(0);
@@ -98,7 +99,8 @@ export const CanvasConnectionHandle = forwardRef<HTMLButtonElement, CanvasConnec
     const y = event.clientY - rect.top - rect.height / 2;
     const distance = Math.hypot(x, y);
     const strength = distance ? Math.min(0.3, 8 / distance) : 0;
-    move(x * strength, y * strength);
+    // Keep the 28px frame outside the card's clipped content boundary.
+    move(side === "output" ? Math.max(-4, x * strength) : Math.min(4, x * strength), y * strength);
   }
   const controller = useRef<HandleController>({ follow, reset: move, press: event => onPointerDown?.(event) });
   controller.current = { follow, reset: move, press: event => { move(); onPointerDown?.(event); } };
@@ -126,6 +128,18 @@ export const CanvasConnectionHandle = forwardRef<HTMLButtonElement, CanvasConnec
     onPointerUp={event => { move(); onPointerUp?.(event); }}
     onPointerCancel={event => { move(); onPointerCancel?.(event); }}
     onBlur={event => { move(); onBlur?.(event); }}>
-    <span ref={glyph} className="canvas-connection-glyph" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M6 2v8M2 6h8" /></svg></span>
+    <span ref={glyph} className="canvas-connection-glyph" aria-hidden="true">
+      <svg width="28" height="28" viewBox="0 0 28 28" focusable="false">
+        <defs>
+          <pattern id={hatchId} width="2" height="2" patternUnits="userSpaceOnUse">
+            <path d="M-1 1l2-2M0 2l2-2M1 3l2-2" stroke="currentColor" strokeWidth=".5" />
+          </pattern>
+        </defs>
+        <rect x="1.5" y="1.5" width="25" height="25" stroke="currentColor" strokeWidth=".6" opacity=".35" />
+        <path d="M1.5 7v14M26.5 7v14" stroke="currentColor" strokeWidth="1" />
+        <path d="M.5.5h2v2h-2zM25.5.5h2v2h-2zM.5 25.5h2v2h-2zM25.5 25.5h2v2h-2z" fill="currentColor" />
+        <path d="M12.25 5h3.5v7.25H23v3.5h-7.25V23h-3.5v-7.25H5v-3.5h7.25z" fill={`url(#${hatchId})`} />
+      </svg>
+    </span>
   </button>;
 });

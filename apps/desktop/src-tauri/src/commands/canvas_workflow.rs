@@ -26,6 +26,10 @@ fn paid_definition(document: &Value) -> Vec<Value> {
             let mut node = node.clone();
             if let Some(fields) = node.as_object_mut() {
                 for key in ["outputs","outputPorts","sessionNodeIds","activeSessionNodeId","resultNodeIds","resultGroupId","completionSeen","triggerCount","describeCache","profileCache"] { fields.remove(key); }
+                if let Some(schedule) = fields.get_mut("triggerSchedule").and_then(Value::as_object_mut) {
+                    schedule.remove("status");
+                    if schedule.get("dailyAt").is_some_and(Value::is_string) { schedule.remove("at"); }
+                }
             }
             node
         }).collect()
@@ -37,6 +41,36 @@ fn has_new_run(before: &Value, after: &Value) -> bool {
             .filter_map(|r| r["id"].as_str().map(str::to_owned)).collect()
     };
     !ids(after).is_subset(&ids(before))
+}
+
+// The schedule and the new run are claimed in the same SQLite transaction.
+// A CAS merge from another window must never consume the same appointment twice.
+fn validate_schedule_claims(before: &Value, after: &Value) -> AppResult<()> {
+    let old_runs: Vec<&Value> = before["runs"].as_array().into_iter().flatten().chain(std::iter::once(&before["run"])).collect();
+    let mut claimed = HashSet::new();
+    for run in after["runs"].as_array().into_iter().flatten().chain(std::iter::once(&after["run"])) {
+        let Some(schedule_id) = run["scheduleId"].as_str() else { continue; };
+        // Undo can restore terminal history; it cannot start provider work.
+        if !matches!(run["status"].as_str(), Some("running" | "waiting")) { continue; }
+        if old_runs.iter().any(|old| old["id"] == run["id"]) || !claimed.insert(run["id"].as_str()) { continue; }
+        let previous_node = before["nodes"].as_array().into_iter().flatten().find(|node| node["id"] == run["startId"]).unwrap_or(&Value::Null);
+        let current_node = after["nodes"].as_array().into_iter().flatten().find(|node| node["id"] == run["startId"]).unwrap_or(&Value::Null);
+        let previous = &previous_node["triggerSchedule"];
+        let current = &current_node["triggerSchedule"];
+        let daily = previous["dailyAt"].is_string();
+        let expected_id = if daily { format!("{}@{}", previous["id"].as_str().unwrap_or(""), previous["at"]) }
+            else { previous["id"].as_str().unwrap_or("").to_owned() };
+        let advanced = if daily { current["status"] == "armed" && current["at"].as_u64() > previous["at"].as_u64() }
+            else { current["status"] == "fired" && current["at"] == previous["at"] };
+        let mode = if daily { "daily" } else { "once" };
+        if previous_node.get("triggerMode").is_some_and(|value| value != mode) || current_node.get("triggerMode").is_some_and(|value| value != mode)
+            || expected_id != schedule_id || previous["status"] != "armed" || current["id"] != previous["id"]
+            || current["dailyAt"] != previous["dailyAt"] || !advanced
+            || old_runs.iter().any(|old| old["scheduleId"] == schedule_id) {
+            return Err(AppError::Other("此定时已取消或已触发，请重新打开项目查看".into()));
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -153,6 +187,17 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
             || node["outputs"].as_object().is_none_or(|outputs| !outputs.is_empty()) || node["outputPorts"].as_array().is_none_or(|ports| !ports.is_empty())) { return Err(invalid()); }
         if node["kind"] == "trigger" && inputs.keys().any(|key| key != "completion") { return Err(invalid()); }
         if node.get("triggerCount").is_some_and(|count| node["kind"] != "trigger" || count.as_u64().is_none_or(|count| count > 9999)) { return Err(invalid()); }
+        if node.get("triggerMode").is_some_and(|mode| node["kind"] != "trigger" || !matches!(mode.as_str(), Some("manual" | "daily" | "once" | "completion"))) { return Err(invalid()); }
+        if let Some(schedule) = node.get("triggerSchedule") {
+            if node["kind"] != "trigger" || schedule["id"].as_str().is_none_or(str::is_empty)
+                || schedule["at"].as_u64().is_none_or(|at| at == 0 || at > 8_640_000_000_000_000)
+                || !matches!(schedule["status"].as_str(), Some("armed" | "fired" | "missed" | "failed")) { return Err(invalid()); }
+            if let Some(time) = schedule.get("dailyAt") {
+                let time = time.as_str().ok_or_else(invalid)?.as_bytes();
+                if time.len() != 5 || time[2] != b':' || ![time[0], time[1], time[3], time[4]].iter().all(u8::is_ascii_digit)
+                    || &time[..2] > b"23".as_slice() || &time[3..] > b"59".as_slice() || schedule["status"] != "armed" { return Err(invalid()); }
+            }
+        }
         if let Some(seen) = node.get("completionSeen") {
             if node["kind"] != "trigger" { return Err(invalid()); }
             let mut unique = HashSet::new();
@@ -286,8 +331,13 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
         None => if document["run"].is_null() { vec![] } else { vec![&document["run"]] },
     };
     let mut run_ids = HashSet::new();
+    let mut schedule_ids = HashSet::new();
     let mut accesses: Vec<(HashSet<&str>, HashSet<&str>)> = Vec::new();
     for run in runs {
+        if let Some(schedule) = run.get("scheduleId") {
+            if !schedule_ids.insert(schedule.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?)
+                || !nodes.iter().any(|node| node["id"] == run["startId"] && node["kind"] == "trigger") { return Err(invalid()); }
+        }
         if let Some(queue) = run.get("triggerQueue") {
             for id in queue.as_array().ok_or_else(invalid)? {
                 if !nodes.iter().any(|node| node["id"] == *id && node["kind"] == "trigger") { return Err(invalid()); }
@@ -348,6 +398,8 @@ impl Database {
         let tx = conn.transaction()?;
         let current: i64 = tx.query_row("SELECT revision FROM canvas_workflows WHERE project_id=?1", [project_id], |r| r.get(0)).optional()?.unwrap_or(0);
         if current != revision { return Err(AppError::Other("工作流已被其他窗口修改，请重新打开项目".into())); }
+        let previous: Option<String> = tx.query_row("SELECT document_json FROM canvas_workflows WHERE project_id=?1", [project_id], |row| row.get(0)).optional()?;
+        validate_schedule_claims(&previous.map(|json| serde_json::from_str::<Value>(&json)).transpose()?.unwrap_or(Value::Null), &document)?;
         if let Some(card) = created_content {
             let now = chrono::Utc::now().timestamp();
             touch_canvas_tx(&tx, project_id, now)?;
@@ -388,6 +440,104 @@ mod tests {
         assert!(paid_definition(&json!({"nodes":[{"id":"text","kind":"text"}]})).is_empty());
     }
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
+    #[test]
+    fn trigger_schedule_validates_time_identity_and_state() {
+        let mut trigger = node("timer", json!({})); trigger["kind"] = json!("trigger");
+        trigger["triggerSchedule"] = json!({"id":"appointment","at":1800000000000u64,"status":"armed"});
+        let doc = json!({"schema_version":1,"nodes":[trigger],"run":null});
+        assert!(validate(&doc).is_ok());
+        for (field, value) in [("at", json!(0)), ("at", json!(-1)), ("at", json!(1.5)), ("at", json!("1800000000000")),
+            ("at", json!(8_640_000_000_000_001u64)), ("id", json!("")), ("status", json!("repeat"))] {
+            let mut invalid_doc = doc.clone(); invalid_doc["nodes"][0]["triggerSchedule"][field] = value;
+            assert!(validate(&invalid_doc).is_err(), "{field}");
+        }
+        let mut changed = doc.clone(); changed["nodes"][0]["kind"] = json!("generation"); assert!(validate(&changed).is_err());
+        changed = doc.clone(); changed["nodes"][0]["triggerSchedule"]["status"] = json!("failed");
+        assert_eq!(paid_definition(&doc), paid_definition(&changed));
+        changed["nodes"][0]["triggerSchedule"]["at"] = json!(1800000060000u64);
+        assert_ne!(paid_definition(&doc), paid_definition(&changed));
+    }
+    #[test]
+    fn trigger_modes_roundtrip_and_inactive_appointments_cannot_be_claimed() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut trigger = node("timer", json!({})); trigger["kind"] = json!("trigger");
+        trigger["triggerSchedule"] = json!({"id":"once","at":1800000000000u64,"status":"armed"});
+        let mut doc = json!({"schema_version":1,"nodes":[trigger],"run":null});
+        for (revision, mode) in ["manual", "daily", "once", "completion"].into_iter().enumerate() {
+            doc["nodes"][0]["triggerMode"] = json!(mode);
+            db.workflow_save("p", revision as i64, doc.clone()).unwrap();
+            assert_eq!(db.workflow_get("p").unwrap().document, doc);
+            let mut claim = doc.clone(); claim["nodes"][0]["triggerSchedule"]["status"] = json!("fired");
+            claim["run"] = json!({"id":"r","startId":"timer","scheduleId":"once","status":"running"});
+            assert_eq!(validate_schedule_claims(&doc, &claim).is_ok(), mode == "once");
+        }
+        for mode in [json!("unknown"), json!(null), json!(true)] {
+            doc["nodes"][0]["triggerMode"] = mode; assert!(validate(&doc).is_err());
+        }
+        doc["nodes"][0]["triggerMode"] = json!("manual"); doc["nodes"][0]["kind"] = json!("generation");
+        doc["nodes"][0].as_object_mut().unwrap().remove("triggerSchedule"); assert!(validate(&doc).is_err());
+    }
+    #[test]
+    fn trigger_schedule_claim_is_atomic_and_cannot_be_replayed() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut trigger = node("timer", json!({})); trigger["kind"] = json!("trigger");
+        trigger["triggerSchedule"] = json!({"id":"appointment","at":1800000000000u64,"status":"armed"});
+        let armed = json!({"schema_version":1,"nodes":[trigger],"run":null});
+        db.workflow_save("p", 0, armed.clone()).unwrap();
+        let mut fired = armed.clone(); fired["nodes"][0]["triggerSchedule"]["status"] = json!("fired");
+        fired["run"] = json!({"id":"r","startId":"timer","scheduleId":"appointment","threadId":"t","status":"waiting","order":["timer"],"steps":{"timer":{"status":"pending"}}});
+        db.workflow_save("p", 1, fired.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, fired);
+        let mut duplicate = fired.clone(); duplicate["run"]["id"] = json!("another-window");
+        assert!(db.workflow_save("p", 2, duplicate).is_err());
+        assert_eq!(db.workflow_get("p").unwrap().revision, 2);
+        fired["run"]["status"] = json!("done"); fired["run"]["steps"]["timer"]["status"] = json!("done");
+        db.workflow_save("p", 2, fired).unwrap();
+        let mut cancelled = armed.clone(); cancelled["nodes"][0].as_object_mut().unwrap().remove("triggerSchedule");
+        let mut candidate = armed.clone(); candidate["nodes"][0]["triggerSchedule"]["status"] = json!("fired");
+        candidate["run"] = json!({"id":"new","startId":"timer","scheduleId":"appointment","status":"running"});
+        assert!(validate_schedule_claims(&cancelled, &candidate).is_err());
+    }
+    #[test]
+    fn daily_trigger_validates_local_time_and_keeps_progress_out_of_paid_definition() {
+        let mut trigger = node("timer", json!({})); trigger["kind"] = json!("trigger");
+        trigger["triggerSchedule"] = json!({"id":"daily","at":1800000000000u64,"dailyAt":"21:00","status":"armed"});
+        let doc = json!({"schema_version":1,"nodes":[trigger],"run":null});
+        assert!(validate(&doc).is_ok());
+        for time in [json!("24:00"), json!("21:60"), json!("9:00"), json!("21:00:00"), json!("aa:00"), json!(""), json!(null), json!(2100)] {
+            let mut bad = doc.clone(); bad["nodes"][0]["triggerSchedule"]["dailyAt"] = time;
+            assert!(validate(&bad).is_err());
+        }
+        let mut next = doc.clone(); next["nodes"][0]["triggerSchedule"]["at"] = json!(1800086400000u64);
+        assert_eq!(paid_definition(&doc), paid_definition(&next));
+        next["nodes"][0]["triggerSchedule"]["dailyAt"] = json!("22:00");
+        assert_ne!(paid_definition(&doc), paid_definition(&next));
+        next["nodes"][0]["triggerSchedule"]["status"] = json!("fired"); assert!(validate(&next).is_err());
+    }
+    #[test]
+    fn daily_trigger_claims_each_occurrence_once_and_advances_atomically() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut trigger = node("timer", json!({})); trigger["kind"] = json!("trigger");
+        trigger["triggerSchedule"] = json!({"id":"daily","at":1800000000000u64,"dailyAt":"21:00","status":"armed"});
+        let mut doc = json!({"schema_version":1,"nodes":[trigger],"runs":[],"run":null});
+        db.workflow_save("p", 0, doc.clone()).unwrap();
+        for (day, at) in [1800000000000u64, 1800086400000u64].into_iter().enumerate() {
+            let revision = 1 + day as i64 * 2;
+            let run = json!({"id":format!("r{day}"),"startId":"timer","scheduleId":format!("daily@{at}"),"threadId":"t","status":"running","order":["timer"],"steps":{"timer":{"status":"pending"}}});
+            doc["runs"].as_array_mut().unwrap().push(run.clone()); doc["run"] = run;
+            assert!(db.workflow_save("p", revision, doc.clone()).is_err(), "claim without advancing the next occurrence");
+            doc["nodes"][0]["triggerSchedule"]["at"] = json!(at + 86400000);
+            db.workflow_save("p", revision, doc.clone()).unwrap();
+            let mut duplicate = doc.clone(); duplicate["runs"][day]["id"] = json!("other-window"); duplicate["run"] = duplicate["runs"][day].clone();
+            assert!(db.workflow_save("p", revision + 1, duplicate).is_err());
+            doc["runs"][day]["status"] = json!("done"); doc["run"] = doc["runs"][day].clone();
+            db.workflow_save("p", revision + 1, doc.clone()).unwrap();
+        }
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+    }
     #[test]
     fn comfy_video_frame_ports_and_single_video_survive_storage() {
         let db=Database::open_in_memory().unwrap();db.migrate().unwrap();

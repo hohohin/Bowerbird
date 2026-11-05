@@ -34,7 +34,7 @@ async function assertHudAccessible() {
 }
 try {
   await page.goto('http://127.0.0.1:17948/scripts/fixtures/creation-image-review/preview.html?deferred');
-  await page.waitForFunction(() => document.querySelector('.creation-image-preview-image img')?.naturalWidth > 0 && window.__reviewPending?.length === 5);
+  await page.waitForFunction(() => document.querySelector('.creation-image-preview-image img')?.naturalWidth > 0 && window.__reviewPending?.length === 4);
   await wait();
   const pendingInspector = modal.locator('.creation-image-preview-inspector');
   const conversation = modal.locator('section[aria-label="独立会话面板"]');
@@ -139,7 +139,7 @@ try {
     window.__reviewPending = [];
   });
   await page.getByRole('button', { name: '重播', exact: true }).click();
-  await page.waitForFunction(() => window.__reviewPending.length === 5);
+  await page.waitForFunction(() => window.__reviewPending.length === 4);
   await modal.getByRole('button', { name: '关闭预览', exact: true }).click();
   await modal.waitFor({ state: 'detached' });
   await page.evaluate(() => { window.__reviewHold.clear(); window.__reviewPending.forEach(item => item.resolve()); });
@@ -150,7 +150,7 @@ try {
     window.__reviewPending = [];
   });
   await page.getByRole('button', { name: '重播', exact: true }).click();
-  await page.waitForFunction(() => window.__reviewPending.length === 5);
+  await page.waitForFunction(() => window.__reviewPending.length === 4);
   await page.evaluate(() => {
     window.__reviewHold.clear();
     window.__reviewPending.forEach(item => item.command === 'generation_history' ? item.reject(new Error('fixture unavailable')) : item.resolve());

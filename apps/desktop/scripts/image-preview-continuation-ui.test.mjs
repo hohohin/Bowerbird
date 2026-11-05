@@ -18,7 +18,7 @@ const mainImage = modal.locator('.creation-image-preview-image img:not(.creation
 async function setup(historical = false) {
   await page.goto(`http://127.0.0.1:17949/scripts/fixtures/creation-image-review/preview.html${historical ? '?deferred' : ''}`);
   if (historical) {
-    await page.waitForFunction(() => window.__reviewPending.length === 5);
+    await page.waitForFunction(() => window.__reviewPending.length === 4);
     await page.evaluate(() => { window.__reviewHold.clear(); window.__reviewPending.forEach(item => item.resolve()); });
   }
   await reply.waitFor();

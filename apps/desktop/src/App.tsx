@@ -26,6 +26,7 @@ import { APPEND_TEXT_EVENT } from "./components/creation/useCreationEditor";
 import { GenerationPanel } from "./components/GenerationPanel";
 import { CloudAgentSession } from "./components/CloudAgentPanel";
 import { LibraryGenerationCoordinator } from "./components/LibraryGenerationCoordinator";
+import { WorkflowScheduleCoordinator } from "./components/WorkflowScheduleCoordinator";
 import { CloudAgentRuntimeCoordinator } from "./components/CloudAgentRuntimeCoordinator";
 import { COLLECTIONS_FEATURE_ENABLED, LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED } from "./lib/featureFlags";
 import { ExploreWorkspace } from "./components/ExploreWorkspace";
@@ -870,6 +871,7 @@ function App() {
     <div className="app-shell flex h-full w-full flex-col">
       <CloudAgentRuntimeCoordinator />
       <LibraryGenerationCoordinator />
+      <WorkflowScheduleCoordinator />
       <ToastViewport />
       <StartupUpdateDialog ready={!initializing} />
       <FileDropImport />
