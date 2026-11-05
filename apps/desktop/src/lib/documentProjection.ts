@@ -1,3 +1,4 @@
+import { readDocumentState } from './documentState.ts';
 export interface DocumentMediaReference { kind: "image" | "audio" | "video"; assetId: string; caption: string; sourcePath?: string }
 export function documentMediaMarkup(ref: DocumentMediaReference): string { return `<${ref.kind === "image" ? "img" : ref.kind} data-bowerbird-asset="${encodeURIComponent(ref.assetId)}" data-caption="${encodeURIComponent(ref.caption)}"${ref.sourcePath ? ` data-source="${encodeURIComponent(ref.sourcePath)}"` : ""} />`; }
 export type DocumentSegment = { text: string } | { media: DocumentMediaReference; newline: string };
@@ -27,6 +28,8 @@ function mediaBlock(lines: string[], index: number, body: string): DocumentMedia
 }
 /** Interpret only registered whole-block references; code examples and external URLs stay text. */
 export function documentSegments(source: string): DocumentSegment[] {
+  const stored = readDocumentState(source);
+  source = stored.source;
   const segments: DocumentSegment[] = [];
   let text = "", fence = "";
   const lines = (source.match(/[^\r\n]*(?:\r\n|\n|\r|$)/g) ?? []).filter(Boolean);
@@ -34,7 +37,7 @@ export function documentSegments(source: string): DocumentSegment[] {
   for (const [index, line] of lines.entries()) {
     const body = line.replace(/[\r\n]+$/, ""), previousFence = fence;
     fence = nextFence(body, fence);
-    const media = index <= headerEnd || previousFence || fence ? undefined : mediaBlock(lines, index, body);
+    const media = index <= headerEnd || previousFence || fence ? undefined : stored.value ? readMedia(body.trim()) : mediaBlock(lines, index, body);
     if (!media) { text += line; continue; }
     if (text) { segments.push({ text }); text = ""; }
     segments.push({ media, newline: line.slice(body.length) });

@@ -30,7 +30,7 @@
 .text-workspace-library-search input { height:28px; padding-right:10px; font-size:11px; }
 .text-workspace-writing { display:flex; position:relative; flex-direction:column; min-width:0; min-height:0; }
 .text-workspace-writing .text-document-editor { min-height:0; }
-.text-workspace-writing .text-document-format { min-height:56px; height:auto; padding:8px 14px; gap:4px; flex-wrap:wrap; position:relative; z-index:47; background:var(--bb-surface); }
+.text-workspace-writing .text-document-format { min-height:56px; height:auto; padding:8px 14px; gap:4px; flex-wrap:wrap; position:relative; z-index:60; background:var(--bb-surface); }
 .text-workspace-writing .text-document-body { padding:40px max(38px,calc((100% - 744px)/2)) 100px max(96px,calc((100% - 744px)/2)); line-height:1.95; font-size:15px; }
 .text-workspace-writing .text-document-block { margin-bottom:17px; }
 .text-workspace-writing .text-document-block h1 { font-size:30px; font-weight:500; margin:0 0 36px; letter-spacing:.02em; }

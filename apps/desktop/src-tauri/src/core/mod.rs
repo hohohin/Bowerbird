@@ -2,6 +2,7 @@
 
 pub mod audio;
 pub mod text_documents;
+pub mod document_state;
 pub mod autoname;
 pub mod caption;
 pub mod creative_session_contract;

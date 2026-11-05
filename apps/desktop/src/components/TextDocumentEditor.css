@@ -26,25 +26,9 @@
 .text-document-missing { padding: 24px; border: 1px dashed var(--bb-line); color: var(--bb-muted); font-size: 12px; }
 .text-document-raw { white-space: pre-wrap; font: 12px/1.8 ui-monospace, Consolas, monospace; padding: 12px; border: 1px solid var(--bb-line); color: var(--bb-muted); }
 
-.text-block-actions { position:absolute; left:-32px; top:0; width:32px; height:28px; display:flex; align-items:center; opacity:0; z-index:2; }
-.text-document-block:hover > .text-block-actions, .text-document-block:focus-within > .text-block-actions { opacity:1; }
-.text-block-actions > button { cursor:grab!important; width:28px; height:28px; min-height:28px!important; padding:2px!important; border:0; color:var(--bb-muted); background:transparent; }
 .text-document-block { min-height:1.85em; }
-.text-document-format button[aria-pressed=true], .text-selection-toolbar button[aria-pressed=true] { color:var(--bb-blue); background:var(--bb-surface-hover); }
 .text-document-body code { padding:2px 4px; background:var(--bb-surface-hover); font: .9em ui-monospace, Consolas, monospace; }
-.text-selection-toolbar { position:fixed; z-index:60; display:flex; align-items:center; gap:2px; padding:4px; border:1px solid var(--bb-line); background:var(--bb-surface); box-shadow:0 4px 16px #0002; }
-.text-selection-toolbar button { display:inline-flex; align-items:center; justify-content:center; width:28px; height:28px; padding:0; border:0; background:transparent; color:var(--bb-secondary); cursor:pointer; }
-.text-selection-toolbar button:hover { background:var(--bb-surface-hover); color:var(--bb-blue); }
-.text-selection-toolbar button:focus-visible { outline:2px solid var(--bb-blue); outline-offset:-2px; }
 .text-document-editor .text-document-block[data-list] { margin-bottom:4px; }
-.text-document-node :is(ul,ol) > li { padding-inline-start:4px; }
 .text-document-editor .text-document-block[data-block-type=blockquote] blockquote { margin:0; padding:2px 16px; }
-.text-document-block[data-block-type=blockquote] .text-document-node > .text-document-node { margin-bottom:4px; }
 .text-document-editor .text-document-block[data-block-type^=h] :is(h1,h2,h3,h4,h5,h6) { margin-top:0; margin-bottom:0; }
 .text-document-block[data-block-type^=h] { padding-top:12px; padding-bottom:8px; }
-.text-document-block[data-block-type^=h] > .text-block-actions { top:14px; }
-.text-document-block[data-drop-edge]::after { content:""; position:absolute; left:0; right:0; height:2px; background:var(--bb-blue); pointer-events:none; z-index:3; }
-.text-document-block[data-drop-edge=before]::after { top:-3px; }
-.text-document-block[data-drop-edge=after]::after { bottom:-3px; }
-.text-block-actions > button:active { cursor:grabbing!important; }
-.text-document-format .text-block-type, .text-selection-toolbar .text-block-type { width:auto; min-width:62px; gap:4px; padding-inline:6px; white-space:nowrap; }

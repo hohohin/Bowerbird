@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { ArrowUp, Square, X } from "lucide-react";
 import type { PlateEditor } from "platejs/react";
 import { useStore } from "../store";
+import { readDocumentState } from "../lib/documentState";
 import { normalizeDocument, parseMarkdown, serializeMarkdown } from "../lib/documentCodec";
 import { usePortalTarget } from "../lib/portalTarget";
 import { textAgentSource, textAgentUnavailable, TEXT_AGENT_LABELS, type TextAgentMessage, type TextAgentProvider } from "../lib/textAgent";
@@ -29,7 +30,7 @@ export function TextAgentScope({ editor, projectId, children }: { editor: PlateE
   return <TextAgentContext.Provider value={open}>{children}{target && <TextAgentBubble key={target.anchor.id} editor={editor} projectId={projectId} target={target} onClose={() => { setTarget(null); editor.tf.focus(); }}/>}</TextAgentContext.Provider>;
 }
 
-function TextAgentModel({ provider, setProvider, busy }: { provider: TextAgentProvider; setProvider(value: TextAgentProvider): void; busy: boolean }) {
+export function TextAgentModel({ provider, setProvider, busy }: { provider: TextAgentProvider; setProvider(value: TextAgentProvider): void; busy: boolean }) {
   const auth = useStore(state => state.cloudAuth), entitlement = useStore(state => state.cloudEntitlement);
   useStore(state => state.codexHealth); useStore(state => state.cloudAgentRuns);
   const balance = entitlement ? entitlement.balances.daily + entitlement.balances.sub + entitlement.balances.topup : null;
@@ -63,7 +64,7 @@ function useTextAgentConversation(editor: PlateEditor, target: Target, projectId
       const node = editor.children.find(node => node.id === anchor.current.id);
       if (!node) throw new Error("原段落已删除，请在新的段落打开 Agent。");
       anchor.current = anchorFor(editor, anchor.current.id)!;
-      const source = textAgentSource(serializeMarkdown(normalizeDocument([node])), messages);
+      const source = textAgentSource(readDocumentState(serializeMarkdown(normalizeDocument([node]))).source, messages);
       setMessages(previous => [...previous, { role: "user", text: prompt }]); setPrompt("");
       void task.run({ provider, prompt, source, projectId, sessionId: sessionId.current, requestId: crypto.randomUUID() });
     } catch (reason) { setState(previous => ({ ...previous, error: userErrorMessage(reason, "本次内容无法提交，请检查段落后重试。") })); }

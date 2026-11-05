@@ -42,6 +42,7 @@ fn decode_document_asset_id(encoded: &str) -> Option<String> {
 
 // Keep the same whole-block boundaries as documentProjection.ts; source examples are not attachments.
 fn document_asset_ids(source: &str) -> Vec<String> {
+    let rich = super::document_state::has_current_rich_state(source);
     static MEDIA: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(
         r#"^(?:<(?:img|audio|video) data-bowerbird-asset="([^"]+)" data-caption="[^"]*"(?: data-source="[^"]*")? />|!\[[^\]]*\]\(bowerbird-asset:([^\s)]+)\))$"#).unwrap());
     static FENCE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"^ {0,3}(`{3,}|~{3,})").unwrap());
@@ -60,7 +61,7 @@ fn document_asset_ids(source: &str) -> Vec<String> {
             } else { fence = Some(marker); }
         }
         let isolated = (index == 0 || lines[index - 1].trim().is_empty()) && lines.get(index + 1).is_none_or(|line| line.trim().is_empty());
-        if frontmatter_end.is_some_and(|end| index <= end) || in_fence || marker.is_some() || !isolated || line.starts_with("    ") || line.starts_with('\t') { continue; }
+        if frontmatter_end.is_some_and(|end| index <= end) || in_fence || marker.is_some() || (!rich && (!isolated || line.starts_with("    ") || line.starts_with('\t'))) { continue; }
         if let Some(id) = MEDIA.captures(line.trim()).and_then(|reference| reference.get(1).or_else(|| reference.get(2))).and_then(|id| decode_document_asset_id(id.as_str())) { ids.push(id); }
     }
     ids
@@ -3303,6 +3304,13 @@ mod tests {
         db.create_canvas_node(&NewCanvasNode { payload_json: payload, ..note("p1", "document") }).unwrap();
         let registered: Vec<String> = db.conn.lock().unwrap().prepare("SELECT asset_id FROM project_assets WHERE project_id='p1' ORDER BY asset_id").unwrap().query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect();
         assert_eq!(registered, vec!["valid"]);
+    }
+
+    #[test]
+    fn document_note_nested_media_uses_current_rich_state_only() {
+        let source = include_str!("../../../scripts/fixtures/text-editor-demo/rich-reference.md");
+        assert_eq!(document_asset_ids(source), vec!["nested-photo"]);
+        assert!(document_asset_ids(&source.replace("Reference", "Changed")).is_empty());
     }
 
     #[test]

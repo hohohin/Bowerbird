@@ -460,6 +460,8 @@ pub fn run() {
             commands::text_documents::read_text_document,
             commands::text_documents::create_text_document,
             commands::text_documents::save_text_document,
+            commands::document_attachments::save_document_attachment,
+            commands::document_attachments::resolve_document_attachment,
             commands::external_files::external_files_preview,
             commands::file_colors::file_colors,
             commands::external_files::external_files_index,

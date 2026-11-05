@@ -1,4 +1,5 @@
 import type { Asset } from "./types";
+import type { Value } from 'platejs';
 
 export interface DocumentText { text: string; [key: string]: unknown }
 export interface DocumentBlock {
@@ -7,10 +8,27 @@ export interface DocumentBlock {
   children: (DocumentText | DocumentBlock)[];
   assetId?: string;
   sourcePath?: string;
-  caption?: string;
+  caption?: string | DocumentText[];
   [key: string]: unknown;
 }
-export type DocumentValue = DocumentBlock[];
+export interface DocumentComment {
+  id: string;
+  contentRich: Value;
+  createdAt: Date;
+  discussionId: string;
+  isEdited: boolean;
+  userId: string;
+}
+export interface DocumentDiscussion {
+  id: string;
+  comments: DocumentComment[];
+  createdAt: Date;
+  isResolved: boolean;
+  userId: string;
+  documentContent?: string;
+}
+/** Editor blocks plus document-level annotations, serialized explicitly by documentState. */
+export type DocumentValue = DocumentBlock[] & { discussions?: DocumentDiscussion[] };
 export interface DocumentMedia { asset: Asset; kind: "image" | "audio" | "video"; path: string; url: string }
 export interface TextDocumentSnapshot {
   assetId: string;

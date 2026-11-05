@@ -3,20 +3,21 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server = await createServer({ root:fileURLToPath(new URL('..',import.meta.url)), plugins: process.env.BOWERBIRD_BLOCK_MUTATION ? [{name:'isolated-block-mutation',enforce:'pre',load(id){if(id.replaceAll('\\','/').endsWith('/src/components/TextBlockActions.tsx')) return readFile(process.env.BOWERBIRD_BLOCK_MUTATION,'utf8');}}] : [], server: { host:'127.0.0.1', port:0, strictPort:false, hmr:false, watch:null } });
+const server = await createServer({ root:fileURLToPath(new URL('..',import.meta.url)), server: { host:'127.0.0.1', port:0, strictPort:false, hmr:false, watch:null } });
 await server.listen();
 const browser = await chromium.launch({ channel:'chrome', headless:true });
 const page = await browser.newPage({ viewport:{width:1440,height:900} });
 page.setDefaultTimeout(5000);
 await page.route('**/fixture/reference.png*', route => route.fulfill({contentType:'image/svg+xml',body:'<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"/>'}));
 const failures=[];
-async function check(name, action) { try { await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-workspace-live/preview.html?blocks`); await page.getByRole('textbox',{name:'文档正文',exact:true}).waitFor(); await action(); console.log('PASS',name); } catch(e) { failures.push(name+': '+e.message); } }
+async function check(name, action) { try { await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/text-workspace-live/preview.html?blocks`); await page.getByRole('textbox',{name:'文档正文',exact:true}).waitFor(); await action(); console.log('PASS',name); } catch(e) { failures.push(name+': '+e.stack);console.log('FAILED_DRAFT',await page.evaluate(()=>window.draft)); } }
 try {
 await check('block controls and drag reorder',async()=>{
  const blocks=page.locator('.text-workspace-writing .text-document-block');
  await blocks.nth(1).hover();
  const handle=blocks.nth(1).getByRole('button',{name:'段落操作'});
- await handle.dragTo(blocks.nth(2),{targetPosition:{x:100,y:25}});
+ const start=await handle.boundingBox(),end=await blocks.nth(2).boundingBox();
+ await page.mouse.move(start.x+start.width/2,start.y+start.height/2);await page.mouse.down();await page.mouse.move(end.x+80,end.y+end.height-2,{steps:15});await page.mouse.move(end.x+80,end.y+end.height-1);await page.waitForTimeout(80);await page.mouse.move(end.x+81,end.y+end.height-2);await page.locator('.slate-dropLine').waitFor();await page.mouse.up();
  await page.waitForFunction(()=>window.draft?.markdown.indexOf('第二段')<window.draft?.markdown.indexOf('窗外'));
  await blocks.nth(1).getByRole('button',{name:'段落操作'}).click();
  await page.getByRole('menuitem',{name:'复制段落',exact:true}).click();

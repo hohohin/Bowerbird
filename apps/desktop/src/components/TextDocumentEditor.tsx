@@ -137,6 +137,6 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
     {notice && <div className="text-document-notice" role="status">{notice}</div>}
     {!draft ? <div className="text-document-loading">{error ? "" : "正在读取文本…"}</div> : draft.base.format === "text" ? <textarea className="text-document-source is-plain" aria-label="文本内容" value={draft.text} onChange={event => changeText(event.target.value)} />
       : draft.mode === "source" ? <textarea className="text-document-source" aria-label="Markdown 源码" value={draft.text} spellCheck={false} onChange={event => changeText(event.target.value)} />
-      : <TextPlateEditor ref={plate} value={value} media={media} onChange={changeValue} onDropAssets={attachAssets} onRejectedPaste={() => setNotice("请使用插入素材选择原文件，已有文件只建立引用。")} />}
+      : <TextPlateEditor ref={plate} value={value} media={media} onChange={changeValue} onDropAssets={attachAssets} />}
   </section>;
 }

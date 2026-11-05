@@ -3,6 +3,7 @@
 pub mod agent;
 pub mod audio;
 pub mod text_documents;
+pub mod document_attachments;
 pub mod agent_ds;
 pub mod agent_z;
 pub mod cloud;
