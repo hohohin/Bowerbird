@@ -152,13 +152,13 @@ impl ExplorerAnalysis {
                     .await.map(Arc::new).map_err(|e| e.to_string());
                 let _ = bytes_tx.send(Some(bytes.clone()));
                 let bytes = bytes?;
-                let image = tokio::task::spawn_blocking(move || jev::preview_image(&bytes))
+                let preview = tokio::task::spawn_blocking(move || jev::preview_image(&bytes))
                     .await.map_err(|e| e.to_string())??;
                 // Only the trusted main view receives thumbnails and library labels.
                 // Never inject private label names into a third-party source page.
                 {
                     let _ = preview_app.emit_to(tauri::EventTarget::webview("main"), "source-browser://drag-preview", serde_json::json!({
-                        "id": preview_id, "thumbnail": format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(&image)),
+                        "id": preview_id, "thumbnail": format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(&preview.thumbnail_png)),
                     }));
                 }
                 let lease = wait_for_turn(worker.clone(), || enabled(&preview_app).is_ok()).await?;
@@ -171,7 +171,7 @@ impl ExplorerAnalysis {
                 let revision = db.local_revision().map_err(|e| e.to_string())?;
                 let labels: Vec<_> = db.local_labels().map_err(|e| e.to_string())?
                     .into_iter().filter(|l| l.enabled).collect();
-                let pending = worker.prepare_jev_image(&judge, &db, &library, "", revision, &labels, true, image).await?;
+                let pending = worker.prepare_jev_image(&judge, &db, &library, "", revision, &labels, true, preview.model_jpeg).await?;
                 if !worker.cancel.load(Ordering::Relaxed) && enabled(&preview_app).is_ok() {
                     let _ = preview_app.emit_to(tauri::EventTarget::webview("main"), "source-browser://drag-preview", serde_json::json!({
                         "id": preview_id, "labels": pending.preview,
@@ -380,12 +380,43 @@ mod tests {
     }
 
     #[test]
+    fn drag_thumbnail_preserves_aspect_without_padding() {
+        for (width, height, expected) in [(1024, 512, (512, 256)), (512, 1024, (256, 512))] {
+            let source = image::RgbaImage::from_pixel(width, height, image::Rgba([200, 40, 30, 255]));
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            source.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+            let thumbnail = jev::preview_image(bytes.get_ref()).unwrap().thumbnail_png;
+            let output = image::load_from_memory(&thumbnail).unwrap().to_rgba8();
+            assert_eq!(output.dimensions(), expected, "UI preview retains the original aspect ratio");
+            assert_eq!(output.get_pixel(0, 0).0, [200, 40, 30, 255], "no generated border");
+        }
+    }
+
+    #[test]
+    fn drag_thumbnail_preserves_alpha_and_real_white_content() {
+        let mut source = image::RgbaImage::from_pixel(512, 256, image::Rgba([100, 50, 20, 0]));
+        for pixel in source.rows_mut().flat_map(|row| row.skip(256)) {
+            *pixel = image::Rgba([255, 255, 255, 255]);
+        }
+        source.put_pixel(128, 128, image::Rgba([100, 50, 20, 96]));
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        source.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
+        let thumbnail = jev::preview_image(bytes.get_ref()).unwrap().thumbnail_png;
+        assert_eq!(image::guess_format(&thumbnail).unwrap(), image::ImageFormat::Png, "UI preview keeps alpha");
+        let output = image::load_from_memory(&thumbnail).unwrap().to_rgba8();
+        assert_eq!(output.dimensions(), (512, 256), "real white content is not cropped away");
+        assert_eq!(output.get_pixel(0, 0).0[3], 0);
+        assert_eq!(output.get_pixel(128, 128).0, [100, 50, 20, 96]);
+        assert_eq!(output.get_pixel(511, 255).0, [255, 255, 255, 255]);
+    }
+
+    #[test]
     fn preview_image_rejects_non_images_and_pads_without_cropping() {
         assert!(jev::preview_image(b"<html>login</html>").is_err());
         let source = image::RgbImage::from_pixel(100, 200, image::Rgb([255, 0, 0]));
         let mut bytes = std::io::Cursor::new(Vec::new());
         source.write_to(&mut bytes, image::ImageFormat::Png).unwrap();
-        let result = image::load_from_memory(&jev::preview_image(bytes.get_ref()).unwrap()).unwrap().to_rgb8();
+        let result = image::load_from_memory(&jev::preview_image(bytes.get_ref()).unwrap().model_jpeg).unwrap().to_rgb8();
         assert_eq!(result.dimensions(), (512, 512));
         assert!(result.get_pixel(0, 0).0.iter().all(|v| *v > 240));
         assert!(result.get_pixel(256, 256).0[0] > 240);

@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef, useState } from "react";
-import { GripVertical, X } from "lucide-react";
+import { PanelEdgeHandle } from "./PanelEdgeHandle";
 
 const widthKey = "bowerbird.canvasLibraryWidth";
 
@@ -78,45 +78,34 @@ export function CanvasLibraryResize({ panelId, collapsed, onClose, onEscape, res
   }
   function finish() { drag.current = null; setDragging(false); }
 
-  return <div ref={handle} className="canvas-library-resize" aria-hidden={collapsed} onKeyDown={event => {
-    if (event.key === "Escape" && onEscape) { event.preventDefault(); event.stopPropagation(); onEscape(); }
-  }}>
-    <svg className="canvas-library-tab-shape" viewBox="0 0 32 96" aria-hidden="true">
-      <path className="canvas-library-tab-fill" d="M0 0H20Q32 0 32 12V74Q32 86 20 86H18C12 86 8 88 8 96H0Z" />
-      <path className="canvas-library-tab-edge" d="M8 0H20Q32 0 32 12V74Q32 86 20 86H18C12 86 8 88 8 96" />
-    </svg>
-    <button type="button" className="canvas-library-close" aria-label="关闭素材库" title="关闭素材库 · Esc"
-      aria-keyshortcuts="Escape" tabIndex={collapsed ? -1 : 0} onClick={onClose}>
-      <span className="canvas-library-close-hint" aria-hidden="true">ESC</span><X size={13} aria-hidden="true" />
-    </button>
-    <div className="canvas-library-grip" role="separator" tabIndex={collapsed ? -1 : 0}
-    aria-label="调整素材库宽度" aria-orientation="vertical" aria-controls={panelId}
-    aria-valuemin={Math.round(minimum)} aria-valuemax={Math.round(maximum)} aria-valuenow={Math.round(width)}
-    aria-valuetext={`${Math.round(width)} 像素`}
-    title="拖动调整素材库宽度 · 左右方向键微调 · 双击恢复最大宽度"
-    onPointerDown={event => {
+  return <PanelEdgeHandle ref={handle} collapsed={collapsed} closeLabel="关闭素材库" onClose={onClose} onEscape={onEscape} grip={{
+    "aria-label": "调整素材库宽度", "aria-controls": panelId,
+    "aria-valuemin": Math.round(minimum), "aria-valuemax": Math.round(maximum), "aria-valuenow": Math.round(width),
+    "aria-valuetext": `${Math.round(width)} 像素`,
+    title: "拖动调整素材库宽度 · 左右方向键微调 · 双击恢复最大宽度",
+    onPointerDown: event => {
       if (event.button !== 0 || drag.current) return;
       event.preventDefault(); event.stopPropagation();
       event.currentTarget.focus({ preventScroll: true });
       event.currentTarget.setPointerCapture(event.pointerId);
       drag.current = { pointer: event.pointerId, x: event.clientX, width };
       setDragging(true);
-    }}
-    onPointerMove={event => {
+    },
+    onPointerMove: event => {
       const start = drag.current;
       if (start?.pointer === event.pointerId) resize(start.width + event.clientX - start.x);
-    }}
-    onPointerUp={event => {
+    },
+    onPointerUp: event => {
       if (drag.current?.pointer !== event.pointerId) return;
       finish(); event.currentTarget.releasePointerCapture(event.pointerId);
-    }}
-    onPointerCancel={finish} onLostPointerCapture={finish}
-    onDoubleClick={() => resize(null)}
-    onKeyDown={event => {
+    },
+    onPointerCancel: finish, onLostPointerCapture: finish,
+    onDoubleClick: () => resize(null),
+    onKeyDown: event => {
       if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
       event.preventDefault(); event.stopPropagation();
       if (event.key === "End") resize(null);
       else resize(event.key === "Home" ? 0 : width + (event.key === "ArrowLeft" ? -32 : 32));
-    }}><GripVertical size={15} aria-hidden="true" /></div>
-  </div>;
+    },
+  }} />;
 }

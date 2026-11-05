@@ -1,6 +1,7 @@
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { assertBodySize, corsHeaders } from "../_shared/limits.ts";
+import { handleWechatNotification } from "../_shared/wechatpay-service.ts";
 
 const MAX_WEBHOOK_BODY_BYTES = 64 * 1024;
 
@@ -204,6 +205,12 @@ Deno.serve(async (request) => {
   const id = requestId(request);
   let cors: HeadersInit = {};
   try {
+    // Any WeChat signature header opts into the strict WeChat branch. Never let
+    // malformed WeChat notifications fall back to the historical Mock secret.
+    if (["wechatpay-signature", "wechatpay-serial", "wechatpay-nonce", "wechatpay-timestamp"].some((name) => request.headers.has(name))
+      || (Deno.env.get("BOWERBIRD_PAYMENT_MOCK") ?? "true") !== "true") {
+      return await handleWechatNotification(request, serviceAdmin());
+    }
     cors = corsHeaders(request);
     if ((Deno.env.get("BOWERBIRD_PAYMENT_MOCK") ?? "true") !== "true") {
       throw new ApiError("not_configured", "真实支付尚未接入", false, 503);

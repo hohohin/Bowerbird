@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { createAccountProxy } from "./account-proxy.mjs";
 import { createCloudProxy } from "./cloud-proxy.mjs";
+import { createPaymentProxy } from "./payment-proxy.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const ASSET_FILES = new Map(Array.from({ length: 8 }, (_, index) => [`p${index + 1}`, `p${index + 1}.jpg`]));
@@ -466,10 +467,12 @@ export function startServer(options = parseArgs(process.argv.slice(2))) {
   const root = isAbsolute(options.root) ? options.root : resolve(SCRIPT_DIR, options.root);
   const accountProxy = createAccountProxy();
   const cloudProxy = createCloudProxy();
+  const paymentProxy = createPaymentProxy();
   const server = createServer(async (request, response) => {
     try {
       if (request.url.split("?", 1)[0].startsWith("/api/account/")) return await accountProxy(request, response);
       if (request.url.split("?", 1)[0].startsWith("/api/cloud/")) return await cloudProxy(request, response);
+      if (request.url.split("?", 1)[0].startsWith("/api/pay/")) return await paymentProxy(request, response);
       const pathname = new URL(request.url, "http://localhost").pathname;
       if ((request.method === "GET" || request.method === "HEAD") && pathname === "/admin") {
         response.writeHead(308, { Location: "/admin/", "Cache-Control": "no-store" });

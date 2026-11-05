@@ -44,12 +44,14 @@ export function RatioSelect({
   ratios = RATIOS,
   ariaLabel,
   autoTitle = "有参考图时跟随首张参考图的比例，否则由引擎决定",
+  allowAuto = true,
 }: {
   value: string | null;
   onChange: (v: string | null) => void;
   ratios?: Ratio[];
   ariaLabel?: string;
   autoTitle?: string;
+  allowAuto?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState<ReturnType<typeof tacticalSelectPosition> | null>(null);
@@ -166,7 +168,7 @@ export function RatioSelect({
         >
           <div className="app-popover-title">画面比例</div>
           <div className="ratio-select-grid grid grid-cols-3 gap-1">
-            <button
+            {allowAuto && <button
               type="button"
               onClick={() => pick(null)}
               role="option"
@@ -181,7 +183,7 @@ export function RatioSelect({
               <RatioIcon ratio={{ w: 1, h: 1 }} dashed />
               <span className="min-w-0 flex-1 text-left">自动</span>
               {value === null && <Check size={13} className="shrink-0 text-accent" />}
-            </button>
+            </button>}
             {ratios.map((r) => {
               const selected = r.key === value;
               return (

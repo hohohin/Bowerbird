@@ -7,9 +7,13 @@ use tauri::{
 
 use crate::error::{AppError, AppResult};
 
+#[path = "source_browser_overlay.rs"]
+mod overlay;
+
 const MAIN_WEBVIEW_LABEL: &str = "main";
 const SOURCE_BROWSER_LABEL: &str = "source-discovery";
 const SOURCE_BROWSER_STATUS_EVENT: &str = "source-browser://status";
+const SOURCE_BROWSER_LOCATION_EVENT: &str = "source-browser://location";
 const SOURCE_BROWSER_TITLE_EVENT: &str = "source-browser://title";
 const SOURCE_BROWSER_NEW_WINDOW_EVENT: &str = "source-browser://new-window";
 static SOURCE_BROWSER_DIMMED: AtomicBool = AtomicBool::new(false);
@@ -34,6 +38,8 @@ pub struct SourceBrowserBounds {
     y: f64,
     width: f64,
     height: f64,
+    #[serde(default)]
+    overlay: Option<overlay::OverlayBounds>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -70,17 +76,20 @@ fn validate_bounds(bounds: SourceBrowserBounds) -> AppResult<SourceBrowserBounds
     {
         return Err(AppError::Other("素材发现面板尺寸无效".to_string()));
     }
+    if bounds.overlay.is_some_and(|rect| !rect.valid(bounds.width, bounds.height)) {
+        return Err(AppError::Other("素材发现面板尺寸无效".into()));
+    }
     Ok(bounds)
 }
 
-fn set_bounds(webview: &tauri::Webview, bounds: SourceBrowserBounds) -> AppResult<()> {
+async fn set_bounds(webview: &tauri::Webview, bounds: SourceBrowserBounds) -> AppResult<()> {
     webview
         .set_position(LogicalPosition::new(bounds.x, bounds.y))
         .map_err(|error| tauri_error("定位素材发现面板失败", error))?;
     webview
         .set_size(LogicalSize::new(bounds.width, bounds.height))
         .map_err(|error| tauri_error("调整素材发现面板失败", error))?;
-    Ok(())
+    overlay::apply(webview, bounds).await
 }
 
 fn emit_status(app: &AppHandle, url: &Url, loading: bool) {
@@ -92,6 +101,23 @@ fn emit_status(app: &AppHandle, url: &Url, loading: bool) {
             loading,
         },
     );
+}
+
+// SPA history changes do not emit page-load events. Read the native location
+// without granting the remote page IPC or changing the loading indicator.
+fn watch_source_location(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let mut previous = None;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            let Some(webview) = app.get_webview(SOURCE_BROWSER_LABEL) else { break; };
+            let Ok(url) = webview.url() else { break; };
+            if previous.as_ref() != Some(&url) && navigation_allowed(&url) {
+                let _ = app.emit_to(MAIN_WEBVIEW_LABEL, SOURCE_BROWSER_LOCATION_EVENT, url.as_str());
+                previous = Some(url);
+            }
+        }
+    });
 }
 
 fn tauri_error(context: &str, error: tauri::Error) -> AppError {
@@ -112,7 +138,7 @@ pub async fn open_source_browser(
     let bounds = validate_bounds(bounds)?;
 
     if let Some(webview) = app.get_webview(SOURCE_BROWSER_LABEL) {
-        set_bounds(&webview, bounds)?;
+        set_bounds(&webview, bounds).await?;
         // Reopening resumes the live document. Explicit navigation has its own command.
         webview
             .show()
@@ -145,6 +171,9 @@ pub async fn open_source_browser(
         .replace("__BOWERBIRD_DRAG_BRIDGE__", &format!("bowerbird-explorer://{drag_token}"));
     let popup_drag_token = drag_token.clone();
     let page_search_token = drag_token.clone();
+    let pinterest_chrome = include_str!("source_browser_pinterest_chrome.js")
+        .replace("__BOWERBIRD_SCROLLBAR_RUNTIME__", include_str!("../../../src/lib/overlayScrollbars.js"))
+        .replace("__BOWERBIRD_SCROLLBAR_CSS__", &serde_json::to_string(include_str!("../../../src/components/OverlayScrollbars.css")).expect("static CSS"));
     let builder = WebviewBuilder::new(SOURCE_BROWSER_LABEL, WebviewUrl::External(url))
         .data_directory(data_directory)
         .disable_drag_drop_handler()
@@ -152,6 +181,7 @@ pub async fn open_source_browser(
         .initialization_script(include_str!("../../../src/lib/explorerDragVisual.js"))
         .initialization_script(include_str!("source_browser_video.js"))
         .initialization_script(include_str!("source_browser_pinterest_layout.js"))
+        .initialization_script(&pinterest_chrome)
         .initialization_script(&drag_script)
         .on_navigation(move |url| {
             if url.scheme() == "bowerbird-pinterest" {
@@ -225,6 +255,8 @@ pub async fn open_source_browser(
             LogicalSize::new(bounds.width, bounds.height),
         )
         .map_err(|error| tauri_error("创建素材发现面板失败", error))?;
+    watch_source_location(app.clone());
+    overlay::apply(&webview, bounds).await?;
     webview
         .set_focus()
         .map_err(|error| tauri_error("聚焦素材发现面板失败", error))?;
@@ -293,7 +325,7 @@ pub async fn resize_source_browser(app: AppHandle, bounds: SourceBrowserBounds, 
             webview.eval(&spotlight_script())
                 .map_err(|error| tauri_error("更新探索引导遮罩失败", error))?;
         }
-        set_bounds(&webview, bounds)?;
+        set_bounds(&webview, bounds).await?;
         if let Some(visible) = visible {
             if visible { webview.show() } else { webview.hide() }
                 .map_err(|error| tauri_error("更新探索面板显示失败", error))?;
@@ -419,6 +451,7 @@ mod tests {
             y: 112.0,
             width: 900.0,
             height: 620.0,
+            overlay: None,
         };
         assert!(validate_bounds(valid).is_ok());
         assert!(validate_bounds(SourceBrowserBounds {

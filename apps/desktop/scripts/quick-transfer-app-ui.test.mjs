@@ -56,9 +56,16 @@ try {
   assert.equal(await dialog.count(), 0);
   assert.equal(await page.evaluate(() => window.transferCalls.some(call => call.command === 'quick_transfer_stop')), false, 'collapse keeps receiving');
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
-  await page.getByRole('region', { name: '素材库创作', exact: true }).waitFor();
+  const home = page.getByRole('navigation', { name: '首页' });
+  await home.locator('[aria-current="page"]').filter({ hasText: '项目' }).waitFor();
+  assert.equal(await trigger.count(), 0, 'project management does not expose quick transfer');
   await checkToolbar();
   await page.evaluate(() => window.transferUpdate({ transfers: [{ id: 'one', name: '手机照片.heic', size: 4096, received: 4096, status: 'complete', error: null, assetId: 'incoming', retryable: false }] }));
+  await home.getByRole('button', { name: '素材库', exact: true }).click();
+  await trigger.waitFor();
+  await checkToolbar();
+  assert.equal(await page.evaluate(() => window.transferCalls.some(call => call.command === 'quick_transfer_stop')), false, 'hiding the entry never stops receiving');
+  assert.equal(await page.evaluate(() => window.transferCalls.filter(call => call.command === 'quick_transfer_status').length), 1, 'navigation keeps the receive owner mounted');
   await trigger.click();
   await dialog.getByText('手机照片.heic', { exact: true }).waitFor();
   await dialog.getByText('已入库', { exact: true }).waitFor();

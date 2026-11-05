@@ -42,8 +42,13 @@ export function cloneCanvasClipboard(value: CanvasClipboard, projectId: string, 
   const dx = x - Math.min(...cards.map(node => node.x)), dy = y - Math.min(...cards.map(node => node.y));
   const ids = new Map([...cards, ...value.workflow].map(node => [node.id, crypto.randomUUID()]));
   const sameProject = projectId === value.projectId;
+  const connections = new Map<string, string>();
   const remap = (input: WorkflowInput): WorkflowInput | null => {
     const next = { ...input };
+    if (input.autoConnect) {
+      if (!connections.has(input.autoConnect)) connections.set(input.autoConnect, crypto.randomUUID());
+      next.autoConnect = connections.get(input.autoConnect);
+    }
     for (const key of ["nodeId", "canvasNodeId", "assetNodeId", "groupId"] as const) {
       const old = input[key]; if (!old) continue;
       const id = ids.get(old);
@@ -71,7 +76,7 @@ export function cloneCanvasClipboard(value: CanvasClipboard, projectId: string, 
   });
   const groups: NewCanvasGroup[] = value.groups.map(({ createdAt: _c, updatedAt: _u, ...group }) => ({ ...group, id: ids.get(group.id)!, projectId, x: group.x + dx, y: group.y + dy }));
   const workflow = value.workflow.map(node => ({ ...structuredClone(node), id: ids.get(node.id)!, x: node.x + dx, y: node.y + dy,
-    outputs: {}, outputPorts: [], activeSessionNodeId: null, sessionNodeIds: [], resultGroupId: undefined, profileCache: undefined, describeCache: undefined, planning: undefined, templateInstance: undefined,
+    outputs: {}, outputPorts: [], activeSessionNodeId: null, sessionNodeIds: [], resultGroupId: undefined, profileCache: undefined, describeCache: undefined, planning: undefined, templateInstance: undefined, triggerSchedule: undefined,
     resultNodeIds: node.resultNodeIds?.flatMap(id => ids.has(id) ? [ids.get(id)!] : []) ?? [],
     textSource: node.textSource ? ids.get(node.textSource) : undefined,
     textTarget: node.textTarget ? { ...node.textTarget, nodeId: ids.get(node.textTarget.nodeId)! } : undefined,

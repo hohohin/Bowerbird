@@ -1,0 +1,19 @@
+[Unit]
+Description=Bowerbird WeChat Pay pending-order reconciliation
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+User=bowerbird
+WorkingDirectory=/opt/bowerbird/apps/cloud
+EnvironmentFile=/etc/bowerbird/wechatpay-maintenance.env
+ExecStart=/usr/bin/node scripts/wechatpay-maintenance.mjs reconcile
+Restart=on-failure
+RestartSec=60
+TimeoutStartSec=70
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

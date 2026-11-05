@@ -1,5 +1,5 @@
 //! Native filesystem notices are hints; reconciliation remains the existing conservative scan.
-use super::queue_refresh;
+use super::{queue_refresh, request_originals_check};
 use crate::{core::paths::LibraryPaths, db::Database, error::AppResult};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::{
@@ -11,7 +11,7 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 #[derive(Clone)]
 struct Root {
@@ -156,6 +156,14 @@ impl Pending {
     }
 }
 pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
+    if let Some(main) = app.get_webview_window("main") {
+        let (app, db, paths) = (app.clone(), db.clone(), paths.clone());
+        main.on_window_event(move |event| {
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                request_originals_check(app.clone(), db.clone(), paths.clone(), true);
+            }
+        });
+    }
     // Enumeration/watch registration can block on a disconnected network mount.
     // Keep that IO on one dedicated background thread, away from the async runtime.
     let result = std::thread::Builder::new()
@@ -182,9 +190,16 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
             let generated = crate::core::folder_connections::generated_connection_paths(&paths);
             let mut sync_at = Instant::now() - Duration::from_secs(30);
             let mut fallback_at = Instant::now();
+            let mut originals_at = Instant::now() - Duration::from_secs(1);
             loop {
                 std::thread::sleep(Duration::from_millis(250));
                 let now = Instant::now();
+                // Polling the queue is cheap even with no connected roots. The shared
+                // worker limits actual IO to 30s confirmation/focus or 300s routine checks.
+                if now.duration_since(originals_at) >= Duration::from_secs(1) {
+                    request_originals_check(app.clone(), db.clone(), paths.clone(), false);
+                    originals_at = now;
+                }
                 if sync_at.elapsed() >= Duration::from_secs(2) {
                     if let Ok(values) = roots(&db) {
                         known_roots = values;

@@ -11,10 +11,9 @@ import {
   LockKeyhole,
   Puzzle,
   RefreshCw,
-  X,
 } from "lucide-react";
 import { api, type SourceBrowserBounds } from "../lib/api";
-import { normalizeSourceAddress, sourceDiscoveryFor } from "../lib/sourceDiscovery";
+import { normalizeSourceAddress, rememberSourceAddress, sourceDiscoveryFor } from "../lib/sourceDiscovery";
 import { EXPLORER_SITES, queueBrowserOperation } from "../lib/explorer";
 import { cancelPinterestSearch, isPinterestSearchCurrent, PINTEREST_SEARCH_EVENT, receivePinterestSearchStatus, usePinterestSearch, type PinterestSearchStatus } from "../lib/pinterestSearch";
 import { useStore } from "../store";
@@ -22,6 +21,7 @@ import "./BrowserExtension.css";
 import { ExplorerCaptureHistory } from "./ExplorerCaptureHistory";
 
 const STATUS_EVENT = "source-browser://status";
+const LOCATION_EVENT = "source-browser://location";
 const TITLE_EVENT = "source-browser://title";
 const NEW_WINDOW_EVENT = "source-browser://new-window";
 
@@ -32,12 +32,20 @@ interface BrowserStatus {
 
 function boundsFor(element: HTMLElement): SourceBrowserBounds {
   const rect = element.getBoundingClientRect();
-  return {
+  const bounds: SourceBrowserBounds = {
     x: Math.round(rect.left),
     y: Math.round(rect.top),
     width: Math.round(rect.width),
     height: Math.round(rect.height),
   };
+  const shape = element.closest(".explore-browser")?.querySelector(".explore-panel-handle .canvas-library-tab-shape");
+  const tab = shape?.getBoundingClientRect();
+  if (tab) {
+    const x = Math.max(0, tab.left - bounds.x), y = Math.max(0, tab.top - bounds.y);
+    const right = Math.min(bounds.width, tab.right - bounds.x), bottom = Math.min(bounds.height, tab.bottom - bounds.y);
+    if (right > x && bottom > y) bounds.overlay = { x, y, width: right - x, height: bottom - y, cut: Number(shape?.getAttribute("data-overlay-cut") || 0) };
+  }
+  return bounds;
 }
 
 function hostnameFor(url: string) {
@@ -100,7 +108,7 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
   }, []);
 
   useEffect(() => {
-    try { if (normalizeSourceAddress(currentUrl)) localStorage.setItem("bowerbird.explorer.lastUrl", currentUrl); } catch { /* unavailable storage */ }
+    rememberSourceAddress(currentUrl);
   }, [currentUrl]);
 
   useEffect(() => {
@@ -112,6 +120,10 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
         if (!addressFocusedRef.current) setAddress(payload.url);
         setLoading(payload.loading);
         if (!payload.loading) setError(null);
+      }),
+      listen<string>(LOCATION_EVENT, ({ payload }) => {
+        setCurrentUrl(payload);
+        if (!addressFocusedRef.current) setAddress(payload);
       }),
       listen<string>(TITLE_EVENT, ({ payload }) => setTitle(payload)),
       listen<string>(NEW_WINDOW_EVENT, ({ payload }) => void navigate(payload, false)),
@@ -295,9 +307,6 @@ export function SourceBrowserPanel({ url, onClose, visible = true, suspended = f
             <ExternalLink size={15} />
           </button>
           <ExplorerCaptureHistory visible={visible} />
-          <button type="button" onClick={onClose} title="收起浏览器" aria-label="收起浏览器">
-            <X size={16} />
-          </button>
         </div>
       </header>
 

@@ -58,7 +58,7 @@ export function SaveWorkflowTemplateDialog({ nodes, selectedIds, graphNodes, bou
             for (const [index, card] of preview.cards.entries()) if (card.kind !== "workflow") {
               values[`item${index + 1}`] = card.kind === "image" || !card.body.trim() && card.assets.length ? { type: "image", assetIds: card.assets } : { type: "text", text: card.body };
             }
-            saved = await includeTemplateContent({ ...template, schemaVersion: 4, layout, name: name.trim(), plan: { ...template.plan, summary: name.trim() } }, values, carryImages, carryText);
+            saved = await includeTemplateContent({ ...template, schemaVersion: template.schemaVersion >= 5 ? 5 : 4, layout, name: name.trim(), plan: { ...template.plan, summary: name.trim() } }, values, carryImages, carryText);
           }
           if (exporting) await api.workflowTemplateExportDocument(saved!, path!);
           else if (enclosed.size) await onEncapsulate(name.trim(), [...enclosed], saved);

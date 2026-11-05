@@ -8,6 +8,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
 
+use super::material_catalog::library_membership_sql;
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
 
@@ -530,8 +531,13 @@ fn rename_file(src: &Path, dst: &Path) -> std::io::Result<()> {
 
 impl Database {
     pub fn insert_asset(&self, a: &Asset) -> AppResult<()> {
+        self.insert_asset_with_auto_classification(a, true)
+    }
+
+    pub(crate) fn insert_asset_with_auto_classification(&self, a: &Asset, automatic: bool) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
             "INSERT INTO assets (id, name, ext, origin_path, store_path, thumb_path, size, width, \
              height, duration, phash, colors, rating, source, source_url, folder_id, created_at, \
              file_mtime, generation_session_id, library_hidden) \
@@ -559,6 +565,9 @@ impl Database {
                 a.library_hidden,
             ],
         )?;
+        // A manual drop must never become visible to the background classifier.
+        if !automatic { tx.execute("DELETE FROM local_auto_classification_pending WHERE asset_id=?1", [&a.id])?; }
+        tx.commit()?;
         Ok(())
     }
 
@@ -597,9 +606,10 @@ impl Database {
             }
         }
         let conn = self.conn.lock().unwrap();
+        let membership = library_membership_sql("assets.id", Some("?2"));
         let sql = format!(
             "SELECT {ASSET_COLS} FROM assets \
-             WHERE library_hidden=0 AND (?1 IS NULL OR folder_id IS ?1) \
+             WHERE library_hidden=0 AND {membership} AND (?1 IS NULL OR folder_id IS ?1) \
              AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                  WHERE pa.asset_id = assets.id AND pa.project_id IS ?2)) \
              AND (?3 = 0 OR ?2 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
@@ -629,12 +639,13 @@ impl Database {
         hide_in_projects: bool,
     ) -> AppResult<i64> {
         let conn = self.conn.lock().unwrap();
+        let membership = library_membership_sql("a.id", Some("?1"));
         let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM assets a WHERE a.library_hidden=0 AND (?1 IS NULL OR EXISTS(\
+            &format!("SELECT COUNT(*) FROM assets a WHERE a.library_hidden=0 AND {membership} AND (?1 IS NULL OR EXISTS(\
                SELECT 1 FROM project_assets pa WHERE pa.asset_id = a.id AND pa.project_id IS ?1\
              )) AND (?2 = 0 OR ?1 IS NOT NULL OR NOT EXISTS(\
                SELECT 1 FROM project_assets pa WHERE pa.asset_id = a.id\
-             ))",
+             ))"),
             rusqlite::params![project_id, hide_in_projects],
             |r| r.get(0),
         )?;
@@ -1043,10 +1054,11 @@ impl Database {
         offset: i64,
     ) -> AppResult<Vec<Asset>> {
         let conn = self.conn.lock().unwrap();
+        let membership = library_membership_sql("a.id", Some("?2"));
         let sql = format!(
             "SELECT {ASSET_COLS_A} FROM assets a \
              JOIN asset_collections ac ON ac.asset_id = a.id \
-             WHERE a.library_hidden=0 AND ac.folder_id = ?1 \
+             WHERE a.library_hidden=0 AND {membership} AND ac.folder_id = ?1 \
              AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                  WHERE pa.asset_id = a.id AND pa.project_id IS ?2)) \
              AND (?5 = 0 OR ?2 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
@@ -1136,9 +1148,11 @@ impl Database {
         offset: i64,
     ) -> AppResult<Vec<Asset>> {
         let conn = self.conn.lock().unwrap();
+        let tag_membership = library_membership_sql("assets.id", Some("?3"));
+        let membership = library_membership_sql("assets.id", Some("?4"));
         if let Some(name) = query.strip_prefix("tag:") {
             let sql = format!(
-                "SELECT {ASSET_COLS} FROM assets WHERE library_hidden=0 AND id IN (\
+                "SELECT {ASSET_COLS} FROM assets WHERE library_hidden=0 AND {tag_membership} AND id IN (\
                    SELECT at.asset_id FROM asset_tags at JOIN tags t ON t.id = at.tag_id WHERE t.name = ?4\
                  ) AND (?3 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                    WHERE pa.asset_id = assets.id AND pa.project_id IS ?3)) \
@@ -1167,7 +1181,7 @@ impl Database {
                 "generation_session_id IS NULL"
             };
             let sql = format!(
-                "SELECT {ASSET_COLS} FROM assets WHERE library_hidden=0 AND {cond} \
+                "SELECT {ASSET_COLS} FROM assets WHERE library_hidden=0 AND {tag_membership} AND {cond} \
                  AND (?3 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                    WHERE pa.asset_id = assets.id AND pa.project_id IS ?3)) \
                  AND (?4 = 0 OR ?3 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
@@ -1193,7 +1207,7 @@ impl Database {
             ("1=1", String::new())
         };
         let sql = format!(
-            "SELECT {ASSET_COLS} FROM assets WHERE library_hidden=0 AND {cond} \
+            "SELECT {ASSET_COLS} FROM assets WHERE library_hidden=0 AND {membership} AND {cond} \
              AND (?4 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = assets.id AND pa.project_id IS ?4)) \
              AND (?5 = 0 OR ?4 IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pa \
@@ -1490,13 +1504,14 @@ impl Database {
             conds.push(format!("NOT {}", term_cond(patterns.len())));
         }
         let n = patterns.len();
+        let membership = library_membership_sql("a.id", Some(&format!("?{}", n + 1)));
         let sql = format!(
             "SELECT a.id, a.name, a.ext, a.origin_path, a.store_path, a.thumb_path, \
              a.size, a.width, a.height, a.duration, a.phash, a.colors, a.rating, a.source, \
              a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id, \
              a.reference_count, a.library_hidden \
              FROM assets a \
-             WHERE a.library_hidden=0 AND {} \
+             WHERE a.library_hidden=0 AND {membership} AND {} \
              AND (?{} IS NULL OR EXISTS(SELECT 1 FROM project_assets pf \
                  WHERE pf.asset_id = a.id AND pf.project_id IS ?{})) \
              AND (?{} = 0 OR ?{} IS NOT NULL OR NOT EXISTS(SELECT 1 FROM project_assets pg \
@@ -1605,7 +1620,7 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
             "SELECT {ASSET_COLS} FROM assets \
-             WHERE library_hidden=0 AND generation_session_id IN ( \
+             WHERE library_hidden=0 AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=assets.id) AND generation_session_id IN ( \
                SELECT gc.session_id FROM generation_conversations gc \
                  WHERE gc.conversation_id = ( \
                    SELECT conversation_id FROM generation_conversations \
@@ -2368,15 +2383,16 @@ impl Database {
         project_id: Option<&str>,
     ) -> AppResult<Vec<TagCount>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
+        let membership = library_membership_sql("assets.id", Some("?2"));
+        let mut stmt = conn.prepare(&format!(
             "SELECT t.id, t.name, COUNT(at.asset_id) AS cnt FROM tags t \
-             LEFT JOIN asset_tags at ON at.tag_id = t.id AND at.asset_id IN (SELECT id FROM assets WHERE library_hidden=0) \
+             LEFT JOIN asset_tags at ON at.tag_id = t.id AND at.asset_id IN (SELECT id FROM assets WHERE library_hidden=0 AND {membership}) \
              WHERE (?1 = 'all' OR t.source = ?1) AND (?2 IS NULL OR EXISTS(\
                SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = at.asset_id AND pa.project_id IS ?2\
              )) \
              GROUP BY t.id HAVING cnt > 0 OR ?1 = 'all' ORDER BY cnt DESC, t.name",
-        )?;
+        ))?;
         let rows = stmt.query_map(rusqlite::params![source, project_id], |r| {
             Ok(TagCount {
                 id: r.get::<_, String>(0)?,
@@ -2466,9 +2482,10 @@ impl Database {
         offset: i64,
     ) -> AppResult<Vec<Asset>> {
         let conn = self.conn.lock().unwrap();
+        let membership = library_membership_sql("assets.id", Some("?4"));
         let sql = format!(
             "SELECT {ASSET_COLS} FROM assets \
-             WHERE library_hidden=0 AND (?3 IS NULL OR folder_id IS ?3) \
+             WHERE library_hidden=0 AND {membership} AND (?3 IS NULL OR folder_id IS ?3) \
              AND (?4 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = assets.id AND pa.project_id IS ?4)) \
              AND id IN (SELECT asset_id FROM asset_colors WHERE bucket = ?5) \
@@ -2498,12 +2515,13 @@ impl Database {
     /// 全库色板：每个桶 + 资产数（count>0），hex 从 color::BUCKETS 注入。不受 500 限制。
     pub fn palette_overview(&self, project_id: Option<&str>) -> AppResult<Vec<ColorBucket>> {
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(
-            "SELECT ac.bucket, COUNT(*) AS cnt FROM asset_colors ac JOIN assets a ON a.id=ac.asset_id AND a.library_hidden=0 \
+        let membership = library_membership_sql("a.id", Some("?1"));
+        let mut stmt = conn.prepare(&format!(
+            "SELECT ac.bucket, COUNT(*) AS cnt FROM asset_colors ac JOIN assets a ON a.id=ac.asset_id AND a.library_hidden=0 AND {membership} \
              WHERE (?1 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
                WHERE pa.asset_id = ac.asset_id AND pa.project_id IS ?1)) \
              GROUP BY ac.bucket HAVING cnt > 0 ORDER BY cnt DESC LIMIT 12",
-        )?;
+        ))?;
         let rows = stmt.query_map(rusqlite::params![project_id], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
         })?;

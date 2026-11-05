@@ -58,6 +58,9 @@ async function dragCard(id) {
   const box = await card.boundingBox(), target = await dialog.locator(".draft-preview").boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
+  await page.waitForTimeout(700);
+  assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === "start_external_drag").length), 0,
+    "holding a draft library image must preserve the internal layer drag");
   await page.mouse.move(box.x + box.width / 2 + 14, box.y + box.height / 2 + 14, { steps: 4 });
   await hiddenLibrary();
   assert.equal(await page.evaluate(() => window.dragSource.isConnected), true, "drag source must stay mounted after the drawer folds");

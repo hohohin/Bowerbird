@@ -9,6 +9,10 @@ await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1800, height: 1100 } });
 page.setDefaultTimeout(5000);
+const selectMode = async (id, name) => {
+  await page.locator(`[data-workflow-card="${id}"]`).getByRole('combobox', { name: '触发方式' }).click();
+  await page.getByRole('option', { name, exact: true }).click();
+};
 try {
   await page.goto('http://127.0.0.1:1687/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
@@ -41,11 +45,12 @@ try {
       window.emitChange();
     };
   });
-  const output = page.locator('[data-workflow-session-output="ordinary-painting"]');
+  const output = page.locator('[data-workflow-material="ordinary-painting"] [data-canvas-connect-side="output"]');
   await output.waitFor();
+  await selectMode('repeat', '上游完成');
   // Exercise the actual session socket rather than constructing a workflow-node binding.
   const input = page.locator('[data-workflow-card="repeat"]').getByRole('button', { name: '输入：完成触发', exact: true });
-  const from = await output.boundingBox(), to = await input.boundingBox();
+  const from = await output.boundingBox(), to = await input.locator('i').boundingBox();
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
   await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 12 });
@@ -82,6 +87,20 @@ try {
   await page.evaluate(() => window.setSession('third-turn', 'done', true));
   await page.waitForTimeout(1800);
   assert.equal(await page.evaluate(() => window.targetCalls), 2, 'zero count cannot trigger');
+  await selectMode('repeat', '手动点击');
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    await c.edit(c.document.nodes.map(node => node.id === 'repeat' ? { ...node, triggerCount: 1 } : node));
+    await window.setSession('inactive-turn', 'done', true);
+  });
+  await page.waitForTimeout(1800);
+  assert.equal(await page.evaluate(() => window.targetCalls), 2, 'manual mode cannot consume native session completions');
+  assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'repeat').triggerCount), 1);
+  await selectMode('repeat', '上游完成');
+  await page.waitForTimeout(1800);
+  assert.equal(await page.evaluate(() => window.targetCalls), 2, 'switching back to completion cannot replay inactive turns');
+  await page.locator('[data-workflow-card="repeat"]').getByLabel('剩余触发次数').fill('0');
   // Reload sees an unconsumed historical success, but must never submit a new run for it.
   await page.evaluate(() => window.setSession('fourth-turn', 'done', true, 'late-job'));
   await page.evaluate(() => {
@@ -109,10 +128,14 @@ try {
     await c.edit([...c.document.nodes, trigger, target]);
     return trigger.id;
   });
-  await page.locator('[data-workflow-session-output]').first().press('Enter');
+  await selectMode(newTriggerId, '上游完成');
+  const sourceId = await page.evaluate(() => [...document.querySelectorAll('[data-workflow-material]')].map(element => element.dataset.workflowMaterial)
+    .find(id => window.snapshot().nodes.some(node => node.id === id && node.kind === 'prompt')));
+  assert.ok(sourceId, 'continued conversation has a visible output anchor');
+  await page.locator(`[data-workflow-material="${sourceId}"] [data-canvas-connect-side="output"]`).press('Enter');
   await page.locator(`[data-workflow-card="${newTriggerId}"]`).getByRole('button', { name: '输入：完成触发', exact: true }).press('Enter');
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'new-repeat').inputs.completion?.length === 1);
   await page.waitForTimeout(1800);
   assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'generation_history').length), 0, 'connecting an already completed conversation cannot replay its results');
-  console.log('native painting session: actual drag connection, pending/output ordering, atomic decrement, duplicate deduplication, failed turn, continued conversation, zero count and reload passed');
+  console.log('native painting session: actual drag/keyboard connection, pending/output ordering, atomic decrement, duplicate deduplication, failed turn, continued conversation, zero count, mode switch without replay and reload passed');
 } finally { await browser.close(); await server.close(); }

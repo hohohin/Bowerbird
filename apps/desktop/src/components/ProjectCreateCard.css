@@ -1,20 +1,9 @@
 .project-manager-panel .project-create-card {
-  --pc-surface: #191e20;
-  --pc-surface-hover: #22292b;
-  --pc-ink: #e4e6eb;
-  --pc-diagram: #d2d8d7;
   position: relative; overflow: visible;
-  color: var(--pc-ink); background: var(--pc-surface); cursor: pointer;
+  cursor: pointer;
 }
-html:not([data-theme="dark"]) .project-manager-panel .project-create-card {
-  --pc-surface: #e5e8e4;
-  --pc-surface-hover: #e1e7e3;
-  --pc-ink: #292f30;
-  --pc-diagram: #3c4947;
-}
-.project-manager-panel .project-create-card:is(:hover, :focus-within) { background: var(--pc-surface-hover); }
 .project-manager-card .project-create-body {
-  transform-style: preserve-3d; color: var(--pc-ink);
+  transform-style: preserve-3d;
 }
 .project-create-head-mark { width: 18px; height: 1px; background: currentColor; opacity: .5; }
 .project-manager-card .project-create-art {
@@ -22,20 +11,20 @@ html:not([data-theme="dark"]) .project-manager-panel .project-create-card {
   transform-style: preserve-3d; pointer-events: none;
 }
 .project-create-layer {
-  position: absolute; inset: 0; display: block; width: 100%; height: 100%; color: var(--pc-diagram);
+  position: absolute; inset: 0; display: block; width: 100%; height: 100%; color: var(--pm-muted);
   transform: translateZ(0); transition: transform 280ms cubic-bezier(.2,.75,.25,1);
 }
 .project-create-layer.is-base { background: var(--pm-screen); }
 .project-create-layer path, .project-create-layer circle { vector-effect: non-scaling-stroke; }
-.project-create-plane { fill: var(--pc-diagram); }
+.project-create-plane { fill: currentColor; }
 .plane-rear { fill-opacity: .04; stroke-opacity: .25; }
 .plane-middle { fill-opacity: .07; stroke-opacity: .4; }
 .plane-front { fill-opacity: .12; stroke-opacity: .7; }
-.project-create-layer.is-signal { color: var(--pc-ink); }
-.project-create-registration { display: inline-block; vertical-align: baseline; stroke: var(--pc-ink); stroke-width: 2; opacity: .65; }
+.project-create-layer.is-signal { color: var(--pm-ink); }
+.project-create-registration { display: inline-block; vertical-align: baseline; stroke: var(--pm-ink); stroke-width: 2; opacity: .65; }
 .project-create-meta { min-height: 1lh; }
 .project-create-arrow {
-  flex: 0 0 28px; width: 28px; height: 20px; color: var(--pc-ink); stroke: currentColor; stroke-width: 1;
+  flex: 0 0 28px; width: 28px; height: 20px; color: var(--pm-ink); stroke: currentColor; stroke-width: 1;
   opacity: .6; transform: translateX(-4px); transition: transform 220ms, opacity 220ms;
 }
 .project-create-card:is(:hover, :focus-within) .project-create-arrow { opacity: 1; transform: translateX(0); }

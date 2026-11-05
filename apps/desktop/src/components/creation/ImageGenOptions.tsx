@@ -91,7 +91,7 @@ export function ImageGenOptions({
           if (event.key === "Tab" && !event.shiftKey) { event.preventDefault(); menuRef.current?.querySelector<HTMLInputElement>("input")?.focus(); }
         }}
         className="tactical-menu-trigger flex h-7 items-center gap-1.5 border px-2 text-xs outline-none"
-        title="生成选项：透明图层 / 张数（即梦与 Cloud 按张数分别提交，消耗相应积分）"
+        title="生成选项：透明背景、张数（即梦、Cloud 按张计费）"
         aria-haspopup="dialog"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
@@ -127,7 +127,7 @@ export function ImageGenOptions({
           <div className="app-popover-title">生成选项</div>
           <label
             className="image-options-toggle flex cursor-pointer items-center gap-2 rounded px-1.5 py-1.5 text-xs text-ink hover:bg-panel2"
-            title="生成带透明背景的 PNG（background: transparent）"
+            title="生成透明背景 PNG"
           >
             <input
               type="checkbox"

@@ -1,4 +1,6 @@
 import { TacticalSelect } from "./TacticalSelect";
+import { AssetTagPicker } from "./AssetTagPicker";
+import { userErrorMessage } from "../lib/userError";
 import { VideoPlayer } from "./VideoPlayer";
 import { AudioWaveform } from "./AudioWaveform";
 import { isAudioAsset } from "../lib/audioMedia";
@@ -148,12 +150,19 @@ function Meta({ label, value }: { label: string; value: ReactNode }) {
  * 资产详情页（浏览模式下覆盖主区）：大图 + 元信息 + 反推描述 + 提示词板块 + 来源外链。
  * 大图走 store_path（原图全尺寸）；视频复用 VideoPlayer；SVG/图片用 <img>。
  */
-export function AssetDetail({ onExploreSource = (url) => { void open(url); }, selection }: {
+export function AssetDetail({ onExploreSource = (url) => { void open(url); }, selection, panelOnly = false, initialAsset, onReady }: {
   onExploreSource?: (url: string) => void;
+  /** Information-only inspector; the host owns the image and generation conversation. */
+  panelOnly?: boolean;
+  initialAsset?: Asset;
+  /** Initial inspector content has settled; the host can reveal it without empty sections flashing. */
+  onReady?: (assetId: string) => void;
   selection?: { assetId: string; onClose: () => void; onOpen: (id: string) => void; onContextMenu?: ReturnType<typeof useStore.getState>["openContextMenu"]; onNavigate?: () => void };
 }) {
   const selectedId = useStore((s) => s.detailAssetId);
   const id = selection?.assetId ?? selectedId;
+  const readyCallback = useRef(onReady);
+  readyCallback.current = onReady;
   const detailRoot = useRef<HTMLDivElement>(null);
   const assets = useStore((s) => s.assets);
   const activeProjectId = useStore((s) => s.activeProjectId);
@@ -185,7 +194,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const listedAsset = assets.find((a) => a.id === id);
   // 画板独有、中央来源或被筛选掉的素材不一定在当前列表中，按身份读取而不切换工作区。
   useEffect(() => {
-    if (!id || listedAsset) return;
+    if (!id || listedAsset || initialAsset?.id === id) return;
     let alive = true;
     api.getAssetsByIds([id]).then(([asset]) => {
       if (alive) setResolvedAsset(asset ?? null);
@@ -193,10 +202,11 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
       if (alive) notifyError(error, "无法读取素材详情");
     });
     return () => { alive = false; };
-  }, [id, listedAsset]);
+  }, [id, listedAsset, initialAsset?.id]);
   // 同流程轮播：生成图取整组过程图。sibling 可能被合并出主列表，故从 group 解析后再回退 assets。
   const asset: Asset | undefined = group.find((a) => a.id === id) ?? listedAsset
-    ?? (resolvedAsset?.id === id ? resolvedAsset : undefined);
+    ?? (resolvedAsset?.id === id ? resolvedAsset : undefined)
+    ?? (initialAsset?.id === id ? initialAsset : undefined);
   // 同流程轮播位置（生成图组内第几张；-1 = 不在组 / 非生成图）。
   const groupPos = asset ? group.findIndex((a) => a.id === asset.id) : -1;
 
@@ -214,8 +224,6 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const [sectionDraft, setSectionDraft] = useState("");
   const [codexHealth, setCodexHealth] = useState<CodexHealth | null>(null);
   const [tags, setTags] = useState<AssetTag[]>([]);
-  const [addingTag, setAddingTag] = useState(false);
-  const [tagDraft, setTagDraft] = useState("");
   const [assetCollections, setAssetCollections] = useState<Folder[]>([]);
   const [collectionPanelOpen, setCollectionPanelOpen] = useState(false);
   const [targetCollectionId, setTargetCollectionId] = useState("");
@@ -223,7 +231,8 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const [collectionName, setCollectionName] = useState("");
   const [collectionBusy, setCollectionBusy] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
-  const [detailTab, setDetailTab] = useState<"create" | "info">("info");
+  const [selectedTab, setDetailTab] = useState<"create" | "info">("info");
+  const detailTab = panelOnly ? "info" : selectedTab;
   const [generationSource, setGenerationSource] = useState<GenerationHistory | null>(null);
   const timerRef = useRef<number | null>(null);
   // caption id 集合快照：区分「新增/删除了一条反推」（重置展开态）与「编辑维度触发的重拉」（保持展开）。
@@ -235,46 +244,6 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
       setAnalyses(await api.listAnalysesByAsset(id));
     } catch (e) {
       console.error(e);
-    }
-  }
-
-  // source describes the label creator; origin records who assigned it to this image.
-  async function loadTags() {
-    if (!id) return;
-    try {
-      setTags(await api.listAssetTags(id));
-    } catch (e) {
-      console.error(e);
-    }
-  }
-
-  async function removeTag(t: AssetTag) {
-    if (!id) return;
-    // 按 source 全量替换：移除该 tag，同 source 的其余保留。
-    const keep = tags.filter((x) => x.source === t.source && x.name !== t.name).map((x) => x.name);
-    try {
-      await api.setAssetTags(id, keep, t.source);
-      await loadTags();
-      notifySuccess("类别已移除");
-    } catch (e) {
-      console.error(e);
-      notifyError(e, "移除类别失败");
-    }
-  }
-
-  async function addTag() {
-    const n = tagDraft.trim();
-    if (!id || !n) return;
-    const manuals = tags.filter((x) => x.source === "manual").map((x) => x.name);
-    try {
-      await api.setAssetTags(id, [...manuals, n], "manual");
-      setAddingTag(false);
-      setTagDraft("");
-      await loadTags();
-      notifySuccess("类别已添加");
-    } catch (e) {
-      console.error(e);
-      notifyError(e, "添加类别失败");
     }
   }
 
@@ -341,41 +310,43 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
     }
   }
   useEffect(() => {
-    loadAnalyses();
-    loadTags();
-    loadCollections();
     setCollectionPanelOpen(false);
     setTargetCollectionId("");
     setCreatingCollection(false);
     setCollectionName("");
     setDetailTab("info");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
     let alive = true;
+    setAnalyses([]);
+    setTags([]);
+    setAssetCollections([]);
     setGenerationSource(null);
     if (!id) return;
-    api
-      .generationHistory(id, activeProjectId)
-      .then((history) => {
-        if (alive && (history.turns.length > 0 || history.references.length > 0)) {
-          setGenerationSource(history);
-        }
-      })
-      .catch(() => {
-        // 普通导入素材没有生成历史，详情页保持无来源卡片即可。
-      });
+    // Keep ordinary details progressive; an embedded host reveals after the initial requests settle.
+    void Promise.allSettled([
+      api.listAnalysesByAsset(id).then(value => { if (alive) setAnalyses(value); }),
+      api.listAssetTags(id).then(value => { if (alive) setTags(value); }),
+      api.listAssetCollections(id).then(value => { if (alive) setAssetCollections(value); }),
+      ...(!panelOnly ? [api.generationHistory(id, activeProjectId).then(value => {
+        if (alive && (value.turns.length || value.references.length)) setGenerationSource(value);
+      })] : []),
+    ]).then(results => {
+      if (!alive) return;
+      for (const result of results.slice(0, 3)) if (result.status === "rejected") console.error(result.reason);
+      readyCallback.current?.(id);
+    });
     return () => {
       alive = false;
     };
-  }, [id, activeProjectId]);
+  }, [id, activeProjectId, panelOnly]);
 
   // 同流程轮播：本图是生成图（或被合并掉的 sibling）时取整组过程图。非生成图置空。
   // sibling 不在主列表 → assets.find 落空 → 仍走 listGenerationGroup 取组。
   // 组已含 id（轮播切 sibling）→ 跳过，免每次切换都 fetch。
   useEffect(() => {
-    if (!id) {
+    if (!id || panelOnly) {
       setGroup([]);
       return;
     }
@@ -396,11 +367,11 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, activeProjectId]);
+  }, [id, activeProjectId, panelOnly]);
 
   // 左右方向键切换过程图（输入框内不拦截，留给光标移动）。
   useEffect(() => {
-    if (group.length <= 1 || groupPos < 0) return;
+    if (panelOnly || group.length <= 1 || groupPos < 0) return;
     function onKey(e: KeyboardEvent) {
       const t = e.target as HTMLElement | null;
       if (t?.closest('[role="dialog"]') !== detailRoot.current?.closest('[role="dialog"]')) return;
@@ -416,16 +387,17 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [group, groupPos, openDetail]);
+  }, [group, groupPos, openDetail, panelOnly]);
 
   // 反推后台化：本图在别处（或本页点反推后离开再回来）跑完落地时，
   // 后端 emit analyses://changed；命中本图则自动刷新 analyses。
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
+    let alive = true;
     listen<{ asset_id: string }>("analyses://changed", (e) => {
       if (e.payload.asset_id === id) loadAnalyses();
-    }).then((u) => (unlisten = u));
-    return () => unlisten?.();
+    }).then((u) => (alive ? (unlisten = u) : u()));
+    return () => { alive = false; unlisten?.(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -609,7 +581,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const textAsset = !!asset && isTextAsset(asset);
   const [audioDuration, setAudioDuration] = useState<number | null | undefined>(asset?.duration);
   useEffect(() => setAudioDuration(asset?.duration), [asset?.id, asset?.duration, asset?.file_mtime]);
-  const imagePath = useCompatibleImagePath(audioAsset || textAsset ? null : asset?.store_path);
+  const imagePath = useCompatibleImagePath(panelOnly || audioAsset || textAsset ? null : asset?.store_path);
   const src = imagePath ? convertFileSrc(imagePath) : undefined;
   const zoom = useImageZoom(src);
 
@@ -673,8 +645,8 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const availableCollections = collections.filter((f) => !collectedIds.has(f.id));
 
   return (
-    <div className="asset-detail flex h-full w-full flex-col" ref={detailRoot}>
-      <header className="asset-detail-toolbar">
+    <div className={`asset-detail flex h-full w-full flex-col${panelOnly ? " asset-detail-panel-only" : ""}`} ref={detailRoot}>
+      {!panelOnly && <><header className="asset-detail-toolbar">
         <button
           onClick={closeDetail}
           className="asset-detail-back"
@@ -741,10 +713,10 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
           {assetCollections.length > 0 ? `已收藏 ${assetCollections.length}` : "收藏"}
         </button>}
       </header>
-      <div className="hatch-divider is-compact" aria-hidden="true"><span /></div>
+      <div className="hatch-divider is-compact" aria-hidden="true"><span /></div></>}
 
       <div className="flex flex-1 overflow-hidden">
-        <div className="asset-detail-stage flex flex-1 flex-col overflow-hidden bg-canvas">
+        {!panelOnly && <div className="asset-detail-stage flex flex-1 flex-col overflow-hidden bg-canvas">
           <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
             {textAsset && <Suspense fallback={<span className="text-sm text-muted">正在打开文档…</span>}>
               <TextDocumentEditor key={asset.id} asset={asset} onSaved={() => {
@@ -811,15 +783,15 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
               </button>
             </div>
           )}
-        </div>
+        </div>}
 
         <aside className="asset-detail-panel">
-          <div className="asset-detail-panel-header">
-            <div>
+          {(!panelOnly || COLLECTIONS_FEATURE_ENABLED) && <div className="asset-detail-panel-header">
+            {!panelOnly && <div>
               <div className="panel-kicker">Asset intelligence</div>
               <div className="mt-1 text-sm font-semibold text-ink">素材洞察</div>
-            </div>
-            <div className="asset-detail-tabs" role="tablist" aria-label="详情内容">
+            </div>}
+            {!panelOnly && <div className="asset-detail-tabs" role="tablist" aria-label="详情内容">
               <button
                 type="button"
                 role="tab"
@@ -840,8 +812,12 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                 <Sparkles size={13} />
                 再创作
               </button>}
-            </div>
-          </div>
+            </div>}
+            {panelOnly && COLLECTIONS_FEATURE_ENABLED && <button type="button" className="asset-detail-collect"
+              onClick={() => { setDetailTab("info"); setCollectionPanelOpen(value => !value); }}>
+              <Bookmark size={14}/>{assetCollections.length ? `已收藏 ${assetCollections.length}` : "收藏"}
+            </button>}
+          </div>}
 
           {detailTab === "info" && (
             <>
@@ -890,6 +866,8 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                     onKeyDown={(e) => {
                       if (e.key === "Enter") createAndAddCollection();
                       if (e.key === "Escape") {
+                        e.preventDefault();
+                        e.stopPropagation();
                         setCreatingCollection(false);
                         setCollectionName("");
                       }
@@ -981,7 +959,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
             </>
           )}
 
-          {!audioAsset && !textAsset && detailTab === "create" && (
+          {!panelOnly && !audioAsset && !textAsset && detailTab === "create" && (
             <>
 
           {/* 生成来源：只读还原首次生成时的原始创作板输入，而不是铺开发 provider 的 prompt。 */}
@@ -1003,7 +981,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                   <button
                     onClick={() => { selection?.onNavigate?.(); void viewGenerationHistory(asset.id); }}
                     className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-[11px] font-semibold text-white disabled:opacity-50"
-                    title="像回看对话一样，看这张图生成时的各轮 prompt 与产出图，并可继续提修改意见"
+                    title="查看生成记录并继续创作"
                   >
                     <MessageSquare size={13} />
                     回看所属创作
@@ -1012,7 +990,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                     <button
                       onClick={() => void openSession(genMeta.session_id!)}
                       className="text-[10px] text-accent hover:underline"
-                      title="在 Terminal 里 codex resume，看这次生成的完整对话含图"
+                      title="在 Codex 中继续这次对话"
                     >
                       在 codex 中打开会话 <ExternalLink size={11} className="inline" />
                     </button>
@@ -1081,7 +1059,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                   title={
                     !understandReady
                       ? understandReason
-                      : "选择反推引擎（Bowerbird Cloud / 本机 codex）按当前反推指令分析这张图片"
+                      : "用默认反推引擎进行反推"
                   }
                 >
                   {describing ? "反推中…" : queued ? "排队中…" : "反推"}
@@ -1103,7 +1081,6 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                   placeholder={DEFAULT_DESCRIBE_PROMPT}
                 />
                 <div className="flex flex-col gap-2 text-[10px] text-muted">
-                  <span>编辑后直接「反推」即用本次内容；「保存为默认」才作为下次默认指令。</span>
                   <div className="flex justify-end gap-3">
                     <button
                       onClick={() => {
@@ -1148,17 +1125,16 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
             )}
             {err && (
               <div className="whitespace-pre-wrap rounded bg-red-500/15 p-2 text-xs text-red-300">
-                {err}
+                {userErrorMessage(err, "删除反推结果失败，请重试。")}
               </div>
             )}
             <LearningHint topic="dimensions" />
-            {captions.length === 0 ? (
+            {captions.length === 0 && !understandReady && (
               <div className="text-xs text-muted">
-                {!understandReady
-                  ? understandReason
-                  : "点「反推」选择引擎（Bowerbird Cloud / 本机 codex）按当前指令分析这张图。"}
+                {understandReason}
               </div>
-            ) : (
+            )}
+            {
               captions.map((a) => {
                 const caption = parseCaptionPayload(a.payload);
                 const hasSections = caption.sections.length > 0;
@@ -1226,7 +1202,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                                     onClick={() => startEditSection(a.id, sidx, section.body)}
                                     disabled={describing || queued || !!editingSection}
                                     className="shrink-0 text-muted hover:text-accent disabled:opacity-50"
-                                    title="修改这个维度的内容（创作板发送时用新内容）"
+                                    title="修改维度内容"
                                     aria-label={`修改维度 ${section.title}`}
                                   >
                                     <Edit3 size={11} />
@@ -1271,7 +1247,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                           <div className="rounded border border-edge bg-panel px-2 py-1 text-[10px] text-muted">
                             {caption.parseStatus === "raw_fallback"
                               ? "没有按维度分段，可作为整段描述使用，或调整指令后重新反推。"
-                              : "这是较早的反推结果（未分段），重新反推可得到分维度描述。"}
+                              : "重新反推可按构图、光影等维度拆分描述。"}
                           </div>
                         </>
                       ))}
@@ -1283,14 +1259,14 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                           }
                           disabled={describing || queued}
                           className="text-accent hover:underline disabled:opacity-50"
-                          title="把这条反推正文登记为这张图的提示词（desc 角色）"
+                          title="将反推结果保存为提示词"
                         >
                           存为提示词
                         </button>
                         <button
                           onClick={() => sendCaptionToBoard(caption.text)}
                           className="text-accent hover:underline"
-                          title="把这条反推正文送进创作板编辑器"
+                          title="将反推结果用于创作"
                         >
                           送到创作板
                         </button>
@@ -1307,7 +1283,7 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                           <button
                             onClick={() => void openSession(caption.sessionId!)}
                             className="text-[10px] text-accent hover:underline"
-                            title="在 Terminal 里跑 codex resume，看这次反推的完整对话（含图）"
+                            title="在 Codex 中继续这次对话"
                           >
                             在 codex 中打开 ↗
                           </button>
@@ -1317,80 +1293,11 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
                   </div>
                 );
               })
-            )}
+            }
           </div>
 
           }
-          {/* 分类标签支持本地识别与人工纠正。 */}
-          <div className="asset-detail-card space-y-2">
-            <div className="text-xs font-medium uppercase tracking-wide text-muted">类别</div>
-            <div className="flex flex-wrap items-center gap-1.5">
-              {tags.length === 0 && !addingTag && (
-                <span className="text-xs text-muted">
-                  {audioAsset || textAsset ? "暂无标签，可手动添加" : "暂无标签，可手动添加或在侧栏开启自动分类"}
-                </span>
-              )}
-              {tags.map((t) => (
-                <span
-                  key={`${t.source}:${t.name}`}
-                  className={`flex items-center gap-1 rounded px-2 py-0.5 text-[11px] ${
-                    t.source === "auto" ? "bg-panel2 text-muted" : "bg-accent/15 text-accent"
-                  }`}
-                  title={t.origin === "local" ? "本地自动匹配" : t.origin === "manual" ? "手动添加" : "历史标签"}
-                >
-                  <span className="opacity-50">#</span> {t.name}
-                  <button
-                    onClick={() => removeTag(t)}
-                    className="text-[10px] opacity-60 hover:opacity-100"
-                    title="移除"
-                  >
-                    ✕
-                  </button>
-                </span>
-              ))}
-            </div>
-            {addingTag ? (
-              <div className="flex items-center gap-1">
-                <input
-                  autoFocus
-                  value={tagDraft}
-                  onChange={(e) => setTagDraft(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") addTag();
-                    if (e.key === "Escape") {
-                      setAddingTag(false);
-                      setTagDraft("");
-                    }
-                  }}
-                  placeholder="新类别名"
-                  className="w-32 rounded bg-panel2 px-2 py-1 text-xs outline-none ring-1 ring-edge focus:ring-accent"
-                />
-                <button
-                  onClick={addTag}
-                  disabled={!tagDraft.trim()}
-                  className="rounded bg-accent px-2 py-1 text-xs text-black disabled:opacity-50"
-                >
-                  加
-                </button>
-                <button
-                  onClick={() => {
-                    setAddingTag(false);
-                    setTagDraft("");
-                  }}
-                  className="text-xs text-muted hover:text-ink"
-                >
-                  取消
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setAddingTag(true)}
-                className="text-xs text-accent hover:opacity-80"
-              >
-                + 加类别
-              </button>
-            )}
-          </div>
+          {id && <AssetTagPicker key={id} assetId={id} tags={tags} onChange={setTags}/>}
 
             </>
           )}

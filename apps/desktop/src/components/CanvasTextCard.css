@@ -1,0 +1,7 @@
+/* Retain legacy socket geometry for saved cell and axis bindings. Scope is now
+   selected from the unified socket menu instead of colored points on the card. */
+.canvas-note.is-content-card .canvas-text-grid .workflow-cell-port[aria-hidden="true"] {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+}

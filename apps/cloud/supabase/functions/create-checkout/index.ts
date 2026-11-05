@@ -1,6 +1,8 @@
 import { requireUser } from "../_shared/auth.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { assertBodySize, corsHeaders } from "../_shared/limits.ts";
+import { wechatCheckoutEnabled } from "../_shared/wechatpay.ts";
+import { handleWechatCheckout } from "../_shared/wechatpay-service.ts";
 
 interface CheckoutRequest {
   product: string;
@@ -12,14 +14,17 @@ Deno.serve(async (request) => {
   let userId: string | undefined;
   try {
     cors = corsHeaders(request);
-    if ((Deno.env.get("BOWERBIRD_PAYMENT_MOCK") ?? "true") !== "true") {
-      throw new ApiError("not_configured", "真实支付尚未接入，购买入口未开放", false, 503);
-    }
     if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-    if (request.method !== "POST") throw new ApiError("invalid_request", "仅支持 POST", false, 405);
+    if (!["GET", "POST"].includes(request.method)) throw new ApiError("invalid_request", "仅支持 GET 或 POST", false, 405);
     assertBodySize(request);
     const { user, admin } = await requireUser(request);
     userId = user.id;
+    cors = { ...cors, "cache-control": "no-store" };
+    if (request.method === "GET") return jsonResponse({ enabled: wechatCheckoutEnabled(), provider: "wechatpay", custom_max_yuan: 21474836 }, 200, cors);
+    if ((Deno.env.get("BOWERBIRD_PAYMENT_MOCK") ?? "true") !== "true") {
+      if (!wechatCheckoutEnabled()) throw new ApiError("not_configured", "微信支付暂未开放", false, 503);
+      return jsonResponse(await handleWechatCheckout(request, { user, admin }), 201, cors);
+    }
     const body = (await request.json()) as CheckoutRequest;
     const { data: sku, error: catalogError } = await admin.from("billing_products")
       .select("product,kind,amount_minor,credits,months,pricing_version,monthly_bonus_credits,bonus_valid_days")

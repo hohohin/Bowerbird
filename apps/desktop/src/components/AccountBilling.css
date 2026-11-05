@@ -61,3 +61,10 @@
   .account-billing-terms { text-align: left; }
 }
 @media (prefers-reduced-motion: reduce) { .account-billing-option { transition: none; } }
+.account-checkout-dialog { z-index: 200; }
+.account-checkout-content { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
+.account-checkout-content p { margin: 0; overflow-wrap: anywhere; max-width: 100%; }
+.account-checkout-account { color: var(--bb-muted); font-size: 12px; }
+.account-checkout-price { font-size: 30px; font-variant-numeric: tabular-nums; }
+.account-checkout-qr { width: min(240px, 100%); aspect-ratio: 1; background: white; color: #141414; display: grid; place-items: center; }
+.account-checkout-qr img { display: block; width: 100%; height: auto; }

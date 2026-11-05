@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 import { startBrowserDrag, finishBrowserDrag } from "./fixtures/explorer/native-drag.mjs";
@@ -13,22 +14,29 @@ const directory = path.join(root, ".tmp", "explorer-native-" + Date.now());
 await mkdir(directory, { recursive: true });
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6Qy4AAAAASUVORK5CYII=", "base64");
 const video = await readFile("src-tauri/tests/fixtures/media/fragmented.mp4");
+const visualScript = await readFile("src/lib/explorerDragVisual.js", "utf8");
+const visualImage = '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="160"><path fill="#587c91" d="M40 20h120v120H40z"/><path fill="white" d="M200 20h100v120H200z"/></svg>';
 const servers = [];
 async function serve(port, handler) {
   const server = createServer(handler); servers.push(server);
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(port, "127.0.0.1", resolve); });
 }
 let imageRequests = 0;
-await serve(1557, (_, res) => { res.setHeader("Content-Type", "text/html"); res.end('<html><body><div id="drop" style="width:250px;height:600px">素材库</div></body></html>'); });
+await serve(1557, (req, res) => {
+  if (req.url === "/visual.js") { res.setHeader("Content-Type", "text/javascript"); res.end(visualScript); return; }
+  res.setHeader("Content-Type", "text/html"); res.end('<html><body><div id="drop" style="width:250px;height:600px">素材库</div><script src="/visual.js"></script></body></html>');
+});
 await serve(1558, (req, res) => {
   if (req.url === "/login") { res.setHeader("Set-Cookie", "explorerSession=logged-in; HttpOnly; Max-Age=3600; SameSite=Lax; Path=/"); res.writeHead(302, { Location: "/fixture" }); res.end(); return; }
   res.setHeader("Content-Type", "text/html");
+  if (req.url === "/visual-fixture") { res.end('<html><body style="padding:30px"><img id="visual-image" width="320" height="160" src="http://127.0.0.1:1559/visual.svg"></body></html>'); return; }
   res.end(`<html><body><h1>${req.headers.cookie?.includes("explorerSession=logged-in") ? "logged in" : "logged out"}</h1><a href="/login">Login</a><a href="/pin/123"><img id="image" draggable="true" style="width:150px;height:150px" src="http://127.0.0.1:1559/small.png" srcset="http://127.0.0.1:1559/small.png 1x, http://127.0.0.1:1559/protected.png 2x"></a><video id="video" controls muted style="display:block;width:320px;height:180px" poster="http://127.0.0.1:1559/protected.png" src="http://127.0.0.1:1559/video.mp4"></video></body></html>`);
 });
 await serve(1559, (req, res) => {
   imageRequests++;
   if (req.url === "/html") { res.setHeader("Content-Type", "text/html"); res.end("<html>Login required</html>"); return; }
   if (!req.headers.cookie?.includes("explorerSession=logged-in")) { res.writeHead(401); res.end("login required"); return; }
+  if (req.url === "/visual.svg") { res.setHeader("Content-Type", "image/svg+xml"); res.end(visualImage); return; }
   if (req.url === "/video-partial.mp4") { res.writeHead(206, { "Content-Type":"video/mp4", "Content-Range":`bytes 0-1023/${video.length}` }); res.end(video.subarray(0,1024)); return; }
   if (req.url === "/video.mp4") { res.setHeader("Content-Type", "video/mp4"); res.end(video); return; }
   res.setHeader("Content-Type", "image/png"); res.end(png); // deliberately no CORS headers
@@ -69,6 +77,57 @@ async function stop(main) {
   await Promise.race([exited, new Promise((_, reject) => setTimeout(() => reject(new Error("native exit timeout")), 10000))]);
   await browser.close().catch(() => {}); browser = null; child = null;
   await sourceBrowser?.close().catch(() => {}); sourceBrowser = null;
+}
+async function visualGeometry(page) {
+  const card = page.locator('[data-explorer-drag-visual] .card[data-ready]');
+  await card.waitFor();
+  await page.waitForTimeout(220);
+  const geometry = await card.evaluate(element => {
+    const style = getComputedStyle(element), paper = getComputedStyle(element.querySelector('.paper'));
+    const rect = element.getBoundingClientRect();
+    return { width: rect.width, height: rect.height, x: rect.x, y: rect.y,
+      padding: style.padding, radius: style.borderRadius, background: style.backgroundColor, paperBackground: paper.backgroundColor };
+  });
+  assert.ok(Math.abs(geometry.width - 96) < .1 && Math.abs(geometry.height - 48) < .1, 'native preview keeps the 2:1 image aspect');
+  assert.equal(geometry.padding, '0px'); assert.equal(geometry.radius, '0px');
+  assert.equal(geometry.background, 'rgba(0, 0, 0, 0)'); assert.equal(geometry.paperBackground, 'rgba(0, 0, 0, 0)');
+  return geometry;
+}
+async function verifyNativeVisual(main, source) {
+  await main.evaluate(() => window.__TAURI_INTERNALS__.invoke('navigate_source_browser', { url: 'http://127.0.0.1:1558/visual-fixture' }));
+  const image = source.locator('#visual-image'); await image.waitFor();
+  await image.evaluate(element => element.decode());
+  const rect = await image.boundingBox();
+  const drag = await startBrowserDrag(source, rect.x + 80, rect.y + 60);
+  try {
+    const sourceGeometry = await visualGeometry(source);
+    // Main uses the exact production factory loaded by the local fixture. This
+    // validates native rendering/public methods, not the React hook lifecycle.
+    await main.evaluate(url => {
+      window.fixtureVisual = window.createBowerbirdDragVisual(document.body);
+      window.fixtureVisual.pick({ id: 'native-visual', imageUrl: url }, 100, 250);
+    }, 'data:image/svg+xml,' + encodeURIComponent(visualImage));
+    const mainGeometry = await visualGeometry(main);
+    assert.equal(mainGeometry.width, sourceGeometry.width); assert.equal(mainGeometry.height, sourceGeometry.height);
+    await main.evaluate(() => window.fixtureVisual.land(100, 200));
+    const landing = await visualGeometry(main);
+    assert.ok(Math.abs(landing.x + landing.width / 2 - 100) < .1 && Math.abs(landing.y + landing.height / 2 - 200) < .1, 'landing centers the actual image at the frozen point');
+    await main.evaluate(() => window.fixtureVisual.settle(document.querySelector('#drop')));
+    await main.locator('[data-explorer-drag-visual]').waitFor({ state: 'detached' });
+    const executable = path.resolve(process.argv.slice(2).find(arg => !arg.startsWith('--')) || 'src-tauri/target-local-classification/debug/examples/explorer_smoke.exe');
+    const binary = await readFile(executable);
+    assert.ok(binary.includes(Buffer.from(visualScript)), 'native executable embeds the current shared visual script');
+    await writeFile(path.join(directory, 'visual-result.json'), JSON.stringify({ sourceGeometry, mainGeometry, landing,
+      sourceProductionInitialization: true, mainProductionFactory: true, mainReactLifecycle: false,
+      visualSha256: createHash('sha256').update(visualScript).digest('hex'), binarySha256: createHash('sha256').update(binary).digest('hex') }, null, 2));
+  } finally {
+    await drag.session.send('Input.dispatchDragEvent', { type: 'dragCancel', x: 0, y: 0, data: drag.data });
+    await drag.session.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 0, y: 0, button: 'left', buttons: 0 });
+    await drag.session.detach();
+  }
+  await source.locator('[data-explorer-drag-visual]').waitFor({ state: 'detached' });
+  await main.evaluate(() => window.__TAURI_INTERNALS__.invoke('navigate_source_browser', { url: 'http://127.0.0.1:1558/fixture' }));
+  await source.locator('#video').waitFor();
 }
 try {
   let { main, source } = await start();
@@ -117,6 +176,7 @@ try {
   await sourceSession.detach();
   await source.locator("[data-explorer-drag-visual]").waitFor({ state: "detached" });
   await main.waitForFunction(async id => (await window.__TAURI_INTERNALS__.invoke("smoke_drag_notices")).some(n => !n.start && n.id === id), dropped.dragId);
+  await verifyNativeVisual(main, source);
   // A real browser-originated VIDEO drag crosses the same standard-text bridge.
   await source.waitForFunction(() => document.querySelector('#video').readyState >= 2);
   const videoRect = await source.locator('#video').boundingBox();

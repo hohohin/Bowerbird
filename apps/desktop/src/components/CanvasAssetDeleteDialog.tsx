@@ -28,9 +28,10 @@ export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const readIds = useRef(target.assetIds);
+  const completed = useRef({ recycled: 0, cleaned: 0 });
   const [progress, setProgress] = useState(0);
   const [failed, setFailed] = useState(false);
-  useEffect(() => { readIds.current = target.assetIds; }, [target]);
+  useEffect(() => { readIds.current = target.assetIds; completed.current = { recycled: 0, cleaned: 0 }; }, [target]);
   useEffect(() => {
     let alive = true;
     setItems(null); setError(null);
@@ -61,10 +62,12 @@ export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
       try {
         stopAudioPreview(item.original.asset_id);
         await assetOriginals.trash(item.original);
+        if (item.original.missing) completed.current.cleaned++;
+        else completed.current.recycled++;
       } catch (reason) {
         remaining.push(item);
         console.error("Original recycling failed", reason);
-        failures.push(`${item.original.name}：${userErrorMessage(reason, "删除未完成，请稍后重试。")}`);
+        failures.push(`${item.original.name}：${userErrorMessage(reason, item.original.missing ? "清理未完成，请稍后重试。" : "删除未完成，请稍后重试。")}`);
       }
       setProgress(index + 1);
     }
@@ -76,28 +79,38 @@ export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
       setError(`已完成 ${items.length - remaining.length} 项，${remaining.length} 项失败，以下仅列出未完成项。\n${failures.join("\n")}`);
       return;
     }
-    notifySuccess(`已将 ${items.length} 个原文件放入回收站`);
+    notifySuccess([
+      completed.current.recycled ? `已将 ${completed.current.recycled} 个原文件放入回收站` : null,
+      completed.current.cleaned ? `已清理 ${completed.current.cleaned} 个失效条目` : null,
+    ].filter(Boolean).join("，"));
     try { onComplete?.(); } catch (reason) { console.error("Refresh after recycling failed", reason); }
     onClose();
   }
 
-  return <ModalShell title="删除原文件" width="md" preventClose={busy} onClose={() => { if (!busyRef.current) onClose(); }} footer={<>
+  const missingCount = items?.filter(item => item.original.missing).length ?? 0;
+  const onlyMissing = missingCount > 0 && missingCount === items?.length;
+  const actionLabel = onlyMissing ? "清理失效条目" : missingCount ? "确认删除" : "删除原文件";
+  return <ModalShell title={actionLabel} width="md" preventClose={busy} onClose={() => { if (!busyRef.current) onClose(); }} footer={<>
     <button data-modal-autofocus className="app-modal-button" disabled={busy} onClick={onClose}>取消</button>
-    <button className="app-modal-button is-danger" disabled={busy || !items?.length} onClick={() => void remove()}>{busy ? `处理中 ${progress}/${items?.length}` : failed ? "重试失败项" : "删除原文件"}</button>
+    <button className="app-modal-button is-danger" disabled={busy || !items?.length} onClick={() => void remove()}>{busy ? `处理中 ${progress}/${items?.length}` : failed ? "重试失败项" : actionLabel}</button>
   </>}>
     <div className="space-y-3">
-      <p className="text-sm">以下原文件将放入系统回收站，其他集合的分身和画布引用将无法访问原件。标签、分析及画布资料保留。</p>
+      <p className="text-sm">{onlyMissing ? "原件已不在登记位置，仅从素材库移除失效条目。标签、分析及画布资料保留。"
+        : missingCount ? "现存原文件将放入系统回收站，失效条目仅从素材库移除。标签、分析及画布资料保留。"
+          : "以下原文件将放入系统回收站，其他集合的分身和画布引用将无法访问原件。标签、分析及画布资料保留。"}</p>
       {!items && !error && <p role="status" className="text-sm text-muted">正在读取原文件…</p>}
       {error && <div role="alert" className="whitespace-pre-wrap break-words text-xs text-red-400">{error}
         <button className="app-modal-button mt-2 block" disabled={busy} onClick={() => { setFailed(false); setAttempt(value => value + 1); }}>重新读取</button>
       </div>}
       {items && <ul aria-label="待删除素材" className="grid grid-cols-2 gap-3 sm:grid-cols-3">{items.map(({ original, asset }) => <li key={original.asset_id} data-delete-asset-id={original.asset_id} className="min-w-0 rounded-lg border border-edge bg-panel2 p-2">
         <div className="flex aspect-square items-center justify-center overflow-hidden rounded bg-panel">
-          {isTextAsset(asset) ? <FileText size={28} aria-label="文本"/> : isAudioAsset(asset) ? <Music2 size={28} aria-label="音频"/> : isVideoPath(original.path)
-            ? <VideoPoster path={original.path} poster={asset.thumb_path} alt={original.name} className="h-full w-full object-contain"/>
+          {original.missing && !asset.thumb_path ? <FileText size={28} aria-label="原件缺失"/>
+            : isTextAsset(asset) ? <FileText size={28} aria-label="文本"/> : isAudioAsset(asset) ? <Music2 size={28} aria-label="音频"/> : isVideoPath(original.path)
+            ? <VideoPoster path={original.missing ? undefined : original.path} poster={asset.thumb_path} alt={original.name} className="h-full w-full object-contain"/>
             : <img src={convertFileSrc(asset.thumb_path || original.path)} alt={original.name} loading="lazy" className="h-full w-full object-contain"/>}
         </div>
         <p className="mt-2 truncate text-xs" title={original.name}>{original.name}</p>
+        {original.missing && <p className="mt-1 text-xs text-muted">原件缺失 · 仅移出素材库</p>}
         <p className="mt-1 break-all text-xs text-muted">{original.path}</p>
       </li>)}</ul>}
     </div>

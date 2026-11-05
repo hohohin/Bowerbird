@@ -86,7 +86,7 @@ impl Database {
             "SELECT a.id,COALESCE(e.fingerprint,f.sha256),e.asset_id IS NOT NULL FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path IN (?1,?2,?3)",
             params![names[0],names[1],names[2]], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
         let id = if let Some((id, expected, external)) = existing {
-            restore_trashed_original(&tx, &id)?;
+            restore_present_original(&tx, &id)?;
             if expected.as_deref().is_some_and(|value| value != hash) {
                 // Creative records belong to the stable asset, not to one content revision.
                 // Only derived visual data is invalidated; manual text/analysis stays intact.

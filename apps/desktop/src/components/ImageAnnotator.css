@@ -18,6 +18,9 @@
 .annotation-toolbar button { white-space: nowrap; }
 .annotation-toolbar button svg { flex-shrink: 0; }
 
+.annotation-stage[data-pan-mode="true"] svg,
+.annotation-stage[data-pan-mode="true"] svg * { cursor: inherit !important; }
+
 .annotation-toolbar-actions {
   display: flex;
   align-items: center;
@@ -33,6 +36,15 @@
 @media (max-width: 1400px) {
   .annotation-toolbar-tools { gap: 4px; }
   .annotation-toolbar-tools .annotation-tool { padding-inline: 6px; }
+}
+
+@media (max-width: 900px) {
+  .image-annotator .annotation-toolbar { gap: 8px; padding-inline: 8px; }
+  .annotation-toolbar-tools { gap: 3px; }
+  .annotation-toolbar-tools .annotation-tool { padding-inline: 4px; }
+  .annotation-toolbar-tools > .mx-1 { margin-inline: 0; }
+  .annotation-toolbar-actions { gap: 4px; }
+  .annotation-toolbar-actions button { padding-inline: 6px; }
 }
 
 @media (max-width: 1100px) {

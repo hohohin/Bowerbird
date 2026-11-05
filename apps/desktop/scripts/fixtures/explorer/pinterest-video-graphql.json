@@ -1,0 +1,16 @@
+{
+  "__typename": "Pin",
+  "id": "UGluOjEyMzQ1Njc4OQ==",
+  "entityId": "123456789",
+  "videos": null,
+  "storyPinData": {
+    "pages": [{"blocks": [{
+      "__typename": "StoryPinVideoBlock",
+      "videoDataV2": {
+        "videoListMobile": {"vHLSV3MOBILE": {"url": "https://cdn.example/right.m3u8", "thumbnail": "https://cdn.example/poster.jpg"}},
+        "videoListEXP3": null,
+        "videoList720P": {"v720P": {"url": "https://cdn.example/right.mp4", "thumbnail": "https://cdn.example/poster.jpg"}}
+      }
+    }]}]
+  }
+}

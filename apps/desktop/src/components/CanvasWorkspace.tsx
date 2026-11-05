@@ -42,7 +42,7 @@ import { CanvasTacticalOverlay } from "./CanvasTacticalOverlay";
 import { TacticalSelect } from "./TacticalSelect";
 import "./CanvasTactical.css";
 import "./CanvasTacticalCards.css";
-import { canvasSectionMembers, canvasTextMinSize, emptyCanvasCell, expandCanvasSections, readCanvasNote, type CanvasNotePayload } from "../lib/canvasNotes";
+import { canvasDocumentHeight, canvasSectionMembers, canvasTextMinSize, emptyCanvasCell, expandCanvasSections, readCanvasNote, type CanvasNotePayload } from "../lib/canvasNotes";
 import { beginOnboardingOperation, useOnboarding } from "../lib/onboardingStore";
 import { notify, notifyError } from "../lib/notify";
 import { arrangeCanvasNodes } from "../lib/canvasArrangement";
@@ -2232,7 +2232,7 @@ export function CanvasWorkspace({
     }
     if (node.kind === "note" && "payloadJson" in node) {
       const note = readCanvasNote(node);
-      if (note.note_type === "document") return { x: node.x, y: node.y, width: node.width, height: 56 };
+      if (note.note_type === "document") return { x: node.x, y: node.y, width: node.width, height: canvasDocumentHeight(note.text) };
       if (note.note_type === "text" || note.note_type === "images") {
         const minimum = canvasTextMinSize(note.cells);
         return { x: node.x, y: node.y, width: Math.max(node.width, minimum.width), height: Math.max(node.height, minimum.height) };
@@ -3305,8 +3305,8 @@ export function CanvasWorkspace({
       return;
     }
     const state = useStore.getState();
-    if (canvasPrimaryMaterialAction(state.boardOpen, !!state.genEditing) === "compose") {
-      // Creation image clicks are arbitrated once at the workspace boundary.
+    if (node.asset.assetId || canvasPrimaryMaterialAction(state.boardOpen, !!state.genEditing) === "compose") {
+      // Library image clicks are arbitrated once at the workspace boundary in both modes.
       return;
     }
 
@@ -3466,7 +3466,7 @@ export function CanvasWorkspace({
     const payloadJson = JSON.stringify(value);
     const node = graphNodesRef.current.find(candidate => candidate.id === nodeId);
     if (!node) return;
-    const minimum = value.note_type === "document" ? { width: 280, height: 56 } : value.note_type !== "section" ? canvasTextMinSize(value.cells, value.note_type === "images", value.note_type === "bubble") : node;
+    const minimum = value.note_type === "document" ? { width: 280, height: canvasDocumentHeight(value.text) } : value.note_type !== "section" ? canvasTextMinSize(value.cells, value.note_type === "images", value.note_type === "bubble") : node;
     const updated = { ...node, payloadJson, width: Math.max(size?.width ?? node.width, minimum.width), height: Math.max(size?.height ?? node.height, minimum.height) };
     graphNodesRef.current = graphNodesRef.current.map(candidate => candidate.id === nodeId ? updated : candidate);
     setGraphNodes(graphNodesRef.current);
@@ -4687,7 +4687,7 @@ export function CanvasWorkspace({
   const timelineEdges = timelineProjection.edges;
 
   const workflowMaterials = useMemo(() => visibleMaterials.flatMap<MaterialAnchor>(node => node.kind === "folder"
-    ? [{ id: node.id, groupId: node.id, assetIds: [...new Set(node.assets.filter(asset => !isVideoPath(asset.storePath)).flatMap(asset => asset.assetId ? [asset.assetId] : []))], ...nodeRect(node) }]
+    ? [{ id: node.id, groupId: node.id, assetIds: [...new Set(node.assets.filter(asset => !isVideoPath(asset.storePath)).flatMap(asset => asset.assetId ? [asset.assetId] : []))], mediaAssetIds: [...new Set(node.assets.flatMap(asset => asset.assetId ? [asset.assetId] : []))], ...nodeRect(node) }]
     : node.kind === "asset" && node.asset.assetId ? [{ id: node.id, assetId: node.asset.assetId, video: isVideoPath(node.asset.storePath), ...nodeRect(node) }] : []),
   [visibleMaterials, expandedFolderIds, showAssetNames]);
   type WorkflowProps = ComponentProps<typeof CanvasWorkflowLayer>;
@@ -5105,7 +5105,7 @@ export function CanvasWorkspace({
           <CanvasMediaProvider key={loading ? "loading" : projectId} zoom={zoom}><div
             ref={planeRef}
             className="canvas-plane"
-            style={{ "--canvas-running-width": `${4 / zoom}px`, transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` } as CSSProperties}
+            style={{ "--canvas-running-width": `${4 / zoom}px`, "--canvas-zoom": zoom, transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` } as CSSProperties}
           >
             {projectId && !loading && !loadFailed && activeCanvas.id === projectId && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} toBoardPoint={toBoardPoint} graphNodes={nonChatGraphNodes} conversationCards={conversationCards} imageOnlyConversationIds={imageOnlyConversationIds}
               selectedIds={selectedCanvasNodeIds} panReady={spacePanReady || drawingTool === "pan"} onSelect={workflowOnSelect}
@@ -5117,9 +5117,10 @@ export function CanvasWorkspace({
             {graphNodes.filter(node => node.kind === "note" && node.hiddenAt == null && !canvasChatId(node)).map(savedNode => {
               const value = resolveGenerationCells(readCanvasNote(savedNode), graphNodes);
               const minimum = value.note_type === "text" || value.note_type === "images" ? canvasTextMinSize(value.cells) : savedNode;
-              const node = { ...savedNode, width: Math.max(savedNode.width, minimum.width), height: value.note_type === "document" ? 56 : Math.max(savedNode.height, minimum.height) };
+              const node = { ...savedNode, width: Math.max(savedNode.width, minimum.width), height: value.note_type === "document" ? canvasDocumentHeight(value.text) : Math.max(savedNode.height, minimum.height) };
               const section = value.note_type === "section";
               const selected = selectedCanvasNodeIds.has(node.id);
+              const openDocument = () => { documentEditorSession.current++; setDocumentEditor({ nodeId: node.id, projectId: node.projectId, initialDocument: { title: value.title || "文本", markdown: value.text } }); };
               const workflowController = projectId ? canvasWorkflowController(projectId) : null;
               const failedWriter = workflowController?.document.nodes.some(writer => (writer.textTarget?.nodeId === node.id || writer.textSource === node.id)
                 && (workflowController.issue?.nodeId === writer.id || workflowNodeRun(workflowController.document, writer.id)?.steps[writer.id]?.status === "failed"));
@@ -5129,7 +5130,8 @@ export function CanvasWorkspace({
                 onPointerDown={event => beginGraphNodeDrag(event, node)} onPointerMove={moveGraphNode}
                 onPointerUp={endGraphNodeDrag} onPointerCancel={event => endGraphNodeDrag(event, true)}
                 onLostPointerCapture={event => endGraphNodeDrag(event, true)}
-                onContextMenu={event => openCanvasNodeMenu(event, node.id)}>
+                onContextMenu={event => openCanvasNodeMenu(event, node.id)}
+                onDoubleClick={value.note_type === "document" ? event => { if ((event.target as Element).closest("button")) return; event.stopPropagation(); openDocument(); } : undefined}>
                 {section ? <>
                   {value.artboard?.base_asset_id && assetById.get(value.artboard.base_asset_id)?.store_path && <CanvasImage className="canvas-artboard-base" data-frequent-asset-id={value.artboard.base_asset_id} draggable={false}
                     path={assetById.get(value.artboard.base_asset_id)!.store_path} sourceWidth={assetById.get(value.artboard.base_asset_id)!.width} sourceHeight={assetById.get(value.artboard.base_asset_id)!.height} alt="画板基底" />}
@@ -5144,8 +5146,8 @@ export function CanvasWorkspace({
                       minimum={{ width: 120, height: 80 }} onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} />
                   ))}
                 </> : value.note_type === "document" ? <CanvasDocumentCard value={value}
-                  onEdit={() => { documentEditorSession.current++; setDocumentEditor({ nodeId: node.id, projectId: node.projectId, initialDocument: { title: value.title || "文本", markdown: value.text } }); }}
-                  onConnect={(port, x, y) => workflowRef.current?.connectCell(node.id, port, x, y)}/>
+                  onEdit={openDocument}
+                  onConnect={(port, x, y, keyboard) => workflowRef.current?.connectCell(node.id, port, x, y, keyboard)}/>
                 : <CanvasTextCard value={value} selected={selected} width={node.width} height={node.height} zoom={zoomRef.current} getZoom={readCanvasZoom}
                   onOpenPreview={openCanvasSourcePreview}
                   onMediaContextMenu={(event, asset) => {
@@ -5167,8 +5169,8 @@ export function CanvasWorkspace({
                       <p>{summary?.text ?? "生成会话已不可用"}</p>
                     </button>;
                   }}
-                  onConnectCell={(cellId, x, y) => workflowRef.current?.connectCell(node.id, cellId, x, y)}
-                  onInput={(cellId, disconnect, type, point) => workflowRef.current?.inputText(node.id, cellId, disconnect, type, point)}
+                  onConnectCell={(cellId, x, y, keyboard) => workflowRef.current?.connectCell(node.id, cellId, x, y, keyboard)}
+                  onInput={(cellId, disconnect, type, point, keyboard) => workflowRef.current?.inputText(node.id, cellId, disconnect, type, point, keyboard)}
                   inputLocked={workflowRef.current?.isLocked(node.id)}
                   onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} onSelect={() => setSelectedCanvasNodeIds(new Set([node.id]))}
                   onChange={(next, size) => updateCanvasNote(node.id, next, size)} />}
@@ -5244,7 +5246,7 @@ export function CanvasWorkspace({
                   data-canvas-filter={images.length ? materialFilterState(selectedConversationImage(node.id, images)!) : undefined}
                   tabIndex={0}
                   aria-busy={running}
-                  aria-label={imageOnly ? `${selectedConversationImage(node.id, images)?.name ?? "生成图片"}，${selectedVideo ? "点击播放视频" : boardOpen || genEditing ? "单击预览，双击添加引用" : "单击查看生成会话，双击放大"}` : undefined}
+                  aria-label={imageOnly ? `${selectedConversationImage(node.id, images)?.name ?? "生成图片"}，${selectedVideo ? "点击播放视频" : boardOpen || genEditing ? "单击预览，双击添加引用" : "点击查看图片与会话"}` : undefined}
                   className={`canvas-prompt-node ${imageOnly ? "is-image-only" : ""} ${conversation?.outputs.length ? "has-conversation-images" : ""} ${running ? "canvas-card-running" : ""} ${selectedCanvasNodeIds.has(node.id) ? "is-selected" : ""} is-${summary.status} ${focusedNodeId === node.id ? "is-focused" : ""} ${activeDragId === node.id || (activeDragId != null && selectedCanvasNodeIds.has(node.id)) ? "is-moving" : ""} ${supersededTaskIds.has(latest.id) ? "is-superseded" : ""}`}
                   onContextMenu={(event) => openCanvasNodeMenu(event, node.id, latest)}
                   style={{

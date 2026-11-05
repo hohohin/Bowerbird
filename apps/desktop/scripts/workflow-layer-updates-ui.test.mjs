@@ -36,7 +36,7 @@ try {
           onSelect: noop, onNodesChanged: noop, onEdited: noop, onOpenGeneration: noop, onOpenAgent: noop, onDragStart: noop, onDragMove: noop,
           onDragEnd: noop, onNodeMenu: noop, onRemove: noop, ensureMaterialized: async () => {}, toBoardPoint: (x, y) => ({ x, y }), onPlaced: noop })))));
     window.changeUnrelated = () => { for (let i = 0; i < 30; i++) useStore.setState({ searchQuery: `unrelated-${i}` }); };
-    window.moveCursor = (x, y) => document.body.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: x, clientY: y }));
+    window.moveCursor = (x, y, buttons = 0) => document.body.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerType: 'mouse', buttons, clientX: x, clientY: y }));
     window.unmountLayer = () => flushSync(() => root.render(null));
   }, cache);
   await page.locator('[data-workflow-material="source"]').waitFor();
@@ -45,11 +45,11 @@ try {
   await page.waitForTimeout(80);
   assert.equal(await page.evaluate(() => window.layerCommits), 0, 'unrelated store updates must not commit the workflow tree');
 
-  await page.locator('[data-workflow-material="source"]').dispatchEvent('pointerdown', { clientX: 140, clientY: 90 });
+  await page.locator('[data-workflow-material="source"]').getByRole('button', { name: '添加下游', exact: true }).dispatchEvent('pointerdown', { button: 0, buttons: 1, pointerType: 'mouse', clientX: 158, clientY: 90 });
   await page.locator('.workflow-wires .is-draft').waitFor({ state: 'attached' });
-  await page.evaluate(() => window.moveCursor(200, 200));
+  await page.evaluate(() => window.moveCursor(200, 200, 1));
   await page.waitForTimeout(80);
-  await page.evaluate(() => { window.layerCommits = 0; for (let i = 0; i < 60; i++) window.moveCursor(300 + i, 250 + i); });
+  await page.evaluate(() => { window.layerCommits = 0; for (let i = 0; i < 60; i++) window.moveCursor(300 + i, 250 + i, 1); });
   await page.waitForFunction(() => document.querySelector('.workflow-wires .is-draft')?.getAttribute('d')?.endsWith('359 309'));
   assert.equal(await page.evaluate(() => window.layerCommits), 0, 'draft cursor updates must not commit unrelated cards');
   await page.keyboard.press('Escape');

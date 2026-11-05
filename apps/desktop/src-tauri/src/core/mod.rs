@@ -40,3 +40,5 @@ pub mod generation_diagnostics;
 pub mod local_chat;
 pub mod local_chat_cards;
 pub mod quick_transfer;
+pub mod file_intake;
+pub mod missing_originals;

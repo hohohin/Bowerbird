@@ -77,7 +77,7 @@ function Preview() {
     return () => { cancel(); window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", cancel); window.removeEventListener("keydown", escape); window.removeEventListener("blur", cancel); };
   }, []);
   useLayoutEffect(() => {
-    if (carrying?.source !== "canvas") { setBlurBounds(null); return; }
+    if (!carrying) { setBlurBounds(null); return; }
     const measure = () => {
       setBlurBounds(app.current?.getBoundingClientRect() ?? null);
       setSourceBounds(press.current?.element.querySelector(".material-art")?.getBoundingClientRect() ?? null);
@@ -87,7 +87,7 @@ function Preview() {
   }, [carrying]);
   useEffect(() => { document.documentElement.dataset.theme = dark ? "dark" : "light"; }, [dark]);
   return <main className={`long-press-preview${carrying ? " is-carrying" : ""}`} data-carrying={carrying?.source}>
-    <section ref={app} className={`mock-bowerbird${carrying?.source === "canvas" ? " is-blurred" : ""}`} aria-label="Bowerbird 演示界面">
+    <section ref={app} className={`mock-bowerbird${carrying ? " is-blurred" : ""}`} aria-label="Bowerbird 演示界面">
       <header className="mock-topbar"><span className="mock-brand">Bowerbird</span><button className="project-name">城市视觉 <ChevronDown size={13}/></button><div className="mock-topbar-actions"><button aria-label="搜索" title="搜索"><Search size={16}/></button><button aria-label="切换明暗主题" title="切换明暗主题" onClick={() => setDark(value => !value)}><Sun size={16}/></button></div></header>
       <div className="mock-workspace">
         <aside className="mock-sidebar"><div className="mock-nav"><button><Grid2X2 size={15}/>素材库</button><button className="is-active"><Layers size={15}/>画布</button></div>
@@ -107,7 +107,7 @@ function Preview() {
         <div className="receiver-composer">{received.map(item => <div className="received-material" data-received={item.id} key={item.id}><div><Artwork item={item}/></div><span>{item.name}</span><Check size={13}/></div>)}<span className="composer-placeholder">添加消息</span><button aria-label="发送演示" disabled><ArrowUpRight size={15}/></button></div>
       </div>
     </section>
-    {createPortal(<>{carrying?.source === "canvas" && blurBounds && <div className="app-drag-blur" style={{ left: blurBounds.left, top: blurBounds.top, width: blurBounds.width, height: blurBounds.height }}><Hologram source={sourceBounds} viewport={blurBounds}/><div className="drag-hud" role="status"><div className="drag-hud-mark" aria-hidden="true"><i/><ArrowUpRight size={18}/></div><h2>拖到其他应用中使用</h2><p>保持按住，移到目标应用后松开</p><div className="drag-hud-foot"><span>Esc 取消</span></div></div></div>} {carrying && <div ref={ghost} className="carried-material" aria-label={`已抓起 ${carrying.item.name}`} style={{ transform: `translate3d(${cursor.current.x + 18}px,${cursor.current.y + 18}px,0)` }}><Artwork item={carrying.item}/><span className="carried-frame" aria-hidden="true"><i/><i/><i/><i/></span></div>}</>, document.body)}
+    {createPortal(<>{carrying && blurBounds && <div className="app-drag-blur" style={{ left: blurBounds.left, top: blurBounds.top, width: blurBounds.width, height: blurBounds.height }}><Hologram source={sourceBounds} viewport={blurBounds}/><div className="drag-hud" role="status"><div className="drag-hud-mark" aria-hidden="true"><i/><ArrowUpRight size={18}/></div><h2>拖到其他应用中使用</h2><p>保持按住，移到目标应用后松开</p><div className="drag-hud-foot"><span>Esc 取消</span></div></div></div>} {carrying && <div ref={ghost} className="carried-material" aria-label={`已抓起 ${carrying.item.name}`} style={{ transform: `translate3d(${cursor.current.x + 18}px,${cursor.current.y + 18}px,0)` }}><Artwork item={carrying.item}/><span className="carried-frame" aria-hidden="true"><i/><i/><i/><i/></span></div>}</>, document.body)}
   </main>;
 }
 createRoot(document.getElementById("root")!).render(<Preview/>);

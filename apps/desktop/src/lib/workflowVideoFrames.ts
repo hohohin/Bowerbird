@@ -7,9 +7,11 @@ import { readVideoLastFrame } from "./videoFrame";
 
 /** Only canvas video image sockets become frames; the generator's video output stays a video. */
 export function videoFrameInputValues(node: WorkflowNode, values: Record<string, WorkflowValue[]>, canvas: readonly CanvasNode[]) {
+  if (node.kind === "agent" && node.skill === "hyperframes") return [];
   const inputs = generationInputNode(node).inputs.image ?? [];
   return (values.image ?? []).filter((_, index) => {
     const input = inputs[index];
+    if (input?.autoConnect) return false;
     return input?.assetNodeId || input?.canvasNodeId && canvas.some(card => card.id === input.canvasNodeId && card.kind === "prompt");
   });
 }

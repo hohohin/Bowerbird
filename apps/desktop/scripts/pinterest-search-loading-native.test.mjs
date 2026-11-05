@@ -11,9 +11,9 @@ const directory=path.resolve('.tmp/pinterest-loading-native-'+Date.now());
 await mkdir(directory,{recursive:true});
 const executable=path.resolve(process.argv[2]||'src-tauri/target/debug/examples/pinterest_search_smoke.exe');
 const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6Qy4AAAAASUVORK5CYII=','base64');
-const html=`<!doctype html><html><head><title>Lens ready, image pending</title></head><body>
+const html=`<!doctype html><html><head><meta charset="utf-8"><title>Lens ready, image pending</title></head><body>
 <script id="__PWS_DATA__" type="application/json">{"context":{"is_authenticated":true}}</script>
-<button aria-label="Lens" onclick="showUploader()">Lens</button><div id="uploader"></div>
+<button aria-label="Pinterest 镜头" onclick="showUploader()">搜图</button><div id="uploader"></div>
 <script>
 window.received=[];window.loadFired=false;
 window.addEventListener('load',()=>window.loadFired=true);
@@ -41,7 +41,7 @@ async function poll(check,message,timeout=12000){
 }
 async function snapshot(){
   return {page:await source.evaluate(()=>({url:location.href,readyState:document.readyState,loadFired:window.loadFired,
-    lensReady:!!document.querySelector('button[aria-label="Lens"]')&&typeof window.showUploader==='function',
+    lensReady:!!document.querySelector('button[aria-label="Pinterest 镜头"]')&&typeof window.showUploader==='function',
     pendingImageComplete:document.querySelector('#pending-image')?.complete,received:window.received?.length})),
     events:await main.evaluate(()=>window.searchEvents)};
 }
@@ -74,7 +74,7 @@ try{
   const assetId=await main.evaluate(()=>window.__TAURI_INTERNALS__.invoke('smoke_asset'));
   const requestId='lens-ready-before-load';
   await main.evaluate(args=>window.__TAURI_INTERNALS__.invoke('start_pinterest_image_search',args),{assetId,requestId});
-  await poll(async()=>releases.length&&await source.locator('button[aria-label="Lens"]').isVisible(),'synthetic Lens never became ready');
+  await poll(async()=>releases.length&&await source.locator('button[aria-label="Pinterest 镜头"]').isVisible(),'synthetic Lens never became ready');
   const initial=await snapshot();
   assert.equal(initial.page.lensReady,true);
   assert.equal(initial.page.loadFired,false);

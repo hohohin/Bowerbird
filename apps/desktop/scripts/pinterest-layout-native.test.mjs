@@ -6,7 +6,8 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-import { lensFixture, imageFor } from './fixtures/pinterest-layout/page.mjs';
+import { imageFor } from './fixtures/pinterest-layout/page.mjs';
+import { chromeFixture } from './fixtures/pinterest-layout/chrome.mjs';
 
 const directory = path.resolve('.tmp/pinterest-layout-native-' + Date.now());
 await mkdir(directory, { recursive: true });
@@ -19,7 +20,7 @@ await new Promise((resolve, reject) => { server.once('error', reject); server.li
 let child, mainBrowser, sourceBrowser, main, source, diagnostic = '';
 const errors = [], unexpected = [], checks = [];
 function nativeFixture() {
-  return lensFixture().replace('</body>', `<button id="fixture-lens" aria-label="Lens">Lens</button><div id="fixture-uploader"></div>
+  return chromeFixture().replace('</body>', `<button id="fixture-lens" aria-label="Lens">Lens</button><div id="fixture-uploader"></div>
 <script>window.layoutUploads=[];document.querySelector('#fixture-lens').onclick=()=>{
  document.querySelector('#fixture-uploader').innerHTML='<input id="lens-file-upload" data-test-id="lens-file-upload" type="file">';
  document.querySelector('#lens-file-upload').onchange=async event=>{
@@ -60,6 +61,11 @@ async function ready() {
 async function assertLayout(name) {
   const value = await geometry();
   checks.push({ name, ...value });
+  assert.equal(value.availableWidth, value.width, `${name}: scrollbar must not reserve native width`);
+  assert.equal(await source.locator('#VerticalNavContent').evaluate(node => node.getBoundingClientRect().width), 36, `${name}: native navigation is half-width`);
+  assert.ok(Math.abs((await source.locator('#nav-icon').boundingBox()).width-16)<0.1, `${name}: navigation icons fit the compact sidebar`);
+  assert.equal(await source.locator('[data-test-id="PinBetterSaveDropdown"]').isVisible(), false, `${name}: board selector hidden`);
+  assert.equal(await source.locator('[data-test-id="PinBetterSaveButton"]').isVisible(), false, `${name}: native save hidden`);
   assert.ok(value.source.height <= 161, `${name}: reference preview exceeds 160px (${value.source.height})`);
   assert.ok(value.image.height > 0 && value.image.height <= 161, `${name}: reference image is visible`);
   assert.equal(value.fit, 'contain', name);
@@ -82,7 +88,9 @@ try {
   mainBrowser = await poll(() => chromium.connectOverCDP('http://127.0.0.1:9567', { timeout: 1000 }), 'main native CDP missing');
   main = await poll(async () => mainBrowser.contexts()[0].pages().find(page => page.url().startsWith('http://127.0.0.1:1557')), 'main page missing');
   await main.waitForFunction(() => window.__TAURI_INTERNALS__?.invoke);
-  await invoke('open_source_browser', { url: 'http://127.0.0.1:1557/source', bounds: { x: 250, y: 100, width: 360, height: 600 } });
+  await invoke('open_source_browser', { url: 'http://127.0.0.1:1557/source', bounds: { x: 250, y: 100, width: 360, height: 600, overlay: { x:340,y:220,width:20,height:98,cut:4 } } });
+  if(process.platform==='win32')assert.deepEqual(await invoke('smoke_region',{points:[[341/360,221/600],[343/360,223/600],[341/360,317/600]]}),[true,false,true],'chamfer corners remain webpage pixels, with no rectangular background residue');
+  if(process.platform==='win32')assert.deepEqual(await invoke('smoke_region',{points:[[.99,.4],[.99,.1],[.99,.8],[.2,.4]]}),[false,true,true,true],'the first native frame already exposes the overlay');
   sourceBrowser = await poll(() => chromium.connectOverCDP('http://127.0.0.1:9568', { timeout: 1000 }), 'source native CDP missing');
   source = await poll(async () => sourceBrowser.contexts()[0].pages().find(page => page.url().includes('/source')), 'source page missing');
   source.setDefaultTimeout(8000);
@@ -104,23 +112,38 @@ try {
   await source.waitForURL('https://www.pinterest.com/'); await ready();
   await assertOriginal('homepage');
   const originalDocument = await source.evaluate(() => performance.timeOrigin);
+  await main.evaluate(async () => {
+    window.locationEvents = [];
+    const handler = window.__TAURI_INTERNALS__.transformCallback(event => window.locationEvents.push(event.payload));
+    await window.__TAURI_INTERNALS__.invoke('plugin:event|listen', { event: 'source-browser://location', target: { kind: 'Any' }, handler });
+  });
   await source.evaluate(() => history.pushState({}, '', '/lens-search/?synthetic=spa'));
   await pause(300); await assertLayout('homepage to Lens SPA without DOM changes');
+  await poll(() => main.evaluate(() => window.locationEvents.at(-1) === 'https://www.pinterest.com/lens-search/?synthetic=spa'), 'SPA address was not reported for memory');
   await source.locator('[data-grid-item="1"] a').click();
   await source.waitForURL('**/pin/1001/'); await pause(300);
   await assertOriginal('Pin detail');
   assert.deepEqual(await source.evaluate(() => window.pinClicks), ['/pin/1001/']);
+  await poll(() => main.evaluate(() => window.locationEvents.at(-1) === 'https://www.pinterest.com/pin/1001/'), 'Pin address was not reported for memory');
   await invoke('source_browser_back');
   await source.waitForURL('**/lens-search/**'); await pause(300);
   const back = await assertLayout('native Back returns to Lens');
+  await poll(() => main.evaluate(() => window.locationEvents.at(-1) === 'https://www.pinterest.com/lens-search/?synthetic=spa'), 'native Back did not update remembered address');
   assert.equal(back.timeOrigin, originalDocument, 'SPA navigation keeps the same document');
 
   const resize = async (width, visible = true) => invoke('resize_source_browser', { bounds: { x: 250, y: 100, width, height: 600 }, visible });
   await resize(720, false); await resize(720);
   await poll(() => source.evaluate(() => innerWidth === 720 && window.layoutRuns.at(-1)?.columns >= 2), 'native resize did not reach site masonry');
   const wide = await assertLayout('native hidden-resize-show at 720px');
+  await invoke('resize_source_browser', { bounds: { x:250,y:100,width:720,height:600,overlay:{x:700,y:220,width:20,height:98} }, visible:true });
+  assert.equal(await source.evaluate(()=>innerWidth),720,'floating tab never narrows the native page');
+  const regionPoints=[[.99,.4],[.99,.1],[.99,.8],[.2,.4]];
+  if(process.platform==='win32')assert.deepEqual(await invoke('smoke_region',{points:regionPoints}),[false,true,true,true],'only the tab footprint reveals the main webview; page above and below stays full-width');
+  checks.push({name:'floating handle excludes only its footprint',width:await source.evaluate(()=>innerWidth),points:process.platform==='win32'?await invoke('smoke_region',{points:regionPoints}):null});
+  await assert.rejects(invoke('resize_source_browser',{bounds:{x:250,y:100,width:720,height:600,overlay:{x:700,y:220,width:65,height:98}}}),/尺寸无效/);
   await source.screenshot({ path: path.join(directory, 'wide.png') });
   await resize(320);
+  if(process.platform==='win32')assert.deepEqual(await invoke('smoke_region',{points:regionPoints}),[true,true,true,true],'removing the overlay clears its native region');
   await poll(() => source.evaluate(() => innerWidth === 320 && window.layoutRuns.at(-1)?.columns === 1), 'native narrow resize did not reach site masonry');
   const narrow = await assertLayout('native resize back to 320px');
   assert.ok(wide.nativeLayout.columns > narrow.nativeLayout.columns);
@@ -147,7 +170,7 @@ try {
   assert.deepEqual(errors, []); assert.deepEqual(unexpected, []);
   const executableBytes = await readFile(executable);
   const hashes = {};
-  for (const file of [executable, 'src-tauri/src/commands/source_browser.rs', 'src-tauri/src/commands/source_browser_pinterest_layout.js', 'src-tauri/src/commands/source_browser_pinterest.js']) {
+  for (const file of [executable, 'src-tauri/src/commands/source_browser.rs', 'src-tauri/src/commands/source_browser_pinterest_layout.js', 'src-tauri/src/commands/source_browser_pinterest.js', 'src-tauri/src/commands/source_browser_pinterest_chrome.js']) {
     const bytes = file === executable ? executableBytes : await readFile(file);
     if (file.endsWith('.js')) assert.ok(executableBytes.includes(bytes), `rebuild the native fixture: current ${file} is not embedded`);
     hashes[file] = createHash('sha256').update(bytes).digest('hex');

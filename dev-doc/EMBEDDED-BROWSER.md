@@ -6,7 +6,41 @@
 
 ## 交互与范围
 
+### 2026-11-04：标签落点直接归类（源码待发布）
+
+从探索页采集图片或视频到素材库的标签目录项、标签分组内容区时，复用 `.is-tag-catalog` 内的 `data-tag-id`／`data-tag-section` 识别标签，并在松手时冻结标签与项目；沿 `localClassification.example`／`projectClassification(...).example` 写入人工标签。未分类分组和其他落点保持原处理。交付失败保留已入库 Asset，采集记录重试只补交付，不重新下载或读取后来变化的标签。
+
+图片调用采集接口时传可选 `skipClassification: true`，同时释放对应拖动预分析，不认领／完成分类，也不展示分类轮盘。原生入库通过 `ingest_from_bytes_with_classification(..., false)`，在同一事务内插入素材并移除自动分类队列项；去重命中的已有素材也移除待分类项。普通入库入口默认值仍为 true，不改变全局分类开关、自动命名或既有人工归属保护。开始拖动时目标尚未知，因此不能撤回松手前已发送的预分析请求；松手后取消剩余分析。
+
+正式组件隔离回归与原生入库测试见 [行动记录](../project_logs/2026-11-04-explorer-tag-drop.md)，不等同于真实站点账号和 OS 物理拖放全链路验收。
+
+### 2026-11-04：地址记忆与紧凑控件后续（源码未发布）
+
+顶栏探索首次打开读取既有本机 `bowerbird.explorer.lastUrl`，有效 HTTP(S) 地址恢复到上次网页；没有记录、记录无效或存储不可用时才用默认页。收起重开复用原生文档，保留其滚动／站内状态；重启只恢复网址，不自动展开探索。设计师引导不再每次开关强制重置网址，显式来源链接和以图搜图仍按本次操作导航。
+
+WebView2 的 `pushState`／`replaceState` 不触发原有加载通知。创建原生浏览器时启动唯一地址观察任务，每 500ms 读取其真实 URL，仅变化时向主窗口发送 `source-browser://location`，不改变加载状态；复用／隐藏不新增观察任务，WebView 关闭或读取失败后退出。沿用 HTTP(S) 与无内嵌凭据边界，不给远程网页增加 IPC 权限。该通知驱动地址栏及已有本机记忆，也覆盖搜图结果、Pin 和后退。
+
+Pinterest 适配只隐藏原生 `PinBetterSaveDropdown` 与 `PinBetterSaveButton`，包括后续 SPA 动态插入；其他按钮保持。探索页签位于面板右边缘内侧并垂直居中，24px 缩为 14.4px，页签／面板外壳／加载占位区共用 `--explore-panel-surface`；网页 viewport 铺满面板，不为把手保留独立宽度。PanelEdgeHandle 的 overlay 外观为 14.4×76px 窄切角控件，上方关闭、下方拖动，无 ESC 小字与旧尾部；切角值由实际 SVG 提供。SourceBrowserPanel 传递精确边界和 cut，不加矩形余量；Windows 用同轮廓多边形裁剪原生子窗口并透出主窗口把手，其上下网页保持完整宽度，移除 overlay 恢复完整窗口。范围受 64×128 上限、viewport 边界和切角不超过短边一半校验，按实际客户区尺寸适配 DPI。Mac 命中和遮罩同步采用该多边形；缺省 cut 为零兼容原矩形协议。设计与直角残留红绿回归见 [记录](../project_logs/2026-11-04-explore-handle-redesign.md)。Mac 接入透明父视图的命中穿透与图层遮罩，保留原 WKWebView 身份和坐标，尚未原生编译／实机验收。素材库页签尺寸和位置保持。浮动回归见 [记录](../project_logs/2026-11-04-explore-overlay-icons.md)。验证与当前开发实例生效证据见 [行动记录](../project_logs/2026-11-04-explore-memory-controls.md)。
+
+### 2026-11-04：Pinterest 滚动条、侧栏与探索把手（源码未发布）
+
+探索面板右边缘改用素材库同款紧凑页签，包含退出按钮和调宽握柄，移除贯穿高度的 10px 拖动条。两处共用 `PanelEdgeHandle`，各自保留宽度与关闭逻辑；探索支持左右键、Home／End、双击恢复默认宽度及 Esc。
+
+精确 Pinterest 顶层页面注入主应用同一 `overlayScrollbars.js`／`OverlayScrollbars.css`，包括 Lens 结果和普通页面：原生轨道不占宽高，4px 斜纹滑块只在滚动时以 50% 透明度显现，800ms 后淡出。支持文档根与嵌套滚动，保留滑块拖动、滚轮和键盘操作。原生导航从 72px 缩到 36px，正文与展开侧栏同步前移 36px；导航 SVG 和图标容器内图片缩到 16px，按钮保持现有 32px 点击宽度。仍使用 Pinterest 自己的按钮、内容与分页。
+
+浏览器及原生 WebView2 合成站点测试通过，当前开发 EXE 已自动重建并包含最终脚本；未发布安装包，真实账号的全部页面变体和 Mac 未验收。结构依据、红绿验证、质量工具及原有测试的边界见 [行动记录](../project_logs/2026-11-04-pinterest-chrome.md)。
+
+### 2026-11-04：采集悬浮缩略图（源码未发布）
+
+来源网页和主工作区继续共用 `explorerDragVisual.js`；容器按图片自然比例缩至 96×112px 上限，无 padding／白底／圆角托盘，透明图片保持 alpha，贴边方点和深浅中性色沿媒体规范。图片加载、替换后同步容器尺寸、标签位置与指针边缘约束；落下居中和减少动态效果保持，失败图片不显示空壳。主端预分析预览改用等比 PNG，Jev 模型仍使用原 512×512 补白 JPEG，一次解码后分别输出。分类开关、请求、来源与采集流程保持，验证与运行程序边界见 [记录](../project_logs/2026-11-04-explorer-drag-visual.md)。
+
 ### 2026-11-03：视频流与采集记录（源码未发布）
+
+**2026-11-05 Pinterest GraphQL 与公开 CDN 修复：** 真实 Pin 使用 `entityId` 作为数字身份，`id` 为不透明 Relay ID；视频位于 `storyPinData.pages[].blocks[].videoDataV2.videoList*`。来源解析同时支持既有 REST 与这些 GraphQL 字段，并读取首屏 `__PWS_RELAY_SSR_REQUESTS__` 中已完成的 Pin 响应；同一 Pin 有明确完整 MP4 时优先选用，仍拒绝身份冲突和无法定位的多视频。Windows 对精确 HTTPS Pinterest 页面到 HTTPS pinimg.com 媒体采用无凭据请求，下载字节与清单无跳转检查共用该策略；其他来源保持原策略。真实页面拖动脚本已选中完整 MP4，原生生产采集通路下载、音轨与全片解码通过。此前 11 月 4 日的验证未覆盖 GraphQL／Relay 全部入口；本次未向用户库实际落盘。只有字节范围 HLS、没有明确完整文件的情况仍不支持。详见 [修复与验证记录](../project_logs/2026-11-05-pinterest-video.md)。
+
+**2026-11-04 真实站点复测后的修复：** 小红书网页接口实际将流分组及 videoCodec 命名为 `EF4`／`EF5` 等不透明标记，不能把它们限定为 h264／h265／av1。现对已匹配笔记的所有数组流分组读取地址，仍只交付一个明确视频；该页面的 Blob／MSE 背后是完整 MP4 的范围播放，不必有 HLS 清单。初始状态优先按 `note.noteDetailMap[id]`／Pinterest pins 索引定位，有界解包 Vue Ref，避免响应式依赖图和整个信息流耗尽通用扫描预算；显式媒体 ID 冲突仍拒绝。真实小红书及 Pinterest Blob 视频已沿当前登录 WebView2 网络栈取回完整文件并全片解码；原生夹具同时覆盖 API 响应和大状态索引两条路径。实际证据、临时诊断移除及真实入库验收边界见 [复核记录](../project_logs/2026-11-04-explorer-video-live.md)。
+
+**2026-11-04 来源识别修复：** 站点响应不再按发起请求时的 SPA 地址丢弃；JSON XHR 以实际解码内容（最多 1,048,576 个字符）检查大小，接受压缩和无 Content-Length 响应。提取有明确笔记／Pin ID 的视频记录，缓存最多 128 条，无关统计响应不占缓存；本次拖动仍检查当前文档地址、元素连接和视频来源未变化。支持小红书 `note_card`／`noteCard` 包装及 `search_result` 路径、Pinterest 带 slug 的 Pin 路径和初始数据脚本；瀑布流只从当前卡片内的唯一笔记／Pin 链接确定来源。近期网络记录优先，没有播放地址的简略记录可回到同一身份的初始数据。MSE 清单沿实际 MediaSource 与追加字节的关系跨 SPA 保留，不靠最后一个网络视频猜测。红绿及原生端到端验证见 [行动记录](../project_logs/2026-11-04-explorer-video-source.md)；真实账号页面仍需实机验收。
 
 探索浏览器工具栏右侧新增采集记录按钮，图片与视频共用队列。弹层展示排队、解析、下载、合并、保存和结果，支持取消、失败重试及查看素材；使用既有模态遮挡规则、Esc 与焦点恢复。总字节数未知时不显示百分比，分段下载显示实际片段数。本机保留最近 50 条摘要，不持久化请求 URL、Cookie、令牌或重试闭包；重启后的未完成项标记已中断，需回到网页重新拖入。
 
@@ -30,6 +64,12 @@ Windows 同源／Blob 用原文档读取，跨源用 CDP 浏览器网络栈。�
 
 验证入口：`scripts/explorer-selection-drag.test.mjs` 使用 Chromium 真实鼠标／原生拖放，检查正文选区、已选文字的原生文本载荷、不生成采集通知，以及笔记图片、轮播、视频和透明覆盖层的图片载荷；`verify-native-explorer.mjs` 增加原生 WebView2 笔记拖选断言。实际结果、旧拖图脚本挂起的基线对照及未覆盖边界见 [修复记录](../project_logs/2026-11-01-explorer-selection.md)。不将合成页面验证记为真实小红书账号或 OS 物理拖放验收。
 
+### 2026-11-04：Pinterest 瀑布流覆盖层直接拖图（源码未发布）
+
+Pinterest 普通 Pin 的图片区域有半透明顶层 wash 和渐变 hover 层，原先通用防穿透规则会将它们视为独立遮挡，导致必须进入详情才能拖图。现仅在精确 Pinterest HTTPS 域名、官方 `pin-card-hover-overlay` 内识别其最近 `pinWrapper`，允许其中两个官方装饰层代理图片命中；图片必须属于同一个最近 wrapper，仍按指针位置与完整绘制顺序确认。
+
+普通遮罩规则、四层祖先边界、正文／按钮／输入框／固定面板与弹窗阻断保持；不放行任意半透明层，不修改站点样式。复用既有清晰图片地址、Pin 来源、拖动通知与采集流程。覆盖源代码依据、红绿与原生验证见 [修复记录](../project_logs/2026-11-04-pinterest-feed-drag.md)。
+
 ### 2026-11-03：Pinterest 以图搜图自动交付修复（本次修复源码未发布）
 
 素材详情操作栏、共用素材右键菜单和连接集合素材菜单提供「Pinterest 以图搜图」。多选时只搜索本次右键命中的图片，连接分身按底层素材 ID 解析原件。支持 JPEG／PNG／WebP／GIF／BMP／HEIC，视频与音频不提供入口；不依赖素材来源链接，原「发现更多」保留。
@@ -43,6 +83,12 @@ Windows 同源／Blob 用原文档读取，跨源用 CDP 浏览器网络栈。�
 一手协议核对：[官方 Lens 帮助](https://help.pinterest.com/en/article/pinterest-lens)、官方公开 `60329-466c563d30b4c62c.js`／`48228-4acf6afe41899d7a.js`。其中 `/upload-lens-image/` 是 POST 服务地址，不是页面入口；不能拼接本机路径直达结果。账号差异、中文控件名称与网站变更仍可能使适配失效。
 
 验证入口为 `scripts/pinterest-search-ui.test.mjs`、`scripts/pinterest-adapter.test.mjs`、Rust `commands::pinterest_search::tests`、`scripts/pinterest-search-native.test.mjs` 与 `scripts/pinterest-search-loading-native.test.mjs`。正式组件和隐藏 WebView2 均使用临时库／合成图片／隔离资料；原生测试拦截 Pinterest 响应为合成页面，不计为真实账号上传验收。操作、红绿证据、剩余边界见 [修复记录](../project_logs/2026-11-03-pinterest-search-fix.md)，初次接入见 [开发记录](../project_logs/2026-11-01-pinterest-search.md)。
+
+### 2026-11-04：中文 Pinterest 自动交图修复（源码未发布）
+
+只读查看用户真实网页，确认当前中文搜索栏的无障碍名称是 `Pinterest 镜头`。原适配器仅定位 `Lens`，导致中文入口无点击、无文件交付；并非运行实例遗漏了上次源码修复。按钮查找与登录恢复判断共用精确中英文选择器，继续限定 Lens 专属文件输入，不扩大到 Pin 创建等上传控件。
+
+适配器回归增加中文及登录 JSON 尚未更新的场景，HTML 明确声明 UTF-8；原生慢资源测试改用实际观察到的中文按钮，旧 EXE 收到零次文件，新 EXE 交付一次 PNG 并进入 `/lens-search/`。合成网页回归、真实未登录站点诊断及真实账号上传的边界分别见 [行动记录](../project_logs/2026-11-04-pinterest-localized-search.md)。
 
 ### 2026-11-03：Pinterest 搜图结果纵向布局（源码未发布）
 

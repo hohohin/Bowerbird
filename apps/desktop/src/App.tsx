@@ -27,10 +27,12 @@ import { APPEND_TEXT_EVENT } from "./components/creation/useCreationEditor";
 import { GenerationPanel } from "./components/GenerationPanel";
 import { CloudAgentSession } from "./components/CloudAgentPanel";
 import { LibraryGenerationCoordinator } from "./components/LibraryGenerationCoordinator";
+import { WorkflowScheduleCoordinator } from "./components/WorkflowScheduleCoordinator";
 import { CloudAgentRuntimeCoordinator } from "./components/CloudAgentRuntimeCoordinator";
 import { COLLECTIONS_FEATURE_ENABLED, LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED } from "./lib/featureFlags";
 import { ExploreWorkspace } from "./components/ExploreWorkspace";
 import { DEFAULT_EXPLORER_URL } from "./lib/explorer";
+import { readLastSourceAddress } from "./lib/sourceDiscovery";
 import { cancelPinterestSearch, isPinterestSearchCurrent, PINTEREST_SEARCH_URL, usePinterestSearch } from "./lib/pinterestSearch";
 import { CodexOnboarding } from "./components/CodexOnboarding";
 import { ExtensionOnboarding } from "./components/ExtensionOnboarding";
@@ -870,6 +872,7 @@ function App() {
     <div className="app-shell flex h-full w-full flex-col">
       <CloudAgentRuntimeCoordinator />
       <LibraryGenerationCoordinator />
+      <WorkflowScheduleCoordinator />
       <ToastViewport />
       <StartupUpdateDialog ready={!initializing} />
       <FileDropImport />
@@ -902,12 +905,7 @@ function App() {
         onHomeViewChange={view => { if (projectWorkspaceActive) void exitCreative(view); else useStore.getState().setLibraryHomeView(view); }}
         exploring={sourceBrowserOpen}
         onExplore={() => {
-          const guide = useOnboarding.getState().guide;
-          const designerExplore = guide.status === "active" && guide.role === "designer" && guide.sessions.designer?.step === 3;
-          if (!sourceBrowserUrl || designerExplore) {
-            setSourceBrowserUrl(DEFAULT_EXPLORER_URL);
-            if (designerExplore) setSourceBrowserNavigation(id => id + 1);
-          }
+          if (!sourceBrowserUrl) setSourceBrowserUrl(readLastSourceAddress() ?? DEFAULT_EXPLORER_URL);
           setSourceBrowserOpen(current => !current);
         }}
       />

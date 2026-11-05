@@ -17,16 +17,140 @@ const settle = () => page.waitForTimeout(400);
 async function bottomGap(dock) {
   return dock.evaluate(element => innerHeight - element.getBoundingClientRect().bottom);
 }
+async function bottomCoverage(dock) {
+  const layout = await dock.evaluate(element => {
+    const surface = element.querySelector('.composer-projection-surface').getBoundingClientRect();
+    const dots = element.querySelector('.composer-projection-dots').getBoundingClientRect();
+    const footer = element.querySelector('.composer-toolbar').getBoundingClientRect();
+    return { surfaceGap: innerHeight - surface.bottom, dotsGap: innerHeight - dots.bottom, footerGap: innerHeight - footer.bottom };
+  });
+  assert.ok(layout.surfaceGap <= 1 && layout.dotsGap <= 1, `blur and dots reach the bottom after opening: ${JSON.stringify(layout)}`);
+  assert.ok(layout.footerGap >= 8 && layout.footerGap <= 16, `footer stays close to the window bottom: ${JSON.stringify(layout)}`);
+}
+async function waitCollapsed(dock) {
+  await page.waitForFunction(element => element.classList.contains('is-collapsed'), await dock.elementHandle());
+}
 async function singleRow(dock) {
-  const centers = await dock.locator('.composer-toolbar').evaluate(toolbar => [...toolbar.querySelectorAll('.composer-video-fields > *, .composer-add-material, .composer-help, .composer-send')]
-    .map(element => element.getBoundingClientRect()).filter(rect => rect.width && rect.height).map(rect => rect.y + rect.height / 2));
-  assert.ok(centers.every(center => Math.abs(center - centers[0]) < 1), `single footer row: ${centers}`);
+  const layout = await dock.locator('.composer-toolbar').evaluate(toolbar => {
+    const controls = [...toolbar.querySelectorAll('.composer-video-fields > *, .composer-add-material, .composer-help, .composer-send')]
+      .map(element => element.getBoundingClientRect()).filter(rect => rect.width && rect.height);
+    return { centers: controls.map(rect => rect.y + rect.height / 2), width: toolbar.clientWidth, scroll: toolbar.scrollWidth,
+      right: toolbar.getBoundingClientRect().right, controlRight: Math.max(...controls.map(rect => rect.right)),
+      overlap: controls.some((rect, index) => controls.some((other, otherIndex) => index < otherIndex && rect.x < other.right - 1 && other.x < rect.right - 1)) };
+  });
+  assert.ok(layout.centers.every(center => Math.abs(center - layout.centers[0]) < 1), `single footer row: ${layout.centers}`);
+  assert.ok(layout.scroll <= layout.width, `footer controls do not overflow at ${page.viewportSize().width}: ${JSON.stringify(layout)}`);
+  assert.equal(layout.overlap, false, 'parameter controls never overlap each other or the send button');
+  const values = await dock.locator('.composer-video-fields .tactical-select-trigger').evaluateAll(buttons => buttons
+    .filter(button => button.getAttribute('aria-label') !== '视频分辨率')
+    .map(button => { const value = button.querySelector('.tactical-select-value'); return { label: button.getAttribute('aria-label'), width: value.clientWidth, content: value.scrollWidth }; }));
+  assert.ok(values.every(value => value.content <= value.width + 1), `core parameter values remain readable: ${JSON.stringify(values)}`);
+  const model = dock.locator('.composer-video-fields .model-select-name');
+  if (await model.count()) assert.ok(await model.evaluate(label => label.scrollWidth <= label.clientWidth + 1), 'the selected video model remains readable');
+}
+async function responsiveWidth(dock) {
+  const widths = [];
+  for (const width of [900, 1100, 1440, 1920]) {
+    await page.setViewportSize({ width, height: 900 }); await settle();
+    const bounds = await dock.boundingBox();
+    await bottomCoverage(dock);
+    const available = await dock.evaluate(element => {
+      const host = element.closest('.library-composer')?.parentElement ?? element.parentElement;
+      const style = getComputedStyle(host);
+      return host.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    });
+    assert.ok(Math.abs(bounds.width - Math.min(1080, available * .68)) < 1, `composer uses 68% of available space, capped at 1080: ${available} / ${bounds.width}`);
+    assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width, 'composer stays inside the resized window');
+    await singleRow(dock);
+    widths.push(bounds.width);
+  }
+  assert.ok(widths[0] < widths[1] && widths[1] < widths[2] && widths[2] <= widths[3], `composer follows window size: ${widths}`);
+  assert.ok(Math.abs(widths[3] - 1080) < 1, 'large windows stop expanding at the maximum');
+  await page.setViewportSize({ width: 1440, height: 900 }); await settle();
+}
+async function leftRail(dock, hasProject = false) {
+  const layout = await dock.evaluate(element => {
+    const rect = node => { const box = node.getBoundingClientRect(); return { x: box.x, y: box.y, right: box.right, bottom: box.bottom }; };
+    return { modes: [...element.querySelectorAll('.composer-mode-picker > button')].map(rect), editor: rect(element.querySelector('.ProseMirror')),
+      project: element.querySelector('.library-composer-target') ? rect(element.querySelector('.library-composer-target')) : null };
+  });
+  assert.ok(layout.modes.length >= 3, 'image, video and chat remain available');
+  assert.ok(layout.modes.every((mode, index) => Math.abs(mode.x - layout.modes[0].x) < 9
+    && mode.right <= layout.editor.x && (!index || mode.y >= layout.modes[index - 1].bottom - 3)), `modes form a vertical rail left of the input: ${JSON.stringify(layout)}`);
+  if (hasProject) {
+    assert.ok(layout.project && layout.project.bottom <= layout.modes[0].y, 'project selector sits above the modes');
+
+  }
+  assert.equal(await dock.locator('.composer-mode-status').count(), 0, 'redundant creation status is removed');
+}
+async function opticalSurface(dock) {
+  await page.mouse.move(20, 160); await settle();
+  const material = await dock.evaluate(element => {
+    const surface = element.querySelector('.composer-projection-surface');
+    const dots = element.querySelector('.composer-projection-dots');
+    const textFilters = [];
+    for (let node = element.querySelector('.ProseMirror'); node && node !== element.parentElement; node = node.parentElement) textFilters.push(getComputedStyle(node).filter);
+    return { mask: getComputedStyle(surface).maskImage, dotMask: getComputedStyle(dots).maskImage, textFilters };
+  });
+  assert.ok(material.mask.startsWith('url('), 'background fades below the curved boundary');
+  assert.equal(material.mask, material.dotMask, 'dots and blur share the feathered extent');
+  assert.ok(material.textFilters.every(filter => filter === 'none'), 'projection never blurs editable text');
+  const selected = dock.locator('.composer-mode-picker > button[aria-pressed="true"]');
+  assert.equal(await selected.evaluate(button => getComputedStyle(button).opacity), '1');
+  assert.equal(await dock.locator('.composer-reference-hint').innerText(), '双击添加素材');
+}
+async function referenceProjection(dock, theme) {
+  const editor = dock.locator('.ProseMirror');
+  const ids = await page.evaluate(() => window.store.getState().assets.slice(0, 2).map(asset => asset.id).reverse());
+  await editor.fill('清晨的薄雾掠过山脊，镜头缓慢推进。');
+  await settle();
+  await editor.press('Control+End'); await editor.press('Enter');
+  await page.waitForFunction(element => {
+    const paragraph = element.lastElementChild, selection = getSelection();
+    return paragraph?.textContent === '' && selection?.isCollapsed && paragraph.contains(selection.anchorNode);
+  }, await editor.elementHandle());
+  for (const id of ids) await page.evaluate(id => window.dispatchEvent(new CustomEvent('bowerbird://board-asset-picked', { detail: id })), id);
+  await editor.locator('[data-asset-id]').nth(1).waitFor();
+  assert.equal(await dock.locator('.composer-references').count(), 0, 'references are shown only inside the text editor, without a duplicate strip');
+  assert.deepEqual(await editor.locator('[data-asset-id]').evaluateAll(chips => chips.map(chip => chip.dataset.assetId)), ids, 'inline chips remain the source of the references');
+  const images = editor.locator('[data-asset-id] img');
+  assert.equal(await images.count(), 2);
+  await images.evaluateAll(images => Promise.all(images.map(image => image.decode().catch(() => {}))));
+  assert.ok(await images.evaluateAll(images => images.every(image => {
+    const rect = image.getBoundingClientRect();
+    return image.naturalWidth > 0 && rect.height > 0;
+  })), 'inline reference images remain visible');
+  assert.ok((await editor.boundingBox()).height >= 32, 'references retain editable text');
+  const referenceHeight = (await dock.boundingBox()).height;
+  assert.ok(referenceHeight < 320, `references use a compact content-driven composer: ${referenceHeight}`);
+  await page.waitForFunction(({ element, lastId }) => {
+    const selection = getSelection();
+    if (!selection?.isCollapsed || !selection.anchorNode || !element.contains(selection.anchorNode)) return false;
+    const before = document.createRange(), after = document.createRange();
+    before.selectNodeContents(element); before.setEnd(selection.anchorNode, selection.anchorOffset);
+    after.selectNodeContents(element); after.setStart(selection.anchorNode, selection.anchorOffset);
+    return !!before.cloneContents().querySelector(`[data-asset-id="${lastId}"]`)
+      && !after.cloneContents().querySelector('[data-asset-id]') && after.toString() === '';
+  }, { element: await editor.elementHandle(), lastId: ids[1] });
+  for (let count = 0; count < 3 && await editor.locator(`[data-asset-id="${ids[1]}"]`).count(); count++) await page.keyboard.press('Backspace');
+  assert.equal(await editor.locator(`[data-asset-id="${ids[1]}"]`).count(), 0, 'Backspace removes the inline reference after the verified caret');
+  assert.deepEqual(await editor.locator('[data-asset-id]').evaluateAll(chips => chips.map(chip => chip.dataset.assetId)), [ids[0]], 'Backspace leaves the other inline reference intact');
+  await page.evaluate(id => window.dispatchEvent(new CustomEvent('bowerbird://board-asset-picked', { detail: id })), ids[1]);
+  await editor.locator('[data-asset-id]').nth(1).waitFor();
+  await dock.getByRole('button', { name: '退出创作模式', exact: true }).click();
+  await waitCollapsed(dock);
+  assert.equal(await editor.locator('[data-asset-id]').count(), 2, 'collapse keeps editor references');
+  await dock.getByRole('button', { name: '展开创作描述', exact: true }).click();
+  await editor.locator('[data-asset-id]').nth(1).waitFor(); await settle();
+  await page.mouse.move(20, 160);
+  await dock.screenshot({ path: `${output}/references-${theme}.png` });
 }
 try {
   await page.goto(url);
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
+  await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '素材库', exact: true }).click();
   const home = page.locator('.library-composer .creation-dock');
   await home.waitFor(); await settle();
   assert.ok(Math.abs(await bottomGap(home)) < 1, 'inactive home composer touches the window bottom');
@@ -36,20 +160,47 @@ try {
   await page.keyboard.press('Escape');
   await page.getByRole('listbox', { name: '选择项目', exact: true }).waitFor({ state: 'detached' });
   await home.getByRole('button', { name: '展开创作描述', exact: true }).click();
+  await settle(); await bottomCoverage(home);
   await home.locator('.ProseMirror').fill('清晨的薄雾掠过山脊，镜头缓慢推进。\n第二行内容仍保留在草稿中。');
   await home.getByRole('button', { name: '退出创作模式', exact: true }).click(); await settle();
+  await waitCollapsed(home);
   assert.ok(Math.abs(await bottomGap(home)) < 1);
   assert.equal(await home.locator('.composer-editor-scroll .collection-scroll-viewport').evaluate(element => element.clientHeight), 36);
   assert.match(await home.locator('.ProseMirror').innerText(), /清晨的薄雾/);
+  assert.equal(await home.locator('.composer-projection-surface').count(), 1, 'collapsed entry shares the feathered projection instead of a rectangular panel');
+  assert.ok((await home.boundingBox()).height <= 56, 'collapsed project, draft and expand control form a compact single row');
   await page.screenshot({ path: `${output}/home-rest.png` });
   for (const theme of ['dark', 'light']) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await home.getByRole('button', { name: '展开创作描述', exact: true }).click();
     const motion = await home.evaluate(element => ({ name: getComputedStyle(element).animationName, filter: getComputedStyle(element).filter }));
-    assert.equal(motion.name, 'composer-hud-rise'); assert.equal(motion.filter, 'none', 'text is never blurred');
+    assert.notEqual(motion.name, 'none', 'opening has a transition'); assert.equal(motion.filter, 'none', 'text is never blurred');
     await settle();
+    await bottomCoverage(home);
     await home.getByRole('button', { name: '图片', exact: true }).click();
+    await home.locator('.ProseMirror').fill('');
+    const disabledSend = home.locator('.generation-send-button:disabled');
+    await disabledSend.waitFor();
+    await settle();
+    const disabledStyle = await disabledSend.evaluate(button => ({ opacity: getComputedStyle(button).opacity,
+      before: getComputedStyle(button, '::before').content, after: getComputedStyle(button, '::after').content,
+      filter: getComputedStyle(button.querySelector('svg')).filter }));
+    assert.ok(Number(disabledStyle.opacity) < 1 && disabledStyle.before !== 'none' && disabledStyle.after === 'none'
+      && disabledStyle.filter === 'none', `unavailable sending remains readable with the same projected backing: ${JSON.stringify(disabledStyle)}`);
     await home.locator('.ProseMirror').fill('清晨的薄雾掠过山脊，镜头缓慢推进。'); await settle();
+    await leftRail(home, true); await opticalSurface(home);
+    const writing = await home.locator('.ProseMirror').boundingBox();
+    assert.ok(writing.height >= 32 && writing.height <= 64, `short input grows only as needed: ${writing.height}`);
+    const compact = await home.boundingBox();
+    assert.ok(compact.width <= 1440 * .68 + 1 && compact.width <= 1080, `composer leaves proportional side space: ${compact.width}`);
+    assert.ok(compact.height < 210, `short draft stays compact: ${compact.height}`);
+    if (theme === 'dark') {
+      await home.getByRole('button', { name: '放大编辑文本', exact: true }).click();
+      const document = page.getByRole('textbox', { name: '文档正文', exact: true });
+      await document.waitFor(); assert.match(await document.innerText(), /清晨的薄雾/);
+      await page.getByRole('button', { name: '返回', exact: true }).click();
+      await document.waitFor({ state: 'detached' });
+    }
     const project = home.getByRole('combobox', { name: '选择项目', exact: true });
     await project.click({ position: { x: 12, y: 6 } });
     const projects = page.getByRole('listbox', { name: '选择项目', exact: true });
@@ -65,18 +216,31 @@ try {
     await project.press('Home'); await projects.waitFor(); await page.keyboard.press('Enter');
     await projects.waitFor({ state: 'detached' });
     assert.equal(await project.innerText(), '选择项目');
+    const profile = home.getByRole('button', { name: '品牌规范', exact: true });
+    await profile.click();
+    const profilePanel = home.locator('.composer-profile-panel');
+    await profilePanel.getByRole('combobox', { name: '品牌视觉规范', exact: true }).waitFor();
+    assert.equal(await profile.getAttribute('aria-expanded'), 'true');
+    await profile.press('Escape'); await profilePanel.waitFor({ state: 'detached' });
+    assert.equal(await profile.evaluate(element => element === document.activeElement), true, 'brand menu Escape restores its trigger');
+    await profile.click(); await profilePanel.waitFor(); await profile.click();
+    await profilePanel.waitFor({ state: 'detached' });
+    await profile.click(); await profilePanel.waitFor();
+    await home.locator('.ProseMirror').click({ position: { x: 20, y: 20 } });
+    await profilePanel.waitFor({ state: 'detached' });
+    assert.equal(await home.evaluate(element => element.classList.contains('is-collapsed')), false, 'clicking the text closes only the brand menu');
+    await referenceProjection(home, theme);
     await home.locator('.ProseMirror').focus(); await settle();
-    assert.ok(await bottomGap(home) >= 12, 'expanded composer floats above the edge');
+    await bottomCoverage(home);
     await page.screenshot({ path: `${output}/home-${theme}.png` });
-    const bounds = await home.boundingBox();
-    await page.screenshot({ path: `${output}/hud-tabs-${theme}.png`, clip: { x: bounds.x - 20, y: bounds.y - 20, width: bounds.width + 40, height: Math.min(bounds.height + 40, 900 - bounds.y + 20) } });
+    await home.screenshot({ path: `${output}/hud-rail-${theme}.png` });
     await home.getByRole('button', { name: '视频', exact: true }).click(); await settle();
     await home.locator('.ProseMirror').fill('清晨的薄雾掠过山脊，镜头缓慢推进。');
+    if (theme === 'dark') await responsiveWidth(home);
     for (const width of [1440, 900]) {
       await page.setViewportSize({ width, height: 900 }); await settle(); await singleRow(home);
       assert.ok(await home.evaluate(element => { const rect = element.getBoundingClientRect(); return rect.left >= 0 && rect.right <= innerWidth; }));
-      const headings = await home.locator('.composer-heading').evaluate(element => [...element.children].map(child => child.getBoundingClientRect()).filter(rect => rect.width && rect.height).map(rect => rect.y + rect.height / 2));
-      assert.ok(headings.every(center => Math.abs(center - headings[0]) < 1), 'HUD tabs, project, profile and collapse control share one center line');
+      await leftRail(home, true);
     }
     await home.locator('.model-select-trigger').click();
     const menu = page.getByRole('dialog', { name: '视频模型', exact: true });
@@ -90,24 +254,46 @@ try {
     await home.screenshot({ path: `${output}/video-${theme}.png` });
     await page.setViewportSize({ width: 1440, height: 900 });
     await home.getByRole('button', { name: '退出创作模式', exact: true }).click(); await settle();
+    await waitCollapsed(home);
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await home.getByRole('button', { name: '展开创作描述', exact: true }).click();
   assert.equal(await home.evaluate(element => getComputedStyle(element).animationName), 'none');
+  await settle(); await bottomCoverage(home);
   await home.getByRole('button', { name: '退出创作模式', exact: true }).click();
-  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  assert.ok(Math.abs(await bottomGap(home)) < 1);
+  await waitCollapsed(home); await settle();
+  assert.ok(Math.abs(await bottomGap(home)) < 1, `collapsed entry stays at the edge: ${await bottomGap(home)}`);
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.goto(url);
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
   const canvas = page.locator('.canvas-workspace .creation-dock');
   await canvas.locator('.ProseMirror').fill('将光线、留白与材质组织成一个安静的镜头。'); await settle();
-  assert.equal(await canvas.evaluate(element => getComputedStyle(element).animationName), 'composer-hud-rise');
+  await bottomCoverage(canvas);
+  await canvas.getByRole('button', { name: '品牌规范', exact: true }).click();
+  await canvas.locator('.composer-profile-panel').waitFor();
+  const canvasStage = await page.locator('.canvas-workspace .canvas-stage').boundingBox();
+  await page.mouse.click(canvasStage.x + canvasStage.width - 40, canvasStage.y + 100);
+  await canvas.locator('.composer-profile-panel').waitFor({ state: 'detached' });
+  await canvas.locator('.ProseMirror').focus(); await settle();
+  await leftRail(canvas); await opticalSurface(canvas);
   await page.screenshot({ path: `${output}/canvas.png` });
   await page.evaluate(() => document.documentElement.dataset.theme = 'light');
-  assert.match(await canvas.locator('.composer-hud-surface').evaluate(element => getComputedStyle(element).filter), /37, 48, 55/, 'only the decorative plane casts the lighter directional shadow');
+  await opticalSurface(canvas);
   await page.screenshot({ path: `${output}/canvas-light.png` });
+  await canvas.getByRole('button', { name: '视频', exact: true }).click();
+  await responsiveWidth(canvas);
+  await page.setViewportSize({ width: 900, height: 900 }); await settle(); await singleRow(canvas);
+  assert.ok(await canvas.locator('.composer-toolbar').evaluate(element => element.scrollWidth <= element.clientWidth), 'canvas footer does not overflow at 900px');
+  await page.emulateMedia({ forcedColors: 'active' });
+  await settle();
+  assert.ok(await canvas.locator('.composer-mode-picker').evaluate(picker => {
+    const selected = getComputedStyle(picker.querySelector('button[aria-pressed="true"]'));
+    const other = getComputedStyle(picker.querySelector('button[aria-pressed="false"]'));
+    return selected.backgroundColor !== 'rgba(0, 0, 0, 0)' && selected.backgroundColor !== other.backgroundColor
+      && selected.color !== selected.backgroundColor;
+  }), 'high-contrast selection keeps a distinct filled background and readable text');
+  await page.emulateMedia({ forcedColors: 'none' });
   assert.deepEqual(errors, []);
-  console.log('PASS HUD home/canvas, project tab pointer/keyboard/Escape, bottom attachment, first-line draft, video single row, clear text and reduced motion');
+  console.log('PASS optical HUD home/canvas, vertical project/mode rail, project and brand menus, content-sized clear input, inline-only references and Backspace, first-line draft, video single row and reduced motion');
 } finally { await browser.close(); await server.close(); }

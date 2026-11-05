@@ -41,9 +41,12 @@ try {
     check(copies.every(n=>!Object.keys(n.outputs).length&&!n.sessionNodeIds.length&&!n.activeSessionNodeId&&!n.profileCache),'runtime state cleared');
     check(two.x-one.x===450&&two.y===one.y,'relative placement');
     const {api}=await import('/src/lib/api.ts');const {useStore}=await import('/src/store.ts');api.localAgentFindAssetId=async()=> 'existing';let submitted=0;
-    useStore.setState({startGeneration:async(...args)=>{submitted++;const identity=args[12];useStore.setState(s=>({genJobs:{...s.genJobs,[identity.jobId]:{turns:[{turnKey:identity.turnKey,images:['existing.png']}]}}}));return {accepted:true};}});
-    await c.start(key.id);check(c.document.run.status==='done'&&submitted===2,'copied workflow executes');
+    const {publishGeneration}=await import('/scripts/fixtures/canvas-reference/generation.ts');const generated=[];
+    useStore.setState({startGeneration:async(...args)=>{submitted++;const identity=args[12];await publishGeneration(args,['existing.png']);generated.push(`gen-prompt:${identity.jobId}:${identity.turnKey}:0`,`gen-output:${identity.jobId}:${identity.turnKey}:0`);useStore.setState(s=>({genJobs:{...s.genJobs,[identity.jobId]:{turns:[{turnKey:identity.turnKey,images:['existing.png']}]}}}));return {accepted:true};}});
+    await c.start(key.id);check(c.document.run.status==='done'&&submitted===2,`copied workflow executes: ${JSON.stringify({run:c.document.run,submitted})}`);
     const original=JSON.parse(window.snapshot().nodes.find(n=>n.id==='content').payloadJson);check(!original.cells[0][1].image_refs?.length,'original container untouched');
+    // Generated sessions belong to the execution check, not the pasted-card count checks below.
+    for(const id of generated)await api.projectCanvasNodeRemove(id);
     return copies.map(n=>n.id);
   });
   // A single undo removes exactly the pasted cards.
@@ -67,6 +70,21 @@ try {
     const value=captureCanvasClipboard('p',new Set(['g','group']),[native],[group],[{projectId:'p',groupId:'group',nodeId:'old',ordinal:0}],[node]);
     const copy=cloneCanvasClipboard(value,'another',100,100);
     if(copy.workflow[0].inputs.image[0].groupId!==copy.groups[0].id||copy.items[0].nodeId!==copy.nodes[0].id||copy.workflow[0].inputs.text.length||copy.workflow[0].inputs.image[1].assetNodeId)throw Error('group/cross-project remap');
+    // One visible automatic wire can contain multiple typed inputs and prompt references.
+    const text={canvasNodeId:'old',cellId:'*text',autoConnect:'automatic'},image={canvasNodeId:'old',cellId:'*',autoConnect:'automatic'};
+    const automatic={...newWorkflowNode('generation',400,10,'codex'),id:'automatic-card',inputs:{text:[text],image:[image,{assetId:'existing'}]},promptReferences:[{id:'words',type:'text',input:text,label:'文本'},{id:'picture',type:'image',input:image,label:'图片'}]};
+    const downstream={...newWorkflowNode('generation',800,10,'codex'),id:'downstream',inputs:{image:[{nodeId:'automatic-card',portId:'image',autoConnect:'second-wire'}]}};
+    const frozen=captureCanvasClipboard('p',new Set(['old','automatic-card','downstream']),[native],[],[],[automatic,downstream]);
+    const copies=[cloneCanvasClipboard(frozen,'p',100,100),cloneCanvasClipboard(frozen,'p',100,100),cloneCanvasClipboard(frozen,'another',100,100)];
+    const connectionIds=[];
+    for(const planned of copies){
+      const first=planned.workflow[0],second=planned.workflow[1],id=first.inputs.text[0].autoConnect;
+      if(!id||id==='automatic'||first.inputs.image[0].autoConnect!==id||first.promptReferences.some(ref=>ref.input.autoConnect!==id))throw Error('automatic typed inputs and references must share a fresh connection identity');
+      if(first.inputs.text[0].canvasNodeId!==planned.nodes[0].id||first.inputs.image[0].canvasNodeId!==planned.nodes[0].id||second.inputs.image[0].nodeId!==first.id)throw Error('automatic sources remapped');
+      if(!second.inputs.image[0].autoConnect||second.inputs.image[0].autoConnect==='second-wire'||second.inputs.image[0].autoConnect===id||first.inputs.image[1].autoConnect)throw Error('separate and precise connections retain their identity boundaries');
+      connectionIds.push(id,second.inputs.image[0].autoConnect);
+    }
+    if(new Set(connectionIds).size!==connectionIds.length||frozen.workflow[0].inputs.text[0].autoConnect!=='automatic')throw Error('repeated paste must not share automatic identities or mutate clipboard');
     window.save();
   });await page.reload();await page.locator('[data-workflow-card="one"]').waitFor();assert.equal(await page.locator('.workflow-card').count(),6);
   await page.locator('[data-canvas-node-id="old"]').waitFor();
@@ -97,5 +115,5 @@ try {
   await page.getByRole('menuitem',{name:'粘贴卡片',exact:true}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.length===9);
   assert.equal(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.at(-1).inputs.image[0].nodeId),'one','same-project external source retained');
-  assert.deepEqual(errors,[]);console.log('clipboard: mixed marquee, ' + primaryModifier + '+C/V, native/writer/reference/trigger remap, isolated execution, runtime reset, undo, repeated paste, text editing, groups/cross-project plan, reload, partial-save/undo retry and context menus passed');
+  assert.deepEqual(errors,[]);console.log('clipboard: mixed marquee, ' + primaryModifier + '+C/V, native/writer/reference/trigger remap, isolated execution, runtime reset, undo, repeated paste, text editing, groups/cross-project plan, automatic connection identity remap, reload, partial-save/undo retry and context menus passed');
 }finally{await browser.close();await server.close();}

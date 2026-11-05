@@ -33,6 +33,9 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
 }) {
   node = rebindGenerationReferences(node);
   const usesPipes = node.kind === "generation" || node.kind === "agent" || node.kind === "planner";
+  const hasAutomaticInput = Object.values(node.inputs).some(inputs => inputs.some(input => !!input.autoConnect));
+  const editorAttributes = useMemo(() => ({ role: "textbox", "aria-label": node.kind === "planner" ? "工作流需求" : node.kind === "agent" ? "Agent 要求" : "卡片指令", "aria-multiline": "true",
+    "data-placeholder": node.kind === "agent" && node.skill === "hyperframes" ? "描述视频内容、时长和风格…" : hasAutomaticInput ? "输入创作要求…" : node.kind === "planner" ? "按 @ 引用输入，例如：保留 @原图 的版式，将产品替换为 @产品参考…" : node.kind === "agent" ? "填写要求，已连接图文会自动发送；可按 @ 指定用途…" : "输入创作要求，按 @ 引入收到的图片或文字…" }), [node.kind, node.skill, hasAutomaticInput]);
   const host = useRef<HTMLDivElement>(null), view = useRef<EditorView | null>(null);
   const [menu, setMenu] = useState<{ pos: number; left: number; top: number } | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -109,7 +112,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
   useEffect(() => {
     const editor = new EditorView(host.current!, {
       state: EditorState.create({ schema, doc: toDoc(), plugins: [history(), keymap({ "Mod-z": undo, "Mod-y": redo, "Mod-Shift-z": redo }), keymap(baseKeymap)] }),
-      attributes: { role: "textbox", "aria-label": node.kind === "planner" ? "工作流需求" : node.kind === "agent" ? "Agent 要求" : "卡片指令", "aria-multiline": "true", "data-placeholder": node.kind === "planner" ? "按 @ 引用输入，例如：保留 @原图 的版式，将产品替换为 @产品参考…" : node.kind === "agent" ? "填写要求，已连接图文会自动发送；可按 @ 指定用途…" : "输入创作要求，按 @ 引入收到的图片或文字…" },
+      attributes: editorAttributes,
       editable: () => !latest.current.disabled,
       dispatchTransaction(tr) {
         editor.updateState(editor.state.apply(tr));
@@ -128,10 +131,10 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
   }, []);
   useEffect(() => {
     const editor = view.current; if (!editor) return;
-    editor.setProps({ editable: () => !disabled });
+    editor.setProps({ editable: () => !disabled, attributes: editorAttributes });
     // External updates (reload/undo) replace the document; normal typing keeps its selection.
     if (serialize(editor.state.doc) !== node.prompt) editor.updateState(EditorState.create({ schema, doc: toDoc(), plugins: editor.state.plugins }));
-  }, [node.prompt, disabled]);
+  }, [node.prompt, disabled, editorAttributes]);
   useEffect(() => {
     const editor = view.current; if (!editor) return;
     const tr = editor.state.tr;

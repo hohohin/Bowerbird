@@ -39,13 +39,30 @@ export function useImageZoom(src?: string, opts: Opts = {}) {
   // 同步最新值，供 wheel/mousemove 闭包读取，避免 stale state。
   const stRef = useRef({ scale: 1, tx: 0, ty: 0 });
   stRef.current = { scale, tx, ty };
-  const dragRef = useRef<{ mx: number; my: number; tx: number; ty: number } | null>(null);
+  const dragRef = useRef<{ mx: number; my: number; tx: number; ty: number; pointerId?: number } | null>(null);
 
   const reset = useCallback(() => {
+    stRef.current = { scale: 1, tx: 0, ty: 0 };
+    dragRef.current = null;
+    setDragging(false);
     setScale(1);
     setTx(0);
     setTy(0);
   }, []);
+
+  const zoomBy = useCallback((factor: number, point?: { x: number; y: number }) => {
+    const el = imgRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const { scale: s, tx: x, ty: y } = stRef.current;
+    const next = clamp(s * factor, min, max);
+    const k = next / s;
+    const cx = point ? point.x - (rect.left + rect.width / 2) : 0;
+    const cy = point ? point.y - (rect.top + rect.height / 2) : 0;
+    const tx = x + cx * (1 - k), ty = y + cy * (1 - k);
+    stRef.current = { scale: next, tx, ty };
+    setTx(tx); setTy(ty); setScale(next);
+  }, [min, max]);
 
   // 换图（src 变）→ reset，避免上一张的缩放/平移带到新图。
   useEffect(() => {
@@ -59,21 +76,20 @@ export function useImageZoom(src?: string, opts: Opts = {}) {
     if (!el) return;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const rect = el.getBoundingClientRect();
-      const cx = e.clientX - (rect.left + rect.width / 2);
-      const cy = e.clientY - (rect.top + rect.height / 2);
-      const { scale: s, tx: x, ty: y } = stRef.current;
+      e.stopPropagation();
+      if (!e.deltaY) return;
       const factor = e.deltaY < 0 ? 1 + step : 1 / (1 + step);
-      const next = clamp(s * factor, min, max);
-      if (next === s) return;
-      const k = next / s;
-      setTx(x + cx * (1 - k));
-      setTy(y + cy * (1 - k));
-      setScale(next);
+      zoomBy(factor, { x: e.clientX, y: e.clientY });
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [src, min, max, step]);
+  }, [src, step, zoomBy]);
+
+  const beginDrag = useCallback((mx: number, my: number, pointerId?: number) => {
+    const { tx, ty } = stRef.current;
+    dragRef.current = { mx, my, tx, ty, pointerId };
+    setDragging(true);
+  }, []);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     // 仅左键拖动平移；右键留给 onContextMenu（避免右键误触发平移）。
@@ -81,20 +97,39 @@ export function useImageZoom(src?: string, opts: Opts = {}) {
     // preventDefault 防止 img 原生拖拽 / 选区；stopPropagation 不冒泡到背景关闭层。
     e.preventDefault();
     e.stopPropagation();
+    beginDrag(e.clientX, e.clientY);
+  }, [beginDrag]);
+
+  // Editors arbitrate drawing vs panning before forwarding a pointer here.
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    if ((e.button !== 0 && e.button !== 1) || dragRef.current) return;
+    e.preventDefault(); e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    beginDrag(e.clientX, e.clientY, e.pointerId);
+  }, [beginDrag]);
+
+  const panBy = useCallback((dx: number, dy: number) => {
+    if (dragRef.current) return;
     const { tx, ty } = stRef.current;
-    dragRef.current = { mx: e.clientX, my: e.clientY, tx, ty };
-    setDragging(true);
+    stRef.current = { ...stRef.current, tx: tx + dx, ty: ty + dy };
+    setTx(tx + dx); setTy(ty + dy);
   }, []);
 
   // 拖动 move/up 挂 window：拖出 img 范围仍能继续平移 / 释放。
   useEffect(() => {
-    function move(e: MouseEvent) {
+    function move(e: MouseEvent | PointerEvent) {
       const d = dragRef.current;
       if (!d) return;
+      if (d.pointerId !== undefined ? !(e instanceof PointerEvent) || e.pointerId !== d.pointerId : e instanceof PointerEvent) return;
+      stRef.current = { ...stRef.current, tx: d.tx + e.clientX - d.mx, ty: d.ty + e.clientY - d.my };
       setTx(d.tx + (e.clientX - d.mx));
       setTy(d.ty + (e.clientY - d.my));
     }
-    function up() {
+    function up(e: Event) {
+      const d = dragRef.current;
+      if (e.type !== "blur" && d?.pointerId !== undefined && (!(e instanceof PointerEvent) || e.pointerId !== d.pointerId)) return;
+      if (e instanceof PointerEvent && d?.pointerId === undefined) return;
+      if (e.type === "pointerup" && e instanceof PointerEvent) move(e);
       if (dragRef.current) {
         dragRef.current = null;
         setDragging(false);
@@ -102,9 +137,19 @@ export function useImageZoom(src?: string, opts: Opts = {}) {
     }
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    window.addEventListener("lostpointercapture", up);
+    window.addEventListener("blur", up);
     return () => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      window.removeEventListener("lostpointercapture", up);
+      window.removeEventListener("blur", up);
     };
   }, []);
 
@@ -137,5 +182,5 @@ export function useImageZoom(src?: string, opts: Opts = {}) {
     cursor: isZoomed ? (dragging ? "grabbing" : "grab") : "zoom-in",
   };
 
-  return { imgRef, style, onMouseDown, onDoubleClick, isZoomed, reset };
+  return { imgRef, style, onMouseDown, onPointerDown, onDoubleClick, isZoomed, isPanned: tx !== 0 || ty !== 0, reset, scale, dragging, zoomBy, panBy };
 }

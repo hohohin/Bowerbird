@@ -24,7 +24,7 @@ async function pageFor(html, url = "https://www.pinterest.com/") {
     const close = page.close.bind(page);
     page.close = async options => { await collectCoverage(page); return close(options); };
   }
-  await page.route("**/*", route => route.fulfill({ contentType: "text/html", body: html }));
+  await page.route("**/*", route => route.fulfill({ contentType: "text/html; charset=utf-8", body: html }));
   await page.goto(url);
   await page.clock.install();
   await page.evaluate(() => {
@@ -45,6 +45,28 @@ async function watchUploads(page) {
 }
 
 try {
+  for (const authenticated of [true, false]) {
+    const localized = await pageFor(`<script id="__PWS_DATA__" type="application/json">{"context":{"is_authenticated":${authenticated}}}</script><button aria-label="Pinterest 镜头">搜图</button><input id="pin-composer" type="file">`);
+    await localized.evaluate(() => {
+      window.lensClicks = 0;
+      window.received = [];
+      document.querySelector('button').onclick = () => {
+        window.lensClicks++;
+        document.body.insertAdjacentHTML('beforeend', '<input id="lens-file-upload" data-test-id="lens-file-upload" type="file">');
+        document.querySelector('#lens-file-upload').onchange = event => {
+          window.received.push(event.target.files[0].name);
+          history.pushState({}, '', '/lens-search/');
+        };
+      };
+    });
+    await localized.evaluate(script('chinese-lens'));
+    await localized.clock.runFor(1500);
+    assert.deepEqual(await localized.evaluate(() => ({ clicks: window.lensClicks, files: window.received, statuses: window.notices.map(n => n.status), unrelatedFiles: document.querySelector('#pin-composer').files.length })),
+      { clicks: 1, files: ['search.png'], statuses: ['searching', 'submitted'], unrelatedFiles: 0 }, 'the observed Chinese Pinterest Lens button must receive the selected image without a manual upload');
+    await localized.close();
+  }
+  console.log('Pinterest adapter: Chinese Lens handoff and stale login metadata passed');
+
   const pending = await pageFor(uploadHtml);
   await pending.evaluate(() => {
     window.changes = 0;

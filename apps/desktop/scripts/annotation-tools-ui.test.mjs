@@ -93,11 +93,12 @@ try {
       assert.equal(await dialog.getByRole("button", { name: "保存到素材库", exact: true }).isDisabled(), true);
     }
     await dialog.getByRole("button", { name: "颜色 #111111", exact: true }).click();
+    const saveButton = mode === "draft" ? "保存到画板" : "保存到素材库";
     await gesture("画圆", [[0.12, 0.12], [0.36, 0.39]], true);
-    const circle = await overlay.locator("ellipse").evaluate(el => ({ rx: +el.getAttribute("rx"), ry: +el.getAttribute("ry") }));
-    assert.ok(Math.abs(circle.rx - circle.ry) < 0.01, "Shift produces a circle on a non-square image");
+    const circle = (await capture(saveButton)).meta.shapes[0];
+    assert.ok(Math.abs((circle.x2 - circle.x1) * 1600 - (circle.y2 - circle.y1) * 1200) <= 1600, "Shift produces a circle on a non-square image (metadata rounds to 1/1000)");
     await gesture("铅笔", [[0.55, 0.18], [0.75, 0.22], [0.72, 0.42], [0.55, 0.18]]);
-    assert.equal(await overlay.locator("polyline").count(), 1, "closed pencil paths must not be discarded");
+    assert.equal((await capture(saveButton)).meta.shapes.filter(s => s.type === "pencil").length, 1, "closed pencil paths must not be discarded");
     await dialog.getByRole("button", { name: "文字", exact: true }).click();
     const input = dialog.getByRole("textbox", { name: "文字内容" });
     assert.equal(await input.count(), 0, "text input only appears at the clicked image position");
@@ -115,19 +116,18 @@ try {
     assert.equal(await input.isVisible(), true, "floating toolbar keeps edit session open");
     await page.mouse.click(box.x + box.width * 0.9, box.y + box.height * 0.9);
     assert.equal(await input.count(), 0);
-    assert.equal(await overlay.locator("text tspan").count(), 2);
-    await overlay.locator("text").click();
+    assert.equal((await capture(saveButton)).meta.shapes[2].text.split("\n").length, 2);
+    await overlay.locator("[data-annotation-text]").click();
     await input.waitFor();
     assert.equal(await input.inputValue(), "你好 Bowerbird\n第二行文字");
     await input.fill("临时修改");
     await input.press("Escape");
-    assert.equal(await overlay.locator("text tspan").first().textContent(), "你好 Bowerbird");
+    assert.equal((await capture(saveButton)).meta.shapes[2].text.split("\n")[0], "你好 Bowerbird");
     await mkdir(".tmp", { recursive: true });
     await page.screenshot({ path: `.tmp/annotation-tools-${mode}.png` });
-    const saveButton = mode === "draft" ? "保存到画板" : "保存到素材库";
     const original = await capture(saveButton);
     // Keyboard activation has no pointerdown: every export must settle the text draft itself.
-    await overlay.locator("text").click();
+    await overlay.locator("[data-annotation-text]").click();
     await input.fill("键盘保存不能丢失");
     const keyboardCount = await page.evaluate(() => window.outputs.length);
     await dialog.getByRole("button", { name: saveButton, exact: true }).focus();
@@ -137,7 +137,7 @@ try {
     assert.equal(await input.count(), 0, "keyboard save commits current text editing");
     await dialog.getByRole("button", { name: "撤销", exact: true }).click();
     assert.equal((await capture(saveButton)).dataUrl, original.dataUrl, "keyboard edit is one undo step");
-    await overlay.locator("text").click();
+    await overlay.locator("[data-annotation-text]").click();
     const beforeResize = await input.boundingBox();
     const handle = await dialog.getByRole("button", { name: "调整文本框宽度" }).boundingBox();
     await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
@@ -181,8 +181,7 @@ try {
       const point = original.meta.shapes[1].points[3], flippedPoint = flipped.meta.shapes[1].points[3];
       assert.ok(Math.abs(flippedPoint.x - (axis === "horizontal" ? 1000 - point.x : point.x)) <= 1);
       assert.ok(Math.abs(flippedPoint.y - (axis === "vertical" ? 1000 - point.y : point.y)) <= 1);
-      const textTransform = await overlay.locator("text").getAttribute("transform");
-      assert.match(textTransform, /scale\(-1 1\)/, "preview mirrors text as well as the base image");
+      assert.equal(await dialog.locator("canvas[data-annotation-canvas]").evaluate(canvas => canvas.toDataURL()), flipped.dataUrl, "preview mirrors text as well as the base image");
       await dialog.getByRole("button", { name: label, exact: true }).click();
       const twice = await capture(saveButton);
       await compareTransform(flipped, twice, axis);
@@ -225,9 +224,9 @@ try {
       assert.deepEqual(temp, croppedFlipped, "both material annotation outputs preserve every tool and mirror");
     }
     await dialog.getByRole("button", { name: "清空", exact: true }).click();
-    assert.equal(await overlay.locator("text, ellipse, polyline").count(), 0);
+    assert.equal((await capture(saveButton)).meta.shapes.length, 0);
     await dialog.getByRole("button", { name: "撤销", exact: true }).click();
-    assert.equal(await overlay.locator("text, ellipse, polyline").count(), 3);
+    assert.equal((await capture(saveButton)).meta.shapes.length, 3);
     await dialog.getByRole("button", { name: "关闭（Esc）", exact: true }).click();
   }
   assert.deepEqual(errors, []);

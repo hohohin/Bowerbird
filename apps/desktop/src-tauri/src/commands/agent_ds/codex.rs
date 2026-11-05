@@ -68,7 +68,7 @@ fn workspace_command(binary: &str, root: &Path) -> tokio::process::Command {
     command
 }
 
-async fn read_tail(mut stream: impl tokio::io::AsyncRead + Unpin) -> std::io::Result<String> {
+pub(super) async fn read_tail(mut stream: impl tokio::io::AsyncRead + Unpin) -> std::io::Result<String> {
     let mut tail = Vec::new();
     let mut buffer = [0; 4096];
     loop {
@@ -132,6 +132,7 @@ pub(super) fn request_root(id: &str) -> Result<PathBuf, AppError> {
 
 pub(super) fn is_request(root: &Path) -> bool { root.join("request.json").exists() }
 pub(super) fn is_active(id: &str) -> bool { ACTIVE.lock().unwrap().contains_key(id) }
+pub(super) fn scope_active(scope: &str) -> bool { ACTIVE.lock().unwrap().values().any(|run| run.scope == scope) }
 
 pub(super) fn start(root: PathBuf, id: String, payload: DeliveryPayload, isolated_session: bool) -> Result<DeliveryOutcome, AppError> {
     let binary = resolve_codex_binary().ok_or_else(|| AppError::Other("未找到 Codex CLI，请在设置中安装并登录".into()))?;
@@ -149,6 +150,7 @@ fn start_with_binary(root: PathBuf, id: String, payload: DeliveryPayload, binary
     if active.values().any(|run| run.scope == scope) {
         return Err(AppError::Other("此卡片的 Codex CLI 尚未结束，请等待或停止原任务".into()));
     }
+    if root.join("video-request.json").is_file() { super::video_studio::ensure_closed(&scope)?; }
     std::fs::create_dir_all(&root)?;
     let root = std::fs::canonicalize(root)?;
     // Isolated loop items must neither inherit nor overwrite the card's interactive
@@ -161,6 +163,9 @@ fn start_with_binary(root: PathBuf, id: String, payload: DeliveryPayload, binary
         Some(session)
     } else { None };
     let mut command = workspace_command(binary, &root);
+    let video_project = if root.join("video-request.json").is_file() { Some(super::video::revision_root(&root, &scope)?) } else { None };
+    #[cfg(unix)]
+    if video_project.is_some() { command.process_group(0); }
     command.args(["exec", "--skip-git-repo-check", "--json"]);
     if let Some(session) = &session { command.arg("resume").arg(session); }
     for image in &payload.images { command.arg("--image").arg(&image.path); }
@@ -172,9 +177,16 @@ fn start_with_binary(root: PathBuf, id: String, payload: DeliveryPayload, binary
     let probe_command = workspace_command(binary, &root);
     let (cancel_tx, mut cancel_rx) = watch::channel(false);
     let (finished_tx, finished_rx) = watch::channel(false);
-    active.insert(id.clone(), Active { scope, cancel: cancel_tx, finished: finished_rx });
+    active.insert(id.clone(), Active { scope: scope.clone(), cancel: cancel_tx, finished: finished_rx });
     tokio::spawn(async move {
+        let (tool_stop, tool_cancel) = watch::channel(false);
+        let mut video_tools = None;
         let completed = async {
+            if video_project.is_some() {
+                write_json_atomic(&root.join("public-progress.json"), &vec![PublicEvent { id: "video-prepare".into(), kind: "tool".into(), text: "正在准备视频制作环境".into(), status: "running".into(), at: chrono::Utc::now().timestamp_millis() as u64 }])?;
+                let prepared = super::video::prepare(&root, &scope, &mut cancel_rx).await?;
+                video_tools = Some(tokio::spawn(super::video::serve(root.clone(), prepared, tool_cancel)));
+            }
             #[cfg(windows)]
             check_workspace_write(probe_command, &root, &mut cancel_rx).await?;
             if *cancel_rx.borrow() { return Err(AppError::Other("Codex CLI 已停止".into())); }
@@ -187,11 +199,14 @@ fn start_with_binary(root: PathBuf, id: String, payload: DeliveryPayload, binary
                 }
             };
             if completed.is_err() {
+                if video_project.is_some() { super::video::stop_child(&mut child).await; }
                 let _ = child.kill().await;
                 let _ = child.wait().await;
             }
             completed
         }.await;
+        let _ = tool_stop.send(true);
+        if let Some(tools) = video_tools { let _ = tools.await; }
         let completed = completed.and_then(|last_message| {
             let result = read_workflow_result(&root, &id)?.ok_or_else(|| {
                 let detail = if last_message.is_empty() { "；Agent 未提供失败说明".into() }

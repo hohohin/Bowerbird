@@ -33,6 +33,7 @@ w.__TAURI_INTERNALS__.invoke = (command: string, args: any) => {
     return new Promise((resolve, reject) => { w.finishExport = resolve; w.failExport = reject; });
   }
   if (command === "cancel_pending_external_drag") { w.cancellations.push(args); return Promise.resolve(true); }
+  if (command === "generation_history") return Promise.resolve({ turns: [], references: [] });
   return original(command, args);
 };
 w.changeProject = () => w.store.setState({ activeProjectId: "q", projectRouteRevision: w.store.getState().projectRouteRevision + 1 });

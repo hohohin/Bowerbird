@@ -25,7 +25,7 @@
 .workflow-caption-preview section { margin-top:12px; }
 .workflow-caption-preview p { white-space:pre-wrap; overflow-wrap:anywhere; margin:6px 0; line-height:1.6; }
 .workflow-prompt-editor .ProseMirror p { margin:0; }
-.workflow-prompt-editor .ProseMirror > p:only-child:has(> br:only-child)::before { content:"输入创作要求，按 @ 引入收到的图片或文字…"; float:left; height:0; color:var(--bb-muted); pointer-events:none; }
+.workflow-prompt-editor .ProseMirror:has(> p:only-child > br:only-child)::before { content:attr(data-placeholder); float:left; height:0; color:var(--bb-muted); pointer-events:none; }
 .workflow-prompt-reference { display:inline-flex; align-items:center; max-width:100%; gap:4px; margin:0 2px; padding:1px 4px; border:1px solid #b58ce866; border-radius:4px; color:var(--bb-blue); vertical-align:middle; white-space:nowrap; }
 .workflow-prompt-reference img { width:30px; height:24px; object-fit:contain; }
 .workflow-reference-menu { position:fixed; z-index:99999; width:288px; max-height:264px; overflow:auto; padding:8px; border:1px solid var(--bb-line); border-radius:10px; background:var(--bb-surface); box-shadow:0 8px 28px #0003; color:var(--bb-ink); font-size:12px; }
@@ -82,6 +82,10 @@
 .workflow-profile-summary { font-size:12px; line-height:1.6; max-height:100px; overflow:auto; margin:8px 0; user-select:text; }
 .workflow-wires path.is-draft { stroke:var(--bb-blue); stroke-dasharray:6 4; }
 .workflow-wires path.is-error { stroke:rgb(239 68 68); }
+.workflow-wires path.is-automatic { stroke:var(--bb-blue); pointer-events:stroke; cursor:pointer; }
+.canvas-connection-target { position:absolute; z-index:10002; pointer-events:none; outline:1px solid var(--bb-blue); outline-offset:3px; }
+.canvas-connection-target.is-invalid { outline-color:var(--bb-danger); }
+.canvas-connection-notice { position:fixed; z-index:99999; pointer-events:none; max-width:240px; padding:6px 9px; background:var(--bb-surface); color:var(--bb-ink); border:1px solid var(--bb-line); font-size:12px; }
 .workflow-wires path:not(.is-selected):not(.is-draft) { stroke:var(--bb-line-strong); }
 .workflow-key { position:absolute; right:16px; top:-34px; color:#b9883e; filter:drop-shadow(0 2px 2px #0003); transform:rotate(-18deg); transform-origin:50% 85%; }
 .workflow-key:hover { color:var(--bb-ink); }
@@ -101,6 +105,46 @@
 .workflow-hint { font-size:11px; color:var(--bb-muted); display:flex; align-items:center; gap:6px; margin:8px 0; }
 .workflow-trigger-count { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:12px; margin:12px 0; }
 .workflow-trigger-count input { width:80px; min-height:30px; padding:4px 8px; border:1px solid var(--bb-line); border-radius:6px; background:var(--bb-surface-2); color:var(--bb-ink); }
+.workflow-card.is-trigger>.workflow-card-body { padding:4px 12px 8px; }
+.workflow-card.is-trigger>.workflow-card-body>.workflow-hint { display:none; }
+.workflow-trigger-schedule { display:flex; flex-direction:column; gap:4px; margin:2px 0 0; font-size:11px; }
+.workflow-schedule-display,.workflow-schedule-actions { display:flex; align-items:center; gap:8px; }
+.workflow-schedule-meta { display:flex; justify-content:space-between; gap:8px; color:var(--bb-muted); }
+.workflow-schedule-status { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+.workflow-schedule-status::before { content:""; width:4px; height:4px; background:currentColor; }
+[data-schedule-status="armed"] .workflow-schedule-status::before { background:var(--bb-blue); }
+[data-schedule-status="failed"] .workflow-schedule-status { color:var(--bb-danger); }
+.workflow-trigger-schedule label { display:flex; flex-direction:column; gap:8px; }
+.workflow-trigger-schedule input { width:100%; min-width:0; min-height:32px; padding:4px 8px; border:1px solid var(--bb-line); border-radius:0; background:transparent; color:var(--bb-ink); font:inherit; color-scheme:dark; }
+html[data-theme="light"] .workflow-trigger-schedule input { color-scheme:light; }
+.workflow-trigger-schedule button { min-height:32px; padding:4px 8px; border:1px solid var(--bb-line); background:transparent; color:var(--bb-ink); font:inherit; cursor:pointer; }
+.workflow-trigger-schedule .workflow-schedule-clock { flex:1; min-height:28px; justify-content:flex-start; gap:8px; padding:0; border:0; text-align:left; }
+.workflow-schedule-digits { font:500 24px/1.2 ui-monospace,"Cascadia Code",Consolas,monospace; font-variant-numeric:tabular-nums; letter-spacing:-.7px; }
+.workflow-schedule-clock>svg { color:var(--bb-muted); }
+.workflow-trigger-schedule .workflow-schedule-cancel { width:24px; min-height:28px; padding:0; border:0; color:var(--bb-muted); }
+.workflow-trigger-schedule button:hover:not(:disabled) { color:var(--bb-blue); }
+[data-schedule-status="off"] .workflow-schedule-digits { color:var(--bb-muted); }
+.workflow-trigger-schedule :is(button,input):focus-visible { outline:1px dashed var(--bb-ink); outline-offset:2px; }
+.workflow-trigger-schedule button:disabled { opacity:.45; cursor:default; }
+.workflow-schedule-error { margin:0; color:var(--bb-danger); }
+.workflow-trigger-mode { display:flex; align-items:center; gap:10px; height:28px; margin-bottom:4px; }
+.workflow-trigger-circuit { flex-shrink:0; color:var(--bb-blue); }
+.workflow-trigger-contact { opacity:0; }
+.canvas-card-running .workflow-trigger-contact { opacity:1; }
+.workflow-card.is-trigger .workflow-trigger-mode .tactical-select-trigger { min-width:0; min-height:28px; height:28px; padding:2px 4px; text-align:left; }
+html[data-theme] .canvas-tactical .workflow-card.is-trigger>header { height:28px; padding:0 32px 0 12px; gap:6px; background:none; }
+.canvas-tactical .workflow-card.is-trigger>header .canvas-tactical-module-icon { position:static; }
+.canvas-tactical .workflow-card.is-trigger>header .canvas-tactical-module-code { display:none; }
+.canvas-tactical .workflow-card.is-trigger>header strong { font-size:11px; }
+.canvas-tactical .workflow-card.is-trigger>header>button[aria-label="复制卡片"] { opacity:0; }
+.canvas-tactical .workflow-card.is-trigger:is(:hover,:focus-within)>header>button[aria-label="复制卡片"] { opacity:1; }
+.canvas-tactical .workflow-card.is-trigger .workflow-trigger-count { justify-content:flex-start; gap:6px; margin:0; padding:0; border:0; font-size:11px; color:var(--bb-muted); }
+.canvas-tactical .workflow-card.is-trigger .workflow-trigger-count input { margin-left:auto; width:58px; min-height:26px; padding:2px 4px; text-align:right; font-variant-numeric:tabular-nums; color:var(--bb-ink); }
+html[data-theme] .canvas-tactical .workflow-card.is-trigger footer { margin-top:0; padding-top:0; gap:4px; background:none; border:0; }
+.canvas-tactical .workflow-card.is-trigger footer button { min-height:26px; padding:3px 4px; }
+.workflow-card.is-trigger>.workflow-port.is-input { flex-direction:row-reverse; transform:translateX(calc(-100% + 13px)); }
+.workflow-card.is-trigger>.workflow-port.is-output { flex-direction:row; transform:translateX(calc(100% - 13px)); }
+.workflow-card.is-trigger>.workflow-port span { background:transparent; }
 .workflow-wires path.is-completion { stroke-dasharray:5 4; }
 .workflow-bindings { display:flex; gap:5px; flex-wrap:wrap; }
 .workflow-bindings button { font-size:10px; border:1px solid var(--bb-line); border-radius:5px; padding:3px 5px; color:var(--bb-muted); }
@@ -140,7 +184,6 @@
 .workflow-waiting { color:var(--bb-muted); font-size:12px; }
 .workflow-error button { margin-left:8px; text-decoration:underline; }
 .workflow-planner .workflow-prompt-editor .ProseMirror { min-height: 120px; }
-.workflow-planner .workflow-prompt-editor .ProseMirror > p:only-child:has(> br:only-child)::before { content:"按 @ 引用输入，说明版式、产品或文字的用途…"; }
 .workflow-planner .workflow-planner-inputs { display: block; min-height: 80px; margin: 0 0 10px; }
 .workflow-planner-summary { white-space: pre-wrap; font-size: 12px; line-height: 1.6; }
 .workflow-planner-actions { display: flex; gap: 8px; margin-top: 8px; }

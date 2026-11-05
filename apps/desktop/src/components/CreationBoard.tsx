@@ -1,7 +1,7 @@
 import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, resolveVideoOptions, videoInputError, videoModelLabel, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { ProviderQuota } from "./creation/ProviderQuota";
@@ -38,11 +38,12 @@ import { ImageGenOptions } from "./creation/ImageGenOptions";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
-import { ArrowUp, ChevronDown, History, Image, Info, Maximize2, MessageCircle, Plus, Sparkles, Video, X } from "lucide-react";
+import { ArrowUp, ChevronDown, History, Image, Info, Maximize2, MessageCircle, Palette, Sparkles, Video, X } from "lucide-react";
 import { useTextWorkspace } from "./useTextWorkspace";
-import { useLibraryGlass } from "./useLibraryGlass";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import "./CreationBoard.css";
+import { ComposerProjection } from "./creation/ComposerProjection";
+import { useTerminalCaret } from "./creation/useTerminalCaret";
 
 // 画面比例偏好记忆（照 AssetDetail 的 localStorage 范式：bowerbird.<name> 前缀、try/catch 兜底）。
 const BOARD_RATIO_KEY = "bowerbird.boardRatio";
@@ -131,7 +132,6 @@ export function CreationBoard({
   promptLoadRequest = null,
   onPromptLoadConsumed,
   onDraftChange,
-  onOpenLibrary,
   registerDraftFlush,
   beforeGenerate,
   prepareProject,
@@ -144,8 +144,10 @@ export function CreationBoard({
   chatHistoryOpen,
   resolveCreativeThread,
 }: CreationBoardProps = {}) {
-  const glass = useLibraryGlass();
   const editorLabelId = useId();
+  const profilePanelId = useId();
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileTriggerRef = useRef<HTMLButtonElement>(null);
   const editorScrollRef = useRef<HTMLDivElement>(null);
   const agentMenuRef = useRef<HTMLDivElement>(null);
   const agentTriggerRef = useRef<HTMLButtonElement>(null);
@@ -200,6 +202,7 @@ export function CreationBoard({
   // 取代旧「请参考」预填——提示职责交给占位文字。
   const {
     hostRef,
+    viewRef,
     focus,
     flushDraft,
     loadPrompt,
@@ -220,6 +223,7 @@ export function CreationBoard({
     onDraftChange: persistGenerationDraft,
   });
   const textWorkspace = useTextWorkspace({ scopeKey: `${embedded ? projectId ?? "library" : "board"}:${composerMode ?? generation.media}`, projectId, getDraft, loadPrompt, focus });
+  useTerminalCaret(viewRef, hostRef);
   const videoOptions = resolveVideoOptions(generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS, references);
 
   useEffect(() => {
@@ -408,7 +412,10 @@ export function CreationBoard({
     function onPointerDown(event: PointerEvent) {
       const menu = event.target instanceof Element ? event.target.closest(".model-select-menu, .tactical-select-menu, .ratio-select-menu, .image-options-menu") : null;
       const ownMenu = menu && dockRef.current?.querySelector(`[aria-controls="${menu.id}"]`);
-      if (event.target instanceof Node && !dockRef.current?.contains(event.target) && !ownMenu) setCollapsed(true);
+      if (event.target instanceof Node && !dockRef.current?.contains(event.target) && !ownMenu) {
+        setCollapsed(true);
+        setProfileOpen(false);
+      }
     }
     const onWindowBlur = () => setCollapsed(true);
     window.addEventListener("pointerdown", onPointerDown, true);
@@ -420,6 +427,7 @@ export function CreationBoard({
   }, []);
   function exitCreationMode() {
     setAgentMenuOpen(false);
+    setProfileOpen(false);
     setBoardActive(false);
     const focused = document.activeElement;
     if (focused instanceof HTMLElement && dockRef.current?.contains(focused)) focused.blur();
@@ -966,7 +974,6 @@ export function CreationBoard({
   const showAgent = !isChat && (agentSelected || (agentModeOn && cloudAgentEntitled)
     || (agentAvailable && (agentAOn || agentBOn)) || (agentZAvailable && agentZOn)
     || (agentZAvailable && codexHealth?.ok && agentGOn) || (agentDsAvailable && agentDsOn));
-  const selectedMode = isChat ? 2 : agentSelected ? (onSendChat ? 3 : 2) : isVideo ? 1 : 0;
   const agentLabel = cloudAgentMode ? "Agent" : agentZMode ? "Agent Z" : agentGMode ? "Agent G"
     : agentDsMode ? "Agent DS" : agentMode === "a" ? "Agent A" : agentMode === "b" ? "Agent B" : "Agent";
 
@@ -980,6 +987,7 @@ export function CreationBoard({
         ref={dockRef}
         // 选择项目保持折叠态，避免 pointerdown 展开导致按钮在 click 前移位。
         onPointerDown={(e) => {
+          if (e.target instanceof Element && !e.target.closest(".composer-profile")) setProfileOpen(false);
           if (!(e.target instanceof Element && e.target.closest(".creation-exit-tab, .composer-expand, .library-composer-target"))) {
             setCollapsed(false);
           }
@@ -996,22 +1004,19 @@ export function CreationBoard({
           if (!e.currentTarget.contains(e.relatedTarget as Node | null) && !ownModelMenu) {
             setCollapsed(true);
             setAgentMenuOpen(false);
+            setProfileOpen(false);
           }
         }}
         aria-label="创作板"
-        style={glass.style}
         className={`creation-dock composer-glass pointer-events-auto relative ${creating ? "is-creating" : ""} ${embedded ? "is-canvas-composer" : ""} ${
           isCollapsed ? "is-collapsed" : ""
         }`}
       >
-        {glass.definition}
-        <span className="composer-hud-surface" aria-hidden="true" />
+        <ComposerProjection dockRef={dockRef} collapsed={isCollapsed} />
         <div className="composer-heading">
           {header}
           {header && isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
-          <div className="composer-mode-picker library-floating-surface" role="group" aria-label="创作方式"
-            style={{ "--switch-count": 2 + (onSendChat ? 1 : 0) + (showAgent ? 1 : 0), "--switch-index": selectedMode } as CSSProperties}>
-            <span className="composer-mode-thumb" aria-hidden="true" />
+          <div className="composer-mode-picker" role="group" aria-label="创作方式">
             <button type="button" aria-pressed={!isChat && !isVideo && !agentSelected} onClick={() => selectMedia("image")}><Image size={15} aria-hidden="true" />图片</button>
             <button type="button" aria-pressed={!isChat && isVideo && !agentSelected} onClick={() => selectMedia("video")}><Video size={15} aria-hidden="true" />视频</button>
             {onSendChat && <button type="button" aria-pressed={isChat} onClick={() => onComposerModeChange?.("chat")}><MessageCircle size={15} aria-hidden="true" />对话</button>}
@@ -1178,10 +1183,20 @@ export function CreationBoard({
 
             </div>}
           </div>
-          {!isChat && <div className="composer-profile"><VisualProfileSelect value={activeVisualProfileId} onChange={setActiveVisualProfile} /></div>}
+        </div>
+        {!isChat && !isCollapsed && <div className="composer-profile" onKeyDown={event => {
+            if (event.key === "Escape" && profileOpen) {
+              event.stopPropagation();
+              setProfileOpen(false);
+              profileTriggerRef.current?.focus();
+            }
+          }}>
+            <button ref={profileTriggerRef} type="button" className="composer-profile-trigger" aria-label="品牌规范" title="品牌规范"
+              aria-haspopup="dialog" aria-expanded={profileOpen} aria-controls={profilePanelId} onClick={() => setProfileOpen(open => !open)}><Palette size={16} aria-hidden="true" /></button>
+            {profileOpen && <div id={profilePanelId} className="composer-profile-panel app-popover" role="dialog" aria-label="品牌规范设置"><VisualProfileSelect value={activeVisualProfileId} onChange={setActiveVisualProfile} /></div>}
+          </div>}
           <button type="button" className="composer-collapse creation-exit-tab" data-tour="board-exit"
             title="退出创作模式，收起并保留草稿" aria-label="退出创作模式" onClick={exitCreationMode}><X size={14} aria-hidden="true" /></button>
-        </div>
         {/* 用途（preset）：发送时作为基底注入；登记=把当前编辑框内容存为用途（只需用途名）。
             功能未完成，PRESET_FEATURE_ENABLED 关闭整块 UI（store 注入逻辑随之不可达）。 */}
         {PRESET_FEATURE_ENABLED && (
@@ -1327,6 +1342,7 @@ export function CreationBoard({
         )}
         {/* 编辑框：随主题切换的独立输入区；超高后内部滚动（不触发主区滚动收起）。
             获得焦点（contenteditable 冒泡）= 激活创作模式（等同旧「创作板」按钮）。 */}
+        <div className="composer-writing">
         <div className="composer-description-heading">
           <span id={editorLabelId}>{isChat ? "聊聊你的创作想法" : "创作描述"}</span>
           <div className="composer-description-actions">
@@ -1358,6 +1374,7 @@ export function CreationBoard({
           className="creation-editor composer-description cursor-text text-ink"
         />
         </OverlayScrollArea>
+        </div>
         {isChat && !isCollapsed && <p className="composer-chat-key-hint">Enter 换行 · Ctrl / ⌘ + Enter 发送</p>}
         {isChat && chatProvider === "deepseek-cloud" && references.length > 0 && <p className="composer-chat-key-hint">图片仅用于建卡引用；看图分析请选择本机 Codex。</p>}
         {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
@@ -1365,8 +1382,6 @@ export function CreationBoard({
         {!isChat && referenceError && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
         {/* 素材、模型参数、帮助与发送保持同一条底栏。 */}
         <div className={`generation-toolbar composer-toolbar${isVideo ? " is-video" : ""}`}>
-          {onOpenLibrary && <button type="button" className="composer-add-material" aria-label="添加参考素材" title="打开素材库（Tab）"
-            onMouseDown={event => event.preventDefault()} onClick={() => { setBoardActive(true); onOpenLibrary(); }}><Plus size={16} aria-hidden="true" />素材<kbd>Tab</kbd></button>}
           {!isChat && <div className="group relative flex shrink-0 items-center composer-help">
             <button
               type="button"
@@ -1391,7 +1406,7 @@ export function CreationBoard({
           {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。
               flex：比例 / 生成选项两个选择器水平并排（外层缺 flex 时 block 根会竖着叠成
               两行，按钮挤在同一列）。 */}
-          {!terminalAgent && !isVideo && <div className="flex shrink-0 items-center gap-2">
+          {!terminalAgent && !isVideo && <div className="composer-image-options flex shrink-0 items-center gap-2">
             {!isVideo && <RatioSelect value={ratio} onChange={selectRatio} />}
             {countSupported && (
               <ImageGenOptions

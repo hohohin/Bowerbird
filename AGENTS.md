@@ -30,6 +30,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/ARCH-ADJUST-PLAN.md` | 收费化架构调整开发计划（账号 / 积分 / 托管 provider / 支付 / 门控，P0–P9 阶段任务卡 + 验收标准；agent 执行用） | 收费化 / 账号 / 积分 / 云端任何实现工作前必读 |
 | `dev-doc/ARCH-ADJUST-PROGRESS.md` | 收费化当前进度、最近部署证据入口与剩余验收 | 接续收费化任务或核对已记录线上基线时必读 |
 | `apps/cloud/PRO-REDEMPTION.md` | Pro 兑换码、可视化管理员后台、加密发码与导出、权限配置、迁移及隔离验证 | 兑换码、发码管理、管理员授权或后台部署相关工作前必读 |
+| `apps/cloud/WECHATPAY.md` | 普通商户 Native 支付、公钥验签、私有配置、桌面扫码、原单恢复、退款／对账与部署边界 | 微信支付、真实收款、支付回调、退款或维护定时器相关工作前必读 |
 | `dev-doc/AGENT-RUNTIME-PLAN.md` | Bowerbird 内置 Skill Agent Runtime 开发计划（Agent Kernel / 有限澄清 / 独立视觉规范 / VPS Worker / Supabase / 方舟，A0–A8 + V0–V4） | Agent loop / 内置 Skill / 独立视觉规范 / VPS Worker / Agent 临时云工作区实现前必读 |
 | `apps/agent-worker/src/prompts/brand-visual/README.md` | 品牌图片观察/文本提炼提示词、VPS 维护目录及标注保留格式 | 修改品牌视觉提示词、色号提取或维护 VPS 提示词文件前必读 |
 | `dev-doc/CREATIVE-MEMORY-PLAN.md` | 创作记忆与常用提示词库开发计划（复用记录、候选提炼、用户确认、只读注入，CM0–CM7） | 提示词复用统计、常用库、个人偏好学习、记忆设置或生成偏好注入工作前必读 |
@@ -45,6 +46,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/DRAFT-EDITOR.md` | 最简草稿编辑器、画笔压感／惯性、图层／文字／自由选区／颜色板、工程快照、画板重试与隔离验证 | 新建草稿、画笔内核、草稿工程保存或删除清理相关工作前必读 |
 | `dev-doc/SEEDANCE-2.5-INTEGRATION.md` | 即梦 Seedance 2.5 视频接入、官方 CLI 四模式契约与验收证据 | 视频生成、参数、任务恢复、视频入库与播放相关工作前必读 |
 | `dev-doc/VIDEO-MEDIA.md` | 统一播放器、悬停预览、截帧来源、独立抖音／直链采集及验证 | 视频浏览、播放、截帧或独立采集相关工作前必读 |
+| `dev-doc/VIDEO-SKILL.md` | 本机 Codex／HyperFrames Skill、受控渲染工具、工程续改、独立 Studio 面板与验证边界 | Skill 视频制作、HyperFrames、Studio 编辑或相关 Cloud 扩展前必读 |
 | `dev-doc/VIDEO-REPLICATION.md` | 画板工具箱、视频分析与改写、插入画板生成、抖音获取、Cloud 独立计费与验证 | 视频复刻、抖音参考视频获取或分析/改写启价相关工作前必读 |
 | `spikes/video-replication-demo/README.md` | 应用外复刻 Demo 的启动、豆包语音、Codex 分镜、本机即梦订阅、零视频输入与字幕合成恢复 | 接续抖音→转写及视觉分析→替换分镜文本／图片→生成合成的独立路径验证前必读 |
 | `dev-doc/FILMCRAFT-RESEARCH.md` | FilmCraft 剪辑交互、时间线、变速、音频波形源码调研及 Bowerbird 轻剪辑建议（未定案） | 轻量视频剪辑方案、时间模型、波形缓存或 FilmCraft 复用评估前读 |
@@ -71,6 +73,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `macOS/DEV-SYNC-2026-10-19.md` | Windows dev 文件优先工作区、素材导航、分类／视频增量的 Apple Silicon 接收与系统路径别名修复 | 接续 10 月 19 日 M 系列 Mac 同步、核对 SQLite 0040 与 ARM64 验证边界时 |
 | `macOS/DEV-SYNC-2026-10-22.md` | Windows 2201 共享增量的 Apple Silicon 接收、H3 暂缓清单与验证 | 接续本轮 Mac 同步、恢复 H3 增量或核对 SQLite 0042 与本机颜色缓存保留时 |
 | `macOS/DEV-SYNC-2026-10-25.md` | Windows 2202–2401 共享增量的 Apple Silicon 接收、H3 延续暂缓与工作流异步授权兼容修复 | 接续 10 月 25 日同步、恢复 H3 或核对 SQLite 0045、Bcoin／Pro 门控与原生媒体验证时 |
+| `macOS/DEV-SYNC-2026-11-06.md` | 投影 HUD、自动连线／定时、文本标注、媒体采集与支付源码的 Apple Silicon 接收，H3 暂缓及隔离验证 | 接续本轮同步、核对 SQLite 0052、Mac 浏览器遮罩与未发布边界时 |
 | `macOS/DEV-SYNC-2026-11-03.md` | 连接目录、文本工作区、媒体／快传与 HUD 的 Apple Silicon 接收，H3 延续暂缓及隔离验证 | 接续本轮同步、核对 SQLite 0050、Mac 原生接缝和未发布边界时 |
 | `macOS/DEV-SYNC-2026-10-31.md` | 工业主题、常用素材／HEIC、分区建卡、图片中继与恢复的 Apple Silicon 接收，H3 延续暂缓 | 接续 10 月 31 日同步、核对 CLI v3、输入重新编号及隔离验证边界时 |
 | `macOS/DEV-SYNC-2026-10-28.md` | Windows 素材分栏／本机对话／受控建卡的 Apple Silicon 接收、H3 暂缓及 CLI 版本前提 | 接续 10 月 28 日同步、核对 SQLite 0047、独立同步工作区及原生验收边界时 |

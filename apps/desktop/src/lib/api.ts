@@ -18,6 +18,8 @@ import type {
   CloudAgentPreview,
   CloudAgentRunRecord,
   CodeRedemption,
+  CheckoutRequest,
+  CheckoutOrder,
   ColorBucket,
   CodexHealth,
   CreationPack,
@@ -69,6 +71,7 @@ export interface SourceBrowserBounds {
   y: number;
   width: number;
   height: number;
+  overlay?: { x: number; y: number; width: number; height: number; cut?: number };
 }
 
 export interface CanvasFrequentAssetsResult {
@@ -168,9 +171,12 @@ export const api = {
       autoDelivered: boolean;
       notice?: string | null;
     }>("agent_ds_chat", { text, images, imageNames, visualProfileId }),
-  agentDsWorkflowStart: (requestId: string, instruction: string, source: string, purpose?: "planning" | "planning-v2" | "agent-text", images?: string[], sessionScope?: { projectId: string; nodeId: string }, imageProvider?: string, transport?: "local-ds" | "codex-cli", isolatedSession?: boolean, sessionGeneration?: boolean, visualProfile?: { profileId: string; version: number }) =>
+  agentDsWorkflowStart: (requestId: string, instruction: string, source: string, purpose?: "planning" | "planning-v2" | "agent-text" | "agent-video", images?: string[], sessionScope?: { projectId: string; nodeId: string }, imageProvider?: string, transport?: "local-ds" | "codex-cli", isolatedSession?: boolean, sessionGeneration?: boolean, visualProfile?: { profileId: string; version: number }) =>
     invoke<{ path: string; sessionId?: string | null; sessionTitle?: string | null; autoDelivered: boolean; notice?: string | null }>("agent_ds_workflow_start", { requestId, instruction, source, purpose, images, sessionScope, imageProvider, transport, isolatedSession, sessionGeneration, visualProfile }),
   agentDsWorkflowCancel: (requestId: string) => invoke<void>("agent_ds_workflow_cancel", { requestId }),
+  agentVideoStudioOpen: (requestId: string, editorSessionId: string, bounds: { x: number; y: number; width: number; height: number }) => invoke<void>("agent_video_studio_open", { requestId, editorSessionId, bounds }),
+  agentVideoStudioResize: (requestId: string, editorSessionId: string, bounds: { x: number; y: number; width: number; height: number }, visible: boolean) => invoke<void>("agent_video_studio_resize", { requestId, editorSessionId, bounds, visible }),
+  agentVideoStudioClose: (requestId: string, editorSessionId: string) => invoke<void>("agent_video_studio_close", { requestId, editorSessionId }),
   agentDsWorkflowGenerationRequest: (requestId: string) =>
     invoke<import("./canvasWorkflow").WorkflowAgentGenerationRequest | null>("agent_ds_workflow_generation_request", { requestId }),
   agentDsWorkflowGenerationResponse: (requestId: string, generation: import("./canvasWorkflow").WorkflowAgentGenerationRequest, response: import("./canvasWorkflow").WorkflowAgentGenerationResponse) =>
@@ -179,7 +185,7 @@ export const api = {
     invoke<{ status: string; images: string[]; error?: string | null } | null>("agent_ds_workflow_generation_job", { jobId, turnKey }),
   agentDsWorkflowProgress: (requestId: string) => invoke<import("./canvasWorkflow").WorkflowAgentEvent[]>("agent_ds_workflow_progress", { requestId }),
   agentDsWorkflowResult: (requestId: string) =>
-    invoke<{ schemaVersion: 1 | 2; requestId: string; text?: string; images?: string[]; error?: string; submissionUnknown?: boolean; phase?: "proposal" | "commit"; revision?: number; digest?: string } | null>("agent_ds_workflow_result", { requestId }),
+    invoke<{ schemaVersion: 1 | 2; requestId: string; text?: string; images?: string[]; videos?: string[]; projectPath?: string; error?: string; submissionUnknown?: boolean; phase?: "proposal" | "commit"; revision?: number; digest?: string } | null>("agent_ds_workflow_result", { requestId }),
   agentDsWorkflowIngestImages: (requestId: string) =>
     invoke<Asset[]>("agent_ds_workflow_ingest_images", { requestId }),
   agentDsWorkflowFeedback: (requestId: string, revision: number, text: string, error?: string) =>
@@ -272,8 +278,8 @@ export const api = {
     invoke<ProjectCanvasLocation>("project_canvas_for_node", { projectId, threadId, nodeId }),
 
   // 导入
-  importFiles: (sources: string[], projectId?: string | null) =>
-    invoke<Asset[]>("import_files", { sources, projectId: projectId ?? null }),
+  importFiles: (sources: string[], projectId?: string | null, collect = false) =>
+    invoke<Asset[]>("import_files", { sources, projectId: projectId ?? null, ...(collect ? { collect: true } : {}) }),
   importFolder: (path: string, projectId?: string | null) =>
     invoke<number>("import_folder", { path, projectId: projectId ?? null }),
   // 拖拽（source=imported）/ 剪切板粘贴（source=clipboard）图片入库：data URL（base64）传后端解码。
@@ -484,8 +490,8 @@ export const api = {
     invoke<void>("cancel_pinterest_image_search", { requestId }),
   resizeSourceBrowser: (bounds: SourceBrowserBounds, visible?: boolean, dimmed?: boolean) =>
     invoke<void>("resize_source_browser", { bounds, visible, dimmed }),
-  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null, dragId?: string, mediaKind?: "image" | "video", captureId?: string) =>
-    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId, ...(dragId ? { dragId } : {}), ...(mediaKind ? { mediaKind } : {}), ...(captureId ? { captureId } : {}) }),
+  captureSourceBrowserImage: (imageUrl: string, pageUrl: string, projectId: string | null, dragId?: string, mediaKind?: "image" | "video", captureId?: string, skipClassification?: boolean) =>
+    invoke<Asset>("capture_source_browser_image", { imageUrl, pageUrl, projectId, ...(dragId ? { dragId } : {}), ...(mediaKind ? { mediaKind } : {}), ...(captureId ? { captureId } : {}), ...(skipClassification ? { skipClassification } : {}) }),
   cancelSourceBrowserCapture: (captureId: string) => invoke<boolean>("cancel_source_browser_capture", { captureId }),
   claimSourceBrowserAnalysis: (dragId: string, imageUrl: string, pageUrl: string) =>
     invoke<boolean>("claim_source_browser_analysis", { dragId, imageUrl, pageUrl }),
@@ -641,6 +647,9 @@ export const api = {
   cloudRestoreSession: () => invoke<AuthSnapshot>("cloud_restore_session"),
   cloudLogout: () => invoke<AuthSnapshot>("cloud_logout"),
   cloudEntitlement: () => invoke<EntitlementSnapshot>("cloud_entitlement"),
+  cloudCheckoutCapability: (userId: string) => invoke<{ enabled: boolean; provider: "wechatpay"; custom_max_yuan?: number }>("cloud_checkout_capability", { userId }),
+  cloudCreateCheckout: (userId: string, request: CheckoutRequest) => invoke<{ order: CheckoutOrder }>("cloud_create_checkout", { userId, request }),
+  cloudCheckoutStatus: (userId: string, orderId?: string) => invoke<{ order: CheckoutOrder | null }>("cloud_checkout_status", { userId, orderId }),
   cloudSyncEntitlement: () =>
     invoke<EntitlementSnapshot>("cloud_sync_entitlement"),
   cloudStartProTrial: () => invoke<EntitlementSnapshot>("cloud_start_pro_trial"),

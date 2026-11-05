@@ -19,6 +19,16 @@ fn invalid(value: impl Into<String>) -> AppError {
 fn string(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
+fn registered_path_spelling(path: &Path) -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let raw = string(path).replace('/', "\\");
+        if raw.starts_with(r"\\?\") { return PathBuf::from(raw); }
+        if let Some(unc) = raw.strip_prefix(r"\\") { return PathBuf::from(format!(r"\\?\UNC\{unc}")); }
+        if path.is_absolute() { return PathBuf::from(format!(r"\\?\{raw}")); }
+    }
+    path.to_owned()
+}
 fn id() -> String {
     ulid::Ulid::new().to_string()
 }
@@ -107,6 +117,8 @@ pub struct AssetOriginal {
     pub name: String,
     pub path: String,
     pub fingerprint: String,
+    #[serde(default)]
+    pub missing: bool,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -713,7 +725,13 @@ impl Database {
                     } else {
                         (size, mtime)
                     };
-                    self.conn.lock().unwrap().execute("INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference,size,mtime) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(path) DO UPDATE SET asset_id=excluded.asset_id,available=1,size=excluded.size,mtime=excluded.mtime",params![id(),folder_id,asset.id,string(&file),file_name,reference(&file),size,mtime])?;
+                    {
+                        let conn = self.conn.lock().unwrap();
+                        let tx = conn.unchecked_transaction()?;
+                        tx.execute("INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference,size,mtime) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(path) DO UPDATE SET asset_id=excluded.asset_id,available=1,size=excluded.size,mtime=excluded.mtime",params![id(),folder_id,asset.id,string(&file),file_name,reference(&file),size,mtime])?;
+                        tx.execute("DELETE FROM disconnected_library_assets WHERE asset_id=?1", [&asset.id])?;
+                        tx.commit()?;
+                    }
                     // Refresh preserves explicit project removals. A new entry/identity joins
                     // connected projects; explicitly reconnecting a folder restores cached members.
                     if old
@@ -810,19 +828,31 @@ impl Database {
             result
         }
     }
-    pub fn disconnect_directory(&self, id: &str) -> AppResult<()> {
+    pub fn disconnect_directory(&self, paths: &LibraryPaths, id: &str) -> AppResult<()> {
         let folder = self.connected_folder(id)?;
-        if folder.parent_id.is_some() {
-            if folder.available || Path::new(&folder.path).try_exists()? {
-                return Err(invalid("集合仍可访问，请刷新后使用移到回收站"));
-            }
-            self.conn.lock().unwrap().execute("DELETE FROM connected_folders WHERE id=?1", [id])?;
-            return Ok(());
+        if folder.parent_id.is_some() && (folder.available || Path::new(&folder.path).try_exists()?) {
+            return Err(invalid("集合仍可访问，请刷新后使用移到回收站"));
         }
-        self.conn
-            .lock()
-            .unwrap()
-            .execute("DELETE FROM connected_roots WHERE id=?1", [id])?;
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let affected: Vec<(String, Option<String>)> = {
+            let mut stmt = tx.prepare("WITH RECURSIVE tree(id) AS (SELECT ?1 UNION ALL SELECT f.id FROM connected_folders f JOIN tree t ON f.parent_id=t.id) SELECT DISTINCT e.asset_id,a.store_path FROM connected_entries e JOIN tree t ON t.id=e.folder_id JOIN assets a ON a.id=e.asset_id")?;
+            let ids = stmt.query_map([id], |row| Ok((row.get(0)?, row.get(1)?)))?.collect::<Result<Vec<_>,_>>()?;
+            ids
+        };
+        if folder.parent_id.is_some() {
+            tx.execute("DELETE FROM connected_folders WHERE id=?1", [id])?;
+        } else {
+            tx.execute("DELETE FROM connected_roots WHERE id=?1", [id])?;
+        }
+        for (asset_id, original) in affected {
+            if original.as_deref().is_some_and(|path| paths.managed_file_root(Path::new(path)).is_some()) { continue; }
+            tx.execute("INSERT OR IGNORE INTO disconnected_library_assets(asset_id)
+                SELECT asset_id FROM external_assets WHERE asset_id=?1
+                AND NOT EXISTS(SELECT 1 FROM connected_entries WHERE asset_id=?1)
+                AND NOT EXISTS(SELECT 1 FROM independent_library_assets WHERE asset_id=?1)", [&asset_id])?;
+        }
+        tx.commit()?;
         Ok(())
     }
     fn repoint_asset(&self, id: &str, old: &Path, new: &Path) -> AppResult<()> {
@@ -1156,28 +1186,39 @@ impl Database {
                 .as_deref()
                 .ok_or_else(|| invalid("原文件暂不可用，请重新定位后重试"))?,
         );
-        if fs::symlink_metadata(stored)?.file_type().is_symlink() {
-            return Err(invalid("文件已变为链接，请刷新后重试"));
-        }
-        let path = fs::canonicalize(stored)?;
-        if !path.is_file() || !media(&path) {
-            return Err(invalid("原文件暂不可用，请重新定位后重试"));
-        }
-        let before = stamp(&path)?;
-        let fingerprint = external_files::fingerprint(&path)?;
-        if stamp(&path)? != before {
-            return Err(invalid("原文件正在变化，请稍后重新确认"));
-        }
         let expected: Option<String> = self.conn.lock().unwrap().query_row(
             "SELECT COALESCE(e.fingerprint,f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1", [id], |row| row.get(0))?;
-        if expected.is_some_and(|value| value != fingerprint) {
-            return Err(invalid("原文件内容已变化，请刷新后重新确认"));
-        }
+        let checked = (|| -> AppResult<(PathBuf, String)> {
+            if fs::symlink_metadata(stored)?.file_type().is_symlink() {
+                return Err(invalid("文件已变为链接，请刷新后重试"));
+            }
+            let path = fs::canonicalize(stored)?;
+            if !path.is_file() || !media(&path) {
+                return Err(invalid("原文件暂不可用，请重新定位后重试"));
+            }
+            let before = stamp(&path)?;
+            let fingerprint = external_files::fingerprint(&path)?;
+            if stamp(&path)? != before {
+                return Err(invalid("原文件正在变化，请稍后重新确认"));
+            }
+            if expected.as_deref().is_some_and(|value| value != fingerprint) {
+                return Err(invalid("原文件内容已变化，请刷新后重新确认"));
+            }
+            Ok((path, fingerprint))
+        })();
+        let (path, fingerprint, missing) = match checked {
+            Ok((path, fingerprint)) => (path, fingerprint, false),
+            Err(AppError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound && media(stored) => {
+                (stored.to_owned(), expected.unwrap_or_default(), true)
+            }
+            Err(error) => return Err(error),
+        };
         Ok(AssetOriginal {
             asset_id: asset.id,
             name: name(&path),
             path: string(&path),
             fingerprint,
+            missing,
         })
     }
     pub fn trash_asset_original(&self, original: &AssetOriginal) -> AppResult<()> {
@@ -1189,9 +1230,10 @@ impl Database {
         trash: impl Fn(&Path) -> AppResult<()>,
     ) -> AppResult<()> {
         let current = self.asset_original(&original.asset_id)?;
-        if current.path != original.path || current.fingerprint != original.fingerprint {
+        if current.missing != original.missing || current.path != original.path || current.fingerprint != original.fingerprint {
             return Err(invalid("原文件的位置或内容已变化，请重新打开确认窗口"));
         }
+        if current.missing { return self.cleanup_missing_original(&current).map(|_| ()); }
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let stored: String = tx.query_row(
@@ -1218,6 +1260,37 @@ impl Database {
             tracing::error!("original recycled but metadata commit failed: {error}");
             invalid("原文件已放入回收站，但列表更新失败，请刷新后核对")
         })
+    }
+    /// Metadata-only cleanup. Existing files can never reach a recycle callback here.
+    pub(crate) fn cleanup_missing_original(&self, original: &AssetOriginal) -> AppResult<usize> {
+        if !original.missing { return Err(invalid("原文件仍存在，不能清理为失效条目")); }
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let (stored, fingerprint): (String, Option<String>) = tx.query_row(
+            "SELECT a.store_path,COALESCE(e.fingerprint,f.sha256) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1",
+            [&original.asset_id], |row| Ok((row.get(0)?,row.get(1)?)))?;
+        if fingerprint.as_deref().unwrap_or("") != original.fingerprint { return Err(invalid("素材记录已变化，请重新确认")); }
+        if stored != original.path {
+            return Err(invalid("原文件的位置已变化，请重新打开确认窗口"));
+        }
+        match fs::symlink_metadata(&stored) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error.into()),
+            Ok(_) => return Err(invalid("原文件已恢复，请重新打开确认窗口")),
+        }
+        // Missing originals cannot be canonicalized. Normalize only Windows path spelling;
+        // never discover a replacement file or follow historical aliases during deletion.
+        let canonical = registered_path_spelling(Path::new(&stored));
+        let names = external_files::connection_path_spellings(Path::new(&stored), &canonical);
+        let added: usize = tx.query_row("SELECT COUNT(*) FROM assets a WHERE (a.id=?4 OR a.store_path IN (?1,?2,?3)) AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)", params![names[0],names[1],names[2],original.asset_id], |row| row.get(0))?;
+        tx.execute("INSERT OR REPLACE INTO removed_missing_asset_originals(asset_id,path) SELECT id,?5 FROM assets WHERE id=?4 OR store_path IN (?1,?2,?3)",
+            params![names[0],names[1],names[2],original.asset_id,original.path])?;
+        tx.execute("DELETE FROM connected_entries WHERE is_reference=0 AND path IN (?1,?2,?3)", params![names[0],names[1],names[2]])?;
+        // Invalidate the reference stamp so an unchanged original returning between scans
+        // still runs the verified index path and restores its cleaned-up library entry.
+        tx.execute("UPDATE connected_entries SET available=0,mtime=NULL WHERE asset_id IN (SELECT asset_id FROM removed_missing_asset_originals WHERE path=?1)", [&original.path])?;
+        tx.commit()?;
+        Ok(added)
     }
     pub fn remove_connection_references(&self, ids: &[String]) -> AppResult<()> {
         self.remove_connection_references_with(ids, recycle)
@@ -1280,11 +1353,11 @@ impl Database {
         }
         Ok(())
     }
-    pub fn trash_connected_directory(&self, id: &str) -> AppResult<()> {
+    pub fn trash_connected_directory(&self, paths: &LibraryPaths, id: &str) -> AppResult<()> {
         let folder = self.writable_connection(id)?;
         recycle(Path::new(&folder.path))?;
         if folder.parent_id.is_none() {
-            self.disconnect_directory(id)
+            self.disconnect_directory(paths, id)
         } else {
             self.conn
                 .lock()

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { gzipSync } from 'node:zlib';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const script = await readFile('src-tauri/src/commands/source_browser_video.js', 'utf8').catch(() => '');
+const script = await readFile(process.env.BOWERBIRD_SOURCE_VIDEO_PATH || 'src-tauri/src/commands/source_browser_video.js', 'utf8');
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 async function pageFor(url = 'https://www.xiaohongshu.com/explore/note-a') {
   const page = await browser.newPage();
@@ -14,6 +14,13 @@ async function pageFor(url = 'https://www.xiaohongshu.com/explore/note-a') {
   return page;
 }
 try {
+  const anonymous = await pageFor('https://www.pinterest.com/pin/123456789/');
+  const manifestUrl = 'https://v1.pinimg.com/videos/fixture/index.m3u8';
+  await anonymous.route(manifestUrl, route => route.fulfill({headers:{'content-type':'application/vnd.apple.mpegurl','access-control-allow-origin':'https://www.pinterest.com','access-control-allow-credentials':'false'},body:'#EXTM3U\n#EXT-X-ENDLIST'}));
+  assert.deepEqual(await anonymous.evaluate(url => window.__bbSourceVideo.manifestBase(url,'anonymous-manifest',false), manifestUrl), {type:'cors',ok:true}, 'Pinterest public CDN allows only credential-free CORS reads');
+  assert.deepEqual(await anonymous.evaluate(url => window.__bbSourceVideo.manifestBase(url,'credentialed-manifest'), manifestUrl), {type:'unknown'}, 'the default remains credentialed for other capture requests');
+  await anonymous.close();
+  console.log('source video: anonymous Pinterest manifest and credentialed default passed');
   const blob = await pageFor();
   assert.equal(await blob.evaluate(() => typeof window.__bbSourceVideo?.open), 'function', 'the source renderer exposes bounded reading to native code');
   const result = await blob.evaluate(async () => {
@@ -97,10 +104,11 @@ try {
     const bytes = await (await fetch('/clip.mp4')).arrayBuffer();
     sb.appendBuffer(bytes);
     await new Promise(resolve => sb.addEventListener('updateend', resolve, {once:true}));
+    history.pushState({}, '', '/watch/playing');
     window.__bbSourceVideo.remember(target, source, location.href);
     return window.__bbSourceVideo.resolve(source, location.href);
   });
-  assert.equal(resolved, 'https://example.com/clip.m3u8', 'the appended segment links its MSE, never the last manifest on the page');
+  assert.equal(resolved, 'https://example.com/clip.m3u8', 'the appended segment links its MSE across SPA navigation, never the last manifest on the page');
   await mse.route('**/ambiguous.m3u8', route => route.fulfill({contentType:'application/vnd.apple.mpegurl',body:'#EXTM3U\n#EXTINF:4,\nclip.mp4\n#EXT-X-ENDLIST\n'}));
   assert.match(await mse.evaluate(async () => {
     await (await fetch('/ambiguous.m3u8')).text();

@@ -72,8 +72,10 @@ class ImageGesture {
 
   private target(target: EventTarget | null, double = false) {
     const state = useStore.getState();
-    if (!this.options.enabled || !(state.boardOpen || state.genEditing) || state.projectRoutePending) return null;
+    if (!this.options.enabled || state.projectRoutePending) return null;
     const media = imageElement(this.options.root.current, target, double);
+    // Outside creation, conversation titles keep their editing entry; images share the HUD.
+    if (media?.hasAttribute("data-creation-conversation") && !(state.boardOpen || state.genEditing)) return null;
     const image = media && this.options.resolve(media);
     return image && isImage(image, media!) ? { ...image, media: media! } : null;
   }
@@ -109,6 +111,9 @@ class ImageGesture {
   }
 
   private activate(image: CreationImageTarget & { media: HTMLElement }, double: boolean, detail: number) {
+    const state = useStore.getState();
+    // Browsing has no double-click reference action, so the image can open immediately.
+    if (!(state.boardOpen || state.genEditing)) { if (!double) void this.preview(image); return; }
     if (double) this.reference(image);
     else if (detail === 0) void this.preview(image);
     else if (detail === 1) {

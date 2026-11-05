@@ -5,6 +5,7 @@ export interface AssetOriginal {
   name: string;
   path: string;
   fingerprint: string;
+  missing?: boolean;
 }
 
 export const assetOriginals = {

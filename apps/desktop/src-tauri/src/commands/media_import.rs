@@ -1,17 +1,16 @@
-//! Legacy HTML video upload IPC. New local files must provide their original path.
-use crate::{core::{ingest, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}};
+//! Bounded loose-file upload. Legacy video IPC names remain for desktop compatibility.
+use crate::{core::{file_intake, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}};
 #[cfg(test)]
-use crate::media::probe;
+use crate::core::ingest;
 use base64::Engine;
 use std::{collections::HashMap, fs::File, io::Write, path::PathBuf, sync::{Arc, LazyLock, Mutex}, time::Instant};
-#[cfg(test)]
 use std::fs::OpenOptions;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 const CHUNK_SIZE: usize = 1024 * 1024;
-static UPLOADS: LazyLock<Mutex<HashMap<String, VideoUpload>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static UPLOADS: LazyLock<Mutex<HashMap<String, MediaUpload>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-struct VideoUpload {
+struct MediaUpload {
     // File must close before TempDir removes it on Windows.
     file: File,
     path: PathBuf,
@@ -24,22 +23,21 @@ struct VideoUpload {
 
 fn invalid(message: &str) -> AppError { AppError::Media(message.into()) }
 
-impl VideoUpload {
-    #[cfg(test)]
+impl MediaUpload {
     fn new(name: &str, size: u64, project_id: Option<String>) -> AppResult<Self> {
         let name = name.rsplit(['/', '\\']).next().unwrap_or("");
-        let (stem, ext) = name.rsplit_once('.').ok_or_else(|| invalid("请选择支持的视频文件"))?;
-        if !probe::is_video(ext) || size == 0 { return Err(invalid("视频格式不支持或文件为空")); }
+        let (stem, ext) = name.rsplit_once('.').ok_or_else(|| invalid("请选择支持的素材文件"))?;
+        if !file_intake::supported(std::path::Path::new(name)) || (size == 0 && !crate::core::text_documents::text_path(std::path::Path::new(name))) || size > 2 * 1024 * 1024 * 1024 { return Err(invalid("素材格式不支持、文件为空或超过 2 GiB")); }
         let stem: String = stem.chars().filter(|c| !matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*' | '\0')).take(80).collect();
         let directory = tempfile::Builder::new().prefix("bowerbird-upload-").tempdir()?;
-        let path = directory.path().join(format!("{}.{}", if stem.trim().is_empty() { "video" } else { &stem }, ext.to_lowercase()));
+        let path = directory.path().join(format!("{}.{}", if stem.trim().is_empty() { "素材" } else { &stem }, ext.to_lowercase()));
         let file = OpenOptions::new().write(true).create_new(true).open(&path)?;
         Ok(Self { file, path, _directory: directory, size, written: 0, project_id, touched: Instant::now() })
     }
 
     fn append(&mut self, offset: u64, bytes: &[u8]) -> AppResult<()> {
         if offset != self.written || bytes.is_empty() || bytes.len() > CHUNK_SIZE || bytes.len() as u64 > self.size - self.written {
-            return Err(invalid("视频传输不完整，请重新拖入"));
+            return Err(invalid("素材传输不完整，请重新拖入"));
         }
         self.file.write_all(bytes)?;
         self.written += bytes.len() as u64;
@@ -48,17 +46,19 @@ impl VideoUpload {
     }
 
     fn finish(mut self, paths: &LibraryPaths, db: &Database) -> AppResult<Asset> {
-        if self.written != self.size { return Err(invalid("视频尚未传输完成，请重新拖入")); }
+        if self.written != self.size { return Err(invalid("素材尚未传输完成，请重新拖入")); }
         self.file.flush()?;
-        let paths = paths.for_project(db, self.project_id.as_deref())?;
-        let mut asset = ingest::ingest_new_file(&paths, db, &self.path)?;
+        if let Some(project) = &self.project_id {
+            if db.get_project(project)?.is_none() { return Err(invalid("目标项目已不存在")); }
+        }
+        let mut asset = file_intake::collect(paths, db, &self.path)?;
         if asset.origin_path.as_deref() == Some(self.path.to_string_lossy().as_ref()) {
             db.conn.lock().unwrap().execute("UPDATE assets SET origin_path=NULL WHERE id=?1", [&asset.id])?;
             asset.origin_path = None;
         }
         if let Some(project) = &self.project_id {
             db.add_assets_to_project(project, std::slice::from_ref(&asset.id))
-                .map_err(|error| AppError::Other(format!("视频已入素材库，但加入项目失败：{error}")))?;
+                .map_err(|error| AppError::Other(format!("素材已入素材库，但加入项目失败：{error}")))?;
         }
         Ok(asset)
     }
@@ -66,16 +66,23 @@ impl VideoUpload {
 
 #[tauri::command]
 pub async fn video_import_begin(file_name: String, size: u64, project_id: Option<String>) -> AppResult<String> {
-    let _ = (file_name, size, project_id);
-    Err(invalid("请选择原视频文件建立连接"))
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut uploads = UPLOADS.lock().unwrap();
+        uploads.retain(|_, upload| upload.touched.elapsed().as_secs() < 900);
+        if uploads.len() >= 4 { return Err(invalid("正在接收其他素材，请稍后重试")); }
+        let upload = MediaUpload::new(&file_name, size, project_id)?;
+        let id = ulid::Ulid::new().to_string();
+        uploads.insert(id.clone(), upload);
+        Ok(id)
+    }).await.map_err(|error| AppError::Other(error.to_string()))?
 }
 
 #[tauri::command]
 pub async fn video_import_append(upload_id: String, offset: u64, data: String) -> AppResult<()> {
     tauri::async_runtime::spawn_blocking(move || {
-        if data.len() > CHUNK_SIZE.div_ceil(3) * 4 { return Err(invalid("视频数据块过大")); }
-        let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|_| invalid("视频数据块无效"))?;
-        UPLOADS.lock().unwrap().get_mut(&upload_id).ok_or_else(|| invalid("视频导入已结束，请重新拖入"))?.append(offset, &bytes)
+        if data.len() > CHUNK_SIZE.div_ceil(3) * 4 { return Err(invalid("素材数据块过大")); }
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|_| invalid("素材数据块无效"))?;
+        UPLOADS.lock().unwrap().get_mut(&upload_id).ok_or_else(|| invalid("素材接收已结束，请重新拖入"))?.append(offset, &bytes)
     }).await.map_err(|e| AppError::Other(e.to_string()))?
 }
 
@@ -83,10 +90,17 @@ pub async fn video_import_append(upload_id: String, offset: u64, data: String) -
 pub async fn video_import_finish(app: AppHandle, paths: State<'_, Arc<LibraryPaths>>, db: State<'_, Arc<Database>>, upload_id: String) -> AppResult<Asset> {
     let paths = paths.inner().clone();
     let db = db.inner().clone();
+    let analyze_db = db.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let upload = UPLOADS.lock().unwrap().remove(&upload_id).ok_or_else(|| invalid("视频导入已结束，请重新拖入"))?;
+        let upload = UPLOADS.lock().unwrap().remove(&upload_id).ok_or_else(|| invalid("素材接收已结束，请重新拖入"))?;
         upload.finish(&paths, &db)
     }).await.map_err(|e| AppError::Other(e.to_string()))?;
+    if let Ok(asset) = &result {
+        for path in [&asset.store_path, &asset.thumb_path].into_iter().flatten() {
+            app.asset_protocol_scope().allow_file(path).map_err(|error| AppError::Other(error.to_string()))?;
+        }
+        crate::core::autoname::spawn_auto_analyze(app.clone(), analyze_db, asset.clone());
+    }
     let _ = app.emit("library://assets-changed", ());
     let _ = app.emit("projects://changed", ());
     result
@@ -103,17 +117,25 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn legacy_local_video_upload_requires_original_connection() {
-        let error = video_import_begin("existing.mp4".into(), 1024, None).await.unwrap_err();
-        assert!(error.to_string().contains("建立连接"));
-        assert!(UPLOADS.lock().unwrap().is_empty());
+    async fn standalone_upload_starts_without_connection_and_cancel_removes_only_temporary_bytes() {
+        let original_dir = tempfile::tempdir().unwrap();
+        let original = original_dir.path().join("existing.mp4");
+        let bytes = include_bytes!("../../tests/fixtures/media/fragmented.mp4");
+        std::fs::write(&original, bytes).unwrap();
+        let id = video_import_begin("existing.mp4".into(), bytes.len() as u64, None).await.unwrap();
+        video_import_append(id.clone(), 0, base64::engine::general_purpose::STANDARD.encode(bytes)).await.unwrap();
+        let directory = UPLOADS.lock().unwrap()[&id]._directory.path().to_owned();
+        video_import_cancel(id.clone()).await.unwrap();
+        assert!(!directory.exists());
+        assert!(!UPLOADS.lock().unwrap().contains_key(&id));
+        assert_eq!(std::fs::read(original).unwrap(), bytes);
     }
 
     #[test]
     fn chunks_require_exact_offsets_and_sizes_and_cleanup_on_drop() {
-        assert!(VideoUpload::new("bad.txt", 3, None).is_err());
-        assert!(VideoUpload::new("empty.mp4", 0, None).is_err());
-        let mut upload = VideoUpload::new("../中文视频.MP4", 6, None).unwrap();
+        assert!(MediaUpload::new("bad.exe", 3, None).is_err());
+        assert!(MediaUpload::new("empty.mp4", 0, None).is_err());
+        let mut upload = MediaUpload::new("../中文视频.MP4", 6, None).unwrap();
         let directory = upload._directory.path().to_owned();
         assert_eq!(upload.path.parent().unwrap(), directory);
         assert!(upload.append(1, &[1, 2]).is_err());
@@ -131,7 +153,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let paths = LibraryPaths::init(root.path().into()).unwrap();
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
-        let mut upload = VideoUpload::new("incomplete.mp4", 6, None).unwrap();
+        let mut upload = MediaUpload::new("incomplete.mp4", 6, None).unwrap();
         let directory = upload._directory.path().to_owned();
         upload.append(0, &[1, 2, 3]).unwrap();
         assert!(upload.finish(&paths, &db).is_err());
@@ -142,11 +164,12 @@ mod tests {
     #[test]
     fn video_first_save_survives_cleanup_and_folder_connection_keeps_original() {
         let root = tempfile::tempdir().unwrap();
-        let paths = LibraryPaths::init(root.path().join("library")).unwrap();
+        let mut paths = LibraryPaths::init(root.path().join("library")).unwrap();
+        paths.files = Some(Arc::new(crate::core::file_workspace::FileWorkspace::open(root.path().join("files.json"), root.path().join("BowerbirdLibrary")).unwrap()));
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
         let bytes = include_bytes!("../../tests/fixtures/media/fragmented.mp4");
         db.create_project("p", "测试项目", "blank:p", "blank:p", "blank").unwrap();
-        let mut upload = VideoUpload::new("示例视频.mp4", bytes.len() as u64, Some("p".into())).unwrap();
+        let mut upload = MediaUpload::new("示例视频.mp4", bytes.len() as u64, Some("p".into())).unwrap();
         let directory = upload._directory.path().to_owned();
         for (index, chunk) in bytes.chunks(512).enumerate() { upload.append((index * 512) as u64, chunk).unwrap(); }
         let asset = upload.finish(&paths, &db).unwrap();

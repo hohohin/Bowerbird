@@ -206,6 +206,11 @@ impl AuthClient {
         auth
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_test_user(&self, user_id: &str) {
+        self.inner.session.write().unwrap().as_mut().unwrap().user_id = Some(user_id.into());
+    }
+
     pub fn new(cloud: CloudClient) -> Self {
         Self {
             inner: Arc::new(AuthInner {
@@ -595,10 +600,45 @@ impl AuthClient {
         request: reqwest::RequestBuilder,
         context: &str,
     ) -> AppResult<reqwest::Response> {
+        self.send_authorized_checked(request, context, None).await
+    }
+
+    /// Financial requests must keep the account selected when the user clicked,
+    /// including the single token refresh retry.
+    pub async fn send_authorized_for_user(
+        &self, request: reqwest::RequestBuilder, context: &str, user_id: &str,
+    ) -> AppResult<reqwest::Response> {
+        self.send_authorized_checked(request, context, Some(user_id)).await
+    }
+
+    fn check_request_account(&self, token: &str, user_id: Option<&str>) -> AppResult<()> {
+        if let Some(user_id) = user_id {
+            let session = self.inner.session.read().unwrap();
+            if !session.as_ref().is_some_and(|s| s.user_id.as_deref() == Some(user_id) && s.access_token == token) {
+                return Err(AppError::Cloud("账号已切换，请重新打开购买页面".into()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Keep account changes excluded until a synchronous account-specific cache
+    /// write finishes. Never hold this guard across HTTP or another await.
+    pub(crate) fn with_current_user<T>(&self, user_id: &str, action: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
+        let session = self.inner.session.read().unwrap();
+        if session.as_ref().and_then(|s| s.user_id.as_deref()) != Some(user_id) {
+            return Err(AppError::Cloud("账号已切换，请重新刷新权益".into()));
+        }
+        action()
+    }
+
+    async fn send_authorized_checked(
+        &self, request: reqwest::RequestBuilder, context: &str, user_id: Option<&str>,
+    ) -> AppResult<reqwest::Response> {
         let retry = request
             .try_clone()
             .ok_or_else(|| AppError::Cloud(format!("{context}: 请求体不可重试")))?;
         let token = self.access_token().await?;
+        self.check_request_account(&token, user_id)?;
         let response = self
             .authorize_request(request, &token)?
             .send()
@@ -609,6 +649,7 @@ impl AuthClient {
         }
 
         let refreshed = self.refresh_after_unauthorized(&token).await?;
+        self.check_request_account(&refreshed, user_id)?;
         let response = self
             .authorize_request(retry, &refreshed)?
             .send()
@@ -800,6 +841,28 @@ mod tests {
             })
             .unwrap(),
         )
+    }
+
+    #[test]
+    fn cache_commit_holds_account_guard_until_the_write_completes() {
+        let auth = AuthClient::with_test_session(CloudClient::new(CloudConfig::default()).unwrap());
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let writer = auth.clone();
+        let mut handle = None;
+        auth.with_current_user("test-user", || {
+            handle = Some(std::thread::spawn(move || {
+                started_tx.send(()).unwrap();
+                writer.set_test_user("other-user");
+                done_tx.send(()).unwrap();
+            }));
+            started_rx.recv().unwrap();
+            assert!(done_rx.try_recv().is_err(), "account switch must wait for the cache write guard");
+            Ok(())
+        }).unwrap();
+        done_rx.recv().unwrap();
+        handle.unwrap().join().unwrap();
+        assert!(auth.with_current_user("test-user", || Ok(())).is_err());
     }
 
     #[test]
@@ -1043,4 +1106,35 @@ mod tests {
         assert_eq!(function_error_message("not json"), None);
         assert_eq!(auth_error_detail(r#"{"error":{"message":""}}"#), None);
     }
+    #[tokio::test]
+    async fn payment_retry_cannot_switch_accounts_after_401() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let auth = AuthClient::with_test_session(CloudClient::new(CloudConfig {
+            supabase_url: Some("https://example.supabase.co".into()),
+            supabase_publishable_key: Some("sb_publishable_test".into()),
+            account_api_url: None,
+        }).unwrap());
+        assert!(auth.check_request_account("test-user-session", Some("test-user")).is_ok());
+        assert!(auth.check_request_account("test-user-session", Some("other-user")).is_err());
+        assert!(auth.check_request_account("stale-token", Some("test-user")).is_err());
+        let request = auth.inner.cloud.http().post(format!("http://{}/checkout", listener.local_addr().unwrap())).body("{}");
+        let server = async {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut body = [0; 2048];
+            let n = socket.read(&mut body).await.unwrap();
+            assert!(String::from_utf8_lossy(&body[..n]).contains("Bearer test-user-session"));
+            {
+                let mut session = auth.inner.session.write().unwrap();
+                let session = session.as_mut().unwrap();
+                session.user_id = Some("other-user".into());
+                session.access_token = "other-user-token".into();
+            }
+            socket.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+        };
+        let (result, _) = tokio::join!(auth.send_authorized_for_user(request, "payment", "test-user"), server);
+        assert!(result.unwrap_err().to_string().contains("账号已切换"));
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(30), listener.accept()).await.is_err(), "must not resend under the other account");
+    }
+
 }

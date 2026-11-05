@@ -4,13 +4,15 @@ import type { Value } from "platejs";
 import { BasicBlocksPlugin, BasicMarksPlugin } from "@platejs/basic-nodes/react";
 import { ListPlugin } from "@platejs/list/react";
 import { AudioPlugin, ImagePlugin, VideoPlugin } from "@platejs/media/react";
-import { Bold, Italic, List, Quote, Redo2, Undo2 } from "lucide-react";
+import { Redo2, Undo2 } from "lucide-react";
 import type { DocumentMedia, DocumentValue } from "../lib/documentTypes";
 import { normalizeDocument, parseMarkdown } from "../lib/documentCodec";
 import { getDragAssets } from "../lib/dragPayload";
 import { BlockDragContext, TextBlockActions, useBlockDrop } from "./TextBlockActions";
 import { AudioWaveform } from "./AudioWaveform";
 import { TextAgentScope } from "./TextAgent";
+import { TextInputRules } from "./TextInputRules";
+import { TextFormatButtons, TextSelectionToolbar } from "./TextFormatToolbar";
 
 export interface TextPlateInsertion { insert(media: DocumentMedia[]): void; cancel(): void }
 export interface TextPlateHandle { insertMedia(media: DocumentMedia[]): void; insertMarkdown(text: string): void; reserveInsertion(): TextPlateInsertion }
@@ -56,11 +58,12 @@ function DocumentElement(props: PlateElementProps) {
 
 export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextPlateEditor({ value, media, onChange, onDropAssets, onRejectedPaste, toolbarStart, toolbarEnd, agent }, ref) {
   const editor = usePlateEditor({
-    plugins: [BasicBlocksPlugin, BasicMarksPlugin, ListPlugin, ImagePlugin.configure({ options: { disableUploadInsert: true, disableEmbedInsert: true } }), AudioPlugin, VideoPlugin, createPlatePlugin({ key: "raw", node: { isElement: true } })],
+    plugins: [BasicBlocksPlugin, BasicMarksPlugin, ListPlugin, TextInputRules, ImagePlugin.configure({ options: { disableUploadInsert: true, disableEmbedInsert: true } }), AudioPlugin, VideoPlugin, createPlatePlugin({ key: "raw", node: { isElement: true } })],
     value: plateValue(value),
     override: { components: Object.fromEntries(["p", "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "hr", "img", "audio", "video", "raw"].map(key => [key, DocumentElement])) },
   });
   const blockDrag = useRef<string | null>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
   const emitted = useRef(value), mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { if (value !== emitted.current) { emitted.current = value; editor.tf.setValue(plateValue(value)); } }, [editor, value]);
@@ -92,14 +95,11 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
       {toolbarStart}
       <button aria-label="撤销" title="撤销" onClick={() => editor.tf.undo()}><Undo2 size={14}/></button>
       <button aria-label="重做" title="重做" onClick={() => editor.tf.redo()}><Redo2 size={14}/></button>
-      <button aria-label="标题" title="标题" onClick={() => { editor.tf.toggleBlock("h2"); editor.tf.focus(); }}>H₂</button>
-      <button aria-label="加粗" title="加粗" onClick={() => { editor.tf.toggleMark("bold"); editor.tf.focus(); }}><Bold size={14}/></button>
-      <button aria-label="斜体" title="斜体" onClick={() => { editor.tf.toggleMark("italic"); editor.tf.focus(); }}><Italic size={14}/></button>
-      <button aria-label="列表" title="列表" onClick={() => { editor.tf.setNodes({ listStyleType: "disc", indent: 1 }); editor.tf.focus(); }}><List size={14}/></button>
-      <button aria-label="引用" title="引用" onClick={() => { editor.tf.toggleBlock("blockquote"); editor.tf.focus(); }}><Quote size={14}/></button>
+      <TextFormatButtons/>
       {toolbarEnd}
     </div>
-    <PlateContent className="text-document-body" aria-label="文档正文" spellCheck={false} placeholder="开始写作…"
+    <TextSelectionToolbar bodyRef={bodyRef}/>
+    <PlateContent ref={bodyRef} className="text-document-body" aria-label="文档正文" spellCheck={false} placeholder="开始写作…"
       onKeyDown={event => {
         if (event.altKey && event.key === "Enter" && !event.nativeEvent.isComposing) {
           const anchor = window.getSelection()?.anchorNode;

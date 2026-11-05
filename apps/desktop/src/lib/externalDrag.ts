@@ -8,7 +8,7 @@ export const EXTERNAL_DRAG_ENDED = "bowerbird:external-drag-ended";
 
 /** The backend resolves registered IDs to originals; no temporary copies or renderer paths. */
 export async function startExternalDrag(assetIds: string[], mode: "hold" | "pickup",
-  { source = "library", signal, sourceRect }: { source?: "library" | "canvas"; signal?: AbortSignal; sourceRect?: DOMRect } = {}): Promise<void> {
+  { source = "library", signal, sourceRect, externalOnly = false }: { source?: "library" | "canvas"; signal?: AbortSignal; sourceRect?: DOMRect; externalOnly?: boolean } = {}): Promise<void> {
   if (!isTauri() || signal?.aborted) return;
   const ids = [...new Set(assetIds.filter(Boolean))];
   const release = holdNativeDragAssets(ids, getDragAssetName() ?? undefined, getDragAssetPreview());
@@ -20,13 +20,22 @@ export async function startExternalDrag(assetIds: string[], mode: "hold" | "pick
   let backdrop: HTMLDivElement | null = null;
   let unmountHud: (() => void) | undefined;
   let cancelPaint: (() => void) | undefined;
+  const internalTargets = source === "library" && !externalOnly;
   const blockInternalDrop = (event: DragEvent) => {
     event.preventDefault(); event.stopImmediatePropagation();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
   };
+  // Keep library-to-canvas/collection targets readable while preserving native ownership.
+  const showInternalTargets = () => { if (backdrop) backdrop.style.visibility = "hidden"; };
+  const leaveInternalTargets = (event: DragEvent) => {
+    if (!event.relatedTarget && backdrop) backdrop.style.visibility = "";
+  };
   const clearAppearance = () => {
     unmountHud?.(); unmountHud = undefined;
     backdrop?.remove(); backdrop = null;
+    window.removeEventListener("dragenter", showInternalTargets, true);
+    window.removeEventListener("dragover", showInternalTargets, true);
+    window.removeEventListener("dragleave", leaveInternalTargets, true);
     window.removeEventListener("dragover", blockInternalDrop, true);
     window.removeEventListener("drop", blockInternalDrop, true);
   };
@@ -56,15 +65,20 @@ export async function startExternalDrag(assetIds: string[], mode: "hold" | "pick
     window.addEventListener("blur", cancelPending);
   }
   try {
-    if (source === "canvas") {
+    if (!internalTargets) {
       window.addEventListener("dragover", blockInternalDrop, true);
       window.addEventListener("drop", blockInternalDrop, true);
     }
-    // Both entry points share feedback; only canvas exports reject internal drops.
     backdrop = document.createElement("div");
     backdrop.className = "external-drag-backdrop";
+
     document.body.append(backdrop);
     unmountHud = mountExternalDragHud(backdrop, sourceRect);
+    if (internalTargets) {
+      window.addEventListener("dragenter", showInternalTargets, true);
+      window.addEventListener("dragover", showInternalTargets, true);
+      window.addEventListener("dragleave", leaveInternalTargets, true);
+    }
     await new Promise<void>(resolve => {
       let first = 0, second = 0;
       const done = () => {

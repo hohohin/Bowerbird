@@ -40,15 +40,16 @@ try {
   }
   const before = (await calls("import_files")).length;
   await drop(null);
-  await page.getByText(/无法取得原文件位置/).waitFor();
+  await page.waitForFunction(() => window.calls.some(call => call.command === "create_material_references"));
   assert.equal((await calls("import_files")).length, before);
   assert.equal((await calls("import_image_bytes")).length, 1);
-  assert.equal((await calls("video_import_begin")).length, 0);
+  assert.equal((await calls("video_import_begin")).length, 1);
+  assert.deepEqual((await calls("create_material_references")).at(-1).args, { assetIds: ["collected-file"], folderId: "folder" });
   await drop("D:/素材/drop.png");
-  await page.waitForFunction(() => window.calls.some(call => call.command === "create_material_references"));
-  assert.deepEqual((await calls("import_files")).at(-1).args, { sources: ["D:/素材/drop.png"], projectId: "p" });
+  await page.waitForFunction(() => window.calls.filter(call => call.command === "create_material_references").length === 2);
+  assert.deepEqual((await calls("import_files")).at(-1).args, { sources: ["D:/素材/drop.png"], projectId: "p", collect: true });
   assert.deepEqual((await calls("create_material_references")).at(-1).args, { assetIds: ["D:/素材/drop.png"], folderId: "folder" });
-  assert.equal((await calls("import_image_bytes")).length, 1, "local drops never upload the existing bytes");
+  assert.equal((await calls("import_image_bytes")).length, 1, "file drops use bounded reception while bitmap paste keeps its first-save path");
   await page.getByRole("button", { name: "预览 HEIC" }).click();
   await page.waitForFunction(() => { const img = document.querySelector('.media-lightbox img'); return img?.complete && img.naturalWidth > 0; });
   assert.equal((await calls("external_files_media"))[0].args.path, "D:/素材/original.heic");
@@ -61,5 +62,5 @@ try {
   await page.waitForFunction(() => !document.querySelector('[data-test-detail]').style.transform.endsWith('scale(1)'));
   assert.match(await detail.getAttribute("style"), /scale\(1\./, "late decoded detail image keeps wheel zoom");
   assert.deepEqual(errors, []);
-  console.log("PASS: Windows/macOS file paste stays linked, bitmap first save, clipboard failure and pathless drop cannot copy, directory drop creates a reference.");
+  console.log("PASS: Windows/macOS file paste stays linked, bitmap first save, pathless drop enters inbox, directory drop creates a reference.");
 } finally { await browser.close(); await server.close(); }

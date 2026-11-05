@@ -1,7 +1,9 @@
 import { userErrorMessage } from "../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
-import { GripVertical } from "lucide-react";
+import { PanelEdgeHandle } from "./PanelEdgeHandle";
 import { SourceBrowserPanel } from "./SourceBrowserPanel";
+import { localClassification, projectClassification } from "../lib/localClassification";
+import { UNTAGGED_SECTION } from "../lib/materialCatalogOrder";
 import { useStore } from "../store";
 import { api } from "../lib/api";
 import { EXPLORER_MIME, parseExplorerImage } from "../lib/explorer";
@@ -22,7 +24,19 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
   const [over, setOver] = useState(false);
   const [width, setWidth] = useState(460);
   const [resizing, setResizing] = useState(false);
+  const [maximumWidth, setMaximumWidth] = useState(1000);
   const root = useRef<HTMLDivElement>(null);
+  const resizeStart = useRef<{ pointer: number; x: number; width: number } | null>(null);
+  const browserWidth = Math.min(width, maximumWidth);
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    const measure = () => setMaximumWidth(Math.max(320, element.clientWidth - 280));
+    const observer = new ResizeObserver(measure); observer.observe(element); measure();
+    return () => observer.disconnect();
+  }, []);
+  const resize = (next: number) => setWidth(Math.max(320, Math.min(maximumWidth, next)));
+  const finishResize = () => { resizeStart.current = null; setResizing(false); };
   const [feedback, setFeedback] = useState<CaptureFeedback | null>(null);
   const [classifications, setClassifications] = useState<ExplorerClassificationItem[]>([]);
   const completionOrder = useRef(0);
@@ -71,12 +85,17 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       : contextProjectId;
     const collectionId = event.target instanceof Element
       ? event.target.closest<HTMLElement>("[data-file-import-collection-id]")?.dataset.fileImportCollectionId || null : null;
+    const tagElement = event.target instanceof Element
+      ? event.target.closest<HTMLElement>(".is-tag-catalog [data-tag-id], .is-tag-catalog [data-tag-section]") : null;
+    const droppedTag = tagElement?.dataset.tagId ?? tagElement?.dataset.tagSection;
+    const tagId = droppedTag && droppedTag !== UNTAGGED_SECTION ? droppedTag : null;
     const completeLesson = beginOnboardingOperation("explore", target);
     const revision = state.projectRouteRevision;
     const placeOnCanvas = prepareExplorerCanvasDrop(event.target, target, event.clientX, event.clientY);
     const droppedOnCanvas = event.target instanceof Element && !!event.target.closest("[data-canvas-stage]");
     // Older/incomplete page injections can lack a drag ID; start on drop then.
     const dragId = image.dragId ?? crypto.randomUUID().replaceAll("-", "");
+    if (tagId && !isVideo) void api.releaseSourceBrowserAnalysis(dragId).catch(() => {});
     const previewUrl = dragMotion.drop(image, dragId, point.x, point.y);
     const classificationId = `${dragId}:${operation}`;
     const inTarget = () => {
@@ -90,13 +109,14 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
     let placedNodeId: string | undefined;
     let capturedAsset: Asset | undefined;
     let collectionDelivered = false;
+    let tagDelivered = false;
     const discard = () => { dragMotion.finish(dragId); if (!isVideo) void api.releaseSourceBrowserAnalysis(dragId).catch(() => {}); };
     try { enqueueExplorerCapture({ mediaKind: image.mediaKind, pageUrl: image.pageUrl, thumbnail: previewUrl }, async attempt => {
     let handedOff = false;
     try {
       if (!placeOnCanvas && droppedOnCanvas) throw new Error("画布尚未准备好，请稍后重新拖入");
       let analysisIssue = "";
-      const analysing = !capturedAsset && !isVideo && await api.claimSourceBrowserAnalysis(dragId, image.imageUrl, image.pageUrl).catch(error => {
+      const analysing = !tagId && !capturedAsset && !isVideo && await api.claimSourceBrowserAnalysis(dragId, image.imageUrl, image.pageUrl).catch(error => {
         const reason = error instanceof Error ? error.message : typeof error === "string" ? error : "";
         console.error("Capture classification unavailable", error);
         analysisIssue = /not found|unknown command/i.test(reason) ? "分类暂不可用，请更新应用后重试" : userErrorMessage(error, "分类暂不可用，可稍后重新分类");
@@ -123,11 +143,15 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
       }
       if (!capturedAsset) {
         attempt.beforeCapture();
-        capturedAsset = await api.captureSourceBrowserImage(image.imageUrl, image.pageUrl, target, dragId, image.mediaKind, attempt.captureId);
+        capturedAsset = await api.captureSourceBrowserImage(image.imageUrl, image.pageUrl, target, dragId, image.mediaKind, attempt.captureId, tagId ? true : undefined);
       }
       const asset = capturedAsset;
       attempt.saved(asset);
       capturedId = asset.id;
+      if (tagId && !tagDelivered) {
+        await (target ? projectClassification(target) : localClassification).example(tagId, [asset.id], true);
+        tagDelivered = true;
+      }
       if (asset.thumb_path) updateClassification({ imageUrl: convertFileSrc(asset.thumb_path) });
       if (collectionId && !collectionDelivered) {
         await folderConnections.references([asset.id], collectionId);
@@ -167,16 +191,35 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
   }
 
   return <div ref={root} className={`explore-workspace ${open ? "is-open" : ""}`} aria-label="主工作区">
-    <aside className="explore-browser" style={{ width }} hidden={!open} aria-label="探索面板">
+    <aside id="explore-browser-panel" className="explore-browser" style={{ width: browserWidth }} hidden={!open} aria-label="探索面板">
       {url && <SourceBrowserPanel url={url} navigationId={navigationId} onClose={onClose} visible={open} suspended={resizing} />}
+      <PanelEdgeHandle variant="overlay" className={`explore-panel-handle ${resizing ? "is-library-resizing" : ""}`} closeLabel="收起浏览器" onClose={onClose} onEscape={onClose} grip={{
+        "aria-label": "调整浏览器宽度", "aria-controls": "explore-browser-panel",
+        "aria-valuemin": 320, "aria-valuemax": maximumWidth, "aria-valuenow": browserWidth,
+        title: "拖动调整浏览器宽度 · 左右方向键微调 · 双击恢复默认宽度",
+        onKeyDown: event => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault(); event.stopPropagation();
+          resize(event.key === "Home" ? 320 : event.key === "End" ? maximumWidth : browserWidth + (event.key === "ArrowLeft" ? -20 : 20));
+        },
+        onPointerDown: event => {
+          if (event.button !== 0 || resizeStart.current) return;
+          event.preventDefault(); event.stopPropagation(); event.currentTarget.focus({ preventScroll: true });
+          resizeStart.current = { pointer: event.pointerId, x: event.clientX, width: browserWidth };
+          event.currentTarget.setPointerCapture(event.pointerId); setResizing(true);
+        },
+        onPointerMove: event => {
+          const start = resizeStart.current;
+          if (start?.pointer === event.pointerId) resize(start.width + event.clientX - start.x);
+        },
+        onPointerUp: event => {
+          if (resizeStart.current?.pointer !== event.pointerId) return;
+          finishResize(); event.currentTarget.releasePointerCapture(event.pointerId);
+        },
+        onPointerCancel: finishResize, onLostPointerCapture: finishResize,
+        onDoubleClick: () => resize(460),
+      }} />
     </aside>
-    <div className="explore-resizer" hidden={!open} role="separator" aria-label="调整浏览器宽度" aria-orientation="vertical" tabIndex={0}
-      onKeyDown={event => { if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-        event.preventDefault(); setWidth(w => Math.max(320, Math.min((root.current?.clientWidth || 900) - 280, w + (event.key === "ArrowLeft" ? -20 : 20))));
-      } }}
-      onPointerDown={event => { event.currentTarget.setPointerCapture(event.pointerId); setResizing(true); }}
-      onPointerMove={event => { if (resizing && root.current) setWidth(Math.max(320, Math.min(root.current.clientWidth - 280, event.clientX - root.current.getBoundingClientRect().left))); }}
-      onPointerUp={() => setResizing(false)} onLostPointerCapture={() => setResizing(false)}><GripVertical size={12} /></div>
     <section className={`explore-main ${over ? "is-drop-target" : ""}`} aria-label="探索采集素材"
       onDragOverCapture={event => {
         if (getDragAssets()?.length) { setOver(false); return; }

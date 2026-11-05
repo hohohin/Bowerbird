@@ -110,15 +110,19 @@ pub async fn import_files(
     db: State<'_, Arc<Database>>,
     sources: Vec<String>,
     project_id: Option<String>,
+    collect: Option<bool>,
 ) -> Result<Vec<Asset>, AppError> {
-    let paths = Arc::new(paths.for_project(&db, project_id.as_deref())?);
+    let paths = if collect.unwrap_or(false) { paths.inner().clone() }
+        else { Arc::new(paths.for_project(&db, project_id.as_deref())?) };
     let db = db.inner().clone();
     let db_for_ingest = db.clone();
     let assets = tokio::task::spawn_blocking(move || {
         let mut assets = Vec::with_capacity(sources.len());
         let mut failures = Vec::new();
         for s in sources {
-            match ingest::ingest_file(&paths, &db_for_ingest, &PathBuf::from(&s)) {
+            let result = if collect.unwrap_or(false) { crate::core::file_intake::collect(&paths, &db_for_ingest, &PathBuf::from(&s)) }
+                else { ingest::ingest_file(&paths, &db_for_ingest, &PathBuf::from(&s)) };
+            match result {
                 Ok(a) => assets.push(a),
                 Err(e) => {
                     tracing::warn!("ingest failed for {s}: {e}");
