@@ -2,6 +2,25 @@ use super::*;
 use serde_json::{json, Value};
 use std::time::Duration;
 
+#[tokio::test]
+async fn sending_and_receiving_have_independent_lifetimes() {
+    let (root, receive, paths, db) = fixture();
+    let original = root.path().join("send.txt");
+    std::fs::write(&original, "send original").unwrap();
+    let runtime = QuickTransfer::default();
+    let send = runtime.start_send(Ipv4Addr::LOCALHOST, vec![original], Arc::new(|_| {})).await.unwrap();
+    assert!(!send.active);
+    let send_url = send.sending.unwrap().url;
+    let receive = runtime.start(&receive, Ipv4Addr::LOCALHOST, paths, db, Arc::new(|_| {})).await.unwrap();
+    assert_eq!(receive.sending.unwrap().url, send_url);
+    assert!(receive.active);
+    let stopped_send = runtime.stop_send().await.unwrap();
+    assert!(stopped_send.active);
+    assert!(stopped_send.sending.is_none());
+    assert!(stopped_send.revision > receive.revision);
+    assert!(!runtime.stop().await.unwrap().active);
+}
+
 fn fixture() -> (
     tempfile::TempDir,
     std::path::PathBuf,

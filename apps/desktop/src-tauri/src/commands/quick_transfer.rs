@@ -109,6 +109,17 @@ pub async fn quick_transfer_stop(state: State<'_, QuickTransfer>) -> AppResult<S
 }
 
 #[tauri::command]
+pub async fn quick_transfer_send_start(app: AppHandle, state: State<'_, QuickTransfer>, address: String, files: Vec<PathBuf>) -> AppResult<Snapshot> {
+    let ip = address.parse().map_err(|_| AppError::Other("请选择有效的局域网地址".into()))?;
+    state.start_send(ip, files, Arc::new(move |snapshot| { let _ = app.emit("quick-transfer://changed", snapshot); })).await
+}
+
+#[tauri::command]
+pub async fn quick_transfer_send_stop(state: State<'_, QuickTransfer>) -> AppResult<Snapshot> {
+    state.stop_send().await
+}
+
+#[tauri::command]
 pub async fn quick_transfer_retry(
     state: State<'_, QuickTransfer>,
     id: String,

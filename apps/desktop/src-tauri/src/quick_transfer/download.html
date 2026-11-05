@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer"><title>接收文件 · Bowerbird</title>
+<style>
+:root{color-scheme:dark;--canvas:#141414;--panel:#1e1e1e;--line:#3d3d3d;--muted:#949494;--ink:#dcdcdc;--accent:#8faab8;--danger:#e79c98;font:14px/1.5 Inter,"Microsoft YaHei",sans-serif;color:var(--ink);background:var(--canvas)}
+@media(prefers-color-scheme:light){:root{color-scheme:light;--canvas:#e7e7e7;--panel:#f7f7f7;--line:#c5c5c5;--muted:#646464;--ink:#2b2b2b;--accent:#496775;--danger:#a83932}}
+*{box-sizing:border-box}body{margin:0;padding:24px 16px}main{max-width:460px;min-height:calc(100svh - 48px);margin:auto;padding:26px 24px max(24px,env(safe-area-inset-bottom));background:var(--panel);box-shadow:0 20px 32px -11px #0003}header{font-size:13px;color:var(--muted);margin-bottom:38px}h1{font-size:27px;font-weight:500;margin:0 0 28px}p{margin:0}button,input,a{font:inherit;color:inherit}button,a{min-height:44px;background:none;border:0;cursor:pointer;color:var(--accent)}button:focus-visible,input:focus-visible,a:focus-visible{outline:1px solid var(--accent);outline-offset:3px}button:disabled{opacity:.45;cursor:default}[hidden]{display:none!important}label{display:block;color:var(--muted)}input{width:100%;height:52px;border:0;border-bottom:1px solid var(--line);background:none;font-size:24px;letter-spacing:.14em;border-radius:0;margin:12px 0 24px}.connect{width:100%;border-block:1px solid var(--accent);text-align:left;font-weight:600}ul{list-style:none;padding:0;margin:0}li{display:flex;align-items:center;gap:16px;padding:16px 0;border-bottom:1px solid var(--line)}.info{min-width:0;flex:1}.name{overflow-wrap:anywhere}.size{font-size:12px;color:var(--muted);margin-top:4px}a{display:grid;place-items:center;text-decoration:none;padding:0 8px;flex-shrink:0}a[aria-disabled="true"]{opacity:.45;pointer-events:none}#notice{font-size:13px;line-height:1.8;margin-top:20px;overflow-wrap:anywhere}#notice.error{color:var(--danger)}footer{font-size:12px;line-height:1.8;color:var(--muted);margin-top:32px}
+@media(max-width:360px){body{padding:16px 12px}main{padding:24px 20px;min-height:calc(100svh - 32px)}}
+</style>
+</head>
+<body><main>
+<header>Bowerbird</header><h1>接收文件</h1>
+<form id="pairing"><label for="code">配对码</label><input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="32" placeholder="8 位数字" required><button class="connect" id="connect">连接</button></form>
+<ul id="files" aria-label="可下载文件"></ul>
+<p id="notice" role="status" aria-live="polite"></p><button id="retry" hidden>重新连接</button>
+<footer>下载进度和保存位置请查看浏览器下载列表。<br>仅在可信局域网使用 · HTTP 未加密</footer>
+</main><script>
+'use strict';
+const byId = id => document.getElementById(id);
+const api = '/api/localsend/v2/';
+let pin = new URLSearchParams(location.search).get('pin') || '';
+let session = '';
+let connecting = false;
+let limited = false;
+function notice(message, error = false) { byId('notice').textContent = message; byId('notice').classList.toggle('error', error); }
+function disableLinks() {
+  document.querySelectorAll('#files a').forEach(link => { link.removeAttribute('href'); link.setAttribute('aria-disabled', 'true'); });
+}
+function showFiles(files) {
+  byId('files').replaceChildren();
+  for (const file of Object.values(files)) {
+    const row = document.createElement('li');
+    const info = document.createElement('div'); info.className = 'info';
+    const name = document.createElement('p'); name.className = 'name'; name.textContent = file.fileName;
+    const size = document.createElement('p'); size.className = 'size'; size.textContent = file.size < 1024 ? `${file.size} B` : `${(file.size / 1024 / 1024).toFixed(2)} MB`;
+    const link = document.createElement('a'); link.textContent = '下载'; link.download = file.fileName;
+    link.href = api + 'download?' + new URLSearchParams({ sessionId: session, fileId: file.id });
+    link.setAttribute('aria-label', `下载 ${file.fileName}`);
+    link.addEventListener('click', () => notice('已交给浏览器下载，请在下载列表中查看结果。'));
+    info.append(name, size); row.append(info, link); byId('files').append(row);
+  }
+}
+function connectionFailed(status) {
+  disableLinks();
+  limited = status === 429;
+  byId('retry').hidden = limited;
+  if (status === 401 || status === 403) {
+    session = ''; byId('pairing').hidden = false;
+    notice('配对码不正确或链接已失效，请核对电脑上的配对码。', true);
+  } else if (limited) {
+    notice('尝试次数过多或连接已满，请在电脑关闭并重新开启发送。', true);
+  } else {
+    notice('连接已中断，请确认电脑发送已开启，并连接同一局域网。', true);
+  }
+}
+async function connect(probe = false) {
+  if (connecting || limited) return;
+  connecting = true; byId('connect').disabled = true; byId('retry').hidden = true;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const params = probe ? { sessionId: session } : session ? { sessionId: session, pin } : { pin };
+    const response = await fetch(api + 'prepare-download?' + new URLSearchParams(params), { method: 'POST', signal: controller.signal, cache: 'no-store' });
+    if (!response.ok) { connectionFailed(response.status); return; }
+    const data = await response.json(); session = data.sessionId;
+    byId('pairing').hidden = true;
+    if (!probe || byId('files').querySelector('[aria-disabled]')) showFiles(data.files);
+    if (!probe) notice('');
+  } catch { connectionFailed(0); }
+  finally { clearTimeout(timeout); connecting = false; byId('connect').disabled = limited; }
+}
+byId('pairing').addEventListener('submit', event => {
+  event.preventDefault(); const value = byId('code').value.replace(/\s/g, '');
+  if (!/^\d{8}$/.test(value)) { notice('请输入 8 位数字配对码。', true); return; }
+  pin = value; session = ''; void connect();
+});
+byId('retry').addEventListener('click', () => void connect());
+document.addEventListener('visibilitychange', () => { if (!document.hidden && session) void connect(true); });
+setInterval(() => { if (!document.hidden && session && byId('retry').hidden) void connect(true); }, 10000);
+if (pin) { byId('code').value = pin; void connect(); }
+</script></body></html>

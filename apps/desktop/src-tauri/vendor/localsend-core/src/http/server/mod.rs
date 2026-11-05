@@ -641,12 +641,17 @@ async fn handle_request_inner(mut req: Request<Incoming>) -> Result<Response<Box
             || req.headers().get(hyper::header::ORIGIN).is_some_and(|h|h.to_str().ok() != Some(origin.as_str())) {
             return Err(AppError::Status(StatusCode::FORBIDDEN));
         }
-        if !matches!((req.method(),req.uri().path()),
+        let allowed = if state.web.is_some() {
+            matches!((req.method(),req.uri().path()),
+                (&Method::GET,"/" | "/i18n.json" | "/api/localsend/v2/download") |
+                (&Method::POST,"/api/localsend/v2/prepare-download"))
+        } else { matches!((req.method(),req.uri().path()),
             (&Method::GET,"/" | "/i18n.json") |
-            (&Method::POST,"/api/localsend/v2/prepare-upload" | "/api/localsend/v2/upload" | "/api/localsend/v2/cancel")) {
+            (&Method::POST,"/api/localsend/v2/prepare-upload" | "/api/localsend/v2/upload" | "/api/localsend/v2/cancel")) };
+        if !allowed {
             return Err(AppError::Status(StatusCode::NOT_FOUND));
         }
-        if req.method() == Method::GET && req.uri().path() == "/" {
+        if state.web.is_none() && req.method() == Method::GET && req.uri().path() == "/" {
             let Some(v2)=&state.v2 else {return Err(AppError::Status(StatusCode::NOT_FOUND))};
             let query = common::query::parse_query(req.uri().query());
             // The public root only contains a pairing form; no upload authority is granted.

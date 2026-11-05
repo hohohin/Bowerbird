@@ -450,6 +450,8 @@ pub fn run() {
             commands::quick_transfer::quick_transfer_start,
             commands::quick_transfer::quick_transfer_stop,
             commands::quick_transfer::quick_transfer_retry,
+            commands::quick_transfer::quick_transfer_send_start,
+            commands::quick_transfer::quick_transfer_send_stop,
             commands::external_files::external_files_browse,
             commands::external_drag::start_external_drag,
             commands::external_drag::cancel_pending_external_drag,

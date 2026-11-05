@@ -35,6 +35,18 @@ HEIC保留接收原件，PNG仅用于兼容验证/预览；不走旧 `ingest_new
 
 ## 源码与验证入口
 
+### 本机发送（2026-11-06，源码待发布）
+
+- 快传新增接收／发送页签；发送使用系统文件选择器，多选普通文件，开启前可移除。发送原文件，不导入、不转码、不修改资料库，不附带创作资料或自动遍历目录；更换文件需先关闭发送。
+- 复用 LocalSend `WebSendConfig`／`PrepareDownload`／`FileDownload`；独立端口、二维码和8位配对码，不需要先开启接收或创建快传目录。收发可同时开启，各自停止；收起、切页不停止。共用已有 snapshot revision。
+- 手机扫码，电脑输入短地址和配对码。通过 PIN 后才返回文件名、大小和随机文件 ID，不暴露本机路径；资源均来自本机。逐文件点击下载，进度／保存位置由浏览器管理；页面不声称点击后已保存到目标设备。
+- 最多100项选择，规范路径去重；单文件2 GiB，合计10 GiB。最多4条文件流，每条256 KiB块、2块队列，读／写等待60秒回收；大小限额针对所选文件集合，不是累计下载流量。不同设备可重复下载，无加密或断点续传承诺。
+- 发送模式仅开放根页面／i18n／prepare-download／download；原接收模式仍关闭下载。Host／Origin／no-store／no-referrer／CSP沿用，PIN每IP三次错误封禁到重开。下载ticket为随机UUID且绑定IP，重新配对撤销该IP旧ticket，最多200客户端；探活不携带PIN重新配对，避免同IP多页互相自动撤销。关闭发送中止监听与连接，新开生成新PIN和文件ID。
+- 下载前核对规范路径、普通文件、大小、修改时间；文件消失或变化时下载失败，需要重新选择。原件不创建冻结副本，发送期间应避免编辑。UTF-8 filename*保留中文文件名。
+- 新入口 `quick_transfer/send.rs`、IPC `quick_transfer_send_start/stop`、桌面 `QuickTransferSend`、终端 `download.html`；复用 `QuickTransferConnection`，原 `upload.html` 不变。验证见[行动记录](../project_logs/2026-11-06-quick-transfer-send.md)。未发布安装包、替换运行中客户端或操作用户资料库；Android／iOS真机下载和Mac原生待验。
+
+### 接收入口
+
 - `src-tauri/vendor/localsend-core/`：固定上游及最小接收边界修订，许可证与来源记录随目录分发；Tauri resources 将 LICENSE 与本地修改说明纳入 `licenses/localsend/`，安装包仍须在发版时核验。
 - Rust版本声明为本轮已验证的1.90；旧1.85声明低于现有和新增锁定依赖要求，不据此承诺1.85兼容。
 - `src-tauri/src/quick_transfer/transport.rs`：LocalSend接收、权限、限额、停止与超时。

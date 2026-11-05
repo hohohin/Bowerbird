@@ -1,6 +1,7 @@
-//! Explicit, local-only receive sessions; no listener is started during application setup.
+//! Explicit local-only send/receive sessions; application setup starts no listener.
 pub mod addresses;
 pub mod transport;
+pub mod send;
 
 use crate::{
     core::{
@@ -27,6 +28,7 @@ pub struct Snapshot {
     pub directory: Option<String>,
     pub url: Option<String>,
     pub transfers: Vec<Transfer>,
+    pub sending: Option<send::SendSnapshot>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -69,9 +71,43 @@ struct Context {
 #[derive(Default)]
 pub struct QuickTransfer {
     active: tokio::sync::Mutex<Option<Active>>,
+    outgoing: tokio::sync::Mutex<Option<send::SendHandle>>,
     view: Arc<Mutex<Snapshot>>,
 }
 impl QuickTransfer {
+    fn set_sending(&self, sending: Option<send::SendSnapshot>, notify: &Notify) -> Snapshot {
+        let snapshot = {
+            let mut view = self.view.lock().unwrap();
+            view.sending = sending;
+            view.revision += 1;
+            view.clone()
+        };
+        notify(&snapshot);
+        snapshot
+    }
+    pub async fn start_send(&self, ip: Ipv4Addr, files: Vec<std::path::PathBuf>, notify: Notify) -> AppResult<Snapshot> {
+        let mut outgoing = self.outgoing.lock().await;
+        if self.snapshot().sending.is_some() { return Err(AppError::Other("请先关闭发送，再更换文件".into())); }
+        if let Some(previous) = outgoing.take() { previous.stop().await; }
+        let view = self.view.clone();
+        let on_stop = notify.clone();
+        let handle = send::start(ip, files, Arc::new(move || {
+            let snapshot = {
+                let mut view = view.lock().unwrap();
+                view.sending = None;
+                view.revision += 1;
+                view.clone()
+            };
+            on_stop(&snapshot);
+        })).await.map_err(AppError::Other)?;
+        let snapshot = self.set_sending(Some(handle.snapshot.clone()), &notify);
+        *outgoing = Some(handle);
+        Ok(snapshot)
+    }
+    pub async fn stop_send(&self) -> AppResult<Snapshot> {
+        if let Some(handle) = self.outgoing.lock().await.take() { handle.stop().await; }
+        Ok(self.snapshot())
+    }
     pub fn snapshot(&self) -> Snapshot {
         self.view.lock().unwrap().clone()
     }
@@ -128,6 +164,7 @@ impl QuickTransfer {
                 directory: Some(directory.to_string_lossy().into_owned()),
                 url: Some(url),
                 transfers,
+                sending: view.sending.clone(),
             }
         });
         let worker = tokio::spawn(process_events(context.clone(), rx));

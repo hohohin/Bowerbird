@@ -2,6 +2,11 @@
 mod transport;
 #[path = "../../../src-tauri/src/quick_transfer/addresses.rs"]
 mod addresses;
+#[path = "../../../src-tauri/src/quick_transfer/send.rs"]
+mod send;
+
+#[cfg(test)]
+mod download_scope_test;
 
 use std::{collections::HashMap, net::Ipv4Addr, sync::Arc};
 use tokio::sync::{mpsc, Mutex};
