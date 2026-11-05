@@ -39,7 +39,7 @@ export function useImageZoom(src?: string, opts: Opts = {}) {
   // 同步最新值，供 wheel/mousemove 闭包读取，避免 stale state。
   const stRef = useRef({ scale: 1, tx: 0, ty: 0 });
   stRef.current = { scale, tx, ty };
-  const dragRef = useRef<{ mx: number; my: number; tx: number; ty: number } | null>(null);
+  const dragRef = useRef<{ mx: number; my: number; tx: number; ty: number; pointerId?: number } | null>(null);
 
   const reset = useCallback(() => {
     stRef.current = { scale: 1, tx: 0, ty: 0 };
@@ -85,27 +85,51 @@ export function useImageZoom(src?: string, opts: Opts = {}) {
     return () => el.removeEventListener("wheel", onWheel);
   }, [src, step, zoomBy]);
 
+  const beginDrag = useCallback((mx: number, my: number, pointerId?: number) => {
+    const { tx, ty } = stRef.current;
+    dragRef.current = { mx, my, tx, ty, pointerId };
+    setDragging(true);
+  }, []);
+
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     // 仅左键拖动平移；右键留给 onContextMenu（避免右键误触发平移）。
     if (e.button !== 0) return;
     // preventDefault 防止 img 原生拖拽 / 选区；stopPropagation 不冒泡到背景关闭层。
     e.preventDefault();
     e.stopPropagation();
+    beginDrag(e.clientX, e.clientY);
+  }, [beginDrag]);
+
+  // Editors arbitrate drawing vs panning before forwarding a pointer here.
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    if ((e.button !== 0 && e.button !== 1) || dragRef.current) return;
+    e.preventDefault(); e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    beginDrag(e.clientX, e.clientY, e.pointerId);
+  }, [beginDrag]);
+
+  const panBy = useCallback((dx: number, dy: number) => {
+    if (dragRef.current) return;
     const { tx, ty } = stRef.current;
-    dragRef.current = { mx: e.clientX, my: e.clientY, tx, ty };
-    setDragging(true);
+    stRef.current = { ...stRef.current, tx: tx + dx, ty: ty + dy };
+    setTx(tx + dx); setTy(ty + dy);
   }, []);
 
   // 拖动 move/up 挂 window：拖出 img 范围仍能继续平移 / 释放。
   useEffect(() => {
-    function move(e: MouseEvent) {
+    function move(e: MouseEvent | PointerEvent) {
       const d = dragRef.current;
       if (!d) return;
+      if (d.pointerId !== undefined ? !(e instanceof PointerEvent) || e.pointerId !== d.pointerId : e instanceof PointerEvent) return;
       stRef.current = { ...stRef.current, tx: d.tx + e.clientX - d.mx, ty: d.ty + e.clientY - d.my };
       setTx(d.tx + (e.clientX - d.mx));
       setTy(d.ty + (e.clientY - d.my));
     }
-    function up() {
+    function up(e: Event) {
+      const d = dragRef.current;
+      if (e.type !== "blur" && d?.pointerId !== undefined && (!(e instanceof PointerEvent) || e.pointerId !== d.pointerId)) return;
+      if (e instanceof PointerEvent && d?.pointerId === undefined) return;
+      if (e.type === "pointerup" && e instanceof PointerEvent) move(e);
       if (dragRef.current) {
         dragRef.current = null;
         setDragging(false);
@@ -113,10 +137,18 @@ export function useImageZoom(src?: string, opts: Opts = {}) {
     }
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+    window.addEventListener("lostpointercapture", up);
     window.addEventListener("blur", up);
     return () => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      window.removeEventListener("lostpointercapture", up);
       window.removeEventListener("blur", up);
     };
   }, []);
@@ -150,5 +182,5 @@ export function useImageZoom(src?: string, opts: Opts = {}) {
     cursor: isZoomed ? (dragging ? "grabbing" : "grab") : "zoom-in",
   };
 
-  return { imgRef, style, onMouseDown, onDoubleClick, isZoomed, reset, scale, dragging, zoomBy };
+  return { imgRef, style, onMouseDown, onPointerDown, onDoubleClick, isZoomed, isPanned: tx !== 0 || ty !== 0, reset, scale, dragging, zoomBy, panBy };
 }

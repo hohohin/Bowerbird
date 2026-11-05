@@ -18,6 +18,9 @@
 .annotation-toolbar button { white-space: nowrap; }
 .annotation-toolbar button svg { flex-shrink: 0; }
 
+.annotation-stage[data-pan-mode="true"] svg,
+.annotation-stage[data-pan-mode="true"] svg * { cursor: inherit !important; }
+
 .annotation-toolbar-actions {
   display: flex;
   align-items: center;

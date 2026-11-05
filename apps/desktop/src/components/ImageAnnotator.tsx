@@ -2,18 +2,21 @@ import { useAnnotationStrokeWheel } from "../lib/useAnnotationStrokeWheel";
 import { useAnnotationHistory } from "../lib/useAnnotationHistory";
 import { useAnnotationDrawing } from "../lib/useAnnotationDrawing";
 import { useAnnotationCanvas } from "../lib/useAnnotationCanvas";
+import { useImageZoom } from "../lib/useImageZoom";
 import { AnnotationTools } from "./AnnotationTools";
 import "./ImageAnnotator.css";
 import { AnnotationTextEditor } from "./AnnotationTextEditor";
 import { ANNOTATION_COLORS as COLORS, ANNOTATION_FONT, drawShapes, applyTextEdit, type DrawShape, type TextEdit } from "../lib/annotation";
 import { userErrorMessage } from "../lib/userError";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   Check,
   Crop,
   Trash2,
   Redo2,
+  Hand,
+  Focus,
   FlipHorizontal2,
   FlipVertical2,
   LayoutDashboard,
@@ -58,7 +61,7 @@ import type {
  */
 
 type BaseOp = AnnotationTransformOp;
-type Tool = DrawShape["type"] | "crop";
+type Tool = DrawShape["type"] | "crop" | "pan";
 
 /** 待应用的裁剪框（0-1 相对当前底图；进入裁剪工具后常驻，应用才落为 crop op）。 */
 type CropRect = { x1: number; y1: number; x2: number; y2: number };
@@ -295,6 +298,9 @@ export function ImageAnnotator() {
   const [filled, setFilled] = useState(false);
   const [busy, setBusy] = useState(false);
   const [textEdit, setTextEdit] = useState<TextEdit<DrawShape["type"]> | null>(null);
+  const viewport = useImageZoom(undefined, { min: 1, max: 1 });
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  useLayoutEffect(() => { viewport.reset(); setSpaceHeld(false); }, [annotator, viewport.reset]);
 
   function commitText() {
     if (!textEdit || !base) return shapes;
@@ -384,7 +390,21 @@ export function ImageAnnotator() {
   const replacesBase = useAnnotationCanvas(canvasRef, draftCanvasRef, baseCanvasRef.current ?? baseImgRef.current,
     base?.w ?? 0, base?.h ?? 0, visibleShapes, draft, open && !!displaySize);
 
-  function chooseTool(next: Tool) { commitText(); drawing.finish(); setTool(next); }
+  function chooseTool(next: Tool) { commitText(); drawing.finish(); setTool(next); stageRef.current?.focus({ preventScroll: true }); }
+
+  function isPanGesture(event: React.PointerEvent) {
+    return !!base && !busy && !cropDragRef.current && (!draft || !!drawing.polyline.current)
+      && (event.button === 1 || (event.button === 0 && (tool === "pan" || spaceHeld)))
+      && !(event.target instanceof Element && event.target.closest("button, input, textarea, select, [data-annotation-text-editor]"));
+  }
+
+  useEffect(() => {
+    if (!open) return;
+    const release = (event: KeyboardEvent) => { if (event.code === "Space") setSpaceHeld(false); };
+    const blur = () => setSpaceHeld(false);
+    window.addEventListener("keyup", release); window.addEventListener("blur", blur);
+    return () => { window.removeEventListener("keyup", release); window.removeEventListener("blur", blur); };
+  }, [open]);
 
   function pushUndo() {
     history.record({ shapes, ops });
@@ -410,7 +430,17 @@ export function ImageAnnotator() {
     function onKey(e: KeyboardEvent) {
       if (busy) return;
       // Text input (including IME confirmation and native undo) owns its keys.
-      if (e.isComposing || (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [role="combobox"]'))) return;
+      if (e.isComposing || (e.target instanceof HTMLElement && (e.target.isContentEditable || e.target.closest('input, textarea, select, [role="combobox"]')))) return;
+      if (e.code === "Space" && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.target instanceof HTMLElement && e.target.closest("button")) return;
+        if ((draft && !drawing.polyline.current) || cropDragRef.current) return;
+        e.preventDefault(); setSpaceHeld(true); return;
+      }
+      if (tool === "pan" && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.startsWith("Arrow")) {
+        const step = e.shiftKey ? 50 : 10;
+        e.preventDefault(); viewport.panBy(e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0,
+          e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0); return;
+      }
       if (e.key === "Enter" && e.target instanceof HTMLElement && e.target.closest("button")) return;
       if (e.key === "Escape") {
         e.preventDefault();
@@ -553,7 +583,7 @@ export function ImageAnnotator() {
   }
 
   function onPointerDown(e: React.PointerEvent) {
-    if (e.button !== 0 || !displaySize) return;
+    if (e.button !== 0 || !displaySize || tool === "pan") return;
     e.preventDefault();
     const p = toRel(e);
     if (tool === "text") {
@@ -761,13 +791,13 @@ export function ImageAnnotator() {
     const overlay = overlayRef.current;
     if (!overlay || !displaySize) return;
     const onWheel = (event: WheelEvent) => {
-      if (busy || draft || textEdit || tool === "crop") return;
+      if (busy || draft || textEdit || tool === "crop" || viewport.dragging || spaceHeld) return;
       const bounds = overlay.getBoundingClientRect();
       editStroke(event, { x: event.clientX - bounds.left, y: event.clientY - bounds.top }, displaySize.w, displaySize.h);
     };
     overlay.addEventListener("wheel", onWheel, { passive: false });
     return () => overlay.removeEventListener("wheel", onWheel);
-  }, [annotator, editStroke, displaySize, busy, draft, textEdit, tool]);
+  }, [annotator, editStroke, displaySize, busy, draft, textEdit, tool, viewport.dragging, spaceHeld]);
 
   if (!annotator) return null;
 
@@ -892,6 +922,7 @@ export function ImageAnnotator() {
       className="image-annotator fixed inset-0 z-[90] flex flex-col bg-black/90"
       role="dialog"
       onPointerDownCapture={event => {
+        if (isPanGesture(event)) return;
         if (!textEdit || (event.target instanceof Element && event.target.closest("[data-annotation-text-editor]"))) return;
         commitText();
         if (event.target instanceof Element && event.target.closest("svg.cursor-crosshair")) event.stopPropagation();
@@ -902,6 +933,10 @@ export function ImageAnnotator() {
       {/* 工具条 */}
       <fieldset disabled={busy} className="annotation-toolbar border-b border-white/10 px-3 py-2 text-xs text-white">
         <div className="annotation-toolbar-tools">
+        <button type="button" aria-label="移动图片" aria-pressed={tool === "pan"} className={toolBtn(tool === "pan")}
+          onClick={() => chooseTool("pan")} title="移动图片：拖动平移，方向键微调；空格或中键临时移动">
+          <Hand size={16} aria-hidden="true" />
+        </button>
         <AnnotationTools tool={tool} onChange={chooseTool} className={toolBtn} iconSize={16}
           labels={{ rect: "画框", ellipse: "画圆", pencil: "铅笔" }} />
         {(tool === "rect" || tool === "ellipse") && <label className="flex items-center gap-1 whitespace-nowrap">
@@ -1034,7 +1069,10 @@ export function ImageAnnotator() {
       </fieldset>
 
       {/* 画布区 */}
-      <div ref={stageRef} className="relative flex flex-1 items-center justify-center overflow-hidden p-6" style={{ pointerEvents: busy ? "none" : undefined }}>
+      <div ref={stageRef} tabIndex={-1} data-pan-mode={tool === "pan" || spaceHeld || viewport.dragging}
+        className="annotation-stage relative flex flex-1 items-center justify-center overflow-hidden p-6 outline-none touch-none"
+        style={{ pointerEvents: busy ? "none" : undefined, cursor: viewport.dragging ? "grabbing" : tool === "pan" || spaceHeld ? "grab" : undefined }}
+        onPointerDownCapture={event => { if (isPanGesture(event)) viewport.onPointerDown(event); }}>
         {assetLoading ? (
           <p className="text-sm text-white/60">正在加载素材…</p>
         ) : assetError ? (
@@ -1046,7 +1084,7 @@ export function ImageAnnotator() {
         ) : !base || !displaySize ? (
           <p className="text-sm text-white/60">正在加载底图…</p>
         ) : (
-          <div className="relative shadow-2xl" style={{ width: dw, height: dh }}>
+          <div className="relative shadow-2xl" style={{ width: dw, height: dh, transform: viewport.style.transform }}>
             {/* Keep the source's accessible name; Canvas paints it exactly once, including alpha. */}
             <img
               src={base.url}
@@ -1084,6 +1122,9 @@ export function ImageAnnotator() {
             {cropActionBar}
           </div>
         )}
+        {base && <button type="button" aria-label="图片居中" title="图片居中" disabled={!viewport.isPanned}
+          className="absolute bottom-3 right-3 flex h-8 w-8 items-center justify-center rounded border border-white/20 bg-black/60 text-white/80 hover:bg-black/80 disabled:opacity-30"
+          onClick={viewport.reset}><Focus size={16} aria-hidden="true" /></button>}
       </div>
 
       {/* 状态条 */}
