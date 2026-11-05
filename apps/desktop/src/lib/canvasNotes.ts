@@ -3,6 +3,8 @@ import type { CanvasRect } from "./canvasLogic";
 import { contentTableText, type ContentTable } from "./contentTable.ts";
 import { documentMediaReferences, documentWorkflowValue } from "./documentProjection.ts";
 
+export function canvasDocumentHeight(text: string): number { return text.trim() ? 112 : 56; }
+
 export interface CanvasTextCell {
   content_type?: "text" | "image";
   id?: string;
