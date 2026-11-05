@@ -22,6 +22,7 @@ export function CreativeComposer({
   registerDraftFlush,
   beforeGenerate,
   prepareProject,
+  onGenerationSubmitted,
   onGenerateLocalVideo,
   onSendChat,
   onChatDraftSent,
@@ -43,6 +44,7 @@ export function CreativeComposer({
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
   prepareProject?: () => Promise<string>;
+  onGenerationSubmitted?: (projectId: string, threadId?: string | null) => void;
   onGenerateLocalVideo?: (request: ComposerLocalVideoRequest, projectId?: string) => Promise<void>;
   onSendChat?: (request: ChatComposeRequest, projectId?: string) => Promise<void>;
   onChatDraftSent?: (sentDraftJson: string) => void;
@@ -104,6 +106,7 @@ export function CreativeComposer({
       registerDraftFlush={(flush) => { flushRef.current = flush; registerDraftFlush?.(flush); }}
       beforeGenerate={beforeGenerate}
       prepareProject={prepareProject}
+      onGenerationSubmitted={onGenerationSubmitted}
       onGenerateLocalVideo={onGenerateLocalVideo}
       onSendChat={onSendChat ? async (request, targetProjectId, sentDraft) => {
         await onSendChat(request, targetProjectId);

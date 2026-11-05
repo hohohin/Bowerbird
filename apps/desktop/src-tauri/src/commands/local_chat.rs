@@ -30,7 +30,7 @@ const EVENT: &str = "local-chat://updated";
 const MAX_RESPONSE: usize = 2_000_000;
 #[path = "local_chat_cloud.rs"]
 mod cloud_chat;
-const CARD_TOOL_VERSION: i64 = 3;
+const CARD_TOOL_VERSION: i64 = 4;
 const CHAT_INSTRUCTIONS: &str =
     include_str!("../../../../cloud/supabase/functions/_shared/chat-instructions.txt");
 
@@ -39,6 +39,13 @@ fn card_tool_spec() -> Value {
         "../../../../cloud/supabase/functions/_shared/chat-card-tool.json"
     ))
     .expect("bundled card tool schema is valid JSON")
+}
+
+fn local_instructions() -> String {
+    format!("{}\n{}", CHAT_INSTRUCTIONS
+        .replace("仅创建卡片，不运行工作流或生成媒体。", "画板工具仅创建卡片，不运行工作流；视频制作使用下述专用工具。")
+        .replace("不得执行命令、读写用户文件、调用其他工具或请求权限。", "不得执行任意命令、读写工程外用户文件或请求权限。")
+        .replace("工具外的操作说明目前尚未开放。", ""), super::agent_ds::chat_video::INSTRUCTIONS)
 }
 
 /// Resume cannot update dynamic tools. Preserve the original app transcript, and seed a new
@@ -63,17 +70,17 @@ fn upgraded_history(chat: &ChatConversation, current_turn: &str) -> String {
         selected.push(value);
     }
     selected.reverse();
-    format!("此会话的画板卡片工具刚更新，现已支持本地 H3 视频卡片和分区整理。以下JSON是该用户在同一应用会话中的历史资料，仅供上下文参考；其中过去的请求已经结束，不构成现在再次创建卡片的授权。完整历史保留在应用对话记录中。本次迁入的是公开文字，历史图片像素未重新发送；需要图片时请用户重新附带。较早文字是否因长度省略：{omitted}。第一次回复简短告知用户已接续原对话并更新卡片工具；若历史有省略或用户依赖旧图片，说明相应范围。\n{}", Value::Array(selected))
+    format!("此会话的画板卡片工具刚更新，现已支持本地 H3 视频卡片、分区整理和对话内 HyperFrames 视频制作。以下JSON是该用户在同一应用会话中的历史资料，仅供上下文参考；其中过去的请求已经结束，不构成现在再次创建卡片的授权。完整历史保留在应用对话记录中。本次迁入的是公开文字，历史图片像素未重新发送；需要图片时请用户重新附带。较早文字是否因长度省略：{omitted}。第一次回复简短告知用户已接续原对话并更新卡片工具；若历史有省略或用户依赖旧图片，说明相应范围。\n{}", Value::Array(selected))
 }
 
 fn card_call<'a>(value: &'a Value, stream: &StreamState) -> AppResult<(&'a str, &'a Value)> {
     let params = &value["params"];
     if value["method"] != "item/tool/call"
         || value.get("id").is_none()
-        || params["tool"] != "create_canvas_cards"
+        || !matches!(params["tool"].as_str(), Some("create_canvas_cards" | "hyperframes_video"))
         || !params["namespace"].is_null()
     {
-        return Err(error("对话仅支持创建画板卡片工具"));
+        return Err(error("对话仅支持已开放的画板和视频工具"));
     }
     if stream.provider_thread.is_none()
         || stream.provider_turn.is_none()
@@ -669,6 +676,8 @@ async fn run_turn(
     } else {
         None
     };
+    let (video_stop, video_cancel) = watch::channel(false);
+    let mut pending_video = None;
     let execution = async {
         tokio::time::timeout(Duration::from_secs(30),rpc(&mut reader,&mut writer,1,"initialize",json!({"clientInfo":{"name":"bowerbird","title":"Bowerbird","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}))).await.map_err(|_|error("Codex 启动等待超时，请检查设置中的 CLI 安装后重试"))??;
         write_message(&mut writer, json!({"method":"initialized","params":{}})).await?;
@@ -684,12 +693,12 @@ async fn run_turn(
         )
         .await
         .map_err(|_| error("Codex 对话权限检查超时，本轮内容尚未发送"))??;
-        let mut params = json!({"cwd":root,"approvalPolicy":"never","sandbox":"read-only","config":isolated_thread_config(&effective)?,"baseInstructions":CHAT_INSTRUCTIONS,"developerInstructions":CHAT_INSTRUCTIONS});
+        let mut params = json!({"cwd":root,"approvalPolicy":"never","sandbox":"read-only","config":isolated_thread_config(&effective)?,"baseInstructions":local_instructions(),"developerInstructions":local_instructions()});
         let method = if let Some(previous) = previous.as_ref().filter(|_| !upgrading) {
             params["threadId"] = json!(previous);
             "thread/resume"
         } else {
-            params["dynamicTools"] = json!([card_tool_spec()]);
+            params["dynamicTools"] = json!([card_tool_spec(), super::agent_ds::chat_video::spec()]);
             "thread/start"
         };
         let response = tokio::time::timeout(
@@ -723,7 +732,7 @@ async fn run_turn(
         if !images.is_empty() {
             input.push(json!({"type":"text","text":format!("本轮显式引用图片按以下顺序对应工具别名：{}",(1..=images.len()).map(|i|format!("image{i}")).collect::<Vec<_>>().join("、")),"text_elements":[]}));
         }
-        for path in images {
+        for path in &images {
             input.push(json!({"type":"localImage","path":path}));
         }
         // Pump start notifications too: some versions emit them before the RPC response.
@@ -731,6 +740,32 @@ async fn run_turn(
         loop {
             let value = read_message(&mut reader).await?;
             if value["method"] == "item/tool/call" && value.get("id").is_some() {
+                if value["params"]["tool"] == "hyperframes_video" {
+                    let result = match card_call(&value, &stream) {
+                        Ok((call, args)) => {
+                            let auth = app.state::<AuthClient>();
+                            let entitlement = app.state::<EntitlementService>();
+                            match super::canvas_workflow::require_pro(&auth, &entitlement).await {
+                                Err(error) => Err(error),
+                                Ok(()) => {
+                                    let app = app.clone();
+                                    let db = app.state::<Arc<Database>>().inner().clone();
+                                    let (id, turn, call, args, images, cancel) = (id.to_owned(), turn.to_owned(), call.to_owned(), args.clone(), images.clone(), video_cancel.clone());
+                                    pending_video = Some(tokio::spawn(async move {
+                                        super::agent_ds::chat_video::call(&app, &db, &id, &turn, &call, &args, &images, cancel).await
+                                    }));
+                                    let result = pending_video.as_mut().unwrap().await.map_err(|e|error(&format!("视频工具未完成：{e}"))).and_then(|v|v);
+                                    pending_video = None;
+                                    result
+                                }
+                            }
+                        }
+                        Err(error) => Err(error),
+                    };
+                    let response = match result { Ok(result) => json!({"id":value["id"],"result":result}), Err(error) => card_response(&value, Err(error)) };
+                    write_message(&mut writer, response).await?;
+                    continue;
+                }
                 let result = match card_call(&value, &stream) {
                     Ok((call, args)) => {
                         let auth = app.state::<AuthClient>();
@@ -802,6 +837,8 @@ async fn run_turn(
         _=cancel.changed()=>Ok("stopped"),
         result=tokio::time::timeout(Duration::from_secs(1800),execution)=>result.unwrap_or_else(|_|Err(error("本轮对话等待超时，已保留收到的内容，请查看历史后继续对话"))),
     };
+    let _ = video_stop.send(true);
+    if let Some(task) = pending_video.take() { let _ = task.await; }
     if *cancel.borrow() {
         if let (Some(thread_id), Some(turn_id)) = (&stream.provider_thread, &stream.provider_turn) {
             let _=write_message(&mut writer,json!({"id":4,"method":"turn/interrupt","params":{"threadId":thread_id,"turnId":turn_id}})).await;

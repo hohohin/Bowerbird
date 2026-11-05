@@ -106,6 +106,7 @@ export interface CreationBoardProps {
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
   prepareProject?: () => Promise<string>;
+  onGenerationSubmitted?: (projectId: string, threadId?: string | null) => void;
   onGenerateLocalVideo?: (request: ComposerLocalVideoRequest, projectId?: string) => Promise<void>;
   composerMode?: CreativeComposerMode;
   onComposerModeChange?: (mode: CreativeComposerMode) => void;
@@ -139,6 +140,7 @@ export function CreationBoard({
   registerDraftFlush,
   beforeGenerate,
   prepareProject,
+  onGenerationSubmitted,
   onGenerateLocalVideo,
   composerMode,
   onComposerModeChange,
@@ -679,6 +681,7 @@ export function CreationBoard({
       if (!comfyEnvironmentReady(environment)) { setLocalEnvironment({ ready: false, checking: false, message: environment.message }); throw new Error(environment.message || "当前环境未设置好，点击配置。"); }
       request.options.endpoint = environment.endpoint;
       await onGenerateLocalVideo!(request, submissionProjectId);
+      if (submissionProjectId) onGenerationSubmitted?.(submissionProjectId);
       if (isCurrentSubmission()) exitCreationMode();
       return;
     }
@@ -749,6 +752,7 @@ export function CreationBoard({
             background: "opaque",
           },
         });
+        if (submissionProjectId) onGenerationSubmitted?.(submissionProjectId, threadId);
         if (continuation?.continuationRequestId) {
           ackPendingCreativeContinuation(continuation.continuationRequestId);
         }
@@ -757,7 +761,7 @@ export function CreationBoard({
           return;
         }
         updateCloudAgentRun(run);
-        notifySuccess("Agent 会话已创建，将根据目标选择所需工具");
+        if (!onGenerationSubmitted) notifySuccess("Agent 会话已创建，将根据目标选择所需工具");
         exitCreationMode();
       } catch (error) {
         if (isCurrentSubmission()) notifyError(error, "启动 Bowerbird Agent 失败");
@@ -936,6 +940,7 @@ export function CreationBoard({
       if (isCurrentSubmission()) notifyError(startedGeneration.error, "生成任务启动失败，请重试");
       return;
     }
+    if (submissionProjectId) onGenerationSubmitted?.(submissionProjectId, threadId);
     if (continuation?.continuationRequestId) {
       ackPendingCreativeContinuation(continuation.continuationRequestId);
     }

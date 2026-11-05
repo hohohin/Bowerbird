@@ -23,6 +23,12 @@ try {
   assert.deepEqual(await page.evaluate(() => window.prepared), ['quick'], 'send lazily prepares default project');
   assert.equal(await page.evaluate(() => window.started[0][9].projectId), 'quick', 'generation belongs to resolved default project');
   assert.equal(await page.evaluate(() => window.store.getState().activeProjectId), null, 'sending stays on library');
+  await page.getByText('任务已进入「快速生成」项目中', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '任务已进入「快速生成」项目中，点击跳转', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => window.store.getState().creativeNavigation), {
+    projectId: 'quick', threadId: await page.evaluate(() => window.started[0][9].threadId), nodeId: null,
+  }, 'submission notice opens the exact submitted project and thread');
+  await page.evaluate(() => window.store.setState({ creativeNavigation: null }));
   await editor.fill('第二次独立创作');
   await page.locator('.composer-send button').click();
   await page.waitForFunction(() => window.started.length === 2);
@@ -30,7 +36,7 @@ try {
   assert.notEqual(await page.evaluate(() => window.started[0][9].threadId), await page.evaluate(() => window.started[1][9].threadId), 'independent sends create independent threads');
 
   async function selectProject(name) {
-    await page.getByRole('combobox', { name: '选择项目', exact: true }).click();
+    await page.getByRole('combobox', { name: '选择项目', exact: true }).press('ArrowDown');
     await page.getByRole('option', { name, exact: true }).click();
   }
   await selectProject('山野护肤 · 品牌视觉');

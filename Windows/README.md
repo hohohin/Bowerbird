@@ -2,6 +2,12 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## Windows 26.11.502 发布准备（2026-11-05）
+
+用户已确认：本机 Codex 对话内 HyperFrames 视频制作、预览、渲染与成片播放，续聊复用成功工程，旧对话工具升级及停止／中断保护；素材库生成任务提示所属项目并支持点击跳转。SQLite 0052；源码与文档同次提交推送后冻结签名构建。完整 TypeScript、Rust 1115 passed／33 ignored、94 项前端逻辑、6 组现行桌面专项、30 项官网回归通过。测试详情和首次失败／修正复跑证据位于 .tmp/release-windows-26.11.502/。
+
+保留中文／English 安装器、原 updater 公钥及更新登录保留钩子。候选复制现役 20261105-windows-26.11.501，仅更新 Windows 下载相关五个文件；不部署仓库 Cloud／微信支付／DSH 源码，Mock 支付、Mac、现有网关保持，Cloud 音频参考与 DeepSeek Cloud 未启用。未安装／重启用户应用、迁移真实库或调用付费模型。
+
 ## Windows 26.11.501 已发布（2026-11-05）
 
 2026-11-05 12:25:34（北京时间）本机公网复核通过。源码 **7b9d8626** 已与文档同次存档推送后冻结构建，发布投影 HUD 创作框与图片预览续聊、段落 Agent／Markdown 快捷编辑与两行文档预览、共用截图标注、Pinterest／小红书采集修复、失效原件清理与标签拖放、统一加号连线和四种工作流触发模式、本机 H3 三模式及 Codex HyperFrames 视频 Skill／独立 Studio。SQLite **0052**，插件 **0.3.1**；Cloud 音频参考 0079／Edge／Worker／网关未部署，桌面在创建音频任务前检测服务端能力并拒绝不支持的请求；DeepSeek Cloud 未启用。Mac 保持 ARM 801／Intel 1501，现有视频及赠币服务和 Mock 支付保持。

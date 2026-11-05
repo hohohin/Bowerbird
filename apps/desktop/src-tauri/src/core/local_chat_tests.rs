@@ -1,4 +1,22 @@
 use super::*;
+
+#[test]
+fn local_chat_video_delivery_survives_completion_and_rejects_foreign_or_stopped_turns() {
+    let db = fixture();
+    let started = db.begin_local_chat(&input("video")).unwrap();
+    let id = &started.conversation.summary.id;
+    let turn = &started.turn_id;
+    db.save_local_chat_video(id, turn, "正在渲染视频", "running", &[]).unwrap();
+    assert!(db.save_local_chat_video(id, "foreign", "bad", "running", &[]).is_err());
+    db.save_local_chat_video(id, turn, "视频已完成", "done", &["video-asset".into()]).unwrap();
+    db.finish_local_chat(id, turn, "done", None).unwrap();
+    db.recover_local_chats().unwrap();
+    let chat = db.get_local_chat(id).unwrap().unwrap();
+    let message = chat.messages.iter().find(|m|m.id.ends_with("-video")).unwrap();
+    assert_eq!(message.reference_asset_ids, ["video-asset"]);
+    assert_eq!(message.status, "done");
+    assert!(db.save_local_chat_video(id, turn, "late", "running", &[]).is_err());
+}
 use crate::core::{
     creative_session_contract::CreativeNodeKind,
     project_canvas::{

@@ -390,6 +390,18 @@ impl Database {
         tx.commit()?;
         Ok(())
     }
+    /// Native video progress and delivery; model text never supplies attachment IDs.
+    pub fn save_local_chat_video(&self, id: &str, turn: &str, text: &str, status: &str, assets: &[String]) -> AppResult<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM local_chat_turns t JOIN local_chat_conversations c ON c.id=t.conversation_id WHERE t.id=?2 AND c.id=?1 AND c.provider='codex-local' AND t.status='running')", params![id,turn], |row| row.get(0))?;
+        if !active || !matches!(status, "running" | "done" | "failed") { return Err(error("视频请求不属于当前运行中的对话")); }
+        let now = Utc::now().timestamp_millis();
+        tx.execute("INSERT INTO local_chat_messages(id,conversation_id,turn_id,role,text,reference_asset_ids,status,created_at,updated_at) VALUES(?1,?2,?3,'tool',?4,?5,?6,?7,?7) ON CONFLICT(id) DO UPDATE SET text=excluded.text,reference_asset_ids=excluded.reference_asset_ids,status=excluded.status,updated_at=excluded.updated_at", params![format!("{turn}-video"),id,turn,text,serde_json::to_string(assets)?,status,now])?;
+        tx.execute("UPDATE local_chat_conversations SET revision=revision+1 WHERE id=?1",[id])?;
+        tx.commit()?;
+        Ok(())
+    }
     pub fn finish_local_chat(
         &self,
         id: &str,
@@ -405,6 +417,10 @@ impl Database {
         let now = Utc::now().timestamp_millis();
         let changed = tx.execute("UPDATE local_chat_turns SET status=?3,updated_at=?4 WHERE id=?2 AND conversation_id=?1 AND status IN ('running','stopping')",params![id,turn,status,now])?;
         if changed > 0 {
+            // A completed model reply does not mean an unfinished render delivered a video.
+            if status == "done" {
+                tx.execute("UPDATE local_chat_messages SET status='interrupted',text='视频尚未交付，可以继续对话完成。' WHERE conversation_id=?1 AND turn_id=?2 AND id=?3 AND status='running'", params![id,turn,format!("{turn}-video")])?;
+            }
             tx.execute("UPDATE local_chat_messages SET status=?3,updated_at=?4 WHERE conversation_id=?1 AND turn_id=?2 AND status='running'",params![id,turn,status,now])?;
             tx.execute("UPDATE local_chat_conversations SET status=?2,error=?3,updated_at=?4,revision=revision+1 WHERE id=?1",params![id,if status=="done" { "idle" } else { status },detail,now])?;
             tx.execute("UPDATE creative_threads SET updated_at=?2 WHERE id=(SELECT thread_id FROM local_chat_conversations WHERE id=?1)",params![id,now/1000])?;

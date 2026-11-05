@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Folder } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { notifySuccess } from "../lib/notify";
 import { clearSentCreativeChatDraft, parseCreativeComposerState } from "../lib/creativeDraft";
 import { useLocalChatStore } from "../lib/localChatStore";
 import { DEFAULT_VIDEO_OPTIONS } from "../lib/videoGeneration";
@@ -132,6 +133,13 @@ export function LibraryComposer({ onLocalVideoStarted, onOpenLibrary }: {
       header={<LibraryProjectPicker value={selectedProjectId} onChange={id => { setSelectedProjectId(id); setHistoryOpen(false); }}/>}
       onDraftChange={saveDraft} registerDraftFlush={value => { flush.current = value; }} prepareProject={prepareProject}
       onOpenLibrary={onOpenLibrary}
+      onGenerationSubmitted={(projectId, threadId) => {
+        const project = useStore.getState().projects.find(item => item.id === projectId);
+        notifySuccess(`任务已进入「${project?.name ?? "默认项目"}」项目中`, {
+          label: "点击跳转",
+          onClick: () => useStore.setState({ creativeNavigation: { projectId, threadId: threadId ?? null, nodeId: null } }),
+        });
+      }}
       resolveCreativeThread={(_parent, prompt, _revision, _continuation, _parentNode, target) => startLibraryThread(prompt, target)}
       onGenerateLocalVideo={async (request, target) => {
         const projectId = requireProject(target);

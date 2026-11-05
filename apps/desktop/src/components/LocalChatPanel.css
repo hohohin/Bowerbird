@@ -101,3 +101,6 @@
 @keyframes local-chat-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .local-chat-spin { animation: none; } .local-chat-reply-box { transition: none; } }
 @media (max-width: 600px) { .local-chat-panel { right: 6px; left: 6px; bottom: 6px; width: auto; max-width: none; } .local-chat-messages { padding: 14px 12px; } }
+.local-chat-video { min-width: 0; margin: 12px 0; }
+.local-chat-video > p { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.local-chat-video .video-player { width: 100%; }

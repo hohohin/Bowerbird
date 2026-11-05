@@ -31,6 +31,7 @@
 
 mod codex;
 mod video;
+pub(crate) mod chat_video;
 pub(crate) mod video_studio;
 
 use std::path::{Path, PathBuf};

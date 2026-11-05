@@ -9,6 +9,7 @@ import { userErrorMessage } from "../lib/userError";
 import { isVideoPath } from "../lib/videoGeneration";
 import type { Asset } from "../lib/types";
 import { ModalShell } from "./ModalShell";
+import { VideoPlayer } from "./VideoPlayer";
 import { BOARD_ASSET_PICK_EVENT } from "./creation/useCreationEditor";
 import { QUOTA_SOURCES } from "./creation/ProviderQuota";
 import { useChatProviderAccess } from "./creation/ChatProviderSelect";
@@ -266,7 +267,10 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
         scrollPositions.set(conversationId, { top: element.scrollTop, follow: nearBottom });
       }}>
         {!ownedChat && <div className="local-chat-empty">{loadError != null ? <><p>{userErrorMessage(loadError, "对话暂时无法读取，请重试。")}</p><button type="button" onClick={() => void useLocalChatStore.getState().loadConversation(conversationId).catch(() => {})}>重新读取</button></> : loading ? "正在读取对话…" : "这段对话暂不可用，请返回画板重新打开。"}</div>}
-        {ownedChat?.messages.map((message, index) => <Fragment key={message.id}>{message.role === "tool" ? <details className="local-chat-tool"><summary><Wrench size={12} />公开工具记录<span>{message.status === "running" ? "处理中" : message.status === "done" ? "已完成" : message.status === "stopped" ? "已停止" : "未完成"}</span></summary>
+        {ownedChat?.messages.map((message, index) => <Fragment key={message.id}>{message.role === "tool" && message.id.endsWith("-video") ? <div className="local-chat-video" data-chat-video-status={message.status}>
+          <p role="status">{message.status === "running" && <LoaderCircle size={13} className="local-chat-spin" />}{message.status === "failed" ? userErrorMessage(message.text, "视频制作未完成，可以继续对话修改。") : message.status === "stopped" || message.status === "interrupted" ? "视频制作已中断，可以继续对话。" : message.text}</p>
+          {message.referenceAssetIds.map(id => { const path = assets[id]?.store_path; return path && isVideoPath(path) ? <VideoPlayer key={id} path={path} sourceKey={`chat:${conversationId}:${id}`} embedded /> : <p key={id}>视频暂时无法读取，请检查素材文件。</p>; })}
+        </div> : message.role === "tool" ? <details className="local-chat-tool"><summary><Wrench size={12} />公开工具记录<span>{message.status === "running" ? "处理中" : message.status === "done" ? "已完成" : message.status === "stopped" ? "已停止" : "未完成"}</span></summary>
           <p>{message.status === "failed" ? userErrorMessage(message.text, "本次工具操作未完成，请查看回复内容。") : message.text}</p></details>
           : <article key={message.id} className={`local-chat-message is-${message.role}`} data-message-id={message.id} data-message-role={message.role}>
             <div className="local-chat-message-label"><strong>{message.role === "user" ? "你" : cloud ? "DeepSeek" : "Codex"}</strong><time dateTime={new Date(message.createdAt).toISOString()}>{timeLabel(message.createdAt)}</time></div>

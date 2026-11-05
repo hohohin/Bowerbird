@@ -1,6 +1,16 @@
 use super::*;
 
 #[test]
+fn local_chat_video_tool_is_available_only_to_confirmed_turn() {
+    let mut state = StreamState { provider_thread: Some("thread".into()), provider_turn: Some("turn".into()), start_confirmed: true, ..Default::default() };
+    let request = json!({"id":7,"method":"item/tool/call","params":{"threadId":"thread","turnId":"turn","callId":"video","tool":"hyperframes_video","arguments":{"action":"prepare"}}});
+    assert!(card_call(&request, &state).is_ok());
+    state.start_confirmed = false;
+    assert!(card_call(&request, &state).is_err());
+    assert!(CARD_TOOL_VERSION > 3);
+}
+
+#[test]
 fn local_chat_stream_is_scoped_deduplicates_completion_and_omits_reasoning() {
     let mut state = StreamState {
         provider_thread: Some("thread".into()),
