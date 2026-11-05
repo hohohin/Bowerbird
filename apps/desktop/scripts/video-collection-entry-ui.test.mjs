@@ -28,6 +28,8 @@ try{
   await page.getByRole('button',{name:'探索',exact:true}).click();
   const panel=page.getByRole('region',{name:'探索浏览器'});
   await panel.waitFor();
+  assert.equal(await panel.locator(".source-browser-header").getByRole("button",{name:"采集视频",exact:true}).count(),0);
+  assert.equal(await panel.getByRole("navigation",{name:"探索网站"}).getByRole("button",{name:"采集视频",exact:true}).count(),1);
   assert.equal(await panel.getByText('登录状态保存在本机',{exact:true}).count(),0,'explorer has no redundant local-login note');
   for(const width of [1280,900,700]){
     await page.setViewportSize({width,height:840});

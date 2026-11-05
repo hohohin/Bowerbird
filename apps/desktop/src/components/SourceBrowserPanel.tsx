@@ -308,7 +308,6 @@ export function SourceBrowserPanel({ url, onClose, onCreateProject, visible = tr
           <button type="button" onClick={openExternal} title="用系统浏览器打开" aria-label="用系统浏览器打开">
             <ExternalLink size={15} />
           </button>
-          <VideoCollectionEntry projectId={projectId} onCloseLibrary={onClose} onCreateProject={onCreateProject}/>
           <ExplorerCaptureHistory visible={visible} />
         </div>
       </header>
@@ -318,6 +317,7 @@ export function SourceBrowserPanel({ url, onClose, onCreateProject, visible = tr
         <button type="button" className="source-browser-extension-entry" onClick={() => openExtension(true)} aria-haspopup="dialog">
           <Puzzle size={13} aria-hidden />浏览器插件
         </button>
+        <VideoCollectionEntry projectId={projectId} onCloseLibrary={onClose} onCreateProject={onCreateProject}/>
       </nav>
 
       {error && <div className="source-browser-error" role="alert">{userErrorMessage(error, "网页暂时无法打开，请检查网络和网址后重试。")}</div>}

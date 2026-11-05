@@ -5,4 +5,4 @@
 .library-filter-trigger.video-collection-entry > span { margin:0; font-size:inherit; color:inherit; }
 .library-filter-trigger.video-collection-entry > svg { flex-shrink:0; }
 
-.source-browser-actions .video-collection-entry { width:auto; flex-shrink:0; }
+.explore-sites .video-collection-entry { width:auto; height:auto; padding:3px 8px; flex-shrink:0; font-size:inherit; }
