@@ -30,6 +30,8 @@ const EVENT: &str = "local-chat://updated";
 const MAX_RESPONSE: usize = 2_000_000;
 #[path = "local_chat_cloud.rs"]
 mod cloud_chat;
+#[path = "local_chat_models.rs"]
+mod models;
 const CARD_TOOL_VERSION: i64 = 4;
 const CHAT_INSTRUCTIONS: &str =
     include_str!("../../../../cloud/supabase/functions/_shared/chat-instructions.txt");
@@ -179,6 +181,12 @@ fn reference_paths(db: &Database, ids: &[String]) -> AppResult<Vec<String>> {
         paths.push(path.to_string_lossy().into_owned());
     }
     Ok(paths)
+}
+
+#[tauri::command]
+pub async fn local_chat_models() -> AppResult<Vec<models::CodexChatModel>> {
+    let binary = resolve_codex_binary().ok_or_else(||error("未找到 Codex CLI，请在设置中安装并登录"))?;
+    models::load(&binary).await
 }
 
 #[tauri::command]
@@ -665,6 +673,7 @@ async fn run_turn(
     ));
     let mut stream = StreamState::default();
     let previous = db.local_chat_provider_thread(id)?;
+    let options = db.local_chat_turn_options(turn)?;
     let upgrading =
         previous.is_some() && db.local_chat_provider_tool_version(id)? < CARD_TOOL_VERSION;
     let history = if upgrading {
@@ -681,6 +690,11 @@ async fn run_turn(
     let execution = async {
         tokio::time::timeout(Duration::from_secs(30),rpc(&mut reader,&mut writer,1,"initialize",json!({"clientInfo":{"name":"bowerbird","title":"Bowerbird","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}))).await.map_err(|_|error("Codex 启动等待超时，请检查设置中的 CLI 安装后重试"))??;
         write_message(&mut writer, json!({"method":"initialized","params":{}})).await?;
+        let options = if let Some(options) = options.as_ref() {
+            let catalog = tokio::time::timeout(Duration::from_secs(30), models::catalog(&mut reader, &mut writer))
+                .await.map_err(|_|error("Codex 模型验证超时，本轮内容尚未发送，请重试"))??;
+            Some(models::resolve(options, &catalog)?)
+        } else { None };
         let effective = tokio::time::timeout(
             Duration::from_secs(30),
             rpc(
@@ -694,6 +708,7 @@ async fn run_turn(
         .await
         .map_err(|_| error("Codex 对话权限检查超时，本轮内容尚未发送"))??;
         let mut params = json!({"cwd":root,"approvalPolicy":"never","sandbox":"read-only","config":isolated_thread_config(&effective)?,"baseInstructions":local_instructions(),"developerInstructions":local_instructions()});
+        if let Some(options) = &options { models::apply_thread(&mut params, options); }
         let method = if let Some(previous) = previous.as_ref().filter(|_| !upgrading) {
             params["threadId"] = json!(previous);
             "thread/resume"
@@ -736,7 +751,9 @@ async fn run_turn(
             input.push(json!({"type":"localImage","path":path}));
         }
         // Pump start notifications too: some versions emit them before the RPC response.
-        write_message(&mut writer,json!({"id":3,"method":"turn/start","params":{"threadId":provider_thread,"input":input,"approvalPolicy":"never","sandboxPolicy":{"type":"readOnly","networkAccess":false}}})).await?;
+        let mut params = json!({"threadId":provider_thread,"input":input,"approvalPolicy":"never","sandboxPolicy":{"type":"readOnly","networkAccess":false}});
+        if let Some(options) = &options { models::apply_turn(&mut params, options); }
+        write_message(&mut writer,json!({"id":3,"method":"turn/start","params":params})).await?;
         loop {
             let value = read_message(&mut reader).await?;
             if value["method"] == "item/tool/call" && value.get("id").is_some() {

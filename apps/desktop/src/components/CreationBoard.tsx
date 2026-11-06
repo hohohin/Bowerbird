@@ -33,8 +33,9 @@ import {
 } from "./creation/useCreationEditor";
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import type { CreativeComposerMode } from "../lib/creativeDraft";
-import { CHAT_PROVIDER_LABELS, localChatInputError, type ChatComposeRequest, type ChatProvider } from "../lib/localChat";
+import { CHAT_PROVIDER_LABELS, chatCodexOptionError, localChatInputError, type ChatCodexOptions, type ChatComposeRequest, type ChatProvider } from "../lib/localChat";
 import { ChatProviderSelect, useChatProviderAccess } from "./creation/ChatProviderSelect";
+import { CodexModelSelect, useChatCodexModels } from "./creation/CodexModelSelect";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ImageGenOptions } from "./creation/ImageGenOptions";
@@ -112,6 +113,8 @@ export interface CreationBoardProps {
   onComposerModeChange?: (mode: CreativeComposerMode) => void;
   onSendChat?: (request: ChatComposeRequest, projectId?: string, sentDraftJson?: string) => Promise<void>;
   chatProvider?: ChatProvider;
+  chatCodexOptions?: ChatCodexOptions;
+  onChatCodexOptionsChange?: (options: ChatCodexOptions) => void;
   onChatProviderChange?: (provider: ChatProvider) => void;
   onOpenChatHistory?: () => void;
   chatHistoryOpen?: boolean;
@@ -146,6 +149,8 @@ export function CreationBoard({
   onComposerModeChange,
   onSendChat,
   chatProvider = "codex-local",
+  chatCodexOptions,
+  onChatCodexOptionsChange,
   onChatProviderChange,
   onOpenChatHistory,
   chatHistoryOpen,
@@ -175,6 +180,7 @@ export function CreationBoard({
   const [generation, setGeneration] = useState<GenerationSettings>(() => initialDraft?.generation ?? { media: "image" });
   const isChat = composerMode === "chat";
   const chatAccess = useChatProviderAccess(isChat);
+  const chatModels = useChatCodexModels(isChat && chatProvider === "codex-local");
   const isVideo = generation.media === "video";
   const isLocalVideo = isVideo && !!generation.localVideo;
   const localAllowed = canUseComfyVideo(cloudAuth, cloudEntitlement);
@@ -565,6 +571,7 @@ export function CreationBoard({
     ? imageInputError(references) : null;
   const sendDisabledReason = isChat
     ? submitting ? "正在发送消息，请稍候。" : chatAccess.reason(chatProvider)
+      ?? (chatProvider === "codex-local" ? chatCodexOptionError(chatCodexOptions ?? {}, chatModels.models) : null)
       ?? (references.some(asset => /\.(mp4|mov|webm|mkv)$/i.test(asset.store_path ?? "")) ? "对话暂时只支持图片参考，请移除视频。" : null)
       ?? localChatInputError(finalPrompt, references.map(asset => asset.id))
     : submitting
@@ -623,7 +630,8 @@ export function CreationBoard({
         const route = useStore.getState();
         if ((prepareProject && (!mounted.current || route.libraryHomeView !== origin.libraryHomeView))
           || !isWorkspaceOperationCurrent(originId, route.activeProjectId, route.projectRoutePending, origin.projectRouteRevision, route.projectRouteRevision)) return;
-        await onSendChat({ prompt: finalPrompt.trim(), references: [...references], provider: chatProvider }, targetProjectId, sentDraft);
+        await onSendChat({ prompt: finalPrompt.trim(), references: [...references], provider: chatProvider,
+          ...(chatProvider === "codex-local" && chatCodexOptions !== undefined ? { codexOptions: { ...chatCodexOptions } } : {}) }, targetProjectId, sentDraft);
         const current = useStore.getState();
         if (mounted.current && (!prepareProject || current.libraryHomeView === origin.libraryHomeView)
           && claim.isCurrent() && isWorkspaceOperationCurrent(originId, current.activeProjectId, current.projectRoutePending, origin.projectRouteRevision, current.projectRouteRevision)) exitCreationMode();
@@ -1436,7 +1444,8 @@ export function CreationBoard({
             </div>
           </div>}
           <div className="composer-parameters">
-          {isChat ? <ChatProviderSelect value={chatProvider} onChange={onChatProviderChange} access={chatAccess} disabled={submitting} /> : <>
+          {isChat ? <><ChatProviderSelect value={chatProvider} onChange={onChatProviderChange} access={chatAccess} disabled={submitting} />
+            {chatProvider === "codex-local" && <CodexModelSelect value={chatCodexOptions ?? {}} onChange={options => onChatCodexOptionsChange?.(options)} catalog={chatModels} disabled={submitting} />}</> : <>
           {isVideo && <VideoControls composer channel={generation.videoChannel} options={videoOptions} onChange={(options, videoChannel = generation.videoChannel) => setGeneration({ ...generation, localVideo: undefined, media: "video", videoChannel, videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio}
             local={onGenerateLocalVideo ? { options: generation.localVideo, onSelect: () => { setLocalEnvironment({ ready: false, checking: true, message: "正在检测环境…" }); setGeneration({ ...generation, localVideo: { ...DEFAULT_COMFY_VIDEO } }); }, onChange: localVideo => setGeneration({ ...generation, localVideo }) } : undefined} />}
           {isLocalVideo && !isCollapsed && localMode !== "text" && <LocalVideoFrames mode={localMode} frames={localFrames.slice(0, localFrameCount)} ignored={references.length - Math.min(localFrameCount, localFrames.length)} />}

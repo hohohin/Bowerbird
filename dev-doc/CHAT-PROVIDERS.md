@@ -1,5 +1,15 @@
 # 对话 provider 实现记录
 
+## 2026-11-06：Codex 模型与推理强度（源码待发布）
+
+- 新对话及详情续聊共用 `CodexModelSelect`，菜单复用 `TacticalSelect`；CLI `model/list` 返回型号、默认值和支持的推理强度，不硬编码可用型号。目录读取失败可重试，旧默认发送不依赖目录成功。
+- `ChatSendInput.codexOptions` 进入原有请求身份；`local_chat_turns.request_json` 另外保存继承后的参数快照，恢复及重放不会受后续选择影响，无需 SQL 迁移。省略参数继承已有选择，显式 `{}` 解析当前目录默认型号／强度并覆盖前轮值。
+- `thread/start`／`thread/resume` 传 `model` 和线程推理配置，`turn/start` 明确传 `model`／`effort`。所选组合在发送模型前按目录验证；Cloud 拒绝这些参数，工具权限与全局 CLI 配置保持。
+- 草稿保留未发送选择；续聊默认恢复上次选择，更换型号自动调整不兼容强度。发送／回复期间锁定菜单，避免显示与已提交参数不一致。
+- 验证：31 项前端行为测试、完整 TypeScript／Vite、65 项 Rust 对话回归通过；2 项真实 CLI 探针按既有规则忽略。CUA 合成 IPC 验证型号联动、参数发送、回复中禁用、刷新后续聊草稿恢复与 Escape 收起菜单。截图 `.tmp/chat-models/chat-models.jpg`，构建 `apps/desktop/.tmp/chat-model-build/`；未调用真实模型，未发布安装包。详见 [行动记录](../project_logs/2026-11-06-chat-models.md)。
+
+## 既有 provider 与工具交付
+
 2026-11-05：本机 Codex 对话增加 `hyperframes_video`，同一模型在对话内编写、检查、预览并渲染视频，成片入库并在对话消息播放。只有此受控宿主工具获得当前视频工程写入／渲染能力，普通 shell、全局 Skill、MCP 与 Cloud 工具范围保持。旧本机对话迁移至工具版本 v4，保留应用历史身份。实现与验收边界见 [VIDEO-SKILL.md](VIDEO-SKILL.md#2026-11-05对话渠道接入源码未发布)。
 
 2026-10-31。产品约定以 `PROJECT.md` 为准；本页记录本轮实现、验证和交付边界。

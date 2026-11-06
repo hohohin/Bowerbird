@@ -8,7 +8,7 @@ export const assets = [
 ].map(asset => ({ ...asset, thumb_path: asset.store_path, width: 480, height: 360, ext: "svg", source: "imported" }));
 export const projects = ["p", "q"].map((id, index) => ({ id, name: index ? "项目 B · 包装文案" : "项目 A · 荷月礼盒", kind: "blank", workspace_path: `blank:${id}`, asset_count: 2, title_source: "manual", created_at: 1, updated_at: 1 }));
 type Message = { id: string; turnId: string; role: "user" | "assistant" | "tool"; text: string; referenceAssetIds: string[]; status: string; createdAt: number; updatedAt: number };
-type Conversation = { id: string; projectId: string; threadId: string; nodeId: string; title: string; provider: "codex-local" | "deepseek-cloud"; status: string; turnCount: number; preview: string; revision: number; createdAt: number; updatedAt: number; error: string | null; messages: Message[]; actions?: any[] };
+type Conversation = { id: string; projectId: string; threadId: string; nodeId: string; title: string; provider: "codex-local" | "deepseek-cloud"; codexOptions?: { model?: string; reasoningEffort?: string }; status: string; turnCount: number; preview: string; revision: number; createdAt: number; updatedAt: number; error: string | null; messages: Message[]; actions?: any[] };
 type Database = { activeProjectId: string; projects: Record<string, any>; conversations: Record<string, Conversation>; requests: Record<string, string>; settings: Record<string, unknown> };
 function emptySnapshot(id: string) {
   return { canvas: { projectId: id, draftJson: "{}", createdAt: 1, updatedAt: 1 },
@@ -93,6 +93,13 @@ export function setDelayReply(value: boolean) { controls.delayReply = value; cha
 export function releaseReplies() { pendingReplies.splice(0).forEach(resolve => resolve()); changed(); }
 export async function invoke(command: string, args: any = {}) {
   if (!command.startsWith("plugin:event")) { calls.push({ command, args: clone(args) }); if (calls.length > 100) calls.shift(); }
+  if (command === "local_chat_models") {
+    if (controls.fault === "models") throw new Error("Codex 模型列表暂时无法读取，请重试。");
+    return [{ id: "fixture-codex", model: "fixture-codex", displayName: "Codex 测试模型", isDefault: true, defaultReasoningEffort: "medium",
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"].map(reasoningEffort => ({ reasoningEffort, description: reasoningEffort })) },
+      { id: "fixture-fast", model: "fixture-fast", displayName: "Codex 轻量测试", isDefault: false, defaultReasoningEffort: "low",
+        supportedReasoningEfforts: [{ reasoningEffort: "low", description: "low" }] }];
+  }
   if (command === "local_chat_quote") {
     if (controls.fault === "quote") throw new Error("synthetic quote upstream error");
     return { provider: "deepseek-cloud", service: "chat_deepseek", available: true, unit_cost: 0, currency: "Bcoin", pricing_version: 1 };
@@ -142,6 +149,7 @@ export async function invoke(command: string, args: any = {}) {
       project.nodes.push({ id: chat.nodeId, projectId: chat.projectId, threadId: chat.threadId, kind: "note", assetId: null, role: null, x: 100, y: 310, width: 320, height: 180, zIndex: 2, ...input.placement, positionLocked: false, hiddenAt: null, createdAt: now, updatedAt: now, payloadJson: JSON.stringify({ schema_version: 1, note_type: "chat", text: chat.title, conversation_id: id, provider }) });
     }
     const turnId = crypto.randomUUID();
+    if (provider === "codex-local" && input.codexOptions !== undefined) chat.codexOptions = clone(input.codexOptions);
     const node = database.projects[chat.projectId].nodes.find((node: any) => node.id === chat.nodeId);
     if (node) node.hiddenAt = null;
     chat.messages.push({ id: crypto.randomUUID(), turnId, role: "user", text: input.text.trim(), referenceAssetIds: input.referenceAssetIds ?? [], status: "done", createdAt: now, updatedAt: now }, { id: crypto.randomUUID(), turnId, role: "assistant", text: "", referenceAssetIds: [], status: "running", createdAt: now, updatedAt: now });

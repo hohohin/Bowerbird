@@ -54,6 +54,12 @@
 - **范围／状态：画布领域共用。** 组件只管理命中与可见反馈，不提交连接或解释媒体类型。交互状态统一归 `CanvasWorkflowLayer`（单击牵线／按住拖放、整卡命中、空白菜单、右键取消），类型交集归 [workflowAutoConnect.ts](../../apps/desktop/src/lib/workflowAutoConnect.ts) 的 `planAutomaticConnection`，持久化归 [canvasWorkflowRuntime.ts](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 的 `connectAutomatic`／`disconnectAutomatic`；消费者不复制手势层或直接写入多条 typed 绑定。菜单复用 `ContextMenu`／`ContextSubmenu`，旧精确端口位置仍由 [useWorkflowPortGeometry.ts](../../apps/desktop/src/lib/useWorkflowPortGeometry.ts) 缓存。
 - **验证：** `canvas-connection-handle-ui.test.mjs` 验证固定屏幕尺寸、磁吸／取消、编辑与键盘及重叠命中；`canvas-auto-connect-ui.test.mjs` 验证实际交互层。运行、原子保存与兼容边界见 [工作流协议](../CANVAS-WORKFLOW.md#2026-11-04统一加号与自动内容连接源码未发布)。
 
+## 选择对话模型与推理强度
+
+- 本机／Cloud 来源仍用 `creation/ChatProviderSelect.tsx`；本机 Codex 参数用 `creation/CodexModelSelect.tsx`，在 `CreationBoard` 与 `LocalChatPanel` 共用。后者复用公共 `TacticalSelect` 的键盘、菜单与主题，不另造模型菜单。
+- 型号及支持的推理强度来自 `localChat.models()` 的本机 CLI 能力目录。只用于桌面对话，不把图片生成 provider 当成 Codex 子模型；Cloud 隐藏且不发送这些参数。
+- 参数属于下一轮消息，未发送选择随草稿保留，已发送选择从会话恢复。更换型号时重新核对该型号支持的强度，过期选项不静默替换。
+
 ## 选择生成模型或图片比例
 
 - **用途／关键词：** provider、模型、比例、ratio、默认模型、Bcoin。

@@ -2,7 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type R
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { ArrowDown, ArrowUp, Check, Coins, Copy, History, ImagePlus, LoaderCircle, LocateFixed, MessageCircle, Plus, Search, Square, Undo2, UserRound, Wrench, X } from "lucide-react";
 import { api } from "../lib/api";
-import { CHAT_PROVIDER_LABELS, LOCAL_CHAT_MAX_REFERENCES, localChatPreview, localChatRunning, localChatStatusLabel, type ChatCardAction, type ChatCardDefaults, type ChatConversation, type ChatMessage, type ChatSummary } from "../lib/localChat";
+import { CHAT_PROVIDER_LABELS, LOCAL_CHAT_MAX_REFERENCES, chatCodexOptionError, localChatPreview, localChatRunning, localChatStatusLabel, type ChatCardAction, type ChatCardDefaults, type ChatConversation, type ChatMessage, type ChatSummary } from "../lib/localChat";
 import { localChatDraft, useLocalChatStore, type LocalChatDraft } from "../lib/localChatStore";
 import { notifyError } from "../lib/notify";
 import { userErrorMessage } from "../lib/userError";
@@ -13,6 +13,7 @@ import { VideoPlayer } from "./VideoPlayer";
 import { BOARD_ASSET_PICK_EVENT } from "./creation/useCreationEditor";
 import { QUOTA_SOURCES } from "./creation/ProviderQuota";
 import { useChatProviderAccess } from "./creation/ChatProviderSelect";
+import { CodexModelSelect, useChatCodexModels } from "./creation/CodexModelSelect";
 import "./LocalChatPanel.css";
 
 const emptyDraft: LocalChatDraft = { text: "", referenceAssetIds: [] };
@@ -142,7 +143,9 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
   const cloud = provider === "deepseek-cloud";
   const access = useChatProviderAccess(cloud);
   const running = localChatRunning(ownedChat);
-  const blockedReason = access.reason(provider);
+  const codexOptions = draft.codexOptions ?? ownedChat?.codexOptions;
+  const chatModels = useChatCodexModels(!!ownedChat && !cloud);
+  const blockedReason = access.reason(provider) ?? (!cloud ? chatCodexOptionError(codexOptions ?? {}, chatModels.models) : null);
   const canSend = !blockedReason;
   const referenceKey = JSON.stringify([...new Set([...(ownedChat?.messages.flatMap(message => message.referenceAssetIds) ?? []), ...draft.referenceAssetIds])]);
 
@@ -228,7 +231,7 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
     const targetId = conversationId;
     setLocalError(null); followRef.current = true; setFollow(true);
     try {
-      await useLocalChatStore.getState().send({ projectId, conversationId: targetId, provider, text: snapshot.text.trim(), referenceAssetIds: snapshot.referenceAssetIds, cardDefaults: getCardDefaults?.() });
+      await useLocalChatStore.getState().send({ projectId, conversationId: targetId, provider, ...(!cloud && codexOptions !== undefined ? { codexOptions: { ...codexOptions } } : {}), text: snapshot.text.trim(), referenceAssetIds: snapshot.referenceAssetIds, cardDefaults: getCardDefaults?.() });
       const current = localChatDraft(targetId);
       // Preserve typing or newly selected references added while the request was being accepted.
       if (current.text === snapshot.text && JSON.stringify(current.referenceAssetIds) === JSON.stringify(snapshot.referenceAssetIds)) useLocalChatStore.getState().setDraft(targetId, emptyDraft);
@@ -299,6 +302,8 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
             onChange={event => useLocalChatStore.getState().setDraft(conversationId, { ...draft, text: event.target.value })}
             onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={() => { composingRef.current = false; }}
             onKeyDown={event => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !composingRef.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); void send(); } }} />
+          {!cloud && ownedChat && <CodexModelSelect value={codexOptions ?? {}} catalog={chatModels} disabled={running || sending || recoverPending}
+            onChange={options => useLocalChatStore.getState().setDraft(conversationId, { ...draft, codexOptions: options })} />}
           <div className="local-chat-reply-toolbar"><span className="local-chat-provider" data-quota={cloud ? "bowerbird" : "chatgpt"} title={cloud ? "使用 Bowerbird Bcoin" : QUOTA_SOURCES.chatgpt.detail}><span className="local-chat-provider-avatar">{cloud ? <Coins size={12} aria-hidden="true" /> : <UserRound size={12} aria-hidden="true" />}</span>{CHAT_PROVIDER_LABELS[provider]}{cloud && access.quote?.available && access.quote.unit_cost === 0 ? ` · ${access.quote.unit_cost} Bcoin` : ""}</span>
             {onOpenLibrary && <button type="button" className="local-chat-add-image" onClick={onOpenLibrary} aria-label="添加对话参考图" title="从素材库选择参考图"><ImagePlus size={16} /></button>}
             {running ? <button type="button" className="local-chat-send is-stop" onClick={() => void stop()} disabled={stopPending || ownedChat?.status === "stopping"} aria-label="停止回复">{stopPending || ownedChat?.status === "stopping" ? <LoaderCircle size={14} className="local-chat-spin" /> : <Square size={12} />}</button>

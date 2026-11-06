@@ -1,8 +1,8 @@
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
-import { localChat, LOCAL_CHAT_UPDATED_EVENT, localChatInputError, localChatRunning, type ChatConversation, type ChatSummary, type LocalChatSendInput } from "./localChat";
+import { localChat, LOCAL_CHAT_UPDATED_EVENT, localChatInputError, localChatRunning, type ChatCodexOptions, type ChatConversation, type ChatSummary, type LocalChatSendInput } from "./localChat";
 
-export interface LocalChatDraft { text: string; referenceAssetIds: string[] }
+export interface LocalChatDraft { text: string; referenceAssetIds: string[]; codexOptions?: ChatCodexOptions }
 const DRAFT_STORAGE = "bowerbird.localChat.drafts.v1";
 const EMPTY_DRAFT: LocalChatDraft = { text: "", referenceAssetIds: [] };
 function readDrafts(): Record<string, LocalChatDraft> {
@@ -121,7 +121,7 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
       await ensureLocalChatEvents();
       // Retrying an uncertain IPC result must reuse its native idempotency key.
       // An accepted response clears it so a later intentional identical message is a new turn.
-      const fingerprint = JSON.stringify([input.projectId, input.conversationId ?? null, input.provider ?? "codex-local", input.text, input.referenceAssetIds, input.cardDefaults ?? null]);
+      const fingerprint = JSON.stringify([input.projectId, input.conversationId ?? null, input.provider ?? "codex-local", input.text, input.referenceAssetIds, input.cardDefaults ?? null, input.codexOptions ?? null]);
       const pending = pendingSubmissions.get(key);
       const requestId = input.requestId || (pending?.fingerprint === fingerprint ? pending.requestId : crypto.randomUUID());
       pendingSubmissions.set(key, { fingerprint, requestId });
@@ -144,7 +144,7 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
   },
   setDraft: (conversationId, draft) => {
     const drafts = { ...get().drafts };
-    if (!draft.text && !draft.referenceAssetIds.length) delete drafts[conversationId];
+    if (!draft.text && !draft.referenceAssetIds.length && !draft.codexOptions) delete drafts[conversationId];
     else drafts[conversationId] = draft;
     saveDrafts(drafts);
     set({ drafts });

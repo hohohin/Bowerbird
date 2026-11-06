@@ -4,6 +4,14 @@ import { clearSentCreativeChatDraft, isCreativeComposerDraftMeaningful, parseCre
 
 const draft = (text = '', media = 'image', refs = []) => ({ doc: { type: 'doc', content: [{ type: 'paragraph', ...(text ? { content: [{ type: 'text', text }] } : {}) }] }, refs, generation: { media, ratio: media === 'video' ? '16:9' : '1:1' } });
 
+test('Codex model choices survive mode switches and accepted chat cleanup', () => {
+  const chat = draft('发送内容');
+  const codexOptions = { model: 'fixture-model', reasoningEffort: 'high' };
+  const saved = serializeCreativeComposerState({ mode: 'video', chatProvider: 'codex-local', chatCodexOptions: codexOptions, drafts: { chat } });
+  assert.deepEqual(parseCreativeComposerState(saved).chatCodexOptions, codexOptions);
+  assert.deepEqual(parseCreativeComposerState(clearSentCreativeChatDraft(saved, JSON.stringify(chat))).chatCodexOptions, codexOptions);
+});
+
 test('chat provider survives switching modes and clearing accepted text independently of generation', () => {
   const chat = draft('已经发送');
   const state = { mode: 'video', chatProvider: 'deepseek-cloud', drafts: { chat, video: draft('视频草稿', 'video') } };

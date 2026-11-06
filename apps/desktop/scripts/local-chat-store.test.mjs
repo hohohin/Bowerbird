@@ -121,6 +121,33 @@ test('concurrent send to the same conversation is rejected before a second IPC',
   assert.equal(f.calls.length, 1);
 });
 
+test('changing model or effort after uncertain send uses a new identity; retrying identical options does not', async () => {
+  const f = fixture();
+  f.handlers.set('local_chat_send', () => { throw new Error('connection lost'); });
+  for (const codexOptions of [{ model: 'a', reasoningEffort: 'low' }, { model: 'a', reasoningEffort: 'high' }, { model: 'b', reasoningEffort: 'high' }, { model: 'b', reasoningEffort: 'high' }]) {
+    await assert.rejects(f.store.getState().send({ projectId: 'p', text: '同一句话', referenceAssetIds: [], codexOptions }), /connection lost/);
+  }
+  const ids = f.calls.map(call => call.args.input.requestId);
+  assert.notEqual(ids[0], ids[1]); assert.notEqual(ids[1], ids[2]); assert.equal(ids[2], ids[3]);
+});
+
+test('model selection preserves supported effort and resets incompatible effort to model default', () => {
+  const { selectChatCodexModel, chatCodexOptionError } = fixture().chatApi;
+  const models = [{ id: 'a', model: 'a', displayName: 'A', isDefault: true, defaultReasoningEffort: 'medium', supportedReasoningEfforts: [{ reasoningEffort: 'medium' }, { reasoningEffort: 'high' }] }, { id: 'b', model: 'b', displayName: 'B', isDefault: false, defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }];
+  assert.deepEqual(plain(selectChatCodexModel({ model: 'a', reasoningEffort: 'high' }, 'b', models)), { model: 'b', reasoningEffort: 'low' });
+  assert.deepEqual(plain(selectChatCodexModel({ reasoningEffort: 'high' }, 'a', models)), { model: 'a', reasoningEffort: 'high' });
+  assert.deepEqual(plain(selectChatCodexModel({ model: 'b', reasoningEffort: 'low' }, '', models)), {});
+  assert.equal(chatCodexOptionError({}, null), null);
+  assert.match(chatCodexOptionError({ model: 'gone' }, models), /模型/);
+  assert.match(chatCodexOptionError({ model: 'a', reasoningEffort: 'low' }, models), /推理/);
+});
+
+test('model-only conversation drafts persist without text', () => {
+  const f = fixture();
+  f.store.getState().setDraft('chat-p', { text: '', referenceAssetIds: [], codexOptions: { model: 'a', reasoningEffort: 'high' } });
+  assert.deepEqual(plain(fixture(f.storage).draft('chat-p').codexOptions), { model: 'a', reasoningEffort: 'high' });
+});
+
 test('card options are frozen per submission and changing them after an uncertain send gets a new identity', async () => {
   const f = fixture();
   f.handlers.set('local_chat_send', () => { throw new Error('connection lost'); });

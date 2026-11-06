@@ -1,6 +1,49 @@
 use super::*;
 
 #[test]
+fn local_chat_model_options_reject_cloud_and_malformed_values_without_creating_turns() {
+    let db = fixture();
+    for options in [serde_json::json!({"model":""}), serde_json::json!({"reasoningEffort":"high\n"})] {
+        let mut raw = serde_json::to_value(input("bad-model")).unwrap();
+        raw["codexOptions"] = options;
+        assert!(db.begin_local_chat(&serde_json::from_value(raw).unwrap()).is_err());
+    }
+    let mut raw = serde_json::to_value(input("cloud-model")).unwrap();
+    raw["provider"] = serde_json::json!("deepseek-cloud");
+    raw["codexOptions"] = serde_json::json!({});
+    assert!(db.begin_local_chat(&serde_json::from_value(raw).unwrap()).err().unwrap().to_string().contains("Cloud"));
+    assert!(db.list_local_chats("project-a").unwrap().is_empty());
+}
+
+#[test]
+fn local_chat_model_selection_is_durable_inherited_and_part_of_request_identity() {
+    let db = fixture();
+    let mut raw = serde_json::to_value(input("model-one")).unwrap();
+    raw["codexOptions"] = serde_json::json!({"model":"fixture-model","reasoningEffort":"high"});
+    let first: ChatSendInput = serde_json::from_value(raw.clone()).unwrap();
+    let started = db.begin_local_chat(&first).unwrap();
+    let id = started.conversation.summary.id.clone();
+    assert_eq!(serde_json::to_value(&started.conversation).unwrap()["codexOptions"], raw["codexOptions"]);
+    db.finish_local_chat(&id, &started.turn_id, "done", None).unwrap();
+    let mut next = input("model-two");
+    next.conversation_id = Some(id.clone());
+    let continued = db.begin_local_chat(&next).unwrap();
+    assert_eq!(serde_json::to_value(&continued.conversation).unwrap()["codexOptions"], raw["codexOptions"]);
+    db.finish_local_chat(&id, &continued.turn_id, "done", None).unwrap();
+    raw["conversationId"] = serde_json::json!(id);
+    raw["requestId"] = serde_json::json!("reset-model");
+    raw["codexOptions"] = serde_json::json!({});
+    let reset: ChatSendInput = serde_json::from_value(raw).unwrap();
+    let reset = db.begin_local_chat(&reset).unwrap();
+    assert_eq!(serde_json::to_value(&reset.conversation).unwrap()["codexOptions"], serde_json::json!({}));
+    assert!(!db.replay_local_chat(&first).unwrap().unwrap().is_new);
+    assert!(!db.replay_local_chat(&next).unwrap().unwrap().is_new);
+    let mut conflict = serde_json::to_value(first).unwrap();
+    conflict["codexOptions"]["reasoningEffort"] = serde_json::json!("low");
+    assert!(db.replay_local_chat(&serde_json::from_value(conflict).unwrap()).is_err());
+}
+
+#[test]
 fn local_chat_video_delivery_survives_completion_and_rejects_foreign_or_stopped_turns() {
     let db = fixture();
     let started = db.begin_local_chat(&input("video")).unwrap();
@@ -49,6 +92,7 @@ fn fixture() -> Database {
 fn input(request: &str) -> ChatSendInput {
     ChatSendInput {
         provider: None,
+        codex_options: None,
         project_id: "project-a".into(),
         conversation_id: None,
         request_id: request.into(),

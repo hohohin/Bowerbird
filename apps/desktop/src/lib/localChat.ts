@@ -4,7 +4,27 @@ export { canvasChatId } from "./canvasChat";
 export type LocalChatStatus = "idle" | "running" | "stopping" | "stopped" | "interrupted" | "failed";
 export type ChatProvider = "codex-local" | "deepseek-cloud";
 export const CHAT_PROVIDER_LABELS = { "codex-local": "本机 Codex", "deepseek-cloud": "DeepSeek · Cloud" } as const;
-export interface ChatComposeRequest { prompt: string; references: import("./types").Asset[]; provider: ChatProvider }
+export interface ChatCodexOptions { model?: string; reasoningEffort?: string }
+export interface ChatCodexModel {
+  id: string; model: string; displayName: string; isDefault: boolean; defaultReasoningEffort: string;
+  supportedReasoningEfforts: { reasoningEffort: string; description: string }[];
+}
+export function selectChatCodexModel(options: ChatCodexOptions, model: string, models: ChatCodexModel[]): ChatCodexOptions {
+  if (!model) return {};
+  const selected = models.find(item => item.model === model);
+  const effort = selected?.supportedReasoningEfforts.some(item => item.reasoningEffort === options.reasoningEffort)
+    ? options.reasoningEffort : selected?.defaultReasoningEffort;
+  return { model, ...(effort ? { reasoningEffort: effort } : {}) };
+}
+export function chatCodexOptionError(options: ChatCodexOptions, models: ChatCodexModel[] | null): string | null {
+  if (!options.model && !options.reasoningEffort) return null;
+  if (!models) return "请先读取 Codex 模型列表后发送。";
+  const selected = options.model ? models.find(item => item.model === options.model) : models.find(item => item.isDefault);
+  if (!selected) return "所选 Codex 模型暂不可用，请重新选择。";
+  return options.reasoningEffort && !selected.supportedReasoningEfforts.some(item => item.reasoningEffort === options.reasoningEffort)
+    ? "所选模型不支持此推理强度，请重新选择。" : null;
+}
+export interface ChatComposeRequest { prompt: string; references: import("./types").Asset[]; provider: ChatProvider; codexOptions?: ChatCodexOptions }
 export interface ChatQuote { provider: "deepseek-cloud"; service: "chat_deepseek"; available: boolean; unit_cost: number | null; currency: "Bcoin"; pricing_version: number | null }
 export function chatProviderUnavailable(provider: ChatProvider, state: {
   cloudAvailable: boolean; loggedIn: boolean; cloudAllowed: boolean; localAllowed: boolean; codexReady: boolean; balance: number;
@@ -25,6 +45,7 @@ export interface ChatSummary {
   nodeId: string;
   title: string;
   provider: ChatProvider;
+  codexOptions?: ChatCodexOptions;
   status: LocalChatStatus;
   turnCount: number;
   preview: string;
@@ -58,6 +79,7 @@ export interface ChatConversation extends ChatSummary { messages: ChatMessage[];
 export interface LocalChatSendInput {
   projectId: string;
   provider?: ChatProvider;
+  codexOptions?: ChatCodexOptions;
   conversationId?: string | null;
   requestId: string;
   text: string;
@@ -75,6 +97,7 @@ export function localChatInputError(text: string, referenceAssetIds: string[]): 
   return null;
 }
 export const localChat = {
+  models: () => invoke<ChatCodexModel[]>("local_chat_models"),
   quote: () => invoke<ChatQuote>("local_chat_quote"),
   list: (projectId: string) => invoke<ChatSummary[]>("local_chat_list", { projectId }),
   get: (conversationId: string) => invoke<ChatConversation | null>("local_chat_get", { conversationId }),

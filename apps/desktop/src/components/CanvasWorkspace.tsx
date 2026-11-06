@@ -1421,7 +1421,7 @@ export function CanvasWorkspace({
     const bounds = stageRef.current?.getBoundingClientRect();
     const point = bounds ? toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 3) : { x: 80, y: 80 };
     const placement = placeCanvasCardNearSource({ x: point.x - 160, y: point.y, width: 320, height: 190 }, selectionAnchors().map(anchor => anchor.rect));
-    const chat = await useLocalChatStore.getState().send({ projectId: id, text: request.prompt, provider: request.provider,
+    const chat = await useLocalChatStore.getState().send({ projectId: id, text: request.prompt, provider: request.provider, codexOptions: request.codexOptions,
       referenceAssetIds: request.references.map(asset => asset.id), cardDefaults: chatCardDefaults(), placement: { ...placement, width: 320, height: 190, zIndex: Date.now() % 1000000 } });
     if (activeCanvasRef.current.id === id && useStore.getState().projectRouteRevision === revision) openLocalChat(chat.id);
   }

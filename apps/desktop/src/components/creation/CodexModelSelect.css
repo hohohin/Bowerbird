@@ -1,0 +1,5 @@
+.chat-codex-options { display: flex; align-items: center; flex-wrap: wrap; gap: 4px; min-width: 0; }
+.chat-codex-options > .tactical-select-trigger { max-width: 180px; min-width: 0; font-size: 11px; }
+.chat-codex-retry { color: var(--bb-muted); font-size: 11px; padding: 4px; }
+.local-chat-reply-box > .chat-codex-options { padding: 0 9px 6px; }
+.local-chat-reply-box > .chat-codex-options > .tactical-select-trigger { flex: 1; max-width: none; }

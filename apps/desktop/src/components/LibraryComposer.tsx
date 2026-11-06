@@ -86,7 +86,7 @@ async function startLibraryChat(request: ChatComposeRequest, draftJson: string, 
   const projectId = requireProject(target);
   const state = useStore.getState();
   const video = parseCreativeComposerState(draftJson).drafts.video?.generation;
-  await useLocalChatStore.getState().send({ projectId, text: request.prompt, provider: request.provider,
+  await useLocalChatStore.getState().send({ projectId, text: request.prompt, provider: request.provider, codexOptions: request.codexOptions,
     referenceAssetIds: request.references.map(asset => asset.id),
     cardDefaults: { provider: state.activeGenProvider || state.defaultProvider, videoChannel: video?.videoChannel ?? "jimeng", videoOptions: { ...(video?.videoOptions ?? DEFAULT_VIDEO_OPTIONS) } },
     placement: { ...await placement(projectId), width: 320, height: 190, zIndex: Date.now() % 1000000 } });

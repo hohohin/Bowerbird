@@ -731,6 +731,7 @@ pub fn run() {
             commands::local_chat::local_chat_list,
             commands::local_chat::local_chat_get,
             commands::local_chat::local_chat_quote,
+            commands::local_chat::local_chat_models,
             commands::local_chat::local_chat_recover,
             commands::local_chat::local_chat_send,
             commands::local_chat::local_chat_stop,

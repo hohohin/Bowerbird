@@ -5,7 +5,7 @@ import { parseCreativeComposerState, serializeCreativeComposerState, type Creati
 import type { CreationEditorDraft } from "./creation/useCreationEditor";
 import type { CreativeParentCandidate, CreativeThreadResolution } from "../lib/creativeGeneration";
 import type { ComposerLocalVideoRequest } from "../lib/comfyVideo";
-import type { ChatComposeRequest, ChatProvider } from "../lib/localChat";
+import type { ChatCodexOptions, ChatComposeRequest, ChatProvider } from "../lib/localChat";
 
 export function CreativeComposer({
   projectId,
@@ -62,6 +62,7 @@ export function CreativeComposer({
   const stateRef = useRef(parseCreativeComposerState(draftJson));
   const [mode, setMode] = useState(stateRef.current.mode);
   const [chatProvider, setChatProvider] = useState<ChatProvider>(stateRef.current.chatProvider ?? "codex-local");
+  const [chatCodexOptions, setChatCodexOptions] = useState<ChatCodexOptions | undefined>(stateRef.current.chatCodexOptions);
   const flushRef = useRef<(() => void) | null>(null);
   function persist(draft: CreationEditorDraft) {
     stateRef.current.drafts[mode] = draft;
@@ -93,6 +94,8 @@ export function CreativeComposer({
       composerMode={mode}
       onComposerModeChange={selectMode}
       chatProvider={chatProvider}
+      chatCodexOptions={chatCodexOptions}
+      onChatCodexOptionsChange={options => { flushRef.current?.(); stateRef.current.chatCodexOptions = options; setChatCodexOptions(options); onDraftChange(serializeCreativeComposerState(stateRef.current)); }}
       onChatProviderChange={provider => { flushRef.current?.(); stateRef.current.chatProvider = provider; setChatProvider(provider); onDraftChange(serializeCreativeComposerState(stateRef.current)); }}
       continuationCandidates={continuationCandidates}
       focusedContinuationNodeId={focusedContinuationNodeId}

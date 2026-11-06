@@ -36,8 +36,28 @@ pub struct ChatPlacement {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatCodexOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+}
+impl ChatCodexOptions {
+    fn validate(&self) -> AppResult<()> {
+        for value in [&self.model, &self.reasoning_effort].into_iter().flatten() {
+            if value.is_empty() || value.len() > 200 || value.trim() != value || value.chars().any(char::is_control) {
+                return Err(error("Codex 模型或推理强度无效，请重新选择"));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChatSendInput {
     pub provider: Option<ChatProvider>,
+    pub codex_options: Option<ChatCodexOptions>,
     pub project_id: String,
     pub conversation_id: Option<String>,
     pub request_id: String,
@@ -57,6 +77,8 @@ pub struct ChatSummary {
     pub node_id: String,
     pub title: String,
     pub provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub codex_options: Option<ChatCodexOptions>,
     pub status: String,
     pub turn_count: i64,
     pub preview: String,
@@ -100,7 +122,9 @@ fn error(text: &str) -> AppError {
 const SUMMARY_SQL: &str = "SELECT c.id,c.project_id,c.thread_id,c.node_id,c.title,c.provider,c.status,
  (SELECT COUNT(*) FROM local_chat_turns t WHERE t.conversation_id=c.id),
  COALESCE((SELECT substr(m.text,1,240) FROM local_chat_messages m WHERE m.conversation_id=c.id AND m.role='assistant' AND m.text<>'' ORDER BY m.created_at DESC,m.id DESC LIMIT 1),''),
- c.revision,c.created_at,c.updated_at,c.error FROM local_chat_conversations c";
+ c.revision,c.created_at,c.updated_at,c.error,
+ (SELECT json_extract(t.request_json,'$.resolvedCodexOptions') FROM local_chat_turns t WHERE t.conversation_id=c.id ORDER BY t.created_at DESC,t.rowid DESC LIMIT 1)
+ FROM local_chat_conversations c";
 
 fn summary(row: &Row<'_>) -> rusqlite::Result<ChatSummary> {
     Ok(ChatSummary {
@@ -117,6 +141,7 @@ fn summary(row: &Row<'_>) -> rusqlite::Result<ChatSummary> {
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
         error: row.get(12)?,
+        codex_options: row.get::<_, Option<String>>(13)?.and_then(|value| serde_json::from_str(&value).ok()),
     })
 }
 
@@ -157,6 +182,9 @@ fn request_fingerprint(input: &ChatSendInput, provider: ChatProvider) -> AppResu
         serde_json::json!({"text":input.text.trim(),"referenceAssetIds":input.reference_asset_ids});
     if let Some(defaults) = &input.card_defaults {
         fingerprint["cardDefaults"] = serde_json::to_value(defaults)?;
+    }
+    if let Some(options) = &input.codex_options {
+        fingerprint["codexOptions"] = serde_json::to_value(options)?;
     }
     // Preserve pre-provider Codex request identities across the migration.
     if provider != ChatProvider::CodexLocal {
@@ -199,12 +227,14 @@ fn replay(conn: &Connection, input: &ChatSendInput) -> AppResult<Option<StartedC
         return Ok(None);
     };
     let conversation = read(conn, &id)?.ok_or_else(|| error("对话记录不存在"))?;
+    let mut original: serde_json::Value = serde_json::from_str(&request)?;
+    if let Some(object) = original.as_object_mut() { object.remove("resolvedCodexOptions"); }
     if conversation.summary.project_id != input.project_id
         || input
             .conversation_id
             .as_ref()
             .is_some_and(|value| value != &id)
-        || request != request_fingerprint(input, provider_for(conn, input)?)?
+        || original != serde_json::from_str::<serde_json::Value>(&request_fingerprint(input, provider_for(conn, input)?)?)?
     {
         return Err(error("发送编号已用于其他内容，请保留草稿并重新发送"));
     }
@@ -237,6 +267,7 @@ impl Database {
     }
 
     pub fn begin_local_chat(&self, input: &ChatSendInput) -> AppResult<StartedChat> {
+        if let Some(options) = &input.codex_options { options.validate()?; }
         if let Some(defaults) = &input.card_defaults {
             defaults.validate()?;
         }
@@ -256,6 +287,12 @@ impl Database {
             return Ok(previous);
         }
         let provider = provider_for(&tx, input)?;
+        if provider != ChatProvider::CodexLocal && input.codex_options.is_some() {
+            return Err(error("Cloud 对话不支持 Codex 模型与推理强度，请移除这些设置"));
+        }
+        let options = if let Some(options) = &input.codex_options { Some(options.clone()) }
+            else if let Some(id) = &input.conversation_id { read(&tx, id)?.and_then(|chat|chat.summary.codex_options) }
+            else { None };
         let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM projects p JOIN project_canvases c ON p.id=c.project_id WHERE p.id=?1 AND p.archived_at IS NULL)",[&input.project_id],|row|row.get(0))?;
         if !exists {
             return Err(error("项目不存在或已归档，请重新打开项目"));
@@ -309,7 +346,9 @@ impl Database {
             }
         };
         let turn_id = ulid::Ulid::new().to_string();
-        tx.execute("INSERT INTO local_chat_turns(id,conversation_id,request_id,request_json,status,created_at,updated_at) VALUES(?1,?2,?3,?4,'running',?5,?5)",params![turn_id,id,input.request_id,request_fingerprint(input,provider)?,now])?;
+        let mut request: serde_json::Value = serde_json::from_str(&request_fingerprint(input,provider)?)?;
+        if let Some(options) = &options { request["resolvedCodexOptions"] = serde_json::to_value(options)?; }
+        tx.execute("INSERT INTO local_chat_turns(id,conversation_id,request_id,request_json,status,created_at,updated_at) VALUES(?1,?2,?3,?4,'running',?5,?5)",params![turn_id,id,input.request_id,request.to_string(),now])?;
         if let Some(defaults) = &input.card_defaults {
             tx.execute(
                 "UPDATE local_chat_turns SET card_defaults_json=?2 WHERE id=?1",
@@ -339,6 +378,11 @@ impl Database {
             [id],
             |row| row.get(0),
         )?)
+    }
+    pub fn local_chat_turn_options(&self, turn: &str) -> AppResult<Option<ChatCodexOptions>> {
+        let raw: Option<String> = self.conn.lock().unwrap().query_row(
+            "SELECT json_extract(request_json,'$.resolvedCodexOptions') FROM local_chat_turns WHERE id=?1", [turn], |row|row.get(0))?;
+        raw.map(|value|serde_json::from_str(&value).map_err(Into::into)).transpose()
     }
     pub fn set_local_chat_provider_thread(&self, id: &str, provider_id: &str) -> AppResult<()> {
         self.conn.lock().unwrap().execute("UPDATE local_chat_conversations SET provider_thread_id=?2 WHERE id=?1 AND (provider_thread_id IS NULL OR provider_thread_id=?2)",params![id,provider_id])?;

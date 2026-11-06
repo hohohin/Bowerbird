@@ -1,11 +1,12 @@
 import type { PromptedAsset } from "./types";
 import type { CreationEditorDraft } from "../components/creation/useCreationEditor";
-import type { ChatProvider } from "./localChat";
+import type { ChatCodexOptions, ChatProvider } from "./localChat";
 
 export type CreativeComposerMode = "image" | "video" | "chat";
 export interface CreativeComposerState {
   mode: CreativeComposerMode;
   chatProvider?: ChatProvider;
+  chatCodexOptions?: ChatCodexOptions;
   drafts: Partial<Record<CreativeComposerMode, CreationEditorDraft>>;
 }
 
@@ -21,12 +22,17 @@ export function parseCreativeComposerState(draftJson: string): CreativeComposerS
       if (draft && Array.isArray(draft.refs) && draft.doc) drafts[key] = draft;
     }
     if (legacy && !drafts[mode]) drafts[mode] = legacy;
-    return { mode, drafts, ...(["codex-local", "deepseek-cloud"].includes(saved.chatProvider) ? { chatProvider: saved.chatProvider } : {}) };
+    const options = saved.chatCodexOptions;
+    const chatCodexOptions = options && typeof options === "object" && !Array.isArray(options)
+      && (options.model === undefined || typeof options.model === "string")
+      && (options.reasoningEffort === undefined || typeof options.reasoningEffort === "string")
+      ? { ...(options.model ? { model: options.model } : {}), ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}) } : undefined;
+    return { mode, drafts, ...(["codex-local", "deepseek-cloud"].includes(saved.chatProvider) ? { chatProvider: saved.chatProvider } : {}), ...(chatCodexOptions ? { chatCodexOptions } : {}) };
   } catch { return { mode: fallbackMode, drafts: legacy ? { [fallbackMode]: legacy } : {} }; }
 }
 
 export function serializeCreativeComposerState(state: CreativeComposerState) {
-  return JSON.stringify({ schema_version: 1, mode: state.mode, chatProvider: state.chatProvider, modeDrafts: state.drafts,
+  return JSON.stringify({ schema_version: 1, mode: state.mode, chatProvider: state.chatProvider, chatCodexOptions: state.chatCodexOptions, modeDrafts: state.drafts,
     composer: state.drafts[state.mode] ?? { doc: { type: "doc", content: [{ type: "paragraph" }] }, refs: [] } });
 }
 
