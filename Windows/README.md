@@ -2,11 +2,17 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
-## Windows 26.11.601 发布准备（2026-11-06）
+## Windows 26.11.601 已发布（2026-11-06）
 
-用户已确认：素材库四级视图与投影控件、项目范围记忆、文本完整编辑／最近文档／本地自动保存、Codex 模型与推理选择、本机及应用托管 DSH 接入、快传原件发送、探索视频采集入口、同会话生成组图、连线与文本聚焦修复及 H3 独立提示词优化。SQLite 0053；源码与文档同次提交推送后冻结签名构建。完整 TypeScript、Rust 1145 passed／34 ignored、154 项前端逻辑、18 组现行桌面专项、30 项官网回归通过。测试详情和首次失败／修正复跑证据位于 .tmp/release-windows-26.11.601/。
+2026-11-06 14:05:58（北京时间）本机公网复核通过。源码 **4ae78ee6** 已与文档同次存档推送后冻结构建，发布素材库四级视图与投影控件、项目范围记忆、文本完整编辑／最近文档／本地自动保存、Codex 模型与推理选择、本机及应用托管 DSH 接入、快传原件发送、探索视频采集入口、同会话生成组图、连线与文本聚焦修复及 H3 独立提示词优化。SQLite **0053**，插件 **0.3.1**；Cloud 音频参考 0079／Edge／Worker／网关未部署，桌面在创建音频任务前检测服务端能力并拒绝不支持的请求；DeepSeek Cloud 未启用。Mac 保持 ARM 801／Intel 1501，现有视频及赠币服务和 Mock 支付保持。
 
-保留中文／English 安装器、原 updater 公钥及更新登录保留钩子。候选复制现役 20261105-windows-26.11.502，仅更新 Windows 下载相关五个文件；不部署仓库 Cloud／微信支付／DSH 源码，Mock 支付、Mac、现有网关保持，Cloud 音频参考与 DeepSeek Cloud 未启用。未安装／重启用户应用、迁移真实库或调用付费模型。
+TypeScript／Vite、Rust 1145 passed／34 ignored、18 组桌面专项、154 项前端测试及 30 项官网回归通过；1996 个冻结输入与 Git 核对、76 个资源（含 LocalSend 许可证与修改说明）、x64／双语安装器／更新登录保留钩子、原公钥验签及篡改拒绝、包内原生媒体／等待和生产 bundle 检查通过。Rust 测试仅向独立测试 EXE 副本嵌入 Common Controls v6 清单，正式构建未修改。未替用户安装／重启应用、迁移真实素材库或调用付费模型；用户库原生升级、真手机端到端、真实站点采集和 Mac 原生仍需各自验收。
+
+安装包 `Bowerbird_26.11.601_x64-setup.exe`：**107520776 bytes**，SHA-256 `7ceff64504c8ab5939e2b4ca7237fbfe9bd9fd8ce1bb13eb1e571dacf62be514`。TOS／CDN 完整回读、Range 206、CDN 包原公钥验签通过后才切更新。候选／现役／公网三平台清单、签名、双首页下载、旧包、后台及账号／Cloud 网关拒绝边界通过。
+
+现役 `/opt/bowerbird/website-releases/20261106-windows-26.11.601`，回滚 `/opt/bowerbird/website-releases/20261105-windows-26.11.502`；只改 Windows 下载与清单相关 5 个文件，82 个其他文件保持，后台、账号／Cloud 代理、Nginx、Mac 清单及旧包保留。
+
+证据：本机 `.tmp/release-windows-26.11.601/`，VPS `/tmp/bowerbird-release-windows-26.11.601/`；`rollback.sh` 恢复 502 官网，不自动降级客户端或回退账本。
 
 ## Windows 26.11.502 已发布（2026-11-05）
 
