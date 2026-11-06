@@ -52,13 +52,13 @@ try {
   await page.evaluate(() => window.renderHandles({ selected: false }));
   await page.mouse.move(900, 700);
   await visible('output', false);
-  await page.mouse.move(147, 300);
+  await page.mouse.move(140, 300);
   await visible('input', true);
   await page.mouse.move(900, 700);
   await visible('input', false);
-  await page.mouse.move(553, 300);
+  await page.mouse.move(560, 300);
   await visible('output', true);
-  await page.mouse.click(553, 300);
+  await page.mouse.click(560, 300);
   assert.deepEqual(await page.evaluate(() => window.events), [['pointer', 'output']], 'the enlarged outer zone reveals and starts a connection without first hovering the card');
   await page.evaluate(() => { window.events = []; });
   await page.mouse.move(900, 700);
@@ -88,12 +88,12 @@ try {
     await page.evaluate(zoom => window.renderHandles({ zoom }), zoom);
     const card = await bounds(page.locator('#card'));
     const out = await bounds(output), incoming = await bounds(input);
-    approx(out.width, 76.8, `output hit width at ${zoom}`);
-    approx(out.height, 76.8, `output hit height at ${zoom}`);
-    approx(incoming.width, 76.8, `input hit width at ${zoom}`);
+    approx(out.width, 92.16, `output hit width at ${zoom}`);
+    approx(out.height, 92.16, `output hit height at ${zoom}`);
+    approx(incoming.width, 92.16, `input hit width at ${zoom}`);
     approx(out.x + out.width / 2 - card.x - card.width, 18, 'output offset');
     approx(card.x - incoming.x - incoming.width / 2, 18, 'input offset');
-    approx((await bounds(glyph)).width, 28, 'glyph width');
+    approx((await bounds(glyph)).width, 25.2, 'glyph width');
     assert.equal(await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.canvas-connection-handle'), {
       x: card.x + card.width - 1, y: card.y + card.height / 2,
     }), false, 'outward heat area does not steal even the last pixel of card content');
@@ -171,5 +171,5 @@ try {
     await page.screenshot({ path: `.tmp/canvas-connection-handle/hatched-${theme}.png`, clip: { x: 130, y: 150, width: 450, height: 300 } });
   }
   assert.deepEqual(errors, []);
-  console.log('PASS: direct hot-zone reveal, fixed 76.8px hit area/28px glyph across 10–250% zoom, bounded magnetic movement, unclipped frame, stable hit area, press/reset, editing, keyboard, active/reduced motion and nearest overlapping socket selection');
+  console.log('PASS: direct hot-zone reveal, fixed 92.16px hit area/25.2px glyph across 10–250% zoom, bounded magnetic movement, unclipped frame, stable hit area, press/reset, editing, keyboard, active/reduced motion and nearest overlapping socket selection');
 } finally { await browser?.close(); await server.close(); }

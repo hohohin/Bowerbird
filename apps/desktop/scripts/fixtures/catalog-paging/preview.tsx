@@ -5,11 +5,16 @@ import { FileDropImport } from "../../../src/components/FileDropImport";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { LibraryHome } from "../../../src/components/LibraryHome";
 import { CategorizedLibrary } from "../../../src/components/CategorizedLibrary";
+import { LibraryCatalogTransition } from "../../../src/components/LibraryCatalogTransition";
+import { LibrarySourceTabs } from "../../../src/components/LibrarySourceTabs";
+import type { LibrarySource } from "../../../src/lib/localFileMode";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { useLocalFileMode } from "../../../src/lib/localFileMode";
 import { useStore } from "../../../src/store";
 import "../../../src/styles.css";
 import "../../../src/components/LocalFileWorkspace.css";
+import "../../../src/components/IndustrialTheme.css";
+import "../../../src/components/IndustrialMenus.css";
 import type { CatalogFilter } from "../../../src/lib/materialCatalog";
 const w = window as any;
 const listeners = new Map<number, (event: unknown) => void>();
@@ -38,6 +43,8 @@ w.__TAURI_INTERNALS__ = {
     if (command === "plugin:event|listen") return args.handler;
     if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return; }
     w.requests.push({command,args});
+    if (command === "list_library_view") return { assets: [{ ...asset(0), thumb_path: thumb }, asset(1)], memberships: [{ projectId: "p", assetId: "asset-0" }, { projectId: "q", assetId: "asset-1" }], total: 2 };
+    if (command === "folder_connections") return [];
     if (command === "file_workspace_status") return { config: { root: "C:/library", places: [], projects: {} }, proposed_root: "C:/library" };
     if (command === "external_files_browse") return { path: args.path ?? "C:/library", parent: null, entries: [], total: 0 };
     if (command === "folder_classification_view") return { root: args.path, record: { labels: [], pictures: [] }, counts: [] };
@@ -66,6 +73,7 @@ w.__TAURI_INTERNALS__ = {
       const {first,count}=range(args.filter);
       return Array.from({length:Math.min(args.limit,Math.max(0,count-args.offset))},(_,i)=>`asset-${first+args.offset+i}`);
     }
+    if (command === "list_generation_groups") return w.generationGroups ?? {};
     if (command === "get_assets_by_ids") return args.assetIds.map((id:string)=>asset(Number(id.split('-')[1])));
     if (command === "external_files_preview" || command === "external_files_media") return thumb;
     if (command === "local_classification_example") { w.classified = args; return; }
@@ -74,7 +82,7 @@ w.__TAURI_INTERNALS__ = {
   },
 };
 w.refresh = () => listeners.forEach(fn => fn({payload:null}));
-useStore.setState({activeProjectId:null,libraryThumbnailWidth:150});
+useStore.setState({activeProjectId:null,libraryThumbnailWidth:150, projects: ["p", "q"].map((id, i) => ({ id, name: `项目${i ? "B" : "A"}`, kind: "blank", workspace_path: `blank:${id}`, asset_count: 1, created_at: 1, updated_at: 1 }))});
 function Fixture() {
   const [kind,setKind] = React.useState<"all"|"tags"|"collections">("all");
   const [project,setProject] = React.useState(false);
@@ -88,4 +96,15 @@ function SplitFixture() {
   w.setExploreOpen = setOpen;
   return <div style={{position:"fixed",inset:0,display:"flex",flexDirection:"column"}}><Toolbar localFilesOpen canvasMode={false} onCanvasModeChange={() => {}} onRefresh={async () => {}} onCreateCreative={() => {}}/><FileDropImport/><ExploreWorkspace url={null} open={open} onClose={() => setOpen(false)}><LibraryHome/></ExploreWorkspace></div>;
 }
-createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("split") ? <SplitFixture/> : <Fixture/>);
+function NavigationFixture() {
+  const { source, mode, media } = useLocalFileMode();
+  const [project, setProject] = React.useState(!new URLSearchParams(location.search).has("home"));
+  w.changeProject = setProject;
+  React.useEffect(() => { useLocalFileMode.getState().setProjectContext(project ? "p" : null); useStore.setState({ activeProjectId: project ? "p" : null }); }, [project]);
+  return <div style={{ position: "fixed", inset: 0 }}><LibraryCatalogTransition key={`${source}:${media}`} kind={mode === "all" || mode === "tags" ? mode : "collections"}
+    media={media} projectId={project ? "p" : null} projectScope={source === "project"}
+    navigation={<header className="library-browser-heading"><div className="library-floating-navigation"><LibrarySourceTabs project={project} value={source} onChange={value => useLocalFileMode.getState().openSource(value as LibrarySource)}/></div></header>}
+    onClose={() => {}}/></div>;
+}
+const params = new URLSearchParams(location.search);
+createRoot(document.getElementById("root")!).render(params.has("navigation") ? <NavigationFixture/> : params.has("split") ? <SplitFixture/> : <Fixture/>);

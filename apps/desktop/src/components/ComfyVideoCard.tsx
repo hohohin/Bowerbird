@@ -207,10 +207,11 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, composer = f
   </>;
 }
 
-export function ComfyVideoCard({ node, disabled, assets, inputImages, onChange }: {
-  node: WorkflowNode; disabled: boolean; assets: Asset[];
+export function ComfyVideoCard({ node, step, disabled, assets, inputImages, onChange, onOptimize }: {
+  node: WorkflowNode; step?: WorkflowStep; disabled: boolean; assets: Asset[];
   inputImages: (input: import("../lib/canvasWorkflow").WorkflowInput) => string[];
   onChange: (patch: Partial<WorkflowNode>) => void;
+  onOptimize: () => void;
 }) {
   const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
   const mode = comfyVideoMode(options);
@@ -251,6 +252,17 @@ export function ComfyVideoCard({ node, disabled, assets, inputImages, onChange }
         {(mode === "frames" ? [0.6, 0.8, 1] : [0.6, 0.8, 0.98, 1]).map(value => <option value={value} key={value}>{value === 0.98 ? "768p" : value.toFixed(1)}</option>)}
       </TacticalSelect>
     </fieldset>
+    <div className="comfy-optimize-row">
+      <button type="button" disabled={disabled || !node.prompt.trim()} onClick={onOptimize}
+        title="通过 Cloud DSH 优化卡片中的提示词，使用 Cloud Agent 额度；目前仅向获授权的测试账号开放。结果供选用，不自动生成视频。图片不会上传。">优化提示词</button>
+      <ProviderQuota source="bowerbird" badge />
+    </div>
+    {step?.comfyOptimization?.result && <details className="comfy-optimization-result">
+      <summary>查看优化结果</summary>
+      <label>原文<textarea aria-label="本次原始提示词" readOnly value={step.comfyOptimization.input.prompt} /></label>
+      <label>优化结果<textarea aria-label="优化后的提示词" readOnly value={step.comfyOptimization.result} /></label>
+      <button type="button" disabled={disabled} onClick={() => onChange({ prompt: step.comfyOptimization!.result! })}>用作卡片指令</button>
+    </details>}
     <ProviderQuota source="local" badge />
   </section>;
 }

@@ -1068,9 +1068,11 @@ pub async fn list_generation_groups(
     db: State<'_, Arc<Database>>,
     asset_ids: Vec<String>,
     project_id: Option<String>,
+    filter: Option<crate::core::catalog_browser::CatalogFilter>,
 ) -> Result<HashMap<String, Vec<Asset>>, AppError> {
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || -> Result<HashMap<String, Vec<Asset>>, AppError> {
+        if let Some(filter) = filter { return db.catalog_generation_groups(&filter, &asset_ids); }
         let mut out = HashMap::new();
         for id in &asset_ids {
             let group = db.list_generation_group(id, project_id.as_deref())?;

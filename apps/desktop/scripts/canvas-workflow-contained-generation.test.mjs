@@ -4,7 +4,7 @@ import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs'
 
 // Exercise the native-session event before the workflow's submission receipt,
 // then pause the actual cell write. No real provider or user library is used.
-const server = await createServer({ configFile: false, root: process.cwd(), cacheDir: '.tmp/contained-generation-vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, server: { host: '127.0.0.1', port: 1699, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ root: process.cwd(), cacheDir: '.tmp/contained-generation-vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, server: { host: '127.0.0.1', port: 1699, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const failures = [], observations = [];
@@ -133,13 +133,14 @@ try {
     if (mode === 'cell') {
       const origin = await page.evaluate(async sessionId => {
         const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
-        const { newWorkflowNode, workflowCardWidth, workflowPortY } = await import('/src/lib/canvasWorkflow.ts');
+        const { newWorkflowNode, workflowCardWidth } = await import('/src/lib/canvasWorkflow.ts');
         const c = canvasWorkflowController('p'), draw = c.document.nodes.find(node => node.id === 'draw');
         await c.edit([...c.document.nodes, { ...newWorkflowNode('instruction', 1250, 650, ''), id: 'old-session-consumer', action: 'reuse', inputs: { image: [{ canvasNodeId: sessionId, cellId: 'image' }] } }]);
-        return `M ${draw.x + workflowCardWidth(draw)} ${workflowPortY(draw, 'output', 'image')} C `;
+        return { x: draw.x + workflowCardWidth(draw), y: draw.y + document.querySelector('[data-workflow-card="draw"]').offsetHeight / 2 };
       }, persistedSessions[0]);
       const oldSessionWire = page.locator('[data-workflow-target="old-session-consumer"]'); await oldSessionWire.waitFor();
-      assert.ok((await oldSessionWire.getAttribute('d')).startsWith(origin), 'an old session reference anchors at the visible generator instead of a hidden card');
+      const start = (await oldSessionWire.getAttribute('d')).match(/^M ([\d.-]+) ([\d.-]+)/);
+      assert.ok(start && Math.abs(Number(start[1]) - origin.x) < 1 && Math.abs(Number(start[2]) - origin.y) < 1, 'an old session reference anchors at the visible generator center instead of a hidden card');
       await page.evaluate(async () => {
         const { api } = await import('/src/lib/api.ts');
         const table = window.snapshot().nodes.find(node => node.id === 'receiver'), note = JSON.parse(table.payloadJson);

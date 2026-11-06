@@ -4,6 +4,7 @@ import { useStore } from "../store";
 import { LibrarySourceTabs } from "./LibrarySourceTabs";
 import { LibraryCatalogTransition } from "./LibraryCatalogTransition";
 import { useLocalFileMode } from "../lib/localFileMode";
+import type { LibrarySource } from "../lib/localFileMode";
 import { copyLibraryPane, createLibraryPane, LibraryPaneContext, registerLibraryPane, useActiveLibraryPane, type LibraryPaneState } from "../lib/libraryPane";
 import "./LibrarySplit.css";
 import "./LibraryTactical.css";
@@ -17,6 +18,7 @@ export function LibraryHome({ onCreateProject, active = true, shortcutsEnabled =
   const currentPanes = useRef(panes);
   currentPanes.current = panes;
   useEffect(() => {
+    useLocalFileMode.getState().setProjectContext(null);
     useLocalFileMode.getState().openSource("global");
   }, []);
   useEffect(() => {
@@ -105,12 +107,13 @@ function HomePane({ pane, split, onSplit, onClose, onCreateProject, shortcutsEna
   const media = pane.mode(s => s.media);
   const active = useActiveLibraryPane(s => s.pane === pane);
   const navigation = <header className="library-browser-heading"><div className="library-floating-navigation">
-    <LibrarySourceTabs value="global" onChange={() => pane.mode.getState().openSource("global")}/>
+    <LibrarySourceTabs value="global" onChange={value => pane.mode.getState().openSource(value as LibrarySource)}/>
   </div></header>;
   return <div ref={root} className="library-pane-content" data-library-pane={pane.id} data-split={split || undefined} data-active={active || undefined} tabIndex={-1}
     onPointerDownCapture={() => useActiveLibraryPane.getState().activate(pane)} onFocusCapture={() => useActiveLibraryPane.getState().activate(pane)}
     onKeyDownCapture={event => {
       const state = useStore.getState(), target = event.target as HTMLElement;
+      if (target.closest('.library-source-navigation[data-scope-expanded]')) return;
       if (event.key !== "Tab" || event.ctrlKey || event.metaKey || event.altKey || event.repeat || event.nativeEvent.isComposing || event.defaultPrevented
         || !shortcutsEnabled || root.current?.closest("[inert]") || state.projectRoutePending || state.contextMenu || state.projectContextMenu
         || document.querySelector('[role="dialog"], [role="menu"]') || target.isContentEditable || target.closest('input, textarea, select, [role="combobox"]')) return;

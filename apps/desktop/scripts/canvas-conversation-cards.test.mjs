@@ -16,6 +16,19 @@ test('same-second retries follow durable turn order instead of random node ids',
   }
 });
 
+test('persisted conversation identity groups unloaded jobs and orders tied outputs by turn then asset', () => {
+  const first = prompt('first', 'job', 'one');
+  const next = prompt('next', 'handoff', 'two', 2);
+  for (const node of [first, next]) node.payloadJson = JSON.stringify({ ...JSON.parse(node.payloadJson), conversation_id: 'saved' });
+  const nodes = [next, {...output('z-node', 'job', 'one', 3), assetId: 'asset-01'},
+    {...output('a-node', 'job', 'one', 3), assetId: 'asset-02'}, first, output('newest', 'handoff', 'two', 3)];
+  const result = canvasConversationCards(nodes, {}, new Set(), new Set(['a-node']));
+  assert.equal(result.cards.size, 1);
+  assert.deepEqual(result.cards.get('first').allOutputs.map(node => node.assetId), ['asset-01', 'asset-02', 'newest']);
+  assert.deepEqual(result.cards.get('first').outputs.map(node => node.assetId), ['asset-01', 'newest']);
+  assert.equal(result.cards.get('first').latest.id, 'next');
+});
+
 test('continuations and provider handoffs share one stable card, independent conversations stay separate', () => {
   const first = prompt('first','job','one');
   const next = prompt('next','job','two',2);

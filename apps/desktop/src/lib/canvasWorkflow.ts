@@ -61,6 +61,7 @@ export interface WorkflowStep {
   comfyProgress?: import("./comfyVideo").ComfyVideoProgress;
   comfyCancelled?: boolean;
   comfyStopping?: boolean;
+  comfyOptimization?: { input: import("./h3PromptOptimization").H3PromptInput; instruction: string; submissionStarted?: boolean; result?: string };
   agentInput?: { prompt: string; source: string; assetIds: string[]; visualProfile?: import("./types").VisualProfileDetail | null };
   agentOutputs?: Record<string, WorkflowValue>;
   agentProgress?: { text: string; at: number }[];

@@ -622,10 +622,15 @@ export function CanvasWorkspace({
   const planeRef = useRef<HTMLDivElement>(null);
   const zoomLabelRef = useRef<HTMLSpanElement>(null);
   const centeredEditorRef = useRef<HTMLElement | null>(null);
-  const editorCenterTimerRef = useRef<ReturnType<typeof setTimeout>>();
-  useEffect(() => () => {
-    clearTimeout(editorCenterTimerRef.current);
-    centeredEditorRef.current = null;
+  const editorCenterFrameRef = useRef<number | null>(null);
+  useEffect(() => {
+    const stop = () => { if (editorCenterFrameRef.current != null) settleCamera(); };
+    window.addEventListener("blur", stop);
+    return () => {
+      window.removeEventListener("blur", stop);
+      cancelEditorCenter();
+      centeredEditorRef.current = null;
+    };
   }, [projectId, viewMode]);
   const cameraSettleRef = useRef<ReturnType<typeof setTimeout>>();
   const snapSizeObserverRef = useRef<ResizeObserver | null>(null);
@@ -943,7 +948,13 @@ export function CanvasWorkspace({
     if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${Math.round(currentZoom * 100)}%`;
   }
 
+  function cancelEditorCenter() {
+    if (editorCenterFrameRef.current != null) cancelAnimationFrame(editorCenterFrameRef.current);
+    editorCenterFrameRef.current = null;
+  }
+
   function settleCamera() {
+    cancelEditorCenter();
     clearTimeout(cameraSettleRef.current);
     cameraFrame.cancel();
     paintCamera();
@@ -1569,8 +1580,8 @@ export function CanvasWorkspace({
   }
 
   useEffect(() => {
-    const state = useLocalFileMode.getState();
-    useLocalFileMode.setState({ source: "project", mode: (state.media === "images" ? state.views : state.videoViews).project, query: "" });
+    useLocalFileMode.getState().setProjectContext(projectId);
+    useLocalFileMode.setState({ source: "project", view: "project", tagSource: "project", mode: "all", query: "" });
   }, [projectId]);
 
   useEffect(() => {
@@ -1901,6 +1912,7 @@ export function CanvasWorkspace({
         && !!target.closest('.creation-editor .ProseMirror, [data-generation-composer] .ProseMirror');
       if (!composerTab && event.key !== "Escape" && (target?.isContentEditable || target?.closest('input, textarea, select, [role="combobox"], .app-topbar'))) return;
       if (event.key === "Escape" && target?.closest('[data-folder-path-editor], [data-frequent-threshold]')) return;
+      if (target?.closest('.library-source-navigation[data-scope-expanded]') && (event.key === "Escape" || event.key === "Tab")) return;
       if (target?.closest('[role="dialog"], [role="menu"]')
         || document.querySelector('[role="dialog"], [role="menu"]') || useStore.getState().contextMenu
         || useStore.getState().projectContextMenu) return;
@@ -3778,41 +3790,52 @@ export function CanvasWorkspace({
         || editor instanceof HTMLInputElement && !["text", "search", "url", "tel", "email"].includes(editor.type)) return;
     } else if (!editor.isContentEditable) return;
 
-    clearTimeout(editorCenterTimerRef.current);
-    // Let double/triple clicks finish selecting text before moving their target.
-    editorCenterTimerRef.current = setTimeout(() => {
-      if (!stage.contains(editor) || !editor.contains(document.activeElement)
-        || loadingRef.current || useStore.getState().projectRoutePending) return;
-      cameraFrame.flush();
-      const bounds = stage.getBoundingClientRect();
-      const field = editor.getBoundingClientRect();
-      if (!field.width || !field.height) return;
-      // These panels overlay the stage rather than reducing its layout size.
-      let left = bounds.left + 64, right = bounds.right - 24, bottom = bounds.bottom - 24;
-      const top = bounds.top + 72;
-      const library = useStore.getState().canvasLibraryOpen && sourcePanelRef.current?.getBoundingClientRect();
-      if (library && library.right > bounds.left && library.left < bounds.right) left = Math.max(left, library.right + 16);
-      const inspector = boardShellRef.current?.querySelector('.project-inspector-shell:not(.is-editing)')?.getBoundingClientRect();
-      if (inspector && inspector.width > 0) right = Math.min(right, inspector.left - 16);
-      const composer = boardShellRef.current?.querySelector('.canvas-composer-host')?.getBoundingClientRect();
-      if (composer && composer.height > 0) bottom = Math.min(bottom, composer.top - 16);
-      if (right <= left || bottom <= top) return;
-      const currentZoom = zoomRef.current;
-      const center = {
-        x: (field.left + field.width / 2 - bounds.left - panRef.current.x) / currentZoom,
-        y: (field.top + field.height / 2 - bounds.top - panRef.current.y) / currentZoom,
-      };
-      const nextZoom = clampCanvasZoom(Math.max(currentZoom, Math.min(1.2,
-        (right - left) * currentZoom / field.width, (bottom - top) * currentZoom / field.height)));
-      zoomRef.current = nextZoom;
-      panRef.current = {
-        x: (left + right) / 2 - bounds.left - center.x * nextZoom,
-        y: (top + bottom) / 2 - bounds.top - center.y * nextZoom,
-      };
-      centeredEditorRef.current = editor;
+    cancelEditorCenter();
+    clearTimeout(cameraSettleRef.current);
+    cameraFrame.flush();
+    const bounds = stage.getBoundingClientRect();
+    const field = editor.getBoundingClientRect();
+    if (!field.width || !field.height) return;
+    // Measure once; the frame loop only paints the camera transform.
+    let left = bounds.left + 64, right = bounds.right - 24, bottom = bounds.bottom - 24;
+    const top = bounds.top + 72;
+    const library = useStore.getState().canvasLibraryOpen && sourcePanelRef.current?.getBoundingClientRect();
+    if (library && library.right > bounds.left && library.left < bounds.right) left = Math.max(left, library.right + 16);
+    const inspector = boardShellRef.current?.querySelector('.project-inspector-shell:not(.is-editing)')?.getBoundingClientRect();
+    if (inspector && inspector.width > 0) right = Math.min(right, inspector.left - 16);
+    const composer = boardShellRef.current?.querySelector('.canvas-composer-host')?.getBoundingClientRect();
+    if (composer && composer.height > 0) bottom = Math.min(bottom, composer.top - 16);
+    if (right <= left || bottom <= top) return;
+    const fromPan = panRef.current, fromZoom = zoomRef.current;
+    const center = {
+      x: (field.left + field.width / 2 - bounds.left - fromPan.x) / fromZoom,
+      y: (field.top + field.height / 2 - bounds.top - fromPan.y) / fromZoom,
+    };
+    const nextZoom = clampCanvasZoom(Math.max(fromZoom, Math.min(1.2,
+      (right - left) * fromZoom / field.width, (bottom - top) * fromZoom / field.height)));
+    const nextPan = {
+      x: (left + right) / 2 - bounds.left - center.x * nextZoom,
+      y: (top + bottom) / 2 - bounds.top - center.y * nextZoom,
+    };
+    const duration = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 280;
+    const started = performance.now();
+    let livePan = fromPan, liveZoom = fromZoom;
+    const animate = (now: number) => {
+      // A new camera owner (navigation, fit, placement) takes precedence.
+      if (panRef.current !== livePan || zoomRef.current !== liveZoom) { cancelEditorCenter(); return; }
+      if (!stage.contains(editor) || !editor.contains(document.activeElement) || viewModeRef.current !== "canvas"
+        || loadingRef.current || useStore.getState().projectRoutePending) { settleCamera(); return; }
+      const progress = duration ? Math.max(0, Math.min(1, (now - started) / duration)) : 1;
+      const eased = 1 - (1 - progress) ** 3;
+      liveZoom = zoomRef.current = fromZoom + (nextZoom - fromZoom) * eased;
+      livePan = panRef.current = { x: fromPan.x + (nextPan.x - fromPan.x) * eased, y: fromPan.y + (nextPan.y - fromPan.y) * eased };
       markViewDirty(false);
-      settleCamera();
-    }, 500);
+      paintCamera();
+      if (progress < 1) editorCenterFrameRef.current = requestAnimationFrame(animate);
+      else { centeredEditorRef.current = editor; settleCamera(); }
+    };
+    if (duration) editorCenterFrameRef.current = requestAnimationFrame(animate);
+    else animate(started);
   }
 
   function onCanvasWheel(event: WheelEvent<HTMLDivElement>) {
@@ -4941,7 +4964,7 @@ export function CanvasWorkspace({
             backgroundSize: `${72 * zoom}px ${72 * zoom}px`,
           }}
           onPointerDownCapture={event => {
-            clearTimeout(editorCenterTimerRef.current);
+            if (editorCenterFrameRef.current != null) settleCamera();
             cameraFrame.flush();
             if (event.button === 0 && !(event.target as HTMLElement).closest('button,input,textarea,select,[contenteditable="true"]')) {
               lastImportPointRef.current = { projectId: activeCanvasRef.current.id, x: event.clientX, y: event.clientY };
@@ -4951,10 +4974,10 @@ export function CanvasWorkspace({
           onPointerDown={beginPan}
           onClickCapture={centerCanvasEditor}
           onBlurCapture={event => {
-            clearTimeout(editorCenterTimerRef.current);
+            if (editorCenterFrameRef.current != null) settleCamera();
             if (centeredEditorRef.current?.contains(event.target as Node)) centeredEditorRef.current = null;
           }}
-          onWheelCapture={() => clearTimeout(editorCenterTimerRef.current)}
+          onWheelCapture={() => { if (editorCenterFrameRef.current != null) settleCamera(); }}
           onKeyDown={(event) => {
             // Mac's backward Delete reports Backspace; also support forward Delete keyboards.
             const deleteKey = event.key === "Delete" && !event.metaKey;
@@ -5087,6 +5110,23 @@ export function CanvasWorkspace({
                   }}
                   renderGeneration={cell => {
                     const session = graphNodes.find(item => item.id === cell.generation_ref?.session_node_id && item.hiddenAt == null);
+                    const anchorId = session && conversationCards.aliases.get(session.id);
+                    const card = anchorId && conversationCards.cards.get(anchorId);
+                    const images = card ? card.allOutputs.flatMap(output => {
+                      const material = nodes.find(item => item.kind === "asset" && item.id === output.id);
+                      return material?.kind === "asset" ? [material.asset] : [];
+                    }) : [];
+                    if (images.length > 1 && anchorId) return <CanvasConversationImages images={images} imageOnly
+                      selectedId={selectedConversationImage(anchorId, images)?.id}
+                      onSelect={selected => { cancelConversationImageClick(); setConversationImageSelection(previous => ({ ...previous, [anchorId]: { newest: images[images.length - 1].id, selected } })); }}
+                      onPointerDown={event => event.stopPropagation()}
+                      onClick={event => {
+                        cancelConversationImageClick();
+                        if (event.detail < 2 && session) conversationImageClickRef.current = setTimeout(() => openWorkflowGeneration(card ? card.latest : session), event.detail === 0 ? 0 : 350);
+                      }}
+                      onDoubleClick={(_event, shown) => { cancelConversationImageClick(); const path = shown.storePath ?? shown.thumbPath; if (path) setCanvasLightbox({ images: [path], index: 0 }); }}
+                      onContextMenu={(event, shown) => { event.preventDefault(); event.stopPropagation(); cancelConversationImageClick(); if (shown.assetId) openContextMenu(event.clientX, event.clientY, shown.assetId, { singleAsset: true }); }}/>
+                    if (cell.image_refs?.length) return null;
                     const summary = session && promptNodeSummary(session);
                     const running = summary && (genJobs[summary.jobId]?.running ?? ["running", "querying", "queued"].includes(summary.status));
                     return <button type="button" className={`canvas-cell-generation ${running ? "canvas-card-running" : ""} ${summary?.status === "failed" ? "is-failed" : ""}`}

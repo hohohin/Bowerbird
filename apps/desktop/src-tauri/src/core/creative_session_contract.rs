@@ -126,6 +126,8 @@ pub struct PromptNodePayloadV1 {
     pub provider_session_id: Option<String>,
     #[serde(default)]
     pub job_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
     #[serde(default)]
     pub turn_key: Option<String>,
     #[serde(default)]

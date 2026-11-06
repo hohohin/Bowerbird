@@ -46,6 +46,7 @@ try {
   });
   await scenario('narrow collection names reclaim action width until hover, focus or menu', async page => {
     await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/connected-collections/preview.html`);
+    await page.getByRole('tab', { name: '集合视图', exact: true }).click();
     const row = page.locator('[data-collection-id="child"]');
     await row.waitFor();
     await row.click({ button: 'right' });

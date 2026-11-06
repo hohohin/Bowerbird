@@ -50,6 +50,15 @@ my-library/
 
 # 开发计划，文件
 dev-doc/*
+# Reuse map: keep the entry and reviewed pages visible without exposing other notes.
+!dev-doc/Bowerbird开发计划.md
+!dev-doc/reuse/
+dev-doc/reuse/*
+!dev-doc/reuse/UI.md
+!dev-doc/reuse/DESKTOP.md
+!dev-doc/reuse/SERVICES.md
+!dev-doc/reuse/ANNOTATION.md
+!dev-doc/reuse/REVIEW.md
 !dev-doc/UI-DESIGN-SPEC.md
 !dev-doc/ui-design-spec/
 dev-doc/ui-design-spec/*

@@ -15,7 +15,8 @@ function resetHovered() {
   hovered = null;
 }
 function nearestHandle(event: globalThis.PointerEvent) {
-  if (!(event.target instanceof Element) || !event.target.closest(".canvas-connection-handle")) return null;
+  // Existing wires can cross a socket; the socket's hot zone wins there.
+  if (!(event.target instanceof Element) || !event.target.closest(".canvas-connection-handle,.workflow-wires")) return null;
   let nearest: { element: HTMLButtonElement; rect: DOMRect; distance: number } | null = null;
   const visited = new Set<Element>();
   for (const hit of document.elementsFromPoint(event.clientX, event.clientY)) {
@@ -99,7 +100,7 @@ export const CanvasConnectionHandle = forwardRef<HTMLButtonElement, CanvasConnec
     const y = event.clientY - rect.top - rect.height / 2;
     const distance = Math.hypot(x, y);
     const strength = distance ? Math.min(0.3, 8 / distance) : 0;
-    // Keep the 28px frame outside the card's clipped content boundary.
+    // Keep the frame outside the card's clipped content boundary.
     move(side === "output" ? Math.max(-4, x * strength) : Math.min(4, x * strength), y * strength);
   }
   const controller = useRef<HandleController>({ follow, reset: move, press: event => onPointerDown?.(event) });

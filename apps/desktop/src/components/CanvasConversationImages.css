@@ -6,6 +6,8 @@
 .canvas-conversation-images .next { right: 0; }
 .canvas-prompt-node:hover .canvas-conversation-images button, .canvas-prompt-node:focus-within .canvas-conversation-images button { opacity: 1; }
 .canvas-conversation-images button:disabled { visibility: hidden; }
+.canvas-text-cell > .canvas-conversation-images { margin: 0; width: 100%; height: 100%; min-height: 64px; }
+.canvas-text-cell:hover > .canvas-conversation-images button, .canvas-text-cell:focus-within > .canvas-conversation-images button { opacity: 1; }
 .canvas-prompt-node.has-conversation-images .canvas-prompt-content { max-height: 56px; }
 
 .canvas-prompt-node.is-image-only,

@@ -68,6 +68,7 @@ export function FileDropImport() {
       const projectId = targetProject(event);
       const libraryMode = libraryPaneAt(event.target)?.mode ?? useLocalFileMode;
       const librarySource = libraryMode.getState().source;
+      const libraryProjectId = libraryMode.getState().browseProjectId;
       const collectionId = targetCollection(event)?.dataset.fileImportCollectionId;
       const revision = state.projectRouteRevision;
       const place = prepareExplorerCanvasDrop(event.target, projectId, event.clientX, event.clientY);
@@ -92,6 +93,7 @@ export function FileDropImport() {
         if (imported.length) {
           const current = useStore.getState();
           if (!place && !collectionId && libraryMode.getState().source === librarySource
+            && (librarySource !== "project" || libraryMode.getState().browseProjectId === libraryProjectId)
             && current.activeProjectId === state.activeProjectId && current.projectRouteRevision === revision && !current.projectRoutePending) {
             current.setCurrentCollection(null); current.setCurrentFolder(null);
             current.setSearchQuery(""); current.setSmartFilter(null); current.setColorFilter(null);

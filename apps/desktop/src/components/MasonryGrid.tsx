@@ -4,6 +4,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { Check, ImagePlus, Layers, Play, SearchX } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { parseColors } from "../lib/assetColors";
 import { isVideoPath } from "../lib/videoGeneration";
 import { useVideoPoster } from "../lib/videoPoster";
 import { setDragAssets } from "../lib/dragPayload";
@@ -16,17 +17,6 @@ import { filterAssetsByMediaType } from "../lib/mediaFilter";
 
 // Keep layout inputs stable when the host only opens/closes its library drawer.
 const EMPTY_PROJECT_GROUPS: LibraryProjectGroup[] = [];
-
-function parseColors(c: string | null | undefined): string[] {
-  if (!c) return [];
-  try {
-    const v = JSON.parse(c);
-    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
 
 // 引入二选一菜单（「Shift + 左键引入」开启时的左键行为）尺寸估算，用于视口钳制。
 const PICK_MENU_W = 172;
@@ -122,7 +112,7 @@ const Thumb = memo(function Thumb({
   const [idx, setIdx] = useState(0);
   useEffect(() => {
     setIdx(groupLen > 0 ? groupLen - 1 : 0);
-  }, [groupLen]);
+  }, [groupLen, group?.[groupLen - 1]?.id]);
   const shown: Asset = groupLen > 0 ? group![idx] ?? asset : asset;
   const thumbnailPath = useVideoPoster(shown.store_path, shown.thumb_path);
   const selected = useStore((s) => s.mode === "manage" && s.selectedIds.has(shown.id));

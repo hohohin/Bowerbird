@@ -34,6 +34,7 @@ import { WorkflowNodeError, workflowDiagnostic, type WorkflowDiagnostic } from "
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
 import { describeBrandImage } from "./describeBrandImage";
 import { canUseComfyVideo, comfyEnvironment, comfyVideo, comfyVideoElapsed, comfyVideoMode, DEFAULT_COMFY_VIDEO, type ComfyVideoStatus } from "./comfyVideo";
+import { h3OptimizationInstruction } from "./h3PromptOptimization";
 import { compileAgentPrompt, activePromptReferences, compileGenerationPrompt, generationInputNode, workflowImageContainer, emptyWorkflow, newWorkflowNode, invalidateWorkflow, workflowExecutionNodes, workflowDependencies, workflowWriteNodes, workflowAccessConflict, workflowLockedNodes, workflowRuns, workflowRunActive, workflowInputProducers, workflowInputValues, workflowOrder, WORKFLOW_SKILLS,
   type CanvasWorkflow, type WorkflowInput, type WorkflowRun, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "./canvasWorkflow";
 
@@ -999,7 +1000,7 @@ export class CanvasWorkflowController {
     try {
     const localIds = this.document.nodes.filter(node => node.kind === "comfy-video" && ["pending", "running", "waiting"].includes(this.run(runId)?.steps[node.id]?.status)).map(node => node.id);
     for (const id of localIds) {
-      this.progress(runId, id, "正在中断本机生成…");
+      this.progress(runId, id, this.run(runId).steps[id].comfyOptimization ? "正在停止提示词优化…" : "正在中断本机生成…");
       this.run(runId).steps[id].comfyStopping = true;
     }
     this.emit();
@@ -1392,6 +1393,91 @@ export class CanvasWorkflowController {
     });
   }
 
+  /** Explicit paid text action. It never invalidates outputs or executes connected cards. */
+  async optimizeComfyPrompt(nodeId: string) {
+    if (!this.ready) throw new Error("工作流尚未载入");
+    await api.canvasWorkflowAuthorize();
+    await this.writing;
+    const node = this.document.nodes.find(node => node.id === nodeId);
+    if (node?.kind !== "comfy-video") throw new Error("请选择本地 H3 视频卡片");
+    if (this.encapsulating || this.isLocked(nodeId)) throw new Error("卡片正在使用，请等待当前任务结束");
+    const prompt = node.prompt.trim(), options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO, mode = comfyVideoMode(options);
+    if (!prompt || prompt.length > 16000) throw new Error("请在卡片中填写 1–16000 字提示词后再优化");
+    const input = { prompt, mode, seconds: options.seconds, ratio: options.ratio,
+      firstFrameCount: mode !== "text" && node.inputs["first-frame"]?.length ? 1 : 0,
+      lastFrameCount: mode === "frames" && node.inputs["last-frame"]?.length ? 1 : 0 };
+    const runId = crypto.randomUUID(), threadId = crypto.randomUUID(), accountId = useStore.getState().cloudAuth?.user_id ?? null;
+    this.reservations.set(runId, { access: [nodeId], writes: [nodeId] }); this.emit();
+    try {
+      await api.projectThreadCreate({ id: threadId, projectId: this.projectId, title: "H3 提示词优化", origin: "direct" });
+      await this.saveRun({ id: runId, startId: nodeId, threadId, order: [nodeId], lockedNodeIds: [nodeId], writeNodeIds: [nodeId], accountId, status: "running",
+        steps: { [nodeId]: { status: "pending", comfyOptimization: { input, instruction: h3OptimizationInstruction(input) } } } });
+    } finally { this.reservations.delete(runId); this.emit(); }
+    await this.continue(runId);
+  }
+
+  private async runComfyPromptOptimization(runId: string, node: WorkflowNode, halted: () => boolean) {
+    const id = node.id, originalStep = this.run(runId).steps[id];
+    const assertAccount = () => {
+      const account = useStore.getState();
+      if (this.run(runId).accountId !== (account.cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后继续，或停止此工作流");
+      if (!canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) throw new Error("本地 H3 视频需要有效的 Pro／Studio 权益或测试账号资格");
+      return account;
+    };
+    assertAccount();
+    let snapshot = originalStep.comfyOptimization;
+    if (!snapshot) throw new Error("缺少本次优化输入，请重新点击优化提示词");
+    if (!snapshot.result) {
+      let terminalFailure = false;
+      try {
+        let agentRunId = originalStep.agentRunId;
+        if (!agentRunId) {
+          if (snapshot.submissionStarted) throw new Error("提示词优化提交状态未知，请核对 Agent 任务记录；不会自动重复提交");
+          const account = assertAccount();
+          if (!account.cloudEntitlement?.is_test_account || !canUseAgentRun(account.cloudEntitlement, "bowerbird-unified-agent")) throw new Error("当前账号尚未开放 Cloud DSH，请使用已获授权的测试账号");
+          const active = Object.values(account.cloudAgentRuns).filter(run => !["succeeded", "failed", "cancelled"].includes(run.status)).length;
+          if (!canStartAnotherAgentRun(account.cloudEntitlement, active, "bowerbird-unified-agent")) throw new Error("Agent 并发已满，请等待当前任务结束");
+          snapshot = { ...snapshot, submissionStarted: true };
+          await this.step(runId, id, { status: "running", comfyOptimization: snapshot, error: undefined, detail: "提交 H3 提示词优化" });
+          if (halted()) return;
+          const created = await api.cloudAgentStart({ intentPrompt: snapshot.instruction, textRewrite: { source: snapshot.input.prompt }, references: [],
+            projectId: this.projectId, threadId: this.run(runId).threadId, imageProvider: "cloud", skillId: "bowerbird-unified-agent", agentRuntime: "dsh" });
+          if (this.stopped.has(runId)) { await api.cloudAgentCancel(created.runId); return; }
+          agentRunId = created.runId;
+          await this.step(runId, id, { agentRunId, detail: "Cloud DSH 正在优化提示词" });
+        }
+        while (!halted()) {
+          assertAccount();
+          const current = await api.cloudAgentGet(agentRunId);
+          if (halted()) return;
+          assertAccount();
+          useStore.getState().openCloudAgentRun(current, { navigate: false });
+          if (["failed", "cancelled"].includes(current.status)) { terminalFailure = true; throw new Error(current.snapshot.run.safe_message || "提示词优化未完成，请检查 Agent 任务记录"); }
+          if (current.status.startsWith("awaiting_")) { terminalFailure = true; throw new Error("云端未按文本优化模式执行，请检查 Cloud DSH 服务版本"); }
+          if (current.status === "succeeded") {
+            terminalFailure = true;
+            const payload = current.snapshot.events.find(event => event.type === "text.result")?.display_payload;
+            if (payload?.schemaVersion !== 1 || typeof payload.text !== "string" || !payload.text.trim() || payload.text.length > 16000) throw new Error("Cloud DSH 未返回有效的优化提示词，请检查任务结果");
+            snapshot = { ...snapshot, result: payload.text };
+            // Persist the suggestion without applying it or submitting local generation.
+            await this.step(runId, id, { comfyOptimization: snapshot });
+            break;
+          }
+          this.progress(runId, id, current.status === "queued" ? "提示词优化排队中" : "Cloud DSH 正在优化提示词");
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      } catch (error) {
+        if (halted()) return;
+        if (terminalFailure || !this.run(runId).steps[id].agentRunId) throw error;
+        await this.step(runId, id, { status: "waiting", error: `${String(error)}。可继续查询原优化任务，或停止此工作流。` });
+        return;
+      }
+    }
+    if (halted() || !snapshot.result) return;
+    assertAccount();
+    await this.step(runId, id, { status: "done", error: undefined, detail: "提示词已优化，可查看并选用" });
+  }
+
   private async runComfyVideo(runId: string, node: WorkflowNode, halted: () => boolean, input?: import("./comfyVideo").ComfyVideoInput) {
     const id = node.id, step = this.run(runId).steps[id], accountId = this.run(runId).accountId;
     let jobId = step.jobId;
@@ -1507,6 +1593,7 @@ export class CanvasWorkflowController {
       if (step.status === "done" || halted()) return;
       this.progress(runId, id, node.kind === "generation" ? `生成${node.generation?.media === "video" ? "视频" : "图片"}，等待会话结果` : node.kind === "skill" ? "执行技能，等待任务结果或审批" : node.kind === "visual-profile" ? "处理视觉规范" : node.kind === "trigger" ? "触发下游流程" : "读取输入素材");
       if (node.kind === "comfy-video" && step.jobId) { await this.runComfyVideo(runId, node, halted); return; }
+      if (node.kind === "comfy-video" && step.comfyOptimization) { await this.runComfyPromptOptimization(runId, node, halted); return; }
       if (node.kind === "generation" && node.generation?.media === "video" && step.jobId) {
         await this.recoverVideoResult(runId, node, halted); return;
       }

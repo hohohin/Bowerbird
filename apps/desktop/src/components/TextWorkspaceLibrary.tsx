@@ -70,6 +70,7 @@ function useWorkspaceLibraryPane(projectId?: string) {
   const scopeId = projectId ?? null;
   const [pane] = useState(() => createLibraryPane(`text-workspace:${scopeId ?? "global"}`));
   useEffect(() => registerLibraryPane(pane), [pane]);
+  useEffect(() => pane.mode.getState().setProjectContext(scopeId), [pane, scopeId]);
   const source = pane.mode(state => state.source), media = pane.mode(state => state.media), mode = pane.mode(state => state.mode);
   const query = pane.mode(state => state.query);
   const kind: CatalogKind = mode === "all" || mode === "tags" ? mode : "collections";

@@ -623,6 +623,24 @@ fn thread_from_row(row: &Row<'_>) -> rusqlite::Result<CreativeThread> {
 
 const THREAD_COLUMNS: &str = "id,project_id,title,origin,archived_at,created_at,updated_at";
 
+// Older prompt snapshots predate conversation_id. Enrich reads from their exact
+// output assets so grouping survives a restart without rewriting saved nodes.
+fn restore_canvas_conversations(conn: &rusqlite::Connection, project_id: &str, nodes: &mut [CanvasNode]) -> AppResult<()> {
+    let mut stmt = conn.prepare("SELECT DISTINCT json_extract(n.payload_json,'$.execution.job_id'),g.conversation_id FROM canvas_nodes n JOIN assets a ON a.id=n.asset_id JOIN generation_conversations g ON g.session_id=a.generation_session_id WHERE n.project_id=?1 AND n.kind='asset' AND n.role='output'")?;
+    let conversations = stmt.query_map([project_id], |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)))?
+        .filter_map(|row| match row { Ok((Some(job), conversation)) => Some(Ok((job, conversation))), Ok(_) => None, Err(error) => Some(Err(error)) })
+        .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+    for node in nodes.iter_mut().filter(|node| node.kind == CreativeNodeKind::Prompt) {
+        let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json)?;
+        if payload["conversation_id"].as_str().is_some() { continue; }
+        if let Some(conversation) = payload["job_id"].as_str().and_then(|job| conversations.get(job)) {
+            payload["conversation_id"] = conversation.clone().into();
+            node.payload_json = serde_json::to_string(&payload)?;
+        }
+    }
+    Ok(())
+}
+
 fn node_from_row(row: &Row<'_>) -> rusqlite::Result<CanvasNode> {
     Ok(CanvasNode {
         id: row.get(0)?,
@@ -1253,7 +1271,7 @@ fn project_canvas_snapshot_tx(
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(AppError::from)?
     };
-    let nodes = {
+    let mut nodes = {
         let mut statement = tx.prepare(&format!(
             "SELECT {NODE_COLUMNS} FROM canvas_nodes WHERE project_id=?1 ORDER BY z_index,created_at,id"
         ))?;
@@ -1261,6 +1279,7 @@ fn project_canvas_snapshot_tx(
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(AppError::from)?
     };
+    restore_canvas_conversations(tx, project_id, &mut nodes)?;
     let groups = {
         let mut statement = tx.prepare(&format!(
             "SELECT {GROUP_COLUMNS} FROM canvas_groups WHERE project_id=?1 ORDER BY z_index,created_at,id"
@@ -1637,10 +1656,11 @@ impl Database {
             "SELECT {NODE_COLUMNS} FROM canvas_nodes WHERE project_id=?1 ORDER BY z_index,created_at,id"
         );
         let mut statement = conn.prepare(&sql)?;
-        let nodes = statement
+        let mut nodes = statement
             .query_map([project_id], node_from_row)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(AppError::from)?;
+        restore_canvas_conversations(&conn, project_id, &mut nodes)?;
         Ok(nodes)
     }
 
@@ -2096,6 +2116,7 @@ impl Database {
             provider: Some(value.provider.clone()),
             provider_session_id: value.provider_session_id.clone(),
             job_id: Some(value.job_id.clone()),
+            conversation_id: Some(value.generation_conversation_id.clone()),
             turn_key: Some(value.turn_key.clone()),
             ratio: value.ratio.clone(),
             visual_profile: value.visual_profile.clone(),
@@ -2520,6 +2541,7 @@ impl Database {
                     provider: Some(value.provider.clone()),
                     provider_session_id: None,
                     job_id: None,
+                    conversation_id: None,
                     turn_key: Some(value.launch_id.clone()),
                     ratio: value.ratio.clone(),
                     visual_profile: value.visual_profile.clone(),
@@ -3453,6 +3475,7 @@ mod tests {
         };
         let graph = db.begin_project_generation_turn(&input).unwrap();
         let first = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&first.payload_json).unwrap()["conversation_id"], "conversation");
         assert_eq!((first.x, first.y, first.position_locked), (520.0, 200.0, true));
         db.begin_project_generation_turn(&input).unwrap();
         let recovered = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
@@ -3469,6 +3492,26 @@ mod tests {
         assert!(next_card.y > first.y); // Retained history occupies the first placement.
         let old = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
         assert_eq!((old.x,old.y),(first.x,first.y));
+    }
+
+    #[test]
+    fn legacy_canvas_conversations_restore_from_outputs_without_mutating_saved_payloads() {
+        let db = db(); materialize(&db, "p1");
+        db.create_creative_thread(&NewCreativeThread { id: "t1".into(), project_id: "p1".into(), title: "gallery".into(), origin: CreativeThreadOrigin::Direct }).unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,generation_session_id) VALUES('image','image','provider-session')", []).unwrap();
+        db.record_generation_conversation("provider-session", "original-conversation").unwrap();
+        let saved = r#"{"schema_version":1,"text":"old turn","job_id":"old-job","turn_key":"one"}"#;
+        db.create_canvas_node(&NewCanvasNode { payload_json: saved.into(), ..prompt("p1", "t1", "session") }).unwrap();
+        let mut result = output("p1", "t1", "output", "image");
+        let mut payload: serde_json::Value = serde_json::from_str(&result.payload_json).unwrap();
+        payload["execution"] = serde_json::json!({"job_id":"old-job","turn_key":"one"});
+        result.payload_json = payload.to_string();
+        db.create_canvas_node(&result).unwrap();
+        for nodes in [db.list_canvas_nodes("p1").unwrap(), db.project_canvas_snapshot("p1").unwrap().nodes] {
+            let prompt = nodes.iter().find(|node| node.id == "session").unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&prompt.payload_json).unwrap()["conversation_id"], "original-conversation");
+        }
+        assert_eq!(db.get_canvas_node("session").unwrap().unwrap().payload_json, saved);
     }
 
     #[test]

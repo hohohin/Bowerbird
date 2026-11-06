@@ -3,18 +3,19 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject, 
 import { materialCatalog, type CatalogFilter } from "../lib/materialCatalog";
 import { catalogLayout, catalogScrollScale, masonryGeometry, masonryRatios, visibleCatalogBlocks, CATALOG_CACHE_PAGES, CATALOG_PAGE_SIZE, type CatalogSectionInfo } from "../lib/catalogVirtualLayout";
 import type { Asset } from "../lib/types";
-import { setDragAssets } from "../lib/dragPayload";
-import { FileMediaCard } from "./FileMediaCard";
+import { api } from "../lib/api";
+import { CatalogAssetCard } from "./CatalogAssetCard";
 
-export interface CatalogLocation { section: string; index: number }
-type Page = { assets: Asset[]; revision: number };
+export interface CatalogLocation { section: string; index: number; assetId?: string }
+type Page = { assets: Asset[]; groups: Record<string, Asset[]>; revision: number };
 // Keep only visited pages' ratios after asset eviction/view switches. A page's
 // total height alone cannot continue uneven columns or adapt to a new width.
 const layoutHistory = new Map<string, Map<string, readonly number[]>>();
-export function VirtualCatalog({ filter, sections, headings, width, revision, scroll, selected, jump, initialTop, onActive, onAssetsChange, onSelect, onActivate, onOpen, onContextMenu, readPage, itemKey = asset => asset.id, renderItem, emptySection }: {
+export function VirtualCatalog({ filter, sections, headings, width, revision, scroll, selected, jump, initialTop, onActive, onAssetsChange, onBrowseGroup, onSelect, onActivate, onOpen, onContextMenu, readPage, itemKey = asset => asset.id, renderItem, emptySection }: {
   filter: CatalogFilter; sections: CatalogSectionInfo[]; headings: boolean; width: number; revision: number;
   scroll: RefObject<HTMLDivElement>; selected: Set<string>; jump: { id: string; sequence: number } | null; initialTop?: number;
   onActive: (id: string | null) => void; onAssetsChange?: (assets: Asset[]) => void;
+  onBrowseGroup?: (head: string, shown: string | null) => void;
   onSelect: (asset: Asset, additive: boolean, range: boolean, location: CatalogLocation) => void;
   onActivate?: (asset: Asset) => void; onOpen: (asset: Asset) => void; onContextMenu: (asset: Asset, x: number, y: number, location: CatalogLocation) => void;
   readPage?: (sectionId: string, offset: number, limit: number) => Promise<Asset[]>;
@@ -109,10 +110,14 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
       pending.current.add(block.key);
       const requestedRevision = version.current;
       const section = sections[block.section];
-      void (readPage ? readPage(section.id, block.offset, CATALOG_PAGE_SIZE) : materialCatalog.page({ ...filter, id: section.tagId ?? filter.id }, block.offset, CATALOG_PAGE_SIZE)).then(assets => {
+      const pageFilter = { ...filter, id: section.tagId ?? filter.id };
+      void (readPage ? readPage(section.id, block.offset, CATALOG_PAGE_SIZE) : materialCatalog.page(pageFilter, block.offset, CATALOG_PAGE_SIZE)).then(async assets => {
+        if (!alive.current || version.current !== requestedRevision) return;
+        const ids = readPage ? [] : assets.filter(asset => asset.generation_session_id).map(asset => asset.id);
+        const groups = ids.length ? await api.listGenerationGroups(ids, filter.projectId, pageFilter) ?? {} : {};
         if (!alive.current || version.current !== requestedRevision) return;
         rememberAnchor();
-        cache.current.delete(block.key); cache.current.set(block.key, { assets, revision: requestedRevision });
+        cache.current.delete(block.key); cache.current.set(block.key, { assets, groups, revision: requestedRevision });
         const keep = new Set(wanted.current.map(item => item.key));
         for (const key of cache.current.keys()) {
           if (cache.current.size <= CATALOG_CACHE_PAGES) break;
@@ -128,7 +133,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   useEffect(() => { errors.current.clear(); pump.current(); }, [revision]);
   const wantedKey = visible.map(block => block.key).join("|");
   useEffect(() => { pump.current(); }, [wantedKey, revision, tick]);
-  useEffect(() => { onAssetsChange?.([...new Map([...cache.current.values()].flatMap(page => page.assets).map(asset => [asset.id, asset])).values()]); }, [tick, onAssetsChange]);
+  useEffect(() => { onAssetsChange?.([...new Map([...cache.current.values()].flatMap(page => [...page.assets, ...Object.values(page.groups).flat()]).map(asset => [asset.id, asset])).values()]); }, [tick, onAssetsChange]);
   useEffect(() => () => onAssetsChange?.([]), [onAssetsChange]);
   useLayoutEffect(() => {
     const view = scroll.current;
@@ -206,12 +211,10 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
               if (focused !== block.key) return null;
             }
             if (renderItem) return renderItem(asset, { width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }, cell.ratio, { section: section.id, index: block.offset + index });
-            return <FileMediaCard key={asset.id} style={{ width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }}
-              entry={{ path: asset.store_path ?? "", name: asset.name, directory: false, preview: asset.thumb_path, version: `${asset.id}:${asset.file_mtime ?? 0}:${asset.thumb_path && asset.thumb_path !== asset.store_path ? asset.thumb_path : revision}` }}
-              aspectRatio={cell.ratio} selected={selected.has(asset.id)} revision={revision} labels={[]} assetId={asset.id} generated={asset.generation_session_id != null} duration={asset.duration}
-              onSelect={(additive, range) => onSelect(asset, additive, range, { section: section.id, index: block.offset + index })}
-              onActivate={onActivate ? () => onActivate(asset) : undefined} onOpen={() => onOpen(asset)} onContextMenu={(x,y) => onContextMenu(asset,x,y,{ section: section.id, index: block.offset + index })}
-              dragAssetIds={() => selected.has(asset.id) ? [...selected] : [asset.id]} onDragEnd={() => setDragAssets(null)}/>;
+            return <CatalogAssetCard key={asset.id} asset={asset} group={page.groups[asset.id]} style={{ width: cell.width, height: cell.height, transform: `translate3d(${cell.left}px,${cell.top}px,0)`, pointerEvents: "auto" }}
+              ratio={cell.ratio} selected={selected} revision={revision} onBrowseGroup={onBrowseGroup}
+              onSelect={(shown, additive, range) => onSelect(shown, additive, range, { section: section.id, index: block.offset + index, assetId: shown.id })}
+              onActivate={onActivate} onOpen={onOpen} onContextMenu={(shown,x,y) => onContextMenu(shown,x,y,{ section: section.id, index: block.offset + index, assetId: shown.id })}/>;
           })}
         </div>;
       })}

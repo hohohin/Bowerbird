@@ -79,7 +79,7 @@ export function showImportedMedia(assets: Asset[], mode = useLocalFileMode) {
   const audios = assets.every(isAudioAsset);
   const texts = assets.every(isTextAsset);
   library.setMedia(texts ? "texts" : audios ? "audios" : videos ? "videos" : "images");
-  library.setCatalogView(videos ? "tags" : "all");
+  library.setCatalogView("all");
   library.setQuery("");
   library.setGeneratedFilter(null);
 }

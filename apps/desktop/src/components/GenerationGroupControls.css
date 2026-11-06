@@ -1,0 +1,10 @@
+.generation-group-count { position: absolute; left: 50%; bottom: 8px; transform: translateX(-50%); padding: 3px 7px; color: var(--bb-ink); background: var(--bb-surface); border: 1px solid var(--bb-line); font: 10px/1.2 ui-monospace, monospace; pointer-events: none; z-index: 5; }
+.generation-group-arrow { position: absolute; top: 50%; transform: translateY(-50%); display: grid; place-items: center; width: 28px; height: 34px; color: var(--bb-ink); background: var(--bb-surface); border: 1px solid var(--bb-line); opacity: 0; cursor: pointer; z-index: 5; }
+.generation-group-arrow.previous { left: 4px; }
+.generation-group-arrow.next { right: 4px; }
+.generation-group:hover > .generation-group-arrow, .generation-group:focus-within > .generation-group-arrow { opacity: 1; }
+.generation-group-arrow:hover, .generation-group-arrow:focus-visible { color: var(--bb-blue); }
+.generation-group-arrow:disabled { visibility: hidden; }
+.catalog-generation-group { position: absolute; top: 0; left: 0; }
+.catalog-generation-group::before { content: ""; position: absolute; inset: -3px 5px auto; height: 3px; border-top: 1px solid var(--bb-line); pointer-events: none; }
+@media (hover: none) { .generation-group > .generation-group-arrow { opacity: 1; } }

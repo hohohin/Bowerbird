@@ -3,25 +3,34 @@ import type { CatalogKind } from "./materialCatalog";
 
 export type LibrarySource = "global" | "project";
 export type LibraryMedia = "images" | "videos" | "audios" | "texts";
-export const catalogViews = (media: LibraryMedia): CatalogKind[] => media !== "videos" ? ["all", "tags", "collections"] : ["tags", "collections"];
-const viewKey = (media: LibraryMedia) => media === "texts" ? "textViews" : media === "audios" ? "audioViews" : media === "videos" ? "videoViews" : "views";
-export const catalogViewName = (kind: CatalogKind, media: LibraryMedia) => kind === "all" ? "全部" : kind === "collections" ? "集合分类" : media === "videos" ? "视频平铺" : "标签分类";
+export type LibraryView = LibrarySource | "collections" | "tags";
 // "global" here is the file browser's aggregate directory, not a source tab.
 type FileMode = CatalogKind | "files" | "global";
+const projectMemoryKey = (context: string | null) => `bowerbird.libraryProject.${context ?? "home"}`;
+function rememberedProject(context: string | null) {
+  try { return localStorage.getItem(projectMemoryKey(context)) || context; } catch { return context; }
+}
 export const createLocalFileMode = () => create<{
   open: boolean; query: string;
   source: LibrarySource;
-  views: Record<LibrarySource, CatalogKind>;
+  view: LibraryView;
+  tagSource: LibrarySource;
+  contextProjectId: string | null;
+  browseProjectId: string | null;
+  projectPickerOpen: boolean;
+  tagMenuOpen: boolean;
+  setProjectContext: (id: string | null) => void;
+  selectProject: (id: string) => void;
+  setProjectPickerOpen: (open: boolean) => void;
+  setTagMenuOpen: (open: boolean) => void;
+  setView: (view: LibraryView) => void;
+  setTagSource: (source: LibrarySource) => void;
   media: LibraryMedia;
   generatedFilter: "source:generated" | "source:!generated" | null;
   setGeneratedFilter: (filter: "source:generated" | "source:!generated" | null) => void;
-  videoViews: Record<LibrarySource, CatalogKind>;
-  audioViews: Record<LibrarySource, CatalogKind>;
-  textViews: Record<LibrarySource, CatalogKind>;
   setMedia: (media: LibraryMedia) => void;
   globalRequest: number;
   mode: FileMode;
-  viewTransition: { source: LibrarySource; kind: CatalogKind; startedAt: number } | null;
   setMode: (mode: FileMode) => void;
   openSource: (source: LibrarySource) => void;
   setCatalogView: (view: CatalogKind) => void;
@@ -34,33 +43,43 @@ export const createLocalFileMode = () => create<{
   setOpen: (value: boolean | ((value: boolean) => boolean)) => void;
   setQuery: (query: string) => void;
 }>((set, get) => ({
-  open: false, query: "", source: "global", views: { global: "tags", project: "tags" },
-  media: "images", videoViews: { global: "tags", project: "tags" },
-  audioViews: { global: "all", project: "all" },
-  textViews: { global: "all", project: "all" },
+  open: false, query: "", source: "global", view: "global", tagSource: "global",
+  contextProjectId: null, browseProjectId: rememberedProject(null), projectPickerOpen: false, tagMenuOpen: false,
+  setProjectContext: contextProjectId => set(state => state.contextProjectId === contextProjectId ? state : {
+    contextProjectId, browseProjectId: rememberedProject(contextProjectId), projectPickerOpen: false, tagMenuOpen: false,
+  }),
+  selectProject: browseProjectId => {
+    try { localStorage.setItem(projectMemoryKey(get().contextProjectId), browseProjectId); } catch { /* Keep browsing without storage. */ }
+    set({ browseProjectId, projectPickerOpen: false, query: "" });
+  },
+  setProjectPickerOpen: projectPickerOpen => set({ projectPickerOpen }),
+  setTagMenuOpen: tagMenuOpen => set({ tagMenuOpen }),
+  media: "images",
   generatedFilter: null,
   setGeneratedFilter: generatedFilter => set({ generatedFilter }),
-  navigationHost: null, globalRequest: 0, mode: "tags", viewTransition: null,
+  navigationHost: null, globalRequest: 0, mode: "all",
   setMode: mode => set({ mode }),
-  openSource: source => set(state => ({ open: true, source, mode: state[viewKey(state.media)][source], query: "", viewTransition: null })),
-  setMedia: media => set(state => ({ media, mode: state[viewKey(media)][state.source], generatedFilter: media === "audios" || media === "texts" ? null : state.generatedFilter, viewTransition: null })),
-  setCatalogView: view => set(state => {
-    if (state.mode === view || !catalogViews(state.media).includes(view)) return state;
-    const key = viewKey(state.media);
-    return { open: true, mode: view, [key]: { ...state[key], [state.source]: view },
-      viewTransition: { source: state.source, kind: view, startedAt: Date.now() } };
+  setView: view => set(state => {
+    const mode = view === "global" || view === "project" ? "all" : view;
+    if (state.view === view) return { open: true, mode };
+    const source = view === "tags" ? state.tagSource : view === "project" ? "project" : "global";
+    return { open: true, view, source, mode, query: "", projectPickerOpen: false, tagMenuOpen: view === "tags",
+      tagSource: view === "global" || view === "project" ? source : state.tagSource };
   }),
+  setTagSource: source => set(state => ({ tagSource: source, projectPickerOpen: false, ...(state.view === "tags" ? { source, query: "" } : {}) })),
+  openSource: source => get().setView(source),
+  setMedia: media => set(state => ({ media, generatedFilter: media === "audios" || media === "texts" ? null : state.generatedFilter })),
+  setCatalogView: view => get().setView(view === "all" ? get().source : view),
   toggleCatalog: () => {
     const state = get();
-    const views = catalogViews(state.media);
-    const current = state[viewKey(state.media)][state.source];
-    state.setCatalogView(views[(views.indexOf(current) + 1) % views.length]);
+    const views: LibraryView[] = ["global", "project", "collections", "tags"];
+    state.setView(views[(views.indexOf(state.view) + 1) % views.length]);
   },
-  closeBrowser: () => set(state => ({ mode: state[viewKey(state.media)][state.source], query: "" })),
+  closeBrowser: () => set(state => ({ mode: state.view === "global" || state.view === "project" ? "all" : state.view, query: "" })),
   openGlobal: () => get().openSource("global"),
   openBrowser: () => { get().setCatalogView("collections"); set({ open: true }); },
   setNavigationHost: navigationHost => set({ navigationHost }),
-  setOpen: value => set(state => ({ open: typeof value === "function" ? value(state.open) : value, viewTransition: null })),
+  setOpen: value => set(state => ({ open: typeof value === "function" ? value(state.open) : value })),
   setQuery: query => set({ query }),
 }));
 

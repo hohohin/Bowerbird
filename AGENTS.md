@@ -100,6 +100,8 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ### 复用检查
 
+- 用户说“检查复用”时，先检查并直接补齐、修正复用地图；将需要业务开发的细项、范围和验证方式交用户确认，确认后再调用子代理实施修复。
+
 - 涉及新增功能或 UI 时，先查[复用地图](dev-doc/Bowerbird开发计划.md#复用地图)，再核实当前源码、导出入口和实际调用方式。
 - 地图未收录不代表仓库不存在；仍须按相关功能词和同义词跨板块检索，不限于 `shared`、`common` 或 `lib` 目录。
 - 实现前简要说明相关候选路径、复用决定，以及确需新建的原因。

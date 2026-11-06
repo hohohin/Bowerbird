@@ -46,7 +46,16 @@ async function assertHandleVisible(id, side, shown) {
     return button && getComputedStyle(button).opacity === (shown ? '1' : '0') && getComputedStyle(button).pointerEvents === 'auto';
   }, { id, side, shown });
 }
-async function clickOutput() { await card('script').hover(); await output().click(); }
+async function clickOutput() {
+  const box = await output().boundingBox();
+  await page.mouse.click(box.x + box.width / 2 + 42, box.y + box.height / 2);
+}
+async function holdOutput() {
+  const box = await output().boundingBox();
+  await page.mouse.move(box.x + box.width / 2 + 42, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.locator('.workflow-wires .is-draft').waitFor();
+}
 async function dragHandleToCard(sourceId, side, targetId) {
   await card(sourceId).hover();
   const from = await handle(sourceId, side).boundingBox(), to = await card(targetId).boundingBox();
@@ -54,6 +63,7 @@ async function dragHandleToCard(sourceId, side, targetId) {
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
   await page.mouse.move(to.x + to.width / 2, to.y + Math.min(100, to.height / 2), { steps: 16 });
+  assert.equal(await handle(sourceId, side).locator('.canvas-connection-glyph').evaluate(element => getComputedStyle(element).opacity), '0', 'dragging hides the initiating marker on native, material and workflow cards');
   const feedback = await page.locator('[data-connection-target]').getAttribute('aria-label', { timeout: 300 }).catch(() => null);
   await page.mouse.up();
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -118,15 +128,32 @@ try {
   await assertHandleVisible('generator', 'input', false);
 
   await clickOutput();
-  assert.equal(await page.getByRole('menu', { name: '添加下游', exact: true }).count(), 0, 'a short click starts a wire without requiring a hold');
+  await page.getByRole('menu', { name: '添加下游', exact: true }).waitFor();
+  await page.waitForTimeout(220);
+  assert.equal(await page.locator('.workflow-wires .is-draft').count(), 0, 'clicking the outer hot zone opens the creation menu without a draft or a delayed hold');
+  await page.keyboard.press('Escape');
+  await holdOutput();
+  await page.mouse.up();
+  await page.getByRole('menu', { name: '添加下游', exact: true }).waitFor();
+  assert.equal(await page.locator('.workflow-wires .is-draft').count(), 0, 'releasing a stationary hold in its hot zone opens the menu without a self-connection error');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-canvas-node-id="script"] .canvas-connection-glyph')).opacity === '1');
+  await page.keyboard.press('Escape');
+  await holdOutput();
+  assert.equal(await output().locator('.canvas-connection-glyph').evaluate(element => getComputedStyle(element).opacity), '0', 'holding hides the source marker');
+  const anchor = await page.locator('.workflow-wires .is-draft').evaluate(element => {
+    const point = element.getPointAtLength(0).matrixTransform(element.getScreenCTM());
+    const card = document.querySelector('[data-canvas-node-id="script"]').getBoundingClientRect();
+    return { x: point.x, y: point.y, right: card.right, middle: card.top + card.height / 2 };
+  });
+  assert.ok(Math.abs(anchor.x - anchor.right) < 1 && Math.abs(anchor.y - anchor.middle) < 1, `draft begins at the card right midpoint, not the off-center press or magnetic glyph: ${JSON.stringify(anchor)}`);
   const initialDraft = await page.locator('.workflow-wires .is-draft').getAttribute('d');
   await page.mouse.move(1200, 80);
   await assertHandleVisible('script', 'output', true);
   await assertHandleVisible('generator', 'input', false);
   const describeBox = await target('describe').boundingBox();
   await page.mouse.move(describeBox.x + describeBox.width / 2, describeBox.y + 100, { steps: 12 });
-  assert.notEqual(await page.locator('.workflow-wires .is-draft').getAttribute('d'), initialDraft, 'released pointer continues moving the wire');
-  await page.mouse.click(describeBox.x + describeBox.width / 2, describeBox.y + 100);
+  assert.notEqual(await page.locator('.workflow-wires .is-draft').getAttribute('d'), initialDraft, 'held pointer moves the wire');
+  await page.mouse.up();
   await waitInputs('describe', 1);
   let doc = await state();
   const describe = doc.nodes.find(node => node.id === 'describe');
@@ -177,16 +204,29 @@ try {
 
   await page.locator('[data-canvas-node-id="script"]').hover();
   const beforeMenu = await state();
-  await clickOutput();
-  await target('generator').getByRole('button', { name: '运行此卡片', exact: true }).click();
+  await holdOutput();
+  await target('generator').getByRole('button', { name: '运行此卡片', exact: true }).hover();
+  await page.mouse.up();
   await page.locator('.workflow-wires .is-draft').waitFor({ state: 'detached' });
   assert.deepEqual(await state(), beforeMenu, 'finishing on a card button only connects; it does not run the card');
-  await clickOutput();
+  await holdOutput();
   await page.mouse.move(1100, 180, { steps: 10 });
   await page.mouse.click(1100, 180, { button: 'right' });
+  await page.mouse.up();
   await page.locator('.workflow-wires .is-draft').waitFor({ state: 'detached' });
   assert.equal(await page.getByRole('menu').count(), 0, 'right-click cancels without opening a canvas menu');
   assert.deepEqual(await state(), beforeMenu, 'right-click does not change any saved connection');
+  await clickOutput();
+  await page.getByRole('menu', { name: '添加下游', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  const pending = await output().boundingBox();
+  await page.mouse.move(pending.x + pending.width / 2, pending.y + pending.height / 2);
+  await page.mouse.down();
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(220);
+  await page.mouse.up();
+  assert.equal(await page.locator('.workflow-wires .is-draft').count(), 0, 'cancelled pending hold cannot revive a draft');
+  assert.equal(await page.getByRole('menu').count(), 0, 'cancelled pending hold cannot open a menu on release');
   await card('script').hover();
   const held = await output().boundingBox();
   await page.mouse.move(held.x + held.width / 2, held.y + held.height / 2);
@@ -263,8 +303,6 @@ try {
   const beforeUpstream = await state();
   await card('reverse').hover();
   await handle('reverse', 'input').click();
-  await page.mouse.move(1450, 160, { steps: 10 });
-  await page.mouse.click(1450, 160);
   const upstreamMenu = page.getByRole('menu', { name: '添加上游', exact: true });
   await upstreamMenu.waitFor();
   await assertMenuLayout(upstreamMenu);
@@ -443,5 +481,5 @@ try {
   assert.deepEqual(await state(), beforeScopeCancel, 'Escape closes scoped menu and restores the plane without editing');
   assert.deepEqual(errors, []);
   assert.equal(await page.evaluate(() => window.calls.filter(call => /^(codex_create|agent_start|dreamina_generate|cloud_generation)/.test(call.command)).length), 0);
-  console.log('PASS unified card connections: whole-card/reverse drops, type projection, automatic compile, one edge, duplicate, grouped disconnect, undo/reload, click/blank/upstream menus, atomic create+connect, text-only, true video, self/cycle/run locks, scoped output/row/column/cell menus, wheel, plane lifecycle and cancel');
+  console.log('PASS unified card connections: click menus, held/dragged wires, hidden source glyph, centered anchor, pending cancel, whole-card/reverse drops, type projection, automatic compile, one edge, duplicate, grouped disconnect, undo/reload, blank/upstream menus, atomic create+connect, true video, self/cycle/run locks, scoped menus, wheel and plane lifecycle');
 } finally { await browser.close(); await server.close(); }

@@ -15,8 +15,6 @@ export function LibraryFloatingControls({ children, controlsRef }: { children: R
     if (!navigation) return;
     let wasCompact = false;
     const fit = () => {
-      const gallery = heading.closest<HTMLElement>(".catalog-gallery");
-      gallery?.style.setProperty("--catalog-title-max-width", `${Math.max(44, navigation.getBoundingClientRect().left - gallery.getBoundingClientRect().left - 16)}px`);
       const width = row.scrollWidth;
       const next = host.getBoundingClientRect().left + width > heading.getBoundingClientRect().right;
       if (!wasCompact && next && row.contains(document.activeElement)) setOpen(true);

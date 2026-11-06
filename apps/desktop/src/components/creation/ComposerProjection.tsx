@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from "react";
 
+const feather = 4;
 const depths = [-.42, .35, 1];
 const matrices = [{ columns: 5, rows: 3, size: 2.1 }, { columns: 5, rows: 3, size: 1.8 }, { columns: 3, rows: 3, size: 3.2 }];
 
@@ -70,9 +71,12 @@ export function ComposerProjection({ collapsed }: { collapsed: boolean }) {
       const curveY = (x: number) => { const position = (x - arcLeft) / span; return y - 4 * bow * position * (1 - position); };
       const edgeLeft = curveY(-50), edgeRight = curveY(width + 50);
       const cap = `M-50 ${edgeLeft} Q${width / 2} ${2 * curveY(width / 2) - (edgeLeft + edgeRight) / 2} ${width + 50} ${edgeRight} L${width + 50} ${height + 50} L-50 ${height + 50}Z`;
-      const cx = (arcLeft + arcRight) / 2, cy = (y - bow + height) / 2 + 20;
-      const rx = span / 2 + 110, ry = height - (y - bow) + 36;
-      const mask = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><defs><filter id="f" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="12.5"/></filter><mask id="top"><path d="${cap}" fill="white" filter="url(#f)"/></mask><radialGradient id="field" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="translate(${cx} ${cy}) scale(${rx} ${ry})"><stop stop-color="white"/><stop offset=".56" stop-color="white"/><stop offset=".78" stop-color="white" stop-opacity=".6"/><stop offset="1" stop-color="white" stop-opacity="0"/></radialGradient></defs><rect width="100%" height="100%" fill="url(#field)" mask="url(#top)"/></svg>`;
+      const cx = (arcLeft + arcRight) / 2;
+      const tags = [...dock!.querySelectorAll('.library-composer-target, .composer-mode-picker > button')];
+      const fadeLeft = Math.min(...tags.map(tag => tag.getBoundingClientRect().left), project.left) - left;
+      const fadeRight = (dock!.querySelector('.composer-send')?.getBoundingClientRect().right ?? box.right) - left;
+      const fadeWidth = fadeRight - fadeLeft + 220;
+      const mask = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><defs><filter id="f" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="${feather / 4}"/></filter><mask id="top"><path d="${cap}" fill="white" filter="url(#f)"/></mask><linearGradient id="field" gradientUnits="userSpaceOnUse" x1="${fadeLeft - 110}" x2="${fadeRight + 110}"><stop stop-color="white" stop-opacity="0"/><stop offset="${110 / fadeWidth}" stop-color="white"/><stop offset="${1 - 110 / fadeWidth}" stop-color="white"/><stop offset="1" stop-color="white" stop-opacity="0"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#field)" mask="url(#top)"/></svg>`;
       surface.style.maskImage = canvas.style.maskImage = `url("data:image/svg+xml,${encodeURIComponent(mask)}")`;
       hint.style.top = `${y - bow + 9}px`;
       hint.style.left = `${cx}px`;

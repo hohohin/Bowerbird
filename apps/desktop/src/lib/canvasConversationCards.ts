@@ -10,6 +10,7 @@ export interface CanvasConversationCard {
   latest: CanvasNode;
   sessions: CanvasNode[];
   outputs: CanvasNode[];
+  allOutputs: CanvasNode[];
 }
 
 /** Presentation only: keep exact turn identities and execution history intact. */
@@ -38,9 +39,9 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
     if (node.kind !== "prompt" || node.hiddenAt != null || excluded.has(node.id)) continue;
     const turn = payload(node);
     if (!turn.job_id) continue;
-    const conversation = jobs[turn.job_id]?.conversationId ?? turn.job_id;
+    const conversation = turn.conversation_id || jobs[turn.job_id]?.conversationId || turn.job_id;
     const key = JSON.stringify([node.projectId, conversation]);
-    const card = groups.get(key) ?? { anchor: node, latest: node, sessions: [], outputs: [] };
+    const card = groups.get(key) ?? { anchor: node, latest: node, sessions: [], outputs: [], allOutputs: [] };
     card.sessions.push(node);
     card.latest = node;
     groups.set(key, card);
@@ -49,12 +50,27 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
   for (const card of groups.values()) {
     const turns = new Set(card.sessions.map(node => { const turn = payload(node); return JSON.stringify([turn.job_id, turn.turn_key]); }));
     for (const node of ordered) {
-      if (node.kind !== "asset" || node.role !== "output" || !node.assetId || node.hiddenAt != null || contained.has(node.id) || node.projectId !== card.anchor.projectId) continue;
+      if (node.kind !== "asset" || node.role !== "output" || !node.assetId || node.hiddenAt != null || node.projectId !== card.anchor.projectId) continue;
       const execution = payload(node).execution;
       if (!execution || !turns.has(JSON.stringify([execution.job_id, execution.turn_key]))) continue;
+      card.allOutputs.push(node);
+      if (contained.has(node.id)) continue;
       card.outputs.push(node);
       aliases.set(node.id, card.anchor.id);
     }
+    // Output UUID/node IDs are not chronological when native timestamps tie.
+    // Turn order comes first; ULID asset IDs break ties within one turn.
+    const ranks = new Map(card.sessions.map((node, index) => {
+      const turn = payload(node);
+      return [JSON.stringify([turn.job_id, turn.turn_key]), index];
+    }));
+    const compare = (a: CanvasNode, b: CanvasNode) => {
+      const left = payload(a).execution, right = payload(b).execution;
+      return ranks.get(JSON.stringify([left.job_id, left.turn_key]))! - ranks.get(JSON.stringify([right.job_id, right.turn_key]))!
+        || a.createdAt - b.createdAt || a.assetId!.localeCompare(b.assetId!);
+    };
+    card.outputs.sort(compare);
+    card.allOutputs.sort(compare);
   }
   const embeddedSessions = new Map(nodes.filter(node => node.kind === "note" && node.hiddenAt == null)
     .flatMap(node => readCanvasNote(node).cells.flatMap(row => row.flatMap(cell => cell.content_type === "image" && cell.generation_ref
@@ -62,7 +78,7 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
   const embedded = new Map<string, { nodeId: string; cellId: string }>();
   for (const card of groups.values()) {
     const target = card.sessions.map(session => embeddedSessions.get(session.id)).find(Boolean);
-    if (target) for (const node of [...card.sessions, ...card.outputs]) embedded.set(node.id, target);
+    if (target) for (const node of [...card.sessions, ...card.allOutputs]) embedded.set(node.id, target);
   }
   const routedIds = new Set([...groups.values()].filter(card => card.sessions.some(session => routed.has(session.id)))
     .flatMap(card => [...card.sessions, ...card.outputs].map(node => node.id)));

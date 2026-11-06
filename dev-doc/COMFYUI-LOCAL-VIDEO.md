@@ -1,5 +1,16 @@
 # 本机 ComfyUI H3 视频卡片
 
+## 2026-11-06：独立提示词优化（源码待发布）
+
+H3 卡片的「优化提示词」是独立付费操作，旁边使用现有 `ProviderQuota` 标出 Bowerbird 积分。普通「运行此卡片」仍只提交本机 H3；不隐式调用 Cloud、不自动串联优化和视频生成。优化完成后展开「查看优化结果」，对照原文，按「用作卡片指令」填回后可继续编辑，再由用户手动生成。没有使用建议时，生成沿用原文；建议仍保留在运行历史中。
+
+- [ComfyVideoCard.tsx](../apps/desktop/src/components/ComfyVideoCard.tsx) 复用既有卡片、三模式参数和额度标记；优化只处理卡片文本框中的文字，不执行上游／下游，不改已有视频输出。上游文本仍在普通生成时按原协议合并。
+- [h3-video-prompt/SKILL.md](../apps/desktop/src/skills/h3-video-prompt/SKILL.md) 是随桌面打包的完整内置 Skill，由 [h3PromptOptimization.ts](../apps/desktop/src/lib/h3PromptOptimization.ts) 附上模式、时长、比例、图片连接数量。保留中英文原语言和用户原意，区分主体动作／视线／镜头、起始／变化／结束，把抽象效果变成可见描述，不默认新增运镜、对白或装饰。单图保持自由参考，首尾帧尊重端点，文生视频不依赖不存在的图片。
+- 复用 `cloudAgentStart` 的 `textRewrite` 通路、`bowerbird-unified-agent` 和 `agentRuntime: dsh`；Skill 正文作为意图，原文作为待改写 source，`references: []`。没有像素观察，不上传图片、素材路径、资产 ID 或本机服务地址。不新增 Agent Runner，不需要为此改动 Cloud／Worker 协议；仍要求服务端已部署文本改写能力，并沿用测试账号 allowlist、并发与既有 Agent 账本，不宣称免费或新增定价。
+- `CanvasWorkflowController.optimizeComfyPrompt` 冻结本次文字和参数，借助原运行记录／锁／停止／恢复执行纯优化任务。`WorkflowStep.comfyOptimization` 保存原文、Skill 指令、提交标记和结果，`agentRunId` 保存 Cloud 身份。查询失败停在 waiting；继续只查询原任务。提交响应丢失时拒绝自动重发；停止中迟到的 Cloud 身份会被取消。跨账号不交付结果。优化完成只标记该步骤完成，不触发输出或生成。
+
+验证入口：[h3-prompt-optimization-ui.test.mjs](../apps/desktop/scripts/h3-prompt-optimization-ui.test.mjs)。覆盖普通生成零 Cloud 调用、独立优化零 H3 调用、保留原文／已有视频／下游、手动选用编辑后生成、三模式元数据、权限、停止迟到响应、账号切换、无效结果、提交未知与重载恢复。深浅色截图来自隔离正式组件；使用模拟 IPC／Cloud，不代表真实付费 DSH 效果或 GPU 质量验收。原三模式和中断卡片删除回归通过。详细检查与发布边界见 [行动日志](../project_logs/2026-11-06-h3-prompt-optimization.md)。
+
 2026-11-05：中断后处于等待状态的 H3 卡片可直接点击右上角删除。删除先持久化停止本地工作流等待，再走原卡片移除；不查询／找回视频，不依赖 ComfyUI 取消响应，也不把放弃等待记录成生成已取消。正在提交／执行或正在停止的卡片仍保留锁。隔离正式界面已验证离线、中断快照重载、删除后刷新不复活及原三模式回归；未修改用户真实卡片或安装包。
 
 ## 2026-11-04：首尾帧、单图、文生视频（源码待发布）

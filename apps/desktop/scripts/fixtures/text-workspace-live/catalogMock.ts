@@ -1,4 +1,5 @@
 export function workspaceCatalogResponse(command: string, args: any, assets: any[]) {
+  if (command === 'list_generation_groups') return {};
   const filtered = (filter = args.filter ?? {}) => assets.filter(asset => {
     const kind = /^(mp4|mov)$/.test(asset.ext) ? 'videos' : /^(wav|mp3)$/.test(asset.ext) ? 'audios' : 'images';
     return (!filter.media || filter.media === kind) && (!filter.query || asset.name.includes(filter.query)) && (!filter.projectId || !asset.id.startsWith('page-'));

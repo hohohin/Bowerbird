@@ -1,4 +1,9 @@
 .comfy-video-card { display: grid; gap: 10px; }
+.comfy-optimize-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.comfy-optimization-result { font-size: 12px; color: var(--bb-muted); }
+.comfy-optimization-result summary { cursor: pointer; }
+.comfy-optimization-result label { display: block; margin-top: 8px; }
+.workflow-card .comfy-optimization-result textarea { display: block; width: 100%; min-height: 100px; max-height: 220px; box-sizing: border-box; margin: 8px 0; resize: vertical; color: var(--bb-ink); }
 .workflow-card .comfy-video-prompt { display: block; width: calc(100% - 51.4px); margin: 0 25.7px; min-height: 220px; max-height: 360px; box-sizing: border-box; }
 .workflow-card.is-comfy-video .workflow-port span { max-width: 48px; padding: 0 4px; font-size: 10px; }
 .comfy-frame-slots { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }

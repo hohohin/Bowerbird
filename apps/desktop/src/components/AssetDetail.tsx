@@ -33,6 +33,7 @@ import {
 import { useStore } from "../store";
 import { canUseByo } from "../lib/entitlement";
 import { api } from "../lib/api";
+import { parseColors } from "../lib/assetColors";
 import { COLLECTIONS_FEATURE_ENABLED, SMART_REFINE_ENABLED } from "../lib/featureFlags";
 import { sourceDiscoveryFor } from "../lib/sourceDiscovery";
 import { canSearchPinterest, requestPinterestSearch } from "../lib/pinterestSearch";
@@ -57,16 +58,6 @@ const TextDocumentEditor = lazy(() => import("./TextDocumentEditor").then(module
 
 function isVideo(ext?: string | null) {
   return !!ext && VIDEO_EXTS.includes(ext.toLowerCase());
-}
-
-function parseColors(c: string | null | undefined): string[] {
-  if (!c) return [];
-  try {
-    const v = JSON.parse(c);
-    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
 }
 
 interface CaptionSection {

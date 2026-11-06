@@ -10,7 +10,12 @@ use crate::{
 };
 use rusqlite::{params_from_iter, types::Value};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+
+// Use the durable conversation mapping, with legacy single-session fallback.
+// Prefixes prevent a non-generated asset ID from colliding with a session ID.
+const GENERATION_GROUP: &str = "CASE WHEN a.generation_session_id IS NULL THEN 'asset:'||a.id ELSE 'generation:'||COALESCE((SELECT g.conversation_id FROM generation_conversations g WHERE g.session_id=a.generation_session_id),a.generation_session_id) END";
+const GALLERY_COUNT: &str = "COUNT(CASE WHEN a.generation_session_id IS NULL THEN 1 END)+COUNT(DISTINCT CASE WHEN a.generation_session_id IS NOT NULL THEN COALESCE((SELECT g.conversation_id FROM generation_conversations g WHERE g.session_id=a.generation_session_id),a.generation_session_id) END)";
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -55,6 +60,15 @@ pub struct CatalogColorBatch {
 }
 
 impl CatalogFilter {
+    fn gallery_sql(&self, columns: &str) -> AppResult<(String, Vec<Value>)> {
+        let (condition, values) = self.sql()?;
+        let mut bindings = values.clone();
+        bindings.extend(values);
+        // Keep the main scan on the existing date index. Ordinary library items
+        // do not participate in window sorting or materialize full asset rows.
+        Ok((format!("WITH generated AS (SELECT a.id,ROW_NUMBER() OVER (PARTITION BY {GENERATION_GROUP} ORDER BY a.created_at DESC,a.id DESC) AS generation_rank FROM assets a INDEXED BY idx_assets_generation_session_id WHERE {condition} AND a.generation_session_id IS NOT NULL) SELECT {columns} FROM assets a INDEXED BY idx_assets_catalog_order WHERE {condition} AND (a.generation_session_id IS NULL OR a.id IN (SELECT id FROM generated WHERE generation_rank=1)) ORDER BY a.created_at DESC,a.id LIMIT ? OFFSET ?"), bindings))
+    }
+
     fn sql(&self) -> AppResult<(String, Vec<Value>)> {
         let mut clauses = vec![
             catalog_visibility(self.project_id.is_some()),
@@ -247,18 +261,18 @@ impl Database {
         let (condition, values) = filter.sql()?;
         let conn = self.conn.lock().unwrap();
         let total = conn.query_row(
-            &format!("SELECT COUNT(*) FROM assets a WHERE {condition}"),
+            &format!("SELECT {GALLERY_COUNT} FROM assets a WHERE {condition}"),
             params_from_iter(&values),
             |r| r.get(0),
         )?;
         let untagged = if filter.media == "images" {
-            conn.query_row(&format!("SELECT COUNT(*) FROM assets a WHERE {condition} AND NOT EXISTS(SELECT 1 FROM asset_tags t WHERE t.asset_id=a.id)"), params_from_iter(&values), |r| r.get(0))?
+            conn.query_row(&format!("SELECT {GALLERY_COUNT} FROM assets a WHERE {condition} AND NOT EXISTS(SELECT 1 FROM asset_tags t WHERE t.asset_id=a.id)"), params_from_iter(&values), |r| r.get(0))?
         } else {
             0
         };
         // Aggregate once, rather than scanning all memberships once per tag.
         let mut counts = BTreeMap::new();
-        let mut stmt = conn.prepare(&format!("SELECT t.tag_id,COUNT(*) FROM assets a JOIN asset_tags t ON t.asset_id=a.id WHERE {condition} GROUP BY t.tag_id"))?;
+        let mut stmt = conn.prepare(&format!("SELECT t.tag_id,{GALLERY_COUNT} FROM assets a JOIN asset_tags t ON t.asset_id=a.id WHERE {condition} GROUP BY t.tag_id"))?;
         for row in stmt.query_map(params_from_iter(&values), |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
         })? {
@@ -306,11 +320,11 @@ impl Database {
         offset: i64,
         limit: i64,
     ) -> AppResult<Vec<Asset>> {
-        let (condition, mut values) = filter.sql()?;
+        let (sql, mut values) = filter.gallery_sql("a.*")?;
         values.push(Value::Integer(limit.clamp(1, 240)));
         values.push(Value::Integer(offset.max(0)));
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(&format!("SELECT a.* FROM assets a WHERE {condition} ORDER BY a.created_at DESC,a.id LIMIT ? OFFSET ?"))?;
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt
             .query_map(params_from_iter(values), asset_from_row)?
             .collect::<Result<Vec<_>, _>>()?;
@@ -324,15 +338,39 @@ impl Database {
         offset: i64,
         limit: i64,
     ) -> AppResult<Vec<String>> {
-        let (condition, mut values) = filter.sql()?;
+        let (sql, mut values) = filter.gallery_sql("a.id")?;
         values.push(Value::Integer(limit.clamp(1, 2000)));
         values.push(Value::Integer(offset.max(0)));
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(&format!("SELECT a.id FROM assets a WHERE {condition} ORDER BY a.created_at DESC,a.id LIMIT ? OFFSET ?"))?;
+        let mut stmt = conn.prepare(&sql)?;
         let rows = stmt
             .query_map(params_from_iter(values), |r| r.get(0))?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
+    }
+
+    /// Carousel members obey the exact same scope as the page (including tags,
+    /// search, media and project visibility), not the unfiltered global group.
+    pub fn catalog_generation_groups(&self, filter: &CatalogFilter, asset_ids: &[String]) -> AppResult<HashMap<String, Vec<Asset>>> {
+        if asset_ids.is_empty() { return Ok(HashMap::new()); }
+        let (condition, mut values) = filter.sql()?;
+        let ids = &asset_ids[..asset_ids.len().min(240)];
+        values.extend(ids.iter().cloned().map(Value::Text));
+        let placeholders = vec!["?"; ids.len()].join(",");
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!("SELECT a.*,{GENERATION_GROUP} AS group_key FROM assets a WHERE {condition} AND a.generation_session_id IS NOT NULL AND {GENERATION_GROUP} IN (SELECT {GENERATION_GROUP} FROM assets a WHERE a.id IN ({placeholders})) ORDER BY a.created_at,a.id"))?;
+        let mut groups: HashMap<String, Vec<Asset>> = HashMap::new();
+        for row in stmt.query_map(params_from_iter(values), |row| Ok((row.get::<_, String>("group_key")?, asset_from_row(row)?)))? {
+            let (key, asset) = row?;
+            groups.entry(key).or_default().push(asset);
+        }
+        let mut result = HashMap::new();
+        for group in groups.into_values() {
+            for id in ids.iter().filter(|id| group.iter().any(|asset| &asset.id == *id)) {
+                result.insert(id.clone(), group.clone());
+            }
+        }
+        Ok(result)
     }
 }
 
@@ -589,6 +627,46 @@ mod tests {
                 60
             )
             .is_err());
+    }
+    #[test]
+    fn conversation_gallery_collapses_before_paging_and_filters_every_member() {
+        let db = fixture();
+        db.record_generation_conversation("generated", "conversation").unwrap();
+        db.record_generation_conversation("continuation", "conversation").unwrap();
+        {
+            let conn = db.conn.lock().unwrap();
+            for index in 0..75 {
+                conn.execute("INSERT INTO assets(id,name,ext,created_at,generation_session_id) VALUES(?1,?1,'png',10,'continuation')", [format!("g{index:03}")]).unwrap();
+            }
+            conn.execute_batch("INSERT INTO assets(id,name,ext,created_at,generation_session_id) VALUES('video','video','mp4',30,'continuation'),('other','other','png',9,'independent');
+                INSERT INTO asset_tags(asset_id,tag_id) VALUES('g000','a');
+                INSERT INTO project_assets(project_id,asset_id,created_at) VALUES('p','g000',1),('p','g001',1);
+                INSERT INTO asset_colors(asset_id,bucket) VALUES('g000','blue');").unwrap();
+        }
+        let f = CatalogFilter { generated: Some(true), ..filter() };
+        assert_eq!(db.catalog_overview(&f, None).unwrap().total, 2);
+        assert_eq!(db.catalog_ids(&f, 0, 1).unwrap(), vec!["g074"]);
+        assert_eq!(db.catalog_page(&f, 1, 1).unwrap()[0].id, "other");
+        let group = db.catalog_generation_groups(&f, &["g074".into()]).unwrap();
+        assert_eq!(group["g074"].len(), 76);
+        assert_eq!(group["g074"].first().unwrap().id, "b");
+        assert_eq!(group["g074"].last().unwrap().id, "g074");
+        for (scope, expected) in [
+            (CatalogFilter { project_id: Some("p".into()), ..f.clone() }, vec!["g000", "g001"]),
+            (CatalogFilter { kind: "tags".into(), id: Some("a".into()), ..f.clone() }, vec!["b", "g000"]),
+            (CatalogFilter { color: Some("blue".into()), ..f.clone() }, vec!["b", "g000"]),
+            (CatalogFilter { query: Some("g07".into()), ..f.clone() }, vec!["g070", "g071", "g072", "g073", "g074"]),
+            (CatalogFilter { media: "videos".into(), ..f.clone() }, vec!["video"]),
+        ] {
+            let head = db.catalog_ids(&scope, 0, 60).unwrap();
+            assert_eq!(head, vec![expected.last().unwrap().to_string()]);
+            assert_eq!(db.catalog_overview(&scope, None).unwrap().total, 1);
+            let groups = db.catalog_generation_groups(&scope, &head).unwrap();
+            assert_eq!(groups[&head[0]].iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), expected);
+        }
+        db.conn.lock().unwrap().execute("UPDATE assets SET library_hidden=1 WHERE id='g074'", []).unwrap();
+        assert_eq!(db.catalog_ids(&f, 0, 1).unwrap(), vec!["g073"]);
+        assert_eq!(db.catalog_generation_groups(&f, &["g073".into()]).unwrap()["g073"].len(), 75);
     }
     #[test]
     fn nested_collections_dedupe_and_empty_scope_does_not_read_whole_library() {

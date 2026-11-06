@@ -14,11 +14,11 @@ function projectUpdatedLabel(timestamp: number) {
   return date.toLocaleDateString("zh-CN", { year: "numeric", month: "numeric", day: "numeric" });
 }
 
-export function ProjectFolder({ group, onExpand, onOpen, detailed = false, serial }: { group: LibraryProjectGroup; onExpand?: () => void; onOpen?: () => void; detailed?: boolean; serial?: number }) {
+export function ProjectFolder({ group, onExpand, onOpen, detailed = false, serial, selection }: { group: LibraryProjectGroup; onExpand?: () => void; onOpen?: () => void; detailed?: boolean; serial?: number; selection?: { id: string | null; onSelect: (id: string) => void } }) {
   const projectDrop = useProjectAssetDrop();
   const projectRoutePending = useStore((s) => s.projectRoutePending);
   const activeProjectId = useStore((s) => s.activeProjectId);
-  const selected = detailed && activeProjectId === group.project.id;
+  const selected = detailed && (selection ? selection.id : activeProjectId) === group.project.id;
   const updatedAt = group.project.updated_at ?? group.project.created_at;
   const openProject = () => void useStore.getState().enterProject(group.project.id)
     .then(() => onOpen?.())
@@ -29,7 +29,7 @@ export function ProjectFolder({ group, onExpand, onOpen, detailed = false, seria
       useStore.getState().openProjectContextMenu(bounds.left, bounds.bottom, group.project.id);
     }}><MoreHorizontal size={15} aria-hidden="true" /></button>;
   const content = <>
-    {detailed && <div className="project-manager-card-head"><span>PRJ / {String(serial ?? 1).padStart(3, "0")}</span>{selected && <span className="project-manager-selected" aria-hidden="true">CURRENT / ✓</span>}</div>}
+    {detailed && <div className="project-manager-card-head"><span>PRJ / {String(serial ?? 1).padStart(3, "0")}</span>{selected && <span className="project-manager-selected" aria-hidden="true">{selection ? "已选择" : "CURRENT / ✓"}</span>}</div>}
     <div className="library-project-mosaic" data-count={Math.min(group.assets.length, detailed ? 3 : 6)} aria-hidden="true">
       {detailed && !group.assets.length ? <div className="project-manager-empty-cover"><ImagePlus size={40} strokeWidth={1}/><span>{group.project.asset_count ? "暂无素材预览" : "开始你的创作"}</span></div> : Array.from({ length: detailed ? Math.min(group.assets.length, 3) : 9 }, (_, index) => {
         const asset = group.assets[index];
@@ -39,22 +39,23 @@ export function ProjectFolder({ group, onExpand, onOpen, detailed = false, seria
     </div>
     <div className="project-folder-info">
       {detailed && <span className="project-manager-card-kind">{activeProjectId === group.project.id ? "当前项目" : "项目画板"}</span>}
-      <div className="library-project-folder-title">{!detailed && <PanelsTopLeft size={14} aria-hidden="true" />}<strong title={group.project.name}>{group.project.name}</strong>{detailed && menuButton}</div>
+      <div className="library-project-folder-title">{!detailed && <PanelsTopLeft size={14} aria-hidden="true" />}<strong title={group.project.name}>{group.project.name}</strong>{detailed && !selection && menuButton}</div>
       {detailed && <div className="project-manager-meta"><span>{group.project.asset_count ? `${group.project.asset_count} 个素材` : "暂无素材"}</span><span aria-hidden="true">·</span><time dateTime={new Date(updatedAt * 1000).toISOString()}>{projectUpdatedLabel(updatedAt)}</time></div>}
     </div>
   </>;
   return <div className={`library-project-folder${detailed ? " project-manager-card" : ""}`}
     data-active={detailed && selected ? true : undefined}
-    {...projectDrop(group.project)}
+    {...(!selection ? projectDrop(group.project) : {})}
     onContextMenu={(event) => {
+      if (selection) return;
       event.preventDefault();
       event.stopPropagation();
       useStore.getState().openProjectContextMenu(event.clientX, event.clientY, group.project.id);
     }}>
     <button type="button" className={detailed ? "project-manager-activate" : "library-project-enter"} disabled={projectRoutePending}
-      aria-label={`打开项目 ${group.project.name}`}
-      aria-current={detailed && activeProjectId === group.project.id ? true : undefined}
-      onClick={openProject}>
+      aria-label={`${selection ? "查看项目素材" : "打开项目"} ${group.project.name}`}
+      aria-current={selected ? true : undefined}
+      onClick={selection ? () => selection.onSelect(group.project.id) : openProject}>
       {!detailed && content}
     </button>
     {detailed && <><div className="library-project-enter">{content}</div><span className="project-manager-open" aria-hidden="true"><ArrowUpRight size={17}/></span></>}

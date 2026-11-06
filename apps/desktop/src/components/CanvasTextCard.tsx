@@ -273,7 +273,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
         }));
       })}
       {value.cells.map((line, row) => <div role={bubble ? undefined : "row"} className="canvas-text-row" key={row} style={{ flexGrow: rowWeights[row] }}>
-        {line.map((item, column) => { const images = item.content_type === "image"; return <div role={bubble ? undefined : "cell"} data-canvas-cell={bubble ? undefined : item.id} className={`canvas-text-cell ${images ? "is-image-cell" : ""} ${canvasCellValue(item).imageRefs.length ? "has-image-refs" : ""} ${removing && (removing.axis === "row" ? removing.index === row : removing.index === column) ? "is-removing" : ""}`} key={column} style={{ flexGrow: columnWeights[column] }} onPointerDown={() => setActive([row, column])}>
+        {line.map((item, column) => { const images = item.content_type === "image"; const generation = images && item.generation_ref ? renderGeneration?.(item) : null; return <div role={bubble ? undefined : "cell"} data-canvas-cell={bubble ? undefined : item.id} className={`canvas-text-cell ${images ? "is-image-cell" : ""} ${canvasCellValue(item).imageRefs.length ? "has-image-refs" : ""} ${removing && (removing.axis === "row" ? removing.index === row : removing.index === column) ? "is-removing" : ""}`} key={column} style={{ flexGrow: columnWeights[column] }} onPointerDown={() => setActive([row, column])}>
           {!bubble && onInput && <button className="workflow-cell-port is-input" data-workflow-text-input={item.id} aria-label={`输入第 ${row + 1} 行第 ${column + 1} 列`} aria-hidden="true" tabIndex={-1}
             disabled={inputLocked} title="输入文本或图片，替换此单元格；右键断开输入"
             onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
@@ -308,8 +308,8 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
               }
             }}
             onChange={event => updateCell(row, column, { text: event.target.value })} />}
-          {images && !item.image_refs?.length && (item.generation_ref && renderGeneration ? renderGeneration(item) : <div className="canvas-image-empty">连接图片输入</div>)}
-          {!!canvasCellValue(item).imageRefs.length && <div className={images ? "canvas-image-content" : "canvas-cell-images"}>{canvasCellValue(item).imageRefs.map(ref => {
+          {generation || (images && !item.image_refs?.length && <div className="canvas-image-empty">连接图片输入</div>)}
+          {!generation && !!canvasCellValue(item).imageRefs.length && <div className={images ? "canvas-image-content" : "canvas-cell-images"}>{canvasCellValue(item).imageRefs.map(ref => {
             const asset = referenceAssets.find(asset => asset.id === ref.asset_id);
             const video = isVideoPath(asset?.store_path);
             const path = asset && canvasAssetMediaPath({ storePath: asset.store_path ?? null, thumbPath: asset.thumb_path ?? null });

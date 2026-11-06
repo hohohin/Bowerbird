@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { ProjectDeleteScanProgress } from "./types";
 import { invokeGenerationWithDiagnostics } from "./generationDiagnostics";
 import type { LibraryView } from "./libraryView";
+import type { CatalogFilter } from "./materialCatalog";
 import type { WorkflowTemplate } from "./workflowTemplates";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
@@ -447,10 +448,11 @@ export const api = {
   // 生成图同流程合并：取某资产的整组过程图（详情轮播 / 批量取可见组）
   listGenerationGroup: (assetId: string, projectId?: string | null) =>
     invoke<Asset[]>("list_generation_group", { assetId, projectId: projectId ?? null }),
-  listGenerationGroups: (assetIds: string[], projectId?: string | null) =>
+  listGenerationGroups: (assetIds: string[], projectId?: string | null, filter?: CatalogFilter) =>
     invoke<Record<string, Asset[]>>("list_generation_groups", {
       assetIds,
       projectId: projectId ?? null,
+      filter: filter ?? null,
     }),
   // 「回看生成对话」：取某生成图所在会话的完整生成时间线（各轮 prompt + 产出图 store_path）。
   generationHistory: (assetId: string, projectId?: string | null) =>

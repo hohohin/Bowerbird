@@ -240,6 +240,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   return <section ref={root} className="categorized-library library-tactical connected-collections" aria-label="按集合浏览素材" data-creation-pick-disabled={multiple || busy} data-file-import-project-id={scope ?? ""} data-file-import-collection-id={active ?? undefined} data-file-import-collection-name={current?.name}
     style={{ ...glass.style, "--catalog-sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
     {glass.definition}<LibraryMotion/>
+    <div className="file-view-heading">{navigation}<div className="video-collection-controls"><LibraryFloatingControls><LibraryMediaSwitch/><button className="library-filter-trigger" aria-label="刷新集合" onClick={refresh}><RefreshCw size={14} className={folders.some(folder => folder.scanning) ? "connected-refreshing" : undefined}/></button>{toolbarActions}</LibraryFloatingControls></div></div>
     <div className="catalog-body">
       <aside className="catalog-sidebar" aria-label="集合目录">
         <div className="catalog-sidebar-heading"><strong>集合</strong><button aria-label="新建集合" title="新建集合" onClick={() => setEditor({ parentId: null })}><Plus size={12}/></button></div>
@@ -266,7 +267,6 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
       </aside>
       <div ref={pinch} className="catalog-gallery">
         <LibraryTacticalBackdrop/>
-        <div className="file-view-heading">{navigation}<div className="video-collection-controls"><LibraryFloatingControls><LibraryMediaSwitch/><button className="library-filter-trigger" aria-label="刷新集合" onClick={refresh}><RefreshCw size={14} className={folders.some(folder => folder.scanning) ? "connected-refreshing" : undefined}/></button>{toolbarActions}</LibraryFloatingControls></div></div>
         {error && <p className="catalog-error" role="alert">{error}<button onClick={() => setRevision(value => value + 1)}>重试</button></p>}
         {current && (!current.available || current.error) && <div className="connected-status"><Unlink size={14}/><span>{current.error ? userErrorMessage(current.error, "文件夹暂时无法读取，请重试。") : "文件夹暂不可用"}</span>{!current.available ? <button onClick={() => void run(() => relocate(current), true)}>重新定位</button> : <button onClick={refresh}>刷新</button>}</div>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none", scrollPaddingTop: 48 }}>
