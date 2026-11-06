@@ -12,18 +12,18 @@
 
 ## 目前进展
 
-2026-11-06 Cloud 通信整改：官网六类受控 Function、Agent 全部签名文件与 OCR 原单查询统一网关；Agent 创建丢响应后只查询原幂等键，不重建任务。网关 `20261106-cloud-routing` 与 `agent-run` v54 已部署并回读验证，Windows 26.11.602 源码已就绪，冻结构建及发布验证进行中；故障机更新／真实优化待实机验收。见 [通信契约与证据](dev-doc/CLOUD-TRANSPORT.md)。
+2026-11-06 Windows **26.11.602** 已发布；Cloud 全通路网关与 Agent 原单恢复接口已部署，源码冻结 **4b3c4b92**。原请求不重提，故障电脑升级／真实优化待实机验收。见 [通信整改](dev-doc/CLOUD-TRANSPORT.md)、[发布证据](dev-doc/DESKTOP-UPDATES.md)。
 
-2026-11-06 Windows 26.11.601 已发布，冻结源码为 4ae78ee6；桌面专项是否发布以该提交为界。Cloud 音频参考与 DeepSeek Cloud 未部署／启用；DSH 桌面接入随包交付，Cloud 仍受既有开关与 allowlist 限制，支付保持 Mock。
+2026-11-06 Windows 26.11.601 功能基线继续保留，602 仅追加通信修复；桌面专项是否发布以 4b3c4b92 为界。Cloud 音频参考与 DeepSeek Cloud 未部署／启用；DSH 桌面接入随包交付，Cloud 仍受既有开关与 allowlist 限制，支付保持 Mock。
 
 ### 源码、发布与部署
 
 | 范围 | 已记录状态 | 证据与边界 |
 |---|---|---|
 | 开发源码 | SQLite **0053**（DSH 对话 provider，随 Windows 26.11.601 发布）；连接式素材库、真实目录集合、`.bowerbird` 分身、第 6 步后台索引及共用原文件回收已接入。10 月 28 日发版后的标注镜像、视频封面修复、内容中继，及 29–30 日工业主题、H3／分区建卡、画布性能与恢复增量均已随 Windows 26.11.202 发布 | [文件夹连接](dev-doc/FOLDER-MODE.md#文件夹连接与连续集合视图2026-10-31源码未发布)、[项目画板](dev-doc/PROJECT-CANVAS-PLAN.md)。第 7 步跨设备随图资料恢复尚未接入 |
-| Windows 公开包 | **26.11.601／SQLite 0053**；2026-11-06 14:05:58 完成公网复核，源码 4ae78ee6 存档推送后冻结构建，含素材库四视图／文本自动保存／DSH／快传发送／组图与 H3 提示词优化 | [桌面自动更新](dev-doc/DESKTOP-UPDATES.md)。1996 冻结输入／原签名／资源／CDN 全量下载通过；真实用户库升级与跨端体验仍待验 |
+| Windows 公开包 | **26.11.602／SQLite 0053**；2026-11-06 19:25:05 完成公网复核，源码 4b3c4b92 冻结构建；601 功能加 Cloud 通信修复 | [桌面自动更新](dev-doc/DESKTOP-UPDATES.md)、[通信契约](dev-doc/CLOUD-TRANSPORT.md)。原签名、资源与 CDN 验证通过；故障电脑实机升级／真实优化待验 |
 | macOS 公开包 | Apple Silicon **26.10.801**、Intel **26.10.1501**；ARM 1502 未切更新通道 | [桌面自动更新](dev-doc/DESKTOP-UPDATES.md)、[Mac 构建与交付](macOS/README.md)。不能将 Windows 验收计作 Mac 验收 |
-| Cloud 与官网 | 10 月 23 日 Bcoin 0070–0074 已上线；24 日分类翻译 0075／jev-proxy v10 已上线；0069／0076 管理后台与昵称搜索已记录上线；28 日生成／签名文件官网网关已上线。0057 预留、0068 未应用 | [部署记录](apps/cloud/DEPLOY.md)、[收费化进度](dev-doc/ARCH-ADJUST-PROGRESS.md)。官网使用 VPS 版本目录、Nginx 与 systemd，操作及回滚以专项为准 |
+| Cloud 与官网 | 10 月 23 日 Bcoin 0070–0074 已上线；24 日分类翻译 0075／jev-proxy v10 已上线；0069／0076 管理后台与昵称搜索已记录上线；28 日生成／签名文件官网网关已上线；11 月 6 日六类控制／Agent 全文件网关及原单恢复已上线。0057 预留、0068 未应用 | [部署记录](apps/cloud/DEPLOY.md)、[收费化进度](dev-doc/ARCH-ADJUST-PROGRESS.md)。官网使用 VPS 版本目录、Nginx 与 systemd，操作及回滚以专项为准 |
 | 注册及 Pro 赠币 | 11 月 2 日 **0078／定时任务／后台及 Windows 26.11.201 已上线**。新注册 200、Pro 每订阅月 800、年付 12 次、30 天有效，老用户不补发 | 23 项真实隔离验收含 Cron 发放、并发重放、退款；6 个测试 Auth 已清理。独立复核旧账本／订阅／回执保持。[规则](dev-doc/Bowerbird定价方案v2-订阅积分制.md)、[部署证据](apps/cloud/DEPLOY.md#2026-11-02-注册及-pro-月度赠币已上线) |
 | Cloud 视频 | 10 月 28 日 18:09 已启用 Seedance 2.5 **480p／720p／1080p**；完成一次 5 秒 480p 文生视频的生成、交付、恢复和单次结算验收 | [视频部署证据](apps/cloud/DEPLOY.md#2026-10-28-seedance-25-三档启用与真实验收)。720p／1080p、参考模式及供应商账单待独立核验；与当日桌面发布时“未启用”的记录不冲突 |
 | Agent／HTML | 统一 `bowerbird-unified-agent + dsh` 与受限 renderer 已部署，已有真实 HTML 工具链和多图片结果验收，仍 **test-only** | [通用 Harness](dev-doc/UNIFIED-AGENT-HARNESS-PLAN.md)。自然任务质量与依赖风险尚未闭环 |
@@ -53,9 +53,9 @@
 
 仅保留最近 3 条；验证按各条日期记录，本轮结果见最新条目。完整原文见日期日志，既有历史里程碑仍见 [进展归档](dev-doc/进展归档.md)。
 
+- **2026-11-06｜Windows 26.11.602 与 Cloud 通信整改已发布。** 六类控制接口、Agent 全部签名文件与 OCR 原单查询统一网关；未登记路径拒绝，构建门禁防止新接口漏接。请求身份先落盘，Agent 创建响应丢失只查询原任务，不重建／重排。官网与 agent-run v54 已部署回读，源码 4b3c4b92 冻结推送；TypeScript／Vite、冻结源码 Rust 1149 passed／34 ignored、Cloud 路由构建门禁 2 项、官网 35 项与 Edge 恢复 3 项通过；2002 个冻结输入匹配 Git，76 个资源、x64／双语安装器／更新登录保留钩子、原公钥验签与篡改拒绝、包内原生媒体／等待及生产 bundle 检查通过。 2026-11-06 19:25:05（北京时间）公网及更新清单通过，官网只改 Windows 下载 5 个文件并保留新网关、Mac、原签名与 0053。未重提原任务或调用模型，故障机升级与真实优化质量待验。[通信契约](dev-doc/CLOUD-TRANSPORT.md)、[发布与回滚](dev-doc/DESKTOP-UPDATES.md)。
 - **2026-11-06｜Windows 26.11.601 已存档发布。** 素材库四级视图与投影控件、项目范围记忆、文本完整编辑／最近文档／本地自动保存、Codex 模型与推理选择、本机及应用托管 DSH 接入、快传原件发送、探索视频采集入口、同会话生成组图、连线与文本聚焦修复及 H3 独立提示词优化已交付。源码 4ae78ee6 推送后冻结构建；TypeScript／Vite、Rust 1145 passed／34 ignored、18 组桌面专项、154 项前端测试及 30 项官网回归通过；1996 个冻结输入与 Git 核对、76 个资源（含 LocalSend 许可证与修改说明）、x64／双语安装器／更新登录保留钩子、原公钥验签及篡改拒绝、包内原生媒体／等待和生产 bundle 检查通过。2026-11-06 14:05:58（北京时间）候选／现役／本机公网和 CDN 完整下载通过。SQLite 0053、中文／English 与更新保留登录保持；官网仅更新 Windows 下载五个文件，后台、网关和 Mac 保留。Cloud 音频参考与 DeepSeek Cloud 未部署／未启用；没有操作用户库或调用付费模型，原生升级、真手机及跨端仍待实机验收。[发布与回滚](dev-doc/DESKTOP-UPDATES.md)。
 - **2026-11-06｜对话接入本机 DSH 与 DSH · Cloud，源码待发布。** 新增两种固定会话 provider，共用历史、多行输入、原请求恢复和受控建卡／分区；本机复用已有 DSH 登录与模型配置，托管 DSH 经现有 Cloud 单次 completion，测试 0 Bcoin，平台密钥不下发。SQLite 0053 保留旧 provider 和历史；77 项原生对话回归、62 项前端行为、DSH 界面专项、实际 DSH 的模拟模型工具循环与冷恢复、TypeScript／Vite 和内嵌桥自检通过。没有部署 Cloud、调用真实模型、迁移用户库或更新安装包；当前完整旧 chat UI 仍受工作区既有投影遮挡影响。[实现与验证](dev-doc/CHAT-PROVIDERS.md)、[行动记录](project_logs/2026-11-06-dsh-chat.md)。
-- **2026-11-05｜Windows 26.11.502 已存档发布。** 本机 Codex 对话内 HyperFrames 视频制作、预览、渲染与成片播放，续聊复用成功工程，旧对话工具升级及停止／中断保护；素材库生成任务提示所属项目并支持点击跳转已交付。源码 3f545a13 推送后冻结构建；TypeScript／Vite、Rust 1115 passed／33 ignored、6 组桌面专项、94 项前端测试及 30 项官网回归通过；1723 个冻结输入与 Git 核对、76 个资源（含 LocalSend 许可证与修改说明）、x64／双语安装器／更新登录保留钩子、原公钥验签及篡改拒绝、包内原生媒体／等待和生产 bundle 检查通过。2026-11-05 20:17:32（北京时间）候选／现役／本机公网和 CDN 完整下载通过。SQLite 0052、中文／English 与更新保留登录保持；官网仅更新 Windows 下载五个文件，后台、网关和 Mac 保留。Cloud 音频参考与 DeepSeek Cloud 未部署／未启用；没有操作用户库或调用付费模型，原生升级、真手机及跨端仍待实机验收。[发布与回滚](dev-doc/DESKTOP-UPDATES.md)。
 
 ## 关键约定
 

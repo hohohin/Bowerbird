@@ -519,4 +519,4 @@ node --env-file=.env scripts/check-agent-runtime-health.mjs
 
 ## 2026-11-06 Cloud 全通路与 Agent 原单恢复
 
-官网版本 `20261106-cloud-routing` 已由候选、现役、公网各 14 项检查验证；前版 `20261106-h3-agent-gateway` 保留回滚，仅代理及新契约变化，86 个其他文件保持。`agent-run` v53→v54 以下载的现役源码为底，只增加 `get_by_key` 只读恢复，保留 `verify_jwt=false`、内部用户鉴权、原计费与 FeaturePolicy；部署后源码读回一致，其他函数版本不变。没有迁移、Worker 或密钥变更，没有创建真实付费任务。Windows 26.11.602 配套构建／发布验证进行中。完整契约、拒绝与恢复边界、验证及回滚见 [CLOUD-TRANSPORT](../../dev-doc/CLOUD-TRANSPORT.md)，原始证据 `.tmp/cloud-routing-20261106/`。
+官网版本 `20261106-cloud-routing` 已由候选、现役、公网各 14 项检查验证；前版 `20261106-h3-agent-gateway` 保留回滚，仅代理及新契约变化，86 个其他文件保持。`agent-run` v53→v54 以下载的现役源码为底，只增加 `get_by_key` 只读恢复，保留 `verify_jwt=false`、内部用户鉴权、原计费与 FeaturePolicy；部署后源码读回一致，其他函数版本不变。没有迁移、Worker 或密钥变更，没有创建真实付费任务。Windows 26.11.602 已签名发布，2026-11-06 19:25:05（北京时间）公网复核通过，现役官网 `20261106-windows-26.11.602` 保留全部新增网关；回滚目标 `20261106-cloud-routing`。完整契约、拒绝与恢复边界、验证及回滚见 [CLOUD-TRANSPORT](../../dev-doc/CLOUD-TRANSPORT.md)，原始证据 `.tmp/cloud-routing-20261106/`。

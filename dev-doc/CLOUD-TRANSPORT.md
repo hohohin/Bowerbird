@@ -22,7 +22,7 @@
 
 - `node apps/desktop/scripts/cloud-routing-contract.test.mjs` 扫描实际 Rust 调用，拒绝未登记 Function、业务代码直接读取 Supabase URL／REST 地址以及 Agent 绕开公共上传映射；已纳入桌面 `build`。
 - `website/scripts/cloud-proxy.test.mjs` 覆盖路由、授权、查询约束、签名和字节保持、大小限制、断开、超时、取消以及付费 POST 不重放；连同账号／更新入口 35 项通过。
-- Rust Cloud／Agent 首轮 80 项通过；后续新增签名路径与最终版本复验另记发布记录。Edge 恢复的 3 项内存隔离测试和 Deno check 通过，覆盖丢响应、原任务终态、账号隔离、哈希冲突及无写入。
+- Rust Cloud／Agent 首轮 80 项通过；最终冻结版完整原生回归 1149 项通过、34 项按原规则跳过。Edge 恢复的 3 项内存隔离测试和 Deno check 通过，覆盖丢响应、原任务终态、账号隔离、哈希冲突及无写入。
 - 2026-11-06：官网已部署 `20261106-cloud-routing`，原 `20261106-h3-agent-gateway` 可回滚；只改代理并添加契约，86 个其他文件保持。候选／现役／公网各 14 项拒绝路径检查通过，无真实任务／模型调用。
 - `agent-run` v53→v54，只新增只读恢复。候选基于下载的现役依赖，不携带工作区尚未部署的文本改写校验、billing 和 FeaturePolicy 差异；原 `verify_jwt=false` 与函数内部 `requireUser` 保持，其他函数版本保持，源码回读一致。备份／证据 `.tmp/cloud-routing-20261106/`。
-- Windows 26.11.602 待冻结构建／发布。必须先完成网关及 Edge，再发客户端；发布后回滚官网须保留新增路由，回滚不删除任务／账本。另一台故障电脑的真实更新及优化仍待实机验收。
+- Windows 26.11.602 已按源码 4b3c4b92 冻结签名发布，2026-11-06 19:25:05（北京时间）完成公网复核；网关与 Edge 先于客户端部署。TypeScript／Vite、冻结源码 Rust 1149 passed／34 ignored、Cloud 路由构建门禁 2 项、官网 35 项与 Edge 恢复 3 项通过；2002 个冻结输入匹配 Git，76 个资源、x64／双语安装器／更新登录保留钩子、原公钥验签与篡改拒绝、包内原生媒体／等待及生产 bundle 检查通过。 [发布与回滚](DESKTOP-UPDATES.md#windows-2611602-已发布2026-11-06)。官网回滚保留新增路由，不删除任务／账本；另一台故障电脑的真实更新及优化仍待实机验收。
