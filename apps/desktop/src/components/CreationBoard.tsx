@@ -400,8 +400,13 @@ export function CreationBoard({
   const dockRef = useRef<HTMLDivElement>(null);
   const [collapsed, setCollapsed] = useState(true);
   const isCollapsed = !creating && collapsed;
+  // A mode mounts already expanded; only a real collapsed-to-open entry animates.
+  const [canAnimateExpansion, setCanAnimateExpansion] = useState(isCollapsed);
   useLayoutEffect(() => {
-    if (isCollapsed && editorScrollRef.current) editorScrollRef.current.scrollTop = 0;
+    if (isCollapsed) {
+      setCanAnimateExpansion(true);
+      if (editorScrollRef.current) editorScrollRef.current.scrollTop = 0;
+    }
   }, [isCollapsed]);
   useEffect(() => {
     const editor = hostRef.current?.querySelector(".ProseMirror");
@@ -1051,11 +1056,11 @@ export function CreationBoard({
           }
         }}
         aria-label="创作板"
-        className={`creation-dock composer-glass pointer-events-auto relative ${creating ? "is-creating" : ""} ${embedded ? "is-canvas-composer" : ""} ${
+        className={`creation-dock composer-glass pointer-events-auto relative ${canAnimateExpansion ? "can-animate-expansion" : ""} ${creating ? "is-creating" : ""} ${embedded ? "is-canvas-composer" : ""} ${
           isCollapsed ? "is-collapsed" : ""
         }`}
       >
-        <ComposerProjection dockRef={dockRef} collapsed={isCollapsed} />
+        <ComposerProjection collapsed={isCollapsed} />
         <div className="composer-heading">
           {header}
           {header && isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}

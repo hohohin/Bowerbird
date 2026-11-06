@@ -195,7 +195,7 @@ html[data-theme] .composer-glass .composer-parameters .model-select .model-selec
 /* Unboxed projection: one shared shell for the library and project canvas. */
 html[data-theme] .creation-dock.composer-glass {
   --composer-paper:#141414;--composer-ink:#dcdcdc;--composer-muted:#949494;
-  --composer-accent:#4868ff;--composer-accent-text:#bac8ff;--composer-rail:128px;
+  --composer-accent:#4868ff;--composer-accent-text:#bac8ff;--composer-rail:128px;--composer-end-inset:8px;
   --projection-dot:#b0becb;--projection-line:#8faab8;--projection-tag:235 242 247;--projection-glow:143,170,184;
   container:composer / inline-size;isolation:isolate;border:0;border-radius:0;outline:none;background:transparent;box-shadow:none;
   backdrop-filter:none;-webkit-backdrop-filter:none;filter:none;transition:none;animation:none;color:var(--composer-ink);
@@ -265,7 +265,7 @@ html[data-theme] .composer-glass:not(.is-collapsed) .composer-writing { margin-l
 html[data-theme] .composer-glass:not(.is-collapsed) .composer-description-heading { position:absolute;right:76px;top:-38px;height:26px;padding:0;z-index:2; }
 html[data-theme] .composer-glass:not(.is-collapsed) .composer-description-heading>span:first-child { position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap; }
 html[data-theme] .composer-glass:not(.is-collapsed) .composer-description-heading>span:first-child::before { content:none; }
-html[data-theme] .composer-glass:not(.is-collapsed) .composer-description { padding:0 112px 0 24px;font-size:16px;line-height:32.8px;letter-spacing:1px;color:var(--composer-ink); }
+html[data-theme] .composer-glass:not(.is-collapsed) .composer-description { padding:0 calc(var(--composer-end-inset) + 7px) 0 24px;font-size:16px;line-height:32.8px;letter-spacing:1px;color:var(--composer-ink); }
 html[data-theme] .composer-glass:not(.is-collapsed) .creation-editor .ProseMirror { min-height:33px; }
 html[data-theme] .composer-glass .creation-editor .ProseMirror.is-empty::before { content:"描述想创造的画面";opacity:.7; }
 html[data-theme] .composer-glass .creation-editor .ProseMirror.is-empty:focus::before { opacity:0; }
@@ -277,7 +277,7 @@ html[data-theme] .composer-glass:not(.is-collapsed) .composer-editor-scroll .col
 .composer-terminal-caret[hidden] { display:none; }
 @keyframes composer-caret-blink { 0%,52%,100% { opacity:1; } 53%,99% { opacity:0; } }
 html[data-theme] .composer-glass .composer-chat-key-hint { margin-left:var(--composer-rail);padding-left:24px; }
-html[data-theme] .composer-glass .composer-toolbar { flex-wrap:nowrap;gap:26px;min-height:46px;margin:39px 8px 0 calc(var(--composer-rail) + 24px);padding:0 7px 0 0;border:0; }
+html[data-theme] .composer-glass .composer-toolbar { flex-wrap:nowrap;gap:26px;min-height:46px;margin:39px var(--composer-end-inset) 0 calc(var(--composer-rail) + 24px);padding:0 7px 0 0;border:0; }
 html[data-theme] .composer-glass .composer-parameters { flex:1 1 auto;flex-wrap:nowrap;gap:26px; }
 html[data-theme] .composer-glass .composer-image-options { order:1;gap:26px; }
 html[data-theme] .composer-glass .composer-send { align-self:center;flex:none; }
@@ -336,7 +336,8 @@ html[data-theme] .composer-glass.is-collapsed :is(.composer-collapse,.composer-p
 @container composer (max-width:620px) {
   html[data-theme] .composer-glass:not(.is-collapsed) .composer-heading { left:-80px; }
   html[data-theme] .composer-glass :is(.composer-writing,.composer-toolbar,.composer-chat-key-hint) { --composer-rail:0px; }
-  html[data-theme] .composer-glass .composer-toolbar { margin-inline:calc(var(--composer-rail) + 12px) 12px;gap:4px; }
+  html[data-theme] .composer-glass :is(.composer-writing,.composer-toolbar) { --composer-end-inset:12px; }
+  html[data-theme] .composer-glass .composer-toolbar { margin-inline:calc(var(--composer-rail) + 12px) var(--composer-end-inset);gap:4px; }
   html[data-theme] .composer-glass .composer-parameters,.composer-image-options { gap:8px; }
   html[data-theme] .composer-glass .composer-video-fields { gap:2px; }
   html[data-theme] .composer-glass .composer-video-fields .model-select { min-width:88px; }
@@ -345,13 +346,13 @@ html[data-theme] .composer-glass.is-collapsed :is(.composer-collapse,.composer-p
   html[data-theme] .composer-glass .composer-video-fields .tactical-select-trigger[aria-label="视频分辨率"] { max-width:75px; }
 }
 @media (max-width:700px) {
-  html[data-theme] .creation-dock.composer-glass:not(.is-collapsed) { --composer-rail:112px; }
+  html[data-theme] .creation-dock.composer-glass:not(.is-collapsed) { --composer-rail:112px;--composer-end-inset:12px; }
   html[data-theme] .composer-glass:not(.is-collapsed) .composer-heading { width:98px; }
-  html[data-theme] .composer-glass .composer-toolbar { margin-right:12px;margin-left:calc(var(--composer-rail) + 12px);gap:4px; }
+  html[data-theme] .composer-glass .composer-toolbar { margin-right:var(--composer-end-inset);margin-left:calc(var(--composer-rail) + 12px);gap:4px; }
   html[data-theme] .composer-glass .composer-parameters { overflow-x:auto;scrollbar-width:thin; }
 }
 @media (prefers-reduced-motion:no-preference) {
-  html[data-theme] .creation-dock.composer-glass:not(.is-collapsed) { animation:composer-optical-rise 280ms cubic-bezier(.2,.7,.2,1);transform-origin:50% 100%; }
+  html[data-theme] .creation-dock.composer-glass.can-animate-expansion:not(.is-collapsed) { animation:composer-optical-rise 280ms cubic-bezier(.2,.7,.2,1);transform-origin:50% 100%; }
   html[data-theme] .composer-glass .composer-mode-picker>button { transition:background 150ms,color 150ms; }
 }
 @keyframes composer-optical-rise { from { opacity:.25;transform:translateY(10px); } to { opacity:1;transform:none; } }

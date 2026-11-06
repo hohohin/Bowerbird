@@ -1,13 +1,13 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useLayoutEffect, useRef } from "react";
 
 const depths = [-.42, .35, 1];
 const matrices = [{ columns: 5, rows: 3, size: 2.1 }, { columns: 5, rows: 3, size: 1.8 }, { columns: 3, rows: 3, size: 3.2 }];
 
 /** Decorative projection only; no draft, pointer target or generation state. */
-export function ComposerProjection({ dockRef, collapsed }: { dockRef: RefObject<HTMLElement>; collapsed: boolean }) {
+export function ComposerProjection({ collapsed }: { collapsed: boolean }) {
   const rootRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const root = rootRef.current, dock = dockRef.current;
+  useLayoutEffect(() => {
+    const root = rootRef.current, dock = root?.parentElement;
     if (!root || !dock) return;
     const canvas = root.querySelector("canvas")!;
     const context = canvas.getContext("2d")!;
@@ -113,7 +113,7 @@ export function ComposerProjection({ dockRef, collapsed }: { dockRef: RefObject<
       window.removeEventListener("pointermove", moved); window.removeEventListener("resize", scheduleMeasure);
       document.removeEventListener("visibilitychange", motion); reduced.removeEventListener("change", motion);
     };
-  }, [dockRef, collapsed]);
+  }, [collapsed]);
   return <div ref={rootRef} className="composer-projection" aria-hidden="true">
     <div className="composer-projection-surface" />
     <canvas className="composer-projection-dots" />
