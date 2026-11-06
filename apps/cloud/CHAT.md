@@ -1,6 +1,12 @@
-# DeepSeek Cloud 对话（源码，未部署）
+# DeepSeek Cloud 对话（已部署，测试 0 Bcoin）
 
 桌面保有 SQLite 对话历史、工具执行和画板事务。Cloud 仅完成一次受控 DeepSeek 文本请求；不启动 DSH、Agent Run、媒体生成或读取本地图片。固定提示词与 `create_canvas_cards` 定义位于 `supabase/functions/_shared/chat-instructions.txt`、`chat-card-tool.json`，Rust 与 Worker 共用。Worker 使用已有 `DeepSeekBackend.chat`，关闭 thinking、最多 8192 输出 tokens，不重试上游请求。
+
+## 2026-11-07 上线记录
+
+01:34:05（北京时间）完成官网真实对话验收。0077 已定向应用；chat-proxy／chat-worker v2 已部署，CHAT_ENABLED=true，向已登录用户开放。Worker 镜像 `8799ba09e5de45ed620b980f844f1ed8ee99c83cb5ee3bfb359206a1760b7b8e` 基于现役仅加入聊天增量；DeepSeek · Cloud 与 DSH · Cloud 共用此服务。现有 26.11.602 客户端无需重打包，平台 key 仍只在 VPS。
+
+18 项线上检查通过，一次真实回复记录 521 输入／5 输出 tokens、唯一 confirm(0)，重放与原键查询未增加任务，余额保持；临时 Auth 已清理。0078 后补 0077 的兼容演练与线上定义回查确认既有计费／赠币不变；18 项 Worker 回归、Deno、候选断网导入及 7 份 Edge 文件读回通过。完整记录、全量 typecheck 的既有测试声明阻断和验证边界见 [行动记录](../../project_logs/2026-11-07-cloud-chat.md)，发布／回退详情见 [部署指引](DEPLOY.md#2026-11-07-cloud-对话已部署0-bcoin)。
 
 ## 接口
 
@@ -20,7 +26,7 @@
 - 测试零价仍启用账号分钟频率与全局成本限制。目录 `provider_cost_reserve_micros=2000000` 为每次保守内部成本预留，不是用户售价或实测供应商成本。真实 tokens 与模型身份作为独立元数据保留。
 - 请求仅暂存私有 `generation-temp/chat/.../request.json`；Worker 使用 180 秒签名 URL 并核对 SHA-256。24 小时后删除请求对象与临时结果；持久保留任务身份、usage 和计费事实，本地已保存历史不受影响。未开始的过期任务退款，已提交但结果未知的任务保留待核对。
 
-## 配套上线顺序（本次未执行）
+## 配套上线顺序
 
 1. 单独审核并应用 `0077_chat_completions.sql`；不要用无筛选 `db push` 顺带应用历史未批准迁移。
 2. 部署 `chat-proxy`（JWT 校验）与 `chat-worker --no-verify-jwt`（函数内恒定时间校验专用 `CHAT_WORKER_TOKEN`）。`CHAT_ENABLED` 默认关闭。
@@ -35,4 +41,4 @@
 3. 补未知传输、结算响应丢失、输入哈希不符与上传失败测试，确认不重复模型或卡片副作用。
 4. 离线验证入口：`node apps/cloud/scripts/chat-db.test.mjs <PGlite dist/index.js>`；`node --test src/cloud-chat/runtime.test.ts src/providers/deepseek/backend.test.ts`（agent-worker）；`npm run typecheck`；`deno check .../chat-proxy/index.ts .../chat-worker/index.ts`。
 
-未部署迁移、Edge 或 VPS，未调用真实模型，未修改用户余额。
+以上为最初源码阶段记录；2026-11-07 已完成本文顶部记录的部署与一次真实模型验收。

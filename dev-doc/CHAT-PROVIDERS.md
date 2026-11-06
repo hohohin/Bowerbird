@@ -1,5 +1,9 @@
 # 对话 provider 实现记录
 
+## 2026-11-07：Cloud 对话已上线
+
+DeepSeek · Cloud 与 DSH · Cloud 的共用后端已部署启用，测试 **0 Bcoin**，不要求用户自带 DeepSeek API key。Windows 26.11.601／602 已包含对应桌面入口；当前 602 无须重打包。官网真实用户完成短对话，原请求重放仍只有一任务、一条 confirm(0)，余额不变；非法凭据与图片输入被拒绝。临时 Auth 已清理。仅文本 completion 链路本次做真实验收，桌面 DSH 完整工具轮次与画板建卡未重验。部署、验证和回退见 [Cloud 对话](../apps/cloud/CHAT.md)；下方未部署／未发布是对应开发时点的历史记录。
+
 ## 2026-11-06：本机 DSH 与 DSH · Cloud（源码待发布）
 
 - 新增 `dsh-local`／`dsh-cloud`；会话固定 provider，0053 迁移保留原 Codex／DeepSeek Cloud 身份、消息与建卡回执。两条路径共用草稿、对话历史、卡片／时间线及详情面板，Codex 参数仅用于 `codex-local`。

@@ -1,5 +1,15 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 2026-11-07 Cloud 对话已部署（0 Bcoin）
+
+01:34:05（北京时间）真实链路通过。定向应用 **0077_chat_completions**；0078 及所有既有计费函数、原服务价格逐项保持，0068／0079／0080 未顺带应用。`chat-proxy v2` 保持 JWT 与内部 requireUser；`chat-worker v2` 关闭平台 JWT，内部校验专用 CHAT_WORKER_TOKEN。CHAT_ENABLED=true，聊天对所有已登录用户开放；原独立 Agent allowlist、支付 Mock 和其他模型开关保持。测试报价锁定 **0 Bcoin**，非零目录价格仍拒绝创建。
+
+现役 Worker **`sha256:8799ba09e5de45ed620b980f844f1ed8ee99c83cb5ee3bfb359206a1760b7b8e`**，基于原 `834246b4560cc…` 镜像仅增加聊天消费循环、DeepSeek 可选输出上限和三份共享协议／提示词。两份服务器 Dockerfile 同步复制规则；原 Compose、资源限制、DSH profile、既有运行时与模型密钥保持。仅新增 CHAT_CONTROL_URL／CHAT_WORKER_TOKEN，真实 DeepSeek key 仍只在 VPS。新增 Secrets 使原 16 个 Edge 版本各加 2，但代码包 SHA、JWT 及入口逐项保持；并未重部署其他函数源码。
+
+官网仍为 `20261106-windows-26.11.602`，已有路由直接生效；没有改官网文件、下载清单或安装包。18 项线上检查通过：真实登录用户经官网 quote=0、一次 DeepSeek 文本回复、原幂等键取回／重放／冲突拒绝、唯一任务／hold／confirm(0)、余额不变，非法用户与 Worker 凭据拒绝；输入 521／输出 5 tokens，临时 Auth 已清理，审计账本保留。18 项离线运行时测试、0078 后补 0077 演练、真实库事务回滚演练、Deno 与候选断网导入通过；7 份 Edge 文件读回一致，Worker 无聊天错误。工作区全量 Worker typecheck 被既有 `video-audio-probe.test.ts` 的 node:child_process 声明错误阻断；该未部署文件未进入候选。
+
+回退先设置 **CHAT_ENABLED=false** 停止新建，保留 get、Worker 和原任务结算；不删除聊天表／hold／usage，不重排未知任务。确需回退 Worker，先等待原任务完成，再使用 `bowerbird/generation-worker:rollback-chat-20261107` 和 `/opt/bowerbird/deploy-backups/chat-20261107/` 的源码／0600 环境备份。不得撤销现用官网路由。原始证据 `.tmp/chat-deploy-20261107/`；详见 [聊天协议](CHAT.md) 与 [行动记录](../../project_logs/2026-11-07-cloud-chat.md)。
+
 > 目标：把 `apps/cloud/` 的 Supabase 迁移 + Edge Functions 推上云端，完成 Auth/积分/算力的真实联调。
 > 前提：你已在 Supabase 控制台拿到 Project URL / publishable key / secret key，并已在 `apps/cloud/.env` 填好方舟 key 与 endpoint id。
 
