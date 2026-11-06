@@ -31,7 +31,7 @@
 1. 单独审核并应用 `0077_chat_completions.sql`；不要用无筛选 `db push` 顺带应用历史未批准迁移。
 2. 部署 `chat-proxy`（JWT 校验）与 `chat-worker --no-verify-jwt`（函数内恒定时间校验专用 `CHAT_WORKER_TOKEN`）。`CHAT_ENABLED` 默认关闭。
 3. VPS 现有组合 Worker 增加 `CHAT_CONTROL_URL=<Supabase functions/v1/chat-worker>` 与相同 `CHAT_WORKER_TOKEN`，复用已有 `DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL/DEEPSEEK_MODEL`。真实 key 继续只在 VPS；Edge 与桌面不持有。两份 Dockerfile 已复制共享协议及提示词，仍使用当前 Compose 的 `cloud-shared` build context。
-4. 前后端配套、官网网关允许 `chat-proxy` 后，验证受控文本 completion、原身份恢复、账本和成本保护，再将 Edge `CHAT_ENABLED=true`。这不代表允许发送图片像素或启用付费价格。
+4. 前后端配套、官网网关允许 `chat-proxy` 后，先完成候选离线和空队列检查，再将 Edge `CHAT_ENABLED=true`，立即验证真实文本 completion、原身份恢复与零额账本；失败先关闭开关并保留原任务。图片像素与付费价格仍不开放。
 5. 回退时先 `CHAT_ENABLED=false` 拒绝新建，保留 get、Worker 与原队列完成能力；不得删除原 hold／usage 或让未知请求重新排队。
 
 ## 动作记录与验证
