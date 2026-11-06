@@ -14,12 +14,16 @@ pub enum ChatProvider {
     #[default]
     CodexLocal,
     DeepseekCloud,
+    DshLocal,
+    DshCloud,
 }
 impl ChatProvider {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CodexLocal => "codex-local",
             Self::DeepseekCloud => "deepseek-cloud",
+            Self::DshLocal => "dsh-local",
+            Self::DshCloud => "dsh-cloud",
         }
     }
 }
@@ -204,6 +208,8 @@ fn provider_for(conn: &Connection, input: &ChatSendInput) -> AppResult<ChatProvi
     let provider = match current.summary.provider.as_str() {
         "codex-local" => ChatProvider::CodexLocal,
         "deepseek-cloud" => ChatProvider::DeepseekCloud,
+        "dsh-local" => ChatProvider::DshLocal,
+        "dsh-cloud" => ChatProvider::DshCloud,
         _ => return Err(error("对话服务无效，请新建对话")),
     };
     if input
@@ -288,7 +294,7 @@ impl Database {
         }
         let provider = provider_for(&tx, input)?;
         if provider != ChatProvider::CodexLocal && input.codex_options.is_some() {
-            return Err(error("Cloud 对话不支持 Codex 模型与推理强度，请移除这些设置"));
+            return Err(error("该对话服务不支持 Codex 模型与推理强度，请移除这些设置"));
         }
         let options = if let Some(options) = &input.codex_options { Some(options.clone()) }
             else if let Some(id) = &input.conversation_id { read(&tx, id)?.and_then(|chat|chat.summary.codex_options) }
@@ -397,8 +403,8 @@ impl Database {
     }
     pub fn local_chat_recovery(&self, id: &str) -> AppResult<(String, String)> {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT t.id,t.provider_turn_id FROM local_chat_turns t JOIN local_chat_conversations c ON c.id=t.conversation_id WHERE c.id=?1 AND c.provider='deepseek-cloud' AND c.status IN ('stopped','interrupted','failed') AND t.provider_turn_id IS NOT NULL ORDER BY t.created_at DESC,t.id DESC LIMIT 1",[id],|row| Ok((row.get(0)?,row.get(1)?)))
-            .map_err(|_| error("此对话暂无可取回的 Cloud 任务"))
+        conn.query_row("SELECT t.id,t.provider_turn_id FROM local_chat_turns t JOIN local_chat_conversations c ON c.id=t.conversation_id WHERE c.id=?1 AND c.provider IN ('deepseek-cloud','dsh-local','dsh-cloud') AND c.status IN ('stopped','interrupted','failed') AND t.provider_turn_id IS NOT NULL ORDER BY t.created_at DESC,t.id DESC LIMIT 1",[id],|row| Ok((row.get(0)?,row.get(1)?)))
+            .map_err(|_| error("此对话暂无可取回的任务"))
     }
     pub fn restore_local_chat_reply(
         &self,

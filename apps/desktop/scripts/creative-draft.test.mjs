@@ -31,6 +31,16 @@ test('old schema 1 image and video drafts keep their mode, parameters, text and 
   }
 });
 
+test('DSH provider survives composer restart and accepted draft cleanup', () => {
+  for (const chatProvider of ['dsh-local', 'dsh-cloud']) {
+    const composer = draft('继续 DSH 对话');
+    const saved = serializeCreativeComposerState({ mode: 'chat', chatProvider, drafts: { chat: composer } });
+    assert.equal(parseCreativeComposerState(saved).chatProvider, chatProvider);
+    const cleared = clearSentCreativeChatDraft(saved, JSON.stringify(composer));
+    assert.equal(parseCreativeComposerState(cleared).chatProvider, chatProvider);
+  }
+});
+
 test('all three independent drafts survive serialization while the compatibility composer follows the active mode', () => {
   const drafts = { image: draft('图片草稿'), video: draft('视频草稿', 'video'), chat: draft('对话草稿', 'image', [{ id: 'chat-ref' }]) };
   for (const mode of ['image', 'video', 'chat']) {

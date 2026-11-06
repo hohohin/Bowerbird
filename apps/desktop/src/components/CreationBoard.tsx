@@ -1424,7 +1424,7 @@ export function CreationBoard({
         </OverlayScrollArea>
         </div>
         {isChat && !isCollapsed && <p className="composer-chat-key-hint">Enter 换行 · Ctrl / ⌘ + Enter 发送</p>}
-        {isChat && chatProvider === "deepseek-cloud" && references.length > 0 && <p className="composer-chat-key-hint">图片仅用于建卡引用；看图分析请选择本机 Codex。</p>}
+        {isChat && chatProvider !== "codex-local" && references.length > 0 && <p className="composer-chat-key-hint">图片仅用于建卡引用；看图分析请选择本机 Codex。</p>}
         {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
         <BoardChipPreview hostRef={hostRef} />
         {!isChat && referenceError && !isLocalVideo && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}

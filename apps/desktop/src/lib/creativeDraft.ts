@@ -1,6 +1,7 @@
 import type { PromptedAsset } from "./types";
 import type { CreationEditorDraft } from "../components/creation/useCreationEditor";
 import type { ChatCodexOptions, ChatProvider } from "./localChat";
+import { isChatProvider } from "./chatProvider.ts";
 
 export type CreativeComposerMode = "image" | "video" | "chat";
 export interface CreativeComposerState {
@@ -27,7 +28,7 @@ export function parseCreativeComposerState(draftJson: string): CreativeComposerS
       && (options.model === undefined || typeof options.model === "string")
       && (options.reasoningEffort === undefined || typeof options.reasoningEffort === "string")
       ? { ...(options.model ? { model: options.model } : {}), ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}) } : undefined;
-    return { mode, drafts, ...(["codex-local", "deepseek-cloud"].includes(saved.chatProvider) ? { chatProvider: saved.chatProvider } : {}), ...(chatCodexOptions ? { chatCodexOptions } : {}) };
+    return { mode, drafts, ...(isChatProvider(saved.chatProvider) ? { chatProvider: saved.chatProvider } : {}), ...(chatCodexOptions ? { chatCodexOptions } : {}) };
   } catch { return { mode: fallbackMode, drafts: legacy ? { [fallbackMode]: legacy } : {} }; }
 }
 

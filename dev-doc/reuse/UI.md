@@ -56,6 +56,8 @@
 
 ## 选择对话模型与推理强度
 
+- 对话 provider 集合与标签统一由 `lib/chatProvider.ts` 提供；`ChatProviderSelect` 在创作框和详情复用 `ModelSelect`、`ModalShell`，支持 Codex、DeepSeek Cloud、本机 DSH、DSH · Cloud。DSH 设置使用 `localChat.dshStatus/dshSetup`；`ModelSelect.footer(close)` 可在打开设置前关闭当前菜单，既有 ReactNode footer 仍兼容。
+- DSH 接入沿 `local_chat.rs` 分派，历史／恢复复用原数据库，卡片工具复用 `local_chat_cards::create_cards`。`local_chat_dsh` 的托管桥复用 Cloud 单次 completion，本机桥复用 `agent_ds::dsh_connection/dsh_client`；这些是桌面内部接口，不能跨运行时导入或用原 ds-inbox 单向投递代替会话协议。详见[对话 provider](../CHAT-PROVIDERS.md)。
 - 本机／Cloud 来源仍用 `creation/ChatProviderSelect.tsx`；本机 Codex 参数用 `creation/CodexModelSelect.tsx`，在 `CreationBoard` 与 `LocalChatPanel` 共用。后者复用公共 `TacticalSelect` 的键盘、菜单与主题，不另造模型菜单。
 - 型号及支持的推理强度来自 `localChat.models()` 的本机 CLI 能力目录。只用于桌面对话，不把图片生成 provider 当成 Codex 子模型；Cloud 隐藏且不发送这些参数。
 - 参数属于下一轮消息，未发送选择随草稿保留，已发送选择从会话恢复。更换型号时重新核对该型号支持的强度，过期选项不静默替换。

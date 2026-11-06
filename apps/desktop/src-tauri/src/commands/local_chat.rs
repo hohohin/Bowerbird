@@ -32,6 +32,10 @@ const MAX_RESPONSE: usize = 2_000_000;
 mod cloud_chat;
 #[path = "local_chat_models.rs"]
 mod models;
+#[path = "local_chat_dsh.rs"]
+mod dsh;
+#[path = "local_chat_dsh_local.rs"]
+mod dsh_local;
 const CARD_TOOL_VERSION: i64 = 4;
 const CHAT_INSTRUCTIONS: &str =
     include_str!("../../../../cloud/supabase/functions/_shared/chat-instructions.txt");
@@ -190,6 +194,16 @@ pub async fn local_chat_models() -> AppResult<Vec<models::CodexChatModel>> {
 }
 
 #[tauri::command]
+pub async fn local_chat_dsh_status() -> AppResult<dsh::Status> {
+    dsh::status().await
+}
+
+#[tauri::command]
+pub async fn local_chat_dsh_setup(mode: String, url: Option<String>, auth_url: Option<String>) -> AppResult<dsh::Status> {
+    dsh::setup(&mode, url, auth_url).await
+}
+
+#[tauri::command]
 pub async fn local_chat_quote(
     cloud: State<'_, CloudClient>,
     auth: State<'_, AuthClient>,
@@ -205,7 +219,15 @@ pub async fn local_chat_recover(
     auth: State<'_, AuthClient>,
     conversation_id: String,
 ) -> AppResult<ChatConversation> {
-    cloud_chat::recover(&db, &cloud, &auth, &conversation_id).await?;
+    let chat = db.get_local_chat(&conversation_id)?.ok_or_else(|| error("对话记录不存在"))?;
+    match chat.summary.provider.as_str() {
+        "deepseek-cloud" | "dsh-cloud" => cloud_chat::recover(&db, &cloud, &auth, &conversation_id).await?,
+        "dsh-local" => {
+            let config = dsh::connection()?;
+            dsh_local::recover(&db, &conversation_id, &config.base, config.auth.as_deref()).await?;
+        }
+        _ => return Err(error("该对话服务不支持取回原请求")),
+    }
     emit(&app, &db, &conversation_id);
     db.get_local_chat(&conversation_id)?
         .ok_or_else(|| error("对话记录不存在"))
@@ -225,7 +247,8 @@ pub async fn local_chat_send(
         return Ok(previous.conversation);
     }
     let provider = db.local_chat_provider(&input)?;
-    let binary = match provider {
+    enum Runtime { Codex(String), Cloud, DshLocal(dsh::LocalConnection), DshCloud(dsh::Runtime) }
+    let runtime = match provider {
         ChatProvider::CodexLocal => {
             super::codex::require_byo(&entitlement, &auth).await?;
             let binary = resolve_codex_binary()
@@ -235,14 +258,20 @@ pub async fn local_chat_send(
             }) {
                 return Err(error("Bowerbird 的 Codex 未登录，请在设置中登录"));
             }
-            Some(binary)
+            Runtime::Codex(binary)
         }
-        ChatProvider::DeepseekCloud => {
+        ChatProvider::DeepseekCloud | ChatProvider::DshCloud => {
             let quote = cloud_chat::request(&cloud, &auth, json!({"action":"quote"})).await?;
             if quote["available"] != true {
                 return Err(error("DeepSeek Cloud 暂未开放，请稍后重试"));
             }
-            None
+            if provider == ChatProvider::DshCloud { Runtime::DshCloud(dsh::runtime().await?) } else { Runtime::Cloud }
+        }
+        ChatProvider::DshLocal => {
+            super::codex::require_byo(&entitlement, &auth).await?;
+            let config = dsh::connection()?;
+            dsh_local::health(&config.base, config.auth.as_deref()).await?;
+            Runtime::DshLocal(config)
         }
     };
     let images = reference_paths(&db, &input.reference_asset_ids)?;
@@ -271,8 +300,8 @@ pub async fn local_chat_send(
     let returned = started.conversation;
     emit(&app, &db, &id);
     tokio::spawn(async move {
-        let result = if let Some(binary) = binary {
-            run_turn(
+        let result = match runtime {
+            Runtime::Codex(binary) => run_turn(
                 &app,
                 &db,
                 &id,
@@ -282,9 +311,10 @@ pub async fn local_chat_send(
                 images,
                 cancel_rx,
             )
-            .await
-        } else {
-            cloud_chat::run(&app, &db, &cloud, &auth, &id, &turn, cancel_rx).await
+            .await,
+            Runtime::Cloud => cloud_chat::run(&app, &db, &cloud, &auth, &id, &turn, cancel_rx).await,
+            Runtime::DshCloud(runtime) => dsh::run(&app, &db, &cloud, &auth, &id, &turn, runtime, cancel_rx).await,
+            Runtime::DshLocal(config) => dsh_local::run(&app, &db, &id, &turn, &config.base, config.auth.as_deref(), cancel_rx).await,
         };
         let (status, detail) = match result {
             Ok(status) => (status, None),

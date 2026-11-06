@@ -2,6 +2,10 @@ use super::*;
 use crate::cloud::config::CloudConfig;
 
 fn cloud_turn() -> (Database, String, String) {
+    cloud_turn_for("deepseek-cloud")
+}
+
+fn cloud_turn_for(provider: &str) -> (Database, String, String) {
     use crate::core::project_canvas::{ProjectCanvasMaterializeInput, ProjectTitleSource};
     let db = Database::open_in_memory().unwrap();
     db.migrate().unwrap();
@@ -20,7 +24,7 @@ fn cloud_turn() -> (Database, String, String) {
         None,
     )
     .unwrap();
-    let input: ChatSendInput = serde_json::from_value(json!({"projectId":"cloud-p","provider":"deepseek-cloud","requestId":"cloud-request","text":"请整理创作方向"})).unwrap();
+    let input: ChatSendInput = serde_json::from_value(json!({"projectId":"cloud-p","provider":provider,"requestId":"cloud-request","text":"请整理创作方向"})).unwrap();
     let started = db.begin_local_chat(&input).unwrap();
     (db, started.conversation.summary.id, started.turn_id)
 }
@@ -43,7 +47,8 @@ fn local_chat_cloud_context_never_uploads_reference_ids_paths_or_old_pixels() {
 async fn local_chat_cloud_recovery_uses_saved_key_without_recreating_or_executing_tools() {
     use axum::{routing::post, Json, Router};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    let (db, id, turn) = cloud_turn();
+    for provider in ["deepseek-cloud", "dsh-cloud"] {
+    let (db, id, turn) = cloud_turn_for(provider);
     let pending = Pending {
         key: "chat-lost-ack-0".into(),
         job: None,
@@ -87,6 +92,7 @@ async fn local_chat_cloud_recovery_uses_saved_key_without_recreating_or_executin
     assert_eq!(requests.load(Ordering::SeqCst), 2);
     server.abort();
     let _ = server.await;
+    }
 }
 
 #[test]

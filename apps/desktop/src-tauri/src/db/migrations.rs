@@ -101,6 +101,7 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0050_asset_original_trash.sql")),
         M::up(include_str!("../../sql/0051_disconnected_library_assets.sql")),
         M::up(include_str!("../../sql/0052_removed_missing_asset_originals.sql")),
+        M::up(include_str!("../../sql/0053_chat_dsh_providers.sql")),
     ])
 }
 

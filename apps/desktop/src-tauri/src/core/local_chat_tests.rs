@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn local_chat_dsh_providers_keep_identity_and_reject_codex_options() {
+    let db = fixture();
+    for provider in ["dsh-local", "dsh-cloud"] {
+        let mut raw = serde_json::to_value(input(provider)).unwrap();
+        raw["provider"] = serde_json::json!(provider);
+        let request: ChatSendInput = serde_json::from_value(raw.clone()).expect("DSH provider accepted");
+        let started = db.begin_local_chat(&request).unwrap();
+        assert_eq!(started.conversation.summary.provider, provider);
+        db.finish_local_chat(&started.conversation.summary.id, &started.turn_id, "done", None).unwrap();
+        assert!(!db.replay_local_chat(&request).unwrap().unwrap().is_new);
+        raw["conversationId"] = serde_json::json!(started.conversation.summary.id);
+        raw["requestId"] = serde_json::json!(format!("{provider}-switch"));
+        raw["provider"] = serde_json::json!("codex-local");
+        assert!(db.begin_local_chat(&serde_json::from_value(raw.clone()).unwrap()).is_err());
+        raw["provider"] = serde_json::json!(provider);
+        raw["codexOptions"] = serde_json::json!({"model":"test"});
+        assert!(db.begin_local_chat(&serde_json::from_value(raw).unwrap()).is_err());
+    }
+}
+
+#[test]
 fn local_chat_model_options_reject_cloud_and_malformed_values_without_creating_turns() {
     let db = fixture();
     for options in [serde_json::json!({"model":""}), serde_json::json!({"reasoningEffort":"high\n"})] {
@@ -11,7 +32,7 @@ fn local_chat_model_options_reject_cloud_and_malformed_values_without_creating_t
     let mut raw = serde_json::to_value(input("cloud-model")).unwrap();
     raw["provider"] = serde_json::json!("deepseek-cloud");
     raw["codexOptions"] = serde_json::json!({});
-    assert!(db.begin_local_chat(&serde_json::from_value(raw).unwrap()).err().unwrap().to_string().contains("Cloud"));
+    assert!(db.begin_local_chat(&serde_json::from_value(raw).unwrap()).err().unwrap().to_string().contains("Codex"));
     assert!(db.list_local_chats("project-a").unwrap().is_empty());
 }
 
@@ -174,9 +195,10 @@ fn local_chat_explicit_codex_replays_legacy_request_and_rejects_unknown_provider
 
 #[test]
 fn local_chat_provider_migration_preserves_history_actions_and_foreign_keys() {
+    for (version, provider) in [(48, ChatProvider::CodexLocal), (52, ChatProvider::DeepseekCloud)] {
     let db = Database::open_in_memory().unwrap();
     crate::db::migrations::migrations()
-        .to_version(&mut db.conn.lock().unwrap(), 48)
+        .to_version(&mut db.conn.lock().unwrap(), version)
         .unwrap();
     db.materialize_project_canvas(
         &ProjectCanvasMaterializeInput {
@@ -194,6 +216,7 @@ fn local_chat_provider_migration_preserves_history_actions_and_foreign_keys() {
     )
     .unwrap();
     let mut request = input("before-provider-migration");
+    request.provider = Some(provider);
     request.card_defaults = Some(Default::default());
     let started = db.begin_local_chat(&request).unwrap();
     let action = db.create_local_chat_cards(&started.conversation.summary.id, &started.turn_id,"legacy-call",&serde_json::json!({"cards":[{"id":"text","kind":"content","title":"旧卡片","text":"保留"}]})).unwrap();
@@ -213,7 +236,7 @@ fn local_chat_provider_migration_preserves_history_actions_and_foreign_keys() {
         .get_local_chat(&started.conversation.summary.id)
         .unwrap()
         .unwrap();
-    assert_eq!(chat.summary.provider, "codex-local");
+    assert_eq!(chat.summary.provider, provider.as_str());
     assert_eq!(chat.messages[1].text, "旧回复");
     assert_eq!(chat.actions[0].id, action.id);
     assert_eq!(
@@ -237,6 +260,7 @@ fn local_chat_provider_migration_preserves_history_actions_and_foreign_keys() {
             []
         )
         .is_err());
+    }
 }
 
 #[test]

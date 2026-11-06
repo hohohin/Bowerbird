@@ -22,7 +22,7 @@ function family(label: string): string {
 export function ModelSelect({ value, label, source, options, onChange, defaultKey, onSetDefault, kind = "图像", quotaDetail, cloudBalance, cloudLoggedIn, footer, menuClassName }: {
   value: string; label: string; source?: ModelSource; options: ModelOption[];
   onChange: (key: string) => void; defaultKey?: string; onSetDefault?: (key: string) => void;
-  kind?: string; quotaDetail?: string; cloudBalance?: number | null; cloudLoggedIn?: boolean; footer?: ReactNode; menuClassName?: string;
+  kind?: string; quotaDetail?: string; cloudBalance?: number | null; cloudLoggedIn?: boolean; footer?: ReactNode | ((close: () => void) => ReactNode); menuClassName?: string;
 }) {
   const portalTarget = usePortalTarget();
   const [open, setOpen] = useState(false);
@@ -137,7 +137,7 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
           <span className="model-source-badge"><Monitor size={12} strokeWidth={2.8} aria-hidden="true" /></span><span>本地部署</span><small>H3</small><span className="model-local-cost"><Coins size={12} aria-hidden="true" />0</span>{value === localOption.key && <Check size={13} aria-hidden="true" />}
         </button></div>}
         {kind === "图像" && <div className="model-select-footer">Cloud 按张计费；第 2 张起每增加一张参考图，每张输出加 1 Bcoin。</div>}
-        {footer && <div className="model-select-footer">{footer}</div>}
+        {footer && <div className="model-select-footer">{typeof footer === "function" ? footer(() => close(true)) : footer}</div>}
       </OverlayScrollArea>
     </div>, portalTarget)}
   </div>;

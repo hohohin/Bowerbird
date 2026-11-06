@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ChatProvider } from "./chatProvider";
+export { CHAT_PROVIDER_LABELS, CHAT_PROVIDERS, isChatProvider, chatUsesCloud, chatAssistantLabel, type ChatProvider } from "./chatProvider";
 export { canvasChatId } from "./canvasChat";
 
 export type LocalChatStatus = "idle" | "running" | "stopping" | "stopped" | "interrupted" | "failed";
-export type ChatProvider = "codex-local" | "deepseek-cloud";
-export const CHAT_PROVIDER_LABELS = { "codex-local": "本机 Codex", "deepseek-cloud": "DeepSeek · Cloud" } as const;
+export interface ChatDshStatus { localAvailable: boolean; managedAvailable: boolean; localReason: string | null; managedReason: string | null; localUrl: string }
+export interface ChatDshSetup { mode: "local" | "managed"; url?: string; authUrl?: string }
 export interface ChatCodexOptions { model?: string; reasoningEffort?: string }
 export interface ChatCodexModel {
   id: string; model: string; displayName: string; isDefault: boolean; defaultReasoningEffort: string;
@@ -28,14 +30,17 @@ export interface ChatComposeRequest { prompt: string; references: import("./type
 export interface ChatQuote { provider: "deepseek-cloud"; service: "chat_deepseek"; available: boolean; unit_cost: number | null; currency: "Bcoin"; pricing_version: number | null }
 export function chatProviderUnavailable(provider: ChatProvider, state: {
   cloudAvailable: boolean; loggedIn: boolean; cloudAllowed: boolean; localAllowed: boolean; codexReady: boolean; balance: number;
-}, quote: ChatQuote | null): string | null {
+}, quote: ChatQuote | null, dsh: ChatDshStatus | null = null): string | null {
   if (provider === "codex-local") return !state.localAllowed ? "本机 Codex 对话需要 Pro 或 Studio，请在账号中查看权益。"
     : !state.codexReady ? "本机 Codex 暂未就绪，请在设置中安装并登录后继续。" : null;
+  if (provider === "dsh-local") return !state.localAllowed ? "本机 DSH 对话需要 Pro 或 Studio，请在账号中查看权益。"
+    : dsh?.localAvailable ? null : dsh?.localReason ?? "请先连接本机 DSH。";
   if (!state.cloudAvailable) return "当前版本未配置 Bowerbird Cloud。";
   if (!state.loggedIn) return "请先登录 Bowerbird 账号。";
   if (!state.cloudAllowed) return "当前账号暂不可使用 Cloud。";
   if (!quote) return "正在获取 Cloud 对话报价，请稍候。";
   if (!quote.available || quote.unit_cost !== 0) return "DeepSeek Cloud 对话暂未开放。";
+  if (provider === "dsh-cloud" && !dsh?.managedAvailable) return dsh?.managedReason ?? "请先准备 DSH。";
   return state.balance < quote.unit_cost ? "Bcoin 不足，请补充后重试。" : null;
 }
 export interface ChatSummary {
@@ -97,6 +102,8 @@ export function localChatInputError(text: string, referenceAssetIds: string[]): 
   return null;
 }
 export const localChat = {
+  dshStatus: () => invoke<ChatDshStatus>("local_chat_dsh_status"),
+  dshSetup: (input: ChatDshSetup) => invoke<ChatDshStatus>("local_chat_dsh_setup", { ...input }),
   models: () => invoke<ChatCodexModel[]>("local_chat_models"),
   quote: () => invoke<ChatQuote>("local_chat_quote"),
   list: (projectId: string) => invoke<ChatSummary[]>("local_chat_list", { projectId }),

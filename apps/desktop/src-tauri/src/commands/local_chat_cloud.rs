@@ -9,7 +9,7 @@ struct Pending {
     account: String,
     text: String,
 }
-fn ensure_account(auth: &AuthClient, account: &str) -> AppResult<()> {
+pub(super) fn ensure_account(auth: &AuthClient, account: &str) -> AppResult<()> {
     if auth.snapshot().user_id.as_deref() != Some(account) {
         return Err(error("账号已切换，请回到原账号后取回回复"));
     }
@@ -85,14 +85,14 @@ pub(super) async fn request(
     Ok(value)
 }
 
-fn messages(chat: &ChatConversation, turn: &str) -> AppResult<Vec<Value>> {
+pub(super) fn messages(chat: &ChatConversation, turn: &str) -> AppResult<Vec<Value>> {
     let current = chat
         .messages
         .iter()
         .find(|m| m.turn_id == turn && m.role == "user")
         .ok_or_else(|| error("对话轮次不存在"))?;
     let mut text = current.text.clone();
-    text.push_str("\n\n[本轮引用范围] DeepSeek Cloud 只收到文字，未上传任何图片像素，不能声称已看图或分析图像。历史图片同样未上传。");
+    text.push_str("\n\n[本轮引用范围] 此对话只收到文字，未上传任何图片像素，不能声称已看图或分析图像。历史图片同样未上传。");
     if !current.reference_asset_ids.is_empty() {
         text.push_str(&format!("本轮仅供本机建卡的图片别名：{}。可引用这些别名创建卡片，需要视觉内容时请用户文字说明。",
             (1..=current.reference_asset_ids.len()).map(|i| format!("image{i}")).collect::<Vec<_>>().join("、")));
@@ -151,7 +151,7 @@ fn completion(value: &Value) -> AppResult<Option<Value>> {
     }
 }
 
-async fn complete(
+pub(super) async fn complete(
     cloud: &CloudClient,
     auth: &AuthClient,
     db: &Database,
@@ -189,7 +189,7 @@ async fn complete(
     }
 }
 
-fn calls(message: &Value) -> AppResult<Vec<(String, Value)>> {
+pub(super) fn calls(message: &Value) -> AppResult<Vec<(String, Value)>> {
     let Some(raw) = message.get("tool_calls").filter(|v| !v.is_null()) else {
         return Ok(vec![]);
     };

@@ -55,6 +55,31 @@ test('Cloud chat uses its live quote, allows zero balance at zero cost and ignor
   assert.match(chatProviderUnavailable('deepseek-cloud', state, { ...quote, available: false }), /开放/);
 });
 
+test('local DSH uses its own readiness and BYO entitlement without requiring Codex or Cloud', () => {
+  const { chatProviderUnavailable } = fixture().chatApi;
+  const state = { cloudAvailable: false, loggedIn: false, cloudAllowed: false, localAllowed: true, codexReady: false, balance: 0 };
+  const dsh = { localAvailable: true, managedAvailable: false, localReason: null, managedReason: '请先准备 DSH。' };
+  assert.equal(chatProviderUnavailable('dsh-local', state, null, dsh), null);
+  assert.match(chatProviderUnavailable('dsh-local', { ...state, localAllowed: false }, null, dsh), /Pro/);
+  assert.match(chatProviderUnavailable('dsh-local', state, null, { ...dsh, localAvailable: false, localReason: '请连接本机 DSH。' }), /连接本机 DSH/);
+  assert.match(chatProviderUnavailable('dsh-local', state, null, null), /DSH/);
+});
+
+test('managed DSH requires its runtime and a zero Cloud quote, without Codex or BYO entitlement', () => {
+  const { chatProviderUnavailable, chatUsesCloud, chatAssistantLabel } = fixture().chatApi;
+  const state = { cloudAvailable: true, loggedIn: true, cloudAllowed: true, localAllowed: false, codexReady: false, balance: 0 };
+  const quote = { provider: 'deepseek-cloud', service: 'chat_deepseek', available: true, unit_cost: 0, currency: 'Bcoin', pricing_version: 1 };
+  const dsh = { localAvailable: false, managedAvailable: true, localReason: '请连接本机 DSH。', managedReason: null };
+  assert.equal(chatProviderUnavailable('dsh-cloud', state, quote, dsh), null);
+  assert.match(chatProviderUnavailable('dsh-cloud', state, quote, { ...dsh, managedAvailable: false, managedReason: '请先准备 DSH。' }), /准备 DSH/);
+  assert.match(chatProviderUnavailable('dsh-cloud', state, { ...quote, unit_cost: 1 }, dsh), /开放/);
+  assert.match(chatProviderUnavailable('dsh-cloud', { ...state, loggedIn: false }, quote, dsh), /登录/);
+  assert.equal(chatUsesCloud('dsh-cloud'), true);
+  assert.equal(chatUsesCloud('dsh-local'), false);
+  assert.equal(chatAssistantLabel('dsh-local'), 'DSH');
+  assert.equal(chatAssistantLabel('dsh-cloud'), 'DSH');
+});
+
 test('a newer streamed event wins over an older delayed send acknowledgement', async () => {
   const f = fixture(); let resolveSend;
   f.handlers.set('local_chat_send', () => new Promise(resolve => { resolveSend = resolve; }));

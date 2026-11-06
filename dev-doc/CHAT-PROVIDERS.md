@@ -1,5 +1,20 @@
 # 对话 provider 实现记录
 
+## 2026-11-06：本机 DSH 与 DSH · Cloud（源码待发布）
+
+- 新增 `dsh-local`／`dsh-cloud`；会话固定 provider，0053 迁移保留原 Codex／DeepSeek Cloud 身份、消息与建卡回执。两条路径共用草稿、对话历史、卡片／时间线及详情面板，Codex 参数仅用于 `codex-local`。
+- **本机 DSH** 连接用户已启动的 `dsh web`，使用其登录、默认模型和模型服务配置，不要求在 Bowerbird 重填 DeepSeek API key。设置保存本机服务地址与可选登录链接；只接受 loopback、同源登录链接，凭据不回传前端。未另配时复用既有 Agent DS 的 `BOWERBIRD_DSH_WEB_URL` 与登录文件。
+- 每轮建立独立 DSH session 和临时最小 preset，以应用公开历史续聊。复用 DSH host 的模型认证，不读取模型密钥；只开放当前轮次的 `create_canvas_cards`。短期 loopback 工具通道绑定 session／call，复用既有建卡事务、权益与撤销，支持生成、内容、触发、循环、H3 与分区。没有添加自动生成媒体权限或 HyperFrames 工具。
+- 本机 preset 位于 `DSH_HOME/.agent-presets`（默认用户 `.dsh`）。只新增本轮独立目录；Unix 权限为 0700。正常结束清理本次两份配置文件，保留 DSH 自身会话历史。应用崩溃可能留下失效 preset，工具服务随应用退出失效；不会遍历删除用户 preset。已用实际 DSH 验证删除 preset 后冷读历史不会重新启动模型。
+- **DSH · Cloud** 在应用私有目录安装锁定的 DSH `0.1.1-rc.2`，要求 Node.js 24；模型经过现有 `chat-proxy`，平台密钥和账号令牌不传给 Node 子进程。DSH 负责原生 Agent loop，桌面只桥接单次 completion 与卡片事务；未新增 Cloud runner。客户端 system、模型、工具 schema 不能覆盖服务端契约。
+- 安装使用随源码冻结的 manifest／lock 和 `npm ci --ignore-scripts --legacy-peer-deps`；固定兼容的 Cordis 依赖。每个桥文件版本使用独立目录，每轮独立临时 DSH_HOME，仅允许受控卡片工具，禁用 shell、用户文件、网页、全局配置、遥测和自动模型重试。自检只初始化 ACP 与会话，不调用模型。
+- 托管路径沿现有 `chat_deepseek` 零价报价和预留／结算，测试阶段 **0 Bcoin**，真实上游费用由平台承担；非零报价仍不能静默发送。本机路径不走 Bcoin，外部模型账户费用遵循用户已有配置。两个 DSH 入口本轮均只传文字与建卡图片别名，不上传图片像素。
+- 每轮最多 12 次托管 completion；工具调用 ID 和参数须匹配当前模型回复。发送前记录原请求，结果不明不重发。停止关闭工具通道；本机请求 DSH cancel，托管退出本地 DSH 进程树，已被 Cloud 接收的 completion 仍可能完成。显式“取回回复”只读原任务，不重复请求模型或执行工具，旧轮结果不能覆盖新轮。
+
+验证：77 项原生对话回归通过、3 项外部运行时探针默认忽略；另显式通过 Rust 内嵌桥的实际 DSH 自检。62 项前端行为、DSH 界面专项、实际托管 DSH 的 8 项协议／生命周期测试、本机实际 DSH + 模拟模型的工具隔离／冷恢复验证通过。完整 TypeScript 与独立 Vite 构建通过。CUA 合成页面确认入口、连接、换行、详情和回复终态，截图 `.tmp/dsh-chat/dsh-chat-ui.png`。完整旧 chat UI 用例受工作区既有投影 canvas 遮挡影响，未宣称通过；未修改该投影逻辑。详见[行动记录](../project_logs/2026-11-06-dsh-chat.md)。
+
+没有调用真实模型、读取用户模型密钥、迁移用户库、部署 Cloud 或发布安装包。Cloud 仍须按 [CHAT.md](../apps/cloud/CHAT.md) 配套部署和启用；本轮只完成源码接入。macOS 原生安装／进程清理与真实账户联调尚待验收。
+
 ## 2026-11-06：Codex 模型与推理强度（源码待发布）
 
 - 新对话及详情续聊共用 `CodexModelSelect`，菜单复用 `TacticalSelect`；CLI `model/list` 返回型号、默认值和支持的推理强度，不硬编码可用型号。目录读取失败可重试，旧默认发送不依赖目录成功。

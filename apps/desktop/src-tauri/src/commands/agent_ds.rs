@@ -75,7 +75,7 @@ fn dsh_auth_url(base: &reqwest::Url, text: &str) -> Result<reqwest::Url, String>
     Ok(url)
 }
 
-async fn dsh_client(base: &str, auth_text: Option<&str>) -> Result<reqwest::Client, String> {
+pub(crate) async fn dsh_client(base: &str, auth_text: Option<&str>) -> Result<reqwest::Client, String> {
     let base = dsh_base_url(base)?;
     let builder = || {
         let builder = reqwest::Client::builder()
@@ -444,6 +444,17 @@ fn workflow_image_parts(images: &[DeliveryImage]) -> Result<Vec<Value>, String> 
     }).collect()
 }
 
+/// 读取既有本机 DSH 地址与登录链接；不读取模型凭据。
+pub(crate) fn dsh_connection() -> Result<(String, Option<String>), String> {
+    let base = std::env::var(DSH_WEB_URL_ENV).unwrap_or_else(|_| DEFAULT_DSH_WEB_URL.to_string());
+    let auth_text = match std::fs::read_to_string(agent_root().join(DSH_AUTH_FILE)) {
+        Ok(text) => Some(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(_) => return Err(format!("无法读取 {}", agent_root().join(DSH_AUTH_FILE).display())),
+    };
+    Ok((base, auth_text))
+}
+
 /// 自动送达：发现目标会话并把本轮作为一条 user 消息投进去（`mode: "queue"`，忙时排队
 /// 而不是打断当前轮）。返回（sessionId, 标题）。
 async fn deliver_to_dsh(
@@ -451,12 +462,7 @@ async fn deliver_to_dsh(
     repo_root_normalized: &str,
     native_images: bool,
 ) -> Result<(String, Option<String>), String> {
-    let base = std::env::var(DSH_WEB_URL_ENV).unwrap_or_else(|_| DEFAULT_DSH_WEB_URL.to_string());
-    let auth_text = match std::fs::read_to_string(agent_root().join(DSH_AUTH_FILE)) {
-        Ok(text) => Some(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
-        Err(_) => return Err(format!("无法读取 {}", agent_root().join(DSH_AUTH_FILE).display())),
-    };
+    let (base, auth_text) = dsh_connection()?;
     let client = dsh_client(&base, auth_text.as_deref()).await?;
     let (session_id, title) = if let Some(session_id) = &payload.target_session_id {
         ensure_workflow_session(&client, &base, session_id, repo_root_normalized).await?;

@@ -1,4 +1,5 @@
 // Closed synthetic IPC. All state belongs to this browser tab, never a user library.
+import type { ChatProvider } from "../../../src/lib/chatProvider";
 const STORAGE_KEY = "bowerbird-local-chat-fixture-v1";
 const clone = <T,>(value: T): T => structuredClone(value);
 const image = (background: string, shape: string) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="360"><rect width="480" height="360" fill="${background}"/><circle cx="240" cy="160" r="92" fill="${shape}"/><path d="M120 280 Q240 210 360 280" stroke="${shape}" stroke-width="14" fill="none"/></svg>`)}`;
@@ -8,7 +9,7 @@ export const assets = [
 ].map(asset => ({ ...asset, thumb_path: asset.store_path, width: 480, height: 360, ext: "svg", source: "imported" }));
 export const projects = ["p", "q"].map((id, index) => ({ id, name: index ? "项目 B · 包装文案" : "项目 A · 荷月礼盒", kind: "blank", workspace_path: `blank:${id}`, asset_count: 2, title_source: "manual", created_at: 1, updated_at: 1 }));
 type Message = { id: string; turnId: string; role: "user" | "assistant" | "tool"; text: string; referenceAssetIds: string[]; status: string; createdAt: number; updatedAt: number };
-type Conversation = { id: string; projectId: string; threadId: string; nodeId: string; title: string; provider: "codex-local" | "deepseek-cloud"; codexOptions?: { model?: string; reasoningEffort?: string }; status: string; turnCount: number; preview: string; revision: number; createdAt: number; updatedAt: number; error: string | null; messages: Message[]; actions?: any[] };
+type Conversation = { id: string; projectId: string; threadId: string; nodeId: string; title: string; provider: ChatProvider; codexOptions?: { model?: string; reasoningEffort?: string }; status: string; turnCount: number; preview: string; revision: number; createdAt: number; updatedAt: number; error: string | null; messages: Message[]; actions?: any[] };
 type Database = { activeProjectId: string; projects: Record<string, any>; conversations: Record<string, Conversation>; requests: Record<string, string>; settings: Record<string, unknown> };
 function emptySnapshot(id: string) {
   return { canvas: { projectId: id, draftJson: "{}", createdAt: 1, updatedAt: 1 },
@@ -92,7 +93,19 @@ export function setFault(value: string) { controls.fault = value; changed(); }
 export function setDelayReply(value: boolean) { controls.delayReply = value; changed(); }
 export function releaseReplies() { pendingReplies.splice(0).forEach(resolve => resolve()); changed(); }
 export async function invoke(command: string, args: any = {}) {
-  if (!command.startsWith("plugin:event")) { calls.push({ command, args: clone(args) }); if (calls.length > 100) calls.shift(); }
+  if (!command.startsWith("plugin:event")) { calls.push({ command, args: command === "local_chat_dsh_setup" ? { mode: args.mode } : clone(args) }); if (calls.length > 100) calls.shift(); }
+  if (command === "local_chat_dsh_status" || command === "local_chat_dsh_setup") {
+    if (controls.fault === "dsh-status") throw new Error("DSH 状态暂不可用，请重试。");
+    if (command === "local_chat_dsh_setup") {
+      await new Promise(resolve => setTimeout(resolve, 600));
+      if (controls.fault === "dsh-setup") throw new Error("DSH 连接未完成，请检查服务后重试。");
+      database.settings[args.mode === "local" ? "dshLocalReady" : "dshManagedReady"] = true;
+      if (args.mode === "local") database.settings.dshLocalUrl = args.url;
+      save();
+    }
+    const localAvailable = database.settings.dshLocalReady === true, managedAvailable = database.settings.dshManagedReady === true;
+    return { localAvailable, managedAvailable, localReason: localAvailable ? null : "请先连接本机 DSH。", managedReason: managedAvailable ? null : "请先准备 DSH。", localUrl: database.settings.dshLocalUrl ?? "http://127.0.0.1:3080" };
+  }
   if (command === "local_chat_models") {
     if (controls.fault === "models") throw new Error("Codex 模型列表暂时无法读取，请重试。");
     return [{ id: "fixture-codex", model: "fixture-codex", displayName: "Codex 测试模型", isDefault: true, defaultReasoningEffort: "medium",
@@ -127,11 +140,13 @@ export async function invoke(command: string, args: any = {}) {
   if (command === "local_chat_send") {
     const input = args.input;
     const provider = input.provider ?? "codex-local";
-    if (provider === "deepseek-cloud") { if (!controls.cloudAuthenticated) throw new Error("请先登录 Bowerbird 账号。"); }
+    if (provider === "deepseek-cloud" || provider === "dsh-cloud") { if (!controls.cloudAuthenticated) throw new Error("请先登录 Bowerbird 账号。"); }
     else {
-      if (!controls.authenticated) throw new Error("请先在设置中登录本机 Codex。");
+      if (provider === "codex-local" && !controls.authenticated) throw new Error("请先在设置中登录本机 Codex。");
       if (!controls.entitled) throw new Error("本机对话需要 Pro 或 Studio 权益。");
     }
+    if (provider === "dsh-local" && !database.settings.dshLocalReady) throw new Error("请先连接本机 DSH。");
+    if (provider === "dsh-cloud" && !database.settings.dshManagedReady) throw new Error("请先准备 DSH。");
     if (controls.fault === "send") throw new Error("synthetic IPC C:\\private\\auth.json token_missing");
     if (database.requests[input.requestId]) return clone(database.conversations[database.requests[input.requestId]]);
     if (!input.text?.trim()) throw new Error("请输入对话内容。");
@@ -162,7 +177,7 @@ export async function invoke(command: string, args: any = {}) {
   if (command === "local_chat_recover") {
     if (controls.fault === "recover") throw new Error("云端仍在处理，请稍后再次取回回复。");
     const chat = database.conversations[args.conversationId];
-    if (!chat || chat.provider !== "deepseek-cloud") throw new Error("这段对话不支持取回回复。");
+    if (!chat || chat.provider === "codex-local") throw new Error("这段对话不支持取回回复。");
     if (chat.status !== "idle") finish(chat.id);
     return clone(chat);
   }
