@@ -14,7 +14,7 @@ import { useEditorPlugin, useEditorSelector } from 'platejs/react';
 import {
   Popover,
   PopoverContent,
-  PopoverTrigger,
+  PopoverAnchor,
 } from '@/components/text-editor/plate/primitives/popover';
 import { cn } from '@/components/text-editor/plate/lib/utils';
 
@@ -46,9 +46,24 @@ const FONT_SIZES = [
   '96',
 ] as const;
 
-export function FontSizeToolbarButton() {
-  const [inputValue, setInputValue] = React.useState(DEFAULT_FONT_SIZE);
-  const [isFocused, setIsFocused] = React.useState(false);
+function useCursorFontSize() {
+  return useEditorSelector((editor) => {
+    const fontSize = editor.api.marks()?.[KEYS.fontSize];
+    if (fontSize) return toUnitLess(fontSize as string);
+    const [block] = editor.api.block<TElement>() || [];
+    if (!block?.type) return DEFAULT_FONT_SIZE;
+    return block.type in FONT_SIZE_MAP
+      ? FONT_SIZE_MAP[block.type as keyof typeof FONT_SIZE_MAP]
+      : DEFAULT_FONT_SIZE;
+  }, []);
+}
+
+function validFontSize(value: string) {
+  const size = Number(toUnitLess(value));
+  return Number.isFinite(size) && size >= 1 && size <= 100 ? size : null;
+}
+
+function useFontSizeSelection() {
   const { editor, tf } = useEditorPlugin(FontSizePlugin);
   const bookmark = React.useRef<RangeRef | null>(null);
   React.useEffect(() => () => { bookmark.current?.unref(); }, []);
@@ -56,30 +71,24 @@ export function FontSizeToolbarButton() {
     const selection = readTextSelection(editor) ?? editor.selection;
     if (!bookmark.current && selection) bookmark.current = editor.api.rangeRef(selection);
   };
-
-  const cursorFontSize = useEditorSelector((editor) => {
-    const fontSize = editor.api.marks()?.[KEYS.fontSize];
-
-    if (fontSize) {
-      return toUnitLess(fontSize as string);
-    }
-
-    const [block] = editor.api.block<TElement>() || [];
-
-    if (!block?.type) return DEFAULT_FONT_SIZE;
-
-    return block.type in FONT_SIZE_MAP
-      ? FONT_SIZE_MAP[block.type as keyof typeof FONT_SIZE_MAP]
-      : DEFAULT_FONT_SIZE;
-  }, []);
-
-  const handleInputChange = (value: string) => {
+  const applyInput = (value: string) => {
     const at = bookmark.current?.unref(); bookmark.current = null;
     if (at) editor.tf.select(at);
-    const newSize = Number(toUnitLess(value));
-    if (Number.isFinite(newSize) && newSize >= 1 && newSize <= 100) tf.fontSize.addMark(`${newSize}px`);
+    const size = validFontSize(value);
+    if (size !== null) tf.fontSize.addMark(`${size}px`);
+  };
+  return { editor, tf, bookmark, rememberSelection, applyInput };
+}
+
+export function FontSizeToolbarButton() {
+  const [inputValue, setInputValue] = React.useState(DEFAULT_FONT_SIZE);
+  const [isFocused, setIsFocused] = React.useState(false);
+  const { editor, tf, bookmark, rememberSelection, applyInput } = useFontSizeSelection();
+  const cursorFontSize = useCursorFontSize();
+  const handleInputChange = (value: string, restoreFocus = true) => {
+    applyInput(value);
     setIsFocused(false);
-    editor.tf.focus();
+    if (restoreFocus) editor.tf.focus();
   };
 
   const handleFontSizeChange = (delta: number) => {
@@ -97,7 +106,7 @@ export function FontSizeToolbarButton() {
       </ToolbarButton>
 
       <Popover open={isFocused} modal={false}>
-        <PopoverTrigger asChild>
+        <PopoverAnchor asChild>
           <input
             aria-label="字号"
             className={cn(
@@ -106,7 +115,7 @@ export function FontSizeToolbarButton() {
             value={displayValue}
             onBlur={event => {
               setIsFocused(false);
-              if (bookmark.current) handleInputChange(event.currentTarget.value);
+              if (bookmark.current) handleInputChange(event.currentTarget.value, false);
             }}
             onChange={(e) => setInputValue(e.target.value)}
             onFocus={() => {
@@ -114,7 +123,7 @@ export function FontSizeToolbarButton() {
               setIsFocused(true);
               setInputValue(toUnitLess(cursorFontSize));
             }}
-            onPointerDown={rememberSelection}
+            onPointerDown={() => { rememberSelection(); setIsFocused(true); }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 e.preventDefault();
@@ -124,9 +133,10 @@ export function FontSizeToolbarButton() {
             data-plate-focus="true"
             type="text"
           />
-        </PopoverTrigger>
+        </PopoverAnchor>
         <PopoverContent
           className="w-10 px-px py-1"
+          onEscapeKeyDown={() => { bookmark.current?.unref(); bookmark.current = null; setIsFocused(false); editor.tf.focus(); }}
           onOpenAutoFocus={(e) => e.preventDefault()}
           onCloseAutoFocus={(e) => e.preventDefault()}
         >

@@ -13,5 +13,6 @@
 .text-segment-agent:hover { color:var(--bb-blue); }
 .text-plate-ui [role=menuitem], .text-plate-ui [role=option] { cursor:pointer; }
 .text-plate-ui [role=menuitem]:focus-visible, .text-plate-ui [role=option][data-selected=true] { outline-color:var(--bb-blue); }
-.text-plate-toolbar [role=toolbar] > div { flex-wrap:wrap; row-gap:2px; }
+.text-plate-toolbar [role=toolbar] > div { flex-wrap:nowrap; width:max-content; min-width:100%; }
+.text-plate-toolbar [role=toolbar] { scrollbar-width:thin; }
 .text-plate-shell .text-document-body { padding-left:max(96px,calc((100% - 744px)/2)); }

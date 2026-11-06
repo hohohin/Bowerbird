@@ -1,4 +1,4 @@
-import { createContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { ArrowUp, Square, X } from "lucide-react";
 import type { PlateEditor } from "platejs/react";
@@ -27,7 +27,7 @@ export function TextAgentScope({ editor, projectId, children }: { editor: PlateE
     const anchor = anchorFor(editor, id);
     if (anchor) setTarget({ anchor, left: rect.left, top: rect.bottom + 8 });
   };
-  return <TextAgentContext.Provider value={open}>{children}{target && <TextAgentBubble key={target.anchor.id} editor={editor} projectId={projectId} target={target} onClose={() => { setTarget(null); editor.tf.focus(); }}/>}</TextAgentContext.Provider>;
+  return <TextAgentContext.Provider value={open}>{children}{target && <TextAgentBubble key={target.anchor.id} editor={editor} projectId={projectId} target={target} onClose={(restoreFocus = true) => { setTarget(null); if (restoreFocus) editor.tf.focus(); }}/>}</TextAgentContext.Provider>;
 }
 
 export function TextAgentModel({ provider, setProvider, busy }: { provider: TextAgentProvider; setProvider(value: TextAgentProvider): void; busy: boolean }) {
@@ -113,11 +113,27 @@ function useBubblePosition(target: Target) {
   useEffect(() => { const resize = () => setPosition(place()); window.addEventListener("resize", resize); return () => window.removeEventListener("resize", resize); }, [target]);
   return position;
 }
-function TextAgentBubble({ editor, projectId, target, onClose }: { editor: PlateEditor; projectId?: string; target: Target; onClose(): void }) {
+function useAgentDismiss(root: RefObject<HTMLDivElement>, onClose: (restoreFocus?: boolean) => void) {
+  useEffect(() => {
+    const outside = (event: PointerEvent) => {
+      const node = event.target as Node;
+      if (root.current?.contains(node)) return;
+      // The model selector is a portal owned by the bubble's aria-controls trigger.
+      const controls = root.current?.querySelectorAll('[aria-controls]') ?? [];
+      for (const trigger of controls) if (document.getElementById(trigger.getAttribute('aria-controls')!)?.contains(node)) return;
+      onClose(false);
+    };
+    document.addEventListener('pointerdown', outside, true);
+    return () => document.removeEventListener('pointerdown', outside, true);
+  }, [root, onClose]);
+}
+function TextAgentBubble({ editor, projectId, target, onClose }: { editor: PlateEditor; projectId?: string; target: Target; onClose(restoreFocus?: boolean): void }) {
   const portal = usePortalTarget(), position = useBubblePosition(target), c = useTextAgentConversation(editor, target, projectId);
-  return createPortal(<div role="dialog" aria-label="段落 Agent" className="text-agent-bubble" style={position}
+  const root = useRef<HTMLDivElement>(null);
+  useAgentDismiss(root, onClose);
+  return createPortal(<div ref={root} role="dialog" aria-label="段落 Agent" className="text-agent-bubble" style={position}
     onPointerDown={event => event.stopPropagation()} onKeyDown={event => { if (event.key === "Escape" && !event.defaultPrevented) { event.stopPropagation(); onClose(); } }}>
-    <div className="text-agent-heading"><TextAgentModel provider={c.provider} setProvider={c.setProvider} busy={c.state.busy || c.state.resumable}/><button aria-label="关闭 Agent" onClick={onClose}><X size={15}/></button></div>
+    <div className="text-agent-heading"><TextAgentModel provider={c.provider} setProvider={c.setProvider} busy={c.state.busy || c.state.resumable}/><button aria-label="关闭 Agent" onClick={() => onClose()}><X size={15}/></button></div>
     <AgentHistory conversation={c}/><AgentInput conversation={c}/><AgentFooter conversation={c}/>
   </div>, portal);
 }

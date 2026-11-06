@@ -43,7 +43,7 @@
 
 - **入口：** [TextPlateEditor.tsx](../../apps/desktop/src/components/TextPlateEditor.tsx) 与 [EditorKit](../../apps/desktop/src/components/text-editor/plate/components/editor/editor-kit.tsx)。宿主传入文档值、素材、变更回调及拖入解析；实例公开插入素材、Markdown 和预留光标插入接口。
 - **调用方：** 放大工作区 `TextWorkspace`、原文件详情 `TextDocumentEditor`。两者共用块编辑、工具栏、媒体与文档内讨论；布局和保存归属由宿主控制。
-- **服务：** `TextEditorServices` 复用 `TextAgentModel`、既有 `TextAgentTask` 和媒体导入；附件走本机受控命令，导入／导出独立懒加载。评论、修订、提及仅本机，完整状态经 `documentState.ts` 保存。
+- **服务：** `TextEditorServices` 复用 `TextAgentModel`、既有 `TextAgentTask` 和媒体导入；附件走本机受控命令，文档导入已移除，导出独立懒加载。评论、修订、提及仅本机，完整状态经 `documentState.ts` 保存。
 - **边界：** 与桌面 store、Tauri API、应用 portal 和主题相关，不是独立跨运行时 UI 包。不要直接跨模块调用某个上游 kit 内部实现；新增文档入口优先复用 `TextPlateEditor`。来源、样式生成、格式边界及验收见 [Plate 适配说明](../../apps/desktop/src/components/text-editor/plate/README.md) 与 [文本专项](../TEXT-LIBRARY.md)。
 
 ## 给画布卡片添加统一连接加号

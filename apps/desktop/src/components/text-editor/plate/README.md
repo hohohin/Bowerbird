@@ -8,7 +8,7 @@
 - `use-chat.ts` 使用应用的 `TextEditorServices`，沿用 Codex CLI / Cloud DSH；不含示例服务端、假回复或新增 runner。
 - 评论、修订、提及限本机文档；清除演示用户与预置讨论，通过 `documentState.ts` 保存。
 - 媒体上传走应用已有导入，附件走本机受控命令；不用 UploadThing 或示例上传服务。
-- 导入支持 Markdown / HTML / Word，导出支持 Markdown / HTML / PNG / PDF / Word。`textEditorExport*` 位于上一级。
+- 文档导入已移除；剪贴板解析和素材插入保留。导出支持 Markdown / HTML / PNG / PDF / Word。`textEditorExport*` 位于上一级。
 - Mermaid / Graphviz / Flowchart 与 Excalidraw 在本机渲染。PlantUML 的在线预览由用户显式点击触发。Excalidraw 字体由 Vite 插件本地提供。
 - 表格拆分修复 Plate 53.0.9 单单元格选区被过滤的问题；字号输入保留真实选区，弹层关闭不夺回焦点。
 

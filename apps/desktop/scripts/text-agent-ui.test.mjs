@@ -52,10 +52,9 @@ try {
  await bubble.getByRole('textbox',{name:'发送给 Agent'}).fill('帮我写一段');await bubble.getByRole('button',{name:'发送',exact:true}).click();
  await page.waitForFunction(()=>window.calls.some(c=>c.command==='agent_ds_workflow_result'));
  await block().locator('[data-slate-leaf]').click();await page.keyboard.type('手工修改');await page.evaluate(()=>window.agentHold=false);
- await bubble.getByText('段落已变化，结果尚未写入。').waitFor();
+ await bubble.waitFor({state:'hidden'});await page.waitForFunction(()=>window.calls.some(c=>c.command==='agent_ds_workflow_cancel'));
  assert(!await page.evaluate(()=>window.draft.markdown.includes('雨落')));
- await bubble.getByRole('button',{name:'插入到光标处'}).click();await page.waitForFunction(()=>window.draft.markdown.includes('雨落'));
- console.log('PASS concurrent editing preserves the draft and retains result for explicit insertion');
+ console.log('PASS clicking the document dismisses Agent, cancels the task and preserves edits');
  await open();await page.evaluate(()=>window.agentHold=true);
  await bubble.getByRole('textbox',{name:'发送给 Agent'}).fill('帮我写一段');await bubble.getByRole('button',{name:'发送',exact:true}).click();
  await page.waitForFunction(()=>window.calls.some(c=>c.command==='agent_ds_workflow_result'));
@@ -79,9 +78,9 @@ try {
  await bubble.getByRole('textbox',{name:'发送给 Agent'}).fill('帮我写一段');await bubble.getByRole('button',{name:'发送',exact:true}).click();
  await page.waitForFunction(()=>window.calls.some(c=>c.command==='agent_ds_workflow_result'));
  await block().getByRole('button',{name:'段落操作'}).click();await page.getByRole('menuitem',{name:'删除段落',exact:true}).click();
- await page.evaluate(()=>window.agentHold=false);await bubble.getByText('段落已变化，结果尚未写入。').waitFor();
+ await page.evaluate(()=>window.agentHold=false);await bubble.waitFor({state:'hidden'});await page.waitForFunction(()=>window.calls.some(c=>c.command==='agent_ds_workflow_cancel'));
  assert(!await page.evaluate(()=>window.draft.markdown.includes('雨落')));
- console.log('PASS deleting the target retains the result without writing into a different block');
+ console.log('PASS deleting the target dismisses Agent without writing into a different block');
  await open();await page.evaluate(()=>window.agentStartDelay=500);
  await bubble.getByRole('textbox',{name:'发送给 Agent'}).fill('帮我写一段');await bubble.getByRole('button',{name:'发送',exact:true}).click();
  await page.waitForFunction(()=>window.calls.some(c=>c.command==='agent_ds_workflow_start'));

@@ -1262,12 +1262,6 @@
 .bg-background:is(.text-plate-ui, .text-plate-ui *) {
   background-color: var(--bb-surface);
 }
-.bg-background\/95:is(.text-plate-ui, .text-plate-ui *) {
-  background-color: var(--bb-surface);
-  @supports (color: color-mix(in lab, red, red)) {
-    background-color: color-mix(in oklab, var(--bb-surface) 95%, transparent);
-  }
-}
 .bg-black:is(.text-plate-ui, .text-plate-ui *) {
   background-color: var(--color-black);
 }
@@ -3499,14 +3493,6 @@
       @supports (color: color-mix(in lab, red, red)) {
         background-color: color-mix(in oklab, var(--bb-blue) 5%, transparent);
       }
-    }
-  }
-}
-.supports-backdrop-blur\:bg-background\/60:is(.text-plate-ui, .text-plate-ui *) {
-  @supports (backdrop-blur: var(--tw)) {
-    background-color: var(--bb-surface);
-    @supports (color: color-mix(in lab, red, red)) {
-      background-color: color-mix(in oklab, var(--bb-surface) 60%, transparent);
     }
   }
 }
