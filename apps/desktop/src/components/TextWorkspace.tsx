@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowLeft, ArrowUp, ChevronDown, FileText, Folder, PanelLeft } from "lucide-react";
 import { api } from "../lib/api";
-import { parseMarkdown, serializeMarkdown } from "../lib/documentCodec";
 import type { DocumentMedia, DocumentValue, TextDocumentDestination, TextWorkspaceDocument } from "../lib/documentTypes";
 import { connectedRows, folderConnections, type FolderConnection } from "../lib/folderConnections";
 import { documentMedia, documentReferenceIds, textDocuments } from "../lib/textDocuments";
@@ -14,13 +13,17 @@ import { TextWorkspaceLibrary } from "./TextWorkspaceLibrary";
 import { PortalTargetContext } from "../lib/portalTarget";
 import "./TextDocumentEditor.css";
 import "./TextWorkspace.css";
+import { useRecentTextDocument } from "./useRecentTextDocument";
+import { RecentTextDocuments, TextAutosaveStatus } from "./RecentTextDocuments";
+import type { TextDocumentOrigin } from "../lib/recentTextDocuments";
 
 interface Props {
   initialDocument: TextWorkspaceDocument;
   projectId?: string;
-  onChange?(document: TextWorkspaceDocument): void;
+  origin?: TextDocumentOrigin;
+  onChange?(document: TextWorkspaceDocument, context: { isSourceDocument: boolean }): void;
   onClose(document: TextWorkspaceDocument): void;
-  onAddToComposer(document: TextWorkspaceDocument): void | Promise<void>;
+  onAddToComposer(document: TextWorkspaceDocument, context: { isSourceDocument: boolean }): void | Promise<void>;
 }
 
 interface DestinationOption { id: string; label: string; title: string; depth: number; available: boolean; destination: TextDocumentDestination }
@@ -51,15 +54,6 @@ function SaveDestinations({ kind, projectId, busy, onSelect }: { kind: "collecti
     {options.map(option => <button key={option.id} disabled={busy || !option.available} title={option.title} style={{ paddingLeft: 10 + option.depth * 14 }} onClick={() => onSelect(option.destination, option.label)}><Folder size={14}/>{option.label}</button>)}
     {!loading && !error && !options.length && <p>{kind === "collection" ? "请先在素材库建立集合连接。" : "请先创建项目。"}</p>}
   </div>;
-}
-
-function useWorkspaceDraft(initialDocument: TextWorkspaceDocument, onChange: Props["onChange"]) {
-  const [draft, setDraft] = useState(initialDocument);
-  const [value, setValue] = useState(() => parseMarkdown(initialDocument.markdown));
-  const current = useRef(initialDocument), changed = useRef(onChange); changed.current = onChange;
-  function update(next: TextWorkspaceDocument) { current.current = next; setDraft(next); changed.current?.(next); }
-  function changeValue(next: DocumentValue) { setValue(next); update({ ...current.current, markdown: serializeMarkdown(next) }); }
-  return { draft, value, current, update, changeValue };
 }
 
 function useWorkspaceMedia(value: DocumentValue, mounted: { current: boolean }, setNotice: (text: string) => void) {
@@ -114,7 +108,7 @@ async function saveWorkspace(activity: WorkspaceActivity, destination: TextDocum
   } catch (reason) { if (activity.mounted.current) activity.setError(userErrorMessage(reason, "保存未完成，草稿已保留，请重试。")); }
   finally { finishActivity(activity); }
 }
-async function addWorkspace(activity: WorkspaceActivity, onAddToComposer: Props["onAddToComposer"]) {
+async function addWorkspace(activity: WorkspaceActivity, onAddToComposer: (document: TextWorkspaceDocument) => void | Promise<void>) {
   if (!beginActivity(activity)) return;
   try { await onAddToComposer(activity.current.current); }
   catch (reason) { if (activity.mounted.current) activity.setError(userErrorMessage(reason, "内容暂时无法添加，草稿已保留，请重试。")); }
@@ -147,18 +141,18 @@ function WorkspaceActions({ projectId, busy, menu, setMenu, save, add }: {
   return <div className="text-workspace-actions">{([['collection', '保存到集合'], ['project', '保存到项目']] as const).map(([kind, label]) => <div className="text-workspace-action" key={kind}><button disabled={busy} aria-expanded={menu === kind} onClick={() => setMenu(menu === kind ? null : kind)}>{label}<ChevronDown size={12}/></button>{menu === kind && <SaveDestinations kind={kind} projectId={projectId} busy={busy} onSelect={save}/>}</div>)}<button className="text-workspace-primary" disabled={busy} onClick={add}>添加到生成对话框<ArrowUp size={14}/></button></div>;
 }
 
-function useToolbarHeight(panel: { current: HTMLDivElement | null }) {
+function useToolbarHeight(panel: { current: HTMLDivElement | null }, ready: boolean) {
   useEffect(() => {
     const toolbar = panel.current?.querySelector('.text-plate-toolbar');
     if (!toolbar) return;
     const measure = () => panel.current?.style.setProperty('--text-toolbar-height', `${toolbar.getBoundingClientRect().height}px`);
     const observer = new ResizeObserver(measure); observer.observe(toolbar); measure();
     return () => observer.disconnect();
-  }, [panel]);
+  }, [panel, ready]);
 }
 
-export function TextWorkspace({ initialDocument, projectId, onChange, onClose, onAddToComposer }: Props) {
-  const document = useWorkspaceDraft(initialDocument, onChange);
+export function TextWorkspace({ initialDocument, projectId, origin, onChange, onClose, onAddToComposer }: Props) {
+  const document = useRecentTextDocument(initialDocument, origin, onChange);
   const [library, setLibrary] = useState(true), [menu, setMenu] = useState<"collection" | "project" | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [portalTarget, setPortalTarget] = useState<HTMLDivElement | null>(null);
@@ -168,24 +162,29 @@ export function TextWorkspace({ initialDocument, projectId, onChange, onClose, o
 
   }, []);
   useWorkspaceFocus(panel, mounted);
-  useToolbarHeight(panel);
+  useToolbarHeight(panel, document.ready);
   const { media, resolveMedia } = useWorkspaceMedia(document.value, mounted, setNotice);
   const activity = { current: document.current, mounted, pending, setBusy, setError, setNotice };
-  const close = () => onClose(document.current.current);
+  const close = () => { if (!document.ready) { onClose(initialDocument); return; } void document.flush().then(() => onClose(document.bound.current.document)).catch(() => {}); };
   const closeTop = () => { if (menu) setMenu(null); else close(); };
   const insertAsset = (asset: Asset) => { void insertWorkspaceAsset(activity, plate.current, resolveMedia, asset); };
   const save = (destination: TextDocumentDestination, label: string) => { setMenu(null); void saveWorkspace(activity, destination, label); };
+  const add = () => void addWorkspace(activity, async next => {
+    await document.flush();
+    if (next !== document.current.current) throw new Error("文本已有新的更改，请再次添加；当前内容已保留。");
+    await onAddToComposer(next, { isSourceDocument: document.isSourceDocument() });
+  });
   const { draft, value, update, changeValue } = document;
   const keyDown = (event: React.KeyboardEvent) => workspaceKeyDown(event, panel.current!, closeTop);
   return createPortal(<div className="text-workspace" ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label="文本编辑器" onKeyDown={keyDown} onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
     <PortalTargetContext.Provider value={portalTarget}>
 
-    {error && <div className="text-workspace-feedback is-error" role="alert">{error}</div>}{notice && <div className="text-workspace-feedback" role="status">{notice}</div>}
+    {(error || document.error) && <div className="text-workspace-feedback is-error" role="alert">{error || document.error}{document.error && <><button onClick={() => void document.retry()?.catch(() => {})}>重试自动保存</button>{document.ready && <button onClick={() => void document.copy()}>另存草稿</button>}</>}</div>}{notice && <div className="text-workspace-feedback" role="status">{notice}</div>}
     <div className={`text-workspace-layout canvas-workspace canvas-tactical${library ? "" : " is-source-collapsed"}`}><TextWorkspaceLibrary open={library} projectId={projectId} onInsert={insertAsset} onClose={() => setLibrary(false)} onNavigate={close} onReusePrompt={text => plate.current?.insertMarkdown(text)}/>
       <main className="text-workspace-writing">
-        <section className="text-document-editor"><TextPlateEditor ref={plate} agent={{ projectId }} value={value} media={media} onChange={changeValue} onDropAssets={resolveMedia}
-          toolbarStart={<div className="text-workspace-name"><button className="text-workspace-icon" aria-label="返回" title="返回" onClick={close}><ArrowLeft size={18}/></button><FileText size={16}/><input aria-label="文档名称" title="重命名文档" value={draft.title} placeholder="空白文档" onChange={event => update({ ...draft, title: event.target.value })}/>{!library && <button className="text-workspace-icon" aria-label="打开素材库" title="打开素材库" onClick={() => setLibrary(true)}><PanelLeft size={16}/></button>}</div>}
-          toolbarEnd={<WorkspaceActions projectId={projectId} busy={busy} menu={menu} setMenu={setMenu} save={save} add={() => void addWorkspace(activity, onAddToComposer)}/>}/></section>
+        <section className="text-document-editor">{document.ready ? <TextPlateEditor key={draft.id} ref={plate} agent={{ projectId }} value={value} media={media} onChange={changeValue} onDropAssets={resolveMedia}
+          toolbarStart={<div className="text-workspace-name"><button className="text-workspace-icon" aria-label="返回" title="返回" onClick={close}><ArrowLeft size={18}/></button><FileText size={16}/><input aria-label="文档名称" title="重命名文档" value={draft.title} placeholder="空白文档" onChange={event => update({ ...draft, title: event.target.value })}/><TextAutosaveStatus status={document.status}/><RecentTextDocuments currentId={draft.id} disabled={busy} beforeOpen={document.flush} onChoose={id => { setMenu(null); setError(""); setNotice(""); void document.choose(id); }}/>{!library && <button className="text-workspace-icon" aria-label="打开素材库" title="打开素材库" onClick={() => setLibrary(true)}><PanelLeft size={16}/></button>}</div>}
+          toolbarEnd={<WorkspaceActions projectId={projectId} busy={busy} menu={menu} setMenu={setMenu} save={save} add={add}/>}/> : <div><button onClick={close}>返回</button><p role="status">{document.error ? "文档暂时无法打开，请重试。" : "正在打开文档…"}</p></div>}</section>
       </main>
     </div>
     </PortalTargetContext.Provider>

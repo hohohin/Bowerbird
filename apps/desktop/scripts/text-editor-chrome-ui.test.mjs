@@ -3,7 +3,7 @@ import {mkdir,writeFile,readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {createServer} from 'vite';
 import {chromium} from '../../html-renderer/node_modules/playwright/index.mjs';
-const server=await createServer({root:fileURLToPath(new URL('..',import.meta.url)),cacheDir:'.tmp/text-editor-chrome-vite',plugins:process.env.BOWERBIRD_CHROME_MUTATION?[{name:'isolated-chrome-mutation',enforce:'pre',load(id){if(id.replaceAll('\\','/').endsWith('/'+process.env.BOWERBIRD_CHROME_MUTATION_FILE))return readFile(process.env.BOWERBIRD_CHROME_MUTATION,'utf8');}}]:[],server:{host:'127.0.0.1',port:0,hmr:false,watch:null}});await server.listen();
+const server=await createServer({root:fileURLToPath(new URL('..',import.meta.url)),cacheDir:'.tmp/text-editor-chrome-vite',plugins:process.env.BOWERBIRD_CHROME_MUTATION?[{name:'isolated-chrome-mutation',enforce:'pre',load(id){if(id.replaceAll('\\','/').endsWith('/'+process.env.BOWERBIRD_CHROME_MUTATION_FILE))return readFile(process.env.BOWERBIRD_CHROME_MUTATION,'utf8');}}]:[],server:{host:'127.0.0.1',port:0,strictPort:false,hmr:false,watch:null}});await server.listen();
 const browser=await chromium.launch({channel:'chrome',headless:true});const page=await browser.newPage({viewport:{width:1440,height:1000}});page.setDefaultTimeout(8000);
 const failures=[],errors=[],coverage=[];let collecting=false;page.on('pageerror',e=>errors.push(e.message));
 const editor=page.getByRole('textbox',{name:'文档正文',exact:true}),toolbar=page.getByRole('toolbar',{name:'文字格式',exact:true}),bubble=page.getByRole('dialog',{name:'段落 Agent',exact:true});

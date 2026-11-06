@@ -5684,15 +5684,16 @@ export function CanvasWorkspace({
             await ensureMaterialized(draft);
           }} />}
         {documentEditor && <Suspense fallback={null}><TextWorkspace key={documentEditor.nodeId} initialDocument={documentEditor.initialDocument} projectId={documentEditor.projectId}
-          onChange={stageDocumentCard}
+          origin={{ key: `canvas-document:${documentEditor.nodeId}`, version: JSON.stringify([documentEditor.initialDocument.title, documentEditor.initialDocument.markdown]), followsChanges: true }}
+          onChange={(document, context) => { documentEditorRevision.current++; if (context.isSourceDocument) stageDocumentCard(document); }}
           onClose={document => { saveDocumentCard(document); documentEditorSession.current++; setDocumentEditor(null); }}
-          onAddToComposer={async document => {
+          onAddToComposer={async (document, context) => {
             const expected = documentEditor.projectId;
             const session = documentEditorSession.current, revision = documentEditorRevision.current;
             const prompt = await documentToPromptLoad(document);
             if (documentEditorSession.current !== session || activeCanvasRef.current.id !== expected) return;
             if (documentEditorRevision.current !== revision) throw new Error("文本已有新的更改，请再次添加；当前内容已保留。");
-            saveDocumentCard(document);
+            if (context.isSourceDocument) saveDocumentCard(document); else flushDocumentCard();
             setDocumentPromptLoad({ ...prompt, id: canvasId("document-prompt") });
             setSelectedChatId(null); useStore.getState().setBoardActive(true); documentEditorSession.current++; setDocumentEditor(null);
           }}/></Suspense>}
