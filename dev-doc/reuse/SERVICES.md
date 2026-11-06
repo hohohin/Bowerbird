@@ -61,6 +61,8 @@ H3 的独立提示词优化复用 [canvasWorkflowRuntime.ts](../../apps/desktop/
 
 ## 从本机调用需要登录的 Cloud 接口
 
+- **通信与恢复契约（2026-11-06）**：先用 `CloudConfig.endpoint` 的闭集路由；桌面与官网共用 [cloud-routes.json](../../website/cloud-routes.json)，未知接口不得回退直连。Agent Storage 使用 `agent_transfer_url`，原文字识别查询使用 `understand_lookup_endpoint`，不手拼上游地址。正式创建请求经 `AuthClient` 保存无正文的原请求身份；Agent 失去创建响应只查 `get_by_key`。新增入口须通过桌面构建中的路由检查及对应传输测试。完整边界、上线顺序与回滚见 [Cloud 通信](../CLOUD-TRANSPORT.md)。
+
 - **用途／关键词**：HTTP、Bearer、刷新 token、401、超时、云客户端。
 - **入口**：[cloud/client.rs](../../apps/desktop/src-tauri/src/cloud/client.rs) 的 `CloudClient::http`／`config` 构造请求；[cloud/auth.rs](../../apps/desktop/src-tauri/src/cloud/auth.rs) 的 `AuthClient::send_authorized` 负责已登录 Function 请求。构造 client 本身不联网。
 - **调用**：[cloud/entitlement.rs](../../apps/desktop/src-tauri/src/cloud/entitlement.rs) 的 `EntitlementService::sync` 和 [codex/understand.rs](../../apps/desktop/src-tauri/src/codex/understand.rs) 的 Cloud 理解请求均调用 `send_authorized`。
@@ -104,7 +106,7 @@ H3 的独立提示词优化复用 [canvasWorkflowRuntime.ts](../../apps/desktop/
 ## 为官网或桌面配置 Cloud 反向代理入口
 
 - **用途／关键词**：官网、Node、网关、账号代理、签名上传下载、路由白名单。
-- **入口**：[account-proxy.mjs](../../website/account-proxy.mjs) 的 `createAccountProxy` 处理账号/auth 和购买查单固定路由；[cloud-proxy.mjs](../../website/cloud-proxy.mjs) 的 `createCloudProxy` 处理 generation/chat 与限定 Storage 签名路径；[payment-proxy.mjs](../../website/payment-proxy.mjs) 的 `createPaymentProxy` 原样转发微信签名通知。
+- **入口**：[account-proxy.mjs](../../website/account-proxy.mjs) 的 `createAccountProxy` 处理账号/auth 和购买查单固定路由；[cloud-proxy.mjs](../../website/cloud-proxy.mjs) 的 `createCloudProxy` 按共同契约处理六个 Function、受限原任务查询与 Storage 签名路径；[payment-proxy.mjs](../../website/payment-proxy.mjs) 的 `createPaymentProxy` 原样转发微信签名通知。
 - **调用**：[server.mjs](../../website/server.mjs) 的 `startServer` 按 `/api/account/`、`/api/cloud/` 和 `/api/pay/` 分派。
 - **边界／状态**：**模块内部专用（website Node server）**。各 handler 的超时、路由、大小、流式传输及断连行为不同；都不能成为任意 URL 代理，不携带 service key，不自动重试。支付通知不能 JSON 解析后重序列化。可以扩展其明确支持的路由，不从桌面直接 import，也不把 `server.mjs` 内早期生成函数当作通用 provider API。
 

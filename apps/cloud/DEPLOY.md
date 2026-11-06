@@ -516,3 +516,7 @@ node --env-file=.env scripts/check-agent-runtime-health.mjs
 - `DAILY_COST_LIMIT_CNY` 是上海自然日的全站预估成本上限；单次预估成本 = 预扣积分 × `COST_CNY_PER_CREDIT`（默认 ¥0.047）。`RATE_LIMIT_PER_USER_PER_MIN` 是同账号每分钟首次上游请求数；同一幂等键重放不重复占用额度，也不会重复提交上游。
 - `BOWERBIRD_CLOUD_MOCK` 与 `BOWERBIRD_PAYMENT_MOCK` 是两个独立开关：前者控制算力，后者控制支付。
 - 部署完成后请告诉我「已部署」，我会继续真机验收（登录 → 积分 → 生成 → 流水 → 扣费/回滚）。
+
+## 2026-11-06 Cloud 全通路与 Agent 原单恢复
+
+官网版本 `20261106-cloud-routing` 已由候选、现役、公网各 14 项检查验证；前版 `20261106-h3-agent-gateway` 保留回滚，仅代理及新契约变化，86 个其他文件保持。`agent-run` v53→v54 以下载的现役源码为底，只增加 `get_by_key` 只读恢复，保留 `verify_jwt=false`、内部用户鉴权、原计费与 FeaturePolicy；部署后源码读回一致，其他函数版本不变。没有迁移、Worker 或密钥变更，没有创建真实付费任务。Windows 26.11.602 配套构建／发布验证进行中。完整契约、拒绝与恢复边界、验证及回滚见 [CLOUD-TRANSPORT](../../dev-doc/CLOUD-TRANSPORT.md)，原始证据 `.tmp/cloud-routing-20261106/`。

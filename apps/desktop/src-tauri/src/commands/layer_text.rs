@@ -20,17 +20,13 @@ pub async fn layer_text_request(
         return Err(AppError::Other("未知文字识别操作".into()));
     }
     // RLS only exposes jobs belonging to the signed-in user.
-    let base = cloud
-        .config()
-        .supabase_url
-        .as_deref()
-        .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?
-        .trim_end_matches('/');
+    let lookup_endpoint = cloud.config().understand_lookup_endpoint()
+        .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
     let lookup = auth
         .send_authorized(
             cloud
                 .http()
-                .get(format!("{base}/rest/v1/understand_jobs"))
+                .get(lookup_endpoint)
                 .query(&[
                     ("select", "status,result_text,error_code,safe_message"),
                     ("idempotency_key", &format!("eq.{key}")),

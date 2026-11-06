@@ -8,7 +8,7 @@
     "test:screenshot": "node scripts/screenshot-ui.test.mjs",
     "dev": "vite",
     "build:text-editor-css": "node scripts/build-text-editor-css.mjs",
-    "build": "tsc --noEmit && vite build",
+    "build": "node scripts/cloud-routing-contract.test.mjs && tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "lint": "tsc --noEmit",

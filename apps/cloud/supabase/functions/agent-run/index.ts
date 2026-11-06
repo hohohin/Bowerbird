@@ -10,6 +10,7 @@ import { accountTestMarker, activeTier, policyForUser } from "../_shared/feature
 import { imageMetadata } from "../_shared/image-metadata.ts";
 import { corsHeaders } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
+import { recoverAgentCreate } from "../_shared/agent-create-recovery.ts";
 
 const BUCKET = "agent-temp";
 const CONTROLLED_SKILL = "bowerbird-controlled-image-edit";
@@ -1233,6 +1234,8 @@ Deno.serve(async (request) => {
     const action = typeof body.action === "string" ? body.action : "";
 
     switch (action) {
+      case "get_by_key":
+        return jsonResponse(await recoverAgentCreate(admin, user.id, body));
       case "create":
         return await actionCreate(admin, user, body, id);
       case "enqueue":

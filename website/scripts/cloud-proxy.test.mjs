@@ -11,6 +11,87 @@ const UPLOAD = `/storage/v1/object/upload/sign/generation-temp/jobs/${JOB}/input
 const DOWNLOAD = `/storage/v1/object/sign/generation-temp/jobs/${JOB}/outputs/result.mp4?token=test%2Bsigned`;
 const AUTH = { Authorization: "Bearer user-token" };
 
+test('understanding, visual profiles and classification preserve original requests through the gateway', async t => {
+  const { send, calls } = await fixture(t);
+  for (const name of ['understand-proxy', 'visual-profile', 'jev-proxy']) {
+    for (const action of ['create', 'get']) {
+      const body = JSON.stringify({ action, idempotency_key: 'original-key', job_id: JOB });
+      assert.equal((await send(`/functions/v1/${name}`, 'POST', body, AUTH)).status, 200);
+      assert.equal(calls.at(-1).body.toString(), body);
+      assert.equal(calls.at(-1).headers.Authorization, AUTH.Authorization);
+    }
+  }
+  assert.equal((await send('/functions/v1/future-function', 'POST', '{}', AUTH)).status, 404);
+  assert.equal(calls.length, 6);
+});
+
+test('original OCR lookup is read-only, narrow and still subject to user RLS', async t => {
+  const { send, calls } = await fixture(t);
+  const query = new URLSearchParams({ select: 'status,result_text,error_code,safe_message', idempotency_key: 'eq.original:key', limit: '1' });
+  const path = `/rest/v1/understand_jobs?${query}`;
+  assert.equal((await send(path, 'GET', undefined, AUTH)).status, 200);
+  assert.equal(calls[0].headers.Authorization, AUTH.Authorization);
+  assert.equal(calls[0].url.search, '?' + query);
+  assert.equal((await send(path)).status, 401);
+  for (const bad of [path + '&or=()', path.replace('limit=1', 'limit=2'), path.replace('select=status', 'select=*'), path.replace('understand_jobs', 'agent_runs')]) {
+    assert.ok([400, 404].includes((await send(bad, 'GET', undefined, AUTH)).status));
+  }
+  assert.equal((await send(path, 'POST', '{}', AUTH)).status, 404);
+  assert.equal(calls.length, 1);
+});
+
+test('all Agent references and local result transfers use signed bounded storage without account credentials', async t => {
+  const { send, calls } = await fixture(t);
+  for (const [object, mime] of [['inputs/reference-1', 'image/jpeg'], ['inputs/reference-8', 'image/jpeg'], ['artifacts/call.png', 'image/png'], ['artifacts/call.webp', 'image/webp'], ['artifacts/call.jpg', 'image/jpeg']]) {
+    const path = `/storage/v1/object/upload/sign/agent-temp/runs/${JOB}/${object}?token=signed%2Btoken`;
+    assert.equal((await send(path, 'PUT', 'pixels', { ...AUTH, 'Content-Type': mime, 'x-upsert': 'true' })).status, 200);
+    assert.equal(calls.at(-1).headers.Authorization, undefined);
+    assert.equal(calls.at(-1).headers['x-upsert'], 'true');
+    assert.equal(calls.at(-1).url.search, '?token=signed%2Btoken');
+    assert.equal((await send(path, 'PUT', undefined, { 'Content-Type': mime, 'Content-Length': 20971521 })).status, 413);
+  }
+  assert.equal(calls.length, 5);
+  assert.equal((await send(`/storage/v1/object/upload/sign/agent-temp/runs/${JOB}/inputs/reference-9?token=signed`, 'PUT', 'x')).status, 404);
+});
+
+test('Agent downloads preserve signed download flag and reject private diagnostics and over-limit content', async t => {
+  const { send } = await fixture(t, { fetchImpl: async () => new Response('pixels', { headers: { 'Content-Type': 'image/png' } }) });
+  const path = `/storage/v1/object/sign/agent-temp/runs/${JOB}/artifacts/${'a'.repeat(64)}-slice-0001.png?token=signed%2Btoken&download=`;
+  assert.equal((await send(path)).body.toString(), 'pixels');
+  for (const bad of [path.replace('.png?', '.json?'), path.replace('/artifacts/', '/checkpoints/'), path + 'secret.png', path + '&token=again']) {
+    assert.ok([400, 404].includes((await send(bad)).status));
+  }
+  const large = await fixture(t, { fetchImpl: async () => new Response('x', { headers: { 'Content-Type': 'image/png', 'Content-Length': '20971521' } }) });
+  assert.equal((await large.send(path)).status, 502);
+});
+
+test("Agent control and signed H3 manifest preserve authorization and never retry", async t => {
+  const { send, calls } = await fixture(t);
+  for (const action of ["create", "enqueue", "get", "cancel"]) {
+    const body = JSON.stringify({ action, runId: JOB });
+    assert.equal((await send('/functions/v1/agent-run', 'POST', body, AUTH)).status, 200);
+    assert.equal(calls.at(-1).body.toString(), body);
+    assert.equal(calls.at(-1).headers.Authorization, AUTH.Authorization);
+  }
+  const path = `/storage/v1/object/upload/sign/agent-temp/runs/${JOB}/inputs/request.json?token=test%2Bsigned`;
+  const body = JSON.stringify({ schemaVersion: 1, textRewrite: { source: '中文提示词' } });
+  assert.equal((await send(path, 'PUT', body, { ...AUTH, 'x-upsert': 'true' })).status, 200);
+  const upload = calls.at(-1);
+  assert.equal(upload.url.search, '?token=test%2Bsigned');
+  assert.equal(upload.headers.Authorization, undefined);
+  assert.equal(upload.headers.apikey, undefined);
+  assert.equal(upload.headers['x-upsert'], 'true');
+  assert.equal((await send(path, 'PUT', 'x'.repeat(65537))).status, 413);
+  assert.equal((await send(path, 'PUT', body, { 'Content-Type': 'text/plain' })).status, 415);
+  assert.equal((await send(path.replace(/\?token=.*/, ''), 'PUT', body)).status, 401);
+  assert.equal((await send(path.replace('request.json', 'other.json'), 'PUT', body)).status, 404);
+  assert.equal((await send('/functions/v1/agent-run', 'POST', '{}')).status, 401);
+  assert.equal((await send('/functions/v1/agent-worker', 'POST', '{}', AUTH)).status, 404);
+  assert.equal(calls.length, 5);
+  const broken = await fixture(t, { fetchImpl: async () => { throw Error('ECONNRESET'); } });
+  assert.equal((await broken.send('/functions/v1/agent-run', 'POST', '{}', AUTH)).status, 502);
+});
+
 test("chat quote, create and recovery use the authenticated fixed Cloud gateway", async t => {
   const { send, calls } = await fixture(t);
   for (const action of ["quote", "create", "get"]) {

@@ -20,6 +20,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `dev-doc/ONBOARDING.md` | 身份实操引导、三条真实操作路线、独立项目与进度恢复、跳步及隔离验证 | 入门引导、首启/升级介绍、引导素材导入或学习提示相关工作前必读 |
 | `dev-doc/DESKTOP-UPDATES.md` | 双端自动更新协议、密钥与发布流程、部署/回滚证据、验收边界及 Mac 协作共识 | 自动更新、更新包签名/清单发布、更新失败或双端上线状态核验前必读 |
 | `dev-doc/USER-FACING-ERRORS.md` | 全应用错误提示展示边界、中文转换、诊断保留与故障注入验证 | 新增或修改错误提示、任务失败展示、通知、安装授权及生产错误排查前必读 |
+| `dev-doc/CLOUD-TRANSPORT.md` | Cloud 统一网关、共同路由契约、签名文件、原请求身份与断线恢复及发布检查 | 新增 Cloud 请求／文件传输、修改重试恢复或排查连接故障前必读 |
 | `PROJECT.md` | **活文档（项目内容唯一权威）**：项目说明 / 目前进展 / 关键约定 / 踩坑记录 | 每次开工前先读「目前进展」与「关键约定」 |
 | `project_logs/README.md` | PROJECT 详细历史的日期日志、2026-10-31 整理前原件、行号与哈希索引及审计处理记录 | 追溯被替代约定、完整故障过程或本次文档整理时；现行结论仍读 PROJECT.md |
 | `dev-doc/UI-DESIGN-SPEC.md` | 当前工业制图视觉与交互规范、深浅色 tokens、卡片／控件／菜单／动效及验收规则 | 设计、修改或审查任何桌面界面前读；产品决策与实装状态仍以 PROJECT.md 为准 |

@@ -392,26 +392,88 @@ async fn agent_action(
     body: Value,
     context: &str,
 ) -> Result<Value, AppError> {
+    // A lost create response is reconciled once by its original identity. Never
+    // replay create or mint a new key, including when the lookup itself fails.
+    let result = agent_action_once(cloud, auth, &body, context).await;
+    if result.is_err() && body.get("action").and_then(Value::as_str) == Some("create") {
+        let mut lookup = body.clone();
+        lookup["action"] = json!("get_by_key");
+        if let Ok(found) = agent_action_once(cloud, auth, &lookup, "查询原 Agent 创建请求失败").await {
+            return Ok(found);
+        }
+        if let Err(error) = result {
+            return Err(AppError::Cloud(format!("{error} [idempotencyKey={}]；原任务状态尚未确认，不会自动重发",
+                body.get("idempotencyKey").and_then(Value::as_str).unwrap_or("unknown"))));
+        }
+    }
+    result
+}
+
+async fn agent_action_once(
+    cloud: &CloudClient, auth: &AuthClient, body: &Value, context: &str,
+) -> Result<Value, AppError> {
     let endpoint = cloud
         .config()
         .endpoint("agent-run")
         .ok_or_else(|| AppError::Cloud("Bowerbird Cloud 未配置".into()))?;
     let response = auth
-        .send_authorized(cloud.http().post(endpoint).json(&body), context)
+        .send_authorized(cloud.http().post(endpoint).json(body), context)
         .await?;
     let status = response.status();
+    let gateway_id = response.headers().get("X-Bowerbird-Request-Id").and_then(|value| value.to_str().ok())
+        .filter(|value| value.len() <= 64 && value.bytes().all(|ch| ch.is_ascii_alphanumeric() || ch == b'-'))
+        .unwrap_or("unavailable").to_string();
     let text = response
         .text()
         .await
-        .map_err(|error| AppError::Cloud(format!("读取 Agent 响应失败: {error}")))?;
+        .map_err(|error| crate::cloud::client::request_error("读取 Agent 响应失败", error))?;
     if !status.is_success() {
-        return Err(AppError::Cloud(safe_cloud_message(
+        let message = safe_cloud_message(
             &text,
             &format!("{context}（HTTP {}）", status.as_u16()),
-        )));
+        );
+        return Err(AppError::Cloud(format!("{message} [HTTP {};gatewayRequestId={gateway_id}]", status.as_u16())));
     }
     serde_json::from_str(&text)
         .map_err(|error| AppError::Cloud(format!("解析 Agent 响应失败: {error}")))
+}
+
+#[cfg(test)]
+mod create_recovery_tests {
+    use super::*;
+    use axum::{routing::post, Json, Router};
+    #[tokio::test]
+    async fn lost_agent_create_response_queries_original_key_without_resubmission() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let record = seen.clone();
+        let router = Router::new().route("/functions/v1/agent-run", post(move |Json(body): Json<Value>| {
+            let record = record.clone();
+            async move {
+                record.lock().unwrap().push(body.clone());
+                if body["action"] == "create" {
+                    (axum::http::StatusCode::BAD_GATEWAY, Json(json!({"error":{"message":"response lost"}})))
+                } else {
+                    (axum::http::StatusCode::OK, Json(json!({"runId":"original-run","status":"uploading","recovered":true})))
+                }
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let cloud = CloudClient::new(crate::cloud::config::CloudConfig {
+            supabase_url: Some(format!("http://{}", listener.local_addr().unwrap())),
+            supabase_publishable_key: Some("test-public".into()), account_api_url: None,
+        }).unwrap();
+        let auth = AuthClient::with_test_session(cloud.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let original = json!({"action":"create","idempotencyKey":"original-key","inputManifestHash":"hash"});
+        let found = agent_action(&cloud, &auth, original.clone(), "创建失败").await.unwrap();
+        server.abort();
+        assert_eq!(found["runId"], "original-run");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0], original);
+        assert_eq!(seen[1]["action"], "get_by_key");
+        assert_eq!(seen[1]["idempotencyKey"], original["idempotencyKey"]);
+    }
 }
 
 fn run_status(snapshot: &Value) -> Result<String, AppError> {
@@ -1265,7 +1327,7 @@ fn checkpoint_created_run(
             "skill_id": skill_id,
             "skill_version": skill_version,
             "agent_runtime": agent_runtime,
-            "status": "uploading",
+            "status": created.get("status").and_then(Value::as_str).unwrap_or("uploading"),
             "progress": 0,
             "budget_credits": created.get("budgetCredits").cloned().unwrap_or(json!(default_budget)),
         },
@@ -1278,7 +1340,7 @@ fn checkpoint_created_run(
         run_id: run_id.to_string(),
         conversation_id: conversation_id.to_string(),
         skill_id: skill_id.to_string(),
-        status: "uploading".into(),
+        status: created.get("status").and_then(Value::as_str).unwrap_or("uploading").into(),
         intent_prompt: intent_prompt.to_string(),
         reference_asset_ids: reference_asset_ids.to_vec(),
         project_id: project_id.map(str::to_string),
@@ -1401,12 +1463,6 @@ fn normalize_intent_prompt(
     Ok(normalized)
 }
 
-fn valid_https_url(value: &str) -> bool {
-    reqwest::Url::parse(value)
-        .ok()
-        .is_some_and(|url| url.scheme() == "https" && url.host_str().is_some())
-}
-
 async fn upload_signed(
     cloud: &CloudClient,
     url: &str,
@@ -1414,9 +1470,8 @@ async fn upload_signed(
     bytes: Vec<u8>,
     label: &str,
 ) -> Result<(), AppError> {
-    if !valid_https_url(url) {
-        return Err(AppError::Cloud(format!("{label}上传地址不安全")));
-    }
+    let url = cloud.config().agent_transfer_url(url, true)
+        .ok_or_else(|| AppError::Cloud(format!("{label}上传地址不安全")))?;
     let response = cloud
         .http()
         .put(url)
@@ -1425,7 +1480,7 @@ async fn upload_signed(
         .body(bytes)
         .send()
         .await
-        .map_err(|error| AppError::Cloud(format!("{label}上传失败: {error}")))?;
+        .map_err(|error| crate::cloud::client::request_error(&format!("{label}上传失败"), error))?;
     if !response.status().is_success() {
         return Err(AppError::Cloud(format!(
             "{label}上传失败（HTTP {}）",
@@ -1613,6 +1668,10 @@ async fn start_html_layout_run(
         creative_launch.as_ref(),
         15,
     )?;
+    if created.get("recovered").and_then(Value::as_bool) == Some(true)
+        && created.get("status").and_then(Value::as_str) != Some("uploading") {
+        return refresh_record(&db, &cloud, &auth, &run_id).await;
+    }
     let transfer_result: Result<(), AppError> = async {
         let request_url = created
             .get("uploadUrl")
@@ -1901,6 +1960,10 @@ async fn start_unified_agent_run(
         creative_launch.as_ref(),
         30,
     )?;
+    if created.get("recovered").and_then(Value::as_bool) == Some(true)
+        && created.get("status").and_then(Value::as_str) != Some("uploading") {
+        return refresh_record(&db, &cloud, &auth, &run_id).await;
+    }
     if created.get("agentRuntime").and_then(Value::as_str) != Some(DSH_AGENT_RUNTIME) {
         let cancel_response = agent_action(
             cloud,
@@ -2309,6 +2372,10 @@ pub async fn cloud_agent_start(
         creative_launch.as_ref(),
         48,
     )?;
+    if created.get("recovered").and_then(Value::as_bool) == Some(true)
+        && created.get("status").and_then(Value::as_str) != Some("uploading") {
+        return refresh_record(&db, &cloud, &auth, &run_id).await;
+    }
     let returned_agent_runtime = created.get("agentRuntime").and_then(Value::as_str);
     if returned_agent_runtime != Some(resolved_agent_runtime) {
         let cancel_response = agent_action(
@@ -2725,15 +2792,14 @@ async fn download_artifact(
     )
     .await?;
     let url = signed.get("url").and_then(Value::as_str).unwrap_or("");
-    if !valid_https_url(url) {
-        return Err(AppError::Cloud("Agent 图片下载地址不安全".into()));
-    }
+    let url = cloud.config().agent_transfer_url(url, false)
+        .ok_or_else(|| AppError::Cloud("Agent 图片下载地址不安全".into()))?;
     let response = cloud
         .http()
         .get(url)
         .send()
         .await
-        .map_err(|error| AppError::Cloud(format!("下载 Agent 图片失败: {error}")))?;
+        .map_err(|error| crate::cloud::client::request_error("下载 Agent 图片失败", error))?;
     if !response.status().is_success() {
         return Err(AppError::Cloud(format!(
             "下载 Agent 图片失败（HTTP {}）",
