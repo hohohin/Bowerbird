@@ -55,7 +55,7 @@ try {
       sideFade: Array.from({ length: 240 }, (_, i) => alpha(tags[0].left - field.left - 80 + i)),
       gap: parseFloat(getComputedStyle(element.querySelector('.composer-mode-picker')).gap) };
   });
-  assert.equal(projection.blur, 'blur(14.4px) saturate(0.72)', 'background blur is reduced by 20%');
+  assert.match(projection.blur, /url\("?#composer-contour-.*-dark/, 'approved contour film replaces background blur');
   assert.ok(projection.left < 8 && projection.right < 8, `materials beside the composer remain clear: ${JSON.stringify(projection)}`);
   assert.ok(projection.center > 240, 'feathering preserves the reading area');
   assert.ok(projection.above.every(alpha => alpha < 8), `blur stays below the arc: ${JSON.stringify(projection)}`);

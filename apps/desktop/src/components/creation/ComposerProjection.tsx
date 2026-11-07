@@ -1,12 +1,18 @@
-import { useLayoutEffect, useRef } from "react";
+import { useId, useLayoutEffect, useRef, type CSSProperties } from "react";
 
 const feather = 4;
 const depths = [-.42, .35, 1];
 const matrices = [{ columns: 5, rows: 3, size: 2.1 }, { columns: 5, rows: 3, size: 1.8 }, { columns: 3, rows: 3, size: 3.2 }];
+// Approved film: 72% contour detail, with a stable neutral reading surface.
+const films = [
+  { theme: "dark", slopes: [.1584, .1728, .1872], base: [.10, .115, .14] },
+  { theme: "light", slopes: [-.1656, -.1584, -.144], base: [.94, .95, .97] },
+];
 
 /** Decorative projection only; no draft, pointer target or generation state. */
 export function ComposerProjection({ collapsed }: { collapsed: boolean }) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const filmId = `composer-contour-${useId().replace(/:/g, "")}`;
   useLayoutEffect(() => {
     const root = rootRef.current, dock = root?.parentElement;
     if (!root || !dock) return;
@@ -118,7 +124,21 @@ export function ComposerProjection({ collapsed }: { collapsed: boolean }) {
       document.removeEventListener("visibilitychange", motion); reduced.removeEventListener("change", motion);
     };
   }, [collapsed]);
-  return <div ref={rootRef} className="composer-projection" aria-hidden="true">
+  return <div ref={rootRef} className="composer-projection" aria-hidden="true" style={{
+    "--projection-contour-dark": `url(#${filmId}-dark)`,
+    "--projection-contour-light": `url(#${filmId}-light)`,
+  } as CSSProperties}>
+    <svg width="0" height="0" className="composer-projection-filters">
+      <defs>{films.map(({ theme, slopes, base }) => <filter key={theme} id={`${filmId}-${theme}`} colorInterpolationFilters="sRGB" x="0" y="0" width="100%" height="100%">
+        <feColorMatrix type="saturate" values="0" />
+        <feConvolveMatrix order="3" kernelMatrix="0 -1 0 -1 4 -1 0 -1 0" preserveAlpha="true" edgeMode="duplicate" />
+        <feComponentTransfer>
+          <feFuncR type="linear" slope={slopes[0]} intercept={base[0]} />
+          <feFuncG type="linear" slope={slopes[1]} intercept={base[1]} />
+          <feFuncB type="linear" slope={slopes[2]} intercept={base[2]} />
+        </feComponentTransfer>
+      </filter>)}</defs>
+    </svg>
     <div className="composer-projection-surface" />
     <canvas className="composer-projection-dots" />
     {matrices.map(({ columns, rows, size }, index) => <svg key={index} className={`composer-cross-matrix depth-${index}`} width={columns * 13} height={rows * 13} viewBox={`0 0 ${columns * 13} ${rows * 13}`}>

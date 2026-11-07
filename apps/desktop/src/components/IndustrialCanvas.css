@@ -194,14 +194,14 @@ html[data-theme] .composer-glass .composer-parameters .model-select .model-selec
 
 /* Unboxed projection: one shared shell for the library and project canvas. */
 html[data-theme] .creation-dock.composer-glass {
-  --composer-paper:#141414;--composer-ink:#dcdcdc;--composer-muted:#949494;
+  --composer-paper:#1a1d24;--composer-ink:#dcdcdc;--composer-muted:#949494;
   --composer-accent:#4868ff;--composer-accent-text:#bac8ff;--composer-rail:128px;--composer-end-inset:8px;
   --projection-dot:#b0becb;--projection-line:#8faab8;--projection-tag:235 242 247;--projection-glow:143,170,184;
   container:composer / inline-size;isolation:isolate;border:0;border-radius:0;outline:none;background:transparent;box-shadow:none;
   backdrop-filter:none;-webkit-backdrop-filter:none;filter:none;transition:none;animation:none;color:var(--composer-ink);
 }
 html[data-theme="light"] .creation-dock.composer-glass {
-  --composer-paper:#eef0f5;--composer-ink:#2c354c;--composer-muted:#58627c;--composer-accent-text:#4057a5;
+  --composer-paper:#f0f2f7;--composer-ink:#2c354c;--composer-muted:#58627c;--composer-accent-text:#4057a5;
   --projection-dot:#52638c;--projection-line:#6b7da2;--projection-tag:255 255 255;--projection-glow:72,104,175;
 }
 html[data-theme] .creation-dock.composer-glass::before,
@@ -209,10 +209,16 @@ html[data-theme] .creation-dock.composer-glass::after { content:none; }
 html[data-theme] .creation-dock.composer-glass:not(.is-collapsed) { padding-top:48px;margin-bottom:var(--composer-bottom-gap); }
 html[data-theme] .library-composer .creation-dock.composer-glass { margin-bottom:0; }
 .composer-projection { position:absolute;z-index:-1;pointer-events:none; }
+.composer-projection-filters { position:absolute; }
 .composer-projection-surface,.composer-projection-dots,.composer-projection-arc { position:absolute;inset:0;width:100%;height:100%;pointer-events:none; }
 .composer-projection-surface {
-  background:linear-gradient(180deg,color-mix(in srgb,var(--composer-paper) 12%,transparent),color-mix(in srgb,var(--composer-paper) 68%,transparent));
-  backdrop-filter:blur(14.4px) saturate(.72);-webkit-backdrop-filter:blur(14.4px) saturate(.72);
+  background:linear-gradient(145deg,rgb(var(--projection-tag) / .07),transparent 28%,color-mix(in srgb,var(--composer-paper) 15%,transparent) 58%,transparent);
+  backdrop-filter:var(--projection-contour-dark);-webkit-backdrop-filter:var(--projection-contour-dark);
+}
+html[data-theme="light"] .composer-projection-surface { backdrop-filter:var(--projection-contour-light);-webkit-backdrop-filter:var(--projection-contour-light); }
+.composer-projection-surface::after {
+  content:"";position:absolute;inset:0;opacity:.24;
+  background:linear-gradient(112deg,transparent 15%,rgb(var(--projection-tag) / .05) 25%,rgb(var(--projection-tag) / .7) 26%,transparent 30%,transparent 70%,rgb(var(--projection-tag) / .35) 82%,transparent 85%);
 }
 .composer-projection-arc { fill:none;stroke:var(--projection-line);stroke-width:.65;opacity:.48;filter:drop-shadow(0 0 3px rgba(var(--projection-glow),.24)); }
 .composer-cross-matrix { position:absolute;fill:none;stroke:var(--projection-line);stroke-width:.85; }
@@ -358,7 +364,8 @@ html[data-theme] .composer-glass.is-collapsed :is(.composer-collapse,.composer-p
 @keyframes composer-optical-rise { from { opacity:.25;transform:translateY(10px); } to { opacity:1;transform:none; } }
 @media (prefers-reduced-transparency:reduce), (forced-colors:active) {
   html[data-theme] .composer-projection :is(canvas,.composer-cross-matrix,.composer-projection-arc) { display:none; }
-  html[data-theme] .composer-projection-surface { background:var(--composer-paper);backdrop-filter:none; }
+  html[data-theme] .composer-projection-surface { background:var(--composer-paper);backdrop-filter:none;-webkit-backdrop-filter:none; }
+  .composer-projection-surface::after { display:none; }
   html[data-theme] .composer-glass .composer-mode-picker>button,
   html[data-theme] .composer-glass .library-composer-target { backdrop-filter:none;-webkit-backdrop-filter:none; }
   html[data-theme] .composer-glass :is(.composer-collapse,.generation-send-button)::before,
@@ -370,7 +377,7 @@ html[data-theme] .composer-glass.is-collapsed :is(.composer-collapse,.composer-p
   html[data-theme] .composer-glass .library-composer-target::before,
   html[data-theme] .composer-glass .library-composer-target::after { filter:none; }
 }
-@supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) {
+@supports not ((backdrop-filter:url(#contour)) or (-webkit-backdrop-filter:url(#contour))) {
   html[data-theme] .composer-projection-surface { background:var(--composer-paper); }
 }
 
