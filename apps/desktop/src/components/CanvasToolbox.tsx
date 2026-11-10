@@ -57,7 +57,7 @@ export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo, onOpenVoice
       }}>
       <div className="canvas-toolbox-heading">工具箱</div>
       {onOpenVoice && <button type="button" role="menuitem" onClick={() => { setOpen(false); onOpenVoice(); }}>
-        <AudioLines size={19} aria-hidden="true" /><span><strong>角色声音</strong><small>声音克隆 · 文字配音</small></span>
+        <AudioLines size={19} aria-hidden="true" /><span><strong>角色声音</strong><small>声音克隆 · 角色配音</small></span>
       </button>}
       <button type="button" role="menuitem" onClick={() => { setOpen(false); onOpenReplication(); }}>
         <Clapperboard size={19} aria-hidden="true" /><span><strong>视频复刻工具</strong><small>分析参考 · 改写分镜 · 生成视频</small></span>

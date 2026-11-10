@@ -129,7 +129,7 @@ Agent 卡片与对话框的新请求统一复用 `localChatStore` → `local_cha
 
 - `commands/voice.rs` 提供 voice_configure／snapshot／save／start／cancel／recover／manage／export；前端 `lib/voice.ts` 是类型化入口。参考裁剪复用音频解码与 media::tools 的 FFmpeg，发布复用 ingest_generated、LibraryPaths 与素材变更事件；持久化运行身份及回执属于声音模块，不跨模块复用其内部 JSON 文件。
 - `commands/voice_setup.rs` 提供 voice_environment 的 status／check／install／pause，专用目录托管 Python、依赖与固定模型，复用库内原子 JSON 写入；不要向其他模块暴露其安装状态全局锁。模型／uv 下载清单在 voice-downloads.json。Windows x64 + NVIDIA，保留高级手动连接，不新增 Cloud 或 Agent 执行器。
-- `VoiceStudio` 复用 ModalShell、AudioWaveform、共享播放器、MediaTrimTimeline、materialCatalog、importFiles 与 saveMediaAssetToCanvas。工具箱由 CanvasWorkspace 先固化项目再提交；voiceStudioDraft 只负责本功能的按项目草稿与试听输入身份。边界和验证见 [角色声音](../VOICE-STUDIO.md)。
+- `VoiceStudio` 复用 ModalShell、AudioWaveform、共享播放器、MediaTrimTimeline、materialCatalog、importFiles 与 saveMediaAssetToCanvas。 2026-11-11 收敛为录音克隆；voiceApi.start 不再提供描述参数，原生命令拒绝无参考或非空描述请求，历史记录继续可读。工具箱由 CanvasWorkspace 先固化项目再提交；voiceStudioDraft 只负责本功能的按项目草稿与试听输入身份。边界和验证见 [角色声音](../VOICE-STUDIO.md)。
 
 ## 重复候选与覆盖边界
 

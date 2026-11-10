@@ -1,8 +1,8 @@
-const creation = () => ({ mode: 'clone', source: null, description: '', name: '', preview: 'idle', start: 0, end: 4 });
+const creation = () => ({ source: null, name: '', preview: 'idle', start: 0, end: 4 });
 export const initial = () => ({ environment: { phase: 'missing', progress: 0 }, voices: [], selected: null, draft: '', jobs: [], creation: creation(), sequence: 0 });
 export const activeJob = state => state.jobs.find(job => ['preparing', 'generating', 'saving'].includes(job.phase));
-export const canPreview = state => state.environment.phase === 'ready' && (state.creation.mode === 'clone' ? !!state.creation.source : !!state.creation.description.trim());
-export const canSave = state => state.environment.phase === 'ready' && !!state.creation.name.trim() && (state.creation.mode === 'clone' ? !!state.creation.source : state.creation.preview === 'ready');
+export const canPreview = state => state.environment.phase === 'ready' && !!state.creation.source;
+export const canSave = state => state.environment.phase === 'ready' && !!state.creation.name.trim() && !!state.creation.source;
 function editCreation(state, patch) { return { ...state, creation: { ...state.creation, ...patch } }; }
 function install(state) {
   if (['ready', 'installing'].includes(state.environment.phase)) return state;
@@ -21,7 +21,7 @@ function tick(state) {
 function saveVoice(state) {
   if (!canSave(state)) return state;
   const id = `voice-${state.sequence + 1}`;
-  const voice = { id, name: state.creation.name.trim(), kind: state.creation.mode, description: state.creation.description, source: state.creation.source, start: state.creation.start, end: state.creation.end };
+  const voice = { id, name: state.creation.name.trim(), kind: 'clone', source: state.creation.source, start: state.creation.start, end: state.creation.end };
   return { ...state, sequence: state.sequence + 1, selected: id, voices: [...state.voices, voice], creation: creation() };
 }
 function generate(state) {
@@ -39,15 +39,13 @@ function range(state, value) {
 const handlers = {
   install, tick, saveVoice, generate,
   ready: state => ({ ...state, environment: { phase: 'ready', progress: 100 } }),
-  demo: () => ({ ...initial(), environment: { phase: 'ready', progress: 100 }, voices: [{ id: 'lin', name: '林岸', kind: 'clone', description: '沉稳 · 叙事', source: { name: '角色参考.wav', duration: 4 } }], selected: 'lin' }),
+  demo: () => ({ ...initial(), environment: { phase: 'ready', progress: 100 }, voices: [{ id: 'lin', name: '林岸', kind: 'clone', source: { name: '角色参考.wav', duration: 4 } }], selected: 'lin' }),
   installFailure: state => ({ ...state, environment: { ...state.environment, phase: 'failed' } }),
   pauseInstall: state => ({ ...state, environment: { ...state.environment, phase: 'paused' } }),
   unsupported: state => ({ ...state, environment: { phase: 'unsupported', progress: 0 } }),
   draft: (state, value) => ({ ...state, draft: value }),
   select: (state, value) => ({ ...state, selected: value }),
-  mode: (state, value) => editCreation(state, { ...creation(), mode: value }),
   source: (state, value) => editCreation(state, { source: value, start: 0, end: Math.min(value.duration, 12), preview: 'idle' }),
-  description: (state, value) => editCreation(state, { description: value, preview: 'idle' }),
   name: (state, value) => editCreation(state, { name: value }),
   range,
   preview: state => canPreview(state) ? editCreation(state, { preview: 'loading' }) : state,

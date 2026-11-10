@@ -18,6 +18,8 @@ try {
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto('http://127.0.0.1:17996/scripts/fixtures/voice-studio/index.html');
   await page.getByRole('button', { name: '创建第一个声音', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: '用文字创建', exact: true }).count(), 0);
+  assert.equal(await page.getByRole('textbox', { name: '描述你想要的声音' }).count(), 0);
   await page.getByRole('button', { name: '选择音频文件', exact: true }).click();
   await page.getByRole('textbox', { name: '声音名称' }).fill('小林');
   await page.getByRole('slider', { name: '裁剪起点' }).waitFor();
@@ -42,7 +44,7 @@ try {
   await page.getByRole('button', { name: '生成配音', exact: true }).click();
   await page.getByRole('button', { name: '取消生成', exact: true }).waitFor();
   const call = await page.evaluate(() => window.calls.find(c => c.command === 'voice_start'));
-  assert.equal(call.args.project, 'project-1'); assert.equal(call.args.voiceId, 'voice-1'); assert.equal(call.args.description, '');
+  assert.equal(call.args.project, 'project-1'); assert.equal(call.args.voiceId, 'voice-1'); assert.equal(call.args.description, undefined);
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === 'voice_start').length), 1);
   await page.getByRole('button', { name: '关闭', exact: true }).click();
   await page.getByRole('button', { name: '打开声音' }).click();
@@ -51,8 +53,8 @@ try {
   await page.getByText('已取消，可以重新生成').waitFor();
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === 'voice_start').length), 1, 'reopening does not resubmit');
   await page.getByRole('button', { name: '创建声音', exact: true }).click();
-  await page.getByRole('button', { name: '用文字创建', exact: true }).click();
-  await page.getByRole('textbox', { name: '描述你想要的声音' }).fill('温暖自然的女声');
+  await page.getByRole('button', { name: '从素材库选择', exact: true }).click();
+  await page.getByRole('button', { name: /参考录音.*4\.0 秒/ }).click();
   await page.getByRole('textbox', { name: '声音名称', exact: true }).fill('旁白');
   for (const theme of ['dark', 'light']) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
@@ -61,9 +63,9 @@ try {
   }
   await page.getByRole('button', { name: '生成试听', exact: true }).click();
   await page.getByRole('button', { name: '取消试听', exact: true }).waitFor();
-  const design = await page.evaluate(() => window.calls.filter(c => c.command === 'voice_start').at(-1));
-  assert.equal(design.args.voiceId, null); assert.equal(design.args.description, '温暖自然的女声');
-  assert.ok(design.args.preview.draftKey);
+  const clone = await page.evaluate(() => window.calls.filter(c => c.command === 'voice_start').at(-1));
+  assert.equal(clone.args.voiceId, null); assert.equal(clone.args.description, undefined);
+  assert.equal(clone.args.preview.assetId, 'reference'); assert.ok(clone.args.preview.draftKey);
   await page.evaluate(() => window.finish());
   await page.getByRole('button', { name: '保存并使用', exact: true }).click();
   await page.getByRole('button', { name: '生成配音', exact: true }).click();
@@ -108,5 +110,5 @@ try {
   await page.getByRole('button', { name: '暂停准备', exact: true }).click();
   await page.getByRole('button', { name: '继续准备', exact: true }).waitFor();
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === 'voice_environment' && c.args.action === 'install').length), 1);
-  assert.deepEqual(errors, []); console.log('Voice studio import, save, clone, reopen, cancel, design and themes passed');
+  assert.deepEqual(errors, []); console.log('Voice studio clone-only, import, save, reopen, cancel, recovery and themes passed');
 } finally { await browser.close(); await server.close(); }

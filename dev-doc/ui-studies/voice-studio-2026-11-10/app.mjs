@@ -1,7 +1,7 @@
 import { initial, update, activeJob, canPreview, canSave } from './model.mjs';
 const $ = selector => document.querySelector(selector);
 const key = 'bowerbird-voice-review-v1';
-function restore() { try { const saved = JSON.parse(localStorage.getItem(key)); return saved?.environment && saved?.creation ? saved : initial(); } catch { return initial(); } }
+function restore() { try { const saved = JSON.parse(localStorage.getItem(key)); if (saved?.creation?.mode === 'design') saved.creation = initial().creation; return saved?.environment && saved?.creation ? saved : initial(); } catch { return initial(); } }
 let state = restore(), modal = null, collapsed = false, uploadedUrl = null, toastTimer, trimDrag = null;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${({ sound: '<path d="M4 9v6m4-9v12m4-15v18m4-15v12m4-9v6"/>', play: '<path d="m9 5 11 7-11 7z"/>', plus: '<path d="M12 5v14M5 12h14"/>', file: '<path d="M14 2H5v20h14V7zM14 2v5h5M9 12v5m4-7v7"/>', down: '<path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4"/>', check: '<path d="m5 12 4 4L19 6"/>', close: '<path d="m6 6 12 12M6 18 18 6"/>' })[name]}</svg>`;
@@ -14,11 +14,11 @@ const phases = { preparing: '正在准备声音引擎…', generating: '正在�
 function waveform(seed = 0) { return `<div class="wave" aria-hidden="true">${Array.from({ length: 70 }, (_, i) => `<i style="height:${6 + Math.abs(Math.sin(i * 1.73 + seed) * Math.cos(i * .19)) * 31}px"></i>`).join('')}</div>`; }
 function audioLine(kind = 'clone', label = '试听示例') { return `<div class="audio-line">${button(icon('play'), 'play', 'play', false, `aria-label="${label}" data-kind="${kind}"`)}${waveform(kind === 'original' ? 4 : 2)}<small>${kind === 'original' ? '原声' : '试听'}</small></div>`; }
 function sidebar() {
-  return `<aside class="sidebar"><div class="sidebar-head">我的声音 <span>${String(state.voices.length).padStart(2, '0')}</span></div><div class="voices">${state.voices.map(voice => button(`<span class="voice-avatar">${esc(voice.name.slice(0, 1))}</span><span>${esc(voice.name)}<small>${voice.kind === 'clone' ? '来自参考录音' : '来自文字设计'}</small></span>`, 'select', 'voice', false, `data-id="${voice.id}" aria-pressed="${state.selected === voice.id}"`)).join('')}</div>${!state.voices.length ? '<p class="library-empty">保存喜欢的声音，<br>下次直接用它来配音。</p>' : ''}${button(`${icon('plus')} 创建声音`, 'create', 'new-voice')}<div class="environment">${button(`<i class="dot ${state.environment.phase === 'ready' ? 'ready' : ''}"></i>${envLabels[state.environment.phase]}`, 'setup')}<small>声音在这台电脑上生成</small></div></aside>`;
+  return `<aside class="sidebar"><div class="sidebar-head">我的声音 <span>${String(state.voices.length).padStart(2, '0')}</span></div><div class="voices">${state.voices.map(voice => button(`<span class="voice-avatar">${esc(voice.name.slice(0, 1))}</span><span>${esc(voice.name)}<small>${voice.kind === 'clone' ? '来自参考录音' : '已保存声音'}</small></span>`, 'select', 'voice', false, `data-id="${voice.id}" aria-pressed="${state.selected === voice.id}"`)).join('')}</div>${!state.voices.length ? '<p class="library-empty">保存喜欢的声音，<br>下次直接用它来配音。</p>' : ''}${button(`${icon('plus')} 创建声音`, 'create', 'new-voice')}<div class="environment">${button(`<i class="dot ${state.environment.phase === 'ready' ? 'ready' : ''}"></i>${envLabels[state.environment.phase]}`, 'setup')}<small>声音在这台电脑上生成</small></div></aside>`;
 }
 function startState() {
   const ready = state.environment.phase === 'ready';
-  return `<div class="start-state"><div class="large-icon">${icon('sound')}</div><h2>${ready ? '为你的角色，找到声音' : '让你的角色开口说话'}</h2><p>${ready ? '从一段录音开始，或用文字描述你想要的声音。选定后，就能用它为角色配音。' : '第一次使用，应用会为你准备好本机配音所需的组件。以后只需要选择声音、输入台词。'}</p>${button(ready ? '创建第一个声音' : state.environment.phase === 'installing' ? '查看准备进度' : '启用本机配音', ready ? 'create' : 'setup', 'primary')}<span class="small muted">${ready ? '声音可在不同项目中复用' : '自动检测设备 · 支持中断后继续'}</span></div>`;
+  return `<div class="start-state"><div class="large-icon">${icon('sound')}</div><h2>${ready ? '为你的角色，找到声音' : '让你的角色开口说话'}</h2><p>${ready ? '从一段参考录音创建角色声音，再用它为角色配音。' : '第一次使用，应用会为你准备好本机配音所需的组件。以后只需要选择声音、输入台词。'}</p>${button(ready ? '创建第一个声音' : state.environment.phase === 'installing' ? '查看准备进度' : '启用本机配音', ready ? 'create' : 'setup', 'primary')}<span class="small muted">${ready ? '声音可在不同项目中复用' : '自动检测设备 · 支持中断后继续'}</span></div>`;
 }
 function result(job, index) {
   const busy = ['preparing', 'generating', 'saving'].includes(job.phase);
@@ -107,15 +107,14 @@ function creationPreview() {
   const c = state.creation;
   if (c.preview === 'loading') return '<div class="busy-line"><i class="spinner"></i>正在准备试听…</div>';
   if (c.preview !== 'ready') return '';
-  return `<div class="preview-card"><p>试听后，再决定是否保存这个声音</p>${audioLine('clone', '试听新声音')}<p class="small" style="margin:8px 0 0">此示意播放此前测试样本，不代表本次描述或上传录音的效果。</p></div>`;
+  return `<div class="preview-card"><p>试听后，再决定是否保存这个声音</p>${audioLine('clone', '试听新声音')}<p class="small" style="margin:8px 0 0">此示意播放此前测试样本，不代表本次上传录音的克隆效果。</p></div>`;
 }
 function createDialog() {
   const c = state.creation;
-  const tabs = `<div class="segmented" role="group" aria-label="创建方式">${button('用录音创建', 'modeClone', '', false, `aria-pressed="${c.mode === 'clone'}"`)}${button('用文字创建', 'modeDesign', '', false, `aria-pressed="${c.mode === 'design'}"`)}</div>`;
-  const source = c.mode === 'clone' ? cloneSource() : `<label class="field">描述你想要的声音<textarea id="description" placeholder="例如：年轻男性，低沉温暖，语气平静，适合叙事。">${esc(c.description)}</textarea></label><p class="small muted">可以多次试听，找到喜欢的声音再保存。</p>`;
-  const name = c.mode === 'design' || c.source ? `<label class="field">声音名称<input id="voice-name" placeholder="例如：林岸、旁白" value="${esc(c.name)}" autocomplete="off"></label>` : '';
-  const saveHint = c.mode === 'clone' ? c.source ? '命名后即可保存，试听可选' : '先选择一段录音' : '生成试听并命名后保存';
-  return dialogFrame('创建声音', `${tabs}${source}${name}<div class="divider stack"><div class="row spread"><span class="small muted">试听台词：欢迎回来，我们可以开始今天的创作了。</span>${button(c.preview === 'loading' ? '准备中…' : c.preview === 'ready' ? '再试一个' : '生成试听', 'preview', 'outline', !canPreview(state) || c.preview === 'loading', 'id="preview"')}</div>${creationPreview()}</div>`, `<small>${saveHint}</small>${button('保存并使用', 'saveVoice', 'primary', !canSave(state), 'id="save-voice"')}`);
+  const source = cloneSource();
+  const name = c.source ? `<label class="field">声音名称<input id="voice-name" placeholder="例如：林岸、旁白" value="${esc(c.name)}" autocomplete="off"></label>` : '';
+  const saveHint = c.source ? '命名后即可保存，试听可选' : '先选择一段录音';
+  return dialogFrame('创建声音', `${source}${name}<div class="divider stack"><div class="row spread"><span class="small muted">试听台词：欢迎回来，我们可以开始今天的创作了。</span>${button(c.preview === 'loading' ? '准备中…' : c.preview === 'ready' ? '再试一个' : '生成试听', 'preview', 'outline', !canPreview(state) || c.preview === 'loading', 'id="preview"')}</div>${creationPreview()}</div>`, `<small>${saveHint}</small>${button('保存并使用', 'saveVoice', 'primary', !canSave(state), 'id="save-voice"')}`);
 }
 function manageDialog() {
   const voice = state.voices.find(voice => voice.id === state.selected);
@@ -167,7 +166,6 @@ const actions = {
   install: () => send('install'), pauseInstall: () => send('pauseInstall'), redetect: () => toast('设备不支持场景：请在顶部切换其他场景继续评审'),
   location: () => toast('正式版将在此打开安装文件夹选择器；示意不写入磁盘'),
   select: el => send('select', el.dataset.id), play: el => void play(el.dataset.kind, el),
-  modeClone: () => send('mode', 'clone'), modeDesign: () => send('mode', 'design'),
   library: () => show('library'), backCreate: () => show('create'), upload: chooseFile,
   sample: () => { send('source', { name: '角色参考录音.wav', duration: 3.9 }); show('create'); },
   preview: () => send('preview'), saveVoice, manage: () => show('manage'), rename,
@@ -182,7 +180,6 @@ document.addEventListener('input', event => {
   const el = event.target;
   if (el.id === 'script') { send('draft', el.value, false); $('#count').textContent = `${el.value.length} 字`; $('#generate').disabled = !el.value.trim() || !!activeJob(state); }
   if (el.id === 'voice-name') { send('name', el.value, false); $('#save-voice').disabled = !canSave(state); }
-  if (el.id === 'description') { send('description', el.value, false); $('#preview').disabled = !canPreview(state); $('#save-voice').disabled = true; }
 });
 document.addEventListener('change', event => {
   if (['trim-start-time', 'trim-end-time'].includes(event.target.id)) {

@@ -22,14 +22,11 @@ test('recordings can be named and saved without generating an audition, preservi
   assert.equal(event(s, 'saveVoice').voices.length, 1);
 });
 
-test('text designs still require an audition and name before saving', () => {
-  let s = event(initial(), 'ready'); s = event(s, 'mode', 'design');
-  s = event(s, 'description', '温暖的旁白'); s = event(s, 'name', '旁白');
+test('a legacy text-only draft cannot preview or save without a recording', () => {
+  let s = event(initial(), 'ready');
+  s.creation={...s.creation, mode:'design', description:'温暖的旁白', name:'旁白', preview:'ready'};
   assert.equal(event(s, 'saveVoice').voices.length, 0);
-  s = event(s, 'preview'); s = event(s, 'tick');
-  assert.equal(s.creation.preview, 'ready');
-  assert.equal(event(s, 'description', '活泼的旁白').creation.preview, 'idle');
-  s = event(s, 'saveVoice'); assert.equal(s.voices.length, 1);
+  s.creation.preview='idle'; assert.equal(event(s, 'preview').creation.preview,'idle');
 });
 test('one generation, cancel preserves draft and historical results survive voice deletion', () => {
   let s = event(initial(), 'demo'); s = event(s, 'draft', '这句台词不能丢。');

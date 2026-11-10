@@ -197,7 +197,17 @@ fn publish(db: &Database, paths: &LibraryPaths, job: &mut Job) -> AppResult<Asse
     job.asset_id = Some(asset.id.clone());
     db.get_asset(&asset.id)?.ok_or_else(|| error("生成结果暂不可读，请取回结果"))
 }
+fn validate_clone_request(description: &str, voice_id: Option<&str>, preview: Option<&Preview>) -> AppResult<()> {
+    let has_source = match preview {
+        Some(p) => p.asset_id.as_deref().is_some_and(|id| !id.trim().is_empty()),
+        None => voice_id.is_some_and(|id| !id.trim().is_empty()),
+    };
+    if !description.trim().is_empty() || !has_source { return Err(error("当前仅支持声音克隆，请选择参考录音或已保存的声音")); }
+    Ok(())
+}
 fn run(base: &Path, job: &Job, cancel: &AtomicBool) -> AppResult<()> {
+    if cancel.load(Ordering::SeqCst) { return Err(error("生成已取消，可以重新生成")); }
+    if !job.reference.as_deref().is_some_and(|p| Path::new(p).is_file()) { return Err(error("请先选择有效的参考录音，再生成克隆配音")); }
     let dir = base.join("runs").join(&job.id); fs::create_dir_all(&dir)?;
     write(&dir.join("request.json"), job)?;
     fs::write(dir.join("runner.py"), include_str!("voice_runner.py"))?;
@@ -219,7 +229,8 @@ fn run(base: &Path, job: &Job, cancel: &AtomicBool) -> AppResult<()> {
     }
 }
 #[tauri::command]
-pub async fn voice_start(app: AppHandle, db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project: String, text: String, description: String, voice_id: Option<String>, preview: Option<Preview>) -> AppResult<String> {
+pub async fn voice_start(app: AppHandle, db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project: String, text: String, description: Option<String>, voice_id: Option<String>, preview: Option<Preview>) -> AppResult<String> {
+    validate_clone_request(description.as_deref().unwrap_or_default(), voice_id.as_deref(), preview.as_ref())?;
     access(&auth, &entitlement).await?;
     if text.trim().is_empty() { return Err(error("请填写要生成的台词")); }
     if db.get_project(&project)?.is_none() { return Err(error("项目已不存在，请重新打开项目")); }
@@ -229,9 +240,9 @@ pub async fn voice_start(app: AppHandle, db: State<'_, Arc<Database>>, paths: St
     let config: Config = read(&base.join("config.json")).map_err(|_| error("请先配置本机声音环境"))?; validate_config(&config)?;
     let voice: Option<Voice> = match &voice_id { Some(id) => { valid_id(id)?; Some(read(&base.join("voices").join(format!("{id}.json")))?) }, None => None };
     if voice.as_ref().is_some_and(|v| !Path::new(&v.reference).is_file()) { return Err(error("角色参考录音缺失，请重新导入并保存角色")); }
-    let mut job = Job { id: ulid::Ulid::new().to_string(), project, text, description, voice_id,
+    let mut job = Job { id: ulid::Ulid::new().to_string(), project, text, description: String::new(), voice_id,
         reference: voice.as_ref().map(|v| v.reference.clone()), transcript: voice.as_ref().map(|v| v.transcript.clone()),
-        voice_name: voice.as_ref().map(|v| v.name.clone()).unwrap_or_else(|| "文字设计".into()), recoverable: false,
+        voice_name: voice.as_ref().map(|v| v.name.clone()).unwrap_or_else(|| "录音克隆试听".into()), recoverable: false,
         purpose: if preview.is_some() { "preview" } else { "speech" }.into(), draft_key: preview.as_ref().map(|p| p.draft_key.clone()).unwrap_or_default(),
         config, status: "running".into(), message: "正在生成，可以关闭面板，稍后查看结果".into(), asset_id: None };
     write(&job_path(&base, &job.id), &job)?;
@@ -281,6 +292,19 @@ pub async fn voice_recover(app: AppHandle, db: State<'_, Arc<Database>>, paths: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn only_reference_based_generation_is_accepted() {
+        assert!(validate_clone_request("", Some("voice"), None).is_ok());
+        assert!(validate_clone_request("", None, None).is_err());
+        assert!(validate_clone_request("温暖女声", Some("voice"), None).is_err());
+        let mut preview = Preview { asset_id: Some("recording".into()), start: Some(0.0), end: Some(3.0), transcript: None, draft_key: "clip".into() };
+        assert!(validate_clone_request("", None, Some(&preview)).is_ok());
+        preview.asset_id = None;
+        assert!(validate_clone_request("", None, Some(&preview)).is_err());
+        let dir=tempfile::tempdir().unwrap();
+        assert!(run(dir.path(), &job(), &AtomicBool::new(false)).unwrap_err().to_string().contains("参考录音"));
+        assert!(!dir.path().join("runs").exists());
+    }
     fn job() -> Job { Job { id: ulid::Ulid::new().to_string(), project: "p".into(), text: "测试声音".into(),
         description: String::new(), voice_id: None, reference: None, transcript: None, config: Config::default(),
         status: "running".into(), message: String::new(), asset_id: None,

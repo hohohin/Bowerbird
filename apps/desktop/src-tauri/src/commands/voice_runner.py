@@ -10,25 +10,26 @@ from pathlib import Path
 
 
 def main():
+    request_path = Path(sys.argv[1])
+    request = json.loads(request_path.read_text(encoding="utf-8"))
+    if not request.get("reference") or not Path(request["reference"]).is_file():
+        raise RuntimeError("请先选择有效的参考录音，再生成克隆配音")
     import numpy as np
     import soundfile as sf
     import torch
     from voxcpm import VoxCPM
 
-    request_path = Path(sys.argv[1])
-    request = json.loads(request_path.read_text(encoding="utf-8"))
     if not torch.cuda.is_available():
         raise RuntimeError("当前本机声音生成需要可用的 NVIDIA CUDA 环境，请检查安装")
     model = VoxCPM.from_pretrained(request["config"]["model"], load_denoiser=False,
                                   optimize=False, device="cuda", local_files_only=True)
-    description = request["description"].strip()
     text = request["text"].strip()
     seed = int.from_bytes(hashlib.sha256(request["id"].encode()).digest()[:4], "little")
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     wav = model.generate(
-        text=f"({description}){text}" if description else text,
+        text=text,
         reference_wav_path=request.get("reference"),
         prompt_wav_path=request.get("reference") if request.get("transcript") else None,
         prompt_text=request.get("transcript") or None,

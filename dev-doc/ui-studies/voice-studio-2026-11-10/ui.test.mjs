@@ -84,11 +84,12 @@ try {
   await page.getByRole('button', { name: '切换深浅色' }).click();
   await page.waitForTimeout(200); await page.screenshot({ path: resolve(output, 'daily-light.png') });
   await page.getByRole('button', { name: '创建声音', exact: true }).click();
-  await page.getByRole('button', { name: '用文字创建', exact: true }).click();
-  await page.getByRole('textbox', { name: '描述你想要的声音' }).fill('温暖、自然、有亲和力的女声。');
+  assert.equal(await page.getByRole('button', { name: '用文字创建', exact: true }).count(), 0);
+  await page.getByRole('button', { name: '从素材库选择', exact: true }).click();
+  await page.getByRole('button', { name: /角色参考录音.wav/ }).click();
   await page.getByRole('button', { name: '生成试听', exact: true }).click();
   await page.getByRole('textbox', { name: '声音名称', exact: true }).fill('旁白');
-  await page.screenshot({ path: resolve(output, 'create-design.png') });
+  await page.screenshot({ path: resolve(output, 'create-clone.png') });
   await page.getByRole('button', { name: '保存并使用' }).click();
   await page.selectOption('#scenario', 'save');
   await page.getByRole('button', { name: '重试保存', exact: true }).click();
@@ -106,5 +107,5 @@ try {
   const audio = await page.request.get(`${url}/audio/clone.wav`); assert.equal(audio.status(), 200);
   const deny = await page.request.get(`${url}/PROJECT.md`); assert.equal(deny.status(), 404);
   assert.deepEqual(errors, []);
-  console.log('PASS: direct recording save, waveform trim drag/keyboard/time input, selected clip playback, clone/design, setup/background, draft/reload, cancellation, save-only recovery, themes, narrow layout, scoped server');
+  console.log('PASS: direct recording save, waveform trim drag/keyboard/time input, selected clip playback, clone-only, setup/background, draft/reload, cancellation, save-only recovery, themes, narrow layout, scoped server');
 } finally { await browser.close(); await new Promise(done => server.close(done)); }

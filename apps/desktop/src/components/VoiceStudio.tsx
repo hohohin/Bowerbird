@@ -66,9 +66,9 @@ export function VoiceStudio({ projectId, onPrepare, onClose }: { projectId: stri
   const audition = snapshot?.jobs.find(job => job.purpose === "preview" && job.draft_key === previewKey && job.id === draft.previewId);
   const auditionAsset = snapshot?.assets.find(a => a.id === audition?.asset_id);
   const validClip = !!source && draft.end - draft.start >= .999 && draft.end - draft.start <= 30.001;
-  const canSave = !!draft.name.trim() && (draft.mode === "clone" ? validClip : !!auditionAsset);
+  const canSave = !!draft.name.trim() && validClip;
   function go(next: View) { setError(""); setNotice(""); setView(next); }
-  function choose(asset: Asset) { setSource(asset); change({ sourceId: asset.id, name: asset.name.replace(/\.[^.]+$/, ""), transcript: "", start: 0, end: Math.min(asset.duration ?? 0, 12), previewId: "", mode: "clone" }); go("create"); }
+  function choose(asset: Asset) { setSource(asset); change({ sourceId: asset.id, name: asset.name.replace(/\.[^.]+$/, ""), transcript: "", start: 0, end: Math.min(asset.duration ?? 0, 12), previewId: "" }); go("create"); }
   function importRecording() { void act(async () => {
     const path = await open({ multiple: false, filters: [{ name: "参考录音", extensions: ["wav", "mp3", "flac", "m4a", "ogg"] }] });
     if (typeof path !== "string") return;
@@ -82,7 +82,7 @@ export function VoiceStudio({ projectId, onPrepare, onClose }: { projectId: stri
   async function generate(job?: VoiceJob) {
     const text = job?.text ?? draft.text, voiceId = job?.voice_id ?? draft.voiceId;
     if (!voiceId || !snapshot?.voices.some(v => v.id === voiceId)) throw new Error("这个声音已移除，请先选择其他声音");
-    await onPrepare(); await voiceApi.start(projectId, text, "", voiceId); change({ text, voiceId });
+    await onPrepare(); await voiceApi.start(projectId, text, voiceId); change({ text, voiceId });
   }
   const close = () => { stopAudioPreview(); onClose(); };
   const title = ({ main: "角色声音", create: "创建声音", setup: "启用本机配音", manage: "管理声音", remove: "删除这个声音？", library: "选择参考录音" })[view];
@@ -92,7 +92,7 @@ export function VoiceStudio({ projectId, onPrepare, onClose }: { projectId: stri
       <div className="voice-studio-voices">{snapshot?.voices.map(voice => <button key={voice.id} className="voice-studio-voice" aria-pressed={voice.id === draft.voiceId} onClick={() => change({ voiceId: voice.id })}><span className="voice-studio-avatar">{voice.name.slice(0,1)}</span><span>{voice.name}</span></button>)}</div>
       <button className="app-modal-button" onClick={() => go(ready ? "create" : "setup")}><Plus size={15} /> 创建声音</button>
       <button className="voice-studio-environment" onClick={() => go("setup")}>{environment?.phase === "installing" ? "正在准备本机配音…" : ready ? "本机配音已就绪" : "启用本机配音"}</button><small>声音在这台电脑上生成</small></aside>
-      <main className="voice-studio-content">{!ready || !selected ? <div className="voice-studio-empty"><AudioLines size={30} /><h3>{ready ? "为你的角色，找到声音" : "让你的角色开口说话"}</h3><p>{ready ? "从一段录音开始，或用文字描述你想要的声音。" : "第一次使用，应用会自动准备本机配音所需的组件。"}</p><button className="app-modal-button is-primary" disabled={!environment} onClick={() => go(ready ? "create" : "setup")}>{ready ? "创建第一个声音" : "启用本机配音"}</button></div> : <>
+      <main className="voice-studio-content">{!ready || !selected ? <div className="voice-studio-empty"><AudioLines size={30} /><h3>{ready ? "为你的角色，找到声音" : "让你的角色开口说话"}</h3><p>{ready ? "从一段参考录音创建角色声音，再用它来朗读台词。" : "第一次使用，应用会自动准备本机配音所需的组件。"}</p><button className="app-modal-button is-primary" disabled={!environment} onClick={() => go(ready ? "create" : "setup")}>{ready ? "创建第一个声音" : "启用本机配音"}</button></div> : <>
         <div className="voice-studio-source"><span className="voice-studio-avatar">{selected.name.slice(0,1)}</span><strong>{selected.name}</strong><button className="app-modal-button" onClick={playSelected}>试听</button><button className="app-modal-button" onClick={() => { setRename(selected.name); go("manage"); }}>管理</button></div>
         <label className="voice-studio-editor">台词<textarea aria-label="台词" value={draft.text} onChange={e => change({ text: e.target.value })} placeholder="让这个角色，说出你写下的话…" /><small>草稿自动保存 <span>{draft.text.length} 字</span></small></label>
         <div className="voice-studio-actions"><small>生成结果保存到当前项目</small><button className="app-modal-button is-primary" disabled={busy || running || !draft.text.trim()} onClick={() => void act(() => generate())}>{running ? "正在生成…" : "生成配音"}</button></div>
@@ -106,17 +106,15 @@ export function VoiceStudio({ projectId, onPrepare, onClose }: { projectId: stri
           {job.status !== "running" && !job.recoverable && <button className="app-modal-button" disabled={busy || running || !ready} onClick={() => void act(() => generate(job))}>{asset ? "再生成一版" : "重新生成"}</button>}
         </div></article>;
       })}</section></main></div> : <div className="voice-studio-body">
-      {view === "create" && <><div className="voice-studio-modes" role="group" aria-label="创建方式">{(["clone", "design"] as const).map(mode => <button className="app-modal-button" key={mode} disabled={busy} aria-pressed={draft.mode === mode} onClick={() => change({ mode, previewId: "" })}>{mode === "clone" ? "用录音创建" : "用文字创建"}</button>)}</div>
-        {draft.mode === "clone" ? source ? <><div className="voice-studio-source"><strong>{source.name}</strong><button className="app-modal-button" disabled={busy} onClick={importRecording}>更换</button></div><VoiceReferenceTrim asset={source} start={draft.start} end={draft.end} disabled={busy} onChange={change} /></> : <div className="voice-studio-drop"><AudioLines size={28} /><h3>放入一段角色录音</h3><div className="voice-studio-row"><button className="app-modal-button" disabled={busy} onClick={importRecording}>选择音频文件</button><button className="app-modal-button" disabled={busy} onClick={() => { setOffset(0); go("library"); }}>从素材库选择</button></div><small>清晰的单人录音 · WAV / MP3 / FLAC / M4A / OGG</small></div>
-          : <label>描述你想要的声音<textarea rows={3} value={draft.description} onChange={e => change({ description: e.target.value })} placeholder="例如：年轻男性，低沉温暖，语气平静，适合叙事。" /></label>}
-        {(source || draft.mode === "design") && <label>声音名称<input value={draft.name} onChange={e => change({ name: e.target.value })} placeholder="例如：林岸、旁白" /></label>}
-        {source && draft.mode === "clone" && <details><summary>录音原文（可选）</summary><textarea value={draft.transcript} onChange={e => change({ transcript: e.target.value })} placeholder="默认留空。填写时须与当前选中片段准确一致。" /></details>}
-        <div className="voice-studio-audition"><small>试听台词：{SAMPLE}</small><button className="app-modal-button" disabled={busy || running || !ready || (draft.mode === "clone" ? !validClip : !draft.description.trim())} onClick={() => void act(async () => { await onPrepare(); const id = await voiceApi.start(projectId, SAMPLE, draft.mode === "design" ? draft.description : "", null, { assetId: draft.mode === "clone" ? draft.sourceId : undefined, start: draft.start, end: draft.end, transcript: draft.transcript, draftKey: previewKey }); change({ previewId: id }); })}>{auditionAsset ? "再试一个" : "生成试听"}</button></div>
+      {view === "create" && <>
+        {source ? <><div className="voice-studio-source"><strong>{source.name}</strong><button className="app-modal-button" disabled={busy} onClick={importRecording}>更换</button></div><VoiceReferenceTrim asset={source} start={draft.start} end={draft.end} disabled={busy} onChange={change} /></> : <div className="voice-studio-drop"><AudioLines size={28} /><h3>放入一段角色录音</h3><div className="voice-studio-row"><button className="app-modal-button" disabled={busy} onClick={importRecording}>选择音频文件</button><button className="app-modal-button" disabled={busy} onClick={() => { setOffset(0); go("library"); }}>从素材库选择</button></div><small>清晰的单人录音 · WAV / MP3 / FLAC / M4A / OGG</small></div>}
+        {source && <label>声音名称<input value={draft.name} onChange={e => change({ name: e.target.value })} placeholder="例如：林岸、旁白" /></label>}
+        {source && <details><summary>录音原文（可选）</summary><textarea value={draft.transcript} onChange={e => change({ transcript: e.target.value })} placeholder="默认留空。填写时须与当前选中片段准确一致。" /></details>}
+        <div className="voice-studio-audition"><small>试听台词：{SAMPLE}</small><button className="app-modal-button" disabled={busy || running || !ready || !validClip} onClick={() => void act(async () => { await onPrepare(); const id = await voiceApi.start(projectId, SAMPLE, null, { assetId: draft.sourceId, start: draft.start, end: draft.end, transcript: draft.transcript, draftKey: previewKey }); change({ previewId: id }); })}>{auditionAsset ? "再试一个" : "生成试听"}</button></div>
         {audition && <div className="voice-studio-preview">{preview(auditionAsset)}<p className="voice-studio-hint">{userErrorMessage(audition.message, "试听暂未完成，请稍后查看")}</p>{audition.status === "running" && <button className="app-modal-button" onClick={() => void act(() => voiceApi.cancel(audition.id))}>取消试听</button>}{audition.recoverable && <button className="app-modal-button" onClick={() => void act(() => voiceApi.recover(audition.id))}>重试保存试听</button>}</div>}
-        <footer className="voice-studio-actions"><small>{draft.mode === "clone" ? "命名后即可保存，试听可选" : "生成试听并命名后保存"}</small><button className="app-modal-button is-primary" disabled={busy || !canSave} onClick={() => void act(async () => {
-          const assetId = draft.mode === "clone" ? draft.sourceId : auditionAsset!.id;
-          const voice = await voiceApi.save(draft.name, assetId, draft.mode === "clone" ? draft.transcript : "", draft.mode === "clone" ? draft.start : 0, draft.mode === "clone" ? draft.end : Math.min(auditionAsset!.duration ?? 4, 30));
-          change({ voiceId: voice.id, sourceId: "", name: "", transcript: "", description: "", previewId: "", start: 0, end: 0 }); setSource(null); go("main"); setNotice("声音已保存，已为你选中");
+        <footer className="voice-studio-actions"><small>命名后即可保存，试听可选</small><button className="app-modal-button is-primary" disabled={busy || !canSave} onClick={() => void act(async () => {
+          const voice = await voiceApi.save(draft.name, draft.sourceId, draft.transcript, draft.start, draft.end);
+          change({ voiceId: voice.id, sourceId: "", name: "", transcript: "", previewId: "", start: 0, end: 0 }); setSource(null); go("main"); setNotice("声音已保存，已为你选中");
         })}>保存并使用</button></footer></>}
       {view === "setup" && <><p>{environment?.message || "正在检测本机环境…"}</p>{environment?.gpu && <p className="voice-studio-hint">{environment.gpu}</p>}{environment && environment.phase !== "ready" && <p className="voice-studio-hint">需预留 {gb(environment.required_bytes)}，当前可用 {gb(environment.free_bytes)}</p>}
         {environment?.phase === "installing" && <><progress value={environment.completed_bytes} max={environment.total_bytes} /><small>可以关闭窗口，准备会在后台继续。</small></>}
