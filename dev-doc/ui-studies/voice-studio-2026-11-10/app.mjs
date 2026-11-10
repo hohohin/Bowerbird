@@ -2,7 +2,7 @@ import { initial, update, activeJob, canPreview, canSave } from './model.mjs';
 const $ = selector => document.querySelector(selector);
 const key = 'bowerbird-voice-review-v1';
 function restore() { try { const saved = JSON.parse(localStorage.getItem(key)); return saved?.environment && saved?.creation ? saved : initial(); } catch { return initial(); } }
-let state = restore(), modal = null, collapsed = false, uploadedUrl = null, toastTimer;
+let state = restore(), modal = null, collapsed = false, uploadedUrl = null, toastTimer, trimDrag = null;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${({ sound: '<path d="M4 9v6m4-9v12m4-15v18m4-15v12m4-9v6"/>', play: '<path d="m9 5 11 7-11 7z"/>', plus: '<path d="M12 5v14M5 12h14"/>', file: '<path d="M14 2H5v20h14V7zM14 2v5h5M9 12v5m4-7v7"/>', down: '<path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4"/>', check: '<path d="m5 12 4 4L19 6"/>', close: '<path d="m6 6 12 12M6 18 18 6"/>' })[name]}</svg>`;
 const button = (text, action, classes = '', disabled = false, extra = '') => `<button class="${classes}" data-action="${action}" ${disabled ? 'disabled' : ''} ${extra}>${text}</button>`;
@@ -37,7 +37,7 @@ function render() {
   if (id && document.getElementById(id)) { const element = document.getElementById(id); element.focus({ preventScroll: true }); if (typeof start === 'number' && element.type !== 'number') element.setSelectionRange?.(start, end); }
 }
 function show(type) { modal = type; render(); if (!$('#dialog').open) $('#dialog').showModal(); }
-function close() { $('#player').pause(); $('#dialog').close(); modal = null; }
+function close() { finishTrim(); $('#player').pause(); $('#dialog').close(); modal = null; }
 function dialogFrame(title, body, footer = '') { return `<div class="dialog-head"><h2 id="dialog-title">${title}</h2>${button(icon('close'), 'close', '', false, 'aria-label="关闭对话框"')}</div><div class="dialog-body">${body}</div>${footer ? `<div class="dialog-foot">${footer}</div>` : ''}`; }
 function setupDialog() {
   const env = state.environment;
@@ -51,19 +51,71 @@ function setupDialog() {
 function cloneSource() {
   const c = state.creation;
   if (!c.source) return `<div class="drop" id="drop"><div class="large-icon">${icon('file')}</div><h3>放入一段角色录音</h3><p>拖到这里，或从现有素材中选择</p><div class="drop-actions">${button('选择音频文件', 'upload', 'outline')}${button('从素材库选择', 'library', 'outline')}</div><span class="small muted">清晰的单人录音 · WAV / MP3 / FLAC / M4A / OGG</span></div>`;
-  return `<div class="stack"><div class="file-row">${icon('file')}<span>${esc(c.source.name)}</span>${button('更换', 'upload')}</div>${audioLine('original', '试听参考录音')}<div class="clip-selector"><label>起点 <input id="clip-start" type="range" min="0" max="${c.end - 1}" step="0.1" value="${c.start}" aria-label="片段起点"><output>${c.start.toFixed(1)} s</output></label><label>终点 <input id="clip-end" type="range" min="${c.start + 1}" max="${Math.min(c.source.duration, c.start + 30)}" step="0.1" value="${c.end}" aria-label="片段终点"><output>${c.end.toFixed(1)} s</output></label></div><span class="small muted">已选 ${(c.end - c.start).toFixed(1)} 秒 · 拖动选择片段，试听时只播放选中部分</span></div>`;
+  return `<div class="stack"><div class="file-row">${icon('file')}<span>${esc(c.source.name)}</span>${button('更换', 'upload')}</div>${trimTimeline()}<div class="trim-controls">${button(icon('play'), 'play', 'play', false, 'aria-label="试听参考录音" data-kind="original"')}<span id="clip-duration">已选 ${(c.end - c.start).toFixed(2)} 秒</span><small>拖动两端裁剪 · 仅试听选中片段</small></div></div>`;
 }
+function trimTimeline() {
+  const c = state.creation, left = c.start / c.source.duration * 100, right = c.end / c.source.duration * 100;
+  const handle = (edge, label) => `<button id="trim-${edge}" class="trim-handle" data-edge="${edge}" role="slider" aria-label="${label}" aria-orientation="horizontal" aria-valuemin="${edge === 'start' ? Math.max(0, c.end - 30) : c.start + 1}" aria-valuemax="${edge === 'start' ? c.end - 1 : Math.min(c.source.duration, c.start + 30)}" aria-valuenow="${c[edge]}" aria-valuetext="${c[edge].toFixed(2)} 秒" title="拖动裁剪；方向键调整，Shift 微调" style="left:${edge === 'start' ? left : right}%"><span aria-hidden="true">Ⅱ</span></button>`;
+  return `<div class="trim-editor"><div class="trim-track" id="trim-track" role="group" aria-label="参考录音裁剪">${waveform(4)}<div class="trim-mask before" style="width:${left}%"></div><div class="trim-mask after" style="left:${right}%"></div><div class="trim-selection" style="left:${left}%;width:${right - left}%"></div>${handle('start', '裁剪起点')}${handle('end', '裁剪终点')}</div><div class="trim-times"><label>起点 <input id="trim-start-time" type="number" min="0" max="${c.end - 1}" step="0.01" value="${c.start.toFixed(2)}" aria-label="起点秒数"> s</label><label>终点 <input id="trim-end-time" type="number" min="${c.start + 1}" max="${c.source.duration}" step="0.01" value="${c.end.toFixed(2)}" aria-label="终点秒数"> s</label></div></div>`;
+}
+function setTrimEdge(edge, value, redraw = true) {
+  if (!Number.isFinite(value)) return;
+  const c = state.creation;
+  const min = edge === 'start' ? Math.max(0, c.end - 30) : c.start + 1;
+  const max = edge === 'start' ? c.end - 1 : Math.min(c.source.duration, c.start + 30);
+  const next = Math.max(min, Math.min(max, Math.round(value * 100) / 100));
+  if (next === c[edge]) return;
+  $('#player').pause();
+  send('range', { start: c.start, end: c.end, [edge]: next }, redraw);
+  if (!redraw) paintTrim();
+}
+function paintTrim() {
+  const c = state.creation, left = c.start / c.source.duration * 100, right = c.end / c.source.duration * 100;
+  $('.trim-mask.before').style.width = `${left}%`; $('.trim-mask.after').style.left = `${right}%`;
+  $('.trim-selection').style.left = `${left}%`; $('.trim-selection').style.width = `${right - left}%`;
+  for (const edge of ['start', 'end']) {
+    const handle = $(`#trim-${edge}`);
+    handle.style.left = `${edge === 'start' ? left : right}%`;
+    handle.setAttribute('aria-valuenow', c[edge]); handle.setAttribute('aria-valuetext', `${c[edge].toFixed(2)} 秒`);
+    $(`#trim-${edge}-time`).value = c[edge].toFixed(2);
+  }
+  $('#clip-duration').textContent = `已选 ${(c.end - c.start).toFixed(2)} 秒`;
+}
+function finishTrim() { if (trimDrag) { trimDrag = null; render(); } }
+document.addEventListener('pointerdown', event => {
+  const handle = event.target.closest('.trim-handle');
+  if (!handle || event.button !== 0) return;
+  event.preventDefault(); handle.focus();
+  trimDrag = { id: event.pointerId, edge: handle.dataset.edge, x: event.clientX, value: state.creation[handle.dataset.edge], width: $('#trim-track').getBoundingClientRect().width };
+  handle.setPointerCapture(event.pointerId);
+});
+document.addEventListener('pointermove', event => {
+  if (!trimDrag || trimDrag.id !== event.pointerId) return;
+  setTrimEdge(trimDrag.edge, trimDrag.value + (event.clientX - trimDrag.x) / trimDrag.width * state.creation.source.duration, false);
+});
+for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) document.addEventListener(type, event => { if (trimDrag?.id === event.pointerId) finishTrim(); });
+window.addEventListener('blur', finishTrim);
+document.addEventListener('visibilitychange', () => { if (document.hidden) finishTrim(); });
+document.addEventListener('keydown', event => {
+  const handle = event.target.closest('.trim-handle');
+  if (!handle || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  const edge = handle.dataset.edge, c = state.creation;
+  setTrimEdge(edge, event.key === 'Home' ? 0 : event.key === 'End' ? c.source.duration : c[edge] + (event.key === 'ArrowLeft' ? -1 : 1) * (event.shiftKey ? .01 : .1));
+});
 function creationPreview() {
   const c = state.creation;
   if (c.preview === 'loading') return '<div class="busy-line"><i class="spinner"></i>正在准备试听…</div>';
   if (c.preview !== 'ready') return '';
-  return `<div class="preview-card"><p>试听后，再决定是否保存这个声音</p>${audioLine('clone', '试听新声音')}<p class="small" style="margin:8px 0 0">此示意播放此前测试样本，不代表本次描述或上传录音的效果。</p></div><label class="field">声音名称<input id="voice-name" placeholder="例如：林岸、旁白" value="${esc(c.name)}" autocomplete="off"></label>`;
+  return `<div class="preview-card"><p>试听后，再决定是否保存这个声音</p>${audioLine('clone', '试听新声音')}<p class="small" style="margin:8px 0 0">此示意播放此前测试样本，不代表本次描述或上传录音的效果。</p></div>`;
 }
 function createDialog() {
   const c = state.creation;
   const tabs = `<div class="segmented" role="group" aria-label="创建方式">${button('用录音创建', 'modeClone', '', false, `aria-pressed="${c.mode === 'clone'}"`)}${button('用文字创建', 'modeDesign', '', false, `aria-pressed="${c.mode === 'design'}"`)}</div>`;
   const source = c.mode === 'clone' ? cloneSource() : `<label class="field">描述你想要的声音<textarea id="description" placeholder="例如：年轻男性，低沉温暖，语气平静，适合叙事。">${esc(c.description)}</textarea></label><p class="small muted">可以多次试听，找到喜欢的声音再保存。</p>`;
-  return dialogFrame('创建声音', `${tabs}${source}<div class="divider stack"><div class="row spread"><span class="small muted">试听台词：欢迎回来，我们可以开始今天的创作了。</span>${button(c.preview === 'loading' ? '准备中…' : c.preview === 'ready' ? '再试一个' : '生成试听', 'preview', 'outline', !canPreview(state) || c.preview === 'loading', 'id="preview"')}</div>${creationPreview()}</div>`, `<small>关闭后保留当前创建草稿</small>${button('保存并使用', 'saveVoice', 'primary', !canSave(state), 'id="save-voice"')}`);
+  const name = c.mode === 'design' || c.source ? `<label class="field">声音名称<input id="voice-name" placeholder="例如：林岸、旁白" value="${esc(c.name)}" autocomplete="off"></label>` : '';
+  const saveHint = c.mode === 'clone' ? c.source ? '命名后即可保存，试听可选' : '先选择一段录音' : '生成试听并命名后保存';
+  return dialogFrame('创建声音', `${tabs}${source}${name}<div class="divider stack"><div class="row spread"><span class="small muted">试听台词：欢迎回来，我们可以开始今天的创作了。</span>${button(c.preview === 'loading' ? '准备中…' : c.preview === 'ready' ? '再试一个' : '生成试听', 'preview', 'outline', !canPreview(state) || c.preview === 'loading', 'id="preview"')}</div>${creationPreview()}</div>`, `<small>${saveHint}</small>${button('保存并使用', 'saveVoice', 'primary', !canSave(state), 'id="save-voice"')}`);
 }
 function manageDialog() {
   const voice = state.voices.find(voice => voice.id === state.selected);
@@ -89,7 +141,7 @@ async function play(kind, control) {
   player.control = control;
   player.dataset.kind = kind;
   player.currentTime = kind === 'original' && modal === 'create' ? state.creation.start : 0;
-  try { await player.play(); } catch { toast('示例音频暂不可用，请选择本机录音试听'); }
+  try { await player.play(); } catch (error) { if (error.name !== 'AbortError') toast('示例音频暂不可用，请选择本机录音试听'); }
 }
 function chooseFile() {
   const input = document.createElement('input'); input.type = 'file'; input.accept = '.wav,.mp3,.flac,.m4a,.ogg';
@@ -133,10 +185,9 @@ document.addEventListener('input', event => {
   if (el.id === 'description') { send('description', el.value, false); $('#preview').disabled = !canPreview(state); $('#save-voice').disabled = true; }
 });
 document.addEventListener('change', event => {
-  if (event.target.id.startsWith('clip-')) {
-    const start = Number($('#clip-start').value), end = Number($('#clip-end').value);
-    if (start < 0 || end > state.creation.source.duration || end - start < 1 || end - start > 30) { toast('请选择 1–30 秒、且在录音范围内的片段'); render(); return; }
-    send('range', { start, end });
+  if (['trim-start-time', 'trim-end-time'].includes(event.target.id)) {
+    setTrimEdge(event.target.id === 'trim-start-time' ? 'start' : 'end', event.target.valueAsNumber);
+    render();
   }
 });
 document.addEventListener('dragover', event => { if (event.target.closest('#drop')) { event.preventDefault(); $('#drop').classList.add('drag'); } });
@@ -151,7 +202,7 @@ function playbackState() {
   });
 }
 ['play', 'pause', 'ended'].forEach(type => $('#player').addEventListener(type, playbackState));
-$('#dialog').addEventListener('cancel', () => { modal = null; $('#player').pause(); });
+$('#dialog').addEventListener('cancel', () => { modal = null; finishTrim(); $('#player').pause(); });
 $('#collapse').onclick = () => { collapsed = true; render(); };
 $('#theme').onclick = () => { const light = document.documentElement.dataset.theme !== 'light'; document.documentElement.dataset.theme = light ? 'light' : 'dark'; $('#theme').textContent = light ? '深色' : '浅色'; };
 function scenario(value) {
@@ -165,6 +216,7 @@ function scenario(value) {
 $('#scenario').onchange = event => scenario(event.target.value);
 $('#reset').onclick = () => { if (confirm('清除本网页中的示意声音、配音和草稿？不会影响真实应用。')) { $('#scenario').value = 'first'; scenario('first'); } };
 setInterval(() => {
+  if (trimDrag) return;
   if (state.environment.phase === 'installing' || state.creation.preview === 'loading' || activeJob(state)) {
     const before = state.environment.phase; send('tick');
     if (before === 'installing' && state.environment.phase === 'ready') toast('本机配音已就绪');

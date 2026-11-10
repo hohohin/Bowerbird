@@ -11,16 +11,25 @@ test('first-use setup resumes from saved progress and reaches readiness without 
   for (let i = 0; i < 10; i++) s = event(s, 'tick');
   assert.equal(s.environment.phase, 'ready');
 });
-test('a voice is saved only after audition and naming, reference edits invalidate audition', () => {
-  let s = event(initial(), 'source', { name: '参考.wav', duration: 4 });
+test('recordings can be named and saved without generating an audition, preserving the selected clip', () => {
+  let s = event(initial(), 'ready');
+  s = event(s, 'source', { name: '参考.wav', duration: 4 });
   s = event(s, 'name', '小林');
-  assert.equal(event(s, 'saveVoice').voices.length, 0);
-  s = event(s, 'ready'); s = event(s, 'preview'); s = event(s, 'tick');
-  assert.equal(s.creation.preview, 'ready');
-  assert.equal(event(s, 'range', { start: 1, end: 3 }).creation.preview, 'idle');
+  s = event(s, 'range', { start: 1, end: 3 });
   s = event(s, 'saveVoice'); assert.equal(s.voices.length, 1);
+  assert.equal(s.voices[0].start, 1); assert.equal(s.voices[0].end, 3);
   assert.equal(s.selected, s.voices[0].id);
   assert.equal(event(s, 'saveVoice').voices.length, 1);
+});
+
+test('text designs still require an audition and name before saving', () => {
+  let s = event(initial(), 'ready'); s = event(s, 'mode', 'design');
+  s = event(s, 'description', '温暖的旁白'); s = event(s, 'name', '旁白');
+  assert.equal(event(s, 'saveVoice').voices.length, 0);
+  s = event(s, 'preview'); s = event(s, 'tick');
+  assert.equal(s.creation.preview, 'ready');
+  assert.equal(event(s, 'description', '活泼的旁白').creation.preview, 'idle');
+  s = event(s, 'saveVoice'); assert.equal(s.voices.length, 1);
 });
 test('one generation, cancel preserves draft and historical results survive voice deletion', () => {
   let s = event(initial(), 'demo'); s = event(s, 'draft', '这句台词不能丢。');

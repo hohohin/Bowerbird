@@ -2,7 +2,7 @@ const creation = () => ({ mode: 'clone', source: null, description: '', name: ''
 export const initial = () => ({ environment: { phase: 'missing', progress: 0 }, voices: [], selected: null, draft: '', jobs: [], creation: creation(), sequence: 0 });
 export const activeJob = state => state.jobs.find(job => ['preparing', 'generating', 'saving'].includes(job.phase));
 export const canPreview = state => state.environment.phase === 'ready' && (state.creation.mode === 'clone' ? !!state.creation.source : !!state.creation.description.trim());
-export const canSave = state => state.creation.preview === 'ready' && !!state.creation.name.trim();
+export const canSave = state => state.environment.phase === 'ready' && !!state.creation.name.trim() && (state.creation.mode === 'clone' ? !!state.creation.source : state.creation.preview === 'ready');
 function editCreation(state, patch) { return { ...state, creation: { ...state.creation, ...patch } }; }
 function install(state) {
   if (['ready', 'installing'].includes(state.environment.phase)) return state;
@@ -21,7 +21,7 @@ function tick(state) {
 function saveVoice(state) {
   if (!canSave(state)) return state;
   const id = `voice-${state.sequence + 1}`;
-  const voice = { id, name: state.creation.name.trim(), kind: state.creation.mode, description: state.creation.description, source: state.creation.source };
+  const voice = { id, name: state.creation.name.trim(), kind: state.creation.mode, description: state.creation.description, source: state.creation.source, start: state.creation.start, end: state.creation.end };
   return { ...state, sequence: state.sequence + 1, selected: id, voices: [...state.voices, voice], creation: creation() };
 }
 function generate(state) {
@@ -32,7 +32,8 @@ function generate(state) {
 function patchJob(state, id, patch) { return { ...state, jobs: state.jobs.map(job => job.id === id ? { ...job, ...patch } : job) }; }
 function range(state, value) {
   if (!Number.isFinite(value.start) || !Number.isFinite(value.end)) return state;
-  if (value.start < 0 || value.end - value.start < 1 || value.end - value.start > 30 || value.end > state.creation.source?.duration) return state;
+  const length = Math.round((value.end - value.start) * 100) / 100;
+  if (!state.creation.source || value.start < 0 || length < 1 || length > 30 || value.end > state.creation.source.duration) return state;
   return editCreation(state, { ...value, preview: 'idle' });
 }
 const handlers = {
