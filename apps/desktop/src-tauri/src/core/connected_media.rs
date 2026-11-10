@@ -1,6 +1,13 @@
 //! Cheap connection indexing; expensive media work runs only for a requested preview.
 use super::*;
 
+pub(crate) struct ConnectedFileFingerprint {
+    path: PathBuf,
+    metadata: fs::Metadata,
+    version: String,
+    pub(crate) hash: String,
+}
+
 // Windows canonicalization adds a verbatim prefix; older assets keep ordinary
 // drive/UNC paths. Match both spellings without rewriting their saved paths.
 pub(crate) fn connection_path_spellings(source: &Path, canonical: &Path) -> [String; 3] {
@@ -17,11 +24,23 @@ pub(crate) fn connection_path_spellings(source: &Path, canonical: &Path) -> [Str
 }
 
 impl Database {
+    pub(crate) fn prepare_connected_file(source: &Path) -> AppResult<ConnectedFileFingerprint> {
+        let started = std::time::Instant::now();
+        let path = original(source)?;
+        let metadata = fs::metadata(&path)?;
+        let version = preview_key(&path, &metadata)?;
+        let hash = fingerprint(&path)?;
+        if preview_key(&path, &fs::metadata(&path)?)? != version {
+            return Err(invalid("文件正在变化，请稍后重试"));
+        }
+        tracing::debug!(stage="connection_fingerprint", elapsed_ms=started.elapsed().as_millis() as u64, bytes=metadata.len());
+        Ok(ConnectedFileFingerprint { path, metadata, version, hash })
+    }
     pub fn connected_preview_pending(&self, source: &Path, preview: &str) -> AppResult<bool> {
         let path = original(source)?;
         let names = connection_path_spellings(source, &path);
         Ok(self.conn.lock().unwrap().query_row(
-            "SELECT EXISTS(SELECT 1 FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path IN (?1,?2,?3) AND COALESCE(e.fingerprint,f.sha256) IS NOT NULL AND (a.thumb_path IS NULL OR a.thumb_path<>?4))",
+            "SELECT EXISTS(SELECT 1 FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path IN (?1,?2,?3) AND COALESCE(e.fingerprint,f.sha256) IS NOT NULL AND (a.thumb_path IS NULL OR a.thumb_path<>?4 OR (lower(a.ext) IN ('png','jpg','jpeg','webp','gif','bmp','tif','tiff','heic','heif') AND (a.phash IS NULL OR a.colors IS NULL))))",
             params![names[0],names[1],names[2],preview], |row| row.get(0))?)
     }
 
@@ -49,11 +68,18 @@ impl Database {
         source: &Path,
         preferred_id: Option<&str>,
     ) -> AppResult<Asset> {
-        let path = original(source)?;
+        self.index_prepared_connected_file(paths, source, preferred_id, Self::prepare_connected_file(source)?)
+    }
+
+    pub(crate) fn index_prepared_connected_file(
+        &self, paths: &LibraryPaths, source: &Path, preferred_id: Option<&str>,
+        prepared: ConnectedFileFingerprint,
+    ) -> AppResult<Asset> {
+        let ConnectedFileFingerprint { path, metadata, version, hash } = prepared;
+        if original(source)? != path || preview_key(&path, &fs::metadata(&path)?)? != version {
+            return Err(invalid("文件正在变化，请稍后重试"));
+        }
         let names = connection_path_spellings(source, &path);
-        let metadata = fs::metadata(&path)?;
-        let version = preview_key(&path, &metadata)?;
-        let hash = fingerprint(&path)?;
         let ext = path
             .extension()
             .unwrap_or_default()
@@ -82,6 +108,9 @@ impl Database {
         let direct_thumb = (ext == "svg").then(|| path.to_string_lossy().into_owned());
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
+        if preview_key(&path, &fs::metadata(&path)?)? != version {
+            return Err(invalid("文件正在变化，请稍后重试"));
+        }
         let existing: Option<(String, Option<String>, bool)> = tx.query_row(
             "SELECT a.id,COALESCE(e.fingerprint,f.sha256),e.asset_id IS NOT NULL FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path IN (?1,?2,?3)",
             params![names[0],names[1],names[2]], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
@@ -158,15 +187,22 @@ impl Database {
         source: &Path,
         preview: &str,
     ) -> AppResult<Option<Asset>> {
+        Ok(self.complete_connected_preview_versioned(paths, source, preview)?.map(|(asset, _)| asset))
+    }
+
+    pub(crate) fn complete_connected_preview_versioned(
+        &self, paths: &LibraryPaths, source: &Path, preview: &str,
+    ) -> AppResult<Option<(Asset, String)>> {
         let path = original(source)?;
         let names = connection_path_spellings(source, &path);
-        let row: Option<(String, String, Option<String>, String)> = self.conn.lock().unwrap().query_row(
-            "SELECT a.id,COALESCE(e.fingerprint,f.sha256),a.thumb_path,a.store_path FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path IN (?1,?2,?3) AND COALESCE(e.fingerprint,f.sha256) IS NOT NULL",
-            params![names[0],names[1],names[2]], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))).optional()?;
-        let Some((id, expected, old_thumb, stored_path)) = row else {
+        let row: Option<(String, String, Option<String>, String, Option<String>, Option<String>)> = self.conn.lock().unwrap().query_row(
+            "SELECT a.id,COALESCE(e.fingerprint,f.sha256),a.thumb_path,a.store_path,a.phash,a.colors FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path IN (?1,?2,?3) AND COALESCE(e.fingerprint,f.sha256) IS NOT NULL",
+            params![names[0],names[1],names[2]], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).optional()?;
+        let Some((id, expected, old_thumb, stored_path, old_phash, old_colors)) = row else {
             return Ok(None);
         };
-        if old_thumb.as_deref() == Some(preview) {
+        let auxiliary = !video_path(&path) && !path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("svg") || ext.eq_ignore_ascii_case("psd"));
+        if old_thumb.as_deref() == Some(preview) && (!auxiliary || (old_phash.is_some() && old_colors.is_some())) {
             return Ok(None);
         }
         let version = preview_key(&path, &fs::metadata(&path)?)?;
@@ -185,18 +221,21 @@ impl Database {
         let (phash, colors) = if video_path(&path) {
             (None, None)
         } else {
-            (
-                crate::media::phash::compute(&input).ok().flatten(),
-                crate::media::color::extract(&input, 5)
-                    .ok()
-                    .and_then(|value| serde_json::to_string(&value).ok()),
-            )
+            match image::open(&input) {
+                Ok(image) => (Some(crate::media::phash::compute_from_image(&image)),
+                    serde_json::to_string(&crate::media::color::extract_from_image(&image, 5)).ok()),
+                Err(_) if matches!(path.extension().and_then(|ext| ext.to_str()), Some("svg" | "psd")) => (None, None),
+                Err(_) => return Err(invalid("缩略图资料暂时无法完成，请稍后重试")),
+            }
         };
         if preview_key(&path, &fs::metadata(&path)?)? != version {
             return Err(invalid("文件正在变化，请刷新后重试缩略图"));
         }
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
+        if preview_key(&path, &fs::metadata(&path)?)? != version {
+            return Err(invalid("文件正在变化，请刷新后重试缩略图"));
+        }
         let changed = tx.execute("UPDATE assets SET thumb_path=?2,width=?3,height=?4,duration=?5,phash=?6,colors=?7 WHERE id=?1 AND store_path=?8 AND COALESCE((SELECT fingerprint FROM external_assets WHERE asset_id=?1),(SELECT sha256 FROM creative_file_fingerprints WHERE asset_id=?1))=?9",
             params![id,preview,meta.width,meta.height,meta.duration,phash,colors,stored_path,expected])?;
         if changed == 0 {
@@ -213,7 +252,8 @@ impl Database {
         }
         tx.commit()?;
         drop(conn);
-        self.get_asset(&id)
+        Ok(self.get_asset(&id)?.filter(|asset| asset.thumb_path.as_deref() == Some(preview))
+            .map(|asset| (asset, expected)))
     }
 }
 

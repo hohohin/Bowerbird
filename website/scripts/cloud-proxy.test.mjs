@@ -74,14 +74,15 @@ test("Agent control and signed H3 manifest preserve authorization and never retr
     assert.equal(calls.at(-1).headers.Authorization, AUTH.Authorization);
   }
   const path = `/storage/v1/object/upload/sign/agent-temp/runs/${JOB}/inputs/request.json?token=test%2Bsigned`;
-  const body = JSON.stringify({ schemaVersion: 1, textRewrite: { source: '中文提示词' } });
+  const body = JSON.stringify({ schemaVersion: 1, textRewrite: { source: '中文提示词\n'.repeat(20000) } });
   assert.equal((await send(path, 'PUT', body, { ...AUTH, 'x-upsert': 'true' })).status, 200);
   const upload = calls.at(-1);
+  assert.equal(upload.body.toString(), body);
   assert.equal(upload.url.search, '?token=test%2Bsigned');
   assert.equal(upload.headers.Authorization, undefined);
   assert.equal(upload.headers.apikey, undefined);
   assert.equal(upload.headers['x-upsert'], 'true');
-  assert.equal((await send(path, 'PUT', 'x'.repeat(65537))).status, 413);
+  assert.equal((await send(path, 'PUT', undefined, { 'Content-Type': 'application/json', 'Content-Length': 0 })).status, 413);
   assert.equal((await send(path, 'PUT', body, { 'Content-Type': 'text/plain' })).status, 415);
   assert.equal((await send(path.replace(/\?token=.*/, ''), 'PUT', body)).status, 401);
   assert.equal((await send(path.replace('request.json', 'other.json'), 'PUT', body)).status, 404);
@@ -111,7 +112,14 @@ test("chat quote, create and recovery use the authenticated fixed Cloud gateway"
 async function fixture(t, overrides = {}) {
   const calls = [];
   const proxy = createCloudProxy({ upstream: "https://project.supabase.co", publicKey: "public-key",
-    fetchImpl: async (url, options) => { calls.push({ url, ...options }); return Response.json({ ok: true }); }, ...overrides });
+    fetchImpl: async (url, options) => {
+      if (options.body?.[Symbol.asyncIterator]) {
+        const chunks = [];
+        for await (const chunk of options.body) chunks.push(Buffer.from(chunk));
+        options = { ...options, body: Buffer.concat(chunks) };
+      }
+      calls.push({ url, ...options }); return Response.json({ ok: true });
+    }, ...overrides });
   const server = createServer(proxy).listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
@@ -359,4 +367,30 @@ test("website mounts generation separately from the existing account gateway", a
   assert.equal((await response.json()).error.code, "cloud_gateway_401");
   assert.equal((await fetch(`${base}/api/account${CONTROL}`, { method: "POST" })).status, 404);
   assert.equal((await fetch(`${base}/healthz`)).status, 204);
+});
+
+
+test('Agent manifests, instructions and event responses cross former byte ceilings intact', async t => {
+  const text = '中文🙂\\"\n'.repeat(1_500_000) + '完整末尾';
+  const manifest = JSON.stringify({ schemaVersion: 1, goal: text, textRewrite: { source: text } });
+  assert.ok(Buffer.byteLength(manifest) > 20 * 1024 * 1024);
+  const result = JSON.stringify({ events: [{ type: 'text.result', displayPayload: { text } }] });
+  let forwarded;
+  const { send } = await fixture(t, { fetchImpl: async (_url, init) => {
+    forwarded = init.body.toString();
+    return new Response(result, { headers: { 'Content-Type': 'application/json' } });
+  } });
+  const upload = `/storage/v1/object/upload/sign/agent-temp/runs/${JOB}/inputs/request.json?token=signed`;
+  // Storage acknowledgements stay small; the long result comes from agent-run.
+  const storage = await fixture(t);
+  assert.equal((await storage.send(upload, 'PUT', manifest)).status, 200);
+  assert.equal(storage.calls[0].body.toString(), manifest);
+  const response = await send('/functions/v1/agent-run', 'POST', JSON.stringify({ action: 'create', goal: text }), AUTH);
+  assert.equal(response.status, 200); assert.equal(response.body.toString(), result);
+  assert.equal(JSON.parse(forwarded).goal, text);
+  const chat = JSON.stringify({ action: 'create', messages: [{ role: 'user', content: text + text }] });
+  assert.ok(Buffer.byteLength(chat) > 20 * 1024 * 1024);
+  const reply = await send('/functions/v1/chat-proxy', 'POST', chat, AUTH);
+  assert.equal(reply.status, 200); assert.equal(reply.body.toString(), result);
+  assert.equal(forwarded, chat);
 });

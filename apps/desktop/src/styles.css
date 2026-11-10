@@ -4108,6 +4108,11 @@ html[data-theme="light"] .app-form-input:focus {
   pointer-events: none;
 }
 
+.canvas-node.is-asset > .canvas-audio-waveform { height: calc(100% - 30px); }
+.canvas-node.is-asset.is-name-hidden > .canvas-audio-waveform { height: 100%; }
+.canvas-node.is-moving > .canvas-audio-waveform .audio-waveform-wave { cursor: grabbing; }
+.canvas-folder-asset > .canvas-audio-waveform { height: 140px; flex-shrink: 0; }
+
 .canvas-node-placeholder {
   height: calc(100% - 30px);
   display: grid;

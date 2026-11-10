@@ -230,7 +230,7 @@ function SidebarContent() {
       await reloadFolders();
       notifySuccess(
         creating === "folder"
-          ? "集合已创建"
+          ? "文件夹已创建"
           : creating === "collection"
             ? "收藏夹已创建"
             : "智能文件夹已创建"
@@ -287,12 +287,12 @@ function SidebarContent() {
       </button>
       <div className="app-sidebar-scroll flex-1 overflow-y-auto p-3 pt-4">
       <div className="panel-kicker mb-2 flex items-center justify-between">
-        <span>集合</span>
+        <span>文件夹</span>
         <span className="flex gap-2 normal-case tracking-normal">
           <button
             onClick={() => (creating === "folder" ? resetCreate() : startCreate("folder"))}
             className="rounded px-1 text-cold hover:opacity-80"
-            title="新建集合"
+            title="新建文件夹"
           >
             <FolderPlus size={13} />
           </button>
@@ -311,7 +311,7 @@ function SidebarContent() {
             }}
             placeholder={
               creating === "folder"
-                ? "集合名"
+                ? "文件夹名"
                 : creating === "collection"
                   ? "收藏夹名"
                   : "智能文件夹名"

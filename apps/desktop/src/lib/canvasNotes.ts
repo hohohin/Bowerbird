@@ -1,9 +1,11 @@
+import { documentPreviewText } from "./documentPreview.ts";
 import type { CanvasNode } from "./types";
 import type { CanvasRect } from "./canvasLogic";
 import { contentTableText, type ContentTable } from "./contentTable.ts";
 import { documentMediaReferences, documentWorkflowValue } from "./documentProjection.ts";
+import { TEXT_CARD_ASPECT_RATIO } from "./textMedia.ts";
 
-export function canvasDocumentHeight(text: string): number { return text.trim() ? 112 : 56; }
+export function canvasDocumentHeight(width: number): number { return width / TEXT_CARD_ASPECT_RATIO; }
 
 export interface CanvasTextCell {
   content_type?: "text" | "image";
@@ -47,7 +49,7 @@ export function canvasNoteValue(note: CanvasNotePayload, cellId: string) {
   if (note.note_type === "document") {
     const value = documentWorkflowValue(note.text);
     if (cellId === "*") return { type: "image" as const, assetIds: [...new Set(documentMediaReferences(note.text).filter(ref => ref.kind === "image").map(ref => ref.assetId))] };
-    return cellId === "*text" ? value : undefined;
+    return cellId === "*text" ? { ...value, text: documentPreviewText(value.text, "markdown", Infinity) } : undefined;
   }
   if (cellId === "*" || cellId === "*latest-image") {
     const cells = (cellId === "*latest-image" ? note.cells.slice(-1) : note.cells).flat();
@@ -107,7 +109,7 @@ export function canvasTextMinSize(cells: CanvasTextCell[][], images = false, bub
 
 /** Fall back to equal weights unless the saved vector matches the grid and stays positive. */
 export function canvasGridWeights(saved: number[] | undefined, count: number): number[] {
-  if (!saved || saved.length !== count || saved.some(weight => !(weight > 0))) return Array.from({ length: count }, () => 1);
+  if (!saved || saved.length !== count || saved.some(weight => !Number.isFinite(weight) || !(weight > 0))) return Array.from({ length: count }, () => 1);
   return saved;
 }
 
@@ -130,8 +132,8 @@ export function readCanvasNote(node: Pick<CanvasNode, "payloadJson">): CanvasNot
     ...(value.note_type === "section" && value.artboard ? { artboard: { base_asset_id: typeof value.artboard.base_asset_id === "string" ? value.artboard.base_asset_id : null } } : {}),
     line_height_percent: value.line_height_percent ?? 165,
     ...(typeof value.title === "string" ? { title: value.title } : {}),
-    ...(Array.isArray(value.column_widths) ? { column_widths: value.column_widths } : {}),
-    ...(Array.isArray(value.row_heights) ? { row_heights: value.row_heights } : {}),
+    ...(Array.isArray(value.column_widths) ? { column_widths: canvasGridWeights(value.column_widths, value.cells?.[0]?.length ?? 1) } : {}),
+    ...(Array.isArray(value.row_heights) ? { row_heights: canvasGridWeights(value.row_heights, value.cells?.length || 1) } : {}),
     ...(value.note_type === "bubble" ? { bubble_tail: value.bubble_tail ?? { side: "bottom", position: 25 } } : {}),
   };
 }

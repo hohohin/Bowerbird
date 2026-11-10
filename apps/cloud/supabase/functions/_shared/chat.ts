@@ -1,5 +1,4 @@
 export const CHAT_SERVICE = "chat_deepseek";
-export const CHAT_MAX_BYTES = 300_000;
 export type ChatToolCall = {
   id: string;
   type: "function";
@@ -73,9 +72,6 @@ export function validateChatInput(value: unknown): ChatInput {
     (value.tools_enabled !== undefined &&
       typeof value.tools_enabled !== "boolean")
   ) throw invalid();
-  if (new TextEncoder().encode(JSON.stringify(value)).length > CHAT_MAX_BYTES) {
-    throw new ChatInputError("对话上下文过长，请新建对话");
-  }
   const messages = value.messages.map(parseMessage);
   const pending = new Set<string>(), seen = new Set<string>();
   for (const message of messages) {
@@ -109,9 +105,6 @@ export function chatResult(
       typeof n === "number" && Number.isSafeInteger(n) && n >= 0 &&
       n <= 2_000_000
     )
-  ) throw invalid();
-  if (
-    new TextEncoder().encode(JSON.stringify(message)).length > CHAT_MAX_BYTES
   ) throw invalid();
   return {
     message,

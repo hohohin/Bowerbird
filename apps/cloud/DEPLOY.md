@@ -1,14 +1,58 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 2026-11-10 强化复刻语音已部署
+
+用户批准后，0085、understand-proxy v43、VPS 语音适配和 5 Bcoin／次临时价已上线。真实词级识别、原单幂等、唯一结算和失败测试退费通过；其他价格、函数、环境及官网保持。桌面源码待发包，真实全流程成片仍待验收。[部署证据与回滚](../../project_logs/2026-11-10-enhanced-replication.md)。
+
+## 2026-11-09 Agent 卡片与对话统一配套已部署
+
+经用户明确确认，chat-proxy／chat-worker v3、VPS 聊天 Worker、官网网关及 0084 已上线，19:57:30（北京时间）核验通过。现役 Worker `sha256:27bcef4aceef9e2dfcd4b8fa2a8b31d53b819fd62d9781005e22b637c981eb0a`，官网 `/opt/bowerbird/website-releases/20261109-agent-chat-unification`；既有 Skill、环境、挂载权限、资源限制、其他云函数、JWT、RLS 和 0 Bcoin 价保持。真实小对话与原请求重放通过，26,400,065 字节输入／2,280,000 字节合成回复完整往返，大文本未调用模型。原用户任务未重提，桌面源码未发布新安装包。
+
+首次切换触发挂载数组校验后自动回退 Worker／官网；修正为按挂载目标排序、比较全部字段后，启用同一候选并复核通过。回退镜像标签 `bowerbird/generation-worker:rollback-agent-chat-20261109`、官网上一版本 `20261109-agent-capacity`，备份目录 `/opt/bowerbird/deploy-backups/agent-chat-unification-20261109` 及 `-retry`。部署文件读回、迁移全文、完整验收与回滚边界见[统一专项记录](../../project_logs/2026-11-09-agent-chat-unification.md)；下方日期条目为历史部署状态。
+
+## 2026-11-09 Agent 文本容量与 413 修复已部署
+
+2026-11-09 Agent 文本容量修复已部署：现役官网遗留 64 KiB `request.json` 限制导致 HTTP 413，现已连同 Edge、Worker／DSH、0081／0083 和 Nginx 配套更新。16:59:27（北京时间）经公网上传 26,400,257 字节合成输入成功，读回长度与 SHA-256 一致，测试对象已清理；原失败任务已取消且预授权退回，未重提或调用付费模型。桌面源码未另打安装包。[部署证据与回滚](../../project_logs/2026-11-09-agent-text-capacity.md)。
+
+## 2026-11-08 Cloud DSH Skill 服务端迁移已部署
+
+11:09:50（北京时间）在四类活动队列为空时切换 Worker 为 `sha256:5d5190c9c6768203ac96dbd57827180ed40386d6b63e730f4bd176d0fcb7624c`。H3 官方指南版和文本编辑方法由 VPS `/opt/bowerbird/agent-worker/src/skills/text/` 只读挂载加载；客户端源码改为标识与业务参数，旧 H3 请求忽略其客户端方法正文。纯文字统一 processor 在模型执行前冻结方法及哈希，恢复不漂移。部署基于现役镜像仅叠加 5 文件和两行 Compose 配置，未部署 Edge／SQL 或夹带其他本机改动。
+
+候选 22 项断网测试、卡片／底部创作框回归及桌面 TypeScript 通过；11:12 再核验现役只读挂载、5 文件哈希、原语言／官方模式、旧版兼容、registry／聊天模块和健康事件，restart 0。未调用真实付费模型、未发布桌面安装包；旧安装版仍携带旧正文，但服务端已改用 VPS 方法。[完整证据、维护及回滚边界](../../project_logs/2026-11-08-cloud-dsh-skills.md)。
+
+## 2026-11-08 H3 文字结果结算修复已部署
+
+用户明确授权后，09:08:30（北京时间）仅应用 `0082_agent_text_settlement`，补齐 `settle_agent_run` 的纯文字结果判定，修复已有 `text.result` 却因缺少图片／HTML 产物而返回 409 的问题。租约、状态转换、预算、原子计费和权限保持；未执行全量迁移或部署 Worker／Edge／客户端。隔离 SQL 先复现再通过；线上完整函数读回、0082 记录、service_role 执行权限及两条旧失败任务／hold／usage 快照保持通过。未提交模型请求，真实付费优化仍待复测。
+
+旧函数备份 `.tmp/h3-failure-20261108/settle-before.sql`，回滚只恢复函数，不重算历史任务／账本；本次服务端修复不依赖客户端更新。详见 [部署证据与边界](../../project_logs/2026-11-08-h3-text-settlement.md)。
+
+## 2026-11-07 H3 纯文本 Worker 已部署
+
+08:13（北京时间）用户授权后，在四类活动队列均为空时切换 Worker。现役镜像 **`sha256:4e732efa289246a064883e997db99bac88ccdab6c4dbbf5dff4bed2afe6ba6b3`**，基于下述聊天版仅叠加输入 schema、文字改写和统一 processor 三份文件，修复 `textRewrite` 被拒绝为 `unified_agent_input_invalid`。候选断网 16 项测试通过；现役三文件哈希、文字输入／输出和聊天模块导入通过，服务正常、重启 0、无错误日志。环境、Compose、资源与安全限制保持；没有 Edge、迁移、价格或官网变更。
+
+旧镜像标签 `bowerbird/generation-worker:rollback-h3-text-20261107`，源码备份 `/opt/bowerbird/deploy-backups/h3-text-20261107/`；回退前确认无运行任务，不重排未知结果。未重提旧失败任务或进行真实付费测试；桌面布局和零建卡修复仍待客户端发布。详见 [部署记录与回滚](../../project_logs/2026-11-07-h3-optimization-repair.md)。
+
 ## 2026-11-07 Cloud 对话已部署（0 Bcoin）
 
 01:34:05（北京时间）真实链路通过。定向应用 **0077_chat_completions**；0078 及所有既有计费函数、原服务价格逐项保持，0068／0079／0080 未顺带应用。`chat-proxy v2` 保持 JWT 与内部 requireUser；`chat-worker v2` 关闭平台 JWT，内部校验专用 CHAT_WORKER_TOKEN。CHAT_ENABLED=true，聊天对所有已登录用户开放；原独立 Agent allowlist、支付 Mock 和其他模型开关保持。测试报价锁定 **0 Bcoin**，非零目录价格仍拒绝创建。
 
-现役 Worker **`sha256:8799ba09e5de45ed620b980f844f1ed8ee99c83cb5ee3bfb359206a1760b7b8e`**，基于原 `834246b4560cc…` 镜像仅增加聊天消费循环、DeepSeek 可选输出上限和三份共享协议／提示词。两份服务器 Dockerfile 同步复制规则；原 Compose、资源限制、DSH profile、既有运行时与模型密钥保持。仅新增 CHAT_CONTROL_URL／CHAT_WORKER_TOKEN，真实 DeepSeek key 仍只在 VPS。新增 Secrets 使原 16 个 Edge 版本各加 2，但代码包 SHA、JWT 及入口逐项保持；并未重部署其他函数源码。
+本次聊天部署镜像 **`sha256:8799ba09e5de45ed620b980f844f1ed8ee99c83cb5ee3bfb359206a1760b7b8e`**（后由上方 H3 修复镜像替代），基于原 `834246b4560cc…` 镜像仅增加聊天消费循环、DeepSeek 可选输出上限和三份共享协议／提示词。两份服务器 Dockerfile 同步复制规则；原 Compose、资源限制、DSH profile、既有运行时与模型密钥保持。仅新增 CHAT_CONTROL_URL／CHAT_WORKER_TOKEN，真实 DeepSeek key 仍只在 VPS。新增 Secrets 使原 16 个 Edge 版本各加 2，但代码包 SHA、JWT 及入口逐项保持；并未重部署其他函数源码。
 
 官网仍为 `20261106-windows-26.11.602`，已有路由直接生效；没有改官网文件、下载清单或安装包。18 项线上检查通过：真实登录用户经官网 quote=0、一次 DeepSeek 文本回复、原幂等键取回／重放／冲突拒绝、唯一任务／hold／confirm(0)、余额不变，非法用户与 Worker 凭据拒绝；输入 521／输出 5 tokens，临时 Auth 已清理，审计账本保留。18 项离线运行时测试、0078 后补 0077 演练、真实库事务回滚演练、Deno 与候选断网导入通过；7 份 Edge 文件读回一致，Worker 无聊天错误。工作区全量 Worker typecheck 被既有 `video-audio-probe.test.ts` 的 node:child_process 声明错误阻断；该未部署文件未进入候选。
 
 回退先设置 **CHAT_ENABLED=false** 停止新建，保留 get、Worker 和原任务结算；不删除聊天表／hold／usage，不重排未知任务。确需回退 Worker，先等待原任务完成，再使用 `bowerbird/generation-worker:rollback-chat-20261107` 和 `/opt/bowerbird/deploy-backups/chat-20261107/` 的源码／0600 环境备份。不得撤销现用官网路由。原始证据 `.tmp/chat-deploy-20261107/`；详见 [聊天协议](CHAT.md) 与 [行动记录](../../project_logs/2026-11-07-cloud-chat.md)。
+
+## 2026-11-06 H3 提示词优化 Agent 网关修复
+
+异机错误 `创建 DSH 统一 Agent Run 失败（连接未建立）`／Windows 10054 发生在模型执行前。桌面 Agent 控制请求仍直连 Supabase；本次复用官网网关处理 `agent-run`，并为统一 Agent 的签名清单上传增加固定路由。保持 Bearer、原任务身份及签名，不自动重发；未改 Worker、Edge、数据库、权益或计费。不能凭连接错误推断实际扣费结果。
+
+**已部署：** 官网现役 `/opt/bowerbird/website-releases/20261106-h3-agent-gateway`，回滚目录 `/opt/bowerbird/website-releases/20261106-windows-26.11.601`。从现役复制，只改 `cloud-proxy.mjs`，86 个既有文件保持，配置／首页／安装包／更新清单／Nginx 不变。新文件 SHA-256 `76115109d001ce81f0496cb75a203b5f35457100cb691131df3026460db86426`，原文件 `375895f636e317659bc4ddfd0ae6d945341423a86e1d1abe740ec1a158623e0e`。未部署本地源码中另一个专项的 `chat-proxy` 路由，线上仍为 404。
+
+固定 POST `/api/cloud/functions/v1/agent-run` 要求用户 Bearer；PUT 仅接受 `/api/cloud/storage/v1/object/upload/sign/agent-temp/runs/<UUID>/inputs/request.json?token=...`，JSON MIME、至多 64 KiB、精确 Content-Length，保留签名查询及 `x-upsert: true`，不转发 Bearer／Cookie／apikey 给存储。没有任意目标代理、私钥、自动重试或请求正文日志。
+
+**验收：** 本机 30 项 Cloud／账号代理测试通过，Rust 配置 5 项通过。正在运行的 `cargo run` 占用开发目录锁，因此配置测试使用现有依赖独立编译；没有停止用户应用，未完成整应用 Rust 重建。候选、现役、服务器公网各 7 项检查通过（healthz 204、匿名及无效 Bearer 401、原生成入口保持、未开放路由 404、无效存储签名 400）；服务 active。没有真实付费任务、素材上传或 GPU 调用。证据在本机 `.tmp/h3-gateway-20261106/` 与服务器 `/tmp/bowerbird-h3-gateway-20261106/`。
+
+**客户端与回滚：** 桌面 `CloudConfig.endpoint("agent-run")` 和 `agent_request_upload_url` 已修改源码，统一 Agent 清单上传调用新地址校验；仅客户端更新后生效，本轮没有重发安装包。客户端发布前可原子恢复旧官网符号链接并重启 `bowerbird-website.service`；新客户端发布后应保留该路由，不回退数据库／账本。H3 纯文本全链路在本次范围内，其他 Agent 媒体传输仍有原直连路径。
 
 > 目标：把 `apps/cloud/` 的 Supabase 迁移 + Edge Functions 推上云端，完成 Auth/积分/算力的真实联调。
 > 前提：你已在 Supabase 控制台拿到 Project URL / publishable key / secret key，并已在 `apps/cloud/.env` 填好方舟 key 与 endpoint id。

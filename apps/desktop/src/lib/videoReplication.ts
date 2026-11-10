@@ -22,6 +22,7 @@ export interface ReplicationInput {
   title: string;
   referenceId?: string;
   analysisProvider?: ReplicationAnalysisProvider;
+  analysisSettings?: { fps: number; transcribe: boolean; thinking: "default" | "disabled" | "low" | "medium" | "high" };
   sourceAnalysisId?: string;
   sourceRewriteId?: string;
   inputText?: string;
@@ -69,11 +70,13 @@ export interface ReplicationImageRequest { prompt: string; referenceId?: string;
 
 export type ReplicationSource = "douyin" | "local" | "library";
 export interface ReplicationCase {
+  enhancedId?: string;
   id: string; projectId: string; title: string; createdAt: string; updatedAt?: string;
   step: 1 | 2 | 3 | 4; sourceMethod: ReplicationSource; shareText: string;
   referenceId?: string; reference?: ReplicationReference; mediaPath?: string;
   analysisText?: string; rewriteDirection?: string; persona?: string; rules?: string;
   analysisProvider?: ReplicationAnalysisProvider;
+  analysisSettings?: { fps: number; transcribe: boolean; thinking: "default" | "disabled" | "low" | "medium" | "high" };
   transcript?: string; transcriptStatus?: "transcribed" | "no_speech" | "unavailable";
   rewrittenText?: string; firstFramePrompt?: string; frameReference?: ReplicationFrameReference | null;
   appliedAnalysisId?: string; appliedRewriteId?: string; workflowId?: string;

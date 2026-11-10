@@ -16,6 +16,18 @@ function fixture(initial = doc([node('original')])) {
   let saved = { revision: 1, document: clone(initial) }, fail = false, gate, readGate, assetGate, failRead = false;
   const interleavedChanges = [];
   const modules = new Map();
+  const requests = new Map(), sends = [], stops = [];
+  const chatApi = { getByRequest: async id => clone(requests.get(id) ?? null) };
+  const chatStore = { summaries: {}, loadProject: async () => {}, applyConversation: () => {},
+    loadConversation: async id => clone([...requests.values()].find(chat => chat.id === id) ?? null),
+    stop: async id => { stops.push(id); },
+    send: async input => {
+      assert.equal(saved.document.run.steps[input.agentNodeId].chatInput.requestId, input.requestId, 'save the request before submitting');
+      sends.push(clone(input));
+      const chat = { id: 'chat', projectId: input.projectId, nodeId: input.agentNodeId, provider: input.provider, submittedTurnId: 'turn', status: 'idle', error: null,
+        messages: [{ turnId: 'turn', role: 'assistant', status: 'done', text: '原轮次输出', referenceAssetIds: [] }] };
+      requests.set(input.requestId, clone(chat)); return chat;
+    } };
   const api = {
     canvasWorkflowGet: async () => {
       const snapshot = clone(saved);
@@ -36,19 +48,21 @@ function fixture(initial = doc([node('original')])) {
       saved = { revision: revision + 1, document: clone(document) }; return saved.revision;
     },
   };
-  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, setTimeout, clearTimeout });
+  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, TextEncoder, setTimeout, clearTimeout });
   function load(path) {
     if (modules.has(path)) return modules.get(path).exports;
     const module = { exports: {} }; modules.set(path, module);
     const output = ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
     const require = specifier => {
       if (specifier === './api') return { api };
+      if (specifier === './localChat') return { localChat: chatApi, localChatRunning: chat => chat && ['running', 'stopping'].includes(chat.status) };
+      if (specifier === './localChatStore') return { useLocalChatStore: { getState: () => chatStore } };
       if (specifier === '../store') return { useStore: { getState: () => ({ genJobs: {} }) } };
       if (specifier === './workflowPlannerRuntime') return { WorkflowPlannerRuntime: class {} };
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
       if (specifier === './workflowAgentOutputs') return { agentWriterValue: () => undefined };
       if (specifier === './canvasSessionOutputs') return { completedCanvasSessions: () => [], reconcileCanvasWorkflowReferences: nodes => nodes };
-      if (['./workflowExternalChanges', './canvasWorkflow', './canvasCardNames', './workflowDiagnostics', './contentTable.ts'].includes(specifier)) return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
+      if (['./workflowExternalChanges', './canvasWorkflow', './canvasCardNames', './workflowDiagnostics', './workflowTriggerSchedule', './workflowTriggerSchedule.ts', './workflowAgentChat', './workflowAgentResult', './workflowAgentProfile', './workflowTemplates', './workflowPlanner', './contentTable.ts'].includes(specifier)) return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       return {};
     };
     vm.runInContext(`(function(require,module,exports){${output}\n})`, context, { filename: path })(require, module, module.exports);
@@ -56,7 +70,7 @@ function fixture(initial = doc([node('original')])) {
   }
   const { CanvasWorkflowController } = load(resolve(lib, 'canvasWorkflowRuntime.ts'));
   const { mergeWorkflowChanges } = load(resolve(lib, 'workflowExternalChanges.ts'));
-  return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved),
+  return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved), requests, sends, stops, chatStore, chatApi, load,
     external: document => { saved = { revision: saved.revision + 1, document: clone(document) }; },
     fail: value => { fail = value; }, failRead: value => { failRead = value; },
     interleave: (...changes) => { interleavedChanges.push(...changes); },
@@ -74,6 +88,63 @@ function fixture(initial = doc([node('original')])) {
     },
     hold: () => { let release; gate = new Promise(resolve => { release = resolve; }); return () => { gate = undefined; release(); }; } };
 }
+
+test('portable Agent templates retain provider/model settings and discard conversation identity', () => {
+  const f = fixture();
+  const { captureWorkflowTemplate, instantiateWorkflowTemplate, parseWorkflowTemplate } = f.load(resolve(lib, 'workflowTemplates.ts'));
+  const trigger = { ...node('start'), kind: 'trigger' };
+  const agent = { ...node('agent', '写作'), kind: 'agent', inputs: { signal: [{ nodeId: 'start', portId: 'signal' }] }, chatProvider: 'codex-local', chatCodexOptions: { model: 'fixture', reasoningEffort: 'high' }, chatConversationId: 'must-not-copy' };
+  const template = captureWorkflowTemplate([trigger, agent], new Set(['start', 'agent']), '对话流程');
+  assert.equal(template.schemaVersion, 6); assert.ok(!JSON.stringify(template).includes('must-not-copy'));
+  const result = instantiateWorkflowTemplate(template, {}, {}, 'codex', [], 0, 0);
+  assert.equal(result[1].chatProvider, 'codex-local'); assert.deepEqual(plain(result[1].chatCodexOptions), agent.chatCodexOptions);
+  assert.equal(result[1].chatConversationId, undefined);
+  template.plan.nodes[1].chatConversationId = 'forged';
+  assert.throws(() => parseWorkflowTemplate(JSON.stringify(template)));
+});
+
+test('Agent execution submits through chat once and resumes the exact original turn', async () => {
+  const agent = { ...node('agent', '写出说明'), kind: 'agent', chatProvider: 'deepseek-cloud' };
+  const source = '参考文字'.repeat(50000);
+  const step = { status: 'pending', agentInput: { prompt: agent.prompt, source: JSON.stringify({ source }), assetIds: [] } };
+  const run = { id: 'run', startId: agent.id, threadId: 'thread', order: [agent.id], status: 'running', steps: { [agent.id]: step } };
+  const f = fixture({ ...doc([agent]), run }); await f.controller.load();
+  const first = await f.controller.chatResult(run.id, agent, step, () => false);
+  assert.equal(first.text.text, '原轮次输出');
+  assert.equal(f.sends.length, 1);
+  assert.ok(f.sends[0].text.includes(source));
+  assert.equal(f.sends[0].provider, 'deepseek-cloud');
+  assert.equal(f.sends[0].agentNodeId, agent.id);
+  const frozen = f.saved().document.run.steps[agent.id];
+  const accepted = f.requests.get(frozen.chatInput.requestId);
+  accepted.status = 'running'; accepted.messages.push({ turnId: 'later', role: 'assistant', status: 'running', text: '后续轮次', referenceAssetIds: [] });
+  const recovered = await f.controller.chatResult(run.id, agent, frozen, () => false);
+  assert.equal(recovered.text.text, '原轮次输出'); assert.equal(f.sends.length, 1);
+  accepted.messages[0].status = 'interrupted';
+  assert.equal(await f.controller.chatResult(run.id, agent, frozen, () => false), null);
+  assert.equal(f.saved().document.run.steps[agent.id].status, 'waiting');
+  assert.equal(f.sends.length, 1);
+});
+
+test('lost chat admission response keeps the request and stops the accepted original conversation', async () => {
+  const agent = { ...node('agent', '任务'), kind: 'agent' };
+  const step = { status: 'pending', agentInput: { prompt: agent.prompt, source: '{}', assetIds: [] } };
+  const run = { id: 'run', startId: agent.id, threadId: 'thread', order: [agent.id], status: 'running', steps: { [agent.id]: step } };
+  const f = fixture({ ...doc([agent]), run }); await f.controller.load();
+  const send = f.chatStore.send;
+  f.chatStore.send = async input => { await send(input); throw new Error('IPC acknowledgement lost'); };
+  assert.equal(await f.controller.chatResult(run.id, agent, step, () => false), null);
+  const frozen = f.saved().document.run.steps[agent.id];
+  assert.equal(frozen.status, 'waiting'); assert.ok(frozen.chatInput.requestId);
+  assert.equal((await f.controller.chatResult(run.id, agent, frozen, () => false)).text.text, '原轮次输出');
+  assert.equal(f.sends.length, 1);
+  const second = fixture({ ...doc([agent]), run }); await second.controller.load();
+  let halted = false;
+  const accept = second.chatStore.send;
+  second.chatStore.send = async input => { const chat = await accept(input); halted = true; return { ...chat, status: 'running' }; };
+  assert.equal(await second.controller.chatResult(run.id, agent, step, () => halted), null);
+  assert.deepEqual(second.stops, ['chat']);
+});
 
 test('chat card additions survive queued edits and stale workflow revision', async () => {
   const f = fixture(), c = f.controller; await c.load(); assert.equal(c.error, '');

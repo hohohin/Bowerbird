@@ -300,7 +300,7 @@ fn deliver_project(
         x,
         y: 100.0,
         width: 420.0,
-        height: 480.0,
+        height: 560.0,
         z_index: nodes.iter().map(|node| node.z_index).max().unwrap_or(0) + 1,
         position_locked: false,
     })?;

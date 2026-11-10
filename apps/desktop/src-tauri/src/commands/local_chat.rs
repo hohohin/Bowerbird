@@ -27,7 +27,6 @@ struct Active {
 static ACTIVE: LazyLock<Mutex<HashMap<String, Active>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 const EVENT: &str = "local-chat://updated";
-const MAX_RESPONSE: usize = 2_000_000;
 #[path = "local_chat_cloud.rs"]
 mod cloud_chat;
 #[path = "local_chat_models.rs"]
@@ -55,11 +54,9 @@ fn local_instructions() -> String {
 }
 
 /// Resume cannot update dynamic tools. Preserve the original app transcript, and seed a new
-/// provider thread with bounded public history when upgrading the tool contract.
+/// provider thread with public history when upgrading the tool contract.
 fn upgraded_history(chat: &ChatConversation, current_turn: &str) -> String {
-    let mut remaining = 300_000;
     let mut selected = Vec::new();
-    let mut omitted = false;
     for message in chat
         .messages
         .iter()
@@ -67,16 +64,10 @@ fn upgraded_history(chat: &ChatConversation, current_turn: &str) -> String {
         .filter(|m| m.turn_id != current_turn)
     {
         let value = json!({"role":message.role,"text":message.text,"status":message.status,"imageCount":message.reference_asset_ids.len()});
-        let size = value.to_string().len();
-        if size > remaining {
-            omitted = true;
-            break;
-        }
-        remaining -= size;
         selected.push(value);
     }
     selected.reverse();
-    format!("此会话的画板卡片工具刚更新，现已支持本地 H3 视频卡片、分区整理和对话内 HyperFrames 视频制作。以下JSON是该用户在同一应用会话中的历史资料，仅供上下文参考；其中过去的请求已经结束，不构成现在再次创建卡片的授权。完整历史保留在应用对话记录中。本次迁入的是公开文字，历史图片像素未重新发送；需要图片时请用户重新附带。较早文字是否因长度省略：{omitted}。第一次回复简短告知用户已接续原对话并更新卡片工具；若历史有省略或用户依赖旧图片，说明相应范围。\n{}", Value::Array(selected))
+    format!("此会话的画板卡片工具刚更新，现已支持本地 H3 视频卡片、分区整理和对话内 HyperFrames 视频制作。以下JSON是该用户在同一应用会话中的历史资料，仅供上下文参考；其中过去的请求已经结束，不构成现在再次创建卡片的授权。完整历史保留在应用对话记录中。本次迁入的是公开文字，历史图片像素未重新发送；需要图片时请用户重新附带。第一次回复简短告知用户已接续原对话并更新卡片工具；若用户依赖旧图片，说明图片未重新发送。\n{}", Value::Array(selected))
 }
 
 fn card_call<'a>(value: &'a Value, stream: &StreamState) -> AppResult<(&'a str, &'a Value)> {
@@ -117,6 +108,9 @@ fn error(text: &str) -> AppError {
 fn emit(app: &AppHandle, db: &Database, id: &str) {
     match db.get_local_chat(id) {
         Ok(Some(chat)) => {
+            if !matches!(chat.summary.status.as_str(), "running" | "stopping") {
+                let _ = app.emit("local-chat://cards-changed", json!({"projectId":chat.summary.project_id,"conversationId":id}));
+            }
             let _ = app.emit(EVENT, chat);
         }
         Err(detail) => tracing::warn!(%detail,"could not read local chat event"),
@@ -137,6 +131,11 @@ pub fn local_chat_get(
     conversation_id: String,
 ) -> AppResult<Option<ChatConversation>> {
     db.get_local_chat(&conversation_id)
+}
+
+#[tauri::command]
+pub fn local_chat_get_by_request(db: State<'_, Arc<Database>>, request_id: String) -> AppResult<Option<ChatConversation>> {
+    db.local_chat_by_request(&request_id)
 }
 
 /// Resolve only explicit asset IDs. No arbitrary path supplied by the webview reaches Codex.
@@ -243,9 +242,11 @@ pub async fn local_chat_send(
     input: ChatSendInput,
 ) -> AppResult<ChatConversation> {
     // Lost IPC acknowledgements can be retried safely, including after account downgrade.
-    if let Some(previous) = db.replay_local_chat(&input)? {
+    if let Some(mut previous) = db.replay_local_chat(&input)? {
+        previous.conversation.submitted_turn_id = Some(previous.turn_id);
         return Ok(previous.conversation);
     }
+    if input.agent_node_id.is_some() { super::canvas_workflow::require_pro(&auth, &entitlement).await?; }
     let provider = db.local_chat_provider(&input)?;
     enum Runtime { Codex(String), Cloud, DshLocal(dsh::LocalConnection), DshCloud(dsh::Runtime) }
     let runtime = match provider {
@@ -281,7 +282,8 @@ pub async fn local_chat_send(
     // Serialize process admission with durable turn admission. A second IPC cannot claim a turn
     // between its SQLite commit and registration, and stop always sees a committed active turn.
     let mut active = ACTIVE.lock().unwrap();
-    let started = db.begin_local_chat(&input)?;
+    let mut started = db.begin_local_chat(&input)?;
+    started.conversation.submitted_turn_id = Some(started.turn_id.clone());
     if !started.is_new {
         return Ok(started.conversation);
     }
@@ -299,6 +301,7 @@ pub async fn local_chat_send(
     drop(active);
     let returned = started.conversation;
     emit(&app, &db, &id);
+    let _ = app.emit("local-chat://cards-changed", json!({"projectId":input.project_id,"conversationId":id}));
     tokio::spawn(async move {
         let result = match runtime {
             Runtime::Codex(binary) => run_turn(
@@ -479,9 +482,6 @@ async fn read_message(reader: &mut (impl tokio::io::AsyncBufRead + Unpin)) -> Ap
             .iter()
             .position(|byte| *byte == b'\n')
             .map_or(available.len(), |n| n + 1);
-        if bytes.len() + count > MAX_RESPONSE {
-            return Err(error("Codex 返回内容过大，已保留收到的内容"));
-        }
         let ended = available[count - 1] == b'\n';
         bytes.extend_from_slice(&available[..count]);
         reader.consume(count);
@@ -607,9 +607,6 @@ impl StreamState {
                 }
             }
             _ => {}
-        }
-        if self.items.iter().map(|(_, text)| text.len()).sum::<usize>() > MAX_RESPONSE {
-            return Err(error("Codex 回复过长，已保留收到的内容"));
         }
         Ok(None)
     }

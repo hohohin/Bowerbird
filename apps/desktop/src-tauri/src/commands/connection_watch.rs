@@ -311,7 +311,7 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                     fallback_at = now;
                 }
                 if let Some(roots) = pending.take_ready(now) {
-                    queue_refresh(app.clone(), db.clone(), paths.clone(), Some(roots), None);
+                    queue_refresh(app.clone(), db.clone(), paths.clone(), Some(roots), None, true);
                 }
             }
         });

@@ -333,12 +333,22 @@ w.__TAURI_INTERNALS__ = {
       w.emitAssetsChanged();
       return null;
     }
-    if (command === "preview_asset_originals") return assets.filter(asset => args.assetIds.includes(asset.id)).map(asset => ({ asset_id: asset.id, name: asset.name, path: `/synthetic/${asset.id}.png`, fingerprint: "fixture-original" }));
+    if (command === "preview_asset_originals") return assets.filter(asset => args.assetIds.includes(asset.id)).map(asset => ({ asset_id: asset.id, name: asset.name, path: `/synthetic/${asset.id}.png`, fingerprint: "fixture-original", missing: w.missingOriginalIds?.includes(asset.id) ?? false }));
     if (command === "trash_asset_original") {
       if (w.failAssetDelete) throw "模拟删除失败";
       const asset = assets.find(asset => asset.id === args.original.asset_id);
       if (!asset) throw "素材已不存在";
       Object.assign(asset, { library_hidden: true });
+      w.missingOriginalIds = [...new Set([...(w.missingOriginalIds ?? []), asset.id])];
+      w.removedOriginalIds = [...new Set([...(w.removedOriginalIds ?? []), asset.id])];
+      for (const prompt of snapshot.nodes.filter((node: any) => node.kind === "prompt" && JSON.parse(node.payloadJson).job_id)) {
+        const outputs = snapshot.edges.filter((edge: any) => edge.fromNodeId === prompt.id && edge.kind === "produced")
+          .map((edge: any) => snapshot.nodes.find((node: any) => node.id === edge.toNodeId))
+          .filter((node: any) => node?.kind === "asset" && node.role === "output");
+        if (outputs.some((node: any) => node.assetId === asset.id)
+          && !outputs.some((node: any) => !w.removedOriginalIds.includes(node.assetId))) prompt.hiddenAt = 20;
+      }
+      for (const node of snapshot.nodes) if (node.assetId === asset.id) node.hiddenAt = 20;
       useStore.setState({ assets: assets.filter((asset: any) => !asset.library_hidden) as any });
       w.emitAssetsChanged();
       return null;

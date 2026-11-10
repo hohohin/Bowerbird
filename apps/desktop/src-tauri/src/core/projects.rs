@@ -113,8 +113,8 @@ pub enum AssetDeleteMode {
 const PROJECT_RUNNING_GENERATION_COUNT_SQL: &str =
     "SELECT COUNT(*) FROM task_queue WHERE project_id=?1 AND status IN ('queued','running')";
 
-// Agent terminal states are intentionally allow-listed. Any new/unknown state must block
-// project deletion until its lifecycle semantics are reviewed. A succeeded + accepted run is
+// Unfinished states are counted for impact reporting, never a deletion veto.
+// A succeeded + accepted run is
 // unfinished until the whole artifact group has its local durable-ingest checkpoint. A primary
 // final_asset_id alone can be written before later artifacts finish projecting/acknowledging.
 pub(crate) const PROJECT_PENDING_AGENT_RESULT_SQL: &str =
@@ -160,29 +160,14 @@ fn project_unfinished_work_counts(
     ))
 }
 
-pub(super) fn ensure_project_has_no_unfinished_work(
-    conn: &rusqlite::Connection,
-    project_id: &str,
-    discard_pending_results: bool,
-) -> AppResult<()> {
-    let (generation_count, mut agent_count) = project_unfinished_work_counts(conn, project_id)?;
-    if discard_pending_results {
-        agent_count -= pending_agent_results(conn, project_id)?.len() as i64;
-    }
-    if generation_count > 0 || agent_count > 0 {
-        return Err(AppError::Other(format!(
-            "项目仍有未完成任务（生成 {generation_count}，Agent {agent_count}），请等待任务终态且已接受结果完成入库后再删除"
-        )));
-    }
-    Ok(())
-}
-
 pub(super) fn discard_project_pending_results(conn: &rusqlite::Connection, project: &str) -> AppResult<()> {
     // Local abandonment, not a fabricated remote cancellation or successful ingest.
     // Committed with project deletion; rollback preserves the original records.
     conn.execute(&format!(
-        "UPDATE cloud_agent_runs SET snapshot_json=json_set(snapshot_json,'$._bowerbirdResultAbandonedV1',json_object('reason','project_deleted','projectId',?1,'abandonedAt',unixepoch())) WHERE project_id=?1 AND ({PROJECT_PENDING_AGENT_RESULT_SQL})"
+        "UPDATE cloud_agent_runs SET snapshot_json=json_set(snapshot_json,'$._bowerbirdResultAbandonedV1',json_object('reason','project_deleted','projectId',?1,'abandonedAt',unixepoch())) WHERE project_id=?1 AND (status NOT IN ('succeeded','failed','cancelled') OR ({PROJECT_PENDING_AGENT_RESULT_SQL}))"
     ), [project])?;
+    // FK actions detach the indexed owner; recovery also reads the serialized job.
+    conn.execute("UPDATE task_queue SET payload=json_set(payload,'$.project_id',NULL,'$.thread_id',NULL,'$.creative_session_id',NULL) WHERE project_id=?1 AND kind='generation' AND json_valid(payload)", [project])?;
     Ok(())
 }
 
@@ -480,9 +465,7 @@ impl Database {
             ));
         }
         let conn = self.conn.lock().unwrap();
-        // Keep the unfinished-work guard and every project-owned database mutation in the same
-        // transaction. This makes the backend authoritative instead of relying on a potentially
-        // stale frontend impact confirmation.
+        // Abandon pending delivery and detach execution records in the deletion transaction.
         let tx = conn.unchecked_transaction()?;
         let (workspace_path, kind): (String, String) = tx
             .query_row(
@@ -492,7 +475,7 @@ impl Database {
             )
             .optional()?
             .ok_or_else(|| AppError::NotFound(format!("project {project_id}")))?;
-        ensure_project_has_no_unfinished_work(&tx, project_id, false)?;
+        discard_project_pending_results(&tx, project_id)?;
         // 预置项目（如「欢迎来到园丁鸟」）：workspace_path 是虚拟值，无真实目录可移出，
         // 成员素材（source='sample'）应留全局供未来按 source 清理。强制 Keep 语义，忽略传入 mode。
         // 空白项目（kind="blank"）没有 workspace，「移出」无处可移（MoveOut 会把文件移到相对
@@ -1031,7 +1014,7 @@ mod tests {
     }
 
     #[test]
-    fn project_delete_counts_and_blocks_every_unfinished_agent_state() {
+    fn project_delete_counts_but_never_blocks_unfinished_agent_states() {
         let db = db();
         put_asset(&db, "ingested-final");
         put_project(&db, "p1");
@@ -1074,50 +1057,10 @@ mod tests {
         let impact = db.project_delete_impact("p1").unwrap();
         assert_eq!(impact.running_agent_count, 5);
 
-        let error = db
-            .delete_project("p1", ProjectDeleteMode::Keep)
-            .unwrap_err();
-        assert!(error.to_string().contains("Agent 5"));
-        assert!(db.get_project("p1").unwrap().is_some());
-
-        {
-            let conn = db.conn.lock().unwrap();
-            conn.execute(
-                "UPDATE cloud_agent_runs SET status='failed' \
-                 WHERE status NOT IN ('succeeded','failed','cancelled')",
-                [],
-            )
-            .unwrap();
-            conn.execute(
-                "UPDATE cloud_agent_runs SET final_asset_id='ingested-final' \
-                 WHERE run_id='accepted-pending'",
-                [],
-            )
-            .unwrap();
-        }
-        assert_eq!(
-            db.project_delete_impact("p1").unwrap().running_agent_count,
-            1,
-            "final_asset_id alone must not make a partially ingested group deletable"
-        );
-        {
-            let conn = db.conn.lock().unwrap();
-            conn.execute(
-                "UPDATE cloud_agent_runs SET snapshot_json=?2 WHERE run_id=?1",
-                rusqlite::params![
-                    "accepted-pending",
-                    r#"{"_bowerbirdAgentIngestV1":{"schemaVersion":1,"fingerprint":"group-hash-2","completedAt":2}}"#
-                ],
-            )
-            .unwrap();
-        }
-        assert_eq!(
-            db.project_delete_impact("p1").unwrap().running_agent_count,
-            0
-        );
-
         db.delete_project("p1", ProjectDeleteMode::Keep).unwrap();
+        assert!(db.get_project("p1").unwrap().is_none());
         let conn = db.conn.lock().unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM cloud_agent_runs WHERE json_extract(snapshot_json,'$._bowerbirdResultAbandonedV1.reason')='project_deleted'", [], |r| r.get::<_, i64>(0)).unwrap(), 5);
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM cloud_agent_runs", [], |row| row
                 .get::<_, i64>(0))

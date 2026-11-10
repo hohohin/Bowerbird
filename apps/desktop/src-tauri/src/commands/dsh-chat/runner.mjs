@@ -34,7 +34,6 @@ function stop(reason = "DSH_CANCELLED") {
 const reader = checking ? undefined : createInterface({ input: process.stdin });
 reader?.on("line", line => {
   try {
-    if (Buffer.byteLength(line) > 1000000) throw new Error("DSH_INPUT_LIMIT");
     const message = JSON.parse(line);
     if (!started) {
       started = true;
@@ -64,10 +63,7 @@ function host(event) {
 
 async function requestBody(request) {
   const chunks = [];
-  let length = 0;
   for await (const chunk of request) {
-    length += chunk.length;
-    if (length > 300000) throw new Error("DSH_REQUEST_LIMIT");
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));

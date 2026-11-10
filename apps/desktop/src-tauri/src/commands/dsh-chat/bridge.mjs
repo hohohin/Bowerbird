@@ -47,7 +47,7 @@ export function cloudMessages(request) {
     }
     return result;
   });
-  if (!messages.length || messages.length > 128 || Buffer.byteLength(JSON.stringify(messages)) > 300000) throw new Error("DSH_MESSAGES_LIMIT");
+  if (!messages.length || messages.length > 128) throw new Error("DSH_MESSAGES_LIMIT");
   return messages;
 }
 

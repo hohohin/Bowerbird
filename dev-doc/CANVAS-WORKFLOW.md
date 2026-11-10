@@ -1,7 +1,121 @@
 # 画板工作流实现与验收
 
+## 2026-11-09：Agent 卡片与对话统一（Cloud 已部署，桌面源码待发包）
+
+新 Agent 卡片与创作框对话统一使用 `localChatStore` / `local_chat_send`。首次发送在 SQLite 事务内创建同 nodeId 的 Agent 工作流投影；旧 note 只保留历史外键，画板不重复显示。工作流提交前保存原 requestId，再按 submittedTurnId 交付；停止、续聊、历史恢复与模型控件共用对话实现。旧 ds-inbox／VPS 任务仅恢复，不作为新发送入口。模板 v6 保存模型配置并剥离会话身份。
+
+移除对话链路原有文字字节拦截及按字节丢弃历史的逻辑，避免恢复 Agent 已取消的限制。保留原对话的消息数量、工具闭集、模型参数、媒体约束及计费／身份校验；没有新增图片像素上传或自动生图权限。经用户确认，聊天 Edge v3、VPS Worker、官网网关与 0084 已部署；真实小对话、原请求恢复和大文本完整往返通过。Cloud 现役哈希、部署证据及桌面尚未发包边界见[实施记录](../project_logs/2026-11-09-agent-chat-unification.md)。本文下方日期记录中的两套执行入口和旧文本字节限额仅描述当时状态。
+
+## 2026-11-09：多行表格调整尺寸后保存失败（开发预览已修复）
+
+- BBLaunchVideo 现场原始错误为 `project canvas: text card grid sizes must match the table and stay positive`。`CanvasTextCard.moveGridResize` 按整表权重 4% 计算相邻格的最小值，53 行等分时下限 2.12 超过两格总量 2，得到负行高并被后端拒绝；FIFO 队首重试同一非法载荷，使后续修改持续无法保存。
+- 拖动下限现取整表 4% 与相邻两格总量四分之一的较小值，保证两个尺寸为正且仍可调整；`readCanvasNote` 复用 `canvasGridWeights` 的等分回退，避免已失败草稿继续携带无效尺寸，非有限值同样回退。不修改后端结构校验、队列顺序或正文。
+- 新增 `canvas-large-grid-resize-ui.test.mjs`：旧源码在正尺寸断言失败，修复后 53 行及 53 列的拖动、尺寸总量／其他行列保持、全文／身份保留和保存重开通过。`canvas-notes-text.test.mjs` 6 项与 TypeScript 通过；旧 `canvas-notes-ui.test.mjs:105` 仍预期空标题，而既有产品显示“内容卡片”，未修改该无关断言，未声称综合回归通过。日志 `apps/desktop/.tmp/canvas-large-grid-*.log`。
+- 当前开发现场经临时限定恢复将负尺寸替换为界面原本使用的等分尺寸，再通过既有“重试保存画板”顺序写入。每次原生返回均核对正文和单元格与提交内容一致；失败提示消失，数据库只读确认目标卡 53 行、4 列且尺寸均为正。诊断及恢复临时代码随即移除，无直接 SQL 修改、正文截断或生成调用，未打包发布。
+
+## 2026-11-09：产物卡片紧凑布局（源码待发布）
+
+- 正常生成会话、原生产物、Agent 图片、Agent／反推／分层内容结果与 H3 新产物改为源卡右侧 64、卡间 32 的画板坐标规则；碰撞使用边缘候选就近避让，不依赖相机缩放或整段向下跳。批次多图 3–4 张用两列、5 张以上用三列；逐件 Agent 附件用三列候选并避让既有卡片。续轮复用可见组图锚点，独立 Agent 图片保持独立。
+- 前端复用 `placeCanvasCardNearSource`，`canvasOutputPlacement.ts` 使用既有会话投影、内容格归属、视频历史、文件组及归档状态过滤占位；组图按最新图片比例／运行态外框计算高度。原生 `project_canvas/placement.rs` 使用同一边缘／间距与尺寸规则，复用快照来源恢复后排除折叠历史；不修改来源、素材、连线身份或用户库。
+- `CanvasWorkflowLayer` 的既有 ResizeObserver 将实测尺寸交给 controller；运行中落点可使用最新测量，`layoutSize` 随下次工作流保存持久化，未挂载时读取缓存，无缓存才用类型估值。该字段不属于付费编辑定义，尺寸变化可以和另一窗口的内容修改合并；不新增数据库迁移、不逐帧保存。
+- “整理”补齐工作流输入、结果、会话和内容写入者的可见关系，结合组图别名遍历下游；测量使用实际尺寸，不再以旧的大外框作为下限。独立叶子产物可紧凑成网格；连线绕开网格前列媒体。既有几何撤销和保存复用，自动生成／恢复不重排已有或手动拖动的卡片，用户显式整理只影响所选分支。
+- 验证入口：`compact-output-ui.test.mjs`（可见历史、实测缓存／并发合并、六张产物三列两行、工作流遍历、无关卡片保持、撤销、深浅色），`canvas-arrangement-ui.test.mjs`（素材／分组／Agent、重复整理与重开），11 项排列／参考落点逻辑；原生 `core::project_canvas`、`commands::canvas_workflow::tests` 验证批次网格、原位恢复、组图与门控。既有整理 UI 测试改为显式 Ctrl 选素材，匹配当前右键不隐式选择／单击预览语义。
+- 日志位于 `.tmp/compact-output-*.log` 和 `apps/desktop/.tmp/compact-*.log`；深浅色截图 `apps/desktop/.tmp/compact-output/`，隔离构建 `apps/desktop/.tmp/compact-output-build/`。均使用临时数据库和合成 IPC，未调用真实模型、整理用户现有画板、安装或发布，macOS 原生未验。
+- 最终通过：76 项原生（画板／历史投影 41、工作流契约与门控 35）、11 项布局逻辑、两组正式组件浏览器回归、TypeScript 与隔离 Vite 构建。深浅色截图已人工查看；网格前列图片上的穿越连线已改走卡间通道。
+
+## 2026-11-09：Agent 文本容量与 DSH 配置（Cloud 已部署／桌面源码待发布）
+
+用户确认取消应用自定的文本限制和拦截。现行范围以 PROJECT.md 为准；下方 11 月 7 日记录中的 4000 字和 20 MiB 保留项已被本节覆盖。
+
+- 本机 Agent 卡片要求、引用、文本结果和历史保存不再按固定字符／字节数拒绝；保留非空、请求身份、JSON 结构、精确输出绑定和原子交付。编排助手的方案协议及图片／视频工具的独立边界保持。
+- Cloud 沿用原输入清单、检查点和 `text.result`，移除相关 20 MiB 拦截。0083 在 0081 后取消 `text.result` 的字节上限，普通事件 16 KiB、对象约束和 7 天清理保持；私有 `agent-temp` 的 `file_size_limit = null` 继承平台全局容量，并不宣称物理无限存储。图片等上传接口仍校验原媒体上限。
+- 官网共享 `cloud-routes.json` 的 Agent `request.json` 路由以 `maxBytes: null` 表示不附加应用容量限制；仅 Agent 控制请求／结果不再使用通用 JSON 大小预算。Nginx 前置 200 MiB body 上限同步取消，由固定路由网关继续执行媒体限制。路由、签名、账号、Content-Length 一致性、并发与断线不重发保持。其他服务沿原配额。
+- 计量代理不再拒绝 8 MiB 请求、2／4 MiB SSE 或 64 KiB 压缩回执；回执仍 gzip 保存、按原 SHA-256／长度校验并复用原工具调用，恢复不能再向模型提交。解压容量由已保存的精确原始长度决定，拒绝损坏的回执。
+- DSH `cordis.bridge.patch.yml` 使用 DeepSeek 官方模型容量：上下文 1,048,576、最大输出 393,216 tokens；关闭自动摘要，避免将原文静默替换成摘要。HTML／内容执行各自的 profile 采用相同容量参数，保持各自工具面，旧受控适配器仍沿旧 profile。上游真实上下文／输出超限给出明确中文错误，截断回复不发布为成功文本，已取得的模型用量与回执仍保存。
+- 长模型调用取消固定 90 秒上游 deadline，统一 Agent prompt 取消固定 10 分钟总时长；代理每 15 秒向 DSH 发 SSE 心跳，初始化／取消及连接空闲检测仍保留。Run 取消／租约失效中断上游请求，状态未知不重提；模型调用次数、权限、计费和 VPS 资源配置保持。
+- 16:59:27（北京时间）Cloud 配套部署及公网实测完成：0081／0083、agent-run v57、agent-worker v62、现役 Worker 的 8 个模块和 3 个 DSH profile、官网网关及 Nginx 已更新。生产候选沿用现役 Skill 正文／哈希，66 项断网回归、23 项网关回归、Edge 大文本和真实 DSH 配置通过；约 25.2 MiB 合成清单公网上传／完整读回成功，未调用付费模型。桌面源码仍待安装包发布，未修改本机用户数据库；工作区既有类型／Skill 哈希问题未据此宣称修复。详见 [部署、原任务核对与回滚](../project_logs/2026-11-09-agent-text-capacity.md)。
+
+验证记录：`.tmp/agent-capacity/`。Worker／代理／适配器／租约 47 项、网关 23 项、Edge 长输入／检查点／结果往返、数据库超过 20 MiB 的完整读回与约束／迁移重放、生产 DSH 适配器配假上游的 61 秒等待及长上下文无摘要已通过；本机 Agent 36 项（6 项既有忽略）及 Cloud 桥 26 项通过，含超过 20 MiB 的本机结果完整读回；HTML／内容执行的真实合成配置均确认模型参数与工具面。处理器／控制面 19 项在独立源码副本与该副本的 Skill 哈希下通过，正式 Skill 清单未改写。正式工作流组件使用合成 IPC 验证传递、恢复不重发和失败停止；不是付费模型内容质量验收。桌面全量类型检查被既有编辑器依赖声明错误阻塞；在编译器中替换本轮改动前的文件进行对照，未新增类型诊断，详见 type-compare.log。
+
+## 2026-11-09：Agent 启动时工作流累计大小误拦（源码待发布）
+
+- 用户诊断 `START_FAILED / validation / 工作流数据无效` 对应 Agent 卡片 `bc38de7f-aa92-4c3d-9ad0-a5294e92f166`。只读查询定位到 revision 657，三个 Agent、六次历史，原工作流 1,838,116 字节；用正式 `CanvasWorkflowController.start`、捕获的输入副本及禁止模型调用的 IPC 桩复现，新增运行及冻结引用后为 2,392,517 字节。原生校验旧快照通过、新快照仅因 2,000,000 字节总量门槛拒绝；移除此门槛后两者均通过。
+- 这是 11 月 7 日长文本改动遗漏的本地持久化入口。`canvas_workflow::validate` 不再对所有历史累计文本设固定总字节数，避免可用长度随运行次数缩小；不清空旧步骤、替换原请求身份、丢弃恢复快照或截断正文。结构校验、节点数量、依赖与锁、版本冲突、权限，以及模板文件和单次 Agent 请求自己的传输边界继续保留。
+- 原生回归 `long_agent_history_and_start_snapshot_roundtrip_without_truncation` 验证超过旧上限的长中文／emoji／换行／转义输入、历史结果、新启动和等待检查点完整保存读回，旧请求身份保持，执行锁错误及过期 revision 仍拒绝。本次只读取真实库并在 `.tmp/agent-start-validation/` 保存诊断副本；浏览器回放 provider 调用数为 0，不修改用户库或重试原任务。桌面 Rust 后端需重建加载，Cloud 无本次代码变更。
+- 验证结果：真实快照的旧／新原生校验对照通过，工作流原生专项 **35 passed**，包含此次长文本回归及既有连接、锁、修订、循环、调度和模板实例检查。日志 `.tmp/agent-start-validation/native.log`；未打安装包或部署。
+
+## 2026-11-08：隐藏卡片的名称与热区残留（源码待发布）
+
+- `CanvasWorkspace` 复用 `liveGraphNodes` 的可见投影，将 `visibleGraphNodeIds` 传给 `CanvasWorkflowLayer`；名称与会话连接热区只挂到可见卡片。Agent 执行组收纳的起始提示词、归档线程不再留下可编辑名称与透明热区。完整 `graphNodes` 继续解析历史引用与保存稳定名称，不删除数据。
+- `canvas-overlay-visibility-ui.test.mjs` 使用封闭合成 IPC，修改前在 Agent 起始提示词残留名称断言失败，修改后通过；同时覆盖归档提示词、正常图片加载／下游按钮、解除收纳与恢复线程后的卡片及原名称。`generation-galleries-ui.test.mjs`、`workflow-layer-updates-ui.test.mjs`、11 项会话逻辑测试和 TypeScript 通过。
+- BBdemo 开发预览热更新后确认残留会话名称消失，已有图片与视频仍可见。未删除用户素材、修改历史节点或触发生成，未打包／发布。
+
+## 2026-11-08：生成阶段反馈与 CLI 进度核查（源码待发布）
+
+- 复用 `codex://chunk` 增加 `progress`，由 `codex/progress.rs` 只解析允许展示的阶段与队列数字。正常提交和 Dreamina 恢复共用解析器；等待本机名额、提交、上游处理、工具执行、查询原任务、保存结果均在实际边界发出。继续使用既有查询频率，不启动额外模型或并行查询。
+- 前端 `generationProgress.ts` 按运行中的 job＋最新 turn 接收，旧轮、未知 job 和已完成／取消任务的迟到进度不生效。画板普通会话、内容格内会话、GenerationPanel 和素材库最近任务共用文字；保留耗时，不增设虚构百分比条。恢复清除旧阶段，`querying` 不再表述为必然排队。
+- Dreamina 的 `queue_idx`／`queue_length` 只在非 `Finish` 且数字为有效正数、位置不超过长度时展示原数值；不把它解释为前方人数、剩余时间或生成比例。零值、缺字段及异常数字退回“上游处理中”。已结束任务的 `queue_status: Finish` 也可能伴随失败，不能作成功依据。
+
+核查证据与能力边界（2026-11-08）：
+
+| 通道 | 已核查证据 | 能显示什么 | 尚未证实的能力 |
+| --- | --- | --- | --- |
+| Dreamina CLI `a857341-dirty`，build 2026-07-31 | 本机 `--help`／`version`、`query_result` 参数、3 份已有诊断响应的字段；Go 字段布局中两份 QueueInfo 含 QueueIdx／Priority／QueueStatus／QueueLength／DebugInfo | `gen_status`、有值时的队列位置与长度；本机提交／保存阶段 | 没有找到生成百分比或中途图片预览接口。3 份真实样本均为终态失败、队列 0/0；非零队列展示只做了离线协议夹具验收，真实运行中的队列含义仍需后续观察 |
+| Codex CLI `0.167.0` | 现有 `exec --json` 解析路径、官方非交互文档、本机离线导出的 app-server schema；仅统计最近 40 份私有 CLI 会话的事件类型，未打印内容 | turn/item 的开始、执行与完成；收到图片生成 item 时显示生图阶段，普通工具只显示工具执行 | app-server 的 imageGeneration item 含 status／savedPath 等，无百分比字段；MCP progress 通知只有 message＋身份。app-server 与 exec 协议不能直接等同；本次未触发真实付费图片生成来证明每种事件必然出现 |
+
+- Dreamina 二进制还含 `Percentage` 字段，其邻接字段是 ClientLanguage／ClientHostName／ServiceConfig，属于客户端服务配置字段布局；不能将孤立字符串作为生成百分比接口证据。Codex 最近会话样本没有 image_generation_call，故不将该样本集当成真实图片过程覆盖。
+- 官方 [Codex 非交互事件](https://learn.chatgpt.com/docs/non-interactive-mode) 支持执行生命周期；当前集成继续消费该流。官方 [OpenAI 图片 API 流式输出](https://developers.openai.com/api/docs/guides/image-generation) 可请求 0–3 张中途图片，但可能少于请求数量，不代表完成百分比。若以后需要中途预览，必须单独评估该 API 的鉴权、计费、模型及续轮兼容；本次没有切换通道。
+- 已通过：12 项前端阶段／素材库逻辑、62 项原生生成协议与恢复测试（另有 2 项既有环境测试忽略）、正式画板／会话组件隔离浏览器验证、TypeScript 检查和隔离 Vite 构建。浏览器验证阶段切换、队列、job／turn 隔离、提交、恢复及终态迟到事件，深浅色截图已查看。原生夹具验证 Dreamina 图片与视频均发出队列信息；未访问真实模型、修改用户素材库、打包安装或发布，macOS 原生未验。
+- 验证入口：`scripts/generation-progress.test.mjs`、`scripts/generation-progress-ui.test.mjs`、`scripts/library-generation-activity.test.mjs`；Rust `codex::`、`core::generation_worker::`。日志 `.tmp/generation-progress-*.log`，界面截图 `apps/desktop/.tmp/generation-progress/`，前端构建 `apps/desktop/.tmp/generation-progress-build/`。
+
+## 2026-11-07：生成组图解散（源码待发布）
+
+- 素材库（全部／项目／标签／文件夹）、画板生成图片和生成会话的右键菜单增加“解散组合”。仅实际合并了多张产物或多轮会话时出现，普通单图及多选不显示；失败时保留组合并沿共用错误提示重试，不增加操作栏或布局占位。
+- `GenerationGroupMenuItem` 共用菜单动作；素材入口提交当前显示 Asset ID，画板入口提交原生成组身份。`dissolve_generation_group` 解析既有来源，SQLite **0054** 的 `generation_gallery_separations` 保存组显示偏好。重复操作幂等，当前筛选外的同组成员、刷新／重开及后续续轮也保持独立。原 session、conversation、job、turn、文件、素材与连线身份均不改写；回看历史和继续生成仍沿原会话。
+- catalog 数量、分页、选择 ID、组成员与文件夹范围共用解散规则；文件夹保持各自目录条目及文件名排序。画板快照只读投影 `generation_group_dissolved`，`canvasConversationCards` 停止折叠对应的原图片和会话；单元格已保存的精确内容绑定不改写。原生成卡片重叠时，在保存偏好的同一事务中补齐横向间距；独立副本、手工素材组及锁定卡片位置保留。
+- 验证通过：11 项分组逻辑、105 项原生测试（1 项既有性能基准忽略）、两项浏览器专项、TypeScript 与隔离 Vite 构建。验证入口：`generation-ungroup-ui.test.mjs`（素材库／文件夹／画板、单图菜单、失败保留、重开和精确连线）、`canvas-conversation-cards.test.mjs`，以及原生 `generation_gallery`／`catalog_browser`／`folder_connections`／`project_canvas`／`library::list_generation_group` 专项。既有 `generation-galleries-ui` 验证轮播、内容格、H3／HyperFrames 与独立 Agent 图片。使用合成 IPC 与临时 SQLite／文件；截图和构建在 `apps/desktop/.tmp/generation-ungroup*`。未迁移真实用户库、打包安装或发布，macOS 原生未验收。
+
+## 2026-11-07：Agent 卡片图片独立展示（源码待发布）
+
+- 按用户确认取消 Agent 卡片图片的自动归组。`generation_gallery.rs` 在工作流的本机请求、子生图 job 与 Cloud run 精确来源中识别图片，画板按原节点、素材库／文件夹按原资产返回独立展示键。引用图片不参与，图片仍属于生成素材，生成筛选、分页和数量使用同一规则。
+- `canvasConversationCards` 对已有图片产物的 Agent 子生图会话保留执行记录，将连线别名指向第一张独立结果；尚未产图的等待／失败会话继续显示。显式定向内容格保留原生成绑定与布局。普通生成、H3／HyperFrames 视频及非工作流 Cloud 会话沿原归组规则。
+- 历史结果读取时应用相同投影，不移动或复制文件，不重写执行历史，不新增迁移，不重新提交生成。此次图片展示调整仅需更新桌面代码，Cloud 请求和 Worker 交付协议保持。
+- 验证入口：`canvas-conversation-cards.test.mjs` 覆盖逐张展示、等待会话、定向交付与既有组图；原生 gallery／galleries 回归覆盖本机直接图片、同会话子生图、Cloud 最终图、参考图排除、文件夹数量／分页／目录身份和普通生成／视频；`generation-galleries-ui.test.mjs` 验证正式组件独立图片及右键素材身份。使用合成 IPC 与临时 SQLite，未改用户库、调用真实模型、安装或发布。
+- 验证结果：10 项画板逻辑、7 项原生 gallery／galleries、浏览器专项和桌面 TypeScript 检查通过；日志在 `.tmp/agent-image-ungrouped/`，截图在 `apps/desktop/.tmp/generation-galleries/agent-individual-*.png`。
+
+## 2026-11-07：Agent 卡片长文本（源码待发布／Cloud 待部署）
+
+- 取消 Agent 卡片引用原文与返回文本的固定 16000 字限制。本机 DSH／Codex CLI 共用 `agent_ds_workflow_start` 与结果文件协议；Cloud 仍沿用 `textRewrite.source`、统一 Harness 与 `text.result`，不增加 Runner、截断、分段或隐式摘要。
+- 桌面运行器、Rust 本机／Cloud 入口、Worker 输入 schema／结果解析／恢复校验、Cloud Edge 输入检查及模型指令均已同步。结构化表格与 `bowerbird-deliveries` 的单项文字也可超过 16000 字，正常保留 Unicode、换行及 JSON 转义。
+- 检查发现并调整其他文本传输瓶颈：Cloud 文本清单原 64 KiB、本机结果文件原 128000 字节、Cloud 检查点原 1 MiB、数据库文本事件原 16 KiB，统一使用 Agent Storage 既有 **20 MiB 单对象**上限。网关 `request.json` 路由配套放宽；Edge 对非文本清单仍保持 64 KiB。新增 `0081_agent_text_payloads.sql` 仅放宽 `text.result`，普通事件仍限 16 KiB、JSON 对象约束及 7 天保留规则保持。此处取消的是固定字数限制，不代表模型 token、回合、费用或传输容量无限。
+- 4000 字修改要求、表格行列／标题、附件与身份／权限校验保持。工作流编排助手、H3 提示词／优化和编辑器段落气泡的入口限制属于各自功能，本次不修改；共用底层不再强制 Agent 卡片服从这些入口的字数上限。本文下方日期早于本节的 16000 字说明为旧行为，以本节为准。
+- 验证：6 项文本结果测试覆盖长中文／emoji／转义文本、长表格单元格及指定位置输出；本机／Cloud 工作流上下游写回与原请求恢复通过；Rust Agent 36 项通过／6 项既有环境测试忽略，含本机结果文件超过 128 KB、模拟 Codex stdin 完整接收长文本和请求不重复执行。Edge 2 项／15 子步骤通过，覆盖清单超过 64 KiB、检查点超过 1 MiB，哈希错误／空原文／非文本大清单／失效租约仍拒绝；22 项网关与 2 项路由契约通过。隔离 PostgreSQL 兼容数据库的迁移重放、旧结果保留、长结果读回、普通事件／非对象／20 MiB 超限拒绝通过。桌面 TypeScript 通过。
+- Worker 文本与统一处理器 18 项在隔离副本通过，覆盖保存结果后事件发布失败、恢复不再调用模型。仓库原 Skill 内容与 `skill.json` 固定 hash 不符（LF／CRLF 组合均不匹配），测试仅在 `.tmp/agent-text-unbounded/worker` 重算夹具 hash，未改正式 Skill 或声称发布包校验通过；全量 Worker 类型检查仍有既存 `cloud-generation/video-audio-probe.test.ts:3` 的 `execFileSync` 声明错误。日志在 `.tmp/agent-text-unbounded/`。无真实模型调用、无线上数据库修改。
+- 生效顺序：先应用 **0081**，再配套发布 `agent-run`／`agent-worker` Edge、VPS Worker 和官网 `cloud-routes.json`，最后更新桌面。发布前需独立解决／核对现役 Skill 哈希与候选包一致性；本次未部署或打安装包。回退应用时保留 0081，不能在已有长文本事件后直接收紧数据库约束；原请求身份保持，不因升级／回退重提任务。
+
 ## 2026-11-06：同会话生成组图（源码未发布）
 
+- 全路径复核补齐：工作流每次运行新建 job／conversation，原实现只按 conversation 合并，遗漏同卡片重复生成；`generation_gallery.rs` 现按项目＋源卡片解析步骤 job、Agent 子生图 job、Cloud run 和本机请求，供画板／素材库共同使用。普通 provider 没返回 session 时，素材库读取 `generation_meta` 的真实 conversation／job；不伪造 provider 的续接句柄。全部是展示投影，无数据库迁移。
+- `PromptNodePayloadV1` 与素材 payload 接收可选只读投影 `workflow_generation_group`；新本机 Agent 交付在混入参考图、定向路由前保存 `generatedAssetIds`。旧本机 Agent 仅在无定向输出时回读确切 `agentOutputs.image.assetIds`，不猜测有混合引用的旧记录。显式内容格、行列与分层结果保持结构；同格原会话续轮仍可浏览历史。
+
+| 生成入口 | 来源与结论 |
+|---|---|
+| 普通 Codex／即梦／Cloud 图片、即梦／Cloud 视频 | 原持久会话归组保留；缺少 provider session 的素材通过 `generation_meta` 归组，旧数据也适用 |
+| 工作流图片、普通视频、定时／完成触发运行 | 补齐同卡片跨 job 合并；同 conversation 的 provider 切换也归到原卡片 |
+| H3 | 保留源卡片字段和旧 `jobId` 恢复；独立视频卡默认最新 |
+| 本机 Codex HyperFrames | 补齐 `workflow-video:<request>` 与 `localDsRequestId` 的旧记录恢复；复用素材卡轮播 |
+| 本机 Codex／DSH Agent 子生图 | 按 `localDsGenerations` 精确 job 关联来源；11 月 7 日调整为图片逐张展示，定向内容格保留原布局 |
+| 本机 Agent 直接交付图片／视频 | 素材库读取实际交付 asset IDs；11 月 7 日调整为图片逐张展示，视频保留归组，定向表格与文本沿原布局 |
+| Cloud Agent／HTML Skill 最终图 | 工作流 Agent 卡片最终图片逐张展示；非工作流会话仍按原 conversation 归组；`intermediate` 画板节点保留独立展示 |
+| 对话内 HyperFrames 视频 | 仅匹配已完成的 `turn-video` 工具消息产物，素材库按对话合并；用户附件不参与，画板仍为原对话卡 |
+| 预置生成样例 | 已有 manifest session，沿会话查询，无额外补丁 |
+| 独立视觉规范验证图、图层导出、剪辑／截帧 | 无生成会话／续轮契约，保留显式保存的原件与结构，不按 profile、文件名或整个项目猜测归组 |
+| 遗留 Agent Z 图片工具 | 单次工具调用已有独立 session；没有现用画板入口或跨调用 conversation 记录，不合并独立调用 |
+| OpenAI Images spike | 仅开发 invoke，无产品 UI／持久会话；不作为正式生成链路扩展 |
+
+- 验收：原生画板 36 项、catalog 9 项、payload 契约 10 项、组图逻辑 9 项与真实组件浏览器专项通过，覆盖历史恢复、跨 provider、缺失画板投影、Cloud 续轮、对话附件排除、精确预览／右键与连线；内容格专项复验固定格／行／列／中继、重复运行与清空／断开／重载。TypeScript、隔离 Vite 构建通过。只读本机数据匹配普通生成结果 32 个／20 组、生成会话 36 个／21 组、H3 42 个／12 组，其他入口使用隔离样例验证；不代表所有 provider 的真实付费端到端验收。30 万合成素材分页／统计专项通过。源码未安装、未发布，未修改用户数据库或触发真实生成。
+
+- 同日补齐 H3：独立视频结果按项目＋原 H3 卡片归组，旧运行历史只读恢复来源；复用素材卡与 `GenerationGroupControls`，保留精确节点及连线身份。原因、验证和发布边界见 [H3 结果组图](COMFYUI-LOCAL-VIDEO.md#2026-11-06h3-生成结果组图补齐源码待发布)。
 - `PromptNodePayloadV1` 增加可选 `conversation_id`，新生成保存原会话身份；旧画板读取时根据精确输出资产的 `generation_conversations` 映射补充返回快照，不批量改写旧 payload，无数据库迁移。前端不再依赖近期任务是否仍在内存，切换 provider 的同会话续轮仍合并。
 - `canvasConversationCards` 保留稳定首卡锚点，按会话轮序／资产时序排列结果；`allOutputs` 供内容格浏览，`outputs` 继续遵守独立画板的收纳规则。内容格内生成会话有多张产物时复用 `CanvasConversationImages`，默认最新、左右回看；点击打开会话、双击预览及右键均沿原入口。浏览不改 `generation_ref` 或下游精确输入。
 - 验证入口：`canvas-conversation-cards.test.mjs`（持久身份、同秒排序、收纳）、`generation-galleries-ui.test.mjs`（画板／内容格续轮与重载、素材库最新与历史操作）、`canvas-workflow-contained-generation.test.mjs`（固定格／行／列／中继、即时交付、历史连线、清空／断开／删除）；原生 `core::project_canvas::tests` 包含旧会话映射只读恢复。使用合成 IPC／临时 SQLite；未调用真实模型或修改用户素材，未打包发布。
@@ -24,7 +138,7 @@ Agent 卡片选择 Codex CLI 后可选「视频制作 · HyperFrames」，支持
 
 - 2026-11-06 修订：确认稿整体缩小 10% 至 25.2px，保留紧凑方框、四角方点、两侧短线，中心加号使用减半密度的细斜纹填充。热区宽高在 76.8px 基础上再增大 20% 至 92.16px，直接进入热区即可浮现，不必先经过卡片；卡片悬浮／选中或键盘聚焦仍可显示，离开且未选中时隐藏，禁用时关闭命中。磁吸保持最多 8px，朝卡片内限制为 4px，避免边框被裁切。牵线期间发起侧标记隐藏，菜单期间恢复显示，沿用既有中性色／工程蓝。原生卡片用自身状态，素材／会话的独立控件层同步 hover 与选中状态，牵线源标记随取消／提交清理。共享控件与正式画布专项覆盖显隐、隐藏热区、键盘、原生／工作流／视频素材卡及原有磁吸／连接流程；类型检查与隔离构建通过，未更新安装版。
 - 数据连接入口统一为卡片左侧输入、右侧输出的一个 `＋`，不常驻文字／图片类型端口。`CanvasConnectionHandle` 共用固定屏幕尺寸的热区和磁吸反馈；卡片及连线锚点不随图标移动。触发器的控制端口保留原信号语义，旧精确连接仍可读取。
-- 输出加号可连到整张接收卡，输入加号可反向连到来源卡。轻点热区直接打开新建／连接菜单，不产生草稿；原地按住 180ms 或按住移动超过 5px 后牵线，发起侧加号隐藏。连线从卡片右侧中央发出，反向连接锚在左侧中央；文档卡复用 canvasDocumentHeight，已有连线穿过热区时热区优先接收真实指针。松手落卡完成，落在空白或原热区打开菜单；右键／Esc、失焦、滚轮和指针取消清理待触发计时器及草稿，键盘 Enter／Space 仍可直接打开菜单。全部菜单项复用 app-context-item 单列行与最小行高，使用共用窗口边缘定位。内容卡菜单保留「仅使用最新一行」，「指定内容」选择单元格，「指定接收位置」选择行／列／单元格；取消、外部点击、画布缩放、项目切换及运行锁不会提交草稿，连接本身不调用模型。
+- 输出加号可连到整张接收卡，输入加号可反向连到来源卡。轻点热区直接打开新建／连接菜单，不产生草稿；原地按住 180ms 或按住移动超过 5px 后牵线，发起侧加号隐藏。连线从卡片右侧中央发出，反向连接锚在左侧中央；文档卡复用 canvasDocumentHeight 按宽度推导 3:4 高度，已有连线穿过热区时热区优先接收真实指针。松手落卡完成，落在空白或原热区打开菜单；右键／Esc、失焦、滚轮和指针取消清理待触发计时器及草稿，键盘 Enter／Space 仍可直接打开菜单。全部菜单项复用 app-context-item 单列行与最小行高，使用共用窗口边缘定位。内容卡菜单保留「仅使用最新一行」，「指定内容」选择单元格，「指定接收位置」选择行／列／单元格；取消、外部点击、画布缩放、项目切换及运行锁不会提交草稿，连接本身不调用模型。
 - `workflowAutoConnect.ts` 的 `planAutomaticConnection` 按来源输出与目标能力求交集，输出已有 `WorkflowInput` 绑定：图文来源到只收图片的卡片只投影图片，同时收图文则生成两种绑定。来源尚无产物时按卡片能力编排，执行时再读取当前内容；重复连接不占新输入，首尾帧等单值位置不隐式覆盖，自连和数据环路拒绝提交。
 - 同一次手势的绑定写入同一个可选 `autoConnect` 身份，画面按连接组与接收卡合并为一条线。`connectAutomatic`／`disconnectAutomatic` 以一次工作流编辑提交整组，新增卡片、必要的图片中继和连线一起记录撤销；保存失败沿原身份重试。右键断开整组，一次撤销恢复整组；复制粘贴为每份副本重映射组身份，同组文本／图片及提示词引用保持一致。
 - 自动绑定使用可选 `mediaFilter` 记录接受媒体。运行时 `filterAutomaticMediaValues` 在旧视频截帧转换前按真实素材路径识别图片／视频／音频，再与目标当前模式取交集；只处理本次输入副本并同步清除被排除媒体的引用标记，不改上游结果。视频不会因底层通道名为 `image` 而误入只收图片的自动连接；过滤后没有可用素材时给出检查来源／模式的提示。

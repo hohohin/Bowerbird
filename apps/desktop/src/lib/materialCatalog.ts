@@ -4,7 +4,7 @@ import type { LibraryMedia } from "./localFileMode";
 export type CatalogKind = "all" | "tags" | "collections";
 export interface CatalogTag { id: string; name: string; description: string; count: number; projectCount: number }
 export interface MaterialCatalog { tags: CatalogTag[]; collections: Folder[]; prompts: string[]; tag_asset_ids: Record<string, string[]> }
-export interface CatalogFilter { kind: CatalogKind; id: string | null; projectId: string | null; media: LibraryMedia; query: string; generated: boolean | null; color: string | null }
+export interface CatalogFilter { kind: CatalogKind | "connections"; id: string | null; projectId: string | null; media: LibraryMedia; query: string; generated: boolean | null; color: string | null }
 export interface CatalogOverview { catalog: MaterialCatalog; total: number; untagged: number }
 export interface CatalogGraphAsset { id: string; name: string; store_path: string | null; thumb_path: string | null; tag_ids: string[] }
 export const materialCatalog = {

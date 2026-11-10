@@ -84,6 +84,10 @@ pub(super) fn update(root: &Path, project: &str, data: &Value) -> AppResult<Valu
         if !matches!(step.as_u64(),Some(1..=4)) { return Err(error("任务步骤无效")); }
         value["step"] = step.clone();
     }
+    if let Some(settings) = data.get("analysisSettings").filter(|v| !v.is_null()) {
+        validate_analysis_settings(settings)?;
+        value["analysisSettings"] = settings.clone();
+    }
     if let Some(provider) = data.get("analysisProvider") {
         if !["codex", "doubao"].contains(&provider.as_str().unwrap_or("")) { return Err(error("分析供应商无效")); }
         value["analysisProvider"] = provider.clone();

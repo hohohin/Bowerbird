@@ -6,14 +6,26 @@ export function LibraryControlProjection() {
   const field = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     const layer = field.current!;
+    const heading = layer.parentElement!;
+    const navigation = heading.querySelector<HTMLElement>('.library-source-navigation')!;
+    const strip = navigation.querySelector<HTMLElement>('.library-view-switch')!;
+    const controls = heading.querySelector<HTMLElement>('.library-controls-host');
     const library = layer.closest<HTMLElement>(".library-motion-root") ?? layer.closest<HTMLElement>(".file-view-heading")?.parentElement;
     if (!library) return;
     const measure = () => {
-      const width = layer.getBoundingClientRect().width;
+      // Size follows disclosure, but the background stays at the library center
+      // while the interactive controls translate to preserve the pointer target.
+      const tabBox = strip.getBoundingClientRect();
+      const controlBox = controls?.getBoundingClientRect();
+      const groupLeft = tabBox.left, groupRight = controlBox?.right ?? tabBox.right;
+      const width = Math.min(heading.clientWidth, groupRight - groupLeft + 96);
+      layer.style.width = `${width}px`;
       const mask = '<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="148"><defs><filter id="f" x="-10%" y="-20%" width="120%" height="140%"><feGaussianBlur stdDeviation="1"/></filter></defs><path d="M-10 -10 H'+(width+10)+' V26 H'+width+' Q'+width/2+' 106 0 26 H-10Z" fill="white" filter="url(#f)"/></svg>';
       layer.style.setProperty('--control-mask', 'url("data:image/svg+xml,'+encodeURIComponent(mask)+'")');
     };
-    const resize = new ResizeObserver(measure); resize.observe(layer); measure();
+    const resize = new ResizeObserver(measure);
+    resize.observe(heading); resize.observe(strip); if (controls) resize.observe(controls);
+    measure();
     const reduced = matchMedia("(prefers-reduced-motion: reduce)");
     let frame = 0;
     const reset = () => {

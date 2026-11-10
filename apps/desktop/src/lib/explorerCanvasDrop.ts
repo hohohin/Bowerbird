@@ -1,13 +1,12 @@
 import type { Asset } from "./types";
 import { isAudioAsset } from "./audioMedia";
-import { isTextAsset } from "./textMedia";
 
 export const EXPLORER_CANVAS_DROP_EVENT = "bowerbird:prepare-explorer-canvas-drop";
 export interface ExplorerCanvasDropDetail {
   projectId: string;
   clientX: number;
   clientY: number;
-  place: ((asset: Asset) => Promise<string | void>) | null;
+  place: ((asset: Asset, sheetName?: string) => Promise<string | void>) | null;
 }
 
 // The enclosing collector owns ingestion; the actual canvas under the drop
@@ -17,9 +16,8 @@ export function prepareExplorerCanvasDrop(target: EventTarget | null, projectId:
   const detail: ExplorerCanvasDropDetail = { projectId, clientX, clientY, place: null };
   target.dispatchEvent(new CustomEvent(EXPLORER_CANVAS_DROP_EVENT, { bubbles: true, detail }));
   const place = detail.place;
-  return place ? async (asset: Asset) => {
-    if (isTextAsset(asset)) throw new Error("文本文件请在素材库中打开编辑，暂不支持添加到画板");
+  return place ? async (asset: Asset, sheetName?: string) => {
     if (isAudioAsset(asset)) throw new Error("音频暂不支持添加到画板，请在素材库中播放");
-    return place(asset);
+    return place(asset, sheetName);
   } : null;
 }

@@ -19,9 +19,9 @@ export function canvasCardSourceRects(
 }
 
 /** Incremental placement in canvas units. The camera never determines collision resolution. */
-export function placeCanvasCardNearSource(card: CanvasRect, obstacles: readonly CanvasRect[]) {
+export function placeCanvasCardNearSource(card: CanvasRect, obstacles: readonly CanvasRect[], minimumX = -Infinity) {
   const gap = 32;
-  const fits = ({ x, y }: { x: number; y: number }) => !obstacles.some(other =>
+  const fits = ({ x, y }: { x: number; y: number }) => x >= minimumX && !obstacles.some(other =>
     x < other.x + other.width + gap && x + card.width + gap > other.x
     && y < other.y + other.height + gap && y + card.height + gap > other.y);
   const origin = { x: card.x, y: card.y };
@@ -36,6 +36,19 @@ export function placeCanvasCardNearSource(card: CanvasRect, obstacles: readonly 
   const distance = (point: { x: number; y: number }) => (point.x - card.x) ** 2 + (point.y - card.y) ** 2;
   candidates.sort((a, b) => distance(a) - distance(b) || b.x - a.x || b.y - a.y);
   return candidates.find(fits)!; // The outermost obstacle edge always offers a free position.
+}
+
+/** Stable row-major slots for independent siblings, bounded to three columns. */
+export function canvasOutputGrid(sizes: readonly Pick<CanvasRect, "width" | "height">[]) {
+  const columns = sizes.length <= 2 ? 1 : sizes.length <= 4 ? 2 : 3;
+  const widths = Array.from({ length: columns }, (_, col) => Math.max(0, ...sizes.filter((_, i) => i % columns === col).map(size => size.width)));
+  let y = 0, rowHeight = 0;
+  return sizes.map((size, index) => {
+    const col = index % columns;
+    if (col === 0 && index > 0) { y += rowHeight + 32; rowHeight = 0; }
+    rowHeight = Math.max(rowHeight, size.height);
+    return { x: widths.slice(0, col).reduce((sum, width) => sum + width + 32, 0), y };
+  });
 }
 
 /** Only automatic execution references first observed during this mount may follow

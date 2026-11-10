@@ -4,7 +4,8 @@ use crate::{
     db::Database,
     error::{AppError, AppResult},
 };
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, params_from_iter, types::Value, OptionalExtension};
+use super::{catalog_browser::{CatalogFilter, GENERATED, generation_display_group}, generation_gallery::WORKFLOW_GALLERY_CTE};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -87,6 +88,29 @@ pub(crate) fn generated_connection_paths(paths: &LibraryPaths) -> Vec<PathBuf> {
     ignored
 }
 
+#[derive(Default, Deserialize)]
+pub struct ConnectionFilter {
+    pub generated: Option<bool>,
+    pub color: Option<String>,
+    #[serde(default)]
+    pub grouped: bool,
+}
+impl ConnectionFilter {
+    fn gallery(&self, condition: &str) -> String {
+        let display_group = generation_display_group("'entry:'||e.id");
+        let group = if self.grouped { format!("CASE WHEN {GENERATED} THEN {display_group} ELSE 'entry:'||e.id END") } else { "'entry:'||e.id".into() };
+        let rank = if self.grouped { "ROW_NUMBER() OVER (PARTITION BY folder_id,group_key ORDER BY created_at DESC,asset_id DESC,id DESC)" } else { "1" };
+        format!("{WORKFLOW_GALLERY_CTE}, entry_gallery AS (SELECT e.id,e.folder_id,e.name,a.created_at,a.id AS asset_id,{group} AS group_key
+          FROM connected_entries e JOIN assets a ON a.id=e.asset_id WHERE {condition}),
+          ranked_entries AS (SELECT *,{rank} AS rank FROM entry_gallery)")
+    }
+    fn sql(&self, project: Option<&str>, media: Option<&str>) -> AppResult<(String, Vec<Value>)> {
+        CatalogFilter { kind: "connections".into(), project_id: project.map(str::to_owned),
+            media: media.unwrap_or("all").into(), generated: self.generated, color: self.color.clone(),
+            ..Default::default() }.sql()
+    }
+}
+
 #[derive(Clone, Serialize)]
 pub struct FolderConnection {
     pub id: String,
@@ -99,7 +123,7 @@ pub struct FolderConnection {
     pub scanning: bool,
     pub error: Option<String>,
 }
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ConnectionEntry {
     pub id: String,
     pub folder_id: String,
@@ -110,6 +134,8 @@ pub struct ConnectionEntry {
     pub available: bool,
     pub asset: Asset,
     pub version: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub group: Vec<ConnectionEntry>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AssetOriginal {
@@ -239,7 +265,7 @@ impl Database {
                 return Err(invalid("此目录包含已经连接的目录，请先断开已有连接"));
             }
             if path.starts_with(&other) {
-                return Err(invalid("此目录已在连接范围内，请刷新后从集合中选择"));
+                return Err(invalid("此目录已在连接范围内，请刷新后从文件夹中选择"));
             }
         }
         let id = id();
@@ -277,24 +303,45 @@ impl Database {
         Ok(())
     }
     pub fn connected_folder(&self, id: &str) -> AppResult<FolderConnection> {
-        self.connection_folders(None, None)?
-            .into_iter()
-            .find(|f| f.id == id)
-            .ok_or_else(|| invalid("集合已不存在，请刷新后重试"))
+        let (condition, _) = ConnectionFilter::default().sql(None, None)?;
+        let waiting = std::time::Instant::now();
+        let conn = self.conn.lock().unwrap();
+        let lock_wait_us = waiting.elapsed().as_micros() as u64;
+        let started = std::time::Instant::now();
+        let value = conn.query_row(&format!("SELECT f.id,f.parent_id,f.root_id,f.name,f.path,
+          f.available AND r.available,r.scanning,r.error,
+          (SELECT COUNT(*) FROM connected_entries e JOIN assets a ON a.id=e.asset_id WHERE e.folder_id=f.id AND {condition})
+          FROM connected_folders f JOIN connected_roots r ON r.id=f.root_id WHERE f.id=?1"), [id], |r| Ok(FolderConnection {
+            id: r.get(0)?, parent_id: r.get(1)?, root_id: r.get(2)?, name: r.get(3)?, path: r.get(4)?,
+            available: r.get(5)?, scanning: r.get(6)?, error: r.get(7)?, count: r.get(8)?,
+        })).optional()?;
+        tracing::debug!(target: "library::read", operation = "folder", lock_wait_us, sql_us = started.elapsed().as_micros() as u64);
+        value.ok_or_else(|| invalid("文件夹已不存在，请刷新后重试"))
     }
     pub fn connection_folders(
         &self,
         project: Option<&str>,
         media_filter: Option<&str>,
     ) -> AppResult<Vec<FolderConnection>> {
+        self.connection_folders_filtered(project, media_filter, &ConnectionFilter::default())
+    }
+    pub fn connection_folders_filtered(
+        &self, project: Option<&str>, media_filter: Option<&str>, filter: &ConnectionFilter,
+    ) -> AppResult<Vec<FolderConnection>> {
+        let (condition, values) = filter.sql(project, media_filter)?;
+        let waiting = std::time::Instant::now();
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT f.id,f.parent_id,f.root_id,f.name,f.path,f.available AND r.available,r.scanning,r.error,
-          (SELECT COUNT(*) FROM connected_entries e JOIN assets a ON a.id=e.asset_id WHERE e.folder_id=f.id
-            AND (?1 IS NULL OR EXISTS(SELECT 1 FROM project_assets p WHERE p.asset_id=a.id AND p.project_id=?1))
-            AND (?2 IS NULL OR ?2='all' OR (?2='videos' AND (lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','mkv','avi','m4v'))) OR (?2='audios' AND (lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg'))) OR (?2='texts' AND (lower(COALESCE(a.ext,'')) IN ('md','markdown','txt'))) OR (?2='images' AND NOT ((lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','mkv','avi','m4v')) OR (lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg')) OR (lower(COALESCE(a.ext,'')) IN ('md','markdown','txt'))))))
-          FROM connected_folders f JOIN connected_roots r ON r.id=f.root_id ORDER BY r.rowid,lower(f.name),f.id")?;
+        let lock_wait_us = waiting.elapsed().as_micros() as u64;
+        let started = std::time::Instant::now();
+        let gallery = filter.gallery(&condition);
+        let mut stmt = conn.prepare(&format!("WITH {gallery}, folder_counts AS (
+          SELECT folder_id,COUNT(DISTINCT group_key) AS count FROM entry_gallery GROUP BY folder_id)
+          SELECT f.id,f.parent_id,f.root_id,f.name,f.path,f.available AND r.available,r.scanning,r.error,
+          COALESCE(c.count,0)
+          FROM connected_folders f JOIN connected_roots r ON r.id=f.root_id
+          LEFT JOIN folder_counts c ON c.folder_id=f.id ORDER BY r.rowid,lower(f.name),f.id"))?;
         let values = stmt
-            .query_map(params![project, media_filter], |r| {
+            .query_map(params_from_iter(values), |r| {
                 Ok(FolderConnection {
                     id: r.get(0)?,
                     parent_id: r.get(1)?,
@@ -308,6 +355,7 @@ impl Database {
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
+        tracing::debug!(target: "library::read", operation = "folder_counts", lock_wait_us, sql_us = started.elapsed().as_micros() as u64, rows = values.len());
         Ok(values)
     }
     pub fn connection_entry_ids(
@@ -318,24 +366,66 @@ impl Database {
         offset: i64,
         limit: i64,
     ) -> AppResult<Vec<String>> {
+        self.connection_entry_ids_filtered(folder, project, media_filter, offset, limit, &ConnectionFilter::default())
+    }
+    pub fn connection_entry_ids_filtered(
+        &self, folder: Option<&str>, project: Option<&str>, media_filter: Option<&str>,
+        offset: i64, limit: i64, filter: &ConnectionFilter,
+    ) -> AppResult<Vec<String>> {
+        let (mut condition, mut values) = filter.sql(project, media_filter)?;
+        if let Some(folder) = folder {
+            condition.push_str(" AND e.folder_id=?");
+            values.push(Value::Text(folder.into()));
+        }
+        values.push(Value::Integer(limit.clamp(1, 2000)));
+        values.push(Value::Integer(offset.max(0)));
+        let waiting = std::time::Instant::now();
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT e.id FROM connected_entries e JOIN assets a ON a.id=e.asset_id
-          WHERE (?1 IS NULL OR e.folder_id=?1) AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets p WHERE p.asset_id=a.id AND p.project_id=?2))
-          AND (?3 IS NULL OR ?3='all' OR (?3='videos' AND (lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','mkv','avi','m4v'))) OR (?3='audios' AND (lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg'))) OR (?3='texts' AND (lower(COALESCE(a.ext,'')) IN ('md','markdown','txt'))) OR (?3='images' AND NOT ((lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','mkv','avi','m4v')) OR (lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg')) OR (lower(COALESCE(a.ext,'')) IN ('md','markdown','txt')))))
-          ORDER BY lower(e.name),e.id LIMIT ?4 OFFSET ?5")?;
-        let values = stmt
-            .query_map(
-                params![
-                    folder,
-                    project,
-                    media_filter,
-                    limit.clamp(1, 2000),
-                    offset.max(0)
-                ],
-                |r| r.get(0),
-            )?
-            .collect::<Result<Vec<_>, _>>()?;
+        let lock_wait_us = waiting.elapsed().as_micros() as u64;
+        let started = std::time::Instant::now();
+        let gallery = filter.gallery(&condition);
+        let mut stmt = conn.prepare(&format!("WITH {gallery}
+          SELECT e.id FROM ranked_entries e
+          WHERE e.rank=1
+          ORDER BY lower(e.name),e.id LIMIT ? OFFSET ?"))?;
+        let values = stmt.query_map(params_from_iter(values), |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
+        tracing::debug!(target: "library::read", operation = "folder_page_ids", lock_wait_us, sql_us = started.elapsed().as_micros() as u64, rows = values.len(), offset);
         Ok(values)
+    }
+    pub fn connection_entry_groups(&self, entries: &mut [ConnectionEntry], project: Option<&str>, media: Option<&str>, filter: &ConnectionFilter) -> AppResult<()> {
+        if !filter.grouped || entries.is_empty() { return Ok(()); }
+        let (mut condition, mut values) = filter.sql(project, media)?;
+        let folders: std::collections::BTreeSet<_> = entries.iter().map(|entry| entry.folder_id.as_str()).collect();
+        condition.push_str(&format!(" AND e.folder_id IN ({})", vec!["?"; folders.len()].join(",")));
+        values.extend(folders.into_iter().map(|id| Value::Text(id.into())));
+        let gallery = filter.gallery(&condition);
+        values.extend(entries.iter().map(|entry| Value::Text(entry.id.clone())));
+        let placeholders = vec!["?"; entries.len()].join(",");
+        let rows = {
+            let waiting = std::time::Instant::now();
+            let conn = self.conn.lock().unwrap();
+            let lock_wait_us = waiting.elapsed().as_micros() as u64;
+            let started = std::time::Instant::now();
+            let mut stmt = conn.prepare(&format!("WITH {gallery} SELECT h.id,m.id FROM entry_gallery h JOIN entry_gallery m ON m.folder_id=h.folder_id AND m.group_key=h.group_key
+              WHERE h.id IN ({placeholders}) ORDER BY m.created_at,m.asset_id,m.id"))?;
+            let rows = stmt.query_map(params_from_iter(values), |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+            tracing::debug!(target: "library::read", operation = "folder_group_ids", lock_wait_us, sql_us = started.elapsed().as_micros() as u64, rows = rows.len());
+            rows
+        };
+        let mut members = std::collections::HashMap::<String, Vec<String>>::new();
+        for (head, member) in rows { members.entry(head).or_default().push(member); }
+        let ids: std::collections::BTreeSet<_> = members.values().filter(|ids| ids.len() > 1).flatten().cloned().collect();
+        let ids: Vec<_> = ids.into_iter().collect();
+        let mut resolved = std::collections::HashMap::new();
+        for chunk in ids.chunks(2000) {
+            for entry in self.read_connection_entries(chunk)? { resolved.insert(entry.id.clone(), entry); }
+        }
+        for entry in entries {
+            if let Some(ids) = members.get(&entry.id).filter(|ids| ids.len() > 1) {
+                entry.group.extend(ids.iter().filter_map(|id| resolved.get(id)).cloned());
+            }
+        }
+        Ok(())
     }
     fn every_entry_id(&self, folder: Option<&str>) -> AppResult<Vec<String>> {
         let mut result = Vec::new();
@@ -350,37 +440,44 @@ impl Database {
         Ok(result)
     }
     pub fn resolve_connection_entries(&self, ids: &[String]) -> AppResult<Vec<ConnectionEntry>> {
+        let mut entries = self.read_connection_entries(ids)?;
+        let started = std::time::Instant::now();
+        for entry in &mut entries {
+            entry.available = entry.available && entry.asset.store_path.as_deref().is_some_and(|path| Path::new(path).is_file());
+        }
+        tracing::debug!(target: "library::read", operation = "verify_entry_originals", elapsed_us = started.elapsed().as_micros() as u64, rows = entries.len());
+        Ok(entries)
+    }
+    /// Browsing uses the watcher's indexed availability. Explicit file operations
+    /// continue through resolve_connection_entries and verify the original paths.
+    pub fn read_connection_entries(&self, ids: &[String]) -> AppResult<Vec<ConnectionEntry>> {
         if ids.len() > 2000 {
             return Err(invalid("一次最多操作 2000 项，请分批操作"));
         }
-        let mut result = Vec::new();
-        for id in ids {
-            let row = self.conn.lock().unwrap().query_row("SELECT e.folder_id,e.asset_id,e.name,e.path,e.is_reference,e.available AND f.available AND r.available FROM connected_entries e JOIN connected_folders f ON f.id=e.folder_id JOIN connected_roots r ON r.id=f.root_id WHERE e.id=?1", [id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,bool>(4)?,r.get::<_,bool>(5)?))).optional()?;
-            if let Some((folder_id, asset_id, name, path, is_reference, available)) = row {
-                if let Some(asset) = self.get_asset(&asset_id)? {
-                    let version = self.conn.lock().unwrap().query_row(
-                        "SELECT COALESCE(e.fingerprint,f.sha256,(SELECT mtime || ':' || size FROM connected_entries WHERE id=?2)) FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1",
-                        params![asset_id, id], |row| row.get(0))?;
-                    let available = available
-                        && asset
-                            .store_path
-                            .as_deref()
-                            .is_some_and(|path| Path::new(path).is_file());
-                    result.push(ConnectionEntry {
-                        id: id.clone(),
-                        folder_id,
-                        asset_id,
-                        name,
-                        path,
-                        is_reference,
-                        available,
-                        asset,
-                        version,
-                    });
-                }
-            }
-        }
-        Ok(result)
+        if ids.is_empty() { return Ok(Vec::new()); }
+        // Ordinals preserve caller order, including duplicate entry IDs and
+        // distinct reference entries pointing at the same Asset.
+        let requested = (0..ids.len()).map(|i| format!("(?,{i})")).collect::<Vec<_>>().join(",");
+        let waiting = std::time::Instant::now();
+        let conn = self.conn.lock().unwrap();
+        let lock_wait_us = waiting.elapsed().as_micros() as u64;
+        let started = std::time::Instant::now();
+        let mut stmt = conn.prepare(&format!("WITH requested(id,ordinal) AS (VALUES {requested})
+          SELECT a.*,e.id AS entry_id,e.folder_id AS entry_folder_id,e.name AS entry_name,e.path AS entry_path,
+          e.is_reference AS entry_reference,e.available AND f.available AND r.available AS entry_available,
+          COALESCE(x.fingerprint,c.sha256,e.mtime||':'||e.size) AS entry_version
+          FROM requested q JOIN connected_entries e ON e.id=q.id JOIN assets a ON a.id=e.asset_id
+          JOIN connected_folders f ON f.id=e.folder_id JOIN connected_roots r ON r.id=f.root_id
+          LEFT JOIN external_assets x ON x.asset_id=a.id LEFT JOIN creative_file_fingerprints c ON c.asset_id=a.id
+          ORDER BY q.ordinal"))?;
+        let rows = stmt.query_map(params_from_iter(ids), |r| {
+            let asset = super::library::asset_from_row(r)?;
+            Ok(ConnectionEntry { id: r.get("entry_id")?, folder_id: r.get("entry_folder_id")?, asset_id: asset.id.clone(),
+                name: r.get("entry_name")?, path: r.get("entry_path")?, is_reference: r.get("entry_reference")?,
+                available: r.get("entry_available")?, version: r.get("entry_version")?, asset, group: Vec::new() })
+        })?.collect::<Result<Vec<_>, _>>()?;
+        tracing::debug!(target: "library::read", operation = "folder_page_assets", lock_wait_us, sql_us = started.elapsed().as_micros() as u64, rows = rows.len());
+        Ok(rows)
     }
     pub(crate) fn writable_connection(&self, id: &str) -> AppResult<FolderConnection> {
         let folder = self.connected_folder(id)?;
@@ -397,12 +494,12 @@ impl Database {
     fn register_connected_asset(&self, paths: &LibraryPaths, path: &Path) -> AppResult<Asset> {
         // Recover a uniquely identifiable original moved outside the app. Never merge two live originals.
         let known:bool=self.conn.lock().unwrap().query_row("SELECT EXISTS(SELECT 1 FROM external_asset_paths WHERE path=?1 UNION ALL SELECT 1 FROM assets WHERE store_path=?1)",[string(path)],|r|r.get(0))?;
-        let hash = external_files::fingerprint(path)?;
+        let prepared = Self::prepare_connected_file(path)?;
         let candidates: Vec<(String, String)> = {
             let conn = self.conn.lock().unwrap();
             let mut stmt=conn.prepare("SELECT a.id,a.store_path FROM assets a JOIN external_assets e ON e.asset_id=a.id WHERE e.fingerprint=?1")?;
             let rows = stmt
-                .query_map([&hash], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .query_map([&prepared.hash], |r| Ok((r.get(0)?, r.get(1)?)))?
                 .collect::<Result<Vec<_>, _>>()?;
             rows
         };
@@ -414,16 +511,7 @@ impl Database {
             let (id, old) = &missing[0];
             self.repoint_asset(id, Path::new(old), path)?;
         }
-        let asset = self.index_connected_file(paths, path, None)?;
-        self.conn.lock().unwrap().execute(
-            "UPDATE external_assets SET library_member=1 WHERE asset_id=?1",
-            [&asset.id],
-        )?;
-        self.conn.lock().unwrap().execute(
-            "UPDATE assets SET library_hidden=0 WHERE id=?1",
-            [&asset.id],
-        )?;
-        Ok(asset)
+        self.index_prepared_connected_file(paths, path, None, prepared)
     }
     fn resolve_reference(&self, paths: &LibraryPaths, path: &Path) -> AppResult<Asset> {
         let value = load_reference(path)?;
@@ -524,27 +612,39 @@ impl Database {
         priority_folder: Option<&str>,
         mut progress: impl FnMut(),
     ) -> AppResult<()> {
-        self.repair_connected_folder_paths(root_id)?;
+        self.scan_connection_changes(paths, root_id, priority_folder, |_| progress())
+    }
+    /// Progress is independent of content changes so a quiet scan never invalidates browsing.
+    pub fn scan_connection_changes(
+        &self,
+        paths: &LibraryPaths,
+        root_id: &str,
+        priority_folder: Option<&str>,
+        mut progress: impl FnMut(bool),
+    ) -> AppResult<()> {
+        let repaired = self.repair_connected_folder_paths(root_id)?;
         let root = self.connected_folder(root_id)?;
         self.conn.lock().unwrap().execute(
             "UPDATE connected_roots SET scanning=1,error=NULL WHERE id=?1",
             [root_id],
         )?;
-        progress();
+        progress(repaired);
         let result = self.scan_connection_inner(paths, &root, priority_folder, &mut progress);
         let message = result.as_ref().err().map(ToString::to_string);
+        let available = Path::new(&root.path).is_dir();
         self.conn.lock().unwrap().execute(
             "UPDATE connected_roots SET scanning=0,error=?2,scanned_at=?3,available=?4 WHERE id=?1",
             params![
                 root_id,
                 message,
                 chrono::Utc::now().timestamp(),
-                Path::new(&root.path).is_dir()
+                available
             ],
         )?;
+        if root.available != available { progress(true); }
         result
     }
-    fn repair_connected_folder_paths(&self, root_id: &str) -> AppResult<()> {
+    fn repair_connected_folder_paths(&self, root_id: &str) -> AppResult<bool> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let folders: Vec<(String, String)> = {
@@ -553,6 +653,7 @@ impl Database {
                 .collect::<Result<Vec<_>, _>>()?;
             rows
         };
+        let mut changed = false;
         for (folder_id, path) in folders {
             // Old repoint_tree joined an empty suffix for the renamed directory itself.
             // Compare only that lexical difference, including when the disk is offline.
@@ -578,16 +679,17 @@ impl Database {
                 tx.execute("DELETE FROM connected_folders WHERE id=?1", [&duplicate_id])?;
             }
             tx.execute("UPDATE connected_folders SET path=?2 WHERE id=?1", params![folder_id, normalized])?;
+            changed = true;
         }
         tx.commit()?;
-        Ok(())
+        Ok(changed)
     }
     fn scan_connection_inner(
         &self,
         paths: &LibraryPaths,
         root: &FolderConnection,
         priority_folder: Option<&str>,
-        progress: &mut impl FnMut(),
+        progress: &mut impl FnMut(bool),
     ) -> AppResult<()> {
         let mut pending = vec![(root.id.clone(), PathBuf::from(&root.path))];
         if let Some(folder) = priority_folder.and_then(|id| self.connected_folder(id).ok()) {
@@ -605,7 +707,7 @@ impl Database {
             // Directory junctions can change without changing the registered path. Do not walk
             // outside the chosen location (or recurse into a cycle) after such a replacement.
             if fs::canonicalize(&path).is_ok_and(|canonical| canonical != path) {
-                self.mark_folder_unavailable(&folder_id)?;
+                progress(self.mark_folder_unavailable(&folder_id)?);
                 errors.push("目录位置已变化，请重新定位后刷新".to_owned());
                 continue;
             }
@@ -613,15 +715,16 @@ impl Database {
                 match fs::read_dir(&path).and_then(|items| items.collect::<Result<Vec<_>, _>>()) {
                     Ok(value) => value,
                     Err(error) => {
-                        self.mark_folder_unavailable(&folder_id)?;
+                        progress(self.mark_folder_unavailable(&folder_id)?);
                         errors.push(error.to_string());
                         continue;
                     }
                 };
-            self.conn.lock().unwrap().execute(
-                "UPDATE connected_folders SET available=1 WHERE id=?1",
+            let restored = self.conn.lock().unwrap().execute(
+                "UPDATE connected_folders SET available=1 WHERE id=?1 AND available=0",
                 [&folder_id],
             )?;
+            if restored > 0 { progress(true); }
             let mut seen = HashSet::new();
             let mut seen_folders = HashSet::new();
             let mut complete = true;
@@ -654,7 +757,9 @@ impl Database {
                         )
                         .optional()?;
                     let next_id = existing.unwrap_or_else(id);
-                    conn.execute("INSERT INTO connected_folders(id,root_id,parent_id,path,name) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(path) DO UPDATE SET available=1",params![next_id,root.id,folder_id,string(&file),file_name])?;
+                    let changed = conn.execute("INSERT INTO connected_folders(id,root_id,parent_id,path,name) VALUES(?1,?2,?3,?4,?5) ON CONFLICT(path) DO UPDATE SET available=1 WHERE connected_folders.available=0",params![next_id,root.id,folder_id,string(&file),file_name])? > 0;
+                    drop(conn);
+                    if changed { progress(true); }
                     pending.push((next_id, file));
                     continue;
                 }
@@ -662,7 +767,7 @@ impl Database {
                     continue;
                 }
                 seen.insert(string(&file));
-                let processed = (|| -> AppResult<()> {
+                let processed = (|| -> AppResult<bool> {
                     let old:Option<(String,i64,String)>=self.conn.lock().unwrap().query_row("SELECT asset_id,COALESCE(size,-1),COALESCE(mtime,'') FROM connected_entries WHERE path=?1",[string(&file)],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
                     let reference_target = if reference(&file) {
                         old.as_ref()
@@ -693,11 +798,11 @@ impl Database {
                             .as_ref()
                             .is_some_and(|(_, s, m)| *s == size && *m == mtime)
                     {
-                        self.conn.lock().unwrap().execute(
-                            "UPDATE connected_entries SET available=1 WHERE path=?1",
+                        let changed = self.conn.lock().unwrap().execute(
+                            "UPDATE connected_entries SET available=1 WHERE path=?1 AND available=0",
                             [string(&file)],
-                        )?;
-                        return Ok(());
+                        )? > 0;
+                        return Ok(changed);
                     }
                     let asset = if reference(&file) {
                         self.resolve_reference(paths, &file)?
@@ -740,16 +845,19 @@ impl Database {
                     {
                         self.connect_entry_projects(&folder_id, &asset.id)?;
                     }
-                    Ok(())
+                    Ok(true)
                 })();
-                if let Err(error) = processed {
-                    self.conn.lock().unwrap().execute(
-                        "UPDATE connected_entries SET available=0 WHERE path=?1",
-                        [string(&file)],
-                    )?;
-                    errors.push(format!("{}：{}", file_name, error));
+                match processed {
+                    Ok(changed) => progress(changed),
+                    Err(error) => {
+                        let changed = self.conn.lock().unwrap().execute(
+                            "UPDATE connected_entries SET available=0 WHERE path=?1 AND available=1",
+                            [string(&file)],
+                        )? > 0;
+                        errors.push(format!("{}：{}", file_name, error));
+                        progress(changed);
+                    }
                 }
-                progress();
             }
             // Reconcile only after all directory entries were read successfully; assets/creative data survive.
             if !complete {
@@ -764,9 +872,11 @@ impl Database {
                     .collect::<Result<Vec<_>, _>>()?;
                 rows
             };
+            let mut removed = false;
             for (id, path) in old {
                 if !seen.contains(&path) {
                     conn.execute("DELETE FROM connected_entries WHERE id=?1", [id])?;
+                    removed = true;
                 }
             }
             let old: Vec<(String, String)> = {
@@ -779,11 +889,11 @@ impl Database {
             };
             for (id, path) in old {
                 if !seen_folders.contains(&path) {
-                    conn.execute("WITH RECURSIVE tree(id) AS (SELECT ?1 UNION ALL SELECT f.id FROM connected_folders f JOIN tree t ON f.parent_id=t.id) UPDATE connected_folders SET available=0 WHERE id IN tree",[id])?;
+                    removed |= conn.execute("WITH RECURSIVE tree(id) AS (SELECT ?1 UNION ALL SELECT f.id FROM connected_folders f JOIN tree t ON f.parent_id=t.id) UPDATE connected_folders SET available=0 WHERE id IN tree AND available=1",[id])? > 0;
                 }
             }
             drop(conn);
-            progress();
+            progress(removed);
         }
         if errors.is_empty() {
             Ok(())
@@ -794,9 +904,8 @@ impl Database {
             )))
         }
     }
-    fn mark_folder_unavailable(&self, id: &str) -> AppResult<()> {
-        self.conn.lock().unwrap().execute("WITH RECURSIVE tree(id) AS (SELECT ?1 UNION ALL SELECT f.id FROM connected_folders f JOIN tree t ON f.parent_id=t.id) UPDATE connected_folders SET available=0 WHERE id IN tree",[id])?;
-        Ok(())
+    fn mark_folder_unavailable(&self, id: &str) -> AppResult<bool> {
+        Ok(self.conn.lock().unwrap().execute("WITH RECURSIVE tree(id) AS (SELECT ?1 UNION ALL SELECT f.id FROM connected_folders f JOIN tree t ON f.parent_id=t.id) UPDATE connected_folders SET available=0 WHERE id IN tree AND available=1",[id])? > 0)
     }
     pub fn create_connected_directory(
         &self,
@@ -831,7 +940,7 @@ impl Database {
     pub fn disconnect_directory(&self, paths: &LibraryPaths, id: &str) -> AppResult<()> {
         let folder = self.connected_folder(id)?;
         if folder.parent_id.is_some() && (folder.available || Path::new(&folder.path).try_exists()?) {
-            return Err(invalid("集合仍可访问，请刷新后使用移到回收站"));
+            return Err(invalid("文件夹仍可访问，请刷新后使用移到回收站"));
         }
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
@@ -1020,7 +1129,7 @@ impl Database {
         let source = self.writable_connection(id)?;
         let target = self.writable_connection(target)?;
         if Path::new(&target.path).starts_with(&source.path) {
-            return Err(invalid("集合不能移入自身或其下级目录"));
+            return Err(invalid("文件夹不能移入自身或其下级目录"));
         }
         let destination = Path::new(&target.path).join(&source.name);
         if destination == Path::new(&source.path) {
@@ -1255,6 +1364,7 @@ impl Database {
             params![names[0], names[1], names[2]],
         )?;
         tx.execute("UPDATE connected_entries SET available=0 WHERE asset_id IN (SELECT asset_id FROM trashed_asset_originals WHERE path=?1)", [&current.path])?;
+        super::project_canvas::hide_removed_original_canvas_nodes(&tx, &current.path)?;
         trash(Path::new(&current.path))?;
         tx.commit().map_err(|error| {
             tracing::error!("original recycled but metadata commit failed: {error}");
@@ -1289,6 +1399,7 @@ impl Database {
         // Invalidate the reference stamp so an unchanged original returning between scans
         // still runs the verified index path and restores its cleaned-up library entry.
         tx.execute("UPDATE connected_entries SET available=0,mtime=NULL WHERE asset_id IN (SELECT asset_id FROM removed_missing_asset_originals WHERE path=?1)", [&original.path])?;
+        super::project_canvas::hide_removed_original_canvas_nodes(&tx, &original.path)?;
         tx.commit()?;
         Ok(added)
     }
@@ -1313,7 +1424,7 @@ impl Database {
         // Already removed entries are harmless on retry after a partial failure.
         for entry in &entries {
             if !entry.is_reference || !reference(Path::new(&entry.path)) {
-                return Err(invalid("只能将分身移出集合；原文件请使用删除原文件"));
+                return Err(invalid("只能将分身移出文件夹；原文件请使用删除原文件"));
             }
             self.writable_connection(&entry.folder_id)?;
             if load_reference(Path::new(&entry.path))?.asset_id != entry.asset_id {
@@ -1333,7 +1444,7 @@ impl Database {
             trash(Path::new(&entry.path))?;
             tx.commit().map_err(|error| {
                 tracing::error!("reference recycled but metadata commit failed: {error}");
-                invalid("分身已移到回收站，但集合更新失败，请刷新后核对")
+                invalid("分身已移到回收站，但文件夹更新失败，请刷新后核对")
             })?;
         }
         Ok(())
@@ -1794,3 +1905,7 @@ mod windows_recycle {
 #[cfg(test)]
 #[path = "folder_connections_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "folder_connections_read_tests.rs"]
+mod read_tests;

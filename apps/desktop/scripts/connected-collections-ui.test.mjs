@@ -19,8 +19,9 @@ async function context(id) { await card(id).click({ button: 'right' }); await pa
 try {
   await mkdir('.tmp/connected-collections', { recursive: true });
   await page.goto('http://127.0.0.1:17951/scripts/fixtures/connected-collections/preview.html');
+  await page.getByRole('tab', { name: '文件夹', exact: true }).click();
   await card('root-0').waitFor();
-  await checkContextRangeSelection(page, index => card(`root-${index}`), page.locator('.connected-selection').getByRole('button', { name: '取消', exact: true }));
+  await checkContextRangeSelection(page, index => card(`root-${index}`), page.locator('.catalog-selection').getByRole('button', { name: '取消选择', exact: true }));
   await card('root-0').click({ modifiers: ['Shift'] });
   await card('root-1').click();
   assert.equal(await card('root-1').getAttribute('aria-pressed'), 'true', 'the first Shift selection must keep subsequent clicks in selection mode');
@@ -30,10 +31,10 @@ try {
   assert.equal(await card('root-0').getAttribute('aria-pressed'), 'false', 'plain clicks toggle items while selecting');
   await card('root-3').click({ modifiers: ['Shift'] });
   await page.waitForFunction(() => document.querySelector('[data-connection-entry="root-2"] .folder-media-card')?.getAttribute('aria-pressed') === 'true');
-  await page.locator('.connected-selection').getByRole('button', { name: '取消', exact: true }).click();
+  await page.locator('.catalog-selection').getByRole('button', { name: '取消选择', exact: true }).click();
   assert.deepEqual(await page.locator('[data-catalog-section]').evaluateAll(items => items.map(item => item.dataset.catalogSection)), ['root', 'child', 'nested', 'empty', 'second', 'offline']);
-  assert.equal(await page.getByText(/父集合|子集合|全部展开/).count(), 0);
-  const plus = row('child').getByRole('button', { name: /新建集合/ });
+  assert.equal(await page.getByText(/父文件夹|子文件夹|全部展开/).count(), 0);
+  const plus = row('child').getByRole('button', { name: /新建文件夹/ });
   assert.equal(await plus.evaluate(el => getComputedStyle(el.parentElement).opacity), '0');
   assert.equal(await plus.locator('svg').getAttribute('width'), '12');
   await row('child').hover();
@@ -42,9 +43,9 @@ try {
   assert.equal(await plus.evaluate(el => getComputedStyle(el.parentElement).opacity), '0');
   await plus.focus();
   assert.equal(await plus.evaluate(el => getComputedStyle(el.parentElement).opacity), '1');
-  await plus.press('Enter'); await dialog().waitFor(); await page.keyboard.press('Escape');
+  await plus.press('Enter'); await page.getByRole('dialog', { name: '新建文件夹', exact: true }).waitFor(); await page.keyboard.press('Escape');
   const heading = page.locator('.catalog-sidebar-heading');
-  const rootPlus = heading.getByRole('button', { name: '新建集合', exact: true });
+  const rootPlus = heading.getByRole('button', { name: '新建文件夹', exact: true });
   assert.equal(await rootPlus.evaluate(el => getComputedStyle(el).opacity), '0');
   await heading.hover();
   assert.equal(await rootPlus.evaluate(el => getComputedStyle(el).opacity), '1');
@@ -78,12 +79,12 @@ try {
   await card('ref-one').click({ modifiers: ['Control'] }); await card('ref-two').click({ modifiers: ['Control'] });
   assert.equal(await card('ref-one').getAttribute('aria-pressed'), 'true'); assert.equal(await card('ref-two').getAttribute('aria-pressed'), 'true');
   assert.equal(await card('child-0').getAttribute('aria-pressed'), 'false');
-  await page.locator('.connected-selection').getByRole('button', { name: '添加到集合', exact: true }).click();
+  await page.locator('.catalog-selection').getByRole('button', { name: '添加到文件夹', exact: true }).click();
   await dialog().getByText('另一目录', { exact: true }).click(); await dialog().getByRole('button', { name: '添加', exact: true }).click();
   assert.deepEqual(await page.evaluate(() => window.requests.find(r => r.command === 'create_material_references').args), { assetIds: ['root-0'], folderId: 'second' });
-  await context('ref-one'); await menu('重命名分身').click(); await dialog().getByRole('textbox').fill('新分身'); await dialog().getByRole('button', { name: '重命名分身', exact: true }).click();
+  await context('ref-one'); await menu('重命名').click(); await dialog().getByRole('textbox').fill('新分身'); await dialog().getByRole('button', { name: '重命名分身', exact: true }).click();
   assert.equal(await page.evaluate(() => window.entries.find(e => e.id === 'root-0').name), 'root-0.png');
-  await context('ref-one'); await menu('删除').click(); await menu('移出该集合').click(); await dialog().getByRole('button', { name: '移出该集合', exact: true }).click();
+  await context('ref-one'); await menu('删除').click(); await menu('移出该文件夹').click(); await dialog().getByRole('button', { name: '移出该文件夹', exact: true }).click();
   assert.ok(await page.evaluate(() => window.entries.some(e => e.id === 'root-0') && !window.entries.some(e => e.id === 'ref-one')));
   await row('child').hover(); await plus.click(); await dialog().getByRole('textbox').fill('新集合'); await dialog().getByRole('button', { name: '保存', exact: true }).click();
   const created = await page.evaluate(() => window.folders.find(f => f.name === '新集合').id); await active(created);
@@ -120,13 +121,13 @@ try {
   await page.waitForTimeout(250);
   await page.screenshot({ path: '.tmp/connected-collections/production-light.png' });
   await row('offline').click({ button: 'right' });
-  assert.equal(await menu('删除集合').isEnabled(), true);
+  assert.equal(await menu('删除文件夹').isEnabled(), true);
   assert.equal(await menu('移到回收站').count(), 0);
-  await menu('删除集合').click();
+  await menu('删除文件夹').click();
   await dialog().getByRole('button', { name: '取消', exact: true }).click();
   assert.equal(await row('offline').count(), 1);
-  await row('offline').click({ button: 'right' }); await menu('删除集合').click();
-  await dialog().getByRole('button', { name: '删除集合', exact: true }).click();
+  await row('offline').click({ button: 'right' }); await menu('删除文件夹').click();
+  await dialog().getByRole('button', { name: '删除文件夹', exact: true }).click();
   await row('offline').waitFor({ state: 'detached' });
   assert.ok(await page.evaluate(() => window.requests.some(r => r.command === 'disconnect_folder' && r.args.id === 'offline')));
   const batching = await page.evaluate(async () => {

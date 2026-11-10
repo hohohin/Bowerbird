@@ -101,6 +101,10 @@ pub struct AssetExecutionRefV1 {
 pub struct AssetNodePayloadV1 {
     pub schema_version: u8,
     pub snapshot: AssetSnapshotV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_generation_group: Option<String>,
     #[serde(default)]
     pub execution: Option<AssetExecutionRefV1>,
 }
@@ -117,6 +121,8 @@ pub struct VisualProfileRefV1 {
 #[serde(deny_unknown_fields)]
 pub struct PromptNodePayloadV1 {
     pub schema_version: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_generation_group: Option<String>,
     pub text: String,
     #[serde(default)]
     pub applied_prompt: Option<String>,

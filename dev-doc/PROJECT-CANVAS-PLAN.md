@@ -70,7 +70,19 @@
 > 当前契约：项目是一块画板；视觉规范独立保存，项目仅引用所选版本；旧用户可见会话不迁移、不 backfill，素材、文件、项目、计费和底层执行审计继续保留。
 > 本页保留数据边界与验收，已删除被替代的 CS 方案和 PB 历史回填执行单。历史实现见 Git。
 
-## 2026-10-23：删除项目时显式放弃已结束任务的待入库结果（源码未发布）
+## 2026-11-10：确认删除项目后不再由任务状态否决（源码待发布）
+
+产品决策以 PROJECT.md「删除保护」为准。复用 `ProjectDeleteDialog`、`useProjectDeletion`、store 路由和 `delete_project_managed`，去掉运行任务禁用、单独放弃结果勾选及待处理 Run 集合变化校验。SQLite `0055_project_delete_without_task_veto.sql` 移除普通生成／Agent 和工作流的旧删除触发器；活动、等待和未知状态只作影响统计。删除不再要求先保存即将丢弃的画板。
+
+本地待交付与未结束 Cloud Agent 记录在同一删除事务写入放弃原因，执行记录沿既有外键解除项目／线程归属，状态、接受事实和账单不改；生成 JSON 的项目身份同步清空，迟到的生成持久化仍保持脱离。原生删除自动排队等待已开始的 Agent 入库临界段释放，不再要求用户重试，也不等待远端任务终态。`discardProjectWorkflow` 停止本地调度、计时器和后续保存，不把它当作远端已取消的证据。旧 `discard_pending_results` 参数仅兼容读取，不再作为删除前置条件。
+
+默认保留素材和独占素材物理删除确认保持。存在活动任务时共享文件原位保留，避免转存改变正在使用的路径；空闲时继续原共享转存和恢复日志。失败事务回滚、物理文件指纹变化和共享／外部引用保护保持原契约。
+
+验证入口：`project-deletion-ui.test.mjs` 使用正式组件和模拟 IPC；原生项目删除、旧库升级、生成迟到回写、本机对话、并行工作流与共享文件转存测试使用临时 SQLite／合成文件。未操作真实任务或用户素材库，未更新安装包。
+
+本轮验证：7 组原生测试 **220 passed / 0 failed**；正式删除组件 Chromium 回归与 TypeScript 通过，前端隔离构建通过。覆盖活动／等待／未知状态、待交付结果、失效旧列表、保存失败、旧库 0054→0055、其他项目归属保持、迟到保存、审计／素材保留和共享路径原位保留。日志在 `.tmp/project-delete-confirmed-native/` 与 `apps/desktop/.tmp/project-delete-confirmed-*.log`，已查看删除弹窗截图；原生安装版需配套更新后生效。
+
+## 2026-10-23：显式放弃待入库结果的历史实现（任务拦截已由 2026-11-10 规则替代）
 
 后续确认面板优化：项目菜单直接打开 `ProjectDeleteDialog`，默认保留全部素材；`physical.exclusive_asset_ids` 与原删除指纹使用同一次 `plan` 的去重 ID 集合，前端按 ID 加载名称／封面展示，名单不完整时不允许勾选永久删除。保留现有确认指纹与删除事务核验，不从前端项目成员列表推测独占性。未保存结果的放弃选项继续独立确认，任务日期／编号改为折叠详情；删除失败不关闭面板，重新检查后重置选项。
 
@@ -710,7 +722,7 @@ UI command
 4. 普通生成和 Agent 共用严格按 `projectId + threadId` 定域的项目检查器；任务中心只保留 active/attention，始终打开当前行最新执行并只用最新 turn 的 node locator；composer 与检查器互斥挂载。Agent 提交与普通生成一致留在画板，只有用户显式查看或需处理状态才进入检查器。
 5. Cloud Agent 轮询、local task、整组产物入库与终态 reconcile 由常驻 runtime coordinator 持有，关闭详情或切换项目不会中断；同一 Run 的前端命令共用串行 lane，后端记录使用 CAS + 单调 merge，终态、`final_asset_id` 与 `downloaded_at` 不可被慢响应回退。入库只有在本地资产、整组 `artifact_received`、画板投影与匹配当前 artifact fingerprint 的 durable checkpoint 都持久化后才成功；重启列表会修复 receipt 后、checkpoint 前的崩溃窗口，并保持失败可退避/手动重试。
 6. 后端 snapshot 使用单读事务；layout DTO 不可覆盖 execution payload；generation/Agent owner 不可改绑；继续操作校验精确父节点；投影恢复服从队列表状态并保留隐藏状态和 provider conversation。
-7. 项目删除在同一 SQLite 事务内 fail-closed 检查 generation 与 Agent 未完成工作；未知 Agent 状态、等待本机/反馈/取消，以及已接受但尚未完成本地入库的成功 Run 都阻止删除，终态审计和中央资产继续保留。
+7. 项目删除确认包含放弃待交付结果，不由 generation、Agent、对话或工作流任务状态否决；同一 SQLite 事务解除执行归属并保留审计，中央资产按独立文件选项处理。当前契约见 2026-11-10 记录。
 8. 画板素材不再借用当前瀑布流列表：snapshot 中全部 asset id 通过精确查询补水，同一资产多节点不折叠，超过 500 条也不丢；snapshot、素材补水和后台刷新各自带 epoch，旧响应不能覆盖新项目或新图。
 9. App/store 中项目级 assets、caption、prompted assets、auto tags、palette 与生成历史读取都冻结 `projectId + routeRevision + latest request`；A 的迟到响应不能写入 B。启动恢复同样 merge 当前内存：新 Run 不会被旧列表删掉，`recover_started` 稀疏 generation 占位会补齐 session/references/ratio 等持久字段而不回退实时状态。
 10. 提交边界冻结 prompt/refs/ratio/provider/视觉设定与精确父节点；同项目 submission claim 位于 React 组件之外，检查器导致 composer 卸载/重挂也无法重复创建 job/Run 或重复消费 continuation。会话编辑坞的 revise 以显式 job id 寻址，异步 Agent compile 不能写进后来打开的会话。

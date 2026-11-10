@@ -13,8 +13,10 @@ services:
       - .env.generation
     environment:
       BOWERBIRD_BRAND_PROMPT_DIR: /app/brand-prompts
+      BOWERBIRD_TEXT_SKILL_DIR: /app/text-skills
     volumes:
       - ./src/prompts/brand-visual:/app/brand-prompts:ro
+      - ./src/skills/text:/app/text-skills:ro
     read_only: true
     tmpfs:
       # Video probing writes one bounded output (up to 500 MiB) at a time.

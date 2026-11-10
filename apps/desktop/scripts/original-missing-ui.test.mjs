@@ -36,8 +36,8 @@ try {
     const dialog = await open(page, ['a1']);
     assert.equal(await dialog.getByRole('heading').textContent(), '清理失效条目');
     assert.equal(await dialog.getByRole('button', { name: '清理失效条目', exact: true }).isEnabled(), true);
-    await dialog.getByText('原件已不在登记位置，仅从素材库移除失效条目。标签、分析及画布资料保留。', { exact: true }).waitFor();
-    await dialog.locator('[data-delete-asset-id="a1"]').getByText('原件缺失 · 仅移出素材库', { exact: true }).waitFor();
+    await dialog.getByText('原件已不在登记位置，将清理失效条目和画板中的对应素材卡片。标签、分析及生成历史保留。', { exact: true }).waitFor();
+    await dialog.locator('[data-delete-asset-id="a1"]').getByText('原件缺失 · 仅清理引用', { exact: true }).waitFor();
     assert.equal(await dialog.getByText(/放入系统回收站/).count(), 0);
     for (const theme of ['dark', 'light']) {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
@@ -66,9 +66,9 @@ try {
   await scenario('mixed confirmation distinguishes recycled originals from cleaned entries', async page => {
     const dialog = await open(page, ['a2'], 'multi');
     assert.equal(await dialog.getByRole('heading').textContent(), '确认删除');
-    await dialog.getByText('现存原文件将放入系统回收站，失效条目仅从素材库移除。标签、分析及画布资料保留。', { exact: true }).waitFor();
+    await dialog.getByText('现存原文件将放入系统回收站，失效条目和画板中的对应素材卡片一并清理。标签、分析及生成历史保留。', { exact: true }).waitFor();
     assert.equal(await dialog.locator('[data-delete-asset-id="a1"]').getByText(/原件缺失/).count(), 0);
-    await dialog.locator('[data-delete-asset-id="a2"]').getByText('原件缺失 · 仅移出素材库', { exact: true }).waitFor();
+    await dialog.locator('[data-delete-asset-id="a2"]').getByText('原件缺失 · 仅清理引用', { exact: true }).waitFor();
     await page.screenshot({ path: `${output}/mixed-dark.png` });
     await dialog.getByRole('button', { name: '确认删除', exact: true }).click();
     await dialog.waitFor({ state: 'detached' });

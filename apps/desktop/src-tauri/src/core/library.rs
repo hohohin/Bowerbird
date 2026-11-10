@@ -1554,30 +1554,22 @@ impl Database {
         Ok(())
     }
 
-    /// 取该资产所属生成会话的全部图（含自己），按 id ASC（ULID 时序 = 过程顺序）。
-    /// 会话级归组：session 有 conversation 映射 → 返回整个 conversation（「重新编辑 / 重试」
-    /// 各版本 session）的全部图；无映射 → 退回本 session（一次生成多图的过程组）。
-    /// 资产无 generation_session_id（非生成图）→ 子查询返回 NULL → `IN (NULL)` 恒假 →
-    /// 返回空（前端据此判断「非组、无轮播」）。
+    /// Same display group as the catalog, including workflow provenance and
+    /// persisted dissolution. Execution history is queried separately.
     pub fn list_generation_group(
         &self,
         asset_id: &str,
         project_id: Option<&str>,
     ) -> AppResult<Vec<Asset>> {
         let conn = self.conn.lock().unwrap();
+        let group = super::catalog_browser::generation_display_group("'asset:'||a.id");
         let sql = format!(
-            "SELECT {ASSET_COLS} FROM assets \
-             WHERE library_hidden=0 AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=assets.id) AND generation_session_id IN ( \
-               SELECT gc.session_id FROM generation_conversations gc \
-                 WHERE gc.conversation_id = ( \
-                   SELECT conversation_id FROM generation_conversations \
-                     WHERE session_id = \
-                       (SELECT generation_session_id FROM assets WHERE library_hidden=0 AND id = ?1)) \
-               UNION ALL \
-               SELECT generation_session_id FROM assets WHERE library_hidden=0 AND id = ?1) \
-             AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa \
-               WHERE pa.asset_id = assets.id AND pa.project_id IS ?2)) \
-             ORDER BY id ASC"
+            "WITH {} SELECT a.* FROM assets a WHERE a.library_hidden=0
+             AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)
+             AND {} AND {group}=(SELECT {group} FROM assets a WHERE a.id=?1)
+             AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa WHERE pa.asset_id=a.id AND pa.project_id=?2))
+             ORDER BY a.created_at,a.id",
+            super::generation_gallery::WORKFLOW_GALLERY_CTE, super::catalog_browser::GENERATED
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params![asset_id, project_id], asset_from_row)?;

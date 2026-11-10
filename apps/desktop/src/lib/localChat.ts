@@ -80,12 +80,13 @@ export interface ChatCardDefaults {
   videoChannel: "jimeng" | "cloud";
   videoOptions: import("./videoGeneration").VideoOptions;
 }
-export interface ChatConversation extends ChatSummary { messages: ChatMessage[]; actions?: ChatCardAction[] }
+export interface ChatConversation extends ChatSummary { messages: ChatMessage[]; actions?: ChatCardAction[]; submittedTurnId?: string }
 export interface LocalChatSendInput {
   projectId: string;
   provider?: ChatProvider;
   codexOptions?: ChatCodexOptions;
   conversationId?: string | null;
+  agentNodeId?: string;
   requestId: string;
   text: string;
   referenceAssetIds: string[];
@@ -97,7 +98,6 @@ export const LOCAL_CHAT_CARDS_CHANGED_EVENT = "local-chat://cards-changed";
 export const LOCAL_CHAT_MAX_REFERENCES = 8;
 export function localChatInputError(text: string, referenceAssetIds: string[]): string | null {
   if (!text.trim()) return "请先输入要发送的消息。";
-  if (new TextEncoder().encode(text).length > 100_000) return "消息内容过长，请分成几条消息发送。";
   if (new Set(referenceAssetIds).size > LOCAL_CHAT_MAX_REFERENCES) return "每条消息最多添加 8 张参考图，请移除部分图片后继续。";
   return null;
 }
@@ -108,6 +108,7 @@ export const localChat = {
   quote: () => invoke<ChatQuote>("local_chat_quote"),
   list: (projectId: string) => invoke<ChatSummary[]>("local_chat_list", { projectId }),
   get: (conversationId: string) => invoke<ChatConversation | null>("local_chat_get", { conversationId }),
+  getByRequest: (requestId: string) => invoke<ChatConversation | null>("local_chat_get_by_request", { requestId }),
   send: (input: LocalChatSendInput) => invoke<ChatConversation>("local_chat_send", { input }),
   stop: (conversationId: string) => invoke<ChatConversation | null>("local_chat_stop", { conversationId }),
   recover: (conversationId: string) => invoke<ChatConversation>("local_chat_recover", { conversationId }),

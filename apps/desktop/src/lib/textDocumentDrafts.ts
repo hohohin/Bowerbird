@@ -8,7 +8,7 @@ const validBase = (value: unknown): value is TextDocumentSnapshot => {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   return ["assetId", "path", "text", "version"].every(key => typeof record[key] === "string")
-    && (record.format === "markdown" || record.format === "text");
+    && (record.format === "markdown" || record.format === "text" || record.format === "docx");
 };
 
 export function getTextDocumentDraft(key: string): TextDocumentDraft | undefined {

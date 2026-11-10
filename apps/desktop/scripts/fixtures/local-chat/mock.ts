@@ -40,7 +40,13 @@ function persistChat(chat: Conversation) {
   chat.preview = [...chat.messages].reverse().find(message => message.role === "assistant" && message.text)?.text.slice(0, 100) ?? "";
   const node = database.projects[chat.projectId].nodes.find((node: any) => node.id === chat.nodeId);
   if (node) node.updatedAt = chat.updatedAt;
+  if (chat.status === "idle") {
+    const workflow = database.projects[chat.projectId].workflow;
+    const card = workflow?.document.nodes.find((card: any) => card.id === chat.nodeId);
+    if (card) { card.outputs = { text: { type: "text", text: chat.messages.at(-1)?.text ?? "" } }; workflow.revision++; }
+  }
   save(); emit("local-chat://updated", chat);
+  if (chat.status !== "running") emit("local-chat://cards-changed", { projectId: chat.projectId, conversationId: chat.id });
 }
 function clearTimer(chat: Conversation) { const timer = timers.get(chat.id); if (timer) clearInterval(timer); timers.delete(chat.id); }
 const fullReply = "**花影入月**\n\n可以保留参考图里的粉灰色关系，把荷花的线条留在包装侧边，正面用一轮留白的月亮组织视觉重心。\n\n先确定礼盒的主色和文字层级，再把包装、海报、社交媒体图片分别整理为三条清晰的生成指令。\n\n这是一段隔离验收回复，不会调用真实模型或修改文件。";
@@ -158,7 +164,7 @@ export async function invoke(command: string, args: any = {}) {
     if (!chat) {
       const id = crypto.randomUUID(); const project = database.projects[input.projectId];
       if (!project) throw new Error("项目不存在。");
-      chat = { id, projectId: input.projectId, threadId: `chat-thread-${id}`, nodeId: `local-chat:${id}`, title: input.text.trim().slice(0, 30), provider, status: "idle", turnCount: 0, preview: "", revision: 0, createdAt: now, updatedAt: now, error: null, messages: [] };
+      chat = { id, projectId: input.projectId, threadId: `chat-thread-${id}`, nodeId: input.agentNodeId ?? `local-chat:${id}`, title: input.text.trim().slice(0, 30), provider, status: "idle", turnCount: 0, preview: "", revision: 0, createdAt: now, updatedAt: now, error: null, messages: [] };
       database.conversations[id] = chat;
       project.threads.push({ id: chat.threadId, projectId: chat.projectId, title: chat.title, createdAt: now, updatedAt: now, archivedAt: null });
       project.nodes.push({ id: chat.nodeId, projectId: chat.projectId, threadId: chat.threadId, kind: "note", assetId: null, role: null, x: 100, y: 310, width: 320, height: 180, zIndex: 2, ...input.placement, positionLocked: false, hiddenAt: null, createdAt: now, updatedAt: now, payloadJson: JSON.stringify({ schema_version: 1, note_type: "chat", text: chat.title, conversation_id: id, provider }) });
@@ -169,8 +175,18 @@ export async function invoke(command: string, args: any = {}) {
     if (node) node.hiddenAt = null;
     chat.messages.push({ id: crypto.randomUUID(), turnId, role: "user", text: input.text.trim(), referenceAssetIds: input.referenceAssetIds ?? [], status: "done", createdAt: now, updatedAt: now }, { id: crypto.randomUUID(), turnId, role: "assistant", text: "", referenceAssetIds: [], status: "running", createdAt: now, updatedAt: now });
     chat.turnCount++; chat.status = "running"; chat.error = null; database.requests[input.requestId] = chat.id;
+    const project = database.projects[chat.projectId];
+    project.workflow ??= { revision: 0, document: { schema_version: 1, nodes: [], run: null } };
+    let agent = project.workflow.document.nodes.find((card: any) => card.id === chat.nodeId);
+    if (!agent) {
+      agent = { id: chat.nodeId, kind: "agent", action: "describe", skill: "image-edit", prompt: input.text, ratio: null, provider: "codex", x: node.x, y: node.y, inputs: {}, outputs: {}, outputPorts: [], trigger: false };
+      project.workflow.document.nodes.push(agent);
+    }
+    Object.assign(agent, { chatConversationId: chat.id, chatProvider: chat.provider, chatCodexOptions: chat.codexOptions });
+    project.workflow.revision++;
     persistChat(chat); autoStream(chat);
-    const accepted = clone(chat);
+    emit("local-chat://cards-changed", { projectId: chat.projectId, conversationId: chat.id });
+    const accepted = { ...clone(chat), submittedTurnId: turnId };
     if (controls.delayReply) await new Promise<void>(resolve => { pendingReplies.push(resolve); changed(); });
     return accepted;
   }
@@ -217,6 +233,9 @@ export async function invoke(command: string, args: any = {}) {
   if (command === "canvas_workflow_save") {
     const project = database.projects[args.projectId];
     if (args.revision !== (project.workflow?.revision ?? 0)) throw new Error("工作流已被其他窗口修改，请重新打开项目");
+    for (const old of project.workflow?.document.nodes ?? []) if (old.chatConversationId && !args.document.nodes.some((card: any) => card.id === old.id)) {
+      const node = project.nodes.find((node: any) => node.id === old.id); if (node) node.hiddenAt = Date.now();
+    }
     project.workflow = { revision: args.revision + 1, document: clone(args.document) }; save(); return args.revision + 1;
   }
   if (command === "list_generation_groups") return {};

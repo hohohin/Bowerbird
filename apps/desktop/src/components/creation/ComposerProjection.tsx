@@ -73,14 +73,18 @@ export function ComposerProjection({ collapsed }: { collapsed: boolean }) {
       const arcSvg = arc.closest("svg")!;
       arcSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
       arcSvg.style.maskImage = `linear-gradient(90deg,transparent ${arcLeft}px,#000 ${arcLeft + 72}px,#000 ${arcRight - 72}px,transparent ${arcRight}px)`;
-      // Center the feather on the local arc; the elliptical field has no vertical side boundary.
+      // Center the feather on the local arc; sides fade beyond the visible controls.
       const curveY = (x: number) => { const position = (x - arcLeft) / span; return y - 4 * bow * position * (1 - position); };
       const edgeLeft = curveY(-50), edgeRight = curveY(width + 50);
       const cap = `M-50 ${edgeLeft} Q${width / 2} ${2 * curveY(width / 2) - (edgeLeft + edgeRight) / 2} ${width + 50} ${edgeRight} L${width + 50} ${height + 50} L-50 ${height + 50}Z`;
       const cx = (arcLeft + arcRight) / 2;
-      const tags = [...dock!.querySelectorAll('.library-composer-target, .composer-mode-picker > button')];
-      const fadeLeft = Math.min(...tags.map(tag => tag.getBoundingClientRect().left), project.left) - left;
-      const fadeRight = (dock!.querySelector('.composer-send')?.getBoundingClientRect().right ?? box.right) - left;
+      const tags = [...dock!.querySelectorAll('.library-composer-target, .composer-mode-picker > button')]
+        .map(tag => tag.getBoundingClientRect()).filter(tag => tag.width > 0 && tag.height > 0);
+      const send = dock!.querySelector('.composer-send')?.getBoundingClientRect();
+      // Collapsed mode hides the mode rail and send button (zero-sized rects).
+      // Its static projection belongs to the whole collapsed bar instead.
+      const fadeLeft = (collapsed || !tags.length ? box.left : Math.min(...tags.map(tag => tag.left))) - left;
+      const fadeRight = (!collapsed && send?.width ? send.right : box.right) - left;
       const fadeWidth = fadeRight - fadeLeft + 220;
       const mask = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><defs><filter id="f" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="${feather / 4}"/></filter><mask id="top"><path d="${cap}" fill="white" filter="url(#f)"/></mask><linearGradient id="field" gradientUnits="userSpaceOnUse" x1="${fadeLeft - 110}" x2="${fadeRight + 110}"><stop stop-color="white" stop-opacity="0"/><stop offset="${110 / fadeWidth}" stop-color="white"/><stop offset="${1 - 110 / fadeWidth}" stop-color="white"/><stop offset="1" stop-color="white" stop-opacity="0"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#field)" mask="url(#top)"/></svg>`;
       surface.style.maskImage = canvas.style.maskImage = `url("data:image/svg+xml,${encodeURIComponent(mask)}")`;

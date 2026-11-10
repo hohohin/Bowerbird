@@ -20,6 +20,8 @@
 
 ## 验证与发布
 
+- 2026-11-09 已部署：Agent `request.json` 的共享路由 `maxBytes: null` 表示不附加应用字节配额；Agent 控制 JSON 和事件结果同样移除固定大小拦截，Nginx 前置 200 MiB body 上限同步取消，由固定路由继续执行媒体配额。签名、非空／精确长度、账号、路由与断线恢复保持，媒体和其他 Function 的配额不变。Cloud Storage 仍受平台全局上传容量约束，0081／0083、Edge／Worker 与现役网关已配套更新；公网约 25.2 MiB 合成清单上传及完整读回通过，桌面安装包未重发。见 [工作流文本容量](CANVAS-WORKFLOW.md#2026-11-09agent-文本容量与-dsh-配置cloud-已部署桌面源码待发布)。
+
 - `node apps/desktop/scripts/cloud-routing-contract.test.mjs` 扫描实际 Rust 调用，拒绝未登记 Function、业务代码直接读取 Supabase URL／REST 地址以及 Agent 绕开公共上传映射；已纳入桌面 `build`。
 - `website/scripts/cloud-proxy.test.mjs` 覆盖路由、授权、查询约束、签名和字节保持、大小限制、断开、超时、取消以及付费 POST 不重放；连同账号／更新入口 35 项通过。
 - Rust Cloud／Agent 首轮 80 项通过；最终冻结版完整原生回归 1149 项通过、34 项按原规则跳过。Edge 恢复的 3 项内存隔离测试和 Deno check 通过，覆盖丢响应、原任务终态、账号隔离、哈希冲突及无写入。

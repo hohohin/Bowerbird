@@ -1,5 +1,139 @@
 use super::*;
 
+fn original_canvas_fixture() -> (Fixture, Vec<AssetOriginal>) {
+    use crate::core::{creative_session_contract::{CreativeNodeKind, CreativeNodeRole, CreativeThreadOrigin, CreativeEdgeKind}, project_canvas::{NewCanvasNode, NewCreativeThread, NewCanvasEdge}};
+    let mut f = Fixture::new();
+    f.db = Database::open(&f._temp.path().join("canvas.sqlite")).unwrap();
+    f.db.migrate().unwrap();
+    image::RgbImage::from_pixel(8, 8, image::Rgb([90, 40, 60])).save(f.source.join("two.png")).unwrap();
+    let root = f.connect(&f.source);
+    let ids: Vec<_> = f.entries(&root).into_iter().map(|entry| entry.asset_id).collect();
+    let originals = f.db.preview_asset_originals(&ids).unwrap();
+    for project in ["delete-main", "delete-other"] {
+        f.db.create_project(project, project, &format!("blank:{project}"), project, "blank").unwrap();
+        f.db.ensure_project_canvas(project).unwrap();
+        f.db.create_creative_thread(&NewCreativeThread { id: project.into(), project_id: project.into(), title: "history".into(), origin: CreativeThreadOrigin::Direct }).unwrap();
+    }
+    let prompt = NewCanvasNode { id: "delete-prompt".into(), project_id: "delete-main".into(), thread_id: Some("delete-main".into()), kind: CreativeNodeKind::Prompt, asset_id: None, role: None,
+        payload_json: r#"{"schema_version":1,"job_id":"delete-job","text":"保留生成历史","status":"done"}"#.into(),
+        x: 10., y: 20., width: 200., height: 160., z_index: 1, position_locked: false };
+    f.db.create_canvas_node(&prompt).unwrap();
+    for (index, original) in originals.iter().enumerate() {
+        let node = NewCanvasNode { id: format!("delete-output-{index}"), kind: CreativeNodeKind::Asset, asset_id: Some(original.asset_id.clone()), role: Some(CreativeNodeRole::Output),
+            payload_json: r#"{"schema_version":1,"snapshot":{"name":"generated"}}"#.into(), ..prompt.clone() };
+        f.db.create_canvas_node(&node).unwrap();
+        f.db.create_canvas_edge(&NewCanvasEdge { id: format!("delete-edge-{index}"), project_id: prompt.project_id.clone(), thread_id: "delete-main".into(),
+            from_node_id: prompt.id.clone(), to_node_id: node.id.clone(), kind: CreativeEdgeKind::Produced, ordinal: index as i64 }).unwrap();
+    }
+    // One physical file can have multiple registered identities and project instances.
+    f.db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,ext,source,store_path) SELECT 'delete-alias',name,ext,source,store_path FROM assets WHERE id=?1", [&originals[0].asset_id]).unwrap();
+    f.db.create_canvas_node(&NewCanvasNode { id: "delete-copy".into(), project_id: "delete-other".into(), thread_id: None, kind: CreativeNodeKind::Asset, asset_id: Some("delete-alias".into()), role: Some(CreativeNodeRole::Reference),
+        payload_json: r#"{"schema_version":1,"snapshot":{"name":"copy"}}"#.into(), ..prompt }).unwrap();
+    (f, originals)
+}
+
+#[test]
+fn original_canvas_trash_hides_instances_and_last_output_but_keeps_history() {
+    let (f, originals) = original_canvas_fixture();
+    let before = f.db.list_canvas_nodes("delete-main").unwrap();
+    assert!(f.db.trash_asset_original_with(&originals[0], |_| Err(invalid("recycle failure"))).is_err());
+    assert_eq!(f.db.list_canvas_nodes("delete-main").unwrap(), before, "failed recycling rolls back canvas visibility too");
+    for (index, original) in originals.iter().enumerate() {
+        f.db.trash_asset_original_with(original, |path| { fs::remove_file(path)?; Ok(()) }).unwrap();
+        assert!(f.db.get_canvas_node(&format!("delete-output-{index}")).unwrap().unwrap().hidden_at.is_some());
+        assert_eq!(f.db.get_canvas_node("delete-prompt").unwrap().unwrap().hidden_at.is_some(), index == 1, "keep a generation card while another original remains");
+        assert!(f.db.get_asset(&original.asset_id).unwrap().is_some());
+    }
+    assert!(f.db.get_canvas_node("delete-copy").unwrap().unwrap().hidden_at.is_some(), "same-file aliases in other projects disappear too");
+    let snapshot = f.db.project_canvas_snapshot("delete-main").unwrap();
+    assert_eq!(snapshot.nodes.len(), before.len());
+    assert!(snapshot.nodes.iter().all(|node| node.hidden_at.is_some()));
+    assert_eq!(snapshot.nodes.iter().find(|node| node.id == "delete-prompt").unwrap().payload_json,
+        before.iter().find(|node| node.id == "delete-prompt").unwrap().payload_json);
+    assert_eq!(snapshot.edges.len(), 2, "history edges are retained");
+    let reopened = Database::open(&f._temp.path().join("canvas.sqlite")).unwrap();
+    assert!(reopened.project_canvas_snapshot("delete-main").unwrap().nodes.iter().all(|node| node.hidden_at.is_some()));
+}
+
+#[test]
+fn original_canvas_missing_cleanup_repairs_old_residue_and_is_idempotent() {
+    let (f, originals) = original_canvas_fixture();
+    for original in &originals {
+        fs::remove_file(&original.path).unwrap();
+        // Simulate a previous version that marked the file missing but left visible nodes.
+        f.db.conn.lock().unwrap().execute("INSERT INTO removed_missing_asset_originals(asset_id,path) VALUES(?1,?2)", params![original.asset_id, original.path]).unwrap();
+    }
+    for original in &originals {
+        let missing = f.db.preview_asset_originals(&[original.asset_id.clone()]).unwrap().remove(0);
+        f.db.trash_asset_original_with(&missing, |_| panic!("missing cleanup must not recycle files")).unwrap();
+        f.db.trash_asset_original_with(&missing, |_| panic!("repeat cleanup must not recycle files")).unwrap();
+    }
+    assert!(f.db.project_canvas_snapshot("delete-main").unwrap().nodes.iter().all(|node| node.hidden_at.is_some()));
+    assert!(f.db.get_canvas_node("delete-copy").unwrap().unwrap().hidden_at.is_some());
+    assert_eq!(f.db.project_canvas_snapshot("delete-main").unwrap().edges.len(), 2);
+}
+
+#[test]
+fn gallery_counts_pages_filters_and_members_keep_folder_entry_identity() {
+    let f = Fixture::new();
+    for (name, color) in [("a-old.png", 80), ("b-new.png", 140)] {
+        image::RgbImage::from_pixel(8, 8, image::Rgb([color, 40, 60])).save(f.source.join(name)).unwrap();
+    }
+    let root = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let entries = f.entries(&root);
+    let old = entries.iter().find(|e| e.name == "a-old.png").unwrap();
+    let new = entries.iter().find(|e| e.name == "b-new.png").unwrap();
+    let ordinary = entries.iter().find(|e| e.name == "one.png").unwrap();
+    for (entry, session, time, color) in [(old, "first", 10, "red"), (new, "second", 20, "blue")] {
+        f.db.conn.lock().unwrap().execute("UPDATE assets SET generation_session_id=?2,created_at=?3 WHERE id=?1", params![entry.asset_id, session, time]).unwrap();
+        f.db.conn.lock().unwrap().execute("INSERT INTO asset_colors(asset_id,bucket) VALUES(?1,?2)", params![entry.asset_id, color]).unwrap();
+        f.db.record_generation_conversation(session, "one-conversation").unwrap();
+    }
+    f.db.create_material_references(&f.paths, &[old.asset_id.clone()], &target).unwrap();
+    let grouped = ConnectionFilter { grouped: true, ..Default::default() };
+    let folders = f.db.connection_folders_filtered(None, Some("images"), &grouped).unwrap();
+    assert_eq!(folders.iter().find(|f| f.id == root).unwrap().count, 2);
+    assert_eq!(folders.iter().find(|f| f.id == target).unwrap().count, 1);
+    let ids = f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 1, &grouped).unwrap();
+    assert_eq!(ids, vec![new.id.clone()]); // Latest member, still sorted by filename.
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 1, 1, &grouped).unwrap(), vec![ordinary.id.clone()]);
+    let mut page = f.db.resolve_connection_entries(&ids).unwrap();
+    f.db.connection_entry_groups(&mut page, None, Some("images"), &grouped).unwrap();
+    assert_eq!(page[0].group.iter().map(|e| &e.id).collect::<Vec<_>>(), vec![&old.id, &new.id]);
+    assert!(page[0].group.iter().all(|e| e.folder_id == root));
+    let red = ConnectionFilter { color: Some("red".into()), grouped: true, ..Default::default() };
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 20, &red).unwrap(), vec![old.id.clone()]);
+    assert_eq!(f.db.connection_folders_filtered(None, Some("images"), &red).unwrap().iter().find(|f| f.id == root).unwrap().count, 1);
+    let source = ConnectionFilter { generated: Some(false), grouped: true, ..Default::default() };
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 20, &source).unwrap(), vec![ordinary.id.clone()]);
+    f.db.dissolve_generation_group(Some(&new.asset_id), None).unwrap();
+    assert_eq!(f.db.connection_folders_filtered(None, Some("images"), &grouped).unwrap().iter().find(|folder| folder.id == root).unwrap().count, 3);
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 1, &grouped).unwrap(), vec![old.id.clone()]);
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 1, 1, &grouped).unwrap(), vec![new.id.clone()]);
+    let mut separated = f.db.resolve_connection_entries(&[old.id.clone(), new.id.clone()]).unwrap();
+    f.db.connection_entry_groups(&mut separated, None, Some("images"), &grouped).unwrap();
+    assert!(separated.iter().all(|entry| entry.group.len() <= 1));
+    // The same images belong to an Agent card: each stays visible even with a
+    // shared generation conversation, and keeps its original folder entry ID.
+    f.db.create_project("agent-project", "Agent", "blank:agent", "blank:agent", "blank").unwrap();
+    let history = serde_json::json!({"schema_version":1,"nodes":[],"runs":[{"steps":{"agent":{
+        "localDsRequestId":"request","generatedAssetIds":[old.asset_id,new.asset_id]
+    }}}]});
+    f.db.conn.lock().unwrap().execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('agent-project',1,?1)", [history.to_string()]).unwrap();
+    assert_eq!(f.db.connection_folders_filtered(None, Some("images"), &grouped).unwrap().iter().find(|f| f.id == root).unwrap().count, 3);
+    let generated = ConnectionFilter { generated: Some(true), grouped: true, ..Default::default() };
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 1, &generated).unwrap(), vec![old.id.clone()]);
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 1, 1, &generated).unwrap(), vec![new.id.clone()]);
+    let mut page = f.db.resolve_connection_entries(&[old.id.clone(), new.id.clone()]).unwrap();
+    f.db.connection_entry_groups(&mut page, None, Some("images"), &generated).unwrap();
+    assert_eq!(page.iter().map(|entry| &entry.id).collect::<Vec<_>>(), vec![&old.id, &new.id]);
+    assert!(page.iter().all(|entry| entry.group.is_empty()), "standalone files have no gallery members");
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 20, &source).unwrap(), vec![ordinary.id.clone()]);
+    assert_eq!(f.entries(&root).len(), 3, "physical operations still enumerate every original");
+    assert!(f.source.join("a-old.png").exists() && f.source.join("b-new.png").exists());
+}
+
 #[test]
 fn original_trash_preview_resolves_registered_original_once_without_copying() {
     let f = Fixture::new();
@@ -440,6 +574,46 @@ fn refresh_checks_selected_directory_before_other_cached_directories() {
     assert!(selected_seen_first);
     assert_eq!(f.entries(&root).len(), 2);
     assert_eq!(f.entries(&selected).len(), 1);
+}
+
+#[test]
+fn unchanged_scan_does_not_rewrite_entries_or_report_catalog_changes() {
+    let f = Fixture::new();
+    fs::create_dir(f.source.join("nested")).unwrap();
+    let root = f.connect(&f.source);
+    f.db.conn.lock().unwrap().execute_batch("CREATE TABLE scan_write_audit(value INTEGER);
+        CREATE TRIGGER audit_entry_scan AFTER UPDATE ON connected_entries BEGIN INSERT INTO scan_write_audit VALUES(1); END;
+        CREATE TRIGGER audit_folder_scan AFTER UPDATE ON connected_folders BEGIN INSERT INTO scan_write_audit VALUES(1); END;").unwrap();
+    let mut changes = 0;
+    f.db.scan_connection_changes(&f.paths, &root, None, |changed| changes += usize::from(changed)).unwrap();
+    assert_eq!(changes, 0, "scan progress alone must not invalidate the catalog");
+    let writes: i64 = f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM scan_write_audit", [], |row| row.get(0)).unwrap();
+    assert_eq!(writes, 0, "unchanged entries and folders need no UPDATE");
+    fs::copy(f.source.join("one.png"), f.source.join("new.png")).unwrap();
+    f.db.scan_connection_changes(&f.paths, &root, None, |changed| changes += usize::from(changed)).unwrap();
+    assert!(changes > 0);
+    changes = 0;
+    fs::remove_file(f.source.join("new.png")).unwrap();
+    f.db.scan_connection_changes(&f.paths, &root, None, |changed| changes += usize::from(changed)).unwrap();
+    assert!(changes > 0, "completed deletion reconciliation must notify");
+}
+
+#[test]
+fn scan_reports_offline_and_restore_once_without_discarding_cached_entries() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let saved = f._temp.path().join("offline");
+    fs::rename(&f.source, &saved).unwrap();
+    let mut changes = 0;
+    assert!(f.db.scan_connection_changes(&f.paths, &root, None, |changed| changes += usize::from(changed)).is_err());
+    assert!(changes > 0);
+    changes = 0;
+    assert!(f.db.scan_connection_changes(&f.paths, &root, None, |changed| changes += usize::from(changed)).is_err());
+    assert_eq!(changes, 0, "unchanged offline state is progress, not new content");
+    fs::rename(&saved, &f.source).unwrap();
+    f.db.scan_connection_changes(&f.paths, &root, None, |changed| changes += usize::from(changed)).unwrap();
+    assert!(changes > 0);
+    assert_eq!(f.entries(&root).len(), 1);
 }
 #[test]
 fn scan_excludes_only_its_own_generated_cache_and_database_paths() {
@@ -1522,7 +1696,7 @@ fn missing_original_cleanup_migration_0052_preserves_v51_identity_and_reopens() 
 }
 
 #[test]
-fn missing_original_cleanup_preserves_canvas_nodes_and_cannot_revive_on_last_node_removal() {
+fn missing_original_cleanup_hides_canvas_nodes_but_preserves_data_and_cannot_revive_on_last_node_removal() {
     use crate::core::{creative_session_contract::{CreativeNodeKind, CreativeNodeRole}, project_canvas::NewCanvasNode};
     let f = Fixture::new();
     let root = f.connect(&f.source);
@@ -1535,12 +1709,16 @@ fn missing_original_cleanup_preserves_canvas_nodes_and_cannot_revive_on_last_nod
         payload_json: r#"{"schema_version":1,"snapshot":{"name":"one"}}"#.into(),
         x: 10., y: 20., width: 100., height: 80., z_index: 1, position_locked: false,
     }).unwrap();
-    let before = serde_json::to_value(f.db.list_canvas_nodes("missing-canvas").unwrap()).unwrap();
+    let before = f.db.list_canvas_nodes("missing-canvas").unwrap();
     let moved = f.target.join("moved.png");
     fs::rename(&entry.path, &moved).unwrap();
     let preview = f.db.preview_asset_originals(&[entry.asset_id.clone()]).unwrap();
     f.db.trash_asset_original_with(&preview[0], |_| panic!("missing original cannot be recycled")).unwrap();
-    assert_eq!(serde_json::to_value(f.db.list_canvas_nodes("missing-canvas").unwrap()).unwrap(), before);
+    let mut after = f.db.list_canvas_nodes("missing-canvas").unwrap();
+    assert!(after[0].hidden_at.is_some());
+    after[0].hidden_at = before[0].hidden_at;
+    after[0].updated_at = before[0].updated_at;
+    assert_eq!(after, before, "only visibility changes; card identity, position and payload remain");
     f.db.remove_canvas_node("missing-node").unwrap();
     assert!(f.db.material_catalog_assets("tags", None, None).unwrap().is_empty());
     assert!(f.db.get_asset(&entry.asset_id).unwrap().is_some());

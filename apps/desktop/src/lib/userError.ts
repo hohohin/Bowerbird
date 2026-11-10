@@ -1,7 +1,7 @@
 const DEFAULT_MESSAGE = "操作未完成，请稍后重试。";
 // English product names, keys and file formats can be useful in a Chinese instruction.
 // Everything else (including unfamiliar upstream prose) uses the caller's action-specific fallback.
-const DISPLAY_WORDS = /^(?:Bowerbird|Bcoin|Pro|Studio|Cloud|Codex|ChatGPT|ComfyUI|Jev|Jimeng|Dreamina|Seedream|Seedance|GPT|OpenAI|Agent|CLI|API|DSH|MCP|FFmpeg|Python|tar|x64|Windows|macOS|Mac|Apple|Intel|NVIDIA|AMD|GPU|CPU|RAM|H3|F\d{1,2}|Ctrl|Control|Alt|Shift|Command|Cmd|Option|Esc|Escape|Enter|Tab|Space|Backspace|Delete|PNG|JPE?G|WebP|GIF|AVIF|HEIC|SVG|PDF|PSD|MP4|MOV|WebM|MKV|MP3|WAV|ZIP|JSON|UTF|Markdown|GB|MB|MiB|KB|TB|px|fps|\d{3,4}p|x)$/i;
+const DISPLAY_WORDS = /^(?:Bowerbird|Bcoin|Pro|Studio|Cloud|Codex|ChatGPT|ComfyUI|Jev|Jimeng|Dreamina|Seedream|Seedance|GPT|OpenAI|Agent|CLI|API|DSH|MCP|FFmpeg|Python|tar|x64|Windows|macOS|Mac|Apple|Intel|NVIDIA|AMD|GPU|CPU|RAM|H3|F\d{1,2}|Ctrl|Control|Alt|Shift|Command|Cmd|Option|Esc|Escape|Enter|Tab|Space|Backspace|Delete|PNG|JPE?G|WebP|GIF|AVIF|HEIC|SVG|PDF|PSD|MP4|MOV|WebM|MKV|MP3|WAV|ZIP|JSON|UTF|Markdown|Word|DOCX|XLSX|CSV|GB|MB|MiB|KB|TB|px|fps|\d{3,4}p|x)$/i;
 
 function clearChineseMessage(message: string): boolean {
   return /[\u3400-\u9fff]/.test(message) && message.length <= 240
@@ -28,6 +28,8 @@ function errorText(error: unknown, depth = 0): string {
 /** Presentation only: never replace raw errors used for recovery, branching or diagnostics. */
 export function userErrorMessage(error: unknown, fallback = DEFAULT_MESSAGE): string {
   const message = errorText(error).trim();
+  if (/deepseek_context_limit/.test(message)) return "本次内容超过模型可容纳的上下文，请拆分任务后再处理。原文已保留。";
+  if (/deepseek_output_limit/.test(message)) return "模型输出达到自身上限，结果不完整。请拆分任务后再处理。";
   const safeFallback = clearChineseMessage(fallback) ? fallback : DEFAULT_MESSAGE;
   if (/HotKey.*already registered|快捷键.*(注册|占用)|hot.?key.*(register|occupied)/i.test(message)) {
     return "这个快捷键暂时无法使用，可能已被其他应用占用。请换一个组合键，或关闭占用它的应用后重试。";

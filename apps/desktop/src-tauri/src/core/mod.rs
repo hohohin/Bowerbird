@@ -12,6 +12,7 @@ pub mod library;
 pub mod library_view;
 pub mod material_catalog;
 pub mod catalog_browser;
+pub(crate) mod generation_gallery;
 pub mod canvas_library;
 pub mod canvas_frequent_assets;
 pub mod local_classification;

@@ -33,7 +33,6 @@ export function LibraryViewSwitch({ value, options, onChange, label, hint }: {
           current?.querySelectorAll<HTMLButtonElement>('button')[next]?.focus();
         });
       }}>{option.icon}<span className="library-view-label">{option.label}</span>
-      {option.shortcut && <span className="library-source-key-hint" aria-hidden="true"><kbd>{option.shortcut}</kbd></span>}
     </button>)}
   </div>;
 }

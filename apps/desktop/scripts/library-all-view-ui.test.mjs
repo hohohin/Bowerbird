@@ -9,7 +9,7 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
 page.setDefaultTimeout(10000);
 const errors = []; page.on('pageerror', error => errors.push(error.message));
-const names = { all: '平铺浏览全部图片', tags: '按标签浏览素材', collections: '按集合浏览素材' };
+const names = { all: '平铺浏览全部图片', tags: '按标签浏览素材', collections: '按文件夹浏览素材' };
 const region = kind => page.getByRole('region', { name: names[kind], exact: true });
 async function settled(kind) {
   await region(kind).waitFor();
@@ -61,7 +61,7 @@ try {
       };
     });
     if (scene === 'home') {
-      assert.deepEqual(await page.getByRole('tab').allTextContents(), ['全部', '标签分类', '集合分类']);
+      assert.deepEqual(await page.getByRole('tab').allTextContents(), ['全部', '标签分类', '文件夹']);
       await page.getByRole('tab', { name: '全部', exact: true }).click();
     } else {
       assert.deepEqual(await page.getByRole('tab').evaluateAll(tabs => tabs.map(tab => tab.getAttribute('aria-label'))), ['全局素材', '项目素材']);
@@ -84,7 +84,7 @@ try {
     if (scene === 'home') {
       await page.getByRole('tab', { name: '全部', exact: true }).press('ArrowRight'); await settled('tags');
       await page.getByRole('tab', { name: '标签分类', exact: true }).press('End'); await settled('collections');
-      await page.getByRole('tab', { name: '集合分类', exact: true }).press('Home'); await settled('all');
+      await page.getByRole('tab', { name: '文件夹', exact: true }).press('Home'); await settled('all');
     } else {
       await page.getByRole('tab', { name: '项目素材', exact: true }).click(); await settled('tags');
       await cycle('collections'); await cycle('all'); await expectIds(['tagged', 'untagged', 'generated']);
@@ -97,7 +97,7 @@ try {
     await control('文件浏览器'); await settled('all');
     await control('视频');
     await page.getByRole('region', { name: '平铺浏览视频', exact: true }).waitFor();
-    if (scene === 'home') assert.deepEqual(await page.getByRole('tab').allTextContents(), ['视频平铺', '集合分类']);
+    if (scene === 'home') assert.deepEqual(await page.getByRole('tab').allTextContents(), ['视频平铺', '文件夹']);
     await control('图片'); await settled('all');
     for (const theme of ['light', 'dark']) {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);

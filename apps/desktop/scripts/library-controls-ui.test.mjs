@@ -46,15 +46,15 @@ try {
   });
   await scenario('narrow collection names reclaim action width until hover, focus or menu', async page => {
     await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/connected-collections/preview.html`);
-    await page.getByRole('tab', { name: '集合视图', exact: true }).click();
+    await page.getByRole('tab', { name: '文件夹', exact: true }).click();
     const row = page.locator('[data-collection-id="child"]');
     await row.waitFor();
     await row.click({ button: 'right' });
-    await page.getByRole('menuitem', { name: '重命名集合', exact: true }).click();
-    await page.getByRole('textbox', { name: '集合名称' }).fill('城市建筑与街景参考素材');
+    await page.getByRole('menuitem', { name: '重命名文件夹', exact: true }).click();
+    await page.getByRole('textbox', { name: '文件夹名称' }).fill('城市建筑与街景参考素材');
     await page.getByRole('button', { name: '保存', exact: true }).click();
     await row.getByText('城市建筑与街景参考素材').waitFor();
-    const resize = page.getByRole('separator', { name: '调整集合侧栏宽度' });
+    const resize = page.getByRole('separator', { name: '调整文件夹侧栏宽度' });
     await resize.focus();
     for (let i = 0; i < 6; i++) await page.keyboard.press('ArrowLeft');
     await page.mouse.move(1250, 0);
@@ -75,7 +75,7 @@ try {
     await page.keyboard.press('Escape');
     await resize.focus();
     assert.equal(await padding(), 0);
-    await row.getByRole('button', { name: /新建集合/ }).focus();
+    await row.getByRole('button', { name: /新建文件夹/ }).focus();
     assert.equal(await padding(), 48, 'keyboard focus reveals controls');
     await resize.focus();
     await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });

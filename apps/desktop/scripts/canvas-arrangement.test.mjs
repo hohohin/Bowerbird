@@ -38,6 +38,17 @@ test("multiple roots and selected descendants retain connection order", () => {
   assertNoOverlaps(apply(nodes, positions));
 });
 
+test("six independent products occupy three compact columns with stable row heights", () => {
+  const nodes = [node('source', 100, 100, 320, 156), ...Array.from({length:6},(_,i)=>node(`out${i}`,500,100+i*420,190,i===0?260:180,i+2))];
+  const edges = nodes.slice(1).map(n=>edge('source',n.id));
+  const positions=arrangeCanvasNodes(nodes,edges,['source']);
+  const results=nodes.slice(1).map(n=>positions.get(n.id));
+  assert.equal(new Set(results.map(p=>p.x)).size,3);
+  assert.equal(results[3].y-results[0].y,292);
+  assertNoOverlaps(apply(nodes,positions));
+  assert.deepEqual(arrangeCanvasNodes(apply(nodes,positions),edges,['source']),positions);
+});
+
 test("obstacle chains, mixed dimensions, missing nodes and cycles remain bounded", () => {
   const nodes = [node('a', 0, 0, 350, 240), node('b'), node('obstacle1', 0, 30), node('obstacle2', 0, 260, 800, 100)];
   const positions = arrangeCanvasNodes(nodes, [edge('a', 'b'), edge('b', 'a'), edge('a', 'missing')], ['a']);

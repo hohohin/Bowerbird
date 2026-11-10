@@ -123,7 +123,7 @@ try {
   const requestsBeforeReturn = await page.evaluate(() => window.requests.filter(r => r.command === 'catalog_page' && r.args.offset === 0).length);
   await scrollTo(0);
   await checkMounted('return after cache eviction');
-  assert.ok(await page.evaluate(() => window.requests.filter(r => r.command === 'catalog_page' && r.args.offset === 0).length) > requestsBeforeReturn, 'First page should have been evicted and fetched again');
+  assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'catalog_page' && r.args.offset === 0).length), requestsBeforeReturn, 'A page evicted from the pane should reuse the bounded session snapshot');
   await scrollTo(1800);
   await checkMounted('reloaded page boundary');
   await page.screenshot({ path: '.tmp/catalog-continuity/page-boundary.png' });

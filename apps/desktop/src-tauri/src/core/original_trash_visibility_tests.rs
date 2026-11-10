@@ -137,7 +137,8 @@ fn original_trash_visibility_migration_0050_preserves_v49_records_across_reopen(
         x: 20., y: 30., width: 100., height: 80., z_index: 1, position_locked: false,
     }).unwrap();
     let asset = serde_json::to_value(db.get_asset("asset").unwrap()).unwrap();
-    let nodes = serde_json::to_value(db.list_canvas_nodes("project").unwrap()).unwrap();
+    // Read the stored row before migration; current list projection requires the latest schema.
+    let nodes = serde_json::to_value(vec![db.get_canvas_node("node").unwrap().unwrap()]).unwrap();
     db.migrate().unwrap();
     assert_eq!(marker_count(&db, "asset"), 0, "existing files must not be treated as recycled during upgrade");
     db.conn.lock().unwrap().execute(

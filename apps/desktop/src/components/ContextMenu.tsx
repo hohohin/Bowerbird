@@ -43,7 +43,7 @@ export function ContextMenu({ x, y, label, children, onClose, className = "", co
     const outside = (event: Event) => { if (!belongs(event.target)) close.current(); };
     const blur = () => close.current();
     const key = (event: KeyboardEvent) => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]') && !belongs(document.activeElement)) return;
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]') && !belongs(document.activeElement) && document.activeElement !== origin.current) return;
       const active = document.activeElement as HTMLElement | null;
       const current = (belongs(active) ? active?.closest('[role="menu"]') : root.current) as HTMLElement | null;
       if (!current) return;

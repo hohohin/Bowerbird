@@ -14,6 +14,8 @@ test("managed requests contain only the existing Cloud text and card tool contra
     { role: "user", content: "create a section" },
   ], tools: [{ type: "function", function: { name: "create_canvas_cards" } }] };
   assert.deepEqual(cloudMessages(request), [{ role: "user", content: "create a section" }]);
+  const long = "长文本🙂".repeat(100000);
+  assert.equal(cloudMessages({ ...request, messages: [{ role: "user", content: long }] })[0].content, long);
   assert.throws(() => cloudMessages({ ...request, model: "arbitrary" }), /MODEL/);
   assert.throws(() => cloudMessages({ ...request, tools: [{ type: "function", function: { name: "shell" } }] }), /TOOL/);
   assert.throws(() => cloudMessages({ ...request, messages: [{ role: "user", content: [{ type: "image_url" }] }] }), /MESSAGE/);

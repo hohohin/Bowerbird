@@ -35,8 +35,8 @@ fn content(value: &Value, kind: &Value) -> AppResult<()> {
 }
 fn validate(value: &Value) -> AppResult<()> {
     fields(value, &["format", "schemaVersion", "id", "revision", "name", "description", "plan", "inputs", "parameters", "outputs", "layout"])?;
-    if value.get("layout").is_some() && !matches!(value["schemaVersion"].as_i64(), Some(3 | 4 | 5)) { return Err(invalid()); }
-    if value.to_string().len() > 32_000_000 || value["format"] != "bowerbird-workflow-template" || !matches!(value["schemaVersion"].as_i64(), Some(1 | 2 | 3 | 4 | 5))
+    if value.get("layout").is_some() && !matches!(value["schemaVersion"].as_i64(), Some(3 | 4 | 5 | 6)) { return Err(invalid()); }
+    if value.to_string().len() > 32_000_000 || value["format"] != "bowerbird-workflow-template" || !matches!(value["schemaVersion"].as_i64(), Some(1 | 2 | 3 | 4 | 5 | 6))
         || !text(&value["id"], 80) || !text(&value["name"], 120) || value["revision"].as_i64().is_none_or(|n| !(0..9_007_199_254_740_991).contains(&n))
         || value["description"].as_str().is_none_or(|s| s.encode_utf16().count() > 2000) { return Err(invalid()); }
     let plan = &value["plan"]; fields(plan, &["summary", "nodes", "edges"])?;
@@ -46,11 +46,17 @@ fn validate(value: &Value) -> AppResult<()> {
     if nodes.len() < 2 || nodes.len() > 24 || edges.len() > 64 { return Err(invalid()); }
     let mut ids = std::collections::HashSet::new();
     let v4 = value["schemaVersion"].as_i64().is_some_and(|version| version >= 4);
-    let v5 = value["schemaVersion"] == 5;
+    let v5 = value["schemaVersion"].as_i64().is_some_and(|version| version >= 5);
     for node in nodes {
         let mut node_fields = vec!["id", "kind", "action", "skill", "prompt", "ratio", "overwriteDescribe"];
         if v4 { node_fields.extend(["loopMode", "loopCount", "loopStartItem", "agentTransport"]); }
+        if value["schemaVersion"] == 6 { node_fields.extend(["chatProvider", "chatCodexOptions"]); }
         fields(node, &node_fields)?;
+        if node.get("chatProvider").is_some_and(|provider| node["kind"] != "agent" || !matches!(provider.as_str(), Some("codex-local" | "dsh-local" | "dsh-cloud" | "deepseek-cloud"))) { return Err(invalid()); }
+        if let Some(options) = node.get("chatCodexOptions") {
+            fields(options, &["model", "reasoningEffort"])?;
+            if node["chatProvider"] != "codex-local" || options.as_object().unwrap().values().any(|value| !text(value, 200) || value.as_str().unwrap().contains(['\r','\n','\0'])) { return Err(invalid()); }
+        }
         if node.get("loopMode").is_some_and(|mode| node["kind"] != "loop" || !matches!(mode.as_str(), Some("images" | "rows" | "count")))
             || (node.get("loopCount").is_some() || node["loopMode"] == "count") && (node["kind"] != "loop" || node["loopMode"] != "count" || node["loopCount"].as_u64().is_none_or(|count| !(1..=100).contains(&count)))
             || node.get("loopStartItem").is_some_and(|item| node["kind"] != "loop" || item.as_u64().is_none_or(|n| !(1..=100).contains(&n)))
@@ -254,6 +260,16 @@ mod tests {
     use super::*;
     use serde_json::json;
     fn template() -> Value { json!({"format":"bowerbird-workflow-template","schemaVersion":1,"id":"template","revision":0,"name":"海报","description":"","inputs":[],"parameters":[],"outputs":[{"id":"out","node":"draw","port":"image","label":"成品"}],"plan":{"summary":"海报","nodes":[{"id":"start","kind":"trigger"},{"id":"draw","kind":"generation","prompt":"猫"}],"edges":[{"from":"start","output":"signal","to":"draw","input":"signal"}]}}) }
+    #[test]
+    fn shared_agent_template_keeps_model_settings_but_never_conversation_identity() {
+        let mut doc = template(); doc["schemaVersion"] = json!(6);
+        doc["plan"]["nodes"][1] = json!({"id":"draw","kind":"agent","prompt":"创作","chatProvider":"codex-local","chatCodexOptions":{"model":"fixture","reasoningEffort":"high"}});
+        validate(&doc).unwrap();
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        assert_eq!(db.workflow_template_save(doc.clone(), 0).unwrap()["plan"]["nodes"][1]["chatCodexOptions"], doc["plan"]["nodes"][1]["chatCodexOptions"]);
+        for key in ["chatConversationId", "chatInput", "chatTurnId"] { let mut bad = doc.clone(); bad["plan"]["nodes"][1][key] = json!("old"); assert!(validate(&bad).is_err()); }
+        doc["plan"]["nodes"][1]["chatProvider"] = json!("dsh-cloud"); assert!(validate(&doc).is_err());
+    }
     #[test]
     fn portable_storage_rejects_private_fields_and_stale_revisions() {
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();

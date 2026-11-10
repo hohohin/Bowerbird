@@ -1048,7 +1048,7 @@ async function actionCheckpointCommit(admin: SupabaseClient, body: Record<string
   const { data, error } = await admin.storage.from(BUCKET).download(fields.objectKey);
   if (error || !data) throw new ApiError("invalid_request", "checkpoint 对象不存在", false, 409);
   const bytes = new Uint8Array(await data.arrayBuffer());
-  if (!bytes.byteLength || bytes.byteLength > 1024 * 1024 || await sha256Hex(bytes) !== fields.checkpointHash) {
+  if (!bytes.byteLength || await sha256Hex(bytes) !== fields.checkpointHash) {
     throw new ApiError("invalid_request", "checkpoint 对象校验失败", false, 409);
   }
   const progress = body.progress === undefined ? null : Number(body.progress);
@@ -1470,9 +1470,9 @@ function artifactFields(body: Record<string, unknown>): ArtifactFields {
   else if (RENDER_ARTIFACT_ROLES.has(role)) allowedMime = mime === "image/png";
   else allowedMime = ["image/png", "image/jpeg", "image/webp"].includes(mime) ||
       role === "final_result" && mime === "application/json";
-  const maxBytes = role === "html_document" ? 2 * 1024 * 1024 : mime === "application/json" ? 64 * 1024 : MAX_ARTIFACT_BYTES;
+  const maxBytes = role === "html_document" ? 2 * 1024 * 1024 : role === "diagnostic" && mime === "application/json" ? Infinity : mime === "application/json" ? 64 * 1024 : MAX_ARTIFACT_BYTES;
   if (!/^[0-9a-f]{64}$/.test(sha256) || !allowedMime ||
-      !Number.isInteger(bytes) || bytes <= 0 || bytes > maxBytes) {
+      !Number.isSafeInteger(bytes) || bytes <= 0 || bytes > maxBytes) {
     throw new ApiError("invalid_request", "artifact 元数据无效");
   }
   const suffix = mime === "application/json" ? "json" : mime === "image/jpeg" ? "jpg" : mime === "image/webp" ? "webp" : mime === "text/html" ? "html" : "png";

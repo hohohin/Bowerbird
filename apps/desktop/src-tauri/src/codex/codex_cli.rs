@@ -373,6 +373,9 @@ impl GenProvider for CodexCliProvider {
                         continue;
                     };
                     failure.observe(&v);
+                    if let Some(progress) = super::progress::GenerationProgress::codex(&v) {
+                        super::progress::send(Some(tx), progress).await;
+                    }
                     match v.get("type").and_then(|t| t.as_str()) {
                         Some("thread.started") => {
                             if let Some(id) = v.get("thread_id").and_then(|i| i.as_str()) {

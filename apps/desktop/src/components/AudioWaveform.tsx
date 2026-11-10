@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type PointerEventHandler } from "react";
 import { Pause, Play } from "lucide-react";
 import { audioPreviewKey, audioPreviewPosition, audioPreviewSnapshot, observeAudioPreviewSource, playAudioPreview,
   stopAudioPreview, stopTemporaryAudioPreview, subscribeAudioPreview } from "../lib/audioPreview";
@@ -17,6 +17,8 @@ export interface AudioWaveformProps {
   interactive?: boolean;
   className?: string;
   onDuration?: (duration: number) => void;
+  /** Canvas drag keeps pointer capture on the wave so a stationary click can still audition. */
+  onWavePointerDown?: PointerEventHandler<HTMLButtonElement>;
 }
 type Loaded = { key: string; assetId: string; path: string; data?: AudioWaveformData; error?: unknown };
 const timeLabel = (time: number) => time < 1 ? "0:00" : videoDurationLabel(time) || "0:00";
@@ -43,7 +45,7 @@ function paint(canvas: HTMLCanvasElement, data: AudioWaveformData) {
 }
 
 /** Original-file audio preview. File names and total duration belong to the parent card. */
-export function AudioWaveform({ assetId, path, name, version, expectedVersion, duration, interactive = true, className = "", onDuration }: AudioWaveformProps) {
+export function AudioWaveform({ assetId, path, name, version, expectedVersion, duration, interactive = true, className = "", onDuration, onWavePointerDown }: AudioWaveformProps) {
   const host = useRef<HTMLDivElement>(null), canvas = useRef<HTMLCanvasElement>(null), progress = useRef<HTMLSpanElement>(null);
   const hover = useRef<HTMLSpanElement>(null), position = useRef<HTMLSpanElement>(null), owner = useRef({});
   const selectedRatio = useRef(0), durationCallback = useRef(onDuration);
@@ -125,9 +127,11 @@ export function AudioWaveform({ assetId, path, name, version, expectedVersion, d
     data-wave-ready={!!data} data-playing={playing} data-interactive={interactive} aria-busy={!data && !failure}
     onPointerLeave={() => stopTemporaryAudioPreview(owner.current)}
     onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget)) stopTemporaryAudioPreview(owner.current); }}
-    onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
+    onPointerDown={event => { if (!onWavePointerDown || !(event.target as HTMLElement).closest(".audio-waveform-wave")) event.stopPropagation(); }}
+    onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
     onKeyDown={event => { event.stopPropagation(); if (event.key === "Escape") stopAudioPreview(); }}>
-    <button type="button" className="audio-waveform-wave" disabled={!interactive || !data} aria-label={`试听 ${name}`}
+    <button type="button" className="audio-waveform-wave" disabled={!interactive || (!data && !onWavePointerDown)} aria-disabled={!interactive || !data} aria-label={`试听 ${name}`}
+      onPointerDown={onWavePointerDown}
       onPointerEnter={event => { if (event.pointerType !== "touch") showPointer(pointerRatio(event.currentTarget, event.clientX)); }}
       onPointerMove={event => { if (event.pointerType !== "touch") showPointer(pointerRatio(event.currentTarget, event.clientX)); }}
       onClick={event => { const ratio = event.detail === 0 ? selectedRatio.current : pointerRatio(event.currentTarget, event.clientX); showPointer(ratio); start(selectedRatio.current, false); }}

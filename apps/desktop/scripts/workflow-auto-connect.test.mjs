@@ -103,7 +103,8 @@ test('automatic cloud Agent inputs are included once, legacy cloud references re
   const mentioned = { ...target, prompt: '@[body]', promptReferences: [{ id: 'body', type: 'text', label: '文本 1', input: target.inputs.text[0] }] };
   assert.deepEqual(JSON.parse(compileAgentPrompt(mentioned, values).source), { '引用文本 1': '正文' });
   const legacy = { ...target, inputs: { text: [{ ...documentOutputs[0].binding }] } };
-  assert.deepEqual(JSON.parse(compileAgentPrompt(legacy, {}).source), {});
+  assert.throws(() => compileAgentPrompt(legacy, {}), /没有可用文字/);
+  assert.deepEqual(JSON.parse(compileAgentPrompt(legacy, values).source), { '引用文本 1': '正文' });
 });
 
 test('video and audio match capability, never the legacy image pipe name', () => {

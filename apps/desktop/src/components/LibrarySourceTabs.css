@@ -2,7 +2,7 @@
 .library-source-navigation > .library-view-switch { width:288px; }
 .library-source-navigation .library-view-switch button:disabled { opacity:.38; cursor:default; }
 .library-tag-scope .library-view-switch { width:160px; }
-.library-tag-scope { position:absolute; right:2px; top:calc(100% - 2px); z-index:2; padding:3px; background:var(--lt-panel, var(--bb-surface)); border:1px solid var(--bb-line); box-shadow:0 8px 18px rgb(var(--bb-shadow-rgb) / 14%); }
+.library-tag-scope { position:absolute; right:calc(25% + 1px); top:calc(100% - 2px); z-index:2; padding:3px; background:var(--lt-panel, var(--bb-surface)); border:1px solid var(--bb-line); box-shadow:0 8px 18px rgb(var(--bb-shadow-rgb) / 14%); }
 .library-tag-scope::before { content:""; position:absolute; right:-1px; top:-4px; height:5px; width:calc(288px / 4 - 4px); background:var(--lt-panel, var(--bb-surface)); border-inline:1px solid var(--bb-line); }
 .library-source-navigation > .library-view-switch button[aria-expanded="true"] { background:var(--lt-panel, var(--bb-surface)); box-shadow:inset 1px 0 var(--bb-line), inset -1px 0 var(--bb-line), inset 0 1px var(--bb-line); }
 .library-tag-scope .library-view-switch { background:transparent; box-shadow:none; }

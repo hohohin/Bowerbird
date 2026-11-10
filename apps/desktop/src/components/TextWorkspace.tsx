@@ -28,7 +28,7 @@ interface Props {
 
 interface DestinationOption { id: string; label: string; title: string; depth: number; available: boolean; destination: TextDocumentDestination }
 function collectionOptions(folders: FolderConnection[]): DestinationOption[] {
-  return connectedRows(folders).map(({ item, depth }) => ({ id: item.id, label: item.name, title: item.available ? item.path : "此集合未连接", available: item.available, depth, destination: { kind: "collection", folderId: item.id } }));
+  return connectedRows(folders).map(({ item, depth }) => ({ id: item.id, label: item.name, title: item.available ? item.path : "此文件夹未连接", available: item.available, depth, destination: { kind: "collection", folderId: item.id } }));
 }
 function projectOptions(projects: Project[], projectId?: string): DestinationOption[] {
   return projects.filter(item => !item.provisional && !item.archived_at).sort((a, b) => Number(b.id === projectId) - Number(a.id === projectId))
@@ -49,10 +49,10 @@ function useDestinations(kind: "collection" | "project", projectId?: string) {
 }
 function SaveDestinations({ kind, projectId, busy, onSelect }: { kind: "collection" | "project"; projectId?: string; busy: boolean; onSelect(destination: TextDocumentDestination, label: string): void }) {
   const { options, loading, error } = useDestinations(kind, projectId);
-  return <div className="text-workspace-destinations" role="group" aria-label={kind === "collection" ? "选择集合" : "选择项目"}>
+  return <div className="text-workspace-destinations" role="group" aria-label={kind === "collection" ? "选择文件夹" : "选择项目"}>
     {loading && <p role="status">正在读取…</p>}{error && <p role="alert">{error}</p>}
     {options.map(option => <button key={option.id} disabled={busy || !option.available} title={option.title} style={{ paddingLeft: 10 + option.depth * 14 }} onClick={() => onSelect(option.destination, option.label)}><Folder size={14}/>{option.label}</button>)}
-    {!loading && !error && !options.length && <p>{kind === "collection" ? "请先在素材库建立集合连接。" : "请先创建项目。"}</p>}
+    {!loading && !error && !options.length && <p>{kind === "collection" ? "请先在素材库建立文件夹连接。" : "请先创建项目。"}</p>}
   </div>;
 }
 
@@ -96,7 +96,7 @@ function finishActivity(activity: WorkspaceActivity) {
 }
 function savedMessage(current: TextWorkspaceDocument, snapshot: TextWorkspaceDocument, destination: TextDocumentDestination, label: string) {
   const changed = current.markdown !== snapshot.markdown || current.title !== snapshot.title;
-  return `已保存到${destination.kind === "collection" ? "集合" : "项目"}「${label}」${changed ? "，新的更改仍保留在编辑器。" : ""}`;
+  return `已保存到${destination.kind === "collection" ? "文件夹" : "项目"}「${label}」${changed ? "，新的更改仍保留在编辑器。" : ""}`;
 }
 async function saveWorkspace(activity: WorkspaceActivity, destination: TextDocumentDestination, label: string) {
   if (!beginActivity(activity)) return;
@@ -138,7 +138,7 @@ function WorkspaceActions({ projectId, busy, menu, setMenu, save, add }: {
   setMenu(kind: "collection" | "project" | null): void;
   save(destination: TextDocumentDestination, label: string): void; add(): void;
 }) {
-  return <div className="text-workspace-actions">{([['collection', '保存到集合'], ['project', '保存到项目']] as const).map(([kind, label]) => <div className="text-workspace-action" key={kind}><button disabled={busy} aria-expanded={menu === kind} onClick={() => setMenu(menu === kind ? null : kind)}>{label}<ChevronDown size={12}/></button>{menu === kind && <SaveDestinations kind={kind} projectId={projectId} busy={busy} onSelect={save}/>}</div>)}<button className="text-workspace-primary" disabled={busy} onClick={add}>添加到生成对话框<ArrowUp size={14}/></button></div>;
+  return <div className="text-workspace-actions">{([['collection', '保存到文件夹'], ['project', '保存到项目']] as const).map(([kind, label]) => <div className="text-workspace-action" key={kind}><button disabled={busy} aria-expanded={menu === kind} onClick={() => setMenu(menu === kind ? null : kind)}>{label}<ChevronDown size={12}/></button>{menu === kind && <SaveDestinations kind={kind} projectId={projectId} busy={busy} onSelect={save}/>}</div>)}<button className="text-workspace-primary" disabled={busy} onClick={add}>添加到生成对话框<ArrowUp size={14}/></button></div>;
 }
 
 function useToolbarHeight(panel: { current: HTMLDivElement | null }, ready: boolean) {

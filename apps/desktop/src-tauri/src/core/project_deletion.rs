@@ -2,7 +2,7 @@
 //! Files are renamed before SQL commit, with a durable manifest for crash recovery.
 use super::{
     paths::LibraryPaths,
-    projects::{ensure_project_has_no_unfinished_work, ProjectDeleteResult},
+    projects::ProjectDeleteResult,
 };
 use crate::{
     db::Database,
@@ -411,20 +411,13 @@ impl Database {
         self.delete_project_managed(paths,project,None,None)
     }
 
-    pub fn delete_project_managed(&self, paths: &LibraryPaths, project: &str, confirmation: Option<&str>, discard_pending_results: Option<&[String]>) -> AppResult<ProjectDeleteResult> {
+    pub fn delete_project_managed(&self, paths: &LibraryPaths, project: &str, confirmation: Option<&str>, _discard_pending_results: Option<&[String]>) -> AppResult<ProjectDeleteResult> {
         let _records=super::creative_files::RECORD_GATE.lock().unwrap();
         self.recover_project_deletions(paths)?;
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(expected) = discard_pending_results {
-            let actual = super::projects::pending_agent_results(&tx, project)?;
-            let expected: std::collections::BTreeSet<_> = expected.iter().map(String::as_str).collect();
-            let actual: std::collections::BTreeSet<_> = actual.iter().map(|result| result.run_id.as_str()).collect();
-            if expected != actual {
-                return Err(AppError::Other("待入库任务已变化，请重新打开删除确认".into()));
-            }
-        }
-        ensure_project_has_no_unfinished_work(&tx, project, discard_pending_results.is_some())?;
+        // Confirming project deletion includes all unfinished work, even if its state
+        // changed after the dialog opened. The legacy result list is no longer a gate.
         let mut plan = if confirmation.is_some() {
             plan(&tx, paths, project)?
         } else {
@@ -463,9 +456,7 @@ impl Database {
         journal.sync_all()?;
         drop(journal);
         let execution = (|| -> AppResult<()> {
-            if discard_pending_results.is_some() {
-                super::projects::discard_project_pending_results(&tx, project)?;
-            }
+            super::projects::discard_project_pending_results(&tx, project)?;
             for (i, file) in manifest.files.iter().enumerate() {
                 safe_file(paths, file)?;
                 let dest = staged(file, &manifest.operation, i);
@@ -531,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_pending_result_abandonment_unblocks_deletion_and_preserves_audit() {
+    fn confirmed_deletion_abandons_pending_results_and_preserves_audit() {
         let (db, paths) = fixture();
         let file = asset(&db, &paths, "already-ingested");
         {
@@ -543,12 +534,11 @@ mod tests {
         let impact = db.project_delete_impact("p").unwrap();
         assert_eq!(impact.running_agent_count, 1);
         assert_eq!(impact.pending_agent_results[0].run_id, "legacy");
-        assert!(db.delete_project_keep_managed(&paths, "p").is_err());
         // A stale physical confirmation must roll back the abandonment too.
         assert!(db.delete_project_managed(&paths, "p", Some("stale"), Some(&["legacy".into()])).is_err());
-        assert!(db.delete_project_managed(&paths, "p", None, Some(&["unreviewed".into()])).unwrap_err().to_string().contains("待入库任务已变化"));
         assert_eq!(db.project_delete_impact("p").unwrap().running_agent_count, 1);
-        let result = db.delete_project_managed(&paths, "p", None, Some(&["legacy".into()])).unwrap();
+        // An old dialog's stale list is not a new veto; confirmation deletes the project.
+        let result = db.delete_project_managed(&paths, "p", None, Some(&["unreviewed".into()])).unwrap();
         assert_eq!(result.deleted_assets, 0);
         assert!(file.is_file());
         assert!(db.get_asset("already-ingested").unwrap().is_some());
@@ -561,13 +551,37 @@ mod tests {
     }
 
     #[test]
-    fn result_abandonment_never_bypasses_active_or_unknown_agent_states() {
-        let (db, paths) = fixture();
+    fn confirmed_deletion_allows_active_and_unknown_agent_states() {
         for status in ["running", "awaiting_local_task", "awaiting_result_feedback", "cancel_requested", "future_state"] {
+            let (db, paths) = fixture();
             db.conn.lock().unwrap().execute("INSERT OR REPLACE INTO cloud_agent_runs(run_id,conversation_id,skill_id,status,intent_prompt,reference_asset_ids,project_id,snapshot_json,created_at,updated_at) VALUES('active','conversation','skill',?1,'test','[]','p','{}',1,1)", [status]).unwrap();
-            assert!(db.delete_project_managed(&paths, "p", None, Some(&[])).is_err(), "{status}");
-            assert!(db.get_project("p").unwrap().is_some());
+            db.delete_project_keep_managed(&paths, "p").unwrap();
+            assert!(db.get_project("p").unwrap().is_none());
+            let audit: (String, Option<String>, String) = db.conn.lock().unwrap().query_row("SELECT status,project_id,json_extract(snapshot_json,'$._bowerbirdResultAbandonedV1.reason') FROM cloud_agent_runs WHERE run_id='active'", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+            assert_eq!(audit, (status.into(), None, "project_deleted".into()));
         }
+    }
+
+    #[test]
+    fn confirmed_deletion_cleans_running_local_chat_and_parallel_workflow() {
+        let (db, paths) = fixture();
+        let file = asset(&db, &paths, "input");
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute_batch("INSERT INTO creative_threads(id,project_id,title,origin,created_at,updated_at) VALUES('t','p','chat','direct',1,1);
+                INSERT INTO canvas_nodes(id,project_id,thread_id,kind,payload_json,x,y,width,height,created_at,updated_at) VALUES('n','p','t','note','{}',0,0,100,100,1,1);
+                INSERT INTO local_chat_conversations(id,project_id,thread_id,node_id,title,status,created_at,updated_at) VALUES('chat','p','t','n','chat','running',1,1);
+                INSERT INTO local_agent_runs(id,skill_id,target_asset_id,status,phase,checkpoint_json,project_id,thread_id,created_at,updated_at) VALUES('local','skill','input','running','tool','{}','p','t',1,1);
+                INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p',1,'{\"schema_version\":1,\"runs\":[{\"status\":\"running\"},{\"status\":\"waiting\"}]}');").unwrap();
+        }
+        db.delete_project_keep_managed(&paths, "p").unwrap();
+        assert!(file.is_file());
+        assert!(db.get_project("p").unwrap().is_none());
+        let conn = db.conn.lock().unwrap();
+        for table in ["canvas_nodes", "creative_threads", "local_chat_conversations", "canvas_workflows"] {
+            assert_eq!(conn.query_row(&format!("SELECT COUNT(*) FROM {table} WHERE project_id='p'"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{table}");
+        }
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM local_agent_runs WHERE id='local' AND project_id IS NULL AND thread_id IS NULL AND status='running'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
     }
 
     #[test]
@@ -875,19 +889,17 @@ mod tests {
         );
     }
     #[test]
-    fn running_generation_and_unknown_agent_block_even_with_fresh_token() {
+    fn running_generation_and_unknown_agent_allow_confirmed_physical_deletion() {
         let (db, paths) = fixture();
         let file = asset(&db, &paths, "a");
         db.conn.lock().unwrap().execute("INSERT INTO task_queue(id,kind,payload,status,created_at,project_id) VALUES('q','generation','{}','running',1,'p')",[]).unwrap();
-        assert!(delete(&db, &paths).is_err());
-        db.conn
-            .lock()
-            .unwrap()
-            .execute("UPDATE task_queue SET status='done'", [])
-            .unwrap();
         db.conn.lock().unwrap().execute("INSERT INTO cloud_agent_runs(run_id,conversation_id,skill_id,status,intent_prompt,reference_asset_ids,project_id,snapshot_json,created_at,updated_at) VALUES('r','r','test','unknown','test','[]','p','{}',1,1)",[]).unwrap();
-        assert!(delete(&db, &paths).is_err());
-        assert!(file.exists());
+        assert_eq!(delete(&db, &paths).unwrap().deleted_assets, 1);
+        assert!(!file.exists());
+        assert!(db.get_project("p").unwrap().is_none());
+        let conn = db.conn.lock().unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM task_queue WHERE id='q' AND project_id IS NULL AND status='running'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM cloud_agent_runs WHERE run_id='r' AND project_id IS NULL AND status='unknown'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
     }
     #[test]
     fn inputs_drafts_collections_and_local_audit_are_protected() {

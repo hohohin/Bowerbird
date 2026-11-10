@@ -64,6 +64,8 @@ pub struct ChatSendInput {
     pub codex_options: Option<ChatCodexOptions>,
     pub project_id: String,
     pub conversation_id: Option<String>,
+    /// Attach the shared conversation to an existing workflow Agent card.
+    pub agent_node_id: Option<String>,
     pub request_id: String,
     pub text: String,
     #[serde(default)]
@@ -112,6 +114,8 @@ pub struct ChatConversation {
     pub summary: ChatSummary,
     pub messages: Vec<ChatMessage>,
     pub actions: Vec<super::local_chat_cards::ChatCardAction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submitted_turn_id: Option<String>,
 }
 
 pub struct StartedChat {
@@ -177,7 +181,65 @@ fn read(conn: &Connection, id: &str) -> AppResult<Option<ChatConversation>> {
         summary,
         messages,
         actions,
+        submitted_turn_id: None,
     }))
+}
+
+/// A chat and a workflow Agent share one canvas identity and one conversation.
+/// Keep the existing note row as the history foreign key; the workflow card is its projection.
+fn project_agent_card(conn: &Connection, chat: &ChatConversation, input: &ChatSendInput) -> AppResult<()> {
+    let previous: Option<(i64, String)> = conn.query_row(
+        "SELECT revision,document_json FROM canvas_workflows WHERE project_id=?1",
+        [&input.project_id], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional()?;
+    let (revision, mut document) = match previous {
+        Some((revision, text)) => (revision, serde_json::from_str::<serde_json::Value>(&text)?),
+        None => (0, serde_json::json!({"schema_version":1,"nodes":[],"run":null})),
+    };
+    let nodes = document["nodes"].as_array_mut().ok_or_else(|| error("工作流数据无效"))?;
+    let id = &chat.summary.node_id;
+    if !nodes.iter().any(|node| node["id"] == *id) {
+        let (x, y, width, height): (f64, f64, f64, f64) = conn.query_row(
+            "SELECT x,y,width,height FROM canvas_nodes WHERE id=?1 AND project_id=?2", params![id,input.project_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        nodes.push(serde_json::json!({"id":id,"kind":"agent","x":x,"y":y,"layoutSize":{"width":width,"height":height},
+            "action":"describe","skill":"image-edit","prompt":input.text,"ratio":null,
+            "provider":input.card_defaults.as_ref().map(|d| d.provider.as_str()).unwrap_or("codex"),
+            "inputs":{"image":input.reference_asset_ids.iter().map(|id|serde_json::json!({"assetId":id})).collect::<Vec<_>>()},
+            "outputs":{},"outputPorts":[],"trigger":false}));
+    }
+    let node = nodes.iter_mut().find(|node| node["id"] == *id).unwrap();
+    if node["kind"] != "agent" || node["chatConversationId"].as_str().is_some_and(|value| value != chat.summary.id) {
+        return Err(error("Agent 卡片与对话身份不匹配"));
+    }
+    let before = node.clone();
+    node["chatConversationId"] = serde_json::json!(chat.summary.id);
+    node["chatProvider"] = serde_json::json!(chat.summary.provider);
+    if let Some(options) = &chat.summary.codex_options { node["chatCodexOptions"] = serde_json::to_value(options)?; }
+    if *node != before {
+        conn.execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES(?1,?2,?3) ON CONFLICT(project_id) DO UPDATE SET revision=excluded.revision,document_json=excluded.document_json",
+            params![input.project_id,revision+1,document.to_string()])?;
+    }
+    Ok(())
+}
+
+fn project_agent_result(conn: &Connection, id: &str, turn: &str) -> AppResult<()> {
+    let latest: String = conn.query_row("SELECT id FROM local_chat_turns WHERE conversation_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 1", [id], |row| row.get(0))?;
+    if latest != turn { return Ok(()); }
+    let chat = read(conn, id)?.ok_or_else(|| error("对话记录不存在"))?;
+    let previous: Option<(i64, String)> = conn.query_row("SELECT revision,document_json FROM canvas_workflows WHERE project_id=?1", [&chat.summary.project_id], |row| Ok((row.get(0)?, row.get(1)?))).optional()?;
+    let Some((revision, source)) = previous else { return Ok(()); };
+    let mut document: serde_json::Value = serde_json::from_str(&source)?;
+    let Some(node) = document["nodes"].as_array_mut().and_then(|nodes| nodes.iter_mut().find(|node| node["id"] == chat.summary.node_id && node["chatConversationId"] == id)) else { return Ok(()); };
+    let text = chat.messages.iter().filter(|m| m.turn_id == turn && m.role == "assistant" && m.status == "done").map(|m|m.text.as_str()).collect::<Vec<_>>().join("\n\n");
+    let assets = chat.messages.iter().filter(|m| m.turn_id == turn && m.role == "tool" && m.status == "done").flat_map(|m|m.reference_asset_ids.clone()).collect::<Vec<_>>();
+    let mut outputs = serde_json::json!({});
+    if !text.trim().is_empty() { outputs["text"] = serde_json::json!({"type":"text","text":text}); }
+    if !assets.is_empty() { outputs["image"] = serde_json::json!({"type":"image","assetIds":assets}); }
+    node["outputs"] = outputs;
+    conn.execute("UPDATE canvas_workflows SET revision=?2,document_json=?3 WHERE project_id=?1", params![chat.summary.project_id,revision+1,document.to_string()])?;
+    Ok(())
 }
 
 fn request_fingerprint(input: &ChatSendInput, provider: ChatProvider) -> AppResult<String> {
@@ -189,6 +251,9 @@ fn request_fingerprint(input: &ChatSendInput, provider: ChatProvider) -> AppResu
     }
     if let Some(options) = &input.codex_options {
         fingerprint["codexOptions"] = serde_json::to_value(options)?;
+    }
+    if let Some(id) = &input.agent_node_id {
+        fingerprint["agentNodeId"] = serde_json::json!(id);
     }
     // Preserve pre-provider Codex request identities across the migration.
     if provider != ChatProvider::CodexLocal {
@@ -252,6 +317,17 @@ fn replay(conn: &Connection, input: &ChatSendInput) -> AppResult<Option<StartedC
 }
 
 impl Database {
+    pub fn local_chat_by_request(&self, request_id: &str) -> AppResult<Option<ChatConversation>> {
+        let conn = self.conn.lock().unwrap();
+        let identity: Option<(String, String)> = conn.query_row(
+            "SELECT conversation_id,id FROM local_chat_turns WHERE request_id=?1",
+            [request_id], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?;
+        let Some((id, turn)) = identity else { return Ok(None); };
+        let mut chat = read(&conn, &id)?.ok_or_else(|| error("对话记录不存在"))?;
+        chat.submitted_turn_id = Some(turn);
+        Ok(Some(chat))
+    }
     pub fn local_chat_provider(&self, input: &ChatSendInput) -> AppResult<ChatProvider> {
         provider_for(&self.conn.lock().unwrap(), input)
     }
@@ -281,7 +357,6 @@ impl Database {
             || input.request_id.trim().is_empty()
             || input.request_id.len() > 200
             || input.text.trim().is_empty()
-            || input.text.len() > 100_000
             || input.reference_asset_ids.len() > 8
         {
             return Err(error("请填写对话内容，每次最多引用 8 张图片"));
@@ -319,6 +394,9 @@ impl Database {
                 if current.summary.project_id != input.project_id {
                     return Err(error("该对话不属于当前项目"));
                 }
+                if input.agent_node_id.as_ref().is_some_and(|node| node != &current.summary.node_id) {
+                    return Err(error("对话与 Agent 卡片不匹配"));
+                }
                 if matches!(current.summary.status.as_str(), "running" | "stopping") {
                     return Err(error("此对话仍在回复，请等待或停止当前回复"));
                 }
@@ -327,7 +405,14 @@ impl Database {
             None => {
                 let id = ulid::Ulid::new().to_string();
                 let thread_id = format!("chat-thread-{id}");
-                let node_id = format!("chat-node-{id}");
+                let node_id = input.agent_node_id.clone().unwrap_or_else(|| format!("chat-node-{id}"));
+                if input.agent_node_id.is_some() {
+                    let document: Option<String> = tx.query_row("SELECT document_json FROM canvas_workflows WHERE project_id=?1", [&input.project_id], |row| row.get(0)).optional()?;
+                    let document: serde_json::Value = serde_json::from_str(&document.ok_or_else(|| error("Agent 卡片已不存在"))?)?;
+                    let node = document["nodes"].as_array().and_then(|nodes| nodes.iter().find(|node| node["id"] == node_id && node["kind"] == "agent"))
+                        .ok_or_else(|| error("Agent 卡片已不存在"))?;
+                    if node["chatConversationId"].as_str().is_some() { return Err(error("Agent 已有关联对话，请重新读取卡片")); }
+                }
                 let title: String = input.text.trim().chars().take(40).collect();
                 let placement = input.placement.clone().unwrap_or(ChatPlacement {
                     x: 0.0,
@@ -369,7 +454,9 @@ impl Database {
             "UPDATE project_canvases SET updated_at=?2 WHERE project_id=?1",
             params![input.project_id, now / 1000],
         )?;
-        let conversation = read(&tx, &id)?.unwrap();
+        let mut conversation = read(&tx, &id)?.unwrap();
+        project_agent_card(&tx, &conversation, input)?;
+        conversation.submitted_turn_id = Some(turn_id.clone());
         tx.commit()?;
         Ok(StartedChat {
             conversation,
@@ -424,6 +511,7 @@ impl Database {
         let now = Utc::now().timestamp_millis();
         tx.execute("UPDATE local_chat_messages SET text=?3,status=?4,updated_at=?5 WHERE conversation_id=?1 AND turn_id=?2 AND role='assistant'",params![id,turn,text,status,now])?;
         tx.execute("UPDATE local_chat_conversations SET status=?2,error=NULL,revision=revision+1,updated_at=?3 WHERE id=?1",params![id,if complete {"idle"} else {"interrupted"},now])?;
+        if complete { project_agent_result(&tx, id, turn)?; }
         tx.commit()?;
         Ok(())
     }
@@ -474,6 +562,7 @@ impl Database {
             tx.execute("UPDATE local_chat_messages SET status=?3,updated_at=?4 WHERE conversation_id=?1 AND turn_id=?2 AND status='running'",params![id,turn,status,now])?;
             tx.execute("UPDATE local_chat_conversations SET status=?2,error=?3,updated_at=?4,revision=revision+1 WHERE id=?1",params![id,if status=="done" { "idle" } else { status },detail,now])?;
             tx.execute("UPDATE creative_threads SET updated_at=?2 WHERE id=(SELECT thread_id FROM local_chat_conversations WHERE id=?1)",params![id,now/1000])?;
+            if status == "done" { project_agent_result(&tx, id, turn)?; }
         }
         tx.commit()?;
         Ok(())

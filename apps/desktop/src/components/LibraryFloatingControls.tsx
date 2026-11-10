@@ -16,17 +16,39 @@ export function LibraryFloatingControls({ children, controlsRef }: { children: R
     let wasCompact = false;
     const fit = () => {
       const width = row.scrollWidth;
-      const next = host.getBoundingClientRect().left + width > heading.getBoundingClientRect().right;
+      const projected = heading.matches(":has(.library-source-navigation)");
+      const navStyle = getComputedStyle(navigation), headingStyle = getComputedStyle(heading);
+      const expandedNavigation = parseFloat(navStyle.getPropertyValue('--lp-navigation-width')) || 0;
+      const types = row.querySelector<HTMLElement>('[aria-label="素材类型"]');
+      const expandedTypes = parseFloat(headingStyle.getPropertyValue('--lp-media-width')) || 0;
+      const expandedWidth = width + (types ? Math.max(0, expandedTypes - types.offsetWidth) : 0);
+      const expandedAssembly = Math.max(navigation.getBoundingClientRect().width, expandedNavigation) + expandedWidth + 12;
+      const next = projected
+        ? expandedAssembly > heading.clientWidth
+          || (heading.dataset.hoverAnchored === 'true' && navigation.getBoundingClientRect().right + expandedWidth + 12 > heading.getBoundingClientRect().right)
+        : host.getBoundingClientRect().left + width > heading.getBoundingClientRect().right;
       if (!wasCompact && next && row.contains(document.activeElement)) setOpen(true);
       if (!next) setOpen(false);
       wasCompact = next; setCompact(next);
     };
     const observer = new ResizeObserver(fit);
     observer.observe(heading); observer.observe(row); observer.observe(navigation);
+    const position = new MutationObserver(fit);
+    position.observe(heading, { attributes: true, attributeFilter: ['style', 'data-hover-anchored'] });
     fit();
-    return () => observer.disconnect();
+    return () => { observer.disconnect(); position.disconnect(); };
   }, [controls]);
   useLayoutEffect(() => { if (controls.current) controls.current.inert = compact && !open; }, [compact, open, controls]);
+  useLayoutEffect(() => {
+    const row = controls.current!, host = root.current!, heading = host.closest<HTMLElement>('.file-view-heading')!;
+    if (!compact || !open) { row.style.translate = ''; return; }
+    const align = () => {
+      const bounds = heading.getBoundingClientRect(), right = host.getBoundingClientRect().right;
+      row.style.translate = Math.max(bounds.left - (right - row.offsetWidth), Math.min(0, bounds.right - right)) + 'px';
+    };
+    const observer = new ResizeObserver(align); observer.observe(heading); observer.observe(row); align();
+    return () => { observer.disconnect(); row.style.translate = ''; };
+  }, [compact, open, controls]);
   useEffect(() => {
     if (!compact || !open) return;
     const dismiss = (event: PointerEvent) => { if (!root.current?.contains(event.target as Node)) setOpen(false); };

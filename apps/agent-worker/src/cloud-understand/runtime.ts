@@ -1,6 +1,8 @@
 import { BRAND_OBSERVATION_TASK, loadBrandPrompt } from "../prompts/brand-visual.ts";
 import { replicationMessages, validateReplicationResult, validateReplicationVideo, REPLICATION_RESULT_ERRORS, type ReplicationPayload } from "./replication.ts";
 import { validateReplication } from "../../../cloud/supabase/functions/_shared/replication.ts";
+import type { ReplicationSpeechInput } from "../../../cloud/supabase/functions/_shared/replication-speech.ts";
+import { recognizeSpeech } from "./speech.ts";
 import { shortRewrite } from "../../../cloud/supabase/functions/_shared/bcoin-text.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { IdlePollBackoff } from "../idle-poll-backoff.ts";
@@ -29,6 +31,7 @@ export interface UnderstandWorkerConfig {
   arkVisionModel: string;
   arkReplicationVideoModel?: string;
   arkReplicationTextModel?: string;
+  doubaoSpeechApiKey?: string;
   mock: boolean;
   pollIntervalMs: number;
   heartbeatIntervalMs: number;
@@ -46,7 +49,8 @@ interface ClaimedJob {
 
 interface UnderstandInput {
   schema_version: number;
-  operation: "caption" | "autoname" | "classify" | ReplicationPayload["operation"];
+  operation: "caption" | "autoname" | "classify" | "speech-transcription" | ReplicationPayload["operation"];
+  audio?: ReplicationSpeechInput;
   video?: ReplicationPayload["video"];
   rewrite?: ReplicationPayload["rewrite"];
   /** null = 纯文本调用（生成图维度数据命名），图片不上云；caption/classify 必带一张图。 */
@@ -106,6 +110,7 @@ export function configFromEnv(env: Record<string, string | undefined>): Understa
     arkVisionModel: required(env, "ARK_VISION_MODEL"),
     arkReplicationVideoModel: env.ARK_REPLICATION_VIDEO_MODEL?.trim(),
     arkReplicationTextModel: env.ARK_REPLICATION_TEXT_MODEL?.trim(),
+    doubaoSpeechApiKey: env.DOUBAO_SPEECH_API_KEY?.trim(),
     mock: (env.BOWERBIRD_CLOUD_MOCK ?? "false") === "true",
     pollIntervalMs: positiveInt(env.UNDERSTAND_POLL_INTERVAL_MS, 2_000, "UNDERSTAND_POLL_INTERVAL_MS"),
     heartbeatIntervalMs: positiveInt(env.UNDERSTAND_HEARTBEAT_INTERVAL_MS, 30_000, "UNDERSTAND_HEARTBEAT_INTERVAL_MS"),
@@ -167,6 +172,7 @@ class ArkVisionClient {
 
   async understand(input: UnderstandInput): Promise<string> {
     if (this.config.mock) return mockUnderstand(input);
+    if (input.operation === "speech-transcription") return recognizeSpeech(input.audio!, this.config.doubaoSpeechApiKey, this.fetch);
     // RequestBurstTooFast（provider_burst）带抖动退避自动重试：瞬时限流重发即可能成功，
     // 请求被方舟拒绝、未产生费用，重试不构成重复计费。其余错误（含其他 429）立即抛出。
     for (let attempt = 0; ; attempt++) {
@@ -207,7 +213,8 @@ class ArkVisionClient {
       body: JSON.stringify({
         model,
         max_tokens: replication && !shortRewrite(input) ? 6000 : 2000,
-        stream: false, thinking: { type: input.operation === "video-analysis" ? "enabled" : "disabled" },
+        stream: false, thinking: { type: input.operation === "video-analysis" && input.video?.settings?.thinking !== "disabled" ? "enabled" : "disabled" },
+        ...(input.operation === "video-analysis" && ["low", "medium", "high"].includes(input.video?.settings?.thinking ?? "") ? { reasoning_effort: input.video!.settings!.thinking } : {}),
         ...(input.operation === "video-analysis" ? { response_format: { type: "text" } } : {}),
         messages: replication ? replicationMessages(input as ReplicationPayload) : [{
           role: "user",
@@ -263,6 +270,7 @@ async function mockUnderstand(input: UnderstandInput): Promise<string> {
   }
   if (scenario === "failure") throw new KnownProviderError("provider_failed", "上游理解失败");
   if (scenario === "timeout") await new Promise<never>(() => {});
+  if (input.operation === "speech-transcription") return JSON.stringify({ text: "", utterances: [], timingSource: "doubao-speech", mock: true });
   if (input.operation === "text-rewrite") return "模拟改写：围绕目标产品安排开场、展示和收束镜头。";
   if (input.operation === "video-analysis") return validateReplicationResult(input as ReplicationPayload, JSON.stringify({ overview: "模拟参考分析", shots: [{ start: 0, end: input.video!.duration, subject: "模拟主体", action: "展示", camera: "固定", composition: "居中", lighting: "柔光", transition: "切" }], uncertainties: ["模拟数据"] }), "stop");
   return MOCK_UNDERSTAND_TEXT;
@@ -270,7 +278,7 @@ async function mockUnderstand(input: UnderstandInput): Promise<string> {
 
 function parseInput(value: unknown): UnderstandInput {
   if (!isRecord(value) || value.schema_version !== 1 ||
-      !["caption", "autoname", "classify", "video-analysis", "text-rewrite"].includes(String(value.operation))) {
+      !["caption", "autoname", "classify", "video-analysis", "text-rewrite", "speech-transcription"].includes(String(value.operation))) {
     throw new Error("invalid_understand_input");
   }
   // image=null 合法（纯文本命名）；带图时校验结构与编码。
@@ -278,7 +286,7 @@ function parseInput(value: unknown): UnderstandInput {
     (isRecord(value.image) && typeof value.image.base64 === "string" && !!value.image.base64 &&
       ["image/jpeg", "image/png", "image/webp"].includes(String(value.image.mime)));
   if (!imageOk) throw new Error("invalid_understand_input");
-  if (["video-analysis", "text-rewrite"].includes(String(value.operation))) validateReplication(value);
+  if (["video-analysis", "text-rewrite", "speech-transcription"].includes(String(value.operation))) validateReplication(value);
   return value as unknown as UnderstandInput;
 }
 
@@ -320,7 +328,8 @@ async function executeClaim(
     const input = await fetchInput(fetchImpl, claimed.inputUrl, inputManifestHash);
     if (input.operation === "video-analysis" && !config.mock) await validateReplicationVideo(input.video!);
     // Resolve once before submission; retries use the same prompt even during maintenance.
-    if (!["video-analysis", "text-rewrite"].includes(input.operation)) input.instruction = visionPrompt(input);
+    if (input.operation === "speech-transcription" && !config.mock && !config.doubaoSpeechApiKey) throw new KnownProviderError("not_configured", "豆包语音服务尚未配置");
+    if (!["video-analysis", "text-rewrite", "speech-transcription"].includes(input.operation)) input.instruction = visionPrompt(input);
     await control.post({ action: "submitted", jobId, leaseId });
     submitted = true;
     const resultText = await ark.understand(input);
@@ -337,7 +346,7 @@ async function executeClaim(
     const safeErrorCode = known ? error.safeCode : safeErrorKind(error);
     const safeMessage = known
       ? error.safeMessage
-      : submitted ? "请求已提交方舟，但 Worker 与上游或控制面连接中断，结果状态暂时无法确认" : "理解任务启动失败";
+      : submitted ? "请求已提交上游服务，但连接中断，结果状态暂时无法确认" : "理解任务启动失败";
     try {
       await control.post({ action, jobId, leaseId, safeErrorCode, safeMessage });
     } catch (settlementError) {

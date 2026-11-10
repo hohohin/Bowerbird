@@ -1,0 +1,4 @@
+.h3-optimize-action { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; padding: 3px 6px; border: 0; border-radius: 0; background: transparent; color: var(--composer-muted, var(--bb-muted)); font-size: 12px; white-space: nowrap; }
+.h3-optimize-action:hover:not(:disabled) { color: var(--composer-ink, var(--bb-ink)); background: rgb(var(--bb-ink-rgb) / .06); }
+.h3-optimize-action:disabled { opacity: .45; cursor: not-allowed; }
+.h3-optimize-action:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 2px; }

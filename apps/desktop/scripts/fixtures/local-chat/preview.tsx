@@ -72,4 +72,5 @@ createRoot(document.getElementById("root")!).render(<React.StrictMode><Fixture /
 
 import "../../../src/components/TacticalDialogs.css";
 import "../../../src/components/CanvasSecondaryTactical.css";
+import "../../../src/components/IndustrialCanvas.css";
 import "../../../src/components/MediaTactical.css";

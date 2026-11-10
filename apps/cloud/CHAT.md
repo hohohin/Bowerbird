@@ -1,5 +1,11 @@
 # DeepSeek Cloud 对话（已部署，测试 0 Bcoin）
 
+## 2026-11-09 已部署：统一 Agent 卡片文本链路
+
+新 Agent 卡片复用桌面对话服务；聊天 Edge／Worker／官网网关取消应用文字字节拦截，0084 删除 result_json 400000 字节约束并让 generation-temp 继承平台全局容量。128 条消息、工具闭集、模型参数、媒体校验、0 Bcoin 测试价和幂等／租约／TTL 保持现有契约。以下旧接口说明中的 300000 字节上限在线上已移除。
+
+经用户明确确认，0084、chat-proxy／chat-worker v3、VPS 聊天 Worker 和官网网关已部署，2026-11-09 19:57:30（北京时间）核验通过。真实小对话、原请求取回、唯一零额结算通过；26,400,065 字节输入和 2,280,000 字节回复经公网完整往返，大文本采用隔离合成结果，未额外调用模型。RLS、计费、其他云函数与原用户任务状态保持；桌面源码已验证但未发布新安装包。具体范围、现役镜像和证据见[实施记录](../../project_logs/2026-11-09-agent-chat-unification.md)。
+
 桌面保有 SQLite 对话历史、工具执行和画板事务。Cloud 仅完成一次受控 DeepSeek 文本请求；不启动 DSH、Agent Run、媒体生成或读取本地图片。固定提示词与 `create_canvas_cards` 定义位于 `supabase/functions/_shared/chat-instructions.txt`、`chat-card-tool.json`，Rust 与 Worker 共用。Worker 使用已有 `DeepSeekBackend.chat`，关闭 thinking、最多 8192 输出 tokens，不重试上游请求。
 
 ## 2026-11-07 上线记录

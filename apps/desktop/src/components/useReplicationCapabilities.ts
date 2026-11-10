@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../store";
-export interface ReplicationCapability { operation: "video-analysis" | "text-rewrite"; available: boolean; credits: number | null }
+export interface ReplicationCapability { operation: "video-analysis" | "text-rewrite" | "speech-transcription"; available: boolean; credits: number | null }
 export function useReplicationCapabilities(projectId: string) {
   const [state, setState] = useState<{ services: ReplicationCapability[]; error: string; loading: boolean }>({ services: [], error: "", loading: true });
   const [revision, refresh] = useState(0);

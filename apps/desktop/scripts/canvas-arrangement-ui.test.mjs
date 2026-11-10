@@ -41,6 +41,7 @@ try {
   await node("old").click({ button: "right", position: { x: 35, y: 35 } });
   assert.equal(await page.getByRole("menuitem", { name: "整理", exact: true }).count(), 0, "single image hides arrange");
   await page.keyboard.press("Escape");
+  await node("old").click({ modifiers: ["Control"], position: { x: 35, y: 35 } });
   await node("prompt").click({ modifiers: ["Control"], position: { x: 35, y: 35 } });
   await arrange("old");
   const selected = await page.locator("[data-canvas-node-id].is-selected").evaluateAll(elements => elements.map(e => e.dataset.canvasNodeId).sort());
@@ -64,6 +65,7 @@ try {
   await node("old").waitFor();
   assert.deepEqual((await page.evaluate(() => window.snapshot())).nodes, after.nodes);
   // A single result has no arrange action and does not pull in its upstream nodes.
+  await node("agent-output").click({ modifiers: ["Control"], position: { x: 35, y: 35 } });
   await node("agent-output").click({ button: "right", position: { x: 35, y: 35 } });
   assert.equal(await page.getByRole("menuitem", { name: "整理", exact: true }).count(), 0);
   assert.deepEqual(await page.locator("[data-canvas-node-id].is-selected").evaluateAll(elements => elements.map(e => e.dataset.canvasNodeId)), ["agent-output"]);

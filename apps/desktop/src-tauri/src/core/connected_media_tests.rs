@@ -53,6 +53,108 @@ fn connected_index_reads_headers_without_creating_media_caches() {
 }
 
 #[test]
+fn prepared_fingerprint_keeps_identity_and_rejects_a_later_file_version() {
+    let f = Fixture::new();
+    let prepared = Database::prepare_connected_file(&f.path).unwrap();
+    let hash = prepared.hash.clone();
+    let asset = f.db.index_prepared_connected_file(&f.paths, &f.path, None, prepared).unwrap();
+    let stored: String = f.db.conn.lock().unwrap().query_row(
+        "SELECT fingerprint FROM external_assets WHERE asset_id=?1", [&asset.id], |row| row.get(0)).unwrap();
+    assert_eq!(stored, hash);
+    let prepared = Database::prepare_connected_file(&f.path).unwrap();
+    f.changed();
+    assert!(f.db.index_prepared_connected_file(&f.paths, &f.path, None, prepared).is_err());
+    let unchanged = f.db.get_asset(&asset.id).unwrap().unwrap();
+    assert_eq!((unchanged.width, unchanged.height), (Some(10), Some(20)));
+    assert_eq!(f.index().id, asset.id);
+}
+
+#[test]
+fn prepared_fingerprint_rejects_same_size_change_within_one_second() {
+    let f = Fixture::new();
+    let source = f.path.with_extension("bmp");
+    let first_time = std::time::UNIX_EPOCH + std::time::Duration::new(1_700_000_000, 100_000_000);
+    image::RgbImage::from_pixel(20, 30, image::Rgb([250, 0, 0])).save(&source).unwrap();
+    fs::File::options().write(true).open(&source).unwrap().set_modified(first_time).unwrap();
+    let prepared = Database::prepare_connected_file(&source).unwrap();
+    let size = fs::metadata(&source).unwrap().len();
+    image::RgbImage::from_pixel(20, 30, image::Rgb([0, 0, 250])).save(&source).unwrap();
+    fs::File::options().write(true).open(&source).unwrap().set_modified(first_time + std::time::Duration::from_millis(100)).unwrap();
+    assert_eq!(size, fs::metadata(&source).unwrap().len());
+    assert!(f.db.index_prepared_connected_file(&f.paths, &source, None, prepared).is_err());
+    assert_eq!(f.db.count_assets(None).unwrap(), 0);
+}
+
+#[test]
+fn render_returns_usable_thumbnail_before_metadata_and_reopen_completes_cached_work() {
+    let f = Fixture::new();
+    let asset = f.index();
+    let preview = preview_with_index(&f.paths, Some(&f.db), &f.path).unwrap();
+    assert!(image::open(&preview).is_ok());
+    assert!(f.db.get_asset(&asset.id).unwrap().unwrap().thumb_path.is_none());
+    assert!(f.db.connected_preview_pending(&f.path, &preview).unwrap());
+    let rendered_at = fs::metadata(&preview).unwrap().modified().unwrap();
+    // A new connection sees the persisted pending state after an interrupted session.
+    let reopened = Database::open(&f.paths.db).unwrap();
+    assert_eq!(cached_preview(&f.paths, &f.path).unwrap(), Some(preview.clone()));
+    let (completed, version) = reopened.complete_connected_preview_versioned(&f.paths, &f.path, &preview).unwrap().unwrap();
+    assert_eq!(version, fingerprint(&f.path).unwrap());
+    assert_eq!(completed.id, asset.id);
+    assert_eq!(completed.phash, crate::media::phash::compute(&f.path).unwrap());
+    assert_eq!(completed.colors, Some(serde_json::to_string(&crate::media::color::extract(&f.path, 5).unwrap()).unwrap()));
+    assert!(!reopened.connected_preview_pending(&f.path, &preview).unwrap());
+    assert!(reopened.complete_connected_preview(&f.paths, &f.path, &preview).unwrap().is_none());
+    assert_eq!(fs::metadata(&preview).unwrap().modified().unwrap(), rendered_at);
+}
+
+#[test]
+fn failed_metadata_stays_pending_and_warm_thumbnail_can_retry() {
+    let f = Fixture::new();
+    let asset = f.index();
+    let preview = preview_with_index(&f.paths, Some(&f.db), &f.path).unwrap();
+    f.db.conn.lock().unwrap().execute("UPDATE external_assets SET fingerprint='other-version' WHERE asset_id=?1", [&asset.id]).unwrap();
+    assert!(f.db.complete_connected_preview(&f.paths, &f.path, &preview).is_err());
+    assert!(f.db.connected_preview_pending(&f.path, &preview).unwrap());
+    assert_eq!(cached_preview(&f.paths, &f.path).unwrap(), Some(preview.clone()));
+    f.db.conn.lock().unwrap().execute("UPDATE external_assets SET fingerprint=?2 WHERE asset_id=?1", params![asset.id, fingerprint(&f.path).unwrap()]).unwrap();
+    assert!(f.db.complete_connected_preview(&f.paths, &f.path, &preview).unwrap().is_some());
+    assert!(!f.db.connected_preview_pending(&f.path, &preview).unwrap());
+}
+
+#[test]
+fn an_existing_thumbnail_with_missing_analysis_is_completed_on_a_warm_visit() {
+    let f = Fixture::new();
+    let asset = f.index();
+    let completed = f.db.ensure_connected_preview(&f.paths, &asset.id).unwrap().unwrap();
+    let preview = completed.thumb_path.unwrap();
+    f.db.conn.lock().unwrap().execute("UPDATE assets SET phash=NULL,colors=NULL WHERE id=?1", [&asset.id]).unwrap();
+    assert!(f.db.connected_preview_pending(&f.path, &preview).unwrap());
+    let refreshed = f.db.complete_connected_preview(&f.paths, &f.path, &preview).unwrap().unwrap();
+    assert!(refreshed.colors.is_some() && refreshed.phash.is_some());
+}
+
+#[test]
+#[ignore = "isolated image benchmark; run explicitly with --ignored --nocapture"]
+fn benchmark_connected_preview_stages() {
+    let f = Fixture::new();
+    image::RgbImage::from_fn(2048, 1536, |x, y| image::Rgb([(x % 251) as u8, (y % 241) as u8, ((x + y) % 239) as u8])).save(&f.path).unwrap();
+    let start = std::time::Instant::now();
+    let asset = f.index();
+    let index_ms = start.elapsed().as_millis();
+    let start = std::time::Instant::now();
+    let preview = preview_with_index(&f.paths, Some(&f.db), &f.path).unwrap();
+    let render_ms = start.elapsed().as_millis();
+    assert!(f.db.get_asset(&asset.id).unwrap().unwrap().thumb_path.is_none());
+    let start = std::time::Instant::now();
+    f.db.complete_connected_preview(&f.paths, &f.path, &preview).unwrap().unwrap();
+    let completion_ms = start.elapsed().as_millis();
+    let start = std::time::Instant::now();
+    for _ in 0..100 { assert_eq!(cached_preview(&f.paths, &f.path).unwrap().as_deref(), Some(preview.as_str())); }
+    let warm_100_ms = start.elapsed().as_millis();
+    println!("preview_benchmark {}", serde_json::json!({"width":2048,"height":1536,"index_ms":index_ms,"render_ms":render_ms,"completion_ms":completion_ms,"warm_cache_100_ms":warm_100_ms}));
+}
+
+#[test]
 fn connected_preview_is_demand_generated_and_unchanged_index_keeps_it() {
     let f = Fixture::new();
     let initial = f.index();

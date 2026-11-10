@@ -93,9 +93,14 @@ function parseNode(node: MarkdownNode, source: string): DocumentValue {
 export function parseMarkdown(source: string): DocumentValue {
   const stored = readDocumentState(source);
   if (stored.value) return stored.value;
-  const ast = markdownToAstProcessor(codec, stored.source, parseOptions);
+  const ast = parseMarkdownAst(stored.source);
   const blocks = ast.children.flatMap(node => parseNode(node, stored.source));
   return blocks.length ? blocks : createEmptyDocument();
+}
+
+/** Shared syntax tree for read-only consumers that must not expose preserved raw blocks. */
+export function parseMarkdownAst(source: string) {
+  return markdownToAstProcessor(codec, source, parseOptions);
 }
 
 function textOf(block: DocumentBlock): string {

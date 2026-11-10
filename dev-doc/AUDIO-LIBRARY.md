@@ -12,6 +12,8 @@
 
 ## 组件与播放归属
 
+- 2026-11-10 视频音轨导出增加独立画板音频卡片，替代下方 11 月 3 日“不创建独立画板音频卡片”的范围限制。主卡片及展开素材组使用 `AudioWaveform`，原音频播放归属／可见加载／缓存继续复用；音轨为独立 WAV，原视频不变。菜单可选择画板或素材库；画板创建失败后重试只补持久化，重开恢复同一节点。见 [导出记录](../project_logs/2026-11-10-video-export.md)。
+
 - `FileMediaCard` 在图片预览 hook 之前分派到 `AudioFileMediaCard`。音频卡片、详情及旧集合详情共用 `AudioWaveform`，名称和总时长由外层排版。
 - 全应用 `audioPreview` 持有一个 `HTMLAudioElement`，第一次点击才建立，`preload=none`。原件用 Tauri asset URL / Range 读取；波形数据与原件播放分离。
 - 播放身份为 `assetId + path + sourceVersion`，普通界面 revision 或时长回填不能误停持续播放。同源再次点击只 seek，不重设 src。
@@ -21,6 +23,12 @@
 - 2026-11-03 源码增量：项目创作／详情编辑开启时，全部／标签及真实集合中的音频卡片双击或 Enter 调用已有激活入口，将音频原件加入创作描述；普通素材库仍打开音频详情。波形和播放按钮维持原行为。视频自动模式识别为多参考；Seedance 只接受 MP3／WAV，其他格式明确拒绝，不静默丢弃。音频不进入图片生成，也不创建独立画板音频卡片。协议与验证见 [视频音频记录](../project_logs/2026-11-03-video-audio.md)。
 
 ## 格式与测试入口
+
+### 画布音频拖动修复（2026-11-10）
+
+独立音频卡片原先被铺满主体的 `AudioWaveform` 拦截 `pointerdown`，无法从波形区域起拖。现通过可选 `onWavePointerDown` 复用 `CanvasWorkspace.beginNodeDrag`；捕获指针留在波形按钮，未超过拖动阈值时仍保留原定位试听。画布在拖动、取消或修饰键选择后拦截波形 click，并将焦点交回卡片，避免误播及吞掉撤销快捷键；播放／重试按钮保留独立操作。波形未加载时仍能起拖，空格／中键可沿现有画布平移流程冒泡。素材库和详情未传此入口，原交互保持。
+
+`node scripts/canvas-audio-drag-ui.test.mjs` 用正式画布及合成 WAV 先复现位置不变，修复后覆盖加载前／后拖动、单击定位试听、持续播放期间拖动、取消回退及随后播放、多选拖动、撤销、空格平移、保存坐标重开。既有 `audio-waveform-ui.test.mjs` 与 TypeScript 检查通过。截图和日志位于 `apps/desktop/.tmp/canvas-audio-drag/`、`.tmp/canvas-audio-drag-*.log`；仅源码与隔离浏览器验证，未操作真实资料库或发布安装包。
 
 首版扩展名：WAV、MP3、FLAC、M4A、OGG。已覆盖 PCM WAV、MP3、FLAC、AAC-LC M4A、Vorbis OGG 合成样本；容器后缀不承诺任意内嵌编码。未增加转码副本、在线转写、音频生成或声音理解服务。
 

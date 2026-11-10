@@ -196,7 +196,9 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
     const total = drag.original.reduce((sum, weight) => sum + weight, 0);
     const pair = drag.original[drag.boundary - 1] + drag.original[drag.boundary];
     const delta = ((drag.axis === "column" ? event.clientX : event.clientY) - drag.start) / drag.base * total;
-    const minimum = total * MIN_GRID_WEIGHT_SHARE;
+    // Dense grids can have a pair smaller than the whole-table minimum. Keep
+    // both neighbours positive while leaving room to move their boundary.
+    const minimum = Math.min(total * MIN_GRID_WEIGHT_SHARE, pair / 4);
     const first = Math.min(Math.max(drag.original[drag.boundary - 1] + delta, minimum), pair - minimum);
     const weights = [...drag.original];
     weights[drag.boundary - 1] = first;
@@ -240,7 +242,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
         setRemoved(null);
       }}><Undo2 size={16} /></button></>}
     </div>}
-    <div className="canvas-text-handle" title={bubble ? "拖动气泡便签" : "拖动内容卡片"}><GripHorizontal size={15} />{bubble ? <MessageCircle size={14} aria-hidden="true" /> : <Table2 size={14} aria-hidden="true" />}<span className="canvas-tactical-note-title">{bubble ? "气泡便签" : "内容卡片"}</span></div>
+    <div className="canvas-text-handle" title={bubble ? "拖动气泡便签" : "拖动内容卡片"}><GripHorizontal size={15} />{bubble ? <MessageCircle size={14} aria-hidden="true" /> : <Table2 size={14} aria-hidden="true" />}<span className="canvas-tactical-note-title">{value.title || (bubble ? "气泡便签" : "内容卡片")}</span></div>
     {onConnectCell && <CanvasConnectionHandle side="output" data-workflow-cell="*auto"
       onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); onConnectCell("*auto", event.clientX, event.clientY); }}
       onClick={event => { if (event.detail === 0) { const rect = event.currentTarget.getBoundingClientRect(); onConnectCell("*auto", rect.left + rect.width / 2, rect.top + rect.height / 2, true); } }} />}

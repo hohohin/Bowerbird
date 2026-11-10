@@ -18,7 +18,6 @@ const HTML_SKILL = "bowerbird-html-layout-render";
 const UNIFIED_SKILL = "bowerbird-unified-agent";
 const ALLOWED_SKILLS = new Set(["smart-refinement", CONTROLLED_SKILL, HTML_SKILL, UNIFIED_SKILL]);
 const MAX_INPUTS = 8;
-const MAX_GOAL_CHARS = 4000;
 const SIGNED_URL_SECONDS = 300;
 const ACTIVE_AGENT_STATUSES = [
   "uploading", "queued", "leased", "running", "awaiting_clarification",
@@ -194,7 +193,7 @@ async function parseControlledManifest(
   }
   const manifest = value as Record<string, unknown>;
   if (manifest.schemaVersion !== 1 || typeof manifest.intentPrompt !== "string" ||
-      !manifest.intentPrompt.trim() || manifest.intentPrompt.length > MAX_GOAL_CHARS || !Array.isArray(manifest.references)) {
+      !manifest.intentPrompt.trim() || !Array.isArray(manifest.references)) {
     throw new ApiError("invalid_request", "受控编辑输入清单无效");
   }
   validatePreferenceCapsule(manifest.preferenceCapsule);
@@ -230,7 +229,7 @@ function parseHtmlLayoutManifest(value: unknown, expectedCount: number): { refer
   const viewport = manifest.viewport as Record<string, unknown> | undefined;
   const capture = manifest.capture as Record<string, unknown> | undefined;
   if (manifest.schemaVersion !== 1 || typeof manifest.layoutPrompt !== "string" ||
-      !manifest.layoutPrompt.trim() || manifest.layoutPrompt.length > MAX_GOAL_CHARS ||
+      !manifest.layoutPrompt.trim() ||
       !Array.isArray(manifest.references) || !viewport || !capture ||
       !Number.isInteger(viewport.widthCssPx) || Number(viewport.widthCssPx) < 320 || Number(viewport.widthCssPx) > 2400 ||
       !Number.isInteger(viewport.heightCssPx) || Number(viewport.heightCssPx) < 240 || Number(viewport.heightCssPx) > 4000 ||
@@ -280,10 +279,12 @@ async function parseUnifiedAgentManifest(
   }
   const manifest = value as Record<string, unknown>;
   const htmlOutput = manifest.htmlOutput;
+  const allowedKeys = new Set(["schemaVersion", "goal", "textRewrite", "references", "ratio", "htmlOutput", "visualProfileCapsule"]);
+  if (Object.keys(manifest).some(key => !allowedKeys.has(key))) throw new ApiError("invalid_request", "统一 Agent 输入清单字段无效");
   if (manifest.textRewrite !== undefined) {
     const rewrite = manifest.textRewrite as Record<string, unknown>;
     if (!rewrite || typeof rewrite !== "object" || Array.isArray(rewrite) || Object.keys(rewrite).some(key => key !== "source") ||
-        typeof rewrite.source !== "string" || !rewrite.source.trim() || rewrite.source.length > 16000 ||
+        typeof rewrite.source !== "string" || !rewrite.source.trim() ||
         expectedCount !== 0 || manifest.visualProfileCapsule !== undefined) throw new ApiError("invalid_request", "文本改写原文无效，或混入了图片输入");
   }
   if (!htmlOutput || typeof htmlOutput !== "object" || Array.isArray(htmlOutput)) {
@@ -356,7 +357,7 @@ async function actionCreate(admin: Parameters<typeof billingAccountId>[0], user:
   }
   const agentRuntime = requestedRuntime as AgentRuntime;
   const goal = typeof body.goal === "string" ? body.goal.trim() : "";
-  if (!goal || goal.length > MAX_GOAL_CHARS) throw new ApiError("invalid_request", "目标文本长度需在 1–4000 字之间");
+  if (!goal) throw new ApiError("invalid_request", "目标文本不能为空");
   const inputCount = Number(body.inputCount);
   const minInputs = [CONTROLLED_SKILL, HTML_SKILL, UNIFIED_SKILL].includes(skillId) ? 0 : 1;
   if (!Number.isInteger(inputCount) || inputCount < minInputs || inputCount > MAX_INPUTS) {
@@ -670,7 +671,7 @@ async function actionEnqueue(admin: Parameters<typeof billingAccountId>[0], user
     const downloaded = await admin.storage.from(BUCKET).download(row.request_object_key);
     if (downloaded.error || !downloaded.data) throw new ApiError("invalid_request", "输入清单尚未上传");
     const requestBytes = new Uint8Array(await downloaded.data.arrayBuffer());
-    if (!requestBytes.byteLength || requestBytes.byteLength > 64 * 1024 ||
+    if (!requestBytes.byteLength ||
         await sha256Hex(requestBytes) !== row.input_manifest_hash) {
       throw new ApiError("invalid_request", "输入清单校验失败");
     }

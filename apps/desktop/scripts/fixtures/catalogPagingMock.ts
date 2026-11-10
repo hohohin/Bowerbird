@@ -9,7 +9,9 @@ export function installCatalogPagingMock(w: any) {
       let result=(assets ?? []).filter((a: any)=> {
         known.set(a.id,a);
         const video=/\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(`file.${a.ext ?? ""}`)||/\.(mp4|mov|webm|m4v|avi|mkv)$/i.test(a.store_path??"");
-        return video===(filter.media==="videos") && (!filter.query||a.name.toLocaleLowerCase().includes(filter.query.toLocaleLowerCase()))
+        const path = a.ext ? `file.${a.ext}` : a.store_path ?? '';
+        const kind = /\.(md|markdown|txt|docx|xlsx|csv)$/i.test(path) ? 'texts' : /\.(mp3|wav|m4a|flac|aac|ogg|aiff|opus)$/i.test(path) ? 'audios' : video ? 'videos' : 'images';
+        return (filter.media === 'all' || kind === (filter.media ?? 'images')) && (!filter.query||a.name.toLocaleLowerCase().includes(filter.query.toLocaleLowerCase()))
           && (filter.generated==null||(a.generation_session_id!=null)===filter.generated);
       });
       if(filter.color) {

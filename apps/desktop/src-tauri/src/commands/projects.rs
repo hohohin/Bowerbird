@@ -265,9 +265,8 @@ pub async fn delete_project(
     let db = db.inner().clone();
     let id_for_delete = project_id.clone();
     // Do not abandon results while a native ingest is still writing files/projections.
-    let _ingest = if discard_pending_results.is_some() {
-        Some(super::cloud_agent::RESULT_INGEST_GATE.try_write().map_err(|_| AppError::Other("Agent 结果正在入库，请稍后重试删除".into()))?)
-    } else { None };
+    // Serialize with an in-flight result write instead of rejecting the user's deletion.
+    let _ingest = super::cloud_agent::RESULT_INGEST_GATE.write().await;
     let result = tokio::task::spawn_blocking(move || {
         let _ingest = _ingest;
         db.delete_project_managed(&paths, &id_for_delete,

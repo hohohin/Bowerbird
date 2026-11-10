@@ -9,13 +9,21 @@ use crate::{
     media::color,
 };
 use rusqlite::{params_from_iter, types::Value};
+use super::generation_gallery::WORKFLOW_GALLERY_CTE;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
 // Use the durable conversation mapping, with legacy single-session fallback.
 // Prefixes prevent a non-generated asset ID from colliding with a session ID.
-const GENERATION_GROUP: &str = "CASE WHEN a.generation_session_id IS NULL THEN 'asset:'||a.id ELSE 'generation:'||COALESCE((SELECT g.conversation_id FROM generation_conversations g WHERE g.session_id=a.generation_session_id),a.generation_session_id) END";
-const GALLERY_COUNT: &str = "COUNT(CASE WHEN a.generation_session_id IS NULL THEN 1 END)+COUNT(DISTINCT CASE WHEN a.generation_session_id IS NOT NULL THEN COALESCE((SELECT g.conversation_id FROM generation_conversations g WHERE g.session_id=a.generation_session_id),a.generation_session_id) END)";
+pub(super) const GENERATED: &str = "(a.generation_session_id IS NOT NULL OR COALESCE(a.source='comfy-h3',0) OR a.id IN (SELECT asset_id FROM workflow_asset_groups) OR a.id IN (SELECT asset_id FROM other_generated_groups))";
+pub(super) const GENERATION_GROUP: &str = "COALESCE((SELECT w.group_key FROM workflow_asset_groups w WHERE w.asset_id=a.id),CASE WHEN a.generation_session_id IS NOT NULL THEN 'generation:'||COALESCE((SELECT g.conversation_id FROM generation_conversations g WHERE g.session_id=a.generation_session_id),a.generation_session_id) END,(SELECT g.group_key FROM other_generated_groups g WHERE g.asset_id=a.id),'asset:'||a.id)";
+pub(super) fn generation_display_group(individual: &str) -> String {
+    format!("CASE WHEN {GENERATION_GROUP} IN (SELECT group_key FROM generation_gallery_separations) THEN {individual} ELSE {GENERATION_GROUP} END")
+}
+fn gallery_count() -> String {
+    let group = generation_display_group("'asset:'||a.id");
+    format!("COUNT(CASE WHEN NOT {GENERATED} THEN 1 END)+COUNT(DISTINCT CASE WHEN {GENERATED} THEN {group} END)")
+}
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -61,18 +69,20 @@ pub struct CatalogColorBatch {
 
 impl CatalogFilter {
     fn gallery_sql(&self, columns: &str) -> AppResult<(String, Vec<Value>)> {
+        let group = generation_display_group("'asset:'||a.id");
         let (condition, values) = self.sql()?;
         let mut bindings = values.clone();
         bindings.extend(values);
         // Keep the main scan on the existing date index. Ordinary library items
         // do not participate in window sorting or materialize full asset rows.
-        Ok((format!("WITH generated AS (SELECT a.id,ROW_NUMBER() OVER (PARTITION BY {GENERATION_GROUP} ORDER BY a.created_at DESC,a.id DESC) AS generation_rank FROM assets a INDEXED BY idx_assets_generation_session_id WHERE {condition} AND a.generation_session_id IS NOT NULL) SELECT {columns} FROM assets a INDEXED BY idx_assets_catalog_order WHERE {condition} AND (a.generation_session_id IS NULL OR a.id IN (SELECT id FROM generated WHERE generation_rank=1)) ORDER BY a.created_at DESC,a.id LIMIT ? OFFSET ?"), bindings))
+        Ok((format!("WITH {WORKFLOW_GALLERY_CTE}, generated AS (SELECT a.id,ROW_NUMBER() OVER (PARTITION BY {group} ORDER BY a.created_at DESC,a.id DESC) AS generation_rank FROM assets a INDEXED BY idx_assets_generation_session_id WHERE {condition} AND {GENERATED}) SELECT {columns} FROM assets a INDEXED BY idx_assets_catalog_order WHERE {condition} AND (NOT {GENERATED} OR a.id IN (SELECT id FROM generated WHERE generation_rank=1)) ORDER BY a.created_at DESC,a.id LIMIT ? OFFSET ?"), bindings))
     }
 
-    fn sql(&self) -> AppResult<(String, Vec<Value>)> {
+    pub(super) fn sql(&self) -> AppResult<(String, Vec<Value>)> {
         let mut clauses = vec![
-            catalog_visibility(self.project_id.is_some()),
+            if self.kind == "connections" { "1".into() } else { catalog_visibility(self.project_id.is_some()) },
             match self.media.as_str() {
+                "all" => format!("({IMAGE} OR {VIDEO} OR {AUDIO} OR {TEXT})"),
                 "images" => IMAGE.to_string(),
                 "videos" => VIDEO.to_string(),
                 "audios" => AUDIO.to_string(),
@@ -82,7 +92,7 @@ impl CatalogFilter {
         ];
         let mut values = Vec::new();
         if let Some(project) = &self.project_id {
-            clauses.push("a.library_hidden=0 AND EXISTS(SELECT 1 FROM project_assets pa WHERE pa.asset_id=a.id AND pa.project_id=?)".into());
+            clauses.push(format!("{}EXISTS(SELECT 1 FROM project_assets pa WHERE pa.asset_id=a.id AND pa.project_id=?)", if self.kind == "connections" { "" } else { "a.library_hidden=0 AND " }));
             values.push(Value::Text(project.clone()));
         }
         if let Some(query) = self.query.as_deref().filter(|q| !q.is_empty()) {
@@ -96,14 +106,7 @@ impl CatalogFilter {
             )));
         }
         if let Some(generated) = self.generated {
-            clauses.push(
-                if generated {
-                    "a.generation_session_id IS NOT NULL"
-                } else {
-                    "a.generation_session_id IS NULL"
-                }
-                .into(),
-            );
+            clauses.push(if generated { GENERATED.into() } else { format!("NOT {GENERATED}") });
         }
         if let Some(color) = &self.color {
             clauses.push(
@@ -113,6 +116,9 @@ impl CatalogFilter {
         }
         match self.kind.as_str() {
             "all" => (),
+            "connections" => {
+                clauses.push("EXISTS(SELECT 1 FROM connected_entries ce WHERE ce.asset_id=a.id)".into());
+            },
             "tags" => {
                 if let Some(id) = &self.id {
                     if id == "__catalog_untagged__" {
@@ -154,7 +160,7 @@ impl Database {
         values.push(Value::Integer(limit));
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(&format!(
-            "WITH page AS (SELECT a.id,a.name,a.store_path,a.thumb_path FROM assets a WHERE {condition} AND a.id>? ORDER BY a.id LIMIT ?) \
+            "WITH {WORKFLOW_GALLERY_CTE}, page AS (SELECT a.id,a.name,a.store_path,a.thumb_path FROM assets a WHERE {condition} AND a.id>? ORDER BY a.id LIMIT ?) \
              SELECT a.id,a.name,a.store_path,a.thumb_path,t.tag_id FROM page a LEFT JOIN asset_tags t ON t.asset_id=a.id ORDER BY a.id,t.tag_id"
         ))?;
         let mut assets: Vec<CatalogGraphAsset> = Vec::new();
@@ -196,7 +202,7 @@ impl Database {
         values.push(Value::Text(after.unwrap_or("").to_string()));
         let rows = {
             let conn = self.conn.lock().unwrap();
-            let mut stmt = conn.prepare(&format!("SELECT a.id,a.thumb_path,a.colors FROM assets a WHERE {condition} AND a.id>? AND (a.colors IS NULL OR a.colors<>'[]') AND NOT EXISTS(SELECT 1 FROM asset_colors c WHERE c.asset_id=a.id) ORDER BY a.id LIMIT 60"))?;
+            let mut stmt = conn.prepare(&format!("WITH {WORKFLOW_GALLERY_CTE} SELECT a.id,a.thumb_path,a.colors FROM assets a WHERE {condition} AND a.id>? AND (a.colors IS NULL OR a.colors<>'[]') AND NOT EXISTS(SELECT 1 FROM asset_colors c WHERE c.asset_id=a.id) ORDER BY a.id LIMIT 60"))?;
             let rows = stmt
                 .query_map(params_from_iter(values), |r| {
                     Ok((
@@ -258,21 +264,22 @@ impl Database {
         context_project: Option<&str>,
     ) -> AppResult<CatalogOverview> {
         let collections = self.list_collections()?;
+        let gallery_count = gallery_count();
         let (condition, values) = filter.sql()?;
         let conn = self.conn.lock().unwrap();
         let total = conn.query_row(
-            &format!("SELECT {GALLERY_COUNT} FROM assets a WHERE {condition}"),
+            &format!("WITH {WORKFLOW_GALLERY_CTE} SELECT {gallery_count} FROM assets a WHERE {condition}"),
             params_from_iter(&values),
             |r| r.get(0),
         )?;
         let untagged = if filter.media == "images" {
-            conn.query_row(&format!("SELECT {GALLERY_COUNT} FROM assets a WHERE {condition} AND NOT EXISTS(SELECT 1 FROM asset_tags t WHERE t.asset_id=a.id)"), params_from_iter(&values), |r| r.get(0))?
+            conn.query_row(&format!("WITH {WORKFLOW_GALLERY_CTE} SELECT {gallery_count} FROM assets a WHERE {condition} AND NOT EXISTS(SELECT 1 FROM asset_tags t WHERE t.asset_id=a.id)"), params_from_iter(&values), |r| r.get(0))?
         } else {
             0
         };
         // Aggregate once, rather than scanning all memberships once per tag.
         let mut counts = BTreeMap::new();
-        let mut stmt = conn.prepare(&format!("SELECT t.tag_id,{GALLERY_COUNT} FROM assets a JOIN asset_tags t ON t.asset_id=a.id WHERE {condition} GROUP BY t.tag_id"))?;
+        let mut stmt = conn.prepare(&format!("WITH {WORKFLOW_GALLERY_CTE} SELECT t.tag_id,{gallery_count} FROM assets a JOIN asset_tags t ON t.asset_id=a.id WHERE {condition} GROUP BY t.tag_id"))?;
         for row in stmt.query_map(params_from_iter(&values), |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
         })? {
@@ -353,12 +360,13 @@ impl Database {
     /// search, media and project visibility), not the unfiltered global group.
     pub fn catalog_generation_groups(&self, filter: &CatalogFilter, asset_ids: &[String]) -> AppResult<HashMap<String, Vec<Asset>>> {
         if asset_ids.is_empty() { return Ok(HashMap::new()); }
+        let group = generation_display_group("'asset:'||a.id");
         let (condition, mut values) = filter.sql()?;
         let ids = &asset_ids[..asset_ids.len().min(240)];
         values.extend(ids.iter().cloned().map(Value::Text));
         let placeholders = vec!["?"; ids.len()].join(",");
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(&format!("SELECT a.*,{GENERATION_GROUP} AS group_key FROM assets a WHERE {condition} AND a.generation_session_id IS NOT NULL AND {GENERATION_GROUP} IN (SELECT {GENERATION_GROUP} FROM assets a WHERE a.id IN ({placeholders})) ORDER BY a.created_at,a.id"))?;
+        let mut stmt = conn.prepare(&format!("WITH {WORKFLOW_GALLERY_CTE} SELECT a.*,{group} AS group_key FROM assets a WHERE {condition} AND {GENERATED} AND {group} IN (SELECT {group} FROM assets a WHERE a.id IN ({placeholders})) ORDER BY a.created_at,a.id"))?;
         let mut groups: HashMap<String, Vec<Asset>> = HashMap::new();
         for row in stmt.query_map(params_from_iter(values), |row| Ok((row.get::<_, String>("group_key")?, asset_from_row(row)?)))? {
             let (key, asset) = row?;
@@ -403,6 +411,17 @@ mod tests {
             media: "images".into(),
             ..Default::default()
         }
+    }
+    #[test]
+    fn all_media_includes_each_kind_and_keeps_visibility() {
+        let db = fixture();
+        db.conn.lock().unwrap().execute_batch("INSERT INTO assets(id,name,ext,created_at,library_hidden) VALUES('audio','sound','mp3',12,0),('text','note','md',13,0);").unwrap();
+        let all = CatalogFilter { media: "all".into(), ..filter() };
+        let ids = db.catalog_ids(&all, 0, 2000).unwrap();
+        for id in ["a", "d", "audio", "text"] { assert!(ids.contains(&id.to_string()), "missing {id}"); }
+        assert!(!ids.contains(&"e".to_string()));
+        let project = CatalogFilter { project_id: Some("p".into()), ..all };
+        assert!(!db.catalog_ids(&project, 0, 2000).unwrap().contains(&"audio".to_string()));
     }
     #[test]
     fn graph_batches_keep_all_memberships_without_duplicate_images() {

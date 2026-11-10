@@ -46,7 +46,7 @@ export function CollectionPanel({ folder, onClose }: { folder: Folder; onClose: 
       } catch (error) {
         console.error("Collection import failed", error);
         const reason = userErrorMessage(error, "请检查文件是否可用后重试。");
-        failures.push(`${file.name || "剪贴板图片"}：${ingested ? "已入素材库，但加入集合失败，" : "导入失败，"}${reason}`);
+        failures.push(`${file.name || "剪贴板图片"}：${ingested ? "已入素材库，但加入文件夹失败，" : "导入失败，"}${reason}`);
       }
     }
     importingRef.current = false;
@@ -147,18 +147,18 @@ export function CollectionPanel({ folder, onClose }: { folder: Folder; onClose: 
     </div>}
     {loading ? <p role="status" className="py-12 text-center text-sm text-muted">正在加载素材…</p>
       : error ? <div role="alert" className="py-12 text-center text-sm text-muted">
-        <p>暂时无法加载集合素材，请重试。</p>
+        <p>暂时无法加载文件夹素材，请重试。</p>
         <button type="button" className="mt-3 text-accent" onClick={() => setRetry((value) => value + 1)}>重新加载</button>
       </div>
       : preview ? <div>
         <button type="button" className="mb-3 flex items-center gap-2 text-sm text-muted" onClick={() => setPreviewId(null)}>
-          <ArrowLeft size={14} />返回集合
+          <ArrowLeft size={14} />返回文件夹
         </button>
         <MediaPreview playback asset={preview} src={convertFileSrc(preview.store_path ?? preview.thumb_path ?? "")} alt={preview.name}
           className="mx-auto max-h-[58vh] max-w-full object-contain" />
         <p className="mt-3 break-words text-center text-sm">{preview.name}</p>
       </div>
-      : assets.length === 0 ? <p className="py-12 text-center text-sm text-muted">这个集合还没有素材</p>
+      : assets.length === 0 ? <p className="py-12 text-center text-sm text-muted">这个文件夹还没有素材</p>
       : <div className="columns-2 gap-3 sm:columns-3 lg:columns-4">
         {assets.map((asset) => <button key={asset.id} type="button" aria-label={`预览 ${asset.name}`}
           className="collection-asset-card mb-3 block w-full break-inside-avoid overflow-hidden rounded border border-edge bg-panel text-left hover:border-accent"

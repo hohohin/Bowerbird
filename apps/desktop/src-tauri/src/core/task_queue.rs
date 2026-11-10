@@ -228,8 +228,8 @@ impl Task {
     /// 重新进入 running。前端 `GenJob` = 一个生成会话（多轮），`task_queue` 行随会话级 job_id 复用，
     /// 故续轮不能再 INSERT（主键冲突）。
     pub fn upsert_gen_job(db: &Database, job: &GenJob) -> AppResult<String> {
+        let mut job = job.clone();
         let coarse = GenJob::coarse_status(&job.status);
-        let payload = serde_json::to_string(job)?;
         let conn = db.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let existing_owner = tx
@@ -245,6 +245,14 @@ impl Task {
             )
             .optional()?;
         if let Some((project_id, thread_id)) = existing_owner {
+            // A provider may finish with the owner captured before project deletion.
+            // Retain its execution result without restoring that deleted ownership.
+            if project_id.is_none() && thread_id.is_none() {
+                if let Some(original) = job.project_id.as_deref() {
+                    let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)", [original], |r| r.get(0))?;
+                    if !exists { job.project_id = None; job.thread_id = None; job.creative_session_id = None; }
+                }
+            }
             if project_id != job.project_id || thread_id != job.thread_id {
                 return Err(AppError::Other(format!(
                     "generation job {} owner cannot change from ({project_id:?}, {thread_id:?}) to ({:?}, {:?})",
@@ -252,6 +260,7 @@ impl Task {
                 )));
             }
         }
+        let payload = serde_json::to_string(&job)?;
         tx.execute(
             "INSERT INTO task_queue (id, kind, payload, status, created_at, started_at, finished_at, provider, project_id, thread_id, creative_launch_id)
              VALUES (?1, 'generation', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
@@ -472,6 +481,27 @@ mod tests {
         assert_eq!(GenJob::coarse_status("done"), "done");
         assert_eq!(GenJob::coarse_status("failed"), "failed");
         assert_eq!(GenJob::coarse_status("cancelled_local"), "cancelled");
+    }
+
+    #[test]
+    fn deleted_project_stays_detached_after_late_generation_updates() {
+        let db = db();
+        db.create_project("p", "p", "p", "p", "blank").unwrap();
+        let mut running = job("codex", "running");
+        running.project_id = Some("p".into());
+        running.session_id = Some("original-session".into());
+        Task::upsert_gen_job(&db, &running).unwrap();
+        db.delete_project("p", crate::core::projects::ProjectDeleteMode::Keep).unwrap();
+        assert!(Task::by_id(&db, &running.id).unwrap().unwrap().gen_job().unwrap().project_id.is_none());
+        for status in ["ingesting", "done"] {
+            running.status = status.into();
+            Task::upsert_gen_job(&db, &running).unwrap();
+            let saved = Task::by_id(&db, &running.id).unwrap().unwrap().gen_job().unwrap();
+            assert_eq!(saved.status, status);
+            assert!(saved.project_id.is_none());
+            assert_eq!(saved.session_id.as_deref(), Some("original-session"));
+        }
+        assert!(db.get_project("p").unwrap().is_none());
     }
 
     #[test]

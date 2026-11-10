@@ -94,6 +94,7 @@ export function unifiedPlanningProcessorFromEnv(
               providerEnvironment,
               parentEnvironment: env,
               timeoutMs: UNIFIED_DSH_HTML_EXECUTION_TIMEOUT_MS,
+              promptTimeoutMs: 0,
               profileMode,
             }),
           });
@@ -111,6 +112,7 @@ export function unifiedPlanningProcessorFromEnv(
           providerEnvironment,
           parentEnvironment: env,
           timeoutMs: UNIFIED_DSH_PROMPT_TIMEOUT_MS,
+          promptTimeoutMs: 0,
           activity,
         }),
       });

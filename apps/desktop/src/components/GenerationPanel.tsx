@@ -1,5 +1,6 @@
 import { generationErrorMessage, userErrorMessage } from "../lib/userError";
 import { DreaminaTaskCredit } from "./creation/DreaminaCredits";
+import { generationProgressLabel } from "../lib/generationProgress";
 import { DreaminaTaskDiagnostics } from "./creation/DreaminaTaskDiagnostics";
 import { GenerationSessionSurface } from "./GenerationSessionSurface";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -622,6 +623,7 @@ export function GenerationPanel({
                 provider={turn.provider ?? activeJob.provider}
                 index={i}
                 busy={running && i === turnsWithOffset.length - 1}
+                progressLabel={generationProgressLabel(activeJob)}
                 streaming={running && i === turnsWithOffset.length - 1 ? activeJob.streaming : ""}
                 imageOffset={imageOffset}
                 visualProfile={activeJob.visualProfile}
@@ -735,6 +737,7 @@ function TurnView({
   provider,
   index,
   busy,
+  progressLabel,
   streaming,
   imageOffset,
   visualProfile,
@@ -753,6 +756,7 @@ function TurnView({
   provider: GenJob["provider"];
   index: number;
   busy: boolean;
+  progressLabel: string;
   streaming: string;
   imageOffset: number;
   visualProfile?: VisualProfileCapsule | null;
@@ -1000,7 +1004,7 @@ function TurnView({
             <div className="space-y-2">
               <div className="flex items-center gap-2 text-xs text-muted">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-lime" />
-                正在生成图像{elapsedLabel ? `… ${elapsedLabel}` : "…"}
+                <span role="status">{progressLabel}</span>{elapsedLabel ? ` · ${elapsedLabel}` : "…"}
               </div>
               {/* 流式过程日志（codex CLI 输出），生成期间实时滚动 */}
               {streaming && (

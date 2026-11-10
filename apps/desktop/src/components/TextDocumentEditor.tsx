@@ -47,8 +47,8 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
     return assets.map(documentMedia).filter((item): item is DocumentMedia => item !== null);
   }
   function loadDraft(next: TextDocumentDraft) {
-    const nextValue = next.base.format === "markdown" ? parseMarkdown(next.text) : [];
-    canonical.current = next.base.format === "markdown" ? serializeMarkdown(nextValue) : next.text;
+    const nextValue = next.base.format !== "text" ? parseMarkdown(next.text) : [];
+    canonical.current = next.base.format !== "text" ? serializeMarkdown(nextValue) : next.text;
     setValue(nextValue); replace(next);
     hydrateMedia(nextValue);
   }
@@ -90,7 +90,7 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
     if (!start || saving || start.text === start.base.text) return;
     setSaving(true); setError("");
     try {
-      const result = await textDocuments.save(asset.id, start.base.version, start.text);
+      const result = await textDocuments.save(asset.id, start.base.version, start.text, start.base.format);
       const next = finishTextDocumentSave(key, start, result);
       if (mounted.current && next) { current.current = next; setDraft(next); setNotice(next.text === next.base.text ? "已保存" : "已保存提交的内容，仍有新的更改。"); onSaved?.(); }
     } catch (reason) {
@@ -128,13 +128,14 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
   }}>
     <div className="text-document-toolbar">
       {draft?.base.format === "markdown" && <div className="text-document-modes"><button aria-pressed={draft.mode === "body"} onClick={() => switchMode("body")}>正文</button><button aria-pressed={draft.mode === "source"} onClick={() => switchMode("source")}>源码</button></div>}
-      {draft?.base.format === "markdown" && <button title="插入已有素材的原文件引用" disabled={draft.mode !== "body" || inserting} onClick={() => void insertFiles()}><Plus size={14}/>插入素材</button>}
+      {draft && draft.base.format !== "text" && <button title="插入已有素材的原文件引用" disabled={draft.mode !== "body" || inserting} onClick={() => void insertFiles()}><Plus size={14}/>插入素材</button>}
       <span className="text-document-save-state">{dirty ? "未保存" : ""}</span>
       <button aria-label="重新读取原文件" title="重新读取原文件" disabled={saving} onClick={() => void reload()}><RotateCcw size={14}/></button>
       <button disabled={!dirty || saving} onClick={() => void save()}><Save size={14}/>{saving ? "保存中…" : "保存"}</button>
     </div>
     {error && <div className="text-document-error" role="alert">{error}</div>}
     {notice && <div className="text-document-notice" role="status">{notice}</div>}
+    {draft?.base.format === "docx" && <div className="text-document-notice">保存为 Word 文档；复杂排版可能变化，正文与基础格式会保留。</div>}
     {!draft ? <div className="text-document-loading">{error ? "" : "正在读取文本…"}</div> : draft.base.format === "text" ? <textarea className="text-document-source is-plain" aria-label="文本内容" value={draft.text} onChange={event => changeText(event.target.value)} />
       : draft.mode === "source" ? <textarea className="text-document-source" aria-label="Markdown 源码" value={draft.text} spellCheck={false} onChange={event => changeText(event.target.value)} />
       : <TextPlateEditor ref={plate} value={value} media={media} onChange={changeValue} onDropAssets={attachAssets} />}

@@ -4,6 +4,19 @@ import { completeChatJob, processChatJob } from "./runtime.ts";
 import { createHash } from "node:crypto";
 import { validateChatInput } from "../../../cloud/supabase/functions/_shared/chat.ts";
 
+test("shared Agent chat preserves large input and result through the worker", async () => {
+  const content = "长文🙂\n".repeat(400_000);
+  const text = JSON.stringify({ messages: [{ role: "user", content }], tools_enabled: false });
+  const job = { id: "large", lease_id: "lease", input_url: "https://fixture.invalid/request", input_hash: createHash("sha256").update(text).digest("hex") };
+  const calls: Record<string, unknown>[] = [];
+  await processChatJob(job, async body => { calls.push(body); return {}; }, { chat: async messages => {
+    assert.equal(messages[1].content, content);
+    return { message: { role: "assistant", content }, content, toolCalls: [], finishReason: "stop", usage: { promptTokens: 1, completionTokens: 1 } };
+  } }, "fixture", async () => new Response(text));
+  assert.equal(calls.length, 1); assert.equal(calls[0].status, "succeeded");
+  assert.equal((calls[0].result as { message: { content: string } }).message.content, content);
+});
+
 test("chat rejects images, forged tools and mismatched tool results", () => {
   assert.throws(() => validateChatInput({ messages: [{ role: "user", content: [{ type: "image_url" }] }] }));
   assert.throws(() => validateChatInput({ messages: [{ role: "user", content: "hi" }], tools: [] }));

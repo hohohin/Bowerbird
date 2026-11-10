@@ -76,9 +76,6 @@ impl Host {
             .await
             .map_err(|_| error("本机 DSH 响应读取中断，请取回原回复"))?
         {
-            if bytes.len() + chunk.len() > MAX_RESPONSE {
-                return Err(error("本机 DSH 回复超过长度限制"));
-            }
             bytes.extend_from_slice(&chunk);
         }
         let value: Value =
@@ -94,7 +91,6 @@ impl Host {
     async fn history(&self, pending: &Pending) -> AppResult<Vec<Value>> {
         let mut entries = BTreeMap::new();
         let mut before = None;
-        let mut bytes = 0;
         for _ in 0..64 {
             let mut request = json!({"sessionId":pending.session,"maxMessages":30});
             if let Some(seq) = before {
@@ -117,10 +113,6 @@ impl Host {
                     .ok_or_else(|| error("本机 DSH 历史缺少顺序编号"))?;
                 earliest = earliest.min(seq);
                 if seq > pending.after && !entries.contains_key(&seq) {
-                    bytes += entry.to_string().len();
-                    if bytes > MAX_RESPONSE {
-                        return Err(error("本机 DSH 本轮记录超过长度限制"));
-                    }
                     entries.insert(seq, entry.clone());
                 }
             }
@@ -239,9 +231,6 @@ fn fold_history(entries: &[Value], rpc_id: &str, after: i64) -> AppResult<Reply>
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("\n\n");
-    if reply.text.len() > MAX_RESPONSE {
-        return Err(error("本机 DSH 本轮回复超过长度限制"));
-    }
     Ok(reply)
 }
 

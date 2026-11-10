@@ -1,6 +1,33 @@
 # 文本素材与内置编辑器
 
-2026-11-03 更新，源码待发布。产品范围与决定以 [PROJECT.md](../PROJECT.md) 为准。
+2026-11-09 更新，源码待发布。产品范围与决定以 [PROJECT.md](../PROJECT.md) 为准。
+
+## 办公文档素材（2026-11-09）
+
+- DOCX／XLSX／CSV 扩展原有 `texts` 类型，复用入库、连接目录、筛选、多选、右键和 3:4 卡片；预览仅返回最多 1200 字的阅读文字。`read_text_document(previewOnly:true)` 不向卡片传 DOCX 压缩包、不加载完整编辑器。导航结构与悬浮几何保持。
+- DOCX 详情沿 `TextDocumentEditor`／Plate，复用已锁定的 `@platejs/docx-io` 导入／导出和 `documentCodec`。显示正文，不提供二进制源码编辑；保存通过 `save_docx_document` 验证 DOCX 包，复用原件版本核对、文件写锁、同目录临时文件原子替换和索引更新；`save_text_document` 明确拒绝覆盖办公格式。无修改不保存，冲突或失败保留草稿。支持正文、标题、基础格式、表格和嵌入图片的编辑器转换；分页、页眉页脚及复杂 Word 排版不保证无损，原生 Word 不是本应用的布局引擎。
+- 表格用本机 `calamine 0.31.0`／`csv 1.4.0` 解析，`read_spreadsheet_document` 返回工作表名和二维字符串。保留空格、前导零、引号／分隔符／换行、空单元格和工作表内行列位置；CSV 支持 UTF-8 BOM、UTF-16 BOM 和中文 GB18030，按逗号分隔。XLSX 日期使用本机解析器的日期类型，数字为单元格值，不完整复刻 Excel 自定义格式、合并样式、图表或宏；公式不求值，有缓存则显示结果，否则保留公式文字。
+- `SpreadsheetDocumentViewer` 使用同一素材详情容器，工作表标签和二维阅读表格；当前项目可添加所选工作表。`readFileContentCards` 共用文本／表格读取，文本生成文档卡，表格复用 `CanvasNotePayload`／`CanvasTextCard`，每张工作表独立建卡并保留标题；拖入、素材多选添加沿同一个冻结项目／落点及画板写入队列，部分写入失败重试不重复创建已完成卡片。首页添加到新项目仍沿原有“加入新项目素材库”语义。画板只存独立内容副本，不自动修改办公原件。
+- 办公文件读取上限 20 MiB，压缩包累计展开上限 64 MiB；每张表最多 10000 格、工作簿最多 100 张表和 100000 格，超限明确拒绝，不截取后冒充完整卡片。包内 XML 仅本机读取、不解压到用户目录；巨型稀疏坐标在建立二维范围前拒绝。损坏／加密文件保留原件并提示重新另存；原 Markdown／TXT 继续使用 2 MiB、UTF-8 及原换行／BOM 保存契约。
+- 验证入口：`core::text_documents`、`core::file_intake::tests`、`commands::media_import::tests`；`office-documents-ui.test.mjs`、`text-file-drop-ui.test.mjs`、`text-catalog-ui.test.mjs`、`text-library-ui.test.mjs`。使用合成 Office 包、临时数据库和隔离浏览器，覆盖导入筛选、正文预览、DOCX 编辑／真正 Word 包保存／重读／冲突、中文 CSV、多工作表、画板单元格／身份／重开／读取失败；截图和导出验证文件位于 `apps/desktop/.tmp/office-documents/`。需配套重建前后端，未发布安装包或验收真实用户 Office 文件、Windows 系统拖放及 Mac 原生。
+- 本轮结果：上述原生 **35 项**、4 组界面回归、完整 TypeScript 与独立 Vite 构建通过；DOCX 嵌入图片往返检查同时核对生成包中的实际图片条目。原生测试仅向独立 EXE 副本添加 Windows 控件清单，未替换正式程序。前端产物在 `apps/desktop/.tmp/office-documents-build/`，原生日志在 `.tmp/office-{native,intake,upload}-tests.log`。
+
+## 文本文件拖入（2026-11-08）
+
+- `.txt/.md/.markdown` 沿 `FileDropImport`／`mediaImport` 接收，支持原路径和无路径 File、多文件、空文档及混合媒体。文件身份与收集箱规则沿用既有导入协议，保留原始字节；纯文本导入自动切到文本类型，混合导入切到全部类型，避免新文本被图片筛选隐藏。
+- `prepareExplorerCanvasDrop` 共用冻结项目及落点的回调。文本通过 `textDocuments.read` 读取已登记原件，在落点创建 `note_type:"document"` 的 420×560 文档卡，沿画板写入队列持久化及重试；素材库内文本拖入也走同一放置入口，不重复导入文件。读取失败保留已入库原件，不创建空白卡片；接收期间离开项目仍保存到原项目，不向新画板插入。
+- Markdown 正文保留，TXT 经 `textDocumentMarkdown` 复用 Plate 编解码转换为字面段落，`#`、`*`、HTML 等不误转成格式或执行内容。沿用 UTF-8、2 MiB 的读取边界。画板正文是独立文档副本，编辑不自动回写素材原件；原件仍从素材详情显式保存。工具栏的 `addMaterialAssets` 现有类型边界保持，本次接入拖放入口。
+- `scripts/text-file-drop-ui.test.mjs` 使用正式画板、素材库与文件接收组件，覆盖路径／File、TXT／Markdown／空文档、3:4 正文、落点、重开、内部拖动、读取失败、切项目与混合筛选；原 `file-drop-ui.test.mjs` 回归通过。原生 `commands::media_import::tests`、`core::file_intake::tests`、`core::text_documents::tests` 共 17 项通过，验证 UTF-8 BOM／换行原样保留、临时文件清理及项目归属；TypeScript、独立 Vite 构建通过。均使用合成 IPC 或临时库，未修改用户库、未更新安装包，真实 Windows／Mac 系统拖放尚待原生验收。
+
+## 素材库文档卡片（2026-11-06）
+
+- 11 月 8 日：画板文档正文支持悬停滚轮上下预览，标题与格式标识固定；滚动到底不带动画板，Ctrl／Meta 滚轮继续缩放画板。画板正文取消 1200 字截断，素材库仍保留原有有界摘要；双击仍进入编辑器。
+
+- Markdown／TXT 默认以 3:4 竖卡显示，标题下展示正文片段；`TextFileMediaCard` 与 `catalogVirtualLayout` 共用比例，全部／项目／标签／集合以及混合媒体列表保持一致。沿用原多选、打开详情和拖动回调，导航仍悬浮、不增加占位。
+- 11 月 7 日画板文档卡同步复用 `DocumentCardPreview` 阅读面与 `documentPreviewText` 正文提取，标题、片段、格式标识、留白与深浅色保持一致；素材库从文件读取，画板直接使用卡片正文，不增加文件副本。空白／有内容均为 3:4，新建默认 420×560；旧卡保持位置和宽度，显示高度由比例推导，连线与命中几何使用同一高度。双击、放大编辑、移动与统一加号保持原行为，画板根节点不添加素材悬停位移。
+- 复用 `read_text_document` 的已登记身份与 2 MiB 读取边界，以及 `createFilePreviewQueue` 的四路并发、去重与 512 项缓存；只请求可见及邻近 200px 的卡片，离开后取消未开始的请求。缓存最多 1200 字符的短文本，文件版本或素材刷新后重新读取，不挂载 Plate。
+- 11 月 7 日修正预览显示源码的问题：Markdown 按需加载 `documentPreviewText`，复用 `documentCodec.parseMarkdownAst` 的编辑器语法树与 `readDocumentState`。从标题、强调、列表、引用、链接与表格提取阅读文字，链接只保留名称、媒体只保留说明，不用删除少数符号的正则冒充正文解析。HTML 在惰性 template 内提取文字、换行和媒体说明，忽略脚本、样式、注释及嵌入内容；不插入页面、不加载媒体资源。内部富文本尾注及 frontmatter 不展示。TXT 保持字面文本，文档中的代码块保留代码文字但去掉围栏。空文档／读取失败保留文件名与格式，详情继续按原流程独立读取正文。
+- `text-catalog-ui.test.mjs` 检查比例、格式化正文、Markdown／HTML 源码不泄漏、零远程资源加载、深浅主题、320／600／1440px、分栏缓存、保存刷新、富状态尾注与长文截断；`text-document-codec.test.mjs` 保证原解析／保存契约不变，`catalog-virtual-layout.test.mjs` 检查混合媒体几何，预览队列沿原单测。TypeScript 与独立 Vite 构建通过，未构建安装包。
 
 ## 放大编辑与画板文本卡片（2026-11-03）
 
@@ -10,10 +37,10 @@
 - 工具栏右侧三个动作：保存到集合、保存到项目、添加到生成对话框。集合写入所选已连接目录中的新 `.md`，不覆盖同名文件；项目创建一个原生文本卡片，不另存第二份可编辑文件。新建命令只接收集合／项目身份，不接受任意写入路径。
 - 保存以冻结内容、标题和目标映射请求身份，关闭后重开重试沿用该身份；原生回执支持中断恢复，已完成的重试不覆盖后续编辑，也不复活已删除卡片。保存中继续输入留在当前草稿。
 - 创作框来源的编辑草稿按输入来源及当前会话保留，返回仅关闭；点击添加才回填，保留 Markdown、原素材身份及已有画板实例定位。无编辑回填保持原 ProseMirror 节点。素材缺失、原输入已变化或回填期间继续编辑时拒绝旧结果；关闭／切项目后的迟到回包不修改另一输入。仅填草稿，不发送或运行模型。
-- 画板工具栏新增文本卡片，支持放置、移动和放大编辑；有内容时显示标题和前两行文本预览（112px），空正文显示“空白文档”（56px）；双击标题或预览区域打开文本编辑器，不提供高度缩放。`note_type:"document"` 以 `text` 为唯一 Markdown 正文，`cells:[]`；旧二维内容卡不变。编辑沿现有画板写入队列保存，返回／切换前冲刷，失败沿画板保存重试恢复。
-- 两个输出：图片口只交付文档中的图片；文本口按顺序保留 Markdown 与受控媒体引用。统一生成引用仍沿现有 `@图片N` 协议（含音／视频附件），实际媒体支持由下游模型校验。路径溯源不进入模型提示词。代码围栏、frontmatter、缩进代码与连续原始 HTML 示例不登记为附件；项目删除保护使用相同独立媒体块边界。
+- 画板工具栏新增文本卡片，支持放置、移动和放大编辑；11 月 7 日改为与素材库共用的 3:4 正文预览，空正文显示“空白文档”，双击标题或预览区域打开文本编辑器，不提供独立高度缩放。`note_type:"document"` 以 `text` 为唯一 Markdown 正文，`cells:[]`；旧二维内容卡不变。编辑沿现有画板写入队列保存，返回／切换前冲刷，失败沿画板保存重试恢复。
+- 两个输出：图片口只交付文档中的图片；文本口按顺序输出可读纯文本与受控媒体引用（2026-11-09 起移除 Markdown 格式标记，保留完整正文）。统一生成引用仍沿现有 `@图片N` 协议（含音／视频附件），实际媒体支持由下游模型校验。路径溯源不进入模型提示词。代码围栏、frontmatter、缩进代码与连续原始 HTML 示例不登记为附件；项目删除保护使用相同独立媒体块边界。
 
-验证入口：`document-projection.test.mjs`、`document-composer.test.mjs`、`canvas-document.test.mjs`；正式组件 `text-workspace-live-ui.test.mjs`、`text-composer-entry-ui.test.mjs`、`canvas-document-ui.test.mjs`；原生创建／恢复 10 项、原文本 10 项及文档卡协议 3 项。完整 TypeScript 与独立 Vite 构建通过。所有测试使用合成 IPC 或临时文件／数据库，无真实生成或用户库写入；前后端需配套重建，未发布安装包、未验收 Mac 原生。质量工具与行动记录见 [本轮日志](../project_logs/2026-11-03-text-workspace.md)。
+验证入口：`document-projection.test.mjs`、`document-composer.test.mjs`、`canvas-document.test.mjs`；正式组件 `text-workspace-live-ui.test.mjs`、`text-composer-entry-ui.test.mjs`；原生创建／恢复 10 项、原文本 10 项及文档卡协议 3 项。11 月 7 日 `canvas-document-preview-ui.test.mjs` 覆盖真实卡片正文、3:4、端口居中、双击／按钮编辑、空白／重开／新建与深浅色，`canvas-auto-connect-ui.test.mjs` 覆盖统一连接，素材库回归、TypeScript 与独立 Vite 构建通过。所有测试使用合成 IPC 或临时文件／数据库，无真实生成或用户库写入；前后端需配套重建，未发布安装包、未验收 Mac 原生。质量工具与行动记录见 [本轮日志](../project_logs/2026-11-03-text-workspace.md)。
 
 ## 段落操作与输入修复（2026-11-03）
 
@@ -78,7 +105,7 @@
 ## 接入范围
 
 - `.md`、`.markdown`、`.txt` 复用「建立连接」及文件夹扫描，登记原路径，不复制已有文件。
-- 现有素材库类型控件增加文本，沿用全部、标签、集合、搜索、分页、分栏和轻量卡片。卡片只读索引元数据，打开详情才加载 Plate 和正文。
+- 现有素材库类型控件增加文本，沿用全部、标签、集合、搜索、分页和分栏。卡片按需读取正文片段（见上方卡片契约），打开详情才加载 Plate。
 - 编辑器在原 `AssetDetail` 媒体舞台内，原顶部栏、侧栏和右侧资料区不改布局。文本不显示图像反推／再创作，也不能作为画板图片或模型图片参考。
 - Markdown 有正文／源码、标题、粗体、斜体、简单列表、引用、撤销／重做；TXT 按字面编辑。显式保存或 Ctrl/⌘+S 写回原文件。
 - 文档内可插入已有图片、音频、视频引用；移除文档中的块只修改文档。原素材详情的转发入口仍未新增；本次创作框／画板入口见上节。

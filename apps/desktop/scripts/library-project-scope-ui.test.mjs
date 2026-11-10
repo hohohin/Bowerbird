@@ -10,6 +10,7 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1000, height: 800 }, reducedMotion: 'reduce' });
 page.setDefaultTimeout(7000);
 const errors = [];
+await page.addInitScript(() => { window.distinctProjects = true; });
 page.on('pageerror', error => errors.push(error.message));
 await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
 const nav = () => page.getByRole('tablist', { name: '素材视图切换条', exact: true });
@@ -19,8 +20,10 @@ const picker = () => page.getByRole('region', { name: '选择素材库项目', e
 const chooseProject = name => page.getByRole('button', { name: `查看项目素材 ${name}`, exact: true }).click();
 async function filter(kind, id) {
   await page.waitForFunction(({ kind, id }) => {
-    const last = window.requests.filter(r => r.command === 'catalog_overview').at(-1)?.args;
-    return last?.filter.kind === kind && last.filter.projectId === id;
+    const root = [...document.querySelectorAll('.categorized-library')].find(element => element.getAttribute('data-file-import-project-id') === (id ?? ''));
+    const section = root?.querySelector(`[data-catalog-section="${kind === 'tags' ? 'first' : 'all'}"]`);
+    return section && root.querySelector(`[data-asset-id^="${id ?? 'global'}:"]`)
+      && window.requests.some(r => r.command === 'catalog_overview' && r.args.filter.kind === kind && r.args.filter.projectId === id);
   }, { kind, id });
 }
 async function overlay() {
@@ -55,48 +58,50 @@ try {
   assert.equal(await page.evaluate(() => window.store.getState().projectsThumbnailWidth), 200, 'picker size does not change the project page');
   await tab('全部素材').click(); await tab('项目素材').click(); await filter('all', 'p');
   assert.equal(await picker().count(), 0, 'returning to project tab restores A');
-  await tab('项目素材').click(); await chooseProject('项目B'); await filter('all', 'q');
+  assert.equal(await page.getByRole('tablist', { name: '当前项目', exact: true }).getByRole('tab').innerText(), '项目A');
+  await page.screenshot({ path: `${output}/current-project.png` });
+  await tab('项目素材').click(); await page.getByRole('tablist', { name: '当前项目', exact: true }).getByRole('tab').click(); await chooseProject('项目B'); await filter('all', 'q');
   await page.reload(); await tab('项目素材').click(); await filter('all', 'q');
   assert.equal(await picker().count(), 0, 'home selection survives reload');
-  await tab('标签视图').click(); await filter('tags', 'q');
+  await tab('标签分类').click(); await filter('tags', 'q');
   await scope().getByRole('tab', { name: '项目素材' }).click(); await picker().waitFor();
   await chooseProject('项目A'); await filter('tags', 'p');
-  assert.equal(await tab('标签视图').getAttribute('aria-selected'), 'true');
+  assert.equal(await tab('标签分类').getAttribute('aria-selected'), 'true');
   await tab('全部素材').click(); await tab('项目素材').click(); await filter('all', 'p');
-  await tab('标签视图').click();
-  const tagBox = await tab('标签视图').boundingBox(), menuBox = await page.locator('.library-tag-scope').boundingBox();
+  await tab('标签分类').click();
+  const tagBox = await tab('标签分类').boundingBox(), menuBox = await page.locator('.library-tag-scope').boundingBox();
   assert.ok(Math.abs(tagBox.x + tagBox.width - menuBox.x - menuBox.width) <= 4, 'scope joins the right edge of its parent tab');
   assert.ok(Math.abs(tagBox.y + tagBox.height - menuBox.y) <= 4, 'scope touches its parent tab');
   assert.ok(menuBox.x >= 0 && menuBox.x + menuBox.width <= 320);
   await page.screenshot({ path: `${output}/joined-tags.png` });
   await page.clock.install();
-  await tab('标签视图').click();
+  await tab('标签分类').click();
   await page.clock.fastForward(2000);
   await scope().getByRole('tab', { name: '全部素材' }).hover();
   await page.clock.fastForward(2000);
-  assert.equal(await tab('标签视图').getAttribute('aria-expanded'), 'true', 'activity restarts idle timer');
+  assert.equal(await tab('标签分类').getAttribute('aria-expanded'), 'true', 'activity restarts idle timer');
   await page.clock.fastForward(1100);
-  assert.equal(await tab('标签视图').getAttribute('aria-expanded'), 'false');
-  await tab('标签视图').click(); await page.keyboard.press('ArrowDown');
+  assert.equal(await tab('标签分类').getAttribute('aria-expanded'), 'false');
+  await tab('标签分类').click(); await page.keyboard.press('ArrowDown');
   assert.equal(await page.evaluate(() => !!document.activeElement.closest('.library-tag-scope')), true);
   await page.keyboard.press('Escape');
-  assert.equal(await tab('标签视图').getAttribute('aria-expanded'), 'false');
-  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), '标签视图');
-  await tab('标签视图').click();
+  assert.equal(await tab('标签分类').getAttribute('aria-expanded'), 'false');
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), '标签分类');
+  await tab('标签分类').click();
   await scope().getByRole('tab', { name: '全部素材', exact: true }).click(); await filter('tags', null);
   await scope().getByRole('tab', { name: '项目素材', exact: true }).click(); await filter('tags', 'p');
   await page.evaluate(() => window.store.setState({ projects: window.store.getState().projects.filter(p => p.id !== 'p') }));
   await picker().waitFor();
   await chooseProject('项目B'); await filter('tags', 'q');
   await page.goto(`${fixture}&home`); await tab('项目素材').click();
-  await tab('项目素材').click(); await chooseProject('项目A'); await filter('all', 'p');
+  await tab('项目素材').click(); await page.getByRole('tablist', { name: '当前项目', exact: true }).getByRole('tab').click(); await chooseProject('项目A'); await filter('all', 'p');
 
   await page.goto(fixture); // New project context defaults to itself, independently from home.
   await tab('项目素材').click(); await filter('all', 'p');
-  await tab('项目素材').click(); await chooseProject('项目B'); await filter('all', 'q');
+  await tab('项目素材').click(); await page.getByRole('tablist', { name: '当前项目', exact: true }).getByRole('tab').click(); await chooseProject('项目B'); await filter('all', 'q');
   assert.equal(await page.evaluate(() => window.store.getState().activeProjectId), 'p');
   assert.equal(await page.locator('.categorized-library').getAttribute('data-file-import-project-id'), 'q');
-  await tab('标签视图').click(); await filter('tags', 'q');
+  await tab('标签分类').click(); await filter('tags', 'q');
   assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'catalog_overview').at(-1).args.contextProject), 'q');
   assert.equal(await page.evaluate(() => window.requests.some(r => r.command === 'set_active_project')), false);
   await page.reload(); await tab('项目素材').click(); await filter('all', 'q');

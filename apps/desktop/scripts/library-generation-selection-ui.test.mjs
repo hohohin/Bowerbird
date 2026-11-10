@@ -38,7 +38,7 @@ try {
   await page.getByRole('dialog', { name: /媒体预览/ }).waitFor();
   await page.keyboard.press('Escape'); await page.locator('.media-lightbox').waitFor({ state: 'detached' });
   await editor.focus();
-  await page.locator('.library-home').getByRole('tab', { name: '集合分类', exact: true }).click();
+  await page.locator('.library-home').getByRole('tab', { name: '文件夹', exact: true }).click();
   const connected = page.locator('[data-connection-entry="parity-entry-1"] .folder-media-card');
   await connected.waitFor();
   await connected.click();

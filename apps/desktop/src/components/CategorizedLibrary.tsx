@@ -4,8 +4,9 @@ import { localClassification, projectClassification } from "../lib/localClassifi
 import { LibraryDropPreview } from "./LibraryDropPreview";
 import { userErrorMessage } from "../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { listen } from "@tauri-apps/api/event";
-import { ChevronDown, ChevronRight, Folder, MoreHorizontal, Pencil, Plus, Settings2, Trash2, X } from "lucide-react";
+import { catalogCache } from "../lib/catalogCache";
+import { invalidateCatalog, useCatalogRevision } from "../lib/useCatalogRevision";
+import { ChevronDown, ChevronRight, Folder, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from "lucide-react";
 import { materialCatalog, type CatalogKind, type MaterialCatalog, type CatalogFilter } from "../lib/materialCatalog";
 import { catalogInitial, collectionRows, orderCatalogTags, UNTAGGED_SECTION } from "../lib/materialCatalogOrder";
 import { type LibraryMedia } from "../lib/localFileMode";
@@ -19,12 +20,9 @@ import { externalFiles } from "../lib/externalFiles";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { useStore } from "../store";
 import type { Asset, Folder as Collection } from "../lib/types";
-import { FileColorFilter } from "./FileColorFilter";
-import { LibraryFloatingControls } from "./LibraryFloatingControls";
-import { LibraryBrowserButton } from "./LibraryBrowserButton";
-import { LibraryMediaSwitch } from "./LibraryMediaSwitch";
-import { GeneratedImageFilter } from "./GeneratedImageFilter";
 import { useLibraryGlass } from "./useLibraryGlass";
+import { CatalogSelectionBar } from "./CatalogSelectionBar";
+import { LibraryCatalogControls } from "./LibraryCatalogControls";
 import { LibraryMotion } from "./LibraryMotion";
 import { LibraryTacticalBackdrop } from "./LibraryTacticalBackdrop";
 import { OverlayScrollArea } from "./CollectionScrollArea";
@@ -64,7 +62,6 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const [active, setActive] = useState<string | null>(savedPosition?.active ?? null);
   const [total, setTotal] = useState(0);
   const [untagged, setUntagged] = useState(0);
-  const [revision, setRevision] = useState(0);
   const [catalogError, setCatalogError] = useState("");
   const [catalogLoading, setCatalogLoading] = useState(true);
   const loadedCatalogScope = useRef<string | null>(null);
@@ -80,10 +77,8 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const [references, setReferences] = useState(false);
   const [preview, setPreview] = useState<{ path: string; sourceKey: string } | null>(null);
   const [working, setWorking] = useState(false);
-  const [colorsOpen, setColorsOpen] = useState(false);
   const [color, setColor] = useState<string | null>(savedPosition?.color ?? null);
-  const [colorProgress, setColorProgress] = useState({ pending: false, failed: 0 });
-  const [colorRetry, setColorRetry] = useState(0);
+  const revision = useCatalogRevision(media === "images" && !!color);
   const lock = useRef(false);
   const anchor = useRef<CatalogLocation | null>(null);
   const selectionVersion = useRef(0);
@@ -112,32 +107,11 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const currentCollection = catalog.collections.find(c => c.id === active);
   const scope = kind === "collections" ? currentCollection?.id ?? null : null;
   const filter = useMemo<CatalogFilter>(() => ({ kind: flat ? "all" : kind, id: scope, projectId: projectScope ? browseProjectId : null, media,
-    query, generated: (media === "images" || media === "videos") && generatedFilter ? generatedFilter === "source:generated" : null, color: media === "images" ? color : null }), [kind, flat, scope, projectScope, browseProjectId, media, query, generatedFilter, color]);
-  const filterKey = JSON.stringify([filter, projectId]);
+    query, generated: (media === "all" || media === "images" || media === "videos") && generatedFilter ? generatedFilter === "source:generated" : null, color: media === "images" ? color : null }), [kind, flat, scope, projectScope, browseProjectId, media, query, generatedFilter, color]);
+  const filterKey = JSON.stringify([filter, catalogProjectId]);
   const filterKeyRef = useRef(filterKey); filterKeyRef.current = filterKey;
   const reading = catalogLoading;
-  const palette = { colors: new Map<string, string[]>(), ...colorProgress, retry: () => setColorRetry(v => v + 1) };
-  const colorScope = JSON.stringify({ ...filter, color: null });
-  const indexColors = media === "images" && (colorsOpen || !!color);
-  useEffect(() => {
-    if (!indexColors) { setColorProgress({ pending: false, failed: 0 }); return; }
-    let current = true;
-    setColorProgress({ pending: true, failed: 0 });
-    void (async () => {
-      let after: string | null = null, failed = 0;
-      try {
-        do {
-          const batch = await materialCatalog.prepareColors(JSON.parse(colorScope), after);
-          if (!current) return;
-          failed += batch.failed; after = batch.after;
-          setColorProgress({ pending: batch.more, failed });
-          if (batch.updated) setRevision(v => v + 1);
-          if (!batch.more) break;
-        } while (current);
-      } catch { if (current) setColorProgress({ pending: false, failed: failed + 1 }); }
-    })();
-    return () => { current = false; };
-  }, [colorScope, indexColors, colorRetry]);
+  const colorsPrepared = invalidateCatalog;
   const sections = useMemo<CatalogSectionInfo[]>(() => flat ? [{ id: "all", name: "", count: total, tagId: null }]
     : kind === "tags" ? [...visibleTags.map(tag => ({ id: tag.id, name: tag.name, count: tag.count, tagId: tag.id })),
       ...(untagged ? [{ id: UNTAGGED_SECTION, name: "未分类", count: untagged, tagId: UNTAGGED_SECTION }] : [])]
@@ -173,22 +147,24 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   }, [kind]);
   useEffect(() => {
     alive.current = true;
-    let timer: number | undefined;
-    const unlisten = listen("library://assets-changed", () => {
-      window.clearTimeout(timer); timer = window.setTimeout(() => setRevision(v => v + 1), 120);
-    });
-    return () => { alive.current = false; previewVersion.current++; window.clearTimeout(timer); void unlisten.then(stop => stop()); };
+    return () => { alive.current = false; previewVersion.current++; };
   }, []);
-  useEffect(() => {
+  useLayoutEffect(() => {
     let current = true; setCatalogError("");
-    if (loadedCatalogScope.current !== filterKey) setCatalogLoading(true);
-    materialCatalog.overview(filter, catalogProjectId).then(value => {
-      if (!current) return;
+    const key = `overview:${filterKey}`;
+    const apply = (value: Awaited<ReturnType<typeof materialCatalog.overview>>) => {
       loadedCatalogScope.current = filterKey;
       setCatalog(value.catalog); setTotal(value.total); setUntagged(value.untagged);
+      setCatalogLoading(false);
       setActive(id => kind === "collections"
         ? value.catalog.collections.some(item => item.id === id) ? id : collectionRows(value.catalog.collections)[0]?.item.id ?? null
         : id);
+    };
+    const cached = catalogCache.peek<Awaited<ReturnType<typeof materialCatalog.overview>>>(key);
+    if (cached) apply(cached.value);
+    else if (loadedCatalogScope.current !== filterKey) setCatalogLoading(true);
+    void catalogCache.read(key, () => materialCatalog.overview(filter, catalogProjectId), !!filter.color).then(value => {
+      if (current && revision === catalogCache.revision(!!filter.color)) apply(value);
     }).catch(error => { if (current) setCatalogError(String(error)); }).finally(() => { if (current) setCatalogLoading(false); });
     return () => { current = false; };
   }, [filterKey, revision]);
@@ -312,7 +288,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     void run(async () => {
       const targets = ids.length === 1 ? [asset] : await resolveSelection(ids);
       if (!canShowOverlay() || filterKeyRef.current !== key) return;
-      (onAssetContextMenu ?? useStore.getState().openContextMenu)(x, y, asset.id, { asset, libraryProjectId: projectScope ? browseProjectId ?? undefined : undefined, fileSelection: { assets: targets, openReferences: () => setReferences(true),
+      (onAssetContextMenu ?? useStore.getState().openContextMenu)(x, y, asset.id, { asset, generationGroup: [...shownGroupAssets.current.values()].includes(asset.id) ? { assetId: asset.id } : undefined, libraryProjectId: projectScope ? browseProjectId ?? undefined : undefined, fileSelection: { assets: targets, openReferences: () => setReferences(true),
         onComplete: finishSelection, select: () => { anchor.current = location; setMultiple(true); setSelected(previous => new Set([...previous, asset.id])); } } });
     });
   }
@@ -363,12 +339,12 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
       void run(async () => {
         if (kind === "tags") await (projectScope && browseProjectId ? projectClassification(browseProjectId) : localClassification).example(id, [...new Set(ids)], true);
         else await materialCatalog.members(id, [...new Set(ids)]);
-        if (alive.current) setRevision(value => value + 1);
-        notifySuccess(kind === "tags" ? "已添加手动分类" : "已添加到集合");
+        if (alive.current) invalidateCatalog();
+        notifySuccess(kind === "tags" ? "已添加手动分类" : "已添加到文件夹");
       });
     }} data-creation-pick-disabled={multiple || working} data-drop-target={dropTarget ?? undefined} data-file-import-project-id={projectScope ? browseProjectId ?? "" : ""}
       data-file-import-collection-id={scope ?? undefined} data-file-import-collection-name={scope ? currentCollection?.name : undefined}
-      className={`categorized-library library-tactical${kind === "tags" && !flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : kind === "tags" ? "按标签浏览素材" : "按集合浏览素材"}
+      className={`categorized-library library-tactical${kind === "tags" && !flat ? " is-tag-catalog" : ""}`} aria-label={flat ? media === "videos" ? "平铺浏览视频" : "平铺浏览全部图片" : kind === "tags" ? "按标签浏览素材" : "按文件夹浏览素材"}
     style={{ ...glass.style, ...(sidebarWidth !== null ? { "--catalog-sidebar-width": `${sidebarWidth}px` } : {}) } as CSSProperties}>
     {dropPreview && dropTarget && dropName && <LibraryDropPreview {...dragItem} target={dropName} collection={kind === "collections"}/>}
     {glass.definition}
@@ -376,26 +352,20 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     <div className="file-view-heading">
       {navigation}
       <div className="video-collection-controls">
-      <LibraryFloatingControls>
-        <LibraryMediaSwitch/>
-        {(media === "images" || media === "videos") && <GeneratedImageFilter floating value={generatedFilter} onChange={useLocalFileMode.getState().setGeneratedFilter}/>}
-        <LibraryBrowserButton/>
-        {media === "images" && <FileColorFilter open={colorsOpen} onOpenChange={setColorsOpen} color={color} onColorChange={setColor} palette={palette}/>}
-        {toolbarActions}
-      </LibraryFloatingControls>
+      <LibraryCatalogControls filter={filter} onColorChange={setColor} onColorsPrepared={colorsPrepared}>{toolbarActions}</LibraryCatalogControls>
       </div>
     </div>
     <div className="catalog-body">
-      {!flat && <aside ref={sidebar} className="catalog-sidebar" aria-label={kind === "tags" ? "标签分类" : "集合目录"}>
+      {!flat && <aside ref={sidebar} className="catalog-sidebar" aria-label={kind === "tags" ? "标签分类" : "文件夹目录"}>
         <div className="library-sidebar-meter" aria-hidden="true">{[0, 1, 2].map(group => <span key={group}>{Array.from({ length: 7 }, (_, index) => <i key={index}/>)}</span>)}</div>
         <div className="library-sidebar-foot" aria-hidden="true"><i/><i/><i/><i/></div>
-        <div className="catalog-sidebar-heading"><strong>{kind === "tags" ? "标签" : "集合"}</strong>
-          <button title={kind === "tags" ? "管理标签" : "新建集合"} aria-label={kind === "tags" ? "管理标签" : "新建集合"}
+        <div className="catalog-sidebar-heading"><strong>{kind === "tags" ? "标签" : "文件夹"}</strong>
+          <button title={kind === "tags" ? "管理标签" : "新建文件夹"} aria-label={kind === "tags" ? "管理标签" : "新建文件夹"}
             onClick={() => kind === "tags" ? setManageTags(true) : setEditor({ parentId: null })}>{kind === "tags" ? <Settings2 size={15}/> : <Plus size={16}/>}</button></div>
         {kind === "tags" && <p className="catalog-sort-note">{catalogProjectId ? <button onClick={() => { setAlphabetic(v => !v); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} title="根据本项目生图提示词和素材标签在本机排序；点击切换拼音顺序">{alphabetic ? "拼音 A–Z" : "项目相关优先"}</button> : "拼音 A–Z"}</p>}
-        {catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
-        {kind === "tags" ? <CatalogTagIndex tags={visibleTags} active={active} dropTarget={dropTarget} alphabetic={!catalogProjectId || alphabetic} pinned={pinnedTags} onTogglePin={id => { togglePin(id); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} onNavigate={navigateTag} onLetter={navigateLetter}/> : <OverlayScrollArea className="catalog-tree-scroll" viewportClassName="catalog-index" label="集合目录滚动条">
-          <div role="tree" aria-label="集合层级" onKeyDown={listKey}>
+        {catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => invalidateCatalog()}>重试</button></p>}
+        {kind === "tags" ? <CatalogTagIndex tags={visibleTags} active={active} dropTarget={dropTarget} alphabetic={!catalogProjectId || alphabetic} pinned={pinnedTags} onTogglePin={id => { togglePin(id); setJump(null); if (scroll.current) scroll.current.scrollTop = 0; }} onNavigate={navigateTag} onLetter={navigateLetter}/> : <OverlayScrollArea className="catalog-tree-scroll" viewportClassName="catalog-index" label="文件夹目录滚动条">
+          <div role="tree" aria-label="文件夹层级" onKeyDown={listKey}>
             {rows.filter(row => !hidden(row.item.id)).map(({ item, depth, path }) => {
               const children = catalog.collections.some(c => c.parent_id === item.id);
               return <div key={item.id} data-catalog-item data-collection-id={item.id} role="treeitem" aria-label={item.name} aria-level={depth + 1} aria-selected={active === item.id}
@@ -417,7 +387,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
                 {children && <button className="catalog-tree-toggle" tabIndex={-1} aria-label={`${collapsed.has(item.id) ? "展开" : "收起"}${item.name}`} onClick={e => { e.stopPropagation(); toggle(item.id); }}>{collapsed.has(item.id) ? <ChevronRight size={12}/> : <ChevronDown size={12}/>}</button>}
                 <Folder className="catalog-tree-icon" size={14} aria-hidden="true"/><span className="catalog-tree-name">{item.name}</span>
                 <div className="catalog-tree-row-actions">
-                <button className="catalog-tree-add" aria-label={`在「${item.name}」中新建子集合`} title="新建子集合"
+                <button className="catalog-tree-add" aria-label={`在「${item.name}」中新建子文件夹`} title="新建子文件夹"
                   onClick={event => { event.stopPropagation(); setEditor({ parentId: item.id }); }}><Plus size={14}/></button>
                 <button aria-label={`「${item.name}」的更多操作`} title="更多操作" aria-haspopup="menu" aria-expanded={collectionMenu?.item.id === item.id}
                   onClick={event => { event.stopPropagation(); const trigger = event.currentTarget, rect = trigger.getBoundingClientRect(); setCollectionMenu({ item, x: rect.right, y: rect.bottom, trigger }); }}><MoreHorizontal size={14}/></button>
@@ -425,10 +395,10 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
               </div>;
             })}
           </div>
-          {catalogLoading && <p className="catalog-hint" role="status">正在读取集合…</p>}
-          {!catalogLoading && !catalog.collections.length && !catalogError && <p className="catalog-hint">还没有集合，点击上方 ＋ 创建。</p>}
+          {catalogLoading && <p className="catalog-hint" role="status">正在读取文件夹…</p>}
+          {!catalogLoading && !catalog.collections.length && !catalogError && <p className="catalog-hint">还没有文件夹，点击上方 ＋ 创建。</p>}
         </OverlayScrollArea>}
-        <div className="catalog-sidebar-resize" role="separator" aria-label={kind === "tags" ? "调整标签侧栏宽度" : "调整集合侧栏宽度"} aria-orientation="vertical"
+        <div className="catalog-sidebar-resize" role="separator" aria-label={kind === "tags" ? "调整标签侧栏宽度" : "调整文件夹侧栏宽度"} aria-orientation="vertical"
           tabIndex={0} aria-valuemin={89} aria-valuemax={sidebarMetrics.max} aria-valuenow={sidebarMetrics.width} title="拖动调宽 · 左右键微调 · 双击恢复默认宽度"
           onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.currentTarget.focus(); event.currentTarget.setPointerCapture(event.pointerId); resizing.current = { pointer: event.pointerId, x: event.clientX, width: sidebar.current!.getBoundingClientRect().width }; }}
           onPointerMove={event => { const start = resizing.current; if (start?.pointer === event.pointerId) resizeSidebar(start.width + event.clientX - start.x); }}
@@ -440,35 +410,33 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
       </aside>}
       <div ref={pinch} className="catalog-gallery">
         <LibraryTacticalBackdrop />
-        {flat && catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => setRevision(v => v + 1)}>重试</button></p>}
+        {flat && catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => invalidateCatalog()}>重试</button></p>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none" }}>
-          {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !total && !catalogError ? <p className="catalog-hint catalog-empty">{kind === "collections" && !currentCollection ? "还没有集合，点击左侧 ＋ 新建集合。" : query || color || generatedFilter ? "没有匹配的素材。" : kind !== "collections" ? "还没有已登记的素材。" : "集合还没有素材。可在素材右键菜单中选择「添加到集合」。"}</p> : null}
+          {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !total && !catalogError ? <p className="catalog-hint catalog-empty">{kind === "collections" && !currentCollection ? "还没有文件夹，点击左侧 ＋ 新建文件夹。" : query || color || generatedFilter ? "没有匹配的素材。" : kind !== "collections" ? "还没有已登记的素材。" : "文件夹还没有素材。可在素材右键菜单中选择「添加到文件夹」。"}</p> : null}
           {loadedCatalogScope.current === filterKey && <VirtualCatalog key={filterKey} filter={filter} sections={sections} headings={!flat} width={width} revision={revision} scroll={scroll}
             selected={selected} jump={jump} initialTop={savedPosition?.query === query && savedPosition?.color === color && savedPosition?.generatedFilter === generatedFilter ? savedPosition.top : 0}
             onActive={onActive} onAssetsChange={onAssetsChange} onBrowseGroup={onBrowseGroup} onSelect={select} onActivate={multiple || working ? undefined : activate} onOpen={openAsset} onContextMenu={context}/>}
         </OverlayScrollArea>
         <ThumbnailSizeSlider scope="library"/>
-        {(selected.size > 0 || multiple) && <div className="catalog-selection" role="group" aria-label="分类素材所选操作">
-          <button aria-label="取消选择" disabled={working} onClick={finishSelection}><X size={14}/></button>
-          <span>{working ? "正在处理…" : `${selected.size} 项`}</span><button disabled={working} onClick={() => void selectAll()}>全选</button>
-          <button disabled={working || !selected.size} onClick={() => setAssign([...selected])}>添加到集合</button>
-          {kind === "collections" && active && <button disabled={working || !selected.size} onClick={() => void run(async () => { await materialCatalog.members(active, [...selected], false); finishSelection(); setRevision(v => v + 1); })}>移出集合</button>}
-          {(media === "images" || media === "videos") && <button disabled={working || !selected.size} onClick={() => void run(async () => { const key = filterKey; const assets = await resolveSelection(); if (!alive.current || filterKeyRef.current !== key) return; await addMaterialAssets(assets, projectId, onNavigate ?? onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); })}>{projectId ? "添加到画板" : "添加到新项目"}</button>}
-        </div>}
+        {(selected.size > 0 || multiple) && <CatalogSelectionBar count={selected.size} busy={working} projectId={projectId} onFinish={finishSelection}
+          onSelectAll={() => void selectAll()} onAssign={() => setAssign([...selected])}
+          onAdd={media !== "audios" ? () => void run(async () => { const key = filterKey; const assets = await resolveSelection(); if (!alive.current || filterKeyRef.current !== key) return; await addMaterialAssets(assets, projectId, onNavigate ?? onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); }) : undefined}>
+          {kind === "collections" && active && <button disabled={working || !selected.size} onClick={() => void run(async () => { await materialCatalog.members(active, [...selected], false); finishSelection(); invalidateCatalog(); })}>移出文件夹</button>}
+        </CatalogSelectionBar>}
       </div>
     </div>
     {preview && <LibraryVideoPreview {...preview} projectId={projectId} onClose={() => setPreview(null)}/>}
-    {manageTags && <LocalClassificationDialog initialView="labels" projectId={projectScope ? browseProjectId ?? undefined : undefined} onClose={() => { setManageTags(false); setRevision(v => v + 1); }}/>}
+    {manageTags && <LocalClassificationDialog initialView="labels" projectId={projectScope ? browseProjectId ?? undefined : undefined} onClose={() => { setManageTags(false); invalidateCatalog(); }}/>}
     {references && <ModalShell title="外部引用" width="lg" onClose={() => setReferences(false)}><LocalFileBrowser initialTab="references" onClose={() => setReferences(false)} onCreateProject={() => void onCreateProject?.()}/></ModalShell>}
-    {editor && <CollectionEditorDialog {...editor} collections={catalog.collections} onClose={() => setEditor(null)} onSaved={id => { setActive(id); setRevision(v => v + 1); }}/>}
-    {collectionMenu && <ContextMenu x={collectionMenu.x} y={collectionMenu.y} label="集合操作" trigger={collectionMenu.trigger} onClose={() => setCollectionMenu(null)}>
+    {editor && <CollectionEditorDialog {...editor} collections={catalog.collections} onClose={() => setEditor(null)} onSaved={id => { setActive(id); invalidateCatalog(); }}/>}
+    {collectionMenu && <ContextMenu x={collectionMenu.x} y={collectionMenu.y} label="文件夹操作" trigger={collectionMenu.trigger} onClose={() => setCollectionMenu(null)}>
       <button role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => { setEditor({ item: collectionMenu.item, parentId: collectionMenu.item.parent_id ?? null }); setCollectionMenu(null); }}><Pencil size={13} aria-hidden="true"/>重命名</button>
-      <DeleteSubmenu><button role="menuitem" className="app-context-item is-danger px-2 py-1.5" onClick={() => { setDeleting(collectionMenu.item); setCollectionMenu(null); }}><Trash2 size={13} aria-hidden="true"/>删除集合</button></DeleteSubmenu>
+      <DeleteSubmenu><button role="menuitem" className="app-context-item is-danger px-2 py-1.5" onClick={() => { setDeleting(collectionMenu.item); setCollectionMenu(null); }}><Trash2 size={13} aria-hidden="true"/>删除文件夹</button></DeleteSubmenu>
     </ContextMenu>}
-    {assign && <CollectionAssignDialog assetIds={assign} onClose={() => setAssign(null)} onSaved={() => { finishSelection(); setRevision(v => v + 1); }}/>}
-    {deleting && <ModalShell title="删除集合" onClose={() => setDeleting(null)} preventClose={working}>
-      <p>删除「{deleting.name}」及其子集合？只移除集合关系，素材和电脑中的原文件均保留。</p>
-      <button className="app-button-dark" disabled={working} onClick={() => void run(async () => { await materialCatalog.deleteCollection(deleting.id); setDeleting(null); setActive(null); setRevision(v => v + 1); })}>{working ? "删除中…" : "删除集合"}</button>
+    {assign && <CollectionAssignDialog assetIds={assign} onClose={() => setAssign(null)} onSaved={() => { finishSelection(); invalidateCatalog(); }}/>}
+    {deleting && <ModalShell title="删除文件夹" onClose={() => setDeleting(null)} preventClose={working}>
+      <p>删除「{deleting.name}」及其子文件夹？只移除文件夹关系，素材和电脑中的原文件均保留。</p>
+      <button className="app-button-dark" disabled={working} onClick={() => void run(async () => { await materialCatalog.deleteCollection(deleting.id); setDeleting(null); setActive(null); invalidateCatalog(); })}>{working ? "删除中…" : "删除文件夹"}</button>
     </ModalShell>}
   </section>;
 }

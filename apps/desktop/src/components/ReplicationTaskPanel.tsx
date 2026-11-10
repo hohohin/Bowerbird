@@ -7,6 +7,7 @@ import { ModalShell } from "./ModalShell";
 import { VideoPlayer } from "./VideoPlayer";
 import { DouyinReferencePicker } from "./DouyinReferencePicker";
 import { useReplicationCapabilities } from "./useReplicationCapabilities";
+import { EnhancedReplication } from "./EnhancedReplication";
 import { replicationAnalysisParts, replicationDuration, replicationRewriteParts, replicationRunning, type ReplicationCase, type ReplicationReference, type ReplicationTask } from "../lib/videoReplication";
 import { ModelSelect, type ModelOption } from "./creation/ModelSelect";
 import { useStore } from "../store";
@@ -17,6 +18,7 @@ import type { Asset } from "../lib/types";
 import { replicationCall as call, replicationSteps as steps, replicationSourceKey as sourceKey, type ReplicationDialogProps } from "./replicationTaskState";
 
 export function ReplicationTaskPanel({ initial, defaults, onUpdate, onBack, ...props }: ReplicationDialogProps & { initial: ReplicationCase; defaults: { persona: string; rules: string }; onUpdate: (value: ReplicationCase) => void; onBack: () => void }) {
+  const [shotSeek, setShotSeek] = useState<{ time: number; revision: number }>();
   const [draft, setDraft] = useState<ReplicationCase>(() => {
     const value = { ...defaults, ...initial };
     // Reopening an older result can recover a previously unrecognized scene heading.
@@ -32,6 +34,8 @@ export function ReplicationTaskPanel({ initial, defaults, onUpdate, onBack, ...p
   const [media, setMedia] = useState<string | null>(null), [mediaError, setMediaError] = useState("");
   const [sources, setSources] = useState<Asset[]>([]), [query, setQuery] = useState(""), [offset, setOffset] = useState(0);
   const [framePreview, setFramePreview] = useState("");
+  const [videoAdded, setVideoAdded] = useState(false);
+  const videoAddId = useRef(crypto.randomUUID());
   const caps = useReplicationCapabilities(props.projectId);
   const codexHealth = useStore(s => s.codexHealth), entitlement = useStore(s => s.cloudEntitlement), auth = useStore(s => s.cloudAuth);
   const balance = entitlement ? entitlement.balances.daily + entitlement.balances.sub + entitlement.balances.topup : 0;
@@ -97,6 +101,13 @@ export function ReplicationTaskPanel({ initial, defaults, onUpdate, onBack, ...p
     change({ referenceId: reference.id, reference, title: reference.name.slice(0,100), step: 2 }); await flush();
   }
   async function choose(data: { path?: string; assetId?: string }) { await flush(); await useReference(await call<ReplicationReference>(props.projectId, "reference", data)); }
+  async function addVideo() {
+    if (!draftRef.current.referenceId || !props.onAddVideo) return;
+    await flush();
+    const path = await call<string>(props.projectId, "media", { id: draftRef.current.referenceId });
+    await props.onAddVideo(path, videoAddId.current);
+    if (alive.current) setVideoAdded(true);
+  }
   async function capture(frame: VideoFrame) {
     const asset = await api.importImageBytes({ dataUrl: frame.dataUrl, projectId: props.projectId, source: "video-frame", fileName: `复刻参考-${frame.time.toFixed(3)}.png` });
     if (!alive.current) return;
@@ -108,7 +119,7 @@ export function ReplicationTaskPanel({ initial, defaults, onUpdate, onBack, ...p
     if (operation === "rewrite" && !value.analysisText?.trim()) throw new Error("请先分析视频");
     await flush();
     const job = await call<ReplicationTask>(props.projectId, "create", { caseId: value.id, operation, title: value.title, referenceId: value.referenceId,
-      analysisProvider: value.analysisProvider || "doubao",
+      analysisProvider: value.analysisProvider || "doubao", analysisSettings: value.analysisSettings,
       inputText: value.transcript?.trim() ? `${value.analysisText}\n\n【语音转写】\n${value.transcript}` : value.analysisText,
       rewriteDirection: value.rewriteDirection, persona: value.persona, rules: value.rules, frameReference: value.frameReference, product: null, ratio: "9:16" });
     onUpdate({ ...initial, ...draftRef.current, ...(operation === "analyze" ? { analysisJob: job } : { rewriteJob: job }) });
@@ -133,19 +144,32 @@ export function ReplicationTaskPanel({ initial, defaults, onUpdate, onBack, ...p
     <div className="vr-task-layout">
       <nav className="vr-step-nav" aria-label="复刻步骤">{steps.map((name, index) => <button key={name} aria-current={step === index + 1 ? "step" : undefined} disabled={busy || !canStep(index + 1)} onClick={() => change({ step: (index + 1) as ReplicationCase["step"] })}><span>{index + 1}</span><div><small>流程 {index + 1}</small><strong>{name}</strong></div></button>)}</nav>
       <section className="vr-fixed-video" aria-label="任务参考视频">
-        {media ? <VideoPlayer key={media} path={media} embedded onReferenceFrame={capture} onAddFrame={props.onAddFrame} /> : <div className="vr-video-placeholder"><Film size={36} /><p>{draft.referenceId ? "正在载入参考视频…" : "请先在右侧获取视频"}</p><button disabled>添加该帧为参考图</button><button disabled>添加该帧到画板</button></div>}
+        {media ? <VideoPlayer key={media} path={media} seekRequest={shotSeek} embedded onReferenceFrame={capture} onAddFrame={props.onAddFrame} /> : <div className="vr-video-placeholder"><Film size={36} /><p>{draft.referenceId ? "正在载入参考视频…" : "请先在右侧获取视频"}</p><button disabled>添加该帧为参考图</button><button disabled>添加该帧到画板</button></div>}
         {mediaError && <p className="vr-message is-error" role="alert">{userErrorMessage(mediaError, "参考视频暂时无法加载，请重新获取视频。")}</p>}
         {draft.reference && <p className="vr-hint">{draft.reference.name} · {draft.reference.duration.toFixed(1)} 秒</p>}
+        {props.onAddVideo && draft.referenceId && <div className="vr-actions"><button disabled={busy || !media || videoAdded} onClick={() => void action(addVideo)}>{videoAdded ? "视频已添加到画板" : "添加视频到画板"}</button></div>}
         {draft.frameReference && <div className="vr-frame-reference">{framePreview && <img src={framePreview} alt="首帧生成参考图" />}<div><strong>已选参考帧</strong><p>{videoTime(draft.frameReference.time)}</p><button disabled={busy} onClick={() => change({ frameReference: null })}>移除参考图</button></div></div>}
       </section>
       <section className="vr-step-content" aria-label={steps[step - 1]}>
         <h3>{steps[step - 1]}</h3>
+        {draft.referenceId && <EnhancedReplication key={draft.id} projectId={props.projectId} caseId={draft.id} initialId={draft.enhancedId}
+          persona={draft.persona || ""} rules={draft.rules || ""} direction={draft.rewriteDirection || ""} beforePrepare={flush}
+          onPrepared={enhancedId => change({ enhancedId })} onAddVideo={props.onAddVideo} onAddAnalysis={props.onAddAnalysis} onViewShot={time => setShotSeek(current => ({ time, revision: (current?.revision || 0) + 1 }))} />}
         {error && <div className="vr-message is-error" role="alert">{userErrorMessage(error, saveStatus === "保存失败" ? "任务未能保存，请点击重试保存。" : "操作未完成，请稍后重试。")}{saveStatus === "保存失败" && <button onClick={() => void action(flush)}>重试保存</button>}</div>}
-        {step === 1 && <fieldset className="vr-analysis-provider" disabled={busy || running}><legend>分析供应商</legend>
+        {(step === 1 || step === 2) && <fieldset className="vr-analysis-provider" disabled={busy || running}><legend>分析供应商</legend>
           <ModelSelect kind="视频分析" value={provider} label={provider === "codex" ? "本机 Codex" : "豆包"} source={provider === "codex" ? "personal" : "cloud"}
             options={analysisOptions} onChange={key => { if (!busy && !running && (key === "codex" || key === "doubao")) change({ analysisProvider: key }); }}
             cloudBalance={entitlement ? balance : null} cloudLoggedIn={auth?.logged_in} />
           <p className="vr-hint">{provider === "codex" ? "使用本机 Codex 订阅分析画面，不扣 Bowerbird 积分；暂不支持语音转写。" : "通过 Bowerbird Cloud 分析画面与音轨，按次消耗积分。"}</p>
+          {provider === "doubao" && <div className="vr-actions">
+            <label className="vr-field">截帧频率<select aria-label="截帧频率" value={draft.analysisSettings?.fps ?? 1} onChange={e => change({ analysisSettings: { transcribe: true, thinking: "default", ...draft.analysisSettings, fps: Number(e.target.value) } })}>
+              {[0.2, 0.5, 1, 2, 5].map(fps => <option key={fps} value={fps}>{fps} 帧/秒</option>)}
+            </select></label>
+            <label className="vr-field">语音转写<select aria-label="语音转写开关" value={String(draft.analysisSettings?.transcribe ?? true)} onChange={e => change({ analysisSettings: { fps: 1, thinking: "default", ...draft.analysisSettings, transcribe: e.target.value === "true" } })}><option value="true">开启</option><option value="false">关闭</option></select></label>
+            <label className="vr-field">思考程度<select aria-label="思考程度" value={draft.analysisSettings?.thinking ?? "default"} onChange={e => change({ analysisSettings: { fps: 1, transcribe: true, ...draft.analysisSettings, thinking: e.target.value as NonNullable<ReplicationCase["analysisSettings"]>["thinking"] } })}>
+              <option value="default">默认</option><option value="disabled">关闭</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option>
+            </select></label>
+          </div>}
         </fieldset>}
         {step === 1 && (draft.referenceId ? <><p className="vr-message">此任务已获取参考视频。</p><p className="vr-hint">{draft.shareText}</p><div className="vr-actions"><button className="is-primary" onClick={() => change({ step: 2 })}>继续分析视频</button></div></> : <>
           <div className="vr-source-tabs" role="group" aria-label="获取途径">{([["douyin", "抖音链接"], ["local", "本地视频"], ["library", "素材库"]] as const).map(([id, name]) => <button key={id} disabled={busy} aria-pressed={draft.sourceMethod === id} onClick={() => { localStorage.setItem(sourceKey,id); change({ sourceMethod: id }); }}>{name}</button>)}</div>

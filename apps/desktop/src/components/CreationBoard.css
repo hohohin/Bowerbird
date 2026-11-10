@@ -137,3 +137,8 @@ html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: r
 
 .composer-chat-provider { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 10px 4px 5px; border: 1px solid var(--bb-line); border-radius: 999px; background: var(--bb-surface); font-size: 12px; white-space: nowrap; }
 .composer-chat-provider > span { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #8052c3; color: white; }
+
+.composer-input-area { position: relative; }
+.composer-input-area.has-h3-action { padding-bottom: 36px; }
+html[data-theme] .composer-glass .composer-input-area.has-h3-action .composer-description { padding-bottom: 8px; }
+.composer-input-area > .h3-optimize-action { position: absolute; right: 20px; bottom: 8px; }

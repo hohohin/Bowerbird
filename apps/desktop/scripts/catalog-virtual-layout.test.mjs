@@ -9,6 +9,16 @@ const measuredPages=(id,ratios)=>new Map(Array.from({length:Math.ceil(ratios.len
 ]));
 const close=(actual,expected,message)=>assert.ok(Math.abs(actual-expected)<1e-7,`${message}: ${actual} != ${expected}`);
 
+test('mixed media keeps text at 3:4 without changing image and audio geometry',()=>{
+  const items=[{store_path:'/notes.md',width:1,height:1},{store_path:'/notes.txt'}, {store_path:'/notes.MARKDOWN'},
+    {store_path:'/photo.png',width:3,height:2},{store_path:'/sound.mp3'}];
+  for(const width of [320,600,1440]) {
+    const geometry=masonryGeometry(items,width,96);
+    assert.deepEqual(geometry.cells.map(cell=>cell.ratio),[.75,.75,.75,1.5,2]);
+    for(const cell of geometry.cells.slice(0,3)) close(cell.width / cell.height,.75,'portrait text tile');
+  }
+});
+
 function assertContinuous(ratios,available,target,measured=measuredPages('all',ratios)) {
   const assets=assetsFor(ratios);
   const expected=masonryGeometry(assets,available,target);

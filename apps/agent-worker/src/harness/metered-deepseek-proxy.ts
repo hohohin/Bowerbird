@@ -17,11 +17,6 @@ import {
 import { canonicalJson, sha256Hex } from "../kernel/tool-ledger.ts";
 
 const REQUEST_PATH = "/chat/completions";
-// Transport protection only. DSH owns token measurement and conversation compaction.
-const MAX_REQUEST_BYTES = 8 * 1024 * 1024;
-const MAX_PLANNING_RESPONSE_BYTES = 2 * 1024 * 1024;
-const MAX_HTML_EXECUTION_RESPONSE_BYTES = 4 * 1024 * 1024;
-const MAX_RESULT_ARTIFACT_BYTES = 64 * 1024;
 const DEFAULT_MAX_MODEL_TURNS = 32;
 const MAX_UPSTREAM_ATTEMPTS = 2;
 const RETRYABLE_UPSTREAM_STATUSES = new Set([502, 503, 504]);
@@ -65,7 +60,7 @@ export type MeteredDeepSeekProxyOptions = {
   upstream: DeepSeekConfig;
   allowInsecureLoopback?: boolean;
   maxModelTurns?: number;
-  maxOutputTokens?: number;
+  signal?: { readonly aborted: boolean };
   allowedToolNames?: readonly string[];
   fetch?: MeteredDeepSeekProxyFetch;
   /** Optional test-only observer for unexpected local persistence/control errors. */
@@ -95,15 +90,6 @@ type PersistedProxyResult = {
   providerRequestId?: string;
 };
 
-function maxResponseBytes(phase: MeteredDeepSeekProxyOptions["phase"]): number {
-  // Tool-call SSE framing can grow much larger than the final structured arguments.
-  // Both routes remain bounded again by their action schema and the 64 KiB compressed
-  // durable-result cap; HTML needs the larger raw transport allowance.
-  return phase === "execute_approved_plan"
-    ? MAX_HTML_EXECUTION_RESPONSE_BYTES
-    : MAX_PLANNING_RESPONSE_BYTES;
-}
-
 class ProxyHttpError extends Error {
   readonly status: number;
   readonly code: string;
@@ -118,6 +104,10 @@ class ProxyHttpError extends Error {
 
 function sendJson(response: ServerResponse, status: number, code: string): void {
   const body = JSON.stringify({ error: { code } });
+  if (response.headersSent) {
+    response.end(`data: ${body}\n\ndata: [DONE]\n\n`);
+    return;
+  }
   response.writeHead(status, {
     "cache-control": "no-store",
     "content-length": String(new TextEncoder().encode(body).byteLength),
@@ -141,14 +131,10 @@ function authorized(request: IncomingMessage, capability: Uint8Array): boolean {
   return candidate.byteLength === capability.byteLength && timingSafeEqual(candidate, capability);
 }
 
-async function readJson(request: IncomingMessage, maxBytes = MAX_REQUEST_BYTES): Promise<unknown> {
+async function readJson(request: IncomingMessage): Promise<unknown> {
   const contentType = request.headers["content-type"];
   if (typeof contentType !== "string" || contentType.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
     throw new ProxyHttpError(415, "content_type_invalid");
-  }
-  const declaredLength = Number(request.headers["content-length"] ?? 0);
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    throw new ProxyHttpError(413, "request_too_large");
   }
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -157,11 +143,6 @@ async function readJson(request: IncomingMessage, maxBytes = MAX_REQUEST_BYTES):
     request.on("data", (chunk) => {
       if (settled) return;
       total += chunk.byteLength;
-      if (total > maxBytes) {
-        settled = true;
-        reject(new ProxyHttpError(413, "request_too_large"));
-        return;
-      }
       chunks.push(Uint8Array.from(chunk));
     });
     request.on("end", () => {
@@ -270,13 +251,13 @@ function encodePersistedResult(result: ProxyResult): string {
   return canonicalJson(persisted);
 }
 
-function decodePersistedResult(value: unknown, responseLimit: number): ProxyResult {
+function decodePersistedResult(value: unknown): ProxyResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("dsh_model_proxy_result_invalid");
   }
   const persisted = value as Partial<PersistedProxyResult>;
   if (persisted.schemaVersion !== 2 || persisted.status !== 200 || persisted.bodyEncoding !== "gzip+base64" ||
-      !Number.isSafeInteger(persisted.bodyBytes) || Number(persisted.bodyBytes) <= 0 || Number(persisted.bodyBytes) > responseLimit ||
+      !Number.isSafeInteger(persisted.bodyBytes) || Number(persisted.bodyBytes) <= 0 ||
       typeof persisted.bodySha256 !== "string" || !/^[0-9a-f]{64}$/.test(persisted.bodySha256) ||
       typeof persisted.bodyGzipBase64 !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(persisted.bodyGzipBase64) ||
       persisted.bodyGzipBase64.length % 4 !== 0 || !persisted.usage || typeof persisted.usage !== "object") {
@@ -288,7 +269,7 @@ function decodePersistedResult(value: unknown, responseLimit: number): ProxyResu
   }
   let bodyBytes: Uint8Array;
   try {
-    bodyBytes = gunzipSync(compressed, { maxOutputLength: responseLimit });
+    bodyBytes = gunzipSync(compressed, { maxOutputLength: Number(persisted.bodyBytes) });
   } catch {
     throw new Error("dsh_model_proxy_result_invalid");
   }
@@ -316,6 +297,9 @@ class MeteredProxyAdapter implements DurableToolAdapter<ProxyRequest, ProxyResul
   private readonly options: MeteredDeepSeekProxyOptions;
   private readonly upstream: Required<DeepSeekConfig>;
   private readonly fetchImpl: MeteredDeepSeekProxyFetch;
+  private readonly abortController = new AbortController();
+
+  close(): void { this.abortController.abort(); }
 
   constructor(options: MeteredDeepSeekProxyOptions, upstream: Required<DeepSeekConfig>) {
     this.options = options;
@@ -335,9 +319,8 @@ class MeteredProxyAdapter implements DurableToolAdapter<ProxyRequest, ProxyResul
             "content-type": "application/json",
           },
           body: JSON.stringify(request),
-          signal: (globalThis as unknown as {
-            AbortSignal: { timeout(timeoutMs: number): AbortSignal };
-          }).AbortSignal.timeout(this.upstream.timeoutMs),
+          // Cancellation/lease loss closes this proxy; long output has no wall-clock deadline.
+          signal: this.abortController.signal,
         });
       } catch {
         await this.recordUsage(callId, { inputUnits: 0, outputUnits: 0 });
@@ -348,6 +331,13 @@ class MeteredProxyAdapter implements DurableToolAdapter<ProxyRequest, ProxyResul
       // 502/503/504 once inside this already-durable logical call; do not retry
       // transport-unknown failures or stable 4xx responses.
       if (!RETRYABLE_UPSTREAM_STATUSES.has(response.status) || attempt === MAX_UPSTREAM_ATTEMPTS - 1) {
+        if (response.status === 400) {
+          let detail = "";
+          try { detail = await response.text(); } catch { /* preserve the received HTTP failure */ }
+          if (/context[_ ]length|context window|maximum context|too many tokens/i.test(detail)) {
+            throw new DurableProviderError("terminal", "deepseek_context_limit");
+          }
+        }
         throw new DurableProviderError("terminal", `deepseek_http_${response.status}`);
       }
     }
@@ -363,10 +353,6 @@ class MeteredProxyAdapter implements DurableToolAdapter<ProxyRequest, ProxyResul
     if (!size) {
       await this.recordUsage(callId, { inputUnits: 0, outputUnits: 0 });
       throw new DurableProviderError("unknown", "deepseek_response_empty");
-    }
-    if (size > maxResponseBytes(this.options.phase)) {
-      await this.recordUsage(callId, { inputUnits: 0, outputUnits: 0 });
-      throw new DurableProviderError("unknown", "deepseek_response_too_large");
     }
     let parsed: Pick<ProxyResult, "usage" | "providerRequestId">;
     try {
@@ -393,9 +379,6 @@ class MeteredProxyAdapter implements DurableToolAdapter<ProxyRequest, ProxyResul
   async persist(callId: string, result: ProxyResult) {
     const content = encodePersistedResult(result);
     const bytes = new TextEncoder().encode(content);
-    if (!bytes.byteLength || bytes.byteLength > MAX_RESULT_ARTIFACT_BYTES) {
-      throw new DurableProviderError("terminal", "deepseek_result_too_large");
-    }
     const sha256 = sha256Hex(content);
     if (result.providerRequestId) {
       await this.persistOperation("response_id", () => this.options.control.markToolSubmitted({
@@ -461,13 +444,13 @@ class MeteredProxyAdapter implements DurableToolAdapter<ProxyRequest, ProxyResul
     const bytes = await this.options.control.downloadVerifiedBytes(
       artifact.url,
       { sha256: artifact.sha256, bytes: artifact.bytes },
-      MAX_RESULT_ARTIFACT_BYTES,
+      Infinity,
     );
     let parsed: unknown;
     try { parsed = JSON.parse(new TextDecoder("utf8", { fatal: true }).decode(bytes)); } catch {
       throw new Error("dsh_model_proxy_result_invalid");
     }
-    return decodePersistedResult(parsed, maxResponseBytes(this.options.phase));
+    return decodePersistedResult(parsed);
   }
 }
 
@@ -530,6 +513,7 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
   let inFlight = false;
   const distinctCalls = new Set<string>();
   const activeRequests = new Set<Promise<void>>();
+  let cancellation: ReturnType<typeof setInterval> | undefined;
   let proxy: MeteredDeepSeekProxy;
 
   const handleRequest = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
@@ -538,17 +522,15 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
     if (!authorized(request, capability)) return sendJson(response, 401, "capability_invalid");
     if (inFlight) return sendJson(response, 409, "request_in_flight");
     inFlight = true;
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
     try {
+      if (options.signal?.aborted) throw new ProxyHttpError(409, "agent_run_cancelled");
       const modelRequest = validateRequest(await readJson(request), upstream.model);
       if (options.allowedToolNames && Array.isArray(modelRequest.tools)) {
         modelRequest.tools = modelRequest.tools.filter((tool) => {
           const name = (tool as { function?: { name?: string } })?.function?.name;
           return typeof name === "string" && options.allowedToolNames!.includes(name);
         });
-      }
-      if (options.maxOutputTokens !== undefined) {
-        modelRequest.max_tokens = Math.min(Number(modelRequest.max_tokens) || options.maxOutputTokens, options.maxOutputTokens);
-        if (!Number.isSafeInteger(modelRequest.max_tokens) || Number(modelRequest.max_tokens) < 1) throw new ProxyHttpError(400, "request_invalid");
       }
       const requestHash = sha256Hex(canonicalJson(modelRequest));
       const callId = sha256Hex(canonicalJson({
@@ -561,6 +543,11 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
         if (distinctCalls.size >= maxModelTurns) throw new ProxyHttpError(429, "model_turn_budget_exhausted");
         distinctCalls.add(callId);
       }
+      // Keep DSH's idle watchdog alive while the complete result is durably saved.
+      heartbeat = setInterval(() => {
+        if (!response.headersSent) response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+        response.write(": keep-alive\n\n");
+      }, 15_000);
       const result = await dispatcher.dispatch({
         runId: options.runId,
         leaseId: options.leaseId,
@@ -568,7 +555,14 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
         phase: options.phase,
         toolName: "model_turn",
       }, modelRequest);
-      response.writeHead(200, {
+      // A provider-truncated answer must never become a successful text result.
+      // The durable response and usage above remain available without resubmission.
+      if (result.body.split(/\r?\n/).some(line => {
+        if (!line.startsWith("data: ") || line === "data: [DONE]") return false;
+        try { return JSON.parse(line.slice(6)).choices?.some((choice: { finish_reason?: string }) => choice.finish_reason === "length"); }
+        catch { return false; }
+      })) throw new ProxyHttpError(422, "deepseek_output_limit");
+      if (!response.headersSent) response.writeHead(200, {
         "cache-control": "no-store",
         "content-type": "text/event-stream",
         "x-content-type-options": "nosniff",
@@ -582,6 +576,7 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
       else if (error instanceof DurableProviderError) sendJson(response, durableErrorStatus(error), error.safeCode);
       else sendJson(response, 502, "model_proxy_failed");
     } finally {
+      if (heartbeat) clearInterval(heartbeat);
       inFlight = false;
     }
   };
@@ -595,7 +590,9 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
   });
   const deactivate = () => {
     active = false;
+    if (cancellation) clearInterval(cancellation);
     capability.fill(0);
+    adapter.close();
   };
   server.on("close", deactivate);
   await new Promise<void>((resolve, reject) => {
@@ -607,6 +604,9 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
     server.close(() => undefined);
     throw new Error("dsh_model_proxy_address_invalid");
   }
+  if (options.signal) cancellation = setInterval(() => {
+    if (options.signal?.aborted) adapter.close();
+  }, 250);
   const waitForIdle = async (): Promise<void> => {
     while (activeRequests.size > 0) {
       await Promise.allSettled([...activeRequests]);

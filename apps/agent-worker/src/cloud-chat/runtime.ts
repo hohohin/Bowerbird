@@ -20,24 +20,6 @@ export async function completeChatJob(input: ChatInput, model: Pick<DeepSeekBack
   return normalized;
 }
 
-async function boundedText(response: Response, limit: number): Promise<string> {
-  if (!response.body) throw new Error("chat_empty_response");
-  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
-  let length = 0;
-  try {
-    for (;;) {
-      const next = await reader.read(); if (next.done) break;
-      length += next.value.length;
-      if (length > limit) { await reader.cancel(); throw new Error("chat_response_too_large"); }
-      chunks.push(next.value);
-    }
-  } finally { reader.releaseLock(); }
-  const bytes = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-  return new TextDecoder().decode(bytes);
-}
-
 type ChatJob = { id: string; lease_id: string; input_hash: string; input_url: string };
 export type ChatControl = (body: Record<string, unknown>) => Promise<Record<string, unknown>>;
 export async function processChatJob(job: ChatJob, control: ChatControl, model: Pick<DeepSeekBackend, "chat">, modelName: string, download: typeof fetch = fetch): Promise<void> {
@@ -46,7 +28,7 @@ export async function processChatJob(job: ChatJob, control: ChatControl, model: 
   try {
     const response = await download(job.input_url, { signal: AbortSignal.timeout(30_000) });
     if (!response.ok) throw new Error("chat_input_unavailable");
-    const text = await boundedText(response, 300_000);
+    const text = await response.text();
     if (createHash("sha256").update(text).digest("hex") !== job.input_hash) throw new Error("chat_input_hash_mismatch");
     const input = validateChatInput(JSON.parse(text));
     submitted = true;
@@ -68,12 +50,12 @@ export async function runChatWorker(env: Record<string, string | undefined>): Pr
     const response = await fetch(url, { method: "POST", headers: { authorization: `Bearer ${token}`, "x-worker-id": workerId, "content-type": "application/json" },
       body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
     if (!response.ok) throw new Error("chat_control_failed");
-    return JSON.parse(await boundedText(response, 400_000));
+    return JSON.parse(await response.text());
   };
   const config = deepSeekConfigFromEnv(env);
   const model = new DeepSeekBackend({ ...config, timeoutMs: 90_000 }, async (endpoint, request) => {
     const response = await fetch(endpoint, { ...request, signal: AbortSignal.timeout(90_000) });
-    return { ok: response.ok, status: response.status, json: async () => JSON.parse(await boundedText(response, 400_000)) };
+    return { ok: response.ok, status: response.status, json: async () => JSON.parse(await response.text()) };
   });
   const backoff = new IdlePollBackoff(1500, 15_000);
   for (;;) {

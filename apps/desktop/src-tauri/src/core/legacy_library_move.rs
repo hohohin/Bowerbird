@@ -190,6 +190,9 @@ pub(super) fn resume(files: &FileWorkspace, db: &Database, mut state: MoveStatus
 pub(crate) fn transfer_shared(conn: &Connection, paths: &LibraryPaths, project: &str) -> AppResult<(usize,Vec<PathBuf>)> {
     let Some(files)=&paths.files else{return Ok((0,vec![]));};
     let config=files.snapshot();let Some(owner)=config.projects.get(project) else{return Ok((0,vec![]));};
+    // Active work may hold an original path in memory. Keep shared files in place
+    // instead of moving that path or vetoing the confirmed project deletion.
+    if !active_work(conn)?.is_empty() { return Ok((0,vec![])); }
     let mut stmt=conn.prepare("SELECT id,store_path FROM assets WHERE store_path IS NOT NULL AND id NOT IN (SELECT asset_id FROM external_assets) AND id NOT IN (SELECT asset_id FROM connected_entries) ORDER BY id")?;
     let assets=stmt.query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?)))?.collect::<Result<Vec<_>,_>>()?;
     let mut items=vec![];let mut originals=vec![];
@@ -197,7 +200,7 @@ pub(crate) fn transfer_shared(conn: &Connection, paths: &LibraryPaths, project: 
         let source=PathBuf::from(raw);if !nested(&source,owner){continue;}
         let refs=references(conn,&id,&source)?;
         let Some((next,name))=refs.iter().find(|(id,_)|id!=project) else{continue;};
-        ensure_idle(conn)?;no_links(&source)?;
+        no_links(&source)?;
         let folder=files.project_directory(next,name)?;
         let target=folder.join(filename(&id,&source)?);
         let item=Item{id,source:source.clone(),target,hash:fingerprint(&source)?,bytes:fs::metadata(&source)?.len(),projects:vec![next.clone()]};

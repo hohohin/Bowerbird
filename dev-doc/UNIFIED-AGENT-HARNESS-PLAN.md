@@ -1,5 +1,19 @@
 # Bowerbird 通用云端 Agent Harness 专项计划
 
+## 2026-11-09：取消 Agent 文本预算拦截（Cloud 已部署）
+
+现行决定见 PROJECT.md。统一 DSH 使用上游模型的 1,048,576 上下文／393,216 输出 token 容量，不再采用 32K 工作窗口／8K 输出；关闭自动摘要以保留原文。规划与 HTML／内容执行各自采用相同模型容量参数，保持各自工具白名单。模型代理和文本传输移除应用字节配额，长任务通过心跳和原 Run 取消／租约管理。授权、计量、身份、存储保留期和平台真实容量保持。现役 Worker 基于原镜像仅覆盖 8 个模块与 3 个 profile，66 项隔离测试及真实 DSH 三阶段配置通过；未调用付费模型。具体改动、验证及桌面边界见 [工作流记录](CANVAS-WORKFLOW.md#2026-11-09agent-文本容量与-dsh-配置cloud-已部署桌面源码待发布)；下文历史 24K／32K 成本窗口不再作为新配置依据。
+
+## 2026-11-08：Cloud DSH Skill 的服务端归属
+
+现行决策见 PROJECT.md：所有 Cloud DSH 内置 Skill／领域方法由 VPS 管理与加载，客户端只传选择标识、业务参数和用户内容，不把方法正文随每次请求提交。图片、HTML 等继续使用 VPS 静态目录和 `read_skill`；文本模式复用统一 processor，不新增 Runner。
+
+H3／文本编辑使用既有 `goal` 字符串承载版本化选择信封：`bowerbird:cloud-text-skill:v1\n` 后为 `{id, parameters}`（H3）或 `{id, instruction}`（文本编辑的用户要求），原文仍放在 `textRewrite.source`。无新增 Edge／数据库字段或权限；Worker 按闭集标识验证参数，不允许客户端路径或方法正文覆盖文件。普通用户改写要求保持原行为。旧版 H3 frontmatter 和编辑器前缀仅用于兼容识别，服务器丢弃其内置方法，读取 VPS 文件。
+
+维护源码在 `apps/agent-worker/src/skills/text/<id>/SKILL.md`；生产 `/opt/bowerbird/agent-worker/src/skills/text/` 以只读目录挂载为 `/app/text-skills`，由 `BOWERBIRD_TEXT_SKILL_DIR` 指定。未配置时读取 Worker 代码旁目录；显式目录缺文件、空文件或超过 20000 字符时报错，不回退客户端内容。任务首次执行前将方法正文、版本、参数与 SHA-256 写入 checkpoint，恢复不随文件更新漂移。更新前备份，用同目录 UTF-8 临时文件原子重命名，保持 Worker 可读；新任务自动读取，不必重建镜像或发布客户端。跨文件契约变化仍按兼容发布顺序处理。
+
+11:09 已部署并核对现役加载、只读挂载和哈希；22 项候选断网测试通过。[证据及回滚](../project_logs/2026-11-08-cloud-dsh-skills.md)。下文历史客户端提交方式不再作为 Cloud Skill 实现范式。
+
 > **2026-09-25 本机工作流会话范围更新：** 工作流文字 Agent 与编排助手按“仓库＋项目＋卡片”使用稳定独立 DSH 会话，通过 `session.create` 创建或幂等接续；不再投递最近共享会话。文字 Agent 自动发送已连接图文，图片使用原生附件。普通创作板 Agent DS 仍走原共享通道，但排除这些专属会话。本条覆盖下述历史共享会话说明在工作流卡片上的适用范围，详见 [工作流文档](CANVAS-WORKFLOW.md)。
 
 > 2026-09-23 工作流编排采用 `planning-v2` 两阶段协议：本机 DSH 提交声明式草稿，桌面编译卡片/连线并写回有 requestId、revision 与 SHA-256 的校验反馈，DSH 最多修订三版，再提交同一已校验内容。复用原 pending/results 队列，新增 feedback 文件，不增加模型 Runner；文本改写 v1 不变。详见 [工作流协议与编译器](CANVAS-WORKFLOW.md)。当前仅源码与隔离验证，未宣称真实 DSH v2 往返或生成质量已验收。

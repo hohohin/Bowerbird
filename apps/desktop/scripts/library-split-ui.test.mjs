@@ -39,7 +39,7 @@ try {
   await controls(pane);
   for(const name of ['图片','视频','只看生成图','不看生成图','颜色筛选','文件浏览器','向右分栏','关闭此栏']) assert.equal(await pane.getByRole('button',{name,exact:true}).count(),1, `${await pane.getAttribute('aria-label')}: ${name} ${await pane.locator('.library-controls-host').getAttribute('class')}`);
  }
- await view(right,'集合分类'); await right.locator('[data-collection-id="collection"]').waitFor();
+ await view(right,'文件夹'); await right.locator('[data-collection-id="collection"]').waitFor();
  assert.equal(await selectedView(left),'标签分类');
  await view(right,'全部');
  await (await button(right,'视频')).click(); await right.locator('[aria-label="平铺浏览视频"]').waitFor();
@@ -112,10 +112,10 @@ try {
  assert.deepEqual(await page.evaluate(()=>window.classified),{tagId:'first',assetIds:['asset-0'],positive:true});
  await right.locator('[data-asset-id="asset-0"]').click({modifiers:['Control']});
  await right.locator('[data-asset-id="asset-1"]').click({modifiers:['Control']});
- await view(left,'集合分类');
+ await view(left,'文件夹');
  await right.locator('[data-asset-id="asset-0"]').dispatchEvent('dragstart',{dataTransfer:transfer});
  await left.locator('[data-collection-id="collection"]').dispatchEvent('dragover',{dataTransfer:transfer});
- assert.match(await preview.getAttribute('aria-label'),/2 个素材，即将添加到集合 集合/);
+ assert.match(await preview.getAttribute('aria-label'),/2 个素材，即将添加到文件夹 集合/);
  await preview.screenshot({path:'.tmp/library-split/drop-card-collection.png'});
  await right.locator('[data-asset-id="asset-0"]').dispatchEvent('dragend',{dataTransfer:transfer});
  await right.locator('[data-asset-id="asset-0"]').dragTo(left.locator('[data-collection-id="collection"]'));
@@ -124,7 +124,7 @@ try {
  await view(right,'标签分类');
  await left.locator('[data-asset-id="asset-0"]').dragTo(right.locator('[data-tag-id="last"]'));
  await page.waitForFunction(()=>window.classified.tagId==='last');
- assert.equal(await selectedView(left),'集合分类');
+ assert.equal(await selectedView(left),'文件夹');
  await page.setViewportSize({width:1040,height:840});
  await (await button(right,'不看生成图')).click(); assert.equal(await (await button(left,'不看生成图')).getAttribute('aria-pressed'),'false');
  await page.screenshot({path:'.tmp/library-split/independent-narrow.png'});
@@ -133,7 +133,7 @@ try {
  await page.keyboard.press('Escape'); await (await button(left,'向右分栏')).click();
  const middle=pane('home-pane-3'); await middle.locator('[data-asset-id]').first().waitFor();
  assert.deepEqual(await paneIds(),['home-left','home-pane-3','home-pane-1']);
- assert.equal(await selectedView(middle),'集合分类');
+ assert.equal(await selectedView(middle),'文件夹');
  assert.equal(await middle.locator('[data-collection-id="collection"]').getAttribute('aria-selected'),'true');
  assert.equal(await size(middle).inputValue(),leftSize);
  assert.equal(await (await button(middle,'颜色筛选')).getAttribute('data-active'),'true');

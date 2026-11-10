@@ -22,6 +22,7 @@ fn fixture_with_db(db: Database) -> (Database, StartedChat) {
             provider: None,
             project_id: "p".into(),
             conversation_id: None,
+            agent_node_id: None,
             request_id: "request".into(),
             text: "请创建卡片".into(),
             reference_asset_ids: vec!["picture".into()],
@@ -32,7 +33,26 @@ fn fixture_with_db(db: Database) -> (Database, StartedChat) {
             }),
         })
         .unwrap();
+    // Existing tool tests also cover historical chats that predate Agent projections.
+    // Shared Agent + tool coexistence is exercised separately below.
+    db.conn.lock().unwrap().execute("DELETE FROM canvas_workflows WHERE project_id='p'", []).unwrap();
     (db, started)
+}
+
+#[test]
+fn local_chat_cards_keep_the_shared_agent_when_creating_and_undoing_tools() {
+    let (db, first) = fixture();
+    let id = &first.conversation.summary.id;
+    db.finish_local_chat(id, &first.turn_id, "done", None).unwrap();
+    let started = db.begin_local_chat(&ChatSendInput {
+        codex_options: None, provider: None, project_id: "p".into(), conversation_id: Some(id.clone()), agent_node_id: None,
+        request_id: "shared-agent".into(), text: "继续创建卡片".into(), reference_asset_ids: vec!["picture".into()], placement: None, card_defaults: None,
+    }).unwrap();
+    let original = document(&db)["nodes"][0].clone();
+    let action = create(&db, &started, &batch()).unwrap();
+    assert!(document(&db)["nodes"].as_array().unwrap().contains(&original));
+    db.undo_local_chat_cards(id, &action.id).unwrap();
+    assert_eq!(document(&db)["nodes"], json!([original]));
 }
 fn batch() -> Value {
     json!({"cards":[

@@ -7,7 +7,7 @@ import { clearSentCreativeChatDraft, parseCreativeComposerState } from "../lib/c
 import { useLocalChatStore } from "../lib/localChatStore";
 import { DEFAULT_VIDEO_OPTIONS } from "../lib/videoGeneration";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
-import { startComposerLocalVideo } from "../lib/composerLocalVideo";
+import { optimizeComposerLocalVideo, startComposerLocalVideo } from "../lib/composerLocalVideo";
 import { prepareFileWorkspace } from "../lib/fileWorkspace";
 import type { ComposerLocalVideoRequest } from "../lib/comfyVideo";
 import type { ChatComposeRequest } from "../lib/localChat";
@@ -112,6 +112,14 @@ function openChat(id: string) {
   if (chat) useStore.setState({ creativeNavigation: { projectId: chat.projectId, threadId: chat.threadId, nodeId: chat.nodeId } });
 }
 
+function notifySubmitted(projectId: string, threadId?: string | null, nodeId?: string | null) {
+  const project = useStore.getState().projects.find(item => item.id === projectId);
+  notifySuccess(`任务已进入「${project?.name ?? "默认项目"}」项目中`, {
+    label: "点击跳转",
+    onClick: () => useStore.setState({ creativeNavigation: { projectId, threadId: threadId ?? null, nodeId: nodeId ?? null } }),
+  });
+}
+
 /** The library draft and destination are independent of the visible project route. */
 export function LibraryComposer({ onLocalVideoStarted, onOpenLibrary }: {
   onLocalVideoStarted?: (projectId: string, nodeId: string) => void;
@@ -133,19 +141,15 @@ export function LibraryComposer({ onLocalVideoStarted, onOpenLibrary }: {
       header={<LibraryProjectPicker value={selectedProjectId} onChange={id => { setSelectedProjectId(id); setHistoryOpen(false); }}/>}
       onDraftChange={saveDraft} registerDraftFlush={value => { flush.current = value; }} prepareProject={prepareProject}
       onOpenLibrary={onOpenLibrary}
-      onGenerationSubmitted={(projectId, threadId) => {
-        const project = useStore.getState().projects.find(item => item.id === projectId);
-        notifySuccess(`任务已进入「${project?.name ?? "默认项目"}」项目中`, {
-          label: "点击跳转",
-          onClick: () => useStore.setState({ creativeNavigation: { projectId, threadId: threadId ?? null, nodeId: null } }),
-        });
-      }}
+      onGenerationSubmitted={notifySubmitted}
       resolveCreativeThread={(_parent, prompt, _revision, _continuation, _parentNode, target) => startLibraryThread(prompt, target)}
       onGenerateLocalVideo={async (request, target) => {
         const projectId = requireProject(target);
         const node = await startLibraryVideo(request, projectId);
+        notifySubmitted(projectId, null, node.id);
         onLocalVideoStarted?.(projectId, node.id);
       }}
+      onOptimizeLocalVideo={optimizeComposerLocalVideo}
       onSendChat={(request, target) => startLibraryChat(request, draft.current, target)}
       onChatDraftSent={clearSent}
       onOpenChatHistory={() => setHistoryOpen(value => !value)} chatHistoryOpen={historyOpen}

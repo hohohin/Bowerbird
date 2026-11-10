@@ -20,6 +20,10 @@ try {
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
     const { DEFAULT_COMFY_VIDEO, comfyVideoOptionsForMode } = await import('/src/lib/comfyVideo.ts');
     const check = (ok, message) => { if (!ok) throw Error(message); };
+    const { cleanH3OptimizedPrompt } = await import('/src/lib/h3PromptOptimization.ts');
+    check(cleanH3OptimizedPrompt('integrated_multimodal_description: 正文') === '正文', 'field label removed');
+    check(cleanH3OptimizedPrompt('参考 <Picture 1>\n  integrated_multimodal_description：正文\n下一行') === '参考 <Picture 1>\n正文\n下一行', 'reference and line breaks preserved');
+    check(cleanH3OptimizedPrompt('她说：<d>[Chinese] integrated_multimodal_description: </d>') === '她说：<d>[Chinese] integrated_multimodal_description: </d>', 'spoken literal preserved');
     const original = '她先看向画面左下，再抬眼看向右上。镜头先固定，最后快速拉远到半身，伴随子弹时间感。';
     const optimized = '单一连续镜头。开场固定低机位锁骨以上特写，她先看向画面左下。随后优雅地抬眼看向画面右上，镜头在最后快速后拉至半身，人物动作极慢，保持视线方向。';
     const entitlement = { user_id: 'tester', is_test_account: true, tier: 'pro', offline_state: 'fresh', balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_byo: true, can_use_agent_runs: true, max_parallel_agent_runs: 3, allowed_agent_skills: ['bowerbird-unified-agent'], agent_budget_options: ['unified-standard'] }, generation_services: [] };
@@ -40,7 +44,7 @@ try {
     api.cloudAgentCancel = async id => { cancels.push(id); };
     const get = async runId => {
       if (resultMode === 'offline') throw Error('网络连接失败，请继续查询原任务');
-      return { runId, status: resultMode, snapshot: { run: { safe_message: '模拟优化失败' }, events: [{ type: 'text.result', display_payload: { schemaVersion: 1, text: optimized } }] } };
+      return { runId, status: resultMode, snapshot: { run: { safe_message: '模拟优化失败' }, events: [{ type: 'text.result', display_payload: { schemaVersion: 1, text: `integrated_multimodal_description: ${optimized}` } }] } };
     };
     api.cloudAgentGet = get;
     const node = { ...newWorkflowNode('comfy-video', 400, 60, 'codex'), id: 'h3', prompt: original, comfyVideo: comfyVideoOptionsForMode(DEFAULT_COMFY_VIDEO, 'text'), outputs: { image: { type: 'image', assetIds: ['previous'] } } };
@@ -55,10 +59,12 @@ try {
     check(starts.length === 1 && calls.length === beforeOptimization, 'explicit optimization never starts a local video');
     check(c.document.run.status === 'done' && c.document.run.order.join() === 'h3', 'optimization completes independently without downstream execution');
     check(starts[0].textRewrite.source === original && starts[0].references.length === 0 && starts[0].agentRuntime === 'dsh', 'text-only DSH contract');
-    check(starts[0].intentPrompt.length <= 4000 && starts[0].intentPrompt.includes('h3-video-prompt'), 'bundled skill fits intent limit');
-    check(c.document.nodes[0].prompt === original && c.document.nodes[0].outputs.image.assetIds[0] === 'previous', 'optimization preserves prompt and previous video outputs');
+    check(starts[0].intentPrompt.startsWith('bowerbird:cloud-text-skill:v1\n') && starts[0].intentPrompt.length < 350, 'only skill identifier and parameters leave the client');
+    const skillRequest = JSON.parse(starts[0].intentPrompt.split('\n')[1]);
+    check(skillRequest.id === 'h3-video-prompt' && skillRequest.parameters.mode === node.comfyVideo.mode, 'VPS skill selection retains H3 mode');
+    check(c.document.nodes[0].prompt === optimized && c.document.nodes[0].outputs.image.assetIds[0] === 'previous', 'optimization replaces prompt and preserves previous video outputs');
     check(c.document.run.steps.h3.comfyOptimization.result === optimized, 'result is retained for review');
-    await c.start('h3', true); check(starts.length === 1 && calls.at(-1).input.prompt === original, 'later generation still uses original until user applies result');
+    await c.start('h3', true); check(starts.length === 1 && calls.at(-1).input.prompt === optimized, 'manual generation uses optimized prompt');
 
     resultMode = 'offline'; const interrupted = await controller(); await interrupted.optimizeComfyPrompt('h3');
     const cloudId = interrupted.document.run.steps.h3.agentRunId, count = starts.length, localCount = calls.length;
@@ -118,25 +124,26 @@ try {
   await card.getByRole('button', { name: '优化提示词', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
   assert.deepEqual(await page.evaluate(() => ({ local: window.h3Calls.length, cloud: window.optimizeStarts.length })), { local: before.local, cloud: before.cloud + 1 });
-  await card.getByText('查看优化结果', { exact: true }).click();
-  assert.match(await card.getByLabel('优化后的提示词', { exact: true }).inputValue(), /单一连续镜头/);
-  assert.match(await card.getByLabel('本次原始提示词', { exact: true }).inputValue(), /她先看向/);
+  assert.match(await card.getByLabel('卡片指令', { exact: true }).inputValue(), /单一连续镜头/);
+  assert.equal(await card.locator('details.comfy-optimization-result').count(), 0);
+  const field = await card.locator('.comfy-video-prompt').boundingBox();
+  const action = await card.getByRole('button', { name: '优化提示词', exact: true }).boundingBox();
+  assert.ok(action.y > field.y + field.height / 2 && action.x + action.width <= field.x + field.width && action.y + action.height <= field.y + field.height);
   for (const theme of ['dark', 'light']) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await page.waitForFunction(theme => {
-      const color = getComputedStyle(document.querySelector('[aria-label="优化后的提示词"]')).color;
+      const color = getComputedStyle(document.querySelector('[aria-label="卡片指令"]')).color;
       const channel = Number(color.match(/\d+/)?.[0]); return theme === 'light' ? channel < 100 : channel > 150;
     }, theme);
     await page.screenshot({ path: `.tmp/h3-optimization/${theme}.png` });
   }
-  await card.getByRole('button', { name: '用作卡片指令', exact: true }).click();
   assert.match(await card.getByLabel('卡片指令', { exact: true }).inputValue(), /单一连续镜头/);
   await card.getByLabel('卡片指令', { exact: true }).fill('用户修改后的提示词');
   await card.getByRole('button', { name: '运行此卡片', exact: true }).click();
   await page.waitForFunction(n => window.h3Calls.length > n, before.local);
   assert.equal(await page.evaluate(() => window.h3Calls.at(-1).input.prompt), '用户修改后的提示词');
   assert.equal(await page.evaluate(() => window.optimizeStarts.length), before.cloud + 1);
-  assert.equal(await card.getByText('查看优化结果', { exact: true }).count(), 1);
+  assert.equal(await card.getByText('查看优化结果', { exact: true }).count(), 0);
   assert.deepEqual(errors, []);
-  console.log('H3 explicit optimization: no automatic Cloud/local chain; review/apply/edit then manual generation; three modes, entitlement, stop, account, invalid output, unknown submission and recovery passed');
+  console.log('H3 explicit optimization: no automatic Cloud/local chain; direct replacement/edit then manual generation; three modes, entitlement, stop, account, invalid output, unknown submission and recovery passed');
 } finally { await browser.close(); await server.close(); }

@@ -185,14 +185,14 @@ try {
   await leftPane.getByRole('button', { name: '向右分栏', exact: true }).click();
   const rightPane = page.locator('.library-split-pane').nth(1);
   const rightRoot = rightPane.locator('[data-library-pane]');
-  await rightPane.getByRole('tab', { name: '标签视图', exact: true }).click();
+  await rightPane.getByRole('tab', { name: '标签分类', exact: true }).click();
   await rightRoot.focus();
   assert.equal(await rightRoot.getAttribute('data-active'), 'true');
   await projects.click();
   assert.equal(await rightRoot.getAttribute('data-active'), null, 'hidden home panes release global active ownership');
   await library.click();
   assert.equal(await rightRoot.getAttribute('data-active'), 'true', 'return restores the previously active split pane');
-  assert.equal(await rightPane.getByRole('tab', { name: '标签视图', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.equal(await rightPane.getByRole('tab', { name: '标签分类', exact: true }).getAttribute('aria-selected'), 'true');
   assert.equal(await leftPane.getByRole('tablist', { name: '素材视图切换条', exact: true }).getByRole('tab', { name: '全部素材', exact: true }).getAttribute('aria-selected'), 'true');
   await rightRoot.focus(); await page.keyboard.press('Tab');
   assert.equal(await rightPane.getByRole('tab', { name: '全部素材', exact: true }).getAttribute('aria-selected'), 'true');

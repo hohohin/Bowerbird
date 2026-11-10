@@ -86,6 +86,7 @@ export const api = {
   videoPoster: (sourcePath: string) => invoke<string | null>("video_poster", { sourcePath }),
   canvasImagePreview: (path: string, maxSize: number) => invoke<string>("canvas_image_preview", { path, maxSize }),
   trimVideo: (request: import("./videoTrim").VideoTrimRequest, projectId?: string) => invoke<Asset>("trim_video", { ...request, projectId: projectId ?? null }),
+  extractVideoAudio: (sourcePath: string, operationId: string, projectId?: string) => invoke<Asset>("extract_video_audio", { sourcePath, operationId, projectId: projectId ?? null }),
   canvasWorkflowGet: (projectId: string) => invoke<import("./canvasWorkflow").WorkflowSnapshot>("canvas_workflow_get", { projectId }),
   workflowTemplatesList: () => invoke<WorkflowTemplate[]>("workflow_templates_list"),
   workflowEncapsulate: (projectId: string, revision: number, name: string, members: string[], bounds: { id: string; x: number; y: number; width: number; height: number }[], template: WorkflowTemplate | null) =>
@@ -450,6 +451,8 @@ export const api = {
   // 生成图同流程合并：取某资产的整组过程图（详情轮播 / 批量取可见组）
   listGenerationGroup: (assetId: string, projectId?: string | null) =>
     invoke<Asset[]>("list_generation_group", { assetId, projectId: projectId ?? null }),
+  dissolveGenerationGroup: (target: { assetId?: string; groupKey?: string }) =>
+    invoke<void>("dissolve_generation_group", target),
   listGenerationGroups: (assetIds: string[], projectId?: string | null, filter?: CatalogFilter) =>
     invoke<Record<string, Asset[]>>("list_generation_groups", {
       assetIds,

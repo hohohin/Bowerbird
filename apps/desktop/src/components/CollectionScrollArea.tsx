@@ -2,7 +2,7 @@ import { useId, useLayoutEffect, type CSSProperties, type ReactNode, type Ref } 
 import { enableOverlayScrollbars } from "./OverlayScrollbars";
 
 export function CollectionScrollArea({ children }: { children: ReactNode }) {
-  return <OverlayScrollArea contentClassName="collection-scroll-content" label="集合素材滚动条">{children}</OverlayScrollArea>;
+  return <OverlayScrollArea contentClassName="collection-scroll-content" label="文件夹素材滚动条">{children}</OverlayScrollArea>;
 }
 
 /** 保留素材区的布局与引用；悬浮滚动条由全局共用管理器绘制。 */

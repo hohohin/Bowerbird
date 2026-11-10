@@ -36,7 +36,7 @@ try {
   await root().getByRole('menuitem', { name: '打开图片详情', exact: true }).focus();
   await page.keyboard.press('ArrowRight'); assert.equal(await focused(), '打开图片详情');
   const leftLast = root().locator('.asset-context-column').first().getByRole('menuitem').last();
-  await leftLast.focus(); await page.keyboard.press('ArrowDown'); assert.equal(await focused(), '添加到集合');
+  await leftLast.focus(); await page.keyboard.press('ArrowDown'); assert.equal(await focused(), '添加到文件夹');
   await page.keyboard.press('ArrowUp'); assert.equal(await focused(), (await leftLast.textContent()).trim());
   await root().getByRole('menuitem', { name: '反推提示词', exact: true }).focus();
   await page.keyboard.press('ArrowRight');
@@ -54,7 +54,7 @@ try {
   for (const kind of ['multi', 'canvas']) {
     await open(kind);
     const menu = page.getByRole('menu', { name: '已选 2 项素材的操作', exact: true });
-    for (const name of ['重命名', '打开图片详情', '反推提示词', '图片标注', '用选中的内容新建集合', '移入已有集合']) assert.equal(await menu.getByRole('menuitem', { name, exact: true }).count(), 0);
+    for (const name of ['重命名', '打开图片详情', '反推提示词', '图片标注', '用选中的内容新建文件夹', '移入已有文件夹']) assert.equal(await menu.getByRole('menuitem', { name, exact: true }).count(), 0);
     await menu.getByRole('menuitem', { name: '批量反推', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Bowerbird Cloud', exact: true }).click();
     assert.deepEqual(await page.evaluate(() => window.describe.splice(0).map(v => v.id)), ['a1', 'a2']);

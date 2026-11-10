@@ -43,6 +43,7 @@ w.__TAURI_INTERNALS__ = {
     if (command === "plugin:event|listen") return args.handler;
     if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return; }
     w.requests.push({command,args});
+    if (w.catalogGate && ["catalog_overview", "catalog_page", "list_generation_groups"].includes(command)) await w.catalogGate;
     if (command === "list_library_view") return { assets: [{ ...asset(0), thumb_path: thumb }, asset(1)], memberships: [{ projectId: "p", assetId: "asset-0" }, { projectId: "q", assetId: "asset-1" }], total: 2 };
     if (command === "folder_connections") return [];
     if (command === "file_workspace_status") return { config: { root: "C:/library", places: [], projects: {} }, proposed_root: "C:/library" };
@@ -66,7 +67,10 @@ w.__TAURI_INTERNALS__ = {
         await new Promise(r => setTimeout(r,w.delay || 20));
         if (w.failOffset === args.offset) throw new Error("模拟分页读取失败");
         const {first,count} = range(args.filter);
-        return Array.from({length:Math.min(args.limit,Math.max(0,count-args.offset))},(_,i)=>asset(first+args.offset+i));
+        return Array.from({length:Math.min(args.limit,Math.max(0,count-args.offset))},(_,i)=>{
+          const value = asset(first+args.offset+i);
+          return w.distinctProjects ? { ...value, id: `${args.filter.projectId ?? "global"}:${value.id}` } : value;
+        });
       } finally { w.inFlight--; }
     }
     if (command === "catalog_ids") {
@@ -84,12 +88,14 @@ w.__TAURI_INTERNALS__ = {
 w.refresh = () => listeners.forEach(fn => fn({payload:null}));
 useStore.setState({activeProjectId:null,libraryThumbnailWidth:150, projects: ["p", "q"].map((id, i) => ({ id, name: `项目${i ? "B" : "A"}`, kind: "blank", workspace_path: `blank:${id}`, asset_count: 1, created_at: 1, updated_at: 1 }))});
 function Fixture() {
+  const [visible, setVisible] = React.useState(true);
+  w.setLibraryVisible = setVisible;
   const [kind,setKind] = React.useState<"all"|"tags"|"collections">("all");
   const [project,setProject] = React.useState(false);
   w.changeKind=setKind; w.changeProject=setProject;
-  return <div style={{position:"fixed",inset:0}}><CategorizedLibrary key={`${kind}:${project}`} kind={kind} projectId={project?"p":null} projectScope={project}
+  return <div style={{position:"fixed",inset:0}}>{visible && <CategorizedLibrary key={`${kind}:${project}`} kind={kind} projectId={project?"p":null} projectScope={project}
     navigation={<input aria-label="搜索素材" onChange={e=>useLocalFileMode.getState().setQuery(e.target.value)}/>}
-    onClose={()=>{}} onCreateProject={async ids=>{w.created=ids;}}/><AssetContextMenu/></div>;
+    onClose={()=>{}} onCreateProject={async ids=>{w.created=ids;}}/>}<AssetContextMenu/></div>;
 }
 function SplitFixture() {
   const [open, setOpen] = React.useState(false);

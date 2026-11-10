@@ -7,7 +7,7 @@
     { "bucket": "generation-temp", "method": "PUT", "pattern": "^jobs/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/inputs/audio-[0-9]+\\.mp3$", "mime": "audio/mpeg", "maxBytes": 15728640 },
     { "bucket": "generation-temp", "method": "PUT", "pattern": "^jobs/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/inputs/audio-[0-9]+\\.wav$", "mime": "audio/wav", "maxBytes": 15728640 },
     { "bucket": "generation-temp", "method": "GET", "pattern": "^jobs/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/outputs/result\\.(png|jpg|webp|mp4|json)$", "maxBytes": 524288000 },
-    { "bucket": "agent-temp", "method": "PUT", "pattern": "^(runs/)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/inputs/request\\.json$", "mime": "application/json", "maxBytes": 65536, "upsert": true },
+    { "bucket": "agent-temp", "method": "PUT", "pattern": "^(runs/)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/inputs/request\\.json$", "mime": "application/json", "maxBytes": null, "upsert": true },
     { "bucket": "agent-temp", "method": "PUT", "pattern": "^runs/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/inputs/reference-[1-8]$", "mime": "image/jpeg", "maxBytes": 20971520, "upsert": true },
     { "bucket": "agent-temp", "method": "PUT", "pattern": "^runs/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/artifacts/[A-Za-z0-9_-]{1,200}\\.jpg$", "mime": "image/jpeg", "maxBytes": 20971520, "upsert": true },
     { "bucket": "agent-temp", "method": "PUT", "pattern": "^runs/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/artifacts/[A-Za-z0-9_-]{1,200}\\.png$", "mime": "image/png", "maxBytes": 20971520, "upsert": true },

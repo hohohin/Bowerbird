@@ -82,7 +82,7 @@ try {
   await page.evaluate(() => document.documentElement.dataset.theme = 'light');
   await checkControls();
   await page.screenshot({ path: '.tmp/library-pane-actions/two-narrow-light.png' });
-  for (const name of ['标签分类', '集合分类', '全部']) {
+  for (const name of ['标签分类', '文件夹', '全部']) {
     for (const host of await page.locator('[data-library-pane]').all()) await host.getByRole('tab', { name, exact: true }).click();
     await checkControls();
     await page.screenshot({ path: `.tmp/library-pane-actions/narrow-${name}.png` });

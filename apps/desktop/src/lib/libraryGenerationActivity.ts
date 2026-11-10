@@ -1,4 +1,5 @@
 import type { CloudAgentRunRecord, GenJob, GenTurn, Project } from "./types";
+import { generationProgressLabel } from "./generationProgress.ts";
 import type { ChatSummary } from "./localChat";
 import type { CanvasWorkflow, WorkflowNode, WorkflowRun, WorkflowStep } from "./canvasWorkflow";
 import { agentTaskNavigation, generationTaskNavigation } from "./projectActivity.ts";
@@ -55,7 +56,7 @@ export function libraryLocalVideoTask(locator: LibraryLocalVideoLocator, documen
 }
 
 function generationProgress(job: GenJob, turn?: GenTurn): TaskStatus {
-  if (job.running) return { status: "running", statusLabel: "生成中" };
+  if (job.running) return { status: "running", statusLabel: generationProgressLabel(job) };
   if (turn?.error || !turn?.images.length) return { status: "attention", statusLabel: "需处理" };
   return { status: "completed", statusLabel: "已完成" };
 }

@@ -23,7 +23,8 @@ const asyncMode = (Deno.env.get("UNDERSTAND_ASYNC") ?? "false") === "true";
 
 interface UnderstandRequest {
   idempotency_key: string;
-  operation: "caption" | "autoname" | "classify" | "video-analysis" | "text-rewrite";
+  operation: "caption" | "autoname" | "classify" | "video-analysis" | "text-rewrite" | "speech-transcription";
+  audio?: unknown;
   video?: unknown;
   rewrite?: unknown;
   /** null = 纯文本调用（生成图维度数据命名），图片不上云；caption/classify 必带一张图。 */
@@ -137,6 +138,7 @@ async function createJob(
     schema_version: 1, operation: body.operation, image: body.image ?? null,
     instruction: body.instruction ?? null, mock_scenario: body.mock_scenario ?? null,
     ...(replication ? { video: body.video ?? null, rewrite: body.rewrite ?? null } : {}),
+    ...(body.operation === "speech-transcription" ? { audio: body.audio } : {}),
   });
   const manifestHash = await sha256Hex(requestPayload);
   // Reopening accepted work never reprices it or rolls back another in-flight request.

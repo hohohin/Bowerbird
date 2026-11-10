@@ -2,7 +2,7 @@ import { activePromptReferences, normalizeWorkflowInputSlots, workflowReferenceM
 import { buildWorkflowPlan, planningSnapshotKey, type PlanningSource } from "./workflowPlanner";
 
 type CardKind = "trigger" | "instruction" | "agent" | "generation" | "skill" | "visual-profile" | "loop";
-interface CardSpec { id: string; kind: CardKind; prompt?: string; action?: string; skill?: string; ratio?: string | null; overwriteDescribe?: boolean; loopMode?: WorkflowNode["loopMode"]; loopCount?: number; loopStartItem?: number; agentTransport?: WorkflowNode["agentTransport"] }
+interface CardSpec { id: string; kind: CardKind; prompt?: string; action?: string; skill?: string; ratio?: string | null; overwriteDescribe?: boolean; loopMode?: WorkflowNode["loopMode"]; loopCount?: number; loopStartItem?: number; agentTransport?: WorkflowNode["agentTransport"]; chatProvider?: WorkflowNode["chatProvider"]; chatCodexOptions?: WorkflowNode["chatCodexOptions"] }
 interface EdgeSpec { from: string; output: string; to: string; input: string; autoConnect?: string; mediaFilter?: WorkflowInput["mediaFilter"] }
 export interface TemplateContent { text?: string; images?: { dataUrl: string; token?: string }[] }
 export interface TemplateInput { id: string; label: string; type: "text" | "image"; content?: TemplateContent; whole?: boolean; latest?: boolean }
@@ -10,7 +10,7 @@ export interface TemplateParameter { id: string; label: string; node: string; fi
 export interface TemplateOutput { id: string; label: string; node: string; port: string }
 export interface TemplateLayoutCard { id: string; node?: string; inputs?: string[]; type?: "text" | "image"; content?: TemplateContent; x: number; y: number; width: number; height: number; enclosed: boolean }
 export interface WorkflowTemplate {
-  format: "bowerbird-workflow-template"; schemaVersion: 1 | 2 | 3 | 4 | 5; id: string; revision: number;
+  format: "bowerbird-workflow-template"; schemaVersion: 1 | 2 | 3 | 4 | 5 | 6; id: string; revision: number;
   name: string; description: string;
   plan: { summary: string; nodes: CardSpec[]; edges: EdgeSpec[] };
   inputs: TemplateInput[]; parameters: TemplateParameter[]; outputs: TemplateOutput[];
@@ -33,7 +33,7 @@ const alias = (value: unknown) => typeof value === "string" && /^[a-zA-Z][a-zA-Z
 function dummySources(template: WorkflowTemplate): PlanningSource[] {
   return template.inputs.map(input => ({ ...input, input: input.type === "image" ? { assetId: input.id } : { canvasNodeId: input.id, cellId: "text" } }));
 }
-const executablePlan = (plan: WorkflowTemplate["plan"]) => ({ ...plan, nodes: plan.nodes.map(({ overwriteDescribe: _, ...node }) => node) });
+const executablePlan = (plan: WorkflowTemplate["plan"]) => ({ ...plan, nodes: plan.nodes.map(({ overwriteDescribe: _, chatProvider: _provider, chatCodexOptions: _options, ...node }) => node) });
 function validateTemplateContent(input: Pick<TemplateInput, "type" | "content">) {
     if (input.content !== undefined) {
       keys(input.content, ["text", "images"]);
@@ -56,7 +56,7 @@ export function parseWorkflowTemplate(raw: string): WorkflowTemplate {
   if (new TextEncoder().encode(raw).length > TEMPLATE_MAX_BYTES) fail("模板超过 32 MB，请减少携带的素材");
   const value = JSON.parse(raw) as WorkflowTemplate;
   keys(value, ["format", "schemaVersion", "id", "revision", "name", "description", "plan", "inputs", "parameters", "outputs", ...(value.schemaVersion >= 3 ? ["layout"] : [])]);
-  if (value.format !== "bowerbird-workflow-template" || ![1, 2, 3, 4, 5].includes(value.schemaVersion) || !label(value.id, 80) || !Number.isSafeInteger(value.revision) || value.revision < 0
+  if (value.format !== "bowerbird-workflow-template" || ![1, 2, 3, 4, 5, 6].includes(value.schemaVersion) || !label(value.id, 80) || !Number.isSafeInteger(value.revision) || value.revision < 0
     || !label(value.name) || typeof value.description !== "string" || value.description.length > 2000) fail("模板版本或基本信息无效");
   if (!Array.isArray(value.inputs) || value.inputs.length > 48 || !Array.isArray(value.parameters) || value.parameters.length > 48 || !Array.isArray(value.outputs) || !value.outputs.length || value.outputs.length > 48) fail("模板接口数量无效");
   keys(value.plan, ["summary", "nodes", "edges"]);
@@ -71,7 +71,12 @@ export function parseWorkflowTemplate(raw: string): WorkflowTemplate {
   }
   if (!Array.isArray(value.plan.nodes)) fail("模板步骤无效");
   for (const node of value.plan.nodes) {
-    keys(node, ["id", "kind", "action", "skill", "prompt", "ratio", "overwriteDescribe", ...(value.schemaVersion >= 4 ? ["loopMode", "loopCount", "loopStartItem", "agentTransport"] : [])]);
+    keys(node, ["id", "kind", "action", "skill", "prompt", "ratio", "overwriteDescribe", ...(value.schemaVersion >= 4 ? ["loopMode", "loopCount", "loopStartItem", "agentTransport"] : []), ...(value.schemaVersion >= 6 ? ["chatProvider", "chatCodexOptions"] : [])]);
+    if (node.chatProvider !== undefined && (node.kind !== "agent" || !["codex-local", "dsh-local", "dsh-cloud", "deepseek-cloud"].includes(node.chatProvider))) fail("Agent 对话模型无效");
+    if (node.chatCodexOptions !== undefined) {
+      keys(node.chatCodexOptions, ["model", "reasoningEffort"]);
+      if (node.chatProvider !== "codex-local" || Object.values(node.chatCodexOptions).some(value => !label(value, 200) || /[\r\n\0]/.test(value))) fail("Codex 模型配置无效");
+    }
     if (node.kind === "loop" && value.schemaVersion < 4) fail("循环卡片需要新版工作流数据包");
     if (node?.overwriteDescribe !== undefined && (typeof node.overwriteDescribe !== "boolean" || node.kind !== "instruction" || node.action !== "describe")) fail("仅反推步骤可以配置覆盖已有描述");
   }
@@ -174,20 +179,20 @@ export function captureWorkflowTemplate(nodes: WorkflowNode[], selected: Set<str
     }
     if (!Object.values(node.inputs).flat().some(input => input.nodeId && aliases.has(input.nodeId))) edges.push({ from: "start", output: "signal", to: id, input: "signal" });
     specs.push({ id, kind: node.kind as CardKind, prompt, ...(node.kind === "instruction" ? { action: node.action, ...(node.action === "describe" ? { overwriteDescribe: !!node.overwriteDescribe } : {}) } : {}), ...(node.kind === "skill" ? { skill: node.skill } : {}), ...(node.kind === "generation" ? { ratio: node.ratio } : {}),
-      ...(node.kind === "loop" ? { loopMode: node.loopMode ?? "images", ...(node.loopMode === "count" ? { loopCount: node.loopCount } : {}), loopStartItem: node.loopStartItem ?? 1 } : {}), ...(node.kind === "agent" ? { agentTransport: node.agentTransport ?? "local-ds" } : {}) });
+      ...(node.kind === "loop" ? { loopMode: node.loopMode ?? "images", ...(node.loopMode === "count" ? { loopCount: node.loopCount } : {}), loopStartItem: node.loopStartItem ?? 1 } : {}), ...(node.kind === "agent" ? { agentTransport: node.agentTransport ?? "codex-cli", chatProvider: node.chatProvider ?? (node.agentTransport === "cloud" ? "dsh-cloud" : node.agentTransport === "local-ds" ? "dsh-local" : "codex-local"), chatCodexOptions: node.chatCodexOptions } : {}) });
   }
   const outputs = work.filter(node => !work.some(other => Object.values(other.inputs).flat().some(input => input.nodeId === node.id)))
     .flatMap(node => workflowOutputs(node).filter(port => port.type !== "signal").map(port => ({ id: `out${aliases.get(node.id)}_${port.id.replaceAll("-", "_")}`, label: `${workflowTitle(node)} · ${port.label}`, node: aliases.get(node.id)!, port: port.id })));
   for (const binding of trigger?.inputs.completion ?? []) if (binding.nodeId && aliases.has(binding.nodeId))
     edges.push({ from: aliases.get(binding.nodeId)!, output: binding.portId!, to: "start", input: "completion", ...connectionMetadata(binding) });
-  return parseWorkflowTemplate(JSON.stringify({ format: "bowerbird-workflow-template", schemaVersion: edges.some(edge => edge.autoConnect || edge.mediaFilter || edge.input === "completion") ? 5 : 4, id: crypto.randomUUID(), revision: 0, name, description: "",
+  return parseWorkflowTemplate(JSON.stringify({ format: "bowerbird-workflow-template", schemaVersion: nodes.some(node => node.kind === "agent") ? 6 : edges.some(edge => edge.autoConnect || edge.mediaFilter || edge.input === "completion") ? 5 : 4, id: crypto.randomUUID(), revision: 0, name, description: "",
     plan: { summary: name, nodes: specs, edges }, inputs, parameters: [], outputs }));
 }
 
 export const templateDefinition = (node: WorkflowNode) => {
   node = normalizeWorkflowInputSlots(node);
   return planningSnapshotKey({ kind: node.kind, action: node.action, skill: node.skill, prompt: node.prompt, ratio: node.ratio,
-  provider: node.provider, generation: node.generation, inputs: node.inputs, promptReferences: node.promptReferences, agentTransport: node.agentTransport, profileId: node.profileId, loopMode: node.loopMode, loopCount: node.loopCount, loopStartItem: node.loopStartItem, overwriteDescribe: !!node.overwriteDescribe });
+  provider: node.provider, generation: node.generation, inputs: node.inputs, promptReferences: node.promptReferences, agentTransport: node.agentTransport, chatProvider: node.chatProvider, chatCodexOptions: node.chatCodexOptions, profileId: node.profileId, loopMode: node.loopMode, loopCount: node.loopCount, loopStartItem: node.loopStartItem, overwriteDescribe: !!node.overwriteDescribe });
 };
 
 export function instantiateWorkflowTemplate(template: WorkflowTemplate, bindings: Record<string, WorkflowInput>, values: Record<string, string>, provider: string,
@@ -213,7 +218,14 @@ export function instantiateWorkflowTemplate(template: WorkflowTemplate, bindings
   const owner = newWorkflowNode("planner", x - 380, y, provider);
   const result = buildWorkflowPlan(JSON.stringify(executablePlan(plan)), owner, sources, existing, [], template.schemaVersion >= 4 ? "template" : "planner").nodes;
   result.forEach((node, i) => { if (plan.nodes[i].overwriteDescribe !== undefined) node.overwriteDescribe = plan.nodes[i].overwriteDescribe; });
-  const dx = x - Math.min(...result.map(node => node.x)); result.forEach(node => { node.x += dx; if (node.kind === "agent" && template.schemaVersion < 4) node.agentTransport = "cloud"; });
+  const dx = x - Math.min(...result.map(node => node.x)); result.forEach((node, index) => {
+    node.x += dx;
+    if (node.kind === "agent") {
+      if (template.schemaVersion < 4) node.agentTransport = "cloud";
+      node.chatProvider = plan.nodes[index].chatProvider ?? (node.agentTransport === "cloud" ? "dsh-cloud" : node.agentTransport === "local-ds" ? "dsh-local" : "codex-local");
+      node.chatCodexOptions = plan.nodes[index].chatCodexOptions;
+    }
+  });
   for (const card of template.layout ?? []) if (card.node) {
     const node = result[plan.nodes.findIndex(node => node.id === card.node)];
     node.x = x + card.x; node.y = y + card.y;

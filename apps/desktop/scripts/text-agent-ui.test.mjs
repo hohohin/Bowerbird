@@ -46,7 +46,9 @@ try {
  await bubble.getByRole('button',{name:'发送',exact:true}).click();
  await page.waitForFunction(()=>window.draft?.markdown.includes('雨落在空荡的街道。'));
  const cloud=await page.evaluate(()=>window.calls.find(c=>c.command==='cloud_agent_start').args);
- assert.equal(cloud.agentRuntime,'dsh');assert.equal(cloud.skillId,'bowerbird-unified-agent');assert(cloud.threadId);assert.match(cloud.textRewrite.source,/窗外/);
+ assert.ok(cloud.intentPrompt.startsWith('bowerbird:cloud-text-skill:v1\n'));
+ const method=JSON.parse(cloud.intentPrompt.split('\n')[1]);assert.equal(method.id,'text-editor');assert.ok(method.instruction);assert.equal(method.instructions,undefined);
+ assert.equal(cloud.agentRuntime,'dsh');assert.equal(cloud.skillId,'bowerbird-unified-agent');assert.equal(cloud.threadId,undefined);assert.equal(await page.evaluate(()=>window.calls.filter(c=>c.command==='project_thread_create').length),0);assert.match(cloud.textRewrite.source,/窗外/);
  console.log('PASS shared provider/credits menu and Cloud DSH text-result write-back');
  await open();await page.evaluate(()=>window.agentHold=true);
  await bubble.getByRole('textbox',{name:'发送给 Agent'}).fill('帮我写一段');await bubble.getByRole('button',{name:'发送',exact:true}).click();

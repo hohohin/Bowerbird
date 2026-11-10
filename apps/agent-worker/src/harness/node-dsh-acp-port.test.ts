@@ -68,6 +68,7 @@ test("formal Node DSH port scopes environment, forwards committed text, cancels 
       return { sessionId: "session-formal" };
     }
     async prompt() {
+      await new Promise<void>(resolve => setTimeout(resolve, 25));
       await callbacks?.sessionUpdate({
         update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "committed" } },
       });
@@ -98,6 +99,8 @@ test("formal Node DSH port scopes environment, forwards committed text, cancels 
       runtimeRoot,
       childEnvironment: bridgeEnvironment(),
       profileMode: "html-execution",
+      timeoutMs: 5,
+      promptTimeoutMs: 0,
       parentEnvironment: {
         PATH: "fixture-path",
         DEEPSEEK_API_KEY: "must-not-pass-without-provider-mode",

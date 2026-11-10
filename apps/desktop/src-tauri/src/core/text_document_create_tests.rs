@@ -199,6 +199,7 @@ fn project_delivery_resumes_with_one_card_and_no_second_document_file() {
             .unwrap();
     let payload: serde_json::Value = serde_json::from_str(&node.payload_json).unwrap();
     assert_eq!(payload["note_type"], "document");
+    assert_eq!(node.width / node.height, 3.0 / 4.0);
     assert_eq!(payload["text"], request.text);
     assert_eq!(payload["cells"], serde_json::json!([]));
     assert_eq!(

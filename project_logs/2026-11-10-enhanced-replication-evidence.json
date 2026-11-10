@@ -1,0 +1,216 @@
+{
+  "deployment": {
+    "verifiedAt": "2026-11-10T04:00:23.270Z",
+    "edgeVersion": 43,
+    "edgeFiles": 11,
+    "workerImage": "sha256:a18a32e25663e9ff581c7b476889ee18fd48a469fe17ea4e0186492ac7ef284a",
+    "otherPricesPreserved": true,
+    "otherFunctionsPreserved": true,
+    "jwtPreserved": true,
+    "migration": "0085",
+    "speechPrice": 5
+  },
+  "acceptance": {
+    "startedAt": "2026-11-10T03:59:40.007Z",
+    "checks": [
+      "invalid account rejected",
+      "isolated test account created",
+      "real user session authenticated",
+      "public capability enabled at 5 Bcoin",
+      "declared duration mismatch rejected before billing",
+      "one real ASR job accepted",
+      "original key recovers original job",
+      "actual Doubao speech recognition succeeded",
+      "synthetic spoken content recognized",
+      "actual provider word timestamps returned within audio",
+      "successful job settled exactly 5 Bcoin",
+      "completed replay reused result without another provider request",
+      "same key with changed audio rejected",
+      "one confirmed 5 Bcoin hold only",
+      "one confirmation ledger entry",
+      "invalid requests and replays created no additional jobs",
+      "isolated account balance decreased exactly 5 Bcoin"
+    ],
+    "key": "replication:deploy-speech-068c3d6d-ebe8-4b72-bfc8-c0b5ccd4fb11",
+    "userId": "c10955af-ea46-433c-b59f-3da24a0fc516",
+    "capabilities": {
+      "services": [
+        {
+          "operation": "video-analysis",
+          "available": true,
+          "credits": 3
+        },
+        {
+          "operation": "text-rewrite",
+          "available": true,
+          "credits": 3
+        },
+        {
+          "operation": "speech-transcription",
+          "available": true,
+          "credits": 5
+        }
+      ]
+    },
+    "balanceBefore": {
+      "daily_balance": 0,
+      "sub_balance": 200,
+      "topup_balance": 0
+    },
+    "submitted": {
+      "status": 202,
+      "data": {
+        "status": "queued",
+        "job_id": "8be6cbc1-5cf8-4229-bda0-9beecfe92335",
+        "charge": {
+          "estimated": 5,
+          "actual": null,
+          "transaction_id": "bbc79d5e-168b-4dc8-8e39-e58e5979d98e",
+          "pricing_version": 1
+        }
+      }
+    },
+    "jobId": "8be6cbc1-5cf8-4229-bda0-9beecfe92335",
+    "result": {
+      "status": 200,
+      "data": {
+        "status": "succeeded",
+        "job_id": "8be6cbc1-5cf8-4229-bda0-9beecfe92335",
+        "charge": {
+          "estimated": 5,
+          "actual": 5,
+          "transaction_id": "bbc79d5e-168b-4dc8-8e39-e58e5979d98e",
+          "pricing_version": 1
+        },
+        "text": "{\"text\":\"Hello, this is a speech recognition test. The subtitles follow the actual audio.\",\"utterances\":[{\"text\":\"Hello, this is a speech recognition test. The subtitles follow the actual audio.\",\"startMs\":200,\"endMs\":6200,\"words\":[{\"text\":\"Hello\",\"startMs\":200,\"endMs\":360},{\"text\":\"this\",\"startMs\":1240,\"endMs\":1480},{\"text\":\"is\",\"startMs\":1480,\"endMs\":1640},{\"text\":\"a\",\"startMs\":1640,\"endMs\":1800},{\"text\":\"speech\",\"startMs\":1840,\"endMs\":2000},{\"text\":\"recognition\",\"startMs\":2320,\"endMs\":2600},{\"text\":\"test\",\"startMs\":2840,\"endMs\":3040},{\"text\":\"The\",\"startMs\":3920,\"endMs\":4160},{\"text\":\"subtitles\",\"startMs\":4280,\"endMs\":4760},{\"text\":\"follow\",\"startMs\":4960,\"endMs\":5160},{\"text\":\"the\",\"startMs\":5200,\"endMs\":5440},{\"text\":\"actual\",\"startMs\":5440,\"endMs\":5720},{\"text\":\"audio\",\"startMs\":5880,\"endMs\":6200}]}],\"timingSource\":\"doubao-speech\"}"
+      }
+    },
+    "status": "succeeded",
+    "speech": {
+      "text": "Hello, this is a speech recognition test. The subtitles follow the actual audio.",
+      "utterances": [
+        {
+          "text": "Hello, this is a speech recognition test. The subtitles follow the actual audio.",
+          "startMs": 200,
+          "endMs": 6200,
+          "words": [
+            {
+              "text": "Hello",
+              "startMs": 200,
+              "endMs": 360
+            },
+            {
+              "text": "this",
+              "startMs": 1240,
+              "endMs": 1480
+            },
+            {
+              "text": "is",
+              "startMs": 1480,
+              "endMs": 1640
+            },
+            {
+              "text": "a",
+              "startMs": 1640,
+              "endMs": 1800
+            },
+            {
+              "text": "speech",
+              "startMs": 1840,
+              "endMs": 2000
+            },
+            {
+              "text": "recognition",
+              "startMs": 2320,
+              "endMs": 2600
+            },
+            {
+              "text": "test",
+              "startMs": 2840,
+              "endMs": 3040
+            },
+            {
+              "text": "The",
+              "startMs": 3920,
+              "endMs": 4160
+            },
+            {
+              "text": "subtitles",
+              "startMs": 4280,
+              "endMs": 4760
+            },
+            {
+              "text": "follow",
+              "startMs": 4960,
+              "endMs": 5160
+            },
+            {
+              "text": "the",
+              "startMs": 5200,
+              "endMs": 5440
+            },
+            {
+              "text": "actual",
+              "startMs": 5440,
+              "endMs": 5720
+            },
+            {
+              "text": "audio",
+              "startMs": 5880,
+              "endMs": 6200
+            }
+          ]
+        }
+      ],
+      "timingSource": "doubao-speech"
+    },
+    "wordCount": 13,
+    "holds": [
+      {
+        "id": "bbc79d5e-168b-4dc8-8e39-e58e5979d98e",
+        "status": "confirmed",
+        "service": "replication_speech_transcription",
+        "estimated_amount": 5,
+        "actual_amount": 5
+      }
+    ],
+    "ledger": [
+      {
+        "kind": "confirm",
+        "amount": 0
+      },
+      {
+        "kind": "hold",
+        "amount": -5
+      }
+    ],
+    "jobs": [
+      {
+        "id": "8be6cbc1-5cf8-4229-bda0-9beecfe92335",
+        "status": "succeeded",
+        "operation": "speech-transcription"
+      }
+    ],
+    "balanceAfter": {
+      "daily_balance": 0,
+      "sub_balance": 195,
+      "topup_balance": 0
+    },
+    "passed": true,
+    "cleanupStatus": 200,
+    "finishedAt": "2026-11-10T03:59:56.367Z"
+  },
+  "failedTestRefund": [
+    {
+      "actual_credits": 0,
+      "hold_status": "rolled_back",
+      "id": "cfc09d1b-d7c8-4e3f-af66-41f66e8da18e",
+      "status": "failed",
+      "sub_balance": 200
+    }
+  ],
+  "failedTestCleanup": {
+    "status": 200,
+    "refundedBeforeDeletion": true
+  }
+}

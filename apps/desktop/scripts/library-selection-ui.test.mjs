@@ -280,7 +280,7 @@ try {
     }
 
     if (scene === 'home') {
-      for (const [name, kind] of [['标签分类', 'tags'], ['集合分类', 'collections']]) {
+      for (const [name, kind] of [['标签分类', 'tags'], ['文件夹', 'collections']]) {
         await page.getByRole('tab', { name, exact: true }).click();
         if (kind === 'collections') await library().getByRole('treeitem', { name: '示例集合', exact: true }).click();
         await waitForMedia();

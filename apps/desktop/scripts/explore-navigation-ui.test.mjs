@@ -76,7 +76,7 @@ const cases = {
     await navigationLayout(page, 'home');
   },
   'catalog-navigation': async page => {
-    for (const [label, mode] of [['集合分类', 'collections'], ['标签分类', 'tags'], ['全部', 'all']]) {
+    for (const [label, mode] of [['文件夹', 'collections'], ['标签分类', 'tags'], ['全部', 'all']]) {
       await page.getByRole('tab', { name: label, exact: true }).click();
       await page.waitForFunction(mode => window.mode.getState().mode === mode, mode);
       assert.equal(await page.getByRole('tab', { name: label, exact: true }).getAttribute('aria-selected'), 'true');
@@ -85,7 +85,7 @@ const cases = {
     await page.getByRole('button', { name: '收起浏览器', exact: true }).click();
     await page.waitForFunction(() => window.calls.slice(window.exploreCallsStart).some(call => call.command === 'hide_source_browser'));
     assert.equal(await page.getByRole('complementary', { name: '探索面板' }).isVisible(), false, 'explicit close still hides exploration');
-    for (const [label, mode] of [['集合分类', 'collections'], ['标签分类', 'tags']]) {
+    for (const [label, mode] of [['文件夹', 'collections'], ['标签分类', 'tags']]) {
       await page.getByRole('tab', { name: label, exact: true }).click();
       for (const open of [true, false]) {
         await page.getByRole('button', { name: '探索', exact: true }).click();

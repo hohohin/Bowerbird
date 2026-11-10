@@ -25,6 +25,8 @@ export interface WorkflowInput { slot?: number; nodeId?: string; portId?: string
 export interface WorkflowPromptReference { slot?: number; id: string; type: "text" | "image"; input: WorkflowInput; assetId?: string; label: string; direction?: "output" }
 export interface WorkflowNode {
   id: string; kind: WorkflowKind; x: number; y: number;
+  /** Last measured canvas size; presentation only, saved with the next workflow change. */
+  layoutSize?: { width: number; height: number };
   action: WorkflowAction; skill: string; prompt: string; ratio: string | null; provider: string;
   generation?: import("./videoGeneration").GenerationSettings;
   comfyVideo?: import("./comfyVideo").ComfyVideoOptions;
@@ -32,6 +34,9 @@ export interface WorkflowNode {
   overwriteDescribe?: boolean;
   describeCache?: { instruction: string; results: { assetId: string; sections: { title: string; body: string }[] }[] };
   agentTransport?: "local-ds" | "codex-cli" | "cloud";
+  chatConversationId?: string;
+  chatProvider?: import("./chatProvider").ChatProvider;
+  chatCodexOptions?: import("./localChat").ChatCodexOptions;
   loopMode?: "images" | "rows" | "count";
   loopCount?: number;
   loopStartItem?: number;
@@ -63,7 +68,12 @@ export interface WorkflowStep {
   comfyStopping?: boolean;
   comfyOptimization?: { input: import("./h3PromptOptimization").H3PromptInput; instruction: string; submissionStarted?: boolean; result?: string };
   agentInput?: { prompt: string; source: string; assetIds: string[]; visualProfile?: import("./types").VisualProfileDetail | null };
+  chatInput?: import("./localChat").LocalChatSendInput;
+  chatConversationId?: string;
+  chatTurnId?: string;
   agentOutputs?: Record<string, WorkflowValue>;
+  /** Actual ingested media, before routing can mix in reference assets. */
+  generatedAssetIds?: string[];
   agentProgress?: { text: string; at: number }[];
   agentOutputTargets?: import("./workflowAgentOutputs").AgentOutputTarget[];
   contentTarget?: WorkflowNode["textTarget"];
@@ -193,7 +203,7 @@ export function workflowTitle(node: WorkflowNode): string {
 }
 export function newWorkflowNode(kind: WorkflowKind, x: number, y: number, provider: string): WorkflowNode {
   return { id: crypto.randomUUID(), kind, x, y, action: "describe", skill: "image-edit", prompt: "", ratio: null,
-    provider, inputs: {}, outputs: {}, outputPorts: [], trigger: false, ...(kind === "trigger" ? { triggerCount: 1 } : {}) };
+    provider, inputs: {}, outputs: {}, outputPorts: [], trigger: false, ...(kind === "agent" ? { chatProvider: "codex-local" as const } : {}), ...(kind === "trigger" ? { triggerCount: 1 } : {}) };
 }
 
 export function workflowConnectionError(nodes: WorkflowNode[], fromId: string, portId: string, toId: string, inputId: string): string | null {
@@ -376,7 +386,7 @@ export function generationInputNode(node: WorkflowNode): WorkflowNode {
     [type, (node.inputs[type] ?? []).filter(input => input.autoConnect || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input)))])) } };
 }
 function usesConnectedAgentInputs(node: WorkflowNode) {
-  return node.kind === "agent" && node.agentTransport !== "cloud";
+  return node.kind === "agent";
 }
 export function compileGenerationPrompt(node: WorkflowNode, values: Record<string, WorkflowValue[]>) {
   node = rebindGenerationReferences(node);

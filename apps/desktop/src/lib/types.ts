@@ -467,6 +467,7 @@ export interface GenTurn {
  * 后端 task_queue upsert）。`running` = 该 job 当前有一个 turn 在跑（用于派生全局 generating）。
  */
 export interface GenJob {
+  progress?: import("./generationProgress").GenerationProgress;
   media?: GenerationMedia;
   videoOptions?: VideoOptions | null;
   id: string;
@@ -1066,8 +1067,10 @@ export interface HtmlLayoutOptions {
 }
 
 export type CodexChunk =
+  | ({ kind: "progress"; job_id: string; turn_key: string } & Omit<import("./generationProgress").GenerationProgress, "turnKey">)
   | {
       kind: "started";
+      turn_key?: string;
       job_id: string;
       references?: string[];
   reference_node_ids?: Array<string | null>;
@@ -1076,7 +1079,7 @@ export type CodexChunk =
       visual_profile?: VisualProfileCapsule | null;
     }
   | { kind: "delta"; text: string; job_id?: string }
-  | { kind: "submit"; submit_id: string; job_id?: string }
+  | { kind: "submit"; submit_id: string; job_id?: string; turn_key?: string }
   | {
       kind: "done";
       text: string;

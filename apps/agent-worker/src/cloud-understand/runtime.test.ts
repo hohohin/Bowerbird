@@ -25,6 +25,14 @@ test("video analysis enables thinking and sends the complete audio/video file, r
     deepEqual(request.messages[0].content[0].video_url, { url: `data:video/mp4;base64,${video.base64}`, fps: 1 });
     ok(request.messages[0].content[1].text?.includes("转写必须依据实际音轨"));
     deepEqual(JSON.parse(recorded.finishBody?.resultText as string), result);
+    for (const thinking of ["default", "disabled", "low", "medium", "high"]) {
+      const configured = await runOnce(async () => ({ ok: true, status: 200, body: JSON.stringify({ choices: [{ finish_reason: "stop", message: { content } }] }) }), baseConfig({ arkReplicationVideoModel: "doubao-seed-2-0-mini-260428" }), JSON.stringify({ schema_version: 1, operation: "video-analysis", image: null, instruction: null, video: { ...video, settings: { fps: 2, transcribe: false, thinking } } }));
+      const body = configured.arkRequestBody as typeof request & { reasoning_effort?: string };
+      equal(body.thinking.type, thinking === "disabled" ? "disabled" : "enabled");
+      equal(body.reasoning_effort, ["default", "disabled"].includes(thinking) ? undefined : thinking);
+      equal(body.messages[0].content[0].video_url?.fps, 2);
+      equal(JSON.parse(configured.finishBody?.resultText as string).transcript, "");
+    }
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

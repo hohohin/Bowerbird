@@ -242,7 +242,7 @@ export class AgentControlClient {
     return new Uint8Array(await response.arrayBuffer());
   }
 
-  async downloadVerifiedJson(url: string, expectedSha256: string, maxBytes = 20 * 1024 * 1024): Promise<unknown> {
+  async downloadVerifiedJson(url: string, expectedSha256: string, maxBytes = Infinity): Promise<unknown> {
     if (!/^[0-9a-f]{64}$/.test(expectedSha256)) throw new Error("agent_object_expected_hash_invalid");
     const bytes = await this.download(url);
     if (!bytes.byteLength || bytes.byteLength > maxBytes) throw new Error("agent_object_size_invalid");
@@ -435,7 +435,7 @@ export class AgentControlClient {
     bytes: Uint8Array;
     sha256: string;
   }): Promise<RegisteredAgentArtifact> {
-    if (!args.bytes.byteLength || args.bytes.byteLength > 64 * 1024) throw new Error("agent_diagnostic_size_invalid");
+    if (!args.bytes.byteLength) throw new Error("agent_diagnostic_size_invalid");
     const metadata = {
       runId: args.runId,
       leaseId: args.leaseId,

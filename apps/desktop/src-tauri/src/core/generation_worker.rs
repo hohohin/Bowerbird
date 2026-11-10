@@ -641,17 +641,37 @@ async fn recover_one_jimeng_job_inner(
 
     // ④ 轮询续查下载（策略 B：bounded poll loop，向下兼容 query_result 阻塞等待）。
     let binary = resolve_dreamina_binary().unwrap_or_else(|| "dreamina".to_string());
+    use crate::codex::{progress::{GenerationProgress, GenerationStage}, types::Chunk};
+    let emit_progress = |progress: GenerationProgress| {
+        if !job.internal_agent {
+            let mut value = serde_json::to_value(Chunk::Progress { progress }).unwrap();
+            value["job_id"] = job.id.clone().into();
+            value["turn_key"] = job.turn_key.clone().into();
+            let _ = app.emit("codex://chunk", value);
+        }
+    };
+    emit_progress(GenerationProgress::new(GenerationStage::WaitingSlot));
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<Chunk>(16);
     let query = async {
+    crate::codex::progress::send(Some(&progress_tx), GenerationProgress::new(GenerationStage::Querying)).await;
     if job.media == "video" {
-        crate::codex::jimeng_video::poll_video(&binary, &submit_id).await.map(|(files, dir)| (files, Some(dir)))
+        crate::codex::jimeng_video::poll_video_progress(&binary, &submit_id, Some(&progress_tx)).await.map(|(files, dir)| (files, Some(dir)))
     } else {
-        poll_query_and_download(&binary, &submit_id, 30, Duration::from_secs(10)).await.map(|files| {
+        poll_query_and_download(&binary, &submit_id, 30, Duration::from_secs(10), Some(&progress_tx)).await.map(|files| {
             let dir = files.first().and_then(|p| p.parent()).map(std::path::Path::to_path_buf);
             (files, dir)
         })
     }
     };
-    let downloaded = match cancellable_jimeng_query(&JIMENG_FLY, &mut cancel_rx, query).await {
+    let download = cancellable_jimeng_query(&JIMENG_FLY, &mut cancel_rx, query);
+    tokio::pin!(download);
+    let result = loop {
+        tokio::select! {
+            result = &mut download => break result,
+            Some(Chunk::Progress { progress }) = progress_rx.recv() => emit_progress(progress),
+        }
+    };
+    let downloaded = match result {
         Some(result) => result,
         None => {
             let _ = Task::mark_cancelled(&db, &job.id);
@@ -665,6 +685,7 @@ async fn recover_one_jimeng_job_inner(
     }
     match downloaded {
         Ok((src_images, temp_dir)) => {
+            emit_progress(GenerationProgress::new(GenerationStage::Saving));
             tracing::info!("恢复续查成功：job={} 图={} 张", job.id, src_images.len());
             // 会话语义：job 死在续轮时 task_queue 已有会话首轮 session（即梦首轮 submit_id），
             // meta/done 都要记回该 session（记成本轮自己的 submit_id 会把会话历史撕裂成两段，
@@ -1109,6 +1130,8 @@ mod tests {
             .unwrap();
         }
         let payload = serde_json::to_string(&AssetNodePayloadV1 {
+            workflow_source: None,
+            workflow_generation_group: None,
             schema_version: 1,
             snapshot: AssetSnapshotV1 {
                 name: "父素材".into(),

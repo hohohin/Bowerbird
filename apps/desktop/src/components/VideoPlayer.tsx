@@ -1,20 +1,37 @@
+import { VideoTrimTimeline } from "./VideoTrimTimeline";
+import { TacticalSelect } from "./TacticalSelect";
+import { VideoExportMenu } from "./VideoExportMenu";
+import { createVideoAudioExport } from "../lib/videoAudio";
+import { useStore } from "../store";
+import { startScrub, moveScrub } from "../lib/videoFineScrub";
 import { userErrorMessage } from "../lib/userError";
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Check, ImagePlus, Maximize, Minimize, Pause, Play, Scissors, Volume2, VolumeX } from "lucide-react";
+import { ImagePlus, Music2, Maximize, Minimize, Pause, Play, Scissors, Volume2, VolumeX } from "lucide-react";
 import { api } from "../lib/api";
 import type { SaveVideoTrim } from "../lib/videoTrim";
 import { captureVideoFrame, invalidateVideoStrip, loadVideoStrip, seekVideoLastFrame, videoTime, type VideoFrame } from "../lib/videoFrame";
 import "./VideoPlayer.css";
 
-export function VideoPlayer({ path, sourceKey, onAddFrame, onAddFrameToCanvas, onReferenceFrame, onSaveTrim, embedded = false, fitContainer = false, showTrim = !embedded, frameTarget = "canvas" }: { path: string; sourceKey?: string; onAddFrame?: (frame: VideoFrame) => Promise<void>; onAddFrameToCanvas?: (frame: VideoFrame) => Promise<void>; onReferenceFrame?: (frame: VideoFrame) => Promise<void>; onSaveTrim?: SaveVideoTrim; embedded?: boolean; fitContainer?: boolean; showTrim?: boolean; frameTarget?: "canvas" | "reference" | "library" }) {
+export function VideoPlayer({ path, sourceKey, seekRequest, onAddFrame, onAddFrameToCanvas, onReferenceFrame, onSaveTrim, embedded = false, fitContainer = false, showTrim = !embedded, frameTarget = "canvas" }: { path: string; sourceKey?: string; seekRequest?: { time: number; revision: number }; onAddFrame?: (frame: VideoFrame) => Promise<void>; onAddFrameToCanvas?: (frame: VideoFrame) => Promise<void>; onReferenceFrame?: (frame: VideoFrame) => Promise<void>; onSaveTrim?: SaveVideoTrim; embedded?: boolean; fitContainer?: boolean; showTrim?: boolean; frameTarget?: "canvas" | "reference" | "library" }) {
   const playerRef = useRef<HTMLElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const controlsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !seekRequest || !Number.isFinite(seekRequest.time)) return;
+    const seek = () => { if (Number.isFinite(video.duration) && video.duration > 0) {
+      video.pause(); video.currentTime = Math.max(0, Math.min(seekRequest.time, video.duration - 0.001));
+    } };
+    if (video.readyState >= 1) seek();
+    else video.addEventListener("loadedmetadata", seek, { once: true });
+    return () => video.removeEventListener("loadedmetadata", seek);
+  }, [path, seekRequest]);
+
   const [dimensions, setDimensions] = useState({ width: 720, height: 405 });
   const [controlsHeight, setControlsHeight] = useState(230);
   const [controlsWidth, setControlsWidth] = useState(1000);
-  const drag = useRef<{ id: number; x: number; time: number; moved: boolean } | null>(null);
+  const drag = useRef<{ id: number; time: number; moved: boolean; gesture: ReturnType<typeof startScrub> } | null>(null);
   const savingRef = useRef(false);
   const [duration, setDuration] = useState(0);
   const [time, setTime] = useState(0);
@@ -31,7 +48,10 @@ export function VideoPlayer({ path, sourceKey, onAddFrame, onAddFrameToCanvas, o
   const [playbackFailure, setPlaybackFailure] = useState<{ message: string; diagnostic: string } | null>(null);
   const [reload, setReload] = useState(0);
   const retryTime = useRef(0);
-  const [savingTarget, setSavingTarget] = useState<"current" | "last" | "canvas" | "copy" | "overwrite" | "reference" | null>(null);
+  const [savingTarget, setSavingTarget] = useState<"current" | "last" | "canvas" | "copy" | "overwrite" | "reference" | "audio" | null>(null);
+  const projectId = useStore(state => state.activeProjectId);
+  const audioExports = useRef(new Map<string, () => Promise<void>>());
+  const [savedAudioTargets, setSavedAudioTargets] = useState<string[]>([]);
   const saving = savingTarget !== null;
   const [savedLastFrame, setSavedLastFrame] = useState(false);
   const [savedTime, setSavedTime] = useState<number | null>(null);
@@ -52,12 +72,19 @@ export function VideoPlayer({ path, sourceKey, onAddFrame, onAddFrameToCanvas, o
   const pixelsPerSecond = duration > 0 ? length / duration : 1;
   // Quarter-window steps keep nearby timeupdates on the same cached strip.
   // Keep two visible widths in a fine window, including contained/fullscreen players.
-  const stripSpan = fine ? Math.min(duration, Math.max(12, Math.ceil(controlsWidth * 2 / pixelsPerSecond))) : duration;
+  const stripSpan = fine && !trimming && !dragging ? Math.min(duration, Math.max(12, Math.ceil(controlsWidth * 2 / pixelsPerSecond))) : duration;
   const stripStep = stripSpan / 4;
   const stripStart = fine && stripStep ? Math.max(0, Math.min(duration - stripSpan, Math.floor(time / stripStep) * stripStep - stripStep)) : 0;
   const stripEnd = stripStart + stripSpan;
   const stripKey = `${src}|${duration}|${stripStart}:${stripEnd}`;
   const thumbnails = strip.key === stripKey ? strip.images : [];
+
+  useEffect(() => {
+    const cancel = () => { drag.current=null; setDragging(false); setFine(false); };
+    const hidden = () => { if (document.hidden) cancel(); };
+    window.addEventListener("blur",cancel); document.addEventListener("visibilitychange",hidden);
+    return () => { window.removeEventListener("blur",cancel); document.removeEventListener("visibilitychange",hidden); };
+  }, []);
 
   useEffect(() => {
     if (!duration || !ready || dragging) return;
@@ -143,6 +170,7 @@ export function VideoPlayer({ path, sourceKey, onAddFrame, onAddFrameToCanvas, o
       const space = event.code === "Space";
       if ((!space && !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) return;
       const target = event.target;
+      if (target instanceof Element && target.closest('[role="combobox"], [role="listbox"], [role="menu"]')) return;
       if (target instanceof HTMLElement && (embedded || target.closest(".video-player"))
         && (target.isContentEditable || target.closest("input, textarea, select"))) return;
       if (embedded && (!(target instanceof HTMLElement) || !videoRef.current?.closest(".video-player")?.contains(target))) return;
@@ -175,6 +203,7 @@ export function VideoPlayer({ path, sourceKey, onAddFrame, onAddFrameToCanvas, o
     if (!current || current.id !== event.pointerId) return;
     drag.current = null;
     setDragging(false);
+    setFine(false);
     if (!cancelled && !current.moved) {
       const bounds = event.currentTarget.getBoundingClientRect();
       seek(current.time + (event.clientX - bounds.left - bounds.width / 2) / pixelsPerSecond);
@@ -186,7 +215,7 @@ export function VideoPlayer({ path, sourceKey, onAddFrame, onAddFrameToCanvas, o
     const save = toCanvas ? onAddFrameToCanvas : onAddFrame;
     if (!video || !save || savingRef.current || (last && savedLastFrame)) return;
     savingRef.current = true;
-    setSavingTarget(toCanvas ? "canvas" : last ? "last" : "current"); setError("");
+    setSavingTarget(toCanvas ? "canvas" : last ? "last" : "current"); setError(""); setSavedMessage("");
     try {
       if (last) {
         await seekVideoLastFrame(video);
@@ -197,7 +226,20 @@ export function VideoPlayer({ path, sourceKey, onAddFrame, onAddFrameToCanvas, o
       await save(frame);
       if (toCanvas) setSavedCanvasTime(frame.time); else setSavedTime(frame.time);
       if (last) setSavedLastFrame(true);
+      setSavedMessage(last ? "尾帧已添加" : toCanvas || frameTarget === "canvas" ? "已添加到画板" : frameTarget === "library" ? "已保存到素材库" : "已选作参考图");
     } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { savingRef.current = false; setSavingTarget(null); }
+  }
+
+  async function exportAudio(target: "canvas" | "library") {
+    if (savingRef.current) return;
+    savingRef.current = true; setSavingTarget("audio"); setError(""); setSavedMessage("");
+    videoRef.current?.pause();
+    const key = `${src}:${target}`;
+    let save = audioExports.current.get(key);
+    if (!save) { save = createVideoAudioExport(path, target === "canvas" ? projectId : null, target); audioExports.current.set(key, save); }
+    try { await save(); setSavedAudioTargets(previous => [...previous, key]); setSavedMessage(target === "canvas" ? "音轨已添加到画板" : "音轨已保存到素材库"); }
+    catch (cause) { setError(String(cause)); }
     finally { savingRef.current = false; setSavingTarget(null); }
   }
 
@@ -212,7 +254,7 @@ export function VideoPlayer({ path, sourceKey, onAddFrame, onAddFrameToCanvas, o
     const video = videoRef.current;
     if (!video || !onReferenceFrame || savingRef.current || !video.paused || !ready || seeking || dragging) return;
     savingRef.current = true; setSavingTarget("reference"); setError("");
-    try { await onReferenceFrame(captureVideoFrame(video, path)); }
+    try { await onReferenceFrame(captureVideoFrame(video, path)); setSavedMessage("已选作参考图"); }
     catch (cause) { setError(String(cause)); }
     finally { savingRef.current = false; setSavingTarget(null); }
   }
@@ -241,7 +283,7 @@ export function VideoPlayer({ path, sourceKey, onAddFrame, onAddFrameToCanvas, o
     }
   }
 
-  return <section ref={playerRef} className={`video-player${trimming ? " is-trimming" : ""}${fitContainer ? " is-contained" : ""}`} aria-label="视频播放器" onClick={event => event.stopPropagation()}
+  return <section ref={playerRef} className={`video-player${trimming ? " is-trimming" : ""}${fitContainer ? " is-contained" : embedded ? " is-embedded" : ""}`} aria-label="视频播放器" onClick={event => event.stopPropagation()}
     style={{ "--video-width": `${dimensions.width}px`, "--video-ratio": dimensions.width / dimensions.height,
       "--video-controls-height": `${controlsHeight}px` } as CSSProperties}
     onPointerDown={event => event.stopPropagation()} tabIndex={0}>
@@ -284,48 +326,37 @@ export function VideoPlayer({ path, sourceKey, onAddFrame, onAddFrameToCanvas, o
         <button aria-label={muted ? "取消静音" : "静音"} onClick={() => setMuted(!muted)}>{muted ? <VolumeX size={17} /> : <Volume2 size={17} />}</button>
         <input className="video-player-volume" aria-label="音量" type="range" min={0} max={1} step={0.05} value={muted ? 0 : volume}
           onChange={event => { setVolume(event.target.valueAsNumber); setMuted(event.target.valueAsNumber === 0); }} />
-        <select aria-label="播放速度" value={speed} onChange={event => setSpeed(Number(event.target.value))}>
-          {[0.5, 0.75, 1, 1.25, 1.5, 2].map(value => <option key={value} value={value}>{value}×</option>)}
-        </select>
+        <TacticalSelect className="video-speed-trigger" menuClassName="video-speed-menu" portalContainer={fullscreen ? playerRef.current : undefined} aria-label="播放速度" value={speed} onValueChange={value => setSpeed(Number(value))}>
+          {[0.5,0.75,1,1.25,1.5,2].map(value => <option key={value} value={value}>{value}×</option>)}
+        </TacticalSelect>
         <button aria-label={fullscreen ? "退出全屏" : "全屏"} onClick={() => void toggleFullscreen()}>{fullscreen ? <Minimize size={17} /> : <Maximize size={17} />}</button>
-        <button className="video-player-fine" aria-pressed={fine} disabled={saving || dragging} onClick={() => setFine(!fine)}>细调</button>
-        {showTrim && <button aria-label="裁剪视频" title="调整入点和出点" aria-pressed={trimming} disabled={!ready || saving || dragging}
-          onClick={() => { videoRef.current?.pause(); setTrimming(!trimming); setSavedMessage(""); }}><Scissors size={16} />裁剪</button>}
+
       </div>
-      {trimming && <div className="video-player-trim" aria-label="视频裁剪范围">
-        <div className="video-player-trim-selection" aria-hidden="true"><i style={{ left: `${inPoint / duration * 100}%`, width: `${(outPoint - inPoint) / duration * 100}%` }} /></div>
-        {(["in", "out"] as const).map(edge => <div className="video-player-trim-edge" key={edge}>
-          <label>{edge === "in" ? "入点" : "出点"}<input type="range" aria-label={edge === "in" ? "视频入点" : "视频出点"} min={0} max={duration} step={0.01}
-            value={edge === "in" ? inPoint : outPoint} disabled={saving} onChange={event => changeTrim(edge, Number(event.target.value))} /></label>
-          <input type="number" aria-label={edge === "in" ? "入点秒数" : "出点秒数"} min={0} max={duration} step={0.01}
-            value={Number((edge === "in" ? inPoint : outPoint).toFixed(3))} disabled={saving} onChange={event => changeTrim(edge, event.target.valueAsNumber)} />
-          <button disabled={saving || seeking} onClick={() => changeTrim(edge, time)}>设为当前</button>
-        </div>)}
-        <span>保留 {videoTime(outPoint - inPoint)} · 覆盖会同步影响此视频的其他引用</span>
-        <div className="video-player-frame-actions">
-          <button className="video-player-add" disabled={!trimChanged || saving} onClick={() => void saveTrim(false)}>{savingTarget === "copy" ? "正在保存…" : "另存为新视频"}</button>
-          <button disabled={!trimChanged || saving} onClick={() => void saveTrim(true)}>{savingTarget === "overwrite" ? "正在覆盖…" : "覆盖原视频"}</button>
-          <button disabled={saving} onClick={() => { setInPoint(0); setOutPoint(duration); setSavedMessage(""); }}>重置</button>
-        </div>
-      </div>}
-      <div className={`video-player-timeline ${dragging ? "is-dragging" : ""}`} role="slider" tabIndex={0}
+      {trimming && <VideoTrimTimeline duration={duration} start={inPoint} end={outPoint} time={time} images={thumbnails} disabled={saving || !ready} change={changeTrim} seek={seek} />}
+      <div className={`video-player-timeline ${dragging ? "is-dragging" : ""} ${fine ? "is-fine" : ""}`} role="slider" tabIndex={0}
+        title="拖动定位 · 长按后轻拖细调 · Shift + 方向键微调"
         aria-label="视频时间轴" aria-valuemin={0} aria-valuemax={duration} aria-valuenow={time} aria-valuetext={videoTime(time)}
         aria-disabled={!ready || saving} onPointerDown={event => {
           if (event.button !== 0 || !ready || saving) return;
           event.preventDefault(); event.currentTarget.focus(); videoRef.current?.pause();
-          drag.current = { id: event.pointerId, x: event.clientX, time, moved: false };
+          drag.current = { id: event.pointerId, time, moved: false, gesture: startScrub(event.clientX, performance.now()) };
           setDragging(true); event.currentTarget.setPointerCapture(event.pointerId);
         }} onPointerMove={event => {
           const current = drag.current;
           if (!current || current.id !== event.pointerId) return;
-          const delta = event.clientX - current.x;
-          if (Math.abs(delta) > 3) current.moved = true;
-          if (current.moved) seek(current.time - delta / pixelsPerSecond);
+          const delta = moveScrub(current.gesture, event.clientX, performance.now());
+          if (Math.abs(event.clientX - current.gesture.origin) >= 3) current.moved = true;
+          setFine(current.gesture.fine);
+          if (current.moved) {
+            const basePixels = Math.max(720, Math.min(4800, duration * 48)) / duration;
+            current.time = Math.max(0, Math.min(duration, current.time - delta / basePixels));
+            seek(current.time);
+          }
         }} onPointerUp={event => endDrag(event)} onPointerCancel={event => endDrag(event, true)}
         onLostPointerCapture={event => endDrag(event, true)} onKeyDown={event => {
           if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
           event.preventDefault(); event.stopPropagation();
-          seek(event.key === "Home" ? 0 : event.key === "End" ? duration : time + (event.key === "ArrowLeft" ? -1 : 1) * (fine ? 0.01 : 0.1));
+          seek(event.key === "Home" ? 0 : event.key === "End" ? duration : time + (event.key === "ArrowLeft" ? -1 : 1) * (event.shiftKey ? 0.01 : 0.1));
         }}>
         <div className="video-player-film" style={{ width: stripSpan * pixelsPerSecond, transform: `translateX(${(stripStart - time) * pixelsPerSecond}px)` }} aria-hidden="true">
           {Array.from({ length: 12 }, (_, index) => <div key={index}>{thumbnails[index] && <img src={thumbnails[index]} alt="" draggable={false} />}</div>)}
@@ -333,18 +364,36 @@ export function VideoPlayer({ path, sourceKey, onAddFrame, onAddFrameToCanvas, o
         <div className="video-player-playhead" aria-hidden="true" />
       </div>
       <div className="video-player-footer">
-        <span>左右拖动选画面 · {fine ? "细调已开启 · 方向键 0.01 秒" : "方向键 0.1 秒"}</span>
-        {onReferenceFrame && <button className="video-player-add" disabled={!paused || !ready || seeking || dragging || saving} onClick={() => void referenceFrame()}><ImagePlus size={16} />{savingTarget === "reference" ? "正在添加…" : "添加该帧为参考图"}</button>}
-        {onAddFrame && <div className="video-player-frame-actions">
-          <button className="video-player-add" disabled={!paused || !ready || seeking || dragging || saving || savedTime === time}
-            onClick={() => void addFrame()}>{savedTime === time ? <Check size={16} /> : <ImagePlus size={16} />}{savingTarget === "current" ? "正在添加…" : savedTime === time ? (frameTarget === "reference" ? "已选作参考图" : frameTarget === "library" ? "已保存到素材库" : "已添加到画板") : frameTarget === "reference" ? "截取当前帧作参考" : frameTarget === "library" ? "保存该帧到素材库" : "添加该帧到画板"}</button>
-          {frameTarget === "canvas" && <button disabled={!ready || !duration || seeking || dragging || saving || savedLastFrame} onClick={() => void addFrame(true)}>
-            {savedLastFrame ? <Check size={16} /> : <ImagePlus size={16} />}{savingTarget === "last" ? "正在添加尾帧…" : savedLastFrame ? "尾帧已添加" : "添加尾帧到画板"}
-          </button>}
+        <div className="video-player-tools">
+          {showTrim && <button aria-label="裁剪视频" title="调整入点和出点" aria-pressed={trimming} disabled={!ready || saving || dragging}
+            onClick={() => { videoRef.current?.pause(); setTrimming(!trimming); setSavedMessage(""); }}><Scissors size={16} />{trimming ? "结束裁剪" : "裁剪"}</button>}
+        </div>
+        {trimming && <div className="video-trim-actions" aria-label="视频裁剪范围">
+          <div className="video-player-frame-actions">
+            <button className="video-player-add" disabled={!trimChanged || saving} onClick={() => void saveTrim(false)}>{savingTarget === "copy" ? "正在保存…" : "另存为新视频"}</button>
+            <button title="覆盖会同步影响此视频的其他引用" disabled={!trimChanged || saving} onClick={() => void saveTrim(true)}>{savingTarget === "overwrite" ? "正在覆盖…" : "覆盖原视频"}</button>
+            <button disabled={saving} onClick={() => { setInPoint(0); setOutPoint(duration); setSavedMessage(""); }}>重置</button>
+          </div>
         </div>}
-        {frameTarget === "library" && onAddFrameToCanvas && <button disabled={!paused || !ready || seeking || dragging || saving || savedCanvasTime === time}
-          onClick={() => void addFrame(false, true)}>{savedCanvasTime === time ? <Check size={16} /> : <ImagePlus size={16} />}{savingTarget === "canvas" ? "正在添加…" : savedCanvasTime === time ? "已添加到画板" : "添加该帧到画板"}</button>}
+        {!trimming && <>
+          {(onAddFrame || onReferenceFrame || onAddFrameToCanvas) && <VideoExportMenu label="导出帧" icon={<ImagePlus size={16} />}
+            portal={playerRef.current} disabled={saving || !ready || seeking || dragging}
+            items={[
+              ...(onReferenceFrame ? [{ label: "添加该帧为参考图", disabled: !paused, run: () => void referenceFrame() }] : []),
+              ...(onAddFrame ? [{ label: frameTarget === "reference" ? "截取当前帧作参考" : frameTarget === "library" ? "保存该帧到素材库" : "添加该帧到画板",
+                disabled: !paused || savedTime === time, run: () => void addFrame() }] : []),
+              ...(onAddFrame && frameTarget === "canvas" ? [{ label: "添加尾帧到画板", disabled: !duration || savedLastFrame, run: () => void addFrame(true) }] : []),
+              ...(frameTarget === "library" && onAddFrameToCanvas ? [{ label: "添加该帧到画板", disabled: !paused || savedCanvasTime === time, run: () => void addFrame(false, true) }] : []),
+            ]} />}
+          <VideoExportMenu label="提取视频音轨" icon={<Music2 size={16} />} portal={playerRef.current}
+            disabled={saving || !ready || dragging} items={[
+              { label: "添加到画板", disabled: !projectId || savedAudioTargets.includes(`${src}:canvas`), run: () => void exportAudio("canvas") },
+              { label: "保存到素材库", disabled: savedAudioTargets.includes(`${src}:library`), run: () => void exportAudio("library") },
+            ]} />
+        </>}
       </div>
+      {savingTarget === "audio" && <p className="video-player-saved" role="status">正在提取音轨…</p>}
+      {savingTarget && ["current", "last", "canvas", "reference"].includes(savingTarget) && <p className="video-player-saved" role="status">正在导出帧…</p>}
       {error && <p className="video-player-error" role="alert">{userErrorMessage(error, "视频操作未完成，请检查原文件和保存位置后重试。")}</p>}
       {playbackFailure && <div className="video-player-error" role="alert">
         <p>{playbackFailure.message}</p>

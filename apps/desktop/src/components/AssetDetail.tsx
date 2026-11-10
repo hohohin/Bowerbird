@@ -4,7 +4,7 @@ import { userErrorMessage } from "../lib/userError";
 import { VideoPlayer } from "./VideoPlayer";
 import { AudioWaveform } from "./AudioWaveform";
 import { isAudioAsset } from "../lib/audioMedia";
-import { isTextAsset } from "../lib/textMedia";
+import { isTextAsset, isSpreadsheetPath } from "../lib/textMedia";
 import { videoDurationLabel } from "./VideoHoverPreview";
 import "./AudioFileMediaCard.css";
 import { saveVideoFrame } from "../lib/saveVideoFrame";
@@ -55,6 +55,7 @@ import {
 
 const VIDEO_EXTS = ["mp4", "mov", "webm", "mkv", "avi", "m4v"];
 const TextDocumentEditor = lazy(() => import("./TextDocumentEditor").then(module => ({ default: module.TextDocumentEditor })));
+const SpreadsheetDocumentViewer = lazy(() => import("./SpreadsheetDocumentViewer").then(module => ({ default: module.SpreadsheetDocumentViewer })));
 
 function isVideo(ext?: string | null) {
   return !!ext && VIDEO_EXTS.includes(ext.toLowerCase());
@@ -710,13 +711,13 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
         {!panelOnly && <div className="asset-detail-stage flex flex-1 flex-col overflow-hidden bg-canvas">
           <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
             {textAsset && <Suspense fallback={<span className="text-sm text-muted">正在打开文档…</span>}>
-              <TextDocumentEditor key={asset.id} asset={asset} onSaved={() => {
+              {isSpreadsheetPath(asset.store_path) ? <SpreadsheetDocumentViewer key={asset.id} asset={asset} onNavigate={() => { closeDetail(); selection?.onNavigate?.(); }}/> : <TextDocumentEditor key={asset.id} asset={asset} onSaved={() => {
                 void api.getAssetsByIds([asset.id]).then(([saved]) => {
                   if (!saved) return;
                   setResolvedAsset(saved);
                   useStore.setState(state => ({ assets: state.assets.map(item => item.id === saved.id ? saved : item) }));
                 }).catch(error => notifyError(error, "文件已保存，素材信息暂未刷新"));
-              }}/>
+              }}/>}
             </Suspense>}
             {audioAsset && asset.store_path && <AudioWaveform assetId={asset.id} path={asset.store_path} name={asset.name}
               version={`${asset.file_mtime ?? 0}:${asset.size ?? 0}`} duration={audioDuration} onDuration={setAudioDuration} className="audio-detail-waveform"/>}

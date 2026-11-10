@@ -77,13 +77,13 @@ fn history_conflicting_alias_cannot_be_overwritten_even_with_identical_bytes() {
 }
 
 #[test]
-fn duplicate_source_identity_is_rejected_and_active_work_blocks_shared_transfer() {
+fn duplicate_source_identity_is_rejected_and_active_work_keeps_shared_files_in_place() {
     let f=Fixture::new();let old=f.asset("a",&["p1","p2"]);
     f.db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,store_path) VALUES('duplicate','duplicate',?1)",[old.to_string_lossy()]).unwrap();
     assert!(preview(&f.files,&f.db,&f.paths.images).is_err());
     f.db.conn.lock().unwrap().execute("DELETE FROM assets WHERE id='duplicate'",[]).unwrap();f.run();let before=f.path("a");
     f.db.conn.lock().unwrap().execute_batch("INSERT INTO task_queue(id,kind,payload,status,created_at,project_id) VALUES('busy','generation','{}','running',1,'p2');").unwrap();
-    assert!(f.db.delete_project_keep_managed(&f.paths,"p1").is_err());assert_eq!(f.path("a"),before);assert!(before.is_file());assert!(f.db.get_project("p1").unwrap().is_some());
+    assert_eq!(f.db.delete_project_keep_managed(&f.paths,"p1").unwrap().moved_assets,0);assert_eq!(f.path("a"),before);assert!(before.is_file());assert!(f.db.get_project("p1").unwrap().is_none());
 }
 
 #[test]

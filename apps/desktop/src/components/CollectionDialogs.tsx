@@ -39,11 +39,11 @@ export function CollectionEditorDialog({ collections, item, parentId, projectId 
     catch (error) { setError(String(error)); }
     finally { lock.current = false; setBusy(false); }
   }
-  return <ModalShell title={item ? "重命名集合" : "新建集合"} onClose={onClose} preventClose={busy}>
+  return <ModalShell title={item ? "重命名文件夹" : "新建文件夹"} onClose={onClose} preventClose={busy}>
     <form className="catalog-form" onSubmit={event => { event.preventDefault(); void save(); }}>
-      <label>集合名称<input data-modal-autofocus value={name} maxLength={100} onChange={e => setName(e.target.value)} disabled={busy} /></label>
+      <label>文件夹名称<input data-modal-autofocus value={name} maxLength={100} onChange={e => setName(e.target.value)} disabled={busy} /></label>
       {!item && (parentName ? <p>{parentName}</p> : <button type="button" disabled={busy} onClick={() => { void api.pickFolder().then(path => { if (path) setLocation(path); }).catch(error => setError(String(error))); }}>{location || "选择保存位置"}</button>)}
-      {error && <p role="alert">{userErrorMessage(error, "集合未保存，请稍后重试。")}</p>}
+      {error && <p role="alert">{userErrorMessage(error, "文件夹未保存，请稍后重试。")}</p>}
       <button className="app-button-accent" type="submit" disabled={busy || !name.trim()}>{busy ? "保存中…" : "保存"}</button>
     </form>
   </ModalShell>;
@@ -81,11 +81,11 @@ export function CollectionAssignDialog({ assetIds, onClose, onSaved }: { assetId
     } catch (error) { setError(String(error)); }
     finally { lock.current = false; setBusy(false); }
   }
-  return <ModalShell title="添加到集合" onClose={onClose} preventClose={busy} description="在目标文件夹创建分身，原文件保持原位。">
+  return <ModalShell title="添加到文件夹" onClose={onClose} preventClose={busy} description="在目标文件夹创建分身，原文件保持原位。">
     <form className="catalog-form" onSubmit={event => { event.preventDefault(); void save(); }}>
       <fieldset className="collection-picker" disabled={loading || busy}>
-        <legend>目标集合</legend>
-        {collections.length > 0 && <OverlayScrollArea className="collection-picker-scroll" label="目标集合滚动条"
+        <legend>目标文件夹</legend>
+        {collections.length > 0 && <OverlayScrollArea className="collection-picker-scroll" label="目标文件夹滚动条"
           viewportStyle={{ height: Math.min(collections.length * 40 + 8, 320), maxHeight: "35vh" }} viewportClassName="collection-picker-list">
           {collectionRows(collections).map(({ item, depth, path }) => <label key={item.id} className="collection-choice" data-selected={selected === item.id}
             title={path} style={{ paddingLeft: 12 + Math.min(depth, 8) * 16 }}>
@@ -94,15 +94,15 @@ export function CollectionAssignDialog({ assetIds, onClose, onSaved }: { assetId
             {selected === item.id && <Check size={15} aria-hidden="true"/>}
           </label>)}
         </OverlayScrollArea>}
-        {!loading && !collections.length && <p className="collection-picker-empty">还没有集合，可以新建一个。</p>}
+        {!loading && !collections.length && <p className="collection-picker-empty">还没有文件夹，可以新建一个。</p>}
         <label className="collection-choice collection-choice-new" data-selected={!selected}>
           <input type="radio" name={choiceName} value="" checked={!selected} onChange={() => setSelected("")} />
-          <Plus size={16} aria-hidden="true"/><span>新建集合</span>{!selected && <Check size={15} aria-hidden="true"/>}
+          <Plus size={16} aria-hidden="true"/><span>新建文件夹</span>{!selected && <Check size={15} aria-hidden="true"/>}
         </label>
       </fieldset>
-      {!selected && <label>集合名称<input value={name} maxLength={100} disabled={busy || !!created.current} onChange={e => setName(e.target.value)} /></label>}
-      {loading && <p role="status">正在读取集合…</p>}
-      {error && <p role="alert">{userErrorMessage(error, "集合操作未完成，请重新读取后重试。")} <button type="button" disabled={busy} onClick={() => setRevision(v => v + 1)}>重新读取</button></p>}
+      {!selected && <label>文件夹名称<input value={name} maxLength={100} disabled={busy || !!created.current} onChange={e => setName(e.target.value)} /></label>}
+      {loading && <p role="status">正在读取文件夹…</p>}
+      {error && <p role="alert">{userErrorMessage(error, "文件夹操作未完成，请重新读取后重试。")} <button type="button" disabled={busy} onClick={() => setRevision(v => v + 1)}>重新读取</button></p>}
       <button type="submit" className="app-button-accent" disabled={loading || busy || (!selected && !name.trim())}>{busy ? "添加中…" : "添加"}</button>
     </form>
   </ModalShell>;

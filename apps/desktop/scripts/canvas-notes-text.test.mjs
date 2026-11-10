@@ -36,6 +36,18 @@ test("canvasGridWeights falls back to equal weights on malformed vectors", () =>
   assert.deepEqual(canvasGridWeights([2], 2), [1, 1]);
   assert.deepEqual(canvasGridWeights([2, 0], 2), [1, 1]);
   assert.deepEqual(canvasGridWeights([2, Number.NaN], 2), [1, 1]);
+  assert.deepEqual(canvasGridWeights([2, Number.POSITIVE_INFINITY], 2), [1, 1]);
+});
+
+test('reading a rejected grid draft reuses displayed fallback weights without changing its cells', () => {
+  const cells = Array.from({ length: 53 }, (_, r) => [{ ...cell(`原文 ${r}\n`), id: `row-${r}` }]);
+  const payload = { schema_version: 1, note_type: 'text', text: '完整原文', cells,
+    row_heights: [-0.12, 2.12, ...Array(51).fill(1)], column_widths: [3] };
+  const recovered = readCanvasNote({ payloadJson: JSON.stringify(payload) });
+  assert.deepEqual(recovered.row_heights, Array(53).fill(1));
+  assert.deepEqual(recovered.column_widths, [3]);
+  assert.deepEqual(recovered.cells, cells);
+  assert.equal(recovered.text, payload.text);
 });
 
 test('single-cell tables remap image references without losing their generation text', () => {

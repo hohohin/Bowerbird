@@ -1,4 +1,5 @@
 export function workspaceCatalogResponse(command: string, args: any, assets: any[]) {
+  if (command === 'refresh_folder_connections') return null;
   if (command === 'list_generation_groups') return {};
   const filtered = (filter = args.filter ?? {}) => assets.filter(asset => {
     const kind = /^(mp4|mov)$/.test(asset.ext) ? 'videos' : /^(wav|mp3)$/.test(asset.ext) ? 'audios' : 'images';

@@ -46,6 +46,8 @@ export type NodeDshAcpPortOptions = {
   providerEnvironment?: Readonly<Record<string, string>>;
   parentEnvironment?: Record<string, string | undefined>;
   timeoutMs?: number;
+  /** Zero disables the task-duration deadline; initialization/cancel remain bounded. */
+  promptTimeoutMs?: number;
   activity?: ToolActivity;
   profileMode?: "planning" | "controlled-model" | "html-execution" | "content-execution";
 };
@@ -166,6 +168,7 @@ export class NodeDshAcpPort implements DshAcpPort {
   private readonly connection: AcpConnection;
   private readonly protocolVersion: number;
   private readonly timeoutMs: number;
+  private readonly promptTimeoutMs: number;
   private readonly activity?: ToolActivity;
   private onCommittedContent?: (content: DshAcpCommittedContent) => void;
   private disposed = false;
@@ -176,6 +179,7 @@ export class NodeDshAcpPort implements DshAcpPort {
     connection: AcpConnection;
     protocolVersion: number;
     timeoutMs: number;
+    promptTimeoutMs?: number;
     activity?: ToolActivity;
   }) {
     this.runtime = args.runtime;
@@ -183,6 +187,7 @@ export class NodeDshAcpPort implements DshAcpPort {
     this.connection = args.connection;
     this.protocolVersion = args.protocolVersion;
     this.timeoutMs = args.timeoutMs;
+    this.promptTimeoutMs = args.promptTimeoutMs ?? args.timeoutMs;
     this.activity = args.activity;
   }
 
@@ -238,6 +243,7 @@ export class NodeDshAcpPort implements DshAcpPort {
         connection,
         protocolVersion: acp.PROTOCOL_VERSION,
         timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        promptTimeoutMs: options.promptTimeoutMs,
         activity: options.activity,
       });
       return port;
@@ -269,9 +275,10 @@ export class NodeDshAcpPort implements DshAcpPort {
     if (this.onCommittedContent) throw new Error("dsh_acp_prompt_concurrent");
     this.onCommittedContent = onCommittedContent;
     try {
+      if (this.promptTimeoutMs === 0) return await this.connection.prompt(args);
       return this.activity
-        ? await withToolActivityTimeout(this.connection.prompt(args), this.timeoutMs, this.activity)
-        : await withTimeout(this.connection.prompt(args), "prompt", this.timeoutMs);
+        ? await withToolActivityTimeout(this.connection.prompt(args), this.promptTimeoutMs, this.activity)
+        : await withTimeout(this.connection.prompt(args), "prompt", this.promptTimeoutMs);
     } finally {
       this.onCommittedContent = undefined;
     }

@@ -210,11 +210,10 @@ fn local_chat_upgrade_preserves_public_history_without_replaying_current_request
     assert!(!history.contains("CURRENT_REQUEST"));
     assert!(!history.contains("asset"));
     assert!(history.contains("不构成现在再次创建卡片的授权"));
-    assert!(history.contains("省略：false"));
     let mut long_chat = chat.clone();
     long_chat.messages[0].text = "长".repeat(100_001);
     let history = upgraded_history(&long_chat, "current");
-    assert!(history.contains("省略：true"));
+    assert!(history.contains(&long_chat.messages[0].text));
     assert!(history.contains("原来的回复"));
 }
 
@@ -289,11 +288,10 @@ async fn local_chat_rpc_reads_real_json_lines_and_declines_server_requests() {
 }
 
 #[tokio::test]
-async fn local_chat_protocol_bounds_messages_and_handles_disconnection() {
-    let oversized = vec![b'x'; MAX_RESPONSE + 1];
-    assert!(read_message(&mut BufReader::new(oversized.as_slice()))
-        .await
-        .is_err());
+async fn local_chat_protocol_accepts_long_text_and_handles_disconnection() {
+    let text = "长文".repeat(400_000);
+    let wire = format!("{}\n", json!({"text":text}));
+    assert_eq!(read_message(&mut BufReader::new(wire.as_bytes())).await.unwrap()["text"], text);
     assert!(read_message(&mut BufReader::new(b"".as_slice()))
         .await
         .is_err());

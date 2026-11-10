@@ -152,7 +152,9 @@ declare module "@agentclientprotocol/sdk" {
 /** html-renderer 执行器测试用的最小 node:http 形状（环回假 renderer 服务）。 */
 declare module "node:http" {
   export interface ServerResponse {
+    readonly headersSent: boolean;
     writeHead(status: number, headers?: Record<string, string>): ServerResponse;
+    write(body: string | Uint8Array): boolean;
     end(body?: string | Uint8Array): void;
     destroy(): void;
   }
@@ -199,6 +201,8 @@ declare const process: {
 
 declare function setTimeout(callback: () => void, delayMs: number): unknown;
 declare function clearTimeout(handle: unknown): void;
+declare function setInterval(callback: () => void, delayMs: number): unknown;
+declare function clearInterval(handle: unknown): void;
 
 declare class TextEncoder {
   encode(input?: string): Uint8Array;
@@ -209,7 +213,13 @@ declare class TextDecoder {
   decode(input?: Uint8Array): string;
 }
 
-interface AbortSignal {}
+interface AbortSignal {
+  addEventListener(event: "abort", listener: () => void, options?: { once?: boolean }): void;
+}
+declare class AbortController {
+  readonly signal: AbortSignal;
+  abort(): void;
+}
 declare const AbortSignal: { timeout(milliseconds: number): AbortSignal };
 
 declare class URL {

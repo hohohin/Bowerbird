@@ -121,14 +121,14 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
       await ensureLocalChatEvents();
       // Retrying an uncertain IPC result must reuse its native idempotency key.
       // An accepted response clears it so a later intentional identical message is a new turn.
-      const fingerprint = JSON.stringify([input.projectId, input.conversationId ?? null, input.provider ?? "codex-local", input.text, input.referenceAssetIds, input.cardDefaults ?? null, input.codexOptions ?? null]);
+      const fingerprint = JSON.stringify([input.projectId, input.conversationId ?? null, input.agentNodeId ?? null, input.provider ?? "codex-local", input.text, input.referenceAssetIds, input.cardDefaults ?? null, input.codexOptions ?? null]);
       const pending = pendingSubmissions.get(key);
       const requestId = input.requestId || (pending?.fingerprint === fingerprint ? pending.requestId : crypto.randomUUID());
       pendingSubmissions.set(key, { fingerprint, requestId });
       const chat = await localChat.send({ ...input, requestId });
       get().applyConversation(chat);
       pendingSubmissions.delete(key);
-      return get().conversations[chat.id] ?? chat;
+      return { ...(get().conversations[chat.id] ?? chat), submittedTurnId: chat.submittedTurnId };
     } catch (error) {
       set(state => ({ errors: { ...state.errors, [key]: error } }));
       throw error;

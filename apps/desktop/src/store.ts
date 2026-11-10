@@ -1,4 +1,5 @@
 import { prepareFileWorkspace } from "./lib/fileWorkspace";
+import { applyGenerationProgress } from "./lib/generationProgress";
 import { create } from "zustand";
 import { filterAssetsByMediaType, type MediaFilter } from "./lib/mediaFilter";
 import { readThumbnailWidth, saveThumbnailWidth, type ThumbnailScope } from "./lib/thumbnailSize";
@@ -515,9 +516,10 @@ interface State {
     workspaceProjectId?: string | null;
     asset?: Asset;
     singleAsset?: boolean;
-    fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string> };
+    fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string>; entries?: { count: number; available: boolean; rename: () => void; move: () => void; removeReferences?: () => void } };
     libraryProjectId?: string;
     addCanvasImagesToBoard?: { count: number; run: () => void };
+    generationGroup?: { assetId?: string; groupKey?: string };
     ungroupCanvasFolder?: () => void;
     canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] };
   } | null;
@@ -525,7 +527,7 @@ interface State {
     x: number,
     y: number,
     assetId: string,
-    context?: { asset?: Asset; singleAsset?: boolean; fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string> }; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
+    context?: { asset?: Asset; generationGroup?: { assetId?: string; groupKey?: string }; singleAsset?: boolean; fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string>; entries?: { count: number; available: boolean; rename: () => void; move: () => void; removeReferences?: () => void } }; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
   ) => void;
   closeContextMenu: () => void;
   // —— 项目右键菜单（侧栏项目行 / 收起态圆标）——
@@ -743,7 +745,7 @@ export const useStore = create<State>((set, get) => {
   beginCollectionAdd: async (id) => {
     if (get().collectionAddBusy || get().projectRoutePending) return;
     const folder = get().folders.find((item) => item.id === id && (item.kind ?? "folder") === "folder");
-    if (!folder || id === "root") throw new Error("目标集合已不存在");
+    if (!folder || id === "root") throw new Error("目标文件夹已不存在");
     if (get().activeProjectId) await get().exitProject();
     set({ libraryHomeView: "library", collectionPanelId: null, collectionAddTargetId: id, mode: "manage",
       selectedIds: new Set(), rangeAnchorId: null, detailAssetId: null,
@@ -755,7 +757,7 @@ export const useStore = create<State>((set, get) => {
     const ids = [...state.selectedIds];
     if (!id || state.collectionAddBusy || ids.length === 0) return 0;
     if (!state.folders.some((item) => item.id === id && (item.kind ?? "folder") === "folder")) {
-      throw new Error("目标集合已不存在");
+      throw new Error("目标文件夹已不存在");
     }
     set({ collectionAddBusy: true });
     try {
@@ -1109,11 +1111,15 @@ export const useStore = create<State>((set, get) => {
       }
       return;
     }
-    if (deletingActiveProject) await get().projectCanvasFlush?.();
+    // The user is discarding this canvas; an unsaved edit must not veto deletion.
+    const { discardProjectWorkflow } = await import("./lib/canvasWorkflowRuntime");
     const result = await api.deleteProject(id, mode, confirmation, discardPendingResults);
+    discardProjectWorkflow(id);
     // Match the durable deletion's detached execution records, so a stale UI
     // snapshot cannot keep scheduling result ingestion for the deleted project.
-    set({ cloudAgentRuns: Object.fromEntries(Object.entries(get().cloudAgentRuns).map(([key, run]) => [key,
+    set({ genJobs: Object.fromEntries(Object.entries(get().genJobs).map(([key, job]) => [key,
+      job.projectId === id ? { ...job, projectId: null, threadId: null, creativeSessionId: null } : job,
+    ])), cloudAgentRuns: Object.fromEntries(Object.entries(get().cloudAgentRuns).map(([key, run]) => [key,
       run.projectId === id ? { ...run, projectId: null, threadId: null, creativeLaunchId: null } : run,
     ])) });
     if (deletingActiveProject) {
@@ -2146,6 +2152,8 @@ export const useStore = create<State>((set, get) => {
         },
       ],
       streaming: "",
+      progress: undefined,
+      remoteStatus: null,
       running: true,
     }));
     try {
@@ -2232,6 +2240,10 @@ export const useStore = create<State>((set, get) => {
     }).catch(error => genHandleError(id, taskErrorMessage(error)));
   },
   applyGenChunk: (c) => {
+    if (c.kind === "progress") {
+      updateJob(c.job_id, job => applyGenerationProgress(job, { stage: c.stage, queue_position: c.queue_position, queue_length: c.queue_length, turnKey: c.turn_key }));
+      return;
+    }
     if (c.kind === "started") {
       if (c.job_id) generationStartupWaiters.get(c.job_id)?.();
       // started = 后端已定本轮最终参考图与比例（续轮含合并的上一轮产出图 / 自动档已按
@@ -2241,6 +2253,7 @@ export const useStore = create<State>((set, get) => {
       if (sid && (c.references || c.ratio || c.applied_prompt || c.visual_profile)) {
         updateJob(sid, (j) => {
           const last = j.turns[j.turns.length - 1];
+          if (c.turn_key && c.turn_key !== last?.turnKey) return j;
           const turns = last
             ? [
                 ...j.turns.slice(0, -1),
@@ -2256,6 +2269,7 @@ export const useStore = create<State>((set, get) => {
           return {
             ...j,
             turns,
+            progress: undefined,
             lastRatio: c.ratio !== undefined ? c.ratio : j.lastRatio,
             visualProfile: c.visual_profile ?? j.visualProfile,
             visualProfileId: c.visual_profile?.profileId ?? j.visualProfileId,
@@ -2267,7 +2281,10 @@ export const useStore = create<State>((set, get) => {
     if (c.kind === "submit") {
       // 即梦 submit_id 到（Chunk::Submit 回填）：记录到 job，纯展示（恢复续查用）。
       const sid = c.job_id;
-      if (sid) updateJob(sid, (j) => ({ ...j, submitId: c.submit_id, remoteStatus: "querying", turns: j.turns.map((turn, index) => index === j.turns.length - 1 ? { ...turn, submitId: c.submit_id } : turn) }));
+      if (sid) updateJob(sid, (j) => {
+        if (c.turn_key && c.turn_key !== j.turns[j.turns.length - 1]?.turnKey) return j;
+        return { ...applyGenerationProgress(j, { stage: "processing", turnKey: c.turn_key }), submitId: c.submit_id, remoteStatus: "querying", turns: j.turns.map((turn, index) => index === j.turns.length - 1 ? { ...turn, submitId: c.submit_id } : turn) };
+      });
       return;
     }
     if (c.kind === "recover_started") {
@@ -2277,7 +2294,7 @@ export const useStore = create<State>((set, get) => {
       set((s) => {
         if (s.genJobs[rid]) {
           const existing = s.genJobs[rid];
-          return { genJobs: { ...s.genJobs, [rid]: { ...existing, running: true, streaming: "",
+          return { genJobs: { ...s.genJobs, [rid]: { ...existing, running: true, streaming: "", progress: undefined,
             media: c.media ?? existing.media, videoOptions: c.video_options ?? existing.videoOptions,
             submitId: c.submit_id ?? existing.submitId, remoteStatus: "querying" as const,
             turns: existing.turns.map((turn, index) => index === existing.turns.length - 1 ? { ...turn, submitId: c.submit_id ?? turn.submitId, error: null } : turn),
@@ -2310,12 +2327,13 @@ export const useStore = create<State>((set, get) => {
       return;
     }
     if (c.kind === "recover_polling") {
-      // 远端仍在排队（querying）：保持 running，streaming 显示提示（下次启动再试）。
+      // querying 只能说明任务未结束，不能据此断言仍在排队。
       const rid = c.job_id;
       if (rid)
         updateJob(rid, (j) => ({
           ...j,
-          streaming: c.message ? `远端仍在排队：${c.message}` : "远端仍在排队…",
+          streaming: "原任务仍待确认，可继续查询。",
+          progress: undefined,
           remoteStatus: "querying",
         }));
       return;

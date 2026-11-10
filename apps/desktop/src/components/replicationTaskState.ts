@@ -1,3 +1,4 @@
+import type { ReplicationAnalysisOutput } from "../lib/replicationAnalysisNote";
 import { invoke } from "@tauri-apps/api/core";
 import type { ReplicationWorkflowRequest } from "../lib/videoReplication";
 import type { VideoFrame } from "../lib/videoFrame";
@@ -7,5 +8,7 @@ export const replicationCall = <T,>(projectId: string, action: string, data: unk
 export interface ReplicationDialogProps {
   projectId: string; onClose: () => void; ensureProject: () => Promise<void>;
   onCreateWorkflow?: (request: ReplicationWorkflowRequest) => Promise<void>;
+  onAddVideo?: (path: string, operationId: string) => Promise<void>;
+  onAddAnalysis?: (output: ReplicationAnalysisOutput) => Promise<void>;
   onAddFrame?: (frame: VideoFrame) => Promise<void>;
 }

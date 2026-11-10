@@ -1,5 +1,6 @@
 import { AdaptiveToolGateway, type AdaptiveJournal } from "../harness/adaptive-tool-gateway.ts";
 import { textRewritePrompt, parseTextRewriteResult } from "../skills/bowerbird-unified-agent/text-rewrite.ts";
+import { resolveCloudTextSkill, validateCloudTextSkillSnapshot, type CloudTextSkillSnapshot } from "../skills/cloud-text-skills.ts";
 import { ToolGatewayError } from "../harness/scoped-tool-gateway.ts";
 import { AdaptiveRunTools } from "../harness/adaptive-run-tools.ts";
 import { ADAPTIVE_TOOL_INPUTS, adaptiveInputContract } from "../harness/adaptive-tool-inputs.ts";
@@ -73,6 +74,7 @@ async function downloadUserResponse(context: AgentRunContext, url: string): Prom
 
 type UnifiedPlanningCheckpoint = HarnessCheckpointSeed & {
   textResult?: string;
+  textSkill?: CloudTextSkillSnapshot;
   adaptiveJournal?: AdaptiveJournal;
   visualObservations?: VisualObservationReference[];
   revision?: number;
@@ -152,8 +154,12 @@ function decodeCheckpoint(
     throw new Error("unified_agent_checkpoint_invalid");
   }
   checkpoint.input = validateUnifiedAgentPlanningInput(checkpoint.input);
+  if (checkpoint.textSkill !== undefined) {
+    if (!checkpoint.input.textRewrite) throw new Error("unified_agent_checkpoint_invalid");
+    checkpoint.textSkill = validateCloudTextSkillSnapshot(checkpoint.textSkill);
+  }
   if (checkpoint.textResult !== undefined && (!checkpoint.input.textRewrite || checkpoint.phase !== "succeeded" ||
-      typeof checkpoint.textResult !== "string" || !checkpoint.textResult.trim() || checkpoint.textResult.length > 16000)) throw new Error("unified_agent_checkpoint_invalid");
+      typeof checkpoint.textResult !== "string" || !checkpoint.textResult.trim())) throw new Error("unified_agent_checkpoint_invalid");
   // Explicit migration of the known previous instruction bundle; approved plan
   // contents/hash and completed durable calls are preserved.
   checkpoint.skillHash = expected.skillHash;
@@ -444,6 +450,7 @@ export class UnifiedPlanningRunProcessor implements AgentRunProcessor {
           leaseId: context.claimed.lease.leaseId,
           phase: "compose_plan",
           control: context.control,
+          signal: context.signal,
         });
       }
       const observations = new VisualObservationMemory({
@@ -511,15 +518,17 @@ export class UnifiedPlanningRunProcessor implements AgentRunProcessor {
     const { run, lease } = context.claimed;
     if (run.approvedPlanHash) throw new Error("unified_agent_text_input_invalid");
     if (!checkpoint.textResult) {
+      // Resolve once before saving; recovery uses the frozen method, never today's VPS file.
+      checkpoint.textSkill ??= resolveCloudTextSkill(checkpoint.input.goal);
       await this.saveCheckpoint(context, checkpoint, "compose_plan", 10, [{ seq: 10, type: "text.rewrite.started", progress: 10, displayPayload: {} }]);
       let proxy: Awaited<ReturnType<typeof startMeteredDeepSeekProxy>> | undefined;
       try {
         if (this.options.modelProxy) proxy = await startMeteredDeepSeekProxy({ ...this.options.modelProxy,
-          runId: run.id, leaseId: lease.leaseId, phase: "compose_plan", control: context.control, maxModelTurns: 3, allowedToolNames: [] });
+          runId: run.id, leaseId: lease.leaseId, phase: "compose_plan", control: context.control, signal: context.signal, maxModelTurns: 3, allowedToolNames: [] });
         const runner = new UnifiedPlanningHarnessRunner({ runId: run.id,
           dispatch: async () => { throw new ToolGatewayError("tool_not_allowed"); },
         }, (environment, _provider, activity) => this.options.createAdapter(environment, proxy?.childEnvironment(), activity));
-        const result = await runner.run(checkpoint, [{ type: "text", text: textRewritePrompt(checkpoint.input.goal, checkpoint.input.textRewrite!.source) }]);
+        const result = await runner.run(checkpoint, [{ type: "text", text: textRewritePrompt(checkpoint.input.goal, checkpoint.input.textRewrite!.source, checkpoint.textSkill) }]);
         if (context.signal.aborted) throw new Error("unified_agent_run_cancelled");
         checkpoint = { ...checkpoint, textResult: parseTextRewriteResult(result), phase: "succeeded", checkpointVersion: checkpoint.checkpointVersion + 1 };
         // Persist the result before publishing it; lease recovery never repeats a completed edit.
@@ -715,7 +724,7 @@ export class UnifiedPlanningRunProcessor implements AgentRunProcessor {
         workspace, vision: this.options.vision, signal: context.signal });
       if (!gateway.finalResult) {
         proxy = await startMeteredDeepSeekProxy({ ...this.options.modelProxy, runId: run.id, leaseId: lease.leaseId,
-          phase: "execute_approved_plan", maxModelTurns: authorization.modelTurns, maxOutputTokens: 8000,
+          phase: "execute_approved_plan", maxModelTurns: authorization.modelTurns, signal: context.signal,
           allowedToolNames: ["read_context", "list_skills", "read_skill", "list_run_assets", "call_tool"],
           control: context.control });
         const runner = new UnifiedPlanningHarnessRunner({ runId: run.id, dispatch: async (call) => {
@@ -1007,6 +1016,7 @@ export class UnifiedPlanningRunProcessor implements AgentRunProcessor {
         leaseId,
         phase: "execute_approved_plan",
         control: context.control,
+        signal: context.signal,
       });
       const runner = new UnifiedHtmlExecutionHarnessRunner(bridge, html.createAdapter);
       const result = await runner.run(checkpoint, [{

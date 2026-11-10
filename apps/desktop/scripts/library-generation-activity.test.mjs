@@ -58,7 +58,7 @@ test('generation rows show original user text and order by latest completed turn
     job('untitled',{createdAt:20,turns:[],lastPrompt:''}),
   ]});
   assert.deepEqual(rows.map(({id,title,statusLabel,updatedAt})=>[id,title,statusLabel,updatedAt]),[
-    ['started','组稿','生成中',600],['completed','用户的原话','已完成',520],
+    ['started','组稿','准备生成',600],['completed','用户的原话','已完成',520],
     ['fallback','初始意图','需处理',40],['untitled','生成任务','需处理',20],
   ]);
 });

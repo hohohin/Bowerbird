@@ -9,11 +9,12 @@ export interface TacticalSelectProps extends Omit<ButtonHTMLAttributes<HTMLButto
   defaultValue?: string | number;
   onValueChange?: (value: string) => void;
   menuClassName?: string;
+  portalContainer?: HTMLElement | null;
 }
 
 export const TacticalSelect = forwardRef<HTMLButtonElement, TacticalSelectProps>(function TacticalSelect({
   children, value, defaultValue, onValueChange, disabled, className = "", id, name, form,
-  onClick, onKeyDown, onPointerDown, onMouseDown, menuClassName = "", ...buttonProps
+  onClick, onKeyDown, onPointerDown, onMouseDown, menuClassName = "", portalContainer, ...buttonProps
 }, forwardedRef) {
   const options = useMemo(() => parseTacticalOptions(children), [children]);
   const first = options.find(option => !option.disabled && !option.hidden);
@@ -205,6 +206,6 @@ export const TacticalSelect = forwardRef<HTMLButtonElement, TacticalSelectProps>
         ? <div role="group" aria-labelledby={`${listId}-group-${group.id}`} className="tactical-select-group" key={index}>
           <div id={`${listId}-group-${group.id}`} className="tactical-select-group-label" title={group.title}>{group.label}</div>{indices.map(renderOption)}
         </div> : <Fragment key={index}>{indices.map(renderOption)}</Fragment>)}
-    </div>, document.body)}
+    </div>, portalContainer ?? document.body)}
   </>;
 });

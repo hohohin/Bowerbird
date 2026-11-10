@@ -23,8 +23,8 @@ async function collectionAction(name, action) {
   const row = page.getByRole('treeitem', { name, exact: true });
   await row.hover();
   await row.getByRole('button', { name: `「${name}」的更多操作`, exact: true }).click();
-  const menu = page.getByRole('menu', { name: '集合操作', exact: true });
-  if (action === '删除集合') {
+  const menu = page.getByRole('menu', { name: '文件夹操作', exact: true });
+  if (action === '删除文件夹') {
     await menu.getByRole('menuitem', { name: '删除', exact: true }).click();
     await page.getByRole('menu', { name: '删除', exact: true }).getByRole('menuitem', { name: action, exact: true }).click();
   } else await menu.getByRole('menuitem', { name: action, exact: true }).click();
@@ -33,14 +33,14 @@ const tab = name => page.locator(name === '全局素材' ? '[role="tab"][data-ta
 const card = name => page.locator('.categorized-library').getByRole('button',{name,exact:true});
 async function view(kind) {
   const root=page.locator('.categorized-library');
-  const same=await root.count() && await root.getAttribute('aria-label')===(kind==='tags' ? '按标签浏览素材' : '按集合浏览素材');
+  const same=await root.count() && await root.getAttribute('aria-label')===(kind==='tags' ? '按标签浏览素材' : '按文件夹浏览素材');
   if (same) {
     await clickControl('文件浏览器');
     await clickControl('文件浏览器');
   } else {
     await page.evaluate(async kind => (await import('/src/lib/localFileMode.ts')).useLocalFileMode.getState().setCatalogView(kind), kind);
   }
-  await page.getByRole('region',{name:kind==='tags' ? '按标签浏览素材' : '按集合浏览素材',exact:true}).waitFor();
+  await page.getByRole('region',{name:kind==='tags' ? '按标签浏览素材' : '按文件夹浏览素材',exact:true}).waitFor();
 }
 async function mockCatalog() {
   await page.evaluate(() => {
@@ -271,7 +271,7 @@ try {
   await mkdir('.tmp/material-catalog',{recursive:true});
   await page.goto('http://127.0.0.1:1698/scripts/fixtures/project-drop/preview.html?layout');
   await tab('全局素材').waitFor(); await mockCatalog();
-  assert.deepEqual(await page.getByRole('tab').allTextContents(),['全部','标签分类','集合分类']);
+  assert.deepEqual(await page.getByRole('tab').allTextContents(),['全部','标签分类','文件夹']);
   await view('tags'); await card('建筑.png').waitFor();
   assert.deepEqual(await page.locator('.catalog-tag-list .catalog-row span').allTextContents(),['插画','海报','建筑']);
   assert.equal(await page.locator('.catalog-sidebar').isVisible(),true);
@@ -307,7 +307,7 @@ try {
   assert.equal(await page.evaluate(()=>window.catalogCalls.some(c=>c.command.startsWith('save_')||c.command.startsWith('set_'))),false,'browsing does not mutate library');
   await page.evaluate(()=>window.catalogFail=true);
   await view('collections');
-  assert.equal(await page.getByRole('button',{name:'全部集合素材',exact:true}).count(),0);
+  assert.equal(await page.getByRole('button',{name:'全部文件夹素材',exact:true}).count(),0);
   await page.getByRole('treeitem',{name:'灵感',exact:true}).waitFor();
   assert.equal(await page.getByRole('treeitem',{name:'灵感',exact:true}).getAttribute('aria-selected'),'true','first tree collection is selected by default');
   assert.ok(await page.evaluate(()=>window.catalogCalls.filter(c=>c.command==='material_catalog_assets' && c.args.kind==='collections').every(c=>!!c.args.id)),'collection view never requests all collections');
@@ -316,8 +316,8 @@ try {
   await page.getByRole('button',{name:'重试',exact:true}).click(); await card('插画.png').waitFor();
   await view('tags'); await card('海报.png').waitFor();
   await card('海报.png').click({modifiers:['Control']});
-  await page.getByRole('group',{name:'分类素材所选操作'}).getByRole('button',{name:'添加到集合'}).click();
-  let dialog=page.getByRole('dialog',{name:'添加到集合',exact:true});
+  await page.getByRole('group',{name:'分类素材所选操作'}).getByRole('button',{name:'添加到文件夹'}).click();
+  let dialog=page.getByRole('dialog',{name:'添加到文件夹',exact:true});
   await dialog.getByText('灵感', { exact: true }).click();
   await dialog.getByRole('button',{name:'添加',exact:true}).click(); await dialog.waitFor({state:'hidden'});
   await view('collections');
@@ -341,11 +341,11 @@ try {
   await leaf.hover();
   assert.equal(await leaf.locator('.catalog-tree-row-actions').evaluate(el => getComputedStyle(el).opacity),'1');
   await leaf.getByRole('button', { name: '「灵感」的更多操作', exact: true }).click();
-  await page.getByRole('menu', { name: '集合操作' }).waitFor();
+  await page.getByRole('menu', { name: '文件夹操作' }).waitFor();
   await page.screenshot({path:'.tmp/material-catalog/collection-row-menu.png'});
   await page.keyboard.press('Escape');
   assert.equal(await leaf.getByRole('button', { name: '「灵感」的更多操作', exact: true }).evaluate(el => el === document.activeElement),true);
-  const collectionResize = page.getByRole('separator', { name: '调整集合侧栏宽度' });
+  const collectionResize = page.getByRole('separator', { name: '调整文件夹侧栏宽度' });
   await collectionResize.focus();
   for(let i=0;i<4;i++) await collectionResize.press('ArrowLeft');
   await page.locator('.catalog-gallery').hover({ position: { x: 30, y: 400 } });
@@ -359,17 +359,17 @@ try {
   await page.getByRole('button',{name:'展开设计',exact:true}).click();
   await page.getByRole('treeitem', { name: '灵感', exact: true }).click();
   await collectionAction('设计', '重命名');
-  dialog=page.getByRole('dialog',{name:'重命名集合',exact:true});
+  dialog=page.getByRole('dialog',{name:'重命名文件夹',exact:true});
   assert.equal(await dialog.locator('select').count(),0,'rename cannot reparent a collection');
-  assert.equal(await dialog.getByLabel('集合名称').inputValue(),'设计','row menu targets its own collection, not the selected one');
+  assert.equal(await dialog.getByLabel('文件夹名称').inputValue(),'设计','row menu targets its own collection, not the selected one');
   await page.keyboard.press('Escape'); await closeControls();
   await page.getByRole('treeitem',{name:'灵感',exact:true}).click();
   await page.getByRole('button',{name:'收起设计',exact:true}).click();
-  await page.getByRole('button',{name:'在「设计」中新建子集合',exact:true}).focus();
+  await page.getByRole('button',{name:'在「设计」中新建子文件夹',exact:true}).focus();
   await page.keyboard.press('Enter');
-  dialog=page.getByRole('dialog',{name:'新建集合',exact:true});
-  await dialog.getByLabel('集合名称').fill('品牌');
-  await dialog.getByText('在「设计」中新建子集合。',{exact:true}).waitFor();
+  dialog=page.getByRole('dialog',{name:'新建文件夹',exact:true});
+  await dialog.getByLabel('文件夹名称').fill('品牌');
+  await dialog.getByText('在「设计」中新建子文件夹。',{exact:true}).waitFor();
   assert.equal(await dialog.locator('select').count(),0);
   await dialog.getByRole('button',{name:'保存',exact:true}).click(); await dialog.waitFor({state:'hidden'});
   assert.equal(await page.getByRole('treeitem',{name:'品牌',exact:true}).getAttribute('aria-level'),'2');
@@ -381,13 +381,13 @@ try {
   assert.equal(await page.getByRole('treeitem',{name:'品牌',exact:true}).count(),0,'left on expanded parent collapses children');
   await page.keyboard.press('ArrowRight');
   await page.getByRole('treeitem',{name:'品牌',exact:true}).waitFor();
-  await collectionAction('品牌', '删除集合');
-  dialog=page.getByRole('dialog',{name:'删除集合',exact:true});
+  await collectionAction('品牌', '删除文件夹');
+  dialog=page.getByRole('dialog',{name:'删除文件夹',exact:true});
   await dialog.getByText(/素材和电脑中的原文件均保留/).waitFor();
-  await dialog.getByRole('button',{name:'删除集合',exact:true}).click(); await dialog.waitFor({state:'hidden'});
+  await dialog.getByRole('button',{name:'删除文件夹',exact:true}).click(); await dialog.waitFor({state:'hidden'});
   assert.equal(await page.getByRole('treeitem',{name:'品牌',exact:true}).count(),0);
   await page.getByRole('treeitem',{name:'设计',exact:false}).click(); await card('海报.png').click({modifiers:['Control']});
-  await page.getByRole('button',{name:'移出集合',exact:true}).click(); await card('海报.png').waitFor({state:'hidden'});
+  await page.getByRole('button',{name:'移出文件夹',exact:true}).click(); await card('海报.png').waitFor({state:'hidden'});
   await page.getByRole('treeitem',{name:'灵感',exact:true}).click(); await card('海报.png').waitFor();
   await assertLayout('home-collections-light');
   await card('海报.png').click({modifiers:['Control']}); await page.getByRole('button',{name:'添加到新项目',exact:true}).click();
@@ -395,26 +395,26 @@ try {
   assert.deepEqual(await page.evaluate(()=>window.catalogCreatedProjectAssets),['catalog-1']);
   await page.evaluate(()=>{window.catalogCollections=[];window.catalogMembers={};});
   await view('collections');
-  await page.getByText('还没有集合，点击左侧 ＋ 新建集合。',{exact:true}).waitFor();
+  await page.getByText('还没有文件夹，点击左侧 ＋ 新建文件夹。',{exact:true}).waitFor();
   assert.equal(await page.getByRole('treeitem').count(),0);
   assert.equal(await page.locator('.categorized-library .folder-media-card').count(),0,'no collections does not fall back to all assets');
-  await page.getByRole('button',{name:'新建集合',exact:true}).click();
-  dialog=page.getByRole('dialog',{name:'新建集合',exact:true});
+  await page.getByRole('button',{name:'新建文件夹',exact:true}).click();
+  dialog=page.getByRole('dialog',{name:'新建文件夹',exact:true});
   await dialog.getByText('新建顶层集合，用来整理素材。',{exact:true}).waitFor();
   assert.equal(await dialog.locator('select').count(),0);
-  await dialog.getByLabel('集合名称').fill('新顶层');
+  await dialog.getByLabel('文件夹名称').fill('新顶层');
   await dialog.getByRole('button',{name:'保存',exact:true}).click(); await dialog.waitFor({state:'hidden'});
   await page.getByRole('treeitem',{name:'新顶层',exact:true}).waitFor();
   assert.equal(await page.getByRole('treeitem',{name:'新顶层',exact:true}).getAttribute('aria-selected'),'true','empty collections remain selectable');
   await page.getByRole('treeitem',{name:'新顶层',exact:true}).hover();
-  await page.getByRole('button',{name:'在「新顶层」中新建子集合',exact:true}).click();
-  dialog=page.getByRole('dialog',{name:'新建集合',exact:true});
-  await dialog.getByText('在「新顶层」中新建子集合。',{exact:true}).waitFor();
+  await page.getByRole('button',{name:'在「新顶层」中新建子文件夹',exact:true}).click();
+  dialog=page.getByRole('dialog',{name:'新建文件夹',exact:true});
+  await dialog.getByText('在「新顶层」中新建子文件夹。',{exact:true}).waitFor();
   await page.keyboard.press('Escape'); await closeControls();
-  await collectionAction('新顶层', '删除集合');
-  dialog=page.getByRole('dialog',{name:'删除集合',exact:true});
-  await dialog.getByRole('button',{name:'删除集合',exact:true}).click(); await dialog.waitFor({state:'hidden'});
-  await page.getByText('还没有集合，点击左侧 ＋ 新建集合。',{exact:true}).waitFor();
+  await collectionAction('新顶层', '删除文件夹');
+  dialog=page.getByRole('dialog',{name:'删除文件夹',exact:true});
+  await dialog.getByRole('button',{name:'删除文件夹',exact:true}).click(); await dialog.waitFor({state:'hidden'});
+  await page.getByText('还没有文件夹，点击左侧 ＋ 新建文件夹。',{exact:true}).waitFor();
   assert.ok(await page.evaluate(()=>window.catalogCalls.filter(c=>c.command==='material_catalog_assets' && c.args.kind==='collections').every(c=>!!c.args.id)),'initial, created and deleted collections never trigger an aggregate query');
   await page.goto('http://127.0.0.1:1698/scripts/fixtures/canvas-reference/preview.html?source-library');
   await page.waitForFunction(()=>document.querySelector('.canvas-workspace')?.getAttribute('aria-busy')==='false');
@@ -429,14 +429,14 @@ try {
   await drawerGrip.press('Home');
   await page.waitForTimeout(350);
   await page.evaluate(() => {
-    window.catalogCollections.find(c => c.id === 'other-collection').name = '灵感参考与品牌设计的超长集合名称';
+    window.catalogCollections.find(c => c.id === 'other-collection').name = '灵感参考与品牌设计的超长文件夹名称';
     window.catalogMembers['other-collection'] = ['catalog-0'];
   });
   await stableSwitch('collections');
   const longTitle = page.locator('.catalog-section-title');
-  assert.equal(await longTitle.getAttribute('title'), '灵感参考与品牌设计的超长集合名称');
+  assert.equal(await longTitle.getAttribute('title'), '灵感参考与品牌设计的超长文件夹名称');
   assert.ok(await longTitle.evaluate(el => el.scrollWidth > el.clientWidth), 'long collection names truncate instead of widening the drawer');
-  await page.getByRole('treeitem',{name:'灵感参考与品牌设计的超长集合名称',exact:true}).hover();
+  await page.getByRole('treeitem',{name:'灵感参考与品牌设计的超长文件夹名称',exact:true}).hover();
   await page.screenshot({path:'.tmp/material-catalog/collection-tree-long-name.png'});
   await stableSwitch('tags');
   await page.evaluate(() => {
@@ -446,7 +446,7 @@ try {
   await drawerGrip.press('End');
   await page.waitForTimeout(350);
   await view('collections');
-  await page.getByText('集合还没有素材。可在素材右键菜单中选择「添加到集合」。',{exact:true}).waitFor();
+  await page.getByText('文件夹还没有素材。可在素材右键菜单中选择「添加到文件夹」。',{exact:true}).waitFor();
   assert.equal(await page.getByRole('treeitem',{name:'灵感',exact:true}).getAttribute('aria-selected'),'true');
   assert.equal(await page.locator('.categorized-library .folder-media-card').count(),0,'empty project collection does not show other collections or global members');
   await view('tags'); await card('建筑.png').waitFor();
@@ -482,8 +482,8 @@ try {
   if (await tab('全局素材').getAttribute('aria-selected') !== 'true') await tab('全局素材').click();
   await view('tags'); await card('建筑.png').waitFor();
   await card('建筑.png').click({button:'right'});
-  await page.getByRole('menuitem',{name:'添加到集合',exact:true}).click();
-  dialog=page.getByRole('dialog',{name:'添加到集合',exact:true});
+  await page.getByRole('menuitem',{name:'添加到文件夹',exact:true}).click();
+  dialog=page.getByRole('dialog',{name:'添加到文件夹',exact:true});
   await dialog.getByText('设计', { exact: true }).click();
   await dialog.getByRole('button',{name:'添加',exact:true}).click(); await dialog.waitFor({state:'hidden'});
   for(const theme of ['light','dark']) {
@@ -650,7 +650,7 @@ try {
     await clickControl('视频'); await closeControls();
     await page.getByRole('region',{name:'平铺浏览视频',exact:true}).waitFor();
     await page.locator('[role="tab"][aria-selected="true"]').focus(); await page.keyboard.press('Tab');
-    await page.getByRole('region',{name:'按集合浏览素材',exact:true}).waitFor();
+    await page.getByRole('region',{name:'按文件夹浏览素材',exact:true}).waitFor();
     await page.getByRole('treeitem',{name:'海报',exact:true}).click();
     await card('project-video.mp4').waitFor();
     assert.equal(await card('海报.png').count(),0,'video collection excludes images');
@@ -668,7 +668,7 @@ try {
       await card('global-video.mp4').waitFor({state:'hidden'});
       assert.equal(await page.locator('.categorized-library .folder-media-card').count(),1,'project video view follows current source');
       await page.locator('[role="tab"][aria-selected="true"]').focus(); await page.keyboard.press('Tab');
-      await page.getByRole('region',{name:'按集合浏览素材',exact:true}).waitFor();
+      await page.getByRole('region',{name:'按文件夹浏览素材',exact:true}).waitFor();
       await page.getByRole('treeitem',{name:'海报',exact:true}).click();
       await card('project-video.mp4').waitFor();
     }
@@ -677,7 +677,7 @@ try {
   }
   await page.evaluate(()=>window.catalogCollections.push(...Array.from({length:40},(_,i)=>({id:`scroll-collection-${i}`,name:`目录 ${i}`,parent_id:null,kind:'collection'}))));
   await view('collections');
-  const collectionRail=page.getByRole('scrollbar',{name:'集合目录滚动条'});
+  const collectionRail=page.getByRole('scrollbar',{name:'文件夹目录滚动条'});
   await collectionRail.waitFor({state:'attached'});
   const collectionWidths=await page.locator('.catalog-index').evaluate(el=>[el.offsetWidth,el.clientWidth]);
   assert.equal(collectionWidths[0],collectionWidths[1],'long collection tree has no native scrollbar gutter');

@@ -12,11 +12,12 @@ const row = id => page.locator(`[data-collection-id="${id}"]`);
 const previews = path => page.evaluate(path => window.requests.filter(r => r.command === 'external_files_preview' && (!path || r.args.path === path)).length, path);
 try {
   await page.goto('http://127.0.0.1:17953/scripts/fixtures/connected-collections/preview.html?cold');
+  await page.getByRole('tab', { name: '文件夹', exact: true }).click();
   await image('root-0').waitFor();
   await page.waitForFunction(() => window.previewActive === 0);
   const startup = await page.evaluate(() => ({ requests: window.requests, peak: window.previewPeak }));
-  assert.ok(startup.requests.findIndex(r => r.command === 'folder_connections') < startup.requests.findIndex(r => r.command === 'refresh_folder_connections'), 'cached tree is requested before a scan');
-  assert.equal(startup.requests.find(r => r.command === 'refresh_folder_connections').args.folderId, 'root');
+  assert.ok(startup.requests.some(r => r.command === 'folder_connections'), 'opening reads the existing folder index');
+  assert.equal(startup.requests.filter(r => r.command === 'refresh_folder_connections').length, 0, 'opening a folder view must not start a full scan');
   assert.ok(startup.peak > 0 && startup.peak <= 4, 'cold previews use bounded concurrency');
   assert.ok(await previews() < 125, 'opening the collection does not generate all previews');
   assert.equal(await previews('/fixture/second-0.png'), 0, 'offscreen collection remains cold');
@@ -27,9 +28,22 @@ try {
   await page.waitForFunction(() => document.querySelector('[data-collection-id="child"]')?.getAttribute('aria-selected') === 'true');
   assert.equal(await previews('/fixture/root-0.png'), originalCalls, 'references reuse the original preview');
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'refresh_folder_connections').length), 0, 'window focus must not start a full scan');
+  await page.getByRole('button', { name: '刷新文件夹', exact: true }).click();
   assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'refresh_folder_connections').at(-1).args.folderId), 'child');
-  await page.getByRole('button', { name: '刷新集合', exact: true }).click();
-  assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'refresh_folder_connections').at(-1).args.folderId), 'child');
+  assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'refresh_folder_connections').at(-1).args.force), true, 'manual refresh bypasses the cooldown');
+  assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'refresh_folder_connections').length), 1);
+  await page.evaluate(() => window.setLibraryVisible(false));
+  await page.locator('.catalog-virtual').waitFor({ state: 'detached' });
+  // Cross both the former 30s automatic-check window and the 60s list TTL.
+  // Revalidating the SQLite index must not enqueue another filesystem walk.
+  await page.clock.setFixedTime(new Date(Date.now() + 90_000));
+  await page.evaluate(() => window.setLibraryVisible(true));
+  await page.getByRole('tab', { name: '文件夹', exact: true }).click();
+  await image('root-0').waitFor();
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.waitForTimeout(150);
+  assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'refresh_folder_connections').length), 1, 'reopening after expiration and focusing only reuse/revalidate the index');
   await row('root').click(); await image('root-0').waitFor();
   assert.equal(await previews('/fixture/root-0.png'), originalCalls, 'unchanged revisit reuses the session cache');
   await page.evaluate(original => {
@@ -54,5 +68,5 @@ try {
   await page.evaluate(() => { window.entries.find(e => e.id === 'root-0').version = '4'; window.changed(); });
   await page.waitForFunction(() => document.querySelector('[data-connection-entry="root-0"] img')?.naturalWidth === 20);
   assert.deepEqual(errors, []);
-  console.log('PASS connection refresh: cache first, active folder priority, cold viewport bounds, four workers, warm reuse, same-second content change, shared references and direct SVG invalidation');
+  console.log('PASS connection refresh: no scan on open/focus/expired reopen, explicit current-folder refresh, four preview workers, warm reuse, same-second content change, shared references and SVG invalidation');
 } finally { await browser.close(); await server.close(); }

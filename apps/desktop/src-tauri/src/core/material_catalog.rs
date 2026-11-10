@@ -15,7 +15,7 @@ mod original_trash_visibility_tests;
 pub(super) const IMAGE: &str = "lower(COALESCE(a.ext,'')) IN ('png','jpg','jpeg','webp','gif','bmp','svg','avif','tif','tiff')";
 pub(super) const VIDEO: &str = "lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','m4v','avi','mkv')";
 pub(super) const AUDIO: &str = "lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg')";
-pub(super) const TEXT: &str = "lower(COALESCE(a.ext,'')) IN ('md','markdown','txt')";
+pub(super) const TEXT: &str = "lower(COALESCE(a.ext,'')) IN ('md','markdown','txt','docx','xlsx','csv')";
 pub(super) const PROJECT_VISIBLE: &str =
     "(a.library_hidden=0 OR EXISTS(SELECT 1 FROM external_assets e WHERE e.asset_id=a.id)) AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=a.id) AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)";
 
@@ -125,7 +125,7 @@ impl Database {
     ) -> AppResult<String> {
         let name = name.trim();
         if name.is_empty() || name.chars().count() > 100 {
-            return Err(AppError::Other("集合名称须为 1–100 个字符".into()));
+            return Err(AppError::Other("文件夹名称须为 1–100 个字符".into()));
         }
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
@@ -140,7 +140,7 @@ impl Database {
                 SELECT id,parent_id FROM folders WHERE id=?1 UNION SELECT f.id,f.parent_id FROM folders f JOIN ancestors a ON f.id=a.parent_id)
                 SELECT EXISTS(SELECT 1 FROM ancestors WHERE id=?2)", params![parent,target], |r| r.get(0))?;
             if cycle {
-                return Err(AppError::Other("集合不能放入自身或其子集合".into()));
+                return Err(AppError::Other("文件夹不能放入自身或其子文件夹".into()));
             }
         }
         if id.is_some() {
@@ -195,7 +195,7 @@ fn require_collection(conn: &rusqlite::Connection, id: &str) -> AppResult<()> {
             |_| Ok(()),
         )
         .optional()?;
-    found.ok_or_else(|| AppError::Other("集合已不存在".into()))
+    found.ok_or_else(|| AppError::Other("文件夹已不存在".into()))
 }
 
 #[cfg(test)]

@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { agentResultValue } from '../src/lib/workflowAgentResult.ts';
+import { routeAgentOutputs } from '../src/lib/workflowAgentOutputs.ts';
+
+test('long text, table cells and directed deliveries remain complete', () => {
+  const text = '中文🙂\\"\n'.repeat(10000) + '末尾标记';
+  assert.equal(agentResultValue(text).text, text);
+  const table = { format: 'bowerbird-table', columns: ['内容'], rows: [[text]] };
+  assert.equal(agentResultValue(JSON.stringify(table)).table.rows[1][0], text);
+  const outputs = routeAgentOutputs({ text: agentResultValue(JSON.stringify({ format: 'bowerbird-deliveries', deliveries: [{ target: 'output1', text }] })) },
+    [{ id: 'output1', writerId: 'writer', type: 'text', nodeId: 'note', cellId: 'cell', append: false }], []);
+  assert.equal(outputs.text.deliveries.writer.value.text, text);
+});
 
 test('ordinary answers and ambiguous prose remain exact text', () => {
   for (const text of ['  普通回答\n第二段  ', 'A｜B', '开场\nA｜B\n1｜2\n末尾说明', 'A｜B\n1｜2｜3', 'A｜B\n1｜2\n\nC｜D\n3｜4', '{"name":"普通 JSON"}']) {
@@ -35,7 +46,7 @@ test('explicit structured results preserve arbitrary cell text and reject malfor
   for (const invalid of [{ ...table, rows: [['少一列']] }, { ...table, columns: [] }, { ...table, rows: [[1, 2]] }, { ...table, rows: [] }, { ...table, extra: true }]) {
     assert.throws(() => agentResultValue(JSON.stringify(invalid)), /表格/);
   }
-  assert.throws(() => agentResultValue('x'.repeat(16001)), /16000/);
+  assert.throws(() => agentResultValue('  '), /不能为空/);
 });
 
 test('canonical tables can roundtrip a single cell or a headerless grid without inventing rows', () => {

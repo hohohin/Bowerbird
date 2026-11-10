@@ -774,7 +774,7 @@ pub async fn delete_asset(
     let db = db.inner().clone();
     super::folder_connections::mutation(app.clone(), move || {
         if db.has_connected_asset(&id)? {
-            return Err(AppError::Other("请在集合视图将文件移到回收站，或断开文件夹连接".into()));
+            return Err(AppError::Other("请在文件夹视图将文件移到回收站，或断开文件夹连接".into()));
         }
         db.delete_asset(&id)
     }).await?;
@@ -822,7 +822,7 @@ pub async fn delete_asset_with_mode(
     let db = db.inner().clone();
     let result = super::folder_connections::mutation(app.clone(), move || {
         if db.has_connected_asset(&id)? && !matches!(mode, AssetDeleteMode::Keep) {
-            return Err(AppError::Other("请在集合视图将文件移到回收站，或断开文件夹连接".into()));
+            return Err(AppError::Other("请在文件夹视图将文件移到回收站，或断开文件夹连接".into()));
         }
         db.delete_asset_with_mode(&id, mode, project_id.as_deref())
     }).await?;
@@ -1070,6 +1070,20 @@ pub async fn list_generation_group(
     tokio::task::spawn_blocking(move || db.list_generation_group(&asset_id, project_id.as_deref()))
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
+}
+
+#[tauri::command]
+pub async fn dissolve_generation_group(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    asset_id: Option<String>,
+    group_key: Option<String>,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.dissolve_generation_group(asset_id.as_deref(), group_key.as_deref()))
+        .await.map_err(|error| AppError::Other(error.to_string()))??;
+    let _ = app.emit("library://assets-changed", ());
+    Ok(())
 }
 
 /// 批量取多资产的生成组：key=输入 asset_id，value=该资产所在组的全部图（仅生成图、且组存在）。

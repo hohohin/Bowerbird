@@ -8,22 +8,23 @@ export interface FolderConnection {
 }
 export interface ConnectionEntry {
   id: string; folder_id: string; asset_id: string; name: string; path: string;
-  is_reference: boolean; available: boolean; version?: string | null; asset: Asset;
+  is_reference: boolean; available: boolean; version?: string | null; asset: Asset; group?: ConnectionEntry[];
 }
-export type ConnectionMedia = "images" | "videos" | "audios" | "texts" | null;
+export interface ConnectionFilter { generated?: boolean | null; color?: string | null; grouped?: boolean }
+export type ConnectionMedia = "all" | "images" | "videos" | "audios" | "texts" | null;
 async function entryBatches(command: string, ids: string[], key: string, args: Record<string, unknown> = {}) {
   for (let offset = 0; offset < ids.length; offset += 2000) await invoke<void>(command, { ...args, [key]: ids.slice(offset, offset + 2000) });
 }
 export const folderConnections = {
-  list: (projectId: string | null = null, media: ConnectionMedia = null) => invoke<FolderConnection[]>("folder_connections", { projectId, media }),
+  list: (projectId: string | null = null, media: ConnectionMedia = null, filter: ConnectionFilter = {}) => invoke<FolderConnection[]>("folder_connections", { projectId, filter, media: media === "all" ? null : media }),
   connect: (path: string, projectId: string | null = null) => invoke<string>("connect_folder", { path, projectId }),
-  refresh: (folderId: string | null = null) => invoke<void>("refresh_folder_connections", { folderId }),
-  page: (folderId: string, offset: number, limit: number, media: ConnectionMedia = null, projectId: string | null = null) => invoke<ConnectionEntry[]>("connection_entries", { folderId, offset, limit, media, projectId }),
-  ids: async (folderId: string | null = null, media: ConnectionMedia = null, projectId: string | null = null, start = 0, count = Infinity) => {
+  refresh: (folderId: string | null = null, force = true) => invoke<void>("refresh_folder_connections", { folderId, force }),
+  page: (folderId: string, offset: number, limit: number, media: ConnectionMedia = null, projectId: string | null = null, filter: ConnectionFilter = {}) => invoke<ConnectionEntry[]>("connection_entries", { folderId, offset, limit, filter, media: media === "all" ? null : media, projectId }),
+  ids: async (folderId: string | null = null, media: ConnectionMedia = null, projectId: string | null = null, start = 0, count = Infinity, filter: ConnectionFilter = {}) => {
     const result: string[] = [];
     for (let offset = start; offset < start + count; offset += 2000) {
       const limit = Math.min(2000, start + count - offset);
-      const page = await invoke<string[]>("connection_entry_ids", { folderId, media, projectId, offset, limit });
+      const page = await invoke<string[]>("connection_entry_ids", { folderId, filter, media: media === "all" ? null : media, projectId, offset, limit });
       result.push(...page); if (page.length < limit) break;
     }
     return result;

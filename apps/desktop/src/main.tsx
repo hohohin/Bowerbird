@@ -3,12 +3,15 @@ import ReactDOM from "react-dom/client";
 import { ScreenshotWindow } from "./components/ScreenshotWindow";
 import { OverlayScrollbars } from "./components/OverlayScrollbars";
 import { applyTheme, loadCachedTheme } from "./lib/theme";
+import { installTextContextMenu } from "./lib/textContextMenu";
 import "./styles.css";
 
 const App = React.lazy(() => import("./App"));
 const screenshotMode = new URLSearchParams(location.search).get("screenshot");
 
 applyTheme(loadCachedTheme());
+const removeTextContextMenu = installTextContextMenu();
+if (import.meta.hot) import.meta.hot.dispose(removeTextContextMenu);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

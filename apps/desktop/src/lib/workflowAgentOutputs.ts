@@ -16,7 +16,6 @@ export function agentOutputTargets(agent: WorkflowNode, nodes: WorkflowNode[]): 
   for (const match of agent.prompt.matchAll(/@\[([^\]]+)\]/g)) {
     const ref = agent.promptReferences?.find(ref => ref.id === match[1]);
     if (ref?.direction !== "output") continue;
-    if (agent.agentTransport === "cloud") throw new Error("输出位置引用目前支持本机 DSH 和 Codex CLI，请切换 Agent 引擎");
     const writer = writers.find(writer => writer.id === ref.input.nodeId);
     if (!writer || !!writer.textTarget!.image !== (ref.type === "image")) throw new Error(`输出位置「${ref.label}」已断开或改接，请重新按 @ 选择`);
     if (targets.some(target => target.writerId === writer.id)) continue;
@@ -49,7 +48,7 @@ export function routeAgentOutputs(outputs: Record<string, WorkflowValue>, target
     if (!item || typeof item !== "object" || Array.isArray(item)
       || Object.keys(item).some(key => !["target", "text", "inputImages", "generatedImages"].includes(key))) throw invalid();
     const target = targets.find(target => target.id === item.target);
-    if (!target || deliveries[target.writerId] || item.text !== undefined && (typeof item.text !== "string" || item.text.length > 16000)) throw invalid();
+    if (!target || deliveries[target.writerId] || item.text !== undefined && typeof item.text !== "string") throw invalid();
     const assetIds = [...new Set([...selectImages(item.inputImages, inputImages), ...selectImages(item.generatedImages, outputs.image?.assetIds ?? [])])];
     if (target.type === "image" && item.text) throw invalid();
     if (item.text === undefined && item.inputImages === undefined && item.generatedImages === undefined) throw invalid();

@@ -559,9 +559,6 @@ async fn exchange(
                 write_message(writer, json!({"type":"result","id":call,"result":result})).await?;
             }
             BridgeEvent::Text { text: delta } => {
-                if text.len() + delta.len() > MAX_RESPONSE {
-                    return Err(error("DSH 本轮回复超过长度限制"));
-                }
                 text.push_str(&delta);
                 db.update_local_chat_text(id, turn, &text)?;
                 emit(app, db, id);

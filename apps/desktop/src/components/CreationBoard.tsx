@@ -1,10 +1,13 @@
+import { generationTaskNavigation, agentTaskNavigation } from "../lib/projectActivity";
 import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, resolveVideoOptions, videoInputError, videoModelLabel, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
 import { LocalVideoFrames } from "./creation/LocalVideoFrames";
+import { H3OptimizeButton } from "./creation/H3OptimizeButton";
 import { ComfyEnvironmentControl, type ComfyEnvironmentState } from "./ComfyVideoCard";
 import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, DEFAULT_COMFY_VIDEO, localVideoFrames, localVideoInputError, type ComposerLocalVideoRequest } from "../lib/comfyVideo";
 import { ProviderQuota } from "./creation/ProviderQuota";
@@ -107,8 +110,9 @@ export interface CreationBoardProps {
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
   prepareProject?: () => Promise<string>;
-  onGenerationSubmitted?: (projectId: string, threadId?: string | null) => void;
+  onGenerationSubmitted?: (projectId: string, threadId?: string | null, nodeId?: string | null) => void;
   onGenerateLocalVideo?: (request: ComposerLocalVideoRequest, projectId?: string) => Promise<void>;
+  onOptimizeLocalVideo?: (request: ComposerLocalVideoRequest, projectId?: string) => Promise<string>;
   composerMode?: CreativeComposerMode;
   onComposerModeChange?: (mode: CreativeComposerMode) => void;
   onSendChat?: (request: ChatComposeRequest, projectId?: string, sentDraftJson?: string) => Promise<void>;
@@ -145,6 +149,7 @@ export function CreationBoard({
   prepareProject,
   onGenerationSubmitted,
   onGenerateLocalVideo,
+  onOptimizeLocalVideo,
   composerMode,
   onComposerModeChange,
   onSendChat,
@@ -244,6 +249,53 @@ export function CreationBoard({
   const localFrames = useMemo(() => localVideoFrames(references), [references]);
   const localMode = comfyVideoMode(generation.localVideo ?? DEFAULT_COMFY_VIDEO);
   const localFrameCount = localMode === "text" ? 0 : localMode === "reference" ? 1 : 2;
+  const [optimizingH3, setOptimizingH3] = useState(false);
+  const h3Scope = JSON.stringify([projectId, cloudAuth?.user_id, isLocalVideo, localMode, generation.localVideo?.seconds, generation.localVideo?.ratio]);
+  const h3ScopeRef = useRef(h3Scope);
+  h3ScopeRef.current = h3Scope;
+
+  async function optimizeH3Prompt() {
+    if (!onOptimizeLocalVideo || !isLocalVideo || optimizingH3 || submitting || !finalPrompt.trim()) return;
+    const origin = useStore.getState();
+    const originId = prepareProject ? origin.activeProjectId : projectId ?? origin.activeProjectId;
+    const claim = acquireCreativeSubmission(originId);
+    if (!claim) return;
+    const scope = h3Scope;
+    const request: ComposerLocalVideoRequest = { prompt: finalPrompt, options: { ...generation.localVideo! },
+      firstFrame: localMode === "text" ? "" : localFrames[0]?.id ?? "", lastFrame: localMode === "frames" ? localFrames[1]?.id : undefined };
+    const current = () => {
+      const state = useStore.getState();
+      return mounted.current && h3ScopeRef.current === scope && claim.isCurrent()
+        && state.cloudAuth?.user_id === origin.cloudAuth?.user_id
+        && (!prepareProject || state.libraryHomeView === origin.libraryHomeView)
+        && isWorkspaceOperationCurrent(originId, state.activeProjectId, state.projectRoutePending, origin.projectRouteRevision, state.projectRouteRevision);
+    };
+    setOptimizingH3(true);
+    flushDraft();
+    try {
+      if (!localAllowed) throw new Error("本地 H3 需要有效的 Pro／Studio 权益或测试账号资格");
+      if (!isTestAccount || !canUseAgentRun(origin.cloudEntitlement, UNIFIED_AGENT_SKILL)) throw new Error("当前账号尚未开放 Cloud DSH，请使用已获授权的测试账号");
+      if (request.prompt.trim().length > 16000) throw new Error("提示词不能超过 16000 字");
+      if (!current()) return;
+      const result = await onOptimizeLocalVideo(request, projectId);
+      if (current()) applyH3Prompt(result);
+    } catch (error) { if (current()) notifyError(error, "提示词优化未完成，请在任务中心查看原任务。"); }
+    finally { claim.release(); if (mounted.current) setOptimizingH3(false); }
+  }
+
+  function applyH3Prompt(result: string) {
+    const view = viewRef.current;
+    if (!view || !result.trim()) return;
+    // Preserve media identity/order, including canvas references, while replacing text.
+    const images: ProseMirrorNode[] = [];
+    view.state.doc.descendants(node => { if (node.type.name === "image") images.push(node); });
+    const { schema } = view.state;
+    const paragraphs = result.trim().split(/\r?\n/).map(line => schema.nodes.paragraph.create(null, line ? schema.text(line) : undefined));
+    if (images.length) paragraphs.push(schema.nodes.paragraph.create(null, images));
+    view.dispatch(view.state.tr.replaceWith(0, view.state.doc.content.size, paragraphs));
+    flushDraft();
+    view.focus();
+  }
 
   useEffect(() => {
     registerDraftFlush?.(flushDraft);
@@ -579,7 +631,7 @@ export function CreationBoard({
       ?? (chatProvider === "codex-local" ? chatCodexOptionError(chatCodexOptions ?? {}, chatModels.models) : null)
       ?? (references.some(asset => /\.(mp4|mov|webm|mkv)$/i.test(asset.store_path ?? "")) ? "对话暂时只支持图片参考，请移除视频。" : null)
       ?? localChatInputError(finalPrompt, references.map(asset => asset.id))
-    : submitting
+    : optimizingH3 ? "正在优化提示词，请等待结果后再生成。" : submitting
     ? "正在提交指令，任务启动后即可继续生成。"
     : agentZBusy
       ? "正在投递到 Agent 终端，请等待投递完成。"
@@ -694,7 +746,6 @@ export function CreationBoard({
       if (!comfyEnvironmentReady(environment)) { setLocalEnvironment({ ready: false, checking: false, message: environment.message }); throw new Error(environment.message || "当前环境未设置好，点击配置。"); }
       request.options.endpoint = environment.endpoint;
       await onGenerateLocalVideo!(request, submissionProjectId);
-      if (submissionProjectId) onGenerationSubmitted?.(submissionProjectId);
       if (isCurrentSubmission()) exitCreationMode();
       return;
     }
@@ -765,7 +816,8 @@ export function CreationBoard({
             background: "opaque",
           },
         });
-        if (submissionProjectId) onGenerationSubmitted?.(submissionProjectId, threadId);
+        const submittedLocation = agentTaskNavigation(run);
+        if (submittedLocation) onGenerationSubmitted?.(submittedLocation.projectId, submittedLocation.threadId, submittedLocation.nodeId);
         if (continuation?.continuationRequestId) {
           ackPendingCreativeContinuation(continuation.continuationRequestId);
         }
@@ -953,7 +1005,9 @@ export function CreationBoard({
       if (isCurrentSubmission()) notifyError(startedGeneration.error, "生成任务启动失败，请重试");
       return;
     }
-    if (submissionProjectId) onGenerationSubmitted?.(submissionProjectId, threadId);
+    const submittedJob = useStore.getState().genJobs[startedGeneration.jobId];
+    const submittedLocation = submittedJob ? generationTaskNavigation(submittedJob) : null;
+    if (submittedLocation) onGenerationSubmitted?.(submittedLocation.projectId, submittedLocation.threadId, submittedLocation.nodeId);
     if (continuation?.continuationRequestId) {
       ackPendingCreativeContinuation(continuation.continuationRequestId);
     }
@@ -1400,6 +1454,7 @@ export function CreationBoard({
             {isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
           </div>
         </div>
+        <div className={`composer-input-area${isLocalVideo && onOptimizeLocalVideo && !isCollapsed ? " has-h3-action" : ""}`}>
         <OverlayScrollArea className="composer-editor-scroll" scrollRef={editorScrollRef} label="创作描述滚动条">
         <div
           ref={hostRef}
@@ -1422,6 +1477,8 @@ export function CreationBoard({
           className="creation-editor composer-description cursor-text text-ink"
         />
         </OverlayScrollArea>
+        {isLocalVideo && onOptimizeLocalVideo && !isCollapsed && <H3OptimizeButton disabled={submitting || !finalPrompt.trim()} busy={optimizingH3} onClick={() => void optimizeH3Prompt()} />}
+        </div>
         </div>
         {isChat && !isCollapsed && <p className="composer-chat-key-hint">Enter 换行 · Ctrl / ⌘ + Enter 发送</p>}
         {isChat && chatProvider !== "codex-local" && references.length > 0 && <p className="composer-chat-key-hint">图片仅用于建卡引用；看图分析请选择本机 Codex。</p>}

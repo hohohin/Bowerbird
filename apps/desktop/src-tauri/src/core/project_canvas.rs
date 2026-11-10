@@ -6,6 +6,8 @@
 
 #![allow(dead_code)]
 
+mod placement;
+
 use chrono::Utc;
 use std::path::Path;
 
@@ -108,6 +110,19 @@ pub(crate) fn hide_asset_canvas_nodes(
     Ok(())
 }
 
+/// Recycled/missing originals keep their asset records, but no visible canvas instances.
+/// Share the caller's transaction so a failed recycle also rolls back visibility.
+pub(crate) fn hide_removed_original_canvas_nodes(conn: &rusqlite::Connection, path: &str) -> AppResult<()> {
+    let mut statement = conn.prepare(
+        "SELECT asset_id FROM trashed_asset_originals WHERE path=?1 UNION SELECT asset_id FROM removed_missing_asset_originals WHERE path=?1")?;
+    let ids = statement.query_map([path], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+    for id in ids {
+        hide_empty_generation_cards_for_asset(conn, &id)?;
+        hide_asset_canvas_nodes(conn, &id, None)?;
+    }
+    Ok(())
+}
+
 /// Removing the last saved output also removes its generation card from the canvas.
 /// Run before deleting the asset row (which clears node asset IDs), in the same transaction.
 /// Keep execution nodes/edges for recovery and audit; other turns and reference users survive.
@@ -129,6 +144,8 @@ pub(crate) fn hide_empty_generation_cards_for_asset(
                JOIN assets a ON a.id = output.asset_id
                WHERE e.from_node_id = prompt.id AND e.kind = 'produced'
                  AND output.kind = 'asset' AND output.role = 'output' AND a.id <> ?1
+                 AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=a.id)
+                 AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)
            )",
         params![asset_id, Utc::now().timestamp()],
     )?;
@@ -625,7 +642,17 @@ const THREAD_COLUMNS: &str = "id,project_id,title,origin,archived_at,created_at,
 
 // Older prompt snapshots predate conversation_id. Enrich reads from their exact
 // output assets so grouping survives a restart without rewriting saved nodes.
-fn restore_canvas_conversations(conn: &rusqlite::Connection, project_id: &str, nodes: &mut [CanvasNode]) -> AppResult<()> {
+pub(super) fn restore_canvas_conversations(conn: &rusqlite::Connection, project_id: &str, nodes: &mut [CanvasNode]) -> AppResult<()> {
+    let mut workflow_stmt = conn.prepare(&format!("WITH {} SELECT node_id,group_key FROM canvas_generation_groups WHERE project_id=?1", super::generation_gallery::WORKFLOW_GALLERY_CTE))?;
+    let workflow_groups = workflow_stmt.query_map([project_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+    for node in nodes.iter_mut() {
+        if let Some(group) = workflow_groups.get(&node.id) {
+            let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json)?;
+            payload["workflow_generation_group"] = group.clone().into();
+            node.payload_json = serde_json::to_string(&payload)?;
+        }
+    }
     let mut stmt = conn.prepare("SELECT DISTINCT json_extract(n.payload_json,'$.execution.job_id'),g.conversation_id FROM canvas_nodes n JOIN assets a ON a.id=n.asset_id JOIN generation_conversations g ON g.session_id=a.generation_session_id WHERE n.project_id=?1 AND n.kind='asset' AND n.role='output'")?;
     let conversations = stmt.query_map([project_id], |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, String>(1)?)))?
         .filter_map(|row| match row { Ok((Some(job), conversation)) => Some(Ok((job, conversation))), Ok(_) => None, Err(error) => Some(Err(error)) })
@@ -635,6 +662,25 @@ fn restore_canvas_conversations(conn: &rusqlite::Connection, project_id: &str, n
         if payload["conversation_id"].as_str().is_some() { continue; }
         if let Some(conversation) = payload["job_id"].as_str().and_then(|job| conversations.get(job)) {
             payload["conversation_id"] = conversation.clone().into();
+            node.payload_json = serde_json::to_string(&payload)?;
+        }
+    }
+    let dissolved = conn.prepare("SELECT group_key FROM generation_gallery_separations")?.query_map([], |row| row.get::<_, String>(0))?
+        .collect::<Result<std::collections::HashSet<_>, _>>()?;
+    if dissolved.is_empty() { return Ok(()); }
+    let mut assets_stmt = conn.prepare(&format!("WITH {} SELECT n.id,{} FROM canvas_nodes n JOIN assets a ON a.id=n.asset_id WHERE n.project_id=?1 AND {}",
+        super::generation_gallery::WORKFLOW_GALLERY_CTE, super::catalog_browser::GENERATION_GROUP, super::catalog_browser::GENERATED))?;
+    let asset_groups = assets_stmt.query_map([project_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+    for node in nodes.iter_mut() {
+        let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json)?;
+        let key = asset_groups.get(&node.id).cloned().or_else(|| {
+            (node.kind == CreativeNodeKind::Prompt).then(|| workflow_groups.get(&node.id).filter(|key| !key.starts_with("asset:")).cloned().or_else(||
+                payload["conversation_id"].as_str().or(payload["job_id"].as_str()).map(|id| format!("generation:{id}")))).flatten()
+        });
+        if let Some(key) = key.filter(|key| dissolved.contains(key)) {
+            payload["generation_group_dissolved"] = true.into();
+            payload["generation_gallery_key"] = key.into();
             node.payload_json = serde_json::to_string(&payload)?;
         }
     }
@@ -666,6 +712,45 @@ fn node_from_row(row: &Row<'_>) -> rusqlite::Result<CanvasNode> {
 }
 
 const NODE_COLUMNS: &str = "id,project_id,thread_id,kind,asset_id,role,payload_json,x,y,width,height,z_index,position_locked,hidden_at,created_at,updated_at";
+
+// Unfold only overlapping original production nodes; copied/grouped/locked nodes
+// retain their placement. Persist positions in the same transaction as the preference.
+pub(super) fn separate_generation_gallery(conn: &rusqlite::Connection, key: &str) -> AppResult<()> {
+    use super::catalog_browser::GENERATION_GROUP;
+    use super::generation_gallery::WORKFLOW_GALLERY_CTE;
+    let mut stmt = conn.prepare(&format!("WITH {WORKFLOW_GALLERY_CTE} SELECT DISTINCT project_id FROM canvas_nodes WHERE
+        asset_id IN (SELECT a.id FROM assets a WHERE {GENERATION_GROUP}=?1)
+        OR id IN (SELECT node_id FROM canvas_generation_groups WHERE group_key=?1)
+        OR (kind='prompt' AND 'generation:'||COALESCE(json_extract(payload_json,'$.conversation_id'),json_extract(payload_json,'$.job_id'))=?1)"))?;
+    let projects = stmt.query_map([key], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
+    for project in projects {
+        let mut stmt = conn.prepare(&format!("SELECT {NODE_COLUMNS} FROM canvas_nodes WHERE project_id=?1 AND hidden_at IS NULL ORDER BY created_at,id"))?;
+        let mut nodes = stmt.query_map([&project], node_from_row)?.collect::<Result<Vec<_>, _>>()?;
+        restore_canvas_conversations(conn, &project, &mut nodes)?;
+        let grouped = conn.prepare("SELECT node_id FROM canvas_group_items WHERE project_id=?1")?.query_map([&project], |row| row.get::<_, String>(0))?
+            .collect::<Result<std::collections::HashSet<_>, _>>()?;
+        let members: Vec<_> = nodes.iter().filter(|node| {
+            let payload: serde_json::Value = serde_json::from_str(&node.payload_json).unwrap_or_default();
+            payload["generation_gallery_key"].as_str() == Some(key) && !grouped.contains(&node.id)
+                && (node.kind == CreativeNodeKind::Prompt || matches!(node.role, Some(CreativeNodeRole::Output | CreativeNodeRole::Final)))
+        }).collect();
+        let ids: std::collections::HashSet<_> = members.iter().map(|node| &node.id).collect();
+        let mut occupied: Vec<_> = nodes.iter().filter(|node| !ids.contains(&node.id) && node.kind != CreativeNodeKind::Note)
+            .map(|node| (node.x, node.y, node.width, node.height)).collect();
+        for (index, node) in members.iter().enumerate() {
+            let mut x = node.x;
+            let height = if node.kind == CreativeNodeKind::Prompt { node.height.max(148.0) } else { node.height };
+            if index > 0 && !node.position_locked {
+                while let Some(right) = occupied.iter().filter(|(left, top, width, h)|
+                    x < left + width + 24.0 && x + node.width + 24.0 > *left && node.y < top + h + 24.0 && node.y + height + 24.0 > *top)
+                    .map(|(left, _, width, _)| left + width + 24.0).max_by(f64::total_cmp) { x = right; }
+            }
+            if x != node.x { conn.execute("UPDATE canvas_nodes SET x=?1,updated_at=?2 WHERE id=?3", params![x, Utc::now().timestamp(), node.id])?; }
+            occupied.push((x, node.y, node.width, height));
+        }
+    }
+    Ok(())
+}
 
 fn group_from_row(row: &Row<'_>) -> rusqlite::Result<CanvasGroup> {
     Ok(CanvasGroup {
@@ -2058,7 +2143,8 @@ impl Database {
         let workflow: serde_json::Value = workflow_json.as_deref().map(serde_json::from_str).transpose()?.unwrap_or_default();
         let workflow_nodes = workflow["nodes"].as_array();
         let owner = workflow_nodes.and_then(|nodes| nodes.iter().find(|node| node["sessionNodeIds"].as_array()
-            .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(prompt_node_id.as_str())))));
+            .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(prompt_node_id.as_str())))))
+            .or_else(|| placement::source(&workflow, &value.job_id, false));
         // 失败重试锚点：同线程内可见的 prompt 卡才可作为叠放目标，否则回退常规落位。
         let retry_anchor = match value.retry_anchor_node_id.as_deref() {
             Some(node_id) => get_node_tx(&tx, node_id)?.filter(|node| {
@@ -2069,33 +2155,23 @@ impl Database {
             }),
             None => None,
         };
-        let downstream = owner.and_then(|source| workflow_nodes.and_then(|nodes| nodes.iter().find(|node| {
-            node["inputs"]["image"].as_array().is_some_and(|inputs| inputs.iter().any(|input| input["nodeId"] == source["id"] && input["portId"] == "image"))
-                && node["x"].as_f64().unwrap_or(0.0) >= source["x"].as_f64().unwrap_or(0.0) + 720.0
-        })));
-        let prompt_x = owner.zip(downstream).map(|(source, target)| (source["x"].as_f64().unwrap_or(0.0) + 320.0 + target["x"].as_f64().unwrap_or(0.0) - 300.0) / 2.0).or_else(|| owner
-            .and_then(|node| node["x"].as_f64())
-            .map(|x| x + 420.0))
-            .or_else(|| retry_anchor.as_ref().map(|anchor| anchor.x))
-            .unwrap_or(max_right + 72.0);
-        let mut prompt_y = owner
-            .and_then(|node| node["y"].as_f64())
-            .or_else(|| retry_anchor.as_ref().map(|anchor| anchor.y))
-            .unwrap_or(88.0);
-        if owner.is_some() {
-            loop {
-                let native_collision: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM canvas_nodes WHERE project_id=?1 AND hidden_at IS NULL AND id<>?2 AND x<?3+300 AND x+width>?3-24 AND y<?4+220 AND y+height>?4-24)",
-                    params![value.project_id, prompt_node_id, prompt_x, prompt_y], |row| row.get(0),
-                )?;
-                let workflow_collision = workflow_nodes.is_some_and(|nodes| nodes.iter().any(|node| {
-                    let x = node["x"].as_f64().unwrap_or(0.0); let y = node["y"].as_f64().unwrap_or(0.0);
-                    x < prompt_x + 300.0 && x + 344.0 > prompt_x && y < prompt_y + 220.0 && y + 400.0 > prompt_y
-                }));
-                if !native_collision && !workflow_collision { break; }
-                prompt_y += 420.0;
-            }
-        }
+        let existing_canvas = project_canvas_snapshot_tx(&tx, &value.project_id)?;
+        let gallery_anchor = existing_canvas.nodes.iter().filter(|n| n.kind == CreativeNodeKind::Prompt && n.hidden_at.is_none())
+            .filter(|n| {
+                let payload: serde_json::Value = serde_json::from_str(&n.payload_json).unwrap_or_default();
+                payload["generation_group_dissolved"] != true
+                    && !payload["workflow_generation_group"].as_str().is_some_and(|key| key.starts_with("asset:"))
+                    && (payload["conversation_id"].as_str() == Some(value.generation_conversation_id.as_str())
+                        || owner.is_some_and(|source| source["sessionNodeIds"].as_array().is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(n.id.as_str())))))
+            }).min_by(|a,b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+        let (prompt_x, prompt_y) = if let Some(anchor) = retry_anchor.as_ref().or(gallery_anchor) {
+            (anchor.x, anchor.y)
+        } else if let Some(source) = owner {
+            let source = placement::workflow_rect(source);
+            let x = source.x + source.width + 64.0;
+            placement::near(placement::Rect { x, y: source.y, width: 260.0, height: 148.0 },
+                &placement::obstacles(&tx, &value.project_id, &workflow, &[&prompt_node_id])?, x)
+        } else { (max_right + 72.0, 88.0) };
         let new_prompt = get_node_tx(&tx, &prompt_node_id)?.is_none();
         let mut reference_assets = Vec::new();
         for path in &value.references {
@@ -2111,6 +2187,7 @@ impl Database {
         }
         let prompt_payload = serde_json::to_string(&PromptNodePayloadV1 {
             schema_version: 1,
+            workflow_generation_group: None,
             text: value.prompt.clone(),
             applied_prompt: Some(value.applied_prompt.clone()),
             provider: Some(value.provider.clone()),
@@ -2180,6 +2257,8 @@ impl Database {
                 } else {
                     let node_id = projection_id("gen-parent", &value.job_id, &value.turn_key, "0");
                     let payload = serde_json::to_string(&AssetNodePayloadV1 {
+                        workflow_source: None,
+                        workflow_generation_group: None,
                         schema_version: 1,
                         snapshot: snapshot.clone(),
                         execution: Some(AssetExecutionRefV1 {
@@ -2315,6 +2394,8 @@ impl Database {
                     new_reference_ids.push(node_id.clone());
                 }
                 let payload = serde_json::to_string(&AssetNodePayloadV1 {
+                    workflow_source: None,
+                    workflow_generation_group: None,
                     schema_version: 1,
                     snapshot: snapshot.clone(),
                     execution: Some(AssetExecutionRefV1 {
@@ -2442,11 +2523,22 @@ impl Database {
             )
             .optional()?
             .ok_or_else(|| AppError::NotFound(format!("project prompt node {prompt_node_id}")))?;
+        let workflow = placement::workflow(&tx, project_id)?;
+        let mut occupied = placement::obstacles(&tx, project_id, &workflow, &[&prompt_node_id])?;
+        let sizes: Vec<_> = assets.iter().map(|asset| (190.0, asset_node_height(&asset_snapshot(asset)))).collect();
+        let slots = placement::grid(&sizes);
+        let source = placement::source(&workflow, job_id, false).map(placement::workflow_rect);
         let mut node_ids = Vec::with_capacity(assets.len());
         for (index, asset) in assets.iter().enumerate() {
             let node_id = projection_id("gen-output", job_id, turn_key, &asset.id);
+            let x = source.map_or(prompt.0 + 260.0 + 64.0, |s| s.x + s.width + 64.0);
+            let point = placement::near(placement::Rect { x: x + slots[index].0, y: source.map_or(prompt.1, |s| s.y) + slots[index].1,
+                width: sizes[index].0, height: sizes[index].1 }, &occupied, x);
+            occupied.push(placement::Rect {x:point.0,y:point.1,width:sizes[index].0,height:sizes[index].1});
             let snapshot = asset_snapshot(asset);
             let payload = serde_json::to_string(&AssetNodePayloadV1 {
+                workflow_source: None,
+                workflow_generation_group: None,
                 schema_version: 1,
                 snapshot: snapshot.clone(),
                 execution: Some(AssetExecutionRefV1 {
@@ -2466,8 +2558,8 @@ impl Database {
                     asset_id: Some(asset.id.clone()),
                     role: Some(CreativeNodeRole::Output),
                     payload_json: payload,
-                    x: prompt.0 + 332.0 + index as f64 * 218.0,
-                    y: prompt.1,
+                    x: point.0,
+                    y: point.1,
                     width: 190.0,
                     height: asset_node_height(&snapshot),
                     z_index: prompt.2 + 1 + index as i64,
@@ -2536,6 +2628,7 @@ impl Database {
                 role: None,
                 payload_json: serde_json::to_string(&PromptNodePayloadV1 {
                     schema_version: 1,
+                    workflow_generation_group: None,
                     text: value.prompt.clone(),
                     applied_prompt: None,
                     provider: Some(value.provider.clone()),
@@ -2685,6 +2778,8 @@ impl Database {
                         asset_id: Some(asset_id.clone()),
                         role: Some(CreativeNodeRole::Reference),
                         payload_json: serde_json::to_string(&AssetNodePayloadV1 {
+                            workflow_source: None,
+                            workflow_generation_group: None,
                             schema_version: 1,
                             snapshot: snapshot.clone(),
                             execution: Some(AssetExecutionRefV1 {
@@ -2896,6 +2991,13 @@ impl Database {
         };
         let snapshot = asset_snapshot(asset);
         let node_id = projection_id("agent-artifact", run_id, "0", artifact_id);
+        let workflow = placement::workflow(&tx, &project_id)?;
+        let source = placement::source(&workflow, run_id, true).map(placement::workflow_rect)
+            .unwrap_or(placement::Rect { x:group_x,y:group_y,width:286.0,height:184.0 });
+        let x = source.x + source.width + 64.0;
+        let occupied = placement::obstacles(&tx, &project_id, &workflow, &[&node_id])?;
+        let point = placement::near(placement::Rect { x:x + (ordinal.max(0) % 3) as f64 * 222.0,
+            y:source.y, width:190.0,height:asset_node_height(&snapshot) }, &occupied, x);
         upsert_projection_node_tx(
             &tx,
             &NewCanvasNode {
@@ -2906,6 +3008,8 @@ impl Database {
                 asset_id: Some(asset.id.clone()),
                 role: Some(role_value),
                 payload_json: serde_json::to_string(&AssetNodePayloadV1 {
+                    workflow_source: None,
+                    workflow_generation_group: None,
                     schema_version: 1,
                     snapshot: snapshot.clone(),
                     execution: Some(AssetExecutionRefV1 {
@@ -2915,8 +3019,8 @@ impl Database {
                         artifact_id: Some(artifact_id.to_string()),
                     }),
                 })?,
-                x: group_x + 358.0 + ordinal as f64 * 218.0,
-                y: group_y,
+                x: point.0,
+                y: point.1,
                 width: 190.0,
                 height: asset_node_height(&snapshot),
                 z_index: group_z + 1 + ordinal,
@@ -3183,6 +3287,162 @@ mod tests {
         db
     }
 
+    #[test]
+    fn h3_gallery_restores_legacy_results_and_scopes_persisted_producers() {
+        use crate::core::catalog_browser::CatalogFilter;
+        let db = db();
+        for project in ["p1", "p2"] {
+            materialize(&db, project);
+            db.create_creative_thread(&NewCreativeThread { id: project.into(), project_id: project.into(), title: "H3".into(), origin: CreativeThreadOrigin::Direct }).unwrap();
+        }
+        for i in 1..=5 {
+            let project = if i == 5 { "p2" } else { "p1" };
+            let asset = format!("video-{i}");
+            db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,ext,source,created_at) VALUES(?1,?1,'mp4','comfy-h3',?2)", params![asset, i]).unwrap();
+            db.add_assets_to_project(project, &[asset.clone()]).unwrap();
+            let mut node = output(project, project, &format!("workflow-comfy:job-{i}"), &asset);
+            if i >= 3 {
+                let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json).unwrap();
+                payload["workflow_source"] = if i == 4 { "other" } else { "shared" }.into();
+                node.payload_json = payload.to_string();
+            }
+            db.create_canvas_node(&node).unwrap();
+        }
+        let history = serde_json::json!({"schema_version":1,"nodes":[],"runs":[
+            {"steps":{"shared":{"jobId":"job-1"}}},{"steps":{"shared":{"jobId":"job-2"}}}]});
+        db.conn.lock().unwrap().execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p1',1,?1)", [history.to_string()]).unwrap();
+        let snapshot = db.project_canvas_snapshot("p1").unwrap();
+        let group = |id: &str| {
+            let node = snapshot.nodes.iter().find(|n| n.id == id).unwrap();
+            serde_json::from_str::<serde_json::Value>(&node.payload_json).unwrap()["workflow_generation_group"].clone()
+        };
+        assert_eq!(group("workflow-comfy:job-1"), group("workflow-comfy:job-3"));
+        assert_ne!(group("workflow-comfy:job-1"), group("workflow-comfy:job-4"));
+        assert!(db.get_canvas_node("workflow-comfy:job-1").unwrap().unwrap().payload_json.find("workflow_generation_group").is_none());
+        let filter = CatalogFilter { kind:"all".into(),media:"videos".into(),generated:Some(true),..Default::default() };
+        assert_eq!(db.catalog_overview(&filter, None).unwrap().total, 3);
+        assert_eq!(db.catalog_ids(&filter, 0, 10).unwrap(), vec!["video-5","video-4","video-3"]);
+        assert_eq!(db.catalog_generation_groups(&filter, &["video-3".into()]).unwrap()["video-3"].len(), 3);
+        let scoped = CatalogFilter { project_id:Some("p1".into()),..filter.clone() };
+        assert_eq!(db.catalog_overview(&scoped, None).unwrap().total, 2);
+        assert_eq!(db.catalog_page(&scoped, 1, 1).unwrap()[0].id, "video-3");
+        let searched = CatalogFilter { query:Some("video-1".into()),..scoped };
+        assert_eq!(db.catalog_ids(&searched, 0, 10).unwrap(), vec!["video-1"]);
+        assert_eq!(db.catalog_generation_groups(&searched, &["video-1".into()]).unwrap()["video-1"].len(), 1);
+        db.remove_canvas_node("workflow-comfy:job-2").unwrap();
+        assert!(db.project_canvas_snapshot("p1").unwrap().nodes.iter().find(|n| n.id == "workflow-comfy:job-2").unwrap().hidden_at.is_some());
+        db.dissolve_generation_group(Some("video-3"), None).unwrap();
+        assert_eq!(db.catalog_overview(&filter, None).unwrap().total, 5);
+        assert_eq!(db.catalog_generation_groups(&filter, &["video-1".into()]).unwrap()["video-1"].len(), 1);
+        let separated = db.project_canvas_snapshot("p1").unwrap();
+        for id in ["workflow-comfy:job-1", "workflow-comfy:job-3"] {
+            let node = separated.nodes.iter().find(|node| node.id == id).unwrap();
+            assert_eq!(serde_json::from_str::<serde_json::Value>(&node.payload_json).unwrap()["generation_group_dissolved"], true);
+        }
+        assert!(db.project_canvas_snapshot("p2").unwrap().nodes.iter().all(|node| !node.payload_json.contains("generation_group_dissolved")), "another project's producer stays independent");
+    }
+
+    #[test]
+    fn workflow_galleries_cover_images_video_agent_tools_and_provider_handoffs() {
+        use crate::core::catalog_browser::CatalogFilter;
+        let db = db();
+        materialize(&db, "p");
+        db.create_creative_thread(&NewCreativeThread { id:"t".into(),project_id:"p".into(),title:"test".into(),origin:CreativeThreadOrigin::Direct }).unwrap();
+        for (job, conversation) in [("image-1","first"),("image-2","second"),("handoff","first"),("video-1","v1"),("video-2","v2"),("tool-1","tool"),("tool-2","tool")] {
+            let mut prompt = note("p", &format!("gen-prompt:{job}:turn:0"));
+            prompt.kind = CreativeNodeKind::Prompt;
+            prompt.thread_id = Some("t".into());
+            prompt.payload_json = serde_json::json!({"schema_version":1,"text":"test","job_id":job,"conversation_id":conversation,"turn_key":"turn"}).to_string();
+            db.create_canvas_node(&prompt).unwrap();
+            db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,ext,created_at,generation_session_id) VALUES(?1,?1,'png',1,?2)", params![job,conversation]).unwrap();
+            let mut result = output("p", "t", &format!("gen-output:{job}:turn:{job}"), job);
+            let mut payload: serde_json::Value = serde_json::from_str(&result.payload_json).unwrap();
+            payload["execution"] = serde_json::json!({"job_id":job,"turn_key":"turn"});
+            result.payload_json = payload.to_string();
+            db.create_canvas_node(&result).unwrap();
+        }
+        for request in ["hf-1","hf-2"] {
+            db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,ext,created_at) VALUES(?1,?1,'mp4',2)", [request]).unwrap();
+            db.create_canvas_node(&output("p", "t", &format!("workflow-video:{request}"), request)).unwrap();
+        }
+        let history = serde_json::json!({"schema_version":1,"nodes":[],"runs":[
+            {"steps":{"image":{"jobId":"image-1"},"video":{"jobId":"video-1"},"hyperframes":{"localDsRequestId":"hf-1"},"agent":{"localDsGenerations":{"call":{"jobId":"tool-1"},"second":{"jobId":"tool-2"}}}}},
+            {"steps":{"image":{"jobId":"image-2"},"video":{"jobId":"video-2"},"hyperframes":{"localDsRequestId":"hf-2"}}}]});
+        db.conn.lock().unwrap().execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p',1,?1)",[history.to_string()]).unwrap();
+        db.conn.lock().unwrap().execute_batch("INSERT INTO assets(id,name,ext,created_at) VALUES('projection-missing','projection-missing','png',3);
+            INSERT INTO analyses(id,asset_id,kind,payload) VALUES('missing','projection-missing','generation_meta','{\"job_id\":\"image-2\",\"conversation_id\":\"second\"}');").unwrap();
+        let snapshot = db.project_canvas_snapshot("p").unwrap();
+        let group = |id: &str| serde_json::from_str::<serde_json::Value>(&snapshot.nodes.iter().find(|n| n.id==id).unwrap().payload_json).unwrap()["workflow_generation_group"].clone();
+        let image = group("gen-prompt:image-1:turn:0");
+        assert!(image.is_string());
+        for id in ["gen-prompt:image-2:turn:0","gen-prompt:handoff:turn:0","gen-output:handoff:turn:handoff"] { assert_eq!(image,group(id)); }
+        assert_eq!(group("workflow-video:hf-1"),group("workflow-video:hf-2"));
+        assert_ne!(image,group("gen-prompt:video-1:turn:0"));
+        let filter = CatalogFilter { kind:"all".into(),media:"all".into(),generated:Some(true),..Default::default() };
+        assert_eq!(db.catalog_overview(&filter,None).unwrap().total,5);
+        assert_eq!(group("gen-prompt:tool-1:turn:0"),serde_json::json!("asset:gen-prompt:tool-1:turn:0"));
+        assert_ne!(group("gen-output:tool-1:turn:tool-1"),group("gen-output:tool-2:turn:tool-2"));
+        let members = db.catalog_generation_groups(&filter,&["image-2".into(),"video-2".into(),"hf-2".into(),"tool-1".into()]).unwrap();
+        assert_eq!(members["image-2"].len(),4);
+        assert_eq!(members["video-2"].len(),2);
+        assert_eq!(members["hf-2"].len(),2);
+        assert_eq!(members["tool-1"].len(),1);
+        assert!(!db.get_canvas_node("gen-prompt:image-1:turn:0").unwrap().unwrap().payload_json.contains("workflow_generation_group"));
+    }
+
+    #[test]
+    fn gallery_provenance_covers_agent_finals_chat_video_and_missing_provider_sessions() {
+        use crate::core::catalog_browser::CatalogFilter;
+        let db = db();
+        materialize(&db, "p");
+        db.create_creative_thread(&NewCreativeThread { id:"t".into(),project_id:"p".into(),title:"test".into(),origin:CreativeThreadOrigin::Direct }).unwrap();
+        db.create_canvas_node(&note("p","chat-node")).unwrap();
+        for (i,id) in ["agent-1","agent-2","intermediate","chat-1","chat-2","reference","raw-1","raw-2","meta-1","meta-2"].iter().enumerate() {
+            db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,ext,created_at) VALUES(?1,?1,'png',?2)",params![id,i as i64]).unwrap();
+        }
+        for (run, asset, role) in [("run-1","agent-1",CreativeNodeRole::Final),("run-2","agent-2",CreativeNodeRole::Final),("run-2","intermediate",CreativeNodeRole::Intermediate)] {
+            db.conn.lock().unwrap().execute("INSERT OR IGNORE INTO cloud_agent_runs(run_id,conversation_id,skill_id,status,intent_prompt,reference_asset_ids,project_id,snapshot_json,created_at,updated_at) VALUES(?1,'agent-conversation','skill','succeeded','','[]','p','{}',1,1)",[run]).unwrap();
+            let mut node = output("p","t",&format!("agent-artifact:{run}:0:{asset}"),asset);
+            node.role = Some(role);
+            let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json).unwrap();
+            payload["execution"] = serde_json::json!({"run_id":run,"artifact_id":asset});
+            node.payload_json = payload.to_string();
+            db.create_canvas_node(&node).unwrap();
+        }
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute_batch("UPDATE assets SET generation_session_id='agent-conversation' WHERE id LIKE 'agent-%';
+                INSERT INTO local_chat_conversations(id,project_id,thread_id,node_id,title,status,created_at,updated_at) VALUES('chat','p','t','chat-node','test','idle',1,1);
+                INSERT INTO local_chat_turns(id,conversation_id,request_id,request_json,status,created_at,updated_at) VALUES('turn-1','chat','request-1','{}','done',1,1),('turn-2','chat','request-2','{}','done',2,2);
+                INSERT INTO local_chat_messages(id,conversation_id,turn_id,role,text,reference_asset_ids,status,created_at,updated_at) VALUES
+                  ('turn-1-video','chat','turn-1','tool','','[\"chat-1\"]','done',1,1),('turn-2-video','chat','turn-2','tool','','[\"chat-2\"]','done',2,2),
+                  ('reference-message','chat','turn-1','user','','[\"reference\"]','done',1,1);
+                INSERT INTO analyses(id,asset_id,kind,payload) VALUES('meta-1','meta-1','generation_meta','{\"conversation_id\":\"missing-session\"}'),('meta-2','meta-2','generation_meta','{\"conversation_id\":\"missing-session\"}');").unwrap();
+            let history = serde_json::json!({"schema_version":1,"nodes":[],"runs":[
+                {"steps":{"raw":{"localDsRequestId":"legacy","agentOutputs":{"image":{"assetIds":["raw-1"]}}}}},
+                {"steps":{"raw":{"localDsRequestId":"new","generatedAssetIds":["raw-2"],"agentOutputTargets":[{}],"agentOutputs":{"image":{"assetIds":["raw-2","reference"]}}}}}]});
+            conn.execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p',1,?1)",[history.to_string()]).unwrap();
+        }
+        let snapshot = db.project_canvas_snapshot("p").unwrap();
+        let group = |id: &str| serde_json::from_str::<serde_json::Value>(&snapshot.nodes.iter().find(|n| n.id==id).unwrap().payload_json).unwrap()["workflow_generation_group"].clone();
+        assert_eq!(group("agent-artifact:run-1:0:agent-1"),serde_json::json!("generation:agent-conversation"));
+        assert_eq!(group("agent-artifact:run-1:0:agent-1"),group("agent-artifact:run-2:0:agent-2"));
+        assert!(group("agent-artifact:run-2:0:intermediate").is_null());
+        db.conn.lock().unwrap().execute("UPDATE canvas_workflows SET document_json=json_set(document_json,'$.runs[0].steps.cloud',json('{\"agentRunId\":\"run-1\"}')) WHERE project_id='p'",[]).unwrap();
+        let owned = db.project_canvas_snapshot("p").unwrap();
+        for id in ["agent-artifact:run-1:0:agent-1","agent-artifact:run-2:0:agent-2"] {
+            let payload: serde_json::Value = serde_json::from_str(&owned.nodes.iter().find(|n| n.id==id).unwrap().payload_json).unwrap();
+            assert_eq!(payload["workflow_generation_group"],serde_json::json!(format!("asset:{id}")));
+        }
+        let filter = CatalogFilter { kind:"all".into(),media:"all".into(),generated:Some(true),..Default::default() };
+        assert_eq!(db.catalog_overview(&filter,None).unwrap().total,6);
+        let members = db.catalog_generation_groups(&filter,&["agent-2".into(),"chat-2".into(),"raw-2".into(),"meta-2".into(),"reference".into()]).unwrap();
+        for id in ["agent-2","raw-2"] { assert_eq!(members[id].len(),1,"Agent image {id}"); }
+        for id in ["chat-2","meta-2"] { assert_eq!(members[id].len(),2,"{id}"); }
+        assert!(!members.contains_key("reference"));
+        assert_eq!(db.catalog_ids(&CatalogFilter { generated:Some(false),..filter },0,20).unwrap(),vec!["reference","intermediate"]);
+    }
+
     fn materialize(db: &Database, id: &str) {
         db.materialize_project_canvas(
             &ProjectCanvasMaterializeInput {
@@ -3246,6 +3506,8 @@ mod tests {
             asset_id: Some(asset_id.into()),
             role: Some(CreativeNodeRole::Output),
             payload_json: serde_json::to_string(&AssetNodePayloadV1 {
+                workflow_source: None,
+                workflow_generation_group: None,
                 schema_version: 1,
                 snapshot: AssetSnapshotV1 {
                     name: asset_id.into(),
@@ -3476,7 +3738,7 @@ mod tests {
         let graph = db.begin_project_generation_turn(&input).unwrap();
         let first = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
         assert_eq!(serde_json::from_str::<serde_json::Value>(&first.payload_json).unwrap()["conversation_id"], "conversation");
-        assert_eq!((first.x, first.y, first.position_locked), (520.0, 200.0, true));
+        assert_eq!((first.x, first.y, first.position_locked), (484.0, 200.0, true));
         db.begin_project_generation_turn(&input).unwrap();
         let recovered = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
         assert_eq!((recovered.x,recovered.y),(first.x,first.y));
@@ -3488,10 +3750,41 @@ mod tests {
         let next_input = ProjectGenerationTurnInput { job_id:"job2".into(), turn_key:"turn2".into(), ..input };
         let next = db.begin_project_generation_turn(&next_input).unwrap();
         let next_card = db.get_canvas_node(&next.prompt_node_id).unwrap().unwrap();
-        assert_eq!(next_card.x, 610.0); // Between source output (420) and downstream input (1100).
-        assert!(next_card.y > first.y); // Retained history occupies the first placement.
+        assert_eq!((next_card.x,next_card.y), (first.x,first.y)); // Folded history reuses the visible gallery.
         let old = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
         assert_eq!((old.x,old.y),(first.x,first.y));
+    }
+
+    #[test]
+    fn independent_workflow_products_use_compact_grid_and_replay_keeps_manual_positions() {
+        let db = db(); materialize(&db, "p1");
+        db.create_creative_thread(&NewCreativeThread { id:"t1".into(),project_id:"p1".into(),title:"grid".into(),origin:CreativeThreadOrigin::Direct }).unwrap();
+        let workflow = serde_json::json!({"schema_version":1,"nodes":[{"id":"agent","kind":"agent","x":100,"y":100,
+            "layoutSize":{"width":320,"height":156},"sessionNodeIds":["gen-prompt:job:one:0"]}],
+            "runs":[{"id":"run","steps":{"agent":{"localDsGenerations":{"request":{"jobId":"job"}}}}}]});
+        db.conn.lock().unwrap().execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p1',1,?1)",[workflow.to_string()]).unwrap();
+        let input = ProjectGenerationTurnInput { project_id:"p1".into(),thread_id:"t1".into(),generation_conversation_id:"conversation".into(),
+            job_id:"job".into(),turn_key:"one".into(),prompt:"test".into(),applied_prompt:"test".into(),provider:"test".into(),provider_session_id:None,
+            ratio:None,visual_profile:None,references:vec![],reference_node_ids:vec![],parent_node_id:None,parent_asset_path:None,relation:None,retry_anchor_node_id:None };
+        db.begin_project_generation_turn(&input).unwrap();
+        let assets: Vec<_> = (0..6).map(|i| {
+            let id = format!("asset{i}");
+            db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,store_path,ext,width,height,created_at) VALUES(?1,?1,?2,'png',190,150,1)",params![id,format!("/{id}.png")]).unwrap();
+            db.get_asset(&id).unwrap().unwrap()
+        }).collect();
+        let ids = db.complete_project_generation_turn("p1","t1","job","one",None,&assets).unwrap();
+        let nodes: Vec<_> = ids.iter().map(|id| db.get_canvas_node(id).unwrap().unwrap()).collect();
+        assert_eq!((nodes[0].x,nodes[0].y),(484.0,100.0));
+        assert_eq!(nodes[3].y-nodes[0].y,nodes[0].height+32.0);
+        assert_eq!((nodes[0].x,nodes[1].x,nodes[2].x),(484.0,706.0,928.0));
+        assert_eq!(nodes[3].x,nodes[0].x);
+        db.conn.lock().unwrap().execute("UPDATE canvas_nodes SET x=2000,y=3000,position_locked=1 WHERE id=?1",[&ids[0]]).unwrap();
+        db.complete_project_generation_turn("p1","t1","job","one",None,&assets).unwrap();
+        let moved = db.get_canvas_node(&ids[0]).unwrap().unwrap();
+        assert_eq!((moved.x,moved.y,moved.position_locked),(2000.0,3000.0,true));
+        let mut conn = db.conn.lock().unwrap(); let tx = conn.transaction().unwrap();
+        let visible = placement::obstacles(&tx,"p1",&workflow,&[]).unwrap();
+        assert_eq!(visible.len(),7,"six individual images and their workflow source, no hidden prompt");
     }
 
     #[test]
@@ -4400,6 +4693,8 @@ mod tests {
         assert_eq!(group.project_id, "p1");
 
         let asset_payload = serde_json::to_string(&AssetNodePayloadV1 {
+            workflow_source: None,
+            workflow_generation_group: None,
             schema_version: 1,
             snapshot: AssetSnapshotV1 {
                 name: "结果".into(),
@@ -4599,7 +4894,7 @@ mod tests {
     }
 
     #[test]
-    fn deleting_asset_keeps_tombstone_thread_archives_and_running_work_blocks_project_delete() {
+    fn deleting_asset_keeps_tombstone_and_project_delete_detaches_running_work() {
         let db = db();
         materialize(&db, "p1");
         db.create_creative_thread(&NewCreativeThread {
@@ -4624,6 +4919,8 @@ mod tests {
         }
         db.add_assets_to_project("p1", &["kept".into()]).unwrap();
         let payload = serde_json::to_string(&AssetNodePayloadV1 {
+            workflow_source: None,
+            workflow_generation_group: None,
             schema_version: 1,
             snapshot: AssetSnapshotV1 {
                 name: "素材".into(),
@@ -4691,11 +4988,6 @@ mod tests {
 
         {
             let conn = db.conn.lock().unwrap();
-            assert!(conn
-                .execute("DELETE FROM projects WHERE id='p1'", [])
-                .is_err());
-            conn.execute("UPDATE task_queue SET status='done' WHERE id='job'", [])
-                .unwrap();
             conn.execute("DELETE FROM projects WHERE id='p1'", [])
                 .unwrap();
             assert_eq!(

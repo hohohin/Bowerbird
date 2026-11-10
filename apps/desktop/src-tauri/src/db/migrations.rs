@@ -102,6 +102,9 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0051_disconnected_library_assets.sql")),
         M::up(include_str!("../../sql/0052_removed_missing_asset_originals.sql")),
         M::up(include_str!("../../sql/0053_chat_dsh_providers.sql")),
+        M::up(include_str!("../../sql/0054_generation_gallery_separations.sql")),
+        M::up(include_str!("../../sql/0055_project_delete_without_task_veto.sql")),
+        M::up(include_str!("../../sql/0056_catalog_file_lookup_indexes.sql")),
     ])
 }
 
@@ -243,7 +246,42 @@ fn backfill_asset_reference_counts(tx: &rusqlite::Transaction) -> rusqlite_migra
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn catalog_file_lookup_indexes_preserve_aliases_and_avoid_table_scans() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        super::migrations().to_latest(&mut conn).unwrap();
+        for id in ["first", "alias"] {
+            conn.execute("INSERT INTO assets(id,name,store_path) VALUES(?1,?1,'/same/file.png')", [id]).unwrap();
+            conn.execute("INSERT INTO external_assets(asset_id,fingerprint) VALUES(?1,'same-content')", [id]).unwrap();
+        }
+        for (sql, index) in [
+            ("SELECT id FROM assets WHERE store_path='/same/file.png'", "idx_assets_store_path"),
+            ("SELECT asset_id FROM external_assets WHERE fingerprint='same-content'", "idx_external_assets_fingerprint"),
+        ] {
+            let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+            let details = stmt.query_map([], |row| row.get::<_, String>(3)).unwrap().collect::<Result<Vec<_>, _>>().unwrap();
+            assert!(details.iter().any(|detail| detail.contains("SEARCH") && detail.contains(index)), "{details:?}");
+        }
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM assets WHERE store_path='/same/file.png'", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 2);
+    }
     use super::*;
+
+    #[test]
+    fn project_delete_upgrade_removes_existing_task_vetoes() {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.pragma_update(None, "foreign_keys", true).unwrap();
+        let ms = migrations();
+        ms.to_version(&mut conn, 54).unwrap();
+        conn.execute_batch("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1);
+            INSERT INTO task_queue(id,kind,payload,status,created_at,project_id) VALUES('q','generation','{}','running',1,'p');
+            INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p',1,'{\"schema_version\":1,\"runs\":[{\"status\":\"waiting\"}]}');").unwrap();
+        assert!(conn.execute("DELETE FROM projects WHERE id='p'", []).is_err());
+        ms.to_latest(&mut conn).unwrap();
+        conn.execute("DELETE FROM projects WHERE id='p'", []).unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM task_queue WHERE id='q' AND project_id IS NULL AND status='running'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM canvas_workflows", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+    }
 
     #[test]
     fn classification_english_upgrade_preserves_rules_assignments_and_revision() {

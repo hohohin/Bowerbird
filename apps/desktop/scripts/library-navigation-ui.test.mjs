@@ -36,33 +36,36 @@ async function assertFloatingNavigation(root = page.locator('.library-catalog-la
 }
 async function filter(kind, projectId, media = 'images') {
   await page.waitForFunction(({ kind, projectId, media }) => {
-    const latest = window.requests.filter(r => r.command === 'catalog_overview').at(-1)?.args.filter;
-    return latest?.kind === kind && latest.projectId === projectId && latest.media === media;
+    const state = window.mode.getState();
+    const currentKind = state.view === 'tags' ? 'tags' : 'all';
+    const currentProject = (state.view === 'project' || state.view === 'tags' && state.tagSource === 'project') ? state.browseProjectId : null;
+    return currentKind === kind && currentProject === projectId && state.media === media
+      && window.requests.some(r => r.command === 'catalog_overview' && r.args.filter.kind === kind && r.args.filter.projectId === projectId && r.args.filter.media === media);
   }, { kind, projectId, media });
 }
 try {
   await mkdir(output, { recursive: true });
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/catalog-paging/preview.html?navigation`);
-  assert.deepEqual(await primary().getByRole('tab').allTextContents(), ['全部素材Q', '项目素材E', '集合视图', '标签视图']);
+  assert.deepEqual(await primary().getByRole('tab').allTextContents(), ['文件夹', '项目素材', '标签分类', '全部素材']);
   await filter('all', null);
   await assertFloatingNavigation();
   assert.equal(await scope().count(), 0);
   await choose('项目素材'); await filter('all', 'p');
   assert.equal(await page.locator('.catalog-sidebar').count(), 0);
-  await choose('标签视图'); await filter('tags', 'p');
+  await choose('标签分类'); await filter('tags', 'p');
   assert.equal(await scope().getByRole('tab', { name: '项目素材' }).getAttribute('aria-selected'), 'true');
   await scope().getByRole('tab', { name: '全部素材', exact: true }).click(); await filter('tags', null);
-  assert.equal(await selected(), '标签视图');
-  await choose('标签视图'); assert.equal(await selected(), '标签视图');
+  assert.equal(await selected(), '标签分类');
+  await choose('标签分类'); assert.equal(await selected(), '标签分类');
   await scope().getByRole('tab', { name: '项目素材' }).click(); await filter('tags', 'p');
-  await choose('集合视图');
+  await choose('文件夹');
   await page.waitForFunction(() => window.requests.filter(r => r.command === 'folder_connections').at(-1)?.args.projectId === null);
   assert.equal(await scope().count(), 0);
-  await choose('标签视图'); await filter('tags', 'p');
+  await choose('标签分类'); await filter('tags', 'p');
   for (const media of ['videos', 'audios', 'texts', 'images']) {
     await page.evaluate(media => window.mode.getState().setMedia(media), media);
     await filter('tags', 'p', media);
-    assert.equal(await selected(), '标签视图');
+    assert.equal(await selected(), '标签分类');
     await page.getByRole('complementary', { name: '标签分类' }).waitFor();
   }
   await page.evaluate(async () => {
@@ -72,7 +75,7 @@ try {
   await filter('all', 'p', 'videos');
   assert.equal(await selected(), '项目素材', 'imported video returns to its scoped flat view');
   await page.evaluate(() => window.mode.getState().setMedia('images'));
-  await choose('标签视图'); await filter('tags', 'p');
+  await choose('标签分类'); await filter('tags', 'p');
   for (const width of [1000, 600, 400, 320]) {
     await page.setViewportSize({ width, height: 800 });
     for (const theme of ['dark', 'light']) {
@@ -85,22 +88,22 @@ try {
   }
   await choose('全部素材'); await filter('all', null);
   await primary().getByRole('tab', { name: '全部素材', exact: true }).focus();
-  await page.keyboard.press('ArrowRight'); assert.equal(await selected(), '项目素材');
-  await page.keyboard.press('End'); assert.equal(await selected(), '标签视图');
+  await page.keyboard.press('ArrowRight'); assert.equal(await selected(), '文件夹');
+  await page.keyboard.press('End'); assert.equal(await selected(), '全部素材');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.keyboard.press('ArrowLeft');
-  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === '集合视图'
+  await page.waitForFunction(() => document.activeElement?.getAttribute('aria-label') === '标签分类'
     && !document.activeElement.closest('[data-outgoing]'));
   await page.locator('.library-catalog-transition[aria-busy="false"]').waitFor();
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.keyboard.press('Home'); assert.equal(await selected(), '全部素材');
+  await page.keyboard.press('Home'); assert.equal(await selected(), '文件夹');
 
   await page.setViewportSize({ width: 1000, height: 800 });
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/catalog-paging/preview.html?split`);
   const left = page.locator('[data-library-pane="home-left"]');
   await left.getByRole('button', { name: '向右分栏', exact: true }).click();
   const right = page.locator('[data-library-pane="home-pane-1"]');
-  await right.getByRole('tab', { name: '标签视图', exact: true }).click();
+  await right.getByRole('tab', { name: '标签分类', exact: true }).click();
   assert.equal(await left.getByRole('tablist', { name: '素材视图切换条' }).getByRole('tab', { selected: true }).getAttribute('aria-label'), '全部素材');
   await page.screenshot({ path: `${output}/split.png` });
   await assertFloatingNavigation(left.locator('.library-catalog-layer:not([data-outgoing]) .categorized-library'));
@@ -112,26 +115,28 @@ try {
   await page.getByRole('button', { name: '打开素材库', exact: true }).click();
   await choose('项目素材');
   await primary().getByRole('tab', { name: '项目素材' }).focus();
+  await page.keyboard.press('Escape'); // Close the project scope submenu before using global Tab navigation.
   await page.keyboard.press('Tab');
-  await page.getByRole('complementary', { name: '集合目录' }).waitFor();
-  assert.equal(await selected(), '集合视图');
+  await scope().waitFor(); assert.equal(await selected(), '标签分类');
+  await page.keyboard.press('Tab'); assert.equal(await selected(), '全部素材');
   await page.keyboard.press('Tab');
-  await scope().waitFor(); assert.equal(await selected(), '标签视图');
+  await page.getByRole('complementary', { name: '文件夹目录' }).waitFor();
+  assert.equal(await selected(), '文件夹');
   await page.keyboard.press('q');
   assert.equal(await selected(), '全部素材');
   await page.keyboard.press('e');
   assert.equal(await selected(), '项目素材');
-  await choose('标签视图');
+  await choose('标签分类');
   await assertFloatingNavigation();
   await page.screenshot({ path: `${output}/canvas-tags.png` });
 
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/connected-collections/preview.html`);
-  await choose('集合视图');
+  await choose('文件夹');
   await page.getByRole('treeitem', { name: '风景', exact: true }).click();
   await page.locator('[data-connection-entry="child-0"]').waitFor();
   await choose('全部素材');
   await page.locator('[data-asset-id]').first().waitFor();
-  await choose('集合视图');
+  await choose('文件夹');
   assert.equal(await page.getByRole('treeitem', { name: '风景', exact: true }).getAttribute('aria-selected'), 'true');
   await assertFloatingNavigation();
   await page.screenshot({ path: `${output}/collections.png` });

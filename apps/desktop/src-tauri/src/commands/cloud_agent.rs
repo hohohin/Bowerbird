@@ -27,7 +27,6 @@ const UNIFIED_SKILL_ID: &str = "bowerbird-unified-agent";
 const LEGACY_AGENT_RUNTIME: &str = "legacy_kernel";
 const DSH_AGENT_RUNTIME: &str = "dsh";
 const MAX_REFERENCES: usize = 8;
-const MAX_PROMPT_CHARS: usize = 4_000;
 const MAX_FEEDBACK_CHARS: usize = 2_000;
 const MAX_ARTIFACT_BYTES: u64 = 20 * 1024 * 1024;
 const PROJECT_AGENT_LAUNCH_SNAPSHOT_KEY: &str = "_bowerbirdProjectAgentLaunchV1";
@@ -1441,8 +1440,8 @@ fn normalize_intent_prompt(
     references: &[CloudAgentReferenceRequest],
 ) -> Result<String, AppError> {
     let mut normalized = prompt.trim().to_string();
-    if normalized.is_empty() || normalized.chars().count() > MAX_PROMPT_CHARS {
-        return Err(AppError::Other("Agent 意图须为 1–4000 个字符".into()));
+    if normalized.is_empty() {
+        return Err(AppError::Other("Agent 意图不能为空".into()));
     }
     let mut tokens: Vec<(String, String)> = references
         .iter()
@@ -1780,6 +1779,14 @@ async fn start_html_layout_run(
     Ok(record)
 }
 
+// Text rewrite belongs to its source editor, not a new canvas creative session.
+fn unified_agent_presentation(prompt: &str, rewrite: Option<&AgentTextRewrite>, thread_id: Option<&str>) -> (String, Option<String>) {
+    match rewrite {
+        Some(rewrite) => (rewrite.source.clone(), None),
+        None => (prompt.to_owned(), thread_id.map(str::to_owned)),
+    }
+}
+
 async fn start_unified_agent_run(
     app: &AppHandle,
     db: &Database,
@@ -1799,8 +1806,8 @@ async fn start_unified_agent_run(
 ) -> Result<CloudAgentRunRecord, AppError> {
     let options = validate_html_layout_options(options)?;
     if let Some(rewrite) = &text_rewrite {
-        if rewrite.source.trim().is_empty() || rewrite.source.encode_utf16().count() > 16000 || !references.is_empty() || visual_profile_id.is_some() {
-            return Err(AppError::Other("文本改写需要 1–16000 字原文，不支持图片或视觉规范输入".into()));
+        if rewrite.source.trim().is_empty() || !references.is_empty() || visual_profile_id.is_some() {
+            return Err(AppError::Other("文本改写原文不能为空，不支持图片或视觉规范输入".into()));
         }
     }
     let entitlement_snapshot = entitlement.current_or_sync(auth).await;
@@ -1875,9 +1882,7 @@ async fn start_unified_agent_run(
         },
         visual_profile_capsule: visual_profile_capsule.as_ref(),
     })?;
-    if manifest.len() > 64 * 1024 {
-        return Err(AppError::Other("统一 Agent 输入清单过大".into()));
-    }
+    let (display_prompt, thread_id) = unified_agent_presentation(&normalized_prompt, text_rewrite.as_ref(), thread_id.as_deref());
     let creative_launch = begin_creative_launch(
         db,
         project_id.as_deref(),
@@ -1952,7 +1957,7 @@ async fn start_unified_agent_run(
         UNIFIED_SKILL_ID,
         "0.1.0",
         Some(DSH_AGENT_RUNTIME),
-        &normalized_prompt,
+        &display_prompt,
         &reference_ids,
         project_id.as_deref(),
         thread_id.as_deref(),
@@ -2076,7 +2081,7 @@ async fn start_unified_agent_run(
         conversation_id,
         skill_id: UNIFIED_SKILL_ID.into(),
         status: "queued".into(),
-        intent_prompt: normalized_prompt,
+        intent_prompt: display_prompt,
         reference_asset_ids: reference_ids,
         project_id,
         thread_id,
@@ -3633,6 +3638,35 @@ pub async fn cloud_agent_execute_local_task(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn text_rewrite_keeps_history_without_canvas_launch_or_projection() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::open(&dir.path().join("text-rewrite.db")).unwrap();
+        db.migrate().unwrap();
+        let rewrite = super::AgentTextRewrite { source: "镜头先固定，再拉远".into() };
+        let (display, thread) = super::unified_agent_presentation("internal skill instructions", Some(&rewrite), Some("source-thread"));
+        assert_eq!(display, rewrite.source);
+        assert!(thread.is_none());
+        let launch = super::begin_creative_launch(&db, Some("source-project"), thread.as_deref(), &display,
+            "cloud", None, None, &[], &[], None, None).unwrap();
+        assert!(launch.is_none());
+        let record = super::CloudAgentRunRecord {
+            run_id: "rewrite-run".into(), conversation_id: "rewrite-conversation".into(), skill_id: "bowerbird-unified-agent".into(),
+            status: "failed".into(), intent_prompt: display, reference_asset_ids: vec![], project_id: None,
+            thread_id: thread, creative_launch_id: None, snapshot: serde_json::json!({"run":{"status":"failed"}}),
+            feedback_action: None, final_asset_id: None, created_at: 1, updated_at: 1,
+        };
+        super::save_and_project_record(&db, &record).unwrap();
+        assert_eq!(super::load_record(&db, "rewrite-run").unwrap().intent_prompt, rewrite.source);
+        let connection = db.conn.lock().unwrap();
+        for table in ["canvas_nodes", "creative_threads"] {
+            let count: i64 = connection.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0)).unwrap();
+            assert_eq!(count, 0, "text rewrite must not create {table}");
+        }
+        let (display, thread) = super::unified_agent_presentation("ordinary creative request", None, Some("thread"));
+        assert_eq!(display, "ordinary creative request");
+        assert_eq!(thread.as_deref(), Some("thread"));
+    }
     use super::{
         agent_group_payload, cache_local_result, ensure_agent_provider_compatible,
         existing_agent_asset, ingestible_artifacts, list_records, load_cached_local_result,

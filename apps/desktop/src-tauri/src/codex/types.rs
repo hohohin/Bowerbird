@@ -64,6 +64,7 @@ pub struct CodexResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Chunk {
+    Progress { #[serde(flatten)] progress: super::progress::GenerationProgress },
     /// 增量文本（一段 token）。
     Delta { text: String },
     /// 即梦 submit 拿到 submit_id 即回填（provider 拿到瞬间发，不等下载）。

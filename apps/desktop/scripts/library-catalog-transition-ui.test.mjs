@@ -32,7 +32,7 @@ try {
  await page.goto('http://127.0.0.1:17958/scripts/fixtures/connected-collections/preview.html');
  await page.getByRole('treeitem',{name:'素材目录',exact:true}).waitFor();
  assert.equal(await page.locator('[data-sidebar-motion]').count(),0);
- for(const [theme,name] of [['dark','标签分类'],['light','集合分类']]) {
+ for(const [theme,name] of [['dark','标签分类'],['light','文件夹']]) {
   await page.evaluate(t => document.documentElement.dataset.theme=t,theme);
   await switchTo(name); await page.waitForTimeout(30);
   assert.equal(await page.locator('[data-sidebar-motion]').count(),2,'full sidebars replace the wipe');
@@ -56,7 +56,7 @@ try {
   assert.equal(await page.locator('[data-sidebar-slot]').count(),0);
  }
  for(const t of [150,450,650]) {
-  await switchTo('标签分类'); await sample(t); await switchTo('集合分类'); await sample(350); await finish();
+  await switchTo('标签分类'); await sample(t); await switchTo('文件夹'); await sample(350); await finish();
   assert.equal(await page.locator(':popover-open').count(),0);
  }
  await switchTo('标签分类'); await sample(350);
@@ -67,9 +67,9 @@ try {
  await page.waitForFunction(() => !document.querySelector('[data-sidebar-motion]'));
  assert.equal(await page.locator(':popover-open').count(),0,'hidden host cleans up top layer');
  await page.locator('.library-pane-content').evaluate(el => el.removeAttribute('aria-hidden'));
- await switchTo('集合分类'); await page.emulateMedia({reducedMotion:'reduce'});
+ await switchTo('文件夹'); await page.emulateMedia({reducedMotion:'reduce'});
  await page.waitForFunction(() => !document.querySelector('[data-sidebar-motion]'));
- await switchTo('标签分类'); await switchTo('集合分类'); assert.equal(await page.locator('[data-sidebar-motion]').count(),0);
+ await switchTo('标签分类'); await switchTo('文件夹'); assert.equal(await page.locator('[data-sidebar-motion]').count(),0);
  await page.getByRole('treeitem',{name:'风景',exact:true}).click();
  assert.equal(await page.getByRole('treeitem',{name:'风景',exact:true}).getAttribute('aria-selected'),'true');
  await switchTo('全部'); assert.equal(await page.locator('[data-sidebar-motion]').count(),0);
@@ -78,7 +78,7 @@ try {
  await switchTo('标签分类');
  await page.getByRole('button',{name:'向右分栏',exact:true}).click();
  const panes=page.locator('.library-pane-content');
- await panes.first().getByRole('tab',{name:'集合分类',exact:true}).click();
+ await panes.first().getByRole('tab',{name:'文件夹',exact:true}).click();
  assert.equal(await panes.last().locator('[data-sidebar-motion]').count(),0,'other pane stays still');
  await panes.first().getByRole('button',{name:'关闭此栏',exact:true}).click();
  assert.equal(await page.locator(':popover-open').count(),0,'unmount cleans up top layer');

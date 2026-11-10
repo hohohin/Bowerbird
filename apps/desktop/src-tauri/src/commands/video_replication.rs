@@ -3,6 +3,7 @@ mod douyin;
 mod cases;
 mod poster;
 mod local;
+mod enhanced;
 pub mod collection;
 use crate::{
     cloud::{AuthClient, CloudClient},
@@ -246,6 +247,15 @@ async fn cloud_request(cloud: &CloudClient, auth: &AuthClient, body: Value) -> A
     }
     Ok(value)
 }
+fn validate_analysis_settings(value: &Value) -> AppResult<()> {
+    if !value["fps"].as_f64().map(|v| [0.2, 0.5, 1.0, 2.0, 5.0].contains(&v)).unwrap_or(false)
+        || !value["transcribe"].is_boolean()
+        || !["default", "disabled", "low", "medium", "high"].contains(&value["thinking"].as_str().unwrap_or("")) {
+        return Err(error("视频分析参数无效"));
+    }
+    Ok(())
+}
+
 async fn proxy_video(root: &Path, task: &Value) -> AppResult<Value> {
     let root = root.to_path_buf();
     let task = task.clone();
@@ -318,6 +328,7 @@ async fn execute(root: PathBuf, id: String, cloud: CloudClient, auth: AuthClient
             if analyze {
                 patch(&root, &id, json!({"message":"正在准备分析视频（保留音轨）"}))?;
                 request["video"] = proxy_video(&root, &task).await?;
+                if let Some(settings) = task.get("analysisSettings") { request["video"]["settings"] = settings.clone(); }
             } else { request["rewrite"] = json!({"inputText":rewrite_input(&task)?,"persona":task["persona"],"rules":task["rules"],"product":task["product"]}); }
             // Save the uncertain window before any possibly billable create.
             patch(&root, &id, json!({"submissionPending":true,"message":"正在提交 Bowerbird Cloud"}))?;
@@ -412,6 +423,16 @@ pub async fn video_replication(
         return douyin::handle(&app, &root, &project_id, &action, data).await;
     }
     match action.as_str() {
+        "enhanced-frame" => enhanced::frame(&root, &project_id, &data).await,
+        "enhanced-prepare" => {
+            let case_id = field(&data,"caseId");
+            let case = cases::require(&root,case_id,&project_id)?;
+            if !field(&case,"enhancedId").is_empty() { return own(&root.join("enhanced"),field(&case,"enhancedId"),&project_id); }
+            let prepared = enhanced::prepare(root.clone(), project_id, field(&case,"referenceId").to_owned()).await?;
+            patch(&root,case_id,json!({"enhancedId":prepared["id"]}))?;
+            Ok(prepared)
+        },
+        "enhanced-get" | "enhanced-save" | "enhanced-analyze" | "enhanced-plan" | "enhanced-finish" => enhanced::handle(&app, root, project_id, &action, data),
         "case-list" => cases::list(&root, &project_id),
         "case-save" => cases::update(&root, &project_id, &data),
         "reference-poster" => poster::load(root, field(&data, "id").to_owned(), project_id).await,
@@ -522,6 +543,12 @@ pub async fn video_replication(
                 if !["codex", "doubao"].contains(&provider) { return Err(error("分析供应商无效")); }
                 if provider == "codex" { local::preflight(&app).await?; }
                 task["analysisProvider"] = json!(provider);
+                if provider == "doubao" {
+                    if let Some(settings) = data.get("analysisSettings").filter(|v| !v.is_null()) {
+                        validate_analysis_settings(settings)?;
+                        task["analysisSettings"] = settings.clone();
+                    }
+                }
             }
             for key in [
                 "operation",

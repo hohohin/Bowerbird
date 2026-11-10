@@ -65,7 +65,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
       return [{ reference: { type, input, slot, label: `${type === "text" ? "文本" : "图片来源"} ${number}` }, preview: "等待上游内容", unavailable: !(pendingSource || (type === "image" && workflowImageContainer(input))) }];
     }
   })), [node.inputs, nodes, graphNodes, usesPipes]);
-  const outputCandidates: Candidate[] = node.kind === "agent" && node.agentTransport !== "cloud" ? agentOutputWriters(node, nodes).map(writer => {
+  const outputCandidates: Candidate[] = node.kind === "agent" ? agentOutputWriters(node, nodes).map(writer => {
     const target = writer.textTarget!;
     const card = graphNodes.find(card => card.id === target.nodeId && card.hiddenAt == null);
     const note = card && readCanvasNote(card);

@@ -68,7 +68,7 @@ try {
 
   // The menu closes before the assignment dialog completes: completion must retain its originating view.
   await card('existing').click({ button: 'right' });
-  await page.getByRole('menuitem', { name: '添加到集合', exact: true }).click();
+  await page.getByRole('menuitem', { name: '添加到文件夹', exact: true }).click();
   await dialog().getByRole('radio', { name: '海报参考', exact: true }).waitFor({ state: 'attached' });
   assert.equal(await dialog().locator('select').count(), 0, 'collection choices are shown directly, without a dropdown');
   await dialog().getByText('海报参考', { exact: true }).click();
@@ -77,7 +77,7 @@ try {
   assert.equal(await dialog().getByRole('radio', { name: '测试集合', exact: true }).isChecked(), true, 'native arrow navigation selects the preceding parent');
   const indent = name => dialog().getByRole('radio', { name, exact: true }).evaluate(input => parseFloat(getComputedStyle(input.parentElement).paddingLeft));
   assert.ok(await indent('海报参考') > await indent('测试集合'), 'child collections retain sidebar hierarchy');
-  await dialog().getByRole('scrollbar', { name: '目标集合滚动条' }).waitFor({ state: 'attached' });
+  await dialog().getByRole('scrollbar', { name: '目标文件夹滚动条' }).waitFor({ state: 'attached' });
   await mkdir('.tmp/collection-choice', { recursive: true });
   for (const theme of ['light', 'dark']) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
@@ -87,10 +87,10 @@ try {
     assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 760 && bounds.y + bounds.height <= 700);
   }
   await page.setViewportSize({ width: 1400, height: 900 });
-  await dialog().getByText('新建集合', { exact: true }).click();
-  await dialog().getByLabel('集合名称', { exact: true }).fill('新的参考');
+  await dialog().getByText('新建文件夹', { exact: true }).click();
+  await dialog().getByLabel('文件夹名称', { exact: true }).fill('新的参考');
   await dialog().getByText('海报参考', { exact: true }).click();
-  assert.equal(await dialog().getByLabel('集合名称', { exact: true }).count(), 0);
+  assert.equal(await dialog().getByLabel('文件夹名称', { exact: true }).count(), 0);
   await page.evaluate(() => { window.failAssignment = true; });
   await dialog().getByRole('button', { name: '添加', exact: true }).click();
   await dialog().getByRole('alert').waitFor();
@@ -100,7 +100,7 @@ try {
   await verifyBrowseMode();
 
   await selectPair();
-  await selection.getByRole('button', { name: '添加到集合', exact: true }).click();
+  await selection.getByRole('button', { name: '添加到文件夹', exact: true }).click();
   await dialog().getByRole('button', { name: '添加', exact: true }).click();
   await verifyBrowseMode();
 

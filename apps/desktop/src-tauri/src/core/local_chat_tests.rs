@@ -1,5 +1,68 @@
 use super::*;
 
+fn agent_projection(db: &Database) -> serde_json::Value {
+    let source: String = db.conn.lock().unwrap().query_row("SELECT document_json FROM canvas_workflows WHERE project_id='project-a'", [], |row| row.get(0)).unwrap();
+    serde_json::from_str(&source).unwrap()
+}
+
+#[test]
+fn local_chat_projects_one_agent_and_delivers_only_the_original_turn() {
+    let db = fixture();
+    let mut request = input("large-agent");
+    request.text = "长篇输入".repeat(100_000);
+    let first = db.begin_local_chat(&request).unwrap();
+    let chat = &first.conversation.summary;
+    let projection = agent_projection(&db);
+    assert_eq!(projection["nodes"].as_array().unwrap().len(), 1);
+    let node = &projection["nodes"][0];
+    assert_eq!(node["id"], chat.node_id);
+    assert_eq!(node["kind"], "agent");
+    assert_eq!(node["chatConversationId"], chat.id);
+    assert_eq!(node["prompt"], request.text);
+    assert_eq!(first.conversation.submitted_turn_id.as_deref(), Some(first.turn_id.as_str()));
+    assert_eq!(chat.status, "running");
+    db.update_local_chat_text(&chat.id, &first.turn_id, "原轮次结果").unwrap();
+    db.finish_local_chat(&chat.id, &first.turn_id, "done", None).unwrap();
+    assert_eq!(agent_projection(&db)["nodes"][0]["outputs"]["text"]["text"], "原轮次结果");
+    let mut next = input("agent-continue");
+    next.conversation_id = Some(chat.id.clone());
+    next.agent_node_id = Some(chat.node_id.clone());
+    let second = db.begin_local_chat(&next).unwrap();
+    let replay = db.local_chat_by_request(&request.request_id).unwrap().unwrap();
+    assert_eq!(replay.submitted_turn_id.as_deref(), Some(first.turn_id.as_str()));
+    assert_eq!(replay.summary.status, "running");
+    db.finish_local_chat(&chat.id, &first.turn_id, "done", None).unwrap();
+    assert_eq!(db.get_local_chat(&chat.id).unwrap().unwrap().summary.status, "running");
+    assert_eq!(agent_projection(&db)["nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(count(&db, "local_chat_turns"), 2);
+    assert_eq!(count(&db, "canvas_nodes"), 1);
+    db.finish_local_chat(&chat.id, &second.turn_id, "stopped", None).unwrap();
+}
+
+#[test]
+fn local_chat_binds_existing_agent_atomically_and_rejects_foreign_cards() {
+    let db = fixture();
+    let doc = serde_json::json!({"schema_version":1,"nodes":[{"id":"agent-one","kind":"agent","prompt":"卡片任务","inputs":{},"outputs":{},"x":50,"y":60}],"run":null});
+    db.conn.lock().unwrap().execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('project-a',1,?1)", [doc.to_string()]).unwrap();
+    let mut request = input("bound-agent");
+    request.agent_node_id = Some("missing".into());
+    assert!(db.begin_local_chat(&request).is_err());
+    assert_eq!(count(&db, "local_chat_turns"), 0);
+    request.agent_node_id = Some("agent-one".into());
+    let first = db.begin_local_chat(&request).unwrap();
+    assert_eq!(first.conversation.summary.node_id, "agent-one");
+    assert_eq!(agent_projection(&db)["nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(agent_projection(&db)["nodes"][0]["prompt"], "卡片任务");
+    assert!(!db.begin_local_chat(&request).unwrap().is_new);
+    assert_eq!(count(&db, "local_chat_turns"), 1);
+    db.finish_local_chat(&first.conversation.summary.id, &first.turn_id, "done", None).unwrap();
+    request.request_id = "wrong-card".into();
+    request.conversation_id = Some(first.conversation.summary.id.clone());
+    request.agent_node_id = Some("different".into());
+    assert!(db.begin_local_chat(&request).is_err());
+    assert_eq!(count(&db, "local_chat_turns"), 1);
+}
+
 #[test]
 fn local_chat_dsh_providers_keep_identity_and_reject_codex_options() {
     let db = fixture();
@@ -116,6 +179,7 @@ fn input(request: &str) -> ChatSendInput {
         codex_options: None,
         project_id: "project-a".into(),
         conversation_id: None,
+        agent_node_id: None,
         request_id: request.into(),
         text: "请帮我分析这组视觉方向".into(),
         reference_asset_ids: vec![],
@@ -427,26 +491,14 @@ fn local_chat_cards_hide_without_erasing_audit_and_reopen_in_place() {
 }
 
 #[test]
-fn local_chat_active_turn_blocks_project_deletion_but_terminal_turn_does_not() {
+fn local_chat_active_turn_allows_project_deletion_and_late_finish_cannot_restore_it() {
     let db = fixture();
     let started = db.begin_local_chat(&input("first")).unwrap();
     let id = &started.conversation.summary.id;
-    assert!(
-        crate::core::projects::ensure_project_has_no_unfinished_work(
-            &db.conn.lock().unwrap(),
-            "project-a",
-            false
-        )
-        .is_err()
-    );
-    db.finish_local_chat(id, &started.turn_id, "done", None)
-        .unwrap();
-    crate::core::projects::ensure_project_has_no_unfinished_work(
-        &db.conn.lock().unwrap(),
-        "project-a",
-        false,
-    )
-    .unwrap();
+    db.delete_project("project-a", crate::core::projects::ProjectDeleteMode::Keep).unwrap();
+    let _ = db.finish_local_chat(id, &started.turn_id, "done", None);
+    assert!(db.get_project("project-a").unwrap().is_none());
+    assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM local_chat_conversations WHERE id=?1", [id], |r| r.get::<_, i64>(0)).unwrap(), 0);
 }
 
 #[test]

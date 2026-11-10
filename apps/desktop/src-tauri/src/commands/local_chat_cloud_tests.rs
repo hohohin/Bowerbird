@@ -43,6 +43,16 @@ fn local_chat_cloud_context_never_uploads_reference_ids_paths_or_old_pixels() {
     assert_eq!(context[0]["role"], "user");
 }
 
+#[test]
+fn local_chat_cloud_history_preserves_long_messages() {
+    let (db, id, turn) = cloud_turn();
+    let mut chat = db.get_local_chat(&id).unwrap().unwrap();
+    let mut old = chat.messages[0].clone(); old.turn_id = "previous".into(); old.text = "历史长文🙂".repeat(100000);
+    chat.messages.insert(0, old.clone());
+    let context = messages(&chat, &turn).unwrap();
+    assert_eq!(context.len(), 2); assert_eq!(context[0]["content"], old.text);
+}
+
 #[tokio::test]
 async fn local_chat_cloud_recovery_uses_saved_key_without_recreating_or_executing_tools() {
     use axum::{routing::post, Json, Router};

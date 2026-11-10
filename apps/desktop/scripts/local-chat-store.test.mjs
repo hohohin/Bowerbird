@@ -227,8 +227,12 @@ test('conversation drafts survive reload separately and clearing one never clear
   assert.equal(third.draft('chat-q').text, '项目 B');
 });
 
-test('invalid input never reaches native IPC and byte limit counts non-ASCII text', async () => {
+test('invalid input never reaches native IPC; long text is preserved', async () => {
   const f = fixture();
-  for (const [text, references] of [['  ', []], ['汉'.repeat(33334), []], ['内容', Array.from({ length: 9 }, (_, i) => `${i}`)]]) await assert.rejects(f.store.getState().send({ projectId: 'p', text, referenceAssetIds: references }));
+  for (const [text, references] of [['  ', []], ['内容', Array.from({ length: 9 }, (_, i) => `${i}`)]]) await assert.rejects(f.store.getState().send({ projectId: 'p', text, referenceAssetIds: references }));
   assert.equal(f.calls.length, 0);
+  f.handlers.set('local_chat_send', () => chat());
+  const text = '汉'.repeat(100001);
+  await f.store.getState().send({ projectId: 'p', text, referenceAssetIds: [] });
+  assert.equal(f.calls[0].args.input.text, text);
 });

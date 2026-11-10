@@ -106,18 +106,22 @@ pub fn cancel(files: &FileWorkspace) -> AppResult<()> {
         state.state = "cancelled".into(); write_json(&files.migration_path(),&state)?;
     } Ok(())
 }
-fn ensure_idle(conn: &Connection) -> AppResult<()> {
+fn active_work(conn: &Connection) -> AppResult<Vec<String>> {
     // Local preview checkpoints wait for an explicit frontend continuation. A tool's
     // actual generation is tracked independently in task_queue. Keep these checkpoints
     // resumable (including their remapped paths), rather than requiring cancellation.
     let (tasks,local,cloud,workflows):(i64,i64,i64,i64) = conn.query_row(
         "SELECT (SELECT count(*) FROM task_queue WHERE status IN ('queued','running')),
-        (SELECT count(*) FROM local_agent_runs WHERE status NOT IN ('done','completed','succeeded','failed','cancelled','canceled','awaiting_tool','awaiting_approval')),
+        (SELECT count(*) FROM local_agent_runs WHERE status NOT IN ('done','completed','succeeded','failed','cancelled','canceled','awaiting_tool','awaiting_approval')) +
+        (SELECT count(*) FROM local_chat_conversations WHERE status IN ('running','stopping')),
         (SELECT count(*) FROM cloud_agent_runs WHERE status NOT IN ('done','completed','succeeded','failed','cancelled','canceled','expired')),
-        (SELECT count(*) FROM canvas_workflows WHERE json_extract(document_json,'$.run.status') IN ('running','waiting'))",
+        (SELECT count(*) FROM canvas_workflows WHERE json_extract(document_json,'$.run.status') IN ('running','waiting') OR EXISTS (SELECT 1 FROM json_each(document_json,'$.runs') WHERE json_extract(value,'$.status') IN ('running','waiting')))",
         [],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?)))?;
-    let blockers:Vec<_> = [("生成或后台任务",tasks),("本机 Agent",local),("云端 Agent",cloud),("工作流",workflows)]
-        .into_iter().filter(|(_,count)|*count>0).map(|(name,count)|format!("{name} {count} 项")).collect();
+    Ok([("生成或后台任务",tasks),("本机 Agent",local),("云端 Agent",cloud),("工作流",workflows)]
+        .into_iter().filter(|(_,count)|*count>0).map(|(name,count)|format!("{name} {count} 项")).collect())
+}
+fn ensure_idle(conn: &Connection) -> AppResult<()> {
+    let blockers = active_work(conn)?;
     if !blockers.is_empty() { return Err(invalid(format!("暂不能迁移资料目录：{}尚未结束，请先完成或取消后重试",blockers.join("、")))); } Ok(())
 }
 fn rewrite_json(value: &mut serde_json::Value, source: &Path,target: &Path) {

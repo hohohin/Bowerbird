@@ -447,6 +447,7 @@ fn main() {
     async fn codex_cards_resume_only_their_own_session_and_duplicate_requests_never_spawn() {
         let (base, binary) = fixture();
         let (root, id, mut payload) = request(&base, "card-a", "success");
+        payload.text = "instruction 中文🙂\\\"\n".repeat(10000) + "末尾标记";
         let image = base.join("reference with spaces.png");
         image::RgbaImage::new(1, 1).save(&image).unwrap();
         payload.images.push(DeliveryImage { path: image.to_string_lossy().into_owned(), name: Some("image 1".into()) });
@@ -465,7 +466,7 @@ fn main() {
         assert!(args.contains(&"windows.sandbox=\"unelevated\"".into()));
         assert!(!args.contains(&"resume".into()));
         assert_eq!(args.last().unwrap(), "-");
-        assert!(std::fs::read_to_string(root.join("stdin.txt")).unwrap().contains("instruction"));
+        assert!(std::fs::read_to_string(root.join("stdin.txt")).unwrap().starts_with(&payload.text));
         #[cfg(windows)]
         {
             let probe: Vec<String> = serde_json::from_slice(&std::fs::read(root.join("preflight.json")).unwrap()).unwrap();

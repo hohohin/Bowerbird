@@ -13,3 +13,38 @@
 - insert:
     - id: bowerbird-html-execution-tools
       name: './plugins/bowerbird-html-execution-tools.mjs'
+
+# Use the upstream model capacity. Do not summarize user source automatically
+# to fit an application cost window. Actual usage remains metered by the parent.
+- id: llm-deepseek
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+    thinking: disabled
+    reasoningEffort: off
+    maxTokens: 393216
+    # The proxy keeps the stream alive while awaiting the durable provider result.
+    streamIdleTimeoutMs: 300000
+    models:
+      - id: deepseek-flash
+        name: DeepSeek-V4.1-Flash
+        contextWindow: 1048576
+        maxTokens: 393216
+      - id: deepseek-v4-pro
+        name: DeepSeek-V4-Pro
+        contextWindow: 1048576
+        maxTokens: 393216
+
+- id: compaction-basic
+  config:
+    auto: false
+    thresholdRatio: 0.75
+    retainRatio: 0.25
+    maxTokens: 4000
+
+# Business context has its own read_context pages. No filesystem tools are
+# exposed, so spilling or clipping a method would make its middle inaccessible.
+- id: tool-result-pruner
+  disabled: true
+
+- id: spill-policy
+  disabled: true

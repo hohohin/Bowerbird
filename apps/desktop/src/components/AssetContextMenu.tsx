@@ -1,6 +1,7 @@
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useRef, useState } from "react";
 import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
+import { GenerationGroupMenuItem } from "./GenerationGroupMenuItem";
 import { CANVAS_ARTBOARD_FROM_IMAGE } from "../lib/canvasArtboard";
 import { ContextMenu, ContextSubmenu, DeleteSubmenu } from "./ContextMenu";
 import { canSearchPinterest, requestPinterestSearch } from "../lib/pinterestSearch";
@@ -151,9 +152,12 @@ export function AssetContextMenu({ selection }: { selection?: {
   const asset = menu.asset ?? (selectionAssets?.menu === menu ? selectionAssets.assets : assets).find((a) => a.id === assetId);
   const canvasMulti = !!menu.canvasSelection && menu.canvasSelection.nodeIds.length > 1;
   const multiIds = canvasMulti ? [...new Set(menu.canvasSelection!.assetIds ?? [])]
-    : menu.fileSelection ? menu.fileSelection.assets.length > 1 ? menu.fileSelection.assets.map(asset => asset.id) : null
+    : menu.fileSelection ? (menu.fileSelection.entries?.count ?? menu.fileSelection.assets.length) > 1 ? menu.fileSelection.assets.map(asset => asset.id) : null
     : !selection && !menu.singleAsset && !menu.canvasSelection && mode === "manage" && selectedIds.size > 1 && selectedIds.has(assetId) ? [...selectedIds] : null;
   const targetIds = multiIds ?? [assetId];
+  const selectedCount = canvasMulti ? menu.canvasSelection!.nodeIds.length : menu.fileSelection?.entries?.count ?? multiIds?.length ?? 1;
+  const connectionEntries = menu.fileSelection?.entries;
+  const moveEntries = connectionEntries && <button role="menuitem" className="app-context-item" disabled={busy || !connectionEntries.available} onClick={() => { closeContextMenu(); connectionEntries.move(); }}>移动到文件夹</button>;
   const knownAssets = menu.fileSelection?.assets ?? (selectionAssets?.menu === menu ? selectionAssets.assets : assets);
   const targets = targetIds.map(id => id === assetId ? asset ?? knownAssets.find(a => a.id === id) : knownAssets.find(a => a.id === id));
   const targetsReady = targets.every((item): item is Asset => !!item);
@@ -361,6 +365,7 @@ export function AssetContextMenu({ selection }: { selection?: {
     </button>}
   </>;
   const deleteMenu = <DeleteSubmenu disabled={busy}>
+    {connectionEntries?.removeReferences && <button role="menuitem" className={itemClass} onClick={() => { closeContextMenu(); connectionEntries.removeReferences!(); }}>移出该文件夹</button>}
     {menu.ungroupCanvasFolder && !canvasMulti && <button role="menuitem" className={itemClass} onClick={() => { closeContextMenu(); menu.ungroupCanvasFolder!(); }}><Ungroup size={13} />解散素材组</button>}
     {!multiIds && menu.libraryProjectId && canChangeLibraryVisibility && !asset?.library_hidden && <button role="menuitem" className={itemClass}
       disabled={!canvasLibraryAvailable} title={canvasLibraryAvailable ? "从中央和各项目素材库列表移除，保留所有画布中的图片及原文件" : "请先将图片拖到当前画布"}
@@ -376,13 +381,13 @@ export function AssetContextMenu({ selection }: { selection?: {
       title="将这组生成图的原文件放入回收站" onClick={() => confirmDelete(groupIds)}>删除整组原文件 · {groupIds.length} 张</button>}
   </DeleteSubmenu>;
   function assign() { setAssignCollectionIds({ ids: targetIds, onComplete }); closeContextMenu(); }
-  if (multiIds) return <ContextMenu key={`${assetId}:${menu.x}:${menu.y}:multi`} x={menu.x} y={menu.y} label={`已选 ${canvasMulti ? menu.canvasSelection!.nodeIds.length : multiIds.length} 项素材的操作`}
+  if (multiIds) return <ContextMenu key={`${assetId}:${menu.x}:${menu.y}:multi`} x={menu.x} y={menu.y} label={`已选 ${selectedCount} 项素材的操作`}
     onClose={closeContextMenu} className="asset-context-menu is-multi">
     <div className="asset-context-column">
-      <div className="app-context-label">已选 {canvasMulti ? menu.canvasSelection!.nodeIds.length : multiIds.length} 项</div>
+      <div className="app-context-label">已选 {selectedCount} 项</div>
       {canvasActions}
       {canSearchPinterest(asset) && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); selection?.onNavigate?.(); requestPinterestSearch(assetId); }}>Pinterest 以图搜图</button>}
-      {targetIds.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={assign}><FolderPlus size={13} />添加到集合</button>}
+      {targetIds.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={assign}><FolderPlus size={13} />添加到文件夹</button>}{moveEntries}
       {menu.canvasSelection && targetIds.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); void exportAssetArchive(targetIds); }}><Archive size={13} />将所选内容打包</button>}
       {!projectId && projects.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { setProjectPickIds({ ids: targetIds, onComplete }); closeContextMenu(); }}><FolderTree size={13} />加入项目</button>}
       {allImages && <><div className="app-context-divider" />{describeMenu}</>}
@@ -394,6 +399,7 @@ export function AssetContextMenu({ selection }: { selection?: {
     <div className="asset-context-column">
       <div className="app-context-label">常用</div>
       {canvasActions}
+      <GenerationGroupMenuItem target={menu.generationGroup} onComplete={closeContextMenu} disabled={busy} />
       {!audio && !text && mode === "browse" && detailAssetId !== null && <button role="menuitem" className={itemClass} disabled={busy}
         onClick={() => { selection?.onNavigate?.(); addAssetToBoardFromDetail(assetId); closeContextMenu(); }}>添加到对话框</button>}
       <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); if (menu.fileSelection && !selection) useStore.setState({ mode: "browse" }); openDetail(assetId); }}>{text ? "打开文本编辑器" : audio ? "打开音频详情" : isVideoPath(storePath) ? "打开视频详情" : "打开图片详情"}</button>
@@ -401,8 +407,8 @@ export function AssetContextMenu({ selection }: { selection?: {
       {!menu.canvasSelection && (!selection || menu.fileSelection) && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
         if (menu.fileSelection) menu.fileSelection.select(); else { if (mode !== "manage") enterManage(); toggleSelect(assetId); } closeContextMenu();
       }}>{menu.fileSelection ? "选择" : mode === "manage" ? "选择/取消选择" : "选择"}</button>}
-      {storePath && <button role="menuitem" className={itemClass} disabled={busy} title={menu.fileSelection?.localPaths ? "重命名本机文件" : asset?.source === "external" ? "修改引用名称，原文件名保留" : "重命名（同步改磁盘文件名）"}
-        onClick={() => { const localPath = menu.fileSelection?.localPaths?.[assetId]; setRenameTarget({ id: assetId, name: localPath ? localPath.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "") : asset?.name ?? "", external: !localPath && asset?.source === "external", localPath }); closeContextMenu(); }}>重命名</button>}
+      {storePath && <button role="menuitem" className={itemClass} disabled={busy || connectionEntries?.available === false} title={connectionEntries ? "重命名当前文件或分身" : menu.fileSelection?.localPaths ? "重命名本机文件" : asset?.source === "external" ? "修改引用名称，原文件名保留" : "重命名（同步改磁盘文件名）"}
+        onClick={() => { if (connectionEntries) { closeContextMenu(); connectionEntries.rename(); return; } const localPath = menu.fileSelection?.localPaths?.[assetId]; setRenameTarget({ id: assetId, name: localPath ? localPath.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "") : asset?.name ?? "", external: !localPath && asset?.source === "external", localPath }); closeContextMenu(); }}>重命名</button>}
       {(allImages || isGenerated) && <><div className="app-context-divider" /><div className="app-context-label">再创作</div></>}
       {allImages && describeMenu}
       {menu.canvasSelection && canChangeLibraryVisibility && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
@@ -417,7 +423,7 @@ export function AssetContextMenu({ selection }: { selection?: {
     </div>
     <div className="asset-context-column">
       <div className="app-context-label">文件</div>
-      <button role="menuitem" className={itemClass} disabled={busy} onClick={assign}><FolderPlus size={13} />添加到集合</button>
+      <button role="menuitem" className={itemClass} disabled={busy} onClick={assign}><FolderPlus size={13} />添加到文件夹</button>{moveEntries}
       {menu.canvasSelection && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); void exportAssetArchive(targetIds); }}><Archive size={13} />将所选内容打包</button>}
       {storePath && <>
         <button role="menuitem" className={itemClass} disabled={busy} onClick={reveal}>打开所在文件夹</button>

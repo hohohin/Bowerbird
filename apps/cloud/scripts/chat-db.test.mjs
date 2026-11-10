@@ -12,7 +12,7 @@ try {
  create schema auth; create schema extensions; create table auth.users(id uuid primary key);
  create function auth.uid() returns uuid language sql as $$ select null::uuid $$;
  create function extensions.gen_random_uuid() returns uuid language sql as $$ select gen_random_uuid() $$;`);
- for (const prefix of ['0001','0002','0003','0004','0005','0006','0009','0010','0011','0015','0016','0017','0018','0019','0023','0058','0059','0061','0062','0063','0064','0065','0066','0067','0070','0077']) {
+ for (const prefix of ['0001','0002','0003','0004','0005','0006','0009','0010','0011','0015','0016','0017','0018','0019','0023','0058','0059','0061','0062','0063','0064','0065','0066','0067','0070','0077','0084']) {
    const file=fs.readdirSync(dir).find(f=>f.startsWith(prefix));
    assert.ok(file, `missing ${prefix} migration`);
    await db.exec(fs.readFileSync(`${dir}/${file}`,'utf8').replace('create extension if not exists pgcrypto with schema extensions;',''));
@@ -30,9 +30,11 @@ try {
  assert.ok(Number((await q('select reserved_cost_micros from credit_holds'))[0].reserved_cost_micros)>0);
  const claim=(await q("select * from claim_chat_completion('fixture')"))[0];
  assert.equal(claim.id,first.id);
- const result={message:{role:'assistant',content:'完成'},usage:{input_tokens:9,output_tokens:2},model:'fixture-model'};
+ const result={message:{role:'assistant',content:'长文结果🙂'.repeat(100000)},usage:{input_tokens:9,output_tokens:2},model:'fixture-model'};
  const finish=async()=>q("select * from finish_chat_completion($1,$2,'succeeded',$3,null)",[first.id,claim.lease_id,result]);
  await finish(); await finish();
+ assert.equal((await q('select result_json from chat_completion_jobs where id=$1',[first.id]))[0].result_json.message.content,result.message.content);
+ assert.equal((await q("select file_size_limit from storage.buckets where id='generation-temp'"))[0].file_size_limit,null);
  assert.equal((await q('select status,actual_amount from credit_holds'))[0].actual_amount,0);
  assert.deepEqual(await q('select kind,amount from credit_transactions'),[{kind:'confirm',amount:0}]);
  assert.deepEqual(await q('select input_tokens::int,output_tokens::int,provider_model from chat_completion_jobs where id=$1',[first.id]),[{input_tokens:9,output_tokens:2,provider_model:'fixture-model'}]);

@@ -5,6 +5,8 @@ import { catalogLayout, catalogScrollScale, masonryGeometry, masonryRatios, visi
 import type { Asset } from "../lib/types";
 import { api } from "../lib/api";
 import { CatalogAssetCard } from "./CatalogAssetCard";
+import { catalogCache, patchCatalogPage, type CatalogPreviewChange } from "../lib/catalogCache";
+import { subscribeCatalogPreviews } from "../lib/useCatalogRevision";
 
 export interface CatalogLocation { section: string; index: number; assetId?: string }
 type Page = { assets: Asset[]; groups: Record<string, Asset[]>; revision: number };
@@ -26,7 +28,10 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   const root = useRef<HTMLDivElement>(null);
   const [viewport, setViewport] = useState({ top: initialTop ?? 0, height: scroll.current?.clientHeight || 800, width: scroll.current?.clientWidth || 800 });
   const [tick, setTick] = useState(0);
-  const cache = useRef(new Map<string, Page>());
+  const pagePrefix = `pages:${JSON.stringify(filter)}:`;
+  const [pages] = useState(() => new Map(catalogCache.entries<Omit<Page, "revision">>(pagePrefix)
+    .slice(-CATALOG_CACHE_PAGES).map(([key, entry]) => [key.slice(pagePrefix.length), { ...entry.value, revision: catalogCache.fresh(entry) ? entry.revision : -1 }])));
+  const cache = useRef(pages);
   const measured = useRef(new Map<string, readonly number[]>());
   const errors = useRef(new Map<string, string>());
   const pending = useRef(new Set<string>());
@@ -73,6 +78,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   if (focusBlock && !visible.some(block => block.key === focused)) visible.push(focusBlock);
   const wanted = useRef(visible); wanted.current = visible;
   const pump = useRef<() => void>(() => {});
+  const applyPreviews = useRef<(change: CatalogPreviewChange) => void>(() => {});
   function rememberAnchor() {
     const view = scroll.current;
     if (!view || anchor.current) return;
@@ -102,8 +108,17 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
     const block = intersecting[intersecting.length - 1];
     if (block) anchor.current = { key: block.key, delta: top - block.top };
   }
+  applyPreviews.current = change => {
+    let changed = false;
+    for (const [key, page] of cache.current) {
+      const next = patchCatalogPage(page, change);
+      if (next !== page) { rememberAnchor(); cache.current.set(key, next); changed = true; }
+    }
+    if (changed) setTick(value => value + 1);
+  };
+  useEffect(() => subscribeCatalogPreviews(change => applyPreviews.current(change)), []);
   pump.current = () => {
-    if (!alive.current) return;
+    if (!alive.current || version.current !== catalogCache.revision(!!filter.color)) return;
     for (const block of wanted.current) {
       if (pending.current.size >= 3) break;
       if (pending.current.has(block.key) || errors.current.has(block.key) || cache.current.get(block.key)?.revision === version.current) continue;
@@ -111,13 +126,15 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
       const requestedRevision = version.current;
       const section = sections[block.section];
       const pageFilter = { ...filter, id: section.tagId ?? filter.id };
-      void (readPage ? readPage(section.id, block.offset, CATALOG_PAGE_SIZE) : materialCatalog.page(pageFilter, block.offset, CATALOG_PAGE_SIZE)).then(async assets => {
-        if (!alive.current || version.current !== requestedRevision) return;
-        const ids = readPage ? [] : assets.filter(asset => asset.generation_session_id).map(asset => asset.id);
+      void catalogCache.read(`${pagePrefix}${block.key}`, async () => {
+        const assets = await (readPage ? readPage(section.id, block.offset, CATALOG_PAGE_SIZE) : materialCatalog.page(pageFilter, block.offset, CATALOG_PAGE_SIZE));
+        const ids = readPage ? [] : assets.map(asset => asset.id);
         const groups = ids.length ? await api.listGenerationGroups(ids, filter.projectId, pageFilter) ?? {} : {};
-        if (!alive.current || version.current !== requestedRevision) return;
+        return { assets, groups };
+      }, !!filter.color).then(page => {
+        if (!alive.current || version.current !== requestedRevision || catalogCache.revision(!!filter.color) !== requestedRevision) return;
         rememberAnchor();
-        cache.current.delete(block.key); cache.current.set(block.key, { assets, groups, revision: requestedRevision });
+        cache.current.delete(block.key); cache.current.set(block.key, { ...page, revision: requestedRevision });
         const keep = new Set(wanted.current.map(item => item.key));
         for (const key of cache.current.keys()) {
           if (cache.current.size <= CATALOG_CACHE_PAGES) break;

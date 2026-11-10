@@ -1,6 +1,7 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { LibraryHome } from "../../../src/components/LibraryHome";
+import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { useLocalFileMode } from "../../../src/lib/localFileMode";
 import { useStore } from "../../../src/store";
@@ -11,6 +12,7 @@ import "../../../src/components/IndustrialTheme.css";
 import "../../../src/components/IndustrialMenus.css";
 
 const w = window as any, listeners = new Map<number, (event: unknown) => void>();
+const eventNames = new Map<number, string>();
 const cold = new URLSearchParams(location.search).has("cold");
 let callbackId = 0, nextId = 0;
 const thumb = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="180"><rect width="240" height="180" fill="#7b9eaa"/><path d="M0 150L90 30l100 140" stroke="#d1d7c8" fill="none" stroke-width="12"/></svg>');
@@ -23,19 +25,32 @@ function entry(id: string, folder_id: string, asset_id = id, is_reference = fals
 w.entries = [...Array.from({ length: 125 }, (_, i) => entry(`root-${i}`, "root")), entry("child-0", "child"), entry("ref-one", "child", "root-0", true), entry("ref-two", "child", "root-0", true), entry("nested-0", "nested"), entry("second-0", "second"), entry("video-0", "second", "video-0", false, true)];
 w.requests = []; w.picker = null; w.store = useStore; w.mode = useLocalFileMode; w.connections = folderConnections;
 w.previewActive = 0; w.previewPeak = 0; w.previewByPath = {}; w.previewDelay = cold ? 60 : 0;
-w.changed = () => listeners.forEach(fn => fn({ payload: null }));
-function entries(args: any) { return w.entries.filter((item: any) => (!args.folderId || item.folder_id === args.folderId) && (!args.media || (item.asset.ext === "mp4") === (args.media === "videos"))); }
+w.changed = () => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://assets-changed") fn({ payload: null }); });
+w.previewChanged = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://previews-changed") fn({ payload }); });
+w.connectionProgress = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://connection-progress") fn({ payload }); });
+function entries(args: any) {
+  const filtered = w.entries.filter((item: any) => (!args.folderId || item.folder_id === args.folderId)
+    && (!args.media || (item.asset.ext === "mp4") === (args.media === "videos"))
+    && (args.filter?.generated == null || !!item.asset.generation_session_id === args.filter.generated)
+    && (!args.filter?.color || item.color === args.filter.color));
+  if (!args.filter?.grouped) return filtered;
+  const groups = new Map<string, any[]>();
+  filtered.forEach((item: any) => { const key = item.asset.generation_session_id ? `${item.folder_id}:${item.asset.generation_session_id}` : item.id; groups.set(key, [...groups.get(key) ?? [], item]); });
+  return [...groups.values()].map(items => { const sorted = items.toSorted((a, b) => (a.asset.created_at ?? 0) - (b.asset.created_at ?? 0)); return { ...sorted.at(-1), group: sorted.length > 1 ? sorted : undefined }; });
+}
+
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 w.__TAURI_INTERNALS__ = {
   transformCallback: (fn: (event: unknown) => void) => { listeners.set(++callbackId, fn); return callbackId; },
   convertFileSrc: (path: string) => path,
   invoke: async (command: string, args: any = {}) => {
-    if (command === "plugin:event|listen") return args.handler;
-    if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return; }
+    if (command === "plugin:event|listen") { eventNames.set(args.handler, args.event); return args.handler; }
+    if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); eventNames.delete(args.eventId); return; }
     w.requests.push({ command, args });
+    if (w.catalogGate && ["folder_connections", "connection_entries"].includes(command)) await w.catalogGate;
     if (command === "folder_connections") return w.folders.map((item: any) => ({ ...item, count: entries({ ...args, folderId: item.id }).length }));
     if (command === "refresh_folder_connections") return;
-    if (command === "connection_entries") return entries(args).slice(args.offset, args.offset + args.limit);
+    if (command === "connection_entries") return structuredClone(entries(args).slice(args.offset, args.offset + args.limit));
     if (command === "connection_entry_ids") return entries(args).slice(args.offset, args.offset + args.limit).map((item: any) => item.id);
     if (command === "resolve_connection_entries") return args.ids.map((id: string) => w.entries.find((item: any) => item.id === id)).filter(Boolean);
     if (command === "plugin:dialog|open") return w.picker;
@@ -64,6 +79,8 @@ w.__TAURI_INTERNALS__ = {
     if (command === "external_files_media") return thumb;
     if (command === "catalog_overview") return { total: 1, untagged: 0, catalog: { tags: [{ id: "tag", name: "测试标签", description: "", count: 1, projectCount: 0 }], collections: [], prompts: [], tag_asset_ids: {} } };
     if (command === "catalog_page") return [asset("root-0")];
+    if (command === "list_generation_groups") return {};
+    if (command === "list_generation_group") return [];
     if (command === "catalog_prepare_colors") return { after: null, more: false, failed: 0, updated: 0 };
     throw new Error(`Unexpected IPC: ${command}`);
   },
@@ -71,7 +88,13 @@ w.__TAURI_INTERNALS__ = {
 useStore.setState({ activeProjectId: null, libraryHomeView: "library", libraryThumbnailWidth: 150 });
 useLocalFileMode.getState().setCatalogView("collections");
 document.documentElement.dataset.theme = "dark";
-createRoot(document.getElementById("root")!).render(<div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
+function Fixture() {
+  const [visible, setVisible] = React.useState(true);
+  w.setLibraryVisible = setVisible;
+  return <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
   <Toolbar localFilesOpen canvasMode={false} onCanvasModeChange={() => {}} onRefresh={async () => {}} onCreateCreative={() => {}}/>
-  <LibraryHome onCreateProject={async ids => { w.createdAssets = ids; }}/>
-</div>);
+  <AssetContextMenu/>
+  {visible && <LibraryHome onCreateProject={async ids => { w.createdAssets = ids; }}/>}
+</div>;
+}
+createRoot(document.getElementById("root")!).render(<Fixture/>);

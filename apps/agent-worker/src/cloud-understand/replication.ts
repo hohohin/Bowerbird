@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import { probeVideo } from "../cloud-generation/video.ts";
 export interface ReplicationPayload {
   operation: "video-analysis" | "text-rewrite";
-  video?: { mime: "video/mp4"; base64: string; duration: number };
+  video?: { mime: "video/mp4"; base64: string; duration: number; settings?: { fps: number; transcribe: boolean; thinking: "default" | "disabled" | "low" | "medium" | "high" } };
   rewrite?: { inputText: string; persona: string; rules: string; product: { id: string; name: string; description: string } | null };
 }
 
@@ -34,8 +34,8 @@ export function replicationMessages(input: ReplicationPayload): unknown[] {
   if (input.operation === "video-analysis") {
     if (!input.video) throw new Error("replication_video_required");
     return [{ role: "user", content: [
-      { type: "video_url", video_url: { url: `data:video/mp4;base64,${input.video.base64}`, fps: 1 } },
-      { type: "text", text: `${VIDEO_ANALYSIS_PROMPT}\n视频时长：${input.video.duration} 秒。` },
+      { type: "video_url", video_url: { url: `data:video/mp4;base64,${input.video.base64}`, fps: input.video.settings?.fps ?? 1 } },
+      { type: "text", text: `${VIDEO_ANALYSIS_PROMPT}${input.video.settings?.transcribe === false ? "\n本次关闭语音转写：不要转写音轨，【语音转写】留空，【转写状态】写 unavailable。" : ""}\n视频时长：${input.video.duration} 秒。` },
     ] }];
   }
   if (!input.rewrite) throw new Error("replication_rewrite_required");
@@ -63,6 +63,16 @@ function plainTextAnalysis(text: string): string {
 }
 
 export function validateReplicationResult(input: ReplicationPayload, text: string, finishReason: unknown): string {
+  const output = validateResult(input, text, finishReason);
+  if (input.operation !== "video-analysis" || input.video?.settings?.transcribe !== false) return output;
+  const result = JSON.parse(output);
+  result.transcript = "";
+  result.transcriptStatus = "unavailable";
+  for (const shot of result.shots ?? []) { delete shot.transcript; delete shot.transcriptStatus; }
+  return JSON.stringify(result);
+}
+
+function validateResult(input: ReplicationPayload, text: string, finishReason: unknown): string {
   if (finishReason === "length") throw new Error("replication_result_truncated");
   if (!text.trim() || text.length > 50000) throw new Error("replication_result_incomplete");
   if (input.operation === "text-rewrite") return text;

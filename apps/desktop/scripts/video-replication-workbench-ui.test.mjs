@@ -32,6 +32,11 @@ async function installMock() {
   const invoke=window.__TAURI_INTERNALS__.invoke;
   window.__TAURI_INTERNALS__.invoke=async(command,args)=>{
    if(command==='video_poster')return 'data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><rect width="320" height="180" fill="red"/></svg>');
+   if(command==='import_files') {
+    window.videoImports ??= []; window.videoImports.push(args);
+    if(window.videoImportFailure) throw Error('模拟视频入库失败');
+    return [{id:'collected-reference',name:'参考广告.mp4',ext:'mp4',width:320,height:180,duration:2,store_path:mediaPath,source:'imported'}];
+   }
    if(command!=='video_replication')return invoke(command,args);
    window.calls.push({command,args});
    const {action,data}=args;
@@ -93,11 +98,23 @@ try {
  await page.getByLabel('分析文本',{exact:true}).waitFor();
  await page.waitForFunction(()=>document.querySelector('.video-player video')?.readyState>=2);
  assert.equal(await page.evaluate(()=>window.jobs.length),0,'acquisition never submits a paid model');
+ await page.evaluate(()=>window.videoImportFailure=true);
+ await page.getByRole('button',{name:'添加视频到画板',exact:true}).click();
+ await page.getByRole('alert').waitFor();
+ assert.equal(await page.getByRole('button',{name:'添加视频到画板',exact:true}).isEnabled(),true);
+ await page.evaluate(()=>window.videoImportFailure=false);
+ await page.getByRole('button',{name:'添加视频到画板',exact:true}).click();
+ await page.getByRole('button',{name:'视频已添加到画板',exact:true}).waitFor();
+ assert.equal(await page.getByRole('button',{name:'视频已添加到画板',exact:true}).isDisabled(),true);
+ assert.deepEqual(await page.evaluate(()=>window.videoImports.at(-1)),{sources:['/.tmp/video-replication/tasks/video.mp4'],projectId:'p',collect:true});
+ assert.equal(await page.evaluate(()=>window.jobs.length),0,'adding reference does not analyze or generate');
+ console.log('PASS replication original video collection, retry, canvas insertion and no paid submission');
+
  const video=page.locator('.video-player video');
  const assertRatio=async()=>{
-  const size=await video.evaluate(v=>({ratio:v.videoWidth/v.videoHeight,screen:v.parentElement.getBoundingClientRect().toJSON(),box:v.getBoundingClientRect().toJSON()}));
-  assert.ok(Math.abs(size.box.width/size.box.height-size.ratio)<0.01,'video uses its native aspect ratio');
-  assert.ok(Math.abs(size.screen.width-size.box.width)<1 && Math.abs(size.screen.height-size.box.height)<1,'screen has no extra side bars');
+  const size=await video.evaluate(v=>({fit:getComputedStyle(v).objectFit,screen:v.parentElement.getBoundingClientRect().toJSON(),box:v.getBoundingClientRect().toJSON()}));
+  assert.equal(size.fit,'contain','complete video is fitted without cropping or stretching');
+  assert.ok(size.box.width>0 && size.box.height>0 && size.box.width<=size.screen.width+1 && size.box.height<=size.screen.height+1,'video remains within its screen; letterboxing is allowed');
  };
  await assertRatio();
  await video.evaluate(v=>{v.src='/.tmp/video-replication/tasks/portrait.mp4';v.load();});
@@ -113,7 +130,12 @@ try {
  await page.getByRole('button',{name:'重新读取 Cloud 状态'}).waitFor();
  assert.equal(await page.getByRole('button',{name:'分析视频',exact:true}).isDisabled(),true);
  await page.evaluate(()=>window.capabilityMode='enabled');await page.getByRole('button',{name:'重新读取 Cloud 状态'}).click();
+ await page.getByLabel('截帧频率',{exact:true}).selectOption('2');
+ await page.getByLabel('语音转写开关',{exact:true}).selectOption('false');
+ await page.getByLabel('思考程度',{exact:true}).selectOption('high');
  await page.getByRole('button',{name:'分析视频 · 3 积分',exact:true}).click();
+ assert.deepEqual(await page.evaluate(()=>window.jobs.at(-1).analysisSettings),{fps:2,transcribe:false,thinking:'high'});
+
  await page.getByRole('button',{name:'进行改写',exact:true}).waitFor();
  assert.equal(await page.getByLabel('语音转写',{exact:true}).inputValue(),'欢迎了解这款产品。');await page.getByLabel('语音转写',{exact:true}).scrollIntoViewIfNeeded();await page.screenshot({path:directory+'/analysis-transcript.png'});
  await page.getByLabel('分析文本',{exact:true}).fill('start: 0, end: 6.2\n用户修订分镜');
@@ -126,10 +148,12 @@ try {
  const slider=page.getByRole('slider',{name:'视频时间轴'});await slider.focus();await page.keyboard.press('Home');
  for(let i=0;i<12;i++)await page.keyboard.press('ArrowRight');
  await page.waitForFunction(()=>{const v=document.querySelector('.video-player video');return v && !v.seeking && v.currentTime>1;});
- await page.getByRole('button',{name:'添加该帧为参考图',exact:true}).click();await page.getByAltText('首帧生成参考图').waitFor();
+ await page.getByRole('button',{name:'导出帧',exact:true}).click();
+ await page.getByRole('menuitem',{name:'添加该帧为参考图',exact:true}).click();await page.getByAltText('首帧生成参考图').waitFor();
  const pixel=await page.getByAltText('首帧生成参考图').evaluate(async image=>{await image.decode();const c=document.createElement('canvas');c.width=image.naturalWidth;c.height=image.naturalHeight;const ctx=c.getContext('2d');ctx.drawImage(image,0,0);return {size:[c.width,c.height],rgba:[...ctx.getImageData(10,10,1,1).data]};});
  assert.deepEqual(pixel.size,[320,180]);assert.ok(pixel.rgba[1]>200 && pixel.rgba[0]<30);
- await page.getByRole('button',{name:'添加该帧到画板',exact:true}).click();await page.getByRole('button',{name:'已添加到画板',exact:true}).waitFor();
+ await page.getByRole('button',{name:'导出帧',exact:true}).click();
+ await page.getByRole('menuitem',{name:'添加该帧到画板',exact:true}).click();await page.getByText('已添加到画板',{exact:true}).waitFor();
  await page.getByRole('button',{name:'开始改写 · 3 积分',exact:true}).click();
  await page.getByLabel('首帧画面提示词',{exact:true}).waitFor();
  const rewrite=await page.evaluate(()=>window.calls.find(c=>c.args?.action==='create' && c.args.data.operation==='rewrite').args.data);
@@ -150,7 +174,7 @@ try {
  assert.equal(await page.getByLabel('首帧画面提示词',{exact:true}).inputValue(),'精修后的首帧画面：清晨浴室');
  await page.getByAltText('首帧生成参考图').waitFor();await page.waitForTimeout(350);await page.screenshot({path:directory+'/step4-light.png'});
  await page.evaluate(()=>document.documentElement.dataset.theme='dark');await page.waitForTimeout(250);
- assert.equal(await page.getByLabel('改写结果',{exact:true}).evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(23, 21, 21)');
+ assert.equal(await page.getByLabel('改写结果',{exact:true}).evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(24, 24, 24)');
  await page.screenshot({path:directory+'/step4-dark.png'});
  await page.setViewportSize({width:640,height:820});
  assert.equal(await page.locator('.app-modal').evaluate(el=>el.scrollWidth<=el.clientWidth),true);await page.screenshot({path:directory+'/step4-narrow.png'});

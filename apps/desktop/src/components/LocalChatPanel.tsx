@@ -41,10 +41,11 @@ function MessageText({ text }: { text: string }) {
   })}</div>;
 }
 
-export function LocalChatCard({ conversation }: { conversation: ChatSummary }) {
+export function LocalChatCard({ conversation, compact = false }: { conversation: ChatSummary; compact?: boolean }) {
   const running = localChatRunning(conversation);
+  if (compact) return <p className="local-chat-card-preview" data-local-chat-id={conversation.id} data-chat-status={conversation.status}>{localChatPreview(conversation.preview) || (running ? "正在准备回复…" : "打开详情继续对话")}</p>;
   return <div className="local-chat-card-content" data-local-chat-id={conversation.id} data-chat-status={conversation.status}>
-    <div className="local-chat-card-heading"><span><MessageCircle size={15} />对话</span><small>{CHAT_PROVIDER_LABELS[conversation.provider]}</small></div>
+    <div className="local-chat-card-heading"><span><MessageCircle size={15} />Agent</span><small>{CHAT_PROVIDER_LABELS[conversation.provider]}</small></div>
     <strong className="local-chat-card-title">{conversation.title || "新对话"}</strong>
     <p className="local-chat-card-preview">{localChatPreview(conversation.preview) || (running ? "正在准备回复…" : "打开详情继续对话")}</p>
     <div className="local-chat-card-footer"><span className={running ? "is-running" : ""}>{running && <span className="local-chat-status-dot" />}{localChatStatusLabel(conversation.status)}</span><span>{conversation.turnCount} 轮 · {timeLabel(conversation.updatedAt)}</span></div>

@@ -35,7 +35,7 @@ export interface TextDocumentSnapshot {
   path: string;
   text: string;
   version: string;
-  format: "markdown" | "text";
+  format: "markdown" | "text" | "docx";
 }
 
 export interface TextWorkspaceDocument { title: string; markdown: string }

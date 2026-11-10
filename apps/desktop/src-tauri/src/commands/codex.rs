@@ -889,6 +889,7 @@ pub async fn codex_create_image(
     let (tx, mut rx) = mpsc::channel::<Chunk>(64);
     let app_clone = app.clone();
     let job_id_for_emit = job_id.clone();
+    let turn_key_for_emit = turn_key.clone();
     tokio::spawn(async move {
         while let Some(chunk) = rx.recv().await {
             // Chunk::Submit：即梦 submit 拿到 submit_id 的瞬间 → 立即 upsert 落库（submit_id + 细粒度
@@ -949,6 +950,7 @@ pub async fn codex_create_image(
             // job_id 注入 chunk JSON 顶层（前端 c.kind/c.text 仍可用 + 新增 c.job_id 路由）。
             let mut v = serde_json::to_value(&chunk).unwrap_or(serde_json::Value::Null);
             if let serde_json::Value::Object(ref mut map) = v {
+                map.insert("turn_key".into(), turn_key_for_emit.clone().into());
                 map.insert(
                     "job_id".into(),
                     serde_json::Value::String(job_id_for_emit.clone()),
@@ -1069,6 +1071,7 @@ pub async fn codex_create_image(
             "codex://chunk",
             serde_json::json!({
                 "kind": "started",
+                "turn_key": &turn_key,
                 "job_id": &job_id,
                 "references": refs_for_meta.clone(),
                 "reference_node_ids": reference_node_ids_for_meta.clone(),
@@ -1096,9 +1099,11 @@ pub async fn codex_create_image(
         let outcome = {
             let gen_fut = async {
                 let _jimeng_permit = if matches!(provider_name.as_str(), "jimeng" | "dreamina") {
+                    crate::codex::progress::send(Some(&tx), crate::codex::progress::GenerationProgress::new(crate::codex::progress::GenerationStage::WaitingSlot)).await;
                     Some(crate::core::generation_worker::JIMENG_FLY.acquire().await
                         .map_err(|e| AppError::Other(e.to_string()))?)
                 } else { None };
+                crate::codex::progress::send(Some(&tx), crate::codex::progress::GenerationProgress::new(crate::codex::progress::GenerationStage::Submitting)).await;
                 if let Some(options) = video_options.clone() {
                     p.generate_video(req, options, &tx, provider_resume).await
                 } else {
@@ -1113,6 +1118,7 @@ pub async fn codex_create_image(
         };
         // 文件已返回后进入不可取消的短暂入库阶段，防后台入库完成覆盖取消终态。
         GENERATE_CANCEL.lock().unwrap().remove(&job_id);
+        crate::codex::progress::send(Some(&tx), crate::codex::progress::GenerationProgress::new(crate::codex::progress::GenerationStage::Saving)).await;
 
         // 簿记 session：优先请求时的会话 id（新 thread 轮也归原会话——meta/前端 sessionId/
         // 重启时间线都不裂），首轮（请求无 session）才用 provider 产出的新 id。

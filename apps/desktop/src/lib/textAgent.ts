@@ -47,26 +47,29 @@ export async function startTextAgent(input: { provider: TextAgentProvider; promp
     if (!delivery.autoDelivered) throw new Error("Codex 请求已保留，请检查本机 Codex 状态后取回原请求。");
     return localTextAgentJob(input.requestId);
   }
-  return startCloudTextAgent(input, instruction);
+  return startCloudTextRewrite({ instruction: `bowerbird:cloud-text-skill:v1\n${JSON.stringify({ id: "text-editor", instruction: input.prompt })}`,
+    source: input.source, projectId: input.projectId });
 }
-async function startCloudTextAgent(input: Parameters<typeof startTextAgent>[0], instruction: string): Promise<TextAgentJob> {
+/** Pure text work is kept in Agent history, without creating canvas sessions. */
+export async function startCloudTextRewrite(input: { instruction: string; source: string; projectId?: string }): Promise<TextAgentJob> {
+  const reason = textAgentUnavailable("cloud");
+  if (reason) throw new Error(reason);
   const userId = useStore.getState().cloudAuth?.user_id;
-  const projectId = input.projectId ?? (await api.prepareLibraryGenerationProject()).id;
-  const thread = await api.projectThreadCreate({ id: crypto.randomUUID(), projectId, title: "文档 Agent", origin: "direct" });
-  // Recheck identity/permissions after preparing the thread, before submitting a paid run.
-  const currentReason = textAgentUnavailable("cloud");
-  if (currentReason) throw new Error(currentReason);
-  if (useStore.getState().cloudAuth?.user_id !== userId) throw new Error("账号已变化，请重新确认后发送。");
-  const run = await api.cloudAgentStart({ intentPrompt: instruction, textRewrite: { source: input.source }, references: [],
-    projectId, threadId: thread.id, imageProvider: "cloud", skillId: "bowerbird-unified-agent", agentRuntime: "dsh" });
+  const assertAccount = () => { if (useStore.getState().cloudAuth?.user_id !== userId) throw new Error("账号已变化，请登录原账号后在任务中心查看原任务。"); };
+  const run = await api.cloudAgentStart({ intentPrompt: input.instruction, textRewrite: { source: input.source }, references: [],
+    projectId: input.projectId, imageProvider: "cloud", skillId: "bowerbird-unified-agent", agentRuntime: "dsh" });
+  assertAccount();
   useStore.getState().openCloudAgentRun(run, { navigate: false });
   return {
     cancel: () => enqueueCloudAgentRunOperation(run.runId, async () => {
+      assertAccount();
       const current = await api.cloudAgentCancel(run.runId);
       useStore.getState().updateCloudAgentRun(current);
     }),
     read: () => enqueueCloudAgentRunOperation(run.runId, async () => {
+      assertAccount();
       const current = await api.cloudAgentGet(run.runId);
+      assertAccount();
       if (current.runId !== run.runId) throw new Error("Agent 返回结果与本次请求不一致，未写入文档。");
       useStore.getState().updateCloudAgentRun(current);
       return cloudTextAgentResult(current);

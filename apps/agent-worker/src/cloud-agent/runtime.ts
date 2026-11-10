@@ -137,7 +137,11 @@ export async function executeClaimedAgentRun(
       if (mutable.cancelRequested) {
         await control.cancel(claimed.run.id, claimed.lease.leaseId);
       } else {
-        await control.fail(claimed.run.id, claimed.lease.leaseId, safeErrorCode(error), "Agent Run 执行失败");
+        const code = safeErrorCode(error);
+        const message = code === "deepseek_context_limit" ? "本次内容超过模型可容纳的上下文，请拆分任务后再处理。原文已保留。"
+          : code === "deepseek_output_limit" ? "模型输出达到自身上限，结果不完整。请拆分任务后再处理。"
+          : "Agent Run 执行失败";
+        await control.fail(claimed.run.id, claimed.lease.leaseId, code, message);
       }
     } catch (settlementError) {
       console.error(JSON.stringify({ event: "agent_settlement_failed", run_id: claimed.run.id, error: safeErrorCode(settlementError) }));

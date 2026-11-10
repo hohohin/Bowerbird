@@ -69,8 +69,8 @@ try {
  await page.waitForFunction(()=>window.fixtureStore);
  await page.evaluate(()=>window.openMenu('multi'));
  await page.getByRole('menu',{name:'已选 2 项素材的操作'}).waitFor();
- assert.equal(await page.getByRole('menuitem',{name:'用选中的内容新建集合',exact:true}).count(),0);
- assert.equal(await page.getByRole('menuitem',{name:'移入已有集合',exact:true}).count(),0);
+ assert.equal(await page.getByRole('menuitem',{name:'用选中的内容新建文件夹',exact:true}).count(),0);
+ assert.equal(await page.getByRole('menuitem',{name:'移入已有文件夹',exact:true}).count(),0);
  await page.getByRole('menuitem',{name:'加入项目',exact:true}).waitFor();
  assert.deepEqual(errors,[]);
  console.log('PASS virtual catalog home return, combined balance/account entry, signed-out/signed-in balance clicks, keyboard and light/dark narrow layouts');

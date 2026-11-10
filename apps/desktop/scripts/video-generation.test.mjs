@@ -5,6 +5,7 @@ import ts from "typescript";
 import { generationPromptNodeId } from "../src/lib/projectNodeIds.ts";
 import { DEFAULT_VIDEO_OPTIONS, resolveVideoOptions, videoInputError, videoRatio, isVideoPath } from "../src/lib/videoGeneration.ts";
 import { mergeRecoveredGenJobs } from "../src/lib/generationRecovery.ts";
+import { applyGenerationProgress } from "../src/lib/generationProgress.ts";
 import { canvasConversationCards } from "../src/lib/canvasConversationCards.ts";
 import { parseCreativeComposerDraft, serializeCreativeComposerDraft } from "../src/lib/creativeDraft.ts";
 const image = (name) => ({ id: name, store_path: `C:/assets/${name}.png`, duration: null });
@@ -87,7 +88,7 @@ function harness() {
     updateJob: (jobId, update) => { state.genJobs[jobId] = update(state.genJobs[jobId]); },
     resolveVideoOptions, videoInputError, videoRatio, generationPromptNodeId, isCloudProvider: value => value?.startsWith("bowerbird-cloud"),
     generationParentLocator: () => ({ storePath: "C:/assets/previous.mp4", nodeId: "parent-node" }),
-    mergeRecoveredGenJobs, taskCenterGenerationJobs: () => [],
+    mergeRecoveredGenJobs, applyGenerationProgress, taskCenterGenerationJobs: () => [],
   };
   const code = ts.transpileModule(`return { ${Object.entries(actions).map(([name, body]) => `${name}: ${body}`).join(",")} };`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   Object.assign(state, new Function(...Object.keys(bindings), code)(...Object.values(bindings)));

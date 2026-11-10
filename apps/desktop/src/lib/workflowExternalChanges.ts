@@ -25,8 +25,19 @@ export function mergeWorkflowChanges(before: CanvasWorkflow, local: CanvasWorkfl
   const localNodes = new Map(local.nodes.map(node => [node.id, node]));
   const remoteNodes = new Map(remote.nodes.map(node => [node.id, node]));
   const nodes = [...new Set([...localNodes.keys(), ...remoteNodes.keys()])].flatMap(id => {
-    const node = mergeValue(baseNodes.get(id), localNodes.get(id), remoteNodes.get(id));
-    return node ? [node] : [];
+    if (same(baseNodes.get(id)?.layoutSize, localNodes.get(id)?.layoutSize) && same(localNodes.get(id)?.layoutSize, remoteNodes.get(id)?.layoutSize)) {
+      const node = mergeValue(baseNodes.get(id), localNodes.get(id), remoteNodes.get(id));
+      return node ? [node] : [];
+    }
+    // Size measurements are display cache, not a competing edit of the workflow.
+    const withoutSize = (node: (typeof before.nodes)[number] | undefined) => {
+      if (!node) return node;
+      const { layoutSize: _, ...definition } = node;
+      return definition;
+    };
+    const node = mergeValue(withoutSize(baseNodes.get(id)), withoutSize(localNodes.get(id)), withoutSize(remoteNodes.get(id)));
+    const layoutSize = localNodes.get(id)?.layoutSize ?? remoteNodes.get(id)?.layoutSize;
+    return node ? [{ ...node, ...(layoutSize ? { layoutSize } : {}) }] : [];
   });
   const names = [...new Set([...Object.keys(before.cardNames ?? {}), ...Object.keys(local.cardNames ?? {}), ...Object.keys(remote.cardNames ?? {})])];
   const cardNames = Object.fromEntries(names.flatMap(id => {

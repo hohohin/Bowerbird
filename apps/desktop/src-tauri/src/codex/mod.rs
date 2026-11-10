@@ -17,6 +17,7 @@ pub mod jimeng;
 pub mod jimeng_video;
 pub(crate) mod jimeng_diagnostics;
 pub mod openai_api;
+pub mod progress;
 pub mod types;
 pub mod understand;
 pub(crate) mod update;

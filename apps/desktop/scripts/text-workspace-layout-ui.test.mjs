@@ -12,7 +12,7 @@ try {
  assert.equal(await page.getByRole('button',{name:'源码',exact:true}).count(),0);
  assert.equal(await page.locator('.text-workspace-library').getAttribute('aria-hidden'),'false');
  const toolbar=page.locator('.text-plate-toolbar');
- for(const name of ['返回','保存到集合','保存到项目','添加到生成对话框']) assert.equal(await toolbar.getByRole('button',{name,exact:true}).count(),1);
+ for(const name of ['返回','保存到文件夹','保存到项目','添加到生成对话框']) assert.equal(await toolbar.getByRole('button',{name,exact:true}).count(),1);
  await toolbar.getByRole('textbox',{name:'文档名称'}).fill('改名后的文档');
  const writing=page.locator('.text-workspace-writing');
  const library=await page.locator('.text-workspace-library').boundingBox();

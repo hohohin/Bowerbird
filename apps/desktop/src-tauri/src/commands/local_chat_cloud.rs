@@ -72,9 +72,6 @@ pub(super) async fn request(
         .bytes()
         .await
         .map_err(|_| error("Cloud 对话响应读取失败"))?;
-    if bytes.len() > MAX_RESPONSE {
-        return Err(error("Cloud 对话响应过大"));
-    }
     let value: Value = serde_json::from_slice(&bytes).map_err(|_| error("Cloud 对话响应无效"))?;
     if !status.is_success() {
         let message = value["error"]["message"]
@@ -108,14 +105,12 @@ pub(super) fn messages(chat: &ChatConversation, turn: &str) -> AppResult<Vec<Val
         ));
     }
     let mut messages = vec![json!({"role":"user","content":text})];
-    let mut bytes = messages[0].to_string().len();
     for old in chat.messages.iter().rev().filter(|m| {
         m.turn_id != turn && !m.text.is_empty() && matches!(m.role.as_str(), "user" | "assistant")
     }) {
         let message = json!({"role":old.role,"content":old.text});
-        bytes += message.to_string().len();
-        // Reserve space for tool replies in this bounded turn. Full history stays in SQLite.
-        if bytes > 220_000 || messages.len() >= 80 {
+        // Reserve message slots for tool replies; individual text is never clipped.
+        if messages.len() >= 80 {
             break;
         }
         messages.push(message);
@@ -252,9 +247,6 @@ pub(super) async fn run(
                     text.push_str("\n\n");
                 }
                 text.push_str(content);
-                if text.len() > MAX_RESPONSE {
-                    return Err(error("Cloud 本轮回复超过长度限制"));
-                }
                 db.update_local_chat_text(id, turn, &text)?;
                 emit(app, db, id);
             }

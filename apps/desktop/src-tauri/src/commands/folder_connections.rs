@@ -1,6 +1,6 @@
 use crate::{
     core::{
-        folder_connections::{AssetOriginal, ConnectionEntry, FolderConnection},
+        folder_connections::{AssetOriginal, ConnectionEntry, ConnectionFilter, FolderConnection},
         missing_originals::MissingOriginalSweep,
         paths::LibraryPaths,
     },
@@ -25,12 +25,22 @@ pub use watcher::watch;
 struct RefreshQueue {
     running: bool,
     all: bool,
+    scanning_all: bool,
+    last_full_scan: Option<Instant>,
     roots: HashSet<String>,
     priority: Option<String>,
     originals: bool,
     schedule: OriginalCheckSchedule,
 }
 impl RefreshQueue {
+    fn request_full_scan(&mut self, now: Instant, force: bool) -> bool {
+        if !force && (self.all || self.scanning_all
+            || self.last_full_scan.is_some_and(|last| now.duration_since(last) < Duration::from_secs(30))) {
+            return false;
+        }
+        self.all = true;
+        true
+    }
     fn has_work(&self) -> bool {
         self.all || !self.roots.is_empty() || self.originals
     }
@@ -64,6 +74,13 @@ fn changed(app: &AppHandle) {
     let _ = app.emit("library://assets-changed", ());
     let _ = app.emit("external-files://changed", ());
 }
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnectionProgress {
+    root_id: String,
+    scanning: bool,
+    error: Option<String>,
+}
 pub(super) async fn mutation<T: Send + 'static>(
     app: AppHandle,
     work: impl FnOnce() -> AppResult<T> + Send + 'static,
@@ -79,7 +96,7 @@ pub(super) async fn mutation<T: Send + 'static>(
     value
 }
 fn refresh(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>, folder: Option<String>) {
-    queue_refresh(app, db, paths, None, folder);
+    queue_refresh(app, db, paths, None, folder, true);
 }
 fn request_originals_check(
     app: AppHandle,
@@ -100,12 +117,13 @@ fn queue_refresh(
     paths: Arc<LibraryPaths>,
     roots: Option<HashSet<String>>,
     priority: Option<String>,
+    force: bool,
 ) {
     let mut queue = REFRESH.lock().unwrap();
     if let Some(roots) = roots {
         queue.roots.extend(roots);
-    } else {
-        queue.all = true;
+    } else if !queue.request_full_scan(Instant::now(), force) {
+        return;
     }
     if priority.is_some() {
         queue.priority = priority;
@@ -147,19 +165,31 @@ fn scan_requested_roots(
     ids.sort_by_key(|id| Some(id) != priority_root.as_ref());
     let mut last = Instant::now() - Duration::from_secs(1);
     for id in ids {
-        let value = db.scan_connection_prioritized(paths, &id, priority, || {
-            if last.elapsed() >= Duration::from_millis(500) {
+        let started = Instant::now();
+        let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id.clone(), scanning: true, error: None });
+        let mut dirty = false;
+        let mut notifications = 0;
+        let value = db.scan_connection_changes(paths, &id, priority, |changed_data| {
+            dirty |= changed_data;
+            if dirty && last.elapsed() >= Duration::from_millis(500) {
                 changed(app);
+                notifications += 1;
+                dirty = false;
                 last = Instant::now();
             }
         });
+        // Flush changes even when a later directory failed. Progress alone never
+        // invalidates pages or forces the expensive catalog counts to run again.
+        if dirty { changed(app); notifications += 1; }
+        let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id, scanning: false, error: value.as_ref().err().map(ToString::to_string) });
+        tracing::debug!(elapsed_ms = started.elapsed().as_millis(), notifications, "connection scan completed");
         if let Err(error) = value {
-            tracing::warn!("connection scan {id}: {error}");
+            tracing::warn!("connection scan: {error}");
         }
     }
     Ok(())
 }
-fn finish_refresh(app: &AppHandle, scanned_roots: bool, originals: bool, result: AppResult<bool>) {
+fn finish_refresh(app: &AppHandle, originals: bool, result: AppResult<bool>) {
     let originals_changed = match result {
         Ok(changed) => changed,
         Err(error) => {
@@ -170,8 +200,8 @@ fn finish_refresh(app: &AppHandle, scanned_roots: bool, originals: bool, result:
             false
         }
     };
-    // A failed originals check must not swallow the final directory refresh.
-    if scanned_roots || originals_changed {
+    // Directory scans publish actual changes themselves, including before errors.
+    if originals_changed {
         changed(app);
     }
 }
@@ -192,6 +222,7 @@ fn start_refresh(
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             let (all, requested, priority, originals) = {
                 let mut queue = REFRESH.lock().unwrap();
+                queue.scanning_all = queue.all;
                 (
                     std::mem::take(&mut queue.all),
                     std::mem::take(&mut queue.roots),
@@ -215,9 +246,13 @@ fn start_refresh(
                 .await
                 .map_err(|error| AppError::Other(format!("connection refresh worker: {error}")))
                 .and_then(|value| value);
-                finish_refresh(&app, scanned_roots, originals, result);
+                if all && result.is_ok() {
+                    REFRESH.lock().unwrap().last_full_scan = Some(Instant::now());
+                }
+                finish_refresh(&app, originals, result);
             }
             let mut queue = REFRESH.lock().unwrap();
+            queue.scanning_all = false;
             if queue.has_work() {
                 continue;
             }
@@ -231,10 +266,16 @@ pub async fn folder_connections(
     db: State<'_, Arc<Database>>,
     project_id: Option<String>,
     media: Option<String>,
+    filter: Option<ConnectionFilter>,
 ) -> AppResult<Vec<FolderConnection>> {
     let db = db.inner().clone();
+    let requested = Instant::now();
     tauri::async_runtime::spawn_blocking(move || {
-        db.connection_folders(project_id.as_deref(), media.as_deref())
+        let queue_ms = requested.elapsed().as_millis();
+        let started = Instant::now();
+        let result = db.connection_folders_filtered(project_id.as_deref(), media.as_deref(), &filter.unwrap_or_default());
+        tracing::debug!(queue_ms, read_ms = started.elapsed().as_millis(), folders = result.as_ref().map_or(0, Vec::len), "catalog folder overview");
+        result
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))?
@@ -249,15 +290,19 @@ pub async fn connect_folder(
 ) -> AppResult<String> {
     let database = db.inner().clone();
     let source = PathBuf::from(path);
-    let id = mutation(app.clone(), move || {
-        database.connect_directory(&source, project_id.as_deref())
+    let (id, root_id) = mutation(app.clone(), move || {
+        let id = database.connect_directory(&source, project_id.as_deref())?;
+        let root = database.connected_folder(&id)?.root_id;
+        Ok((id, root))
     })
     .await?;
-    refresh(
+    queue_refresh(
         app,
         db.inner().clone(),
         paths.inner().clone(),
+        Some(HashSet::from([root_id])),
         Some(id.clone()),
+        true,
     );
     Ok(id)
 }
@@ -267,19 +312,35 @@ pub async fn refresh_folder_connections(
     db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
     folder_id: Option<String>,
+    force: Option<bool>,
 ) -> AppResult<()> {
-    refresh(app, db.inner().clone(), paths.inner().clone(), folder_id);
+    queue_refresh(app, db.inner().clone(), paths.inner().clone(), None, folder_id, force.unwrap_or(true));
     Ok(())
 }
+#[derive(Default)]
+struct CatalogFileGrants(Mutex<HashSet<(String, String)>>);
 fn allow_entries(app: &AppHandle, entries: &[ConnectionEntry]) -> AppResult<()> {
-    for entry in entries {
+    if app.try_state::<CatalogFileGrants>().is_none() { app.manage(CatalogFileGrants::default()); }
+    let grants = app.state::<CatalogFileGrants>();
+    let mut granted = grants.0.lock().unwrap();
+    let mut pending: Vec<_> = entries.iter().collect();
+    while let Some(entry) = pending.pop() {
+        pending.extend(&entry.group);
         for path in [&entry.asset.store_path, &entry.asset.thumb_path]
             .into_iter()
             .flatten()
         {
+            // Tauri canonicalizes on every allow_file, even for an existing rule.
+            // Cache only successful, versioned grants in this application session.
+            let key = entry.version.as_ref().map(|version| (path.clone(), version.clone()));
+            if key.as_ref().is_some_and(|key| granted.contains(key)) { continue; }
             app.asset_protocol_scope()
                 .allow_file(path)
                 .map_err(|e| AppError::Other(e.to_string()))?;
+            if let Some(key) = key {
+                if granted.len() >= 16_384 { granted.clear(); }
+                granted.insert(key);
+            }
         }
     }
     Ok(())
@@ -292,22 +353,37 @@ pub async fn connection_entries(
     offset: i64,
     limit: i64,
     media: Option<String>,
+    filter: Option<ConnectionFilter>,
     project_id: Option<String>,
 ) -> AppResult<Vec<ConnectionEntry>> {
     let db = db.inner().clone();
+    let requested = Instant::now();
     let values = tauri::async_runtime::spawn_blocking(move || {
-        let ids = db.connection_entry_ids(
+        let queue_ms = requested.elapsed().as_millis();
+        let started = Instant::now();
+        let filter = filter.unwrap_or_default();
+        let ids = db.connection_entry_ids_filtered(
             Some(&folder_id),
             project_id.as_deref(),
             media.as_deref(),
             offset,
             limit.min(240),
+            &filter,
         )?;
-        db.resolve_connection_entries(&ids)
+        let ids_ms = started.elapsed().as_millis();
+        let hydrate = Instant::now();
+        let mut entries = db.read_connection_entries(&ids)?;
+        let hydrate_ms = hydrate.elapsed().as_millis();
+        let groups = Instant::now();
+        db.connection_entry_groups(&mut entries, project_id.as_deref(), media.as_deref(), &filter)?;
+        tracing::debug!(queue_ms, ids_ms, hydrate_ms, groups_ms = groups.elapsed().as_millis(), count = entries.len(), "catalog folder page");
+        Ok::<_, AppError>(entries)
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
+    let permissions = Instant::now();
     allow_entries(&app, &values)?;
+    tracing::debug!(permissions_ms = permissions.elapsed().as_millis(), total_ms = requested.elapsed().as_millis(), "catalog folder page returned");
     Ok(values)
 }
 #[tauri::command]
@@ -315,18 +391,20 @@ pub async fn connection_entry_ids(
     db: State<'_, Arc<Database>>,
     folder_id: Option<String>,
     media: Option<String>,
+    filter: Option<ConnectionFilter>,
     project_id: Option<String>,
     offset: Option<i64>,
     limit: Option<i64>,
 ) -> AppResult<Vec<String>> {
     let db = db.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        db.connection_entry_ids(
+        db.connection_entry_ids_filtered(
             folder_id.as_deref(),
             project_id.as_deref(),
             media.as_deref(),
             offset.unwrap_or(0),
             limit.unwrap_or(2000),
+            &filter.unwrap_or_default(),
         )
     })
     .await
@@ -510,6 +588,23 @@ pub async fn remove_connection_references(
 #[cfg(test)]
 mod maintenance_tests {
     use super::*;
+
+    #[test]
+    fn automatic_full_scans_share_pending_work_and_cooldown_but_manual_refresh_bypasses() {
+        let now = Instant::now();
+        let mut queue = RefreshQueue::default();
+        assert!(queue.request_full_scan(now, false));
+        assert!(!queue.request_full_scan(now, false));
+        queue.all = false;
+        queue.scanning_all = true;
+        assert!(!queue.request_full_scan(now + Duration::from_secs(60), false));
+        queue.scanning_all = false;
+        queue.last_full_scan = Some(now);
+        assert!(!queue.request_full_scan(now + Duration::from_secs(29), false));
+        assert!(queue.request_full_scan(now + Duration::from_secs(30), false));
+        queue.all = false;
+        assert!(queue.request_full_scan(now + Duration::from_secs(1), true));
+    }
 
     #[test]
     fn checks_on_startup_without_roots_then_waits_between_healthy_sweeps() {

@@ -16,11 +16,11 @@ export function useProjectDeletion(close: () => void = () => {}) {
   }
 
   return { busy, prepareDelete, confirmation: target && <ProjectDeleteDialog key={target.id} target={target}
-    onClose={() => setTarget(null)} onConfirm={async (impact, physical, discard) => {
+    onClose={() => setTarget(null)} onConfirm={async (impact, physical) => {
       setBusy(true);
       try {
         const result = await deleteProjectCanvas(target.id, physical ? "delete_exclusive" : "keep",
-          impact?.physical.confirmation ?? "", discard ? impact?.pending_agent_results?.map(item => item.run_id) : undefined);
+          impact?.physical.confirmation ?? "");
         if (result?.cleanup_pending.length) {
           notifyError("项目已删除，部分文件清理尚未完成；重启应用后会重试。", "文件清理未完成");
         } else {

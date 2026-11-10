@@ -6,6 +6,11 @@
 .workflow-card button { display:inline-flex; align-items:center; justify-content:center; gap:4px; }
 .workflow-card button:disabled { opacity:.4; cursor:not-allowed; }
 .workflow-card-body { padding:12px 16px; }
+.workflow-agent-chat-controls { display:flex; flex-wrap:wrap; align-items:center; gap:6px; margin-bottom:8px; }
+.workflow-agent-chat-controls > * { min-width:0; }
+.workflow-agent-chat-controls .chat-codex-options { flex:1 1 100%; flex-wrap:nowrap; }
+.workflow-agent-chat-controls .chat-codex-options > .tactical-select-trigger { flex:1; width:0; max-width:none; }
+.workflow-card .local-chat-card-preview { white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
 .workflow-card.is-generation > header strong { display:flex; align-items:center; }
 /* Keep sockets at the existing wire anchors while placing their labels outside the editor. */
 .workflow-card.is-generation > .workflow-port.is-input { flex-direction:row-reverse; transform:translateX(calc(-100% + 13px)); }

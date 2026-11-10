@@ -41,9 +41,9 @@ try {
   assert.equal(await editor.evaluate(element => document.activeElement === element), true, 'reverse Tab stays inside the modal');
   await page.keyboard.press('Tab');
   assert.equal(await button('返回').evaluate(element => document.activeElement === element), true, 'last control wraps to first');
-  await button('保存到集合').click();
+  await button('保存到文件夹').click();
   await page.keyboard.press('Escape');
-  assert.equal(await page.getByRole('group', { name: '选择集合' }).count(), 0, 'Escape dismisses only the top menu');
+  assert.equal(await page.getByRole('group', { name: '选择文件夹' }).count(), 0, 'Escape dismisses only the top menu');
   assert.equal(await editor.count(), 1);
   await chooseMedia('视频'); await card('video1').waitFor();
   await chooseMedia('音频'); await card('audio1').waitFor();
@@ -186,9 +186,9 @@ try {
   let markdown = await source.inputValue();
   assert.ok(markdown.indexOf('data-bowerbird-asset="img1"') < markdown.indexOf('桌面上'), 'delayed image must insert at original caret');
   assert.equal((markdown.match(/data-bowerbird-asset/g) || []).length, 1);
-  await button('保存到集合').click(); await button('创作笔记').click();
+  await button('保存到文件夹').click(); await button('创作笔记').click();
   await page.getByRole('status').filter({ hasText: '已保存到' }).waitFor();
-  await button('保存到集合').click(); await button('创作笔记').click();
+  await button('保存到文件夹').click(); await button('创作笔记').click();
   let calls = await page.evaluate(() => window.calls.filter(call => call.command === 'create_text_document'));
   assert.equal(calls[0].args.input.destination.folderId, 'f');
   assert.equal(calls[0].args.input.requestId, calls[1].args.input.requestId, 'unchanged repeat save uses same idempotency identity');
@@ -207,12 +207,12 @@ try {
   assert.equal(calls[3].args.input.destination.projectId, 'p');
   await page.evaluate(() => { window.saveError = true; window.saveDelay = 250; });
   await source.fill('# 关闭后重试\n');
-  await button('保存到集合').click(); await button('创作笔记').click();
+  await button('保存到文件夹').click(); await button('创作笔记').click();
   await button('返回').click();
   await page.waitForTimeout(300);
   await button('放大编辑').click(); await button('源码').click();
   await page.evaluate(() => { window.saveError = false; window.saveDelay = 0; });
-  await button('保存到集合').click(); await button('创作笔记').click();
+  await button('保存到文件夹').click(); await button('创作笔记').click();
   await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
   calls = await page.evaluate(() => window.calls.filter(call => call.command === 'create_text_document'));
   assert.equal(calls[calls.length - 2].args.input.requestId, calls[calls.length - 1].args.input.requestId, 'failed save keeps identity across close/reopen');
@@ -241,13 +241,13 @@ try {
   await page.waitForTimeout(300); await button('放大编辑').click();
   assert.equal(await page.getByRole('alert').count(), 0, 'closed-session failure does not leak into a reopened editor');
   await button('源码').click(); await source.fill('# 重载后重试\n');
-  await button('保存到集合').click(); await button('创作笔记').click();
+  await button('保存到文件夹').click(); await button('创作笔记').click();
   await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
   const reloadRequestId = await page.evaluate(() => window.calls.filter(call => call.command === 'create_text_document').at(-1).args.input.requestId);
   if (coverage) { coverageChunks.push(...await page.coverage.stopJSCoverage()); await page.coverage.startJSCoverage({ resetOnNavigation: false }); }
   await page.reload(); await editor.waitFor();
   await button('源码').click(); await source.fill('# 重载后重试\n');
-  await button('保存到集合').click(); await button('创作笔记').click();
+  await button('保存到文件夹').click(); await button('创作笔记').click();
   await page.getByRole('status').filter({ hasText: '已保存' }).waitFor();
   assert.equal(await page.evaluate(() => window.calls.find(call => call.command === 'create_text_document').args.input.requestId), reloadRequestId, 'same snapshot retains retry identity across page reload');
   await source.fill(markdown);

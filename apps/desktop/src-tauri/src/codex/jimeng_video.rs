@@ -163,7 +163,7 @@ pub(crate) fn preflight(req: &CodexRequest, options: &VideoOptions) -> AppResult
     Ok(())
 }
 
-fn response(stdout: &[u8]) -> AppResult<serde_json::Value> {
+pub(super) fn response(stdout: &[u8]) -> AppResult<serde_json::Value> {
     let text = String::from_utf8_lossy(stdout);
     let start = text
         .find('{')
@@ -260,7 +260,7 @@ pub(crate) async fn generate(
     })
     .await
     .map_err(|_| AppError::Jimeng("视频任务状态通道已关闭".into()))?;
-    let (source_images, temp_dir) = poll_video(binary, &submit_id).await?;
+    let (source_images, temp_dir) = poll_video_progress(binary, &submit_id, Some(tx)).await?;
     Ok(GenOutcome {
         text: format!("[即梦 {}] 已生成 {} 个视频", options.model_version, source_images.len()),
         session_id: resume_session.or_else(|| Some(submit_id.clone())),
@@ -297,18 +297,28 @@ fn retryable_query_error(error: &AppError) -> bool {
 }
 
 /// querying 持续等待，临时查询错误有限重试；外层取消会 drop 子进程及等待。
+#[cfg(test)]
 pub(crate) async fn poll_video(
     binary: &str,
     submit_id: &str,
 ) -> AppResult<(Vec<PathBuf>, PathBuf)> {
-    poll_video_with_interval(binary, submit_id, Duration::from_secs(10)).await
+    poll_video_progress(binary, submit_id, None).await
 }
 
+pub(crate) async fn poll_video_progress(binary: &str, submit_id: &str, tx: Option<&mpsc::Sender<Chunk>>) -> AppResult<(Vec<PathBuf>, PathBuf)> {
+    poll_video_with_progress(binary, submit_id, Duration::from_secs(10), tx).await
+}
+
+#[cfg(test)]
 async fn poll_video_with_interval(
     binary: &str,
     submit_id: &str,
     interval: Duration,
 ) -> AppResult<(Vec<PathBuf>, PathBuf)> {
+    poll_video_with_progress(binary, submit_id, interval, None).await
+}
+
+async fn poll_video_with_progress(binary: &str, submit_id: &str, interval: Duration, tx: Option<&mpsc::Sender<Chunk>>) -> AppResult<(Vec<PathBuf>, PathBuf)> {
     let mut dir =
         DownloadDir(std::env::temp_dir().join(format!("bowerbird-video-{}", Ulid::new())));
     std::fs::create_dir_all(&dir.0)?;
@@ -343,6 +353,9 @@ async fn poll_video_with_interval(
             }
             Err(error) => return Err(error),
         };
+        if let Some(progress) = super::progress::GenerationProgress::dreamina(&value) {
+            super::progress::send(tx, progress).await;
+        }
         match value.get("gen_status").and_then(|v| v.as_str()) {
             Some("querying") => tokio::time::sleep(interval).await,
             Some("success") => {
@@ -607,6 +620,15 @@ mod tests {
         assert!(poll_video(binary, "failed").await.unwrap_err().to_string().contains("VIP required"));
         assert!(poll_video(binary, "unknown").await.unwrap_err().to_string().contains("未知状态"));
         assert!(tokio::time::timeout(Duration::from_millis(500), poll_video(binary, "pending")).await.is_err());
+        // Both adapters forward queue metadata from the same real subprocess contract.
+        let (progress_tx, mut progress_rx) = mpsc::channel(8);
+        assert!(tokio::time::timeout(Duration::from_millis(500), poll_video_progress(binary, "queued", Some(&progress_tx))).await.is_err());
+        assert!(matches!(progress_rx.try_recv().unwrap(), Chunk::Progress { progress }
+            if progress.stage == super::super::progress::GenerationStage::Queued && progress.queue_position == Some(3) && progress.queue_length == Some(9)));
+        let image_query = super::super::jimeng::query_and_download(binary, "queued", &dir.0, Some(&progress_tx)).await;
+        assert!(image_query.is_err(), "pending image query has no files yet");
+        assert!(matches!(progress_rx.try_recv().unwrap(), Chunk::Progress { progress }
+            if progress.stage == super::super::progress::GenerationStage::Queued && progress.queue_position == Some(3)));
         // Three transient failures on either side of a valid querying response reset the budget.
         let (restored, root) = poll_video_with_interval(binary, "transient", Duration::from_millis(1)).await.unwrap();
         assert_eq!(restored.len(), 1);

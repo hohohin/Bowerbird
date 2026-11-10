@@ -76,7 +76,16 @@ function VisualFileMediaCard({ entry, selected, revision, labels, onSelect, onAc
   useEffect(() => {
     if (entry.directory) return;
     const cached = (`${previewKey}:${entry.preview}` !== failedPreview ? entry.preview : null) ?? previews.peek(previewKey);
-    if (cached) { previews.remember(previewKey, cached); setPreview(cached); return; }
+    if (cached) {
+      previews.remember(previewKey, cached); setPreview(cached);
+      // A rendered thumbnail may precede its persisted metadata. A warm request
+      // lets the native queue resume that work after a prior failure/restart.
+      if (!entry.preview) {
+        const request = previews.request(previewKey, entry.path, 1, () => {});
+        return () => request.cancel();
+      }
+      return;
+    }
     let alive = true; let priority = 1;
     let request: ReturnType<typeof previews.request> | undefined;
     setPreview(null);

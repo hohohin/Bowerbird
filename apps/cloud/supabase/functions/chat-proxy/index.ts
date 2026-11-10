@@ -168,9 +168,6 @@ Deno.serve(async (request: Request) => {
     }
     const { user, admin } = await requireUser(request);
     const body = await request.text();
-    if (new TextEncoder().encode(body).length > 320_000) {
-      throw new ApiError("payload_too_large", "对话上下文过长，请新建对话");
-    }
     const raw = JSON.parse(body) as Record<string, unknown>;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
       throw new ApiError("invalid_request", "请求格式无效");

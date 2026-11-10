@@ -49,6 +49,7 @@ export function Lightbox({
   }, []);
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (e.target instanceof Element && e.target.closest('[role="combobox"][aria-expanded="true"], [role="listbox"], [role="menu"], [aria-haspopup="menu"][aria-expanded="true"]')) return;
       if (e.key !== "Escape" && e.target instanceof Element && e.target.closest('[role="slider"], input, textarea, select')) return;
       // Video arrows belong to time seeking; previous/next media keep explicit buttons.
       if (isVideoPath(images[index]) && e.key !== "Escape") return;

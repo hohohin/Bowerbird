@@ -2,8 +2,9 @@ import { create } from "zustand";
 import type { CatalogKind } from "./materialCatalog";
 
 export type LibrarySource = "global" | "project";
-export type LibraryMedia = "images" | "videos" | "audios" | "texts";
-export type LibraryView = LibrarySource | "collections" | "tags";
+export type LibraryMedia = "all" | "images" | "videos" | "audios" | "texts";
+export const LIBRARY_VIEW_ORDER = ["collections", "project", "tags", "global"] as const;
+export type LibraryView = typeof LIBRARY_VIEW_ORDER[number];
 // "global" here is the file browser's aggregate directory, not a source tab.
 type FileMode = CatalogKind | "files" | "global";
 const projectMemoryKey = (context: string | null) => `bowerbird.libraryProject.${context ?? "home"}`;
@@ -18,11 +19,11 @@ export const createLocalFileMode = () => create<{
   contextProjectId: string | null;
   browseProjectId: string | null;
   projectPickerOpen: boolean;
-  tagMenuOpen: boolean;
+  scopeMenuOpen: boolean;
   setProjectContext: (id: string | null) => void;
   selectProject: (id: string) => void;
   setProjectPickerOpen: (open: boolean) => void;
-  setTagMenuOpen: (open: boolean) => void;
+  setScopeMenuOpen: (open: boolean) => void;
   setView: (view: LibraryView) => void;
   setTagSource: (source: LibrarySource) => void;
   media: LibraryMedia;
@@ -44,16 +45,16 @@ export const createLocalFileMode = () => create<{
   setQuery: (query: string) => void;
 }>((set, get) => ({
   open: false, query: "", source: "global", view: "global", tagSource: "global",
-  contextProjectId: null, browseProjectId: rememberedProject(null), projectPickerOpen: false, tagMenuOpen: false,
+  contextProjectId: null, browseProjectId: rememberedProject(null), projectPickerOpen: false, scopeMenuOpen: false,
   setProjectContext: contextProjectId => set(state => state.contextProjectId === contextProjectId ? state : {
-    contextProjectId, browseProjectId: rememberedProject(contextProjectId), projectPickerOpen: false, tagMenuOpen: false,
+    contextProjectId, browseProjectId: rememberedProject(contextProjectId), projectPickerOpen: false, scopeMenuOpen: false,
   }),
   selectProject: browseProjectId => {
     try { localStorage.setItem(projectMemoryKey(get().contextProjectId), browseProjectId); } catch { /* Keep browsing without storage. */ }
     set({ browseProjectId, projectPickerOpen: false, query: "" });
   },
   setProjectPickerOpen: projectPickerOpen => set({ projectPickerOpen }),
-  setTagMenuOpen: tagMenuOpen => set({ tagMenuOpen }),
+  setScopeMenuOpen: scopeMenuOpen => set({ scopeMenuOpen }),
   media: "images",
   generatedFilter: null,
   setGeneratedFilter: generatedFilter => set({ generatedFilter }),
@@ -63,7 +64,7 @@ export const createLocalFileMode = () => create<{
     const mode = view === "global" || view === "project" ? "all" : view;
     if (state.view === view) return { open: true, mode };
     const source = view === "tags" ? state.tagSource : view === "project" ? "project" : "global";
-    return { open: true, view, source, mode, query: "", projectPickerOpen: false, tagMenuOpen: view === "tags",
+    return { open: true, view, source, mode, query: "", projectPickerOpen: false, scopeMenuOpen: view === "tags" || view === "project",
       tagSource: view === "global" || view === "project" ? source : state.tagSource };
   }),
   setTagSource: source => set(state => ({ tagSource: source, projectPickerOpen: false, ...(state.view === "tags" ? { source, query: "" } : {}) })),
@@ -72,8 +73,7 @@ export const createLocalFileMode = () => create<{
   setCatalogView: view => get().setView(view === "all" ? get().source : view),
   toggleCatalog: () => {
     const state = get();
-    const views: LibraryView[] = ["global", "project", "collections", "tags"];
-    state.setView(views[(views.indexOf(state.view) + 1) % views.length]);
+    state.setView(LIBRARY_VIEW_ORDER[(LIBRARY_VIEW_ORDER.indexOf(state.view) + 1) % LIBRARY_VIEW_ORDER.length]);
   },
   closeBrowser: () => set(state => ({ mode: state.view === "global" || state.view === "project" ? "all" : state.view, query: "" })),
   openGlobal: () => get().openSource("global"),

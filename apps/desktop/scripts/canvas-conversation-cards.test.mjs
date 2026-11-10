@@ -1,9 +1,66 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { canvasConversationCards } from '../src/lib/canvasConversationCards.ts';
+import { canvasConversationCards, canvasConversationGroupTarget } from '../src/lib/canvasConversationCards.ts';
 
 const prompt = (id, job, turn, time = 1, projectId = 'p') => ({ id, projectId, kind: 'prompt', createdAt: time, hiddenAt: null, payloadJson: JSON.stringify({job_id: job, turn_key: turn}) });
 const output = (id, job, turn, time = 1) => ({...prompt(id, job, turn, time), kind: 'asset', role: 'output', assetId: id, payloadJson: JSON.stringify({execution: {job_id: job, turn_key: turn}})});
+
+test('Agent tool images stay separate even in the same provider conversation, with exact prompt aliases', () => {
+  const session = prompt('gen-prompt:agent','agent-job','turn');
+  const pictures = ['one','two'].map(id => output(`gen-output:${id}`,'agent-job','turn'));
+  const final = {...output('agent-artifact:final','',''),role:'final'};
+  for (const node of [session,...pictures,final]) node.payloadJson = JSON.stringify({...JSON.parse(node.payloadJson),workflow_generation_group:`asset:${node.id}`});
+  const result = canvasConversationCards([session,...pictures,final],{});
+  assert.equal(result.cards.size,3);
+  assert.deepEqual([...result.hiddenIds], [session.id]);
+  assert.equal(result.aliases.get(session.id),pictures[0].id);
+  for (const node of [...pictures,final]) assert.deepEqual(result.cards.get(node.id).outputs.map(item=>item.id),[node.id]);
+  const pending = canvasConversationCards([session],{});
+  assert.equal(pending.cards.has(session.id),true);
+  const routed = canvasConversationCards([session,...pictures],{},new Set(),new Set(),new Set([session.id]));
+  assert.deepEqual(routed.cards.get(session.id).allOutputs.map(node=>node.id),pictures.map(node=>node.id));
+  assert.deepEqual(canvasConversationGroupTarget(routed.cards.get(session.id)), {groupKey:'generation:agent-job'}, 'embedded galleries use conversation identity even when Agent pictures are separate');
+  assert.equal(routed.hiddenIds.size,3,'explicit content destinations retain their own presentation');
+});
+
+test('H3 outputs use their exact producer with a stable anchor, latest first and hidden/contained instances excluded', () => {
+  const video = (id, group, time) => ({...output(`workflow-comfy:${id}`, '', '', time), assetId: id, payloadJson: JSON.stringify({workflow_generation_group: group})});
+  const nodes = [video('old', 'h3', 1), video('new', 'h3', 2), video('other', 'second', 3),
+    {...video('removed','h3',4), hiddenAt:1}, video('contained','h3',5), {...video('copy','h3',6),id:'copy'}];
+  const result = canvasConversationCards(nodes, {}, new Set(), new Set(['workflow-comfy:contained']));
+  assert.equal(result.cards.size, 2);
+  assert.equal(result.cards.get('workflow-comfy:old').latest.assetId, 'new');
+  assert.deepEqual(result.cards.get('workflow-comfy:old').outputs.map(n => n.assetId), ['old','new']);
+  assert.deepEqual([...result.hiddenIds], ['workflow-comfy:new']);
+});
+
+test('workflow repeats group across independent jobs while routed content keeps its exact target', () => {
+  const first = prompt('first','job-1','turn'), next = prompt('next','job-2','turn',2);
+  for (const node of [first,next]) node.payloadJson = JSON.stringify({...JSON.parse(node.payloadJson),conversation_id:node.id,workflow_generation_group:'workflow:producer'});
+  const nodes = [first,next,output('a','job-1','turn'),output('b','job-2','turn',2)];
+  const result = canvasConversationCards(nodes,{});
+  assert.equal(result.cards.size,1);
+  assert.deepEqual(result.cards.get('first').outputs.map(n=>n.assetId),['a','b']);
+  assert.equal(result.cards.get('first').latest.id,'next');
+  const routed = canvasConversationCards(nodes,{},new Set(),new Set(),new Set(['first','next']));
+  assert.deepEqual([...routed.hiddenIds].sort(),['a','b','first','next']);
+  assert.equal(routed.cards.size,2,'explicit destinations keep separate sessions across runs');
+  assert.deepEqual(routed.cards.get('first').allOutputs.map(n=>n.assetId),['a']);
+  assert.deepEqual(routed.cards.get('next').allOutputs.map(n=>n.assetId),['b']);
+});
+
+test('workflow video, HyperFrames and Cloud Agent final galleries exclude copies, intermediates and hidden results', () => {
+  for (const prefix of ['gen-output','workflow-video','agent-artifact']) {
+    const role = prefix === 'agent-artifact' ? 'final' : 'output';
+    const media = (id,time) => ({...output(`${prefix}:${id}`,'job','turn',time),assetId:id,role,payloadJson:JSON.stringify({workflow_generation_group:`${prefix}-producer`})});
+    const nodes = [media('one',1),media('two',2),{...media('ref',3),role:'reference'}, {...media('intermediate',4),role:'intermediate'},
+      {...media('copy',5),id:'copied-node'}, {...media('hidden',6),hiddenAt:1},media('contained',7)];
+    const result = canvasConversationCards(nodes,{},new Set(),new Set([`${prefix}:contained`]));
+    assert.equal(result.cards.size,1,prefix);
+    assert.equal(result.cards.get(`${prefix}:one`).latest.assetId,'two');
+    assert.deepEqual([...result.hiddenIds],[`${prefix}:two`]);
+  }
+});
 
 test('same-second retries follow durable turn order instead of random node ids', () => {
   const nodes = [prompt('z-original','job','failed'), prompt('a-retry','job','retry')];
@@ -78,4 +135,19 @@ test('content routing hides pending and replaced workflow turns while keeping ex
   const disconnected = canvasConversationCards([...nodes, table], {});
   assert.equal(disconnected.hiddenIds.has('first'), false, 'removing routing returns uncontained history');
   assert.equal(disconnected.hiddenIds.has('next'), true, 'stored cell keeps its session after disconnect');
+});
+
+test('dissolved conversations expose every original session and picture without changing execution identities', () => {
+  const nodes = [prompt('first', 'job', 'one'), prompt('next', 'job', 'two', 2), output('a', 'job', 'one'), output('b', 'job', 'two', 2)];
+  for (const node of nodes) node.payloadJson = JSON.stringify({ ...JSON.parse(node.payloadJson), generation_group_dissolved: true });
+  const before = structuredClone(nodes);
+  const result = canvasConversationCards(nodes, { job: { conversationId: 'conversation' } });
+  assert.equal(result.cards.size, 0);
+  assert.equal(result.hiddenIds.size, 0);
+  assert.equal(result.aliases.size, 0);
+  assert.deepEqual(nodes, before);
+  for (const prefix of ['workflow-comfy', 'workflow-video', 'agent-artifact']) {
+    const media = ['one','two'].map(id => ({ ...output(`${prefix}:${id}`, '', ''), payloadJson: JSON.stringify({ workflow_generation_group: 'workflow:producer', generation_group_dissolved: true }) }));
+    assert.equal(canvasConversationCards(media, {}).hiddenIds.size, 0);
+  }
 });

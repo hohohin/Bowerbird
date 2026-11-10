@@ -46,6 +46,7 @@ fn main() {
             Some("failed") => println!(r#"{{"submit_id":"failed","gen_status":"fail","fail_reason":"VIP required","logid":"log-test-42","debug_info":{{"error_code":42}}}}"#),
             Some("unknown") => println!(r#"{{"gen_status":"unexpected"}}"#),
             Some("pending") => println!(r#"{{"gen_status":"querying"}}"#),
+            Some("queued") => println!(r#"{{"gen_status":"querying","queue_info":{{"queue_idx":3,"queue_length":9}}}}"#),
             _ => {
                 let dir = PathBuf::from(value("--download_dir").unwrap()).join("nested");
                 fs::create_dir_all(&dir).unwrap();

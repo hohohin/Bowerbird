@@ -79,6 +79,7 @@ pub mod dreamina_account;
 pub mod video_poster;
 pub mod canvas_image_preview;
 pub mod video_trim;
+pub mod video_audio;
 pub mod comfy_video;
 pub mod comfy_setup;
 mod comfy_discovery;

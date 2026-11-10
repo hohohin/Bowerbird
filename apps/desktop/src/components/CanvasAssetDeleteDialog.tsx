@@ -16,7 +16,7 @@ import { FileText, Music2 } from "lucide-react";
 
 type Target = { original: AssetOriginal; asset: Asset };
 
-/** Every view confirms the same registered originals; records and canvas instances survive. */
+/** Every view confirms the same originals; history survives while invalid canvas instances hide. */
 export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
   target: { assetIds: string[]; projectId: string | null; localPaths?: Record<string, string> };
   onClose: () => void;
@@ -95,9 +95,9 @@ export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
     <button className="app-modal-button is-danger" disabled={busy || !items?.length} onClick={() => void remove()}>{busy ? `处理中 ${progress}/${items?.length}` : failed ? "重试失败项" : actionLabel}</button>
   </>}>
     <div className="space-y-3">
-      <p className="text-sm">{onlyMissing ? "原件已不在登记位置，仅从素材库移除失效条目。标签、分析及画布资料保留。"
-        : missingCount ? "现存原文件将放入系统回收站，失效条目仅从素材库移除。标签、分析及画布资料保留。"
-          : "以下原文件将放入系统回收站，其他集合的分身和画布引用将无法访问原件。标签、分析及画布资料保留。"}</p>
+      <p className="text-sm">{onlyMissing ? "原件已不在登记位置，将清理失效条目和画板中的对应素材卡片。标签、分析及生成历史保留。"
+        : missingCount ? "现存原文件将放入系统回收站，失效条目和画板中的对应素材卡片一并清理。标签、分析及生成历史保留。"
+          : "以下原文件将放入系统回收站，并移除画板中的对应素材卡片。其他文件夹的分身将失联；标签、分析及生成历史保留。"}</p>
       {!items && !error && <p role="status" className="text-sm text-muted">正在读取原文件…</p>}
       {error && <div role="alert" className="whitespace-pre-wrap break-words text-xs text-red-400">{error}
         <button className="app-modal-button mt-2 block" disabled={busy} onClick={() => { setFailed(false); setAttempt(value => value + 1); }}>重新读取</button>
@@ -110,7 +110,7 @@ export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
             : <img src={convertFileSrc(asset.thumb_path || original.path)} alt={original.name} loading="lazy" className="h-full w-full object-contain"/>}
         </div>
         <p className="mt-2 truncate text-xs" title={original.name}>{original.name}</p>
-        {original.missing && <p className="mt-1 text-xs text-muted">原件缺失 · 仅移出素材库</p>}
+        {original.missing && <p className="mt-1 text-xs text-muted">原件缺失 · 仅清理引用</p>}
         <p className="mt-1 break-all text-xs text-muted">{original.path}</p>
       </li>)}</ul>}
     </div>
