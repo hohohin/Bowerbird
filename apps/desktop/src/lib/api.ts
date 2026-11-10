@@ -304,12 +304,14 @@ export const api = {
     fileName: string;
     projectId?: string | null;
     annotationJson: string;
+    overwrite?: { assetId: string; sourceHash: string };
   }) =>
     invoke<Asset>("save_annotated_image", {
       dataUrl: req.dataUrl,
       fileName: req.fileName,
       projectId: req.projectId ?? null,
       annotationJson: req.annotationJson,
+      overwrite: req.overwrite ?? null,
     }),
   // 图片标注「插入创作板（不入库）」：落 <库根>/annotations/ 临时文件 + sidecar（name/ext/
   // annotation），返回 Asset 形对象（无 DB 行）；sidecar 供 generation_history 反查兜底合成，

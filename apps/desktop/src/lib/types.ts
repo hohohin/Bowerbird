@@ -382,6 +382,10 @@ export interface AnnotationMeta {
   image: { width: number; height: number };
   /** 裁剪/旋转/镜像过程（无变换时缺省）；供追溯与未来重编辑。 */
   transform?: AnnotationTransformOp[];
+  /** 覆盖时由本机保存层追加；各次操作独立保留在 analyses。 */
+  save_mode?: "overwrite";
+  source_sha256?: string;
+  output_sha256?: string;
   shapes: AnnotationShape[];
 }
 

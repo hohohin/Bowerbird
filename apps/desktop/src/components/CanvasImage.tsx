@@ -32,21 +32,24 @@ export const CanvasImage = memo(function CanvasImage({ path, thumbPath, sourceWi
   const fallback = canvasAssetMediaPath({ storePath: path ?? null, thumbPath: thumbPath ?? null });
   const size = path ? canvasImagePreviewSize(path, Math.max(width, height) * zoom,
     Math.max(sourceWidth ?? 0, sourceHeight ?? 0)) : null;
-  const [loaded, setLoaded] = useState<{ path: string; size: number; preview: string }>();
+  const version = thumbPath ?? "";
+  const [loaded, setLoaded] = useState<{ path: string; size: number; preview: string; version: string }>();
   const [failed, setFailed] = useState<string>();
   useEffect(() => {
     if (!visible || !path || size === null || width <= 0 || height <= 0) return;
     let current = true;
-    const request = requestCanvasImagePreview(path, size);
-    void request.promise.then(preview => { if (current && preview) setLoaded({ path, size, preview }); });
+    const request = requestCanvasImagePreview(path, size, version);
+    void request.promise.then(preview => { if (current && preview) setLoaded({ path, size, preview, version }); });
     return () => { current = false; request.release(); };
-  }, [visible, path, size, width > 0, height > 0]);
+  }, [visible, path, size, version, width > 0, height > 0]);
   // Intrinsic dimensions remain available while a resource is offscreen or queued.
   const placeholder = `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${sourceWidth || 160}" height="${sourceHeight || 100}"/>`)}`;
-  const preview = loaded && loaded.path === path ? loaded.preview : null;
+  const preview = loaded && loaded.path === path && loaded.version === version ? loaded.preview : null;
   const selected = visible ? size === null ? fallback : preview : null;
   const source = selected && failed === selected ? fallback : selected;
-  return <img {...props} ref={ref} decoding="async" src={source ? /^(data:|blob:|https?:)/i.test(source) ? source : convertFileSrc(source) : placeholder}
+  const src = source ? /^(data:|blob:|https?:)/i.test(source) ? source
+    : convertFileSrc(source) + (source === path && version ? `?revision=${encodeURIComponent(version)}` : "") : placeholder;
+  return <img {...props} ref={ref} decoding="async" src={src}
     data-canvas-media-loaded={!!source} onError={event => {
       if (source && source !== fallback) setFailed(source);
       else onError?.(event);

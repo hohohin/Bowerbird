@@ -25,6 +25,9 @@ use crate::error::AppError;
 mod video_frame;
 use video_frame::VideoFrameOrigin;
 
+#[path = "library_annotation.rs"]
+mod annotation;
+
 /// 「在全局素材中隐藏项目素材」：仅全局视图（project_id = None）生效——项目视图本来就只显示项目素材。
 /// 开关来自设置面板（settings.json），命令层每次现读，改设置后无需重启即生效。
 fn hide_in_global(settings: &SettingsState, project_id: &Option<String>) -> bool {
@@ -306,8 +309,16 @@ pub async fn save_annotated_image(
     file_name: String,
     project_id: Option<String>,
     annotation_json: String,
+    overwrite: Option<annotation::Overwrite>,
 ) -> Result<Asset, AppError> {
     let bytes = decode_data_url_bytes(&data_url)?;
+    if let Some(request) = overwrite {
+        let paths = paths.inner().clone();
+        let db = db.inner().clone();
+        let asset = super::folder_connections::mutation(app.clone(), move || annotation::overwrite(&paths, &db, &request, &bytes, &annotation_json)).await?;
+        let _ = app.emit("analyses://changed", serde_json::json!({ "asset_id": asset.id, "kind": "annotation" }));
+        return Ok(asset);
+    }
     let paths = Arc::new(paths.for_project(&db, project_id.as_deref())?);
     let db = db.inner().clone();
     let db_for_ingest = db.clone();
