@@ -9,6 +9,8 @@
 
 ## 让新界面沿用主题、按钮和字段
 
+角色声音的 `VoiceReferenceTrim` 与视频共享 `MediaTrimTimeline` 的双端手柄、遮罩、时间输入、键盘和长按细调；支持 children 放入真实 AudioWaveform，minGap／maxLength 限制声音选区 1–30 秒。`VideoTrimTimeline` 保留兼容导出，默认胶片与视频范围不变。播放器仍使用 audioPreview 单例；裁剪片段变化与原声结束会同步停止试听。声音主界面使用 ModalShell，列表与结果分区滚动，草稿按项目保留。见 [角色声音](../VOICE-STUDIO.md)。
+
 H3 卡片的独立优化入口复用 [ComfyVideoCard.tsx](../../apps/desktop/src/components/ComfyVideoCard.tsx) 和 [ProviderQuota.tsx](../../apps/desktop/src/components/creation/ProviderQuota.tsx)：按钮旁标记 Cloud 积分，原本机生成额度标记保留。`onOptimize` 仅提交文字优化；结果以折叠原文／建议对照展示，`onChange` 只在用户选用后填回可编辑提示词，不自动运行卡片。运行记录从 `CanvasWorkflowLayer` 传入；不另建生成弹窗或全局开关。
 
 - **用途／关键词：** 深浅色、tokens、工程蓝、button、input、Tailwind。

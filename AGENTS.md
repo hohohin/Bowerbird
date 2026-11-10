@@ -50,6 +50,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 | `spikes/video-replication-demo/README.md` | 应用外复刻 Demo 的启动、豆包语音、Codex 分镜、本机即梦订阅、零视频输入与字幕合成恢复 | 接续抖音→转写及视觉分析→替换分镜文本／图片→生成合成的独立路径验证前必读 |
 | `dev-doc/FILMCRAFT-RESEARCH.md` | FilmCraft 剪辑交互、时间线、变速、音频波形源码调研及 Bowerbird 轻剪辑建议（未定案） | 轻量视频剪辑方案、时间模型、波形缓存或 FilmCraft 复用评估前读 |
 | `dev-doc/AUDIO-LIBRARY.md` | 音频素材原位连接、流式波形缓存、共享播放器、正式组件与隔离验证 | 音频收集、波形、试听交互或音频格式支持相关工作前必读 |
+| `dev-doc/VOICE-STUDIO.md` | 本机 VoxCPM2 声音克隆、角色参考、文字设计、任务恢复及环境验证 | 角色声音、语音生成、声音克隆或 VoxCPM 本机接入前必读 |
 | `dev-doc/TEXT-LIBRARY.md` | 文本原位连接、Plate 正文／源码、媒资引用、冲突保存及验证边界 | 文本文件支持、文档编辑、Markdown 转换或原件保存相关工作前必读 |
 | `dev-doc/COMFYUI-LOCAL-VIDEO.md` | 本机 ComfyUI H3 视频卡片、环境检测与一键安装、固定工作流参数、账号门控、任务恢复与隔离验证 | 本机 H3 视频、首尾帧或 ComfyUI 接入/安装相关工作前必读 |
 | `dev-doc/Eagle类创意收集工具调查报告.html` | 前序竞品调研，计划的依据 | 需要背景/对标时 |

@@ -1,0 +1,50 @@
+[
+  {
+    "file": "uv.whl",
+    "size": 15330939,
+    "url": "https://files.pythonhosted.org/packages/8e/4f/041b59d2a38807a3e31ef41064cf3e45d2752fe0409d89040d52778049ae/uv-0.13.7-py3-none-win_amd64.whl",
+    "sha256": "2835e2ab397d0db86323b9975dce75ecd76aa9cfa0d6a2aea84734aae7f8c9b3"
+  },
+  {
+    "file": "model/config.json",
+    "size": 4336,
+    "url": "https://huggingface.co/openbmb/VoxCPM2/resolve/7936080b41163874f38610f46f438e2c0757f9fd/config.json",
+    "sha256": "405f0dcd92f7feba6011ed4eac5c8d4f74cba9712f07fd5cfa3063bbdd95402c"
+  },
+  {
+    "file": "model/audiovae.pth",
+    "size": 376951122,
+    "url": "https://huggingface.co/openbmb/VoxCPM2/resolve/7936080b41163874f38610f46f438e2c0757f9fd/audiovae.pth",
+    "sha256": "94b5d51e107e0507d4acc976cfdadb64edd6fd06d1f751dadbf2fd1594274bf1"
+  },
+  {
+    "file": "model/model.safetensors",
+    "size": 4580080592,
+    "url": "https://huggingface.co/openbmb/VoxCPM2/resolve/7936080b41163874f38610f46f438e2c0757f9fd/model.safetensors",
+    "sha256": "f7f964cfa9da23653baec6e6f7750719977ad944ed9f95fe52fe3a620506891d"
+  },
+  {
+    "file": "model/tokenizer.json",
+    "size": 3676772,
+    "url": "https://huggingface.co/openbmb/VoxCPM2/resolve/7936080b41163874f38610f46f438e2c0757f9fd/tokenizer.json",
+    "sha256": "f8984687e4a92a3503d521396d454b7d68e9fdaab2a0288eb3536c7c1aa4bc20"
+  },
+  {
+    "file": "model/tokenizer_config.json",
+    "size": 5059,
+    "url": "https://huggingface.co/openbmb/VoxCPM2/resolve/7936080b41163874f38610f46f438e2c0757f9fd/tokenizer_config.json",
+    "sha256": "e78a3ebb48a0b9437efd1823b6b726c823da89e49dd8bcc90c02419d9baa772b"
+  },
+  {
+    "file": "model/special_tokens_map.json",
+    "size": 1632,
+    "url": "https://huggingface.co/openbmb/VoxCPM2/resolve/7936080b41163874f38610f46f438e2c0757f9fd/special_tokens_map.json",
+    "sha256": "068594063e37662c02b21acf42ebb334ef6a74fb810e68a2368f88f08351de76"
+  },
+  {
+    "file": "model/tokenization_voxcpm2.py",
+    "size": 2895,
+    "url": "https://huggingface.co/openbmb/VoxCPM2/resolve/7936080b41163874f38610f46f438e2c0757f9fd/tokenization_voxcpm2.py",
+    "sha256": "84489ea32b6ee0cae22ed5480cacb6df85c46624c3119be9a2021c3649a12729"
+  }
+]

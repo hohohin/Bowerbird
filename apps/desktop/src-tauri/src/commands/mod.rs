@@ -2,6 +2,8 @@
 
 pub mod agent;
 pub mod audio;
+pub mod voice;
+pub mod voice_setup;
 pub mod text_documents;
 pub mod document_attachments;
 pub mod agent_ds;

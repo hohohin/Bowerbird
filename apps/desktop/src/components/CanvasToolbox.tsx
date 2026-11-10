@@ -1,12 +1,12 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { BriefcaseBusiness, Clapperboard, Images, Film } from "lucide-react";
+import { BriefcaseBusiness, Clapperboard, Images, Film, AudioLines } from "lucide-react";
 import { useStore } from "../store";
 import { notify } from "../lib/notify";
 import { canUseComfyVideo } from "../lib/comfyVideo";
 import "./CanvasToolbox.css";
 
-export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo }: { onOpenReplication: () => void; onOpenLocalVideo: () => void }) {
+export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo, onOpenVoice }: { onOpenReplication: () => void; onOpenLocalVideo: () => void; onOpenVoice?: () => void }) {
   const isTestAccount = useStore(state => state.cloudAuth?.logged_in === true && !!state.cloudAuth.user_id
     && state.cloudEntitlement?.user_id === state.cloudAuth.user_id && state.cloudEntitlement?.is_test_account === true);
   const canUseLocalVideo = useStore(state => canUseComfyVideo(state.cloudAuth, state.cloudEntitlement));
@@ -56,6 +56,9 @@ export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo }: { onOpenR
         }
       }}>
       <div className="canvas-toolbox-heading">工具箱</div>
+      {onOpenVoice && <button type="button" role="menuitem" onClick={() => { setOpen(false); onOpenVoice(); }}>
+        <AudioLines size={19} aria-hidden="true" /><span><strong>角色声音</strong><small>声音克隆 · 文字配音</small></span>
+      </button>}
       <button type="button" role="menuitem" onClick={() => { setOpen(false); onOpenReplication(); }}>
         <Clapperboard size={19} aria-hidden="true" /><span><strong>视频复刻工具</strong><small>分析参考 · 改写分镜 · 生成视频</small></span>
       </button>

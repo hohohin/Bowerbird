@@ -17,6 +17,7 @@ import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import { CanvasArtboardDialog } from "./CanvasArtboardDialog";
 import { CANVAS_ARTBOARD_FROM_IMAGE, artboardComposition, containArtboardImage, intersectArtboard, type ArtboardComposition, type ArtboardImage } from "../lib/canvasArtboard";
 import { CanvasToolbox } from "./CanvasToolbox";
+import { VoiceStudio } from "./VoiceStudio";
 import { VideoReplicationDialog } from "./VideoReplicationDialog";
 import { CanvasWorkflowLayer, WindingKey, type WorkflowLayerHandle, type WorkflowGeometry, type MaterialAnchor } from "./CanvasWorkflowLayer";
 import { canvasConversationCards } from "../lib/canvasConversationCards";
@@ -575,6 +576,7 @@ export function CanvasWorkspace({
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(() => new Set());
   const [pendingProductGroup, setPendingProductGroup] = useState<{ projectId: string; id: string } | null>(null);
   const [replicationProjectId, setReplicationProjectId] = useState<string | null>(null);
+  const [voiceProjectId, setVoiceProjectId] = useState<string | null>(null);
   useEffect(() => { setReplicationProjectId(null); }, [projectId]);
   const expandedFolderIdsRef = useRef(expandedFolderIds);
   const [externalDragOver, setExternalDragOver] = useState(false);
@@ -5039,7 +5041,7 @@ export function CanvasWorkspace({
               onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); setDrawingTool("select"); workflowRef.current?.arm(event.clientX, event.clientY); }}
               onClick={event => { if (event.detail === 0) { setDrawingTool("select"); workflowRef.current?.arm(); } }}><WindingKey size={21} /></button>
             <hr />
-            <CanvasToolbox onOpenReplication={() => { setDrawingTool("select"); if (projectId) setReplicationProjectId(projectId); }} onOpenLocalVideo={() => chooseCanvasTool("comfy-video")} />
+            <CanvasToolbox onOpenVoice={() => { setDrawingTool("select"); if (projectId) setVoiceProjectId(projectId); }} onOpenReplication={() => { setDrawingTool("select"); if (projectId) setReplicationProjectId(projectId); }} onOpenLocalVideo={() => chooseCanvasTool("comfy-video")} />
             <hr />
             <div className="canvas-assist-tools" role="group" aria-label="辅助">
               <span>辅助</span>
@@ -5685,6 +5687,11 @@ export function CanvasWorkspace({
               { projectId: origin.projectId, threadId: thread.threadId, referenceNodeIds: references.map((asset, index) => index < 2 ? null : origin.composition.images.find(image => image.asset.id === asset.id)?.nodeId ?? null) }, true);
             if (!result.accepted) throw new Error(result.error || "合成提交失败");
           }} />}
+        {voiceProjectId === projectId && voiceProjectId && <VoiceStudio key={`voice-${voiceProjectId}`} projectId={voiceProjectId} onClose={() => setVoiceProjectId(null)} onPrepare={async () => {
+          const project = activeCanvasRef.current;
+          if (project.id !== voiceProjectId || useStore.getState().projectRoutePending) throw new Error("项目已切换，请重新打开声音面板");
+          await ensureMaterialized(project);
+        }} />}
         {replicationProjectId === projectId && replicationProjectId && <VideoReplicationDialog key={`replication-${replicationProjectId}`} projectId={replicationProjectId}
           onAddFrame={addVideoFrame}
           onCreateWorkflow={async request => {

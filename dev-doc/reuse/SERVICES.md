@@ -115,3 +115,9 @@ H3 的独立提示词优化复用 [canvasWorkflowRuntime.ts](../../apps/desktop/
 - **模块内部专用（各端契约）；共用源提取仍为候选**：Cloud [_shared/task-authorization.ts](../../apps/cloud/supabase/functions/_shared/task-authorization.ts) 与 Worker [contracts/task-authorization.ts](../../apps/agent-worker/src/contracts/task-authorization.ts) 各自维护 `TaskAuthorization`／`parseTaskAuthorization`。前者经 [_shared/unified-agent-plan.ts](../../apps/cloud/supabase/functions/_shared/unified-agent-plan.ts) 消费，后者经 `AdaptiveToolGateway` 消费。2026-11-06 新增 [task-authorization-sync.test.ts](../../apps/agent-worker/src/contracts/task-authorization-sync.test.ts)，由现有 Worker `test` 自动纳入：仅统一 CRLF/LF 后比较完整源码，变更契约须同步两端。此检查不改变运行时隔离，不提供跨包生产导入入口，也不代替授权行为测试。
 - **尚待确认**：两个 website proxy 都有 `readLimited`／限流片段，但失败状态码、输入输出方向及流控策略不完全相同；先比较测试与传输契约，再决定是否值得提取。Rust/Edge/TS 三份 FeaturePolicy 则有本机门控、服务端用户策略、序列化类型之分，不推荐仅凭同名合并。
 - 本页抽查了桌面接口、生成和文件接入、Cloud 鉴权计费、Worker 工具、扩展与官网网关；没有穷举 Rust DB 查询、每个 provider、所有 Edge Function、安装更新、支付、renderer 内部与平台原生分支。这里只验证静态入口及调用关系，未联网调用或验证部署状态。
+
+## 本机角色声音与配音
+
+- `commands/voice.rs` 提供 voice_configure／snapshot／save／start／cancel／recover／manage／export；前端 `lib/voice.ts` 是类型化入口。参考裁剪复用音频解码与 media::tools 的 FFmpeg，发布复用 ingest_generated、LibraryPaths 与素材变更事件；持久化运行身份及回执属于声音模块，不跨模块复用其内部 JSON 文件。
+- `commands/voice_setup.rs` 提供 voice_environment 的 status／check／install／pause，专用目录托管 Python、依赖与固定模型，复用库内原子 JSON 写入；不要向其他模块暴露其安装状态全局锁。模型／uv 下载清单在 voice-downloads.json。Windows x64 + NVIDIA，保留高级手动连接，不新增 Cloud 或 Agent 执行器。
+- `VoiceStudio` 复用 ModalShell、AudioWaveform、共享播放器、MediaTrimTimeline、materialCatalog、importFiles 与 saveMediaAssetToCanvas。工具箱由 CanvasWorkspace 先固化项目再提交；voiceStudioDraft 只负责本功能的按项目草稿与试听输入身份。边界和验证见 [角色声音](../VOICE-STUDIO.md)。
