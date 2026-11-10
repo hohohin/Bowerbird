@@ -273,7 +273,7 @@ impl Database {
         let path = original(path)?;
         // Files created in BowerbirdLibrary keep their existing image identity when browsed.
         let managed: Option<String> = self.conn.lock().unwrap().query_row(
-            "SELECT id FROM assets WHERE store_path IN (?1,?2) AND NOT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=assets.id)",
+            "SELECT id FROM assets WHERE store_path IN (?1,?2) AND NOT EXISTS(SELECT 1 FROM external_assets WHERE asset_id=assets.id) ORDER BY assets.rowid LIMIT 1",
             params![path.to_string_lossy(), supplied], |row| row.get(0)).optional()?;
         if let Some(id) = managed {
             let conn = self.conn.lock().unwrap();

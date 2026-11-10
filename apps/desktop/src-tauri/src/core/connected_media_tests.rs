@@ -86,6 +86,27 @@ fn prepared_fingerprint_rejects_same_size_change_within_one_second() {
 }
 
 #[test]
+fn path_lookup_indexes_preserve_registration_order_and_known_matching_identity() {
+    let f = Fixture::new();
+    let first = f.index();
+    let ordinary = connection_path_spellings(&f.path, &f.path)[2].clone();
+    {
+        let conn = f.db.conn.lock().unwrap();
+        conn.execute("UPDATE assets SET store_path=?2 WHERE id=?1", params![first.id,ordinary]).unwrap();
+        conn.execute("INSERT INTO assets(id,name,ext,store_path,source) VALUES('duplicate','duplicate','png',?1,'external')", [f.path.to_str().unwrap()]).unwrap();
+        conn.execute("INSERT INTO external_assets(asset_id,fingerprint) VALUES('duplicate',?1)", [fingerprint(&f.path).unwrap()]).unwrap();
+        conn.execute("INSERT INTO assets(id,name,ext,store_path) VALUES('unrelated','unrelated','png','/unrelated')", []).unwrap();
+    }
+    assert_eq!(f.db.index_connected_file(&f.paths, &f.path, None).unwrap().id, first.id);
+    assert_eq!(f.db.index_connected_file(&f.paths, &f.path, Some("duplicate")).unwrap().id, "duplicate");
+    assert_eq!(f.db.index_connected_file(&f.paths, &f.path, Some("unrelated")).unwrap().id, first.id);
+    assert_eq!(f.db.get_asset("unrelated").unwrap().unwrap().store_path.as_deref(), Some("/unrelated"));
+    let preview = preview_with_index(&f.paths, Some(&f.db), &f.path).unwrap();
+    assert_eq!(f.db.complete_connected_preview(&f.paths, &f.path, &preview).unwrap().unwrap().id, first.id);
+    assert!(f.db.get_asset("duplicate").unwrap().unwrap().thumb_path.is_none());
+}
+
+#[test]
 fn render_returns_usable_thumbnail_before_metadata_and_reopen_completes_cached_work() {
     let f = Fixture::new();
     let asset = f.index();

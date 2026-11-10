@@ -491,7 +491,7 @@ impl Database {
         }
         Ok(folder)
     }
-    fn register_connected_asset(&self, paths: &LibraryPaths, path: &Path) -> AppResult<Asset> {
+    fn register_connected_asset(&self, paths: &LibraryPaths, path: &Path, preferred_id: Option<&str>) -> AppResult<Asset> {
         // Recover a uniquely identifiable original moved outside the app. Never merge two live originals.
         let known:bool=self.conn.lock().unwrap().query_row("SELECT EXISTS(SELECT 1 FROM external_asset_paths WHERE path=?1 UNION ALL SELECT 1 FROM assets WHERE store_path=?1)",[string(path)],|r|r.get(0))?;
         let prepared = Self::prepare_connected_file(path)?;
@@ -511,7 +511,7 @@ impl Database {
             let (id, old) = &missing[0];
             self.repoint_asset(id, Path::new(old), path)?;
         }
-        self.index_prepared_connected_file(paths, path, None, prepared)
+        self.index_prepared_connected_file(paths, path, preferred_id, prepared)
     }
     fn resolve_reference(&self, paths: &LibraryPaths, path: &Path) -> AppResult<Asset> {
         let value = load_reference(path)?;
@@ -525,7 +525,7 @@ impl Database {
                     .as_deref()
                     .filter(|p| Path::new(p).is_file())
                 {
-                    let updated = self.index_connected_file(paths, Path::new(original), None)?;
+                    let updated = self.index_connected_file(paths, Path::new(original), Some(&asset.id))?;
                     let hash = external_files::fingerprint(Path::new(original))?;
                     if hash != value.sha256 {
                         // A read-only reference remains usable through its locally registered identity.
@@ -807,7 +807,7 @@ impl Database {
                     let asset = if reference(&file) {
                         self.resolve_reference(paths, &file)?
                     } else {
-                        self.register_connected_asset(paths, &file)?
+                        self.register_connected_asset(paths, &file, old.as_ref().map(|(id, _, _)| id.as_str()))?
                     };
                     if !reference(&file) && file_stamp()? != (size, mtime.clone()) {
                         return Err(invalid("文件正在变化，请稍后刷新"));

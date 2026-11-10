@@ -112,8 +112,8 @@ impl Database {
             return Err(invalid("文件正在变化，请稍后重试"));
         }
         let existing: Option<(String, Option<String>, bool)> = tx.query_row(
-            "SELECT a.id,COALESCE(e.fingerprint,f.sha256),e.asset_id IS NOT NULL FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path IN (?1,?2,?3)",
-            params![names[0],names[1],names[2]], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
+            "SELECT a.id,COALESCE(e.fingerprint,f.sha256),e.asset_id IS NOT NULL FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path IN (?1,?2,?3) ORDER BY a.id=?4 DESC,a.rowid LIMIT 1",
+            params![names[0],names[1],names[2],preferred_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
         let id = if let Some((id, expected, external)) = existing {
             restore_present_original(&tx, &id)?;
             if expected.as_deref().is_some_and(|value| value != hash) {
@@ -196,7 +196,7 @@ impl Database {
         let path = original(source)?;
         let names = connection_path_spellings(source, &path);
         let row: Option<(String, String, Option<String>, String, Option<String>, Option<String>)> = self.conn.lock().unwrap().query_row(
-            "SELECT a.id,COALESCE(e.fingerprint,f.sha256),a.thumb_path,a.store_path,a.phash,a.colors FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path IN (?1,?2,?3) AND COALESCE(e.fingerprint,f.sha256) IS NOT NULL",
+            "SELECT a.id,COALESCE(e.fingerprint,f.sha256),a.thumb_path,a.store_path,a.phash,a.colors FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path IN (?1,?2,?3) AND COALESCE(e.fingerprint,f.sha256) IS NOT NULL ORDER BY a.rowid LIMIT 1",
             params![names[0],names[1],names[2]], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).optional()?;
         let Some((id, expected, old_thumb, stored_path, old_phash, old_colors)) = row else {
             return Ok(None);
