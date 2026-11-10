@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>角色声音 · 交互确认稿</title><link rel="stylesheet" href="./style.css"></head>
+<body>
+  <header class="review"><strong>交互确认稿</strong><span>安装与生成均为模拟，试听使用已有样本</span><div class="review-actions"><label>场景 <select id="scenario"><option value="first">首次使用</option><option value="daily">日常配音</option><option value="download">下载中断</option><option value="save">保存失败</option><option value="device">设备不支持</option></select></label><button id="theme" aria-label="切换深浅色">浅色</button><button id="reset">重置示意</button></div></header>
+  <div class="app-frame">
+    <header class="app-bar"><a class="brand" href="#" aria-label="园丁鸟">⌑ <span>Bowerbird</span></a><span class="breadcrumb">创作项目 <span>/</span> 角色声音</span><button id="collapse" class="icon-button" aria-label="收起声音面板">−</button></header>
+    <div id="workspace"></div>
+  </div>
+  <footer class="review-note">本地交互示意 · 不下载安装组件，不调用模型，不写入真实素材库。上传文件仅在浏览器内预览。</footer>
+  <dialog id="dialog" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <audio id="player" preload="none"></audio>
+  <script type="module" src="./app.mjs"></script>
+</body></html>
