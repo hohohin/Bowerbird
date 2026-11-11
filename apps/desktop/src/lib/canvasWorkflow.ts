@@ -15,7 +15,7 @@ export class WorkflowInputError extends WorkflowNodeError {
 }
 
 /** Editable workflow wiring is independent from immutable generation history edges. */
-export type WorkflowKind = "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "visual-profile" | "text" | "trigger" | "planner" | "loop";
+export type WorkflowKind = "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop";
 export const WORKFLOW_CARD_DRAG_TYPE = "application/x-bowerbird-workflow-card";
 export type WorkflowAction = "describe" | "reuse" | "layers";
 export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" | "signal";
@@ -24,6 +24,7 @@ export interface WorkflowPort { id: string; label: string; type: WorkflowPortTyp
 export interface WorkflowInput { slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string; autoConnect?: string; mediaFilter?: ("image" | "video" | "audio")[] }
 export interface WorkflowPromptReference { slot?: number; id: string; type: "text" | "image"; input: WorkflowInput; assetId?: string; label: string; direction?: "output" }
 export interface WorkflowNode {
+  voice?: import("./voiceCard").VoiceCardSettings;
   id: string; kind: WorkflowKind; x: number; y: number;
   /** Last measured canvas size; presentation only, saved with the next workflow change. */
   layoutSize?: { width: number; height: number };
@@ -63,6 +64,7 @@ export interface WorkflowNode {
 }
 export interface WorkflowAgentEvent { id: string; kind: "message" | "tool"; text: string; status: string; at: number }
 export interface WorkflowStep {
+  voiceRequest?: import("./voiceCard").VoiceCardRequest;
   comfyProgress?: import("./comfyVideo").ComfyVideoProgress;
   comfyCancelled?: boolean;
   comfyStopping?: boolean;
@@ -160,6 +162,9 @@ export function normalizeWorkflowLocalVideo(node: WorkflowNode): WorkflowNode {
 }
 
 export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
+  if (node.kind === "voice") return node.voice?.id
+    ? [{ id: "text", label: "台词", type: "text" }]
+    : [{ id: "image", label: "参考录音", type: "image" }];
   if (node.kind === "trigger") return [{ id: "completion", label: "完成触发", type: "signal" }];
   if (node.textSource) return [];
   if (node.kind === "comfy-video") {
@@ -174,6 +179,7 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
   return ports;
 }
 export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
+  if (node.kind === "voice") return node.voice?.id ? [{ id: "image", label: "配音", type: "image" }] : [];
   if (node.kind === "comfy-video") return [{ id: "image", label: "视频", type: "image" }];
   if (node.kind === "planner") return [];
   if (node.kind === "loop") return node.loopMode === "count" ? [{ id: "iteration", label: "当前轮次", type: "text" }] : node.loopMode === "rows"
@@ -191,6 +197,7 @@ export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
   return [{ id: "image", label: "产物", type: "image" }];
 }
 export function workflowTitle(node: WorkflowNode): string {
+  if (node.kind === "voice") return "角色声音";
   if (node.kind === "comfy-video") return "本地 H3 视频";
   if (node.templateInstance) return `子流程 · ${node.templateInstance.template.name}`;
   if (node.kind === "planner") return "工作流助手";
@@ -579,7 +586,7 @@ export function workflowActiveSession(node: WorkflowNode): string | null {
 }
 export const WORKFLOW_CARD_WIDTH = 320;
 export function workflowCardWidth(node: Pick<WorkflowNode, "kind">) {
-  return node.kind === "trigger" ? 196 : node.kind === "comfy-video" ? WORKFLOW_CARD_WIDTH * 1.3 : WORKFLOW_CARD_WIDTH;
+  return node.kind === "trigger" ? 196 : node.kind === "comfy-video" || node.kind === "voice" ? WORKFLOW_CARD_WIDTH * 1.3 : WORKFLOW_CARD_WIDTH;
 }
 export function workflowPortY(node: WorkflowNode, side: "input" | "output", portId: string): number {
   if (node.kind === "trigger") return node.y + 46;

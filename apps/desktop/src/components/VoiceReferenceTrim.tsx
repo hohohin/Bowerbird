@@ -32,7 +32,7 @@ export function VoiceReferenceTrim({ asset, start, end, onChange, disabled }: { 
       change={(edge, value) => onChange(voiceClipRange(duration, start, end || duration, edge, value))} seek={value => play(Math.max(start, Math.min(end, value)))}>
       <AudioWaveform assetId={asset.id} path={path} name={asset.name} version={asset.file_mtime ?? asset.created_at ?? 0} interactive={false} />
     </MediaTrimTimeline>
-    <div className="voice-studio-row"><button className="app-modal-button" aria-label={playing ? "暂停参考录音" : "试听参考录音"} disabled={!version || duration < 1} onClick={() => { if (playing) { stopAudioPreview(asset.id); setPlaying(false); } else play(); }}>{playing ? <Pause size={15} /> : <Play size={15} />}</button><span className="voice-studio-hint">拖动两端裁剪 · 仅试听选中片段</span></div>
+    <div className="voice-studio-row"><button className="app-modal-button" aria-label={playing ? "暂停参考录音" : "试听参考录音"} disabled={!version || duration < 1} onClick={() => { if (playing) { stopAudioPreview(asset.id); setPlaying(false); } else play(); }}>{playing ? <Pause size={15} /> : <Play size={15} />}</button></div>
     {duration > 0 && duration < 1 && <p role="alert">录音不足 1 秒，请换一段录音</p>}{error && <p role="alert">{error}</p>}
   </div>;
 }

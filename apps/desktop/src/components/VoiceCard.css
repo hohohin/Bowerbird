@@ -1,0 +1,19 @@
+.voice-reference-trim .trim-film-editor{display:flex;flex-direction:column}.voice-reference-trim .trim-film-track{order:0;height:80px;background:var(--bb-bg)}.voice-reference-trim .trim-timecodes{order:1;margin:12px 0}.voice-reference-trim .trim-timecodes input{width:58px;padding:4px 2px;border:0;border-bottom:1px solid var(--bb-line);background:transparent}.voice-reference-trim .trim-timecodes label{display:flex}.voice-reference-trim .audio-waveform{height:80px;pointer-events:none}.voice-reference-trim .audio-waveform-track{height:80px}.voice-reference-trim .audio-waveform-play{display:none}.voice-reference-trim .trim-handle{position:absolute;top:0;bottom:0;width:24px;min-height:64px;padding:0;transform:translateX(-50%);border-radius:2px;background:transparent;touch-action:none;cursor:ew-resize;display:grid;place-items:center}.voice-reference-trim .trim-handle:hover{background:transparent}.voice-reference-trim .trim-film-mask{background:var(--bb-bg);opacity:.8}.voice-reference-trim .trim-film-cursor{background:var(--bb-ink)}
+.workflow-card.is-voice .workflow-card-body { padding-inline: 22px; }
+.voice-card { display: grid; gap: 10px; min-width: 0; }
+.voice-card-row, .voice-card-actions, .voice-reference-trim .voice-studio-row { display: flex; align-items: center; gap: 8px; }
+.voice-card-actions { flex-wrap: wrap; }
+.voice-card-row > input, .voice-card-row > .tactical-select-trigger { flex: 1; min-width: 0; }
+.voice-card input { padding: 7px 9px; border: 1px solid var(--bb-line); background: var(--bb-bg); color: var(--bb-ink); font: inherit; user-select: text; }
+.voice-card button, .voice-environment-dialog button { cursor: pointer; }
+.voice-card button:disabled { cursor: default; opacity: .55; }
+.voice-card-drop { display: grid; justify-items: center; gap: 8px; padding: 14px; border: 1px dashed var(--bb-line); color: var(--bb-muted); }
+.voice-card-primary { color: var(--bb-blue); justify-self: end; font-weight: 600; }
+.voice-card-list { display: grid; gap: 6px; max-height: 180px; overflow: auto; }
+.voice-card-list > button, .voice-card-list > div { text-align: left; overflow-wrap: anywhere; }
+.voice-card summary { cursor: pointer; font-size: 11px; color: var(--bb-muted); }
+.voice-card [role=alert], .voice-environment-dialog [role=alert] { color: var(--bb-danger); }
+.voice-card :is(.audio-waveform,.audio-waveform-track) { max-height: 64px; }
+.voice-environment-dialog .app-modal-body > div, .voice-environment-dialog details[open] { display: grid; gap: 12px; }
+.voice-environment-dialog small { color: var(--bb-muted); }
+.voice-environment-dialog progress { width: 100%; }

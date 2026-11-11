@@ -33,6 +33,7 @@ pub struct Job {
     pub voice_id: Option<String>, pub reference: Option<String>, pub transcript: Option<String>,
     pub config: Config, pub status: String, pub message: String, pub asset_id: Option<String>,
     #[serde(default)] pub purpose: String, #[serde(default)] pub draft_key: String,
+    #[serde(default)] pub request_key: Option<String>,
     #[serde(default)] pub voice_name: String, #[serde(default)] pub recoverable: bool,
 }
 #[derive(Deserialize)]
@@ -229,7 +230,7 @@ fn run(base: &Path, job: &Job, cancel: &AtomicBool) -> AppResult<()> {
     }
 }
 #[tauri::command]
-pub async fn voice_start(app: AppHandle, db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project: String, text: String, description: Option<String>, voice_id: Option<String>, preview: Option<Preview>) -> AppResult<String> {
+pub async fn voice_start(app: AppHandle, db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project: String, text: String, description: Option<String>, voice_id: Option<String>, preview: Option<Preview>, request_key: Option<String>) -> AppResult<String> {
     validate_clone_request(description.as_deref().unwrap_or_default(), voice_id.as_deref(), preview.as_ref())?;
     access(&auth, &entitlement).await?;
     if text.trim().is_empty() { return Err(error("请填写要生成的台词")); }
@@ -243,7 +244,7 @@ pub async fn voice_start(app: AppHandle, db: State<'_, Arc<Database>>, paths: St
     let mut job = Job { id: ulid::Ulid::new().to_string(), project, text, description: String::new(), voice_id,
         reference: voice.as_ref().map(|v| v.reference.clone()), transcript: voice.as_ref().map(|v| v.transcript.clone()),
         voice_name: voice.as_ref().map(|v| v.name.clone()).unwrap_or_else(|| "录音克隆试听".into()), recoverable: false,
-        purpose: if preview.is_some() { "preview" } else { "speech" }.into(), draft_key: preview.as_ref().map(|p| p.draft_key.clone()).unwrap_or_default(),
+        purpose: if preview.is_some() { "preview" } else { "speech" }.into(), draft_key: preview.as_ref().map(|p| p.draft_key.clone()).unwrap_or_default(), request_key,
         config, status: "running".into(), message: "正在生成，可以关闭面板，稍后查看结果".into(), asset_id: None };
     write(&job_path(&base, &job.id), &job)?;
     let id = job.id.clone(); let cancel = Arc::new(AtomicBool::new(false)); *active = Some((id.clone(), cancel.clone()));
@@ -308,7 +309,7 @@ mod tests {
     fn job() -> Job { Job { id: ulid::Ulid::new().to_string(), project: "p".into(), text: "测试声音".into(),
         description: String::new(), voice_id: None, reference: None, transcript: None, config: Config::default(),
         status: "running".into(), message: String::new(), asset_id: None,
-        purpose: String::new(), draft_key: String::new(), voice_name: String::new(), recoverable: false } }
+        purpose: String::new(), draft_key: String::new(), request_key: None, voice_name: String::new(), recoverable: false } }
     fn wav(path: &Path) {
         let mut data = Vec::new(); let bytes = 16000u32 * 2;
         data.extend(b"RIFF"); data.extend((36 + bytes).to_le_bytes()); data.extend(b"WAVEfmt ");

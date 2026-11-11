@@ -27,7 +27,7 @@ export function canvasAutomaticOutputs(id: string, nodes: WorkflowNode[], canvas
   if (workflow) return workflowOutputs(workflow).filter(port => port.type !== "session" && port.type !== "signal"
     && (port.id !== "iteration" || workflowOutputs(workflow).length === 1)).map(port => ({
       binding: { nodeId: id, portId: port.id }, type: port.type,
-      ...(port.type === "image" ? { media: workflow.kind === "comfy-video" || workflow.generation?.media === "video" || workflow.kind === "agent" && workflow.skill === "hyperframes" ? "video" as const : "image" as const } : {}),
+      ...(port.type === "image" ? { media: workflow.kind === "voice" ? "audio" as const : workflow.kind === "comfy-video" || workflow.generation?.media === "video" || workflow.kind === "agent" && workflow.skill === "hyperframes" ? "video" as const : "image" as const } : {}),
     }));
   const card = canvas.find(node => node.id === id && node.hiddenAt == null);
   if (card?.kind === "note") {

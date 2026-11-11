@@ -9,7 +9,7 @@
 
 ## 让新界面沿用主题、按钮和字段
 
-角色声音的 `VoiceReferenceTrim` 与视频共享 `MediaTrimTimeline` 的双端手柄、遮罩、时间输入、键盘和长按细调；支持 children 放入真实 AudioWaveform，minGap／maxLength 限制声音选区 1–30 秒。`VideoTrimTimeline` 保留兼容导出，默认胶片与视频范围不变。播放器仍使用 audioPreview 单例；裁剪片段变化与原声结束会同步停止试听。声音主界面使用 ModalShell，列表与结果分区滚动，草稿按项目保留。见 [角色声音](../VOICE-STUDIO.md)。
+角色声音使用 `CanvasWorkflowLayer` 的工作流卡片、输入输出连线与复制／移动交互。`VoiceCard` 复用 TacticalSelect、AudioWaveform、VoiceReferenceTrim 和项目音频检索；`VoiceEnvironmentControl` 沿用 H3 标题栏环境状态点和公共弹窗。`VoiceReferenceTrim` 与视频共享 MediaTrimTimeline 的双端手柄、时间输入与键盘细调。见 [声音卡片](../VOICE-STUDIO.md)。
 
 强化分析输出复用 `CanvasTextCard` 与 `canvasNotes` 的图片／文字单元格，每镜头一行、图片与分析两列；`replicationAnalysisNote` 仅负责业务数据适配。`VideoPlayer.seekRequest` 是可选的外部时间定位请求，强化分析点击镜头时暂停并定位原片；旧调用方不传时保持原行为。
 

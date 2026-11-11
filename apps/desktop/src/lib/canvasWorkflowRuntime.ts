@@ -5,6 +5,8 @@ import { normalizeWorkflowLocalVideo, workflowTitle, workflowCardWidth, workflow
 import { resolveVideoCardOutputs } from "./workflowVideoFrames";
 import { automaticInputMedia, planAutomaticConnection, type AutomaticOutput } from "./workflowAutoConnect";
 import { isAudioPath } from "./audioMedia";
+import { voiceApi } from "./voice";
+import { defaultVoiceSample, voiceCardClip, voiceCardPreviewKey, type VoiceCardRequest } from "./voiceCard";
 import { api } from "./api";
 import type { Asset, CanvasNode, NewCanvasNode } from "./types";
 import { placeCanvasCardNearSource } from "./canvasReferencePlacement";
@@ -296,7 +298,7 @@ export class CanvasWorkflowController {
           const run = [...runs].reverse().find(run => run.steps[node.id]?.status === "done" && run.steps[node.id]?.jobId);
           if (!run) continue;
           const [asset] = await api.getAssetsByIds(node.outputs.image!.assetIds!);
-          if (asset) await this.deliverComfyVideo(run, node, asset, () => false);
+          if (asset) await this.deliverMediaAsset(run, node, asset, () => false);
         }
         this.ready = true;
         this.error = "";
@@ -943,6 +945,15 @@ export class CanvasWorkflowController {
         continue;
       }
       if (node.kind === "generation" && !node.prompt.trim()) throw new WorkflowNodeError("请在生成卡片文本框中填写指令，或通过 @ 引入内容", node);
+      if (node.kind === "voice") {
+        if (node.voice?.id) {
+          if (!node.prompt.trim() && !node.inputs.text?.length) throw new WorkflowNodeError("请输入配音台词或连接文本输入", node);
+        } else {
+          if (node.inputs.image?.length !== 1) throw new WorkflowNodeError("请选择一段参考录音", node);
+          if (!(node.voice?.sampleText ?? defaultVoiceSample).trim()) throw new WorkflowNodeError("请输入试听台词", node);
+        }
+        continue;
+      }
       if (node.kind === "agent" && !node.prompt.trim()) throw new WorkflowNodeError("请在 Agent 卡片中填写要求，可按 @ 引用文字或图片", node);
       if (node.kind === "agent") {
         try { agentOutputTargets(node, this.document.nodes); }
@@ -1050,6 +1061,7 @@ export class CanvasWorkflowController {
     const active = Object.values(run.steps).filter(step => step.status === "running" || step.status === "waiting");
     // Keep the definition locked until cancellation requests have completed.
     await Promise.all(active.map(async step => {
+      if (step.voiceRequest?.jobId) await voiceApi.cancel(step.voiceRequest.jobId);
       if (step.jobId && step.generationSubmission !== "submitted" && !this.document.nodes.some(node => node.kind === "comfy-video" && run.steps[node.id] === step)) await api.cancelCodexCreate(step.jobId);
       for (const generation of Object.values(step.localDsGenerations ?? {})) {
         if (!generation.response) await api.cancelCodexCreate(generation.jobId);
@@ -1291,7 +1303,7 @@ export class CanvasWorkflowController {
           if (halted()) return null;
           if (result.videos) {
             await this.step(runId, node.id, { videoProjectPath: result.projectPath });
-            await this.deliverComfyVideo(this.run(runId), node, assets[0], halted, `workflow-video:${requestId}`);
+            await this.deliverMediaAsset(this.run(runId), node, assets[0], halted, `workflow-video:${requestId}`);
             if (halted()) return null;
           }
           // Directed results index the outer images array, including duplicate bytes.
@@ -1448,7 +1460,7 @@ export class CanvasWorkflowController {
     });
   }
 
-  private async deliverComfyVideo(run: WorkflowRun, node: WorkflowNode, asset: Asset, halted: () => boolean, resultId = `workflow-comfy:${run.steps[node.id].jobId}`) {
+  private async deliverMediaAsset(run: WorkflowRun, node: WorkflowNode, asset: Asset, halted: () => boolean, resultId = `workflow-comfy:${run.steps[node.id].jobId}`) {
     await this.withResource("canvas", async () => {
       if (halted()) return;
       const canvas = await api.projectCanvasGet(this.projectId);
@@ -1467,6 +1479,91 @@ export class CanvasWorkflowController {
       await this.save({ ...this.document, nodes: this.document.nodes.map(item => item.id === node.id ? { ...item, resultNodeIds: [resultId] } : item) });
       await emit("creative://changed", { projectId: this.projectId });
     });
+  }
+
+  private async runVoice(runId: string, node: WorkflowNode, halted: () => boolean, values?: Record<string, WorkflowValue[]>) {
+    const run = this.run(runId);
+    const voice = node.voice ?? {};
+    let request: VoiceCardRequest | undefined = run.steps[node.id].voiceRequest;
+    const recovering = !!request;
+    if (!request) {
+      const environment = await voiceApi.environment();
+      if (environment.phase !== "ready") throw new Error(environment.message);
+      const key = crypto.randomUUID();
+      let text = [...(values?.text ?? []).map(value => value.text), node.prompt].filter(Boolean).join("\n").trim();
+      let preview: Parameters<typeof voiceApi.start>[3];
+      request = { key };
+      if (!voice.id) {
+        if (run.order.length !== 1) throw new Error("请先为角色声音卡片选择声音");
+        const ids = (values?.image ?? []).flatMap(value => value.assetIds ?? []);
+        if (ids.length !== 1) throw new Error("请选择一段参考录音");
+        const [asset] = await api.getAssetsByIds(ids);
+        if (!asset || !isAudioPath(asset.store_path)) throw new Error("请选择音频素材作为参考录音");
+        const clip = voiceCardClip(voice, asset);
+        text = (voice.sampleText ?? defaultVoiceSample).trim();
+        request.previewKey = voiceCardPreviewKey(voice, asset);
+        preview = { assetId: asset.id, start: clip.start, end: clip.end, transcript: clip.transcript, draftKey: request.previewKey };
+      }
+      if (!text) throw new Error(voice.id ? "请输入配音台词" : "请输入试听台词");
+      if (halted()) return;
+      await this.step(runId, node.id, { status: "running", voiceRequest: request, detail: voice.id ? "正在生成配音" : "正在生成试听" });
+      if (halted()) return;
+      let jobId: string;
+      try { jobId = await voiceApi.start(this.projectId, text, voice.id ?? null, preview, key); }
+      catch (error) {
+        const snapshot = await voiceApi.snapshot(this.projectId).catch(() => null);
+        if (!snapshot) {
+          if (!halted()) await this.step(runId, node.id, { status: "waiting", error: "提交状态待确认，点击继续以查询原任务" });
+          return;
+        }
+        const original = snapshot.jobs.find(item => item.request_key === key);
+        if (!original) throw error;
+        jobId = original.id;
+      }
+      if (halted()) { await voiceApi.cancel(jobId); return; }
+      request = { ...request, jobId };
+      await this.step(runId, node.id, { voiceRequest: request });
+    }
+    let retrySave = recovering;
+    while (!halted()) {
+      if (run.accountId !== (useStore.getState().cloudAuth?.user_id ?? null)) throw new Error("请登录原账号后继续取回配音");
+      let snapshot: Awaited<ReturnType<typeof voiceApi.snapshot>>;
+      try { snapshot = await voiceApi.snapshot(this.projectId); }
+      catch (error) {
+        if (!halted()) await this.step(runId, node.id, { status: "waiting", error: `配音查询中断，可继续查询原任务。${String(error)}` });
+        return;
+      }
+      if (halted()) return;
+      const identity: VoiceCardRequest = request;
+      const job = snapshot.jobs.find(item => item.id === identity.jobId || item.request_key === identity.key);
+      if (!job) { await this.step(runId, node.id, { status: "waiting", error: "尚未找到原配音任务，可继续查询" }); return; }
+      if (!request.jobId) {
+        request = { ...request, jobId: job.id };
+        await this.step(runId, node.id, { voiceRequest: request });
+      }
+      if (job.status === "succeeded") {
+        const asset = snapshot.assets.find(item => item.id === job.asset_id);
+        if (!asset) throw new Error("配音素材已移除");
+        if (!request.previewKey) {
+          try { await this.deliverMediaAsset(this.run(runId), node, asset, halted, `workflow-voice:${job.id}`); }
+          catch (error) {
+            if (!halted()) await this.step(runId, node.id, { status: "waiting", error: `配音已保存，点击继续添加到画板。${String(error)}` });
+            return;
+          }
+        }
+        if (halted()) return;
+        await this.step(runId, node.id, { voiceRequest: { ...request, assetId: asset.id } });
+        await this.finish(runId, node, request.previewKey ? {} : { image: { type: "image", assetIds: [asset.id] } });
+        return;
+      }
+      if (job.recoverable) {
+        if (retrySave) { retrySave = false; await voiceApi.recover(job.id); continue; }
+        await this.step(runId, node.id, { status: "waiting", error: "音频已生成，点击继续以重试保存" });
+        return;
+      }
+      if (job.status !== "running") throw new Error(job.message);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
   }
 
   /** Explicit paid text action. It never invalidates outputs or executes connected cards. */
@@ -1594,7 +1691,7 @@ export class CanvasWorkflowController {
           await this.step(runId, id, { status: "waiting", error: "请登录原账号后继续取回视频" }); return;
         }
         if (result.status === "done" && result.asset) {
-          await this.deliverComfyVideo(this.run(runId), node, result.asset, halted);
+          await this.deliverMediaAsset(this.run(runId), node, result.asset, halted);
           if (halted()) return;
           await this.step(runId, id, { detail: comfyVideoElapsed(result.elapsedMs) ? `视频已生成 · 用时 ${comfyVideoElapsed(result.elapsedMs)}` : "视频已生成", error: undefined, comfyProgress: undefined });
           await this.finish(runId, node, { image: { type: "image", assetIds: [result.asset.id] } });
@@ -1672,6 +1769,7 @@ export class CanvasWorkflowController {
       const node = storedNode.kind === "trigger" ? { ...storedNode, inputs: {} } : storedNode.kind === "comfy-video" ? generationInputNode(storedNode) : storedNode;
       const step = this.run(runId).steps[id];
       if (step.status === "done" || halted()) return;
+      if (node.kind === "voice" && step.voiceRequest) { await this.runVoice(runId, node, halted); return; }
       this.progress(runId, id, node.kind === "generation" ? `生成${node.generation?.media === "video" ? "视频" : "图片"}，等待会话结果` : node.kind === "skill" ? "执行技能，等待任务结果或审批" : node.kind === "visual-profile" ? "处理视觉规范" : node.kind === "trigger" ? "触发下游流程" : "读取输入素材");
       if (node.kind === "comfy-video" && step.jobId) { await this.runComfyVideo(runId, node, halted); return; }
       if (node.kind === "comfy-video" && step.comfyOptimization) { await this.runComfyPromptOptimization(runId, node, halted); return; }
@@ -1743,6 +1841,7 @@ export class CanvasWorkflowController {
       }
       const inputNode: WorkflowNode = step.localAgentSkill === "hyperframes" ? { ...node, skill: "hyperframes", agentTransport: "codex-cli" } : node;
       await filterAutomaticMediaValues(inputNode, values);
+      if (node.kind === "voice") { await this.runVoice(runId, node, halted, values); return; }
       if (node.kind === "instruction") {
         const count = (values.image ?? []).flatMap(value => value.assetIds ?? []).length;
         if (node.action === "describe" ? count < 1 : count !== 1) throw new Error("指令卡片的输入图片数量不符合要求");

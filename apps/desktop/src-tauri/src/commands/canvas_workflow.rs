@@ -188,7 +188,7 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
     let mut dependencies: HashMap<&str, Vec<&str>> = HashMap::new();
     for node in nodes {
         let id = node["id"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("instruction" | "generation" | "skill" | "agent" | "comfy-video" | "visual-profile" | "text" | "trigger" | "planner" | "loop"))
+        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop"))
             || !matches!(node["action"].as_str(), Some("describe" | "reuse" | "layers"))
             || node["x"].as_f64().filter(|v| v.is_finite()).is_none()
             || node["y"].as_f64().filter(|v| v.is_finite()).is_none()
@@ -608,6 +608,26 @@ mod tests {
         next["nodes"][0]["triggerSchedule"]["dailyAt"] = json!("22:00");
         assert_ne!(paid_definition(&doc), paid_definition(&next));
         next["nodes"][0]["triggerSchedule"]["status"] = json!("fired"); assert!(validate(&next).is_err());
+    }
+    #[test]
+    fn voice_card_persists_recording_preview_and_spoken_output() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut card = node("voice", json!({"image":[{"assetId":"recording"}]}));
+        card["kind"] = json!("voice");
+        card["voice"] = json!({"sampleText":"修改后的试听", "clip":{"assetId":"recording","start":1,"end":3,"name":"旁白","transcript":""}});
+        let mut doc = json!({"schema_version":1,"nodes":[card],"run":null});
+        assert_eq!(validate(&doc).unwrap(), HashSet::from(["recording".into()]));
+        db.workflow_save("p", 0, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+        doc["nodes"][0]["inputs"] = json!({});
+        doc["nodes"][0]["voice"]["id"] = json!("saved-voice");
+        doc["nodes"][0]["prompt"] = json!("角色的台词");
+        doc["nodes"][0]["outputs"] = json!({"image":{"type":"image","assetIds":["spoken-audio"]}});
+        assert_eq!(validate(&doc).unwrap(), HashSet::from(["spoken-audio".into()]));
+        db.workflow_save("p", 1, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
     }
     #[test]
     fn daily_trigger_claims_each_occurrence_once_and_advances_atomically() {

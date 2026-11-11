@@ -15,6 +15,7 @@ export interface AutomaticConnectionPlan {
 
 /** The legacy image pipe also transports video/audio; never use its name as MIME. */
 export function automaticInputMedia(node: WorkflowNode): AutomaticMedia[] {
+  if (node.kind === "voice") return node.voice?.id ? [] : ["audio"];
   if (node.kind === "agent" && node.skill === "hyperframes" && node.agentTransport === "codex-cli") return ["image", "video", "audio"];
   if (node.kind === "comfy-video" && node.comfyVideo?.mode === "text") return [];
   if (node.kind === "generation" && node.generation?.media === "video"
@@ -43,7 +44,7 @@ export function planAutomaticConnection(nodes: WorkflowNode[], outputs: Automati
     if (source.nodeId && (!producer || !workflowOutputs(producer).some(port => port.id === source.portId && port.type === output.type)))
       return fail("来源卡片或输出已不存在");
     const knownMedia = output.media ? (Array.isArray(output.media) ? output.media : [output.media])
-      : producer?.kind === "comfy-video" || producer?.kind === "generation" && producer.generation?.media === "video" ? ["video"] : undefined;
+      : producer?.kind === "voice" ? ["audio"] : producer?.kind === "comfy-video" || producer?.kind === "generation" && producer.generation?.media === "video" ? ["video"] : undefined;
     if (target.kind !== "trigger" && output.type === "image" && knownMedia && !knownMedia.some(media => acceptedMedia.includes(media as AutomaticMedia))) continue;
     let candidates = workflowInputs(target).filter(port => port.type === output.type);
     if (target.kind === "trigger") {
@@ -62,7 +63,7 @@ export function planAutomaticConnection(nodes: WorkflowNode[], outputs: Automati
       if (target.kind === "trigger") break;
       continue;
     }
-    const single = (id: string) => id === "visual-profile" || target.kind === "comfy-video" && id !== "text"
+    const single = (id: string) => id === "visual-profile" || target.kind === "voice" && id === "image" || target.kind === "comfy-video" && id !== "text"
       || target.kind === "instruction" && target.action !== "describe" || target.kind === "loop" && target.loopMode === "rows";
     const port = candidates.find(port => !single(port.id) || !inputs[port.id]?.length);
     if (!port) return fail(target.kind === "comfy-video" ? target.comfyVideo?.mode === "reference" ? "参考图已连接，请先移除要替换的来源" : "首尾帧已连接，请先移除要替换的来源" : "此输入已有来源，请先断开后再连接");
