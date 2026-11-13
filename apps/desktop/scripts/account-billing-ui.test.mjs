@@ -21,6 +21,7 @@ try {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('http://127.0.0.1:1816/scripts/fixtures/redemption/preview.html');
   await page.getByRole('button', { name: '账号管理', exact: true }).click();
+  await page.getByText('查看会员方案与充值', { exact: true }).click();
   const plan = page.getByRole('region', { name: 'Plan', exact: true });
   const recharge = page.getByRole('region', { name: 'Bcoin 充值', exact: true });
   const output = recharge.getByLabel('充值到账 Bcoin', { exact: true });
@@ -43,7 +44,7 @@ try {
     const cloud = await readCells(/Cloud\s*服务/);
     assert.equal(cloud.length, 2);
     for (const value of cloud) assert.match(value, /按量.*Bcoin/);
-    for (const feature of ['自有订阅接入', '工作流卡片', '本地生成']) {
+    for (const feature of ['接入自己的 ChatGPT / 即梦订阅', '用工作流卡片串联创作步骤', '本地生成']) {
       const cells = await readCells(feature);
       assert.equal(cells.length, 2);
       assert.match(cells[0], /^(?:不支持|—|需 Pro)$/);
@@ -94,7 +95,7 @@ try {
   const yearly = plan.getByRole('radio', { name: /359/ });
   assert.equal(await monthly.count(), 1);
   assert.equal(await yearly.count(), 1);
-  assert.match(await plan.innerText(), /自有订阅/);
+  assert.match(await plan.innerText(), /自己的 ChatGPT/);
   assert.match(await plan.innerText(), /工作流/);
   assert.match(await plan.innerText(), /本地生成/);
   await assertComparison(plan);
@@ -162,12 +163,12 @@ try {
     assert.equal(await plan.getByText('当前方案 · Free', { exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: '领取一次 7 天 Pro 功能体验' }).count(), 0);
     assert.match(await recharge.locator('.account-billing-balance-value').innerText(), /^—\s*Bcoin$/);
-    await page.getByRole('region', { name: '积分明细', exact: true }).getByText(/积分信息暂不可用/).waitFor();
+    await page.getByRole('region', { name: '账号概览' }).getByText('权益待同步', { exact: true }).waitFor();
   }
   await page.evaluate(() => window.store.setState({ cloudEntitlement: null }));
   await plan.getByText('权益暂不可用', { exact: true }).waitFor();
   assert.equal(await page.getByRole('button', { name: '领取一次 7 天 Pro 功能体验' }).count(), 0);
-  await page.getByRole('region', { name: '积分明细', exact: true }).getByText(/积分信息暂不可用/).waitFor();
+  await page.getByRole('region', { name: '账号概览' }).getByText('权益待同步', { exact: true }).waitFor();
   await page.evaluate(() => window.store.setState({ cloudEntitlement: { ...window.free, balances: { daily: 0, sub: 0, topup: 400 } } }));
   await mkdir('.tmp/account-billing', { recursive: true });
   for (const theme of ['light', 'dark']) {
@@ -208,21 +209,42 @@ try {
   assert.equal(await page.getByRole('button', { name: '领取一次 7 天 Pro 功能体验' }).count(), 0);
   assert.equal(await page.getByRole('region', { name: '积分明细', exact: true }).count(), 0);
 
-  // The independent account dialog uses the same billing component without the settings sidebar.
+  // Start at the real topbar. Login returns directly to the same account overview.
   const standaloneEntitlement = await page.evaluate(() => ({ ...window.free, tier: 'pro', offline_state: 'fresh',
-    balances: { daily: 0, sub: 0, topup: 400 }, policy: { ...window.free.policy, can_use_byo: true } }));
-  await page.setViewportSize({ width: 1100, height: 1100 });
-  await page.goto('http://127.0.0.1:1816/scripts/fixtures/onboarding/preview.html');
-  await page.waitForFunction(() => window.store && window.lesson);
-  await page.evaluate(entitlement => {
-    window.lesson.getState().show('closed');
-    window.store.setState({ activeProjectId: null, cloudAuth: { logged_in: true, cloud_available: true,
-      user_id: 'test-user', display_name: '独立账号测试', email: 'test@example.test', avatar_url: null,
-      access_expires_at: null, reason: null }, cloudEntitlement: entitlement, cloudBusy: false,
-      cloudError: null, accountOnboardingForceOpen: true });
-    document.documentElement.dataset.theme = 'light';
-  }, standaloneEntitlement);
-  const standalone = page.getByRole('dialog', { name: 'Bowerbird 账号', exact: true });
+    membership_ends_at: '2027-01-15T05:00:00Z', balances: { daily: 0, sub: 0, topup: 400 }, policy: { ...window.free.policy, can_use_byo: true } }));
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.goto('http://127.0.0.1:1816/scripts/fixtures/redemption/preview.html?journey');
+  await page.waitForFunction(() => window.store && window.free);
+  await page.evaluate(() => window.store.setState({ cloudAuth: { logged_in: false, cloud_available: true }, cloudEntitlement: null }));
+  await page.getByRole('button', { name: '登录 Bowerbird 账号', exact: true }).click();
+  await page.getByRole('button', { name: '使用微信扫码登录' }).waitFor();
+  await page.evaluate(() => window.store.setState({ cloudAuth: { logged_in: true, cloud_available: true, user_id: window.free.user_id }, cloudEntitlement: window.free }));
+  const standalone = page.getByRole('dialog', { name: '设置', exact: true });
+  await standalone.getByRole('button', { name: /领取一次/ }).waitFor();
+  await standalone.getByLabel('兑换 Pro', { exact: true }).waitFor();
+  await page.evaluate(() => window.store.setState({ cloudEntitlement: { ...window.free, trial_available: false } }));
+  await standalone.getByRole('button', { name: /领取一次/ }).waitFor({ state: 'hidden' });
+  assert.equal(await standalone.getByRole('region', { name: '账号概览' }).locator('time').count(), 0);
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: /可用 Bcoin.*查看积分明细/ }).click();
+  await standalone.getByRole('region', { name: '积分明细' }).waitFor();
+  await page.evaluate(() => window.store.setState({ cloudEntitlement: { ...window.free, user_id: 'previous-user' } }));
+  await standalone.getByText(/积分信息暂不可用/).waitFor();
+  assert.equal(await page.getByRole('button', { name: /Bcoin 余额暂不可用，查看积分明细/ }).count(), 1);
+  await page.keyboard.press('Escape');
+  await page.evaluate(value => window.store.setState({ cloudEntitlement: value }), standaloneEntitlement);
+  await page.locator('.topbar-account-trigger').click();
+  const overview = standalone.getByRole('region', { name: '账号概览' });
+  assert.equal(await overview.locator('time').getAttribute('datetime'), standaloneEntitlement.membership_ends_at);
+  await mkdir('.tmp/account-billing', { recursive: true });
+  for (const theme of ['dark', 'light']) {
+    await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
+    await page.screenshot({ path: `.tmp/account-billing/overview-${theme}.png` });
+  }
+  await standalone.getByRole('button', { name: /连接我的 ChatGPT/ }).click();
+  await standalone.getByText('使用自有ChatGPT订阅', { exact: true }).waitFor();
+  await standalone.getByRole('button', { name: '账号管理', exact: true }).click();
+  await standalone.getByText('查看会员方案与充值', { exact: true }).click();
   const standalonePlan = standalone.getByRole('region', { name: 'Plan', exact: true });
   const standaloneRecharge = standalone.getByRole('region', { name: 'Bcoin 充值', exact: true });
   await standalonePlan.getByText('当前方案 · Pro', { exact: true }).waitFor();

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ configFile: false, root: process.cwd(), cacheDir: '.tmp/auto-connect-runtime-vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] },
+const server = await createServer({ root: process.cwd(), cacheDir: '.tmp/auto-connect-runtime-vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] },
   server: { host: '127.0.0.1', port: 1749, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -128,7 +128,7 @@ try {
     check(saves === beforeSaves + 1 && fixedWriter.inputs.text?.length && !fixedWriter.inputs.image?.length, 'explicit text cell receives only text');
     canvas.groups.push({ id: 'media-folder' });
     for (const [ordinal, id] of ['photo', 'video', 'audio'].entries()) {
-      canvas.nodes.push({ ...table, id: `group-${id}`, kind: 'asset', assetId: id, payloadJson: null });
+      canvas.nodes.push({ ...table, id: `group-${id}`, kind: 'asset', assetId: id, payloadJson: "{}" });
       canvas.groupItems.push({ groupId: 'media-folder', nodeId: `group-${id}`, ordinal });
     }
     await controller.connectAutomatic([{ type: 'image', binding: { groupId: 'media-folder', assetIds: ['photo', 'video', 'audio'] } }], { canvasNodeId: 'content' });
@@ -143,17 +143,17 @@ try {
     const reuse = { ...newWorkflowNode('instruction', 400, 600, 'codex'), id: 'reuse', action: 'reuse' };
     await controller.edit([...controller.document.nodes, draw, reuse]);
     beforeSaves = saves;
-    const relayResult = await controller.connectAutomatic([{ type: 'image', media: 'image', binding: { nodeId: 'draw', portId: 'image' } }], { nodeId: 'reuse' });
-    check(saves === beforeSaves + 1 && relayResult.createdNodeIds.length === 1, 'relay and consumer commit once');
-    check(controller.document.nodes.find(node => node.id === 'reuse').inputs.image[0].cellId === '*latest-image', 'generation retains latest history delivery');
+    const directResult = await controller.connectAutomatic([{ type: 'image', media: 'image', binding: { nodeId: 'draw', portId: 'image' } }], { nodeId: 'reuse' });
+    check(saves === beforeSaves + 1 && directResult.createdNodeIds.length === 0, 'direct connection commits once without adding a card');
+    check(controller.document.nodes.find(node => node.id === 'reuse').inputs.image[0].nodeId === 'draw', 'consumer receives the generator output');
     beforeSaves = saves;
     await controller.connectAutomatic([{ type: 'image', media: 'image', binding: { nodeId: 'draw', portId: 'image' } }], { nodeId: 'reuse' });
-    check(saves === beforeSaves, 'relay duplicate respects single-input receiver');
+    check(saves === beforeSaves, 'duplicate respects single-input receiver');
     const completion = { ...newWorkflowNode('trigger', 900, 600, 'codex'), id: 'completion' };
     beforeSaves = saves;
     const triggerConnection = await controller.connectAutomatic([{ type: 'image', media: 'image', binding: { nodeId: 'draw', portId: 'image' } }], { nodeId: completion.id }, { createNodes: [completion] });
     const completionInput = controller.document.nodes.find(node => node.id === completion.id).inputs.completion[0];
-    check(saves === beforeSaves + 1 && completionInput.nodeId === 'draw' && !completionInput.canvasNodeId && !completionInput.mediaFilter && triggerConnection.createdNodeIds.join() === completion.id, 'completion event keeps producer identity even when image relay exists');
+    check(saves === beforeSaves + 1 && completionInput.nodeId === 'draw' && !completionInput.canvasNodeId && !completionInput.mediaFilter && triggerConnection.createdNodeIds.join() === completion.id, 'completion event keeps producer identity alongside its data connection');
 
     const filterNode = { ...target, inputs: { image: [{ assetId: 'photo', autoConnect: 'filter', mediaFilter: ['image'] }] } };
     const values = { image: [{ type: 'image', assetIds: ['photo', 'video', 'audio'] }] };
@@ -210,7 +210,7 @@ try {
     failSave = true;
     await rejects(() => controller.connectAutomatic(outputs, { nodeId: 'failure' }, { createNodes: [{ ...fresh, id: 'failure' }] }), 'save failure surfaced');
     check(JSON.stringify(docs.get('auto-runtime')) === persisted && runs === 0, 'failure leaves durable graph intact and no connection executes models');
-    return 'PASS automatic runtime: atomic multi-content/new-card/relay/native/axis commits and delivery, duplicate/reload/undo/disconnect, cycles/media filtering/old frames, portable template grouping and compilation, failed save and zero model execution';
+    return 'PASS automatic runtime: atomic multi-content/new-card/generator/native/axis commits and delivery, duplicate/reload/undo/disconnect, cycles/media filtering/old frames, portable template grouping and compilation, failed save and zero model execution';
   });
   assert.match(result, /^PASS/); console.log(result);
 } finally { await browser.close(); await server.close(); }

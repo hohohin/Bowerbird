@@ -146,7 +146,7 @@ fn scoped_pages_and_aggregated_counts_match_legacy_with_history_filters_and_sepa
 #[test]
 #[ignore = "isolated performance comparison; run explicitly with --ignored --nocapture"]
 fn compare_small_folder_reads_with_large_other_roots() {
-    for (current,other,history) in [(80,200,0),(100,10_000,20)] {
+    for (current,other,history) in [(80,200,0),(100,10_000,20),(10_000,100,20)] {
         let f = ReadFixture::new(current,other,history);
         let filter = ConnectionFilter { grouped:true,..Default::default() };
         let ids = legacy_ids(&f.db,Some("current"),None,None,0,60,&filter);
@@ -167,4 +167,33 @@ fn compare_small_folder_reads_with_large_other_roots() {
         measure("groups", &mut || { let mut entries=f.db.read_connection_entries(&ids).unwrap(); f.db.connection_entry_groups(&mut entries,None,None,&filter).unwrap(); });
         measure("point_folder", &mut || { f.db.connected_folder("current").unwrap(); });
     }
+}
+
+#[test]
+#[ignore = "isolated query-plan/VM regression; run explicitly with --ignored --nocapture"]
+fn group_materialization_bounds_work_in_a_large_current_folder() {
+    let f = ReadFixture::new(10_000,100,20);
+    let filter = ConnectionFilter { grouped:true,..Default::default() };
+    let ids = f.db.connection_entry_ids_filtered(Some("current"),None,None,0,60,&filter).unwrap();
+    let (mut condition,mut values) = filter.sql(None,None).unwrap();
+    condition.push_str(" AND e.folder_id IN (?)");
+    values.push(Value::Text("current".into()));
+    values.extend(ids.iter().cloned().map(Value::Text));
+    let gallery=filter.gallery(&condition);
+    let placeholders=vec!["?";ids.len()].join(",");
+    let mut outcomes=Vec::new();
+    for materialized in [false,true] {
+        let (extra,table)=if materialized { (", group_entries AS MATERIALIZED (SELECT * FROM entry_gallery)","group_entries") } else { ("","entry_gallery") };
+        let sql=format!("WITH {gallery}{extra} SELECT h.id,m.id FROM {table} h JOIN {table} m ON m.folder_id=h.folder_id AND m.group_key=h.group_key WHERE h.id IN ({placeholders}) ORDER BY m.created_at,m.asset_id,m.id");
+        let conn=f.db.conn.lock().unwrap();
+        let mut stmt=conn.prepare(&sql).unwrap();
+        let rows=stmt.query_map(params_from_iter(values.iter()),|r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?))).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+        let steps=stmt.get_status(rusqlite::StatementStatus::VmStep);
+        let mut plan=conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        let details=plan.query_map(params_from_iter(values.iter()),|r|r.get::<_,String>(3)).unwrap().collect::<Result<Vec<_>,_>>().unwrap();
+        println!("group-plan materialized={materialized} vm_steps={steps} joins={:?}",details.iter().filter(|s|s.contains("group_entries")||s.contains("SEARCH e ")||s.contains("SEARCH h ")||s.contains("SEARCH m ")||s.contains("SCAN h")||s.contains("SCAN m")).collect::<Vec<_>>());
+        outcomes.push((rows,steps));
+    }
+    assert_eq!(outcomes[0].0,outcomes[1].0,"materialization must not change visible members or order");
+    assert!(outcomes[1].1<outcomes[0].1,"shared provenance rows must reduce repeated VM work");
 }

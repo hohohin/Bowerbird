@@ -73,6 +73,7 @@ try {
   await page.evaluate(() => window.save()); await page.reload(); await trigger.waitFor();
   assert.equal(await page.locator('[data-workflow-signal-link]').count(), 1);
   await instruction.getByRole('button', { name: '断开触发器连接', exact: true }).click({ button: 'right' });
+  await page.getByRole('menu', { name: '选择要断开的连线' }).getByRole('menuitem').click();
   await page.waitForFunction(() => !document.querySelector('[data-workflow-signal-link]'));
   const keyTool = await page.getByRole('button', { name: '发条触发器', exact: true }).boundingBox();
   const cardHeader = await instruction.locator('header strong').boundingBox();
@@ -108,6 +109,7 @@ try {
   await instruction.getByRole('button', { name: '断开触发器连接', exact: true }).waitFor();
   assert.equal(await instruction.getByRole('button', { name: '上发条，运行工作流', exact: true }).count(), 0);
   await instruction.getByRole('button', { name: '断开触发器连接', exact: true }).click({ button: 'right' });
+  await page.getByRole('menu', { name: '选择要断开的连线' }).getByRole('menuitem').click();
   await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     const { CanvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');

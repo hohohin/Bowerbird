@@ -3,6 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Check, RotateCw, Sparkles, X } from "lucide-react";
 import { api } from "../lib/api";
 import { understandProvider } from "../lib/entitlement";
+import { generationProviderIssue } from "../lib/generationAvailability";
+import { ProviderIssueNotice } from "./creation/ProviderIssueNotice";
 import { notifyError, notifySuccess } from "../lib/notify";
 import type { Analysis, Asset, LocalAgentRun } from "../lib/types";
 import { useStore } from "../store";
@@ -51,6 +53,9 @@ export function LocalAgentPanel({
   const activeProvider = useStore((state) => state.activeGenProvider);
   const startGeneration = useStore((state) => state.startGeneration);
   const cloudEntitlement = useStore((state) => state.cloudEntitlement);
+  const cloudAuth = useStore(state => state.cloudAuth);
+  const codexHealth = useStore(state => state.codexHealth);
+  const dreaminaHealth = useStore(state => state.dreaminaHealth);
   const activeProjectId = useStore((state) => state.activeProjectId);
   const activeVisualProfileId = useStore((state) => state.activeVisualProfileId);
   const [available, setAvailable] = useState(false);
@@ -81,6 +86,8 @@ export function LocalAgentPanel({
     return Array.isArray(scores) ? scores : [];
   }, [run]);
   const plan = run?.checkpoint.approval?.arguments?.changes;
+  const refineIssue = run?.status === "awaiting_approval" || (run?.status === "awaiting_tool" && run.checkpoint.pendingTool?.action === "refine_once")
+    ? generationProviderIssue(activeProvider, { cloudAuth, cloudEntitlement, codexHealth, dreaminaHealth }) : null;
 
   async function start() {
     if (!goal.trim()) return;
@@ -169,7 +176,7 @@ export function LocalAgentPanel({
   }
 
   async function continueRun(approve = false) {
-    if (!run) return;
+    if (!run || refineIssue) return;
     setBusy(true);
     setError(null);
     try {
@@ -243,16 +250,17 @@ export function LocalAgentPanel({
       )}
 
       {stage && <div className="text-xs text-muted">{stage}</div>}
+      {refineIssue && <ProviderIssueNotice issue={refineIssue} />}
       {error && <div className="rounded-lg border border-red-400/30 bg-red-400/5 p-2 text-xs text-red-300">{userErrorMessage(error, "智能精修未完成，请稍后继续。")}</div>}
 
       <div className="flex justify-end gap-2">
         {run?.status === "awaiting_approval" ? (
           <>
             <button type="button" onClick={reject} disabled={busy} className="inline-flex items-center gap-1 rounded-lg border border-edge px-2.5 py-1.5 text-xs text-muted hover:text-ink disabled:opacity-50"><X size={12} />取消</button>
-            <button type="button" onClick={() => void continueRun(true)} disabled={busy} className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50"><Check size={12} />确认并精修一次</button>
+            <button type="button" onClick={() => void continueRun(true)} disabled={busy || !!refineIssue} className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50"><Check size={12} />确认并精修一次</button>
           </>
         ) : run?.status === "awaiting_tool" ? (
-          <button type="button" onClick={() => void continueRun()} disabled={busy} className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50"><RotateCw size={12} />继续本轮</button>
+          <button type="button" onClick={() => void continueRun()} disabled={busy || !!refineIssue} className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50"><RotateCw size={12} />继续本轮</button>
         ) : (
           <button type="button" onClick={() => void start()} disabled={busy || !hasCaption || !goal.trim()} className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1.5 text-xs font-semibold text-white disabled:opacity-50"><Sparkles size={12} />{run ? "新建精修计划" : "开始评估"}</button>
         )}

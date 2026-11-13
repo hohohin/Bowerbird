@@ -10,6 +10,12 @@ export function agentOutputWriters(agent: WorkflowNode, nodes: WorkflowNode[]) {
     writer.inputs[type]?.some(input => input.nodeId === agent.id && input.portId === type)));
 }
 
+/** Content cards that own this Agent's text result when it is wired without explicit targets. */
+export function agentTextWriters(agent: WorkflowNode, nodes: WorkflowNode[]) {
+  return nodes.filter(writer => !!writer.textTarget && !writer.textTarget.image
+    && writer.inputs.text?.some(input => input.nodeId === agent.id && input.portId === "text"));
+}
+
 /** Resolve only explicitly mentioned, still-connected destinations; never positional row IDs. */
 export function agentOutputTargets(agent: WorkflowNode, nodes: WorkflowNode[]): AgentOutputTarget[] {
   const writers = agentOutputWriters(agent, nodes), targets: AgentOutputTarget[] = [];

@@ -155,7 +155,7 @@ try {
     check(controller.document.run.status === 'done' && window.h3Calls.at(-1).input.firstFrame === 'updated-frame', 'H3 resolves connected upstream image without mentions');
     api.localAgentFindAssetId = async () => 'h3-result';
     const remoteCalls = [], localCount = window.h3Calls.length;
-    window.store.setState({ startGeneration: async (...args) => {
+    window.store.setState({ dreaminaHealth: { ok: true, reason: "已登录" }, startGeneration: async (...args) => {
       remoteCalls.push(args); const identity = args[12];
       window.store.setState({ genJobs: { [identity.jobId]: { turns: [{ turnKey: identity.turnKey, images: ['/synthetic-h3.mp4'] }] } } });
       return { accepted: true, jobId: identity.jobId };

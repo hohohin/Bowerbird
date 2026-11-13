@@ -29,7 +29,7 @@ function fixture(storage = new Map()) {
     const localRequire = specifier => {
       if (specifier === '@tauri-apps/api/core') return { invoke: async (command, args) => { calls.push({ command, args: plain(args) }); const handler = handlers.get(command); if (!handler) throw new Error(`No synthetic handler for ${command}`); return handler(args); } };
       if (specifier === '@tauri-apps/api/event') return { listen: async (event, callback) => { listeners.set(event, callback); return () => listeners.delete(event); } };
-      if (specifier.startsWith('.')) return load(resolve(dirname(path), `${specifier}.ts`));
+      if (specifier.startsWith('.')) return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       return require(specifier);
     };
     const execute = vm.runInContext(`(function(require,module,exports){${compiled}\n})`, context, { filename: path });
@@ -43,16 +43,16 @@ function fixture(storage = new Map()) {
 test('Cloud chat uses its live quote, allows zero balance at zero cost and ignores local CLI eligibility', () => {
   const { chatProviderUnavailable } = fixture().chatApi;
   const state = { cloudAvailable: true, loggedIn: true, cloudAllowed: true, localAllowed: false, codexReady: false, balance: 0 };
-  const quote = { provider: 'deepseek-cloud', service: 'chat_deepseek', available: true, unit_cost: 0, currency: 'Bcoin', pricing_version: 1 };
-  assert.equal(chatProviderUnavailable('deepseek-cloud', state, quote), null);
+  const quote = { service: 'chat_deepseek', available: true, dsh_vps_v2_available: true, unit_cost: 0, currency: 'Bcoin', pricing_version: 1 };
+  assert.equal(chatProviderUnavailable('dsh-cloud', state, quote), null);
   assert.match(chatProviderUnavailable('codex-local', state, quote), /Pro/);
-  assert.match(chatProviderUnavailable('deepseek-cloud', state, null), /报价/);
+  assert.match(chatProviderUnavailable('dsh-cloud', state, null), /报价/);
   for (const unit_cost of [1, -1, null, undefined, NaN]) {
-    assert.match(chatProviderUnavailable('deepseek-cloud', { ...state, balance: 100 }, { ...quote, unit_cost }), /开放/);
+    assert.match(chatProviderUnavailable('dsh-cloud', { ...state, balance: 100 }, { ...quote, unit_cost }), /开放/);
   }
-  assert.match(chatProviderUnavailable('deepseek-cloud', state, { ...quote, available: false, unit_cost: null, pricing_version: null }), /开放/);
-  assert.match(chatProviderUnavailable('deepseek-cloud', { ...state, loggedIn: false }, quote), /登录/);
-  assert.match(chatProviderUnavailable('deepseek-cloud', state, { ...quote, available: false }), /开放/);
+  assert.match(chatProviderUnavailable('dsh-cloud', state, { ...quote, available: false, unit_cost: null, pricing_version: null }), /开放/);
+  assert.match(chatProviderUnavailable('dsh-cloud', { ...state, loggedIn: false }, quote), /登录/);
+  assert.match(chatProviderUnavailable('dsh-cloud', state, { ...quote, available: false }), /开放/);
 });
 
 test('local DSH uses its own readiness and BYO entitlement without requiring Codex or Cloud', () => {
@@ -65,13 +65,13 @@ test('local DSH uses its own readiness and BYO entitlement without requiring Cod
   assert.match(chatProviderUnavailable('dsh-local', state, null, null), /DSH/);
 });
 
-test('managed DSH requires its runtime and a zero Cloud quote, without Codex or BYO entitlement', () => {
+test('VPS DSH follows the cloud capability and price independently of local DSH', () => {
   const { chatProviderUnavailable, chatUsesCloud, chatAssistantLabel } = fixture().chatApi;
   const state = { cloudAvailable: true, loggedIn: true, cloudAllowed: true, localAllowed: false, codexReady: false, balance: 0 };
   const quote = { provider: 'deepseek-cloud', service: 'chat_deepseek', available: true, unit_cost: 0, currency: 'Bcoin', pricing_version: 1 };
   const dsh = { localAvailable: false, managedAvailable: true, localReason: '请连接本机 DSH。', managedReason: null };
-  assert.equal(chatProviderUnavailable('dsh-cloud', state, quote, dsh), null);
-  assert.match(chatProviderUnavailable('dsh-cloud', state, quote, { ...dsh, managedAvailable: false, managedReason: '请先准备 DSH。' }), /准备 DSH/);
+  assert.equal(chatProviderUnavailable('dsh-cloud', state, { ...quote, dsh_vps_v2_available: true }, null), null);
+  assert.match(chatProviderUnavailable('dsh-cloud', state, { ...quote, dsh_vps_available: true }, dsh), /云端 DSH 会话服务暂未开放/);
   assert.match(chatProviderUnavailable('dsh-cloud', state, { ...quote, unit_cost: 1 }, dsh), /开放/);
   assert.match(chatProviderUnavailable('dsh-cloud', { ...state, loggedIn: false }, quote, dsh), /登录/);
   assert.equal(chatUsesCloud('dsh-cloud'), true);
@@ -126,12 +126,12 @@ test('switching chat provider after an uncertain send starts a distinct native r
   const f = fixture();
   f.handlers.set('local_chat_send', () => { throw new Error('connection lost'); });
   const input = { projectId: 'p', text: '同一个问题', referenceAssetIds: [] };
-  for (const provider of ['codex-local', 'deepseek-cloud', 'deepseek-cloud']) {
+  for (const provider of ['codex-local', 'deepseek-cloud', 'dsh-cloud']) {
     await assert.rejects(f.store.getState().send({ ...input, provider }), /connection lost/);
   }
   assert.notEqual(f.calls[0].args.input.requestId, f.calls[1].args.input.requestId);
   assert.equal(f.calls[1].args.input.requestId, f.calls[2].args.input.requestId);
-  assert.equal(f.calls[1].args.input.provider, 'deepseek-cloud');
+  assert.equal(f.calls[1].args.input.provider, 'dsh-cloud');
 });
 
 test('concurrent send to the same conversation is rejected before a second IPC', async () => {

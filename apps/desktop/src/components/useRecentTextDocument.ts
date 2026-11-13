@@ -66,14 +66,15 @@ async function copyDraft(writer: WriterRef, bound: MutableRefObject<{ id: string
   const source = await visitRecentTextDocument(previous.document.id).catch(() => undefined);
   if (!live.current) return;
   if (source && source.id === bound.current.id) bound.current.document = source;
+  const latest = previous.document;
   previous.cancelScheduled();
-  adopt(saved, previous.document);
+  adopt(saved, latest);
   await writer.current?.flush();
 }
 
-export function useRecentTextDocument(initial: TextWorkspaceDocument, origin: TextDocumentOrigin | undefined, onChange?: (document: TextWorkspaceDocument, context: { isSourceDocument: boolean }) => void) {
+export function useRecentTextDocument(initial: TextWorkspaceDocument, origin: TextDocumentOrigin | undefined, onChange?: (document: TextWorkspaceDocument, context: { isSourceDocument: boolean }) => void, onPendingInput?: (capture: () => void) => void) {
   const [draft, setDraft] = useState(() => initialEntry(initial, origin));
-  const [value, setValue] = useState(() => parseMarkdown(initial.markdown)), [ready, setReady] = useState(false);
+  const [value, setValue] = useState<DocumentValue>([]), [ready, setReady] = useState(false);
   const current = useRef<TextWorkspaceDocument>(initial), bound = useRef({ id: draft.id, document: initial });
   const writer = useRef<TextDocumentAutosave>();
   const live = useAutosaveExit(writer), { status, error, report } = useAutosaveFeedback(live);
@@ -98,10 +99,21 @@ export function useRecentTextDocument(initial: TextWorkspaceDocument, origin: Te
     save.update(entry);
     changed.current?.(entry, { isSourceDocument: entry.id === bound.current.id });
   }
-  function changeValue(next: DocumentValue) { setValue(next); update({ ...current.current, markdown: serializeMarkdown(next) }); }
+  function changeValue(next: DocumentValue) {
+    const materialize = () => {
+      setValue(next);
+      update({ ...current.current, markdown: serializeMarkdown(next) });
+    };
+    if (writer.current) {
+      writer.current.stage(materialize);
+      onPendingInput?.(writer.current.capture);
+    } else materialize();
+  }
   async function flush() { if (writer.current) await writer.current.flush(); else await reopen(); }
   const choose = useRecentSelection(writer, live, attach, report);
-  return { draft, value, current, bound, ready, status, error, update, changeValue, flush, choose,
+  const capture = () => writer.current?.capture();
+  const rename = (title: string) => { capture(); update({ ...current.current, title }); };
+  return { draft, value, current, bound, ready, status, error, rename, capture, changeValue, flush, choose,
     retry: flush,
     copy: () => {
       report('saving');

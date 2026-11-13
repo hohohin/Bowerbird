@@ -85,7 +85,6 @@
 .local-chat-history-entry-title { display: flex; align-items: center; gap: 7px; font-size: 12px; }
 .local-chat-history-entry-title strong { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
 .local-chat-history-entry-title svg { color: var(--bb-blue); flex-shrink: 0; }
-.local-chat-history-entry p { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; font-size: 11px; line-height: 1.5; margin: 7px 0; color: var(--bb-muted); }
 .local-chat-history-entry small { font-size: 10px; color: var(--bb-muted); }
 .local-chat-empty { text-align: center; margin: 35px auto; padding: 0 12px; font-size: 12px; line-height: 1.8; color: var(--bb-muted); }
 .local-chat-card-content { display: flex; flex-direction: column; width: 100%; height: 100%; min-height: inherit; min-width: 0; box-sizing: border-box; padding: 14px 15px; color: var(--bb-ink); text-align: left; }
@@ -93,7 +92,6 @@
 .local-chat-card-heading > span { display: flex; gap: 6px; align-items: center; color: var(--bb-blue); font-size: 11px; }
 .local-chat-card-heading small { color: var(--bb-muted); font-size: 10px; }
 .local-chat-card-title { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 8px; white-space: nowrap; text-overflow: ellipsis; overflow: hidden; }
-.local-chat-card-preview { font-size: 11px; color: var(--bb-muted); line-height: 1.75; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow-wrap: anywhere; margin: 0 0 15px; flex: 1; }
 .local-chat-card-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; color: var(--bb-muted); }
 .local-chat-card-footer > span { display: flex; align-items: center; gap: 5px; }
 .local-chat-card-footer .is-running { color: var(--bb-blue); }

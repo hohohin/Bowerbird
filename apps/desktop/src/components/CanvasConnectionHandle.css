@@ -18,8 +18,7 @@
   color: var(--bb-ink);
   box-shadow: none;
   outline: none;
-  transform-origin: 0 0;
-  transform: scale(calc(1 / var(--canvas-connection-zoom, var(--canvas-zoom, 1)))) translate(var(--connection-offset), -46.08px);
+  transform: translate(var(--connection-offset), -50%);
   touch-action: none;
   cursor: crosshair;
   opacity: 0;

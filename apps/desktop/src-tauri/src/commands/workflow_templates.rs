@@ -33,10 +33,20 @@ fn content(value: &Value, kind: &Value) -> AppResult<()> {
     }
     Ok(())
 }
+fn normalize_chat_providers(document: &mut Value) {
+    if let Some(nodes) = document.pointer_mut("/plan/nodes").and_then(Value::as_array_mut) {
+        for node in nodes {
+            if node["kind"] == "agent" && node["chatProvider"] == "deepseek-cloud" {
+                node["chatProvider"] = "dsh-cloud".into();
+            }
+        }
+    }
+}
+
 fn validate(value: &Value) -> AppResult<()> {
     fields(value, &["format", "schemaVersion", "id", "revision", "name", "description", "plan", "inputs", "parameters", "outputs", "layout"])?;
-    if value.get("layout").is_some() && !matches!(value["schemaVersion"].as_i64(), Some(3 | 4 | 5 | 6)) { return Err(invalid()); }
-    if value.to_string().len() > 32_000_000 || value["format"] != "bowerbird-workflow-template" || !matches!(value["schemaVersion"].as_i64(), Some(1 | 2 | 3 | 4 | 5 | 6))
+    if value.get("layout").is_some() && !matches!(value["schemaVersion"].as_i64(), Some(3..=8)) { return Err(invalid()); }
+    if value.to_string().len() > 32_000_000 || value["format"] != "bowerbird-workflow-template" || !matches!(value["schemaVersion"].as_i64(), Some(1..=8))
         || !text(&value["id"], 80) || !text(&value["name"], 120) || value["revision"].as_i64().is_none_or(|n| !(0..9_007_199_254_740_991).contains(&n))
         || value["description"].as_str().is_none_or(|s| s.encode_utf16().count() > 2000) { return Err(invalid()); }
     let plan = &value["plan"]; fields(plan, &["summary", "nodes", "edges"])?;
@@ -50,9 +60,14 @@ fn validate(value: &Value) -> AppResult<()> {
     for node in nodes {
         let mut node_fields = vec!["id", "kind", "action", "skill", "prompt", "ratio", "overwriteDescribe"];
         if v4 { node_fields.extend(["loopMode", "loopCount", "loopStartItem", "agentTransport"]); }
-        if value["schemaVersion"] == 6 { node_fields.extend(["chatProvider", "chatCodexOptions"]); }
+        if value["schemaVersion"].as_u64().is_some_and(|v| v >= 6) { node_fields.extend(["chatProvider", "chatCodexOptions"]); }
+        if value["schemaVersion"].as_u64().is_some_and(|v| v >= 7) { node_fields.push("chatDshSkill"); }
         fields(node, &node_fields)?;
-        if node.get("chatProvider").is_some_and(|provider| node["kind"] != "agent" || !matches!(provider.as_str(), Some("codex-local" | "dsh-local" | "dsh-cloud" | "deepseek-cloud"))) { return Err(invalid()); }
+        if node.get("chatProvider").is_some_and(|provider| node["kind"] != "agent" || !matches!(provider.as_str(), Some("codex-local" | "dsh-local" | "dsh-cloud"))) { return Err(invalid()); }
+        if let Some(skill) = node.get("chatDshSkill") {
+            if node["kind"] != "agent" || node["chatProvider"] != "dsh-cloud" { return Err(invalid()); }
+            serde_json::from_value::<crate::core::local_chat::ChatDshSkill>(skill.clone()).map_err(|_| invalid())?.validate()?;
+        }
         if let Some(options) = node.get("chatCodexOptions") {
             fields(options, &["model", "reasoningEffort"])?;
             if node["chatProvider"] != "codex-local" || options.as_object().unwrap().values().any(|value| !text(value, 200) || value.as_str().unwrap().contains(['\r','\n','\0'])) { return Err(invalid()); }
@@ -109,7 +124,13 @@ fn validate(value: &Value) -> AppResult<()> {
     for edge in edges {
         let mut edge_fields = vec!["from", "output", "to", "input"];
         if v5 { edge_fields.extend(["autoConnect", "mediaFilter"]); }
+        if value["schemaVersion"] == 8 { edge_fields.push("referenceRanks"); }
         fields(edge, &edge_fields)?;
+        if let Some(ranks) = edge.get("referenceRanks") {
+            if !matches!(edge["input"].as_str(), Some("text" | "image"))
+                || !nodes.iter().any(|node| node["id"] == edge["to"] && node["kind"] == "generation")
+                || ranks.as_array().is_none_or(|items| items.is_empty() || items.iter().any(|item| item.as_i64().is_none_or(|n| !(-1..=9_007_199_254_740_991).contains(&n)))) { return Err(invalid()); }
+        }
         if edge.get("autoConnect").is_some_and(|group| !alias(group)) { return Err(invalid()); }
         if let Some(filter) = edge.get("mediaFilter") {
             let media = filter.as_array().ok_or_else(invalid)?;
@@ -132,10 +153,13 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT document_json FROM workflow_templates ORDER BY updated_at DESC,id")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
-        rows.into_iter().map(|raw| Ok(serde_json::from_str(&raw)?)).collect()
+        rows.into_iter().map(|raw| {
+            let mut doc = serde_json::from_str(&raw)?;
+            normalize_chat_providers(&mut doc);
+            Ok(doc)
+        }).collect()
     }
     fn workflow_template_save(&self, mut document: Value, expected_revision: i64) -> AppResult<Value> {
-        validate(&document)?;
         if document["revision"] != expected_revision { return Err(invalid()); }
         let mut conn = self.conn.lock().unwrap(); let tx = conn.transaction()?;
         save_definition(&tx, &mut document, expected_revision)?;
@@ -143,6 +167,7 @@ impl Database {
     }
 }
 fn save_definition(tx: &rusqlite::Connection, document: &mut Value, expected_revision: i64) -> AppResult<()> {
+        normalize_chat_providers(document);
         validate(document)?;
         let id = document["id"].as_str().unwrap().to_owned();
         let current = tx.query_row("SELECT revision FROM workflow_templates WHERE id=?1", [&id], |r| r.get::<_, i64>(0)).optional()?.unwrap_or(0);
@@ -237,7 +262,7 @@ pub fn workflow_template_delete(db: State<'_, Arc<Database>>, id: String, expect
 }
 #[tauri::command]
 pub fn workflow_template_export(db: State<'_, Arc<Database>>, id: Option<String>, document: Option<Value>, path: String) -> AppResult<()> {
-    let document = match (id, document) {
+    let mut document = match (id, document) {
         (Some(id), None) => {
             let raw: String = db.conn.lock().unwrap().query_row("SELECT document_json FROM workflow_templates WHERE id=?1", [id], |r| r.get(0))?;
             serde_json::from_str(&raw)?
@@ -245,6 +270,7 @@ pub fn workflow_template_export(db: State<'_, Arc<Database>>, id: Option<String>
         (None, Some(document)) => document,
         _ => return Err(invalid()),
     };
+    normalize_chat_providers(&mut document);
     export_document(&document, &path)
 }
 fn export_document(document: &Value, path: &str) -> AppResult<()> {
@@ -261,6 +287,21 @@ mod tests {
     use serde_json::json;
     fn template() -> Value { json!({"format":"bowerbird-workflow-template","schemaVersion":1,"id":"template","revision":0,"name":"海报","description":"","inputs":[],"parameters":[],"outputs":[{"id":"out","node":"draw","port":"image","label":"成品"}],"plan":{"summary":"海报","nodes":[{"id":"start","kind":"trigger"},{"id":"draw","kind":"generation","prompt":"猫"}],"edges":[{"from":"start","output":"signal","to":"draw","input":"signal"}]}}) }
     #[test]
+    fn reference_order_survives_template_storage() {
+        let mut doc = template();
+        doc["schemaVersion"] = json!(8);
+        doc["inputs"] = json!([{"id":"pictures","label":"参考图","type":"image"}]);
+        doc["plan"]["edges"].as_array_mut().unwrap().push(json!({"from":"pictures","output":"image","to":"draw","input":"image","referenceRanks":[2,0,-1]}));
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        assert_eq!(db.workflow_template_save(doc.clone(), 0).unwrap()["plan"]["edges"][1]["referenceRanks"], json!([2,0,-1]));
+        doc["schemaVersion"] = json!(7);
+        assert!(validate(&doc).is_err());
+        doc["schemaVersion"] = json!(8);
+        doc["plan"]["edges"][1]["referenceRanks"] = json!([-2]);
+        assert!(validate(&doc).is_err());
+    }
+    #[test]
     fn shared_agent_template_keeps_model_settings_but_never_conversation_identity() {
         let mut doc = template(); doc["schemaVersion"] = json!(6);
         doc["plan"]["nodes"][1] = json!({"id":"draw","kind":"agent","prompt":"创作","chatProvider":"codex-local","chatCodexOptions":{"model":"fixture","reasoningEffort":"high"}});
@@ -269,6 +310,17 @@ mod tests {
         assert_eq!(db.workflow_template_save(doc.clone(), 0).unwrap()["plan"]["nodes"][1]["chatCodexOptions"], doc["plan"]["nodes"][1]["chatCodexOptions"]);
         for key in ["chatConversationId", "chatInput", "chatTurnId"] { let mut bad = doc.clone(); bad["plan"]["nodes"][1][key] = json!("old"); assert!(validate(&bad).is_err()); }
         doc["plan"]["nodes"][1]["chatProvider"] = json!("dsh-cloud"); assert!(validate(&doc).is_err());
+    }
+    #[test]
+    fn legacy_cloud_agent_template_saves_with_the_dsh_provider() {
+        let mut doc = template();
+        doc["schemaVersion"] = json!(6);
+        doc["plan"]["nodes"][1] = json!({"id":"draw","kind":"agent","prompt":"创作","chatProvider":"deepseek-cloud"});
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let saved = db.workflow_template_save(doc, 0).unwrap();
+        assert_eq!(saved["plan"]["nodes"][1]["chatProvider"], "dsh-cloud");
+        assert_eq!(db.workflow_templates_list().unwrap(), vec![saved]);
     }
     #[test]
     fn portable_storage_rejects_private_fields_and_stale_revisions() {

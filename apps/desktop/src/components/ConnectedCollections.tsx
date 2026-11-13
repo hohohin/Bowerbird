@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { catalogCache, patchConnectionProgress } from "../lib/catalogCache";
-import { invalidateCatalog, useCatalogRevision, subscribeConnectionProgress } from "../lib/useCatalogRevision";
+import { invalidateCatalog, observeCatalogChanges, useCatalogRevision, subscribeConnectionProgress, waitingForConnectionScan } from "../lib/useCatalogRevision";
 import { ChevronDown, ChevronRight, Folder, Link2, MoreHorizontal, Plus, RefreshCw, Unlink } from "lucide-react";
 import { api } from "../lib/api";
 import { connectedRows, folderConnections, useConnectedNavigation, type ConnectionEntry, type FolderConnection } from "../lib/folderConnections";
@@ -34,7 +34,7 @@ import { videoSourceKey } from "../lib/videoSourceKey";
 import { isAudioAsset } from "../lib/audioMedia";
 import { isTextAsset } from "../lib/textMedia";
 import { stopAudioPreview, stopAudioPreviewInFolder } from "../lib/audioPreview";
-import { CollectionEditorDialog, CollectionAssignDialog } from "./CollectionDialogs";
+import { CollectionEditorDialog, CollectionAssignDialog, CollectionMoveDialog, type MoveEntrySelection } from "./CollectionDialogs";
 import "./CategorizedLibrary.css";
 import "./ConnectedCollections.css";
 
@@ -42,7 +42,7 @@ type EntryAsset = Asset & { connectionEntry: ConnectionEntry; connectionGroup?: 
 const entryAsset = (entry: ConnectionEntry): EntryAsset => ({ ...entry.asset, connectionEntry: entry, connectionGroup: entry.group?.map(entryAsset) });
 type Menu = { x: number; y: number; folder: FolderConnection };
 type Operation = { kind: "disconnect" | "trash-folder" | "move-folder"; folder: FolderConnection }
-  | { kind: "rename-entry" | "move-entries" | "remove-references"; entries: ConnectionEntry[] };
+  | { kind: "rename-entry" | "remove-references"; entries: ConnectionEntry[] };
 const entryOf = (asset: Asset) => (asset as EntryAsset).connectionEntry;
 const entryKey = (asset: Asset) => entryOf(asset).id;
 const assetsOf = (entries: ConnectionEntry[]) => [...new Map(entries.map(entry => [entry.asset_id, entry.asset])).values()];
@@ -63,6 +63,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   const [references, setReferences] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [recoveringRoots, setRecoveringRoots] = useState<ReadonlySet<string>>(new Set());
   const loadedFolderScope = useRef<string | null>(null);
   const [selected, setSelected] = useState(new Set<string>());
   const [multiple, setMultiple] = useState(false);
@@ -71,6 +72,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   const [editor, setEditor] = useState<{ item?: FolderConnection; parentId: string | null } | null>(null);
   const [operation, setOperation] = useState<Operation | null>(null);
   const [assign, setAssign] = useState<string[] | null>(null);
+  const [moveEntries, setMoveEntries] = useState<MoveEntrySelection | null>(null);
   const [preview, setPreview] = useState<{ path: string; sourceKey: string } | null>(null);
   const [jump, setJump] = useState<{ id: string; sequence: number } | null>(null);
   const [drop, setDrop] = useState<string | null>(null);
@@ -98,6 +100,8 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   const foldersById = useMemo(() => new Map(folders.map(folder => [folder.id, folder])), [folders]);
   const sections = useMemo(() => rows.map(({ item }) => ({ id: item.id, name: item.name, count: item.count, tagId: null })), [rows]);
   const current = folders.find(folder => folder.id === active);
+  const connectionRoot = current && foldersById.get(current.root_id);
+  const reading = !!current && !error && !current.error && (current.scanning || recoveringRoots.has(current.root_id));
   const filter = useMemo<CatalogFilter & { grouped: boolean }>(() => ({ grouped: true, kind: "connections", id: null, projectId: scope, media, query: "", generated: (media === "all" || media === "images" || media === "videos") && generatedFilter ? generatedFilter === "source:generated" : null, color: media === "images" ? color : null }), [scope, media, generatedFilter, color]);
   const filterKey = JSON.stringify(filter);
   const filterRef = useRef(filterKey); filterRef.current = filterKey;
@@ -114,7 +118,14 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     alive.current = true;
     return () => { alive.current = false; };
   }, []);
-  useEffect(() => subscribeConnectionProgress(progress => setFolders(folders => patchConnectionProgress(folders, progress))), []);
+  useEffect(() => subscribeConnectionProgress(progress => {
+    setFolders(folders => patchConnectionProgress(folders, progress));
+    if (progress.rootAvailable !== undefined) setRecoveringRoots(previous => {
+      const next = new Set(previous);
+      if (progress.rootAvailable) next.add(progress.rootId); else next.delete(progress.rootId);
+      return next;
+    });
+  }), []);
   useLayoutEffect(() => {
     let current = true;
     const key = `folders:${filterKey}`;
@@ -127,8 +138,17 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     const cached = catalogCache.peek<FolderConnection[]>(key);
     if (cached) apply(cached.value);
     else if (loadedFolderScope.current !== filterKey) setLoading(true);
-    void catalogCache.read(key, () => folderConnections.list(scope, media, filter), !!filter.color).then(value => {
-      if (current && revision === catalogCache.revision(!!filter.color)) apply(value);
+    void catalogCache.read(key, async () => {
+      await observeCatalogChanges();
+      return folderConnections.list(scope, media, filter);
+    }, !!filter.color).then(value => {
+      if (current && revision === catalogCache.revision(!!filter.color)) {
+        apply(value);
+        setRecoveringRoots(previous => {
+          if (!previous.size) return previous;
+          return new Set([...previous].filter(id => waitingForConnectionScan(id) || value.some(folder => folder.id === id && folder.scanning)));
+        });
+      }
     }).catch(reason => { if (current) setError(userErrorMessage(reason, "文件夹暂时无法读取，请重试。")); }).finally(() => { if (current) setLoading(false); });
     return () => { current = false; };
   }, [scope, media, revision, filter]);
@@ -139,7 +159,17 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   }, [filterKey]);
   useEffect(() => {
     let current = true; dragSelection.current = [];
-    if (selected.size) void folderConnections.resolve([...selected]).then(entries => { if (current && entries.length === selected.size) dragSelection.current = entries; }).catch(() => {});
+    const version = selectionVersion.current;
+    if (selected.size) void folderConnections.resolve([...selected]).then(entries => {
+      if (!current || version !== selectionVersion.current) return;
+      dragSelection.current = entries;
+      if (entries.length === selected.size) return;
+      if (!entries.length) { finishSelection(); return; }
+      selectionVersion.current++;
+      const retained = new Set(entries.map(entry => entry.id));
+      setSelected(retained);
+      anchor.current = null;
+    }).catch(() => {});
     return () => { current = false; };
   }, [selected, revision]);
   const reveal = useCallback((id: string) => {
@@ -225,14 +255,20 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   function context(asset: Asset, x: number, y: number, location: CatalogLocation) {
     const entry = entryOf(asset), key = filterRef.current;
     void run(async () => {
-      const entries = selected.has(entry.id) ? await resolve([...selected]) : [entry];
+      const entryIds = selected.has(entry.id) ? [...selected] : [entry.id];
+      const entries = entryIds.length > 1 ? await folderConnections.resolve(entryIds) : [entry];
       if (!canShowOverlay() || filterRef.current !== key) return;
+      const move = () => setMoveEntries({ entryIds, entries });
+      if (entries.length !== entryIds.length) {
+        (onAssetContextMenu ?? useStore.getState().openContextMenu)(x, y, asset.id, { asset, moveIncompleteSelection: move });
+        return;
+      }
       const fileSelection = {
         assets: assetsOf(entries), openReferences: () => setReferences(true),
         onComplete: () => { finishSelection(); invalidateCatalog(); },
         select: () => { anchor.current = location; setSelected(previous => new Set([...previous, ...entries.map(item => item.id)])); setMultiple(true); },
         entries: { count: entries.length, available: entries.every(item => item.available),
-          rename: () => setOperation({ kind: "rename-entry", entries }), move: () => setOperation({ kind: "move-entries", entries }),
+          rename: () => setOperation({ kind: "rename-entry", entries }), move,
           removeReferences: entries.every(item => item.is_reference) ? () => setOperation({ kind: "remove-references", entries }) : undefined },
       };
       ownedMenu.current = fileSelection;
@@ -297,11 +333,20 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
       <div ref={pinch} className="catalog-gallery">
         <LibraryTacticalBackdrop/>
         {error && <p className="catalog-error" role="alert">{error}<button onClick={() => invalidateCatalog()}>重试</button></p>}
-        {current && (!current.available || current.error) && <div className="connected-status"><Unlink size={14}/><span>{current.error ? userErrorMessage(current.error, "文件夹暂时无法读取，请重试。") : "文件夹暂不可用"}</span>{!current.available ? <button onClick={() => void run(() => relocate(current), true)}>重新定位</button> : <button onClick={refresh}>刷新</button>}</div>}
+        {current && (connectionRoot?.available === false || reading || !current.available || current.error) &&
+          <div className="connected-status" role="status">
+            {connectionRoot?.available !== false && reading ? <><RefreshCw size={14} className="connected-refreshing"/><span>正在读取「{current.name}」…</span></> :
+              <><Unlink size={14}/><span>{connectionRoot?.available === false ? `「${connectionRoot.name}」已离线，接回原目录后会自动读取。`
+                : current.error ? userErrorMessage(current.error, "文件夹暂时无法读取，请重试。") : "文件夹暂不可用"}</span>
+                {!current.available ? <button onClick={() => void run(() => relocate(current), true)}>重新定位</button> : <button onClick={refresh}>刷新</button>}</>}
+          </div>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none", scrollPaddingTop: 48 }}>
           {!loading && !folders.length && !error && <p className="catalog-hint catalog-empty">点击「建立连接」选择素材文件夹。</p>}
           {!loading && loadedFolderScope.current === filterKey && <VirtualCatalog key={`${pane?.id ?? "main"}:${filterKey}`} filter={filter} sections={sections} headings width={width} revision={revision} scroll={scroll} selected={selected} jump={jump} initialTop={savedPosition?.top} onActive={onActive}
-            readPage={readPage} itemKey={entryKey} emptySection={id => folders.find(folder => folder.id === id)?.scanning ? "正在检查文件夹…" : null}
+            readPage={readPage} itemKey={entryKey} emptySection={id => {
+              const folder = foldersById.get(id);
+              return folder && foldersById.get(folder.root_id)?.available === false ? "文件夹已离线" : folder?.scanning ? "正在读取文件夹…" : null;
+            }}
             onAssetsChange={assetsChanged} onSelect={select} onActivate={activate} onOpen={openAsset} onContextMenu={context}
             renderItem={(head, style, ratio, location) => <CatalogAssetCard key={entryKey(head)} asset={head} group={(head as EntryAsset).connectionGroup} itemKey={entryKey}
               style={style} ratio={ratio} selected={selected} revision={revision} onBrowseGroup={onBrowseGroup}
@@ -315,6 +360,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
         </OverlayScrollArea>
         <ThumbnailSizeSlider scope="library"/>
         {(selected.size > 0 || multiple) && <CatalogSelectionBar count={selected.size} busy={busy} projectId={projectId} onFinish={finishSelection} onSelectAll={selectAll}
+          onMove={() => setMoveEntries({ entryIds: [...selected] })}
           onAssign={() => void run(async () => { const entries = await resolve([...selected]); if (canShowOverlay()) setAssign(assetsOf(entries).map(asset => asset.id)); })}
           onAdd={media !== "audios" ? () => void run(async () => { const key = filterRef.current; const entries = await resolve([...selected]); if (!canShowOverlay() || filterRef.current !== key) return; await addMaterialAssets(assetsOf(entries), projectId, onNavigate ?? onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); }) : undefined}/>}
       </div>
@@ -325,6 +371,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     {references && <ModalShell title="外部引用" width="lg" onClose={() => setReferences(false)}><LocalFileBrowser initialTab="references" onClose={() => setReferences(false)} onCreateProject={() => void onCreateProject?.()}/></ModalShell>}
     {editor && <CollectionEditorDialog collections={folders} {...editor} projectId={scope} onClose={() => setEditor(null)} onSaved={id => { pendingJump.current = id; invalidateCatalog(); }}/ >}
     {assign && <CollectionAssignDialog assetIds={assign} onClose={() => setAssign(null)} onSaved={() => { finishSelection(); invalidateCatalog(); }}/ >}
+    {moveEntries && <CollectionMoveDialog selection={moveEntries} onClose={() => setMoveEntries(null)} onSaved={finishSelection}/>}
     {operation && <ConnectionOperation key={operation.kind} operation={operation} folders={folders} onClose={() => setOperation(null)} onSaved={() => { finishSelection(); invalidateCatalog(); }}/ >}
     {preview && <LibraryVideoPreview {...preview} projectId={projectId} onClose={() => setPreview(null)}/>}
   </section>;
@@ -335,7 +382,7 @@ function ConnectionOperation({ operation, folders, onClose, onSaved }: { operati
   const [target, setTarget] = useState("");
   const [busy, setBusy] = useState(false), [error, setError] = useState("");
   const lock = useRef(false);
-  const moving = operation.kind === "move-folder" || operation.kind === "move-entries";
+  const moving = operation.kind === "move-folder";
   function allowed(folder: FolderConnection) {
     if (!folder.available) return false;
     if (operation.kind !== "move-folder") return true;
@@ -354,7 +401,6 @@ function ConnectionOperation({ operation, folders, onClose, onSaved }: { operati
       switch (operation.kind) {
         case "rename-entry": await folderConnections.renameEntry(operation.entries[0].id, name); break;
         case "move-folder": await folderConnections.moveFolder(operation.folder.id, target); break;
-        case "move-entries": await folderConnections.moveEntries(operation.entries.map(entry => entry.id), target); break;
         case "remove-references": await folderConnections.removeReferences(operation.entries.map(entry => entry.id)); break;
         case "trash-folder": await folderConnections.trashFolder(operation.folder.id); break;
         case "disconnect": await folderConnections.disconnect(operation.folder.id); break;

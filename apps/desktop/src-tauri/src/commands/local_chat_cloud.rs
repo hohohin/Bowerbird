@@ -1,4 +1,4 @@
-//! Cloud transports one completion at a time; the existing desktop chat owns history/tools.
+//! Shared Cloud transport and read-only recovery for legacy completion jobs.
 use super::*;
 use serde::{Deserialize, Serialize};
 
@@ -26,15 +26,20 @@ pub(super) async fn recover(
     let pending: Pending =
         serde_json::from_str(&saved).map_err(|_| error("原 Cloud 任务记录不完整，无法取回"))?;
     ensure_account(auth, &pending.account)?;
-    let value = request(
+    let value = request_for_user(
         cloud,
         auth,
         json!({"action":"get","idempotency_key":pending.key}),
+        &pending.account,
     )
     .await?;
     ensure_account(auth, &pending.account)?;
-    let message =
-        completion(&value)?.ok_or_else(|| error("原 Cloud 任务仍在处理中，请稍后取回"))?;
+    let message = match completion(&value) {
+        Err(reason @ AppError::ChatNoReply(_)) => {
+            return db.record_local_chat_recovery_error(id, &turn, &saved, &reason.to_string());
+        }
+        result => result?.ok_or_else(|| error("原 Cloud 任务仍在处理中，请稍后取回"))?,
+    };
     let has_calls = !calls(&message)?.is_empty();
     let mut text = pending.text;
     if let Some(content) = message["content"]
@@ -57,14 +62,19 @@ pub(super) async fn request(
     auth: &AuthClient,
     body: Value,
 ) -> AppResult<Value> {
+    let account = auth.snapshot().user_id.ok_or_else(|| error("请先登录 Bowerbird 账号"))?;
+    request_for_user(cloud, auth, body, &account).await
+}
+
+pub(super) async fn request_for_user(cloud: &CloudClient, auth: &AuthClient, body: Value, account: &str) -> AppResult<Value> {
     let endpoint = cloud
         .config()
         .endpoint("chat-proxy")
         .ok_or_else(|| error("当前构建未配置 Bowerbird Cloud"))?;
     let response = auth
-        .send_authorized(
+        .send_authorized_for_user(
             cloud.http().post(endpoint).json(&body),
-            "Cloud 对话请求失败",
+            "Cloud 对话请求失败", account,
         )
         .await?;
     let status = response.status();
@@ -82,107 +92,75 @@ pub(super) async fn request(
     Ok(value)
 }
 
-pub(super) fn messages(chat: &ChatConversation, turn: &str) -> AppResult<Vec<Value>> {
-    let current = chat
-        .messages
-        .iter()
-        .find(|m| m.turn_id == turn && m.role == "user")
-        .ok_or_else(|| error("对话轮次不存在"))?;
-    let mut text = current.text.clone();
-    text.push_str("\n\n[本轮引用范围] 此对话只收到文字，未上传任何图片像素，不能声称已看图或分析图像。历史图片同样未上传。");
-    if !current.reference_asset_ids.is_empty() {
-        text.push_str(&format!("本轮仅供本机建卡的图片别名：{}。可引用这些别名创建卡片，需要视觉内容时请用户文字说明。",
-            (1..=current.reference_asset_ids.len()).map(|i| format!("image{i}")).collect::<Vec<_>>().join("、")));
+pub(super) fn current_text(text: &str, reference_count: usize) -> String {
+    let mut text = text.to_owned();
+    text.push_str("\n\n[本轮引用范围] 此对话只收到文字，未上传任何图片像素或视频画面。需要了解素材内容时请用户文字说明。");
+    if reference_count > 0 {
+        text.push_str(&format!("本轮可用于本机建卡的素材别名：{}。",
+            (1..=reference_count).map(|i| format!("image{i}")).collect::<Vec<_>>().join("、")));
     }
-    if !chat.actions.is_empty() {
-        let actions: Vec<Value> = chat.actions.iter().rev().take(8).map(|action| json!({
+    text
+}
+
+pub(super) fn messages(chat: &ChatConversation, turn: &str, include_history: bool) -> AppResult<Vec<Value>> {
+    let current = chat.messages.iter().find(|m| m.turn_id == turn && m.role == "user")
+        .ok_or_else(|| error("对话轮次不存在"))?;
+    let mut text = current_text(&current.text,current.reference_asset_ids.len());
+    // Keep the suffix of complete turns. Messages after this user turn can appear when a saved
+    // request is inspected, and failed or interrupted exchanges must not become model context.
+    let mut history = Vec::new();
+    let mut included = HashSet::new();
+    if include_history {
+        let end = chat.messages.iter().position(|m| m.turn_id == turn).unwrap();
+        for group in chat.messages[..end].chunk_by(|a,b| a.turn_id == b.turn_id).rev() {
+            let public: Vec<_> = group.iter().filter(|m| matches!(m.role.as_str(), "user" | "assistant")).collect();
+            if public.first().is_none_or(|m| m.role != "user") || !public.iter().any(|m| m.role == "assistant")
+                || public.iter().any(|m| m.status != "done" || m.text.trim().is_empty()) { continue; }
+            if history.len() + public.len() + 1 > 80 { break; }
+            included.insert(group[0].turn_id.as_str());
+            history.extend(public.into_iter().rev().map(|m| json!({"role":m.role,"content":m.text})));
+        }
+    }
+    history.reverse();
+    if !included.is_empty() {
+        let actions: Vec<Value> = chat.actions.iter().rev().filter(|a| included.contains(a.turn_id.as_str())).take(8).map(|action| json!({
             "status":action.status,
             "cards":action.cards.iter().map(|card|json!({"kind":card.kind,"title":card.title})).collect::<Vec<_>>()
         })).collect();
-        text.push_str(&format!(
-            "\n[近期建卡历史，仅作上下文，不授权重复创建] {}",
-            json!(actions)
-        ));
-    }
-    let mut messages = vec![json!({"role":"user","content":text})];
-    for old in chat.messages.iter().rev().filter(|m| {
-        m.turn_id != turn && !m.text.is_empty() && matches!(m.role.as_str(), "user" | "assistant")
-    }) {
-        let message = json!({"role":old.role,"content":old.text});
-        // Reserve message slots for tool replies; individual text is never clipped.
-        if messages.len() >= 80 {
-            break;
+        if !actions.is_empty() {
+            text.push_str(&format!("\n[近期建卡历史，仅作上下文，不授权重复创建] {}", json!(actions)));
         }
-        messages.push(message);
     }
-    messages.reverse();
-    Ok(messages)
+    history.push(json!({"role":"user","content":text}));
+    Ok(history)
 }
 
-fn completion(value: &Value) -> AppResult<Option<Value>> {
+pub(super) fn completion(value: &Value) -> AppResult<Option<Value>> {
     match value["status"].as_str() {
         Some("uploading" | "queued" | "running") => Ok(None),
         Some("succeeded") => {
             if let Some(message) = value["error"]["message"].as_str() {
-                return Err(error(message));
+                return Err(AppError::ChatNoReply(message.to_owned()));
             }
             let message = &value["message"];
             if message["role"] != "assistant"
                 || (!message["content"].is_null() && !message["content"].is_string())
             {
-                return Err(error("Cloud 对话消息格式无效"));
+                return Err(AppError::ChatNoReply("云端保存的回复格式无效，没有可取回的回复。".into()));
             }
             Ok(Some(message.clone()))
         }
-        Some("outcome_unknown") => Err(error(
-            "Cloud 本轮结果暂无法确认，未自动重发；请稍后查看原任务",
-        )),
-        Some("failed" | "cancelled") => Err(error(
-            value["error"]["message"]
-                .as_str()
-                .unwrap_or("Cloud 对话未完成，请稍后重试"),
-        )),
+        Some("outcome_unknown" | "failed" | "cancelled") => {
+            // Older gateways used a waiting instruction even for terminal jobs.
+            let detail = value["error"]["message"].as_str()
+                .filter(|_| value["error"]["recoverable"] == false)
+                .unwrap_or("本轮云端任务已结束，没有可取回的回复。");
+            Err(AppError::ChatNoReply(detail.to_owned()))
+        }
         _ => Err(error("Cloud 对话状态无效")),
     }
 }
 
-pub(super) async fn complete(
-    cloud: &CloudClient,
-    auth: &AuthClient,
-    db: &Database,
-    turn: &str,
-    round: usize,
-    messages: &[Value],
-    account: &str,
-    text: &str,
-) -> AppResult<Value> {
-    ensure_account(auth, account)?;
-    let mut pending = Pending {
-        key: format!("chat-{turn}-{round}"),
-        job: None,
-        account: account.into(),
-        text: text.into(),
-    };
-    db.set_local_chat_provider_turn(turn, &serde_json::to_string(&pending)?)?;
-    let mut value = request(cloud, auth, json!({"action":"create", "idempotency_key":pending.key, "messages":messages, "tools_enabled":true})).await?;
-    ensure_account(auth, account)?;
-    let job = value["job_id"]
-        .as_str()
-        .filter(|id| !id.is_empty() && id.len() <= 200)
-        .ok_or_else(|| error("Cloud 对话未返回任务编号"))?
-        .to_owned();
-    pending.job = Some(job.clone());
-    db.set_local_chat_provider_turn(turn, &serde_json::to_string(&pending)?)?;
-    loop {
-        if let Some(message) = completion(&value)? {
-            return Ok(message);
-        }
-        tokio::time::sleep(Duration::from_millis(750)).await;
-        ensure_account(auth, account)?;
-        value = request(cloud, auth, json!({"action":"get", "job_id":job})).await?;
-        ensure_account(auth, account)?;
-    }
-}
 
 pub(super) fn calls(message: &Value) -> AppResult<Vec<(String, Value)>> {
     let Some(raw) = message.get("tool_calls").filter(|v| !v.is_null()) else {
@@ -216,76 +194,7 @@ pub(super) fn calls(message: &Value) -> AppResult<Vec<(String, Value)>> {
         .collect()
 }
 
-pub(super) async fn run(
-    app: &AppHandle,
-    db: &Database,
-    cloud: &CloudClient,
-    auth: &AuthClient,
-    id: &str,
-    turn: &str,
-    mut cancel: watch::Receiver<bool>,
-) -> AppResult<&'static str> {
-    if *cancel.borrow() {
-        return Ok("stopped");
-    }
-    let account = auth
-        .snapshot()
-        .user_id
-        .ok_or_else(|| error("请先登录 Bowerbird 账号"))?;
-    let chat = db
-        .get_local_chat(id)?
-        .ok_or_else(|| error("对话记录不存在"))?;
-    let mut messages = messages(&chat, turn)?;
-    let mut text = String::new();
-    let execution = async {
-        for round in 0..12 {
-            let message =
-                complete(cloud, auth, db, turn, round, &messages, &account, &text).await?;
-            let calls = calls(&message)?;
-            if let Some(content) = message["content"].as_str().filter(|s| !s.is_empty()) {
-                if !text.is_empty() {
-                    text.push_str("\n\n");
-                }
-                text.push_str(content);
-                db.update_local_chat_text(id, turn, &text)?;
-                emit(app, db, id);
-            }
-            messages.push(message);
-            if calls.is_empty() {
-                return Ok("done");
-            }
-            for (call, args) in calls {
-                ensure_account(auth, &account)?;
-                let entitlement = app.state::<EntitlementService>();
-                let result = super::super::local_chat_cards::create_cards(
-                    app,
-                    db,
-                    auth,
-                    &entitlement,
-                    id,
-                    turn,
-                    &call,
-                    &args,
-                )
-                .await;
-                let result = match result {
-                    Ok(action) => json!({"success":true,"action":action}),
-                    Err(detail) => json!({"success":false,"error":detail.to_string()}),
-                };
-                messages
-                    .push(json!({"role":"tool","tool_call_id":call,"content":result.to_string()}));
-            }
-        }
-        Err(error(
-            "本轮卡片编排已达到次数上限，请查看已创建卡片后继续对话",
-        ))
-    };
-    tokio::select! {
-        _ = cancel.changed() => Ok("stopped"),
-        result = tokio::time::timeout(Duration::from_secs(1800), execution) => result.unwrap_or_else(|_| Err(error("Cloud 对话等待超时，已保留收到的内容；未自动重发任务"))),
-    }
-}
 
 #[cfg(test)]
 #[path = "local_chat_cloud_tests.rs"]
-mod tests;
+pub(super) mod tests;

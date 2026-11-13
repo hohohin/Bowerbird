@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { resolve } from "path";
+import { createRequire } from "node:module";
 import { viteLifecycle } from "./scripts/vite-lifecycle.mjs";
 import { textEditorAssets } from "./scripts/text-editor-assets.mjs";
 
@@ -14,6 +15,9 @@ export default defineConfig({
   root: resolve(__dirname, "."),
   resolve: {
     alias: {
+      // Vite prebundles Markdown dependencies for the page and the Worker together.
+      // The package's default export uses the entity table; its browser export needs a DOM.
+      "decode-named-character-reference": createRequire(import.meta.url).resolve("decode-named-character-reference"),
       "@": resolve(__dirname, "./src"),
       events: "events/",
       path: "path-browserify",

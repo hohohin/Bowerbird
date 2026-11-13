@@ -13,6 +13,7 @@ import {
   deepSeekConfigFromEnv,
   type DeepSeekConfig,
 } from "../providers/deepseek/backend.ts";
+import { dshDeepSeekConfig } from "../providers/deepseek/dsh-config.ts";
 import {
   arkControlledImageConfigFromEnv,
   createArkApprovedStepExecutor,
@@ -35,18 +36,8 @@ function requiredUnifiedPath(env: Record<string, string | undefined>, name: stri
   return value;
 }
 
-const UNIFIED_DSH_MODEL = "deepseek-flash";
 export const UNIFIED_DSH_PROMPT_TIMEOUT_MS = 600_000;
 export const UNIFIED_DSH_HTML_EXECUTION_TIMEOUT_MS = 600_000;
-
-function dshDeepSeekConfig(
-  env: Record<string, string | undefined>,
-  upstream: DeepSeekConfig,
-): DeepSeekConfig {
-  const model = env.BOWERBIRD_DSH_MODEL?.trim() || UNIFIED_DSH_MODEL;
-  if (model !== UNIFIED_DSH_MODEL) throw new Error("BOWERBIRD_DSH_MODEL_mismatch");
-  return { ...upstream, model };
-}
 
 /** Deployment-only DSH injection. Unset/false preserves the existing fail-closed dispatcher. */
 export function unifiedPlanningProcessorFromEnv(

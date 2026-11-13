@@ -10,8 +10,8 @@
 .library-tactical .library-source-navigation .library-view-switch button[aria-selected="true"] { color:var(--lt-selected-ink); }
 .library-tactical .library-source-navigation > .library-view-switch button[aria-expanded="true"] { color:var(--lt-ink); }
 /* Overlay only: navigation must never allocate a row or shrink the gallery. */
-.categorized-library:has(.library-source-navigation) > .file-view-heading { position:absolute; height:auto; min-height:28px; align-items:start; }
-.categorized-library:has(.library-source-navigation) > .file-view-heading > .library-browser-heading { height:auto; }
+.categorized-library > .file-view-heading.has-source-navigation { position:absolute; height:auto; min-height:28px; align-items:start; }
+.categorized-library > .file-view-heading.has-source-navigation > .library-browser-heading { height:auto; }
 @container (max-width:560px) {
   .categorized-library .library-source-navigation > .library-view-switch { width:224px; }
   .categorized-library .library-tag-scope .library-view-switch { width:144px; }

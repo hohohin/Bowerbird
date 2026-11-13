@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server = await createServer({ configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1650, strictPort: true, hmr: false, watch: null } });
+await mkdir('.tmp/loop-card-design', { recursive: true });
+const server = await createServer({ cacheDir: '.tmp/workflow-loop-updates-vite', server: { host: '127.0.0.1', port: 1650, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1800, height: 1200 } });
@@ -33,11 +35,11 @@ try {
   await source.waitFor(); await card.waitFor();
   const picker = card.getByRole('button', { name: '循环起始项', exact: true });
   const menu = page.getByRole('listbox', { name: '选择循环起始项' });
-  assert.match(await card.locator('.workflow-loop-start > small').textContent(), /共 10 项/);
+  assert.match(await card.locator('.loop-field-label small').textContent(), /共 10 项/);
   await source.getByRole('textbox', { name: '第 10 行第 1 列', exact: true }).click();
   await source.getByRole('button', { name: '在第 11 行位置插入', exact: true }).click();
   await source.getByRole('textbox', { name: '第 11 行第 1 列', exact: true }).fill('新增第 11 行');
-  assert.match(await card.locator('.workflow-loop-start > small').textContent(), /共 11 项/);
+  await card.getByText('共 11 项', { exact: true }).waitFor();
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const c = canvasWorkflowController('p');
@@ -46,21 +48,25 @@ try {
   });
   await picker.click();
   assert.equal(await menu.getByRole('option').count(), 11);
-  await page.screenshot({ path: '.tmp/workflow/loop-input-updated.png' });
+  await page.screenshot({ path: '.tmp/loop-card-design/loop-input-updated.png' });
   await menu.getByRole('option', { name: /第 11 项.*新增第 11 行/ }).click();
-  assert.match(await picker.textContent(), /从第 11 项开始/);
+  assert.match(await picker.textContent(), /第 11 项/);
   await page.waitForFunction(() => JSON.parse(window.snapshot().nodes.find(node => node.id === 'source-table').payloadJson).cells.at(-1)[0].text === '新增第 11 行');
   await page.evaluate(() => window.save());
   await page.reload(); await card.waitFor();
-  assert.match(await picker.textContent(), /从第 11 项开始/);
+  assert.match(await picker.textContent(), /第 11 项/);
   await page.evaluate(async () => {
-    const { api } = await import('/src/lib/api.ts');
+    const { localChat } = await import('/src/lib/localChat.ts');
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
-    const requests = [], results = new Map();
-    api.agentDsWorkflowStart = async (requestId, instruction, source) => {
-      requests.push(source); results.set(requestId, { schemaVersion: 1, requestId, text: '完成新增行' }); return { autoDelivered: true };
+    const requests = [];
+    localChat.list = async () => [];
+    localChat.getByRequest = async () => null;
+    localChat.send = async input => {
+      requests.push(input.text);
+      return { id: 'row-chat', projectId: 'p', threadId: 't', nodeId: 'agent', title: '处理当前行', provider: input.provider,
+        revision: 1, turnCount: 1, submittedTurnId: 'row-turn', status: 'idle', actions: [],
+        messages: [{ id: 'reply', turnId: 'row-turn', role: 'assistant', status: 'done', text: '完成新增行', referenceAssetIds: [] }] };
     };
-    api.agentDsWorkflowResult = async requestId => results.get(requestId);
     const c = canvasWorkflowController('p'); await c.start('loop');
     if (c.document.run.status !== 'done' || c.document.run.loop.items.length !== 11 || c.document.run.loop.startIndex !== 10
       || c.document.run.loop.completed.length !== 1 || requests.length !== 1 || !requests[0].includes('新增第 11 行')) throw Error('new loop must execute the new eleventh row only');
@@ -69,6 +75,7 @@ try {
   await source.getByRole('textbox', { name: '第 11 行第 1 列', exact: true }).click();
   await source.getByRole('button', { name: '在第 12 行位置插入', exact: true }).click();
   await source.getByRole('textbox', { name: '第 12 行第 1 列', exact: true }).fill('完成后新增第 12 行');
+  await card.getByText('共 12 项', { exact: true }).waitFor();
   await picker.click(); assert.equal(await menu.getByRole('option').count(), 12);
   await menu.getByRole('option', { name: /第 12 项.*完成后新增第 12 行/ }).click();
   assert.deepEqual(errors, []);

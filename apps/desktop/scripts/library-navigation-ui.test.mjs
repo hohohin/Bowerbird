@@ -47,6 +47,7 @@ try {
   await mkdir(output, { recursive: true });
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/catalog-paging/preview.html?navigation`);
   assert.deepEqual(await primary().getByRole('tab').allTextContents(), ['文件夹', '项目素材', '标签分类', '全部素材']);
+  await choose('全部素材');
   await filter('all', null);
   await assertFloatingNavigation();
   assert.equal(await scope().count(), 0);

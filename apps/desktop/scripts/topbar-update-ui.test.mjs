@@ -18,6 +18,7 @@ try {
   const button = slot.getByRole('button');
   const credits = page.locator('.app-topbar-credits');
   await slot.waitFor();
+  await page.evaluate(() => window.store.setState({ cloudAuth: { logged_in: true, user_id: 'test-user', display_name: '测试用户' } }));
   await page.evaluate(async () => { window.updater = (await import('/src/lib/appUpdater.ts')).useAppUpdater; });
   for (const phase of ['idle', 'checking', 'current']) {
     await page.evaluate(phase => window.updater.setState({ phase, update: null, error: null }), phase);

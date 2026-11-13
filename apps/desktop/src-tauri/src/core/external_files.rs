@@ -227,8 +227,27 @@ use shell_thumbnail::cached as shell_thumbnail;
 mod connected_media;
 pub(crate) use connected_media::connection_path_spellings;
 
-fn restore_present_original(conn: &rusqlite::Connection, id: &str) -> AppResult<()> {
-    conn.execute("DELETE FROM removed_missing_asset_originals WHERE asset_id=?1", [id])?;
+pub(super) fn restore_present_original(conn: &rusqlite::Connection, id: &str, canonical: &Path, hash: Option<&str>) -> AppResult<()> {
+    let cleaned: Option<(String, Option<String>)> = conn.query_row(
+        "SELECT m.path,COALESCE(NULLIF(t.fingerprint,''),e.fingerprint,f.sha256) FROM removed_missing_asset_originals m
+         LEFT JOIN trashed_asset_originals t ON t.asset_id=m.asset_id LEFT JOIN external_assets e ON e.asset_id=m.asset_id
+         LEFT JOIN creative_file_fingerprints f ON f.asset_id=m.asset_id WHERE m.asset_id=?1",
+        [id], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
+    if let Some((path, expected)) = cleaned {
+        let names = connection_path_spellings(canonical, canonical);
+        if !names.iter().any(|name| Path::new(name) == Path::new(&path)) {
+            return Err(invalid("原文件位置已变化，请核对后重新定位"));
+        }
+        let measured;
+        let hash = match hash {
+            Some(hash) => hash,
+            None => { measured = fingerprint(canonical)?; &measured }
+        };
+        if expected.as_deref() != Some(hash) {
+            return Err(invalid("原件校验不符，已保留失效条目的清理状态"));
+        }
+        conn.execute("DELETE FROM removed_missing_asset_originals WHERE asset_id=?1", [id])?;
+    }
     if conn.execute("DELETE FROM trashed_asset_originals WHERE asset_id=?1", [id])? > 0 {
         conn.execute("UPDATE external_assets SET library_member=1 WHERE asset_id=?1", [id])?;
         conn.execute("UPDATE assets SET library_hidden=0 WHERE id=?1", [id])?;
@@ -278,7 +297,7 @@ impl Database {
         if let Some(id) = managed {
             let conn = self.conn.lock().unwrap();
             let tx = conn.unchecked_transaction()?;
-            restore_present_original(&tx, &id)?;
+            restore_present_original(&tx, &id, &path, None)?;
             tx.commit()?;
             drop(conn);
             return self.get_asset(&id)?.ok_or_else(|| invalid("素材已不存在"));
@@ -318,7 +337,7 @@ impl Database {
             }
             // A historical alias can still exist while the current original is missing.
             if fs::canonicalize(&current).ok().is_some_and(|current| current == Path::new(&path)) {
-                restore_present_original(&tx, &id)?;
+                restore_present_original(&tx, &id, Path::new(&path), Some(&hash))?;
             }
             id
         } else {
@@ -464,7 +483,8 @@ pub struct ExternalReference {
 pub fn references(db: &Database, project_id: &str) -> AppResult<Vec<ExternalReference>> {
     let ids = {
         let conn = db.conn.lock().unwrap();
-        let mut stmt = conn.prepare("SELECT e.asset_id FROM external_assets e JOIN project_assets p ON p.asset_id=e.asset_id WHERE p.project_id=?1")?;
+        let mut stmt = conn.prepare("SELECT e.asset_id FROM external_assets e JOIN project_assets p ON p.asset_id=e.asset_id
+            WHERE p.project_id=?1 AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=e.asset_id)")?;
         let ids = stmt
             .query_map([project_id], |r| r.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;

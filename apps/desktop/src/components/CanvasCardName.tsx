@@ -2,8 +2,8 @@ import { userErrorMessage } from "../lib/userError";
 import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { canvasCardNameError } from "../lib/canvasCardNames";
 
-export function CanvasCardName({ id, name, names, activeIds, style, disabled, onSave }: {
-  id: string; name: string; names: Record<string, string>; activeIds: Set<string>; style?: CSSProperties;
+export function CanvasCardName({ id, name, names, activeIds, nameCounts, style, disabled, onSave }: {
+  id: string; name: string; names: Record<string, string>; activeIds: Set<string>; nameCounts: Map<string, number>; style?: CSSProperties;
   disabled?: boolean; onSave: (name: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState(name);
@@ -11,7 +11,7 @@ export function CanvasCardName({ id, name, names, activeIds, style, disabled, on
   const saving = useRef(false);
   const messageId = useId();
   useEffect(() => { setDraft(name); setSaveError(""); }, [name]);
-  const error = canvasCardNameError(id, draft, names, activeIds) || saveError;
+  const error = canvasCardNameError(id, draft, names, activeIds, nameCounts) || saveError;
   async function commit() {
     if (error || draft.trim() === name || saving.current) return;
     saving.current = true;

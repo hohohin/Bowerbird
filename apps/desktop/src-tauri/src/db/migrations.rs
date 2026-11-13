@@ -105,6 +105,9 @@ pub fn migrations() -> Migrations<'static> {
         M::up(include_str!("../../sql/0054_generation_gallery_separations.sql")),
         M::up(include_str!("../../sql/0055_project_delete_without_task_veto.sql")),
         M::up(include_str!("../../sql/0056_catalog_file_lookup_indexes.sql")),
+        M::up(include_str!("../../sql/0057_manual_generation_galleries.sql")),
+        M::up(include_str!("../../sql/0058_library_identity.sql")),
+        M::up(include_str!("../../sql/0059_chat_cloud_provider.sql")),
     ])
 }
 

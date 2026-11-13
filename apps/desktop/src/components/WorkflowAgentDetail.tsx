@@ -4,28 +4,28 @@ import { useEffect, useMemo, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../lib/api";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
-import { workflowRuns, type WorkflowAgentEvent, type WorkflowValue } from "../lib/canvasWorkflow";
+import { workflowPromptPreview, workflowRuns, type WorkflowAgentEvent, type WorkflowValue } from "../lib/canvasWorkflow";
+import { workflowBindingAssetIds } from "../lib/canvasSessionOutputs";
+import { workflowAssetMedia, workflowSourceMediaLabel } from "../lib/workflowCanvasCapabilities";
 import { contentTableRows } from "../lib/contentTable";
 import type { Asset, CanvasNode } from "../lib/types";
 import { ProjectInspectorShell } from "./ProjectInspectorShell";
 import { ModalShell } from "./ModalShell";
 import { VideoPlayer } from "./VideoPlayer";
-import { isVideoPath } from "../lib/videoGeneration";
 import { notifyError } from "../lib/notify";
 import { AudioWaveform } from "./AudioWaveform";
-import { isAudioPath } from "../lib/audioMedia";
 import { VideoStudioPanel } from "./VideoStudioPanel";
 import "./WorkflowAgentDetail.css";
 
 const statusLabels: Record<string, string> = { pending: "等待执行", running: "运行中", waiting: "等待继续", done: "已完成", failed: "失败", stopped: "已停止" };
 const valueText = (value: WorkflowValue) => value.table ? contentTableRows(value.table).map(row => row.join(" · ")).join("\n") : value.text;
 
-export function WorkflowAgentDetail({ projectId, nodeId, graphNodes, onOpenGeneration, onClose }: {
-  projectId: string; nodeId: string; graphNodes: CanvasNode[]; onOpenGeneration: (node: CanvasNode) => void; onClose: () => void;
+export function WorkflowAgentDetail({ projectId, nodeId, initialEntry = "latest", graphNodes, onOpenGeneration, onClose }: {
+  projectId: string; nodeId: string; initialEntry?: string; graphNodes: CanvasNode[]; onOpenGeneration: (node: CanvasNode) => void; onClose: () => void;
 }) {
   const controller = useMemo(() => canvasWorkflowController(projectId), [projectId]);
   const [, redraw] = useState(0);
-  const [selection, setSelection] = useState("latest");
+  const [selection, setSelection] = useState(initialEntry);
   const [journal, setJournal] = useState<{ requestId: string; events: WorkflowAgentEvent[] } | null>(null);
   const [progressError, setProgressError] = useState("");
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -45,10 +45,10 @@ export function WorkflowAgentDetail({ projectId, nodeId, graphNodes, onOpenGener
       label: `运行 ${runIndex + 1} · 第 ${(run.loop!.startIndex ?? 0) + index + 1} 轮`,
     }] : []) ?? [];
     const step = run.steps[nodeId];
-    if (step && !(run.loop && run.status === "done" && previous.length)) previous.push({ key: `${run.id}:current`, step,
-      outputs: step.agentOutputs ?? {},
+    if (step && !(run.loop && run.status === "done" && previous.length)) return [...previous, { key: `${run.id}:current`, step,
+      outputs: step.agentOutputs,
       status: step.status === "done" ? "done" : run.status === "stopped" ? "stopped" : step.status,
-      label: `运行 ${runIndex + 1}${run.loop ? ` · 第 ${run.loop.index + 1} 轮` : ""}` });
+      label: `运行 ${runIndex + 1}${run.loop ? ` · 第 ${run.loop.index + 1} 轮` : ""}` }];
     return previous;
   });
   const entry = (selection === "latest" ? entries[entries.length - 1] : entries.find(entry => entry.key === selection)) ?? entries[entries.length - 1];
@@ -70,22 +70,34 @@ export function WorkflowAgentDetail({ projectId, nodeId, graphNodes, onOpenGener
     void poll();
     return () => { cancelled = true; clearTimeout(timer); };
   }, [requestId, step?.localAgentTransport, active]);
-  const outputs = entry?.outputs ?? {};
+  // Older cards may retain the last result only on the node. Never borrow it for a previous run.
+  const card = controller.document.nodes.find(node => node.id === nodeId);
+  const savedOutputs = card?.outputs;
+  const latestResult = !entry || (entry === entries[entries.length - 1] && entry.status === "done");
+  const outputs = entry?.outputs ?? (latestResult ? savedOutputs : undefined) ?? {};
   const inputIds = step?.agentInput?.assetIds ?? [];
   const outputIds = [...new Set(Object.values(outputs).flatMap(value => value.assetIds ?? []))];
-  const assetKey = JSON.stringify([...new Set([...inputIds, ...outputIds])]);
+  const draftMedia = new Map((!entry ? card?.inputs.image ?? [] : []).map((binding, i) => {
+    const source = controller.document.nodes.find(node => node.id === binding.nodeId);
+    const native = graphNodes.find(node => node.id === binding.canvasNodeId);
+    return [i + 1, { ids: workflowBindingAssetIds(binding, source, native, graphNodes), source }] as const;
+  }));
+  const assetKey = JSON.stringify([...new Set([...inputIds, ...outputIds, ...Array.from(draftMedia.values()).flatMap(value => value.ids)])]);
   useEffect(() => {
     let cancelled = false;
     setAssets([]);
+    if (assetKey === "[]") return;
     void api.getAssetsByIds(JSON.parse(assetKey)).then(assets => { if (!cancelled) setAssets(assets); }).catch(() => {});
     return () => { cancelled = true; };
   }, [assetKey]);
   const pictures = (ids: string[]) => <div className="workflow-agent-detail-images">{ids.map((id, index) => {
     const asset = assets.find(asset => asset.id === id);
-    if (asset?.store_path && isAudioPath(asset.store_path)) return <AudioWaveform key={`${id}:${index}`} assetId={id} path={asset.store_path} name={asset.name} version={asset.file_mtime ?? 0} />;
-    return <button key={`${id}:${index}`} type="button" disabled={!asset?.store_path} onClick={() => asset && setPreview(asset)} aria-label={`查看${isVideoPath(asset?.store_path) ? "视频" : "图片"} ${index + 1}`}>
-      {asset?.store_path && (!isVideoPath(asset.store_path) || asset.thumb_path) ? <img src={convertFileSrc(asset.thumb_path || asset.store_path)} alt={`素材 ${index + 1}`} /> : <span>{asset?.name || `素材 ${index + 1} 暂不可用`}</span>}
-      <small>{isVideoPath(asset?.store_path) ? "视频" : "图片"} {index + 1}</small>
+    const kind = workflowAssetMedia(asset);
+    const label = kind === "audio" ? "音频" : kind === "video" ? "视频" : kind === "image" ? "图片" : "素材";
+    if (kind === "audio" && asset?.store_path) return <AudioWaveform key={`${id}:${index}`} assetId={id} path={asset.store_path} name={asset.name} version={asset.file_mtime ?? 0} />;
+    return <button key={`${id}:${index}`} type="button" disabled={!asset?.store_path || !kind} onClick={() => asset && setPreview(asset)} aria-label={`查看${label} ${index + 1}`}>
+      {asset?.store_path && (kind === "image" || kind === "video" && asset.thumb_path) ? <img src={convertFileSrc(asset.thumb_path || asset.store_path)} alt={`素材 ${index + 1}`} /> : <span>{asset?.name || `素材 ${index + 1} 暂不可用`}</span>}
+      <small>{label} {index + 1}</small>
     </button>;
   })}</div>;
   const events = journal && journal.requestId === requestId ? journal.events : [];
@@ -94,7 +106,19 @@ export function WorkflowAgentDetail({ projectId, nodeId, graphNodes, onOpenGener
   const sources: Record<string, unknown> = (() => { try { return JSON.parse(step?.agentInput?.source ?? "{}"); } catch { return {}; } })();
   const generations = Object.values(step?.localDsGenerations ?? {});
   const sessionIds = [...new Set([...(outputs.image?.nodeIds ?? outputs.session?.nodeIds ?? []), ...generations.flatMap(call => call.response?.submitted ? [call.response.submitted.sessionNodeId] : [])])];
-  return <ProjectInspectorShell anchorNodeId={nodeId} onClose={onClose} header={{ kind: "agent", title: "Agent 卡片详情", closeLabel: "关闭项目详情", detail: `${step?.localAgentTransport === "codex-cli" ? "Codex CLI" : step?.agentRunId ? "Cloud DSH" : "Agent DS"} · ${statusLabels[entry?.status ?? "pending"]}`, running: entry?.status === "running" }}>
+  const draft = !entry && !Object.keys(outputs).length;
+  if (draft) return <ProjectInspectorShell anchorNodeId={nodeId} onClose={onClose} header={{ kind: "agent", title: "Agent 卡片详情", closeLabel: "关闭项目详情", detail: "尚未运行", running: false }}>
+    <div className="workflow-agent-detail" data-agent-detail={nodeId}>
+      <section className="workflow-agent-input"><h3>当前要求</h3><p>{card?.prompt ? workflowPromptPreview(card, ref => {
+        if (ref.direction === "output" || ref.type !== "image" || !ref.slot) return ref.label;
+        const media = draftMedia.get(ref.slot);
+        return `${workflowSourceMediaLabel(media?.ids ?? [], assets, media?.source)}来源 ${ref.slot}`;
+      }) : "尚未填写要求。"}</p></section>
+    </div>
+  </ProjectInspectorShell>;
+  const detail = !entry ? "已保存结果"
+    : `${step?.localAgentTransport === "codex-cli" ? "Codex CLI" : step?.agentRunId ? "Cloud DSH" : "Agent DS"} · ${statusLabels[entry?.status ?? "pending"]}`;
+  return <ProjectInspectorShell anchorNodeId={nodeId} onClose={onClose} header={{ kind: "agent", title: "Agent 卡片详情", closeLabel: "关闭项目详情", detail, running: entry?.status === "running" }}>
     <div className="workflow-agent-detail" data-agent-detail={nodeId}>
       {entries.length > 1 && <label>执行记录<TacticalSelect aria-label="Agent 执行记录" value={selection} onValueChange={value => setSelection(value)}>
         <option value="latest">最新执行</option>{entries.map(entry => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
@@ -133,7 +157,7 @@ export function WorkflowAgentDetail({ projectId, nodeId, graphNodes, onOpenGener
         {sessionIds.map((id, index) => { const card = graphNodes.find(node => node.id === id && node.hiddenAt == null); return <button className="workflow-agent-session" key={id} disabled={!card} onClick={() => { if (card) { onClose(); onOpenGeneration(card); } }}>查看生成会话 {index + 1}</button>; })}
       </section>
     </div>
-    {preview && <ModalShell title="Agent 素材" width="lg" onClose={() => setPreview(null)}>{isVideoPath(preview.store_path)
+    {preview && <ModalShell title="Agent 素材" width="lg" onClose={() => setPreview(null)}>{workflowAssetMedia(preview) === "video"
       ? <VideoPlayer path={preview.store_path!} />
       : <img className="workflow-agent-detail-preview" src={convertFileSrc(preview.store_path!)} alt="Agent 图片" />}</ModalShell>}
     {studio && <VideoStudioPanel requestId={studio} onClose={() => setStudio(null)} />}

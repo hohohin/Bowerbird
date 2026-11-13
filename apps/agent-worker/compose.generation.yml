@@ -14,9 +14,11 @@ services:
     environment:
       BOWERBIRD_BRAND_PROMPT_DIR: /app/brand-prompts
       BOWERBIRD_TEXT_SKILL_DIR: /app/text-skills
+      BOWERBIRD_DSH_SESSION_ROOT: /dsh-sessions
     volumes:
       - ./src/prompts/brand-visual:/app/brand-prompts:ro
       - ./src/skills/text:/app/text-skills:ro
+      - ./dsh-sessions:/dsh-sessions:rw
     read_only: true
     tmpfs:
       # Video probing writes one bounded output (up to 500 MiB) at a time.

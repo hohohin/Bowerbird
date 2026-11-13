@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer, request as httpRequest } from "node:http";
 import { once } from "node:events";
+import { createHash } from "node:crypto";
 import { createCloudProxy } from "../cloud-proxy.mjs";
 import { startServer } from "../server.mjs";
 
@@ -93,6 +94,55 @@ test("Agent control and signed H3 manifest preserve authorization and never retr
   assert.equal((await broken.send('/functions/v1/agent-run', 'POST', '{}', AUTH)).status, 502);
 });
 
+test("text control verifies the user before reading a request body or invoking the function", async t => {
+  let authCalls = 0;
+  const { port, calls } = await fixture(t, { authFetchImpl: async (url, init) => {
+    assert.equal(url.href, "https://project.supabase.co/auth/v1/user");
+    assert.equal(init.headers.Authorization, AUTH.Authorization);
+    authCalls++;
+    return Response.json({}, { status: 401 });
+  } });
+  const status = await new Promise((resolve, reject) => {
+    const req = httpRequest({ host: "127.0.0.1", port, path: "/api/cloud/functions/v1/chat-proxy",
+      method: "POST", headers: { ...AUTH, "Content-Type": "application/json", "Content-Length": 10 } },
+    res => { res.resume(); res.once("end", () => resolve(res.statusCode)); });
+    req.on("error", reject);
+    req.flushHeaders();
+  });
+  assert.equal(status, 401);
+  assert.equal(authCalls, 1);
+  assert.equal(calls.length, 0);
+});
+
+test("eight authenticated text streams return complete bytes under backpressure", async t => {
+  const edge = createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    req.pipe(res);
+  }).listen(0, "127.0.0.1");
+  await once(edge, "listening");
+  t.after(() => { edge.closeAllConnections(); return new Promise(resolve => edge.close(resolve)); });
+  const { port } = await fixture(t, { fetchImpl: (_url, init) => fetch(`http://127.0.0.1:${edge.address().port}/`, init) });
+  const chunk = Buffer.alloc(64 * 1024, "a");
+  async function* content() {
+    yield Buffer.from('{"input":"');
+    for (let i = 0; i < 400; i++) yield chunk;
+    yield Buffer.from('"}');
+  }
+  async function digest(stream) {
+    const hash = createHash("sha256");
+    for await (const part of stream) hash.update(part);
+    return hash.digest("hex");
+  }
+  const expected = await digest(content());
+  await Promise.all(Array.from({ length: 8 }, async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/cloud/functions/v1/chat-proxy`, {
+      method: "POST", headers: { ...AUTH, "Content-Type": "application/json" }, body: content(), duplex: "half",
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await digest(response.body), expected);
+  }));
+});
+
 test("chat quote, create and recovery use the authenticated fixed Cloud gateway", async t => {
   const { send, calls } = await fixture(t);
   for (const action of ["quote", "create", "get"]) {
@@ -112,6 +162,7 @@ test("chat quote, create and recovery use the authenticated fixed Cloud gateway"
 async function fixture(t, overrides = {}) {
   const calls = [];
   const proxy = createCloudProxy({ upstream: "https://project.supabase.co", publicKey: "public-key",
+    authFetchImpl: async () => Response.json({ id: "test-user" }),
     fetchImpl: async (url, options) => {
       if (options.body?.[Symbol.asyncIterator]) {
         const chunks = [];
@@ -377,7 +428,9 @@ test('Agent manifests, instructions and event responses cross former byte ceilin
   const result = JSON.stringify({ events: [{ type: 'text.result', displayPayload: { text } }] });
   let forwarded;
   const { send } = await fixture(t, { fetchImpl: async (_url, init) => {
-    forwarded = init.body.toString();
+    const chunks = [];
+    for await (const chunk of init.body) chunks.push(Buffer.from(chunk));
+    forwarded = Buffer.concat(chunks).toString();
     return new Response(result, { headers: { 'Content-Type': 'application/json' } });
   } });
   const upload = `/storage/v1/object/upload/sign/agent-temp/runs/${JOB}/inputs/request.json?token=signed`;

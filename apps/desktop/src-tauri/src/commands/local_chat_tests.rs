@@ -128,23 +128,21 @@ fn local_chat_h3_tool_contract_exposes_frames_and_local_options_without_endpoint
         "existing card-tool threads must migrate"
     );
     let tool = card_tool_spec();
-    let cards = tool["inputSchema"]["properties"]["cards"]["items"]["oneOf"]
-        .as_array()
-        .unwrap();
-    let h3 = cards
-        .iter()
-        .find(|card| card["properties"]["kind"]["const"] == "comfy-video")
-        .expect("H3 has its own native card kind");
-    assert_eq!(h3["required"], json!(["id", "kind", "title", "prompt"]));
-    assert_eq!(h3["additionalProperties"], false);
-    let options = &h3["properties"];
+    let cards = &tool["inputSchema"]["properties"]["cards"]["items"];
+    let kinds = cards["properties"]["kind"]["enum"].as_array().unwrap();
+    for kind in ["generation", "comfy-video", "content", "trigger", "loop"] {
+        assert!(kinds.contains(&json!(kind)), "{kind} is a selectable card kind");
+    }
+    assert_eq!(cards["required"], json!(["id", "kind", "title"]));
+    assert_eq!(cards["additionalProperties"], false);
+    let options = &cards["properties"];
     assert_eq!(options["seconds"]["minimum"], 1);
     assert_eq!(options["seconds"]["maximum"], 15);
     assert_eq!(options["seconds"]["default"], 8);
-    assert_eq!(
-        options["ratio"]["enum"],
-        json!(["auto", "9:16", "16:9", "4:3", "3:4", "1:1"])
-    );
+    let ratios = options["ratio"]["enum"].as_array().unwrap();
+    assert!(ratios.contains(&json!("auto")));
+    assert!(ratios.contains(&json!("9:16")));
+    assert!(ratios.contains(&json!("21:9")));
     assert_eq!(options["resolution"]["enum"], json!([0.6, 0.8, 1]));
     for slot in ["firstFrameAlias", "lastFrameAlias"] {
         assert_eq!(options[slot]["pattern"], "^image[1-8]$");
@@ -185,12 +183,11 @@ fn local_chat_section_tool_contract_groups_current_batch_cards_without_geometry_
     assert_eq!(members["maxItems"], 12);
     assert_eq!(members["uniqueItems"], true);
     assert_eq!(members["items"]["type"], "string");
-    let cards = schema["properties"]["cards"]["items"]["oneOf"]
+    let kinds = schema["properties"]["cards"]["items"]["properties"]["kind"]["enum"]
         .as_array()
         .unwrap();
-    assert!(cards
-        .iter()
-        .all(|card| card["properties"]["kind"]["const"] != "section"));
+    assert_eq!(kinds.len(), 5);
+    assert!(!kinds.contains(&json!("section")));
 }
 
 #[test]
@@ -210,6 +207,10 @@ fn local_chat_upgrade_preserves_public_history_without_replaying_current_request
     assert!(!history.contains("CURRENT_REQUEST"));
     assert!(!history.contains("asset"));
     assert!(history.contains("不构成现在再次创建卡片的授权"));
+    let restored = codex_history_before_turn(&chat, "current").unwrap().unwrap();
+    assert!(restored.contains("原来的创意") && restored.contains("原来的回复"));
+    assert!(!restored.contains("CURRENT_REQUEST") && !restored.contains("asset"));
+    assert!(restored.contains("不构成本轮再次调用工具的授权"));
     let mut long_chat = chat.clone();
     long_chat.messages[0].text = "长".repeat(100_001);
     let history = upgraded_history(&long_chat, "current");

@@ -1,5 +1,17 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 2026-11-13 微信支付联调服务已部署
+
+0080、五个支付 Edge、官网账号和通知网关、商户 Secrets、分钟补偿及每日对账 timer 已上线。独立账号通过现役 Cloud 取得 ¥1／20 Bcoin 的真实微信二维码，公开购买能力返回关闭。线上版本、原站点目录、回退边界和验收进度见[微信支付记录](WECHATPAY.md#验证记录)。
+
+## 2026-11-11 审查第二批已部署
+
+北京时间 15:06:37 生产库读回 0087 及两项读取策略。理解服务升级至 v45，视觉服务升级至 v22。20 个运行文件逐一匹配冻结包，两个入口保留 JWT 验证。15:09:10 官网切至 `20261111-read-deadline-and-recovery`，5 个静态文件通过公网读回。生产策略的 12 项截止时间判定通过。专用测试账号已注销，使用该账号实际取回原单仍待验。[本批上线回执与回退入口](../../project_logs/2026-11-11-release-readiness.md#官网和-cloud)
+
+## 2026-11-11 工程审查云端修复已部署
+
+按用户确认，生产新增 0086，五个 Edge 已部署并完成 38 个文件的哈希读回：generate-proxy v45、understand-proxy v44、understand-worker v25、visual-profile v21、visual-profile-worker v19。原有权限和价格配置已核对。官网切至 `20261111-engineering-audit`，8 个公开文件与候选一致，已登录的公网原单查询通过。HTML Renderer 0.1.2 已从现役 Worker 完成并发渲染，队列回到空闲。生产数据库、官网、Renderer 的核验与可单独执行的回退步骤分别见 [Cloud](../../project_logs/2026-11-11-audit-cloud-deployment.md)、[官网](../../project_logs/2026-11-11-audit-site-deployment.md)、[Renderer](../../project_logs/2026-11-11-audit-renderer-deployment.md)。
+
 ## 2026-11-10 强化复刻语音已部署
 
 用户批准后，0085、understand-proxy v43、VPS 语音适配和 5 Bcoin／次临时价已上线。真实词级识别、原单幂等、唯一结算和失败测试退费通过；其他价格、函数、环境及官网保持。桌面源码待发包，真实全流程成片仍待验收。[部署证据与回滚](../../project_logs/2026-11-10-enhanced-replication.md)。

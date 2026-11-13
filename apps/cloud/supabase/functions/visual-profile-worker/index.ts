@@ -2,6 +2,7 @@
 // 与 understand-worker 同一安全边界：Worker 只持专用 Worker Token 与签名输入 URL，
 // 不持 Supabase secret。任务执行 = DeepSeek 分批文本抽取 + 确定性聚合（无图片参与）。
 
+import { cleanupTextJobs } from "../_shared/text-job-upload.ts";
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { corsHeaders } from "../_shared/limits.ts";
@@ -75,28 +76,7 @@ async function assertLease(admin: SupabaseClient, jobId: string, leaseId: string
 }
 
 async function actionCleanupExpired(admin: SupabaseClient): Promise<Response> {
-  const now = Date.now();
-  const { data, error } = await admin.from("visual_profile_jobs")
-    .select("id,request_object_key")
-    .lt("content_expires_at", new Date(now).toISOString())
-    .is("deleted_at", null)
-    .limit(100);
-  if (error) throw new ApiError("internal_error", "过期提炼任务查询失败", true);
-  const rows = (data ?? []) as Array<{ id: string; request_object_key: string }>;
-  const keys = [...new Set(rows.map((row) => row.request_object_key))];
-  if (keys.length) {
-    const removed = await admin.storage.from(BUCKET).remove(keys);
-    if (removed.error) throw new ApiError("internal_error", "过期提炼对象删除失败", true);
-  }
-  if (rows.length) {
-    const updated = await admin.from("visual_profile_jobs").update({
-      deleted_at: new Date(now).toISOString(),
-      result_text: null,
-    })
-      .in("id", rows.map((row) => row.id)).is("deleted_at", null);
-    if (updated.error) throw new ApiError("internal_error", "过期提炼任务标记失败", true);
-  }
-  return jsonResponse({ expiredJobs: rows.length, removedObjects: keys.length });
+  return jsonResponse(await cleanupTextJobs(admin, "visual_profile_jobs"));
 }
 
 async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Response> {

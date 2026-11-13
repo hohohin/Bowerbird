@@ -17,7 +17,10 @@ try {
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   const header = page.locator('.app-topbar');
   for (const view of ['canvas', 'library', 'projects']) {
-    if (view === 'library') await page.getByRole('button', { name: '返回主页', exact: true }).click();
+    if (view === 'library') {
+      await page.getByRole('button', { name: '返回主页', exact: true }).click();
+      await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '素材库', exact: true }).click();
+    }
     if (view === 'projects') await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '项目', exact: true }).click();
     for (const theme of ['dark', 'light']) {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
@@ -77,7 +80,7 @@ try {
   await account.focus();
   assert.equal(await account.evaluate(el => getComputedStyle(el).animationName), 'none');
   await page.keyboard.press('Enter');
-  await page.getByRole('dialog', { name: '设置', exact: true }).waitFor();
+  await page.getByRole('dialog', { name: 'Bowerbird 账号', exact: true }).waitFor();
   await page.keyboard.press('Escape');
   assert.deepEqual(errors, []);
   console.log('PASS: compact transparent topbar; canvas/library/projects; dark/light; 900–1920px; hover/selection/reduced motion; account entry');

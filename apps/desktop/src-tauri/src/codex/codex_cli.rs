@@ -9,11 +9,13 @@
 //! 可用 `codex resume <id>` 在 TUI 回看完整对话），从 `item.completed` 取
 //! `agent_message` 正文作为最终答案。
 
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
+use base64::Engine;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{mpsc, Semaphore};
@@ -97,6 +99,73 @@ fn list_new_generated(
         .collect();
     new_files.sort();
     new_files
+}
+
+/// A new exec thread owns its directory. Resumed threads may have concurrent
+/// terminal activity or late files from a cancelled turn, so never watch them.
+fn fresh_preview_dir(root: &Path, thread: &str, resume: Option<&str>, before: &std::collections::HashSet<PathBuf>) -> Option<PathBuf> {
+    if resume.is_some() || uuid::Uuid::parse_str(thread).ok()?.to_string() != thread {
+        return None;
+    }
+    let dir = root.join(thread);
+    (!before.iter().any(|path| path.starts_with(&dir))).then_some(dir)
+}
+
+fn thread_image_preview(dir: &Path) -> Option<String> {
+    // Never follow a relocated thread directory or a link to another image.
+    let expected = dir.parent()?.canonicalize().ok()?.join(dir.file_name()?);
+    if dir.canonicalize().ok()? != expected { return None; }
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        // The CLI writes exec-<uuid>.png (older releases used ig_<hash>.png).
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+        let known_name = stem.strip_prefix("exec-").is_some_and(|id| uuid::Uuid::parse_str(id).is_ok())
+            || stem.strip_prefix("ig_").is_some_and(|hash| !hash.is_empty() && hash.bytes().all(|b| b.is_ascii_hexdigit()));
+        if !entry.file_type().is_ok_and(|kind| kind.is_file())
+            || !known_name
+            || path.extension().and_then(|s| s.to_str()) != Some("png")
+            || path.canonicalize().ok()?.parent() != Some(expected.as_path()) {
+            continue;
+        }
+        if let Some(preview) = complete_png_preview(&path) { return Some(preview); }
+    }
+    None
+}
+
+fn complete_png_preview(path: &Path) -> Option<String> {
+    const MAX_BYTES: u64 = 64 * 1024 * 1024;
+    const IEND: &[u8] = b"\x00\x00\x00\x00IEND\xaeB\x60\x82";
+    let mut file = std::fs::File::open(path).ok()?;
+    if file.metadata().ok()?.len() > MAX_BYTES { return None; }
+    let mut trailer = [0; 12];
+    file.seek(SeekFrom::End(-12)).ok()?;
+    file.read_exact(&mut trailer).ok()?;
+    if trailer != IEND { return None; }
+    file.rewind().ok()?;
+    let mut bytes = Vec::new();
+    file.take(MAX_BYTES + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > MAX_BYTES || !bytes.ends_with(IEND) { return None; }
+    let reader = image::ImageReader::with_format(Cursor::new(&bytes), image::ImageFormat::Png);
+    let (width, height) = reader.into_dimensions().ok()?;
+    if u64::from(width) * u64::from(height) > 32_000_000 { return None; }
+    let image = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).ok()?;
+    let mut output = Cursor::new(Vec::new());
+    image.thumbnail(480, 480).write_to(&mut output, image::ImageFormat::Png).ok()?;
+    Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(output.into_inner())))
+}
+
+async fn send_first_thread_preview(dir: PathBuf, tx: mpsc::Sender<Chunk>) {
+    while !tx.is_closed() {
+        let check = dir.clone();
+        match tokio::task::spawn_blocking(move || thread_image_preview(&check)).await {
+            Ok(Some(data_url)) => {
+                let _ = tx.send(Chunk::Preview { data_url }).await;
+                return;
+            }
+            Err(_) => return,
+            Ok(None) => tokio::time::sleep(Duration::from_millis(750)).await,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -261,16 +330,8 @@ impl GenProvider for CodexCliProvider {
         })
     }
 
-    /// 图像生成：spawn `codex exec --json --image ...`，prompt 经 stdin 喂入。
-    ///
-    /// 与 `run`（反推用、整输出）不同——逐行读 JSONL，每条 `agent_message` 即时推为
-    /// `Chunk::Delta`（app 内流式反馈）；跑完扫 `~/.codex/generated_images/` 取本次新增图
-    /// （mtime ≥ start），copy 进 `generations_dir`（落在 asset scope `$APPDATA/**` 内，
-    /// 可被 convertFileSrc 渲染），最后发 `Chunk::Done`（`images` = copy 后的库内路径）。
-    ///
-    /// 取图走 mtime 扫盘而非事件解析：codex 内置 imagegen 技能把产物固定写到
-    /// `~/.codex/generated_images/<uuid>/ig_*.png`，路径不在 JSONL 一等字段里（spike 实测），
-    /// 扫盘最稳。codex exec 默认只读沙箱会阻止写 cwd，故不能改用 cwd 扫盘。
+    /// Stream the CLI turn while it runs. On successful exit, return the newly
+    /// generated files for the command layer to ingest and deliver.
     async fn generate_image(
         &self,
         req: CodexRequest,
@@ -280,17 +341,28 @@ impl GenProvider for CodexCliProvider {
         if !self.enabled {
             return Err(AppError::Codex("CodexCliProvider 未启用".into()));
         }
+        let root = codex_home().map(|home| home.join("generated_images"));
+        self.run_image_command(codex_command(&self.binary), root, req, tx, resume_session).await
+    }
+}
+
+impl CodexCliProvider {
+    async fn run_image_command(
+        &self,
+        mut cmd: Command,
+        gen_root: Option<PathBuf>,
+        req: CodexRequest,
+        tx: &mpsc::Sender<Chunk>,
+        resume_session: Option<String>,
+    ) -> Result<GenOutcome, AppError> {
         let _codex_image_permit = CODEX_IMAGE_FLY.acquire().await.unwrap();
         let start = SystemTime::now();
 
         // codex 内置 imagegen 把产物固定写进 ~/.codex/generated_images/（见踩坑）。
         // 跑前快照已有图，跑完按「新增文件」copy —— 比 mtime 稳：不受时钟精度 / 落盘时机 /
         // resume 续接另起 session 子目录影响（mtime 偶发漏图）。
-        let codex_home = codex_home();
-        let gen_root = codex_home.map(|h| h.join("generated_images"));
         let before = list_generated_images(gen_root.as_deref());
 
-        let mut cmd = codex_command(&self.binary);
         cmd.arg("exec").arg("--skip-git-repo-check").arg("--json");
         match &resume_session {
             // 续接：codex 记得本会话历史 + 上一张图，按新指令编辑出图（spike 实测可行）。
@@ -349,6 +421,8 @@ impl GenProvider for CodexCliProvider {
         let (status, session_id, texts, failure) =
             match tokio::time::timeout(Duration::from_secs(600), async {
                 let mut session_id: Option<String> = None;
+                // Dropping this scope on exit, cancellation or timeout stops polling.
+                let mut preview = tokio::task::JoinSet::new();
                 let mut texts: Vec<String> = Vec::new();
                 let mut failure = CodexFailure::default();
                 let mut line_bytes = Vec::new();
@@ -379,6 +453,12 @@ impl GenProvider for CodexCliProvider {
                     match v.get("type").and_then(|t| t.as_str()) {
                         Some("thread.started") => {
                             if let Some(id) = v.get("thread_id").and_then(|i| i.as_str()) {
+                                if session_id.is_none() && req.job_id.is_some() {
+                                    if let Some(dir) = gen_root.as_deref().and_then(|root|
+                                        fresh_preview_dir(root, id, resume_session.as_deref(), &before)) {
+                                        preview.spawn(send_first_thread_preview(dir, tx.clone()));
+                                    }
+                                }
                                 session_id = Some(id.to_string());
                             }
                         }
@@ -986,6 +1066,56 @@ exit 1
 
         assert_eq!(PathBuf::from(found), first.join("codex"));
         fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn early_image_preview_requires_complete_png_in_a_fresh_thread() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let id = uuid::Uuid::new_v4().to_string();
+        let before = list_generated_images(Some(root));
+        let dir = fresh_preview_dir(root, &id, None, &before).unwrap();
+        assert!(fresh_preview_dir(root, &id, Some(&id), &before).is_none());
+        assert!(fresh_preview_dir(root, "../other-thread", None, &before).is_none());
+        fs::create_dir(&dir).unwrap();
+        let path = dir.join(format!("exec-{}.png", uuid::Uuid::new_v4()));
+        image::DynamicImage::new_rgba8(12, 20).save(&path).unwrap();
+        let data = fs::read(&path).unwrap();
+        fs::write(&path, &data[..data.len() - 8]).unwrap();
+        fs::write(dir.join("partial.png"), &data).unwrap();
+        let other = root.join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir(&other).unwrap();
+        fs::write(other.join(path.file_name().unwrap()), &data).unwrap();
+        assert!(thread_image_preview(&dir).is_none());
+        fs::write(&path, data).unwrap();
+        assert!(thread_image_preview(&dir).unwrap().starts_with("data:image/png;base64,"));
+        assert!(fresh_preview_dir(root, &id, None, &list_generated_images(Some(root))).is_none());
+    }
+
+    #[tokio::test]
+    async fn early_image_preview_arrives_while_offline_cli_is_still_running() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let binary = root.join(format!("preview-fixture{}", std::env::consts::EXE_SUFFIX));
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codex-image-preview.rs");
+        let compiled = std::process::Command::new("rustc").arg(source).arg("-o").arg(&binary).output().unwrap();
+        assert!(compiled.status.success(), "{}", String::from_utf8_lossy(&compiled.stderr));
+        image::DynamicImage::new_rgba8(32, 16).save(root.join("fixture.png")).unwrap();
+        let mut cmd = Command::new(&binary);
+        cmd.env("CODEX_HOME", root);
+        let provider = CodexCliProvider { binary: binary.to_string_lossy().into(), model: String::new(), enabled: true };
+        let req = serde_json::from_value(serde_json::json!({"instruction":"offline", "job_id":"fixture"})).unwrap();
+        let (tx, mut rx) = mpsc::channel(8);
+        let run = provider.run_image_command(cmd, Some(root.join("generated_images")), req, &tx, None);
+        tokio::pin!(run);
+        tokio::select! {
+            chunk = rx.recv() => assert!(matches!(chunk, Some(Chunk::Preview { data_url }) if data_url.starts_with("data:image/png;base64,"))),
+            result = &mut run => panic!("CLI exited before preview: {result:?}"),
+            _ = tokio::time::sleep(Duration::from_secs(10)) => panic!("no preview while process alive"),
+        }
+        fs::write(root.join("finish"), []).unwrap();
+        assert_eq!(run.await.unwrap().source_images.len(), 1);
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]

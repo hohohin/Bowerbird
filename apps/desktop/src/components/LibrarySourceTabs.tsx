@@ -5,6 +5,7 @@ import { Folders, Layers2, LayoutDashboard, Tags } from "lucide-react";
 import { useStore } from "../store";
 import { LibraryViewSwitch } from "./LibraryViewSwitch";
 import { LibraryControlProjection } from "./LibraryControlProjection";
+import { trackFocusVisibleWithin } from "../lib/focusVisibleWithin";
 import { LIBRARY_VIEW_ORDER, type LibrarySource, type LibraryView } from "../lib/localFileMode";
 import "./LibrarySourceTabs.css";
 
@@ -30,13 +31,16 @@ export function LibrarySourceTabs({ onChange, project = false, tabShortcut = tru
     const navigation = root.current!;
     const heading = navigation.closest<HTMLElement>('.file-view-heading');
     if (!heading) return;
+    heading.classList.add("has-source-navigation");
+    const releaseHeadingFocus = trackFocusVisibleWithin(heading);
+    const releaseNavFocus = trackFocusVisibleWithin(navigation);
     setProjectionHost(heading);
     const strip = navigation.querySelector<HTMLElement>('.library-view-switch')!;
     const controls = heading.querySelector<HTMLElement>('.library-controls-host');
     let anchor: { button: HTMLElement; x: number; fraction: number; width: number; opened: boolean } | undefined;
     let shift = 0;
     const reset = () => { anchor = undefined; shift = 0; heading.style.removeProperty('--library-hover-shift'); delete heading.dataset.hoverAnchored; };
-    const isOpen = () => heading.matches(':has(.library-source-navigation:is([data-revealed],[data-scope-expanded]), :focus-visible, .library-controls-host.is-open)');
+    const isOpen = () => heading.hasAttribute("data-navigation-open") || heading.hasAttribute("data-keyboard-focus") || heading.hasAttribute("data-controls-open");
     const remember = (event: PointerEvent) => {
       if (isOpen()) return;
       const button = (event.target as Element).closest<HTMLButtonElement>('button');
@@ -69,10 +73,17 @@ export function LibrarySourceTabs({ onChange, project = false, tabShortcut = tru
     heading.addEventListener('pointermove', remember);
     heading.addEventListener('pointerleave', left);
     return () => {
+      heading.classList.remove("has-source-navigation");
+      releaseHeadingFocus(); releaseNavFocus();
       observer.disconnect(); reset();
       heading.removeEventListener('pointerenter', entered); heading.removeEventListener('pointermove', remember); heading.removeEventListener('pointerleave', left);
     };
   }, []);
+  useLayoutEffect(() => {
+    if (!projectionHost) return;
+    projectionHost.toggleAttribute("data-navigation-open", revealed || expanded);
+    return () => projectionHost.removeAttribute("data-navigation-open");
+  }, [projectionHost, revealed, expanded]);
   function close() {
     if (root.current?.querySelector('.library-tag-scope')?.contains(document.activeElement)) {
       root.current.querySelector<HTMLButtonElement>(`[data-tab-value="${view}"]`)?.focus();

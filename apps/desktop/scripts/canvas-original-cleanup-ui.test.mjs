@@ -37,10 +37,12 @@ try {
       await confirm.waitFor();
       if (assetId === 'c') {
         await page.evaluate(() => { window.failAssetDelete = true; });
-        await confirm.click(); await dialog.getByRole('alert').waitFor();
+        await confirm.click(); await dialog.waitFor({ state: 'detached' });
+        await page.getByRole('button', { name: '查看文件任务', exact: true }).click();
         assert.equal(await page.locator('[data-conversation-image="c"]').count(), 1, 'failed deletion retains the result');
         await page.evaluate(() => { window.failAssetDelete = false; });
         await dialog.getByRole('button', { name: '重试失败项' }).click();
+        await page.keyboard.press('Escape');
       } else await confirm.click();
       await dialog.waitFor({ state: 'detached' });
       await page.locator(`[data-conversation-image="${assetId}"]`).waitFor({ state: 'detached' });
@@ -60,4 +62,4 @@ try {
   }
   assert.deepEqual(errors, []);
   console.log('PASS original recycling and missing cleanup: actual menu/confirmation, failure/retry, remaining gallery outputs, last-output card, duplicate instance, history/draft/camera, repeated refresh and reload');
-} finally { await browser.close(); await server.close(); }
+} catch (error) { console.error(error); throw error; } finally { await browser.close(); await server.close(); }

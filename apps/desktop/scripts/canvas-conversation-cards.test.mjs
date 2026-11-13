@@ -5,6 +5,21 @@ import { canvasConversationCards, canvasConversationGroupTarget } from '../src/l
 const prompt = (id, job, turn, time = 1, projectId = 'p') => ({ id, projectId, kind: 'prompt', createdAt: time, hiddenAt: null, payloadJson: JSON.stringify({job_id: job, turn_key: turn}) });
 const output = (id, job, turn, time = 1) => ({...prompt(id, job, turn, time), kind: 'asset', role: 'output', assetId: id, payloadJson: JSON.stringify({execution: {job_id: job, turn_key: turn}})});
 
+test('manual galleries merge independent conversations without losing execution or absorbing copied references', () => {
+  const nodes=[prompt('one','one','turn',1),output('gen-output:one','one','turn',2),prompt('two','two','turn',3),output('gen-output:two','two','turn',4)];
+  const manual=node=>({...node,payloadJson:JSON.stringify({...JSON.parse(node.payloadJson),workflow_generation_group:'manual:group',generation_gallery_key:'manual:group'})});
+  const selected={...output('selected','','',5),role:'reference'};
+  selected.payloadJson=JSON.stringify({workflow_generation_group:'manual:group',generation_gallery_key:'manual:group',manual_gallery_node:true});
+  const copy=manual({...output('copy','','',6),role:'reference'});
+  const result=canvasConversationCards([...nodes.map(manual),selected,copy],{});
+  assert.equal(result.cards.size,1);
+  const card=result.cards.get('one');
+  assert.equal(card.latest.id,'two','a merged reference must not replace the latest execution session');
+  assert.deepEqual(card.outputs.map(n=>n.id),['gen-output:one','gen-output:two','selected']);
+  assert.equal(result.hiddenIds.has('copy'),false);
+  assert.deepEqual(canvasConversationGroupTarget(card),{groupKey:'manual:group'});
+});
+
 test('Agent tool images stay separate even in the same provider conversation, with exact prompt aliases', () => {
   const session = prompt('gen-prompt:agent','agent-job','turn');
   const pictures = ['one','two'].map(id => output(`gen-output:${id}`,'agent-job','turn'));

@@ -9,6 +9,27 @@ const documentOutputs = [
   { type: 'image', media: 'image', binding: { canvasNodeId: 'document', cellId: '*' } },
 ];
 const source = (id, media = 'image') => ({ type: 'image', media, binding: { assetId: id, assetNodeId: `card-${id}` } });
+test('whole text table reaches the Agent through native canvas input resolution', () => {
+  const agent = connect(node('reader', 'agent'), documentOutputs);
+  const table = { rows: [['标题', ''], ['第一屏', '内容']] };
+  const values = workflowInputValues([agent], agent, (_, port) => port === '*'
+    ? { type: 'image', assetIds: [] }
+    : { type: 'text', text: JSON.stringify(table), table });
+  assert.deepEqual(Object.values(JSON.parse(compileAgentPrompt(agent, values).source))[0].rows, table.rows);
+});
+test('Agent accepts a text-only loop row on a mixed wire but still requires independent image inputs', () => {
+  const binding = { nodeId: 'loop', autoConnect: 'row', slot: 1 };
+  const target = node('reader', 'agent', { prompt: '读取当前行', inputs: {
+    text: [{ ...binding, portId: 'text' }], image: [{ ...binding, portId: 'image' }],
+  } });
+  const table = { rows: [['当前行', '']] };
+  const values = { text: [{ type: 'text', text: JSON.stringify(table), table }], image: [{ type: 'image', assetIds: [] }] };
+  const result = compileAgentPrompt(target, values);
+  assert.deepEqual(Object.values(JSON.parse(result.source))[0].rows, table.rows);
+  assert.deepEqual(result.assetIds, []);
+  target.inputs.image[0].autoConnect = 'separate';
+  assert.throws(() => compileAgentPrompt(target, values), /没有可用图片/);
+});
 const connect = (target, outputs) => {
   const plan = planAutomaticConnection([target], outputs, target.id);
   assert.equal(plan.error, null);
@@ -48,7 +69,9 @@ test('prewiring a producer without results succeeds, empty result fails at compi
   assert.equal(plan.error, null);
   assert.equal(plan.bindings.length, 2);
   const connected = connect(target, documentOutputs);
-  assert.throws(() => compileGenerationPrompt(connected, { text: [{ type: 'text', text: '' }], image: [{ type: 'image', assetIds: ['a'] }] }), /没有可用内容/);
+  assert.throws(() => compileGenerationPrompt(connected, { text: [{ type: 'text', text: '' }], image: [{ type: 'image', assetIds: [] }] }), /没有可用内容/);
+  const imageOnly = compileGenerationPrompt({ ...connected, prompt: '使用参考图' }, { text: [{ type: 'text', text: '' }], image: [{ type: 'image', assetIds: ['a'] }] });
+  assert.deepEqual(imageOnly.assetIds, ['a']);
 });
 
 test('text only receivers ignore image output without asking', () => {

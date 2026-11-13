@@ -2,7 +2,7 @@
 use super::*;
 
 pub(crate) struct ConnectedFileFingerprint {
-    path: PathBuf,
+    pub(crate) path: PathBuf,
     metadata: fs::Metadata,
     version: String,
     pub(crate) hash: String,
@@ -24,6 +24,17 @@ pub(crate) fn connection_path_spellings(source: &Path, canonical: &Path) -> [Str
 }
 
 impl Database {
+    pub(crate) fn current_preview_changes(&self, values: Vec<(Asset, String)>) -> AppResult<Vec<(Asset, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut query = conn.prepare("SELECT EXISTS(SELECT 1 FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.id=?1 AND COALESCE(e.fingerprint,f.sha256)=?2 AND a.thumb_path IS ?3 AND a.store_path IS ?4 AND a.file_mtime IS ?5 AND a.size IS ?6)")?;
+        let mut current = Vec::with_capacity(values.len());
+        for (asset, version) in values {
+            if query.query_row(params![asset.id,version,asset.thumb_path,asset.store_path,asset.file_mtime,asset.size], |row| row.get::<_, bool>(0))? {
+                current.push((asset, version));
+            }
+        }
+        Ok(current)
+    }
     pub(crate) fn prepare_connected_file(source: &Path) -> AppResult<ConnectedFileFingerprint> {
         let started = std::time::Instant::now();
         let path = original(source)?;
@@ -111,11 +122,13 @@ impl Database {
         if preview_key(&path, &fs::metadata(&path)?)? != version {
             return Err(invalid("文件正在变化，请稍后重试"));
         }
+        // Keep a known entry/reference identity; otherwise preserve registration
+        // order across query-plan changes when historical path aliases coexist.
         let existing: Option<(String, Option<String>, bool)> = tx.query_row(
             "SELECT a.id,COALESCE(e.fingerprint,f.sha256),e.asset_id IS NOT NULL FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id WHERE a.store_path IN (?1,?2,?3) ORDER BY a.id=?4 DESC,a.rowid LIMIT 1",
             params![names[0],names[1],names[2],preferred_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).optional()?;
         let id = if let Some((id, expected, external)) = existing {
-            restore_present_original(&tx, &id)?;
+            restore_present_original(&tx, &id, &path, Some(&hash))?;
             if expected.as_deref().is_some_and(|value| value != hash) {
                 // Creative records belong to the stable asset, not to one content revision.
                 // Only derived visual data is invalidated; manual text/analysis stays intact.
@@ -224,7 +237,7 @@ impl Database {
             match image::open(&input) {
                 Ok(image) => (Some(crate::media::phash::compute_from_image(&image)),
                     serde_json::to_string(&crate::media::color::extract_from_image(&image, 5)).ok()),
-                Err(_) if matches!(path.extension().and_then(|ext| ext.to_str()), Some("svg" | "psd")) => (None, None),
+                Err(_) if !auxiliary => (None, None),
                 Err(_) => return Err(invalid("缩略图资料暂时无法完成，请稍后重试")),
             }
         };

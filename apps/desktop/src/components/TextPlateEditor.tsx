@@ -1,4 +1,5 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, type ReactNode } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState, type ReactNode } from "react";
+import { documentPasteData } from "../lib/documentPaste";
 import { Plate, PlateContainer, PlateContent, PlateElement, createPlatePlugin, usePlateEditor, useEditorRef, usePluginOption, type PlateElementProps } from "platejs/react";
 import type { Value } from "platejs";
 import { BlockSelectionPlugin } from '@platejs/selection/react';
@@ -50,9 +51,11 @@ function DiscussionChanges({ onChange }: { onChange(value: Value): void }) {
 }
 
 export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextPlateEditor({ value, media, onChange, onDropAssets, toolbarStart, toolbarEnd, agent }, ref) {
+  // Initialization clones the entire Slate tree. Later external documents are applied by the effect below.
+  const [initialValue] = useState(() => plateValue(value));
   const editor = usePlateEditor({
     plugins: [...EditorKit.filter(plugin => plugin.key !== 'fixed-toolbar').map(plugin => plugin.key === 'discussion' ? discussionPlugin.extend({ options: { discussions: value.discussions ?? [] } }) : plugin), createPlatePlugin({ key: "raw", node: { isElement: true, component: RawElement } })],
-    value: plateValue(value),
+    value: initialValue,
     override: { components: { img: TextMediaElement, audio: TextMediaElement, video: TextMediaElement } },
   });
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -107,6 +110,13 @@ export const TextPlateEditor = forwardRef<TextPlateHandle, Props>(function TextP
     </div>
     <PlateContainer className="text-plate-container">
     <PlateContent ref={bodyRef} className="text-document-body" aria-label="文档正文" spellCheck={false} placeholder="开始写作…"
+      onPaste={event => {
+        const data = documentPasteData(event.clipboardData);
+        if (!data || editor.dom.readOnly) return;
+        event.preventDefault();
+        editor.tf.insertData(data);
+        return true;
+      }}
       onClickCapture={event => {
         if (editor.dom.readOnly) return;
         if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey || event.target !== event.currentTarget) return;

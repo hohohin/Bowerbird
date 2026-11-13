@@ -4,3 +4,21 @@ html[data-theme] .canvas-tactical .canvas-plane .canvas-note.is-content-card.is-
 .canvas-document-edit { display:flex; flex-shrink:0; align-items:center; justify-content:center; width:24px; height:24px; border:0; background:transparent; color:var(--bb-muted); cursor:pointer; }
 .canvas-document-edit:hover { color:var(--bb-blue); }
 .canvas-document-edit:focus-visible { outline:1px solid var(--bb-blue); }
+.is-document-card .text-file-excerpt:focus-visible { outline:1px solid var(--bb-blue); outline-offset:-1px; }
+.canvas-document-reading { display:block; white-space:normal; color:inherit; }
+.canvas-document-prose { display:block; white-space:pre-wrap; }
+.canvas-document-prose + .canvas-document-prose { margin-block-start:1lh; }
+.canvas-document-reading :is(p,blockquote,pre,ol,ul,table) { margin:0 0 .5em; }
+.canvas-document-reading :is(h1,h2,h3,h4,h5,h6) { margin:.8em 0 .25em; font-family:inherit; font-size:1.05em; font-weight:600; line-height:1.35; }
+.canvas-document-reading h1 { font-size:1.35em; }
+.canvas-document-reading h2 { font-size:1.18em; }
+.canvas-document-reading > :first-child { margin-top:0; }
+.canvas-document-reading ol, .canvas-document-reading ul { padding-inline-start:1.55em; }
+.canvas-document-reading ol { list-style:decimal; }
+.canvas-document-reading ul { list-style:disc; }
+.canvas-document-reading li > p { margin:0; }
+.canvas-document-reading blockquote { border-inline-start:2px solid var(--bb-line); padding-inline-start:.7em; }
+.canvas-document-reading pre { white-space:pre-wrap; overflow-wrap:anywhere; }
+.canvas-document-reading :is(pre,code) { font-family:var(--font-mono,monospace); font-size:.95em; }
+.canvas-document-reading table { border-collapse:collapse; width:100%; table-layout:fixed; }
+.canvas-document-reading :is(th,td) { border:1px solid var(--bb-line); padding:.2em .4em; text-align:start; vertical-align:top; }

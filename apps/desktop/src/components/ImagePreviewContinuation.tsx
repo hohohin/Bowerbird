@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { Send, Square } from "lucide-react";
 import type { Asset, GenJob } from "../lib/types";
 import { useStore } from "../store";
-import { canStartAnotherJob, canUseGenerationProvider } from "../lib/entitlement";
-import { canonicalProviderKey, isCloudProvider } from "../lib/genProviders";
+import { canStartAnotherJob } from "../lib/entitlement";
+import { normalizeGenerationProvider } from "../lib/genProviders";
+import { generationProviderIssue } from "../lib/generationAvailability";
+import { ProviderIssueNotice } from "./creation/ProviderIssueNotice";
 import { resolveImagePreviewJob } from "../lib/imagePreviewContinuation";
 import { userErrorMessage } from "../lib/userError";
 
@@ -22,14 +24,9 @@ export function ImagePreviewContinuation({ asset, job, sourceJobId, enabled, onS
   const runningCount = useStore(state => Object.values(state.genJobs).filter(item => item.running).length);
   const last = job.turns[job.turns.length - 1];
   const rawProvider = last?.provider || job.provider || "codex";
-  const provider = rawProvider === "dreamina" ? "jimeng" : rawProvider === "codex-cli" ? "codex" : canonicalProviderKey(rawProvider);
-  const cloud = isCloudProvider(provider);
-  const health = provider === "jimeng" ? dreamina : codex;
-  const balance = entitlement ? entitlement.balances.daily + entitlement.balances.sub + entitlement.balances.topup : 0;
-  const unavailable = !job.sessionId ? "此图片未保存可续接的会话"
-    : !canUseGenerationProvider(entitlement, provider) ? "当前账号不可使用此生成模型"
-    : cloud ? !auth?.logged_in ? "请先登录 Bowerbird Cloud" : !auth.cloud_available ? "Bowerbird Cloud 暂不可用" : balance <= 0 ? "积分不足" : ""
-    : !health?.ok ? userErrorMessage(health?.reason, "请在设置中检查生成服务的登录状态") : "";
+  const provider = normalizeGenerationProvider(rawProvider);
+  const issue = job.sessionId ? generationProviderIssue(provider, { cloudAuth: auth, cloudEntitlement: entitlement, codexHealth: codex, dreaminaHealth: dreamina }) : null;
+  const unavailable = job.sessionId ? issue?.message : "此图片未保存可续接的会话";
   const blocked = unavailable || (!canStartAnotherJob(entitlement, runningCount) ? "已达当前账号档位的并行生成上限" : "");
   useEffect(() => () => { revision.current++; }, [asset.id, enabled]);
 
@@ -51,7 +48,7 @@ export function ImagePreviewContinuation({ asset, job, sourceJobId, enabled, onS
       const previousTurns = latest.turns.length;
       const lastTurn = latest.turns[latest.turns.length - 1];
       const nextProvider = lastTurn?.provider || latest.provider || "codex";
-      const operation = useStore.getState().sendGenRevise(latest.id, text.trim(), canonicalProviderKey(nextProvider === "dreamina" ? "jimeng" : nextProvider), {
+      const operation = useStore.getState().sendGenRevise(latest.id, text.trim(), normalizeGenerationProvider(nextProvider), {
         rawPrompt: text.trim(), ratio: lastTurn?.ratio ?? latest.lastRatio,
         creativeRelation: "continued",
       });
@@ -70,8 +67,9 @@ export function ImagePreviewContinuation({ asset, job, sourceJobId, enabled, onS
       onKeyDown={event => {
         if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && !event.nativeEvent.isComposing) { event.preventDefault(); void send(); }
       }}/>
+    {!job.running && !pending && <ProviderIssueNotice issue={issue} />}
     <div className="creation-image-preview-reply-actions">
-      <span role={error ? "alert" : "status"}>{error || (job.running ? "生成中…" : pending ? "正在接续会话…" : blocked)}</span>
+      <span role={error ? "alert" : "status"}>{error || (job.running ? "生成中…" : pending ? "正在接续会话…" : !issue && blocked)}</span>
       {job.running && sourceJobId ? <button type="button" aria-label="停止当前会话生成" title="停止生成"
         onClick={() => useStore.getState().cancelGeneration(sourceJobId)}><Square size={14}/></button>
         : <button type="submit" aria-label="发送续轮对话" title={blocked || "发送（Ctrl / ⌘ + Enter）"} disabled={pending || !!blocked || !text.trim()}><Send size={16}/></button>}

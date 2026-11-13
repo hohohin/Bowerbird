@@ -1,8 +1,8 @@
 import type { CanvasNode, ProjectCanvasSnapshot } from "./types";
 import { canvasConversationCards } from "./canvasConversationCards";
-import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkflowSessionIds } from "./canvasSessionOutputs";
+import { containedSessionOutputIds, contentRoutedWorkflowSessionIds, hiddenWorkflowSessionIds, workflowGenerationResultAnchor } from "./canvasSessionOutputs";
 import { readCanvasNote } from "./canvasNotes";
-import { workflowCardWidth, type WorkflowNode } from "./canvasWorkflow";
+import { isWorkflowGenerationResult, workflowCardWidth, type WorkflowNode } from "./canvasWorkflow";
 import { placeCanvasCardNearSource } from "./canvasReferencePlacement";
 
 export function workflowLayoutRect(node: WorkflowNode) {
@@ -10,14 +10,24 @@ export function workflowLayoutRect(node: WorkflowNode) {
     height: node.layoutSize?.height ?? (node.kind === "trigger" ? 92 : node.kind === "comfy-video" ? 360 : 280) };
 }
 
-export function workflowArrangementEdges(workflow: readonly WorkflowNode[]) {
+export function workflowArrangementEdges(workflow: readonly WorkflowNode[], canvas: readonly CanvasNode[], conversations: ReturnType<typeof canvasConversationCards>) {
+  const byId = new Map(workflow.map(node => [node.id, node]));
   const visibleId = (id: string) => {
-    const node = workflow.find(item => item.id === id);
+    const node = byId.get(id);
     return node?.textSource ?? node?.textTarget?.nodeId ?? id;
   };
   return workflow.flatMap(node => [
-    ...Object.values(node.inputs).flat().flatMap(input => input.nodeId || input.canvasNodeId
-      ? [{ fromNodeId: visibleId(input.nodeId ?? input.canvasNodeId!), toNodeId: visibleId(node.id) }] : []),
+    ...Object.entries(node.inputs).flatMap(([port, inputs]) => inputs.flatMap(input => {
+      const id = input.nodeId ?? input.canvasNodeId;
+      if (!id) return [];
+      const fromNodeId = visibleId(id), toNodeId = visibleId(node.id);
+      const source = input.nodeId && byId.get(input.nodeId);
+      if (source && !node.textTarget && node.kind !== "trigger" && port !== "signal" && isWorkflowGenerationResult(input, source)) {
+        const result = workflowGenerationResultAnchor(source, canvas, conversations);
+        if (result) return [{ fromNodeId, toNodeId: result.nodeId }, { fromNodeId: result.nodeId, toNodeId }];
+      }
+      return [{ fromNodeId, toNodeId }];
+    })),
     ...[...(node.sessionNodeIds ?? []), ...(node.resultNodeIds ?? []), ...(node.resultGroupId ? [node.resultGroupId] : [])]
       .map(id => ({ fromNodeId: visibleId(node.id), toNodeId: id })),
   ]);

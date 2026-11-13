@@ -71,6 +71,14 @@ export type MeteredDeepSeekProxyOptions = {
   }) => void;
 };
 
+// Chat has its own job/lease and settlement ledger; no Agent Run artifacts are created.
+export type ChatModelProxyOptions = Omit<MeteredDeepSeekProxyOptions, "phase" | "control" | "maxModelTurns"> & {
+  phase: "chat";
+  beforeModel(request: Record<string, unknown>): Promise<void>;
+  onUsage(usage: { inputUnits: number; outputUnits: number }): void;
+  onModelError(error: unknown): void;
+};
+
 type ProxyRequest = JsonRecord;
 type ProxyResult = {
   schemaVersion: 1;
@@ -293,6 +301,66 @@ function decodePersistedResult(value: unknown): ProxyResult {
   };
 }
 
+async function requestModelStream(request: ProxyRequest, upstream: Required<DeepSeekConfig>, fetchImpl: MeteredDeepSeekProxyFetch,
+  signal: AbortSignal, maxAttempts: number, recordUnknown: () => Promise<void>): Promise<ProxyResult> {
+  let response: Awaited<ReturnType<MeteredDeepSeekProxyFetch>> | undefined;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    try {
+      response = await fetchImpl(`${upstream.baseUrl}${REQUEST_PATH}`, {
+        method: "POST",
+        headers: {
+          accept: "text/event-stream",
+          authorization: `Bearer ${upstream.apiKey}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(request),
+        // Cancellation/lease loss closes this proxy; long output has no wall-clock deadline.
+        signal: signal,
+      });
+    } catch {
+      await recordUnknown();
+      throw new DurableProviderError("unknown", "deepseek_transport_unknown");
+    }
+    if (response.ok) break;
+    // A received gateway status is a definitive non-success response. Retry
+    // 502/503/504 once inside this already-durable logical call; do not retry
+    // transport-unknown failures or stable 4xx responses.
+    if (!RETRYABLE_UPSTREAM_STATUSES.has(response.status) || attempt === maxAttempts - 1) {
+      if (response.status === 400) {
+        let detail = "";
+        try { detail = await response.text(); } catch { /* preserve the received HTTP failure */ }
+        if (/context[_ ]length|context window|maximum context|too many tokens/i.test(detail)) {
+          throw new DurableProviderError("terminal", "deepseek_context_limit");
+        }
+      }
+      throw new DurableProviderError("terminal", `deepseek_http_${response.status}`);
+    }
+  }
+  if (!response?.ok) throw new DurableProviderError("terminal", "deepseek_http_502");
+  let body: string;
+  try {
+    body = await response.text();
+  } catch {
+    await recordUnknown();
+    throw new DurableProviderError("unknown", "deepseek_transport_unknown");
+  }
+  const size = new TextEncoder().encode(body).byteLength;
+  if (!size) {
+    await recordUnknown();
+    throw new DurableProviderError("unknown", "deepseek_response_empty");
+  }
+  let parsed: Pick<ProxyResult, "usage" | "providerRequestId">;
+  try {
+    parsed = parseSse(body);
+  } catch (error) {
+    if (error instanceof DurableProviderError && error.outcome === "unknown") {
+      await recordUnknown();
+    }
+    throw error;
+  }
+  return { schemaVersion: 1, status: 200, body, ...parsed };
+}
+
 class MeteredProxyAdapter implements DurableToolAdapter<ProxyRequest, ProxyResult> {
   private readonly options: MeteredDeepSeekProxyOptions;
   private readonly upstream: Required<DeepSeekConfig>;
@@ -308,62 +376,8 @@ class MeteredProxyAdapter implements DurableToolAdapter<ProxyRequest, ProxyResul
   }
 
   async execute(callId: string, request: ProxyRequest): Promise<ProxyResult> {
-    let response: Awaited<ReturnType<MeteredDeepSeekProxyFetch>> | undefined;
-    for (let attempt = 0; attempt < MAX_UPSTREAM_ATTEMPTS; attempt += 1) {
-      try {
-        response = await this.fetchImpl(`${this.upstream.baseUrl}${REQUEST_PATH}`, {
-          method: "POST",
-          headers: {
-            accept: "text/event-stream",
-            authorization: `Bearer ${this.upstream.apiKey}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify(request),
-          // Cancellation/lease loss closes this proxy; long output has no wall-clock deadline.
-          signal: this.abortController.signal,
-        });
-      } catch {
-        await this.recordUsage(callId, { inputUnits: 0, outputUnits: 0 });
-        throw new DurableProviderError("unknown", "deepseek_transport_unknown");
-      }
-      if (response.ok) break;
-      // A received gateway status is a definitive non-success response. Retry
-      // 502/503/504 once inside this already-durable logical call; do not retry
-      // transport-unknown failures or stable 4xx responses.
-      if (!RETRYABLE_UPSTREAM_STATUSES.has(response.status) || attempt === MAX_UPSTREAM_ATTEMPTS - 1) {
-        if (response.status === 400) {
-          let detail = "";
-          try { detail = await response.text(); } catch { /* preserve the received HTTP failure */ }
-          if (/context[_ ]length|context window|maximum context|too many tokens/i.test(detail)) {
-            throw new DurableProviderError("terminal", "deepseek_context_limit");
-          }
-        }
-        throw new DurableProviderError("terminal", `deepseek_http_${response.status}`);
-      }
-    }
-    if (!response?.ok) throw new DurableProviderError("terminal", "deepseek_http_502");
-    let body: string;
-    try {
-      body = await response.text();
-    } catch {
-      await this.recordUsage(callId, { inputUnits: 0, outputUnits: 0 });
-      throw new DurableProviderError("unknown", "deepseek_transport_unknown");
-    }
-    const size = new TextEncoder().encode(body).byteLength;
-    if (!size) {
-      await this.recordUsage(callId, { inputUnits: 0, outputUnits: 0 });
-      throw new DurableProviderError("unknown", "deepseek_response_empty");
-    }
-    let parsed: Pick<ProxyResult, "usage" | "providerRequestId">;
-    try {
-      parsed = parseSse(body);
-    } catch (error) {
-      if (error instanceof DurableProviderError && error.outcome === "unknown") {
-        await this.recordUsage(callId, { inputUnits: 0, outputUnits: 0 });
-      }
-      throw error;
-    }
-    return { schemaVersion: 1, status: 200, body, ...parsed };
+    return requestModelStream(request, this.upstream, this.fetchImpl, this.abortController.signal, MAX_UPSTREAM_ATTEMPTS,
+      () => this.recordUsage(callId, { inputUnits: 0, outputUnits: 0 }));
   }
 
   async reconcile(callId: string): Promise<ProxyResult | null> {
@@ -497,18 +511,19 @@ export class MeteredDeepSeekProxy {
   }
 }
 
-export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOptions): Promise<MeteredDeepSeekProxy> {
+export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOptions | ChatModelProxyOptions): Promise<MeteredDeepSeekProxy> {
   const upstream = validateUpstream(options.upstream, options.allowInsecureLoopback === true);
-  const maxModelTurns = options.maxModelTurns ?? DEFAULT_MAX_MODEL_TURNS;
+  const maxModelTurns = options.phase === "chat" ? 12 : options.maxModelTurns ?? DEFAULT_MAX_MODEL_TURNS;
   if (!Number.isSafeInteger(maxModelTurns) || maxModelTurns < 1 || maxModelTurns > 128) {
     throw new Error("dsh_model_proxy_turn_limit_invalid");
   }
   const capabilityValue = Array.from(randomBytes(32), (byte) => byte.toString(16).padStart(2, "0")).join("");
   const capability = new TextEncoder().encode(capabilityValue);
-  const adapter = new MeteredProxyAdapter(options, upstream);
-  const dispatcher = new DurableToolDispatcher(options.control, adapter, {
+  const adapter = options.phase === "chat" ? undefined : new MeteredProxyAdapter(options, upstream);
+  const dispatcher = options.phase !== "chat" && adapter ? new DurableToolDispatcher(options.control, adapter, {
     onUnexpectedError: options.onUnexpectedError,
-  });
+  }) : undefined;
+  const chatAbort = new AbortController();
   let active = true;
   let inFlight = false;
   const distinctCalls = new Set<string>();
@@ -532,6 +547,7 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
           return typeof name === "string" && options.allowedToolNames!.includes(name);
         });
       }
+      if (options.phase === "chat") await options.beforeModel(modelRequest);
       const requestHash = sha256Hex(canonicalJson(modelRequest));
       const callId = sha256Hex(canonicalJson({
         schemaVersion: 1,
@@ -539,6 +555,7 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
         phase: options.phase,
         requestHash,
       }));
+      if (options.phase === "chat" && distinctCalls.has(callId)) throw new ProxyHttpError(409, "duplicate_model_call");
       if (!distinctCalls.has(callId)) {
         if (distinctCalls.size >= maxModelTurns) throw new ProxyHttpError(429, "model_turn_budget_exhausted");
         distinctCalls.add(callId);
@@ -548,13 +565,15 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
         if (!response.headersSent) response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
         response.write(": keep-alive\n\n");
       }, 15_000);
-      const result = await dispatcher.dispatch({
+      const result = options.phase === "chat" ? await requestModelStream(modelRequest, upstream,
+        options.fetch ?? fetch, chatAbort.signal, 1, async () => {}) : await dispatcher!.dispatch({
         runId: options.runId,
         leaseId: options.leaseId,
         callId,
         phase: options.phase,
         toolName: "model_turn",
       }, modelRequest);
+      if (options.phase === "chat") options.onUsage(result.usage);
       // A provider-truncated answer must never become a successful text result.
       // The durable response and usage above remain available without resubmission.
       if (result.body.split(/\r?\n/).some(line => {
@@ -570,6 +589,7 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
       response.end(result.body);
       proxy.lastErrorCode = undefined;
     } catch (error) {
+      if (options.phase === "chat") options.onModelError(error);
       proxy.lastErrorCode = error instanceof ProxyHttpError ? error.code
         : error instanceof DurableProviderError ? error.safeCode : "model_proxy_failed";
       if (error instanceof ProxyHttpError) sendJson(response, error.status, error.code);
@@ -592,7 +612,8 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
     active = false;
     if (cancellation) clearInterval(cancellation);
     capability.fill(0);
-    adapter.close();
+    adapter?.close();
+    chatAbort.abort();
   };
   server.on("close", deactivate);
   await new Promise<void>((resolve, reject) => {
@@ -605,7 +626,7 @@ export async function startMeteredDeepSeekProxy(options: MeteredDeepSeekProxyOpt
     throw new Error("dsh_model_proxy_address_invalid");
   }
   if (options.signal) cancellation = setInterval(() => {
-    if (options.signal?.aborted) adapter.close();
+    if (options.signal?.aborted) { adapter?.close(); chatAbort.abort(); }
   }, 250);
   const waitForIdle = async (): Promise<void> => {
     while (activeRequests.size > 0) {

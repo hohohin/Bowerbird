@@ -141,7 +141,7 @@ fn candidates(db: &Database, after: Option<&str>) -> AppResult<Vec<Candidate>> {
     let mut stmt = conn.prepare(&format!("SELECT a.id,a.store_path,COALESCE(e.fingerprint,f.sha256,''),COALESCE(a.created_at,0),m.asset_id IS NOT NULL
         FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id
         LEFT JOIN removed_missing_asset_originals m ON m.asset_id=a.id
-        WHERE a.id>?1 AND a.store_path IS NOT NULL AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=a.id)
+        WHERE a.id>?1 AND a.store_path IS NOT NULL
         AND (m.asset_id IS NOT NULL OR ({global}) OR ({project} AND a.library_hidden=0 AND EXISTS(SELECT 1 FROM project_assets p WHERE p.asset_id=a.id)))
         ORDER BY a.id LIMIT ?2"))?;
     let rows = stmt
@@ -165,6 +165,9 @@ fn clean_candidate(db: &Database, candidate: &Candidate, volume: u32) -> AppResu
     // and NotFound again; this API has no route to a filesystem deletion callback.
     if !matches!(LocalProbe::default().check(Path::new(&candidate.path)), PathState::Missing(current) if current == volume)
     {
+        return Ok(0);
+    }
+    if db.original_under_offline_connection(Path::new(&candidate.path))? {
         return Ok(0);
     }
     let originals = db.preview_asset_originals(std::slice::from_ref(&candidate.id))?;
@@ -378,6 +381,29 @@ mod tests {
                 .unwrap()
                 .len()
         }
+    }
+
+    #[test]
+    fn sweep_verifies_originals_with_both_recycled_and_cleaned_markers() {
+        let f = Fixture::new();
+        let ids = [f.id.clone()];
+        let original = f.db.preview_asset_originals(&ids).unwrap().remove(0);
+        fs::rename(&f.original, &f.moved).unwrap();
+        f.db.conn.lock().unwrap().execute("INSERT INTO trashed_asset_originals(asset_id,path,fingerprint) VALUES(?1,?2,?3)",
+            rusqlite::params![f.id,original.path,original.fingerprint]).unwrap();
+        // The sweeper must not auto-clean references solely because the original was recycled.
+        assert!(candidates(&f.db,None).unwrap().is_empty());
+        let missing = f.db.preview_asset_originals(&ids).unwrap().remove(0);
+        f.db.cleanup_missing_original(&missing).unwrap();
+        let mut sweep = MissingOriginalSweep::default();
+        let now = Instant::now();
+        image::RgbImage::from_pixel(8, 8, image::Rgb([7u8,8,9])).save(&f.original).unwrap();
+        assert_eq!(sweep.check_batch(&f.db,&f.paths,now).unwrap().restored, 0);
+        assert_eq!(f.visible(), 0);
+        fs::remove_file(&f.original).unwrap();
+        fs::rename(&f.moved,&f.original).unwrap();
+        assert_eq!(sweep.check_batch(&f.db,&f.paths,now + Duration::from_secs(31)).unwrap().restored, 1);
+        assert_eq!(f.visible(), 1);
     }
 
     #[test]

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server=await createServer({configFile:false,root:process.cwd(),server:{host:'127.0.0.1',port:1617,strictPort:true,hmr:false,watch:null}});
+const server=await createServer({cacheDir:'.tmp/generation-cell-vite',server:{host:'127.0.0.1',port:1617,strictPort:true,hmr:false,watch:null}});
 await server.listen();
 const browser=await chromium.launch({channel:'chrome',headless:true});
 const page=await browser.newPage({viewport:{width:1600,height:1100}});
@@ -52,7 +52,7 @@ try{
   await mkdir('.tmp/canvas-generation-cell',{recursive:true});
   await page.screenshot({path:'.tmp/canvas-generation-cell/pending.png'});
   await status('failed');await cell.getByText('codex · 生成失败').waitFor();
-  await status('running');await cell.getByText('codex · 生成中').waitFor();
+  await status('running');await cell.locator('[data-cell-generation][aria-busy="true"]').waitFor();
   await status('done',true);
   await cell.locator('.canvas-image-content img').waitFor();
   await page.waitForFunction(()=>JSON.parse(window.snapshot().nodes.find(n=>n.id==='table').payloadJson).cells[0][0].image_refs?.[0]?.asset_id==='b');
@@ -60,17 +60,16 @@ try{
   await page.screenshot({path:'.tmp/canvas-generation-cell/completed.png'});
   assert.equal(await source.count(),0);assert.equal(await page.locator('[data-canvas-node-id="result"]').count(),0);
   assert.equal((await saved()).cells[0][1].text,'保留');
+  await page.evaluate(async()=>{ const {api}=await import('/src/lib/api.ts'); api.generationHistory=async()=>({turns:[],references:[]}); window.picked=[]; window.addEventListener('bowerbird://board-asset-picked',event=>window.picked.push(event.detail)); window.store.setState({boardOpen:true}); });
   const picture=cell.getByRole('button',{name:/查看生成会话/});
-  await picture.click();await page.locator('[data-project-inspector]').waitFor();
-  assert.equal(await page.getByRole('dialog',{name:'媒体预览，1 / 1'}).count(),0,'single click opens only the original session');
-  await page.getByTitle('关闭详情（进行中的任务不会中断）').click();
-  await picture.dblclick();await page.getByRole('dialog',{name:'媒体预览，1 / 1'}).waitFor();
-  await page.waitForTimeout(450);assert.equal(await page.locator('[data-project-inspector]').count(),0,'double click cancels delayed session opening');
-  await page.keyboard.press('Escape');
+  await picture.dblclick();
+  assert.deepEqual(await page.evaluate(()=>window.picked),['b']);
+  await page.waitForTimeout(550);assert.equal(await page.locator('[data-project-inspector]').count(),0,'double click cancels delayed session opening');
+  await picture.click();await page.getByRole('dialog',{name:'图片与会话预览'}).waitFor();await page.keyboard.press('Escape');
   assert.deepEqual(await page.evaluate(async()=>{const {canvasInputValue}=await import('/src/lib/canvasSessionOutputs.ts');const s=window.snapshot();return canvasInputValue(s.nodes.find(n=>n.id==='table'),'one',s.nodes).assetIds;}),['b']);
   await page.evaluate(()=>window.save());await page.reload();await cell.locator('.canvas-image-content img').waitFor();assert.equal(await source.count(),0);
-  await cell.getByRole('button',{name:/查看生成会话/}).focus();await page.keyboard.press('Enter');await page.locator('[data-project-inspector]').waitFor();
-  await page.getByTitle('关闭详情（进行中的任务不会中断）').click();
+  await page.evaluate(async()=>{ const {api}=await import('/src/lib/api.ts'); api.generationHistory=async()=>({turns:[],references:[]}); });
+  await cell.getByRole('button',{name:/查看生成会话/}).focus();await page.keyboard.press('Enter');await page.getByRole('dialog',{name:'图片与会话预览'}).waitFor();await page.keyboard.press('Escape');
   await cell.hover();await cell.getByRole('button',{name:'清空第 1 行第 1 列图片'}).click();
   await source.waitFor();assert.equal((await saved()).cells[0][0].generation_ref,undefined);
   // A finished card can also be placed directly, without a workflow dependency.
@@ -81,10 +80,9 @@ try{
   assert.equal((await saved()).cells[0][0].generation_ref,undefined,'replacement cannot be overwritten by the old generation');
   await page.evaluate(async()=>{const {api}=await import('/src/lib/api.ts');await api.projectCanvasNodeUpdate('session',{x:70,y:120});window.emitChange();});
   const ordinary=cell.getByRole('button',{name:/放大图片/});
-  await ordinary.click();await page.waitForTimeout(450);
-  assert.equal(await page.getByRole('dialog',{name:'媒体预览，1 / 1'}).count(),0,'ordinary image single click does not magnify');
+  await ordinary.click();await page.getByRole('dialog',{name:'图片与会话预览'}).waitFor();
   assert.equal(await page.locator('[data-project-inspector]').count(),0,'replacement no longer opens the old session');
-  await ordinary.dblclick();await page.getByRole('dialog',{name:'媒体预览，1 / 1'}).waitFor();await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
   // Selecting an older result before dropping freezes that exact turn and image.
   await page.evaluate(async()=>{
     const {api}=await import('/src/lib/api.ts');const s=window.snapshot(),n=s.nodes.find(n=>n.id==='session'),output=s.nodes.find(n=>n.id==='result');
@@ -108,6 +106,13 @@ try{
     const point=wire.getPointAtLength(0),screen=new DOMPoint(point.x,point.y).matrixTransform(wire.getScreenCTM()),rect=cell.getBoundingClientRect();
     return Math.abs(screen.x-rect.right)<2&&Math.abs(screen.y-(rect.top+rect.height/2))<2;
   });
+  await page.evaluate(()=>{window.picked=[];window.addEventListener('bowerbird://board-asset-picked',event=>window.picked.push(event.detail));window.store.setState({boardOpen:true});});
+  const shown=cell.locator('[data-conversation-image="b"]');
+  await shown.dblclick();
+  assert.deepEqual(await page.evaluate(()=>window.picked),['b'],'group references the displayed older image rather than the latest result');
+  await shown.click({button:'right'});
+  assert.equal(await page.evaluate(()=>window.store.getState().contextMenu.assetId),'b');
+  await page.keyboard.press('Escape');
   assert.equal(await page.evaluate(()=>window.calls.some(call=>/^(generate_|start_generation)/.test(call.command))),false);
   assert.deepEqual(errors,[]);
   console.log('generation cell: drag threshold, failed-save retention, pending/failed/completed UI, original-session inspector, live completion, exact output, preview, reload, clear/replacement and no resubmission passed');

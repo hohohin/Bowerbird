@@ -45,6 +45,9 @@ w.__TAURI_INTERNALS__ = {
     w.requests.push({command,args});
     if (w.catalogGate && ["catalog_overview", "catalog_page", "list_generation_groups"].includes(command)) await w.catalogGate;
     if (command === "list_library_view") return { assets: [{ ...asset(0), thumb_path: thumb }, asset(1)], memberships: [{ projectId: "p", assetId: "asset-0" }, { projectId: "q", assetId: "asset-1" }], total: 2 };
+    if (command === "project_covers") return { p: { asset_count: 1, paths: [thumb] }, q: { asset_count: 1, paths: [thumb] } };
+    if (command === "remove_assets_from_project") return args.assetIds.length;
+    if (command === "list_projects") return useStore.getState().projects;
     if (command === "folder_connections") return [];
     if (command === "file_workspace_status") return { config: { root: "C:/library", places: [], projects: {} }, proposed_root: "C:/library" };
     if (command === "external_files_browse") return { path: args.path ?? "C:/library", parent: null, entries: [], total: 0 };
@@ -110,7 +113,7 @@ function NavigationFixture() {
   return <div style={{ position: "fixed", inset: 0 }}><LibraryCatalogTransition key={`${source}:${media}`} kind={mode === "all" || mode === "tags" ? mode : "collections"}
     media={media} projectId={project ? "p" : null} projectScope={source === "project"}
     navigation={<header className="library-browser-heading"><div className="library-floating-navigation"><LibrarySourceTabs project={project} value={source} onChange={value => useLocalFileMode.getState().openSource(value as LibrarySource)}/></div></header>}
-    onClose={() => {}}/></div>;
+    onClose={() => {}}/><AssetContextMenu/></div>;
 }
 const params = new URLSearchParams(location.search);
 createRoot(document.getElementById("root")!).render(params.has("navigation") ? <NavigationFixture/> : params.has("split") ? <SplitFixture/> : <Fixture/>);

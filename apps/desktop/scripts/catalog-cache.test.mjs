@@ -71,6 +71,7 @@ test('preview patch updates heads, group members and references without changing
   assert.equal(next.groups.gallery[0].width, 20);
   assert.equal(patchCatalogPage(next, { assets: [{ ...original, thumb_path: '/old.jpg' }], versions: { shared: 'old' } }).assets[1], next.assets[1]);
   assert.equal(patchCatalogPage(next, { assets: [{ ...original, file_mtime: 0, thumb_path: '/old.jpg' }] }), next);
+  assert.equal(patchCatalogPage(next, { assets: [{ ...original, thumb_path: '/late.jpg' }], versions: { shared: 'old' } }).assets[0], next.assets[0], 'an unversioned plain card never replaces a different existing thumbnail');
 });
 test('preview completion only invalidates color-filtered snapshots and patches a pending page result', async () => {
   const cache = createCatalogCache(), original = asset('one'), pending = deferred();

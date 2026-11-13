@@ -74,13 +74,13 @@ export function DreaminaOnboarding() {
   async function recheck() {
     setChecking(true);
     try {
-      const h = await api.dreaminaHealth();
+      const h = await api.dreaminaHealth(true);
       setDreaminaHealth(h);
       if (h.ok) {
         setForceOpen(false);
       }
     } catch {
-      setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" });
+      setDreaminaHealth({ ok: false, status: "unconfirmed", reason: "即梦状态检测失败，请重新检测。" });
     } finally {
       setChecking(false);
     }
@@ -116,6 +116,10 @@ export function DreaminaOnboarding() {
     setFlow(null);
     try {
       const f = await api.dreaminaLoginHeadless();
+      if (!f) {
+        await recheck();
+        return;
+      }
       setFlow(f);
       setLoginOpened(true);
       // 一步化：拿到授权链接自动打开浏览器（shell:allow-open 已授权，CodexOnboarding 同款）。
@@ -145,7 +149,7 @@ export function DreaminaOnboarding() {
   }
 
   const reason = dreaminaHealth?.reason ?? "";
-  const notInstalled = !dreaminaHealth?.ok && reason.includes("未检测到");
+  const notInstalled = dreaminaHealth?.status === "missing";
   const ready = dreaminaHealth?.ok === true;
   // CLI 已装即可登录：本机已装 / 已就绪 / 后端判「已装但未登录」三种都算。
   const installDone =

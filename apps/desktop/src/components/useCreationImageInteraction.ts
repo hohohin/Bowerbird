@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState, type MouseEvent, type PointerEvent, type KeyboardEvent, type RefObject } from "react";
 import { api } from "../lib/api";
+import { externalFiles } from "../lib/externalFiles";
 import { isAudioPath } from "../lib/audioMedia";
 import { isTextPath } from "../lib/textMedia";
 import { isVideoPath } from "../lib/videoGeneration";
@@ -21,6 +22,7 @@ interface Options {
   scope: string;
   resolve: (media: HTMLElement) => CreationImageTarget | null;
   onCapture?: () => void;
+  onCanvasVideoPreview?: (path: string, media: HTMLElement) => boolean;
 }
 
 interface PreviewRequest { sequence: number; route: number; projectId: string | null; scope: string }
@@ -43,11 +45,10 @@ function unavailableImage(media: HTMLElement, double: boolean) {
     || media.matches(":disabled") || media.closest(".connected-media")?.querySelector(".connected-missing");
 }
 
-function isImage(target: CreationImageTarget, media: HTMLElement) {
-  const path = target.asset
+function mediaPath(target: CreationImageTarget, media: HTMLElement) {
+  return target.asset
     ? target.asset.store_path || (target.asset.ext ? `asset.${target.asset.ext}` : target.asset.name)
     : media.dataset.filePath;
-  return !!path && !isVideoPath(path) && !isAudioPath(path) && !isTextPath(path);
 }
 
 function modified(event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean; altKey: boolean }) {
@@ -77,8 +78,15 @@ class ImageGesture {
     // Outside creation, conversation titles keep their editing entry; images share the HUD.
     if (media?.hasAttribute("data-creation-conversation") && !(state.boardOpen || state.genEditing)) return null;
     const image = media && this.options.resolve(media);
-    return image && isImage(image, media!) ? { ...image, media: media! } : null;
+    if (!image || !media) return null;
+    const path = mediaPath(image, media);
+    if (!path || isAudioPath(path) || isTextPath(path)) return null;
+    const video = isVideoPath(path);
+    if (video && (!state.boardOpen || state.genEditing || !this.options.root.current?.querySelector('.creation-dock.is-creating[data-video-references="true"]'))) return null;
+    return { ...image, media, video };
   }
+
+  handlesVideo(target: EventTarget | null) { return this.target(target)?.video === true; }
 
   private request(): PreviewRequest {
     const state = useStore.getState();
@@ -98,15 +106,24 @@ class ImageGesture {
       const asset = image.asset ?? (await api.getAssetsByIds([image.assetId]))[0];
       if (!this.current(request, image)) return;
       if (!asset) throw new Error("素材已移除，无法预览");
-      if (isImage({ assetId: asset.id, asset }, image.media)) this.show(asset);
+      const path = mediaPath({ assetId: asset.id, asset }, image.media);
+      if (!path || isAudioPath(path) || isTextPath(path)) return;
+      if (isVideoPath(path)) {
+        if (!this.handlesVideo(image.media) || this.options.onCanvasVideoPreview?.(path, image.media)) return;
+        const playable = await externalFiles.media(path);
+        if (this.current(request, image)) this.show({ ...asset, store_path: playable });
+        return;
+      }
+      this.show(asset);
     } catch (error) {
       if (this.current(request, image)) notifyError(error, "无法预览素材，请重试");
     }
   }
 
-  private reference(image: CreationImageTarget) {
+  private reference(image: CreationImageTarget & { video?: boolean }) {
     window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, {
-      detail: image.canvasNodeId ? { assetId: image.assetId, canvasNodeId: image.canvasNodeId } : image.assetId,
+      detail: image.video ? { assetId: image.assetId, canvasNodeId: image.canvasNodeId, target: "creation-board" }
+        : image.canvasNodeId ? { assetId: image.assetId, canvasNodeId: image.canvasNodeId } : image.assetId,
     }));
   }
 

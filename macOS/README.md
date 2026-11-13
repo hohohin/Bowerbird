@@ -2,6 +2,14 @@
 
 本目录记录 Mac 上的本地开发、运行和未签名构建流程。Bowerbird 使用 canonical Tauri / React / Rust 源码，不维护 macOS override。构建架构以 `rustc -vV` 的 host 为准；Intel 为 `x86_64-apple-darwin`，Apple Silicon 原生工具链为 `aarch64-apple-darwin`。
 
+## 正式渠道签名与公证（2026-11-11 源码，待 Mac 验收）
+
+`macOS/release.sh` 默认用于正式渠道。签名机设置 `APPLE_SIGNING_IDENTITY` 为本团队的 Developer ID Application 身份，并配置 Tauri 支持的 Apple 公证凭据，使构建出的 app 已装订公证票据。`BOWERBIRD_NOTARY_PROFILE` 指定本机 `notarytool` 已保存的钥匙串配置，用于 DMG 的公证与装订。正式流程对实际更新归档和挂载镜像中的 app 核对签名、Hardened Runtime、版本、架构和 Gatekeeper，再处理 DMG。跳过构建复用制品时也执行这些检查。操作参考 [Tauri 签名文档](https://v2.tauri.app/distribute/sign/macos/)。
+
+本地开发仍可使用 `run-signed.sh`。测试分发脚本可设置 `BOWERBIRD_MAC_CHANNEL=local COS_SKIP_UPLOAD=1`，输出位于 `macOS/dist/local`。正式放行还需对两种架构分别保留干净机安装、旧版升级和登录恢复记录。
+
+使用 `installer/package-dmg.sh` 重新封装镜像后，将结果放到本版本的 Tauri DMG 输出位置，运行 `COS_SKIP_BUILD=1 COS_SKIP_UPLOAD=1 bash macOS/release.sh` 验证该镜像、更新归档、Apple 签名及公证票据。正式脚本打印专属的 `macOS/dist/release-<版本>-<架构>.<随机后缀>/`，保留本批已签名装订的 DMG、更新归档和 SHA256SUMS。一个工作区同时只允许一次发布构建。若进程被强制终止，先确认该工作区没有构建或挂载镜像，再移除遗留的空目录 `macOS/dist/.release-build.lock`。
+
 ## 2026-10-15 Apple Silicon 26.10.1502 已发包
 
 源码 `5fecb7c` 已存档推送，固定快照构建的 ARM64 DMG 与签名更新归档已上传 R2，完整公网哈希及原 Mac 公钥验签通过。包含下节同步增量及循环/视觉规范卡分享 v4；SQLite 0034。安装包 [R2 下载](https://pub-5e4c00c218cd4682b622cbab5e58563e.r2.dev/mac_package/Bowerbird_26.10.1502_aarch64-updater-installer.dmg)，打开后拖到 Applications。使用本地代码签名，未做 Apple 公证；未替换本机安装或操作正式库。官网更新通道仍 26.10.801，待 SSH 发布；完整证据与接续见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md)。
@@ -136,24 +144,26 @@ Mac 接缝修正：Agent DS 比较会话 cwd 时两侧均解析符号链接和 `
 
 **已发布（同日）：** 上述 26.9.1802 产物已经双端发布流程核验上线，`darwin-aarch64` 清单现指向 R2 直下包；发布证据与验收边界以 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md) 为准。（曾短暂构建过 26.9.19 版本号，不符合同日序号规范，产物未发布已删除。）
 
-## 一键发布流程（打包后自动上传腾讯 COS，2026-09-18 建立、2026-09-20 自 R2 迁移）
+## 一键发布到现役火山 TOS 和 CDN
 
 `macOS/release.sh` 把发布串成一条命令（协议见 [DESKTOP-UPDATES.md](../dev-doc/DESKTOP-UPDATES.md)）：
 
 ```bash
-bash macOS/release.sh <release-notes.txt>            # 完整：护栏→签名构建→归档校验→COS清单→上传→公网核对
-COS_SKIP_BUILD=1 COS_SKIP_UPLOAD=1 bash macOS/release.sh   # 本地演练：复用产物、不上传、无需凭据
+bash macOS/release.sh <release-notes.txt>            # 完整：护栏→签名构建→归档校验→版本清单→上传→公网核对
+BOWERBIRD_MAC_CHANNEL=local COS_SKIP_BUILD=1 COS_SKIP_UPLOAD=1 bash macOS/release.sh   # 本地测试渠道，复用产物
 ```
 
-流程内容：读取 `tauri.conf.json` 版本并按本机 rustc 架构选 `aarch64`/`x86_64`；**版本护栏**（必须高于该通道线上清单版本，同日重发布用日期+序号如 `26.9.1802`）；带私钥签名构建 `app,dmg`；核对包内版本/架构、DMG 完整性，归档 `macOS/dist/` 并生成 SHA-256；生成**指向 cdn.bowerbird.cn 直下地址**的 `darwin-<arch>.json` 清单；用 rclone（TencentCOS provider）上传 `mac_package/`（更新包、`.sig`、`.sha256`、DMG、DMG 校验、清单）；最后公网 HEAD 核对 Content-Length。结束打印交接摘要（版本、URL、SHA-256、清单路径）。
+脚本在构建前及上传前读取指定架构的官网清单。网络故障、清单错误、同版及降版都停止。首次启用全新通道须单独确认初始权威基线，两个现役 Mac 通道均已有基线。正式构建通过公证后冻结六个文件。上传按版本命名，逐件使用 TOS 服务端禁止覆盖的 PUT，并从源站读回完整字节核对 SHA-256。已有同名文件仅可在哈希相同的情况下复用。最后一个对象为 `darwin-<arch>-<version>.json`，随后从 CDN 完整读取更新归档与 DMG，比对两份 SHA-256。官网切换前另行完成签名与实机验收。
 
 一次性准备：
 
-1. `brew install rclone`（上传工具，环境变量内联配置，不留配置文件）。
-2. `cp macOS/cos.env.example macOS/.signing/cos.env` 并填入腾讯云 SecretId / SecretKey / 桶名（含 appid 后缀）/ 地域（创建方式见模板注释；`.signing/` 不入 Git）。
+1. 在发布用 Python 虚拟环境执行 `python3 -m pip install tos==2.9.3`。桶必须从未开启版本控制。发布凭据需要读取桶版本状态、读取对象及发布对象的权限。开启或暂停版本控制、或无法判定时，脚本都会在第一件上传前停止。见火山引擎 [PutObject](https://docs.volcengine.com/docs/torch-object-storage/put-object) 和 [GetBucketVersioning](https://docs.volcengine.com/docs/torch-object-storage/get-bucket-versioning)。
+2. 沿用根目录私有 `.env.tos` 或发布机环境中的 TOS_ACCESS_KEY_ID、TOS_SECRET_ACCESS_KEY、TOS_BUCKET、TOS_REGION、TOS_ENDPOINT。CDN 默认 `https://cdn.bowerbird.cn`。
 3. 更新器私钥沿用 `macOS/.signing/updater.key`。
 
-上传 ≠ 发布：官网 `downloads/updates/darwin-<arch>.json` 仍由发布侧**核验完整下载、SHA-256、公钥验签后原子替换**；上传后本机公网核对只验证了可达与大小。上传前请确认版本号已按规范提升（脚本护栏会拦同版本/降版本）。
+上传中断时，保留原冻结目录，使用同一 TOS 配置执行 `python3 macOS/upload_immutable.py upload <arch> <version> <冻结目录>`。它会重验线上版本、本地文件和已存在对象，再补齐缺件。渠道由官网发布侧核验后原子切换。离线 SDK 演练命令为 `python3 macOS/test_upload_immutable.py`。
+
+2026-11-11 在 Windows 上通过实际 TOS Python SDK 2.9.3 和隔离 HTTP 传输演练并发抢占、同内容续传、既存签名/镜像保护、版本状态异常及官网基线失败。对现役桶只读查询版本状态返回 HTTP 403 AccessDenied，这套本机凭据仍需取得该桶的只读版本状态权限，或用已有此权限的发布身份完成检查。两条已发布 Mac 渠道均从 `cdn.bowerbird.cn` 取包。Developer ID、公证、安装及升级结果须在对应 Mac 上补齐。[离线 SDK 演练](../.tmp/release-gates-20261111/tos-sdk.log) · [双架构脚本夹具](../.tmp/release-gates-20261111/mac-script.log)。
 
 ## 钥匙串授权弹窗与本地稳定签名（2026-09-25 更正）
 

@@ -44,7 +44,7 @@ try {
   await card.getByRole('button', { name: '继续工作流', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'waiting' && window.recoveryCalls.length > 0);
   assert.match(await card.innerText(), /原视频仍在生成或恢复中/);
-  assert.equal(await card.getByRole('button', { name: '删除卡片', exact: true }).isEnabled(), true);
+  assert.equal(await card.getByRole('button', { name: '删除卡片', exact: true }).isDisabled(), true, 'active original video must be stopped before deletion');
   await page.evaluate(() => window.recoveryResult = { status: 'done', images: ['/result.mp4'] });
   await card.getByRole('button', { name: '继续工作流', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');

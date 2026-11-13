@@ -4,7 +4,7 @@ import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
 // Real store, canvas and inspector; synthetic IPC only, no provider or user library.
-const server = await createServer({ configFile: false, root: process.cwd(),
+const server = await createServer({ root: process.cwd(),
   cacheDir: '.tmp/retry-session/vite-cache',
   server: { host: '127.0.0.1', port: 1598, strictPort: true, hmr: false, watch: null } });
 await server.listen();
@@ -131,6 +131,17 @@ try {
   assert.equal(await page.locator('.canvas-prompt-node').count(), 1);
   assert.equal(await page.locator('.canvas-prompt-node.canvas-card-running').count(), 0);
   await page.screenshot({ path: '.tmp/retry-session/completed.png' });
+
+  // A historical turn keeps its own subscription even if newer rounds use another provider.
+  await page.evaluate(() => window.store.setState(state => ({
+    dreaminaHealth: { ok: false, reason: '即梦未登录' },
+    genJobs: { ...state.genJobs, 'retry-job': { ...state.genJobs['retry-job'],
+      turns: state.genJobs['retry-job'].turns.map((turn, index) => index === 0 ? { ...turn, provider: 'dreamina' } : turn) } },
+  })));
+  const oldRetry = panel.getByTitle(/即梦自有订阅未登录/);
+  await oldRetry.first().waitFor();
+  assert.deepEqual(await oldRetry.evaluateAll(buttons => buttons.map(button => button.disabled)), [true, true]);
+  assert.ok(await panel.getByRole('button', { name: '↻ 重试', exact: true }).nth(1).isEnabled());
 
   // Historical Cloud video recovery must never target the job's newer successful round.
   await page.evaluate(async () => {

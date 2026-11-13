@@ -1,13 +1,15 @@
 import type { PromptedAsset } from "./types";
 import type { CreationEditorDraft } from "../components/creation/useCreationEditor";
 import type { ChatCodexOptions, ChatProvider } from "./localChat";
-import { isChatProvider } from "./chatProvider.ts";
+import { parseChatProvider } from "./chatProvider.ts";
+import { isDshSkill, type DshSkill } from "./dshSkill.ts";
 
 export type CreativeComposerMode = "image" | "video" | "chat";
 export interface CreativeComposerState {
   mode: CreativeComposerMode;
   chatProvider?: ChatProvider;
   chatCodexOptions?: ChatCodexOptions;
+  chatDshSkill?: DshSkill;
   drafts: Partial<Record<CreativeComposerMode, CreationEditorDraft>>;
 }
 
@@ -28,12 +30,14 @@ export function parseCreativeComposerState(draftJson: string): CreativeComposerS
       && (options.model === undefined || typeof options.model === "string")
       && (options.reasoningEffort === undefined || typeof options.reasoningEffort === "string")
       ? { ...(options.model ? { model: options.model } : {}), ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}) } : undefined;
-    return { mode, drafts, ...(isChatProvider(saved.chatProvider) ? { chatProvider: saved.chatProvider } : {}), ...(chatCodexOptions ? { chatCodexOptions } : {}) };
+    const chatProvider = parseChatProvider(saved.chatProvider);
+    return { mode, drafts, ...(chatProvider ? { chatProvider } : {}), ...(chatCodexOptions ? { chatCodexOptions } : {}),
+      ...(saved.chatProvider === "dsh-cloud" && isDshSkill(saved.chatDshSkill) ? { chatDshSkill: saved.chatDshSkill } : {}) };
   } catch { return { mode: fallbackMode, drafts: legacy ? { [fallbackMode]: legacy } : {} }; }
 }
 
 export function serializeCreativeComposerState(state: CreativeComposerState) {
-  return JSON.stringify({ schema_version: 1, mode: state.mode, chatProvider: state.chatProvider, chatCodexOptions: state.chatCodexOptions, modeDrafts: state.drafts,
+  return JSON.stringify({ schema_version: 1, mode: state.mode, chatProvider: state.chatProvider, chatCodexOptions: state.chatCodexOptions, chatDshSkill: state.chatDshSkill, modeDrafts: state.drafts,
     composer: state.drafts[state.mode] ?? { doc: { type: "doc", content: [{ type: "paragraph" }] }, refs: [] } });
 }
 

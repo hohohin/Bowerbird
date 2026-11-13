@@ -1,7 +1,9 @@
+import { installDeletionTaskMock } from "../fileTaskMock";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { LibraryHome } from "../../../src/components/LibraryHome";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
+import { FileTaskStatusPanel } from "../../../src/components/FileTaskStatus";
 import { Toolbar } from "../../../src/components/Toolbar";
 import { useLocalFileMode } from "../../../src/lib/localFileMode";
 import { useStore } from "../../../src/store";
@@ -28,6 +30,7 @@ w.previewActive = 0; w.previewPeak = 0; w.previewByPath = {}; w.previewDelay = c
 w.changed = () => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://assets-changed") fn({ payload: null }); });
 w.previewChanged = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://previews-changed") fn({ payload }); });
 w.connectionProgress = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://connection-progress") fn({ payload }); });
+w.connectionAvailability = (payload: unknown) => listeners.forEach((fn, id) => { if (eventNames.get(id) === "library://connection-availability") fn({ payload }); });
 function entries(args: any) {
   const filtered = w.entries.filter((item: any) => (!args.folderId || item.folder_id === args.folderId)
     && (!args.media || (item.asset.ext === "mp4") === (args.media === "videos"))
@@ -54,10 +57,17 @@ w.__TAURI_INTERNALS__ = {
     if (command === "connection_entry_ids") return entries(args).slice(args.offset, args.offset + args.limit).map((item: any) => item.id);
     if (command === "resolve_connection_entries") return args.ids.map((id: string) => w.entries.find((item: any) => item.id === id)).filter(Boolean);
     if (command === "plugin:dialog|open") return w.picker;
+    if (command === "file_workspace_status") return { config: { root: null, places: [], projects: {} }, proposed_root: "/fixture/BowerbirdLibrary" };
     if (command === "connect_folder") { const id = `connected-${++nextId}`; w.folders.push(folder(id, null, "新连接")); return id; }
     if (command === "create_connected_collection") { const id = `created-${++nextId}`; w.folders.push(folder(id, args.parentId, args.name)); return id; }
     if (command === "rename_connected_collection") { w.folders.find((item: any) => item.id === args.id).name = args.name; return; }
     if (command === "create_material_references") { for (const id of args.assetIds) w.entries.push(entry(`ref-${++nextId}`, args.folderId, id, true)); return; }
+    if (command === "start_file_task") {
+      const task = args.request;
+      if (task.kind === "add") for (const id of task.ids) w.entries.push(entry(`ref-${++nextId}`, task.folderId, id, true));
+      if (task.kind === "move") for (const item of w.entries) if (task.ids.includes(item.id)) item.folder_id = task.folderId;
+      return;
+    }
     if (command === "rename_connection_entry") { w.entries.find((item: any) => item.id === args.id).name = args.name; return; }
     if (command === "remove_connection_references") { if (w.failReference) throw new Error(w.failReference); if (w.entries.some((item: any) => args.ids.includes(item.id) && !item.is_reference)) throw new Error("只能移出分身"); w.entries = w.entries.filter((item: any) => !args.ids.includes(item.id)); return; }
     if (command === "get_assets_by_ids") return [...new Map(w.entries.map((item: any) => [item.asset_id, item.asset])).values()].filter((item: any) => args.assetIds.includes(item.id));
@@ -73,7 +83,14 @@ w.__TAURI_INTERNALS__ = {
     if (command === "relocate_folder") { w.folders.find((item: any) => item.id === args.id).available = true; return; }
     if (command === "external_files_preview") {
       w.previewActive++; w.previewPeak = Math.max(w.previewPeak, w.previewActive);
-      try { await new Promise(resolve => setTimeout(resolve, w.previewDelay)); return w.previewByPath[args.path] ?? thumb; }
+      try {
+        await new Promise(resolve => setTimeout(resolve, w.previewDelay));
+        const preview = w.previewByPath[args.path] ?? thumb;
+        const updated = w.entries.filter((entry: any) => entry.asset.store_path === args.path);
+        for (const entry of updated) entry.asset.thumb_path = preview;
+        queueMicrotask(() => w.previewChanged({ assets: updated.map((entry: any) => ({ ...entry.asset })), versions: Object.fromEntries(updated.map((entry: any) => [entry.asset_id, entry.version])) }));
+        return preview;
+      }
       finally { w.previewActive--; }
     }
     if (command === "external_files_media") return thumb;
@@ -94,7 +111,9 @@ function Fixture() {
   return <div style={{ position: "fixed", inset: 0, display: "flex", flexDirection: "column" }}>
   <Toolbar localFilesOpen canvasMode={false} onCanvasModeChange={() => {}} onRefresh={async () => {}} onCreateCreative={() => {}}/>
   <AssetContextMenu/>
+  {new URLSearchParams(location.search).has("file-tasks") && <FileTaskStatusPanel/>}
   {visible && <LibraryHome onCreateProject={async ids => { w.createdAssets = ids; }}/>}
 </div>;
 }
+installDeletionTaskMock();
 createRoot(document.getElementById("root")!).render(<Fixture/>);

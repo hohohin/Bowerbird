@@ -120,7 +120,7 @@ fn active_work(conn: &Connection) -> AppResult<Vec<String>> {
     Ok([("生成或后台任务",tasks),("本机 Agent",local),("云端 Agent",cloud),("工作流",workflows)]
         .into_iter().filter(|(_,count)|*count>0).map(|(name,count)|format!("{name} {count} 项")).collect())
 }
-fn ensure_idle(conn: &Connection) -> AppResult<()> {
+pub(super) fn ensure_idle(conn: &Connection) -> AppResult<()> {
     let blockers = active_work(conn)?;
     if !blockers.is_empty() { return Err(invalid(format!("暂不能迁移资料目录：{}尚未结束，请先完成或取消后重试",blockers.join("、")))); } Ok(())
 }
@@ -170,7 +170,13 @@ fn copy_tree(source: &Path,target: &Path,entries:&[Entry]) -> AppResult<()> {
         if to.exists() && fs::symlink_metadata(&to)?.file_type().is_symlink() {return Err(invalid("目标目录包含链接，已停止迁移"));}
         if !fs::canonicalize(to.parent().unwrap())?.starts_with(target) {return Err(invalid("目标路径越出迁移范围"));}
         if entry.directory { fs::create_dir_all(&to)?; }
-        else { fs::create_dir_all(to.parent().unwrap())?; copy_file(&source.join(&entry.path),&to)?; }
+        else {
+            fs::create_dir_all(to.parent().unwrap())?;
+            let from = source.join(&entry.path);
+            if !copy_remapped_sidecar(source, target, entry, &from, &to)? {
+                copy_file(&from, &to)?;
+            }
+        }
         if !fs::canonicalize(&to)?.starts_with(target) {return Err(invalid("目标目录中的链接越出迁移范围"));}
         if index%50==0 {tracing::info!("BowerbirdLibrary migration: {index}/{}",entries.len());}
     } Ok(())
@@ -189,15 +195,29 @@ fn local_classification(files:&FileWorkspace,source:&Path,target:&Path)->AppResu
         value["root"]=serde_json::json!(root); write_json(&next.join("source.json"),&value)?;
     } Ok(())
 }
-fn rewrite_sidecars(source:&Path,target:&Path,entries:&[Entry])->AppResult<()> {
-    for entry in entries.iter().filter(|e|!e.directory && e.path.extension().is_some_and(|e|e=="json") && e.path.components().any(|c|c.as_os_str()==".bowerbird" || c.as_os_str()==".bowerbird-quick-transfer")) {
-        if entry.size>32*1024*1024 {return Err(invalid("随图资料超过 32 MB，未切换位置"));}
-        let path=target.join(&entry.path);
-        if let Ok(mut value)=serde_json::from_slice::<serde_json::Value>(&fs::read(&path)?) {
-            let before=value.clone();rewrite_json(&mut value,source,target);
-            if value!=before {write_json(&path,&value)?;}
+fn copy_remapped_sidecar(source: &Path, target: &Path, entry: &Entry, from: &Path, to: &Path) -> AppResult<bool> {
+    if entry.path.extension().is_none_or(|ext| ext != "json") ||
+        !entry.path.components().any(|part| matches!(part.as_os_str().to_str(), Some(".bowerbird" | ".bowerbird-quick-transfer"))) {
+        return Ok(false);
+    }
+    if entry.size > 32 * 1024 * 1024 { return Err(invalid("随图资料超过 32 MB，未切换位置")); }
+    let original = fs::read(from)?;
+    let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&original) else { return Ok(false); };
+    let before = value.clone();
+    rewrite_json(&mut value, source, target);
+    if value == before { return Ok(false); }
+    let expected = serde_json::to_vec_pretty(&value)?;
+    if to.try_exists()? {
+        let size = fs::metadata(to)?.len();
+        if size == expected.len() as u64 && fingerprint(to)? == format!("{:x}", Sha256::digest(&expected)) {
+            return Ok(true);
         }
-    } Ok(())
+        if size != original.len() as u64 || fingerprint(to)? != format!("{:x}", Sha256::digest(&original)) {
+            return Err(invalid(format!("目标随图资料已修改，原目录保持不变：{}", to.display())));
+        }
+    }
+    write_json(to, &value)?;
+    Ok(true)
 }
 
 /// Startup only. A failed copy leaves the original configuration active; a committed index
@@ -218,6 +238,7 @@ pub fn resume(files:&FileWorkspace,db:&Database)->AppResult<()> {
                 return Err(invalid("迁移目录或目标父目录已被替换，请重新选择"));
             }
             let marker=state.target.join(format!(".bowerbird-migration-{}",state.id));
+            if marker.try_exists()? && fs::read(&marker)? != state.id.as_bytes() {return Err(invalid("迁移凭据与目标目录不一致"));}
             if state.target.exists() && !marker.is_file() && fs::read_dir(&state.target)?.next().is_some() {return Err(invalid("目标已有文件，已停止迁移"));}
             if state.target.exists() && fs::symlink_metadata(&state.target)?.file_type().is_symlink() {return Err(invalid("目标目录不能是链接"));}
             fs::create_dir_all(&state.target)?;
@@ -230,7 +251,6 @@ pub fn resume(files:&FileWorkspace,db:&Database)->AppResult<()> {
             copy_tree(&state.source,&state.target,&entries)?;
             if !state.create_only && scan(&state.source)?!=entries {return Err(invalid("复制期间原目录发生变化，未切换位置"));}
             local_classification(files,&state.source,&state.target)?;
-            rewrite_sidecars(&state.source,&state.target,&entries)?;
             let mut conn=db.conn.lock().unwrap(); let tx=conn.transaction()?;
             // Keep historical aliases valid for references outside structured JSON too.
             let aliases={let mut stmt=tx.prepare("SELECT id,store_path FROM assets WHERE store_path IS NOT NULL UNION SELECT asset_id,path FROM external_asset_paths")?;

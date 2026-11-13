@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown, ChevronUp, CircleArrowUp, Coins, LogIn, LogOut, Settings, Zap } from "lucide-react";
 import { useStore } from "../store";
-import { understandReady } from "../lib/entitlement";
+import { accountEntitlement, understandReady } from "../lib/entitlement";
 import { SettingsDialog } from "./SettingsDialog";
 import { useAppUpdater } from "../lib/appUpdater";
 import { NotificationBell } from "./NotificationBell";
 
 /**
- * 共用账号入口：顶栏将头像与 Bcoin 合为账号面板入口，旧侧栏保留菜单。
+ * 顶栏头像进入账号管理，余额直达积分明细。旧侧栏保留菜单。
  * 已登录 → 升级账号（应用内账号管理）/ 设置 / 登出；未登录 → 登录 Bowerbird 账号 / 设置。
  * 账号详情（账号名 / 积分明细 / 升级）已移入设置面板「账号管理」。
  */
@@ -19,6 +19,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   const topbar = placement === "topbar";
   const compact = topbar || collapsed;
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const balanceTriggerRef = useRef<HTMLButtonElement>(null);
   const updateTriggerRef = useRef<HTMLButtonElement>(null);
   const update = useAppUpdater(s => s.update);
   const updatePhase = useAppUpdater(s => s.phase);
@@ -27,20 +28,22 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   const cloudBusy = useStore((s) => s.cloudBusy);
   const logoutCloud = useStore((s) => s.logoutCloud);
   const setAccountOnboardingForceOpen = useStore((s) => s.setAccountOnboardingForceOpen);
+  const loginOpen = useStore((s) => s.accountOnboardingForceOpen);
   const codexHealth = useStore((s) => s.codexHealth);
   const [open, setOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<"system" | "account" | "about">("system");
+  const [settingsSection, setSettingsSection] = useState<"system" | "account" | "credits" | "about">("system");
   const rootRef = useRef<HTMLDivElement>(null);
 
   const loggedIn = cloudAuth?.logged_in === true;
-  const balances = cloudEntitlement?.balances;
+  const current = accountEntitlement(cloudEntitlement, loggedIn ? cloudAuth?.user_id : null);
+  const balances = current?.balances;
   const credits = loggedIn && balances ? balances.daily + balances.sub + balances.topup : null;
   const creditsText = credits == null ? "—" : credits.toLocaleString("zh-CN");
   const creditsLabel = !loggedIn ? "登录后查看 Bcoin" : credits == null ? "Bcoin 余额暂不可用" : `可用 Bcoin：${creditsText}`;
   const name = cloudAuth?.display_name || cloudAuth?.email || cloudAuth?.user_id || "";
   const avatarUrl = cloudAuth?.avatar_url ?? null;
-  const tier = cloudEntitlement?.tier?.toUpperCase() ?? "";
+  const tier = current?.tier.toUpperCase() ?? "";
   // 旧版本浏览器扩展不再参与未就绪提醒。
   const hasIssue = !understandReady({ entitlement: cloudEntitlement, codexHealth, cloudAuth });
   const updateLabel = `${updatePhase === "downloading" ? "正在下载更新" : updatePhase === "ready" ? "更新已就绪" : updatePhase === "installing" ? "正在安装更新" : updatePhase === "installed" ? "重启完成更新" : "发现新版本"} ${update?.version ?? ""}`;
@@ -170,18 +173,27 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
         </div>
       )}
 
+      {topbar && !loggedIn && <button type="button" className="app-button-dark" title="系统设置" aria-label="系统设置"
+        onClick={() => { setSettingsSection("system"); setSettingsOpen(true); }}>
+        <Settings size={16} aria-hidden="true" />
+      </button>}
+      {topbar && loggedIn && <button type="button" ref={balanceTriggerRef} className="app-topbar-credits app-button-dark"
+        title="查看积分明细" aria-label={`${creditsLabel}，查看积分明细`} aria-haspopup="dialog"
+        aria-expanded={settingsOpen && settingsSection === "credits"}
+        onClick={() => { setSettingsSection("credits"); setSettingsOpen(true); }}>
+        <Coins size={16} aria-hidden="true" /><span>{creditsText}</span>
+      </button>}
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => { if (topbar) { setSettingsSection("account"); setSettingsOpen(true); } else setOpen((v) => !v); }}
+        onClick={() => { if (topbar && !loggedIn) openAccountDetail(); else if (topbar) { setSettingsSection("account"); setSettingsOpen(true); } else setOpen((v) => !v); }}
         className={topbar ? "topbar-account-trigger" : `flex w-full items-center rounded-lg py-2 hover:bg-panel2 ${collapsed ? "justify-center" : "gap-2 px-2"}`}
-        title={topbar ? `账号管理 · ${creditsLabel}` : loggedIn ? `${name} · ${tier || "已登录"}` : "未登录"}
-        aria-label={topbar ? `${loggedIn ? name : "未登录"}，账号管理，${creditsLabel}` : loggedIn ? `${name}，账号与设置` : "未登录，账号与设置"}
+        title={topbar ? (loggedIn ? "账号管理" : "登录 Bowerbird 账号") : loggedIn ? `${name} · ${tier || "已登录"}` : "未登录"}
+        aria-label={topbar ? (loggedIn ? `${name}，账号管理` : "登录 Bowerbird 账号") : loggedIn ? `${name}，账号与设置` : "未登录，账号与设置"}
         data-tour="sidebar-account"
         aria-haspopup={topbar ? "dialog" : "menu"}
-        aria-expanded={topbar ? settingsOpen : open}
+        aria-expanded={topbar ? loginOpen || (settingsOpen && settingsSection === "account") : open}
       >
-        {topbar && <span className="app-topbar-credits"><Coins size={16} aria-hidden="true"/><span>{creditsText}</span></span>}
         {topbar && !loggedIn && <span className="text-xs text-muted">登录</span>}
         {loggedIn && avatarUrl ? (
           <img src={avatarUrl} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" />
@@ -201,7 +213,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
         {open ? <ChevronUp size={13} className="shrink-0 text-muted" /> : <ChevronDown size={13} className="shrink-0 text-muted" />}</>}
       </button>
 
-      {settingsOpen && <SettingsDialog initialSection={settingsSection} onClose={() => { setSettingsOpen(false); (settingsSection === "about" ? updateTriggerRef.current ?? triggerRef.current : triggerRef.current)?.focus(); }} />}
+      {settingsOpen && <SettingsDialog initialSection={settingsSection} onClose={() => { setSettingsOpen(false); (settingsSection === "about" ? updateTriggerRef.current ?? triggerRef.current : settingsSection === "credits" ? balanceTriggerRef.current : triggerRef.current)?.focus(); }} />}
     </div>
   );
 }

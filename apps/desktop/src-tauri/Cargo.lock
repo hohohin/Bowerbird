@@ -523,7 +523,7 @@ dependencies = [
 
 [[package]]
 name = "bowerbird-desktop"
-version = "26.11.1001"
+version = "26.11.1301"
 dependencies = [
  "anyhow",
  "arboard",

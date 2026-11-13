@@ -39,7 +39,7 @@ fn changed(app: &AppHandle) {
 
 #[derive(Clone, serde::Serialize)]
 struct PreviewChanges { assets: Vec<Asset>, versions: HashMap<String, String> }
-fn preview_completed(app: AppHandle, asset: Asset, version: String) {
+fn preview_completed(app: AppHandle, db: Arc<Database>, asset: Asset, version: String) {
     static PENDING: LazyLock<Mutex<HashMap<String, (Asset, String)>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
     let first = {
         let mut pending = PENDING.lock().unwrap();
@@ -51,8 +51,14 @@ fn preview_completed(app: AppHandle, asset: Asset, version: String) {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let pending = std::mem::take(&mut *PENDING.lock().unwrap());
+        let current = tokio::task::spawn_blocking(move || db.current_preview_changes(pending.into_values().collect())).await;
+        let Ok(Ok(current)) = current else {
+            tracing::warn!(stage="preview_publish", "preview metadata snapshot could not be checked");
+            return;
+        };
+        if current.is_empty() { return; }
         let mut payload = PreviewChanges { assets: Vec::new(), versions: HashMap::new() };
-        for (id, (asset, version)) in pending { payload.assets.push(asset); payload.versions.insert(id, version); }
+        for (asset, version) in current { payload.versions.insert(asset.id.clone(), version); payload.assets.push(asset); }
         let _ = app.emit("library://previews-changed", payload);
     });
 }
@@ -121,7 +127,7 @@ fn queue_preview_completion(app: AppHandle, db: Arc<Database>, paths: Arc<Librar
                 (job, result)
             }).await;
             match result {
-                Ok((job, Ok(Some((asset, version))))) => preview_completed(job.app, asset, version),
+                Ok((job, Ok(Some((asset, version))))) => preview_completed(job.app, job.db, asset, version),
                 Ok((mut job, Err(_))) if job.attempt < 2 => {
                     job.attempt += 1;
                     job.queued_at = Instant::now();

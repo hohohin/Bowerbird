@@ -1,10 +1,21 @@
 import type { WorkflowNode, WorkflowValue } from "./canvasWorkflow";
 import type { ChatConversation, ChatProvider } from "./localChat";
+import { parseChatProvider } from "./chatProvider.ts";
 import { agentResultValue } from "./workflowAgentResult";
 
 /** Legacy settings select an existing chat provider; they never start the retired runner. */
 export function workflowAgentProvider(node: WorkflowNode): ChatProvider {
-  return node.chatProvider ?? (node.agentTransport === "cloud" ? "dsh-cloud" : node.agentTransport === "local-ds" ? "dsh-local" : "codex-local");
+  return parseChatProvider(node.chatProvider) ?? (node.agentTransport === "cloud" ? "dsh-cloud" : node.agentTransport === "local-ds" ? "dsh-local" : "codex-local");
+}
+
+/** The host finished this turn in a failed state; querying the same turn can never return a reply.
+ * The bridge owns this prefix, so it distinguishes a definite failure from an interrupted turn
+ * whose remote work may still complete. */
+export function terminalDshTurnFailure(chat: ChatConversation, turnId: string, confirmedTurnId?: string): boolean {
+  // The live error belongs to the latest turn. A saved observation can outlive that turn.
+  return chat.provider === "dsh-local"
+    && (confirmedTurnId === turnId || (chat.messages[chat.messages.length - 1]?.turnId === turnId && !!chat.error?.startsWith("本机 DSH 本轮失败")))
+    && chat.messages.some(m => m.turnId === turnId && m.role === "assistant" && ["failed", "interrupted", "stopped"].includes(m.status));
 }
 
 export function workflowAgentMessage(prompt: string, source: string): string {

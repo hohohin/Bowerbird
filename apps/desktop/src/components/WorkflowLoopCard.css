@@ -1,0 +1,184 @@
+.workflow-loop {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+  color: var(--bb-ink);
+  font-size: 12px;
+}
+.workflow-loop .loop-mode {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.loop-mode > svg {
+  position: absolute;
+  left: 9px;
+  color: var(--bb-blue);
+  pointer-events: none;
+}
+.canvas-tactical .workflow-card .loop-mode .tactical-select-trigger {
+  justify-content: space-between;
+  width: 100%;
+  max-width: none;
+  min-height: 36px;
+  padding: 4px 8px 4px 38px;
+  color: var(--bb-ink);
+  font-size: 15px;
+  font-weight: 600;
+}
+.loop-count, .loop-field-label, .loop-progress > div {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.loop-count { color: var(--bb-ink-soft); }
+.workflow-loop .workflow-bindings { margin: -8px 0 0; }
+.workflow-loop .workflow-bindings button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.loop-count input {
+  margin-left: auto;
+  width: 60px;
+  padding: 3px 5px;
+  border-bottom: 1px solid var(--bb-line);
+  background: var(--bb-surface-2);
+  color: var(--bb-ink);
+  font: inherit;
+  text-align: center;
+}
+.workflow-loop .workflow-loop-start {
+  margin: 0;
+  gap: 6px;
+}
+.loop-field-label { justify-content: space-between; color: var(--bb-ink-soft); }
+.loop-field-label small, .workflow-loop-results small { color: var(--bb-muted); font-size: 11px; font-weight: 400; }
+.canvas-tactical .workflow-card .workflow-loop-start > button {
+  justify-content: flex-start;
+  min-height: 38px;
+  padding: 5px 8px;
+  gap: 6px;
+  border: 1px solid var(--bb-line);
+  background: var(--bb-surface-2);
+  color: var(--bb-ink);
+  font-size: 12px;
+}
+.workflow-loop .workflow-loop-start > button:disabled { opacity: 1; color: var(--bb-muted); }
+.workflow-loop-start > button > span:first-child:not(:only-child) {
+  padding-right: 8px;
+  border-right: 1px solid var(--bb-line);
+  font-variant-numeric: tabular-nums;
+}
+.loop-note, .loop-progress > small {
+  color: var(--bb-muted);
+  font-size: 11px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.loop-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+  padding: 11px 0 0;
+  border-top: 1px solid var(--bb-line);
+}
+.loop-progress > div { justify-content: space-between; }
+.loop-progress span { color: var(--bb-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.loop-progress b { color: var(--bb-ink); }
+.loop-progress progress {
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  border: 0;
+  background: var(--bb-line);
+}
+.loop-progress progress::-webkit-progress-bar { background: var(--bb-line); }
+.loop-progress progress::-webkit-progress-value { background: var(--bb-blue); }
+.loop-progress > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workflow-loop .workflow-loop-results {
+  border-top: 1px solid var(--bb-line);
+  overscroll-behavior: contain;
+}
+.workflow-loop-results summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 29px;
+  list-style: none;
+  color: var(--bb-ink-soft);
+  font-size: 12px;
+}
+.workflow-loop-results > summary { padding-top: 5px; }
+.workflow-loop-results > summary small { margin-left: auto; }
+.workflow-loop-results summary::-webkit-details-marker { display: none; }
+.workflow-loop-results [open] > summary > svg:first-child,
+.workflow-loop-results[open] > summary > svg:last-child { transform: rotate(90deg); }
+.workflow-loop-results details > summary small { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.workflow-loop-results details { padding-left: 9px; border-left: 1px solid var(--bb-line); }
+.workflow-loop-results summary:hover { color: var(--bb-ink); background: var(--bb-surface-hover); }
+.loop-result-output p { white-space: pre-wrap; user-select: text; }
+.loop-result-output img { width: 68px; height: 68px; object-fit: contain; }
+.loop-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--bb-line);
+}
+.workflow-card .loop-actions button {
+  min-height: 30px;
+  padding: 4px 10px;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--bb-ink-soft);
+}
+.workflow-card .loop-actions .loop-main-action {
+  flex: 1;
+  color: var(--bb-surface);
+  background: var(--bb-ink);
+  font-weight: 600;
+}
+.workflow-card .loop-actions button:hover:enabled { background: var(--bb-surface-hover); }
+.workflow-card .loop-actions .loop-main-action:hover:enabled { color: var(--bb-surface); background: var(--bb-ink-soft); }
+.is-loop :is(.loop-actions button, .loop-count input, summary):focus-visible { outline: 1px dashed var(--bb-blue); outline-offset: 2px; }
+.workflow-loop-frame {
+  position: absolute;
+  pointer-events: none;
+  z-index: 11001;
+}
+.workflow-loop-frame::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 6%, #5499ce 18%, #304d68 54%, #5499ce 82%, transparent 94%) top / 100% 1px no-repeat,
+    linear-gradient(90deg, transparent 6%, #5499ce 18%, #304d68 54%, #5499ce 82%, transparent 94%) bottom / 100% 1px no-repeat,
+    repeating-linear-gradient(0deg, transparent 0 3px, #539bff0d 3px 4px),
+    linear-gradient(90deg, #246fb92a, transparent 46%, #387db31c);
+  clip-path: polygon(9px 0, 100% 0, 100% calc(100% - 9px), calc(100% - 9px) 100%, 0 100%, 0 9px);
+}
+.workflow-loop-frame svg { position: absolute; overflow: visible; stroke-linejoin: round; }
+.workflow-loop-frame span {
+  position: absolute;
+  right: 44px;
+  top: -7px;
+  padding-inline: 4px;
+  color: #c4e6ff;
+  background: #1a2938;
+  font: 10px/14px monospace;
+  letter-spacing: 1px;
+}
+.workflow-loop-frame span::before {
+  content: "";
+  position: absolute;
+  right: 100%;
+  top: 50%;
+  width: 40px;
+  height: 2px;
+  background: linear-gradient(90deg, #367cb655, #83caff);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .loop-frame-lock { animation: loop-frame-contact 160ms steps(1,end); }
+  @keyframes loop-frame-contact { 18%, 67% { opacity: .23; } 40%, 84% { opacity: 1; } }
+}

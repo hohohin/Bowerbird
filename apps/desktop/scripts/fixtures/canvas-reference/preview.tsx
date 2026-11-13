@@ -1,3 +1,5 @@
+import { FileTaskStatusPanel } from "../../../src/components/FileTaskStatus";
+import { installDeletionTaskMock } from "../fileTaskMock";
 import { installCatalogPagingMock } from "../catalogPagingMock";
 import { installMediaImportMock } from "../mediaImportMock";
 import { FileDropImport } from "../../../src/components/FileDropImport";
@@ -416,6 +418,7 @@ w.__TAURI_INTERNALS__ = {
       return canvas;
     }
     if (command === "list_generation_groups") return {};
+    if (command === "project_covers") return {};
     if ((sourceLibrary || localFiles) && command === "list_library_view") {
       const filter = args.filter ?? {};
       let visible = assets.filter((asset: any) => !asset.library_hidden);
@@ -443,6 +446,7 @@ w.__TAURI_INTERNALS__ = {
     if (sourceLibrary && command === "count_assets") return assets.filter((asset: any) => !asset.library_hidden).length;
     if (command === "material_catalog") return { tags: [], collections: [], prompts: [] };
     if (command === "material_catalog_assets") return canvasLibrary ? assets.filter((asset: any) => !asset.library_hidden) : [];
+    if (command === "folder_connections" || command === "connection_entries") return [];
     if (command === "count_assets") return 0;
     if (command.startsWith("list_")) return [];
     return null;
@@ -478,10 +482,11 @@ function Fixture() {
       <Toolbar localFilesOpen={folderMode} canvasMode={toolbarCanvasMode} onCanvasModeChange={setToolbarCanvasMode} onCreateCreative={() => {}} onRefresh={async () => {}} />
       <div className="flex min-h-0 flex-1">{canvas}</div>
     </div> : explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
-    <AssetContextMenu /><ImageAnnotator /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+    <FileTaskStatusPanel /><AssetContextMenu /><ImageAnnotator /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
   </div>;
 }
 installCatalogPagingMock(window);
 if (mediaImport) installMediaImportMock(w, assets);
+installDeletionTaskMock();
 createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("strict")
   ? <React.StrictMode>{detailRoute ? <App /> : <Fixture />}</React.StrictMode> : detailRoute ? <App /> : <Fixture />);

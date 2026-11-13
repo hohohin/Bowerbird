@@ -21,7 +21,7 @@ export function CanvasConversation({ turns, selectedId, onReuse, onAddVideoFrame
       createdAt: first.node.createdAt, lastPrompt: first.text, lastRefs: first.references.flatMap(a => a.store_path ? [a.store_path] : []),
       refAssets: first.references, lastRatio: first.ratio,
       turns: turns.map((turn, index) => ({ id: index + 1, turnKey: turn.node.id, media: "image",
-        prompt: turn.appliedPrompt, promptRaw: turn.text, appliedPrompt: turn.appliedPrompt, provider: turn.provider,
+        prompt: turn.appliedPrompt, promptRaw: turn.text, appliedPrompt: turn.appliedPrompt, provider: turn.provider, error: turn.error,
         ratio: turn.ratio, refs: turn.references.flatMap(a => a.store_path ? [a.store_path] : []),
         refAssets: turn.references, referenceNodeIds: turn.referenceNodeIds,
         images: turn.outputs.flatMap(a => a.store_path ? [a.store_path] : []) })) };

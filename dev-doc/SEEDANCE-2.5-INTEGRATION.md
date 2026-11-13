@@ -1,5 +1,23 @@
 # Seedance 2.5 视频接入与验收记录
 
+## 2026-11-13 即梦 CLI 并发来源核对
+
+- 2026-08-06 的实机记录使用 `maestro` 账号。第一笔 fast、5 秒、720p 文生视频仍在排队，同账号第二笔视频请求返回 `gen_status=fail` 和 `ret=1310, message=ExceedConcurrencyLimit`。同文 §2.4 明列图片并发未测。可用 `git show de605549:VIDEO-GENERATION.md` 核对 §2–§4。该次测试只覆盖一个账号和一次重叠的视频提交。
+- 桌面实现将同一个 `JIMENG_FLY` 名额用于即梦图片、视频及恢复查询，直到结果下载返回后才释放。它位于 Bowerbird 自身的套餐并行数检查之后，不读取即梦会员等级。2026-11-13 本机应用私有 CLI 的已有账号日志记录 `vip_level=maestro` 与 `has_cli_permission` 等字段，所见账号信息未提供并发额度。此次未新增供应商任务。
+- 即梦官方 CLI 介绍支持同时发起多项创作任务。会员页区分视频标准、快速通道，网页指定模型的无限生成活动另列 1 个并发并排除 CLI/MCP。查到的官方页面未给出 CLI 按会员、模型、图像/视频组合划分的名额表。独立开发者 10 月 16 日记录其 `seedance2.0_vip` 六笔视频同时处于 Generating，只能作为该环境的观察。[官方 CLI](https://jimeng.jianying.com/ai-tool/install?from_page=banner) · [会员权益](https://jimeng.jianying.com/) · [独立开发者的实测记录](https://github.com/wangcanyu/daihuo-fanpai/blob/main/SKILL.md)
+
+## 2026-11-10：建卡免核验与后台每日规格巡检
+
+产品决定以 PROJECT.md 为准。用户明确确认后，后台巡检于 2026-11-10 23:46:29（北京时间）部署并完成线上核验；桌面免建卡核验已修改源码，仍待客户端发包。
+
+- 旧 `VideoControls` 在挂载／模式切换时调用 `dreamina_video_models`，原生实际运行当前模式的 `dreamina --help`，并将分辨率和模型选择阻塞到返回。它不是远程账号能力接口；即使选择 Cloud，也会发生无用的本机查询。
+- 控件改为复用 `videoResolutions`／`videoDurationRange`，与提交校验同源；删除 catalog 状态／重试 UI／“待核验”选项。原有登录、BYO 权益、Cloud 余额及报价边界保持。旧模型恢复参数保留；不支持的历史分辨率明确标注而不静默改值。原生诊断命令保留，交互链不调用。
+- VPS 新模块 `src/cloud-generation/seedance-resolution-audit.ts` 由组合入口及独立生图入口启动，启动一次、随后每 24 小时检查。固定 GET [官方 Seedance 2.5 文档](https://docs.volcengine.com/docs/ark/seedance-2-5?lang=zh)，15 秒超时、最大 4 MiB、禁止重定向，不带 API Key；只解析分辨率枚举区，不从示例或脚本拼凑能力。与现有共享 `VIDEO_RESOLUTIONS` 比较，记录 `seedance_resolution_audit` 的 `unchanged`／`changed`／`unavailable`。并发和当天重复检查合并；日志仅含来源／时间／规格及固定错误码。没有前端订阅、远程配置分发、数据库写入或付费生成探测，变化须维护人员核实后更新版本化契约。
+- 官方公开文档真实读取约 2.38 MB；按正式模块实际运行得到 `unchanged`、480p／720p／1080p。该结果核对公共文档，不能证明每个用户本机 CLI 版本、账号权限或所有档位均实际生成成功。文档布局变化、HTTP／超时／体积异常只报告 unavailable，不清空旧选项、不阻塞生成。
+- 验证：`scripts/video-controls-ui.test.mjs` 覆盖重挂载三次／切模式零能力查询、IPC 不可用仍可选分辨率、历史 VIP／4k 参数、模型与通道切换、真实创作框、余额／任务消费与窄屏；`video-generation.test.mjs` 28 项、Worker `seedance-resolution-audit.test.ts`／`ark-video.test.ts` 12 项通过。桌面完整 TypeScript 与 Worker 排除测试文件的生产 TypeScript 通过。Worker 全量类型检查仍有三处既有测试声明错误：chat `Response` 构造、video audio probe `execFileSync`、speech `structuredClone`，未改无关声明，也未计作全量通过。日志位于 `.tmp/seedance-audit-*` 及 `apps/desktop/.tmp/seedance-static-*`。
+- 本次仅部署 Worker 新巡检模块、`src/main.ts`、`src/cloud-generation/main.ts`。在现役镜像上叠加三文件、四类活动队列为零时切换；新镜像 `sha256:cd4fd8c7093df2a34f96462ab7d42387d6a81e37d9dfd4636f4004139e2734ed`，首次巡检真实返回 unchanged、480p／720p／1080p。运行正常、restart=0，源码哈希、环境、Compose、挂载、资源／安全限制、网络、共享视频契约及官网保持核验通过；未部署 Edge／数据库／官网，未生成视频。
+- 候选断网巡检 3 项通过；同一套视频回归在原生产镜像和候选中均为 8 通过、1 既有失败（本机新增的纯音频参考测试与线上旧共享契约不匹配，`video_references_required`），没有新增失败，不将候选计为 12 项全通过。详情、脱敏证据与三文件／镜像回滚步骤见 [部署记录](../project_logs/2026-11-10-seedance-resolution-audit.md)。桌面仍须后续发包才能覆盖已安装版本。
+
 ## 2026-11-03：音频参考接入（源码未部署／发布）
 
 - 重新核验[官方创建接口](https://docs.volcengine.com/docs/ark/create-video-generation-task-api?lang=zh)、[2.5 模型说明](https://docs.volcengine.com/docs/ark/seedance-2-5?lang=zh)及本机官方 CLI `multimodal2video -h`。2.5 支持纯音频及图／视频／音频混合参考：MP3／WAV，最多 10 段，每段 2–30 秒、音频合计不超过 30 秒，每段不超过 15 MB；30 图／10 视频／10 音频合计 50 项。2.0 系列最多 3 段音频、每段及合计 2–15 秒，必须搭配图片或视频，总素材最多 12 项。

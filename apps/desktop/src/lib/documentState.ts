@@ -1,6 +1,28 @@
 import type { DocumentBlock, DocumentComment, DocumentDiscussion, DocumentValue } from './documentTypes.ts';
+import { deflate, Inflate } from 'pako';
 
-const footer = /\r?\n\r?\n<!-- bowerbird-document:1:([A-Za-z0-9+/=]+) -->\s*$/;
+const footer = /\r?\n\r?\n<!-- bowerbird-document:([12]):([A-Za-z0-9+/=]+) -->\s*$/;
+const maxInflatedBytes = 16 * 1024 * 1024;
+/** Read surfaces only need the Markdown portion. The editor validates and restores the attachment. */
+export function documentReadingSource(source: string): string {
+  const marker = footer.exec(source);
+  return marker ? source.slice(0, marker.index) : source;
+}
+
+function unpack(bytes: Uint8Array): string {
+  const inflater = new Inflate({ chunkSize: 32768 });
+  const decoder = new TextDecoder();
+  const parts: string[] = [];
+  let length = 0;
+  inflater.onData = chunk => {
+    length += chunk.length;
+    if (length > maxInflatedBytes) throw new Error("Document state exceeds limit");
+    parts.push(decoder.decode(chunk, { stream: true }));
+  };
+  if (!inflater.push(bytes, true) || !inflater.ended || inflater.err) throw new Error("Invalid document state");
+  parts.push(decoder.decode());
+  return parts.join("");
+}
 function canonical(source: string) { return source.replace(/\r\n?/g, '\n').trimEnd() + '\n'; }
 function fingerprint(source: string) {
   let hash = 2166136261;
@@ -56,7 +78,10 @@ export function readDocumentState(source: string): { source: string; value?: Doc
   const match = footer.exec(source);
   if (!match) return { source };
   try {
-    const decoded = new TextDecoder().decode(Uint8Array.from(atob(match[1]), character => character.charCodeAt(0)));
+    const binary = atob(match[2]);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const decoded = match[1] === "2" ? unpack(bytes) : new TextDecoder().decode(bytes);
     const state = JSON.parse(decoded);
     if (!state || typeof state.hash !== 'string' || !isValue(state.value)) return { source };
     const discussions = discussionsFromJson(state.discussions);
@@ -76,6 +101,11 @@ function needsState(node: DocumentBlock | Record<string, unknown>): boolean {
 export function writeDocumentState(source: string, value: DocumentValue): string {
   if (!value.discussions?.length && !value.some(needsState)) return source;
   const payload = JSON.stringify({ hash: fingerprint(source), value, discussions: value.discussions }, (key, item) => item && typeof item === 'object' && (item.assetId || item.attachmentId) ? Object.fromEntries(Object.entries(item).filter(([property]) => property !== 'url')) : key === 'placeholderId' ? undefined : item);
-  const encoded = btoa(Array.from(new TextEncoder().encode(payload), byte => String.fromCharCode(byte)).join(''));
-  return canonical(source) + `\n<!-- bowerbird-document:1:${encoded} -->\n`;
+  const raw = new TextEncoder().encode(payload);
+  const packed = raw.length >= 4096 && raw.length <= maxInflatedBytes ? deflate(raw, { level: 1 }) : undefined;
+  const bytes = packed && packed.length < raw.length ? packed : raw;
+  const chunks = [];
+  for (let i = 0; i < bytes.length; i += 8192) chunks.push(String.fromCharCode(...bytes.subarray(i, i + 8192)));
+  const encoded = btoa(chunks.join(''));
+  return canonical(source) + `\n<!-- bowerbird-document:${bytes === raw ? 1 : 2}:${encoded} -->\n`;
 }

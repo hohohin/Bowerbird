@@ -55,6 +55,9 @@ export function ModalShell({
     window.requestAnimationFrame(() => (preferred ?? first)?.focus({ preventScroll: true }));
 
     function onKeyDown(event: KeyboardEvent) {
+      // A second modal (e.g. subscription settings above a composition) owns its own keys.
+      const activeDialog = document.activeElement?.closest('[role="dialog"]');
+      if (activeDialog && panel && !activeDialog.contains(panel)) return;
       if (event.key === "Escape" && !preventCloseRef.current) {
         event.preventDefault();
         closeRef.current();

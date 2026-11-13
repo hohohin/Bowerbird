@@ -99,8 +99,10 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Working principles
 
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
-**User-Friendly**：Avoid unnecessary secondary label and descriptions. Let the layout do the explaining.
+### **Tradeoff:**
+These guidelines bias toward caution over speed. For trivial tasks, use judgment.
+### **User-Friendly**
+Avoid unnecessary secondary label and descriptions. Let the layout do the explaining.
 
 ### 复用检查
 

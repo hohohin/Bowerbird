@@ -106,8 +106,8 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
   }
   // Video workflows and Agent finals can have no visible prompt/session node.
   // Only original production instances participate; copied references stay put.
-  for (const node of ordered.filter(node => /^(workflow-comfy|workflow-video|gen-output|agent-artifact):/.test(node.id)
-    && node.kind === "asset" && (node.role === "output" || node.role === "final") && node.assetId
+  for (const node of ordered.filter(node => node.kind === "asset" && node.assetId && (/^(workflow-comfy|workflow-video|gen-output|agent-artifact):/.test(node.id)
+    && (node.role === "output" || node.role === "final") || payload(node).generation_gallery_key?.startsWith("manual:") && (node.role !== "reference" || payload(node).manual_gallery_node))
     && node.hiddenAt == null && !aliases.has(node.id) && !excluded.has(node.id) && !contained.has(node.id))) {
     const group = payload(node).workflow_generation_group;
     if (payload(node).generation_group_dissolved) continue;
@@ -116,7 +116,7 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
     const card = groups.get(key) ?? { anchor: node, latest: node, sessions: [], outputs: [], allOutputs: [] };
     card.outputs.push(node);
     card.allOutputs.push(node);
-    card.latest = node;
+    if (!card.sessions.length) card.latest = node;
     groups.set(key, card);
     aliases.set(node.id, card.anchor.id);
   }
@@ -124,6 +124,10 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
     card.outputs.sort((a, b) => a.createdAt - b.createdAt || a.assetId!.localeCompare(b.assetId!));
     card.allOutputs = [...card.outputs];
     card.latest = card.outputs[card.outputs.length - 1];
+  }
+  for (const card of groups.values()) if (payload(card.anchor).generation_gallery_key?.startsWith("manual:")) {
+    const compare = (a: CanvasNode, b: CanvasNode) => a.createdAt - b.createdAt || a.assetId!.localeCompare(b.assetId!);
+    card.outputs.sort(compare); card.allOutputs.sort(compare);
   }
   const embedded = new Map<string, { nodeId: string; cellId: string }>();
   for (const card of groups.values()) {

@@ -42,13 +42,21 @@ try {
   await page.evaluate(() => { window.failId = 'a2'; window.holdTrash = true; });
   await dialog().getByRole('button', { name: '删除原文件', exact: true }).click();
   await page.waitForFunction(() => window.releaseTrash);
-  await page.keyboard.press('Escape'); assert.equal(await dialog().isVisible(), true);
-  assert.equal(await dialog().getByRole('button', { name: '取消', exact: true }).isDisabled(), true);
+  await dialog().waitFor({ state: 'detached' });
+  await page.locator('#after').focus();
+  assert.equal(await page.locator('#after').evaluate(el => el === document.activeElement), true);
+  const showTasks = () => page.getByRole('button', { name: '查看文件任务', exact: true }).click();
+  await showTasks();
+  await dialog().getByRole('button', { name: '后台继续' }).click();
+  await dialog().waitFor({ state: 'detached' });
   await page.evaluate(() => { window.holdTrash = false; window.releaseTrash(); });
-  await dialog().getByRole('alert').filter({ hasText: '1 项失败' }).waitFor();
-  assert.deepEqual(await dialog().locator('[data-delete-asset-id]').evaluateAll(items => items.map(item => item.dataset.deleteAssetId)), ['a2']);
+  await showTasks();
+  await dialog().getByText('查看未完成项').click();
+  await dialog().getByText(/disk-a2.png/).waitFor();
   await page.evaluate(() => { window.failId = null; });
-  await dialog().getByRole('button', { name: '重试失败项', exact: true }).click(); await dialog().waitFor({ state: 'detached' });
+  await dialog().getByRole('button', { name: '重试失败项' }).click();
+  await page.waitForFunction(() => window.trashCalls.length === 3);
+  await page.keyboard.press('Escape');
   assert.deepEqual((await calls()).map(item => item.asset_id), ['a1', 'a2', 'a2']);
   assert.deepEqual((await calls()).map(item => item.fingerprint), ['version-a1', 'version-a2', 'version-a2']);
   assert.equal(await page.evaluate(() => window.calls.some(call => call.command === 'delete_asset_with_mode')), false, 'no legacy record-deletion command');
@@ -68,4 +76,4 @@ try {
   assert.deepEqual(errors, []); assert.deepEqual(remote, []);
   await writeFile('.tmp/original-deletion/result.json', JSON.stringify({ passed: true, errors, remote, boundary: 'real menu and dialog, controlled native IPC' }, null, 2));
   console.log('Original deletion UI passed.');
-} finally { await browser.close(); await server.close(); }
+} catch (error) { console.error(error); throw error; } finally { await browser.close(); await server.close(); }

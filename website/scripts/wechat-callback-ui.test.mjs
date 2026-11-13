@@ -52,7 +52,7 @@ try {
     if (url.hostname === "fixture.supabase.co") {
       return route.fulfill({ json: { access_token: "synthetic", refresh_token: "synthetic" } });
     }
-    if (url.hostname === "cdn.jsdelivr.net") {
+    if (url.pathname === "/account-sdk.js") {
       return route.fulfill({ contentType: "application/javascript", body: `window.supabase = { createClient: () => ({ auth: {
         setSession: () => new Promise(resolve => { window.__finishSession = () => resolve({ error: null }); })
       } }) };` });

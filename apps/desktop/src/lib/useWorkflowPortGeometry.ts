@@ -11,14 +11,20 @@ export function useWorkflowPortGeometry(root: RefObject<SVGSVGElement>, targets:
   const geometry = useRef(new Map<string, Rect>());
   const previous = useRef<WorkflowPortTarget[]>([]);
   const cleanup = useRef<() => void>();
+  const measureChanged = useRef<(ids: Set<string>) => void>();
   const [, redraw] = useState(0);
   useLayoutEffect(() => {
     const unique = [...new Map(targets.map(target => [targetKey(target), target])).values()];
-    if (unique.length === previous.current.length && unique.every((target, index) => {
-      const old = previous.current[index];
-      return targetKey(target) === targetKey(old) && target.node.payloadJson === old.node.payloadJson
-        && target.node.width === old.node.width && target.node.height === old.node.height;
-    })) return;
+    if (unique.length === previous.current.length && unique.every((target, index) => targetKey(target) === targetKey(previous.current[index]))) {
+      const changed = new Set<string>();
+      unique.forEach(({ node }, i) => {
+        const old = previous.current[i].node;
+        if (node.payloadJson !== old.payloadJson || node.width !== old.width || node.height !== old.height) changed.add(node.id);
+      });
+      previous.current = unique;
+      if (changed.size) measureChanged.current?.(changed);
+      return;
+    }
     previous.current = unique;
     cleanup.current?.();
     const plane = root.current?.parentElement;
@@ -46,13 +52,14 @@ export function useWorkflowPortGeometry(root: RefObject<SVGSVGElement>, targets:
       }
     }
     let frame = 0;
-    const measure = () => {
-      frame = 0;
-      const next = new Map<string, Rect>();
+    const measure = (changedIds?: Set<string>) => {
+      const next = changedIds ? new Map(geometry.current) : new Map<string, Rect>();
       const bounds = new Map<HTMLElement, DOMRect>();
       const transform = root.current?.getScreenCTM();
       const scale = transform ? Math.hypot(transform.a, transform.b) : 0;
       for (const [key, { card, port }] of elements) {
+        if (changedIds && !changedIds.has(card.dataset.canvasNodeId!)) continue;
+        next.delete(key);
         if (!card.isConnected || !port.isConnected) continue;
         let cardRect = bounds.get(card);
         if (!cardRect) { cardRect = card.getBoundingClientRect(); bounds.set(card, cardRect); }
@@ -73,7 +80,8 @@ export function useWorkflowPortGeometry(root: RefObject<SVGSVGElement>, targets:
       });
       if (changed) { geometry.current = next; redraw(value => value + 1); }
     };
-    const schedule = () => { if (!frame) frame = requestAnimationFrame(measure); };
+    measureChanged.current = measure;
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(() => { frame = 0; measure(); }); };
     const observer = new ResizeObserver(schedule);
     const observed = new Set<HTMLElement>();
     for (const { card, port } of elements.values()) {
@@ -110,6 +118,7 @@ export function useWorkflowPortGeometry(root: RefObject<SVGSVGElement>, targets:
     plane?.addEventListener("scroll", schedule, true);
     measure();
     cleanup.current = () => {
+      measureChanged.current = undefined;
       observer.disconnect(); mutations.disconnect(); cancelAnimationFrame(frame); cancelAnimationFrame(refreshFrame);
       plane?.removeEventListener("scroll", schedule, true);
     };

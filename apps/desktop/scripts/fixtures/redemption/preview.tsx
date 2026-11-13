@@ -1,12 +1,15 @@
 import "../../../src/styles.css";
 import React from "react";
 import { createRoot } from "react-dom/client";
+import { SidebarAccount } from "../../../src/components/SidebarAccount";
+import { AccountOnboarding } from "../../../src/components/AccountOnboarding";
 import { SettingsDialog } from "../../../src/components/SettingsDialog";
 import { useStore } from "../../../src/store";
 
 
 // Synthetic IPC only: the real SettingsDialog, store action and API wrapper run without native IO.
 const w = window as any;
+w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
 w.store = useStore;
 w.calls = [];
 w.mode = "success";
@@ -59,8 +62,9 @@ useStore.setState({ cloudAuth: { cloud_available: true, logged_in: true, user_id
   display_name: null, avatar_url: null, access_expires_at: null, reason: null }, cloudEntitlement: free,
   cloudBusy: false, loadSettings: async () => {}, defaultProvider: "codex",
   settings: { theme: 'light', auto_analyze_on_ingest: false, auto_analyze_prompt: '', board_shift_pick: true, hide_project_assets: true, dreamina_model_version: '4.7', screenshot_shortcuts: { capture: 'F1', paste: 'F3' } } as any });
-createRoot(document.getElementById("root")!).render(<SettingsDialog onClose={() => {}} />);
+createRoot(document.getElementById("root")!).render(location.search === "?journey" ? <><SidebarAccount placement="topbar" /><AccountOnboarding /></> : <SettingsDialog onClose={() => {}} />);
 
 import "../../../src/components/TacticalDialogs.css";
 import "../../../src/components/CanvasSecondaryTactical.css";
 import "../../../src/components/MediaTactical.css";
+import "../../../src/components/IndustrialTheme.css";

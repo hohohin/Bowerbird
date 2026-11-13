@@ -1086,6 +1086,29 @@ pub async fn dissolve_generation_group(
     Ok(())
 }
 
+#[tauri::command]
+pub async fn previous_gallery_generation(db: State<'_, Arc<Database>>, project_id: Option<String>) -> Result<Option<String>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.previous_gallery_generation(project_id.as_deref()))
+        .await.map_err(|error| AppError::Other(error.to_string()))?
+}
+
+#[tauri::command]
+pub async fn merge_generation_galleries(app: AppHandle, db: State<'_, Arc<Database>>, input: crate::core::generation_gallery::GalleryMergeInput) -> Result<crate::core::generation_gallery::GalleryMerge, AppError> {
+    let db = db.inner().clone();
+    let edit = tokio::task::spawn_blocking(move || db.merge_generation_galleries(input)).await.map_err(|error| AppError::Other(error.to_string()))??;
+    let _ = app.emit("library://assets-changed", ());
+    Ok(edit)
+}
+
+#[tauri::command]
+pub async fn undo_generation_gallery_merge(app: AppHandle, db: State<'_, Arc<Database>>, edit: crate::core::generation_gallery::GalleryMerge) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.undo_generation_gallery_merge(edit)).await.map_err(|error| AppError::Other(error.to_string()))??;
+    let _ = app.emit("library://assets-changed", ());
+    Ok(())
+}
+
 /// 批量取多资产的生成组：key=输入 asset_id，value=该资产所在组的全部图（仅生成图、且组存在）。
 /// 瀑布流缩略图轮播用：一次 invoke 拿到所有可见生成图组，免每缩略图各发一次。
 #[tauri::command]

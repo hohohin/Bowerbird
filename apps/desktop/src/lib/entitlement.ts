@@ -1,6 +1,12 @@
 import type { EntitlementSnapshot, FeaturePolicy } from "../lib/types";
 import { isCloudProvider } from "../lib/genProviders";
 
+/** 账号界面只展示当前身份有效快照中的余额和订阅。 */
+export function accountEntitlement(snapshot: EntitlementSnapshot | null, userId?: string | null) {
+  return userId && snapshot?.user_id === userId && snapshot.offline_state !== "expired" && snapshot.offline_state !== "invalid"
+    ? snapshot : null;
+}
+
 /** 服务端派生的免费权益兜底（未同步/未登录时与 Rust FeaturePolicy::free 对齐）。 */
 export const FREE_POLICY: FeaturePolicy = {
   can_use_byo: false,

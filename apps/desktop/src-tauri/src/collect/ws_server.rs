@@ -26,15 +26,16 @@ pub const ADDR: &str = "127.0.0.1:39871";
 
 /// 扩展连接状态（ws_server 写、`extension_status` command 读，经 lib.rs `manage` 共享）。
 /// 内部 Arc，Clone 共享同一份 last_seen / connected。
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ExtensionStatus {
+    pub(crate) pairing: Arc<super::pairing::Pairing>,
     last_seen: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
     connected: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl ExtensionStatus {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn open(path: &std::path::Path) -> std::io::Result<Self> {
+        Ok(Self { pairing: Arc::new(super::pairing::Pairing::open(path)?), last_seen: Default::default(), connected: Default::default() })
     }
     /// 收到扩展任意消息（ping/save/save_batch）时调：更新 last_seen；
     /// 返回是否「刚连上」（false→true 跳变），供调用方 emit `collect://extension-connected`。
@@ -69,21 +70,32 @@ struct AppState {
     paths: Arc<LibraryPaths>,
     db: Arc<Database>,
     app: AppHandle,
-    client: reqwest::Client,
     status: ExtensionStatus,
     active_project: ActiveProjectContext,
+    sockets: Arc<tokio::sync::Semaphore>,
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>, headers: axum::http::HeaderMap) -> axum::response::Response {
+    let Ok(permit) = state.sockets.clone().try_acquire_owned() else {
+        return axum::http::StatusCode::TOO_MANY_REQUESTS.into_response();
+    };
+    let Some(grant) = state.status.pairing.grant(&headers) else {
+        return axum::http::StatusCode::FORBIDDEN.into_response();
+    };
     ws.max_message_size(video_blob::MAX_BYTES).max_frame_size(video_blob::MAX_BYTES)
-        .on_upgrade(move |socket| handle_socket(socket, state))
+        .protocols([super::pairing::PROTOCOL])
+        .on_upgrade(move |socket| async move {
+            let _permit = permit;
+            handle_socket(socket, state, grant).await;
+        })
 }
 
-async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState) {
+async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState, grant: super::pairing::Grant) {
     tracing::debug!("collect ws: connection opened");
     // save_blob 两帧协议：先 Text metadata，再 Binary 图片字节（浏览器 background fetch，带 Cookie/代理）。
     let mut pending_upload: Option<(serde_json::Value, Option<String>)> = None;
-    while let Some(Ok(msg)) = socket.recv().await {
+    while let Ok(Some(Ok(msg))) = tokio::time::timeout(std::time::Duration::from_secs(180), socket.recv()).await {
+        if !state.status.pairing.allow_action(&grant, 1) { break; }
         match msg {
             Message::Text(text) => {
                 // 任意消息（ping / save / save_batch / save_blob metadata）= 扩展在线。
@@ -102,6 +114,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                 }
                 let parsed = serde_json::from_str::<serde_json::Value>(&text).ok();
                 let kind = parsed.as_ref().and_then(|v| v["type"].as_str());
+                if grant.upload_only && !matches!(kind, Some("save_blob" | "ping")) { break; }
                 // A second upload or command invalidates the pending pair. Never let
                 // its next Binary frame acquire the first upload's provenance/project.
                 if pending_upload.is_some() && kind != Some("ping") {
@@ -129,6 +142,10 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                     tracing::info!("collect ws recv: kind=save_blob");
                     pending_upload = parsed.map(|meta| (meta, state.active_project.get()));
                 } else {
+                    if kind == Some("save_batch") {
+                        let count = parsed.as_ref().and_then(|v| v["items"].as_array()).map_or(0, Vec::len);
+                        if !state.status.pairing.allow_action(&grant, count) { break; }
+                    }
                     let resp = handle_message(&text, &state).await;
                     let _ = socket.send(Message::Text(resp)).await;
                 }
@@ -157,6 +174,7 @@ async fn handle_socket(mut socket: axum::extract::ws::WebSocket, state: AppState
                     .to_string(),
                 };
                 let _ = socket.send(Message::Text(resp)).await;
+                if grant.upload_only { break; }
             }
             _ => {}
         }
@@ -302,8 +320,7 @@ async fn handle_message(text: &str, state: &AppState) -> String {
                 .and_then(|value| value.as_str());
             match save_one(state, url, source_url, project_id.as_deref()).await {
                 Ok(a) => {
-                    let _ = state.app.emit("library://assets-changed", ());
-                    asset_result(&a).to_string()
+                    save_succeeded(a, state).to_string()
                 }
                 Err(error) => {
                     serde_json::json!({ "ok": false, "error": error.to_string() }).to_string()
@@ -379,7 +396,6 @@ async fn save_one(
 ) -> crate::error::AppResult<crate::core::library::Asset> {
     let paths = state.paths.for_project(&state.db, project_id)?;
     let asset = match ingest::ingest_from_url(
-        &state.client,
         &paths,
         &state.db,
         url,
@@ -407,8 +423,6 @@ async fn save_one(
             );
         }
     }
-    // 后台命名 + 基础分析（非阻塞；完成后 autoname 再 emit 刷新）。
-    crate::core::autoname::spawn_auto_analyze(state.app.clone(), state.db.clone(), asset.clone());
     Ok(asset)
 }
 
@@ -449,14 +463,13 @@ pub async fn serve_listener(
     status: ExtensionStatus,
     active_project: ActiveProjectContext,
 ) -> Result<(), std::io::Error> {
-    let client = ingest::download_client().map_err(std::io::Error::other)?;
     let state = AppState {
         paths,
         db,
         app: app.clone(),
-        client,
         status: status.clone(),
         active_project,
+        sockets: Arc::new(tokio::sync::Semaphore::new(4)),
     };
     // 心跳超时 tick：每 5s 检查，距上次消息 > 30s（错过 1 个 15s 心跳）→ emit disconnected。
     // 让前端状态指示器在扩展被 disable / 卸载后及时变灰，而非永久卡绿。
@@ -473,6 +486,13 @@ pub async fn serve_listener(
         }
     });
     let app = Router::new()
+        .route("/pairing-session", get(|State(state): State<AppState>| async move {
+            // Public challenge only. Authorization still requires the current private key.
+            (axum::http::StatusCode::NO_CONTENT, [
+                ("cache-control", "no-store".to_owned()),
+                ("x-bowerbird-session", state.status.pairing.session().simple().to_string()),
+            ])
+        }))
         .route("/ws", get(ws_handler))
         .with_state(state);
     tracing::info!("collect ws server listening on ws://{}/ws", listener.local_addr()?);

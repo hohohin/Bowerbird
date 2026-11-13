@@ -89,6 +89,39 @@ fn copying_interruption_can_resume_and_active_tasks_block_scheduling() {
     resume(&f.files,&f.db).unwrap();assert_eq!(status(&f.files).unwrap().unwrap().state,"completed");
 }
 #[test]
+fn remapped_sidecars_survive_precommit_restart_and_independent_edits_are_preserved() {
+    for edited in [false, true] {
+        let f = Fixture::new();
+        let old = f.seed();
+        f.schedule();
+        let mut state = status(&f.files).unwrap().unwrap();
+        state.state = "copying".into();
+        write_json(&f.files.migration_path(), &state).unwrap();
+        fs::create_dir(&state.target).unwrap();
+        fs::write(state.target.join(format!(".bowerbird-migration-{}",state.id)), &state.id).unwrap();
+        let entries = scan(&state.source).unwrap();
+        copy_tree(&state.source, &state.target, &entries).unwrap();
+        let relative = old.parent().unwrap().strip_prefix(&state.source).unwrap().join(".bowerbird/a.json");
+        let derived = state.target.join(&relative);
+        let original = fs::read(state.source.join(&relative)).unwrap();
+        assert_ne!(original, fs::read(&derived).unwrap());
+        if edited { fs::write(&derived, b"edited independently").unwrap(); }
+        resume(&f.files, &f.db).unwrap();
+        let result = status(&f.files).unwrap().unwrap();
+        if edited {
+            assert_eq!(result.state, "failed");
+            assert_eq!(fs::read(derived).unwrap(), b"edited independently");
+            assert_eq!(f.files.proposed_root(), state.old_config.root.unwrap());
+        } else {
+            assert_eq!(result.state, "completed");
+            let record: serde_json::Value = serde_json::from_slice(&fs::read(derived).unwrap()).unwrap();
+            assert_eq!(record["reference"], f.db.get_asset("a").unwrap().unwrap().store_path.unwrap());
+        }
+        assert_eq!(original, fs::read(state.source.join(relative)).unwrap());
+    }
+}
+
+#[test]
 fn local_classification_follows_moved_root_without_overwriting_source_record() {
     let f=Fixture::new();let old=f.seed();let folder=old.parent().unwrap();let base=f.index.join("local-classification/folder-records");
     let local=super::super::local_classification::folder::local_record_root(folder,&base);

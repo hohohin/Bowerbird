@@ -16,6 +16,8 @@ pub(super) const IMAGE: &str = "lower(COALESCE(a.ext,'')) IN ('png','jpg','jpeg'
 pub(super) const VIDEO: &str = "lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','m4v','avi','mkv')";
 pub(super) const AUDIO: &str = "lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg')";
 pub(super) const TEXT: &str = "lower(COALESCE(a.ext,'')) IN ('md','markdown','txt','docx','xlsx','csv')";
+/// A broken reference is still visible until its original has been explicitly or automatically cleaned.
+pub(super) const CONNECTION_ENTRY_VISIBLE: &str = "NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)";
 pub(super) const PROJECT_VISIBLE: &str =
     "(a.library_hidden=0 OR EXISTS(SELECT 1 FROM external_assets e WHERE e.asset_id=a.id)) AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=a.id) AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)";
 

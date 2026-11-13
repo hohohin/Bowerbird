@@ -147,14 +147,12 @@ fn check_originals(db: &Database, paths: &LibraryPaths) -> AppResult<bool> {
     }
     Ok(changed)
 }
-fn scan_requested_roots(
-    app: &AppHandle,
+fn requested_root_ids(
     db: &Database,
-    paths: &LibraryPaths,
     all: bool,
     requested: &HashSet<String>,
     priority: Option<&str>,
-) -> AppResult<()> {
+) -> AppResult<Vec<String>> {
     let priority_root = priority
         .and_then(|id| db.connected_folder(id).ok())
         .map(|f| f.root_id);
@@ -163,31 +161,31 @@ fn scan_requested_roots(
         ids.retain(|id| requested.contains(id));
     }
     ids.sort_by_key(|id| Some(id) != priority_root.as_ref());
+    Ok(ids)
+}
+fn scan_requested_root(app: &AppHandle, db: &Database, paths: &LibraryPaths, id: String, priority: Option<&str>) {
     let mut last = Instant::now() - Duration::from_secs(1);
-    for id in ids {
-        let started = Instant::now();
-        let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id.clone(), scanning: true, error: None });
-        let mut dirty = false;
-        let mut notifications = 0;
-        let value = db.scan_connection_changes(paths, &id, priority, |changed_data| {
-            dirty |= changed_data;
-            if dirty && last.elapsed() >= Duration::from_millis(500) {
-                changed(app);
-                notifications += 1;
-                dirty = false;
-                last = Instant::now();
-            }
-        });
-        // Flush changes even when a later directory failed. Progress alone never
-        // invalidates pages or forces the expensive catalog counts to run again.
-        if dirty { changed(app); notifications += 1; }
-        let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id, scanning: false, error: value.as_ref().err().map(ToString::to_string) });
-        tracing::debug!(elapsed_ms = started.elapsed().as_millis(), notifications, "connection scan completed");
-        if let Err(error) = value {
-            tracing::warn!("connection scan: {error}");
+    let started = Instant::now();
+    let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id.clone(), scanning: true, error: None });
+    let mut dirty = false;
+    let mut notifications = 0;
+    let value = db.scan_connection_changes(paths, &id, priority, |changed_data| {
+        dirty |= changed_data;
+        if dirty && last.elapsed() >= Duration::from_millis(500) {
+            changed(app);
+            notifications += 1;
+            dirty = false;
+            last = Instant::now();
         }
+    });
+    // Flush changes even when a later directory failed. Progress alone never
+    // invalidates pages or forces the expensive catalog counts to run again.
+    if dirty { changed(app); notifications += 1; }
+    let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id, scanning: false, error: value.as_ref().err().map(ToString::to_string) });
+    tracing::debug!(elapsed_ms = started.elapsed().as_millis(), notifications, "connection scan completed");
+    if let Err(error) = value {
+        tracing::warn!("connection scan: {error}");
     }
-    Ok(())
 }
 fn finish_refresh(app: &AppHandle, originals: bool, result: AppResult<bool>) {
     let originals_changed = match result {
@@ -230,27 +228,34 @@ fn start_refresh(
                     std::mem::take(&mut queue.originals),
                 )
             };
-            if let Ok(_permit) = GATE.acquire().await {
-                let (app2, db2, paths2) = (app.clone(), db.clone(), paths.clone());
-                let scanned_roots = all || !requested.is_empty();
-                let result = tauri::async_runtime::spawn_blocking(move || -> AppResult<bool> {
-                    if scanned_roots {
-                        scan_requested_roots(&app2, &db2, &paths2, all, &requested, priority.as_deref())?;
-                    }
-                    if originals {
-                        check_originals(&db2, &paths2)
-                    } else {
-                        Ok(false)
-                    }
-                })
-                .await
-                .map_err(|error| AppError::Other(format!("connection refresh worker: {error}")))
-                .and_then(|value| value);
-                if all && result.is_ok() {
-                    REFRESH.lock().unwrap().last_full_scan = Some(Instant::now());
+            let result = async {
+                let (db2, priority2) = (db.clone(), priority.clone());
+                let ids = if all || !requested.is_empty() {
+                    tauri::async_runtime::spawn_blocking(move ||
+                        requested_root_ids(&db2, all, &requested, priority2.as_deref()))
+                        .await.map_err(|e| AppError::Other(e.to_string()))??
+                } else { Vec::new() };
+                for id in ids {
+                    let (app, db, paths, priority) = (app.clone(), db.clone(), paths.clone(), priority.clone());
+                    let permit = GATE.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
+                    tauri::async_runtime::spawn_blocking(move || {
+                        let _permit = permit;
+                        scan_requested_root(&app, &db, &paths, id, priority.as_deref());
+                    }).await.map_err(|e| AppError::Other(e.to_string()))?;
                 }
-                finish_refresh(&app, originals, result);
+                if originals {
+                    let (db, paths) = (db.clone(), paths.clone());
+                    let permit = GATE.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
+                    tauri::async_runtime::spawn_blocking(move || {
+                        let _permit = permit;
+                        check_originals(&db, &paths)
+                    }).await.map_err(|e| AppError::Other(e.to_string()))?
+                } else { Ok(false) }
+            }.await;
+            if all && result.is_ok() {
+                REFRESH.lock().unwrap().last_full_scan = Some(Instant::now());
             }
+            finish_refresh(&app, originals, result);
             let mut queue = REFRESH.lock().unwrap();
             queue.scanning_all = false;
             if queue.has_work() {
@@ -319,10 +324,22 @@ pub async fn refresh_folder_connections(
 }
 #[derive(Default)]
 struct CatalogFileGrants(Mutex<HashSet<(String, String)>>);
+impl CatalogFileGrants {
+    fn allow(&self, path: &str, version: Option<&str>, allow: impl FnOnce() -> AppResult<()>) -> AppResult<()> {
+        let key = version.map(|version| (path.to_owned(), version.to_owned()));
+        let mut granted = self.0.lock().unwrap();
+        if key.as_ref().is_some_and(|key| granted.contains(key)) { return Ok(()); }
+        allow()?;
+        if let Some(key) = key {
+            if granted.len() >= 16_384 { granted.clear(); }
+            granted.insert(key);
+        }
+        Ok(())
+    }
+}
 fn allow_entries(app: &AppHandle, entries: &[ConnectionEntry]) -> AppResult<()> {
     if app.try_state::<CatalogFileGrants>().is_none() { app.manage(CatalogFileGrants::default()); }
     let grants = app.state::<CatalogFileGrants>();
-    let mut granted = grants.0.lock().unwrap();
     let mut pending: Vec<_> = entries.iter().collect();
     while let Some(entry) = pending.pop() {
         pending.extend(&entry.group);
@@ -332,15 +349,9 @@ fn allow_entries(app: &AppHandle, entries: &[ConnectionEntry]) -> AppResult<()> 
         {
             // Tauri canonicalizes on every allow_file, even for an existing rule.
             // Cache only successful, versioned grants in this application session.
-            let key = entry.version.as_ref().map(|version| (path.clone(), version.clone()));
-            if key.as_ref().is_some_and(|key| granted.contains(key)) { continue; }
-            app.asset_protocol_scope()
+            grants.allow(path, entry.version.as_deref(), || app.asset_protocol_scope()
                 .allow_file(path)
-                .map_err(|e| AppError::Other(e.to_string()))?;
-            if let Some(key) = key {
-                if granted.len() >= 16_384 { granted.clear(); }
-                granted.insert(key);
-            }
+                .map_err(|e| AppError::Other(e.to_string())))?;
         }
     }
     Ok(())
@@ -372,7 +383,7 @@ pub async fn connection_entries(
         )?;
         let ids_ms = started.elapsed().as_millis();
         let hydrate = Instant::now();
-        let mut entries = db.read_connection_entries(&ids)?;
+        let mut entries = db.visible_connection_entries(&ids)?;
         let hydrate_ms = hydrate.elapsed().as_millis();
         let groups = Instant::now();
         db.connection_entry_groups(&mut entries, project_id.as_deref(), media.as_deref(), &filter)?;
@@ -417,7 +428,7 @@ pub async fn resolve_connection_entries(
     ids: Vec<String>,
 ) -> AppResult<Vec<ConnectionEntry>> {
     let db = db.inner().clone();
-    let values = tauri::async_runtime::spawn_blocking(move || db.resolve_connection_entries(&ids))
+    let values = tauri::async_runtime::spawn_blocking(move || db.resolve_visible_connection_entries(&ids))
         .await
         .map_err(|e| AppError::Other(e.to_string()))??;
     allow_entries(&app, &values)?;
@@ -427,14 +438,17 @@ pub async fn resolve_connection_entries(
 pub async fn create_connected_collection(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
+    files: State<'_, Arc<crate::core::file_workspace::FileWorkspace>>,
     parent_id: Option<String>,
     name: String,
     path: Option<String>,
     project_id: Option<String>,
 ) -> AppResult<String> {
     let db = db.inner().clone();
+    let files = files.inner().clone();
     mutation(app, move || {
         db.create_connected_directory(
+            &files,
             parent_id.as_deref(),
             path.as_deref().map(std::path::Path::new),
             &name,
@@ -556,9 +570,13 @@ pub async fn trash_connection_entries(
 pub async fn preview_asset_originals(
     db: State<'_, Arc<Database>>,
     asset_ids: Vec<String>,
-) -> AppResult<Vec<AssetOriginal>> {
+    allow_partial: Option<bool>,
+) -> AppResult<Vec<crate::core::folder_connections::OriginalPreview>> {
     let db = db.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || db.preview_asset_originals(&asset_ids))
+    tauri::async_runtime::spawn_blocking(move || {
+        if allow_partial == Some(true) { db.preview_original_selection(&asset_ids) }
+        else { Ok(db.preview_asset_originals(&asset_ids)?.into_iter().map(crate::core::folder_connections::OriginalPreview::Ready).collect()) }
+    })
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }
@@ -588,6 +606,26 @@ pub async fn remove_connection_references(
 #[cfg(test)]
 mod maintenance_tests {
     use super::*;
+
+    #[test]
+    fn catalog_grants_reuse_only_successful_same_version_in_the_same_app() {
+        let grants = CatalogFileGrants::default();
+        let calls = std::cell::Cell::new(0);
+        let allow = || { calls.set(calls.get() + 1); Ok(()) };
+        grants.allow("source", Some("v1"), allow).unwrap();
+        grants.allow("source", Some("v1"), allow).unwrap();
+        assert_eq!(calls.get(), 1);
+        grants.allow("source", Some("v2"), allow).unwrap();
+        grants.allow("renamed", Some("v2"), allow).unwrap();
+        assert_eq!(calls.get(), 3);
+        assert!(grants.allow("failed", Some("v1"), || Err(AppError::Other("failure".into()))).is_err());
+        grants.allow("failed", Some("v1"), allow).unwrap();
+        grants.allow("unversioned", None, allow).unwrap();
+        grants.allow("unversioned", None, allow).unwrap();
+        assert_eq!(calls.get(), 6);
+        CatalogFileGrants::default().allow("source", Some("v1"), allow).unwrap();
+        assert_eq!(calls.get(), 7);
+    }
 
     #[test]
     fn automatic_full_scans_share_pending_work_and_cooldown_but_manual_refresh_bypasses() {

@@ -23,7 +23,7 @@ try {
     window.events = [];
     const root = createRoot(document.getElementById('root'));
     window.renderHandles = ({ zoom = 1, active = false, disabled = false, overlap = false, selected = true } = {}) => flushSync(() => root.render(React.createElement('div', {
-      id: 'plane', style: { position: 'absolute', left: 200, top: 200, transform: `scale(${zoom})`, transformOrigin: '0 0', '--canvas-zoom': zoom },
+      id: 'plane', style: { position: 'absolute', left: 200, top: 200, transform: `scale(${zoom})`, transformOrigin: '0 0' },
     }, React.createElement('article', { id: 'card', className: `canvas-note ${selected ? 'is-selected' : ''}`, style: { position: 'relative', width: 300, height: 200, background: '#202020', '--bb-muted': '#aaa', '--bb-ink': '#dcdcdc', '--bb-blue': '#8faab8', '--bb-surface': '#222' } },
       React.createElement('textarea', { id: 'text', defaultValue: 'Editable content', style: { position: 'absolute', left: 20, top: 40, width: 240, height: 110 } }),
       ...['input', 'output'].map(side => React.createElement(CanvasConnectionHandle, {
@@ -88,15 +88,20 @@ try {
     await page.evaluate(zoom => window.renderHandles({ zoom }), zoom);
     const card = await bounds(page.locator('#card'));
     const out = await bounds(output), incoming = await bounds(input);
-    approx(out.width, 92.16, `output hit width at ${zoom}`);
-    approx(out.height, 92.16, `output hit height at ${zoom}`);
-    approx(incoming.width, 92.16, `input hit width at ${zoom}`);
-    approx(out.x + out.width / 2 - card.x - card.width, 18, 'output offset');
-    approx(card.x - incoming.x - incoming.width / 2, 18, 'input offset');
-    approx((await bounds(glyph)).width, 25.2, 'glyph width');
+    approx(out.width, 92.16 * zoom, `output hit width at ${zoom}`);
+    approx(out.height, 92.16 * zoom, `output hit height at ${zoom}`);
+    approx(incoming.width, 92.16 * zoom, `input hit width at ${zoom}`);
+    approx(out.x + out.width / 2 - card.x - card.width, 18 * zoom, 'output offset');
+    approx(card.x - incoming.x - incoming.width / 2, 18 * zoom, 'input offset');
+    approx((await bounds(glyph)).width, 25.2 * zoom, 'glyph width');
     assert.equal(await page.evaluate(({ x, y }) => !!document.elementFromPoint(x, y)?.closest('.canvas-connection-handle'), {
       x: card.x + card.width - 1, y: card.y + card.height / 2,
     }), false, 'outward heat area does not steal even the last pixel of card content');
+    await page.mouse.move(out.x + out.width / 2 + 30 * zoom, out.y + out.height / 2);
+    await page.waitForTimeout(230);
+    const follow = await glyphOffset();
+    approx(follow.x, 8, `fully engaged magnet moves eight canvas units at ${zoom}`);
+    await page.mouse.move(1198, 898);
   }
   await page.evaluate(() => window.renderHandles());
   const original = await bounds(output);
@@ -171,5 +176,5 @@ try {
     await page.screenshot({ path: `.tmp/canvas-connection-handle/hatched-${theme}.png`, clip: { x: 130, y: 150, width: 450, height: 300 } });
   }
   assert.deepEqual(errors, []);
-  console.log('PASS: direct hot-zone reveal, fixed 92.16px hit area/25.2px glyph across 10–250% zoom, bounded magnetic movement, unclipped frame, stable hit area, press/reset, editing, keyboard, active/reduced motion and nearest overlapping socket selection');
+  console.log('PASS: proportional hit area, glyph, spacing and magnetic movement across 10–250% zoom, editing, keyboard, reduced motion and nearest overlapping socket selection');
 } finally { await browser?.close(); await server.close(); }

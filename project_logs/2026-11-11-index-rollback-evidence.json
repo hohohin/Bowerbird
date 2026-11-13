@@ -1,0 +1,81 @@
+{
+  "archive_sha256": "e3b46436d39d8ecfebb7dca8561dec47f64eda08c598174ef3e011d49fb8093b",
+  "old_package_tool_version": "26.11.1001",
+  "old_tool_sha256": "04de3714988b31fc6d005d958c0e97cda820c8bb3216a64cc6ab7389ad9c8e8a",
+  "candidate_tool_version": "26.11.1101",
+  "candidate_tool_sha256": "41be2d8beb5a5276f125a1b7f60ddd41e304051773b65ff561ffd735eb56e331",
+  "frozen_56_backup_sha256": "94caad5e02cf2882a6e3cdaf5c1c2b30c0a91a6e98b497be1a4d827af0a4ef41",
+  "restored_native_preview_sha256": "b135cd8218edd63c85e777fb721a4ad71c39fd81cce9ce547b5b99caecf44fb1",
+  "before": {
+    "version": 56,
+    "integrity": "ok",
+    "fk": 0,
+    "schema_digest": "0869f13e25c116a8ffbbc5b3f30d405a83973fd0d8317a32105ffbdb632e4dc0",
+    "tables": 64,
+    "rows_digest": "878f8338624020de8ed6c11756837655c69168f62ee9b2b9f58f853b7c9a72d3",
+    "asset_paths": [
+      192,
+      "9a261da7354a7aca25260148d736207d68a37a58e8329726185fb53771bd3279"
+    ],
+    "six_counts": {
+      "assets": 192,
+      "analyses": 186,
+      "projects": 5,
+      "task_queue": 184,
+      "local_agent_runs": 6,
+      "cloud_agent_runs": 24
+    },
+    "has_library_identity": false
+  },
+  "after": {
+    "version": 58,
+    "integrity": "ok",
+    "fk": 0,
+    "schema_digest": "de4c3b1e8b46fefed3ca82b1e5381bcca5b1efc653227c511f2725ae56b74208",
+    "tables": 66,
+    "rows_digest": "1541f8cd9125dbf1626e45aa654cac8c9dc38ccc8ea51be561fc024527823b93",
+    "asset_paths": [
+      193,
+      "443c94b302e855a890521c52098b24fbe5ac97be7394e9b891fd9a93d9918c65"
+    ],
+    "six_counts": {
+      "assets": 193,
+      "analyses": 186,
+      "projects": 5,
+      "task_queue": 184,
+      "local_agent_runs": 6,
+      "cloud_agent_runs": 24
+    },
+    "has_library_identity": true
+  },
+  "restored": {
+    "version": 56,
+    "integrity": "ok",
+    "fk": 0,
+    "schema_digest": "0869f13e25c116a8ffbbc5b3f30d405a83973fd0d8317a32105ffbdb632e4dc0",
+    "tables": 64,
+    "rows_digest": "878f8338624020de8ed6c11756837655c69168f62ee9b2b9f58f853b7c9a72d3",
+    "asset_paths": [
+      192,
+      "9a261da7354a7aca25260148d736207d68a37a58e8329726185fb53771bd3279"
+    ],
+    "six_counts": {
+      "assets": 192,
+      "analyses": 186,
+      "projects": 5,
+      "task_queue": 184,
+      "local_agent_runs": 6,
+      "cloud_agent_runs": 24
+    },
+    "has_library_identity": false
+  },
+  "source_and_backup_unchanged": true,
+  "managed_external_and_thumb_bytes": [
+    "1c9bfa0492e48f0fcd317bd4532710cf611d39ebab2f6213567c0f1ae0fb3a41",
+    "522068db3b1b939e2349c18cc05633a63c6f98c15b20815ac86171a0ff96a62c",
+    "472316ad08069160c01e13979de9f8a94b7778d08ca5d5675ec0e01276219f4e"
+  ],
+  "rollback_new_only_asset_in_restored": 0,
+  "rollback_new_only_asset_in_retained_copy": 1,
+  "rollback_new_only_file_preserved": true
+}

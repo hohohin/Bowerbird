@@ -1,24 +1,12 @@
-import { useEffect, useState } from "react";
-import { localChat, selectChatCodexModel, type ChatCodexModel, type ChatCodexOptions } from "../../lib/localChat";
-import { userErrorMessage } from "../../lib/userError";
-import { useStore } from "../../store";
+import { useStore } from "zustand";
+import { selectChatCodexModel, type ChatCodexOptions } from "../../lib/localChat";
+import { codexModelCatalog } from "../../lib/chatCapabilities";
 import { TacticalSelect } from "../TacticalSelect";
 import "./CodexModelSelect.css";
 
-export function useChatCodexModels(active: boolean) {
-  const ready = useStore(state => !!state.codexHealth?.ok);
-  const [models, setModels] = useState<ChatCodexModel[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    setModels(null); setError(null);
-    if (active && ready) localChat.models()
-      .then(value => { if (!cancelled) setModels(value); })
-      .catch(reason => { if (!cancelled) setError(userErrorMessage(reason, "Codex 模型列表读取失败，请重试。")); });
-    return () => { cancelled = true; };
-  }, [active, ready, attempt]);
-  return { models, error, loading: active && ready && !models && !error, retry: () => setAttempt(value => value + 1) };
+export function useChatCodexModels() {
+  const { value: models, error, pending, key } = useStore(codexModelCatalog.store);
+  return { models, error, loading: pending && !models, retry: () => codexModelCatalog.check(key, true) };
 }
 
 const effortLabels: Record<string, string> = { none: "无推理", minimal: "极低", low: "低", medium: "中", high: "高", xhigh: "极高" };

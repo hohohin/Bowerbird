@@ -6,9 +6,9 @@ import { isVideoPath } from "./videoGeneration";
 import { readVideoLastFrame } from "./videoFrame";
 
 /** Only canvas video image sockets become frames; the generator's video output stays a video. */
-export function videoFrameInputValues(node: WorkflowNode, values: Record<string, WorkflowValue[]>, canvas: readonly CanvasNode[]) {
+export function videoFrameInputValues(node: WorkflowNode, values: Record<string, WorkflowValue[]>, canvas: readonly CanvasNode[], nodes: readonly WorkflowNode[] = []) {
   if (node.kind === "agent" && node.skill === "hyperframes") return [];
-  const inputs = generationInputNode(node).inputs.image ?? [];
+  const inputs = generationInputNode(node, nodes).inputs.image ?? [];
   return (values.image ?? []).filter((_, index) => {
     const input = inputs[index];
     if (input?.autoConnect) return false;
@@ -16,8 +16,8 @@ export function videoFrameInputValues(node: WorkflowNode, values: Record<string,
   });
 }
 export async function resolveVideoCardOutputs(node: WorkflowNode, values: Record<string, WorkflowValue[]>,
-  canvas: readonly CanvasNode[], projectId: string, halted: () => boolean) {
-  const selected = videoFrameInputValues(node, values, canvas);
+  canvas: readonly CanvasNode[], projectId: string, halted: () => boolean, nodes: readonly WorkflowNode[] = []) {
+  const selected = videoFrameInputValues(node, values, canvas, nodes);
   const ids = [...new Set(selected.flatMap(value => value.assetIds ?? []))];
   if (!ids.length) return;
   const assets = await api.getAssetsByIds(ids);

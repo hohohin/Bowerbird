@@ -4,6 +4,7 @@ import type { Asset } from "../lib/types";
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
+import { CanvasTextarea } from "./CanvasTextarea";
 import { CanvasBubbleTail } from "./CanvasBubbleTail";
 import { CanvasConnectionHandle } from "./CanvasConnectionHandle";
 import "./CanvasTextCard.css";
@@ -17,7 +18,7 @@ import { parseCanvasTableClipboard, pasteCanvasTable } from "../lib/canvasTableP
 
 const MIN_GRID_WEIGHT_SHARE = 0.04;
 
-export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, onChange, onSelect, onResize, onConnectCell, onInput, inputLocked, onOpenPreview, onOpenGeneration, renderGeneration, onMediaContextMenu }: {
+export function CanvasTextCard({ value, readCurrentValue, selected, width, height, zoom, getZoom, onChange, onSelect, onResize, onConnectCell, onInput, inputLocked, onOpenPreview, onOpenGeneration, renderGeneration, onMediaContextMenu }: {
   onMediaContextMenu?: (event: MouseEvent<HTMLElement>, asset: Asset) => void;
   renderGeneration?: (cell: CanvasTextCell) => ReactNode;
   onOpenGeneration?: (cell: CanvasTextCell) => void;
@@ -26,12 +27,13 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
   inputLocked?: boolean;
   onConnectCell?: (cellId: string, clientX: number, clientY: number, keyboard?: boolean) => void;
   value: CanvasNotePayload;
+  readCurrentValue: () => CanvasNotePayload;
   selected: boolean;
   width: number;
   height: number;
   zoom: number;
   getZoom?: () => number;
-  onChange: (value: CanvasNotePayload, size?: { width: number; height: number }) => void;
+  onChange: (value: CanvasNotePayload, size?: { width: number; height: number }, history?: "edit" | "typing" | "layout") => void;
   onSelect: () => void;
   onResize: (size: { width: number; height: number }, finished: boolean, cancelled?: boolean) => void;
 }) {
@@ -88,7 +90,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
         growth += extra;
         return rowWeights[index] + extra * unit;
       });
-      if (growth > 0) onChange({ ...value, row_heights: weights }, { width, height: height + growth });
+      if (growth > 0) onChange({ ...value, row_heights: weights }, { width, height: height + growth }, "layout");
     };
     // Media uses its natural aspect ratio at the current column width. Observe
     // late image/poster loads too, then persist just the extra space it needs.
@@ -106,8 +108,10 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
   }
   function updateCell(row: number, column: number, change: Partial<CanvasTextCell>) {
     setRemoved(null);
-    const cells = value.cells.map((line, r) => line.map((item, c) => r === row && c === column ? { ...item, ...(change.content_type !== undefined || change.text !== undefined || change.image_refs !== undefined ? { generation_ref: undefined } : {}), ...change } : item));
-    onChange({ ...value, cells, text: cells.map(line => line.map(item => item.text).join("\t")).join("\n") });
+    const current = readCurrentValue();
+    const cells = current.cells.map((line, r) => line.map((item, c) => r === row && c === column ? { ...item, ...(change.content_type !== undefined || change.text !== undefined || change.image_refs !== undefined ? { generation_ref: undefined } : {}), ...change } : item));
+    onChange({ ...current, cells, text: cells.map(line => line.map(item => item.text).join("\t")).join("\n") }, undefined,
+      change.text !== undefined && change.content_type === undefined && change.image_refs === undefined ? "typing" : "edit");
   }
   function changeGrid(next: CanvasNotePayload) {
     const currentZoom = getZoom?.() ?? zoom;
@@ -257,7 +261,9 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
       <button aria-label="增大行距" title="增大行距" disabled={lineHeight >= 300} onClick={() => changeLineHeight(10)}><ChevronsUpDown size={14} /></button>
       {!bubble && <button aria-label="复制表格为 CSV" title="复制表格为 CSV" onClick={copyCsv}>{copied === "csv" ? <Check size={13} /> : <Copy size={13} />}</button>}
     </div>}
-    <div ref={grid} className="canvas-text-grid" role={bubble ? "group" : "table"} aria-label={bubble ? "气泡便签" : "内容卡片"} onPointerDown={event => { event.stopPropagation(); onSelect(); }} onKeyDown={event => event.stopPropagation()}
+    <div ref={grid} className="canvas-text-grid" role={bubble ? "group" : "table"} aria-label={bubble ? "气泡便签" : "内容卡片"} onPointerDown={event => { event.stopPropagation(); onSelect(); }} onKeyDown={event => {
+      if (event.key !== "Escape" && !((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z")) event.stopPropagation();
+    }}
       onWheel={event => { if (!event.ctrlKey && !event.metaKey) event.stopPropagation(); }}>
       {!bubble && onInput && (["row", "column"] as const).flatMap(axis => {
         const weights = axis === "row" ? rowWeights : columnWeights;
@@ -276,6 +282,26 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
       })}
       {value.cells.map((line, row) => <div role={bubble ? undefined : "row"} className="canvas-text-row" key={row} style={{ flexGrow: rowWeights[row] }}>
         {line.map((item, column) => { const images = item.content_type === "image"; const generation = images && item.generation_ref ? renderGeneration?.(item) : null; return <div role={bubble ? undefined : "cell"} data-canvas-cell={bubble ? undefined : item.id} className={`canvas-text-cell ${images ? "is-image-cell" : ""} ${canvasCellValue(item).imageRefs.length ? "has-image-refs" : ""} ${removing && (removing.axis === "row" ? removing.index === row : removing.index === column) ? "is-removing" : ""}`} key={column} style={{ flexGrow: columnWeights[column] }} onPointerDown={() => setActive([row, column])}>
+          {!bubble && (["input", "output"] as const).map(side => (side === "input" ? onInput : onConnectCell) && <CanvasConnectionHandle key={side} side={side}
+            className="canvas-cell-connection" disabled={inputLocked}
+            aria-label={`${side === "input" ? "添加上游到" : "引用"}第 ${row + 1} 行第 ${column + 1} 列`}
+            onPointerDown={event => {
+              if (event.button !== 0) return;
+              event.preventDefault(); event.stopPropagation();
+              if (side === "input") onInput?.(item.id, false, "auto", { x: event.clientX, y: event.clientY });
+              else onConnectCell?.(item.id!, event.clientX, event.clientY);
+            }}
+            onClick={event => {
+              event.stopPropagation();
+              if (event.detail !== 0) return;
+              const rect = event.currentTarget.getBoundingClientRect(), point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+              if (side === "input") onInput?.(item.id, false, "auto", point, true);
+              else onConnectCell?.(item.id!, point.x, point.y, true);
+            }}
+            onContextMenu={side === "input" ? event => {
+              event.preventDefault(); event.stopPropagation();
+              onInput?.(item.id, true, "auto", { x: event.clientX, y: event.clientY });
+            } : undefined} />)}
           {!bubble && onInput && <button className="workflow-cell-port is-input" data-workflow-text-input={item.id} aria-label={`输入第 ${row + 1} 行第 ${column + 1} 列`} aria-hidden="true" tabIndex={-1}
             disabled={inputLocked} title="输入文本或图片，替换此单元格；右键断开输入"
             onPointerDown={event => { event.stopPropagation(); event.preventDefault(); }}
@@ -289,7 +315,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
           {!bubble && onConnectCell && <button className={`workflow-cell-port ${images ? "is-image-output" : ""}`} data-workflow-cell={item.id} aria-label={`输出第 ${row + 1} 行第 ${column + 1} 列${images ? "图片" : "文本"}`} aria-hidden="true" tabIndex={-1}
             title={images ? "拖动连接图片输入" : "拖动连接文本输入"} onPointerDown={event => { event.preventDefault(); event.stopPropagation(); onConnectCell(item.id!, event.clientX, event.clientY); }}
             onClick={event => { if (event.detail === 0) onConnectCell(item.id!, event.clientX, event.clientY); }} />}
-          {!images && <textarea aria-label={bubble ? "气泡便签内容" : `第 ${row + 1} 行第 ${column + 1} 列`} placeholder={bubble ? "添加说明或标签…" : "输入文本…"} value={item.text}
+          {!images && <CanvasTextarea aria-label={bubble ? "气泡便签内容" : `第 ${row + 1} 行第 ${column + 1} 列`} placeholder={bubble ? "添加说明或标签…" : "输入文本…"} value={item.text}
             readOnly={inputLocked}
             style={{ fontWeight: item.bold ? 700 : 400, fontStyle: item.italic ? "italic" : "normal", textAlign: item.align, lineHeight: lineHeight / 100 }}
             onFocus={() => { setActive([row, column]); onSelect(); }}
@@ -309,7 +335,8 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
                 notifyError(error, "粘贴表格失败");
               }
             }}
-            onChange={event => updateCell(row, column, { text: event.target.value })} />}
+            readCurrentValue={() => readCurrentValue().cells[row]?.[column]?.text ?? item.text}
+            onValueChange={text => updateCell(row, column, { text })} />}
           {generation || (images && !item.image_refs?.length && <div className="canvas-image-empty">连接图片输入</div>)}
           {!generation && !!canvasCellValue(item).imageRefs.length && <div className={images ? "canvas-image-content" : "canvas-cell-images"}>{canvasCellValue(item).imageRefs.map(ref => {
             const asset = referenceAssets.find(asset => asset.id === ref.asset_id);
@@ -323,9 +350,9 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
               event.preventDefault(); event.stopPropagation(); cancelImageClick();
               if (asset) onMediaContextMenu?.(event, asset);
             };
-            if (images) return <button type="button" className="canvas-image-preview" key={ref.token} data-frequent-asset-id={ref.asset_id} aria-disabled={!available || !onOpenPreview}
+            if (images) return <button type="button" className="canvas-image-preview" key={ref.token} data-frequent-asset-id={ref.asset_id} data-file-path={asset?.store_path ?? undefined} aria-disabled={!available || !onOpenPreview}
               onContextMenu={contextMenu}
-              title={available ? item.generation_ref ? "单击打开会话，双击放大" : "双击放大" : "媒体已不可用"} aria-label={`${item.generation_ref ? "查看生成会话" : video ? "播放视频" : "放大图片"}：${asset?.name ?? "媒体已不可用"}`}
+              title={available ? video ? "双击播放视频" : "单击预览，创作时双击添加为参考图" : "媒体已不可用"} aria-label={`${item.generation_ref ? "查看生成会话" : video ? "播放视频" : "放大图片"}：${asset?.name ?? "媒体已不可用"}`}
               onClick={event => {
                 event.stopPropagation();
                 cancelImageClick();
@@ -340,7 +367,7 @@ export function CanvasTextCard({ value, selected, width, height, zoom, getZoom, 
               }}>
               {media}
             </button>;
-            return <span key={ref.token} data-asset-id={ref.asset_id} title={asset?.name ?? "媒体已不可用"} onContextMenu={contextMenu}>
+            return <span key={ref.token} data-asset-id={ref.asset_id} data-file-path={asset?.store_path ?? undefined} title={asset?.name ?? "媒体已不可用"} onContextMenu={contextMenu}>
               {media}{!images && ref.token}
             </span>;
           })}</div>}

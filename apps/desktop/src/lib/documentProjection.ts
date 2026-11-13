@@ -47,6 +47,7 @@ export function documentSegments(source: string): DocumentSegment[] {
 }
 
 export function documentMediaReferences(source: string): DocumentMediaReference[] {
+  if (!source.includes("data-bowerbird-asset=") && !source.includes("bowerbird-asset:")) return [];
   return documentSegments(source).flatMap(segment => "media" in segment ? [segment.media] : []);
 }
 

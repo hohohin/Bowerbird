@@ -13,7 +13,8 @@ const nodes = assets.flatMap((asset, index) => {
 });
 const workflow = assets.map((asset, index) => {
   const material = nodes[index * 2];
-  return { id: `workflow-${index}`, kind: "instruction", x: material.x + 760, y: material.y, action: "reuse", skill: "image-edit", prompt: "", ratio: null,
+  const typing = new URLSearchParams(location.search).has("typing");
+  return { id: `workflow-${index}`, kind: typing && index === 0 ? "generation" : "instruction", x: material.x + 760, y: material.y, action: typing && index === 1 ? "describe" : "reuse", skill: "image-edit", prompt: "", ratio: null,
     provider: "codex", inputs: { image: [{ assetId: asset.id, assetNodeId: material.id }], text: [{ canvasNodeId: `content-${index}`, cellId: `cell-${index}` }] },
     outputs: {}, outputPorts: [], trigger: false };
 });

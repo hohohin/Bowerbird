@@ -404,6 +404,10 @@ export interface CodexHealth {
   reason: string;
 }
 
+export interface DreaminaHealth extends CodexHealth {
+  status: "ready" | "missing" | "login_required" | "unconfirmed";
+}
+
 /** `dreamina login --headless` 的 OAuth Device Flow 字段（app 内自动登录用）。 */
 export interface DreaminaDeviceFlow {
   verification_uri: string;
@@ -468,6 +472,7 @@ export interface GenTurn {
  */
 export interface GenJob {
   progress?: import("./generationProgress").GenerationProgress;
+  preview?: { turnKey: string; dataUrl: string };
   media?: GenerationMedia;
   videoOptions?: VideoOptions | null;
   id: string;
@@ -663,6 +668,8 @@ export interface GenerationService {
 export interface EntitlementSnapshot {
   user_id: string;
   tier: "free" | "pro" | "studio";
+  membership_ends_at?: string | null;
+  trial_available?: boolean | null;
   balances: { daily: number; sub: number; topup: number };
   policy: FeaturePolicy;
   recent_transactions: CreditTransaction[];
@@ -677,13 +684,6 @@ export interface EntitlementSnapshot {
   /** 测试账号标记（bowerbird_test）：决定开发者选项与 test-only runtime 入口，不参与付费门控。 */
   is_test_account?: boolean;
   offline_state: "fresh" | "grace" | "expired" | "invalid" | null;
-}
-
-/** 素材库迁移进度（library://migrate-progress）。 */
-export interface MigrateProgress {
-  stage: string;
-  done: number;
-  total: number;
 }
 
 /** 未完成生成 job 摘要（list_gen_jobs 命令返回，前端启动重建 genJobs 用）。字段对齐后端 GenJobSummary。 */
@@ -1067,6 +1067,7 @@ export interface HtmlLayoutOptions {
 }
 
 export type CodexChunk =
+  | { kind: "preview"; job_id: string; turn_key: string; data_url: string }
   | ({ kind: "progress"; job_id: string; turn_key: string } & Omit<import("./generationProgress").GenerationProgress, "turnKey">)
   | {
       kind: "started";

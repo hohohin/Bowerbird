@@ -177,6 +177,8 @@ cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml 
 2. Node.js 22 LTS+，并启用 pnpm：`corepack enable`。
 3. Rust MSVC 工具链：`rustup default stable-x86_64-pc-windows-msvc`。
 4. Visual Studio 2022 Build Tools，勾选“使用 C++ 的桌面开发”和 Windows 10/11 SDK。
+
+   构建正式安装包还需把 7-Zip 的 `7z.exe` 加入 PATH。`build.ps1` 调用 `verify-installer.ps1` 从最终 NSIS 包读取主程序，核对安装包与主程序的产品版本及主程序的 x64 架构，再生成签名清单。
 5. AI 功能可在应用内一键安装 codex CLI（自动下载独立版，无需 Node.js）并登录 ChatGPT；不安装时素材库仍可用，AI 按项目约定降级置灰。
 6. Windows 视频封面在 2026-10-23 后续源码中优先通过独立 Media Foundation 子进程提取，常见 H.264 MP4 不再要求安装 `ffmpeg`；Windows 26.10.2301 已包含此修复，2203 及更早版本需更新。系统缺少解码器或原生提取失败时回退已有 `ffmpeg`。尺寸/时长依次尝试 MP4/MOV/M4V 内置解析、独立 Media Foundation 读取、已有可选 `ffprobe`；不随包附带或自动下载工具。分片 MP4 依据样本时序取时长，普通旋转视频按显示方向取宽高；特殊编码仍可能需要 ffprobe，裁剪/分析转码仍需要 FFmpeg。工具发现检查随附目录、PATH、Windows 注册表 Path 及常见 WinGet/Scoop/Chocolatey 安装位置，特殊安装可用 `BOWERBIRD_FFMPEG_BINARY` / `BOWERBIRD_FFPROBE_BINARY` 指定绝对路径。图片功能不依赖它们。
 
@@ -214,7 +216,9 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib installation
 powershell -ExecutionPolicy Bypass -File .\Windows\build.ps1 -Clean
 ```
 
-脚本先执行 TypeScript 检查和 Rust 测试，再生成 `Windows/dist/Bowerbird_*_x64-setup.exe`。仅在已单独验证时可用 `-SkipTests` 跳过测试。
+脚本先执行 TypeScript 检查和 Rust 测试，再生成 `Windows/dist/Bowerbird_*_x64-setup.exe`。清单生成器核对 updater 签名及紧邻安装包的 `<安装包>.verification.json`，要求测试通过、SHA-256、版本、平台和文件名均匹配。请从可信构建或独立 QA 批次取得记录，保存原始测试输出。需要独立记录时可在原参数后传入测试记录路径，省略发版说明时第四个参数传空字符串。
+
+`-SkipTests` 的输出在 `Windows/dist/untested/<SHA-256>/`，含安装包、签名和跳测记录。晋级须提供同一冻结输入和安装包的等效 TypeScript、Rust 通过记录，再用清单生成器验签、校验实包哈希。审核样本的 [42 项忽略用例处置](RELEASE-IGNORED-2026-11-11.md) 单独记录。发布者 Authenticode 结果和 updater 验签分别登记。
 
 ## 应用内更新
 

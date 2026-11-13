@@ -7,6 +7,8 @@ import { renderArtboardComposition } from "../lib/artboardRaster";
 import type { Asset } from "../lib/types";
 import { ModalShell } from "./ModalShell";
 import { ProviderSelect } from "./creation/ProviderSelect";
+import { generationProviderIssue } from "../lib/generationAvailability";
+import { ProviderIssueNotice } from "./creation/ProviderIssueNotice";
 
 export function CanvasArtboardDialog({ composition, onClose, onSubmit }: {
   composition: ArtboardComposition;
@@ -22,7 +24,7 @@ export function CanvasArtboardDialog({ composition, onClose, onSubmit }: {
   const [provider, setProvider] = useState(useStore.getState().activeGenProvider);
   const codexHealth = useStore(s => s.codexHealth), dreaminaHealth = useStore(s => s.dreaminaHealth);
   const cloudAuth = useStore(s => s.cloudAuth), cloudEntitlement = useStore(s => s.cloudEntitlement);
-  const cloudAvailable = cloudAuth?.cloud_available ?? false;
+  const issue = generationProviderIssue(provider, { codexHealth, dreaminaHealth, cloudAuth, cloudEntitlement });
   useEffect(() => {
     let current = true;
     renderArtboardComposition(composition).then(value => { if (current) setRaster(value); })
@@ -30,7 +32,7 @@ export function CanvasArtboardDialog({ composition, onClose, onSubmit }: {
     return () => { current = false; };
   }, [composition]);
   async function submit() {
-    if (!raster || !instruction.trim() || submitting.current) return;
+    if (!raster || !instruction.trim() || submitting.current || generationProviderIssue(provider, useStore.getState())) return;
     submitting.current = true; setBusy(true); setError("");
     try {
       // Reuse prepared files after a rejected submission; no library assets are created.
@@ -46,8 +48,8 @@ export function CanvasArtboardDialog({ composition, onClose, onSubmit }: {
   return <ModalShell title="合成画板中的内容" width="lg" onClose={onClose} preventClose={busy}
     description={`${composition.width} × ${composition.height} · ${composition.images.length} 个素材实例 · 按当前画板位置合成`}
     footer={<><ProviderSelect value={provider} onChange={setProvider} codexHealth={codexHealth} dreaminaHealth={dreaminaHealth}
-      cloudAvailable={cloudAvailable} cloudAuth={cloudAuth} cloudEntitlement={cloudEntitlement} />
-      <button type="button" className="app-modal-button is-primary" disabled={busy || !raster || !instruction.trim()} onClick={() => void submit()}>{busy ? "正在提交…" : "开始合成"}</button></>}>
+      cloudAuth={cloudAuth} cloudEntitlement={cloudEntitlement} />
+      <button type="button" className="app-modal-button is-primary" disabled={busy || !!issue || !raster || !instruction.trim()} onClick={() => void submit()}>{busy ? "正在提交…" : "开始合成"}</button></>}>
     <div className="canvas-artboard-previews">
       {raster ? <><figure><img src={raster.preview} alt="画板拼放预览" /><figcaption>拼放效果</figcaption></figure>
         <figure><img src={raster.marked} alt="基底与编号红框" /><figcaption>位置标注（仅定位辅助）</figcaption></figure></> : <p>正在读取原图并制作位置参考…</p>}
@@ -55,6 +57,7 @@ export function CanvasArtboardDialog({ composition, onClose, onSubmit }: {
     <label className="canvas-artboard-prompt">合成提示词<textarea data-modal-autofocus value={instruction} disabled={busy}
       onChange={event => setInstruction(event.target.value)} placeholder="例如：给人物戴上耳饰，保持人物和背景不变" rows={3} /></label>
     <p className="text-xs text-muted">发送范围内独立图片的拼放图、编号红框图及对应原图，附带位置、尺寸和层叠顺序。越界部分裁切；原图与画板保留，结果进入新的生成会话。素材组请先解散，文字卡片和视频不参与合成。</p>
+    <ProviderIssueNotice issue={issue} />
     {error && <p role="alert" className="mt-2 text-sm text-red-400">{userErrorMessage(error, "画板设置未完成，请重新打开后重试。")}</p>}
   </ModalShell>;
 }

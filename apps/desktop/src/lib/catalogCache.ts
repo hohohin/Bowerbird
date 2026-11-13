@@ -5,7 +5,7 @@ import type { ConnectionEntry, FolderConnection } from "./folderConnections";
 
 export type CatalogPage = { assets: Asset[]; groups: Record<string, Asset[]> };
 export type CatalogPreviewChange = { assets: Asset[]; versions?: Record<string, string> };
-export type ConnectionProgress = { rootId: string; scanning: boolean; error: string | null };
+export type ConnectionProgress = { rootId: string; scanning: boolean; error: string | null; rootAvailable?: boolean };
 type EntryAsset = Asset & { connectionEntry?: ConnectionEntry; connectionGroup?: Asset[] };
 const previewFields = ["thumb_path", "width", "height", "duration", "phash", "colors"] as const;
 
@@ -21,8 +21,15 @@ export function patchCatalogPage<T extends CatalogPage>(page: T, change: Catalog
     const update = incoming.get(asset.id);
     let next = asset;
     const expected = change.versions?.[asset.id];
+    const currentVersion = version ?? entryAsset.connectionEntry?.version;
+    // Plain Asset pages have no content fingerprint. Never replace an already
+    // rendered, different thumbnail with a delayed completion. Native emission
+    // also verifies fingerprint + thumbnail against the current database row.
+    const sameVersion = expected && currentVersion ? expected === currentVersion
+      : !asset.thumb_path || !update?.thumb_path || asset.thumb_path === update.thumb_path;
     if (update && update.store_path === asset.store_path && update.file_mtime === asset.file_mtime
-      && (!expected || !(version ?? entryAsset.connectionEntry?.version) || expected === (version ?? entryAsset.connectionEntry?.version))) {
+      && (update.size === undefined || asset.size === undefined || update.size === asset.size)
+      && sameVersion) {
       const fields = Object.fromEntries(previewFields.filter(key => update[key] !== undefined && update[key] !== asset[key]).map(key => [key, update[key]]));
       if (Object.keys(fields).length) next = { ...asset, ...fields };
     }
@@ -39,8 +46,15 @@ export function patchCatalogPage<T extends CatalogPage>(page: T, change: Catalog
     ? page : { ...page, assets, groups };
 }
 export function patchConnectionProgress(folders: FolderConnection[], progress: ConnectionProgress) {
-  return folders.map(folder => folder.root_id === progress.rootId && (folder.scanning !== progress.scanning || folder.error !== progress.error)
-    ? { ...folder, scanning: progress.scanning, error: progress.error } : folder);
+  const next = folders.map(folder => {
+    if (folder.root_id !== progress.rootId) return folder;
+    // A returned root does not prove that every former subfolder still exists.
+    const available = progress.rootAvailable === false ? false
+      : folder.id === progress.rootId && progress.rootAvailable === true ? true : folder.available;
+    return folder.scanning === progress.scanning && folder.error === progress.error && folder.available === available
+      ? folder : { ...folder, scanning: progress.scanning, error: progress.error, ...(folder.available !== available ? { available } : {}) };
+  });
+  return next.every((folder, i) => folder === folders[i]) ? folders : next;
 }
 
 type Snapshot<T> = { value: T; revision: number; readAt: number; colorFiltered: boolean };

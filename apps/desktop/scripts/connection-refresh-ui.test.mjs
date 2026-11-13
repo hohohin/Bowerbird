@@ -49,7 +49,7 @@ try {
   await page.evaluate(original => {
     // Same file path, byte length and second-level timestamp; only the content version differs.
     window.previewByPath['/fixture/root-0.png'] = original.replace('%237b9eaa', '%23aa785b');
-    for (const entry of window.entries) if (entry.asset_id === 'root-0') entry.version = '2';
+    for (const entry of window.entries) if (entry.asset_id === 'root-0') { entry.version = '2'; entry.asset.thumb_path = null; }
     window.changed();
   }, original);
   await page.waitForFunction(original => document.querySelector('[data-connection-entry="root-0"] img')?.getAttribute('src') !== original, original);

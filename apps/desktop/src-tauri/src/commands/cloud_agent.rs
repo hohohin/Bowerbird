@@ -2212,11 +2212,7 @@ pub async fn cloud_agent_start(
     let image_provider = match image_provider.as_deref() {
         None | Some("cloud") => "cloud".to_string(),
         Some("jimeng") => {
-            if crate::codex::jimeng::resolve_dreamina_binary().is_none() {
-                return Err(AppError::Other(
-                    "未找到可用的即梦 CLI，无法使用本机生图引擎".into(),
-                ));
-            }
+            super::codex::require_generation_cli(&app, "jimeng").await?;
             "jimeng".to_string()
         }
         Some(other) => {

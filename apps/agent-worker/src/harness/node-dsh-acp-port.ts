@@ -27,6 +27,7 @@ type AcpClientCallbacks = {
 type AcpConnection = {
   initialize(args: { protocolVersion: number; clientCapabilities: Record<string, never> }): Promise<{ protocolVersion: number }>;
   newSession(args: { cwd: string; mcpServers: never[]; additionalDirectories: never[] }): Promise<{ sessionId: string }>;
+  loadSession(args: { sessionId: string; cwd: string; mcpServers: never[] }): Promise<unknown>;
   prompt(args: { sessionId: string; prompt: HarnessPromptBlock[] }): Promise<{ stopReason: string }>;
   cancel(args: { sessionId: string }): Promise<void>;
 };
@@ -49,7 +50,8 @@ export type NodeDshAcpPortOptions = {
   /** Zero disables the task-duration deadline; initialization/cancel remain bounded. */
   promptTimeoutMs?: number;
   activity?: ToolActivity;
-  profileMode?: "planning" | "controlled-model" | "html-execution" | "content-execution";
+  profileMode?: "planning" | "controlled-model" | "html-execution" | "content-execution" | "chat";
+  nativeSession?: { dir: string; sessionId: string };
 };
 
 export type NodeDshAcpPortDependencies = {
@@ -99,6 +101,7 @@ function exactProviderEnvironment(value: Readonly<Record<string, string>>): Reco
 }
 
 function resolvePatch(runtime: DshRuntimeHome, mode?: NodeDshAcpPortOptions["profileMode"]): string {
+  if (mode === "chat") return join("profiles", runtime.profileName, "cordis.chat.patch.yml");
   if (mode === "content-execution") return runtime.contentExecutionPatch;
   if (mode === "html-execution") return runtime.htmlExecutionPatch;
   if (mode === "controlled-model") return runtime.controlledModelPatch;
@@ -122,6 +125,7 @@ export function buildDshChildEnvironment(
   environment.DSH_PERMISSION_MODE = "read-only";
 
   if (options.providerEnvironment) Object.assign(environment, exactProviderEnvironment(options.providerEnvironment));
+  if (options.nativeSession) environment.BOWERBIRD_DSH_SESSION_ID = options.nativeSession.sessionId;
   return environment;
 }
 
@@ -198,6 +202,8 @@ export class NodeDshAcpPort implements DshAcpPort {
     const runtime = createDshRuntimeHome({
       templateDir: options.profileTemplateDir,
       runtimeRoot: options.runtimeRoot,
+      chat: options.profileMode === "chat",
+      nativeSession: options.nativeSession,
     });
     try {
       const acp = await dependencies.loadAcp(options.profileTemplateDir);
@@ -266,6 +272,11 @@ export class NodeDshAcpPort implements DshAcpPort {
       mcpServers: [],
       additionalDirectories: [],
     }), "new_session", this.timeoutMs);
+  }
+
+  async loadSession(sessionId: string, cwd: string) {
+    await withTimeout(this.connection.loadSession({sessionId, cwd, mcpServers: []}), "load_session", this.timeoutMs);
+    return { sessionId };
   }
 
   async prompt(

@@ -1,10 +1,6 @@
-import { userErrorMessage } from "../../lib/userError";
-import { useEffect, useState } from "react";
-import { RotateCw } from "lucide-react";
-import { api } from "../../lib/api";
+import { generationProviderIssue } from "../../lib/generationAvailability";
 import { useStore } from "../../store";
-import { canUseByo } from "../../lib/entitlement";
-import { SELECTABLE_VIDEO_MODELS, VIDEO_RATIOS, videoDurationRange, videoModelLabel, videoResolutions, videoSupportsRatio, type VideoModelCapability, type VideoOptions } from "../../lib/videoGeneration";
+import { SELECTABLE_VIDEO_MODELS, VIDEO_RATIOS, videoDurationRange, videoModelLabel, videoProvider, videoResolutions, videoSupportsRatio, type VideoOptions } from "../../lib/videoGeneration";
 import { DreaminaBalance } from "./DreaminaCredits";
 import { ModelSelect, type ModelOption } from "./ModelSelect";
 import { TacticalSelect } from "../TacticalSelect";
@@ -21,41 +17,28 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
   const entitlement = useStore(state => state.cloudEntitlement);
   const auth = useStore(state => state.cloudAuth);
   const health = useStore(state => state.dreaminaHealth);
-  const byo = canUseByo(entitlement);
-  const [catalog, setCatalog] = useState<{ kind: string; models: VideoModelCapability[]; error?: string } | null>(null);
-  const [refresh, setRefresh] = useState(0);
-  useEffect(() => {
-    if (!byo || !health?.ok) { setCatalog(null); return; }
-    let active = true;
-    setCatalog(null);
-    void api.dreaminaVideoModels(options.kind).then(models => { if (active) setCatalog({ kind: options.kind, models }); })
-      .catch(error => { if (active) setCatalog({ kind: options.kind, models: [], error: String(error) }); });
-    return () => { active = false; };
-  }, [options.kind, refresh, byo, health?.ok]);
-  const current = catalog?.kind === options.kind ? catalog : null;
-  const models = current?.models ?? [];
-  const selected = models.find(model => model.model_version === options.model_version);
-  const resolutions = channel === "cloud" ? videoResolutions("seedance2.5") : selected?.resolutions ?? [];
-  const [minDuration, maxDuration] = selected && channel === "jimeng" ? [selected.min_duration, selected.max_duration] : videoDurationRange(options.model_version);
+  const availability = { cloudAuth: auth, cloudEntitlement: entitlement, dreaminaHealth: health, codexHealth: null };
+  const model = channel === "cloud" ? "seedance2.5" : options.model_version;
+  const resolutions = videoResolutions(model);
+  const [minDuration, maxDuration] = videoDurationRange(model);
   const balance = entitlement ? entitlement.balances.daily + entitlement.balances.sub + entitlement.balances.topup : 0;
-  const cloudReason = !auth?.cloud_available ? "当前版本未配置 Bowerbird Cloud" : !auth.logged_in ? "请先登录 Bowerbird 账号" : balance <= 0 ? "积分不足" : undefined;
+  const cloudReason = generationProviderIssue(videoProvider("cloud", options), availability)?.message;
+  const personalReason = generationProviderIssue("jimeng", availability)?.message;
   const modelOptions: ModelOption[] = SELECTABLE_VIDEO_MODELS.map(model => ({ key: `jimeng:${model}`, label: videoModelLabel(model), source: "personal",
-    reason: !byo ? "升级 Pro 解锁自有订阅" : !health?.ok ? userErrorMessage(health?.reason, "请先登录即梦账号") : !current ? "正在查询当前模式支持的模型" : current.error ? "模型查询失败，请重试" : !models.some(item => item.model_version === model) ? "当前模式或账号不支持此模型" : undefined }));
+    reason: personalReason }));
   modelOptions.push({ key: "cloud:seedance2.5", label: "Seedance 2.5", source: "cloud", reason: cloudReason });
   if (local) modelOptions.push({ key: "local:h3", label: "本地部署 · H3", source: "local", reason: canUseComfyVideo(auth, entitlement) ? undefined : "本地 H3 需要有效的 Pro／Studio 权益或测试账号资格" });
   function selectModel(key: string) {
     if (key === "local:h3") { local?.onSelect(); return; }
     const [nextChannel, version] = key.split(":") as [VideoChannel, string];
-    const capability = models.find(model => model.model_version === version);
-    const allowed = nextChannel === "cloud" ? videoResolutions(version) : capability!.resolutions;
+    const allowed = videoResolutions(version);
     const fallbackResolution = allowed.includes("720p") ? "720p" : allowed[0];
-    const [min, max] = nextChannel === "cloud" ? videoDurationRange(version) : [capability!.min_duration, capability!.max_duration];
+    const [min, max] = videoDurationRange(version);
     onChange({ ...options, model_version: version, duration: Math.min(max, Math.max(min, options.duration)),
       video_resolution: allowed.includes(options.video_resolution) ? options.video_resolution : fallbackResolution }, nextChannel);
   }
-  const status = !local?.options && (channel === "jimeng" || current?.error) && <>
+  const status = !local?.options && channel === "jimeng" && <>
     {channel === "jimeng" && <><DreaminaBalance /><span className="text-[11px] text-muted">暂无官方生成前报价；提交后显示任务消耗</span></>}
-    {current?.error && <button type="button" title={userErrorMessage(current.error, "暂时无法查询可用模型，请点击重试。")} className="text-[11px] text-muted underline" onClick={() => setRefresh(value => value + 1)}>模型查询失败，重试</button>}
   </>;
   const fields = <>
     <ModelSelect kind="视频" menuClassName={menuClassName} value={local?.options ? "local:h3" : `${channel}:${options.model_version}`} label={local?.options ? (composer ? "H3" : "本地部署 · H3") : videoModelLabel(options.model_version)} source={local?.options ? "local" : channel === "cloud" ? "cloud" : "personal"}
@@ -68,7 +51,7 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
       <TacticalSelect aria-label="本地视频比例" value={local.options.ratio} onValueChange={value => local.onChange({ ...local.options!, ratio: value as ComfyVideoOptions["ratio"] })}>{[...(comfyVideoMode(local.options) === "text" ? [] : ["auto"]), "9:16", "16:9", "4:3", "3:4", "1:1"].map(value => <option key={value} value={value}>{value === "auto" ? "自动" : value}</option>)}</TacticalSelect>
     </> : <>
     <TacticalSelect aria-label="视频分辨率" className={control} value={options.video_resolution} onValueChange={value => onChange({ ...options, video_resolution: value as VideoOptions["video_resolution"] })}>
-      {!resolutions.includes(options.video_resolution) && <option value={options.video_resolution}>{options.video_resolution} · 待核验</option>}
+      {!resolutions.includes(options.video_resolution) && <option value={options.video_resolution} disabled>{options.video_resolution} · 不支持</option>}
       {resolutions.map(value => <option key={value} value={value}>{value}</option>)}
     </TacticalSelect>
     <TacticalSelect aria-label="视频生成模式" title={options.kind === "frames2video" ? "按参考顺序使用首帧、尾帧" : `自动识别：${options.kind === "text2video" ? "文生视频" : options.kind === "image2video" ? "单图生视频" : "多参考"}`} className={control} value={options.kind === "frames2video" ? "frames2video" : "auto"} onValueChange={value => onChange({ ...options, kind: value === "frames2video" ? "frames2video" : "text2video" })}>
@@ -83,7 +66,6 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
   </>;
   return <>
     {composer ? <div className={`composer-video-fields${local?.options ? " is-local" : ""}`}>{fields}</div> : fields}
-    {composer ? current?.error && <button type="button" className="composer-video-retry" aria-label="模型查询失败，重试" title={userErrorMessage(current.error, "模型查询失败，请点击重试。")} onClick={() => setRefresh(value => value + 1)}><RotateCw size={14} aria-hidden="true" /></button>
-      : status && <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1">{status}</div>}
+    {!composer && status && <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1">{status}</div>}
   </>;
 }

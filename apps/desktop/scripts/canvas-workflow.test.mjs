@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { agentTextWriters } from '../src/lib/workflowAgentOutputs.ts';
 import { newWorkflowNode, workflowConnectionError, workflowOrder, workflowInputValues, workflowOutputs, invalidateWorkflow, generationInputNode, compileGenerationPrompt, compileAgentPrompt, normalizeWorkflowInputSlots, workflowInputProducers, assertWorkflowAcyclic } from '../src/lib/canvasWorkflow.ts';
 const node = (id, kind = 'skill') => ({ ...newWorkflowNode(kind, 0, 0, 'codex'), id });
 const mentionText = node => { node.prompt = '@[text]'; node.promptReferences = [{ id: 'text', type: 'text', input: node.inputs.text[0], label: '文本' }]; };
@@ -376,4 +377,13 @@ test('three input pipes compact after deleting the middle source, independently 
     assert.equal(n.promptReferences[1].slot,3);
     assert.deepEqual(normalizeWorkflowInputSlots(JSON.parse(JSON.stringify(n))),n,'reload does not revive the removed source');
   }
+});
+
+test('only connected text content cards own an agent result', () => {
+  const agent = node('agent', 'agent');
+  const textCard = { ...node('card', 'text'), textTarget: { nodeId: 'note', cellId: 'c1' }, inputs: { text: [{ nodeId: 'agent', portId: 'text' }] } };
+  const imageCard = { ...node('card-image', 'text'), textTarget: { nodeId: 'note', cellId: 'c2', image: true }, inputs: { image: [{ nodeId: 'agent', portId: 'image' }] } };
+  const foreign = { ...node('foreign', 'text'), textTarget: { nodeId: 'note', cellId: 'c3' }, inputs: { text: [{ nodeId: 'other', portId: 'text' }] } };
+  assert.deepEqual(agentTextWriters(agent, [agent, textCard, imageCard, foreign]).map(item => item.id), ['card']);
+  assert.deepEqual(agentTextWriters({ ...agent, id: 'lonely' }, [agent, textCard]), []);
 });

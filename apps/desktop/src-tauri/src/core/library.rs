@@ -1569,7 +1569,7 @@ impl Database {
              AND {} AND {group}=(SELECT {group} FROM assets a WHERE a.id=?1)
              AND (?2 IS NULL OR EXISTS(SELECT 1 FROM project_assets pa WHERE pa.asset_id=a.id AND pa.project_id=?2))
              ORDER BY a.created_at,a.id",
-            super::generation_gallery::WORKFLOW_GALLERY_CTE, super::catalog_browser::GENERATED
+            super::generation_gallery::WORKFLOW_GALLERY_CTE, super::catalog_browser::gallery_eligible()
         );
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params![asset_id, project_id], asset_from_row)?;

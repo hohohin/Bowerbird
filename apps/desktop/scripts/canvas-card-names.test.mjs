@@ -15,3 +15,9 @@ test('custom video names and missing-media titles remain intact', () => {
   const previous = { custom: '产品视频终稿', missing: '视频卡片 4', similar: '图片卡片 2 修改版' };
   assert.deepEqual(assignCanvasCardNames(previous, [{ id: 'custom', title: '视频卡片' }, { id: 'missing', title: '图片卡片' }, { id: 'similar', title: '视频卡片' }]), previous);
 });
+
+test('saved audio sources replace old default image names and keep user titles', () => {
+  const previous = { track: '图片卡片 3', used: '音频卡片 1', custom: '海浪声' };
+  const cards = Object.keys(previous).map(id => ({ id, title: '音频卡片' }));
+  assert.deepEqual(assignCanvasCardNames(previous, cards), { ...previous, track: '音频卡片 2' });
+});

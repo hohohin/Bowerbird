@@ -40,10 +40,12 @@ import { AccountOnboarding } from "./components/AccountOnboarding";
 import { beginOnboardingOperation, useOnboarding } from "./lib/onboardingStore";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { ToastViewport } from "./components/ToastViewport";
+import { FileTaskStatusPanel } from "./components/FileTaskStatus";
 import { StartupUpdateDialog } from "./components/StartupUpdateDialog";
 import { FileDropImport } from "./components/FileDropImport";
 import { prepareGenerationSound } from "./lib/generationNotifications";
 import { useStore } from "./store";
+import { codexModelCatalog, startChatCapabilityChecks } from "./lib/chatCapabilities";
 import { api } from "./lib/api";
 import { prepareFileWorkspace } from "./lib/fileWorkspace";
 import { importDroppedMedia, prepareMediaImport } from "./lib/mediaImport";
@@ -60,7 +62,7 @@ import {
   resolveWorkspaceProjectId,
   shouldDiscardCreativeTarget,
 } from "./lib/workspaceRoute";
-import type { AuthSnapshot, CodexChunk, JimengOrphanTask } from "./lib/types";
+import type { AuthSnapshot, CodexChunk, CodexHealth, DreaminaHealth, JimengOrphanTask } from "./lib/types";
 import "./components/TacticalProjection.css";
 import "./components/TacticalDialogs.css";
 import "./components/CanvasSecondaryTactical.css";
@@ -85,6 +87,7 @@ function LibraryLoadingState() {
 }
 
 function App() {
+  useEffect(startChatCapabilityChecks, []);
   const [initializing, setInitializing] = useState(true);
   const localFilesOpen = useLocalFileMode(s => s.open);
   const setLocalFilesOpen = useLocalFileMode(s => s.setOpen);
@@ -738,8 +741,11 @@ function App() {
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let alive = true;
-    listen("codex://health-changed", () => {
-      api.codexHealth().then(setCodexHealth).catch(() => {});
+    listen<CodexHealth | null>("codex://health-changed", ({ payload }) => {
+      (payload ? Promise.resolve(payload) : api.codexHealth()).then(health => {
+        codexModelCatalog.check(null);
+        setCodexHealth(health);
+      }).catch(() => {});
     }).then((u) => (alive ? (unlisten = u) : u()));
     return () => {
       alive = false;
@@ -771,7 +777,7 @@ function App() {
     api
       .dreaminaHealth()
       .then(setDreaminaHealth)
-      .catch(() => setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" }));
+      .catch(() => setDreaminaHealth({ ok: false, status: "unconfirmed", reason: "即梦状态检测失败，请重新检测。" }));
   }, [setDreaminaHealth]);
 
   // dreamina 一键安装成功后端 emit `dreamina://health-changed` → 强制重取 dreaminaHealth
@@ -779,8 +785,9 @@ function App() {
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let alive = true;
-    listen("dreamina://health-changed", () => {
-      api.dreaminaHealth(true).then(setDreaminaHealth).catch(() => {});
+    listen<DreaminaHealth | null>("dreamina://health-changed", ({ payload }) => {
+      if (payload) setDreaminaHealth(payload);
+      else api.dreaminaHealth(true).then(setDreaminaHealth).catch(() => {});
     }).then((u) => (alive ? (unlisten = u) : u()));
     return () => {
       alive = false;
@@ -873,6 +880,7 @@ function App() {
       <LibraryGenerationCoordinator />
       <WorkflowScheduleCoordinator />
       <ToastViewport />
+      <FileTaskStatusPanel />
       <StartupUpdateDialog ready={!initializing} />
       <FileDropImport />
       {/* 环境引导：codex/扩展/即梦由设置面板对应分区直接唤起，不再有「环境状态」总览 */}

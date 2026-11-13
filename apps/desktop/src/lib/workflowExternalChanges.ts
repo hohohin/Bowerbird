@@ -25,8 +25,20 @@ export function mergeWorkflowChanges(before: CanvasWorkflow, local: CanvasWorkfl
   const localNodes = new Map(local.nodes.map(node => [node.id, node]));
   const remoteNodes = new Map(remote.nodes.map(node => [node.id, node]));
   const nodes = [...new Set([...localNodes.keys(), ...remoteNodes.keys()])].flatMap(id => {
-    if (same(baseNodes.get(id)?.layoutSize, localNodes.get(id)?.layoutSize) && same(localNodes.get(id)?.layoutSize, remoteNodes.get(id)?.layoutSize)) {
-      const node = mergeValue(baseNodes.get(id), localNodes.get(id), remoteNodes.get(id));
+    const base = baseNodes.get(id), localNode = localNodes.get(id), remoteNode = remoteNodes.get(id);
+    // A drag and a native execution checkpoint can update the same card concurrently.
+    // Treat x/y as one position, so conflicting moves cannot merge into a third location.
+    if (base && localNode && remoteNode && (localNode.x !== remoteNode.x || localNode.y !== remoteNode.y)
+        && !same(base, localNode) && !same(base, remoteNode)) {
+      const split = ({ x, y, layoutSize, ...definition }: typeof base) => ({ position: { x, y }, definition, layoutSize });
+      const original = split(base), ours = split(localNode), theirs = split(remoteNode);
+      const definition = mergeValue(original.definition, ours.definition, theirs.definition);
+      const position = mergeValue(original.position, ours.position, theirs.position);
+      const layoutSize = ours.layoutSize ?? theirs.layoutSize;
+      return [{ ...definition, ...position, ...(layoutSize ? { layoutSize } : {}) }];
+    }
+    if (same(base?.layoutSize, localNode?.layoutSize) && same(localNode?.layoutSize, remoteNode?.layoutSize)) {
+      const node = mergeValue(base, localNode, remoteNode);
       return node ? [node] : [];
     }
     // Size measurements are display cache, not a competing edit of the workflow.
@@ -35,8 +47,8 @@ export function mergeWorkflowChanges(before: CanvasWorkflow, local: CanvasWorkfl
       const { layoutSize: _, ...definition } = node;
       return definition;
     };
-    const node = mergeValue(withoutSize(baseNodes.get(id)), withoutSize(localNodes.get(id)), withoutSize(remoteNodes.get(id)));
-    const layoutSize = localNodes.get(id)?.layoutSize ?? remoteNodes.get(id)?.layoutSize;
+    const node = mergeValue(withoutSize(base), withoutSize(localNode), withoutSize(remoteNode));
+    const layoutSize = localNode?.layoutSize ?? remoteNode?.layoutSize;
     return node ? [{ ...node, ...(layoutSize ? { layoutSize } : {}) }] : [];
   });
   const names = [...new Set([...Object.keys(before.cardNames ?? {}), ...Object.keys(local.cardNames ?? {}), ...Object.keys(remote.cardNames ?? {})])];

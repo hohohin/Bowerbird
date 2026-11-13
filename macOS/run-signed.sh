@@ -51,11 +51,12 @@ if [ "$(basename "$BINARY")" = "bowerbird-desktop" ]; then
   cp -p "$BINARY" "$BUNDLE/Contents/MacOS/bowerbird-desktop"
   cp -p "$HELPER" "$BUNDLE/Contents/MacOS/bowerbird-dev-keychain"
   cp "$MAC_DIR/dev-Info.plist" "$BUNDLE/Contents/Info.plist"
+  (cd "$MAC_DIR/../apps/desktop/src-tauri" && /usr/libexec/PlistBuddy -c 'Merge Info.plist' "$BUNDLE/Contents/Info.plist")
   VERSION=$(/usr/bin/plutil -extract version raw "$MAC_DIR/../apps/desktop/src-tauri/tauri.conf.json")
   /usr/bin/plutil -replace CFBundleShortVersionString -string "$VERSION" "$BUNDLE/Contents/Info.plist"
   /usr/bin/plutil -replace CFBundleVersion -string "$VERSION" "$BUNDLE/Contents/Info.plist"
   # Preserve the resource_dir contract of the bare Cargo executable.
-  for RESOURCE in extension samples onboarding-v0917; do
+  for RESOURCE in extension samples onboarding-v0917 licenses; do
     if [ -d "$BUILD_DIR/$RESOURCE" ]; then
       cp -R "$BUILD_DIR/$RESOURCE" "$BUNDLE/Contents/Resources/$RESOURCE"
     fi

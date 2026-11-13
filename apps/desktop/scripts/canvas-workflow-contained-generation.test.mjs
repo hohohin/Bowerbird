@@ -21,14 +21,19 @@ try {
       const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
       const c = canvasWorkflowController('p'); await c.load();
       const draw = { ...newWorkflowNode('generation', 80, 100, 'codex'), id: 'draw', prompt: '生成合成测试图片' };
-      await c.edit([draw, ...(mode === 'relay' ? [{ ...newWorkflowNode('instruction', 1250, 100, ''), id: 'sink', action: 'reuse' }] : [])]);
-      if (mode === 'relay') window.receiverId = (await c.connectGenerationImage('draw', 'sink', 'image')).node.id;
-      else if (mode !== 'none') {
+      await c.edit([draw]);
+      if (mode !== 'none') {
         const base = window.snapshot().nodes[0];
         window.receiverId = 'receiver';
         await api.projectCanvasNodeCreate({ ...base, id: 'receiver', kind: 'note', assetId: null, role: null, x: 650, y: 90, width: 360, height: 280,
           payloadJson: JSON.stringify({ schema_version: 1, note_type: 'text', text: '', member_ids: [], cells: [[{ id: 'cell', text: '' }]] }) });
-        await c.bindTextInput('receiver', mode === 'column' || mode === 'row' ? `${mode}:cell` : 'cell', { nodeId: 'draw', portId: 'image' }, 'image');
+        if (mode === 'relay') {
+          await c.edit([draw, { ...newWorkflowNode('text', 650, 90, ''), id: 'legacy-writer',
+            textTarget: { nodeId: 'receiver', cellId: 'cell', image: true, append: true, automaticImageRelay: true },
+            inputs: { image: [{ nodeId: 'draw', portId: 'image' }] } },
+            { ...newWorkflowNode('instruction', 1250, 100, ''), id: 'sink', action: 'reuse',
+              inputs: { image: [{ canvasNodeId: 'receiver', cellId: '*latest-image' }] } }]);
+        } else await c.bindTextInput('receiver', mode === 'column' || mode === 'row' ? `${mode}:cell` : 'cell', { nodeId: 'draw', portId: 'image' }, 'image');
       }
       if (mode === 'completion') await c.edit([...c.document.nodes,
         { ...newWorkflowNode('trigger', 1250, 100, ''), id: 'on-complete', inputs: { completion: [{ nodeId: 'draw', portId: 'image' }] } },
@@ -51,7 +56,7 @@ try {
         for (const card of document.querySelectorAll('.canvas-prompt-node[data-canvas-node-id]')) if (card.dataset.canvasNodeId.startsWith('gen-prompt:') && !window.appeared.includes(card.dataset.canvasNodeId)) window.appeared.push(card.dataset.canvasNodeId);
       };
       new MutationObserver(watch).observe(document.body, { childList: true, subtree: true });
-      useStore.setState({ cloudEntitlement: { balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_byo: true, can_use_cloud: true, max_parallel_jobs: 100 } } });
+      useStore.setState({ codexHealth: { ok: true, reason: '' }, cloudEntitlement: { balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_byo: true, can_use_cloud: true, max_parallel_jobs: 100 } } });
       const update = api.projectCanvasNoteUpdate;
       const pausedSessions = new Set();
       api.projectCanvasNoteUpdate = async (id, json) => {

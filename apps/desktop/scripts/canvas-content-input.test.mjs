@@ -92,6 +92,7 @@ try {
   await page.waitForFunction(()=>document.querySelector('.is-content-card')?.querySelectorAll('.canvas-image-content img').length===11);
   assert.equal(await card.getByRole('row').count(),11);
   await card.hover();await card.getByRole('button',{name:'第 1 列图片输入',exact:true}).click({button:'right'});
+  await page.getByRole('menu', { name: '选择要断开的连线' }).getByRole('menuitem').click();
   await page.waitForFunction(()=>!JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(n=>n.textTarget));
   assert.equal(await card.locator('.canvas-image-content img').count(),11);
   await page.evaluate(async()=>{

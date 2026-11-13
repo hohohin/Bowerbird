@@ -1,0 +1,135 @@
+{
+  "candidate-result.json": {
+    "static_sha256_matches": 8,
+    "three_update_manifests_unchanged": true,
+    "health": 204,
+    "account_config": true,
+    "create_without_key": 400,
+    "unauthenticated_control": 401,
+    "preserved_files": 79,
+    "nginx": "5a14126f96529e6330030f73adcb64409c404bd434f0893655ef4823c930e2d5",
+    "previous_pid": 1405065,
+    "runtime": "/usr/bin/node"
+  },
+  "live-result.json": {
+    "local": {
+      "static_sha256_matches": 8,
+      "three_update_manifests_unchanged": true,
+      "health": 204,
+      "account_config": true,
+      "create_without_key": 400,
+      "unauthenticated_control": 401
+    },
+    "public": {
+      "static_sha256_matches": 8,
+      "three_update_manifests_unchanged": true,
+      "health": 204,
+      "account_config": true,
+      "create_without_key": 400,
+      "unauthenticated_control": 401
+    },
+    "previous": "/opt/bowerbird/website-releases/20261110-windows-26.11.1001",
+    "active": "/opt/bowerbird/website-releases/20261111-engineering-audit",
+    "pid": 1707281,
+    "preserved_files": 79,
+    "active_at": "2026-11-11T04:19:43.539552+00:00"
+  },
+  "external_static_sha256": {
+    "index.html": "06dd6f622d8f1f17d640818fc96d4ebb708b58ffa768cf5279ade3765234b509",
+    "index-v2.html": "5ad09eeb6fe3833f3a252fa79ce504a73dfcffddefeba046480a88ee9ed80601",
+    "app.bundle.js": "2292a6ec5ae0a7354c8f18b374c98f41169a170a8b089ac59f1b8ef9ee2921b3",
+    "app-v2.bundle.js": "0e7736f26babdd5e0d2e6598883c07f9d8445432f21876aa473715d19b0d8b46",
+    "account-sdk.js": "04b957f2563a40dcb02b1d9d6f7a7a23973bf8ebe4c1435be5feaf24bff91134",
+    "admin/index.html": "d094d3c6f127ce94bf35ef385ef2cb8b3879793496054ad0cec5e8dd8a518798",
+    "wechat-callback.html": "3c2bcee90ad13210da901d3a11b380e418ae57ee3d85b3b394e711514277c65d",
+    "user-error.js": "394cf9d393427c3f32847f6dd9276a42991172a9092f7afd51a13ab3188c0589"
+  },
+  "candidate_files": {
+    "server.mjs": "b86027fd39c13fe6d20416cb2f8881080dae6801bd2ca087cd2cf9963248e4c0",
+    "cloud-proxy.mjs": "b725cfff312e963d659f47f21f0a731ba5f9d2bfceea1ea49aad6207adcef404",
+    "dist/index.html": "06dd6f622d8f1f17d640818fc96d4ebb708b58ffa768cf5279ade3765234b509",
+    "dist/index-v2.html": "5ad09eeb6fe3833f3a252fa79ce504a73dfcffddefeba046480a88ee9ed80601",
+    "dist/app.bundle.js": "2292a6ec5ae0a7354c8f18b374c98f41169a170a8b089ac59f1b8ef9ee2921b3",
+    "dist/app-v2.bundle.js": "0e7736f26babdd5e0d2e6598883c07f9d8445432f21876aa473715d19b0d8b46",
+    "dist/account-sdk.js": "04b957f2563a40dcb02b1d9d6f7a7a23973bf8ebe4c1435be5feaf24bff91134",
+    "dist/admin/index.html": "d094d3c6f127ce94bf35ef385ef2cb8b3879793496054ad0cec5e8dd8a518798",
+    "dist/wechat-callback.html": "3c2bcee90ad13210da901d3a11b380e418ae57ee3d85b3b394e711514277c65d",
+    "dist/user-error.js": "394cf9d393427c3f32847f6dd9276a42991172a9092f7afd51a13ab3188c0589"
+  },
+  "previous_files": {
+    "server.mjs": "593782b1c92d0d12b49aa03bdd6679586630d2906be2e59d17ddae4cb46b84b2",
+    "cloud-proxy.mjs": "fea59cf57da30d7ef1f7004a193686c6c9906b344e0959fc62e5166250771a69",
+    "cloud-routes.json": "fa2cdcd6e3bf8efd5cf6f0c5ed54fec399a811a4e18493ae1ac7e6338cf9376a",
+    "dist/index.html": "e6734adc44a672da23fbc3aeed703ca5de3988e1c701dc7c93ef89195fd3f289",
+    "dist/index-v2.html": "fa6f5c15cd109072d0cf187ea0c69ad784a3c1b18f2f4d13a77265ce65e3bf25",
+    "dist/app.bundle.js": "f728d8e2c87bb7ccc98bd5857a823e8c72e44032649f81e8cf094ead3222c991",
+    "dist/app-v2.bundle.js": "0944b66c2c0b9875492d947197486f5a0857f9084259b6a450f558f88ed18c1a",
+    "dist/admin/index.html": "f85a0c2e439d3c024e1adfd085c8928badc9f357091d33ba2ac430705d9fe132",
+    "dist/wechat-callback.html": "64ede9b7fe0307b4d8882e1b7bedc33c1e4b71bc291ec214b18079e60a034155",
+    "dist/user-error.js": "ec918220227c17c32c737d630e120f7c2dbb5e3c483f3c16dbad93ca34d6c024"
+  },
+  "rollback_script": "/opt/bowerbird/deploy-backups/20261111-engineering-audit-site/site.py rollback",
+  "verified_at": "2026-11-11T04:21:22.795335+00:00",
+  "production_browser": {
+    "start": "2026-11-11T04:20:22.901Z",
+    "checks": [
+      {
+        "label": "public health and release bytes"
+      },
+      {
+        "label": "signed-out read-only calls rejected"
+      },
+      {
+        "label": "created uniquely marked QA identity",
+        "syntheticIdHash": "5cf1f5e542d5fbd3"
+      },
+      {
+        "label": "verified real SDK sign-in, refresh, identity and scoped read-only Cloud calls",
+        "queries": [
+          {
+            "name": "chat-proxy",
+            "action": "quote",
+            "status": 200,
+            "provider": "deepseek-cloud",
+            "service": "chat_deepseek",
+            "gatewayId": "29cb9c44-c5f9-4428-8c68-7fee1a071ad0"
+          },
+          {
+            "name": "chat-proxy",
+            "action": "get",
+            "status": 404,
+            "edgeError": "invalid_request",
+            "gatewayId": "f08320a8-4c9a-4f58-83ca-09a14aacb4b9"
+          },
+          {
+            "name": "agent-run",
+            "action": "get",
+            "status": 404,
+            "edgeError": "invalid_request",
+            "gatewayId": "fbccfa51-e086-4926-b128-ef280f7d046f"
+          },
+          {
+            "name": "generate-proxy",
+            "action": "get_by_key",
+            "status": 404,
+            "responseStatus": "not_found",
+            "gatewayId": "72d07b9c-d7b8-4e08-a88b-567253c87a8f"
+          }
+        ]
+      },
+      {
+        "label": "live homepage resumed SDK session and signed out"
+      },
+      {
+        "label": "no Agent, chat, generation or credit holds for this QA identity"
+      },
+      {
+        "label": "verified isolated Auth identity removed"
+      }
+    ],
+    "tasksCreated": 0,
+    "modelCalls": 0,
+    "finished": "2026-11-11T04:20:49.043Z",
+    "passed": true
+  }
+}

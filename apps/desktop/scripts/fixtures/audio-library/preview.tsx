@@ -1,3 +1,4 @@
+import { installDeletionTaskMock } from "../fileTaskMock";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { Toolbar } from "../../../src/components/Toolbar";
@@ -56,6 +57,8 @@ w.__TAURI_INTERNALS__ = {
       return { deleted_assets: 1, removed_members: 1, failed_moves: [] };
     }
     if (command === "list_projects") return [];
+    if (command === "list_generation_groups") return {};
+    if (command === "quick_transfer_status") return { revision: 0, active: false, directory: null, url: null, transfers: [] };
     if (command === "folder_connections") return w.folders.map((item: any) => ({ ...item, count: entries({ ...args, folderId: item.id }).length }));
     if (command === "refresh_folder_connections") return;
     if (command === "connection_entries") return entries(args).slice(args.offset, args.offset + args.limit);
@@ -128,4 +131,5 @@ function Fixture() {
   </>;
 }
 document.documentElement.dataset.theme = "dark";
+installDeletionTaskMock();
 createRoot(document.getElementById("root")!).render(<Fixture/>);

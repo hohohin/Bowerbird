@@ -71,7 +71,8 @@ try {
   assert.equal((await page.evaluate(() => window.snapshot())).nodes.find(n => n.id === "model-node").x, 900);
   // Use actual store submission with closed synthetic IPC, never a real model.
   await page.evaluate(() => {
-    window.store.setState({ activeGenProvider: "bowerbird-cloud-image_hd" });
+    window.store.setState({ activeGenProvider: "bowerbird-cloud-image_hd", cloudAuth: { logged_in: false, cloud_available: true },
+      cloudEntitlement: { policy: { can_use_cloud: true }, balances: { daily: 100, sub: 0, topup: 0 } } });
     const original = window.__TAURI_INTERNALS__.invoke;
     window.artboardCalls = []; window.failPrepare = true;
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
@@ -95,6 +96,9 @@ try {
   });
   assert.deepEqual(pixels[0], [160, 170, 180, 255]); assert.deepEqual(pixels[1], [0, 255, 0, 255]);
   await dialog.getByLabel("合成提示词").fill("给人物戴上耳饰");
+  assert.equal(await dialog.getByRole("button", { name: "开始合成" }).isDisabled(), true);
+  assert.match(await dialog.innerText(), /尚未登录 Bowerbird/);
+  await page.evaluate(() => window.store.setState({ cloudAuth: { logged_in: true, cloud_available: true } }));
   await dialog.getByRole("button", { name: "开始合成" }).click();
   await dialog.getByRole("alert").waitFor();
   assert.equal(await page.evaluate(() => window.artboardCalls.length), 0);

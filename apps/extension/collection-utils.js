@@ -13,13 +13,27 @@
   const videoLimit = capabilities => Number.isSafeInteger(capabilities?.video_max_bytes) && capabilities.video_max_bytes > 0
     ? Math.min(209715200,capabilities.video_max_bytes) : 209715200;
 
-  function checkVideoSupport() {
+  async function socketAccess() {
+    try {
+      if (typeof BowerbirdPairing !== "undefined") {
+        return await BowerbirdPairing.proof("chrome-extension://" + chrome.runtime.id, "extension");
+      }
+      return await new Promise(resolve => chrome.runtime.sendMessage({type:"collect_access"}, result => {
+        const error = chrome.runtime.lastError;
+        resolve(error || !result ? {ok:false,code:"pair_required"} : result);
+      }));
+    } catch { return {ok:false,code:"pair_required"}; }
+  }
+
+  async function checkVideoSupport() {
+    const access = await socketAccess();
+    if (!access.ok) return access;
     return new Promise(resolve => {
       let ws, finished=false;
       const done=result=>{if(finished)return;finished=true;clearTimeout(timer);try{ws?.close();}catch{}resolve(result);};
       const timer=setTimeout(()=>done({ok:false,code:"desktop_unavailable"}),3000);
       try {
-        ws=new WebSocket("ws://127.0.0.1:39871/ws");
+        ws=new WebSocket("ws://127.0.0.1:39871/ws", access.protocols);
         ws.onopen=()=>ws.send(JSON.stringify({type:"ping"}));
         ws.onmessage=event=>{try{const reply=JSON.parse(event.data);done(reply.capabilities?.video_blob===true ? {ok:true,maxBytes:videoLimit(reply.capabilities)} : {ok:false,code:"desktop_upgrade"});}catch{done({ok:false,code:"desktop_upgrade"});}};
         ws.onerror=()=>done({ok:false,code:"desktop_unavailable"});ws.onclose=ws.onerror;
@@ -38,7 +52,9 @@
     };
   }
 
-  function uploadBytes(bytes, metadata) {
+  async function uploadBytes(bytes, metadata) {
+    const access = await socketAccess();
+    if (!access.ok) return access;
     return new Promise((resolve) => {
       let finished = false;
       let sent = false;
@@ -63,7 +79,7 @@
         sent = true;
       };
       try {
-        ws = new WebSocket("ws://127.0.0.1:39871/ws");
+        ws = new WebSocket("ws://127.0.0.1:39871/ws", access.protocols);
         ws.binaryType = "arraybuffer";
         ws.onopen = () => {
           try {
@@ -147,10 +163,11 @@
   }
 
   function failureMessage(result, mediaKind = "image") {
+    if(result?.code==="pair_required") return "请打开扩展选项，将配对码粘贴到 Bowerbird 的浏览器插件设置中。";
     if(mediaKind==="video") {
       if(result?.saved===true) return result.code==="preview_unavailable" ? "视频已保存，预览暂不可用，请在素材库重新打开。" : "视频已保存，请在素材库查看。";
       if(result?.code==="desktop_upgrade") return "当前桌面端尚不支持插件视频采集，请更新并重启 Bowerbird 后再试。";
-      if(result?.code==="desktop_unavailable") return "请先启动 Bowerbird 桌面应用，再采集视频。";
+      if(result?.code==="desktop_unavailable") return "请启动桌面应用，检查插件配对后再采集视频。";
       if(result?.code==="unsupported_stream") return "该视频使用分段播放或直播，暂不支持直接采集，请使用视频文件链接。";
       if(result?.code==="protected_video") return "该视频受播放保护，暂不支持采集。";
       if(result?.code==="too_large") return "视频超过 200 MiB，请选择较小的视频。";
@@ -161,11 +178,12 @@
       if(result?.code==="incomplete_video") return "网站只返回了部分视频，请使用完整视频文件链接。";
       return "视频未能采集，请确认网页中可以播放、桌面应用正常运行后再试。";
     }
+    if (result?.code === "desktop_upgrade") return "请更新并重启 Bowerbird，再采集未保存的图片。";
     if (result?.code === "result_unknown") return "部分图片的保存结果尚未确认，请先查看桌面素材库，不要重复采集。";
     if (result?.code === "reload_extension") return "扩展已更新或失效，请重新加载扩展并刷新网页后再试。";
     const error = String(result?.error || "");
     if (result?.code === "desktop_unavailable" || /无法连接.*桌面|ECONNREFUSED/.test(error)) {
-      return "请先启动 Bowerbird 桌面应用，再重新采集未保存的图片。";
+      return "请启动桌面应用，检查插件配对后再采集未保存的图片。";
     }
     if (result?.code === "fetch_timeout" || /读取.*超时|AbortError/.test(error)) return "读取图片超时，请检查网络后再试。";
     if (result?.code === "too_large" || /超过.*上限/.test(error)) return "图片过大，请选择较小的图片后再试。";

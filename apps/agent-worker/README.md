@@ -1,5 +1,25 @@
 # @bowerbird/agent-worker — Bowerbird Agent Runtime
 
+### DSH 云端原生会话（2026-11-13，VPS Worker 已切换）
+
+新版 `dsh-vps-v2` 只接收本轮用户消息。VPS 使用钉版 DSH 的 `agents.create`、`agents.resume` 和 `sessions.flush` 创建、恢复及刷写原生会话；默认自动压缩可以独立调用计量代理。控制面在 claim 中提供按账号和对话派生的 `session_key` 以及同会话前一个成功 job ID。Worker 仅向客户端交付本轮最终答复和建卡所需参数。旧 `dsh-vps-v1` 沿用原实现。
+
+生产 Compose 把宿主机 `/opt/bowerbird/agent-worker/dsh-sessions` 挂载到 `/dsh-sessions`，置为 UID/GID 1000:1000、权限 0700。这个卷只存 DSH 自身的会话日志；子进程配置、单轮授权和模型代理能力在临时 HOME / 内存中。已经提交过的会话必须读到控制面指定的原生状态，缺失时请求失败。普通轮次只复制已确认成功的快照到临时目录，完成并刷盘后按本轮 job ID 原子发布。每次新 claim 清理同一会话更早的快照和遗留临时文件，常态保留当前及上一份快照；取消、失败当轮清除自己的临时目录。进程突然退出产生的孤立快照或临时文件在该会话下一次 claim 时收回。长期没有续聊的持久会话保留最后状态，没有按时长自动删除。独立工作流 `t-` 轮次只用临时目录，结束后移除。
+
+候选镜像从原生产基线定向叠加，在无外网的 VPS 容器通过真实进程恢复、当前输出隔离、独立会话、自动压缩和 v1 回归。部署镜像 `b596d516af10`，原镜像 `cd4fd8c7093d`，回滚记录在 `/opt/bowerbird/deploy-backups/dsh-native-20261113T013739700056Z/`。先停新增并让在途任务结束，再回退 Worker。持久目录随应用重建保留。
+
+### DSH 云端对话 v1（2026-11-12）
+
+`cloud-chat/runtime.ts` 为普通 completion 和 `dsh-vps-v1` 各保留一个消费槽。DSH 槽需要生产 Compose 提供的钉版 Profile 与可写 `/dsh-runtime`。每轮创建独立 ACP 会话，只带本轮提交的公开历史。H3 和文本编辑的方法从 `BOWERBIRD_TEXT_SKILL_DIR` 只读加载，技能轮次仅交付文字。普通聊天的建卡调用用原 job、lease 和由 ACP 调用身份派生的键等待桌面回执。每轮最多 12 次模型调用，整轮含回执等待最多 30 分钟。失租即终止，未确认上游结果保留原任务对账。
+
+仓库锁定版本的 DSH、真实 ACP 和本机模型桩可在仓库根目录运行 `node --test spikes/unified-agent-harness-u1/profiles/bowerbird-u1/test/chat-session.e2e.test.mjs`。在候选镜像中将同一测试文件挂为 `/probe/chat-session.e2e.test.mjs`，设置 `BOWERBIRD_CHAT_TEST_WORKER=/app`，沿用镜像的 DSH 环境变量，运行 `node --test /probe/chat-session.e2e.test.mjs`。测试只用回环、临时运行目录和合成消息。控制面、开关及部署状态见[聊天契约](../cloud/CHAT.md)。
+
+## Seedance 规格巡检（2026-11-10，已部署）
+
+启用生图／视频消费循环时，`cloud-generation/seedance-resolution-audit.ts` 在独立后台启动一次公开文档检查，随后每 24 小时执行；组合入口与独立 generation 入口均接入。检查固定官方 Seedance 2.5 页的分辨率枚举，与共享 `VIDEO_RESOLUTIONS` 比对；15 秒超时、4 MiB 上限，不携带账号凭据，不生成视频。日志事件 `seedance_resolution_audit`：`unchanged` 为一致，`changed` 须人工核对契约，`unavailable` 表示网络／文档结构不可用。失败保持已有参数，不影响消费者领取任务，也不自动调整价格或客户端选项。该巡检不验证用户本机 Dreamina CLI／账号权限。[验证与部署范围](../../dev-doc/SEEDANCE-2.5-INTEGRATION.md#2026-11-10建卡免核验与后台每日规格巡检)。
+
+2026-11-10 23:46:29（北京时间）已切换至 `cd4fd8c7093d…`，首次巡检 unchanged，480p／720p／1080p 与契约一致；原配置保持，运行正常、无重启。[部署证据与回滚](../../project_logs/2026-11-10-seedance-resolution-audit.md)。
+
 > 状态（2026-09-17 核对）：VPS 已部署统一 Agent、视频、DSH `deepseek-flash`/漏参纠正及分层服务；DSH 保持 test-only，视频未启价，分层暂用 20/23 积分测试价。最近发布与回滚入口统一见 [收费化进度](../../dev-doc/ARCH-ADJUST-PROGRESS.md)。
 > 桌面 Agent 主路径已人工验收，A5 完成；A6 安全/Cloud 回归与 A7 VPS 运维基线完成。Codex Agent CLI 真机 E2E 已成功，但因双重思考/对话耗时过长暂时禁止新建该组合。Dreamina Agent CLI 真机 E2E 按 2026-08-25 用户决定暂时跳过：实现保留、未宣称验证通过，也不再作为当前发布或继续开发门槛。
 > 依据：[dev-doc/AGENT-RUNTIME-PLAN.md](../../dev-doc/AGENT-RUNTIME-PLAN.md) §A2 / §A3。

@@ -99,6 +99,10 @@ pub struct ChatCardAction {
     pub call_id: String,
     pub status: String,
     pub cards: Vec<CreatedChatCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_status: Option<String>,
+    #[serde(skip)]
+    pub fresh: bool,
     pub created_at: i64,
     pub undone_at: Option<i64>,
 }
@@ -106,6 +110,8 @@ pub struct ChatCardAction {
 #[serde(deny_unknown_fields)]
 struct CardBatch {
     cards: Vec<CardSpec>,
+    #[serde(rename = "runCard")]
+    run_card: Option<String>,
     #[serde(default)]
     sections: Vec<SectionSpec>,
     #[serde(default)]
@@ -154,6 +160,12 @@ enum CardSpec {
         id: String,
         title: String,
         count: Option<u32>,
+        #[serde(rename = "triggerMode")]
+        trigger_mode: Option<String>,
+        #[serde(rename = "dailyAt")]
+        daily_at: Option<String>,
+        #[serde(rename = "runAt")]
+        run_at: Option<String>,
     },
     Loop {
         id: String,
@@ -372,6 +384,102 @@ fn add_input(node: &mut Value, port: &str, mut binding: Value, label: &str) {
         ));
     }
 }
+/// Fields any card kind may carry. The flat tool schema lists all of them, so a model can put a
+/// field on the wrong kind; such a field is dropped here instead of failing the batch. Keys
+/// outside this set stay and are still rejected as unknown.
+const CARD_FIELDS: &[&str] = &[
+    "id",
+    "kind",
+    "title",
+    "prompt",
+    "mediaType",
+    "ratio",
+    "referenceAliases",
+    "seconds",
+    "resolution",
+    "firstFrameAlias",
+    "lastFrameAlias",
+    "text",
+    "rows",
+    "count",
+    "triggerMode",
+    "runAt",
+    "dailyAt",
+    "mode",
+    "source",
+    "body",
+];
+
+fn normalize_card_fields(args: &mut Value) {
+    let Some(cards) = args.get_mut("cards").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for card in cards {
+        let Some(map) = card.as_object_mut() else {
+            continue;
+        };
+        let kind = map
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let allowed: &[&str] = match kind.as_str() {
+            "generation" => &[
+                "id",
+                "kind",
+                "title",
+                "prompt",
+                "mediaType",
+                "ratio",
+                "referenceAliases",
+            ],
+            "comfy-video" => &[
+                "id",
+                "kind",
+                "title",
+                "prompt",
+                "seconds",
+                "ratio",
+                "resolution",
+                "firstFrameAlias",
+                "lastFrameAlias",
+            ],
+            "content" => &["id", "kind", "title", "text", "rows"],
+            "trigger" => &["id", "kind", "title", "count", "triggerMode", "dailyAt", "runAt"],
+            "loop" => &["id", "kind", "title", "mode", "count", "source", "body"],
+            _ => &["id", "kind", "title"],
+        };
+        map.retain(|key, _| !CARD_FIELDS.contains(&key.as_str()) || allowed.contains(&key.as_str()));
+    }
+}
+
+fn trigger_schedule(
+    mode: Option<&str>, daily_at: Option<&str>, run_at: Option<&str>, id: &str,
+    now: chrono::DateTime<chrono::Local>,
+) -> AppResult<Option<Value>> {
+    use chrono::{NaiveTime, TimeZone};
+    match (mode, daily_at, run_at) {
+        (None | Some("manual" | "completion"), None, None) => Ok(None),
+        (Some("once"), None, Some(value)) => {
+            let at = chrono::DateTime::parse_from_rfc3339(value)
+                .map_err(|_| error("单次执行时间需要包含日期、时间和时区"))?.timestamp_millis();
+            if at <= now.timestamp_millis() { return Err(error("单次执行时间须在将来")); }
+            Ok(Some(json!({"id":id,"at":at,"status":"armed"})))
+        }
+        (Some("daily"), Some(value), None) => {
+            let time = NaiveTime::parse_from_str(value, "%H:%M")
+                .map_err(|_| error("每日执行时间请使用 HH:MM"))?;
+            if time.format("%H:%M").to_string() != value { return Err(invalid()); }
+            let today = now.date_naive();
+            let at = [today, today.succ_opt().ok_or_else(invalid)?].into_iter()
+                .filter_map(|day| chrono::Local.from_local_datetime(&day.and_time(time)).earliest())
+                .find(|at| *at > now).ok_or_else(invalid)?;
+            Ok(Some(json!({"id":id,"at":at.timestamp_millis(),"dailyAt":value,"status":"armed"})))
+        }
+        _ => Err(error("请按触发方式设置时间：单次使用 runAt，每日使用 dailyAt")),
+    }
+}
+
 fn compile(
     args: &Value,
     defaults: &ChatCardDefaults,
@@ -382,7 +490,9 @@ fn compile(
     if args.to_string().len() > 64_000 {
         return Err(invalid());
     }
-    let batch: CardBatch = serde_json::from_value(args.clone()).map_err(|_| invalid())?;
+    let mut args = args.clone();
+    normalize_card_fields(&mut args);
+    let batch: CardBatch = serde_json::from_value(args).map_err(|_| invalid())?;
     if batch.cards.is_empty()
         || batch.cards.len() > 12
         || batch.sections.len() > 12
@@ -543,7 +653,11 @@ fn compile(
                     }
                 }
             }
-            CardSpec::Trigger { count, .. } => {
+            CardSpec::Trigger { count, trigger_mode, daily_at, run_at, .. } => {
+                if let Some(mode) = trigger_mode { node["triggerMode"] = json!(mode); }
+                if let Some(schedule) = trigger_schedule(trigger_mode.as_deref(), daily_at.as_deref(), run_at.as_deref(), &id, chrono::Local::now())? {
+                    node["triggerSchedule"] = schedule;
+                }
                 if count.is_some_and(|c| c > 9999) {
                     return Err(invalid());
                 }
@@ -733,6 +847,20 @@ fn compile(
             &cards.iter().find(|c| c.id == *from).unwrap().title,
         );
     }
+    for trigger in nodes.iter().filter(|node| node["kind"] == "trigger") {
+        if trigger["inputs"]["completion"].is_array() && !trigger["triggerMode"].is_null()
+            && trigger["triggerMode"] != "completion" {
+            return Err(error("完成连线需要使用完成后触发方式"));
+        }
+    }
+    if let Some(alias) = batch.run_card.as_deref() {
+        let target = aliases.get(alias).and_then(|(id, _)| nodes.iter().find(|node| node["id"] == *id))
+            .ok_or_else(|| error("运行目标须为本批创建的可执行卡片"))?;
+        if target["kind"] == "trigger" && (target["inputs"]["completion"].is_array()
+            || !target["triggerMode"].is_null() && target["triggerMode"] != "manual") {
+            return Err(error("立即触发下游请选择手动触发卡"));
+        }
+    }
     if !batch.sections.is_empty() {
         place_section_groups(
             &batch.sections,
@@ -863,11 +991,13 @@ fn action(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatCardAction> {
         call_id: row.get(3)?,
         status: row.get(4)?,
         cards,
+        run_status: row.get(8)?,
+        fresh: false,
         created_at: row.get(6)?,
         undone_at: row.get(7)?,
     })
 }
-const ACTION_SELECT:&str="SELECT id,conversation_id,turn_id,call_id,status,cards_json,created_at,undone_at FROM local_chat_card_actions";
+const ACTION_SELECT:&str="SELECT id,conversation_id,turn_id,call_id,status,cards_json,created_at,undone_at,json_extract(footprint_json,'$.runStatus') FROM local_chat_card_actions";
 pub(crate) fn read_actions(conn: &Connection, id: &str) -> AppResult<Vec<ChatCardAction>> {
     let mut query = conn.prepare(&format!(
         "{ACTION_SELECT} WHERE conversation_id=?1 ORDER BY created_at,id"
@@ -961,6 +1091,33 @@ fn note_snapshot(conn: &Connection, id: &str) -> AppResult<Option<Value>> {
 }
 
 impl Database {
+    /// Only one live callback may dispatch this action, including concurrent call-id replays.
+    pub fn claim_chat_card_run(&self, action: &str, account: &str) -> AppResult<Option<(String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let claimed = tx.execute(
+            "UPDATE local_chat_card_actions SET footprint_json=json_set(footprint_json,'$.runStatus','dispatching')
+             WHERE id=?1 AND status='created' AND json_extract(footprint_json,'$.runStatus')='requested'
+             AND json_extract(footprint_json,'$.runAccount')=?2
+             AND turn_id IN (SELECT id FROM local_chat_turns WHERE status='running')
+             AND conversation_id IN (SELECT c.id FROM local_chat_conversations c JOIN projects p ON p.id=c.project_id WHERE c.status='running' AND p.archived_at IS NULL)", params![action,account],
+        )?;
+        if claimed == 0 { return Ok(None); }
+        let target = tx.query_row("SELECT c.project_id,json_extract(a.footprint_json,'$.runTarget')
+            FROM local_chat_card_actions a JOIN local_chat_conversations c ON c.id=a.conversation_id WHERE a.id=?1",
+            [action], |row| Ok((row.get(0)?,row.get(1)?)))?;
+        tx.commit()?;
+        Ok(Some(target))
+    }
+
+    pub fn finish_chat_card_dispatch(&self, action: &str, status: &str) -> AppResult<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE local_chat_card_actions SET footprint_json=json_set(footprint_json,'$.runStatus',?2)
+             WHERE id=?1 AND json_extract(footprint_json,'$.runStatus') IN ('requested','dispatching')", params![action,status],
+        )?;
+        Ok(())
+    }
+
     pub fn replay_local_chat_card_action(
         &self,
         conversation: &str,
@@ -970,12 +1127,18 @@ impl Database {
     ) -> AppResult<Option<ChatCardAction>> {
         replay(&self.conn.lock().unwrap(), conversation, turn, call, args)
     }
-    pub fn create_local_chat_cards(
+    #[cfg(test)]
+    pub fn create_local_chat_cards(&self, conversation: &str, turn: &str, call: &str, args: &Value) -> AppResult<ChatCardAction> {
+        self.create_local_chat_cards_for_account(conversation, turn, call, args, "test-user")
+    }
+
+    pub fn create_local_chat_cards_for_account(
         &self,
         conversation: &str,
         turn: &str,
         call: &str,
         args: &Value,
+        account: &str,
     ) -> AppResult<ChatCardAction> {
         if call.is_empty() || call.len() > 200 {
             return Err(invalid());
@@ -1121,7 +1284,14 @@ impl Database {
         for asset in &images {
             tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) VALUES(?1,?2,?3)",params![project,asset,now/1000])?;
         }
-        let footprint = json!({"nodes":compiled.nodes,"notes":note_records,"names":compiled.names});
+        let mut footprint = json!({"nodes":compiled.nodes,"notes":note_records,"names":compiled.names});
+        let run_status = args["runCard"].as_str().map(|alias| {
+            let card = compiled.cards.iter().find(|card| card.alias == alias).expect("validated run alias");
+            footprint["runTarget"] = json!(&card.id);
+            footprint["runAccount"] = json!(account);
+            footprint["runStatus"] = json!("requested");
+            "requested".to_owned()
+        });
         let result = ChatCardAction {
             id: id.clone(),
             conversation_id: conversation.into(),
@@ -1129,6 +1299,8 @@ impl Database {
             call_id: call.into(),
             status: "created".into(),
             cards: compiled.cards,
+            run_status,
+            fresh: true,
             created_at: now,
             undone_at: None,
         };
@@ -1152,6 +1324,12 @@ impl Database {
             return Ok(());
         }
         let footprint: Value = serde_json::from_str(&raw)?;
+        if footprint["runStatus"] == "dispatching" && tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM local_chat_turns t JOIN local_chat_card_actions a ON a.turn_id=t.id WHERE a.id=?1 AND t.status='running')",
+            [action_id], |row| row.get::<_, bool>(0),
+        )? {
+            return Err(error("卡片正在启动，请稍后再撤销"));
+        }
         let (revision, mut doc) = workflow(&tx, &project)?;
         let ids: HashSet<String> = footprint["nodes"]
             .as_array()

@@ -305,6 +305,8 @@
             return node ? this.owners.get(node.closest(".industrial-scrollbar") ?? node) ?? node : null;
         }
         scrollAncestors(start, result) {
+            if (start?.closest("[data-overlay-scrollbars-suspended]"))
+                return;
             for (let node = start; node; node = node.parentElement) {
                 if (node.matches(LAYER))
                     continue;
@@ -350,7 +352,7 @@
             this.ancestorsObserved.clear();
             for (const node of next) {
                 this.ancestorsObserved.add(node);
-                this.changes.observe(node, { childList: true, attributes: true, attributeFilter: ["style", "class", "hidden", "inert", "aria-hidden", "open"] });
+                this.changes.observe(node, { childList: true, attributes: true, attributeFilter: ["style", "class", "hidden", "inert", "aria-hidden", "open", "data-overlay-scrollbars-suspended"] });
             }
         }
         paint() {
@@ -376,6 +378,8 @@
                 return;
             }
             const next = this.targetElement(event.target);
+            if (event.type === "pointermove" && next === this.current)
+                return;
             if (next?.closest(LAYER))
                 return;
             this.current = next;

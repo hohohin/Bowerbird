@@ -11,7 +11,7 @@ w.__TAURI_INTERNALS__.invoke = async (command: string, args: any) => {
   }
   if (command === "preview_asset_originals") {
     if (w.failPreview) throw new Error("原文件暂时无法读取，请重试。");
-    return args.assetIds.map((id: string) => ({ asset_id: id, name: `disk-${id}.png`,
+    return args.assetIds.map((id: string) => id === w.unavailableId ? { asset_id: id, error: "素材记录已不存在" } : ({ asset_id: id, name: `disk-${id}.png`,
       path: `D:/素材/${w.samePath ? "same" : id}.png`, fingerprint: `version-${id}`,
       ...(w.missingIds?.includes(id) ? { missing: true } : {}) }));
   }

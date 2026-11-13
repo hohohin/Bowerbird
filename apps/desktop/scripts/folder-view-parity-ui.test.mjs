@@ -14,7 +14,7 @@ try {
  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/connected-collections/preview.html`); await page.getByRole('tab',{name:'文件夹',exact:true}).click(); await card('root-0').waitFor();
  await more(); for(const label of ['不看生成图','颜色筛选','刷新文件夹']) assert.equal(await page.getByRole('button',{name:label,exact:true}).isVisible(),true);
  await card('root-0').click({button:'right'});
- for(const label of ['打开图片详情','选择','重命名','图片标注','分层编辑','添加到文件夹','移动到文件夹','打开所在文件夹','用系统程序打开','复制图片','复制文件路径','管理外部引用 · 原文件保留','删除']) assert.equal(await menu(label).count(),1,label);
+ for(const label of ['打开图片详情','选择','重命名','图片标注','分层编辑','添加到文件夹','移动至文件夹','打开所在文件夹','用系统程序打开','复制图片','复制文件路径','管理外部引用 · 原文件保留','删除']) assert.equal(await menu(label).count(),1,label);
  await menu('选择').click(); const bar=page.getByRole('group',{name:'分类素材所选操作'});
  assert.equal(await bar.getByRole('button',{name:'全选',exact:true}).count(),1);assert.equal(await bar.getByRole('button',{name:'添加到新项目',exact:true}).count(),1);
  await bar.getByRole('button',{name:'全选',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.catalog-selection')?.textContent.includes('130 项'));

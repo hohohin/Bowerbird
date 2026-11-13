@@ -9,6 +9,21 @@ function positiveNumber(name: string, fallback: number): number {
   return value;
 }
 
+export function managedUsagePolicy() {
+  const dailyLimitCny = positiveNumber("DAILY_COST_LIMIT_CNY", 500);
+  const perUserPerMinute = Math.floor(positiveNumber("RATE_LIMIT_PER_USER_PER_MIN", 10));
+  const costCnyPerCredit = positiveNumber("COST_CNY_PER_CREDIT", 0.047);
+  const mock = (Deno.env.get("BOWERBIRD_CLOUD_MOCK") ?? "true") === "true";
+  const unitCostMicros = mock ? 0 : costCnyPerCredit * 1_000_000;
+  const dailyLimitMicros = Math.floor(dailyLimitCny * 1_000_000);
+
+  if (!Number.isFinite(unitCostMicros) || !Number.isSafeInteger(dailyLimitMicros) ||
+    dailyLimitMicros <= 0 || perUserPerMinute <= 0) {
+    throw new ApiError("not_configured", "成本熔断配置超出安全范围");
+  }
+  return { unitCostMicros, dailyLimitMicros, perUserPerMinute };
+}
+
 export async function reserveManagedUsage(
   admin: SupabaseClient,
   userId: string,
@@ -17,17 +32,9 @@ export async function reserveManagedUsage(
   allowReplay = false,
   providerCostMicros?: number,
 ): Promise<void> {
-  const dailyLimitCny = positiveNumber("DAILY_COST_LIMIT_CNY", 500);
-  const perUserPerMinute = Math.floor(positiveNumber("RATE_LIMIT_PER_USER_PER_MIN", 10));
-  const costCnyPerCredit = positiveNumber("COST_CNY_PER_CREDIT", 0.047);
-  const mock = (Deno.env.get("BOWERBIRD_CLOUD_MOCK") ?? "true") === "true";
-  const costMicros = providerCostMicros ?? (mock ? 0 : Math.ceil(estimatedCredits * costCnyPerCredit * 1_000_000));
-  const dailyLimitMicros = Math.floor(dailyLimitCny * 1_000_000);
-
-  if (!Number.isSafeInteger(costMicros) || !Number.isSafeInteger(dailyLimitMicros) ||
-    dailyLimitMicros <= 0 || perUserPerMinute <= 0) {
-    throw new ApiError("not_configured", "成本熔断配置超出安全范围");
-  }
+  const { unitCostMicros, dailyLimitMicros, perUserPerMinute } = managedUsagePolicy();
+  const costMicros = providerCostMicros ?? Math.ceil(estimatedCredits * unitCostMicros);
+  if (!Number.isSafeInteger(costMicros)) throw new ApiError("not_configured", "成本熔断配置超出安全范围");
 
   const { data, error } = await admin.rpc("reserve_managed_usage", {
     p_user_id: userId,

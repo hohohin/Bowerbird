@@ -1,10 +1,9 @@
 import { createSlateEditor, type SlatePlugin } from 'platejs';
 import type { PlateEditor } from 'platejs/react';
 import { serializeHtml } from 'platejs/static';
-import { normalizeDocument, serializeMarkdown } from '../../lib/documentCodec';
+import { normalizeDocument, serializeReadableMarkdown } from '../../lib/documentCodec';
 import { BaseEditorKit } from './plate/components/editor/editor-base-kit';
 import { DocxExportKit } from './plate/components/editor/plugins/docx-export-kit';
-import { discussionPlugin } from './plate/components/editor/plugins/discussion-kit';
 import { EditorStatic } from './plate/ui/editor-static';
 import utilities from './plate/utilities.css?raw';
 import mathStyles from 'katex/dist/katex.min.css?inline';
@@ -60,9 +59,7 @@ async function documentCanvas(editor: PlateEditor) {
 export async function exportDocument(editor: PlateEditor, format: 'html' | 'pdf' | 'png' | 'md' | 'docx') {
   if (format === 'md') {
     const value = normalizeDocument(editor.children);
-    const discussions = editor.getOption(discussionPlugin, 'discussions');
-    if (discussions.length) value.discussions = discussions;
-    download(new Blob([serializeMarkdown(value)], { type: 'text/markdown;charset=utf-8' }), format); return;
+    download(new Blob([serializeReadableMarkdown(value)], { type: 'text/markdown;charset=utf-8' }), format); return;
   }
   if (format === 'html') { download(new Blob([await documentHtml(editor)], { type: 'text/html;charset=utf-8' }), format); return; }
   if (format === 'docx') {

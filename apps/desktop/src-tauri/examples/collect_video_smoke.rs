@@ -40,8 +40,16 @@ fn main() {
         tauri::async_runtime::spawn(async move {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
-            let server = tokio::spawn(collect::ws_server::serve_listener(listener, paths, db.clone(), handle.clone(), collect::ws_server::ExtensionStatus::new(), active));
-            std::fs::write(root.join("ready.json"), serde_json::json!({"url": format!("ws://{address}/ws")}).to_string()).unwrap();
+            let endpoint = serde_json::json!({"url": format!("ws://{address}/ws")}).to_string();
+            std::fs::write(root.join("address.json"), &endpoint).unwrap();
+            // Let a real unpacked extension start on its final fixture port and generate its pair.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+            while !root.join("fixture-pair.txt").is_file() {
+                if std::time::Instant::now() >= deadline { handle.exit(2); return; }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            let server = tokio::spawn(collect::ws_server::serve_listener(listener, paths, db.clone(), handle.clone(), collect::ws_server::ExtensionStatus::open(&root.join("fixture-pair.txt")).unwrap(), active));
+            std::fs::write(root.join("ready.json"), endpoint).unwrap();
             let started = std::time::Instant::now();
             while !root.join("stop").exists() && started.elapsed().as_secs() < 90 {
                 tokio::time::sleep(std::time::Duration::from_millis(50)).await;

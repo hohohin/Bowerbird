@@ -17,9 +17,17 @@ const memberships = projects.flatMap((p, index) => assets.slice(index * 3, index
 const tags = [{ id: 'brand', name: 'A 品牌', count: assets.length, projectCount: 0, description: '' }];
 w.mode = useLocalFileMode;
 w.homeProjects = projects;
+w.homeCovers = Object.fromEntries(projects.map((p, index) => [p.id, {
+  asset_count: 3, paths: assets.slice(index * 3, index * 3 + 3).map(a => a.thumb_path ?? a.store_path),
+}]));
 w.__TAURI_INTERNALS__.invoke = async (command: string, args: any = {}) => {
   if (['list_projects', 'list_library_view', 'set_active_project', 'file_workspace_prepare', 'project_canvas_get'].includes(command)) w.calls.push({ command, args });
   if (command === 'list_projects') return projects;
+  if (command === 'project_covers') {
+    const covers = structuredClone(w.homeCovers);
+    if (w.holdHomeCovers) await new Promise(resolve => { w.releaseHomeCovers = resolve; });
+    return covers;
+  }
   if (command === 'list_library_view') return { assets, memberships, total: assets.length };
   if (command === 'material_catalog') return { tags, prompts: [], collections: [], tag_asset_ids: { brand: assets.map(asset => asset.id) } };
   if (command === 'material_catalog_assets') return assets;

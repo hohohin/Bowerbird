@@ -15,7 +15,7 @@ test('stable writers are referenced without treating destinations as upstream in
   assert.equal(targets.length, 2);
   assert.equal(targets[0].cellId, 'cell0');
   assert.throws(() => agentOutputTargets(agent, [agent, writers[1]]), /已断开/);
-  assert.throws(() => agentOutputTargets({ ...agent, agentTransport: 'cloud' }, [agent, ...writers]), /本机/);
+  assert.deepEqual(agentOutputTargets({ ...agent, agentTransport: 'cloud' }, [agent, ...writers]), targets);
 });
 test('classification routes actual input images independently and leaves unmentioned destinations alone', () => {
   const outputs = routeAgentOutputs(result(assignments), targets, ['product-image','copy-image']);

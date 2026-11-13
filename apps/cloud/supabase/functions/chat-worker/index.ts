@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
-import { chatResult } from "../_shared/chat.ts";
+import { chatFailure, chatResult, DSH_CHAT_ENGINE, DSH_CHAT_ENGINE_V2, isDshChatEngine, validChatCallId } from "../_shared/chat.ts";
 import {
   ApiError,
   errorResponse,
@@ -73,8 +73,12 @@ Deno.serve(async (request: Request) => {
     if (raw.action === "claim") {
       const worker = request.headers.get("x-worker-id") ?? "";
       await cleanup(admin);
-      const result = await admin.rpc("claim_chat_completion", {
+      const supportsDsh = isDshChatEngine(raw.engine);
+      if (raw.engine !== undefined && !supportsDsh) throw new ApiError("invalid_request", "未知 Worker 通道");
+      const persistent = raw.engine === DSH_CHAT_ENGINE_V2;
+      const result = await admin.rpc(persistent ? "claim_chat_session_turn" : supportsDsh ? "claim_chat_turn" : "claim_chat_completion", {
         p_worker: worker,
+        ...(supportsDsh && !persistent ? { p_dsh_supported: true } : {}),
       });
       if (result.error) {
         throw new ApiError("internal_error", "领取对话请求失败", true);
@@ -101,15 +105,30 @@ Deno.serve(async (request: Request) => {
           lease_id: job.lease_id,
           input_hash: job.input_hash,
           input_url: signed.data.signedUrl,
+          ...(job.dsh_session_key ? { engine: DSH_CHAT_ENGINE_V2, session_key: job.dsh_session_key,
+            previous_job_id: job.dsh_previous_job_id } : job.dsh_tools_enabled != null ? { engine: DSH_CHAT_ENGINE } : {}),
         },
       });
+    }
+    if (raw.action === "dsh_poll" || raw.action === "tool_request") {
+      const tool = raw.action === "tool_request";
+      if (typeof raw.job_id !== "string" || typeof raw.lease_id !== "string" ||
+          (tool || raw.call_id !== undefined) && !validChatCallId(raw.call_id) ||
+          tool && (!raw.arguments || typeof raw.arguments !== "object" || Array.isArray(raw.arguments))) {
+        throw new ApiError("invalid_request", "DSH 请求或租约身份无效");
+      }
+      const polled = await admin.rpc("poll_chat_dsh", {
+        p_id: raw.job_id, p_lease: raw.lease_id, p_call: raw.call_id ?? null, p_arguments: tool ? raw.arguments : null,
+      });
+      if (polled.error) throw new ApiError("invalid_request", "DSH 工具请求已失效或与已有请求冲突", false, 409);
+      return jsonResponse(polled.data);
     }
     if (raw.action === "finish") {
       if (
         typeof raw.job_id !== "string" || typeof raw.lease_id !== "string" ||
         !["succeeded", "failed", "outcome_unknown"].includes(raw.status)
       ) throw new ApiError("invalid_request", "对话完成信息无效");
-      const result = raw.status === "succeeded" ? chatResult(raw.result) : null;
+      const result = raw.status === "succeeded" ? chatResult(raw.result, isDshChatEngine(raw.engine) ? raw.engine : undefined) : null;
       if (
         result &&
         (typeof raw.result.model !== "string" || !raw.result.model.trim() ||
@@ -120,9 +139,7 @@ Deno.serve(async (request: Request) => {
         p_lease: raw.lease_id,
         p_status: raw.status,
         p_result: result ? { ...result, model: raw.result.model } : null,
-        p_error: raw.status === "failed"
-          ? "chat_upstream_rejected"
-          : "chat_outcome_unknown",
+        p_error: result ? null : chatFailure(raw.status, raw.error_code).code,
       });
       if (finished.error) {
         throw new ApiError(

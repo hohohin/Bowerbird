@@ -46,6 +46,10 @@ try {
   await placeWorkflowCard(page, '新增生成卡片');
   await page.getByRole('button', { name: '适应内容', exact: true }).click();
   const card = page.locator('.workflow-card.is-generation').first();
+  async function selectCardOption(label, option) {
+    await card.getByRole('combobox', { name: label, exact: true }).click();
+    await page.getByRole('option', { name: option, exact: true }).click();
+  }
   await card.hover();
   await mkdir('.tmp/workflow-video', { recursive: true });
   for (const theme of ['light', 'dark']) {
@@ -61,29 +65,30 @@ try {
   await imageMenu.locator('[data-model-key="bowerbird-cloud-image_lite"]').click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0].provider === 'bowerbird-cloud-image_lite');
   assert.ok((await card.locator('.model-select-name').innerText()).includes('Seedream 5.0 Lite'));
-  await card.getByLabel('生成类型', { exact: true }).selectOption('video');
+  await selectCardOption('生成类型', '视频');
   await card.getByTitle('选择视频模型', { exact: true }).click();
   await page.getByRole('dialog', { name: '视频模型', exact: true }).locator('[data-model-key="cloud:seedance2.5"]').click();
-  await card.getByLabel('视频生成模式').selectOption('frames2video');
+  await selectCardOption('视频生成模式', '首尾帧');
   await card.getByLabel('视频时长（秒）').fill('8');
-  await card.getByLabel('视频分辨率').selectOption('1080p');
+  await selectCardOption('视频分辨率', '1080p');
   await card.getByLabel('卡片指令', { exact: true }).fill('首尾平滑转场');
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0].generation.videoOptions.duration === 8);
   const saved = await page.evaluate(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0]);
   await page.reload();
   await card.waitFor();
+  await mockCatalog();
   assert.equal(await card.getByLabel('视频时长（秒）').inputValue(), '8');
-  assert.equal(await card.getByLabel('视频生成模式').inputValue(), 'frames2video');
-  assert.equal(await card.getByRole('button', { name: '输出：视频', exact: true }).count(), 1);
+  assert.ok((await card.getByLabel('视频生成模式').innerText()).includes('首尾帧'));
+  assert.equal(await card.getByRole('button', { name: '添加下游', exact: true }).count(), 1);
   // Outward socket labels free the top of both image and video cards for content.
   await assertCompactCard(card);
   await page.getByRole('button', { name: '适应内容', exact: true }).click();
   await mkdir('.tmp/workflow-video', { recursive: true });
   await page.screenshot({ path: '.tmp/workflow-video/controls.png' });
   await card.hover();
-  await card.getByLabel('生成类型', { exact: true }).selectOption('image');
+  await selectCardOption('生成类型', '图片');
   assert.equal(await card.getByLabel('视频时长（秒）').count(), 0);
-  await card.getByLabel('生成类型', { exact: true }).selectOption('video');
+  await selectCardOption('生成类型', '视频');
   assert.equal(await card.getByLabel('视频时长（秒）').inputValue(), '8');
   await card.getByLabel('复制卡片', { exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.length === 2);
@@ -127,7 +132,16 @@ try {
       check(active.document.nodes[0].outputs.image.assetIds[0] === 'v', 'video output delivered as library asset');
     }
     const beforeInvalid = calls.length;
-    for (const [kind, refs] of [['text2video', ['a']], ['image2video', []], ['frames2video', ['a']], ['image2video', ['v']]]) {
+    const offline = await setup('text2video');
+    useStore.setState({ dreaminaHealth: { ok: false, reason: '未登录' } });
+    const trigger = { ...newWorkflowNode('trigger', -300, 0, ''), id: 'trigger' };
+    await active.edit([trigger, { ...offline, inputs: { signal: [{ nodeId: 'trigger', portId: 'signal' }] } }]);
+    let refusal;
+    try { await active.start('trigger'); } catch (error) { refusal = error.message; }
+    check(refusal?.includes('未登录') && active.issue?.nodeId === 'gen' && !active.document.run && calls.length === beforeInvalid,
+      'an unavailable downstream video provider blocks the trigger before any run is created');
+    useStore.setState({ dreaminaHealth: { ok: true, reason: '已登录' } });
+    for (const [kind, refs] of [['frames2video', []], ['frames2video', ['a']], ['frames2video', ['a', 'v']]]) {
       await setup(kind, refs); await active.start('gen', true);
       check(active.document.run.status === 'failed' && !active.document.run.steps.gen.jobId, 'invalid inputs fail before job identity or submission');
     }
@@ -135,9 +149,12 @@ try {
     await setup('text2video'); loseResult = true; await active.start('gen', true);
     check(active.document.run.status === 'waiting', 'missing ingest remains retrievable');
     const step = active.document.run.steps.gen, count = calls.length, projectId = active.projectId;
-    api.recentGenSessions = async () => [{ id: step.jobId, status: 'done', turns: [{ turn_key: step.turnKey, images: ['/tmp/v.mp4'] }] }];
+    api.agentDsWorkflowGenerationJob = async (job, turn) => job === step.jobId && turn === step.turnKey
+      ? { status: 'done', images: ['/tmp/v.mp4'] } : null;
+    useStore.setState({ dreaminaHealth: { ok: false, reason: '未登录' } });
     loseResult = false; active = new CanvasWorkflowController(projectId); await active.load(); await active.continue();
     check(active.document.run.status === 'done' && calls.length === count, 'reload retrieves exact original turn without resubmission');
+    useStore.setState({ dreaminaHealth: { ok: true, reason: '已登录' } });
     const generator = await setup('text2video');
     await api.projectCanvasNodeCreate({ ...window.snapshot().nodes[0], id: 'video-content', kind: 'note', assetId: null, role: null, threadId: null,
       payloadJson: JSON.stringify({ schema_version: 1, note_type: 'text', text: '', member_ids: [], cells: [[{ id: 'video-cell', text: '', bold: false, italic: false, align: 'left', content_type: 'image' }]] }) });

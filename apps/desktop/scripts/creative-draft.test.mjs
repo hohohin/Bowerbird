@@ -16,9 +16,9 @@ test('chat provider survives switching modes and clearing accepted text independ
   const chat = draft('已经发送');
   const state = { mode: 'video', chatProvider: 'deepseek-cloud', drafts: { chat, video: draft('视频草稿', 'video') } };
   const saved = serializeCreativeComposerState(state);
-  assert.deepEqual(parseCreativeComposerState(saved), state);
+  assert.deepEqual(parseCreativeComposerState(saved), { ...state, chatProvider: 'dsh-cloud' });
   const cleared = clearSentCreativeChatDraft(saved, JSON.stringify(chat));
-  assert.equal(parseCreativeComposerState(cleared).chatProvider, 'deepseek-cloud');
+  assert.equal(JSON.parse(cleared).chatProvider, 'dsh-cloud');
   assert.deepEqual(parseCreativeComposerState(cleared).drafts.video, state.drafts.video);
 });
 

@@ -1,6 +1,10 @@
 //! Generation provenance and display preferences shared by canvas and catalog.
 // Preserve execution IDs and files. Only exact producer/request relationships
 // establish galleries; copied references and ambiguous ownership do not.
+#[path = "generation_gallery_manual.rs"]
+mod manual;
+pub use manual::{GalleryMerge, GalleryMergeInput};
+
 pub(crate) const WORKFLOW_GALLERY_CTE: &str = r#"
 workflow_steps AS MATERIALIZED (
   SELECT w.project_id,s.key AS source_id,s.value AS step
@@ -100,11 +104,11 @@ other_generated_groups AS (
 impl crate::db::Database {
     pub fn dissolve_generation_group(&self, asset_id: Option<&str>, group_key: Option<&str>) -> crate::error::AppResult<()> {
         use rusqlite::OptionalExtension;
-        use super::catalog_browser::{GENERATED, GENERATION_GROUP};
+        use super::catalog_browser::{gallery_eligible, generation_resolved_group};
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let key = if let Some(id) = asset_id {
-            tx.query_row(&format!("WITH {WORKFLOW_GALLERY_CTE} SELECT {GENERATION_GROUP} FROM assets a WHERE a.id=?1 AND {GENERATED}"),
+            tx.query_row(&format!("WITH {WORKFLOW_GALLERY_CTE} SELECT {} FROM assets a WHERE a.id=?1 AND {}", generation_resolved_group(), gallery_eligible()),
                 [id], |row| row.get::<_, String>(0)).optional()?
         } else { group_key.map(str::to_owned) };
         let key = key.filter(|key| !key.is_empty() && !key.starts_with("asset:"))

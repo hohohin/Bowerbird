@@ -8,6 +8,9 @@ import "./HomeWorkspace.css";
 import { LibraryComposer } from "./LibraryComposer";
 import { registerLibraryLocalVideo } from "../lib/libraryGenerationRuntime";
 import { CreationImagePreview } from "./CreationImagePreview";
+import { LibraryVideoPreview } from "./LibraryVideoPreview";
+import { isVideoPath } from "../lib/videoGeneration";
+import { videoSourceKey } from "../lib/videoSourceKey";
 import { useHomeCreationImage } from "./useHomeCreationImage";
 import "./LibraryHomeGeneration.css";
 
@@ -48,7 +51,9 @@ export function HomeWorkspace({ active = true, shortcutsEnabled = true, onCreate
         {active && <LibraryHome active={libraryActive} onCreateProject={onCreateProject} shortcutsEnabled={shortcutsEnabled}/>}
         {libraryActive && <LibraryComposer onLocalVideoStarted={registerLibraryLocalVideo} onOpenLibrary={openLibrary}/>}
       </PreservedWorkspace>
-      {preview && <CreationImagePreview asset={preview.asset} projectId={null} job={preview.job} onClose={creationImage.close}/>}
+      {preview && (isVideoPath(preview.asset.store_path)
+        ? <LibraryVideoPreview path={preview.asset.store_path!} sourceKey={videoSourceKey(preview.asset)} projectId={null} onClose={creationImage.close}/>
+        : <CreationImagePreview asset={preview.asset} projectId={null} job={preview.job} onClose={creationImage.close}/>)}
     </div>
     {visitedProjects && <div className="home-workspace-page" data-suspended={!projectsActive}>
       <PreservedWorkspace suspended={!projectsActive}>

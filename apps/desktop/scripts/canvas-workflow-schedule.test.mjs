@@ -116,6 +116,28 @@ try {
       await until(() => observer.document.run?.status === 'done');
       check(calls === 4 && !canvasWorkflowController('archived').ready && removedObserver.document.run === null,
         `background project restores and fires, archived and removed projects do not: ${JSON.stringify({ calls, archived: canvasWorkflowController('archived').ready, removed: removedObserver.document.run })}`);
+      // Use the real event listener and project controller, with a synthetic native claim and provider.
+      const bridge = window.__TAURI_INTERNALS__.invoke;
+      const receipts = new Map(), claimed = new Set();
+      window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+        if (command === 'local_chat_claim_card_run') {
+          if (claimed.has(args.actionId)) return null;
+          claimed.add(args.actionId);
+          return ['background', 'child'];
+        }
+        if (command === 'plugin:event|emit' && args.event.startsWith('local-chat://run-result-')) receipts.set(args.event, args.payload);
+        return bridge(command, args);
+      };
+      const startCard = action => bridge('plugin:event|emit', { event: 'local-chat://start-card', payload: action });
+      await Promise.all([startCard('accepted'), startCard('accepted')]);
+      await until(() => receipts.get('local-chat://run-result-accepted') === true && observer.document.run.status === 'done');
+      check(calls === 5, 'a replayed Agent request submits the target exactly once');
+      deny = true;
+      await startCard('denied');
+      await until(() => receipts.get('local-chat://run-result-denied') === false);
+      check(calls === 5, 'failed authorization is reported without submitting');
+      deny = false;
+      window.__TAURI_INTERNALS__.invoke = bridge;
       root.unmount(); host.remove(); window.store.setState({ projects });
 
       const ui = await make('p');
@@ -126,7 +148,7 @@ try {
       return { calls, checkpoint: !!checkpoint };
     } finally { Date.now = originalNow; controllers.forEach(c => c.setTriggerTimersEnabled(false)); }
   });
-  assert.deepEqual(result, { calls: 4, checkpoint: true });
+  assert.deepEqual(result, { calls: 5, checkpoint: true });
   const dailyResult = await page.evaluate(async () => {
     const { CanvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');

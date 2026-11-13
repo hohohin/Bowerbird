@@ -105,7 +105,8 @@ export async function invoke(command: string, args: any = {}) {
     if (command === "local_chat_dsh_setup") {
       await new Promise(resolve => setTimeout(resolve, 600));
       if (controls.fault === "dsh-setup") throw new Error("DSH 连接未完成，请检查服务后重试。");
-      database.settings[args.mode === "local" ? "dshLocalReady" : "dshManagedReady"] = true;
+      if (args.mode !== "local") throw new Error("只支持连接本机 DSH。");
+      database.settings.dshLocalReady = true;
       if (args.mode === "local") database.settings.dshLocalUrl = args.url;
       save();
     }
@@ -121,7 +122,8 @@ export async function invoke(command: string, args: any = {}) {
   }
   if (command === "local_chat_quote") {
     if (controls.fault === "quote") throw new Error("synthetic quote upstream error");
-    return { provider: "deepseek-cloud", service: "chat_deepseek", available: true, unit_cost: 0, currency: "Bcoin", pricing_version: 1 };
+    return { provider: "deepseek-cloud", service: "chat_deepseek", available: true, unit_cost: 0, currency: "Bcoin", pricing_version: 1,
+      dsh_vps_available: true, dsh_vps_v2_available: true, dsh_vps_skills_available: true };
   }
   if (command === "plugin:event|listen") { listeners.set(args.handler, args.event); return args.handler; }
   if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return null; }
@@ -129,6 +131,42 @@ export async function invoke(command: string, args: any = {}) {
   if (command === "visual_profile_list") return [];
   if (command === "local_chat_list") { if (controls.fault === "read") throw new Error("synthetic database C:\\private\\chat.db failed"); return Object.values(database.conversations).filter(chat => chat.projectId === args.projectId).sort((a, b) => b.updatedAt - a.updatedAt).map(summary); }
   if (command === "local_chat_get") { if (controls.fault === "read") throw new Error("synthetic database C:\\private\\chat.db failed"); return clone(database.conversations[args.conversationId] ?? null); }
+  if (command === "local_chat_new_on_card") {
+    const old = database.conversations[args.conversationId];
+    const project = database.projects[args.projectId];
+    const card = project.workflow.document.nodes.find((node: any) => node.id === args.nodeId);
+    if (!old || old.nodeId !== args.nodeId || card.chatConversationId !== old.id || ["running", "stopping"].includes(old.status)) throw new Error("卡片的对话已切换或仍在回复。");
+    const provider: ChatProvider = args.provider ?? old.provider;
+    const changedProvider = provider !== old.provider;
+    if (!old.turnCount && !changedProvider) return clone(old);
+    const codexOptions = provider === "codex-local" ? args.codexOptions ?? (!changedProvider ? old.codexOptions : undefined) : undefined;
+    const note = project.nodes.find((node: any) => node.id === args.nodeId);
+    if (changedProvider) { delete card.chatDshSkill; delete card.chatCodexOptions; }
+    Object.assign(card, { chatProvider: provider, chatCodexOptions: codexOptions });
+    if (!old.turnCount) {
+      Object.assign(old, { provider, codexOptions, updatedAt: Date.now(), revision: old.revision + 1 });
+      note.payloadJson = JSON.stringify({ ...JSON.parse(note.payloadJson), provider });
+      project.workflow.revision++;
+      save();
+      emit("local-chat://updated", old); emit("local-chat://cards-changed", { projectId: old.projectId, conversationId: old.id });
+      return clone(old);
+    }
+    const id = crypto.randomUUID(), now = Date.now();
+    old.nodeId = `history-${id}`;
+    old.revision++;
+    project.nodes.push({ ...clone(note), id: old.nodeId, hiddenAt: now });
+    const chat: Conversation = { ...old, id, nodeId: args.nodeId, threadId: `chat-thread-${id}`, title: "新对话", status: "idle", error: null,
+      provider, codexOptions, revision: 1, createdAt: now, updatedAt: now, turnCount: 0, messages: [], actions: [], preview: "" };
+    database.conversations[id] = chat;
+    Object.assign(note, { threadId: chat.threadId, payloadJson: JSON.stringify({schema_version: 1, note_type: "chat", text: chat.title, conversation_id: id, provider}) });
+    project.threads.push({ id: chat.threadId, projectId: chat.projectId, title: chat.title, createdAt: now, updatedAt: now, archivedAt: null });
+    card.chatConversationId = id;
+    project.workflow.revision++;
+    save();
+    emit("local-chat://updated", old); emit("local-chat://updated", chat);
+    emit("local-chat://cards-changed", { projectId: chat.projectId, conversationId: id });
+    return clone(chat);
+  }
   if (command === "local_chat_cards_undo") {
     const chat = database.conversations[args.conversationId], action = chat?.actions?.find(action => action.id === args.actionId);
     if (!action) throw new Error("找不到这次创建记录。");
@@ -152,7 +190,6 @@ export async function invoke(command: string, args: any = {}) {
       if (!controls.entitled) throw new Error("本机对话需要 Pro 或 Studio 权益。");
     }
     if (provider === "dsh-local" && !database.settings.dshLocalReady) throw new Error("请先连接本机 DSH。");
-    if (provider === "dsh-cloud" && !database.settings.dshManagedReady) throw new Error("请先准备 DSH。");
     if (controls.fault === "send") throw new Error("synthetic IPC C:\\private\\auth.json token_missing");
     if (database.requests[input.requestId]) return clone(database.conversations[database.requests[input.requestId]]);
     if (!input.text?.trim()) throw new Error("请输入对话内容。");

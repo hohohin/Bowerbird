@@ -5,6 +5,7 @@ import { CanvasWorkspace } from "../../../src/components/CanvasWorkspace";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { ToastViewport } from "../../../src/components/ToastViewport";
 import { useStore } from "../../../src/store";
+import { startChatCapabilityChecks } from "../../../src/lib/chatCapabilities";
 import { installCatalogPagingMock } from "../catalogPagingMock";
 import { advance, assets, controls, createCards, failRunning, finish, inspect, install, interrupt, projects, releaseReplies, reset, setDelayReply, setFault, setHold, staleEvent, subscribe } from "./mock";
 
@@ -18,6 +19,7 @@ useStore.setState({ projects: projects as any, activeProjectId: inspect().active
   activeGenProvider: "codex", codexHealth: { ok: true, reason: "" }, dreaminaHealth: { ok: true, reason: "" } });
 
 function Fixture() {
+  useEffect(startChatCapabilityChecks, []);
   const projectId = useStore(state => state.activeProjectId)!;
   const [snapshot, setSnapshot] = useState(inspect);
   const [authenticated, setAuthenticated] = useState(true);

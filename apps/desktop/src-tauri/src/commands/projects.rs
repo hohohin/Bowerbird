@@ -146,6 +146,13 @@ pub async fn create_blank_project(
 }
 
 #[tauri::command]
+pub async fn project_covers(db: State<'_, Arc<Database>>) -> AppResult<HashMap<String, crate::core::projects::ProjectCover>> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.project_covers())
+        .await.map_err(|error| AppError::Other(error.to_string()))?
+}
+
+#[tauri::command]
 pub async fn list_projects(db: State<'_, Arc<Database>>) -> Result<Vec<Project>, AppError> {
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || db.list_projects())

@@ -2,13 +2,13 @@ import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ configFile: false, root: process.cwd(), cacheDir: '.tmp/generation-session-errors-vite',
+const server = await createServer({ root: process.cwd(), cacheDir: '.tmp/generation-session-errors-vite',
   server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 const errors = [];
-page.on('pageerror', error => errors.push(error.message));
+page.on('pageerror', error => errors.push(error.stack));
 await page.addInitScript(() => {
   window.copied = [];
   window.notices = [];
@@ -54,6 +54,8 @@ try {
 
   // Production TurnView translates actionable failures without destroying diagnosis evidence.
   const failureCases = [
+    { provider: 'jimeng', media: 'image', raw: '即梦: dreamina 提交退出 exit code: 1 | stderr: 未检测到有效登录态，请先执行 dreamina login | stdout: ',
+      expected: '即梦自有订阅未登录或登录已失效，请在设置中登录即梦后继续。', settings: 'jimeng' },
     { provider: 'codex', media: 'image', raw: "You've hit your usage limit. https://private.example/usage?token=secret at C:\\private\\worker.ts:42",
       expected: '当前 ChatGPT 账号的使用额度已用完，请等待额度恢复，或切换生成方式。' },
     { provider: 'jimeng', media: 'image', raw: 'ExceedConcurrencyLimit: request_id=private-request https://private.example/queue',
@@ -73,6 +75,10 @@ try {
         attempts: [{ phase: 'provider', status: 'failed', error: raw }], task: null });
     }, failure);
     await surface.getByText(failure.expected, { exact: true }).waitFor();
+    if (failure.settings) {
+      await surface.getByRole('alert').locator('..').getByRole('button', { name: '配置自有订阅' }).click();
+      assert.equal(await page.evaluate(() => window.store.getState().subscriptionSettingsTarget), failure.settings);
+    }
     const display = `${await surface.innerText()} ${await surface.locator('[title], [aria-label]').evaluateAll(nodes => nodes.map(node => `${node.title ?? ''} ${node.getAttribute('aria-label') ?? ''}`).join(' '))}`;
     assert.doesNotMatch(display, /https?:\/\/|C:\\private|TypeError|provider_token_missing|ExceedConcurrencyLimit|outcome_unknown|usage limit|private-request/);
     assert.equal(await page.evaluate(() => window.store.getState().genJobs[window.store.getState().activeJobId].turns[0].error), failure.raw);
@@ -121,7 +127,7 @@ try {
 
   await surface.focus();
   await page.keyboard.press('Shift+F10');
-  await copy.waitFor();
+  await copy.and(page.locator(':focus')).waitFor();
   assert.equal(await copy.evaluate(el => el === document.activeElement), true);
   await page.keyboard.press('ArrowDown');
   assert.equal(await menu.getByRole('menuitem', { name: '复制本次会话诊断信息', exact: true }).evaluate(el => el === document.activeElement), true);
@@ -166,18 +172,22 @@ try {
   // Reloaded canvas history carries the original job ID, never the synthetic canvas-snapshot ID.
   await page.evaluate(() => {
     const s = window.snapshot(), base = s.nodes[0];
+    const history = { schema_version: 1, job_id: 'original-history-job', turn_key: 'one', provider: 'jimeng',
+      text: '历史会话', status: 'failed', error: '未检测到有效登录态，请先执行 dreamina login' };
     s.nodes = [{ ...base, id: 'history', kind: 'prompt', assetId: null, role: null, x: 200, y: 100,
-      payloadJson: JSON.stringify({ schema_version: 1, job_id: 'original-history-job', turn_key: 'one', text: '历史会话', status: 'done' }) },
-    { ...base, id: 'output', assetId: 'a', role: 'output', x: 500, y: 100,
-      payloadJson: JSON.stringify({ schema_version: 1, snapshot: { name: 'a', width: 190, height: 150 },
-        execution: { job_id: 'original-history-job', turn_key: 'one' } }) }];
-    s.edges = [{ id: 'produced', projectId: 'p', threadId: 't', fromNodeId: 'history', toNodeId: 'output', kind: 'produced', ordinal: 0, createdAt: 1 }];
+      payloadJson: JSON.stringify(history) },
+    { ...base, id: 'reference', assetId: 'a', role: 'reference', x: 500, y: 100,
+      payloadJson: JSON.stringify({ schema_version: 1, snapshot: { name: 'a', width: 190, height: 150 } }) }];
+    s.edges = [{ id: 'input', projectId: 'p', threadId: 't', fromNodeId: 'reference', toNodeId: 'history', kind: 'input', ordinal: 0, createdAt: 1 }];
     s.view = { ...s.view, panX: 50, panY: 60, zoom: 1 };
     sessionStorage.setItem('reference-fixture', JSON.stringify(s));
   });
   await page.reload();
-  await page.evaluate(() => window.store.setState({ boardOpen: false }));
-  await page.locator('[data-conversation-image="a"]').click();
+  const historyCard = page.locator('[data-canvas-node-id="history"]');
+  await historyCard.waitFor();
+  await page.evaluate(() => window.store.setState({ boardOpen: false, genEditing: null }));
+  await historyCard.press('Enter');
+  await surface.getByRole('alert').filter({ hasText: '即梦自有订阅未登录' }).waitFor();
   await open(); await copy.click();
   assert.deepEqual(await page.evaluate(() => window.copied), ['original-history-job']);
   await surface.locator('img').first().dispatchEvent('contextmenu', { bubbles: true, cancelable: true });
@@ -189,8 +199,9 @@ try {
     sessionStorage.setItem('reference-fixture', JSON.stringify(s));
   });
   await page.reload();
-  await page.evaluate(() => window.store.setState({ boardOpen: false }));
-  await page.locator('[data-canvas-node-id="history"]').click();
+  await historyCard.waitFor();
+  await page.evaluate(() => window.store.setState({ boardOpen: false, genEditing: null }));
+  await historyCard.press('Enter');
   await open();
   for (const item of await menu.getByRole('menuitem').all()) assert.equal(await item.isDisabled(), true);
   assert.match(await menu.innerText(), /未记录任务 ID/);

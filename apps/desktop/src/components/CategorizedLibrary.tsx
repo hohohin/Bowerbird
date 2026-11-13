@@ -33,7 +33,7 @@ import { isAudioAsset } from "../lib/audioMedia";
 import { isTextAsset } from "../lib/textMedia";
 import { LocalClassificationDialog } from "./LocalClassificationDialog";
 import { LocalFileBrowser } from "./LocalFileBrowser";
-import { CollectionAssignDialog, CollectionEditorDialog } from "./CollectionDialogs";
+import { CollectionAssignDialog, CollectionEditorDialog, CollectionMoveDialog } from "./CollectionDialogs";
 import { ModalShell } from "./ModalShell";
 import { CatalogTagIndex } from "./CatalogTagIndex";
 import { ContextMenu, DeleteSubmenu } from "./ContextMenu";
@@ -73,6 +73,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const [deleting, setDeleting] = useState<Collection | null>(null);
   const [collectionMenu, setCollectionMenu] = useState<{ item: Collection; x: number; y: number; trigger: HTMLElement } | null>(null);
   const [assign, setAssign] = useState<string[] | null>(null);
+  const [moveIds, setMoveIds] = useState<string[] | null>(null);
   const [manageTags, setManageTags] = useState(false);
   const [references, setReferences] = useState(false);
   const [preview, setPreview] = useState<{ path: string; sourceKey: string } | null>(null);
@@ -125,7 +126,9 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     view?.addEventListener("scroll", save, { passive: true });
     return () => { save(); view?.removeEventListener("scroll", save); };
   }, [positionKey, positions]);
-  useLayoutEffect(() => { positions.set(positionKey, { ...position.current, top: scroll.current?.scrollTop ?? 0 }); });
+  useLayoutEffect(() => {
+    positions.set(positionKey, { ...position.current, top: scroll.current?.scrollTop ?? 0 });
+  }, [positions, positionKey, active, alphabetic, color, query, generatedFilter]);
   function navigateTag(id: string) { setActive(id); setJump(previous => ({ id, sequence: (previous?.sequence ?? 0) + 1 })); }
   function navigateLetter(letter: string) {
     const target = orderCatalogTags(visibleTags, [], false).find(tag => !pinnedTags.includes(tag.id) && catalogInitial(tag.name) === letter)
@@ -215,10 +218,10 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
       if (alive.current && selectionVersion.current === version) { setSelected(new Set(ids)); setMultiple(true); }
     });
   }
-  async function resolveSelection(ids = [...selected]) {
+  async function resolveSelection(ids = [...selected], allowPartial = false) {
     const assets: Asset[] = [];
     for (let i = 0; i < ids.length; i += 200) assets.push(...await api.getAssetsByIds(ids.slice(i, i + 200)));
-    if (assets.length !== ids.length) throw new Error("部分所选素材已不存在，请重新选择");
+    if (!allowPartial && assets.length !== ids.length) throw new Error("部分所选素材已不存在，请重新选择");
     return assets;
   }
   function select(asset: Asset, additive: boolean, range: boolean, location: CatalogLocation) {
@@ -286,8 +289,12 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     const ids = selected.has(asset.id) ? [...selected] : [asset.id];
     const key = filterKey;
     void run(async () => {
-      const targets = ids.length === 1 ? [asset] : await resolveSelection(ids);
+      const targets = ids.length === 1 ? [asset] : await resolveSelection(ids, true);
       if (!canShowOverlay() || filterKeyRef.current !== key) return;
+      if (targets.length !== ids.length) {
+        (onAssetContextMenu ?? useStore.getState().openContextMenu)(x, y, asset.id, { asset, moveIncompleteSelection: () => setMoveIds(ids) });
+        return;
+      }
       (onAssetContextMenu ?? useStore.getState().openContextMenu)(x, y, asset.id, { asset, generationGroup: [...shownGroupAssets.current.values()].includes(asset.id) ? { assetId: asset.id } : undefined, libraryProjectId: projectScope ? browseProjectId ?? undefined : undefined, fileSelection: { assets: targets, openReferences: () => setReferences(true),
         onComplete: finishSelection, select: () => { anchor.current = location; setMultiple(true); setSelected(previous => new Set([...previous, asset.id])); } } });
     });
@@ -419,7 +426,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
         </OverlayScrollArea>
         <ThumbnailSizeSlider scope="library"/>
         {(selected.size > 0 || multiple) && <CatalogSelectionBar count={selected.size} busy={working} projectId={projectId} onFinish={finishSelection}
-          onSelectAll={() => void selectAll()} onAssign={() => setAssign([...selected])}
+          onSelectAll={() => void selectAll()} onAssign={() => setAssign([...selected])} onMove={() => setMoveIds([...selected])}
           onAdd={media !== "audios" ? () => void run(async () => { const key = filterKey; const assets = await resolveSelection(); if (!alive.current || filterKeyRef.current !== key) return; await addMaterialAssets(assets, projectId, onNavigate ?? onClose, onCreateProject); finishSelection(); notifySuccess(projectId ? "已添加到画板" : "已添加到新项目素材库"); }) : undefined}>
           {kind === "collections" && active && <button disabled={working || !selected.size} onClick={() => void run(async () => { await materialCatalog.members(active, [...selected], false); finishSelection(); invalidateCatalog(); })}>移出文件夹</button>}
         </CatalogSelectionBar>}
@@ -434,6 +441,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
       <DeleteSubmenu><button role="menuitem" className="app-context-item is-danger px-2 py-1.5" onClick={() => { setDeleting(collectionMenu.item); setCollectionMenu(null); }}><Trash2 size={13} aria-hidden="true"/>删除文件夹</button></DeleteSubmenu>
     </ContextMenu>}
     {assign && <CollectionAssignDialog assetIds={assign} onClose={() => setAssign(null)} onSaved={() => { finishSelection(); invalidateCatalog(); }}/>}
+    {moveIds && <CollectionMoveDialog selection={{ assetIds: moveIds }} onClose={() => setMoveIds(null)} onSaved={finishSelection}/>}
     {deleting && <ModalShell title="删除文件夹" onClose={() => setDeleting(null)} preventClose={working}>
       <p>删除「{deleting.name}」及其子文件夹？只移除文件夹关系，素材和电脑中的原文件均保留。</p>
       <button className="app-button-dark" disabled={working} onClick={() => void run(async () => { await materialCatalog.deleteCollection(deleting.id); setDeleting(null); setActive(null); invalidateCatalog(); })}>{working ? "删除中…" : "删除文件夹"}</button>

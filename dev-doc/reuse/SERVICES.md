@@ -4,6 +4,12 @@
 
 ## 读取或修改本机业务数据
 
+云端 DSH 要求在画板建卡时，复用 [桌面聊天桥](../../apps/desktop/src-tauri/src/commands/local_chat_dsh_vps.rs) 与原生建卡事务，VPS 不直写本地数据库。需要在云端执行受保护的聊天技能时，复用 [Worker 的 DSH 聊天入口](../../apps/agent-worker/src/cloud-chat/dsh.ts) 和既有技能加载器；聊天协议及服务端权限见 [Cloud 对话](../../apps/cloud/CHAT.md)。
+
+- 桌面批量文件操作从 [startFileTask](../../apps/desktop/src/lib/fileTasks.ts) 提交已确认的原件或目录条目与目标。当前会话的受理、取消、状态和失败项重试由 [原生文件任务](../../apps/desktop/src-tauri/src/commands/file_tasks.rs) 管理。进度显示复用 [FileTaskStatusPanel](../../apps/desktop/src/components/FileTaskStatus.tsx)。[文件操作契约](../FOLDER-MODE.md#2026-11-12-文件操作后台执行与新建位置源码待发布)
+
+- 图片手动合组调用 `api.mergeGenerationGalleries`／`undoGenerationGalleryMerge`；创作框通过 `previousGalleryGeneration(projectId)` 读取当前项目最近普通图片任务。原生实现为 [generation_gallery_manual.rs](../../apps/desktop/src-tauri/src/core/generation_gallery_manual.rs)，SQLite 0057 只存展示别名；catalog／文件夹共用 `gallery_eligible`、`generation_resolved_group`／`generation_display_group`，画板只读补充，不修改 provider 身份或生成图属性。[显式合组契约](../CANVAS-WORKFLOW.md#2026-11-11显式抽卡与手动合组源码待发布)。
+
 文档原件统一由 [text_documents.rs](../../apps/desktop/src-tauri/src/core/text_documents.rs) 按已登记素材身份访问。其 `office` 子模块 [office_documents.rs](../../apps/desktop/src-tauri/src/core/office_documents.rs) 提供 DOCX 正文／包读取、版本保护的 `save_docx` 和 XLSX／CSV `read_spreadsheet`；对应 IPC 为 `read_text_document`（可选 `previewOnly`）、`save_docx_document`、`read_spreadsheet_document`。调用方只能传 asset ID，不能指定任意读写路径。正文预览、全量编辑与画板内容转换共用格式边界；表格只读原件，DOCX 不走 UTF-8 保存。依赖固定版本、读取限制与验收见 [办公文档支持](../TEXT-LIBRARY.md#办公文档素材2026-11-09)。
 
 局域网文件收发使用 [quick_transfer.rs](../../apps/desktop/src-tauri/src/commands/quick_transfer.rs) 的显式 start/stop IPC；发送端调用 `quick_transfer_send_start(address, files)`／`quick_transfer_send_stop`，共享单调版本状态，独立于接收。底层 [send.rs](../../apps/desktop/src-tauri/src/quick_transfer/send.rs) 复用固定 LocalSend 浏览器下载协议，仅交付显式选择的原件；不拿缩略图作交付，不开启目录浏览。二维码／复制链接共用 `QuickTransferConnection`。完整权限和生命周期见[快传协议](../QUICK-TRANSFER.md)。
@@ -15,12 +21,15 @@
 
 ## 判断账号权益和可用 provider
 
+- 本机订阅提交前用 [require_generation_cli](../../apps/desktop/src-tauri/src/commands/codex.rs) 复查设置页所用的健康检测。即梦通过独立 CLI 的 `user_credit` 核验授权，[jimeng.rs](../../apps/desktop/src-tauri/src/commands/jimeng.rs) 区分登录失效和网络检测失败，并将最新状态通知桌面。
 - **用途／关键词**：FeaturePolicy、Pro、BYO、门控、并发、权益快照。
 - **入口**：桌面用 `api.cloudEntitlement` 获取快照；后端用 [entitlement.rs](../../apps/desktop/src-tauri/src/cloud/entitlement.rs) 的 `EntitlementService::current_or_sync` 和 [policy.rs](../../apps/desktop/src-tauri/src/cloud/policy.rs) 的 `FeaturePolicy::allows_generation_provider`。服务端按用户计算用 [_shared/feature-policy.ts](../../apps/cloud/supabase/functions/_shared/feature-policy.ts) 的 `policyForUser`。
 - **调用**：[commands/codex.rs](../../apps/desktop/src-tauri/src/commands/codex.rs) 的 `codex_create_image` 在执行前核验 policy；[entitlement/index.ts](../../apps/cloud/supabase/functions/entitlement/index.ts) 把 `policyForUser(tier, user)` 写入权益响应；[store.ts](../../apps/desktop/src/store.ts) 消费 `api.cloudEntitlement()`。
 - **边界／状态**：**可跨模块复用（各自运行时）**。TS `FeaturePolicy` 是响应类型，Rust policy 是本机执行门控，Edge policy 还包含测试账号规则；不能仅按 tier 在 UI 重建权限，也不能把 `policyFor` 的基础值当作用户最终授权。改字段需核对三端，禁止用 UI 禁用替代服务端校验。
 
 ## 增加图片、视频或理解能力
+
+- 本机 Codex 新建会话的首张完整图片可通过同一 `codex://chunk` 的 `preview` 事件展示。画板与详情按 job 和 turn 读取内存缩略图。素材、引用、工作流输出和完成通知仍从正式入库结果读取。续接已有 Codex 会话等待正式交付，现用 CLI 的 `thread.started` 只能识别会话。
 
 - 生成进度复用 [codex/progress.rs](../../apps/desktop/src-tauri/src/codex/progress.rs) 的 `GenerationProgress`／`GenerationStage` 及 `Chunk::Progress`。Codex CLI、Dreamina 图片／视频和恢复 worker 共用 `codex://chunk`，命令层补齐 job／turn 身份。`jimeng_video::response` 仅在桌面 provider 模块内复用为 Dreamina stdout JSON 解析器；它不是跨模块／跨运行时 API。不将原始工具参数、推理或诊断正文写入用户阶段标签。
 
@@ -53,8 +62,15 @@ H3 的独立提示词优化复用 [canvasWorkflowRuntime.ts](../../apps/desktop/
 - **调用**：[TextDocumentEditor.tsx](../../apps/desktop/src/components/TextDocumentEditor.tsx) 用 `api.importFiles(paths)` 原位插入媒体；[mediaImport.ts](../../apps/desktop/src/lib/mediaImport.ts) 的单独拖入明确选择收集路径。命令层继续处理项目成员、asset protocol scope、后台分析和变更事件；[commands/layers.rs](../../apps/desktop/src-tauri/src/commands/layers.rs) 调用 `ingest_generated_with_visibility` 保存图层产物。
 - **边界／状态**：**可跨模块复用（桌面 API／Rust 入库层）**。目录连接不复制已有原件，单文件收集不要求先建立连接；不要用 `ingest_new_file` 代替明确收集的 `collect`，也不要仅调用底层写文件就视为完成项目交付。连接目录使用 [connected_media.rs](../../apps/desktop/src-tauri/src/core/connected_media.rs) 的 `Database::index_connected_file` 做廉价索引，实际调用在 [folder_connections.rs](../../apps/desktop/src-tauri/src/core/folder_connections.rs)，并非通用立即生成全部预览的导入器。依赖 SQLite、`LibraryPaths`；先读 [文件契约](../FOLDER-MODE.md)。
 
+## 读取已连接目录与补齐预览
+
+- **入口／调用**：[folder_connections.rs](../../apps/desktop/src-tauri/src/core/folder_connections.rs) 的 `connection_folders_filtered`／`connection_entry_ids_filtered`／`connection_entry_groups` 供原生素材浏览命令使用；`read_connection_entries(ids)` 批量读索引，`resolve_connection_entries(ids)` 在同一读取基础上保留原件存在校验。浏览用前者，明确文件操作用后者；不能用索引可用状态代替删除前确认。
+- **索引与预览**：[connected_media.rs](../../apps/desktop/src-tauri/src/core/connected_media.rs) 的 crate 内 `prepare_connected_file`／`index_prepared_connected_file` 供目录扫描复用指纹，外部入口仍调用 `index_connected_file`。`complete_connected_preview_versioned` 完成预览元数据并返回内容版本，`current_preview_changes` 批量校验待发送事件；[commands/external_files.rs](../../apps/desktop/src-tauri/src/commands/external_files.rs) 用已有四并发渲染、单 worker 有界后台补齐与 `library://previews-changed`，不要再因预览完成触发全库刷新。
+- **扫描通知／边界**：`scan_connection_changes` 回调只标识内容是否变化；原 `scan_connection_with_progress`／`scan_connection_prioritized` 包装保留。命令层独立发 `library://connection-progress`，未变扫描不发素材失效。以上均为桌面本机目录模块内部能力；当前数据规模、基准与恢复限制见 [性能说明](../FOLDER-MODE.md#文件夹读取与预览性能2026-11-10)。
+
 ## 保持断开目录后的素材可见性
 
+- 项目管理页与素材库项目选择器共用 `api.projectCovers()`。它按项目成员查询当前可见素材数及最多三张封面，排除库内隐藏、已回收和已清理失效原件，仍属于项目的断联素材按项目范围读取。[项目查询](../../apps/desktop/src-tauri/src/core/projects.rs)
 - **入口／调用**：[folder_connections.rs](../../apps/desktop/src-tauri/src/core/folder_connections.rs) 的 `disconnect_directory(paths, id)` 将连接移除与断联事实写入同一事务；[external_files.rs](../../apps/desktop/src-tauri/src/core/external_files.rs) 的 `link_external_to_library` 记录明确独立收集并清除断联，重新连接也恢复原身份。
 - **复用边界**：[material_catalog.rs](../../apps/desktop/src-tauri/src/core/material_catalog.rs) 的 crate 内部 `catalog_visibility`／`library_membership_sql` 统一供应分页、标签、旧列表／搜索／计数／色板及常用素材查询；不要另按 `library_hidden` 推断目录成员。0051 的独立收集／断联表只影响全局成员展示，不删除原件、缓存、创作资料或真实项目成员；其他连接／分身、独立收集与受管路径保留。旧版已经断开的来源不能可靠推断，升级不批量猜测隐藏。详见 [文件契约](../FOLDER-MODE.md)。
 
@@ -92,7 +108,7 @@ H3 的独立提示词优化复用 [canvasWorkflowRuntime.ts](../../apps/desktop/
 
 - **用途／关键词**：余额、hold、幂等键、确认、回滚、待结算。
 - **入口**：[_shared/billing.ts](../../apps/cloud/supabase/functions/_shared/billing.ts) 的 `holdCredits`、`confirmCredits`、`rollbackCredits`、`markPendingSettlement` 封装账本 RPC；`ensureDailyCredits` 是保留的历史名称，当前传 `p_amount: 0`，不能据此新增每日赠币。
-- **调用**：[understand-proxy/index.ts](../../apps/cloud/supabase/functions/understand-proxy/index.ts) 调用 hold／confirm／rollback；[agent-run/index.ts](../../apps/cloud/supabase/functions/agent-run/index.ts) 在创建与容量失败路径调用 hold／rollback。
+- **调用**：[理解与视觉提炼上传](../../apps/cloud/supabase/functions/_shared/text-job-upload.ts) 通过 [0086](../../apps/cloud/supabase/migrations/0086_text_job_upload_retention.sql) 事务化受理、凭原输入哈希续传、入队与过期回收（[2026-11-11 部署](../../project_logs/2026-11-11-audit-cloud-deployment.md)）；旧同步理解独占预留后结算；[agent-run/index.ts](../../apps/cloud/supabase/functions/agent-run/index.ts) 在创建与容量失败路径调用 hold／rollback。
 - **边界／状态**：**可跨模块复用（Cloud Edge Functions）**。需已验证用户、admin client、当前 migrations 与服务端 service 定价；异步任务各自拥有持久化与结算状态机，不能复制同步接口的 catch 就统一退款。供应商结果未知与可确认失败不同；新计费服务先读 [当前定价](../Bowerbird定价方案v2-订阅积分制.md)、[收费化计划](../ARCH-ADJUST-PLAN.md)。
 
 ## 接入微信支付与恢复原订单
@@ -106,6 +122,8 @@ H3 的独立提示词优化复用 [canvasWorkflowRuntime.ts](../../apps/desktop/
 
 Agent 卡片与对话框的新请求统一复用 `localChatStore` → `local_chat_send`；`workflowAgentChat` / `CanvasWorkflowController.chatResult` 仅适配工作流输入和原轮次输出，不新增 runner。SQLite 原子绑定同 nodeId 的会话／Agent 投影；`local_chat_get_by_request` 只读原请求身份，既有 `localDsRequestId` / `agentRunId` 仅用于恢复。全文和表格结果复用 `workflowAgentResult` / `workflowAgentOutputs`。Cloud 共用聊天服务，0084 与聊天 Worker／Edge／网关于 2026-11-09 经用户确认后部署并核验；桌面源码尚未发布安装包，详见[当前统一契约](../CHAT-PROVIDERS.md)。
 
+同一张卡片切换到空会话复用 `localChat.newOnCard` → `local_chat_new_on_card`。原生校验项目、卡片、原会话与运行锁，将旧会话存入项目历史，并让新会话沿原卡接线运行。发送与恢复仍走上面的公共入口。
+
 - **用途／关键词**：Tool Gateway、DSH、审批、lease、durable、工具账本、TaskAuthorization。
 - **入口**：Worker [scoped-tool-gateway.ts](../../apps/agent-worker/src/harness/scoped-tool-gateway.ts) 的 `ScopedToolGateway`／`ToolGatewayDefinition` 校验工具、阶段、授权和参数；外部副作用通过 [durable-tool-dispatcher.ts](../../apps/agent-worker/src/kernel/durable-tool-dispatcher.ts) 的 `DurableToolDispatcher`。v3 能力额度与动作 journal 由 [adaptive-tool-gateway.ts](../../apps/agent-worker/src/harness/adaptive-tool-gateway.ts) 的 `AdaptiveToolGateway` 管理。
 - **调用**：[unified-planning-tool-bridge.ts](../../apps/agent-worker/src/harness/unified-planning-tool-bridge.ts) 的 `createUnifiedPlanningToolBridge` 组合 scoped gateway；[unified-planning-run-processor.ts](../../apps/agent-worker/src/cloud-agent/unified-planning-run-processor.ts) 实例化 adaptive gateway；[controlled-image-executor.ts](../../apps/agent-worker/src/providers/ark/controlled-image-executor.ts) 使用 durable dispatcher。
@@ -116,6 +134,7 @@ Agent 卡片与对话框的新请求统一复用 `localChatStore` → `local_cha
 - **用途／关键词**：MV3、网页取图、浏览器会话、save_blob、WebSocket、采集回执。
 - **入口**：[collection-utils.js](../../apps/extension/collection-utils.js) 经 `globalThis.BowerbirdCollection` 暴露 `uploadBytes`／`checkVideoSupport`；[background.js](../../apps/extension/background.js) 的消息监听接收 `save_image`／`save_video`。桌面入口为 [collect/ws_server.rs](../../apps/desktop/src-tauri/src/collect/ws_server.rs) 的 `start`，解析元数据帧和二进制帧。
 - **调用**：`background.js` 的 `fetchVideo` 调用 `BowerbirdCollection.uploadBytes`；桌面 [lib.rs](../../apps/desktop/src-tauri/src/lib.rs) 启动 `collect::ws_server::start`，视频保存走 [video_blob.rs](../../apps/desktop/src-tauri/src/collect/video_blob.rs) 的 `save`；内置探索 [source_browser_capture.rs](../../apps/desktop/src-tauri/src/commands/source_browser_capture.rs) 也复用该保存层。
+- 桌面主窗口通过 `pair_extension` 登记扩展安装公钥。后台 `pairing.js` 为每个连接签发绑定浏览器来源的限时凭据；页面只取得单次上传授权。兼容 URL 下载复用 `core/public_network.rs` 的公网地址判定，每跳独立固定解析结果。
 - **边界／状态**：**模块内部专用（扩展采集协议）**；视频保存层在 Rust crate 内已有跨入口调用。扩展 JS 是 classic script/global 导出，不是 React 模块；浏览器下载保持站点会话，上传只发字节及来源，不导出 Cookie。视频必须能力协商。内置探索和扩展的下载范围不同，不能拿一侧流媒体支持替另一侧作保证；见 [扩展 README](../../apps/extension/README.md)、[探索契约](../EMBEDDED-BROWSER.md)。
 
 ## 为官网或桌面配置 Cloud 反向代理入口

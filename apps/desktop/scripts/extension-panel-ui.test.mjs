@@ -3,12 +3,13 @@ import { mkdir } from "node:fs/promises";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
-const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: ".tmp/extension-panel/vite", optimizeDeps: { entries: ["scripts/fixtures/extension/preview.html"] }, server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const port = server.httpServer.address().port;
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 850 } });
 page.setDefaultTimeout(10000);
+page.setDefaultNavigationTimeout(60000);
 const errors = [];
 page.on("pageerror", error => errors.push(error.message));
 await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
@@ -216,6 +217,13 @@ try {
       await page.screenshot({ path: `.tmp/extension-panel/${theme}-${width}.png`, animations: "disabled" });
     }
   }
+  const pair = dialog().getByLabel("浏览器配对码");
+  assert.equal(await button("确认配对").isDisabled(), true);
+  const code = "abcdefghijklmnopabcdefghijklmnop." + "01".repeat(32);
+  await pair.fill(code);
+  await button("确认配对").click();
+  await dialog().getByText("配对已保存。请刷新采集网页以检查连接。").waitFor();
+  assert.equal((await calls("pair_extension")).at(-1).args.code, code);
   assert.deepEqual(errors, []);
   console.log("PASS extension entry, connection/recheck, Chrome/Edge/path copy and late-result isolation, failure recovery, focus/Escape, native visibility without navigation, and narrow light/dark layouts.");
 } catch (error) {

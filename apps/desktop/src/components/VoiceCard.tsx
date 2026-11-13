@@ -31,9 +31,9 @@ function audio(asset?: Asset) {
   return asset?.store_path && <AudioWaveform assetId={asset.id} path={asset.store_path} name={asset.name}
     version={asset.file_mtime ?? asset.created_at ?? 0} duration={asset.duration} />;
 }
-export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetIds, step, busy, patch, run }: {
+export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetIds, step, busy, runBlocked, patch, run }: {
   node: WorkflowNode; projectId: string; referenceIds: string[]; assets: Asset[]; step?: WorkflowStep; busy: boolean;
-  placedAssetIds: Set<string>; patch: (changes: Partial<WorkflowNode>) => void; run: () => void;
+  placedAssetIds: Set<string>; runBlocked: boolean; patch: (changes: Partial<WorkflowNode>) => void; run: () => void;
 }) {
   const settings = node.voice ?? {}, selectedId = settings.id;
   const [snapshot, setSnapshot] = useState<VoiceSnapshot>(), [error, setError] = useState("");
@@ -132,7 +132,7 @@ export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetId
       </div>}
       {recording && clip && <>
         <textarea aria-label="试听台词" placeholder="试听台词" disabled={locked} value={sample} onChange={e => patch({ voice: { ...settings, sampleText: e.target.value } })} />
-        <button disabled={locked || !sample.trim() || clip.end - clip.start < .999} onClick={run}>生成试听</button>
+        <button disabled={locked || runBlocked || !sample.trim() || clip.end - clip.start < .999} onClick={run}>生成试听</button>
         {audio(result)}
         <details><summary>录音原文（可选）</summary><textarea aria-label="录音原文" disabled={locked} value={clip.transcript} onChange={e => patch({ voice: { ...settings, clip: { ...clip, transcript: e.target.value } } })} /></details>
         <div className="voice-card-row"><input aria-label="声音名称" placeholder="声音名称" disabled={locked} value={clip.name} onChange={e => patch({ voice: { ...settings, clip: { ...clip, name: e.target.value } } })} />
@@ -144,7 +144,7 @@ export function VoiceCard({ node, projectId, referenceIds, assets, placedAssetId
     </>}
     {selectedId && <>
       <textarea aria-label="配音台词" placeholder="输入角色要说的话…" disabled={locked} value={node.prompt} onChange={e => patch({ prompt: e.target.value })} />
-      <button className="voice-card-primary" disabled={locked || !selected || (!node.prompt.trim() && !node.inputs.text?.length)} onClick={run}>生成配音</button>
+      <button className="voice-card-primary" disabled={locked || runBlocked || !selected || (!node.prompt.trim() && !node.inputs.text?.length)} onClick={run}>生成配音</button>
       {audio(result)}
     </>}
     {!!snapshot?.jobs.some(j => j.purpose !== "preview") && <details open={history} onToggle={e => setHistory(e.currentTarget.open)}><summary>项目配音</summary>

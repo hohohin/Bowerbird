@@ -2,7 +2,8 @@ import { create } from "zustand";
 import type { CatalogKind } from "./materialCatalog";
 
 export type LibrarySource = "global" | "project";
-export type LibraryMedia = "all" | "images" | "videos" | "audios" | "texts";
+const libraryMediaTypes = ["all", "images", "videos", "audios", "texts"] as const;
+export type LibraryMedia = typeof libraryMediaTypes[number];
 export const LIBRARY_VIEW_ORDER = ["collections", "project", "tags", "global"] as const;
 export type LibraryView = typeof LIBRARY_VIEW_ORDER[number];
 // "global" here is the file browser's aggregate directory, not a source tab.
@@ -11,7 +12,26 @@ const projectMemoryKey = (context: string | null) => `bowerbird.libraryProject.$
 function rememberedProject(context: string | null) {
   try { return localStorage.getItem(projectMemoryKey(context)) || context; } catch { return context; }
 }
-export const createLocalFileMode = () => create<{
+export const createLocalFileMode = (paneId = "main") => {
+  type Memory = { view: LibraryView; tagSource: LibrarySource; media: LibraryMedia };
+  const memories = new Map<string | null, Memory>();
+  const memoryKey = (context: string | null) => `bowerbird.libraryView.${paneId}.${context ?? "home"}`;
+  function navigation(context: string | null) {
+    let memory = memories.get(context);
+    if (!memory) {
+      let saved: Partial<Memory> | null = null;
+      try { saved = JSON.parse(localStorage.getItem(memoryKey(context)) ?? "null"); } catch { /* Use defaults without storage. */ }
+      const view = saved?.view && LIBRARY_VIEW_ORDER.includes(saved.view) ? saved.view : context ? "project" : "global";
+      const tagSource = saved?.tagSource === "project" || saved?.tagSource === "global" ? saved.tagSource : context ? "project" : "global";
+      const media = saved?.media && libraryMediaTypes.includes(saved.media) ? saved.media : "images";
+      memory = { view, tagSource, media };
+      memories.set(context, memory);
+    }
+    const source: LibrarySource = memory.view === "tags" ? memory.tagSource : memory.view === "project" ? "project" : "global";
+    const mode: FileMode = memory.view === "global" || memory.view === "project" ? "all" : memory.view;
+    return { ...memory, source, mode };
+  }
+  const store = create<{
   open: boolean; query: string;
   source: LibrarySource;
   view: LibraryView;
@@ -44,10 +64,16 @@ export const createLocalFileMode = () => create<{
   setOpen: (value: boolean | ((value: boolean) => boolean)) => void;
   setQuery: (query: string) => void;
 }>((set, get) => ({
-  open: false, query: "", source: "global", view: "global", tagSource: "global",
+  open: false, query: "", ...navigation(null),
   contextProjectId: null, browseProjectId: rememberedProject(null), projectPickerOpen: false, scopeMenuOpen: false,
-  setProjectContext: contextProjectId => set(state => state.contextProjectId === contextProjectId ? state : {
-    contextProjectId, browseProjectId: rememberedProject(contextProjectId), projectPickerOpen: false, scopeMenuOpen: false,
+  setProjectContext: contextProjectId => set(state => {
+    if (state.contextProjectId === contextProjectId) return state;
+    const restored = navigation(contextProjectId);
+    return {
+      ...restored, contextProjectId, browseProjectId: rememberedProject(contextProjectId),
+      generatedFilter: restored.media === "audios" || restored.media === "texts" ? null : state.generatedFilter,
+      query: "", projectPickerOpen: false, scopeMenuOpen: false,
+    };
   }),
   selectProject: browseProjectId => {
     try { localStorage.setItem(projectMemoryKey(get().contextProjectId), browseProjectId); } catch { /* Keep browsing without storage. */ }
@@ -55,10 +81,9 @@ export const createLocalFileMode = () => create<{
   },
   setProjectPickerOpen: projectPickerOpen => set({ projectPickerOpen }),
   setScopeMenuOpen: scopeMenuOpen => set({ scopeMenuOpen }),
-  media: "images",
   generatedFilter: null,
   setGeneratedFilter: generatedFilter => set({ generatedFilter }),
-  navigationHost: null, globalRequest: 0, mode: "all",
+  navigationHost: null, globalRequest: 0,
   setMode: mode => set({ mode }),
   setView: view => set(state => {
     const mode = view === "global" || view === "project" ? "all" : view;
@@ -82,5 +107,13 @@ export const createLocalFileMode = () => create<{
   setOpen: value => set(state => ({ open: typeof value === "function" ? value(state.open) : value })),
   setQuery: query => set({ query }),
 }));
+  store.subscribe((state, previous) => {
+    if (state.view === previous.view && state.tagSource === previous.tagSource && state.media === previous.media && state.contextProjectId === previous.contextProjectId) return;
+    const memory = { view: state.view, tagSource: state.tagSource, media: state.media };
+    memories.set(state.contextProjectId, memory);
+    try { localStorage.setItem(memoryKey(state.contextProjectId), JSON.stringify(memory)); } catch { /* Keep session memory without storage. */ }
+  });
+  return store;
+};
 
 export const useLocalFileMode = createLocalFileMode();

@@ -1,6 +1,26 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { documentMediaMarkup, documentMediaReferences, documentWorkflowValue } from '../src/lib/documentProjection.ts';
+import { documentReadingHtml } from '../src/lib/documentPreview.ts';
+
+test('canvas prose keeps paragraph boundaries and the last line in compact text blocks', () => {
+  const paragraphs = Array.from({ length: 1250 }, (_, i) => `第 ${i + 1} 段。`);
+  const reading = documentReadingHtml(paragraphs.join('\r\n\r\n'));
+  const chunks = [...reading.matchAll(/<span class="canvas-document-prose">([^<]*)<\/span>/g)];
+  assert.ok(chunks.length > 1 && chunks.length < paragraphs.length / 10);
+  assert.equal(chunks.map(match => match[1]).join('\n\n'), paragraphs.join('\n\n'));
+  assert.match(documentReadingHtml('今天\n天气很好。'), /今天 天气很好。/);
+  assert.match(documentReadingHtml('A &amp; B'), /canvas-document-prose">A &amp; B</);
+});
+
+test('semantic Markdown still renders as structure wherever it occurs in a long document', () => {
+  const lead = '普通正文。\n\n'.repeat(200);
+  for (const [syntax, tag] of [
+    ['标题\n---', '<h2>'], ['2) 有序项目', '<ol start="2">'], ['- 列表', '<ul>'],
+    ['| 表头 |\n| --- |\n| 表格 |', '<table>'], ['    保留缩进', '<pre>'], ['**强调**', '<strong>'],
+    ['第一行  \n下一行', '<br>'], ['www.example.com', '<u>'],
+  ]) assert.ok(documentReadingHtml(lead + syntax).includes(tag), syntax);
+});
 
 test('document keeps Markdown order and captions while projecting ordered media identities', () => {
   const source = '# 场景\n\n**近景**\n\n' + documentMediaMarkup({ kind: 'image', assetId: 'first', caption: '光线', sourcePath: 'D:/private/photo.webp' }) + '\n\n> 保持节奏\n\n' + documentMediaMarkup({ kind: 'image', assetId: 'second', caption: '' }) + '\n\n- 收尾\n';

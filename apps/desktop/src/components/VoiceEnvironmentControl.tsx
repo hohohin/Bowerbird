@@ -20,13 +20,14 @@ function subscribe(listener: () => void) {
 function detect(action = "status") {
   return pending ??= voiceApi.environment(action).then(publish).finally(() => { pending = undefined; });
 }
-export function VoiceEnvironmentControl({ projectId }: { projectId: string }) {
+export function VoiceEnvironmentControl({ projectId, onStatusChange }: { projectId: string; onStatusChange?: (message: string | null) => void }) {
   const state = useSyncExternalStore(subscribe, () => environment);
   const [show, setShow] = useState(false), [busy, setBusy] = useState(false), [error, setError] = useState("");
   const [config, setConfig] = useState<VoiceConfig>({ python: "", model: "" });
   const [advanced, setAdvanced] = useState(false);
   const dot = useRef<HTMLButtonElement>(null);
   const ready = state?.phase === "ready", installing = state?.phase === "installing";
+  useEffect(() => { onStatusChange?.(ready ? null : error || state?.message || "正在检查本机配音环境…"); }, [ready, error, state, onStatusChange]);
   const close = () => { setShow(false); dot.current?.focus(); };
   useEffect(() => {
     let active = true;

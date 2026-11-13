@@ -65,6 +65,8 @@ pub struct CodexResult {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Chunk {
     Progress { #[serde(flatten)] progress: super::progress::GenerationProgress },
+    /// Display-only thumbnail. Never a stored asset or workflow output.
+    Preview { data_url: String },
     /// 增量文本（一段 token）。
     Delta { text: String },
     /// 即梦 submit 拿到 submit_id 即回填（provider 拿到瞬间发，不等下载）。

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Mac 更新包一键流程：版本护栏 → 签名构建 → 产物归档/校验 → 生成 COS 直下清单 → 上传 COS → 公网核对。
+# Mac 更新包一键流程：版本护栏 → 签名构建 → 产物归档/校验 → 生成 CDN 清单 → 上传 TOS → 公网核对。
 # 用法：bash macOS/release.sh [release-notes.txt]
 #   COS_SKIP_BUILD=1   复用 target 里已有产物，只做归档/清单/上传
-#   COS_SKIP_UPLOAD=1  不上传（也不需要 cos.env），仅本地产出
-# 凭据：macOS/.signing/cos.env（模板见 macOS/cos.env.example）；签名私钥固定用 macOS/.signing/updater.key。
-# 分发走腾讯 COS + CDN（cdn.bowerbird.cn）；2026-09-20 起取代 R2 r2.dev（Cloudflare 明确其仅供开发且有速率限制）。
+#   COS_SKIP_UPLOAD=1  沿用已有开关，仅本地产出
+# 凭据：项目根 .env.tos 或签名机的 TOS_* 环境变量；签名私钥固定用 macOS/.signing/updater.key。
+# 2026-10-23 起正式分发走火山 TOS + CDN（cdn.bowerbird.cn）。
 # 上传后清单仍需发布侧核验并原子替换 bowerbird.cn 的 downloads/updates/darwin-<arch>.json（见 dev-doc/DESKTOP-UPDATES.md）。
 set -euo pipefail
 
@@ -13,18 +13,24 @@ cd "$ROOT"
 NOTES=${1:-}
 DIST="macOS/dist"
 SIGNING="macOS/.signing"
-ENV_FILE="$SIGNING/cos.env"
+CHANNEL=${BOWERBIRD_MAC_CHANNEL:-release}
+case "$CHANNEL" in
+  release) ;;
+  local)
+    [ "${COS_SKIP_UPLOAD:-0}" = "1" ] || { echo "本地测试包不能上传"; exit 1; }
+    DIST="$DIST/local"
+    ;;
+  *) echo "未知 Mac 渠道"; exit 1 ;;
+esac
 
-# COS 公开基地址（CDN 加速域名），缺省用仓库文档记录的现役地址；如换域名/桶请在 cos.env 覆盖。
-DEFAULT_PUBLIC_BASE="https://cdn.bowerbird.cn"
-COS_PUBLIC_BASE="${COS_PUBLIC_BASE:-$DEFAULT_PUBLIC_BASE}"
+PUBLIC_BASE="${TOS_CDN_BASE:-https://cdn.bowerbird.cn}"
 
-if [ "${COS_SKIP_UPLOAD:-0}" != "1" ]; then
-  [ -f "$ENV_FILE" ] || { echo "缺少 $ENV_FILE（模板：macOS/cos.env.example）"; exit 1; }
-  set -a; # shellcheck disable=SC1090
-  source "$ENV_FILE"; set +a
-  : "${TENCENT_SECRET_ID:?TENCENT_SECRET_ID 未配置}" "${TENCENT_SECRET_KEY:?TENCENT_SECRET_KEY 未配置}" \
-    "${COS_BUCKET:?COS_BUCKET 未配置}" "${COS_REGION:?COS_REGION 未配置}"
+if [ "$CHANNEL" = release ]; then
+  case "${APPLE_SIGNING_IDENTITY:-}" in
+    "Developer ID Application: "*) ;;
+    *) echo "正式发布需要 APPLE_SIGNING_IDENTITY 指定 Developer ID Application"; exit 1 ;;
+  esac
+  : "${BOWERBIRD_NOTARY_PROFILE:?需要 DMG 公证的 notarytool 钥匙串配置名}"
 fi
 
 VERSION=$(python3 -c "import json;print(json.load(open('apps/desktop/src-tauri/tauri.conf.json'))['version'])")
@@ -36,36 +42,28 @@ case "$HOST" in
 esac
 TAR="Bowerbird_${VERSION}_${ARCH}.app.tar.gz"
 DMG="Bowerbird_${VERSION}_${ARCH}-updater-installer.dmg"
-URL="$COS_PUBLIC_BASE/mac_package/$TAR"
+URL="$PUBLIC_BASE/mac_package/$TAR"
 echo "==> 版本 $VERSION · darwin-$ARCH · 包 $TAR"
 
 # 1) 版本必须高于该通道线上已发布版本（同日重发布用日期+序号，如 26.9.1802）。
-LIVE=$(curl -fsSL --max-time 30 "https://bowerbird.cn/api/desktop-update/darwin-$ARCH" \
-  | python3 -c "import sys,json;print(json.load(sys.stdin).get('version',''))" 2>/dev/null || echo "")
-if [ -n "$LIVE" ]; then
-  python3 - "$LIVE" "$VERSION" <<'EOF'
-import sys
-key = lambda s: [int(x) for x in s.split(".")]
-live, new = key(sys.argv[1]), key(sys.argv[2])
-if new <= live:
-    raise SystemExit(f"版本 {sys.argv[2]} 未高于线上已发布 {sys.argv[1]}，先按规范升版本")
-EOF
-  echo "==> 线上 ${LIVE} < 新包 ${VERSION}，护栏通过"
-else
-  echo "==> 线上清单不可读（未发布？），跳过版本对比"
+if [ "$CHANNEL" = release ]; then
+  python3 macOS/upload_immutable.py check-live "$ARCH" "$VERSION"
+fi
+
+mkdir -p "$DIST"
+# Both local and release builds share Tauri's target/release/bundle directory.
+BUILD_LOCK="$ROOT/macOS/dist/.release-build.lock"
+mkdir "$BUILD_LOCK" || { echo "另一个发布构建仍占用 $BUILD_LOCK"; exit 1; }
+trap 'rmdir "$BUILD_LOCK"' EXIT
+if [ "$CHANNEL" = release ]; then
+  DIST=$(mktemp -d "$DIST/release-$VERSION-$ARCH.XXXXXX")
+  echo "==> 候选归档 $DIST"
 fi
 
 # 2) 签名构建（createUpdaterArtifacts 开启时必须提供私钥）。
-#    稳定本地签名身份：钥匙串“始终允许”按签名身份生效，ad-hoc 签名每次构建指纹都变会导致
-#    用户端反复弹钥匙串授权框；身份缺失时回退 ad-hoc 并提示（一次性生成：setup-codesign-cert.sh）。
-IDENTITY="Bowerbird Local Code Signing"
 if [ "${COS_SKIP_BUILD:-0}" != "1" ]; then
-  if security find-certificate -c "$IDENTITY" >/dev/null 2>&1; then
-    export APPLE_SIGNING_IDENTITY="$IDENTITY"
-    echo "==> 使用稳定签名身份：$IDENTITY"
-  else
-    echo "==> 提示：钥匙串无 $IDENTITY，本次为 ad-hoc 签名，用户端钥匙串授权弹窗会复现"
-    echo "    （一次性修复：bash macOS/setup-codesign-cert.sh）"
+  if [ "$CHANNEL" = local ] && security find-certificate -c "Bowerbird Local Code Signing" >/dev/null 2>&1; then
+    export APPLE_SIGNING_IDENTITY="Bowerbird Local Code Signing"
   fi
   [ -s "$SIGNING/updater.key" ] || { echo "缺少原 Mac updater 私钥；请在原签名机完成签名，不要生成替代密钥。"; exit 1; }
   echo "==> 签名构建 app,dmg"
@@ -85,31 +83,69 @@ mkdir -p "$DIST"
 cp "$B/macos/Bowerbird.app.tar.gz" "$DIST/$TAR"
 cp "$B/macos/Bowerbird.app.tar.gz.sig" "$DIST/$TAR.sig"
 cp "$B/dmg/Bowerbird_${VERSION}_${DMG_ARCH}.dmg" "$DIST/$DMG"
+if [ "$CHANNEL" = release ]; then
+  # Inspect the actual archived and mounted applications, including reused builds.
+  VERIFY_DIR=$(mktemp -d)
+  MOUNT="$VERIFY_DIR/dmg"
+  mounted=0
+  cleanup_verify() {
+    if [ "$mounted" = 1 ]; then hdiutil detach "$MOUNT" || return 1; fi
+    rm -rf -- "$VERIFY_DIR"
+  }
+  trap 'cleanup_verify; rmdir "$BUILD_LOCK"' EXIT
+  mkdir "$MOUNT"
+  node --input-type=module - "$DIST/$TAR" <<'JS'
+import { readFileSync } from "node:fs";
+import { verifyUpdate } from "./macOS/verify-update.mjs";
+const tar = process.argv[2];
+const config = JSON.parse(readFileSync("apps/desktop/src-tauri/tauri.macos.conf.json"));
+verifyUpdate(readFileSync(tar), readFileSync(tar + ".sig", "utf8"), config.plugins.updater.pubkey);
+JS
+  tar -xzf "$DIST/$TAR" -C "$VERIFY_DIR"
+  hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$DIST/$DMG"
+  mounted=1
+  archived_hash=""
+  for app in "$VERIFY_DIR/Bowerbird.app" "$MOUNT/Bowerbird.app"; do
+    codesign --verify --deep --strict "$app"
+    details=$(codesign -dv --verbose=4 "$app" 2>&1)
+    grep -Fx "Authority=$APPLE_SIGNING_IDENTITY" <<<"$details" >/dev/null
+    grep -E 'flags=.*[(,]runtime[,)]' <<<"$details" >/dev/null
+    app_hash=$(sed -n 's/^CDHash=//p' <<<"$details")
+    [ -n "$app_hash" ] && { [ -z "$archived_hash" ] || [ "$app_hash" = "$archived_hash" ]; } || exit 1
+    archived_hash="$app_hash"
+    [ "$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")" = "$VERSION" ]
+    [ "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" = "$(plutil -extract identifier raw apps/desktop/src-tauri/tauri.conf.json)" ]
+    lipo "$app/Contents/MacOS/bowerbird-desktop" -verify_arch "$MACHO"
+    codesign -d --entitlements :- "$app" > "$VERIFY_DIR/entitlements.plist"
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.automation.apple-events' "$VERIFY_DIR/entitlements.plist")" = true ]
+    plutil -extract NSAppleEventsUsageDescription raw "$app/Contents/Info.plist" >/dev/null
+    xcrun stapler validate "$app"
+    spctl --assess --type execute "$app"
+  done
+  hdiutil detach "$MOUNT"
+  mounted=0
+  codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$DIST/$DMG"
+  xcrun notarytool submit "$DIST/$DMG" --keychain-profile "$BOWERBIRD_NOTARY_PROFILE" --wait
+  xcrun stapler staple "$DIST/$DMG"
+  xcrun stapler validate "$DIST/$DMG"
+  spctl --assess --type open --context context:primary-signature "$DIST/$DMG"
+fi
 (cd "$DIST" && shasum -a 256 "$TAR" > "$TAR.sha256" && shasum -a 256 "$DMG" > "$DMG.sha256")
-hdiutil verify "$DIST/$DMG" >/dev/null && echo "==> DMG 完整性通过"
+hdiutil verify "$DIST/$DMG" >/dev/null
+echo "==> DMG 完整性通过"
 SHA=$(awk '{print $1}' "$DIST/$TAR.sha256")
 echo "==> $TAR SHA-256 $SHA"
 
-# 4) 生成指向 COS 直下地址的版本清单。
+# 4) 生成指向 CDN 下载地址的版本清单。
 NOTES_ARG=(); [ -n "$NOTES" ] && NOTES_ARG=("$NOTES")
 node macOS/update-manifest.mjs "$DIST/$TAR" "$ARCH" "$URL" "$DIST/darwin-$ARCH.json" ${NOTES_ARG:+"${NOTES_ARG[@]}"}
 
-# 5) 上传 COS（rclone 用环境变量内联配置，不留配置文件）。
+# Freeze the actual notarized bytes, including the manifest timestamp, for a retriable upload.
+if [ "$CHANNEL" = release ]; then
+  (cd "$DIST" && shasum -a 256 "$TAR" "$TAR.sig" "$TAR.sha256" "$DMG" "$DMG.sha256" "darwin-$ARCH.json" > SHA256SUMS)
+fi
 if [ "${COS_SKIP_UPLOAD:-0}" != "1" ]; then
-  export RCLONE_CONFIG_COS_TYPE=s3 RCLONE_CONFIG_COS_PROVIDER=TencentCOS
-  export RCLONE_CONFIG_COS_ENDPOINT="https://cos.$COS_REGION.myqcloud.com"
-  export RCLONE_CONFIG_COS_ACCESS_KEY_ID="$TENCENT_SECRET_ID"
-  export RCLONE_CONFIG_COS_SECRET_ACCESS_KEY="$TENCENT_SECRET_KEY"
-  for f in "$TAR" "$TAR.sig" "$TAR.sha256" "$DMG" "$DMG.sha256" "darwin-$ARCH.json"; do
-    rclone copyto "$DIST/$f" "cos:$COS_BUCKET/mac_package/$f" --s3-no-check-bucket
-    echo "==> 已上传 mac_package/$f"
-  done
-  # 6) 公网核对：大小一致（rclone 上传本身带校验；完整哈希复核由发布侧执行并记录）。
-  sleep 3
-  REMOTE_SIZE=$(curl -sI --max-time 30 "$URL" | awk 'tolower($1)=="content-length:"{gsub("\r","");print $2}')
-  LOCAL_SIZE=$(stat -f%z "$DIST/$TAR")
-  [ "$REMOTE_SIZE" = "$LOCAL_SIZE" ] || { echo "公网 Content-Length $REMOTE_SIZE ≠ 本地 $LOCAL_SIZE，复核后重试"; exit 1; }
-  echo "==> 公网 $URL 可访问，大小一致（$LOCAL_SIZE bytes）"
+  python3 macOS/upload_immutable.py upload "$ARCH" "$VERSION" "$DIST"
 fi
 
 echo

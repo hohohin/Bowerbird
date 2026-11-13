@@ -34,7 +34,7 @@ function fixture(initial = doc([node('original')])) {
       if (readGate) { readGate.entered(); await readGate.promise; }
       if (failRead) throw new Error('synthetic read failed');
       return snapshot;
-    }, projectCanvasGet: async () => ({ nodes: [] }), canvasWorkflowAuthorize: async () => {},
+    }, projectCanvasGet: async () => ({ nodes: [] }), canvasWorkflowAuthorize: async () => {}, projectThreadCreate: async () => {},
     getAssetsByIds: async ids => {
       if (assetGate) { assetGate.entered(); await assetGate.promise; }
       return ids.map(id => ({ id, store_path: `${id}.png` }));
@@ -55,12 +55,15 @@ function fixture(initial = doc([node('original')])) {
     const output = ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
     const require = specifier => {
       if (specifier === './api') return { api };
+      if (specifier === './userError') return load(resolve(dirname(path), 'userError.ts'));
+      if (specifier === './dshSkill.ts' || specifier === './chatProvider.ts') return load(resolve(dirname(path), specifier));
       if (specifier === './localChat') return { localChat: chatApi, localChatRunning: chat => chat && ['running', 'stopping'].includes(chat.status) };
       if (specifier === './localChatStore') return { useLocalChatStore: { getState: () => chatStore } };
       if (specifier === '../store') return { useStore: { getState: () => ({ genJobs: {} }) } };
       if (specifier === './workflowPlannerRuntime') return { WorkflowPlannerRuntime: class {} };
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
-      if (specifier === './workflowAgentOutputs') return { agentWriterValue: () => undefined };
+      if (specifier === './workflowLoop') return load(resolve(lib, 'workflowLoop.ts'));
+      if (specifier === './workflowAgentOutputs') return { agentWriterValue: () => undefined, agentOutputTargets: () => [] };
       if (specifier === './canvasSessionOutputs') return { completedCanvasSessions: () => [], reconcileCanvasWorkflowReferences: nodes => nodes };
       if (['./workflowExternalChanges', './canvasWorkflow', './canvasCardNames', './workflowDiagnostics', './workflowTriggerSchedule', './workflowTriggerSchedule.ts', './workflowAgentChat', './workflowAgentResult', './workflowAgentProfile', './workflowTemplates', './workflowPlanner', './contentTable.ts'].includes(specifier)) return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       return {};
@@ -99,6 +102,17 @@ test('portable Agent templates retain provider/model settings and discard conver
   const result = instantiateWorkflowTemplate(template, {}, {}, 'codex', [], 0, 0);
   assert.equal(result[1].chatProvider, 'codex-local'); assert.deepEqual(plain(result[1].chatCodexOptions), agent.chatCodexOptions);
   assert.equal(result[1].chatConversationId, undefined);
+  const legacy = structuredClone(template);
+  legacy.plan.nodes[1].chatProvider = 'deepseek-cloud';
+  delete legacy.plan.nodes[1].chatCodexOptions;
+  assert.equal(parseWorkflowTemplate(JSON.stringify(legacy)).plan.nodes[1].chatProvider, 'dsh-cloud');
+  assert.equal(instantiateWorkflowTemplate(legacy, {}, {}, 'codex', [], 0, 0)[1].chatProvider, 'dsh-cloud');
+  const cloudAgent = { ...agent, chatProvider: 'dsh-cloud', chatCodexOptions: undefined, chatDshSkill: { id: 'text-editor' } };
+  const remote = captureWorkflowTemplate([trigger, cloudAgent], new Set(['start','agent']), '云端文本编辑');
+  assert.equal(remote.schemaVersion, 7);
+  assert.deepEqual(plain(instantiateWorkflowTemplate(remote, {}, {}, 'codex', [], 0, 0)[1].chatDshSkill), { id: 'text-editor' });
+  remote.plan.nodes[1].chatDshSkill.instructions = 'injected template instructions';
+  assert.throws(() => parseWorkflowTemplate(JSON.stringify(remote)), /云端技能/);
   template.plan.nodes[1].chatConversationId = 'forged';
   assert.throws(() => parseWorkflowTemplate(JSON.stringify(template)));
 });
@@ -113,8 +127,9 @@ test('Agent execution submits through chat once and resumes the exact original t
   assert.equal(first.text.text, '原轮次输出');
   assert.equal(f.sends.length, 1);
   assert.ok(f.sends[0].text.includes(source));
-  assert.equal(f.sends[0].provider, 'deepseek-cloud');
+  assert.equal(f.sends[0].provider, 'dsh-cloud');
   assert.equal(f.sends[0].agentNodeId, agent.id);
+  assert.equal(f.sends[0].manualCardRun, undefined, 'old and automatic workflow runs retain the original isolated request');
   const frozen = f.saved().document.run.steps[agent.id];
   const accepted = f.requests.get(frozen.chatInput.requestId);
   accepted.status = 'running'; accepted.messages.push({ turnId: 'later', role: 'assistant', status: 'running', text: '后续轮次', referenceAssetIds: [] });
@@ -124,6 +139,33 @@ test('Agent execution submits through chat once and resumes the exact original t
   assert.equal(await f.controller.chatResult(run.id, agent, frozen, () => false), null);
   assert.equal(f.saved().document.run.steps[agent.id].status, 'waiting');
   assert.equal(f.sends.length, 1);
+  accepted.messages.pop(); // The original failed completion is now the latest turn again.
+  accepted.status = 'failed';
+  accepted.error = 'chat_no_reply: 上游模型服务返回 HTTP 502。本轮云端任务已结束，没有可取回的回复。';
+  await assert.rejects(() => f.controller.chatResult(run.id, agent, frozen, () => false), /HTTP 502/);
+  assert.equal(f.sends.length, 1);
+});
+
+test('only clicking run on the Agent itself opts its saved request into bound conversation history', async () => {
+  const trigger = { ...node('signal'), kind: 'trigger' };
+  const loop = { ...node('loop'), kind: 'loop', loopMode: 'count', loopCount: 2, inputs: { signal: [{ nodeId: trigger.id, portId: 'signal' }] } };
+  const agent = { ...node('agent', '继续修改'), kind: 'agent', chatProvider: 'dsh-cloud', chatConversationId: 'bound-chat',
+    inputs: { text: [{ nodeId: loop.id, portId: 'text' }] } };
+  for (const [startId, single, expected] of [[agent.id, true, true], [trigger.id, false, undefined], [loop.id, false, undefined]]) {
+    const f = fixture(doc([trigger, loop, agent]));
+    await f.controller.load();
+    f.controller.continue = async () => {}; // Capture the real accepted run before any step is dispatched.
+    await f.controller.start(startId, single);
+    const run = f.controller.run(f.saved().document.run.id);
+    assert.equal(run.manualCardRun, expected);
+    await f.controller.step(run.id, agent.id, { agentInput: { prompt: agent.prompt, source: '{}', assetIds: [] } });
+    await f.controller.chatResult(run.id, agent, run.steps[agent.id], () => false);
+    const request = f.sends[0];
+    assert.equal(request.agentNodeId, agent.id);
+    assert.equal(request.conversationId, agent.chatConversationId);
+    assert.equal(request.manualCardRun, expected);
+    assert.deepEqual(f.saved().document.run.steps[agent.id].chatInput, plain(request));
+  }
 });
 
 test('lost chat admission response keeps the request and stops the accepted original conversation', async () => {
@@ -168,6 +210,15 @@ test('same-card conflicts and deletion of an edited card preserve local edits an
   const f = fixture(), c = f.controller; await c.load(); f.external(doc([]));
   await assert.rejects(c.save(doc([node('original', 'keep me')])), /同一卡片已有其他修改/);
   assert.equal(c.document.nodes[0].prompt, 'keep me'); assert.equal(f.saved().document.nodes.length, 0);
+});
+
+test('moving an active card retains concurrent execution checkpoints and rejects competing positions', () => {
+  const f = fixture(), original = node('source'), base = doc([original]);
+  const moved = doc([{ ...original, x: 34, y: 86 }]);
+  const updated = doc([{ ...original, activeSessionNodeId: 'session', outputs: { image: { type: 'image', assetIds: ['result'] } } }]);
+  const merged = f.mergeWorkflowChanges(base, moved, updated);
+  assert.deepEqual(plain(merged.nodes[0]), { ...updated.nodes[0], x: 34, y: 86 });
+  assert.throws(() => f.mergeWorkflowChanges(base, moved, doc([{ ...original, y: 77 }])), /同一卡片已有其他修改/);
 });
 
 test('retry after a failed write retains the unsaved edit', async () => {

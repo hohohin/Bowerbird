@@ -53,7 +53,7 @@ export function workflowLoopItems(node: WorkflowNode, nodes: WorkflowNode[], can
 }
 
 /** Native rows retain text/image pairing; never zip independently flattened columns. */
-export function workflowLoopRows(node: WorkflowNode, nodes: WorkflowNode[], canvas: CanvasNode[]): WorkflowLoopItem[] {
+export function workflowLoopRows(node: WorkflowNode, nodes: WorkflowNode[], canvas: CanvasNode[], onNativeRow?: (firstCell?: string, lastCell?: string) => void): WorkflowLoopItem[] {
   const inputs = node.inputs.text ?? [];
   if (inputs.length !== 1) throw new WorkflowNodeError("逐行循环需要连接一张完整内容卡或一个表格输出", node);
   const input = inputs[0];
@@ -66,6 +66,7 @@ export function workflowLoopRows(node: WorkflowNode, nodes: WorkflowNode[], canv
     if (input.cellId === "*latest" && rows.flat().some(cell => cell.generation_ref && !cell.image_refs?.length)) throw new WorkflowNodeError("上游图片尚未生成完成，请等待原生成任务", node);
     items = rows.map(row => {
       const { text, table, assetIds } = canvasTableValue([row]);
+      if (text || assetIds.length) onNativeRow?.(row[0].id, row[row.length - 1].id);
       return { text, table, assetIds };
     }).filter(item => item.text || item.assetIds.length);
   } else {

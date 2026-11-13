@@ -12,7 +12,7 @@ try {
  create schema auth; create schema extensions; create table auth.users(id uuid primary key);
  create function auth.uid() returns uuid language sql as $$ select null::uuid $$;
  create function extensions.gen_random_uuid() returns uuid language sql as $$ select gen_random_uuid() $$;`);
- for (const prefix of ['0001','0002','0003','0004','0005','0006','0009','0010','0011','0015','0016','0017','0018','0019','0023','0058','0059','0061','0062','0063','0064','0065','0066','0067','0070','0077','0084']) {
+ for (const prefix of ['0001','0002','0003','0004','0005','0006','0009','0010','0011','0015','0016','0017','0018','0019','0023','0058','0059','0061','0062','0063','0064','0065','0066','0067','0070','0077','0084','0088','0089']) {
    const file=fs.readdirSync(dir).find(f=>f.startsWith(prefix));
    assert.ok(file, `missing ${prefix} migration`);
    await db.exec(fs.readFileSync(`${dir}/${file}`,'utf8').replace('create extension if not exists pgcrypto with schema extensions;',''));
@@ -20,7 +20,7 @@ try {
  const user='aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
  await q('insert into auth.users values($1)',[user]);
  const begin=async(key='one',hash='a'.repeat(64))=>{
-  const job=(await q('select * from begin_chat_completion($1,$2,$3,$4,10000000,20)',[user,key,hash,`chat/${user}/${key}/request.json`]))[0];
+  const job=(await q('select * from begin_chat_completion($1,$2,$3,$4,100000000,20)',[user,key,hash,`chat/${user}/${key}/request.json`]))[0];
   return (await q('select * from enqueue_chat_completion($1,$2,true)',[job.id,hash]))[0];
  };
  const first=await begin(); assert.equal(first.estimated_credits,0);
@@ -60,6 +60,102 @@ try {
  assert.equal((await q('select input_tokens::int from chat_completion_jobs where id=$1',[first.id]))[0].input_tokens,9);
  await assert.rejects(()=>q('select * from begin_chat_completion($1,$2,$3,$4,1,20)',[user,'cost-stop','a'.repeat(64),'chat/cost/request.json']),/daily managed cost limit/);
  assert.equal((await q('select count(*)::int n from chat_completion_jobs'))[0].n,4);
+ for(const [status,code,holdStatus] of [['failed','chat_upstream_http_429','rolled_back'],['outcome_unknown','chat_reply_json','pending_settlement']]) {
+   const original=await begin(code), claimed=(await q("select * from claim_chat_completion('fixture')"))[0];
+   const [ended]=await q('select * from finish_chat_completion($1,$2,$3,null,$4)',[original.id,claimed.lease_id,status,code]);
+   assert.equal(ended.error_code,code); assert.equal(ended.result_json,null);
+   const same=await begin(code); assert.equal(same.id,original.id); assert.equal(same.error_code,code);
+   assert.equal((await q('select status from credit_holds where id=$1',[original.hold_id]))[0].status,holdStatus);
+ }
  await assert.rejects(()=>q("insert into credit_holds(user_id,idempotency_key,service,pricing_version,estimated_amount) values($1,'invalid-zero','caption',1,0)",[user]),/estimated_amount_check/);
  console.log('chat DB: zero-price hold/confirm, replay, conflict, cost guard, unknown, paid gate, expiry and upload rollback passed');
+ const startDsh=async(key,tools=true)=>{
+  const [uploaded]=await q('select * from begin_chat_turn($1,$2,$3,$4,1000000000,100,$5)',[user,key,'c'.repeat(64),'chat/dsh/input',tools]);
+  return (await q('select * from enqueue_chat_completion($1,$2,true)',[uploaded.id,uploaded.input_hash]))[0];
+ };
+ const other='bbbbbbbb-bbbb-4bbb-abbb-bbbbbbbbbbbb';
+ const cancel=(id,key,owner=user)=>q('select * from cancel_chat_dsh($1,$2,$3)',[owner,id,key]).then(rows=>rows[0]);
+ const claimDsh=()=>q("select * from claim_chat_turn('vps',true)").then(rows=>rows[0]);
+ const legacyOnly=await begin('legacy-lane');
+ assert.equal((await claimDsh()).id,null);
+ assert.equal((await q("select * from claim_chat_completion('legacy')"))[0].id,legacyOnly.id);
+ const poll=(job,call=null,args=null)=>q('select poll_chat_dsh($1,$2,$3,$4) reply',[job.id,job.lease_id,call,args]).then(rows=>rows[0].reply);
+ const ack=(job,call,res,owner=user)=>q('select ack_chat_dsh($1,$2,$3,$4) ok',[owner,job.id,call,res]).then(rows=>rows[0].ok);
+ const isolated=await startDsh('dsh');
+ assert.equal((await startDsh('dsh')).id,isolated.id);
+ const costs=(await q('select reserved_cost_micros from credit_holds where id in ($1,$2) order by reserved_cost_micros',[first.hold_id,isolated.hold_id])).map(row=>Number(row.reserved_cost_micros));
+ assert.equal(costs[1], costs[0]*12);
+ assert.equal((await q("select * from claim_chat_completion('legacy')"))[0].id,null);
+ assert.equal((await cancel(first.id,null)).id,null);
+ assert.equal((await cancel(isolated.id,null,other)).id,null);
+ const claimed=await claimDsh(), receipt={success:true,created_count:1}, args={cards:[{kind:'content'}]};
+ assert.equal(claimed.id,isolated.id);
+ assert.deepEqual(await poll({...claimed,lease_id:other},'1',args),{active:false});
+ assert.deepEqual(await poll(claimed,'1',args),{active:true});
+ assert.deepEqual(await poll(claimed,'1',args),{active:true});
+ await assert.rejects(()=>poll(claimed,'next',{}),/conflict/);
+ assert.equal(await ack(claimed,'1',receipt,other),false);
+ assert.equal(await ack(claimed,'wrong',receipt),false);
+ assert.equal(await ack(claimed,'1',receipt),true);
+ assert.equal(await ack(claimed,'1',receipt),true);
+ assert.equal(await ack(claimed,'1',{success:false,error:'card_creation_failed'}),false);
+ assert.deepEqual(await poll(claimed,'1'),{active:true,result:receipt});
+ assert.deepEqual(await poll(claimed,'1',args),{active:true,result:receipt});
+ await assert.rejects(()=>poll(claimed,'1',{different:true}),/conflict/);
+ await poll(claimed,'2',args);
+ await assert.rejects(()=>q("select * from finish_chat_completion($1,$2,'succeeded',$3,null)",[claimed.id,claimed.lease_id,result]),/pending tool/);
+ const cancelled=await cancel(null,'dsh');
+ assert.equal(cancelled.status,'outcome_unknown'); assert.equal(cancelled.pending_tool,null); assert.deepEqual(cancelled.dsh_receipts,{});
+ assert.deepEqual(await poll(claimed,'3',args),{active:false}); assert.equal(await ack(claimed,'2',receipt),false);
+ await assert.rejects(()=>q("select * from finish_chat_completion($1,$2,'succeeded',$3,null)",[claimed.id,claimed.lease_id,result]),/lease/);
+ const queuedDsh=await startDsh('queued-only'); assert.equal((await cancel(queuedDsh.id,null)).status,'failed');
+ assert.equal((await q('select status from credit_holds where id=$1',[queuedDsh.hold_id]))[0].status,'rolled_back');
+ await startDsh('tools-disabled',false); const pure=await claimDsh();
+ await assert.rejects(()=>poll(pure,'1',{}),/disabled/);
+ const [done]=await q("select * from finish_chat_completion($1,$2,'succeeded',$3,null)",[pure.id,pure.lease_id,result]);
+ assert.equal(done.status,'succeeded'); assert.equal((await cancel(done.id,null)).status,'succeeded');
+ await startDsh('expired-lease'); const late=await claimDsh();
+ await q("update chat_completion_jobs set lease_expires_at=now()-interval '1 second' where id=$1",[late.id]);
+ assert.deepEqual(await poll(late),{active:false});
+ for(const sig of ['poll_chat_dsh(uuid,uuid,text,jsonb)','ack_chat_dsh(uuid,uuid,text,jsonb)','cancel_chat_dsh(uuid,uuid,text)']){
+  assert.equal((await q("select has_function_privilege('authenticated',$1,'execute') allowed",[sig]))[0].allowed,false);
+ }
+ console.log('DSH DB: mixed worker versions, scoped cancellation and leases, tool request/receipt replay, terminal cleanup, disabled tools, private RPC permissions passed');
+ const conversation = 'c-01EXAMPLE';
+ await q('insert into auth.users values($1)',[other]);
+ const createSession = async(key,owner=user,scope=conversation)=>{
+   const [j]=await q('select * from begin_chat_session_turn($1,$2,$3,$4,1000000000,100,false,$5)',[owner,key,'d'.repeat(64),'chat/session/request.json',scope]);
+   return (await q('select * from enqueue_chat_completion($1,$2,true)',[j.id,j.input_hash]))[0];
+ };
+ const nextJob=()=>q("select * from claim_chat_session_turn('dsh-v2')").then(rows=>rows[0]);
+ const initial=await createSession('native-first');
+ assert.match(initial.dsh_session_key,/^[0-9a-f]{64}$/);
+ assert.equal((await createSession('native-first')).id,initial.id);
+ await assert.rejects(()=>createSession('native-first',user,'other'),/different content/);
+ await assert.rejects(()=>createSession('busy'),/active turn/);
+ assert.equal((await q("select count(*)::int n from chat_completion_jobs where idempotency_key='busy'"))[0].n,0);
+ assert.equal((await claimDsh()).id,null);
+ assert.equal((await q("select * from claim_chat_completion('legacy')"))[0].id,null);
+ const lease=await nextJob();
+ assert.equal(lease.id,initial.id);assert.equal(lease.dsh_previous_job_id,null);
+ const shortResult={...result,message:{role:'assistant',content:'ok'}};
+ const finishSession=j=>q("select * from finish_chat_completion($1,$2,'succeeded',$3,null)",[j.id,j.lease_id,shortResult]);
+ await finishSession(lease);
+ const secondTurn=await createSession('native-second');
+ assert.equal(secondTurn.dsh_session_key,initial.dsh_session_key);assert.equal(secondTurn.dsh_previous_job_id,initial.id);
+ const cancelledLease=await nextJob();
+ await cancel(secondTurn.id,null);
+ const afterCancel=await createSession('native-third');
+ assert.equal(afterCancel.dsh_previous_job_id,initial.id);
+ await assert.rejects(()=>finishSession(cancelledLease),/lease/);
+ const otherFirst=await createSession('native-first',other);
+ assert.notEqual(otherFirst.dsh_session_key,initial.dsh_session_key);assert.equal(otherFirst.dsh_previous_job_id,null);
+ const otherConversation=await createSession('fresh',user,'c-NEW');
+ assert.notEqual(otherConversation.dsh_session_key,initial.dsh_session_key);assert.equal(otherConversation.dsh_previous_job_id,null);
+ const isolatedItem=await createSession('auto',user,'t-item');
+ await cancel(isolatedItem.id,null);
+ assert.equal((await createSession('auto',user,'t-item')).id,isolatedItem.id);
+ await assert.rejects(()=>createSession('auto-again',user,'t-item'),/different content/);
+ assert.equal((await q("select has_function_privilege('authenticated','begin_chat_session_turn(uuid,text,text,text,bigint,integer,boolean,text)','execute') allowed"))[0].allowed,false);
+ console.log('DSH v2 DB: one active turn, immutable parent on success, late canceled lease rejected, owner and conversation isolation, engine-aware claims, original request replay passed');
 } finally { await db.close(); }

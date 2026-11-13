@@ -109,7 +109,8 @@ try {
   // Real standalone account panel, without unrelated canvas fixture dependencies.
   await page.goto('http://127.0.0.1:1817/scripts/fixtures/checkout/preview.html?standalone');
   await page.evaluate(() => { window.enabled = true; window.store.setState({ accountOnboardingForceOpen: true }); window.remount(); });
-  const account = page.getByRole('dialog', { name: 'Bowerbird 账号', exact: true });
+  const account = page.getByRole('dialog', { name: '设置', exact: true });
+  await account.getByText('查看会员方案与充值', { exact: true }).click();
   await account.getByRole('button', { name: '微信支付', exact: true }).click();
   await dialog.getByRole('img', { name: '微信付款二维码' }).waitFor();
   await dialog.getByRole('button', { name: '查询支付结果' }).focus();

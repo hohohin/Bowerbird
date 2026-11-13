@@ -18,30 +18,29 @@ try {
  await page.getByRole('button',{name:'返回主页',exact:true}).waitFor();
  const account=page.locator('.topbar-account-trigger');
  const credits=page.locator('.app-topbar-credits');
- assert.equal(await credits.innerText(),'—','signed-out balance is unknown, not zero');
- assert.equal(await account.locator('.app-topbar-credits').count(),1,'balance and avatar share one button');
- await credits.click();
+ assert.equal(await credits.count(),0,'guest has no account balance');
+ await account.click();
  const dialog=page.getByRole('dialog');
  await dialog.waitFor();
- assert.equal(await dialog.getByRole('button',{name:'账号管理',exact:true}).getAttribute('aria-current'),'true');
- await dialog.getByRole('button',{name:'登录 Bowerbird 账号',exact:true}).waitFor();
+ await dialog.getByRole('button',{name:'使用微信扫码登录',exact:true}).waitFor();
  await page.keyboard.press('Escape');
  assert.equal(await account.evaluate(el=>el===document.activeElement),true);
- await page.evaluate(()=>window.store.setState({cloudAuth:{logged_in:true,display_name:'测试用户',cloud_available:true},cloudEntitlement:{tier:'pro',policy:{can_use_byo:true,can_use_cloud:true},balances:{daily:0,sub:0,topup:0},recent_transactions:[],generation_services:[],prompt_configs:[]}}));
+ await page.evaluate(()=>window.store.setState({cloudAuth:{logged_in:true,user_id:'test-user',display_name:'测试用户',cloud_available:true},cloudEntitlement:{user_id:'test-user',tier:'pro',policy:{can_use_byo:true,can_use_cloud:true},balances:{daily:0,sub:0,topup:0},recent_transactions:[],generation_services:[],prompt_configs:[]}}));
  await page.waitForFunction(()=>document.querySelector('.app-topbar-credits')?.textContent==='0');
  await page.evaluate(()=>window.store.setState(s=>({cloudEntitlement:{...s.cloudEntitlement,balances:{daily:30,sub:1100,topup:100}}})));
  await page.waitForFunction(()=>document.querySelector('.app-topbar-credits')?.textContent==='1,230');
  const viewBounds=await page.locator('.app-topbar-view-controls').boundingBox(), creditBounds=await credits.boundingBox(), accountBounds=await account.boundingBox();
- assert.ok(accountBounds.x>=viewBounds.x+viewBounds.width && creditBounds.x>=accountBounds.x && creditBounds.x+creditBounds.width<=accountBounds.x+accountBounds.width,'credits are inside the combined account control');
+ assert.ok(creditBounds.x>=viewBounds.x+viewBounds.width && creditBounds.x+creditBounds.width<=accountBounds.x,'balance and avatar have separate targets');
  await credits.click();await dialog.waitFor();
- assert.equal(await dialog.getByRole('button',{name:'账号管理',exact:true}).getAttribute('aria-current'),'true');
- await dialog.getByRole('button',{name:'登出账号',exact:true}).waitFor();
+ assert.equal(await dialog.getByRole('button',{name:'积分明细',exact:true}).getAttribute('aria-current'),'true');
+ await dialog.getByRole('region',{name:'积分明细',exact:true}).waitFor();
  await page.screenshot({path:'.tmp/home-shell/account-balance.png'});
  await dialog.getByRole('button',{name:'系统设置',exact:true}).click();
  await page.keyboard.press('Escape');
  await page.getByRole('dialog').waitFor({state:'hidden'});
  await page.screenshot({path:'.tmp/home-shell/canvas.png'});
  await page.getByRole('button',{name:'返回主页',exact:true}).click();
+ await page.getByRole('navigation',{name:'首页'}).getByRole('button',{name:'素材库',exact:true}).click();
  await page.locator('.library-home .catalog-virtual [data-asset-id]').first().waitFor();
  assert.equal(await page.locator('.app-sidebar,.task-center-entry').count(),0);
  for(const theme of ['light','dark']) {
@@ -55,7 +54,7 @@ try {
    assert.ok(bounds.count>0 && bounds.inside,JSON.stringify(bounds));
    assert.equal(bounds.overflow,false);
    const credit=await credits.boundingBox(), avatar=await account.boundingBox();
-   assert.ok(credit.x>=avatar.x && credit.x+credit.width<=avatar.x+avatar.width && avatar.x+avatar.width<=width,'combined balance/account stays visible');
+   assert.ok(credit.x>=0 && credit.x+credit.width<=avatar.x && avatar.x+avatar.width<=width,'balance and avatar stay visible');
    await account.focus();await account.press('Enter');await dialog.waitFor();
    assert.equal(await dialog.getByRole('button',{name:'账号管理',exact:true}).getAttribute('aria-current'),'true');
    await page.screenshot({path:`.tmp/home-shell/home-${theme}-${width}.png`});
@@ -73,5 +72,5 @@ try {
  assert.equal(await page.getByRole('menuitem',{name:'移入已有文件夹',exact:true}).count(),0);
  await page.getByRole('menuitem',{name:'加入项目',exact:true}).waitFor();
  assert.deepEqual(errors,[]);
- console.log('PASS virtual catalog home return, combined balance/account entry, signed-out/signed-in balance clicks, keyboard and light/dark narrow layouts');
+ console.log('PASS virtual catalog home return, login, balance and account entries, keyboard and light/dark narrow layouts');
 } catch(error) { console.error(errors); console.error((await page.locator('body').innerText()).slice(0,1800)); throw error; } finally {await browser.close();await server.close();}

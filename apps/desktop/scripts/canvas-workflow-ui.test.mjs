@@ -147,6 +147,7 @@ try {
   const textBefore=await resultCard.getByLabel('第 2 行第 2 列',{exact:true}).inputValue();
   await resultCard.hover();
   await resultCard.getByRole('button',{name:'第 1 列文字输入',exact:true}).click({button:'right'});
+  await page.getByRole('menu', { name: '选择要断开的连线' }).getByRole('menuitem').click();
   await page.waitForFunction(id=>!document.querySelector(`[data-workflow-result-link="${id}"]`),resultTable);
   assert.equal(await resultCard.getByLabel('第 2 行第 2 列',{exact:true}).inputValue(),textBefore);
   await page.evaluate(()=>window.save());

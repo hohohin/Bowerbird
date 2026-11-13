@@ -21,5 +21,21 @@ for(const [label,ext,signature] of [['Markdown','md','#'],['HTML','html','<!doct
 await toolbar.locator('[aria-label="导出"]').click();const download=page.waitForEvent('download',{timeout:60000});await page.getByRole('menuitem',{name:`导出 ${label}`,exact:true}).click();const d=await download;const path=`.tmp/text-editor-io/document.${ext}`;await d.saveAs(path);const bytes=await readFile(path);assert.ok(bytes.length>100);assert.ok(bytes.subarray(0,30).toString().includes(signature));console.log('PASS export',label,bytes.length);
 if(ext==='html'){const content=bytes.toString();assert.match(content,/文档标题/);assert.doesNotMatch(content,/<script|fonts.googleapis|platejs.org/);}
 }
+await fresh();
+await page.evaluate(async () => navigator.clipboard.write([new ClipboardItem({
+  'text/plain': new Blob(['样式正文 有意强调'], { type: 'text/plain' }),
+  'text/html': new Blob(['<p style="color:black;font-family:system-ui;font-size:16px"><b>样式正文</b><span style="color:red">有意强调</span></p>'], { type: 'text/html' }),
+})]));
+await page.keyboard.press('Control+v');
+await page.waitForFunction(() => window.draft?.markdown?.includes('有意强调'));
+const pasted = await page.evaluate(async () => {
+  const { parseMarkdown, serializeReadableMarkdown } = await import('/src/lib/documentCodec.ts');
+  const value = parseMarkdown(window.draft.markdown);
+  return { leaves: value.flatMap(block => block.children), markdown: serializeReadableMarkdown(value) };
+});
+assert.ok(pasted.leaves.find(leaf => leaf.text === '样式正文')?.bold);
+assert.ok(pasted.leaves.find(leaf => leaf.text === '有意强调')?.color);
+assert.ok(pasted.leaves.every(leaf => !leaf.fontFamily && !leaf.fontSize));
+assert.doesNotMatch(pasted.markdown, /<span|bowerbird-document/);
 assert.deepEqual(errors,[]);assert.deepEqual(notices.filter(n=>n.tone==='error'),[]);
 }finally{console.log('PAGE_ERRORS',errors,'NOTICES',notices);await page.screenshot({path:'.tmp/text-editor-io/current.png'});if(process.env.BOWERBIRD_DEMO_COVERAGE){await mkdir('.tmp/text-editor-io',{recursive:true});await writeFile('.tmp/text-editor-io/coverage.json',JSON.stringify((await collect(),coverage)));}await browser.close();await server.close();}

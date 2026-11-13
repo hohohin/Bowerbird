@@ -5,6 +5,7 @@ import { configFromEnv as understandConfigFromEnv, runUnderstandWorker } from ".
 import { configFromEnv as visualConfigFromEnv, runVisualProfileWorker } from "./cloud-visual/runtime.ts";
 import { runControlledAgentWorker } from "./cloud-agent/main.ts";
 import { runChatWorker } from "./cloud-chat/runtime.ts";
+import { startSeedanceResolutionAudit } from "./cloud-generation/seedance-resolution-audit.ts";
 
 let loops = 0;
 
@@ -18,6 +19,7 @@ function fatal(event: string): (error: unknown) => void {
 
 if (process.env.GENERATION_CONTROL_URL?.trim()) {
   loops += 1;
+  startSeedanceResolutionAudit();
   runGenerationWorker(generationConfigFromEnv(process.env)).catch(fatal("generation_worker_fatal"));
 }
 

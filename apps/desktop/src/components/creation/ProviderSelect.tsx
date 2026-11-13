@@ -1,20 +1,19 @@
 import { useRef, useState } from "react";
-import { userErrorMessage } from "../../lib/userError";
+import { generationProviderIssue } from "../../lib/generationAvailability";
 import { api } from "../../lib/api";
 import { notifyError } from "../../lib/notify";
 import type { AuthSnapshot, CodexHealth, EntitlementSnapshot } from "../../lib/types";
-import { canUseByo } from "../../lib/entitlement";
 import { canonicalProviderKey, dreaminaModelKey, dreaminaVersionForKey, genProviders, imageProviderLabel, isCloudProvider } from "../../lib/genProviders";
 import { useStore } from "../../store";
 import { ModelSelect, type ModelOption } from "./ModelSelect";
 import { providerQuota, QUOTA_SOURCES } from "./ProviderQuota";
 
 /** Model names are presentation only; selection keeps the original routing keys. */
-export function ProviderSelect({ value, onChange, codexHealth, dreaminaHealth, cloudAvailable = false,
+export function ProviderSelect({ value, onChange, codexHealth, dreaminaHealth,
   cloudAuth = null, cloudEntitlement = null, defaultProvider = "", onSetDefaultProvider, menuClassName }: {
   value: string; onChange: (provider: string) => void;
   codexHealth: CodexHealth | null; dreaminaHealth: CodexHealth | null;
-  cloudAvailable?: boolean; cloudAuth?: AuthSnapshot | null; cloudEntitlement?: EntitlementSnapshot | null;
+  cloudAuth?: AuthSnapshot | null; cloudEntitlement?: EntitlementSnapshot | null;
   defaultProvider?: string; onSetDefaultProvider?: (provider: string) => void; menuClassName?: string;
 }) {
   const dreaminaVersion = useStore(state => state.settings?.dreamina_model_version ?? "5.0Pro");
@@ -25,13 +24,9 @@ export function ProviderSelect({ value, onChange, codexHealth, dreaminaHealth, c
   const options: ModelOption[] = genProviders(cloudEntitlement, dreaminaVersion).map(option => {
     const cloud = isCloudProvider(option.key);
     const dreamina = dreaminaVersionForKey(option.key) !== null;
-    const health = dreamina ? dreaminaHealth : codexHealth;
-    const reason = saving ? "正在保存模型选择，请稍候" : cloud
-      ? !cloudAvailable ? "当前版本未配置 Bowerbird Cloud"
-        : !cloudAuth?.logged_in ? "请先登录 Bowerbird 账号" : balance <= 0 ? "积分不足" : undefined
-      : !canUseByo(cloudEntitlement) ? "升级 Pro 解锁自有订阅"
-        : dreamina && !settingsReady ? "模型设置尚未加载，请稍后重试"
-        : !health?.ok ? userErrorMessage(health?.reason, "请先登录对应账号并检查引擎") : undefined;
+    const issue = generationProviderIssue(dreamina ? "jimeng" : option.key, { cloudAuth, cloudEntitlement, dreaminaHealth, codexHealth });
+    const reason = saving ? "正在保存模型选择，请稍候" : issue?.message
+      ?? (dreamina && !settingsReady ? "模型设置尚未加载，请稍后重试" : undefined);
     return { ...option, source: cloud ? "cloud" : "personal", reason };
   });
   async function select(key: string, setDefault = false) {

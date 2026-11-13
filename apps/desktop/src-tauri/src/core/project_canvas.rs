@@ -69,28 +69,43 @@ fn document_asset_ids(source: &str) -> Vec<String> {
     ids
 }
 
-fn record_image_container_assets(tx: &Transaction<'_>, project_id: &str, payload: &str, now: i64) -> AppResult<()> {
-    let value: serde_json::Value = serde_json::from_str(payload)?;
+fn note_asset_ids(value: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    let mut ids = std::collections::BTreeSet::new();
     if let Some(id) = value["artboard"]["base_asset_id"].as_str() {
-        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)", [id], |row| row.get(0))?;
-        if !exists { return Err(AppError::NotFound(format!("artboard base {id}"))); }
-        tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) VALUES (?1,?2,?3)", params![project_id,id,now])?;
+        ids.insert(id.to_owned());
     }
     if value["note_type"] == "document" {
-        for id in document_asset_ids(value["text"].as_str().unwrap_or("")) {
-            tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) SELECT ?1,id,?3 FROM assets WHERE id=?2", params![project_id,id,now])?;
-        }
-        return Ok(());
+        ids.extend(document_asset_ids(value["text"].as_str().unwrap_or("")));
+        return ids;
     }
-    if value["note_type"] != "images" && value["note_type"] != "text" { return Ok(()); }
+    if value["note_type"] != "images" && value["note_type"] != "text" { return ids; }
     for row in value["cells"].as_array().into_iter().flatten() {
         for cell in row.as_array().into_iter().flatten() {
             for image in cell["image_refs"].as_array().into_iter().flatten() {
                 if let Some(id) = image["asset_id"].as_str() {
-                    tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) SELECT ?1,id,?3 FROM assets WHERE id=?2", params![project_id,id,now])?;
+                    ids.insert(id.to_owned());
                 }
             }
         }
+    }
+    ids
+}
+
+fn record_image_container_assets(tx: &Transaction<'_>, project_id: &str, payload: &str, previous: Option<&str>, now: i64) -> AppResult<()> {
+    let value: serde_json::Value = serde_json::from_str(payload)?;
+    let mut ids = note_asset_ids(&value);
+    if ids.is_empty() { return Ok(()); }
+    if let Some(id) = value["artboard"]["base_asset_id"].as_str() {
+        let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM assets WHERE id=?1)", [id], |row| row.get(0))?;
+        if !exists { return Err(AppError::NotFound(format!("artboard base {id}"))); }
+    }
+    // Saving an existing attachment must respect a later explicit project removal.
+    if let Some(previous) = previous {
+        let existing = note_asset_ids(&serde_json::from_str(previous)?);
+        ids.retain(|id| !existing.contains(id));
+    }
+    for id in ids {
+        tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) SELECT ?1,id,?3 FROM assets WHERE id=?2", params![project_id,id,now])?;
     }
     Ok(())
 }
@@ -134,9 +149,9 @@ pub(crate) fn hide_empty_generation_cards_for_asset(
         "UPDATE canvas_nodes AS prompt SET hidden_at = ?2, updated_at = ?2
          WHERE prompt.kind = 'prompt' AND prompt.hidden_at IS NULL
            AND json_extract(prompt.payload_json, '$.job_id') IS NOT NULL
-           AND EXISTS (
-               SELECT 1 FROM canvas_edges e JOIN canvas_nodes output ON output.id = e.to_node_id
-               WHERE e.from_node_id = prompt.id AND e.kind = 'produced'
+           AND prompt.id IN (
+               SELECT e.from_node_id FROM canvas_nodes output JOIN canvas_edges e ON output.id = e.to_node_id
+               WHERE e.kind = 'produced'
                  AND output.kind = 'asset' AND output.role = 'output' AND output.asset_id = ?1
            )
            AND NOT EXISTS (
@@ -643,6 +658,13 @@ const THREAD_COLUMNS: &str = "id,project_id,title,origin,archived_at,created_at,
 // Older prompt snapshots predate conversation_id. Enrich reads from their exact
 // output assets so grouping survives a restart without rewriting saved nodes.
 pub(super) fn restore_canvas_conversations(conn: &rusqlite::Connection, project_id: &str, nodes: &mut [CanvasNode]) -> AppResult<()> {
+    for node in nodes.iter_mut() {
+        let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json)?;
+        if payload["generation_gallery_key"].as_str().is_some_and(|key| key.starts_with("manual:")) {
+            for key in ["generation_gallery_key", "workflow_generation_group", "generation_group_dissolved", "manual_gallery_node"] { payload.as_object_mut().unwrap().remove(key); }
+            node.payload_json = serde_json::to_string(&payload)?;
+        }
+    }
     let mut workflow_stmt = conn.prepare(&format!("WITH {} SELECT node_id,group_key FROM canvas_generation_groups WHERE project_id=?1", super::generation_gallery::WORKFLOW_GALLERY_CTE))?;
     let workflow_groups = workflow_stmt.query_map([project_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
@@ -667,20 +689,31 @@ pub(super) fn restore_canvas_conversations(conn: &rusqlite::Connection, project_
     }
     let dissolved = conn.prepare("SELECT group_key FROM generation_gallery_separations")?.query_map([], |row| row.get::<_, String>(0))?
         .collect::<Result<std::collections::HashSet<_>, _>>()?;
-    if dissolved.is_empty() { return Ok(()); }
+    let merged = conn.prepare("SELECT source_key,group_key FROM generation_gallery_merges")?.query_map([], |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?)))?
+        .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
+    if dissolved.is_empty() && merged.is_empty() { return Ok(()); }
     let mut assets_stmt = conn.prepare(&format!("WITH {} SELECT n.id,{} FROM canvas_nodes n JOIN assets a ON a.id=n.asset_id WHERE n.project_id=?1 AND {}",
-        super::generation_gallery::WORKFLOW_GALLERY_CTE, super::catalog_browser::GENERATION_GROUP, super::catalog_browser::GENERATED))?;
+        super::generation_gallery::WORKFLOW_GALLERY_CTE, super::catalog_browser::generation_resolved_group(), super::catalog_browser::gallery_eligible()))?;
     let asset_groups = assets_stmt.query_map([project_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
         .collect::<Result<std::collections::HashMap<_, _>, _>>()?;
     for node in nodes.iter_mut() {
         let mut payload: serde_json::Value = serde_json::from_str(&node.payload_json)?;
-        let key = asset_groups.get(&node.id).cloned().or_else(|| {
+        let selected_group = merged.get(&format!("node:{}",node.id));
+        let key = selected_group.cloned().or_else(|| asset_groups.get(&node.id).cloned()).or_else(|| {
             (node.kind == CreativeNodeKind::Prompt).then(|| workflow_groups.get(&node.id).filter(|key| !key.starts_with("asset:")).cloned().or_else(||
-                payload["conversation_id"].as_str().or(payload["job_id"].as_str()).map(|id| format!("generation:{id}")))).flatten()
+                payload["conversation_id"].as_str().or(payload["job_id"].as_str()).map(|id| format!("generation:{id}")))
+                .map(|key| merged.get(&key).cloned().unwrap_or(key))).flatten()
         });
-        if let Some(key) = key.filter(|key| dissolved.contains(key)) {
-            payload["generation_group_dissolved"] = true.into();
-            payload["generation_gallery_key"] = key.into();
+        if let Some(key) = key {
+            if dissolved.contains(&key) {
+                payload["generation_group_dissolved"] = true.into();
+                payload["generation_gallery_key"] = key.into();
+            } else if key.starts_with("manual:") {
+                payload["workflow_generation_group"] = key.clone().into();
+                payload["generation_gallery_key"] = key.into();
+                if selected_group.is_some() { payload["manual_gallery_node"] = true.into(); }
+                payload.as_object_mut().unwrap().remove("generation_group_dissolved");
+            }
             node.payload_json = serde_json::to_string(&payload)?;
         }
     }
@@ -716,10 +749,10 @@ const NODE_COLUMNS: &str = "id,project_id,thread_id,kind,asset_id,role,payload_j
 // Unfold only overlapping original production nodes; copied/grouped/locked nodes
 // retain their placement. Persist positions in the same transaction as the preference.
 pub(super) fn separate_generation_gallery(conn: &rusqlite::Connection, key: &str) -> AppResult<()> {
-    use super::catalog_browser::GENERATION_GROUP;
+    let generation_group = super::catalog_browser::generation_resolved_group();
     use super::generation_gallery::WORKFLOW_GALLERY_CTE;
     let mut stmt = conn.prepare(&format!("WITH {WORKFLOW_GALLERY_CTE} SELECT DISTINCT project_id FROM canvas_nodes WHERE
-        asset_id IN (SELECT a.id FROM assets a WHERE {GENERATION_GROUP}=?1)
+        asset_id IN (SELECT a.id FROM assets a WHERE {generation_group}=?1)
         OR id IN (SELECT node_id FROM canvas_generation_groups WHERE group_key=?1)
         OR (kind='prompt' AND 'generation:'||COALESCE(json_extract(payload_json,'$.conversation_id'),json_extract(payload_json,'$.job_id'))=?1)"))?;
     let projects = stmt.query_map([key], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
@@ -878,7 +911,7 @@ pub(crate) fn insert_node_tx(tx: &Transaction<'_>, value: &NewCanvasNode, now: i
             params![value.project_id, asset_id, now],
         )?;
     }
-    if value.kind == CreativeNodeKind::Note { record_image_container_assets(tx, &value.project_id, &value.payload_json, now)?; }
+    if value.kind == CreativeNodeKind::Note { record_image_container_assets(tx, &value.project_id, &value.payload_json, None, now)?; }
     tx.execute(
         "INSERT INTO canvas_nodes (id,project_id,thread_id,kind,asset_id,role,payload_json,x,y,width,height,z_index,position_locked,hidden_at,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,NULL,?14,?14)",
         params![value.id, value.project_id, value.thread_id, node_kind_sql(value.kind), value.asset_id, value.role.map(node_role_sql), value.payload_json, value.x, value.y, value.width, value.height, value.z_index, i64::from(value.position_locked), now],
@@ -1762,7 +1795,7 @@ impl Database {
         if existing.kind != CreativeNodeKind::Note || existing.hidden_at.is_some() {
             return Err(invalid("only visible notes can be edited"));
         }
-        record_image_container_assets(&tx, &existing.project_id, payload_json, now)?;
+        record_image_container_assets(&tx, &existing.project_id, payload_json, Some(&existing.payload_json), now)?;
         tx.execute(
             "UPDATE canvas_nodes SET payload_json=?2,updated_at=?3 WHERE id=?1",
             params![node_id, payload_json, now],
@@ -3680,10 +3713,10 @@ mod tests {
         image_grid["note_type"] = serde_json::json!("text");
         image_grid["cells"][0][0]["content_type"] = serde_json::json!("image");
         image_grid["cells"][0].as_array_mut().unwrap().push(serde_json::json!({"id":"text-cell","text":"原样文本","content_type":"text","bold":false,"italic":false,"align":"left"}));
-        db.conn.lock().unwrap().execute("DELETE FROM project_assets WHERE project_id='p1' AND asset_id='container-image'", []).unwrap();
+        assert_eq!(db.remove_assets_from_project("p1", &["container-image".into()]).unwrap(), 1);
         let mixed = db.update_canvas_note_payload("text", &image_grid.to_string()).unwrap();
         assert_eq!(serde_json::from_str::<serde_json::Value>(&mixed.payload_json).unwrap()["cells"][0][0]["content_type"], "image");
-        assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM project_assets WHERE project_id='p1' AND asset_id='container-image'", [], |row| row.get::<_,i64>(0)).unwrap(), 1);
+        assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM project_assets WHERE project_id='p1' AND asset_id='container-image'", [], |row| row.get::<_,i64>(0)).unwrap(), 0, "editing another cell must not re-add a removed member");
         image_grid["cells"][0][0]["content_type"] = serde_json::json!("invalid");
         assert!(db.update_canvas_note_payload("text", &image_grid.to_string()).is_err());
         assert_eq!((updated.x, updated.y, updated.width), (original.x, original.y, original.width));

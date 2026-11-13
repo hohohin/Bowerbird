@@ -1,80 +1,40 @@
 {
   "type": "function",
   "name": "create_canvas_cards",
-  "description": "Only when the user explicitly asks to create cards or implement a discussed plan, create editable native cards in this conversation's project. Discussion alone does not authorize creation. Creates a single atomic batch, never runs a workflow or generates media. Card ids are unique aliases using only ASCII letters, digits, underscore or hyphen. Content uses either text or rectangular rows (no implicit header), at most 24000 characters per card. Each batch may contain at most one loop; at most four successful batches may be created in one turn. A loop automatically connects its generation/comfy-video body and its content row source; do not duplicate those connections. Count mode requires count and omits source; rows mode requires source and omits count. Trigger connects from signal to generation/comfy-video/loop signal. Content text connects to generation/comfy-video text. Generation image connects to generation image, comfy-video first-frame/last-frame, or trigger completion. Use kind comfy-video for local H3 video, not generation with mediaType video. H3 first/last frames each accept one static image from a current-turn alias OR a batch image-generation connection; do not supply both for the same slot. Frames may be omitted to create a draft; running later requires a first frame. H3 output image is a VIDEO: it may connect to a video generation input or trigger completion, never image generation or H3 frames. Content is an input source only, not an output destination. Image references may only use image1, image2, etc. supplied in the current user turn. Providers and model defaults come from the application; local H3 defaults to 8 seconds, 9:16, 0.8 MP and uses the application's local environment. The result is durable and contains created card ids; the user can locate or undo the batch in the chat panel.",
+  "description": "Only when the user explicitly asks to create cards or implement a discussed plan, create editable native cards in this conversation's project. Discussion alone does not authorize creation. Creates one atomic batch. Only when the user requests execution, set runCard to the alias of one newly created executable card. A manual trigger starts its downstream workflow, a loop runs its body, and a generation or comfy-video card runs individually. A run request can generate media using the selected provider. Schedule a trigger only when requested. Card ids are unique aliases using only ASCII letters, digits, underscore or hyphen. Content uses either text or rectangular rows (no implicit header), at most 24000 characters per card. Each batch may contain at most one loop; at most four successful batches may be created in one turn. A loop automatically connects its generation/comfy-video body and its content row source; do not duplicate those connections. Count mode requires count and omits source; rows mode requires source and omits count. Trigger connects from signal to generation/comfy-video/loop signal. Content text connects to generation/comfy-video text. Generation image connects to generation image, comfy-video first-frame/last-frame, or trigger completion. Use kind comfy-video for local H3 video, not generation with mediaType video. H3 first/last frames each accept one static image from a current-turn alias OR a batch image-generation connection; do not supply both for the same slot. Frames may be omitted to create a draft; running later requires a first frame. H3 output image is a VIDEO: it may connect to a video generation input or trigger completion, never image generation or H3 frames. Content is an input source only, not an output destination. Image references may only use image1, image2, etc. supplied in the current user turn. Providers and model defaults come from the application; local H3 defaults to 8 seconds, 9:16, 0.8 MP and uses the application's local environment. The result is durable and contains created card ids; the user can locate or undo the batch in the chat panel.",
   "inputSchema": {
     "type": "object",
     "additionalProperties": false,
     "required": ["cards"],
     "properties": {
+      "runCard": {"type":"string","minLength":1,"maxLength":40,"description":"Optional current-batch alias to start immediately after creation. Omit for drafts. Success confirms submission, not generated output."},
       "cards": {
         "type": "array", "minItems": 1, "maxItems": 12,
         "items": {
-          "oneOf": [
-            {
-              "type": "object", "additionalProperties": false,
-              "required": ["id", "kind", "title", "prompt", "mediaType"],
-              "properties": {
-                "id": {"type": "string", "minLength": 1, "maxLength": 40},
-                "kind": {"const": "generation"},
-                "title": {"type": "string", "minLength": 1, "maxLength": 80},
-                "prompt": {"type": "string", "minLength": 1, "maxLength": 8000},
-                "mediaType": {"enum": ["image", "video"]},
-                "ratio": {"enum": ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9"]},
-                "referenceAliases": {"type": "array", "maxItems": 8, "items": {"type": "string", "pattern": "^image[1-8]$"}}
-              }
-            },
-            {
-              "type": "object", "additionalProperties": false,
-              "required": ["id", "kind", "title", "prompt"],
-              "properties": {
-                "id": {"type": "string", "minLength": 1, "maxLength": 40},
-                "kind": {"const": "comfy-video"},
-                "title": {"type": "string", "minLength": 1, "maxLength": 80},
-                "prompt": {"type": "string", "minLength": 1, "maxLength": 8000},
-                "seconds": {"type": "integer", "minimum": 1, "maximum": 15, "default": 8},
-                "ratio": {"enum": ["auto", "9:16", "16:9", "4:3", "3:4", "1:1"], "default": "9:16"},
-                "resolution": {"enum": [0.6, 0.8, 1], "default": 0.8, "description": "Resolution in megapixels."},
-                "firstFrameAlias": {"type": "string", "pattern": "^image[1-8]$", "description": "Current-turn static image for the first frame; omit if using a first-frame connection or creating a draft."},
-                "lastFrameAlias": {"type": "string", "pattern": "^image[1-8]$", "description": "Optional current-turn static image for the last frame."}
-              }
-            },
-            {
-              "type": "object", "additionalProperties": false,
-              "required": ["id", "kind", "title"],
-              "properties": {
-                "id": {"type": "string", "minLength": 1, "maxLength": 40},
-                "kind": {"const": "content"},
-                "title": {"type": "string", "minLength": 1, "maxLength": 80},
-                "text": {"type": "string", "maxLength": 24000},
-                "rows": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "array", "minItems": 1, "maxItems": 12, "items": {"type": "string"}}}
-              },
-              "oneOf": [{"required": ["text"]}, {"required": ["rows"]}]
-            },
-            {
-              "type": "object", "additionalProperties": false,
-              "required": ["id", "kind", "title"],
-              "properties": {
-                "id": {"type": "string", "minLength": 1, "maxLength": 40},
-                "kind": {"const": "trigger"},
-                "title": {"type": "string", "minLength": 1, "maxLength": 80},
-                "count": {"type": "integer", "minimum": 0, "maximum": 9999}
-              }
-            },
-            {
-              "type": "object", "additionalProperties": false,
-              "required": ["id", "kind", "title", "mode", "body"],
-              "properties": {
-                "id": {"type": "string", "minLength": 1, "maxLength": 40},
-                "kind": {"const": "loop"},
-                "title": {"type": "string", "minLength": 1, "maxLength": 80},
-                "mode": {"enum": ["count", "rows"]},
-                "count": {"type": "integer", "minimum": 1, "maximum": 100},
-                "source": {"type": "string", "description": "Alias of the content card whose rows are the loop input; required for mode rows."},
-                "body": {"type": "array", "minItems": 1, "maxItems": 10, "uniqueItems": true, "items": {"type": "string"}, "description": "Aliases of generation or comfy-video cards controlled by this loop; row text is delivered to each body card."}
-              }
-            }
-          ]
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "kind", "title"],
+          "properties": {
+            "id": {"type": "string", "minLength": 1, "maxLength": 40},
+            "kind": {"enum": ["generation", "comfy-video", "content", "trigger", "loop"]},
+            "title": {"type": "string", "minLength": 1, "maxLength": 80},
+            "prompt": {"type": "string", "minLength": 1, "maxLength": 8000, "description": "generation and comfy-video only."},
+            "mediaType": {"enum": ["image", "video"], "description": "generation only."},
+            "ratio": {"enum": ["1:1", "2:3", "3:2", "3:4", "4:3", "9:16", "16:9", "21:9", "auto"], "description": "generation: 1:1, 2:3, 3:2, 3:4, 4:3, 9:16, 16:9, 21:9. comfy-video: auto, 9:16, 16:9, 4:3, 3:4, 1:1."},
+            "referenceAliases": {"type": "array", "maxItems": 8, "items": {"type": "string", "pattern": "^image[1-8]$"}, "description": "generation only."},
+            "seconds": {"type": "integer", "minimum": 1, "maximum": 15, "default": 8, "description": "comfy-video only."},
+            "resolution": {"enum": [0.6, 0.8, 1], "default": 0.8, "description": "comfy-video only; megapixels."},
+            "firstFrameAlias": {"type": "string", "pattern": "^image[1-8]$", "description": "comfy-video only: current-turn static image for the first frame; omit if using a first-frame connection or creating a draft."},
+            "lastFrameAlias": {"type": "string", "pattern": "^image[1-8]$", "description": "comfy-video only: optional current-turn static image for the last frame."},
+            "text": {"type": "string", "maxLength": 24000, "description": "content only; supply either text or rows, never both."},
+            "rows": {"type": "array", "minItems": 1, "maxItems": 100, "items": {"type": "array", "minItems": 1, "maxItems": 12, "items": {"type": "string"}}, "description": "content only; supply either rows or text, never both."},
+            "triggerMode": {"enum":["manual","completion","once","daily"],"description":"Trigger only. Defaults to completion if connected to a completion input, otherwise manual."},
+            "runAt": {"type":"string","format":"date-time","description":"Required for once only. Future RFC 3339 timestamp with UTC offset."},
+            "dailyAt": {"type":"string","pattern":"^([01][0-9]|2[0-3]):[0-5][0-9]$","description":"Required for daily only. Device local time."},
+            "count": {"type": "integer", "minimum": 0, "maximum": 9999, "description": "trigger count, or loop count when mode is count."},
+            "mode": {"enum": ["count", "rows"], "description": "loop only."},
+            "source": {"type": "string", "description": "loop mode rows only: alias of the content card whose rows are the loop input."},
+            "body": {"type": "array", "minItems": 1, "maxItems": 10, "uniqueItems": true, "items": {"type": "string"}, "description": "loop only: aliases of generation or comfy-video cards controlled by this loop; row text is delivered to each body card."}
+          }
         }
       },
       "connections": {

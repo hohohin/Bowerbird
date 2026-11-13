@@ -10,7 +10,6 @@
 .workflow-agent-chat-controls > * { min-width:0; }
 .workflow-agent-chat-controls .chat-codex-options { flex:1 1 100%; flex-wrap:nowrap; }
 .workflow-agent-chat-controls .chat-codex-options > .tactical-select-trigger { flex:1; width:0; max-width:none; }
-.workflow-card .local-chat-card-preview { white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
 .workflow-card.is-generation > header strong { display:flex; align-items:center; }
 /* Keep sockets at the existing wire anchors while placing their labels outside the editor. */
 .workflow-card.is-generation > .workflow-port.is-input { flex-direction:row-reverse; transform:translateX(calc(-100% + 13px)); }
@@ -22,6 +21,15 @@
 .workflow-card textarea:focus { outline:1px solid var(--bb-blue); }
 .workflow-prompt-editor .ProseMirror { min-height:100px; max-height:260px; overflow:auto; padding:9px; border:1px solid var(--bb-line); border-radius:8px; background:var(--bb-surface-2); font-size:12px; line-height:1.8; user-select:text; outline:none; white-space:pre-wrap; overflow-wrap:anywhere; }
 .workflow-prompt-editor .ProseMirror:focus { border-color:var(--bb-blue); }
+.workflow-prompt-with-action { position:relative; }
+.workflow-prompt-with-action .ProseMirror { padding-inline-end:40px; }
+.workflow-agent-provider-row { display:flex; align-items:center; gap:6px; width:100%; }
+.workflow-card .workflow-new-chat-action { display:inline-flex; align-items:center; gap:4px; margin-inline-start:auto; flex:none; white-space:nowrap; height:28px; padding:0 5px; border:0; background:transparent; color:var(--bb-muted); border-radius:4px; }
+.workflow-card .workflow-new-chat-action { transform:scale(.9); transform-origin:right center; }
+/* Combined with the button scale, the label renders at 70% of its original size. */
+.workflow-new-chat-action > span { transform:scale(calc(.7 / .9)); transform-origin:left center; }
+.workflow-card .workflow-new-chat-action:not(:disabled):is(:hover,:focus-visible) { color:var(--bb-ink); background:var(--bb-surface-2); }
+.workflow-card .workflow-new-chat-action:focus-visible { outline:1px solid currentColor; }
 .workflow-describe-option { display:flex; align-items:center; font-size:12px; gap:0; margin-bottom:8px; }
 .workflow-describe-option label { display:flex; align-items:center; gap:6px; }
 .workflow-describe-option input { width:13px; height:13px; margin:0; accent-color:var(--bb-blue); }
@@ -107,6 +115,26 @@
 .workflow-key-ghost { position:fixed; z-index:99999; pointer-events:none; display:flex; align-items:center; gap:8px; border:1px solid var(--bb-line); background:var(--bb-surface); color:var(--bb-ink); padding:8px 12px; border-radius:9px; font-size:12px; }
 .workflow-preview { display:flex; gap:6px; overflow:auto; margin:10px 0; max-height:100px; }
 .workflow-preview img { width:74px; height:74px; object-fit:contain; border-radius:6px; background:var(--bb-surface-2); }
+.workflow-generation-references button {
+  position:relative; flex:0 0 74px; height:74px; overflow:hidden; border:0; padding:0;
+  color:inherit; background:transparent; cursor:grab; touch-action:none; user-select:none;
+}
+.workflow-generation-references button > * { pointer-events:none; }
+.workflow-generation-references button:focus-visible { outline:2px solid var(--bb-blue); outline-offset:-2px; }
+.workflow-card .workflow-generation-references button:disabled { opacity:1; pointer-events:none; }
+.workflow-generation-references button.is-dragging { opacity:.55; cursor:grabbing; }
+.workflow-generation-references button:is(.is-drop-before,.is-drop-after)::after {
+  content:""; position:absolute; top:0; bottom:0; width:3px; background:var(--bb-blue);
+}
+.workflow-generation-references button.is-drop-before::after { left:0; }
+.workflow-generation-references button.is-drop-after::after { right:0; }
+.context-menu-surface.workflow-disconnect-menu { width:350px; }
+.workflow-disconnect-menu [data-workflow-disconnect-choice] > span:last-child { flex:none; white-space:nowrap; }
+.workflow-disconnect-menu .workflow-disconnect-source { flex:1; min-width:0; }
+.workflow-disconnect-source :is(b,small) { display:block; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.workflow-disconnect-media { display:inline-flex; flex:none; align-items:center; gap:3px; }
+.workflow-disconnect-media > [data-workflow-disconnect-asset] { display:grid; width:34px; height:34px; place-items:center; overflow:hidden; background:var(--bb-surface-2); }
+.workflow-disconnect-media img,.workflow-disconnect-media > span > span { width:100%; height:100%; object-fit:contain; }
 .workflow-hint { font-size:11px; color:var(--bb-muted); display:flex; align-items:center; gap:6px; margin:8px 0; }
 .workflow-trigger-count { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:12px; margin:12px 0; }
 .workflow-trigger-count input { width:80px; min-height:30px; padding:4px 8px; border:1px solid var(--bb-line); border-radius:6px; background:var(--bb-surface-2); color:var(--bb-ink); }
@@ -248,12 +276,6 @@ html[data-theme] .canvas-tactical .workflow-card.is-trigger footer { margin-top:
 .canvas-card-name.is-invalid input { transition:none; outline-color:#dc4444; border-color:#dc4444; box-shadow:0 0 0 1px #dc444433; }
 .canvas-card-name > span { position:absolute; left:0; bottom:calc(100% + 4px); width:max-content; max-width:280px; padding:3px 7px; border:1px solid #dc4444; border-radius:5px; background:var(--bb-surface); color:#dc4444; font-size:11px; pointer-events:none; }
 
-.workflow-image-result { margin-top: 8px; font-size: 12px; }
-.workflow-image-result summary { cursor: pointer; }
-.workflow-image-result > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-top: 6px; max-height: 280px; overflow: auto; }
-.workflow-image-result button { padding: 0; border: 1px solid var(--bb-line); border-radius: 6px; background: var(--bb-surface-2); overflow: hidden; cursor: zoom-in; }
-.workflow-image-result img { display: block; width: 100%; height: 110px; object-fit: contain; }
-.workflow-image-preview { display: block; max-width: 100%; max-height: 75vh; margin: auto; object-fit: contain; }
 .workflow-template-save-modal .app-modal[data-width="lg"] { width: min(1180px, calc(100vw - 40px)); max-width: none; }
 .workflow-template-save { max-height: none; overflow: visible; }
 .workflow-template-save > label { display: flex; align-items: center; gap: 16px; margin: 0 0 14px; }

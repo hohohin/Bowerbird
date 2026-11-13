@@ -2,7 +2,7 @@ import { TacticalSelect } from "./TacticalSelect";
 import { type CSSProperties, type PointerEvent, useEffect, useMemo, useState } from "react";
 import { LayoutGrid, List, Search } from "lucide-react";
 import { api } from "../lib/api";
-import type { LibraryView } from "../lib/libraryView";
+import { useCatalogRevision } from "../lib/useCatalogRevision";
 import { useStore } from "../store";
 import { useThumbnailPinch } from "../lib/useThumbnailPinch";
 import { ProjectFolder } from "./ProjectFolder";
@@ -28,7 +28,8 @@ export function ProjectManagerPanel({ active, onCreate, onOpen, selection }: { a
   const projects = useStore(s => s.projects);
   const projectRoutePending = useStore(s => s.projectRoutePending);
   const [search, setSearch] = useState("");
-  const [library, setLibrary] = useState<LibraryView | null>(null);
+  const [covers, setCovers] = useState<Awaited<ReturnType<typeof api.projectCovers>>>({});
+  const catalogRevision = useCatalogRevision();
   const [error, setError] = useState("");
   const [revision, setRevision] = useState(0);
   const [view, setView] = useState<"grid" | "list">("grid");
@@ -39,19 +40,21 @@ export function ProjectManagerPanel({ active, onCreate, onOpen, selection }: { a
   const pinchRef = useThumbnailPinch("projects");
   const visibleProjects = useMemo(() => projects.filter(p => !p.provisional && !p.archived_at), [projects]);
   useEffect(() => {
+    if (!active) return;
     let current = true;
     setError("");
-    void api.listLibraryView({}).then(value => { if (current) setLibrary(value); })
-      .catch(e => { if (current) setError(String(e)); });
+    void api.projectCovers().then(value => { if (current) setCovers(value); })
+      .catch(e => { if (current) { setCovers({}); setError(String(e)); } });
     return () => { current = false; };
-  }, [revision, projects]);
+  }, [active, catalogRevision, revision, projects]);
   const groups = useMemo(() => {
-    const byId = new Map(library?.assets.map(asset => [asset.id, asset]) ?? []);
     return visibleProjects.filter(p => p.name.toLocaleLowerCase().includes(search.trim().toLocaleLowerCase()))
       .sort((a, b) => sort === "name" ? a.name.localeCompare(b.name, "zh-CN") : (b.updated_at ?? b.created_at) - (a.updated_at ?? a.created_at))
-      .map(project => ({ project, assets: (library?.memberships ?? []).filter(m => m.projectId === project.id)
-        .flatMap(m => { const asset = byId.get(m.assetId); return asset ? [asset] : []; }) }));
-  }, [visibleProjects, library, search, sort]);
+      .map(project => {
+        const cover = covers[project.id];
+        return { project: { ...project, asset_count: cover?.asset_count ?? 0 }, paths: cover?.paths ?? [] };
+      });
+  }, [visibleProjects, covers, search, sort]);
   return <section aria-label={selection ? "选择素材库项目" : "项目管理"} className={`project-manager-panel home-projects-page${selection ? " is-library-picker" : ""}`}>
     {active && <ProjectManagerBackdrop />}
     {!selection && <aside className="project-manager-index" aria-label="项目目录">

@@ -42,13 +42,14 @@ export function createCanvasCellHitCache(
       if (!fresh && !dirty) return entries;
       const nextObserved = new Set<Element>();
       const zoom = getZoom();
+      const origin = toBoardPoint(0, 0);
       entries = Array.from(stage.querySelectorAll<HTMLElement>(cellSelector)).flatMap(element => {
         const card = element.closest<HTMLElement>(cardSelector);
         const targetId = card?.dataset.canvasNodeId, cellId = element.dataset.canvasCell;
         if (!card || targetId === undefined || cellId === undefined) return [];
         nextObserved.add(card); nextObserved.add(element);
         const bounds = element.getBoundingClientRect();
-        return [{ element, targetId, cellId, rect: { ...toBoardPoint(bounds.left, bounds.top),
+        return [{ element, targetId, cellId, rect: { x: origin.x + bounds.left / zoom, y: origin.y + bounds.top / zoom,
           width: bounds.width / zoom, height: bounds.height / zoom } }];
       });
       for (const element of observed) if (!nextObserved.has(element)) sizes.unobserve(element);

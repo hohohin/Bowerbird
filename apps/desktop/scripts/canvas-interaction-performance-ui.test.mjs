@@ -79,7 +79,51 @@ async function dragBurst(locator, dx, dy, cancel = false) {
   await locator.dispatchEvent(cancel ? 'pointercancel' : 'pointerup', { pointerId: 1, pointerType: 'mouse', clientX: x + dx, clientY: y + dy });
   await page.mouse.up(); await frame();
 }
-try {
+async function checkTyping() {
+  await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/canvas-interaction-performance/preview.html?typing');
+  const client = await page.context().newCDPSession(page);
+  const fields = [
+    ['content', content.locator('textarea').first()],
+    ['generation', workflow.locator('.ProseMirror')],
+    ['instruction', page.locator('[data-workflow-card="workflow-1"] textarea')],
+    ['composer', page.locator('.creation-dock .ProseMirror')],
+  ];
+  for (const [label, field] of fields) {
+    await field.focus();
+    await page.keyboard.press('End');
+    const read = () => field.evaluate(el => el.value ?? el.textContent);
+    const before = await read();
+    await resetStats();
+    await field.evaluate(el => {
+      window.inputDelays = [];
+      el.addEventListener('input', event => {
+        const start = event.timeStamp;
+        requestAnimationFrame(() => setTimeout(() => window.inputDelays.push(Math.round(performance.now() - start)), 0));
+      });
+    });
+    await page.keyboard.type('abcde', { delay: 25 });
+    await client.send('Input.imeSetComposition', { text: 'huaban', selectionStart: 6, selectionEnd: 6 });
+    await client.send('Input.insertText', { text: '画板' });
+    const expected = before + 'abcde画板';
+    assert.equal(await read(), expected, label + ' keeps the composed text and caret');
+    await frame();
+    await field.blur();
+    if (label === 'content') {
+      await page.waitForFunction(expected => JSON.parse(window.snapshot().nodes.find(n => n.id === 'content-0').payloadJson).cells[0][0].text === expected, expected);
+    } else if (label !== 'composer') {
+      const id = label === 'generation' ? 'workflow-0' : 'workflow-1';
+      await page.waitForFunction(([id, expected]) => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === id).prompt === expected, [id, expected]);
+    }
+    await collect(label, 7);
+    const result = samples.at(-1);
+    result.inputToNextPaintOpportunityMs = await page.evaluate(() => window.inputDelays);
+    if (label === 'content') assert.ok(result.portQueries < 100, 'Typing must not rediscover sockets on every connected card');
+    if (label === 'composer') assert.equal(result.workspaceCommits, 0, 'The dock edits locally');
+    console.log(JSON.stringify(result));
+  }
+  assert.deepEqual(errors, []);
+}
+async function checkGeometry() {
   await page.goto('http://127.0.0.1:1628/scripts/fixtures/canvas-interaction-performance/preview.html');
   await material.waitFor(); await workflow.waitFor(); await page.waitForTimeout(1200);
   assert.equal(await page.locator('.canvas-plane [data-canvas-node]').count(), 300);
@@ -210,4 +254,8 @@ try {
     checks: ['300 mounted mixed cards and 200 wires', 'pan delta accumulation', 'zoom pointer anchor', 'mixed multi-selection drag persists final geometry', 'cancel rollback', 'wire follows live moving content ports before pointerup', 'pointerup flushes an unpainted final move', 'Escape cancels an unpainted move without later drift', 'same-frame drag threshold roundtrip does not activate asset', ...(!baseline ? ['wheel then resize in one task uses live zoom'] : []), 'route flush persists latest wheel view before camera settles', 'mixed-card marquee', 'alignment snap', 'stationary workflow resize invalidates drag snap geometry'],
     renderedSourceHashes, samples };
   await writeFile(`${out}/${baseline ? 'before' : 'after'}.json`, JSON.stringify(report, null, 2)); console.log(JSON.stringify(report, null, 2));
+}
+try {
+  if (process.argv.includes('--typing')) await checkTyping();
+  else await checkGeometry();
 } finally { await browser.close(); await server.close(); }

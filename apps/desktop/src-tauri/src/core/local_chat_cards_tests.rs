@@ -18,11 +18,11 @@ fn fixture_with_db(db: Database) -> (Database, StartedChat) {
     }
     let started = db
         .begin_local_chat(&ChatSendInput {
-            codex_options: None,
+            dsh_skill: None, codex_options: None,
             provider: None,
             project_id: "p".into(),
             conversation_id: None,
-            agent_node_id: None,
+            agent_node_id: None, manual_card_run: false,
             request_id: "request".into(),
             text: "请创建卡片".into(),
             reference_asset_ids: vec!["picture".into()],
@@ -45,7 +45,7 @@ fn local_chat_cards_keep_the_shared_agent_when_creating_and_undoing_tools() {
     let id = &first.conversation.summary.id;
     db.finish_local_chat(id, &first.turn_id, "done", None).unwrap();
     let started = db.begin_local_chat(&ChatSendInput {
-        codex_options: None, provider: None, project_id: "p".into(), conversation_id: Some(id.clone()), agent_node_id: None,
+        dsh_skill: None, codex_options: None, provider: None, project_id: "p".into(), conversation_id: Some(id.clone()), agent_node_id: None, manual_card_run: false,
         request_id: "shared-agent".into(), text: "继续创建卡片".into(), reference_asset_ids: vec!["picture".into()], placement: None, card_defaults: None,
     }).unwrap();
     let original = document(&db)["nodes"][0].clone();
@@ -54,6 +54,50 @@ fn local_chat_cards_keep_the_shared_agent_when_creating_and_undoing_tools() {
     db.undo_local_chat_cards(id, &action.id).unwrap();
     assert_eq!(document(&db)["nodes"], json!([original]));
 }
+#[test]
+fn local_chat_cards_run_is_scoped_and_claimed_once() {
+    let (db, s) = fixture();
+    let mut args = batch();
+    for alias in ["existing-card", "copy"] {
+        args["runCard"] = json!(alias);
+        assert!(create(&db, &s, &args).is_err());
+        assert_eq!(document(&db)["nodes"], json!([]));
+    }
+    args["runCard"] = json!("start");
+    let action = create(&db, &s, &args).unwrap();
+    assert_eq!(action.run_status.as_deref(), Some("requested"));
+    assert!(db.claim_chat_card_run(&action.id, "other").unwrap().is_none());
+    let (project, target) = db.claim_chat_card_run(&action.id, "test-user").unwrap().unwrap();
+    assert_eq!(project, "p");
+    assert_eq!(target, action.cards[2].id);
+    assert!(db.claim_chat_card_run(&action.id, "test-user").unwrap().is_none());
+    db.finish_chat_card_dispatch(&action.id, "started").unwrap();
+    assert_eq!(create(&db, &s, &args).unwrap().run_status.as_deref(), Some("started"));
+}
+
+#[test]
+fn local_chat_cards_schedule_uses_native_modes_and_validates_before_creation() {
+    let (db, s) = fixture();
+    let mut args = batch();
+    args["cards"][2]["triggerMode"] = json!("daily");
+    args["cards"][2]["dailyAt"] = json!("25:00");
+    assert!(create(&db, &s, &args).is_err());
+    args["cards"][2]["dailyAt"] = json!("09:15");
+    args["runCard"] = json!("start");
+    assert!(create(&db, &s, &args).is_err());
+    args.as_object_mut().unwrap().remove("runCard");
+    let action = create(&db, &s, &args).unwrap();
+    assert!(action.run_status.is_none());
+    let doc = document(&db);
+    let node = doc["nodes"].as_array().unwrap().iter().find(|node| node["id"] == action.cards[2].id).unwrap();
+    assert_eq!(node["triggerSchedule"]["dailyAt"], "09:15");
+    assert_eq!(node["triggerSchedule"]["status"], "armed");
+    assert!(node["triggerSchedule"]["at"].as_i64().unwrap() > Utc::now().timestamp_millis());
+    let once = |at| trigger_schedule(Some("once"), None, Some(at), "id", chrono::Local::now());
+    assert!(once("2020-01-01T20:00:00+08:00").is_err());
+    assert!(once("2099-01-01T20:00:00+08:00").is_ok());
+}
+
 fn batch() -> Value {
     json!({"cards":[
     {"id":"copy","kind":"content","title":"文案","rows":[["第一行"],["第二行"]]},
@@ -1435,4 +1479,21 @@ fn local_chat_cards_export_review_fixtures() {
         examples.insert(mode.into(),json!({"args":args,"action":action,"workflow":{"revision":revision,"document":document},"notes":notes}));
     }
     std::fs::write(path, serde_json::to_vec_pretty(&examples).unwrap()).unwrap();
+}
+
+#[test]
+fn local_chat_cards_drop_other_kind_fields_and_keep_unknown_keys_for_rejection() {
+    let mut args = json!({"cards":[
+        {"id":"copy","kind":"content","title":"文案","text":"正文","seconds":8,
+         "endpoint":"http://example.invalid"},
+        {"id":"draw","kind":"generation","title":"图","prompt":"画一只贝","mediaType":"image","rows":[["x"]]},
+        {"id":"clip","kind":"comfy-video","title":"视频","prompt":"动起来","text":"其他类型"}
+    ]});
+    normalize_card_fields(&mut args);
+    assert!(args["cards"][0].get("seconds").is_none(), "content drops video options");
+    assert_eq!(args["cards"][0]["endpoint"], "http://example.invalid", "unknown keys still reach serde");
+    assert!(args["cards"][1].get("rows").is_none(), "generation drops content rows");
+    assert_eq!(args["cards"][1]["mediaType"], "image");
+    assert!(args["cards"][2].get("text").is_none(), "video drops content text");
+    assert_eq!(args["cards"][2]["prompt"], "动起来");
 }

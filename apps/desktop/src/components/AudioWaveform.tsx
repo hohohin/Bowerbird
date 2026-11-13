@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type PointerEventHandler } from "react";
-import { Pause, Play } from "lucide-react";
+import { Music2, Pause, Play } from "lucide-react";
+import type { Asset } from "../lib/types";
+import { useMediaVisibility } from "../lib/useMediaVisibility";
 import { audioPreviewKey, audioPreviewPosition, audioPreviewSnapshot, observeAudioPreviewSource, playAudioPreview,
   stopAudioPreview, stopTemporaryAudioPreview, subscribeAudioPreview } from "../lib/audioPreview";
 import { peekAudioWaveform, requestAudioWaveform, type AudioWaveformData } from "../lib/audioPreviewPeaks";
@@ -23,7 +25,7 @@ export interface AudioWaveformProps {
 type Loaded = { key: string; assetId: string; path: string; data?: AudioWaveformData; error?: unknown };
 const timeLabel = (time: number) => time < 1 ? "0:00" : videoDurationLabel(time) || "0:00";
 
-function paint(canvas: HTMLCanvasElement, data: AudioWaveformData) {
+function paint(canvas: HTMLCanvasElement, data: AudioWaveformData, verticalInset = 24) {
   const width = canvas.clientWidth, height = canvas.clientHeight;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr);
@@ -32,7 +34,7 @@ function paint(canvas: HTMLCanvasElement, data: AudioWaveformData) {
   context.scale(dpr, dpr);
   context.strokeStyle = getComputedStyle(canvas).getPropertyValue("--bb-muted").trim() || "#949494";
   context.lineWidth = 1; context.beginPath();
-  const amplitude = Math.max(0, height - 48) / 2 * data.displayGain;
+  const amplitude = Math.max(0, height / 2 - verticalInset) * data.displayGain;
   for (let x = 0; x < width; x += 2) {
     const start = Math.floor(x / width * data.totalFrames / data.framesPerPeak);
     const end = Math.min(data.peaks.length / 2, Math.ceil((x + 2) / width * data.totalFrames / data.framesPerPeak));
@@ -42,6 +44,27 @@ function paint(canvas: HTMLCanvasElement, data: AudioWaveformData) {
     context.lineTo(x + .5, Math.max(height / 2 - low * amplitude, height / 2 + .5));
   }
   context.stroke();
+}
+
+/** A passive thumbnail can sit inside a menu item without taking playback or focus. */
+export function AudioWaveformThumbnail({ asset, className = "" }: { asset: Asset; className?: string }) {
+  const { ref, visible, width, height } = useMediaVisibility<HTMLSpanElement>();
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const key = JSON.stringify([asset.id, asset.store_path, `${asset.file_mtime ?? 0}:${asset.size ?? 0}`, undefined]);
+  const [loaded, setLoaded] = useState<{ key: string; data: AudioWaveformData }>();
+  const data = loaded?.key === key ? loaded.data : undefined;
+  useEffect(() => {
+    if (!visible || !asset.store_path) return;
+    return requestAudioWaveform({ key, assetId: asset.id }, result => {
+      if (result.data) setLoaded({ key, data: result.data });
+    });
+  }, [visible, key, asset.id, asset.store_path]);
+  useEffect(() => {
+    if (visible && data && canvas.current) paint(canvas.current, data, 3);
+  }, [visible, data, width, height]);
+  return <span ref={ref} className={`audio-waveform-thumbnail ${className}`} role="img" aria-label={`音频：${asset.name}`}>
+    {data ? <canvas ref={canvas} /> : <Music2 size={18} aria-hidden="true" />}
+  </span>;
 }
 
 /** Original-file audio preview. File names and total duration belong to the parent card. */

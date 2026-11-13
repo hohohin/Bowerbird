@@ -45,7 +45,7 @@ try {
       signOut: async () => { current = null; listener?.("SIGNED_OUT", null); return {}; },
     } }) };
   });
-  await context.route("https://cdn.jsdelivr.net/**", (route) => route.fulfill({ body: "", contentType: "application/javascript" }));
+  await context.route("**/account-sdk.js", (route) => route.fulfill({ body: "", contentType: "application/javascript" }));
   await context.route("https://fonts.googleapis.com/**", (route) => route.fulfill({ body: "", contentType: "text/css" }));
   await context.route("**/api/image-config", (route) => route.fulfill({ json: { supabaseUrl: "https://admin-fixture.supabase.co", supabasePublishableKey: "test-publishable" } }));
   await context.route("https://admin-fixture.supabase.co/**", async (route) => {

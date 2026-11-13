@@ -3,8 +3,7 @@ import { open as openExternal } from "@tauri-apps/plugin-shell";
 import { useStore } from "../store";
 import { ModalShell } from "./ModalShell";
 import { accountErrorMessage } from "../lib/accountError";
-import { CreditDetails } from "./CreditDetails";
-import { AccountBilling } from "./AccountBilling";
+import { SettingsDialog } from "./SettingsDialog";
 
 /**
  * Bowerbird 账号面板（独立于「环境状态」总览）：侧栏底部账号区「登录 / 管理账号」唤起，
@@ -12,19 +11,21 @@ import { AccountBilling } from "./AccountBilling";
  */
 export function AccountOnboarding() {
   const open = useStore((s) => s.accountOnboardingForceOpen);
+  const subscription = useStore(s => s.subscriptionSettingsTarget);
   const setOpen = useStore((s) => s.setAccountOnboardingForceOpen);
   const auth = useStore((s) => s.cloudAuth);
-  const entitlement = useStore((s) => s.cloudEntitlement);
   const busy = useStore((s) => s.cloudBusy);
   const error = useStore((s) => s.cloudError);
   const startLogin = useStore((s) => s.startCloudEmailLogin);
   const startWechatLogin = useStore((s) => s.startCloudWechatLogin);
-  const logout = useStore((s) => s.logoutCloud);
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
   const [wechatStarted, setWechatStarted] = useState(false);
 
+  if (subscription) return <SettingsDialog initialSection="models" initialSubscription={subscription}
+    onClose={() => useStore.setState({ subscriptionSettingsTarget: null })} />;
   if (!open) return null;
+  if (auth?.logged_in) return <SettingsDialog initialSection="account" onClose={() => setOpen(false)} />;
 
   return (
     <ModalShell
@@ -40,24 +41,6 @@ export function AccountOnboarding() {
         </button>
       )}
     >
-        {auth?.logged_in ? (
-          <div className="space-y-3">
-            <div className="settings-card flex items-center gap-2 p-4">
-              {auth.avatar_url && (
-                <img src={auth.avatar_url} alt="" className="h-8 w-8 shrink-0 rounded-full object-cover" />
-              )}
-              <div className="min-w-0">
-                <div className="truncate text-sm text-ink">{auth.display_name || auth.email || auth.user_id}</div>
-              </div>
-            </div>
-            <AccountBilling key={auth.user_id} loggedIn entitlement={entitlement} />
-            <div className="settings-card p-4"><CreditDetails entitlement={entitlement?.offline_state === "expired" || entitlement?.offline_state === "invalid" ? null : entitlement} /></div>
-            <button type="button" onClick={() => void logout()} disabled={busy} className="app-modal-button is-danger mt-3">
-              {busy && <span className="app-spinner" aria-hidden="true" />}
-              登出账号
-            </button>
-          </div>
-        ) : (
           <div className="space-y-3">
             <div className="settings-card p-4 text-xs text-muted">
               <div className="font-medium text-ink">微信扫码登录</div>
@@ -106,7 +89,6 @@ export function AccountOnboarding() {
             {sent && <p className="app-inline-status is-success">邮件已发送，请在本机浏览器完成验证。</p>}
             {error && <p role="alert" className="app-inline-status is-error">{accountErrorMessage(error)}</p>}
           </div>
-        )}
     </ModalShell>
   );
 }

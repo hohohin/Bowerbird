@@ -28,6 +28,7 @@ apps/desktop/src-tauri/gen/
 !website/.env.example
 !apps/cloud/.env.example
 !apps/cloud/.env.wechatpay.example
+!apps/cloud/.env.alipay.example
 !apps/html-renderer/.env.renderer.example
 .secrets/
 

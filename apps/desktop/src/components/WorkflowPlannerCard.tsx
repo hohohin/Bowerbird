@@ -7,9 +7,9 @@ import { notifyError } from "../lib/notify";
 import { WorkflowPromptEditor } from "./WorkflowPromptEditor";
 import { canResumeWorkflowPlanning } from "../lib/workflowPlanner";
 
-export function WorkflowPlannerCard({ node, nodes, graphNodes, runtime, onChange, onLocate }: {
+export function WorkflowPlannerCard({ node, nodes, graphNodes, runtime, readCurrentPrompt, onChange, onLocate }: {
   node: WorkflowNode; nodes: WorkflowNode[]; graphNodes: CanvasNode[]; runtime: WorkflowPlannerRuntime;
-  onChange: (prompt: string, references: WorkflowPromptReference[]) => void; onLocate: () => void;
+  readCurrentPrompt: () => string; onChange: (prompt: string, references: WorkflowPromptReference[]) => void; onLocate: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const planning = node.planning, waiting = planning?.status === "waiting";
@@ -19,7 +19,7 @@ export function WorkflowPlannerCard({ node, nodes, graphNodes, runtime, onChange
   };
   return <section className="workflow-planner" aria-label="工作流编排助手">
     <p className="workflow-hint workflow-planner-inputs">编排素材（可选）</p>
-    <WorkflowPromptEditor node={node} nodes={nodes} graphNodes={graphNodes} disabled={waiting || busy} onChange={onChange} />
+    <WorkflowPromptEditor node={node} nodes={nodes} graphNodes={graphNodes} disabled={waiting || busy} readCurrentPrompt={readCurrentPrompt} onChange={onChange} />
     <p className="workflow-hint">按 @ 引用接入的文本和图片，说明各自用途。搭建完成后，点击新流程的触发器运行。</p>
     {!import.meta.env.DEV && <p className="workflow-waiting">工作流助手目前仅在开发版连接本机 DSH。</p>}
     {planning?.summary && <p className="workflow-planner-summary" style={{ whiteSpace: "pre-wrap" }}>{planning.summary}</p>}

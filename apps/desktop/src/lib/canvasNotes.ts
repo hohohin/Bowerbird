@@ -1,4 +1,5 @@
 import { documentPreviewText } from "./documentPreview.ts";
+import { readCanvasNoteSource } from "./canvasNoteSource.ts";
 import type { CanvasNode } from "./types";
 import type { CanvasRect } from "./canvasLogic";
 import { contentTableText, type ContentTable } from "./contentTable.ts";
@@ -45,11 +46,15 @@ export interface CanvasBubbleTail {
   position: number;
 }
 
+export function canvasDocumentTextValue(markdown: string) {
+  const value = documentWorkflowValue(markdown);
+  return { ...value, text: documentPreviewText(value.text, "markdown", Infinity) };
+}
+
 export function canvasNoteValue(note: CanvasNotePayload, cellId: string) {
   if (note.note_type === "document") {
-    const value = documentWorkflowValue(note.text);
     if (cellId === "*") return { type: "image" as const, assetIds: [...new Set(documentMediaReferences(note.text).filter(ref => ref.kind === "image").map(ref => ref.assetId))] };
-    return cellId === "*text" ? { ...value, text: documentPreviewText(value.text, "markdown", Infinity) } : undefined;
+    return cellId === "*text" ? canvasDocumentTextValue(note.text) : undefined;
   }
   if (cellId === "*" || cellId === "*latest-image") {
     const cells = (cellId === "*latest-image" ? note.cells.slice(-1) : note.cells).flat();
@@ -120,14 +125,14 @@ export function canvasTextCsv(cells: CanvasTextCell[][]): string {
 }
 
 export function readCanvasNote(node: Pick<CanvasNode, "payloadJson">): CanvasNotePayload {
-  const value = JSON.parse(node.payloadJson);
+  const value = readCanvasNoteSource(node);
   return {
     schema_version: 1,
     text: value.text ?? "",
     note_type: value.note_type === "document" ? "document" : value.note_type === "images" ? "images" : value.note_type === "section" ? "section" : value.note_type === "bubble" ? "bubble" : "text",
     cells: (value.note_type === "section" || value.note_type === "document" ? [] : value.cells?.length ? value.cells : [[{ ...emptyCanvasCell(), text: value.text ?? "" }]])
       .map((row: CanvasTextCell[], r: number) => row.map((cell, c) => ({ ...cell, ...(value.note_type === "images" && !cell.content_type ? { content_type: "image" } : {}), id: cell.id ?? `cell-${r}-${c}` }))),
-    member_ids: value.member_ids ?? [],
+    member_ids: [...(value.member_ids ?? [])],
     ...(value.note_type === "section" && value.workflow_container === true ? { workflow_container: true } : {}),
     ...(value.note_type === "section" && value.artboard ? { artboard: { base_asset_id: typeof value.artboard.base_asset_id === "string" ? value.artboard.base_asset_id : null } } : {}),
     line_height_percent: value.line_height_percent ?? 165,

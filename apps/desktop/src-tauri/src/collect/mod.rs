@@ -5,3 +5,5 @@
 
 pub mod ws_server;
 pub(crate) mod video_blob;
+
+pub(crate) mod pairing;

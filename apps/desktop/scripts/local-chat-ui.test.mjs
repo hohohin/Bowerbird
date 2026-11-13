@@ -57,6 +57,7 @@ try {
   const id = await panel.getAttribute('data-local-chat-id');
   await fixture('追加回复片段');
   await panel.getByText('花影入月', { exact: true }).waitFor();
+  assert.doesNotMatch(await card.textContent(), /花影入月/, 'streamed text is only shown in the conversation');
   await panel.getByRole('button', { name: '停止回复', exact: true }).click();
   await panel.getByText('已停止 · 已收到的内容已保留', { exact: true }).waitFor();
   assert.equal(await panel.locator('[data-message-role="user"]').count(), 1);
@@ -77,7 +78,10 @@ try {
   await fixture('追加回复片段');
   await card.locator('[data-chat-status="running"]').waitFor();
   await fixture('完成回复');
-  await card.locator('.local-chat-card-preview').click(); await panel.waitFor();
+  await card.locator('[data-chat-status="idle"]').waitFor();
+  assert.doesNotMatch(await card.textContent(), /花影入月/, 'completed reply is absent even inside collapsed elements');
+  assert.equal(await card.locator('.workflow-text-result, .workflow-image-result').count(), 0);
+  await card.getByRole('button', { name: '查看 Agent 详情', exact: true }).click(); await panel.waitFor();
   assert.equal(await panel.getAttribute('data-local-chat-id'), id);
   assert.equal(await card.count(), 1, 'continuations keep one canvas card');
   assert.equal(await panel.locator('[data-message-role="user"]').count(), 2);
@@ -93,7 +97,7 @@ try {
   await close();
   await card.getByRole('combobox', { name: 'Codex 模型', exact: true }).click();
   await page.getByRole('option', { name: 'Codex 轻量测试', exact: true }).click();
-  await card.locator('.local-chat-card-preview').click(); await panel.waitFor();
+  await card.getByRole('button', { name: '查看 Agent 详情', exact: true }).click(); await panel.waitFor();
   assert.match(await panel.getByRole('combobox', { name: 'Codex 模型', exact: true }).innerText(), /Codex 轻量测试/);
   await panel.getByRole('combobox', { name: 'Codex 模型', exact: true }).click();
   await page.getByRole('option', { name: '默认模型', exact: true }).click();
@@ -107,6 +111,7 @@ try {
   const composerHistory = page.locator('.canvas-chat-history');
   await composerHistory.getByRole('textbox', { name: '搜索对话历史', exact: true }).fill('给荷月礼盒');
   assert.equal(await composerHistory.locator('.local-chat-history-entry').count(), 1);
+  assert.doesNotMatch(await composerHistory.textContent(), /花影入月/);
   await composerHistory.getByRole('button', { name: '关闭对话历史', exact: true }).click();
   assert.deepEqual(await editor.locator('p').allTextContents(), unsentParagraphs, 'closing history keeps the unsent multiline draft');
   await page.locator('.creation-dock').getByRole('button', { name: '打开对话记录', exact: true }).click();
@@ -117,7 +122,7 @@ try {
   assert.deepEqual(await editor.locator('p').allTextContents(), unsentParagraphs, 'returning from an earlier conversation preserves the new draft');
   await fixture('刷新界面'); await ready(); await expandComposer();
   assert.deepEqual(await editor.locator('p').allTextContents(), unsentParagraphs, 'reloading restores paragraph boundaries');
-  await card.locator('.local-chat-card-preview').click(); await panel.waitFor();
+  await card.getByRole('button', { name: '查看 Agent 详情', exact: true }).click(); await panel.waitFor();
 
   await page.getByRole('combobox', { name: '测试故障', exact: true }).selectOption('send');
   await panel.getByRole('textbox', { name: '继续对话', exact: true }).fill('发送失败时仍保留的草稿');
@@ -138,7 +143,7 @@ try {
   await panel.getByText('本轮回复未完成，请检查连接后继续对话。', { exact: true }).waitFor();
   assert.doesNotMatch(await panel.innerText(), /private|auth\.json|token_missing/);
   await panel.getByRole('textbox', { name: '继续对话', exact: true }).fill('刷新后继续编辑的草稿');
-  await fixture('刷新界面'); await ready(); await card.locator('.local-chat-card-preview').click(); await panel.waitFor();
+  await fixture('刷新界面'); await ready(); await card.getByRole('button', { name: '查看 Agent 详情', exact: true }).click(); await panel.waitFor();
   assert.equal(await panel.getByRole('textbox', { name: '继续对话', exact: true }).inputValue(), '刷新后继续编辑的草稿');
   assert.equal(await panel.locator('[data-message-role="user"]').count(), 3);
 
@@ -150,7 +155,7 @@ try {
   await panel.waitFor(); await fixture('模拟进程中断');
   await panel.getByText('上次回复已中断，已收到的内容已保留。可以发送消息继续对话。', { exact: true }).waitFor();
   await page.getByRole('combobox', { name: '测试项目', exact: true }).selectOption('p'); await ready();
-  await card.locator('.local-chat-card-preview').click(); await panel.waitFor();
+  await card.getByRole('button', { name: '查看 Agent 详情', exact: true }).click(); await panel.waitFor();
   assert.equal(await panel.getAttribute('data-local-chat-id'), id);
   assert.doesNotMatch(await panel.innerText(), /项目 B 的独立对话/);
 
@@ -202,7 +207,7 @@ try {
   await mode('图片').click(); assert.equal(await editor.innerText(), '图片模式的独立草稿');
   await mode('视频').click(); assert.equal(await editor.innerText(), '视频模式的独立草稿');
   await mode('对话').click(); assert.equal((await editor.innerText()).trim(), '');
-  await page.locator(`.workflow-card.is-agent:has([data-local-chat-id="${id}"])`).locator('.local-chat-card-preview').click(); await panel.waitFor();
+  await page.locator(`.workflow-card.is-agent:has([data-local-chat-id="${id}"])`).getByRole('button', { name: '查看 Agent 详情', exact: true }).click(); await panel.waitFor();
   await mkdir('.tmp/local-chat', { recursive: true });
   await page.screenshot({ path: '.tmp/local-chat/desktop-light.png' });
   await fixture('深色'); await page.screenshot({ path: '.tmp/local-chat/desktop-dark.png' });
@@ -210,11 +215,18 @@ try {
   const bounds = await panel.boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 901 && bounds.y + bounds.height <= 701, JSON.stringify(bounds));
   await page.screenshot({ path: '.tmp/local-chat/desktop-narrow.png' });
+  await fixture('创建按次数循环四卡');
+  await page.waitForFunction(() => {
+    const action = Object.values(window.localChatFixture.inspect().conversations).flatMap(chat => chat.actions ?? []).at(-1);
+    return action?.cards.length === 4 && action.cards.every(card =>
+      document.querySelector(`[data-workflow-card="${card.id}"], [data-canvas-node-id="${card.id}"]`));
+  });
+  assert.doesNotMatch((await card.allTextContents()).join(' '), /已创建内容、生成、循环和触发卡片/);
   assert.deepEqual(errors, []);
   console.log('PASS: independent and multiline drafts, Enter/Shift+Enter newlines, Ctrl+Enter sending, IME protection, composer history, stable/removable/restorable chat card, streaming/stop/close, revision ordering, failure recovery, refresh, project isolation and delayed draft cleanup, local access gates and layouts');
 } catch (error) {
   await mkdir('.tmp/local-chat', { recursive: true });
   await page.screenshot({path:'.tmp/local-chat/unification-error.png'});
-  console.log(await page.evaluate(() => ['.creation-dock','.canvas-workspace','.workflow-card','.composer-host-glass','.local-chat-card-preview'].map(selector=>{const e=document.querySelector(selector),r=e?.getBoundingClientRect();return [selector,r&&{x:r.x,y:r.y,width:r.width,height:r.height},e&&{position:getComputedStyle(e).position,overflow:getComputedStyle(e).overflow}];})));
+  console.log(await page.evaluate(() => ['.creation-dock','.canvas-workspace','.workflow-card','.composer-host-glass','.workflow-detail'].map(selector=>{const e=document.querySelector(selector),r=e?.getBoundingClientRect();return [selector,r&&{x:r.x,y:r.y,width:r.width,height:r.height},e&&{position:getComputedStyle(e).position,overflow:getComputedStyle(e).overflow}];})));
   throw error;
 } finally { await browser.close(); await server.close(); }

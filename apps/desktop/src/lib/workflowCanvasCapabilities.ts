@@ -8,6 +8,32 @@ import type { Asset, CanvasNode } from "./types";
 
 type Material = { id: string; assetId?: string; groupId?: string; assetIds?: string[]; mediaAssetIds?: string[]; video?: boolean };
 
+/** The "image" workflow channel carries all three media types. */
+export function workflowAssetMedia(asset?: Pick<Asset, "store_path" | "ext">): AutomaticMedia | undefined {
+  for (const path of [asset?.store_path, asset?.ext && `asset.${asset.ext}`]) {
+    if (!path) continue;
+    if (isAudioPath(path) || /^data:audio\//i.test(path)) return "audio";
+    if (isVideoPath(path) || /^data:video\//i.test(path)) return "video";
+    if (/\.(?:png|jpe?g|webp|gif|avif|svg|ico|bmp|tiff?|heic|heif)(?:[?#].*)?$/i.test(path) || /^data:image\//i.test(path)) return "image";
+  }
+}
+
+export function workflowSourceMediaLabel(assetIds: readonly string[], assets: readonly Asset[], source?: WorkflowNode) {
+  if (assetIds.length) {
+    let kind: AutomaticMedia | undefined;
+    for (const id of assetIds) {
+      const media = workflowAssetMedia(assets.find(asset => asset.id === id));
+      if (!media || (kind && kind !== media)) return "素材";
+      kind = media;
+    }
+    return kind === "audio" ? "音频" : kind === "video" ? "视频" : "图片";
+  }
+  if (source?.kind === "voice") return "音频";
+  if (source?.kind === "comfy-video" || source?.generation?.media === "video" || (source?.kind === "agent" && source.skill === "hyperframes")) return "视频";
+  if (source?.kind === "generation" || source?.kind === "agent" || source?.kind === "skill" || source?.kind === "instruction") return "图片";
+  return "素材";
+}
+
 export function automaticValueMedia(value: WorkflowValue | undefined, assets: Asset[], pending = false): AutomaticMedia[] | undefined {
   // Partial metadata and future outputs cannot prove that a connection is incompatible.
   if (pending || value?.nodeIds?.length || !value?.assetIds?.length) return;

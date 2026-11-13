@@ -17,12 +17,20 @@ use std::collections::{BTreeMap, HashMap};
 // Prefixes prevent a non-generated asset ID from colliding with a session ID.
 pub(super) const GENERATED: &str = "(a.generation_session_id IS NOT NULL OR COALESCE(a.source='comfy-h3',0) OR a.id IN (SELECT asset_id FROM workflow_asset_groups) OR a.id IN (SELECT asset_id FROM other_generated_groups))";
 pub(super) const GENERATION_GROUP: &str = "COALESCE((SELECT w.group_key FROM workflow_asset_groups w WHERE w.asset_id=a.id),CASE WHEN a.generation_session_id IS NOT NULL THEN 'generation:'||COALESCE((SELECT g.conversation_id FROM generation_conversations g WHERE g.session_id=a.generation_session_id),a.generation_session_id) END,(SELECT g.group_key FROM other_generated_groups g WHERE g.asset_id=a.id),'asset:'||a.id)";
+pub(super) fn gallery_eligible() -> String {
+    format!("({GENERATED} OR 'asset:'||a.id IN (SELECT source_key FROM generation_gallery_merges))")
+}
+pub(super) fn generation_resolved_group() -> String {
+    format!("COALESCE((SELECT group_key FROM generation_gallery_merges WHERE source_key='asset:'||a.id),(SELECT group_key FROM generation_gallery_merges WHERE source_key={GENERATION_GROUP}),{GENERATION_GROUP})")
+}
 pub(super) fn generation_display_group(individual: &str) -> String {
-    format!("CASE WHEN {GENERATION_GROUP} IN (SELECT group_key FROM generation_gallery_separations) THEN {individual} ELSE {GENERATION_GROUP} END")
+    let group = generation_resolved_group();
+    format!("CASE WHEN {group} IN (SELECT group_key FROM generation_gallery_separations) THEN {individual} ELSE {group} END")
 }
 fn gallery_count() -> String {
     let group = generation_display_group("'asset:'||a.id");
-    format!("COUNT(CASE WHEN NOT {GENERATED} THEN 1 END)+COUNT(DISTINCT CASE WHEN {GENERATED} THEN {group} END)")
+    let eligible = gallery_eligible();
+    format!("COUNT(CASE WHEN NOT {eligible} THEN 1 END)+COUNT(DISTINCT CASE WHEN {eligible} THEN {group} END)")
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -71,16 +79,17 @@ impl CatalogFilter {
     fn gallery_sql(&self, columns: &str) -> AppResult<(String, Vec<Value>)> {
         let group = generation_display_group("'asset:'||a.id");
         let (condition, values) = self.sql()?;
+        let eligible = gallery_eligible();
         let mut bindings = values.clone();
         bindings.extend(values);
         // Keep the main scan on the existing date index. Ordinary library items
         // do not participate in window sorting or materialize full asset rows.
-        Ok((format!("WITH {WORKFLOW_GALLERY_CTE}, generated AS (SELECT a.id,ROW_NUMBER() OVER (PARTITION BY {group} ORDER BY a.created_at DESC,a.id DESC) AS generation_rank FROM assets a INDEXED BY idx_assets_generation_session_id WHERE {condition} AND {GENERATED}) SELECT {columns} FROM assets a INDEXED BY idx_assets_catalog_order WHERE {condition} AND (NOT {GENERATED} OR a.id IN (SELECT id FROM generated WHERE generation_rank=1)) ORDER BY a.created_at DESC,a.id LIMIT ? OFFSET ?"), bindings))
+        Ok((format!("WITH {WORKFLOW_GALLERY_CTE}, generated AS (SELECT a.id,ROW_NUMBER() OVER (PARTITION BY {group} ORDER BY a.created_at DESC,a.id DESC) AS generation_rank FROM assets a INDEXED BY idx_assets_generation_session_id WHERE {condition} AND {eligible}) SELECT {columns} FROM assets a INDEXED BY idx_assets_catalog_order WHERE {condition} AND (NOT {eligible} OR a.id IN (SELECT id FROM generated WHERE generation_rank=1)) ORDER BY a.created_at DESC,a.id LIMIT ? OFFSET ?"), bindings))
     }
 
     pub(super) fn sql(&self) -> AppResult<(String, Vec<Value>)> {
         let mut clauses = vec![
-            if self.kind == "connections" { "1".into() } else { catalog_visibility(self.project_id.is_some()) },
+            if self.kind == "connections" { super::material_catalog::CONNECTION_ENTRY_VISIBLE.into() } else { catalog_visibility(self.project_id.is_some()) },
             match self.media.as_str() {
                 "all" => format!("({IMAGE} OR {VIDEO} OR {AUDIO} OR {TEXT})"),
                 "images" => IMAGE.to_string(),
@@ -366,7 +375,8 @@ impl Database {
         values.extend(ids.iter().cloned().map(Value::Text));
         let placeholders = vec!["?"; ids.len()].join(",");
         let conn = self.conn.lock().unwrap();
-        let mut stmt = conn.prepare(&format!("WITH {WORKFLOW_GALLERY_CTE} SELECT a.*,{group} AS group_key FROM assets a WHERE {condition} AND {GENERATED} AND {group} IN (SELECT {group} FROM assets a WHERE a.id IN ({placeholders})) ORDER BY a.created_at,a.id"))?;
+        let eligible = gallery_eligible();
+        let mut stmt = conn.prepare(&format!("WITH {WORKFLOW_GALLERY_CTE} SELECT a.*,{group} AS group_key FROM assets a WHERE {condition} AND {eligible} AND {group} IN (SELECT {group} FROM assets a WHERE a.id IN ({placeholders})) ORDER BY a.created_at,a.id"))?;
         let mut groups: HashMap<String, Vec<Asset>> = HashMap::new();
         for row in stmt.query_map(params_from_iter(values), |row| Ok((row.get::<_, String>("group_key")?, asset_from_row(row)?)))? {
             let (key, asset) = row?;

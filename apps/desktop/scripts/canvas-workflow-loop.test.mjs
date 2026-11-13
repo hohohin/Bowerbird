@@ -1,8 +1,10 @@
 import { placeWorkflowCard } from "./fixtures/canvas-reference/place-card.mjs";
 import assert from 'node:assert/strict';
+import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server = await createServer({ configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1613, strictPort: true, hmr: false, watch: null } });
+await mkdir('.tmp/loop-card-design', { recursive: true });
+const server = await createServer({ cacheDir: '.tmp/workflow-loop-contract-vite', server: { host: '127.0.0.1', port: 1613, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -17,12 +19,13 @@ try {
   await page.reload(); await page.locator('[data-canvas-node-id="old"]').waitFor();
   await placeWorkflowCard(page, '新增循环卡片');
   const card = page.locator('.workflow-card.is-loop'); await card.waitFor();
-  assert.equal(await card.getByRole('button', { name: '输出：当前轮次', exact: true }).count(), 1);
-  await card.getByRole('combobox', { name: '循环方式' }).selectOption('rows');
+  assert.equal(await card.locator('[data-canvas-connect-side="output"]').count(), 1);
+  await card.getByRole('combobox', { name: '循环方式' }).click();
+  await page.getByRole('option', { name: '逐行处理内容' }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(node => node.kind === 'loop' && node.loopMode === 'rows'));
   await page.reload(); await card.waitFor();
-  assert.equal(await card.getByRole('combobox', { name: '循环方式' }).inputValue(), 'rows');
-  assert.equal(await card.getByRole('button', { name: '输出：当前轮次', exact: true }).count(), 1);
+  assert.match(await card.getByRole('combobox', { name: '循环方式' }).textContent(), /逐行处理内容/);
+  assert.equal(await card.locator('[data-canvas-connect-side="output"]').count(), 1);
   assert.equal(await card.getByRole('spinbutton').count(), 0);
   assert.equal(await card.getByRole('button', { name: '循环起始项', exact: true }).isDisabled(), true);
   await page.evaluate(async () => {
@@ -40,11 +43,11 @@ try {
   const menu = page.getByRole('listbox', { name: '选择循环起始项' });
   assert.equal(await menu.getByRole('option').count(), 3);
   await menu.getByRole('option', { name: /第 2 项.*产品乙/ }).getByRole('img', { name: '合成参考 b' }).waitFor();
-  await page.screenshot({ path: '.tmp/workflow/loop-start-rows.png' });
+  await page.screenshot({ path: '.tmp/loop-card-design/loop-start-rows.png' });
   await menu.getByRole('option', { name: /第 2 项.*产品乙/ }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(node => node.kind === 'loop' && node.loopStartItem === 2));
   await page.reload(); await card.waitFor();
-  assert.match(await picker.textContent(), /从第 2 项开始.*产品乙/);
+  assert.match(await picker.textContent(), /第 2 项.*产品乙/);
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const c = canvasWorkflowController('p');
@@ -53,7 +56,7 @@ try {
   await picker.click();
   assert.equal(await menu.getByRole('option').count(), 3);
   await menu.getByRole('option', { name: /第 2 项.*合成参考 b/ }).getByRole('img').waitFor();
-  await page.screenshot({ path: '.tmp/workflow/loop-start-images.png' });
+  await page.screenshot({ path: '.tmp/loop-card-design/loop-start-images.png' });
   await menu.getByRole('option', { name: /第 2 项/ }).press('ArrowDown');
   await page.keyboard.press('Enter');
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(node => node.kind === 'loop' && node.loopStartItem === 3));
@@ -70,7 +73,7 @@ try {
   assert.equal(await card.getByRole('button', { name: '开始循环', exact: true }).isDisabled(), true);
   await picker.click(); assert.equal(await menu.getByRole('option').count(), 1);
   await menu.getByRole('option').click();
-  assert.match(await picker.textContent(), /从第 1 项开始/);
+  assert.match(await picker.textContent(), /第 1 项/);
   assert.equal(await card.getByRole('button', { name: '开始循环', exact: true }).isDisabled(), false);
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -97,7 +100,7 @@ try {
   assert.match(await card.locator('.workflow-loop-start').textContent(), /先让上游输出表格/);
   assert.equal(await card.locator('textarea').count(), 0);
   await page.evaluate(async () => { const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts'); const c = canvasWorkflowController('p'); await c.edit(c.document.nodes.filter(node => node.kind === 'loop').map(node => ({ ...node, x: 600, y: 150, loopMode: 'images', loopStartItem: 1, inputs: { image: [{ assetId: 'a' }] } }))); });
-  await page.screenshot({ path: '.tmp/workflow/loop-card.png' });
+  await page.screenshot({ path: '.tmp/loop-card-design/loop-card.png' });
   console.log(await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     const { useStore } = await import('/src/store.ts');
@@ -281,15 +284,15 @@ try {
   }));
   await page.getByRole('button', { name: '适应内容', exact: true }).click();
   await page.locator('.workflow-loop-results > summary').click();
-  assert.equal(await page.locator('.workflow-loop-results > details > summary').first().textContent(), '第 2 项');
-  assert.match(await page.locator('.workflow-loop [role="status"]').textContent(), /已完成 1 \/ 1 项 · 从第 2 项起/);
+  assert.match(await page.locator('.workflow-loop-results > details > summary').first().textContent(), /^第 2 项/);
+  assert.match(await page.locator('.workflow-loop [role="status"]').textContent(), /已完成 1 \/ 1 项/);
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const example = window.loopStoppedExample, position = window.loopResultPosition;
     await canvasWorkflowController('p').save({ ...example, nodes: example.nodes.map((node, index) => ({ ...node, x: position.x + index * 400, y: position.y })) });
   });
-  await page.getByRole('button', { name: '从中断处开始 · 第 2 项', exact: true }).waitFor();
-  await page.screenshot({ path: '.tmp/workflow/loop-resume.png' });
+  await page.getByRole('button', { name: '从第 2 项继续', exact: true }).waitFor();
+  await page.screenshot({ path: '.tmp/loop-card-design/loop-resume.png' });
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const example = window.loopCompletedExample, position = window.loopResultPosition;
@@ -299,6 +302,6 @@ try {
   await page.locator('.workflow-loop-results > details > summary').first().click();
   await page.locator('.workflow-loop-results img').first().waitFor();
   assert.equal(await page.locator('.workflow-loop-results > details').count(), 2);
-  await page.screenshot({ path: '.tmp/workflow/loop-results.png' });
+  await page.screenshot({ path: '.tmp/loop-card-design/loop-results.png' });
   assert.deepEqual(errors, []);
 } finally { await browser.close(); await server.close(); }

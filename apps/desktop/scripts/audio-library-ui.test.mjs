@@ -152,6 +152,9 @@ try {
   if (!process.argv.includes('--guards-only')) {
     await page.goto(url);
     await page.locator('.library-home').waitFor();
+    await page.getByRole('tab', { name: '全部素材', exact: true }).click();
+    await page.getByRole('group', { name: '素材类型' }).hover();
+    await page.getByRole('button', { name: '音频', exact: true }).waitFor();
     assert.equal(await page.getByRole('button', { name: '音频', exact: true }).count(), 1, 'formal library must expose audio alongside image and video');
     await page.getByRole('button', { name: '音频', exact: true }).click();
     await wave('wav').waitFor();
@@ -173,13 +176,16 @@ try {
     assert.match((await playerState()).currentSrc, /long-vbr\.mp3/);
     assert.equal(await page.locator('div[data-audio-preview][data-playing="true"]').count(), 1);
     const beforeMediaSwitch = await playerState();
+    await page.getByRole('group', { name: '素材类型' }).hover();
     await page.getByRole('button', { name: '图片', exact: true }).click(); await progressBeyond(beforeMediaSwitch.time + .2);
     assert.equal((await playerState()).currentSrc, beforeMediaSwitch.currentSrc, 'continuous playback persists media/view switches');
     await page.locator('.folder-media-card[data-asset-id="image"]').waitFor();
     assert.equal(await page.locator('div[data-audio-preview]').count(), 0);
+    await page.getByRole('group', { name: '素材类型' }).hover();
     await page.getByRole('button', { name: '视频', exact: true }).click();
     await page.locator('.folder-media-card[data-asset-id="video"]').waitFor();
     assert.equal(await page.locator('div[data-audio-preview]').count(), 0);
+    await page.getByRole('group', { name: '素材类型' }).hover();
     await page.getByRole('button', { name: '音频', exact: true }).click(); await wave('wav').waitFor();
     await wave('mp3').locator('.audio-waveform-play').click(); await stopped();
     result.ui.mutations = await mutations();
@@ -226,6 +232,7 @@ try {
     assert.deepEqual(await page.evaluate(() => window.unexpected), []);
     const stressRequests = mediaRequests.length;
     await page.goto(`${url}?stress`);
+    await page.getByRole('group', { name: '素材类型' }).hover();
     await page.getByRole('button', { name: '音频', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('div[data-audio-preview][data-asset-id="wav"]')?.dataset.waveReady === 'true');
     await page.waitForFunction(() => [...document.querySelectorAll('div[data-audio-preview]')].filter(element => { const rect = element.getBoundingClientRect(); return rect.height > 0 && rect.top < innerHeight && rect.bottom > 0; }).every(element => element.dataset.waveReady === 'true'));

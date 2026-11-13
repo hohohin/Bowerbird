@@ -15,7 +15,7 @@ const card = id => page.locator(`[data-connection-entry="${id}"] .folder-media-c
 const action = name => page.getByRole('menuitem', { name, exact: true });
 const dialog = () => page.getByRole('dialog');
 async function open() {
-  await page.goto('http://127.0.0.1:17931/scripts/fixtures/connected-collections/preview.html');
+  await page.goto('http://127.0.0.1:17931/scripts/fixtures/connected-collections/preview.html', { timeout: 45000 });
   await page.getByRole('tab', { name: '文件夹', exact: true }).click();
   await page.locator('[data-collection-id="child"]').click();
   await card('ref-one').waitFor();
@@ -80,4 +80,4 @@ try {
   assert.deepEqual(errors, []); assert.deepEqual(remote, []);
   await writeFile('.tmp/collection-delete-actions/result.json', JSON.stringify({ passed: true, errors, remote, boundary: 'real collection components with controlled IPC' }, null, 2));
   console.log('PASS collection deletion: reference/original identity, cancellation, duplicate/mixed selection, failure and themes');
-} finally { await browser.close(); await server.close(); }
+} catch (error) { console.error(error); throw error; } finally { await browser.close(); await server.close(); }

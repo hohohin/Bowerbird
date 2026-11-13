@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server=await createServer({configFile:false,root:process.cwd(),server:{host:'127.0.0.1',port:1592,strictPort:true,hmr:false,watch:null}});
+const server=await createServer({root:process.cwd(),cacheDir:".tmp/workflow-generation-chain-vite",optimizeDeps:{entries:["scripts/fixtures/canvas-reference/preview.html"]},server:{host:'127.0.0.1',port:1592,strictPort:true,hmr:false,watch:null}});
 await server.listen();
 const browser=await chromium.launch({channel:'chrome',headless:true});
 const page=await browser.newPage({viewport:{width:1800,height:1200}});
@@ -23,7 +23,7 @@ try {
     let round=1,fail=false,release,started,delay=true;const calls=[];
     let signal=new Promise(resolve=>{started=resolve;});
     api.localAgentFindAssetId=async path=>path.replace('.png','');
-    useStore.setState({startGeneration:async(...args)=>{
+    useStore.setState({codexHealth:{ok:true,reason:''},cloudEntitlement:{policy:{can_use_byo:true,max_parallel_jobs:3},balances:{daily:0,sub:0,topup:0}},startGeneration:async(...args)=>{
       const identity=args[12],isSource=args[0]==='source';calls.push({source:isSource,assets:args[1].map(a=>a.id),identity});
       if(isSource&&delay){started();await new Promise(resolve=>{release=resolve;});}
       if(isSource&&fail)throw new Error('source failed');
@@ -61,13 +61,18 @@ try {
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
     const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
     await canvasWorkflowController('p').edit([{...newWorkflowNode('generation',80,100,'codex'),id:'ui-source',prompt:'source'}, {...newWorkflowNode('generation',1100,100,'codex'),id:'ui-target'}]);
+    const c=canvasWorkflowController('p');
+    await c.save({...c.document,cardNames:{'ui-target':'下游生成'}});
     const snapshot=window.snapshot();snapshot.nodes=snapshot.nodes.filter(n=>n.id==='old');snapshot.view={...snapshot.view,panX:50,panY:70,zoom:0.8};sessionStorage.setItem('reference-fixture',JSON.stringify(snapshot));
   });
   await page.reload();const source=page.locator('[data-workflow-card="ui-source"]'),target=page.locator('[data-workflow-card="ui-target"]');await source.waitFor();
   const history=source.getByRole('button',{name:'生成历史',exact:true});
   await history.click();await page.getByText('暂无生成会话',{exact:true}).waitFor();
   await page.keyboard.press('Escape');assert.equal(await history.getAttribute('aria-expanded'),'false');
-  await source.getByRole('button',{name:'输出：图片',exact:true}).click();await target.getByRole('button',{name:'输入：图片',exact:true}).click();
+  const plus=source.getByRole('button',{name:'添加下游',exact:true});
+  await plus.focus(); await plus.press('Enter');
+  await page.getByRole('menu',{name:'添加下游',exact:true}).getByRole('menuitem',{name:'连接已有卡片'}).click();
+  await page.getByRole('menu',{name:'连接已有卡片',exact:true}).getByRole('menuitem',{name:'下游生成',exact:true}).click();
   await target.getByRole('textbox',{name:'卡片指令',exact:true}).pressSequentially('@');
   const option=page.getByRole('option').filter({hasText:'图片来源 1'});await option.click();
   await page.evaluate(async()=>{
@@ -77,19 +82,17 @@ try {
     for(const [id,y] of [['session-old',100],['session-new',420]])canvas.nodes.push({...base,id,kind:'prompt',assetId:null,role:null,x:570,y,width:260,height:180,createdAt:1790121600+y,positionLocked:true,payloadJson:JSON.stringify({schema_version:1,job_id:id,turn_key:'one',text:id,status:'succeeded',provider:'codex'})});
     for(const [assetId,job,turn] of [['a','session-old','one'],['b','session-old','one'],['c','session-new','one'],['d','session-new','later']])canvas.nodes.push({...base,id:'result-'+assetId,assetId,hiddenAt:1,role:'output',payloadJson:JSON.stringify({execution:{job_id:job,turn_key:turn}})});
     sessionStorage.setItem('reference-fixture',JSON.stringify(canvas));
-    await c.edit(c.document.nodes.map(n=>n.id==='ui-source'?{...n,sessionNodeIds:['session-old','session-new'],activeSessionNodeId:'session-old'}:n));
+    await c.edit(c.document.nodes.map(n=>n.id==='ui-source'?{...n,sessionNodeIds:['session-old','session-new'],activeSessionNodeId:'session-old',outputs:{image:{type:'image',nodeIds:['session-old']}}}:n));
   });
   await page.reload();await source.waitFor();
   const wire=page.locator('[data-workflow-target="ui-target"]');await wire.waitFor();
   const directPath=await wire.getAttribute('d');
-  const relay=await page.evaluate(()=>{
-    const definition=JSON.parse(sessionStorage.getItem('workflow-p')).document;
-    const input=definition.nodes.find(node=>node.id==='ui-target').inputs.image[0];
-    return {input,card:window.snapshot().nodes.find(node=>node.id===input.canvasNodeId)};
-  });
-  assert.equal(relay.input.cellId,'*latest-image','downstream follows the inserted content card latest row');
-  assert.ok(relay.card,'image connection inserts a saved content card');
-  assert.ok(Math.abs(Number(directPath.match(/^M ([\d.-]+)/)[1])-(relay.card.x+relay.card.width))<2,'wire starts at the content card latest socket');
+  const definition=await page.evaluate(()=>JSON.parse(sessionStorage.getItem('workflow-p')).document);
+  const input=definition.nodes.find(node=>node.id==='ui-target').inputs.image[0];
+  assert.equal(input.nodeId,'ui-source');
+  assert.equal(input.portId,'image');
+  assert.ok(!definition.nodes.some(node=>node.textTarget),'no intermediate table is inserted');
+  assert.ok(Math.abs(Number(directPath.match(/^M ([\d.-]+)/)[1])-830)<2,'wire starts at the active session right edge');
   assert.equal(await page.locator('[data-canvas-node-id="session-old"],[data-canvas-node-id="session-new"]').count(),2);
   assert.equal(await page.locator('[data-workflow-session-link]').count(),2);
   await history.click();const popup=page.getByRole('dialog',{name:'生成历史',exact:true});await popup.waitFor();
@@ -113,8 +116,8 @@ try {
   await page.locator('[data-project-inspector="generation"]').waitFor();
   assert.match(await page.locator('[data-project-inspector="generation"]').innerText(),/session-old/,'saved session opens even when job is outside in-memory history');
   await page.keyboard.press('Escape');
-  await page.evaluate(async()=>{const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const c=canvasWorkflowController('p');await c.edit(c.document.nodes.map(n=>n.id==='ui-source'?{...n,activeSessionNodeId:'session-new'}:n));});
-  assert.equal(await wire.getAttribute('d'),directPath,'new session does not move the wire');
+  await page.evaluate(async()=>{const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const c=canvasWorkflowController('p');await c.edit(c.document.nodes.map(n=>n.id==='ui-source'?{...n,activeSessionNodeId:'session-new',outputs:{image:{type:'image',nodeIds:['session-new']}}}:n));});
+  await page.waitForFunction(previous=>document.querySelector('[data-workflow-target="ui-target"]')?.getAttribute('d')!==previous,directPath);
   assert.equal(await page.locator('[data-canvas-node-id="session-old"]').count(),1);
   await page.reload();await source.waitFor();await history.click();await popup.waitFor();
   assert.equal(await popup.locator('[data-workflow-history-session]').count(),2);

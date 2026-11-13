@@ -1,5 +1,6 @@
 //! Native filesystem notices are hints; reconciliation remains the existing conservative scan.
 use super::{queue_refresh, request_originals_check};
+use crate::core::folder_connections::connection_root_readable;
 use crate::{core::paths::LibraryPaths, db::Database, error::AppResult};
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use std::{
@@ -11,23 +12,25 @@ use std::{
     },
     time::{Duration, Instant},
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Clone)]
 struct Root {
     id: String,
     path: PathBuf,
+    indexed_available: bool,
     // A reference may point outside all connected roots. Watch its original's parent too.
     originals: Vec<PathBuf>,
 }
 fn roots(db: &Database) -> AppResult<Vec<Root>> {
     let conn = db.conn.lock().unwrap();
-    let mut stmt = conn.prepare("SELECT id,path FROM connected_roots ORDER BY rowid")?;
+    let mut stmt = conn.prepare("SELECT id,path,available FROM connected_roots ORDER BY rowid")?;
     let mut roots = stmt
         .query_map([], |row| {
             Ok(Root {
                 id: row.get(0)?,
                 path: PathBuf::from(row.get::<_, String>(1)?),
+                indexed_available: row.get(2)?,
                 originals: Vec::new(),
             })
         })?
@@ -93,12 +96,13 @@ fn invalidated_watches(event: &Event, watched: &HashMap<PathBuf, RecursiveMode>)
 }
 fn desired_watches(
     roots: &[Root],
+    readable: &HashSet<PathBuf>,
     watched: &HashMap<PathBuf, RecursiveMode>,
 ) -> HashMap<PathBuf, RecursiveMode> {
     let mut watches = HashMap::new();
     let mut parents = HashSet::new();
     for root in roots {
-        if root.path.is_dir() {
+        if readable.contains(&root.path) {
             watches.insert(root.path.clone(), RecursiveMode::Recursive);
         }
         // Watching the parent detects replacement/deletion of a watched directory itself.
@@ -124,6 +128,56 @@ fn desired_watches(
         }
     }
     watches
+}
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnectionAvailability {
+    root_id: String,
+    available: bool,
+}
+
+fn reconcile_availability(
+    db: &Database,
+    roots: &[Root],
+    observed: &mut HashMap<String, bool>,
+    mut notify: impl FnMut(ConnectionAvailability),
+    mut rescan: impl FnMut(String),
+) -> HashSet<PathBuf> {
+    let mut readable = HashSet::new();
+    for root in roots {
+        let online = connection_root_readable(&root.path);
+        if online {
+            readable.insert(root.path.clone());
+        }
+        let previous = observed.get(&root.id).copied();
+        if previous == Some(online) && root.indexed_available == online {
+            continue;
+        }
+        if root.indexed_available != online {
+            match db.set_connection_root_available(&root.id, &root.path, online) {
+                Ok(true) => (),
+                Ok(false) => continue, // path was relocated/disconnected or a scan just updated it
+                Err(error) => {
+                    tracing::warn!("connection availability: {error}");
+                    continue;
+                }
+            }
+        }
+        observed.insert(root.id.clone(), online);
+        if previous.is_some() || root.indexed_available != online || !online {
+            notify(ConnectionAvailability {
+                root_id: root.id.clone(),
+                available: online,
+            });
+        }
+        // Even after a fresh app launch the indexed entries can reflect an
+        // older unavailable disk. Reconcile once on initial attachment too.
+        if online {
+            rescan(root.id.clone());
+        }
+    }
+    observed.retain(|id, _| roots.iter().any(|r| &r.id == id));
+    readable
 }
 #[derive(Default)]
 struct Pending {
@@ -204,7 +258,17 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                     if let Ok(values) = roots(&db) {
                         known_roots = values;
                     }
-                    let desired = desired_watches(&known_roots, &watched);
+                    let readable = reconcile_availability(
+                        &db,
+                        &known_roots,
+                        &mut available,
+                        |value| {
+                            let _ = app.emit("library://connection-availability", value);
+                            super::changed(&app);
+                        },
+                        |root| pending.add(HashSet::from([root]), now),
+                    );
+                    let desired = desired_watches(&known_roots, &readable, &watched);
                     if let Some(native) = native.as_mut() {
                         let stale: Vec<_> = watched
                             .iter()
@@ -244,16 +308,6 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                             }
                         }
                     }
-                    for root in &known_roots {
-                        let online = root.path.is_dir();
-                        if available
-                            .insert(root.id.clone(), online)
-                            .is_some_and(|old| old != online)
-                        {
-                            pending.add(HashSet::from([root.id.clone()]), now);
-                        }
-                    }
-                    available.retain(|id, _| known_roots.iter().any(|root| &root.id == id));
                     sync_at = now;
                 }
                 while let Ok(event) = receive.try_recv() {
@@ -311,7 +365,14 @@ pub fn watch(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
                     fallback_at = now;
                 }
                 if let Some(roots) = pending.take_ready(now) {
-                    queue_refresh(app.clone(), db.clone(), paths.clone(), Some(roots), None, true);
+                    queue_refresh(
+                        app.clone(),
+                        db.clone(),
+                        paths.clone(),
+                        Some(roots),
+                        None,
+                        true,
+                    );
                 }
             }
         });
@@ -325,9 +386,211 @@ mod tests {
     use super::*;
     use notify::event::{AccessKind, ModifyKind};
     #[test]
+    fn removable_root_round_trip() {
+        use std::fs;
+        let temp = tempfile::tempdir().unwrap();
+        let db_path = temp.path().join("index.db");
+        let db = Database::open(&db_path).unwrap();
+        db.migrate().unwrap();
+        let paths = LibraryPaths::init(temp.path().join("internal")).unwrap();
+        let external = std::env::var_os("BOWERBIRD_QA_CONNECTION_ROOT").map(PathBuf::from);
+        let signals = std::env::var_os("BOWERBIRD_QA_CONNECTION_SIGNALS").map(PathBuf::from);
+        assert_eq!(external.is_some(), signals.is_some());
+        let source = if let Some(dir) = external.as_ref() {
+            assert!(signals.as_ref().unwrap().is_dir());
+            assert_eq!(fs::read_dir(signals.as_ref().unwrap()).unwrap().count(), 0);
+            // This branch never writes, moves or dismounts the mounted device.
+            // Mount/unmount is controlled by the release operator outside this process.
+            assert!(dir.join("TEST.PNG").is_file());
+            dir.clone()
+        } else {
+            let dir = temp.path().join("connected-media");
+            fs::create_dir(&dir).unwrap();
+            image::RgbImage::from_pixel(4, 4, image::Rgb([25, 50, 75]))
+                .save(dir.join("TEST.PNG"))
+                .unwrap();
+            dir
+        };
+        let source = fs::canonicalize(source).unwrap();
+        let root = db.connect_directory(&source, None).unwrap();
+        let ids = |db: &Database| {
+            db.connection_entry_ids(Some(&root), None, None, 0, 2000)
+                .unwrap()
+        };
+        let mut observed = HashMap::new();
+        let poll = |db: &Database, observed: &mut HashMap<String, bool>| {
+            let mut changes = Vec::new();
+            let mut rescans = Vec::new();
+            reconcile_availability(
+                db,
+                &roots(db).unwrap(),
+                observed,
+                |v| changes.push((v.root_id, v.available)),
+                |id| rescans.push(id),
+            );
+            for id in &rescans {
+                db.scan_connection(&paths, id).unwrap();
+            }
+            (changes, rescans)
+        };
+        assert_eq!(poll(&db, &mut observed).1, vec![root.clone()]);
+        let before = ids(&db);
+        assert!(!before.is_empty());
+        let entry = db
+            .read_connection_entries(&before)
+            .unwrap()
+            .into_iter()
+            .find(|row| row.name.eq_ignore_ascii_case("TEST.PNG"))
+            .unwrap();
+        let original = PathBuf::from(entry.asset.store_path.as_deref().unwrap());
+        let bytes = fs::read(&original).unwrap();
+        db.create_project(
+            "connection-qa",
+            "QA",
+            temp.path().to_str().unwrap(),
+            "qa",
+            "user",
+        )
+        .unwrap();
+        db.add_assets_to_project("connection-qa", std::slice::from_ref(&entry.asset_id))
+            .unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO analyses(id,asset_id,kind,payload) VALUES('qa-note',?1,'caption','QA note')", [&entry.asset_id]).unwrap();
+        let park = temp.path().join("parked-root");
+        let wait = |online: bool| {
+            let until = Instant::now() + Duration::from_secs(90);
+            while connection_root_readable(&source) != online && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            assert_eq!(connection_root_readable(&source), online);
+        };
+        if let Some(dir) = signals.as_ref() {
+            fs::write(dir.join("ready-to-unmount"), b"ok").unwrap();
+            wait(false);
+        } else {
+            fs::rename(&source, &park).unwrap();
+        }
+        assert_eq!(
+            poll(&db, &mut observed),
+            (vec![(root.clone(), false)], vec![])
+        );
+        assert_eq!(poll(&db, &mut observed), (vec![], vec![]));
+        assert!(!db.connected_folder(&root).unwrap().available);
+        assert!(db.original_under_offline_connection(&original).unwrap());
+        assert_eq!(
+            ids(&db),
+            before,
+            "offline cache still serves collection entries"
+        );
+        assert!(db
+            .read_connection_entries(&before)
+            .unwrap()
+            .iter()
+            .all(|e| !e.available));
+        // An offline connected root is not evidence that the original was deleted.
+        let mut sweep = crate::core::missing_originals::MissingOriginalSweep::default();
+        let now = Instant::now();
+        for elapsed in [0, 31] {
+            assert_eq!(
+                sweep
+                    .check_batch(&db, &paths, now + Duration::from_secs(elapsed))
+                    .unwrap()
+                    .removed,
+                0
+            );
+        }
+        let seed_legacy_offline_cache = |db: &Database| {
+            db.conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO removed_missing_asset_originals(asset_id,path) VALUES(?1,?2)",
+                    rusqlite::params![entry.asset_id, entry.path],
+                )
+                .unwrap();
+            db.conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE connected_folders SET available=0 WHERE root_id=?1",
+                    [&root],
+                )
+                .unwrap();
+            db.conn
+                .lock()
+                .unwrap()
+                .execute(
+                    "UPDATE connected_entries SET available=0 WHERE id=?1",
+                    [&entry.id],
+                )
+                .unwrap();
+        };
+        seed_legacy_offline_cache(&db);
+        if let Some(dir) = signals.as_ref() {
+            fs::write(dir.join("unmounted"), b"ok").unwrap();
+            wait(true);
+        } else {
+            // A same-named directory elsewhere (for example on another drive) is never chosen.
+            let other = temp
+                .path()
+                .join("different-location")
+                .join(source.file_name().unwrap());
+            fs::create_dir_all(&other).unwrap();
+            fs::write(other.join("TEST.PNG"), &bytes).unwrap();
+            assert_eq!(poll(&db, &mut HashMap::new()).1, Vec::<String>::new());
+            assert!(!db.connected_folder(&root).unwrap().available);
+            fs::rename(&park, &source).unwrap();
+        }
+        // Same application, same connection, same watcher: a returning root rescans itself.
+        assert_eq!(
+            poll(&db, &mut observed),
+            (vec![(root.clone(), true)], vec![root.clone()])
+        );
+        assert_eq!(ids(&db), before);
+        assert_eq!(poll(&db, &mut observed), (vec![], vec![]));
+        // Also cover an upgrade from a 1101 snapshot which already saved the stale state.
+        seed_legacy_offline_cache(&db);
+        db.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE connected_roots SET available=0 WHERE id=?1",
+                [&root],
+            )
+            .unwrap();
+        drop(db);
+        // Fresh watcher state, as after upgrading/restarting while the drive was absent.
+        let db = Database::open(&db_path).unwrap();
+        assert_eq!(
+            poll(&db, &mut HashMap::new()),
+            (vec![(root.clone(), true)], vec![root.clone()])
+        );
+        assert_eq!(ids(&db), before);
+        let after = db
+            .read_connection_entries(std::slice::from_ref(&entry.id))
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert!(after.available && db.connected_folder(&root).unwrap().available);
+        assert_eq!(after.asset_id, entry.asset_id);
+        assert_eq!(fs::read(after.path).unwrap(), bytes);
+        let conn = db.conn.lock().unwrap();
+        let count = |sql| {
+            conn.query_row(sql, [&entry.asset_id], |r| r.get::<_, i64>(0))
+                .unwrap()
+        };
+        assert_eq!(count("SELECT COUNT(*) FROM project_assets WHERE asset_id=?1 AND project_id='connection-qa'"),1);
+        assert_eq!(count("SELECT COUNT(*) FROM analyses WHERE asset_id=?1 AND id='qa-note' AND payload='QA note'"),1);
+        assert_eq!(
+            count("SELECT COUNT(*) FROM removed_missing_asset_originals WHERE asset_id=?1"),
+            0
+        );
+        eprintln!("connected root round trip: real_mounted_fixture={}, restored_members={}, identity/content/notes/project preserved",external.is_some(),before.len());
+    }
+    #[test]
     fn filters_sidecar_and_reads_but_tracks_reference_files_and_external_originals() {
         let root = Root {
             id: "a".into(),
+            indexed_available: true,
             path: PathBuf::from("/media"),
             originals: vec![PathBuf::from("/outside/source.png")],
         };

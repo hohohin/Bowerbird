@@ -4,7 +4,7 @@ import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
-const server = await createServer({ configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1628, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: '.tmp/workflow-undo/vite', server: { host: '127.0.0.1', port: 1628, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1800, height: 1200 } });
@@ -91,7 +91,8 @@ try {
   });
   await undo(); assert.equal((await persisted()).nodes.length, 3);
   // Form editing keeps its own undo; after leaving the form, canvas undo restores parameters.
-  await card('producer').getByLabel('指令功能').selectOption('reuse');
+  await card('producer').getByLabel('指令功能').click();
+  await page.getByRole('option', { name: /复用/ }).click();
   await card('producer').getByLabel('指令功能').focus();
   await undo(); assert.equal((await state()).nodes.find(node => node.id === 'producer').action, 'reuse');
   await card('producer').getByRole('button', { name: '复制卡片', exact: true }).focus();
@@ -101,7 +102,8 @@ try {
   await page.waitForFunction(async () => { const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts'); return canvasWorkflowController('p').document.nodes.length === 4; });
   await undo(); assert.equal((await persisted()).nodes.length, 3);
   await page.reload(); await card('producer').waitFor();
-  assert.deepEqual((await state()).runs, restored.runs);
+  assert.deepEqual((await state()).runs, restored.runs.map(run => ({ ...run,
+    steps: Object.fromEntries(Object.entries(run.steps).map(([id, step]) => [id, { ...step, comfyStopping: false, comfyProgress: undefined }])) })));
   assert.deepEqual(errors, []);
   console.log('PASS workflow deletion/writer/wire/history recovery, sequential movement undo, focused-button shortcut, copy/create/parameter undo, active-run protection, form protection and persisted reload.');
 } finally { await browser.close(); await server.close(); }

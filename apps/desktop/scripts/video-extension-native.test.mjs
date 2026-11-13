@@ -21,6 +21,14 @@ const http = createServer((req, res) => {
 });
 await new Promise(done => http.listen(0, '127.0.0.1', done));
 const origin = `http://127.0.0.1:${http.address().port}`;
+const extensionId = "abcdefghijklmnopabcdefghijklmnop";
+const extensionOrigin = "chrome-extension://" + extensionId;
+const pair = await crypto.subtle.generateKey("Ed25519", true, ["sign", "verify"]);
+const key = {
+  privateKey: await crypto.subtle.exportKey("jwk", pair.privateKey),
+  publicKey: Buffer.from(await crypto.subtle.exportKey("raw", pair.publicKey)).toString("hex"),
+};
+await writeFile(`${root}/fixture-pair.txt`, `${extensionId}.${key.publicKey}`);
 const child = spawn(resolve('src-tauri/target/debug/examples/collect_video_smoke.exe'), [], {
   windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'],
   env: { ...process.env, APPDATA: `${root}/appdata`, LOCALAPPDATA: `${root}/localappdata`, BOWERBIRD_COLLECT_TEST_ROOT: root },
@@ -41,9 +49,10 @@ const waitFile = async name => {
 try {
   const { url } = await waitFile('ready.json');
   let listener;
-  const context = vm.createContext({ URL, TextDecoder, Uint8Array, ArrayBuffer, AbortController, console, setTimeout, clearTimeout,
-    fetch, WebSocket: class extends WebSocket { constructor() { super(url); } },
-    chrome: { runtime: { onMessage: { addListener: callback => listener = callback } } },
+  const context = vm.createContext({ URL, TextEncoder, TextDecoder, crypto, Uint8Array, ArrayBuffer, AbortController, AbortSignal, console, setTimeout, clearTimeout,
+    fetch: (input, options) => fetch(input === "http://127.0.0.1:39871/pairing-session" ? url.replace("ws:", "http:").replace("/ws", "/pairing-session") : input, options),
+    WebSocket: class extends WebSocket { constructor(_, protocols) { super(url, {protocols, headers:{origin:extensionOrigin}}); } },
+    chrome: { storage: { local: {setAccessLevel:async()=>{},get:async()=>({collectionKey:key})} }, runtime: { id:extensionId, onMessage: { addListener: callback => listener = callback } } },
   });
   context.importScripts = (...names) => names.forEach(name => vm.runInContext(readFileSync(resolve('../extension', name), 'utf8'), context));
   vm.runInContext(readFileSync('../extension/background.js', 'utf8'), context);
@@ -57,8 +66,9 @@ try {
   const invalid = await context.BowerbirdCollection.uploadBytes(new TextEncoder().encode('<html>not video</html>').buffer,
     { media_kind: 'video', url: `${origin}/fake.mp4`, file_name: 'fake.mp4', content_type: 'video/mp4' });
   assert.equal(invalid.ok, false);
+  const signed = await vm.runInContext('BowerbirdPairing.proof("'+extensionOrigin+'","extension")', context);
   const conflicting = await new Promise((done, reject) => {
-    const socket = new WebSocket(url), replies = [];
+    const socket = new WebSocket(url, {protocols:signed.protocols,headers:{origin:extensionOrigin}}), replies = [];
     const timeout = setTimeout(() => { socket.close(); reject(new Error('Conflicting metadata did not receive errors')); }, 5000);
     socket.onopen = () => {
       const metadata = JSON.stringify({ type: 'save_blob', media_kind: 'video', url: `${origin}/conflict`, byte_length: clip.length });

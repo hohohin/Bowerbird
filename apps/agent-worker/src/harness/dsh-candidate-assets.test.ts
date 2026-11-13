@@ -61,9 +61,10 @@ test("both Worker images include the transitive Cloud imports of the production 
   ok(cloudFiles.size > 0, "probe must reach the cross-package imports");
   for (const name of ["Dockerfile.generation", "Dockerfile.unified-harness-candidate"]) {
     const source = readFileSync(resolve(worker, name), "utf8");
-    const copy = source.match(/^COPY --from=cloud-shared (.+) \/cloud\/supabase\/functions\/_shared\/$/m);
-    ok(copy, name + " must copy the Cloud shared context");
-    const files = new Set(copy![1].split(/\s+/));
+    const copies = [...source.matchAll(/^COPY --from=cloud-shared (.+) \/cloud\/supabase\/functions\/_shared\/$/gm)];
+    ok(copies.length, name + " must copy the Cloud shared context");
+    const files = new Set(copies.flatMap(copy => copy[1].split(/\s+/)));
     for (const file of cloudFiles) ok(files.has(file), name + " is missing " + file);
+    for (const asset of ["chat-instructions.txt", "chat-card-tool.json"]) ok(files.has(asset), name + " is missing " + asset);
   }
 });

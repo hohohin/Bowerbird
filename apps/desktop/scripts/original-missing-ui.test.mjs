@@ -4,7 +4,7 @@ import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
 const output = '.tmp/original-missing';
-const server = await createServer({ cacheDir: `${output}/vite`, server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: `${output}/vite`, server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const reports = [], errors = [], remote = [];
@@ -74,21 +74,48 @@ try {
     await dialog.waitFor({ state: 'detached' });
     assert.deepEqual(await notices(page), ['已将 1 个原文件放入回收站，已清理 1 个失效条目']);
   });
-  await scenario('partial failure retries only remaining entries and reports total actual outcomes', async page => {
+  await scenario('one vanished record does not block cleaning a confirmed missing original', async page => {
+    await page.evaluate(() => { window.unavailableId = 'a2'; });
+    const dialog = await open(page, ['a1'], 'multi');
+    await dialog.getByRole('alert').getByText(/将跳过/).waitFor();
+    await dialog.getByRole('button', { name: '清理失效条目', exact: true }).click();
+    await dialog.waitFor({ state: 'detached' });
+    assert.deepEqual(await page.evaluate(() => window.trashCalls.map(item => item.asset_id)), ['a1']);
+  });
+  await scenario('close, reopen and cancel the pending items of a slow missing cleanup', async page => {
+    await page.evaluate(() => { window.holdTrash = true; });
+    const dialog = await open(page, ['a1', 'a2'], 'multi');
+    await dialog.locator('button.is-danger').click();
+    await dialog.waitFor({ state: 'detached' });
+    const reopen = page.getByRole('button', { name: '查看文件任务', exact: true });
+    await reopen.click();
+    const status = page.getByRole('dialog', { name: '文件任务' });
+    await status.getByRole('button', { name: '后台继续' }).click();
+    await reopen.click();
+    await status.getByRole('button', { name: '取消剩余项' }).click();
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => { window.holdTrash = false; window.releaseTrash(); });
+    await reopen.click();
+    await status.getByText(/已停止，1 项未执行/).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.trashCalls.map(item => item.asset_id)), ['a1']);
+  });
+  await scenario('partial failure retries only remaining entries and reports actual outcomes', async page => {
     const dialog = await open(page, ['a2'], 'multi');
     await page.evaluate(() => { window.failId = 'a2'; });
     await dialog.locator('button.is-danger').click();
-    await dialog.getByRole('alert').filter({ hasText: '1 项失败' }).waitFor();
-    assert.deepEqual(await dialog.locator('[data-delete-asset-id]').evaluateAll(items => items.map(item => item.dataset.deleteAssetId)), ['a2']);
-    assert.equal(await dialog.getByRole('heading').textContent(), '清理失效条目');
-    await page.evaluate(() => { window.failId = null; });
-    await dialog.getByRole('button', { name: '重试失败项', exact: true }).click();
     await dialog.waitFor({ state: 'detached' });
+    await page.getByRole('button', { name: '查看文件任务' }).click();
+    const status = page.getByRole('dialog', { name: '文件任务' });
+    await status.getByText('查看未完成项').click();
+    await status.getByText(/disk-a2.png/).waitFor();
+    await page.evaluate(() => { window.failId = null; });
+    await status.getByRole('button', { name: '重试失败项', exact: true }).click();
+    await page.waitForFunction(() => window.trashCalls.length === 3);
     assert.deepEqual(await page.evaluate(() => window.trashCalls.map(item => item.asset_id)), ['a1', 'a2', 'a2']);
-    assert.deepEqual(await notices(page), ['已将 1 个原文件放入回收站，已清理 1 个失效条目']);
+    await status.getByText('已清理 1 个失效条目', { exact: true }).waitFor();
   });
   await writeFile(`${output}/result.json`, JSON.stringify({ reports, errors, remote, boundary: 'Actual confirmation with controlled IPC; no real files or user library accessed.' }, null, 2));
   for (const report of reports) console.log(`${report.passed ? 'PASS' : 'FAIL'} ${report.name}${report.error ? `: ${report.error}` : ''}`);
   assert.deepEqual(errors, []); assert.deepEqual(remote, []);
   assert.equal(reports.filter(report => !report.passed).length, 0);
-} finally { await browser.close(); await server.close(); }
+} catch (error) { console.error(error); throw error; } finally { await browser.close(); await server.close(); }

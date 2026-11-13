@@ -149,3 +149,9 @@
 - 完整 TypeScript、独立 Vite 生产构建通过；Plate 输出独立懒加载 chunk。开发辅助产物位于 `apps/desktop/.tmp/text-library*`，不用于发布。
 
 未构建安装包；Windows 原生完整编辑手势、Mac 原生、网络目录、大文档长期性能和跨设备资料恢复待各自环境验收。
+## 2026-11-11 编辑、阅读与工作流共用的文档格式
+
+- `documentCodec.ts` 保存标题、列表、粗斜体、表格和代码的 Markdown 表达；字体、字号、字色与底色保存在可恢复的编辑器状态中。导出 Markdown 使用 `serializeReadableMarkdown`，导出 HTML、Word 仍走各自的富文本导出入口。
+- `documentState.ts` 同时读取旧版 Base64 JSON 和新版 zlib 压缩状态。新写入的富状态从 4 KiB 起尝试压缩，只有体积减小时才选用 v2；可压缩路径有 16 MiB 解压上限，超过此范围的原始状态继续使用 v1。普通 Markdown 不附加状态。TS 与 Rust 校验同一正文指纹，外部改写后以改写的正文为准。
+- `documentReadingQueue.ts` 只把接近视口的卡片提交给共用 Worker。普通段落按最多 32 段合成一个可选取的文本块，明确无 Markdown 语法时跳过语法树解析。含标题、列表、表格、强调或代码的文档保留对应结构。两种读法都可滚动到文末、双击打开完整编辑器。原始 HTML 仅提取可读文字，不载入脚本或远端图片。画板编辑、目录缩略摘要、下游完整输出各用对应读取入口。
+- Markdown 实体解码在页面和 Worker 中使用同一个无 DOM 的实现。`document-reading-ui.test.mjs` 要求每个首屏解析请求都收到 Worker 的成功结果，同时检查屏外不解析、拖动坐标和解析次数、显示结构和剪贴板格式。旧项目不做启动时批量重写，下一次实际编辑保存时使用新格式。

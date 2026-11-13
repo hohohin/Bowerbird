@@ -155,6 +155,60 @@ fn an_existing_thumbnail_with_missing_analysis_is_completed_on_a_warm_visit() {
 }
 
 #[test]
+fn uppercase_psd_and_svg_accept_cached_previews_without_raster_analysis() {
+    // A valid flat 1x1 RGB PSD with raw planar pixels and no optional sections.
+    let mut psd = b"8BPS".to_vec();
+    psd.extend_from_slice(&1u16.to_be_bytes());
+    psd.extend_from_slice(&[0; 6]);
+    psd.extend_from_slice(&3u16.to_be_bytes());
+    psd.extend_from_slice(&1u32.to_be_bytes());
+    psd.extend_from_slice(&1u32.to_be_bytes());
+    psd.extend_from_slice(&8u16.to_be_bytes());
+    psd.extend_from_slice(&3u16.to_be_bytes());
+    psd.extend_from_slice(&[0; 12]);
+    psd.extend_from_slice(&0u16.to_be_bytes());
+    psd.extend_from_slice(&[255, 0, 0]);
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="red"/></svg>"#;
+    for (extension, bytes) in [("PSD", psd.as_slice()), ("SVG", svg.as_slice())] {
+        let f = Fixture::new();
+        let source = f.path.with_extension(extension);
+        fs::write(&source, bytes).unwrap();
+        assert!(image::open(&source).is_err(), "this must exercise the decoder-failure fallback");
+        let asset = f.db.index_connected_file(&f.paths, &source, None).unwrap();
+        let folder = f.paths.root.join("external-previews");
+        fs::create_dir_all(&folder).unwrap();
+        let preview = folder.join(format!("{}.jpg", preview_key(&source, &fs::metadata(&source).unwrap()).unwrap()));
+        // Model a thumbnail supplied by the existing Windows Shell cache.
+        image::RgbImage::from_pixel(1, 1, image::Rgb([255, 0, 0])).save(&preview).unwrap();
+        let preview = preview.to_str().unwrap();
+        assert!(f.db.connected_preview_pending(&source, preview).unwrap());
+        let (completed, version) = f.db.complete_connected_preview_versioned(&f.paths, &source, preview).unwrap().unwrap();
+        assert_eq!(completed.id, asset.id);
+        assert_eq!(completed.thumb_path.as_deref(), Some(preview));
+        assert_eq!(version, fingerprint(&source).unwrap());
+        assert!(completed.phash.is_none() && completed.colors.is_none());
+        assert!(!f.db.connected_preview_pending(&source, preview).unwrap());
+        assert!(f.db.complete_connected_preview(&f.paths, &source, preview).unwrap().is_none());
+    }
+}
+
+#[test]
+fn delayed_preview_events_drop_reindexed_replaced_or_removed_assets() {
+    let f = Fixture::new();
+    let asset = f.index();
+    let preview = preview_with_index(&f.paths, Some(&f.db), &f.path).unwrap();
+    let completed = f.db.complete_connected_preview_versioned(&f.paths, &f.path, &preview).unwrap().unwrap();
+    assert_eq!(f.db.current_preview_changes(vec![completed.clone()]).unwrap().len(), 1);
+    f.db.conn.lock().unwrap().execute("UPDATE external_assets SET fingerprint='new-same-second-version' WHERE asset_id=?1", [&asset.id]).unwrap();
+    assert!(f.db.current_preview_changes(vec![completed.clone()]).unwrap().is_empty());
+    f.db.conn.lock().unwrap().execute("UPDATE external_assets SET fingerprint=?2 WHERE asset_id=?1", params![asset.id,completed.1]).unwrap();
+    f.db.conn.lock().unwrap().execute("UPDATE assets SET thumb_path=NULL WHERE id=?1", [&asset.id]).unwrap();
+    assert!(f.db.current_preview_changes(vec![completed.clone()]).unwrap().is_empty());
+    f.db.conn.lock().unwrap().execute("DELETE FROM assets WHERE id=?1", [&asset.id]).unwrap();
+    assert!(f.db.current_preview_changes(vec![completed]).unwrap().is_empty());
+}
+
+#[test]
 #[ignore = "isolated image benchmark; run explicitly with --ignored --nocapture"]
 fn benchmark_connected_preview_stages() {
     let f = Fixture::new();

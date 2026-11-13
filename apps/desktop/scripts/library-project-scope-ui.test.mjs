@@ -9,6 +9,7 @@ await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1000, height: 800 }, reducedMotion: 'reduce' });
 page.setDefaultTimeout(7000);
+page.setDefaultNavigationTimeout(60000);
 const errors = [];
 await page.addInitScript(() => { window.distinctProjects = true; });
 page.on('pageerror', error => errors.push(error.message));
@@ -101,6 +102,12 @@ try {
   await tab('项目素材').click(); await page.getByRole('tablist', { name: '当前项目', exact: true }).getByRole('tab').click(); await chooseProject('项目B'); await filter('all', 'q');
   assert.equal(await page.evaluate(() => window.store.getState().activeProjectId), 'p');
   assert.equal(await page.locator('.categorized-library').getAttribute('data-file-import-project-id'), 'q');
+  const member = page.locator('[data-asset-id^="q:"]').first();
+  const memberId = await member.getAttribute('data-asset-id');
+  await member.click({ button: 'right' });
+  await page.getByRole('menuitem', { name: '删除', exact: true }).hover();
+  await page.getByRole('menuitem', { name: '移出当前项目', exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => window.requests.filter(r => r.command === 'remove_assets_from_project').at(-1)?.args), { projectId: 'q', assetIds: [memberId] });
   await tab('标签分类').click(); await filter('tags', 'q');
   assert.equal(await page.evaluate(() => window.requests.filter(r => r.command === 'catalog_overview').at(-1).args.contextProject), 'q');
   assert.equal(await page.evaluate(() => window.requests.some(r => r.command === 'set_active_project')), false);
@@ -110,5 +117,5 @@ try {
   console.log('PASS project picker, minimum size, remembered scope, deletion, context isolation, joined dropdown, idle and keyboard');
 } catch (error) {
   await page.screenshot({ path: `${output}/failure.png` });
-  console.error(errors); throw error;
+  console.error(errors, error); throw error;
 } finally { await browser.close(); await server.close(); }

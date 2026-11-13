@@ -73,9 +73,64 @@ try {
   await panel.getByRole('status').filter({ hasText: '准备生成' }).waitFor();
   await send({ stage: 'queued', queue_position: 3, queue_length: 9 });
   assert.equal(await page.evaluate(() => window.store.getState().genJobs['progress-job'].progress), undefined, 'previous round cannot overwrite preparing next round');
+  const { turnKey, previewUrl, finalPath } = await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    const turnKey = window.store.getState().genJobs['progress-job'].turns.at(-1).turnKey;
+    const previous = window.snapshot().nodes[0];
+    await api.projectCanvasNodeCreate({ ...previous, id: `gen-prompt:progress-job:${turnKey}:0`,
+      payloadJson: JSON.stringify({ schema_version: 1, job_id: 'progress-job', turn_key: turnKey,
+        provider: 'codex', text: '换一个构图', status: 'running' }) });
+    window.emitChange();
+    const canvas = document.createElement('canvas');
+    canvas.width = 80; canvas.height = 40;
+    canvas.getContext('2d').fillRect(0, 0, 80, 40);
+    return { turnKey, previewUrl: canvas.toDataURL('image/png'), finalPath: window.store.getState().assets.find(asset => asset.id === 'a').store_path };
+  });
+  const preview = { kind: 'preview', turn_key: turnKey, data_url: previewUrl };
+  const readJob = () => page.evaluate(() => window.store.getState().genJobs['progress-job']);
+  for (const foreign of [{ turn_key: 'current' }, { turn_key: undefined }, { job_id: 'another-job' }]) await send({ ...preview, ...foreign });
+  assert.equal((await readJob()).preview, undefined);
+  await send(preview);
+  for (const box of [card, panel]) {
+    const image = box.getByAltText('本轮生成预览');
+    await image.waitFor();
+    assert.equal(await image.evaluate(async el => { await el.decode(); return el.naturalWidth; }), 80);
+  }
+  assert.equal((await readJob()).running, true);
+  assert.deepEqual((await readJob()).turns.at(-1).images, []);
+  await page.evaluate(async turnKey => {
+    const { api } = await import('/src/lib/api.ts');
+    const prompt = window.snapshot().nodes.find(node => JSON.parse(node.payloadJson).turn_key === turnKey);
+    await api.projectCanvasNodeUpdate(prompt.id, { payloadJson: JSON.stringify({ ...JSON.parse(prompt.payloadJson), status: 'done' }) });
+    await api.projectCanvasNodeCreate({ ...prompt, id: `gen-output:progress-job:${turnKey}:a`, kind: 'asset', role: 'output', assetId: 'a',
+      payloadJson: JSON.stringify({ schema_version: 1, snapshot: { name: '正式图片', width: 190, height: 150 },
+        execution: { job_id: 'progress-job', turn_key: turnKey } }) });
+    window.emitChange();
+  }, turnKey);
+  await send({ kind: 'done', turn_key: turnKey, provider: 'codex-cli', session_id: 'synthetic-session', images: [finalPath] });
+  const finalCardImage = card.locator('[data-conversation-image="a"] img');
+  await finalCardImage.waitFor();
+  assert.equal(await finalCardImage.evaluate(async image => { await image.decode(); return image.naturalWidth; }), 190);
+  await page.waitForFunction(src => [...document.querySelectorAll('[data-project-inspector] img')].some(el => el.src === src && el.naturalWidth === 190), finalPath);
+  await send(preview);
+  assert.equal((await readJob()).preview, undefined);
+  assert.equal(await page.getByAltText('本轮生成预览').count(), 0);
+  await page.evaluate(async () => { window.finishProgressRevise(); await window.progressRevise; });
+  await page.evaluate(() => { window.progressRevise = window.store.getState().sendGenRevise('progress-job', '再调整一次', 'codex'); });
+  await page.waitForFunction(() => window.store.getState().genJobs['progress-job'].turns.length === 3);
+  const nextTurn = (await readJob()).turns.at(-1).turnKey;
+  await send(preview);
+  assert.equal((await readJob()).preview, undefined);
+  await send({ ...preview, turn_key: nextTurn });
+  await panel.getByAltText('本轮生成预览').waitFor();
+  await send({ kind: 'error', turn_key: nextTurn, message: '已取消' });
+  await send({ ...preview, turn_key: nextTurn });
+  assert.equal((await readJob()).preview, undefined);
+  assert.deepEqual((await readJob()).turns.flatMap(turn => turn.images), [finalPath]);
+  await panel.getByAltText('本轮生成预览').waitFor({ state: 'detached' });
   await page.evaluate(async () => { window.finishProgressRevise(); await window.progressRevise; });
   assert.deepEqual(errors, []);
-  console.log('PASS: canvas + inspector phases, queue position, turn/job isolation, submit, recovery, late terminal events and real continuation reset; dark/light screenshots');
+  console.log('PASS: canvas + inspector progress, running preview, formal image replacement, recovery, continuation and cancellation isolation; dark/light screenshots');
 } catch (error) {
   await page.screenshot({ path: '.tmp/generation-progress/failure.png' });
   throw error;

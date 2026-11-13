@@ -5,3 +5,19 @@
   opacity: 0;
   pointer-events: none;
 }
+
+/* Cell sockets share gestures/glyphs, with a compact hit area at the cell edge. */
+.canvas-cell-connection.canvas-connection-handle.canvas-connection-handle {
+  width: 28px; height: 32px; clip-path: none;
+  transform: translate(-50%, -50%);
+  opacity: 0; pointer-events: none; z-index: 12;
+}
+.canvas-text-cell:hover > .canvas-cell-connection.canvas-connection-handle,
+.canvas-text-cell:has(.canvas-cell-connection:focus-visible) > .canvas-cell-connection.canvas-connection-handle,
+.canvas-text-cell[data-canvas-connection-source] > .canvas-cell-connection.canvas-connection-handle {
+  opacity: 1; pointer-events: auto;
+}
+.canvas-note:has(.canvas-text-cell:hover, .canvas-text-cell:has(.canvas-cell-connection:focus-visible), .canvas-text-cell[data-canvas-connection-source]) > .canvas-connection-handle.canvas-connection-handle {
+  opacity: 0; pointer-events: none;
+}
+.canvas-cell-connection.canvas-connection-handle:disabled { opacity: 0; pointer-events: none; }

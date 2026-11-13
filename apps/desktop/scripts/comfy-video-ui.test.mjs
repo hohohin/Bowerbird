@@ -343,6 +343,7 @@ try {
   assert.ok((await page.evaluate(()=>window.environmentCalls)).every(call=>call.action!=='prepare'),'recovery only queries the original job');
   // Single-frame mode and a second explicit run get a new identity.
   await card.getByRole('button',{name:'输入：尾帧（可选）',exact:true}).click({button:'right'});
+  await page.getByRole('menu', { name: '选择要断开的连线' }).getByRole('menuitem').click();
   await page.evaluate(()=>{window.environmentPhase='ready';});
   await card.getByRole('button',{name:'运行此卡片',exact:true}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('comfy-calls')).filter(call=>call.action==='start').length===2);

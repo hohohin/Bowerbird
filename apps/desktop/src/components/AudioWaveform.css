@@ -17,3 +17,5 @@
 .audio-waveform-error button { border: 0; padding: 4px; margin-left: 4px; background: transparent; color: var(--bb-blue); cursor: pointer; }
 .audio-waveform[data-interactive="false"] { pointer-events: none; }
 .audio-waveform[data-interactive="false"] .audio-waveform-play[aria-pressed="true"] { pointer-events: auto; }
+.audio-waveform-thumbnail { display:inline-grid; place-items:center; width:40px; height:32px; color:var(--bb-muted); }
+.audio-waveform-thumbnail canvas { display:block; width:100%; height:100%; }

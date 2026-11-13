@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ configFile: false, cacheDir: '.tmp/workflow-auto-video/vite', server: { host: '127.0.0.1', port: 1796, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: '.tmp/workflow-auto-video/vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, server: { host: '127.0.0.1', port: 1796, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
@@ -20,6 +20,8 @@ try {
     api.localAgentFindAssetId = async () => 'v';
     let active;
     const calls = [];
+    useStore.setState({ cloudAuth: { logged_in: true, cloud_available: true }, dreaminaHealth: { ok: true },
+      cloudEntitlement: { policy: { can_use_byo: true, can_use_cloud: true, max_parallel_jobs: 10 }, balances: { daily: 100, sub: 0, topup: 0 } } });
     useStore.setState({ startGeneration: async (...args) => {
       calls.push(args);
       const identity = args[12];

@@ -1,5 +1,6 @@
 dist/
 app.bundle.js
 app-v2.bundle.js
+account-sdk.js
 assets/collecting-demo.gif
 assets/creating-demo.gif

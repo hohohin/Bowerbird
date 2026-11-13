@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: '.tmp/home-navigation-vite', server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
@@ -15,7 +15,7 @@ await page.route('**/*', route => {
   remote.push(route.request().url()); return route.abort();
 });
 try {
-  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/home-navigation-live/preview.html?source-library&detail-route&canvas-library`);
+  await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/home-navigation-live/preview.html?source-library&detail-route&canvas-library`, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
   await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '素材库', exact: true }).click();
@@ -68,6 +68,23 @@ try {
   const projectPage = page.getByRole('region', { name: '项目管理' });
   await projectPage.locator('.project-manager-card').first().waitFor();
   assert.equal(await projectPage.getByRole('button', { name: /^打开项目 / }).count(), 18);
+  const coverCard = projectPage.locator('.project-manager-card').filter({ has: page.getByRole('button', { name: '打开项目 山野品牌 1', exact: true }) });
+  await coverCard.locator('.library-project-mosaic img').nth(2).waitFor();
+  await page.evaluate(() => { window.holdHomeCovers = true; window.emitAssetsChanged(); });
+  await page.waitForFunction(() => !!window.releaseHomeCovers);
+  await page.evaluate(() => {
+    window.holdHomeCovers = false;
+    window.homeCovers.p = { paths: [window.homeCovers.p.paths[2]], asset_count: 1 };
+    window.emitAssetsChanged();
+  });
+  await coverCard.getByText('1 个素材', { exact: true }).waitFor();
+  await page.evaluate(async () => { window.releaseHomeCovers(); await new Promise(requestAnimationFrame); });
+  assert.deepEqual(await coverCard.locator('img').evaluateAll(imgs => imgs.map(img => img.getAttribute('src'))), await page.evaluate(() => window.homeCovers.p.paths));
+  await library.click();
+  await page.evaluate(() => { delete window.homeCovers.p; });
+  await projects.click();
+  await coverCard.getByText('暂无素材', { exact: true }).waitFor();
+  assert.equal(await coverCard.locator('img').count(), 0, 'return to a preserved page must clear the last deleted preview');
   assert.equal(await page.getByRole('dialog').count(), 0, 'project management is not modal');
   assert.equal(await page.locator('.app-modal-backdrop').count(), 0);
   await page.keyboard.press('Tab');

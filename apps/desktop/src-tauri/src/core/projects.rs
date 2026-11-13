@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::ingest;
 use crate::core::library::{delete_asset_files, Asset};
+use crate::core::material_catalog::{IMAGE, PROJECT_VISIBLE};
 use crate::core::paths::LibraryPaths;
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
@@ -53,6 +54,12 @@ pub struct ProjectCreateResult {
     pub project: Project,
     pub imported_count: usize,
     pub member_count: usize,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct ProjectCover {
+    pub asset_count: i64,
+    pub paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -370,6 +377,34 @@ impl Database {
             rusqlite::params![id, name, workspace_path, workspace_key, kind],
         )?;
         Ok(())
+    }
+
+    pub fn project_covers(&self) -> AppResult<std::collections::HashMap<String, ProjectCover>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(&format!(
+            "WITH members AS (
+                SELECT pa.project_id, pa.asset_id, pa.created_at,
+                    COALESCE(NULLIF(a.thumb_path,''), CASE WHEN {IMAGE} THEN NULLIF(a.store_path,'') END) AS path
+                FROM project_assets pa JOIN assets a ON a.id=pa.asset_id
+                JOIN projects p ON p.id=pa.project_id
+                WHERE p.archived_at IS NULL AND a.library_hidden=0 AND {PROJECT_VISIBLE}
+            ), ranked AS (
+                SELECT project_id, path, COUNT(*) OVER (PARTITION BY project_id) AS asset_count,
+                    ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY path IS NULL, created_at DESC, asset_id) AS position
+                FROM members
+            )
+            SELECT project_id, asset_count, path FROM ranked WHERE position<=3 ORDER BY project_id, position"
+        ))?;
+        let mut covers = std::collections::HashMap::<String, ProjectCover>::new();
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let cover = covers.entry(row.get(0)?).or_default();
+            cover.asset_count = row.get(1)?;
+            if let Some(path) = row.get(2)? {
+                cover.paths.push(path);
+            }
+        }
+        Ok(covers)
     }
 
     pub fn list_projects(&self) -> AppResult<Vec<Project>> {

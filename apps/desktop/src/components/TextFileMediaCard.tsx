@@ -5,12 +5,12 @@ import type { FileMediaCardProps } from "./FileMediaCard";
 import { LibrarySelectionMark } from "./LibrarySelectionMark";
 import { DocumentCardPreview } from "./DocumentCardPreview";
 import { textFileFormat } from "../lib/textMedia";
+import { requestDocumentReading } from "../lib/documentReadingQueue";
 
 const previews = createFilePreviewQueue(async assetId => {
   const document = await textDocuments.preview(assetId);
   if (document.format === "text") return document.text.trim().slice(0, 1200);
-  const { documentPreviewText } = await import("../lib/documentPreview");
-  return documentPreviewText(document.text, "markdown");
+  return requestDocumentReading(document.text, "excerpt");
 });
 
 /** Only visible/nearby cards read originals; cache excerpts, never mount the editor. */

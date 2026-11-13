@@ -1,0 +1,14 @@
+html[data-theme] .app-error-boundary {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+  max-width: 460px; margin: 15vh auto; padding: 20px 22px;
+  background: var(--bb-surface); border: 1px solid var(--bb-line); color: var(--bb-ink);
+}
+html[data-theme] .app-error-boundary-title { margin: 0; font-size: 15px; font-weight: 600; }
+html[data-theme] .app-error-boundary-detail { margin: 0; color: var(--bb-muted); font-size: 12px; line-height: 1.6; }
+html[data-theme] .app-error-boundary button {
+  height: 28px; padding: 0 14px; border: 1px solid var(--bb-line); border-radius: 3px;
+  background: transparent; color: var(--bb-ink); cursor: pointer; font-size: 12px;
+}
+html[data-theme] .app-error-boundary button:hover { border-color: var(--bb-blue); color: var(--bb-blue); }
+html[data-theme] .app-error-boundary details { color: var(--bb-muted); font-size: 11px; }
+html[data-theme] .app-error-boundary code { display: block; margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }

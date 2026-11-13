@@ -81,6 +81,8 @@ pub enum OfflineState {
 pub struct EntitlementSnapshot {
     pub user_id: String,
     pub tier: String,
+    pub membership_ends_at: Option<DateTime<Utc>>,
+    pub trial_available: Option<bool>,
     pub balances: CreditBalance,
     pub policy: FeaturePolicy,
     #[serde(default)]
@@ -239,11 +241,11 @@ impl EntitlementService {
         self.sync(auth).await.unwrap_or(current)
     }
 
-    pub async fn start_trial(&self, auth: &AuthClient) -> AppResult<EntitlementSnapshot> {
+    pub async fn start_trial(&self, auth: &AuthClient, user_id: &str) -> AppResult<EntitlementSnapshot> {
         let endpoint = self.cloud.config().account_endpoint("entitlement")
             .ok_or_else(|| AppError::Cloud("当前构建未配置 Bowerbird Cloud".into()))?;
-        let response = auth.send_authorized(self.cloud.http().post(endpoint)
-            .json(&serde_json::json!({"action":"start_trial"})), "领取体验失败").await?;
+        let response = auth.send_authorized_for_user(self.cloud.http().post(endpoint)
+            .json(&serde_json::json!({"action":"start_trial"})), "领取体验失败", user_id).await?;
         if !response.status().is_success() {
             let body: serde_json::Value = response.json().await.unwrap_or_default();
             return Err(AppError::Cloud(body.pointer("/error/message").and_then(|v| v.as_str())
@@ -431,6 +433,8 @@ impl EntitlementService {
             signature_version: 0,
             signature: None,
             is_test_account: false,
+            membership_ends_at: None,
+            trial_available: None,
             last_trusted_server_time: now,
             offline_state: Some(state),
             signature_valid: false,
@@ -539,6 +543,8 @@ mod tests {
             signature_version: 1,
             signature: Some("test-signature".into()),
             is_test_account: false,
+            membership_ends_at: None,
+            trial_available: None,
             last_trusted_server_time: now,
             offline_state: None,
             signature_valid: true,
@@ -751,6 +757,8 @@ mod tests {
             signature_version: 1,
             signature: Some(VECTOR_SIGNATURE.into()),
             is_test_account: false,
+            membership_ends_at: None,
+            trial_available: None,
             last_trusted_server_time: time("2026-08-27T08:00:00.000Z"),
             offline_state: None,
             signature_valid: false,

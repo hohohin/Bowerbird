@@ -2,7 +2,7 @@
 use crate::error::{AppError, AppResult};
 use futures_util::StreamExt;
 use std::{
-    net::{IpAddr, SocketAddr},
+    net::SocketAddr,
     path::Path,
     time::Duration,
 };
@@ -43,31 +43,7 @@ pub(super) fn media_url(raw: &str) -> AppResult<Url> {
     }
     Ok(url)
 }
-pub fn public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            let [a, b, c, _] = ip.octets();
-            !(ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_broadcast()
-                || ip.is_documentation()
-                || a == 0
-                || a >= 224
-                || (a == 100 && (64..=127).contains(&b))
-                || (a == 198 && (b == 18 || b == 19))
-                || (a == 192 && b == 0 && c == 0))
-        }
-        IpAddr::V6(ip) => {
-            if let Some(v4) = ip.to_ipv4_mapped() {
-                public_ip(IpAddr::V4(v4))
-            } else {
-                let s = ip.segments();
-                (s[0] & 0xe000) == 0x2000 && !(s[0] == 0x2001 && (s[1] == 0xdb8 || s[1] < 0x200))
-            }
-        }
-    }
-}
+pub(crate) use crate::core::public_network::public_ip;
 pub(super) async fn download(
     window: &tauri::WebviewWindow,
     raw: &str,

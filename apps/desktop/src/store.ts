@@ -1,5 +1,6 @@
 import { prepareFileWorkspace } from "./lib/fileWorkspace";
 import { applyGenerationProgress } from "./lib/generationProgress";
+import { generationProviderIssue } from "./lib/generationAvailability";
 import { create } from "zustand";
 import { filterAssetsByMediaType, type MediaFilter } from "./lib/mediaFilter";
 import { readThumbnailWidth, saveThumbnailWidth, type ThumbnailScope } from "./lib/thumbnailSize";
@@ -26,6 +27,7 @@ import type {
   CodeRedemption,
   CodexChunk,
   CodexHealth,
+  DreaminaHealth,
   ColorBucket,
   EntitlementSnapshot,
   Folder,
@@ -41,7 +43,7 @@ import type {
   TagCount,
   VisualProfileSummary,
 } from "./lib/types";
-import { canonicalProviderKey, isCloudProvider, isKnownGenProvider } from "./lib/genProviders";
+import { canonicalProviderKey, isKnownGenProvider, normalizeGenerationProvider } from "./lib/genProviders";
 import { normalizeAnnotationPrompt } from "./lib/annotationPrompt";
 import { notifyError } from "./lib/notify";
 import { notifyGenerationComplete } from "./lib/generationNotifications";
@@ -376,6 +378,7 @@ interface State {
   dreaminaOnboardingForceOpen: boolean;
   setDreaminaOnboardingForceOpen: (v: boolean) => void;
   accountOnboardingForceOpen: boolean;
+  subscriptionSettingsTarget: "jimeng" | "codex" | null;
   setAccountOnboardingForceOpen: (v: boolean) => void;
   // —— 应用设置（从后端 settings.json 加载）——
   settings: AppSettings | null;
@@ -396,8 +399,8 @@ interface State {
   setCloudAuth: (snapshot: AuthSnapshot) => void;
   setCloudError: (error: string | null) => void;
   // —— 即梦（dreamina）可用性 + 出图 provider 切换（Phase 3）——
-  dreaminaHealth: CodexHealth | null;
-  setDreaminaHealth: (h: CodexHealth | null) => void;
+  dreaminaHealth: DreaminaHealth | null;
+  setDreaminaHealth: (h: DreaminaHealth | null) => void;
   defaultProvider: string; // 全局默认出图 provider（"codex"/"jimeng"，localStorage 持久化）
   setDefaultProvider: (p: string) => void;
   // —— 默认反推引擎（设置「模型设置」可选并持久化）——
@@ -463,7 +466,7 @@ interface State {
     },
   ) => Promise<void>;
   cancelGeneration: (jobId?: string) => void; // 默认取消 activeJob
-  loadGenJobs: () => Promise<void>;
+  loadGenJobs: (jobId?: string) => Promise<void>;
   applyGenChunk: (c: CodexChunk) => void;
   // 重试 activeJob 末尾失败轮：保留失败历史，在原 job 追加轮次；provider 尚无 session 时新建 provider 会话。
   retryLastGenTurn: (assetsOverride?: Asset[]) => void;
@@ -514,12 +517,14 @@ interface State {
     y: number;
     assetId: string;
     workspaceProjectId?: string | null;
+    moveIncompleteSelection?: () => void;
     asset?: Asset;
     singleAsset?: boolean;
     fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string>; entries?: { count: number; available: boolean; rename: () => void; move: () => void; removeReferences?: () => void } };
     libraryProjectId?: string;
     addCanvasImagesToBoard?: { count: number; run: () => void };
     generationGroup?: { assetId?: string; groupKey?: string };
+    removeCanvasImage?: () => void;
     ungroupCanvasFolder?: () => void;
     canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] };
   } | null;
@@ -527,7 +532,7 @@ interface State {
     x: number,
     y: number,
     assetId: string,
-    context?: { asset?: Asset; generationGroup?: { assetId?: string; groupKey?: string }; singleAsset?: boolean; fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string>; entries?: { count: number; available: boolean; rename: () => void; move: () => void; removeReferences?: () => void } }; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
+    context?: { asset?: Asset; moveIncompleteSelection?: () => void; generationGroup?: { assetId?: string; groupKey?: string }; singleAsset?: boolean; fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string>; entries?: { count: number; available: boolean; rename: () => void; move: () => void; removeReferences?: () => void } }; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void; removeCanvasImage?: () => void },
   ) => void;
   closeContextMenu: () => void;
   // —— 项目右键菜单（侧栏项目行 / 收起态圆标）——
@@ -540,14 +545,9 @@ interface State {
   closeVisualProfile: () => void;
 }
 
-function normalizeGenerationProvider(provider: string): string {
-  return provider === "codex-cli" || !provider ? "codex" : provider;
-}
-
 function generationGateError(state: State, provider: string): string | null {
-  if (!canUseGenerationProvider(state.cloudEntitlement, provider)) {
-    return "当前账号不可使用本机生成引擎；升级 Pro 解锁 Codex / 即梦 CLI";
-  }
+  const issue = generationProviderIssue(provider, state);
+  if (issue) return issue.message;
   const runningCount = Object.values(state.genJobs).filter((job) => job.running).length;
   if (!canStartAnotherJob(state.cloudEntitlement, runningCount)) {
     return "已达当前账号档位的并行生成上限";
@@ -655,7 +655,10 @@ export const useStore = create<State>((set, get) => {
     set((s) => {
       const prev = s.genJobs[id];
       if (!prev) return {};
-      const next = fn(prev);
+      let next = fn(prev);
+      if (next.preview && (!next.running || next.preview.turnKey !== next.turns[next.turns.length - 1]?.turnKey)) {
+        next = { ...next, preview: undefined };
+      }
       const genJobs = { ...s.genJobs, [id]: next };
       return {
         genJobs,
@@ -1498,6 +1501,7 @@ export const useStore = create<State>((set, get) => {
   setDreaminaOnboardingForceOpen: (dreaminaOnboardingForceOpen) =>
     set({ dreaminaOnboardingForceOpen }),
   accountOnboardingForceOpen: false,
+  subscriptionSettingsTarget: null,
   setAccountOnboardingForceOpen: (accountOnboardingForceOpen) =>
     set({ accountOnboardingForceOpen }),
   // —— 应用设置 ——
@@ -1821,14 +1825,14 @@ export const useStore = create<State>((set, get) => {
       return { genJobs, genJobOrder, activeJobId, generating };
     });
   },
-  loadGenJobs: async () => {
+  loadGenJobs: async (jobId) => {
     // 启动恢复：① 未完成 job（queued/running）重建 genJobs（恢复中 job 在面板可见）；
     // ② 最近终态会话（done/failed）从 generation_meta 重建时间线 —— 会话面板跨重启保留
     // （done 会话可回看续轮，failed 会话可重试；cancelled 用户显式取消过、不恢复）。
     try {
       const [jobs, recent] = await Promise.all([
-        api.listGenJobs(),
-        api.recentGenSessions().catch((): RecentGenSession[] => []), // 历史恢复失败不阻断在跑恢复
+        api.listGenJobs(jobId),
+        api.recentGenSessions(undefined, jobId).catch((): RecentGenSession[] => []), // 历史恢复失败不阻断在跑恢复
       ]);
       set((s) => {
         const genJobs = { ...s.genJobs };
@@ -1894,7 +1898,7 @@ export const useStore = create<State>((set, get) => {
         for (const j of jobs) {
           // 同 session 已有另一条终态行时不重复展示；同 id 的 recover_started 占位必须
           // 继续进入 field-wise hydrate，不能因 seenSessions / 已存在而永久保留稀疏字段。
-          if (j.session_id && seenSessions.has(j.session_id) && !genJobs[j.id]) continue;
+          if (!jobId && j.session_id && seenSessions.has(j.session_id) && !genJobs[j.id]) continue;
           const turns: GenTurn[] = (j.turns ?? []).map(t => ({
             id: nextGenTurnId(), turnKey: t.turn_key ?? undefined, submitId: t.submit_id,
             prompt: t.prompt, appliedPrompt: t.applied_prompt ?? null, promptRaw: t.prompt_raw ?? null,
@@ -2193,7 +2197,8 @@ export const useStore = create<State>((set, get) => {
   cancelGeneration: (jobId) => {
     const id = jobId ?? get().activeJobId;
     if (!id) return;
-    void api.cancelCodexCreate(id).catch(console.error);
+    const turns = get().genJobs[id]?.turns;
+    void api.cancelCodexCreate(id, turns?.[turns.length - 1]?.turnKey).catch(console.error);
   },
   retryLastGenTurn: (assetsOverride) => {
     const s = get();
@@ -2201,19 +2206,14 @@ export const useStore = create<State>((set, get) => {
     if (!id) return;
     const job = s.genJobs[id];
     if (!job || job.running) return;
-    const provider = normalizeGenerationProvider(job.provider);
-    const targetHealthy = isCloudProvider(provider)
-      ? !!s.cloudAuth?.cloud_available && !!s.cloudAuth.logged_in
-      : provider === "jimeng"
-        ? !!s.dreaminaHealth?.ok
-        : !!s.codexHealth?.ok;
-    if (!targetHealthy || generationGateError(s, provider)) return;
     const last = job.turns[job.turns.length - 1];
     if (!last?.error) return; // 没有失败轮可重试
-    if ((last.media ?? job.media) === "video" && job.provider.startsWith("bowerbird-cloud")) {
+    const provider = normalizeGenerationProvider(last.provider || job.provider);
+    if ((last.media ?? job.media) === "video" && provider.startsWith("bowerbird-cloud")) {
       void api.recoverCloudVideo(job.id).then(() => get().loadGenJobs()).catch(error => genHandleError(job.id, taskErrorMessage(error)));
       return;
     }
+    if (generationGateError(s, provider)) return;
     const parent = generationParentLocator(
       job.id,
       job.turns,
@@ -2240,6 +2240,14 @@ export const useStore = create<State>((set, get) => {
     }).catch(error => genHandleError(id, taskErrorMessage(error)));
   },
   applyGenChunk: (c) => {
+    if (c.kind === "preview") {
+      updateJob(c.job_id, job => {
+        if (!job.running || !c.turn_key || job.turns[job.turns.length - 1]?.turnKey !== c.turn_key
+          || !["codex", "codex-cli", "default"].includes(job.provider)) return job;
+        return { ...job, preview: { turnKey: c.turn_key, dataUrl: c.data_url } };
+      });
+      return;
+    }
     if (c.kind === "progress") {
       updateJob(c.job_id, job => applyGenerationProgress(job, { stage: c.stage, queue_position: c.queue_position, queue_length: c.queue_length, turnKey: c.turn_key }));
       return;

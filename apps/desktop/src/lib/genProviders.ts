@@ -119,3 +119,10 @@ export function canonicalProviderKey(key: string): string {
   }
   return key;
 }
+
+/** Resolve legacy session keys for display, readiness checks and new submissions. */
+export function normalizeGenerationProvider(provider: string): string {
+  if (provider === "dreamina") return "jimeng";
+  if (provider === "codex-cli" || provider === "default" || !provider) return "codex";
+  return canonicalProviderKey(provider);
+}

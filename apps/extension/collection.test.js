@@ -100,12 +100,12 @@ test("desktop disconnect before upload is unavailable; disconnect/timeout after 
     send(value) { this.frames.push(value); }
     close() { this.onclose?.(); }
   }
-  const { api, timers } = runtime({ WebSocket: Socket });
+  const { api, timers } = runtime({ WebSocket: Socket, BowerbirdPairing: {proof: async () => ({ok:true,protocols:["bowerbird-v1","fixture"]})}, chrome:{runtime:{id:"fixture"}} });
   const unavailable = api.uploadBytes(new Uint8Array([1]).buffer, {});
-  sockets[0].onerror();
+  await flush(); sockets[0].onerror();
   assert.equal((await unavailable).code, "desktop_unavailable");
   const unknown = api.uploadBytes(new Uint8Array([1]).buffer, { page_url: "https://site.test/note" });
-  sockets[1].onopen();
+  await flush(); sockets[1].onopen();
   assert.equal(JSON.parse(sockets[1].frames[0]).type, "save_blob");
   assert.equal(JSON.parse(sockets[1].frames[0]).page_url, "https://site.test/note");
   assert.equal(sockets[1].frames.length, 2);
@@ -163,20 +163,31 @@ function contentFixture({ urls = [], xhsState, remote, localResult = { ok: true 
     },
     chrome: { runtime: {
       getURL: (url) => `chrome-extension://fixture/${url}`,
-      sendMessage: (message, cb) => { messages.push(message); if (remote) remote(message, cb); else cb({ ok: true }); },
+      sendMessage: (message, cb) => {
+        if (message.type === "button_position_get") { cb({ position: null }); return; }
+        if (message.type === "button_position_set") { cb({ ok: true }); return; }
+        if (message.type === "collect_heartbeat" || message.type === "collect_access") { cb({ok:true,protocols:["bowerbird-v1","fixture"]}); return; }
+        messages.push(message); if (remote) remote(message, cb); else cb({ ok: true });
+      },
     } },
   });
   vm.runInContext(source("candidate-utils.js"), context);
   vm.runInContext(source("video-utils.js"), context);
   vm.runInContext(source("content.js"), context);
   const button = document.documentElement.children[0];
+  const openMenu = () => button.listeners.click({ isTrusted: true });
+  const startImages = async () => {
+    openMenu();
+    const menu = document.getElementById("__bowerbird_menu");
+    await menu.children[0].listeners.click({ isTrusted: true });
+  };
   const confirm = async () => {
-    await button.listeners.click();
+    await startImages();
     const card = document.getElementById("__bowerbird_confirm");
-    card.children[1].children[1].onclick();
+    card.children[1].children[1].listeners.click({ isTrusted: true });
     await flush();
   };
-  return { document, button, nodes, messages, fetched, uploads, confirm, documentListeners, timers };
+  return { document, button, nodes, messages, fetched, uploads, confirm, startImages, openMenu, documentListeners, timers };
 }
 
 test("real content click/confirmation saves mixed HTTP/blob/data batch with correct partial summary", async () => {
@@ -198,9 +209,9 @@ test("content busy guard blocks repeat click, drop and Alt while an upload is pe
   let done;
   const fixture = contentFixture({ urls: ["https://cdn.test/a.jpg"], remote: (_m, cb) => { done = cb; } });
   await fixture.confirm();
-  await fixture.button.listeners.click();
-  await fixture.button.listeners.drop({ preventDefault() {}, dataTransfer: { getData() { throw new Error("busy drop must not read"); } } });
-  await fixture.documentListeners.click({ altKey: true, composedPath() { throw new Error("busy Alt must not scan"); } });
+  await fixture.button.listeners.click({isTrusted:true});
+  await fixture.button.listeners.drop({ isTrusted:true, preventDefault() {}, dataTransfer: { getData() { throw new Error("busy drop must not read"); } } });
+  await fixture.documentListeners.click({ isTrusted:true, altKey: true, composedPath() { throw new Error("busy Alt must not scan"); } });
   assert.equal(fixture.messages.length, 1);
   assert.equal(fixture.document.getElementById("__bowerbird_confirm"), undefined);
   assert.match(fixture.document.getElementById("__bowerbird_toast").textContent, /采集中 0\/1/);
@@ -212,10 +223,10 @@ test("content busy guard blocks repeat click, drop and Alt while an upload is pe
 test("real XHS detail path keeps image order and note URL while limiting confirmation/upload to 100", async () => {
   const imageList = Array.from({ length: 110 }, (_, i) => ({ urlDefault: `https://sns.xhscdn.com/${i}.jpg` }));
   const fixture = contentFixture({ xhsState: { note: { noteDetailMap: { "note-id": { note: { type: "normal", imageList } } } } } });
-  await fixture.button.listeners.click();
+  await fixture.startImages();
   const card = fixture.document.getElementById("__bowerbird_confirm");
   assert.match(card.children[0].textContent, /110.*100/);
-  card.children[1].children[1].onclick();
+  card.children[1].children[1].listeners.click({isTrusted:true});
   for (let i = 0; i < 15; i += 1) await flush();
   assert.equal(fixture.messages.length, 100);
   assert.equal(fixture.messages[99].url, "https://sns.xhscdn.com/99.jpg");
@@ -225,6 +236,11 @@ test("real XHS detail path keeps image order and note URL while limiting confirm
 function backgroundFixture(fetch, videoSupport = true) {
   let listener;
   const uploads = [];
+  const stored = {};
+  const storage = { local: {
+    get: (key, callback) => callback({ [key]: stored[key] }),
+    set: (value, callback) => { Object.assign(stored, value); callback?.(); },
+  } };
   class Socket {
     constructor() { queueMicrotask(() => this.onopen?.()); }
     send(value) {
@@ -241,15 +257,19 @@ function backgroundFixture(fetch, videoSupport = true) {
   }
   const { context, timers } = runtime({
     fetch, WebSocket: Socket,
-    chrome: { runtime: { onMessage: { addListener: (fn) => { listener = fn; } } } },
+    chrome: { storage, runtime: { id: "fixture", onMessage: { addListener: (fn) => { listener = fn; } } } },
   });
-  context.importScripts = (...names) => names.forEach(name=>vm.runInContext(source(name), context));
+  context.importScripts = (...names) => names.forEach(name=>vm.runInContext(name === "pairing.js" ? 'const BowerbirdPairing={ proof:async()=>({ok:true,protocols:["bowerbird-v1","fixture"]}), load:async()=>({publicKey:"public-key"}), generate:async()=>({publicKey:"generated-key"}) };' : source(name), context));
   vm.runInContext(source("background.js"), context);
   return {
-    uploads, timers,
+    uploads, timers, stored,
     send: (message) => new Promise((resolve) => {
       assert.equal(listener({ type: "save_image", ...message }, {}, resolve), true);
     }),
+    message: (message) => new Promise((resolve) => {
+      assert.equal(listener(message, { id: "fixture" }, resolve), true);
+    }),
+    rejected: (message) => listener(message, { id: "fixture" }, () => {}),
   };
 }
 
@@ -289,18 +309,43 @@ test("actual background fetch abort has no upload and is reported as a read time
 
 test("packaged manifest loads all content dependencies and Windows runtime stays identical", () => {
   const manifest = JSON.parse(source("manifest.json"));
-  assert.equal(manifest.version, "0.3.1");
+  assert.equal(manifest.version, "0.5.1");
   assert.deepEqual(manifest.content_scripts[0].js, ["candidate-utils.js", "collection-utils.js", "video-utils.js", "content.js"]);
-  for (const file of ["manifest.json", "candidate-utils.js", "collection-utils.js", "video-utils.js", "content.js", "background.js"]) {
+  for (const file of ["manifest.json", "candidate-utils.js", "collection-utils.js", "video-utils.js", "content.js", "background.js", "pairing.js", "options.html", "options.js"]) {
     assert.equal(source(file), readFileSync(new URL(`../../Windows/extension/${file}`, import.meta.url), "utf8"), file);
   }
 });
 
-test("content exposes a separate video entry without downloading all videos", () => {
+test("content opens a secondary menu for image, video and settings without downloading", () => {
   const fixture=contentFixture();
-  const video=fixture.nodes.find(node=>node.attributes["aria-label"]==="采集网页视频");
-  assert.ok(video);
+  assert.equal(fixture.nodes.filter(node=>node.id==="__bowerbird_menu").length,0);
+  fixture.openMenu();
+  const menu=fixture.document.getElementById("__bowerbird_menu");
+  assert.ok(menu);
+  assert.equal(menu.attributes.role,"menu");
+  assert.deepEqual(menu.children.map(item=>item.textContent),["采集本页图片","采集本页视频","设置"]);
   assert.equal(fixture.messages.length,0);
+  assert.equal(fixture.button.attributes["aria-expanded"],"true");
+});
+
+test("background exposes the public pairing code for the settings panel", async () => {
+  const fixture=backgroundFixture(async()=>{ throw new Error("pairing code messages must not fetch"); });
+  const result=await fixture.message({type:"pairing_code_get"});
+  assert.equal(result.ok,true);
+  assert.equal(result.code,"fixture.public-key");
+});
+
+test("background persists only numeric button positions", async () => {
+  const fixture=backgroundFixture(async()=>{ throw new Error("position messages must not fetch"); });
+  assert.equal((await fixture.message({type:"button_position_get"})).position,null);
+  assert.equal((await fixture.message({type:"button_position_set",position:{x:"12",y:34,dock:"left"}})).ok,true);
+  const saved=fixture.stored.bowerbird_button_position;
+  assert.deepEqual([saved.x,saved.y,saved.dock],[12,34,"left"]);
+  const loaded=(await fixture.message({type:"button_position_get"})).position;
+  assert.deepEqual([loaded.x,loaded.y,loaded.dock],[12,34,"left"]);
+  assert.equal(fixture.rejected({type:"button_position_set",position:{x:"bad",y:34}}),false);
+  const unchanged=fixture.stored.bowerbird_button_position;
+  assert.deepEqual([unchanged.x,unchanged.y,unchanged.dock],[12,34,"left"]);
 });
 
 test("video background negotiates capability before browser-session download and sends verified video bytes", async () => {
@@ -338,13 +383,13 @@ test("old desktop causes no video download; playlists, oversized and fake video 
 test("video upload rechecks desktop capability and never accepts an image-only receipt as success", async()=>{
   const sockets=[];
   class Socket{constructor(){sockets.push(this);this.sent=[];}send(value){this.sent.push(value);}close(){this.onclose?.();}}
-  const {api}=runtime({WebSocket:Socket});
+  const {api}=runtime({WebSocket:Socket,BowerbirdPairing:{proof:async()=>({ok:true,protocols:["bowerbird-v1","fixture"]})},chrome:{runtime:{id:"fixture"}}});
   const old=api.uploadBytes(new Uint8Array([1]).buffer,{media_kind:"video"});
-  sockets[0].onopen();assert.equal(JSON.parse(sockets[0].sent[0]).type,"ping");
+  await flush(); sockets[0].onopen();assert.equal(JSON.parse(sockets[0].sent[0]).type,"ping");
   sockets[0].onmessage({data:'{"ok":true,"pong":true}'});
   assert.equal((await old).code,"desktop_upgrade");assert.equal(sockets[0].sent.length,1);
   const unknown=api.uploadBytes(new Uint8Array([1]).buffer,{media_kind:"video"});
-  sockets[1].onopen();sockets[1].onmessage({data:'{"ok":true,"capabilities":{"video_blob":true,"video_max_bytes":209715200}}'});
+  await flush(); sockets[1].onopen();sockets[1].onmessage({data:'{"ok":true,"capabilities":{"video_blob":true,"video_max_bytes":209715200}}'});
   assert.equal(sockets[1].sent.length,3);
   sockets[1].onmessage({data:'{"ok":true,"asset_id":"image-only"}'});
   assert.equal((await unknown).code,"result_unknown");

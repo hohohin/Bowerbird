@@ -18,7 +18,7 @@ export CARGO_TARGET_DIR="$WORK/target"
 export BOWERBIRD_DEV_REGISTER_URLS=0
 
 for VERSION in one two; do
-  for RESOURCE in extension samples onboarding-v0917; do
+  for RESOURCE in extension samples onboarding-v0917 licenses; do
     mkdir -p "$WORK/target/debug/$RESOURCE"
     printf '%s' "$VERSION" > "$WORK/target/debug/$RESOURCE/fixture.txt"
   done
@@ -46,7 +46,7 @@ fn main() {
         assert!(CFStringGetCString(id, bytes.as_mut_ptr(), 128, 0x08000100));
         assert_eq!(std::ffi::CStr::from_ptr(bytes.as_ptr().cast()).to_str().unwrap(), "com.bowerbird.desktop");
     }
-    for resource in ["extension", "samples", "onboarding-v0917"] {
+    for resource in ["extension", "samples", "onboarding-v0917", "licenses"] {
         let path = exe.parent().unwrap().join("../Resources").join(resource).join("fixture.txt");
         assert_eq!(std::fs::read_to_string(path).unwrap(), "$VERSION");
     }
@@ -69,6 +69,7 @@ EOF
   /usr/bin/codesign --verify --strict "$BUNDLE"
   cmp "$WORK/target/debug/bowerbird-dev-keychain" "$BUNDLE/Contents/MacOS/bowerbird-dev-keychain"
   [ "$(/usr/bin/plutil -extract CFBundleURLTypes.0.CFBundleURLSchemes.0 raw "$BUNDLE/Contents/Info.plist")" = bowerbird ]
+  [ "$(/usr/bin/plutil -extract NSAppleEventsUsageDescription raw "$BUNDLE/Contents/Info.plist")" = "$(/usr/bin/plutil -extract NSAppleEventsUsageDescription raw "$ROOT/apps/desktop/src-tauri/Info.plist")" ]
 done
 
 cmp "$WORK/one.requirement" "$WORK/two.requirement"

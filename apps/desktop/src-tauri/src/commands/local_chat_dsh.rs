@@ -1,13 +1,8 @@
-//! Application-owned local DSH connection and managed runtime, separate from user credentials.
+//! Local DSH connection; the managed provider runs on the VPS.
 use super::*;
-use crate::codex::codex_cli::{app_data_dir, npm_command, resolve_npm_binary};
+use crate::codex::codex_cli::app_data_dir;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tokio::process::{Child, Command};
-
-const VERSION: &str = "0.1.1-rc.2";
-static INSTALL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct LocalConnection {
     pub base: String,
@@ -22,11 +17,8 @@ pub struct Status {
     local_url: String,
     local_reason: Option<String>,
     managed_reason: Option<String>,
-}
-
-pub(super) struct Runtime {
-    node: PathBuf,
-    root: PathBuf,
+    /// 连接可用但能力降级（例如 DSH 0.2 的建卡组件还没生效）。
+    local_note: Option<String>,
 }
 
 fn root() -> AppResult<PathBuf> {
@@ -109,210 +101,41 @@ fn save_connection(path: &Path, config: &LocalConnection) -> AppResult<()> {
     result.map_err(|_| error("DSH 连接配置保存失败，请重试"))
 }
 
-fn node() -> AppResult<PathBuf> {
-    let name = if cfg!(windows) { "node.exe" } else { "node" };
-    let mut dirs = resolve_npm_binary()
-        .and_then(|npm| Path::new(&npm).parent().map(Path::to_path_buf))
-        .into_iter()
-        .collect::<Vec<_>>();
-    if let Some(path) = std::env::var_os("PATH") {
-        dirs.extend(std::env::split_paths(&path));
-    }
-    dirs.into_iter()
-        .map(|dir| dir.join(name))
-        .find(|path| path.is_file())
-        .ok_or_else(|| error("DSH · Cloud 需要 Node.js 24，请安装后重新准备环境"))
-}
-
-fn command(binary: &Path) -> Command {
-    let mut command = Command::new(binary);
-    #[cfg(windows)]
-    command.creation_flags(0x08000000);
-    #[cfg(unix)]
-    command.process_group(0);
-    command.kill_on_drop(true);
-    command
-}
-
-/// Kill the private process tree, including the DSH CLI spawned by the bridge.
-async fn stop(child: &mut Child) {
-    if let Some(pid) = child.id() {
-        #[cfg(windows)]
-        {
-            let _ = command(Path::new("taskkill.exe"))
-                .args(["/PID", &pid.to_string(), "/T", "/F"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await;
-        }
-        #[cfg(unix)]
-        {
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
-        }
-    }
-    let _ = child.kill().await;
-    let _ = child.wait().await;
-}
-
-async fn checked_output(mut command: Command, seconds: u64) -> AppResult<Vec<u8>> {
-    command
-        .kill_on_drop(true)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    #[cfg(unix)]
-    command.process_group(0);
-    let mut child = command
-        .spawn()
-        .map_err(|_| error("DSH 环境无法启动，请检查 Node.js 安装"))?;
-    let mut output = child
-        .stdout
-        .take()
-        .ok_or_else(|| error("DSH 环境没有返回输出"))?;
-    let execution = async {
-        let mut bytes = Vec::new();
-        let mut buffer = [0u8; 8192];
-        loop {
-            let count = output.read(&mut buffer).await?;
-            if count == 0 {
-                break;
-            }
-            let keep = count.min((64 * 1024usize).saturating_sub(bytes.len()));
-            bytes.extend_from_slice(&buffer[..keep]);
-        }
-        let status = child.wait().await?;
-        if !status.success() {
-            return Err(error(
-                "DSH 环境准备失败，请检查网络与 Node.js 24 安装后重试",
-            ));
-        }
-        Ok(bytes)
-    };
-    let result = tokio::time::timeout(Duration::from_secs(seconds), execution)
-        .await
-        .unwrap_or_else(|_| Err(error("DSH 环境准备超时，请检查网络后重试")));
-    if result.is_err() {
-        stop(&mut child).await;
-    }
-    result
-}
-
-async fn check_node(node: &Path) -> AppResult<()> {
-    let mut version = command(node);
-    version.arg("--version");
-    if !String::from_utf8_lossy(&checked_output(version, 10).await?)
-        .trim()
-        .starts_with("v24.")
-    {
-        return Err(error(
-            "DSH · Cloud 当前需要 Node.js 24，请安装该版本后重新准备环境",
-        ));
-    }
-    Ok(())
-}
-
-fn write_runtime_assets(root: &Path) -> AppResult<()> {
-    std::fs::create_dir_all(root)?;
-    for (name, content) in [
-        ("runner.mjs", include_str!("dsh-chat/runner.mjs")),
-        ("bridge.mjs", include_str!("dsh-chat/bridge.mjs")),
-        (
-            "cards-plugin.mjs",
-            include_str!("dsh-chat/cards-plugin.mjs"),
-        ),
-        (
-            "package.json",
-            include_str!("dsh-chat/runtime-package.json"),
-        ),
-        (
-            "package-lock.json",
-            include_str!("dsh-chat/runtime-package-lock.json"),
-        ),
-    ] {
-        std::fs::write(root.join(name), content)?;
-    }
-    Ok(())
-}
-
-fn runtime_root() -> AppResult<PathBuf> {
-    use sha2::{Digest, Sha256};
-    let mut hash = Sha256::new();
-    for content in [
-        include_str!("dsh-chat/runner.mjs"),
-        include_str!("dsh-chat/bridge.mjs"),
-        include_str!("dsh-chat/cards-plugin.mjs"),
-        include_str!("dsh-chat/runtime-package.json"),
-        include_str!("dsh-chat/runtime-package-lock.json"),
-    ] {
-        hash.update(content.as_bytes());
-    }
-    Ok(root()?
-        .join("managed")
-        .join(VERSION)
-        .join(format!("{:x}", hash.finalize())[..16].to_string()))
-}
-
-async fn probe(runtime: &Runtime) -> AppResult<()> {
-    let mut check = command(&runtime.node);
-    check
-        .arg(runtime.root.join("runner.mjs"))
-        .arg("--check")
-        .arg(&runtime.root);
-    let result: Value = serde_json::from_slice(&checked_output(check, 20).await?)
-        .map_err(|_| error("DSH 环境校验失败，请重新准备环境"))?;
-    if result["ready"] != true || result["version"] != VERSION {
-        return Err(error("DSH 环境版本不匹配，请重新准备环境"));
-    }
-    Ok(())
-}
-
-pub(super) async fn runtime() -> AppResult<Runtime> {
-    let runtime = Runtime {
-        node: node()?,
-        root: runtime_root()?,
-    };
-    check_node(&runtime.node).await?;
-    if !runtime
-        .root
-        .join("node_modules/@deepseek-ai/dsh/package.json")
-        .is_file()
-    {
-        return Err(error("请先准备 DSH · Cloud 环境"));
-    }
-    // Immutable bridge revisions let concurrent chats keep using their admitted runtime.
-    probe(&runtime).await?;
-    Ok(runtime)
-}
-
 pub(super) async fn status() -> AppResult<Status> {
     let config = connection();
     let local_url = config
         .as_ref()
         .map(|c| c.base.clone())
         .unwrap_or_else(|_| "http://127.0.0.1:3080".into());
-    let local = async {
-        match config {
-            Ok(config) => dsh_local::health(&config.base, config.auth.as_deref()).await,
-            Err(detail) => Err(detail),
+    let local = match config {
+        Ok(config) => dsh_local::inspect(&config.base, config.auth.as_deref()).await,
+        Err(detail) => Err(detail),
+    };
+    let local_note = local.as_ref().ok().and_then(|health| {
+        if !health.live {
+            return None;
         }
-    };
-    let managed = async {
-        let runtime = Runtime {
-            node: node()?,
-            root: runtime_root()?,
-        };
-        check_node(&runtime.node).await?;
-        probe(&runtime).await
-    };
-    let (local, managed) = tokio::join!(local, managed);
+        if health.preset && dsh_local::installed_current() {
+            return None;
+        }
+        if health.preset {
+            return Some(
+                "本机 DSH 的建卡组件版本过旧，请在 DSH 设置中重新连接以更新（更新后可能需要重启 DSH）。"
+                    .to_string(),
+            );
+        }
+        Some(
+            "本机 DSH 已连接；建卡组件尚未生效，请在 DSH 设置中重新连接以安装（安装后可能需要重启 DSH）。"
+                .to_string(),
+        )
+    });
     Ok(Status {
         local_available: local.is_ok(),
-        managed_available: managed.is_ok(),
+        managed_available: false,
         local_url,
         local_reason: local.err().map(|e| e.to_string()),
-        managed_reason: managed.err().map(|e| e.to_string()),
+        managed_reason: Some("请通过云端报价查看 DSH 服务状态".into()),
+        local_note,
     })
 }
 
@@ -332,68 +155,45 @@ pub(super) async fn setup(
                     .and_then(|c| c.auth)
             });
             validate_connection(&base, auth.as_deref())?;
-            dsh_local::health(&base, auth.as_deref()).await?;
+            let health = dsh_local::inspect(&base, auth.as_deref()).await?;
+            // DSH 0.2 reads presets from the profile: keep the managed contract current instead of
+            // trusting that a same-named preset is the one this build ships.
+            let note = if health.live {
+                match dsh_local::install(&base, auth.as_deref()).await {
+                    Ok(dsh_local::Install::Active) => None,
+                    Ok(dsh_local::Install::RestartRequired) => {
+                        Some("建卡组件需要重启 DSH 后生效。".to_string())
+                    }
+                    Err(detail) => Some(format!(
+                        "建卡组件安装失败：{detail}。对话仍可用，但暂时没有建卡工具。"
+                    )),
+                }
+            } else {
+                None
+            };
             save_connection(
                 &root()?.join("local-connection.json"),
                 &LocalConnection { base, auth },
             )?;
-        }
-        "managed" => {
-            let _install = INSTALL.lock().await;
-            let runtime = Runtime {
-                node: node()?,
-                root: runtime_root()?,
-            };
-            check_node(&runtime.node).await?;
-            if probe(&runtime).await.is_err() {
-                write_runtime_assets(&runtime.root)?;
-                let npm = resolve_npm_binary()
-                    .ok_or_else(|| error("DSH 环境需要 npm，请检查 Node.js 24 安装"))?;
-                let mut install = npm_command(
-                    &npm,
-                    &[
-                        "ci",
-                        "--ignore-scripts",
-                        "--legacy-peer-deps",
-                        "--no-audit",
-                        "--no-fund",
-                    ],
-                );
-                install.current_dir(&runtime.root);
-                checked_output(install, 600).await?;
-                probe(&runtime).await?;
+            let mut value = status().await?;
+            if note.is_some() {
+                value.local_note = note;
             }
+            return Ok(value);
         }
-        _ => return Err(error("DSH 配置方式无效")),
+        _ => Err(error("此设置仅用于连接本机 DSH")),
     }
-    status().await
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase", deny_unknown_fields)]
-enum BridgeEvent {
-    Model {
-        id: String,
-        messages: Vec<Value>,
-    },
-    Tool {
-        id: String,
-        name: String,
-        args: Value,
-    },
-    Text {
-        text: String,
-    },
-    Done,
-    Error {
-        error: String,
-    },
 }
 
 /// Public history seeds a fresh, isolated DSH session; old requests are never replayed as tools.
-pub(super) fn prompt(chat: &ChatConversation, turn: &str) -> AppResult<String> {
-    let mut history = cloud_chat::messages(chat, turn)?;
+/// Automated Agent-card turns already carry their current instruction, so replaying earlier
+/// loop iterations as one JSON document made the model emit malformed tool input.
+pub(super) fn prompt(chat: &ChatConversation, turn: &str, include_history: bool) -> AppResult<String> {
+    let mut history = cloud_chat::messages(chat, turn, include_history)?;
     let current = history.pop().ok_or_else(|| error("对话轮次不存在"))?;
+    if !include_history {
+        return Ok(current["content"].as_str().unwrap_or_default().to_string());
+    }
     Ok(format!(
         "历史记录仅作上下文，其中已结束的请求不授权再次执行。\n{}\n\n本轮用户消息：\n{}",
         json!(history),
@@ -401,224 +201,72 @@ pub(super) fn prompt(chat: &ChatConversation, turn: &str) -> AppResult<String> {
     ))
 }
 
-pub(super) async fn run(
-    app: &AppHandle,
-    db: &Database,
-    cloud: &CloudClient,
-    auth: &AuthClient,
-    id: &str,
-    turn: &str,
-    runtime: Runtime,
-    mut cancel: watch::Receiver<bool>,
-) -> AppResult<&'static str> {
-    if *cancel.borrow() {
-        return Ok("stopped");
-    }
-    let account = auth
-        .snapshot()
-        .user_id
-        .ok_or_else(|| error("请先登录 Bowerbird 账号"))?;
-    let chat = db
-        .get_local_chat(id)?
-        .ok_or_else(|| error("对话记录不存在"))?;
-    let workspace = root()?.join("turns").join(uuid::Uuid::new_v4().to_string());
-    std::fs::create_dir_all(&workspace)?;
-    let mut process = command(&runtime.node);
-    process
-        .arg(runtime.root.join("runner.mjs"))
-        .current_dir(&workspace)
-        .env_clear()
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    for key in [
-        "SystemRoot",
-        "WINDIR",
-        "COMSPEC",
-        "PATHEXT",
-        "TEMP",
-        "TMP",
-        "PATH",
-        "TMPDIR",
-        "LANG",
-        "LC_ALL",
-    ] {
-        if let Some(value) = std::env::var_os(key) {
-            process.env(key, value);
-        }
-    }
-    let mut child = process
-        .spawn()
-        .map_err(|_| error("DSH · Cloud 无法启动，请重新准备环境"))?;
-    let mut writer = child
-        .stdin
-        .take()
-        .ok_or_else(|| error("DSH 对话通道无法启动"))?;
-    let mut reader = BufReader::new(
-        child
-            .stdout
-            .take()
-            .ok_or_else(|| error("DSH 回复通道无法启动"))?,
-    );
-    let execution = async {
-        write_message(&mut writer, json!({"type":"start","runtime":runtime.root,"workspace":workspace,"prompt":prompt(&chat,turn)?,"tools":[card_tool_spec()]})).await?;
-        exchange(
-            app,
-            db,
-            cloud,
-            auth,
-            id,
-            turn,
-            &account,
-            &mut reader,
-            &mut writer,
-        )
-        .await
-    };
-    let result = tokio::select! {
-        _ = cancel.changed() => Ok("stopped"),
-        result = tokio::time::timeout(Duration::from_secs(1800), execution) => result.unwrap_or_else(|_| Err(error("DSH · Cloud 等待超时，请稍后取回原请求；未自动重发"))),
-    };
-    drop(writer);
-    if tokio::time::timeout(Duration::from_secs(2), child.wait())
-        .await
-        .is_err()
-    {
-        stop(&mut child).await;
-    }
-    // This UUID directory is created by this turn and contains no user files.
-    let _ = std::fs::remove_dir_all(&workspace);
-    result
-}
-
-async fn exchange(
-    app: &AppHandle,
-    db: &Database,
-    cloud: &CloudClient,
-    auth: &AuthClient,
-    id: &str,
-    turn: &str,
-    account: &str,
-    reader: &mut (impl tokio::io::AsyncBufRead + Unpin),
-    writer: &mut (impl AsyncWrite + Unpin),
-) -> AppResult<&'static str> {
-    let mut rounds = 0;
-    let mut text = String::new();
-    let mut allowed = HashMap::new();
-    loop {
-        let raw = read_message(reader)
-            .await
-            .map_err(|_| error("DSH 连接已结束，已保留收到的内容，请取回原请求或重新准备环境"))?;
-        let event: BridgeEvent =
-            serde_json::from_value(raw).map_err(|_| error("DSH 回复格式无效，未继续执行工具"))?;
-        cloud_chat::ensure_account(auth, account)?;
-        match event {
-            BridgeEvent::Model {
-                id: request,
-                messages,
-            } => {
-                if rounds >= 12 || !allowed.is_empty() || request != format!("model-{}", rounds + 1)
-                {
-                    return Err(error(
-                        "DSH 编排状态无效或达到次数上限，请查看已创建卡片后继续",
-                    ));
-                }
-                let message =
-                    cloud_chat::complete(cloud, auth, db, turn, rounds, &messages, account, &text)
-                        .await?;
-                allowed = cloud_chat::calls(&message)?.into_iter().collect();
-                rounds += 1;
-                write_message(
-                    writer,
-                    json!({"type":"result","id":request,"result":message}),
-                )
-                .await?;
-            }
-            BridgeEvent::Tool {
-                id: call,
-                name,
-                args,
-            } => {
-                authorize_call(&mut allowed, &call, &name, &args)?;
-                let entitlement = app.state::<EntitlementService>();
-                let action = super::super::local_chat_cards::create_cards(
-                    app,
-                    db,
-                    auth,
-                    &entitlement,
-                    id,
-                    turn,
-                    &call,
-                    &args,
-                )
-                .await;
-                let result = match action {
-                    Ok(action) => json!({"success":true,"action":action}),
-                    Err(detail) => json!({"success":false,"error":detail.to_string()}),
-                };
-                write_message(writer, json!({"type":"result","id":call,"result":result})).await?;
-            }
-            BridgeEvent::Text { text: delta } => {
-                text.push_str(&delta);
-                db.update_local_chat_text(id, turn, &text)?;
-                emit(app, db, id);
-            }
-            BridgeEvent::Done if rounds > 0 && allowed.is_empty() => return Ok("done"),
-            BridgeEvent::Error { error: code } => {
-                tracing::warn!(code = %code.chars().filter(char::is_ascii_uppercase).take(80).collect::<String>(), "managed DSH turn failed");
-                return Err(error(
-                    "DSH · Cloud 本轮未完成，已保留收到的内容；可取回原请求，未自动重发",
-                ));
-            }
-            _ => return Err(error("DSH 本轮未完成，请查看已创建卡片后继续")),
-        }
-    }
-}
-
-fn authorize_call(
-    allowed: &mut HashMap<String, Value>,
-    call: &str,
-    name: &str,
-    args: &Value,
-) -> AppResult<()> {
-    if name != "create_canvas_cards" || allowed.get(call) != Some(args) {
-        return Err(error("DSH 工具请求不属于当前模型回复，未创建卡片"));
-    }
-    allowed.remove(call);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    #[ignore = "requires an isolated installed DSH runtime; never calls a model"]
-    async fn dsh_managed_runtime_probe_uses_bundled_bridge_without_model_credentials() {
-        let runtime = Runtime {
-            node: node().unwrap(),
-            root: PathBuf::from(
-                std::env::var("DSH_CHAT_TEST_RUNTIME").expect("isolated runtime required"),
-            ),
-        };
-        check_node(&runtime.node).await.unwrap();
-        write_runtime_assets(&runtime.root).unwrap();
-        probe(&runtime).await.unwrap();
-    }
-
     #[test]
-    fn dsh_bridge_only_executes_the_current_model_call_once_with_exact_arguments() {
-        let args = json!({"cards":[{"id":"a","kind":"content","title":"方向","text":"简洁"}]});
-        let mut allowed = HashMap::from([("call-1".into(), args.clone())]);
-        for (id, name, value) in [
-            ("other", "create_canvas_cards", args.clone()),
-            ("call-1", "shell", args.clone()),
-            ("call-1", "create_canvas_cards", json!({"cards":[]})),
-        ] {
-            assert!(authorize_call(&mut allowed, id, name, &value).is_err());
-        }
-        authorize_call(&mut allowed, "call-1", "create_canvas_cards", &args).unwrap();
-        assert!(authorize_call(&mut allowed, "call-1", "create_canvas_cards", &args).is_err());
+    fn dsh_agent_card_prompt_never_replays_previous_loop_iterations() {
+        use crate::core::local_chat::{ChatMessage, ChatSummary};
+        let chat = ChatConversation {
+            summary: ChatSummary {
+                id: "chat".into(),
+                project_id: "project".into(),
+                thread_id: "thread".into(),
+                node_id: "agent".into(),
+                title: "循环".into(),
+                provider: "dsh-local".into(),
+                codex_options: None,
+                status: "running".into(),
+                turn_count: 2,
+                preview: String::new(),
+                revision: 2,
+                created_at: 1,
+                updated_at: 2,
+                error: None,
+            },
+            messages: vec![
+                ChatMessage {
+                    id: "m1".into(),
+                    turn_id: "turn-1".into(),
+                    role: "user".into(),
+                    text: "上一轮：第 1 项".into(),
+                    reference_asset_ids: vec![],
+                    status: "done".into(),
+                    created_at: 1,
+                    updated_at: 1,
+                },
+                ChatMessage {
+                    id: "m2".into(),
+                    turn_id: "turn-1".into(),
+                    role: "assistant".into(),
+                    text: "第一项的回复".into(),
+                    reference_asset_ids: vec![],
+                    status: "done".into(),
+                    created_at: 1,
+                    updated_at: 1,
+                },
+                ChatMessage {
+                    id: "m3".into(),
+                    turn_id: "turn-2".into(),
+                    role: "user".into(),
+                    text: "本轮：第 2 项".into(),
+                    reference_asset_ids: vec![],
+                    status: "done".into(),
+                    created_at: 2,
+                    updated_at: 2,
+                },
+            ],
+            actions: vec![],
+            vps_history_start_turn_id: None,
+            submitted_turn_id: Some("turn-2".into()),
+        };
+        let fresh = prompt(&chat, "turn-2", false).unwrap();
+        assert!(fresh.starts_with("本轮：第 2 项"));
+        assert!(!fresh.contains("历史记录仅作上下文") && !fresh.contains("上一轮：第 1 项"));
+        let seeded = prompt(&chat, "turn-2", true).unwrap();
+        assert!(seeded.contains("历史记录仅作上下文") && seeded.contains("上一轮：第 1 项"));
+        assert!(seeded.contains("本轮用户消息：\n本轮：第 2 项"));
     }
 
     #[test]
@@ -643,6 +291,7 @@ mod tests {
             local_url: saved.base,
             local_reason: None,
             managed_reason: Some("请先准备环境".into()),
+            local_note: None,
         })
         .unwrap();
         assert!(!public.contains("private-token") && !public.contains("auth"));

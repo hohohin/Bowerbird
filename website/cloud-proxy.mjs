@@ -47,15 +47,16 @@ export function createCloudProxy({
   upstream = process.env.SUPABASE_URL,
   publicKey = process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY,
   trustProxy = process.env.BOWERBIRD_TRUST_PROXY === "1",
-  fetchImpl = fetch, timeoutMs = 180_000,
+  fetchImpl = fetch, authFetchImpl = fetchImpl, timeoutMs = 180_000,
 } = {}) {
   const buckets = new Map(); let active = 0; let sweptAt = 0;
+  const textUsers = new Map();
   return async (request, response) => {
     const incomingId = request.headers['x-bowerbird-request-id'];
     const requestId = typeof incomingId === 'string' && /^[A-Za-z0-9-]{20,64}$/.test(incomingId) ? incomingId : randomUUID();
     response.setHeader('X-Bowerbird-Request-Id', requestId);
     const controller = new AbortController();
-    let timer, admitted = false;
+    let timer, admitted = false, textUser;
     const disconnected = () => { if (!response.writableEnded) controller.abort(); };
     request.on("aborted", disconnected); response.on("close", disconnected);
     try {
@@ -104,10 +105,28 @@ export function createCloudProxy({
       if (control) target.searchParams.set("forceFunctionRegion", "ap-northeast-1");
       timer = setTimeout(() => controller.abort(), timeoutMs);
       let body;
-      if (control) {
+      if (textContent) {
         if (!/^application\/json(?:;|$)/i.test(request.headers["content-type"] || "")) throw fail(415);
-        if (!textContent && Number(request.headers["content-length"]) > JSON_LIMIT) throw fail(413);
-        body = await readRequest(request, textContent ? Infinity : JSON_LIMIT, controller.signal);
+        const auth = await authFetchImpl(new URL("/auth/v1/user", base), {
+          headers, redirect: "manual", signal: controller.signal,
+        });
+        if (!auth.ok || !auth.body) {
+          await auth.body?.cancel();
+          throw fail([401, 403].includes(auth.status) ? 401 : 502);
+        }
+        const user = JSON.parse((await readLimited(auth.body, 64 * 1024)).toString());
+        if (typeof user.id !== "string" || !user.id) throw fail(502);
+        const count = textUsers.get(user.id) || 0;
+        if (count >= 8) throw fail(429);
+        textUser = user.id;
+        textUsers.set(textUser, count + 1);
+        headers["Content-Type"] = "application/json";
+        // Node streams apply backpressure. Edge validates the JSON document.
+        body = request;
+      } else if (control) {
+        if (!/^application\/json(?:;|$)/i.test(request.headers["content-type"] || "")) throw fail(415);
+        if (Number(request.headers["content-length"]) > JSON_LIMIT) throw fail(413);
+        body = await readRequest(request, JSON_LIMIT, controller.signal);
         let parsed;
         try { parsed = JSON.parse(body.toString("utf8")); } catch { throw fail(400); }
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw fail(400);
@@ -129,7 +148,7 @@ export function createCloudProxy({
         })();
       }
       const result = await fetchImpl(target, { method: request.method, headers, body,
-        ...(upload ? { duplex: "half" } : {}), redirect: "manual", signal: controller.signal });
+        ...(upload || textContent ? { duplex: "half" } : {}), redirect: "manual", signal: controller.signal });
       if (result.status >= 300 && result.status < 400) { await result.body?.cancel(); throw fail(502); }
       if (download && result.ok) {
         const mime = result.headers.get("content-type")?.split(";", 1)[0];
@@ -143,7 +162,14 @@ export function createCloudProxy({
         } }), response, { signal: controller.signal });
       } else {
         if (!/^application\/json(?:;|$)/i.test(result.headers.get("content-type") || "")) { await result.body?.cancel(); throw fail(502); }
-        const payload = result.body ? await readLimited(result.body, textContent ? Infinity : 1_048_576) : Buffer.alloc(0);
+        if (textContent && result.body) {
+          const retry = result.headers.get("retry-after");
+          response.writeHead(result.status, { ...PRIVATE, "Content-Type": "application/json; charset=utf-8",
+            ...(retry && /^\d{1,6}$/.test(retry) ? { "Retry-After": retry } : {}) });
+          await pipeline(Readable.fromWeb(result.body), response, { signal: controller.signal });
+          return;
+        }
+        const payload = result.body ? await readLimited(result.body, 1_048_576) : Buffer.alloc(0);
         try { JSON.parse(payload.toString("utf8")); } catch { throw fail(502); }
         const retry = result.headers.get("retry-after");
         response.writeHead(result.status, { ...PRIVATE, "Content-Type": "application/json; charset=utf-8", "Content-Length": payload.length,
@@ -157,6 +183,10 @@ export function createCloudProxy({
       response.end(JSON.stringify({ requestId, phase: 'gateway', error: { code: `cloud_gateway_${status}`, message: status === 401 ? "请先登录或重新获取原任务文件链接" : status === 413 ? "请求内容超过大小限制，请减少参考素材" : "云服务连接暂时中断，请稍后查看原任务状态，勿重复提交" } }));
     } finally {
       clearTimeout(timer); controller.abort(); if (admitted) active--;
+      if (textUser) {
+        const count = textUsers.get(textUser) - 1;
+        if (count) textUsers.set(textUser, count); else textUsers.delete(textUser);
+      }
       request.off("aborted", disconnected); response.off("close", disconnected);
     }
   };

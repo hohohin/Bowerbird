@@ -22,11 +22,18 @@ pub enum AppError {
     #[error("cloud: {0}")]
     Cloud(String),
 
+    #[error("chat_no_reply: {0}")]
+    ChatNoReply(String),
+
     #[error("media: {0}")]
     Media(String),
 
     #[error("not found: {0}")]
     NotFound(String),
+
+    /// The physical operation succeeded. Repeating it is unsafe.
+    #[error("{0}")]
+    FileOperationNeedsReview(String),
 
     #[error("{0}")]
     Other(String),

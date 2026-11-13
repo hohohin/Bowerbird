@@ -3,7 +3,8 @@ import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ cacheDir: '.tmp/compact-output/vite', server: { host:'127.0.0.1',port:17936,strictPort:true,hmr:false,watch:null } });
+const server = await createServer({ cacheDir: '.tmp/compact-output/vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] },
+  server: { host:'127.0.0.1',port:17936,strictPort:true,hmr:false,watch:null } });
 await server.listen();
 const browser = await chromium.launch({channel:'chrome',headless:true});
 const page = await browser.newPage({viewport:{width:1600,height:1000}});
@@ -15,7 +16,8 @@ try {
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   const checks = await page.evaluate(async()=>{
     const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
-    const {placeWorkflowOutput,canvasOutputObstacles}=await import('/src/lib/canvasOutputPlacement.ts');
+    const {placeWorkflowOutput,canvasOutputObstacles,workflowArrangementEdges}=await import('/src/lib/canvasOutputPlacement.ts');
+    const {canvasConversationCards}=await import('/src/lib/canvasConversationCards.ts');
     const {canvasOutputGrid}=await import('/src/lib/canvasReferencePlacement.ts');
     const {mergeWorkflowChanges}=await import('/src/lib/workflowExternalChanges.ts');
     const canvas=window.snapshot(), base=canvas.nodes[0];
@@ -29,12 +31,29 @@ try {
     const before={schema_version:1,nodes:[source],run:null};
     const merged=mergeWorkflowChanges(before,{...before,nodes:[{...source,layoutSize:{width:320,height:180}}]},
       {...before,nodes:[{...source,prompt:'updated in another window'}]});
+    const session = prompt('video-session', 100);
+    const video = { ...base, id: 'video-output', kind: 'asset', role: 'output', assetId: 'video',
+      payloadJson: JSON.stringify({ execution: { job_id: session.id, turn_key: 'one' } }) };
+    const consumer = { ...newWorkflowNode('agent', 1000, 100, ''), id: 'sink',
+      inputs: { image: [{ nodeId: 'source', portId: 'image' }] } };
+    const output = { image: { type: 'image', assetIds: ['video'] } };
+    const producers = [
+      { ...newWorkflowNode('generation', 0, 0, 'jimeng'), id: 'source', generation: { media: 'video' },
+        sessionNodeIds: [session.id], activeSessionNodeId: session.id, outputs: output },
+      { ...newWorkflowNode('comfy-video', 0, 0, ''), id: 'source', resultNodeIds: [video.id], outputs: output },
+    ];
+    const videoCards = [session, video];
+    const gallery = canvasConversationCards(videoCards, {}, new Set([session.id]));
+    const sinkInputs = producers.map(producer => workflowArrangementEdges([producer, consumer], videoCards, gallery)
+      .filter(edge => edge.toNodeId === consumer.id).map(edge => edge.fromNodeId));
     return {visible:obstacles.length,ghost:obstacles.some(r=>r.y===9000),placed,
+      sinkInputs,
       mergedPrompt:merged.nodes[0].prompt,mergedHeight:merged.nodes[0].layoutSize.height,
       first:placeWorkflowOutput(empty,[source],source,{width:260,height:148}),
       grid:canvasOutputGrid(Array.from({length:6},()=>({width:190,height:180}))),unchanged:canvas.nodes[1].y};
   });
   assert.equal(checks.visible,2);assert.equal(checks.ghost,false);assert.equal(checks.unchanged,9000);
+  assert.deepEqual(checks.sinkInputs, [['video-output'], ['video-output']]);
   assert.equal(checks.mergedPrompt,'updated in another window');assert.equal(checks.mergedHeight,180);
   assert.deepEqual(checks.first,{x:484,y:100});
   assert.ok(Math.abs(checks.placed.y-100)<420);

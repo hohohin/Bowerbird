@@ -17,7 +17,10 @@ pub struct Database {
 
 impl Database {
     pub fn open(path: &Path) -> AppResult<Self> {
-        let conn = Connection::open(path)?;
+        Self::from_connection(Connection::open(path)?)
+    }
+
+    pub(crate) fn from_connection(conn: Connection) -> AppResult<Self> {
         // WAL 提升并发读；外键约束开。
         conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
         Ok(Self {

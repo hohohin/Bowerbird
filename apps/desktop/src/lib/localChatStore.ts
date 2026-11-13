@@ -1,8 +1,10 @@
 import { create } from "zustand";
 import { listen } from "@tauri-apps/api/event";
+import { isDshSkill, type DshSkill } from "./dshSkill";
+import { parseChatProvider } from "./chatProvider";
 import { localChat, LOCAL_CHAT_UPDATED_EVENT, localChatInputError, localChatRunning, type ChatCodexOptions, type ChatConversation, type ChatSummary, type LocalChatSendInput } from "./localChat";
 
-export interface LocalChatDraft { text: string; referenceAssetIds: string[]; codexOptions?: ChatCodexOptions }
+export interface LocalChatDraft { text: string; referenceAssetIds: string[]; codexOptions?: ChatCodexOptions; dshSkill?: DshSkill }
 const DRAFT_STORAGE = "bowerbird.localChat.drafts.v1";
 const EMPTY_DRAFT: LocalChatDraft = { text: "", referenceAssetIds: [] };
 function readDrafts(): Record<string, LocalChatDraft> {
@@ -10,7 +12,8 @@ function readDrafts(): Record<string, LocalChatDraft> {
     const parsed: unknown = JSON.parse(localStorage.getItem(DRAFT_STORAGE) || "{}");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     return Object.fromEntries(Object.entries(parsed).filter(([, value]) => value && typeof value.text === "string"
-      && Array.isArray(value.referenceAssetIds) && value.referenceAssetIds.every((id: unknown) => typeof id === "string")));
+      && Array.isArray(value.referenceAssetIds) && value.referenceAssetIds.every((id: unknown) => typeof id === "string"))
+      .map(([id, { dshSkill, ...draft }]) => [id, isDshSkill(dshSkill) ? { ...draft, dshSkill } : draft]));
   } catch { return {}; }
 }
 function saveDrafts(drafts: Record<string, LocalChatDraft>) {
@@ -110,6 +113,9 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
     return request;
   },
   send: async input => {
+    // An unaccepted workflow step may replay its saved input after a desktop upgrade.
+    const provider = parseChatProvider(input.provider);
+    if (provider && provider !== input.provider) input = { ...input, provider };
     const key = input.conversationId || `new:${input.projectId}`;
     const validation = localChatInputError(input.text, input.referenceAssetIds);
     if (validation) throw new Error(validation);
@@ -121,7 +127,7 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
       await ensureLocalChatEvents();
       // Retrying an uncertain IPC result must reuse its native idempotency key.
       // An accepted response clears it so a later intentional identical message is a new turn.
-      const fingerprint = JSON.stringify([input.projectId, input.conversationId ?? null, input.agentNodeId ?? null, input.provider ?? "codex-local", input.text, input.referenceAssetIds, input.cardDefaults ?? null, input.codexOptions ?? null]);
+      const fingerprint = JSON.stringify([input.projectId, input.conversationId ?? null, input.agentNodeId ?? null, input.provider ?? "codex-local", input.text, input.referenceAssetIds, input.cardDefaults ?? null, input.codexOptions ?? null, input.dshSkill ?? null, input.manualCardRun ?? false]);
       const pending = pendingSubmissions.get(key);
       const requestId = input.requestId || (pending?.fingerprint === fingerprint ? pending.requestId : crypto.randomUUID());
       pendingSubmissions.set(key, { fingerprint, requestId });
@@ -144,7 +150,7 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
   },
   setDraft: (conversationId, draft) => {
     const drafts = { ...get().drafts };
-    if (!draft.text && !draft.referenceAssetIds.length && !draft.codexOptions) delete drafts[conversationId];
+    if (!draft.text && !draft.referenceAssetIds.length && !draft.codexOptions && !draft.dshSkill) delete drafts[conversationId];
     else drafts[conversationId] = draft;
     saveDrafts(drafts);
     set({ drafts });

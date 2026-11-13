@@ -81,3 +81,40 @@ Deno.test("active Pro and Lite still reach the original preauthorization RPC", a
     assertEquals(result.calls.filter(path => path.includes("credit_hold_bcoin")), ["/rest/v1/rpc/credit_hold_bcoin_image"]);
   }
 });
+
+Deno.test("get_by_key and get surface the original expired image job without re-creating it", async () => {
+  const env = { SUPABASE_URL: "https://fixture.invalid", SUPABASE_PUBLISHABLE_KEY: "public-test", SUPABASE_SECRET_KEY: "secret-test" };
+  const originalEnv = Object.fromEntries(Object.keys(env).map(key => [key, Deno.env.get(key)]));
+  const originalFetch = globalThis.fetch;
+  const user = "11111111-1111-4111-8111-111111111111";
+  const job = { id: "22222222-2222-4222-8222-222222222222", user_id: user, status: "uploading", service: "image_sd",
+    progress: 0, hold_id: "hold", estimated_credits: 8, actual_credits: null, pricing_version: 1 };
+  const terminal = { ...job, status: "failed", actual_credits: 0, error_code: "image_upload_expired" };
+  try {
+    for (const [key,value] of Object.entries(env)) Deno.env.set(key,value);
+    globalThis.fetch = (async (input: Request | URL | string, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      assertEquals(url.origin,"https://fixture.invalid");
+      if (url.pathname === "/auth/v1/user") return Response.json({id:user});
+      if (url.pathname === "/rest/v1/generation_jobs") {
+        assertEquals(url.searchParams.get("user_id"),"eq." + user);
+        return Response.json([job]);
+      }
+      assertEquals(url.pathname,"/rest/v1/rpc/inspect_image_upload");
+      const raw = typeof init?.body === "string" ? init.body : await (input as Request).text();
+      assertEquals(JSON.parse(raw),{p_job_id:job.id,p_user_id:user,p_enqueue:false});
+      return Response.json(terminal);
+    }) as typeof globalThis.fetch;
+    for (const body of [{action:"get_by_key",idempotency_key:"same-key"},{action:"get",job_id:job.id}]) {
+      const response = await handler(new Request("https://fixture.invalid/generate-proxy", {
+        method: "POST", headers: { authorization: "Bearer fixture", "content-type":"application/json" }, body:JSON.stringify(body),
+      }));
+      assertEquals(response.status,200);
+      const result = await response.json();
+      assertEquals([result.job_id,result.status,result.charge.actual,result.error.code],[job.id,"failed",0,"image_upload_expired"]);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const [key,value] of Object.entries(originalEnv)) { if (value===undefined) Deno.env.delete(key); else Deno.env.set(key,value); }
+  }
+});

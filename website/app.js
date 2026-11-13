@@ -1,3 +1,4 @@
+import { createAccountGenerationUI, loadAccountSDK } from "./account-generation.js";
 import { reportUserError } from "./user-error.js";
 import { Schema } from "prosemirror-model";
 import { EditorState } from "prosemirror-state";
@@ -570,8 +571,44 @@ let imageService = null;
 // magic-link login so generation uses the shared cloud credits instead of the per-IP demo quota.
 // The demo path stays fully functional when cloud auth is not configured.
 let supabaseClient = null;
+let accountUnavailable = false;
 let supabaseAccessToken = null;
 let supabaseEmail = null;
+const accountGenerationUI = createAccountGenerationUI({
+  button: generateButton,
+  readInput: () => {
+    const { prompt, references } = serializeDoc(view.state.doc);
+    return { prompt, referenceIds: references };
+  },
+  token: () => supabaseAccessToken,
+  cloudUrl: () => imageService.supabaseUrl,
+  show: showGenerationMessage,
+  updateGraph(state) {
+    graphOutputState = state;
+    renderCreationGraph();
+  },
+  displayImage(url) {
+    const card = addGeneratedAsset(url);
+    generatedImage.src = url;
+    generatedImage.hidden = false;
+    graphOutputImage = url;
+    renderCreationGraph();
+    return () => {
+      card.remove();
+      displayedAssetCount -= 1;
+      paneAssetCount.textContent = windowAssetCount.textContent = String(displayedAssetCount);
+      if (generatedImage.src === url) {
+        generatedImage.hidden = true;
+        generatedImage.removeAttribute("src");
+      }
+      if (graphOutputImage === url) {
+        graphOutputImage = "";
+        graphOutputState = "idle";
+        renderCreationGraph();
+      }
+    };
+  },
+});
 let supabaseDisplayName = null;
 
 function hasSupabaseAuth() {
@@ -586,13 +623,16 @@ async function initSupabaseAuth() {
       imageService.supabasePublishableKey || imageService.supabaseAnonKey || imageService.supabaseUrl || "anon",
       { auth: { persistSession: true, autoRefreshToken: true, flowType: "pkce" } },
     );
-    const { data } = await supabaseClient.auth.getSession();
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) throw error;
     supabaseAccessToken = data.session?.access_token || null;
+    accountGenerationUI.updateOwner(data.session);
     supabaseEmail = data.session?.user?.email || null;
     supabaseDisplayName = data.session?.user?.user_metadata?.nickname || null;
     if (supabaseClient && window.supabase && supabaseClient.auth) {
       supabaseClient.auth.onAuthStateChange((_event, session) => {
         supabaseAccessToken = session?.access_token || null;
+        accountGenerationUI.updateOwner(session);
         supabaseEmail = session?.user?.email || null;
         supabaseDisplayName = session?.user?.user_metadata?.nickname || null;
         renderAccountState();
@@ -600,7 +640,9 @@ async function initSupabaseAuth() {
     }
     renderAccountState();
   } catch {
-    // Cloud auth unavailable: fall back to demo quota.
+    accountUnavailable = true;
+    accountState.hidden = false;
+    accountState.textContent = "账号会话未能恢复，请刷新页面";
     supabaseClient = null;
   }
 }
@@ -823,6 +865,7 @@ function addGeneratedAsset(imageUrl) {
   displayedAssetCount += 1;
   windowAssetCount.textContent = String(displayedAssetCount);
   paneAssetCount.textContent = String(displayedAssetCount);
+  return card;
 }
 
 function showGenerationMessage(title, detail, state = "ready") {
@@ -872,7 +915,19 @@ async function loadImageService() {
     applyDownloadConfig(payload.windowsDownloadUrl);
     demoDailyLimit = Number.isFinite(payload.trialLimit) ? payload.trialLimit : 3;
     demoCurrentDay = payload.trialDay || demoCurrentDay;
-    if (window.supabase) initSupabaseAuth();
+    if (payload.supabaseUrl) {
+      if (!await loadAccountSDK()) {
+        accountUnavailable = true;
+        accountState.hidden = false;
+        accountState.textContent = "账号组件加载失败，请刷新页面";
+      }
+      await initSupabaseAuth();
+      if (accountUnavailable) return;
+    }
+    if (accountGenerationUI.owner) {
+      showGenerationMessage("Bowerbird Cloud 已就绪", "使用当前账号的云端积分生成图片", "ready");
+      return;
+    }
     if (hasCompletedDemo()) {
       showDemoLimitReached();
       return;
@@ -887,7 +942,8 @@ async function loadImageService() {
 }
 
 generateButton.addEventListener("click", async () => {
-  if (hasCompletedDemo()) {
+  if (accountUnavailable || accountGenerationUI.active) return;
+  if (!accountGenerationUI.owner && hasCompletedDemo()) {
     showDemoLimitReached();
     return;
   }
@@ -897,6 +953,10 @@ generateButton.addEventListener("click", async () => {
   }
 
   const { prompt, references } = serializeDoc(view.state.doc);
+  if (accountGenerationUI.owner) {
+    await accountGenerationUI.run({ prompt, referenceIds: references });
+    return;
+  }
   if (!prompt.trim()) {
     showGenerationMessage("先写下你的创作意图", "描述你想要的画面后再开始创作。", "error");
     view.focus();
@@ -924,7 +984,6 @@ generateButton.addEventListener("click", async () => {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
-        ...(supabaseAccessToken ? { Authorization: `Bearer ${supabaseAccessToken}` } : {}),
       },
       body: JSON.stringify({ prompt, referenceIds: references }),
       signal: controller.signal,
@@ -970,11 +1029,8 @@ generateButton.addEventListener("click", async () => {
   }
 });
 
-// Supabase SDK 从官方 CDN 加载（仅当服务端暴露了 supabaseUrl 才初始化）。
-const supabaseScript = document.createElement("script");
-supabaseScript.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
-supabaseScript.onload = () => initSupabaseAuth();
-document.head.appendChild(supabaseScript);
+// 账号 SDK 随本次官网构建交付。
+
 
 const menuToggle = document.getElementById("menu-toggle");
 const siteNav = document.getElementById("site-nav");
@@ -1023,4 +1079,7 @@ document.querySelectorAll("video[data-src]").forEach((video) => lazyVideoObserve
 window.addEventListener("resize", scheduleGraphConnections);
 
 updateDerivedUI();
-loadImageService();
+generateButton.disabled = true;
+loadImageService().finally(() => {
+  if (!accountUnavailable && !accountGenerationUI.active && (accountGenerationUI.owner || !hasCompletedDemo())) generateButton.disabled = false;
+});

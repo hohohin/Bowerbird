@@ -47,9 +47,12 @@ function parseRequest(goal: string): Record<string, unknown> | undefined {
 }
 
 /** Resolve only trusted IDs; never treat a client-supplied path or Skill body as executable policy. */
-export function resolveCloudTextSkill(goal: string, directory = process.env.BOWERBIRD_TEXT_SKILL_DIR ?? join(import.meta.dirname, "text")): CloudTextSkillSnapshot | undefined {
+export function resolveCloudTextSkill(goal: string, directory?: string): CloudTextSkillSnapshot | undefined {
   const request = parseRequest(goal);
-  if (!request) return;
+  return request && loadCloudTextSkill(request, directory);
+}
+
+export function loadCloudTextSkill(request: Record<string, unknown>, directory = process.env.BOWERBIRD_TEXT_SKILL_DIR ?? join(import.meta.dirname, "text")): CloudTextSkillSnapshot {
   if (Object.keys(request).some(key => !["id", "parameters", "instruction"].includes(key)) ||
       !["h3-video-prompt", "text-editor"].includes(String(request.id))) throw new Error("cloud_text_skill_request_invalid");
   const id = request.id as SkillId;

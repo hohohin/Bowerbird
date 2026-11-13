@@ -26,7 +26,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   emptySection?: (sectionId: string) => ReactNode;
 }) {
   const root = useRef<HTMLDivElement>(null);
-  const [viewport, setViewport] = useState({ top: initialTop ?? 0, height: scroll.current?.clientHeight || 800, width: scroll.current?.clientWidth || 800 });
+  const [viewport, setViewport] = useState(() => ({ top: initialTop ?? 0, height: scroll.current?.clientHeight || 800, width: scroll.current?.clientWidth || 800 }));
   const [tick, setTick] = useState(0);
   const pagePrefix = `pages:${JSON.stringify(filter)}:`;
   const [pages] = useState(() => new Map(catalogCache.entries<Omit<Page, "revision">>(pagePrefix)

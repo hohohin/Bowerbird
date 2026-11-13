@@ -19,7 +19,7 @@ export function LibraryHome({ onCreateProject, active = true, shortcutsEnabled =
   currentPanes.current = panes;
   useEffect(() => {
     useLocalFileMode.getState().setProjectContext(null);
-    useLocalFileMode.getState().openSource("global");
+    useLocalFileMode.getState().setOpen(true);
   }, []);
   useEffect(() => {
     if (!active) return;

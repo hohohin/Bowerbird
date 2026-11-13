@@ -40,17 +40,6 @@ const BlockCommentContent = ({ children, element, path: blockPath }: PlateElemen
   const editor = useEditorRef();
   const commentsApi = editor.getApi(CommentPlugin).comment;
   const isTopLevelBlock = blockPath.length === 1;
-  const draftCommentNode = isTopLevelBlock
-    ? commentsApi.node({ at: blockPath, isDraft: true })
-    : undefined;
-  const commentNodes = isTopLevelBlock
-    ? [...commentsApi.nodes({ at: blockPath })]
-    : [];
-  const suggestionNodes = isTopLevelBlock
-    ? [
-        ...editor.getApi(SuggestionPlugin).suggestion.nodes({ at: blockPath }),
-      ].filter(([node]) => !node[getTransientSuggestionKey()])
-    : [];
   const { resolvedDiscussions, resolvedSuggestions } =
     useBlockDiscussionItems(blockPath);
 
@@ -85,6 +74,9 @@ const BlockCommentContent = ({ children, element, path: blockPath }: PlateElemen
   // in some cases, we may comment the multiple blocks
   const commentingCurrent =
     !!commentingBlock && PathApi.equals(blockPath, commentingBlock);
+  const draftCommentNode = isTopLevelBlock && isCommenting && commentingCurrent
+    ? commentsApi.node({ at: blockPath, isDraft: true })
+    : undefined;
 
   const open =
     _open ||
@@ -94,15 +86,15 @@ const BlockCommentContent = ({ children, element, path: blockPath }: PlateElemen
   const anchorElement = (() => {
     let activeNode: NodeEntry | undefined;
 
-    if (activeSuggestion) {
-      activeNode = suggestionNodes.find(
+    if (isTopLevelBlock && activeSuggestion) {
+      activeNode = [...editor.getApi(SuggestionPlugin).suggestion.nodes({ at: blockPath })].find(
         ([node]) =>
-          editor.getApi(SuggestionPlugin).suggestion.nodeId(node) ===
+          !node[getTransientSuggestionKey()] && editor.getApi(SuggestionPlugin).suggestion.nodeId(node) ===
           activeSuggestion.suggestionId
       );
     }
 
-    if (activeCommentId) {
+    if (isTopLevelBlock && activeCommentId) {
       if (activeCommentId === getDraftCommentKey()) {
         if (!draftCommentNode || !commentingCurrent) return null;
 
@@ -119,7 +111,7 @@ const BlockCommentContent = ({ children, element, path: blockPath }: PlateElemen
             new DOMRect(),
         };
       }
-      activeNode = commentNodes.find(
+      activeNode = [...commentsApi.nodes({ at: blockPath })].find(
         ([node]) =>
           editor.getApi(commentPlugin).comment.nodeId(node) === activeCommentId
       );
@@ -134,7 +126,8 @@ const BlockCommentContent = ({ children, element, path: blockPath }: PlateElemen
 
   return (
     <div className="flex w-full justify-between">
-      <Popover
+      <div className="w-full">{children}</div>
+      {(open || totalCount > 0) && <Popover
         open={open}
         onOpenChange={(_open_) => {
           if (!_open_ && isCommenting && draftCommentNode) {
@@ -147,7 +140,6 @@ const BlockCommentContent = ({ children, element, path: blockPath }: PlateElemen
           setOpen(_open_);
         }}
       >
-        <div className="w-full">{children}</div>
         {anchorElement && (
           <PopoverAnchor
             asChild
@@ -231,7 +223,7 @@ const BlockCommentContent = ({ children, element, path: blockPath }: PlateElemen
             </PopoverTrigger>
           </div>
         )}
-      </Popover>
+      </Popover>}
     </div>
   );
 };

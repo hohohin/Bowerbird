@@ -22,8 +22,16 @@ try{
  for(const theme of ['dark','light']) {await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);await page.screenshot({path:`.tmp/canvas-document-preview/${theme}.png`});}
  await card.locator('.text-file-excerpt').dblclick({position:{x:60,y:25}});
  const editor=page.getByRole('textbox',{name:'文档正文',exact:true});await editor.waitFor();assert.match(await editor.innerText(),/第三行也展示/);
+ await editor.locator('[data-slate-string=true]').first().click();
+ await page.keyboard.press('End');
+ const ime = await page.context().newCDPSession(page);
+ await ime.send('Input.imeSetComposition', { text: 'ce', selectionStart: 2, selectionEnd: 2 });
+ await ime.send('Input.insertText', { text: '长文末次输入' });
+ assert.match(await editor.innerText(), /长文末次输入/);
  await page.getByRole('button',{name:'返回',exact:true}).click();
+ await page.waitForFunction(() => JSON.parse(window.snapshot().nodes.find(node => node.id === 'doc').payloadJson).text.includes('长文末次输入'));
  await card.locator('.text-file-title').dblclick();await editor.waitFor();
+ assert.match(await editor.innerText(), /长文末次输入/);
  await page.getByRole('textbox',{name:'文档名称',exact:true}).fill('更新后的剧本');
  await page.getByRole('button',{name:'返回',exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('.is-document-card .text-file-title')?.textContent==='更新后的剧本');

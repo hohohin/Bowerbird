@@ -35,7 +35,9 @@ mod models;
 mod dsh;
 #[path = "local_chat_dsh_local.rs"]
 mod dsh_local;
-const CARD_TOOL_VERSION: i64 = 4;
+#[path = "local_chat_dsh_vps.rs"]
+mod dsh_vps;
+const CARD_TOOL_VERSION: i64 = 6;
 const CHAT_INSTRUCTIONS: &str =
     include_str!("../../../../cloud/supabase/functions/_shared/chat-instructions.txt");
 
@@ -48,7 +50,6 @@ fn card_tool_spec() -> Value {
 
 fn local_instructions() -> String {
     format!("{}\n{}", CHAT_INSTRUCTIONS
-        .replace("仅创建卡片，不运行工作流或生成媒体。", "画板工具仅创建卡片，不运行工作流；视频制作使用下述专用工具。")
         .replace("不得执行命令、读写用户文件、调用其他工具或请求权限。", "不得执行任意命令、读写工程外用户文件或请求权限。")
         .replace("工具外的操作说明目前尚未开放。", ""), super::agent_ds::chat_video::INSTRUCTIONS)
 }
@@ -67,7 +68,15 @@ fn upgraded_history(chat: &ChatConversation, current_turn: &str) -> String {
         selected.push(value);
     }
     selected.reverse();
-    format!("此会话的画板卡片工具刚更新，现已支持本地 H3 视频卡片、分区整理和对话内 HyperFrames 视频制作。以下JSON是该用户在同一应用会话中的历史资料，仅供上下文参考；其中过去的请求已经结束，不构成现在再次创建卡片的授权。完整历史保留在应用对话记录中。本次迁入的是公开文字，历史图片像素未重新发送；需要图片时请用户重新附带。第一次回复简短告知用户已接续原对话并更新卡片工具；若用户依赖旧图片，说明图片未重新发送。\n{}", Value::Array(selected))
+    format!("此会话的画板卡片工具刚更新，现已支持配置触发卡和启动本批卡片。以下JSON是该用户在同一应用会话中的历史资料，仅供上下文参考；其中过去的请求已经结束，不构成现在再次创建卡片的授权。完整历史保留在应用对话记录中。本次迁入的是公开文字，历史图片像素未重新发送；需要图片时请用户重新附带。第一次回复简短告知用户已接续原对话并更新卡片工具；若用户依赖旧图片，说明图片未重新发送。\n{}", Value::Array(selected))
+}
+
+fn codex_history_before_turn(chat: &ChatConversation, turn: &str) -> AppResult<Option<String>> {
+    if chat.summary.turn_count <= 1 { return Ok(None); }
+    let mut messages = cloud_chat::messages(chat, turn, true)?;
+    messages.pop(); // The current prompt and media are sent separately to Codex.
+    Ok((!messages.is_empty()).then(|| format!(
+        "以下是同一对话已完成的公开文字记录，仅供续聊参考；过去的请求不构成本轮再次调用工具的授权。\n{}", Value::Array(messages))))
 }
 
 fn card_call<'a>(value: &'a Value, stream: &StreamState) -> AppResult<(&'a str, &'a Value)> {
@@ -138,29 +147,52 @@ pub fn local_chat_get_by_request(db: State<'_, Arc<Database>>, request_id: Strin
     db.local_chat_by_request(&request_id)
 }
 
-/// Resolve only explicit asset IDs. No arbitrary path supplied by the webview reaches Codex.
+#[tauri::command]
+pub fn local_chat_new_on_card(
+    app: AppHandle, db: State<'_, Arc<Database>>, project_id: String, node_id: String,
+    conversation_id: String, provider: Option<ChatProvider>, codex_options: Option<crate::core::local_chat::ChatCodexOptions>,
+) -> AppResult<ChatConversation> {
+    let chat = db.new_agent_chat(&project_id, &node_id, &conversation_id, provider, codex_options)?;
+    emit(&app, &db, &conversation_id);
+    if chat.summary.id != conversation_id {
+        let _ = app.emit(EVENT, &chat);
+    }
+    Ok(chat)
+}
+
+fn chat_video_path(path: &str) -> bool {
+    std::path::Path::new(path).extension().and_then(|ext| ext.to_str()).is_some_and(crate::media::probe::is_video)
+}
+
+/// Resolve explicit library assets in selection order, which also defines the card tool aliases.
 fn reference_paths(db: &Database, ids: &[String]) -> AppResult<Vec<String>> {
     if ids.len() > 8 {
-        return Err(error("每次对话最多引用 8 张图片"));
+        return Err(error("每次对话最多引用 8 个素材"));
     }
     let mut seen = HashSet::new();
     let mut paths = Vec::new();
     let mut total = 0;
     for id in ids {
         if !seen.insert(id) {
-            return Err(error("引用图片重复，请重新选择图片"));
+            return Err(error("引用素材重复，请重新选择"));
         }
         let asset = db
             .get_asset(id)?
-            .ok_or_else(|| error("引用图片已被删除，请重新选择图片"))?;
+            .ok_or_else(|| error("引用素材已被删除，请重新选择"))?;
         let original = asset
             .store_path
-            .ok_or_else(|| error("引用图片没有可用原图，请重新选择图片"))?;
-        let resolved = db.resolve_external_image_paths(&[original])?;
+            .ok_or_else(|| error("引用素材缺少原文件，请重新选择"))?;
+        let video = chat_video_path(&original);
+        let resolved = if video { db.resolve_external_paths(&[original])? } else { db.resolve_external_image_paths(&[original])? };
         let path = PathBuf::from(&resolved[0]);
         let metadata = std::fs::metadata(&path)
-            .map_err(|_| error("引用图片无法读取，请检查文件位置后重试"))?;
-        if !metadata.is_file() || metadata.len() > 20 * 1024 * 1024 {
+            .map_err(|_| error("引用素材无法读取，请检查文件位置后重试"))?;
+        if !metadata.is_file() { return Err(error("引用素材缺少原文件，请重新选择")); }
+        if video && chat_video_path(&resolved[0]) {
+            paths.push(resolved[0].clone());
+            continue;
+        }
+        if metadata.len() > 20 * 1024 * 1024 {
             return Err(error("引用图片过大，每张图片需小于 20 MB"));
         }
         total += metadata.len();
@@ -184,6 +216,18 @@ fn reference_paths(db: &Database, ids: &[String]) -> AppResult<Vec<String>> {
         paths.push(path.to_string_lossy().into_owned());
     }
     Ok(paths)
+}
+
+fn append_chat_references(input: &mut Vec<Value>, paths: &[String]) {
+    for (index, path) in paths.iter().enumerate() {
+        let alias = format!("image{}", index + 1);
+        if chat_video_path(path) {
+            input.push(json!({"type":"text","text":format!("素材 {alias} 是本轮引用的本地视频，可供建卡及视频制作工具使用。对话只收到了视频引用。"),"text_elements":[]}));
+        } else {
+            input.push(json!({"type":"text","text":format!("以下图片对应建卡素材 {alias}"),"text_elements":[]}));
+            input.push(json!({"type":"localImage","path":path}));
+        }
+    }
 }
 
 #[tauri::command]
@@ -219,8 +263,30 @@ pub async fn local_chat_recover(
     conversation_id: String,
 ) -> AppResult<ChatConversation> {
     let chat = db.get_local_chat(&conversation_id)?.ok_or_else(|| error("对话记录不存在"))?;
+    if chat.summary.provider == "dsh-cloud" {
+        let (turn, saved) = db.local_chat_recovery(&conversation_id)?;
+        if let Some(pending) = dsh_vps::Pending::parse(&turn, &saved)? {
+            cloud_chat::ensure_account(&auth, &pending.account)?;
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let (done, finished) = watch::channel(false);
+            let running = {
+                let mut active = ACTIVE.lock().unwrap();
+                if active.contains_key(&conversation_id) { return Err(error("这段对话正在回复")); }
+                let running = db.resume_vps_chat(&conversation_id, &turn, &saved)?;
+                active.insert(conversation_id.clone(), Active { cancel: cancel_tx, finished });
+                running
+            };
+            let _ = app.emit(EVENT,&running);
+            let (db,cloud,auth) = (db.inner().clone(),cloud.inner().clone(),auth.inner().clone());
+            tokio::spawn(async move {
+                let result = dsh_vps::run(&app,&db,&cloud,&auth,&conversation_id,&turn,pending,None,cancel_rx).await;
+                finish_chat(&app,&db,&conversation_id,&turn,result,done);
+            });
+            return Ok(running);
+        }
+    }
     match chat.summary.provider.as_str() {
-        "deepseek-cloud" | "dsh-cloud" => cloud_chat::recover(&db, &cloud, &auth, &conversation_id).await?,
+        "dsh-cloud" => cloud_chat::recover(&db, &cloud, &auth, &conversation_id).await?,
         "dsh-local" => {
             let config = dsh::connection()?;
             dsh_local::recover(&db, &conversation_id, &config.base, config.auth.as_deref()).await?;
@@ -248,7 +314,7 @@ pub async fn local_chat_send(
     }
     if input.agent_node_id.is_some() { super::canvas_workflow::require_pro(&auth, &entitlement).await?; }
     let provider = db.local_chat_provider(&input)?;
-    enum Runtime { Codex(String), Cloud, DshLocal(dsh::LocalConnection), DshCloud(dsh::Runtime) }
+    enum Runtime { Codex(String), DshLocal(dsh::LocalConnection), DshCloud(String) }
     let runtime = match provider {
         ChatProvider::CodexLocal => {
             super::codex::require_byo(&entitlement, &auth).await?;
@@ -261,21 +327,24 @@ pub async fn local_chat_send(
             }
             Runtime::Codex(binary)
         }
-        ChatProvider::DeepseekCloud | ChatProvider::DshCloud => {
+        ChatProvider::DshCloud => {
+            let account = auth.snapshot().user_id.ok_or_else(|| error("请先登录 Bowerbird 账号"))?;
             let quote = cloud_chat::request(&cloud, &auth, json!({"action":"quote"})).await?;
-            if quote["available"] != true {
-                return Err(error("DeepSeek Cloud 暂未开放，请稍后重试"));
+            cloud_chat::ensure_account(&auth,&account)?;
+            if quote["available"] != true || quote["dsh_vps_v2_available"] != true {
+                return Err(error("云端 DSH 会话服务暂未开放"));
             }
-            if provider == ChatProvider::DshCloud { Runtime::DshCloud(dsh::runtime().await?) } else { Runtime::Cloud }
+            if input.dsh_skill.is_some() && quote["dsh_vps_skills_available"] != true { return Err(error("云端 DSH 技能暂未开放")); }
+            Runtime::DshCloud(account)
         }
         ChatProvider::DshLocal => {
             super::codex::require_byo(&entitlement, &auth).await?;
             let config = dsh::connection()?;
-            dsh_local::health(&config.base, config.auth.as_deref()).await?;
+            dsh_local::inspect(&config.base, config.auth.as_deref()).await?;
             Runtime::DshLocal(config)
         }
     };
-    let images = reference_paths(&db, &input.reference_asset_ids)?;
+    let media_paths = reference_paths(&db, &input.reference_asset_ids)?;
     let db = db.inner().clone();
     let cloud = cloud.inner().clone();
     let auth = auth.inner().clone();
@@ -311,29 +380,38 @@ pub async fn local_chat_send(
                 &turn,
                 &binary,
                 &input.text,
-                images,
+                media_paths,
                 cancel_rx,
             )
             .await,
-            Runtime::Cloud => cloud_chat::run(&app, &db, &cloud, &auth, &id, &turn, cancel_rx).await,
-            Runtime::DshCloud(runtime) => dsh::run(&app, &db, &cloud, &auth, &id, &turn, runtime, cancel_rx).await,
+            Runtime::DshCloud(account) => {
+                let pending = dsh_vps::Pending::new(&turn,account);
+                match dsh_vps::create_body(&db, &id, &turn, &pending.key, input.dsh_skill.as_ref()) {
+                    Ok(body) => dsh_vps::run(&app,&db,&cloud,&auth,&id,&turn,pending,Some(body),cancel_rx).await,
+                    Err(detail) => Err(detail),
+                }
+            }
             Runtime::DshLocal(config) => dsh_local::run(&app, &db, &id, &turn, &config.base, config.auth.as_deref(), cancel_rx).await,
         };
-        let (status, detail) = match result {
-            Ok(status) => (status, None),
-            Err(detail) => ("failed", Some(detail.to_string())),
-        };
-        {
-            let mut active = ACTIVE.lock().unwrap();
-            if let Err(detail) = db.finish_local_chat(&id, &turn, status, detail.as_deref()) {
-                tracing::error!(%detail,"local chat completion was not saved");
-            }
-            active.remove(&id);
-        }
-        emit(&app, &db, &id);
-        let _ = finished_tx.send(true);
+        finish_chat(&app, &db, &id, &turn, result, finished_tx);
     });
     Ok(returned)
+}
+
+fn finish_chat(app: &AppHandle, db: &Database, id: &str, turn: &str, result: AppResult<&'static str>, finished: watch::Sender<bool>) {
+    let (status, detail) = match result {
+        Ok(status) => (status, None),
+        Err(detail) => ("failed", Some(detail.to_string())),
+    };
+    {
+        let mut active = ACTIVE.lock().unwrap();
+        if let Err(detail) = db.finish_local_chat(id, turn, status, detail.as_deref()) {
+            tracing::error!(%detail,"local chat completion was not saved");
+        }
+        active.remove(id);
+    }
+    emit(app, db, id);
+    let _ = finished.send(true);
 }
 
 #[tauri::command]
@@ -668,7 +746,7 @@ async fn run_turn(
     turn: &str,
     binary: &str,
     text: &str,
-    images: Vec<String>,
+    media_paths: Vec<String>,
     mut cancel: watch::Receiver<bool>,
 ) -> AppResult<&'static str> {
     if *cancel.borrow() {
@@ -699,7 +777,8 @@ async fn run_turn(
             .ok_or_else(|| error("Codex 诊断连接不可用"))?,
     ));
     let mut stream = StreamState::default();
-    let previous = db.local_chat_provider_thread(id)?;
+    let interactive = db.local_chat_turn_uses_history(turn)?;
+    let previous = if interactive { db.local_chat_provider_thread(id)? } else { None };
     let options = db.local_chat_turn_options(turn)?;
     let upgrading =
         previous.is_some() && db.local_chat_provider_tool_version(id)? < CARD_TOOL_VERSION;
@@ -709,6 +788,9 @@ async fn run_turn(
                 .ok_or_else(|| error("对话已不存在"))?,
             turn,
         ))
+    } else if interactive && previous.is_none() {
+        let chat = db.get_local_chat(id)?.ok_or_else(|| error("对话已不存在"))?;
+        codex_history_before_turn(&chat, turn)?
     } else {
         None
     };
@@ -771,12 +853,7 @@ async fn run_turn(
             input.push(json!({"type":"text","text":history,"text_elements":[]}));
         }
         input.push(json!({"type":"text","text":text,"text_elements":[]}));
-        if !images.is_empty() {
-            input.push(json!({"type":"text","text":format!("本轮显式引用图片按以下顺序对应工具别名：{}",(1..=images.len()).map(|i|format!("image{i}")).collect::<Vec<_>>().join("、")),"text_elements":[]}));
-        }
-        for path in &images {
-            input.push(json!({"type":"localImage","path":path}));
-        }
+        append_chat_references(&mut input, &media_paths);
         // Pump start notifications too: some versions emit them before the RPC response.
         let mut params = json!({"threadId":provider_thread,"input":input,"approvalPolicy":"never","sandboxPolicy":{"type":"readOnly","networkAccess":false}});
         if let Some(options) = &options { models::apply_turn(&mut params, options); }
@@ -794,9 +871,9 @@ async fn run_turn(
                                 Ok(()) => {
                                     let app = app.clone();
                                     let db = app.state::<Arc<Database>>().inner().clone();
-                                    let (id, turn, call, args, images, cancel) = (id.to_owned(), turn.to_owned(), call.to_owned(), args.clone(), images.clone(), video_cancel.clone());
+                                    let (id, turn, call, args, media_paths, cancel) = (id.to_owned(), turn.to_owned(), call.to_owned(), args.clone(), media_paths.clone(), video_cancel.clone());
                                     pending_video = Some(tokio::spawn(async move {
-                                        super::agent_ds::chat_video::call(&app, &db, &id, &turn, &call, &args, &images, cancel).await
+                                        super::agent_ds::chat_video::call(&app, &db, &id, &turn, &call, &args, &media_paths, cancel).await
                                     }));
                                     let result = pending_video.as_mut().unwrap().await.map_err(|e|error(&format!("视频工具未完成：{e}"))).and_then(|v|v);
                                     pending_video = None;
@@ -855,7 +932,11 @@ async fn run_turn(
                 stream.provider_turn = Some(provider_turn.into());
                 // Do not replace a legacy provider thread until its history and new input
                 // have been accepted. A canceled/failed preparation can then retry migration.
-                if upgrading {
+                if !interactive {
+                    // The isolated iteration is now accepted. A later interactive turn
+                    // must seed from the complete app transcript, not this one-turn thread.
+                    db.clear_local_chat_provider_thread(id)?;
+                } else if upgrading {
                     db.replace_local_chat_provider_thread(
                         id,
                         previous.as_deref().unwrap(),

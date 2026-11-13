@@ -120,9 +120,10 @@ try {
   assert.equal(await card.getByRole('cell').count(), 12); // Growth preserves old cells, even after shrinking.
   await card.getByRole('textbox', { name: '第 2 行第 2 列', exact: true }).fill('手动编辑模块');
   await page.waitForFunction(id => JSON.parse(window.snapshot().nodes.find(n => n.id === id).payloadJson).cells[1][1].text === '手动编辑模块', result.tableId);
-  const preview = page.locator('.workflow-text-result').filter({ hasText: '表格 · 3 行 × 3 列' });
-  await preview.locator('summary').first().click();
-  assert.equal(await preview.locator('table td').count(), 9);
+  const agentCard = page.locator('.workflow-card.is-agent');
+  await agentCard.waitFor();
+  assert.equal(await agentCard.locator('.workflow-text-result, table').count(), 0);
+  assert.doesNotMatch(await agentCard.textContent(), /万贝过眼/);
   await page.getByRole('button', { name: '适应内容', exact: true }).click();
   await card.screenshot({ path: '.tmp/workflow/agent-table.png' });
   console.log('PASS Agent table parsing, real cells, stable reruns, single-cell consumer, recovery, connected targets, isolation and rendered reload', result);

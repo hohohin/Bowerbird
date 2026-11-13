@@ -5,7 +5,6 @@
   if (window.__bowerbirdInjected) return;
   window.__bowerbirdInjected = true;
 
-  const WS_URL = "ws://127.0.0.1:39871/ws";
   const XHS_HOST = "www.xiaohongshu.com";
   const S = globalThis.BowerbirdCollection;
   const V = globalThis.BowerbirdVideo;
@@ -15,33 +14,57 @@
   let temporaryDraggable = null;
   const handledDrops = new WeakSet();
 
+  // Content scripts share DOM elements with the page. Accept browser input
+  // (including keyboard button activation) at each capture decision.
+  function onUserAction(target, type, handler, capture = false) {
+    target.addEventListener(type, event => {
+      if (event.isTrusted) return handler(event);
+    }, capture);
+  }
+
   // 心跳：让桌面端知道扩展已安装且当前浏览器可连接（每 15s 建短连发 ping）。
   // 不影响采集（采集走独立的 save_blob 连接）；桌面端据此显示「扩展已连接」。
   function heartbeat() {
     try {
-      const ws = new WebSocket(WS_URL);
-      const timer = setTimeout(() => ws.close(), 3000);
-      ws.onopen = () => ws.send(JSON.stringify({ type: "ping" }));
-      ws.onmessage = () => { clearTimeout(timer); ws.close(); };
-      ws.onerror = () => { clearTimeout(timer); };
+      chrome.runtime.sendMessage({type:"collect_heartbeat"}, () => { void chrome.runtime.lastError; });
     } catch { /* 桌面端未启动时静默，采集时再给明确提示 */ }
   }
   heartbeat();
   setInterval(heartbeat, 15000);
 
+  // 悬浮入口：可拖动；拖到左右边缘会吸附并自动收起，悬停或聚焦展开。
+  // 单击打开二级菜单选择采集本页图片或视频；拖拽图片/视频到按钮仍直接采集。
+  const BTN_SIZE = 48;
+  const BTN_MARGIN = 24;
+  const SNAP_DISTANCE = 16;
+  const PEEK = 12;
+  const HIDE_DELAY_MS = 1200;
+  const DRAG_THRESHOLD = 4;
+  const MENU_ID = "__bowerbird_menu";
+  const SETTINGS_ID = "__bowerbird_settings";
+  const PANEL_WIDTHS = {
+    [MENU_ID]: 220,
+    [SETTINGS_ID]: 360,
+    __bowerbird_confirm: 320,
+    __bowerbird_videos: 340,
+    __bowerbird_toast: 380,
+  };
+
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.setAttribute("aria-label", "采集网页图片");
+  btn.setAttribute("aria-label", "Bowerbird 采集菜单");
+  btn.setAttribute("aria-haspopup", "menu");
+  btn.setAttribute("aria-expanded", "false");
+  btn.draggable = false;
   const btnLogo = document.createElement("img");
   btnLogo.src = chrome.runtime.getURL("icons/48x48.png");
   btnLogo.alt = "";
+  btnLogo.draggable = false;
   btnLogo.style.cssText = "width:100%;height:100%;display:block;pointer-events:none";
   btn.appendChild(btnLogo);
-  btn.title = "Bowerbird：拖拽图片或视频到此处采集，或点击后确认批量采集本页图片";
+  btn.title = "拖动可调整位置；拖到左右边缘自动收起，悬停展开；点击选择采集图片或视频";
   btn.style.cssText = [
     "position:fixed",
-    "bottom:24px",
-    "right:24px",
     "width:48px",
     "height:48px",
     "border-radius:12px",
@@ -49,18 +72,386 @@
     "padding:0",
     "background:#0b1026",
     "overflow:hidden",
-    "cursor:pointer",
+    "cursor:grab",
+    "touch-action:none",
+    "user-select:none",
     "z-index:2147483647",
     "display:flex",
     "align-items:center",
     "justify-content:center",
     "box-shadow:0 2px 12px rgba(0,0,0,0.35)",
     "opacity:0.85",
-    "transition:opacity .15s",
+    "transition:transform .18s ease,opacity .15s",
   ].join(";");
-  btn.addEventListener("mouseenter", () => (btn.style.opacity = "1"));
-  btn.addEventListener("mouseleave", () => (btn.style.opacity = "0.85"));
-  btn.addEventListener("click", async () => {
+
+  function viewportSize() {
+    return {
+      width: Number(globalThis.innerWidth) || Number(document.documentElement?.clientWidth) || 1024,
+      height: Number(globalThis.innerHeight) || Number(document.documentElement?.clientHeight) || 768,
+    };
+  }
+  const clamp = (value, min, max) => Math.min(Math.max(value, min), Math.max(min, max));
+  function defaultButtonState() {
+    const { width, height } = viewportSize();
+    return {
+      x: Math.max(8, width - BTN_MARGIN - BTN_SIZE),
+      y: Math.max(8, height - BTN_MARGIN - BTN_SIZE),
+      dock: null,
+    };
+  }
+  let buttonState = defaultButtonState();
+  let btnScale = 1;
+  let collapsed = false;
+  let dragging = false;
+  let pointerDrag = null;
+  let suppressClick = false;
+  let hovering = false;
+  let positionCustomized = false;
+  let hideTimer = 0;
+
+  function renderButton() {
+    const shift = collapsed && buttonState.dock
+      ? (buttonState.dock === "left" ? -(BTN_SIZE - PEEK) : BTN_SIZE - PEEK)
+      : 0;
+    btn.style.left = `${buttonState.x}px`;
+    btn.style.top = `${buttonState.y}px`;
+    btn.style.right = "auto";
+    btn.style.bottom = "auto";
+    btn.style.transform = `translateX(${shift}px) scale(${btnScale})`;
+    btn.style.cursor = dragging ? "grabbing" : "grab";
+    btn.style.opacity = hovering || dragging ? "1" : collapsed ? "0.75" : "0.85";
+    btn.setAttribute("aria-expanded", document.getElementById(MENU_ID) ? "true" : "false");
+  }
+
+  function panelOpen() {
+    return Boolean(
+      document.getElementById(MENU_ID) ||
+      document.getElementById(SETTINGS_ID) ||
+      document.getElementById("__bowerbird_confirm") ||
+      document.getElementById("__bowerbird_videos")
+    );
+  }
+  function canAutoCollapse() {
+    if (!buttonState.dock || dragging || hovering || collecting || scanning || panelOpen()) return false;
+    const active = document.activeElement;
+    return !(active && (active === btn || btn.contains?.(active)));
+  }
+  function clearHideTimer() {
+    if (hideTimer) {
+      clearTimeout(hideTimer);
+      hideTimer = 0;
+    }
+  }
+  function scheduleCollapse(delay = HIDE_DELAY_MS) {
+    clearHideTimer();
+    if (!buttonState.dock || collapsed || !canAutoCollapse()) return;
+    hideTimer = setTimeout(() => {
+      hideTimer = 0;
+      if (canAutoCollapse()) setCollapsed(true);
+    }, delay);
+  }
+  function setCollapsed(value) {
+    const next = Boolean(value && buttonState.dock);
+    if (next === collapsed) return;
+    collapsed = next;
+    renderButton();
+  }
+
+  function placePanel(panel, maxWidth) {
+    const { width, height } = viewportSize();
+    panel.style.boxSizing = "border-box";
+    panel.style.position = "fixed";
+    panel.style.width = `min(${maxWidth}px, calc(100vw - 48px))`;
+    panel.style.left = "auto";
+    panel.style.right = "auto";
+    panel.style.top = "auto";
+    panel.style.bottom = "auto";
+    const rect = panel.getBoundingClientRect();
+    const panelWidth = rect.width || maxWidth;
+    const panelHeight = rect.height || 120;
+    const left = clamp(buttonState.x + BTN_SIZE - panelWidth, 8, width - panelWidth - 8);
+    panel.style.left = `${left}px`;
+    const belowTop = buttonState.y + BTN_SIZE + 8;
+    const spaceBelow = height - belowTop - 12;
+    const spaceAbove = buttonState.y - 8 - 12;
+    if (spaceBelow >= Math.min(panelHeight, 220) || spaceBelow >= spaceAbove) {
+      panel.style.top = `${belowTop}px`;
+      panel.style.maxHeight = `${Math.max(96, spaceBelow)}px`;
+    } else {
+      panel.style.bottom = `${height - buttonState.y + 8}px`;
+      panel.style.maxHeight = `${Math.max(96, spaceAbove)}px`;
+    }
+    panel.style.overflow = "auto";
+  }
+
+  function saveButtonState() {
+    positionCustomized = true;
+    try {
+      chrome.runtime.sendMessage(
+        {
+          type: "button_position_set",
+          position: { x: buttonState.x, y: buttonState.y, dock: buttonState.dock },
+        },
+        () => { void chrome.runtime.lastError; }
+      );
+    } catch { /* 后台不可用时只保留本次页面位置 */ }
+  }
+  function loadButtonState() {
+    try {
+      chrome.runtime.sendMessage({ type: "button_position_get" }, (response) => {
+        if (chrome.runtime.lastError || positionCustomized) return;
+        const saved = response?.position;
+        if (!saved) return;
+        const { width, height } = viewportSize();
+        const dock = saved.dock === "left" || saved.dock === "right" ? saved.dock : null;
+        const y = Number(saved.y);
+        const x = dock === "left" ? 0 : dock === "right" ? width - BTN_SIZE : Number(saved.x);
+        if (!Number.isFinite(y) || !Number.isFinite(x)) return;
+        buttonState = { x: clamp(x, 0, width - BTN_SIZE), y: clamp(y, 0, height - BTN_SIZE), dock };
+        renderButton();
+        if (dock) scheduleCollapse();
+      });
+    } catch { /* 读取失败时沿用默认位置 */ }
+  }
+  function dockFor(x) {
+    const { width } = viewportSize();
+    if (x <= SNAP_DISTANCE) return "left";
+    if (x + BTN_SIZE >= width - SNAP_DISTANCE) return "right";
+    return null;
+  }
+
+  function openMenu() {
+    closeMenu();
+    closeSettings();
+    hideConfirm();
+    document.getElementById("__bowerbird_videos")?.remove();
+    document.getElementById("__bowerbird_toast")?.remove();
+    const card = document.createElement("div");
+    card.id = MENU_ID;
+    card.setAttribute("role", "menu");
+    card.setAttribute("aria-label", "Bowerbird 菜单");
+    card.style.cssText = [
+      "position:fixed",
+      "padding:6px",
+      "background:#1e1e1e",
+      "color:#dcdcdc",
+      "border:1px solid #747474",
+      "border-radius:8px",
+      "font:13px -apple-system,sans-serif",
+      "box-shadow:0 6px 20px rgba(0,0,0,0.45)",
+      "z-index:2147483647",
+    ].join(";");
+    const actions = [
+      ["采集本页图片", startImageScan],
+      ["采集本页视频", startVideoScan],
+      ["设置", openSettings],
+    ];
+    let firstItem = null;
+    actions.forEach(([label, run]) => {
+      const item = document.createElement("button");
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      item.textContent = label;
+      item.style.cssText = "display:block;width:100%;padding:9px 12px;border:0;border-radius:5px;background:transparent;color:inherit;font:inherit;text-align:left;white-space:nowrap;cursor:pointer";
+      if (label === "设置") {
+        item.style.marginTop = "4px";
+        item.style.borderTop = "1px solid #3d3d3d";
+        item.style.borderRadius = "0 0 5px 5px";
+        item.style.boxSizing = "border-box";
+      }
+      item.addEventListener("mouseenter", () => (item.style.background = "#2f2f2f"));
+      item.addEventListener("mouseleave", () => (item.style.background = "transparent"));
+      onUserAction(item, "click", () => {
+        closeMenu();
+        run();
+      });
+      card.append(item);
+      if (!firstItem) firstItem = item;
+    });
+    document.documentElement.appendChild(card);
+    placePanel(card, PANEL_WIDTHS[MENU_ID]);
+    btn.setAttribute("aria-expanded", "true");
+    firstItem?.focus?.();
+  }
+  function closeMenu(options = {}) {
+    document.getElementById(MENU_ID)?.remove();
+    btn.setAttribute("aria-expanded", "false");
+    if (options.focus) btn.focus?.();
+    scheduleCollapse();
+  }
+  function toggleMenu() {
+    if (document.getElementById(MENU_ID)) {
+      closeMenu({ focus: true });
+      return;
+    }
+    if (document.getElementById(SETTINGS_ID)) {
+      closeSettings({ focus: true });
+      return;
+    }
+    openMenu();
+  }
+
+  async function copyText(text) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch { /* 页面拒绝剪贴板 API 时回退到选区复制 */ }
+    try {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0";
+      document.documentElement.appendChild(area);
+      try {
+        area.focus();
+        area.select();
+        return document.execCommand("copy");
+      } finally {
+        area.remove();
+      }
+    } catch { return false; }
+  }
+
+  function resetButtonPosition() {
+    buttonState = defaultButtonState();
+    collapsed = false;
+    clearHideTimer();
+    renderButton();
+    saveButtonState();
+  }
+
+  function openSettings() {
+    closeMenu();
+    hideConfirm();
+    document.getElementById("__bowerbird_videos")?.remove();
+    document.getElementById("__bowerbird_toast")?.remove();
+    document.getElementById(SETTINGS_ID)?.remove();
+
+    const card = document.createElement("section");
+    card.id = SETTINGS_ID;
+    card.setAttribute("role", "dialog");
+    card.setAttribute("aria-label", "Bowerbird 设置");
+    card.tabIndex = -1;
+    card.style.cssText = "position:fixed;padding:16px;background:#1e1e1e;color:#dcdcdc;border:1px solid #747474;border-radius:8px;font:13px -apple-system,sans-serif;box-shadow:0 8px 24px rgba(0,0,0,0.45);z-index:2147483647";
+
+    const heading = document.createElement("div");
+    heading.style.cssText = "display:flex;align-items:center;justify-content:space-between;margin-bottom:14px";
+    const title = document.createElement("strong");
+    title.textContent = "设置";
+    title.style.cssText = "font-size:14px;font-weight:600";
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "关闭";
+    close.style.cssText = "background:none;border:0;color:#a9a9a9;cursor:pointer;padding:4px 6px;font:inherit";
+    close.onclick = () => closeSettings({ focus: true });
+    heading.append(title, close);
+    card.append(heading);
+
+    const pairLabel = document.createElement("div");
+    pairLabel.textContent = "配对码";
+    pairLabel.style.cssText = "font-size:12px;color:#8faab8;margin-bottom:6px";
+    const codeBox = document.createElement("div");
+    codeBox.id = "__bowerbird_pairing_code";
+    codeBox.setAttribute("aria-label", "配对码");
+    codeBox.style.cssText = "padding:8px;background:#141414;border:1px solid #3d3d3d;border-radius:5px;color:#dcdfe4;font:11px ui-monospace,SFMono-Regular,Consolas,monospace;line-height:1.5;word-break:break-all;user-select:text;max-height:84px;overflow:auto";
+    codeBox.textContent = "正在读取配对码…";
+    const copyRow = document.createElement("div");
+    copyRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:8px";
+    const copy = document.createElement("button");
+    copy.type = "button";
+    copy.textContent = "复制配对码";
+    copy.disabled = true;
+    copy.style.cssText = "padding:7px 10px;border:0;border-radius:5px;background:#7c9cff;color:#10131c;font:inherit;font-weight:600;cursor:pointer;opacity:0.55";
+    copy.addEventListener("mouseenter", () => { if (!copy.disabled) copy.style.background = "#91adff"; });
+    copy.addEventListener("mouseleave", () => (copy.style.background = "#7c9cff"));
+    const copyStatus = document.createElement("span");
+    copyStatus.setAttribute("role", "status");
+    copyStatus.style.cssText = "font-size:12px;color:#8fc99a";
+    copyRow.append(copy, copyStatus);
+    const pairHint = document.createElement("p");
+    pairHint.textContent = "打开 Bowerbird → 探索 → 浏览器插件，粘贴配对码并确认。仅这份插件可采集。";
+    pairHint.style.cssText = "margin:8px 0 0;color:#a9a9a9;font-size:12px;line-height:1.5";
+    card.append(pairLabel, codeBox, copyRow, pairHint);
+
+    let pairingCode = "";
+    const pairingFailed = () => {
+      if (!card.isConnected) return;
+      codeBox.textContent = "配对码读取失败，请打开扩展选项重试。";
+      copy.disabled = true;
+      copy.style.opacity = "0.55";
+    };
+    onUserAction(copy, "click", async () => {
+      if (!pairingCode) return;
+      const ok = await copyText(pairingCode);
+      copyStatus.textContent = ok ? "已复制配对码" : "复制失败，请手动选择配对码";
+      copyStatus.style.color = ok ? "#8fc99a" : "#e08a8a";
+    });
+
+    const divider = document.createElement("div");
+    divider.style.cssText = "height:1px;background:#3d3d3d;margin:14px 0";
+    card.append(divider);
+
+    const entryLabel = document.createElement("div");
+    entryLabel.textContent = "悬浮按钮";
+    entryLabel.style.cssText = "font-size:12px;color:#8faab8;margin-bottom:6px";
+    const entryHint = document.createElement("p");
+    entryHint.textContent = "拖动可调整位置；拖到左右边缘会自动吸附收起，悬停展开。";
+    entryHint.style.cssText = "margin:0 0 8px;color:#a9a9a9;font-size:12px;line-height:1.5";
+    const resetRow = document.createElement("div");
+    resetRow.style.cssText = "display:flex;align-items:center;gap:8px";
+    const reset = document.createElement("button");
+    reset.type = "button";
+    reset.textContent = "恢复默认位置";
+    reset.style.cssText = "padding:7px 10px;border:1px solid #747474;border-radius:5px;background:#2b2b2b;color:#dcdcdc;font:inherit;cursor:pointer";
+    reset.addEventListener("mouseenter", () => (reset.style.background = "#343434"));
+    reset.addEventListener("mouseleave", () => (reset.style.background = "#2b2b2b"));
+    const resetStatus = document.createElement("span");
+    resetStatus.setAttribute("role", "status");
+    resetStatus.style.cssText = "font-size:12px;color:#8faab8";
+    onUserAction(reset, "click", () => {
+      resetButtonPosition();
+      resetStatus.textContent = "已恢复默认位置";
+    });
+    resetRow.append(reset, resetStatus);
+    card.append(entryLabel, entryHint, resetRow);
+
+    const footer = document.createElement("div");
+    footer.style.cssText = "display:flex;justify-content:space-between;margin-top:14px;padding-top:10px;border-top:1px solid #3d3d3d;color:#8c8c8c;font-size:11px";
+    const brand = document.createElement("span");
+    brand.textContent = "Bowerbird Collect";
+    const version = document.createElement("span");
+    version.textContent = `v${chrome.runtime.getManifest?.().version || "—"}`;
+    footer.append(brand, version);
+    card.append(footer);
+
+    card.addEventListener("mousedown", (event) => event.stopPropagation());
+    document.documentElement.appendChild(card);
+    placePanel(card, PANEL_WIDTHS[SETTINGS_ID]);
+    card.focus?.();
+
+    try {
+      chrome.runtime.sendMessage({ type: "pairing_code_get" }, (response) => {
+        if (chrome.runtime.lastError || !response?.ok || !response.code) {
+          pairingFailed();
+          return;
+        }
+        if (!card.isConnected) return;
+        pairingCode = response.code;
+        codeBox.textContent = pairingCode;
+        copy.disabled = false;
+        copy.style.opacity = "1";
+      });
+    } catch { pairingFailed(); }
+  }
+
+  function closeSettings(options = {}) {
+    document.getElementById(SETTINGS_ID)?.remove();
+    if (options.focus) btn.focus?.();
+    scheduleCollapse();
+  }
+  async function startImageScan() {
     if (collecting || scanning) return;
     scanning = true;
     btn.disabled = true;
@@ -76,16 +467,65 @@
     } finally {
       scanning = false;
       btn.disabled = collecting;
+      scheduleCollapse();
     }
+  }
+  async function startVideoScan() {
+    if (collecting || scanning) return;
+    scanning = true;
+    btn.disabled = true;
+    try {
+      showVideos(await collectVideos());
+    } catch {
+      showToast("未能读取页面视频，请刷新网页后再试。", false, 10000);
+    } finally {
+      scanning = false;
+      btn.disabled = collecting;
+      scheduleCollapse();
+    }
+  }
+
+  onUserAction(btn, "click", () => {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+    if (collecting || scanning) return;
+    toggleMenu();
+  });
+  btn.addEventListener("mouseenter", () => {
+    hovering = true;
+    clearHideTimer();
+    setCollapsed(false);
+    renderButton();
+  });
+  btn.addEventListener("mouseleave", () => {
+    hovering = false;
+    renderButton();
+    scheduleCollapse();
+  });
+  btn.addEventListener("focus", () => {
+    clearHideTimer();
+    setCollapsed(false);
+    renderButton();
+  });
+  btn.addEventListener("blur", () => {
+    renderButton();
+    scheduleCollapse();
+  });
+  btn.addEventListener("dragenter", () => {
+    clearHideTimer();
+    setCollapsed(false);
   });
   btn.addEventListener("dragover", (e) => {
     e.preventDefault();
     e.dataTransfer.dropEffect = "copy";
-    btn.style.transform = "scale(1.15)";
+    btnScale = 1.15;
+    renderButton();
     btn.style.boxShadow = "0 0 0 3px #5fd35f,0 2px 12px rgba(0,0,0,0.35)";
   });
   btn.addEventListener("dragleave", resetBtnStyle);
-  btn.addEventListener("drop", async (e) => {
+  onUserAction(btn, "drop", async (e) => {
     e.preventDefault();
     resetBtnStyle();
     if (collecting || scanning || handledDrops.has(e.dataTransfer)) return;
@@ -94,34 +534,136 @@
     if (video) { void saveVideo(video); return; }
     const candidates = candidatesFromDropEvent(e);
     if (candidates.length === 0) {
-      showToast("未识别到图片地址", false);
+      showToast("未识别到可采集的图片或视频", false);
       return;
     }
     saveBatch(makeGenericBatch(candidates));
   });
-  document.documentElement.appendChild(btn);
 
-  const videoBtn = document.createElement("button");
-  videoBtn.type="button";
-  videoBtn.textContent="视频";
-  videoBtn.setAttribute("aria-label","采集网页视频");
-  videoBtn.title="选择本页视频采集，也可 Alt 点击视频";
-  videoBtn.style.cssText="position:fixed;bottom:30px;right:80px;z-index:2147483647;border:1px solid #747474;border-radius:6px;padding:8px 12px;background:#1e1e1e;color:#dcdcdc;font:13px -apple-system,sans-serif;cursor:pointer";
-  videoBtn.addEventListener("click",async()=>{
-    if(collecting || scanning) return;
-    scanning=true; videoBtn.disabled=true;
-    try {showVideos(await collectVideos());}
-    catch {showToast("未能读取页面视频，请刷新网页后再试。",false,10000);}
-    finally {scanning=false;videoBtn.disabled=collecting;}
+  onUserAction(btn, "pointerdown", (e) => {
+    if (e.button !== 0 || e.isPrimary === false) return;
+    pointerDrag = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      originX: buttonState.x,
+      originY: buttonState.y,
+      originDock: buttonState.dock,
+      moved: false,
+    };
+    clearHideTimer();
+    setCollapsed(false);
+    try { btn.setPointerCapture?.(e.pointerId); } catch { /* 指针捕获失败时仍可按位置拖动 */ }
+  }, true);
+  onUserAction(btn, "pointermove", (e) => {
+    if (!pointerDrag || (e.pointerId !== undefined && e.pointerId !== pointerDrag.pointerId)) return;
+    const dx = e.clientX - pointerDrag.startX;
+    const dy = e.clientY - pointerDrag.startY;
+    if (!pointerDrag.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+    if (!pointerDrag.moved) {
+      pointerDrag.moved = true;
+      dragging = true;
+      btnScale = 1.05;
+      closeMenu();
+    }
+    e.preventDefault?.();
+    const { width, height } = viewportSize();
+    buttonState = {
+      x: clamp(pointerDrag.originX + dx, 0, width - BTN_SIZE),
+      y: clamp(pointerDrag.originY + dy, 0, height - BTN_SIZE),
+      dock: null,
+    };
+    renderButton();
   });
-  videoBtn.addEventListener("dragover",e=>{e.preventDefault();e.dataTransfer.dropEffect="copy";});
-  videoBtn.addEventListener("drop",e=>{
-    e.preventDefault();if(collecting || scanning || handledDrops.has(e.dataTransfer))return;
-    handledDrops.add(e.dataTransfer);
-    const item=videoFromDrop(e);
-    if(item) void saveVideo(item);else showToast("未识别到视频，请点击“视频”选择或 Alt 点击网页播放器。",false,10000);
+  function finishPointerDrag(e) {
+    if (!pointerDrag || (e?.pointerId !== undefined && e.pointerId !== pointerDrag.pointerId)) return;
+    const moved = pointerDrag.moved;
+    const pointerId = pointerDrag.pointerId;
+    pointerDrag = null;
+    dragging = false;
+    btnScale = 1;
+    if (moved) {
+      suppressClick = true;
+      setTimeout(() => { suppressClick = false; }, 0);
+      buttonState.dock = dockFor(buttonState.x);
+      if (buttonState.dock) {
+        const { width } = viewportSize();
+        buttonState.x = buttonState.dock === "left" ? 0 : width - BTN_SIZE;
+      }
+      const { height } = viewportSize();
+      buttonState.y = clamp(buttonState.y, 0, height - BTN_SIZE);
+      saveButtonState();
+    }
+    try { btn.releasePointerCapture?.(pointerId); } catch { /* 已自动释放 */ }
+    renderButton();
+    if (moved) {
+      // A pointer drag focuses the button; release it so edge docking can collapse.
+      btn.blur?.();
+      scheduleCollapse();
+    }
+  }
+  function cancelPointerDrag() {
+    if (!pointerDrag) return;
+    buttonState = { x: pointerDrag.originX, y: pointerDrag.originY, dock: pointerDrag.originDock };
+    pointerDrag = null;
+    dragging = false;
+    btnScale = 1;
+    renderButton();
+    scheduleCollapse();
+  }
+  onUserAction(btn, "pointerup", finishPointerDrag);
+  onUserAction(btn, "pointercancel", cancelPointerDrag);
+  btn.addEventListener("lostpointercapture", () => { if (pointerDrag) cancelPointerDrag(); });
+
+  onUserAction(document, "pointerdown", (e) => {
+    const panel = document.getElementById(MENU_ID) || document.getElementById(SETTINGS_ID);
+    if (!panel) return;
+    const path = e.composedPath?.() || [e.target];
+    if (path.includes(btn) || path.includes(panel)) return;
+    closeMenu();
+    closeSettings();
+  }, true);
+  onUserAction(document, "keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (document.getElementById(MENU_ID)) {
+      e.preventDefault();
+      closeMenu({ focus: true });
+      return;
+    }
+    const picker = document.getElementById("__bowerbird_videos");
+    if (picker) {
+      e.preventDefault();
+      picker.remove();
+      btn.focus?.();
+      scheduleCollapse();
+      return;
+    }
+    if (document.getElementById(SETTINGS_ID)) {
+      e.preventDefault();
+      closeSettings({ focus: true });
+    }
+  }, true);
+
+  window.addEventListener?.("resize", () => {
+    const { width, height } = viewportSize();
+    buttonState.y = clamp(buttonState.y, 0, height - BTN_SIZE);
+    buttonState.x = buttonState.dock === "left"
+      ? 0
+      : buttonState.dock === "right"
+        ? width - BTN_SIZE
+        : clamp(buttonState.x, 0, width - BTN_SIZE);
+    renderButton();
+    for (const [id, maxWidth] of Object.entries(PANEL_WIDTHS)) {
+      const panel = document.getElementById(id);
+      if (panel) placePanel(panel, maxWidth);
+    }
   });
-  document.documentElement.appendChild(videoBtn);
+
+  document.documentElement.appendChild(btn);
+  renderButton();
+  loadButtonState();
+  scheduleCollapse();
+
   function restoreVideoDraggable() {
     if(!temporaryDraggable)return;
     const {video,attribute}=temporaryDraggable;
@@ -130,7 +672,7 @@
     }
     temporaryDraggable=null;
   }
-  document.addEventListener("pointerdown",e=>{
+  onUserAction(document, "pointerdown",e=>{
     restoreVideoDraggable();
     if(e.button!==0 || e.isPrimary===false || e.pointerType==="touch")return;
     const video=(e.composedPath?.() || [e.target]).find(node=>node?.tagName==="VIDEO");
@@ -144,7 +686,7 @@
   document.addEventListener("pointerup",restoreVideoDraggable,true);
   document.addEventListener("pointercancel",restoreVideoDraggable,true);
   window.addEventListener?.("blur",restoreVideoDraggable);
-  document.addEventListener("dragstart",e=>{
+  onUserAction(document, "dragstart",e=>{
     const video=(e.composedPath?.() || [e.target]).find(node=>node?.tagName==="VIDEO");
     draggedVideo=video ? V.element(video,location.href) : null;
   },true);
@@ -198,25 +740,27 @@
   }
 
   function showVideos(items) {
+    closeSettings();
     hideConfirm();document.getElementById("__bowerbird_videos")?.remove();
     document.getElementById("__bowerbird_toast")?.remove();
     if(!items.length) {showToast("未发现可采集视频，请先打开视频详情或开始播放后再试。",false,10000);return;}
     const card=document.createElement("section");card.id="__bowerbird_videos";
     card.setAttribute("role","dialog");card.setAttribute("aria-label","选择视频");
-    card.style.cssText="position:fixed;bottom:88px;right:24px;width:min(340px,calc(100vw - 48px));max-height:60vh;overflow:auto;padding:16px;background:#1e1e1e;color:#dcdcdc;border:1px solid #747474;border-radius:6px;font:13px -apple-system,sans-serif;box-shadow:0 4px 16px #0006;z-index:2147483647";
+    card.style.cssText="position:fixed;padding:16px;background:#1e1e1e;color:#dcdcdc;border:1px solid #747474;border-radius:6px;font:13px -apple-system,sans-serif;box-shadow:0 4px 16px #0006;z-index:2147483647";
     const heading=document.createElement("div");heading.style.cssText="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px";
     const title=document.createElement("strong");title.textContent="选择视频";
-    const close=document.createElement("button");close.textContent="关闭";close.style.cssText="background:none;border:0;color:inherit;cursor:pointer;padding:6px";close.onclick=()=>{card.remove();videoBtn.focus?.();};
+    const closeCard=()=>{card.remove();btn.focus?.();scheduleCollapse();};
+    const close=document.createElement("button");close.textContent="关闭";close.style.cssText="background:none;border:0;color:inherit;cursor:pointer;padding:6px";close.onclick=closeCard;
     heading.append(title,close);card.append(heading);
     items.forEach((item,index)=>{
       const row=document.createElement("div");row.style.cssText="display:flex;gap:12px;align-items:center;border-top:1px solid #3d3d3d;padding:12px 0";
       const name=document.createElement("span");name.textContent=item.name==="视频" || item.name==="页面视频" ? `视频 ${index+1}` : item.name;name.style.cssText="min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
       const action=document.createElement("button");action.textContent="采集视频";action.style.cssText="flex-shrink:0;padding:8px;background:none;color:#8faab8;border:1px solid #747474;border-radius:4px;cursor:pointer";
-      action.onclick=()=>{card.remove();void saveVideo(item);};row.append(name,action);card.append(row);
+      onUserAction(action, "click", ()=>{card.remove();void saveVideo(item);});row.append(name,action);card.append(row);
     });
-    card.addEventListener("keydown",event=>{if(event.key==="Escape") {event.preventDefault();card.remove();videoBtn.focus?.();}});
+    card.addEventListener("keydown",event=>{if(event.key==="Escape") {event.preventDefault();closeCard();}});
     card.addEventListener("mousedown",event=>event.stopPropagation());
-    document.documentElement.appendChild(card);close.focus?.();
+    document.documentElement.appendChild(card);placePanel(card,PANEL_WIDTHS.__bowerbird_videos);close.focus?.();
   }
 
   async function savePageVideo(item) {
@@ -237,18 +781,19 @@
   async function saveVideo(item) {
     if(collecting || scanning)return;
     if(item.blocked){showToast(S.failureMessage({code:item.blocked},"video"),false,12000);return;}
-    collecting=true;btn.disabled=true;videoBtn.disabled=true;videoBtn.textContent="采集中";hideConfirm();
+    collecting=true;btn.disabled=true;btn.setAttribute("aria-busy","true");hideConfirm();closeMenu();closeSettings();
     document.getElementById("__bowerbird_videos")?.remove();
     showToast("正在采集视频，请保持网页打开…",true,0);
     try {
       const result=/^(blob:|data:)/i.test(item.media_url) ? await savePageVideo(item) : await S.requestBackground(item);
       showToast(result.ok ? "视频已保存到素材库" : S.failureMessage(result,"video"),result.ok || result.saved,12000);
     }catch {showToast("视频未能采集，请刷新网页后再试。",false,12000);}
-    finally {collecting=false;btn.disabled=false;videoBtn.disabled=false;videoBtn.textContent="视频";}
+    finally {collecting=false;btn.disabled=false;btn.setAttribute("aria-busy","false");scheduleCollapse();}
   }
 
   function resetBtnStyle() {
-    btn.style.transform = "";
+    btnScale = 1;
+    renderButton();
     btn.style.boxShadow = "0 2px 12px rgba(0,0,0,0.35)";
   }
 
@@ -259,10 +804,7 @@
     t.textContent = text;
     t.style.cssText = [
       "position:fixed",
-      "bottom:80px",
-      "right:24px",
       "padding:8px 12px",
-      "max-width:min(380px,calc(100vw - 48px))",
       "border-radius:6px",
       "font:13px -apple-system,sans-serif",
       "color:#fff",
@@ -272,6 +814,7 @@
     ].join(";");
     t.setAttribute("role", "status");
     document.documentElement.appendChild(t);
+    placePanel(t, PANEL_WIDTHS.__bowerbird_toast);
     if (duration > 0) setTimeout(() => t.remove(), duration);
   }
 
@@ -718,13 +1261,12 @@
   }
 
   function showConfirm(batch) {
+    closeSettings();
     hideConfirm();
     const card = document.createElement("div");
     card.id = "__bowerbird_confirm";
     card.style.cssText = [
       "position:fixed",
-      "bottom:84px",
-      "right:24px",
       "padding:12px 14px",
       "border-radius:10px",
       "background:#1f2330",
@@ -732,8 +1274,6 @@
       "font:13px -apple-system,sans-serif",
       "box-shadow:0 4px 16px rgba(0,0,0,0.4)",
       "z-index:2147483647",
-      "min-width:220px",
-      "max-width:320px",
     ].join(";");
     const label = document.createElement("div");
     label.textContent = batch.label;
@@ -751,18 +1291,22 @@
     actions.append(cancel, ok);
     card.append(label, actions);
     document.documentElement.appendChild(card);
+    placePanel(card, PANEL_WIDTHS.__bowerbird_confirm);
 
-    const close = () => card.remove();
+    const close = () => {
+      card.remove();
+      scheduleCollapse();
+    };
     const timer = setTimeout(close, 15000);
     cancel.onclick = () => {
       clearTimeout(timer);
       close();
     };
-    ok.onclick = () => {
+    onUserAction(ok, "click", () => {
       clearTimeout(timer);
       close();
       saveBatch(batch);
-    };
+    });
     card.addEventListener("mousedown", (e) => e.stopPropagation());
   }
 
@@ -824,12 +1368,52 @@
     }
   }
 
-  document.addEventListener(
+  // Instagram 等站点会在图片上覆盖透明层，并把 IMG 设为 pointer-events:none；
+  // 点击路径里没有 IMG，但图片仍按几何位置可见。按点击坐标找回最贴合的那张。
+  function imageAtPoint(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !document.images) return null;
+    let best = null;
+    let bestArea = Infinity;
+    let bestPixels = -1;
+    let bestIndex = -1;
+    let index = 0;
+    for (const image of Array.from(document.images)) {
+      const currentIndex = index++;
+      if (!image || image.tagName !== "IMG" || btn.contains?.(image)) continue;
+      const rect = image.getBoundingClientRect?.();
+      if (!rect || rect.width <= 1 || rect.height <= 1) continue;
+      if (x < rect.left || x > rect.right || y < rect.top || y > rect.bottom) continue;
+      if (!elementVisible(image)) continue;
+      if (!(image.currentSrc || image.getAttribute?.("src"))) continue;
+      const area = rect.width * rect.height;
+      const pixels = (image.naturalWidth || 0) * (image.naturalHeight || 0);
+      if (
+        area < bestArea ||
+        (area === bestArea && (pixels > bestPixels || (pixels === bestPixels && currentIndex > bestIndex)))
+      ) {
+        best = image;
+        bestArea = area;
+        bestPixels = pixels;
+        bestIndex = currentIndex;
+      }
+    }
+    return best;
+  }
+
+  onUserAction(document,
     "click",
     async (e) => {
       if (!e.altKey) return;
       if (collecting || scanning) return;
       const path = typeof e.composedPath === "function" ? e.composedPath() : [e.target];
+      const ownUi = path.some((node) =>
+        node === btn ||
+        node?.id === MENU_ID ||
+        node?.id === "__bowerbird_confirm" ||
+        node?.id === "__bowerbird_videos" ||
+        node?.id === "__bowerbird_toast"
+      );
+      if (ownUi) return;
       const video=path.find(node=>node?.tagName==="VIDEO");
       if(video) {
         e.preventDefault();e.stopPropagation();
@@ -844,14 +1428,21 @@
         saveBatch({ items: [{ canvas, source_url: location.href }] });
         return;
       }
-      const image = path.find((node) => node?.tagName === "IMG");
-      let candidates = [];
-      let sourceElement = image;
-      if (image) {
+      const collectImage = (image) => {
         const out = [];
         addElementImageCandidates(out, image, location.href, 1000);
-        candidates = C.rankAndDedupe(out);
-      } else {
+        return C.rankAndDedupe(out);
+      };
+      let sourceElement = path.find((node) => node?.tagName === "IMG");
+      let candidates = sourceElement ? collectImage(sourceElement) : [];
+      if (candidates.length === 0 && (e.clientX || e.clientY)) {
+        const pointImage = imageAtPoint(e.clientX, e.clientY);
+        if (pointImage && pointImage !== sourceElement) {
+          sourceElement = pointImage;
+          candidates = collectImage(pointImage);
+        }
+      }
+      if (candidates.length === 0) {
         sourceElement = path.find(
           (node) => node instanceof Element && cssBackgroundCandidates(node, location.href, 1000).length > 0
         );
@@ -871,9 +1462,11 @@
     if (collecting || batch.items.length === 0) return;
     collecting = true;
     btn.disabled = true;
-    videoBtn.disabled = true;
     btn.setAttribute("aria-busy", "true");
     hideConfirm();
+    closeMenu();
+    closeSettings();
+    document.getElementById("__bowerbird_videos")?.remove();
     try {
       // 普通 URL 由后台继承浏览器会话取图；页面 blob/data 只能在当前页面读取。
       const summary = await S.runBatch(batch.items, {
@@ -885,8 +1478,8 @@
     } finally {
       collecting = false;
       btn.disabled = false;
-      videoBtn.disabled = false;
       btn.setAttribute("aria-busy", "false");
+      scheduleCollapse();
     }
   }
 })();

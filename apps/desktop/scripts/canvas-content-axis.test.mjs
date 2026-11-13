@@ -119,6 +119,7 @@ try {
   await page.reload(); await card.waitFor(); await card.hover();
   assert.equal(await page.locator('path[data-workflow-text-link]').count(), 1);
   await card.getByRole('button', { name: '第 2 行图片输入', exact: true }).click({ button: 'right' });
+  await page.getByRole('menu', { name: '选择要断开的连线' }).getByRole('menuitem').click();
   await page.waitForFunction(() => !JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(n => n.textTarget));
   await page.waitForFunction(() => document.querySelectorAll('[data-canvas-node-id="ui-card"] .canvas-image-content img').length === 3);
   console.log('PASS axis sockets, pointer connection, expansion, hit targets, persisted wire and disconnect');

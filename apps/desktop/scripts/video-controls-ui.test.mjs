@@ -3,13 +3,17 @@ import { mkdirSync } from "node:fs";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
-const server = await createServer({ configFile: false, root: process.cwd(), server: { host: "127.0.0.1", port: 0, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: '.tmp/video-controls/vite', server: { host: "127.0.0.1", port: 0, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 560, height: 400 } });
 const errors = [];
 page.on("pageerror", error => errors.push(error.message));
 const waitText = text => page.waitForFunction(value => document.body.innerText.includes(value), text);
+const select = async (label, value) => {
+  await page.getByRole('combobox', { name: label, exact: true }).click();
+  await page.getByRole('option', { name: value, exact: true }).click();
+};
 const choose = async key => {
   await page.getByTitle('选择视频模型', { exact: true }).click();
   await page.getByRole('dialog', { name: '视频模型', exact: true }).locator(`[data-model-key="${key}"]`).click();
@@ -19,12 +23,18 @@ try {
   await waitText("即梦剩余：9,434 积分");
   await waitText("本次消耗：240 积分");
   await page.getByLabel("视频时长（秒）").fill("30");
-  await page.getByLabel("视频分辨率", { exact: true }).selectOption("1080p");
+  await select('视频分辨率', '1080p');
+  for (let i = 0; i < 3; i++) {
+    await page.evaluate(() => window.remount());
+    await page.getByRole('combobox', { name: '视频分辨率', exact: true }).waitFor();
+  }
+  assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'dreamina_video_models').length), 0);
+  assert.equal(await page.getByText(/待核验|正在查询当前模式|模型查询失败/).count(), 0);
   await choose('jimeng:seedance2.0');
   assert.deepEqual(await page.evaluate(() => [window.options.duration, window.options.video_resolution]), [15, "720p"]);
   // Restored legacy tasks retain their original parameters but cannot be newly selected.
   await page.evaluate(() => window.setOptions({ ...window.options, model_version: 'seedance2.0_vip' }));
-  await page.getByLabel("视频分辨率", { exact: true }).selectOption("4k");
+  await select('视频分辨率', '4k');
   await page.getByTitle('选择视频模型', { exact: true }).click();
   assert.equal(await page.locator('[data-model-key*="vip"]').count(), 0);
   assert.equal(await page.locator('[data-model-key*="fast"]').count(), 0);
@@ -32,7 +42,7 @@ try {
   assert.deepEqual(await page.evaluate(() => [window.options.model_version, window.options.video_resolution]), ["seedance2.5", "720p"]);
   assert.equal(await page.getByLabel("刷新即梦剩余积分").count(), 0);
   await choose('jimeng:seedance2.0mini');
-  await page.getByLabel("视频生成模式").selectOption("image2video");
+  await select('视频生成模式', '首尾帧');
   await page.evaluate(() => window.setOptions({ ...window.options, model_version: 'seedance1.0fast' }));
   await waitText('Seedance 1.0 Fast');
   assert.equal(await page.getByLabel("视频时长（秒）").getAttribute("max"), "10");
@@ -45,6 +55,9 @@ try {
   await page.getByLabel("刷新即梦剩余积分").click();
   await waitText("即梦剩余：查询失败");
   assert.equal((await page.locator("body").innerText()).includes("8,800"), false);
+  await page.evaluate(() => { window.setOptions({ ...window.options, model_version: 'seedance2.5' }); window.remount(); });
+  await select('视频分辨率', '1080p');
+  assert.equal(await page.evaluate(() => window.calls.filter(call => call.command === 'dreamina_video_models').length), 0, 'unavailable IPC never blocks resolution selection');
   await page.evaluate(() => { window.fail = false; window.balance = 0; window.cost = null; });
   await page.getByLabel("刷新即梦剩余积分").click();
   await waitText("即梦剩余：0 积分");
@@ -72,7 +85,7 @@ try {
   await page.evaluate(() => {
     const previous = window.__TAURI_INTERNALS__.invoke;
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
-      if (command === "dreamina_video_models") return [{ model_version: "seedance2.5", resolutions: ["480p", "720p", "1080p"], min_duration: 4, max_duration: 30 }];
+      if (command === "dreamina_video_models") { window.modelQueries = (window.modelQueries || 0) + 1; throw '建卡不应查询模型能力'; }
       if (command === "dreamina_credit_balance") return 9434;
       if (command === "dreamina_task_credit") return args.submitId === "old-task" ? 120 : 240;
       return previous(command, args);
@@ -87,7 +100,7 @@ try {
   await page.getByRole('dialog', { name: '视频模型', exact: true }).getByRole('button', { name: '刷新即梦剩余积分' }).click();
   await waitText("即梦剩余：9,434 积分");
   await page.keyboard.press('Escape');
-  await page.getByLabel("视频分辨率", { exact: true }).selectOption("1080p");
+  await select('视频分辨率', '1080p');
   await page.evaluate(() => {
     const options = { kind: "text2video", model_version: "seedance2.5", duration: 5, video_resolution: "720p" };
     const job = { id: "video-job", projectId: "p", threadId: "t", sessionId: "video-session", provider: "jimeng", media: "video", videoOptions: options,
@@ -99,6 +112,7 @@ try {
   await page.locator('[data-generation-turn-key="old-turn"]').getByText("本次消耗：120 积分").waitFor();
   await page.locator('[data-generation-turn-key="new-turn"]').getByText("本次消耗：240 积分").waitFor();
   assert.deepEqual(errors, []);
+  assert.equal(await page.evaluate(() => window.modelQueries || 0), 0);
   await page.waitForTimeout(400);
   await page.screenshot({ path: ".tmp/video-controls/canvas.png" });
   console.log("PASS: official-model selection, limits, channel switch, balance refresh, task identity, missing/error/zero credits, and narrow layout");

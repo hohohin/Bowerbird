@@ -41,6 +41,7 @@ try {
     check(copies.every(n=>!Object.keys(n.outputs).length&&!n.sessionNodeIds.length&&!n.activeSessionNodeId&&!n.profileCache),'runtime state cleared');
     check(two.x-one.x===450&&two.y===one.y,'relative placement');
     const {api}=await import('/src/lib/api.ts');const {useStore}=await import('/src/store.ts');api.localAgentFindAssetId=async()=> 'existing';let submitted=0;
+    useStore.setState({ codexHealth: { ok: true, reason: '' }, cloudEntitlement: { policy: { can_use_byo: true }, balances: { daily: 100, sub: 0, topup: 0 } } });
     const {publishGeneration}=await import('/scripts/fixtures/canvas-reference/generation.ts');const generated=[];
     useStore.setState({startGeneration:async(...args)=>{submitted++;const identity=args[12];await publishGeneration(args,['existing.png']);generated.push(`gen-prompt:${identity.jobId}:${identity.turnKey}:0`,`gen-output:${identity.jobId}:${identity.turnKey}:0`);useStore.setState(s=>({genJobs:{...s.genJobs,[identity.jobId]:{turns:[{turnKey:identity.turnKey,images:['existing.png']}]}}}));return {accepted:true};}});
     await c.start(key.id);check(c.document.run.status==='done'&&submitted===2,`copied workflow executes: ${JSON.stringify({run:c.document.run,submitted})}`);

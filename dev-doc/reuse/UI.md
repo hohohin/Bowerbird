@@ -9,6 +9,12 @@
 
 ## 让新界面沿用主题、按钮和字段
 
+工作流模板预览与首次运行前的 Agent 详情共用 `workflowPromptPreview` 将提示词内的引用标记显示为对应名称。[工作流提示词](../../apps/desktop/src/lib/canvasWorkflow.ts)
+
+手动组图复用 [GenerationGroupMenuItem.tsx](../../apps/desktop/src/components/GenerationGroupMenuItem.tsx) 的 `MergeGenerationGroupMenuItem`（图片多选）和 `GenerationGroupMenuItem`（解散）。调用为 `AssetContextMenu` 与 `CanvasWorkspace`，显示继续共用 `GenerationGroupControls`／`CanvasConversationImages`。普通图片创作框的「并入上个生成」是显式选择，不复用模型会话作为展示别名；实现见 [显式合组](../CANVAS-WORKFLOW.md#2026-11-11显式抽卡与手动合组源码待发布)。
+
+视频模型／分辨率／时长复用 `VideoControls` 与 `videoGeneration.ts` 的 `videoResolutions`／`videoDurationRange`，建卡和切模式直接使用已确认配置；不要重新引入 `dreaminaVideoModels` 或 CLI 帮助读取作为 UI 前置条件。该控制组件供创作框及工作流共用，保留本机登录／权益及 Cloud 门控。[背景与巡检](../SEEDANCE-2.5-INTEGRATION.md#2026-11-10建卡免核验与后台每日规格巡检)。
+
 角色声音使用 `CanvasWorkflowLayer` 的工作流卡片、输入输出连线与复制／移动交互。`VoiceCard` 复用 TacticalSelect、AudioWaveform、VoiceReferenceTrim 和项目音频检索；`VoiceEnvironmentControl` 沿用 H3 标题栏环境状态点和公共弹窗。`VoiceReferenceTrim` 与视频共享 MediaTrimTimeline 的双端手柄、时间输入与键盘细调。见 [声音卡片](../VOICE-STUDIO.md)。
 
 强化分析输出复用 `CanvasTextCard` 与 `canvasNotes` 的图片／文字单元格，每镜头一行、图片与分析两列；`replicationAnalysisNote` 仅负责业务数据适配。`VideoPlayer.seekRequest` 是可选的外部时间定位请求，强化分析点击镜头时暂停并定位原片；旧调用方不传时保持原行为。
@@ -70,24 +76,26 @@ H3 优化按钮共用 [H3OptimizeButton.tsx](../../apps/desktop/src/components/c
 ## 给画布卡片添加统一连接加号
 
 - **用途／关键词：** 端口、加号、输入输出、磁吸、整卡接收、自动连接、热区。
-- **入口：** [CanvasConnectionHandle.tsx](../../apps/desktop/src/components/CanvasConnectionHandle.tsx) 的 `CanvasConnectionHandle`／`CanvasConnectionHandleProps` 兼容原生 button 属性，提供 `side: "input" | "output"`、`active`、可选 `zoom` 及转发 ref；宿主提供事件回调。卡片或热区悬浮／选中／键盘显隐、禁用命中关闭、92.16px 固定热区、25.2px 标记、紧凑方框与斜纹加号造型、视觉磁吸、重叠热区就近选择及减少动态效果均由组件与同名 CSS 共用，尺寸与动效见 [端口规范](../UI-DESIGN-SPEC.md#8-输入输出端口)。
-- **实用证据：** [CanvasWorkflowLayer.tsx](../../apps/desktop/src/components/CanvasWorkflowLayer.tsx) 用于工作流／素材数据连接，[CanvasTextCard.tsx](../../apps/desktop/src/components/CanvasTextCard.tsx) 与 [CanvasDocumentCard.tsx](../../apps/desktop/src/components/CanvasDocumentCard.tsx) 用于原生卡片。画布容器提供 `--canvas-zoom` 和草稿期间的 `data-canvas-connecting`，发起卡片的 `data-canvas-connection-source` 保留对应一侧入口，按钮输出 `data-canvas-connect-side`；键盘激活由宿主按按钮中心打开连接菜单。
+- **单元格宿主：** `CanvasTextCard` 复用同一控件及手势，`CanvasTextCard.css` 仅覆盖单元格的 28×32 画布像素热区与悬停显隐；`CanvasWorkflowLayer` 以 `scope` 复用自动连接、菜单和 `useWorkflowPortGeometry` 的单元格边界。格内图片复用 `useCreationImageInteraction` 和 `AssetContextMenu`，引用不携带父表格实例身份；菜单传单素材集合和局部移除回调，避免删除父卡。
+- **入口：** [CanvasConnectionHandle.tsx](../../apps/desktop/src/components/CanvasConnectionHandle.tsx) 的 `CanvasConnectionHandle`／`CanvasConnectionHandleProps` 兼容原生 button 属性，提供 `side: "input" | "output"`、`active` 及转发 ref；宿主提供事件回调。卡片或热区悬浮／选中／键盘显隐、禁用命中关闭、同比缩放的 92.16px 热区与 25.2px 标记（100% 基准）、紧凑方框与斜纹加号造型、视觉磁吸、重叠热区就近选择及减少动态效果均由组件与同名 CSS 共用，尺寸与动效见 [端口规范](../UI-DESIGN-SPEC.md#8-输入输出端口)。
+- **实用证据：** [CanvasWorkflowLayer.tsx](../../apps/desktop/src/components/CanvasWorkflowLayer.tsx) 用于工作流／素材数据连接，[CanvasTextCard.tsx](../../apps/desktop/src/components/CanvasTextCard.tsx) 与 [CanvasDocumentCard.tsx](../../apps/desktop/src/components/CanvasDocumentCard.tsx) 用于原生卡片。控件随画布容器的 transform 缩放，容器在草稿期间提供 `data-canvas-connecting`，发起卡片的 `data-canvas-connection-source` 保留对应一侧入口，按钮输出 `data-canvas-connect-side`；键盘激活由宿主按按钮中心打开连接菜单。
 - **范围／状态：画布领域共用。** 组件只管理命中与可见反馈，不提交连接或解释媒体类型。交互状态统一归 `CanvasWorkflowLayer`（轻点菜单、180ms 长按或超过 5px 拖动牵线、发起标记隐藏、整卡命中、空白菜单、右键取消），类型交集归 [workflowAutoConnect.ts](../../apps/desktop/src/lib/workflowAutoConnect.ts) 的 `planAutomaticConnection`，持久化归 [canvasWorkflowRuntime.ts](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 的 `connectAutomatic`／`disconnectAutomatic`；消费者不复制手势层或直接写入多条 typed 绑定。菜单复用 `ContextMenu`／`ContextSubmenu`，旧精确端口位置仍由 [useWorkflowPortGeometry.ts](../../apps/desktop/src/lib/useWorkflowPortGeometry.ts) 缓存。
 - **显示边界：** `CanvasWorkspace` 以既有 `liveGraphNodes` 提供 `visibleGraphNodeIds`，供 `CanvasWorkflowLayer` 限定名称和会话热区；完整 `graphNodes` 仍供历史引用解析。新增覆盖层应沿同一可见投影，避免 Agent 收纳／归档节点留下空热区；`canvas-overlay-visibility-ui.test.mjs` 覆盖隐藏与恢复。
-- **验证：** `canvas-connection-handle-ui.test.mjs` 验证固定屏幕尺寸、磁吸／取消、编辑与键盘及重叠命中；`canvas-auto-connect-ui.test.mjs` 验证实际交互层。运行、原子保存与兼容边界见 [工作流协议](../CANVAS-WORKFLOW.md#2026-11-04统一加号与自动内容连接源码未发布)。
+- **验证：** `canvas-connection-handle-ui.test.mjs` 验证不同缩放下的实际尺寸、磁吸／取消、编辑与键盘及重叠命中；`canvas-auto-connect-ui.test.mjs` 验证实际交互层。运行、原子保存与兼容边界见 [工作流协议](../CANVAS-WORKFLOW.md#2026-11-04统一加号与自动内容连接源码未发布)。
 
 ## 选择对话模型与推理强度
 
-- Agent 卡片的 `AgentChatControls` 组合现有 `ChatProviderSelect` 与 `CodexModelSelect`，流式预览用 `LocalChatCard`，详情／续聊／恢复用 `LocalChatPanel`。`WorkflowAgentDetail` 只承载旧任务查询。新建卡片不复制会话组件或执行器；卡片绑定 chatConversationId，复制时清除，模板 v6 只保留 provider／模型配置。
+- Agent 卡片的 `AgentChatControls` 组合现有 `ChatProviderSelect` 与 `CodexModelSelect`。流式回复、详情、续聊和恢复共用 `LocalChatPanel`，旧任务通过 `WorkflowAgentDetail` 查看结果。卡面只提供运行状态和详情入口，内容输出和直接建卡复用现有交付逻辑。卡片绑定 chatConversationId，复制时清除，模板 v6 只保留 provider／模型配置。
 
 - 对话 provider 集合与标签统一由 `lib/chatProvider.ts` 提供；`ChatProviderSelect` 在创作框和详情复用 `ModelSelect`、`ModalShell`，支持 Codex、DeepSeek Cloud、本机 DSH、DSH · Cloud。DSH 设置使用 `localChat.dshStatus/dshSetup`；`ModelSelect.footer(close)` 可在打开设置前关闭当前菜单，既有 ReactNode footer 仍兼容。
-- DSH 接入沿 `local_chat.rs` 分派，历史／恢复复用原数据库，卡片工具复用 `local_chat_cards::create_cards`。`local_chat_dsh` 的托管桥复用 Cloud 单次 completion，本机桥复用 `agent_ds::dsh_connection/dsh_client`；这些是桌面内部接口，不能跨运行时导入或用原 ds-inbox 单向投递代替会话协议。详见[对话 provider](../CHAT-PROVIDERS.md)。
-- 本机／Cloud 来源仍用 `creation/ChatProviderSelect.tsx`；本机 Codex 参数用 `creation/CodexModelSelect.tsx`，在 `CreationBoard` 与 `LocalChatPanel` 共用。后者复用公共 `TacticalSelect` 的键盘、菜单与主题，不另造模型菜单。
+- DSH 接入沿 `local_chat.rs` 分派，历史与建卡复用 SQLite 和 `local_chat_cards::create_cards`。本机桥复用 `agent_ds::dsh_connection/dsh_client`；新版 Cloud 桥由 `local_chat_dsh_vps.rs` 按原任务身份收发。卡片、创作框与详情复用 [DshSkillSelect](../../apps/desktop/src/components/creation/DshSkillSelect.tsx)，仅传技能 ID 与用户参数。详见[对话 provider](../CHAT-PROVIDERS.md)。
+- 本机／Cloud 来源使用 `creation/ChatProviderSelect.tsx`，本机 Codex 参数使用 `creation/CodexModelSelect.tsx`，由 Agent 卡片、`CreationBoard` 和 `LocalChatPanel` 共用。能力快照由 [chatCapabilities.ts](../../apps/desktop/src/lib/chatCapabilities.ts) 在主窗口启动时读取。Cloud 报价按登录账号隔离，本机 Codex 安装／登录变化后重读目录，DSH 设置结果同步到所有选择器。菜单的「重新检查」可手动刷新三项。发送仍由原生执行路径验证。
 - 型号及支持的推理强度来自 `localChat.models()` 的本机 CLI 能力目录。只用于桌面对话，不把图片生成 provider 当成 Codex 子模型；Cloud 隐藏且不发送这些参数。
 - 参数属于下一轮消息，未发送选择随草稿保留，已发送选择从会话恢复。更换型号时重新核对该型号支持的强度，过期选项不静默替换。
 
 ## 选择生成模型或图片比例
 
+- 卡片、创作框和会话续轮使用 [generationProviderIssue](../../apps/desktop/src/lib/generationAvailability.ts) 检查本次实际提交的图片或视频 provider。[ProviderIssueNotice](../../apps/desktop/src/components/creation/ProviderIssueNotice.tsx) 展示原因，并按返回的设置目标打开对应的自有订阅授权卡或账号页。工作流各卡片的渠道映射在 [workflowProviderIssue.ts](../../apps/desktop/src/lib/workflowProviderIssue.ts)。
 - **用途／关键词：** provider、模型、比例、ratio、默认模型、Bcoin。
 - **入口：** [creation/ProviderSelect.tsx](../../apps/desktop/src/components/creation/ProviderSelect.tsx) 的 `ProviderSelect` 负责图片 provider 选择；其内部用 [ModelSelect.tsx](../../apps/desktop/src/components/creation/ModelSelect.tsx) 的 `ModelSelect`。比例图形菜单用 [RatioSelect.tsx](../../apps/desktop/src/components/creation/RatioSelect.tsx) 的 `RatioSelect`。
 - **实用证据：** [CreationBoard.tsx](../../apps/desktop/src/components/CreationBoard.tsx) 调用 `ProviderSelect` 与 `RatioSelect`；`ProviderSelect` 生成 `ModelOption[]` 后调用 `ModelSelect`。
@@ -155,7 +163,7 @@ H3 优化按钮共用 [H3OptimizeButton.tsx](../../apps/desktop/src/components/c
 - **用途／关键词：** 创作状态、单击预览、双击引用、拖动抑制、迟到回包。
 - **入口：** [CreationModeIndicator.tsx](../../apps/desktop/src/components/CreationModeIndicator.tsx) 的 `CreationModeIndicator`；行为用 [useCreationImageInteraction.ts](../../apps/desktop/src/components/useCreationImageInteraction.ts) 的 `useCreationImageInteraction`／`CreationImageTarget`，宿主只负责解析媒体归属与绑定 gesture。
 - **实用证据：** [App.tsx](../../apps/desktop/src/App.tsx) 与 [CanvasWorkspace.tsx](../../apps/desktop/src/components/CanvasWorkspace.tsx) 都挂标记；后者调用手势 Hook，[useHomeCreationImage.ts](../../apps/desktop/src/components/useHomeCreationImage.ts) 适配主屏并由 [HomeWorkspace.tsx](../../apps/desktop/src/components/HomeWorkspace.tsx) 绑定事件。
-- **范围／状态：可跨模块复用（普通浏览与创作模式图片）。** 标记不管理业务状态；Hook 依赖 `useStore`、素材 API、`BOARD_ASSET_PICK_EVENT` 及 `data-asset-id` 等媒体属性，并校验当前项目路由。普通模式图片立即预览，创作模式保留双击一次引用；只处理图片，保留修饰键、拖动、普通会话正文编辑和音视频原行为。主屏适配 `useHomeCreationImage` 本身不是其他板块的通用入口。
+- **范围。** 项目画板与素材库主页共用该手势。浏览图片时单击预览，创作时双击添加引用。「视频」或「对话」创作框激活后，视频同样支持单击播放、双击引用。画板通过 `handlesVideo` 把鼠标松开后的打开动作交给同一手势处理，点击组图时取当前显示项。Hook 校验当前项目、素材身份、修饰键与拖动状态，通过 `BOARD_ASSET_PICK_EVENT` 投递引用。
 - **图片详情复用：** [CreationImagePreview.tsx](../../apps/desktop/src/components/CreationImagePreview.tsx) 左侧使用 [AssetDetail.tsx](../../apps/desktop/src/components/AssetDetail.tsx) 的 `panelOnly` 与显式 `selection`，`initialAsset` 支持不在当前列表中的图片先显示元信息；详情数据和编辑仍走原接口。该模式直接展示信息，不挂载页签、再创作内容、详情页工具栏、原图或组内导航，也不重复读取生成历史；中间原图及右侧会话由预览宿主管理，独立详情默认保留原页签。「双击添加参考图」由共用 `CreationBoard` 的输入区底部留白展示，仅「双击」加粗；`CreationModeIndicator` 保留顶部创作状态。
 - **预览续轮：** 私有 [ImagePreviewContinuation.tsx](../../apps/desktop/src/components/ImagePreviewContinuation.tsx) 保留独立文本草稿，复用 store 的显式 `sendGenRevise(jobId, ...)`／`cancelGeneration(jobId)`，不接管主创作编辑器。[imagePreviewContinuation.ts](../../apps/desktop/src/lib/imagePreviewContinuation.ts) 共用历史轮映射，发送时恢复真实任务与原项目／线程归属；歧义拒绝、路由／关闭作废及权益门控保持。预览订阅目标实时任务，继续用 `GenerationPanel` 的只读历史视图屏蔽依赖全局任务的操作，显式 `followLatest` 在续轮、图片加载及失败时跟随底部；其他调用默认保留原滚动行为。两侧收起均保持挂载以保留草稿与阅读位置。
 - **自由图片舞台：** 同一预览支持普通导入图片，没有会话时只显示图片和详情。详情／会话均可独立收起，工具栏保留重开入口；详情保持挂载以保留未完成编辑和滚动位置。`CreationImagePreview.css` 仅在窗口边界裁切，图片与角标共同变换；预览私有 [useImagePreviewHud.ts](../../apps/desktop/src/components/useImagePreviewHud.ts) 按图片边界定位四组标题／控制，维持屏幕尺寸、窗口安全边距及侧面板避让，并将预览中心换算成每侧局部坐标作为共同旋转／透视原点，不作为跨模块布局接口。拖拽／滚轮只从图片开始，空白单击退出，按下／松手来源和移动距离防止拖图误关。外围投影线保留，面板及图片后层沿用 `ProjectManagerPanel.css`／`ProjectCreateCard.css` 的层叠与短闪语汇，不导入项目卡片内部逻辑；两侧正文与底板同属一个虚拟平面，选取／输入／键盘聚焦时共享姿态锁定，原图保持平面。缩放复用 [useImageZoom.ts](../../apps/desktop/src/lib/useImageZoom.ts) 的 `zoomBy`／`reset`；宿主显式允许 0.1–16 倍，原灯箱与普通详情仍默认 1–8 倍。已移除没有消费者的空白舞台滚轮参数。
@@ -193,3 +201,7 @@ H3 优化按钮共用 [H3OptimizeButton.tsx](../../apps/desktop/src/components/c
 - 视频链接采集入口：`VideoCollectionEntry` 由 `SourceBrowserPanel` 在探索工具栏使用；`ExploreWorkspace` 传递主应用的新建项目回调。素材库不再挂载入口，采集与画板交付继续复用原实现。
 
 - 文档卡片文本输出：`canvasNoteValue` 复用 `documentPreviewText` 的语法树正文提取，传入无限长度以避免摘要截断；素材引用先由 `documentWorkflowValue` 投影，再移除 Markdown 标记。编辑器回填仍使用原投影。
+
+## 头像、登录与余额
+
+顶栏 [SidebarAccount](../../apps/desktop/src/components/SidebarAccount.tsx) 将登录、账号概览和积分明细分别送到对应面板。微信或邮箱登录后，[AccountOnboarding](../../apps/desktop/src/components/AccountOnboarding.tsx) 打开同一 [SettingsDialog](../../apps/desktop/src/components/SettingsDialog.tsx) 的账号分区。复用 [CreditDetails](../../apps/desktop/src/components/CreditDetails.tsx) 展示真实收支，[AccountBilling](../../apps/desktop/src/components/AccountBilling.tsx) 处理可展开的方案与充值，[RedeemCodeCard](../../apps/desktop/src/components/RedeemCodeCard.tsx) 处理兑换与回执。概览与顶栏使用 `accountEntitlement` 核对账号和快照有效状态。

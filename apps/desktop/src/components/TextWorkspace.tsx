@@ -22,6 +22,7 @@ interface Props {
   projectId?: string;
   origin?: TextDocumentOrigin;
   onChange?(document: TextWorkspaceDocument, context: { isSourceDocument: boolean }): void;
+  onPendingInput?(capture: () => void): void;
   onClose(document: TextWorkspaceDocument): void;
   onAddToComposer(document: TextWorkspaceDocument, context: { isSourceDocument: boolean }): void | Promise<void>;
 }
@@ -151,8 +152,8 @@ function useToolbarHeight(panel: { current: HTMLDivElement | null }, ready: bool
   }, [panel, ready]);
 }
 
-export function TextWorkspace({ initialDocument, projectId, origin, onChange, onClose, onAddToComposer }: Props) {
-  const document = useRecentTextDocument(initialDocument, origin, onChange);
+export function TextWorkspace({ initialDocument, projectId, origin, onChange, onClose, onAddToComposer, onPendingInput }: Props) {
+  const document = useRecentTextDocument(initialDocument, origin, onChange, onPendingInput);
   const [library, setLibrary] = useState(true), [menu, setMenu] = useState<"collection" | "project" | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const [portalTarget, setPortalTarget] = useState<HTMLDivElement | null>(null);
@@ -168,13 +169,16 @@ export function TextWorkspace({ initialDocument, projectId, origin, onChange, on
   const close = () => { if (!document.ready) { onClose(initialDocument); return; } void document.flush().then(() => onClose(document.bound.current.document)).catch(() => {}); };
   const closeTop = () => { if (menu) setMenu(null); else close(); };
   const insertAsset = (asset: Asset) => { void insertWorkspaceAsset(activity, plate.current, resolveMedia, asset); };
-  const save = (destination: TextDocumentDestination, label: string) => { setMenu(null); void saveWorkspace(activity, destination, label); };
-  const add = () => void addWorkspace(activity, async next => {
-    await document.flush();
-    if (next !== document.current.current) throw new Error("文本已有新的更改，请再次添加；当前内容已保留。");
-    await onAddToComposer(next, { isSourceDocument: document.isSourceDocument() });
-  });
-  const { draft, value, update, changeValue } = document;
+  const save = (destination: TextDocumentDestination, label: string) => { document.capture(); setMenu(null); void saveWorkspace(activity, destination, label); };
+  const add = () => {
+    document.capture();
+    void addWorkspace(activity, async next => {
+      await document.flush();
+      if (next !== document.current.current) throw new Error("文本已有新的更改，请再次添加；当前内容已保留。");
+      await onAddToComposer(next, { isSourceDocument: document.isSourceDocument() });
+    });
+  };
+  const { draft, value, rename, changeValue } = document;
   const keyDown = (event: React.KeyboardEvent) => workspaceKeyDown(event, panel.current!, closeTop);
   return createPortal(<div className="text-workspace" ref={panel} tabIndex={-1} role="dialog" aria-modal="true" aria-label="文本编辑器" onKeyDown={keyDown} onPointerDown={event => event.stopPropagation()} onClick={event => event.stopPropagation()}>
     <PortalTargetContext.Provider value={portalTarget}>
@@ -183,7 +187,7 @@ export function TextWorkspace({ initialDocument, projectId, origin, onChange, on
     <div className={`text-workspace-layout canvas-workspace canvas-tactical${library ? "" : " is-source-collapsed"}`}><TextWorkspaceLibrary open={library} projectId={projectId} onInsert={insertAsset} onClose={() => setLibrary(false)} onNavigate={close} onReusePrompt={text => plate.current?.insertMarkdown(text)}/>
       <main className="text-workspace-writing">
         <section className="text-document-editor">{document.ready ? <TextPlateEditor key={draft.id} ref={plate} agent={{ projectId }} value={value} media={media} onChange={changeValue} onDropAssets={resolveMedia}
-          toolbarStart={<div className="text-workspace-name"><button className="text-workspace-icon" aria-label="返回" title="返回" onClick={close}><ArrowLeft size={18}/></button><FileText size={16}/><input aria-label="文档名称" title="重命名文档" value={draft.title} placeholder="空白文档" onChange={event => update({ ...draft, title: event.target.value })}/><TextAutosaveStatus status={document.status}/><RecentTextDocuments currentId={draft.id} disabled={busy} beforeOpen={document.flush} onChoose={id => { setMenu(null); setError(""); setNotice(""); void document.choose(id); }}/>{!library && <button className="text-workspace-icon" aria-label="打开素材库" title="打开素材库" onClick={() => setLibrary(true)}><PanelLeft size={16}/></button>}</div>}
+          toolbarStart={<div className="text-workspace-name"><button className="text-workspace-icon" aria-label="返回" title="返回" onClick={close}><ArrowLeft size={18}/></button><FileText size={16}/><input aria-label="文档名称" title="重命名文档" value={draft.title} placeholder="空白文档" onChange={event => rename(event.target.value)}/><TextAutosaveStatus status={document.status}/><RecentTextDocuments currentId={draft.id} disabled={busy} beforeOpen={document.flush} onChoose={id => { setMenu(null); setError(""); setNotice(""); void document.choose(id); }}/>{!library && <button className="text-workspace-icon" aria-label="打开素材库" title="打开素材库" onClick={() => setLibrary(true)}><PanelLeft size={16}/></button>}</div>}
           toolbarEnd={<WorkspaceActions projectId={projectId} busy={busy} menu={menu} setMenu={setMenu} save={save} add={add}/>}/> : <div><button onClick={close}>返回</button><p role="status">{document.error ? "文档暂时无法打开，请重试。" : "正在打开文档…"}</p></div>}</section>
       </main>
     </div>

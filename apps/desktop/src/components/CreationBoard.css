@@ -49,6 +49,22 @@ html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: r
 .composer-add-material { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 8px; border-radius: 999px; font-size: 12px; color: var(--bb-muted); white-space: nowrap; }
 .composer-add-material kbd { border: 1px solid var(--bb-line); border-radius: 4px; padding: 0 3px; font-size: 10px; }
 .composer-help { order: 2; }
+.composer-join-wrap { position: relative; order: 2; flex-shrink: 0; }
+.composer-join-bubble { position: absolute; right: 0; bottom: 100%; z-index: 35; width: min(260px, calc(100vw - 24px)); padding-bottom: 4px; }
+.composer-join-bubble.align-left { left: 0; right: auto; }
+.composer-join-bubble [role="status"] { display: block; padding: 5px; color: var(--bb-muted); font-size: 12px; }
+.composer-join-link { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; padding: 6px; text-align: left; color: var(--bb-ink); font-size: 13px; }
+.composer-join-link span { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.composer-join-link svg { flex-shrink: 0; color: var(--bb-blue); }
+.composer-join-link:is(:hover,:focus-visible) { background: var(--library-glass-hover); }
+.composer-join-link:focus-visible { outline: 1px solid var(--bb-blue); }
+.composer-join-previous { order: 2; display: inline-flex; align-items: center; gap: 6px; min-height: 30px; flex-shrink: 0; color: var(--bb-ink-soft); font-size: 12px; white-space: nowrap; cursor: pointer; }
+.composer-join-previous input { appearance: none; width: 13px; height: 13px; margin: 0; border: 1px solid var(--bb-muted); border-radius: 0; background: transparent; display: grid; place-content: center; cursor: inherit; }
+.composer-join-previous input::before { content: ""; width: 7px; height: 7px; background: var(--bb-blue); transform: scale(0); }
+.composer-join-previous input:checked::before { transform: scale(1); }
+.composer-join-previous:has(input:checked) { color: var(--bb-blue); }
+.composer-join-previous:has(input:disabled) { color: var(--bb-muted); opacity: .55; cursor: default; }
+.composer-join-previous input:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 3px; }
 .composer-send { order: 3; align-self: flex-end; }
 .composer-parameters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex: 1 1 260px; min-width: 0; }
 .composer-glass .composer-toolbar.is-video { flex-wrap: nowrap; gap: 6px; }
@@ -83,7 +99,6 @@ html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: r
 .composer-glass .composer-parameters .composer-video-fields :is(select, .tactical-select-trigger) { width: auto; max-width: none; }
 .composer-toolbar.is-video .composer-add-material { flex-shrink: 0; }
 .composer-toolbar.is-video .composer-send { flex-shrink: 0; align-self: center; }
-.composer-video-retry { display: grid; place-items: center; flex-shrink: 0; width: 24px; height: 30px; color: var(--bb-muted); }
 @media (max-width: 1000px) {
   .composer-toolbar.is-video .composer-add-material { width: 32px; padding: 0; justify-content: center; font-size: 0; gap: 0; }
   .composer-toolbar.is-video .composer-add-material kbd { display: none; }

@@ -13,15 +13,14 @@ use crate::{
 pub enum ChatProvider {
     #[default]
     CodexLocal,
-    DeepseekCloud,
     DshLocal,
+    #[serde(alias = "deepseek-cloud")]
     DshCloud,
 }
 impl ChatProvider {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::CodexLocal => "codex-local",
-            Self::DeepseekCloud => "deepseek-cloud",
             Self::DshLocal => "dsh-local",
             Self::DshCloud => "dsh-cloud",
         }
@@ -59,13 +58,46 @@ impl ChatCodexOptions {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChatH3Parameters {
+    pub mode: String,
+    pub seconds: f64,
+    pub ratio: String,
+    pub first_frame_count: u8,
+    pub last_frame_count: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "id", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ChatDshSkill {
+    TextEditor {},
+    H3VideoPrompt { parameters: ChatH3Parameters },
+}
+impl ChatDshSkill {
+    pub fn validate(&self) -> AppResult<()> {
+        if let Self::H3VideoPrompt { parameters: p } = self {
+            if !p.seconds.is_finite() || p.seconds <= 0.0 || p.seconds > 120.0
+                || !matches!(p.ratio.as_str(), "9:16"|"16:9"|"4:3"|"3:4"|"1:1"|"auto")
+                || !matches!((p.mode.as_str(),p.first_frame_count,p.last_frame_count),
+                    ("text",0,0)|("reference",1,0)|("frames",1,0|1)) {
+                return Err(error("H3 视频提示词参数无效，请重新设置"));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ChatSendInput {
     pub provider: Option<ChatProvider>,
     pub codex_options: Option<ChatCodexOptions>,
+    pub dsh_skill: Option<ChatDshSkill>,
     pub project_id: String,
     pub conversation_id: Option<String>,
     /// Attach the shared conversation to an existing workflow Agent card.
     pub agent_node_id: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub manual_card_run: bool,
     pub request_id: String,
     pub text: String,
     #[serde(default)]
@@ -114,6 +146,9 @@ pub struct ChatConversation {
     pub summary: ChatSummary,
     pub messages: Vec<ChatMessage>,
     pub actions: Vec<super::local_chat_cards::ChatCardAction>,
+    /// First server-memory turn following a local-only transcript (display only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vps_history_start_turn_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub submitted_turn_id: Option<String>,
 }
@@ -131,7 +166,8 @@ const SUMMARY_SQL: &str = "SELECT c.id,c.project_id,c.thread_id,c.node_id,c.titl
  (SELECT COUNT(*) FROM local_chat_turns t WHERE t.conversation_id=c.id),
  COALESCE((SELECT substr(m.text,1,240) FROM local_chat_messages m WHERE m.conversation_id=c.id AND m.role='assistant' AND m.text<>'' ORDER BY m.created_at DESC,m.id DESC LIMIT 1),''),
  c.revision,c.created_at,c.updated_at,c.error,
- (SELECT json_extract(t.request_json,'$.resolvedCodexOptions') FROM local_chat_turns t WHERE t.conversation_id=c.id ORDER BY t.created_at DESC,t.rowid DESC LIMIT 1)
+ COALESCE((SELECT json_extract(t.request_json,'$.resolvedCodexOptions') FROM local_chat_turns t WHERE t.conversation_id=c.id ORDER BY t.created_at DESC,t.rowid DESC LIMIT 1),
+          (SELECT json_extract(n.payload_json,'$.initialCodexOptions') FROM canvas_nodes n WHERE n.id=c.node_id))
  FROM local_chat_conversations c";
 
 fn summary(row: &Row<'_>) -> rusqlite::Result<ChatSummary> {
@@ -160,7 +196,9 @@ fn read(conn: &Connection, id: &str) -> AppResult<Option<ChatConversation>> {
     else {
         return Ok(None);
     };
-    let mut statement = conn.prepare("SELECT id,turn_id,role,text,reference_asset_ids,status,created_at,updated_at FROM local_chat_messages WHERE conversation_id=?1 ORDER BY created_at,id")?;
+    let mut statement = conn.prepare("SELECT m.id,m.turn_id,m.role,m.text,m.reference_asset_ids,m.status,m.created_at,m.updated_at
+        FROM local_chat_messages m JOIN local_chat_turns t ON t.id=m.turn_id WHERE m.conversation_id=?1
+        ORDER BY t.created_at,t.rowid,m.created_at,m.id")?;
     let messages = statement
         .query_map([id], |row| {
             let references: String = row.get(4)?;
@@ -177,10 +215,20 @@ fn read(conn: &Connection, id: &str) -> AppResult<Option<ChatConversation>> {
         })?
         .collect::<Result<Vec<_>, _>>()?;
     let actions = super::local_chat_cards::read_actions(conn, id)?;
+    let vps_history_start_turn_id = if summary.provider == "dsh-cloud" && summary.turn_count > 1 {
+        conn.query_row("WITH turns AS (
+            SELECT id,rowid AS seq,COALESCE(CASE WHEN json_valid(provider_turn_id) THEN json_extract(provider_turn_id,'$.engine') END,'') AS engine,
+              (json_extract(request_json,'$.agentNodeId') IS NULL OR json_extract(request_json,'$.manualCardRun') IS 1) AS interactive
+            FROM local_chat_turns WHERE conversation_id=?1
+        ), first_v2 AS (SELECT id,seq FROM turns WHERE interactive AND engine='dsh-vps-v2' ORDER BY seq LIMIT 1)
+        SELECT id FROM first_v2 WHERE EXISTS (SELECT 1 FROM turns WHERE turns.seq<first_v2.seq AND turns.engine<>'dsh-vps-v2')",
+            [id], |row| row.get(0)).optional()?
+    } else { None };
     Ok(Some(ChatConversation {
         summary,
         messages,
         actions,
+        vps_history_start_turn_id,
         submitted_turn_id: None,
     }))
 }
@@ -214,6 +262,9 @@ fn project_agent_card(conn: &Connection, chat: &ChatConversation, input: &ChatSe
         return Err(error("Agent 卡片与对话身份不匹配"));
     }
     let before = node.clone();
+    if node["chatConversationId"].is_null() {
+        if let Some(skill) = &input.dsh_skill { node["chatDshSkill"] = serde_json::to_value(skill)?; }
+    }
     node["chatConversationId"] = serde_json::json!(chat.summary.id);
     node["chatProvider"] = serde_json::json!(chat.summary.provider);
     if let Some(options) = &chat.summary.codex_options { node["chatCodexOptions"] = serde_json::to_value(options)?; }
@@ -255,6 +306,13 @@ fn request_fingerprint(input: &ChatSendInput, provider: ChatProvider) -> AppResu
     if let Some(id) = &input.agent_node_id {
         fingerprint["agentNodeId"] = serde_json::json!(id);
     }
+    if input.manual_card_run {
+        if input.agent_node_id.is_none() { return Err(error("手动运行缺少 Agent 卡片身份")); }
+        fingerprint["manualCardRun"] = serde_json::json!(true);
+    }
+    if let Some(skill) = &input.dsh_skill {
+        fingerprint["dshSkill"] = serde_json::to_value(skill)?;
+    }
     // Preserve pre-provider Codex request identities across the migration.
     if provider != ChatProvider::CodexLocal {
         fingerprint["provider"] = serde_json::json!(provider);
@@ -272,7 +330,6 @@ fn provider_for(conn: &Connection, input: &ChatSendInput) -> AppResult<ChatProvi
     }
     let provider = match current.summary.provider.as_str() {
         "codex-local" => ChatProvider::CodexLocal,
-        "deepseek-cloud" => ChatProvider::DeepseekCloud,
         "dsh-local" => ChatProvider::DshLocal,
         "dsh-cloud" => ChatProvider::DshCloud,
         _ => return Err(error("对话服务无效，请新建对话")),
@@ -300,6 +357,9 @@ fn replay(conn: &Connection, input: &ChatSendInput) -> AppResult<Option<StartedC
     let conversation = read(conn, &id)?.ok_or_else(|| error("对话记录不存在"))?;
     let mut original: serde_json::Value = serde_json::from_str(&request)?;
     if let Some(object) = original.as_object_mut() { object.remove("resolvedCodexOptions"); }
+    if original["provider"] == "deepseek-cloud" {
+        original["provider"] = serde_json::json!(ChatProvider::DshCloud);
+    }
     if conversation.summary.project_id != input.project_id
         || input
             .conversation_id
@@ -344,6 +404,72 @@ impl Database {
     pub fn get_local_chat(&self, id: &str) -> AppResult<Option<ChatConversation>> {
         read(&self.conn.lock().unwrap(), id)
     }
+
+    /// Keep the public workflow node and all its connections. The old conversation's private
+    /// note remains available for history, provider recovery, and independent continuations.
+    pub fn new_agent_chat(&self, project: &str, node_id: &str, previous_id: &str, target: Option<ChatProvider>, options: Option<ChatCodexOptions>) -> AppResult<ChatConversation> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let source: String = tx.query_row(
+            "SELECT w.document_json FROM canvas_workflows w JOIN projects p ON p.id=w.project_id WHERE w.project_id=?1 AND p.archived_at IS NULL",
+            [project], |row| row.get(0),
+        ).optional()?.ok_or_else(|| error("请重新打开卡片所属的项目"))?;
+        let mut document: serde_json::Value = serde_json::from_str(&source)?;
+        let runs = document["runs"].as_array().into_iter().flatten().chain(std::iter::once(&document["run"]));
+        if runs.filter(|run| matches!(run["status"].as_str(), Some("running" | "waiting")))
+            .any(|run| run.get("lockedNodeIds").unwrap_or(&run["order"]).as_array().is_some_and(|ids| ids.iter().any(|id| id == node_id))) {
+            return Err(error("此卡片关联的工作流正在运行，请先停止对应流程"));
+        }
+        let node = document["nodes"].as_array_mut().and_then(|nodes| nodes.iter_mut().find(|n| n["kind"] == "agent" && n["id"] == node_id))
+            .ok_or_else(|| error("Agent 卡片已不存在"))?;
+        if node["chatConversationId"] != previous_id { return Err(error("卡片的对话已切换，请重新打开卡片")); }
+        let previous = tx.query_row(&format!("{SUMMARY_SQL} WHERE c.id=?1 AND c.node_id=?2 AND c.project_id=?3"),
+            params![previous_id,node_id,project], summary).optional()?.ok_or_else(|| error("对话与 Agent 卡片不匹配"))?;
+        if matches!(previous.status.as_str(), "running" | "stopping") { return Err(error("请等待当前回复完成，或先停止回复")); }
+        let provider = target.map(ChatProvider::as_str).unwrap_or(&previous.provider);
+        let switching = provider != previous.provider;
+        if previous.turn_count == 0 && !switching { return Ok(read(&tx, previous_id)?.unwrap()); }
+        let options = if provider == ChatProvider::CodexLocal.as_str() {
+            options.or_else(|| if switching { None } else { previous.codex_options })
+        } else {
+            if !switching && options.is_some() { return Err(error("此对话服务不支持 Codex 模型设置")); }
+            None
+        };
+        if let Some(options) = &options { options.validate()?; }
+        let now = Utc::now().timestamp_millis();
+        let (id, thread) = if previous.turn_count == 0 {
+            tx.execute("UPDATE local_chat_conversations SET provider=?2,updated_at=?3,revision=revision+1 WHERE id=?1",
+                params![previous_id,provider,now])?;
+            (previous.id, previous.thread_id)
+        } else {
+            let id = ulid::Ulid::new().to_string();
+            let thread = format!("chat-thread-{id}");
+            let history_node = format!("chat-history-{id}");
+            tx.execute("INSERT INTO canvas_nodes(id,project_id,thread_id,kind,payload_json,x,y,width,height,z_index,created_at,updated_at,hidden_at)
+                SELECT ?2,project_id,thread_id,kind,payload_json,x,y,width,height,z_index,created_at,updated_at,?3 FROM canvas_nodes WHERE id=?1",
+                params![node_id,history_node,now/1000])?;
+            tx.execute("UPDATE local_chat_conversations SET node_id=?2,revision=revision+1 WHERE id=?1", params![previous_id,history_node])?;
+            tx.execute("INSERT INTO creative_threads(id,project_id,title,origin,created_at,updated_at) VALUES(?1,?2,'新对话','direct',?3,?3)",
+                params![thread,project,now/1000])?;
+            tx.execute("INSERT INTO local_chat_conversations(id,project_id,thread_id,node_id,title,status,provider,created_at,updated_at) VALUES(?1,?2,?3,?4,'新对话','idle',?5,?6,?6)",
+                params![id,project,thread,node_id,provider,now])?;
+            (id, thread)
+        };
+        let payload = serde_json::json!({"schema_version":1,"note_type":"chat","conversation_id":id,"text":"新对话","initialCodexOptions":options});
+        tx.execute("UPDATE canvas_nodes SET thread_id=?2,payload_json=?3,updated_at=?4 WHERE id=?1",
+            params![node_id,thread,payload.to_string(),now/1000])?;
+        node["chatConversationId"] = serde_json::json!(id);
+        node["chatProvider"] = serde_json::json!(provider);
+        let fields = node.as_object_mut().unwrap();
+        if switching || provider != ChatProvider::DshCloud.as_str() { fields.remove("chatDshSkill"); }
+        if let Some(options) = options { fields.insert("chatCodexOptions".into(), serde_json::to_value(options)?); }
+        else { fields.remove("chatCodexOptions"); }
+        tx.execute("UPDATE canvas_workflows SET revision=revision+1,document_json=?2 WHERE project_id=?1", params![project,document.to_string()])?;
+        tx.execute("UPDATE project_canvases SET updated_at=?2 WHERE project_id=?1", params![project,now/1000])?;
+        let fresh = read(&tx, &id)?.unwrap();
+        tx.commit()?;
+        Ok(fresh)
+    }
     pub fn replay_local_chat(&self, input: &ChatSendInput) -> AppResult<Option<StartedChat>> {
         replay(&self.conn.lock().unwrap(), input)
     }
@@ -359,7 +485,7 @@ impl Database {
             || input.text.trim().is_empty()
             || input.reference_asset_ids.len() > 8
         {
-            return Err(error("请填写对话内容，每次最多引用 8 张图片"));
+            return Err(error("请填写对话内容，每次最多引用 8 个素材"));
         }
         let now = Utc::now().timestamp_millis();
         let conn = self.conn.lock().unwrap();
@@ -368,6 +494,10 @@ impl Database {
             return Ok(previous);
         }
         let provider = provider_for(&tx, input)?;
+        if let Some(skill) = &input.dsh_skill {
+            if provider != ChatProvider::DshCloud { return Err(error("此技能需要 DSH · Cloud")); }
+            skill.validate()?;
+        }
         if provider != ChatProvider::CodexLocal && input.codex_options.is_some() {
             return Err(error("该对话服务不支持 Codex 模型与推理强度，请移除这些设置"));
         }
@@ -385,7 +515,7 @@ impl Database {
                 |row| row.get(0),
             )?;
             if !exists {
-                return Err(error("引用图片已被删除，请重新选择图片"));
+                return Err(error("引用素材已被删除，请重新选择"));
             }
         }
         let id = match &input.conversation_id {
@@ -399,6 +529,12 @@ impl Database {
                 }
                 if matches!(current.summary.status.as_str(), "running" | "stopping") {
                     return Err(error("此对话仍在回复，请等待或停止当前回复"));
+                }
+                if current.summary.turn_count == 0 {
+                    let title: String = input.text.trim().chars().take(40).collect();
+                    tx.execute("UPDATE local_chat_conversations SET title=?2 WHERE id=?1", params![id,title])?;
+                    tx.execute("UPDATE creative_threads SET title=?2 WHERE id=?1", params![current.summary.thread_id,title])?;
+                    tx.execute("UPDATE canvas_nodes SET payload_json=json_remove(json_set(payload_json,'$.text',?2),'$.initialCodexOptions') WHERE id=?1", params![current.summary.node_id,title])?;
                 }
                 id.clone()
             }
@@ -477,8 +613,25 @@ impl Database {
             "SELECT json_extract(request_json,'$.resolvedCodexOptions') FROM local_chat_turns WHERE id=?1", [turn], |row|row.get(0))?;
         raw.map(|value|serde_json::from_str(&value).map_err(Into::into)).transpose()
     }
+    /// Unmarked card requests, including older saved workflow requests, use only the current input.
+    pub fn local_chat_turn_uses_history(&self, turn: &str) -> AppResult<bool> {
+        Ok(self.conn.lock().unwrap().query_row(
+            "SELECT json_extract(request_json,'$.agentNodeId') IS NULL OR json_extract(request_json,'$.manualCardRun') IS 1
+             FROM local_chat_turns WHERE id=?1", [turn], |row|row.get(0))?)
+    }
+    pub fn vps_chat_turn_message(&self, conversation: &str, turn: &str) -> AppResult<(String,usize)> {
+        self.conn.lock().unwrap().query_row("SELECT m.text,json_array_length(m.reference_asset_ids)
+            FROM local_chat_messages m JOIN local_chat_conversations c ON c.id=m.conversation_id
+            WHERE c.id=?1 AND c.provider='dsh-cloud' AND m.turn_id=?2 AND m.role='user'",
+            params![conversation,turn], |row| Ok((row.get(0)?,row.get(1)?)))
+            .optional()?.ok_or_else(|| error("云端对话轮次不存在"))
+    }
     pub fn set_local_chat_provider_thread(&self, id: &str, provider_id: &str) -> AppResult<()> {
         self.conn.lock().unwrap().execute("UPDATE local_chat_conversations SET provider_thread_id=?2 WHERE id=?1 AND (provider_thread_id IS NULL OR provider_thread_id=?2)",params![id,provider_id])?;
+        Ok(())
+    }
+    pub fn clear_local_chat_provider_thread(&self, id: &str) -> AppResult<()> {
+        self.conn.lock().unwrap().execute("UPDATE local_chat_conversations SET provider_thread_id=NULL WHERE id=?1", [id])?;
         Ok(())
     }
     pub fn set_local_chat_provider_turn(&self, turn: &str, provider_id: &str) -> AppResult<()> {
@@ -488,10 +641,47 @@ impl Database {
         )?;
         Ok(())
     }
+    pub fn save_vps_chat_checkpoint(&self, turn: &str, checkpoint: &str) -> AppResult<()> {
+        let changed = self.conn.lock().unwrap().execute("UPDATE local_chat_turns SET provider_turn_id=
+            CASE WHEN status='stopping' THEN json_set(?2,'$.cancel_requested',json('true')) ELSE ?2 END
+            WHERE id=?1 AND status IN ('running','stopping')",params![turn,checkpoint])?;
+        if changed != 1 { return Err(error("原云端 DSH 轮次已结束")); }
+        Ok(())
+    }
     pub fn local_chat_recovery(&self, id: &str) -> AppResult<(String, String)> {
         let conn = self.conn.lock().unwrap();
-        conn.query_row("SELECT t.id,t.provider_turn_id FROM local_chat_turns t JOIN local_chat_conversations c ON c.id=t.conversation_id WHERE c.id=?1 AND c.provider IN ('deepseek-cloud','dsh-local','dsh-cloud') AND c.status IN ('stopped','interrupted','failed') AND t.provider_turn_id IS NOT NULL ORDER BY t.created_at DESC,t.id DESC LIMIT 1",[id],|row| Ok((row.get(0)?,row.get(1)?)))
+        conn.query_row("SELECT t.id,t.provider_turn_id FROM local_chat_turns t JOIN local_chat_conversations c ON c.id=t.conversation_id WHERE c.id=?1 AND c.provider IN ('deepseek-cloud','dsh-local','dsh-cloud') AND c.status IN ('stopped','interrupted','failed') ORDER BY t.created_at DESC,t.rowid DESC LIMIT 1",[id],|row| Ok((row.get(0)?,row.get(1)?)))
             .map_err(|_| error("此对话暂无可取回的任务"))
+    }
+    pub fn local_chat_turn_has_dsh_skill(&self, turn: &str) -> AppResult<bool> {
+        Ok(self.conn.lock().unwrap().query_row("SELECT json_type(request_json,'$.dshSkill')='object' FROM local_chat_turns WHERE id=?1",
+            [turn], |row| Ok(row.get::<_, Option<bool>>(0)?.unwrap_or(false)))?)
+    }
+    /// Reattach the original VPS job to its latest turn for polling and receipt replay.
+    pub fn resume_vps_chat(&self, id: &str, turn: &str, checkpoint: &str) -> AppResult<ChatConversation> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let changed = tx.execute("UPDATE local_chat_turns SET status='running' WHERE id=?2 AND conversation_id=?1 AND provider_turn_id=?3
+            AND status IN ('interrupted','failed','stopped') AND ?2=(SELECT id FROM local_chat_turns WHERE conversation_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 1)
+            AND EXISTS(SELECT 1 FROM local_chat_conversations WHERE id=?1 AND provider='dsh-cloud' AND status IN ('interrupted','failed','stopped'))",
+            params![id,turn,checkpoint])?;
+        if changed != 1 { return Err(error("对话已有新进展，请重新打开查看")); }
+        tx.execute("UPDATE local_chat_messages SET status='running' WHERE conversation_id=?1 AND turn_id=?2 AND role='assistant'",params![id,turn])?;
+        tx.execute("UPDATE local_chat_conversations SET status='running',error=NULL,revision=revision+1 WHERE id=?1",[id])?;
+        let chat = read(&tx, id)?.ok_or_else(|| error("对话记录不存在"))?;
+        tx.commit()?;
+        Ok(chat)
+    }
+    pub fn record_local_chat_recovery_error(&self, id: &str, turn: &str, checkpoint: &str, detail: &str) -> AppResult<()> {
+        let changed = self.conn.lock().unwrap().execute(
+            "UPDATE local_chat_conversations SET error=?4,revision=revision+1,updated_at=?5
+             WHERE id=?1 AND status IN ('stopped','interrupted','failed')
+             AND ?2=(SELECT id FROM local_chat_turns WHERE conversation_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 1)
+             AND EXISTS(SELECT 1 FROM local_chat_turns WHERE id=?2 AND provider_turn_id=?3)",
+            params![id, turn, checkpoint, detail, Utc::now().timestamp_millis()],
+        )?;
+        if changed == 0 { return Err(error("对话已有新进展，请重新打开对话后查看")); }
+        Ok(())
     }
     pub fn restore_local_chat_reply(
         &self,
@@ -570,6 +760,8 @@ impl Database {
     pub fn mark_local_chat_stopping(&self, id: &str) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
+        tx.execute("UPDATE local_chat_turns SET provider_turn_id=json_set(provider_turn_id,'$.cancel_requested',json('true'))
+            WHERE conversation_id=?1 AND status='running' AND CASE WHEN json_valid(provider_turn_id) THEN json_extract(provider_turn_id,'$.engine') IN ('dsh-vps-v1','dsh-vps-v2') ELSE 0 END",[id])?;
         tx.execute("UPDATE local_chat_turns SET status='stopping' WHERE conversation_id=?1 AND status='running'",[id])?;
         tx.execute("UPDATE local_chat_conversations SET status='stopping',revision=revision+1 WHERE id=?1 AND status='running'",[id])?;
         tx.commit()?;

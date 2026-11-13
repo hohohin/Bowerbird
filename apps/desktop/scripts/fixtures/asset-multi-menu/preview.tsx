@@ -1,3 +1,5 @@
+import { FileTaskStatusPanel } from "../../../src/components/FileTaskStatus";
+import { installDeletionTaskMock } from "../fileTaskMock";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
@@ -64,7 +66,8 @@ function Preview() {
       { key: "busy", label: "运行中", detail: "输入", disabled: true, disconnect: () => {} },
       { key: "ready", label: "图片输入", detail: "素材", disabled: false, disconnect: () => w.disconnected = true },
     ]} />}
-    <AssetContextMenu /><ProjectContextMenu />
+    <FileTaskStatusPanel /><AssetContextMenu /><ProjectContextMenu />
   </div>;
 }
+installDeletionTaskMock();
 createRoot(document.getElementById("root")!).render(<Preview />);

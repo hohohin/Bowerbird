@@ -49,7 +49,7 @@ function fixture(example, initial = example.workflow) {
     getAssetsByIds: async ids => ids.map(id => ({ id, store_path: `${id}.png` })),
   };
   const real = new Set(['canvasWorkflow', 'workflowExternalChanges', 'canvasCardNames', 'workflowDiagnostics',
-    'contentTable', 'canvasNotes', 'canvasLogic', 'canvasSessionOutputs', 'canvasConversationCards', 'comfyVideo', 'videoGeneration']);
+    'contentTable', 'canvasNotes', 'canvasNoteSource', 'canvasLogic', 'canvasSessionOutputs', 'canvasConversationCards', 'comfyVideo', 'videoGeneration', 'workflowTriggerSchedule']);
   const context = vm.createContext({ console, crypto: webcrypto, structuredClone, setTimeout, clearTimeout });
   function load(path) {
     if (modules.has(path)) return modules.get(path).exports;

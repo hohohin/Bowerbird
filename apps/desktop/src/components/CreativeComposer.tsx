@@ -65,6 +65,7 @@ export function CreativeComposer({
   const [mode, setMode] = useState(stateRef.current.mode);
   const [chatProvider, setChatProvider] = useState<ChatProvider>(stateRef.current.chatProvider ?? "codex-local");
   const [chatCodexOptions, setChatCodexOptions] = useState<ChatCodexOptions | undefined>(stateRef.current.chatCodexOptions);
+  const [chatDshSkill, setChatDshSkill] = useState(stateRef.current.chatDshSkill);
   const flushRef = useRef<(() => void) | null>(null);
   function persist(draft: CreationEditorDraft) {
     stateRef.current.drafts[mode] = draft;
@@ -97,8 +98,15 @@ export function CreativeComposer({
       onComposerModeChange={selectMode}
       chatProvider={chatProvider}
       chatCodexOptions={chatCodexOptions}
+      chatDshSkill={chatDshSkill}
+      onChatDshSkillChange={skill => { flushRef.current?.(); stateRef.current.chatDshSkill = skill; setChatDshSkill(skill); onDraftChange(serializeCreativeComposerState(stateRef.current)); }}
       onChatCodexOptionsChange={options => { flushRef.current?.(); stateRef.current.chatCodexOptions = options; setChatCodexOptions(options); onDraftChange(serializeCreativeComposerState(stateRef.current)); }}
-      onChatProviderChange={provider => { flushRef.current?.(); stateRef.current.chatProvider = provider; setChatProvider(provider); onDraftChange(serializeCreativeComposerState(stateRef.current)); }}
+      onChatProviderChange={provider => {
+        flushRef.current?.();
+        stateRef.current.chatProvider = provider; setChatProvider(provider);
+        if (provider !== "dsh-cloud") { stateRef.current.chatDshSkill = undefined; setChatDshSkill(undefined); }
+        onDraftChange(serializeCreativeComposerState(stateRef.current));
+      }}
       continuationCandidates={continuationCandidates}
       focusedContinuationNodeId={focusedContinuationNodeId}
       focusedContinuationThreadId={focusedContinuationThreadId}

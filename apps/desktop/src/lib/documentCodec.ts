@@ -117,17 +117,23 @@ function diagramSource(node: DocumentBlock): DocumentBlock {
 function attachmentSource(node: DocumentBlock): DocumentBlock {
   return { id: node.id, type: 'p', children: [{ id: node.id + ':link', type: 'a', url: node.attachmentId ? 'bowerbird-attachment:' + node.attachmentId : node.url, children: [{ text: String(node.name ?? '附件') }] }] };
 }
+// Visual marks belong to the editable state. Keep semantic marks in portable Markdown.
+function markdownTextLeaf(leaf: DocumentText) {
+  const { color, backgroundColor, fontFamily, fontSize, ...semantic } = leaf;
+  return semantic;
+}
 function serializableNode(node: DocumentBlock): DocumentBlock {
   if (node.type === 'code_drawing') return diagramSource(node);
   if (node.type === 'excalidraw') return { id: node.id, type: 'p', children: [{ text: '［绘图］' }] };
   if (node.type === 'file') return attachmentSource(node);
   if (node.assetId && ['img', 'audio', 'video'].includes(node.type)) return { ...node, type: 'document_media', markup: mediaMarkup(node) };
   if (node.attachmentId) return { ...node, url: 'bowerbird-attachment:' + node.attachmentId };
-  return { ...node, children: node.children.map(child => typeof child.text === 'string' ? child : serializableNode(child as DocumentBlock)) };
+  const { color, backgroundColor, fontFamily, fontSize, ...semantic } = node;
+  return { ...semantic, children: node.children.map(child => typeof child.text === 'string' ? markdownTextLeaf(child as DocumentText) : serializableNode(child as DocumentBlock)) };
 }
 function serializableNodes(nodes: DocumentValue): DocumentValue { return nodes.map(serializableNode); }
 
-export function serializeMarkdown(value: DocumentValue): string {
+export function serializeReadableMarkdown(value: DocumentValue): string {
   const pieces: string[] = [];
   let ordinary: DocumentValue = [];
   const flush = () => {
@@ -142,5 +148,9 @@ export function serializeMarkdown(value: DocumentValue): string {
     pieces.push(mediaMarkup(block));
   }
   flush();
-  return writeDocumentState(pieces.join("\n\n") + "\n", value);
+  return pieces.join("\n\n") + "\n";
+}
+
+export function serializeMarkdown(value: DocumentValue): string {
+  return writeDocumentState(serializeReadableMarkdown(value), value);
 }

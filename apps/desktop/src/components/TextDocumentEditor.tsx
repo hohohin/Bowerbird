@@ -27,8 +27,11 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
   const [saving, setSaving] = useState(false), [inserting, setInserting] = useState(false);
   const current = useRef(draft), mounted = useRef(true), plate = useRef<TextPlateHandle>(null);
   const canonical = useRef("");
+  const pendingValue = useRef<DocumentValue>();
+  const draftTimer = useRef<ReturnType<typeof setTimeout>>();
+  const [editing, setEditing] = useState(false);
   const readEpoch = useRef(0), mediaEpoch = useRef(0);
-  const dirty = !!draft && draft.text !== draft.base.text;
+  const dirty = editing || (!!draft && draft.text !== draft.base.text);
 
   function replace(next: TextDocumentDraft) {
     readEpoch.current++;
@@ -59,25 +62,41 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
       if (!mounted.current) return;
       if (current.current?.text !== next.text) loadDraft(next);
       else replace(next);
-    });
+    }, captureValue);
     const cached = getTextDocumentDraft(key);
     if (cached) { loadDraft(cached); setNotice("已恢复未保存的草稿。"); }
     else void textDocuments.read(asset.id).then(base => {
       if (mounted.current && ticket === readEpoch.current) loadDraft({ base, text: base.text, mode: "body" });
     }).catch(reason => { if (mounted.current && ticket === readEpoch.current) setError(userErrorMessage(reason, "文本暂时无法打开，请检查文件后重试。")); });
-    return () => { mounted.current = false; readEpoch.current++; mediaEpoch.current++; unsubscribe(); };
+    const hidden = () => { if (document.hidden) captureValue(); };
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      captureValue(); mounted.current = false; readEpoch.current++; mediaEpoch.current++;
+      document.removeEventListener("visibilitychange", hidden); unsubscribe();
+    };
   }, [key, asset.id]);
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
 
   function changeText(text: string) { if (current.current) replace({ ...current.current, text }); }
   function changeValue(next: DocumentValue) {
-    setValue(next);
+    readEpoch.current++; pendingValue.current = next; setEditing(true);
+    clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(captureValue, 300);
+  }
+  function captureValue() {
+    clearTimeout(draftTimer.current);
+    const next = pendingValue.current;
+    if (!next) return;
     const text = serializeMarkdown(next);
+    pendingValue.current = undefined;
+    setValue(next); setEditing(false);
     if (text !== canonical.current) { canonical.current = text; changeText(text); }
   }
   function switchMode(mode: "body" | "source") {
-    if (!draft || draft.mode === mode) return;
     try {
+      captureValue();
+      const draft = current.current;
+      if (!draft || draft.mode === mode) return;
       if (mode === "body") {
         const next = parseMarkdown(draft.text); setValue(next); canonical.current = serializeMarkdown(next);
         hydrateMedia(next);
@@ -86,6 +105,7 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
     } catch { setError("源码暂时无法转换，请检查格式；内容仍保留在编辑区。"); }
   }
   async function save() {
+    captureValue();
     const start = current.current;
     if (!start || saving || start.text === start.base.text) return;
     setSaving(true); setError("");
@@ -99,6 +119,7 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
   }
   async function reload() {
     if (saving || (dirty && !window.confirm("重新读取会放弃当前未保存的更改，是否继续？"))) return;
+    captureValue();
     const ticket = ++readEpoch.current;
     try { const base = await textDocuments.read(asset.id); if (mounted.current && ticket === readEpoch.current) { loadDraft({ base, text: base.text, mode: draft?.mode ?? "body" }); setError(""); setNotice(""); } }
     catch (reason) { if (mounted.current && ticket === readEpoch.current) setError(userErrorMessage(reason, "原文件暂时无法读取，请稍后重试。")); }

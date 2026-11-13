@@ -2,12 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-shell";
-import { Moon, RefreshCw, Sun } from "lucide-react";
+import { ChevronDown, Moon, RefreshCw, Sun } from "lucide-react";
 import { useStore, understandEngineUsable } from "../store";
 import { api } from "../lib/api";
 import { CODEX_ONBOARDING_ENABLED, DREAMINA_ONBOARDING_ENABLED, LEGACY_SETTINGS_ENABLED } from "../lib/featureFlags";
 import { DEFAULT_AUTO_ANALYZE_PROMPT, WEBSITE_URL } from "../lib/constants";
-import type { MigrateProgress } from "../lib/types";
 import { useOnboarding } from "../lib/onboardingStore";
 import { ModalShell } from "./ModalShell";
 import { RedeemCodeCard } from "./RedeemCodeCard";
@@ -16,15 +15,10 @@ import { AppUpdateCard } from "./AppUpdateCard";
 import { FileWorkspaceMoveDialog } from "./FileWorkspaceMoveDialog";
 import { CreditDetails } from "./CreditDetails";
 import { AccountBilling } from "./AccountBilling";
+import { accountEntitlement } from "../lib/entitlement";
 import { userErrorMessage } from "../lib/userError";
 
-const STAGE_LABEL: Record<string, string> = {
-  images: "复制原图",
-  thumbnails: "复制缩略图",
-  db: "整理数据库",
-};
-
-type SectionKey = "system" | "account" | "models" | "personalization" | "about" | "developer";
+type SectionKey = "system" | "account" | "credits" | "models" | "personalization" | "about" | "developer";
 
 // 仅供保存其他设置时兼容旧配置，不再在订阅卡片中选择模型版本。
 const DEFAULT_DREAMINA_MODEL_VERSION = "5.0Pro";
@@ -88,6 +82,7 @@ function AgentModeCard({
 const SECTIONS: { key: SectionKey; label: string }[] = [
   { key: "system", label: "系统设置" },
   { key: "account", label: "账号管理" },
+  { key: "credits", label: "积分明细" },
   { key: "models", label: "模型设置" },
   { key: "personalization", label: "个性化与记忆" },
   { key: "about", label: "关于我们" },
@@ -95,6 +90,38 @@ const SECTIONS: { key: SectionKey; label: string }[] = [
 
 /** 开发者选项分区：仅测试账号（entitlement.is_test_account）追加在导航末尾。 */
 const DEVELOPER_SECTION = { key: "developer", label: "开发者选项" } as const;
+
+function ProTrial({ userId, available }: { userId: string; available: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  async function start() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const next = await api.cloudStartProTrial(userId);
+      const auth = useStore.getState().cloudAuth;
+      if (!auth?.logged_in || auth.user_id !== userId || next.user_id !== userId) return;
+      useStore.setState({ cloudEntitlement: next });
+      setMessage(next.tier === "pro"
+        ? "7 天 Pro 功能体验已领取；Cloud 仍按用量计费，到期不会自动扣款。"
+        : "当前没有生效的 Pro 体验，可刷新权益查看。");
+    } catch (error) {
+      setMessage(userErrorMessage(error, "暂时无法领取体验，请稍后重试。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!available && !message) return null;
+  return <div className="settings-card space-y-2 p-3">
+    {available && <>
+      <button type="button" className="app-modal-button is-primary" disabled={busy} onClick={() => void start()}>
+        {busy ? "领取中…" : "领取一次 7 天 Pro 功能体验"}
+      </button>
+      <p className="account-billing-note">每个账号可体验一次。Cloud 按用量计费，体验到期不会自动扣款。</p>
+    </>}
+    {message && <p role="status" className="text-xs text-muted">{message}</p>}
+  </div>;
+}
 
 /**
  * 设置面板（约定 13 全屏 Modal 形态）：常见两列式——左侧分区导航，右侧具体内容。
@@ -107,9 +134,10 @@ const DEVELOPER_SECTION = { key: "developer", label: "开发者选项" } as cons
  * 创作板 / 会话编辑坞渲染（默认只开正式 Agent）。
  * 由侧栏底部账号区「设置」唤起。点背景 / ✕ 关闭。
  */
-export function SettingsDialog({ onClose, initialSection = "system" }: {
+export function SettingsDialog({ onClose, initialSection = "system", initialSubscription }: {
   onClose: () => void;
-  initialSection?: "system" | "account" | "about";
+  initialSection?: "system" | "account" | "credits" | "models" | "about";
+  initialSubscription?: "codex" | "jimeng";
 }) {
   const codexHealth = useStore((s) => s.codexHealth);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
@@ -132,9 +160,11 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
   const defaultUnderstandProvider = useStore((s) => s.defaultUnderstandProvider);
   const setDefaultUnderstandProvider = useStore((s) => s.setDefaultUnderstandProvider);
 
-  const [section, setSection] = useState<SectionKey>(initialSection);
-  const [trialBusy, setTrialBusy] = useState(false);
-  const [trialMessage, setTrialMessage] = useState("");
+  const [selectedSection, setSection] = useState<SectionKey>(initialSection);
+  const subscriptionCard = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    subscriptionCard.current?.scrollIntoView({ block: "nearest" });
+  }, [initialSubscription]);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [checkingCodex, setCheckingCodex] = useState(true);
   const [codexLogoutBusy, setCodexLogoutBusy] = useState(false);
@@ -149,6 +179,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
   // —— dreamina「登录授权」一键流程（检测 → 安装 → 浏览器授权 → checklogin 轮询）——
   const [dreaminaAuthBusy, setDreaminaAuthBusy] = useState(false);
   const [dreaminaAuthLine, setDreaminaAuthLine] = useState<string | null>(null);
+  const [dreaminaUserCode, setDreaminaUserCode] = useState("");
   const [dreaminaAuthFailed, setDreaminaAuthFailed] = useState(false);
   const dreaminaAuthRunningRef = useRef(false);
 
@@ -162,28 +193,11 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
   const [migrateTarget, setMigrateTarget] = useState<string | null>(null); // 确认迁移的旧→新
   const [fileMoveOpen, setFileMoveOpen] = useState(false);
   const [migrating, setMigrating] = useState(false);
-  const [migrateProgress, setMigrateProgress] = useState<MigrateProgress | null>(null);
   const [migrateError, setMigrateError] = useState<string | null>(null);
 
   useEffect(() => {
     api.libraryRoot().then(setLibRoot).catch(() => {});
     getVersion().then(setAppVersion).catch(() => {});
-  }, []);
-
-  // 迁移进度：后端复制大目录时逐文件推 library://migrate-progress。
-  useEffect(() => {
-    let unlisten: UnlistenFn | undefined;
-    let alive = true;
-    listen<MigrateProgress>("library://migrate-progress", (e) => {
-      setMigrateProgress(e.payload);
-    }).then((u) => {
-      if (alive) unlisten = u;
-      else u();
-    });
-    return () => {
-      alive = false;
-      unlisten?.();
-    };
   }, []);
 
   useEffect(() => {
@@ -283,10 +297,9 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
     if (!migrateTarget) return;
     setMigrating(true);
     setMigrateError(null);
-    setMigrateProgress(null);
     try {
+      await useStore.getState().projectCanvasFlush?.();
       await api.migrateLibraryRoot(migrateTarget);
-      // 迁移成功后立即重启：lib.rs 启动时读新根并清理旧库残留。
       await api.restartApp();
     } catch (error) {
       setMigrating(false);
@@ -378,7 +391,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       // force=true 跳过 120s TTL 缓存：手动「重新检测」要看真实登录态（后端 dreamina_health 约定）。
       setDreaminaHealth(await api.dreaminaHealth(true));
     } catch {
-      setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" });
+      setDreaminaHealth({ ok: false, status: "unconfirmed", reason: "即梦状态检测失败，请重新检测。" });
     } finally {
       setCheckingDreamina(false);
     }
@@ -392,6 +405,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       return;
     }
     setDreaminaAuthBusy(true);
+    setDreaminaUserCode("");
     dreaminaAuthRunningRef.current = true;
     setDreaminaAuthFailed(false);
     setDreaminaAuthLine("检测环境中…");
@@ -399,11 +413,10 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       let h = await api.dreaminaHealth(true);
       setDreaminaHealth(h);
       // 未装 CLI → 先自动安装。
-      if (!h.ok && h.reason.includes("未检测到")) {
+      if (h.status === "missing") {
         setDreaminaAuthLine("准备安装 dreamina CLI…");
         const installed = await api.dreaminaInstall();
         if (!installed.ok) {
-          setDreaminaHealth(installed);
           setDreaminaAuthFailed(true);
           setDreaminaAuthLine(userErrorMessage(installed.reason, "安装未完成，请稍后重试。"));
           return;
@@ -415,16 +428,29 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
         setDreaminaAuthLine("已就绪，无需授权");
         return;
       }
+      if (h.status !== "login_required") {
+        setDreaminaAuthFailed(true);
+        setDreaminaAuthLine(h.reason || "暂时无法确认即梦订阅状态，请重新检测。");
+        return;
+      }
       // 已装未登录 → headless 拿授权链接自动开浏览器，checklogin 轮询等授权完成（约 1 分钟）。
       const flow = await api.dreaminaLoginHeadless();
+      if (!flow) {
+        const current = await api.dreaminaHealth(true);
+        setDreaminaHealth(current);
+        setDreaminaAuthFailed(!current.ok);
+        setDreaminaAuthLine(current.ok ? "已就绪，无需授权" : current.reason);
+        return;
+      }
       try {
         await open(flow.verification_uri);
       } catch {
-        setDreaminaAuthLine(`浏览器打开失败，请手动访问：${flow.verification_uri}`);
+        setDreaminaAuthFailed(true);
+        setDreaminaAuthLine("未能打开即梦授权网页，请检查系统默认浏览器后重试。");
+        return;
       }
-      setDreaminaAuthLine(
-        `请在浏览器完成即梦授权${flow.user_code ? `（授权码 ${flow.user_code}）` : ""}…`,
-      );
+      setDreaminaUserCode(flow.user_code);
+      setDreaminaAuthLine("请在浏览器完成即梦授权。");
       const r = await api.dreaminaCheckLogin(flow.device_code);
       setDreaminaHealth(r);
       setDreaminaAuthFailed(!r.ok);
@@ -438,6 +464,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       }
     } finally {
       dreaminaAuthRunningRef.current = false;
+      setDreaminaUserCode("");
       setDreaminaAuthBusy(false);
     }
   }
@@ -455,10 +482,6 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       setDreaminaAuthLine(userErrorMessage(e, "退出即梦登录未完成，请重试。"));
     }
   }
-
-  const progress = migrateProgress
-    ? STAGE_LABEL[migrateProgress.stage] ?? migrateProgress.stage
-    : "";
 
   // 默认反推模型：非 auto 选项仅在对应引擎当下可用时可选（门控与选择浮层一致）。
   const cloudUsable = understandEngineUsable({ cloudAuth, cloudEntitlement, codexHealth }, "bowerbird-cloud");
@@ -481,10 +504,11 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
 
   const loggedIn = cloudAuth?.logged_in === true;
   const accountName = cloudAuth?.display_name || cloudAuth?.email || cloudAuth?.user_id || "";
-  const canStartTrial = loggedIn && cloudEntitlement?.tier === "free" && cloudEntitlement.offline_state !== "expired" && cloudEntitlement.offline_state !== "invalid";
   // 测试账号（bowerbird_test 标记，云端随权益快照下发）才追加「开发者选项」分区。
-  const isTestAccount = cloudEntitlement?.is_test_account === true;
-  const sections = isTestAccount ? [...SECTIONS, DEVELOPER_SECTION] : SECTIONS;
+  const current = accountEntitlement(cloudEntitlement, loggedIn ? cloudAuth?.user_id : null);
+  const isTestAccount = current?.is_test_account === true;
+  const sections = (isTestAccount ? [...SECTIONS, DEVELOPER_SECTION] : SECTIONS).filter(item => loggedIn || item.key !== "credits");
+  const section = sections.some(item => item.key === selectedSection) ? selectedSection : "account";
 
   return (
     <ModalShell
@@ -513,7 +537,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
         </nav>
 
         {/* 右列：具体内容（内容超出时列内滚动） */}
-        <div className="min-w-0 flex-1 space-y-3 overflow-y-auto">
+        <div key={section} className="min-w-0 flex-1 space-y-3 overflow-y-auto">
           {section === "system" && (
             <>
               {/* 外观：后端 settings.json 持久化；夜间模式沿用原有黑色 UI。 */}
@@ -576,7 +600,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 {migrateTarget && !migrating && (
                   <div className="mt-2 rounded bg-panel p-2 text-[11px]">
                     <div className="text-muted">
-                      将全部原图 / 缩略图 / 数据库复制到新位置，随后自动重启；旧位置文件在重启后清理，可释放系统盘空间。迁移期间请勿操作。
+                      应用将重启，把索引库、原图、图层和缩略图复制到新位置。校验成功后切换，旧位置保留完整副本。
                     </div>
                     <div className="mt-1.5 break-all text-ink">
                       → <span className="text-accent">{migrateTarget}</span>
@@ -606,25 +630,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
 
                 {migrating && (
                   <div className="mt-2 rounded bg-panel p-2 text-[11px] text-muted">
-                    <div>
-                      正在{progress}…
-                      {migrateProgress && migrateProgress.total > 0 && (
-                        <span className="text-ink">
-                          {" "}
-                          {migrateProgress.done} / {migrateProgress.total}
-                        </span>
-                      )}
-                    </div>
-                    {migrateProgress && migrateProgress.total > 0 && (
-                      <div className="mt-1.5 h-1 w-full overflow-hidden rounded bg-panel2">
-                        <div
-                          className="h-full bg-accent transition-[width]"
-                          style={{
-                            width: `${Math.round((migrateProgress.done / migrateProgress.total) * 100)}%`,
-                          }}
-                        />
-                      </div>
-                    )}
+                    正在保存迁移计划并重启…
                   </div>
                 )}
               </div>
@@ -711,46 +717,43 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 )}
               </div>
 
-              <AccountBilling
-                key={cloudAuth?.user_id ?? "guest"}
-                loggedIn={loggedIn}
-                entitlement={cloudEntitlement}
-                trialAction={loggedIn && (canStartTrial || trialMessage) ? <>
-                  {canStartTrial && <>
-                  <button type="button" className="app-button" disabled={trialBusy} onClick={async () => {
-                    if (trialBusy) return; setTrialBusy(true); setTrialMessage("");
-                    try { const next = await api.cloudStartProTrial(); useStore.setState({ cloudEntitlement: next }); setTrialMessage("7 天 Pro 功能体验已领取；Cloud 仍按用量计费，到期不会自动扣款。"); }
-                    catch (error) { setTrialMessage(userErrorMessage(error, "暂时无法领取体验，请稍后重试。")); }
-                    finally { setTrialBusy(false); }
-                  }}>{trialBusy ? "领取中…" : "领取一次 7 天 Pro 功能体验"}</button>
-                  <p className="account-billing-note">每账号一次，不赠算力，到期不会自动扣款。</p>
-                  </>}
-                  {trialMessage && <p role="status" className="text-xs text-muted">{trialMessage}</p>}
-                </> : undefined}
-              />
-
-              {loggedIn && <RedeemCodeCard key={cloudAuth?.user_id} />}
-
-              {/* credits 明细 */}
-              {loggedIn && (
-                <div className="settings-card px-3 py-2.5">
-                  <CreditDetails entitlement={cloudEntitlement?.offline_state === "expired" || cloudEntitlement?.offline_state === "invalid" ? null : cloudEntitlement} />
-                  <button
-                    onClick={() => void logoutCloud()}
-                    disabled={cloudBusy}
-                    className="mt-3 text-xs text-muted hover:text-red-300 disabled:opacity-50"
-                  >
-                    登出账号
-                  </button>
+              {loggedIn && <section aria-label="账号概览" className="settings-card account-overview">
+                <div>
+                  <h3>当前方案</h3>
+                  <strong>{current ? { free: "免费版", pro: "Pro", studio: "Studio" }[current.tier] : "权益待同步"}</strong>
+                  {current?.tier !== "free" && current?.membership_ends_at && <p className="account-billing-note">
+                    有效期至 <time dateTime={current.membership_ends_at}>{new Date(current.membership_ends_at).toLocaleString("zh-CN", { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</time>
+                  </p>}
+                  {current?.policy.can_use_byo && <button type="button" className="app-modal-button" onClick={() => setSection("models")}>
+                    {codexHealth?.ok || dreaminaHealth?.ok ? "管理我的 ChatGPT / 即梦订阅" : "连接我的 ChatGPT / 即梦订阅"}
+                  </button>}
                 </div>
-              )}
+                <div>
+                  <h3>可用余额</h3>
+                  <strong>{current ? (current.balances.sub + current.balances.daily + current.balances.topup).toLocaleString("zh-CN") : "—"} <small>Bcoin</small></strong>
+                  <button type="button" className="app-modal-button" onClick={() => setSection("credits")}>查看积分明细</button>
+                </div>
+              </section>}
+              {loggedIn && cloudAuth?.user_id && <ProTrial key={`trial-${cloudAuth.user_id}`} userId={cloudAuth.user_id} available={current?.tier === "free" && current.trial_available !== false} />}
+              {loggedIn && <RedeemCodeCard key={cloudAuth?.user_id} />}
+              <details className="settings-card account-plan-disclosure p-3">
+                <summary className="cursor-pointer text-ink">查看会员方案与充值<ChevronDown size={16} aria-hidden="true" /></summary>
+                <AccountBilling key={cloudAuth?.user_id ?? "guest"} loggedIn={loggedIn} entitlement={cloudEntitlement?.user_id === cloudAuth?.user_id ? cloudEntitlement : null} />
+              </details>
+              {loggedIn && <button onClick={() => void logoutCloud()} disabled={cloudBusy} className="app-modal-button">登出账号</button>}
             </>
           )}
-
+          {section === "credits" && loggedIn && <div className="settings-card p-3">
+            <CreditDetails entitlement={current} />
+            {!current && <button type="button" className="app-modal-button mt-2" disabled={cloudBusy} onClick={() => void syncCloudEntitlement()}>
+              {cloudBusy ? "同步中…" : "刷新权益"}
+            </button>}
+          </div>}
           {section === "models" && (
             <>
               {/* 使用自有 ChatGPT 订阅（codex CLI）：状态 + 一键登录授权；引导弹窗入口随 CODEX_ONBOARDING_ENABLED 暂隐 */}
-              <div className="settings-card px-3 py-2.5">
+              <div className="settings-card px-3 py-2.5" tabIndex={-1}
+                ref={initialSubscription === "codex" ? subscriptionCard : undefined} data-modal-autofocus={initialSubscription === "codex" || undefined}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-ink">使用自有ChatGPT订阅</span>
                   <span className="flex items-center gap-1.5">
@@ -823,7 +826,8 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
               </div>
 
               {/* 使用自有即梦订阅（dreamina CLI）：状态 + 一键登录授权；引导弹窗入口随 DREAMINA_ONBOARDING_ENABLED 暂隐 */}
-              <div className="settings-card px-3 py-2.5">
+              <div className="settings-card px-3 py-2.5" tabIndex={-1}
+                ref={initialSubscription === "jimeng" ? subscriptionCard : undefined} data-modal-autofocus={initialSubscription === "jimeng" || undefined}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-ink">使用自有即梦订阅</span>
                   <span className="flex items-center gap-1.5">
@@ -877,6 +881,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                       title={userErrorMessage(dreaminaAuthLine, dreaminaAuthFailed ? "即梦授权未完成，请重新登录。" : "正在准备即梦授权，请稍候…")}
                     >
                       {userErrorMessage(dreaminaAuthLine, dreaminaAuthFailed ? "即梦授权未完成，请重新登录。" : "正在准备即梦授权，请稍候…")}
+                      {dreaminaUserCode && <span className="ml-1 select-text font-mono">{dreaminaUserCode}</span>}
                     </span>
                   )}
                 </div>

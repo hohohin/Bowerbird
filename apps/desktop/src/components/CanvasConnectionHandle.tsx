@@ -1,10 +1,9 @@
-import { forwardRef, useCallback, useEffect, useId, useRef, type ButtonHTMLAttributes, type CSSProperties, type PointerEvent } from "react";
+import { forwardRef, memo, useCallback, useEffect, useId, useRef, type ButtonHTMLAttributes, type RefObject, type PointerEvent } from "react";
 import "./CanvasConnectionHandle.css";
 
 export interface CanvasConnectionHandleProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   side: "input" | "output";
   active?: boolean;
-  zoom?: number;
 }
 
 type HandleController = { follow: (event: globalThis.PointerEvent, rect: DOMRect) => void; reset: () => void; press: (event: PointerEvent<HTMLButtonElement>) => void };
@@ -76,12 +75,28 @@ function unregisterHandle(element: HTMLButtonElement) {
   }
 }
 
+const ConnectionGlyph = memo(function ConnectionGlyph({ glyphRef }: { glyphRef: RefObject<HTMLSpanElement> }) {
+  const hatchId = `connection-hatch-${useId().replaceAll(":", "")}`;
+  return <span ref={glyphRef} className="canvas-connection-glyph" aria-hidden="true">
+    <svg width="28" height="28" viewBox="0 0 28 28" focusable="false">
+      <defs>
+        <pattern id={hatchId} width="2" height="2" patternUnits="userSpaceOnUse">
+          <path d="M-1 1l2-2M0 2l2-2M1 3l2-2" stroke="currentColor" strokeWidth=".5" />
+        </pattern>
+      </defs>
+      <rect x="1.5" y="1.5" width="25" height="25" stroke="currentColor" strokeWidth=".6" opacity=".35" />
+      <path d="M1.5 7v14M26.5 7v14" stroke="currentColor" strokeWidth="1" />
+      <path d="M.5.5h2v2h-2zM25.5.5h2v2h-2zM.5 25.5h2v2h-2zM25.5 25.5h2v2h-2z" fill="currentColor" />
+      <path d="M12.25 5h3.5v7.25H23v3.5h-7.25V23h-3.5v-7.25H5v-3.5h7.25z" fill={`url(#${hatchId})`} />
+    </svg>
+  </span>;
+});
+
 /** The hit area stays still; only the small visible socket follows the pointer. */
 export const CanvasConnectionHandle = forwardRef<HTMLButtonElement, CanvasConnectionHandleProps>(function CanvasConnectionHandle({
-  side, active = false, zoom, className = "", style, disabled, onPointerEnter, onPointerMove, onPointerLeave,
+  side, active = false, className = "", disabled, onPointerEnter, onPointerMove, onPointerLeave,
   onPointerDown, onPointerUp, onPointerCancel, onBlur, children: _children, ...props
 }, forwardedRef) {
-  const hatchId = `connection-hatch-${useId().replaceAll(":", "")}`;
   const glyph = useRef<HTMLSpanElement | null>(null);
   const button = useRef<HTMLButtonElement | null>(null);
   const frame = useRef(0);
@@ -96,8 +111,10 @@ export const CanvasConnectionHandle = forwardRef<HTMLButtonElement, CanvasConnec
   }
   function follow(event: globalThis.PointerEvent, rect: DOMRect) {
     if (disabled || active || event.buttons || event.pointerType === "touch" || window.matchMedia("(prefers-reduced-motion: reduce)").matches) { move(); return; }
-    const x = event.clientX - rect.left - rect.width / 2;
-    const y = event.clientY - rect.top - rect.height / 2;
+    // The pointer and hit rect are in screen pixels; translate the glyph in canvas units.
+    const unitsPerPixel = button.current!.offsetWidth / rect.width;
+    const x = (event.clientX - rect.left - rect.width / 2) * unitsPerPixel;
+    const y = (event.clientY - rect.top - rect.height / 2) * unitsPerPixel;
     const distance = Math.hypot(x, y);
     const strength = distance ? Math.min(0.3, 8 / distance) : 0;
     // Keep the frame outside the card's clipped content boundary.
@@ -121,7 +138,6 @@ export const CanvasConnectionHandle = forwardRef<HTMLButtonElement, CanvasConnec
     title={props.title ?? (side === "input" ? "添加上游" : "添加下游")}
     data-canvas-connect-side={side} data-connection-active={active || undefined}
     className={`canvas-connection-handle is-${side}${active ? " is-active" : ""} ${className}`}
-    style={{ ...(zoom ? { "--canvas-connection-zoom": zoom } : {}), ...style } as CSSProperties}
     onPointerEnter={onPointerEnter}
     onPointerMove={onPointerMove}
     onPointerLeave={event => { if (hovered === event.currentTarget) resetHovered(); onPointerLeave?.(event); }}
@@ -129,18 +145,6 @@ export const CanvasConnectionHandle = forwardRef<HTMLButtonElement, CanvasConnec
     onPointerUp={event => { move(); onPointerUp?.(event); }}
     onPointerCancel={event => { move(); onPointerCancel?.(event); }}
     onBlur={event => { move(); onBlur?.(event); }}>
-    <span ref={glyph} className="canvas-connection-glyph" aria-hidden="true">
-      <svg width="28" height="28" viewBox="0 0 28 28" focusable="false">
-        <defs>
-          <pattern id={hatchId} width="2" height="2" patternUnits="userSpaceOnUse">
-            <path d="M-1 1l2-2M0 2l2-2M1 3l2-2" stroke="currentColor" strokeWidth=".5" />
-          </pattern>
-        </defs>
-        <rect x="1.5" y="1.5" width="25" height="25" stroke="currentColor" strokeWidth=".6" opacity=".35" />
-        <path d="M1.5 7v14M26.5 7v14" stroke="currentColor" strokeWidth="1" />
-        <path d="M.5.5h2v2h-2zM25.5.5h2v2h-2zM.5 25.5h2v2h-2zM25.5 25.5h2v2h-2z" fill="currentColor" />
-        <path d="M12.25 5h3.5v7.25H23v3.5h-7.25V23h-3.5v-7.25H5v-3.5h7.25z" fill={`url(#${hatchId})`} />
-      </svg>
-    </span>
+    <ConnectionGlyph glyphRef={glyph} />
   </button>;
 });

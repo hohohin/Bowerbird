@@ -10,6 +10,11 @@ export function LibraryFloatingControls({ children, controlsRef }: { children: R
   const [compact, setCompact] = useState(false);
   const [open, setOpen] = useState(false);
   useLayoutEffect(() => {
+    const heading = root.current?.closest(".file-view-heading");
+    heading?.toggleAttribute("data-controls-open", open);
+    return () => heading?.removeAttribute("data-controls-open");
+  }, [open]);
+  useLayoutEffect(() => {
     const host = root.current!, row = controls.current!, heading = host.closest<HTMLElement>(".file-view-heading")!;
     const navigation = heading.querySelector<HTMLElement>(".library-view-switch");
     if (!navigation) return;

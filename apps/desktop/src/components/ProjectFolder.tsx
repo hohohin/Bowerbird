@@ -14,7 +14,8 @@ function projectUpdatedLabel(timestamp: number) {
   return date.toLocaleDateString("zh-CN", { year: "numeric", month: "numeric", day: "numeric" });
 }
 
-export function ProjectFolder({ group, onExpand, onOpen, detailed = false, serial, selection }: { group: LibraryProjectGroup; onExpand?: () => void; onOpen?: () => void; detailed?: boolean; serial?: number; selection?: { id: string | null; onSelect: (id: string) => void } }) {
+export function ProjectFolder({ group, onExpand, onOpen, detailed = false, serial, selection }: { group: LibraryProjectGroup | { project: LibraryProjectGroup["project"]; paths: string[] }; onExpand?: () => void; onOpen?: () => void; detailed?: boolean; serial?: number; selection?: { id: string | null; onSelect: (id: string) => void } }) {
+  const paths = "paths" in group ? group.paths : group.assets.slice(0, 9).map(asset => asset.thumb_path ?? asset.store_path);
   const projectDrop = useProjectAssetDrop();
   const projectRoutePending = useStore((s) => s.projectRoutePending);
   const activeProjectId = useStore((s) => s.activeProjectId);
@@ -30,11 +31,10 @@ export function ProjectFolder({ group, onExpand, onOpen, detailed = false, seria
     }}><MoreHorizontal size={15} aria-hidden="true" /></button>;
   const content = <>
     {detailed && <div className="project-manager-card-head"><span>PRJ / {String(serial ?? 1).padStart(3, "0")}</span>{selected && <span className="project-manager-selected" aria-hidden="true">{selection ? "已选择" : "CURRENT / ✓"}</span>}</div>}
-    <div className="library-project-mosaic" data-count={Math.min(group.assets.length, detailed ? 3 : 6)} aria-hidden="true">
-      {detailed && !group.assets.length ? <div className="project-manager-empty-cover"><ImagePlus size={40} strokeWidth={1}/><span>{group.project.asset_count ? "暂无素材预览" : "开始你的创作"}</span></div> : Array.from({ length: detailed ? Math.min(group.assets.length, 3) : 9 }, (_, index) => {
-        const asset = group.assets[index];
-        const path = asset?.thumb_path ?? asset?.store_path;
-        return <span key={index}>{path ? <img src={convertFileSrc(path)} alt="" loading="lazy" draggable={false} /> : asset ? <Image size={18} /> : null}</span>;
+    <div className="library-project-mosaic" data-count={Math.min(paths.length, detailed ? 3 : 6)} aria-hidden="true">
+      {detailed && !paths.length ? <div className="project-manager-empty-cover"><ImagePlus size={40} strokeWidth={1}/><span>{group.project.asset_count ? "暂无素材预览" : "开始你的创作"}</span></div> : Array.from({ length: detailed ? Math.min(paths.length, 3) : 9 }, (_, index) => {
+        const path = paths[index];
+        return <span key={index}>{path ? <img key={path} src={convertFileSrc(path)} alt="" loading="lazy" draggable={false} /> : index < paths.length ? <Image size={18} /> : null}</span>;
       })}
     </div>
     <div className="project-folder-info">

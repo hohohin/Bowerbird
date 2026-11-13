@@ -1,5 +1,5 @@
 import { contentInputAxisIndex } from "../lib/canvasContentInput";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Schema, type Node as PMNode } from "prosemirror-model";
 import { EditorState } from "prosemirror-state";
@@ -9,11 +9,12 @@ import { baseKeymap } from "prosemirror-commands";
 import { history, undo, redo } from "prosemirror-history";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { api } from "../lib/api";
-import { canvasInputValue, canvasWorkflowInputState } from "../lib/canvasSessionOutputs";
+import { canvasInputValue, canvasWorkflowInputState, workflowGenerationPreviewIds } from "../lib/canvasSessionOutputs";
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
+import { workflowAssetMedia, workflowSourceMediaLabel } from "../lib/workflowCanvasCapabilities";
 import { readCanvasNote } from "../lib/canvasNotes";
 import { agentOutputWriters } from "../lib/workflowAgentOutputs";
-import { workflowReferenceMatchesInput, workflowImageContainer, workflowInputValues, workflowReferenceToken, rebindGenerationReferences, type WorkflowNode, type WorkflowPromptReference } from "../lib/canvasWorkflow";
+import { workflowReferenceMatchesInput, workflowImageContainer, workflowInputValues, workflowReferenceToken, isWorkflowGenerationResult, rebindGenerationReferences, type WorkflowNode, type WorkflowPromptReference } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode } from "../lib/types";
 
 const schema = new Schema({ nodes: {
@@ -26,45 +27,54 @@ const schema = new Schema({ nodes: {
 const serialize = (doc: PMNode) => doc.textBetween(0, doc.content.size, "\n", node => node.type.name === "reference" ? workflowReferenceToken(node.attrs.id) : "");
 interface Candidate { reference: Omit<WorkflowPromptReference, "id">; preview: string; assetIds?: string[]; unavailable?: boolean }
 
-export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disabled, onChange }: {
+export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disabled, readCurrentPrompt, onChange, action }: {
   node: WorkflowNode; nodes: WorkflowNode[]; graphNodes: CanvasNode[]; disabled: boolean;
+  action?: ReactNode;
   cardNames?: Record<string, string>;
+  readCurrentPrompt: () => string;
   onChange: (prompt: string, references: WorkflowPromptReference[]) => void;
 }) {
   node = rebindGenerationReferences(node);
+  const [updatingBoard, updateBoard] = useTransition();
   const usesPipes = node.kind === "generation" || node.kind === "agent" || node.kind === "planner";
-  const hasAutomaticInput = Object.values(node.inputs).some(inputs => inputs.some(input => !!input.autoConnect));
+  const hasAutomaticInput = Object.values(node.inputs).some(inputs => inputs.some(input => input.autoConnect ||
+    node.kind === "generation" && input.nodeId && isWorkflowGenerationResult(input, nodes.find(source => source.id === input.nodeId))));
   const editorAttributes = useMemo(() => ({ role: "textbox", "aria-label": node.kind === "planner" ? "工作流需求" : node.kind === "agent" ? "Agent 要求" : "卡片指令", "aria-multiline": "true",
     "data-placeholder": node.kind === "agent" && node.skill === "hyperframes" ? "描述视频内容、时长和风格…" : hasAutomaticInput ? "输入创作要求…" : node.kind === "planner" ? "按 @ 引用输入，例如：保留 @原图 的版式，将产品替换为 @产品参考…" : node.kind === "agent" ? "填写要求，已连接图文会自动发送；可按 @ 指定用途…" : "输入创作要求，按 @ 引入收到的图片或文字…" }), [node.kind, node.skill, hasAutomaticInput]);
   const host = useRef<HTMLDivElement>(null), view = useRef<EditorView | null>(null);
   const [menu, setMenu] = useState<{ pos: number; left: number; top: number } | null>(null);
   const [assets, setAssets] = useState<Asset[]>([]);
+  // Image candidates also supply inline chip thumbnails. Text previews are only displayed in the @ menu.
+  const showTextCandidates = !!menu && !disabled;
   const inputCandidates = useMemo(() => (["text", "image"] as const).flatMap(type => (node.inputs[type] ?? []).flatMap((input, index): Candidate[] => {
     const slot = usesPipes ? input.slot : undefined;
     const number = slot ?? index + 1;
+    if (type === "text" && !showTextCandidates) return [{ reference: { type, input, slot, label: `文本 ${number}` }, preview: "" }];
+    const source = nodes.find(node => node.id === input.nodeId);
+    const mediaLabel = (ids: string[] = []) => workflowSourceMediaLabel(ids, assets, source);
     if (canvasWorkflowInputState(input, graphNodes, nodes) === "missing") return [{
-      reference: { type, input, slot, label: `${type === "text" ? "文本" : "图片来源"} ${number}` },
+      reference: { type, input, slot, label: `${type === "text" ? "文本" : "素材来源"} ${number}` },
       preview: "来源卡片或单元格已删除，请重新连接", unavailable: true,
     }];
-    const source = nodes.find(node => node.id === input.nodeId);
-    if (type === "image" && input.portId === "image" && source?.kind === "generation") {
-      const count = source.outputs.image?.assetIds?.length ?? 0;
-      return [{ reference: { type, input, slot, label: usesPipes ? `图片来源 ${number}` : `生成结果 ${number}` }, assetIds: source.outputs.image?.assetIds, preview: count ? `本次 ${count} 张图片 · 重跑自动更新` : "本次生成图片 · 运行时等待上游" }];
-    }
     try {
-      const value = workflowInputValues(nodes, { ...node, inputs: { [type]: [input] } }, (id, cellId) => {
+      const generated = type === "image" && source && isWorkflowGenerationResult(input, source);
+      const value = generated ? { assetIds: workflowGenerationPreviewIds(source, graphNodes), text: undefined } : workflowInputValues(nodes, { ...node, inputs: { [type]: [input] } }, (id, cellId) => {
         const table = graphNodes.find(node => node.id === id && node.hiddenAt == null);
         return table ? canvasInputValue(table, cellId, graphNodes) : undefined;
       })[type][0];
-      return type === "text" ? [{ reference: { type, input, slot, label: `文本 ${number}` }, preview: value.text || "（空文本）" }]
-        : usesPipes || workflowImageContainer(input)
-          ? [{ reference: { type, input, slot, label: `图片来源 ${number}` }, assetIds: value.assetIds, preview: `当前 ${value.assetIds?.length ?? 0} 张图片 · 随来源自动更新` }]
-          : (value.assetIds ?? []).map((assetId, i) => ({ reference: { type, input, slot, assetId, label: `图片 ${number}.${i + 1}` }, preview: "" }));
+      if (type === "text") return [{ reference: { type, input, slot, label: `文本 ${number}` }, preview: value.text || "（空文本）" }];
+      const assetIds = value.assetIds ?? [];
+      const media = mediaLabel(assetIds);
+      const count = `${assetIds.length} ${media === "图片" ? "张" : media === "素材" ? "项" : "段"}${media}`;
+      const preview = !assetIds.length ? "等待上游内容" : generated ? `本次 ${count} · 重跑自动更新` : `当前 ${count} · 随来源自动更新`;
+      return usesPipes || workflowImageContainer(input)
+        ? [{ reference: { type, input, slot, label: `${media}来源 ${number}` }, assetIds, preview }]
+        : assetIds.map((assetId, i) => ({ reference: { type, input, slot, assetId, label: `${mediaLabel([assetId])} ${number}.${i + 1}` }, preview: "" }));
     } catch {
       const pendingSource = type === "text" && (source || graphNodes.some(card => card.id === input.canvasNodeId && card.hiddenAt == null));
-      return [{ reference: { type, input, slot, label: `${type === "text" ? "文本" : "图片来源"} ${number}` }, preview: "等待上游内容", unavailable: !(pendingSource || (type === "image" && workflowImageContainer(input))) }];
+      return [{ reference: { type, input, slot, label: `${type === "text" ? "文本" : mediaLabel() + "来源"} ${number}` }, preview: "等待上游内容", unavailable: !(pendingSource || (type === "image" && workflowImageContainer(input))) }];
     }
-  })), [node.inputs, nodes, graphNodes, usesPipes]);
+  })), [node.inputs, nodes, graphNodes, usesPipes, showTextCandidates, assets]);
   const outputCandidates: Candidate[] = node.kind === "agent" ? agentOutputWriters(node, nodes).map(writer => {
     const target = writer.textTarget!;
     const card = graphNodes.find(card => card.id === target.nodeId && card.hiddenAt == null);
@@ -79,7 +89,8 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
   const candidates = [...inputCandidates, ...outputCandidates];
   const referenceLabel = (ref: WorkflowPromptReference) => ref.direction === "output"
     ? outputCandidates.find(candidate => candidate.reference.input.nodeId === ref.input.nodeId)?.reference.label ?? `${ref.label}（已断开）`
-    : inputCandidates.some(candidate => candidate.reference.type === ref.type && workflowReferenceMatchesInput(ref, candidate.reference.input)) ? ref.label : `${ref.label}（已断开）`;
+    : inputCandidates.find(candidate => candidate.reference.type === ref.type && workflowReferenceMatchesInput(ref, candidate.reference.input))?.reference.label
+      ?? `${ref.type === "image" && ref.slot ? `素材来源 ${ref.slot}` : ref.label}（已断开）`;
   const referenceAssetId = (ref?: Omit<WorkflowPromptReference, "id">) => ref?.direction === "output" ? undefined : ref && (ref.slot !== undefined || workflowImageContainer(ref.input))
     ? inputCandidates.find(candidate => candidate.reference.type === ref.type && workflowReferenceMatchesInput(ref, candidate.reference.input))?.assetIds?.[0]
     : ref?.assetId;
@@ -91,7 +102,11 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
   }, [assetKey]);
   const imageSrc = (id?: string) => {
     const asset = assets.find(asset => asset.id === id);
-    const path = asset && canvasAssetMediaPath({ storePath: asset.store_path ?? null, thumbPath: asset.thumb_path ?? null });
+    const media = workflowAssetMedia(asset);
+    if (!asset || !media || media === "audio") return "";
+    const path = media === "video"
+      ? workflowAssetMedia({ store_path: asset.thumb_path }) === "image" ? asset.thumb_path : null
+      : canvasAssetMediaPath({ storePath: asset.store_path ?? null, thumbPath: asset.thumb_path ?? null });
     return path ? path.startsWith("data:") ? path : convertFileSrc(path) : "";
   };
   function toDoc() {
@@ -117,7 +132,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
       dispatchTransaction(tr) {
         editor.updateState(editor.state.apply(tr));
         const prompt = serialize(editor.state.doc);
-        if (tr.docChanged) latest.current.onChange(prompt, latest.current.node.promptReferences ?? []);
+        if (tr.docChanged) updateBoard(() => latest.current.onChange(prompt, latest.current.node.promptReferences ?? []));
         const { from, empty } = editor.state.selection;
         if (empty && from > 1 && editor.state.doc.textBetween(from - 1, from) === "@" && !editor.composing) {
           const rect = editor.coordsAtPos(from); setMenu({ pos: from - 1, left: rect.left, top: rect.bottom });
@@ -132,9 +147,22 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
   useEffect(() => {
     const editor = view.current; if (!editor) return;
     editor.setProps({ editable: () => !disabled, attributes: editorAttributes });
-    // External updates (reload/undo) replace the document; normal typing keeps its selection.
-    if (serialize(editor.state.doc) !== node.prompt) editor.updateState(EditorState.create({ schema, doc: toDoc(), plugins: editor.state.plugins }));
-  }, [node.prompt, disabled, editorAttributes]);
+  }, [disabled, editorAttributes]);
+  useEffect(() => {
+    const editor = view.current;
+    if (!editor || updatingBoard || serialize(editor.state.doc) === node.prompt || readCurrentPrompt() !== node.prompt) return;
+    // Map the live selection and undo history through the changed range. Recreating EditorState
+    // would move the caret to the first paragraph even for a change after the current word.
+    const current = editor.state.doc.content, next = toDoc();
+    const start = current.findDiffStart(next.content);
+    const end = current.findDiffEnd(next.content);
+    if (start == null || !end) return;
+    // Repeated characters can make the shared prefix and suffix overlap.
+    const overlap = Math.max(0, start - Math.min(end.a, end.b));
+    const tr = editor.state.tr.replace(start, end.a + overlap, next.slice(start, end.b + overlap));
+    editor.updateState(editor.state.apply(tr.setMeta("addToHistory", false)));
+    setMenu(null); // Its stored @ position belongs to the previous document.
+  }, [node.prompt, updatingBoard]);
   useEffect(() => {
     const editor = view.current; if (!editor) return;
     const tr = editor.state.tr;
@@ -155,7 +183,8 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
     onChange(serialize(state.doc), [...(node.promptReferences ?? []), reference]);
     setMenu(null); editor.focus();
   }
-  return <><div ref={host} className="workflow-prompt-editor" onPointerDown={event => event.stopPropagation()} />
+  const editorField = <div ref={host} className="workflow-prompt-editor" onPointerDown={event => event.stopPropagation()} />;
+  return <>{action ? <div className="workflow-prompt-with-action">{editorField}{action}</div> : editorField}
     {menu && !disabled && createPortal(<div className="workflow-reference-menu" role="listbox" aria-label="收到的内容" style={{ left: Math.max(8, Math.min(menu.left, window.innerWidth - 300)), top: Math.min(menu.top + 6, window.innerHeight - 280) }} onPointerDown={event => { event.preventDefault(); event.stopPropagation(); }}>
       <strong>收到的内容</strong>{!inputCandidates.length && <p>连接图片或文本输入后，可在这里引用</p>}
       {candidates.map((candidate, index) => <Fragment key={index}>

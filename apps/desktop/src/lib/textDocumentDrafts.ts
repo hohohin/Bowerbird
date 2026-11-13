@@ -3,6 +3,7 @@ export interface TextDocumentDraft { base: TextDocumentSnapshot; text: string; m
 const drafts = new Map<string, TextDocumentDraft>();
 const versions = new Map<string, string>();
 const listeners = new Map<string, Set<(draft: TextDocumentDraft) => void>>();
+const captures = new Map<string, Set<() => void>>();
 const prefix = "bowerbird:text-draft:";
 const validBase = (value: unknown): value is TextDocumentSnapshot => {
   if (!value || typeof value !== "object") return false;
@@ -12,6 +13,7 @@ const validBase = (value: unknown): value is TextDocumentSnapshot => {
 };
 
 export function getTextDocumentDraft(key: string): TextDocumentDraft | undefined {
+  captures.get(key)?.forEach(capture => capture());
   if (drafts.has(key)) return drafts.get(key);
   if (typeof sessionStorage === "undefined") return undefined;
   try {
@@ -52,12 +54,19 @@ export function finishTextDocumentSave(key: string, submitted: TextDocumentDraft
   return next;
 }
 
-export function subscribeTextDocumentDraft(key: string, listener: (draft: TextDocumentDraft) => void): () => void {
+export function subscribeTextDocumentDraft(key: string, listener: (draft: TextDocumentDraft) => void, capture?: () => void): () => void {
   const group = listeners.get(key) ?? new Set(); group.add(listener); listeners.set(key, group);
-  return () => { group.delete(listener); if (!group.size) listeners.delete(key); };
+  const pending = captures.get(key) ?? new Set<() => void>();
+  if (capture) { pending.add(capture); captures.set(key, pending); }
+  return () => {
+    group.delete(listener); if (!group.size) listeners.delete(key);
+    if (capture) pending.delete(capture);
+    if (!pending.size) captures.delete(key);
+  };
 }
 
 if (typeof window !== "undefined") window.addEventListener("beforeunload", event => {
+  captures.forEach(group => group.forEach(capture => capture()));
   if (!drafts.size) return;
   event.preventDefault(); event.returnValue = "";
 });

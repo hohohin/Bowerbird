@@ -1,4 +1,4 @@
-importScripts("collection-utils.js", "video-utils.js");
+importScripts("pairing.js", "collection-utils.js", "video-utils.js");
 const S = globalThis.BowerbirdCollection;
 const MAX_IMAGE_BYTES = S.MAX_IMAGE_BYTES;
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
@@ -7,6 +7,50 @@ const FETCH_TIMEOUT_MS = S.FETCH_TIMEOUT_MS;
 // content script 把候选交给 service worker；background 在浏览器会话内 fetch（自动走浏览器
 // 系统代理 + Cookie / 登录态），再把真实图片字节经 WS save_blob 两帧协议上传桌面端。
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  // Only our own isolated content scripts may request a short-lived upload
+  // proof. Take the origin from Chrome, never from message fields.
+  if (message?.type === "collect_access") {
+    if (_sender.id !== chrome.runtime.id || !_sender.tab || typeof _sender.origin !== "string") return false;
+    const origin = _sender.origin;
+    if (!/^(https?:\/\/|file:\/\/)/.test(origin) && origin !== "null") return false;
+    BowerbirdPairing.proof(origin, "upload").then(sendResponse, () => sendResponse({ok:false,code:"pair_required"}));
+    return true;
+  }
+  if (message?.type === "collect_heartbeat") {
+    S.checkVideoSupport().then(sendResponse, () => sendResponse({ok:false}));
+    return true;
+  }
+  if (message?.type === "pairing_code_get") {
+    if (_sender.id !== chrome.runtime.id) return false;
+    (async () => {
+      try {
+        const key = (await BowerbirdPairing.load()) || (await BowerbirdPairing.generate());
+        if (!key?.publicKey) throw new Error("missing public key");
+        sendResponse({ ok: true, code: `${chrome.runtime.id}.${key.publicKey}` });
+      } catch { sendResponse({ ok: false, code: "pair_required" }); }
+    })();
+    return true;
+  }
+  if (message?.type === "button_position_get") {
+    chrome.storage.local.get("bowerbird_button_position", (data) => {
+      sendResponse({ position: data?.bowerbird_button_position || null });
+    });
+    return true;
+  }
+  if (message?.type === "button_position_set") {
+    const position = message.position;
+    if (!position || typeof position !== "object") return false;
+    const saved = {
+      x: Number(position.x),
+      y: Number(position.y),
+      dock: position.dock === "left" || position.dock === "right" ? position.dock : null,
+    };
+    if (!Number.isFinite(saved.x) || !Number.isFinite(saved.y)) return false;
+    chrome.storage.local.set({ bowerbird_button_position: saved }, () => {
+      sendResponse({ ok: !chrome.runtime.lastError });
+    });
+    return true;
+  }
   if (!["save_image","save_video"].includes(message?.type)) return false;
   (message.type==="save_video" ? fetchVideo(message) : fetchCandidate(message))
     .then(sendResponse)

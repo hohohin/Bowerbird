@@ -47,7 +47,9 @@ declare module "node:fs" {
   export function readFileSync(path: number | string): Uint8Array;
   export function writeFileSync(path: string, data: string, encoding: "utf8"): void;
   export function writeFileSync(path: string, data: Uint8Array): void;
-  export function mkdirSync(path: string, options: { recursive: boolean }): string | undefined;
+  export function mkdirSync(path: string, options: { recursive: boolean; mode?: number }): string | undefined;
+  export function cpSync(source: string, target: string, options: { recursive: boolean }): void;
+  export function renameSync(source: string, target: string): void;
   export function mkdtempSync(prefix: string): string;
   export function copyFileSync(source: string, destination: string): void;
   export function symlinkSync(target: string, path: string, type?: "dir" | "junction"): void;
@@ -214,6 +216,7 @@ declare class TextDecoder {
 }
 
 interface AbortSignal {
+  readonly aborted: boolean;
   addEventListener(event: "abort", listener: () => void, options?: { once?: boolean }): void;
 }
 declare class AbortController {
