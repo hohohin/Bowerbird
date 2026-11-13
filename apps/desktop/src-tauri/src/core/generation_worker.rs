@@ -6,11 +6,10 @@
 //! 「有反推」——已移除；生成图需手动反推才进创作板 @ 池 / 标 🏷️）。
 
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::Semaphore;
 use ulid::Ulid;
 use crate::commands::codex::{GenerationCancellation, GenerationGuard};
 
@@ -24,23 +23,15 @@ use crate::core::task_queue::{GenJob, Task};
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
 
-/// Bowerbird 本机即梦图片、视频及启动恢复共用一个名额，覆盖提交、查询和下载。
-/// 2026-08-06 的单账号视频测试在第二笔提交时收到 ret=1310 ExceedConcurrencyLimit。
-/// 当时未测图片或跨会员档位。名额数是桌面调度策略，来源见 SEEDANCE-2.5-INTEGRATION.md。
-pub static JIMENG_FLY: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(1));
-
-/// 取消覆盖等待账号名额与远端查询，返回后不再取消同步入库。
+/// 取消当前任务的原单查询。
 async fn cancellable_jimeng_query<T>(
-    semaphore: &Semaphore,
     cancel_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
     query: impl std::future::Future<Output = AppResult<T>>,
 ) -> Option<AppResult<T>> {
     tokio::select! {
-        result = async {
-            let _permit = semaphore.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
-            query.await
-        } => Some(result),
+        biased;
         _ = async { match cancel_rx.as_mut() { Some(rx) => { let _ = rx.await; }, None => std::future::pending::<()>().await } } => None,
+        result = query => Some(result),
     }
 }
 
@@ -336,7 +327,7 @@ pub async fn finalize_generation_assets(
 /// - 即梦 job 但 submit_id=None → `mark_failed`（重启前未拿到 submit_id，无法续查）；
 /// - 即梦 job + submit_id → 后台 spawn `recover_one_jimeng_job` 续查。
 ///
-/// 异步不阻塞启动；恢复 job 的 permit 与正常生成公平排队（JIMENG_FLY FIFO）。
+/// 各恢复任务按自己的 submit_id 独立查询。
 pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
     tauri::async_runtime::spawn(async move {
         match Task::list_project_generation(&db) {
@@ -589,7 +580,7 @@ pub(crate) async fn recover_one_cloud_job(
     }
 }
 
-/// 续查单个即梦 job：emit recover_started（前端 upsert 占位 job）→ 拿 JIMENG_FLY permit →
+/// 续查单个即梦 job：emit recover_started（前端 upsert 占位 job）→
 /// status=querying 落库 → poll_query_and_download 续查下载 → finalize_generation_assets 入库 →
 /// emit done。远端仍排队则保持 running + emit recover_polling（下次启动再试）；真失败 mark_failed。
 /// 启动恢复与孤儿取回（`jimeng_retrieve_orphan`）共用。
@@ -636,7 +627,6 @@ async fn recover_one_jimeng_job_inner(
             }),
         );
     }
-    // ② 拿 permit（FIFO 公平，与正常即梦生成串行）。
     // ③ status=querying 落库（前端 loadGenJobs 拉到时显示「续查中」）。
     job.status = "querying".into();
     let _ = Task::upsert_gen_job(&db, &job);
@@ -653,20 +643,19 @@ async fn recover_one_jimeng_job_inner(
             let _ = app.emit("codex://chunk", value);
         }
     };
-    emit_progress(GenerationProgress::new(GenerationStage::WaitingSlot));
+    emit_progress(GenerationProgress::new(GenerationStage::Querying));
     let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<Chunk>(16);
     let query = async {
-    crate::codex::progress::send(Some(&progress_tx), GenerationProgress::new(GenerationStage::Querying)).await;
-    if job.media == "video" {
-        crate::codex::jimeng_video::poll_video_progress(&binary, &submit_id, Some(&progress_tx)).await.map(|(files, dir)| (files, Some(dir)))
-    } else {
-        poll_query_and_download(&binary, &submit_id, 30, Duration::from_secs(10), Some(&progress_tx)).await.map(|files| {
-            let dir = files.first().and_then(|p| p.parent()).map(std::path::Path::to_path_buf);
-            (files, dir)
-        })
-    }
+        if job.media == "video" {
+            crate::codex::jimeng_video::poll_video_progress(&binary, &submit_id, Some(&progress_tx)).await.map(|(files, dir)| (files, Some(dir)))
+        } else {
+            poll_query_and_download(&binary, &submit_id, 30, Duration::from_secs(10), Some(&progress_tx)).await.map(|files| {
+                let dir = files.first().and_then(|p| p.parent()).map(std::path::Path::to_path_buf);
+                (files, dir)
+            })
+        }
     };
-    let download = cancellable_jimeng_query(&JIMENG_FLY, &mut cancel_rx, query);
+    let download = cancellable_jimeng_query(&mut cancel_rx, query);
     tokio::pin!(download);
     let result = loop {
         tokio::select! {
@@ -877,12 +866,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn video_recovery_cancel_before_permit_never_starts_query() {
-        let semaphore = Semaphore::new(0);
+    async fn video_recovery_already_cancelled_never_starts_query() {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let mut cancel = Some(rx);
         tx.send(()).unwrap();
-        let result = cancellable_jimeng_query(&semaphore, &mut cancel, async {
+        let result = cancellable_jimeng_query(&mut cancel, async {
             panic!("query must not run while queued");
             #[allow(unreachable_code)] Ok::<(), AppError>(())
         }).await;
@@ -890,16 +878,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn video_recovery_cancel_drops_query_and_releases_permit() {
-        let semaphore = Semaphore::new(1);
+    async fn video_recovery_cancel_drops_query() {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let mut cancel = Some(rx);
-        let result = cancellable_jimeng_query(&semaphore, &mut cancel, async {
+        let result = cancellable_jimeng_query(&mut cancel, async {
             tx.send(()).unwrap();
             std::future::pending::<AppResult<()>>().await
         }).await;
         assert!(result.is_none());
-        assert_eq!(semaphore.available_permits(), 1);
     }
 
     #[test]

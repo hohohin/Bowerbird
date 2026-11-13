@@ -140,7 +140,7 @@ interface Props {
   panReady: boolean;
   onSelect: (id: string, additive?: boolean) => void;
   onNodesChanged: () => void;
-  onEdited: (before: CanvasWorkflow, after: CanvasWorkflow, createdNodeIds?: string[]) => void;
+  onEdited: (before: CanvasWorkflow, after: CanvasWorkflow) => void;
   onOpenGeneration: (node: CanvasNode) => void;
   onOpenAgent: (nodeId: string, conversationId?: string, entryKey?: string) => void;
   onNewAgentChat?: (previousId: string) => void;
@@ -655,15 +655,14 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     handle((async () => {
       await ensureMaterialized();
       const result = await owner.connectAutomatic(outputs, target, { createNodes });
-      onEdited(result.before, result.after, result.createdNodeIds);
+      onEdited(result.before, result.after);
       if (createNodes.length) onSelect(createNodes[0].id);
-      onNodesChanged();
     })());
   }
   function disconnectAutomatic(id: string) {
     handle((async () => {
       const result = await controller.disconnectAutomatic(id);
-      onEdited(result.before, result.after); onNodesChanged();
+      onEdited(result.before, result.after);
     })());
   }
   function disconnectChoices({ nodeId, port: onlyPort, cellId, wireKey }: DisconnectTarget) {
@@ -1262,15 +1261,18 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           data-workflow-generator={node.id} d={path(cardPoint(node.id, "output")!,
             embedded ?? cardPoint(anchorId, "input")!)} />;
       }))}
-      {document.nodes.filter(node => node.kind === "generation").flatMap(node =>
-        graphNodes.filter(session => hiddenWorkflowSessionIds([node]).has(session.id)).flatMap(session =>
+      {document.nodes.filter(node => node.kind === "generation").flatMap(node => {
+        const hiddenSessions = hiddenWorkflowSessionIds([node]);
+        if (!hiddenSessions.size) return [];
+        return graphNodes.filter(session => hiddenSessions.has(session.id)).flatMap(session =>
           canvasSessionImages(session, graphNodes).flatMap(output => {
             const anchorId = conversationCards?.aliases.get(output.id) ?? output.id;
             const visible = materialById.get(anchorId) ?? conversationCards?.cards.get(anchorId)?.anchor;
             if (!visible || output.hiddenAt != null || conversationCards?.hiddenIds.has(anchorId)) return [];
             return <path key={`generated-${node.id}-${output.id}`} className={`is-image${wireSelected(node.id) || wireSelected(visible.id) ? " is-selected" : ""}`} data-workflow-generated-link={output.id}
               data-workflow-generator={node.id} d={outputPath(cardPoint(node.id, "output")!, cardPoint(anchorId, "input")!)} />;
-          }))) }
+          }));
+      })}
       {document.nodes.map(node => {
         const group = node.resultGroupId && groupById.get(node.resultGroupId);
         return group && <path key={`group-${node.id}`} className={`is-image${wireSelected(node.id) || wireSelected(group.id) ? " is-selected" : ""}`} data-workflow-product-link={group.id} d={path(cardPoint(node.id, "output")!, { x: group.x, y: group.y + group.height / 2 })} />;
@@ -1361,7 +1363,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const height = node.kind === "voice" ? 0 : node.kind === "generation" ? 210 : node.kind === "trigger" ? 0 : node.kind === "loop" ? 260 : Math.max(330, 130 + Math.max(inputPorts.length, outputPorts.length) * 30);
       const images = Object.values(node.outputs).flatMap(value => value.assetIds ?? []);
       const profileId = node.profileId || node.profileCache?.profileId || step?.profileId;
-      const inputIds = node.kind === "trigger" ? [] : Object.values(visibleInputs).flat().flatMap(inputImages);
+      const inputIds = node.kind === "trigger" || node.kind === "generation" ? [] : Object.values(visibleInputs).flat().flatMap(inputImages);
       const references = node.kind === "generation" ? generationReferencePreviewOrder(node, referencePreviewValues(node), document.nodes)
         .map(id => assets.find(asset => asset.id === id)).filter((asset): asset is Asset => !!asset) : [];
       const selectedImages = [...new Set(node.kind === "generation" || (node.kind !== "agent" && images.length) ? images : inputIds)].map(id => assets.find(asset => asset.id === id)).filter((asset): asset is Asset => !!asset);

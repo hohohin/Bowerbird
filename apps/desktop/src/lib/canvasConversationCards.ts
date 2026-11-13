@@ -55,19 +55,33 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
     const sorted = [...tied].sort((a, b) => a.rank - b.rank).map(item => ordered[item.slot]);
     tied.forEach((item, index) => { ordered[item.slot] = sorted[index]; });
   }
+  // Index production instances once. Iteration order remains the canvas order even
+  // when several jobs or sessions contribute to the same card.
+  const ownersByTurn = new Map<string, Set<CanvasConversationCard>>();
+  const outputTurns = new Map<CanvasNode, string>();
+  const firstAvailable = new Map<string, CanvasNode>();
+  for (const node of ordered) {
+    if (node.kind !== "asset" || node.role !== "output" || !node.assetId || node.hiddenAt != null) continue;
+    const execution = payload(node).execution;
+    if (!execution) continue;
+    const key = JSON.stringify([node.projectId, execution.job_id, execution.turn_key]);
+    outputTurns.set(node, key);
+    // Agent aliases require an exact turn (including absent vs null in legacy payloads).
+    const exactKey = execution.turn_key === undefined ? key + ":missing" : key;
+    if (!contained.has(node.id) && !firstAvailable.has(exactKey)) firstAvailable.set(exactKey, node);
+  }
   for (const node of ordered) {
     if (node.kind !== "prompt" || node.hiddenAt != null || excluded.has(node.id)) continue;
     const turn = payload(node);
     if (!turn.job_id) continue;
     if (turn.generation_group_dissolved) continue;
+    const turnKey = JSON.stringify([node.projectId, turn.job_id, turn.turn_key]);
     const originalConversation = conversationId(node);
     const explicitDestination = structured.has(JSON.stringify([node.projectId, originalConversation]));
     // Agent tool sessions retain their execution history, but their pictures are
     // independent canvas cards. Keep pending/failed sessions until a result exists.
     if (turn.workflow_generation_group?.startsWith("asset:") && !explicitDestination) {
-      const firstOutput = ordered.find(output => output.kind === "asset" && output.role === "output" && output.assetId
-        && output.projectId === node.projectId && output.hiddenAt == null && !contained.has(output.id)
-        && payload(output).execution?.job_id === turn.job_id && payload(output).execution?.turn_key === turn.turn_key);
+      const firstOutput = firstAvailable.get(turn.turn_key === undefined ? turnKey + ":missing" : turnKey);
       if (firstOutput) { aliases.set(node.id, firstOutput.id); continue; }
     }
     const conversation = explicitDestination ? originalConversation
@@ -78,18 +92,18 @@ export function canvasConversationCards(nodes: readonly CanvasNode[], jobs: Reco
     card.latest = node;
     groups.set(key, card);
     aliases.set(node.id, card.anchor.id);
+    const owners = ownersByTurn.get(turnKey) ?? new Set<CanvasConversationCard>();
+    owners.add(card);
+    ownersByTurn.set(turnKey, owners);
+  }
+  for (const [node, turnKey] of outputTurns) {
+    for (const card of ownersByTurn.get(turnKey) ?? []) {
+      card.allOutputs.push(node);
+      if (!contained.has(node.id)) card.outputs.push(node);
+    }
   }
   for (const card of groups.values()) {
-    const turns = new Set(card.sessions.map(node => { const turn = payload(node); return JSON.stringify([turn.job_id, turn.turn_key]); }));
-    for (const node of ordered) {
-      if (node.kind !== "asset" || node.role !== "output" || !node.assetId || node.hiddenAt != null || node.projectId !== card.anchor.projectId) continue;
-      const execution = payload(node).execution;
-      if (!execution || !turns.has(JSON.stringify([execution.job_id, execution.turn_key]))) continue;
-      card.allOutputs.push(node);
-      if (contained.has(node.id)) continue;
-      card.outputs.push(node);
-      aliases.set(node.id, card.anchor.id);
-    }
+    for (const output of card.outputs) aliases.set(output.id, card.anchor.id);
     // Output UUID/node IDs are not chronological when native timestamps tie.
     // Turn order comes first; ULID asset IDs break ties within one turn.
     const ranks = new Map(card.sessions.map((node, index) => {

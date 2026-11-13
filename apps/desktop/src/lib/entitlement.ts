@@ -1,5 +1,5 @@
-import type { EntitlementSnapshot, FeaturePolicy } from "../lib/types";
-import { isCloudProvider } from "../lib/genProviders";
+import type { EntitlementSnapshot, FeaturePolicy, GenJob } from "../lib/types";
+import { isCloudProvider, normalizeGenerationProvider } from "../lib/genProviders";
 
 /** 账号界面只展示当前身份有效快照中的余额和订阅。 */
 export function accountEntitlement(snapshot: EntitlementSnapshot | null, userId?: string | null) {
@@ -72,12 +72,19 @@ export function understandProvider(
   return null;
 }
 
-/** 创作板发送时的并发闸：max_parallel_jobs 决定允许同时运行的生成任务数。 */
+/** 即梦自有订阅由供应商控制并发。其在途任务不占其他生成渠道的名额。 */
+export function countLimitedGenerationJobs(jobs: Record<string, GenJob>): number {
+  return Object.values(jobs).filter(job => job.running && normalizeGenerationProvider(job.provider) !== "jimeng").length;
+}
+
 export function canStartAnotherJob(
   entitlement: EntitlementSnapshot | null,
   runningCount: number,
+  provider: string,
 ): boolean {
-  return runningCount < effectivePolicy(entitlement).max_parallel_jobs;
+  const policy = effectivePolicy(entitlement);
+  if (normalizeGenerationProvider(provider) === "jimeng") return policy.can_use_byo;
+  return runningCount < policy.max_parallel_jobs;
 }
 
 /**

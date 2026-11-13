@@ -90,7 +90,7 @@
 
 ## 给素材卡和详情加入音频试听与波形
 
-- 菜单内的音频缩略图使用 [AudioWaveformThumbnail](../../apps/desktop/src/components/AudioWaveform.tsx)。它共用波形请求缓存和绘制函数，仅在预览进入可见范围时订阅，不创建播放器。工作流断开菜单用它区分不同音轨。
+- 生成卡和 Agent 卡的素材预览、工作流断开菜单共用 [AudioWaveformThumbnail](../../apps/desktop/src/components/AudioWaveform.tsx)。它共用波形请求缓存和绘制函数，仅在预览进入可见范围时订阅，不创建播放器。
 
 - 用途／关键词：音频、试听、连续播放、peaks、源版本、单播放器。
 - 推荐 UI 入口：[AudioWaveform.tsx](../../apps/desktop/src/components/AudioWaveform.tsx) 的 `AudioWaveform`；底层为 [audioPreview.ts](../../apps/desktop/src/lib/audioPreview.ts) 的 `playAudioPreview`／`stopAudioPreview` 与 [audioPreviewPeaks.ts](../../apps/desktop/src/lib/audioPreviewPeaks.ts) 的 `requestAudioWaveform`。实际调用：[AudioFileMediaCard.tsx](../../apps/desktop/src/components/AudioFileMediaCard.tsx) 和 [AssetDetail.tsx](../../apps/desktop/src/components/AssetDetail.tsx) 都渲染 `AudioWaveform`。

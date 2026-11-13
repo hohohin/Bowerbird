@@ -96,6 +96,36 @@ try {
   await page.waitForFunction(() => !!window.releaseDiagnostic);
   await page.evaluate(() => window.releaseDiagnostic()); await page.evaluate(() => window.generationTest);
   assert.equal(await page.evaluate(() => window.submittedModel.dreaminaModelVersion), '5.0', 'follow-up uses the newly selected version');
+  await page.evaluate(() => {
+    const state = window.store.getState();
+    window.store.setState({ cloudEntitlement: { ...state.cloudEntitlement, generation_services: [
+      { service: 'image_seedream55', label: 'Seedream 5.5', credits: 20 },
+      { service: 'image_seedream55_1k', label: 'Seedream 5.5 1K', credits: 10 },
+      { service: 'image_seedream55_15k', label: 'Seedream 5.5 1.5K', credits: 10 },
+      { service: 'image_hd', label: 'Seedream 5.0 Pro', credits: 20 },
+      { service: 'image_lite', label: 'Seedream 5.0 Lite', credits: 8 },
+    ] } });
+  });
+  await trigger.click();
+  for (const key of ['image_seedream55', 'image_seedream55_1k', 'image_seedream55_15k', 'image_hd', 'image_lite']) {
+    assert.equal(await option(`bowerbird-cloud-${key}`).isDisabled(), false);
+  }
+  await option('bowerbird-cloud-image_seedream55').click();
+  assert.equal(await page.evaluate(() => window.store.getState().activeGenProvider), 'bowerbird-cloud-image_seedream55');
+  await page.evaluate(async () => {
+    const original = window.__TAURI_INTERNALS__.invoke;
+    window.__TAURI_INTERNALS__.invoke = async (command, args) => command === 'cloud_sync_entitlement'
+      ? window.store.getState().cloudEntitlement : original(command, args);
+    window.store.setState({ defaultProvider: 'jimeng' });
+    await window.store.getState().syncCloudEntitlement();
+  });
+  assert.equal(await page.evaluate(() => window.store.getState().activeGenProvider), 'jimeng', 'saved available default is preserved');
+  await page.evaluate(async () => {
+    const state = window.store.getState();
+    window.store.setState({ cloudEntitlement: { ...state.cloudEntitlement, policy: { can_use_byo: false } } });
+    await window.store.getState().syncCloudEntitlement();
+  });
+  assert.equal(await page.evaluate(() => window.store.getState().activeGenProvider), 'bowerbird-cloud-image_seedream55', 'Cloud fallback uses active 5.5');
   for (const theme of ['light', 'dark']) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await trigger.click(); await menu.screenshot({ path: `.tmp/seedream-models/${theme}.png` }); await page.keyboard.press('Escape');

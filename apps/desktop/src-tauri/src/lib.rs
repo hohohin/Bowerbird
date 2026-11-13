@@ -522,6 +522,7 @@ pub fn run() {
             commands::projects::prepare_library_generation_project,
             commands::project_canvas::project_canvas_ensure,
             commands::project_canvas::project_canvas_get,
+            commands::project_canvas::project_canvas_visible_nodes,
             commands::project_canvas::project_canvas_rename,
             commands::project_canvas::project_canvas_title_from_first_prompt,
             commands::project_canvas::project_canvas_update_draft,

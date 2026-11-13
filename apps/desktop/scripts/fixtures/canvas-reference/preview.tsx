@@ -265,6 +265,8 @@ w.__TAURI_INTERNALS__ = {
       return null;
     }
     if (command === "list_projects") return explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project];
+    if (command === "project_canvas_visible_nodes") return structuredClone(snapshot.nodes.filter((node: any) =>
+      node.projectId === args.projectId && node.hiddenAt == null && args.nodeIds.includes(node.id)));
     if (command === "project_canvas_get") return args.projectId === "q"
       ? { ...structuredClone(snapshot), canvas: { ...canvas, projectId: "q" }, nodes: [], edges: [], groups: [], groupItems: [], threads: [], view: null }
       : structuredClone(snapshot);

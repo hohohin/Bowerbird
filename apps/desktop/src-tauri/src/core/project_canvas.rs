@@ -1768,6 +1768,23 @@ impl Database {
         Ok(conn.query_row(&sql, [node_id], node_from_row).optional()?)
     }
 
+    /// Read the addressed canvas instances without rebuilding gallery or conversation projections.
+    pub fn visible_canvas_nodes(&self, project_id: &str, node_ids: &[String]) -> AppResult<Vec<CanvasNode>> {
+        let conn = self.conn.lock().unwrap();
+        let sql = format!("SELECT {NODE_COLUMNS} FROM canvas_nodes WHERE id=?1 AND project_id=?2 AND hidden_at IS NULL");
+        let mut stmt = conn.prepare(&sql)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut nodes = Vec::new();
+        for id in node_ids {
+            if seen.insert(id) {
+                if let Some(node) = stmt.query_row(params![id, project_id], node_from_row).optional()? {
+                    nodes.push(node);
+                }
+            }
+        }
+        Ok(nodes)
+    }
+
     pub fn list_canvas_nodes(&self, project_id: &str) -> AppResult<Vec<CanvasNode>> {
         let conn = self.conn.lock().unwrap();
         let sql = format!(
@@ -3318,6 +3335,23 @@ mod tests {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
         db
+    }
+
+    #[test]
+    fn visible_canvas_nodes_filter_project_and_hidden_instances() {
+        let db = db();
+        for project in ["p", "other"] {
+            materialize(&db, project);
+        }
+        for (project, id) in [("p", "visible"), ("p", "hidden"), ("p", "unrequested"), ("other", "foreign")] {
+            db.create_canvas_node(&note(project, id)).unwrap();
+        }
+        db.conn.lock().unwrap().execute("UPDATE canvas_nodes SET hidden_at=1 WHERE id='hidden'", []).unwrap();
+        let ids = ["hidden", "visible", "visible", "missing", "foreign"].map(String::from);
+        let nodes = db.visible_canvas_nodes("p", &ids).unwrap();
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0], db.get_canvas_node("visible").unwrap().unwrap());
+        assert!(db.visible_canvas_nodes("p", &[]).unwrap().is_empty());
     }
 
     #[test]

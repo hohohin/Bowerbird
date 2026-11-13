@@ -26,6 +26,7 @@ try {
       payloadJson: JSON.stringify({ execution: { job_id: 'source-job', turn_key: 'source-turn' } }) };
     canvas.nodes.push(session, output);
     api.projectCanvasGet = async () => structuredClone(canvas);
+    api.projectCanvasVisibleNodes = async (projectId, ids) => structuredClone(canvas.nodes.filter(node => node.projectId === projectId && node.hiddenAt == null && ids.includes(node.id)));
     const requests = [];
     api.codexCreateImage = async request => { requests.push(request); };
     window.store.setState({ codexHealth: { ok: true, reason: '' },

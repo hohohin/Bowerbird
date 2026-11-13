@@ -928,19 +928,21 @@ pub async fn codex_create_image(
             }
         } => result?,
     }
-    let db_for_gate = db.inner().clone();
-    let gate_job_id = job_id.clone();
-    let running_count = tokio::task::spawn_blocking(move || -> Result<usize, AppError> {
-        Ok(crate::core::task_queue::Task::list_running(&db_for_gate)?
-            .into_iter()
-            .filter_map(|task| task.gen_job())
-            .filter(|job| job.id != gate_job_id)
-            .count())
-    })
-    .await
-    .map_err(|error| AppError::Other(error.to_string()))??;
-    if !entitlement_snapshot.policy.can_start_job(running_count) {
-        return Err(AppError::Other("已达当前账号档位的并行生成上限".into()));
+    if !crate::codex::is_jimeng_provider(provider.as_deref()) {
+        let db_for_gate = db.inner().clone();
+        let gate_job_id = job_id.clone();
+        let running_count = tokio::task::spawn_blocking(move || -> Result<usize, AppError> {
+            Ok(crate::core::task_queue::Task::list_running(&db_for_gate)?
+                .into_iter()
+                .filter_map(|task| task.gen_job())
+                .filter(|job| job.id != gate_job_id && !crate::codex::is_jimeng_provider(Some(&job.provider)))
+                .count())
+        })
+        .await
+        .map_err(|error| AppError::Other(error.to_string()))??;
+        if !entitlement_snapshot.policy.can_start_job(running_count) {
+            return Err(AppError::Other("已达当前账号档位的并行生成上限".into()));
+        }
     }
     if cancel_rx.try_recv().is_ok() { return Err(AppError::Codex("已取消".into())); }
 
@@ -1152,19 +1154,12 @@ pub async fn codex_create_image(
         );
     }
 
-    // 本机即梦图片与视频按桌面策略共享 JIMENG_FLY，等待名额和生成均响应取消。
-    // Codex 图片由 provider 单独管理产物归属与并发。
     let generation_result: Result<(), AppError> = async {
         // generate_image 借用 tx 推 Delta；用 block 限定借期，结束后 command 才能 reuse tx 发 Done。
         // resume 句柄用 provider_resume（非 codex 原生会话切 codex = None 开新 thread）。
         db.generation_diagnostic_phase(&diagnostic_id, &job_id, "provider", None)?;
         let outcome = {
             let gen_fut = async {
-                let _jimeng_permit = if matches!(provider_name.as_str(), "jimeng" | "dreamina") {
-                    crate::codex::progress::send(Some(&tx), crate::codex::progress::GenerationProgress::new(crate::codex::progress::GenerationStage::WaitingSlot)).await;
-                    Some(crate::core::generation_worker::JIMENG_FLY.acquire().await
-                        .map_err(|e| AppError::Other(e.to_string()))?)
-                } else { None };
                 crate::codex::progress::send(Some(&tx), crate::codex::progress::GenerationProgress::new(crate::codex::progress::GenerationStage::Submitting)).await;
                 if let Some(options) = video_options.clone() {
                     p.generate_video(req, options, &tx, provider_resume).await

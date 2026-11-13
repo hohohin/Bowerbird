@@ -56,7 +56,7 @@ Bowerbird 是本地优先的 AI 图像素材库与创作工作台：收集、浏
 
 后端入口为 [codex/mod.rs](../apps/desktop/src-tauri/src/codex/mod.rs)、[understand.rs](../apps/desktop/src-tauri/src/codex/understand.rs)。UI/provider 默认选择与单次选择须遵守 FeaturePolicy：免费仅 Cloud，本机 CLI 由 Pro/Studio 解锁；不能只靠按钮禁用。
 
-本机 CLI 使用 Bowerbird 独立凭据；Windows 应用内更新保留登录、普通手动重装清登录，具体上线版本与失败恢复边界见 [桌面自动更新](DESKTOP-UPDATES.md)。不得读写系统 CLI 原登录。普通生成持久化到 SQLite 任务队列，按 job 取消；即梦串行，Cloud 按原 job/key 恢复。上游结果未知不自动重发或退款。
+本机 CLI 使用 Bowerbird 独立凭据；Windows 应用内更新保留登录、普通手动重装清登录，具体上线版本与失败恢复边界见 [桌面自动更新](DESKTOP-UPDATES.md)。不得读写系统 CLI 原登录。普通生成持久化到 SQLite 任务队列，按 job 取消；即梦自有订阅图像、视频独立提交，Cloud 按原 job/key 恢复。上游结果未知不自动重发或退款。
 
 Agent 的授权、预算、审批、幂等、计量、租约、TTL 由控制面掌权，DSH 不接管账本；新内容能力复用工具与按需 Skill，不新增领域 Runner。Codex 直接生成保留，禁止新建 Codex + 正式 Agent 组合；即梦 Agent CLI 真机专项按用户决定暂停。
 

@@ -20,7 +20,7 @@ try {
     const check = (ok, reason) => { if (!ok) throw Error(reason); };
     const rejects = async (work, reason) => { let failed = false; try { await work(); } catch { failed = true; } check(failed, reason); };
     const docs = new Map(); let saves = 0, failSave = false, runs = 0;
-    const table = { ...window.snapshot().nodes[0], id: 'content', kind: 'note', assetId: null, role: null,
+    const table = { ...window.snapshot().nodes[0], projectId: 'auto-runtime', id: 'content', kind: 'note', assetId: null, role: null,
       payloadJson: JSON.stringify({ schema_version: 1, note_type: 'text', cells: [[{ id: 'first', text: '' }]], text: '', member_ids: [] }) };
     const canvas = { ...window.snapshot(), nodes: [table] };
     api.canvasWorkflowAuthorize = async () => {};
@@ -32,7 +32,13 @@ try {
       if (createdContent) canvas.nodes.push({ ...createdContent, hiddenAt: null });
       return revision + 1;
     };
-    api.projectCanvasGet = async () => structuredClone(canvas);
+    let fullReads = 0;
+    const nodeReads = [];
+    api.projectCanvasGet = async () => { fullReads++; return structuredClone(canvas); };
+    api.projectCanvasVisibleNodes = async (projectId, ids) => {
+      nodeReads.push([...ids]);
+      return structuredClone(canvas.nodes.filter(node => node.projectId === projectId && node.hiddenAt == null && ids.includes(node.id)));
+    };
     api.projectThreadCreate = async () => { runs++; throw Error('connecting must not execute'); };
     api.getAssetsByIds = async ids => ids.map(id => ({ id, duration: ['video', 'audio'].includes(id) ? 10 : null, store_path: `${id}.${id === 'video' ? 'mp4' : id === 'audio' ? 'mp3' : 'png'}` }));
     const controller = new CanvasWorkflowController('auto-runtime'); await controller.load();
@@ -44,7 +50,9 @@ try {
     const outputs = [{ type: 'text', binding: { nodeId: 'source', portId: 'text' } },
       { type: 'image', media: 'image', binding: { nodeId: 'source', portId: 'image' } }];
     let beforeSaves = saves;
+    let beforeReads = fullReads;
     const connected = await controller.connectAutomatic(outputs, { nodeId: 'target' });
+    check(fullReads === beforeReads && !nodeReads.length, 'wiring two workflow cards does not read canvas nodes');
     let receiver = controller.document.nodes.find(node => node.id === 'target');
     const connection = receiver.inputs.text[0].autoConnect;
     check(saves === beforeSaves + 1, 'two types save once');
@@ -75,7 +83,9 @@ try {
 
     beforeSaves = saves;
     const noteBefore = canvas.nodes.find(node => node.id === 'content').payloadJson;
+    beforeReads = fullReads;
     await controller.connectAutomatic(outputs, { canvasNodeId: 'content' });
+    check(fullReads === beforeReads && nodeReads.at(-1).join() === 'content', 'content destination is read by exact instance');
     const writers = controller.document.nodes.filter(node => node.textTarget?.nodeId === 'content');
     check(writers.length === 2 && saves === beforeSaves + 1, 'native receiver commits two writers once');
     check(new Set(writers.map(node => node.textTarget.cellId)).size === 2, 'writers own distinct stable destinations');
@@ -154,6 +164,21 @@ try {
     const triggerConnection = await controller.connectAutomatic([{ type: 'image', media: 'image', binding: { nodeId: 'draw', portId: 'image' } }], { nodeId: completion.id }, { createNodes: [completion] });
     const completionInput = controller.document.nodes.find(node => node.id === completion.id).inputs.completion[0];
     check(saves === beforeSaves + 1 && completionInput.nodeId === 'draw' && !completionInput.canvasNodeId && !completionInput.mediaFilter && triggerConnection.createdNodeIds.join() === completion.id, 'completion event keeps producer identity alongside its data connection');
+
+    for (const id of ['first-turn', 'last-turn']) {
+      canvas.nodes.push({ ...table, id, kind: 'prompt', payloadJson: JSON.stringify({
+        job_id: id, turn_key: id, status: 'done', workflow_generation_group: 'grouped-history' }) });
+      canvas.nodes.push({ ...table, id: 'result-' + id, kind: 'asset', role: 'output', assetId: 'asset-' + id,
+        payloadJson: JSON.stringify({ execution: { job_id: id, turn_key: id } }) });
+    }
+    const sessionOutput = id => [{ type: 'image', binding: { canvasNodeId: id, cellId: 'image' } }];
+    beforeReads = fullReads;
+    await controller.connectAutomatic(sessionOutput('last-turn'), { nodeId: 'target' });
+    check(fullReads === beforeReads && nodeReads.at(-1).join() === 'last-turn', 'session reference reads only the connected turn');
+    await rejects(() => controller.connectAutomatic(sessionOutput('deleted-turn'), { nodeId: 'target' }), 'missing session rejected');
+    await controller.connectAutomatic(sessionOutput('last-turn'), { nodeId: completion.id });
+    const seen = controller.document.nodes.find(node => node.id === completion.id).completionSeen;
+    check(seen.includes('first-turn') && seen.includes('last-turn'), 'completion baseline includes sibling turns and outputs in the historical group');
 
     const filterNode = { ...target, inputs: { image: [{ assetId: 'photo', autoConnect: 'filter', mediaFilter: ['image'] }] } };
     const values = { image: [{ type: 'image', assetIds: ['photo', 'video', 'audio'] }] };

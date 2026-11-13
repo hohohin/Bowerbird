@@ -1,0 +1,415 @@
+{
+  "timezone": "Asia/Shanghai",
+  "scope": "One Worker runtime file, ARK_IMAGE_MODEL_55 and migration 0090; no Edge, website or desktop release",
+  "baseline": {
+    "image": "sha256:394ad4f896f411a1a8406c2ebc12685a0dce92d161e1f32ce37ea0672596ec51",
+    "fileHash": "e98396dddc60af802294efd01d98d9852ca2a40a61dcf99f53c5cdb13d947f77",
+    "running": true,
+    "restarts": 0,
+    "backup": "/opt/bowerbird/deploy-backups/seedream55-20261113",
+    "mock": "false",
+    "proModel": "doubao-seedream-5-0-pro-260628",
+    "liteModel": "doubao-seedream-5-0-260128"
+  },
+  "candidate": {
+    "image": "sha256:243d949a5829e3de727b1e0f6b8bb80561f483b49bbb4b242ce3a0089c092111",
+    "baseImage": "sha256:394ad4f896f411a1a8406c2ebc12685a0dce92d161e1f32ce37ea0672596ec51",
+    "runtimeHash": "74536a4a2f52b0548177337b91ccfe18f4e215f5f2f8509ebc97483cf1f1202f",
+    "testsPassed": 14,
+    "testsFailed": 0,
+    "network": "none",
+    "gptChangesIncluded": false
+  },
+  "activation": {
+    "image": "sha256:243d949a5829e3de727b1e0f6b8bb80561f483b49bbb4b242ce3a0089c092111",
+    "startedAt": "2026-11-13T10:00:05.802244437Z",
+    "running": true,
+    "restarts": 0,
+    "runtimeHash": "74536a4a2f52b0548177337b91ccfe18f4e215f5f2f8509ebc97483cf1f1202f",
+    "onlyEnvironmentAddition": "ARK_IMAGE_MODEL_55=doubao-seedream-5-5-261028",
+    "composePreserved": true,
+    "otherEnvironmentPreserved": true,
+    "limitsMountsNetworksPreserved": true,
+    "websitePreserved": true
+  },
+  "migration": {
+    "at": "2026-11-13T10:00:53.911Z",
+    "version": "0090",
+    "rows": [
+      {
+        "active": true,
+        "parameters": {
+          "currency": "Bcoin",
+          "extra_reference_cost": 1,
+          "label": "Seedream 5.5",
+          "output_size": "2K",
+          "sort": 0
+        },
+        "pricing_version": 20261023,
+        "service": "image_seedream55",
+        "unit_cost": 20,
+        "updated_at": "2026-11-13 10:00:49.176461+00"
+      },
+      {
+        "active": true,
+        "parameters": {
+          "currency": "Bcoin",
+          "extra_reference_cost": 1,
+          "label": "Seedream 5.5 1.5K",
+          "output_size": "1.5K",
+          "sort": 0.2
+        },
+        "pricing_version": 20261023,
+        "service": "image_seedream55_15k",
+        "unit_cost": 10,
+        "updated_at": "2026-11-13 10:00:49.176461+00"
+      },
+      {
+        "active": true,
+        "parameters": {
+          "currency": "Bcoin",
+          "extra_reference_cost": 1,
+          "label": "Seedream 5.5 1K",
+          "output_size": "1K",
+          "sort": 0.1
+        },
+        "pricing_version": 20261023,
+        "service": "image_seedream55_1k",
+        "unit_cost": 10,
+        "updated_at": "2026-11-13 10:00:49.176461+00"
+      }
+    ],
+    "oldCatalogueUnchanged": true
+  },
+  "smoke": {
+    "startedAt": "2026-11-13T10:02:09.906Z",
+    "checks": [
+      "image_seedream55 advertised with correct Bcoin tariff",
+      "image_seedream55_1k advertised with correct Bcoin tariff",
+      "image_seedream55_15k advertised with correct Bcoin tariff",
+      "Pro and Lite remain advertised",
+      "real Seedream 5.5 generation succeeded",
+      "2K reservation and settlement equal 20 Bcoin",
+      "gateway artifact length and SHA256 verified",
+      "PNG contains real transparent and visible pixels",
+      "real output is in 2K pixel tier",
+      "artifact receipt acknowledged",
+      "identical request replay returns original settled job",
+      "original request key recovery succeeds",
+      "generation and replays consume only 20 Bcoin",
+      "ledger has one reservation and one confirmation"
+    ],
+    "jobId": "e67de5c0-e4d3-42e1-aa6f-525bb11108cd",
+    "lastStatus": "succeeded",
+    "png": {
+      "width": 2048,
+      "height": 2048,
+      "depth": 8,
+      "colorType": 6,
+      "minAlpha": 0,
+      "maxAlpha": 255,
+      "fullyTransparentPixels": 2750368,
+      "visiblePixels": 1443936
+    },
+    "sha256": "8f2a6d2d97723828b6df94436652bd42d42968f94c979498240cba24c5536853",
+    "bytes": 4157444,
+    "charge": {
+      "estimated": 20,
+      "actual": 20,
+      "transaction_id": "e67de5c0-e4d3-42e1-aa6f-525bb11108cd",
+      "pricing_version": 20261023
+    },
+    "ledger": [
+      {
+        "kind": "hold",
+        "amount": -20,
+        "service": "image_seedream55"
+      },
+      {
+        "kind": "confirm",
+        "amount": 0,
+        "service": "image_seedream55"
+      }
+    ],
+    "finishedAt": "2026-11-13T10:03:58.918Z",
+    "passed": true,
+    "testAuthRemoved": true
+  },
+  "verification": {
+    "runtime": {
+      "at": "2026-11-13T10:06:40Z",
+      "image": "sha256:243d949a5829e3de727b1e0f6b8bb80561f483b49bbb4b242ce3a0089c092111",
+      "running": true,
+      "restarts": 0,
+      "runtimeHash": "74536a4a2f52b0548177337b91ccfe18f4e215f5f2f8509ebc97483cf1f1202f",
+      "otherEnvironmentPreserved": true,
+      "composePreserved": true,
+      "websitePreserved": true,
+      "jobEvents": [
+        {
+          "event": "generation_succeeded",
+          "job_id": "e67de5c0-e4d3-42e1-aa6f-525bb11108cd",
+          "model": "doubao-seedream-5-5-261028",
+          "optimize_prompt_mode": null,
+          "bytes": 4157444
+        }
+      ]
+    },
+    "quotes": [
+      {
+        "n": 0,
+        "quote": {
+          "credits": 20,
+          "large_layer_cost": 10,
+          "max_outputs": 17,
+          "output_size": "2K",
+          "pixel_threshold": 2610000,
+          "pricing_version": 20261023,
+          "reference_count": 0,
+          "requested_size": null,
+          "service": "image_seedream55",
+          "settlement": "fixed",
+          "small_layer_cost": 5
+        },
+        "service": "image_seedream55"
+      },
+      {
+        "n": 1,
+        "quote": {
+          "credits": 20,
+          "large_layer_cost": 10,
+          "max_outputs": 17,
+          "output_size": "2K",
+          "pixel_threshold": 2610000,
+          "pricing_version": 20261023,
+          "reference_count": 1,
+          "requested_size": null,
+          "service": "image_seedream55",
+          "settlement": "fixed",
+          "small_layer_cost": 5
+        },
+        "service": "image_seedream55"
+      },
+      {
+        "n": 3,
+        "quote": {
+          "credits": 22,
+          "large_layer_cost": 10,
+          "max_outputs": 17,
+          "output_size": "2K",
+          "pixel_threshold": 2610000,
+          "pricing_version": 20261023,
+          "reference_count": 3,
+          "requested_size": null,
+          "service": "image_seedream55",
+          "settlement": "fixed",
+          "small_layer_cost": 5
+        },
+        "service": "image_seedream55"
+      },
+      {
+        "n": 10,
+        "quote": {
+          "credits": 29,
+          "large_layer_cost": 10,
+          "max_outputs": 17,
+          "output_size": "2K",
+          "pixel_threshold": 2610000,
+          "pricing_version": 20261023,
+          "reference_count": 10,
+          "requested_size": null,
+          "service": "image_seedream55",
+          "settlement": "fixed",
+          "small_layer_cost": 5
+        },
+        "service": "image_seedream55"
+      },
+      {
+        "n": 0,
+        "quote": {
+          "credits": 10,
+          "large_layer_cost": 10,
+          "max_outputs": 17,
+          "output_size": "1.5K",
+          "pixel_threshold": 2610000,
+          "pricing_version": 20261023,
+          "reference_count": 0,
+          "requested_size": null,
+          "service": "image_seedream55_15k",
+          "settlement": "fixed",
+          "small_layer_cost": 5
+        },
+        "service": "image_seedream55_15k"
+      },
+      {
+        "n": 1,
+        "quote": {
+          "credits": 10,
+          "large_layer_cost": 10,
+          "max_outputs": 17,
+          "output_size": "1.5K",
+          "pixel_threshold": 2610000,
+          "pricing_version": 20261023,
+          "reference_count": 1,
+          "requested_size": null,
+          "service": "image_seedream55_15k",
+          "settlement": "fixed",
+          "small_layer_cost": 5
+        },
+        "service": "image_seedream55_15k"
+      },
+      {
+        "n": 3,
+        "quote": {
+          "credits": 12,
+          "large_layer_cost": 10,
+          "max_outputs": 17,
+          "output_size": "1.5K",
+          "pixel_threshold": 2610000,
+          "pricing_version": 20261023,
+          "reference_count": 3,
+          "requested_size": null,
+          "service": "image_seedream55_15k",
+          "settlement": "fixed",
+          "small_layer_cost": 5
+        },
+        "service": "image_seedream55_15k"
+      },
+      {
+        "n": 10,
+        "quote": {
+          "credits": 19,
+          "large_layer_cost": 10,
+          "max_outputs": 17,
+          "output_size": "1.5K",
+          "pixel_threshold": 2610000,
+          "pricing_version": 20261023,
+          "reference_count": 10,
+          "requested_size": null,
+          "service": "image_seedream55_15k",
+          "settlement": "fixed",
+          "small_layer_cost": 5
+        },
+        "service": "image_seedream55_15k"
+      },
+      {
+        "n": 0,
+        "quote": {
+          "credits": 10,
+          "large_layer_cost": 10,
+          "max_outputs": 17,
+          "output_size": "1K",
+          "pixel_threshold": 2610000,
+          "pricing_version": 20261023,
+          "reference_count": 0,
+          "requested_size": null,
+          "service": "image_seedream55_1k",
+          "settlement": "fixed",
+          "small_layer_cost": 5
+        },
+        "service": "image_seedream55_1k"
+      },
+      {
+        "n": 1,
+        "quote": {
+          "credits": 10,
+          "large_layer_cost": 10,
+          "max_outputs": 17,
+          "output_size": "1K",
+          "pixel_threshold": 2610000,
+          "pricing_version": 20261023,
+          "reference_count": 1,
+          "requested_size": null,
+          "service": "image_seedream55_1k",
+          "settlement": "fixed",
+          "small_layer_cost": 5
+        },
+        "service": "image_seedream55_1k"
+      },
+      {
+        "n": 3,
+        "quote": {
+          "credits": 12,
+          "large_layer_cost": 10,
+          "max_outputs": 17,
+          "output_size": "1K",
+          "pixel_threshold": 2610000,
+          "pricing_version": 20261023,
+          "reference_count": 3,
+          "requested_size": null,
+          "service": "image_seedream55_1k",
+          "settlement": "fixed",
+          "small_layer_cost": 5
+        },
+        "service": "image_seedream55_1k"
+      },
+      {
+        "n": 10,
+        "quote": {
+          "credits": 19,
+          "large_layer_cost": 10,
+          "max_outputs": 17,
+          "output_size": "1K",
+          "pixel_threshold": 2610000,
+          "pricing_version": 20261023,
+          "reference_count": 10,
+          "requested_size": null,
+          "service": "image_seedream55_1k",
+          "settlement": "fixed",
+          "small_layer_cost": 5
+        },
+        "service": "image_seedream55_1k"
+      }
+    ],
+    "migrations": [
+      {
+        "name": "seedream55",
+        "version": "0090"
+      }
+    ],
+    "jobs": [
+      {
+        "actual_credits": 20,
+        "attempt_count": 1,
+        "downloaded_at": "2026-11-13 10:03:52.877+00",
+        "estimated_credits": 20,
+        "id": "e67de5c0-e4d3-42e1-aa6f-525bb11108cd",
+        "output_bytes": 4157444,
+        "output_sha256": "8f2a6d2d97723828b6df94436652bd42d42968f94c979498240cba24c5536853",
+        "service": "image_seedream55",
+        "status": "succeeded"
+      }
+    ],
+    "queues": {
+      "agent": 1,
+      "chat": 0,
+      "generation": 0,
+      "understand": 0
+    },
+    "oldCatalogueUnchanged": true
+  },
+  "dreaminaCliProbe": {
+    "checkedAt": "2026-11-13T11:38:56.913Z",
+    "officialLatest": {
+      "version": "1.4.22",
+      "release_date": "2026-10-28",
+      "release_notes": "统一创作CLI图片、视频生成成本入口归因为 edit_type=cli / tool_id=cli，保留原能力与场景维度。"
+    },
+    "officialBinarySha256": "27f92ce763035af10e41b31f4c161e8349d40e5fdaa90c5fa98e7869da5d492d",
+    "installedBinarySha256": "27f92ce763035af10e41b31f4c161e8349d40e5fdaa90c5fa98e7869da5d492d",
+    "models": [
+      {
+        "command": "text2image",
+        "modelList": "- model_version: 3.0, 3.1, 4.0, 4.1, 4.5, 4.6, 4.7, 5.0, 5.0Pro",
+        "supports55": false
+      },
+      {
+        "command": "image2image",
+        "modelList": "- model_version: 4.0, 4.1, 4.5, 4.6, 4.7, 5.0, 5.0Pro",
+        "supports55": false
+      }
+    ],
+    "installedCliChanged": false,
+    "paidCalls": 0
+  }
+}

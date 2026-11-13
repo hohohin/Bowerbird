@@ -269,7 +269,7 @@ type CanvasUndoEntry =
   | { kind: "names"; projectId: string; before: Record<string, string | undefined> }
   | { kind: "content"; projectId: string; before: ProjectGraphNode; after: ProjectGraphNode; typedAt?: number; restoredMaterials?: CanvasNode[] }
   | { kind: "materials"; projectId: string; before: CanvasNode[]; after: CanvasNode[]; groups: Map<string, CanvasGroup> }
-  | { kind: "workflow"; projectId: string; edit: WorkflowEditUndo; createdNodeIds?: string[] }
+  | { kind: "workflow"; projectId: string; edit: WorkflowEditUndo }
   | { kind: "paste"; projectId: string; nodeIds: string[]; groupIds: string[]; workflowIds: string[] }
   | { kind: "removal"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; groups: Map<string, CanvasGroup>; workflow?: WorkflowEditUndo | null }
   | { kind: "geometry"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; workflow: WorkflowGeometry[] };
@@ -4392,15 +4392,7 @@ export function CanvasWorkspace({
       if (controller.error) { notify("请先重试保存工作流，再撤销卡片操作", "info"); return; }
       const before = controller.document;
       const restored = restoreWorkflowEdit(before.nodes, entry.edit);
-      if (entry.createdNodeIds?.length && restored.some(node =>
-        [node.textSource, node.textTarget?.nodeId, ...(node.resultNodeIds ?? []), ...Object.values(node.inputs).flat().map(input => input.canvasNodeId)]
-          .some(id => id && entry.createdNodeIds!.includes(id)))) {
-        notify("内容卡片已有新的外部连线，请先断开后再撤销", "info"); return;
-      }
-      const pending = controller.edit(restored, entry.edit).then(async () => {
-        for (const id of entry.createdNodeIds ?? []) await api.projectCanvasNodeRemove(id);
-        if (entry.createdNodeIds?.length) await refreshClipboardCanvas(entry.projectId);
-      });
+      const pending = controller.edit(restored, entry.edit);
       if (controller.document !== before) popCanvasUndo();
       void pending.catch(error => notifyError(error, "工作流撤销未完成"));
       return;
@@ -4886,15 +4878,14 @@ export function CanvasWorkspace({
     if (additive) toggleCanvasNodeSelection(id); else setSelectedCanvasNodeIds(new Set([id]));
   });
   const workflowOnNodesChanged = useCallback(() => setWorkflowRevision(value => value + 1), []);
-  const workflowOnEdited = useLatestCallback<Parameters<WorkflowProps["onEdited"]>, void>((before, after, createdNodeIds) => {
+  const workflowOnEdited = useLatestCallback<Parameters<WorkflowProps["onEdited"]>, void>((before, after) => {
     if (activeCanvasRef.current.id !== projectId) return;
     const edit = workflowEditUndo(before, after);
-    if (edit) pushCanvasUndo({ kind: "workflow", projectId, edit, createdNodeIds });
+    if (edit) pushCanvasUndo({ kind: "workflow", projectId, edit });
     else {
       const changed = Object.keys(after.cardNames ?? {}).filter(id => before.cardNames?.[id] !== after.cardNames?.[id]);
       if (changed.length) pushCanvasUndo({ kind: "names", projectId, before: Object.fromEntries(changed.map(id => [id, before.cardNames?.[id]])) });
     }
-    if (createdNodeIds?.length) void refreshClipboardCanvas(projectId).catch(error => notifyError(error, "内容卡片刷新未完成"));
   });
   const workflowOnOpenAgent = useLatestCallback((nodeId: string, conversationId?: string, entryKey?: string) => {
     if (conversationId) { openLocalChat(conversationId); return; }

@@ -23,7 +23,7 @@ import {
 } from "../lib/generationIntent";
 import { PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
 import { notify, notifyError, notifySuccess } from "../lib/notify";
-import { canStartAnotherJob } from "../lib/entitlement";
+import { canStartAnotherJob, countLimitedGenerationJobs } from "../lib/entitlement";
 import { imageProviderLabel, isCloudProvider, normalizeGenerationProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import type { Asset, GenJob, GenTurn, VisualProfileCapsule, VisualProfileRuleValue } from "../lib/types";
 import { Lightbox } from "./Lightbox";
@@ -105,7 +105,7 @@ export function GenerationPanel({
   const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
   const armBoardAgent = useStore((s) => s.armBoardAgent);
   const reloadPresets = useStore((s) => s.reloadPresets);
-  const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
+  const runningJobCount = useStore((s) => countLimitedGenerationJobs(s.genJobs));
 
   // 把当前会话首轮 prompt 登记为用途（preset）的 inline 起名态。
   const [savingPreset, setSavingPreset] = useState(false);
@@ -126,7 +126,7 @@ export function GenerationPanel({
   const firstIssue = retryAvailability(activeJob?.turns[0]);
   const latestIssue = turnProviderIssue(activeJob?.turns[activeJob.turns.length - 1]);
   // 失败重试续轮与成功结果的新版本都遵守并行上限。
-  const canStartAnother = canStartAnotherJob(cloudEntitlement, runningJobCount);
+  const canRetryFirst = canStartAnotherJob(cloudEntitlement, runningJobCount, activeJob?.turns[0]?.provider ?? activeJob?.provider ?? "codex");
 
   const imageCount = useMemo(
     () => activeJob?.turns.reduce((n, t) => n + t.images.length, 0) ?? 0,
@@ -375,7 +375,7 @@ export function GenerationPanel({
           <button
             type="button"
             onClick={retryFirstTurn}
-            disabled={!!snapshot || !!firstIssue || !canStartAnother || historicalCloudVideoFailure(activeJob.turns[0])}
+            disabled={!!snapshot || !!firstIssue || !canRetryFirst || historicalCloudVideoFailure(activeJob.turns[0])}
             className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent disabled:opacity-40"
             title={
               snapshot
@@ -383,7 +383,7 @@ export function GenerationPanel({
                 : historicalCloudVideoFailure(activeJob.turns[0]) ? "旧视频任务不支持在此取回"
                 : firstIssue
                 ? firstIssue.message
-                : !canStartAnother
+                : !canRetryFirst
                   ? "已达当前档位的并行生成上限"
                   : activeJob.turns[0]?.error ? "重试：在当前会话追加一轮" : "重试：首轮组稿原样重发，结果作为同一会话的新版本（←/→ 切换）"
             }
@@ -513,7 +513,7 @@ export function GenerationPanel({
             job={activeJob}
             assets={assets}
             mode="edit"
-            canStart={canStartAnother}
+            runningJobCount={runningJobCount}
             recentImages={lastImageTurn?.images ?? []}
             onOpenRecent={(k) =>
               lastImageTurn && setLightbox({ images: allImages, index: lastImageTurn.offset + k })
@@ -648,7 +648,7 @@ export function GenerationPanel({
             job={activeJob}
             assets={assets}
             mode="revise"
-            canStart={canStartAnother}
+            runningJobCount={runningJobCount}
             recentImages={[]}
             onOpenRecent={() => {}}
             preloadTurn={editTurnId != null ? activeJob.turns.find(turn => turn.id === editTurnId) ?? null : null}
@@ -1114,7 +1114,7 @@ function GenEditComposer({
   job,
   assets,
   mode,
-  canStart,
+  runningJobCount,
   recentImages,
   onOpenRecent,
   preloadTurn,
@@ -1125,7 +1125,7 @@ function GenEditComposer({
   job: GenJob;
   assets: Asset[];
   mode: GenEditingMode;
-  canStart: boolean;
+  runningJobCount: number;
   // 左侧「上次结果」缩略图，组稿时对照参考：轮级编辑 = 该轮当时的基图（前一轮产出）；
   // 重新编辑 / 空白续轮 = 会话最近一次产出（最后一个有图的轮，新续轮自动带的就是它）。
   recentImages: string[];
@@ -1154,6 +1154,7 @@ function GenEditComposer({
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const canStart = canStartAnotherJob(cloudEntitlement, runningJobCount, activeGenProvider);
   const settings = useStore((s) => s.settings);
   // 底部对话框（续轮）空编辑器开局：不预填「请参考」，避免误发送占位文字。
   const {

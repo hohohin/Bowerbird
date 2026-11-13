@@ -34,6 +34,9 @@ export const DEFAULT_CLOUD_PROVIDERS: readonly GenProviderOption[] = [
 
 /** 遗留 provider key → 展示标签（动态档位之前的持久化 job/turn 会带这些 key）。 */
 const LEGACY_CLOUD_LABELS: Record<string, string> = {
+  "bowerbird-cloud-image_seedream55": "Seedream 5.5",
+  "bowerbird-cloud-image_seedream55_1k": "Seedream 5.5 1K",
+  "bowerbird-cloud-image_seedream55_15k": "Seedream 5.5 1.5K",
   "bowerbird-cloud-image_hd": "Seedream 5.0 Pro",
   "bowerbird-cloud-image_fast": "Seedream 5.0 Pro · 快速",
   "bowerbird-cloud-image_lite": "Seedream 5.0 Lite",
@@ -54,7 +57,14 @@ export function isCloudProProvider(provider: string | null | undefined): boolean
 
 /** 是否按官方紧凑坐标格式发送标注：即梦与 Cloud Pro 支持，其余 provider 只保留“标记位置”。 */
 export function supportsAnnotationCoordinates(provider: string | null | undefined): boolean {
-  return provider === "jimeng" || provider === "dreamina" || isCloudProProvider(provider);
+  return provider === "jimeng" || provider === "dreamina" || isCloudProProvider(provider)
+    || ["bowerbird-cloud-image_seedream55", "bowerbird-cloud-image_seedream55_1k", "bowerbird-cloud-image_seedream55_15k"].includes(provider ?? "");
+}
+
+/** Only select 5.5 after the server advertises it as active. */
+export function defaultCloudProvider(entitlement: EntitlementSnapshot | null): string {
+  return entitlement?.generation_services?.some(s => s.service === "image_seedream55")
+    ? "bowerbird-cloud-image_seedream55" : "bowerbird-cloud-image_hd";
 }
 
 /** 云端动态档位（key = `bowerbird-cloud-<service>`）；云端未提供时用内置兜底。 */

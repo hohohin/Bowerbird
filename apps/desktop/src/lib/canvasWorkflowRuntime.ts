@@ -530,7 +530,13 @@ export class CanvasWorkflowController {
   async connectAutomatic(outputs: AutomaticOutput[], target: { nodeId?: string; canvasNodeId?: string; cellId?: string }, options: { createNodes?: WorkflowNode[] } = {}) {
     return this.withResource("canvas", async () => {
       await this.flush();
-      const canvas = await api.projectCanvasGet(this.projectId);
+      const nativeIds = new Set(outputs.map(({ binding }) => binding.assetNodeId ?? binding.canvasNodeId).filter((id): id is string => !!id));
+      if (target.canvasNodeId) nativeIds.add(target.canvasNodeId);
+      const trigger = this.document.nodes.find(node => node.id === target.nodeId) ?? options.createNodes?.find(node => node.id === target.nodeId);
+      // Only session completion needs older turns and outputs grouped at read time.
+      const needsSessions = trigger?.kind === "trigger" && (nativeIds.size > 0 || trigger.inputs.completion?.some(input => input.canvasNodeId));
+      const canvasNodes = needsSessions ? (await api.projectCanvasGet(this.projectId)).nodes
+        : nativeIds.size ? await api.projectCanvasVisibleNodes(this.projectId, [...nativeIds]) : [];
       const before = structuredClone(this.document);
       const createdNodeIds: string[] = [];
       let nodes = [...this.document.nodes];
@@ -541,7 +547,7 @@ export class CanvasWorkflowController {
       for (const output of outputs) {
         const input = output.binding;
         const sourceId = input.assetNodeId ?? input.canvasNodeId;
-        if (sourceId && !canvas.nodes.some(node => node.id === sourceId && node.hiddenAt == null)) throw new Error("来源卡片已不存在");
+        if (sourceId && !canvasNodes.some(node => node.id === sourceId && node.hiddenAt == null)) throw new Error("来源卡片已不存在");
         if (input.nodeId && !nodes.some(node => node.id === input.nodeId)) throw new Error("来源卡片已不存在");
         if ([sourceId, input.nodeId, ...workflowInputProducers(nodes, input)].some(id => id && this.isLocked(id))) throw new Error("关联工作流正在运行，请先停止");
       }
@@ -555,7 +561,7 @@ export class CanvasWorkflowController {
         const plan = planAutomaticConnection(nodes, outputs, receiver.id);
         if (plan.error) throw new Error(plan.error);
         if (receiver.kind === "trigger" && plan.bindings.some(({ binding }) => binding.canvasNodeId
-          && !canvas.nodes.some(node => node.id === binding.canvasNodeId && node.kind === "prompt"))) throw new Error("请连接执行卡片或绘画会话的输出端口");
+          && !canvasNodes.some(node => node.id === binding.canvasNodeId && node.kind === "prompt"))) throw new Error("请连接执行卡片或绘画会话的输出端口");
         const inputs = { ...receiver.inputs };
         for (const item of plan.bindings) {
           const binding: WorkflowInput = { ...item.binding, autoConnect: connectionId };
@@ -567,9 +573,9 @@ export class CanvasWorkflowController {
         if (receiver.kind === "trigger" && workflowTriggerMode(receiver) !== "completion") changedIds.push(receiver.id);
         nodes = nodes.map(node => node.id === receiver.id ? { ...node, inputs,
           ...(receiver.kind === "trigger" ? { triggerMode: "completion" as const, triggerSchedule: undefined,
-            completionSeen: [...new Set([...(node.completionSeen ?? []), ...completedCanvasSessions(inputs.completion ?? [], canvas.nodes, useStore.getState().genJobs)])] } : {}) } : node);
+            completionSeen: [...new Set([...(node.completionSeen ?? []), ...completedCanvasSessions(inputs.completion ?? [], canvasNodes, useStore.getState().genJobs)])] } : {}) } : node);
       } else if (target.canvasNodeId) {
-        const card = canvas.nodes.find(node => node.id === target.canvasNodeId && node.kind === "note" && node.hiddenAt == null);
+        const card = canvasNodes.find(node => node.id === target.canvasNodeId && node.kind === "note" && node.hiddenAt == null);
         if (!card) throw new Error("接收卡片已不存在");
         const note = readCanvasNote(card);
         if (note.note_type !== "text" && note.note_type !== "images") throw new Error("此卡片不接收内容");

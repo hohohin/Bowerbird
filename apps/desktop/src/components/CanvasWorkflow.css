@@ -115,6 +115,9 @@
 .workflow-key-ghost { position:fixed; z-index:99999; pointer-events:none; display:flex; align-items:center; gap:8px; border:1px solid var(--bb-line); background:var(--bb-surface); color:var(--bb-ink); padding:8px 12px; border-radius:9px; font-size:12px; }
 .workflow-preview { display:flex; gap:6px; overflow:auto; margin:10px 0; max-height:100px; }
 .workflow-preview img { width:74px; height:74px; object-fit:contain; border-radius:6px; background:var(--bb-surface-2); }
+.workflow-audio-thumbnail { display:inline-grid; box-sizing:border-box; width:74px; height:74px; flex:none; grid-template:minmax(0,1fr) auto / minmax(0,1fr); padding:4px; gap:3px; background:var(--bb-surface-2); }
+.workflow-audio-thumbnail .audio-waveform-thumbnail { width:100%; height:100%; grid-template:minmax(0,1fr) / minmax(0,1fr); }
+.workflow-audio-filename { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:center; font-size:11px; line-height:15px; }
 .workflow-generation-references button {
   position:relative; flex:0 0 74px; height:74px; overflow:hidden; border:0; padding:0;
   color:inherit; background:transparent; cursor:grab; touch-action:none; user-select:none;

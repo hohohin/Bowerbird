@@ -12,7 +12,7 @@ import { loadProjectOrder, reconcileProjectOrder, saveProjectOrder } from "./lib
 import { acknowledgeCreativeContinuation, generationParentLocator } from "./lib/creativeGeneration";
 import { generationPromptNodeId } from "./lib/projectNodeIds";
 import {
-  canStartAnotherJob,
+  canStartAnotherJob, countLimitedGenerationJobs,
   canUseByo,
   canUseGenerationProvider,
   understandProvider,
@@ -43,7 +43,7 @@ import type {
   TagCount,
   VisualProfileSummary,
 } from "./lib/types";
-import { canonicalProviderKey, isKnownGenProvider, normalizeGenerationProvider } from "./lib/genProviders";
+import { canonicalProviderKey, defaultCloudProvider, isKnownGenProvider, normalizeGenerationProvider } from "./lib/genProviders";
 import { normalizeAnnotationPrompt } from "./lib/annotationPrompt";
 import { notifyError } from "./lib/notify";
 import { notifyGenerationComplete } from "./lib/generationNotifications";
@@ -548,8 +548,8 @@ interface State {
 function generationGateError(state: State, provider: string): string | null {
   const issue = generationProviderIssue(provider, state);
   if (issue) return issue.message;
-  const runningCount = Object.values(state.genJobs).filter((job) => job.running).length;
-  if (!canStartAnotherJob(state.cloudEntitlement, runningCount)) {
+  const runningCount = countLimitedGenerationJobs(state.genJobs);
+  if (!canStartAnotherJob(state.cloudEntitlement, runningCount, provider)) {
     return "已达当前账号档位的并行生成上限";
   }
   return null;
@@ -588,7 +588,7 @@ export const useStore = create<State>((set, get) => {
         cloudAuth,
         cloudEntitlement,
         cloudError: "登录已失效，请重新登录",
-        activeGenProvider: "bowerbird-cloud-image_hd",
+        activeGenProvider: defaultCloudProvider(cloudEntitlement),
       });
     } catch {
       // 原业务错误仍会展示；这里只做后端已清理会话后的前端快照对齐。
@@ -1560,7 +1560,7 @@ export const useStore = create<State>((set, get) => {
         cloudEntitlement,
         activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
           ? s.defaultProvider
-          : "bowerbird-cloud-image_hd",
+          : defaultCloudProvider(cloudEntitlement),
       }));
     } catch (e) {
       set({ cloudError: typeof e === "string" ? e : "账号状态读取失败" });
@@ -1599,7 +1599,7 @@ export const useStore = create<State>((set, get) => {
         cloudEntitlement,
         activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
           ? s.defaultProvider
-          : "bowerbird-cloud-image_hd",
+          : defaultCloudProvider(cloudEntitlement),
       }));
     } catch (e) {
       const message = taskErrorMessage(e) || "权益同步失败";
@@ -1621,7 +1621,7 @@ export const useStore = create<State>((set, get) => {
         set((s) => ({
           cloudEntitlement,
           activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
-            ? s.defaultProvider : "bowerbird-cloud-image_hd",
+            ? s.defaultProvider : defaultCloudProvider(cloudEntitlement),
         }));
       }
       return result;
@@ -1645,7 +1645,7 @@ export const useStore = create<State>((set, get) => {
         cloudEntitlement,
         activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
           ? s.defaultProvider
-          : "bowerbird-cloud-image_hd",
+          : defaultCloudProvider(cloudEntitlement),
       }));
     } catch {
       // 静默失败：下一次轮询或手动刷新再试。
@@ -1656,7 +1656,7 @@ export const useStore = create<State>((set, get) => {
     try {
       const cloudAuth = await api.cloudLogout();
       const cloudEntitlement = await api.cloudEntitlement();
-      set({ cloudAuth, cloudEntitlement, activeGenProvider: "bowerbird-cloud-image_hd" });
+      set({ cloudAuth, cloudEntitlement, activeGenProvider: defaultCloudProvider(cloudEntitlement) });
     } catch (e) {
       set({ cloudError: typeof e === "string" ? e : "登出失败" });
     } finally {

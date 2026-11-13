@@ -98,6 +98,10 @@ pub fn resolve_gen_provider(
     }
 }
 
+pub fn is_jimeng_provider(provider: Option<&str>) -> bool {
+    matches!(provider, Some("jimeng" | "dreamina"))
+}
+
 /// provider key 是否为 Cloud 生图变体（Pro / Lite / Fast）。
 pub fn is_cloud_generation_provider(provider: Option<&str>) -> bool {
     provider.is_some_and(|p| p.starts_with("bowerbird-cloud"))

@@ -12,7 +12,7 @@ import { ComfyEnvironmentControl, type ComfyEnvironmentState } from "./ComfyVide
 import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, DEFAULT_COMFY_VIDEO, localVideoFrames, localVideoInputError, type ComposerLocalVideoRequest } from "../lib/comfyVideo";
 import { ProviderQuota } from "./creation/ProviderQuota";
 import { useStore } from "../store";
-import { canStartAnotherAgentRun, canStartAnotherJob, canUseAgentRun } from "../lib/entitlement";
+import { canStartAnotherAgentRun, canStartAnotherJob, countLimitedGenerationJobs, canUseAgentRun } from "../lib/entitlement";
 import { generationProviderIssue } from "../lib/generationAvailability";
 import { ProviderIssueNotice } from "./creation/ProviderIssueNotice";
 import { imageProviderLabel, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
@@ -203,7 +203,7 @@ export function CreationBoard({
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
   const isTestAccount = cloudEntitlement?.is_test_account === true;
-  const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
+  const runningJobCount = useStore((s) => countLimitedGenerationJobs(s.genJobs));
   const selectedImageProvider = useStore((s) => s.activeGenProvider);
   const [generation, setGeneration] = useState<GenerationSettings>(() => initialDraft?.generation ?? { media: "image" });
   const isChat = composerMode === "chat";
@@ -668,7 +668,7 @@ export function CreationBoard({
               : agentBusy
                 ? "Agent 正在整理意图，请等待处理完成。"
                 : referenceError ?? targetUnavailableReason
-                  ?? (!isLocalVideo && !canStartAnotherJob(cloudEntitlement, runningJobCount)
+                  ?? (!isLocalVideo && !canStartAnotherJob(cloudEntitlement, runningJobCount, activeGenProvider)
                     ? "已达当前档位的并行生成上限，请等待已有任务完成或取消任务。"
                     : !finalPrompt ? "请先输入创作要求或添加参考内容。" : null);
   const hasAnnotationDimension = graphSources.some((source) =>
@@ -935,7 +935,7 @@ export function CreationBoard({
       return;
     }
     if (!targetReady || !finalPrompt) return;
-    if (!canStartAnotherJob(cloudEntitlement, runningJobCount)) return;
+    if (!canStartAnotherJob(cloudEntitlement, runningJobCount, activeGenProvider)) return;
     let prompt = finalPrompt;
     if (agentMode !== "off") {
       setAgentBusy(true);

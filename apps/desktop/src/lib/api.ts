@@ -236,6 +236,8 @@ export const api = {
     invoke<ProjectCanvas>("project_canvas_ensure", { projectId }),
   projectCanvasGet: (projectId: string) =>
     invoke<ProjectCanvasSnapshot>("project_canvas_get", { projectId }),
+  projectCanvasVisibleNodes: (projectId: string, nodeIds: string[]) =>
+    invoke<CanvasNode[]>("project_canvas_visible_nodes", { projectId, nodeIds }),
   projectCanvasRename: (projectId: string, title: string) =>
     invoke<boolean>("project_canvas_rename", { projectId, title }),
   projectCanvasTitleFromFirstPrompt: (projectId: string, title: string) =>

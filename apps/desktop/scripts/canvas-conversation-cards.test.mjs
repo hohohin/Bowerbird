@@ -115,6 +115,27 @@ test('continuations and provider handoffs share one stable card, independent con
   assert.deepEqual(canvasConversationCards(structuredClone(nodes), {job:{conversationId:'conversation'},other:{conversationId:'conversation'}}),result);
 });
 
+test('matching an output inspects only its turn and keeps the existing alias when groups share a turn', () => {
+  const nodes = [];
+  let reads = 0;
+  for (let i = 0; i < 100; i++) {
+    const job = 'job' + i;
+    const image = output('result' + i, job, 'one');
+    const data = image.payloadJson;
+    Object.defineProperty(image, 'payloadJson', { get() { reads++; return data; } });
+    nodes.push(prompt('session' + i, job, 'one'), image);
+  }
+  const duplicate = (id, group) => ({ ...prompt(id, 'job0', 'one', 2), payloadJson: JSON.stringify({
+    job_id: 'job0', turn_key: 'one', workflow_generation_group: group,
+  }) });
+  nodes.push(duplicate('copy1', 'job0'), duplicate('copy2', 'other-card'));
+  const result = canvasConversationCards(nodes, {});
+  assert.ok(reads < nodes.length * 3, 'reading output payloads stays proportional to the graph size');
+  assert.deepEqual(result.cards.get('session0').outputs.map(node => node.id), ['result0']);
+  assert.deepEqual(result.cards.get('copy2').outputs.map(node => node.id), ['result0']);
+  assert.equal(result.aliases.get('result0'), 'copy2');
+});
+
 test('hidden, workflow-owned, contained and reference instances keep their own visibility rules', () => {
   const nodes = [prompt('session','job','one'),prompt('workflow','owned','one'),output('a','job','one'),output('b','job','one'),output('owned-image','owned','one'),{...output('reference','job','one'),role:'reference'}, {...output('removed','job','one'),hiddenAt:2}];
   const result = canvasConversationCards(nodes, {}, new Set(['workflow']), new Set(['b']));

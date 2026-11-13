@@ -120,6 +120,32 @@ try {
     assert.match(await card.innerText(), reason);
     assert.equal(await run.isDisabled(), true);
   }
+  const concurrent = await page.evaluate(async () => {
+    const {canStartAnotherJob, countLimitedGenerationJobs} = await import('/src/lib/entitlement.ts');
+    const {api} = await import('/src/lib/api.ts');
+    const store = window.store;
+    const policy = { can_use_byo: true, can_use_cloud: true, max_parallel_jobs: 4 };
+    const entitlement = { policy, balances: { daily: 100, sub: 0, topup: 0 } };
+    const seed = { running: true, turns: [], lastPrompt: '', lastRefs: [], streaming: '', refAssets: [], dimAssets: [], createdAt: Date.now() };
+    const jobs = Object.fromEntries(Array.from({length: 4}, (_, i) => ['codex-' + i, {...seed, id: 'codex-' + i, provider: 'codex', media: 'image'}]));
+    jobs.video = {...seed, id: 'video', provider: 'dreamina', media: 'video'};
+    store.setState({ cloudAuth: { logged_in: true, cloud_available: true }, cloudEntitlement: entitlement,
+      dreaminaHealth: {status: 'ready', ok: true, reason: ''}, genJobs: jobs, genJobOrder: Object.keys(jobs) });
+    const received = [];
+    const finishes = [];
+    api.codexCreateImage = args => new Promise(resolve => {
+      received.push(args.media);
+      finishes.push(() => resolve(args.jobId));
+    });
+    const runs = Array.from({length: 6}, () => store.getState().startGeneration('隔离并发验证', [], null, 'jimeng'));
+    const atCapacity = countLimitedGenerationJobs(store.getState().genJobs);
+    for (const finish of finishes) finish();
+    const completed = await Promise.all(runs);
+    return {received, atCapacity, accepted: completed.every(job => job.accepted),
+      cloud: canStartAnotherJob(entitlement, atCapacity, 'bowerbird-cloud'),
+      free: canStartAnotherJob(null, 0, 'jimeng')};
+  });
+  assert.deepEqual(concurrent, {received: Array(6).fill('image'), atCapacity: 4, accepted: true, cloud: false, free: false});
   assert.deepEqual(errors, []);
   console.log('PASS default card and store block before submission, direct subscription settings, recheck and draft preservation');
 } finally {

@@ -3497,17 +3497,6 @@ pub async fn cloud_agent_execute_local_task(
             return Ok::<(Vec<u8>, String), AppError>(cached);
         }
 
-        // 即梦与主生成队列共用账号级串行锁；Codex provider 自己持有全局图片目录锁。
-        let _jimeng_permit = if provider_key == "jimeng" {
-            Some(
-                crate::core::generation_worker::JIMENG_FLY
-                    .acquire()
-                    .await
-                    .unwrap(),
-            )
-        } else {
-            None
-        };
         let dreamina_model =
             (provider_key == "jimeng").then(|| settings.get().dreamina_model_version);
         let provider = crate::codex::resolve_gen_provider(

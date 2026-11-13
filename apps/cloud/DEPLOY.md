@@ -1,5 +1,19 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 2026-11-13 Seedream 5.5 已部署
+
+用户明确确认后，北京时间 18:00:05 切换单文件 Worker，18:00:49 应用 0090；18:03:58 真实透明 PNG 验收完成，18:06:40 现役及单次执行复核通过。当前镜像 `243d949a5829…`，原镜像 `394ad4f896f4…`。详见[部署证据、验收边界与回退](../../project_logs/2026-11-13-seedream55.md)。
+
+- 新模型：`doubao-seedream-5-5-261028`，Worker 独立环境变量 `ARK_IMAGE_MODEL_55`；普通生成支持原生透明 PNG，不发送 Pro fast 参数。既有 Pro／Lite、Agent 与分层模型保持。
+- 数据：定向应用 `0090_seedream55.sql` 三条新服务。2K 20、1K／1.5K 10 Bcoin，第二张起参考图每张加 1，沿用 20261023 锁价与恢复；现有余额、价格、账本和旧任务保持。不要顺序推送未部署的其他迁移。
+- Worker：只给现役 `src/cloud-generation/runtime.ts` 叠加本次独立配置、三服务路由及 PNG 参数，再增加上述环境变量。开发树还包含未上线 GPT 改动，不能整文件覆盖现役。已只读下载现役生成最小候选，冻结入口 `.tmp/seedream55/prepare.mjs`，单文件候选 `.tmp/seedream55/candidate/apps/agent-worker/src/cloud-generation/runtime.ts`。
+- 顺序：备份现役镜像、文件与私有 env；核对队列空闲和基线后先部署 Worker、检查模型配置，再定向插入三条服务；通过权益列表、报价、原任务恢复及一次真实透明 PNG 生成／交付／唯一结算核验。无需部署 Edge 或官网；不发布整棵开发树。
+- 回退：先将三个 `image_seedream55*` 服务设为 inactive，等待已接受任务完成／核对未知结果，随后恢复原 Worker 镜像、源文件与 env；不删除新服务、任务或财务记录，不重发旧任务。
+- 桌面：源码复用动态模型菜单，5.5 排在 Cloud 首位；仅在服务器提供该服务时成为 Cloud 兜底，用户保存的可用默认值保留。旧安装包刷新权益可手动选择；自动默认及坐标标注随新版客户端生效。本轮未打包、发布或重启客户端。
+- 验证：开发 Worker 22 项、现役单文件候选 14 项、`bcoin-db.test.mjs` 的三档报价／0–10 参考图边界／预授权重放及旧服务逐字段保持、`seedream-models-ui.test.mjs` 的真实菜单／默认保持／Cloud 切换／深浅色／窄窗口均通过。类型检查存在原基线错误，编译器以 Git HEAD 覆盖本次改动对照：桌面 1027→1027、Worker 2→2，无新增诊断；不能记为全量类型检查通过。一笔真实 2K 透明 PNG、官网网关交付、原键恢复、同键重放及唯一 20 Bcoin 结算通过；测试 Auth 已删除。1K／1.5K 与参考图没有真实生成，上游账单待独立核对。
+
+参数来源：[官方 5.5 教程](https://console.volcengine.com/ark/region%3Acn-beijing/docs/seedream-5-5)、[图片生成 API](https://console.volcengine.com/ark/region%3Acn-beijing/docs/image-generation-api)，2026-11-13 核对。Bcoin 为本产品沿用的报价，不声明其等同上游新模型成本。
+
 ## 2026-11-13 微信支付联调服务已部署
 
 0080、五个支付 Edge、官网账号和通知网关、商户 Secrets、分钟补偿及每日对账 timer 已上线。独立账号通过现役 Cloud 取得 ¥1／20 Bcoin 的真实微信二维码，公开购买能力返回关闭。线上版本、原站点目录、回退边界和验收进度见[微信支付记录](WECHATPAY.md#验证记录)。

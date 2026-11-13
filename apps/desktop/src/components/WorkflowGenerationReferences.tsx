@@ -2,15 +2,20 @@ import { useEffect, useRef, useState } from "react";
 import { exceedsCanvasDragThreshold } from "../lib/canvasLogic";
 import type { Asset } from "../lib/types";
 import { workflowAssetMedia } from "../lib/workflowCanvasCapabilities";
+import { AudioWaveformThumbnail } from "./AudioWaveform";
 import { CanvasImage } from "./CanvasImage";
 import { VideoPoster } from "./VideoPoster";
 
 export function WorkflowMediaThumbnail({ asset, draggable }: { asset: Asset; draggable?: boolean }) {
   const media = workflowAssetMedia(asset);
-  if (media === "audio" || !media) return <span>{asset.name}</span>;
+  if (media === "audio") return <span className="workflow-audio-thumbnail" title={asset.name}>
+    <AudioWaveformThumbnail asset={asset} />
+    <span className="workflow-audio-filename">{asset.name}</span>
+  </span>;
+  if (!media) return <span>{asset.name}</span>;
   if (media === "video") return <VideoPoster path={asset.store_path} poster={asset.thumb_path} title={asset.name} alt={asset.name} draggable={draggable} />;
   return <CanvasImage title={asset.name} alt={asset.name} path={asset.store_path} thumbPath={asset.thumb_path}
-    sourceWidth={asset.width} sourceHeight={asset.height} draggable={draggable} />;
+    sourceWidth={asset.width} sourceHeight={asset.height} draggable={draggable} progressiveThumbnail />;
 }
 
 export function WorkflowGenerationReferences({ assets, disabled, onMove }: {

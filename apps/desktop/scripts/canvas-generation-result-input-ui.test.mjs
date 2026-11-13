@@ -34,6 +34,20 @@ try {
     await page.reload();
     const target = page.locator('[data-workflow-card="draw"]');
     await target.waitFor();
+    await page.evaluate(async () => {
+      const { api } = await import('/src/lib/api.ts');
+      const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+      await canvasWorkflowController('p').flush();
+      window.connectionReads = 0;
+      api.projectCanvasGet = async () => { window.connectionReads++; throw Error('Unexpected whole-canvas read during connection'); };
+      const save = api.canvasWorkflowSave;
+      api.canvasWorkflowSave = async (...args) => {
+        if (window.connectionSaveGate && args[2].nodes.find(node => node.id === 'draw')?.inputs.image?.length) {
+          await window.connectionSaveGate;
+        }
+        return save(...args);
+      };
+    });
     for (const id of ['first', 'old']) {
       const handle = page.locator(`[data-workflow-material="${id}"] [data-canvas-connect-side="output"]`);
       await page.locator(`[data-canvas-node-id="${id}"]`).hover();
@@ -41,9 +55,21 @@ try {
       await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
       await page.mouse.down();
       await page.mouse.move(to.x + to.width / 2, to.y + 60, { steps: 12 });
+      await page.evaluate(() => {
+        window.connectionSaveGate = new Promise(resolve => { window.releaseConnectionSave = resolve; });
+      });
       await page.mouse.up();
+      const sources = id === 'first' ? 1 : 2;
+      const refs = [...(grouped ? ['b', 'c'] : ['a']), ...(id === 'old' ? ['existing'] : [])];
+      await page.waitForFunction(({ sources, refs }) => {
+        const row = document.querySelectorAll('[data-workflow-card="draw"] [data-workflow-reference-asset]');
+        return document.querySelectorAll('path[data-auto-connection][data-workflow-target="draw"]').length === sources
+          && row.length === refs.length && refs.every((asset, i) => row[i].dataset.workflowReferenceAsset === asset);
+      }, { sources, refs }, { timeout: 5000 });
+      assert.equal(await page.evaluate(() => window.connectionReads), 0);
+      await page.evaluate(() => { window.releaseConnectionSave(); window.connectionSaveGate = null; });
       await page.waitForFunction(n => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'draw').inputs.image?.length === n,
-        id === 'first' ? 1 : 2);
+        sources);
     }
     await page.evaluate(async () => {
       const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -97,7 +123,7 @@ try {
   });
   for (const result of rejected) assert.deepEqual(result, { status: 'failed', source: 'next', requests: 0, slots: [1, 2] });
   assert.deepEqual(errors, []);
-  console.log('PASS generated single and grouped outputs retain both live wires, reload, turn identity and exact downstream request');
+  console.log('PASS single and grouped result wires and references appear before save without a full read, then reload and send the exact turn');
 } finally {
   await browser.close();
   await server.close();

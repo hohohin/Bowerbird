@@ -1,9 +1,13 @@
 # Seedance 2.5 视频接入与验收记录
 
+## 2026-11-13 放开即梦自有订阅并发
+
+普通图片和视频、画板工作流触发的生成、Agent 的本地即梦生图直接提交，原单恢复独立查询。Pro／Studio 沿用已有 BYO 权益；即梦任务与其他渠道的桌面并行配额分开计算。供应商返回并发超限时沿用错误反馈，同轮取消与按原任务号恢复沿用现有契约。
+
 ## 2026-11-13 即梦 CLI 并发来源核对
 
 - 2026-08-06 的实机记录使用 `maestro` 账号。第一笔 fast、5 秒、720p 文生视频仍在排队，同账号第二笔视频请求返回 `gen_status=fail` 和 `ret=1310, message=ExceedConcurrencyLimit`。同文 §2.4 明列图片并发未测。可用 `git show de605549:VIDEO-GENERATION.md` 核对 §2–§4。该次测试只覆盖一个账号和一次重叠的视频提交。
-- 桌面实现将同一个 `JIMENG_FLY` 名额用于即梦图片、视频及恢复查询，直到结果下载返回后才释放。它位于 Bowerbird 自身的套餐并行数检查之后，不读取即梦会员等级。2026-11-13 本机应用私有 CLI 的已有账号日志记录 `vip_level=maestro` 与 `has_cli_permission` 等字段，所见账号信息未提供并发额度。此次未新增供应商任务。
+- 调整前的桌面实现将同一个 `JIMENG_FLY` 名额用于即梦图片、视频及恢复查询，直到结果下载返回后才释放。它位于 Bowerbird 自身的套餐并行数检查之后，不读取即梦会员等级。2026-11-13 本机应用私有 CLI 的已有账号日志记录 `vip_level=maestro` 与 `has_cli_permission` 等字段，所见账号信息未提供并发额度。此次未新增供应商任务。
 - 即梦官方 CLI 介绍支持同时发起多项创作任务。会员页区分视频标准、快速通道，网页指定模型的无限生成活动另列 1 个并发并排除 CLI/MCP。查到的官方页面未给出 CLI 按会员、模型、图像/视频组合划分的名额表。独立开发者 10 月 16 日记录其 `seedance2.0_vip` 六笔视频同时处于 Generating，只能作为该环境的观察。[官方 CLI](https://jimeng.jianying.com/ai-tool/install?from_page=banner) · [会员权益](https://jimeng.jianying.com/) · [独立开发者的实测记录](https://github.com/wangcanyu/daihuo-fanpai/blob/main/SKILL.md)
 
 ## 2026-11-10：建卡免核验与后台每日规格巡检

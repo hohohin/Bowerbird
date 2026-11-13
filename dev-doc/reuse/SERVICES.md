@@ -1,8 +1,12 @@
 # 接口、文件接入与执行服务复用
 
+Cloud 图片新增模型复用 [modelForService／arkImageRequestBody](../../apps/agent-worker/src/cloud-generation/runtime.ts) 的独立 service 路由和 [generate-proxy](../../apps/cloud/supabase/functions/generate-proxy/index.ts) 的动态 `service_costs` 校验；报价沿用 `quote_bcoin_image`，恢复沿用原 job／hold，不能改默认环境变量来替换旧任务模型。Seedream 5.5 使用 0090 三服务与 `ARK_IMAGE_MODEL_55`，部署状态见 [部署说明](../../apps/cloud/DEPLOY.md#2026-11-13-seedream-55-已部署)。桌面模型和 Cloud 兜底统一复用 [genProviders.ts](../../apps/desktop/src/lib/genProviders.ts) 的 `cloudGenProviders`／`defaultCloudProvider`，后者只在服务端宣告 5.5 可用时返回新 key；坐标能力由 `supportsAnnotationCoordinates` 判定。
+
 [返回复用地图](../Bowerbird开发计划.md#复用地图)。2026-11-03 按当前工作区源码核验；以下“可跨模块复用”均限定所在运行时，不表示可以跨应用直接 import。发布状态与产品约定仍以 [PROJECT](../../PROJECT.md) 为准。
 
 ## 读取或修改本机业务数据
+
+画板自动接线用 `api.projectCanvasVisibleNodes(projectId, nodeIds)` 读取当前项目指定可见实例的原始节点及内容卡数据。需要恢复会话归组、判断历史完成状态时用 `api.projectCanvasGet`。[画板服务实现](../../apps/desktop/src-tauri/src/core/project_canvas.rs)
 
 云端 DSH 要求在画板建卡时，复用 [桌面聊天桥](../../apps/desktop/src-tauri/src/commands/local_chat_dsh_vps.rs) 与原生建卡事务，VPS 不直写本地数据库。需要在云端执行受保护的聊天技能时，复用 [Worker 的 DSH 聊天入口](../../apps/agent-worker/src/cloud-chat/dsh.ts) 和既有技能加载器；聊天协议及服务端权限见 [Cloud 对话](../../apps/cloud/CHAT.md)。
 

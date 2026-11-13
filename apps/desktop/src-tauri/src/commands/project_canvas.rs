@@ -49,6 +49,15 @@ pub async fn project_canvas_get(
 }
 
 #[tauri::command]
+pub async fn project_canvas_visible_nodes(
+    db: State<'_, Arc<Database>>,
+    project_id: String,
+    node_ids: Vec<String>,
+) -> AppResult<Vec<CanvasNode>> {
+    db.visible_canvas_nodes(&project_id, &node_ids)
+}
+
+#[tauri::command]
 pub async fn project_canvas_rename(
     db: State<'_, Arc<Database>>,
     project_id: String,

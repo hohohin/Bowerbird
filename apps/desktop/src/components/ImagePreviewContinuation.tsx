@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Send, Square } from "lucide-react";
 import type { Asset, GenJob } from "../lib/types";
 import { useStore } from "../store";
-import { canStartAnotherJob } from "../lib/entitlement";
+import { canStartAnotherJob, countLimitedGenerationJobs } from "../lib/entitlement";
 import { normalizeGenerationProvider } from "../lib/genProviders";
 import { generationProviderIssue } from "../lib/generationAvailability";
 import { ProviderIssueNotice } from "./creation/ProviderIssueNotice";
@@ -21,13 +21,13 @@ export function ImagePreviewContinuation({ asset, job, sourceJobId, enabled, onS
   const auth = useStore(state => state.cloudAuth);
   const codex = useStore(state => state.codexHealth);
   const dreamina = useStore(state => state.dreaminaHealth);
-  const runningCount = useStore(state => Object.values(state.genJobs).filter(item => item.running).length);
+  const runningCount = useStore(state => countLimitedGenerationJobs(state.genJobs));
   const last = job.turns[job.turns.length - 1];
   const rawProvider = last?.provider || job.provider || "codex";
   const provider = normalizeGenerationProvider(rawProvider);
   const issue = job.sessionId ? generationProviderIssue(provider, { cloudAuth: auth, cloudEntitlement: entitlement, codexHealth: codex, dreaminaHealth: dreamina }) : null;
   const unavailable = job.sessionId ? issue?.message : "此图片未保存可续接的会话";
-  const blocked = unavailable || (!canStartAnotherJob(entitlement, runningCount) ? "已达当前账号档位的并行生成上限" : "");
+  const blocked = unavailable || (!canStartAnotherJob(entitlement, runningCount, provider) ? "已达当前账号档位的并行生成上限" : "");
   useEffect(() => () => { revision.current++; }, [asset.id, enabled]);
 
   async function send() {
