@@ -433,7 +433,7 @@ async function withRequestSignal<T>(
   try {
     if (caller.addEventListener && caller.removeEventListener) caller.addEventListener("abort", cancel, { once: true });
     else poll = setInterval(() => { if (caller.aborted) cancel(); }, 100);
-    if (caller.aborted) { cancel(); return await interrupted.promise; }
+    if (caller.aborted) throw new DeepSeekBackendError("deepseek_not_dispatched");
     const result = await Promise.race([interrupted.promise, request(controller.signal)]);
     if (caller.aborted) throw new DeepSeekBackendError("deepseek_aborted");
     return result;
@@ -472,7 +472,7 @@ export class DeepSeekBackend implements ModelBackend {
     maxOutputTokens?: number,
   ): Promise<ChatTurnResult> {
     if (signal.aborted) {
-      throw new DeepSeekBackendError("deepseek_aborted");
+      throw new DeepSeekBackendError("deepseek_not_dispatched");
     }
     const body = await this.post({
       model: this.config.model,

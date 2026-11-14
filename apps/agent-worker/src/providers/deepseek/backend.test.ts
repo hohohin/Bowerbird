@@ -403,3 +403,16 @@ for (const [status, retryable] of [[403, false], [408, true], [499, false], [500
     equal(calls, 1);
   });
 }
+
+for (const entry of ["turn", "chat"] as const) {
+  test(`DeepSeek ${entry} knows cancellation before fetch was never dispatched`, async () => {
+    let checks = 0;
+    let calls = 0;
+    const signal = { get aborted() { return ++checks >= 2; } };
+    const model = new DeepSeekBackend({ apiKey: "fixture", baseUrl: "https://local.test", model: "test" },
+      async () => { calls++; return response({}); });
+    await rejects(() => entry === "turn" ? model.turn(REQUEST, signal) : model.chat([], [], signal),
+      (error: unknown) => error instanceof DeepSeekBackendError && error.safeCode === "deepseek_not_dispatched");
+    equal(calls, 0);
+  });
+}
