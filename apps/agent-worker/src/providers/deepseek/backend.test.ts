@@ -389,3 +389,17 @@ test("successful slow body outlives the lease polling interval and releases its 
   equal(transport?.aborted, false);
   equal(calls, 1);
 });
+
+for (const [status, retryable] of [[403, false], [408, true], [499, false], [500, true]] as const) {
+  test(`DeepSeek preserves retry metadata for empty HTTP ${status}`, async () => {
+    let calls = 0;
+    const model = new DeepSeekBackend({ apiKey: "fixture", baseUrl: "https://local.test", model: "test" }, async () => {
+      calls++;
+      return { ok: false, status, json: async () => JSON.parse("") };
+    });
+    await rejects(() => model.turn(REQUEST, { aborted: false }), (error: unknown) =>
+      error instanceof DeepSeekBackendError && error.safeCode === "deepseek_http_error" &&
+      error.status === status && error.retryable === retryable);
+    equal(calls, 1);
+  });
+}
