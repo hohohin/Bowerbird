@@ -114,25 +114,34 @@ class MeteredModelAdapter {
 
   async execute(callId: string, _request: ModelTurnRequest): Promise<ModelTurnResult> {
     try {
-      return await this.base.turn(this.request, this.signal);
+      if (this.signal.aborted) throw new DurableProviderError("terminal", "deepseek_not_dispatched");
+      const result = await this.base.turn(this.request, this.signal);
+      if (result.kind === "refusal" && result.reason === "aborted") {
+        throw new DurableProviderError("terminal", "deepseek_not_dispatched");
+      }
+      return result;
     } catch (error) {
       if (error instanceof DeepSeekBackendError) {
-        if (error.status === undefined) await this.recordUsage(callId, {});
+        if (error.safeCode === "deepseek_not_dispatched") throw new DurableProviderError("terminal", error.safeCode);
+        if (error.status === undefined) await this.recordUsage(callId, {}, true);
         throw new DurableProviderError(error.status === undefined ? "unknown" : "terminal", error.safeCode);
       }
       throw error;
     }
   }
 
-  async reconcile(callId: string): Promise<ModelTurnResult | null> {
+  async reconcile(callId: string, _request: ModelTurnRequest, record: PreparedToolCall): Promise<ModelTurnResult | null> {
     try {
       return await this.load(callId);
     } catch (error) {
       if (!(error instanceof AgentControlError) || error.status !== 409) throw error;
-      // The upstream request was durably marked submitted, but no normalized
-      // result was persisted. Charge the configured minimum text unit and do
-      // not repeat a request whose provider outcome cannot be reconciled.
-      await this.recordUsage(callId, {});
+      // A submitted marker precedes the HTTP request. Only replay observed usage.
+      if (record.directDeepSeekV1Model === null && !record.pendingUsage) {
+        // Pre-migration direct adapter replay keeps its original policy.
+        await this.recordUsage(callId, {}, true);
+      } else if (record.pendingUsage) {
+        await this.recordUsage(callId, { promptTokens: record.pendingUsage.inputUnits, completionTokens: record.pendingUsage.outputUnits }, record.safeErrorCode === "agent_model_minimum_pending");
+      }
       return null;
     }
   }
@@ -142,25 +151,33 @@ class MeteredModelAdapter {
     const content = canonicalJson(normalized);
     const bytes = new TextEncoder().encode(content);
     if (!bytes.byteLength || bytes.byteLength > 64 * 1024) {
+      await this.recordUsage(callId, normalized.providerUsage);
       throw new DurableProviderError("terminal", "agent_model_result_too_large");
     }
     const hash = sha256Hex(content);
-    if (normalized.providerUsage.providerRequestId) {
-      await this.control.markToolSubmitted({
+    let artifact: RegisteredAgentArtifact;
+    try {
+      if (normalized.providerUsage.providerRequestId) {
+        await this.control.markToolSubmitted({
+          runId: this.runId,
+          leaseId: this.leaseId,
+          callId,
+          providerRequestId: normalized.providerUsage.providerRequestId,
+        });
+      }
+      artifact = await this.control.uploadDiagnostic({
         runId: this.runId,
         leaseId: this.leaseId,
-        callId,
-        providerRequestId: normalized.providerUsage.providerRequestId,
+        sourceCallId: callId,
+        stepId: `model-${this.request.phase}`.slice(0, 120),
+        bytes,
+        sha256: hash,
       });
+    } catch (error) {
+      // Preserve the already-observed token counts even when the result cannot be checkpointed.
+      await this.recordUsage(callId, normalized.providerUsage);
+      throw error;
     }
-    const artifact = await this.control.uploadDiagnostic({
-      runId: this.runId,
-      leaseId: this.leaseId,
-      sourceCallId: callId,
-      stepId: `model-${this.request.phase}`.slice(0, 120),
-      bytes,
-      sha256: hash,
-    });
     await this.recordUsage(callId, normalized.providerUsage);
     return { value: normalized, resultObjectKey: artifact.objectKey, resultHash: hash };
   }
@@ -169,18 +186,34 @@ class MeteredModelAdapter {
     return await this.load(record.callId);
   }
 
-  private async recordUsage(callId: string, usage: ProviderUsage): Promise<void> {
-    await this.control.recordUsage({
+  private async recordUsage(callId: string, usage: ProviderUsage, minimum = false): Promise<void> {
+    const item = {
       runId: this.runId,
       leaseId: this.leaseId,
       callId,
-      kind: "model_tokens",
-      provider: "deepseek",
+      kind: "model_tokens" as const,
+      provider: "deepseek" as const,
       model: this.model,
       inputUnits: usage.promptTokens ?? 0,
       outputUnits: usage.completionTokens ?? 0,
       imageCount: 0,
-    });
+    };
+    try {
+      await this.control.recordUsage(item);
+      return;
+    } catch (error) {
+      const transient = error instanceof TypeError || (error instanceof Error && error.message === "control_deadline_exceeded") ||
+        (error instanceof AgentControlError && error.status >= 500);
+      if (transient) {
+        try {
+          await this.control.recordUsage(item);
+          return;
+        } catch { /* Carry the observation in the existing tool_complete checkpoint. */ }
+      }
+      throw new DurableProviderError("unknown", minimum ? "agent_model_minimum_pending" : "agent_model_usage_pending", {
+        inputUnits: item.inputUnits, outputUnits: item.outputUnits,
+      });
+    }
   }
 
   private async load(callId: string): Promise<ModelTurnResult> {
@@ -247,6 +280,7 @@ export class MeteredModelBackend implements ModelBackend {
       callId,
       phase: request.phase,
       toolName: "model_turn",
+      directDeepSeekV1Model: this.model,
     }, request);
   }
 }

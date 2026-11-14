@@ -7,6 +7,7 @@ export type DurableToolIdentity = {
   callId: string;
   phase: string;
   toolName: string;
+  directDeepSeekV1Model?: string;
 };
 
 export interface DurableToolControl {
@@ -19,6 +20,7 @@ export interface DurableToolControl {
     resultObjectKey?: string;
     resultHash?: string;
     safeErrorCode?: string;
+    pendingUsage?: PreparedToolCall["pendingUsage"];
   }): Promise<PreparedToolCall>;
 }
 
@@ -33,7 +35,7 @@ export interface DurableToolAdapter<TRequest, TResult> {
   /** Called only after submitted is durable. */
   execute(callId: string, request: TRequest): Promise<TResult>;
   /** Query an already-submitted call. Must never submit a second side effect. */
-  reconcile(callId: string, request: TRequest): Promise<TResult | null>;
+  reconcile(callId: string, request: TRequest, record: PreparedToolCall): Promise<TResult | null>;
   /** Persist normalized result before tool_complete. */
   persist(callId: string, result: TResult): Promise<PersistedToolResult<TResult>>;
   /** Restore a succeeded call from resultObjectKey/resultHash. */
@@ -44,11 +46,14 @@ export class DurableProviderError extends Error {
   readonly outcome: "terminal" | "unknown";
   readonly safeCode: string;
 
-  constructor(outcome: "terminal" | "unknown", safeCode: string) {
+  readonly pendingUsage?: PreparedToolCall["pendingUsage"];
+
+  constructor(outcome: "terminal" | "unknown", safeCode: string, pendingUsage?: PreparedToolCall["pendingUsage"]) {
     super(safeCode);
     this.name = "DurableProviderError";
     this.outcome = outcome;
     this.safeCode = safeCode;
+    this.pendingUsage = pendingUsage;
   }
 }
 
@@ -84,14 +89,29 @@ export class DurableToolDispatcher<TRequest, TResult> {
   async dispatch(identity: DurableToolIdentity, request: TRequest): Promise<TResult> {
     const argsHash = computeArgsHash(request);
     let record = await this.control.prepareTool({ ...identity, argsHash });
+    if (identity.directDeepSeekV1Model && record.directDeepSeekV1Model !== identity.directDeepSeekV1Model &&
+        !(record.reused && record.status !== "prepared" && record.directDeepSeekV1Model === null)) {
+      throw new Error("direct_model_contract_unavailable");
+    }
     if (record.status === "succeeded") return await this.adapter.restore(record);
     if (record.status === "failed") {
       throw new DurableProviderError("terminal", record.safeErrorCode ?? "durable_tool_previously_failed");
     }
 
     try {
-      if (record.status === "submitted" || record.status === "outcome_unknown") {
-        const reconciled = await this.adapter.reconcile(identity.callId, request);
+      let acquired = false;
+      if (record.status === "prepared") {
+        record = await this.control.markToolSubmitted({
+          runId: identity.runId,
+          leaseId: identity.leaseId,
+          callId: identity.callId,
+        });
+        if (record.status === "succeeded") return await this.adapter.restore(record);
+        if (record.status === "failed") throw new DurableProviderError("terminal", record.safeErrorCode ?? "durable_tool_previously_failed");
+        acquired = identity.directDeepSeekV1Model ? record.status === "submitted" && record.reused === false : true;
+      }
+      if (!acquired) {
+        const reconciled = await this.adapter.reconcile(identity.callId, request, record);
         if (reconciled === null) {
           const safeErrorCode = record.safeErrorCode ?? "provider_outcome_unknown";
           await this.control.completeTool({
@@ -106,12 +126,6 @@ export class DurableToolDispatcher<TRequest, TResult> {
         return await this.persistAndComplete(identity, reconciled);
       }
 
-      record = await this.control.markToolSubmitted({
-        runId: identity.runId,
-        leaseId: identity.leaseId,
-        callId: identity.callId,
-      });
-      if (record.status === "succeeded") return await this.adapter.restore(record);
       const result = await this.adapter.execute(identity.callId, request);
       this.afterExecute?.();
       return await this.persistAndComplete(identity, result);
@@ -125,6 +139,7 @@ export class DurableToolDispatcher<TRequest, TResult> {
             callId: identity.callId,
             status: error.outcome === "terminal" ? "failed" : "outcome_unknown",
             safeErrorCode: error.safeCode,
+            ...(error.pendingUsage ? {pendingUsage: error.pendingUsage} : {}),
           });
         }
         throw error;

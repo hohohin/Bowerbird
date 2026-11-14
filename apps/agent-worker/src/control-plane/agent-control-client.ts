@@ -106,6 +106,8 @@ export type PreparedToolCall = {
   resultObjectKey?: string | null;
   resultHash?: string | null;
   safeErrorCode?: string | null;
+  directDeepSeekV1Model?: string | null;
+  pendingUsage?: { inputUnits: number; outputUnits: number } | null;
   reused: boolean;
 };
 
@@ -359,7 +361,7 @@ export class AgentControlClient {
   }
 
   async prepareTool(args: {
-    runId: string; leaseId: string; callId: string; phase: string; toolName: string; argsHash: string;
+    runId: string; leaseId: string; callId: string; phase: string; toolName: string; argsHash: string; directDeepSeekV1Model?: string;
   }): Promise<PreparedToolCall> {
     return await this.post({ action: "tool_prepare", ...args }) as unknown as PreparedToolCall;
   }
@@ -373,7 +375,7 @@ export class AgentControlClient {
   async completeTool(args: {
     runId: string; leaseId: string; callId: string;
     status: "succeeded" | "failed" | "outcome_unknown";
-    resultObjectKey?: string; resultHash?: string; safeErrorCode?: string;
+    resultObjectKey?: string; resultHash?: string; safeErrorCode?: string; pendingUsage?: PreparedToolCall["pendingUsage"];
   }): Promise<PreparedToolCall> {
     return await this.post({ action: "tool_complete", ...args }) as unknown as PreparedToolCall;
   }

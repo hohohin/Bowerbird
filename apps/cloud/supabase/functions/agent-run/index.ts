@@ -1013,7 +1013,7 @@ async function actionCancel(admin: Parameters<typeof billingAccountId>[0], user:
     return jsonResponse({
       runId,
       status: "cancelled",
-      actualCredits: Number((settled as { actual_credits?: number } | null)?.actual_credits ?? 0),
+      actualCredits: (settled as { actual_credits?: number | null } | null)?.actual_credits ?? null,
     });
   }
   const { error } = await admin.from("agent_runs")
@@ -1215,7 +1215,7 @@ async function actionLocalTaskFail(admin: Parameters<typeof billingAccountId>[0]
   return jsonResponse({
     runId,
     status: "failed",
-    actualCredits: Number((settled as { actual_credits?: number } | null)?.actual_credits ?? 0),
+    actualCredits: (settled as { actual_credits?: number | null } | null)?.actual_credits ?? null,
   });
 }
 
