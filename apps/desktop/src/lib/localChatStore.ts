@@ -116,7 +116,10 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
     // An unaccepted workflow step may replay its saved input after a desktop upgrade.
     const provider = parseChatProvider(input.provider);
     if (provider && provider !== input.provider) input = { ...input, provider };
-    const key = input.conversationId || `new:${input.projectId}`;
+    const key = input.conversationId || JSON.stringify(
+      input.agentNodeId ? ["card", input.projectId, input.agentNodeId] :
+      input.requestId ? ["request", input.projectId, input.requestId] : ["composer", input.projectId]
+    );
     const validation = localChatInputError(input.text, input.referenceAssetIds);
     if (validation) throw new Error(validation);
     if (get().sending[key] || (input.conversationId && localChatRunning(get().summaries[input.conversationId]))) {

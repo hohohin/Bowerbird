@@ -134,6 +134,47 @@ test('switching chat provider after an uncertain send starts a distinct native r
   assert.equal(f.calls[1].args.input.provider, 'dsh-cloud');
 });
 
+test('independent new cards send concurrently and retry their own original request', async () => {
+  const f = fixture();
+  const waiting = new Map();
+  f.handlers.set('local_chat_send', ({input}) => new Promise((resolve, reject) => {
+    waiting.set(input.agentNodeId, {resolve, reject, id: input.requestId});
+  }));
+  const base = { projectId: 'p', text: '相同要求', referenceAssetIds: [] };
+  const first = { ...base, agentNodeId: 'card-a', requestId: 'workflow-a' };
+  const second = { ...base, agentNodeId: 'card-b' };
+  const send = input => f.store.getState().send(input);
+  const both = Promise.allSettled([send(first), send(second)]);
+  await settle();
+  assert.equal(waiting.size, 2, 'both cards reached the native send command');
+  const originalB = waiting.get('card-b').id;
+  await assert.rejects(send({ ...first, requestId: 'another-run' }), /仍在回复/);
+  for (const attempt of waiting.values()) attempt.reject(new Error('ack lost'));
+  assert.deepEqual((await both).map(result => result.status), ['rejected','rejected']);
+  const retry = Promise.all([send(second), send(first)]);
+  await settle();
+  assert.equal(waiting.get('card-a').id, 'workflow-a');
+  assert.equal(waiting.get('card-b').id, originalB);
+  waiting.get('card-a').resolve(chat(1, 'p', 'chat-a'));
+  waiting.get('card-b').resolve(chat(1, 'p', 'chat-b'));
+  assert.deepEqual((await retry).map(value => value.id), ['chat-b','chat-a']);
+  assert.equal(f.calls.length, 4);
+});
+
+test('new sends without a node retain the ordinary composer lock and honor explicit request identity', async () => {
+  const f = fixture(), waiting = [];
+  f.handlers.set('local_chat_send', ({input}) => new Promise(resolve => waiting.push({ id: input.requestId, resolve })));
+  const base = { projectId: 'p', text: '新对话', referenceAssetIds: [] };
+  const send = input => f.store.getState().send(input);
+  const attempts = Promise.allSettled([send(base), send({ ...base, requestId: 'a' }), send({ ...base, requestId: 'b' })]);
+  await settle();
+  assert.equal(waiting.length, 3);
+  await assert.rejects(send(base), /仍在回复/);
+  await assert.rejects(send({ ...base, requestId: 'a' }), /仍在回复/);
+  for (const attempt of waiting) attempt.resolve(chat(1, 'p', attempt.id));
+  assert.ok((await attempts).every(result => result.status === 'fulfilled'));
+});
+
 test('concurrent send to the same conversation is rejected before a second IPC', async () => {
   const f = fixture(); let resolveSend;
   f.handlers.set('local_chat_send', () => new Promise(resolve => { resolveSend = resolve; }));
