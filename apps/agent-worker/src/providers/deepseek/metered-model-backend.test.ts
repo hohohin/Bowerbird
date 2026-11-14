@@ -1,11 +1,12 @@
 import { deepEqual, equal, rejects } from "node:assert/strict";
 import { test } from "node:test";
+import { createServer } from "node:http";
 import type { ModelBackend, ModelTurnRequest, ModelTurnResult } from "../../contracts/model.ts";
 import { AgentControlError, type PreparedToolCall, type RegisteredAgentArtifact } from "../../control-plane/agent-control-client.ts";
 import type { DurableToolIdentity } from "../../kernel/durable-tool-dispatcher.ts";
 import { sha256Hex } from "../../kernel/tool-ledger.ts";
 import { MeteredModelBackend, type MeteredModelControl } from "./metered-model-backend.ts";
-import { DeepSeekBackendError } from "./backend.ts";
+import { DeepSeekBackend, DeepSeekBackendError } from "./backend.ts";
 
 const request: ModelTurnRequest = {
   runId: "run-1",
@@ -156,4 +157,86 @@ test("network-unknown DeepSeek outcome records minimum usage before the Run can 
   equal(control.calls.get(callId)?.status, "outcome_unknown");
   equal(control.usages.get(callId)?.inputUnits, 0);
   equal(control.usages.get(callId)?.outputUnits, 0);
+});
+
+for (const [status, body, finalState] of [
+  [403, "html", "failed"], [403, "empty", "failed"], [403, "stall", "failed"],
+  [429, "empty", "failed"], [503, "json", "failed"], [502, "stall", "failed"],
+  [200, "html", "outcome_unknown"],
+] as const) {
+  test(`metered DeepSeek preserves ${status} with ${body} body through settlement and recovery`, async () => {
+    let dispatches = 0;
+    let transportAborted = false;
+    const control = new FakeControl();
+    const base = new DeepSeekBackend({ apiKey: "fixture", baseUrl: "https://local.test", model: "test", timeoutMs: 60 },
+      async (_url, init) => {
+        dispatches++;
+        return {
+          ok: status === 200, status,
+          json: () => {
+            if (body === "stall") return new Promise<never>((_, reject) => {
+              init.signal.addEventListener("abort", () => { transportAborted = true; reject(new Error("closed")); }, { once: true });
+            });
+            return Promise.resolve(JSON.parse(body === "html" ? "<html>private</html>" : body === "empty" ? "" : '{"error":{"type":"upstream_failure"}}'));
+          },
+        };
+      });
+    const model = new MeteredModelBackend({ base, control, runId: request.runId, leaseId: "lease", model: "test" });
+    const error = status === 200 ? /deepseek_invalid_json/ : /deepseek_http_error/;
+    await rejects(() => model.turn(request, { aborted: false }), error);
+    const callId = [...control.calls.keys()][0];
+    equal(control.calls.get(callId)?.status, finalState);
+    equal(control.usages.size, finalState === "failed" ? 0 : 1);
+    if (finalState === "outcome_unknown") {
+      equal(control.usages.get(callId)?.inputUnits, 0);
+      equal(control.usages.get(callId)?.outputUnits, 0);
+    }
+    if (body === "stall") equal(transportAborted, true);
+    await rejects(() => model.turn(request, { aborted: false }), error);
+    equal(dispatches, 1);
+    equal(control.usages.size, finalState === "failed" ? 0 : 1);
+  });
+}
+
+test("direct fetch preserves HTTP 403 and actually closes a stalled error body on cancellation", async () => {
+  const headers = Promise.withResolvers<void>();
+  const disconnected = Promise.withResolvers<void>();
+  const caller = new AbortController();
+  let sent = 0;
+  const server = createServer((_req, res) => {
+    sent++;
+    res.on("close", () => disconnected.resolve());
+    res.writeHead(403, { "content-type": "text/html" });
+    res.write("<html>");
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address !== "object") throw new Error("loopback_listen_failed");
+  const model = new DeepSeekBackend({ apiKey: "fixture", baseUrl: "https://local.test", model: "test", timeoutMs: 5000 },
+    async (_url, init) => {
+      const response = await fetch(`http://127.0.0.1:${address.port}`, init);
+      return { ok: response.ok, status: response.status, json: () => {
+        headers.resolve();
+        return response.json();
+      } };
+    });
+  let watchdog: unknown;
+  try {
+    const verify = async () => {
+      const result = rejects(() => model.turn(request, caller.signal), (error: unknown) =>
+        error instanceof DeepSeekBackendError && error.safeCode === "deepseek_http_error" && error.status === 403);
+      await headers.promise;
+      caller.abort();
+      await result;
+      await disconnected.promise;
+      equal(sent, 1);
+    };
+    await Promise.race([verify(), new Promise<never>((_, reject) => {
+      watchdog = setTimeout(() => reject(new Error("stalled_connection_not_closed")), 8000);
+    })]);
+  } finally {
+    clearTimeout(watchdog);
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });

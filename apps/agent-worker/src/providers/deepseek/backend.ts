@@ -522,12 +522,12 @@ export class DeepSeekBackend implements ModelBackend {
     return { message, content, toolCalls, finishReason, usage };
   }
 
-  private post(body: JsonRecord, caller: AbortSignalLike): Promise<unknown> {
-    return withRequestSignal(caller, this.config.timeoutMs, async signal => {
-      let response: DeepSeekHttpResponse;
-      let responseBody: unknown;
-      try {
-        response = await this.fetch(`${this.config.baseUrl}/chat/completions`, {
+  private async post(body: JsonRecord, caller: AbortSignalLike): Promise<unknown> {
+    let rejectedStatus: number | undefined;
+    let providerCode: string | undefined;
+    try {
+      const result = await withRequestSignal(caller, this.config.timeoutMs, async signal => {
+        const response = await this.fetch(`${this.config.baseUrl}/chat/completions`, {
           method: "POST",
           headers: {
             authorization: `Bearer ${this.config.apiKey}`,
@@ -536,20 +536,22 @@ export class DeepSeekBackend implements ModelBackend {
           body: JSON.stringify(body),
           signal,
         });
-        responseBody = await response.json();
-      } catch (error) {
+        if (response.ok) return await response.json();
+        // A received HTTP rejection owns settlement even if its optional diagnostic body fails.
+        rejectedStatus = response.status;
+        providerCode = safeProviderCode(await response.json());
+      });
+      if (rejectedStatus === undefined) return result;
+    } catch (error) {
+      if (rejectedStatus === undefined) {
         if (error instanceof DeepSeekBackendError) throw error;
         if (error instanceof SyntaxError) throw new DeepSeekBackendError("deepseek_invalid_json");
         throw new DeepSeekBackendError("deepseek_network_error", { retryable: true });
       }
-      if (!response.ok) {
-        throw new DeepSeekBackendError("deepseek_http_error", {
-          status: response.status,
-          providerCode: safeProviderCode(responseBody),
-          retryable: response.status === 408 || response.status === 429 || response.status >= 500,
-        });
-      }
-      return responseBody;
+    }
+    const status = rejectedStatus;
+    throw new DeepSeekBackendError("deepseek_http_error", {
+      status, providerCode, retryable: status === 408 || status === 429 || status >= 500,
     });
   }
 }
