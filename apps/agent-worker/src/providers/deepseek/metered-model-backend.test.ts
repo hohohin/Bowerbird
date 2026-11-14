@@ -236,6 +236,145 @@ test("a reused submission acknowledgement never dispatches another direct model 
   equal(control.usages.size,0);
 });
 
+test("recovering an uncertain call writes the terminal observation once per attempt", async () => {
+  const control = new FakeControl();
+  const complete = control.completeTool.bind(control);
+  const codes: (string | undefined)[] = [];
+  control.completeTool = async args => {
+    codes.push(args.safeErrorCode);
+    return await complete(args);
+  };
+  const model = new MeteredModelBackend({base: new UnknownOutcomeDeepSeek(), control, runId: request.runId, leaseId: "lease", model: "fixture"});
+  await rejects(() => model.turn(request, {aborted: false}), /deepseek_network_error/);
+  await rejects(() => model.turn(request, {aborted: false}), /deepseek_network_error/);
+  deepEqual(codes, ["deepseek_network_error", "deepseek_network_error"]);
+});
+
+for (const [error, writes] of [
+  [new TypeError("connection reset"), 2], [new Error("control_deadline_exceeded"), 2],
+  [new AgentControlError(409), 1], [new AgentControlError(402), 1],
+] as const) {
+  test(`model usage write ${error.message} performs ${writes} attempts and preserves exact counts`, async () => {
+    const control = new FakeControl(), base = new FakeDeepSeek();
+    const stored = control.recordUsage.bind(control);
+    let attempted = 0;
+    control.recordUsage = async args => {
+      if (++attempted === 1) throw error;
+      await stored(args);
+    };
+    const model = new MeteredModelBackend({base, control, runId: request.runId, leaseId: "lease", model: "fixture"});
+    if (writes === 2) {
+      await model.turn(request, {aborted: false});
+      equal([...control.usages.values()][0].inputUnits, 20);
+    } else {
+      await rejects(() => model.turn(request, {aborted: false}), /agent_model_usage_pending/);
+      deepEqual([...control.calls.values()][0].pendingUsage, {inputUnits: 20, outputUnits: 10});
+    }
+    equal(attempted, writes);
+    equal(base.calls, 1);
+  });
+}
+
+for (const cause of ["before-execute", "refusal", "provider-preflight", "unexpected"] as const) {
+  test(`model failure ${cause} leaves no billable observation`, async () => {
+    const control = new FakeControl();
+    const signal = {aborted: false};
+    const submit = control.markToolSubmitted.bind(control);
+    control.markToolSubmitted = async args => {
+      const result = await submit(args);
+      signal.aborted = cause === "before-execute";
+      return result;
+    };
+    let calls = 0;
+    const base: ModelBackend = {id: "deepseek", async turn() {
+      calls++;
+      if (cause === "refusal") return {kind: "refusal", reason: "aborted", providerUsage: {}};
+      if (cause === "provider-preflight") throw new DeepSeekBackendError("deepseek_not_dispatched");
+      throw new TypeError("unexpected");
+    }};
+    const model = new MeteredModelBackend({base, control, runId: request.runId, leaseId: "lease", model: "fixture"});
+    await rejects(() => model.turn(request, signal), cause === "unexpected" ? /provider_outcome_unknown/ : /deepseek_not_dispatched/);
+    equal(calls, cause === "before-execute" ? 0 : 1);
+    equal(control.usages.size, 0);
+    equal([...control.calls.values()][0].status, cause === "unexpected" ? "outcome_unknown" : "failed");
+  });
+}
+
+test("an actual model refusal with another reason records its observed tokens", async () => {
+  const control = new FakeControl();
+  const base: ModelBackend = {id: "deepseek", async turn() {
+    return {kind: "refusal", reason: "policy", providerUsage: {promptTokens: 2, completionTokens: 1}};
+  }};
+  const model = new MeteredModelBackend({base, control, runId: request.runId, leaseId: "lease", model: "fixture"});
+  const result = await model.turn(request, {aborted: false});
+  equal(result.kind, "refusal");
+  equal([...control.usages.values()][0].outputUnits, 1);
+});
+
+for (const [status, reused, modelName] of [
+  ["submitted", false, null], ["prepared", true, null], ["submitted", true, "different-model"],
+] as const) {
+  test(`incompatible prepare response ${status}/${reused}/${modelName} stops before model execution`, async () => {
+    const control = new FakeControl(), base = new FakeDeepSeek();
+    const prepare = control.prepareTool.bind(control);
+    control.prepareTool = async args => ({
+      ...await prepare(args), directDeepSeekV1Model: modelName, status, reused,
+    });
+    const model = new MeteredModelBackend({base, control, runId: request.runId, leaseId: "lease", model: "fixture"});
+    await rejects(() => model.turn(request, {aborted: false}), /direct_model_contract_unavailable/);
+    equal(base.calls, 0);
+    equal(control.usages.size, 0);
+    equal([...control.calls.values()][0].status, "prepared");
+  });
+}
+
+for (const status of ["succeeded", "failed"] as const) {
+  test(`when another worker has ${status}, a stale submit acknowledgement restores its outcome`, async () => {
+    const control = new FakeControl(), base = new FakeDeepSeek();
+    const model = new MeteredModelBackend({base, control, runId: request.runId, leaseId: "lease", model: "fixture"});
+    const result = await model.turn(request, {aborted: false});
+    // The first read sees the row before the concurrent worker's terminal commit.
+    const prepare = control.prepareTool.bind(control);
+    control.prepareTool = async args => ({...await prepare(args), status: "prepared"});
+    control.markToolSubmitted = async () => ({...[...control.calls.values()][0], status, reused: true,
+      safeErrorCode: status === "failed" ? "deepseek_http_error" : null});
+    if (status === "succeeded") deepEqual(await model.turn(request, {aborted: false}), result);
+    else await rejects(() => model.turn(request, {aborted: false}), /deepseek_http_error/);
+    equal(base.calls, 1);
+    equal(control.usages.size, 1);
+  });
+}
+
+for (const [safeErrorCode, usage] of [
+  ["agent_model_minimum_pending", {inputUnits: 0, outputUnits: 0}],
+  ["agent_model_usage_pending", {inputUnits: 20, outputUnits: 10}],
+] as const) {
+  test(`a failed recovery preserves the evidence class ${safeErrorCode}`, async () => {
+    const control = new FakeControl(), base = new FakeDeepSeek();
+    const model = new MeteredModelBackend({base, control, runId: request.runId, leaseId: "lease", model: "fixture"});
+    await model.turn(request, {aborted: false});
+    const [row] = control.calls.values();
+    control.calls.set(row.callId, {...row, safeErrorCode, status: "outcome_unknown", pendingUsage: usage});
+    control.artifacts.clear(); control.usages.clear();
+    control.recordUsage = async () => { throw new AgentControlError(500); };
+    await rejects(() => model.turn(request, {aborted: false}), new RegExp(safeErrorCode));
+    equal(base.calls, 1);
+    deepEqual(control.calls.get(row.callId)?.pendingUsage, usage);
+  });
+}
+
+test("an empty historical provider error code still reports an unknown outcome on recovery", async () => {
+  const control = new FakeControl(), base = new FakeDeepSeek();
+  const model = new MeteredModelBackend({base, control, runId: request.runId, leaseId: "lease", model: "fixture"});
+  await model.turn(request, {aborted: false});
+  const [row] = control.calls.values();
+  control.calls.set(row.callId, {...row, status: "outcome_unknown", safeErrorCode: ""});
+  control.artifacts.clear();
+  await rejects(() => model.turn(request, {aborted: false}), /provider_outcome_unknown/);
+  equal(base.calls, 1);
+  equal(control.calls.get(row.callId)?.safeErrorCode, "provider_outcome_unknown");
+});
+
 test("artifact-before-usage crash recovers the same model result and records usage once", async () => {
   const base = new FakeDeepSeek();
   const control = new FakeControl();

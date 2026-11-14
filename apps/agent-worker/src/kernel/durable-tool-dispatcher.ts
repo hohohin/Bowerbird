@@ -88,76 +88,72 @@ export class DurableToolDispatcher<TRequest, TResult> {
 
   async dispatch(identity: DurableToolIdentity, request: TRequest): Promise<TResult> {
     const argsHash = computeArgsHash(request);
-    let record = await this.control.prepareTool({ ...identity, argsHash });
-    if (identity.directDeepSeekV1Model && record.directDeepSeekV1Model !== identity.directDeepSeekV1Model &&
-        !(record.reused && record.status !== "prepared" && record.directDeepSeekV1Model === null)) {
-      throw new Error("direct_model_contract_unavailable");
-    }
+    const record = await this.control.prepareTool({ ...identity, argsHash });
+    this.assertModelContract(identity, record);
     if (record.status === "succeeded") return await this.adapter.restore(record);
-    if (record.status === "failed") {
-      throw new DurableProviderError("terminal", record.safeErrorCode ?? "durable_tool_previously_failed");
-    }
+    if (record.status === "failed") throw this.priorFailure(record);
 
     try {
-      let acquired = false;
-      if (record.status === "prepared") {
-        record = await this.control.markToolSubmitted({
-          runId: identity.runId,
-          leaseId: identity.leaseId,
-          callId: identity.callId,
-        });
-        if (record.status === "succeeded") return await this.adapter.restore(record);
-        if (record.status === "failed") throw new DurableProviderError("terminal", record.safeErrorCode ?? "durable_tool_previously_failed");
-        acquired = identity.directDeepSeekV1Model ? record.status === "submitted" && record.reused === false : true;
-      }
-      if (!acquired) {
-        const reconciled = await this.adapter.reconcile(identity.callId, request, record);
-        if (reconciled === null) {
-          const safeErrorCode = record.safeErrorCode ?? "provider_outcome_unknown";
-          await this.control.completeTool({
-            runId: identity.runId,
-            leaseId: identity.leaseId,
-            callId: identity.callId,
-            status: "outcome_unknown",
-            safeErrorCode,
-          });
-          throw new DurableProviderError("unknown", safeErrorCode);
-        }
-        return await this.persistAndComplete(identity, reconciled);
-      }
-
-      const result = await this.adapter.execute(identity.callId, request);
-      this.afterExecute?.();
-      return await this.persistAndComplete(identity, result);
+      if (record.status !== "prepared") return await this.recover(identity, request, record);
+      return await this.submit(identity, request);
     } catch (error) {
-      if (error instanceof SimulatedProcessCrash) throw error;
-      if (error instanceof DurableProviderError) {
-        if (error.safeCode !== "provider_outcome_unknown") {
-          await this.control.completeTool({
-            runId: identity.runId,
-            leaseId: identity.leaseId,
-            callId: identity.callId,
-            status: error.outcome === "terminal" ? "failed" : "outcome_unknown",
-            safeErrorCode: error.safeCode,
-            ...(error.pendingUsage ? {pendingUsage: error.pendingUsage} : {}),
-          });
-        }
-        throw error;
-      }
+      return await this.recordFailure(identity, error);
+    }
+  }
+
+  private assertModelContract(identity: DurableToolIdentity, record: PreparedToolCall): void {
+    if (!identity.directDeepSeekV1Model || record.directDeepSeekV1Model === identity.directDeepSeekV1Model) return;
+    // Legacy direct calls already past preparation can only be restored or reconciled.
+    if (record.reused && record.status !== "prepared" && record.directDeepSeekV1Model === null) return;
+    throw new Error("direct_model_contract_unavailable");
+  }
+
+  private priorFailure(record: PreparedToolCall): DurableProviderError {
+    return new DurableProviderError("terminal", record.safeErrorCode ?? "durable_tool_previously_failed");
+  }
+
+  private async submit(identity: DurableToolIdentity, request: TRequest): Promise<TResult> {
+    const {runId, leaseId, callId} = identity;
+    const record = await this.control.markToolSubmitted({runId, leaseId, callId});
+    if (record.status === "succeeded") return await this.adapter.restore(record);
+    if (record.status === "failed") throw this.priorFailure(record);
+    if (identity.directDeepSeekV1Model && (record.status !== "submitted" || record.reused !== false)) {
+      return await this.recover(identity, request, record);
+    }
+
+    const result = await this.adapter.execute(callId, request);
+    this.afterExecute?.();
+    return await this.persistAndComplete(identity, result);
+  }
+
+  private async recover(identity: DurableToolIdentity, request: TRequest, record: PreparedToolCall): Promise<TResult> {
+    const result = await this.adapter.reconcile(identity.callId, request, record);
+    if (result === null) throw new DurableProviderError("unknown", record.safeErrorCode || "provider_outcome_unknown");
+    return await this.persistAndComplete(identity, result);
+  }
+
+  private async recordFailure(identity: DurableToolIdentity, error: unknown): Promise<never> {
+    if (error instanceof SimulatedProcessCrash) throw error;
+    let failure: DurableProviderError;
+    if (error instanceof DurableProviderError) {
+      failure = error;
+    } else {
       try {
         this.onUnexpectedError?.(error, identity);
       } catch {
         // Observability must never change provider durability semantics.
       }
-      await this.control.completeTool({
-        runId: identity.runId,
-        leaseId: identity.leaseId,
-        callId: identity.callId,
-        status: "outcome_unknown",
-        safeErrorCode: "provider_outcome_unknown",
-      });
-      throw new DurableProviderError("unknown", "provider_outcome_unknown");
+      failure = new DurableProviderError("unknown", "provider_outcome_unknown");
     }
+    await this.control.completeTool({
+      runId: identity.runId,
+      leaseId: identity.leaseId,
+      callId: identity.callId,
+      status: failure.outcome === "terminal" ? "failed" : "outcome_unknown",
+      safeErrorCode: failure.safeCode,
+      ...(failure.pendingUsage ? {pendingUsage: failure.pendingUsage} : {}),
+    });
+    throw failure;
   }
 
   private async persistAndComplete(identity: DurableToolIdentity, result: TResult): Promise<TResult> {

@@ -44,6 +44,11 @@ export interface MeteredModelControl extends DurableToolControl {
 
 type PersistedModelTurn = ModelTurnResult;
 
+function isTemporaryUsageWriteFailure(error: unknown): boolean {
+  if (error instanceof AgentControlError) return error.status >= 500;
+  return error instanceof TypeError || (error instanceof Error && error.message === "control_deadline_exceeded");
+}
+
 function safeUsage(usage: ProviderUsage): ProviderUsage {
   const integer = (value: number | undefined): number | undefined =>
     Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : undefined;
@@ -121,12 +126,12 @@ class MeteredModelAdapter {
       }
       return result;
     } catch (error) {
-      if (error instanceof DeepSeekBackendError) {
-        if (error.safeCode === "deepseek_not_dispatched") throw new DurableProviderError("terminal", error.safeCode);
-        if (error.status === undefined) await this.recordUsage(callId, {}, true);
-        throw new DurableProviderError(error.status === undefined ? "unknown" : "terminal", error.safeCode);
+      if (!(error instanceof DeepSeekBackendError)) throw error;
+      if (error.status !== undefined || error.safeCode === "deepseek_not_dispatched") {
+        throw new DurableProviderError("terminal", error.safeCode);
       }
-      throw error;
+      await this.recordUsage(callId, {}, true);
+      throw new DurableProviderError("unknown", error.safeCode);
     }
   }
 
@@ -202,9 +207,7 @@ class MeteredModelAdapter {
       await this.control.recordUsage(item);
       return;
     } catch (error) {
-      const transient = error instanceof TypeError || (error instanceof Error && error.message === "control_deadline_exceeded") ||
-        (error instanceof AgentControlError && error.status >= 500);
-      if (transient) {
+      if (isTemporaryUsageWriteFailure(error)) {
         try {
           await this.control.recordUsage(item);
           return;
