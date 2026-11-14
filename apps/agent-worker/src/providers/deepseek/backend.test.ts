@@ -1,5 +1,7 @@
 import { test } from "node:test";
-import { deepEqual, equal, ok } from "node:assert/strict";
+import { createServer } from "node:http";
+import { chatUpstreamFetch } from "../../cloud-chat/runtime.ts";
+import { deepEqual, equal, ok, rejects } from "node:assert/strict";
 import type { ModelTurnRequest } from "../../contracts/model.ts";
 import {
   DeepSeekBackend,
@@ -307,4 +309,83 @@ test("DeepSeekBackend.chat fails closed on invalid structure or unparseable tool
       ok(error.safeCode.startsWith("deepseek_"));
     }
   }
+});
+
+for (const scenario of ["timeout before headers", "timeout during body", "lease lost during body", "chat cancellation during body"]) {
+  test(`DeepSeek closes the upstream socket once on ${scenario}`, async () => {
+    const bodyStarted = Promise.withResolvers<void>();
+    const peerClosed = Promise.withResolvers<void>();
+    let calls = 0;
+    const server = createServer((_req, res) => {
+      calls++;
+      res.on("close", () => peerClosed.resolve());
+      if (scenario !== "timeout before headers") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.write('{"choices":');
+      }
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address !== "object") throw new Error("expected loopback address");
+    const endpoint = `http://127.0.0.1:${address.port}`;
+    const source = new AbortController();
+    let leaseLost = false;
+    const lease = { get aborted() { return leaseLost; } };
+    const deadline = scenario.startsWith("timeout");
+    const backend = new DeepSeekBackend({
+      apiKey: "fixture", baseUrl: "https://local.test", model: "deepseek-chat", timeoutMs: deadline ? 1200 : 5000,
+    }, chatUpstreamFetch(async (_url, init) => {
+      const response = await fetch(endpoint, init);
+      bodyStarted.resolve();
+      return response;
+    }));
+    let watchdog: unknown;
+    try {
+      const checked = (async () => {
+        const result = scenario === "lease lost during body" ? backend.turn(REQUEST, lease) : backend.chat([], [], source.signal);
+        const failure = rejects(() => result, (error: unknown) =>
+          error instanceof DeepSeekBackendError && error.safeCode === (deadline ? "deepseek_timeout" : "deepseek_aborted"));
+        if (scenario !== "timeout before headers") await bodyStarted.promise;
+        if (scenario === "lease lost during body") leaseLost = true;
+        if (scenario === "chat cancellation during body") source.abort();
+        await failure;
+        await peerClosed.promise;
+        equal(calls, 1);
+      })();
+      await Promise.race([checked, new Promise<never>((_, reject) => {
+        watchdog = setTimeout(() => reject(new Error("upstream connection did not close")), 8000);
+      })]);
+    } finally {
+      clearTimeout(watchdog);
+      server.closeAllConnections();
+      await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+}
+
+test("successful slow body outlives the lease polling interval and releases its abort listener and deadline", async () => {
+  let transport: AbortSignal | undefined;
+  let listener: (() => void) | undefined;
+  let removed = 0;
+  let calls = 0;
+  const caller = {
+    aborted: false,
+    addEventListener(_event: "abort", fn: () => void) { listener = fn; },
+    removeEventListener(_event: "abort", fn: () => void) { equal(fn, listener); listener = undefined; removed++; },
+  };
+  const backend = new DeepSeekBackend({ apiKey: "fixture", baseUrl: "https://local.test", model: "deepseek-chat", timeoutMs: 600 },
+    async (_url, init) => {
+      calls++;
+      transport = init.signal;
+      return { ok: true, status: 200, json: async () => {
+        await new Promise<void>(resolve => setTimeout(resolve, 150));
+        return { choices: [{ message: { content: "complete" } }] };
+      } };
+    });
+  equal((await backend.chat([], [], caller)).content, "complete");
+  equal(removed, 1);
+  equal(listener, undefined);
+  await new Promise<void>(resolve => setTimeout(resolve, 620));
+  equal(transport?.aborted, false);
+  equal(calls, 1);
 });

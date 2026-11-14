@@ -75,9 +75,8 @@ export async function processChatJob(job: ChatJob, control: ChatControl, model: 
 
 export function chatUpstreamFetch(download: typeof fetch = fetch): DeepSeekFetch {
   return async (endpoint, request) => {
-    const signal = AbortSignal.timeout(90_000);
-    const connectionError = () => new DeepSeekBackendError(signal.aborted ? "deepseek_timeout" : "deepseek_network_error");
-    const response = await download(endpoint, { ...request, signal }).catch(() => { throw connectionError(); });
+    const connectionError = () => new DeepSeekBackendError("deepseek_network_error");
+    const response = await download(endpoint, request).catch(() => { throw connectionError(); });
     if (!response.ok) {
       void response.body?.getReader().cancel().catch(() => {});
       throw new DeepSeekBackendError("deepseek_http_error", { status: response.status });

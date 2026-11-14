@@ -154,6 +154,7 @@ declare module "@agentclientprotocol/sdk" {
 /** html-renderer 执行器测试用的最小 node:http 形状（环回假 renderer 服务）。 */
 declare module "node:http" {
   export interface ServerResponse {
+    on(event: "close", listener: () => void): ServerResponse;
     readonly headersSent: boolean;
     writeHead(status: number, headers?: Record<string, string>): ServerResponse;
     write(body: string | Uint8Array): boolean;
@@ -218,6 +219,7 @@ declare class TextDecoder {
 interface AbortSignal {
   readonly aborted: boolean;
   addEventListener(event: "abort", listener: () => void, options?: { once?: boolean }): void;
+  removeEventListener(event: "abort", listener: () => void): void;
 }
 declare class AbortController {
   readonly signal: AbortSignal;
