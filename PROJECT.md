@@ -31,6 +31,7 @@
 | 开发源码 | 本次审查冻结到 SQLite **0058**（素材库身份），从公开版 0056 顺序升级。并行开发工作区另有未入候选的改动；不要将整棵开发树当作公开包 | [本轮冻结范围](project_logs/2026-11-11-release-readiness.md) · [文件夹连接](dev-doc/FOLDER-MODE.md) · [项目画板](dev-doc/PROJECT-CANVAS-PLAN.md) |
 | Windows 公开包 | **26.11.1401**，源码 6e71c6b4，11 月 14 日 00:30 公网复核通过 | [发布与回滚](dev-doc/DESKTOP-UPDATES.md) |
 | macOS 公开包 | Apple Silicon **26.10.801**、Intel **26.10.1501**；ARM 1502 未切更新通道 | [桌面自动更新](dev-doc/DESKTOP-UPDATES.md)、[Mac 构建与交付](macOS/README.md)。不能将 Windows 验收计作 Mac 验收 |
+| Worker 模型请求与计量 | 11 月 15 日 10:30 核验 0091、两个 Edge 和 VPS 四个运行文件。受控模型保留已收到的 HTTP 状态，用量缺失时保留冻结额。 | [结算部署、读回与回退](project_logs/2026-11-15-agent-model-settlement-deployment.md) |
 | Cloud 与官网 | 10 月 23 日 Bcoin 0070–0074 已上线；24 日分类翻译 0075／jev-proxy v10 已上线；0069／0076 管理后台与昵称搜索已记录上线；28 日生成／签名文件官网网关已上线；11 月 6 日六类控制／Agent 全文件网关及原单恢复已上线。0057 预留、0068 未应用 | [部署记录](apps/cloud/DEPLOY.md)、[收费化进度](dev-doc/ARCH-ADJUST-PROGRESS.md)。官网使用 VPS 版本目录、Nginx 与 systemd，操作及回滚以专项为准 |
 | 注册及 Pro 赠币 | 11 月 2 日 **0078／定时任务／后台及 Windows 26.11.201 已上线**。新注册 200、Pro 每订阅月 800、年付 12 次、30 天有效，老用户不补发 | 23 项真实隔离验收含 Cron 发放、并发重放、退款；6 个测试 Auth 已清理。独立复核旧账本／订阅／回执保持。[规则](dev-doc/Bowerbird定价方案v2-订阅积分制.md)、[部署证据](apps/cloud/DEPLOY.md#2026-11-02-注册及-pro-月度赠币已上线) |
 | Cloud 视频 | 10 月 28 日 18:09 已启用 Seedance 2.5 **480p／720p／1080p**；完成一次 5 秒 480p 文生视频的生成、交付、恢复和单次结算验收 | [视频部署证据](apps/cloud/DEPLOY.md#2026-10-28-seedance-25-三档启用与真实验收)。720p／1080p、参考模式及供应商账单待独立核验；与当日桌面发布时“未启用”的记录不冲突 |
