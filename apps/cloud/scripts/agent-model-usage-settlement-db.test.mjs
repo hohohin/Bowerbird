@@ -127,6 +127,17 @@ try {
   await finish(succeededCheckpoint);
   await assert.rejects(()=>review(b,succeededCheckpoint,"call","no_charge"),/conflicting saved observation/);
   await assert.rejects(()=>review(b,succeededCheckpoint,"call","receipt",0,0),/conflicting saved observation/);
+  // Stage the row exactly as it stands between the authorized review UPDATE and usage INSERT.
+  await a.query("begin");
+  try {
+    await q("update agent_tool_calls set model_review_ref='case/staged' where run_id=$1 and call_id='call'",[succeededCheckpoint.id]);
+    await a.query("savepoint usage_insert");
+    await assert.rejects(()=>posted(a,succeededCheckpoint,"call",null),{
+      code:"55000",message:"invalid direct model usage identity",
+    });
+    await a.query("rollback to savepoint usage_insert");
+    assert.deepEqual(await q("select call_id from agent_usage_items where run_id=$1",[succeededCheckpoint.id]),[]);
+  } finally { await a.query("rollback"); }
   assert.equal((await review(b,succeededCheckpoint,"call","recorded")).rows[0].actual,1);
   console.log("PASS optional contract, model-only marker, name lengths, observation provenance and review references");
 
@@ -169,6 +180,13 @@ try {
     assert.equal((await finish(run1))[0].actual_credits,0); assert.equal((await hold(run1)).status,"rolled_back");
     await assert.rejects(()=>submitted(run1),/invalid direct model lease/);
   }
+  const failedWithoutCode=await run();
+  await direct(failedWithoutCode);
+  await update(failedWithoutCode,"failed",null);
+  assert.equal((await finish(failedWithoutCode))[0].actual_credits,null);
+  assert.equal((await hold(failedWithoutCode)).status,"pending_settlement");
+  assert.deepEqual(await q("select call_id from agent_usage_items where run_id=$1",[failedWithoutCode.id]),[]);
+  assert.deepEqual((await rows(failedWithoutCode)).filter(row=>["confirm","rollback"].includes(row.kind)),[]);
   const historical=await run(); await insertCall(historical,"legacy"); assert.equal((await finish(historical))[0].actual_credits,0);
   const dsh=await run(); await q("update agent_runs set agent_runtime='dsh' where id=$1",[dsh.id]);
   await assert.rejects(()=>prepare(dsh),/invalid direct model lease or runtime/);
@@ -223,13 +241,25 @@ try {
   assert.equal((await review(b,multi,"two","receipt",600000,2)).rows[0].actual,2);
   console.log("PASS budget ceiling, minimum recovery, known exact receipt supersedes estimated minimum, multiple missing calls");
 
+  // Session a holds the Run lock. Commit only once PostgreSQL observes b waiting for a.
+  async function commitAfterLockWait() {
+    const deadline=performance.now()+5000;
+    try {
+      do {
+        const [{blocked}]=await q("select pg_backend_pid() = any(pg_blocking_pids($1::int)) as blocked",[b.processID]);
+        if (blocked) return;
+        await new Promise(resolve=>setTimeout(resolve,10));
+      } while (performance.now()<deadline);
+      assert.fail("PostgreSQL did not observe session b waiting for session a");
+    } finally { await a.query("commit"); }
+  }
   const race=await run();
   await direct(race);
   await a.query("begin");
   await posted(a,race);
   const waiting=b.query("select actual_credits from settle_agent_run($1,$2,'failed')",[race.id,race.lease]);
-  await a.query("commit");
-  assert.equal((await waiting).rows[0].actual_credits,2);
+  const [settlement]=await Promise.all([waiting,commitAfterLockWait()]);
+  assert.equal(settlement.rows[0].actual_credits,2);
   assert.equal((await review(b,race,"call","receipt",600000,2)).rows[0].actual,2);
   assert.equal((await rows(race)).filter(row=>row.kind==="confirm" && row.meta?.actual===2).length,1);
   const stale=await run();
@@ -237,8 +267,7 @@ try {
   await a.query("begin"); await finish(stale);
   await b.query("reset role");
   const late=assert.rejects(()=>posted(b,stale),/closed for worker writes/);
-  await a.query("commit");
-  await late;
+  await Promise.all([late,commitAfterLockWait()]);
   const revoked=await run(); await direct(revoked);
   const replacement=randomUUID();
   await q("update agent_runs set lease_id=$2 where id=$1",[revoked.id,replacement]);
