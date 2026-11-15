@@ -1,6 +1,8 @@
 -- Apply atomically. Only new controlled direct DeepSeek calls opt into this contract.
 alter table public.agent_tool_calls
-  add column direct_deepseek_v1_model text check (char_length(direct_deepseek_v1_model) between 1 and 120 and tool_name='model_turn'),
+  add column direct_deepseek_v1_model text check (
+    direct_deepseek_v1_model is null or (tool_name='model_turn' and char_length(direct_deepseek_v1_model) between 1 and 120)
+  ),
   add column model_write_lease uuid,
   add column pending_model_usage jsonb,
   add column model_review_ref text check (char_length(model_review_ref) between 1 and 160);
@@ -31,7 +33,7 @@ begin
   if tg_op='INSERT' and new.status <> 'prepared' then raise exception 'missing direct model preparation'; end if;
   if new.pending_model_usage is not null then
     if new.status not in ('outcome_unknown','succeeded') or (new.status='outcome_unknown'
-       and new.safe_error_code not in ('agent_model_usage_pending','agent_model_minimum_pending')) then raise exception 'invalid observation state'; end if;
+       and coalesce(new.safe_error_code,'') not in ('agent_model_usage_pending','agent_model_minimum_pending')) then raise exception 'invalid observation state'; end if;
     if jsonb_typeof(new.pending_model_usage)<>'object' or new.pending_model_usage - 'inputUnits' - 'outputUnits' <> '{}'::jsonb
        or not (new.pending_model_usage ?& array['inputUnits','outputUnits'])
        or not (new.pending_model_usage->>'inputUnits' ~ '^[0-9]{1,8}$' and new.pending_model_usage->>'outputUnits' ~ '^[0-9]{1,8}$')
@@ -64,7 +66,7 @@ begin
     if new.kind<>'model_tokens' or new.provider<>'deepseek' or new.model<>c.direct_deepseek_v1_model or new.pricing_version<>r.pricing_version
        or new.image_count<>0 or c.status='prepared' or (c.status='failed' and c.safe_error_code in ('deepseek_http_error','deepseek_not_dispatched'))
        or (c.pending_model_usage is not null and c.pending_model_usage <> jsonb_build_object('inputUnits',new.input_units,'outputUnits',new.output_units)
-           and not (c.model_review_ref is not null and c.safe_error_code='agent_model_minimum_pending')) then
+           and not (c.model_review_ref is not null and c.safe_error_code is not distinct from 'agent_model_minimum_pending')) then
       raise exception 'invalid direct model usage identity' using errcode='55000';
     end if;
     if r.status in ('failed','succeeded','cancelled') then
@@ -124,7 +126,7 @@ begin
     units := null;
   else raise exception 'invalid direct model review disposition'; end if;
   if c.pending_model_usage is not null and units is distinct from c.pending_model_usage
-     and not (c.safe_error_code='agent_model_minimum_pending' and p_action in ('receipt','no_charge')) then raise exception 'conflicting saved observation'; end if;
+     and not (c.safe_error_code is not distinct from 'agent_model_minimum_pending' and p_action in ('receipt','no_charge')) then raise exception 'conflicting saved observation'; end if;
   if u.id is not null and (units is null or units<>jsonb_build_object('inputUnits',u.input_units,'outputUnits',u.output_units)) then
     raise exception 'conflicting posted model usage'; end if;
   if c.model_review_ref is not null and (c.model_review_ref <> p_evidence_ref or (u.id is null) <> (units is null)) then

@@ -30,7 +30,7 @@ try {
   await q(`create role anon; create role supabase_auth_admin; create role authenticated; create role service_role bypassrls; create schema auth; create schema extensions;
     create table auth.users(id uuid primary key); create function auth.uid() returns uuid language sql as $$select null::uuid$$;
     create function extensions.gen_random_uuid() returns uuid language sql as $$select gen_random_uuid()$$`);
-  for(const p of ["0001","0002","0003","0004","0006","0008","0009","0012","0021","0023","0028","0030","0031","0033","0040","0043","0044","0082"]) {
+  for(const p of ["0001","0002","0003","0004","0006","0008","0009","0012","0021","0023","0028","0030","0031","0033","0040","0043","0044","0082","0090"]) {
     await q(sql(p).replace("create extension if not exists pgcrypto with schema extensions;",""));
   }
   // Only later columns used by this checkout's live procedures.
@@ -54,7 +54,23 @@ try {
   assert.equal((await finish(legacy))[0].actual_credits,0);
   console.log("RED baseline: submitted call with no usage refunded by 0082");
   if(process.argv.includes("--baseline")) assert.equal((await q("select status from credit_holds where id=$1",[legacy.hold]))[0].status,"pending_settlement");
+  // Exercise the upgrade against populated pre-0091 rows, including every journal state.
+  await q(`insert into agent_tool_calls(run_id,call_id,phase,tool_name,args_hash,status,submitted_at,finished_at)
+    select $1, tool||'-'||state,'fixture',tool,repeat('a',64),state,
+      case when state<>'prepared' then now() end,
+      case when state in ('succeeded','failed') then now() end
+    from unnest(array['model_turn','generate_image','render_html']) tool
+    cross join unnest(array['prepared','submitted','succeeded','failed','outcome_unknown']) state`,[legacy.id]);
+  const oldCalls = async () => q(`select to_jsonb(c) - array['direct_deepseek_v1_model','model_write_lease','pending_model_usage','model_review_ref'] as row
+    from agent_tool_calls c where c.run_id=$1 order by c.call_id`,[legacy.id]);
+  const beforeUpgrade = await oldCalls();
+  assert.equal(beforeUpgrade.length,16);
   await q(sql("0091"));
+  assert.deepEqual(await oldCalls(),beforeUpgrade);
+  assert.equal((await q(`select count(*)::int as marked from agent_tool_calls where run_id=$1
+    and (direct_deepseek_v1_model is not null or model_write_lease is not null
+      or pending_model_usage is not null or model_review_ref is not null)`,[legacy.id]))[0].marked,0);
+  console.log("PASS 0090 to 0091 upgrade with 16 preexisting model and ordinary tool rows unchanged");
   const prepare=(r,id="call",lease=r.lease)=>q(`insert into agent_tool_calls(run_id,call_id,phase,tool_name,args_hash,status,direct_deepseek_v1_model,model_write_lease)
     values($1,$2,'fixture','model_turn',repeat('a',64),'prepared','deepseek-fixture',$3)`,[r.id,id,lease]);
   const submitted=(r,id="call",lease=r.lease)=>q("update agent_tool_calls set status='submitted',submitted_at=now(),model_write_lease=$3 where run_id=$1 and call_id=$2",[r.id,id,lease]);
@@ -78,6 +94,42 @@ try {
     and not (c.status='failed' and coalesce(c.safe_error_code,'') in ('deepseek_http_error','deepseek_not_dispatched'))
     and not exists(select from agent_usage_items u where u.run_id=c.run_id and u.call_id=c.call_id)`)).rows;
   await b.query("set role service_role");
+  const constraintsRun=await run();
+  const writePrepared=(id,tool,model)=>q(`insert into agent_tool_calls
+    (run_id,call_id,phase,tool_name,args_hash,status,direct_deepseek_v1_model,model_write_lease)
+    values($1,$2,'fixture',$3,repeat('a',64),'prepared',$4,$5)`,
+    [constraintsRun.id,id,tool,model,model === null ? null : constraintsRun.lease]);
+  await writePrepared("ordinary","generate_image",null);
+  await writePrepared("unmarked-model","model_turn",null);
+  await writePrepared("short-model","model_turn","a");
+  await writePrepared("long-model","model_turn","x".repeat(120));
+  for (const [id,tool,model] of [["wrong-tool","generate_image","model"],["empty-name","model_turn",""],
+      ["too-long","model_turn","x".repeat(121)]]) {
+    await assert.rejects(()=>writePrepared(id,tool,model),{code:"23514"});
+  }
+  await direct(constraintsRun,"observed");
+  for (const invalidCode of [null, "", "provider_outcome_unknown"]) {
+    await assert.rejects(()=>update(constraintsRun,"outcome_unknown",invalidCode,{inputUnits:8,outputUnits:1},"observed"),/invalid observation state/);
+  }
+  await update(constraintsRun,"outcome_unknown","agent_model_usage_pending",{inputUnits:8,outputUnits:1},"observed");
+  await assert.rejects(()=>update(constraintsRun,"outcome_unknown","agent_model_usage_pending",{inputUnits:8,outputUnits:null},"observed"),/invalid direct model usage observation/);
+  await finish(constraintsRun);
+  for (const ref of [null,"","bad ref","x".repeat(161)]) {
+    await assert.rejects(()=>review(b,constraintsRun,"observed","recorded",null,null,ref),/invalid direct model review/);
+  }
+  await assert.rejects(()=>review(b,constraintsRun,"observed","receipt",null,1),/invalid direct model review disposition/);
+  assert.equal((await review(b,constraintsRun,"observed","recorded",null,null,"evidence/valid")).rows[0].actual,1);
+  // Succeeded checkpoints clear safe_error_code and retain any exact observation already recorded.
+  const succeededCheckpoint=await run();
+  await direct(succeededCheckpoint);
+  await update(succeededCheckpoint,"outcome_unknown","agent_model_usage_pending",{inputUnits:8,outputUnits:1});
+  await update(succeededCheckpoint,"succeeded",null,{inputUnits:8,outputUnits:1});
+  await finish(succeededCheckpoint);
+  await assert.rejects(()=>review(b,succeededCheckpoint,"call","no_charge"),/conflicting saved observation/);
+  await assert.rejects(()=>review(b,succeededCheckpoint,"call","receipt",0,0),/conflicting saved observation/);
+  assert.equal((await review(b,succeededCheckpoint,"call","recorded")).rows[0].actual,1);
+  console.log("PASS optional contract, model-only marker, name lengths, observation provenance and review references");
+
   const r=await run();
   await direct(r);
   await update(r,"outcome_unknown","agent_model_usage_pending",{inputUnits:600000,outputUnits:2});
