@@ -54,7 +54,9 @@ pub(super) async fn recover(
     if has_calls {
         text.push_str("\n\n原回复包含卡片创建请求。本次仅取回文字，未继续执行工具；已创建卡片请查看本轮回执，需要继续时请发送新消息。");
     }
-    db.restore_local_chat_reply(id, &turn, &saved, &text, !has_calls)
+    use crate::core::local_chat::RestoredChatOutcome;
+    let outcome = if has_calls { RestoredChatOutcome::Interrupted } else { RestoredChatOutcome::Done };
+    db.restore_local_chat_reply(id, &turn, &saved, &text, outcome)
 }
 
 pub(super) async fn request(
@@ -128,7 +130,11 @@ pub(super) fn messages(chat: &ChatConversation, turn: &str, include_history: boo
             "cards":action.cards.iter().map(|card|json!({"kind":card.kind,"title":card.title})).collect::<Vec<_>>()
         })).collect();
         if !actions.is_empty() {
-            text.push_str(&format!("\n[近期建卡历史，仅作上下文，不授权重复创建] {}", json!(actions)));
+            let mut summary = json!(actions).to_string();
+            if chat.summary.provider == "dsh-local" {
+                summary = summary.replace('/', "\\/");
+            }
+            text.push_str(&format!("\n[近期建卡历史，仅作上下文，不授权重复创建] {summary}"));
         }
     }
     history.push(json!({"role":"user","content":text}));

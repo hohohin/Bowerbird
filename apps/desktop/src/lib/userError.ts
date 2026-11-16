@@ -1,6 +1,9 @@
 import type { ProviderIssue } from "./generationAvailability";
 
 const DEFAULT_MESSAGE = "操作未完成，请稍后重试。";
+export function hasGenerationFailureReason(error?: string | null): boolean {
+  return !!error?.trim() && !/^(?:生成失败|任务失败)[。！!]?$/.test(error.trim());
+}
 // English product names, keys and file formats can be useful in a Chinese instruction.
 // Everything else (including unfamiliar upstream prose) uses the caller's action-specific fallback.
 const DISPLAY_WORDS = /^(?:Bowerbird|Bcoin|Pro|Studio|Cloud|Codex|ChatGPT|ComfyUI|Jev|Jimeng|Dreamina|Seedream|Seedance|GPT|OpenAI|Agent|CLI|API|DSH|MCP|FFmpeg|Python|tar|x64|Windows|macOS|Mac|Apple|Intel|NVIDIA|AMD|GPU|CPU|RAM|H3|F\d{1,2}|Ctrl|Control|Alt|Shift|Command|Cmd|Option|Esc|Escape|Enter|Tab|Space|Backspace|Delete|PNG|JPE?G|WebP|GIF|AVIF|HEIC|SVG|PDF|PSD|MP4|MOV|WebM|MKV|MP3|WAV|ZIP|JSON|UTF|Markdown|Word|DOCX|XLSX|CSV|GB|MB|MiB|KB|TB|px|fps|\d{3,4}p|x)$/i;
@@ -8,7 +11,7 @@ const DISPLAY_WORDS = /^(?:Bowerbird|Bcoin|Pro|Studio|Cloud|Codex|ChatGPT|ComfyU
 function clearChineseMessage(message: string): boolean {
   return /[\u3400-\u9fff]/.test(message) && message.length <= 240
     && !/[\r\n\x00-\x1f{}<>]|https?:|file:|[a-z]:[\\/]|\\\\|(?:^|[\s：:（("'])\/(?:[^\s/]+\/)|\b[a-z0-9]+(?:_[a-z0-9]+)+\b|\b0x[\da-f]+\b|\b[\da-f]{8}-[\da-f-]{27,}\b|\b[a-z][a-z0-9-]*\.[a-z]{2,}(?:\b|\/)/i.test(message)
-    && (message.match(/\b\d{3,4}p\b|[a-z][a-z0-9]*/gi) ?? []).every(word => DISPLAY_WORDS.test(word));
+    && (message.replace(/\bDeepSeek(?: Harness)?\b/g, "DSH").match(/\b\d{3,4}p\b|[a-z][a-z0-9]*/gi) ?? []).every(word => DISPLAY_WORDS.test(word));
 }
 
 function errorText(error: unknown, depth = 0): string {
@@ -43,6 +46,12 @@ export function userErrorMessage(error: unknown, fallback = DEFAULT_MESSAGE): st
   const ended = cloudChatEndedMessage(error);
   if (ended) return ended;
   const message = errorText(error).trim();
+  // Legacy DSH builds used this provider code for several malformed-response causes.
+  if (/^(?:Error: )?本机 DSH 本轮失败[：；]/.test(message) && message.includes("MALFORMED_RESPONSE")) {
+    return "本机 DSH 本轮失败：模型回复格式异常，请核对本轮已创建的卡片后重试。";
+  }
+  if (/(?:ComfyUI|Sage Attention|aimdo)/i.test(message) && /illegal memory access|aimdo memory compile error/i.test(message)) return "本机显卡计算中断，请重新运行卡片。";
+  if (/无法连接本机 ComfyUI|error sending request for url \(http:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):1818[89]\/(?:queue|history)/i.test(message)) return "本机生成服务暂时无法响应。";
   if (/deepseek_context_limit/.test(message)) return "本次内容超过模型可容纳的上下文，请拆分任务后再处理。原文已保留。";
   if (/deepseek_output_limit/.test(message)) return "模型输出达到自身上限，结果不完整。请拆分任务后再处理。";
   const safeFallback = clearChineseMessage(fallback) ? fallback : DEFAULT_MESSAGE;

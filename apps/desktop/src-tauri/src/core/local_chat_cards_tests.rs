@@ -40,6 +40,29 @@ fn fixture_with_db(db: Database) -> (Database, StartedChat) {
 }
 
 #[test]
+#[ignore = "set BOWERBIRD_CARD_ARGUMENT_FIXTURE to a local tool arguments JSON file"]
+fn local_chat_cards_replay_incident_batch_in_memory() {
+    let bytes = std::fs::read(std::env::var_os("BOWERBIRD_CARD_ARGUMENT_FIXTURE").unwrap()).unwrap();
+    let args: Value = serde_json::from_slice(&bytes).unwrap();
+    let (db, started) = fixture();
+    let first = create(&db, &started, &args).unwrap();
+    let replay = create(&db, &started, &args).unwrap();
+    assert!(first.fresh && !replay.fresh);
+    assert_eq!(first.id, replay.id);
+    assert_eq!(db.get_local_chat(&started.conversation.summary.id).unwrap().unwrap().actions.len(), 1);
+}
+
+#[test]
+fn local_chat_cards_content_table_accepts_empty_placeholder_but_rejects_conflicting_text() {
+    let (db, started) = fixture();
+    let mut args = json!({"cards":[{"kind":"content","title":"表格","id":"table","rows":[["一","二"]],"text":"正文"}]});
+    assert!(create(&db, &started, &args).unwrap_err().to_string().contains("rows 表格"));
+    assert!(db.get_local_chat(&started.conversation.summary.id).unwrap().unwrap().actions.is_empty());
+    args["cards"][0]["text"] = json!("");
+    assert_eq!(create(&db, &started, &args).unwrap().cards.len(), 1);
+}
+
+#[test]
 fn local_chat_cards_keep_the_shared_agent_when_creating_and_undoing_tools() {
     let (db, first) = fixture();
     let id = &first.conversation.summary.id;
@@ -495,23 +518,12 @@ fn local_chat_cards_h3_frames_text_loops_and_layout_are_native() {
         assert_eq!(node("still")["prompt"], "产品缓慢旋转");
         assert!(
             node("start")["x"].as_f64().unwrap()
-                >= node("linked")["x"].as_f64().unwrap() + 416.0 + 80.0
+                >= node("linked")["x"].as_f64().unwrap() + 320.0 + 80.0
         );
         assert!(
             node("linked")["y"].as_f64().unwrap()
                 >= node("still")["y"].as_f64().unwrap() + 720.0 + 80.0
         );
-        let right = nodes
-            .iter()
-            .map(|n| {
-                n["x"].as_f64().unwrap()
-                    + if n["kind"] == "comfy-video" {
-                        416.0
-                    } else {
-                        340.0
-                    }
-            })
-            .fold(0.0, f64::max);
         let next = db.create_local_chat_cards(&s.conversation.summary.id, &s.turn_id, "next", &json!({"cards":[{"id":"next","kind":"comfy-video","title":"下一张","prompt":"缓慢移动"}]})).unwrap();
         let next_doc = document(&db);
         let next_node = next_doc["nodes"]
@@ -520,7 +532,13 @@ fn local_chat_cards_h3_frames_text_loops_and_layout_are_native() {
             .iter()
             .find(|n| n["id"] == next.cards[0].id)
             .unwrap();
-        assert!(next_node["x"].as_f64().unwrap() >= right + 80.0);
+        let (x, y) = (next_node["x"].as_f64().unwrap(), next_node["y"].as_f64().unwrap());
+        for old in nodes {
+            let (ox, oy) = (old["x"].as_f64().unwrap(), old["y"].as_f64().unwrap());
+            let (width, height) = if old["kind"] == "comfy-video" { (320.0, 720.0) }
+                else if old["kind"] == "trigger" { (196.0, 92.0) } else { (320.0, 330.0) };
+            assert!(x + 320.0 <= ox || x >= ox + width || y + 720.0 <= oy || y >= oy + height);
+        }
         crate::commands::canvas_workflow::validate(&doc).unwrap();
     }
 }
@@ -611,7 +629,7 @@ fn local_chat_cards_sections_compile_native_members_names_and_grid_without_execu
                     member["width"]
                         .as_f64()
                         .unwrap_or(if member["kind"] == "comfy-video" {
-                            416.0
+                            320.0
                         } else {
                             340.0
                         });
@@ -806,9 +824,8 @@ fn local_chat_cards_sections_limit_is_independent_and_grid_avoids_existing_secti
                 .unwrap()
         })
         .collect();
-    assert!(bounds
-        .iter()
-        .all(|note| note["x"].as_f64().unwrap() >= 19080.0));
+    assert!(bounds.iter().all(|note| note["x"].as_f64().unwrap().abs()
+        + note["width"].as_f64().unwrap() < 10000.0));
     assert_eq!(
         bounds[0]["x"], bounds[2]["x"],
         "sections wrap after two columns"
@@ -1170,6 +1187,83 @@ fn local_chat_cards_h3_accepts_video_outputs_and_rejects_frame_conflicts() {
 }
 
 #[test]
+fn local_chat_cards_place_by_moved_agent_and_leave_room_for_outputs() {
+    for grouped in [false, true] {
+        let (db, first) = fixture();
+        let conversation = &first.conversation.summary.id;
+        db.finish_local_chat(conversation, &first.turn_id, "done", None).unwrap();
+        let started = db.begin_local_chat(&ChatSendInput {
+            dsh_skill: None, codex_options: None, provider: None, project_id: "p".into(),
+            conversation_id: Some(conversation.clone()), agent_node_id: None, manual_card_run: false,
+            request_id: "moved-agent".into(), text: "创建生成卡".into(),
+            reference_asset_ids: vec![], placement: None, card_defaults: None,
+        }).unwrap();
+        let mut doc = document(&db);
+        doc["nodes"][0]["x"] = json!(-8000);
+        doc["nodes"][0]["y"] = json!(3500);
+        replace_document(&db, &doc);
+        let conn = db.conn.lock().unwrap();
+        for (id, x, y) in [("nearby", -7500, 3500), ("distant", 50000, 3500)] {
+            conn.execute("INSERT INTO canvas_nodes(id,project_id,kind,payload_json,x,y,width,height,created_at,updated_at) VALUES(?1,'p','note',?2,?3,?4,340,330,1,1)",
+                params![id, json!({"schema_version":1,"note_type":"text","text":id}).to_string(), x, y]).unwrap();
+        }
+        drop(conn);
+        let mut args = json!({"cards":[
+            {"id":"first","kind":"generation","title":"首图","prompt":"首图","mediaType":"image"},
+            {"id":"local","kind":"comfy-video","title":"本地视频","prompt":"推近"},
+            {"id":"last","kind":"generation","title":"尾图","prompt":"尾图","mediaType":"image"}]});
+        if grouped {
+            args["sections"] = json!([{"id":"section","title":"镜头","members":["first","local","last"]}]);
+        }
+        let action = create(&db, &started, &args).unwrap();
+        let doc = document(&db);
+        let mut previous_end = None;
+        for card in action.cards.iter().filter(|card| card.kind != "section") {
+            let node = doc["nodes"].as_array().unwrap().iter().find(|n| n["id"] == card.id).unwrap();
+            let (x, y) = (node["x"].as_f64().unwrap(), node["y"].as_f64().unwrap());
+            let (width, height, output_width) = if card.kind == "comfy-video" {
+                (320.0, 720.0, 280.0)
+            } else {
+                (320.0, 330.0, 260.0)
+            };
+            // The canvas places a result to the right of its producer.
+            let end = x + width + 64.0 + output_width;
+            if let Some(previous_end) = previous_end {
+                assert!(x >= previous_end, "next card overlaps the previous output");
+            } else {
+                assert!((x + 8000.0).abs() < 3500.0 && (y - 3500.0).abs() < 2000.0,
+                    "first card ({x}, {y}) must be near the visible Agent");
+            }
+            assert!(end <= -7500.0 || x >= -7160.0 || y + height <= 3500.0 || y >= 3830.0,
+                "card or output overlaps the existing note");
+            previous_end = Some(end);
+        }
+        if grouped {
+            let section = action.cards.iter().find(|card| card.kind == "section").unwrap();
+            let frame = db.get_canvas_node(&section.id).unwrap().unwrap();
+            assert!(frame.x + frame.width >= previous_end.unwrap());
+        }
+        let mut doc = doc;
+        let producer = doc["nodes"].as_array_mut().unwrap().iter_mut()
+            .find(|node| node["id"] == action.cards[0].id).unwrap();
+        producer["sessionNodeIds"] = json!(["gen-prompt:job:turn:0"]);
+        let result_origin = (producer["x"].as_f64().unwrap() + 320.0 + 64.0, producer["y"].as_f64().unwrap());
+        replace_document(&db, &doc);
+        let graph = db.begin_project_generation_turn(&crate::core::project_canvas::ProjectGenerationTurnInput {
+            project_id: "p".into(), thread_id: started.conversation.summary.thread_id.clone(),
+            generation_conversation_id: "layout".into(), job_id: "job".into(), turn_key: "turn".into(),
+            prompt: "首图".into(), applied_prompt: "首图".into(), provider: "test".into(),
+            provider_session_id: None, ratio: None, visual_profile: None, references: vec![],
+            reference_node_ids: vec![], parent_node_id: None, parent_asset_path: None,
+            relation: None, retry_anchor_node_id: None,
+        }).unwrap();
+        let result = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
+        assert_eq!((result.x, result.y), result_origin);
+        assert_eq!(result.width, 260.0);
+    }
+}
+
+#[test]
 fn local_chat_cards_layout_uses_content_dimensions_and_video_uses_actual_inputs() {
     let (db, s) = fixture();
     let mut args = batch();
@@ -1298,6 +1392,32 @@ fn local_chat_cards_call_replay_is_stable_after_finish_and_undo() {
     db.undo_local_chat_cards(&s.conversation.summary.id, &a.id)
         .unwrap();
 }
+#[test]
+fn local_chat_cards_choose_image_provider_per_card_and_reject_invalid_batches() {
+    let (db, started) = fixture();
+    let mut args = json!({"cards":[
+        {"id":"a","kind":"generation","mediaType":"image","title":"即梦","prompt":"a","provider":"dreamina-web55"},
+        {"id":"b","kind":"generation","mediaType":"image","title":"本机","prompt":"b","provider":"minimax-h3-image"},
+        {"id":"c","kind":"generation","mediaType":"image","title":"Cloud","prompt":"c","provider":"bowerbird-cloud-image_hd"},
+        {"id":"d","kind":"generation","mediaType":"image","title":"默认","prompt":"d"}
+    ]});
+    for (media, provider) in [("video","codex"), ("image","unknown"), ("image","bowerbird-cloud-image_nonexistent")] {
+        args["cards"][2]["mediaType"] = json!(media);
+        args["cards"][2]["provider"] = json!(provider);
+        assert!(create(&db, &started, &args).is_err());
+        assert_eq!(document(&db)["nodes"], json!([]));
+    }
+    args["cards"][2]["provider"] = json!("bowerbird-cloud-image_hd");
+    let action = create(&db, &started, &args).unwrap();
+    let canvas = document(&db);
+    for (card, expected) in action.cards.iter().zip(["dreamina-web55","minimax-h3-image","bowerbird-cloud-image_hd","jimeng"]) {
+        let node = canvas["nodes"].as_array().unwrap().iter().find(|node| node["id"] == card.id).unwrap();
+        assert_eq!(node["provider"], expected);
+    }
+    assert_eq!(action.cards.len(), 4);
+    assert!(action.run_status.is_none());
+}
+
 #[test]
 fn local_chat_cards_invalid_or_unowned_arguments_never_mutate_canvas() {
     let invalids = [

@@ -35,14 +35,14 @@ function resultText(text: unknown): string {
   return text;
 }
 
-export async function startTextAgent(input: { provider: TextAgentProvider; prompt: string; source: string; projectId?: string; sessionId: string; requestId: string }): Promise<TextAgentJob> {
+export async function startTextAgent(input: { provider: TextAgentProvider; prompt: string; source: string; images?: string[]; projectId?: string; sessionId: string; requestId: string }): Promise<TextAgentJob> {
   const reason = textAgentUnavailable(input.provider);
   if (reason) throw new Error(reason);
   if (!input.prompt.trim() || input.prompt.length > 3600) throw new Error("请输入较短的要求（最多 3600 字）。");
   if (input.provider === "codex-cli") {
     // Isolate every turn; only this bubble's explicit history is passed to the CLI.
     const instruction = `输入字段：segment（选中段落）、conversation（此前对话）。只返回供插入的 Markdown 文本。\n用户要求：${input.prompt}`;
-    const delivery = await api.agentDsWorkflowStart(input.requestId, instruction, input.source, "agent-text", [],
+    const delivery = await api.agentDsWorkflowStart(input.requestId, instruction, input.source, "agent-text", input.images ?? [],
       { projectId: input.sessionId, nodeId: input.sessionId }, undefined, "codex-cli", true);
     if (!delivery.autoDelivered) throw new Error("Codex 请求已保留，请检查本机 Codex 状态后取回原请求。");
     return localTextAgentJob(input.requestId);

@@ -16,11 +16,17 @@ export interface LibraryActivityTask {
   status: "running" | "completed" | "failed" | "attention" | "cancelled";
   statusLabel: string;
   updatedAt: number;
+  /** Present only when this occurrence can be removed from notification history. */
+  dismissKey?: string;
 }
 
 export interface LibraryLocalVideoLocator { projectId: string; nodeId: string; createdAt: number }
 
 type TaskStatus = Pick<LibraryActivityTask, "status" | "statusLabel">;
+
+function taskKey(projectId: string, source: LibraryActivityTask["source"], id: string, occurrence: unknown, status: string) {
+  return JSON.stringify([projectId, source, id, occurrence, status]);
+}
 
 export function libraryLocalVideoRun(document: CanvasWorkflow, nodeId: string): WorkflowRun | undefined {
   const runs = document.runs ?? (document.run ? [document.run] : []);
@@ -52,6 +58,8 @@ export function libraryLocalVideoTask(locator: LibraryLocalVideoLocator, documen
   const step = run.steps[locator.nodeId];
   const progress = localVideoInterruption(run, step, error) ?? localVideoProgress(node, step);
   return { id: `${locator.projectId}:${locator.nodeId}`, source: "extra", projectId: locator.projectId,
+    dismissKey: ["completed", "failed", "cancelled"].includes(progress.status)
+      ? taskKey(locator.projectId, "extra", locator.nodeId, [run.id, step.diagnostic?.id], progress.status) : undefined,
     threadId: run.threadId, nodeId: localVideoTarget(node, progress.status), title: node.prompt || "本机 H3 视频", ...progress, updatedAt: locator.createdAt };
 }
 
@@ -74,6 +82,7 @@ function generationTask(job: GenJob): LibraryActivityTask | null {
   if (!location) return null;
   const turn = job.turns[job.turns.length - 1];
   return { ...location, id: job.id, source: "generation", title: generationTitle(job, turn),
+    dismissKey: !job.running && turn ? taskKey(location.projectId, "generation", job.id, turn.turnKey ?? turn.id ?? job.turns.length, turn.error ? "error" : turn.images.length ? "completed" : "empty") : undefined,
     ...generationProgress(job, turn), updatedAt: generationUpdatedAt(job, turn) };
 }
 
@@ -88,27 +97,30 @@ function agentTask(run: CloudAgentRunRecord): LibraryActivityTask | null {
   } else if (run.status === "failed") status = "failed";
   else if (run.status === "cancelled") status = "cancelled";
   else if (["awaiting_clarification", "awaiting_approval", "awaiting_result_feedback"].includes(run.status)) status = "attention";
-  return { ...location, id: run.runId, source: "agent", title: run.intentPrompt || "Agent 创作", status, statusLabel, updatedAt: run.updatedAt };
+  return { ...location, id: run.runId, source: "agent", title: run.intentPrompt || "Agent 创作", status, statusLabel, updatedAt: run.updatedAt,
+    dismissKey: ["failed", "completed", "cancelled"].includes(status) ? taskKey(location.projectId, "agent", run.runId, run.createdAt, status) : undefined };
 }
 
 function chatTask(chat: ChatSummary): LibraryActivityTask {
   const running = chat.status === "running" || chat.status === "stopping";
   const status = running ? "running" : chat.status === "idle" ? "completed" : "attention";
   return { id: chat.id, source: "chat", projectId: chat.projectId, threadId: chat.threadId, nodeId: chat.nodeId,
+    dismissKey: running ? undefined : taskKey(chat.projectId, "chat", chat.id, chat.revision, chat.status),
     title: chat.title || "对话", status, statusLabel: running ? "回复中" : status === "completed" ? "已回复" : "需处理", updatedAt: chat.updatedAt };
 }
 
 /** History is a projection of persisted task owners, never a second task queue. */
-export function libraryGenerationTasks({ projects, jobs = [], runs = [], chats = [], extraTasks = [] }: {
+export function libraryGenerationTasks({ projects, jobs = [], runs = [], chats = [], extraTasks = [], limit = 20 }: {
   projects: readonly Pick<Project, "id" | "archived_at">[];
   jobs?: readonly GenJob[];
   runs?: readonly CloudAgentRunRecord[];
   chats?: readonly ChatSummary[];
   extraTasks?: readonly LibraryActivityTask[];
+  limit?: number;
 }): LibraryActivityTask[] {
   const visibleProjects = new Set(projects.filter(project => project.archived_at == null).map(project => project.id));
   return [...jobs.map(generationTask), ...runs.map(agentTask), ...chats.map(chatTask), ...extraTasks]
     .filter((task): task is LibraryActivityTask => !!task && !!task.threadId && visibleProjects.has(task.projectId))
     .sort((left, right) => right.updatedAt - left.updatedAt || left.id.localeCompare(right.id))
-    .slice(0, 20);
+    .slice(0, limit);
 }

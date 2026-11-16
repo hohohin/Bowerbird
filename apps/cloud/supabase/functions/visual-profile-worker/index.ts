@@ -114,7 +114,10 @@ async function actionHeartbeat(admin: SupabaseClient, body: Record<string, unkno
     p_lease_id: leaseId,
     p_lease_seconds: LEASE_SECONDS,
   });
-  if (result.error) throw new ApiError("invalid_request", "提炼任务租约已失效", false, 409);
+  if (result.error) {
+    if (["55000", "P0002"].includes(result.error.code)) throw new ApiError("invalid_request", "提炼任务租约已失效", false, 409);
+    throw new ApiError("internal_error", "任务续租暂时不可用", true);
+  }
   const row = scalar(result.data) as { job_status?: string; cancel_requested?: boolean; lease_expires_at?: string } | null;
   return jsonResponse({
     status: row?.job_status ?? "unknown",

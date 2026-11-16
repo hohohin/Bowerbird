@@ -6,7 +6,7 @@ const server = await createServer({ cacheDir: '.tmp/agent-loop-chat-retry/vite',
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 try {
-  for (const scenario of ['failed', 'created-cards', 'unknown', 'different-turn', 'created-cards-ui']) {
+  for (const scenario of ['failed', 'created-cards', 'unknown', 'different-turn', 'historic-failure', 'old-retry', 'created-cards-ui', 'single-cards-ui']) {
     const page = await browser.newPage({viewport: {width: 1500, height: 1050}});
     await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/local-chat/preview.html`);
     await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
@@ -30,21 +30,32 @@ try {
         if (snapshot.document.run.steps.agent.chatInput.requestId !== input.requestId) throw Error('request key was not persisted before submission');
         if (turns.has(input.requestId)) throw Error('the same request was submitted twice');
         requests.push(structuredClone(input));
-        const turn = `turn-${requests.length}`, failed = requests.length === 2;
+        const turn = `turn-${requests.length}`, failed = requests.length === (scenario === 'single-cards-ui' ? 1 : 2);
         turns.set(input.requestId, turn);
         conversation.status = failed ? (scenario === 'unknown' ? 'interrupted' : 'failed') : 'idle';
         conversation.error = failed ? (scenario === 'unknown' ? '连接中断，请先核对原请求' : confirmedFailure) : null;
         conversation.revision++;
         conversation.turnCount++;
         for (const role of ['user', 'assistant']) conversation.messages.push({ id: turn + role, turnId: turn, role,
-          status: role === 'assistant' && failed ? conversation.status : 'done', text: role === 'user' ? input.text : failed ? '' : '完成 ' + snapshot.document.run.loop.index,
+          status: role === 'assistant' && failed ? conversation.status : 'done', text: role === 'user' ? input.text : failed ? '' : '完成 ' + (snapshot.document.run.loop?.index ?? 0),
           referenceAssetIds: [], createdAt: requests.length, updatedAt: requests.length });
         if (failed && scenario === 'different-turn') {
           // getByRequest returns the requested turn ID along with the latest public conversation.
           conversation.messages.at(-1).status = 'interrupted';
           conversation.messages.push({...conversation.messages.at(-1), turnId: 'other-turn', id: 'other-reply', status: 'failed'});
         }
-        if (failed && scenario.startsWith('created-cards')) conversation.actions.push({
+        if (failed && scenario === 'historic-failure') {
+          // Let the independent append commit before the Agent's terminal event.
+          const until = Date.now() + 5000;
+          while (first.document.run.steps[writerId].status !== 'done') {
+            if (Date.now() > until) throw Error('independent branch never completed');
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+          Object.assign(conversation.messages.at(-1), {dshTerminalError: confirmedFailure, dshFailureCode: 'MALFORMED_RESPONSE'});
+          conversation.messages.push({...conversation.messages.at(-1), turnId: 'later-turn', id: 'later-reply', status: 'done', text: '稍后成功的回复', dshTerminalError: undefined});
+          conversation.error = null;
+        }
+        if (failed && (scenario.startsWith('created-cards') || scenario === 'single-cards-ui')) conversation.actions.push({
           id: 'action-two', turnId: turn, conversationId: conversation.id, callId: 'call-two', status: 'created',
           cards: [{id: 'created-note', alias: 'one', kind: 'content', title: '第二项产生的文案卡'}],
         });
@@ -67,13 +78,29 @@ try {
       const agent = { ...newWorkflowNode('agent', 400, 0, 'codex'), id: 'agent', prompt: '为当前产品写文案', chatProvider: 'dsh-local', chatConversationId: scenario === 'failed' ? undefined : conversation.id,
         inputs: {text: [{nodeId: 'loop', portId: 'text'}, {nodeId: 'loop', portId: 'iteration'}]} };
       const first = new CanvasWorkflowController(projectId);
-      await first.load(); await first.edit([loop, agent]); await first.start('loop');
+      let writerId;
+      if (scenario === 'single-cards-ui') {
+        await first.load(); await first.edit([{...agent, inputs: {}}]); await first.start('agent', true);
+        const mounted = canvasWorkflowController(projectId);
+        await mounted.refreshExternalCards();
+        window.singleRetryResult = () => ({ requests, run: mounted.document.run });
+        return;
+      }
+      await first.load(); await first.edit([loop, agent]);
+      if (scenario === 'historic-failure') {
+        await api.projectCanvasNodeCreate({ projectId, threadId: null, id: 'iteration-log', kind: 'note', role: null, assetId: null,
+          x: 0, y: 300, width: 250, height: 200, zIndex: 1, positionLocked: false, payloadJson: JSON.stringify(rows([''])) });
+        await first.bindTextInput('iteration-log', undefined, {nodeId: 'loop', portId: 'iteration'}, 'text');
+        writerId = first.document.nodes.find(node => node.textTarget?.nodeId === 'iteration-log').id;
+      }
+      await first.start('loop');
       const paused = structuredClone(first.document.run);
       const uncertain = scenario === 'unknown' || scenario === 'different-turn';
       if (paused.status !== 'waiting' || paused.loop.index !== 1 || paused.loop.completed.length !== 1 || paused.steps.agent.status !== (uncertain ? 'waiting' : 'failed')) {
         throw Error('expected item two to pause with the original request: ' + JSON.stringify(paused.steps));
       }
       const key = paused.steps.agent.chatInput.requestId;
+      if (scenario === 'historic-failure' && (paused.steps.agent.diagnostic.dshFailureCode !== 'MALFORMED_RESPONSE' || paused.steps.agent.diagnostic.message !== confirmedFailure)) throw Error('lost turn-specific failure diagnostic');
       await api.projectCanvasNoteUpdate('table', JSON.stringify(rows(['已编辑的内容'])));
       useStore.setState({ activeGenProvider: 'cloud' });
       if (uncertain) {
@@ -81,6 +108,16 @@ try {
         // Exercise recovery of that persisted shape without fabricating turn-specific proof.
         const snapshot = await api.canvasWorkflowGet(projectId);
         for (const run of [snapshot.document.run, ...snapshot.document.runs]) run.steps.agent.status = 'failed';
+        await api.canvasWorkflowSave(projectId, snapshot.revision, snapshot.document);
+      }
+      if (scenario === 'old-retry' || scenario === 'historic-failure') {
+        const snapshot = await api.canvasWorkflowGet(projectId);
+        const nextKey = crypto.randomUUID();
+        for (const run of [snapshot.document.run, ...snapshot.document.runs]) {
+          const step = run.steps.agent;
+          Object.assign(step, { status: 'waiting', confirmedFailedChatTurnId: undefined });
+          if (scenario === 'old-retry') Object.assign(step, { chatTurnId: undefined, chatInput: {...step.chatInput, requestId: nextKey}});
+        }
         await api.canvasWorkflowSave(projectId, snapshot.revision, snapshot.document);
       }
       if (scenario === 'created-cards-ui') {
@@ -91,13 +128,34 @@ try {
       }
       const reopened = new CanvasWorkflowController(projectId);
       await reopened.load();
+      if (scenario === 'old-retry' || scenario === 'historic-failure') await reopened.continue(paused.id);
       const confirmation = await reopened.retryLoop(paused.id);
       const beforeConfirmation = { count: requests.length, key: reopened.document.run.steps.agent.chatInput?.requestId };
+      if (writerId) {
+        const log = (await api.projectCanvasGet(projectId)).nodes.find(node => node.id === 'iteration-log');
+        const entries = JSON.parse(log.payloadJson).cells.flat().map(cell => cell.text).filter(Boolean);
+        if (entries.join(',') !== '1,2,3') throw Error('independent branch replayed: ' + JSON.stringify(entries));
+      }
       if (scenario === 'created-cards' && confirmation) {
         await Promise.all([reopened.retryLoop(paused.id, confirmation.requestIds), reopened.retryLoop(paused.id, confirmation.requestIds)]);
       }
       return { paused, run: reopened.document.run, requests, confirmation, beforeConfirmation, key };
     }, scenario);
+    if (scenario === 'single-cards-ui') {
+      const button = page.locator('[data-workflow-card="agent"]').getByRole('button', {name: '运行此卡片', exact: true});
+      const dialog = page.getByRole('dialog', {name: '重做失败步骤？'});
+      await button.click();
+      assert.match(await dialog.innerText(), /第二项产生的文案卡/);
+      await dialog.getByRole('button', {name: '取消', exact: true}).click();
+      assert.equal((await page.evaluate(() => window.singleRetryResult())).requests.length, 1);
+      await button.click();
+      await dialog.getByRole('button', {name: '保留卡片并重做', exact: true}).click();
+      await page.waitForFunction(() => window.singleRetryResult().run.status === 'done');
+      assert.equal((await page.evaluate(() => window.singleRetryResult())).requests.length, 2);
+      console.log('PASS', scenario);
+      await page.close();
+      continue;
+    }
     if (scenario === 'created-cards-ui') {
       const retry = page.locator('[data-workflow-card="loop"]').getByRole('button', {name: '重试失败步骤', exact: true});
       const dialog = page.getByRole('dialog', {name: '重做失败步骤？'});

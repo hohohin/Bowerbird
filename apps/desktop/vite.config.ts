@@ -12,8 +12,15 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig({
   plugins: [react(), viteLifecycle(), textEditorAssets()],
   clearScreen: false,
+  // Keep the optimizer output local even when checkouts share a node_modules junction.
+  cacheDir: resolve(__dirname, ".tmp/vite-cache"),
+  optimizeDeps: {
+    entries: ["index.html", "screenshot.html"],
+    include: ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime"],
+  },
   root: resolve(__dirname, "."),
   resolve: {
+    dedupe: ["react", "react-dom"],
     alias: {
       // Vite prebundles Markdown dependencies for the page and the Worker together.
       // The package's default export uses the entity table; its browser export needs a DOM.

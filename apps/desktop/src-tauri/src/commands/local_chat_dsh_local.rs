@@ -1,13 +1,13 @@
 // A fresh, restricted session on the user's DSH host for each app turn.
 // The host owns its credentials/model selection; this bridge owns its preset and tools.
 use super::*;
+use crate::core::local_chat::RestoredChatOutcome;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
 
 /// DSH 0.2+ 把 preset 声明固定在 profile 里：注册表不扫描目录，也不接受 preset 路径。
 /// 因此本机建卡工具作为一条 profile 补丁安装一次，每轮只登记会话级连接。
-const PRESET_ID: &str = "bowerbird-chat";
 const PRESET_ROW: &str = "preset-bowerbird-chat";
 const PRESET_BEGIN: &str = "# >>> bowerbird-chat (managed by Bowerbird; rewritten on connect)";
 const PRESET_END: &str = "# <<< bowerbird-chat";
@@ -50,12 +50,12 @@ pub(super) struct Health {
     pub(super) preset: bool,
 }
 
-struct Host {
+pub(super) struct Host {
     client: reqwest::Client,
     base: String,
 }
 impl Host {
-    async fn connect(base: &str, auth: Option<&str>) -> AppResult<Self> {
+    pub(super) async fn connect(base: &str, auth: Option<&str>) -> AppResult<Self> {
         let base = local_base(base)?;
         let client = super::super::agent_ds::dsh_client(&base, auth)
             .await
@@ -94,7 +94,7 @@ impl Host {
 
     /// DSH 0.2 gateway call: the endpoint names the method and `payload` carries exactly one
     /// plain-object `args`. No dotted fallback — an unknown route is a version mismatch.
-    async fn rpc(&self, route: &str, args: Value) -> AppResult<Value> {
+    pub(super) async fn rpc(&self, route: &str, args: Value) -> AppResult<Value> {
         let rpc_id = uuid::Uuid::new_v4().to_string();
         let response = self
             .client
@@ -218,7 +218,10 @@ async fn inspect_host(host: &Host) -> AppResult<Health> {
             .ok_or_else(|| error("本机 DSH 未返回可用的 Agent preset"))?;
         return Ok(Health {
             live: true,
-            preset: presets.iter().any(|row| row["id"] == PRESET_ID),
+            preset: {
+                let id = current_preset_id()?;
+                presets.iter().any(|row| row["id"] == id)
+            },
         });
     }
     let value = host
@@ -275,11 +278,27 @@ fn module_name(source: &str) -> String {
     format!("{TOOL_PREFIX}{}.mjs", &digest[..12])
 }
 
+// Hash the complete managed block, including the content-addressed tool/schema and persona.
+fn preset_id(module: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let contract = preset_block_template(module, "bowerbird-chat");
+    let digest = format!("{:x}", Sha256::digest(contract.as_bytes()));
+    format!("bowerbird-chat-{}", &digest[..16])
+}
+
+fn current_preset_id() -> AppResult<String> {
+    Ok(preset_id(&module_name(&preset_source(&handshake_path()?))))
+}
+
 fn preset_block(module: &str) -> String {
+    preset_block_template(module, &preset_id(module))
+}
+
+fn preset_block_template(module: &str, id: &str) -> String {
     let mut text = format!(
-        "{PRESET_BEGIN}\n- insert:\n    - id: {PRESET_ROW}\n      name: '@deepseek-ai/dsh-agent-preset'\n      config:\n        id: {PRESET_ID}\n        order: 99\n        plugins:\n          - id: persona\n            name: '@deepseek-ai/dsh-persona'\n            config:\n              prefix: |-\n"
+        "{PRESET_BEGIN}\n- insert:\n    - id: {PRESET_ROW}\n      name: '@deepseek-ai/dsh-agent-preset'\n      config:\n        id: {id}\n        order: 99\n        plugins:\n          - id: persona\n            name: '@deepseek-ai/dsh-persona'\n            config:\n              prefix: |-\n"
     );
-    for line in CHAT_INSTRUCTIONS.trim_end().lines() {
+    for line in skill_instructions().trim_end().lines() {
         if line.trim().is_empty() {
             text.push('\n');
         } else {
@@ -289,13 +308,26 @@ fn preset_block(module: &str) -> String {
         }
     }
     text.push_str(&format!(
-        "          - id: bowerbird-cards\n            name: ./{module}\n{PRESET_END}\n"
+        "          - id: skill-filesystem\n            name: '@deepseek-ai/dsh-skill-filesystem'\n          - id: tool-skill\n            name: '@deepseek-ai/dsh-tool-skill'\n          - id: bowerbird-cards\n            name: ./{module}\n{PRESET_END}\n"
     ));
     text
 }
 
+fn skill_instructions() -> String {
+    CHAT_INSTRUCTIONS.replace("不得执行命令、读写用户文件、调用其他工具或请求权限。",
+        "可使用 skill 加载本机技能目录中适用的技能，并按其正文完成本轮任务。只在用户要求建卡时使用 create_canvas_cards。不得执行命令、读写其他用户文件或请求权限。")
+}
+
 /// Replace our own marker block in place, otherwise append it to the user patch list.
 fn merge_patch(original: &str, block: &str) -> String {
+    // The official first-run file has comments above its empty top-level sequence.
+    // Earlier builds appended a managed block beneath that sequence; repair only
+    // the empty sequence when it is the entire unmanaged YAML document.
+    if let Some(at) = empty_sequence_offset(original) {
+        let mut clean = original.to_owned();
+        clean.replace_range(at..at + 2, "");
+        return merge_patch(&clean, block);
+    }
     if let Some(start) = original.find(PRESET_BEGIN) {
         let end = original[start..]
             .find(PRESET_END)
@@ -309,16 +341,36 @@ fn merge_patch(original: &str, block: &str) -> String {
     if trimmed.is_empty() {
         return block.to_string();
     }
-    if trimmed == "[]" {
-        return original.replacen("[]", block, 1);
-    }
     let mut text = original.trim_end().to_string();
     text.push_str("\n\n");
     text.push_str(block);
     text
 }
 
-fn write_private(path: &Path, content: &str) -> AppResult<()> {
+fn empty_sequence_offset(patch: &str) -> Option<usize> {
+    let mut offset = 0;
+    let mut sequence = None;
+    let mut managed = false;
+    for line in patch.split_inclusive('\n') {
+        let text = line.trim();
+        match text {
+            PRESET_BEGIN => managed = true,
+            PRESET_END => managed = false,
+            _ if managed || text.is_empty() || text.starts_with('#') => (),
+            _ => {
+                let suffix = text.strip_prefix("[]")?.trim_start();
+                if sequence.is_some() || (!suffix.is_empty() && !suffix.starts_with('#')) {
+                    return None;
+                }
+                sequence = Some(offset + line.find("[]")?);
+            }
+        }
+        offset += line.len();
+    }
+    sequence
+}
+
+pub(super) fn write_private(path: &Path, content: &str) -> AppResult<()> {
     use std::io::Write;
     std::fs::create_dir_all(path.parent().ok_or_else(|| error("DSH 配置目录无效"))?)?;
     let temp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
@@ -366,30 +418,11 @@ fn managed_block(patch: &str) -> Option<&str> {
     Some(&patch[start..end])
 }
 
-/// Remove only our managed block; an otherwise empty patch must stay loadable.
-fn strip_patch(original: &str) -> String {
-    let Some(start) = original.find(PRESET_BEGIN) else {
-        return original.to_string();
-    };
-    let end = original[start..]
-        .find(PRESET_END)
-        .map(|offset| start + offset + PRESET_END.len());
-    let mut text = match end {
-        Some(end) => format!("{}{}", &original[..start], &original[end..]),
-        None => original[..start].to_string(),
-    };
-    text = text.replace("\n\n\n", "\n\n");
-    if text.trim().is_empty() {
-        return "[]\n".into();
-    }
-    text
-}
-
-fn preset_files_current(profiles: &[PathBuf], module: &str, block: &str) -> bool {
+fn preset_files_current(profiles: &[PathBuf], module: &str, source: &str, block: &str) -> bool {
     let managed = block.trim_end();
     !profiles.is_empty()
         && profiles.iter().all(|profile| {
-            profile.join(module).is_file()
+            std::fs::read(profile.join(module)).is_ok_and(|bytes| bytes == source.as_bytes())
                 && std::fs::read_to_string(profile.join("cordis.patch.yml"))
                     .ok()
                     .and_then(|text| {
@@ -410,48 +443,51 @@ pub(super) fn installed_current() -> bool {
     let source = preset_source(&handshake);
     let module = module_name(&source);
     let block = preset_block(&module);
-    preset_files_current(&profiles, &module, &block)
+    preset_files_current(&profiles, &module, &source, &block)
 }
 
-async fn preset_listed(host: &Host) -> bool {
-    host.rpc(ROUTE_PRESETS, json!({}))
-        .await
-        .ok()
-        .and_then(|value| {
-            value["presets"]
-                .as_array()
-                .map(|rows| rows.iter().any(|row| row["id"] == PRESET_ID))
-        })
-        .unwrap_or(false)
-}
-
-async fn wait_preset(host: &Host, wanted: bool) -> bool {
-    for _ in 0..30 {
-        if preset_listed(host).await == wanted {
-            return true;
-        }
-        tokio::time::sleep(Duration::from_millis(150)).await;
-    }
-    false
+async fn preset_listed(host: &Host, id: &str) -> AppResult<bool> {
+    let value = host.rpc(ROUTE_PRESETS, json!({})).await?;
+    let rows = value["presets"].as_array()
+        .ok_or_else(|| error("本机 DSH 未返回可用的 Agent preset"))?;
+    Ok(rows.iter().any(|row| row["id"] == id))
 }
 
 fn write_preset(profiles: &[PathBuf], module: &str, source: &str, block: &str) -> AppResult<()> {
     for profile in profiles {
-        write_private(&profile.join(module), source)?;
         let patch = profile.join("cordis.patch.yml");
-        let original = std::fs::read_to_string(&patch).unwrap_or_default();
+        let original = match std::fs::read_to_string(&patch) {
+            Ok(text) => text,
+            Err(detail) if detail.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(_) => return Err(error("本机 DSH 配置读取失败，请检查文件和目录权限")),
+        };
+        if (original.contains(PRESET_BEGIN) || original.contains(PRESET_END))
+            && (managed_block(&original).is_none() || original.matches(PRESET_BEGIN).count() != 1
+                || original.matches(PRESET_END).count() != 1)
+        {
+            return Err(error("本机 DSH 配置中的建卡组件标记不完整，请检查配置"));
+        }
         let next = merge_patch(&original, block);
+        let path = profile.join(module);
+        if std::fs::read(&path).ok().as_deref() != Some(source.as_bytes()) {
+            write_private(&path, source)?;
+        }
         if next != original {
             write_private(&patch, &next)?;
         }
-        // Content-addressed modules are never overwritten, so the preset only points at an
-        // immutable file; older revisions stay harmless next to it.
-        for stale in std::fs::read_dir(profile).into_iter().flatten().flatten() {
-            let name = stale.file_name().to_string_lossy().into_owned();
-            if name.starts_with(TOOL_PREFIX) && name.ends_with(".mjs") && name != module {
-                let _ = std::fs::remove_file(stale.path());
-            }
-        }
+        // Prior sessions may still resolve their content-addressed modules.
+    }
+    Ok(())
+}
+
+/// Recover an existing web profile before the CLI parses it. A fresh home
+/// is initialized by the official launcher, then installed via the normal RPC path.
+pub(super) fn prepare_auto_profile() -> AppResult<()> {
+    let web = profiles_root()?.join("web");
+    if web.join("cordis.yml").is_file() && web.join("package.json").is_file() {
+        let source = preset_source(&handshake_path()?);
+        let module = module_name(&source);
+        write_preset(&[web], &module, &source, &preset_block(&module))?;
     }
     Ok(())
 }
@@ -459,51 +495,33 @@ fn write_preset(profiles: &[PathBuf], module: &str, source: &str, block: &str) -
 /// Keeps the profile contract in sync: a newer build must replace an older managed preset, and
 /// only a host that actually lists the preset again is reported as active.
 pub(super) async fn install(base: &str, auth: Option<&str>) -> AppResult<Install> {
-    let profiles = profile_dirs()?;
+    let host = Host::connect(base, auth).await?;
+    install_profile(&host, &profile_dirs()?, &handshake_path()?).await
+}
+
+async fn install_profile(host: &Host, profiles: &[PathBuf], handshake: &Path) -> AppResult<Install> {
     if profiles.is_empty() {
         return Err(error("找不到本机 DSH profile，请先启动一次 DSH"));
     }
-    let handshake = handshake_path()?;
-    let source = preset_source(&handshake);
+    let source = preset_source(handshake);
     let module = module_name(&source);
     let block = preset_block(&module);
-    let host = Host::connect(base, auth).await?;
-    if preset_files_current(&profiles, &module, &block) {
-        return Ok(if preset_listed(&host).await {
+    let id = preset_id(&module);
+    if preset_files_current(profiles, &module, &source, &block) {
+        return Ok(if preset_listed(host, &id).await? {
             Install::Active
         } else {
             Install::RestartRequired
         });
     }
-    // A live host reloads only when the patch text changes. Drop the managed block first: if the
-    // preset disappears, this host hot-reloads and the new module is provably loaded; if it never
-    // disappears, this profile only applies patches on the next DSH start.
-    let managed: Vec<&PathBuf> = profiles
-        .iter()
-        .filter(|profile| {
-            std::fs::read_to_string(profile.join("cordis.patch.yml"))
-                .map(|text| text.contains(PRESET_BEGIN))
-                .unwrap_or(false)
-        })
-        .collect();
-    if !managed.is_empty() {
-        for profile in &managed {
-            let patch = profile.join("cordis.patch.yml");
-            if let Ok(original) = std::fs::read_to_string(&patch) {
-                write_private(&patch, &strip_patch(&original))?;
-            }
+    write_preset(profiles, &module, &source, &block)?;
+    for _ in 0..30 {
+        if preset_listed(host, &id).await? {
+            return Ok(Install::Active);
         }
-        if !wait_preset(&host, false).await {
-            write_preset(&profiles, &module, &source, &block)?;
-            return Ok(Install::RestartRequired);
-        }
+        tokio::time::sleep(Duration::from_millis(150)).await;
     }
-    write_preset(&profiles, &module, &source, &block)?;
-    Ok(if wait_preset(&host, true).await {
-        Install::Active
-    } else {
-        Install::RestartRequired
-    })
+    Ok(Install::RestartRequired)
 }
 
 fn handshake_update(session: &str, endpoint: Option<(&str, &str)>) -> AppResult<()> {
@@ -559,6 +577,24 @@ struct Reply {
     failure: Option<(String, String)>,
 }
 impl Reply {
+    fn failure_code(&self) -> Option<&str> {
+        self.failure.as_ref().map(|(code, _)| code.as_str()).filter(|code| {
+            !code.is_empty() && code.len() <= 64
+                && code.bytes().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == b'_')
+        })
+    }
+
+    fn observed_status(&self, db: &Database, turn: &str, pending: &Pending) -> AppResult<Option<&'static str>> {
+        let status = self.status();
+        if let Err(detail) = &status {
+            let mut checkpoint = serde_json::to_value(pending)?;
+            checkpoint["terminalError"] = json!(detail.to_string());
+            checkpoint["failureCode"] = json!(self.failure_code());
+            db.set_local_chat_provider_turn(turn, &checkpoint.to_string())?;
+        }
+        status
+    }
+
     fn status(&self) -> AppResult<Option<&'static str>> {
         match self.reason.as_deref() {
             None => Ok(None),
@@ -590,6 +626,9 @@ impl Reply {
         // The card tool is the usual culprit: the model streams broken tool arguments and DSH
         // rejects the turn before Bowerbird ever sees the call. An earlier batch of the same turn
         // may already be committed, so the retry hint never promises a clean rerun.
+        if code == "AUTH" {
+            return format!("本机 DSH 的模型授权未通过，请打开 DSH 检查登录状态和模型使用权限后重试{kept}。");
+        }
         if detail.contains("tool input is invalid JSON") {
             return format!(
                 "本机 DSH 本轮失败：模型返回的卡片工具参数不是合法 JSON；可重跑这张卡片，重跑前请确认本轮已创建的卡片{kept}"
@@ -702,7 +741,7 @@ fn fold_history(entries: &[Value], rpc_id: &str, after: i64) -> AppResult<Reply>
                     .join("");
                 parts.insert(step, text);
             }
-            Some("turn/end") if data["turn"].as_i64() == reply.latest => {
+            Some("turn/end") if reply.latest.is_some() && data["turn"].as_i64() == reply.latest => {
                 if reply.target.is_none() && armed {
                     reply.target = reply.latest;
                     armed = false;
@@ -881,7 +920,9 @@ fn prepare_preset(
         std::fs::set_permissions(&preset.directory, std::fs::Permissions::from_mode(0o700))?;
     }
     let rows = json!([
-        {"id":"persona","name":"@deepseek-ai/dsh-persona","config":{"text":CHAT_INSTRUCTIONS,"complete":true,"includeRuntimeContext":false}},
+        {"id":"persona","name":"@deepseek-ai/dsh-persona","config":{"text":skill_instructions(),"complete":true,"includeRuntimeContext":false}},
+        {"id":"skill-filesystem","name":"@deepseek-ai/dsh-skill-filesystem"},
+        {"id":"tool-skill","name":"@deepseek-ai/dsh-tool-skill"},
         {"id":"bowerbird-cards","name":"./bowerbird-tools.mjs"}
     ]);
     std::fs::write(
@@ -921,20 +962,24 @@ pub(super) async fn run(
     let host = Host::connect(base, auth).await?;
     let health = inspect_host(&host).await?;
     if health.live {
-        run_live(app, db, id, turn, &host, health.preset, cancel).await
+        if (!health.preset || !installed_current())
+            && matches!(install(base, auth).await?, Install::RestartRequired)
+        {
+            return Err(error("本机 DSH 建卡组件尚未加载，请重启 DSH 后重跑这张卡片"));
+        }
+        run_live(app, db, id, turn, &host, cancel).await
     } else {
         run_legacy(app, db, id, turn, &host, cancel).await
     }
 }
 
-/// DSH 0.2 session: the profile preset (when installed) or the user's default preset.
+/// DSH 0.2 session bound to this build's managed preset.
 async fn run_live(
     app: &AppHandle,
     db: &Arc<Database>,
     id: &str,
     turn: &str,
     host: &Host,
-    preset: bool,
     cancel: watch::Receiver<bool>,
 ) -> AppResult<&'static str> {
     if *cancel.borrow() {
@@ -942,10 +987,8 @@ async fn run_live(
     }
     let session = session_id(turn);
     let gateway = Gateway::start(app, db, id, turn, &session, cancel.clone()).await?;
-    if preset {
-        handshake_add(&session, &gateway.endpoint, &gateway.token)?;
-    }
-    let result = live_turn(app, db, id, turn, host, &session, preset, &gateway, cancel).await;
+    handshake_add(&session, &gateway.endpoint, &gateway.token)?;
+    let result = live_turn(app, db, id, turn, host, &session, &gateway, cancel).await;
     handshake_remove(&session);
     result
 }
@@ -958,25 +1001,22 @@ async fn live_turn(
     turn: &str,
     host: &Host,
     session: &str,
-    preset: bool,
     gateway: &Gateway,
     cancel: watch::Receiver<bool>,
 ) -> AppResult<&'static str> {
-    let mut create = json!({"sessionId":session,"cwd":preset_root()?.parent()});
-    if preset {
-        create["agentPreset"] = json!(PRESET_ID);
-    }
+    let preset = current_preset_id()?;
+    let create = json!({"sessionId":session,"cwd":preset_root()?.parent(),"agentPreset":preset});
     let created = host
         .rpc(ROUTE_CREATE, json!({"request": create}))
         .await?;
-    if created["sessionId"] != session || (preset && created["agentPreset"] != PRESET_ID) {
+    if created["sessionId"] != session || created["agentPreset"] != preset {
         return Err(error("本机 DSH 未启用本轮独立工具，未发送对话"));
     }
     let chat = db
         .get_local_chat(id)?
         .ok_or_else(|| error("对话记录不存在"))?;
     // Agent 卡片由流程逐轮驱动；重复附带上轮 JSON 历史会让模型产出非法工具参数。
-    let include_history = db.local_chat_turn_uses_history(turn)?;
+    let prompt = dsh::prompt(&chat, turn, db.local_chat_turn_uses_history(turn)?)?;
     let pending = Pending {
         version: 1,
         base: host.base.clone(),
@@ -996,7 +1036,7 @@ async fn live_turn(
                 "sessionId": session,
                 "mode": "queue",
                 "requestId": pending.rpc_id,
-                "content": [{"type":"text","text":dsh::prompt(&chat, turn, include_history)?}],
+                "content": [{"type":"text","text":prompt}],
             }}),
         )
         .await?;
@@ -1010,11 +1050,10 @@ async fn live_turn(
     loop {
         let reply = fold_history(&host.events(&pending).await?, &pending.rpc_id, pending.after)?;
         if reply.text != saved {
-            db.update_local_chat_text(id, turn, &reply.text)?;
+            save_stream_text(app, db, id, turn, &saved, &reply.text)?;
             saved = reply.text.clone();
-            emit(app, db, id);
         }
-        if let Some(status) = reply.status()? {
+        if let Some(status) = reply.observed_status(db, turn, &pending)? {
             return Ok(status);
         }
         if *cancel.borrow() {
@@ -1076,7 +1115,7 @@ async fn run_legacy(
         .get_local_chat(id)?
         .ok_or_else(|| error("对话记录不存在"))?;
     // Agent 卡片由流程逐轮驱动；重复附带上轮 JSON 历史会让模型产出非法工具参数。
-    let include_history = db.local_chat_turn_uses_history(turn)?;
+    let prompt = dsh::prompt(&chat, turn, db.local_chat_turn_uses_history(turn)?)?;
     let pending = Pending {
         version: 1,
         base: host.base.clone(),
@@ -1089,7 +1128,7 @@ async fn run_legacy(
     if *cancel.borrow() {
         return Ok("stopped");
     }
-    let accepted=host.call("session.prompt",json!({"sessionId":pending.session,"mode":"queue","content":[{"type":"text","text":dsh::prompt(&chat,turn,include_history)?}]}),&pending.rpc_id).await?;
+    let accepted=host.call("session.prompt",json!({"sessionId":pending.session,"mode":"queue","content":[{"type":"text","text":prompt}]}),&pending.rpc_id).await?;
     if accepted["accepted"] != true {
         return Err(error("本机 DSH 未确认接收，请取回原回复；未自动重发"));
     }
@@ -1104,11 +1143,10 @@ async fn run_legacy(
             pending.after,
         )?;
         if reply.text != saved {
-            db.update_local_chat_text(id, turn, &reply.text)?;
+            save_stream_text(app, db, id, turn, &saved, &reply.text)?;
             saved = reply.text.clone();
-            emit(app, db, id);
         }
-        if let Some(status) = reply.status()? {
+        if let Some(status) = reply.observed_status(db, turn, &pending)? {
             return Ok(status);
         }
         if *cancel.borrow() {
@@ -1160,7 +1198,7 @@ pub(super) async fn recover(
     }
     let host = Host::connect(base, auth).await?;
     let health = inspect_host(&host).await?;
-    let mut reply = if health.live {
+    let reply = if health.live {
         fold_history(&host.events(&pending).await?, &pending.rpc_id, pending.after)?
     } else {
         fold_history(
@@ -1169,16 +1207,17 @@ pub(super) async fn recover(
             pending.after,
         )?
     };
-    let complete = match reply.status() {
-        Ok(Some("done")) => true,
-        Ok(Some(_)) => false,
+    let message;
+    let outcome = match reply.status() {
+        Ok(Some("done")) => RestoredChatOutcome::Done,
+        Ok(Some(_)) => RestoredChatOutcome::Interrupted,
         Err(detail) => {
-            reply.text.push_str(&format!("\n\n{detail}"));
-            false
+            message = detail.to_string();
+            RestoredChatOutcome::DshFailed { message: &message, code: reply.failure_code() }
         }
         Ok(None) => return Err(error("原本机 DSH 任务尚未结束或无法确认；未重新发送")),
     };
-    db.restore_local_chat_reply(id, &turn, &saved, &reply.text, complete)
+    db.restore_local_chat_reply(id, &turn, &saved, &reply.text, outcome)
 }
 
 #[cfg(test)]

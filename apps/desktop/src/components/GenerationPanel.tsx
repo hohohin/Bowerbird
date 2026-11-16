@@ -1,4 +1,4 @@
-import { generationFailure, userErrorMessage } from "../lib/userError";
+import { generationFailure, hasGenerationFailureReason, userErrorMessage } from "../lib/userError";
 import { generationProviderIssue } from "../lib/generationAvailability";
 import { openProviderSettings, ProviderIssueNotice } from "./creation/ProviderIssueNotice";
 import { DreaminaTaskCredit } from "./creation/DreaminaCredits";
@@ -73,7 +73,7 @@ export function GenerationPanel({
   embedded?: boolean;
   followLatest?: boolean;
   hydratedAssets?: Asset[];
-  snapshot?: { job: GenJob; sourceJobId: string | null; selectedTurnKey: string; onReuse: (turn: GenTurn) => void };
+  snapshot?: { job: GenJob; sourceJobId: string | null; selectedTurnKey: string; diagnosticTurnKeys?: ReadonlyMap<string, string>; onReuse: (turn: GenTurn) => void };
   onAddVideoFrame?: (frame: VideoFrame) => Promise<void>;
   onSaveVideoTrim?: SaveVideoTrim;
 } = {}) {
@@ -118,6 +118,37 @@ export function GenerationPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const activeJob: GenJob | null = snapshot?.job ?? (activeJobId ? genJobs[activeJobId] ?? null : null);
+  // Historical canvas turns use their node ID for scrolling and their original turn key for diagnostics.
+  const diagnosticJobId = snapshot ? snapshot.sourceJobId : activeJob?.id;
+  const diagnosticKey = (turn: GenTurn) => turn.turnKey && (snapshot?.diagnosticTurnKeys
+    ? snapshot.diagnosticTurnKeys.get(turn.turnKey) : turn.turnKey);
+  const missingKeys = JSON.stringify(activeJob?.turns.filter(turn => turn.error && !hasGenerationFailureReason(turn.error))
+    .map(diagnosticKey).filter(Boolean) ?? []);
+  const [diagnostics, setDiagnostics] = useState<{ jobId: string; keys: string; errors: Map<string, string> }>();
+  useEffect(() => {
+    if (!diagnosticJobId || missingKeys === "[]") return;
+    let current = true;
+    const errors = new Map<string, string>();
+    void api.generationDiagnostics(diagnosticJobId).then(report => {
+      if (report.jobId !== diagnosticJobId) return;
+      for (const attempt of report.attempts) {
+        if (attempt.turnKey && attempt.status === "failed" && attempt.error && hasGenerationFailureReason(attempt.error)) {
+          errors.set(attempt.turnKey, attempt.error);
+        }
+      }
+    }).catch(() => {}).finally(() => {
+      if (current) setDiagnostics({ jobId: diagnosticJobId, keys: missingKeys, errors });
+    });
+    return () => { current = false; };
+  }, [diagnosticJobId, missingKeys]);
+  function displayTurn(turn: GenTurn): GenTurn {
+    if (!turn.error || hasGenerationFailureReason(turn.error)) return turn;
+    const key = diagnosticKey(turn);
+    const recovered = diagnostics?.jobId === diagnosticJobId && diagnostics?.keys === missingKeys ? diagnostics : undefined;
+    const reason = key && recovered?.errors.get(key);
+    return { ...turn, error: reason || (diagnosticJobId && key && !recovered
+      ? "本轮生成失败，正在读取失败原因。" : "本轮生成失败，未能读取具体原因。") };
+  }
 
   // 历史任务也必须重新读取当前权益；降级后不可通过续改/重试绕过 BYO 门控。
   const turnProviderIssue = (turn?: GenTurn) => activeJob
@@ -598,7 +629,7 @@ export function GenerationPanel({
               const retryIssue = retryAvailability(turn);
               return <TurnView
                 key={turn.id}
-                turn={turn}
+                turn={displayTurn(turn)}
                 provider={turn.provider ?? activeJob.provider}
                 index={i}
                 busy={running && i === turnsWithOffset.length - 1}
@@ -675,6 +706,12 @@ export function GenerationPanel({
               ? <ProviderIssueNotice issue={latestIssue} />
               : "🎨 在创作板点「✓ 发送」开始一个生成会话；出图后可在此继续对话迭代。"}
           </div>
+        )}
+        {!readOnly && !running && activeJob?.provider === "minimax-h3-image" && activeJob.submitId && activeJob.turns[activeJob.turns.length - 1]?.error && (
+          <button type="button" className="mt-2 w-full rounded border border-accent px-3 py-2 text-xs text-accent"
+            onClick={() => void api.recoverH3Image(activeJob.id).then(() => useStore.getState().loadGenJobs()).catch(error => notifyError(error, "取回图片失败"))}>
+            取回原 H3 图片
+          </button>
         )}
         {!readOnly && !running && activeJob?.media === "video" && (activeJob.submitId || isCloudProvider(activeJob.provider)) && activeJob.turns[activeJob.turns.length - 1]?.error && (
           <button type="button" className="mt-2 w-full rounded border border-accent px-3 py-2 text-xs text-accent"
@@ -1146,7 +1183,8 @@ function GenEditComposer({
   const [videoChannel, setVideoChannel] = useState<"jimeng" | "cloud">((sourceTurn?.provider ?? job.provider).startsWith("bowerbird-cloud") ? "cloud" : "jimeng");
   const sourceProvider = sourceTurn?.provider ?? job.provider;
   const continuationProvider = normalizeGenerationProvider(sourceProvider);
-  const activeGenProvider = isVideo ? videoProvider(videoChannel, selectedVideoOptions) : isRevise ? continuationProvider : selectedProvider;
+  const [reviseProvider, setReviseProvider] = useState<string | null>(null);
+  const activeGenProvider = isVideo ? videoProvider(videoChannel, selectedVideoOptions) : isRevise ? reviseProvider ?? continuationProvider : selectedProvider;
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
   const defaultProvider = useStore((s) => s.defaultProvider);
   const setDefaultProvider = useStore((s) => s.setDefaultProvider);
@@ -1482,16 +1520,16 @@ function GenEditComposer({
       <div className="generation-toolbar flex flex-wrap items-center gap-2">
           {isVideo ? <VideoControls channel={videoChannel} options={videoOptions} onChange={(options, channel) => { if (channel) setVideoChannel(channel); setVideoOptions(options); }} ratio={ratio} onRatioChange={setRatio} /> : <>
           <RatioSelect value={ratio} onChange={setRatio} />
-          {!isRevise && <ProviderSelect
+          <ProviderSelect hasReferences={references.length > 0 || (isRevise && !!job.sessionId)}
             value={activeGenProvider}
-            onChange={setActiveGenProvider}
+            onChange={isRevise ? setReviseProvider : setActiveGenProvider}
             codexHealth={codexHealth}
             dreaminaHealth={dreaminaHealth}
             cloudAuth={cloudAuth}
             cloudEntitlement={cloudEntitlement}
             defaultProvider={defaultProvider}
             onSetDefaultProvider={setDefaultProvider}
-          />}
+          />
           </>}
           {/* Agent 方案开关（A/B 互斥，与创作板同款）：本机 Agent 可用且「开发者选项」
               未关闭时渲染——release 包中 health 命令被后端门控拒绝，开关不出现。 */}

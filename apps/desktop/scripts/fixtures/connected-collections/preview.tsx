@@ -10,6 +10,7 @@ import { useStore } from "../../../src/store";
 import { folderConnections } from "../../../src/lib/folderConnections";
 import "../../../src/styles.css";
 import "../../../src/components/LocalFileWorkspace.css";
+import "../../../src/components/TacticalProjection.css";
 import "../../../src/components/IndustrialTheme.css";
 import "../../../src/components/IndustrialMenus.css";
 

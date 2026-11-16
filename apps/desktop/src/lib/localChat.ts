@@ -4,8 +4,14 @@ export { CHAT_PROVIDER_LABELS, CHAT_PROVIDERS, isChatProvider, chatUsesCloud, ch
 export { canvasChatId } from "./canvasChat";
 
 export type LocalChatStatus = "idle" | "running" | "stopping" | "stopped" | "interrupted" | "failed";
-export interface ChatDshStatus { localAvailable: boolean; managedAvailable: boolean; localReason: string | null; managedReason: string | null; localUrl: string; localNote?: string | null }
-export interface ChatDshSetup { mode: "local"; url?: string; authUrl?: string }
+export interface ChatDshStatus { localAvailable: boolean; managedAvailable: boolean; localReason: string | null; managedReason: string | null; localUrl: string; localMode?: "auto" | "local"; localNote?: string | null }
+export type ChatDshSetup = { mode: "auto" } | { mode: "local"; url?: string; authUrl?: string };
+export interface ChatDshAccount {
+  state: "notInstalled" | "signedOut" | "pending" | "verified" | "unverified" | "failed" | "cancelled" | "expired";
+  attemptId?: string;
+  authorizeUrl?: string;
+  modelConfigured?: boolean;
+}
 export interface ChatCodexOptions { model?: string; reasoningEffort?: string }
 export interface ChatCodexModel {
   id: string; model: string; displayName: string; isDefault: boolean; defaultReasoningEffort: string;
@@ -59,6 +65,8 @@ export interface ChatSummary {
   error: string | null;
 }
 export interface ChatMessage {
+  dshTerminalError?: string;
+  dshFailureCode?: string;
   id: string;
   turnId: string;
   role: "user" | "assistant" | "tool";
@@ -106,15 +114,18 @@ export function localChatInputError(text: string, referenceAssetIds: string[]): 
 export const localChat = {
   dshStatus: () => invoke<ChatDshStatus>("local_chat_dsh_status"),
   dshSetup: (input: ChatDshSetup) => invoke<ChatDshStatus>("local_chat_dsh_setup", { ...input }),
+  dshAccount: (action: "status" | "start" | "cancel", attemptId?: string) =>
+    invoke<ChatDshAccount>("local_chat_dsh_account", { action, attemptId }),
   models: () => invoke<ChatCodexModel[]>("local_chat_models"),
   quote: () => invoke<ChatQuote>("local_chat_quote"),
   list: (projectId: string) => invoke<ChatSummary[]>("local_chat_list", { projectId }),
+  revision: (conversationId: string) => invoke<number | null>("local_chat_revision", { conversationId }),
   get: (conversationId: string) => invoke<ChatConversation | null>("local_chat_get", { conversationId }),
   newOnCard: (projectId: string, nodeId: string, conversationId: string, codexOptions?: ChatCodexOptions, provider?: ChatProvider) =>
     invoke<ChatConversation>("local_chat_new_on_card", { projectId, nodeId, conversationId, codexOptions, provider }),
   getByRequest: (requestId: string) => invoke<ChatConversation | null>("local_chat_get_by_request", { requestId }),
   send: (input: LocalChatSendInput) => invoke<ChatConversation>("local_chat_send", { input }),
-  stop: (conversationId: string) => invoke<ChatConversation | null>("local_chat_stop", { conversationId }),
+  stop: (conversationId: string, turnId?: string) => invoke<ChatConversation | null>("local_chat_stop", { conversationId, turnId }),
   recover: (conversationId: string) => invoke<ChatConversation>("local_chat_recover", { conversationId }),
   undoCards: (conversationId: string, actionId: string) => invoke<ChatConversation>("local_chat_cards_undo", { conversationId, actionId }),
 };

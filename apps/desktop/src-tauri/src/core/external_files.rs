@@ -17,14 +17,8 @@ fn invalid(message: impl Into<String>) -> AppError {
     AppError::Other(message.into())
 }
 pub fn image_path(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase()
-            .as_str(),
-        "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp" | "tif" | "tiff" | "heic" | "heif" | "svg" | "psd"
-    )
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    crate::media::is_image_ext(ext) || ext.eq_ignore_ascii_case("svg") || ext.eq_ignore_ascii_case("psd")
 }
 fn original(path: &Path) -> AppResult<PathBuf> {
     let path =

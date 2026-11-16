@@ -1,10 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { Asset, AuthSnapshot, EntitlementSnapshot } from "./types";
 
-export function canUseComfyVideo(auth: AuthSnapshot | null, entitlement: EntitlementSnapshot | null) {
-  return auth?.logged_in === true && !!auth.user_id && entitlement?.user_id === auth.user_id
-    && (entitlement.offline_state === "fresh" || entitlement.offline_state === "grace")
+export function hasComfyEntitlement(entitlement: EntitlementSnapshot | null) {
+  return !!entitlement?.user_id && (entitlement.offline_state === "fresh" || entitlement.offline_state === "grace")
     && (entitlement.is_test_account === true || entitlement.tier === "pro" || entitlement.tier === "studio");
+}
+
+export function canUseComfyVideo(auth: AuthSnapshot | null, entitlement: EntitlementSnapshot | null) {
+  return auth?.logged_in === true && !!auth.user_id && entitlement?.user_id === auth.user_id && hasComfyEntitlement(entitlement);
 }
 
 export type ComfyVideoMode = "frames" | "reference" | "text";
@@ -45,14 +48,15 @@ export function comfyVideoSize(options: ComfyVideoOptions, firstFrame?: { width?
 }
 export interface ComfyVideoInput extends ComfyVideoOptions { firstFrame: string; lastFrame?: string; prompt: string }
 export interface ComfyVideoProgress { label: string; value?: number | null; max?: number | null }
-export interface ComfyVideoStatus { status: "queued" | "running" | "unknown" | "failed" | "done" | "cancelled"; message: string; asset?: Asset; progress?: ComfyVideoProgress | null; elapsedMs?: number | null }
+export interface ComfyVideoStatus { status: "queued" | "running" | "offline" | "unknown" | "failed" | "done" | "cancelled"; originalService?: [string, ComfyVideoMode]; message: string; asset?: Asset; progress?: ComfyVideoProgress | null; elapsedMs?: number | null }
 export function comfyVideo(action: "start" | "status" | "cancel", projectId: string, requestId: string, input?: ComfyVideoInput) {
   return invoke<ComfyVideoStatus>("comfy_video", { action, projectId, requestId, input: input ?? null });
 }
 export function checkComfyVideo(endpoint: string, mode: ComfyVideoMode = "frames") { return invoke<string>("comfy_video_check", { endpoint, mode }); }
 
+export type ComfyEnvironmentMode = ComfyVideoMode | "image" | "edit";
 export interface ComfyEnvironment {
-  mode?: ComfyVideoMode; modelsRequired?: number; canAddModels?: boolean;
+  mode?: ComfyEnvironmentMode; modelsRequired?: number; canAddModels?: boolean;
   phase: "missing" | "ready" | "installing" | "starting" | "stopped" | "unavailable" | "failed" | "cancelled";
   message: string; endpoint: string; directory: string; canInstall: boolean; installed: boolean;
   downloadBytes: number; requiredBytes: number; completedBytes: number; totalBytes: number;
@@ -70,7 +74,7 @@ export function comfyEnvironmentReady(environment?: ComfyEnvironment) {
 }
 // Multiple visible cards share a read-only detection request; installation is singleton in native code.
 const detections = new Map<string, Promise<ComfyEnvironment>>();
-export function comfyEnvironment(action: "detect" | "status" | "prepare" | "install" | "cancel" | "select_existing" | "start_existing" | "driver", endpoint: string, directory?: string, existingDirectory?: string, mode: ComfyVideoMode = "frames") {
+export function comfyEnvironment(action: "detect" | "status" | "prepare" | "install" | "cancel" | "select_existing" | "start_existing" | "driver", endpoint: string, directory?: string, existingDirectory?: string, mode: ComfyEnvironmentMode = "frames") {
   const key = JSON.stringify([endpoint, directory, existingDirectory, mode]);
   if (action === "detect" && detections.has(key)) return detections.get(key)!;
   const request = invoke<ComfyEnvironment>("comfy_video_environment", { action, endpoint, directory: directory ?? null, existingDirectory: existingDirectory ?? null, mode });

@@ -51,6 +51,7 @@ export function createDshRuntimeHome(options: {
   templateDir: string;
   runtimeRoot: string;
   chat?: boolean;
+  imageCardProvider?: boolean;
   nativeSession?: {dir: string; sessionId:string};
 }): DshRuntimeHome {
   const templateDir = resolve(options.templateDir);
@@ -84,7 +85,9 @@ export function createDshRuntimeHome(options: {
     if (options.chat) {
       copyFileSync(join(import.meta.dirname, "../cloud-chat/cordis.chat.patch.yml"), join(profileDir, "cordis.chat.patch.yml"));
       copyFileSync(join(import.meta.dirname, "../cloud-chat/chat-cards.mjs"), join(pluginDir, "chat-cards.mjs"));
-      copyFileSync(join(import.meta.dirname, "../../../cloud/supabase/functions/_shared/chat-card-tool.json"), join(pluginDir, "chat-card-tool.json"));
+      const cardTool = JSON.parse(readFileSync(join(import.meta.dirname, "../../../cloud/supabase/functions/_shared/chat-card-tool.json"), "utf8"));
+      if (!options.imageCardProvider) delete cardTool.inputSchema.properties.cards.items.properties.provider;
+      writeFileSync(join(pluginDir, "chat-card-tool.json"), JSON.stringify(cardTool), "utf8");
       if (options.nativeSession) {
         copyFileSync(join(import.meta.dirname, "../cloud-chat/native-chat-acp.mjs"), join(pluginDir, "native-chat-acp.mjs"));
         const file = join(profileDir, "cordis.chat.patch.yml");

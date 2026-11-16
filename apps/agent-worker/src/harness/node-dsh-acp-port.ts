@@ -50,6 +50,7 @@ export type NodeDshAcpPortOptions = {
   /** Zero disables the task-duration deadline; initialization/cancel remain bounded. */
   promptTimeoutMs?: number;
   activity?: ToolActivity;
+  imageCardProvider?: boolean;
   profileMode?: "planning" | "controlled-model" | "html-execution" | "content-execution" | "chat";
   nativeSession?: { dir: string; sessionId: string };
 };
@@ -203,6 +204,7 @@ export class NodeDshAcpPort implements DshAcpPort {
       templateDir: options.profileTemplateDir,
       runtimeRoot: options.runtimeRoot,
       chat: options.profileMode === "chat",
+      imageCardProvider: options.imageCardProvider,
       nativeSession: options.nativeSession,
     });
     try {

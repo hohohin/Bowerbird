@@ -36,10 +36,10 @@ pub struct Input { endpoint: String, seconds: f64, ratio: String, resolution: f6
 #[derive(Deserialize, Serialize)]
 struct Record { account: String, project: String, input: Input, prompt_id: Option<String>, submitted: bool, asset_id: Option<String>, failure: Option<String>, #[serde(default)] cancelled: bool, #[serde(default)] elapsed_ms: Option<u64> }
 #[derive(Serialize)]
-pub struct Status { status: &'static str, message: String, asset: Option<Asset>, progress: Option<progress::Progress>, #[serde(rename = "elapsedMs")] elapsed_ms: Option<u64> }
-fn status(state: &'static str, message: &str) -> Status { Status { status: state, message: message.into(), asset: None, progress: None, elapsed_ms: None } }
+pub struct Status { #[serde(rename="originalService", skip_serializing_if="Option::is_none")] original_service: Option<(String, Mode)>, status: &'static str, message: String, asset: Option<Asset>, progress: Option<progress::Progress>, #[serde(rename = "elapsedMs")] elapsed_ms: Option<u64> }
+fn status(state: &'static str, message: &str) -> Status { Status { original_service: None, status: state, message: message.into(), asset: None, progress: None, elapsed_ms: None } }
 
-pub(super) fn endpoint(value: &str) -> AppResult<String> {
+pub(crate) fn endpoint(value: &str) -> AppResult<String> {
     let url = reqwest::Url::parse(value).map_err(|_| error("请输入本机 ComfyUI 地址，例如 http://127.0.0.1:8000"))?;
     if url.scheme() != "http" || !matches!(url.host_str(), Some("127.0.0.1" | "[::1]" | "localhost"))
         || !url.username().is_empty() || url.password().is_some() || url.path() != "/" || url.query().is_some() || url.fragment().is_some() {
@@ -47,12 +47,15 @@ pub(super) fn endpoint(value: &str) -> AppResult<String> {
     }
     Ok(url.as_str().trim_end_matches('/').into())
 }
-fn client() -> AppResult<reqwest::Client> {
+pub(crate) fn client() -> AppResult<reqwest::Client> {
     reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(5)).timeout(Duration::from_secs(120)).build().map_err(|e| error(e.to_string()))
 }
-async fn json_response(request: reqwest::RequestBuilder) -> AppResult<Value> {
+pub(crate) async fn json_response(request: reqwest::RequestBuilder) -> AppResult<Value> {
     let response = request.send().await.map_err(|e| error(format!("无法连接本机 ComfyUI：{e}")))?;
+    parse_json_response(response).await
+}
+async fn parse_json_response(response: reqwest::Response) -> AppResult<Value> {
     let code = response.status();
     let body: Value = response.json().await.map_err(|_| error("ComfyUI 返回了无法识别的响应"))?;
     if !code.is_success() { return Err(error(format!("ComfyUI 请求失败（{code}）：{}", body.to_string().chars().take(1500).collect::<String>()))); }
@@ -144,7 +147,7 @@ pub(super) async fn check_for_mode(http: &reqwest::Client, base: &str, mode: Mod
     }
     Ok(())
 }
-pub(super) async fn account(auth: &AuthClient, entitlement: &EntitlementService) -> AppResult<String> {
+pub(crate) async fn account(auth: &AuthClient, entitlement: &EntitlementService) -> AppResult<String> {
     let snapshot = entitlement.current_or_sync(auth).await;
     let login = auth.snapshot();
     check_access(&login, &snapshot)?;
@@ -154,7 +157,7 @@ fn check_access(login: &crate::cloud::auth::AuthSnapshot, snapshot: &crate::clou
     if !login.logged_in || snapshot.user_id.is_empty() || login.user_id.as_deref() != Some(snapshot.user_id.as_str())
         || !(snapshot.is_test_account || matches!(snapshot.tier.as_str(), "pro" | "studio"))
         || !matches!(snapshot.offline_state, Some(crate::cloud::entitlement::OfflineState::Fresh | crate::cloud::entitlement::OfflineState::Grace)) {
-        return Err(error("本地 H3 视频需要有效的 Pro／Studio 权益或测试账号资格"));
+        return Err(error("本地 H3 需要有效的 Pro／Studio 权益或测试账号资格"));
     }
     Ok(())
 }
@@ -174,6 +177,10 @@ fn save(path: &Path, record: &Record) -> AppResult<()> {
 async fn upload(http: &reqwest::Client, base: &str, db: &Database, id: &str, request: &str, role: &str) -> AppResult<(String,(u32,u32))> {
     let asset = db.get_asset(id)?.ok_or_else(|| error("输入图片不存在"))?;
     let path = asset.store_path.ok_or_else(|| error("输入图片没有本地文件"))?;
+    upload_image_path(http, base, PathBuf::from(path), request, role).await
+}
+
+pub(crate) async fn upload_image_path(http: &reqwest::Client, base: &str, path: PathBuf, request: &str, role: &str) -> AppResult<(String,(u32,u32))> {
     // Decode and normalize to PNG: no arbitrary local files are forwarded to ComfyUI.
     let (bytes,size) = tokio::task::spawn_blocking(move || -> AppResult<(Vec<u8>,(u32,u32))> {
         let image = image::open(path)?;
@@ -219,12 +226,25 @@ fn execution_elapsed(result: &Value, prompt_id: &str) -> Option<u64> {
 }
 async fn poll(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path: &Path, record: &mut Record, request: &str, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<Status> {
     owner()?;
-    if let Some(id) = &record.asset_id { return Ok(Status { status:"done",message:"视频已生成".into(),asset:Some(db.get_asset(id)?.ok_or_else(|| error("生成的视频已被删除"))?),progress:None,elapsed_ms:record.elapsed_ms }); }
+    if let Some(id) = &record.asset_id { return Ok(Status { original_service: None, status:"done",message:"视频已生成".into(),asset:Some(db.get_asset(id)?.ok_or_else(|| error("生成的视频已被删除"))?),progress:None,elapsed_ms:record.elapsed_ms }); }
     if record.cancelled { return Ok(status("cancelled","本机生成已取消")); }
     if let Some(message) = &record.failure { return Ok(status("failed",message)); }
     if !record.submitted { return Ok(status("failed","尚未提交到 ComfyUI，请停止后重新运行")); }
     let base = endpoint(&record.input.endpoint)?;
-    let queue = json_response(http.get(format!("{base}/queue"))).await?;
+    let response = match http.get(format!("{base}/queue")).send().await {
+        Ok(response) => response,
+        Err(e) if e.is_connect() && !e.is_timeout() => {
+            // Only restart services on ports owned by the Bowerbird video launcher.
+            if base == "http://127.0.0.1:18189" || base == "http://127.0.0.1:18188" {
+                let mut offline = status("offline", "本机视频服务已断开。");
+                offline.original_service = Some((base, record.input.mode));
+                return Ok(offline);
+            }
+            return Err(error("无法连接此任务使用的本机 ComfyUI 服务，原任务记录已保留。"));
+        }
+        Err(e) => return Err(error(format!("查询本机视频队列失败：{e}"))),
+    };
+    let queue = parse_json_response(response).await?;
     let history = json_response(http.get(match &record.prompt_id { Some(id) => format!("{base}/history/{id}"), None => format!("{base}/history?max_items=500") })).await?;
     if record.prompt_id.is_none() {
         record.prompt_id = queue["queue_running"].as_array().into_iter().flatten().chain(queue["queue_pending"].as_array().into_iter().flatten())
@@ -271,7 +291,7 @@ async fn poll(http: &reqwest::Client, db: &Database, paths: &LibraryPaths, path:
     db.add_assets_to_project(&record.project,&[asset.id.clone()])?;
     record.asset_id = Some(asset.id.clone()); save(path,record)?;
     let _ = fs::remove_file(video);
-    Ok(Status { status:"done",message:"视频已生成".into(),asset:db.get_asset(&asset.id)?,progress:None,elapsed_ms:record.elapsed_ms })
+    Ok(Status { original_service: None, status:"done",message:"视频已生成".into(),asset:db.get_asset(&asset.id)?,progress:None,elapsed_ms:record.elapsed_ms })
 }
 
 async fn cancel(http: &reqwest::Client, path: &Path, record: &mut Record, request: &str, owner: &(dyn Fn() -> AppResult<()> + Sync)) -> AppResult<Status> {

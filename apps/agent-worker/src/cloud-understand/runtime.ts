@@ -1,3 +1,4 @@
+import { ControlTransport as ControlClient, ControlDeadlineError } from "../control-plane/control-transport.ts";
 import { BRAND_OBSERVATION_TASK, loadBrandPrompt } from "../prompts/brand-visual.ts";
 import { replicationMessages, validateReplicationResult, validateReplicationVideo, REPLICATION_RESULT_ERRORS, type ReplicationPayload } from "./replication.ts";
 import { validateReplication } from "../../../cloud/supabase/functions/_shared/replication.ts";
@@ -19,7 +20,6 @@ import {
 
 export type { WorkerFetch } from "../cloud-generation/runtime.ts";
 
-type JsonRecord = Record<string, unknown>;
 const CLEANUP_INTERVAL_MS = 10 * 60_000;
 
 export interface UnderstandWorkerConfig {
@@ -135,31 +135,6 @@ export function visionPrompt(input: UnderstandInput): string {
   return "请详细分析图片，并按 **维度名** 换行正文的 Markdown 格式输出类型、构图、光影、色调、主体动作、材质、背景、氛围与反推提示词。";
 }
 
-class ControlClient {
-  private readonly config: UnderstandWorkerConfig;
-  private readonly fetch: WorkerFetch;
-
-  constructor(config: UnderstandWorkerConfig, fetchImpl: WorkerFetch) {
-    this.config = config;
-    this.fetch = fetchImpl;
-  }
-
-  async post(body: JsonRecord): Promise<JsonRecord> {
-    const response = await this.fetch(this.config.controlUrl, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.config.workerToken}`,
-        "content-type": "application/json",
-        "x-worker-id": this.config.workerId,
-      },
-      body: JSON.stringify(body),
-    });
-    const text = await response.text();
-    const value = parseJson(text);
-    if (!response.ok || !isRecord(value)) throw new Error(`control_http_${response.status}`);
-    return value;
-  }
-}
 
 class ArkVisionClient {
   private readonly config: UnderstandWorkerConfig;
@@ -170,7 +145,8 @@ class ArkVisionClient {
     this.fetch = fetchImpl;
   }
 
-  async understand(input: UnderstandInput): Promise<string> {
+  async understand(input: UnderstandInput, leaseValid: () => boolean): Promise<string> {
+    if (!leaseValid()) throw new Error("understand_lease_lost");
     if (this.config.mock) return mockUnderstand(input);
     if (input.operation === "speech-transcription") return recognizeSpeech(input.audio!, this.config.doubaoSpeechApiKey, this.fetch);
     // RequestBurstTooFast（provider_burst）带抖动退避自动重试：瞬时限流重发即可能成功，
@@ -191,6 +167,7 @@ class ArkVisionClient {
             delay_ms: delayMs,
           }));
           await sleep(delayMs);
+          if (!leaseValid()) throw new Error("understand_lease_lost");
           continue;
         }
         throw error;
@@ -300,8 +277,8 @@ async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: str
 }
 
 async function heartbeatLoop(control: ControlClient, jobId: string, leaseId: string, intervalMs: number, state: { stopped: boolean }): Promise<void> {
-  while (!state.stopped) {
-    await sleep(intervalMs);
+  while (!state.stopped && control.remainingMs(leaseId) > 1) {
+    await sleep(control.nextHeartbeatMs(leaseId, intervalMs));
     if (state.stopped) return;
     try {
       await control.post({ action: "heartbeat", jobId, leaseId });
@@ -332,7 +309,7 @@ async function executeClaim(
     if (!["video-analysis", "text-rewrite", "speech-transcription"].includes(input.operation)) input.instruction = visionPrompt(input);
     await control.post({ action: "submitted", jobId, leaseId });
     submitted = true;
-    const resultText = await ark.understand(input);
+    const resultText = await ark.understand(input, () => control.remainingMs(leaseId) > 1);
     await control.post({ action: "finish", jobId, leaseId, resultText });
     console.log(JSON.stringify({
       event: "understand_succeeded",
@@ -341,6 +318,7 @@ async function executeClaim(
       chars: resultText.length,
     }));
   } catch (error) {
+    if (control.remainingMs(leaseId) <= 1 || error instanceof ControlDeadlineError) return;
     const known = error instanceof KnownProviderError;
     const action = known || !submitted ? "fail" : "outcome_unknown";
     const safeErrorCode = known ? error.safeCode : safeErrorKind(error);

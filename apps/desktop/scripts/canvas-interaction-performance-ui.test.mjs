@@ -10,7 +10,7 @@ const root = process.cwd(), frozen = path.join(root, '.tmp/canvas-interaction-pe
 const out = '.tmp/canvas-interaction-performance'; await mkdir(out, { recursive: true });
 const slash = value => value.replaceAll('\\', '/');
 const renderedSourceHashes = {};
-const server = await createServer({ configFile: false, root, cacheDir: '.tmp/canvas-interaction-performance-vite', plugins: [{
+const server = await createServer({ root, cacheDir: '.tmp/canvas-interaction-performance-vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-interaction-performance/preview.html'] }, plugins: [{
   name: 'interaction-instrumentation', enforce: 'pre',
   resolveId(source, importer) {
     if (!baseline || !importer || !source.startsWith('.')) return;
@@ -255,7 +255,56 @@ async function checkGeometry() {
     renderedSourceHashes, samples };
   await writeFile(`${out}/${baseline ? 'before' : 'after'}.json`, JSON.stringify(report, null, 2)); console.log(JSON.stringify(report, null, 2));
 }
+async function checkMotion() {
+  await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/canvas-interaction-performance/preview.html');
+  await workflow.waitFor();
+  await page.waitForTimeout(1200);
+  assert.equal(await page.locator('.canvas-plane [data-canvas-node]').count(), 300);
+  assert.equal(await page.locator('[data-workflow-target]').count(), 200);
+  const stage = page.locator('.canvas-stage'), bounds = await stage.boundingBox();
+  async function sample(label, target, start, buttons) {
+    await resetStats();
+    const timing = await target.evaluate(async (el, { label, start, buttons }) => {
+      const times = [];
+      const media = [0, 1].map(n => document.querySelector('[data-canvas-node-id="material-' + n + '"]'));
+      for (let i = 0; i <= 48; i++) {
+        times.push(await new Promise(requestAnimationFrame));
+        if (i === 48) break;
+        const hover = label === 'hover', node = hover ? media[i % 2] : el;
+        node.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, pointerType: 'mouse', buttons,
+          clientX: start.x + i, clientY: start.y + (hover ? i % 2 * 440 : 0) }));
+      }
+      const intervals = times.slice(1).map((t,i) => t-times[i]).sort((a,b) => a-b);
+      return { medianMs: +intervals[23].toFixed(1), p95Ms: +intervals[45].toFixed(1), over33ms: intervals.filter(n => n > 33.5).length };
+    }, { label, start, buttons });
+    await collect(label, 48);
+    Object.assign(samples.at(-1), timing);
+  }
+  const box = await material.boundingBox();
+  const point = { x: box.x + 30, y: box.y + 25 };
+  await sample('hover', material, point, 0);
+  assert.equal(await page.locator('[data-workflow-material="material-1"].is-hovered').count(), 1);
+  const start = { x: bounds.x + 160, y: bounds.y + 110 };
+  await page.mouse.move(start.x, start.y); await page.mouse.down();
+  await sample('marquee-empty', stage, { x: start.x + 10, y: start.y + 10 }, 1);
+  assert.equal(await page.locator('.canvas-selection-marquee:visible').count(), 1);
+  await page.mouse.up();
+  await page.keyboard.down('Control');
+  for (const card of [material, content, workflow]) {
+    const b = await card.boundingBox(); await page.mouse.click(b.x + 4, b.y + 12);
+  }
+  await page.keyboard.up('Control');
+  assert.equal(await page.locator('.canvas-plane [data-canvas-node].is-selected').count(), 3);
+  await page.mouse.move(point.x, point.y); await page.mouse.down();
+  await sample('multi-drag', material, { x: point.x + 12, y: point.y + 12 }, 1);
+  await material.dispatchEvent('pointercancel', { pointerId: 1 }); await page.mouse.up();
+  assert.deepEqual(errors, []);
+  const report = { environment: 'Headless Chrome ' + browser.version() + ', Vite dev, mock IPC, 300 cards/200 wires. One pointer event per animation frame; interval includes browser scheduling, not physical display latency.', renderedSourceHashes, samples };
+  await writeFile(out + '/motion.json', JSON.stringify(report, null, 2));
+  console.log(JSON.stringify(report, null, 2));
+}
 try {
-  if (process.argv.includes('--typing')) await checkTyping();
+  if (process.argv.includes('--motion')) await checkMotion();
+  else if (process.argv.includes('--typing')) await checkTyping();
   else await checkGeometry();
 } finally { await browser.close(); await server.close(); }

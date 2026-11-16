@@ -5,7 +5,7 @@
 mod manual;
 pub use manual::{GalleryMerge, GalleryMergeInput};
 
-pub(crate) const WORKFLOW_GALLERY_CTE: &str = r#"
+pub(crate) const WORKFLOW_GALLERY_CTE: &str = concat!(r#"
 workflow_steps AS MATERIALIZED (
   SELECT w.project_id,s.key AS source_id,s.value AS step
   FROM canvas_workflows w,json_each(COALESCE(json_extract(w.document_json,'$.runs'),json_array(json_extract(w.document_json,'$.run')))) r,
@@ -80,7 +80,7 @@ workflow_agent_groups AS (
 workflow_agent_image_assets AS (
   SELECT DISTINCT w.asset_id FROM workflow_asset_sources w JOIN assets a ON a.id=w.asset_id
   WHERE w.group_key IN (SELECT group_key FROM workflow_agent_groups)
-    AND lower(COALESCE(a.ext,'')) IN ('png','jpg','jpeg','webp','gif','bmp','svg','avif','tif','tiff')
+    AND "#, super::material_catalog::catalog_image_predicate!(), r#"
 ),
 workflow_asset_groups AS (
   SELECT asset_id,CASE WHEN asset_id IN (SELECT asset_id FROM workflow_agent_image_assets)
@@ -99,7 +99,69 @@ other_generated_groups AS (
   SELECT asset_id,MIN(group_key) AS group_key FROM other_generated_sources WHERE group_key IS NOT NULL
   GROUP BY asset_id HAVING COUNT(DISTINCT group_key)=1
 )
-"#;
+"#);
+
+// Only the two derived asset relations are cached. Display aliases, separations,
+// project membership and media filters remain live in every query.
+pub(super) const CACHED_GALLERY_CTE: &str = "
+    workflow_asset_groups AS (SELECT asset_id,group_key FROM temp.catalog_provenance WHERE source=0),
+    other_generated_groups AS (SELECT asset_id,group_key FROM temp.catalog_provenance WHERE source=1)";
+
+fn init_catalog_cache(conn: &rusqlite::Connection) -> crate::error::AppResult<()> {
+    conn.execute_batch("CREATE TEMP TABLE catalog_provenance(
+        source INTEGER NOT NULL, asset_id TEXT NOT NULL, group_key TEXT NOT NULL,
+        PRIMARY KEY(source,asset_id)) WITHOUT ROWID;
+        CREATE TEMP TABLE catalog_cache_version(version INTEGER NOT NULL);")?;
+    // UPDATE OF excludes thumbnail/colour writes, node position changes and
+    // streamed chat content. Only completed tool video messages feed the CTE.
+    for (table, columns, predicate) in [
+        ("canvas_workflows", "project_id,document_json", ""),
+        ("canvas_nodes", "project_id,id,kind,role,asset_id,payload_json", ""),
+        ("assets", "id,ext,generation_session_id", ""),
+        ("analyses", "asset_id,kind,payload", ".kind='generation_meta'"),
+        ("cloud_agent_runs", "project_id,conversation_id,run_id", ""),
+        ("local_chat_messages", "id,role,status,turn_id,conversation_id,reference_asset_ids", ".role='tool'"),
+    ] {
+        for (event, timing) in [("insert", "INSERT".into()), ("delete", "DELETE".into()), ("update", format!("UPDATE OF {columns}"))] {
+            let when = match (predicate, event) {
+                ("", _) => String::new(),
+                // REPLACE may remove a qualifying old row when the new row does not qualify.
+                (_, "insert") => String::new(),
+                (_, "delete") => format!("WHEN OLD{predicate}"),
+                _ => format!("WHEN OLD{predicate} OR NEW{predicate}"),
+            };
+            conn.execute_batch(&format!("CREATE TEMP TRIGGER catalog_dirty_{table}_{event}
+                AFTER {timing} ON main.{table} {when} BEGIN DELETE FROM catalog_cache_version; END;"))?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn with_gallery_cache<T>(
+    conn: &rusqlite::Connection, required: bool,
+    query: impl FnOnce(&rusqlite::Connection, &str) -> crate::error::AppResult<T>,
+) -> crate::error::AppResult<T> {
+    if !required { return query(conn, WORKFLOW_GALLERY_CTE); }
+    let tx = conn.unchecked_transaction()?;
+    // Pin the main database before checking data_version, including changes
+    // committed by another connection (which cannot fire our TEMP triggers).
+    tx.query_row("SELECT rootpage FROM main.sqlite_schema WHERE name='assets'", [], |_| Ok(()))?;
+    let version: i64 = tx.query_row("PRAGMA main.data_version", [], |r| r.get(0))?;
+    let initialized: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_temp_master WHERE name='catalog_cache_version')", [], |r| r.get(0))?;
+    if !initialized { init_catalog_cache(&tx)?; }
+    let current: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM catalog_cache_version WHERE version=?1)", [version], |r| r.get(0))?;
+    if !current {
+        tx.execute_batch(&format!("DELETE FROM catalog_provenance;
+          WITH {WORKFLOW_GALLERY_CTE} INSERT INTO catalog_provenance
+          SELECT 0,asset_id,group_key FROM workflow_asset_groups WHERE asset_id IS NOT NULL
+          UNION ALL SELECT 1,asset_id,group_key FROM other_generated_groups WHERE asset_id IS NOT NULL;"))?;
+        tx.execute("DELETE FROM catalog_cache_version", [])?;
+        tx.execute("INSERT INTO catalog_cache_version VALUES(?1)", [version])?;
+    }
+    let value = query(&tx, CACHED_GALLERY_CTE)?;
+    tx.commit()?;
+    Ok(value)
+}
 
 impl crate::db::Database {
     pub fn dissolve_generation_group(&self, asset_id: Option<&str>, group_key: Option<&str>) -> crate::error::AppResult<()> {

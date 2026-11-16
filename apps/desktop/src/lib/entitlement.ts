@@ -1,3 +1,5 @@
+import { hasComfyEntitlement } from "./comfyVideo";
+import { H3_IMAGE } from "./genProviders";
 import type { EntitlementSnapshot, FeaturePolicy, GenJob } from "../lib/types";
 import { isCloudProvider, normalizeGenerationProvider } from "../lib/genProviders";
 
@@ -59,6 +61,7 @@ export function canUseGenerationProvider(
   provider: string | null | undefined,
 ): boolean {
   const policy = effectivePolicy(entitlement);
+  if (provider === H3_IMAGE) return hasComfyEntitlement(entitlement);
   return isCloudProvider(provider) ? policy.can_use_cloud : policy.can_use_byo;
 }
 

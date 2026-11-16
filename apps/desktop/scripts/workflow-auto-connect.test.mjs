@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { newWorkflowNode, generationInputNode, compileGenerationPrompt, compileAgentPrompt, workflowOrder, workflowInputValues } from '../src/lib/canvasWorkflow.ts';
+import { newWorkflowNode, generationInputNode, compileGenerationPrompt, compileAgentPrompt, workflowOrder, workflowInputValues, selectWorkflowVideoProvider } from '../src/lib/canvasWorkflow.ts';
 import { planAutomaticConnection } from '../src/lib/workflowAutoConnect.ts';
 
 const node = (id, kind = 'generation', rest = {}) => ({ ...newWorkflowNode(kind, 0, 0, 'codex'), id, ...rest });
@@ -160,6 +160,28 @@ test('H3 fills the first free frame, repeated source is a no-op, full frames rej
   const rejected = planAutomaticConnection([full], [documentOutputs[0], source('c')], 'h3');
   assert.deepEqual(rejected.bindings, []);
   assert.match(rejected.error, /首尾帧已连接/);
+});
+
+test('switching a video card to H3 explains incompatible sources and accepts inputs for its active mode', () => {
+  const video = node('target', 'generation', { generation: { media: 'video' } });
+  const local = selectWorkflowVideoProvider(video, 'h3');
+  const movie = node('movie', 'generation', { generation: { media: 'video' } });
+  const videoOutput = { type: 'image', binding: { nodeId: 'movie', portId: 'image' } };
+  for (const mode of ['frames', 'reference', 'text']) {
+    const target = { ...local, comfyVideo: { ...local.comfyVideo, mode } };
+    const plan = (...outputs) => planAutomaticConnection([movie, target], outputs, target.id);
+    assert.deepEqual(plan(...documentOutputs).bindings.map(item => item.inputId),
+      mode === 'text' ? ['text'] : ['text', 'first-frame']);
+    if (mode === 'text') {
+      assert.match(plan(source('photo')).error, /文生视频.*单图.*首尾帧/);
+    } else {
+      assert.match(plan(videoOutput).error, /从视频中截取/);
+      assert.match(plan(source('music', 'audio')).error, /音频/);
+    }
+    const audioWithText = plan(source('music', 'audio'), documentOutputs[0]);
+    assert.equal(audioWithText.error, null);
+    assert.deepEqual(audioWithText.bindings.map(item => item.inputId), ['text']);
+  }
 });
 
 test('cycles and self-connections reject the entire planned relation', () => {

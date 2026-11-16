@@ -22,6 +22,7 @@ export function canvasConversationTurn(node: CanvasNode, nodes: readonly CanvasN
       return asset ? [asset] : [];
     });
   return { node, jobId: typeof payload.job_id === "string" && payload.job_id.trim() ? payload.job_id : null,
+    turnKey: typeof payload.turn_key === "string" ? payload.turn_key : null, failed: payload.status === "failed",
     text: payload.text as string, ratio: typeof payload.ratio === "string" ? payload.ratio : null,
     provider: typeof payload.provider === "string" ? payload.provider : "codex-cli",
     error: typeof payload.error === "string" ? payload.error : undefined,

@@ -1,4 +1,5 @@
 //! Narrow chat-to-canvas compiler. Model arguments never contain storage IDs or execution state.
+use super::project_canvas::placement::{near, visible_obstacles, workflow_rect, Rect};
 use crate::{
     db::Database,
     error::{AppError, AppResult},
@@ -45,9 +46,22 @@ impl Default for ChatCardDefaults {
         }
     }
 }
+pub(crate) fn card_tool_spec() -> &'static Value {
+    static TOOL: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
+        serde_json::from_str(include_str!("../../../../cloud/supabase/functions/_shared/chat-card-tool.json"))
+            .expect("bundled card tool schema is valid JSON")
+    });
+    &TOOL
+}
+
+fn listed_image_provider(provider: &str) -> bool {
+    card_tool_spec()["inputSchema"]["properties"]["cards"]["items"]["properties"]["provider"]["enum"]
+        .as_array().expect("image provider catalog").iter().any(|key| key.as_str() == Some(provider))
+}
+
 impl ChatCardDefaults {
     pub fn validate(&self) -> AppResult<()> {
-        if !(matches!(self.provider.as_str(), "codex" | "jimeng")
+        if !(listed_image_provider(&self.provider)
             || self.provider.starts_with("bowerbird-cloud-image_"))
             || self.provider.len() > 100
             || !self
@@ -133,6 +147,7 @@ enum CardSpec {
         prompt: String,
         #[serde(rename = "mediaType")]
         media_type: String,
+        provider: Option<String>,
         ratio: Option<String>,
         #[serde(default, rename = "referenceAliases")]
         reference_aliases: Vec<String>,
@@ -202,6 +217,27 @@ struct Compilation {
     names: serde_json::Map<String, Value>,
 }
 
+// Workflow outputs start 64 units after their producer. The regular gallery is
+// 260 units wide; a local video uses a 280-unit asset card.
+fn batch_node_rect(node: &Value) -> Rect {
+    let mut rect = workflow_rect(node);
+    if node["kind"] == "generation" || node["kind"] == "comfy-video" {
+        let ratio = node["comfyVideo"]["ratio"]
+            .as_str()
+            .or(node["ratio"].as_str())
+            .and_then(|ratio| ratio.split_once(':'))
+            .and_then(|(w, h)| Some(h.parse::<f64>().ok()? / w.parse::<f64>().ok()?))
+            .filter(|aspect| aspect.is_finite() && *aspect > 0.0)
+            .unwrap_or(1.0);
+        rect.width += 64.0 + 280.0;
+        rect.height = rect.height.max(280.0 * ratio + 32.0);
+        if node["kind"] == "comfy-video" {
+            rect.height = rect.height.max(720.0);
+        }
+    }
+    rect
+}
+
 fn valid_identity(alias: &str, title: &str) -> bool {
     !alias.is_empty()
         && alias.len() <= 40
@@ -265,12 +301,10 @@ fn place_section_groups(
                     widths[member_index % 3].max(note["width"].as_f64().unwrap());
                 heights[member_index / 3] =
                     heights[member_index / 3].max(note["height"].as_f64().unwrap());
-            } else if nodes
-                .iter()
-                .any(|node| node["id"] == *id && node["kind"] == "comfy-video")
-            {
-                widths[member_index % 3] = widths[member_index % 3].max(416.0);
-                heights[member_index / 3] = heights[member_index / 3].max(720.0);
+            } else if let Some(node) = nodes.iter().find(|n| n["id"] == *id) {
+                let rect = batch_node_rect(node);
+                widths[member_index % 3] = widths[member_index % 3].max(rect.width);
+                heights[member_index / 3] = heights[member_index / 3].max(rect.height);
             }
         }
         let width = widths.iter().sum::<f64>() + (widths.len() - 1) as f64 * 96.0 + 144.0;
@@ -393,6 +427,7 @@ const CARD_FIELDS: &[&str] = &[
     "title",
     "prompt",
     "mediaType",
+    "provider",
     "ratio",
     "referenceAliases",
     "seconds",
@@ -430,6 +465,7 @@ fn normalize_card_fields(args: &mut Value) {
                 "title",
                 "prompt",
                 "mediaType",
+                "provider",
                 "ratio",
                 "referenceAliases",
             ],
@@ -534,7 +570,9 @@ fn compile(
             let rows = match (text, rows) {
                 (Some(text), None) => vec![vec![text.clone()]],
                 (None, Some(rows)) => rows.clone(),
-                _ => return Err(invalid()),
+                // Flat tool schemas sometimes produce an empty text placeholder with a table.
+                (Some(text), Some(rows)) if text.is_empty() => rows.clone(),
+                _ => return Err(error("内容卡片须在 text 正文和 rows 表格中选一种；本批未创建卡片")),
             };
             let columns = rows.first().map_or(0, Vec::len);
             if rows.is_empty()
@@ -566,6 +604,7 @@ fn compile(
             CardSpec::Generation {
                 prompt,
                 media_type,
+                provider,
                 ratio,
                 reference_aliases,
                 ..
@@ -585,6 +624,12 @@ fn compile(
                     )
                 }) {
                     return Err(invalid());
+                }
+                if let Some(provider) = provider {
+                    if media_type != "image" || !listed_image_provider(provider) {
+                        return Err(error("请为生图卡选择工具列出的图片生成服务，本批卡片未创建"));
+                    }
+                    node["provider"] = json!(provider);
                 }
                 node["prompt"] = json!(prompt.trim());
                 if media_type == "image" && ratio.as_deref() == Some("21:9") {
@@ -876,9 +921,10 @@ fn compile(
         let mut widths = [340.0f64; 3];
         let mut heights = vec![380.0f64; (cards.len() + 2) / 3];
         for (index, card) in cards.iter().enumerate() {
-            if card.kind == "comfy-video" {
-                widths[index % 3] = widths[index % 3].max(416.0);
-                heights[index / 3] = heights[index / 3].max(720.0);
+            if let Some(node) = nodes.iter().find(|n| n["id"] == card.id) {
+                let rect = batch_node_rect(node);
+                widths[index % 3] = widths[index % 3].max(rect.width);
+                heights[index / 3] = heights[index / 3].max(rect.height);
             }
             if let Some(note) = notes.iter().find(|n| n["id"] == card.id) {
                 widths[index % 3] = widths[index % 3].max(note["width"].as_f64().unwrap());
@@ -1148,8 +1194,15 @@ impl Database {
         if let Some(action) = replay(&tx, conversation, turn, call, args)? {
             return Ok(action);
         }
-        let owner:Option<(String,String,f64,f64,String)>=tx.query_row("SELECT c.project_id,c.thread_id,n.x,n.y,t.card_defaults_json FROM local_chat_conversations c JOIN local_chat_turns t ON t.conversation_id=c.id JOIN canvas_nodes n ON n.id=c.node_id JOIN projects p ON p.id=c.project_id WHERE c.id=?1 AND t.id=?2 AND c.status='running' AND t.status='running' AND p.archived_at IS NULL",params![conversation,turn],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
-        let (project, thread, x, y, raw_defaults) =
+        let owner: Option<(String, String, String, Rect, String)> = tx.query_row(
+            "SELECT c.project_id,c.thread_id,n.id,n.x,n.y,n.width,n.height,t.card_defaults_json
+             FROM local_chat_conversations c JOIN local_chat_turns t ON t.conversation_id=c.id
+             JOIN canvas_nodes n ON n.id=c.node_id JOIN projects p ON p.id=c.project_id
+             WHERE c.id=?1 AND t.id=?2 AND c.status='running' AND t.status='running' AND p.archived_at IS NULL",
+            params![conversation, turn], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?,
+                Rect { x: r.get(3)?, y: r.get(4)?, width: r.get(5)?, height: r.get(6)? }, r.get(7)?))
+        ).optional()?;
+        let (project, thread, source_id, native_rect, raw_defaults) =
             owner.ok_or_else(|| error("本轮对话已结束或项目已关闭，本次未创建卡片"))?;
         let defaults = if raw_defaults == "{}" {
             ChatCardDefaults::default()
@@ -1179,33 +1232,28 @@ impl Database {
         // Batch aliases can only reference newly compiled cards. Append to the latest
         // document in this transaction, preserving every unrelated run and reservation.
         let id = ulid::Ulid::new().to_string();
-        let native_right:f64=tx.query_row("SELECT COALESCE(MAX(x+width),?2) FROM canvas_nodes WHERE project_id=?1 AND hidden_at IS NULL",params![project,x],|r|r.get(0))?;
-        let workflow_right = doc["nodes"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|n| {
-                n["x"].as_f64().map(|x| {
-                    x + if n["kind"] == "comfy-video" {
-                        416.0
-                    } else {
-                        340.0
-                    }
-                })
-            })
-            .fold(x, f64::max);
-        let mut compiled = compile(
-            args,
-            &defaults,
-            &images,
-            (
-                (x + 420.0)
-                    .max(native_right + 80.0)
-                    .max(workflow_right + 80.0),
-                y,
-            ),
-            &id,
-        )?;
+        let mut compiled = compile(args, &defaults, &images, (0.0, 0.0), &id)?;
+        let existing = doc["nodes"].as_array().into_iter().flatten();
+        let source = existing.clone().find(|n| n["id"] == source_id && n["kind"] == "agent")
+            .map(workflow_rect).unwrap_or(native_rect);
+        let mut occupied = visible_obstacles(&tx, &project, &doc, &[&source_id], Some(source))?;
+        occupied.push(source);
+        // Keep earlier generators' output slots clear when another tool call appends cards.
+        occupied.extend(existing.filter(|n| n["kind"] == "generation" || n["kind"] == "comfy-video")
+            .map(batch_node_rect));
+        let mut batch = Rect { x: source.x + source.width + 64.0, y: source.y, width: 0.0, height: 0.0 };
+        for rect in compiled.nodes.iter().map(batch_node_rect).chain(compiled.notes.iter().map(|note| Rect {
+            x: note["x"].as_f64().unwrap(), y: note["y"].as_f64().unwrap(),
+            width: note["width"].as_f64().unwrap(), height: note["height"].as_f64().unwrap(),
+        })) {
+            batch.width = batch.width.max(rect.x + rect.width);
+            batch.height = batch.height.max(rect.y + rect.height);
+        }
+        let (x, y) = near(batch, &occupied, f64::NEG_INFINITY);
+        for item in compiled.nodes.iter_mut().chain(&mut compiled.notes) {
+            item["x"] = json!(item["x"].as_f64().unwrap() + x);
+            item["y"] = json!(item["y"].as_f64().unwrap() + y);
+        }
         for node in &compiled.nodes {
             let image_ports: &[&str] = if node["kind"] == "comfy-video" {
                 &["first-frame", "last-frame"]

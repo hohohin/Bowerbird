@@ -46,14 +46,14 @@ impl ReadFixture {
 fn legacy_ids(db: &Database, folder: Option<&str>, project: Option<&str>, media: Option<&str>, offset: i64, limit: i64, filter: &ConnectionFilter) -> Vec<String> {
     let (condition, mut values) = filter.sql(project, media).unwrap();
     values.extend([folder.map(|v| Value::Text(v.into())).unwrap_or(Value::Null), folder.map(|v| Value::Text(v.into())).unwrap_or(Value::Null), Value::Integer(limit), Value::Integer(offset)]);
-    let gallery = filter.gallery(&condition);
+    let gallery = filter.gallery(&condition, crate::core::generation_gallery::WORKFLOW_GALLERY_CTE);
     let conn = db.conn.lock().unwrap();
     let mut stmt = conn.prepare(&format!("WITH {gallery} SELECT e.id FROM ranked_entries e WHERE e.rank=1 AND (? IS NULL OR e.folder_id=?) ORDER BY lower(e.name),e.id LIMIT ? OFFSET ?")).unwrap();
     stmt.query_map(params_from_iter(values), |r| r.get(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
 }
 fn legacy_counts(db: &Database, project: Option<&str>, media: Option<&str>, filter: &ConnectionFilter) -> Vec<(String, i64)> {
     let (condition, values) = filter.sql(project, media).unwrap();
-    let gallery = filter.gallery(&condition);
+    let gallery = filter.gallery(&condition, crate::core::generation_gallery::WORKFLOW_GALLERY_CTE);
     let conn = db.conn.lock().unwrap();
     let mut stmt = conn.prepare(&format!("WITH {gallery} SELECT f.id,(SELECT COUNT(*) FROM ranked_entries e WHERE e.folder_id=f.id AND e.rank=1) FROM connected_folders f JOIN connected_roots r ON r.id=f.root_id ORDER BY r.rowid,lower(f.name),f.id")).unwrap();
     stmt.query_map(params_from_iter(values), |r| Ok((r.get(0)?,r.get(1)?))).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
@@ -75,7 +75,7 @@ fn legacy_resolve(db: &Database, ids: &[String]) -> Vec<ConnectionEntry> {
 fn legacy_groups(db: &Database, entries: &mut [ConnectionEntry], project: Option<&str>, media: Option<&str>, filter: &ConnectionFilter) {
     if !filter.grouped || entries.is_empty() { return; }
     let (condition,mut values) = filter.sql(project,media).unwrap();
-    let gallery = filter.gallery(&condition);
+    let gallery = filter.gallery(&condition, crate::core::generation_gallery::WORKFLOW_GALLERY_CTE);
     values.extend(entries.iter().map(|entry| Value::Text(entry.id.clone())));
     let placeholders = vec!["?";entries.len()].join(",");
     let rows = {
@@ -179,7 +179,7 @@ fn group_materialization_bounds_work_in_a_large_current_folder() {
     condition.push_str(" AND e.folder_id IN (?)");
     values.push(Value::Text("current".into()));
     values.extend(ids.iter().cloned().map(Value::Text));
-    let gallery=filter.gallery(&condition);
+    let gallery=filter.gallery(&condition, crate::core::generation_gallery::WORKFLOW_GALLERY_CTE);
     let placeholders=vec!["?";ids.len()].join(",");
     let mut outcomes=Vec::new();
     for materialized in [false,true] {

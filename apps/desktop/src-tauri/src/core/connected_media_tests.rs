@@ -387,21 +387,37 @@ fn changed_original_requeues_classification_only_when_enabled() {
 
 #[test]
 fn heic_connection_defers_conversion_until_preview_is_requested() {
-    let f = Fixture::new();
-    let source = f.path.with_extension("heic");
-    let bytes = include_bytes!("../../tests/fixtures/heic/rgb-strips-96.heic");
-    fs::write(&source, bytes).unwrap();
-    let asset = f.db.index_connected_file(&f.paths, &source, None).unwrap();
-    assert_eq!(asset.ext.as_deref(), Some("heic"));
-    assert!(asset.thumb_path.is_none());
-    assert!(!f.paths.root.join("external-previews").exists());
-    let loaded =
-        f.db.ensure_connected_preview(&f.paths, &asset.id)
-            .unwrap()
-            .unwrap();
-    assert_eq!((loaded.width, loaded.height), (Some(96), Some(32)));
-    assert!(image::open(loaded.thumb_path.unwrap()).is_ok());
-    assert_eq!(fs::read(&source).unwrap(), bytes);
+    use crate::core::catalog_browser::CatalogFilter;
+    for ext in ["heic", "HEIF", "HEIC"] {
+        let f = Fixture::new();
+        let dir = f.path.parent().unwrap().join("phone");
+        fs::create_dir(&dir).unwrap();
+        let source = dir.join(format!("photo.{ext}"));
+        let bytes = include_bytes!("../../tests/fixtures/heic/rgb-strips-96.heic");
+        fs::write(&source, bytes).unwrap();
+        let folder = f.db.connect_directory(&dir, None).unwrap();
+        f.db.scan_connection(&f.paths, &folder).unwrap();
+        let ids = f.db.connection_entry_ids(Some(&folder), None, Some("images"), 0, 10).unwrap();
+        assert_eq!(ids.len(), 1);
+        let asset = f.db.read_connection_entries(&ids).unwrap().pop().unwrap().asset;
+        assert_eq!(asset.ext, Some(ext.to_ascii_lowercase()));
+        assert!(asset.thumb_path.is_none());
+        // Also exercise old databases retaining the supplied spelling.
+        f.db.conn.lock().unwrap().execute("UPDATE assets SET ext=?1 WHERE id=?2", rusqlite::params![ext,asset.id]).unwrap();
+        for media in ["all", "images"] {
+            let filter = CatalogFilter { kind:"all".into(), media:media.into(), ..Default::default() };
+            assert_eq!(f.db.catalog_ids(&filter, 0, 10).unwrap(), vec![asset.id.clone()]);
+            assert_eq!(f.db.catalog_overview(&filter,None).unwrap().total, 1);
+            assert_eq!(f.db.connection_folders(None,Some(media)).unwrap()[0].count, 1);
+        }
+        let preview = f.db.ensure_connected_preview(&f.paths,&asset.id).unwrap().unwrap();
+        assert_eq!((preview.width, preview.height), (Some(96), Some(32)));
+        assert!(image::open(preview.thumb_path.unwrap()).is_ok());
+        assert_eq!(preview.store_path, asset.store_path);
+        assert_eq!(preview.id, asset.id);
+        assert!(preview.ext.unwrap().eq_ignore_ascii_case(ext));
+        assert_eq!(fs::read(source).unwrap(),bytes);
+    }
 }
 
 #[test]

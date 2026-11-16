@@ -12,7 +12,7 @@ use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -37,11 +37,13 @@ struct Plan {
 
 // Hidden nodes and archived projects/threads deliberately participate. JSON fields are
 // checked as structured values, never LIKE matches against serialized user text.
-const CANDIDATES: &str = "SELECT a.id, a.store_path, a.thumb_path, a.origin_path FROM assets a WHERE
+const CANDIDATES: &str = "SELECT a.id, a.store_path, a.thumb_path, a.origin_path,
+ COALESCE(a.generation_session_id IN (SELECT json_extract(q.payload,'$.session_id')
+   FROM task_queue q WHERE q.project_id IS NOT ?1 AND json_valid(q.payload)),0) FROM assets a WHERE
  EXISTS(SELECT 1 FROM project_assets p WHERE p.asset_id=a.id AND p.project_id=?1)
  OR EXISTS(SELECT 1 FROM canvas_nodes n WHERE n.asset_id=a.id AND n.project_id=?1)
- OR EXISTS(SELECT 1 FROM task_queue q WHERE q.project_id=?1 AND json_valid(q.payload)
-   AND a.generation_session_id=json_extract(q.payload,'$.session_id'))
+ OR a.generation_session_id IN (SELECT json_extract(q.payload,'$.session_id')
+   FROM task_queue q WHERE q.project_id=?1 AND json_valid(q.payload))
  OR EXISTS(SELECT 1 FROM thread_generation_links l JOIN creative_threads t ON t.id=l.thread_id
    WHERE t.project_id=?1 AND (l.generation_conversation_id=a.generation_session_id OR
      EXISTS(SELECT 1 FROM generation_conversations g WHERE g.session_id=a.generation_session_id AND g.conversation_id=l.generation_conversation_id)))
@@ -49,11 +51,10 @@ const CANDIDATES: &str = "SELECT a.id, a.store_path, a.thumb_path, a.origin_path
    OR EXISTS(SELECT 1 FROM cloud_agent_artifact_assets f WHERE f.run_id=r.run_id AND f.asset_id=a.id)))
  ORDER BY a.id";
 
-fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>, check: &dyn Fn() -> AppResult<()>) -> AppResult<bool> {
-    check()?;
+fn linked(conn: &Connection, project: &str, id: &str) -> AppResult<bool> {
     // local_agent_runs.target_asset_id CASCADE would destroy execution evidence: always protect.
     // Global collections and saved prompt bindings are independent uses, not project ownership.
-    let linked: bool = conn.query_row("SELECT
+    let mut stmt = conn.prepare_cached("SELECT
       EXISTS(SELECT 1 FROM external_assets WHERE asset_id=?2) OR
       EXISTS(SELECT 1 FROM connected_entries WHERE asset_id=?2) OR
       EXISTS(SELECT 1 FROM project_assets WHERE asset_id=?2 AND project_id<>?1) OR
@@ -70,12 +71,26 @@ fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>, ch
         EXISTS(SELECT 1 FROM cloud_agent_artifact_assets f WHERE f.run_id=r.run_id AND f.asset_id=?2))) OR
       EXISTS(SELECT 1 FROM cloud_agent_runs r JOIN thread_agent_links l ON l.run_id=r.run_id
         JOIN creative_threads t ON t.id=l.thread_id WHERE t.project_id<>?1 AND (r.final_asset_id=?2 OR
-        EXISTS(SELECT 1 FROM cloud_agent_artifact_assets f WHERE f.run_id=r.run_id AND f.asset_id=?2))) OR
-      EXISTS(SELECT 1 FROM task_queue q JOIN assets a ON a.id=?2 WHERE q.project_id IS NOT ?1
-        AND json_valid(q.payload) AND a.generation_session_id=json_extract(q.payload,'$.session_id'))",
-      params![project, id], |r| r.get(0))?;
-    if linked {
-        return Ok(true);
+        EXISTS(SELECT 1 FROM cloud_agent_artifact_assets f WHERE f.run_id=r.run_id AND f.asset_id=?2)))")?;
+    let linked: bool = stmt.query_row(params![project, id], |r| r.get(0))?;
+    Ok(linked)
+}
+
+type Candidate = (String, Option<String>, Option<String>, Option<String>);
+
+#[cfg(test)]
+thread_local! { static PARSED_REFERENCE_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+fn referenced_assets(conn: &Connection, project: &str, candidates: &[Candidate],
+    check: &dyn Fn() -> AppResult<()>) -> AppResult<HashSet<String>> {
+    let mut protected = HashSet::new();
+    if candidates.is_empty() { return Ok(protected); }
+    let ids: HashSet<&str> = candidates.iter().map(|c| c.0.as_str()).collect();
+    let mut paths = HashMap::<String, Vec<&str>>::new();
+    for (id, store, _, _) in candidates {
+        if let Some(path) = store {
+            paths.entry(path_key(Path::new(path))).or_default().push(id);
+        }
     }
     // Input references in retained audit rows remain protected even inside the deleted project.
     // Other projects' payloads/snapshots/drafts may reference an asset without project_assets.
@@ -93,41 +108,44 @@ fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>, ch
         "SELECT payload FROM task_queue WHERE project_id IS NOT ?1",
         "SELECT payload FROM task_queue WHERE project_id=?1 AND NOT json_valid(payload)",
         "SELECT json_object('references',json_extract(payload,'$.references'),'parent',json_extract(payload,'$.parent_asset_path')) FROM task_queue WHERE project_id=?1 AND json_valid(payload)",
-        "SELECT payload FROM analyses WHERE kind='generation_meta' AND asset_id<>?2 AND ?1 IS NOT NULL",
+        "SELECT payload,asset_id FROM analyses WHERE kind='generation_meta' AND ?1 IS NOT NULL",
     ];
     for sql in json_sources {
         check()?;
         let mut stmt = conn.prepare(sql)?;
-        stmt.raw_bind_parameter(1, project)?;
-        if stmt.parameter_count() > 1 {
-            stmt.raw_bind_parameter(2, id)?;
-        }
-        let mut rows = stmt.raw_query();
+        let owned = stmt.column_count() == 2;
+        let mut rows = stmt.query([project])?;
         while let Some(row) = rows.next()? {
             check()?;
             let raw: String = row.get(0)?;
-            // Unknown/malformed persisted reference data is not evidence of exclusivity.
+            let owner: Option<String> = if owned { row.get(1)? } else { None };
+            #[cfg(test)]
+            PARSED_REFERENCE_ROWS.set(PARSED_REFERENCE_ROWS.get() + 1);
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
-                return Ok(true);
+                // An asset's own generation metadata is excluded even if malformed.
+                protected.extend(ids.iter().copied().filter(|id| Some(*id) != owner.as_deref()).map(str::to_owned));
+                if protected.len() == ids.len() { return Ok(protected); }
+                continue;
             };
-            fn contains(value: &serde_json::Value, id: &str, path: Option<&str>) -> bool {
+            let mut pending = vec![&value];
+            while let Some(value) = pending.pop() {
                 match value {
-                    serde_json::Value::String(s) => {
-                        s == id
-                            || path
-                                .is_some_and(|p| path_key(Path::new(s)) == path_key(Path::new(p)))
+                    serde_json::Value::String(text) => {
+                        if ids.contains(text.as_str()) && Some(text.as_str()) != owner.as_deref() {
+                            protected.insert(text.clone());
+                        }
+                        if let Some(matches) = paths.get(&path_key(Path::new(text))) {
+                            protected.extend(matches.iter().copied().filter(|id| Some(*id) != owner.as_deref()).map(str::to_owned));
+                        }
                     }
-                    serde_json::Value::Array(a) => a.iter().any(|v| contains(v, id, path)),
-                    serde_json::Value::Object(o) => o.values().any(|v| contains(v, id, path)),
-                    _ => false,
+                    serde_json::Value::Array(values) => pending.extend(values),
+                    serde_json::Value::Object(fields) => pending.extend(fields.values()),
+                    _ => {}
                 }
-            }
-            if contains(&value, id, store) {
-                return Ok(true);
             }
         }
     }
-    Ok(false)
+    Ok(protected)
 }
 
 fn path_key(path: &Path) -> String {
@@ -194,24 +212,32 @@ fn plan_with_progress(conn: &Connection, paths: &LibraryPaths, project: &str,
                 r.get::<_, Option<String>>(1)?,
                 r.get::<_, Option<String>>(2)?,
                 r.get::<_, Option<String>>(3)?,
+                r.get::<_, bool>(4)?,
             ))
         })?;
     let mut candidates = Vec::new();
+    let mut shared = 0;
     for row in candidate_rows {
         check()?;
-        candidates.push(row?);
+        let (id, store, thumb, origin, shared_session) = row?;
+        if kind == "builtin" || shared_session || linked(conn, project, &id)? {
+            shared += 1;
+        } else {
+            candidates.push((id,store,thumb,origin));
+        }
     }
     let mut out = Plan {
-        impact: ExclusiveDeleteImpact::default(),
+        impact: ExclusiveDeleteImpact { preserved_shared_count: shared, ..Default::default() },
         ids: vec![],
         files: BTreeSet::new(),
     };
     let mut path_owners: Option<HashMap<String, BTreeSet<String>>> = None;
     let total = candidates.len();
+    let references = referenced_assets(conn, project, &candidates, check)?;
     for (index, (id, store, thumb, origin)) in candidates.into_iter().enumerate() {
         check()?;
         report("assets", index, total);
-        if kind == "builtin" || protected(conn, project, &id, store.as_deref(), check)? {
+        if references.contains(&id) {
             out.impact.preserved_shared_count += 1;
             continue;
         }
@@ -356,7 +382,18 @@ impl Database {
         loop {
             check()?;
             match self.conn.try_lock() {
-                Ok(conn) => return plan_with_progress(&conn, paths, project, check, report).map(|p| p.impact),
+                Ok(conn) => {
+                    // A separate WAL read transaction pins the preview snapshot while allowing
+                    // normal queries and writes on the primary connection during the scan.
+                    if let Some(path) = conn.path().filter(|path| !path.is_empty()) {
+                        let reader = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+                        let tx = reader.unchecked_transaction()?;
+                        drop(conn);
+                        return plan_with_progress(&tx, paths, project, check, report).map(|p| p.impact);
+                    }
+                    // Private in-memory databases have no second connection to open.
+                    return plan_with_progress(&conn, paths, project, check, report).map(|p| p.impact);
+                }
                 Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_millis(20)),
                 Err(_) => return Err(AppError::Other("无法读取素材库".into())),
             }
@@ -368,7 +405,7 @@ impl Database {
         paths: &LibraryPaths,
         project: &str,
     ) -> AppResult<ExclusiveDeleteImpact> {
-        plan(&self.conn.lock().unwrap(), paths, project).map(|p| p.impact)
+        self.project_exclusive_impact_progress(paths, project, &|| Ok(()), &mut |_, _, _| {})
     }
 
     /// Run before workers start. No recursive directory removal; an interrupted operation
@@ -712,6 +749,63 @@ mod tests {
         assert_eq!(impact.exclusive_asset_count, 0);
         assert_eq!(impact.preserved_shared_count, 1);
     }
+    #[test]
+    #[ignore = "synthetic deletion reference-scan scaling and foreground read timing"]
+    fn deletion_preview_scales_with_reference_rows_once() {
+        use std::time::Instant;
+        let (db, paths) = fixture();
+        for i in 0..1200 {
+            db.conn.lock().unwrap().execute("INSERT INTO task_queue(id,kind,payload,status,created_at,project_id)
+                VALUES(?1,'generation','{}','done',1,'other')", [format!("task{i}")]).unwrap();
+        }
+        for (from,to) in [(0,4),(4,100)] {
+            for i in from..to { asset(&db,&paths,&format!("asset{i}")); }
+            let start = Instant::now();
+            let mut lock_ms = None;
+            let mut read_us = None;
+            PARSED_REFERENCE_ROWS.set(0);
+            let result = db.project_exclusive_impact_progress(&paths,"p",&|| Ok(()),&mut |phase,_,_| {
+                if phase == "candidates" { lock_ms = Some(start.elapsed().as_secs_f64()*1000.); }
+                if phase == "paths" && read_us.is_none() {
+                    let reading = Instant::now();
+                    db.get_asset("asset0").unwrap().unwrap();
+                    read_us = Some(reading.elapsed().as_micros());
+                }
+            }).unwrap();
+            assert_eq!(result.exclusive_asset_count,to);
+            println!("delete candidates={to} parsed_rows={} before_main_lock_release_ms={:.2} foreground_read_us={} elapsed_ms={:.2}",
+                PARSED_REFERENCE_ROWS.get(),lock_ms.unwrap(),read_us.unwrap(),start.elapsed().as_secs_f64()*1000.);
+            assert_eq!(PARSED_REFERENCE_ROWS.get(),1200);
+        }
+    }
+    #[test]
+    fn preview_uses_one_snapshot_and_rechecks_new_references_on_confirm() {
+        let (db, paths) = fixture();
+        let file = asset(&db, &paths, "late-link");
+        let mut inserted = false;
+        let impact = db.project_exclusive_impact_progress(&paths, "p", &|| Ok(()), &mut |phase, _, _| {
+            if phase == "paths" && !inserted {
+                assert!(db.conn.try_lock().is_ok(), "file checks must release the main DB connection");
+                db.add_assets_to_project("other", &["late-link".into()]).unwrap();
+                inserted = true;
+            }
+        }).unwrap();
+        assert!(inserted);
+        assert_eq!(impact.exclusive_asset_ids, ["late-link"]);
+        assert!(db.delete_project_exclusive(&paths, "p", &impact.confirmation).is_err());
+        assert!(file.exists());
+        assert_eq!(db.project_exclusive_impact(&paths, "p").unwrap().preserved_shared_count, 1);
+    }
+    #[test]
+    fn invalid_generation_meta_protects_every_asset_except_its_owner() {
+        let (db, paths) = fixture();
+        for id in ["a","b"] { asset(&db,&paths,id); }
+        db.conn.lock().unwrap().execute("INSERT INTO analyses(id,asset_id,kind,payload) VALUES('m1','a','generation_meta','broken')", []).unwrap();
+        assert_eq!(db.project_exclusive_impact(&paths,"p").unwrap().exclusive_asset_ids, ["a"]);
+        db.conn.lock().unwrap().execute("INSERT INTO analyses(id,asset_id,kind,payload) VALUES('m2','b','generation_meta','broken')", []).unwrap();
+        assert_eq!(db.project_exclusive_impact(&paths,"p").unwrap().preserved_shared_count, 2);
+    }
+
     #[test]
     fn managed_keep_preserves_exclusive_shared_and_missing_assets() {
         let (db, paths) = fixture();

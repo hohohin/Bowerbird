@@ -72,10 +72,12 @@ export function FileTaskStatusPanel() {
     void changeFileTask(action, id).catch(error => notifyError(error, "文件任务状态未更新，请查看进度后重试。"));
   };
   return <>
-    <button type="button" className="app-modal-button fixed bottom-3 right-3 z-40 border border-edge bg-panel"
-      aria-label="查看文件任务" onClick={() => setExpanded(true)}>
-      文件任务 · {current ? `${current.completed}/${current.total}` : `${tasks.length} 条结果`}
-    </button>
+    <div className="fixed bottom-3 right-3 z-40">
+      <button type="button" className="app-modal-button border border-edge bg-panel"
+        aria-label="查看文件任务" onClick={() => setExpanded(true)}>
+        文件任务 · {current ? `${current.completed}/${current.total}` : `${tasks.length} 条结果`}
+      </button>
+    </div>
     {expanded && <ModalShell title="文件任务" onClose={() => setExpanded(false)} footer={
       <button type="button" className="app-modal-button" onClick={() => setExpanded(false)}>
         {current ? "后台继续" : "关闭"}

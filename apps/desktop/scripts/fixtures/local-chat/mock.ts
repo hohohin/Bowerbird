@@ -100,18 +100,20 @@ export function setDelayReply(value: boolean) { controls.delayReply = value; cha
 export function releaseReplies() { pendingReplies.splice(0).forEach(resolve => resolve()); changed(); }
 export async function invoke(command: string, args: any = {}) {
   if (!command.startsWith("plugin:event")) { calls.push({ command, args: command === "local_chat_dsh_setup" ? { mode: args.mode } : clone(args) }); if (calls.length > 100) calls.shift(); }
+  if (command === "local_chat_dsh_account") return { state: "signedOut", modelConfigured: true };
   if (command === "local_chat_dsh_status" || command === "local_chat_dsh_setup") {
     if (controls.fault === "dsh-status") throw new Error("DSH 状态暂不可用，请重试。");
     if (command === "local_chat_dsh_setup") {
       await new Promise(resolve => setTimeout(resolve, 600));
       if (controls.fault === "dsh-setup") throw new Error("DSH 连接未完成，请检查服务后重试。");
-      if (args.mode !== "local") throw new Error("只支持连接本机 DSH。");
+      if (args.mode !== "local" && args.mode !== "auto") throw new Error("只支持连接本机 DSH。");
       database.settings.dshLocalReady = true;
-      if (args.mode === "local") database.settings.dshLocalUrl = args.url;
+      database.settings.dshLocalMode = args.mode;
+      database.settings.dshLocalUrl = args.mode === "local" ? args.url : "http://127.0.0.1:3082";
       save();
     }
     const localAvailable = database.settings.dshLocalReady === true, managedAvailable = database.settings.dshManagedReady === true;
-    return { localAvailable, managedAvailable, localReason: localAvailable ? null : "请先连接本机 DSH。", managedReason: managedAvailable ? null : "请先准备 DSH。", localUrl: database.settings.dshLocalUrl ?? "http://127.0.0.1:3080" };
+    return { localAvailable, managedAvailable, localMode: database.settings.dshLocalMode, localReason: localAvailable ? null : "请先连接本机 DSH。", managedReason: managedAvailable ? null : "请先准备 DSH。", localUrl: database.settings.dshLocalUrl ?? "http://127.0.0.1:3080" };
   }
   if (command === "local_chat_models") {
     if (controls.fault === "models") throw new Error("Codex 模型列表暂时无法读取，请重试。");
@@ -130,6 +132,7 @@ export async function invoke(command: string, args: any = {}) {
   if (command === "plugin:event|emit") { emit(args.event, args.payload); return null; }
   if (command === "visual_profile_list") return [];
   if (command === "local_chat_list") { if (controls.fault === "read") throw new Error("synthetic database C:\\private\\chat.db failed"); return Object.values(database.conversations).filter(chat => chat.projectId === args.projectId).sort((a, b) => b.updatedAt - a.updatedAt).map(summary); }
+  if (command === "local_chat_revision") return database.conversations[args.conversationId]?.revision ?? null;
   if (command === "local_chat_get") { if (controls.fault === "read") throw new Error("synthetic database C:\\private\\chat.db failed"); return clone(database.conversations[args.conversationId] ?? null); }
   if (command === "local_chat_new_on_card") {
     const old = database.conversations[args.conversationId];

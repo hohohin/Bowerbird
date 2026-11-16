@@ -22,7 +22,7 @@ async function reset(zoom = 1) {
         payloadJson: JSON.stringify({ schema_version: 1, text: "分区", note_type: "section", cells: [], member_ids: ["inside"] }) },
     ];
     snapshot.groups = []; snapshot.groupItems = []; snapshot.edges = [];
-    snapshot.view = { ...snapshot.view, panX: 0, panY: 100, zoom };
+    snapshot.view = { ...snapshot.view, panX: zoom === 0.1 ? 320 : 0, panY: 100, zoom };
     sessionStorage.setItem("reference-fixture", JSON.stringify(snapshot));
   }, zoom);
   await page.reload();
@@ -80,6 +80,43 @@ try {
   await page.evaluate(() => window.save()); await page.reload();
   await section.waitFor();
   assert.deepEqual((await snapshot()).nodes.find(node => node.id === "section"), persisted);
+  const title = page.locator('[data-card-name="section"] input');
+  for (const zoom of [1, 0.5, 0.1]) {
+    await reset(zoom);
+    const screenFont = await title.evaluate(input => {
+      const rect = input.getBoundingClientRect();
+      return parseFloat(getComputedStyle(input).fontSize) * rect.height / input.offsetHeight;
+    });
+    assert.ok(Math.abs(screenFont - (zoom === 1 ? 16 : 14)) < 0.3, `zoom ${zoom}: title ${screenFont}px`);
+  }
+  await title.fill("戏班片段");
+  await title.press("Enter");
+  await title.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "分区颜色" }).click();
+  await page.getByRole("menuitemradio", { name: "绿色" }).click();
+  const storedColor = () => JSON.parse(window.snapshot().nodes.find(node => node.id === "section").payloadJson).section_color;
+  await page.waitForFunction(storedColor);
+  assert.equal(await page.evaluate(storedColor), "#347b53");
+  const sectionFill = () => section.evaluate(el => getComputedStyle(el, "::before").backgroundColor);
+  const fill = await sectionFill();
+  await page.getByRole("button", { name: "撤销画布操作", exact: true }).click();
+  await page.waitForFunction(() => !JSON.parse(window.snapshot().nodes.find(node => node.id === "section").payloadJson).section_color);
+  assert.notEqual(await sectionFill(), fill);
+  await title.click({ button: "right" });
+  await page.getByRole("menuitem", { name: "分区颜色" }).click();
+  await page.getByRole("menuitemradio", { name: "绿色" }).click();
+  await page.waitForFunction(storedColor);
+  await page.evaluate(() => window.save()); await page.reload(); await title.waitFor();
+  assert.equal(await title.inputValue(), "戏班片段");
+  assert.equal(await page.evaluate(storedColor), "#347b53");
+  assert.equal(await sectionFill(), fill);
+  const frame = await section.boundingBox();
+  await page.mouse.click(frame.x + frame.width - 5, frame.y + frame.height - 5, { button: "right" });
+  await page.getByRole("menuitem", { name: "分区颜色" }).click();
+  assert.equal(await page.getByRole("menuitemradio", { name: "绿色" }).getAttribute("aria-checked"), "true");
   assert.deepEqual(errors, []);
-  console.log("PASS all four section corners: anchored geometry at 100%/50%, minimum size, membership, unchanged cards, cancellation and reload.");
+  console.log("PASS section resize, members and reload; readable titles at 100%/50%/10%, title and frame menus, rename, color persistence and undo.");
+} catch (error) {
+  console.error("Canvas menus:", await page.locator('[role="menu"]').allTextContents(), "page errors:", errors);
+  throw error;
 } finally { await browser.close(); await server.close(); }

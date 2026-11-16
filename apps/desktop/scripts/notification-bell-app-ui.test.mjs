@@ -24,6 +24,7 @@ try {
   const account = await page.locator('.topbar-account-trigger').boundingBox();
   assert.ok(slot.x + slot.width <= bellBox.x + 1 && bellBox.x + bellBox.width <= account.x + 1, 'bell preserves update slot and sits before Bcoin');
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
+  await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '素材库' }).click();
   const composer = page.getByRole('region', { name: '素材库创作', exact: true });
   await composer.waitFor();
   assert.equal(await page.locator('.library-home-activity').count(), 0, 'former task block removed from actual library');
@@ -37,7 +38,7 @@ try {
   const latest = page.getByRole('dialog', { name: '新通知' });
   await latest.waitFor();
   assert.equal(await latest.getByRole('listitem').count(), 1);
-  assert.equal(await page.locator('.app-toast').count(), 0, 'real producer uses generation channel, avoiding duplicate Toast');
+  assert.equal(await page.locator('.app-toast').filter({ hasText: '图片生成完成' }).count(), 0, 'completion has no duplicate Toast');
   await latest.getByRole('button', { name: /快速生成.*查看画板/ }).click();
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   await page.locator(`[data-canvas-node-id="${expected.promptId}"]`).waitFor();
@@ -46,6 +47,7 @@ try {
   assert.equal(await latest.count(), 0, 'notification closes before destination is shown');
   assert.equal(await bell.count(), 1, 'canvas keeps the same global task entry');
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
+  await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '素材库' }).click();
   await composer.waitFor();
   assert.ok((await editor.innerText()).includes('继续创作的草稿'));
   await bell.click();

@@ -34,6 +34,7 @@ export function planAutomaticConnection(nodes: WorkflowNode[], outputs: Automati
   const acceptedMedia = automaticInputMedia(target);
   const inputs = Object.fromEntries(Object.entries(target.inputs).map(([id, bindings]) => [id, [...bindings]]));
   const bindings: AutomaticConnectionPlan["bindings"] = [];
+  const rejectedMedia = new Set<string>();
   let compatible = false;
   for (const output of outputs) {
     const source = output.binding;
@@ -44,8 +45,11 @@ export function planAutomaticConnection(nodes: WorkflowNode[], outputs: Automati
     if (source.nodeId && (!producer || !workflowOutputs(producer).some(port => port.id === source.portId && port.type === output.type)))
       return fail("来源卡片或输出已不存在");
     const knownMedia = output.media ? (Array.isArray(output.media) ? output.media : [output.media])
-      : producer?.kind === "voice" ? ["audio"] : producer?.kind === "comfy-video" || producer?.kind === "generation" && producer.generation?.media === "video" ? ["video"] : undefined;
-    if (target.kind !== "trigger" && output.type === "image" && knownMedia && !knownMedia.some(media => acceptedMedia.includes(media as AutomaticMedia))) continue;
+      : producer?.kind === "director3d" ? ["video"] : producer?.kind === "voice" ? ["audio"] : producer?.kind === "comfy-video" || producer?.kind === "generation" && producer.generation?.media === "video" ? ["video"] : undefined;
+    if (target.kind !== "trigger" && output.type === "image" && knownMedia && !knownMedia.some(media => acceptedMedia.includes(media as AutomaticMedia))) {
+      for (const media of knownMedia) rejectedMedia.add(media);
+      continue;
+    }
     let candidates = workflowInputs(target).filter(port => port.type === output.type);
     if (target.kind === "trigger") {
       const session = source.canvasNodeId && source.cellId === "image" && output.type === "image";
@@ -80,6 +84,16 @@ export function planAutomaticConnection(nodes: WorkflowNode[], outputs: Automati
     bindings.push({ inputId: port.id, binding });
     // Completion is one event per producer, regardless of its output count.
     if (target.kind === "trigger") break;
+  }
+  if (!compatible && target.kind === "comfy-video") {
+    if (target.comfyVideo?.mode === "text") {
+      if (rejectedMedia.has("image")) return fail("H3 的「文生视频」接收文本。要连接图片，请切换到「单图」或「首尾帧」。");
+      return fail("H3 的「文生视频」接收文本，请连接提示词来源。");
+    }
+    const frame = target.comfyVideo?.mode === "reference" ? "参考图" : "首帧或尾帧";
+    if (rejectedMedia.has("video")) return fail(`H3 的${frame}需要图片。请先从视频中截取所需画面，再连接截取的图片。`);
+    if (rejectedMedia.has("audio")) return fail(`H3 不支持音频输入。请连接图片作为${frame}，或连接文本作为提示词。`);
+    return fail(`H3 接收图片作为${frame}，也可以连接文本作为提示词。`);
   }
   if (!compatible) return fail("这张卡片不能接收来源内容");
   try { assertWorkflowAcyclic(nodes.map(node => node.id === targetId ? { ...node, inputs } : node), targetId); }

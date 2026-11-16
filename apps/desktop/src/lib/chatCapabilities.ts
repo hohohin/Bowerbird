@@ -1,6 +1,6 @@
 import { createStore } from "zustand";
 import { useStore } from "../store";
-import { localChat, chatProviderUnavailable, type ChatProvider, type ChatDshSetup } from "./localChat";
+import { localChat, chatProviderUnavailable, type ChatDshAccount, type ChatProvider, type ChatDshSetup } from "./localChat";
 import { generationProviderIssue, type GenerationAvailabilityState, type ProviderIssue } from "./generationAvailability";
 import { canUseByo, effectivePolicy } from "./entitlement";
 import type { AuthSnapshot } from "./types";
@@ -15,13 +15,13 @@ function capability<T>(load: () => Promise<T>, fallback: string) {
     () => ({ key: null, value: null, error: null, pending: false }),
   );
   let revision = 0;
-  function check(key: Scope, refresh = false) {
+  function check(key: Scope, refresh = false, read = load) {
     const current = store.getState();
-    if (current.key === key && (!refresh || current.pending || key === null)) return;
+    if (current.key === key && (!refresh || (current.pending && read === load) || key === null)) return;
     const request = ++revision;
     store.setState({ key, value: key === current.key ? current.value : null, pending: key !== null, error: null });
     if (key === null) return;
-    void load().then(value => {
+    void read().then(value => {
       if (request === revision) store.setState({ value, pending: false });
     }).catch(reason => {
       if (request === revision) store.setState({ value: null, error: userErrorMessage(reason, fallback), pending: false });
@@ -35,7 +35,23 @@ function capability<T>(load: () => Promise<T>, fallback: string) {
 }
 
 export const codexModelCatalog = capability(localChat.models, "Codex 模型列表读取失败，请重试。");
-export const chatDshStatus = capability(localChat.dshStatus, "DSH 状态暂不可用，请重试。");
+export function dshNeedsConfiguration(account: ChatDshAccount) {
+  return account.state === "notInstalled" || (account.state !== "verified" && account.modelConfigured === false);
+}
+async function readDshStatus(knownAccount?: ChatDshAccount) {
+  const status = await localChat.dshStatus();
+  if (!status.localAvailable || status.localMode !== "auto") return status;
+  const account = knownAccount ?? await localChat.dshAccount("status");
+  if (dshNeedsConfiguration(account)) {
+    return { ...status, localAvailable: false, localReason: "请在模型设置中完成本机 DSH 登录授权或配置可用模型。" };
+  }
+  return status;
+}
+export const chatDshStatus = capability(readDshStatus, "DSH 状态暂不可用，请重试。");
+export function publishDshAccount(account: ChatDshAccount) {
+  // Settings has a newer account result than any pending startup probe.
+  chatDshStatus.check("local", true, () => readDshStatus(account));
+}
 export const chatQuote = capability(localChat.quote, "Cloud 对话报价暂不可用，请重试。");
 
 /** The selector, send button and workflow must use the same active chat service. */
@@ -49,7 +65,8 @@ export function chatProviderAccessIssue(provider: ChatProvider, state: Omit<Gene
     localAllowed: canUseByo(entitlement), codexReady: !!state.codexHealth?.ok, balance: balances ? balances.daily + balances.sub + balances.topup : 0,
   }, quote.value, dsh.value);
   if (!message) return null;
-  return { message, ...(provider === "dsh-cloud" && auth?.cloud_available && !auth.logged_in || provider === "dsh-local" && !canUseByo(entitlement) ? { settings: "account" as const } : {}) };
+  if (provider === "dsh-local") return { message, settings: canUseByo(entitlement) ? "dsh" : "account" };
+  return { message, ...(provider === "dsh-cloud" && auth?.cloud_available && !auth.logged_in ? { settings: "account" as const } : {}) };
 }
 
 function checkChatCapabilities(refresh = false) {
@@ -70,8 +87,16 @@ export function startChatCapabilityChecks() {
   });
 }
 
+let connecting: { mode: ChatDshSetup["mode"]; result: ReturnType<typeof localChat.dshSetup> } | undefined;
 export async function setupChatDsh(input: ChatDshSetup) {
-  const status = await localChat.dshSetup(input);
-  chatDshStatus.replace("local", status);
-  return status;
+  if (connecting) {
+    if (input.mode === "auto" && connecting.mode === "auto") return connecting.result;
+    throw new Error("本机 DSH 正在连接，请稍后重试。");
+  }
+  const result = localChat.dshSetup(input).then(status => {
+    chatDshStatus.replace("local", status);
+    return status;
+  });
+  connecting = { mode: input.mode, result };
+  try { return await result; } finally { connecting = undefined; }
 }

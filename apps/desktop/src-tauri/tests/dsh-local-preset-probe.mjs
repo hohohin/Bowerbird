@@ -19,6 +19,7 @@ const { default: SessionStore } = await load("dsh-session");
 const { default: SessionPersistence } = await load("dsh-session-persistence-jsonl");
 const { default: SystemPrompt } = await load("dsh-system-prompt");
 const { default: ToolRuntime } = await load("dsh-tools");
+const { default: Skills } = await load("dsh-skill");
 const { default: AgentRegistry } = await load("dsh-agent");
 const { default: AgentLoop } = await load("dsh-agent-loop");
 const { default: AgentPresets } = await load("dsh-agent-presets");
@@ -30,6 +31,8 @@ const tool = JSON.parse(await readFile(join(here, "../../../cloud/supabase/funct
 const root = await mkdtemp(join(tmpdir(), "bowerbird-dsh-probe-"));
 const preset = join(root, "fixture");
 await mkdir(preset);
+await mkdir(join(root, "skills", "fixture-card"), { recursive: true });
+await writeFile(join(root, "skills", "fixture-card", "SKILL.md"), "---\nname: fixture-card\ndescription: Name the test card.\n---\nUse the title Orchid-731.\n");
 const received = [];
 const server = createServer(async (request, response) => {
   let raw = "";
@@ -44,6 +47,8 @@ const connection = { endpoint: `http://127.0.0.1:${server.address().port}/cards`
 await writeFile(join(preset, "bowerbird-tools.mjs"), `const connection=${JSON.stringify(connection)};\nconst tool=${JSON.stringify(tool)};\n${source}`);
 await writeFile(join(preset, "agent.cordis.yml"), JSON.stringify([
   { id: "persona", name: "@deepseek-ai/dsh-persona", config: { text: "Only create requested cards.", complete: true, includeRuntimeContext: false } },
+  { id: "skill-filesystem", name: "@deepseek-ai/dsh-skill-filesystem", config: { includeDefaultRoots: false, customSkillDirs: [join(root, "skills")] } },
+  { id: "tool-skill", name: "@deepseek-ai/dsh-tool-skill" },
   { id: "cards", name: "./bowerbird-tools.mjs" },
 ]));
 let ctx = new Context();
@@ -52,9 +57,10 @@ let requests = 0;
 class FixtureModel extends LlmAdapter {
   async *stream(options) {
     assert.equal(options.provider, "fixture");
-    assert.deepEqual(options.tools.map(tool => tool.name), ["create_canvas_cards"]);
+    assert.deepEqual(options.tools.map(tool => tool.name).sort(), ["create_canvas_cards", "skill"]);
     requests++;
     if (requests === 1) {
+      assert.ok(JSON.stringify(options.messages).includes("Use the title Orchid-731."));
       yield { type: "block-start", index: 0, blockType: "tool-call" };
       yield { type: "tool-call-delta", index: 0, id: "fixture-call", name: "create_canvas_cards", argumentsDelta: JSON.stringify({ cards: [{ id: "text", kind: "content", title: "测试", text: "fixture" }] }) };
       yield { type: "finish", reason: { kind: "tool-calls" } };
@@ -74,6 +80,7 @@ try {
   await ctx.plugin(SessionPersistence, { root: join(root, "sessions"), compression: "none" });
   await ctx.plugin(SystemPrompt, { persona: "" });
   await ctx.plugin(ToolRuntime);
+  await ctx.plugin(Skills);
   await ctx.plugin(AgentRegistry);
   await ctx.plugin(AgentLoop, { agents: [] });
   await ctx.plugin(UserQuestions);
@@ -91,9 +98,9 @@ try {
   const created = await rpc("session.create", { sessionId: connection.session, cwd: root, agentPreset: "fixture" });
   assert.equal(created.agentPreset, "fixture");
   const agent = ctx.agents.get(connection.session);
-  assert.deepEqual(ctx.tools.schemas(agent).map(tool => tool.name), ["create_canvas_cards"]);
+  assert.deepEqual(ctx.tools.schemas(agent).map(tool => tool.name).sort(), ["create_canvas_cards", "skill"]);
   assert.deepEqual(ctx.tools.schemas().map(tool => tool.name), ["dangerous_global"]);
-  assert.deepEqual(await rpc("session.prompt", { sessionId: connection.session, mode: "queue", content: [{ type: "text", text: "Create a text card." }] }), { accepted: true });
+  assert.deepEqual(await rpc("session.prompt", { sessionId: connection.session, mode: "queue", content: [{ type: "text", text: "/fixture-card Create a text card." }] }), { accepted: true });
   await agent.whenIdle();
   assert.equal(requests, 2);
   assert.equal(received.length, 1, JSON.stringify(agent.session.events.filter(event => event.type === "tool/result")));

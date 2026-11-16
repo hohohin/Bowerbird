@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ configFile: false, cacheDir: '.tmp/workflow-h3/vite', server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } });
+const server = await createServer({ optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, cacheDir: '.tmp/workflow-h3/vite', server: { host: '127.0.0.1', port: 17982, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
@@ -67,7 +67,7 @@ try {
   assert.equal(await card.getByLabel('首帧输入', { exact: true }).count(), 1);
   assert.equal(await card.getByLabel('尾帧输入', { exact: true }).count(), 1);
   assert.equal(await card.getByRole('button', { name: '添加上游', exact: true }).count(), 1);
-  assert.equal(await card.evaluate(el => parseFloat(el.style.width)), 416);
+  assert.equal(await card.evaluate(el => parseFloat(el.style.width)), 320);
   // Actual slot drop must replace the first frame, not create a generic image reference.
   await page.evaluate(async () => (await import('/src/lib/dragPayload.ts')).setDragAssets(['c']));
   await card.getByLabel('首帧输入', { exact: true }).dispatchEvent('drop');
@@ -75,6 +75,23 @@ try {
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0].inputs['first-frame'][0].assetId === 'c');
   await page.reload(); await card.waitFor(); await mock();
   assert.equal(await card.getByLabel('H3 时长').inputValue(), '6');
+  // Switch the persisted H3 card back to a remote supplier, then return to H3 on the same card.
+  const selectModel = async key => {
+    await card.getByTitle('选择视频模型', { exact: true }).click();
+    await menu.locator(`[data-model-key="${key}"]`).click();
+  };
+  await selectModel('cloud:seedance2.5');
+  await card.getByLabel('视频时长（秒）').fill('8');
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0].generation?.videoOptions?.duration === 8);
+  assert.equal(await card.getByLabel('H3 时长').count(), 0);
+  assert.equal((await saved()).prompt, '镜头推进');
+  await selectModel('local:h3');
+  assert.equal(await card.getByLabel('H3 时长').inputValue(), '6');
+  assert.match(await card.getByLabel('H3 分辨率', { exact: true }).innerText(), /0\.6/);
+  assert.match(await card.getByLabel('H3 比例', { exact: true }).innerText(), /1:1/);
+  const returned = await saved();
+  assert.equal(returned.inputs['first-frame'][0].assetId, 'c');
+  assert.equal(returned.inputs['last-frame'][0].assetId, 'b');
   await page.waitForFunction(() => [...document.querySelectorAll('[data-workflow-card="video-provider"] .comfy-frame-slot img')].filter(img => img.complete && img.naturalWidth > 0).length === 2);
   await mkdir('.tmp/workflow-h3', { recursive: true });
   for (const theme of ['light', 'dark']) {

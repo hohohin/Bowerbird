@@ -1,5 +1,6 @@
 import { canUseGenerationProvider } from "./entitlement";
-import { cloudGenProviders, isCloudProvider, normalizeGenerationProvider } from "./genProviders";
+import { canUseComfyVideo } from "./comfyVideo";
+import { dreaminaWebModel, H3_IMAGE, cloudGenProviders, isCloudProvider, normalizeGenerationProvider } from "./genProviders";
 import type { AuthSnapshot, CodexHealth, EntitlementSnapshot } from "./types";
 
 export interface GenerationAvailabilityState {
@@ -11,7 +12,7 @@ export interface GenerationAvailabilityState {
 
 export interface ProviderIssue {
   message: string;
-  settings?: "jimeng" | "codex" | "account";
+  settings?: "jimeng" | "codex" | "dsh" | "account";
 }
 
 export function cloudAccountIssue(auth: AuthSnapshot | null): ProviderIssue | null {
@@ -24,6 +25,7 @@ export function cloudAccountIssue(auth: AuthSnapshot | null): ProviderIssue | nu
 export function generationProviderIssue(requestedProvider: string, state: GenerationAvailabilityState): ProviderIssue | null {
   const provider = normalizeGenerationProvider(requestedProvider);
   const { cloudAuth, cloudEntitlement } = state;
+  if (provider === H3_IMAGE) return canUseComfyVideo(cloudAuth, cloudEntitlement) ? null : { message: "本地 H3 需要有效的 Pro／Studio 权益或测试账号资格", settings: "account" };
   if (isCloudProvider(provider)) {
     const access = cloudAccountIssue(cloudAuth);
     if (access) return access;
@@ -40,10 +42,11 @@ export function generationProviderIssue(requestedProvider: string, state: Genera
     return null;
   }
   const jimeng = provider === "jimeng";
-  if (!jimeng && provider !== "codex") return { message: "此生成方式不可用，请重新选择模型。" };
+  if (!jimeng && provider !== "codex" && !dreaminaWebModel(provider)) return { message: "此生成方式不可用，请重新选择模型。" };
   if (!cloudEntitlement) return { message: "账号权益尚未就绪，请检查账号状态。", settings: "account" };
   if (!canUseGenerationProvider(cloudEntitlement, provider)) return { message: "自有订阅需要 Pro 或 Studio 权益，请检查当前账号方案。", settings: "account" };
   const health = jimeng ? state.dreaminaHealth : state.codexHealth;
+  if (dreaminaWebModel(provider)) return null;
   if (health?.ok) return null;
   const name = jimeng ? "即梦" : "ChatGPT";
   const settings = jimeng ? "jimeng" : "codex";

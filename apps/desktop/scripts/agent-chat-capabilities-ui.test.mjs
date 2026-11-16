@@ -13,7 +13,7 @@ const counts = () => page.evaluate(async () => {
   return ["local_chat_models", "local_chat_dsh_status", "local_chat_quote"].map(command => calls.filter(call => call.command === command).length);
 });
 try {
-  await page.goto(server.resolvedUrls.local[0] + "scripts/fixtures/local-chat/preview.html");
+  await page.goto(server.resolvedUrls.local[0] + "scripts/fixtures/local-chat/preview.html?settings");
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   assert.deepEqual(await counts(), [1, 1, 1], "startup and StrictMode share one probe per capability");
 
@@ -35,8 +35,11 @@ try {
   const fault = page.getByRole("combobox", { name: "测试故障" });
   await fault.selectOption("models");
   await cards.first().getByRole("button", { name: /选择对话模型$/ }).click();
-  await page.getByRole("button", { name: "重新检查", exact: true }).click();
+  const menu = page.getByRole("dialog", { name: "对话模型" });
+  assert.equal(await menu.locator(".model-select-footer").count(), 0);
+  assert.equal(await menu.getByRole("button", { name: "重新检查", exact: true }).count(), 0);
   await page.keyboard.press("Escape");
+  await page.evaluate(async () => (await import('/src/lib/chatCapabilities.ts')).refreshChatCapabilities());
   const retry = card => card.getByRole("button", { name: "重试模型列表" });
   await retry(cards.nth(1)).waitFor();
   await fault.selectOption("none");
@@ -66,6 +69,55 @@ try {
     return [b, chatQuote.store.getState().value];
   });
   assert.deepEqual(scope, [2, null]);
+  const concurrent = await page.evaluate(async () => {
+    const {setupChatDsh} = await import('/src/lib/chatCapabilities.ts');
+    const {calls} = await import('/scripts/fixtures/local-chat/mock.ts');
+    const before = calls.filter(c => c.command === 'local_chat_dsh_setup').length;
+    const [first, second, manual] = await Promise.allSettled([
+      setupChatDsh({mode:'auto'}), setupChatDsh({mode:'auto'}), setupChatDsh({mode:'local', url:'http://127.0.0.1:3081'}),
+    ]);
+    return [first.status, second.status, manual.status, calls.filter(c => c.command === 'local_chat_dsh_setup').length - before];
+  });
+  assert.deepEqual(concurrent, ['fulfilled', 'fulfilled', 'rejected', 1]);
+  const select = async label => {
+    await cards.first().getByRole('button', {name:/选择对话模型$/}).click();
+    const menu = page.getByRole('dialog', {name:'对话模型'});
+    assert.equal(await menu.getByRole('button', {name:/DSH 设置|连接本机 DSH/}).count(), 0);
+    await menu.getByRole('button', {name:label, exact:true}).click();
+    await cards.first().getByRole('button', {name:new RegExp(label + '.*选择对话模型$')}).waitFor();
+  };
+  const dshCalls = () => page.evaluate(async () => (await import('/scripts/fixtures/local-chat/mock.ts')).calls.filter(c =>
+    ['local_chat_dsh_setup', 'local_chat_dsh_account', 'local_chat_dsh_status'].includes(c.command)).length);
+  const before = await dshCalls();
+  await select('本机 DSH');
+  await select('本机 Codex');
+  await select('本机 DSH');
+  assert.equal(await dshCalls(), before, 'switches use shared readiness and never start setup or an account probe');
+  assert.equal(await page.getByRole('dialog', {name:/设置/}).count(), 0);
+  await page.evaluate(async () => {
+    const {localChat} = await import('/src/lib/localChat.ts');
+    localChat.dshAccount = async () => ({state:'signedOut', modelConfigured:false});
+    (await import('/src/lib/chatCapabilities.ts')).refreshChatCapabilities();
+  });
+  await page.waitForFunction(async () => (await import('/src/lib/chatCapabilities.ts')).chatDshStatus.store.getState().value?.localAvailable === false);
+  assert.equal(await cards.first().getByRole('button', {name:'运行此卡片', exact:true}).isDisabled(), true);
+  await cards.first().getByRole('button', {name:/选择对话模型$/}).click();
+  assert.equal(await page.getByRole('button', {name:'本机 DSH', exact:true}).isDisabled(), true);
+  assert.equal(await page.getByRole('dialog', {name:/设置/}).count(), 0);
+  await page.evaluate(async () => {
+    const {localChat} = await import('/src/lib/localChat.ts');
+    const {chatDshStatus, publishDshAccount} = await import('/src/lib/chatCapabilities.ts');
+    let release;
+    const pending = new Promise(started => {
+      localChat.dshAccount = () => new Promise(resolve => { release = resolve; started(); });
+    });
+    chatDshStatus.check('local', true);
+    await pending;
+    publishDshAccount({state:'signedOut', modelConfigured:true});
+    release({state:'signedOut', modelConfigured:false});
+  });
+  await page.waitForFunction(async () => (await import('/src/lib/chatCapabilities.ts')).chatDshStatus.store.getState().value?.localAvailable);
+  assert.equal(await page.getByRole('button', {name:'本机 DSH', exact:true}).isEnabled(), true, 'configured API model becomes available without repeating login');
   assert.deepEqual(errors, []);
   console.log("PASS: startup probes, two real cards with no repeated reads, shared error/retry, account switch/logout with delayed quotes");
 } finally {

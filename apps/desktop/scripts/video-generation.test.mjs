@@ -6,6 +6,7 @@ import { generationPromptNodeId } from "../src/lib/projectNodeIds.ts";
 import { DEFAULT_VIDEO_OPTIONS, resolveVideoOptions, videoInputError, videoRatio, isVideoPath } from "../src/lib/videoGeneration.ts";
 import { mergeRecoveredGenJobs } from "../src/lib/generationRecovery.ts";
 import { applyGenerationProgress } from "../src/lib/generationProgress.ts";
+import { hasGenerationFailureReason } from "../src/lib/userError.ts";
 import { canvasConversationCards } from "../src/lib/canvasConversationCards.ts";
 import { parseCreativeComposerDraft, serializeCreativeComposerDraft } from "../src/lib/creativeDraft.ts";
 const image = (name) => ({ id: name, store_path: `C:/assets/${name}.png`, duration: null });
@@ -88,7 +89,7 @@ function harness() {
     updateJob: (jobId, update) => { state.genJobs[jobId] = update(state.genJobs[jobId]); },
     resolveVideoOptions, videoInputError, videoRatio, generationPromptNodeId, isCloudProvider: value => value?.startsWith("bowerbird-cloud"),
     generationParentLocator: () => ({ storePath: "C:/assets/previous.mp4", nodeId: "parent-node" }),
-    mergeRecoveredGenJobs, applyGenerationProgress, taskCenterGenerationJobs: () => [],
+    mergeRecoveredGenJobs, applyGenerationProgress, hasGenerationFailureReason, taskCenterGenerationJobs: () => [],
   };
   const code = ts.transpileModule(`return { ${Object.entries(actions).map(([name, body]) => `${name}: ${body}`).join(",")} };`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   Object.assign(state, new Function(...Object.keys(bindings), code)(...Object.values(bindings)));
@@ -298,6 +299,24 @@ test("startup keeps failed history while a new retry round is still running", as
   assert.equal(restored.turns[0].error, "saved failure");
   assert.equal(restored.turns[1].error, undefined);
   assert.equal(restored.running, true);
+});
+
+test("startup restores the failed turn with its own reason and preserves older successful images", async () => {
+  const reason = "即梦网页控件未能确认生成参数，本次未发起生成";
+  for (const savedFailure of [null, "生成失败", reason]) {
+    const h = harness();
+    h.api.listGenJobs = async () => [];
+    h.api.recentGenSessions = async () => [{ id: "restored", status: "failed", turn_key: "latest",
+      provider: "dreamina-web55", references: [], ref_assets: [], error: savedFailure === reason ? null : reason,
+      prompt: "latest", turns: [
+        { turn_key: "first", prompt: "first", images: ["/previous.png"] },
+        ...(savedFailure ? [{ turn_key: "latest", prompt: "latest", images: [], error: savedFailure }] : []),
+      ] }];
+    await h.state.loadGenJobs();
+    assert.deepEqual(h.state.genJobs.restored.turns.map(turn => [turn.turnKey, turn.images, turn.error]), [
+      ["first", ["/previous.png"], null], ["latest", [], reason],
+    ]);
+  }
 });
 
 test("an explicitly empty image reference list stays empty when retrying a failed continuation", async () => {

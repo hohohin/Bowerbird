@@ -62,6 +62,7 @@ test("explicit test-only claim delay creates a pre-processor crash window", asyn
   const sleeps: number[] = [];
   let processed = 0;
   const control = {
+    remainingMs() { return 60_000; },
     async claim() { return claim(); },
     async heartbeat() { return { status: "running", cancelRequested: false, leaseExpiresAt: null }; },
   } as unknown as AgentControlClient;
@@ -169,6 +170,7 @@ test("two worker loops sharing one atomic queue process a Run exactly once", asy
   const processedBy: string[] = [];
   function control(workerId: string): AgentControlClient {
     return {
+      remainingMs() { return 60_000; },
       async claim() {
         if (!available) return { run: null };
         available = false;

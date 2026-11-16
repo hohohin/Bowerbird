@@ -6,7 +6,7 @@ import { notify } from "../lib/notify";
 import { canUseComfyVideo } from "../lib/comfyVideo";
 import "./CanvasToolbox.css";
 
-export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo, onOpenVoice }: { onOpenReplication: () => void; onOpenLocalVideo: () => void; onOpenVoice?: () => void }) {
+export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo, onOpenVoice, workflowReady = true }: { onOpenReplication: () => void; onOpenLocalVideo: () => void; onOpenVoice?: () => void; workflowReady?: boolean }) {
   const isTestAccount = useStore(state => state.cloudAuth?.logged_in === true && !!state.cloudAuth.user_id
     && state.cloudEntitlement?.user_id === state.cloudAuth.user_id && state.cloudEntitlement?.is_test_account === true);
   const canUseLocalVideo = useStore(state => canUseComfyVideo(state.cloudAuth, state.cloudEntitlement));
@@ -23,7 +23,7 @@ export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo, onOpenVoice
       if (rect) setPosition({ left: Math.min(rect.right + 12, window.innerWidth - 240), top: Math.max(12, Math.min(rect.top - 8, window.innerHeight - (menu.current?.offsetHeight ?? 98) - 12)) });
     };
     place();
-    menu.current?.querySelector<HTMLButtonElement>("button")?.focus();
+    menu.current?.querySelector<HTMLButtonElement>("button:enabled")?.focus();
     window.addEventListener("resize", place);
     return () => window.removeEventListener("resize", place);
   }, [open, isTestAccount, canUseLocalVideo]);
@@ -48,7 +48,7 @@ export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo, onOpenVoice
         if (event.key === "Tab") setOpen(false);
         if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
           event.preventDefault();
-          const items = Array.from(menu.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]") ?? []);
+          const items = Array.from(menu.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]:enabled") ?? []);
           const index = items.findIndex(item => item === document.activeElement);
           const next = event.key === "Home" ? 0 : event.key === "End" ? items.length - 1
             : (index + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
@@ -56,7 +56,7 @@ export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo, onOpenVoice
         }
       }}>
       <div className="canvas-toolbox-heading">工具箱</div>
-      {onOpenVoice && <button type="button" role="menuitem" onClick={() => { setOpen(false); onOpenVoice(); }}>
+      {onOpenVoice && <button type="button" role="menuitem" disabled={!workflowReady} onClick={() => { setOpen(false); onOpenVoice(); }}>
         <AudioLines size={19} aria-hidden="true" /><span><strong>角色声音</strong><small>声音克隆 · 角色配音</small></span>
       </button>}
       <button type="button" role="menuitem" onClick={() => { setOpen(false); onOpenReplication(); }}>
@@ -65,7 +65,7 @@ export function CanvasToolbox({ onOpenReplication, onOpenLocalVideo, onOpenVoice
       {isTestAccount && <button type="button" role="menuitem" onClick={() => { setOpen(false); button.current?.focus(); notify("功能开发中"); }}>
         <Images size={19} aria-hidden="true" /><span><strong>视频转图文</strong><small>功能开发中</small></span>
       </button>}
-      <button type="button" role="menuitem" onClick={() => {
+      <button type="button" role="menuitem" disabled={!workflowReady} onClick={() => {
         setOpen(false);
         const account = useStore.getState();
         if (!canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) {

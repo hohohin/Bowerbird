@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useReducer, useRef, useState, type Dispatch, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore, type Dispatch, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowUpRight, Bell, Check, CircleAlert, LoaderCircle, X } from 'lucide-react';
 import { listenForNotices, type NoticeDetail } from '../lib/notify';
@@ -6,6 +6,7 @@ import { useStore } from '../store';
 import { useLocalChatStore } from '../lib/localChatStore';
 import { libraryGenerationTasks, type LibraryActivityTask } from '../lib/libraryGenerationActivity';
 import { openLibraryActivityTask, useLibraryGenerationRuntime } from '../lib/libraryGenerationRuntime';
+import { dismissNotices, readDismissedNotices, subscribeDismissedNotices } from '../lib/dismissedNotices';
 import './NotificationBell.css';
 
 type GenerationNotice = NoticeDetail;
@@ -26,13 +27,17 @@ function openTask(task: LibraryActivityTask) {
   else openLibraryActivityTask(task);
 }
 
-function TaskRow({ task, projectName, onOpen }: { task: LibraryActivityTask; projectName: string; onOpen: () => void }) {
+const BELL_SCOPE = 'notification-bell';
+const getDismissed = () => readDismissedNotices(BELL_SCOPE);
+
+function TaskRow({ task, projectName, onOpen, onRemove }: { task: LibraryActivityTask; projectName: string; onOpen: () => void; onRemove: (keys: string[]) => void }) {
   const Icon = task.status === 'running' ? LoaderCircle : task.status === 'completed' ? Check : CircleAlert;
   return <div role="listitem"><button type="button" className={`notification-bell-task is-${task.status}`}
     onClick={() => { onOpen(); openTask(task); }} aria-label={`${projectName} · ${task.title} · ${task.statusLabel}，查看画板`}>
     <Icon size={14} aria-hidden/><span className="notification-bell-copy"><span>{task.title}</span><small>{projectName}</small></span>
     <span className="notification-bell-status">{task.statusLabel}</span><ArrowUpRight size={13} aria-hidden/>
-  </button></div>;
+  </button>{task.dismissKey && <button type="button" className="notification-bell-remove" aria-label={`移除通知：${task.title}`} title="移除此条通知"
+    onClick={() => onRemove([task.dismissKey!])}><X size={14} aria-hidden/></button>}</div>;
 }
 
 function useRecentTasks() {
@@ -41,8 +46,11 @@ function useRecentTasks() {
   const unreadThreads = useStore(value => value.projectUnreadThreads);
   const chats = useLocalChatStore(value => value.summaries);
   const videos = useLibraryGenerationRuntime(value => value.tasks);
-  const tasks = libraryGenerationTasks({ projects, jobs: Object.values(jobs), runs: Object.values(runs), chats: Object.values(chats), extraTasks: Object.values(videos) });
-  return { projects, tasks, unread: tasks.some(task => unreadThreads[task.projectId]?.includes(task.threadId)) };
+  const dismissed = useSyncExternalStore(subscribeDismissedNotices, getDismissed);
+  const tasks = libraryGenerationTasks({ projects, jobs: Object.values(jobs), runs: Object.values(runs), chats: Object.values(chats), extraTasks: Object.values(videos), limit: Infinity })
+    .filter(task => !task.dismissKey || !dismissed.has(task.dismissKey));
+  return { projects, tasks: tasks.slice(0, 20), clearable: tasks.flatMap(task => task.dismissKey ? [task.dismissKey] : []),
+    unread: tasks.some(task => unreadThreads[task.projectId]?.includes(task.threadId)) };
 }
 
 function useBellNotices(state: BellState, dispatch: Dispatch<Action>) {
@@ -100,15 +108,22 @@ function LatestNotice({ notice, close, dismiss }: { notice: GenerationNotice; cl
 type RecentTasks = ReturnType<typeof useRecentTasks>;
 function TaskHistory({ recent, close, dismiss }: { recent: RecentTasks; close: () => void; dismiss: () => void }) {
   const content = useRef<HTMLDivElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  function remove(keys: string[]) {
+    closeButton.current?.focus();
+    dismissNotices(BELL_SCOPE, keys);
+  }
   useEffect(() => {
     const first = content.current!.querySelector<HTMLButtonElement>('.notification-bell-task') ?? content.current!.querySelector<HTMLButtonElement>('button');
     first!.focus();
   }, []);
   return <div ref={content}>
-    <div className="notification-bell-heading"><span>通知</span><button type="button" aria-label="关闭通知面板" onClick={dismiss}><X size={14}/></button></div>
+    <div className="notification-bell-heading"><span>通知</span>{recent.clearable.length > 0 &&
+      <button type="button" className="notification-bell-clear" onClick={() => remove(recent.clearable)}>清除已结束</button>}
+      <button ref={closeButton} type="button" aria-label="关闭通知面板" onClick={dismiss}><X size={14}/></button></div>
     <div className="notification-bell-history" role="list" aria-label="近期任务">
       {!recent.tasks.length && <p>暂无任务</p>}
-      {recent.tasks.map(task => <TaskRow key={`${task.source}:${task.id}`} task={task} projectName={recent.projects.find(project => project.id === task.projectId)?.name ?? '项目'} onOpen={close}/>)}
+      {recent.tasks.map(task => <TaskRow key={`${task.source}:${task.id}`} task={task} projectName={recent.projects.find(project => project.id === task.projectId)?.name ?? '项目'} onOpen={close} onRemove={remove}/>)}
     </div>
   </div>;
 }

@@ -5,23 +5,27 @@ export interface GenProviderOption {
   label: string;
 }
 
+export const H3_IMAGE = "minimax-h3-image";
+const DREAMINA_MODELS = [
+  { key: "dreamina-web55", label: "Seedream 5.5" },
+  { key: "dreamina-web50pro", label: "Seedream 5.0 Pro" },
+  { key: "dreamina-web50flash", label: "Seedream 5.0 Flash" },
+  { key: "dreamina-web50lite", label: "Seedream 5.0 Lite" },
+  { key: "dreamina-web47", label: "Seedream 4.7" },
+  { key: "dreamina-web40", label: "Seedream 4.0" },
+];
+export function dreaminaWebModel(key: string | null | undefined) {
+  return DREAMINA_MODELS.find(model => model.key === key);
+}
+const H3_IMAGE_OPTION = { key: H3_IMAGE, label: "MiniMax-H3-Image" };
+
 /** 本地 BYO 引擎（CLI 子进程，随客户端发布，不参与云端动态档位）。 */
 export const BYO_PROVIDERS: readonly GenProviderOption[] = [
   { key: "codex", label: "gpt-image-2" },
   { key: "jimeng", label: "Seedream 5.0 Pro" },
+  H3_IMAGE_OPTION,
+  ...DREAMINA_MODELS,
 ];
-
-export const DREAMINA_IMAGE_VERSIONS = ["5.0Pro", "5.0", "4.7", "4.0"] as const;
-
-/** Model menu keys stay inside ProviderSelect; execution continues to use jimeng. */
-export function dreaminaModelKey(version: string): string {
-  return version === "5.0Pro" ? "jimeng" : `jimeng-${version}`;
-}
-
-export function dreaminaVersionForKey(key: string): string | null {
-  if (key === "jimeng") return "5.0Pro";
-  return key.startsWith("jimeng-") ? key.slice("jimeng-".length) : null;
-}
 
 /**
  * 云端档位兜底（与服务端 0018 的 service_costs 种子对齐）：entitlement 未提供
@@ -80,10 +84,8 @@ export function cloudGenProviders(
 }
 
 /** 完整下拉列表：本地 BYO 在前，云端档位在后。 */
-export function genProviders(entitlement: EntitlementSnapshot | null, dreaminaVersion = "5.0Pro"): GenProviderOption[] {
-  const versions: readonly string[] = DREAMINA_IMAGE_VERSIONS.includes(dreaminaVersion as typeof DREAMINA_IMAGE_VERSIONS[number])
-    ? DREAMINA_IMAGE_VERSIONS : [...DREAMINA_IMAGE_VERSIONS, dreaminaVersion];
-  return [BYO_PROVIDERS[0], ...versions.map(version => ({ key: dreaminaModelKey(version), label: dreaminaModelLabel(version) })), ...cloudGenProviders(entitlement)];
+export function genProviders(entitlement: EntitlementSnapshot | null): GenProviderOption[] {
+  return [BYO_PROVIDERS[0], ...DREAMINA_MODELS, ...cloudGenProviders(entitlement), H3_IMAGE_OPTION];
 }
 
 /** 是否已知 provider key（BYO 枚举或任意 cloud 档位 key——云端上新档位后无需改这里）。 */
@@ -111,6 +113,9 @@ export function dreaminaModelLabel(version = "5.0Pro"): string {
 
 /** Display names only; routing keys and stored history remain unchanged. */
 export function imageProviderLabel(provider: string | null | undefined, entitlement: EntitlementSnapshot | null = null, dreaminaVersion: string | null = "5.0Pro"): string {
+  if (provider === H3_IMAGE) return H3_IMAGE_OPTION.label;
+  const webModel = dreaminaWebModel(provider);
+  if (webModel) return webModel.label;
   if (provider === "codex" || provider === "codex-cli") return "gpt-image-2";
   if (provider === "jimeng" || provider === "dreamina") return dreaminaVersion ? dreaminaModelLabel(dreaminaVersion) : "Seedream · 即梦";
   return cloudProviderLabel(provider, entitlement) ?? provider ?? "模型未记录";

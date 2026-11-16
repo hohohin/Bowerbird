@@ -1556,7 +1556,7 @@ export function CreationBoard({
             <ProviderQuota source="bowerbird" badge />
           ) : (
           <div>
-            <ProviderSelect
+            <ProviderSelect hasReferences={references.length > 0}
               value={activeGenProvider}
               onChange={setActiveGenProvider}
               codexHealth={codexHealth}

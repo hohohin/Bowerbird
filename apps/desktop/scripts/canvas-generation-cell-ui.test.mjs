@@ -52,6 +52,9 @@ try{
   await mkdir('.tmp/canvas-generation-cell',{recursive:true});
   await page.screenshot({path:'.tmp/canvas-generation-cell/pending.png'});
   await status('failed');await cell.getByText('codex · 生成失败').waitFor();
+  await cell.getByRole('button',{name:'关闭本次错误提示'}).click();
+  assert.equal(await cell.locator('.canvas-cell-generation.is-failed').count(),0);
+  assert.equal((await saved()).cells[0][0].generation_ref.session_node_id,'session');
   await status('running');await cell.locator('[data-cell-generation][aria-busy="true"]').waitFor();
   await status('done',true);
   await cell.locator('.canvas-image-content img').waitFor();

@@ -106,9 +106,9 @@ fn validate_binding_metadata(binding: &Value) -> AppResult<()> {
     Ok(())
 }
 
-fn control_binding_fields(binding: &Value) -> bool {
-    binding.get("mediaFilter").is_none() && binding.as_object().is_some_and(|value|
-        value.keys().filter(|key| key.as_str() != "autoConnect").count() == 2)
+fn control_binding_fields(binding: &Value, fields: &[&str]) -> bool {
+    binding.as_object().is_some_and(|value|
+        value.keys().all(|key| key == "autoConnect" || fields.contains(&key.as_str())))
 }
 
 fn validate_image_output(value: &Value, assets: &mut HashSet<String>) -> AppResult<()> {
@@ -188,7 +188,7 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
     let mut dependencies: HashMap<&str, Vec<&str>> = HashMap::new();
     for node in nodes {
         let id = node["id"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop"))
+        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("director3d" | "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop"))
             || !matches!(node["action"].as_str(), Some("describe" | "reuse" | "layers"))
             || node["x"].as_f64().filter(|v| v.is_finite()).is_none()
             || node["y"].as_f64().filter(|v| v.is_finite()).is_none()
@@ -263,13 +263,16 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                     validate_binding_metadata(binding)?;
                     if binding.get("canvasNodeId").is_some() {
                         if binding["canvasNodeId"].as_str().is_none_or(str::is_empty) || binding["cellId"] != "image"
-                            || !control_binding_fields(binding) { return Err(invalid()); }
+                            || !control_binding_fields(binding, &["canvasNodeId", "cellId"]) { return Err(invalid()); }
                         continue;
                     }
                     let producer = nodes.iter().find(|source| source["id"] == binding["nodeId"]).ok_or_else(invalid)?;
                     if matches!(producer["kind"].as_str(), Some("trigger" | "planner")) || producer.get("textSource").is_some()
                         || !matches!(binding["portId"].as_str(), Some("text" | "image" | "visual-profile" | "iteration"))
-                        || !control_binding_fields(binding) { return Err(invalid()); }
+                        || !control_binding_fields(binding, &["nodeId", "portId", "pendingCompletionSession"]) { return Err(invalid()); }
+                    if binding.get("pendingCompletionSession").is_some_and(|session|
+                        session.as_str().is_none_or(str::is_empty) || binding["portId"] != "image"
+                        || !matches!(producer["kind"].as_str(), Some("generation" | "comfy-video"))) { return Err(invalid()); }
                 }
                 continue; // Completion events do not participate in the data dependency DAG.
             }
@@ -279,7 +282,7 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                 validate_binding_metadata(binding)?;
                 if port == "signal" {
                     let producer = nodes.iter().find(|node| node["id"] == binding["nodeId"]).ok_or_else(invalid)?;
-                    if producer["kind"] != "trigger" || binding["portId"] != "signal" || !control_binding_fields(binding) { return Err(invalid()); }
+                    if producer["kind"] != "trigger" || binding["portId"] != "signal" || !control_binding_fields(binding, &["nodeId", "portId"]) { return Err(invalid()); }
                     deps.push(producer["id"].as_str().ok_or_else(invalid)?);
                     continue;
                 }
@@ -610,6 +613,21 @@ mod tests {
         next["nodes"][0]["triggerSchedule"]["status"] = json!("fired"); assert!(validate(&next).is_err());
     }
     #[test]
+    fn director_card_roundtrips_scene_reference_and_exported_mp4() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut card = node("stage",json!({"image":[{"assetId":"photo"}]}));
+        card["kind"] = json!("director3d");
+        card["directorDocument"] = json!({"scene":{"objectList":[{"threeJsonId":"box-1"}]}});
+        card["directorVideoId"] = json!("movie");
+        card["outputs"] = json!({"image":{"type":"image","assetIds":["movie"]}});
+        let doc = json!({"schema_version":1,"nodes":[card],"run":null});
+        assert_eq!(validate(&doc).unwrap(),HashSet::from(["photo".into(),"movie".into()]));
+        db.workflow_save("p",0,doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document,doc);
+    }
+    #[test]
     fn voice_card_persists_recording_preview_and_spoken_output() {
         let db = Database::open_in_memory().unwrap();
         db.migrate().unwrap();
@@ -913,16 +931,20 @@ mod tests {
     }
     #[test]
     fn completion_trigger_accepts_native_sessions_and_persists_deduplication() {
-        let mut switch = node("switch", json!({"completion":[{"canvasNodeId":"session","cellId":"image"}]}));
+        let draw = node("draw", json!({}));
+        let mut switch = node("switch", json!({"completion":[{"canvasNodeId":"session","cellId":"image"},
+            {"nodeId":"draw","portId":"image","autoConnect":"link","pendingCompletionSession":"current-turn"}]}));
         switch["kind"] = json!("trigger"); switch["triggerCount"] = json!(1);
         switch["completionSeen"] = json!(["previous-turn"]);
-        let doc = json!({"schema_version":1,"nodes":[switch],"run":null});
+        let doc = json!({"schema_version":1,"nodes":[switch,draw],"run":null});
         assert!(validate(&doc).is_ok());
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
         db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
         db.workflow_save("p", 0, doc.clone()).unwrap();
         assert_eq!(db.workflow_get("p").unwrap().document, doc);
         for binding in [json!({"canvasNodeId":"","cellId":"image"}), json!({"canvasNodeId":"session","cellId":"text"}),
+            json!({"nodeId":"draw","portId":"image","pendingCompletionSession":""}),
+            json!({"canvasNodeId":"session","cellId":"image","pendingCompletionSession":"turn"}),
             json!({"assetId":"asset"}), json!({"canvasNodeId":"session","cellId":"image","nodeId":"switch"})] {
             let mut bad = doc.clone(); bad["nodes"][0]["inputs"]["completion"] = json!([binding]); assert!(validate(&bad).is_err());
         }

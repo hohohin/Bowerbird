@@ -1,3 +1,4 @@
+import { ControlDeadlineError } from "../control-plane/control-transport.ts";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -130,6 +131,7 @@ export async function executeVideo(input: VideoInput, job: { id: string; leaseId
     if (!uploaded.ok) throw new Error("video_output_upload_failed");
     await control({ action: "finish", ...identity, objectKey: upload.objectKey, mime: "video/mp4", bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), completionTokens: task.completionTokens });
   } catch (error) {
+    if (error instanceof ControlDeadlineError && !taskId) return;
     const code = error instanceof ArkVideoError ? error.code : "video_processing_failed";
     if (taskId) {
       // Never fail/refund a task whose provider outcome or downloaded output can still recover.

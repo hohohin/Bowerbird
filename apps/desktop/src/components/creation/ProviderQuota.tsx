@@ -1,5 +1,5 @@
 import { CircleHelp, Coins, Monitor, UserRound } from "lucide-react";
-import { isCloudProvider } from "../../lib/genProviders";
+import { dreaminaWebModel, H3_IMAGE, isCloudProvider } from "../../lib/genProviders";
 import "./ProviderQuota.css";
 
 export type QuotaSource = "bowerbird" | "chatgpt" | "jimeng" | "local" | "unknown";
@@ -14,8 +14,9 @@ export const QUOTA_SOURCES = {
 
 export function providerQuota(provider: string): QuotaSource {
   if (isCloudProvider(provider)) return "bowerbird";
+  if (provider === H3_IMAGE) return "local";
   if (provider === "codex") return "chatgpt";
-  if (provider === "jimeng" || provider === "dreamina") return "jimeng";
+  if (provider === "jimeng" || provider === "dreamina" || dreaminaWebModel(provider)) return "jimeng";
   return "unknown";
 }
 

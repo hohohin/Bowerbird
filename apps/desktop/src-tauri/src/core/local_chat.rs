@@ -134,6 +134,10 @@ pub struct ChatMessage {
     pub role: String,
     pub text: String,
     pub reference_asset_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsh_terminal_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dsh_failure_code: Option<String>,
     pub status: String,
     pub created_at: i64,
     pub updated_at: i64,
@@ -157,6 +161,12 @@ pub struct StartedChat {
     pub conversation: ChatConversation,
     pub turn_id: String,
     pub is_new: bool,
+}
+
+pub enum RestoredChatOutcome<'a> {
+    Done,
+    Interrupted,
+    DshFailed { message: &'a str, code: Option<&'a str> },
 }
 
 fn error(text: &str) -> AppError {
@@ -196,7 +206,9 @@ fn read(conn: &Connection, id: &str) -> AppResult<Option<ChatConversation>> {
     else {
         return Ok(None);
     };
-    let mut statement = conn.prepare("SELECT m.id,m.turn_id,m.role,m.text,m.reference_asset_ids,m.status,m.created_at,m.updated_at
+    let mut statement = conn.prepare("SELECT m.id,m.turn_id,m.role,m.text,m.reference_asset_ids,m.status,m.created_at,m.updated_at,
+        CASE WHEN m.role='assistant' AND json_valid(t.provider_turn_id) THEN json_extract(t.provider_turn_id,'$.terminalError') END,
+        CASE WHEN m.role='assistant' AND json_valid(t.provider_turn_id) THEN json_extract(t.provider_turn_id,'$.failureCode') END
         FROM local_chat_messages m JOIN local_chat_turns t ON t.id=m.turn_id WHERE m.conversation_id=?1
         ORDER BY t.created_at,t.rowid,m.created_at,m.id")?;
     let messages = statement
@@ -211,6 +223,8 @@ fn read(conn: &Connection, id: &str) -> AppResult<Option<ChatConversation>> {
                 status: row.get(5)?,
                 created_at: row.get(6)?,
                 updated_at: row.get(7)?,
+                dsh_terminal_error: row.get(8)?,
+                dsh_failure_code: row.get(9)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -400,6 +414,11 @@ impl Database {
             .query_map([project], summary)?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(result)
+    }
+    pub fn local_chat_revision(&self, id: &str) -> AppResult<Option<i64>> {
+        Ok(self.conn.lock().unwrap().query_row(
+            "SELECT revision FROM local_chat_conversations WHERE id=?1", [id], |row| row.get(0),
+        ).optional()?)
     }
     pub fn get_local_chat(&self, id: &str) -> AppResult<Option<ChatConversation>> {
         read(&self.conn.lock().unwrap(), id)
@@ -689,34 +708,46 @@ impl Database {
         turn: &str,
         checkpoint: &str,
         text: &str,
-        complete: bool,
+        outcome: RestoredChatOutcome<'_>,
     ) -> AppResult<()> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
-        let latest: Option<String> = tx.query_row("SELECT id FROM local_chat_turns WHERE conversation_id=?1 ORDER BY created_at DESC,id DESC LIMIT 1",[id],|row|row.get(0)).optional()?;
-        let status = if complete { "done" } else { "interrupted" };
+        let latest: Option<String> = tx.query_row("SELECT id FROM local_chat_turns WHERE conversation_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 1",[id],|row|row.get(0)).optional()?;
+        let (status, conversation_status, detail) = match outcome {
+            RestoredChatOutcome::Done => ("done", "idle", None),
+            RestoredChatOutcome::Interrupted => ("interrupted", "interrupted", None),
+            RestoredChatOutcome::DshFailed { message, .. } => ("failed", "failed", Some(message)),
+        };
         if latest.as_deref()!=Some(turn) || tx.execute("UPDATE local_chat_turns SET status=?4 WHERE id=?2 AND conversation_id=?1 AND provider_turn_id=?3 AND status IN ('stopped','interrupted','failed')",params![id,turn,checkpoint,status])? != 1 {
             return Err(error("对话已有新进展，请重新打开对话后查看"));
         }
         let now = Utc::now().timestamp_millis();
+        if let RestoredChatOutcome::DshFailed { message, code } = outcome {
+            tx.execute("UPDATE local_chat_turns SET provider_turn_id=json_set(provider_turn_id,'$.terminalError',?2,'$.failureCode',?3) WHERE id=?1",
+                params![turn,message,code])?;
+        }
         tx.execute("UPDATE local_chat_messages SET text=?3,status=?4,updated_at=?5 WHERE conversation_id=?1 AND turn_id=?2 AND role='assistant'",params![id,turn,text,status,now])?;
-        tx.execute("UPDATE local_chat_conversations SET status=?2,error=NULL,revision=revision+1,updated_at=?3 WHERE id=?1",params![id,if complete {"idle"} else {"interrupted"},now])?;
-        if complete { project_agent_result(&tx, id, turn)?; }
+        tx.execute("UPDATE local_chat_conversations SET status=?2,error=?4,revision=revision+1,updated_at=?3 WHERE id=?1",params![id,conversation_status,now,detail])?;
+        if matches!(outcome, RestoredChatOutcome::Done) { project_agent_result(&tx, id, turn)?; }
         tx.commit()?;
         Ok(())
     }
-    pub fn update_local_chat_text(&self, id: &str, turn: &str, text: &str) -> AppResult<()> {
+    pub fn update_local_chat_text(&self, id: &str, turn: &str, text: &str) -> AppResult<Option<(String, i64, i64)>> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
-        let changed = tx.execute("UPDATE local_chat_messages SET text=?3,updated_at=?4 WHERE conversation_id=?1 AND turn_id=?2 AND role='assistant' AND status='running'",params![id,turn,text,Utc::now().timestamp_millis()])?;
-        if changed > 0 {
-            tx.execute(
-                "UPDATE local_chat_conversations SET revision=revision+1 WHERE id=?1",
-                [id],
-            )?;
-        }
+        let now = Utc::now().timestamp_millis();
+        let message_id: Option<String> = tx.query_row(
+            "UPDATE local_chat_messages SET text=?3,updated_at=?4 WHERE conversation_id=?1 AND turn_id=?2
+             AND role='assistant' AND status='running' RETURNING id",
+            params![id, turn, text, now], |row| row.get(0),
+        ).optional()?;
+        let result = if let Some(message) = message_id {
+            let revision = tx.query_row("UPDATE local_chat_conversations SET revision=revision+1 WHERE id=?1 RETURNING revision",
+                [id], |row| row.get(0))?;
+            Some((message, revision, now))
+        } else { None };
         tx.commit()?;
-        Ok(())
+        Ok(result)
     }
     /// Native video progress and delivery; model text never supplies attachment IDs.
     pub fn save_local_chat_video(&self, id: &str, turn: &str, text: &str, status: &str, assets: &[String]) -> AppResult<()> {
@@ -745,6 +776,16 @@ impl Database {
         let now = Utc::now().timestamp_millis();
         let changed = tx.execute("UPDATE local_chat_turns SET status=?3,updated_at=?4 WHERE id=?2 AND conversation_id=?1 AND status IN ('running','stopping')",params![id,turn,status,now])?;
         if changed > 0 {
+            // Local DSH saves the request identity before dispatch. A preparation failure
+            // without that checkpoint has no model response to recover.
+            if status == "failed" {
+                if let Some(message) = detail {
+                    tx.execute("UPDATE local_chat_turns SET provider_turn_id=json_object('terminalError',?3)
+                        WHERE id=?2 AND provider_turn_id IS NULL AND conversation_id=?1
+                        AND EXISTS(SELECT 1 FROM local_chat_conversations WHERE id=?1 AND provider='dsh-local')",
+                        params![id, turn, message])?;
+                }
+            }
             // A completed model reply does not mean an unfinished render delivered a video.
             if status == "done" {
                 tx.execute("UPDATE local_chat_messages SET status='interrupted',text='视频尚未交付，可以继续对话完成。' WHERE conversation_id=?1 AND turn_id=?2 AND id=?3 AND status='running'", params![id,turn,format!("{turn}-video")])?;

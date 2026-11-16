@@ -218,6 +218,7 @@ html[data-theme] .canvas-tactical .workflow-card.is-trigger footer { margin-top:
 .workflow-diagnostic details { margin-top:12px; }
 .workflow-diagnostic pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:11px; }
 .workflow-waiting { color:var(--bb-muted); font-size:12px; }
+.workflow-history-issue { font-size:11px; color:var(--bb-muted); margin:8px 0; }
 .workflow-error button { margin-left:8px; text-decoration:underline; }
 .workflow-planner .workflow-prompt-editor .ProseMirror { min-height: 120px; }
 .workflow-planner .workflow-planner-inputs { display: block; min-height: 80px; margin: 0 0 10px; }

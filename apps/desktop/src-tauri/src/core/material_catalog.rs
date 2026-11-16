@@ -12,7 +12,11 @@ use std::collections::{BTreeMap, BTreeSet};
 #[path = "original_trash_visibility_tests.rs"]
 mod original_trash_visibility_tests;
 
-pub(super) const IMAGE: &str = "lower(COALESCE(a.ext,'')) IN ('png','jpg','jpeg','webp','gif','bmp','svg','avif','tif','tiff')";
+macro_rules! catalog_image_predicate {
+    () => { "lower(COALESCE(a.ext,'')) IN ('png','jpg','jpeg','webp','gif','bmp','svg','avif','tif','tiff','heic','heif')" };
+}
+pub(super) use catalog_image_predicate;
+pub(super) const IMAGE: &str = catalog_image_predicate!();
 pub(super) const VIDEO: &str = "lower(COALESCE(a.ext,'')) IN ('mp4','mov','webm','m4v','avi','mkv')";
 pub(super) const AUDIO: &str = "lower(COALESCE(a.ext,'')) IN ('wav','mp3','flac','m4a','ogg')";
 pub(super) const TEXT: &str = "lower(COALESCE(a.ext,'')) IN ('md','markdown','txt','docx','xlsx','csv')";

@@ -1,3 +1,5 @@
+import { ControlTransport } from "./control-transport.ts";
+export { AgentControlError } from "./control-transport.ts";
 import { createHash } from "node:crypto";
 import type { ControlledRunnerCheckpoint } from "../kernel/controlled-image-edit-runner.ts";
 import { decodeControlledCheckpoint, encodeControlledCheckpoint } from "../kernel/controlled-checkpoint.ts";
@@ -20,6 +22,7 @@ export interface HttpResponse {
 
 export interface HttpRequest {
   method?: "GET" | "POST" | "PUT";
+  signal?: AbortSignal;
   headers?: Record<string, string>;
   body?: string | Uint8Array;
 }
@@ -106,6 +109,8 @@ export type PreparedToolCall = {
   resultObjectKey?: string | null;
   resultHash?: string | null;
   safeErrorCode?: string | null;
+  directDeepSeekV1Model?: string | null;
+  pendingUsage?: { inputUnits: number; outputUnits: number } | null;
   reused: boolean;
 };
 
@@ -156,63 +161,24 @@ export type AgentRuntimeMetrics = {
   ttlBacklog: { runs: number; artifacts: number };
 };
 
-export class AgentControlError extends Error {
-  readonly status: number;
-
-  constructor(status: number) {
-    super(`agent_control_http_${status}`);
-    this.name = "AgentControlError";
-    this.status = status;
-  }
-}
-
 function defaultFetch(): AgentWorkerFetch {
   const candidate = (globalThis as unknown as { fetch?: AgentWorkerFetch }).fetch;
   if (!candidate) throw new Error("agent_fetch_unavailable");
   return candidate.bind(globalThis);
 }
 
-function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function parseJson(text: string): JsonRecord {
-  try {
-    const value = JSON.parse(text);
-    if (isRecord(value)) return value;
-  } catch {
-    // Normalize below; never include a private response body in the error.
-  }
-  throw new Error("agent_control_invalid_json");
-}
-
 export class AgentControlClient {
-  private readonly controlUrl: string;
-  private readonly workerToken: string;
-  private readonly workerId: string;
+  private readonly transport: ControlTransport;
   private readonly fetch: AgentWorkerFetch;
 
   constructor(config: { controlUrl: string; workerToken: string; workerId: string }, fetchImpl?: AgentWorkerFetch) {
-    this.controlUrl = config.controlUrl;
-    this.workerToken = config.workerToken;
-    this.workerId = config.workerId;
     this.fetch = fetchImpl ?? defaultFetch();
+    this.transport = new ControlTransport(config, this.fetch);
   }
 
-  async post(body: JsonRecord): Promise<JsonRecord> {
-    const response = await this.fetch(this.controlUrl, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.workerToken}`,
-        "content-type": "application/json",
-        "x-worker-id": this.workerId,
-      },
-      body: JSON.stringify(body),
-    });
-    const text = await response.text();
-    if (!response.ok) throw new AgentControlError(response.status);
-    return parseJson(text);
-  }
+  remainingMs(leaseId: string): number { return this.transport.remainingMs(leaseId); }
+
+  post(body: JsonRecord): Promise<JsonRecord> { return this.transport.post(body); }
 
   async claim(): Promise<ClaimedAgentRun> {
     return await this.post({ action: "claim" }) as unknown as ClaimedAgentRun;
@@ -359,7 +325,7 @@ export class AgentControlClient {
   }
 
   async prepareTool(args: {
-    runId: string; leaseId: string; callId: string; phase: string; toolName: string; argsHash: string;
+    runId: string; leaseId: string; callId: string; phase: string; toolName: string; argsHash: string; directDeepSeekV1Model?: string;
   }): Promise<PreparedToolCall> {
     return await this.post({ action: "tool_prepare", ...args }) as unknown as PreparedToolCall;
   }
@@ -373,7 +339,7 @@ export class AgentControlClient {
   async completeTool(args: {
     runId: string; leaseId: string; callId: string;
     status: "succeeded" | "failed" | "outcome_unknown";
-    resultObjectKey?: string; resultHash?: string; safeErrorCode?: string;
+    resultObjectKey?: string; resultHash?: string; safeErrorCode?: string; pendingUsage?: PreparedToolCall["pendingUsage"];
   }): Promise<PreparedToolCall> {
     return await this.post({ action: "tool_complete", ...args }) as unknown as PreparedToolCall;
   }

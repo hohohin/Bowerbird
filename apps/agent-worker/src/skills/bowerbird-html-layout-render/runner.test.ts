@@ -274,3 +274,29 @@ test("policy: understand_image and generate_image denied in every html-layout ph
     }
   }
 });
+
+
+test("HTML compose observes lease loss during the model turn", async () => {
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const signal = { cancelRequested: false, leaseLost: false, stopRequested: false };
+  const effects = new FakeEffects();
+  let calls = 0;
+  const model: ModelBackend = { id: "deepseek", async turn(_request, caller) {
+    calls++;
+    equal(caller.aborted, false);
+    entered.resolve();
+    await release.promise;
+    equal(caller.aborted, true);
+    throw new Error("deepseek_aborted");
+  } };
+  const running = advanceHtmlLayoutRun({
+    claim: { ...RUN, resultFeedbackAction: null }, input: input(), model, signal, effects, control: new FakeControl(),
+  });
+  await entered.promise;
+  signal.leaseLost = true;
+  release.resolve();
+  await rejects(() => running, /deepseek_aborted/);
+  equal(calls, 1);
+  equal(effects.renderCalls, 0);
+});

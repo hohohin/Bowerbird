@@ -1,7 +1,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { userErrorMessage } from "../../lib/userError";
-import { Check, ChevronDown, CircleHelp, Coins, Monitor, Star, UserRound } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Coins, Monitor, Star, UserRound } from "lucide-react";
 import { OverlayScrollArea } from "../CollectionScrollArea";
 import "./ModelSelect.css";
 import { useStore } from "../../store";
@@ -12,6 +12,7 @@ export interface ModelOption {
   key: string;
   label: string;
   source: ModelSource;
+  group?: string;
   reason?: string;
 }
 
@@ -26,6 +27,8 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
 }) {
   const portalTarget = usePortalTarget();
   const [open, setOpen] = useState(false);
+  const [personalGroup, setPersonalGroup] = useState<string | null>(null);
+  const groupFocus = useRef<string | null>(null);
   const prices = useStore(state => state.cloudEntitlement?.generation_services);
   const [position, setPosition] = useState<{ left: number; top?: number; bottom?: number; width: number; height: number }>();
   const trigger = useRef<HTMLButtonElement>(null);
@@ -37,6 +40,8 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
   const balanceLabel = !cloudLoggedIn ? "登录后查看 Bowerbird Bcoin" : cloudBalance == null ? "Bowerbird Bcoin余额暂不可用" : `Bowerbird 可用 Bcoin：${cloudBalance.toLocaleString("zh-CN")}`;
   function close(restore = false) {
     setOpen(false);
+    setPersonalGroup(null);
+    groupFocus.current = null;
     if (restore) trigger.current?.focus();
   }
   useLayoutEffect(() => {
@@ -60,6 +65,19 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
     window.addEventListener("scroll", place, true);
     return () => { cancelAnimationFrame(frame); window.removeEventListener("resize", place); window.removeEventListener("scroll", place, true); };
   }, [open]);
+  function switchGroup(group: string) {
+    groupFocus.current = group;
+    setPersonalGroup(current => current === group ? null : group);
+  }
+  useLayoutEffect(() => {
+    if (!open || !groupFocus.current) return;
+    const column = menu.current?.querySelector('.model-select-column[data-source="personal"]');
+    const back = column?.querySelector<HTMLButtonElement>('[data-model-group]');
+    const selected = column?.querySelector<HTMLButtonElement>('[data-model-key][aria-pressed=true]:not(:disabled)');
+    const first = column?.querySelector<HTMLButtonElement>('[data-model-key]:not(:disabled)');
+    (personalGroup ? selected ?? first ?? back : back)?.focus();
+    groupFocus.current = null;
+  }, [open, personalGroup]);
   useEffect(() => {
     if (!open) return;
     function outside(event: PointerEvent) {
@@ -75,7 +93,7 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
       title={kind === "图像" ? "选择出图引擎" : `选择${kind}模型`} aria-label={`${label} · ${sourceLabel}，选择${kind}模型`}
       aria-haspopup="dialog" aria-expanded={open} aria-controls={open ? id : undefined}
       onKeyDown={event => { if (open && event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); } }}
-      onClick={() => setOpen(value => !value)}>
+      onClick={() => open ? close() : setOpen(true)}>
       <span className="model-select-source model-source-badge" title={quotaDetail ?? sourceLabel} aria-label={sourceLabel}><SourceIcon size={12} strokeWidth={2.8} aria-hidden="true" /></span>
       <span className="model-select-name">{label}</span>
       <ChevronDown size={12} aria-hidden="true" />
@@ -84,7 +102,7 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
       style={{ position: "fixed", left: position?.left, top: position?.top, bottom: position?.bottom, width: position?.width, visibility: position ? "visible" : "hidden" }}
       onPointerDown={event => event.stopPropagation()} onWheel={event => event.stopPropagation()}
       onKeyDown={event => {
-        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); close(true); return; }
+        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); if (personalGroup) switchGroup(personalGroup); else close(true); return; }
         if (event.key === "Tab") { close(true); return; }
         if (!(event.target instanceof HTMLButtonElement) || !event.target.hasAttribute("data-model-option")) return;
         const column = event.target.closest(".model-select-column");
@@ -92,6 +110,10 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
         if (!column) {
           if (event.key === "ArrowUp" || event.key === "ArrowDown") { event.preventDefault(); event.stopPropagation(); menu.current?.querySelector<HTMLButtonElement>('.model-select-column [data-model-option]:not(:disabled)')?.focus(); }
           return;
+        }
+        const group = event.target.dataset.modelGroup;
+        if ((event.key === "ArrowRight" && group && !personalGroup) || (event.key === "ArrowLeft" && personalGroup && column.getAttribute("data-source") === "personal")) {
+          event.preventDefault(); event.stopPropagation(); switchGroup((personalGroup ?? group)!); return;
         }
         const buttons = Array.from(column.querySelectorAll<HTMLButtonElement>("[data-model-option]:not(:disabled)"));
         const index = buttons.indexOf(event.target);
@@ -109,7 +131,9 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
       }}>
       <OverlayScrollArea label="模型列表滚动条" viewportStyle={{ maxHeight: position?.height }}>
         <div className="model-select-columns">{(["personal", "cloud"] as const).map(column => {
-          const entries = options.filter(option => option.source === column);
+          const columnOptions = options.filter(option => option.source === column);
+          const groups = [...new Set(columnOptions.flatMap(option => option.group ? [option.group] : []))];
+          const entries = columnOptions.filter(option => column !== "personal" || (option.group ?? null) === personalGroup);
           const families = [...new Set(entries.map(option => family(option.label)))];
           const ordered = families.flatMap(group => entries.filter(option => family(option.label) === group));
           const Icon = column === "cloud" ? Coins : UserRound;
@@ -120,7 +144,10 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
                 <Coins size={13} aria-hidden="true" /><strong>{cloudLoggedIn && cloudBalance != null ? cloudBalance.toLocaleString("zh-CN") : "—"}</strong>
               </div>}
             </div>
-            <div className="model-select-options">{ordered.map(option => <div key={option.key} className="model-select-row">
+            <div className="model-select-options">
+              {column === "personal" && personalGroup && <button type="button" className="model-select-option model-select-group" data-model-option data-model-group={personalGroup}
+                aria-label="返回自有订阅" onClick={() => switchGroup(personalGroup)}><ChevronLeft size={13} />{personalGroup}</button>}
+              {ordered.map(option => <div key={option.key} className="model-select-row">
               <button type="button" data-model-option data-model-key={option.key} className="model-select-option" disabled={!!option.reason}
                 aria-pressed={value === option.key} title={option.reason ? userErrorMessage(option.reason, "此模型暂不可用，请检查账号和服务状态。") : option.label}
                 onClick={() => { onChange(option.key); close(true); }}>
@@ -129,13 +156,18 @@ export function ModelSelect({ value, label, source, options, onChange, defaultKe
               {onSetDefault && <button type="button" className={`model-select-default${defaultKey === option.key ? " is-default" : ""}`}
                 disabled={!!option.reason} aria-label={`${defaultKey === option.key ? "取消默认" : "设为默认"}：${option.label}`}
                 onClick={() => onSetDefault(option.key)}><Star size={12} fill={defaultKey === option.key ? "currentColor" : "none"} aria-hidden="true" /></button>}
-            </div>)}</div>
+            </div>)}
+              {column === "personal" && !personalGroup && groups.map(group => <button key={group} type="button" className="model-select-option model-select-group" data-model-option data-model-group={group}
+                aria-pressed={columnOptions.some(option => option.group === group && option.key === value)} onClick={() => switchGroup(group)}><span>{group}</span><ChevronRight size={13} /></button>)}
+            </div>
           </section>;
         })}</div>
         {localOption && <div className="model-select-local-row" data-source="local"><button type="button" className="model-select-local" data-model-option data-model-key={localOption.key} aria-pressed={value === localOption.key}
-          disabled={!!localOption.reason} title={localOption.reason ? userErrorMessage(localOption.reason, "本地视频暂不可用，请检查账号和本机环境。") : "本地 H3 视频，不消耗积分"} onClick={() => { onChange(localOption.key); close(true); }}>
-          <span className="model-source-badge"><Monitor size={12} strokeWidth={2.8} aria-hidden="true" /></span><span>本地部署</span><small>H3</small><span className="model-local-cost"><Coins size={12} aria-hidden="true" />0</span>{value === localOption.key && <Check size={13} aria-hidden="true" />}
-        </button></div>}
+          disabled={!!localOption.reason} title={localOption.reason ? userErrorMessage(localOption.reason, "本地模型暂不可用，请检查账号和本机环境。") : "本地部署，不消耗积分"} onClick={() => { onChange(localOption.key); close(true); }}>
+          <span className="model-source-badge"><Monitor size={12} strokeWidth={2.8} aria-hidden="true" /></span><span>本地部署</span><small>{localOption.label.replace("本地部署 · ", "")}</small><span className="model-local-cost"><Coins size={12} aria-hidden="true" />0</span>{value === localOption.key && <Check size={13} aria-hidden="true" />}
+        </button>{onSetDefault && <button type="button" className={`model-select-default${defaultKey === localOption.key ? " is-default" : ""}`}
+          disabled={!!localOption.reason} aria-label={`${defaultKey === localOption.key ? "取消默认" : "设为默认"}：${localOption.label}`}
+          onClick={() => onSetDefault(localOption.key)}><Star size={12} fill={defaultKey === localOption.key ? "currentColor" : "none"} aria-hidden="true" /></button>}</div>}
         {kind === "图像" && <div className="model-select-footer">Cloud 按张计费；第 2 张起每增加一张参考图，每张输出加 1 Bcoin。</div>}
         {footer && <div className="model-select-footer">{typeof footer === "function" ? footer(() => close(true)) : footer}</div>}
       </OverlayScrollArea>

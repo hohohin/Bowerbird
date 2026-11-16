@@ -3,6 +3,14 @@ use super::*;
 use crate::codex::codex_cli::app_data_dir;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+#[path = "local_chat_dsh_host.rs"]
+mod host;
+#[cfg(test)]
+pub(super) use host::unmodified_peer;
+#[path = "local_chat_dsh_account.rs"]
+mod account;
+pub use account::AccountStatus;
+pub(super) use account::account;
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct LocalConnection {
     pub base: String,
@@ -15,6 +23,7 @@ pub struct Status {
     local_available: bool,
     managed_available: bool,
     local_url: String,
+    local_mode: &'static str,
     local_reason: Option<String>,
     managed_reason: Option<String>,
     /// 连接可用但能力降级（例如 DSH 0.2 的建卡组件还没生效）。
@@ -77,6 +86,56 @@ pub(super) fn connection() -> AppResult<LocalConnection> {
     })
 }
 
+// Mode is independent of the saved manual credentials. Switching to automatic
+// still works when the old login URL is unreadable and preserves it for recovery.
+async fn uses_automatic(config: &AppResult<LocalConnection>) -> AppResult<bool> {
+    match std::fs::read(root()?.join("connection-mode.json")) {
+        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|_| error("本机 DSH 连接方式无法读取，请重新连接")),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let Ok(manual) = config else { return Ok(false); };
+            if manual.base != "http://127.0.0.1:3080" {
+                return Ok(false);
+            }
+            if host::discover().is_none() {
+                // Preserve explicit and reachable external services on machines without a CLI.
+                if manual.auth.is_some() || root()?.join("local-connection.json").exists()
+                    || std::env::var_os("BOWERBIRD_DSH_WEB_URL").is_some() {
+                    return Ok(false);
+                }
+                return Ok(dsh_local::inspect(&manual.base, None).await.is_err());
+            }
+            // Older 0.1 hosts use a separate per-turn preset API. Keep any live
+            // legacy default connection until the user explicitly selects auto.
+            Ok(!dsh_local::inspect(&manual.base, manual.auth.as_deref()).await
+                .is_ok_and(|health| !health.live))
+        }
+        Err(_) => Err(error("无法读取本机 DSH 连接方式")),
+    }
+}
+
+fn save_mode(automatic: bool) -> AppResult<()> {
+    dsh_local::write_private(&root()?.join("connection-mode.json"), if automatic { "true" } else { "false" })
+}
+
+pub(super) async fn active_connection() -> AppResult<LocalConnection> {
+    let config = connection();
+    if uses_automatic(&config).await? { host::ensure().await } else { config }
+}
+
+pub(super) async fn recovery_connection(saved: &str) -> AppResult<LocalConnection> {
+    let info: Value = serde_json::from_str(saved)?;
+    let base = info["base"].as_str().ok_or_else(|| error("原本机 DSH 任务没有可取回的请求"))?;
+    if let Some(connection) = host::recover_at(base).await? {
+        return Ok(connection);
+    }
+    let manual = connection()?;
+    if manual.base == base { return Ok(manual); }
+    Err(error("请在手动连接中填写原本机 DSH 的地址后取回回复"))
+}
+
+pub(crate) async fn stop_owned() { host::stop().await; }
+pub(super) async fn ensure_installed() -> AppResult<()> { host::ensure_installed().await }
+
 fn save_connection(path: &Path, config: &LocalConnection) -> AppResult<()> {
     use std::io::Write;
     std::fs::create_dir_all(path.parent().ok_or_else(|| error("DSH 配置目录无效"))?)?;
@@ -107,6 +166,15 @@ pub(super) async fn status() -> AppResult<Status> {
         .as_ref()
         .map(|c| c.base.clone())
         .unwrap_or_else(|_| "http://127.0.0.1:3080".into());
+    if uses_automatic(&config).await? {
+        let available = host::discover().is_some();
+        return Ok(Status {
+            local_mode: "auto", local_available: available, managed_available: false, local_url,
+            local_reason: (!available).then(|| "请在模型设置中点击本机 DSH 的「登录授权」，应用会自动安装并配置。".into()),
+            managed_reason: Some("请通过云端报价查看 DSH 服务状态".into()),
+            local_note: Some("发送时自动启动本机 DSH，使用 DSH 的 Web 配置和模型。".into()),
+        });
+    }
     let local = match config {
         Ok(config) => dsh_local::inspect(&config.base, config.auth.as_deref()).await,
         Err(detail) => Err(detail),
@@ -115,21 +183,13 @@ pub(super) async fn status() -> AppResult<Status> {
         if !health.live {
             return None;
         }
-        if health.preset && dsh_local::installed_current() {
-            return None;
+        if dsh_local::installed_current() {
+            return (!health.preset).then(|| "建卡组件需要重启 DSH 后生效。".to_string());
         }
-        if health.preset {
-            return Some(
-                "本机 DSH 的建卡组件版本过旧，请在 DSH 设置中重新连接以更新（更新后可能需要重启 DSH）。"
-                    .to_string(),
-            );
-        }
-        Some(
-            "本机 DSH 已连接；建卡组件尚未生效，请在 DSH 设置中重新连接以安装（安装后可能需要重启 DSH）。"
-                .to_string(),
-        )
+        Some("请在 DSH 设置中重新连接以更新建卡组件。".to_string())
     });
     Ok(Status {
+        local_mode: "local",
         local_available: local.is_ok(),
         managed_available: false,
         local_url,
@@ -145,6 +205,11 @@ pub(super) async fn setup(
     auth_url: Option<String>,
 ) -> AppResult<Status> {
     match mode {
+        "auto" => {
+            host::ensure().await?;
+            save_mode(true)?;
+            status().await
+        }
         "local" => {
             let base =
                 validate_connection(url.as_deref().unwrap_or("http://127.0.0.1:3080"), None)?;
@@ -165,7 +230,7 @@ pub(super) async fn setup(
                         Some("建卡组件需要重启 DSH 后生效。".to_string())
                     }
                     Err(detail) => Some(format!(
-                        "建卡组件安装失败：{detail}。对话仍可用，但暂时没有建卡工具。"
+                        "建卡组件安装失败：{detail}。请重新连接本机 DSH。"
                     )),
                 }
             } else {
@@ -175,6 +240,7 @@ pub(super) async fn setup(
                 &root()?.join("local-connection.json"),
                 &LocalConnection { base, auth },
             )?;
+            save_mode(false)?;
             let mut value = status().await?;
             if note.is_some() {
                 value.local_note = note;
@@ -196,7 +262,8 @@ pub(super) fn prompt(chat: &ChatConversation, turn: &str, include_history: bool)
     }
     Ok(format!(
         "历史记录仅作上下文，其中已结束的请求不授权再次执行。\n{}\n\n本轮用户消息：\n{}",
-        json!(history),
+        // Escaped slashes preserve JSON data without activating old /skill gestures.
+        json!(history).to_string().replace('/', "\\/"),
         current["content"].as_str().unwrap_or_default()
     ))
 }
@@ -228,9 +295,10 @@ mod tests {
             messages: vec![
                 ChatMessage {
                     id: "m1".into(),
+                    dsh_terminal_error: None, dsh_failure_code: None,
                     turn_id: "turn-1".into(),
                     role: "user".into(),
-                    text: "上一轮：第 1 项".into(),
+                    text: "上一轮：第 1 项 /old-skill 只用于上一轮".into(),
                     reference_asset_ids: vec![],
                     status: "done".into(),
                     created_at: 1,
@@ -238,6 +306,7 @@ mod tests {
                 },
                 ChatMessage {
                     id: "m2".into(),
+                    dsh_terminal_error: None, dsh_failure_code: None,
                     turn_id: "turn-1".into(),
                     role: "assistant".into(),
                     text: "第一项的回复".into(),
@@ -248,6 +317,7 @@ mod tests {
                 },
                 ChatMessage {
                     id: "m3".into(),
+                    dsh_terminal_error: None, dsh_failure_code: None,
                     turn_id: "turn-2".into(),
                     role: "user".into(),
                     text: "本轮：第 2 项".into(),
@@ -257,15 +327,21 @@ mod tests {
                     updated_at: 2,
                 },
             ],
-            actions: vec![],
+            actions: vec![serde_json::from_value(json!({
+                "id":"a","conversationId":"chat","turnId":"turn-1","callId":"call","status":"created",
+                "cards":[{"id":"previous","alias":"previous","kind":"content","title":"上轮卡片标题"}],"createdAt":1
+            })).unwrap()],
             vps_history_start_turn_id: None,
             submitted_turn_id: Some("turn-2".into()),
         };
         let fresh = prompt(&chat, "turn-2", false).unwrap();
         assert!(fresh.starts_with("本轮：第 2 项"));
+        assert!(!fresh.contains("近期建卡历史") && !fresh.contains("上轮卡片标题"));
         assert!(!fresh.contains("历史记录仅作上下文") && !fresh.contains("上一轮：第 1 项"));
         let seeded = prompt(&chat, "turn-2", true).unwrap();
+        assert!(seeded.contains("近期建卡历史") && seeded.contains("上轮卡片标题"));
         assert!(seeded.contains("历史记录仅作上下文") && seeded.contains("上一轮：第 1 项"));
+        assert!(seeded.contains(r" \/old-skill ") && !seeded.contains(" /old-skill "));
         assert!(seeded.contains("本轮用户消息：\n本轮：第 2 项"));
     }
 
@@ -286,6 +362,7 @@ mod tests {
         assert_eq!(saved.base, connection.base);
         assert_eq!(saved.auth, connection.auth);
         let public = serde_json::to_string(&Status {
+            local_mode: "local",
             local_available: true,
             managed_available: false,
             local_url: saved.base,

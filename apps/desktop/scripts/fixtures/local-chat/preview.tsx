@@ -2,6 +2,7 @@ import "../../../src/styles.css";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CanvasWorkspace } from "../../../src/components/CanvasWorkspace";
+import { AccountOnboarding } from "../../../src/components/AccountOnboarding";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { ToastViewport } from "../../../src/components/ToastViewport";
 import { useStore } from "../../../src/store";
@@ -68,6 +69,7 @@ function Fixture() {
       <details className="chat-fixture-evidence"><summary>IPC 记录（{localCalls.length}）</summary><pre aria-label="合成 IPC 记录">{JSON.stringify(localCalls, null, 2)}</pre></details>
     </details>
     <main className="chat-fixture-workspace"><CanvasWorkspace key={projectId} projectId={projectId} /><AssetContextMenu /><ToastViewport /></main>
+    {location.search === "?settings" && <AccountOnboarding />}
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<React.StrictMode><Fixture /></React.StrictMode>);

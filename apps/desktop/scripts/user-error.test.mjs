@@ -24,6 +24,11 @@ test('unknown and mixed-language diagnostics never reach the presentation', () =
 
 test('recognized failures explain a cause and a recovery action', () => {
   const examples = [
+    ['本机 DSH 本轮失败：模型返回的卡片工具参数不是合法 JSON（MALFORMED_RESPONSE）；可直接重跑这张卡片', /模型回复格式异常/],
+    ['未找到本机 DSH，请安装 DeepSeek Harness 后重试', /请安装 DeepSeek Harness/],
+    ['DSH 未返回有效的 DeepSeek 官方授权地址，请重新授权', /请重新授权/],
+    ['无法连接本机 ComfyUI：error sending request for url (http://127.0.0.1:18189/queue)', /本机生成服务/],
+    ['ComfyUI 生成失败：CUDA error: an illegal memory access was encountered', /本机显卡计算中断/],
     ['HotKey already registered: HotKey { key: F1, id: 160 }', /换一个组合键/],
     ['permission denied C:\\private', /权限/], ['No space left on device', /释放空间/],
     ['No such file or directory', /重新选择文件/], ['os error 32', /其他应用/],

@@ -1,5 +1,17 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 2026-11-15 受控 DeepSeek 结算与 HTTP 状态已部署
+
+10:30:12 完成修正版 0091、`agent-worker` 65、`agent-run` 60 及 VPS 镜像 `ba9d2224f878…` 的生产核验。两个 Edge 的 18 个文件与 Worker 的四个运行文件均已读回。缺失用量的旧账未作追补，已标记新调用按冻结额及原调用凭据恢复。[数据库、运行回执与回退](../../project_logs/2026-11-15-agent-model-settlement-deployment.md)
+
+## 2026-11-15 DeepSeek 请求取消已部署
+
+VPS Worker 于北京时间 01:41:44 切换为 `cf2c2eef3d55…`，修复模型正文读取停顿时的超时与取消传递。生产候选隔离测试 79/79，01:42:31 核验通过。[文件哈希、线上核验与回退](../../project_logs/2026-11-15-deepseek-cancellation.md)
+
+## 2026-11-15 Worker 控制请求与 Edge 正文限额已部署
+
+8 个 Edge 及 VPS Worker 已按现役制品增量上线。Worker 镜像 `3a2dd891316c…` 于北京时间 01:14:33 启动，7 个运行源码及 56 个 Edge 文件哈希核验通过。部署范围、函数版本、线上探针与回退步骤见[部署记录](../../project_logs/2026-11-15-worker-control-deployment.md)。
+
 ## 2026-11-13 Seedream 5.5 已部署
 
 用户明确确认后，北京时间 18:00:05 切换单文件 Worker，18:00:49 应用 0090；18:03:58 真实透明 PNG 验收完成，18:06:40 现役及单次执行复核通过。当前镜像 `243d949a5829…`，原镜像 `394ad4f896f4…`。详见[部署证据、验收边界与回退](../../project_logs/2026-11-13-seedream55.md)。

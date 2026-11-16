@@ -44,7 +44,7 @@ export function isDshChatEngine(value: unknown): value is DshChatEngine {
   return value === DSH_CHAT_ENGINE || value === DSH_CHAT_ENGINE_V2;
 }
 type ChatSkill = { id: "h3-video-prompt"; parameters: Record<string, unknown> } | { id: "text-editor" };
-export type ChatInput = { messages: ChatMessage[]; tools_enabled: boolean; engine?: DshChatEngine; conversation_id?: string; skill?: ChatSkill };
+export type ChatInput = { messages: ChatMessage[]; tools_enabled: boolean; image_card_provider?: true; engine?: DshChatEngine; conversation_id?: string; skill?: ChatSkill };
 export class ChatInputError extends Error {}
 const invalid = () => new ChatInputError("对话内容格式无效，请重新发送");
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -100,12 +100,13 @@ function parseMessage(value: unknown): ChatMessage {
 
 export function validateChatInput(value: unknown): ChatInput {
   if (
-    !record(value) || !keys(value, ["messages", "tools_enabled", "engine", "skill", "conversation_id"]) ||
+    !record(value) || !keys(value, ["messages", "tools_enabled", "engine", "skill", "conversation_id", "image_card_provider"]) ||
     (value.engine !== undefined && !isDshChatEngine(value.engine)) ||
     (value.skill !== undefined && !isDshChatEngine(value.engine)) ||
     (value.engine !== DSH_CHAT_ENGINE_V2 && value.conversation_id !== undefined) ||
     !Array.isArray(value.messages) ||
     value.messages.length < 1 || value.messages.length > 128 ||
+    (value.image_card_provider !== undefined && (value.image_card_provider !== true || value.engine !== DSH_CHAT_ENGINE_V2 || value.skill !== undefined || value.tools_enabled === false)) ||
     (value.tools_enabled !== undefined &&
       typeof value.tools_enabled !== "boolean")
   ) throw invalid();
@@ -132,6 +133,7 @@ export function validateChatInput(value: unknown): ChatInput {
         !messages[0].content?.trim())) throw invalid();
     return { messages, tools_enabled: value.skill === undefined && value.tools_enabled !== false, engine: value.engine,
       ...(value.engine === DSH_CHAT_ENGINE_V2 ? { conversation_id: value.conversation_id as string } : {}),
+      ...(value.image_card_provider === true ? { image_card_provider: true as const } : {}),
       ...(value.skill === undefined ? {} : { skill: parseChatSkill(value.skill) }) };
   }
   return { messages, tools_enabled: value.tools_enabled !== false };

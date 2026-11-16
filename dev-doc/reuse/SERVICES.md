@@ -1,5 +1,12 @@
 # 接口、文件接入与执行服务复用
 
+## 网页 Agent 只读代码快照
+
+- **入口**：`apps/code-reader-mcp/core.mjs` 的 `TOOLS`／`callTool`／`validateSnapshot` 是四个只读代码工具的公共实现；`export.mjs` 负责本机安全读取、脱敏、依赖补齐及覆盖门禁，`dependencies.mjs` 负责静态引用解析和相关测试识别。stdio 的 `server.mjs` 与 Gemini 的 `http-app.mjs` 共用同一套工具，传输层各自处理协议和授权。
+- **边界**：只属于私有开发工具，运行在本机受限 Node 进程；不能拿官网产品鉴权、Cloud Worker 或用户库权限替代快照限制。Gemini OAuth／SSH／Nginx 接入及部署边界见 [只读 MCP](../../apps/code-reader-mcp/README.md#gemini-网页端已部署账号连接待验收)。
+
+自有订阅「即梦」二级菜单中的 Seedream 图片模型 复用项目生成任务、探索浏览器资料目录和生成图入库。网页表单适配在 [jimeng_web.js](../../apps/desktop/src-tauri/src/codex/jimeng_web.js)，选择、默认值、首轮和续轮均携带具体模型键。每个任务的 WebView、登录和一次性下载由 [jimeng_web.rs](../../apps/desktop/src-tauri/src/codex/jimeng_web.rs) 管理。网页作业中断后查看即梦创作记录，应用不自动重提。入口仅支持单张 2K。
+
 Cloud 图片新增模型复用 [modelForService／arkImageRequestBody](../../apps/agent-worker/src/cloud-generation/runtime.ts) 的独立 service 路由和 [generate-proxy](../../apps/cloud/supabase/functions/generate-proxy/index.ts) 的动态 `service_costs` 校验；报价沿用 `quote_bcoin_image`，恢复沿用原 job／hold，不能改默认环境变量来替换旧任务模型。Seedream 5.5 使用 0090 三服务与 `ARK_IMAGE_MODEL_55`，部署状态见 [部署说明](../../apps/cloud/DEPLOY.md#2026-11-13-seedream-55-已部署)。桌面模型和 Cloud 兜底统一复用 [genProviders.ts](../../apps/desktop/src/lib/genProviders.ts) 的 `cloudGenProviders`／`defaultCloudProvider`，后者只在服务端宣告 5.5 可用时返回新 key；坐标能力由 `supportsAnnotationCoordinates` 判定。
 
 [返回复用地图](../Bowerbird开发计划.md#复用地图)。2026-11-03 按当前工作区源码核验；以下“可跨模块复用”均限定所在运行时，不表示可以跨应用直接 import。发布状态与产品约定仍以 [PROJECT](../../PROJECT.md) 为准。
@@ -10,9 +17,12 @@ Cloud 图片新增模型复用 [modelForService／arkImageRequestBody](../../app
 
 云端 DSH 要求在画板建卡时，复用 [桌面聊天桥](../../apps/desktop/src-tauri/src/commands/local_chat_dsh_vps.rs) 与原生建卡事务，VPS 不直写本地数据库。需要在云端执行受保护的聊天技能时，复用 [Worker 的 DSH 聊天入口](../../apps/agent-worker/src/cloud-chat/dsh.ts) 和既有技能加载器；聊天协议及服务端权限见 [Cloud 对话](../../apps/cloud/CHAT.md)。
 
+本机 DSH 的 Agent 卡片复用[本机聊天 preset](../../apps/desktop/src-tauri/src/commands/local_chat_dsh_local.rs)，由官方 Skill 插件发现和加载用户技能，建卡仍走同一轮的 `create_canvas_cards`。[调用方式与工具范围](../CHAT-PROVIDERS.md#2026-11-15-本机-dsh-在卡片第一轮使用-skill)
+
 - 桌面批量文件操作从 [startFileTask](../../apps/desktop/src/lib/fileTasks.ts) 提交已确认的原件或目录条目与目标。当前会话的受理、取消、状态和失败项重试由 [原生文件任务](../../apps/desktop/src-tauri/src/commands/file_tasks.rs) 管理。进度显示复用 [FileTaskStatusPanel](../../apps/desktop/src/components/FileTaskStatus.tsx)。[文件操作契约](../FOLDER-MODE.md#2026-11-12-文件操作后台执行与新建位置源码待发布)
 
 - 图片手动合组调用 `api.mergeGenerationGalleries`／`undoGenerationGalleryMerge`；创作框通过 `previousGalleryGeneration(projectId)` 读取当前项目最近普通图片任务。原生实现为 [generation_gallery_manual.rs](../../apps/desktop/src-tauri/src/core/generation_gallery_manual.rs)，SQLite 0057 只存展示别名；catalog／文件夹共用 `gallery_eligible`、`generation_resolved_group`／`generation_display_group`，画板只读补充，不修改 provider 身份或生成图属性。[显式合组契约](../CANVAS-WORKFLOW.md#2026-11-11显式抽卡与手动合组源码待发布)。
+- 素材库和文件夹的分页、计数及组成员查询通过 `with_gallery_cache` 共用同一 SQLite 连接的生成来源索引。首次读取、相关来源数据变化或其他连接提交后按原查询重建。筛选条件、合组别名和解散状态在每次读取时计算。新增生成来源时，同步维护派生查询和失效条件。[generation_gallery.rs](../../apps/desktop/src-tauri/src/core/generation_gallery.rs)
 
 文档原件统一由 [text_documents.rs](../../apps/desktop/src-tauri/src/core/text_documents.rs) 按已登记素材身份访问。其 `office` 子模块 [office_documents.rs](../../apps/desktop/src-tauri/src/core/office_documents.rs) 提供 DOCX 正文／包读取、版本保护的 `save_docx` 和 XLSX／CSV `read_spreadsheet`；对应 IPC 为 `read_text_document`（可选 `previewOnly`）、`save_docx_document`、`read_spreadsheet_document`。调用方只能传 asset ID，不能指定任意读写路径。正文预览、全量编辑与画板内容转换共用格式边界；表格只读原件，DOCX 不走 UTF-8 保存。依赖固定版本、读取限制与验收见 [办公文档支持](../TEXT-LIBRARY.md#办公文档素材2026-11-09)。
 
@@ -49,6 +59,10 @@ H3 的独立提示词优化复用 [canvasWorkflowRuntime.ts](../../apps/desktop/
 对话渠道的 HyperFrames 能力沿 [local_chat.rs](../../apps/desktop/src-tauri/src/commands/local_chat.rs) 的受控动态工具接入 [agent_ds/chat_video.rs](../../apps/desktop/src-tauri/src/commands/agent_ds/chat_video.rs)，与 Agent 卡片共用 `video::execute` 和工程副本／入库契约。对话模型直接编写工程，不投递第二个 Agent；进度与视频附件复用 `local_chat_messages`，UI 复用 `VideoPlayer`。工具参数不接收绝对路径或任意命令；调用必须绑定已确认的当前对话轮次，Cloud 不开放此工具。
 
 本机 Skill 视频制作复用 [agent_ds.rs](../../apps/desktop/src-tauri/src/commands/agent_ds.rs) 的 `agent_ds_workflow_start`／结果／入库协议，`purpose: agent-video` 由 [video.rs](../../apps/desktop/src-tauri/src/commands/agent_ds/video.rs) 提供固定版本 HyperFrames 环境、工程副本与 `serve` 工具桥。Codex 保留沙箱，只请求固定本机检查／截图／渲染命令；不能用视频生成 provider 或受限 HTML 截图 renderer 代替。独立编辑面板由 [video_studio.rs](../../apps/desktop/src-tauri/src/commands/agent_ds/video_studio.rs) 的 open／resize／close 管理服务与 WebView，React 使用 [VideoStudioPanel](../../apps/desktop/src/components/VideoStudioPanel.tsx)。这些是桌面 Agent 内部能力，不能跨运行时导入；Cloud 扩展继续沿统一 Harness。完整契约见 [VIDEO-SKILL.md](../VIDEO-SKILL.md)。
+
+图片生成卡片、底部创作框和图片会话的编辑坞共用 [ProviderSelect](../../apps/desktop/src/components/creation/ProviderSelect.tsx)。本机 `minimax-h3-image` 通过 [H3 图片 provider](../../apps/desktop/src-tauri/src/codex/h3_image.rs) 运行受控图片图谱，沿用图片任务队列、续轮参考图和产物入库。环境入口复用 `ComfyEnvironmentControl` 和 `comfy_video_environment`，按 `image` 或 `edit` 检测及补齐模型。[工作流与安装版本](../COMFYUI-LOCAL-VIDEO.md)。
+
+H3 图片文生图／编辑共用直接提示词图谱，`h3_image::reference_prompt` 将显式引用绑定为原顺序的 `<Picture N>`，不执行自动扩展。取消使用 `cancel_codex_create` 的内存运行守卫；守卫缺失时按原持久任务恢复取消，完成后复用 `generation_worker::update_creative_job_status` 同步任务与项目会话状态。`h3_image::cancel` 只取消原 UUID 并确认队列退出，不使用全局中断。
 
 本机 H3 使用独立的既有持久任务协议：前端 [comfyVideo.ts](../../apps/desktop/src/lib/comfyVideo.ts) 的 `comfyVideo`／`comfyEnvironment`，Rust [comfy_video.rs](../../apps/desktop/src-tauri/src/commands/comfy_video.rs) 的固定模式 graph 与恢复、[comfy_setup.rs](../../apps/desktop/src-tauri/src/commands/comfy_setup.rs) 的按模式环境准备。`frames`／`reference`／`text` 由显式选择确定，缺省兼容旧首尾帧；[composerLocalVideo.ts](../../apps/desktop/src/lib/composerLocalVideo.ts) 让主屏和画板先保存同一 H3 卡片再执行。模式选择复用 `comfyVideoOptionsForMode`，环境响应的 `mode`／`modelsRequired` 用于当前模式就绪判断，`canAddModels` 仅表示托管环境可以补模型。此接口限定桌面与本机 loopback，不接受任意工作流；见 [三模式契约](../COMFYUI-LOCAL-VIDEO.md)。
 
@@ -107,6 +121,10 @@ H3 的独立提示词优化复用 [canvasWorkflowRuntime.ts](../../apps/desktop/
 - **入口**：[_shared/auth.ts](../../apps/cloud/supabase/functions/_shared/auth.ts) 的 `requireUser` 返回已核验 `user` 与 `admin`；[_shared/errors.ts](../../apps/cloud/supabase/functions/_shared/errors.ts) 的 `ApiError`、`requestId`、`jsonResponse`、`errorResponse`、`safeLog` 统一协议。
 - **调用**：[generate-proxy/index.ts](../../apps/cloud/supabase/functions/generate-proxy/index.ts) 先 `requireUser` 再处理请求，异常由 `errorResponse(error, id, cors)` 返回；[entitlement/index.ts](../../apps/cloud/supabase/functions/entitlement/index.ts) 复用同一入口。
 - **边界／状态**：**可跨模块复用（Cloud Edge Functions）**。依赖 Deno 环境变量与 Supabase SDK；`admin` 不替代业务所有权、配额、审批检查。`safeLog` 只接受有限摘要，不能塞入 prompt/token/完整请求。不可把该文件导入浏览器或 Node Worker；机器 worker 的认证协议另行核验。
+
+Edge 接收 JSON 对象时可复用 [_shared/limits.ts](../../apps/cloud/supabase/functions/_shared/limits.ts) 的 `readJsonBody`，传入接口的字节预算。支付通知需要原始正文验签，沿用 `readPaymentBody`。
+
+VPS 的 Agent、生成、理解和视觉提炼消费循环复用 [ControlTransport](../../apps/agent-worker/src/control-plane/control-transport.ts) 发送控制请求。每个串行消费者单独持有实例，按领取和续租回执跟踪有效期。控制请求超时后按原任务恢复，模型请求、签名对象传输仍由各自的客户端处理。
 
 ## 复用 Bcoin 预授权与结算
 

@@ -20,13 +20,23 @@ async function emitPreview(color) {
   }, color);
 }
 try {
+  await page.route('**/src/lib/catalogVirtualLayout.ts*', async route => {
+    const response = await route.fetch();
+    const source = await response.text();
+    const instrumented = source.replace(/(export function catalogLayout\([^)]*\)\s*\{)/, '$1 window.layoutCalls = (window.layoutCalls || 0) + 1;');
+    assert.notEqual(source, instrumented);
+    await route.fulfill({ response, body: instrumented });
+  });
   await page.goto('http://127.0.0.1:17981/scripts/fixtures/connected-collections/preview.html');
   await tab().click(); await image('root-0').waitFor(); await page.waitForTimeout(200);
+  const layoutCalls = await page.evaluate(() => window.layoutCalls);
+  assert.ok(layoutCalls > 0);
   const original = await image('root-0').getAttribute('src');
   const initialReads = await reads();
   await emitPreview('red');
   await page.waitForFunction(original => document.querySelector('[data-connection-entry="root-0"] img')?.getAttribute('src') !== original, original);
   await page.waitForTimeout(180);
+  assert.equal(await page.evaluate(() => window.layoutCalls), layoutCalls, 'unchanged dimensions preserve the entire layout');
   assert.deepEqual(await reads(), initialReads, 'preview completion patches the visible card without rereading counts/pages');
 
   await page.locator('[data-collection-id="child"]').click(); await image('ref-one').waitFor(); await page.waitForTimeout(120);
@@ -37,7 +47,7 @@ try {
   assert.deepEqual(await reads(), beforeReference, 'reference cards patch without resolving or reloading a page');
 
   await page.evaluate(() => window.connectionProgress({ rootId: 'root', scanning: true, error: null }));
-  await page.locator('.connected-refreshing').waitFor();
+  await page.locator('.connected-refreshing').first().waitFor();
   assert.deepEqual(await reads(), beforeReference, 'scan progress does not invalidate catalog data');
   await page.evaluate(() => window.setLibraryVisible(false));
   await page.locator('.catalog-virtual').waitFor({ state: 'detached' });

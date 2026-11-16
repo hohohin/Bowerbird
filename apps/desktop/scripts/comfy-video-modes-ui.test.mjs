@@ -4,7 +4,7 @@ import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
 await mkdir('.tmp/h3-modes', { recursive: true });
-const server = await createServer({ configFile: false, cacheDir: '.tmp/h3-modes/vite', server: { host: '127.0.0.1', port: 1698, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ optimizeDeps: { entries: ["scripts/fixtures/canvas-reference/preview.html"] }, cacheDir: '.tmp/h3-modes/vite', server: { host: '127.0.0.1', port: 1698, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
@@ -24,7 +24,14 @@ async function mock() {
           ? { mode: args.mode, phase: 'unavailable', endpoint: args.endpoint, message: '缺少此模式的模型', canInstall: true, canAddModels: true, installed: false, downloadBytes: 21e9, requiredBytes: 24e9 }
           : { mode: args.mode, phase: 'ready', endpoint: args.endpoint, message: '已就绪' };
       }
-      if (command === 'comfy_video') { window.h3Calls.push(args); return { status: args.action === 'cancel' ? 'cancelled' : window.h3Status, message: '模拟', asset: window.h3Asset }; }
+      if (command === 'comfy_video') {
+        window.h3Calls.push(args);
+        if (window.h3Status === 'offline') {
+          window.h3Status = window.afterRestart ?? 'done';
+          return { status: 'offline', originalService: ['http://127.0.0.1:18189','text'], message: '本机视频服务已断开。' };
+        }
+        return { status: args.action === 'cancel' ? 'cancelled' : window.h3Status, message: '模拟', asset: window.h3Asset };
+      }
       return invoke(command, args);
     };
     const { api } = await import('/src/lib/api.ts');
@@ -42,6 +49,14 @@ try {
     await c.edit([{ ...newWorkflowNode('comfy-video', 400, 60, 'codex'), id: 'h3', prompt: '主体 <Picture 1> 在雨中行走', inputs: { 'first-frame': [{ assetId: 'a' }], 'last-frame': [{ assetId: 'b' }] } }]);
   });
   const card = page.locator('[data-workflow-card="h3"]');
+  assert.match(await card.locator('header').innerText(), /视频生成/);
+  await card.getByTitle('选择视频模型', { exact: true }).click();
+  const modelMenu = page.getByRole('dialog', { name: '视频模型', exact: true });
+  await page.evaluate(() => window.store.setState({ dreaminaHealth: { ok: true } }));
+  await modelMenu.locator('[data-model-key="jimeng:seedance2.5"]').click();
+  await card.getByLabel('视频时长（秒）').waitFor();
+  await card.getByTitle('选择视频模型', { exact: true }).click();
+  await modelMenu.locator('[data-model-key="local:h3"]').click();
   await card.getByLabel('H3 模式', { exact: true }).click();
   await page.getByRole('option', { name: '单图', exact: true }).click();
   assert.equal(await card.locator('.comfy-frame-slot').count(), 1);
@@ -55,8 +70,16 @@ try {
   assert.equal(input.mode, 'reference'); assert.equal(input.firstFrame, 'a'); assert.equal(input.lastFrame, undefined);
   assert.equal(input.resolution, .98); assert.equal(input.seconds, 5); assert.match(input.prompt, /<Picture 1>/);
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
-  await card.getByLabel('H3 模式', { exact: true }).click();
-  await page.getByRole('option', { name: '文生视频', exact: true }).click();
+  // Completion refreshes the canvas. Reopen if that refresh dismissed the first popup.
+  const modePicker = card.getByLabel('H3 模式', { exact: true });
+  const textOption = page.getByRole('option', { name: '文生视频', exact: true });
+  await modePicker.click();
+  try { await textOption.click({ timeout: 1500 }); }
+  catch (error) {
+    if (await modePicker.getAttribute('aria-expanded') === 'true') throw error;
+    await modePicker.click();
+    await textOption.click();
+  }
   assert.equal(await card.locator('.comfy-frame-slot').count(), 0);
   await card.getByLabel('H3 比例', { exact: true }).click();
   assert.equal(await page.getByRole('option', { name: '自动', exact: true }).count(), 0);
@@ -83,10 +106,19 @@ try {
     const c = new CanvasWorkflowController(`modes-${crypto.randomUUID()}`); await c.load();
     await c.edit([base]); window.h3Status = 'unknown'; await c.start('gen', true);
     const jobId = c.document.run.steps.gen.jobId, starts = window.h3Calls.filter(call => call.action === 'start').length;
-    const restored = new CanvasWorkflowController(c.projectId); await restored.load(); window.h3Status = 'done'; await restored.continue();
+    const restored = new CanvasWorkflowController(c.projectId); await restored.load(); window.h3Status = 'offline'; await restored.continue();
+    check(window.envCalls.some(call => call.action === 'prepare' && call.endpoint === 'http://127.0.0.1:18189' && call.mode === 'text'), 'restart original local service');
     check(restored.document.run.status === 'done', 'text task recovered');
     check(window.h3Calls.at(-1).requestId === jobId && window.h3Calls.at(-1).action === 'status', 'recovery queries original job');
     check(window.h3Calls.filter(call => call.action === 'start').length === starts, 'recovery cannot resubmit');
+    const lost = new CanvasWorkflowController(`lost-${crypto.randomUUID()}`); await lost.load();
+    await lost.edit([base]); window.h3Status = 'unknown'; await lost.start('gen', true);
+    const beforeRestart = window.h3Calls.filter(call => call.action === 'start').length;
+    window.h3Status = 'offline'; window.afterRestart = 'unknown'; await lost.continue();
+    check(lost.document.run.status === 'failed' && !lost.isLocked('gen'), 'lost job releases original Run control');
+    check(window.h3Calls.filter(call => call.action === 'start').length === beforeRestart, 'lost job never replays automatically');
+    window.h3Status = 'done'; await lost.start('gen', true);
+    check(lost.document.run.status === 'done', 'existing Run works after lost job');
     for (const ids of [[], ['a', 'b']]) {
       const invalid = new CanvasWorkflowController(`invalid-${crypto.randomUUID()}`); await invalid.load();
       await invalid.edit([{ ...base, comfyVideo: comfyVideoOptionsForMode(DEFAULT_COMFY_VIDEO, 'reference'), inputs: { 'first-frame': ids.map(assetId => ({ assetId })) } }]);
@@ -99,7 +131,16 @@ try {
   for (const theme of ['light', 'dark']) { await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme); await page.screenshot({ path: `.tmp/h3-modes/text-${theme}.png` }); }
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
   await page.evaluate(() => window.needModels = 'reference');
-  await card.getByLabel('H3 模式', { exact: true }).click(); await page.getByRole('option', { name: '单图', exact: true }).click();
+  const modes = card.getByLabel('H3 模式', { exact: true });
+  await modes.focus();
+  await modes.press('ArrowUp');
+  const referenceOption = page.getByRole('option', { name: '单图', exact: true });
+  try { await referenceOption.press('Enter', { timeout: 1500 }); }
+  catch (error) {
+    if (await modes.getAttribute('aria-expanded') === 'true') throw error;
+    await modes.press('ArrowUp');
+    await referenceOption.press('Enter');
+  }
   await page.waitForFunction(() => window.envCalls.at(-1)?.mode === 'reference');
   await card.getByRole('button', { name: '本地部署工作流：环境未就绪，打开环境设置', exact: true }).click();
   await page.getByRole('button', { name: '下载模型', exact: true }).click();

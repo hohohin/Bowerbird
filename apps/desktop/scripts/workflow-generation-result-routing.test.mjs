@@ -131,6 +131,10 @@ try {
   await page.reload();
   await connectWithPlus('clip', '视频下游');
   await checkWire('clip', 'edit-clip');
+  const clipCard = page.locator('[data-workflow-card="clip"]');
+  const editCard = page.locator('[data-workflow-card="edit-clip"]');
+  assert.equal(await clipCard.locator('.workflow-preview').count(), 0);
+  assert.equal(await editCard.locator('.workflow-preview').count(), 0);
   const video = await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -167,6 +171,9 @@ try {
   await page.locator(`[data-workflow-generated-link="${video.clipResultId}"]`).waitFor();
   await checkWire(video.clipResultId, 'edit-clip');
   await checkWire('clip', 'completion');
+  await editCard.locator('[data-workflow-reference-asset="clip-asset"]').waitFor();
+  assert.equal(await clipCard.locator('.workflow-preview').count(), 0, 'the producer keeps its result on the canvas');
+  assert.equal(await editCard.locator('.workflow-preview > *').count(), 1, 'only the upstream clip is shown inside the downstream generator');
   assert.deepEqual(errors, []);
   console.log('PASS new + and saved direct inputs, image/video result wires, whole video delivery, completion signal, fan-out, with/without @, rerun, single-card run and reload');
 } finally {

@@ -61,7 +61,7 @@ try {
   const provider = dock.locator('.provider-choice');
   const imageMenu = page.getByRole('dialog', { name: '图像模型', exact: true });
   for (const [key, source, label] of [
-    ['codex', 'personal', 'gpt-image-2'], ['jimeng', 'personal', 'Seedream 5.0 Pro'],
+    ['codex', 'personal', 'gpt-image-2'], ['dreamina-web50pro', 'personal', 'Seedream 5.0 Pro'],
     ['bowerbird-cloud-image_hd', 'cloud', 'Seedream 5.0 Pro'],
   ]) {
     await provider.click();
@@ -76,6 +76,7 @@ try {
     assert.ok(balanceBox.x >= titleBox.x + titleBox.width, 'balance does not overlap the title');
     assert.ok((await heading.boundingBox()).height < 50, 'balance does not increase the menu header height');
     assert.equal(await imageMenu.locator('[data-model-key="bowerbird-cloud-image_fast"]').count(), 0, 'Fast is absent from new selections');
+    if (key === "dreamina-web50pro") await imageMenu.locator("[data-model-group]").click();
     await imageMenu.locator(`[data-model-key="${key}"]`).click();
     assert.equal(await provider.getAttribute('data-source'), source);
     assert.equal(await provider.locator('.model-select-source').innerText(), '', 'collapsed source uses an icon, not a second label');
@@ -83,7 +84,9 @@ try {
     await provider.click();
     assert.equal(await imageMenu.locator(`[data-source="${source}"] .model-select-column-title`).evaluate(el => getComputedStyle(el).color), iconColor, 'expanded column and collapsed icon share the source color');
     assert.equal(await imageMenu.locator(`[data-source="${source}"] .model-source-badge`).evaluate(el => getComputedStyle(el).backgroundColor), iconColor, 'menu and trigger use the same filled badge');
+    if (key === "dreamina-web50pro") await imageMenu.locator("[data-model-group]").click();
     assert.equal(await imageMenu.locator(`[data-model-key="${key}"] > svg`).evaluate(el => getComputedStyle(el).color), iconColor);
+    if (key === 'dreamina-web50pro') await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
     assert.ok((await provider.innerText()).includes(label));
     assert.equal(await page.evaluate(() => window.store.getState().activeGenProvider), key, 'display names do not change routing keys');
@@ -139,7 +142,9 @@ try {
   await imageMenu.getByRole('status', { name: '登录后查看 Bowerbird 积分' }).waitFor();
   await page.evaluate(() => window.store.setState({ cloudAuth: { ...window.store.getState().cloudAuth, logged_in: true } }));
   await imageMenu.getByRole('status').filter({ hasText: '100' }).waitFor();
-  assert.equal(await imageMenu.locator('[data-model-key="jimeng"]').isDisabled(), true);
+  await imageMenu.locator('[data-model-group]').click();
+  assert.equal(await imageMenu.locator('[data-model-key="dreamina-web55"]').isDisabled(), false);
+  await page.keyboard.press('Escape');
   // Changing account eligibility can disable the focused option and move focus to the body.
   await imageMenu.locator('[data-model-key="codex"]').focus();
   await page.keyboard.press('Escape');
@@ -167,7 +172,7 @@ try {
   await page.evaluate(() => window.store.setState({ cloudEntitlement: { ...window.store.getState().cloudEntitlement, generation_services: undefined,
     policy: { can_use_byo: false }, balances: { daily: 0, sub: 0, topup: 0 } } }));
   await provider.click();
-  assert.equal(await imageMenu.locator('.model-select-option:enabled').count(), 0, 'Pro and credit gates remain enforced');
+  assert.equal(await imageMenu.locator('[data-model-key]:enabled').count(), 0, 'Pro and credit gates remain enforced');
   assert.equal(await imageMenu.getByRole('status').innerText(), '0', 'known zero is distinct from an unavailable balance');
   await page.keyboard.press('Escape');
   await page.evaluate(() => window.store.setState({ cloudEntitlement: { ...window.store.getState().cloudEntitlement,

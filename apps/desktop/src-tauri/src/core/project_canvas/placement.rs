@@ -4,14 +4,14 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct Rect {
+pub(in crate::core) struct Rect {
     pub x: f64,
     pub y: f64,
     pub width: f64,
     pub height: f64,
 }
 
-pub(super) fn workflow_rect(node: &Value) -> Rect {
+pub(in crate::core) fn workflow_rect(node: &Value) -> Rect {
     let kind = node["kind"].as_str().unwrap_or("");
     let size = |key: &str, fallback: f64| {
         node["layoutSize"][key]
@@ -26,8 +26,6 @@ pub(super) fn workflow_rect(node: &Value) -> Rect {
             "width",
             if kind == "trigger" {
                 196.0
-            } else if kind == "comfy-video" {
-                416.0
             } else {
                 320.0
             },
@@ -45,7 +43,7 @@ pub(super) fn workflow_rect(node: &Value) -> Rect {
     }
 }
 
-pub(super) fn near(card: Rect, obstacles: &[Rect], minimum_x: f64) -> (f64, f64) {
+pub(in crate::core) fn near(card: Rect, obstacles: &[Rect], minimum_x: f64) -> (f64, f64) {
     let fits = |x: f64, y: f64| {
         x >= minimum_x
             && !obstacles.iter().any(|other| {
@@ -103,6 +101,18 @@ pub(super) fn obstacles(
     project: &str,
     workflow: &Value,
     excluded: &[&str],
+) -> AppResult<Vec<Rect>> {
+    visible_obstacles(tx, project, workflow, excluded, None)
+}
+
+// Deliveries can land inside sections. A new batch should respect unrelated sections,
+// while a conversation inside a section can still create cards beside itself.
+pub(in crate::core) fn visible_obstacles(
+    tx: &Transaction<'_>,
+    project: &str,
+    workflow: &Value,
+    excluded: &[&str],
+    batch_source: Option<Rect>,
 ) -> AppResult<Vec<Rect>> {
     let snapshot = project_canvas_snapshot_tx(tx, project)?;
     let archived: HashSet<_> = snapshot
@@ -167,7 +177,7 @@ pub(super) fn obstacles(
     hidden.extend(embedded.iter().cloned());
     let mut galleries = HashSet::new();
     let mut anchors = HashMap::<String, String>::new();
-    let mut finished = HashMap::new();
+    let mut image_only = HashMap::new();
     let mut folded_turns = HashMap::new();
     for (node, p) in nodes
         .iter()
@@ -208,7 +218,7 @@ pub(super) fn obstacles(
                 hidden.insert(node.id.clone());
             }
         }
-        finished.insert(anchor.clone(), p["status"] == "done");
+        image_only.insert(anchor.clone(), matches!(p["status"].as_str(), Some("done" | "failed")));
         if let Some(t) = turn(p, false) {
             folded_turns.insert(t, anchor);
         }
@@ -224,7 +234,7 @@ pub(super) fn obstacles(
                 let height = p["snapshot"]["height"].as_f64().unwrap_or(0.0);
                 gallery_heights.insert(
                     anchor.clone(),
-                    if finished.get(anchor) == Some(&true) {
+                    if image_only.get(anchor) == Some(&true) {
                         card.width
                             * if width > 0.0 && height > 0.0 {
                                 height / width
@@ -256,7 +266,12 @@ pub(super) fn obstacles(
                 }
             }
         }
-        if hidden.contains(&node.id) || p["note_type"] == "section" {
+        if hidden.contains(&node.id) {
+            continue;
+        }
+        if p["note_type"] == "section" && batch_source.is_none_or(|s|
+            s.x >= node.x && s.y >= node.y && s.x < node.x + node.width && s.y < node.y + node.height)
+        {
             continue;
         }
         result.push(Rect {

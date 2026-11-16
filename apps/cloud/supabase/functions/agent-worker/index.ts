@@ -319,6 +319,7 @@ async function actionMetrics(admin: SupabaseClient): Promise<Response> {
   const cancelled = terminalRows.filter((row) => row.status === "cancelled").length;
   const completed = succeeded + failed;
   const credits = terminalRows
+    .filter((row) => row.actual_credits !== null)
     .map((row) => Number(row.actual_credits))
     .filter((value) => Number.isFinite(value) && value >= 0);
   const failuresByCode: Record<string, number> = {};
@@ -463,7 +464,7 @@ async function actionObservation(admin: SupabaseClient, body: Record<string, unk
       const wait = Date.parse(row.started_at) - Date.parse(row.queued_at);
       if (Number.isFinite(wait) && wait >= 0) queueWaits.push(wait);
     }
-    if (["succeeded", "failed", "cancelled"].includes(row.status)) {
+    if (row.actual_credits !== null && ["succeeded", "failed", "cancelled"].includes(row.status)) {
       const value = Number(row.actual_credits);
       if (Number.isFinite(value) && value >= 0) creditsList.push(value);
     }
@@ -811,15 +812,16 @@ async function actionUsage(admin: SupabaseClient, body: Record<string, unknown>)
   const callIds = new Set(normalized.map((item) => item.callId));
   if (callIds.size !== normalized.length) throw new ApiError("invalid_request", "usage callId 重复", false, 400);
   const { data: calls, error: callsError } = await admin.from("agent_tool_calls")
-    .select("call_id,tool_name")
+    .select("call_id,tool_name,direct_deepseek_v1_model")
     .eq("run_id", runId)
     .in("call_id", [...callIds]);
   if (callsError) throw new ApiError("internal_error", "usage 工具调用读取失败", true);
-  const callById = new Map((calls ?? []).map((call) => [String(call.call_id), String(call.tool_name)]));
+  const callById = new Map((calls ?? []).map((call) => [String(call.call_id), call]));
   if (callById.size !== callIds.size) throw new ApiError("invalid_request", "usage 引用了未登记的工具调用", false, 400);
 
   const rows = normalized.map((item) => {
-    assertUsageBinding(item, callById.get(item.callId) ?? "", run);
+    const call = callById.get(item.callId);
+    assertUsageBinding(item, String(call?.tool_name ?? ""), run);
     let credits: number;
     try {
       credits = creditsForAgentUsage(item, pricing);
@@ -829,6 +831,7 @@ async function actionUsage(admin: SupabaseClient, body: Record<string, unknown>)
     return {
       run_id: runId,
       call_id: item.callId,
+      ...(call?.direct_deepseek_v1_model ? { model_write_lease: leaseId } : {}),
       kind: item.kind,
       provider: item.provider,
       model: String(item.model ?? "unknown").slice(0, 120),
@@ -877,16 +880,17 @@ async function actionToolCall(admin: SupabaseClient, body: Record<string, unknow
   const leaseId = typeof body.leaseId === "string" ? body.leaseId : "";
   const callId = typeof body.callId === "string" ? body.callId : "";
   if (!runId || !leaseId || !callId) throw new ApiError("invalid_request", "缺少 runId/leaseId/callId");
-  await assertLease(admin, runId, leaseId);
+  const run = await assertLease(admin, runId, leaseId);
 
+  const toolColumns = "call_id,phase,tool_name,args_hash,status,provider_request_id,result_object_key,result_hash,safe_error_code,direct_deepseek_v1_model,pending_model_usage";
   const { data: existingData, error: existingError } = await admin.from("agent_tool_calls")
-    .select("call_id,phase,tool_name,args_hash,status,provider_request_id,result_object_key,result_hash,safe_error_code")
+    .select(toolColumns)
     .eq("run_id", runId).eq("call_id", callId).maybeSingle();
   if (existingError) throw new ApiError("internal_error", "tool call 读取失败", true);
   const existing = existingData as null | {
     call_id: string; phase: string; tool_name: string; args_hash: string; status: string;
     provider_request_id: string | null; result_object_key: string | null; result_hash: string | null;
-    safe_error_code: string | null;
+    safe_error_code: string | null; direct_deepseek_v1_model: string | null; pending_model_usage: unknown;
   };
 
   const responseFor = (row: NonNullable<typeof existing>, reused: boolean): Response => jsonResponse({
@@ -896,10 +900,18 @@ async function actionToolCall(admin: SupabaseClient, body: Record<string, unknow
     resultObjectKey: row.result_object_key,
     resultHash: row.result_hash,
     safeErrorCode: row.safe_error_code,
+    pendingUsage: row.pending_model_usage,
+    directDeepSeekV1Model: row.direct_deepseek_v1_model,
     reused,
   });
 
   if (phase === "prepare") {
+    const directModel = body.directDeepSeekV1Model;
+    if (directModel !== undefined && (typeof directModel !== "string" || !directModel.trim() ||
+        directModel !== directModel.trim() || directModel.length > 120 || body.toolName !== "model_turn" ||
+        run.agent_runtime !== "legacy_kernel" || !["bowerbird-controlled-image-edit", "bowerbird-html-layout-render"].includes(run.skill_id))) {
+      throw new ApiError("invalid_request", "模型调用合同无效");
+    }
     const row = {
       run_id: runId,
       call_id: callId,
@@ -907,21 +919,33 @@ async function actionToolCall(admin: SupabaseClient, body: Record<string, unknow
       tool_name: String(body.toolName ?? "unknown").slice(0, 80),
       args_hash: String(body.argsHash ?? ""),
       status: "prepared" as const,
+      ...(directModel ? {direct_deepseek_v1_model: directModel, model_write_lease: leaseId} : {}),
     };
     if (!/^[0-9a-f]{64}$/.test(row.args_hash)) throw new ApiError("invalid_request", "args_hash 无效");
     if (existing) {
-      if (existing.args_hash !== row.args_hash || existing.phase !== row.phase || existing.tool_name !== row.tool_name) {
+      if (existing.args_hash !== row.args_hash || existing.phase !== row.phase || existing.tool_name !== row.tool_name ||
+          (existing.direct_deepseek_v1_model && existing.direct_deepseek_v1_model !== directModel)) {
         throw new ApiError("invalid_request", "call_id 与已登记参数冲突", false, 409);
+      }
+      if (existing.status === "prepared" && !existing.direct_deepseek_v1_model && directModel) {
+        const upgraded = await admin.from("agent_tool_calls")
+          .update({ direct_deepseek_v1_model: directModel, model_write_lease: leaseId })
+          .eq("run_id", runId).eq("call_id", callId).eq("args_hash", row.args_hash)
+          .eq("tool_name", row.tool_name).eq("phase", row.phase).eq("status", "prepared")
+          .is("direct_deepseek_v1_model", null).select(toolColumns).maybeSingle();
+        if (upgraded.error || !upgraded.data) throw new ApiError("invalid_request", "工具登记状态已变化", false, 409);
+        return responseFor(upgraded.data as NonNullable<typeof existing>, true);
       }
       return responseFor(existing, true);
     }
     const { data, error } = await admin.from("agent_tool_calls").insert(row)
-      .select("call_id,phase,tool_name,args_hash,status,provider_request_id,result_object_key,result_hash,safe_error_code")
+      .select(toolColumns)
       .single();
     if (error || !data) throw new ApiError("internal_error", "tool call 登记失败", true);
     return responseFor(data as NonNullable<typeof existing>, false);
   }
 
+  const leaseBinding = existing?.direct_deepseek_v1_model ? {model_write_lease: leaseId} : {};
   if (phase === "submitted") {
     if (!existing) throw new ApiError("invalid_request", "tool call 尚未 prepare", false, 409);
     const providerRequestId = body.providerRequestId ? String(body.providerRequestId).slice(0, 200) : null;
@@ -931,9 +955,9 @@ async function actionToolCall(admin: SupabaseClient, body: Record<string, unknow
       }
       if (providerRequestId && !existing.provider_request_id) {
         const attached = await admin.from("agent_tool_calls")
-          .update({ provider_request_id: providerRequestId })
+          .update({ ...leaseBinding, provider_request_id: providerRequestId })
           .eq("run_id", runId).eq("call_id", callId).eq("status", "submitted").is("provider_request_id", null)
-          .select("call_id,phase,tool_name,args_hash,status,provider_request_id,result_object_key,result_hash,safe_error_code")
+          .select(toolColumns)
           .maybeSingle();
         if (attached.error || !attached.data) throw new ApiError("invalid_request", "provider request id 状态已变化", false, 409);
         return responseFor(attached.data as NonNullable<typeof existing>, true);
@@ -942,9 +966,9 @@ async function actionToolCall(admin: SupabaseClient, body: Record<string, unknow
     }
     if (existing.status !== "prepared") return responseFor(existing, true);
     const { data, error } = await admin.from("agent_tool_calls")
-      .update({ status: "submitted", submitted_at: new Date().toISOString(), provider_request_id: providerRequestId })
+      .update({ ...leaseBinding, status: "submitted", submitted_at: new Date().toISOString(), provider_request_id: providerRequestId })
       .eq("run_id", runId).eq("call_id", callId).eq("status", "prepared")
-      .select("call_id,phase,tool_name,args_hash,status,provider_request_id,result_object_key,result_hash,safe_error_code")
+      .select(toolColumns)
       .maybeSingle();
     if (error || !data) throw new ApiError("invalid_request", "tool call 状态已变化", false, 409);
     return responseFor(data as NonNullable<typeof existing>, false);
@@ -954,7 +978,8 @@ async function actionToolCall(admin: SupabaseClient, body: Record<string, unknow
   const status = body.status === "failed" ? "failed" : body.status === "outcome_unknown" ? "outcome_unknown" : "succeeded";
   if (!existing) throw new ApiError("invalid_request", "tool call 尚未 prepare", false, 409);
   if (["succeeded", "failed"].includes(existing.status) ||
-      (existing.status === "outcome_unknown" && status === "outcome_unknown")) {
+      (existing.status === "outcome_unknown" && status === "outcome_unknown" &&
+        !(existing.direct_deepseek_v1_model && body.pendingUsage && !existing.pending_model_usage))) {
     const suppliedHash = typeof body.resultHash === "string" ? body.resultHash : null;
     if (suppliedHash && existing.result_hash && suppliedHash !== existing.result_hash) {
       throw new ApiError("invalid_request", "tool call 完成结果冲突", false, 409);
@@ -963,6 +988,8 @@ async function actionToolCall(admin: SupabaseClient, body: Record<string, unknow
   }
   const { data, error } = await admin.from("agent_tool_calls")
     .update({
+      ...leaseBinding,
+      ...(existing.direct_deepseek_v1_model && body.pendingUsage ? {pending_model_usage: body.pendingUsage} : {}),
       status,
       finished_at: new Date().toISOString(),
       result_object_key: body.resultObjectKey ? String(body.resultObjectKey).slice(0, 512) : null,
@@ -970,7 +997,7 @@ async function actionToolCall(admin: SupabaseClient, body: Record<string, unknow
       safe_error_code: body.safeErrorCode ? String(body.safeErrorCode).slice(0, 80) : null,
     })
     .eq("run_id", runId).eq("call_id", callId).in("status", ["prepared", "submitted", "outcome_unknown"])
-    .select("call_id,phase,tool_name,args_hash,status,provider_request_id,result_object_key,result_hash,safe_error_code")
+    .select(toolColumns)
     .maybeSingle();
   if (error || !data) throw new ApiError("invalid_request", "tool call 状态已变化", false, 409);
   return responseFor(data as NonNullable<typeof existing>, false);
@@ -1843,7 +1870,7 @@ async function settleRun(
   run: RunRow,
   finalStatus: "succeeded" | "failed" | "cancelled",
   error?: { code: string; message: string },
-): Promise<{ run: RunRow & { actual_credits: number }; actual: number }> {
+): Promise<{ run: RunRow & { actual_credits: number | null }; actual: number | null }> {
   const result = await admin.rpc("settle_agent_run", {
     p_run_id: run.id,
     p_lease_id: run.lease_id,
@@ -1856,11 +1883,11 @@ async function settleRun(
     throw new ApiError("internal_error", "Run 结算失败", true);
   }
   const raw = Array.isArray(result.data) ? result.data[0] : result.data;
-  const settled = raw as RunRow & { actual_credits: number };
-  if (!settled?.id || !Number.isInteger(Number(settled.actual_credits))) {
+  const settled = raw as RunRow & { actual_credits: number | null };
+  if (!settled?.id || (settled.actual_credits !== null && !Number.isInteger(settled.actual_credits))) {
     throw new ApiError("internal_error", "Run 结算返回无效", true);
   }
-  return { run: settled, actual: Number(settled.actual_credits) };
+  return { run: settled, actual: settled.actual_credits };
 }
 
 async function actionFinish(admin: SupabaseClient, body: Record<string, unknown>): Promise<Response> {
@@ -1877,7 +1904,7 @@ async function actionFinish(admin: SupabaseClient, body: Record<string, unknown>
     p_run_id: runId, p_lease_id: leaseId, p_to_status: "exporting", p_current_step: "export",
   });
   const { actual } = await settleRun(admin, exporting, "succeeded");
-  safeLog({ requestId: requestIdFromBody(body), service: "agent-worker:finish", status: "ok", credits: actual });
+  safeLog({ requestId: requestIdFromBody(body), service: "agent-worker:finish", status: "ok", credits: actual ?? undefined });
   return jsonResponse({ runId, status: "succeeded", actualCredits: actual });
 }
 

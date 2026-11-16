@@ -1,3 +1,4 @@
+import { ControlTransport as ControlClient, ControlDeadlineError } from "../control-plane/control-transport.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { IdlePollBackoff } from "../idle-poll-backoff.ts";
@@ -30,6 +31,7 @@ interface HttpRequest {
   headers?: Record<string, string>;
   body?: string | Uint8Array;
   redirect?: "error";
+  signal?: AbortSignal;
 }
 
 export type WorkerFetch = (url: string, request?: HttpRequest) => Promise<HttpResponse>;
@@ -249,31 +251,6 @@ export function modelForService(config: GenerationWorkerConfig, service: string)
   return { model: config.arkImageModel, optimizePromptMode: null };
 }
 
-class ControlClient {
-  private readonly config: GenerationWorkerConfig;
-  private readonly fetch: WorkerFetch;
-
-  constructor(config: GenerationWorkerConfig, fetchImpl: WorkerFetch) {
-    this.config = config;
-    this.fetch = fetchImpl;
-  }
-
-  async post(body: JsonRecord): Promise<JsonRecord> {
-    const response = await this.fetch(this.config.controlUrl, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.config.workerToken}`,
-        "content-type": "application/json",
-        "x-worker-id": this.config.workerId,
-      },
-      body: JSON.stringify(body),
-    });
-    const text = await response.text();
-    const value = parseJson(text);
-    if (!response.ok || !isRecord(value)) throw new Error(`control_http_${response.status}`);
-    return value;
-  }
-}
 
 /** `/images/generations` 请求体：分层任务走 layerPayload；透明图层映射官方
  *  `background: "transparent"`（仅 alpha 通道格式有效，此处恒为 b64_json PNG）。 */
@@ -393,8 +370,8 @@ async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: str
 }
 
 async function heartbeatLoop(control: ControlClient, jobId: string, leaseId: string, intervalMs: number, state: { stopped: boolean }): Promise<void> {
-  while (!state.stopped) {
-    await sleep(intervalMs);
+  while (!state.stopped && control.remainingMs(leaseId) > 1) {
+    await sleep(control.nextHeartbeatMs(leaseId, intervalMs));
     if (state.stopped) return;
     try {
       await control.post({ action: "heartbeat", jobId, leaseId });
@@ -467,6 +444,7 @@ async function executeClaim(
       bytes: image.bytes.byteLength,
     }));
   } catch (error) {
+    if (control.remainingMs(leaseId) <= 1 || error instanceof ControlDeadlineError) return;
     // Video execution owns its durable submission boundary and settlement. A failed
     // control-plane update must never fall through to the image refund path.
     if (videoExecutionEntered || claimed.job.upstreamTaskId) {

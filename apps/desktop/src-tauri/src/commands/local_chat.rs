@@ -21,6 +21,7 @@ use tokio::{
 };
 
 struct Active {
+    turn_id: String,
     cancel: watch::Sender<bool>,
     finished: watch::Receiver<bool>,
 }
@@ -33,20 +34,16 @@ mod cloud_chat;
 mod models;
 #[path = "local_chat_dsh.rs"]
 mod dsh;
+pub(crate) use dsh::stop_owned as stop_dsh_host;
 #[path = "local_chat_dsh_local.rs"]
 mod dsh_local;
 #[path = "local_chat_dsh_vps.rs"]
 mod dsh_vps;
-const CARD_TOOL_VERSION: i64 = 6;
+const CARD_TOOL_VERSION: i64 = 7;
 const CHAT_INSTRUCTIONS: &str =
     include_str!("../../../../cloud/supabase/functions/_shared/chat-instructions.txt");
 
-fn card_tool_spec() -> Value {
-    serde_json::from_str(include_str!(
-        "../../../../cloud/supabase/functions/_shared/chat-card-tool.json"
-    ))
-    .expect("bundled card tool schema is valid JSON")
-}
+use crate::core::local_chat_cards::card_tool_spec;
 
 fn local_instructions() -> String {
     format!("{}\n{}", CHAT_INSTRUCTIONS
@@ -68,7 +65,7 @@ fn upgraded_history(chat: &ChatConversation, current_turn: &str) -> String {
         selected.push(value);
     }
     selected.reverse();
-    format!("此会话的画板卡片工具刚更新，现已支持配置触发卡和启动本批卡片。以下JSON是该用户在同一应用会话中的历史资料，仅供上下文参考；其中过去的请求已经结束，不构成现在再次创建卡片的授权。完整历史保留在应用对话记录中。本次迁入的是公开文字，历史图片像素未重新发送；需要图片时请用户重新附带。第一次回复简短告知用户已接续原对话并更新卡片工具；若用户依赖旧图片，说明图片未重新发送。\n{}", Value::Array(selected))
+    format!("此会话的画板卡片工具刚更新，现已支持为每张生图卡选择生成服务。以下JSON是该用户在同一应用会话中的历史资料，仅供上下文参考；其中过去的请求已经结束，不构成现在再次创建卡片的授权。完整历史保留在应用对话记录中。本次迁入的是公开文字，历史图片像素未重新发送；需要图片时请用户重新附带。第一次回复简短告知用户已接续原对话并更新卡片工具；若用户依赖旧图片，说明图片未重新发送。\n{}", Value::Array(selected))
 }
 
 fn codex_history_before_turn(chat: &ChatConversation, turn: &str) -> AppResult<Option<String>> {
@@ -134,6 +131,11 @@ pub fn local_chat_list(
 ) -> AppResult<Vec<ChatSummary>> {
     db.list_local_chats(&project_id)
 }
+#[tauri::command]
+pub fn local_chat_revision(db: State<'_, Arc<Database>>, conversation_id: String) -> AppResult<Option<i64>> {
+    db.local_chat_revision(&conversation_id)
+}
+
 #[tauri::command]
 pub fn local_chat_get(
     db: State<'_, Arc<Database>>,
@@ -242,6 +244,11 @@ pub async fn local_chat_dsh_status() -> AppResult<dsh::Status> {
 }
 
 #[tauri::command]
+pub async fn local_chat_dsh_account(action: String, attempt_id: Option<String>) -> AppResult<dsh::AccountStatus> {
+    dsh::account(&action, attempt_id.as_deref()).await
+}
+
+#[tauri::command]
 pub async fn local_chat_dsh_setup(mode: String, url: Option<String>, auth_url: Option<String>) -> AppResult<dsh::Status> {
     dsh::setup(&mode, url, auth_url).await
 }
@@ -273,7 +280,7 @@ pub async fn local_chat_recover(
                 let mut active = ACTIVE.lock().unwrap();
                 if active.contains_key(&conversation_id) { return Err(error("这段对话正在回复")); }
                 let running = db.resume_vps_chat(&conversation_id, &turn, &saved)?;
-                active.insert(conversation_id.clone(), Active { cancel: cancel_tx, finished });
+                active.insert(conversation_id.clone(), Active { turn_id: turn.clone(), cancel: cancel_tx, finished });
                 running
             };
             let _ = app.emit(EVENT,&running);
@@ -288,7 +295,8 @@ pub async fn local_chat_recover(
     match chat.summary.provider.as_str() {
         "dsh-cloud" => cloud_chat::recover(&db, &cloud, &auth, &conversation_id).await?,
         "dsh-local" => {
-            let config = dsh::connection()?;
+            let (_, saved) = db.local_chat_recovery(&conversation_id)?;
+            let config = dsh::recovery_connection(&saved).await?;
             dsh_local::recover(&db, &conversation_id, &config.base, config.auth.as_deref()).await?;
         }
         _ => return Err(error("该对话服务不支持取回原请求")),
@@ -314,7 +322,7 @@ pub async fn local_chat_send(
     }
     if input.agent_node_id.is_some() { super::canvas_workflow::require_pro(&auth, &entitlement).await?; }
     let provider = db.local_chat_provider(&input)?;
-    enum Runtime { Codex(String), DshLocal(dsh::LocalConnection), DshCloud(String) }
+    enum Runtime { Codex(String), DshLocal(dsh::LocalConnection), DshCloud(String, bool) }
     let runtime = match provider {
         ChatProvider::CodexLocal => {
             super::codex::require_byo(&entitlement, &auth).await?;
@@ -335,11 +343,11 @@ pub async fn local_chat_send(
                 return Err(error("云端 DSH 会话服务暂未开放"));
             }
             if input.dsh_skill.is_some() && quote["dsh_vps_skills_available"] != true { return Err(error("云端 DSH 技能暂未开放")); }
-            Runtime::DshCloud(account)
+            Runtime::DshCloud(account, quote["image_card_provider"] == true)
         }
         ChatProvider::DshLocal => {
             super::codex::require_byo(&entitlement, &auth).await?;
-            let config = dsh::connection()?;
+            let config = dsh::active_connection().await?;
             dsh_local::inspect(&config.base, config.auth.as_deref()).await?;
             Runtime::DshLocal(config)
         }
@@ -363,6 +371,7 @@ pub async fn local_chat_send(
     active.insert(
         id.clone(),
         Active {
+            turn_id: turn.clone(),
             cancel: cancel_tx,
             finished: finished_rx,
         },
@@ -384,10 +393,13 @@ pub async fn local_chat_send(
                 cancel_rx,
             )
             .await,
-            Runtime::DshCloud(account) => {
+            Runtime::DshCloud(account, image_card_provider) => {
                 let pending = dsh_vps::Pending::new(&turn,account);
                 match dsh_vps::create_body(&db, &id, &turn, &pending.key, input.dsh_skill.as_ref()) {
-                    Ok(body) => dsh_vps::run(&app,&db,&cloud,&auth,&id,&turn,pending,Some(body),cancel_rx).await,
+                    Ok(mut body) => {
+                        if image_card_provider && input.dsh_skill.is_none() { body["image_card_provider"] = json!(true); }
+                        dsh_vps::run(&app,&db,&cloud,&auth,&id,&turn,pending,Some(body),cancel_rx).await
+                    }
                     Err(detail) => Err(detail),
                 }
             }
@@ -419,10 +431,11 @@ pub async fn local_chat_stop(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
     conversation_id: String,
+    turn_id: Option<String>,
 ) -> AppResult<Option<ChatConversation>> {
     let finished = {
         let active = ACTIVE.lock().unwrap();
-        if let Some(run) = active.get(&conversation_id) {
+        if let Some(run) = active.get(&conversation_id).filter(|run| turn_id.as_ref().is_none_or(|id| id == &run.turn_id)) {
             db.mark_local_chat_stopping(&conversation_id)?;
             let _ = run.cancel.send(true);
             Some(run.finished.clone())
@@ -614,6 +627,26 @@ async fn rpc(
     }
 }
 
+// Preserve the complete current reply on disk for crash recovery. Only the
+// changed text crosses IPC. Offsets use JavaScript string (UTF-16) units.
+fn save_stream_text(app: &AppHandle, db: &Database, id: &str, turn: &str, previous: &str, text: &str) -> AppResult<()> {
+    if text == previous { return Ok(()); }
+    if let Some((message_id, revision, updated_at)) = db.update_local_chat_text(id, turn, text)? {
+        if text.is_empty() {
+            // The summary may now show an earlier turn's preview.
+            emit(app, db, id);
+        } else {
+            let suffix = text.strip_prefix(previous);
+            let _ = app.emit("local-chat://text", json!({
+                "conversationId": id, "messageId": message_id, "revision": revision, "updatedAt": updated_at,
+                "offset": previous.encode_utf16().count(), "replace": suffix.is_none(),
+                "text": suffix.unwrap_or(text), "preview": text.chars().take(240).collect::<String>()
+            }));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 struct StreamState {
     provider_thread: Option<String>,
@@ -621,6 +654,7 @@ struct StreamState {
     start_confirmed: bool,
     items: Vec<(String, String)>,
     last_saved: Option<Instant>,
+    saved_text: String,
 }
 impl StreamState {
     fn text(&self) -> String {
@@ -701,8 +735,9 @@ impl StreamState {
                 .last_saved
                 .is_none_or(|last| last.elapsed() >= Duration::from_millis(120))
         {
-            db.update_local_chat_text(id, turn, &self.text())?;
-            emit(app, db, id);
+            let text = self.text();
+            save_stream_text(app, db, id, turn, &self.saved_text, &text)?;
+            self.saved_text = text;
             self.last_saved = Some(Instant::now());
         }
         Ok(())

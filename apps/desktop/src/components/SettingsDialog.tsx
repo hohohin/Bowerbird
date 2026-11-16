@@ -15,13 +15,14 @@ import { AppUpdateCard } from "./AppUpdateCard";
 import { FileWorkspaceMoveDialog } from "./FileWorkspaceMoveDialog";
 import { CreditDetails } from "./CreditDetails";
 import { AccountBilling } from "./AccountBilling";
-import { accountEntitlement } from "../lib/entitlement";
+import { accountEntitlement, canUseByo } from "../lib/entitlement";
+import { DshSubscriptionCard } from "./DshSubscriptionCard";
 import { userErrorMessage } from "../lib/userError";
 
 type SectionKey = "system" | "account" | "credits" | "models" | "personalization" | "about" | "developer";
 
 // 仅供保存其他设置时兼容旧配置，不再在订阅卡片中选择模型版本。
-const DEFAULT_DREAMINA_MODEL_VERSION = "5.0Pro";
+
 
 /**
  * 设置项 ON/OFF 滑块开关（设置里的布尔项统一用它，右对齐在调节项右侧；不用复选框）。
@@ -137,7 +138,7 @@ function ProTrial({ userId, available }: { userId: string; available: boolean })
 export function SettingsDialog({ onClose, initialSection = "system", initialSubscription }: {
   onClose: () => void;
   initialSection?: "system" | "account" | "credits" | "models" | "about";
-  initialSubscription?: "codex" | "jimeng";
+  initialSubscription?: "codex" | "jimeng" | "dsh";
 }) {
   const codexHealth = useStore((s) => s.codexHealth);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
@@ -149,7 +150,10 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
   const startTour = useOnboarding((s) => s.open);
   const settings = useStore((s) => s.settings);
   const loadSettings = useStore((s) => s.loadSettings);
-  const updateSettings = useStore((s) => s.updateSettings);
+  const saveSettings = useStore(s => s.updateSettings);
+  const settingsSaveError = useStore(s => s.settingsSaveError);
+  const retrySettings = useStore(s => s.retrySettings);
+  const updateSettings = (patch: Parameters<typeof saveSettings>[0]) => saveSettings(patch).catch(() => {});
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudBusy = useStore((s) => s.cloudBusy);
@@ -269,27 +273,9 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
   }, [settings]);
 
   const commitSettings = (onIngest: boolean, prompt: string) => {
-    // 全量覆盖：只改自动反推两项，其余设置保持不变。
     void updateSettings({
-      theme: settings?.theme ?? "light",
       auto_analyze_on_ingest: onIngest,
       auto_analyze_prompt: prompt || DEFAULT_AUTO_ANALYZE_PROMPT,
-      library_root: settings?.library_root ?? null,
-      cloud_auto_understand: settings?.cloud_auto_understand ?? false,
-      board_shift_pick: settings?.board_shift_pick ?? false,
-      hide_project_assets: settings?.hide_project_assets ?? false,
-      canvas_show_asset_names: settings?.canvas_show_asset_names ?? false,
-      generation_completion_popup: settings?.generation_completion_popup ?? true,
-      generation_completion_sound: settings?.generation_completion_sound ?? true,
-      dreamina_model_version: settings?.dreamina_model_version ?? DEFAULT_DREAMINA_MODEL_VERSION,
-      agent_mode_enabled: settings?.agent_mode_enabled ?? true,
-      agent_a_mode_enabled: settings?.agent_a_mode_enabled ?? false,
-      agent_b_mode_enabled: settings?.agent_b_mode_enabled ?? false,
-      agent_z_mode_enabled: settings?.agent_z_mode_enabled ?? false,
-      agent_g_mode_enabled: settings?.agent_g_mode_enabled ?? false,
-      agent_ds_mode_enabled: settings?.agent_ds_mode_enabled ?? false,
-      jev_image_classification_enabled: settings?.jev_image_classification_enabled ?? false,
-      jev_api_key: settings?.jev_api_key ?? null,
     });
   };
 
@@ -538,6 +524,9 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
 
         {/* 右列：具体内容（内容超出时列内滚动） */}
         <div key={section} className="min-w-0 flex-1 space-y-3 overflow-y-auto">
+          {settingsSaveError != null && <p role="alert" className="settings-card px-3 py-2 text-sm">
+            {userErrorMessage(settingsSaveError, "设置未保存，请重试。")} <button type="button" onClick={() => void retrySettings().catch(() => {})}>重试保存</button>
+          </p>}
           {section === "system" && (
             <>
               {/* 外观：后端 settings.json 持久化；夜间模式沿用原有黑色 UI。 */}
@@ -556,7 +545,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                         type="button"
                         role="radio"
                         aria-checked={selected}
-                        onClick={() => settings && void updateSettings({ ...settings, theme: value })}
+                        onClick={() => settings && void updateSettings({ theme: value })}
                         className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors ${
                           selected
                             ? "border-accent bg-accent/10 text-accent"
@@ -898,6 +887,8 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                 )}
               </div>
 
+              <DshSubscriptionCard allowed={canUseByo(cloudEntitlement)} cardRef={initialSubscription === "dsh" ? subscriptionCard : undefined} />
+
               {/* 默认反推模型：非 auto 时跳过每次的引擎选择浮层直接执行 */}
               <div className="settings-card px-3 py-2.5">
                 <div className="text-ink">默认反推模型</div>
@@ -967,7 +958,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                   <Toggle
                     checked={settings?.cloud_auto_understand ?? false}
                     onChange={(v) =>
-                      settings && void updateSettings({ ...settings, cloud_auto_understand: v })
+                      settings && void updateSettings({ cloud_auto_understand: v })
                     }
                     disabled={!cloudAuth?.cloud_available}
                   />
@@ -983,7 +974,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                 <label className="flex items-center justify-between gap-3">
                   <span className="text-ink">显示画板素材名称</span>
                   <Toggle checked={settings?.canvas_show_asset_names ?? false} disabled={!settings}
-                    onChange={value => settings && void updateSettings({ ...settings, canvas_show_asset_names: value })} />
+                    onChange={value => settings && void updateSettings({ canvas_show_asset_names: value })} />
                 </label>
                 <p className="mt-1 text-xs text-muted">在画板图片和视频下方显示素材名称，默认关闭。</p>
               </div>
@@ -995,7 +986,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                   <Toggle
                     checked={settings?.generation_completion_popup ?? true}
                     disabled={!settings}
-                    onChange={(v) => settings && void updateSettings({ ...settings, generation_completion_popup: v })}
+                    onChange={(v) => settings && void updateSettings({ generation_completion_popup: v })}
                   />
                 </label>
                 <label className="mt-3 flex items-center justify-between">
@@ -1003,7 +994,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                   <Toggle
                     checked={settings?.generation_completion_sound ?? true}
                     disabled={!settings}
-                    onChange={(v) => settings && void updateSettings({ ...settings, generation_completion_sound: v })}
+                    onChange={(v) => settings && void updateSettings({ generation_completion_sound: v })}
                   />
                 </label>
                 <p className="mt-2 text-xs text-muted">默认开启；可分别关闭，设置自动保存。弹窗显示在应用右上角。</p>
@@ -1014,7 +1005,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                   <Toggle
                     checked={settings?.board_shift_pick ?? false}
                     onChange={(v) =>
-                      settings && void updateSettings({ ...settings, board_shift_pick: v })
+                      settings && void updateSettings({ board_shift_pick: v })
                     }
                   />
                 </div>
@@ -1031,7 +1022,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                   <Toggle
                     checked={settings?.hide_project_assets ?? false}
                     onChange={(v) =>
-                      settings && void updateSettings({ ...settings, hide_project_assets: v })
+                      settings && void updateSettings({ hide_project_assets: v })
                     }
                   />
                 </div>
@@ -1072,7 +1063,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                 description="正式 Bowerbird Agent（云端 Run）：先只做文字意图分析并给出可审批计划，批准后再执行。默认开启。"
                 checked={settings?.agent_mode_enabled ?? true}
                 onChange={(v) =>
-                  settings && void updateSettings({ ...settings, agent_mode_enabled: v })
+                  settings && void updateSettings({ agent_mode_enabled: v })
                 }
               />
               <AgentModeCard
@@ -1080,7 +1071,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                 description="dev 方案A（子句挑选）：Agent 按意图从参考图维度原文中挑选子句，确定性拼合后再发送。默认关闭。"
                 checked={settings?.agent_a_mode_enabled ?? false}
                 onChange={(v) =>
-                  settings && void updateSettings({ ...settings, agent_a_mode_enabled: v })
+                  settings && void updateSettings({ agent_a_mode_enabled: v })
                 }
               />
               <AgentModeCard
@@ -1088,7 +1079,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                 description="dev 方案B（skill 审查）：Agent 按官方 skill 审查并修复展开后的完整 prompt，再发送。默认关闭。"
                 checked={settings?.agent_b_mode_enabled ?? false}
                 onChange={(v) =>
-                  settings && void updateSettings({ ...settings, agent_b_mode_enabled: v })
+                  settings && void updateSettings({ agent_b_mode_enabled: v })
                 }
               />
               <AgentModeCard
@@ -1096,7 +1087,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                 description="dev：把编辑器内容 + 参考图发到 Claude Code 终端（TUI）对话。默认关闭。"
                 checked={settings?.agent_z_mode_enabled ?? false}
                 onChange={(v) =>
-                  settings && void updateSettings({ ...settings, agent_z_mode_enabled: v })
+                  settings && void updateSettings({ agent_z_mode_enabled: v })
                 }
               />
               <AgentModeCard
@@ -1104,7 +1095,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                 description="dev：把编辑器内容 + 参考图发到 codex 终端（TUI）对话。默认关闭。"
                 checked={settings?.agent_g_mode_enabled ?? false}
                 onChange={(v) =>
-                  settings && void updateSettings({ ...settings, agent_g_mode_enabled: v })
+                  settings && void updateSettings({ agent_g_mode_enabled: v })
                 }
               />
               <AgentModeCard
@@ -1112,7 +1103,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                 description="dev：DeepSeek 对话 harness，回复追加到创作板编辑器。默认关闭。"
                 checked={settings?.agent_ds_mode_enabled ?? false}
                 onChange={(v) =>
-                  settings && void updateSettings({ ...settings, agent_ds_mode_enabled: v })
+                  settings && void updateSettings({ agent_ds_mode_enabled: v })
                 }
               />
             </>

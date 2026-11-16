@@ -1,5 +1,6 @@
 import { prepareFileWorkspace } from "./lib/fileWorkspace";
 import { applyGenerationProgress } from "./lib/generationProgress";
+import { hasGenerationFailureReason } from "./lib/userError";
 import { generationProviderIssue } from "./lib/generationAvailability";
 import { create } from "zustand";
 import { filterAssetsByMediaType, type MediaFilter } from "./lib/mediaFilter";
@@ -47,6 +48,7 @@ import { canonicalProviderKey, defaultCloudProvider, isKnownGenProvider, normali
 import { normalizeAnnotationPrompt } from "./lib/annotationPrompt";
 import { notifyError } from "./lib/notify";
 import { notifyGenerationComplete } from "./lib/generationNotifications";
+import { settingsQueue } from "./lib/settingsQueue";
 import { applyTheme } from "./lib/theme";
 import { autoRatioFromReferences } from "./components/creation/ratios";
 import {
@@ -378,12 +380,14 @@ interface State {
   dreaminaOnboardingForceOpen: boolean;
   setDreaminaOnboardingForceOpen: (v: boolean) => void;
   accountOnboardingForceOpen: boolean;
-  subscriptionSettingsTarget: "jimeng" | "codex" | null;
+  subscriptionSettingsTarget: "jimeng" | "codex" | "dsh" | null;
   setAccountOnboardingForceOpen: (v: boolean) => void;
   // —— 应用设置（从后端 settings.json 加载）——
   settings: AppSettings | null;
   loadSettings: () => Promise<void>;
-  updateSettings: (s: AppSettings) => Promise<void>;
+  settingsSaveError: unknown;
+  retrySettings: () => Promise<void>;
+  updateSettings: (patch: Partial<AppSettings>) => Promise<void>;
   // —— Bowerbird 账号与权益（token 不进前端）——
   cloudAuth: AuthSnapshot | null;
   cloudEntitlement: EntitlementSnapshot | null;
@@ -566,6 +570,11 @@ function taskErrorMessage(error: unknown): string {
 }
 
 export const useStore = create<State>((set, get) => {
+  const saves = settingsQueue(() => api.getSettings(), settings => api.updateSettings(settings),
+    () => get().settings, (settings, failure) => {
+      if (settings && settings.theme !== get().settings?.theme) applyTheme(settings.theme);
+      set({ settings, settingsSaveError: failure?.cause ?? null });
+    });
   function runProjectRoute<T>(operation: () => Promise<T>): Promise<T> {
     const requestId = ++projectRouteRequestId;
     set({ projectRoutePending: true, projectRouteRevision: requestId });
@@ -1506,29 +1515,13 @@ export const useStore = create<State>((set, get) => {
     set({ accountOnboardingForceOpen }),
   // —— 应用设置 ——
   settings: null,
+  settingsSaveError: null,
+  retrySettings: saves.retry,
   loadSettings: async () => {
-    try {
-      const settings = await api.getSettings();
-      applyTheme(settings.theme);
-      set({ settings });
-    } catch (e) {
-      console.error("loadSettings failed", e);
-    }
+    try { await saves.load(); }
+    catch (error) { console.error("loadSettings failed", error); }
   },
-  updateSettings: async (settings) => {
-    const previous = get().settings;
-    applyTheme(settings.theme);
-    set({ settings });
-    try {
-      await api.updateSettings(settings);
-    } catch (e) {
-      if (previous) {
-        applyTheme(previous.theme);
-        set({ settings: previous });
-      }
-      console.error("updateSettings failed", e);
-    }
-  },
+  updateSettings: saves.update,
   // —— Bowerbird 账号与权益 ——
   cloudAuth: null,
   cloudEntitlement: null,
@@ -1861,13 +1854,14 @@ export const useStore = create<State>((set, get) => {
             refAssets: t.ref_assets,
           }));
           // 已有任务但产物被移除或历史读取失败时，仍显示真实提交，不能当作未开始。
-          if (turns.length === 0) {
+          if (turns.length === 0 || (failed && r.turn_key && !turns.some(turn => turn.turnKey === r.turn_key))) {
             turns.push({ id: nextGenTurnId(), turnKey: r.turn_key ?? undefined, submitId: r.submit_id, prompt: r.prompt, promptRaw: null, images: [], provider: r.provider, media: r.media, videoOptions: r.video_options, ratio: r.ratio, refs: r.references, referenceNodeIds: r.reference_node_ids, refAssets: r.ref_assets });
           }
           if (failed) {
             // 最新任务终态补齐最后一轮；早期失败由持久诊断历史恢复。
-            const err = r.error ?? "生成失败";
-            turns[turns.length - 1] = { ...turns[turns.length - 1], error: err };
+            const index = r.turn_key ? turns.findIndex(turn => turn.turnKey === r.turn_key) : turns.length - 1;
+            const turn = turns[index];
+            turns[index] = { ...turn, error: hasGenerationFailureReason(turn.error) ? turn.error : r.error || turn.error || "生成失败" };
           }
           genJobs[r.id] = {
             id: r.id,
@@ -2198,7 +2192,8 @@ export const useStore = create<State>((set, get) => {
     const id = jobId ?? get().activeJobId;
     if (!id) return;
     const turns = get().genJobs[id]?.turns;
-    void api.cancelCodexCreate(id, turns?.[turns.length - 1]?.turnKey).catch(console.error);
+    void api.cancelCodexCreate(id, turns?.[turns.length - 1]?.turnKey)
+      .catch(error => notifyError(error, "尚未确认停止，请检查原任务状态"));
   },
   retryLastGenTurn: (assetsOverride) => {
     const s = get();

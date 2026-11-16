@@ -45,6 +45,7 @@ export function cloneCanvasClipboard(value: CanvasClipboard, projectId: string, 
   const connections = new Map<string, string>();
   const remap = (input: WorkflowInput): WorkflowInput | null => {
     const next = { ...input };
+    delete next.pendingCompletionSession;
     if (input.autoConnect) {
       if (!connections.has(input.autoConnect)) connections.set(input.autoConnect, crypto.randomUUID());
       next.autoConnect = connections.get(input.autoConnect);

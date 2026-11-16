@@ -2,6 +2,12 @@
 
 [返回复用地图](../Bowerbird开发计划.md#复用地图)。以下入口按 2026-11-03 当前工作区源码及生产调用核对，包含未提交实现；不代表已发布。公共入口均指桌面应用内部，不是供 Cloud、扩展或官网直接导入的包。API 与原生边界见 [服务与接口](SERVICES.md)，外观入口见 [UI](UI.md)。
 
+## 3D 导演预演
+
+画板工具箱放置「3D 导演台」卡片后，从卡片打开工作台。场景、人偶与运镜沿用同目录的 scene、mannequin、motion。对象清单、视口与属性共用对象 ID，编辑与撤销以完整导演文档为单位。多个运镜方案共用布景并随该节点的 directorDocument 保存。图片输入来自画板绑定的素材，本机 Codex 通过 TextAgentTask 提交受限 JSON 编辑，可携带图片及视频截帧。[导演台入口](../../apps/desktop/src/director3d/DirectorStudio.tsx) · [对象编辑](../../apps/desktop/src/director3d/objectEditing.ts)
+
+布景视图拥有独立浏览相机。拍摄预览、起终点缩略图、当前帧 PNG 和预演 MP4 共用镜头与动作采样。加入画板复用 importDroppedMedia 分块入库与画板避障放置，结果位于导演台附近。成功交付的 MP4 通过 directorVideoId 供下游使用，其 directorVideoRenderKey 用于核对当前画面。旧项目缺少版本记录时可继续使用既有输出。[拍摄预览](../../apps/desktop/src/director3d/ShotPreview.tsx) · [镜头采样与版本核对](../../apps/desktop/src/director3d/shot.ts) · [媒体导出](../../apps/desktop/src/director3d/renderMedia.ts)
+
 ## 切换项目、读取任务和共用身份
 
 - 生成会话标题共用 [projectActivity.ts](../../apps/desktop/src/lib/projectActivity.ts) 的 `generationSessionTitle`，取首轮原文的第一行非空文字。`loadGenJobs(jobId)` 可按 ID 恢复超出近期列表的会话，`openGenerationJob(jobId)` 打开对应会话并定位到所属项目。创作框的「并入上个生成」气泡使用同一合组目标 ID。
@@ -33,6 +39,11 @@
 - 四种模式共用 [workflowTriggerSchedule.ts](../../apps/desktop/src/lib/workflowTriggerSchedule.ts) 的 `workflowTriggerMode`，兼容旧卡配置；定时入口使用 `activeTriggerSchedule` 排除其他模式的停用预约。一次性与每日模式使用同文件的 `nextDailyTrigger`、`triggerScheduleOccurrence`、`advanceTriggerSchedule`，供卡片表单和运行时计算本机日历时刻、每次运行身份及下一次预约，不供其他模块创建独立调度器。
 - 边界／状态：**工作流模块内部专用**。只在桌面应用运行期间调度；不承担系统唤醒、关闭后执行或云端 cron。到点消费检查点由原生 SQLite 事务保护；复制入口清除 `triggerSchedule`。当前契约和验证见 [画板工作流](../CANVAS-WORKFLOW.md#2026-11-05触发器定时执行源码未发布)。
 
+## 读取项目对话摘要和流式正文
+
+- 项目内会话列表或画板卡面使用 [localChatStore.ts](../../apps/desktop/src/lib/localChatStore.ts) 的 `useProjectChatSummaries(projectId)`。打开正文时沿用 `LocalChatPanel` 的 `pinLocalChat` 与 `loadConversation`，读取缺口快照、处理文本增量及保留活跃会话均由 store 负责。
+- 工作流 Agent 步骤用 `CanvasWorkflowController.waitForChatTurn` 订阅已接受会话。五秒未收到目标更新时通过 `localChat.revision(id)` 读取单个版本号，发现差异才读取正文。工作流停止携带提交轮次，避免中断后来发起的独立回复。
+
 ## 在新面板里嵌入独立素材浏览状态
 
 - 用途／关键词：分栏、嵌入素材库、筛选、滚动位置、缩略图尺寸、pane。
@@ -52,6 +63,10 @@
 - 入口：[catalogSelection.ts](../../apps/desktop/src/lib/catalogSelection.ts) 的 `selectCatalogItem`；实际调用：[CategorizedLibrary.tsx](../../apps/desktop/src/components/CategorizedLibrary.tsx) 与 [ConnectedCollections.tsx](../../apps/desktop/src/components/ConnectedCollections.tsx) 的 `select`。
 - 边界：公共函数只处理单项增删与多选模式，**不负责取范围内 ID**。标签／全部视图选择 Asset ID，真实集合选择 entry ID；两宿主分别解析 section、分页、范围起点与迟到结果保护，不能直接复制或互换其 `select` 闭包。
 - 状态：单项规则 **可跨模块复用**；两处范围分页编排是 **待提取候选**，提取前须保留身份差异与异步取消语义。
+
+## 修改普通应用设置
+
+- [store.ts](../../apps/desktop/src/store.ts) 的 `updateSettings(patch)` 只接收本次变更字段。设置面板、截图自动保存和分类授权共用 [settingsQueue.ts](../../apps/desktop/src/lib/settingsQueue.ts) 的顺序写入、确认快照和失败重试。快捷键、迁移等具有原生副作用的专用命令仍由各自入口维护。
 
 ## 顺序保存画板，失败时阻止后续覆盖
 
@@ -152,6 +167,7 @@ DOCX 及表格接入同一文档类型。`textDocuments.preview` 读取有界正
 
 - 用途／关键词：Seedance、自动识别、首尾帧、多参考、时长、比例、音频参考。
 - 入口：[videoGeneration.ts](../../apps/desktop/src/lib/videoGeneration.ts) 的 `GenerationSettings`、`VideoOptions`、`resolveVideoOptions`、`videoInputError`、`videoRatio`；实际调用：[CreationBoard.tsx](../../apps/desktop/src/components/CreationBoard.tsx)、[GenerationPanel.tsx](../../apps/desktop/src/components/GenerationPanel.tsx) 和 [CanvasWorkflowLayer.tsx](../../apps/desktop/src/components/CanvasWorkflowLayer.tsx) 解析本次引用。
+- 工作流视频卡切换供应商使用 [selectWorkflowVideoProvider](../../apps/desktop/src/lib/canvasWorkflow.ts)，由卡面的视频模型选择器调用，负责普通引用与 H3 帧输入的往返转换。
 - 边界：仅首尾帧为显式模式，其余按提交引用推导；不能把只是连接到工作流的素材全部当成引用。历史恢复保留冻结参数，不用当前自动识别重写；本机 H3 用自身固定工作流。前端校验不替代 Rust／服务端能力与权益校验。
 - 状态：**可跨模块复用**；模型／模式契约见 [Seedance](../SEEDANCE-2.5-INTEGRATION.md) 与 [Cloud 视频](../VIDEO-API-INTEGRATION.md)。
 
@@ -164,6 +180,7 @@ DOCX 及表格接入同一文档类型。`textDocuments.preview` 读取有界正
 
 ## 展示失败原因，并取回原 Cloud 视频
 
+- 生成详情可用 `api.generationDiagnostics(jobId)` 取回本机记录，再按 `turnKey` 匹配失败原因。画布组图用最新失败轮次打开详情，当前预览图片可来自其他任务。见[组图失败轮次](../CANVAS-WORKFLOW.md#2026-11-14-组图最新一轮生成失败桌面源码待发布)。
 - 用途／关键词：错误、中文提示、notify、恢复、原任务、recover、诊断。
 - 展示入口：[userError.ts](../../apps/desktop/src/lib/userError.ts) 的 `userErrorMessage`／`generationErrorMessage`，通知用 [notify.ts](../../apps/desktop/src/lib/notify.ts) 的 `notifyError(error, fallback)`。实际调用：[GenerationPanel.tsx](../../apps/desktop/src/components/GenerationPanel.tsx) 用 `generationErrorMessage(turn.error, { provider })` 显示轮次错误，用 `notifyError` 显示取回失败。
 - 恢复入口：[api.ts](../../apps/desktop/src/lib/api.ts) 的 `api.recoverCloudVideo(jobId)`；同一面板的取回按钮按 provider 分流到该方法或 `api.jimengRetrieveOrphan`，成功后 `loadGenJobs`。保持原 job，不能改成 `startGeneration`；只有当前可操作任务才能恢复，历史只读轮次不能操作后续任务。错误转换仅在展示边界执行，不覆盖原始诊断、持久化错误或业务判断。
@@ -179,3 +196,6 @@ DOCX 及表格接入同一文档类型。`textDocuments.preview` 读取有界正
 ## 视频采集与复刻原件添加画板
 
 - CanvasWorkspace 的 addCollectedVideo 复用画板快照、避让落点、串行写入及失败恢复；独立采集事件与复刻 onAddVideo 共用。属于画板宿主内部实现，不跨模块直接导入。复刻先经 media 校验原件，再用 api.importFiles 的 collect 模式转存，避免画板仅依赖复刻任务副本。
+### 本机提示的关闭记录
+
+[dismissedNotices.ts](../../apps/desktop/src/lib/dismissedNotices.ts) 提供按范围读取、批量关闭与订阅显示变化的入口。画布生成提示以项目和生成轮次标识，工作流使用诊断 ID 或旧步骤的运行与卡片 ID，通知铃铛使用任务和轮次标识。原任务仍负责运行、恢复和历史详情。

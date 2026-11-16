@@ -170,9 +170,9 @@ impl Task {
             rusqlite::params![job.id,job.turn_key])? == 1)
     }
     /// 取回只恢复已有提交；条件更新阻止双击或并发调用重复查询/入库。
-    pub(crate) fn claim_video_retrieval(db: &Database, job: &GenJob) -> AppResult<bool> {
-        if job.media != "video" || job.provider != "jimeng" || job.submit_id.is_none() {
-            return Err(AppError::Other("待取回的视频任务无效".into()));
+    pub(crate) fn claim_submitted_retrieval(db: &Database, job: &GenJob) -> AppResult<bool> {
+        if !((job.media == "video" && job.provider == "jimeng") || (job.media == "image" && job.provider == crate::codex::h3_image::KEY)) || job.submit_id.is_none() {
+            return Err(AppError::Other("待取回的生成任务无效".into()));
         }
         let conn = db.conn.lock().unwrap();
         let changed = conn.execute(
@@ -668,8 +668,8 @@ mod tests {
         assert_eq!(restored.submit_id, j.submit_id);
         let mut resumed = restored;
         resumed.status = "querying".into();
-        assert!(Task::claim_video_retrieval(&db, &resumed).unwrap());
-        assert!(!Task::claim_video_retrieval(&db, &resumed).unwrap(), "second retrieval must not schedule another worker");
+        assert!(Task::claim_submitted_retrieval(&db, &resumed).unwrap());
+        assert!(!Task::claim_submitted_retrieval(&db, &resumed).unwrap(), "second retrieval must not schedule another worker");
         let mut legacy = serde_json::to_value(&j).unwrap();
         legacy.as_object_mut().unwrap().remove("media");
         assert_eq!(serde_json::from_value::<GenJob>(legacy).unwrap().media, "image");

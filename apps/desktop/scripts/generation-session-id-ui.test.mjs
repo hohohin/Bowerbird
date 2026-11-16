@@ -52,6 +52,26 @@ try {
   assert.equal(diagnostic.attempts[0].phase, 'preflight');
   assert.equal(diagnostic.memorySnapshot.turns[0].error, 'synthetic startup failure');
 
+  // An editable job can have a generic status while its exact provider reason is in the journal.
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    const state = window.store.getState(), job = state.genJobs[state.activeJobId];
+    window.failureReads = 0;
+    api.generationDiagnostics = async jobId => {
+      window.failureReads++;
+      return { jobId, attempts: [
+        { turnKey: 'latest', status: 'failed', error: '即梦网页控件未能确认生成参数，本次未发起生成' },
+        { turnKey: 'other', status: 'failed', error: '此原因属于另一轮' },
+      ] };
+    };
+    window.store.setState({ codexHealth: { ok: true }, cloudEntitlement: { policy: { can_use_byo: true, max_parallel_jobs: 3 }, balances: { daily: 0, sub: 0, topup: 0 } },
+      genJobs: { [job.id]: { ...job, provider: 'codex', turns: [{ ...job.turns[0], turnKey: 'latest', error: '生成失败' }] } } });
+  });
+  await surface.getByRole('alert').filter({ hasText: '即梦网页控件未能确认生成参数，本次未发起生成' }).waitFor();
+  assert.equal(await surface.getByRole('button', { name: '↻ 重试', exact: true }).isEnabled(), true);
+  assert.equal(await page.evaluate(() => window.failureReads), 1);
+  assert.doesNotMatch(await surface.innerText(), /此原因属于另一轮/);
+
   // Production TurnView translates actionable failures without destroying diagnosis evidence.
   const failureCases = [
     { provider: 'jimeng', media: 'image', raw: '即梦: dreamina 提交退出 exit code: 1 | stderr: 未检测到有效登录态，请先执行 dreamina login | stdout: ',

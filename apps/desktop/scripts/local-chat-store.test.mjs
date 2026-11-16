@@ -37,6 +37,7 @@ function fixture(storage = new Map()) {
   }
   const module = load(storePath);
   return { store: module.useLocalChatStore, events: module.ensureLocalChatEvents, calls, handlers, storage, chatApi: load(resolve(dirname(storePath), 'localChat.ts')),
+    pin: module.pinLocalChat, stream: value => listeners.get('local-chat://text')?.({payload: value}),
     emit: value => listeners.get('local-chat://updated')?.({ payload: value }), draft: module.localChatDraft };
 }
 
@@ -132,6 +133,47 @@ test('switching chat provider after an uncertain send starts a distinct native r
   assert.notEqual(f.calls[0].args.input.requestId, f.calls[1].args.input.requestId);
   assert.equal(f.calls[1].args.input.requestId, f.calls[2].args.input.requestId);
   assert.equal(f.calls[1].args.input.provider, 'dsh-cloud');
+});
+
+test('independent new cards send concurrently and retry their own original request', async () => {
+  const f = fixture();
+  const waiting = new Map();
+  f.handlers.set('local_chat_send', ({input}) => new Promise((resolve, reject) => {
+    waiting.set(input.agentNodeId, {resolve, reject, id: input.requestId});
+  }));
+  const base = { projectId: 'p', text: '相同要求', referenceAssetIds: [] };
+  const first = { ...base, agentNodeId: 'card-a', requestId: 'workflow-a' };
+  const second = { ...base, agentNodeId: 'card-b' };
+  const send = input => f.store.getState().send(input);
+  const both = Promise.allSettled([send(first), send(second)]);
+  await settle();
+  assert.equal(waiting.size, 2, 'both cards reached the native send command');
+  const originalB = waiting.get('card-b').id;
+  await assert.rejects(send({ ...first, requestId: 'another-run' }), /仍在回复/);
+  for (const attempt of waiting.values()) attempt.reject(new Error('ack lost'));
+  assert.deepEqual((await both).map(result => result.status), ['rejected','rejected']);
+  const retry = Promise.all([send(second), send(first)]);
+  await settle();
+  assert.equal(waiting.get('card-a').id, 'workflow-a');
+  assert.equal(waiting.get('card-b').id, originalB);
+  waiting.get('card-a').resolve(chat(1, 'p', 'chat-a'));
+  waiting.get('card-b').resolve(chat(1, 'p', 'chat-b'));
+  assert.deepEqual((await retry).map(value => value.id), ['chat-b','chat-a']);
+  assert.equal(f.calls.length, 4);
+});
+
+test('new sends without a node retain the ordinary composer lock and honor explicit request identity', async () => {
+  const f = fixture(), waiting = [];
+  f.handlers.set('local_chat_send', ({input}) => new Promise(resolve => waiting.push({ id: input.requestId, resolve })));
+  const base = { projectId: 'p', text: '新对话', referenceAssetIds: [] };
+  const send = input => f.store.getState().send(input);
+  const attempts = Promise.allSettled([send(base), send({ ...base, requestId: 'a' }), send({ ...base, requestId: 'b' })]);
+  await settle();
+  assert.equal(waiting.length, 3);
+  await assert.rejects(send(base), /仍在回复/);
+  await assert.rejects(send({ ...base, requestId: 'a' }), /仍在回复/);
+  for (const attempt of waiting) attempt.resolve(chat(1, 'p', attempt.id));
+  assert.ok((await attempts).every(result => result.status === 'fulfilled'));
 });
 
 test('concurrent send to the same conversation is rejected before a second IPC', async () => {
@@ -235,4 +277,42 @@ test('invalid input never reaches native IPC; long text is preserved', async () 
   const text = '汉'.repeat(100001);
   await f.store.getState().send({ projectId: 'p', text, referenceAssetIds: [] });
   assert.equal(f.calls[0].args.input.text, text);
+});
+
+
+test('UTF-16 append, replacement, and a gap during snapshot recovery', async () => {
+  const f = fixture(); await f.events();
+  const base = chat(1, 'p', 'chat-p', 'running');
+  base.messages[1].text = '雪🌙';
+  f.emit(base);
+  const update = (revision, offset, text, replace = false) => f.stream({
+    conversationId: 'chat-p', messageId: 'assistant', revision, offset, replace, text, preview: text, updatedAt: revision,
+  });
+  update(2, 3, '好');
+  assert.equal(f.store.getState().conversations['chat-p'].messages[1].text, '雪🌙好');
+  update(3, 4, '重写', true);
+  assert.equal(f.store.getState().conversations['chat-p'].messages[1].text, '重写');
+  assert.equal('messages' in f.store.getState().summaries['chat-p'], false);
+  const reads = [];
+  f.handlers.set('local_chat_get', () => new Promise(resolve => reads.push(resolve)));
+  update(4, 8, 'bad offset'); await settle();
+  update(7, 7, 'gap'); assert.equal(reads.length, 1);
+  reads[0](chat(4, 'p', 'chat-p', 'running')); await settle();
+  assert.equal(reads.length, 2);
+  f.emit(chat(8)); reads[1](chat(7)); await settle();
+  assert.equal(f.store.getState().conversations['chat-p'].revision, 8);
+  assert.equal(f.store.getState().conversations['chat-p'].messages[1].text, '回复 8');
+});
+
+test('a mounted detail and active reply survive eviction of older completed transcripts', async () => {
+  const f = fixture(); await f.events();
+  const release = f.pin('open');
+  f.emit(chat(1, 'p', 'open')); f.emit(chat(1, 'p', 'active', 'running'));
+  for (let i = 0; i < 40; i++) f.emit(chat(1, 'q', String(i) + '-chat'));
+  const state = f.store.getState();
+  assert.ok(state.conversations.open && state.conversations.active);
+  assert.equal(Object.keys(state.conversations).length, 18);
+  assert.equal(Object.keys(state.summaries).length, 42);
+  release();
+  assert.equal(Object.keys(f.store.getState().conversations).length, 17);
 });

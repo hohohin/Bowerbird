@@ -25,6 +25,6 @@ export function apply(ctx) {
   // A preset is the agent's ancestor scope: restrict inherited tools on the agent,
   // after this preset's own tool is registered and before its first model request.
   ctx.on("agent/created", ({ agent }) => {
-    if (agent.id === connection.session) agent.ctx.tools.restrict({ allow: [tool.name] });
+    if (agent.id === connection.session) agent.ctx.tools.restrict({ allow: [tool.name, "skill"] });
   });
 }

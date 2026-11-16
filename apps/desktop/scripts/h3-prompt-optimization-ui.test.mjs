@@ -51,6 +51,53 @@ try {
     async function controller(base = node) {
       const c = new CanvasWorkflowController(`opt-${crypto.randomUUID()}`); await c.load(); await c.edit([base]); return c;
     }
+    for (const fail of ['canvasWorkflowAuthorize', 'canvasWorkflowSave']) {
+      for (const action of ['optimize','run']) {
+        const card = await controller();
+        const originalMethod = api[fail];
+        const prior = [starts.length,calls.length];
+        api[fail] = async () => { throw Error('rejected pre-dispatch barrier'); };
+        let rejected = false;
+        try { await (action === 'optimize' ? card.optimizeComfyPrompt('h3') : card.start('h3',true)); }
+        catch (error) { rejected = String(error).includes('rejected pre-dispatch barrier'); }
+        finally { api[fail] = originalMethod; }
+        check(rejected, action+' reports the rejected '+fail);
+        check(prior[0]===starts.length && prior[1]===calls.length, action+' never dispatches after denied permission or failed initial save');
+      }
+    }
+    for (const boundary of ['canvasWorkflowAuthorize', 'initial-save', 'submission-save']) {
+      for (const action of ['optimize', 'run']) {
+        for (const change of ['route', 'account', 'account-return', 'cancel']) {
+          const card = await controller(), state = window.store.getState();
+          const gate = Promise.withResolvers(), reached = Promise.withResolvers();
+          const method = boundary === 'canvasWorkflowAuthorize' ? boundary : 'canvasWorkflowSave';
+          const originalMethod = api[method], before = [starts.length, calls.filter(call => call.action === 'start').length];
+          let writes = 0;
+          api[method] = async (...args) => {
+            if (++writes === (boundary === 'submission-save' ? 2 : 1)) { reached.resolve(); await gate.promise; }
+            return originalMethod(...args);
+          };
+          try {
+            const pending = action === 'optimize' ? card.optimizeComfyPrompt('h3') : card.start('h3', true);
+            await reached.promise;
+            await (action === 'optimize' ? card.start('h3', true) : card.optimizeComfyPrompt('h3'));
+            check(before[0] === starts.length && before[1] === calls.filter(call => call.action === 'start').length, 'cross-action double click must not dispatch');
+            if (change === 'route') window.store.setState({ projectRouteRevision: state.projectRouteRevision + 1 });
+            if (change.startsWith('account')) window.store.setState({ cloudAuth: { logged_in: true, user_id: 'other' } });
+            if (change === 'account-return') window.store.setState({ cloudAuth: state.cloudAuth });
+            if (change === 'cancel') {
+              if (card.startingAction('h3')) card.cancelStarting('h3');
+              else void card.stop();
+            }
+            gate.resolve(); await pending;
+            check(before[0] === starts.length && before[1] === calls.filter(call => call.action === 'start').length,
+              action + ' must not dispatch after ' + change + ' during ' + boundary);
+            if (card.document.run) check(card.document.run.status === 'stopped' && !card.document.run.steps.h3.jobId
+              && !card.document.run.steps.h3.comfyOptimization?.submissionStarted, 'unsent work is terminal without a recoverable provider request');
+          } finally { gate.resolve(); api[method] = originalMethod; window.store.setState({ projectRouteRevision: state.projectRouteRevision, cloudAuth: state.cloudAuth }); }
+        }
+      }
+    }
     const direct = await controller(); await direct.start('h3', true);
     check(starts.length === 0 && calls.at(-1).input.prompt === original, 'ordinary generation never calls paid optimization');
     const beforeOptimization = calls.length, c = await controller();
@@ -116,10 +163,58 @@ try {
     check(unknownCalls === 1 && restored.document.run.status === 'failed', 'unknown submission is not automatically charged again');
     api.cloudAgentStart = start;
 
+    const parallel = await controller(), second = { ...node, id: 'other-h3' };
+    await parallel.edit([node, second]);
+    const entered = Promise.withResolvers(), finish = Promise.withResolvers();
+    api.cloudAgentStart = async input => { entered.resolve(); await finish.promise; return start(input); };
+    const firstRun = parallel.optimizeComfyPrompt('h3'); await entered.promise;
+    const previousVideos = calls.filter(call => call.action === 'start').length;
+    try {
+      await parallel.start('other-h3', true);
+      check(calls.filter(call => call.action === 'start').length === previousVideos + 1, 'independent card dispatches while first request is held');
+    } finally { finish.resolve(); api.cloudAgentStart = start; await firstRun; }
+
     const ui = canvasWorkflowController('p'); await ui.load(); await ui.edit([{ ...node, x: 800 }]);
   });
   const card = page.locator('[data-workflow-card="h3"]');
   assert.equal(await card.getByRole('checkbox').count(), 0);
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const controller = canvasWorkflowController('p');
+    await controller.flush();
+    const { promise, resolve } = Promise.withResolvers();
+    window.releaseDraftWrite = resolve;
+    window.dispatchTrace = [];
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+    window.__TAURI_INTERNALS__.invoke = (command, args) => {
+      if(command === 'comfy_video' && args.action === 'start') window.dispatchTrace.push({ key: 'localDispatch' });
+      return invoke(command,args);
+    };
+    for (const key of ['canvasWorkflowAuthorize','canvasWorkflowSave','projectCanvasGet','cloudAgentStart','projectThreadCreate']) {
+      const original = api[key];
+      api[key] = async (...args) => {
+        window.dispatchTrace.push({ key, prompt: key === 'cloudAgentStart' ? args[0].textRewrite.source : undefined });
+        if (key === 'canvasWorkflowSave') await promise;
+        return original(...args);
+      };
+    }
+  });
+  const draft = card.getByLabel('卡片指令', { exact: true });
+  await draft.fill('new');
+  await draft.pressSequentially(' latest draft');
+  const optimize = card.getByRole('button', { name: '优化提示词', exact: true });
+  await optimize.evaluate(button => { button.click(); button.click(); });
+  const feedback = await card.locator('.h3-optimize-action').evaluate(button =>
+    new Promise(resolve => requestAnimationFrame(() => resolve(button.getAttribute('aria-busy')))));
+  await page.evaluate(() => window.releaseDraftWrite());
+  await page.waitForFunction(() => window.dispatchTrace.some(row => row.key === 'cloudAgentStart'));
+  const prefix = await page.evaluate(() => window.dispatchTrace.slice(0,window.dispatchTrace.findIndex(row => row.key === 'cloudAgentStart') + 1));
+  const queuedWrites = prefix.filter(row => row.key === 'canvasWorkflowSave').length;
+  console.log('queued edit + optimize: native saves before dispatch',queuedWrites,'busy while first write blocked',feedback);
+  assert.equal(prefix.at(-1).prompt,'new latest draft');
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
+  assert.equal(await page.evaluate(() => window.dispatchTrace.filter(row => row.key === 'cloudAgentStart').length),1,'same-turn clicks submit one optimization');
   const before = await page.evaluate(() => ({ local: window.h3Calls.length, cloud: window.optimizeStarts.length }));
   await card.getByRole('button', { name: '优化提示词', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
@@ -139,11 +234,19 @@ try {
   }
   assert.match(await card.getByLabel('卡片指令', { exact: true }).inputValue(), /单一连续镜头/);
   await card.getByLabel('卡片指令', { exact: true }).fill('用户修改后的提示词');
-  await card.getByRole('button', { name: '运行此卡片', exact: true }).click();
+  await page.evaluate(() => { window.dispatchTrace.length = 0; });
+  await card.getByRole('button', { name: '运行此卡片', exact: true }).evaluate(button => { button.click(); button.click(); });
   await page.waitForFunction(n => window.h3Calls.length > n, before.local);
+  const directReads = await page.evaluate(() => window.dispatchTrace.slice(0,window.dispatchTrace.findIndex(row => row.key === 'localDispatch')).filter(row=>row.key==='projectCanvasGet').length);
+  console.log('single text-only H3: native canvas reads before dispatch',directReads);
+  assert.equal(feedback,'true','optimize must acknowledge the first click while a prior native save is outstanding');
+  assert.ok(queuedWrites <= 4,`typed draft, run and submission must not wait for a write per character: ${queuedWrites}`);
+  assert.equal(directReads,0,'standalone text-only card must not load the entire native canvas before dispatch');
+  assert.equal(await page.evaluate(() => window.dispatchTrace.filter(row=>row.key==='localDispatch').length),1,'same-turn clicks dispatch one local task');
   assert.equal(await page.evaluate(() => window.h3Calls.at(-1).input.prompt), '用户修改后的提示词');
   assert.equal(await page.evaluate(() => window.optimizeStarts.length), before.cloud + 1);
   assert.equal(await card.getByText('查看优化结果', { exact: true }).count(), 0);
   assert.deepEqual(errors, []);
   console.log('H3 explicit optimization: no automatic Cloud/local chain; direct replacement/edit then manual generation; three modes, entitlement, stop, account, invalid output, unknown submission and recovery passed');
-} finally { await browser.close(); await server.close(); }
+} catch (error) { console.error(error); throw error; }
+finally { await browser.close(); await server.close(); }

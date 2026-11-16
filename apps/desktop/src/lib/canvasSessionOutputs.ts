@@ -9,10 +9,23 @@ function payload(node: CanvasNode) {
   try { return JSON.parse(node.payloadJson); } catch { return {}; }
 }
 
+/** Result of the exact submitted turn, independent of other turns in its gallery. */
+export function submittedTurnState(id: string, nodes: readonly CanvasNode[]): "pending" | "done" | "closed" {
+  const turn = nodes.find(node => node.id === id && node.kind === "prompt" && node.hiddenAt == null);
+  if (!turn) return "closed";
+  const status = payload(turn).status;
+  if (["failed", "cancelled", "canceled", "stopped"].includes(status)) return "closed";
+  return status === "done" && canvasSessionImages(turn, nodes).some(output => output.hiddenAt == null) ? "done" : "pending";
+}
+
 /** Completion follows the connected conversation, while image data stays tied to its exact turn. */
 export function completedCanvasSessions(inputs: WorkflowInput[], nodes: readonly CanvasNode[], jobs: Parameters<typeof canvasConversationCards>[1]) {
   const conversations = canvasConversationCards(nodes, jobs);
   const sessions = inputs.flatMap(input => {
+    if (input.pendingCompletionSession) {
+      const turn = nodes.find(node => node.kind === "prompt" && node.id === input.pendingCompletionSession && node.hiddenAt == null);
+      return turn ? [turn] : [];
+    }
     if (!input.canvasNodeId || input.cellId !== "image") return [];
     const source = nodes.find(node => node.id === input.canvasNodeId && node.kind === "prompt" && node.hiddenAt == null);
     if (!source) return [];
@@ -24,7 +37,7 @@ export function completedCanvasSessions(inputs: WorkflowInput[], nodes: readonly
 
 /** All generation-card sessions, including those visible on the canvas. */
 export function workflowSessionIds(workflow: readonly WorkflowNode[]) {
-  return new Set(workflow.filter(node => node.kind === "generation")
+  return new Set(workflow.filter(node => node.kind === "generation" || node.kind === "comfy-video")
     .flatMap(node => [...(node.sessionNodeIds ?? []), ...(node.activeSessionNodeId ? [node.activeSessionNodeId] : [])]));
 }
 
@@ -93,17 +106,13 @@ export function workflowGenerationResultAnchor(source: WorkflowNode, canvas: rea
     const anchor = conversations?.aliases.get(id) ?? id;
     return conversations?.hiddenIds.has(anchor) ? undefined : { nodeId: anchor };
   };
-  if (source.kind === "comfy-video") {
-    const card = canvas.find(card => source.resultNodeIds?.includes(card.id) && card.hiddenAt == null && card.assetId && output.assetIds?.includes(card.assetId));
-    return card && presented(card.id);
-  }
-  if (source.kind !== "generation") return;
+  if (source.kind !== "generation" && source.kind !== "comfy-video") return;
   const sessionId = output.nodeIds?.[0] ?? workflowActiveSession(source);
   const session = canvas.find(card => card.id === sessionId && card.kind === "prompt" && card.hiddenAt == null);
-  if (!session) return;
-  if (source.generation?.media !== "video" && !payload(session).generation_group_dissolved) return presented(session.id);
-  const current = canvasSessionImages(session, canvas).filter(card => card.hiddenAt == null);
-  const result = output.assetIds?.length ? current.find(card => output.assetIds!.includes(card.assetId!)) : current.pop();
+  if (session && source.kind === "generation" && source.generation?.media !== "video" && !payload(session).generation_group_dissolved) return presented(session.id);
+  const current = session ? canvasSessionImages(session, canvas).filter(card => card.hiddenAt == null) : [];
+  const result = (output.assetIds?.length ? current.find(card => output.assetIds!.includes(card.assetId!)) : current.pop())
+    ?? canvas.find(card => source.resultNodeIds?.includes(card.id) && card.hiddenAt == null && card.assetId && output.assetIds?.includes(card.assetId));
   return result && presented(result.id);
 }
 

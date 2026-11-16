@@ -1,5 +1,6 @@
 import { contentTableRows, type ContentTable } from "./contentTable.ts";
-import { comfyVideoMode } from "./comfyVideo.ts";
+import { comfyVideoMode, DEFAULT_COMFY_VIDEO } from "./comfyVideo.ts";
+import type { VideoOptions } from "./videoGeneration";
 import { workflowTriggerMode } from "./workflowTriggerSchedule.ts";
 
 export class WorkflowNodeError extends Error {
@@ -15,18 +16,24 @@ export class WorkflowInputError extends WorkflowNodeError {
 }
 
 /** Editable workflow wiring is independent from immutable generation history edges. */
-export type WorkflowKind = "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop";
+export type WorkflowKind = "director3d" | "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop";
 export const WORKFLOW_CARD_DRAG_TYPE = "application/x-bowerbird-workflow-card";
 export type WorkflowAction = "describe" | "reuse" | "layers";
 export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" | "signal";
 export interface WorkflowValue { type: WorkflowPortType; text?: string; table?: ContentTable; assetIds?: string[]; referenceRanks?: number[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[]; deliveries?: Record<string, { nodeId: string; cellId: string; append: boolean; value: WorkflowValue }> }
 export interface WorkflowPort { id: string; label: string; type: WorkflowPortType }
 export interface WorkflowInput { slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string; autoConnect?: string; mediaFilter?: ("image" | "video" | "audio")[];
+  /** A submitted image was still rendering when this completion listener was added. */
+  pendingCompletionSession?: string;
   /** Per-member position in this generation card's reference strip, set by dragging. */
   referenceRanks?: number[];
+  h3TailOnly?: boolean;
 }
 export interface WorkflowPromptReference { slot?: number; id: string; type: "text" | "image"; input: WorkflowInput; assetId?: string; label: string; direction?: "output" }
 export interface WorkflowNode {
+  directorDocument?: unknown;
+  directorVideoId?: string;
+  directorVideoRenderKey?: string;
   voice?: import("./voiceCard").VoiceCardSettings;
   id: string; kind: WorkflowKind; x: number; y: number;
   /** Last measured canvas size; presentation only, saved with the next workflow change. */
@@ -34,6 +41,10 @@ export interface WorkflowNode {
   action: WorkflowAction; skill: string; prompt: string; ratio: string | null; provider: string;
   generation?: import("./videoGeneration").GenerationSettings;
   comfyVideo?: import("./comfyVideo").ComfyVideoOptions;
+  /** Reversible rendering of ordinary @ mentions in the H3 text editor. */
+  videoPrompt?: { ordinary: string; local: string };
+  /** Ordinary input positions assigned to each H3 frame, including after its source is replaced. */
+  videoFrameSlots?: Pick<WorkflowInput, "slot" | "referenceRanks">[];
   promptReferences?: WorkflowPromptReference[];
   overwriteDescribe?: boolean;
   describeCache?: { instruction: string; results: { assetId: string; sections: { title: string; body: string }[] }[] };
@@ -161,7 +172,7 @@ export function normalizeWorkflowLocalVideo(node: WorkflowNode): WorkflowNode {
     ordered.sort((left, right) => rank(left) - rank(right));
   }
   const frames = ordered.flatMap(input => !workflowImageContainer(input) && input.assetIds?.length
-    ? input.assetIds.map(assetId => ({ assetId })) : [input]).map(({ referenceRanks: _ranks, ...input }: WorkflowInput) => input);
+    ? input.assetIds.map(assetId => ({ ...input, assetIds: undefined, assetId })) : [input]);
   const prompt = node.prompt.replace(/@\[([^\]]+)\]/g, (token, id: string) => {
     const ref = refs.find(ref => ref.id === id && ref.direction !== "output");
     if (!ref) return token;
@@ -170,13 +181,52 @@ export function normalizeWorkflowLocalVideo(node: WorkflowNode): WorkflowNode {
     if (comfyVideoMode(node.generation!.localVideo) === "reference" && index === 0) return "<Picture 1>";
     return index < 0 ? ref.label : `@图片${index + 1}`;
   }).trim();
-  const { image: _image, "visual-profile": _profile, ...inputs } = node.inputs;
-  return { ...node, kind: "comfy-video", comfyVideo: node.generation!.localVideo, prompt, promptReferences: undefined,
+  const { image: _image, ...inputs } = node.inputs;
+  const tailOnly = frames.length === 1 && frames[0].h3TailOnly;
+  return { ...node, kind: "comfy-video", comfyVideo: node.generation!.localVideo, prompt,
+    videoFrameSlots: frames.map(({ slot, referenceRanks }) => ({ slot, referenceRanks })),
+    videoPrompt: prompt === node.prompt ? undefined : { ordinary: node.prompt, local: prompt },
     generation: { ...node.generation, localVideo: undefined },
-    inputs: { ...inputs, "first-frame": inputs["first-frame"] ?? frames.slice(0, 1), "last-frame": inputs["last-frame"] ?? frames.slice(1) } };
+    inputs: { ...inputs, "first-frame": inputs["first-frame"] ?? (tailOnly ? [] : frames.slice(0, 1)), "last-frame": inputs["last-frame"] ?? (tailOnly ? frames : frames.slice(1)) } };
+}
+
+export function selectWorkflowVideoProvider(node: WorkflowNode, channel: "jimeng" | "cloud" | "h3", options?: VideoOptions): WorkflowNode {
+  if (channel === "h3") return node.kind === "comfy-video" ? node : normalizeWorkflowLocalVideo({
+    ...node, generation: { ...node.generation, media: "video", localVideo: node.comfyVideo ?? { ...DEFAULT_COMFY_VIDEO } },
+  });
+  const generation = { ...node.generation, media: "video" as const, localVideo: undefined, videoChannel: channel,
+    videoOptions: options ?? node.generation?.videoOptions };
+  if (node.kind !== "comfy-video") return { ...node, generation };
+  const { "first-frame": first = [], "last-frame": last = [], ...inputs } = node.inputs;
+  const frames = [...first, ...last];
+  const prompt = node.videoPrompt?.local === node.prompt ? node.videoPrompt.ordinary : node.prompt;
+  // Slot numbers belong to the ordinary editor. The H3 sockets can be in
+  // mention order, and a user can replace a socket's source while on H3.
+  const editedPrompt = node.videoPrompt && node.videoPrompt.local !== node.prompt;
+  const remoteInput = (input: WorkflowInput) => input.autoConnect || (node.videoFrameSlots && input.slot && !editedPrompt)
+    ? input : { ...input, autoConnect: crypto.randomUUID() };
+  const ordered = frames.map((input, index) => {
+    const previous = node.videoFrameSlots?.[first.length ? index : index + 1];
+    return { ...previous, ...remoteInput(input),
+      h3TailOnly: !first.length && index === 0 || undefined };
+  })
+    .sort((a, b) => (a.slot ?? Infinity) - (b.slot ?? Infinity));
+  // A legacy literal asset list uses one ordinary slot but occupies multiple H3 sockets.
+  const image: WorkflowInput[] = [];
+  for (const input of ordered) {
+    const previous = image[image.length - 1];
+    if (input.slot && previous?.slot === input.slot && !workflowImageContainer(input) && input.assetId
+      && !workflowImageContainer(previous) && (previous.assetId || previous.assetIds?.length)) {
+      previous.assetIds = [...(previous.assetIds ?? [previous.assetId!]), input.assetId];
+      delete previous.assetId;
+    } else image.push(input);
+  }
+  return normalizeWorkflowInputSlots({ ...node, kind: "generation", generation, prompt, videoPrompt: undefined, videoFrameSlots: undefined,
+    inputs: { ...inputs, image, text: (inputs.text ?? []).map(remoteInput) } });
 }
 
 export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
+  if (node.kind === "director3d") return [{id:"image",label:"场景参考图",type:"image"}];
   if (node.kind === "voice") return node.voice?.id
     ? [{ id: "text", label: "台词", type: "text" }]
     : [{ id: "image", label: "参考录音", type: "image" }];
@@ -194,6 +244,7 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
   return ports;
 }
 export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
+  if (node.kind === "director3d") return [{id:"image",label:"MP4",type:"image"}];
   if (node.kind === "voice") return node.voice?.id ? [{ id: "image", label: "配音", type: "image" }] : [];
   if (node.kind === "comfy-video") return [{ id: "image", label: "视频", type: "image" }];
   if (node.kind === "planner") return [];
@@ -212,9 +263,10 @@ export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
   return [{ id: "image", label: "产物", type: "image" }];
 }
 export function workflowTitle(node: WorkflowNode): string {
+  if (node.kind === "director3d") return "3D 导演台";
   if (node.kind === "voice") return "角色声音";
-  if (node.kind === "comfy-video") return "本地 H3 视频";
   if (node.templateInstance) return `子流程 · ${node.templateInstance.template.name}`;
+  if (node.kind === "comfy-video" || node.kind === "generation" && node.generation?.media === "video") return "视频生成";
   if (node.kind === "planner") return "工作流助手";
   if (node.kind === "loop") return "循环卡片";
   if (node.kind === "agent") return "Agent 卡片";
@@ -280,7 +332,7 @@ export function invalidateWorkflow(nodes: WorkflowNode[], changedId: string): Wo
   let changed = true;
   while (changed) {
     changed = false;
-    for (const node of nodes) if (!ids.has(node.id) && Object.values(node.inputs).flat().some(input => workflowInputProducers(nodes, input).some(id => ids.has(id)))) {
+    for (const node of nodes) if (!ids.has(node.id) && Object.values(workflowExecutionInputs(node)).flat().some(input => input.portId !== "signal" && workflowInputProducers(nodes, input).some(id => ids.has(id)))) {
       ids.add(node.id); changed = true;
     }
   }
@@ -348,19 +400,6 @@ export function workflowCompletionTriggers(nodes: WorkflowNode[], sourceId: stri
   return nodes.filter(node => node.kind === "trigger" && workflowTriggerMode(node) === "completion" && (node.triggerCount ?? 0) > 0
     && node.inputs.completion?.some(input => input.nodeId === sourceId));
 }
-/** Reserve all possible repeat targets before running; unrelated runs cannot race a repeat. */
-export function workflowTriggerScope(nodes: WorkflowNode[], order: string[]): string[] {
-  const scope = new Set(order);
-  const expanded = new Set<string>();
-  const uncached = nodes.map(node => ({ ...node, outputs: {} }));
-  for (const id of scope) for (const trigger of workflowCompletionTriggers(nodes, id)) {
-    if (expanded.has(trigger.id)) continue;
-    expanded.add(trigger.id);
-    for (const target of workflowOrder(uncached, trigger.id)) scope.add(target);
-  }
-  return [...scope];
-}
-
 export const workflowReferenceToken = (id: string) => `@[${id}]`;
 export function workflowPromptPreview(node: WorkflowNode, label = (ref: WorkflowPromptReference) => ref.label): string {
   return node.prompt.replace(/@\[([^\]]+)\]/g, (_, id) => {
@@ -654,11 +693,15 @@ export const workflowRunActive = (run: WorkflowRun) => run.status === "running" 
 export const workflowRuns = (document: CanvasWorkflow): WorkflowRun[] => document.runs ?? (document.run ? [document.run] : []);
 export function workflowDependencies(nodes: WorkflowNode[], order: string[]): string[] {
   const ids = new Set(order);
-  for (const id of ids) for (const input of Object.values(nodes.find(node => node.id === id)?.inputs ?? {}).flat()) {
-    if (input.portId === "signal" && !order.includes(input.nodeId ?? "")) continue;
-    for (const producer of workflowInputProducers(nodes, input)) ids.add(producer);
+  for (const id of ids) {
+    const node = nodes.find(node => node.id === id);
+    if (!node || node.kind === "trigger") continue;
+    for (const input of Object.values(node.inputs).flat()) {
+      if (input.portId === "signal") continue;
+      for (const producer of workflowInputProducers(nodes, input)) ids.add(producer);
+    }
   }
-  const tables = new Set(nodes.filter(node => ids.has(node.id) || (node.textTarget && Object.values(node.inputs).flat().some(input => order.includes(input.nodeId ?? "")))).flatMap(node => [...(node.resultNodeIds ?? []), ...(node.textTarget ? [node.textTarget.nodeId] : [])]));
+  const tables = new Set(nodes.filter(node => ids.has(node.id) || (node.textTarget && Object.values(node.inputs).flat().some(input => input.portId !== "signal" && order.includes(input.nodeId ?? "")))).flatMap(node => [...(node.resultNodeIds ?? []), ...(node.textTarget ? [node.textTarget.nodeId] : [])]));
   for (const node of nodes) if ((node.textTarget && tables.has(node.textTarget.nodeId)) || node.resultNodeIds?.some(id => tables.has(id))) ids.add(node.id);
   return [...ids];
 }
@@ -668,7 +711,7 @@ export function workflowLockedNodes(document: CanvasWorkflow): Set<string> {
 /** Execution can rewrite outputs and native result tables; cached dependencies are read-only. */
 export function workflowWriteNodes(nodes: WorkflowNode[], order: string[]): string[] {
   const ids = new Set(order);
-  const tables = new Set(nodes.filter(node => ids.has(node.id) || (node.textTarget && Object.values(node.inputs).flat().some(input => order.includes(input.nodeId ?? "")))).flatMap(node => [...(node.resultNodeIds ?? []), ...(node.textTarget ? [node.textTarget.nodeId] : [])]));
+  const tables = new Set(nodes.filter(node => ids.has(node.id) || (node.textTarget && Object.values(node.inputs).flat().some(input => input.portId !== "signal" && order.includes(input.nodeId ?? "")))).flatMap(node => [...(node.resultNodeIds ?? []), ...(node.textTarget ? [node.textTarget.nodeId] : [])]));
   for (const node of nodes) if ((node.textTarget && tables.has(node.textTarget.nodeId)) || node.resultNodeIds?.some(id => tables.has(id))) ids.add(node.id);
   return [...ids];
 }
@@ -676,15 +719,18 @@ export function workflowAccessConflict(readsAndWrites: string[], writes: string[
   return writes.some(id => otherAccess.includes(id)) || otherWrites.some(id => readsAndWrites.includes(id));
 }
 export function workflowNodeRun(document: CanvasWorkflow, nodeId: string): WorkflowRun | undefined {
-  const runs = workflowRuns(document).filter(run => run.steps[nodeId] || workflowRunActive(run) && run.lockedNodeIds?.includes(nodeId));
-  return runs.find(workflowRunActive) ?? runs[runs.length - 1];
+  const runs = workflowRuns(document);
+  return runs.find(run => workflowRunActive(run) && run.order.includes(nodeId))
+    ?? runs.find(run => workflowRunActive(run) && !run.order.length && run.triggerQueue?.[0] === nodeId)
+    ?? runs.find(run => workflowRunActive(run) && run.lockedNodeIds?.includes(nodeId))
+    ?? [...runs].reverse().find(run => !workflowRunActive(run) && run.steps[nodeId]);
 }
 export function workflowActiveSession(node: WorkflowNode): string | null {
   return node.activeSessionNodeId !== undefined ? node.activeSessionNodeId : node.sessionNodeIds?.[node.sessionNodeIds.length - 1] ?? null;
 }
 export const WORKFLOW_CARD_WIDTH = 320;
 export function workflowCardWidth(node: Pick<WorkflowNode, "kind">) {
-  return node.kind === "trigger" ? 196 : node.kind === "comfy-video" || node.kind === "voice" ? WORKFLOW_CARD_WIDTH * 1.3 : WORKFLOW_CARD_WIDTH;
+  return node.kind === "trigger" ? 196 : node.kind === "voice" ? WORKFLOW_CARD_WIDTH * 1.3 : WORKFLOW_CARD_WIDTH;
 }
 export function workflowPortY(node: WorkflowNode, side: "input" | "output", portId: string): number {
   if (node.kind === "trigger") return node.y + 46;

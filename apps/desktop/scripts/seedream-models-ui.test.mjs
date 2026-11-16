@@ -32,53 +32,39 @@ async function ready() {
 const trigger = page.locator('.composer-glass .provider-choice');
 const menu = page.getByRole('dialog', { name: '图像模型', exact: true });
 const option = key => menu.locator(`[data-model-key="${key}"]`);
-async function choose(version) {
+const group = menu.locator('[data-model-group="即梦"]');
+const versions = ['dreamina-web55', 'dreamina-web50pro', 'dreamina-web50flash', 'dreamina-web50lite', 'dreamina-web47', 'dreamina-web40'];
+async function openJimeng() {
   await trigger.click();
-  await option(version === '5.0Pro' ? 'jimeng' : `jimeng-${version}`).click();
-  await page.waitForFunction(version => window.store.getState().settings.dreamina_model_version === version, version);
-  assert.equal(await page.evaluate(() => window.store.getState().activeGenProvider), 'jimeng');
-  assert.match(await trigger.innerText(), new RegExp(`Seedream ${version.replace('Pro', ' Pro').replaceAll('.', '\\.')}`));
+  assert.equal(await option('dreamina-web55').count(), 0);
+  await group.click();
 }
 try {
   await page.goto('http://127.0.0.1:1724/scripts/fixtures/canvas-reference/preview.html?source-library');
   await ready();
-  await trigger.click();
-  for (const version of ['5.0Pro', '5.0', '4.7', '4.0']) {
-    assert.equal(await option(version === '5.0Pro' ? 'jimeng' : `jimeng-${version}`).count(), 1);
+  await page.evaluate(() => window.store.setState({ dreaminaHealth: null }));
+  for (const key of versions) {
+    await openJimeng();
+    assert.equal(await menu.locator('[data-source="personal"] [data-model-key]').count(), versions.length);
+    await option(key).click();
+    assert.equal(await page.evaluate(() => window.store.getState().activeGenProvider), key);
+    assert.doesNotMatch(await trigger.innerText(), /网页|CLI/);
   }
-  assert.equal(await option('jimeng').getAttribute('aria-pressed'), 'true', 'old default still selects Pro');
+  await openJimeng();
+  await menu.locator('[data-source="personal"]').getByRole('button', {name:'设为默认：Seedream 5.0 Pro',exact:true}).click();
+  assert.equal(await page.evaluate(() => localStorage.getItem('bowerbird.defaultProvider')), 'dreamina-web50pro');
   await page.keyboard.press('Escape');
-  for (const version of ['5.0', '4.7', '4.0', '5.0Pro']) await choose(version);
-  await choose('4.7');
-  await trigger.click();
-  assert.equal(await option('jimeng-4.7').getAttribute('aria-pressed'), 'true');
-  assert.equal(await option('jimeng').getAttribute('aria-pressed'), 'false');
-  await menu.getByRole('button', { name: '设为默认：Seedream 4.0', exact: true }).click();
-  await page.waitForFunction(() => window.store.getState().settings.dreamina_model_version === '4.0');
-  assert.equal(await page.evaluate(() => localStorage.getItem('bowerbird.defaultProvider')), 'jimeng', 'menu keys never escape to stored provider');
-  assert.equal(await option('jimeng-4.0').getAttribute('aria-pressed'), 'true');
+  await group.waitFor();
+  assert.equal(await option('dreamina-web55').count(), 0);
   await page.keyboard.press('Escape');
   await page.reload(); await ready();
-  assert.match(await trigger.innerText(), /Seedream 4\.0/, 'model persists after reload');
-  await page.evaluate(() => window.failModelSave = true);
-  await trigger.click(); await option('jimeng-5.0').click();
-  await page.waitForFunction(() => window.notices.length > 0);
-  assert.match(await trigger.innerText(), /Seedream 4\.0/, 'failed save retains previous model');
-  assert.equal(await page.evaluate(() => window.store.getState().settings.dreamina_model_version), '4.0');
-  assert.ok(!(await page.evaluate(() => window.notices.join(' '))).includes('secret'));
-  await page.evaluate(() => { window.failModelSave = false; window.store.setState({ dreaminaHealth: { ok: false }, codexHealth: { ok: true } }); });
-  await trigger.click();
-  for (const key of ['jimeng', 'jimeng-5.0', 'jimeng-4.7', 'jimeng-4.0']) assert.equal(await option(key).isDisabled(), true);
-  assert.equal(await option('codex').isDisabled(), false, 'Dreamina availability never comes from Codex health');
-  await page.keyboard.press('Escape');
-  await page.evaluate(() => window.store.setState({ dreaminaHealth: { ok: true }, cloudEntitlement: { plan: 'free', policy: { can_use_byo: false }, balances: { topup: 100, daily: 0, sub: 0 } } }));
-  await trigger.click();
-  for (const key of ['jimeng', 'jimeng-5.0', 'jimeng-4.7', 'jimeng-4.0']) assert.equal(await option(key).isDisabled(), true);
-  assert.equal(await option('bowerbird-cloud-image_hd').isDisabled(), false);
-  await page.keyboard.press('Escape');
-  await page.evaluate(() => window.store.setState({ cloudEntitlement: { plan: 'pro', policy: { can_use_byo: true }, balances: { topup: 100, daily: 0, sub: 0 } } }));
-  await choose('4.7');
-  await page.evaluate(() => { window.generationTest = window.store.getState().startGeneration('模型快照测试', [], '1:1', 'jimeng'); });
+  assert.equal(await page.evaluate(() => window.store.getState().defaultProvider), 'dreamina-web50pro');
+  await openJimeng();
+  await page.evaluate(() => window.store.setState({cloudEntitlement:{...window.store.getState().cloudEntitlement,policy:{can_use_byo:false}}}));
+  for (const key of versions) assert.equal(await option(key).isDisabled(), true);
+  await page.evaluate(() => window.store.setState({cloudEntitlement:{...window.store.getState().cloudEntitlement,policy:{can_use_byo:true,max_parallel_jobs:2}}}));
+  await option('dreamina-web55').click();
+  await page.evaluate(() => { window.generationTest = window.store.getState().startGeneration('模型快照测试', [], '1:1', 'dreamina-web55'); });
   await page.waitForFunction(() => !!window.releaseDiagnostic);
   await page.evaluate(() => {
     window.store.setState({ settings: { ...window.store.getState().settings, dreamina_model_version: '5.0' } });
@@ -86,16 +72,16 @@ try {
   });
   await page.evaluate(() => window.generationTest);
   const submitted = await page.evaluate(() => window.submittedModel);
-  assert.equal(submitted.provider, 'jimeng'); assert.equal(submitted.dreaminaModelVersion, '4.7', 'request snapshot survives later model changes');
+  assert.equal(submitted.provider, 'dreamina-web55'); assert.equal(submitted.dreaminaModelVersion, null);
   await page.evaluate(() => {
     const state = window.store.getState(); const id = state.activeJobId;
     window.store.setState({ genJobs: { ...state.genJobs, [id]: { ...state.genJobs[id], sessionId: 'fake-session' } } });
     window.releaseDiagnostic = null;
-    window.generationTest = window.store.getState().sendGenRevise(id, '续轮模型测试', 'jimeng');
+    window.generationTest = window.store.getState().sendGenRevise(id, '续轮模型测试', 'dreamina-web50pro');
   });
   await page.waitForFunction(() => !!window.releaseDiagnostic);
   await page.evaluate(() => window.releaseDiagnostic()); await page.evaluate(() => window.generationTest);
-  assert.equal(await page.evaluate(() => window.submittedModel.dreaminaModelVersion), '5.0', 'follow-up uses the newly selected version');
+  assert.equal(await page.evaluate(() => window.submittedModel.provider), 'dreamina-web50pro', 'follow-up uses the newly selected version');
   await page.evaluate(() => {
     const state = window.store.getState();
     window.store.setState({ cloudEntitlement: { ...state.cloudEntitlement, generation_services: [
@@ -133,5 +119,5 @@ try {
   await page.setViewportSize({ width: 900, height: 600 }); await trigger.click();
   const bounds = await menu.boundingBox(); assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 900 && bounds.y >= 0);
   assert.deepEqual(errors, []);
-  console.log('PASS: Seedream versions, selected/default state, persistence, save failure, health/Pro gates, request/follow-up snapshots, themes and narrow layout');
+  console.log('PASS: Seedream versions, selected/default state, persistence, submenu, Pro gates, request/follow-up snapshots, themes and narrow layout');
 } finally { await browser.close(); await server.close(); }

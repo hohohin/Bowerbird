@@ -17,20 +17,43 @@ const openMenu = () => composer.getByRole('button', { name: /选择对话模型$
 const inspect = () => page.evaluate(async () => (await import('/scripts/fixtures/local-chat/mock.ts')).inspect());
 
 try {
-  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/local-chat/preview.html`);
+  await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/local-chat/preview.html?settings`);
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   await composer.locator('.ProseMirror').waitFor();
   const expand = composer.getByRole('button', { name: '展开创作描述', exact: true });
   if (await expand.count()) await expand.click();
   await page.getByRole('group', { name: '创作方式' }).getByRole('button', { name: '对话', exact: true }).click();
+  const entitlement = page.getByRole('checkbox', {name: '本机权益', exact: true});
+  await entitlement.uncheck();
   await openMenu();
   assert.equal(await menu.getByRole('button', { name: '本机 DSH', exact: true }).isDisabled(), true);
-  await menu.getByRole('button', { name: 'DSH 设置', exact: true }).click();
+  await page.keyboard.press('Escape');
+  await entitlement.check();
+  const openSettings = async () => {
+    await page.evaluate(async () => (await import('/src/components/creation/ProviderIssueNotice.tsx')).openProviderSettings('dsh'));
+    await page.getByRole('region', {name:'DeepSeek 账号授权'}).getByRole('button', {name:'服务连接设置'}).click();
+  };
+  const closeModelSettings = () => page.getByRole('dialog', {name:'设置', exact:true}).getByRole('button', {name:'关闭', exact:true}).click();
+  await openMenu();
+  assert.equal(await menu.getByRole('button', {name:'DSH 设置', exact:true}).count(), 0);
+  assert.equal(await menu.getByRole('button', {name:'本机 DSH', exact:true}).isDisabled(), true);
+  await page.keyboard.press('Escape');
+  await page.getByRole('combobox', { name: '测试故障' }).selectOption('dsh-setup');
+  await openSettings();
+  await settings.getByRole('button', {name:'一键连接本机 DSH', exact:true}).click();
+  await settings.getByRole('alert').waitFor();
+  assert.match(await settings.getByRole('alert').innerText(), /连接未完成/);
+  await settings.getByRole('button', {name:'取消', exact:true}).click();
+  await closeModelSettings();
+  await page.getByRole('combobox', {name:'测试故障'}).selectOption('none');
+  await openSettings();
+  await settings.getByRole('button', {name: '手动配置服务地址', exact:true}).click();
   await settings.getByRole('textbox', { name: '服务地址', exact: true }).fill('http://127.0.0.1:3081');
   await settings.getByLabel('登录链接（可选）', { exact: true }).fill('http://127.0.0.1:3081/?token=fixture-secret');
   await settings.getByRole('button', { name: '连接', exact: true }).click();
   assert.equal(await settings.getByRole('button', { name: '取消', exact: true }).isDisabled(), true);
   await settings.waitFor({ state: 'detached' });
+  await closeModelSettings();
   await openMenu();
   await menu.getByRole('button', { name: '本机 DSH', exact: true }).click();
   assert.equal(await composer.locator('.chat-codex-options').count(), 0);
@@ -45,10 +68,27 @@ try {
   await panel.getByRole('button', { name: '停止回复', exact: true }).click();
   await panel.getByRole('button', { name: '取回回复', exact: true }).click();
   await panel.getByText('花影入月', { exact: true }).waitFor();
-  await panel.getByRole('button', { name: 'DSH 设置', exact: true }).click();
+  assert.equal(await panel.getByRole('button', {name:'DSH 设置', exact:true}).count(), 0);
+  await openSettings();
+  await settings.getByRole('button', {name: '手动配置服务地址', exact:true}).click();
   assert.equal(await settings.getByRole('textbox', { name: '服务地址', exact: true }).inputValue(), 'http://127.0.0.1:3081');
   assert.equal(await settings.getByLabel('登录链接（可选）', { exact: true }).inputValue(), '');
-  await settings.getByRole('button', { name: '取消', exact: true }).click();
+  await settings.getByRole('button', {name: '手动配置服务地址', exact:true}).click();
+  await settings.getByRole('button', {name:'一键连接本机 DSH', exact:true}).click();
+  await settings.waitFor({state:'detached'});
+  await closeModelSettings();
+  assert.deepEqual((await inspect()).calls.filter(c => c.command === 'local_chat_dsh_setup').map(c=>c.args.mode), ['auto', 'local', 'auto']);
+
+  const terminalText = "本机 DSH 本轮失败：模型回复格式异常，请核对本轮已创建的卡片后重试。";
+  await page.evaluate(async ({id, text}) => {
+    const store = (await import('/src/lib/localChatStore.ts')).useLocalChatStore.getState();
+    const chat = store.conversations[id];
+    store.applyConversation({...chat, status: 'failed', revision: chat.revision + 1, error: text,
+      messages: chat.messages.map(m => m.role === 'assistant' ? {...m, status: 'failed', dshTerminalError: text, dshFailureCode: 'MALFORMED_RESPONSE'} : m)});
+  }, {id: await panel.getAttribute('data-local-chat-id'), text: terminalText});
+  await panel.getByText(terminalText, {exact: true}).waitFor();
+  assert.equal(await panel.getByRole('button', {name: '取回回复'}).count(), 0);
+  assert.doesNotMatch(await panel.innerText(), /MALFORMED_RESPONSE/);
 
   await panel.getByRole('button', { name: '发起新对话', exact: true }).click();
   await page.getByRole('checkbox', { name: 'Cloud 已登录', exact: true }).check();

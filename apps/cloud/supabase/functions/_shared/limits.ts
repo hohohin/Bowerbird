@@ -24,10 +24,39 @@ function envInt(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export function assertBodySize(request: Request): void {
-  const maxBytes = envInt("MAX_REQUEST_BODY_MB", 20) * 1024 * 1024;
+function requestLimitBytes(): number { return envInt("MAX_REQUEST_BODY_MB", 20) * 1024 * 1024; }
+
+export function assertBodySize(request: Request, maxBytes = requestLimitBytes()): void {
   const contentLength = Number.parseInt(request.headers.get("content-length") ?? "0", 10);
   if (contentLength > maxBytes) throw new ApiError("payload_too_large", "请求内容过大");
+}
+
+export async function readJsonBody(request: Request, maxBytes = requestLimitBytes()): Promise<Record<string, unknown>> {
+  assertBodySize(request, maxBytes);
+  const reader = request.body?.getReader();
+  if (!reader) throw new ApiError("invalid_request", "缺少请求正文");
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > maxBytes) {
+        void reader.cancel().catch(() => {});
+        throw new ApiError("payload_too_large", "请求内容过大");
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    const parsed: unknown = JSON.parse(text + decoder.decode());
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  throw new ApiError("invalid_request", "请求正文格式错误");
 }
 
 export function assertReferenceImages(images: unknown, maxCount = 10): void {

@@ -664,9 +664,9 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
         >
           <Edit3 size={14} />
         </button>
-        {(asset.source === "codex" || asset.source === "jimeng" || asset.source === "bowerbird-cloud") ? (
+        {(asset.source === "minimax-h3-image" || asset.source === "codex" || asset.source === "jimeng" || asset.source === "bowerbird-cloud") ? (
           <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent">
-            ✨ {asset.source === "jimeng" ? "即梦" : asset.source === "bowerbird-cloud" ? "Cloud" : "codex"} 生成
+            ✨ {asset.source === "minimax-h3-image" ? "MiniMax-H3-Image" : asset.source === "jimeng" ? "即梦" : asset.source === "bowerbird-cloud" ? "Cloud" : "codex"} 生成
           </span>
         ) : asset.source ? (
           <span className="rounded bg-edge px-1.5 py-0.5 text-[10px] uppercase text-muted">

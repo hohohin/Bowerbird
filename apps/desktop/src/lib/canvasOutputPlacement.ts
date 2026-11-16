@@ -48,7 +48,8 @@ export function canvasOutputObstacles(canvas: ProjectCanvasSnapshot, workflow: r
     if (node.kind !== "prompt" || !card?.outputs.length) return node;
     const latest = JSON.parse(card.latest.payloadJson), image = JSON.parse(card.outputs[card.outputs.length - 1].payloadJson).snapshot;
     const ratio = image?.width && image?.height ? image.height / image.width : 1;
-    return { ...node, height: latest.status === "done" ? node.width * ratio : Math.max(node.height, 340) };
+    const imageOnly = latest.status === "done" || latest.status === "failed";
+    return { ...node, height: imageOnly ? node.width * ratio : Math.max(node.height, 340) };
   }), ...canvas.groups.filter(group => !exclude.has(group.id)),
     ...workflow.filter(node => node.kind !== "text" && !exclude.has(node.id)).map(workflowLayoutRect)];
 }

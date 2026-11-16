@@ -9,6 +9,14 @@ try {
 } finally { Deno.serve = serve; }
 
 const messages = [{ role: "user" as const, content: "整理文案" }];
+Deno.test("image provider overrides are opt-in for card-capable v2 clients", () => {
+  const input = { messages, conversation_id: "c-fixture", engine: DSH_CHAT_ENGINE_V2 };
+  assert(!("image_card_provider" in validateChatInput(input)));
+  assertEquals(validateChatInput({ ...input, image_card_provider: true }).image_card_provider, true);
+  for (const patch of [{ tools_enabled: false }, { engine: DSH_CHAT_ENGINE }, { image_card_provider: "yes" }]) {
+    assertThrows(() => validateChatInput({ ...input, image_card_provider: true, ...patch }), ChatInputError);
+  }
+});
 Deno.test("DSH accepts public history, structured skill IDs and minimal card receipts", () => {
   const base = { messages, engine: DSH_CHAT_ENGINE } as const;
   const skill = { id: "text-editor" } as const;

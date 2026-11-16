@@ -10,6 +10,7 @@ import { DshChatDeadline, DshChatLeaseLost, runDshChat, type DshChatOptions } fr
 const shared = join(import.meta.dirname, "../../../cloud/supabase/functions/_shared");
 const instructions = readFileSync(join(shared, "chat-instructions.txt"), "utf8");
 const schema = JSON.parse(readFileSync(join(shared, "chat-card-tool.json"), "utf8"));
+delete schema.inputSchema.properties.cards.items.properties.provider; // Legacy completion jobs use the original card contract.
 const tool = { type: "function", function: { name: schema.name, description: schema.description, parameters: schema.inputSchema } };
 
 export async function completeChatJob(input: ChatInput, model: Pick<DeepSeekBackend, "chat">) {
@@ -75,9 +76,8 @@ export async function processChatJob(job: ChatJob, control: ChatControl, model: 
 
 export function chatUpstreamFetch(download: typeof fetch = fetch): DeepSeekFetch {
   return async (endpoint, request) => {
-    const signal = AbortSignal.timeout(90_000);
-    const connectionError = () => new DeepSeekBackendError(signal.aborted ? "deepseek_timeout" : "deepseek_network_error");
-    const response = await download(endpoint, { ...request, signal }).catch(() => { throw connectionError(); });
+    const connectionError = () => new DeepSeekBackendError("deepseek_network_error");
+    const response = await download(endpoint, request).catch(() => { throw connectionError(); });
     if (!response.ok) {
       void response.body?.getReader().cancel().catch(() => {});
       throw new DeepSeekBackendError("deepseek_http_error", { status: response.status });

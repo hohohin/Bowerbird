@@ -47,7 +47,7 @@ export function CanvasArtboardDialog({ composition, onClose, onSubmit }: {
   }
   return <ModalShell title="合成画板中的内容" width="lg" onClose={onClose} preventClose={busy}
     description={`${composition.width} × ${composition.height} · ${composition.images.length} 个素材实例 · 按当前画板位置合成`}
-    footer={<><ProviderSelect value={provider} onChange={setProvider} codexHealth={codexHealth} dreaminaHealth={dreaminaHealth}
+    footer={<><ProviderSelect hasReferences value={provider} onChange={setProvider} codexHealth={codexHealth} dreaminaHealth={dreaminaHealth}
       cloudAuth={cloudAuth} cloudEntitlement={cloudEntitlement} />
       <button type="button" className="app-modal-button is-primary" disabled={busy || !!issue || !raster || !instruction.trim()} onClick={() => void submit()}>{busy ? "正在提交…" : "开始合成"}</button></>}>
     <div className="canvas-artboard-previews">

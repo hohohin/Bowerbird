@@ -1,7 +1,7 @@
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject, type ReactNode, type CSSProperties } from "react";
 import { materialCatalog, type CatalogFilter } from "../lib/materialCatalog";
-import { catalogLayout, catalogScrollScale, masonryGeometry, masonryRatios, visibleCatalogBlocks, CATALOG_CACHE_PAGES, CATALOG_PAGE_SIZE, type CatalogSectionInfo } from "../lib/catalogVirtualLayout";
+import { catalogLayout, catalogScrollScale, masonryGeometry, masonryRatios, visibleCatalogBlocks, CATALOG_CACHE_PAGES, CATALOG_PAGE_SIZE, type CatalogSectionInfo, type CatalogPlacementCache } from "../lib/catalogVirtualLayout";
 import type { Asset } from "../lib/types";
 import { api } from "../lib/api";
 import { CatalogAssetCard } from "./CatalogAssetCard";
@@ -32,6 +32,8 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
   const [pages] = useState(() => new Map(catalogCache.entries<Omit<Page, "revision">>(pagePrefix)
     .slice(-CATALOG_CACHE_PAGES).map(([key, entry]) => [key.slice(pagePrefix.length), { ...entry.value, revision: catalogCache.fresh(entry) ? entry.revision : -1 }])));
   const cache = useRef(pages);
+  const [geometryRevision, setGeometryRevision] = useState(0);
+  const placements = useRef<CatalogPlacementCache>(new Map());
   const measured = useRef(new Map<string, readonly number[]>());
   const errors = useRef(new Map<string, string>());
   const pending = useRef(new Set<string>());
@@ -46,11 +48,12 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
     measured.current = layoutHistory.get(geometryKey) ?? new Map();
     layoutHistory.delete(geometryKey); layoutHistory.set(geometryKey, measured.current);
     if (layoutHistory.size > 16) layoutHistory.delete(layoutHistory.keys().next().value!);
+    placements.current.clear();
+    for (const [key, page] of cache.current) measured.current.set(key, masonryRatios(page.assets));
     oldGeometry.current = geometryKey;
   }
   const layout = useMemo(() => {
-    for (const [key, page] of cache.current) measured.current.set(key, masonryRatios(page.assets));
-    const layout = catalogLayout(sections, viewport.width, width, measured.current, headings);
+    const layout = catalogLayout(sections, viewport.width, width, measured.current, headings, placements.current);
     if (showEmpty) {
       let extra = 0;
       const offsets: number[] = [];
@@ -69,7 +72,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
       layout.height = last.top + Math.max(last.height, viewport.height);
     }
     return layout;
-  }, [sections, viewport.width, viewport.height, width, headings, tick, showEmpty]);
+  }, [sections, viewport.width, viewport.height, width, headings, geometryRevision, geometryKey, showEmpty]);
   const layoutRef = useRef(layout); layoutRef.current = layout;
   const scale = catalogScrollScale(layout.height + 100, viewport.height);
   const logicalTop = viewport.top / scale;
@@ -108,11 +111,21 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
     const block = intersecting[intersecting.length - 1];
     if (block) anchor.current = { key: block.key, delta: top - block.top };
   }
+  function measurePage(key: string, assets: Asset[]) {
+    const next = masonryRatios(assets);
+    const before = measured.current.get(key);
+    // Missing entries have always used square estimates.
+    if (before?.length === next.length && next.every((ratio, i) => ratio === before[i])) return;
+    if (!before && next.every(ratio => ratio === 1)) return;
+    rememberAnchor();
+    measured.current.set(key, next);
+    setGeometryRevision(value => value + 1);
+  }
   applyPreviews.current = change => {
     let changed = false;
     for (const [key, page] of cache.current) {
       const next = patchCatalogPage(page, change);
-      if (next !== page) { rememberAnchor(); cache.current.set(key, next); changed = true; }
+      if (next !== page) { measurePage(key, next.assets); cache.current.set(key, next); changed = true; }
     }
     if (changed) setTick(value => value + 1);
   };
@@ -133,7 +146,7 @@ export function VirtualCatalog({ filter, sections, headings, width, revision, sc
         return { assets, groups };
       }, !!filter.color).then(page => {
         if (!alive.current || version.current !== requestedRevision || catalogCache.revision(!!filter.color) !== requestedRevision) return;
-        rememberAnchor();
+        measurePage(block.key, page.assets);
         cache.current.delete(block.key); cache.current.set(block.key, { ...page, revision: requestedRevision });
         const keep = new Set(wanted.current.map(item => item.key));
         for (const key of cache.current.keys()) {

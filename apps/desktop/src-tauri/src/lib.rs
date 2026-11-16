@@ -773,10 +773,12 @@ pub fn run() {
             commands::codex::codex_health,
             commands::local_chat::local_chat_list,
             commands::local_chat::local_chat_get,
+            commands::local_chat::local_chat_revision,
             commands::local_chat::local_chat_get_by_request,
             commands::local_chat::local_chat_quote,
             commands::local_chat::local_chat_models,
             commands::local_chat::local_chat_dsh_status,
+            commands::local_chat::local_chat_dsh_account,
             commands::local_chat::local_chat_dsh_setup,
             commands::local_chat::local_chat_recover,
             commands::local_chat::local_chat_send,
@@ -795,6 +797,7 @@ pub fn run() {
             commands::codex::list_gen_jobs,
             commands::codex::jimeng_retrieve_orphan,
             commands::codex::recover_cloud_video,
+            commands::codex::recover_h3_image,
             commands::codex::recent_gen_sessions,
             commands::codex::dismiss_gen_job,
             commands::codex::open_codex_session,
@@ -857,7 +860,10 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app, _event| {
             if matches!(&_event, tauri::RunEvent::Exit) {
-                tauri::async_runtime::block_on(commands::agent_ds::video_studio::shutdown());
+                tauri::async_runtime::block_on(async {
+                    commands::local_chat::stop_dsh_host().await;
+                    commands::agent_ds::video_studio::shutdown().await;
+                });
             }
             #[cfg(target_os = "macos")]
             forward_opened_urls(_event, |value| forward_auth_callback(_app, value));

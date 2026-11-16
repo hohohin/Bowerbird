@@ -39,6 +39,15 @@ test("DSH runtime home keeps dependencies immutable and cleans only its fresh ch
     home.dispose();
     assert.equal(existsSync(home.home), false);
     assert.equal(existsSync(template), true);
+    for (const imageCardProvider of [false, true]) {
+      const chat = createDshRuntimeHome({ templateDir: template, runtimeRoot: runtime, chat: true, imageCardProvider });
+      try {
+        const schema = JSON.parse(readFileSync(join(chat.home, "profiles", chat.profileName, "plugins", "chat-card-tool.json"), "utf8"));
+        const field = schema.inputSchema.properties.cards.items.properties.provider;
+        if (imageCardProvider) assert.ok(field.enum.includes("dreamina-web55"));
+        else assert.equal(field, undefined);
+      } finally { chat.dispose(); }
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -625,7 +625,8 @@ export const api = {
       creativeRelation: req.creativeRelation ?? null,
       retryAnchorNodeId: req.retryAnchorNodeId ?? null,
     }, invoke),
-  generationDiagnostics: (jobId: string) => invoke<{ schemaVersion: number; jobId: string; attempts: unknown[]; task: unknown }>("generation_diagnostics", { jobId }),
+  generationDiagnostics: (jobId: string) => invoke<{ schemaVersion: number; jobId: string;
+    attempts: { turnKey: string | null; status: string; error: string | null }[]; task: unknown }>("generation_diagnostics", { jobId }),
   cancelCodexCreate: (jobId: string, turnKey?: string | null) => invoke<void>("cancel_codex_create", { jobId, turnKey }),
   // 启动恢复（Task 5）：列出未完成生成 job，前端挂载时拉取重建 genJobs（恢复中 job 可见）。
   listGenJobs: (jobId?: string) => invoke<GenJobSummary[]>("list_gen_jobs", { jobId }),
@@ -636,6 +637,7 @@ export const api = {
   // 即梦孤儿任务取回（约定 23 阶段 3）：远端在跑/已完成但本地无记录的任务，用户显式取回。
   jimengRetrieveOrphan: (submitId: string, prompt: string, jobId?: string) =>
     invoke<void>("jimeng_retrieve_orphan", { submitId, prompt, jobId: jobId ?? null }),
+  recoverH3Image: (jobId: string) => invoke<void>("recover_h3_image", { jobId }),
   recoverCloudVideo: (jobId: string) => invoke<void>("recover_cloud_video", { jobId }),
   // 扩展小白化：连接状态 + 扩展文件夹路径（引导「一键复制」用，不自动打开——Windows 上不稳）。
   pairExtension: (code: string) => invoke<void>("pair_extension", { code }),

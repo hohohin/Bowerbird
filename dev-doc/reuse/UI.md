@@ -55,7 +55,7 @@ H3 优化按钮共用 [H3OptimizeButton.tsx](../../apps/desktop/src/components/c
 2026-11-06：公共 `ContextMenu` 的首焦点与方向键导航同时覆盖普通菜单项、单选菜单项和多选菜单项（`menuitem`／`menuitemradio`／`menuitemcheckbox`）；文本编辑器的 `TextSegmentMenu` 使用此入口并保存块身份；正文／标题类型切换已由完整 Plate EditorKit 接管。
 
 - **用途／关键词：** context menu、右键、操作、删除子菜单、焦点恢复。
-- **入口：** [ContextMenu.tsx](../../apps/desktop/src/components/ContextMenu.tsx) 的 `ContextMenu`、`ContextSubmenu`、`DeleteSubmenu`；宿主提供坐标、关闭回调、`button[role="menuitem"]` 与禁用状态。
+- **入口：** [ContextMenu.tsx](../../apps/desktop/src/components/ContextMenu.tsx) 的 `ContextMenu`、`ContextSubmenu`、`DeleteSubmenu`。宿主提供坐标、关闭回调、`button[role="menuitem"]` 与禁用状态。筛选代价高的子菜单可把 children 写为函数，展开时才计算条目，画板「连接已有卡片」使用此方式。
 - **实用证据：** [AssetContextMenu.tsx](../../apps/desktop/src/components/AssetContextMenu.tsx) 使用子菜单和删除分组；[ProjectContextMenu.tsx](../../apps/desktop/src/components/ProjectContextMenu.tsx) 使用同一菜单壳。
 - **范围／状态：可跨模块复用。** 共用边缘定位、菜单家族互斥、键盘／外部点击关闭和滚动包装；`ContextSubmenu` 必须位于该菜单 Context 内。`AssetContextMenu`／`ProjectContextMenu` 自身绑定素材、项目和 store 行为，是领域入口，不作其他业务的通用菜单模板。
 
@@ -87,9 +87,9 @@ H3 优化按钮共用 [H3OptimizeButton.tsx](../../apps/desktop/src/components/c
 
 - Agent 卡片的 `AgentChatControls` 组合现有 `ChatProviderSelect` 与 `CodexModelSelect`。流式回复、详情、续聊和恢复共用 `LocalChatPanel`，旧任务通过 `WorkflowAgentDetail` 查看结果。卡面只提供运行状态和详情入口，内容输出和直接建卡复用现有交付逻辑。卡片绑定 chatConversationId，复制时清除，模板 v6 只保留 provider／模型配置。
 
-- 对话 provider 集合与标签统一由 `lib/chatProvider.ts` 提供；`ChatProviderSelect` 在创作框和详情复用 `ModelSelect`、`ModalShell`，支持 Codex、DeepSeek Cloud、本机 DSH、DSH · Cloud。DSH 设置使用 `localChat.dshStatus/dshSetup`；`ModelSelect.footer(close)` 可在打开设置前关闭当前菜单，既有 ReactNode footer 仍兼容。
+- 对话 provider 集合与标签统一由 `lib/chatProvider.ts` 提供。创作框和 Agent 卡片复用 `ChatProviderSelect`，按共享状态切换。模型设置的 `DshSubscriptionCard` 统一提供本机 DSH 的安装授权、状态复核和手动服务地址，分别调用 `localChat.dshAccount` 和 `localChat.dshStatus/dshSetup`。
 - DSH 接入沿 `local_chat.rs` 分派，历史与建卡复用 SQLite 和 `local_chat_cards::create_cards`。本机桥复用 `agent_ds::dsh_connection/dsh_client`；新版 Cloud 桥由 `local_chat_dsh_vps.rs` 按原任务身份收发。卡片、创作框与详情复用 [DshSkillSelect](../../apps/desktop/src/components/creation/DshSkillSelect.tsx)，仅传技能 ID 与用户参数。详见[对话 provider](../CHAT-PROVIDERS.md)。
-- 本机／Cloud 来源使用 `creation/ChatProviderSelect.tsx`，本机 Codex 参数使用 `creation/CodexModelSelect.tsx`，由 Agent 卡片、`CreationBoard` 和 `LocalChatPanel` 共用。能力快照由 [chatCapabilities.ts](../../apps/desktop/src/lib/chatCapabilities.ts) 在主窗口启动时读取。Cloud 报价按登录账号隔离，本机 Codex 安装／登录变化后重读目录，DSH 设置结果同步到所有选择器。菜单的「重新检查」可手动刷新三项。发送仍由原生执行路径验证。
+- 本机／Cloud 来源使用 `creation/ChatProviderSelect.tsx`，本机 Codex 参数使用 `creation/CodexModelSelect.tsx`，由 Agent 卡片、`CreationBoard` 和 `LocalChatPanel` 共用。能力快照由 [chatCapabilities.ts](../../apps/desktop/src/lib/chatCapabilities.ts) 在主窗口启动时读取。Cloud 报价按登录账号隔离，本机 Codex 安装／登录变化后重读目录，DSH 设置结果同步到所有选择器。发送仍由原生执行路径验证。
 - 型号及支持的推理强度来自 `localChat.models()` 的本机 CLI 能力目录。只用于桌面对话，不把图片生成 provider 当成 Codex 子模型；Cloud 隐藏且不发送这些参数。
 - 参数属于下一轮消息，未发送选择随草稿保留，已发送选择从会话恢复。更换型号时重新核对该型号支持的强度，过期选项不静默替换。
 

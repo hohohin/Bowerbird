@@ -42,6 +42,8 @@ fn provider_source_tag(provider: &str) -> &'static str {
     } else {
         match provider {
             "jimeng" | "dreamina" => "jimeng",
+            key if crate::codex::jimeng_web::model(Some(key)).is_some() => "jimeng",
+            crate::codex::h3_image::KEY => crate::codex::h3_image::KEY,
             _ => "codex",
         }
     }
@@ -51,7 +53,7 @@ fn media_from_paths(paths: &[PathBuf]) -> &'static str {
     if paths.iter().any(|p| p.extension().and_then(|e| e.to_str()).is_some_and(crate::media::probe::is_video)) { "video" } else { "image" }
 }
 
-fn update_creative_job_status(
+pub(crate) fn update_creative_job_status(
     app: &AppHandle,
     db: &Database,
     job: &GenJob,
@@ -397,13 +399,16 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
             }
             if !matches!(
                 job.provider.as_str(),
-                "jimeng" | "dreamina" | "bowerbird-cloud"
+                "jimeng" | "dreamina" | "bowerbird-cloud" | crate::codex::h3_image::KEY
             ) && !job.provider.starts_with("bowerbird-cloud-") {
-                let _ = Task::mark_failed(&db, &job.id, "app 重启中断，codex 会话不可恢复");
+                let message = if crate::codex::jimeng_web::model(Some(&job.provider)).is_some() {
+                    "应用重启中断了即梦网页取回，请在即梦创作记录查看结果后再试"
+                } else { "app 重启中断，codex 会话不可恢复" };
+                let _ = Task::mark_failed(&db, &job.id, message);
                 update_creative_job_status(&app, &db, &job, "failed", None);
                 let _ = app.emit(
                     "codex://chunk",
-                    serde_json::json!({ "kind": "error", "job_id": job.id, "message": "app 重启中断，codex 会话不可恢复" }),
+                    serde_json::json!({ "kind": "error", "job_id": job.id, "message": message }),
                 );
                 continue;
             }
@@ -430,10 +435,10 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
                 );
                 continue;
             };
-            if job.provider.starts_with("bowerbird-cloud") {
+            if job.provider.starts_with("bowerbird-cloud") || job.provider == crate::codex::h3_image::KEY {
                 let (app2, db2, paths2) = (app.clone(), db.clone(), paths.clone());
                 tokio::spawn(async move {
-                    recover_one_cloud_job(app2, db2, paths2, job, submit_id, cancellation).await;
+                    recover_submitted_job(app2, db2, paths2, job, submit_id, cancellation).await;
                 });
                 continue;
             }
@@ -446,9 +451,8 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
     });
 }
 
-/// 续查 Bowerbird Cloud 持久任务。Cloud 任务由 VPS 独立执行，桌面重启后只需按 job_id
-/// 恢复轮询和产物下载；不会重新提交方舟请求。
-pub(crate) async fn recover_one_cloud_job(
+/// Resume an existing Cloud job or loopback H3 image and deliver through the same asset pipeline.
+pub(crate) async fn recover_submitted_job(
     app: AppHandle,
     db: Arc<Database>,
     paths: Arc<LibraryPaths>,
@@ -456,6 +460,8 @@ pub(crate) async fn recover_one_cloud_job(
     submit_id: String,
     (_guard, mut cancel_rx): GenerationCancellation,
 ) {
+    let local_image = job.provider == crate::codex::h3_image::KEY;
+    let public_id = if local_image { crate::codex::h3_image::session(&submit_id) } else { Some(submit_id.clone()) };
     if !job.internal_agent {
         let _ = app.emit(
             "codex://chunk",
@@ -472,30 +478,44 @@ pub(crate) async fn recover_one_cloud_job(
                 "references": job.references,
                 "reference_node_ids": job.reference_node_ids,
                 "ratio": job.ratio,
-                "submit_id": submit_id,
+                "submit_id": public_id,
             }),
         );
     }
     job.status = "querying".into();
     let _ = Task::upsert_gen_job(&db, &job);
-    update_creative_job_status(&app, &db, &job, "querying", Some(&submit_id));
+    update_creative_job_status(&app, &db, &job, "querying", public_id.as_deref());
     let cloud = app.state::<crate::cloud::CloudClient>().inner().clone();
     let auth = app.state::<crate::cloud::AuthClient>().inner().clone();
     let recovered = tokio::select! {
         biased;
         _ = &mut cancel_rx => {
+            if local_image {
+                if let Err(error) = crate::codex::h3_image::cancel(&submit_id,&auth).await {
+                    let message=error.to_string();
+                    let _ = Task::mark_failed(&db,&job.id,&message);
+                    update_creative_job_status(&app,&db,&job,"failed",public_id.as_deref());
+                    let _ = app.emit("codex://chunk",serde_json::json!({"kind":"error","job_id":job.id,"message":message}));
+                    return;
+                }
+            }
             let _ = Task::mark_cancelled(&db,&job.id);
-            update_creative_job_status(&app, &db, &job, "cancelled", Some(&submit_id));
-            let _ = app.emit("codex://chunk",serde_json::json!({"kind":"error","job_id":job.id,"message":"已停止等待，可按原任务取回视频"}));
+            update_creative_job_status(&app, &db, &job, "cancelled", public_id.as_deref());
+            let _ = app.emit("codex://chunk",serde_json::json!({"kind":"error","job_id":job.id,"message":if local_image { "已停止本机图片任务" } else { "已停止等待，可按原任务取回视频" }}));
             return;
         }
-        result = crate::codex::bowerbird_cloud::recover_cloud_generation(&cloud, &auth, &submit_id) => result,
+        result = async {
+            if local_image {
+                crate::commands::comfy_video::account(&auth, &app.state::<crate::cloud::EntitlementService>()).await?;
+                crate::codex::h3_image::recover(&submit_id, &auth).await
+            } else { crate::codex::bowerbird_cloud::recover_cloud_generation(&cloud, &auth, &submit_id).await }
+        } => result,
     };
     cancel_rx.close();
     match recovered {
         Ok((src_images, temp_dir)) => {
             // 会话语义（同即梦恢复）：job 死在续轮时记回会话首轮 session，不把历史撕成两段。
-            let session_for_meta = job.session_id.clone().or_else(|| Some(submit_id.clone()));
+            let session_for_meta = job.session_id.clone().or_else(|| public_id.clone());
             match finalize_generation_assets(
                 app.clone(),
                 db.clone(),
@@ -510,7 +530,7 @@ pub(crate) async fn recover_one_cloud_job(
                 job.references.clone(),
                 session_for_meta.clone(),
                 job.conversation_id.clone(),
-                Some(submit_id.clone()),
+                public_id.clone(),
                 job.provider.clone(),
                 job.project_id.clone(),
                 job.visual_profile.clone(),
@@ -553,14 +573,14 @@ pub(crate) async fn recover_one_cloud_job(
                     let _ = Task::mark_done(&db, &job.id);
                     let _ = app.emit(
                         "codex://chunk",
-                        serde_json::json!({ "kind": "done", "job_id": job.id, "images": asset_paths, "provider": "bowerbird-cloud", "session_id": session_for_meta, "text": "", "elapsed_ms": 0 }),
+                        serde_json::json!({ "kind": "done", "job_id": job.id, "images": asset_paths, "provider": job.provider, "session_id": session_for_meta, "text": "", "elapsed_ms": 0 }),
                     );
                     let _ = app.emit("library://assets-changed", ());
                 }
                 Err(error) => {
                     let message = error.to_string();
                     let _ = Task::mark_failed(&db, &job.id, &message);
-                    update_creative_job_status(&app, &db, &job, "failed", Some(&submit_id));
+                    update_creative_job_status(&app, &db, &job, "failed", public_id.as_deref());
                     let _ = app.emit(
                         "codex://chunk",
                         serde_json::json!({ "kind": "error", "job_id": job.id, "message": message }),
@@ -571,7 +591,7 @@ pub(crate) async fn recover_one_cloud_job(
         Err(error) => {
             let message = error.to_string();
             let _ = Task::mark_failed(&db, &job.id, &message);
-            update_creative_job_status(&app, &db, &job, "failed", Some(&submit_id));
+            update_creative_job_status(&app, &db, &job, "failed", public_id.as_deref());
             let _ = app.emit(
                 "codex://chunk",
                 serde_json::json!({ "kind": "error", "job_id": job.id, "message": message }),

@@ -1,0 +1,84 @@
+diff --git a/packages/llm/llm-deepseek/src/adapter.ts b/packages/llm/llm-deepseek/src/adapter.ts
+index df35b6c..6958e80 100644
+--- a/packages/llm/llm-deepseek/src/adapter.ts
++++ b/packages/llm/llm-deepseek/src/adapter.ts
+@@ -166,7 +166,7 @@ export class DeepSeekAdapter<C extends Connection = Connection> extends LlmAdapt
+         }
+         await extensions.accept()
+         if (response.body === null) throw new LlmError('DeepSeek Messages returned no response body', 'EMPTY_RESPONSE')
+-        yield* translate(parseSse(response.body, activity), options.model)
++        yield* translate(parseSse(response.body, activity), options.model, options.sessionId)
+         return
+       }
+     } catch (error) {
+diff --git a/packages/llm/llm-deepseek/src/translate.ts b/packages/llm/llm-deepseek/src/translate.ts
+index deb9011..acc7501 100644
+--- a/packages/llm/llm-deepseek/src/translate.ts
++++ b/packages/llm/llm-deepseek/src/translate.ts
+@@ -1,5 +1,6 @@
+ /** Translate Messages events while preserving block order and cumulative usage. */
+ 
++import { createHash } from 'node:crypto'
+ import { LlmError, ToolCallId } from '@deepseek-ai/dsh-llm'
+ import type { ContentBlock, FinishReason, StreamChunk, TokenUsage } from '@deepseek-ai/dsh-llm'
+ import { object, replayState } from './replay.ts'
+@@ -101,9 +102,12 @@ function stopReason(raw: unknown): FinishReason {
+  * @param model - requested model id stored in durable replay state.
+  * @returns blocks, one final usage value, and exactly one terminal finish.
+  */
+-export async function* translate(events: AsyncIterable<Record<string, unknown>>, model: string): AsyncGenerator<StreamChunk> {
++export async function* translate(events: AsyncIterable<Record<string, unknown>>, model: string, sessionId?: string): AsyncGenerator<StreamChunk> {
+   const blocks = new Map<number, Block>()
+   const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 }
++  const cardSession = /^session-bowerbird-chat-[a-f0-9]{64}$/.test(sessionId ?? '')
++  // Keep raw deltas for diagnostics. Only a settled tool-use response may replace the final block.
++  const deferred = new Map<number, string>()
+   let started = false
+   let reason: FinishReason | undefined
+   for await (const event of events) {
+@@ -138,6 +142,20 @@ export async function* translate(events: AsyncIterable<Record<string, unknown>>,
+       } else {
+         block.closed = true
+         if (block.content.type === 'tool-call' && block.json.length > 0) block.content.arguments = block.json
++        if (cardSession && block.content.type === 'tool-call' && block.content.name === 'create_canvas_cards') {
++          const original = block.content.arguments
++          try { JSON.parse(original) } catch {
++            // Preserve JSON whitespace and every other code unit verbatim.
++            const candidate = original.replace(/\}([ \t\r\n]*)$/u, '$1')
++            if (candidate !== original) {
++              try {
++                object(JSON.parse(candidate))
++                deferred.set(block.index, candidate)
++                continue
++              } catch { /* let the ordinary provider validation reject this input */ }
++            }
++          }
++        }
+         yield { type: 'block-end', index: block.index, block: { ...block.content } }
+       }
+     } else if (event.type === 'message_delta') {
+@@ -149,13 +167,23 @@ export async function* translate(events: AsyncIterable<Record<string, unknown>>,
+       if (blocks.size === 0 && reason.kind === 'stop') throw new LlmError('DeepSeek Messages returned no content', 'EMPTY_RESPONSE')
+       // Truncated tool JSON is retained in the stream, then pruned by the shared assembler.
+       if (reason.kind !== 'max-tokens') {
+-        for (const { content } of blocks.values()) {
++        for (const { index, content } of blocks.values()) {
+           if (content.type !== 'tool-call') continue
++          const candidate = deferred.get(index)
++          if (candidate !== undefined && reason.kind === 'tool-calls') content.arguments = candidate
+           let parsed: unknown
+           try { parsed = JSON.parse(content.arguments) } catch (_invalidProviderToolJson) { return malformed('tool input is invalid JSON') }
+           object(parsed)
+         }
+       }
++      for (const block of blocks.values()) {
++        if (!deferred.has(block.index)) continue
++        if (reason.kind === 'tool-calls' && block.content.type === 'tool-call') {
++          const sha256 = createHash('sha256').update(block.json).digest('hex')
++          console.info('[bowerbird-chat] removed one surplus trailing brace', { sessionId, callId: block.content.id, sha256 })
++        }
++        yield { type: 'block-end', index: block.index, block: { ...block.content } }
++      }
+       usage.totalTokens = usage.inputTokens + usage.outputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
+       yield { type: 'usage', usage }
+       yield { type: 'finish', reason, replayState: replayState(model, [...blocks.values()].map(block => block.replay)) }

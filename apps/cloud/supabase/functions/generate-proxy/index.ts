@@ -3,7 +3,7 @@ import type { ImageInput, MockScenario } from "../_shared/ark.ts";
 import { requireUser } from "../_shared/auth.ts";
 import { ensureDailyCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
-import { assertBodySize, assertReferenceImages, corsHeaders } from "../_shared/limits.ts";
+import { assertBodySize, readJsonBody, assertReferenceImages, corsHeaders } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
 import { LAYER_SERVICES, validateLayerRequest, type LayerOptions } from "../_shared/layer-contract.ts";
 import { validateVideoInput, videoService, type CloudVideoOptions, type VideoReference, type AudioReference, type VideoInput } from "../_shared/video-contract.ts";
@@ -343,7 +343,7 @@ Deno.serve(async (request) => {
     assertBodySize(request);
     const { user, admin } = await requireUser(request);
     userId = user.id;
-    const raw = await request.json() as Record<string, unknown>;
+    const raw = await readJsonBody(request);
     const action = typeof raw.action === "string" ? raw.action : "";
     const jobId = typeof raw.job_id === "string"
       ? raw.job_id

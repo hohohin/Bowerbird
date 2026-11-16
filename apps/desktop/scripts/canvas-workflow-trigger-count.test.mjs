@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
 await mkdir('.tmp/trigger-count', { recursive: true });
-const server = await createServer({ configFile: false, cacheDir: '.tmp/trigger-count/vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, server: { host: '127.0.0.1', port: 1683, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ configFile: false, resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } }, cacheDir: '.tmp/trigger-count/vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, server: { host: '127.0.0.1', port: 1683, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1800, height: 1200 } });
 try {
-  await page.goto('http://127.0.0.1:1683/scripts/fixtures/canvas-reference/preview.html');
+  await page.goto(new URL('scripts/fixtures/canvas-reference/preview.html', server.resolvedUrls.local[0]).href);
   await page.locator('[data-canvas-node-id="old"]').waitFor();
   const result = await page.evaluate(async () => {
     const { CanvasWorkflowController, canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -88,6 +89,9 @@ try {
     const waiting = c.document.runs.find(run => run.id === lateRunId);
     check(waiting.status === 'waiting' && waiting.triggerQueue.join() === 'repeat' && c.document.nodes[0].triggerCount === 1 && calls.length === 0,
       'new downstream conflict preserves the completion event and count without submitting');
+    check(waiting.startId === 'repeat' && !waiting.order.length && !c.isLocked('h3') && c.isLocked('busy-target'),
+      'only the independent running target stays locked while the trigger waits');
+    await c.edit(c.document.nodes.map(node => node.id === 'h3' ? { ...node, prompt: '下次生成' } : node));
     await c.stop('busy-run'); await c.continue(lateRunId);
     check(c.document.runs.find(run => run.id === lateRunId).status === 'done' && calls.length === 2 && c.document.nodes[0].triggerCount === 0,
       'continuing after the other flow stops reserves both targets and consumes the event once');
@@ -102,15 +106,22 @@ try {
     check(calls.length === 3 && calls[0].requestId === originalJob && c.document.nodes[0].triggerCount === 0, 'recovery queries original then submits exactly two repeats');
 
     // Recover a snapshot taken after decrement but before the next job identity exists.
-    const committed = snapshots.find(doc => doc.nodes[0]?.triggerCount === 1 && doc.run?.steps.h3.status === 'pending');
+    const committed = structuredClone(snapshots.find(doc => doc.nodes[0]?.triggerCount === 1 && doc.run?.steps.h3.status === 'pending'));
+    committed.nodes.push({ ...make()[1], id: 'prior-source', inputs: {} });
+    committed.nodes[0].inputs.completion.push({ nodeId: 'prior-source', portId: 'image' });
+    for (const run of [committed.run, ...committed.runs.filter(run => run.id === committed.run.id)]) {
+      run.lockedNodeIds = [...new Set([...run.lockedNodeIds, 'prior-source', 'repeat'])];
+      run.writeNodeIds = [...new Set([...run.writeNodeIds, 'prior-source', 'repeat'])];
+    }
     await api.canvasWorkflowSave('p', c.revision, committed);
     c = new CanvasWorkflowController('p'); await c.load(); calls = [];
     check(c.document.nodes[0].triggerCount === 1, 'committed counter survives restart');
+    check(!c.isLocked('prior-source') && c.isLocked('h3'), 'restart releases the previous completion source while retaining the current generation lock');
     await c.continue(); check(calls.length === 2 && c.document.nodes[0].triggerCount === 0, 'resume does not double-decrement committed event');
 
     calls = []; mode = 'hold'; hold = null; await c.edit(make(2)); const running = c.start('h3', true);
     while (!hold) await new Promise(resolve => setTimeout(resolve, 5));
-    check(c.isLocked('repeat'), 'receiver is locked with repeat scope');
+    check(!c.isLocked('repeat'), 'an armed completion receiver stays editable while its source runs');
     const stopping = c.stop(); mode = 'done'; hold(); await Promise.all([running, stopping]);
     check(calls.length === 1 && cancelCalls === 1 && c.document.nodes[0].triggerCount === 2 && c.document.run.status === 'stopped', 'stop does not trigger or decrement');
 
@@ -125,7 +136,7 @@ try {
     const imageController = new CanvasWorkflowController('trigger-image'); await imageController.load();
     const base = window.snapshot().nodes.find(node => node.id === 'old');
     let imageCalls = [];
-    window.store.setState({ startGeneration: async (...args) => {
+    window.store.setState({ codexHealth: { ok: true }, startGeneration: async (...args) => {
       const identity = args[12], id = `gen-prompt:${identity.jobId}:${identity.turnKey}:0`;
       await api.projectCanvasNodeCreate({ ...base, id, projectId: 'trigger-image', kind: 'prompt', assetId: null, role: null,
         payloadJson: JSON.stringify({ schema_version: 1, job_id: identity.jobId, turn_key: identity.turnKey, status: 'running' }) });
@@ -135,7 +146,7 @@ try {
     const draw = { ...newWorkflowNode('generation', 0, 0, 'codex'), id: 'draw', prompt: '合成图片', inputs: { signal: [{ nodeId: 'repeat', portId: 'signal' }] } };
     await imageController.edit([imageTrigger, draw]);
     const imageRun = imageController.start('draw', true);
-    const until = async predicate => { for (let i = 0; i < 500; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); } throw new Error('image completion timed out'); };
+    const until = async predicate => { for (let i = 0; i < 500; i++) { if (predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)); } throw new Error('image completion timed out: ' + JSON.stringify(imageController.issue)); };
     await until(() => imageCalls.length === 1);
     check(imageController.document.nodes[0].triggerCount === 1, 'submitted image does not consume count');
     const firstImage = imageCalls[0];
@@ -159,9 +170,17 @@ try {
     }
     let reuseCalls = 0, agentCalls = 0;
     api.generationHistory = async () => { reuseCalls++; return { turns: [{ prompt: '复用提示词' }], references: [] }; };
-    api.agentDsWorkflowGenerationRequest = async () => null;
-    api.agentDsWorkflowStart = async () => { agentCalls++; return { autoDelivered: true, path: 'synthetic' }; };
-    api.agentDsWorkflowResult = async requestId => ({ schemaVersion: 1, requestId, text: '已完成合成测试' });
+    const { localChat } = await import('/src/lib/localChat.ts');
+    const { chatDshStatus } = await import('/src/lib/chatCapabilities.ts');
+    chatDshStatus.store.setState({ value: { localAvailable: true }, error: null });
+    localChat.list = async () => [];
+    localChat.getByRequest = async () => null;
+    localChat.send = async input => {
+      agentCalls++;
+      const turnId = input.requestId;
+      return { id: input.conversationId ?? crypto.randomUUID(), projectId: input.projectId, nodeId: input.agentNodeId, provider: input.provider,
+        revision: agentCalls, status: 'done', submittedTurnId: turnId, messages: [{ turnId, role: 'assistant', status: 'done', text: '已完成合成测试' }] };
+    };
     for (const transport of ['reuse', 'local-ds', 'codex-cli']) {
       const repeated = new CanvasWorkflowController(`trigger-${transport}`); await repeated.load();
       const source = { ...newWorkflowNode(transport === 'reuse' ? 'instruction' : 'agent', 0, 0, 'codex'),
@@ -192,23 +211,25 @@ try {
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const c = canvasWorkflowController('p');
-    await c.edit(c.document.nodes.map(node => node.kind === 'trigger' ? { ...node, inputs: {} } : node));
+    await c.edit(c.document.nodes.map(node => node.kind === 'trigger' ? { ...node, triggerMode: 'completion', inputs: {} } : node));
   });
-  await page.locator('.workflow-card.is-comfy-video').getByRole('button', { name: '输出：视频', exact: true }).press('Enter');
-  await trigger.getByRole('button', { name: '输入：完成触发', exact: true }).press('Enter');
+  await trigger.getByRole('button', { name: '输入：完成触发', exact: true }).locator('i').dragTo(page.locator('[data-workflow-card="h3"] header strong'));
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'repeat').inputs.completion?.[0]?.nodeId === 'h3');
   await page.screenshot({ path: '.tmp/trigger-count/light.png' });
   const beforeResume = await page.evaluate(async () => {
-    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const { CanvasWorkflowController, canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const c = canvasWorkflowController('p');
     const queued = structuredClone(window.lateQueued);
     queued.run.status = 'waiting';
     queued.runs.find(run => run.id === queued.run.id).status = 'waiting';
     await c.save(queued);
+    const restored = new CanvasWorkflowController('p');
+    await restored.load();
+    await c.save(restored.document);
     return window.h3SubmissionCount();
   });
-  await page.locator('.workflow-card.is-comfy-video').getByRole('button', { name: '继续工作流', exact: true }).click();
+  await trigger.getByRole('button', { name: '继续工作流', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
-  assert.equal(await page.evaluate(() => window.h3SubmissionCount()), beforeResume + 1, 'completed-source card exposes Continue for the queued trigger and submits only its repeat');
+  assert.equal(await page.evaluate(() => window.h3SubmissionCount()), beforeResume + 1, 'queued trigger exposes Continue and submits only its repeat');
   console.log('trigger count: H3, image/Agent/instruction completion, late arming, scope conflict, queued recovery UI, dedup, zero, failure, reload, atomic recovery and stop passed');
 } finally { await browser.close(); await server.close(); }

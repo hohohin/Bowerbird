@@ -29,7 +29,7 @@ export function workflowSourceMediaLabel(assetIds: readonly string[], assets: re
     return kind === "audio" ? "音频" : kind === "video" ? "视频" : "图片";
   }
   if (source?.kind === "voice") return "音频";
-  if (source?.kind === "comfy-video" || source?.generation?.media === "video" || (source?.kind === "agent" && source.skill === "hyperframes")) return "视频";
+  if (source?.kind === "director3d" || source?.kind === "comfy-video" || source?.generation?.media === "video" || (source?.kind === "agent" && source.skill === "hyperframes")) return "视频";
   if (source?.kind === "generation" || source?.kind === "agent" || source?.kind === "skill" || source?.kind === "instruction") return "图片";
   return "素材";
 }
@@ -53,7 +53,7 @@ export function canvasAutomaticOutputs(id: string, nodes: WorkflowNode[], canvas
   if (workflow) return workflowOutputs(workflow).filter(port => port.type !== "session" && port.type !== "signal"
     && (port.id !== "iteration" || workflowOutputs(workflow).length === 1)).map(port => ({
       binding: { nodeId: id, portId: port.id }, type: port.type,
-      ...(port.type === "image" ? { media: workflow.kind === "voice" ? "audio" as const : workflow.kind === "comfy-video" || workflow.generation?.media === "video" || workflow.kind === "agent" && workflow.skill === "hyperframes" ? "video" as const : "image" as const } : {}),
+      ...(port.type === "image" ? { media: workflow.kind === "voice" ? "audio" as const : workflow.kind === "director3d" || workflow.kind === "comfy-video" || workflow.generation?.media === "video" || workflow.kind === "agent" && workflow.skill === "hyperframes" ? "video" as const : "image" as const } : {}),
     }));
   const card = canvas.find(node => node.id === id && node.hiddenAt == null);
   if (card?.kind === "note") {

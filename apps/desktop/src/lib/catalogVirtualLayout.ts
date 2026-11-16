@@ -32,6 +32,15 @@ function placeMasonry(ratios: readonly number[] | undefined, count: number, widt
   const top = Math.min(...heights);
   let bottom = top;
   for (let index = 0; index < count; index++) {
+    if (!ratios && !cells && count - index >= heights.length &&
+        Math.max(...heights) - Math.min(...heights) < width + CATALOG_GAP - 1e-7) {
+      // All columns receive one square before any column can receive a second.
+      const rounds = Math.floor((count - index) / heights.length);
+      for (let i = 0; i < heights.length; i++) heights[i] += rounds * (width + CATALOG_GAP);
+      bottom = Math.max(bottom, ...heights);
+      index += rounds * heights.length - 1;
+      continue;
+    }
     let column = 0;
     // Keep ties deterministic when absolute column tails are translated into
     // page-local coordinates; sub-pixel rounding must not choose another column.
@@ -53,7 +62,13 @@ export function masonryGeometry(items: readonly Dimensions[], available: number,
   return { cells, height: Math.max(...heights), width, columns };
 }
 
-export function catalogLayout(sections: CatalogSectionInfo[], available: number, target: number, measured: ReadonlyMap<string, readonly number[]>, headings: boolean) {
+type PagePlacement = {
+  ratios: readonly number[]; width: number; count: number;
+  initial: number[]; tails: number[]; top: number; bottom: number;
+};
+export type CatalogPlacementCache = Map<string, PagePlacement>;
+
+export function catalogLayout(sections: CatalogSectionInfo[], available: number, target: number, measured: ReadonlyMap<string, readonly number[]>, headings: boolean, placements?: CatalogPlacementCache) {
   const geometry = masonryDimensions(available, target);
   let top = 0, maxBottom = 0;
   const blocks: CatalogBlock[] = [];
@@ -61,16 +76,43 @@ export function catalogLayout(sections: CatalogSectionInfo[], available: number,
     const start = top;
     if (headings) top += 40;
     const heights = Array<number>(geometry.columns).fill(top + 8);
+    const firstTop = top + 8, step = geometry.width + CATALOG_GAP;
+    let allSquares = true;
     for (let offset = 0; offset < section.count; offset += CATALOG_PAGE_SIZE) {
       const page = offset / CATALOG_PAGE_SIZE, key = `${section.id}:${page}`;
       const count = Math.min(CATALOG_PAGE_SIZE, section.count - offset);
+      const ratios = measured.get(key);
+      if (allSquares && !ratios) {
+        const firstRow = Math.floor(offset / geometry.columns);
+        const lastRow = Math.ceil((offset + count) / geometry.columns);
+        const pageTop = firstTop + firstRow * step;
+        const bottom = firstTop + lastRow * step;
+        maxBottom = Math.max(maxBottom, bottom);
+        const remainder = offset % geometry.columns;
+        blocks.push({ key, section: index, page, offset, count, top: pageTop, height: bottom - pageTop,
+          columnTops: heights.map((_, column) => column < remainder ? step : 0), maxBottom });
+        continue;
+      }
+      if (allSquares) {
+        for (let i = 0; i < heights.length; i++) heights[i] = firstTop + Math.ceil((offset - i) / geometry.columns) * step;
+        allSquares = false;
+      }
       const initialTops = [...heights];
-      const bounds = placeMasonry(measured.get(key), count, geometry.width, heights);
+      const cached = ratios && placements?.get(key);
+      let bounds;
+      if (cached && cached.ratios === ratios && cached.count === count && cached.width === geometry.width &&
+          cached.initial.length === heights.length && heights.every((value, i) => value === cached.initial[i])) {
+        bounds = cached;
+        heights.splice(0, heights.length, ...cached.tails);
+      } else {
+        bounds = placeMasonry(ratios, count, geometry.width, heights);
+        if (ratios) placements?.set(key, { ratios, width: geometry.width, count, initial: initialTops, tails: [...heights], ...bounds });
+      }
       maxBottom = Math.max(maxBottom, bounds.bottom);
       blocks.push({ key, section: index, page, offset, count, top: bounds.top, height: bounds.bottom - bounds.top,
         columnTops: initialTops.map(value => value - bounds.top), maxBottom });
     }
-    if (section.count) top = Math.max(...heights);
+    if (section.count) top = allSquares ? firstTop + Math.ceil(section.count / geometry.columns) * step : Math.max(...heights);
     if (headings) top += 16;
     return { top: start, height: top - start };
   });

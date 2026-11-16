@@ -13,18 +13,26 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const node = (id, prompt = '') => ({ id, kind: 'generation', x: 0, y: 0, action: 'describe', skill: 'image-edit', prompt, ratio: null, provider: 'codex', inputs: {}, outputs: {}, outputPorts: [], trigger: false });
 const doc = nodes => ({ schema_version: 1, nodes, run: null });
 function fixture(initial = doc([node('original')])) {
-  let saved = { revision: 1, document: clone(initial) }, fail = false, gate, readGate, assetGate, failRead = false;
+  let saved = { revision: 1, document: clone(initial) }, fail = false, gate, readGate, failRead = false;
   const interleavedChanges = [];
+  const writes = [];
   const modules = new Map();
   const requests = new Map(), sends = [], stops = [];
-  const chatApi = { getByRequest: async id => clone(requests.get(id) ?? null) };
-  const chatStore = { summaries: {}, loadProject: async () => {}, applyConversation: () => {},
-    loadConversation: async id => clone([...requests.values()].find(chat => chat.id === id) ?? null),
-    stop: async id => { stops.push(id); },
+  const chatListeners = new Set(), checkpoints = new Map();
+  const reads = { checkpoints: 0, full: 0 };
+  const chatApi = { revision: async id => { reads.checkpoints++; return checkpoints.get(id); }, getByRequest: async id => clone(requests.get(id) ?? null) };
+  const chatStore = { summaries: {}, conversations: {}, drafts: {}, loadProject: async () => {},
+    applyConversation(chat) {
+      const previous = { conversations: chatStore.conversations };
+      chatStore.conversations = { ...chatStore.conversations, [chat.id]: chat };
+      for (const listener of chatListeners) listener(chatStore, previous);
+    },
+    loadConversation: async id => { reads.full++; return clone([...requests.values()].find(chat => chat.id === id) ?? null); },
+    stop: async (id, turnId) => { stops.push([id, turnId]); },
     send: async input => {
       assert.equal(saved.document.run.steps[input.agentNodeId].chatInput.requestId, input.requestId, 'save the request before submitting');
       sends.push(clone(input));
-      const chat = { id: 'chat', projectId: input.projectId, nodeId: input.agentNodeId, provider: input.provider, submittedTurnId: 'turn', status: 'idle', error: null,
+      const chat = { id: input.conversationId ?? 'chat', revision: 1, projectId: input.projectId, nodeId: input.agentNodeId, provider: input.provider, submittedTurnId: 'turn', status: 'idle', error: null,
         messages: [{ turnId: 'turn', role: 'assistant', status: 'done', text: '原轮次输出', referenceAssetIds: [] }] };
       requests.set(input.requestId, clone(chat)); return chat;
     } };
@@ -35,17 +43,14 @@ function fixture(initial = doc([node('original')])) {
       if (failRead) throw new Error('synthetic read failed');
       return snapshot;
     }, projectCanvasGet: async () => ({ nodes: [] }), canvasWorkflowAuthorize: async () => {}, projectThreadCreate: async () => {},
-    getAssetsByIds: async ids => {
-      if (assetGate) { assetGate.entered(); await assetGate.promise; }
-      return ids.map(id => ({ id, store_path: `${id}.png` }));
-    },
+    getAssetsByIds: async ids => ids.map(id => ({ id, store_path: `${id}.png` })),
     canvasWorkflowSave: async (_id, revision, document) => {
       if (gate) await gate;
       if (fail) throw new Error('synthetic disk write failed');
       const change = interleavedChanges.shift();
       if (change) saved = { revision: saved.revision + 1, document: change(clone(saved.document)) };
       if (revision !== saved.revision) throw new Error('工作流已被其他窗口修改，请重新打开项目');
-      saved = { revision: revision + 1, document: clone(document) }; return saved.revision;
+      saved = { revision: revision + 1, document: clone(document) }; writes.push(saved.document); return saved.revision;
     },
   };
   const context = vm.createContext({ console, crypto: webcrypto, structuredClone, TextEncoder, setTimeout, clearTimeout });
@@ -58,7 +63,10 @@ function fixture(initial = doc([node('original')])) {
       if (specifier === './userError') return load(resolve(dirname(path), 'userError.ts'));
       if (specifier === './dshSkill.ts' || specifier === './chatProvider.ts') return load(resolve(dirname(path), specifier));
       if (specifier === './localChat') return { localChat: chatApi, localChatRunning: chat => chat && ['running', 'stopping'].includes(chat.status) };
-      if (specifier === './localChatStore') return { useLocalChatStore: { getState: () => chatStore } };
+      if (specifier === './localChatStore') return { ensureLocalChatEvents: async () => {},
+        useLocalChatStore: { getState: () => chatStore, subscribe: listener => { chatListeners.add(listener); return () => chatListeners.delete(listener); } } };
+      if (specifier === './workflowProviderIssue') return { workflowProviderIssue: () => null };
+      if (specifier === './chatCapabilities') return { chatProviderAccessIssue: () => null };
       if (specifier === '../store') return { useStore: { getState: () => ({ genJobs: {} }) } };
       if (specifier === './workflowPlannerRuntime') return { WorkflowPlannerRuntime: class {} };
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
@@ -73,7 +81,7 @@ function fixture(initial = doc([node('original')])) {
   }
   const { CanvasWorkflowController } = load(resolve(lib, 'canvasWorkflowRuntime.ts'));
   const { mergeWorkflowChanges } = load(resolve(lib, 'workflowExternalChanges.ts'));
-  return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved), requests, sends, stops, chatStore, chatApi, load,
+  return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved), writes, requests, sends, stops, chatStore, chatApi, chatListeners, checkpoints, reads, load,
     external: document => { saved = { revision: saved.revision + 1, document: clone(document) }; },
     fail: value => { fail = value; }, failRead: value => { failRead = value; },
     interleave: (...changes) => { interleavedChanges.push(...changes); },
@@ -82,12 +90,6 @@ function fixture(initial = doc([node('original')])) {
       const started = new Promise(resolve => { entered = resolve; }), promise = new Promise(resolve => { release = resolve; });
       readGate = { entered, promise };
       return { started, release: () => { readGate = undefined; release(); } };
-    },
-    holdAssets: expected => {
-      let entered, release, count = 0;
-      const started = new Promise(resolve => { entered = resolve; }), promise = new Promise(resolve => { release = resolve; });
-      assetGate = { entered: () => { if (++count === expected) entered(); }, promise };
-      return { started, release: () => { assetGate = undefined; release(); } };
     },
     hold: () => { let release; gate = new Promise(resolve => { release = resolve; }); return () => { gate = undefined; release(); }; } };
 }
@@ -143,7 +145,9 @@ test('Agent execution submits through chat once and resumes the exact original t
   accepted.status = 'failed';
   accepted.error = 'chat_no_reply: 上游模型服务返回 HTTP 502。本轮云端任务已结束，没有可取回的回复。';
   await assert.rejects(() => f.controller.chatResult(run.id, agent, frozen, () => false), /HTTP 502/);
-  assert.equal(f.sends.length, 1);
+  f.requests.delete(frozen.chatInput.requestId);
+  assert.equal(await f.controller.chatResult(run.id, agent, frozen, () => false), null);
+  assert.equal(f.sends.length, 1, 'an acknowledged turn that disappeared must never be resubmitted');
 });
 
 test('only clicking run on the Agent itself opts its saved request into bound conversation history', async () => {
@@ -185,7 +189,7 @@ test('lost chat admission response keeps the request and stops the accepted orig
   const accept = second.chatStore.send;
   second.chatStore.send = async input => { const chat = await accept(input); halted = true; return { ...chat, status: 'running' }; };
   assert.equal(await second.controller.chatResult(run.id, agent, step, () => halted), null);
-  assert.deepEqual(second.stops, ['chat']);
+  assert.deepEqual(second.stops, [['chat', 'turn']]);
 });
 
 test('chat card additions survive queued edits and stale workflow revision', async () => {
@@ -269,6 +273,29 @@ async function activeFixture(kind = 'generation') {
   await f.controller.saveRun(running('b'));
   return f;
 }
+
+test('only adjacent draft edits coalesce across CAS and every run checkpoint reaches disk in order', async () => {
+  const f = await activeFixture(), c = f.controller;
+  await c.edit([...c.document.nodes, node('draft')]);
+  const edit = text => c.edit(c.document.nodes.map(n => n.id === 'draft' ? { ...n, prompt: text } : n), undefined, 'draft');
+  const release = f.hold(), first = f.writes.length;
+  const jobs = [c.step('run-a', 'a', { detail: 'before edits' }), edit('a'), edit('ab'),
+    c.step('run-a', 'a', { detail: 'between drafts' }), edit('abc'), edit('abcd')];
+  f.external({ ...f.saved().document, nodes: [...f.saved().document.nodes, node('from-other-editor')] });
+  release(); await Promise.all(jobs);
+  assert.deepEqual(f.writes.slice(first).map(d => [d.nodes.find(n => n.id === 'draft').prompt, d.runs[0].steps.a.detail]),
+    [['', 'before edits'], ['ab', 'before edits'], ['ab', 'between drafts'], ['abcd', 'between drafts']]);
+  assert.ok(f.saved().document.nodes.some(n => n.id === 'from-other-editor'));
+
+  const finish = f.hold();
+  const checkpoint = c.step('run-b', 'b', { detail: 'concurrent save' });
+  const edits = [edit('local first'), edit('local latest')];
+  f.external({ ...f.saved().document, nodes: f.saved().document.nodes.map(n => n.id === 'draft' ? { ...n, prompt: 'remote' } : n) });
+  finish(); await Promise.allSettled([checkpoint, ...edits]);
+  assert.match(c.error, /同一卡片已有其他修改/);
+  assert.equal(c.document.nodes.find(n => n.id === 'draft').prompt, 'local latest');
+  assert.equal(f.saved().document.nodes.find(n => n.id === 'draft').prompt, 'remote');
+});
 
 test('refresh joins the write queue while two active runs checkpoint and chat adds cards', async () => {
   const f = await activeFixture(), c = f.controller;
@@ -363,10 +390,17 @@ test('a refresh merge conflict keeps local progress and blocks subsequent overwr
   assert.equal(f.saved().document.runs[1].steps.b.detail, 'submitted');
 });
 
-test('two live executor loops finish after chat creates and undoes unrelated cards', async () => {
-  const f = await activeFixture('trigger'), c = f.controller, assets = f.holdAssets(2);
+test('two live executor loops finish after chat creates and undoes unrelated cards', { timeout: 5000 }, async () => {
+  const f = await activeFixture('trigger'), c = f.controller;
+  const reached = Promise.withResolvers(), gate = Promise.withResolvers(), finishing = new Set();
+  const finish = c.finish.bind(c);
+  c.finish = async (id, ...args) => {
+    finishing.add(id); if (finishing.size === 2) reached.resolve();
+    await gate.promise; return finish(id, ...args);
+  };
   const first = c.continue('run-a'), second = c.continue('run-b');
-  await assets.started;
+  await reached.promise;
+  assert.deepEqual([...finishing].sort(), ['run-a', 'run-b']);
   assert.equal(c.isLocked('a'), true); assert.equal(c.isLocked('b'), true);
   f.external({ ...f.saved().document, nodes: [...f.saved().document.nodes, node('chat-card')] });
   await c.refreshExternalCards();
@@ -374,7 +408,7 @@ test('two live executor loops finish after chat creates and undoes unrelated car
   f.external({ ...f.saved().document, nodes: f.saved().document.nodes.filter(n => n.id !== 'chat-card') });
   await c.refreshExternalCards();
   assert.equal(c.isLocked('a'), true); assert.equal(c.isLocked('b'), true);
-  assets.release(); await Promise.all([first, second]);
+  gate.resolve(); await Promise.all([first, second]);
   assert.equal(c.error, ''); assert.equal(c.issue, null);
   assert.deepEqual(f.saved().document.runs.map(r => [r.id, r.status, r.steps[r.startId].status]),
     [['run-a', 'done', 'done'], ['run-b', 'done', 'done']]);
@@ -396,23 +430,67 @@ test('live progress received during a checkpoint remains an unsaved delta for th
 test('chat card events refresh native content even when workflow refresh fails, scoped to the mounted project', async () => {
   const path = resolve(lib, '../components/CanvasWorkspace.tsx'), source = readFileSync(path, 'utf8');
   const ast = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  let callback;
+  let callback, refreshMountedWorkflow;
   const visit = node => {
     if (ts.isCallExpression(node) && node.arguments[0]?.getText(ast) === 'LOCAL_CHAT_CARDS_CHANGED_EVENT') callback = node.arguments[1];
+    if (ts.isBinaryExpression(node) && node.left.getText(ast) === 'workflowCardsChanged.current' && ts.isArrowFunction(node.right)) refreshMountedWorkflow = node.right;
     ts.forEachChild(node, visit);
   };
-  visit(ast); assert.ok(callback, 'production card listener is present');
+  visit(ast); assert.ok(callback, 'production card listener is present'); assert.ok(refreshMountedWorkflow, 'production mounted-workflow refresh is present');
   const refreshes = [], controllerCalls = [], errors = [], failure = new Error('workflow merge conflict');
-  const context = vm.createContext({ module: { exports: {} }, alive: true, projectId: 'p',
+  let retries = 0;
+  const context = vm.createContext({ module: { exports: {} }, alive: true, projectId: 'p', loadingRef: { current: false }, workflowCardsChanged: {},
     scheduleRefresh: (...args) => refreshes.push(args), reportError: error => errors.push(error),
-    canvasWorkflowController: id => ({ refreshExternalCards: () => { controllerCalls.push(id); return Promise.reject(failure); } }) });
-  const output = ts.transpileModule(`module.exports = (${callback.getText(ast)});`,
+    controller: { projectId: 'p', refreshExternalCards() { controllerCalls.push(this.projectId); return Promise.reject(failure); } }, retry: () => retries++ });
+  const output = ts.transpileModule(`workflowCardsChanged.current = (${refreshMountedWorkflow.getText(ast)}); module.exports = (${callback.getText(ast)});`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   vm.runInContext(output, context); const listener = context.module.exports;
   listener({ payload: { projectId: 'p' } });
   assert.deepEqual(refreshes, [['p', 40]], 'native graph refresh is scheduled independently');
   await Promise.resolve(); assert.deepEqual(errors, [failure]);
   listener({ payload: { projectId: 'other-project' } });
+  context.loadingRef.current = true;
+  listener({ payload: { projectId: 'p' } });
   context.alive = false; listener({ payload: { projectId: 'p' } });
-  assert.deepEqual(refreshes, [['p', 40]]); assert.deepEqual(controllerCalls, ['p']);
+  assert.deepEqual(refreshes, [['p', 40], ['p', 40]]); assert.deepEqual(controllerCalls, ['p']);
+  assert.equal(retries, 1, 'a matching event while the native view is loading rechecks the current project once');
+});
+
+
+test('parallel workflow waits consume only their target revisions and detach on completion or discard', async () => {
+  const f = fixture();
+  const make = id => ({ id, revision: 1, status: 'running', messages: [{turnId: id, role: 'assistant', status: 'running'}] });
+  const a = make('a'), b = make('b');
+  let halted = false;
+  const wa = f.controller.waitForChatTurn(a, 'a', () => halted);
+  const wb = f.controller.waitForChatTurn(b, 'b', () => halted);
+  await new Promise(setImmediate);
+  for (let revision = 2; revision <= 51; revision++) {
+    f.chatStore.applyConversation({ ...a, revision });
+    f.chatStore.applyConversation({ ...b, revision });
+  }
+  assert.equal(f.chatListeners.size, 2);
+  f.chatStore.applyConversation({ ...a, revision: 52, status: 'idle' });
+  assert.equal((await wa).revision, 52);
+  assert.equal(f.chatListeners.size, 1);
+  halted = true;
+  f.controller.discard();
+  assert.equal(await wb, null);
+  assert.equal(f.chatListeners.size, 0);
+  assert.deepEqual(f.reads, { checkpoints: 0, full: 0 });
+});
+
+test('a quiet workflow checks the revision only and recovers a missed terminal snapshot once', async () => {
+  const f = fixture();
+  const running = { id: 'chat', revision: 1, status: 'running', messages: [{ turnId: 'original', role: 'assistant', status: 'running' }] };
+  f.checkpoints.set('chat', 1);
+  const final = { ...running, revision: 2, status: 'idle', messages: [{turnId: 'original', role: 'assistant', status: 'done'}] };
+  f.requests.set('key', final);
+  const result = f.controller.waitForChatTurn(running, 'original', () => false);
+  await new Promise(resolve => setTimeout(resolve, 5200));
+  assert.deepEqual(f.reads, {checkpoints: 1, full: 0});
+  f.checkpoints.set('chat', 2);
+  assert.equal((await result).revision, 2);
+  assert.deepEqual(f.reads, {checkpoints: 2, full: 1});
+  assert.equal(f.chatListeners.size, 0);
 });

@@ -4,7 +4,7 @@ import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { createArkAdapter, type ImageInput, type MockScenario } from "../_shared/ark.ts";
 import { requireUser } from "../_shared/auth.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
-import { assertReferenceImages, corsHeaders, withTimeout } from "../_shared/limits.ts";
+import { assertReferenceImages, corsHeaders, readJsonBody, withTimeout } from "../_shared/limits.ts";
 import { isReplication, replicationOperations, replicationService, replicationPriceAvailable, validateReplication } from "../_shared/replication.ts";
 import { shortRewrite, standardTextFits } from "../_shared/bcoin-text.ts";
 import { imageMetadata } from "../_shared/image-metadata.ts";
@@ -155,25 +155,6 @@ async function replicationCapabilities(admin: SupabaseClient) {
   });
 }
 
-async function readBody(request: Request): Promise<Record<string, unknown>> {
-  const reader = request.body?.getReader();
-  if (!reader) throw new ApiError("invalid_request", "缺少请求正文");
-  const decoder = new TextDecoder(); let bytes = 0; let text = "";
-  try {
-    while (true) {
-      const item = await reader.read(); if (item.done) break;
-      bytes += item.value.byteLength;
-      if (bytes > 50 * 1024 * 1024) { await reader.cancel(); throw new ApiError("payload_too_large", "复刻请求超过大小限制"); }
-      text += decoder.decode(item.value, { stream: true });
-    }
-    text += decoder.decode();
-    const value = JSON.parse(text);
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid");
-    return value;
-  } catch (error) { if (error instanceof ApiError) throw error; throw new ApiError("invalid_request", "请求正文格式错误"); }
-  finally { reader.releaseLock(); }
-}
-
 Deno.serve(async (request) => {
   const id = requestId(request);
   let cors: HeadersInit = {};
@@ -185,7 +166,7 @@ Deno.serve(async (request) => {
     if (request.method !== "POST") throw new ApiError("invalid_request", "仅支持 POST", false, 405);
     const { user, admin } = await requireUser(request);
     userId = user.id;
-    const raw = await readBody(request);
+    const raw = await readJsonBody(request, 50 * 1024 * 1024);
     if (raw.action === "replication-capabilities") return jsonResponse({ services: await replicationCapabilities(admin) }, 200, cors);
     if (raw.action === "get-by-key") {
       if (typeof raw.idempotency_key !== "string" || raw.idempotency_key.length > 200 || !raw.idempotency_key.startsWith("replication:")) throw new ApiError("invalid_request", "复刻幂等键无效");

@@ -4,7 +4,17 @@ import { createServer } from 'vite';
 const { chromium } = await import(process.env.BOWERBIRD_PLAYWRIGHT_MODULE || '../../html-renderer/node_modules/playwright/index.mjs');
 
 // Real desktop components with the closed synthetic IPC fixture. No Tauri app or provider.
-const server = await createServer({ cacheDir: '.tmp/local-chat-test/vite', server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } });
+const countWorkspaceRenders = {
+  name: 'count-workspace-renders',
+  enforce: 'pre',
+  transform(source, id) {
+    if (!id.endsWith('/components/CanvasWorkspace.tsx')) return;
+    const start = '  const assets = useStore((state) => state.assets);';
+    assert.ok(source.includes(start));
+    return source.replace(start, '(window as any).workspaceRenders = ((window as any).workspaceRenders || 0) + 1;\n' + start);
+  },
+};
+const server = await createServer({ plugins: [countWorkspaceRenders], cacheDir: '.tmp/local-chat-test/vite', server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
@@ -27,6 +37,21 @@ async function fixture(command) { await page.getByRole('button', { name: command
 try {
   await page.goto(`http://127.0.0.1:${server.httpServer.address().port}/scripts/fixtures/local-chat/preview.html`);
   await ready(); await expandComposer();
+  await page.waitForTimeout(180);
+  const renders = await page.evaluate(async () => {
+    const { useLocalChatStore } = await import('/src/lib/localChatStore.ts');
+    const state = useLocalChatStore.getState();
+    const before = window.workspaceRenders;
+    for (let revision = 1; revision <= 20; revision++) {
+      state.applyConversation({ id: 'background', projectId: 'q', threadId: 't', nodeId: 'n',
+        title: 'background', provider: 'codex-local', status: 'running', turnCount: 1, revision,
+        createdAt: 1, updatedAt: revision, error: null, preview: '', messages: [] });
+      await new Promise(requestAnimationFrame);
+    }
+    return [before, window.workspaceRenders];
+  });
+  assert.ok(renders[0] > 0);
+  assert.equal(renders[1], renders[0], 'background conversation updates do not render the current canvas');
   await mode('图片').click(); await editor.fill('图片模式的独立草稿');
   await mode('视频').click(); await editor.fill('视频模式的独立草稿');
   await mode('对话').click(); await editor.fill('给荷月礼盒三个视觉方向');

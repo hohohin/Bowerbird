@@ -31,6 +31,7 @@ export interface CanvasNotePayload {
   note_type: "text" | "section" | "bubble" | "images" | "document";
   cells: CanvasTextCell[][];
   member_ids: string[];
+  section_color?: string;
   workflow_container?: boolean;
   /** A compositing artboard uses the same frame interactions as a section. */
   artboard?: { base_asset_id: string | null };
@@ -45,6 +46,11 @@ export interface CanvasBubbleTail {
   side: "top" | "right" | "bottom" | "left";
   position: number;
 }
+
+export const SECTION_COLORS = [
+  ["灰色", "#69737f"], ["蓝色", "#426eaa"], ["青色", "#207b88"], ["绿色", "#347b53"],
+  ["琥珀色", "#956321"], ["玫红色", "#963c68"], ["紫色", "#72559e"],
+] as const;
 
 export function canvasDocumentTextValue(markdown: string) {
   const value = documentWorkflowValue(markdown);
@@ -133,6 +139,8 @@ export function readCanvasNote(node: Pick<CanvasNode, "payloadJson">): CanvasNot
     cells: (value.note_type === "section" || value.note_type === "document" ? [] : value.cells?.length ? value.cells : [[{ ...emptyCanvasCell(), text: value.text ?? "" }]])
       .map((row: CanvasTextCell[], r: number) => row.map((cell, c) => ({ ...cell, ...(value.note_type === "images" && !cell.content_type ? { content_type: "image" } : {}), id: cell.id ?? `cell-${r}-${c}` }))),
     member_ids: [...(value.member_ids ?? [])],
+    ...(value.note_type === "section" && typeof value.section_color === "string" && /^#[0-9a-f]{6}$/i.test(value.section_color)
+      ? { section_color: value.section_color } : {}),
     ...(value.note_type === "section" && value.workflow_container === true ? { workflow_container: true } : {}),
     ...(value.note_type === "section" && value.artboard ? { artboard: { base_asset_id: typeof value.artboard.base_asset_id === "string" ? value.artboard.base_asset_id : null } } : {}),
     line_height_percent: value.line_height_percent ?? 165,

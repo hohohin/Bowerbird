@@ -11,7 +11,7 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
   options: VideoOptions; onChange: (options: VideoOptions, channel?: VideoChannel) => void;
   ratio: string | null; onRatioChange: (ratio: string) => void;
   channel?: VideoChannel; composer?: boolean; menuClassName?: string;
-  local?: { options?: ComfyVideoOptions; onSelect: () => void; onChange: (options: ComfyVideoOptions) => void };
+  local?: { options?: ComfyVideoOptions; onSelect: () => void; onChange?: (options: ComfyVideoOptions) => void };
 }) {
   const control = "h-7 rounded border border-edge bg-panel2 px-2 text-xs text-ink";
   const entitlement = useStore(state => state.cloudEntitlement);
@@ -44,11 +44,11 @@ export function VideoControls({ options, onChange, ratio, onRatioChange, channel
     <ModelSelect kind="视频" menuClassName={menuClassName} value={local?.options ? "local:h3" : `${channel}:${options.model_version}`} label={local?.options ? (composer ? "H3" : "本地部署 · H3") : videoModelLabel(options.model_version)} source={local?.options ? "local" : channel === "cloud" ? "cloud" : "personal"}
       cloudBalance={entitlement ? balance : null} cloudLoggedIn={auth?.logged_in}
       options={modelOptions} onChange={selectModel} footer={composer ? status : undefined} quotaDetail={local?.options ? "本地 H3 视频，不消耗积分" : channel === "cloud" ? "使用 Bowerbird 账号积分" : "使用自有即梦账号额度，不扣 Bowerbird 积分"} />
-    {local?.options ? <>
-      <TacticalSelect aria-label="本地视频模式" value={comfyVideoMode(local.options)} onValueChange={value => local.onChange(comfyVideoOptionsForMode(local.options!, value as ComfyVideoMode))}><option value="frames">首尾帧</option><option value="reference">单图</option><option value="text">文生视频</option></TacticalSelect>
-      <TacticalSelect aria-label="本地视频分辨率" value={local.options.resolution} onValueChange={value => local.onChange({ ...local.options!, resolution: Number(value) as ComfyVideoOptions["resolution"] })}>{(comfyVideoMode(local.options) === "frames" ? [0.6, 0.8, 1] : [0.6, 0.8, 0.98, 1]).map(value => <option key={value} value={value}>{value === 0.98 ? "768p" : `${value} MP`}</option>)}</TacticalSelect>
-      <label className="flex items-center gap-1 text-xs text-muted"><input aria-label="本地视频时长（秒）" type="number" min={1} max={15} step={1} className={`${control} w-12`} value={local.options.seconds} onChange={event => local.onChange({ ...local.options!, seconds: Number(event.target.value) })} />秒</label>
-      <TacticalSelect aria-label="本地视频比例" value={local.options.ratio} onValueChange={value => local.onChange({ ...local.options!, ratio: value as ComfyVideoOptions["ratio"] })}>{[...(comfyVideoMode(local.options) === "text" ? [] : ["auto"]), "9:16", "16:9", "4:3", "3:4", "1:1"].map(value => <option key={value} value={value}>{value === "auto" ? "自动" : value}</option>)}</TacticalSelect>
+    {local?.options ? local.onChange && <>
+      <TacticalSelect aria-label="本地视频模式" value={comfyVideoMode(local.options)} onValueChange={value => local.onChange?.(comfyVideoOptionsForMode(local.options!, value as ComfyVideoMode))}><option value="frames">首尾帧</option><option value="reference">单图</option><option value="text">文生视频</option></TacticalSelect>
+      <TacticalSelect aria-label="本地视频分辨率" value={local.options.resolution} onValueChange={value => local.onChange?.({ ...local.options!, resolution: Number(value) as ComfyVideoOptions["resolution"] })}>{(comfyVideoMode(local.options) === "frames" ? [0.6, 0.8, 1] : [0.6, 0.8, 0.98, 1]).map(value => <option key={value} value={value}>{value === 0.98 ? "768p" : `${value} MP`}</option>)}</TacticalSelect>
+      <label className="flex items-center gap-1 text-xs text-muted"><input aria-label="本地视频时长（秒）" type="number" min={1} max={15} step={1} className={`${control} w-12`} value={local.options.seconds} onChange={event => local.onChange?.({ ...local.options!, seconds: Number(event.target.value) })} />秒</label>
+      <TacticalSelect aria-label="本地视频比例" value={local.options.ratio} onValueChange={value => local.onChange?.({ ...local.options!, ratio: value as ComfyVideoOptions["ratio"] })}>{[...(comfyVideoMode(local.options) === "text" ? [] : ["auto"]), "9:16", "16:9", "4:3", "3:4", "1:1"].map(value => <option key={value} value={value}>{value === "auto" ? "自动" : value}</option>)}</TacticalSelect>
     </> : <>
     <TacticalSelect aria-label="视频分辨率" className={control} value={options.video_resolution} onValueChange={value => onChange({ ...options, video_resolution: value as VideoOptions["video_resolution"] })}>
       {!resolutions.includes(options.video_resolution) && <option value={options.video_resolution} disabled>{options.video_resolution} · 不支持</option>}

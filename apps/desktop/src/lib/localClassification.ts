@@ -98,11 +98,6 @@ export const localClassification = {
     const settings = await invoke<AppSettings>("get_settings");
     return { enabled: settings.jev_image_classification_enabled };
   },
-  saveJevConfig: async (enabled: boolean) => {
-    const settings = await invoke<AppSettings>("get_settings");
-    settings.jev_image_classification_enabled = enabled;
-    await invoke<void>("update_settings", { settings });
-  },
 };
 
 export const projectClassification = (projectId: string) => ({

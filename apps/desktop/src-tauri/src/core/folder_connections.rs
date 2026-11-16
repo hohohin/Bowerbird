@@ -5,7 +5,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 use rusqlite::{params, params_from_iter, types::Value, OptionalExtension};
-use super::{catalog_browser::{CatalogFilter, gallery_eligible, generation_display_group}, generation_gallery::WORKFLOW_GALLERY_CTE};
+use super::{catalog_browser::{CatalogFilter, gallery_eligible, generation_display_group}, generation_gallery::with_gallery_cache};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
@@ -103,12 +103,12 @@ pub struct ConnectionFilter {
     pub grouped: bool,
 }
 impl ConnectionFilter {
-    fn gallery(&self, condition: &str) -> String {
+    fn gallery(&self, condition: &str, provenance: &str) -> String {
         let display_group = generation_display_group("'entry:'||e.id");
         let eligible = gallery_eligible();
         let group = if self.grouped { format!("CASE WHEN {eligible} THEN {display_group} ELSE 'entry:'||e.id END") } else { "'entry:'||e.id".into() };
         let rank = if self.grouped { "ROW_NUMBER() OVER (PARTITION BY folder_id,group_key ORDER BY created_at DESC,asset_id DESC,id DESC)" } else { "1" };
-        format!("{WORKFLOW_GALLERY_CTE}, entry_gallery AS (SELECT e.id,e.folder_id,e.name,a.created_at,a.id AS asset_id,{group} AS group_key
+        format!("{provenance}, entry_gallery AS (SELECT e.id,e.folder_id,e.name,a.created_at,a.id AS asset_id,{group} AS group_key
           FROM connected_entries e JOIN assets a ON a.id=e.asset_id WHERE {condition}),
           ranked_entries AS (SELECT *,{rank} AS rank FROM entry_gallery)")
     }
@@ -365,30 +365,32 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let lock_wait_us = waiting.elapsed().as_micros() as u64;
         let started = std::time::Instant::now();
-        let gallery = filter.gallery(&condition);
-        let mut stmt = conn.prepare_cached(&format!("WITH {gallery}, folder_counts AS (
-          SELECT folder_id,COUNT(DISTINCT group_key) AS count FROM entry_gallery GROUP BY folder_id)
-          SELECT f.id,f.parent_id,f.root_id,f.name,f.path,f.available AND r.available,r.scanning,r.error,
-          COALESCE(c.count,0)
-          FROM connected_folders f JOIN connected_roots r ON r.id=f.root_id
-          LEFT JOIN folder_counts c ON c.folder_id=f.id ORDER BY r.rowid,lower(f.name),f.id"))?;
-        let values = stmt
-            .query_map(params_from_iter(values), |r| {
-                Ok(FolderConnection {
-                    id: r.get(0)?,
-                    parent_id: r.get(1)?,
-                    root_id: r.get(2)?,
-                    name: r.get(3)?,
-                    path: r.get(4)?,
-                    available: r.get(5)?,
-                    scanning: r.get(6)?,
-                    error: r.get(7)?,
-                    count: r.get(8)?,
-                })
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        tracing::debug!(target: "library::read", operation = "folder_counts", lock_wait_us, sql_us = started.elapsed().as_micros() as u64, rows = values.len());
-        Ok(values)
+        with_gallery_cache(&conn, filter.grouped || filter.generated.is_some(), |conn, provenance| {
+            let gallery = filter.gallery(&condition, provenance);
+            let mut stmt = conn.prepare_cached(&format!("WITH {gallery}, folder_counts AS (
+              SELECT folder_id,COUNT(DISTINCT group_key) AS count FROM entry_gallery GROUP BY folder_id)
+              SELECT f.id,f.parent_id,f.root_id,f.name,f.path,f.available AND r.available,r.scanning,r.error,
+              COALESCE(c.count,0)
+              FROM connected_folders f JOIN connected_roots r ON r.id=f.root_id
+              LEFT JOIN folder_counts c ON c.folder_id=f.id ORDER BY r.rowid,lower(f.name),f.id"))?;
+            let values = stmt
+                .query_map(params_from_iter(values), |r| {
+                    Ok(FolderConnection {
+                        id: r.get(0)?,
+                        parent_id: r.get(1)?,
+                        root_id: r.get(2)?,
+                        name: r.get(3)?,
+                        path: r.get(4)?,
+                        available: r.get(5)?,
+                        scanning: r.get(6)?,
+                        error: r.get(7)?,
+                        count: r.get(8)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            tracing::debug!(target: "library::read", operation = "folder_counts", lock_wait_us, sql_us = started.elapsed().as_micros() as u64, rows = values.len());
+            Ok(values)
+        })
     }
     pub fn connection_entry_ids(
         &self,
@@ -415,14 +417,16 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         let lock_wait_us = waiting.elapsed().as_micros() as u64;
         let started = std::time::Instant::now();
-        let gallery = filter.gallery(&condition);
-        let mut stmt = conn.prepare_cached(&format!("WITH {gallery}
-          SELECT e.id FROM ranked_entries e
-          WHERE e.rank=1
-          ORDER BY lower(e.name),e.id LIMIT ? OFFSET ?"))?;
-        let values = stmt.query_map(params_from_iter(values), |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
-        tracing::debug!(target: "library::read", operation = "folder_page_ids", lock_wait_us, sql_us = started.elapsed().as_micros() as u64, rows = values.len(), offset);
-        Ok(values)
+        with_gallery_cache(&conn, filter.grouped || filter.generated.is_some(), |conn, provenance| {
+            let gallery = filter.gallery(&condition, provenance);
+            let mut stmt = conn.prepare_cached(&format!("WITH {gallery}
+              SELECT e.id FROM ranked_entries e
+              WHERE e.rank=1
+              ORDER BY lower(e.name),e.id LIMIT ? OFFSET ?"))?;
+            let values = stmt.query_map(params_from_iter(values), |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
+            tracing::debug!(target: "library::read", operation = "folder_page_ids", lock_wait_us, sql_us = started.elapsed().as_micros() as u64, rows = values.len(), offset);
+            Ok(values)
+        })
     }
     pub fn connection_entry_groups(&self, entries: &mut [ConnectionEntry], project: Option<&str>, media: Option<&str>, filter: &ConnectionFilter) -> AppResult<()> {
         if !filter.grouped || entries.is_empty() { return Ok(()); }
@@ -430,7 +434,6 @@ impl Database {
         let folders: std::collections::BTreeSet<_> = entries.iter().map(|entry| entry.folder_id.as_str()).collect();
         condition.push_str(&format!(" AND e.folder_id IN ({})", vec!["?"; folders.len()].join(",")));
         values.extend(folders.into_iter().map(|id| Value::Text(id.into())));
-        let gallery = filter.gallery(&condition);
         values.extend(entries.iter().map(|entry| Value::Text(entry.id.clone())));
         let placeholders = vec!["?"; entries.len()].join(",");
         let rows = {
@@ -438,15 +441,18 @@ impl Database {
             let conn = self.conn.lock().unwrap();
             let lock_wait_us = waiting.elapsed().as_micros() as u64;
             let started = std::time::Instant::now();
-            // Both sides need the derived provenance key. Without this boundary
-            // SQLite can expand the self-join and recalculate it for every pair
-            // of a visible head and a file in a large current directory.
-            let mut stmt = conn.prepare_cached(&format!("WITH {gallery}, group_entries AS MATERIALIZED (SELECT * FROM entry_gallery)
-              SELECT h.id,m.id FROM group_entries h JOIN group_entries m ON m.folder_id=h.folder_id AND m.group_key=h.group_key
-              WHERE h.id IN ({placeholders}) ORDER BY m.created_at,m.asset_id,m.id"))?;
-            let rows = stmt.query_map(params_from_iter(values), |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
-            tracing::debug!(target: "library::read", operation = "folder_group_ids", lock_wait_us, sql_us = started.elapsed().as_micros() as u64, rows = rows.len());
-            rows
+            with_gallery_cache(&conn, true, |conn, provenance| {
+                let gallery = filter.gallery(&condition, provenance);
+                // Both sides need the derived provenance key. Without this boundary
+                // SQLite can expand the self-join and recalculate it for every pair
+                // of a visible head and a file in a large current directory.
+                let mut stmt = conn.prepare_cached(&format!("WITH {gallery}, group_entries AS MATERIALIZED (SELECT * FROM entry_gallery)
+                  SELECT h.id,m.id FROM group_entries h JOIN group_entries m ON m.folder_id=h.folder_id AND m.group_key=h.group_key
+                  WHERE h.id IN ({placeholders}) ORDER BY m.created_at,m.asset_id,m.id"))?;
+                let rows = stmt.query_map(params_from_iter(values), |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+                tracing::debug!(target: "library::read", operation = "folder_group_ids", lock_wait_us, sql_us = started.elapsed().as_micros() as u64, rows = rows.len());
+                Ok(rows)
+            })?
         };
         let mut members = std::collections::HashMap::<String, Vec<String>>::new();
         for (head, member) in rows { members.entry(head).or_default().push(member); }

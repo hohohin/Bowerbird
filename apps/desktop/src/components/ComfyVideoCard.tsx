@@ -1,7 +1,8 @@
 import { H3OptimizeButton } from "./creation/H3OptimizeButton";
+import { CanvasTextarea } from "./CanvasTextarea";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useId, useRef, useState } from "react";
-import { CircleAlert } from "lucide-react";
+import { Check, CircleAlert, Ellipsis } from "lucide-react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -16,6 +17,7 @@ import { ProviderQuota } from "./creation/ProviderQuota";
 import { TacticalSelect } from "./TacticalSelect";
 import { RatioSelect } from "./creation/RatioSelect";
 import { RATIOS } from "./creation/ratios";
+import imageLicense from "../assets/comfy-licenses/MiniMax-H3-Image-LICENSE.txt?raw";
 import h3License from "../assets/comfy-licenses/MiniMax-H3-LICENSE.txt?raw";
 
 const H3_RATIOS = RATIOS.filter(ratio => ["9:16", "16:9", "4:3", "3:4", "1:1"].includes(ratio.key));
@@ -52,13 +54,13 @@ export function ComfyGenerationProgress({ step }: { step: WorkflowStep }) {
 }
 
 export interface ComfyEnvironmentState { ready: boolean; checking: boolean; message: string }
-export function ComfyEnvironmentControl({ node, disabled, onChange, composer = false, onStatusChange }: {
+export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, composer = false, onStatusChange }: {
   node: Pick<WorkflowNode, "comfyVideo">; disabled: boolean; onChange: (patch: Partial<WorkflowNode>) => void;
-  composer?: boolean; onStatusChange?: (state: ComfyEnvironmentState) => void;
+  imageMode?: "image" | "edit"; composer?: boolean; onStatusChange?: (state: ComfyEnvironmentState) => void;
 }) {
   const panelId = useId();
   const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
-  const mode = comfyVideoMode(options);
+  const mode = imageMode ?? comfyVideoMode(options);
   const dialog = useRef<HTMLDialogElement>(null);
   const dot = useRef<HTMLButtonElement>(null);
   const [environment, setEnvironment] = useState<ComfyEnvironment>();
@@ -69,15 +71,15 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, composer = f
   const [acting, setActing] = useState(false);
   const [driverOpening, setDriverOpening] = useState(false);
   const actionInFlight = useRef(false);
-  const latest = useRef({ options, onChange, disabled, environment }); latest.current = { options, onChange, disabled, environment };
+  const latest = useRef({ mode, options, onChange, disabled, environment }); latest.current = { mode, options, onChange, disabled, environment };
   const request = useRef(0);
   const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; request.current++; }; }, []);
   function accept(state: ComfyEnvironment) {
-    if (state.mode && state.mode !== comfyVideoMode(latest.current.options)) return;
+    if (state.mode && state.mode !== latest.current.mode) return;
     setEnvironment(state); setConnectionError("");
     if (comfyEnvironmentReady(state)) dialog.current?.close();
-    if (state.phase === "ready" && state.endpoint !== latest.current.options.endpoint && !latest.current.disabled) {
+    if (!imageMode && state.phase === "ready" && state.endpoint !== latest.current.options.endpoint && !latest.current.disabled) {
       latest.current.onChange({ comfyVideo: { ...latest.current.options, endpoint: state.endpoint } });
     }
   }
@@ -98,7 +100,7 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, composer = f
     let stopped = false;
     let timer: number;
     async function poll() {
-      try { const state = await comfyEnvironment("status", latest.current.options.endpoint, undefined, undefined, comfyVideoMode(latest.current.options)); if (!stopped) accept(state); }
+      try { const state = await comfyEnvironment("status", latest.current.options.endpoint, undefined, undefined, latest.current.mode); if (!stopped) accept(state); }
       catch (error) { if (!stopped) setConnectionError(String(error)); }
       if (!stopped) timer = window.setTimeout(poll, 1000);
     }
@@ -139,11 +141,11 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, composer = f
   const gb = (bytes: number) => `${(bytes / 1e9).toFixed(1)} GB`;
   const message = connectionError ? userErrorMessage(connectionError, "暂时无法检查本地生成环境，请重新检测。") : (checking ? "正在检查本机环境…" : ready && environment?.phase !== "ready" && environment?.phase !== "starting"
     ? "环境已就绪，运行卡片时会自动启动" : userErrorMessage(environment?.message, "环境未就绪，请重新检测或检查安装位置。"));
-  const busyHint = disabled ? "当前视频任务正在执行，请等待任务结束或停止任务后再调整环境。"
+  const busyHint = disabled ? "当前生成任务正在执行，请等待任务结束或停止任务后再调整环境。"
     : driverOpening ? "正在匹配官方显卡驱动，请稍候，勿重复点击。"
     : checking ? "正在检测本机环境，请稍候；检测完成后会自动更新可用操作。"
     : preparing || acting ? `${message}。请等待当前操作完成，无需重复操作；安装期间关闭面板仍会继续。`
-    : ready ? "环境已就绪，无需再次安装；接好输入后直接运行视频卡片。" : "";
+    : ready ? "环境已就绪，无需再次安装；可以直接开始生成。" : "";
   const actionHint = busyHint || (recheck ? `${message}。处理后点击重新检测。`
     : needsDriver ? `${message}。点击匹配并下载 NVIDIA 官方驱动，安装后返回应用自动复查。`
     : !canPrepare && !environment?.canInstall ? message
@@ -166,17 +168,17 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, composer = f
       if (mounted.current) setEnvironment(previous => previous ? { ...previous, phase: "failed", message: String(error) } : previous);
     } finally {
       actionInFlight.current = false;
-      if (mounted.current) { setChecking(false); setActing(false); setDriverOpening(false); if (mode !== comfyVideoMode(latest.current.options)) setRefresh(value => value + 1); }
+      if (mounted.current) { setChecking(false); setActing(false); setDriverOpening(false); if (mode !== latest.current.mode) setRefresh(value => value + 1); }
     }
   }
   return <>
-    <button ref={dot} type="button" className={`comfy-environment-dot${ready ? " is-ready" : ""}${composer ? " composer-environment" : ""}`}
-      aria-label={ready ? "本地部署工作流：环境就绪" : "本地部署工作流：环境未就绪，打开环境设置"}
+    <button ref={dot} type="button" className={`comfy-environment-dot${imageMode ? " h3-image-environment" : ""}${ready ? " is-ready" : ""}${composer ? " composer-environment" : ""}`}
+      aria-label={imageMode && checking ? "本地部署工作流：正在检测环境" : ready ? "本地部署工作流：环境就绪" : "本地部署工作流：环境未就绪，打开环境设置"}
       aria-haspopup="dialog" aria-controls={panelId} title={message} onClick={() => { if (!ready) {
         dialog.current?.showModal();
         if (!actionInFlight.current && !preparing) { setChecking(true); setRefresh(value => value + 1); }
       } }}>
-      {composer && (!ready || checking) ? <><CircleAlert size={13} aria-hidden="true" /><span className="environment-full">{checking ? "正在检测环境…" : "环境未就绪，点击配置"}</span><span className="environment-short">{checking ? "检测中…" : "配置环境"}</span></> : <span aria-hidden="true" />}
+      {imageMode ? (checking ? <Ellipsis size={14} aria-hidden="true" /> : ready ? <Check size={14} aria-hidden="true" /> : <CircleAlert size={14} aria-hidden="true" />) : composer && (!ready || checking) ? <><CircleAlert size={13} aria-hidden="true" /><span className="environment-full">{checking ? "正在检测环境…" : "环境未就绪，点击配置"}</span><span className="environment-short">{checking ? "检测中…" : "配置环境"}</span></> : <span aria-hidden="true" />}
     </button>
     {createPortal(<dialog ref={dialog} id={panelId} className="comfy-environment-panel" aria-label="本地部署工作流环境设置"
       onClose={() => dot.current?.focus()} onPointerDown={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}
@@ -190,7 +192,7 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, composer = f
         {gpu.memoryMib != null && ` · 显存 ${(gpu.memoryMib / 1024).toFixed(1)} GB`}
         {` · 驱动 ${gpu.driver ?? "未识别"}`}</p>)}
       <p className="comfy-install-path">{environment?.directory || directory || "正在读取安装位置…"}</p>
-      <details><summary>MiniMax H3 使用许可</summary><p>点击安装即同意以下许可（含适用地区及用途限制）。许可与来源文件将保存在安装目录的 licenses 文件夹。</p><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 180, overflow: "auto" }}>{h3License}</pre></details>
+      <details><summary>MiniMax H3 使用许可</summary><p>点击安装即同意以下许可（含适用地区及用途限制）。许可与来源文件将保存在安装目录的 licenses 文件夹。</p><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 180, overflow: "auto" }}>{imageMode ? imageLicense : h3License}</pre></details>
       {environment && !ready && !existing.length && !environment.installed && !preparing && <small>下载 {gb(environment.downloadBytes)} · 需空闲 {gb(environment.requiredBytes)}</small>}
       {environment?.phase === "installing" && <>
         <progress aria-label="环境下载进度" max={environment.totalBytes || 1} value={environment.completedBytes} />
@@ -198,7 +200,7 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, composer = f
       </>}
       <div className="comfy-environment-actions">
         <EnvironmentAction label="安装位置" disabled={disabled || checking || acting || preparing || ready}
-          hint={busyHint || "选择安装位置，应用会在所选文件夹下创建 Bowerbird-ComfyUI；选好后自动重新检查磁盘空间。"} onClick={async () => {
+          hint={busyHint || "选择安装位置后，应用会创建独立目录并检查磁盘空间。"} onClick={async () => {
           try { const selected = await open({ directory: true, multiple: false, title: "选择本地部署工作流的安装位置" }); if (typeof selected === "string" && selected !== directory) { setChecking(true); setDirectory(selected); } }
           catch (error) { setConnectionError(String(error)); }
         }} />
@@ -208,11 +210,11 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, composer = f
   </>;
 }
 
-export function ComfyVideoCard({ node, disabled, assets, inputImages, onChange, onOptimize }: {
+export function ComfyVideoCard({ node, disabled, optimizing, assets, inputImages, readCurrentPrompt, onChange, onOptimize }: {
   node: WorkflowNode; step?: WorkflowStep; disabled: boolean; assets: Asset[];
   inputImages: (input: import("../lib/canvasWorkflow").WorkflowInput) => string[];
   onChange: (patch: Partial<WorkflowNode>) => void;
-  onOptimize: () => void;
+  readCurrentPrompt: () => string; onOptimize: () => void; optimizing?: boolean;
 }) {
   const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
   const mode = comfyVideoMode(options);
@@ -239,10 +241,10 @@ export function ComfyVideoCard({ node, disabled, assets, inputImages, onChange, 
       </div>;
     })}</div>}
     <div className="comfy-prompt-field">
-    <textarea className="comfy-video-prompt" aria-label="卡片指令" disabled={disabled}
+    <CanvasTextarea className="comfy-video-prompt" aria-label="卡片指令" disabled={disabled}
       placeholder={mode === "reference" ? "用 <Picture 1> 指代参考图主体，不固定首尾画面…" : "输入视频提示词，也可从文本端口接入…"} value={node.prompt}
-      onChange={event => onChange({ prompt: event.target.value })} />
-    <H3OptimizeButton disabled={disabled || !node.prompt.trim()} onClick={() => onOptimize?.()} />
+      readCurrentValue={readCurrentPrompt} onValueChange={prompt => onChange({ prompt })} />
+    <H3OptimizeButton busy={optimizing} disabled={disabled || !node.prompt.trim()} onClick={() => onOptimize?.()} />
     </div>
     <fieldset disabled={disabled} className="comfy-video-options">
       <TacticalSelect aria-label="H3 模式" value={mode} onValueChange={value => onChange({ comfyVideo: comfyVideoOptionsForMode(options, value as ComfyVideoMode) })}>

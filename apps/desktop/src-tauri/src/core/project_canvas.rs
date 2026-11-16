@@ -6,7 +6,7 @@
 
 #![allow(dead_code)]
 
-mod placement;
+pub(super) mod placement;
 
 use chrono::Utc;
 use std::path::Path;
@@ -3779,6 +3779,11 @@ mod tests {
         assert!(db.update_canvas_note_payload("text", r#"{"schema_version":1,"text":"","cells":[[]]}"#).is_err());
         let section = r#"{"schema_version":1,"text":"分区","note_type":"section","cells":[],"member_ids":["text"]}"#;
         db.create_canvas_node(&NewCanvasNode { payload_json: section.into(), ..note("p1", "section") }).unwrap();
+        let mut colored: serde_json::Value = serde_json::from_str(section).unwrap();
+        colored["section_color"] = serde_json::json!("#347b53");
+        assert_eq!(db.update_canvas_note_payload("section", &colored.to_string()).unwrap().payload_json, colored.to_string());
+        colored["section_color"] = serde_json::json!("invalid");
+        assert!(db.update_canvas_note_payload("section", &colored.to_string()).is_err());
         assert_eq!(db.project_canvas_snapshot("p1").unwrap().nodes.len(), 2);
         db.create_creative_thread(&NewCreativeThread { id: "t".into(), project_id: "p1".into(), title: "t".into(), origin: CreativeThreadOrigin::Direct }).unwrap();
         db.create_canvas_node(&prompt("p1", "t", "execution")).unwrap();
@@ -3872,6 +3877,31 @@ mod tests {
             assert_eq!(serde_json::from_str::<serde_json::Value>(&prompt.payload_json).unwrap()["conversation_id"], "original-conversation");
         }
         assert_eq!(db.get_canvas_node("session").unwrap().unwrap().payload_json, saved);
+    }
+
+    #[test]
+    fn gallery_with_failed_latest_turn_keeps_previous_image_bounds() {
+        let db = db();
+        materialize(&db, "p1");
+        db.create_creative_thread(&NewCreativeThread {
+            id: "t".into(), project_id: "p1".into(), title: "test".into(), origin: CreativeThreadOrigin::Direct,
+        }).unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO assets(id,name) VALUES('image','image')", []).unwrap();
+        for (id, status) in [("first", "done"), ("latest", "failed")] {
+            let mut card = prompt("p1", "t", id);
+            card.payload_json = serde_json::json!({"schema_version":1,"text":id,"conversation_id":"gallery",
+                "job_id":id,"turn_key":id,"status":status}).to_string();
+            db.create_canvas_node(&card).unwrap();
+        }
+        let mut image = output("p1", "t", "output", "image");
+        image.payload_json = serde_json::json!({"schema_version":1,"snapshot":{"name":"image","width":400,"height":200},
+            "execution":{"job_id":"first","turn_key":"first"}}).to_string();
+        db.create_canvas_node(&image).unwrap();
+        let mut conn = db.conn.lock().unwrap();
+        let tx = conn.transaction().unwrap();
+        let visible = placement::obstacles(&tx, "p1", &serde_json::json!({}), &[]).unwrap();
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].height, visible[0].width / 2.0);
     }
 
     #[test]

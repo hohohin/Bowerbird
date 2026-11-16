@@ -49,11 +49,11 @@ impl Database {
         let mut keys = BTreeSet::new();
         let group = generation_display_group("'asset:'||a.id");
         for id in input.asset_ids.iter().collect::<BTreeSet<_>>() {
-            let row: Option<(String,String)> = tx.query_row(&format!("WITH {WORKFLOW_GALLERY_CTE}
-                SELECT {group},lower(COALESCE(a.ext,'')) FROM assets a WHERE a.id=?1 AND a.store_path IS NOT NULL
-                AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)"), [id], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
-            let Some((key, ext)) = row else { return Err(AppError::Other("所选图片已不可用，请刷新后重试".into())); };
-            if !["png","jpg","jpeg","webp","gif","bmp","svg","avif","tif","tiff","ico"].contains(&ext.as_str()) {
+            let row: Option<(String,bool)> = tx.query_row(&format!("WITH {WORKFLOW_GALLERY_CTE}
+                SELECT {group},({} OR lower(COALESCE(a.ext,''))='ico') FROM assets a WHERE a.id=?1 AND a.store_path IS NOT NULL
+                AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)",crate::core::material_catalog::IMAGE), [id], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
+            let Some((key, image)) = row else { return Err(AppError::Other("所选图片已不可用，请刷新后重试".into())); };
+            if !image {
                 return Err(AppError::Other("请选择至少两张图片或图片组".into()));
             }
             keys.insert(key);

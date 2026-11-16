@@ -4,6 +4,131 @@ fn event(seq: i64, kind: &str, data: Value) -> Value {
     json!({"event":{"seq":seq,"type":kind,"data":data,"time":0}})
 }
 
+// Run alone with the installed DSH, a fresh DSH_HOME, isolated application data
+// and a loopback Messages SSE fixture. The fixture emits a single extra brace.
+#[tokio::test]
+#[ignore = "requires an isolated real DSH installation test environment"]
+async fn dsh_auto_installed_host_creates_one_card_call_and_recovers_after_restart() {
+    let app_data = crate::codex::codex_cli::app_data_dir().unwrap();
+    let home = PathBuf::from(std::env::var_os("DSH_HOME").unwrap());
+    let isolated = PathBuf::from(std::env::var_os("BOWERBIRD_DSH_AUTO_FIXTURE").unwrap());
+    assert!(isolated.is_absolute() && isolated.starts_with(std::env::temp_dir()));
+    assert!(home.starts_with(&isolated) && app_data.starts_with(&isolated));
+    if let Ok(platform) = std::env::var("BOWERBIRD_DSH_ACCOUNT_FIXTURE") {
+        assert!(platform.starts_with("http://127.0.0.1:"));
+        assert!(std::env::var_os("DEEPSEEK_API_KEY").is_none());
+        authorize_fixture_account(&platform).await;
+    } else {
+        assert!(std::env::var("DEEPSEEK_BASE_URL").unwrap().starts_with("http://127.0.0.1:"));
+        assert_eq!(std::env::var("DEEPSEEK_API_KEY").unwrap(), "fixture");
+        dsh::setup("auto", None, None).await.unwrap();
+    }
+    let config = dsh::active_connection().await.unwrap();
+    let host = Host::connect(&config.base, config.auth.as_deref()).await.unwrap();
+    let session = session_id(&uuid::Uuid::new_v4().to_string());
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let received = calls.clone();
+    let router = axum::Router::new().route("/cards", axum::routing::post(move |axum::Json(body): axum::Json<Value>| {
+        received.lock().unwrap().push(body);
+        async { axum::Json(json!({"success":true})) }
+    }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    handshake_add(&session, &format!("http://{}/cards", listener.local_addr().unwrap()), "fixture").unwrap();
+    let gateway = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    let preset = current_preset_id().unwrap();
+    let created = host.rpc(ROUTE_CREATE, json!({"request":{"sessionId":session,"agentPreset":preset,"cwd":home}})).await.unwrap();
+    assert_eq!(created["agentPreset"], preset);
+    let (mut peer_process, peer_config) = dsh::unmodified_peer().await.unwrap();
+    let peer = Host::connect(&peer_config.base, peer_config.auth.as_deref()).await.unwrap();
+    assert_other_writer(&peer, &session).await;
+    let other = session_id(&uuid::Uuid::new_v4().to_string());
+    host.rpc(ROUTE_CREATE, json!({"request":{"sessionId":other,"agentPreset":preset,"cwd":home}})).await.unwrap();
+    let pending = Pending { version: 1, base: config.base.clone(), session: session.clone(), rpc_id: "fixture".into(), after: -1 };
+    let accepted = host.rpc(ROUTE_PROMPT, json!({"request":{"sessionId":session,"mode":"queue","requestId":pending.rpc_id,
+        "content":[{"type":"text","text":"/fixture-card Create the fixture card using the skill's title."}]}})).await.unwrap();
+    assert_eq!(accepted["accepted"], true);
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let reply = fold_history(&host.events(&pending).await.unwrap(), &pending.rpc_id, -1).unwrap();
+            if let Some(status) = reply.status().unwrap() {
+                assert_eq!(status, "done");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }).await.unwrap();
+    handshake_remove(&session);
+    gateway.abort();
+    // Keep the initiating process alive. Another official host sharing this DSH_HOME
+    // must be able to acquire the writer and continue the same durable conversation.
+    let continuation = Pending { version: 1, base: peer_config.base, session: session.clone(),
+        rpc_id: "peer-continuation".into(), after: -1 };
+    let accepted = peer.rpc(ROUTE_PROMPT, json!({"request":{"sessionId":session,"mode":"queue",
+        "requestId":continuation.rpc_id,"content":[{"type":"text","text":"Continue this conversation."}]}})).await.unwrap();
+    assert_eq!(accepted["accepted"], true);
+    tokio::time::timeout(Duration::from_secs(45), async {
+        loop {
+            let events = host.events(&pending).await.unwrap();
+            let next = fold_history(&events, &continuation.rpc_id, -1).unwrap();
+            if next.status().unwrap() == Some("done") {
+                assert_eq!(next.text, "done");
+                assert_eq!(fold_history(&events, &pending.rpc_id, -1).unwrap().status().unwrap(), Some("done"));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }).await.unwrap();
+    assert_other_writer(&peer, &other).await;
+    peer_process.kill().await.unwrap();
+    dsh::stop_owned().await;
+    let restored = dsh::recovery_connection(&serde_json::to_string(&pending).unwrap()).await.unwrap();
+    assert_eq!(restored.base, config.base);
+    let host = Host::connect(&restored.base, restored.auth.as_deref()).await.unwrap();
+    let reply = fold_history(&host.events(&pending).await.unwrap(), &pending.rpc_id, -1).unwrap();
+    assert_eq!(reply.status().unwrap(), Some("done"));
+    dsh::stop_owned().await;
+    let calls = calls.lock().unwrap();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["sessionId"], session);
+    assert_eq!(calls[0]["callId"], "original-1");
+    assert_eq!(calls[0]["arguments"]["cards"][0]["id"], "c1");
+    assert_eq!(calls[0]["arguments"]["cards"][0]["title"], "Orchid-731");
+}
+
+async fn assert_other_writer(peer: &Host, session: &str) {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let busy: Value = peer.client.post(format!("{}/api/{ROUTE_PROMPT}", peer.base)).json(&json!({
+        "type":"client-request","method":ROUTE_PROMPT,"rpcId":request_id,"payload":{"args":{"request":{
+            "sessionId":session,"mode":"queue","requestId":request_id,"content":[{"type":"text","text":"busy check"}]
+        }}}
+    })).send().await.unwrap().json().await.unwrap();
+    assert_eq!(busy["result"]["error"]["code"], "session/writer-held", "{busy}");
+}
+
+async fn authorize_fixture_account(platform: &str) {
+    let account = |action: &'static str| async move {
+        serde_json::to_value(super::super::local_chat_dsh_account(action.into(), None).await.unwrap()).unwrap()
+    };
+    let initial = account("status").await;
+    assert_eq!(initial["state"], "notInstalled");
+    let mut status = account("start").await;
+    tokio::time::timeout(Duration::from_secs(45), async {
+        while status["authorizeUrl"].is_null() {
+            assert_eq!(status["state"], "pending", "{status:?}");
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            status = account("status").await;
+        }
+    }).await.unwrap();
+    assert_eq!(status["authorizeUrl"], "https://platform.deepseek.com/dsh/authorize?fixture=1");
+    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+    let approval: Value = client.get(format!("{platform}/fixture/callback")).send().await.unwrap().json().await.unwrap();
+    let callback = reqwest::Url::parse(approval["url"].as_str().unwrap()).unwrap();
+    assert_eq!(callback.host_str(), Some("127.0.0.1"));
+    assert_eq!(callback.path(), "/oauth/callback");
+    assert_eq!(client.get(callback).send().await.unwrap().status(), 302);
+    assert_eq!(account("status").await["state"], "verified");
+}
+
 #[test]
 fn dsh_local_reply_correlates_request_and_omits_reasoning_and_other_turns() {
     let events = vec![
@@ -75,6 +200,62 @@ fn dsh_local_retains_partial_reply_but_never_calls_error_completed() {
     assert_eq!(reply.text, "保留");
     assert!(reply.status().unwrap_err().to_string().contains("本机 DSH"));
     assert!(!reply.status().unwrap_err().to_string().contains("private"));
+}
+
+#[test]
+fn dsh_local_preparation_failure_is_terminal_only_before_prompt_checkpoint() {
+    for submitted in [false, true] {
+        let (db, id, turn) = cloud_chat::tests::cloud_turn_for("dsh-local");
+        if submitted {
+            db.set_local_chat_provider_turn(&turn, r#"{"rpc_id":"original"}"#).unwrap();
+        }
+        db.finish_local_chat(&id, &turn, "failed", Some("连接中断")).unwrap();
+        let chat = db.get_local_chat(&id).unwrap().unwrap();
+        let assistant = chat.messages.iter().find(|m| m.role == "assistant").unwrap();
+        assert_eq!(assistant.dsh_terminal_error.as_deref(), (!submitted).then_some("连接中断"));
+        if submitted {
+            assert_eq!(db.local_chat_recovery(&id).unwrap().1, r#"{"rpc_id":"original"}"#);
+        }
+    }
+}
+
+#[test]
+fn dsh_local_unreadable_or_incomplete_patch_is_preserved() {
+    let root = tempfile::tempdir().unwrap();
+    let profiles = [root.path().to_owned()];
+    let patch = root.path().join("cordis.patch.yml");
+    let block = preset_block("test.mjs");
+    for content in [vec![0xff], format!("{PRESET_BEGIN}\n- id: user-row\n").into_bytes()] {
+        std::fs::write(&patch, &content).unwrap();
+        assert!(write_preset(&profiles, "test.mjs", "fixture", &block).is_err());
+        assert_eq!(std::fs::read(&patch).unwrap(), content);
+    }
+}
+
+#[test]
+fn dsh_local_confirmed_failure_persists_on_the_original_assistant_message() {
+    let (db, id, turn) = cloud_chat::tests::cloud_turn_for("dsh-local");
+    let pending = Pending { version: 1, base: "http://localhost:3080".into(),
+        session: session_id(&turn), rpc_id: "wanted".into(), after: -1 };
+    let saved = serde_json::to_string(&pending).unwrap();
+    db.set_local_chat_provider_turn(&turn, &saved).unwrap();
+    let reply = Reply { reason: Some("error".into()), failure: Some(("MALFORMED_RESPONSE".into(),
+        "unexpected stop reason".into())), ..Default::default() };
+    let detail = reply.observed_status(&db, &turn, &pending).unwrap_err().to_string();
+    assert!(detail.contains("回复格式异常") && !detail.contains("卡片工具参数"));
+    db.finish_local_chat(&id, &turn, "failed", Some(&detail)).unwrap();
+    let (_, checkpoint) = db.local_chat_recovery(&id).unwrap();
+    assert_eq!(serde_json::from_str::<Pending>(&checkpoint).unwrap().rpc_id, "wanted");
+    // A cold read of the same failed session keeps the partial text and failure distinct.
+    db.restore_local_chat_reply(&id, &turn, &checkpoint, "已有正文",
+        RestoredChatOutcome::DshFailed { message: &detail, code: reply.failure_code() }).unwrap();
+    let chat = db.get_local_chat(&id).unwrap().unwrap();
+    let assistant = chat.messages.iter().find(|m| m.role == "assistant").unwrap();
+    assert_eq!(assistant.status, "failed");
+    assert_eq!(assistant.text, "已有正文");
+    assert_eq!(assistant.dsh_failure_code.as_deref(), Some("MALFORMED_RESPONSE"));
+    assert_eq!(assistant.dsh_terminal_error.as_deref(), Some(detail.as_str()));
+    assert!(chat.messages.iter().filter(|m| m.role != "assistant").all(|m| m.dsh_terminal_error.is_none()));
 }
 
 #[test]
@@ -182,7 +363,8 @@ fn dsh_local_preset_is_private_to_turn_and_cleanup_preserves_other_files() {
     let composition: Value =
         serde_json::from_slice(&std::fs::read(directory.join("agent.cordis.yml")).unwrap())
             .unwrap();
-    assert_eq!(composition.as_array().unwrap().len(), 2);
+    let plugins: Vec<_> = composition.as_array().unwrap().iter().map(|row| row["id"].as_str().unwrap()).collect();
+    assert_eq!(plugins, ["persona", "skill-filesystem", "tool-skill", "bowerbird-cards"]);
     assert_eq!(composition[0]["config"]["complete"], true);
     assert!(prepare_preset(
         root.path(),
@@ -324,6 +506,19 @@ fn dsh_local_profile_patch_is_appended_once_and_rewritten_in_place() {
     let empty = merge_patch("[]\n", &block);
     assert_eq!(empty.matches(PRESET_BEGIN).count(), 1);
     assert!(!empty.contains("[]"));
+    let header = "# Your patch layer for this dsh profile, applied after every bundle layer:\n\
+                  # a top-level YAML array of loader patch entries (id-targeted config\n\
+                  # overrides, disables, and insert lists; `!!js` expressions allowed).\n";
+    let old = preset_block_template("old.mjs", "bowerbird-chat");
+    for file in [format!("{header}[]\n"), format!("{header}[]\n\n{old}")] {
+        let fixed = merge_patch(&file, &block);
+        assert!(fixed.starts_with(header));
+        assert!(!fixed.lines().any(|line| line.trim() == "[]"));
+        assert_eq!(merge_patch(&fixed, &block), fixed);
+        assert_eq!(fixed.matches(PRESET_BEGIN).count(), 1);
+    }
+    let user_lists = "# [] belongs in this comment\n- id: keep\n  config: []\n";
+    assert!(merge_patch(user_lists, &block).starts_with(user_lists));
 
     let user = "- id: tool-bash\n  disabled: true\n";
     let merged = merge_patch(user, &block);
@@ -340,7 +535,7 @@ fn dsh_local_profile_patch_is_appended_once_and_rewritten_in_place() {
 #[test]
 fn dsh_local_profile_preset_names_an_immutable_module() {
     let block = preset_block("bowerbird-chat-deadbeef0000.mjs");
-    assert!(block.contains("id: bowerbird-chat\n"));
+    assert!(block.contains(&format!("id: {}\n", preset_id("bowerbird-chat-deadbeef0000.mjs"))));
     assert!(block.contains("name: '@deepseek-ai/dsh-agent-preset'"));
     assert!(block.contains("name: ./bowerbird-chat-deadbeef0000.mjs"));
     assert!(block.contains("prefix: |-"));
@@ -414,16 +609,46 @@ async fn scripted_host(
 
 #[tokio::test]
 async fn dsh_local_inspect_reads_the_live_preset_roster() {
-    let (host, _, server) = scripted_host(json!([{"id":"standard"},{"id":PRESET_ID}]), vec![], false).await;
+    let (host, _, server) = scripted_host(json!([{"id":"standard"},{"id":current_preset_id().unwrap()}]), vec![], false).await;
     let health = inspect_host(&host).await.unwrap();
     assert!(health.live);
     assert!(health.preset);
     server.abort();
 
-    let (host, _, server) = scripted_host(json!([{"id":"standard"}]), vec![], false).await;
+    let (host, _, server) = scripted_host(json!([{"id":"standard"},{"id":"bowerbird-chat"},{"id":"bowerbird-chat-oldversion"}]), vec![], false).await;
     let health = inspect_host(&host).await.unwrap();
     assert!(health.live);
     assert!(!health.preset);
+    server.abort();
+}
+
+#[tokio::test]
+async fn dsh_local_profile_upgrade_requires_the_new_id_even_on_reconnect() {
+    let root = tempfile::tempdir().unwrap();
+    let profiles = [root.path().to_owned()];
+    let handshake = root.path().join("current.json");
+    let source = preset_source(&handshake);
+    let module = module_name(&source);
+    let id = preset_id(&module);
+    let old = preset_block_template("bowerbird-chat-old.mjs", "bowerbird-chat");
+    std::fs::write(root.path().join("cordis.patch.yml"), merge_patch("- id: user-row", &old)).unwrap();
+    let (stale, _, server) = scripted_host(json!([{"id":"bowerbird-chat"}]), vec![], false).await;
+    for _ in 0..2 {
+        assert!(matches!(
+            install_profile(&stale, &profiles, &handshake).await.unwrap(),
+            Install::RestartRequired
+        ));
+    }
+    server.abort();
+    let patch = std::fs::read_to_string(root.path().join("cordis.patch.yml")).unwrap();
+    assert!(patch.contains("- id: user-row"));
+    assert!(patch.contains(&format!("id: {id}\n")));
+    assert!(preset_files_current(&profiles, &module, &source, &preset_block(&module)));
+    let (updated, _, server) = scripted_host(json!([{"id":id}]), vec![], false).await;
+    assert!(matches!(
+        install_profile(&updated, &profiles, &handshake).await.unwrap(),
+        Install::Active
+    ));
     server.abort();
 }
 
@@ -438,11 +663,11 @@ async fn dsh_local_inspect_falls_back_to_the_legacy_preset_api() {
 
 #[tokio::test]
 async fn dsh_local_live_calls_name_the_endpoint_and_wrap_the_request() {
-    let (host, calls, server) = scripted_host(json!([{"id":PRESET_ID}]), vec![], false).await;
+    let (host, calls, server) = scripted_host(json!([{"id":current_preset_id().unwrap()}]), vec![], false).await;
     let _ = host
         .rpc(
             "session/create",
-            json!({"request":{"sessionId":"owned","agentPreset":PRESET_ID}}),
+            json!({"request":{"sessionId":"owned","agentPreset":current_preset_id().unwrap()}}),
         )
         .await
         .unwrap();

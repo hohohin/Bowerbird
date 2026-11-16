@@ -48,7 +48,7 @@ Bowerbird 是本地优先的 AI 图像素材库与创作工作台：收集、浏
 
 | 能力 | 当前路线 | 约束 |
 |---|---|---|
-| 图片生成 | Codex CLI、Dreamina CLI、Bowerbird Cloud | `GenProvider` / `resolve_gen_provider`；Cloud 档位来自服务端 `service_costs` |
+| 图片生成 | Codex CLI、Dreamina CLI、本机固定 ComfyUI MiniMax-H3-Image、Bowerbird Cloud | `GenProvider` / `resolve_gen_provider`；Cloud 档位来自服务端 `service_costs` |
 | 反推/命名 | 本机 Codex 或 Cloud 方舟 Vision | `UnderstandProvider`；即梦不承担理解 |
 | 视频 | Dreamina Seedance 2.5、Cloud 国内方舟 Seedance 2.5 | [CLI 四模式](SEEDANCE-2.5-INTEGRATION.md)、[Cloud 恢复与结算](VIDEO-API-INTEGRATION.md) |
 | 分层 | Cloud Seedream 5.0 Pro | [透明图层与本地工程](LAYER-EDITING.md) |

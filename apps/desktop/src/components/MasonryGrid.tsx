@@ -444,10 +444,10 @@ const Thumb = memo(function Thumb({
           <span>{describeStatus === "running" ? "反推中" : `排队 ${queuePos}`}</span>
         </button>
       )}
-      {(shown.source === "codex" || shown.source === "jimeng" || shown.source === "bowerbird-cloud" || hasCaption || hasLayerWorkspace) && (
+      {(shown.source === "minimax-h3-image" || shown.source === "codex" || shown.source === "jimeng" || shown.source === "bowerbird-cloud" || hasCaption || hasLayerWorkspace) && (
         <div className="absolute left-1 top-1 z-10 flex items-center gap-1">
           {hasLayerWorkspace && <span className="rounded-full bg-black/70 px-1.5 py-1 text-white backdrop-blur" title="有分层工程" aria-label="有分层工程"><Layers size={12} /></span>}
-          {(shown.source === "codex" || shown.source === "jimeng" || shown.source === "bowerbird-cloud") && (
+          {(shown.source === "minimax-h3-image" || shown.source === "codex" || shown.source === "jimeng" || shown.source === "bowerbird-cloud") && (
             <span
               className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white backdrop-blur"
               title={groupLen > 1 ? `生成图 · 同流程 ${groupLen} 张` : "生成图"}

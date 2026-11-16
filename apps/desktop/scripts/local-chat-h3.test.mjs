@@ -37,7 +37,7 @@ function fixture(initial = example.workflow) {
   };
   const invoke = async (command, args) => {
     calls.push({ command, args: clone(args) });
-    if (command === 'comfy_video_environment' && args.action === 'prepare') {
+    if (command === 'comfy_video_environment' && ['detect', 'prepare'].includes(args.action)) {
       return { phase: 'ready', endpoint: 'http://127.0.0.1:18189', message: 'synthetic ready' };
     }
     if (command === 'comfy_video' && ['start', 'status'].includes(args.action)) {
@@ -46,8 +46,8 @@ function fixture(initial = example.workflow) {
     throw new Error(`unexpected native call: ${command}`);
   };
   const real = new Set(['canvasWorkflow', 'workflowExternalChanges', 'canvasCardNames', 'workflowDiagnostics',
-    'contentTable', 'workflowLoop', 'canvasNotes', 'canvasSessionOutputs', 'canvasConversationCards',
-    'comfyVideo', 'videoGeneration']);
+    'contentTable', 'workflowLoop', 'canvasNotes', 'canvasNoteSource', 'canvasSessionOutputs', 'canvasConversationCards',
+    'comfyVideo', 'videoGeneration', 'workflowTriggerSchedule', 'workflowProviderIssue', 'workflowAgentChat', 'chatProvider']);
   const context = vm.createContext({ console, crypto: webcrypto, structuredClone, setTimeout, clearTimeout });
   function load(path) {
     if (modules.has(path)) return modules.get(path).exports;
@@ -58,6 +58,10 @@ function fixture(initial = example.workflow) {
     const require = specifier => {
       if (specifier === './api') return { api };
       if (specifier === '../store') return { useStore: { getState: () => account } };
+      if (specifier === './chatCapabilities') {
+        const snapshot = { store: { getState: () => ({}) } };
+        return { chatQuote: snapshot, chatDshStatus: snapshot };
+      }
       if (specifier === '@tauri-apps/api/core') return { invoke };
       if (specifier === '@tauri-apps/api/event') return { emit: async () => {} };
       if (specifier === './workflowPlannerRuntime') return { WorkflowPlannerRuntime: class {} };
@@ -97,8 +101,8 @@ test('Rust-created H3 graph loads, saves, reloads and remains unstarted', async 
   for (const card of cards) {
     assert.deepEqual(plain(f.helpers.workflowInputs(card)).map(port => port.id), ['first-frame', 'last-frame', 'text']);
     assert.deepEqual(plain(f.helpers.workflowOutputs(card)), [{ id: 'image', label: '视频', type: 'image' }]);
-    assert.equal(f.helpers.workflowTitle(card), '本地 H3 视频');
-    assert.equal(f.helpers.workflowCardWidth(card), 416);
+    assert.equal(f.helpers.workflowTitle(card), '视频生成');
+    assert.equal(f.helpers.workflowCardWidth(card), 320);
     for (const [port, bindings] of Object.entries(card.inputs)) for (const input of bindings) {
       if (input.nodeId) assert.equal(f.helpers.workflowConnectionError(c.document.nodes, input.nodeId, input.portId, card.id, port), null);
     }
@@ -166,8 +170,13 @@ test('an unfilled H3 draft loads but explicit execution requires a first frame a
     else f.account.cloudEntitlement.offline_state = 'expired';
     await c.save();
     assert.equal(nativeCalls(f).length, 0);
-    await c.start(card.id, true);
-    assert.match(c.issue?.message ?? '', missing === 'frame' ? /首帧/ : /Pro／Studio/);
-    assert.equal(nativeCalls(f).length, 0, 'invalid drafts cannot prepare or submit local video');
+    if (missing === 'frame') {
+      await c.start(card.id, true);
+      assert.match(c.issue?.message ?? '', /首帧/);
+    } else {
+      await assert.rejects(c.start(card.id, true), /Pro／Studio/);
+    }
+    assert.deepEqual(nativeCalls(f).map(call => call.args.action), missing === 'frame' ? ['detect'] : [],
+      'frame validation permits an environment check, while expired entitlement blocks every native call');
   }
 });
