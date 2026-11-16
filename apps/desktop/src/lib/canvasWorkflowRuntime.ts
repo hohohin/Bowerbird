@@ -411,8 +411,10 @@ export class CanvasWorkflowController {
       this.document = mergeWorkflowChanges(snapshot, this.document, merged);
       if (this.queuedDocument === snapshot) this.queuedDocument = structuredClone(merged);
     });
-    // A failed write blocks later writes and execution until explicitly retried.
-    this.writing = write;
+    // Loading may repair a historical result link. Its caller observes the
+    // failed write below and holds the editor closed until the link is retried.
+    // Preserve ordering without poisoning the next load's repair or clearing a newer queue.
+    this.writing = !this.ready && !this.pendingEditAuthorization ? write.catch(() => {}) : write;
     try {
       await write; this.error = "";
       if (this.writing === write) this.pendingEditAuthorization = false;

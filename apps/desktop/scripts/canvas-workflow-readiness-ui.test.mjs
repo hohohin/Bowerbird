@@ -25,7 +25,23 @@ async function fixture(mode) {
   await page.addInitScript(mode => {
     const reads = {};
     window.releaseWorkflow = {};
-    window.delayReply = async (command, { projectId, assetIds } = {}) => {
+    window.delayReply = async (command, { projectId, assetIds, document } = {}) => {
+      if ((mode === "history-save" || mode === "history-save-route") && projectId === "p" && command === "canvas_workflow_save"
+        && document.nodes.some(node => node.resultNodeIds?.includes("workflow-comfy:original-job")) && !reads.failedWrite) {
+        reads.failedWrite = 1;
+        if (mode === "history-save-route") await new Promise(resolve => { window.releaseWorkflow.firstWrite = resolve; });
+        throw Error("fixture historical projection save failure");
+      }
+      if (mode === "history-save" && command === "canvas_workflow_save" && !reads.conflict) {
+        reads.conflict = 1;
+        const remote = JSON.parse(sessionStorage.getItem("workflow-p"));
+        remote.revision++;
+        remote.document.nodes[1].prompt = "other window edit";
+        sessionStorage.setItem("workflow-p", JSON.stringify(remote));
+        throw Error("工作流已被其他窗口修改");
+      }
+      if (mode === "history-save-route" && window.failUserWrite && command === "canvas_workflow_save"
+        && document.nodes.some(node => node.prompt === "preserve my draft")) throw Error("fixture normal edit save failure");
       if (command === "get_assets_by_ids" && assetIds?.[0] === "archived-h3-result") {
         if (mode === "history") await new Promise(resolve => { window.releaseWorkflow.history = resolve; });
         if (mode === "history-failure" && !reads.history) { reads.history = 1; throw Error("fixture H3 recovery read failure"); }
@@ -51,9 +67,9 @@ async function fixture(mode) {
         prompt: project + " first prompt", ratio: null, provider: "codex", inputs: {}, outputs: {}, outputPorts: [], trigger: false,
       }));
       let run = null;
-      if (mode === "history" || mode === "history-failure") {
+      if (mode === "history" || mode === "history-failure" || project === "p" && ["history-save", "history-save-route"].includes(mode)) {
         const video = nodes.find(node => node.kind === "comfy-video");
-        video.outputs = { image: { type: "image", assetIds: ["archived-h3-result"] } };
+        video.outputs = { image: { type: "image", assetIds: [mode.startsWith("history-save") ? "a" : "archived-h3-result"] } };
         run = { id: "archived-run", startId: video.id, threadId: "t", order: [video.id], status: "done",
           steps: { [video.id]: { status: "done", jobId: "original-job" } } };
       }
@@ -161,6 +177,48 @@ try {
   await resume.click();
   await ready(recovery, "p");
   await recovery.close();
+
+  const projection = await fixture("history-save");
+  const retryProjection = projection.getByRole("button", { name: "重新加载工作流" });
+  await retryProjection.waitFor();
+  const projectionWrites = () => projection.evaluate(() => window.calls.filter(call => call.command === "canvas_workflow_save" && call.args.document.nodes.some(node => node.resultNodeIds?.includes("workflow-comfy:original-job"))).length);
+  assert.equal(await projectionWrites(), 1);
+  assert.equal(await projection.evaluate(() => window.calls.filter(call => call.command === "project_canvas_node_create" && call.args.value.id === "workflow-comfy:original-job").length), 1);
+  assert.equal(await projection.evaluate(() => JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes.find(node => node.kind === "comfy-video").resultNodeIds), undefined);
+  await retryProjection.click();
+  await projection.waitForFunction(() => window.calls.filter(call => call.command === "canvas_workflow_get").length >= 2
+    && (document.querySelector("[data-workflow-card]") || document.querySelector(".canvas-save-error [type=button]")));
+  assert.ok(await projectionWrites() >= 2, "retrying a failed historical result link must issue another native save");
+  await ready(projection, "p");
+  assert.deepEqual(await projection.evaluate(() => {
+    const saved = JSON.parse(sessionStorage.getItem("workflow-p")).document;
+    return { links: saved.nodes.find(node => node.kind === "comfy-video").resultNodeIds, remoteEdit: saved.nodes[1].prompt,
+      job: saved.run.steps["p-comfy-video"].jobId,
+      results: window.calls.filter(call => call.command === "project_canvas_node_create" && call.args.value.id === "workflow-comfy:original-job").length,
+      dispatches: window.calls.filter(call => call.command === "comfy_video" && call.args.action === "start" || call.command === "cloud_agent_start").length };
+  }), { links: ["workflow-comfy:original-job"], remoteEdit: "other window edit", job: "original-job", results: 1, dispatches: 0 });
+  await projection.close();
+
+  const lateRepair = await fixture("history-save-route");
+  await lateRepair.waitForFunction(() => !!window.releaseWorkflow.firstWrite);
+  await switchTo(lateRepair, "q");
+  await ready(lateRepair, "q");
+  await switchTo(lateRepair, "p");
+  await lateRepair.waitForFunction(() => window.calls.filter(call => call.command === "canvas_workflow_get" && call.args.projectId === "p").length >= 2);
+  assert.equal(await cards(lateRepair).count(), 0);
+  await lateRepair.evaluate(() => window.releaseWorkflow.firstWrite());
+  await ready(lateRepair, "p");
+  assert.equal(await lateRepair.evaluate(() => window.calls.filter(call => call.command === "project_canvas_node_create" && call.args.value.id === "workflow-comfy:original-job").length), 1);
+  await lateRepair.evaluate(() => { window.failUserWrite = true; });
+  await lateRepair.getByRole("textbox", { name: "反推要求" }).fill("preserve my draft", { force: true });
+  const retryDraft = lateRepair.getByRole("button", { name: "重试保存", exact: true });
+  await retryDraft.waitFor();
+  assert.notEqual(await lateRepair.evaluate(() => JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes[0].prompt), "preserve my draft");
+  assert.equal(await lateRepair.getByRole("textbox", { name: "反推要求" }).inputValue(), "preserve my draft");
+  await lateRepair.evaluate(() => { window.failUserWrite = false; });
+  await retryDraft.click();
+  await lateRepair.waitForFunction(() => JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes[0].prompt === "preserve my draft");
+  await lateRepair.close();
 
   const switching = await fixture("switch");
   await switching.waitForFunction(() => !!window.releaseWorkflow.p1);
