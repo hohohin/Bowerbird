@@ -1,4 +1,5 @@
 import { H3OptimizeButton } from "./creation/H3OptimizeButton";
+import { CanvasTextarea } from "./CanvasTextarea";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useId, useRef, useState } from "react";
 import { CircleAlert } from "lucide-react";
@@ -208,11 +209,11 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, composer = f
   </>;
 }
 
-export function ComfyVideoCard({ node, disabled, assets, inputImages, onChange, onOptimize }: {
+export function ComfyVideoCard({ node, disabled, optimizing, assets, inputImages, readCurrentPrompt, onChange, onOptimize }: {
   node: WorkflowNode; step?: WorkflowStep; disabled: boolean; assets: Asset[];
   inputImages: (input: import("../lib/canvasWorkflow").WorkflowInput) => string[];
   onChange: (patch: Partial<WorkflowNode>) => void;
-  onOptimize: () => void;
+  readCurrentPrompt: () => string; onOptimize: () => void; optimizing?: boolean;
 }) {
   const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
   const mode = comfyVideoMode(options);
@@ -239,10 +240,10 @@ export function ComfyVideoCard({ node, disabled, assets, inputImages, onChange, 
       </div>;
     })}</div>}
     <div className="comfy-prompt-field">
-    <textarea className="comfy-video-prompt" aria-label="卡片指令" disabled={disabled}
+    <CanvasTextarea className="comfy-video-prompt" aria-label="卡片指令" disabled={disabled}
       placeholder={mode === "reference" ? "用 <Picture 1> 指代参考图主体，不固定首尾画面…" : "输入视频提示词，也可从文本端口接入…"} value={node.prompt}
-      onChange={event => onChange({ prompt: event.target.value })} />
-    <H3OptimizeButton disabled={disabled || !node.prompt.trim()} onClick={() => onOptimize?.()} />
+      readCurrentValue={readCurrentPrompt} onValueChange={prompt => onChange({ prompt })} />
+    <H3OptimizeButton busy={optimizing} disabled={disabled || !node.prompt.trim()} onClick={() => onOptimize?.()} />
     </div>
     <fieldset disabled={disabled} className="comfy-video-options">
       <TacticalSelect aria-label="H3 模式" value={mode} onValueChange={value => onChange({ comfyVideo: comfyVideoOptionsForMode(options, value as ComfyVideoMode) })}>

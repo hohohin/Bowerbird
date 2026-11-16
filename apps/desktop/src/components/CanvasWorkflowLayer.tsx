@@ -493,9 +493,12 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   }
   useEffect(() => {
     const refresh = () => { redraw(value => value + 1); nodesChanged.current(); };
-    return controller.subscribe(() => {
+    return controller.subscribe((urgent, promptEditor) => {
+      const focused = window.document.activeElement;
+      if (promptEditor && focused?.matches(".comfy-video-prompt") && focused.closest<HTMLElement>("[data-workflow-card]")?.dataset.workflowCard === promptEditor) return;
+      if (urgent) { redraw(value => value + 1); return; }
       // A save acknowledgement arrives outside the input event's transition.
-      if (window.document.activeElement?.closest(".workflow-card textarea, .workflow-card [contenteditable=true]")) startTransition(refresh);
+      if (focused?.closest(".workflow-card textarea, .workflow-card [contenteditable=true]")) startTransition(refresh);
       else refresh();
     });
   }, [controller]);
@@ -563,16 +566,32 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     return () => { current = false; };
   }, [assetKey]);
 
-  function edit(nodes: WorkflowNode[]) {
+  function edit(nodes: WorkflowNode[], draftNodeId?: string, editorOnly = false) {
     const before = controller.document;
-    const pending = controller.edit(nodes);
+    const pending = controller.edit(nodes, undefined, draftNodeId, editorOnly);
     // edit validates locks before synchronously applying its optimistic snapshot.
     if (controller.document !== before) onEdited(before, controller.document);
     return pending;
   }
   function patch(id: string, update: Partial<WorkflowNode>, invalidate = true) {
-    const nodes = controller.document.nodes.map(node => node.id === id ? { ...node, ...update } : node);
-    handle(edit(invalidate ? invalidateWorkflow(nodes, id) : nodes).then(() => controller.syncCanvasReferences(graphNodes)));
+    const previous = controller.document.nodes;
+    const nodes = previous.map(node => node.id === id ? { ...node, ...update } : node);
+    const promptOnly = Object.keys(update).length === 1 && typeof update.prompt === "string";
+    const next = invalidate && (!promptOnly || previous.some(node => Object.keys(node.outputs).length))
+      ? invalidateWorkflow(nodes, id) : nodes;
+    const edited = promptOnly && previous.find(node => node.id === id);
+    // Native typing paints this field. Other cards only change when an output
+    // is invalidated, or the transition to/from empty changes available actions.
+    const editorOnly = !!edited && edited.kind === "comfy-video" && !!edited.prompt.trim() === !!update.prompt!.trim()
+      && !previous.some((node, index) => node.outputs !== next[index].outputs && Object.keys(node.outputs).length > 0);
+    const saved = edit(next, promptOnly ? id : undefined, editorOnly);
+    handle(saved.then(() => {
+      if (promptOnly) {
+        const current = controller.document.nodes.find(node => node.id === id);
+        if (current?.kind === "comfy-video" || current?.prompt !== update.prompt) return;
+      }
+      return controller.syncCanvasReferences(graphNodes);
+    }));
   }
   function sourceLabel(binding: WorkflowInput) {
     const workflow = document.nodes.find(node => node.id === binding.nodeId);
@@ -1336,7 +1355,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const agentChat = node.kind === "agent" ? (node.chatConversationId ? chatSummaries[node.chatConversationId] : Object.values(chatSummaries).find(chat => chat.projectId === projectId && chat.nodeId === node.id)) : undefined;
       const chatBusy = localChatRunning(agentChat);
       const conversationId = agentChat?.id ?? node.chatConversationId;
-      const busy = controller.isLocked(node.id) || chatBusy || pendingAgentCards.has(node.id) || node.planning?.status === "waiting";
+      const starting = controller.startingAction(node.id);
+      const busy = !!starting || controller.isLocked(node.id) || chatBusy || pendingAgentCards.has(node.id) || node.planning?.status === "waiting";
       const providerIssue = (node.kind === "loop" || node.kind === "trigger" ? flowIssues.get(node.id) : providerIssues.get(node.id)) ?? null;
       const loop = node.kind === "loop" && run?.loop?.nodeId === node.id ? run.loop : undefined;
       const restartIssue = loop && run?.status === "stopped" ? loop.bodyIds.map(id => providerIssues.get(id)).find(Boolean) : null;
@@ -1398,7 +1418,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           <button key={port} disabled={busy} title="断开此输入" onClick={event => chooseDisconnect({ nodeId: node.id, port }, { x: event.clientX, y: event.clientY }, true)}>{node.kind === "loop" && bindings.length === 1 ? sourceLabel(bindings[0]).label : node.kind === "voice" && port === "image" ? "参考录音" : port === "completion" ? "完成触发" : port === "signal" ? "触发器" : port === "text" ? "文本" : port === "visual-profile" ? "视觉规范" : port === "first-frame" ? node.comfyVideo?.mode === "reference" ? "参考图" : "首帧" : port === "last-frame" ? "尾帧" : portMediaLabel(bindings)}{(node.kind !== "loop" || bindings.length > 1) && ` · ${bindings.length} 个来源`} <X size={11} /></button>)}
       </div>;
       const presentation = WORKFLOW_CARD_PRESENTATION[node.kind], CardIcon = node.kind === "trigger" ? TRIGGER_MODES.find(mode => mode.id === triggerMode)!.icon : presentation.icon;
-      return <article key={node.id} data-canvas-node data-workflow-card={node.id} ref={element => { if (element) cardElements.current.set(node.id, element); else cardElements.current.delete(node.id); }} aria-busy={chatBusy || run?.status === "running" && step?.status === "running"} className={`workflow-card ${chatBusy || run?.status === "running" && step?.status === "running" ? "canvas-card-running" : step?.status === "failed" || nodeDiagnostic(node.id) ? "canvas-card-error" : ""} is-${node.kind} ${selectedIds.has(node.id) ? "is-selected" : ""} ${armed ? "is-key-target" : ""}`}
+      const running = !!starting || chatBusy || run?.status === "running" && step?.status === "running";
+      return <article key={node.id} data-canvas-node data-workflow-card={node.id} ref={element => { if (element) cardElements.current.set(node.id, element); else cardElements.current.delete(node.id); }} aria-busy={running} className={`workflow-card ${running ? "canvas-card-running" : step?.status === "failed" || nodeDiagnostic(node.id) ? "canvas-card-error" : ""} is-${node.kind} ${selectedIds.has(node.id) ? "is-selected" : ""} ${armed ? "is-key-target" : ""}`}
         onMouseEnter={event => { if (node.kind === "trigger" && !event.buttons) showProgress(node.id, event.currentTarget, true); }}
         onMouseLeave={() => { if (node.kind === "trigger") setKeyHover(null); }}
         style={{ left: node.x, top: node.y, width: workflowCardWidth(node), minHeight: height, zIndex: selectedIds.has(node.id) ? 11000 : 9000 }}
@@ -1529,7 +1550,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
             step={step} busy={busy} runBlocked={!!providerIssue} patch={changes => patch(node.id, changes)} run={() => handle(controller.start(node.id, true))} />}
               {node.kind === "comfy-video" && <ComfyVideoCard node={node}
                 step={step?.comfyOptimization ? step : [...workflowRuns(document)].reverse().find(item => item.steps[node.id]?.comfyOptimization?.result)?.steps[node.id]}
-                disabled={busy} assets={assets} inputImages={inputImages} onChange={changes => patch(node.id, changes)} onOptimize={() => handle(controller.optimizeComfyPrompt(node.id))} />}
+                disabled={busy} readCurrentPrompt={readCurrentPrompt} optimizing={starting === "optimize" || (run?.status === "running" && !!step?.comfyOptimization)}
+                assets={assets} inputImages={inputImages} onChange={changes => patch(node.id, changes)} onOptimize={() => handle(controller.optimizeComfyPrompt(node.id))} />}
           {node.kind === "loop" && <WorkflowLoopCard node={node} items={loopItems} notice={loopInputNotice} busy={busy} run={run}
             runs={workflowRuns(document).filter(entry => entry.loop?.nodeId === node.id)} bindings={bindings} nodes={nodeById} assets={assets} onOpenAgent={onOpenAgent}
             graphById={graphById} onOpenGeneration={onOpenGeneration}
@@ -1607,7 +1629,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
             onRetry={() => run && handle(retryLoop(run.id))} />}
           {node.kind !== "loop" && node.kind !== "planner" && (node.kind !== "voice" || busy) && (node.kind !== "trigger" || triggerMode === "manual" || busy || run?.status === "failed") && <footer>
             <span>{agentChat ? localChatStatusLabel(agentChat.status, agentChat.turnCount) : node.kind === "comfy-video" && run?.status === "stopped" ? step?.comfyCancelled ? "已取消" : "已停止" : node.kind === "trigger" && busy ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>
-            {chatBusy && !controller.isLocked(node.id) ? <button onClick={() => handle(useLocalChatStore.getState().stop(agentChat!.id))}><Square size={13} />停止</button> : controller.isLocked(node.id) && run?.order.includes(node.id) ? <>
+            {starting ? <button title="取消启动" onClick={() => controller.cancelStarting(node.id)}><Square size={13} />停止</button> : chatBusy && !controller.isLocked(node.id) ? <button onClick={() => handle(useLocalChatStore.getState().stop(agentChat!.id))}><Square size={13} />停止</button> : controller.isLocked(node.id) && run?.order.includes(node.id) ? <>
               {deliveryRunIds.has(run.id) && node.id === run.startId && <button onClick={() => handle(controller.continue(run.id))}>重试写入内容卡</button>}
               {run?.status === "waiting" && !Object.values(run.steps).some(step => step.status === "failed")
                 && (run.order.find(id => run!.steps[id].status !== "done") ?? (run.triggerQueue?.length ? run.startId : null)) === node.id

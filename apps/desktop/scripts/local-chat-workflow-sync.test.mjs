@@ -13,8 +13,9 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const node = (id, prompt = '') => ({ id, kind: 'generation', x: 0, y: 0, action: 'describe', skill: 'image-edit', prompt, ratio: null, provider: 'codex', inputs: {}, outputs: {}, outputPorts: [], trigger: false });
 const doc = nodes => ({ schema_version: 1, nodes, run: null });
 function fixture(initial = doc([node('original')])) {
-  let saved = { revision: 1, document: clone(initial) }, fail = false, gate, readGate, assetGate, failRead = false;
+  let saved = { revision: 1, document: clone(initial) }, fail = false, gate, readGate, failRead = false;
   const interleavedChanges = [];
+  const writes = [];
   const modules = new Map();
   const requests = new Map(), sends = [], stops = [];
   const chatApi = { getByRequest: async id => clone(requests.get(id) ?? null) };
@@ -35,17 +36,14 @@ function fixture(initial = doc([node('original')])) {
       if (failRead) throw new Error('synthetic read failed');
       return snapshot;
     }, projectCanvasGet: async () => ({ nodes: [] }), canvasWorkflowAuthorize: async () => {}, projectThreadCreate: async () => {},
-    getAssetsByIds: async ids => {
-      if (assetGate) { assetGate.entered(); await assetGate.promise; }
-      return ids.map(id => ({ id, store_path: `${id}.png` }));
-    },
+    getAssetsByIds: async ids => ids.map(id => ({ id, store_path: `${id}.png` })),
     canvasWorkflowSave: async (_id, revision, document) => {
       if (gate) await gate;
       if (fail) throw new Error('synthetic disk write failed');
       const change = interleavedChanges.shift();
       if (change) saved = { revision: saved.revision + 1, document: change(clone(saved.document)) };
       if (revision !== saved.revision) throw new Error('工作流已被其他窗口修改，请重新打开项目');
-      saved = { revision: revision + 1, document: clone(document) }; return saved.revision;
+      saved = { revision: revision + 1, document: clone(document) }; writes.push(saved.document); return saved.revision;
     },
   };
   const context = vm.createContext({ console, crypto: webcrypto, structuredClone, TextEncoder, setTimeout, clearTimeout });
@@ -59,6 +57,8 @@ function fixture(initial = doc([node('original')])) {
       if (specifier === './dshSkill.ts' || specifier === './chatProvider.ts') return load(resolve(dirname(path), specifier));
       if (specifier === './localChat') return { localChat: chatApi, localChatRunning: chat => chat && ['running', 'stopping'].includes(chat.status) };
       if (specifier === './localChatStore') return { useLocalChatStore: { getState: () => chatStore } };
+      if (specifier === './workflowProviderIssue') return { workflowProviderIssue: () => null };
+      if (specifier === './chatCapabilities') return { chatProviderAccessIssue: () => null };
       if (specifier === '../store') return { useStore: { getState: () => ({ genJobs: {} }) } };
       if (specifier === './workflowPlannerRuntime') return { WorkflowPlannerRuntime: class {} };
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
@@ -73,7 +73,7 @@ function fixture(initial = doc([node('original')])) {
   }
   const { CanvasWorkflowController } = load(resolve(lib, 'canvasWorkflowRuntime.ts'));
   const { mergeWorkflowChanges } = load(resolve(lib, 'workflowExternalChanges.ts'));
-  return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved), requests, sends, stops, chatStore, chatApi, load,
+  return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved), writes, requests, sends, stops, chatStore, chatApi, load,
     external: document => { saved = { revision: saved.revision + 1, document: clone(document) }; },
     fail: value => { fail = value; }, failRead: value => { failRead = value; },
     interleave: (...changes) => { interleavedChanges.push(...changes); },
@@ -82,12 +82,6 @@ function fixture(initial = doc([node('original')])) {
       const started = new Promise(resolve => { entered = resolve; }), promise = new Promise(resolve => { release = resolve; });
       readGate = { entered, promise };
       return { started, release: () => { readGate = undefined; release(); } };
-    },
-    holdAssets: expected => {
-      let entered, release, count = 0;
-      const started = new Promise(resolve => { entered = resolve; }), promise = new Promise(resolve => { release = resolve; });
-      assetGate = { entered: () => { if (++count === expected) entered(); }, promise };
-      return { started, release: () => { assetGate = undefined; release(); } };
     },
     hold: () => { let release; gate = new Promise(resolve => { release = resolve; }); return () => { gate = undefined; release(); }; } };
 }
@@ -270,6 +264,29 @@ async function activeFixture(kind = 'generation') {
   return f;
 }
 
+test('only adjacent draft edits coalesce across CAS and every run checkpoint reaches disk in order', async () => {
+  const f = await activeFixture(), c = f.controller;
+  await c.edit([...c.document.nodes, node('draft')]);
+  const edit = text => c.edit(c.document.nodes.map(n => n.id === 'draft' ? { ...n, prompt: text } : n), undefined, 'draft');
+  const release = f.hold(), first = f.writes.length;
+  const jobs = [c.step('run-a', 'a', { detail: 'before edits' }), edit('a'), edit('ab'),
+    c.step('run-a', 'a', { detail: 'between drafts' }), edit('abc'), edit('abcd')];
+  f.external({ ...f.saved().document, nodes: [...f.saved().document.nodes, node('from-other-editor')] });
+  release(); await Promise.all(jobs);
+  assert.deepEqual(f.writes.slice(first).map(d => [d.nodes.find(n => n.id === 'draft').prompt, d.runs[0].steps.a.detail]),
+    [['', 'before edits'], ['ab', 'before edits'], ['ab', 'between drafts'], ['abcd', 'between drafts']]);
+  assert.ok(f.saved().document.nodes.some(n => n.id === 'from-other-editor'));
+
+  const finish = f.hold();
+  const checkpoint = c.step('run-b', 'b', { detail: 'concurrent save' });
+  const edits = [edit('local first'), edit('local latest')];
+  f.external({ ...f.saved().document, nodes: f.saved().document.nodes.map(n => n.id === 'draft' ? { ...n, prompt: 'remote' } : n) });
+  finish(); await Promise.allSettled([checkpoint, ...edits]);
+  assert.match(c.error, /同一卡片已有其他修改/);
+  assert.equal(c.document.nodes.find(n => n.id === 'draft').prompt, 'local latest');
+  assert.equal(f.saved().document.nodes.find(n => n.id === 'draft').prompt, 'remote');
+});
+
 test('refresh joins the write queue while two active runs checkpoint and chat adds cards', async () => {
   const f = await activeFixture(), c = f.controller;
   const release = f.hold();
@@ -363,10 +380,17 @@ test('a refresh merge conflict keeps local progress and blocks subsequent overwr
   assert.equal(f.saved().document.runs[1].steps.b.detail, 'submitted');
 });
 
-test('two live executor loops finish after chat creates and undoes unrelated cards', async () => {
-  const f = await activeFixture('trigger'), c = f.controller, assets = f.holdAssets(2);
+test('two live executor loops finish after chat creates and undoes unrelated cards', { timeout: 5000 }, async () => {
+  const f = await activeFixture('trigger'), c = f.controller;
+  const reached = Promise.withResolvers(), gate = Promise.withResolvers(), finishing = new Set();
+  const finish = c.finish.bind(c);
+  c.finish = async (id, ...args) => {
+    finishing.add(id); if (finishing.size === 2) reached.resolve();
+    await gate.promise; return finish(id, ...args);
+  };
   const first = c.continue('run-a'), second = c.continue('run-b');
-  await assets.started;
+  await reached.promise;
+  assert.deepEqual([...finishing].sort(), ['run-a', 'run-b']);
   assert.equal(c.isLocked('a'), true); assert.equal(c.isLocked('b'), true);
   f.external({ ...f.saved().document, nodes: [...f.saved().document.nodes, node('chat-card')] });
   await c.refreshExternalCards();
@@ -374,7 +398,7 @@ test('two live executor loops finish after chat creates and undoes unrelated car
   f.external({ ...f.saved().document, nodes: f.saved().document.nodes.filter(n => n.id !== 'chat-card') });
   await c.refreshExternalCards();
   assert.equal(c.isLocked('a'), true); assert.equal(c.isLocked('b'), true);
-  assets.release(); await Promise.all([first, second]);
+  gate.resolve(); await Promise.all([first, second]);
   assert.equal(c.error, ''); assert.equal(c.issue, null);
   assert.deepEqual(f.saved().document.runs.map(r => [r.id, r.status, r.steps[r.startId].status]),
     [['run-a', 'done', 'done'], ['run-b', 'done', 'done']]);

@@ -12,7 +12,7 @@ export function workflowEditUndo(before: CanvasWorkflow, after: CanvasWorkflow):
   const next = new Map(after.nodes.map(node => [node.id, node]));
   const nodes = [...new Set([...previous.keys(), ...next.keys()])].flatMap(id => {
     const before = previous.get(id), after = next.get(id);
-    return JSON.stringify(before) === JSON.stringify(after) ? [] : [{ id, before, after }];
+    return before === after || JSON.stringify(before) === JSON.stringify(after) ? [] : [{ id, before, after }];
   });
   if (!nodes.length) return null;
   const runs = new Set(workflowRuns(after).map(run => run.id));

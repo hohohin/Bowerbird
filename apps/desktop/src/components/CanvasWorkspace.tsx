@@ -680,7 +680,7 @@ export function CanvasWorkspace({
   const activeCanvasRef = useRef(activeCanvas);
   const groupsRef = useRef(new Map<string, CanvasGroup>());
   const undoHistoryRef = useRef<CanvasUndoEntry[]>([]);
-  const [undoCount, setUndoCount] = useState(0);
+  const [canUndo, setCanUndo] = useState(false);
   useEffect(() => {
     const onMerge = (event: Event) => {
       const { edit, projectId } = (event as CustomEvent<{ edit: GalleryMerge; projectId: string | null }>).detail;
@@ -691,11 +691,11 @@ export function CanvasWorkspace({
   }, []);
   function pushCanvasUndo(entry: CanvasUndoEntry) {
     undoHistoryRef.current.push(entry);
-    setUndoCount(undoHistoryRef.current.length);
+    setCanUndo(true);
   }
   function popCanvasUndo() {
     const entry = undoHistoryRef.current.pop();
-    setUndoCount(undoHistoryRef.current.length);
+    setCanUndo(undoHistoryRef.current.length > 0);
     return entry;
   }
   const resizeBaselineRef = useRef<Map<string, { material?: CanvasNode; graph?: ProjectGraphNode }>>(new Map());
@@ -891,7 +891,7 @@ export function CanvasWorkspace({
     sectionDrawRef.current = null;
     setCanvasLightbox(null);
     undoHistoryRef.current = [];
-    setUndoCount(0);
+    setCanUndo(false);
     resizeBaselineRef.current.clear();
     setCanvasMarquee(null);
     marqueePressRef.current = null;
@@ -5350,7 +5350,7 @@ export function CanvasWorkspace({
             <hr />
             <div className="canvas-assist-tools" role="group" aria-label="辅助">
               <span>辅助</span>
-              <button type="button" data-tip="撤销（Ctrl / ⌘ Z）" aria-label="撤销画布操作" disabled={!undoCount}
+              <button type="button" data-tip="撤销（Ctrl / ⌘ Z）" aria-label="撤销画布操作" disabled={!canUndo}
                 onPointerDown={event => event.preventDefault()} onClick={undoCanvasAction}><Undo2 size={18} /></button>
               <button type="button" data-tip={snapEnabled ? "关闭吸附对齐" : "开启吸附对齐"} aria-label="吸附对齐" aria-pressed={snapEnabled} onClick={() => {
                 const next = !snapEnabled;
