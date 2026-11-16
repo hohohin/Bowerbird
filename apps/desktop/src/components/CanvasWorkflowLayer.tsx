@@ -499,7 +499,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       else refresh();
     });
   }, [controller]);
-  useEffect(() => { handle(controller.load(provisional).then(() => controller.syncCanvasReferences(graphNodes))); }, [controller, provisional, graphNodes]);
+  useEffect(() => { handle(controller.syncCanvasReferences(graphNodes)); }, [controller, graphNodes]);
   useEffect(() => { setConnection(null); setArmed(false); clearAutomatic(); setAgentOpen(false); setKeyHover(null); setTemplateLibrary(null); setTemplateSelection(null); setDisconnectMenu(null); }, [projectId]);
   useLayoutEffect(() => {
     const observer = new ResizeObserver(entries => {

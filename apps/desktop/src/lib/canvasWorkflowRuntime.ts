@@ -9,7 +9,7 @@ import { isAudioPath } from "./audioMedia";
 import { voiceApi } from "./voice";
 import { defaultVoiceSample, voiceCardClip, voiceCardPreviewKey, type VoiceCardRequest } from "./voiceCard";
 import { api } from "./api";
-import type { Asset, CanvasNode } from "./types";
+import type { Asset, CanvasNode, ProjectCanvasSnapshot } from "./types";
 import { placeWorkflowOutput } from "./canvasOutputPlacement";
 import { assetPayloadJson, canvasAssetNodeSize, createCanvasAssetSnapshot } from "./creativeCanvas";
 import { DEFAULT_VIDEO_OPTIONS, isVideoPath, resolveVideoOptions, videoInputError } from "./videoGeneration";
@@ -117,6 +117,7 @@ export class CanvasWorkflowController {
   revision = 0;
   private listeners = new Set<() => void>();
   private loading: Promise<void> | null = null;
+  private loadAttempt = 0;
   private writing: Promise<void> = Promise.resolve();
   private persistedDocument = emptyWorkflow();
   private queuedDocument = emptyWorkflow();
@@ -239,7 +240,7 @@ export class CanvasWorkflowController {
   constructor(readonly projectId: string) {}
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   private emit() { for (const listener of this.listeners) listener(); }
-  load(provisional = false) {
+  load(provisional = false, canvasRead?: Promise<ProjectCanvasSnapshot>) {
     // Untouched canvases have no database row. Their first edit materializes
     // the project before saving this empty, revision-zero workflow.
     if (provisional && !this.loading) {
@@ -248,9 +249,17 @@ export class CanvasWorkflowController {
       this.error = "";
       this.emit();
     }
-    if (!this.loading) this.loading = (async () => {
+    // A new visit supplies its own canvas read. An older visit's reply must
+    // never install its revision after a later visit has started editing.
+    if (this.loading && (!canvasRead || this.ready)) return this.loading;
+    const attempt = ++this.loadAttempt;
+    const stale = () => this.discarded || this.loadAttempt !== attempt;
+    this.error = "";
+    this.loading = (async () => {
       try {
-        const snapshot = await api.canvasWorkflowGet(this.projectId);
+        const [snapshot, canvas] = await Promise.all([api.canvasWorkflowGet(this.projectId), canvasRead ?? api.projectCanvasGet(this.projectId)]);
+        if (stale()) return;
+        if (canvasRead && canvas.canvas.projectId !== this.projectId) throw new Error("画板与当前项目不匹配，请重新加载工作流。");
         this.document = snapshot.document; this.revision = snapshot.revision;
         this.persistedDocument = structuredClone(snapshot.document);
         this.queuedDocument = structuredClone(snapshot.document);
@@ -282,7 +291,6 @@ export class CanvasWorkflowController {
           for (const id of run.order) if (run.steps[id].status === "running") run.steps[id] = { ...run.steps[id],
             status: "waiting", error: "上次执行已中断，可继续取回已有任务；不会自动重新生成。" };
         }
-        const canvas = await api.projectCanvasGet(this.projectId);
         // Conversation metadata may hydrate later; baseline all completed turns before grouping them.
         this.historicalSessionCompletions = new Set(completedCanvasSessions(canvas.nodes.filter(node => node.kind === "prompt")
           .map(node => ({ canvasNodeId: node.id, cellId: "image" })), canvas.nodes, {}));
@@ -307,8 +315,10 @@ export class CanvasWorkflowController {
           const run = [...runs].reverse().find(run => run.steps[node.id]?.status === "done" && run.steps[node.id]?.jobId);
           if (!run) continue;
           const [asset] = await api.getAssetsByIds(node.outputs.image!.assetIds!);
-          if (asset) await this.deliverMediaAsset(run, node, asset, () => false);
+          if (stale()) return;
+          if (asset) await this.deliverMediaAsset(run, node, asset, stale);
         }
+        if (stale()) return;
         this.ready = true;
         this.error = "";
         const scheduledNodes = this.document.nodes.map<WorkflowNode>(node => activeTriggerSchedule(node)?.status === "armed" && node.triggerSchedule!.at <= scheduleSessionStartedAt
@@ -319,9 +329,10 @@ export class CanvasWorkflowController {
         }
         this.scheduleTriggers();
         this.scheduleSessionCompletions();
-      } catch (error) { this.error = String(error); }
+      } catch (error) { if (!stale()) this.error = String(error); }
       this.emit();
     })();
+    this.emit();
     return this.loading;
   }
   async save(document = this.document, authorizeEdit = false) {
@@ -393,8 +404,12 @@ export class CanvasWorkflowController {
     // A transient read failure is reported without blocking unrelated run checkpoints.
     if (readFailure) throw readFailure.error;
   }
+  retryLoad() {
+    if (!this.ready && this.error) this.loading = null;
+    return this.load();
+  }
   async retrySave() {
-    if (!this.ready) { this.loading = null; await this.load(); return; }
+    if (!this.ready) { await this.retryLoad(); return; }
     await this.writing.catch(() => {}); this.writing = Promise.resolve();
     this.queuedDocument = structuredClone(this.persistedDocument);
     await this.save(this.document, this.pendingEditAuthorization);

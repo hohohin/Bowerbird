@@ -396,23 +396,28 @@ test('live progress received during a checkpoint remains an unsaved delta for th
 test('chat card events refresh native content even when workflow refresh fails, scoped to the mounted project', async () => {
   const path = resolve(lib, '../components/CanvasWorkspace.tsx'), source = readFileSync(path, 'utf8');
   const ast = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  let callback;
+  let callback, refreshMountedWorkflow;
   const visit = node => {
     if (ts.isCallExpression(node) && node.arguments[0]?.getText(ast) === 'LOCAL_CHAT_CARDS_CHANGED_EVENT') callback = node.arguments[1];
+    if (ts.isBinaryExpression(node) && node.left.getText(ast) === 'workflowCardsChanged.current' && ts.isArrowFunction(node.right)) refreshMountedWorkflow = node.right;
     ts.forEachChild(node, visit);
   };
-  visit(ast); assert.ok(callback, 'production card listener is present');
+  visit(ast); assert.ok(callback, 'production card listener is present'); assert.ok(refreshMountedWorkflow, 'production mounted-workflow refresh is present');
   const refreshes = [], controllerCalls = [], errors = [], failure = new Error('workflow merge conflict');
-  const context = vm.createContext({ module: { exports: {} }, alive: true, projectId: 'p',
+  let retries = 0;
+  const context = vm.createContext({ module: { exports: {} }, alive: true, projectId: 'p', loadingRef: { current: false }, workflowCardsChanged: {},
     scheduleRefresh: (...args) => refreshes.push(args), reportError: error => errors.push(error),
-    canvasWorkflowController: id => ({ refreshExternalCards: () => { controllerCalls.push(id); return Promise.reject(failure); } }) });
-  const output = ts.transpileModule(`module.exports = (${callback.getText(ast)});`,
+    controller: { projectId: 'p', refreshExternalCards() { controllerCalls.push(this.projectId); return Promise.reject(failure); } }, retry: () => retries++ });
+  const output = ts.transpileModule(`workflowCardsChanged.current = (${refreshMountedWorkflow.getText(ast)}); module.exports = (${callback.getText(ast)});`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   vm.runInContext(output, context); const listener = context.module.exports;
   listener({ payload: { projectId: 'p' } });
   assert.deepEqual(refreshes, [['p', 40]], 'native graph refresh is scheduled independently');
   await Promise.resolve(); assert.deepEqual(errors, [failure]);
   listener({ payload: { projectId: 'other-project' } });
+  context.loadingRef.current = true;
+  listener({ payload: { projectId: 'p' } });
   context.alive = false; listener({ payload: { projectId: 'p' } });
-  assert.deepEqual(refreshes, [['p', 40]]); assert.deepEqual(controllerCalls, ['p']);
+  assert.deepEqual(refreshes, [['p', 40], ['p', 40]]); assert.deepEqual(controllerCalls, ['p']);
+  assert.equal(retries, 1, 'a matching event while the native view is loading rechecks the current project once');
 });

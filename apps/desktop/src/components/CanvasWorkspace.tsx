@@ -763,7 +763,13 @@ export function CanvasWorkspace({
   const workflowRef = useRef<WorkflowLayerHandle>(null);
   const pastingRef = useRef(false);
   const [workflowRevision, setWorkflowRevision] = useState(0);
-  const workflowNodes = projectId ? canvasWorkflowController(projectId).document.nodes : [];
+  const workflow = projectId ? canvasWorkflowController(projectId) : null;
+  const [workflowEntry, setWorkflowEntry] = useState<{ projectId: string; revision: number; error: string | null; retry: () => void } | null>(null);
+  const workflowCardsChanged = useRef<() => void>(() => {});
+  const currentWorkflowEntry = workflowEntry?.projectId === projectId && workflowEntry?.revision === projectRouteRevision ? workflowEntry : null;
+  const workflowInteractive = !!workflow?.ready && currentWorkflowEntry?.error === null && !loading && !loadFailed
+    && !projectRoutePending && activeCanvas.id === projectId;
+  const workflowNodes = workflowInteractive ? workflow.document.nodes : [];
   const workflowHistoryIds = useMemo(() => hiddenWorkflowSessionIds(workflowNodes), [workflowNodes]);
   const containedOutputIds = useMemo(() => containedSessionOutputIds(graphNodes, workflowNodes), [graphNodes, workflowNodes]);
   const conversationCards = useMemo(() => canvasConversationCards(graphNodes, genJobs,
@@ -819,8 +825,10 @@ export function CanvasWorkspace({
     setDrawingTool(tool);
   }
   function canvasCardTool(kind: "bubble" | "document" | Exclude<WorkflowKind, "trigger">) {
+    const enabled = workflowInteractive || ["text", "document", "bubble"].includes(kind);
     return {
-      draggable: true,
+      disabled: !enabled,
+      draggable: enabled,
       "aria-pressed": drawingTool === kind,
       onClick: () => chooseCanvasTool(kind),
       onDragStart: (event: DragEvent<HTMLButtonElement>) => {
@@ -1640,6 +1648,44 @@ export function CanvasWorkspace({
     const token = ++loadTokenRef.current;
     const loadRouteRevision = projectRouteRevision;
     let cancelled = false;
+    let changedDuringEntry = false;
+    const markChanged = () => { changedDuringEntry = true; };
+    workflowCardsChanged.current = markChanged;
+    setWorkflowEntry(null);
+    function enterWorkflow(controller: NonNullable<typeof workflow>, initialRead: Promise<void>) {
+      let pending = true;
+      async function observe(read: Promise<void>) {
+        let error: string | null = null;
+        try {
+          await read;
+          if (!controller.ready) throw new Error(controller.error || "工作流暂时无法加载");
+          while (changedDuringEntry && !cancelled && token === loadTokenRef.current) {
+            changedDuringEntry = false;
+            await controller.refreshExternalCards();
+          }
+        } catch (reason) { error = String(reason); }
+        pending = false;
+        if (!cancelled && token === loadTokenRef.current) {
+          if (!error) workflowCardsChanged.current = () => {
+            if (loadingRef.current && !controller.error) retry();
+            else void controller.refreshExternalCards().catch(reportError);
+          };
+          setWorkflowEntry({ projectId: controller.projectId, revision: loadRouteRevision, error, retry });
+        }
+      }
+      function retry() {
+        if (cancelled || pending) return;
+        pending = true;
+        changedDuringEntry = false;
+        workflowCardsChanged.current = markChanged;
+        setWorkflowEntry(null);
+        // A cached document with a failed save must first preserve those edits.
+        const read = !controller.ready ? controller.retryLoad() : controller.error
+          ? controller.retrySave().then(() => controller.refreshExternalCards()) : controller.refreshExternalCards();
+        void observe(read);
+      }
+      void observe(initialRead);
+    }
     initialSnapshotRestoredRef.current = false;
     loadingRef.current = true;
     setLoading(true);
@@ -1660,10 +1706,19 @@ export function CanvasWorkspace({
             });
             if (cancelled || token !== loadTokenRef.current) return;
           }
+          const controller = canvasWorkflowController(projectId);
+          enterWorkflow(controller, controller.load(!activeCanvasRef.current.materialized));
         } else {
           await api.projectCanvasEnsure(projectId);
           if (cancelled || token !== loadTokenRef.current) return;
-          const snapshot = await api.projectCanvasGet(projectId);
+          const snapshotRead = api.projectCanvasGet(projectId).then(snapshot => {
+            if (snapshot.canvas.projectId !== projectId) throw new Error("读取的画板与当前项目不匹配，请重试载入。");
+            return snapshot;
+          });
+          const workflow = canvasWorkflowController(projectId);
+          // A cached workflow can gain or lose cards while off screen.
+          enterWorkflow(workflow, workflow.ready ? workflow.refreshExternalCards() : workflow.load(false, snapshotRead));
+          const snapshot = await snapshotRead;
           if (cancelled || token !== loadTokenRef.current) return;
           const exactAssets = await api.getAssetsByIds(projectCanvasAssetIds(snapshot.nodes));
           if (cancelled || token !== loadTokenRef.current) return;
@@ -1720,11 +1775,6 @@ export function CanvasWorkspace({
     let timer: ReturnType<typeof setTimeout> | undefined;
     let alive = true;
     let refreshVersion = 0;
-
-    // A cached controller may have been off screen when a chat created cards.
-    if (projectId && !useStore.getState().projects.find(project => project.id === projectId)?.provisional) {
-      void canvasWorkflowController(projectId).refreshExternalCards().catch(reportError);
-    }
 
     function scheduleRefresh(eventProjectId: string, delay: number) {
       if (timer) clearTimeout(timer);
@@ -1805,7 +1855,7 @@ export function CanvasWorkspace({
     listen<{ projectId: string }>(LOCAL_CHAT_CARDS_CHANGED_EVENT, ({ payload }) => {
       if (!alive || payload.projectId !== projectId) return;
       scheduleRefresh(payload.projectId, 40);
-      void canvasWorkflowController(payload.projectId).refreshExternalCards().catch(reportError);
+      workflowCardsChanged.current();
     }).then(cleanup => { if (alive) unlistenChatCards = cleanup; else cleanup(); });
 
     // This listener must stay mounted for the whole project lifetime. Asset
@@ -1912,7 +1962,7 @@ export function CanvasWorkspace({
     }
     appliedFocusRequestRef.current = requestKey;
     onFocusConsumed?.(focusRequestId);
-  }, [focusNodeId, focusRequestId, focusThreadId, graphNodes, graphEdges, loadFailed, loading, onFocusConsumed, projectId, threads, workflowRevision]);
+  }, [focusNodeId, focusRequestId, focusThreadId, graphNodes, graphEdges, loadFailed, loading, onFocusConsumed, projectId, threads, workflowRevision, workflowInteractive]);
 
   useEffect(() => { setCanvasLibraryOpen(false); }, [projectId, setCanvasLibraryOpen]);
 
@@ -2331,7 +2381,7 @@ export function CanvasWorkspace({
 
   function hitContentCell(clientX: number, clientY: number, fresh = false) {
     const stage = stageRef.current;
-    if (!stage) return null;
+    if (!stage || !workflowInteractive) return null;
     // A wheel event may have advanced the live camera before its scheduled paint.
     cameraFrame.flush();
     const point = toBoardPoint(clientX, clientY);
@@ -4070,7 +4120,7 @@ export function CanvasWorkspace({
   }
 
   async function pasteCanvasSelection(value: CanvasClipboard, point?: CanvasPoint) {
-    if (pastingRef.current || loadingRef.current || !value.selection.length) return;
+    if (pastingRef.current || !workflowInteractive || !value.selection.length) return;
     const draft = activeCanvasRef.current, controller = canvasWorkflowController(draft.id);
     if (!controller.ready || controller.error || writeJournalRef.current.failure) { notify("请先完成当前画板的保存重试", "info"); return; }
     pastingRef.current = true;
@@ -4154,9 +4204,10 @@ export function CanvasWorkspace({
     };
     window.addEventListener("copy", copy, true); window.addEventListener("paste", paste, true);
     return () => { window.removeEventListener("copy", copy, true); window.removeEventListener("paste", paste, true); };
-  }, [scopedInspectorOpen]);
+  }, [scopedInspectorOpen, workflowInteractive]);
 
   function removeNodes(nodeIds: Iterable<string>) {
+    if (!workflowInteractive) return; // Deletion also checks locks on connected workflow cards.
     const ids = new Set(nodeIds);
     for (const id of [...ids]) {
       const card = conversationCardsRef.current.cards.get(id);
@@ -5111,6 +5162,10 @@ export function CanvasWorkspace({
             <small className={`canvas-save-state${loading || savingVisible ? " is-visible" : ""}`} aria-hidden={!loading && !savingVisible}>
               <LoaderCircle size={12} /> {loading ? "载入中" : "保存中"}
             </small>
+            {!loading && currentWorkflowEntry?.error !== null && (currentWorkflowEntry?.error
+              ? <small className="canvas-save-error" role="alert">工作流加载失败
+                  <button type="button" className="ml-2 underline" onClick={currentWorkflowEntry.retry}>{workflow?.ready && workflow.error ? "重试保存工作流" : "重新加载工作流"}</button></small>
+              : <small className="canvas-save-state is-visible" role="status">正在加载工作流…</small>)}
             {error && <small className="canvas-save-error" title={userErrorMessage(error, "画板未能保存，请重试保存。")}>保存失败，修改仍保留在当前画面
               {writeJournalRef.current.failure != null && <button type="button" className="ml-2 underline" onClick={() => { void retryPendingWrites().catch(error => notifyError(error, "画板保存失败")); }}>重试保存画板</button>}
             </small>}
@@ -5286,12 +5341,12 @@ export function CanvasWorkspace({
             {WORKFLOW_PLANNER_ENABLED && import.meta.env.DEV && <button data-tip="工作流助手 · 拖入画布或选中后点击放置" aria-label="新增工作流助手" {...canvasCardTool("planner")}><Sparkles size={18} /></button>}
             <button data-tip="Agent 卡片 · 拖入画布或选中后点击放置" aria-label="新增 Agent 卡片" {...canvasCardTool("agent")}><TextCursorInput size={18} /></button>
             <button data-tip="视觉规范卡片 · 拖入画布或选中后点击放置" aria-label="新增视觉规范卡片" {...canvasCardTool("visual-profile")}><Palette size={18} /></button>
-            {WORKFLOW_TEMPLATE_LIBRARY_ENABLED && <button data-tip="模板库 · 子流程与分享" aria-label="工作流模板库" onClick={() => workflowRef.current?.templates()}><Copy size={18} /></button>}
-            <button data-tip="发条 · 卡片上吸附，空白处创建" aria-label="发条触发器"
+            {WORKFLOW_TEMPLATE_LIBRARY_ENABLED && <button disabled={!workflowInteractive} data-tip="模板库 · 子流程与分享" aria-label="工作流模板库" onClick={() => workflowRef.current?.templates()}><Copy size={18} /></button>}
+            <button disabled={!workflowInteractive} data-tip="发条 · 卡片上吸附，空白处创建" aria-label="发条触发器"
               onPointerDown={event => { if (event.button !== 0) return; event.preventDefault(); event.stopPropagation(); setDrawingTool("select"); workflowRef.current?.arm(event.clientX, event.clientY); }}
               onClick={event => { if (event.detail === 0) { setDrawingTool("select"); workflowRef.current?.arm(); } }}><WindingKey size={21} /></button>
             <hr />
-            <CanvasToolbox onOpenVoice={() => chooseCanvasTool("voice")} onOpenReplication={() => { setDrawingTool("select"); if (projectId) setReplicationProjectId(projectId); }} onOpenLocalVideo={() => chooseCanvasTool("comfy-video")} />
+            <CanvasToolbox workflowReady={workflowInteractive} onOpenVoice={() => chooseCanvasTool("voice")} onOpenReplication={() => { setDrawingTool("select"); if (projectId) setReplicationProjectId(projectId); }} onOpenLocalVideo={() => chooseCanvasTool("comfy-video")} />
             <hr />
             <div className="canvas-assist-tools" role="group" aria-label="辅助">
               <span>辅助</span>
@@ -5311,7 +5366,7 @@ export function CanvasWorkspace({
             className="canvas-plane"
             style={{ "--canvas-running-width": `${4 / zoom}px`, transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` } as CSSProperties}
           >
-            {projectId && !loading && !loadFailed && activeCanvas.id === projectId && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} toBoardPoint={toBoardPoint} graphNodes={nonChatGraphNodes} visibleGraphNodeIds={visibleGraphNodeIds} conversationCards={conversationCards} imageOnlyConversationIds={imageOnlyConversationIds} sessionHeights={sessionHeights}
+            {projectId && workflowInteractive && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} toBoardPoint={toBoardPoint} graphNodes={nonChatGraphNodes} visibleGraphNodeIds={visibleGraphNodeIds} conversationCards={conversationCards} imageOnlyConversationIds={imageOnlyConversationIds} sessionHeights={sessionHeights}
               diagnosticTarget={diagnosticTarget} selectedIds={selectedCanvasNodeIds} panReady={spacePanReady || drawingTool === "pan"} onSelect={workflowOnSelect}
               onNodesChanged={workflowOnNodesChanged} onEdited={workflowOnEdited}
               onOpenAgent={workflowOnOpenAgent} onNewAgentChat={workflowOnNewAgentChat} onOpenGeneration={workflowOnOpenGeneration}
@@ -5351,7 +5406,7 @@ export function CanvasWorkspace({
                   ))}
                 </> : value.note_type === "document" ? <CanvasDocumentCard value={value} editing={documentEditor?.nodeId === node.id}
                   onEdit={openDocument}
-                  onConnect={(port, x, y, keyboard) => workflowRef.current?.connectCell(node.id, port, x, y, keyboard)}/>
+                  onConnect={!workflowInteractive ? undefined : (port, x, y, keyboard) => workflowRef.current?.connectCell(node.id, port, x, y, keyboard)}/>
                 : <CanvasTextCard value={value} selected={selected} width={node.width} height={node.height} zoom={zoomRef.current} getZoom={readCanvasZoom}
                   readCurrentValue={() => {
                     const current = graphNodesRef.current.find(item => item.id === node.id);
@@ -5391,8 +5446,8 @@ export function CanvasWorkspace({
                       <p>{summary?.text ?? "生成会话已不可用"}</p>
                     </button>;
                   }}
-                  onConnectCell={(cellId, x, y, keyboard) => workflowRef.current?.connectCell(node.id, cellId, x, y, keyboard)}
-                  onInput={(cellId, disconnect, type, point, keyboard) => workflowRef.current?.inputText(node.id, cellId, disconnect, type, point, keyboard)}
+                  onConnectCell={!workflowInteractive ? undefined : (cellId, x, y, keyboard) => workflowRef.current?.connectCell(node.id, cellId, x, y, keyboard)}
+                  onInput={!workflowInteractive ? undefined : (cellId, disconnect, type, point, keyboard) => workflowRef.current?.inputText(node.id, cellId, disconnect, type, point, keyboard)}
                   inputLocked={workflowRef.current?.isLocked(node.id)}
                   onResize={(size, finished, cancelled) => resizeCanvasNote(node.id, size, finished, cancelled)} onSelect={() => setSelectedCanvasNodeIds(new Set([node.id]))}
                   onChange={(next, size, history) => updateCanvasNote(node.id, next, size, history)} />}
@@ -5757,7 +5812,7 @@ export function CanvasWorkspace({
 
           {nodes.length === 0 && promptGraphNodes.length === 0 && agentGraphNodes.length === 0 && chatGraphNodes.length === 0
             && !graphNodes.some(node => node.kind === "note" && node.hiddenAt == null)
-            && !workflowNodes.some(node => node.kind !== "text") && !loading && (
+            && !workflowNodes.some(node => node.kind !== "text") && workflowInteractive && (
             <div className="canvas-empty-state" aria-hidden="true">
               <span><Move size={20} /></span>
               <strong>把左侧素材拖到这里</strong>
@@ -5803,7 +5858,7 @@ export function CanvasWorkspace({
             onChatDraftSent={sentDraft => clearSentChatDraft(activeCanvas.id, sentDraft)}
             onOpenChatHistory={() => setChatHistoryOpen(open => !open)}
             chatHistoryOpen={chatHistoryOpen}
-            onGenerateLocalVideo={async request => {
+            onGenerateLocalVideo={!workflowInteractive ? undefined : async request => {
               const workflow = workflowRef.current;
               const bounds = stageRef.current?.getBoundingClientRect();
               if (!workflow || !bounds) throw new Error("画板正在载入，请稍后重试");
@@ -5823,7 +5878,7 @@ export function CanvasWorkspace({
           onOpenLibrary={() => { openLibrary(); setCanvasLibraryOpen(true); useStore.getState().setBoardActive(true); }} />}
         {chatHistoryOpen && projectId && <div id="project-chat-history" className="canvas-chat-history"><LocalChatHistory projectId={projectId}
           activeConversationId={selectedChatId ?? undefined} onOpen={openLocalChat} onClose={() => setChatHistoryOpen(false)} /></div>}
-        {workflowAgentDetail && workflowAgentDetail.projectId === projectId && !loading && !genPanelOpen && <WorkflowAgentDetail
+        {workflowAgentDetail && workflowAgentDetail.projectId === projectId && workflowInteractive && !genPanelOpen && <WorkflowAgentDetail
           key={`${projectId}:${workflowAgentDetail.nodeId}:${workflowAgentDetail.entryKey ?? "latest"}`} projectId={workflowAgentDetail.projectId} nodeId={workflowAgentDetail.nodeId} initialEntry={workflowAgentDetail.entryKey}
           graphNodes={graphNodes} onOpenGeneration={openWorkflowGeneration} onClose={() => setWorkflowAgentDetail(null)} />}
         {scopedInspectorOpen && inspectorHeader && (
@@ -5872,21 +5927,21 @@ export function CanvasWorkspace({
                 setPromptMenu(null);
                 void exportAssetArchive(ids);
               }}><Archive size={14} /> 将所选内容打包</button>}
-            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
+            {promptMenu.nodeIds.length > 0 && <button type="button" disabled={!workflowInteractive} role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               workflowRef.current?.saveTemplate(promptMenu.nodeIds, "container"); setPromptMenu(null);
             }}><Frame size={14} /> 封装为容器</button>}
-            {WORKFLOW_TEMPLATE_LIBRARY_ENABLED && [...expandCanvasSections(new Set(promptMenu.nodeIds), graphNodes)].some(id => canvasWorkflowController(activeCanvasRef.current.id).document.nodes.some(node => node.id === id && !["trigger", "text", "planner"].includes(node.kind))) &&
+            {WORKFLOW_TEMPLATE_LIBRARY_ENABLED && [...expandCanvasSections(new Set(promptMenu.nodeIds), graphNodes)].some(id => workflowNodes.some(node => node.id === id && !["trigger", "text", "planner"].includes(node.kind))) &&
               <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
                 workflowRef.current?.saveTemplate(promptMenu.nodeIds); setPromptMenu(null);
               }}><Copy size={14} /> 存为模板</button>}
-            {promptMenu.nodeIds.some(id => canvasWorkflowController(activeCanvasRef.current.id).document.nodes.some(node => node.id === id && !["trigger", "text", "planner"].includes(node.kind))) &&
+            {promptMenu.nodeIds.some(id => workflowNodes.some(node => node.id === id && !["trigger", "text", "planner"].includes(node.kind))) &&
               <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
                 workflowRef.current?.saveTemplate(promptMenu.nodeIds, "package"); setPromptMenu(null);
               }}><Copy size={14} /> 导出工作流数据包</button>}
-            <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
+            <button type="button" disabled={!workflowInteractive} role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               workflowRef.current?.templates(true); setPromptMenu(null);
             }}><Copy size={14} /> 导入工作流数据包</button>
-            <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
+            <button type="button" disabled={!workflowInteractive} role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               const point = promptMenu.point ?? toBoardPoint(promptMenu.x, promptMenu.y); setPromptMenu(null);
               void navigator.clipboard.readText().catch(() => canvasClipboardText).then(text => {
                 const value = parseCanvasClipboard(text);
@@ -5913,7 +5968,7 @@ export function CanvasWorkspace({
               <Copy size={14} /> 复用提示词
             </button>}
             {(promptMenu.section || promptMenu.nodeIds.length > 0) && <><div className="app-context-divider" /><DeleteSubmenu>
-            {promptMenu.section && <button type="button" role="menuitem" title="移除分区框，保留其中的卡片" className="app-context-item is-danger px-2 py-1.5" onClick={() => {
+            {promptMenu.section && <button type="button" disabled={!workflowInteractive} role="menuitem" title="移除分区框，保留其中的卡片" className="app-context-item is-danger px-2 py-1.5" onClick={() => {
               removeNodes([promptMenu.section!.id]);
               setPromptMenu(null);
             }}>
@@ -5925,7 +5980,7 @@ export function CanvasWorkspace({
             }}>
               <Ungroup size={14} /> 解散素材组
             </button>}
-            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="app-context-item is-danger px-2 py-1.5" disabled={promptMenu.nodeIds.some(id => workflowRef.current?.isLocked(id))} onClick={() => {
+            {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="app-context-item is-danger px-2 py-1.5" disabled={!workflowInteractive || promptMenu.nodeIds.some(id => workflowRef.current?.isLocked(id))} onClick={() => {
               removeNodes(promptMenu.nodeIds);
               setPromptMenu(null);
             }}>
