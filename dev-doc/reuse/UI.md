@@ -99,7 +99,7 @@ H3 优化按钮共用 [H3OptimizeButton.tsx](../../apps/desktop/src/components/c
 - **用途／关键词：** provider、模型、比例、ratio、默认模型、Bcoin。
 - **入口：** [creation/ProviderSelect.tsx](../../apps/desktop/src/components/creation/ProviderSelect.tsx) 的 `ProviderSelect` 负责图片 provider 选择；其内部用 [ModelSelect.tsx](../../apps/desktop/src/components/creation/ModelSelect.tsx) 的 `ModelSelect`。比例图形菜单用 [RatioSelect.tsx](../../apps/desktop/src/components/creation/RatioSelect.tsx) 的 `RatioSelect`。
 - **实用证据：** [CreationBoard.tsx](../../apps/desktop/src/components/CreationBoard.tsx) 调用 `ProviderSelect` 与 `RatioSelect`；`ProviderSelect` 生成 `ModelOption[]` 后调用 `ModelSelect`。
-- **范围／状态：模块内部专用（创作／生成领域）。** `ProviderSelect` 依赖账号权益、引擎健康、store 和设置 API；`ModelSelect` 也读取 Cloud 服务价格，并非纯展示组件。比例菜单表示 `string | null` 的自动／固定比例，模型面板提供来源、禁用原因及默认项；不能仅因都是下拉就直接换成 `TacticalSelect`，也不推荐非生成板块导入这些业务选择器。
+- **范围／状态：模块内部专用（创作／生成领域）。** `ProviderSelect` 依赖账号权益、引擎健康、store 和设置 API；`ModelSelect` 共用来源分栏、模型收藏和二级菜单。Bcoin 图片模型中的 Seedream 版本归入同名子菜单。比例菜单表示 `string | null` 的自动／固定比例，模型面板提供来源、禁用原因及默认项；不能仅因都是下拉就直接换成 `TacticalSelect`，也不推荐非生成板块导入这些业务选择器。
 
 ## 把弹层留在嵌入工作区的焦点边界内
 

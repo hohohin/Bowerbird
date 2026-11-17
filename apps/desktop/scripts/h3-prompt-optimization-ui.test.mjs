@@ -246,6 +246,30 @@ try {
   assert.equal(await page.evaluate(() => window.h3Calls.at(-1).input.prompt), '用户修改后的提示词');
   assert.equal(await page.evaluate(() => window.optimizeStarts.length), before.cloud + 1);
   assert.equal(await card.getByText('查看优化结果', { exact: true }).count(), 0);
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
+    const { api } = await import('/src/lib/api.ts');
+    const ui = canvasWorkflowController('p');
+    await ui.flush();
+    const image = { ...newWorkflowNode('generation', 800, 60, 'minimax-h3-image'), provider: 'minimax-h3-image', id: 'image-h3',
+      prompt: '一只玻璃杯', outputs: { image: { type: 'image', assetIds: ['previous'] } } };
+    await ui.edit([image, { ...image, id: 'other-image', provider: 'codex', x: 1400 }]);
+    api.cloudAgentGet = async runId => ({ runId, status: 'succeeded', snapshot: { run: {}, events: [
+      { type: 'text.result', display_payload: { schemaVersion: 1, text: '透明玻璃杯，杯沿反射窗边的柔光。' } }] } });
+  });
+  assert.equal(await page.locator('[data-workflow-card="other-image"]').getByRole('button', { name: '优化提示词' }).count(), 0);
+  await page.locator('[data-workflow-card="image-h3"]').getByRole('button', { name: '优化提示词', exact: true }).click();
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes
+    .some(node => node.id === 'image-h3' && node.prompt === '透明玻璃杯，杯沿反射窗边的柔光。'));
+  const imageResult = await page.evaluate(() => {
+    const request = window.optimizeStarts.at(-1);
+    const doc = JSON.parse(sessionStorage.getItem('workflow-p')).document;
+    return { request: JSON.parse(request.intentPrompt.split('\n')[1]), outputs: doc.nodes.find(n => n.id === 'image-h3').outputs };
+  });
+  assert.equal(imageResult.request.id, 'h3-image-prompt');
+  assert.equal(imageResult.request.parameters.referenceCount, 0);
+  assert.deepEqual(imageResult.outputs.image.assetIds, ['previous']);
   assert.deepEqual(errors, []);
   console.log('H3 explicit optimization: no automatic Cloud/local chain; direct replacement/edit then manual generation; three modes, entitlement, stop, account, invalid output, unknown submission and recovery passed');
 } catch (error) { console.error(error); throw error; }

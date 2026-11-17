@@ -5,7 +5,8 @@ const { chromium } = await import(process.env.BOWERBIRD_PLAYWRIGHT_MODULE || '..
 const label = '在新建对话中运行指令，消除上下文影响';
 const prompt = '只分析本轮的花朵参考';
 const options = { model: 'fixture-codex', reasoningEffort: 'high' };
-const server = await createServer({ cacheDir: '.tmp/agent-card-new-chat/vite', server: { host: '127.0.0.1', port: 17866, strictPort: false, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: '.tmp/agent-card-new-chat/vite', optimizeDeps: { entries: ['scripts/fixtures/local-chat/preview.html'] },
+  server: { host: '127.0.0.1', port: 17866, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 try {

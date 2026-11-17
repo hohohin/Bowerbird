@@ -1015,8 +1015,7 @@ async fn live_turn(
     let chat = db
         .get_local_chat(id)?
         .ok_or_else(|| error("对话记录不存在"))?;
-    // Agent 卡片由流程逐轮驱动；重复附带上轮 JSON 历史会让模型产出非法工具参数。
-    let prompt = dsh::prompt(&chat, turn, db.local_chat_turn_uses_history(turn)?)?;
+    let prompt = dsh::prompt(&chat, turn)?;
     let pending = Pending {
         version: 1,
         base: host.base.clone(),
@@ -1114,8 +1113,7 @@ async fn run_legacy(
     let chat = db
         .get_local_chat(id)?
         .ok_or_else(|| error("对话记录不存在"))?;
-    // Agent 卡片由流程逐轮驱动；重复附带上轮 JSON 历史会让模型产出非法工具参数。
-    let prompt = dsh::prompt(&chat, turn, db.local_chat_turn_uses_history(turn)?)?;
+    let prompt = dsh::prompt(&chat, turn)?;
     let pending = Pending {
         version: 1,
         base: host.base.clone(),

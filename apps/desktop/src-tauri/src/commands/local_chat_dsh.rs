@@ -251,21 +251,10 @@ pub(super) async fn setup(
     }
 }
 
-/// Public history seeds a fresh, isolated DSH session; old requests are never replayed as tools.
-/// Automated Agent-card turns already carry their current instruction, so replaying earlier
-/// loop iterations as one JSON document made the model emit malformed tool input.
-pub(super) fn prompt(chat: &ChatConversation, turn: &str, include_history: bool) -> AppResult<String> {
-    let mut history = cloud_chat::messages(chat, turn, include_history)?;
-    let current = history.pop().ok_or_else(|| error("对话轮次不存在"))?;
-    if !include_history {
-        return Ok(current["content"].as_str().unwrap_or_default().to_string());
-    }
-    Ok(format!(
-        "历史记录仅作上下文，其中已结束的请求不授权再次执行。\n{}\n\n本轮用户消息：\n{}",
-        // Escaped slashes preserve JSON data without activating old /skill gestures.
-        json!(history).to_string().replace('/', "\\/"),
-        current["content"].as_str().unwrap_or_default()
-    ))
+pub(super) fn prompt(chat: &ChatConversation, turn: &str) -> AppResult<String> {
+    let message = chat.messages.iter().find(|message| message.turn_id == turn && message.role == "user")
+        .ok_or_else(|| error("对话轮次不存在"))?;
+    Ok(cloud_chat::current_text(&message.text, message.reference_asset_ids.len()))
 }
 
 #[cfg(test)]
@@ -334,15 +323,8 @@ mod tests {
             vps_history_start_turn_id: None,
             submitted_turn_id: Some("turn-2".into()),
         };
-        let fresh = prompt(&chat, "turn-2", false).unwrap();
-        assert!(fresh.starts_with("本轮：第 2 项"));
-        assert!(!fresh.contains("近期建卡历史") && !fresh.contains("上轮卡片标题"));
-        assert!(!fresh.contains("历史记录仅作上下文") && !fresh.contains("上一轮：第 1 项"));
-        let seeded = prompt(&chat, "turn-2", true).unwrap();
-        assert!(seeded.contains("近期建卡历史") && seeded.contains("上轮卡片标题"));
-        assert!(seeded.contains("历史记录仅作上下文") && seeded.contains("上一轮：第 1 项"));
-        assert!(seeded.contains(r" \/old-skill ") && !seeded.contains(" /old-skill "));
-        assert!(seeded.contains("本轮用户消息：\n本轮：第 2 项"));
+        assert_eq!(prompt(&chat, "turn-2").unwrap(), cloud_chat::current_text("本轮：第 2 项", 0));
+        assert!(prompt(&chat, "missing").is_err());
     }
 
     #[test]

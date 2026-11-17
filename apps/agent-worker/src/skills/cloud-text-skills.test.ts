@@ -15,6 +15,10 @@ test("H3 loads the VPS skill from a compact identifier, preserving language and 
   ok(skill.instructions.includes("保留用户输入的语言"));
   ok(skill.instructions.includes("FL2VA"));
   const prompt = textRewritePrompt(request(), "猫站起来然后喊潘酱", skill);
+  ok(prompt.includes(skill.instructions));
+  for (const rule of ["核对时长与台词容量", "编排可见、可听的连续动作", "固定机位口播"]) {
+    ok(prompt.includes(rule), `missing H3 optimizer rule: ${rule}`);
+  }
   ok(prompt.includes("保留用户输入的语言"));
   ok(prompt.includes('"mode":"reference"'));
   ok(prompt.includes("untrustedSource"));
@@ -62,4 +66,18 @@ test("new runs reload maintained files; snapshots survive updates and reject tam
     throws(() => resolveCloudTextSkill(request(), directory), /cloud_text_skill/);
     throws(() => resolveCloudTextSkill(request(), join(directory, "missing")));
   } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("H3 image optimization pins its method, frame shape and ordered reference count", () => {
+  const image = (parameters: unknown) => "bowerbird:cloud-text-skill:v1\n" + JSON.stringify({ id: "h3-image-prompt", parameters });
+  for (const count of [0, 3]) {
+    const goal = image({ referenceCount: count, ratio: "16:9" });
+    const skill = resolveCloudTextSkill(goal)!;
+    equal(validateCloudTextSkillSnapshot(skill).id, "h3-image-prompt");
+    const prompt = textRewritePrompt(goal, "保留 {{REF_1}}", skill);
+    ok(prompt.includes(skill.instructions));
+    ok(skill.instructions.includes("<Picture N>") && skill.instructions.includes("{{REF_1}}"));
+  }
+  throws(() => resolveCloudTextSkill(image({ referenceCount: -1, ratio: "auto" })));
+  throws(() => resolveCloudTextSkill(image({ referenceCount: 0, ratio: "override" })));
 });

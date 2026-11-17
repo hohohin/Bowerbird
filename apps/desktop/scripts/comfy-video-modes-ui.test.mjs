@@ -49,6 +49,25 @@ try {
     await c.edit([{ ...newWorkflowNode('comfy-video', 400, 60, 'codex'), id: 'h3', prompt: '主体 <Picture 1> 在雨中行走', inputs: { 'first-frame': [{ assetId: 'a' }], 'last-frame': [{ assetId: 'b' }] } }]);
   });
   const card = page.locator('[data-workflow-card="h3"]');
+  const waitFrames = (first, last) => page.waitForFunction(([first, last]) => {
+    const node = JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'h3');
+    return (node.inputs['first-frame']?.[0]?.assetId ?? null) === first
+      && (node.inputs['last-frame']?.[0]?.assetId ?? null) === last;
+  }, [first, last]);
+  const swap = card.getByRole('button', { name: /交换首尾帧|调换首尾帧/ });
+  await swap.click();
+  await waitFrames('b', 'a');
+  await page.reload(); await card.waitFor(); await mock();
+  await waitFrames('b', 'a');
+  await card.getByRole('button', { name: /断开尾帧/ }).click();
+  await waitFrames('b', null);
+  await card.getByRole('button', { name: /断开首帧/ }).click();
+  await waitFrames(null, null);
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    await c.edit(c.document.nodes.map(n => n.id === 'h3' ? { ...n, inputs: { 'first-frame': [{ assetId: 'a' }], 'last-frame': [{ assetId: 'b' }] } } : n));
+  });
   assert.match(await card.locator('header').innerText(), /视频生成/);
   await card.getByTitle('选择视频模型', { exact: true }).click();
   const modelMenu = page.getByRole('dialog', { name: '视频模型', exact: true });

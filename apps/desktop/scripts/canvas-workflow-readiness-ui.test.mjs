@@ -168,6 +168,28 @@ try {
   assert.equal(await windows.evaluate(() => window.calls.filter(item => item.command === "canvas_workflow_get").length), 2);
   await windows.close();
 
+  const agentBatch = await fixture("agent-batch");
+  await ready(agentBatch, "p");
+  await agentBatch.evaluate(async () => {
+    const saved = JSON.parse(sessionStorage.getItem("workflow-p"));
+    saved.revision++;
+    saved.document.nodes.push({ ...saved.document.nodes[0], id: "agent-created" });
+    sessionStorage.setItem("workflow-p", JSON.stringify(saved));
+    window.calls.length = 0;
+    await window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+      event: "local-chat://cards-changed", payload: { projectId: "p", nativeCanvasChanged: false },
+    });
+  });
+  await agentBatch.locator('[data-workflow-card="agent-created"]').waitFor();
+  await agentBatch.waitForTimeout(120);
+  assert.equal(await agentBatch.evaluate(() => window.calls.filter(call => call.command === "project_canvas_get").length), 0,
+    "workflow-only Agent batches appear without reloading the native canvas");
+  await agentBatch.evaluate(() => window.__TAURI_INTERNALS__.invoke("plugin:event|emit", {
+    event: "local-chat://cards-changed", payload: { projectId: "p", nativeCanvasChanged: true },
+  }));
+  await agentBatch.waitForFunction(() => window.calls.some(call => call.command === "project_canvas_get"));
+  await agentBatch.close();
+
   const recovery = await fixture("history-failure");
   const resume = recovery.getByRole("button", { name: "重新加载工作流" });
   await resume.waitFor();

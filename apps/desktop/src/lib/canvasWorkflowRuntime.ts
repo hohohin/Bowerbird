@@ -43,7 +43,8 @@ import { ConfirmedDshTurnFailure, WorkflowNodeError, workflowDiagnostic, type Wo
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
 import { describeBrandImage } from "./describeBrandImage";
 import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideo, comfyVideoElapsed, comfyVideoMode, DEFAULT_COMFY_VIDEO, type ComfyVideoStatus } from "./comfyVideo";
-import { cleanH3OptimizedPrompt, h3OptimizationInstruction } from "./h3PromptOptimization";
+import { H3_IMAGE } from "./genProviders";
+import { imageOptimizationText, cleanH3OptimizedPrompt, h3OptimizationInstruction } from "./h3PromptOptimization";
 import { compileAgentPrompt, compileGenerationPrompt, generationInputNode, workflowImageContainer, emptyWorkflow, newWorkflowNode, invalidateWorkflow, workflowExecutionNodes, workflowDependencies, workflowWriteNodes, workflowAccessConflict, workflowLockedNodes, workflowNodeRun, workflowRuns, workflowRunActive, workflowInputProducers, workflowInputValues, workflowOrder, WORKFLOW_SKILLS,
   type CanvasWorkflow, type WorkflowInput, type WorkflowRun, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "./canvasWorkflow";
 
@@ -1818,15 +1819,16 @@ export class CanvasWorkflowController {
   }
 
   /** Explicit paid text action. It never invalidates outputs or executes connected cards. */
-  async optimizeComfyPrompt(nodeId: string) {
+  async optimizeComfyPrompt(nodeId: string, referenceCount?: number) {
     if (!this.ready) throw new Error("工作流尚未载入");
     if (this.startingCards.has(nodeId)) return;
     const node = this.document.nodes.find(node => node.id === nodeId);
-    if (node?.kind !== "comfy-video") throw new Error("请选择本地 H3 视频卡片");
+    const image = node?.kind === "generation" && node.provider === H3_IMAGE && node.generation?.media !== "video";
+    if (!node || (!image && node.kind !== "comfy-video")) throw new Error("请选择本地 H3 生成卡片");
     if (this.encapsulating || this.isLocked(nodeId)) throw new Error("卡片正在使用，请等待当前任务结束");
     const prompt = node.prompt.trim(), options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO, mode = comfyVideoMode(options);
     if (!prompt || prompt.length > 16000) throw new Error("请在卡片中填写 1–16000 字提示词后再优化");
-    const input = { prompt, mode, seconds: options.seconds, ratio: options.ratio,
+    const input = image ? { prompt, referenceCount: referenceCount ?? node.inputs.image?.length ?? 0, ratio: node.ratio ?? "auto" } : { prompt, mode, seconds: options.seconds, ratio: options.ratio,
       firstFrameCount: mode !== "text" && node.inputs["first-frame"]?.length ? 1 : 0,
       lastFrameCount: mode === "frames" && node.inputs["last-frame"]?.length ? 1 : 0 };
     const runId = crypto.randomUUID(), threadId = crypto.randomUUID(), accountId = useStore.getState().cloudAuth?.user_id ?? null;
@@ -1851,7 +1853,7 @@ export class CanvasWorkflowController {
     const assertAccount = () => {
       const account = useStore.getState();
       if (this.run(runId).accountId !== (account.cloudAuth?.user_id ?? null)) throw new Error("账号已切换，请登录原账号后继续，或停止此工作流");
-      if (!canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) throw new Error("本地 H3 视频需要有效的 Pro／Studio 权益或测试账号资格");
+      if (!canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) throw new Error("本地 H3 需要有效的 Pro／Studio 权益或测试账号资格");
       return account;
     };
     assertAccount();
@@ -1872,7 +1874,7 @@ export class CanvasWorkflowController {
           if (halted()) return;
           if (start && !start.current()) { await this.stopBeforeDispatch(runId); return; }
           start?.release();
-          const created = await api.cloudAgentStart({ intentPrompt: snapshot.instruction, textRewrite: { source: snapshot.input.prompt }, references: [],
+          const created = await api.cloudAgentStart({ intentPrompt: snapshot.instruction, textRewrite: { source: "referenceCount" in snapshot.input ? imageOptimizationText(snapshot.input.prompt) : snapshot.input.prompt }, references: [],
             projectId: this.projectId, threadId: this.run(runId).threadId, imageProvider: "cloud", skillId: "bowerbird-unified-agent", agentRuntime: "dsh" });
           if (this.stopped.has(runId)) { await api.cloudAgentCancel(created.runId); return; }
           agentRunId = created.runId;
@@ -1890,7 +1892,7 @@ export class CanvasWorkflowController {
             terminalFailure = true;
             const payload = current.snapshot.events.find(event => event.type === "text.result")?.display_payload;
             if (payload?.schemaVersion !== 1 || typeof payload.text !== "string" || !payload.text.trim() || payload.text.length > 16000) throw new Error("Cloud DSH 未返回有效的优化提示词，请检查任务结果");
-            const prompt = cleanH3OptimizedPrompt(payload.text);
+            const prompt = "referenceCount" in snapshot.input ? imageOptimizationText(snapshot.input.prompt, payload.text) : cleanH3OptimizedPrompt(payload.text);
             if (!prompt) throw new Error("Cloud DSH 未返回有效的优化提示词，请检查任务结果");
             snapshot = { ...snapshot, result: prompt };
             // Save the result before applying it so recovery never repeats the paid request.
@@ -1911,7 +1913,7 @@ export class CanvasWorkflowController {
     assertAccount();
     const run = this.run(runId);
     await this.saveRun({ ...run, steps: { ...run.steps, [id]: { ...run.steps[id], status: "done", error: undefined, detail: "提示词已替换" } } },
-      this.document.nodes.map(item => item.id === id ? { ...item, prompt: cleanH3OptimizedPrompt(snapshot.result!) } : item));
+      this.document.nodes.map(item => item.id === id ? { ...item, prompt: "referenceCount" in snapshot.input ? snapshot.result! : cleanH3OptimizedPrompt(snapshot.result!) } : item));
   }
 
   private async runComfyVideo(runId: string, node: WorkflowNode, halted: () => boolean, input?: import("./comfyVideo").ComfyVideoInput, start?: CardStart) {
@@ -2051,7 +2053,7 @@ export class CanvasWorkflowController {
       if (node.kind === "voice" && step.voiceRequest) { await this.runVoice(runId, node, halted); return; }
       this.progress(runId, id, node.kind === "generation" ? `生成${node.generation?.media === "video" ? "视频" : "图片"}，等待会话结果` : node.kind === "skill" ? "执行技能，等待任务结果或审批" : node.kind === "visual-profile" ? "处理视觉规范" : node.kind === "trigger" ? "触发下游流程" : "读取输入素材");
       if (node.kind === "comfy-video" && step.jobId) { await this.runComfyVideo(runId, node, halted); return; }
-      if (node.kind === "comfy-video" && step.comfyOptimization) { await this.runComfyPromptOptimization(runId, node, halted, start); return; }
+      if (step.comfyOptimization) { await this.runComfyPromptOptimization(runId, node, halted, start); return; }
       if (node.kind === "generation" && node.generation?.media === "video" && step.jobId) {
         await this.recoverVideoResult(runId, node, halted); return;
       }

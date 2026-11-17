@@ -14,6 +14,8 @@ Agent 建卡时可按用户要求在每张图片生成卡上填写 `provider`。
 
 ## 2026-11-15 在 DSH 中继续 Agent 卡片的原对话
 
+桌面向本机 DSH 投递每轮消息时只发送当轮正文与当轮素材引用说明。桌面历史保留在对话详情中，提交时不拼接旧消息、建卡回执或历史提示语。每轮仍使用独立的工具授权与恢复身份。
+
 DSH Web 创建 Agent 时取得会话写锁。收到 `turn/end` 只表示一轮结束，Web 宿主仍可继续持有 Agent。此时另一个 DSH 进程能看到历史，尝试发送消息时会收到 `session/writer-held`。
 
 Bowerbird 自动启动的 DSH 0.2.2-rc.1 在创建卡片专用 Agent 时保留官方 `AgentHandle`。任务结束、Agent 空闲且没有排队输入后，调用该句柄的 `dispose()`，由 DSH 完成写入并释放这一条会话。建卡工具随本轮 Agent 挂载，持久化会话保留原 ID，再打开时由接手的 DSH 加载自己的默认 preset。Bowerbird 取回结果仍按原请求 ID 区分卡片回复和后来人工追加的消息。适配按官方会话控制器的版本和文件指纹启用。手动连接的外部宿主由其自身管理会话寿命。[双宿主原生验收](../apps/desktop/src-tauri/tests/dsh-auto-host.py)

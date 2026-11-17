@@ -11,7 +11,7 @@ const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 await mkdir('.tmp/composer-glass', { recursive: true });
 try {
-  await page.goto('http://127.0.0.1:1717/scripts/fixtures/canvas-reference/preview.html?source-library');
+  await page.goto('http://127.0.0.1:1717/scripts/fixtures/canvas-reference/preview.html?source-library&canvas-library');
   await page.locator('.canvas-workspace[aria-busy="false"]').waitFor();
   await page.evaluate(() => {
     const original = window.__TAURI_INTERNALS__.invoke;
@@ -46,9 +46,9 @@ try {
   await editor.fill('前后');
   await page.keyboard.press('Home');
   await page.keyboard.press('ArrowRight');
-  await dock.getByRole('button', { name: '添加参考素材' }).click();
-  await page.waitForFunction(() => window.store.getState().canvasLibraryOpen && document.activeElement?.classList.contains('canvas-source-panel'));
-  await page.locator('.categorized-library [data-asset-id="a"]').click();
+  await page.getByRole('button', { name: '展开画板素材库', exact: true }).click();
+  await page.getByRole('complementary', { name: '画板素材库', exact: true }).waitFor();
+  await page.locator('.canvas-source-panel [data-asset-id="a"]').dblclick();
   await editor.locator('[data-asset-id="a"]').waitFor();
   assert.equal(await editor.evaluate(el => el.textContent.startsWith('前') && el.textContent.endsWith('后')), true, 'visible material action preserves the insertion caret');
   await page.getByRole('button', { name: '关闭素材库', exact: true }).click();
@@ -76,25 +76,28 @@ try {
     assert.ok(balanceBox.x >= titleBox.x + titleBox.width, 'balance does not overlap the title');
     assert.ok((await heading.boundingBox()).height < 50, 'balance does not increase the menu header height');
     assert.equal(await imageMenu.locator('[data-model-key="bowerbird-cloud-image_fast"]').count(), 0, 'Fast is absent from new selections');
-    if (key === "dreamina-web50pro") await imageMenu.locator("[data-model-group]").click();
+    if (key !== "codex") await imageMenu.locator(`[data-source="${source}"] [data-model-group]`).click();
     await imageMenu.locator(`[data-model-key="${key}"]`).click();
     assert.equal(await provider.getAttribute('data-source'), source);
     assert.equal(await provider.locator('.model-select-source').innerText(), '', 'collapsed source uses an icon, not a second label');
     const iconColor = await provider.locator('.model-select-source').evaluate(el => getComputedStyle(el).backgroundColor);
     await provider.click();
-    assert.equal(await imageMenu.locator(`[data-source="${source}"] .model-select-column-title`).evaluate(el => getComputedStyle(el).color), iconColor, 'expanded column and collapsed icon share the source color');
-    assert.equal(await imageMenu.locator(`[data-source="${source}"] .model-source-badge`).evaluate(el => getComputedStyle(el).backgroundColor), iconColor, 'menu and trigger use the same filled badge');
-    if (key === "dreamina-web50pro") await imageMenu.locator("[data-model-group]").click();
-    assert.equal(await imageMenu.locator(`[data-model-key="${key}"] > svg`).evaluate(el => getComputedStyle(el).color), iconColor);
-    if (key === 'dreamina-web50pro') await page.keyboard.press('Escape');
+    assert.equal(await imageMenu.locator(`[data-source="${source}"] .model-source-badge`).evaluate(el => getComputedStyle(el).color), iconColor, 'menu source icon and trigger badge share the source color');
+    if (key !== "codex") await imageMenu.locator(`[data-source="${source}"] [data-model-group]`).click();
+    assert.equal(await imageMenu.locator(`[data-model-key="${key}"]`).getAttribute('aria-pressed'), 'true');
+    if (key !== 'codex') await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
     assert.ok((await provider.innerText()).includes(label));
     assert.equal(await page.evaluate(() => window.store.getState().activeGenProvider), key, 'display names do not change routing keys');
   }
   await provider.click();
-  await page.waitForFunction(() => document.activeElement?.dataset.modelKey === 'bowerbird-cloud-image_hd');
+  await imageMenu.waitFor();
+  await page.waitForFunction(() => document.querySelector('.model-select-menu')?.contains(document.activeElement));
   await imageMenu.locator('[data-model-key="codex"]').focus();
   await page.keyboard.press('ArrowRight');
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset.modelGroup), 'Seedream');
+  await page.keyboard.press('ArrowRight');
+  await page.waitForFunction(() => document.activeElement?.dataset.modelKey === 'bowerbird-cloud-image_hd');
   assert.equal(await page.evaluate(() => document.activeElement?.dataset.modelKey), 'bowerbird-cloud-image_hd');
   await page.keyboard.press('ArrowDown');
   await page.keyboard.press('Enter');
@@ -103,7 +106,7 @@ try {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await provider.click();
     await page.waitForTimeout(350);
-    const sourceColors = await imageMenu.locator('.model-select-column-title').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color));
+    const sourceColors = await imageMenu.locator('.model-select-column-heading .model-source-badge').evaluateAll(nodes => nodes.map(node => getComputedStyle(node).color));
     assert.notEqual(sourceColors[0], sourceColors[1], 'personal and cloud remain visually distinct in each theme');
     assert.equal(await provider.locator('.model-select-source').evaluate(el => getComputedStyle(el).backgroundColor), sourceColors[1]);
     const dockBox = await dock.boundingBox(), menuBox = await imageMenu.boundingBox();
@@ -137,12 +140,12 @@ try {
   });
   await imageMenu.getByRole('status').filter({ hasText: '3,201' }).waitFor();
   await page.evaluate(() => window.store.setState({ cloudEntitlement: null }));
-  await imageMenu.getByRole('status', { name: 'Bowerbird 积分余额暂不可用' }).waitFor();
+  await imageMenu.getByRole('status', { name: 'Bowerbird Bcoin余额暂不可用' }).waitFor();
   await page.evaluate(() => window.store.setState({ cloudEntitlement: window.savedEntitlement, cloudAuth: { ...window.store.getState().cloudAuth, logged_in: false } }));
-  await imageMenu.getByRole('status', { name: '登录后查看 Bowerbird 积分' }).waitFor();
+  await imageMenu.getByRole('status', { name: '登录后查看 Bowerbird Bcoin' }).waitFor();
   await page.evaluate(() => window.store.setState({ cloudAuth: { ...window.store.getState().cloudAuth, logged_in: true } }));
   await imageMenu.getByRole('status').filter({ hasText: '100' }).waitFor();
-  await imageMenu.locator('[data-model-group]').click();
+  await imageMenu.locator('[data-source="personal"] [data-model-group]').click();
   assert.equal(await imageMenu.locator('[data-model-key="dreamina-web55"]').isDisabled(), false);
   await page.keyboard.press('Escape');
   // Changing account eligibility can disable the focused option and move focus to the body.
@@ -161,13 +164,15 @@ try {
   await provider.click();
   const cloudColumn = imageMenu.locator('[data-source="cloud"]');
   await cloudColumn.locator('[data-model-key="bowerbird-cloud-image_gpt25_flare"]').waitFor();
-  assert.deepEqual(await cloudColumn.locator('.model-select-option').allTextContents(), [
-    'Seedream 5.0 Pro', 'Seedream 5.0 Lite', 'gpt-image-2.5-sunburst', 'gpt-image-2.5-flare',
-  ], 'dynamic models remain available and models of each family stay adjacent without series headings');
+  await cloudColumn.getByRole('button', { name: 'Seedream', exact: true }).click();
+  assert.deepEqual(await cloudColumn.locator('[data-model-key]').allTextContents(), [
+    'Seedream 5.0 Pro', 'Seedream 5.0 Lite',
+  ], 'only Seedream variants appear in the cloud Seedream submenu');
   assert.equal(await imageMenu.getByRole('heading').count(), 0);
   await cloudColumn.getByRole('button', { name: '设为默认：Seedream 5.0 Pro', exact: true }).click();
   assert.equal(await page.evaluate(() => window.store.getState().defaultProvider), 'bowerbird-cloud-image_hd');
-  assert.equal(await provider.getAttribute('aria-expanded'), 'true', 'setting a favorite does not choose or close the model');
+  assert.equal(await provider.getAttribute('aria-expanded'), 'true', 'setting the default does not choose or close the model');
+  await page.keyboard.press('Escape');
   await page.keyboard.press('Escape');
   await page.evaluate(() => window.store.setState({ cloudEntitlement: { ...window.store.getState().cloudEntitlement, generation_services: undefined,
     policy: { can_use_byo: false }, balances: { daily: 0, sub: 0, topup: 0 } } }));
@@ -236,7 +241,7 @@ try {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, width === 900 ? 'dark' : 'light');
     for (const channel of ['jimeng', 'cloud']) {
       await chooseVideo(`${channel}:seedance2.5`);
-      assert.equal(await dock.locator('.model-select-source').getAttribute('aria-label'), channel === 'cloud' ? 'Bowerbird 积分' : '自有订阅');
+      assert.equal(await dock.locator('.model-select-source').getAttribute('aria-label'), channel === 'cloud' ? 'Bowerbird Bcoin' : '自有订阅');
       for (const kind of ['text2video', 'image2video', 'frames2video', 'multimodal2video']) {
         await dock.getByLabel('视频生成模式').selectOption(kind);
         if (channel === 'jimeng') await chooseVideo('jimeng:seedance2.0mini');

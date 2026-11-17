@@ -3645,7 +3645,8 @@ html[data-theme="light"] .app-form-input:focus {
 .canvas-stage {
   position: absolute;
   inset: 0;
-  overflow: hidden;
+  /* Focusing distant cards must not scroll the stage and displace the drawing tools. */
+  overflow: clip;
   cursor: default;
   touch-action: none;
   background-color: var(--bb-bg);

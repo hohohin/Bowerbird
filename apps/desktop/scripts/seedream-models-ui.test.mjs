@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 const { chromium } = await import(process.env.BOWERBIRD_PLAYWRIGHT_MODULE || '../../html-renderer/node_modules/playwright/index.mjs');
-const server = await createServer({ server: { host: '127.0.0.1', port: 1724, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ server: { host: '127.0.0.1', port: 1724, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -40,7 +40,7 @@ async function openJimeng() {
   await group.click();
 }
 try {
-  await page.goto('http://127.0.0.1:1724/scripts/fixtures/canvas-reference/preview.html?source-library');
+  await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/canvas-reference/preview.html?source-library');
   await ready();
   await page.evaluate(() => window.store.setState({ dreaminaHealth: null }));
   for (const key of versions) {
@@ -51,6 +51,13 @@ try {
     assert.doesNotMatch(await trigger.innerText(), /网页|CLI/);
   }
   await openJimeng();
+  const favorites = menu.getByRole('region', {name:'收藏的模型'});
+  const star = (source, name) => menu.locator(`[data-source="${source}"]`).getByRole('button', {name, exact:true});
+  const original = await page.evaluate(() => window.store.getState().activeGenProvider);
+  await star('personal', '收藏：Seedream 5.0 Pro').click();
+  await menu.locator('[data-source="local"] .model-select-favorite').click();
+  assert.equal(await favorites.getByRole('button').count(), 2);
+  assert.equal(await page.evaluate(() => window.store.getState().activeGenProvider), original);
   await menu.locator('[data-source="personal"]').getByRole('button', {name:'设为默认：Seedream 5.0 Pro',exact:true}).click();
   assert.equal(await page.evaluate(() => localStorage.getItem('bowerbird.defaultProvider')), 'dreamina-web50pro');
   await page.keyboard.press('Escape');
@@ -60,8 +67,10 @@ try {
   await page.reload(); await ready();
   assert.equal(await page.evaluate(() => window.store.getState().defaultProvider), 'dreamina-web50pro');
   await openJimeng();
+  assert.equal(await favorites.getByRole('button').count(), 2, 'favorites survive reload');
   await page.evaluate(() => window.store.setState({cloudEntitlement:{...window.store.getState().cloudEntitlement,policy:{can_use_byo:false}}}));
   for (const key of versions) assert.equal(await option(key).isDisabled(), true);
+  assert.equal(await favorites.getByRole('button', {name:'Seedream 5.0 Pro',exact:true}).isDisabled(), true);
   await page.evaluate(() => window.store.setState({cloudEntitlement:{...window.store.getState().cloudEntitlement,policy:{can_use_byo:true,max_parallel_jobs:2}}}));
   await option('dreamina-web55').click();
   await page.evaluate(() => { window.generationTest = window.store.getState().startGeneration('模型快照测试', [], '1:1', 'dreamina-web55'); });
@@ -93,6 +102,14 @@ try {
     ] } });
   });
   await trigger.click();
+  assert.equal(await option('bowerbird-cloud-image_seedream55').count(), 0, 'Cloud versions begin inside their family');
+  assert.doesNotMatch(await menu.innerText(), /\d+\s*Bcoin\s*起/i);
+  await menu.locator('[data-model-group="Seedream"]').click();
+  await star('cloud', '收藏：Seedream 5.5').click();
+  assert.equal(await favorites.getByRole('button').count(), 3);
+  await star('cloud', '取消收藏：Seedream 5.5').click();
+  assert.equal(await favorites.getByRole('button').count(), 2);
+  assert.doesNotMatch(await menu.innerText(), /\d+\s*Bcoin\s*起/i);
   for (const key of ['image_seedream55', 'image_seedream55_1k', 'image_seedream55_15k', 'image_hd', 'image_lite']) {
     assert.equal(await option(`bowerbird-cloud-${key}`).isDisabled(), false);
   }

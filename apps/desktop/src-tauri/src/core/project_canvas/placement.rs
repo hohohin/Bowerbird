@@ -177,8 +177,13 @@ pub(in crate::core) fn visible_obstacles(
     hidden.extend(embedded.iter().cloned());
     let mut galleries = HashSet::new();
     let mut anchors = HashMap::<String, String>::new();
+    let mut anchor_sizes = HashMap::new();
     let mut image_only = HashMap::new();
     let mut folded_turns = HashMap::new();
+    let output_turns: HashSet<_> = nodes.iter()
+        .filter(|(node, _)| node.kind == CreativeNodeKind::Asset && node.role == Some(CreativeNodeRole::Output))
+        .map(|(_, payload)| turn(payload, true))
+        .collect();
     for (node, p) in nodes
         .iter()
         .filter(|(n, _)| n.kind == CreativeNodeKind::Prompt)
@@ -193,13 +198,8 @@ pub(in crate::core) fn visible_obstacles(
         let independent = p["workflow_generation_group"]
             .as_str()
             .is_some_and(|key| key.starts_with("asset:"));
-        let has_output = nodes.iter().any(|(n, out)| {
-            n.kind == CreativeNodeKind::Asset
-                && n.role == Some(CreativeNodeRole::Output)
-                && turn(out, true) == turn(p, false)
-        });
         if independent && !embedded.contains(&node.id) {
-            if has_output {
+            if output_turns.contains(&turn(p, false)) {
                 hidden.insert(node.id.clone());
             }
             continue;
@@ -218,6 +218,7 @@ pub(in crate::core) fn visible_obstacles(
                 hidden.insert(node.id.clone());
             }
         }
+        anchor_sizes.entry(anchor.clone()).or_insert((node.width, node.height));
         image_only.insert(anchor.clone(), matches!(p["status"].as_str(), Some("done" | "failed")));
         if let Some(t) = turn(p, false) {
             folded_turns.insert(t, anchor);
@@ -229,20 +230,20 @@ pub(in crate::core) fn visible_obstacles(
             continue;
         }
         if let Some(anchor) = turn(p, true).and_then(|t| folded_turns.get(&t)) {
-            if let Some((card, _)) = nodes.iter().find(|(n, _)| &n.id == anchor) {
+            if let Some(&(anchor_width, anchor_height)) = anchor_sizes.get(anchor) {
                 let width = p["snapshot"]["width"].as_f64().unwrap_or(0.0);
                 let height = p["snapshot"]["height"].as_f64().unwrap_or(0.0);
                 gallery_heights.insert(
                     anchor.clone(),
                     if image_only.get(anchor) == Some(&true) {
-                        card.width
+                        anchor_width
                             * if width > 0.0 && height > 0.0 {
                                 height / width
                             } else {
                                 1.0
                             }
                     } else {
-                        card.height.max(340.0)
+                        anchor_height.max(340.0)
                     },
                 );
             }

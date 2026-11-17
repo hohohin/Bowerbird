@@ -4,7 +4,7 @@ import { canonicalJson, sha256Hex } from "../kernel/tool-ledger.ts";
 
 const PREFIX = "bowerbird:cloud-text-skill:v1\n";
 const LEGACY_EDITOR = "你是文本编辑器中的写作助手。引用文字是 JSON，segment 为当前段落，conversation 为本气泡的对话历史。按用户要求回答或写作，返回可直接插入文档的 Markdown 正文，不要附加完成说明，不要生成图片或调用生图工具。\n用户要求：";
-type SkillId = "h3-video-prompt" | "text-editor";
+type SkillId = "h3-video-prompt" | "h3-image-prompt" | "text-editor";
 export interface CloudTextSkillSnapshot {
   id: SkillId;
   version: 1;
@@ -32,6 +32,16 @@ function h3Parameters(value: unknown): Record<string, unknown> {
   return p;
 }
 
+function imageParameters(value: unknown): Record<string, unknown> {
+  const p = record(value);
+  if (Object.keys(p).some(key => !["referenceCount", "ratio"].includes(key)) ||
+      typeof p.referenceCount !== "number" || !Number.isSafeInteger(p.referenceCount) || p.referenceCount < 0 ||
+      typeof p.ratio !== "string" || !/^(?:auto|[1-9][0-9]{0,8}:[1-9][0-9]{0,8})$/.test(p.ratio)) {
+    throw new Error("cloud_text_skill_parameters_invalid");
+  }
+  return p;
+}
+
 function parseRequest(goal: string): Record<string, unknown> | undefined {
   try {
     if (goal.startsWith(PREFIX)) return record(JSON.parse(goal.slice(PREFIX.length)));
@@ -54,10 +64,10 @@ export function resolveCloudTextSkill(goal: string, directory?: string): CloudTe
 
 export function loadCloudTextSkill(request: Record<string, unknown>, directory = process.env.BOWERBIRD_TEXT_SKILL_DIR ?? join(import.meta.dirname, "text")): CloudTextSkillSnapshot {
   if (Object.keys(request).some(key => !["id", "parameters", "instruction"].includes(key)) ||
-      !["h3-video-prompt", "text-editor"].includes(String(request.id))) throw new Error("cloud_text_skill_request_invalid");
+      !["h3-video-prompt", "h3-image-prompt", "text-editor"].includes(String(request.id))) throw new Error("cloud_text_skill_request_invalid");
   const id = request.id as SkillId;
-  const parameters = id === "h3-video-prompt" ? h3Parameters(request.parameters) : {};
-  if ((id === "h3-video-prompt" && request.instruction !== undefined) ||
+  const parameters = id === "h3-video-prompt" ? h3Parameters(request.parameters) : id === "h3-image-prompt" ? imageParameters(request.parameters) : {};
+  if ((id !== "text-editor" && request.instruction !== undefined) ||
       (id === "text-editor" && (request.parameters !== undefined || typeof request.instruction !== "string" || !request.instruction.trim()))) {
     throw new Error("cloud_text_skill_request_invalid");
   }
@@ -70,12 +80,13 @@ export function loadCloudTextSkill(request: Record<string, unknown>, directory =
 /** Checkpoints keep the exact method used by this run, even after a VPS file update. */
 export function validateCloudTextSkillSnapshot(value: unknown): CloudTextSkillSnapshot {
   const snapshot = record(value);
-  if (!["h3-video-prompt", "text-editor"].includes(String(snapshot.id)) || snapshot.version !== 1 ||
+  if (!["h3-video-prompt", "h3-image-prompt", "text-editor"].includes(String(snapshot.id)) || snapshot.version !== 1 ||
       typeof snapshot.instructions !== "string" || !snapshot.instructions.trim() || snapshot.instructions.length > 20000 ||
       snapshot.sha256 !== sha256Hex(snapshot.instructions) || typeof snapshot.instruction !== "string") {
     throw new Error("cloud_text_skill_snapshot_invalid");
   }
   if (snapshot.id === "h3-video-prompt") h3Parameters(snapshot.parameters);
+  else if (snapshot.id === "h3-image-prompt") imageParameters(snapshot.parameters);
   else if (canonicalJson(record(snapshot.parameters)) !== "{}") throw new Error("cloud_text_skill_snapshot_invalid");
   return snapshot as unknown as CloudTextSkillSnapshot;
 }

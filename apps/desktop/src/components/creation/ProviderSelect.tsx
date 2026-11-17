@@ -18,7 +18,7 @@ export function ProviderSelect({ value, onChange, codexHealth, dreaminaHealth,
   const balance = cloudEntitlement ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup : 0;
   const options: ModelOption[] = genProviders(cloudEntitlement).map(option => {
     const cloud = isCloudProvider(option.key);
-    const group = dreaminaWebModel(option.key) ? "即梦" : undefined;
+    const group = dreaminaWebModel(option.key) ? "即梦" : cloud && /^seedream\b/i.test(option.label) ? "Seedream" : undefined;
     const reason = generationProviderIssue(option.key, { cloudAuth, cloudEntitlement, dreaminaHealth, codexHealth })?.message;
     return { ...option, group, source: cloud ? "cloud" : option.key === H3_IMAGE ? "local" : "personal", reason };
   });

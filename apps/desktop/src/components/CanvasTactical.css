@@ -64,7 +64,7 @@
 .canvas-tactical :is(.canvas-zoom-controls,.canvas-drawing-tools) button:is(:hover,:focus-visible) {color:var(--holo-ink);background:var(--holo-hover);animation:canvas-tactical-contact 160ms steps(1,end);}
 .canvas-tactical :is(.canvas-zoom-controls,.canvas-drawing-tools) button:is(.is-active,[aria-pressed=true]) {color:var(--cs-selected-ink);background:var(--cs-selected);}
 .canvas-tactical :is(.canvas-zoom-controls,.canvas-drawing-tools) button:is(.is-active,[aria-pressed=true])::before {content:"";position:absolute;right:3px;bottom:3px;width:2px;height:2px;background:var(--holo-pixel);box-shadow:var(--holo-glow);pointer-events:none;}
-.canvas-tactical .canvas-drawing-tools hr {border-color:var(--cs-rule);margin:4px 8px;}
+.canvas-tactical .canvas-drawing-tools hr {border-color:var(--cs-rule);margin:var(--tools-divider-gap,4px) 8px;}
 .canvas-tactical .canvas-drawing-tools button[data-tip]::after {border-radius:4px;}
 .canvas-workspace.canvas-tactical>.canvas-source-panel {background:var(--cs-console);border-color:transparent;border-radius:0 0 8px 0;box-shadow:8px 0 28px rgb(37 43 42 / .08);}
 .canvas-tactical .canvas-library-tab-fill {fill:var(--cs-console);}

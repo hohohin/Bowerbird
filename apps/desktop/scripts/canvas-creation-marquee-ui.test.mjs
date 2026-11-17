@@ -42,6 +42,37 @@ try {
 
   // 创作模式下空白拖动即框选（原为浏览模式专属）。
   const stage = await page.locator(".canvas-stage").boundingBox();
+  const surface = page.locator(".canvas-stage");
+  assert.equal(await surface.evaluate(el => {
+    const field = document.createElement("input");
+    field.style.cssText = "position:absolute;left:5000px;top:80px";
+    el.querySelector(".canvas-plane").append(field);
+    field.focus();
+    const nativeScroll = el.scrollLeft;
+    field.remove();
+    return nativeScroll;
+  }), 0, "focus on a distant card cannot scroll the stage independently of the camera");
+  await page.mouse.move(stage.x + 500, stage.y + 290);
+  await page.mouse.down();
+  // Reposition the surface mid-gesture, as a transitioning sidebar can do.
+  await surface.evaluate(el => { el.style.left = "-200px"; });
+  await page.mouse.move(stage.x + 100, stage.y + 75, { steps: 6 });
+  await page.mouse.up();
+  assert.equal(await node("prompt").evaluate(el => el.classList.contains("is-selected")), false,
+    "the press remains at board x=500; a layout shift must not extend the hit rectangle to x=700");
+  await surface.evaluate(el => { el.style.left = ""; });
+  await page.mouse.move(stage.x + 500, stage.y + 290);
+  await page.mouse.down();
+  await page.mouse.move(stage.x + 510, stage.y + 310);
+  const plane = page.locator(".canvas-plane");
+  const beforeWheel = await plane.boundingBox();
+  await page.mouse.wheel(0, 100);
+  await page.waitForFunction(y => Math.abs(document.querySelector(".canvas-plane").getBoundingClientRect().y - y) > 10, beforeWheel.y);
+  const afterWheel = await plane.boundingBox();
+  await page.waitForFunction(y => Math.abs(document.querySelector(".canvas-selection-marquee").getBoundingClientRect().y - y) < 2, afterWheel.y + 290);
+  await page.mouse.up();
+  await page.mouse.wheel(0, -100);
+  await page.waitForFunction(y => Math.abs(document.querySelector(".canvas-plane").getBoundingClientRect().y - y) < 2, beforeWheel.y);
   await page.mouse.move(stage.x + 500, stage.y + 290);
   await page.mouse.down();
   await page.mouse.move(stage.x + 65, stage.y + 75, { steps: 12 });
@@ -127,7 +158,7 @@ try {
   assert.equal(await editor.innerText(), "拖动后仍可编辑");
 
   assert.deepEqual(errors, []);
-  console.log("PASS: marquee and card drags suppress native selection in both modes; textarea and rich-text editing remain selectable");
+  console.log("PASS: marquee anchor across layout, focus and camera changes; card dragging and native text selection");
 } finally {
   await browser.close();
   await server.close();

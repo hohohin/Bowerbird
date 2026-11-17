@@ -2,7 +2,7 @@ import { H3OptimizeButton } from "./creation/H3OptimizeButton";
 import { CanvasTextarea } from "./CanvasTextarea";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useId, useRef, useState } from "react";
-import { Check, CircleAlert, Ellipsis } from "lucide-react";
+import { ArrowLeftRight, Check, CircleAlert, Ellipsis, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -236,10 +236,20 @@ export function ComfyVideoCard({ node, disabled, optimizing, assets, inputImages
           onChange({ inputs: { ...node.inputs, [port]: [{ assetId: ids[0] }] } });
         }}>
         <strong className="comfy-frame-badge">{index ? "尾帧 · 可选" : label}</strong>
+        {bindings.length > 0 && <button type="button" className="comfy-frame-action comfy-frame-disconnect"
+          aria-label={`断开${label}`} title={`断开${label}`} disabled={disabled}
+          onPointerDown={event => event.stopPropagation()}
+          onClick={() => onChange({ inputs: { ...node.inputs, [port]: [] } })}><X size={14} /></button>}
         {path ? <img alt={label} src={path.startsWith("data:") ? path : convertFileSrc(path)} draggable={false} />
           : <span>{bindings.length ? "已连接 · 等待上游" : "拖入图片或连接端口"}</span>}
       </div>;
-    })}</div>}
+    })}
+      {mode === "frames" && !!node.inputs["first-frame"]?.length && !!node.inputs["last-frame"]?.length &&
+        <button type="button" className="comfy-frame-action comfy-frame-swap" aria-label="交换首尾帧" title="交换首尾帧"
+          disabled={disabled} onPointerDown={event => event.stopPropagation()}
+          onClick={() => onChange({ inputs: { ...node.inputs, "first-frame": node.inputs["last-frame"], "last-frame": node.inputs["first-frame"] } })}>
+          <ArrowLeftRight size={14} /></button>}
+    </div>}
     <div className="comfy-prompt-field">
     <CanvasTextarea className="comfy-video-prompt" aria-label="卡片指令" disabled={disabled}
       placeholder={mode === "reference" ? "用 <Picture 1> 指代参考图主体，不固定首尾画面…" : "输入视频提示词，也可从文本端口接入…"} value={node.prompt}

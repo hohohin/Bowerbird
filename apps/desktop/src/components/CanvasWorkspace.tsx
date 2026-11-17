@@ -252,13 +252,6 @@ type CanvasNode = ProjectCanvasUiNode;
 type CanvasAssetNode = Extract<CanvasNode, { kind: "asset" }>;
 type CanvasFolderNode = Extract<CanvasNode, { kind: "folder" }>;
 
-interface CanvasMarquee {
-  startX: number;
-  startY: number;
-  currentX: number;
-  currentY: number;
-}
-
 interface DragProjection {
   preview?: ReturnType<typeof canvasDragPreview>;
   apply?: () => void;
@@ -271,7 +264,9 @@ function clearDragProjection(drag: DragProjection | null) {
   drag.apply = undefined;
 }
 
-interface CanvasMarqueePress extends CanvasMarquee {
+interface CanvasMarqueePress {
+  origin: CanvasPoint;
+  cursor: CanvasPointerSample;
   pointerId: number;
   startClientX: number;
   startClientY: number;
@@ -905,6 +900,8 @@ export function CanvasWorkspace({
   const panFrame = useCanvasFrame(updatePan);
   const cameraFrame = useCanvasFrame<void>(() => {
     paintCamera();
+    const marquee = marqueePressRef.current;
+    if (marquee?.active) updatePan(marquee.cursor);
     clearTimeout(cameraSettleRef.current);
     cameraSettleRef.current = setTimeout(settleCamera, 120);
   });
@@ -1849,12 +1846,22 @@ export function CanvasWorkspace({
     let timer: ReturnType<typeof setTimeout> | undefined;
     let alive = true;
     let refreshVersion = 0;
+    let refreshInFlight = false;
 
     function scheduleRefresh(eventProjectId: string, delay: number) {
       if (timer) clearTimeout(timer);
       const version = ++refreshVersion;
-      timer = setTimeout(() => {
-        void refreshGraph(eventProjectId, version);
+      timer = setTimeout(async () => {
+        timer = undefined;
+        if (refreshInFlight || !alive) return;
+        refreshInFlight = true;
+        try {
+          await refreshGraph(eventProjectId, version);
+        } finally {
+          refreshInFlight = false;
+          // Several tool batches can arrive while the native snapshot is still being read.
+          if (alive && version !== refreshVersion && !timer) scheduleRefresh(eventProjectId, 0);
+        }
       }, delay);
     }
 
@@ -1881,6 +1888,7 @@ export function CanvasWorkspace({
         const refreshRouteRevision = route.projectRouteRevision;
         const queueBeforeRead = writeQueueRef.current;
         const snapshot = await api.projectCanvasGet(eventProjectId);
+        if (!alive || version !== refreshVersion || activeCanvasRef.current.id !== eventProjectId) return;
         const exactAssets = await api.getAssetsByIds(projectCanvasAssetIds(snapshot.nodes));
         if (
           !alive
@@ -1926,9 +1934,9 @@ export function CanvasWorkspace({
       if (!graphNodesRef.current.some(node => node.id === chat.nodeId && node.hiddenAt == null)) scheduleRefresh(chat.projectId, 40);
     }).then(cleanup => { if (alive) unlistenChat = cleanup; else cleanup(); });
 
-    listen<{ projectId: string }>(LOCAL_CHAT_CARDS_CHANGED_EVENT, ({ payload }) => {
+    listen<{ projectId: string; nativeCanvasChanged?: boolean }>(LOCAL_CHAT_CARDS_CHANGED_EVENT, ({ payload }) => {
       if (!alive || payload.projectId !== projectId) return;
-      scheduleRefresh(payload.projectId, 40);
+      if (payload.nativeCanvasChanged !== false) scheduleRefresh(payload.projectId, 40);
       workflowCardsChanged.current();
     }).then(cleanup => { if (alive) unlistenChatCards = cleanup; else cleanup(); });
 
@@ -3076,7 +3084,7 @@ export function CanvasWorkspace({
     event.currentTarget.focus({ preventScroll: true });
     const point = toBoardPoint(event.clientX, event.clientY);
     const toggleSelection = event.ctrlKey || event.metaKey;
-    const selectedIds = expandArtboardSelection(toggleSelection || selectedCanvasNodeIdsRef.current.has(node.id)
+    const selectedIds = expandMovableSelection(toggleSelection || selectedCanvasNodeIdsRef.current.has(node.id)
       ? new Set([...selectedCanvasNodeIdsRef.current, node.id])
       : new Set([node.id]));
     nodeDragRef.current = {
@@ -3121,7 +3129,7 @@ export function CanvasWorkspace({
       initialNodes: graphNodesRef.current,
       initialMaterialNodes: nodesRef.current,
       initialWorkflow,
-      selectedIds: expandArtboardSelection(toggleSelection || selectedCanvasNodeIdsRef.current.has(node.id)
+      selectedIds: expandMovableSelection(toggleSelection || selectedCanvasNodeIdsRef.current.has(node.id)
         ? new Set([...selectedCanvasNodeIdsRef.current, node.id]) : new Set([node.id])),
       pointerId: event.pointerId,
       offsetX: point.x - node.x,
@@ -3837,6 +3845,34 @@ export function CanvasWorkspace({
     });
   }
 
+  function expandMovableSelection(ids: Set<string>) {
+    const expanded = expandArtboardSelection(ids);
+    if (!graphNodesRef.current.some(node => ids.has(node.id) && node.kind === "note" && readCanvasNote(node).note_type === "section")) return expanded;
+    const sections = graphNodesRef.current.filter(node => node.kind === "note" && node.hiddenAt == null
+      && readCanvasNote(node).note_type === "section");
+    const { aliases, cards } = conversationCardsRef.current;
+    const owners = new Map<string, string>();
+    const ordinary = sections.filter(section => {
+      const note = readCanvasNote(section);
+      for (const member of note.member_ids) {
+        const anchor = aliases.get(member) ?? member;
+        owners.set(anchor, section.id);
+        if (anchor !== member && ids.has(section.id) && !ids.has(member)) expanded.delete(member);
+      }
+      return !note.artboard && !note.workflow_container;
+    }).reverse();
+    // A generated result can appear after the section was drawn, or replace its saved member's visible identity.
+    const generated = new Set([...cards.keys(), ...aliases.values()]);
+    for (const node of graphNodesRef.current) if (node.kind === "asset" && node.role === "output") generated.add(node.id);
+    for (const anchor of selectionAnchors()) {
+      if (!generated.has(anchor.id)) continue;
+      const owner = owners.get(anchor.id) ?? ordinary.find(section =>
+        canvasSectionMembers(section, [anchor]).length > 0)?.id;
+      if (owner && ids.has(owner)) expanded.add(anchor.id);
+    }
+    return expanded;
+  }
+
   function expandArtboardSelection(ids: Set<string>) {
     if (!graphNodesRef.current.some(node => ids.has(node.id) && node.kind === "note" && readCanvasNote(node).artboard))
       return expandCanvasSections(ids, graphNodesRef.current);
@@ -3939,13 +3975,10 @@ export function CanvasWorkspace({
         if (canStartCanvasMarquee(event.button, targetIsCanvasNode)) {
           event.preventDefault();
           event.currentTarget.focus({ preventScroll: true });
-          const stageRect = event.currentTarget.getBoundingClientRect();
           const press: CanvasMarqueePress = {
             pointerId: event.pointerId,
-            startX: event.clientX - stageRect.left,
-            startY: event.clientY - stageRect.top,
-            currentX: event.clientX - stageRect.left,
-            currentY: event.clientY - stageRect.top,
+            origin: toBoardPoint(event.clientX, event.clientY),
+            cursor: canvasPointerSample(event),
             startClientX: event.clientX,
             startClientY: event.clientY,
             active: false,
@@ -3998,25 +4031,20 @@ export function CanvasWorkspace({
         marqueePress.active = true;
       }
       const stageRect = event.currentTarget.getBoundingClientRect();
-      marqueePress.currentX = event.clientX - stageRect.left;
-      marqueePress.currentY = event.clientY - stageRect.top;
+      marqueePress.cursor = event;
+      const pan = panRef.current, zoom = zoomRef.current;
+      const selection = canvasRectFromPoints(marqueePress.origin, {
+        x: (event.clientX - stageRect.left - pan.x) / zoom,
+        y: (event.clientY - stageRect.top - pan.y) / zoom,
+      });
       const overlay = marqueeElement.current;
       if (overlay) {
-        const { startX, startY, currentX, currentY } = marqueePress;
         overlay.hidden = false;
-        overlay.style.left = `${Math.min(startX, currentX)}px`;
-        overlay.style.top = `${Math.min(startY, currentY)}px`;
-        overlay.style.width = `${Math.abs(currentX - startX)}px`;
-        overlay.style.height = `${Math.abs(currentY - startY)}px`;
+        overlay.style.left = `${selection.x * zoom + pan.x}px`;
+        overlay.style.top = `${selection.y * zoom + pan.y}px`;
+        overlay.style.width = `${selection.width * zoom}px`;
+        overlay.style.height = `${selection.height * zoom}px`;
       }
-      const boardPoint = (x: number, y: number) => ({
-        x: (x - stageRect.left - panRef.current.x) / zoomRef.current,
-        y: (y - stageRect.top - panRef.current.y) / zoomRef.current,
-      });
-      const selection = canvasRectFromPoints(
-        boardPoint(marqueePress.startClientX, marqueePress.startClientY),
-        boardPoint(event.clientX, event.clientY),
-      );
       const sectionIds = new Set(graphNodesRef.current.filter(node => node.kind === "note"
         && readCanvasNote(node).note_type === "section").map(node => node.id));
       const selected = canvasNodeIdsInRect(

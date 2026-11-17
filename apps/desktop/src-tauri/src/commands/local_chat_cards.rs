@@ -8,9 +8,9 @@ use serde_json::Value;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Listener, State};
 
-fn publish(app: &AppHandle, db: &Database, conversation: &str, action: &str, scheduled: bool) {
+fn publish(app: &AppHandle, db: &Database, conversation: &str, action: &str, scheduled: bool, native_canvas_changed: bool) {
     if let Ok(Some(chat)) = db.get_local_chat(conversation) {
-        let _=app.emit("local-chat://cards-changed",serde_json::json!({"projectId":chat.summary.project_id,"conversationId":conversation,"actionId":action,"scheduled":scheduled}));
+        let _=app.emit("local-chat://cards-changed",serde_json::json!({"projectId":chat.summary.project_id,"conversationId":conversation,"actionId":action,"scheduled":scheduled,"nativeCanvasChanged":native_canvas_changed}));
         let _ = app.emit("local-chat://updated", chat);
     }
 }
@@ -44,7 +44,8 @@ pub(super) async fn create_cards_for_account(
     })?;
     let scheduled = args["cards"].as_array().is_some_and(|cards| cards.iter().any(|card|
         card["kind"] == "trigger" && matches!(card["triggerMode"].as_str(), Some("daily" | "once"))));
-    publish(app, db, conversation_id, &action.id, scheduled);
+    let native_canvas_changed = action.cards.iter().any(|card| matches!(card.kind.as_str(), "content" | "section"));
+    publish(app, db, conversation_id, &action.id, scheduled, native_canvas_changed);
     if action.run_status.as_deref() == Some("requested") && action.fresh {
         let reply = format!("local-chat://run-result-{}", action.id);
         let (send, receive) = tokio::sync::oneshot::channel();
@@ -88,7 +89,7 @@ pub async fn local_chat_cards_undo(
 ) -> AppResult<ChatConversation> {
     super::canvas_workflow::require_pro(&auth, &entitlement).await?;
     db.undo_local_chat_cards(&conversation_id, &action_id)?;
-    publish(&app, &db, &conversation_id, &action_id, true);
+    publish(&app, &db, &conversation_id, &action_id, true, true);
     db.get_local_chat(&conversation_id)?
         .ok_or_else(|| AppError::Other("对话记录不存在".into()))
 }
