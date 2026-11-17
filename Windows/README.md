@@ -2,6 +2,12 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## Windows 26.11.1704 已发布（2026-11-17）
+
+源码 88aca8a9。画板交互和批量建卡优化、模型收藏及 Seedream 子菜单、H3 首尾帧操作和图片提示词优化、本机 DSH 逐轮投递；配套云端视频规则已同步。原生 1301 项、九组冻结界面与图片菜单专项通过，中文默认／English、签名和 CDN 回读核验通过。完整边界与回滚见 [桌面更新](../dev-doc/DESKTOP-UPDATES.md#windows-26111704-已公开发布2026-11-17)。
+
+[下载 Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1704_x64-setup.exe)。
+
 ## Windows 26.11.1703 已发布（2026-11-17）
 
 源码 a8c110fb。设置与订阅入口整理、DeepSeek 退出登录、后台更新检查、入库自动分析仅本地、通知与探索交互修正。1301 项原生与八组冻结界面通过，中文默认／English 可选、原签名及 CDN 完整下载验证通过。发布与回滚见 [桌面更新](../dev-doc/DESKTOP-UPDATES.md#windows-26111703-已公开发布2026-11-17)。
