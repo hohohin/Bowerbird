@@ -1,5 +1,9 @@
 # DSH · Cloud 对话（已部署，测试 0 Bcoin）
 
+## 2026-11-18 续聊恢复修复已部署
+
+北京时间 01:23，删除原生会话恢复后对不存在的 `agent.model.select` 的调用，模型选择沿用 `agents.resume` 的 `agentOptions`。配套 `chat-worker v8`、`chat-proxy v11` 区分输入读取失败与 DSH 启动／恢复失败。现役源码读回、原会话副本恢复及固定 DSH 多轮合成测试通过。无需更新桌面端；已失败原单保留终态。部署镜像、回退与验证边界见 [故障修复记录](../../project_logs/2026-11-18-dsh-chat-resume.md)。
+
 ## 2026-11-13 Agent 卡片运行回执
 
 北京时间 13:15，生产 `chat-proxy` 从 v7 升至 v8，接受可选的 `run_status`（started、failed、unknown）。JWT 校验开启，重新下载的七份文件与候选逐字节一致。13:17 切换 VPS generation-worker 到 `sha256:394ad4f896f411a1a8406c2ebc12685a0dce92d161e1f32ce37ea0672596ec51`，镜像中已核对工具定义、提示词、回执解析三份文件。切换前在途执行数为零，切换后运行正常；已比对环境变量、挂载及资源限制。首次切换因按顺序比较环境变量列表触发回滚，改为完整条目排序比对后通过。候选断网 DSH 测试 9 项通过。

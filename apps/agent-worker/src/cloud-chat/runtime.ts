@@ -43,6 +43,7 @@ function upstreamFailure(error: unknown): string {
 }
 export async function processChatJob(job: ChatJob, control: ChatControl, model: Pick<DeepSeekBackend, "chat">, modelName: string, download: typeof fetch = fetch, dsh?: DshChatOptions): Promise<void> {
   let submissions = 0;
+  let inputReady = false;
   let result;
   try {
     const response = await download(job.input_url, { signal: AbortSignal.timeout(30_000) });
@@ -51,9 +52,10 @@ export async function processChatJob(job: ChatJob, control: ChatControl, model: 
     if (createHash("sha256").update(text).digest("hex") !== job.input_hash) throw new Error("chat_input_hash_mismatch");
     const input = validateChatInput(JSON.parse(text));
     if (input.engine !== job.engine) throw new Error("chat_engine_identity_mismatch");
+    inputReady = true;
     if (isDshChatEngine(input.engine)) {
       if (!dsh) throw new Error("dsh_chat_worker_unavailable");
-      modelName = dsh.upstream.model;
+      modelName = input.dsh_options?.model ?? dsh.upstream.model;
       result = await runDshChat(input, { job_id: job.id, lease_id: job.lease_id }, control, dsh, () => { submissions++; },
         job.session_key && job.previous_job_id !== undefined ? {session_key:job.session_key, previous_job_id:job.previous_job_id} : undefined);
     } else {
@@ -63,7 +65,8 @@ export async function processChatJob(job: ChatJob, control: ChatControl, model: 
   } catch (error) {
     if (error instanceof DshChatLeaseLost) return; // Cancellation/lease expiry owns settlement.
     const rejected = submissions === 1 && error instanceof DeepSeekBackendError && error.status !== undefined && error.status >= 400 && error.status < 500;
-    const code = submissions || error instanceof DshChatDeadline ? upstreamFailure(error) : "chat_input_unavailable";
+    const code = submissions || error instanceof DshChatDeadline ? upstreamFailure(error)
+      : inputReady ? "chat_dsh_start_failed" : "chat_input_unavailable";
     const status = !submissions || rejected ? "failed" : "outcome_unknown";
     console.warn(JSON.stringify({ event: "chat_job_failed", job_id: job.id, status, error_code: code }));
     await control({ action: "finish", job_id: job.id, lease_id: job.lease_id, ...(job.engine ? { engine: job.engine } : {}), status, error_code: code });

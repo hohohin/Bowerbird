@@ -56,7 +56,7 @@ try {
   await closeModelSettings();
   await openMenu();
   await menu.getByRole('button', { name: '本机 DSH', exact: true }).click();
-  assert.equal(await composer.locator('.chat-codex-options').count(), 0);
+  assert.equal(await composer.getByRole('combobox', {name: 'DSH 模型'}).count(), 1);
   await page.getByRole('checkbox', { name: 'Codex 已登录', exact: true }).uncheck();
   await page.getByRole('checkbox', { name: 'Cloud 已登录', exact: true }).uncheck();
   await composer.locator('.ProseMirror').fill('本机 DSH 独立于 Codex 登录');
@@ -64,7 +64,7 @@ try {
   await panel.waitFor();
   assert.equal((await inspect()).conversations[await panel.getAttribute('data-local-chat-id')].provider, 'dsh-local');
   assert.equal(await panel.locator('[data-message-role="assistant"] .local-chat-message-label strong').textContent(), 'DSH');
-  assert.equal(await panel.locator('.chat-codex-options').count(), 0);
+  assert.equal(await panel.getByRole('combobox', {name: 'DSH 模型'}).count(), 1);
   await panel.getByRole('button', { name: '停止回复', exact: true }).click();
   await panel.getByRole('button', { name: '取回回复', exact: true }).click();
   await panel.getByText('花影入月', { exact: true }).waitFor();
@@ -98,6 +98,10 @@ try {
   assert.equal(await composer.getByRole('combobox', {name: '云端技能'}).count(), 0);
 
   await composer.locator('.ProseMirror').fill('Cloud DSH 零价聊天');
+  await composer.getByRole('combobox', {name: 'DSH 模型'}).click();
+  await page.getByRole('option', {name: /Pro/i}).click();
+  await composer.getByRole('combobox', {name: 'DSH 推理强度'}).click();
+  await page.getByRole('option', {name: '高', exact:true}).click();
   await composer.getByRole('button', { name: '发送', exact: true }).click();
   await panel.waitFor();
   assert.match(await panel.locator('.local-chat-provider').innerText(), /DSH · Cloud · 0 Bcoin/);
@@ -105,6 +109,8 @@ try {
   await panel.getByRole('button', { name: '取回回复', exact: true }).click();
   await panel.getByText('花影入月', { exact: true }).waitFor();
   const snapshot = await inspect();
+  assert.deepEqual(snapshot.calls.filter(c => c.command === 'local_chat_send').at(-1).args.input.codexOptions,
+    {model: 'deepseek-v4-pro', reasoningEffort: 'high'});
   assert.equal(snapshot.calls.some(c => c.command === 'local_chat_dsh_setup' && c.args.mode === 'managed'), false);
   assert.equal(snapshot.calls.filter(c => c.command === 'local_chat_send').at(-1).args.input.dshSkill, undefined);
   assert.doesNotMatch(JSON.stringify(snapshot), /fixture-secret/);

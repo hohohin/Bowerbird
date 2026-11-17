@@ -1,5 +1,9 @@
 # 对话 provider 实现记录
 
+## 2026-11-18 模型选择与建卡参数（Windows 26.11.1801 发布中）
+
+DSH 对话和 Agent 卡可选模型及思考程度；跟随服务配置仍可用。所选项按轮次保存，本机宿主复核实际模型回执，Cloud 沿原任务身份提交。Codex 显示并提交实际默认模型与推理程度。建卡补充 H3 的 text／reference／frames 模式、图片供应商和普通视频逐卡选项；Cloud 通过 image_card_provider／video_card_options 能力协商，旧客户端不接收未知字段。H3 提示词优化保留原文和结果、可恢复与重试；结果未知时只查询原任务。Agent 队列空闲退避上限从 60 秒调整到 5 秒，不代表模型正文生成速度已经提高。Cloud 续聊修复证据见 [续聊记录](../project_logs/2026-11-18-dsh-chat-resume.md)，本轮实际发布和回滚以 [桌面更新](DESKTOP-UPDATES.md) 为准。
+
 ## Agent 按生图卡选择 provider（桌面与云端源码）
 
 Agent 建卡时可按用户要求在每张图片生成卡上填写 `provider`。例如「第一张用个人即梦 Seedream 5.5，第二张用本机 H3，只建卡」会分别选择 `dreamina-web55` 和 `minimax-h3-image`。省略时采用本轮的生图默认值。工具暴露的可选值与桌面编译器共用同一份枚举。无效值会拒绝整批。运行仍沿用生图卡的账号、环境与额度检查。
@@ -172,3 +176,10 @@ DeepSeek · Cloud 与 DSH · Cloud 的共用后端已部署启用，测试 **0 B
 - 界面证据：`apps/desktop/.tmp/local-chat/provider-selector.jpg`、`provider-cloud-recovered.jpg`。截图为合成验收数据。
 - 未部署 Cloud 迁移、Edge、官网网关或 VPS Worker，未运行真实 DeepSeek 请求。上线必须配套执行 [Cloud 对话部署顺序](../apps/cloud/CHAT.md)；测试开关默认关闭，数据库价格为 0 Bcoin。
 - 按 ub-mode 分为 Cloud 单次请求服务与桌面对话选择两批提交；只暂存本轮文件及共享文档中的本轮增量，保留工作区其他改动。未创建临时 worktree；验收服务结束后只停止本轮 17883 端口进程，保留本轮截图与构建证据。
+
+
+## 建卡模型和视频参数
+
+建卡工具的生图供应商目录包含 MiniMax-H3-Image，使用 generation、mediaType=image、provider=minimax-h3-image，可通过 referenceAliases 引入当轮参考图。普通视频卡支持逐卡 videoChannel 和完整 videoOptions，未指定时沿用应用默认值。H3 视频使用 comfy-video，支持 text、reference、frames 三模式；参考模式的 firstFrameAlias 表示参考图，0.98 分辨率仅适用于 text/reference。端口与模式不匹配时整批拒绝。
+
+2026-11-18 源码回归覆盖逐卡模型、参数、H3 三模式及无效连线。上线前需同步云端工具目录与能力声明。只读检查发现当时现役 Worker 的建卡 schema 完全没有 provider 字段，解释了云端 Agent 看不到 H3 Image 选项。

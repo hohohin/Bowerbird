@@ -429,7 +429,7 @@ fn local_chat_cards_h3_drafts_use_native_defaults_and_bounded_options() {
     assert_eq!(h3["provider"], "comfy-video");
     assert_eq!(
         h3["comfyVideo"],
-        json!({"endpoint":"http://127.0.0.1:8000","seconds":8,"ratio":"9:16","resolution":0.8})
+        json!({"mode":"frames","endpoint":"http://127.0.0.1:8000","seconds":8,"ratio":"9:16","resolution":0.8})
     );
     assert_eq!(
         h3["inputs"],
@@ -1626,4 +1626,37 @@ fn local_chat_cards_drop_other_kind_fields_and_keep_unknown_keys_for_rejection()
     assert_eq!(args["cards"][1]["mediaType"], "image");
     assert!(args["cards"][2].get("text").is_none(), "video drops content text");
     assert_eq!(args["cards"][2]["prompt"], "动起来");
+}
+
+
+#[test]
+fn local_chat_cards_h3_text_reference_modes_and_frame_validation() {
+    for mode in ["text", "reference"] {
+        let (db, s) = fixture();
+        create(&db, &s, &json!({"cards":[{"id":"h3","kind":"comfy-video","title":"H3","prompt":"缓慢移动","mode":mode,"resolution":0.98}]})).unwrap();
+        assert_eq!(document(&db)["nodes"][0]["comfyVideo"]["mode"], mode);
+    }
+    for (mode, port) in [("text", "first-frame"), ("reference", "last-frame")] {
+        let (db, s) = fixture();
+        assert!(create(&db, &s, &json!({"cards":[
+            {"id":"image","kind":"generation","title":"图片","mediaType":"image","prompt":"产品","provider":"minimax-h3-image"},
+            {"id":"h3","kind":"comfy-video","title":"H3","prompt":"缓慢移动","mode":mode}
+        ],"connections":[{"from":"image","to":"h3","output":"image","input":port}]})).is_err());
+        assert_eq!(document(&db)["nodes"], json!([]));
+    }
+}
+
+#[test]
+fn local_chat_cards_video_options_are_per_card() {
+    let (db, s) = fixture();
+    create(&db, &s, &json!({"cards":[
+        {"id":"one","kind":"generation","title":"one","mediaType":"video","prompt":"a","videoChannel":"jimeng","videoOptions":{"kind":"text2video","model_version":"seedance2.5","duration":12,"video_resolution":"1080p"}},
+        {"id":"two","kind":"generation","title":"two","mediaType":"video","prompt":"b","videoChannel":"cloud","videoOptions":{"kind":"text2video","model_version":"seedance2.5","duration":5,"video_resolution":"720p"}}
+    ]})).unwrap();
+    let doc = document(&db);
+    assert_eq!(doc["nodes"][0]["generation"]["videoOptions"]["duration"], 12);
+    assert_eq!(doc["nodes"][0]["generation"]["videoChannel"], "jimeng");
+    assert_eq!(doc["nodes"][1]["generation"]["videoOptions"]["duration"], 5);
+    assert_eq!(doc["nodes"][1]["generation"]["videoChannel"], "cloud");
+    assert_eq!(doc["nodes"][1]["provider"], "bowerbird-cloud-video_seedance25_720p");
 }

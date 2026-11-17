@@ -17,6 +17,14 @@ Deno.test("image provider overrides are opt-in for card-capable v2 clients", () 
     assertThrows(() => validateChatInput({ ...input, image_card_provider: true, ...patch }), ChatInputError);
   }
 });
+Deno.test("video options are opt-in for card-capable v2 clients", () => {
+  const input = { messages, conversation_id: "c-fixture", engine: DSH_CHAT_ENGINE_V2 };
+  assert(!("video_card_options" in validateChatInput(input)));
+  assertEquals(validateChatInput({ ...input, video_card_options: true }).video_card_options, true);
+  for (const patch of [{ tools_enabled: false }, { engine: DSH_CHAT_ENGINE }, { video_card_options: "yes" }]) {
+    assertThrows(() => validateChatInput({ ...input, video_card_options: true, ...patch }), ChatInputError);
+  }
+});
 Deno.test("DSH accepts public history, structured skill IDs and minimal card receipts", () => {
   const base = { messages, engine: DSH_CHAT_ENGINE } as const;
   const skill = { id: "text-editor" } as const;

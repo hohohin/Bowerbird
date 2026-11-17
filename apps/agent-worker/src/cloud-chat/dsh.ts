@@ -97,7 +97,7 @@ export async function runDshChat(input: ChatInput, identity: Identity, control: 
     scheduleHeartbeat();
     if (native && nativeClaim && options.sessionRoot) snapshot = stageNativeSession(ephemeral ? options.runtimeRoot : options.sessionRoot, identity.job_id, nativeClaim, ephemeral);
     proxy = await startMeteredDeepSeekProxy({
-      runId: identity.job_id, leaseId: identity.lease_id, phase: "chat", upstream: options.upstream, fetch: options.fetch,
+      runId: identity.job_id, leaseId: identity.lease_id, phase: "chat", upstream: { ...options.upstream, model: input.dsh_options?.model ?? options.upstream.model }, fetch: options.fetch,
       signal: abort.signal, allowedToolNames: allowCards ? ["create_canvas_cards"] : [],
       async beforeModel(request) {
         await leased("dsh_poll");
@@ -126,7 +126,7 @@ export async function runDshChat(input: ChatInput, identity: Identity, control: 
           new DeepSeekBackendError(code === "deepseek_transport_unknown" ? "deepseek_network_error" : "deepseek_invalid_response"));
       },
     });
-    port = await NodeDshAcpPort.create({ profileTemplateDir: options.profileTemplateDir, runtimeRoot: options.runtimeRoot, profileMode: "chat", imageCardProvider: input.image_card_provider,
+    port = await NodeDshAcpPort.create({ profileTemplateDir: options.profileTemplateDir, runtimeRoot: options.runtimeRoot, profileMode: "chat", chatOptions: input.dsh_options, imageCardProvider: input.image_card_provider, videoCardOptions: input.video_card_options,
       childEnvironment: bridge.childEnvironment(), providerEnvironment: proxy.childEnvironment(), promptTimeoutMs: 0, nativeSession: snapshot });
     await Promise.race([port.initialize(), stopped.promise]);
     sessionId = (await Promise.race([snapshot && nativeClaim?.previous_job_id

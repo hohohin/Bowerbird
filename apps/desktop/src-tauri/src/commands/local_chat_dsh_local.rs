@@ -1015,6 +1015,18 @@ async fn live_turn(
     let chat = db
         .get_local_chat(id)?
         .ok_or_else(|| error("对话记录不存在"))?;
+    if let Some(options) = db.local_chat_turn_options(turn)? {
+        let catalog = host.rpc("session/modelCatalog", json!({})).await?;
+        let group = catalog["groups"].as_array().and_then(|groups| groups.iter()
+            .filter(|group| group["models"].as_array().is_some_and(|models| models.iter().any(|m| m["id"].as_str() == options.model.as_deref())))
+            .max_by_key(|group| group["id"] == catalog["default"]["provider"]))
+            .and_then(|group| group["id"].as_str()).ok_or_else(|| error("当前 DSH 服务未提供所选模型"))?;
+        let request = json!({"sessionId":session,"provider":group,"model":options.model,"reasoningEffort":options.reasoning_effort});
+        let reply = host.rpc("session/selectModel", json!({"request": request})).await?;
+        if reply["selected"]["model"] != request["model"] || reply["selected"]["reasoningEffort"] != request["reasoningEffort"] || reply["selected"]["provider"] != request["provider"] {
+            return Err(error("本机 DSH 没有确认所选模型和思考程度，请重新选择"));
+        }
+    }
     let prompt = dsh::prompt(&chat, turn)?;
     let pending = Pending {
         version: 1,
@@ -1094,6 +1106,9 @@ async fn run_legacy(
 ) -> AppResult<&'static str> {
     if *cancel.borrow() {
         return Ok("stopped");
+    }
+    if db.local_chat_turn_options(turn)?.is_some() {
+        return Err(error("当前本机 DSH 版本不支持选择模型，请升级 DSH 或使用服务配置"));
     }
     let session = session_id(turn);
     let gateway = Gateway::start(app, db, id, turn, &session, cancel.clone()).await?;

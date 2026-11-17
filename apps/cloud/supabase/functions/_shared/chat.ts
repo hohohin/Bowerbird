@@ -7,6 +7,7 @@ const failureReasons: Record<string, string> = {
   chat_reply_format: "上游模型返回的回复格式无效。",
   chat_reply_tool_arguments: "上游模型返回的工具参数无法解析。",
   chat_input_unavailable: "云端未能读取本轮输入。",
+  chat_dsh_start_failed: "云端 DSH 启动或恢复会话失败。",
   chat_upload_failed: "本轮输入未能上传到云端。",
   chat_expired: "本轮输入已过期。",
   chat_upstream_rejected: "云端未能完成本轮请求。",
@@ -44,7 +45,8 @@ export function isDshChatEngine(value: unknown): value is DshChatEngine {
   return value === DSH_CHAT_ENGINE || value === DSH_CHAT_ENGINE_V2;
 }
 type ChatSkill = { id: "h3-video-prompt"; parameters: Record<string, unknown> } | { id: "text-editor" };
-export type ChatInput = { messages: ChatMessage[]; tools_enabled: boolean; image_card_provider?: true; engine?: DshChatEngine; conversation_id?: string; skill?: ChatSkill };
+export type DshChatOptionsSelection = { model: "deepseek-flash" | "deepseek-v4-pro"; reasoningEffort: "off" | "low" | "high" | "max" };
+export type ChatInput = { dsh_options?: DshChatOptionsSelection; messages: ChatMessage[]; tools_enabled: boolean; image_card_provider?: true; video_card_options?: true; engine?: DshChatEngine; conversation_id?: string; skill?: ChatSkill };
 export class ChatInputError extends Error {}
 const invalid = () => new ChatInputError("对话内容格式无效，请重新发送");
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -100,16 +102,22 @@ function parseMessage(value: unknown): ChatMessage {
 
 export function validateChatInput(value: unknown): ChatInput {
   if (
-    !record(value) || !keys(value, ["messages", "tools_enabled", "engine", "skill", "conversation_id", "image_card_provider"]) ||
+    !record(value) || !keys(value, ["messages", "tools_enabled", "engine", "skill", "conversation_id", "image_card_provider", "video_card_options", "dsh_options"]) ||
     (value.engine !== undefined && !isDshChatEngine(value.engine)) ||
     (value.skill !== undefined && !isDshChatEngine(value.engine)) ||
     (value.engine !== DSH_CHAT_ENGINE_V2 && value.conversation_id !== undefined) ||
     !Array.isArray(value.messages) ||
     value.messages.length < 1 || value.messages.length > 128 ||
     (value.image_card_provider !== undefined && (value.image_card_provider !== true || value.engine !== DSH_CHAT_ENGINE_V2 || value.skill !== undefined || value.tools_enabled === false)) ||
+    (value.video_card_options !== undefined && (value.video_card_options !== true || value.engine !== DSH_CHAT_ENGINE_V2 || value.skill !== undefined || value.tools_enabled === false)) ||
     (value.tools_enabled !== undefined &&
       typeof value.tools_enabled !== "boolean")
   ) throw invalid();
+  const options = value.dsh_options;
+  if (options !== undefined && (value.engine !== DSH_CHAT_ENGINE_V2 || !record(options) ||
+      !keys(options, ["model", "reasoningEffort"]) || !["deepseek-flash", "deepseek-v4-pro"].includes(String(options.model)) ||
+      !["off", "low", "high", "max"].includes(String(options.reasoningEffort)) ||
+      typeof options.model !== "string" || typeof options.reasoningEffort !== "string")) throw invalid();
   const messages = value.messages.map(parseMessage);
   const pending = new Set<string>(), seen = new Set<string>();
   for (const message of messages) {
@@ -133,7 +141,9 @@ export function validateChatInput(value: unknown): ChatInput {
         !messages[0].content?.trim())) throw invalid();
     return { messages, tools_enabled: value.skill === undefined && value.tools_enabled !== false, engine: value.engine,
       ...(value.engine === DSH_CHAT_ENGINE_V2 ? { conversation_id: value.conversation_id as string } : {}),
+      ...(options === undefined ? {} : { dsh_options: options as DshChatOptionsSelection }),
       ...(value.image_card_provider === true ? { image_card_provider: true as const } : {}),
+      ...(value.video_card_options === true ? { video_card_options: true as const } : {}),
       ...(value.skill === undefined ? {} : { skill: parseChatSkill(value.skill) }) };
   }
   return { messages, tools_enabled: value.tools_enabled !== false };

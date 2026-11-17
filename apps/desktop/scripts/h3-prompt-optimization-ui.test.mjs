@@ -174,6 +174,17 @@ try {
       check(calls.filter(call => call.action === 'start').length === previousVideos + 1, 'independent card dispatches while first request is held');
     } finally { finish.resolve(); api.cloudAgentStart = start; await firstRun; }
 
+    const retryCard = await controller();
+    await retryCard.optimizeComfyPrompt('h3');
+    const firstOptimization = retryCard.document.run;
+    const beforeRetry = starts.length;
+    await retryCard.retryComfyPrompt('h3');
+    check(starts.length === beforeRetry + 1 && starts.at(-1).textRewrite.source === original, 'retry optimizes the original source instead of the previous result');
+    const history = retryCard.document.runs.filter(run => run.steps.h3?.comfyOptimization);
+    check(history.length === 2 && history[0].id === firstOptimization.id && history.every(run => run.steps.h3.comfyOptimization.input.prompt === original),
+      'both optimization attempts retain their original input');
+    const reloaded = new CanvasWorkflowController(retryCard.projectId); await reloaded.load();
+    check(reloaded.document.runs.filter(run => run.steps.h3?.comfyOptimization).length === 2, 'optimization history survives reload');
     const ui = canvasWorkflowController('p'); await ui.load(); await ui.edit([{ ...node, x: 800 }]);
   });
   const card = page.locator('[data-workflow-card="h3"]');
@@ -270,6 +281,27 @@ try {
   assert.equal(imageResult.request.id, 'h3-image-prompt');
   assert.equal(imageResult.request.parameters.referenceCount, 0);
   assert.deepEqual(imageResult.outputs.image.assetIds, ['previous']);
+  const imageCard = page.locator('[data-workflow-card="image-h3"]');
+  await imageCard.getByRole('button', { name: '查看提示词优化历史', exact: true }).click();
+  const history = page.getByRole('dialog', { name: '提示词优化历史', exact: true });
+  await history.waitFor();
+  assert.match(await history.innerText(), /一只玻璃杯/);
+  assert.match(await history.innerText(), /透明玻璃杯，杯沿反射窗边的柔光/);
+  await page.keyboard.press('Escape');
+  const prior = await page.evaluate(() => window.optimizeStarts.length);
+  await imageCard.getByRole('button', { name: '重试优化提示词', exact: true }).click();
+  await page.waitForFunction(n => window.optimizeStarts.length === n + 1 &&
+    JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', prior);
+  assert.equal(await page.evaluate(() => window.optimizeStarts.at(-1).textRewrite.source), '一只玻璃杯');
+  await imageCard.getByRole('button', { name: '查看提示词优化历史', exact: true }).click();
+  await history.waitFor();
+  assert.equal(await history.getByRole('heading', { name: '用户原文', exact: true }).count(), 2);
+  await history.getByRole('button', { name: '恢复第 1 次用户原文', exact: true }).click();
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'image-h3').prompt === '一只玻璃杯');
+  await history.getByRole('button', { name: '恢复第 2 次优化结果', exact: true }).click();
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'image-h3').prompt === '透明玻璃杯，杯沿反射窗边的柔光。');
+  assert.equal(await page.evaluate(() => window.optimizeStarts.length), prior + 1, 'restoring history never submits another optimization');
+  await page.keyboard.press('Escape');
   assert.deepEqual(errors, []);
   console.log('H3 explicit optimization: no automatic Cloud/local chain; direct replacement/edit then manual generation; three modes, entitlement, stop, account, invalid output, unknown submission and recovery passed');
 } catch (error) { console.error(error); throw error; }

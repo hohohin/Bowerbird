@@ -22,10 +22,10 @@ export function AgentChatControls({ node, busy, onChange, onProviderChange, newC
       onChange={next => { if (next !== provider) onProviderChange(next); }} />
       {newChatAction}
     </div>
-    {provider === "codex-local" && <CodexModelSelect value={options ?? {}} catalog={models} disabled={busy}
+    <CodexModelSelect provider={provider} value={options ?? {}} catalog={models} disabled={busy}
       onChange={chatCodexOptions => {
         if (conversationId) useLocalChatStore.getState().setDraft(conversationId, { ...localChatDraft(conversationId), codexOptions: chatCodexOptions });
         else onChange({ chatCodexOptions });
-      }} />}
+      }} />
   </div>;
 }

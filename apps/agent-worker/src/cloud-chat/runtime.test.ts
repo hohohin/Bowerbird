@@ -74,6 +74,17 @@ function downloaded(text: string): Response {
     body: { getReader: () => ({ read: async () => { const ended = done; done = true; return { done: ended, value: new TextEncoder().encode(text) }; }, cancel: async () => {}, releaseLock: () => {} }) } };
 }
 
+test("valid DSH input followed by startup failure is not reported as missing input", async () => {
+  const text = JSON.stringify({ engine: "dsh-vps-v2", conversation_id: "room", messages: [{ role: "user", content: "hello" }], tools_enabled: false });
+  const writes: Record<string, unknown>[] = [];
+  await processChatJob({ id: "job", lease_id: "lease", engine: "dsh-vps-v2", input_url: "fixture:", input_hash: createHash("sha256").update(text).digest("hex") },
+    async body => { writes.push(body); return {}; }, { chat: async () => { assert.fail("no upstream submission"); } }, "fixture", async () => downloaded(text));
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].status, "failed");
+  assert.equal(writes[0].error_code, "chat_dsh_start_failed");
+  assert.ok(/启动或恢复会话失败/.test(chatFailure("failed", writes[0].error_code).message));
+});
+
 test("classifies the original upstream response through Worker finish and public chat error", async () => {
   const input = JSON.stringify({ messages: [{ role: "user", content: "hi" }] });
   const job = { id: "sample", lease_id: "lease", input_url: "fixture:", input_hash: createHash("sha256").update(input).digest("hex") };
@@ -136,4 +147,15 @@ test("lost settlement response never reruns upstream or overwrites completion", 
     { chat: async () => { submitted++; return { message: { role: "assistant", content: "done" }, content: "done", toolCalls: [], finishReason: "stop", usage: { promptTokens: 1, completionTokens: 1 } }; } },
     "fixture", async () => downloaded(text)));
   assert.equal(submitted, 1); assert.equal(settlements, 1);
+});
+
+test("DSH model and effort are frozen in v2 job input and rejected for other queues", () => {
+  const request = { engine: "dsh-vps-v2", conversation_id: "c-a", messages: [{ role: "user", content: "hello" }] };
+  for (const model of ["deepseek-flash", "deepseek-v4-pro"]) for (const reasoningEffort of ["off", "low", "high", "max"]) {
+    const options = { model, reasoningEffort };
+    assert.deepEqual(validateChatInput({ ...request, dsh_options: options }).dsh_options, options);
+  }
+  for (const options of [{ model: "custom", reasoningEffort: "off" }, { model: "deepseek-flash", reasoningEffort: "bogus" }])
+    assert.throws(() => validateChatInput({ ...request, dsh_options: options }));
+  assert.throws(() => validateChatInput({ messages: request.messages, dsh_options: { model: "deepseek-flash", reasoningEffort: "high" } }));
 });

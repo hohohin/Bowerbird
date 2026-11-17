@@ -14,7 +14,7 @@ import { placeWorkflowOutput } from "./canvasOutputPlacement";
 import { assetPayloadJson, canvasAssetNodeSize, createCanvasAssetSnapshot } from "./creativeCanvas";
 import { DEFAULT_VIDEO_OPTIONS, isVideoPath, resolveVideoOptions, videoInputError } from "./videoGeneration";
 import { profileExtractionIssue, profileInputKey, workflowGenerationProvider, workflowProviderIssue } from "./workflowProviderIssue";
-import { chatProviderAccessIssue } from "./chatCapabilities";
+import { selectedChatOptions, chatProviderAccessIssue } from "./chatCapabilities";
 import { generationProviderIssue } from "./generationAvailability";
 import { autoRatioFromReferences } from "../components/creation/ratios";
 import { workflowLoopScope, workflowLoopRows, workflowLoopOutputs, workflowLoopItems, validateLoopItems, validateLoopStart } from "./workflowLoop";
@@ -1460,7 +1460,7 @@ export class CanvasWorkflowController {
       input = { requestId: crypto.randomUUID(), projectId: this.projectId, agentNodeId: node.id,
         ...(run.manualCardRun && run.startId === node.id ? { manualCardRun: true } : {}),
         conversationId: existing?.id ?? node.chatConversationId, provider,
-        codexOptions: existing ? useLocalChatStore.getState().drafts[existing.id]?.codexOptions ?? existing.codexOptions ?? node.chatCodexOptions : node.chatCodexOptions,
+        codexOptions: selectedChatOptions(provider, existing ? useLocalChatStore.getState().drafts[existing.id]?.codexOptions ?? existing.codexOptions ?? node.chatCodexOptions : node.chatCodexOptions),
         text: workflowAgentMessage(cloudAgentProfilePrompt(snapshot.prompt, snapshot.visualProfile), snapshot.source, provider),
         referenceAssetIds: snapshot.assetIds,
         cardDefaults: { provider: useStore.getState().activeGenProvider || useStore.getState().defaultProvider, videoChannel: "jimeng", videoOptions: { ...DEFAULT_VIDEO_OPTIONS } },
@@ -1817,19 +1817,66 @@ export class CanvasWorkflowController {
     }
   }
 
+  async restoreComfyPrompt(nodeId: string, runId: string, source: "original" | "result") {
+    const node = this.document.nodes.find(node => node.id === nodeId);
+    const snapshot = workflowRuns(this.document).find(run => run.id === runId)?.steps[nodeId]?.comfyOptimization;
+    if (!node || !snapshot) return;
+    if (this.isLocked(nodeId) || this.startingCards.has(nodeId)) throw new Error("卡片正在使用，请等待当前任务结束");
+    const text = source === "original" ? snapshot.input.prompt : snapshot.result;
+    if (text === undefined) return;
+    const references: NonNullable<WorkflowNode["promptReferences"]> = snapshot.inputBindings
+      ? JSON.parse(snapshot.inputBindings)[1] ?? [] : node.promptReferences ?? [];
+    const restored: NonNullable<WorkflowNode["promptReferences"]> = [];
+    const prompt = text.replace(/@\[([^\]]+)\]/g, (_, id: string) => {
+      const ref = references.find(ref => ref.id === id);
+      if (!ref) return id;
+      const input = node.inputs[ref.type]?.find(input => workflowBindingKey(input) === workflowBindingKey(ref.input));
+      if (!input || ref.direction === "output") return ref.label;
+      if (!restored.some(reference => reference.id === id)) restored.push({ ...ref, input, slot: input.slot });
+      return "@[" + id + "]";
+    });
+    await this.edit(this.document.nodes.map(current => current.id === nodeId
+      ? { ...current, prompt, promptReferences: restored } : current));
+  }
+
+  async retryComfyPrompt(nodeId: string) {
+    const previous = [...workflowRuns(this.document)].reverse().find(run => run.steps[nodeId]?.comfyOptimization);
+    const step = previous?.steps[nodeId], snapshot = step?.comfyOptimization;
+    if (!previous || !snapshot) return;
+    const node = this.document.nodes.find(node => node.id === nodeId);
+    if (!node) return;
+    if (snapshot.inputBindings && snapshot.inputBindings !== JSON.stringify([Object.fromEntries(Object.entries(node.inputs).filter(([port]) => port !== "signal" && port !== "completion")), node.promptReferences])) {
+      throw new Error("素材引用已改变，请用当前提示词重新优化。历史记录仍可查看。");
+    }
+    if (previous.status === "running") return;
+    if (previous.status === "waiting") return this.continue(previous.id);
+    if (!snapshot.result && snapshot.submissionStarted) {
+      if (!step.agentRunId) throw new Error("上次优化的提交状态尚未确认，请先查看 Agent 任务记录。");
+      const original = await api.cloudAgentGet(step.agentRunId);
+      if (!["succeeded", "failed", "cancelled"].includes(original.status)) throw new Error("上次优化任务仍在处理中，请先等待结果。");
+      if (original.status === "succeeded") {
+        if (this.isLocked(nodeId)) throw new Error("卡片正在使用，请等待当前任务结束");
+        await this.saveRun({ ...previous, status: "waiting" });
+        return this.continue(previous.id);
+      }
+    }
+    return this.optimizeComfyPrompt(nodeId, undefined, snapshot.input);
+  }
+
   /** Explicit paid text action. It never invalidates outputs or executes connected cards. */
-  async optimizeComfyPrompt(nodeId: string, referenceCount?: number) {
+  async optimizeComfyPrompt(nodeId: string, referenceCount?: number, retryInput?: NonNullable<WorkflowStep["comfyOptimization"]>["input"]) {
     if (!this.ready) throw new Error("工作流尚未载入");
     if (this.startingCards.has(nodeId)) return;
     const node = this.document.nodes.find(node => node.id === nodeId);
     const image = node?.kind === "generation" && node.provider === H3_IMAGE && node.generation?.media !== "video";
     if (!node || (!image && node.kind !== "comfy-video")) throw new Error("请选择本地 H3 生成卡片");
     if (this.encapsulating || this.isLocked(nodeId)) throw new Error("卡片正在使用，请等待当前任务结束");
-    const prompt = node.prompt.trim(), options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO, mode = comfyVideoMode(options);
+    if (retryInput && image !== ("referenceCount" in retryInput)) throw new Error("卡片类型已改变，请使用当前提示词重新优化。");
+    const prompt = retryInput?.prompt ?? node.prompt.trim(), options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO, mode = comfyVideoMode(options);
     if (!prompt || prompt.length > 16000) throw new Error("请在卡片中填写 1–16000 字提示词后再优化");
-    const input = image ? { prompt, referenceCount: referenceCount ?? node.inputs.image?.length ?? 0, ratio: node.ratio ?? "auto" } : { prompt, mode, seconds: options.seconds, ratio: options.ratio,
+    const input = retryInput ?? (image ? { prompt, referenceCount: referenceCount ?? node.inputs.image?.length ?? 0, ratio: node.ratio ?? "auto" } : { prompt, mode, seconds: options.seconds, ratio: options.ratio,
       firstFrameCount: mode !== "text" && node.inputs["first-frame"]?.length ? 1 : 0,
-      lastFrameCount: mode === "frames" && node.inputs["last-frame"]?.length ? 1 : 0 };
+      lastFrameCount: mode === "frames" && node.inputs["last-frame"]?.length ? 1 : 0 });
     const runId = crypto.randomUUID(), threadId = crypto.randomUUID(), accountId = useStore.getState().cloudAuth?.user_id ?? null;
     this.reservations.set(runId, { access: [nodeId], writes: [nodeId] });
     const start = this.beginStart(nodeId, "optimize");
@@ -1839,7 +1886,7 @@ export class CanvasWorkflowController {
       await api.projectThreadCreate({ id: threadId, projectId: this.projectId, title: "H3 提示词优化", origin: "direct" });
       if (!start.current()) return;
       await this.saveRun({ id: runId, startId: nodeId, threadId, order: [nodeId], lockedNodeIds: [nodeId], writeNodeIds: [nodeId], accountId, status: "running",
-        steps: { [nodeId]: { status: "pending", comfyOptimization: { input, instruction: h3OptimizationInstruction(input) } } } });
+        steps: { [nodeId]: { status: "pending", comfyOptimization: { input, instruction: h3OptimizationInstruction(input), inputBindings: JSON.stringify([Object.fromEntries(Object.entries(node.inputs).filter(([port]) => port !== "signal" && port !== "completion")), node.promptReferences]), createdAt: Date.now() } } } });
       if (!start.current()) { await this.stopBeforeDispatch(runId); return; }
       this.reservations.delete(runId);
       await this.continue(runId, start);

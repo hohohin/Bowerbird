@@ -322,7 +322,7 @@ pub async fn local_chat_send(
     }
     if input.agent_node_id.is_some() { super::canvas_workflow::require_pro(&auth, &entitlement).await?; }
     let provider = db.local_chat_provider(&input)?;
-    enum Runtime { Codex(String), DshLocal(dsh::LocalConnection), DshCloud(String, bool) }
+    enum Runtime { Codex(String), DshLocal(dsh::LocalConnection), DshCloud(String, bool, bool) }
     let runtime = match provider {
         ChatProvider::CodexLocal => {
             super::codex::require_byo(&entitlement, &auth).await?;
@@ -343,7 +343,7 @@ pub async fn local_chat_send(
                 return Err(error("云端 DSH 会话服务暂未开放"));
             }
             if input.dsh_skill.is_some() && quote["dsh_vps_skills_available"] != true { return Err(error("云端 DSH 技能暂未开放")); }
-            Runtime::DshCloud(account, quote["image_card_provider"] == true)
+            Runtime::DshCloud(account, quote["image_card_provider"] == true, quote["video_card_options"] == true)
         }
         ChatProvider::DshLocal => {
             super::codex::require_byo(&entitlement, &auth).await?;
@@ -393,11 +393,12 @@ pub async fn local_chat_send(
                 cancel_rx,
             )
             .await,
-            Runtime::DshCloud(account, image_card_provider) => {
+            Runtime::DshCloud(account, image_card_provider, video_card_options) => {
                 let pending = dsh_vps::Pending::new(&turn,account);
                 match dsh_vps::create_body(&db, &id, &turn, &pending.key, input.dsh_skill.as_ref()) {
                     Ok(mut body) => {
                         if image_card_provider && input.dsh_skill.is_none() { body["image_card_provider"] = json!(true); }
+                        if video_card_options && input.dsh_skill.is_none() { body["video_card_options"] = json!(true); }
                         dsh_vps::run(&app,&db,&cloud,&auth,&id,&turn,pending,Some(body),cancel_rx).await
                     }
                     Err(detail) => Err(detail),

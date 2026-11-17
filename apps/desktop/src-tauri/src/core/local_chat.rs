@@ -46,6 +46,15 @@ pub struct ChatCodexOptions {
     pub reasoning_effort: Option<String>,
 }
 impl ChatCodexOptions {
+    fn validate_for(&self, provider: &str) -> AppResult<()> {
+        self.validate()?;
+        if matches!(provider, "dsh-local" | "dsh-cloud") &&
+            !(matches!(self.model.as_deref(), Some("deepseek-flash" | "deepseek-v4-pro"))
+              && matches!(self.reasoning_effort.as_deref(), Some("off" | "low" | "high" | "max"))) {
+            return Err(error("DSH 模型或思考程度无效，请重新选择"));
+        }
+        Ok(())
+    }
     fn validate(&self) -> AppResult<()> {
         for value in [&self.model, &self.reasoning_effort].into_iter().flatten() {
             if value.is_empty() || value.len() > 200 || value.trim() != value || value.chars().any(char::is_control) {
@@ -448,13 +457,11 @@ impl Database {
         let provider = target.map(ChatProvider::as_str).unwrap_or(&previous.provider);
         let switching = provider != previous.provider;
         if previous.turn_count == 0 && !switching { return Ok(read(&tx, previous_id)?.unwrap()); }
-        let options = if provider == ChatProvider::CodexLocal.as_str() {
-            options.or_else(|| if switching { None } else { previous.codex_options })
-        } else {
-            if !switching && options.is_some() { return Err(error("此对话服务不支持 Codex 模型设置")); }
-            None
-        };
-        if let Some(options) = &options { options.validate()?; }
+        // Older clients forward the previous card's selection on provider switches.
+        let options = options.filter(|value| !(switching && provider != "codex-local"
+            && value.validate_for(provider).is_err() && Some(value) == previous.codex_options.as_ref()));
+        let options = options.or_else(|| if switching { None } else { previous.codex_options });
+        if let Some(options) = &options { options.validate_for(provider)?; }
         let now = Utc::now().timestamp_millis();
         let (id, thread) = if previous.turn_count == 0 {
             tx.execute("UPDATE local_chat_conversations SET provider=?2,updated_at=?3,revision=revision+1 WHERE id=?1",
@@ -517,9 +524,7 @@ impl Database {
             if provider != ChatProvider::DshCloud { return Err(error("此技能需要 DSH · Cloud")); }
             skill.validate()?;
         }
-        if provider != ChatProvider::CodexLocal && input.codex_options.is_some() {
-            return Err(error("该对话服务不支持 Codex 模型与推理强度，请移除这些设置"));
-        }
+        if let Some(options) = &input.codex_options { options.validate_for(provider.as_str())?; }
         let options = if let Some(options) = &input.codex_options { Some(options.clone()) }
             else if let Some(id) = &input.conversation_id { read(&tx, id)?.and_then(|chat|chat.summary.codex_options) }
             else { None };

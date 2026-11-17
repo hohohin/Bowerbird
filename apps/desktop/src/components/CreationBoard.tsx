@@ -692,7 +692,7 @@ export function CreationBoard({
         if ((prepareProject && (!mounted.current || route.libraryHomeView !== origin.libraryHomeView))
           || !isWorkspaceOperationCurrent(originId, route.activeProjectId, route.projectRoutePending, origin.projectRouteRevision, route.projectRouteRevision)) return;
         await onSendChat({ prompt: finalPrompt.trim(), references: [...references], provider: chatProvider,
-          ...(chatProvider === "codex-local" && chatCodexOptions !== undefined ? { codexOptions: { ...chatCodexOptions } } : {}) }, targetProjectId, sentDraft);
+          ...(chatCodexOptions !== undefined ? { codexOptions: { ...chatCodexOptions } } : {}) }, targetProjectId, sentDraft);
         const current = useStore.getState();
         if (mounted.current && (!prepareProject || current.libraryHomeView === origin.libraryHomeView)
           && claim.isCurrent() && isWorkspaceOperationCurrent(originId, current.activeProjectId, current.projectRoutePending, origin.projectRouteRevision, current.projectRouteRevision)) exitCreationMode();
@@ -1523,7 +1523,7 @@ export function CreationBoard({
           </div>}
           <div className="composer-parameters">
           {isChat ? <><ChatProviderSelect value={chatProvider} onChange={onChatProviderChange} access={chatAccess} disabled={submitting} />
-            {chatProvider === "codex-local" && <CodexModelSelect value={chatCodexOptions ?? {}} onChange={options => onChatCodexOptionsChange?.(options)} catalog={chatModels} disabled={submitting} />}</> : <>
+            <CodexModelSelect provider={chatProvider} value={chatCodexOptions ?? {}} onChange={options => onChatCodexOptionsChange?.(options)} catalog={chatModels} disabled={submitting} /></> : <>
           {isVideo && <VideoControls composer channel={generation.videoChannel} options={videoOptions} onChange={(options, videoChannel = generation.videoChannel) => setGeneration({ ...generation, localVideo: undefined, media: "video", videoChannel, videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio}
             local={onGenerateLocalVideo ? { options: generation.localVideo, onSelect: () => { setLocalEnvironment({ ready: false, checking: true, message: "正在检测环境…" }); setGeneration({ ...generation, localVideo: { ...DEFAULT_COMFY_VIDEO } }); }, onChange: localVideo => setGeneration({ ...generation, localVideo }) } : undefined} />}
           {isLocalVideo && !isCollapsed && localMode !== "text" && <LocalVideoFrames mode={localMode} frames={localFrames.slice(0, localFrameCount)} ignored={references.length - Math.min(localFrameCount, localFrames.length)} />}

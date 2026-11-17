@@ -240,7 +240,7 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
     const targetId = conversationId;
     setLocalError(null); followRef.current = true; setFollow(true);
     try {
-      await useLocalChatStore.getState().send({ projectId, conversationId: targetId, provider, ...(codex && codexOptions !== undefined ? { codexOptions: { ...codexOptions } } : {}), text: snapshot.text.trim(), referenceAssetIds: snapshot.referenceAssetIds, cardDefaults: getCardDefaults?.() });
+      await useLocalChatStore.getState().send({ projectId, conversationId: targetId, provider, ...(codexOptions !== undefined ? { codexOptions: { ...codexOptions } } : {}), text: snapshot.text.trim(), referenceAssetIds: snapshot.referenceAssetIds, cardDefaults: getCardDefaults?.() });
       const current = localChatDraft(targetId);
       // Preserve typing or newly selected references added while the request was being accepted.
       if (current.text === snapshot.text && JSON.stringify(current.referenceAssetIds) === JSON.stringify(snapshot.referenceAssetIds)) useLocalChatStore.getState().setDraft(targetId, emptyDraft);
@@ -314,7 +314,7 @@ export function LocalChatPanel({ conversationId, projectId, onClose, onOpenLibra
             onChange={event => useLocalChatStore.getState().setDraft(conversationId, { ...draft, text: event.target.value })}
             onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={() => { composingRef.current = false; }}
             onKeyDown={event => { if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !composingRef.current && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) { event.preventDefault(); void send(); } }} />
-          {codex && ownedChat && <CodexModelSelect value={codexOptions ?? {}} catalog={chatModels} disabled={running || sending || recoverPending}
+          {ownedChat && <CodexModelSelect provider={provider} value={codexOptions ?? {}} catalog={chatModels} disabled={running || sending || recoverPending}
             onChange={options => useLocalChatStore.getState().setDraft(conversationId, { ...draft, codexOptions: options })} />}
           <div className="local-chat-reply-toolbar"><span className="local-chat-provider" data-quota={cloud ? "bowerbird" : "chatgpt"} title={cloud ? "使用 Bowerbird Bcoin" : codex ? QUOTA_SOURCES.chatgpt.detail : "使用本机 DSH 的登录配置"}><span className="local-chat-provider-avatar">{cloud ? <Coins size={12} aria-hidden="true" /> : <UserRound size={12} aria-hidden="true" />}</span>{CHAT_PROVIDER_LABELS[provider]}{cloud && access.cloudPrice ? ` · ${access.cloudPrice}` : ""}</span>
             {onOpenLibrary && <button type="button" className="local-chat-add-image" onClick={onOpenLibrary} aria-label="添加对话参考素材" title="从素材库选择参考素材"><ImagePlus size={16} /></button>}

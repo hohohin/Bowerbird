@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { listen } from "@tauri-apps/api/event";
+import { selectedChatOptions } from "./chatCapabilities";
 import { parseChatProvider } from "./chatProvider";
 import { localChat, LOCAL_CHAT_UPDATED_EVENT, localChatInputError, localChatRunning, type ChatCodexOptions, type ChatConversation, type ChatSummary, type LocalChatSendInput } from "./localChat";
 
@@ -188,6 +189,7 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
       input.agentNodeId ? ["card", input.projectId, input.agentNodeId] :
       input.requestId ? ["request", input.projectId, input.requestId] : ["composer", input.projectId]
     );
+    if (!input.requestId) input = { ...input, codexOptions: selectedChatOptions(input.provider ?? "codex-local", input.codexOptions) };
     const validation = localChatInputError(input.text, input.referenceAssetIds);
     if (validation) throw new Error(validation);
     if (get().sending[key] || (input.conversationId && localChatRunning(get().summaries[input.conversationId]))) {

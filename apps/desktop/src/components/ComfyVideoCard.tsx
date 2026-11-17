@@ -1,4 +1,4 @@
-import { H3OptimizeButton } from "./creation/H3OptimizeButton";
+
 import { CanvasTextarea } from "./CanvasTextarea";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useId, useRef, useState } from "react";
@@ -210,8 +210,8 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
   </>;
 }
 
-export function ComfyVideoCard({ node, modelControl, disabled, optimizing, assets, inputImages, readCurrentPrompt, onChange, onOptimize }: {
-  modelControl: React.ReactNode; node: WorkflowNode; step?: WorkflowStep; disabled: boolean; assets: Asset[];
+export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImages, readCurrentPrompt, onChange, optimizationActions }: {
+  optimizationActions?: React.ReactNode; modelControl: React.ReactNode; node: WorkflowNode; step?: WorkflowStep; disabled: boolean; assets: Asset[];
   inputImages: (input: import("../lib/canvasWorkflow").WorkflowInput) => string[];
   onChange: (patch: Partial<WorkflowNode>) => void;
   readCurrentPrompt: () => string; onOptimize: () => void; optimizing?: boolean;
@@ -268,7 +268,7 @@ export function ComfyVideoCard({ node, modelControl, disabled, optimizing, asset
     <CanvasTextarea className="comfy-video-prompt" aria-label="卡片指令" disabled={disabled}
       placeholder={mode === "reference" ? "用 <Picture 1> 指代参考图主体，不固定首尾画面…" : "输入视频提示词，也可从文本端口接入…"} value={node.prompt}
       readCurrentValue={readCurrentPrompt} onValueChange={prompt => onChange({ prompt })} />
-    <H3OptimizeButton busy={optimizing} disabled={disabled || !node.prompt.trim()} onClick={() => onOptimize?.()} />
+    {optimizationActions}
     </div>
     <ProviderQuota source="local" badge />
   </section>;

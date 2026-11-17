@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server = await createServer({cacheDir:'.tmp/text-file-drop/vite',server:{host:'127.0.0.1',port:0,hmr:false,watch:null}});
+const server = await createServer({cacheDir:'.tmp/text-file-drop/vite',optimizeDeps:{entries:['scripts/fixtures/canvas-reference/preview.html']},server:{host:'127.0.0.1',port:0,hmr:false,watch:null}});
 await server.listen();
 const browser = await chromium.launch({channel:'chrome',headless:true});
 const page = await browser.newPage({viewport:{width:1440,height:960},reducedMotion:'reduce'});
@@ -51,13 +51,40 @@ try {
   await drop('.canvas-stage',[{name:'内部拖动.md',text:'内部文本'}],point);
   await page.waitForFunction(()=>window.mediaImports.length===1);
   await page.waitForFunction(()=>window.snapshot().nodes.filter(n=>JSON.parse(n.payloadJson).note_type==='document').length===4);
-  await page.evaluate(async point=>{
-    const {setDragAssets}=await import('/src/lib/dragPayload.ts'); setDragAssets([window.mediaImports[0].asset.id]);
-    const stage=document.querySelector('.canvas-stage'); const dt=new DataTransfer();dt.setData('text/plain','bowerbird-assets');
-    for(const type of ['dragover','drop']) stage.dispatchEvent(new DragEvent(type,{bubbles:true,cancelable:true,dataTransfer:dt,clientX:point.x,clientY:point.y}));
-    setDragAssets(null);
+  await page.evaluate(async () => {
+    window.isTauri = true;
+    const bridge=window.__TAURI_INTERNALS__, original=bridge.invoke;
+    bridge.invoke=async(command,args)=>{
+      if(command!=='start_external_drag') return original(command,args);
+      window.draggedDocumentIds=args.assetIds;
+      return new Promise(resolve=>{window.finishNativeDrop=()=>resolve({dropped:true});});
+    };
+    const {useLocalFileMode} = await import('/src/lib/localFileMode.ts');
+    useLocalFileMode.getState().setMedia('texts');
+    window.store.getState().setCanvasLibraryOpen(true);
+  });
+  const tile=page.locator('.canvas-source-panel .text-file-card').filter({hasText:'内部拖动'});
+  const start=await tile.boundingBox();
+  await page.mouse.move(start.x+start.width/2,start.y+start.height/2);
+  await page.mouse.down();
+  await page.mouse.move(start.x+start.width/2+20,start.y+start.height/2,{steps:4});
+  await page.waitForFunction(()=>!window.store.getState().canvasLibraryOpen);
+  await page.waitForFunction(()=>window.finishNativeDrop);
+  assert.deepEqual(await page.evaluate(()=>window.draggedDocumentIds),[await page.evaluate(()=>window.mediaImports[0].asset.id)]);
+  // Chromium supplies the source gesture. Replay the platform's drop into the WebView
+  // while the native session still owns the actual asset IDs.
+  await page.evaluate(point=>{
+    const stage=document.querySelector('.canvas-stage'), dataTransfer=new DataTransfer();
+    dataTransfer.setData('text/plain','内部拖动.md');
+    for(const type of ['dragenter','dragover','drop'])
+      stage.dispatchEvent(new DragEvent(type,{bubbles:true,cancelable:true,dataTransfer,clientX:point.x,clientY:point.y}));
+    window.finishNativeDrop();
   },point);
+  await page.mouse.up();
+  assert.equal(await page.getByText('部分原文件不可用，请重新定位后再拖出').count(),0);
   await page.waitForFunction(()=>window.snapshot().nodes.filter(n=>JSON.parse(n.payloadJson).note_type==='document').length===5);
+  const placed=(await documents()).at(-1);
+  await page.locator('[data-canvas-node-id='+JSON.stringify(placed.id)+']').getByText('内部文本',{exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>window.mediaImports.length),1,'internal drop does not import a second file');
   // Failed reads retain the imported original but create no empty canvas card.
   await page.evaluate(()=>{window.failTextRead=true;});

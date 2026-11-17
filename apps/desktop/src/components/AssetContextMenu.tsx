@@ -8,7 +8,7 @@ import { canSearchPinterest, requestPinterestSearch } from "../lib/pinterestSear
 import { isVideoPath } from "../lib/videoGeneration";
 import { isAudioAsset } from "../lib/audioMedia";
 import { isTextAsset } from "../lib/textMedia";
-import { ClipboardCopy, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2, Ungroup } from "lucide-react";
+import { ClipboardCopy, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Scan, Trash2, Ungroup } from "lucide-react";
 import { AssetTransferMenuItems, useAssetTransferDialogs } from "./AssetTransferMenuItems";
 import { understandEngineUsable, useStore } from "../store";
 import { api } from "../lib/api";
@@ -437,6 +437,13 @@ export function AssetContextMenu({ selection }: { selection?: {
         onClick={() => { if (connectionEntries) { closeContextMenu(); connectionEntries.rename(); return; } const localPath = menu.fileSelection?.localPaths?.[assetId]; setRenameTarget({ id: assetId, name: localPath ? localPath.split(/[\\/]/).pop()!.replace(/\.[^.]+$/, "") : asset?.name ?? "", external: !localPath && asset?.source === "external", localPath }); closeContextMenu(); }}>重命名</button>}
       {(allImages || isGenerated) && <><div className="app-context-divider" /><div className="app-context-label">再创作</div></>}
       {allImages && describeMenu}
+      {allImages && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
+        const nodeId = menu.canvasSelection?.nodeIds[0];
+        const anchor = nodeId ? document.querySelector<HTMLElement>(`[data-canvas-node-id="${CSS.escape(nodeId)}"]`) : null;
+        closeContextMenu();
+        if (anchor) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-peek", { detail: { assetId, anchor } }));
+        else useStore.getState().openCaptionRing(assetId);
+      }}><Scan size={13} />维度</button>}
       {menu.canvasSelection && menu.canvasSelection.nodeIds.length > 0 && canChangeLibraryVisibility && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
         window.dispatchEvent(new CustomEvent(CANVAS_ARTBOARD_FROM_IMAGE, { detail: { ...menu.canvasSelection, assetId } })); closeContextMenu();
       }}><LayoutDashboard size={13} />以此图新建画板</button>}

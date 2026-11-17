@@ -100,6 +100,7 @@ export function CreativeComposer({
       onChatCodexOptionsChange={options => { flushRef.current?.(); stateRef.current.chatCodexOptions = options; setChatCodexOptions(options); onDraftChange(serializeCreativeComposerState(stateRef.current)); }}
       onChatProviderChange={provider => {
         flushRef.current?.();
+        if (provider !== chatProvider) { stateRef.current.chatCodexOptions = undefined; setChatCodexOptions(undefined); }
         stateRef.current.chatProvider = provider; setChatProvider(provider);
         onDraftChange(serializeCreativeComposerState(stateRef.current));
       }}

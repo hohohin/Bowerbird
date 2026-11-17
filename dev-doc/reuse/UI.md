@@ -9,6 +9,8 @@
 
 ## 让新界面沿用主题、按钮和字段
 
+图片右键「维度」由 `AssetContextMenu` 的单图菜单提供，素材库与画板共用；复用 store `openCaptionRing` 按需加载维度及全局 `CaptionRing`。画板通过既有 `bowerbird://board-asset-peek` 传入节点元素作为锚点，避免同一素材多处出现时定位到素材栏；多选不提供此操作。
+
 工作流模板预览与首次运行前的 Agent 详情共用 `workflowPromptPreview` 将提示词内的引用标记显示为对应名称。[工作流提示词](../../apps/desktop/src/lib/canvasWorkflow.ts)
 
 手动组图复用 [GenerationGroupMenuItem.tsx](../../apps/desktop/src/components/GenerationGroupMenuItem.tsx) 的 `MergeGenerationGroupMenuItem`（图片多选）和 `GenerationGroupMenuItem`（解散）。调用为 `AssetContextMenu` 与 `CanvasWorkspace`，显示继续共用 `GenerationGroupControls`／`CanvasConversationImages`。普通图片创作框的「并入上个生成」是显式选择，不复用模型会话作为展示别名；实现见 [显式合组](../CANVAS-WORKFLOW.md#2026-11-11显式抽卡与手动合组源码待发布)。

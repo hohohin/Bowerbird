@@ -17,6 +17,12 @@ export interface ChatCodexModel {
   id: string; model: string; displayName: string; isDefault: boolean; defaultReasoningEffort: string;
   supportedReasoningEfforts: { reasoningEffort: string; description: string }[];
 }
+export const DSH_MODELS: ChatCodexModel[] = [
+  { model: "deepseek-flash", displayName: "DeepSeek V4.1 Flash" },
+  { model: "deepseek-v4-pro", displayName: "DeepSeek V4 Pro" },
+].map((item, index) => ({ ...item, id: item.model, isDefault: index === 0, defaultReasoningEffort: "high",
+  supportedReasoningEfforts: ["off", "low", "high", "max"].map(reasoningEffort => ({ reasoningEffort, description: "" })) }));
+
 export function selectChatCodexModel(options: ChatCodexOptions, model: string, models: ChatCodexModel[]): ChatCodexOptions {
   if (!model) return {};
   const selected = models.find(item => item.model === model);

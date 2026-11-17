@@ -144,7 +144,7 @@ function ChatDshSetupDialog({ access, onClose, onAuthorize }: {
     <button type="button" className="app-modal-button is-primary" disabled={busy || !access.localAllowed || (manual && !url.trim())} onClick={() => void setup(manual)}>{busy ? "正在连接…" : manual ? "连接" : "一键连接本机 DSH"}</button>
   </>}>
     <fieldset disabled={busy} className="space-y-4">
-      <p className="text-sm">{access.dsh?.localAvailable && access.dsh.localMode !== "auto" ? "当前使用手动服务地址。一键连接可切换到本机自动模式。" : "使用本机 DSH 的登录账号和 Web 配置中的默认模型。"}</p>
+      <p className="text-sm">{access.dsh?.localAvailable && access.dsh.localMode !== "auto" ? "当前使用手动服务地址。一键连接可切换到本机自动模式。" : "使用本机 DSH 的登录账号。模型可在对话中选择，也可跟随服务配置。"}</p>
       <button type="button" aria-expanded={manual} onClick={() => setManual(!manual)}>手动配置服务地址</button>
       {manual && <><div><label htmlFor={`${id}-url`} className="text-sm">服务地址</label><input id={`${id}-url`} className="app-form-input mt-2 px-3 text-sm" type="url" value={url} onChange={event => setUrl(event.target.value)} spellCheck={false} /></div>
         <div><label htmlFor={`${id}-auth`} className="text-sm">登录链接（可选）</label><input id={`${id}-auth`} className="app-form-input mt-2 px-3 text-sm" type="password" autoComplete="off" value={authUrl} onChange={event => setAuthUrl(event.target.value)} spellCheck={false} /></div></>}

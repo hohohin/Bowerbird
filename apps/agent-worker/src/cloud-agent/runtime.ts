@@ -170,7 +170,8 @@ export async function runAgentWorker(
   const stop = options.stop ?? { requested: false };
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
-  const idleBackoff = new IdlePollBackoff(config.pollIntervalMs);
+  // Interactive text edits should start promptly even after a long idle period.
+  const idleBackoff = new IdlePollBackoff(config.pollIntervalMs, Math.max(config.pollIntervalMs, 5_000));
   let lastMaintenanceAt = Number.NEGATIVE_INFINITY;
   console.log(JSON.stringify({ event: "agent_worker_started", worker_id: config.workerId }));
   while (!stop.requested) {

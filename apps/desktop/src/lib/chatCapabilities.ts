@@ -1,6 +1,6 @@
 import { createStore } from "zustand";
 import { useStore } from "../store";
-import { localChat, chatProviderUnavailable, type ChatDshAccount, type ChatProvider, type ChatDshSetup } from "./localChat";
+import { selectChatCodexModel, type ChatCodexOptions, localChat, chatProviderUnavailable, type ChatDshAccount, type ChatProvider, type ChatDshSetup } from "./localChat";
 import { generationProviderIssue, type GenerationAvailabilityState, type ProviderIssue } from "./generationAvailability";
 import { canUseByo, effectivePolicy } from "./entitlement";
 import type { AuthSnapshot } from "./types";
@@ -35,6 +35,14 @@ function capability<T>(load: () => Promise<T>, fallback: string) {
 }
 
 export const codexModelCatalog = capability(localChat.models, "Codex 模型列表读取失败，请重试。");
+/** Resolve the concrete Codex values shown by the selector, including for pre-selector drafts. */
+export function selectedChatOptions(provider: ChatProvider, options?: ChatCodexOptions): ChatCodexOptions | undefined {
+  if (provider !== "codex-local") return options?.model || options?.reasoningEffort ? options : undefined;
+  const models = codexModelCatalog.store.getState().value;
+  const model = options?.model ?? (models?.find(item => item.isDefault) ?? models?.[0])?.model;
+  if (!model || !models) return options;
+  return { ...selectChatCodexModel(options ?? {}, model, models), ...options };
+}
 export function dshNeedsConfiguration(account: ChatDshAccount) {
   return account.state === "notInstalled" || (account.state !== "verified" && account.modelConfigured === false);
 }

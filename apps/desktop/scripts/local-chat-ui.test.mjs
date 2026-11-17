@@ -125,8 +125,12 @@ try {
   await card.getByRole('button', { name: '查看 Agent 详情', exact: true }).click(); await panel.waitFor();
   assert.match(await panel.getByRole('combobox', { name: 'Codex 模型', exact: true }).innerText(), /Codex 轻量测试/);
   await panel.getByRole('combobox', { name: 'Codex 模型', exact: true }).click();
-  await page.getByRole('option', { name: '默认模型', exact: true }).click();
-  assert.match(await card.getByRole('combobox', { name: 'Codex 模型', exact: true }).innerText(), /默认模型/);
+  assert.equal(await page.getByRole('option', { name: '默认模型', exact: true }).count(), 0);
+  await page.getByRole('option', { name: 'Codex 测试模型', exact: true }).click();
+  assert.match(await card.getByRole('combobox', { name: 'Codex 模型', exact: true }).innerText(), /Codex 测试模型/);
+  await panel.getByRole('combobox', { name: 'Codex 推理强度', exact: true }).click();
+  assert.equal(await page.getByRole('option', { name: '默认推理', exact: true }).count(), 0);
+  await page.keyboard.press('Escape');
 
   // History is reachable while composing the first message, without discarding that draft.
   await close(); await expandComposer();

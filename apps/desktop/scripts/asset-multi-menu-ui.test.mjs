@@ -31,6 +31,10 @@ try {
   await mkdir('.tmp/context-menu', { recursive: true });
   await page.goto('http://127.0.0.1:1796/scripts/fixtures/asset-multi-menu/preview.html', { waitUntil: 'domcontentloaded' });
   await page.locator('#trigger').click();
+  await root().getByRole('menuitem', { name: '维度', exact: true }).click();
+  assert.equal(await page.evaluate(async () => (await import('/src/store.ts')).useStore.getState().captionRing), 'a1');
+  await page.evaluate(async () => (await import('/src/store.ts')).useStore.getState().closeCaptionRing());
+  await page.locator('#trigger').click();
   assert.equal(await root().getByRole('menuitem', { name: '删除原文件…', exact: true }).count(), 0);
   // ArrowRight never changes column. Down traverses DOM order, left column then right.
   await root().getByRole('menuitem', { name: '打开图片详情', exact: true }).focus();

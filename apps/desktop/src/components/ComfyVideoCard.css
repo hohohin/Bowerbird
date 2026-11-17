@@ -1,6 +1,6 @@
 .comfy-video-card { display: grid; gap: 10px; }
 .comfy-prompt-field { position: relative; }
-.comfy-prompt-field > .h3-optimize-action { position: absolute; right: 8px; bottom: 8px; }
+.comfy-prompt-field > .h3-optimization-actions { position: absolute; right: 8px; bottom: 8px; }
 .workflow-card .comfy-video-prompt { display: block; width: 100%; margin: 0; padding-bottom: 44px; min-height: 220px; max-height: 360px; box-sizing: border-box; }
 .comfy-frame-slots { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .comfy-frame-slots .comfy-frame-action { position: absolute; z-index: 2; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border-radius: 4px; background: rgb(0 0 0 / 76%); color: #fff; }

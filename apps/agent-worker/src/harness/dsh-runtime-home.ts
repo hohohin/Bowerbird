@@ -51,7 +51,9 @@ export function createDshRuntimeHome(options: {
   templateDir: string;
   runtimeRoot: string;
   chat?: boolean;
+  chatOptions?: import("../../../cloud/supabase/functions/_shared/chat.ts").DshChatOptionsSelection;
   imageCardProvider?: boolean;
+  videoCardOptions?: boolean;
   nativeSession?: {dir: string; sessionId:string};
 }): DshRuntimeHome {
   const templateDir = resolve(options.templateDir);
@@ -83,10 +85,30 @@ export function createDshRuntimeHome(options: {
     for (const file of DSH_PROFILE_TEMPLATE_FILES) copyFileSync(join(templateDir, file), join(profileDir, file));
     for (const file of DSH_PROFILE_PLUGIN_FILES) copyFileSync(join(templateDir, "plugins", file), join(pluginDir, file));
     if (options.chat) {
-      copyFileSync(join(import.meta.dirname, "../cloud-chat/cordis.chat.patch.yml"), join(profileDir, "cordis.chat.patch.yml"));
+      let chatPatch = readFileSync(join(import.meta.dirname, "../cloud-chat/cordis.chat.patch.yml"), "utf8");
+      if (options.chatOptions) {
+        const { model, reasoningEffort } = options.chatOptions;
+        chatPatch = chatPatch.replace("thinking: disabled", "thinking: " + (reasoningEffort === "off" ? "disabled" : "enabled"))
+          .replace("reasoningEffort: off", "reasoningEffort: " + reasoningEffort)
+          .replace("id: deepseek-flash", "id: " + model)
+          .replace("name: DeepSeek-V4.1-Flash", "name: " + model);
+      }
+      writeFileSync(join(profileDir, "cordis.chat.patch.yml"), chatPatch, "utf8");
       copyFileSync(join(import.meta.dirname, "../cloud-chat/chat-cards.mjs"), join(pluginDir, "chat-cards.mjs"));
       const cardTool = JSON.parse(readFileSync(join(import.meta.dirname, "../../../cloud/supabase/functions/_shared/chat-card-tool.json"), "utf8"));
       if (!options.imageCardProvider) delete cardTool.inputSchema.properties.cards.items.properties.provider;
+      if (options.videoCardOptions !== true) {
+        const fields = cardTool.inputSchema.properties.cards.items.properties;
+        delete fields.videoChannel;
+        delete fields.videoOptions;
+        fields.mode.enum = ["count", "rows"];
+        fields.mode.description = "loop only: count repeats the body; rows feeds source table rows to the body.";
+        fields.resolution.enum = [0.6, 0.8, 1];
+        cardTool.description = cardTool.description
+          .replace("H3 video mode is text, reference (one image), or frames (default, first and optional last frame). ", "")
+          .replace("Frames may be omitted to create a draft; frames mode requires a first frame to run, reference mode requires one image, text mode needs none.", "Frames may be omitted to create a draft; running H3 requires a first frame.");
+      }
+
       writeFileSync(join(pluginDir, "chat-card-tool.json"), JSON.stringify(cardTool), "utf8");
       if (options.nativeSession) {
         copyFileSync(join(import.meta.dirname, "../cloud-chat/native-chat-acp.mjs"), join(pluginDir, "native-chat-acp.mjs"));

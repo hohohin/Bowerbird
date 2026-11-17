@@ -21,16 +21,17 @@ export function apply(ctx) {
     if (event.type === "assistant/message") reply = event.data.message.content.filter(block => block.type === "text").map(block => block.text).join("");
     if (event.type === "turn/end") done(event.data.reason.kind);
   });
+  const route = { provider: "deepseek-official", model: process.env.BOWERBIRD_DSH_CHAT_MODEL || "deepseek-flash", reasoningEffort: process.env.BOWERBIRD_DSH_CHAT_EFFORT || "off" };
   const connection = new AgentSideConnection(() => ({
     async initialize() { return { protocolVersion: PROTOCOL_VERSION, agentCapabilities: { loadSession: true }, authMethods: [] }; },
     async newSession({cwd}) {
       if (handle) throw new Error("session_already_open");
-      handle = await ctx.agents.create({ sessionId: process.env.BOWERBIRD_DSH_SESSION_ID, meta: { cwd }, agentOptions: { provider: "deepseek-official", model: "deepseek-flash" } });
+      handle = await ctx.agents.create({ sessionId: process.env.BOWERBIRD_DSH_SESSION_ID, meta: { cwd }, agentOptions: route });
       return { sessionId: handle.agent.session.id };
     },
     async loadSession({sessionId}) {
       if (handle || sessionId !== process.env.BOWERBIRD_DSH_SESSION_ID) throw new Error("invalid_session");
-      handle = await ctx.agents.resume({ resumeSessionId: sessionId, agentOptions: { provider: "deepseek-official", model: "deepseek-flash" } });
+      handle = await ctx.agents.resume({ resumeSessionId: sessionId, agentOptions: route });
       return {};
     },
     async prompt({sessionId, prompt}) {

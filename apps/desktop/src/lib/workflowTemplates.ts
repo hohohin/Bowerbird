@@ -82,7 +82,7 @@ export function parseWorkflowTemplate(raw: string): WorkflowTemplate {
     if (node.chatDshSkill !== undefined && (node.kind !== "agent" || node.chatProvider !== "dsh-cloud" || !isDshSkill(node.chatDshSkill))) fail("云端技能选择无效");
     if (node.chatCodexOptions !== undefined) {
       keys(node.chatCodexOptions, ["model", "reasoningEffort"]);
-      if (node.chatProvider !== "codex-local" || Object.values(node.chatCodexOptions).some(value => !label(value, 200) || /[\r\n\0]/.test(value))) fail("Codex 模型配置无效");
+      if (!node.chatProvider || Object.values(node.chatCodexOptions).some(value => !label(value, 200) || /[\r\n\0]/.test(value))) fail("Codex 模型配置无效");
     }
     if (node.kind === "loop" && value.schemaVersion < 4) fail("循环卡片需要新版工作流数据包");
     if (node?.overwriteDescribe !== undefined && (typeof node.overwriteDescribe !== "boolean" || node.kind !== "instruction" || node.action !== "describe")) fail("仅反推步骤可以配置覆盖已有描述");

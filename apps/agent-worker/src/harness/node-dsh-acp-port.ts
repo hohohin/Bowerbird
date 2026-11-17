@@ -51,6 +51,8 @@ export type NodeDshAcpPortOptions = {
   promptTimeoutMs?: number;
   activity?: ToolActivity;
   imageCardProvider?: boolean;
+  videoCardOptions?: boolean;
+  chatOptions?: import("../../../cloud/supabase/functions/_shared/chat.ts").DshChatOptionsSelection;
   profileMode?: "planning" | "controlled-model" | "html-execution" | "content-execution" | "chat";
   nativeSession?: { dir: string; sessionId: string };
 };
@@ -126,6 +128,10 @@ export function buildDshChildEnvironment(
   environment.DSH_PERMISSION_MODE = "read-only";
 
   if (options.providerEnvironment) Object.assign(environment, exactProviderEnvironment(options.providerEnvironment));
+  if (options.chatOptions) {
+    environment.BOWERBIRD_DSH_CHAT_MODEL = options.chatOptions.model;
+    environment.BOWERBIRD_DSH_CHAT_EFFORT = options.chatOptions.reasoningEffort;
+  }
   if (options.nativeSession) environment.BOWERBIRD_DSH_SESSION_ID = options.nativeSession.sessionId;
   return environment;
 }
@@ -205,6 +211,8 @@ export class NodeDshAcpPort implements DshAcpPort {
       runtimeRoot: options.runtimeRoot,
       chat: options.profileMode === "chat",
       imageCardProvider: options.imageCardProvider,
+      videoCardOptions: options.videoCardOptions,
+      chatOptions: options.chatOptions,
       nativeSession: options.nativeSession,
     });
     try {

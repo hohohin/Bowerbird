@@ -69,6 +69,9 @@ pub(super) fn create_body(
     let conversation = if db.local_chat_turn_uses_history(turn)? { format!("c-{id}") } else { format!("t-{turn}") };
     let mut body = json!({"action":"create","engine":ENGINE,"idempotency_key":key,"conversation_id":conversation,
         "messages":[{"role":"user","content":cloud_chat::current_text(&text,references)}],"tools_enabled":skill.is_none()});
+    if let Some(options) = db.local_chat_turn_options(turn)? {
+        body["dsh_options"] = serde_json::to_value(options)?;
+    }
     if let Some(skill) = skill {
         body["skill"] = serde_json::to_value(skill)?;
     }

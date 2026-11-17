@@ -83,7 +83,7 @@ export interface WorkflowStep {
   comfyProgress?: import("./comfyVideo").ComfyVideoProgress;
   comfyCancelled?: boolean;
   comfyStopping?: boolean;
-  comfyOptimization?: { input: import("./h3PromptOptimization").H3PromptInput | import("./h3PromptOptimization").H3ImagePromptInput; instruction: string; submissionStarted?: boolean; result?: string };
+  comfyOptimization?: { input: import("./h3PromptOptimization").H3PromptInput | import("./h3PromptOptimization").H3ImagePromptInput; instruction: string; inputBindings?: string; createdAt?: number; submissionStarted?: boolean; result?: string };
   agentInput?: { prompt: string; source: string; assetIds: string[]; visualProfile?: import("./types").VisualProfileDetail | null };
   chatInput?: import("./localChat").LocalChatSendInput;
   chatConversationId?: string;
@@ -456,7 +456,7 @@ export function generationInputNode(node: WorkflowNode, nodes: readonly Workflow
   if (usesConnectedAgentInputs(node)) return node;
   const refs = activePromptReferences(node);
   return { ...node, inputs: { ...node.inputs, ...Object.fromEntries((["text", "image"] as const).map(type =>
-    [type, (node.inputs[type] ?? []).filter(input => implicitGenerationInput(input, nodes) || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input)))])) } };
+    [type, (node.inputs[type] ?? []).filter(input => type === "image" || implicitGenerationInput(input, nodes) || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input)))])) } };
 }
 function usesConnectedAgentInputs(node: WorkflowNode) {
   return node.kind === "agent";
@@ -507,7 +507,7 @@ function generationMentionAssets(prompt: string, resolved: Map<string, WorkflowV
   return ids;
 }
 
-/** Include inactive connected images so they can be arranged before a mention is added. */
+/** Connected image order determines reference numbers; mentions only place them in the prompt. */
 export function generationReferencePreviewOrder(node: WorkflowNode, values: Record<string, WorkflowValue[]>, nodes: readonly WorkflowNode[]) {
   node = rebindGenerationReferences(node);
   const resolved = new Map<string, WorkflowValue>();
@@ -516,7 +516,8 @@ export function generationReferencePreviewOrder(node: WorkflowNode, values: Reco
     const value = values[ref.type]?.[index];
     if (value) resolved.set(ref.id, value);
   }
-  const ids = generationMentionAssets(node.prompt, resolved);
+  const ids = new Set(values.image?.flatMap(value => value.assetIds ?? []) ?? []);
+  for (const id of generationMentionAssets(node.prompt, resolved)) ids.add(id);
   for (const type of ["text", "image"] as const) for (const [index, binding] of (node.inputs[type] ?? []).entries()) {
     if (implicitGenerationInput(binding, nodes)) for (const id of values[type]?.[index]?.assetIds ?? []) ids.add(id);
   }
@@ -538,12 +539,13 @@ export function compileGenerationPrompt(node: WorkflowNode, values: Record<strin
     if (dynamic && !value.assetIds?.length) throw new WorkflowInputError(`上游处理结束后，引用「${ref.label}」仍没有可用图片，请检查来源卡片的输出`, node, ref.input, ref.label);
     resolved.set(ref.id, ref.type === "image" && ref.assetId && !dynamic ? { ...value, assetIds: [ref.assetId] } : value);
   }
-  const participating = generationMentionAssets(node.prompt, resolved);
+  const participating = new Set(values.image?.flatMap(value => value.assetIds ?? []) ?? []);
+  for (const id of generationMentionAssets(node.prompt, resolved)) participating.add(id);
   // New card-level connections are active without @. Explicit mentions still
   // control placement, so the same source is never appended a second time.
   const automaticText: WorkflowValue[] = [];
   for (const type of ["text", "image"] as const) for (const [index, input] of (inputs[type] ?? []).entries()) {
-    if (!implicitGenerationInput(input, nodes) || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input))) continue;
+    if ((type !== "image" && !implicitGenerationInput(input, nodes)) || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input))) continue;
     const value = values[type]?.[index];
     const label = `${type === "text" ? "文字" : "素材"}输入 ${input.slot ?? index + 1}`;
     if (emptyCompanionPort(type, index, inputs, values)) continue;

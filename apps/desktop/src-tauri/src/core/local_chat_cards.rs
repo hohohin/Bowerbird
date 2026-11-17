@@ -148,6 +148,10 @@ enum CardSpec {
         #[serde(rename = "mediaType")]
         media_type: String,
         provider: Option<String>,
+        #[serde(rename = "videoChannel")]
+        video_channel: Option<String>,
+        #[serde(rename = "videoOptions")]
+        video_options: Option<VideoDefaults>,
         ratio: Option<String>,
         #[serde(default, rename = "referenceAliases")]
         reference_aliases: Vec<String>,
@@ -157,6 +161,7 @@ enum CardSpec {
         id: String,
         title: String,
         prompt: String,
+        mode: Option<String>,
         seconds: Option<u32>,
         ratio: Option<String>,
         resolution: Option<f64>,
@@ -427,6 +432,8 @@ const CARD_FIELDS: &[&str] = &[
     "title",
     "prompt",
     "mediaType",
+    "videoChannel",
+    "videoOptions",
     "provider",
     "ratio",
     "referenceAliases",
@@ -465,6 +472,8 @@ fn normalize_card_fields(args: &mut Value) {
                 "title",
                 "prompt",
                 "mediaType",
+                "videoChannel",
+                "videoOptions",
                 "provider",
                 "ratio",
                 "referenceAliases",
@@ -474,6 +483,7 @@ fn normalize_card_fields(args: &mut Value) {
                 "kind",
                 "title",
                 "prompt",
+                "mode",
                 "seconds",
                 "ratio",
                 "resolution",
@@ -604,6 +614,8 @@ fn compile(
             CardSpec::Generation {
                 prompt,
                 media_type,
+                video_channel,
+                video_options,
                 provider,
                 ratio,
                 reference_aliases,
@@ -636,17 +648,24 @@ fn compile(
                     return Err(error("图片比例不受支持，请使用常用图片比例"));
                 }
                 node["ratio"] = json!(ratio);
+                if media_type == "image" && (video_channel.is_some() || video_options.is_some()) { return Err(invalid()); }
                 if media_type == "video" {
-                    let provider = if defaults.video_channel == "cloud" {
+                    let selected = ChatCardDefaults {
+                        provider: defaults.provider.clone(),
+                        video_channel: video_channel.clone().unwrap_or_else(|| defaults.video_channel.clone()),
+                        video_options: video_options.clone().unwrap_or_else(|| defaults.video_options.clone()),
+                    };
+                    selected.validate()?;
+                    let provider = if selected.video_channel == "cloud" {
                         format!(
                             "bowerbird-cloud-video_seedance25_{}",
-                            defaults.video_options.video_resolution
+                            selected.video_options.video_resolution
                         )
                     } else {
                         "jimeng".into()
                     };
                     node["provider"] = json!(provider);
-                    node["generation"] = json!({"media":"video","videoChannel":defaults.video_channel,"videoOptions":defaults.video_options,"ratio":ratio});
+                    node["generation"] = json!({"media":"video","videoChannel":selected.video_channel,"videoOptions":selected.video_options,"ratio":ratio});
                 } else {
                     node["generation"] = json!({"media":"image","ratio":ratio});
                 }
@@ -665,6 +684,7 @@ fn compile(
                 }
             }
             CardSpec::ComfyVideo {
+                mode,
                 prompt,
                 seconds,
                 ratio,
@@ -673,6 +693,7 @@ fn compile(
                 last_frame_alias,
                 ..
             } => {
+                let mode = mode.as_deref().unwrap_or("frames");
                 let seconds = seconds.unwrap_or(8);
                 let ratio = ratio.as_deref().unwrap_or("9:16");
                 let resolution = resolution.unwrap_or(0.8);
@@ -681,13 +702,16 @@ fn compile(
                     || prompt.contains("@[")
                     || !(1..=15).contains(&seconds)
                     || !matches!(ratio, "auto" | "9:16" | "16:9" | "4:3" | "3:4" | "1:1")
-                    || ![0.6, 0.8, 1.0].contains(&resolution)
+                    || !matches!(mode, "text" | "reference" | "frames")
+                    || !(if mode == "frames" { &[0.6, 0.8, 1.0][..] } else { &[0.6, 0.8, 0.98, 1.0][..] }).contains(&resolution)
+                    || (mode == "text" && (first_frame_alias.is_some() || last_frame_alias.is_some()))
+                    || (mode == "reference" && last_frame_alias.is_some())
                 {
                     return Err(invalid());
                 }
                 node["prompt"] = json!(prompt.trim());
                 node["provider"] = json!("comfy-video");
-                node["comfyVideo"] = json!({"endpoint":"http://127.0.0.1:8000","seconds":seconds,"ratio":ratio,"resolution":resolution});
+                node["comfyVideo"] = json!({"mode":mode,"endpoint":"http://127.0.0.1:8000","seconds":seconds,"ratio":ratio,"resolution":resolution});
                 for (port, alias) in [
                     ("first-frame", first_frame_alias),
                     ("last-frame", last_frame_alias),
@@ -847,7 +871,9 @@ fn compile(
         let valid = match (to_kind.as_str(), connection.input.as_str()) {
             ("generation", "text" | "image" | "signal") => connection.input == output_type,
             ("comfy-video", "text" | "signal") => connection.input == output_type,
-            ("comfy-video", "first-frame" | "last-frame") => output_type == "image",
+            ("comfy-video", "first-frame" | "last-frame") => output_type == "image" && nodes.iter().any(|node|
+                node["id"] == *to && node["comfyVideo"]["mode"] != "text"
+                    && (connection.input == "first-frame" || node["comfyVideo"]["mode"] != "reference")),
             ("trigger", "completion") => matches!(kind.as_str(), "generation" | "comfy-video"),
             ("loop", "signal") => output_type == "signal",
             _ => false,
@@ -952,7 +978,8 @@ fn compile(
                 .unwrap_or(&[]);
             let dynamic = images.iter().any(|i| i.get("assetId").is_none());
             let count = images.len();
-            let selected = defaults.video_options.kind.as_str();
+            let selected = node["generation"]["videoOptions"]["kind"].as_str().unwrap_or("text2video").to_string();
+            let cloud = node["generation"]["videoChannel"] == "cloud";
             let mode = if count == 0 {
                 "text2video"
             } else if dynamic {
@@ -960,7 +987,7 @@ fn compile(
             } else if selected == "frames2video" && count == 2 {
                 "frames2video"
             } else if selected == "multimodal2video" {
-                selected
+                "multimodal2video"
             } else if count == 1 {
                 "image2video"
             } else {
@@ -968,7 +995,7 @@ fn compile(
             };
             let options = &mut node["generation"]["videoOptions"];
             options["kind"] = json!(mode);
-            if defaults.video_channel == "cloud" {
+            if cloud {
                 options["model_version"] = json!("seedance2.5");
                 if options["video_resolution"] == "4k" {
                     options["video_resolution"] = json!("720p");
@@ -998,7 +1025,7 @@ fn compile(
             {
                 return Err(error("当前视频模型不支持这些输入，请切换视频模型后再创建"));
             }
-            if defaults.video_channel == "cloud" {
+            if cloud {
                 node["provider"] = json!(format!(
                     "bowerbird-cloud-video_seedance25_{}",
                     node["generation"]["videoOptions"]["video_resolution"]

@@ -21,3 +21,12 @@
   opacity: 0; pointer-events: none;
 }
 .canvas-cell-connection.canvas-connection-handle:disabled { opacity: 0; pointer-events: none; }
+
+/* Column insertion stays on its visible button, leaving the cell edge for wires. */
+.canvas-note.is-content-card .canvas-text-insert.is-column { top:calc(100% + 8px); width:20px; height:20px; }
+.canvas-note.is-content-card .canvas-text-insert.is-column::before { display:none; }
+.canvas-note.is-content-card .canvas-text-insert.is-column svg { top:0; left:0; }
+
+/* Keep gallery paging inside the image, clear of the edge connection handles. */
+.canvas-text-cell > .canvas-conversation-images .previous { left:16px; }
+.canvas-text-cell > .canvas-conversation-images .next { right:16px; }

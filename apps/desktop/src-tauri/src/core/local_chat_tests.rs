@@ -238,7 +238,10 @@ fn local_chat_dsh_providers_keep_identity_and_reject_codex_options() {
         assert!(db.begin_local_chat(&serde_json::from_value(raw.clone()).unwrap()).is_err());
         raw["provider"] = serde_json::json!(provider);
         raw["codexOptions"] = serde_json::json!({"model":"test"});
-        assert!(db.begin_local_chat(&serde_json::from_value(raw).unwrap()).is_err());
+        assert!(db.begin_local_chat(&serde_json::from_value(raw.clone()).unwrap()).is_err());
+        raw["codexOptions"] = serde_json::json!({"model":"deepseek-v4-pro","reasoningEffort":"max"});
+        let chosen = db.begin_local_chat(&serde_json::from_value(raw.clone()).unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(db.local_chat_turn_options(&chosen.turn_id).unwrap()).unwrap(), raw["codexOptions"]);
     }
 }
 
@@ -253,7 +256,7 @@ fn local_chat_model_options_reject_cloud_and_malformed_values_without_creating_t
     let mut raw = serde_json::to_value(input("cloud-model")).unwrap();
     raw["provider"] = serde_json::json!("deepseek-cloud");
     raw["codexOptions"] = serde_json::json!({});
-    assert!(db.begin_local_chat(&serde_json::from_value(raw).unwrap()).err().unwrap().to_string().contains("Codex"));
+    assert!(db.begin_local_chat(&serde_json::from_value(raw).unwrap()).err().unwrap().to_string().contains("DSH"));
     assert!(db.list_local_chats("project-a").unwrap().is_empty());
 }
 

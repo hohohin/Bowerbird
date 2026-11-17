@@ -6,7 +6,6 @@ use crate::{
 };
 use std::{
     collections::HashSet,
-    fs,
     path::{Path, PathBuf},
 };
 
@@ -23,14 +22,7 @@ pub fn files(db: &Database, ids: &[String]) -> AppResult<Vec<PathBuf>> {
     let mut seen = HashSet::new();
     for asset in assets {
         let stored = Path::new(asset.store_path.as_deref().ok_or_else(unavailable)?);
-        let path = fs::canonicalize(stored).map_err(|_| unavailable())?;
-        if !path.is_file()
-            || !(external_files::image_path(&path)
-                || external_files::video_path(&path)
-                || external_files::audio_path(&path))
-        {
-            return Err(unavailable());
-        }
+        let path = external_files::original(stored).map_err(|_| unavailable())?;
         if seen.insert(path.clone()) {
             paths.push(path);
         }
@@ -115,6 +107,17 @@ mod tests {
                 .map(|path| fs::read(path).unwrap())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn drag_resolves_registered_markdown_and_rejects_a_missing_document() {
+        let (_temp, paths, db, _, originals) = fixture();
+        let document = originals[0].with_file_name("笔记.md");
+        fs::write(&document, "# 正文").unwrap();
+        let ids = [db.index_connected_file(&paths, &document, None).unwrap().id];
+        assert_eq!(files(&db, &ids).unwrap(), vec![document.clone()]);
+        fs::remove_file(document).unwrap();
+        assert!(files(&db, &ids).is_err());
     }
 
     #[test]

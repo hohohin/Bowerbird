@@ -20,7 +20,7 @@ pub fn image_path(path: &Path) -> bool {
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
     crate::media::is_image_ext(ext) || ext.eq_ignore_ascii_case("svg") || ext.eq_ignore_ascii_case("psd")
 }
-fn original(path: &Path) -> AppResult<PathBuf> {
+pub(super) fn original(path: &Path) -> AppResult<PathBuf> {
     let path =
         fs::canonicalize(path).map_err(|_| invalid("原素材不可用，请检查文件权限或重新定位"))?;
     if !path.is_file() || !(image_path(&path) || video_path(&path) || audio_path(&path) || crate::core::text_documents::text_path(&path)) {

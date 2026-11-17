@@ -98,7 +98,7 @@ async function create(
   const userId = user.id;
   if (
     Object.keys(raw).some((key) =>
-      !["action", "idempotency_key", "messages", "tools_enabled", "engine", "conversation_id", "skill", "image_card_provider"].includes(key)
+      !["action", "idempotency_key", "messages", "tools_enabled", "engine", "conversation_id", "skill", "image_card_provider", "video_card_options", "dsh_options"].includes(key)
     ) ||
     typeof raw.idempotency_key !== "string" || !raw.idempotency_key.trim() ||
     raw.idempotency_key.length > 200
@@ -108,7 +108,9 @@ async function create(
     engine: raw.engine,
     conversation_id: raw.conversation_id,
     skill: raw.skill,
+    dsh_options: raw.dsh_options,
     image_card_provider: raw.image_card_provider,
+    video_card_options: raw.video_card_options,
     ...(raw.tools_enabled === undefined
       ? {}
       : { tools_enabled: raw.tools_enabled }),
@@ -232,6 +234,7 @@ Deno.serve(async (request: Request) => {
           dsh_vps_available: false,
           dsh_vps_v2_available: available,
           image_card_provider: available,
+          video_card_options: available,
           dsh_vps_skills_available: available && await skillsAvailable(admin, user),
         },
         200,
