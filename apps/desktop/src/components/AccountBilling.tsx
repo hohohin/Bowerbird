@@ -72,12 +72,11 @@ export function AccountBilling({ loggedIn, entitlement }: {
         </fieldset>
         <div className="account-billing-checkout">
           <div className="account-billing-summary" aria-live="polite"><span>Pro {selectedPlan.title}</span><strong>¥{selectedPlan.price}</strong></div>
-          <button type="button" className="app-modal-button" disabled={!checkout.enabled || checkout.busy || checkout.restoring || checkout.recoveryFailed || current?.tier === "studio"} onClick={() => void checkout.begin(`pro_${plan}`)} aria-describedby={`${id}-plan-payment`}>{checkout.busy ? "正在处理…" : checkout.enabled ? "微信支付" : "购买暂未开放"}</button>
+          <button type="button" className="app-modal-button" disabled={!checkout.enabled || checkout.busy || checkout.restoring || checkout.recoveryFailed || current?.tier === "studio"} onClick={() => void checkout.begin(`pro_${plan}`)} aria-describedby={`${id}-plan-payment`}>{checkout.busy ? "正在处理…" : !loggedIn ? "登录后购买" : checkout.enabled ? `微信支付 ¥${selectedPlan.price}` : "购买暂未开放"}</button>
         </div>
         <p id={`${id}-plan-payment`} className="account-billing-note">
           {current?.tier === "studio" && "当前 Studio 权益继续保留。"}
-          {!loggedIn && "登录后可查看账号权益。"}
-          {checkout.enabled ? "一次购买对应所选周期，不自动扣款。" : "微信支付尚未开放。已有兑换码可在账号管理中兑换。"}
+          {!loggedIn ? "登录后可购买 Pro。" : checkout.enabled ? "一次购买对应所选周期，不自动扣款。" : "微信支付尚未开放。已有兑换码可在账号管理中兑换。"}
         </p>
       </section>
 
@@ -115,9 +114,9 @@ export function AccountBilling({ loggedIn, entitlement }: {
             <span>支付 <strong>{amount === null ? "—" : `¥${formatNumber(amount)}`}</strong></span>
             <span>到账 <output aria-label="充值到账 Bcoin">{amount === null ? "—" : formatNumber(amount * 20)}</output> Bcoin</span>
           </div>
-          <button type="button" className="app-modal-button" disabled={!checkout.enabled || checkout.busy || checkout.restoring || checkout.recoveryFailed || amount === null} onClick={() => void checkout.begin(topup === "custom" ? "bcoin_custom" : `bcoin_${topup * 20}`, topup === "custom" ? amount! : undefined)} aria-describedby={`${id}-topup-payment`}>{checkout.busy ? "正在处理…" : checkout.enabled ? "微信充值" : "充值暂未开放"}</button>
+          <button type="button" className="app-modal-button" disabled={!checkout.enabled || checkout.busy || checkout.restoring || checkout.recoveryFailed || amount === null} onClick={() => void checkout.begin(topup === "custom" ? "bcoin_custom" : `bcoin_${topup * 20}`, topup === "custom" ? amount! : undefined)} aria-describedby={`${id}-topup-payment`}>{checkout.busy ? "正在处理…" : !loggedIn ? "登录后充值" : checkout.enabled ? amount === null ? "请输入充值金额" : `微信充值 ¥${formatNumber(amount)}` : "充值暂未开放"}</button>
         </div>
-        {!checkout.enabled && <p id={`${id}-topup-payment`} className="account-billing-note">{!loggedIn && "登录后可查看账号余额。"}微信支付尚未开放，当前可查看充值金额与到账 Bcoin。</p>}
+        {!checkout.enabled && <p id={`${id}-topup-payment`} className="account-billing-note">{loggedIn ? "微信充值暂不可用。" : "登录后可使用微信充值。"}</p>}
       </section>
       {checkout.recoveryFailed && <div role="status">
         {(checkout.error || checkout.hasAttempt || checkout.enabled) && <p className="account-billing-note">

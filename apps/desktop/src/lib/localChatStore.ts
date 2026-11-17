@@ -1,11 +1,10 @@
 import { create } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import { listen } from "@tauri-apps/api/event";
-import { isDshSkill, type DshSkill } from "./dshSkill";
 import { parseChatProvider } from "./chatProvider";
 import { localChat, LOCAL_CHAT_UPDATED_EVENT, localChatInputError, localChatRunning, type ChatCodexOptions, type ChatConversation, type ChatSummary, type LocalChatSendInput } from "./localChat";
 
-export interface LocalChatDraft { text: string; referenceAssetIds: string[]; codexOptions?: ChatCodexOptions; dshSkill?: DshSkill }
+export interface LocalChatDraft { text: string; referenceAssetIds: string[]; codexOptions?: ChatCodexOptions }
 const DRAFT_STORAGE = "bowerbird.localChat.drafts.v1";
 const EMPTY_DRAFT: LocalChatDraft = { text: "", referenceAssetIds: [] };
 function readDrafts(): Record<string, LocalChatDraft> {
@@ -14,7 +13,7 @@ function readDrafts(): Record<string, LocalChatDraft> {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     return Object.fromEntries(Object.entries(parsed).filter(([, value]) => value && typeof value.text === "string"
       && Array.isArray(value.referenceAssetIds) && value.referenceAssetIds.every((id: unknown) => typeof id === "string"))
-      .map(([id, { dshSkill, ...draft }]) => [id, isDshSkill(dshSkill) ? { ...draft, dshSkill } : draft]));
+      .map(([id, { text, referenceAssetIds, codexOptions }]) => [id, { text, referenceAssetIds, codexOptions }]));
   } catch { return {}; }
 }
 function saveDrafts(drafts: Record<string, LocalChatDraft>) {
@@ -222,7 +221,7 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
   },
   setDraft: (conversationId, draft) => {
     const drafts = { ...get().drafts };
-    if (!draft.text && !draft.referenceAssetIds.length && !draft.codexOptions && !draft.dshSkill) delete drafts[conversationId];
+    if (!draft.text && !draft.referenceAssetIds.length && !draft.codexOptions) delete drafts[conversationId];
     else drafts[conversationId] = draft;
     saveDrafts(drafts);
     set({ drafts });

@@ -6,11 +6,12 @@ const server = await createServer({ cacheDir: '.tmp/catalog-move-entries/vite', 
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const url = server.resolvedUrls.local[0] + 'scripts/fixtures/connected-collections/preview.html?file-tasks';
-const name = '移动至文件夹';
+const name = '移动到文件夹';
 try {
   for (const view of ['global', 'tags', 'project', 'collections']) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' });
     page.setDefaultTimeout(7000);
+    page.setDefaultNavigationTimeout(90000);
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(url);
@@ -19,9 +20,26 @@ try {
       const backend = window.__TAURI_INTERNALS__;
       const previous = backend.invoke.bind(backend);
       window.moveTasks = [];
+      window.projectMoves = [];
+      window.exports = [];
+      window.exportPickers = [];
+      const projects = [
+        {id:'test-project',name:'测试项目',archived_at:null},
+        {id:'other-project',name:'目标项目',archived_at:null},
+        {id:'workspace',name:'创作中的项目',archived_at:null},
+      ];
+      window.store.setState({ projects, activeProjectId:'workspace' });
       const receipts = [];
       const assets = window.entries.slice(0, 3).map(item => item.asset);
       backend.invoke = async (cmd, args) => {
+        if (cmd === 'list_projects') return projects;
+        if (cmd === 'move_assets_to_project') { window.projectMoves.push(args); return {changed:args.assetIds.length}; }
+        if (cmd === 'plugin:dialog|open' || cmd === 'plugin:dialog|save') {
+          window.exportPickers.push({cmd,options:args.options}); return window.exportPath ?? null;
+        }
+        if (cmd === 'export_assets_to_directory' || cmd === 'export_assets_zip') {
+          window.exports.push({cmd,...args}); return args.assetIds.length;
+        }
         if (cmd === 'catalog_overview') return { total: 3, untagged: 0, catalog: { tags: [{ id: 'tag', name: '测试标签', description: '', count: 3, projectCount: 0 }], collections: [], prompts: [], tag_asset_ids: {} } };
         if (cmd === 'catalog_page') { window.catalogProject = args.filter.projectId; return assets.slice(args.offset, args.offset + args.limit); }
         if (cmd === 'get_assets_by_ids') return assets.filter(asset => args.assetIds.includes(asset.id));
@@ -44,7 +62,6 @@ try {
         return previous(cmd, args);
       };
       if (view === 'project') {
-        window.store.setState({projects:[{id:'test-project',name:'测试项目',archived_at:null}]});
         window.mode.getState().selectProject('test-project');
       }
       if (view === 'collections') {
@@ -59,6 +76,7 @@ try {
       : page.locator(`.folder-media-card[data-asset-id="root-${index}"]`);
     const dialog = page.getByRole('dialog', { name, exact: true });
     const menu = page.getByRole('menuitem', { name, exact: true });
+    const action = label => page.getByRole('menuitem', { name:label, exact:true });
     const bar = page.getByRole('group', { name: '分类素材所选操作' });
     const confirm = async () => {
       await dialog.getByText('另一目录', { exact: true }).click();
@@ -74,6 +92,46 @@ try {
       assert.ok(await result.locator('details[open] li').count() === count);
       await page.keyboard.press('Escape');
     }
+    async function exportMenu() {
+      await item(0).click({button:'right'});
+      assert.equal(await action('将所选内容打包为压缩包').count(), 0);
+      await action('导出').hover();
+      const submenu = page.getByRole('menu', {name:'导出', exact:true});
+      await submenu.waitFor();
+      assert.equal(await submenu.locator('p').innerText(), '您也可以长按素材，看到界面变化后，直接将素材拖动到其他应用中');
+      assert.deepEqual(await submenu.getByRole('menuitem').allInnerTexts(), ['将所选内容导出到..','将所选内容打包为压缩包']);
+    }
+    await exportMenu();
+    await action('将所选内容导出到..').click();
+    await page.waitForFunction(() => window.exportPickers.length === 1);
+    assert.equal(await page.evaluate(() => window.exportPickers[0].options.directory), true);
+    assert.deepEqual(await page.evaluate(() => window.exports), []);
+    await page.evaluate(() => { window.exportPath = '/fixtures/export'; });
+    await exportMenu();
+    await action('将所选内容导出到..').click();
+    await page.waitForFunction(() => window.exports.length === 1);
+    assert.deepEqual(await page.evaluate(() => window.exports[0]), {cmd:'export_assets_to_directory',assetIds:['root-0'],path:'/fixtures/export'});
+    await item(0).click({modifiers:['Control']});
+    await item(1).click();
+    await page.evaluate(() => { window.exportPath = '/fixtures/export.zip'; });
+    await exportMenu();
+    await action('将所选内容打包为压缩包').click();
+    await page.waitForFunction(() => window.exports.length === 2);
+    const twoAssets = entryView ? ['root-0'] : ['root-0','root-1'];
+    assert.deepEqual(await page.evaluate(() => window.exports[1]), {cmd:'export_assets_zip',assetIds:twoAssets,path:'/fixtures/export.zip'});
+    assert.equal(await page.evaluate(() => window.exportPickers.at(-1).options.title), '将所选内容打包为压缩包');
+    await item(0).click({button:'right'});
+    await action('移动到项目').click();
+    const projectDialog = page.getByRole('dialog',{name:'移动到项目',exact:true});
+    const moveButton = projectDialog.getByRole('button',{name:'移动',exact:true});
+    assert.ok(await moveButton.isDisabled());
+    await projectDialog.getByRole('radio',{name:'目标项目',exact:true}).check();
+    await moveButton.click();
+    await projectDialog.waitFor({state:'detached'});
+    assert.deepEqual(await page.evaluate(() => window.projectMoves), [{
+      assetIds:twoAssets,sourceProjectId:view === 'project' ? 'test-project' : null,targetProjectId:'other-project',
+    }]);
+    await bar.waitFor({state:'detached'});
     await item(0).click({button:'right'});
     await menu.click();
     await dialog.getByRole('button', { name:'取消', exact:true }).click();
@@ -131,7 +189,10 @@ try {
       await checkOmissions(2);
     }
     assert.deepEqual(errors, []);
-    console.log('PASS', view, 'single, multi-context, selection bar, cancel and frozen identity');
+    console.log('PASS', view, 'project and folder moves, directory and ZIP export, selection identity and partial receipts');
     await page.close();
   }
+} catch (error) {
+  console.error(error);
+  throw error;
 } finally { await browser.close(); await server.close(); }

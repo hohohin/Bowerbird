@@ -19,7 +19,7 @@ try {
   assert.equal(await page.getByRole('button', { name: '购买暂未开放' }).isDisabled(), true);
   assert.equal(await page.evaluate(() => window.calls.filter(c => c.command === 'cloud_create_checkout').length), 0);
   await page.evaluate(() => { window.enabled = true; window.remount(); });
-  const buy = page.getByRole('button', { name: '微信支付', exact: true });
+  const buy = page.getByRole('button', { name: '微信支付 ¥39', exact: true });
   await buy.waitFor();
   await page.waitForFunction(() => !document.querySelector('button[aria-describedby$="plan-payment"]')?.disabled);
   await page.evaluate(() => { window.mode = 'query-error'; window.remount(); });
@@ -76,7 +76,7 @@ try {
 
   await page.getByRole('radio', { name: '自定义充值金额', exact: true }).check();
   await page.getByLabel('自定义充值金额（元）', { exact: true }).fill('1234');
-  await page.getByRole('button', { name: '微信充值', exact: true }).click();
+  await page.getByRole('button', { name: /^微信充值 ¥/ }).click();
   await dialog.getByRole('img', { name: '微信付款二维码' }).waitFor();
   assert.match(await dialog.innerText(), /¥1234\.00/);
   assert.match(await dialog.innerText(), /24,680 Bcoin/);
@@ -111,7 +111,7 @@ try {
   await page.evaluate(() => { window.enabled = true; window.store.setState({ accountOnboardingForceOpen: true }); window.remount(); });
   const account = page.getByRole('dialog', { name: '设置', exact: true });
   await account.getByText('查看会员方案与充值', { exact: true }).click();
-  await account.getByRole('button', { name: '微信支付', exact: true }).click();
+  await account.getByRole('button', { name: '微信支付 ¥39', exact: true }).click();
   await dialog.getByRole('img', { name: '微信付款二维码' }).waitFor();
   await dialog.getByRole('button', { name: '查询支付结果' }).focus();
   await page.keyboard.press('Escape');

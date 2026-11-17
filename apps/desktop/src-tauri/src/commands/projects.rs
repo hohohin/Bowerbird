@@ -12,7 +12,7 @@ use crate::core::ingest;
 use crate::core::paths::LibraryPaths;
 use crate::core::projects::{
     refresh_workspace_assets, ActiveProjectContext, Project, ProjectCreateResult,
-    ProjectDeleteImpact, ProjectDeleteMode, ProjectDeleteResult, ProjectRefreshResult,
+    ProjectAssetMoveResult, ProjectDeleteImpact, ProjectDeleteMode, ProjectDeleteResult, ProjectRefreshResult,
 };
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
@@ -238,15 +238,33 @@ pub async fn add_assets_to_project(
 }
 
 #[tauri::command]
+pub async fn move_assets_to_project(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    source_project_id: Option<String>,
+    target_project_id: String,
+    asset_ids: Vec<String>,
+) -> Result<ProjectAssetMoveResult, AppError> {
+    let db = db.inner().clone();
+    let result = tokio::task::spawn_blocking(move || {
+        db.move_assets_to_project(source_project_id.as_deref(), &target_project_id, &asset_ids)
+    }).await.map_err(|error| AppError::Other(error.to_string()))??;
+    let _ = app.emit("projects://changed", ());
+    let _ = app.emit("library://assets-changed", ());
+    Ok(result)
+}
+
+#[tauri::command]
 pub async fn remove_assets_from_project(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
     project_id: String,
     asset_ids: Vec<String>,
+    remove_canvas_instances: Option<bool>,
 ) -> Result<usize, AppError> {
     let db = db.inner().clone();
     let removed =
-        tokio::task::spawn_blocking(move || db.remove_assets_from_project(&project_id, &asset_ids))
+        tokio::task::spawn_blocking(move || db.remove_assets_from_project(&project_id, &asset_ids, remove_canvas_instances.unwrap_or(false)))
             .await
             .map_err(|error| AppError::Other(error.to_string()))??;
     let _ = app.emit("projects://changed", ());

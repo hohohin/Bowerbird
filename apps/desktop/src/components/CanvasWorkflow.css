@@ -54,9 +54,16 @@
 .workflow-generation-parameters :is(select, .tactical-select-trigger) { width:auto; height:28px; padding:3px 8px; }
 .workflow-generation-parameters .model-select { flex:1 1 120px; max-width:100%; }
 .workflow-generation-parameters .model-select .model-select-trigger { width:100%; height:28px; padding:3px 8px; gap:5px; font-size:11px; }
-.workflow-video-controls { display:flex; flex-wrap:wrap; gap:8px; min-width:0; margin-bottom:12px; }
-.workflow-video-controls :is(select, .tactical-select-trigger) { width:auto; max-width:100%; }
-.workflow-video-controls p { font-size:11px; color:var(--bb-muted); line-height:1.5; }
+.workflow-video-controls { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:8px; min-width:0; margin:0 0 12px; padding:0; border:0; }
+.workflow-video-field { display:grid; align-content:start; gap:4px; min-width:0; }
+.workflow-video-controls > .workflow-video-field { grid-column:span 2; }
+.workflow-video-controls > .workflow-video-field:nth-child(-n+2) { grid-column:span 3; }
+.workflow-video-controls p { grid-column:1 / -1; }
+.workflow-video-field > span:first-child { font-size:12px; line-height:1.35; color:var(--bb-muted); }
+.workflow-video-field :is(button,select,input) { max-width:100%; min-height:30px; }
+.workflow-video-field :is(button,select) { width:100%; }
+.workflow-video-field :focus-visible { outline:2px solid var(--bb-blue); outline-offset:2px; }
+.workflow-video-controls p { font-size:12px; color:var(--bb-muted); line-height:1.5; }
 .workflow-port { position:absolute; height:20px; padding:0; font-size:11px; color:var(--bb-muted); }
 .workflow-port.is-input { left:-7px; flex-direction:row; }
 .workflow-port.is-output { right:-7px; flex-direction:row-reverse; }
@@ -309,3 +316,17 @@ html[data-theme] .canvas-tactical .workflow-card.is-trigger footer { margin-top:
 .workflow-template-save-options p { font-size: 12px; color: var(--bb-muted); }
 .canvas-workflow-container-badge { color: var(--bb-blue); white-space: nowrap; font-size: 11px; }
 .canvas-note[data-workflow-container] { border-color: var(--bb-blue); }
+
+/* The generation controls keep their full card width; both HUD tabs dock to its left edge. */
+.workflow-media-settings .workflow-generation-parameters { padding:0; min-width:0; }
+html[data-theme] .canvas-tactical .workflow-card > .workflow-media-tabs {
+  --projection-tag:235 242 247;
+  position:absolute; z-index:2; top:46px; right:calc(100% - 3px); width:max-content;
+  align-items:flex-end; pointer-events:none;
+}
+html[data-theme] .canvas-tactical .workflow-card > .workflow-media-tabs > button {
+  width:auto; padding-inline:8px; pointer-events:auto;
+}
+html[data-theme] .canvas-tactical .workflow-card > .workflow-media-tabs > button::before,
+html[data-theme] .canvas-tactical .workflow-card > .workflow-media-tabs > button::after { inset-inline:0; }
+.workflow-media-tabs button:focus-visible { outline:2px solid var(--bb-blue); outline-offset:2px; }

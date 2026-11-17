@@ -132,7 +132,7 @@ pub(crate) fn hide_removed_original_canvas_nodes(conn: &rusqlite::Connection, pa
         "SELECT asset_id FROM trashed_asset_originals WHERE path=?1 UNION SELECT asset_id FROM removed_missing_asset_originals WHERE path=?1")?;
     let ids = statement.query_map([path], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
     for id in ids {
-        hide_empty_generation_cards_for_asset(conn, &id)?;
+        hide_empty_generation_cards_for_asset(conn, &id, None)?;
         hide_asset_canvas_nodes(conn, &id, None)?;
     }
     Ok(())
@@ -144,10 +144,12 @@ pub(crate) fn hide_removed_original_canvas_nodes(conn: &rusqlite::Connection, pa
 pub(crate) fn hide_empty_generation_cards_for_asset(
     conn: &rusqlite::Connection,
     asset_id: &str,
+    project_id: Option<&str>,
 ) -> AppResult<()> {
     conn.execute(
         "UPDATE canvas_nodes AS prompt SET hidden_at = ?2, updated_at = ?2
          WHERE prompt.kind = 'prompt' AND prompt.hidden_at IS NULL
+           AND (?3 IS NULL OR prompt.project_id = ?3)
            AND json_extract(prompt.payload_json, '$.job_id') IS NOT NULL
            AND prompt.id IN (
                SELECT e.from_node_id FROM canvas_nodes output JOIN canvas_edges e ON output.id = e.to_node_id
@@ -159,10 +161,11 @@ pub(crate) fn hide_empty_generation_cards_for_asset(
                JOIN assets a ON a.id = output.asset_id
                WHERE e.from_node_id = prompt.id AND e.kind = 'produced'
                  AND output.kind = 'asset' AND output.role = 'output' AND a.id <> ?1
+                 AND (?3 IS NULL OR output.hidden_at IS NULL)
                  AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=a.id)
                  AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)
            )",
-        params![asset_id, Utc::now().timestamp()],
+        params![asset_id, Utc::now().timestamp(), project_id],
     )?;
     Ok(())
 }
@@ -3780,7 +3783,7 @@ mod tests {
         image_grid["note_type"] = serde_json::json!("text");
         image_grid["cells"][0][0]["content_type"] = serde_json::json!("image");
         image_grid["cells"][0].as_array_mut().unwrap().push(serde_json::json!({"id":"text-cell","text":"原样文本","content_type":"text","bold":false,"italic":false,"align":"left"}));
-        assert_eq!(db.remove_assets_from_project("p1", &["container-image".into()]).unwrap(), 1);
+        assert_eq!(db.remove_assets_from_project("p1", &["container-image".into()], false).unwrap(), 1);
         let mixed = db.update_canvas_note_payload("text", &image_grid.to_string()).unwrap();
         assert_eq!(serde_json::from_str::<serde_json::Value>(&mixed.payload_json).unwrap()["cells"][0][0]["content_type"], "image");
         assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM project_assets WHERE project_id='p1' AND asset_id='container-image'", [], |row| row.get::<_,i64>(0)).unwrap(), 0, "editing another cell must not re-add a removed member");

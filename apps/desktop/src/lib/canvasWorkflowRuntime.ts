@@ -1460,7 +1460,6 @@ export class CanvasWorkflowController {
       input = { requestId: crypto.randomUUID(), projectId: this.projectId, agentNodeId: node.id,
         ...(run.manualCardRun && run.startId === node.id ? { manualCardRun: true } : {}),
         conversationId: existing?.id ?? node.chatConversationId, provider,
-        ...(provider === "dsh-cloud" && node.chatDshSkill ? { dshSkill: node.chatDshSkill } : {}),
         codexOptions: existing ? useLocalChatStore.getState().drafts[existing.id]?.codexOptions ?? existing.codexOptions ?? node.chatCodexOptions : node.chatCodexOptions,
         text: workflowAgentMessage(cloudAgentProfilePrompt(snapshot.prompt, snapshot.visualProfile), snapshot.source, provider),
         referenceAssetIds: snapshot.assetIds,

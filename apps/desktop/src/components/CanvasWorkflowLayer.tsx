@@ -1559,6 +1559,14 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       </div>;
       const presentation = WORKFLOW_CARD_PRESENTATION[videoCard ? "comfy-video" : node.kind], CardIcon = node.kind === "trigger" ? TRIGGER_MODES.find(mode => mode.id === triggerMode)!.icon : presentation.icon;
       const running = !!starting || chatBusy || run?.status === "running" && step?.status === "running";
+      const videoControls = videoCard && <VideoControls card menuClassName="canvas-tactical-model-menu" options={videoOptions} channel={node.generation?.videoChannel ?? "jimeng"}
+        onChange={(options, channel) => {
+          if (channel) patch(node.id, selectWorkflowVideoProvider(node, channel, options), false);
+          else patch(node.id, { generation: { ...node.generation, videoOptions: options } });
+        }}
+        local={{ options: localVideo ? node.comfyVideo ?? DEFAULT_COMFY_VIDEO : undefined,
+          onSelect: () => { if (!localVideo) patch(node.id, selectWorkflowVideoProvider(node, "h3"), false); } }}
+        ratio={node.generation?.ratio ?? "16:9"} onRatioChange={ratio => patch(node.id, { generation: { ...node.generation, ratio } })} />;
       return <article key={node.id} data-canvas-node data-workflow-card={node.id} ref={element => { if (element) cardElements.current.set(node.id, element); else cardElements.current.delete(node.id); }} aria-busy={running} className={`workflow-card ${running ? "canvas-card-running" : failure && !failure.dismissed ? "canvas-card-error" : ""} is-${node.kind} ${localVideo ? "is-generation" : ""} ${selectedIds.has(node.id) ? "is-selected" : ""} ${armed ? "is-key-target" : ""}`}
         style={{ left: node.x, top: node.y, width: workflowCardWidth(node), minHeight: height, zIndex: selectedIds.has(node.id) ? 11000 : 9000 }}
         onPointerDownCapture={event => {
@@ -1650,17 +1658,15 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
               handle(controller.stop(run.id).then(() => { if (!controller.isLocked(node.id)) onRemove(node.id); }));
             }}><X size={15} /></button>
         </header>
-        {(node.kind === "generation" || localVideo) && <div className="workflow-generation-parameters" role="toolbar" aria-label="生成参数" onPointerDown={event => event.stopPropagation()}>
-          <fieldset disabled={busy}><TacticalSelect aria-label="生成类型" value={videoCard ? "video" : "image"} onValueChange={value => {
-            if (localVideo && value === "image") {
-              const next = selectWorkflowVideoProvider(node, node.generation?.videoChannel ?? "jimeng");
-              patch(node.id, { ...next, provider: state.activeGenProvider || state.defaultProvider, generation: { ...next.generation, media: "image" } }, false);
-            } else patch(node.id, { generation: { ...node.generation, media: value as "image" | "video" } });
-          }}>
-            <option value="image">图片</option><option value="video">视频</option>
-          </TacticalSelect>{!videoCard && <><RatioSelect value={node.ratio} onChange={ratio => patch(node.id, { ratio })} />
-            <ProviderSelect environmentInHeader value={node.provider} onChange={provider => patch(node.id, { provider })} codexHealth={state.codexHealth} dreaminaHealth={state.dreaminaHealth}
-              cloudAuth={state.cloudAuth} cloudEntitlement={state.cloudEntitlement} menuClassName="canvas-tactical-model-menu" /></>}</fieldset>
+        {(node.kind === "generation" || localVideo) && <div className="workflow-media-tabs" role="group" aria-label="生成类型" onPointerDown={event => event.stopPropagation()}>
+          {(["image", "video"] as const).map(media => <button type="button" key={media} aria-label={media === "image" ? "图片" : "视频"} title={media === "image" ? "图片" : "视频"} aria-pressed={videoCard === (media === "video")} disabled={busy}
+            onClick={() => {
+              if (videoCard === (media === "video")) return;
+              if (localVideo && media === "image") {
+                const next = selectWorkflowVideoProvider(node, node.generation?.videoChannel ?? "jimeng");
+                patch(node.id, { ...next, provider: state.activeGenProvider || state.defaultProvider, generation: { ...next.generation, media } }, false);
+              } else patch(node.id, { generation: { ...node.generation, media } });
+            }}>{media === "image" ? <Images size={13} aria-hidden="true" /> : <Clapperboard size={13} aria-hidden="true" />}{selectedIds.has(node.id) && <span>{media === "image" ? "图片" : "视频"}</span>}</button>)}
         </div>}
         <div className="workflow-card-body">
           {node.kind === "director3d" && <span>工作台已下架</span>}
@@ -1710,18 +1716,18 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
             }} />}
           {node.kind === "instruction" && node.action === "describe" && <WorkflowDescribeOption node={node} assetIds={inputIds} checked={!!node.overwriteDescribe} disabled={busy} onChange={overwriteDescribe => patch(node.id, { overwriteDescribe })} />}
           {node.kind === "visual-profile" && !node.profileId && <input className="workflow-profile-name" aria-label="规范名称" disabled={busy} maxLength={80} placeholder="画板视觉规范" value={node.profileName ?? ""} onChange={event => patch(node.id, { profileName: event.target.value }, false)} />}
-          {videoCard && <fieldset className="workflow-video-controls" disabled={busy} onPointerDown={event => event.stopPropagation()}>
-            <VideoControls menuClassName="canvas-tactical-model-menu" options={videoOptions} channel={node.generation?.videoChannel ?? "jimeng"}
-              onChange={(options, channel) => {
-                if (channel) patch(node.id, selectWorkflowVideoProvider(node, channel, options), false);
-                else patch(node.id, { generation: { ...node.generation, videoOptions: options } });
-              }}
-              local={{ options: localVideo ? node.comfyVideo ?? DEFAULT_COMFY_VIDEO : undefined,
-                onSelect: () => { if (!localVideo) patch(node.id, selectWorkflowVideoProvider(node, "h3"), false); } }}
-              ratio={node.generation?.ratio ?? "16:9"} onRatioChange={ratio => patch(node.id, { generation: { ...node.generation, ratio } })} />
-            {!localVideo && videoOptions.kind === "frames2video" && <p>第一张参考图作首帧，第二张作尾帧。</p>}
-          </fieldset>}
-          {localVideo && <ComfyVideoCard node={node}
+          {node.kind === "generation" && !localVideo && <div className="workflow-media-settings">
+            {!videoCard && <div className="workflow-generation-parameters" role="toolbar" aria-label="生成参数" onPointerDown={event => event.stopPropagation()}>
+              <fieldset disabled={busy}><RatioSelect value={node.ratio} onChange={ratio => patch(node.id, { ratio })} />
+                <ProviderSelect environmentInHeader value={node.provider} onChange={provider => patch(node.id, { provider })} codexHealth={state.codexHealth} dreaminaHealth={state.dreaminaHealth}
+                  cloudAuth={state.cloudAuth} cloudEntitlement={state.cloudEntitlement} menuClassName="canvas-tactical-model-menu" /></fieldset>
+            </div>}
+            {videoCard && <fieldset className="workflow-video-controls" disabled={busy} onPointerDown={event => event.stopPropagation()}>
+              {videoControls}
+              {videoOptions.kind === "frames2video" && <p>第一张参考图作首帧，第二张作尾帧。</p>}
+            </fieldset>}
+          </div>}
+          {localVideo && <ComfyVideoCard node={node} modelControl={videoControls}
                 step={step?.comfyOptimization ? step : [...workflowRuns(document)].reverse().find(item => item.steps[node.id]?.comfyOptimization?.result)?.steps[node.id]}
                 disabled={busy} readCurrentPrompt={readCurrentPrompt} optimizing={starting === "optimize" || (run?.status === "running" && !!step?.comfyOptimization)}
                 assets={assets} inputImages={inputImages} onChange={changes => patch(node.id, changes)} onOptimize={() => handle(controller.optimizeComfyPrompt(node.id))} />}

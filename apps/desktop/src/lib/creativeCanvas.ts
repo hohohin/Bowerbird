@@ -28,15 +28,9 @@ export interface CanvasAssetSnapshot {
   payloadJson?: string;
 }
 
-export const CANVAS_REMOVE_NODES_EVENT = "bowerbird:canvas-remove-nodes";
 export const CANVAS_ARRANGE_NODES_EVENT = "bowerbird:canvas-arrange-nodes";
 
 export interface CanvasArrangeNodesEventDetail {
-  projectId: string;
-  nodeIds: string[];
-}
-
-export interface CanvasRemoveNodesEventDetail {
   projectId: string;
   nodeIds: string[];
 }

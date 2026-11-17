@@ -4,7 +4,6 @@ import { workflowAgentProvider } from "../lib/workflowAgentChat";
 import { ChatProviderSelect, useChatProviderAccess } from "./creation/ChatProviderSelect";
 import { CodexModelSelect, useChatCodexModels } from "./creation/CodexModelSelect";
 import { localChatDraft, useLocalChatStore } from "../lib/localChatStore";
-import { DshSkillSelect } from "./creation/DshSkillSelect";
 
 /** Agent cards use the exact provider/model controls and availability checks of the composer. */
 export function AgentChatControls({ node, busy, onChange, onProviderChange, newChatAction }: {
@@ -23,8 +22,6 @@ export function AgentChatControls({ node, busy, onChange, onProviderChange, newC
       onChange={next => { if (next !== provider) onProviderChange(next); }} />
       {newChatAction}
     </div>
-    {provider === "dsh-cloud" && <DshSkillSelect value={node.chatDshSkill} onChange={chatDshSkill => onChange({ chatDshSkill })}
-      available={access.quote?.dsh_vps_skills_available === true} disabled={busy} />}
     {provider === "codex-local" && <CodexModelSelect value={options ?? {}} catalog={models} disabled={busy}
       onChange={chatCodexOptions => {
         if (conversationId) useLocalChatStore.getState().setDraft(conversationId, { ...localChatDraft(conversationId), codexOptions: chatCodexOptions });

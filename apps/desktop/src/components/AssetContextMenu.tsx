@@ -8,12 +8,12 @@ import { canSearchPinterest, requestPinterestSearch } from "../lib/pinterestSear
 import { isVideoPath } from "../lib/videoGeneration";
 import { isAudioAsset } from "../lib/audioMedia";
 import { isTextAsset } from "../lib/textMedia";
-import { Archive, ClipboardCopy, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Ungroup } from "lucide-react";
-import { exportAssetArchive } from "../lib/assetArchive";
+import { ClipboardCopy, FolderPlus, FolderTree, Layers, LayoutDashboard, MessageSquare, PenTool, ScanSearch, Trash2, Ungroup } from "lucide-react";
+import { AssetTransferMenuItems, useAssetTransferDialogs } from "./AssetTransferMenuItems";
 import { understandEngineUsable, useStore } from "../store";
 import { api } from "../lib/api";
 import { loadDescribePrompt } from "../lib/describePrompt";
-import { CollectionAssignDialog, CollectionMoveDialog } from "./CollectionDialogs";
+import { CollectionAssignDialog } from "./CollectionDialogs";
 import { CanvasAssetDeleteDialog } from "./CanvasAssetDeleteDialog";
 import { ModalShell } from "./ModalShell";
 import { RenameDialog } from "./RenameDialog";
@@ -23,10 +23,8 @@ import { isWorkspaceOperationCurrent } from "../lib/workspaceRoute";
 import type { Asset } from "../lib/types";
 import { externalFiles, OPEN_LOCAL_FILES } from "../lib/externalFiles";
 import {
-  CANVAS_REMOVE_NODES_EVENT,
   CANVAS_ARRANGE_NODES_EVENT,
   type CanvasArrangeNodesEventDetail,
-  type CanvasRemoveNodesEventDetail,
 } from "../lib/creativeCanvas";
 
 /** 可标注图片：浏览器 <img>/canvas 能解码的位图格式（tiff 浏览器不解码，排除）。 */
@@ -93,7 +91,7 @@ export function AssetContextMenu({ selection }: { selection?: {
   const [groupIds, setGroupIds] = useState<string[] | null>(null);
   const [renameTarget, setRenameTarget] = useState<{ id: string; name: string; external: boolean; localPath?: string } | null>(null);
   const [assignCollectionIds, setAssignCollectionIds] = useState<SelectionOperation | null>(null);
-  const [moveOriginals, setMoveOriginals] = useState<SelectionOperation | null>(null);
+  const transfer = useAssetTransferDialogs();
   const [projectPickIds, setProjectPickIds] = useState<SelectionOperation | null>(null);
   const [pendingCanvasDelete, setPendingCanvasDelete] = useState<{ assetIds: string[]; projectId: string | null; localPaths?: Record<string, string>; onComplete?: () => void } | null>(null);
   const [selectionAssets, setSelectionAssets] = useState<{ menu: typeof menu; assets: Asset[] } | null>(null);
@@ -126,7 +124,7 @@ export function AssetContextMenu({ selection }: { selection?: {
   // 非生成图 / 查询失败按无组处理，不显示整组删除。
   useEffect(() => {
     setGroupIds(null);
-    if (!menu) return;
+    if (!menu || menu.canvasSelection) return;
     const target = menu.asset ?? useStore.getState().assets.find((a) => a.id === menu.assetId);
     if (!target?.generation_session_id) return;
     let alive = true;
@@ -143,7 +141,7 @@ export function AssetContextMenu({ selection }: { selection?: {
 
   if (!menu) return <>
     {assignCollectionIds && <CollectionAssignDialog assetIds={assignCollectionIds.ids} onSaved={assignCollectionIds.onComplete} onClose={() => setAssignCollectionIds(null)} />}
-    {moveOriginals && <CollectionMoveDialog selection={{ assetIds: moveOriginals.ids }} onSaved={moveOriginals.onComplete} onClose={() => setMoveOriginals(null)} />}
+    {transfer.dialogs}
     {pendingCanvasDelete && <CanvasAssetDeleteDialog target={pendingCanvasDelete} onComplete={pendingCanvasDelete.onComplete} onClose={() => setPendingCanvasDelete(null)} />}
     {renameTarget && <RenameDialog open assetId={renameTarget.id} currentName={renameTarget.name} external={renameTarget.external} localPath={renameTarget.localPath} onClose={() => setRenameTarget(null)} />}
     {projectPickIds && <BatchAddToProjectsDialog ids={projectPickIds.ids} onComplete={projectPickIds.onComplete} onClose={() => setProjectPickIds(null)} />}
@@ -151,7 +149,7 @@ export function AssetContextMenu({ selection }: { selection?: {
 
   if (menu.moveIncompleteSelection) return <ContextMenu x={menu.x} y={menu.y} label="所选素材的操作" onClose={closeContextMenu}>
     <div className="app-context-label">部分所选条目已不存在</div>
-    <button role="menuitem" className="app-context-item" onClick={() => { menu.moveIncompleteSelection?.(); closeContextMenu(); }}>移动至文件夹</button>
+    <button role="menuitem" className="app-context-item" onClick={() => { menu.moveIncompleteSelection?.(); closeContextMenu(); }}>移动到文件夹</button>
   </ContextMenu>;
 
   // 守卫后捕获，闭包里直接用（TS 不会把守卫的收窄带进嵌套函数）。
@@ -164,12 +162,6 @@ export function AssetContextMenu({ selection }: { selection?: {
   const targetIds = multiIds ?? [assetId];
   const selectedCount = canvasMulti ? menu.canvasSelection!.nodeIds.length : menu.fileSelection?.entries?.count ?? multiIds?.length ?? 1;
   const connectionEntries = menu.fileSelection?.entries;
-  const moveEntries = !menu.canvasSelection && !menu.fileSelection?.localPaths && <button role="menuitem" className="app-context-item" disabled={busy}
-    onClick={() => {
-      if (connectionEntries) connectionEntries.move();
-      else setMoveOriginals({ ids: targetIds, onComplete });
-      closeContextMenu();
-    }}>移动至文件夹</button>;
   const knownAssets = menu.fileSelection?.assets ?? (selectionAssets?.menu === menu ? selectionAssets.assets : assets);
   const targets = targetIds.map(id => id === assetId ? asset ?? knownAssets.find(a => a.id === id) : knownAssets.find(a => a.id === id));
   const targetsReady = targets.every((item): item is Asset => !!item);
@@ -179,6 +171,8 @@ export function AssetContextMenu({ selection }: { selection?: {
   const projectId = menu.canvasSelection?.projectId ?? (menu.workspaceProjectId !== undefined ? menu.workspaceProjectId : activeProjectId);
   const membershipProjectId = menu.libraryProjectId ?? projectId;
   const onComplete = menu.fileSelection?.onComplete ?? (!selection && !menu.canvasSelection && multiIds ? exitManage : undefined);
+  const transfers = !menu.fileSelection?.localPaths && <AssetTransferMenuItems assetIds={targetIds} sourceProjectId={menu.canvasSelection?.projectId ?? menu.libraryProjectId ?? null}
+    dialogs={transfer} onClose={closeContextMenu} onMoveFolder={connectionEntries?.move} onComplete={onComplete} disabled={busy} />;
   const storePath = asset?.store_path ?? null;
   const canvasLibraryAvailable = canvasLibraryCheck?.menu === menu && canvasLibraryCheck.available;
   const canChangeLibraryVisibility = !!asset?.store_path && CANVAS_IMAGE_EXTS.includes((asset.ext ?? "").toLowerCase());
@@ -339,11 +333,14 @@ export function AssetContextMenu({ selection }: { selection?: {
     closeContextMenu();
   }
 
-  async function removeFromProject(ids: string[]) {
+  async function removeFromProject(ids: string[], removeCellImages?: () => void) {
     if (!membershipProjectId) return;
     setBusy(true);
     try {
-      await api.removeAssetsFromProject(membershipProjectId, ids);
+      const canvas = menu?.canvasSelection;
+      await canvas?.prepareProjectRemoval?.(ids);
+      await api.removeAssetsFromProject(membershipProjectId, ids, !!canvas);
+      if (canvas && !canvas.nodeIds.length && useStore.getState().activeProjectId === canvas.projectId) removeCellImages?.();
       await reloadProjects();
       notifySuccess("素材已移出当前项目");
       if (isCurrentMenu()) onComplete?.();
@@ -377,16 +374,30 @@ export function AssetContextMenu({ selection }: { selection?: {
       {menu.addCanvasImagesToBoard.count > 1 ? `添加所选 ${menu.addCanvasImagesToBoard.count} 张图片到对话框` : "添加到对话框"}
     </button>}
   </>;
-  const deleteMenu = <DeleteSubmenu disabled={busy}>
-    {connectionEntries?.removeReferences && <button role="menuitem" className={itemClass} onClick={() => { closeContextMenu(); connectionEntries.removeReferences!(); }}>移出该文件夹</button>}
+  const deletionTargets = menu.canvasSelection?.deletionTargets;
+  function canvasDeleteSubmenu(group: boolean) {
+    const target = group ? deletionTargets?.group : deletionTargets?.item;
+    return <ContextSubmenu label={group ? "删除当前组" : "删除当前项"}
+      icon={group ? <Layers size={13} /> : <Trash2 size={13} />} disabled={busy || !target}>
+      {target && <>
+        <button role="menuitem" className={itemClass} title="素材仍能在项目素材库找到"
+          onClick={() => { target.removeFromCanvas(); closeContextMenu(); }}>移出画布</button>
+        <button role="menuitem" className={itemClass} title="移除后，进入全局素材" disabled={!membershipProjectId}
+          onClick={() => void removeFromProject(target.assetIds, target.removeFromCanvas)}>移出项目</button>
+        <button role="menuitem" className={itemClass + " is-danger"} title="将文件放入回收箱，应用内不可见"
+          onClick={() => confirmDelete(target.assetIds)}>删除原文件</button>
+      </>}
+    </ContextSubmenu>;
+  }
+  const deleteMenu = menu.canvasSelection ? <>
     {menu.ungroupCanvasFolder && !canvasMulti && <button role="menuitem" className={itemClass} onClick={() => { closeContextMenu(); menu.ungroupCanvasFolder!(); }}><Ungroup size={13} />解散素材组</button>}
+    {canvasDeleteSubmenu(false)}
+    {canvasDeleteSubmenu(true)}
+  </> : <DeleteSubmenu disabled={busy}>
+    {connectionEntries?.removeReferences && <button role="menuitem" className={itemClass} onClick={() => { closeContextMenu(); connectionEntries.removeReferences!(); }}>移出该文件夹</button>}
     {!multiIds && menu.libraryProjectId && canChangeLibraryVisibility && !asset?.library_hidden && <button role="menuitem" className={itemClass}
       disabled={!canvasLibraryAvailable} title={canvasLibraryAvailable ? "从中央和各项目素材库列表移除，保留所有画布中的图片及原文件" : "请先将图片拖到当前画布"}
       onClick={() => void setLibraryVisibility(false)}>从库中删除 · 在画布保留</button>}
-    {menu.canvasSelection && <button role="menuitem" className={itemClass} onClick={() => {
-      if (menu.removeCanvasImage) menu.removeCanvasImage();
-      else window.dispatchEvent(new CustomEvent<CanvasRemoveNodesEventDetail>(CANVAS_REMOVE_NODES_EVENT, { detail: menu.canvasSelection })); closeContextMenu();
-    }}>{canvasMulti ? `从画布移出所选 ${menu.canvasSelection.nodeIds.length} 项` : "从画布移出"}</button>}
     {membershipProjectId && targetIds.length > 0 && <button role="menuitem" className={itemClass} title="仅移出当前项目 · 原文件保留" onClick={() => void removeFromProject(targetIds)}>移出当前项目</button>}
     {targetIds.length > 0 && <button role="menuitem" className={itemClass + " is-danger"} onClick={() => confirmDelete(targetIds)}>
       删除原文件
@@ -402,8 +413,8 @@ export function AssetContextMenu({ selection }: { selection?: {
       {canvasActions}
       {allImages && <MergeGenerationGroupMenuItem assetIds={targetIds} nodeIds={menu.canvasSelection?.nodeIds} projectId={projectId} disabled={busy} onComplete={() => { closeContextMenu(); onComplete?.(); }} />}
       {canSearchPinterest(asset) && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); selection?.onNavigate?.(); requestPinterestSearch(assetId); }}>Pinterest 以图搜图</button>}
-      {targetIds.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={assign}><FolderPlus size={13} />添加到文件夹</button>}{moveEntries}
-      {menu.canvasSelection && targetIds.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); void exportAssetArchive(targetIds); }}><Archive size={13} />将所选内容打包</button>}
+      {targetIds.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={assign}><FolderPlus size={13} />添加到文件夹</button>}
+      {transfers}
       {!projectId && projects.length > 0 && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { setProjectPickIds({ ids: targetIds, onComplete }); closeContextMenu(); }}><FolderTree size={13} />加入项目</button>}
       {allImages && <><div className="app-context-divider" />{describeMenu}</>}
       <div className="app-context-divider" />{deleteMenu}
@@ -438,8 +449,8 @@ export function AssetContextMenu({ selection }: { selection?: {
     </div>
     <div className="asset-context-column">
       <div className="app-context-label">文件</div>
-      <button role="menuitem" className={itemClass} disabled={busy} onClick={assign}><FolderPlus size={13} />添加到文件夹</button>{moveEntries}
-      {menu.canvasSelection && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => { closeContextMenu(); void exportAssetArchive(targetIds); }}><Archive size={13} />将所选内容打包</button>}
+      <button role="menuitem" className={itemClass} disabled={busy} onClick={assign}><FolderPlus size={13} />添加到文件夹</button>
+      {transfers}
       {storePath && <>
         <button role="menuitem" className={itemClass} disabled={busy} onClick={reveal}>打开所在文件夹</button>
         <button role="menuitem" className={itemClass} disabled={busy} onClick={async () => { setBusy(true); try { await api.openWithSystem(storePath); notifySuccess("已用系统程序打开素材"); closeContextMenu(); } catch (e) { notifyError(e, "无法用系统程序打开素材"); setBusy(false); } }}>用系统程序打开</button>

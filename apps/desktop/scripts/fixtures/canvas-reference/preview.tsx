@@ -357,6 +357,14 @@ w.__TAURI_INTERNALS__ = {
       w.emitAssetsChanged();
       return null;
     }
+    if (command === "remove_assets_from_project") {
+      if (w.failAssetDelete) throw "模拟删除失败";
+      if (args.removeCanvasInstances) {
+        for (const node of snapshot.nodes) if (node.projectId === args.projectId && args.assetIds.includes(node.assetId)) node.hiddenAt = 20;
+      }
+      w.emitAssetsChanged();
+      return args.assetIds.length;
+    }
     if (command === "delete_asset_with_mode") {
       if (w.failAssetDelete) throw "模拟删除失败";
       if (args.mode === "delete") {

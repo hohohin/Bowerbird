@@ -39,20 +39,22 @@ try {
       const menuBox = await menu.boundingBox();
       assert.ok(menuBox.width <= 401, `context menu should stay compact, got ${menuBox.width}px`);
       assert.equal(await menu.locator(".asset-context-column").count(), 2);
-      assert.equal(await menu.getByRole("menuitem", { name: "删除", exact: true }).locator("svg").count(), 2);
-      await menu.getByRole("menuitem", { name: "删除", exact: true }).click();
-      assert.equal(await page.getByRole("menu", { name: "删除", exact: true }).getByRole("menuitem", { name: "从画布移出", exact: true }).locator("svg").count(), 0);
+      assert.equal(await menu.getByRole("menuitem", { name: "删除当前项", exact: true }).locator("svg").count(), 2);
+      await menu.getByRole("menuitem", { name: "删除当前项", exact: true }).click();
+      assert.equal(await page.getByRole("menu", { name: "删除当前项", exact: true }).getByRole("menuitem", { name: "移出画布", exact: true }).locator("svg").count(), 0);
       if (mode === "keep") {
-        const moveOutOfProject = page.getByRole("menuitem", { name: "移出当前项目", exact: true });
-        assert.equal(await moveOutOfProject.getAttribute("title"), "仅移出当前项目 · 素材留在全局");
+        const moveOutOfProject = page.getByRole("menuitem", { name: "移出项目", exact: true });
+        assert.equal(await moveOutOfProject.getAttribute("title"), "移除后，进入全局素材");
         await moveOutOfProject.click();
       } else {
-        await page.getByRole("menuitem", { name: "物理删除", exact: true }).click();
-        await page.getByRole("dialog").getByRole("button", { name: "物理删除", exact: true }).click();
+        await page.getByRole("menuitem", { name: "删除原文件", exact: true }).click();
+        await page.getByRole("dialog").getByRole("button", { name: "删除原文件", exact: true }).click();
       }
     }
     await remove();
-    await page.getByText("模拟删除失败", { exact: false }).waitFor();
+    if (mode === "keep") await page.getByText("模拟删除失败", { exact: false }).waitFor();
+    else await page.waitForFunction(async () => (await window.__TAURI_INTERNALS__.invoke("list_file_tasks")).some(task =>
+      task.phase === "finished" && task.failures.some(failure => failure.message.includes("模拟删除失败"))));
     assert.equal(await node("old").count(), 1);
     assert.equal(await node("copy").count(), 1);
     await page.keyboard.press("Escape");

@@ -42,7 +42,7 @@ import { replicationWorkflow } from "../lib/replicationWorkflow";
 import { captureCanvasClipboard, cloneCanvasClipboard, parseCanvasClipboard, serializeCanvasClipboard, type CanvasClipboard } from "../lib/canvasClipboard";
 import { CanvasResizeHandle } from "./CanvasResizeHandle";
 import { CanvasLibraryResize } from "./CanvasLibraryResize";
-import { exportAssetArchive } from "../lib/assetArchive";
+import { AssetTransferMenuItems, useAssetTransferDialogs } from "./AssetTransferMenuItems";
 import { CanvasLayerMenuItem } from "./CanvasLayerMenuItem";
 import { CANVAS_LAYER_STEP_EVENT, stepCanvasLayers, type CanvasLayerStepDetail } from "../lib/canvasLayers";
 import { ReadonlyPrompt } from "./creation/ReadonlyPrompt";
@@ -201,7 +201,6 @@ import {
   canvasAssetMediaPath,
   canvasPromptReferences,
   agentPromptGroupMap,
-  CANVAS_REMOVE_NODES_EVENT,
   CANVAS_ARRANGE_NODES_EVENT,
   type CanvasArrangeNodesEventDetail,
   createCanvasAssetSnapshot,
@@ -216,7 +215,6 @@ import {
   persistedProjectActiveNodeId,
   rehydrateProjectCanvasAssets,
   type CanvasAssetSnapshot,
-  type CanvasRemoveNodesEventDetail,
   type ProjectCanvasUiNode,
 } from "../lib/creativeCanvas";
 import {
@@ -283,7 +281,7 @@ type CanvasUndoEntry =
   | { kind: "materials"; projectId: string; before: CanvasNode[]; after: CanvasNode[]; groups: Map<string, CanvasGroup> }
   | { kind: "workflow"; projectId: string; edit: WorkflowEditUndo }
   | { kind: "paste"; projectId: string; nodeIds: string[]; groupIds: string[]; workflowIds: string[] }
-  | { kind: "removal"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; groups: Map<string, CanvasGroup>; workflow?: WorkflowEditUndo | null }
+  | { kind: "removal"; changedFolders?: CanvasFolderNode[]; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; groups: Map<string, CanvasGroup>; workflow?: WorkflowEditUndo | null }
   | { kind: "geometry"; projectId: string; materials: CanvasNode[]; graph: ProjectGraphNode[]; workflow: WorkflowGeometry[] };
 
 interface ActiveCanvasState {
@@ -643,6 +641,7 @@ export function CanvasWorkspace({
   const videoFrameSaves = useRef(new Map<string, () => Promise<void>>());
   const videoTrimSaves = useRef(new Map<string, () => Promise<Asset>>());
   const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; section?: { id: string; name: string } | null; x: number; y: number; point: CanvasPoint | null } | null>(null);
+  const transfer = useAssetTransferDialogs();
   useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
   const viewSaveTimer = useRef<ReturnType<typeof setTimeout>>();
   const mediaZoomHandle = useRef<((value: number) => void) | null>(null);
@@ -956,16 +955,6 @@ export function CanvasWorkspace({
     if (marqueeElement.current) marqueeElement.current.hidden = true;
     marqueePressRef.current = null;
   }, [projectId]);
-
-  useEffect(() => {
-    function removeRequestedNodes(event: Event) {
-      const detail = (event as CustomEvent<CanvasRemoveNodesEventDetail>).detail;
-      if (!detail || detail.projectId !== activeCanvasRef.current.id) return;
-      removeNodes(detail.nodeIds);
-    }
-    window.addEventListener(CANVAS_REMOVE_NODES_EVENT, removeRequestedNodes);
-    return () => window.removeEventListener(CANVAS_REMOVE_NODES_EVENT, removeRequestedNodes);
-  }, []);
 
   useEffect(() => {
     function arrangeRequestedNodes(event: Event) {
@@ -1560,7 +1549,6 @@ export function CanvasWorkspace({
     const point = bounds ? toBoardPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 3) : { x: 80, y: 80 };
     const placement = placeCanvasCardNearSource({ x: point.x - 172, y: point.y, width: 344, height: 460 }, selectionAnchors().map(anchor => anchor.rect));
     const chat = await useLocalChatStore.getState().send({ projectId: id, text: request.prompt, provider: request.provider, codexOptions: request.codexOptions,
-      dshSkill: request.dshSkill,
       referenceAssetIds: request.references.map(asset => asset.id), cardDefaults: chatCardDefaults(), placement: { ...placement, width: 344, height: 460, zIndex: Date.now() % 1000000 } });
     if (activeCanvasRef.current.id === id && useStore.getState().projectRouteRevision === revision) openLocalChat(chat.id);
   }
@@ -3254,7 +3242,7 @@ export function CanvasWorkspace({
     }
   }
 
-  function canvasImagesForSelection(nodeIds: Iterable<string>, includeVideos = false) {
+  function canvasImagesForSelection(nodeIds: Iterable<string>, includeAllMedia = false) {
     const ids = new Set(nodeIds);
     for (const id of [...ids]) {
       const card = conversationCardsRef.current.cards.get(id);
@@ -3264,7 +3252,7 @@ export function CanvasWorkspace({
     for (const node of nodesRef.current) {
       if (!ids.has(node.id)) continue;
       for (const asset of node.kind === "asset" ? [(displayedMaterial(node) as CanvasAssetNode).asset] : node.assets) {
-        if (asset.assetId && asset.storePath && (includeVideos || (!isVideoPath(asset.storePath) && !isAudioPath(asset.storePath))) && !images.has(asset.assetId)) {
+        if (asset.assetId && (includeAllMedia || (asset.storePath && !isVideoPath(asset.storePath) && !isAudioPath(asset.storePath))) && !images.has(asset.assetId)) {
           images.set(asset.assetId, { assetId: asset.assetId, canvasNodeId: asset.id });
         }
       }
@@ -3281,6 +3269,21 @@ export function CanvasWorkspace({
     setSelectedCanvasNodeIds(new Set());
   }
 
+  async function prepareCanvasProjectRemoval(ids: string[], nodeIds: Iterable<string>) {
+    const project = activeCanvasRef.current;
+    await flushCanvasWrites(false);
+    if (activeCanvasRef.current.id !== project.id || useStore.getState().projectRoutePending) {
+      throw new Error("项目已切换，请返回原画布重试");
+    }
+    const assets = new Set(ids);
+    const affected = graphNodesRef.current.filter(node => node.hiddenAt == null && node.assetId && assets.has(node.assetId));
+    if ([...nodeIds, ...affected.map(node => node.id)].some(id => workflowRef.current?.isLocked(id))) {
+      throw new Error("卡片正在使用，请先停止对应任务再删除");
+    }
+  }
+
+  const removeMenuNodes = useLatestCallback(removeNodes);
+
   function openCanvasAssetContextMenu(
     event: React.MouseEvent<HTMLElement>,
     selectionNode: CanvasNode,
@@ -3288,10 +3291,6 @@ export function CanvasWorkspace({
   ) {
     event.preventDefault();
     event.stopPropagation();
-    if (selectedCanvasNodeIdsRef.current.has(selectionNode.id) && canvasWorkflowController(activeCanvasRef.current.id).document.nodes.some(node => selectedCanvasNodeIdsRef.current.has(node.id))) {
-      openCanvasNodeMenu(event, selectionNode.id);
-      return;
-    }
     if (!selectedAsset.assetId) {
       openCanvasNodeMenu(event, selectionNode.id);
       return;
@@ -3300,8 +3299,15 @@ export function CanvasWorkspace({
     const selectedIds = selectedCanvasNodeIdsRef.current.has(selectionNode.id)
       ? new Set(selectedCanvasNodeIdsRef.current)
       : new Set([selectionNode.id]);
+    const card = conversationCardsRef.current.cards.get(selectionNode.id);
+    const members = selectionNode.kind === "folder" ? selectionNode.assets : card?.outputs;
+    const itemId = selectedAsset.id;
+    const groupTarget = members && (selectionNode.kind === "folder" || members.length > 1) ? {
+      assetIds: [...new Set(members.flatMap(member => member.assetId ? [member.assetId] : []))],
+      removeFromCanvas: () => removeMenuNodes([selectionNode.id]),
+    } : undefined;
     openContextMenu(event.clientX, event.clientY, selectedAsset.assetId, {
-      generationGroup: canvasConversationGroupTarget(conversationCardsRef.current.cards.get(selectionNode.id)),
+      generationGroup: canvasConversationGroupTarget(card),
       ungroupCanvasFolder: selectionNode.kind === "folder" ? () => ungroupFolder(selectionNode) : undefined,
       addCanvasImagesToBoard: {
         count: canvasImagesForSelection(selectedIds).length,
@@ -3311,6 +3317,11 @@ export function CanvasWorkspace({
       canvasSelection: {
         projectId: activeCanvasRef.current.id,
         nodeIds: [...selectedIds],
+        deletionTargets: {
+          item: { assetIds: [selectedAsset.assetId], removeFromCanvas: () => removeMenuNodes([members?.length === 1 ? selectionNode.id : itemId], members?.length === 1) },
+          group: groupTarget,
+        },
+        prepareProjectRemoval: ids => prepareCanvasProjectRemoval(ids, [selectionNode.id]),
         assetIds: selectedIds.size > 1
           ? canvasImagesForSelection(selectedIds, true).map(asset => asset.assetId)
           : [selectedAsset.assetId],
@@ -3318,21 +3329,37 @@ export function CanvasWorkspace({
     });
   }
 
-  function openCellAssetContextMenu(event: React.MouseEvent<HTMLElement>, node: ProjectGraphNode, assetId: string, asset?: Asset, generationGroup?: { assetId?: string; groupKey?: string }) {
+  function openCellAssetContextMenu(event: React.MouseEvent<HTMLElement>, node: ProjectGraphNode, assetId: string, asset?: Asset, outputId?: string) {
     event.preventDefault(); event.stopPropagation(); cancelConversationImageClick(); setPromptMenu(null);
     const cellId = event.currentTarget.closest<HTMLElement>("[data-canvas-cell]")?.dataset.canvasCell;
+    const cell = readCanvasNote(node).cells.flat().find(item => item.id === cellId);
+    const session = cell?.generation_ref?.session_node_id;
+    const anchor = session && conversationCardsRef.current.aliases.get(session);
+    const card = anchor ? conversationCardsRef.current.cards.get(anchor) : undefined;
+    const assetIds = [...new Set(card?.allOutputs.flatMap(output => output.assetId ? [output.assetId] : []) ?? cell?.image_refs?.map(ref => ref.asset_id) ?? [])];
+    function clearCell(ids: string[]) {
+      const current = graphNodesRef.current.find(item => item.id === node.id);
+      if (!current || !cellId || canvasWorkflowController(activeCanvasRef.current.id).isLocked(node.id)) return;
+      const value = readCanvasNote(current);
+      updateCanvasNote(node.id, { ...value, cells: value.cells.map(row => row.map(item => item.id !== cellId ? item : {
+        ...item, generation_ref: undefined, image_refs: item.image_refs?.filter(ref => !ids.includes(ref.asset_id)),
+      })) });
+    }
     openContextMenu(event.clientX, event.clientY, assetId, {
-      asset, singleAsset: true, generationGroup,
-      canvasSelection: { projectId: activeCanvasRef.current.id, nodeIds: [], assetIds: [assetId] },
-      addCanvasImagesToBoard: { count: isVideoPath(asset?.store_path ?? event.currentTarget.dataset.filePath) ? 0 : 1, run: () => window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: assetId })) },
-      removeCanvasImage: () => {
-        const current = graphNodesRef.current.find(item => item.id === node.id);
-        if (!current || !cellId || canvasWorkflowController(activeCanvasRef.current.id).isLocked(node.id)) return;
-        const value = readCanvasNote(current);
-        updateCanvasNote(node.id, { ...value, cells: value.cells.map(row => row.map(cell => cell.id !== cellId ? cell : {
-          ...cell, generation_ref: undefined, image_refs: cell.image_refs?.filter(ref => ref.asset_id !== assetId),
-        })) });
+      asset, singleAsset: true, generationGroup: canvasConversationGroupTarget(card),
+      canvasSelection: {
+        projectId: activeCanvasRef.current.id, nodeIds: [], assetIds: [assetId],
+        prepareProjectRemoval: ids => prepareCanvasProjectRemoval(ids, [node.id]),
+        deletionTargets: {
+          item: { assetIds: [assetId], removeFromCanvas: () => {
+            if (outputId && card && card.allOutputs.length > 1) {
+              if (!canvasWorkflowController(node.projectId).isLocked(node.id)) removeMenuNodes([outputId], false);
+            } else clearCell([assetId]);
+          } },
+          group: assetIds.length > 1 ? { assetIds, removeFromCanvas: () => clearCell(assetIds) } : undefined,
+        },
       },
+      addCanvasImagesToBoard: { count: isVideoPath(asset?.store_path ?? event.currentTarget.dataset.filePath) ? 0 : 1, run: () => window.dispatchEvent(new CustomEvent(BOARD_ASSET_PICK_EVENT, { detail: assetId })) },
     });
   }
 
@@ -4354,11 +4381,11 @@ export function CanvasWorkspace({
     return () => { window.removeEventListener("copy", copy, true); window.removeEventListener("paste", paste, true); };
   }, [scopedInspectorOpen, workflowInteractive]);
 
-  function removeNodes(nodeIds: Iterable<string>) {
+  function removeNodes(nodeIds: Iterable<string>, expandConversations = true) {
     if (!workflowInteractive) return; // Deletion also checks locks on connected workflow cards.
     const ids = new Set(nodeIds);
     for (const id of [...ids]) {
-      const card = conversationCardsRef.current.cards.get(id);
+      const card = expandConversations && conversationCardsRef.current.cards.get(id);
       if (card) for (const member of [...card.sessions, ...card.outputs]) ids.add(member.id);
     }
     const materials = nodesRef.current.filter((node) => ids.has(node.id));
@@ -4369,7 +4396,7 @@ export function CanvasWorkspace({
     const draft = activeCanvasRef.current;
     const controller = canvasWorkflowController(draft.id);
     const workflowIds = new Set(controller.document.nodes.filter(node => ids.has(node.id)).map(node => node.id));
-    if ([...ids].some(id => workflowRef.current?.isLocked(id))) {
+    if ([...ids].some(id => workflowRef.current?.isLocked(id) || workflowRef.current?.isLocked(conversationCardsRef.current.aliases.get(id) ?? id))) {
       notify("卡片正在使用，请先停止对应任务再删除", "info"); return;
     }
     if (materials.length === 0 && graph.length === 0 && workflowIds.size === 0) return;
@@ -4383,8 +4410,11 @@ export function CanvasWorkspace({
       if (controller.document === before) return;
       workflow = workflowEditUndo(before, controller.document);
     }
-    pushCanvasUndo({ kind: "removal", projectId: draft.id, materials, graph, groups: new Map(groupsRef.current), workflow });
-    commitNodes(nodesRef.current.filter((node) => !ids.has(node.id)));
+    const changedFolders = nodesRef.current.filter((node): node is CanvasFolderNode =>
+      node.kind === "folder" && !ids.has(node.id) && node.assets.some(asset => ids.has(asset.id)));
+    pushCanvasUndo({ kind: "removal", projectId: draft.id, materials, graph, changedFolders, groups: new Map(groupsRef.current), workflow });
+    commitNodes(nodesRef.current.filter(node => !ids.has(node.id)).map(node =>
+      node.kind === "folder" && changedFolders.includes(node) ? { ...node, assets: node.assets.filter(asset => !ids.has(asset.id)) } : node));
     const next = graphNodesRef.current.map((node) => ids.has(node.id) ? { ...node, hiddenAt: Date.now() } : node);
     graphNodesRef.current = next;
     setGraphNodes(next);
@@ -4652,7 +4682,8 @@ export function CanvasWorkspace({
     }
     const ids = new Set(entry.graph.map((node) => node.id));
     const currentIds = new Set(nodesRef.current.map((node) => node.id));
-    commitNodes([...nodesRef.current, ...entry.materials.filter((node) => !currentIds.has(node.id))]);
+    const folders = new Map(entry.changedFolders?.map(folder => [folder.id, folder]));
+    commitNodes([...nodesRef.current.map(node => folders.get(node.id) ?? node), ...entry.materials.filter((node) => !currentIds.has(node.id))]);
     const graphIds = new Set(graphNodesRef.current.map((node) => node.id));
     const next = [...graphNodesRef.current.map((node) => ids.has(node.id) ? { ...node, hiddenAt: null } : node),
       ...entry.graph.filter((node) => !graphIds.has(node.id))];
@@ -4669,6 +4700,7 @@ export function CanvasWorkspace({
         }
         restored.add(original.id);
       }
+      for (const folder of folders.values()) await api.projectCanvasGroupSetItems(folder.id, folder.assets.map(asset => asset.id));
       for (const node of entry.materials) {
         const assets = node.kind === "asset" ? [node] : node.assets.map((asset, index) => groupedAssetNode(asset, node, index));
         for (const asset of assets) {
@@ -5596,7 +5628,7 @@ export function CanvasWorkspace({
                       const material = nodes.find(item => item.kind === "asset" && item.id === output.id);
                       return material?.kind === "asset" ? [material.asset] : [];
                     }) : [];
-                    if (images.length > 1 && anchorId) return <CanvasConversationImages images={images} imageOnly
+                    if (anchorId && images.length && (images.length > 1 || images[0].assetId !== cell.image_refs?.[0]?.asset_id)) return <CanvasConversationImages images={images} imageOnly
                       selectedId={selectedConversationImage(anchorId, images)?.id}
                       onSelect={selected => { cancelConversationImageClick(); setConversationImageSelection(previous => ({ ...previous, [anchorId]: { newest: images[images.length - 1].id, selected } })); }}
                       onPointerDown={event => event.stopPropagation()}
@@ -5605,7 +5637,7 @@ export function CanvasWorkspace({
                         if (event.detail < 2 && session) conversationImageClickRef.current = setTimeout(() => openWorkflowGeneration(card ? card.latest : session), event.detail === 0 ? 0 : 350);
                       }}
                       onDoubleClick={(_event, shown) => { cancelConversationImageClick(); const path = shown.storePath ?? shown.thumbPath; if (path) setCanvasLightbox({ images: [path], index: 0 }); }}
-                      onContextMenu={(event, shown) => { if (shown.assetId) openCellAssetContextMenu(event, node, shown.assetId, assetById.get(shown.assetId), canvasConversationGroupTarget(card || undefined)); }}/>
+                      onContextMenu={(event, shown) => { if (shown.assetId) openCellAssetContextMenu(event, node, shown.assetId, assetById.get(shown.assetId), shown.id); }}/>
                     if (cell.image_refs?.length) return null;
                     const summary = session && promptNodeSummary(session);
                     const running = summary && (genJobs[summary.jobId]?.running ?? ["running", "querying", "queued"].includes(summary.status));
@@ -5874,7 +5906,7 @@ export function CanvasWorkspace({
                   onLostPointerCapture={(event) => endNodeDrag(event, true)}
                   onContextMenu={node.kind === "asset"
                     ? (event) => openCanvasAssetContextMenu(event, node, node.asset)
-                    : (event) => openCanvasNodeMenu(event, node.id)}
+                    : (event) => node.assets[0] ? openCanvasAssetContextMenu(event, node, node.assets[0]) : openCanvasNodeMenu(event, node.id)}
                   onKeyDown={(event) => {
                     if ((event.target as HTMLElement).closest(".generation-group-arrow")) return;
                     if (event.key === "Enter") {
@@ -6071,6 +6103,7 @@ export function CanvasWorkspace({
                   )}
           </ProjectInspectorShell>
         )}
+        {transfer.dialogs}
         {promptMenu && <ContextMenu key={`${promptMenu.x}:${promptMenu.y}`} x={promptMenu.x} y={promptMenu.y}
           label={promptMenu.node?.kind === "agent_group" ? "Agent 执行组菜单" : promptMenu.node ? "生成指令菜单" : "画板节点菜单"}
           onClose={() => setPromptMenu(null)}>
@@ -6083,12 +6116,8 @@ export function CanvasWorkspace({
             {promptMenu.nodeIds.length > 0 && <button type="button" role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               void copyCanvasSelection(promptMenu.nodeIds); setPromptMenu(null);
             }}><Copy size={14} /> 复制所选卡片</button>}
-            {canvasImagesForSelection(promptMenu.nodeIds, true).length > 0 && <button type="button" role="menuitem" title="将所选内容制成压缩包"
-              className="app-context-item px-2 py-1.5" onClick={() => {
-                const ids = canvasImagesForSelection(promptMenu.nodeIds, true).map(asset => asset.assetId);
-                setPromptMenu(null);
-                void exportAssetArchive(ids);
-              }}><Archive size={14} /> 将所选内容打包</button>}
+            <AssetTransferMenuItems assetIds={canvasImagesForSelection(promptMenu.nodeIds, true).map(asset => asset.assetId)}
+              sourceProjectId={projectId} onClose={() => setPromptMenu(null)} dialogs={transfer} />
             {promptMenu.nodeIds.length > 0 && <button type="button" disabled={!workflowInteractive} role="menuitem" className="app-context-item px-2 py-1.5" onClick={() => {
               workflowRef.current?.saveTemplate(promptMenu.nodeIds, "container"); setPromptMenu(null);
             }}><Frame size={14} /> 封装为容器</button>}

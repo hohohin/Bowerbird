@@ -192,6 +192,9 @@ export type DescribeTask =
   | { kind: "batch"; ids: string[]; instruction: string }
   | { kind: "single"; assetId: string; instruction: string };
 
+type CanvasDeletionTarget = { assetIds: string[]; removeFromCanvas: () => void };
+type CanvasMenuSelection = { projectId: string; nodeIds: string[]; assetIds?: string[]; prepareProjectRemoval?: (assetIds: string[]) => Promise<void>; deletionTargets?: { item: CanvasDeletionTarget; group?: CanvasDeletionTarget } };
+
 interface State {
   libraryThumbnailWidth: number;
   canvasThumbnailWidth: number;
@@ -528,15 +531,14 @@ interface State {
     libraryProjectId?: string;
     addCanvasImagesToBoard?: { count: number; run: () => void };
     generationGroup?: { assetId?: string; groupKey?: string };
-    removeCanvasImage?: () => void;
     ungroupCanvasFolder?: () => void;
-    canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] };
+    canvasSelection?: CanvasMenuSelection;
   } | null;
   openContextMenu: (
     x: number,
     y: number,
     assetId: string,
-    context?: { asset?: Asset; moveIncompleteSelection?: () => void; generationGroup?: { assetId?: string; groupKey?: string }; singleAsset?: boolean; fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string>; entries?: { count: number; available: boolean; rename: () => void; move: () => void; removeReferences?: () => void } }; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[] }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void; removeCanvasImage?: () => void },
+    context?: { asset?: Asset; moveIncompleteSelection?: () => void; generationGroup?: { assetId?: string; groupKey?: string }; singleAsset?: boolean; fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string>; entries?: { count: number; available: boolean; rename: () => void; move: () => void; removeReferences?: () => void } }; libraryProjectId?: string; canvasSelection?: CanvasMenuSelection; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
   ) => void;
   closeContextMenu: () => void;
   // —— 项目右键菜单（侧栏项目行 / 收起态圆标）——

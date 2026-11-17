@@ -225,18 +225,18 @@ export function CollectionMoveDialog({ selection, onClose, onSaved }: {
           if (entry.version) versions[entry.id] = entry.version;
           if (!entry.is_reference) stopAudioPreview(entry.asset_id);
         }
-        await startFileTask({ kind: "move", ids: preview.entries.map(entry => entry.id), versions, folderId: target }, "移动至文件夹", preview.problems);
+        await startFileTask({ kind: "move", ids: preview.entries.map(entry => entry.id), versions, folderId: target }, "移动到文件夹", preview.problems);
       } else {
         for (const original of preview.originals) stopAudioPreview(original.asset_id);
-        await startFileTask({ kind: "moveoriginals", originals: preview.originals, folderId: target }, "移动至文件夹", preview.problems);
+        await startFileTask({ kind: "moveoriginals", originals: preview.originals, folderId: target }, "移动到文件夹", preview.problems);
       }
       onSaved?.(); onClose();
     } catch (reason) { setError(userErrorMessage(reason, "移动任务未提交，请重试。")); }
     finally { lock.current = false; setBusy(false); }
   }
-  return <ModalShell title="移动至文件夹" onClose={onClose} preventClose={busy} footer={<>
+  return <ModalShell title="移动到文件夹" onClose={onClose} preventClose={busy} footer={<>
     <button type="button" className="app-modal-button" onClick={onClose} disabled={busy}>取消</button>
-    <button type="button" className="app-button-accent" onClick={() => void move()} disabled={busy || !target || !count}>{busy ? "提交中…" : "移动至文件夹"}</button>
+    <button type="button" className="app-button-accent" onClick={() => void move()} disabled={busy || !target || !count}>{busy ? "提交中…" : "移动到文件夹"}</button>
   </>}>
     <div className="catalog-form">
       {preview ? <>

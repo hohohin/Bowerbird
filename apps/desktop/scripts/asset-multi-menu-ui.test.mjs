@@ -58,16 +58,18 @@ try {
     await menu.getByRole('menuitem', { name: '批量反推', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Bowerbird Cloud', exact: true }).click();
     assert.deepEqual(await page.evaluate(() => window.describe.splice(0).map(v => v.id)), ['a1', 'a2']);
-    await open(kind); await menu.getByRole('menuitem', { name: '删除', exact: true }).click();
-    await deletion().getByRole('menuitem', { name: '删除原文件', exact: true }).click();
+    const deleteMenu = kind === 'canvas' ? '删除当前项' : '删除';
+    await open(kind); await menu.getByRole('menuitem', { name: deleteMenu, exact: true }).click();
+    await page.getByRole('menu', {name:deleteMenu, exact:true}).getByRole('menuitem', { name: '删除原文件', exact: true }).click();
     await page.getByRole('dialog').waitFor();
-    assert.deepEqual(await page.locator('[data-delete-asset-id]').evaluateAll(els => els.map(el => el.dataset.deleteAssetId)), ['a1', 'a2']);
+    assert.deepEqual(await page.locator('[data-delete-asset-id]').evaluateAll(els => els.map(el => el.dataset.deleteAssetId)), kind === 'canvas' ? ['a1'] : ['a1','a2']);
     await page.getByRole('button', { name: '取消', exact: true }).click();
   }
   await page.evaluate(() => {
     window.fixtureStore.setState({ mode: 'manage', selectedIds: new Set(['a1', 'a2']) });
     window.fixtureStore.getState().openContextMenu(100, 100, 'a1', {
-      canvasSelection: { projectId: 'p1', nodeIds: ['n1'], assetIds: ['a1'] },
+      canvasSelection: { projectId: 'p1', nodeIds: ['n1'], assetIds: ['a1'],
+        deletionTargets: { item: {assetIds:['a1'],removeFromCanvas: () => {}} } },
     });
   });
   await root().waitFor();
@@ -81,8 +83,8 @@ try {
     { projectId: 'p1', nodeIds: ['n1'], direction: 1 },
     { projectId: 'p1', nodeIds: ['n1'], direction: -1 },
   ]);
-  await root().getByRole('menuitem', { name: '删除', exact: true }).click();
-  await deletion().getByRole('menuitem', { name: '删除原文件', exact: true }).click();
+  await root().getByRole('menuitem', { name: '删除当前项', exact: true }).click();
+  await page.getByRole('menu', {name:'删除当前项', exact:true}).getByRole('menuitem', { name: '删除原文件', exact: true }).click();
   await page.getByRole('dialog').waitFor();
   assert.deepEqual(await page.locator('[data-delete-asset-id]').evaluateAll(els => els.map(el => el.dataset.deleteAssetId)), ['a1'], 'single canvas target ignores library multiselect');
   await page.getByRole('button', { name: '取消', exact: true }).click();

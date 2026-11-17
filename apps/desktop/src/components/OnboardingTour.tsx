@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ONBOARDING_FEATURE_ENABLED } from "../lib/featureFlags";
 import { ArrowLeft, ArrowRight, BookOpen, Check, ChevronDown, ChevronUp, X } from "lucide-react";
 import { useStore } from "../store";
 import { LEARNING_TOPICS, useOnboarding } from "../lib/onboardingStore";
@@ -32,7 +33,7 @@ function editorState() {
 export function LearningHint({ topic }: { topic: typeof LEARNING_TOPICS[number]["id"] }) {
   const { progress, guide, patch } = useOnboarding();
   const item = LEARNING_TOPICS.find(item => item.id === topic)!;
-  if (progress.dismissed.includes(topic) || guide.status === "active") return null;
+  if (!ONBOARDING_FEATURE_ENABLED || progress.dismissed.includes(topic) || guide.status === "active") return null;
   return <aside className="learning-hint" aria-label={item.title}>
     <div><strong>{item.title}</strong><p>{item.body}</p></div>
     <button type="button" aria-label={"关闭" + item.title + "提示"} onClick={() => patch({ dismissed: [...progress.dismissed, topic] })}><X size={14} /></button>

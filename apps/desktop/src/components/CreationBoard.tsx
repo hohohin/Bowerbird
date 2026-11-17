@@ -41,8 +41,6 @@ import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import type { CreativeComposerMode } from "../lib/creativeDraft";
 import { CHAT_PROVIDER_LABELS, chatCodexOptionError, localChatInputError, type ChatCodexOptions, type ChatComposeRequest, type ChatProvider } from "../lib/localChat";
 import { ChatProviderSelect, useChatProviderAccess } from "./creation/ChatProviderSelect";
-import { DshSkillSelect } from "./creation/DshSkillSelect";
-import type { DshSkill } from "../lib/dshSkill";
 import { CodexModelSelect, useChatCodexModels } from "./creation/CodexModelSelect";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
@@ -124,8 +122,6 @@ export interface CreationBoardProps {
   onSendChat?: (request: ChatComposeRequest, projectId?: string, sentDraftJson?: string) => Promise<void>;
   chatProvider?: ChatProvider;
   chatCodexOptions?: ChatCodexOptions;
-  chatDshSkill?: DshSkill;
-  onChatDshSkillChange?: (skill?: DshSkill) => void;
   onChatCodexOptionsChange?: (options: ChatCodexOptions) => void;
   onChatProviderChange?: (provider: ChatProvider) => void;
   onOpenChatHistory?: () => void;
@@ -163,8 +159,6 @@ export function CreationBoard({
   onSendChat,
   chatProvider = "codex-local",
   chatCodexOptions,
-  chatDshSkill,
-  onChatDshSkillChange,
   onChatCodexOptionsChange,
   onChatProviderChange,
   onOpenChatHistory,
@@ -639,7 +633,6 @@ export function CreationBoard({
   const sendDisabledReason = isChat
     ? submitting ? "正在发送消息，请稍候。" : providerIssue?.message
       ?? (chatProvider === "codex-local" ? chatCodexOptionError(chatCodexOptions ?? {}, chatModels.models) : null)
-      ?? (chatProvider === "dsh-cloud" && chatDshSkill && !chatAccess.quote?.dsh_vps_skills_available ? "当前账号暂不可使用此云端技能。" : null)
       ?? localChatInputError(finalPrompt, references.map(asset => asset.id))
     : optimizingH3 ? "正在优化提示词，请等待结果后再生成。" : submitting
     ? "正在提交指令，任务启动后即可继续生成。"
@@ -699,7 +692,6 @@ export function CreationBoard({
         if ((prepareProject && (!mounted.current || route.libraryHomeView !== origin.libraryHomeView))
           || !isWorkspaceOperationCurrent(originId, route.activeProjectId, route.projectRoutePending, origin.projectRouteRevision, route.projectRouteRevision)) return;
         await onSendChat({ prompt: finalPrompt.trim(), references: [...references], provider: chatProvider,
-          ...(chatProvider === "dsh-cloud" && chatDshSkill ? { dshSkill: chatDshSkill } : {}),
           ...(chatProvider === "codex-local" && chatCodexOptions !== undefined ? { codexOptions: { ...chatCodexOptions } } : {}) }, targetProjectId, sentDraft);
         const current = useStore.getState();
         if (mounted.current && (!prepareProject || current.libraryHomeView === origin.libraryHomeView)
@@ -1531,7 +1523,6 @@ export function CreationBoard({
           </div>}
           <div className="composer-parameters">
           {isChat ? <><ChatProviderSelect value={chatProvider} onChange={onChatProviderChange} access={chatAccess} disabled={submitting} />
-            {chatProvider === "dsh-cloud" && onChatDshSkillChange && <DshSkillSelect value={chatDshSkill} onChange={onChatDshSkillChange} available={chatAccess.quote?.dsh_vps_skills_available === true} disabled={submitting} />}
             {chatProvider === "codex-local" && <CodexModelSelect value={chatCodexOptions ?? {}} onChange={options => onChatCodexOptionsChange?.(options)} catalog={chatModels} disabled={submitting} />}</> : <>
           {isVideo && <VideoControls composer channel={generation.videoChannel} options={videoOptions} onChange={(options, videoChannel = generation.videoChannel) => setGeneration({ ...generation, localVideo: undefined, media: "video", videoChannel, videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio}
             local={onGenerateLocalVideo ? { options: generation.localVideo, onSelect: () => { setLocalEnvironment({ ready: false, checking: true, message: "正在检测环境…" }); setGeneration({ ...generation, localVideo: { ...DEFAULT_COMFY_VIDEO } }); }, onChange: localVideo => setGeneration({ ...generation, localVideo }) } : undefined} />}

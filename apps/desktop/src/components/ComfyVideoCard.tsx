@@ -210,8 +210,8 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
   </>;
 }
 
-export function ComfyVideoCard({ node, disabled, optimizing, assets, inputImages, readCurrentPrompt, onChange, onOptimize }: {
-  node: WorkflowNode; step?: WorkflowStep; disabled: boolean; assets: Asset[];
+export function ComfyVideoCard({ node, modelControl, disabled, optimizing, assets, inputImages, readCurrentPrompt, onChange, onOptimize }: {
+  modelControl: React.ReactNode; node: WorkflowNode; step?: WorkflowStep; disabled: boolean; assets: Asset[];
   inputImages: (input: import("../lib/canvasWorkflow").WorkflowInput) => string[];
   onChange: (patch: Partial<WorkflowNode>) => void;
   readCurrentPrompt: () => string; onOptimize: () => void; optimizing?: boolean;
@@ -221,6 +221,19 @@ export function ComfyVideoCard({ node, disabled, optimizing, assets, inputImages
   const ports = mode === "text" ? [] : mode === "reference" ? ["first-frame"] : ["first-frame", "last-frame"];
   function update(patch: Partial<ComfyVideoOptions>) { onChange({ comfyVideo: { ...options, ...patch } }); }
   return <section className="comfy-video-card" aria-label="本地 H3 视频设置">
+    <fieldset disabled={disabled} className="comfy-video-options">
+      {modelControl}
+      <div className="comfy-option"><span>模式</span><TacticalSelect aria-label="H3 模式" value={mode} onValueChange={value => onChange({ comfyVideo: comfyVideoOptionsForMode(options, value as ComfyVideoMode) })}>
+        <option value="frames">首尾帧</option><option value="reference">单图</option><option value="text">文生视频</option>
+      </TacticalSelect></div>
+      <label>时长<input aria-label="H3 时长" type="number" min={1} max={15} step={1} value={options.seconds} onChange={event => update({ seconds: Number(event.target.value) })} />秒</label>
+      <div className="comfy-option"><span>画幅</span><RatioSelect ariaLabel="H3 比例" value={options.ratio === "auto" ? null : options.ratio} ratios={H3_RATIOS}
+        allowAuto={mode !== "text"} autoTitle="按运行时输入图片的实际宽高比生成，尺寸按模型要求对齐"
+        onChange={ratio => update({ ratio: (ratio ?? "auto") as ComfyVideoOptions["ratio"] })} /></div>
+      <div className="comfy-option"><span>分辨率</span><TacticalSelect aria-label="H3 分辨率" title="分辨率（MP）" value={options.resolution} onValueChange={value => update({ resolution: Number(value) as ComfyVideoOptions["resolution"] })}>
+        {(mode === "frames" ? [0.6, 0.8, 1] : [0.6, 0.8, 0.98, 1]).map(value => <option value={value} key={value}>{value === 0.98 ? "768p" : `${value.toFixed(1)} MP`}</option>)}
+      </TacticalSelect></div>
+    </fieldset>
     {ports.length > 0 && <div className="comfy-frame-slots">{ports.map((port, index) => {
       const label = mode === "reference" ? "参考图" : index ? "尾帧" : "首帧";
       const bindings = node.inputs[port] ?? [];
@@ -251,23 +264,12 @@ export function ComfyVideoCard({ node, disabled, optimizing, assets, inputImages
           <ArrowLeftRight size={14} /></button>}
     </div>}
     <div className="comfy-prompt-field">
+    <span className="comfy-prompt-caption">提示词</span>
     <CanvasTextarea className="comfy-video-prompt" aria-label="卡片指令" disabled={disabled}
       placeholder={mode === "reference" ? "用 <Picture 1> 指代参考图主体，不固定首尾画面…" : "输入视频提示词，也可从文本端口接入…"} value={node.prompt}
       readCurrentValue={readCurrentPrompt} onValueChange={prompt => onChange({ prompt })} />
     <H3OptimizeButton busy={optimizing} disabled={disabled || !node.prompt.trim()} onClick={() => onOptimize?.()} />
     </div>
-    <fieldset disabled={disabled} className="comfy-video-options">
-      <TacticalSelect aria-label="H3 模式" value={mode} onValueChange={value => onChange({ comfyVideo: comfyVideoOptionsForMode(options, value as ComfyVideoMode) })}>
-        <option value="frames">首尾帧</option><option value="reference">单图</option><option value="text">文生视频</option>
-      </TacticalSelect>
-      <label>时长<input aria-label="H3 时长" type="number" min={1} max={15} step={1} value={options.seconds} onChange={event => update({ seconds: Number(event.target.value) })} />秒</label>
-      <RatioSelect ariaLabel="H3 比例" value={options.ratio === "auto" ? null : options.ratio} ratios={H3_RATIOS}
-        allowAuto={mode !== "text"} autoTitle="按运行时输入图片的实际宽高比生成，尺寸按模型要求对齐"
-        onChange={ratio => update({ ratio: (ratio ?? "auto") as ComfyVideoOptions["ratio"] })} />
-      <TacticalSelect aria-label="H3 分辨率" title="分辨率（MP）" value={options.resolution} onValueChange={value => update({ resolution: Number(value) as ComfyVideoOptions["resolution"] })}>
-        {(mode === "frames" ? [0.6, 0.8, 1] : [0.6, 0.8, 0.98, 1]).map(value => <option value={value} key={value}>{value === 0.98 ? "768p" : value.toFixed(1)}</option>)}
-      </TacticalSelect>
-    </fieldset>
     <ProviderQuota source="local" badge />
   </section>;
 }

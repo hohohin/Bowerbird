@@ -35,7 +35,7 @@ try {
   await page.waitForFunction(() => !!window.finish);
   assert.equal(await original.getByLabel("卡片指令", { exact: true }).getAttribute("contenteditable"), "false");
   assert.equal(await original.getByLabel("删除卡片", { exact: true }).isDisabled(), true);
-  assert.equal(await original.getByLabel("生成类型", { exact: true }).isDisabled(), true);
+  assert.equal(await original.getByRole("group", { name: "生成类型" }).getByRole("button", { name: "视频", exact: true }).isDisabled(), true);
   const read = () => page.evaluate(() => JSON.parse(sessionStorage.getItem("workflow-p")).document);
   const before = await read();
   const header = await original.locator("header strong").boundingBox();

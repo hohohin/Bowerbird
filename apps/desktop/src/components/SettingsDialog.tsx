@@ -5,7 +5,7 @@ import { open } from "@tauri-apps/plugin-shell";
 import { ChevronDown, Moon, RefreshCw, Sun } from "lucide-react";
 import { useStore, understandEngineUsable } from "../store";
 import { api } from "../lib/api";
-import { CODEX_ONBOARDING_ENABLED, DREAMINA_ONBOARDING_ENABLED, LEGACY_SETTINGS_ENABLED } from "../lib/featureFlags";
+import { ONBOARDING_FEATURE_ENABLED, CODEX_ONBOARDING_ENABLED, DREAMINA_ONBOARDING_ENABLED, LEGACY_SETTINGS_ENABLED } from "../lib/featureFlags";
 import { DEFAULT_AUTO_ANALYZE_PROMPT, WEBSITE_URL } from "../lib/constants";
 import { useOnboarding } from "../lib/onboardingStore";
 import { ModalShell } from "./ModalShell";
@@ -665,7 +665,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
               </div>}
 
               {/* 入门引导：主线续学与按需教程 */}
-              <div className="settings-card px-3 py-2">
+              {ONBOARDING_FEATURE_ENABLED && <div className="settings-card px-3 py-2">
                 <div className="text-ink">入门引导</div>
                 <p className="mt-1 text-xs text-muted">
                     在项目画板上学习拖图、参考、图片特征与生成；可续学或查看按需教程。
@@ -679,7 +679,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                 >
                   打开入门引导
                 </button>
-              </div>
+              </div>}
             </>
           )}
 

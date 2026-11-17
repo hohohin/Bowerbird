@@ -48,6 +48,8 @@ H3 优化按钮共用 [H3OptimizeButton.tsx](../../apps/desktop/src/components/c
 
 ## 添加右键菜单与动作子菜单
 
+素材库与画布同步维护素材右键操作。`AssetTransferMenuItems` 统一提供项目移动、文件夹移动及导出子菜单；普通素材按素材 ID 操作，文件夹宿主传入条目移动回调。画布节点与空白处选区使用相同组件，菜单关闭后的目标选择弹窗由宿主保留。
+
 视频导出使用领域包装 `VideoExportMenu`，复用 `ContextMenu` 的动作语义、焦点和边缘定位，通过 `PortalTargetContext` 挂入播放器以兼容 Lightbox／全屏；普通单选 `TacticalSelect` 不承担动作执行。画板音轨卡及展开素材组直接复用 `AudioWaveform`，不作为图片预览。
 
 - **素材业务菜单：** `CategorizedLibrary`、`ConnectedCollections` 与嵌入工作区共用 `AssetContextMenu`；文件夹通过 `fileSelection.entries` 提供条目数量和改名／移动／移出分身回调，不能按 Asset ID 代替目录条目 ID。普通素材操作不另写一套菜单；目录树自身仍使用 `ContextMenu` 的文件夹操作。

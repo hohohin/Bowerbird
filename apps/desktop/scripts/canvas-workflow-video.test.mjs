@@ -12,7 +12,7 @@ async function assertCompactCard(card) {
   const layout = await card.evaluate(el => {
     const bounds = el.getBoundingClientRect(), scale = bounds.width / el.offsetWidth;
     const header = el.querySelector('header').getBoundingClientRect();
-    const parameters = el.querySelector('.workflow-generation-parameters');
+    const parameters = el.querySelector('.workflow-generation-parameters, .workflow-video-controls');
     const content = parameters.getBoundingClientRect();
     return { gap: (content.top - header.bottom) / scale,
       parametersInside: content.left >= bounds.left && content.right <= bounds.right && content.bottom < bounds.bottom,
@@ -62,10 +62,11 @@ try {
   const imageMenu = page.getByRole('dialog', { name: '图像模型', exact: true });
   assert.equal(await imageMenu.locator('.model-select-column').count(), 2);
   assert.equal(await imageMenu.locator('[data-model-key="bowerbird-cloud-image_fast"]').count(), 0);
+  await imageMenu.locator('[data-source="cloud"]').getByRole('button', { name: 'Seedream', exact: true }).click();
   await imageMenu.locator('[data-model-key="bowerbird-cloud-image_lite"]').click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes[0].provider === 'bowerbird-cloud-image_lite');
   assert.ok((await card.locator('.model-select-name').innerText()).includes('Seedream 5.0 Lite'));
-  await selectCardOption('生成类型', '视频');
+  await card.getByRole('group', { name: '生成类型' }).getByRole('button', { name: '视频', exact: true }).click();
   await card.getByTitle('选择视频模型', { exact: true }).click();
   await page.getByRole('dialog', { name: '视频模型', exact: true }).locator('[data-model-key="cloud:seedance2.5"]').click();
   await selectCardOption('视频生成模式', '首尾帧');
@@ -86,9 +87,9 @@ try {
   await mkdir('.tmp/workflow-video', { recursive: true });
   await page.screenshot({ path: '.tmp/workflow-video/controls.png' });
   await card.hover();
-  await selectCardOption('生成类型', '图片');
+  await card.getByRole('group', { name: '生成类型' }).getByRole('button', { name: '图片', exact: true }).click();
   assert.equal(await card.getByLabel('视频时长（秒）').count(), 0);
-  await selectCardOption('生成类型', '视频');
+  await card.getByRole('group', { name: '生成类型' }).getByRole('button', { name: '视频', exact: true }).click();
   assert.equal(await card.getByLabel('视频时长（秒）').inputValue(), '8');
   await card.getByLabel('复制卡片', { exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.length === 2);

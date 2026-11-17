@@ -183,6 +183,14 @@ html[data-theme] .canvas-tactical .canvas-plane .canvas-node:is(.is-focused,.is-
 html[data-theme] .canvas-tactical .canvas-chat-node { box-shadow:var(--hud-shadow); }
 html[data-theme] .canvas-tactical .canvas-chat-node:is(:hover,:focus-within,.is-selected,.is-focused) { box-shadow:var(--hud-shadow-active); }
 
+/* Align the visible option text to its field caption in generation cards. */
+html[data-theme] .canvas-tactical .canvas-plane .workflow-card :is(.workflow-video-field,.comfy-option,.workflow-media-settings) :is(.tactical-select-trigger,.model-select .model-select-trigger,button[title="选择画面比例"]) {
+  justify-content:flex-start; text-align:left; padding-inline-start:0; border-inline-start-width:0;
+}
+html[data-theme] .canvas-tactical .canvas-plane .workflow-card :is(.workflow-video-field,.workflow-media-settings) .model-select .model-select-trigger::before { display:none; }
+.workflow-card :is(.workflow-video-field,.workflow-media-settings) .model-select-name,
+.workflow-card :is(.comfy-option,.workflow-media-settings) button[title="选择画面比例"] > span:not([aria-hidden="true"]) { order:-1; }
+
 /* Current models are identified by a small state mark instead of a filled provider row. */
 html[data-theme] .canvas-tactical .canvas-plane .workflow-card .model-select .model-select-trigger,
 html[data-theme] .composer-glass .composer-parameters .model-select .model-select-trigger {
@@ -236,32 +244,32 @@ html[data-theme="light"] .composer-cross-matrix.depth-1 { opacity:.5; }
 html[data-theme] .composer-projection .composer-reference-hint { position:absolute;left:50%;bottom:auto;transform:translateX(-50%);font:400 10px/16px var(--bb-font-mono,ui-monospace,Consolas,monospace);letter-spacing:.06em;color:var(--composer-muted);opacity:.78;text-shadow:none;white-space:nowrap; }
 .composer-reference-hint::before,.composer-reference-hint::after { content:"";display:inline-block;width:10px;height:2px;margin:0 7px 1px;background:linear-gradient(currentColor,currentColor) left center/5px 1px no-repeat,linear-gradient(currentColor,currentColor) right center/1px 1px no-repeat;opacity:.45; }
 html[data-theme] .composer-glass:not(.is-collapsed) .composer-heading { position:absolute;left:36px;top:20px;bottom:auto;width:104px;display:flex;flex-direction:column;align-items:flex-start;flex-wrap:nowrap;gap:3.312px;padding:0;transform:perspective(520px) rotateY(18deg) rotateZ(-3deg);transform-origin:right center; }
-html[data-theme] .composer-glass .composer-mode-picker { display:flex;flex-direction:column;gap:3.312px;width:100%;height:auto;padding:0;margin:0;background:none;border:0;box-shadow:none;backdrop-filter:none; }
-html[data-theme] .composer-glass .composer-mode-picker>button,
+html[data-theme] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs) { display:flex;flex-direction:column;gap:3.312px;width:100%;height:auto;padding:0;margin:0;background:none;border:0;box-shadow:none;backdrop-filter:none; }
+html[data-theme] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button,
 html[data-theme] .composer-glass .library-composer-target {
   position:relative;isolation:isolate;flex:none;display:flex;flex-direction:row;align-items:center;justify-content:flex-start;gap:8px;height:25.56px;min-height:0;padding:3.78px 0;
   border:0;border-radius:0;box-shadow:none;color:#e3e8ec;background:transparent;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);transform:none;
   font-size:11.2px;line-height:18px;font-weight:400;letter-spacing:2px;text-shadow:0 0 7px #ecf4fa40;
 }
-html[data-theme] .composer-glass .composer-mode-picker>button { width:72px;opacity:1;color:#b9c3ca;text-shadow:none; }
-html[data-theme] .composer-glass .composer-mode-picker>button>svg { display:block;width:15px;height:15px;stroke-width:1.25; }
-html[data-theme] .composer-glass .composer-mode-picker>button>svg:last-child:not(:first-child) { position:absolute;right:0;top:8px;width:8px; }
-html[data-theme] .composer-glass .composer-mode-picker>button::before,
+html[data-theme] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button { width:72px;opacity:1;color:#b9c3ca;text-shadow:none; }
+html[data-theme] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button>svg { display:block;width:15px;height:15px;stroke-width:1.25; }
+html[data-theme] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button>svg:last-child:not(:first-child) { position:absolute;right:0;top:8px;width:8px; }
+html[data-theme] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button::before,
 html[data-theme] .composer-glass .library-composer-target::before { content:"";position:absolute;inset:1.8px -7px;z-index:-1;pointer-events:none;background:radial-gradient(ellipse at 10% 50%,rgb(var(--projection-tag) / .12),transparent 70%),linear-gradient(95deg,rgb(var(--projection-tag) / .25),rgb(var(--projection-tag) / .16) 68%,rgb(var(--projection-tag) / .08));box-shadow:0 0 11px rgb(var(--projection-tag) / .1),-8px 0 22px rgb(var(--projection-tag) / .06);filter:blur(.15px);opacity:.8; }
-html[data-theme] .composer-glass .composer-mode-picker>button::after,
+html[data-theme] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button::after,
 html[data-theme] .composer-glass .library-composer-target::after { content:"";position:absolute;inset:1.8px -7px;width:auto;height:auto;pointer-events:none;background:linear-gradient(#f2f7fb,#f2f7fb) left top/2px 2px no-repeat,linear-gradient(#f2f7fb,#f2f7fb) right top/2px 2px no-repeat,linear-gradient(#f2f7fb,#f2f7fb) left bottom/2px 2px no-repeat,linear-gradient(#f2f7fb,#f2f7fb) right bottom/2px 2px no-repeat;box-shadow:none;filter:drop-shadow(0 0 3px #eaf3fa80);opacity:.72; }
-html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="false"]::before { opacity:.4; }
-html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="false"]::after { opacity:.45; }
-html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"] { color:#f5f8fb;font-weight:500;text-shadow:0 0 7px #ecf4fa66;background:transparent;box-shadow:none; }
-html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"]::before { opacity:1;background:linear-gradient(#eaf2f8,#eaf2f8) left center/2px 70% no-repeat,linear-gradient(95deg,rgb(var(--projection-tag) / .42),rgb(var(--projection-tag) / .22) 65%,rgb(var(--projection-tag) / .08));box-shadow:-5px 0 16px #eaf3fa26,0 0 8px #eaf3fa14; }
-html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"]::after { opacity:1;background:linear-gradient(#f2f7fb,#f2f7fb) right 6px center/3px 3px no-repeat,linear-gradient(#f2f7fb,#f2f7fb) left top/2px 2px no-repeat,linear-gradient(#f2f7fb,#f2f7fb) right top/2px 2px no-repeat,linear-gradient(#f2f7fb,#f2f7fb) left bottom/2px 2px no-repeat,linear-gradient(#f2f7fb,#f2f7fb) right bottom/2px 2px no-repeat; }
-html[data-theme="light"] .composer-glass .composer-mode-picker>button { color:#606a71;text-shadow:0 0 6px #ffffffcc; }
-html[data-theme="light"] .composer-glass .composer-mode-picker>button::before,
+html[data-theme] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button[aria-pressed="false"]::before { opacity:.4; }
+html[data-theme] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button[aria-pressed="false"]::after { opacity:.45; }
+html[data-theme] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button[aria-pressed="true"] { color:#f5f8fb;font-weight:500;text-shadow:0 0 7px #ecf4fa66;background:transparent;box-shadow:none; }
+html[data-theme] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button[aria-pressed="true"]::before { opacity:1;background:linear-gradient(#eaf2f8,#eaf2f8) left center/2px 70% no-repeat,linear-gradient(95deg,rgb(var(--projection-tag) / .42),rgb(var(--projection-tag) / .22) 65%,rgb(var(--projection-tag) / .08));box-shadow:-5px 0 16px #eaf3fa26,0 0 8px #eaf3fa14; }
+html[data-theme] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button[aria-pressed="true"]::after { opacity:1;background:linear-gradient(#f2f7fb,#f2f7fb) right 6px center/3px 3px no-repeat,linear-gradient(#f2f7fb,#f2f7fb) left top/2px 2px no-repeat,linear-gradient(#f2f7fb,#f2f7fb) right top/2px 2px no-repeat,linear-gradient(#f2f7fb,#f2f7fb) left bottom/2px 2px no-repeat,linear-gradient(#f2f7fb,#f2f7fb) right bottom/2px 2px no-repeat; }
+html[data-theme="light"] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button { color:#606a71;text-shadow:0 0 6px #ffffffcc; }
+html[data-theme="light"] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button::before,
 html[data-theme="light"] .composer-glass .library-composer-target::before { background:linear-gradient(95deg,#ffffffbf,#ffffff6b 68%,#ffffff1f);box-shadow:0 2px 7px #2b37410f,-5px 0 18px #ffffff66; }
-html[data-theme="light"] .composer-glass .composer-mode-picker>button::after,
+html[data-theme="light"] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button::after,
 html[data-theme="light"] .composer-glass .library-composer-target::after { filter:drop-shadow(0 1px 1px #46596633); }
-html[data-theme="light"] .composer-glass .composer-mode-picker>button[aria-pressed="true"] { color:#30477d; }
-html[data-theme="light"] .composer-glass .composer-mode-picker>button[aria-pressed="true"]::before { background:linear-gradient(#4868af,#4868af) left center/2px 70% no-repeat,linear-gradient(95deg,#fffffffa,#ffffffb8 65%,#ffffff33);box-shadow:0 3px 9px #2d414f17,-5px 0 20px #ffffffb3; }
+html[data-theme="light"] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button[aria-pressed="true"] { color:#30477d; }
+html[data-theme="light"] :is(.composer-glass .composer-mode-picker, .workflow-card .workflow-media-tabs)>button[aria-pressed="true"]::before { background:linear-gradient(#4868af,#4868af) left center/2px 70% no-repeat,linear-gradient(95deg,#fffffffa,#ffffffb8 65%,#ffffff33);box-shadow:0 3px 9px #2d414f17,-5px 0 20px #ffffffb3; }
 html[data-theme] .composer-glass .composer-agent-menu { left:calc(100% + 8px);bottom:0;max-height:min(360px,60vh);overflow-y:auto; }
 html[data-theme] .composer-glass .library-composer-target { width:104px;height:26.64px;padding:4.32px 3px 4.32px 0;margin:0;letter-spacing:0;color:var(--composer-ink);background:transparent; }
 html[data-theme] .composer-glass .library-composer-target>svg { width:13px; }

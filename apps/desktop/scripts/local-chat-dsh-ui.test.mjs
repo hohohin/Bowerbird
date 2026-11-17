@@ -95,8 +95,8 @@ try {
   await page.getByRole('checkbox', { name: '本机权益', exact: true }).uncheck();
   await openMenu();
   await menu.getByRole('button', { name: 'DSH · Cloud', exact: true }).click();
-  await composer.getByRole('combobox', {name: '云端技能'}).click();
-  await page.getByRole('option', {name:'文本编辑',exact:true}).click();
+  assert.equal(await composer.getByRole('combobox', {name: '云端技能'}).count(), 0);
+
   await composer.locator('.ProseMirror').fill('Cloud DSH 零价聊天');
   await composer.getByRole('button', { name: '发送', exact: true }).click();
   await panel.waitFor();
@@ -106,19 +106,20 @@ try {
   await panel.getByText('花影入月', { exact: true }).waitFor();
   const snapshot = await inspect();
   assert.equal(snapshot.calls.some(c => c.command === 'local_chat_dsh_setup' && c.args.mode === 'managed'), false);
-  assert.deepEqual(snapshot.calls.filter(c => c.command === 'local_chat_send').at(-1).args.input.dshSkill, {id:'text-editor'});
+  assert.equal(snapshot.calls.filter(c => c.command === 'local_chat_send').at(-1).args.input.dshSkill, undefined);
   assert.doesNotMatch(JSON.stringify(snapshot), /fixture-secret/);
   assert.equal(snapshot.calls.filter(call => call.command === 'local_chat_send').length, 2, 'recovery never sends another request');
   assert.equal(snapshot.calls.filter(call => call.command === 'local_chat_recover').length, 2);
-  await panel.getByRole('combobox', {name: '云端技能'}).click();
-  await page.getByRole('option', {name: 'H3 视频提示词', exact: true}).click();
-  await panel.getByRole('combobox', {name: '视频素材'}).click();
-  await page.getByRole('option', {name: '首尾帧', exact: true}).click();
-  await panel.getByRole('combobox', {name: '画面比例'}).click();
-  await page.getByRole('option', {name: '16:9', exact: true}).click();
-  await panel.getByRole('spinbutton', {name: '视频时长'}).fill('8');
-  const h3 = await page.evaluate(async id => (await import('/src/lib/localChatStore.ts')).localChatDraft(id).dshSkill, await panel.getAttribute('data-local-chat-id'));
-  assert.deepEqual(h3, {id: 'h3-video-prompt', parameters: {mode: 'frames', firstFrameCount: 1, lastFrameCount: 1, ratio: '16:9', seconds: 8}});
+  assert.equal(await panel.getByRole('combobox', {name: '云端技能'}).count(), 0);
+  await page.evaluate(async id => {
+    const {useLocalChatStore} = await import('/src/lib/localChatStore.ts');
+    useLocalChatStore.getState().setDraft(id, {text: '继续普通对话', referenceAssetIds: [], dshSkill: {id: 'text-editor'}});
+  }, await panel.getAttribute('data-local-chat-id'));
+  await panel.getByRole('button', { name: '发送对话消息' }).click();
+  await panel.getByRole('button', {name:'停止回复'}).waitFor();
+  assert.equal((await inspect()).calls.filter(c => c.command === 'local_chat_send').at(-1).args.input.dshSkill, undefined);
+  await panel.getByRole('button', {name:'停止回复'}).click();
+  await panel.getByRole('button', {name:'取回回复'}).click();
   const migration = panel.getByText('云端会话从这里开始。此前的对话保存在本机。', { exact: true });
   assert.equal(await migration.count(), 0);
   await page.evaluate(async id => {
@@ -144,6 +145,15 @@ try {
     await panel.getByText(expected, { exact: true }).waitFor();
     assert.equal(await panel.getByRole('button', { name: '取回回复' }).count(), 0);
   }
+  await page.evaluate(async () => {
+    const {canvasWorkflowController} = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const {newWorkflowNode} = await import('/src/lib/canvasWorkflow.ts');
+    const c = canvasWorkflowController('p');
+    await c.edit([...c.document.nodes, {...newWorkflowNode('agent', 300, 120, 'codex'), id: 'legacy-dsh-agent', chatProvider: 'dsh-cloud', chatDshSkill: {id: 'text-editor'}}]);
+  });
+  const agent = page.locator('[data-workflow-card="legacy-dsh-agent"] .workflow-agent-chat-controls');
+  await agent.waitFor();
+  assert.equal(await agent.getByRole('combobox', {name:'云端技能'}).count(), 0);
   assert.deepEqual(errors, []);
   console.log('PASS: DSH setup, credential redaction, URL restore, independent local entitlement, zero-price managed access, role labels, original-request recovery');
 } finally { await browser.close(); await server.close(); }

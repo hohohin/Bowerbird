@@ -732,7 +732,7 @@ mod tests {
         // The legacy unlink IPC can remove membership while leaving a visible node.
         fixture
             .db
-            .remove_assets_from_project("p1", &["legacy".into()])
+            .remove_assets_from_project("p1", &["legacy".into()], false)
             .unwrap();
         let member_count = || {
             fixture

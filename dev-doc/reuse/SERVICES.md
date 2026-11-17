@@ -13,6 +13,8 @@ Cloud 图片新增模型复用 [modelForService／arkImageRequestBody](../../app
 
 ## 读取或修改本机业务数据
 
+素材菜单和画板导出所选原件时，复用 [assetArchive.ts](../../apps/desktop/src/lib/assetArchive.ts) 的 `exportAssetsToDirectory` 或 `exportAssetArchive`。两个入口在系统选择框打开前固定素材 ID，并共用[原生导出命令](../../apps/desktop/src-tauri/src/commands/asset_archive.rs)中的原件解析、命名和复制校验。目录中有同名项目时，副本自动加编号。
+
 画板自动接线用 `api.projectCanvasVisibleNodes(projectId, nodeIds)` 读取当前项目指定可见实例的原始节点及内容卡数据。需要恢复会话归组、判断历史完成状态时用 `api.projectCanvasGet`。[画板服务实现](../../apps/desktop/src-tauri/src/core/project_canvas.rs)
 
 云端 DSH 要求在画板建卡时，复用 [桌面聊天桥](../../apps/desktop/src-tauri/src/commands/local_chat_dsh_vps.rs) 与原生建卡事务，VPS 不直写本地数据库。需要在云端执行受保护的聊天技能时，复用 [Worker 的 DSH 聊天入口](../../apps/agent-worker/src/cloud-chat/dsh.ts) 和既有技能加载器；聊天协议及服务端权限见 [Cloud 对话](../../apps/cloud/CHAT.md)。
@@ -88,6 +90,7 @@ H3 图片文生图／编辑共用直接提示词图谱，`h3_image::reference_pr
 
 ## 保持断开目录后的素材可见性
 
+- 素材库与画布的「移动到项目」共用 [MoveAssetsToProjectDialog](../../apps/desktop/src/components/MoveAssetsToProjectDialog.tsx) 和 `api.moveAssetsToProject(sourceProjectId, targetProjectId, assetIds)`。来源由当前视图传入，全局范围传 `null`。原生事务更新所选项目成员和素材可见性，保留断联记录、其他成员、画板卡片及创作线程。
 - 项目管理页与素材库项目选择器共用 `api.projectCovers()`。它按项目成员查询当前可见素材数及最多三张封面，排除库内隐藏、已回收和已清理失效原件，仍属于项目的断联素材按项目范围读取。[项目查询](../../apps/desktop/src-tauri/src/core/projects.rs)
 - **入口／调用**：[folder_connections.rs](../../apps/desktop/src-tauri/src/core/folder_connections.rs) 的 `disconnect_directory(paths, id)` 将连接移除与断联事实写入同一事务；[external_files.rs](../../apps/desktop/src-tauri/src/core/external_files.rs) 的 `link_external_to_library` 记录明确独立收集并清除断联，重新连接也恢复原身份。
 - **复用边界**：[material_catalog.rs](../../apps/desktop/src-tauri/src/core/material_catalog.rs) 的 crate 内部 `catalog_visibility`／`library_membership_sql` 统一供应分页、标签、旧列表／搜索／计数／色板及常用素材查询；不要另按 `library_hidden` 推断目录成员。0051 的独立收集／断联表只影响全局成员展示，不删除原件、缓存、创作资料或真实项目成员；其他连接／分身、独立收集与受管路径保留。旧版已经断开的来源不能可靠推断，升级不批量猜测隐藏。详见 [文件契约](../FOLDER-MODE.md)。

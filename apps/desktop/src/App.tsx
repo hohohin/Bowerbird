@@ -28,7 +28,7 @@ import { CloudAgentSession } from "./components/CloudAgentPanel";
 import { LibraryGenerationCoordinator } from "./components/LibraryGenerationCoordinator";
 import { WorkflowScheduleCoordinator } from "./components/WorkflowScheduleCoordinator";
 import { CloudAgentRuntimeCoordinator } from "./components/CloudAgentRuntimeCoordinator";
-import { COLLECTIONS_FEATURE_ENABLED, LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED } from "./lib/featureFlags";
+import { ONBOARDING_FEATURE_ENABLED, COLLECTIONS_FEATURE_ENABLED, LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED } from "./lib/featureFlags";
 import { ExploreWorkspace } from "./components/ExploreWorkspace";
 import { DEFAULT_EXPLORER_URL } from "./lib/explorer";
 import { readLastSourceAddress } from "./lib/sourceDiscovery";
@@ -830,7 +830,7 @@ function App() {
     const assetIds = creativeLaunchAssetIds(blank, state.selectedIds);
     const completeLesson = beginOnboardingOperation("create-project", state.activeProjectId);
     const guide = useOnboarding.getState().guide;
-    const designerStart = guide.status === "active" && guide.role === "designer" && !guide.sessions.designer?.projectId;
+    const designerStart = ONBOARDING_FEATURE_ENABLED && guide.status === "active" && guide.role === "designer" && !guide.sessions.designer?.projectId;
     const createdProjectId = await state.beginProvisionalProject(designerStart ? "设计师 · 入门创作" : undefined);
     const route = useStore.getState();
     if (!isWorkspaceOperationCurrent(
@@ -889,7 +889,7 @@ function App() {
       <DreaminaOnboarding />
       <AccountOnboarding />
       {/* 版本化入门引导，独立保存学习进度 */}
-      <OnboardingTour />
+      {ONBOARDING_FEATURE_ENABLED && <OnboardingTour />}
       {/* 图片右键菜单（全局单实例，store.contextMenu 驱动） */}
       <AssetContextMenu />
       {/* 项目右键菜单（全局单实例，store.projectContextMenu 驱动） */}

@@ -86,6 +86,28 @@ fn original_canvas_fixture() -> (Fixture, Vec<AssetOriginal>) {
 }
 
 #[test]
+fn canvas_project_removal_preserves_other_projects_files_and_history() {
+    let (f, originals) = original_canvas_fixture();
+    let first = &originals[0].asset_id;
+    f.db.conn.lock().unwrap().execute("UPDATE canvas_nodes SET asset_id=?1 WHERE id='delete-copy'", [first]).unwrap();
+    f.db.add_assets_to_project("delete-other", &[first.clone()]).unwrap();
+    for (index, original) in originals.iter().enumerate() {
+        let ids = [original.asset_id.clone()];
+        f.db.add_assets_to_project("delete-main", &ids).unwrap();
+        assert_eq!(f.db.remove_assets_from_project("delete-main", &ids, true).unwrap(), 1);
+        assert!(std::path::Path::new(&original.path).exists());
+        assert!(f.db.get_canvas_node(&format!("delete-output-{index}")).unwrap().unwrap().hidden_at.is_some());
+        assert_eq!(f.db.get_canvas_node("delete-prompt").unwrap().unwrap().hidden_at.is_some(), index == 1);
+    }
+    let reopened = Database::open(&f._temp.path().join("canvas.sqlite")).unwrap();
+    assert!(reopened.get_canvas_node("delete-copy").unwrap().unwrap().hidden_at.is_none());
+    assert!(reopened.conn.lock().unwrap().query_row("SELECT EXISTS(SELECT 1 FROM project_assets WHERE project_id='delete-other' AND asset_id=?1)", [first], |row| row.get::<_, bool>(0)).unwrap());
+    let snapshot = reopened.project_canvas_snapshot("delete-main").unwrap();
+    assert!(snapshot.nodes.iter().all(|node| node.hidden_at.is_some()));
+    assert_eq!(snapshot.edges.len(), 2);
+}
+
+#[test]
 fn original_canvas_trash_hides_instances_and_last_output_but_keeps_history() {
     let (f, originals) = original_canvas_fixture();
     let before = f.db.list_canvas_nodes("delete-main").unwrap();
@@ -1266,7 +1288,7 @@ fn project_covers_follow_detach_and_recycle_across_shared_projects() {
     fs::write(&cached, b"cached thumbnail").unwrap();
     f.db.conn.lock().unwrap().execute("UPDATE assets SET thumb_path=?2 WHERE id=?1", params![entry.asset_id, string(&cached)]).unwrap();
     assert_eq!(f.db.project_covers().unwrap()["first"].paths, vec![string(&cached)]);
-    f.db.remove_assets_from_project("first", &ids).unwrap();
+    f.db.remove_assets_from_project("first", &ids, false).unwrap();
     let covers = f.db.project_covers().unwrap();
     assert!(!covers.contains_key("first"));
     assert_eq!(covers["second"].paths, vec![string(&cached)]);

@@ -51,3 +51,17 @@
 }
 button.h3-image-environment.is-ready > svg { color: var(--bb-success); }
 button.h3-image-environment > .lucide-ellipsis { color: var(--bb-muted); }
+.comfy-video-card .comfy-video-options { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); align-items: end; padding-bottom: 10px; border-bottom: 1px solid var(--bb-line); }
+.comfy-video-card .comfy-option, .comfy-video-card .comfy-video-options label { display: grid; gap: 4px; min-width: 0; font-size: 12px; color: var(--bb-muted); }
+.comfy-video-card .comfy-video-options label { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.comfy-video-card .comfy-video-options label input { grid-column: 1; width: 100%; }
+.comfy-option > .tactical-select-trigger { width: 100%; min-height: 28px; }
+.comfy-prompt-caption { display: block; font-size: 12px; color: var(--bb-muted); margin-bottom: 4px; }
+.workflow-card .comfy-video-prompt { min-height: 144px; }
+.comfy-frame-slot:only-child { grid-column: 1 / -1; aspect-ratio: auto; height: 112px; }
+.comfy-frame-slot:has(img) { border-style: solid; }
+.comfy-frame-slots .comfy-frame-action { width: 28px; height: 28px; }
+.comfy-frame-slots .comfy-frame-action:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 1px; }
+
+.comfy-video-card .comfy-video-options > * { grid-column:span 2; }
+.comfy-video-card .comfy-video-options > :nth-child(-n+2) { grid-column:span 3; }

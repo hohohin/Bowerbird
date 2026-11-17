@@ -9,7 +9,7 @@ export function CatalogSelectionBar({ count, busy, projectId, onFinish, onSelect
     <button aria-label="取消选择" disabled={busy} onClick={onFinish}><X size={14}/></button>
     <span>{busy ? "正在处理…" : `${count} 项`}</span><button disabled={busy} onClick={onSelectAll}>全选</button>
     <button disabled={busy || !count} onClick={onAssign}>添加到文件夹</button>
-    <button disabled={busy || !count} onClick={onMove}>移动至文件夹</button>
+    <button disabled={busy || !count} onClick={onMove}>移动到文件夹</button>
     {children}
     {onAdd && <button disabled={busy || !count} onClick={onAdd}>{projectId ? "添加到画板" : "添加到新项目"}</button>}
   </div>;

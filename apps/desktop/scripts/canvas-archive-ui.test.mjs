@@ -10,10 +10,19 @@ page.setDefaultTimeout(10000);
 const errors = [];
 page.on("pageerror", error => errors.push(error.message));
 const node = id => page.locator(`[data-canvas-node-id="${id}"]`);
-const item = () => page.getByRole("menuitem", { name: "将所选内容打包", exact: true });
+const item = () => page.getByRole("menuitem", { name: "将所选内容打包为压缩包", exact: true });
+const menuItem = name => page.getByRole("menuitem", { name, exact: true });
+async function openExport() {
+  await menuItem("移动到项目").waitFor();
+  await menuItem("移动到文件夹").waitFor();
+  assert.equal(await item().count(), 0);
+  await menuItem("导出").click();
+  await page.getByText("您也可以长按素材，看到界面变化后，直接将素材拖动到其他应用中", { exact: true }).waitFor();
+  await menuItem("将所选内容导出到..").waitFor();
+}
 async function openMenu(id = "a") {
-  await node(id).click({ button: "right", position: { x: 30, y: 30 } });
-  await item().waitFor();
+  await node(id).click({ button: "right" });
+  await openExport();
 }
 try {
   await page.goto("http://127.0.0.1:1497/scripts/fixtures/canvas-reference/preview.html");
@@ -32,10 +41,17 @@ try {
     document.activeElement?.blur();
     window.store.setState({ boardOpen: false, mode: "manage", selectedIds: new Set(["b", "c"]), assets: [] });
     window.archiveCalls = []; window.dialogCalls = []; window.archiveNotices = [];
+    window.directoryDialogs = []; window.directoryExports = [];
+    window.projectMoves = [];
+    const projects = window.store.getState().projects;
+    window.store.setState({ projects: [...projects, { ...projects[0], id: "transfer-target", name: "目标项目 B" }] });
     window.addEventListener("bowerbird://notify", event => window.archiveNotices.push(event.detail));
     const original = window.__TAURI_INTERNALS__.invoke;
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
       if (command === "plugin:dialog|save") { window.dialogCalls.push(args); return window.archivePath ?? null; }
+      if (command === "plugin:dialog|open") { window.directoryDialogs.push(args); return window.directoryPath ?? null; }
+      if (command === "export_assets_to_directory") { window.directoryExports.push(args); return args.assetIds.length; }
+      if (command === "move_assets_to_project") { window.projectMoves.push(args); return { changed: args.assetIds.length }; }
       if (command === "export_assets_zip") {
         window.archiveCalls.push(args);
         if (window.holdArchive) await new Promise(resolve => { window.releaseArchive = resolve; });
@@ -62,6 +78,7 @@ try {
   // Cancelling the native save dialog never exports.
   await item().click();
   assert.equal(await page.evaluate(() => window.dialogCalls.length), 1);
+  assert.equal(await page.evaluate(() => window.dialogCalls[0].options.title), "将所选内容打包为压缩包");
   assert.deepEqual(await page.evaluate(() => window.archiveCalls), []);
   await page.evaluate(() => { window.archivePath = "D:/export/所选内容.zip"; });
   await openMenu();
@@ -70,11 +87,39 @@ try {
   assert.deepEqual(await page.evaluate(() => window.archiveCalls[0]), { assetIds: ["existing", "a"], path: "D:/export/所选内容.zip" });
   // Blank-canvas menu shares the same selection and does not package outside images.
   await page.mouse.click(rect.x + 800, rect.y + 350, { button: "right" });
+  await openExport();
   await item().click();
   await page.waitForFunction(() => window.archiveCalls.length === 2);
   assert.deepEqual(await page.evaluate(() => window.archiveCalls[1].assetIds), ["existing", "a"]);
+  await openMenu();
+  await menuItem("将所选内容导出到..").click();
+  assert.equal(await page.evaluate(() => window.directoryDialogs[0].options.directory), true);
+  assert.deepEqual(await page.evaluate(() => window.directoryExports), []);
+  await page.evaluate(() => { window.directoryPath = "D:/export"; });
+  await page.mouse.click(rect.x + 800, rect.y + 350, { button: "right" });
+  await openExport();
+  await menuItem("将所选内容导出到..").click();
+  await page.waitForFunction(() => window.directoryExports.length === 1);
+  assert.deepEqual(await page.evaluate(() => window.directoryExports[0]), { assetIds: ["existing", "a"], path: "D:/export" });
+  for (const action of ["移动到项目", "移动到文件夹"]) {
+    await page.mouse.click(rect.x + 800, rect.y + 350, { button: "right" });
+    await menuItem(action).click();
+    const dialog = page.getByRole("dialog", { name: action, exact: true });
+    await dialog.waitFor();
+    await page.keyboard.press("Escape");
+    await dialog.waitFor({ state: "detached" });
+  }
+  await page.mouse.click(rect.x + 800, rect.y + 350, { button: "right" });
+  await menuItem("移动到项目").click();
+  const projectDialog = page.getByRole("dialog", { name: "移动到项目" });
+  await projectDialog.getByRole("radio", { name: "目标项目 B" }).check();
+  await projectDialog.getByRole("button", { name: "移动", exact: true }).click();
+  await projectDialog.waitFor({ state: "detached" });
+  assert.deepEqual(await page.evaluate(() => window.projectMoves), [
+    { sourceProjectId: "p", targetProjectId: "transfer-target", assetIds: ["existing", "a"] },
+  ]);
   // Ctrl multi-select, independent of the library's selection.
-  await node("outside").click({ modifiers: ["Control"], position: { x: 30, y: 30 } });
+  await node("outside").click({ modifiers: ["Control"] });
   await page.waitForFunction(() => document.querySelectorAll("[data-canvas-node-id].is-selected").length === 4);
   await openMenu("outside");
   await page.evaluate(() => { window.holdArchive = true; });
@@ -85,7 +130,7 @@ try {
   await item().click();
   assert.equal(await page.evaluate(() => window.archiveCalls.length), 3, "a second menu cannot start a concurrent export");
   await page.evaluate(() => { window.holdArchive = false; window.releaseArchive(); });
-  await page.waitForFunction(() => window.archiveNotices.filter(n => n.tone === "success").length === 3);
+  await page.waitForFunction(() => window.archiveNotices.filter(n => n.tone === "success" && n.message.includes("ZIP")).length === 3);
   await page.evaluate(() => { window.failArchive = true; });
   await openMenu();
   await item().click();

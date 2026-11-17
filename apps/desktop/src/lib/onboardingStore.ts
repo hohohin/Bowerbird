@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { ONBOARDING_FEATURE_ENABLED } from "./featureFlags";
 import { ONBOARDING_KEY, parseOnboarding, type OnboardingProgress } from "./onboarding";
 import { freshRoleGuide, ONBOARDING_ROUTES, parseRoleGuide, type GuideScene, type RoleGuideProgress, type RoleSession } from "./onboardingRoutes";
 
@@ -33,10 +34,11 @@ export const useOnboarding = create<{
     set({ progress });
   },
   open: () => {
+    if (!ONBOARDING_FEATURE_ENABLED) return;
     get().setGuide(freshRoleGuide());
     set({ panel: "welcome" });
   },
-  show: (panel) => set({ panel }),
+  show: (panel) => { if (ONBOARDING_FEATURE_ENABLED) set({ panel }); },
 }));
 
 /** Capture before an operation; late success cannot advance another project, step or replay. */
@@ -47,7 +49,7 @@ export function beginOnboardingOperation(scene: GuideScene, projectId: string | 
   return (details: Partial<Pick<RoleSession, "projectId" | "collectionId" | "profileId" | "analysisAssetId" | "annotationAssetId">> = {}) => {
     const store = useOnboarding.getState();
     const current = role && store.guide.sessions[role];
-    if (!role || !session || !current || initial.status !== "active" || store.guide.role !== role
+    if (!ONBOARDING_FEATURE_ENABLED || !role || !session || !current || initial.status !== "active" || store.guide.role !== role
       || !["active", "paused"].includes(store.guide.status) || (current.projectId || null) !== projectId
       || current.runId !== session.runId || current.step !== session.step || current.stepVisit !== session.stepVisit
       || (ONBOARDING_ROUTES[role][current.step].scene !== scene && !(scene === "create-project" && role === "designer" && !current.projectId))) return;

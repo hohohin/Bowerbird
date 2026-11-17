@@ -168,8 +168,8 @@ try {
   await page.waitForFunction(() => !document.querySelector('.canvas-plane[data-canvas-connecting]'));
 
   await portrait.click({ button: 'right' });
-  await page.getByRole('menuitem', { name: '删除', exact: true }).click();
-  await page.getByRole('menuitem', { name: '从画布移出', exact: true }).click();
+  await page.getByRole('menuitem', { name: '删除当前项', exact: true }).click();
+  await page.getByRole('menuitem', { name: '移出画布', exact: true }).click();
   await page.waitForFunction(() => !JSON.parse(window.snapshot().nodes.find(node => node.id === 'media-table').payloadJson).cells[0][0].image_refs.length);
   assert.equal(JSON.parse((await state()).payloadJson).cells[0][1].image_refs[0].asset_id, 'video', 'removing a cell image preserves the table and other cells');
   await mkdir('.tmp/content-media', { recursive: true });

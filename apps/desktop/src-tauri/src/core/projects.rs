@@ -56,6 +56,11 @@ pub struct ProjectCreateResult {
     pub member_count: usize,
 }
 
+#[derive(Debug, Serialize)]
+pub struct ProjectAssetMoveResult {
+    pub changed: usize,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct ProjectCover {
     pub asset_count: i64,
@@ -471,15 +476,81 @@ impl Database {
         Ok(added)
     }
 
+    /// Move library membership while retaining each canvas instance and its creative history.
+    pub fn move_assets_to_project(
+        &self,
+        source_project_id: Option<&str>,
+        target_project_id: &str,
+        asset_ids: &[String],
+    ) -> AppResult<ProjectAssetMoveResult> {
+        if source_project_id == Some(target_project_id) {
+            return Err(AppError::Other("请选择与来源不同的目标项目".into()));
+        }
+        let ids: std::collections::BTreeSet<_> = asset_ids.iter().collect();
+        if ids.is_empty() {
+            return Err(AppError::Other("请先选择要移动的素材".into()));
+        }
+        let selection = serde_json::to_string(&ids)?;
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        for project_id in [Some(target_project_id), source_project_id].into_iter().flatten() {
+            let available: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1 AND archived_at IS NULL)",
+                [project_id], |row| row.get(0),
+            )?;
+            if !available {
+                return Err(AppError::Other("所选项目已不存在或已归档，请重新选择项目".into()));
+            }
+        }
+        let (available, changed): (usize, usize) = tx.query_row(
+            "SELECT COUNT(*), COUNT(*) FILTER (WHERE a.library_hidden<>0 OR e.library_member=0
+               OR target.asset_id IS NULL OR source.asset_id IS NOT NULL)
+             FROM json_each(?1) s JOIN assets a ON a.id=s.value
+             LEFT JOIN external_assets e ON e.asset_id=a.id
+             LEFT JOIN project_assets target ON target.project_id=?2 AND target.asset_id=a.id
+             LEFT JOIN project_assets source ON source.project_id=?3 AND source.asset_id=a.id
+             WHERE NOT EXISTS(SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=a.id)
+               AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)",
+            rusqlite::params![selection, target_project_id, source_project_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if available != ids.len() {
+            return Err(AppError::Other("部分素材已移除或清理，请刷新后重新选择".into()));
+        }
+        tx.execute(
+            "INSERT INTO project_assets(project_id,asset_id,created_at)
+             SELECT ?2,value,strftime('%s','now') FROM json_each(?1) WHERE true
+             ON CONFLICT(project_id,asset_id) DO NOTHING",
+            rusqlite::params![selection, target_project_id],
+        )?;
+        // Explicit placement in a project library also restores a canvas-only asset to browsing.
+        // The external visibility trigger requires library_member before changing library_hidden.
+        tx.execute("UPDATE external_assets SET library_member=1 WHERE library_member=0
+            AND asset_id IN (SELECT value FROM json_each(?1))", [&selection])?;
+        tx.execute("UPDATE assets SET library_hidden=0 WHERE library_hidden=1
+            AND id IN (SELECT value FROM json_each(?1))", [&selection])?;
+        if let Some(source) = source_project_id {
+            tx.execute("DELETE FROM project_assets WHERE project_id=?2
+                AND asset_id IN (SELECT value FROM json_each(?1))", rusqlite::params![selection, source])?;
+        }
+        tx.commit()?;
+        Ok(ProjectAssetMoveResult { changed })
+    }
+
     pub fn remove_assets_from_project(
         &self,
         project_id: &str,
         asset_ids: &[String],
+        remove_canvas_instances: bool,
     ) -> AppResult<usize> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let mut removed = 0;
         for asset_id in asset_ids {
+            if remove_canvas_instances {
+                super::project_canvas::hide_empty_generation_cards_for_asset(&tx, asset_id, Some(project_id))?;
+                super::project_canvas::hide_asset_canvas_nodes(&tx, asset_id, Some(project_id))?;
+            }
             removed += tx.execute(
                 "DELETE FROM project_assets WHERE project_id = ?1 AND asset_id = ?2",
                 rusqlite::params![project_id, asset_id],
@@ -1019,6 +1090,100 @@ mod tests {
                 .sum::<i64>(),
             2
         );
+    }
+
+    #[test]
+    fn move_assets_to_project_keeps_other_memberships_and_source_canvas_history() {
+        let db = db();
+        for project in ["source", "target", "other"] { put_project(&db, project); }
+        for id in ["shared", "second"] { put_asset(&db, id); }
+        let ids = vec!["shared".into(), "second".into(), "shared".into()];
+        db.add_assets_to_project("source", &ids).unwrap();
+        db.add_assets_to_project("other", &ids).unwrap();
+        db.add_assets_to_project("target", &["shared".into()]).unwrap();
+        db.conn.lock().unwrap().execute_batch(r#"
+            UPDATE assets SET library_hidden=1 WHERE id='shared';
+            INSERT INTO creative_threads(id,project_id,title,origin,created_at,updated_at)
+                VALUES('thread','source','已完成的生成','direct',1,1);
+            INSERT INTO canvas_nodes(id,project_id,thread_id,kind,asset_id,role,payload_json,
+                x,y,width,height,created_at,updated_at)
+                VALUES('card','source','thread','asset','shared','output','{"schema_version":1}',11,22,100,100,1,1);
+        "#).unwrap();
+
+        assert_eq!(db.material_catalog_assets("tags", None, Some("target")).unwrap().len(), 0);
+        assert_eq!(db.move_assets_to_project(Some("source"), "target", &ids).unwrap().changed, 2);
+        assert_eq!(db.move_assets_to_project(Some("source"), "target", &ids).unwrap().changed, 0);
+        assert_eq!(db.get_project("source").unwrap().unwrap().asset_count, 0);
+        for project in ["target", "other"] {
+            assert_eq!(db.get_project(project).unwrap().unwrap().asset_count, 2);
+            assert_eq!(db.material_catalog_assets("tags", None, Some(project)).unwrap().len(), 2);
+        }
+        let intact: bool = db.conn.lock().unwrap().query_row(
+            "SELECT EXISTS(SELECT 1 FROM canvas_nodes n JOIN creative_threads t ON t.id=n.thread_id
+             WHERE n.id='card' AND n.project_id='source' AND n.asset_id='shared' AND n.role='output'
+             AND n.hidden_at IS NULL AND n.x=11 AND n.y=22 AND t.project_id='source' AND t.title='已完成的生成')",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert!(intact);
+    }
+
+    #[test]
+    fn move_assets_to_project_from_global_restores_visibility_and_keeps_disconnections() {
+        let db = db();
+        for project in ["other", "target"] { put_project(&db, project); }
+        let ids = vec!["managed".to_owned(), "external".to_owned()];
+        for id in &ids { put_asset(&db, id); }
+        db.add_assets_to_project("other", &ids).unwrap();
+        db.conn.lock().unwrap().execute_batch("
+            UPDATE assets SET library_hidden=1;
+            INSERT INTO external_assets(asset_id,fingerprint,library_member) VALUES('external','fp',0);
+            INSERT INTO disconnected_library_assets(asset_id) VALUES('external');
+        ").unwrap();
+
+        assert_eq!(db.move_assets_to_project(None, "target", &ids).unwrap().changed, 2);
+        assert_eq!(db.move_assets_to_project(None, "target", &ids).unwrap().changed, 0);
+        for project in ["other", "target"] {
+            assert_eq!(db.material_catalog_assets("tags", None, Some(project)).unwrap().len(), 2);
+        }
+        let global = db.material_catalog_assets("tags", None, None).unwrap();
+        assert_eq!(global.len(), 1);
+        assert_eq!(global[0].id, "managed");
+        let external_visible: bool = db.conn.lock().unwrap().query_row(
+            "SELECT library_member FROM external_assets WHERE asset_id='external'", [], |row| row.get(0),
+        ).unwrap();
+        assert!(external_visible);
+    }
+
+    #[test]
+    fn move_assets_to_project_rejects_invalid_batch_and_rolls_back_failed_source_removal() {
+        let db = db();
+        for project in ["source", "target", "archived"] { put_project(&db, project); }
+        for id in ["valid", "cleaned", "trashed"] { put_asset(&db, id); }
+        let ids = vec!["valid".into()];
+        db.add_assets_to_project("source", &ids).unwrap();
+        db.conn.lock().unwrap().execute_batch("
+            UPDATE projects SET archived_at=4 WHERE id='archived';
+            UPDATE assets SET library_hidden=1 WHERE id='valid';
+            INSERT INTO removed_missing_asset_originals VALUES('cleaned','/missing');
+            INSERT INTO trashed_asset_originals VALUES('trashed','/gone','fingerprint');
+        ").unwrap();
+        for unavailable in ["cleaned", "trashed", "nonexistent"] {
+            assert!(db.move_assets_to_project(Some("source"), "target", &["valid".into(), unavailable.into()]).is_err());
+        }
+        for target in ["archived", "source", "nonexistent"] {
+            assert!(db.move_assets_to_project(Some("source"), target, &ids).is_err());
+        }
+        assert!(db.move_assets_to_project(Some("archived"), "target", &ids).is_err());
+        db.conn.lock().unwrap().execute_batch("
+            CREATE TRIGGER reject_source_remove BEFORE DELETE ON project_assets
+            BEGIN SELECT RAISE(ABORT,'injected failure'); END;
+        ").unwrap();
+        assert!(db.move_assets_to_project(Some("source"), "target", &ids).is_err());
+        assert!(db.get_asset("valid").unwrap().unwrap().library_hidden);
+        let projects: String = db.conn.lock().unwrap().query_row(
+            "SELECT group_concat(project_id) FROM project_assets WHERE asset_id='valid'", [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(projects, "source");
     }
 
     #[test]

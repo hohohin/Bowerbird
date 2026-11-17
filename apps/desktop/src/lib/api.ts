@@ -84,6 +84,7 @@ export interface CanvasFrequentAssetsResult {
 
 export const api = {
   exportAssetsZip: (assetIds: string[], path: string) => invoke<number>("export_assets_zip", { assetIds, path }),
+  exportAssetsToDirectory: (assetIds: string[], path: string) => invoke<number>("export_assets_to_directory", { assetIds, path }),
   videoPoster: (sourcePath: string) => invoke<string | null>("video_poster", { sourcePath }),
   canvasImagePreview: (path: string, maxSize: number) => invoke<string>("canvas_image_preview", { path, maxSize }),
   trimVideo: (request: import("./videoTrim").VideoTrimRequest, projectId?: string) => invoke<Asset>("trim_video", { ...request, projectId: projectId ?? null }),
@@ -207,8 +208,10 @@ export const api = {
     invoke<void>("set_active_project", { projectId: projectId ?? null }),
   addAssetsToProject: (projectId: string, assetIds: string[]) =>
     invoke<number>("add_assets_to_project", { projectId, assetIds }),
-  removeAssetsFromProject: (projectId: string, assetIds: string[]) =>
-    invoke<number>("remove_assets_from_project", { projectId, assetIds }),
+  moveAssetsToProject: (sourceProjectId: string | null, targetProjectId: string, assetIds: string[]) =>
+    invoke<{ changed: number }>("move_assets_to_project", { sourceProjectId, targetProjectId, assetIds }),
+  removeAssetsFromProject: (projectId: string, assetIds: string[], removeCanvasInstances = false) =>
+    invoke<number>("remove_assets_from_project", { projectId, assetIds, ...(removeCanvasInstances && { removeCanvasInstances }) }),
   deleteProject: (projectId: string, mode: ProjectDeleteMode, confirmation?: string, discardPendingResults?: string[]) =>
     invoke<ProjectDeleteResult>("delete_project", { projectId, mode, confirmation: confirmation ?? null, ...(discardPendingResults ? { discardPendingResults } : {}) }),
   projectDeleteImpact: (projectId: string, includePhysical = true) =>

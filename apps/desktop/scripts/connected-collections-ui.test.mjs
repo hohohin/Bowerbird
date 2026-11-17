@@ -177,9 +177,9 @@ try {
   await navigate('child');
   for (const id of ['ref-one', 'ref-two']) await card(id).click({ modifiers: ['Control'] });
   await context('ref-one');
-  await menu('移动至文件夹').click();
+  await menu('移动到文件夹').click();
   await dialog().getByText('另一目录', { exact: true }).click();
-  await dialog().getByRole('button', { name: '移动至文件夹', exact: true }).click();
+  await dialog().getByRole('button', { name: '移动到文件夹', exact: true }).click();
   await dialog().waitFor({ state: 'detached' });
   const moved = await page.evaluate(() => window.requests.find(r => r.command === 'start_file_task').args.request);
   assert.equal(moved.kind, 'move');
