@@ -2,6 +2,22 @@
 
 本页集中维护自动更新的技术约定、发布操作和部署证据；[PROJECT.md](../PROJECT.md) 只保留项目级摘要及入口。更新代码、构建签名包、发布清单、排查双端差异前先读本页。
 
+## Windows 26.11.1801 已公开发布（2026-11-18）
+
+用户授权另一会话完成后汇总范围直接发版，不再等确认。2026-11-18 02:09:11（北京时间）公网复核通过，最终桌面冻结源码 **57afb84044ed934630e9793c2a7d1a1878b87e5d**，兼容补丁及测试修订已同次流程推送。应用内更新说明沿用：**优化文件管理问题，提升使用体验；提高应用稳定性**。
+
+发布范围：H3 图片／视频提示词优化历史、按原文重试、恢复原文或结果及未知任务原单查询；Agent 图片供应商（含 MiniMax H3 Image）、H3 text／reference／frames、普通视频逐卡模型／时长／分辨率及新旧客户端能力协商；DSH 模型／思考程度、Codex 实际默认选项；组图使用当前显示图片建立固定连接、表格插列与翻页按钮避让端点；Markdown 原件拖入画板；图片右键维度入口。H3 结果 Delete 未复现，未将测试补充写作行为修复。
+
+配套 Cloud：**chat-proxy 11 → 12** 已 ACTIVE，七份发布文件回读匹配。以现役包定向增加 image_card_provider／video_card_options，保留现役普通聊天与 DSH 错误分支；工作区其他历史差异未覆盖线上。Worker **sha256:39faba7d53a529fa7e8274c05973070be0dc1a71ba705e604ec356dc3abbe158** 已运行，九份受控输入（其中 native 桥内容保持）逐份核对，配置／挂载／资源限制保持、restarts=0，五类队列切换前均为 0。Agent 空闲退避上限从 60 秒缩到 5 秒，减少任务开始前等待；未将其表述为模型正文生成提速。25 项断网 Worker 专项和四项合成 Edge 测试通过；旧 DSH 与普通 completion 均过滤未协商的视频字段，保留原模式／分辨率。先前续聊修复保持，见 [独立部署记录](../project_logs/2026-11-18-dsh-chat-resume.md)。本轮没有数据库迁移、密钥或收费开关变更。
+
+最终原生 **1319 passed／0 failed／49 ignored**，完整 TypeScript、Cloud 路由契约及生产 Vite 构建通过。六组冻结界面为 asset-multi-menu、text-file-drop、local-chat、local-chat-dsh、h3-prompt-optimization、workflow-group-current-input。首轮发现旧 H3 schema 断言缺 0.98 档位，已同步新模式并重跑；菜单初始焦点／冷启动导航已修订就绪条件；窄屏截图后恢复标准视口。冻结目录缺少被忽略的建卡样本，显式从本轮原生测试导出合成夹具（1 项通过）后聊天回归通过，未借用旧样本；失败日志保留 initial-* 和 debug-local-chat.log。额外 canvas-workflow 逻辑组 32/33，其历史 Agent 文本筛选断言与既有“所有连接输入参与”语义不符，该单项未计通过，也不宣称全库回归通过。
+
+**2241** 个冻结输入匹配 Git，**80** 个资源、扩展 **0.5.2** 与独立副本、x64、默认简体中文／可选 English、升级保留登录钩子、原公钥签名和篡改拒绝、原生媒体／等待工具、生产 bundle 及 Skill 正文未入包检查通过。安装包 **108368320 字节**，SHA-256 **9dabdae83ab57865cdebdf7a35d2abbd1dee7178f241ce759c0b641b75cc16b4**。CDN 完整回读、Range 206 与下载包原公钥验签后切公开入口。冻结后未遗漏新桌面改动，code-reader 等并行修改不随包。未安装／重启用户应用、改写用户库、创建真实支付或调用付费模型；Mac、真实旧版升级与自然生成质量仍按各自环境验收。
+
+官网现役 /opt/bowerbird/website-releases/20261118-windows-26.11.1801，回滚 /opt/bowerbird/website-releases/20261117-windows-26.11.1706。只改 **5** 个 Windows 下载文件，递归保持其余 **90** 文件、Cloud 网关、Nginx、Mac 清单与旧包。候选／现役／公网及本机独立复核通过：三平台清单／签名、no-store、双首页、账号／后台与每轮 14 项 Cloud 路径。支付开关只读确认正式公开购买保持。SQLite **0059**。
+
+本机证据 .tmp/release-windows-26.11.1801/，VPS /tmp/bowerbird-release-windows-26.11.1801/。官网 rollback.sh 恢复 1706；Worker 回滚 python3 /tmp/bowerbird-release-windows-26.11.1801/cloud.py rollback，备份 /opt/bowerbird/deploy-backups/windows-1801-cloud-20261118/，旧镜像标签 bowerbird/generation-worker:rollback-windows-1801-cloud-20261118。Edge 原包在本机 edge-before/chat-proxy/，回退须保留已发桌面协商兼容，不能盲退到不接受新字段的版本。
+
 ## Windows 26.11.1706 已公开发布（2026-11-17）
 
 用户确认发布，固定源码 **ff14fda861627c1056402b903a38c2fbf120fe9c** 已存档推送，2026-11-17 21:52:21（北京时间）公网复核通过。应用内更新说明逐字为：**优化文件管理问题，提升使用体验；提高应用稳定性**。本地清单、候选、现役及公网清单均核验此原文，没有追加技术细节或安装语言说明。
