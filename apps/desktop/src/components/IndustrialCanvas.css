@@ -34,10 +34,16 @@ html[data-theme="light"] .canvas-tactical {
 }
 html[data-theme] .canvas-tactical .canvas-stage {
   background-color:var(--cs-base);
-  background-image:var(--industrial-cross-pattern);
-  /* CanvasWorkspace supplies a zoom-scaled size inline; this surface uses the approved fixed spacing. */
-  background-size:80px 80px !important;
+  background-image:none;
 }
+html[data-theme] .canvas-camera-grid {
+  position:absolute;inset:-80px;pointer-events:none;
+  background-image:var(--industrial-cross-pattern);background-size:80px 80px;
+  will-change:transform;
+}
+/* Offstage rich card bodies still provide their real size, focus and wire anchors. */
+.canvas-plane > [data-canvas-offscreen]:not(:focus-within) { contain:paint;clip-path:inset(100%); }
+.canvas-plane :is(.workflow-wires,.canvas-graph-edges) > path[data-canvas-offscreen] { display:none; }
 html[data-theme] .canvas-tactical .canvas-drawing-tools {
   border:1px solid var(--cs-rule);border-radius:0;background:var(--cs-console);
   box-shadow:none;backdrop-filter:none;-webkit-backdrop-filter:none;
@@ -399,7 +405,7 @@ html[data-theme] :is(.local-chat-reply-box,.local-chat-search):focus-within {
   html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"] { background:Highlight; }
   html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"],
   html[data-theme] .composer-glass .composer-mode-picker>button[aria-pressed="true"] svg { color:HighlightText; }
-  html[data-theme] .canvas-tactical .canvas-stage { background-image:none; }
+  html[data-theme] .canvas-camera-grid { background-image:none; }
   html[data-theme] .creation-dock.composer-glass { background:Canvas;border:1px solid ButtonText; }
   html[data-theme] .creation-dock.composer-glass .composer-projection { display:none; }
   html[data-theme] .composer-glass .composer-collapse { border:1px solid ButtonText; }

@@ -64,7 +64,8 @@ import { VideoPoster } from "./VideoPoster";
 import { CanvasMediaHover } from "./CanvasMediaHover";
 import { CanvasImage, CanvasMediaProvider } from "./CanvasImage";
 import { useCanvasFrame, useLatestCallback } from "../lib/useCanvasFrame";
-import { canvasDragPreview } from "../lib/canvasDragPreview";
+import { canvasDragPreview, dragWire, graphWirePath } from "../lib/canvasDragPreview";
+import { canvasPaintWindow } from "../lib/canvasPaintWindow";
 import { createCanvasCellHitCache } from "../lib/canvasCellHitCache";
 import { lazyModule } from "../lib/lazyModule";
 import {
@@ -583,6 +584,7 @@ export function CanvasWorkspace({
   const explainTutorialSources = useOnboarding(state => state.guide.status === "active" && state.guide.role === "designer"
     && state.guide.sessions.designer?.projectId === projectId && [2, 7, 8].includes(state.guide.sessions.designer.step));
   const sourcePanelId = useId();
+  const planeId = useId();
   const sourceScope = useLocalFileMode(state => state.source);
   const localFilesOpen = useLocalFileMode(state => state.open);
   const fileMode = useLocalFileMode(state => state.mode);
@@ -618,7 +620,7 @@ export function CanvasWorkspace({
   }
   useEffect(() => () => window.clearTimeout(saveIndicator.current.timer), []);
   const [error, setError] = useState<string | null>(null);
-  const [activeDragId, setActiveDragId] = useState<string | null>(null);
+  const [layoutDragId, setActiveDragId] = useState<string | null>(null);
   const [guides, setGuides] = useState<CanvasSnapGuide[]>([]);
   const [snapEnabled, setSnapEnabled] = useState(() => {
     try { return localStorage.getItem(CANVAS_SNAP_ENABLED_KEY) !== "false"; }
@@ -639,13 +641,16 @@ export function CanvasWorkspace({
   const [panning, setPanning] = useState(false);
   const marqueeElement = useRef<HTMLDivElement>(null);
   const wheelStageRect = useRef<DOMRect | undefined>(undefined);
+  const gridElement = useRef<HTMLDivElement>(null);
+  const paintWindow = useRef<ReturnType<typeof canvasPaintWindow> | null>(null);
   const [selectedCanvasNodeIds, setSelectedCanvasNodeIds] = useState<Set<string>>(() => new Set());
   const [canvasLightbox, setCanvasLightbox] = useState<{ images: string[]; index: number } | null>(null);
   const videoFrameSaves = useRef(new Map<string, () => Promise<void>>());
   const videoTrimSaves = useRef(new Map<string, () => Promise<Asset>>());
   const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; section?: { id: string; name: string } | null; x: number; y: number; point: CanvasPoint | null } | null>(null);
   useEffect(() => { setPromptMenu(null); }, [projectId, viewMode]);
-  const [viewRevision, setViewRevision] = useState(0);
+  const viewSaveTimer = useRef<ReturnType<typeof setTimeout>>();
+  const mediaZoomHandle = useRef<((value: number) => void) | null>(null);
   const [documentEditor, setDocumentEditor] = useState<{ nodeId: string; projectId: string; initialDocument: TextWorkspaceDocument } | null>(null);
   const documentEditorSession = useRef(0);
   const documentEditorRevision = useRef(0);
@@ -898,7 +903,11 @@ export function CanvasWorkspace({
   const nodeFrame = useCanvasFrame(updateNodeDrag);
   const graphNodeFrame = useCanvasFrame(updateGraphNodeDrag);
   const panFrame = useCanvasFrame(updatePan);
-  const cameraFrame = useCanvasFrame<void>(paintCamera);
+  const cameraFrame = useCanvasFrame<void>(() => {
+    paintCamera();
+    clearTimeout(cameraSettleRef.current);
+    cameraSettleRef.current = setTimeout(settleCamera, 120);
+  });
   useEffect(() => {
     const hold = canvasDragHold.current;
     const move = (event: globalThis.PointerEvent) => hold.move(event.pointerId, { x: event.clientX, y: event.clientY }, event.buttons);
@@ -920,6 +929,15 @@ export function CanvasWorkspace({
   }, [projectId, projectRouteRevision, projectRoutePending, viewMode, exploring]);
   const readCanvasZoom = useCallback(() => { cameraFrame.flush(); return zoomRef.current; }, [cameraFrame]);
   // The refs own the live camera during gestures; React catches up when input settles.
+  const activeDragId = layoutDragId ?? (nodeDragRef.current?.moved ? nodeDragRef.current.nodeId
+    : graphNodeDragRef.current?.moved ? graphNodeDragRef.current.nodeId : null);
+  const manyCanvasCards = Math.max(graphNodes.length, nodes.length) + workflowNodes.length >= 150;
+  useLayoutEffect(() => {
+    if (!manyCanvasCards || !planeRef.current || !stageRef.current || loading || viewMode !== "canvas") return;
+    const window = canvasPaintWindow(planeRef.current, stageRef.current);
+    paintWindow.current = window;
+    return () => { window.dispose(); paintWindow.current = null; };
+  }, [manyCanvasCards, projectId, loading, viewMode]);
   useLayoutEffect(paintCamera);
   useEffect(() => () => {
     clearTimeout(cameraSettleRef.current);
@@ -1031,7 +1049,12 @@ export function CanvasWorkspace({
   function markViewDirty(notify = true) {
     viewDirtyRef.current = true;
     viewRevisionRef.current += 1;
-    if (notify) setViewRevision(viewRevisionRef.current);
+    if (notify) scheduleViewSave();
+  }
+
+  function scheduleViewSave() {
+    clearTimeout(viewSaveTimer.current);
+    if (viewDirtyRef.current && !loadingRef.current) viewSaveTimer.current = setTimeout(() => void queueViewPersistence(false), 220);
   }
 
   function paintCamera() {
@@ -1039,13 +1062,13 @@ export function CanvasWorkspace({
     const currentPan = panRef.current;
     const currentZoom = zoomRef.current;
     if (planeRef.current) {
+      paintWindow.current?.paint(currentPan, currentZoom);
       planeRef.current.style.transform = `translate3d(${currentPan.x}px, ${currentPan.y}px, 0) scale(${currentZoom})`;
-      planeRef.current.style.setProperty("--canvas-running-width", `${4 / currentZoom}px`);
-      planeRef.current.style.setProperty("--section-title-scale", String(Math.max(1, 14 / (16 * currentZoom))));
     }
     if (stageRef.current) {
-      stageRef.current.style.backgroundPosition = `${currentPan.x}px ${currentPan.y}px`;
-      stageRef.current.style.backgroundSize = `${72 * currentZoom}px ${72 * currentZoom}px`;
+      // The industrial grid repeats every 80 screen pixels. Pan its own layer
+      // without repainting the stage or invalidating inherited styles on every card.
+      if (gridElement.current) gridElement.current.style.transform = `translate3d(${currentPan.x % 80}px,${currentPan.y % 80}px,0)`;
     }
     const label = `${Math.round(currentZoom * 100)}%`;
     if (zoomLabelRef.current && zoomLabelRef.current.textContent !== label) zoomLabelRef.current.textContent = label;
@@ -1061,15 +1084,18 @@ export function CanvasWorkspace({
     clearTimeout(cameraSettleRef.current);
     cameraFrame.cancel();
     paintCamera();
-    setPan(panRef.current);
-    setZoom(zoomRef.current);
-    setViewRevision(viewRevisionRef.current);
+    mediaZoomHandle.current?.(zoomRef.current);
+    if (stageRef.current) {
+      stageRef.current.style.backgroundPosition = `${panRef.current.x}px ${panRef.current.y}px`;
+      stageRef.current.style.backgroundSize = `${72 * zoomRef.current}px ${72 * zoomRef.current}px`;
+    }
+    scheduleViewSave();
   }
 
   function scheduleCamera() {
     cameraFrame.push();
     clearTimeout(cameraSettleRef.current);
-    cameraSettleRef.current = setTimeout(settleCamera, 120);
+    clearTimeout(viewSaveTimer.current);
   }
 
   function lockWorkspaceInteraction() {
@@ -2120,6 +2146,13 @@ export function CanvasWorkspace({
         return;
       }
       if (event.key !== "Escape") return;
+      const marquee = marqueePressRef.current;
+      if (marquee) {
+        marqueePressRef.current = null;
+        if (marqueeElement.current) marqueeElement.current.hidden = true;
+        setSelectedCanvasNodeIds(marquee.baseSelection);
+        if (stageRef.current?.hasPointerCapture(marquee.pointerId)) stageRef.current.releasePointerCapture(marquee.pointerId);
+      }
       clearDragProjection(nodeDragRef.current); clearDragProjection(graphNodeDragRef.current);
       nodeFrame.cancel(); graphNodeFrame.cancel(); panFrame.cancel();
       snapSizeObserverRef.current?.disconnect(); snapSizeObserverRef.current = null;
@@ -2203,10 +2236,9 @@ export function CanvasWorkspace({
   }, [projectRoutePending]);
 
   useEffect(() => {
-    if (!viewDirtyRef.current || loading) return;
-    const timer = window.setTimeout(() => void queueViewPersistence(false), 220);
-    return () => window.clearTimeout(timer);
-  }, [loading, pan, viewRevision, zoom]);
+    scheduleViewSave();
+    return () => clearTimeout(viewSaveTimer.current);
+  }, [loading, projectId]);
 
   useEffect(() => {
     const flush = async () => {
@@ -2717,7 +2749,7 @@ export function CanvasWorkspace({
     if (selected.length) workflowRef.current?.position(new Map(selected.map(node => [node.id, { x: node.x + dx, y: node.y + dy }])), persist);
   }
 
-  function translateDrag(drag: DragProjection & { selectedIds: Set<string> }, materials: CanvasNode[], graph: ProjectGraphNode[],
+  function translateDrag(drag: DragProjection & { nodeId: string; selectedIds: Set<string> }, materials: CanvasNode[], graph: ProjectGraphNode[],
     workflowGeometry: WorkflowGeometry[], dx: number, dy: number) {
     const apply = () => {
       translateGraphSelection(graph, drag.selectedIds, dx, dy);
@@ -2728,11 +2760,13 @@ export function CanvasWorkspace({
       const plane = planeRef.current;
       // Folder names belong to the group ID; use the full layout for that two-identity case.
       drag.preview = plane && !materials.some(node => node.kind === "folder" && drag.selectedIds.has(node.id))
-        ? canvasDragPreview(plane, drag.selectedIds, () => {
+        ? canvasDragPreview(plane, drag.selectedIds, drag.nodeId, () => {
           const pending = drag.apply;
           clearDragProjection(drag);
+          setActiveDragId(drag.nodeId);
           pending?.();
         }) : null;
+      if (!drag.preview) setActiveDragId(drag.nodeId);
     }
     if (drag.preview) { drag.apply = apply; drag.preview.move(dx, dy); }
     else apply();
@@ -3120,7 +3154,6 @@ export function CanvasWorkspace({
       )) return;
       drag.moved = true;
       if (drag.toggleSelection) setSelectedCanvasNodeIds(drag.selectedIds);
-      setActiveDragId(drag.nodeId);
     }
     const origin = drag.initialNodes.find((node) => node.id === drag.nodeId) ?? drag.initialWorkflow.find(node => node.id === drag.nodeId);
     if (!origin) return;
@@ -3546,7 +3579,6 @@ export function CanvasWorkspace({
       )) return;
       drag.moved = true;
       if (drag.toggleSelection) setSelectedCanvasNodeIds(drag.selectedIds);
-      setActiveDragId(drag.nodeId);
     }
     const point = toBoardPoint(event.clientX, event.clientY);
     const raw = {
@@ -5331,7 +5363,7 @@ export function CanvasWorkspace({
             >
               <Minus size={14} />
             </button>
-            <span ref={zoomLabelRef}>{Math.round(zoom * 100)}%</span>
+            <span ref={zoomLabelRef}>{Math.round(zoomRef.current * 100)}%</span>
             <button
               type="button"
               title="放大"
@@ -5357,8 +5389,8 @@ export function CanvasWorkspace({
           data-overlay-scrollbars-suspended={activeDragId ? "" : undefined}
           className={`canvas-stage ${drawingTool !== "select" && drawingTool !== "pan" ? "is-drawing" : ""} ${drawingTool === "pan" ? "is-hand" : ""} ${externalDragOver ? "is-drag-over" : ""} ${spacePanReady ? "is-pan-ready" : ""} ${panning ? "is-panning" : ""} ${boardOpen || genEditing ? "is-creation-mode" : ""} ${viewMode !== "canvas" ? "is-view-hidden" : ""}`}
           style={{
-            backgroundPosition: `${pan.x}px ${pan.y}px`,
-            backgroundSize: `${72 * zoom}px ${72 * zoom}px`,
+            backgroundPosition: `${panRef.current.x}px ${panRef.current.y}px`,
+            backgroundSize: `${72 * zoomRef.current}px ${72 * zoomRef.current}px`,
           }}
           onPointerDownCapture={event => {
             if (editorCenterFrameRef.current != null) settleCamera();
@@ -5432,6 +5464,7 @@ export function CanvasWorkspace({
           }}
           onDrop={onCanvasDrop}
         >
+          <div ref={gridElement} className="canvas-camera-grid" aria-hidden="true" />
           <div className="canvas-drawing-tools" role="toolbar" aria-label="画板工具" onPointerDown={event => event.stopPropagation()}>
             <button data-tip="选择" aria-label="选择工具" aria-pressed={drawingTool === "select"} onClick={() => chooseCanvasTool("select")}><MousePointer2 size={18} /></button>
             <button data-tip="抓手 · 按住左键平移视图（Esc 退出）" aria-label="抓手工具" aria-pressed={drawingTool === "pan"} onClick={() => chooseCanvasTool("pan")}><Hand size={18} /></button>
@@ -5468,10 +5501,11 @@ export function CanvasWorkspace({
               }}><Magnet size={18} /></button>
             </div>
           </div>
-          <CanvasMediaProvider key={loading ? "loading" : projectId} zoom={zoom}><div
+          <CanvasMediaProvider key={loading ? "loading" : projectId} zoom={zoomRef.current} zoomHandle={mediaZoomHandle} planeId={planeId}><div
+            id={planeId}
             ref={planeRef}
             className="canvas-plane"
-            style={{ "--canvas-running-width": `${4 / zoom}px`, "--section-title-scale": Math.max(1, 14 / (16 * zoom)), transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})` } as CSSProperties}
+            style={{ transform: `translate3d(${panRef.current.x}px, ${panRef.current.y}px, 0) scale(${zoomRef.current})` }}
           >
             {projectId && workflowInteractive && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} toBoardPoint={toBoardPoint} graphNodes={nonChatGraphNodes} visibleGraphNodeIds={visibleGraphNodeIds} conversationCards={conversationCards} imageOnlyConversationIds={imageOnlyConversationIds} sessionHeights={sessionHeights}
               diagnosticTarget={diagnosticTarget} selectedIds={selectedCanvasNodeIds} panReady={spacePanReady || drawingTool === "pan"} onSelect={workflowOnSelect}
@@ -5578,12 +5612,11 @@ export function CanvasWorkspace({
                 const y1 = from.y + (fromMaterial ? nodeRect(fromMaterial).height : nodeRect(from).height) / 2;
                 const x2 = to.x;
                 const y2 = to.y + (toMaterial ? nodeRect(toMaterial).height : nodeRect(to).height) / 2;
-                const bend = Math.max(48, Math.abs(x2 - x1) * 0.42);
                 return (
                   <path
                     key={edge.id}
                     className={`is-${edge.kind}${selectedCanvasNodeIds.has(fromMaterial?.id ?? from.id) || selectedCanvasNodeIds.has(toMaterial?.id ?? to.id) ? " is-selected" : ""}`}
-                    d={`M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`}
+                    {...dragWire({ x: x1, y: y1, owner: fromMaterial?.id ?? from.id }, { x: x2, y: y2, owner: toMaterial?.id ?? to.id }, graphWirePath)}
                   />
                 );
               })}
@@ -5773,8 +5806,8 @@ export function CanvasWorkspace({
                 key={`${guide.axis}-${guide.position}`}
                 className={`canvas-snap-guide is-${guide.axis}`}
                 style={guide.axis === "x"
-                  ? { left: guide.position, width: 1 / zoom, backgroundSize: `100% ${12 / zoom}px` }
-                  : { top: guide.position, height: 1 / zoom, backgroundSize: `${12 / zoom}px 100%` }}
+                  ? { left: guide.position, width: 1 / zoomRef.current, backgroundSize: `100% ${12 / zoomRef.current}px` }
+                  : { top: guide.position, height: 1 / zoomRef.current, backgroundSize: `${12 / zoomRef.current}px 100%` }}
               />
             ))}
             {visibleMaterials.map((node) => {

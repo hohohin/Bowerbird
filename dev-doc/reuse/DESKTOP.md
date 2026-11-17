@@ -2,6 +2,12 @@
 
 [返回复用地图](../Bowerbird开发计划.md#复用地图)。以下入口按 2026-11-03 当前工作区源码及生产调用核对，包含未提交实现；不代表已发布。公共入口均指桌面应用内部，不是供 Cloud、扩展或官网直接导入的包。API 与原生边界见 [服务与接口](SERVICES.md)，外观入口见 [UI](UI.md)。
 
+## 无限画布的交互性能
+
+平移、缩放、拖动的最后一个输入样本复用 [useCanvasFrame](../../apps/desktop/src/lib/useCanvasFrame.ts)。[canvasDragPreview](../../apps/desktop/src/lib/canvasDragPreview.ts) 负责把拖动位移投射到选中卡、独立标题、端口和受影响的线；新增可拖连线要用 `dragWire` 登记**实际显示端口**的归属。未知连线、循环框或手势中拓扑变化回到原几何计算。最终位置、取消、撤销及持久化仍归 CanvasWorkspace。
+
+[canvasPaintWindow](../../apps/desktop/src/lib/canvasPaintWindow.ts) 为同一张大画布裁剪屏外卡片及 SVG 曲线的绘制；不卸载编辑器，不改变坐标模型，不代理指针。新增分离的卡片装饰需核对它的所有者 ID，未知元素保留原显示。[验证夹具](../../apps/desktop/scripts/fixtures/canvas-interaction-performance/README.md) 同时支持 Chrome 和 Windows WebView2。
+
 ## 3D 导演预演
 
 画板工具箱放置「3D 导演台」卡片后，从卡片打开工作台。场景、人偶与运镜沿用同目录的 scene、mannequin、motion。对象清单、视口与属性共用对象 ID，编辑与撤销以完整导演文档为单位。多个运镜方案共用布景并随该节点的 directorDocument 保存。图片输入来自画板绑定的素材，本机 Codex 通过 TextAgentTask 提交受限 JSON 编辑，可携带图片及视频截帧。[导演台入口](../../apps/desktop/src/director3d/DirectorStudio.tsx) · [对象编辑](../../apps/desktop/src/director3d/objectEditing.ts)

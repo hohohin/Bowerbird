@@ -1,11 +1,16 @@
-import { createContext, memo, useContext, useEffect, useState, type ImgHTMLAttributes, type ReactNode } from "react";
+import { createContext, memo, useContext, useEffect, useImperativeHandle, useLayoutEffect, useState, type ImgHTMLAttributes, type ReactNode, type Ref } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { canvasAssetMediaPath } from "../lib/creativeCanvas";
 import { canvasImagePreviewSize, requestCanvasImagePreview } from "../lib/canvasImagePreview";
 import { useMediaVisibility } from "../lib/useMediaVisibility";
 
 const MediaZoom = createContext(1);
-export function CanvasMediaProvider({ zoom, children }: { zoom: number; children: ReactNode }) {
+export function CanvasMediaProvider({ zoom: initialZoom, zoomHandle, planeId, children }: {
+  zoom: number; zoomHandle?: Ref<(value: number) => void>; planeId?: string; children: ReactNode;
+}) {
+  const [zoom, setZoom] = useState(initialZoom);
+  useImperativeHandle(zoomHandle, () => setZoom, []);
+  useLayoutEffect(() => setZoom(initialZoom), [initialZoom]);
   const [settledZoom, setSettledZoom] = useState(zoom);
   const [pixelRatio, setPixelRatio] = useState(() => window.devicePixelRatio);
   useEffect(() => {
@@ -19,7 +24,11 @@ export function CanvasMediaProvider({ zoom, children }: { zoom: number; children
     const timer = setTimeout(() => setSettledZoom(zoom), 150);
     return () => clearTimeout(timer);
   }, [zoom]);
-  return <MediaZoom.Provider value={settledZoom * pixelRatio}>{children}</MediaZoom.Provider>;
+  // Scope zoom-dependent decoration to its actual consumers. Inheriting either
+  // variable from the plane restyles thousands of unrelated editing controls.
+  return <>{planeId && <style>{`#${CSS.escape(planeId)} :is(.canvas-card-running,.canvas-card-error) { --canvas-running-width:${4 / zoom}px; }
+    #${CSS.escape(planeId)} :is(.canvas-section-heading,.canvas-card-name.is-section-name) { --section-title-scale:${Math.max(1, 14 / (16 * zoom))}; }`}</style>}
+    <MediaZoom.Provider value={settledZoom * pixelRatio}>{children}</MediaZoom.Provider></>;
 }
 
 type Props = Omit<ImgHTMLAttributes<HTMLImageElement>, "src"> & {

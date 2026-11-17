@@ -8,6 +8,15 @@
 node scripts/canvas-interaction-performance-ui.test.mjs
 ```
 
+测连续手势另用 `--motion`：每个真实动画帧派发一次输入，连续 48 帧，分别记录帧间隔中位数、P95、最慢帧以及 React 提交次数。`--large` 构造 1,002 张混合卡和 668 条连线，另在 20% 全貌下平移／缩放，核对视口内实际卡数、松手阶段最慢帧、导航未停时原生卡片命中。输出位于同一目录的 `motion*.json`。
+
+```powershell
+node scripts/canvas-interaction-performance-ui.test.mjs --motion
+node scripts/canvas-interaction-performance-ui.test.mjs --motion --large --webview2
+```
+
+Windows 原生测试复用隔离的调试宿主；首次在 `apps/desktop/src-tauri` 运行 `cargo build --example audio_preview_smoke`。测试连接本机临时调试端口和独立 WebView2 资料目录，页面仍使用模拟 IPC。应单独运行计时项；并行构建、显示刷新率和系统负载都会影响数据。这些数值是浏览器动画回调间隔，不是硬件输入到屏幕出图的延迟。
+
 输出 `.tmp/canvas-interaction-performance/after.json`。改动前复制完整 `src` 到 `.tmp/canvas-interaction-performance-before/src`，再运行 `--before` 保存对照。冻结目录不应覆盖；测试用 Vite 将源码依赖指向冻结目录。报告中的哈希来自 Vite 实际载入的 Workspace/Workflow 源文，不是运行末尾可能已被其他任务修改的文件。
 
 Vite 仅在测试进程插入两个组件的 render 和 layout-effect commit 计数，不改业务源。夹具同时统计 document 级节点查询、端口查询、总边界读取、端口边界读取和 stage 边界读取。每项输入 48 个事件，分四组每组 12 次，事件派发包装在 `flushSync` 中，再留两次真实动画帧处理调度工作。React 仍可能合并部分 native-event commit，因此 render 与 commit 分开记录；这是可重复压力测试，不代表真实设备输入频率、原生帧率或完整应用性能。

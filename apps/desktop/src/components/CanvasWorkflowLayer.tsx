@@ -37,7 +37,7 @@ import { contentInputPort } from "../lib/canvasContentInput";
 import { contentTableRows } from "../lib/contentTable";
 import { canvasInputAssetIds, canvasInputValue, canvasWorkflowInputState, canvasSessionImages, workflowBindingAssetIds, workflowGenerationResultAnchor, hiddenWorkflowSessionIds, workflowSessionIds, completedCanvasSessions } from "../lib/canvasSessionOutputs";
 import { useStore } from "../store";
-import { canvasWirePath as path, rememberDragWire } from "../lib/canvasDragPreview";
+import { canvasWirePath as path, dragWire, type DragOffset } from "../lib/canvasDragPreview";
 import { useWorkflowPortGeometry, type WorkflowPortTarget } from "../lib/useWorkflowPortGeometry";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError, notifySuccess } from "../lib/notify";
@@ -1280,12 +1280,17 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     }
     return table ? { x: table.x + (input ? 0 : table.width), y: table.y + table.height / 2, owner: table.id, selected: selectedIds.has(table.id) } : null;
   }
-  function outputPath(from: { x: number; y: number }, to: { x: number; y: number }) {
+  function outputPath(from: { x: number; y: number }, to: { x: number; y: number }, drag?: DragOffset) {
     // Compact sibling grids need a lane around earlier columns, not through their media.
-    const blockers = materials.filter(rect => rect.x > from.x && rect.x + rect.width < to.x
-      && rect.y < Math.max(from.y, to.y) && rect.y + rect.height > Math.min(from.y, to.y));
-    if (!blockers.length) return path(from, to);
-    const lane = Math.max(...blockers.map(rect => rect.y + rect.height)) + 16;
+    let bottom = -Infinity;
+    for (const rect of materials) {
+      const moved = drag?.ids.has(rect.id);
+      const x = rect.x + (moved ? drag!.dx : 0), y = rect.y + (moved ? drag!.dy : 0);
+      if (x > from.x && x + rect.width < to.x && y < Math.max(from.y, to.y) && y + rect.height > Math.min(from.y, to.y))
+        bottom = Math.max(bottom, y + rect.height);
+    }
+    if (bottom === -Infinity) return path(from, to);
+    const lane = bottom + 16;
     return `M${from.x},${from.y} H${from.x + 16} V${lane} H${to.x - 16} V${to.y} H${to.x}`;
   }
   updateCursor.current = () => {
@@ -1388,8 +1393,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
         const embedded = embeddedPoint(id, true);
         if (!embedded && (conversationCards?.routedIds.has(id) || visibleGraphNodeIds && !visibleGraphNodeIds.has(anchorId) && !materialById.has(anchorId))) return null;
         return session && <path key={`agent-session-${node.id}-${id}`} className={`is-image${wireSelected(node.id) || wireSelected(anchorId) ? " is-selected" : ""}`} data-workflow-session-link={id}
-          data-workflow-generator={node.id} d={path(cardPoint(node.id, "output")!,
-            embedded ?? cardPoint(anchorId, "input")!)} />;
+          data-workflow-generator={node.id} {...dragWire(cardPoint(node.id, "output")!, embedded ?? cardPoint(anchorId, "input")!)} />;
       }))}
       {document.nodes.filter(node => node.kind === "generation" || node.kind === "comfy-video").flatMap(node => {
         const hiddenSessions = hiddenWorkflowSessionIds([node]);
@@ -1400,17 +1404,17 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
             const visible = materialById.get(anchorId) ?? conversationCards?.cards.get(anchorId)?.anchor;
             if (!visible || output.hiddenAt != null || conversationCards?.hiddenIds.has(anchorId)) return [];
             return <path key={`generated-${node.id}-${output.id}`} className={`is-image${wireSelected(node.id) || wireSelected(visible.id) ? " is-selected" : ""}`} data-workflow-generated-link={output.id}
-              data-workflow-generator={node.id} d={outputPath(cardPoint(node.id, "output")!, cardPoint(anchorId, "input")!)} />;
+              data-workflow-generator={node.id} {...dragWire(cardPoint(node.id, "output")!, cardPoint(anchorId, "input")!, outputPath, true)} />;
           }));
       })}
       {document.nodes.map(node => {
         const group = node.resultGroupId && groupById.get(node.resultGroupId);
-        return group && <path key={`group-${node.id}`} className={`is-image${wireSelected(node.id) || wireSelected(group.id) ? " is-selected" : ""}`} data-workflow-product-link={group.id} d={path(cardPoint(node.id, "output")!, { x: group.x, y: group.y + group.height / 2 })} />;
+        return group && <path key={`group-${node.id}`} className={`is-image${wireSelected(node.id) || wireSelected(group.id) ? " is-selected" : ""}`} data-workflow-product-link={group.id} {...dragWire(cardPoint(node.id, "output")!, { x: group.x, y: group.y + group.height / 2, owner: group.id })} />;
       })}
       {document.nodes.flatMap(node => (node.resultNodeIds ?? []).map(id => {
         const result = graphById.get(id);
         const type = node.kind === "voice" || node.kind === "comfy-video" || node.kind === "generation" || node.action === "layers" ? "image" : "text";
-        return result && <path key={id} className={`is-${type}${wireSelected(node.id) || wireSelected(id) ? " is-selected" : ""}`} data-workflow-result-link={id} d={outputPath(cardPoint(node.id, "output")!, cardPoint(result.id, "input")!)} />;
+        return result && <path key={id} className={`is-${type}${wireSelected(node.id) || wireSelected(id) ? " is-selected" : ""}`} data-workflow-result-link={id} {...dragWire(cardPoint(node.id, "output")!, cardPoint(result.id, "input")!, outputPath, true)} />;
       }))}
       {renderedNodes.flatMap(node => Object.entries(node.kind === "comfy-video" ? generationInputNode(node).inputs : node.inputs).flatMap(([port, inputs]) => inputs.map((binding, index) => {
         if (node.kind === "trigger" && port === "completion" && workflowTriggerMode(node) !== "completion") return null;
@@ -1439,7 +1443,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
         const diagnostic = nodeDiagnostic(node.id);
         const failedWire = diagnostic?.source && (workflowBindingKey(diagnostic.source) === workflowBindingKey(binding)
           || inputs.length === 1 && node.promptReferences?.some(ref => ref.type === port && ref.label === diagnostic.referenceLabel));
-        return <path key={`${node.id}-${port}-${index}`} ref={rememberDragWire(from, { ...to, owner: node.textTarget?.nodeId ?? node.textSource ?? node.id })} style={frame && !failedWire ? { stroke: "#66baff", opacity: 1 } : undefined} data-auto-connection={binding.autoConnect} data-workflow-target={node.id} data-workflow-signal-link={port === "signal" ? node.id : undefined} data-workflow-text-link={node.textTarget?.cellId} className={`is-${binding.autoConnect ? "automatic" : port}${failedWire ? " is-error" : ""}${from.selected || wireSelected(node.id) ? " is-selected" : ""}`} d={path(from, to)}
+        return <path key={`${node.id}-${port}-${index}`} {...dragWire(from, { ...to, owner: node.textTarget?.nodeId ?? node.textSource ?? node.id })} style={frame && !failedWire ? { stroke: "#66baff", opacity: 1 } : undefined} data-auto-connection={binding.autoConnect} data-workflow-target={node.id} data-workflow-signal-link={port === "signal" ? node.id : undefined} data-workflow-text-link={node.textTarget?.cellId} className={`is-${binding.autoConnect ? "automatic" : port}${failedWire ? " is-error" : ""}${from.selected || wireSelected(node.id) ? " is-selected" : ""}`}
           onContextMenu={event => {
             if (!binding.autoConnect && port !== "signal") return;
             event.preventDefault(); event.stopPropagation();
