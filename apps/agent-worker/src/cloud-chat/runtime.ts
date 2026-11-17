@@ -11,6 +11,15 @@ const shared = join(import.meta.dirname, "../../../cloud/supabase/functions/_sha
 const instructions = readFileSync(join(shared, "chat-instructions.txt"), "utf8");
 const schema = JSON.parse(readFileSync(join(shared, "chat-card-tool.json"), "utf8"));
 delete schema.inputSchema.properties.cards.items.properties.provider; // Legacy completion jobs use the original card contract.
+const legacyFields = schema.inputSchema.properties.cards.items.properties;
+delete legacyFields.videoChannel;
+delete legacyFields.videoOptions;
+legacyFields.mode.enum = ["count", "rows"];
+legacyFields.mode.description = "loop only: count repeats the body; rows feeds source table rows to the body.";
+legacyFields.resolution.enum = [0.6, 0.8, 1];
+schema.description = schema.description
+  .replace("H3 video mode is text, reference (one image), or frames (default, first and optional last frame). ", "")
+  .replace("Frames may be omitted to create a draft; frames mode requires a first frame to run, reference mode requires one image, text mode needs none.", "Frames may be omitted to create a draft; running H3 requires a first frame.");
 const tool = { type: "function", function: { name: schema.name, description: schema.description, parameters: schema.inputSchema } };
 
 export async function completeChatJob(input: ChatInput, model: Pick<DeepSeekBackend, "chat">) {

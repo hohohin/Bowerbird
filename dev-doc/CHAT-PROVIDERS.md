@@ -2,6 +2,8 @@
 
 ## 2026-11-18 模型选择与建卡参数（Windows 26.11.1801 发布中）
 
+发布前复核补齐旧版普通 completion 的视频字段过滤，旧工具保持 count／rows 与原 H3 分辨率枚举。chat-proxy 部署基于现役候选只增图片／视频能力字段，保留现役区分普通聊天与 DSH 的错误响应，不用工作区整文件覆盖线上。
+
 DSH 对话和 Agent 卡可选模型及思考程度；跟随服务配置仍可用。所选项按轮次保存，本机宿主复核实际模型回执，Cloud 沿原任务身份提交。Codex 显示并提交实际默认模型与推理程度。建卡补充 H3 的 text／reference／frames 模式、图片供应商和普通视频逐卡选项；Cloud 通过 image_card_provider／video_card_options 能力协商，旧客户端不接收未知字段。H3 提示词优化保留原文和结果、可恢复与重试；结果未知时只查询原任务。Agent 队列空闲退避上限从 60 秒调整到 5 秒，不代表模型正文生成速度已经提高。Cloud 续聊修复证据见 [续聊记录](../project_logs/2026-11-18-dsh-chat-resume.md)，本轮实际发布和回滚以 [桌面更新](DESKTOP-UPDATES.md) 为准。
 
 ## Agent 按生图卡选择 provider（桌面与云端源码）

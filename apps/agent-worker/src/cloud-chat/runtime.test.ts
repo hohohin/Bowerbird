@@ -51,6 +51,12 @@ test("one completion uses fixed tools, records usage and never executes the card
   const [messages, tools] = calls[0] as Array<Array<Record<string, unknown>>>;
   assert.equal(messages[0].role, "system");
   assert.equal(tools.length, 1);
+  const fields = (tools[0] as any).function.parameters.properties.cards.items.properties;
+  assert.equal(fields.provider, undefined);
+  assert.equal(fields.videoChannel, undefined);
+  assert.equal(fields.videoOptions, undefined);
+  assert.deepEqual(fields.mode.enum, ["count", "rows"]);
+  assert.deepEqual(fields.resolution.enum, [0.6, 0.8, 1]);
 });
 
 test("plain chat disables card tools and unknown transport is never retried", async () => {
