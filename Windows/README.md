@@ -2,6 +2,12 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## Windows 26.11.1601 已发布（2026-11-17）
+
+源码 32239f02 已推送并冻结。官网与自动更新已切换，安装器首次默认简体中文，可选 English。1299 项原生通过、49 项跳过，九组冻结界面、63 项逻辑、38 项官网、2227 个冻结输入及 80 个包资源核验通过。详见[发布范围、证据和回滚](../dev-doc/DESKTOP-UPDATES.md#windows-26111601-已公开发布2026-11-17)。
+
+[下载 Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1601_x64-setup.exe)。
+
 ## Windows 26.11.1001 已发布（2026-11-10）
 
 最终源码 **b5302da2** 已存档推送并冻结签名，官网与自动更新已切换。包含角色声音、强化复刻、播放器／音轨、办公文档、统一 Agent、素材库与创作框，以及标注覆盖原图；修复索引影响原件恢复身份的问题。冻结 Rust 1207 passed／41 ignored、23 组界面、2104 输入及 76 资源、中文／English、原公钥验签与完整 CDN 下载通过。SQLite 0056；后续并行增量未纳入。
