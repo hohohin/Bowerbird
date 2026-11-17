@@ -40,6 +40,7 @@ w.__TAURI_INTERNALS__ = {
     }
     if (command === "screenshot_start" || command === "screenshot_paste") { if (w.screenshotError) throw w.screenshotError; return; }
     if (command === "update_settings") return;
+    if (command === "file_workspace_status") return { proposed_root: "D:/fixture/BowerbirdLibrary" };
     if (command === "library_root") return "synthetic-library";
     if (command === "codex_health" || command === "dreamina_health") return { ok: false };
     if (command === "cloud_sync_entitlement") return pro;

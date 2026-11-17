@@ -11,6 +11,10 @@ try {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('http://127.0.0.1:1798/scripts/fixtures/redemption/preview.html');
   assert.equal(await page.getByText('浏览器扩展', { exact: true }).count(), 0);
+  await page.getByText('D:/fixture/BowerbirdLibrary', {exact:true}).waitFor();
+  assert.equal(await page.getByText('资料文件夹', {exact:true}).count(), 1);
+  await page.getByTitle('选择项目与随图资料的保存位置，或将历史素材按项目迁入当前位置。').waitFor();
+  await page.getByText('当前版本', {exact:true}).waitFor();
   await page.getByRole('radio', { name: /夜间模式/ }).click();
   assert.deepEqual(await page.evaluate(() => { const s = window.store.getState().settings; return [s.board_shift_pick, s.hide_project_assets, s.dreamina_model_version]; }), [true, true, '4.7']);
   await page.getByRole('button', { name: '模型设置', exact: true }).click();
@@ -32,25 +36,25 @@ try {
   await page.getByRole('alert').filter({ hasText: '截图操作未完成' }).waitFor();
   assert.doesNotMatch(await page.getByRole('dialog').innerText(), /TypeError|private debug/);
   await page.getByRole('button', { name: '账号管理', exact: true }).click();
-  const panel = page.getByRole('region', { name: '积分明细', exact: true });
-  await page.getByText('暂无积分记录', { exact: true }).waitFor();
-  await panel.getByText('赠送积分', { exact: true }).waitFor();
-  await panel.getByText('历史每日赠送', { exact: true }).waitFor();
-  assert.equal(await panel.getByText('历史赠送积分', { exact: true }).count(), 0);
-  assert.doesNotMatch(await page.getByRole('dialog').innerText(), /每码可兑换/);
+  await page.getByText('查看会员方案与充值', {exact:true}).click();
   await page.getByRole('region', { name: 'Plan', exact: true }).waitFor();
   await page.getByRole('region', { name: 'Bcoin 充值', exact: true }).waitFor();
+  await page.getByRole('button', {name:'查看积分明细'}).click();
+  const panel = page.getByRole('region', { name: '积分明细', exact: true });
+  await page.getByText('暂无积分收支', { exact: true }).waitFor();
+  await panel.getByText('赠送积分', { exact: true }).waitFor();
+  await panel.getByText('充值积分', { exact: true }).waitFor();
+  assert.equal(await panel.getByText('历史赠送积分', { exact: true }).count(), 0);
+  assert.doesNotMatch(await page.getByRole('dialog').innerText(), /每码可兑换/);
   await page.evaluate(() => {
     const rows = [['confirm', 0, 'image_hd'], ['confirm', 5, 'image_hd'], ['hold', -20, 'image_hd'], ['rollback', 10, 'image_layer_edit'], ['refund', -100, null], ['grant', 100, null], ['expire', -30, null], ['adjust', 3, null], ['future_kind', 1, 'future_service']];
     window.store.setState({ cloudEntitlement: { ...window.free, balances: { daily: 0, sub: 10, topup: 400 }, recent_transactions: rows.map(([kind, amount, service], i) => ({ kind, amount, service, created_at: new Date(Date.UTC(2026, 9, 24, 10, 0) - i * 60000).toISOString() })) } });
   });
-  await panel.getByText('余额不变', { exact: true }).waitFor();
-  await panel.getByText('多余预留返还', { exact: true }).waitFor();
-  await panel.getByText('退款回收积分', { exact: true }).waitFor();
-  await panel.getByText('有有效期的积分到期后扣除。', { exact: true }).waitFor();
+  assert.equal(await panel.getByText('余额不变', {exact:true}).count(), 0);
+  await panel.getByText('图层修改 · 积分退回', {exact:true}).waitFor();
+  await panel.getByText('订单退款 · 积分收回', {exact:true}).waitFor();
+  await panel.getByText('积分到期', {exact:true}).waitFor();
   assert.doesNotMatch(await panel.innerText(), /hold|confirm|rollback|image_hd|future_kind|future_service/);
-  await panel.getByText('如何看懂积分记录', { exact: true }).click();
-  await panel.getByText(/不会再扣一次/).waitFor();
   await mkdir('.tmp/settings-presentation', { recursive: true });
   for (const theme of ['light', 'dark']) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);

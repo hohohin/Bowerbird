@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
-const server = await createServer({ server: { host: "127.0.0.1", port: 0, hmr: false, watch: null } });
+const server = await createServer({ server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 try {
@@ -18,7 +18,7 @@ try {
     const { notifySuccess } = await import("/src/lib/notify.ts");
     notifySuccess("测试消息", undefined, "generation");
   });
-  await page.getByRole("dialog", { name: "新通知" }).waitFor();
+  await page.getByRole("status", { name: "新通知" }).waitFor();
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal(await hiddenCount(), initialCount);
   const dialog = page.getByRole("button", { name: "测试弹窗" });

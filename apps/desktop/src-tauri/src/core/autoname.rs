@@ -155,7 +155,7 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
         &entitlement,
         cloud,
         auth,
-        settings.cloud_auto_understand,
+        false, // 后台入库分析仅使用本机引擎，包括旧版已开启上云的配置。
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -303,7 +303,6 @@ async fn name_from_text(
     let entitlement = app.state::<EntitlementService>();
     let snapshot = entitlement.current_or_sync(&auth).await;
     // allow_cloud 恒 true：命名只上传文本、不上传图片，无需「云端理解」隐私开关
-    // （cloud_auto_understand 只管图片上云）；codex 路由不受此参数影响。
     let provider = resolve_entitled_understand_provider(&entitlement, cloud, auth, true)
         .await
         .map_err(|e| e.to_string())?;

@@ -12,6 +12,7 @@ import { ModalShell } from "./ModalShell";
 import { RedeemCodeCard } from "./RedeemCodeCard";
 import { ScreenshotSettings } from "./ScreenshotSettings";
 import { AppUpdateCard } from "./AppUpdateCard";
+import { fileWorkspace } from "../lib/fileWorkspace";
 import { FileWorkspaceMoveDialog } from "./FileWorkspaceMoveDialog";
 import { CreditDetails } from "./CreditDetails";
 import { AccountBilling } from "./AccountBilling";
@@ -130,7 +131,7 @@ function ProTrial({ userId, available }: { userId: string; available: boolean })
  * 五分区：系统设置（外观 / 素材库位置 / 新手教程）、账号管理（账号名 / 等级与升级 / 积分明细）、
  * 模型设置（订阅授权 / 默认反推模型 / 入库自动反推）、个性化与记忆（快捷键 / 素材名称 / 完成提醒），
  * 旧版本扩展检测、Shift 引入和隐藏项目素材设置由 LEGACY_SETTINGS_ENABLED 隐藏。
- * 关于我们（当前版本 / 前往官网）。原「环境状态」总览已删除，各引导由对应分区直接唤起。
+ * 关于我们（前往官网）。原「环境状态」总览已删除，各引导由对应分区直接唤起。
  * 另有「开发者选项」分区仅测试账号可见：对话框 Agent 模式开关集中在此，关闭的模式不在
  * 创作板 / 会话编辑坞渲染（默认只开正式 Agent）。
  * 由侧栏底部账号区「设置」唤起。点背景 / ✕ 关闭。
@@ -196,6 +197,16 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
   const [libRoot, setLibRoot] = useState<string | null>(null);
   const [migrateTarget, setMigrateTarget] = useState<string | null>(null); // 确认迁移的旧→新
   const [fileMoveOpen, setFileMoveOpen] = useState(false);
+  const [workspaceRoot, setWorkspaceRoot] = useState("读取中…");
+  useEffect(() => {
+    if (fileMoveOpen) return;
+    let active = true;
+    void fileWorkspace.status().then(status => {
+      if (active) setWorkspaceRoot(status.proposed_root);
+    }).catch(() => { if (active) setWorkspaceRoot("无法读取当前位置"); });
+    return () => { active = false; };
+  }, [fileMoveOpen]);
+
   const [migrating, setMigrating] = useState(false);
   const [migrateError, setMigrateError] = useState<string | null>(null);
 
@@ -523,12 +534,13 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
         </nav>
 
         {/* 右列：具体内容（内容超出时列内滚动） */}
-        <div key={section} className="min-w-0 flex-1 space-y-3 overflow-y-auto">
+        <div key={section} className="min-w-0 flex-1 space-y-3 overflow-y-auto [scrollbar-gutter:stable]">
           {settingsSaveError != null && <p role="alert" className="settings-card px-3 py-2 text-sm">
             {userErrorMessage(settingsSaveError, "设置未保存，请重试。")} <button type="button" onClick={() => void retrySettings().catch(() => {})}>重试保存</button>
           </p>}
           {section === "system" && (
             <>
+              <AppUpdateCard version={appVersion} migrating={migrating} />
               {/* 外观：后端 settings.json 持久化；夜间模式沿用原有黑色 UI。 */}
               <div className="settings-card px-3 py-2.5">
                 <div className="text-ink">外观</div>
@@ -563,9 +575,9 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
 
               {/* 素材库位置 */}
               <div className="settings-card px-3 py-2.5">
-                <div className="text-ink">资料文件夹 · BowerbirdLibrary</div>
-                <p className="mt-1 text-xs text-muted">选择项目与随图资料的保存位置，或将历史素材按项目迁入当前位置。</p>
-                <button className="app-button-secondary mt-2" onClick={() => setFileMoveOpen(true)}>选择位置并迁移…</button>
+                <div className="text-ink">资料文件夹</div>
+                <p className="mt-1 break-all text-xs text-muted">{workspaceRoot}</p>
+                <button title="选择项目与随图资料的保存位置，或将历史素材按项目迁入当前位置。" className="app-button-secondary mt-2" onClick={() => setFileMoveOpen(true)}>选择位置并迁移…</button>
               </div>
               <div className="settings-card px-3 py-2.5">
                 <div className="text-ink">历史素材索引与缓存位置</div>
@@ -685,7 +697,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                       disabled={cloudBusy}
                       className="shrink-0 text-xs text-muted hover:text-accent disabled:opacity-50"
                     >
-                      {cloudBusy ? "同步中…" : "刷新权益"}
+                      <RefreshCw size={13} aria-hidden="true" className="mr-1 inline-block align-middle" />{cloudBusy ? "同步中…" : "刷新权益"}
                     </button>
                   ) : (
                     <button
@@ -699,11 +711,6 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                     </button>
                   )}
                 </div>
-                {loggedIn && (
-                  <p className="mt-1 text-[11px] text-muted">
-                    账号只同步订阅和积分；素材库与本地数据库默认不上传。使用 Cloud / Agent 时，仅本次明确提交的文字和参考图会临时上传。
-                  </p>
-                )}
               </div>
 
               {loggedIn && <section aria-label="账号概览" className="settings-card account-overview">
@@ -735,16 +742,18 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
           {section === "credits" && loggedIn && <div className="settings-card p-3">
             <CreditDetails entitlement={current} />
             {!current && <button type="button" className="app-modal-button mt-2" disabled={cloudBusy} onClick={() => void syncCloudEntitlement()}>
-              {cloudBusy ? "同步中…" : "刷新权益"}
+              <RefreshCw size={13} aria-hidden="true" className="mr-1 inline-block align-middle" />{cloudBusy ? "同步中…" : "刷新权益"}
             </button>}
           </div>}
           {section === "models" && (
             <>
+              <section aria-labelledby="byo-heading" className="space-y-3">
+              <h3 id="byo-heading" className="font-medium text-ink">自有订阅</h3>
               {/* 使用自有 ChatGPT 订阅（codex CLI）：状态 + 一键登录授权；引导弹窗入口随 CODEX_ONBOARDING_ENABLED 暂隐 */}
               <div className="settings-card px-3 py-2.5" tabIndex={-1}
                 ref={initialSubscription === "codex" ? subscriptionCard : undefined} data-modal-autofocus={initialSubscription === "codex" || undefined}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-ink">使用自有ChatGPT订阅</span>
+                  <span className="text-ink">ChatGPT</span>
                   <span className="flex items-center gap-1.5">
                     <span
                       className={`rounded px-2 py-0.5 text-xs ${
@@ -754,7 +763,7 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                       }`}
                       title={codexHealth?.reason ? userErrorMessage(codexHealth.reason, "暂时无法使用，请重新检测或登录。") : undefined}
                     >
-                      {codexHealth?.ok ? "✓ 已登录" : "✗ 未就绪"}
+                      {codexHealth?.ok ? "✓ 就绪" : "✗ 未就绪"}
                     </span>
                     <button
                       type="button"
@@ -814,11 +823,11 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                 )}
               </div>
 
-              {/* 使用自有即梦订阅（dreamina CLI）：状态 + 一键登录授权；引导弹窗入口随 DREAMINA_ONBOARDING_ENABLED 暂隐 */}
+              {/* 即梦（dreamina CLI）：状态 + 一键登录授权；引导弹窗入口随 DREAMINA_ONBOARDING_ENABLED 暂隐 */}
               <div className="settings-card px-3 py-2.5" tabIndex={-1}
                 ref={initialSubscription === "jimeng" ? subscriptionCard : undefined} data-modal-autofocus={initialSubscription === "jimeng" || undefined}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-ink">使用自有即梦订阅</span>
+                  <span className="text-ink">即梦</span>
                   <span className="flex items-center gap-1.5">
                     <span
                       className={`rounded px-2 py-0.5 text-xs ${
@@ -857,9 +866,9 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                     <button
                       onClick={() => void logoutDreamina()}
                       title="登出即梦账号（dreamina logout）"
-                      className="shrink-0 text-[11px] text-muted hover:text-red-300"
+                      className="shrink-0 rounded border border-edge px-3 py-1 text-[12px] text-ink hover:bg-edge disabled:opacity-50"
                     >
-                      登出
+                      退出登录
                     </button>
                   )}
                   {dreaminaAuthLine && (
@@ -888,6 +897,8 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
               </div>
 
               <DshSubscriptionCard allowed={canUseByo(cloudEntitlement)} cardRef={initialSubscription === "dsh" ? subscriptionCard : undefined} />
+
+              </section>
 
               {/* 默认反推模型：非 auto 时跳过每次的引擎选择浮层直接执行 */}
               <div className="settings-card px-3 py-2.5">
@@ -949,20 +960,6 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
                     </p>
                   </div>
                 )}
-                {/* 云端理解授权勾选留在「入库时自动反推」里（本质是入库行为开关）。 */}
-                <div className="mt-3 flex items-start justify-between gap-2 border-t border-edge pt-2 text-[11px] text-muted">
-                  <span className="min-w-0">
-                    允许入库自动分析时，把新图片临时发送到 Bowerbird Cloud
-                    理解（默认关闭；请求结束不保存图片）
-                  </span>
-                  <Toggle
-                    checked={settings?.cloud_auto_understand ?? false}
-                    onChange={(v) =>
-                      settings && void updateSettings({ cloud_auto_understand: v })
-                    }
-                    disabled={!cloudAuth?.cloud_available}
-                  />
-                </div>
               </div>
             </>
           )}
@@ -1035,7 +1032,6 @@ export function SettingsDialog({ onClose, initialSection = "system", initialSubs
 
           {section === "about" && (
             <>
-              <AppUpdateCard version={appVersion} migrating={migrating} />
               <div className="settings-card flex items-center justify-between px-3 py-2.5">
                 <span className="text-ink">关于 Bowerbird</span>
                 <button

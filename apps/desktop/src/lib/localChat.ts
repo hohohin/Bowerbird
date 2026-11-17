@@ -114,7 +114,7 @@ export function localChatInputError(text: string, referenceAssetIds: string[]): 
 export const localChat = {
   dshStatus: () => invoke<ChatDshStatus>("local_chat_dsh_status"),
   dshSetup: (input: ChatDshSetup) => invoke<ChatDshStatus>("local_chat_dsh_setup", { ...input }),
-  dshAccount: (action: "status" | "start" | "cancel", attemptId?: string) =>
+  dshAccount: (action: "status" | "start" | "cancel" | "logout", attemptId?: string) =>
     invoke<ChatDshAccount>("local_chat_dsh_account", { action, attemptId }),
   models: () => invoke<ChatCodexModel[]>("local_chat_models"),
   quote: () => invoke<ChatQuote>("local_chat_quote"),

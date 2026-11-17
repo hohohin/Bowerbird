@@ -88,7 +88,7 @@ pub(in crate::commands::local_chat) async fn account(
     action: &str,
     attempt_id: Option<&str>,
 ) -> AppResult<AccountStatus> {
-    if !matches!(action, "start" | "cancel" | "status") {
+    if !matches!(action, "start" | "cancel" | "status" | "logout") {
         return Err(error("无效的 DSH 授权操作"));
     }
     if action == "start" {
@@ -141,6 +141,13 @@ pub(in crate::commands::local_chat) async fn account(
             {
                 save_mode(true)?;
             }
+        }
+        "logout" => {
+            if host.rpc("account/hasRunningAccountTasks", json!({})).await? == true {
+                return Err(error("请等待当前 DeepSeek 账号任务完成后再退出登录"));
+            }
+            host.rpc("account/signOut", json!({"client": client})).await?;
+            view = host.rpc("account/getState", json!({})).await?;
         }
         "cancel" => {
             let id = attempt_id

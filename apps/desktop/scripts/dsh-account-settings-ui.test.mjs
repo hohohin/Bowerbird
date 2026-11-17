@@ -18,6 +18,7 @@ try {
       if (command === 'plugin:shell|open') { window.opens.push(args.path); return; }
       if (command === 'local_chat_dsh_status') return {localAvailable:true, localMode:'auto'};
       if (command !== 'local_chat_dsh_account') return original(command, args);
+      if (args.action === 'logout') window.account = {state:'signedOut'};
       if (args.action === 'start') {
         window.attempts++;
         window.account = {state:'pending', attemptId:'test-' + window.attempts, authorizeUrl:window.nextUrl};
@@ -64,12 +65,12 @@ try {
   await login.click();
   await page.waitForFunction(() => window.attempts === 3 && window.opens.length === 3);
   await page.evaluate(() => { window.account = {state:'verified'}; });
-  await card.getByText('已登录', {exact:true}).waitFor();
+  await card.getByText('✓ 就绪', {exact:true}).waitFor();
   await page.evaluate(() => { window.account = {state:'unverified'}; });
   await card.getByRole('button', {name:'重新检测 DSH 登录状态'}).click();
   await card.getByText('登录状态待确认', {exact:true}).waitFor();
-  assert.equal(await card.getByText('已登录', {exact:true}).count(), 0);
-  await page.evaluate(() => {window.account = {state:'signedOut'};});
+  assert.equal(await card.getByText('✓ 就绪', {exact:true}).count(), 0);
+  await card.getByRole('button', {name:'退出登录'}).click();
   await card.getByRole('button', {name:'重新检测 DSH 登录状态'}).click();
   await card.getByText('未登录', {exact:true}).waitFor();
   await login.click();

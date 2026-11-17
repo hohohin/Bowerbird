@@ -32,7 +32,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
   const codexHealth = useStore((s) => s.codexHealth);
   const [open, setOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [settingsSection, setSettingsSection] = useState<"system" | "account" | "credits" | "about">("system");
+  const [settingsSection, setSettingsSection] = useState<"system" | "account" | "credits" | "update">("system");
   const rootRef = useRef<HTMLDivElement>(null);
 
   const loggedIn = cloudAuth?.logged_in === true;
@@ -80,8 +80,8 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
     <div ref={rootRef} className={topbar ? "topbar-account" : `relative border-t border-edge px-1 pb-1 pt-2 ${collapsed ? "mt-auto w-full" : "mt-2"}`}>
       {topbar && <span className="topbar-update-slot">
         {update && <button ref={updateTriggerRef} type="button" className="topbar-update-button"
-          title={updateLabel} aria-label={updateLabel} aria-haspopup="dialog" aria-expanded={settingsOpen && settingsSection === "about"}
-          onClick={() => { setSettingsSection("about"); setSettingsOpen(true); }}>
+          title={updateLabel} aria-label={updateLabel} aria-haspopup="dialog" aria-expanded={settingsOpen && settingsSection === "update"}
+          onClick={() => { setSettingsSection("update"); setSettingsOpen(true); }}>
           <CircleArrowUp size={18} aria-hidden="true" />
         </button>}
       </span>}
@@ -213,7 +213,7 @@ export function SidebarAccount({ collapsed = false, onInteractionChange, placeme
         {open ? <ChevronUp size={13} className="shrink-0 text-muted" /> : <ChevronDown size={13} className="shrink-0 text-muted" />}</>}
       </button>
 
-      {settingsOpen && <SettingsDialog initialSection={settingsSection} onClose={() => { setSettingsOpen(false); (settingsSection === "about" ? updateTriggerRef.current ?? triggerRef.current : settingsSection === "credits" ? balanceTriggerRef.current : triggerRef.current)?.focus(); }} />}
+      {settingsOpen && <SettingsDialog initialSection={settingsSection === "update" ? "system" : settingsSection} onClose={() => { setSettingsOpen(false); (settingsSection === "update" ? updateTriggerRef.current ?? triggerRef.current : settingsSection === "credits" ? balanceTriggerRef.current : triggerRef.current)?.focus(); }} />}
     </div>
   );
 }

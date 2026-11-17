@@ -39,6 +39,7 @@ try {
   await page.waitForFunction(() => !document.querySelector('.generation-send-button').disabled);
   assert.equal(await tooltip.count(), 0);
   await dock.locator('.ProseMirror').fill('');
+  await page.waitForFunction(() => document.querySelector('.generation-send-button').disabled);
   await send.locator('..').hover();
   assert.match(await tooltip.innerText(), /请先输入创作要求/);
   await dock.locator('.ProseMirror').fill('画一只鸟');
@@ -74,8 +75,8 @@ try {
     dreaminaHealth: { ok: false, reason: '即梦未登录' },
   }));
   await dock.getByRole('button', { name: '配置自有订阅' }).click();
-  const settings = page.getByRole('dialog').filter({ hasText: '使用自有即梦订阅' });
-  await settings.locator('[data-modal-autofocus]').filter({ hasText: '使用自有即梦订阅' }).waitFor();
+  const settings = page.getByRole('dialog').filter({ hasText: '即梦' });
+  await settings.locator('[data-modal-autofocus]').filter({ hasText: '即梦' }).waitFor();
   await settings.getByRole('button', { name: '关闭', exact: true }).click();
   await settings.waitFor({ state: 'detached' });
   assert.deepEqual(errors, []);

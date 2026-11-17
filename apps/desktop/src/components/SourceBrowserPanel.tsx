@@ -158,7 +158,6 @@ export function SourceBrowserPanel({ url, onClose, onCreateProject, visible = tr
         const viewportRect = viewport.getBoundingClientRect();
         const overlay = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], .caption-ring-layer, .external-drag-backdrop, .app-sidebar.is-auto-hide:not(.is-auto-hidden)'))
           .some(element => {
-            if (element.matches('.notification-bell-panel.is-latest')) return false;
             if (element.getClientRects().length === 0 || getComputedStyle(element).visibility === "hidden") return false;
             // Dialogs and the dimension ring have full-window backdrops. The
             // native webpage must yield until they close, regardless of z-index.

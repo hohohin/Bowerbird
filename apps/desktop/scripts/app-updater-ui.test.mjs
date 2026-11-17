@@ -26,6 +26,15 @@ try {
     }
   }
 
+  await page.clock.install();
+  await page.goto(`${fixture}?startup&mode=current`);
+  await page.waitForFunction(() => window.updater.getState().phase === "current");
+  await page.evaluate(() => { window.mode = "available"; });
+  await page.clock.fastForward(300_000);
+  await page.waitForFunction(() => window.updater.getState().update?.version === "26.9.18");
+  assert.equal(await startupDialog.count(), 0);
+  await page.clock.resume();
+
   await page.goto(`${fixture}?startup&notReady`);
   await button("初始化完成").waitFor();
   assert.equal(await checkCount(), 0, "wait for application initialization");

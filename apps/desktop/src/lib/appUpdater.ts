@@ -13,7 +13,7 @@ interface AppUpdaterState {
   startupChecked: boolean;
   startupPrompt: boolean;
   dismissStartupPrompt: () => void;
-  check: (options?: { startup?: boolean }) => Promise<void>;
+  check: (options?: { startup?: boolean; background?: boolean }) => Promise<void>;
   download: () => Promise<void>;
   install: (beforeInstall: () => Promise<void>) => Promise<void>;
   restart: () => Promise<void>;
@@ -25,13 +25,14 @@ export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
   phase: "idle", update: null, downloaded: 0, total: null, error: null,
   startupChecked: false, startupPrompt: false,
   dismissStartupPrompt: () => set({ startupPrompt: false }),
-  check: async ({ startup = false } = {}) => {
+  check: async ({ startup = false, background = false } = {}) => {
     // Session-only guard also covers StrictMode and component remounts.
     if (startup) {
       if (get().startupChecked) return;
       set({ startupChecked: true });
     }
     if (!["idle", "current", "available"].includes(get().phase)) return;
+    if (background && get().startupPrompt) return;
     const previous = get().update;
     set({ phase: "checking", error: null });
     try {
@@ -41,7 +42,7 @@ export const useAppUpdater = create<AppUpdaterState>((set, get) => ({
       await previous?.close().catch(() => {});
     } catch (error) {
       console.warn("[updater] check failed", error);
-      set({ phase: previous ? "available" : "idle", error: startup ? null : userErrorMessage(error, "暂时无法检查更新，请稍后再试。") });
+      set({ phase: previous ? "available" : "idle", error: startup || background ? null : userErrorMessage(error, "暂时无法检查更新，请稍后再试。") });
     }
   },
   download: async () => {

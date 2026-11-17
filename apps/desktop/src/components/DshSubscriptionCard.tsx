@@ -8,7 +8,7 @@ import { ModalShell } from "./ModalShell";
 import { useChatProviderAccess } from "./creation/ChatProviderSelect";
 
 const labels: Record<ChatDshAccount["state"], string> = {
-  notInstalled: "未安装", signedOut: "未登录", pending: "等待授权", verified: "已登录",
+  notInstalled: "未安装", signedOut: "未登录", pending: "等待授权", verified: "✓ 就绪",
   unverified: "登录状态待确认", failed: "授权失败", cancelled: "已取消", expired: "授权已过期",
 };
 
@@ -22,13 +22,13 @@ async function openDshAuthorization(raw: string) {
 
 export function DshSubscriptionCard({ cardRef, allowed }: { cardRef?: Ref<HTMLDivElement>; allowed: boolean }) {
   const [account, setAccount] = useState<ChatDshAccount>();
-  const [busy, setBusy] = useState<"start" | "cancel" | "check" | null>(null);
+  const [busy, setBusy] = useState<"start" | "cancel" | "logout" | "check" | null>(null);
   const [notice, setNotice] = useState("");
   const [settings, setSettings] = useState(false);
   const access = useChatProviderAccess();
   const sequence = useRef(0);
   const openOnReady = useRef(false);
-  async function update(action: "status" | "start" | "cancel", poll = false) {
+  async function update(action: "status" | "start" | "cancel" | "logout", poll = false) {
     const request = ++sequence.current;
     if (!poll) setBusy(action === "status" ? "check" : action);
     if (action === "start") openOnReady.current = true;
@@ -65,9 +65,9 @@ export function DshSubscriptionCard({ cardRef, allowed }: { cardRef?: Ref<HTMLDi
   return <div ref={cardRef} tabIndex={-1} data-modal-autofocus={cardRef ? true : undefined}
     role="region" aria-label="DeepSeek 账号授权" className="settings-card px-3 py-2.5">
     <div className="flex items-center justify-between gap-2">
-      <span className="text-ink">使用本机 DSH · DeepSeek 账号</span>
+      <span className="text-ink">DeepSeek</span>
       <span className="flex items-center gap-1.5">
-        <span aria-live="polite" className={`rounded px-2 py-0.5 text-xs ${account?.state === "verified" ? "bg-green-500/15 text-green-400" : "bg-panel text-muted"}`}>
+        <span aria-live="polite" className={`rounded px-2 py-0.5 text-xs ${account?.state === "verified" ? "bg-green-500/15 text-green-400" : "bg-red-500/15 text-red-300"}`}>
           {busy === "start" ? (account?.state === "notInstalled" ? "正在安装 DSH…" : "正在准备授权…") : account ? labels[account.state] : busy ? "检测中…" : "待检测"}
         </span>
         <button type="button" disabled={!!busy} title="重新检测" aria-label="重新检测 DSH 登录状态"
@@ -82,6 +82,11 @@ export function DshSubscriptionCard({ cardRef, allowed }: { cardRef?: Ref<HTMLDi
       <button type="button" disabled={!!busy || (pending && !account?.attemptId)}
         className="shrink-0 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90 disabled:opacity-50"
         onClick={() => void update(pending ? "cancel" : "start")}>{pending ? "取消授权" : "登录授权"}</button>
+      {(account?.state === "verified" || account?.state === "unverified") && <button type="button"
+        disabled={!!busy} onClick={() => void update("logout")}
+        className="shrink-0 rounded border border-edge px-3 py-1 text-[12px] text-ink hover:bg-edge disabled:opacity-50">
+        {busy === "logout" ? "退出中…" : "退出登录"}
+      </button>}
       {pending && account?.authorizeUrl && <button type="button" disabled={!!busy} className="text-xs text-ink underline" onClick={() =>
         void openDshAuthorization(account.authorizeUrl!).catch(() => setNotice("未能打开官方授权网页，请重新检测后再试。"))}>打开授权网页</button>}
       {!allowed && !pending && <small className="text-muted">本机 DSH 对话需要 Pro 或 Studio。</small>}

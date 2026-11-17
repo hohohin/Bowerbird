@@ -51,9 +51,9 @@ try {
       assert.equal(cells[1], '支持');
     }
     const text = await section.innerText();
-    assert.match(text, /新注册账号赠 200 Bcoin/);
-    assert.match(text, /新订阅或续费 Pro，每订阅月赠 800 Bcoin，年付分 12 次发放/);
-    assert.match(text, /赠送积分到账后 30 天有效/);
+    assert.doesNotMatch(text, /新注册账号赠 200 Bcoin/);
+    assert.doesNotMatch(text, /新订阅或续费 Pro，每订阅月赠 800 Bcoin，年付分 12 次发放/);
+    assert.doesNotMatch(text, /赠送积分到账后 30 天有效/);
     assert.doesNotMatch(text, /Pro 不含 Bcoin/);
   };
   const assertSingleRechargeRow = async (section, requireScroll = false) => {
@@ -242,7 +242,7 @@ try {
     await page.screenshot({ path: `.tmp/account-billing/overview-${theme}.png` });
   }
   await standalone.getByRole('button', { name: /连接我的 ChatGPT/ }).click();
-  await standalone.getByText('使用自有ChatGPT订阅', { exact: true }).waitFor();
+  await standalone.getByText('ChatGPT', { exact: true }).waitFor();
   await standalone.getByRole('button', { name: '账号管理', exact: true }).click();
   await standalone.getByText('查看会员方案与充值', { exact: true }).click();
   const standalonePlan = standalone.getByRole('region', { name: 'Plan', exact: true });
