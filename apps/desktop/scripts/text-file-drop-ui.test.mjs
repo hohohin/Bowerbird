@@ -7,6 +7,7 @@ await server.listen();
 const browser = await chromium.launch({channel:'chrome',headless:true});
 const page = await browser.newPage({viewport:{width:1440,height:960},reducedMotion:'reduce'});
 page.setDefaultTimeout(15000);
+page.setDefaultNavigationTimeout(30000);
 const errors=[]; page.on('pageerror',error=>errors.push(error.message));
 const url = suffix => `${server.resolvedUrls.local[0]}scripts/fixtures/canvas-reference/preview.html?media-import${suffix}`;
 async function drop(selector, files, point) {

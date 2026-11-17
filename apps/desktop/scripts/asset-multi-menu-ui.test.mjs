@@ -35,6 +35,7 @@ try {
   assert.equal(await page.evaluate(async () => (await import('/src/store.ts')).useStore.getState().captionRing), 'a1');
   await page.evaluate(async () => (await import('/src/store.ts')).useStore.getState().closeCaptionRing());
   await page.locator('#trigger').click();
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal(await root().getByRole('menuitem', { name: '删除原文件…', exact: true }).count(), 0);
   // ArrowRight never changes column. Down traverses DOM order, left column then right.
   await root().getByRole('menuitem', { name: '打开图片详情', exact: true }).focus();
@@ -125,6 +126,7 @@ try {
   await page.keyboard.press('End'); assert.equal(await focused(), '删除项目 · 素材保留'); await page.keyboard.press('Escape');
   await page.locator('#disconnect').click(); await page.waitForFunction(() => document.activeElement?.textContent?.includes('图片输入')); await page.keyboard.press('Escape');
   await page.locator('.session-test').focus(); await page.keyboard.press('Shift+F10'); await page.getByRole('menu', { name: '生成会话操作' }).waitFor();
+  await page.waitForFunction(() => document.activeElement?.closest('[role="menu"][aria-label="生成会话操作"]'));
   await page.keyboard.press('End'); assert.equal(await focused(), '复制本次会话诊断信息'); await page.keyboard.press('Escape');
   await page.locator('[data-tag-id="tag1"]').click({button:'right'}); await page.getByRole('menu', {name:'标签操作'}).waitFor(); await page.keyboard.press('Escape');
   assert.equal(await page.locator('[data-tag-id="tag1"]').evaluate(el => el === document.activeElement), true);

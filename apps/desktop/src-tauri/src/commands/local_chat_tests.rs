@@ -143,7 +143,11 @@ fn local_chat_h3_tool_contract_exposes_frames_and_local_options_without_endpoint
     assert!(ratios.contains(&json!("auto")));
     assert!(ratios.contains(&json!("9:16")));
     assert!(ratios.contains(&json!("21:9")));
-    assert_eq!(options["resolution"]["enum"], json!([0.6, 0.8, 1]));
+    assert_eq!(options["resolution"]["enum"], json!([0.6, 0.8, 0.98, 1]));
+    let modes = options["mode"]["enum"].as_array().unwrap();
+    for mode in ["text", "reference", "frames"] {
+        assert!(modes.contains(&json!(mode)));
+    }
     for slot in ["firstFrameAlias", "lastFrameAlias"] {
         assert_eq!(options[slot]["pattern"], "^image[1-8]$");
     }

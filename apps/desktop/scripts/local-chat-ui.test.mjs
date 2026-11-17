@@ -244,6 +244,7 @@ try {
   const bounds = await panel.boundingBox();
   assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 901 && bounds.y + bounds.height <= 701, JSON.stringify(bounds));
   await page.screenshot({ path: '.tmp/local-chat/desktop-narrow.png' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
   await fixture('创建按次数循环四卡');
   await page.waitForFunction(() => {
     const action = Object.values(window.localChatFixture.inspect().conversations).flatMap(chat => chat.actions ?? []).at(-1);
