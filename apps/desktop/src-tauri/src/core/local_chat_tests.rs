@@ -441,7 +441,12 @@ fn local_chat_provider_migration_preserves_history_actions_and_foreign_keys() {
     request.provider = Some(ChatProvider::CodexLocal);
     request.card_defaults = Some(Default::default());
     let started = db.begin_local_chat(&request).unwrap();
-    let action = db.create_local_chat_cards(&started.conversation.summary.id, &started.turn_id,"legacy-call",&serde_json::json!({"cards":[{"id":"text","kind":"content","title":"旧卡片","text":"保留"}]})).unwrap();
+    // Seed the historical receipt directly, before current gallery tables exist.
+    let cards = serde_json::json!([{"alias":"text","id":"legacy-card","kind":"content","title":"旧卡片"}]);
+    db.conn.lock().unwrap().execute(
+        "INSERT INTO local_chat_card_actions(id,conversation_id,turn_id,call_id,args_json,cards_json,footprint_json,status,created_at) VALUES('legacy-action',?1,?2,'legacy-call','{}',?3,'{}','created',1)",
+        rusqlite::params![started.conversation.summary.id, started.turn_id, cards.to_string()],
+    ).unwrap();
     db.update_local_chat_text(&started.conversation.summary.id, &started.turn_id, "旧回复")
         .unwrap();
     db.set_local_chat_provider_thread(&started.conversation.summary.id, "legacy-codex-thread")
@@ -466,7 +471,8 @@ fn local_chat_provider_migration_preserves_history_actions_and_foreign_keys() {
         .unwrap();
     assert_eq!(chat.summary.provider, provider.as_str());
     assert_eq!(chat.messages[1].text, "旧回复");
-    assert_eq!(chat.actions[0].id, action.id);
+    assert_eq!(chat.actions[0].id, "legacy-action");
+    assert_eq!(serde_json::to_value(&chat.actions[0].cards).unwrap(), cards);
     assert_eq!(
         db.local_chat_provider_thread(&chat.summary.id)
             .unwrap()

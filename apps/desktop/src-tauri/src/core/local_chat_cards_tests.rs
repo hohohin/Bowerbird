@@ -1056,7 +1056,6 @@ fn local_chat_cards_h3_rejects_invalid_options_and_frame_sources_atomically() {
         ("prompt", json!("@[injected]")),
         ("prompt", json!("x".repeat(8001))),
         ("endpoint", json!("http://example.invalid")),
-        ("provider", json!("jimeng")),
         ("firstFrameAlias", json!("picture")),
         ("lastFrameAlias", json!("image2")),
         ("firstFrameAlias", json!("image01")),
@@ -1087,6 +1086,17 @@ fn local_chat_cards_h3_rejects_invalid_options_and_frame_sources_atomically() {
                 .unwrap(),
             1
         );
+    }
+    // The H3 card kind owns its provider; cross-kind hints are discarded.
+    for provider in ["jimeng", "invalid-provider"] {
+        let (db, session) = fixture();
+        let mut args = h3_batch();
+        args["cards"][2]["provider"] = json!(provider);
+        let action = create(&db, &session, &args).unwrap();
+        let doc = document(&db);
+        let card_id = &action.cards[2].id;
+        let card = doc["nodes"].as_array().unwrap().iter().find(|node| node["id"] == *card_id).unwrap();
+        assert_eq!(card["provider"], "comfy-video");
     }
     for ext in ["gif", "mp4", "svg"] {
         let (db, s) = fixture();
