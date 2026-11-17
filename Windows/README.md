@@ -2,6 +2,12 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## Windows 26.11.1706 已发布（2026-11-17）
+
+源码 ff14fda8。应用内更新说明：优化文件管理问题，提升使用体验；提高应用稳定性。本轮原件／分身回收即时反馈、缓存与失败恢复、关联分身补查及扫描校验优化随包发布；1316 项原生和九组冻结界面通过，旧批量菜单脚本未计通过。中文默认、English 可选，签名与 CDN 回读通过。[验证与回滚](../dev-doc/DESKTOP-UPDATES.md#windows-26111706-已公开发布2026-11-17)。
+
+[下载 Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1706_x64-setup.exe)。
+
 ## Windows 26.11.1705 已发布（2026-11-17）
 
 源码 dc1b420e，已包含本轮最后补入的素材移动与目录导出修改。隐藏入门引导、画板删除分流与撤销、项目／文件夹移动及目录／ZIP 导出、视频／H3 布局、Cloud DSH 入口及支付提示同步更新。1309 项原生、十五组冻结界面、原签名与 CDN 回读通过。安装默认中文、English 可选。[验证与回滚](../dev-doc/DESKTOP-UPDATES.md#windows-26111705-已公开发布2026-11-17)。
