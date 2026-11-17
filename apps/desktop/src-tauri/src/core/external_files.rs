@@ -36,7 +36,8 @@ pub fn audio_path(path: &Path) -> bool {
 }
 pub fn fingerprint(path: &Path) -> AppResult<String> {
     let mut file = fs::File::open(path)?;
-    let mut hash = Sha256::new();
+    // Original identity uses full SHA-256, including for large videos about to be recycled.
+    let mut hash = ring::digest::Context::new(&ring::digest::SHA256);
     let mut buffer = [0u8; 65536];
     loop {
         let count = file.read(&mut buffer)?;
@@ -45,7 +46,7 @@ pub fn fingerprint(path: &Path) -> AppResult<String> {
         }
         hash.update(&buffer[..count]);
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(hash.finish().as_ref().iter().map(|byte| format!("{byte:02x}")).collect())
 }
 #[derive(Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -222,12 +223,13 @@ mod connected_media;
 pub(crate) use connected_media::connection_path_spellings;
 
 pub(super) fn restore_present_original(conn: &rusqlite::Connection, id: &str, canonical: &Path, hash: Option<&str>) -> AppResult<()> {
-    let cleaned: Option<(String, Option<String>)> = conn.query_row(
-        "SELECT m.path,COALESCE(NULLIF(t.fingerprint,''),e.fingerprint,f.sha256) FROM removed_missing_asset_originals m
-         LEFT JOIN trashed_asset_originals t ON t.asset_id=m.asset_id LEFT JOIN external_assets e ON e.asset_id=m.asset_id
-         LEFT JOIN creative_file_fingerprints f ON f.asset_id=m.asset_id WHERE m.asset_id=?1",
+    let marked: Option<(String, Option<String>)> = conn.query_row(
+        "SELECT COALESCE(m.path,t.path),COALESCE(NULLIF(t.fingerprint,''),e.fingerprint,f.sha256) FROM assets a
+         LEFT JOIN removed_missing_asset_originals m ON m.asset_id=a.id LEFT JOIN trashed_asset_originals t ON t.asset_id=a.id
+         LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id
+         WHERE a.id=?1 AND (m.asset_id IS NOT NULL OR t.asset_id IS NOT NULL)",
         [id], |row| Ok((row.get(0)?,row.get(1)?))).optional()?;
-    if let Some((path, expected)) = cleaned {
+    if let Some((path, expected)) = marked {
         let names = connection_path_spellings(canonical, canonical);
         if !names.iter().any(|name| Path::new(name) == Path::new(&path)) {
             return Err(invalid("原文件位置已变化，请核对后重新定位"));
@@ -478,7 +480,7 @@ pub fn references(db: &Database, project_id: &str) -> AppResult<Vec<ExternalRefe
     let ids = {
         let conn = db.conn.lock().unwrap();
         let mut stmt = conn.prepare("SELECT e.asset_id FROM external_assets e JOIN project_assets p ON p.asset_id=e.asset_id
-            WHERE p.project_id=?1 AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=e.asset_id)")?;
+            WHERE p.project_id=?1 AND NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=e.asset_id) AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=e.asset_id)")?;
         let ids = stmt
             .query_map([project_id], |r| r.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;

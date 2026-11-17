@@ -42,7 +42,7 @@ try {
       const trigger = menu.getByRole("menuitem", { name: scope, exact: true });
       assert.ok(await trigger.locator("svg").count() > 0);
       await trigger.click();
-      const labels = ["移出画布", "移出项目", "删除原文件"];
+      const labels = ["移出画布", "移出项目", "删除原文件…"];
       const tips = ["素材仍能在项目素材库找到", "移除后，进入全局素材", "将文件放入回收箱，应用内不可见"];
       const submenu = page.getByRole("menu").filter({ has: page.getByRole("menuitem", { name: "移出画布", exact: true }) }).last();
       assert.deepEqual(await submenu.getByRole("menuitem").allTextContents(), labels);
@@ -111,7 +111,7 @@ try {
     const target = session ? card.locator('[data-conversation-image="b"]') : card;
     await target.click({ button: "right", position: { x: 30, y: 30 } });
     await page.getByRole("menuitem", { name: "删除当前组" }).click();
-    await page.getByRole("menuitem", { name: "删除原文件", exact: true }).click();
+    await page.getByRole("menuitem", { name: "删除原文件…", exact: true }).click();
     await page.waitForFunction(() => window.calls.some(c => c.command === "preview_asset_originals"));
     assert.deepEqual(await page.evaluate(() => window.calls.findLast(c => c.command === "preview_asset_originals").args.assetIds.slice().sort()), ["a", "b"]);
     await page.getByRole("dialog").getByRole("button", { name: "取消" }).click();

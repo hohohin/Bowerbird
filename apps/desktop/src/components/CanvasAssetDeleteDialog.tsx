@@ -81,7 +81,8 @@ export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
     <div className="space-y-3">
       <p className="text-sm">{onlyMissing ? "原件已不在登记位置，将清理失效条目和画板中的对应素材卡片。标签、分析及生成历史保留。"
         : missingCount ? "现存原文件将放入系统回收站，失效条目和画板中的对应素材卡片一并清理。标签、分析及生成历史保留。"
-          : "以下原文件将放入系统回收站，并移除画板中的对应素材卡片。其他文件夹的分身将失联；标签、分析及生成历史保留。"}</p>
+          : "以下原文件将放入系统回收站，画板中的对应素材卡片也会移除。标签、分析及生成历史保留。"}</p>
+      <p className="text-sm">已连接文件夹中，经核验指向这些原文件的分身也会移到回收站。离线文件夹恢复连接后会重新扫描，补查遗留分身。</p>
       {!items && !error && <p role="status" className="text-sm text-muted">正在读取原文件…</p>}
       {error && <div role="alert" className="whitespace-pre-wrap break-words text-xs text-red-400">{error}
         <button className="app-modal-button mt-2 block" disabled={busy} onClick={() => { setAttempt(value => value + 1); }}>重新读取</button>
@@ -94,7 +95,7 @@ export function CanvasAssetDeleteDialog({ target, onClose, onComplete }: {
             : <img src={convertFileSrc(asset.thumb_path || original.path)} alt={original.name} loading="lazy" className="h-full w-full object-contain"/>}
         </div>
         <p className="mt-2 truncate text-xs" title={original.name}>{original.name}</p>
-        {original.missing && <p className="mt-1 text-xs text-muted">原件缺失 · 仅清理引用</p>}
+        {original.missing && <p className="mt-1 text-xs text-muted">原件缺失</p>}
         <p className="mt-1 break-all text-xs text-muted">{original.path}</p>
       </li>)}</ul>}
     </div>

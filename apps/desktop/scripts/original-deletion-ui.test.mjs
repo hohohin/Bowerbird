@@ -15,13 +15,13 @@ const dialog = () => page.getByRole('dialog');
 const calls = () => page.evaluate(() => window.trashCalls);
 async function reset() {
   await page.goto('http://127.0.0.1:17908/scripts/fixtures/original-deletion/preview.html');
-  await page.waitForFunction(() => window.ready);
+  await page.waitForFunction(() => window.ready, undefined, { timeout: 30000 });
 }
 async function open(kind = 'single') {
   await page.evaluate(kind => window.openMenu(kind), kind);
   await page.getByRole('menuitem', { name: '删除', exact: true }).click();
   assert.equal(await page.getByRole('menuitem', { name: '移出园丁鸟', exact: true }).count(), 0);
-  await page.getByRole('menuitem', { name: '删除原文件', exact: true }).click();
+  await page.getByRole('menuitem', { name: '删除原文件…', exact: true }).click();
   await dialog().waitFor();
 }
 try {

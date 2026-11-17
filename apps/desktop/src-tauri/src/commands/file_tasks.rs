@@ -1,5 +1,5 @@
 //! In-process file operations. Closing a window never abandons a filesystem mutation.
-use super::folder_connections::GATE;
+use super::folder_connections::{mutation_permit, GATE};
 use crate::{
     core::folder_connections::AssetOriginal,
     db::Database,
@@ -98,6 +98,8 @@ struct Failure {
     label: String,
     message: String,
     retryable: bool,
+    #[serde(rename = "originalRemoved")]
+    original_removed: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -107,6 +109,14 @@ enum Phase {
     Stopping,
     Finished,
     Cancelled,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeletionTarget {
+    asset_id: String,
+    path: String,
+    missing: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -123,6 +133,8 @@ pub struct FileStatus {
     cleaned: usize,
     failures: Vec<Failure>,
     retry_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    delete_originals: Option<Vec<DeletionTarget>>,
 }
 
 impl FileStatus {
@@ -184,6 +196,14 @@ impl Registry {
             };
         }
         self.receipts.insert(id.clone(), signature);
+        let delete_originals = match &request {
+            FileRequest::Delete { originals } => Some(originals.iter().map(|item| DeletionTarget {
+                asset_id: item.asset_id.clone(),
+                path: item.path.clone(),
+                missing: item.missing,
+            }).collect()),
+            _ => None,
+        };
         let task = Arc::new(Task {
             request,
             status: Mutex::new(FileStatus {
@@ -198,6 +218,7 @@ impl Registry {
                 cleaned: 0,
                 failures: Vec::new(),
                 retry_id: None,
+                delete_originals,
             }),
             cancel: watch::channel(false).0,
         });
@@ -238,7 +259,7 @@ async fn permission<'a>(
     tokio::select! {
         biased;
         _ = cancel.changed() => None,
-        result = gate.acquire() => result.ok(),
+        result = mutation_permit(gate) => result.ok(),
     }
 }
 
@@ -322,7 +343,13 @@ async fn run_items(
                 }
                 Ok(false) => status.skipped += 1,
                 Err(error) => {
-                    let retryable = !matches!(error, AppError::FileOperationNeedsReview(_));
+                    let original_removed = matches!(error, AppError::ReferenceCleanupIncomplete(_));
+                    let retryable = !original_removed && !matches!(error, AppError::FileOperationNeedsReview(_));
+                    if original_removed {
+                        if let FileRequest::Delete { originals } = &task.request {
+                            if originals[index].missing { status.cleaned += 1; } else { status.recycled += 1; }
+                        }
+                    }
                     dirty |= !retryable;
                     let (id, label) = task.request.identity(index);
                     tracing::warn!(task_id = %status.id, index, %error, "file task item failed");
@@ -331,6 +358,7 @@ async fn run_items(
                         label: label.into(),
                         message: error.to_string(),
                         retryable,
+                        original_removed,
                     });
                 }
             }
@@ -494,7 +522,14 @@ mod tests {
             run_items(
                 task.clone(),
                 &Semaphore::new(1),
-                move |request, index| request.apply(index, &db),
+                move |request, index| match request {
+                    FileRequest::Delete { originals } => db.trash_asset_original_with(&originals[index], |path| {
+                        assert_eq!(path.extension().and_then(|ext| ext.to_str()), Some("bowerbird"));
+                        fs::rename(path, path.with_extension("recycled"))?;
+                        Ok(())
+                    }),
+                    _ => request.apply(index, &db),
+                },
                 || (),
             )
             .await;
@@ -599,7 +634,19 @@ mod tests {
             .unwrap();
         assert!(originals[0].missing);
         let request = json!({"kind":"delete","originals":originals});
+        let partial = register_json(&mut registry, "partial-clean", request.clone());
+        run_items(partial.clone(), &Semaphore::new(1), |_, _| {
+            Err(AppError::ReferenceCleanupIncomplete("分身待核对".into()))
+        }, || ()).await;
+        let partial_status = partial.status.lock().unwrap().clone();
+        assert_eq!(partial_status.cleaned, 1);
+        assert!(partial_status.failures[0].original_removed);
+        assert!(!partial_status.failures[0].retryable);
         let cleanup = register_json(&mut registry, "clean", request.clone());
+        let receipt = serde_json::to_value(&*cleanup.status.lock().unwrap()).unwrap();
+        assert_eq!(receipt["deleteOriginals"], json!([{
+            "assetId": asset_id, "path": originals[0].path, "missing": true
+        }]));
         assert_eq!(execute(cleanup, &db).await.cleaned, 1);
         let already_clean = register_json(&mut registry, "old-selection", request);
         let status = execute(already_clean, &db).await;
@@ -617,7 +664,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(removed && reference_path.is_file());
+        assert!(removed && !reference_path.exists());
         assert!(reopened
             .connection_entry_ids(Some(&destination), None, None, 0, 10)
             .unwrap()

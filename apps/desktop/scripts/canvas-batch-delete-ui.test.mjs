@@ -15,7 +15,7 @@ const deleteCalls = () => page.evaluate(() => window.deleteCalls ?? []);
 async function openDelete(id = "a") {
   await node(id).click({ button: "right", position: { x: 90, y: 85 } });
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
-  await page.getByRole("menuitem", { name: "删除原文件", exact: true }).click();
+  await page.getByRole("menuitem", { name: "删除原文件…", exact: true }).click();
   await dialog().getByRole("list", { name: "待删除素材" }).waitFor();
 }
 async function marquee() {
@@ -119,7 +119,7 @@ try {
   await page.evaluate(() => { window.failPreview = true; });
   await node("outside").click({ button: "right", position: { x: 90, y: 85 } });
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
-  await page.getByRole("menuitem", { name: "删除原文件", exact: true }).click();
+  await page.getByRole("menuitem", { name: "删除原文件…", exact: true }).click();
   await dialog().getByRole("alert").waitFor();
   assert.equal(await dialog().getByRole("button", { name: "删除原文件", exact: true }).isDisabled(), true);
   await page.evaluate(() => { window.failPreview = false; window.externalPreview = true; });
@@ -134,7 +134,7 @@ try {
   await page.waitForFunction(() => window.openMenu);
   await page.evaluate(() => window.openMenu('multi'));
   await page.getByRole("menuitem", { name: "删除", exact: true }).click();
-  await page.getByRole("menuitem", { name: "删除原文件", exact: true }).click();
+  await page.getByRole("menuitem", { name: "删除原文件…", exact: true }).click();
   await dialog().getByRole("button", { name: "删除原文件", exact: true }).click();
   await dialog().waitFor({ state: 'detached' });
   assert.deepEqual(await page.evaluate(() => window.calls.filter(c => c.command === 'trash_asset_original').map(c => c.args.original.asset_id)), ['a1','a2']);

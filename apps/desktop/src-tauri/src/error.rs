@@ -34,6 +34,8 @@ pub enum AppError {
     /// The physical operation succeeded. Repeating it is unsafe.
     #[error("{0}")]
     FileOperationNeedsReview(String),
+    #[error("{0}")]
+    ReferenceCleanupIncomplete(String),
 
     #[error("{0}")]
     Other(String),

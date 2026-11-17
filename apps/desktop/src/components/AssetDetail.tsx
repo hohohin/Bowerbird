@@ -1,6 +1,7 @@
 import { TacticalSelect } from "./TacticalSelect";
 import { AssetTagPicker } from "./AssetTagPicker";
 import { userErrorMessage } from "../lib/userError";
+import { isPendingOriginal, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { VideoPlayer } from "./VideoPlayer";
 import { AudioWaveform } from "./AudioWaveform";
 import { isAudioAsset } from "../lib/audioMedia";
@@ -199,6 +200,10 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const asset: Asset | undefined = group.find((a) => a.id === id) ?? listedAsset
     ?? (resolvedAsset?.id === id ? resolvedAsset : undefined)
     ?? (initialAsset?.id === id ? initialAsset : undefined);
+  const pendingDeletion = usePendingOriginalDeletion();
+  useEffect(() => {
+    if (isPendingOriginal(id, asset?.store_path)) closeDetail();
+  }, [id, asset?.store_path, pendingDeletion, closeDetail]);
   // 同流程轮播位置（生成图组内第几张；-1 = 不在组 / 非生成图）。
   const groupPos = asset ? group.findIndex((a) => a.id === asset.id) : -1;
 

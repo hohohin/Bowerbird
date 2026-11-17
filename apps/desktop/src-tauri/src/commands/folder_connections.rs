@@ -1,7 +1,7 @@
 use crate::{
     core::{
         folder_connections::{AssetOriginal, ConnectionEntry, ConnectionFilter, FolderConnection},
-        missing_originals::MissingOriginalSweep,
+        missing_originals::{MarkedReferenceSweep, MissingOriginalSweep},
         paths::LibraryPaths,
     },
     db::Database,
@@ -17,6 +17,30 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 // Serialize walks and physical mutations so a refresh cannot reconcile a half-finished move.
 pub(crate) static GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+static WAITING_MUTATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub(super) async fn mutation_permit(gate: &tokio::sync::Semaphore) -> Result<tokio::sync::SemaphorePermit<'_>, tokio::sync::AcquireError> {
+    use std::sync::atomic::Ordering;
+    struct Waiting;
+    impl Drop for Waiting {
+        fn drop(&mut self) { WAITING_MUTATIONS.fetch_sub(1, Ordering::SeqCst); }
+    }
+    WAITING_MUTATIONS.fetch_add(1, Ordering::SeqCst);
+    let _waiting = Waiting;
+    gate.acquire().await
+}
+
+fn mutation_waiting() -> bool {
+    WAITING_MUTATIONS.load(std::sync::atomic::Ordering::SeqCst) != 0
+}
+
+fn yield_scan_permit<'a>(gate: &'a tokio::sync::Semaphore, permit: &mut Option<tokio::sync::SemaphorePermit<'a>>) -> bool {
+    if !mutation_waiting() { return false; }
+    // Runs only on a blocking scan worker, between entries and outside any SQLite transaction.
+    drop(permit.take());
+    *permit = Some(tauri::async_runtime::block_on(gate.acquire()).expect("file operation gate stays open"));
+    true
+}
 #[path = "connection_watch.rs"]
 mod watcher;
 pub use watcher::watch;
@@ -30,6 +54,7 @@ struct RefreshQueue {
     roots: HashSet<String>,
     priority: Option<String>,
     originals: bool,
+    reference_continuation: bool,
     schedule: OriginalCheckSchedule,
 }
 impl RefreshQueue {
@@ -43,6 +68,15 @@ impl RefreshQueue {
     }
     fn has_work(&self) -> bool {
         self.all || !self.roots.is_empty() || self.originals
+    }
+    fn advance_originals(&mut self, catalog_more: bool, pending: bool, references_more: bool) {
+        if !self.reference_continuation { self.schedule.pending = pending; }
+        self.reference_continuation = references_more;
+        if catalog_more || references_more {
+            self.originals = true;
+        } else {
+            self.schedule.complete(Instant::now(), self.schedule.pending);
+        }
     }
 }
 #[derive(Default)]
@@ -70,6 +104,8 @@ static REFRESH: std::sync::LazyLock<Mutex<RefreshQueue>> =
     std::sync::LazyLock::new(|| Mutex::new(RefreshQueue::default()));
 static ORIGINALS: std::sync::LazyLock<Mutex<MissingOriginalSweep>> =
     std::sync::LazyLock::new(|| Mutex::new(MissingOriginalSweep::default()));
+static MARKED_REFERENCES: std::sync::LazyLock<Mutex<MarkedReferenceSweep>> =
+    std::sync::LazyLock::new(|| Mutex::new(MarkedReferenceSweep::default()));
 fn changed(app: &AppHandle) {
     let _ = app.emit("library://assets-changed", ());
     let _ = app.emit("external-files://changed", ());
@@ -85,8 +121,7 @@ pub(super) async fn mutation<T: Send + 'static>(
     app: AppHandle,
     work: impl FnOnce() -> AppResult<T> + Send + 'static,
 ) -> AppResult<T> {
-    let _permit = GATE
-        .acquire()
+    let _permit = mutation_permit(&GATE)
         .await
         .map_err(|e| AppError::Other(e.to_string()))?;
     let value = tauri::async_runtime::spawn_blocking(work)
@@ -134,16 +169,18 @@ fn queue_refresh(
     start_refresh(app, db, paths, queue);
 }
 fn check_originals(db: &Database, paths: &LibraryPaths) -> AppResult<bool> {
-    let batch = ORIGINALS.lock().unwrap().check_batch(db, paths, Instant::now())?;
-    let mut queue = REFRESH.lock().unwrap();
-    if batch.more {
-        queue.originals = true;
-    } else {
-        queue.schedule.complete(Instant::now(), batch.pending);
-    }
-    let changed = batch.removed + batch.restored > 0;
+    let references_only = REFRESH.lock().unwrap().reference_continuation;
+    let batch = if references_only { Default::default() } else {
+        ORIGINALS.lock().unwrap().check_batch_until(db, paths, Instant::now(), mutation_waiting)?
+    };
+    // Each continuation releases GATE. There is no complete catalog walk between reference batches.
+    let (references, more_references) = if !batch.more {
+        MARKED_REFERENCES.lock().unwrap().check_batch(db, mutation_waiting, crate::core::folder_connections::recycle)?
+    } else { (0, false) };
+    REFRESH.lock().unwrap().advance_originals(batch.more, batch.pending, more_references);
+    let changed = batch.removed + batch.restored + references > 0;
     if changed {
-        tracing::info!(removed = batch.removed, restored = batch.restored, "missing originals reconciled");
+        tracing::info!(removed = batch.removed, restored = batch.restored, references, "missing originals reconciled");
     }
     Ok(changed)
 }
@@ -163,13 +200,15 @@ fn requested_root_ids(
     ids.sort_by_key(|id| Some(id) != priority_root.as_ref());
     Ok(ids)
 }
-fn scan_requested_root(app: &AppHandle, db: &Database, paths: &LibraryPaths, id: String, priority: Option<&str>) {
+fn scan_requested_root(app: &AppHandle, db: &Database, paths: &LibraryPaths, id: String, priority: Option<&str>, permit: tokio::sync::SemaphorePermit<'static>) {
     let mut last = Instant::now() - Duration::from_secs(1);
     let started = Instant::now();
     let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id.clone(), scanning: true, error: None });
     let mut dirty = false;
     let mut notifications = 0;
-    let value = db.scan_connection_changes(paths, &id, priority, |changed_data| {
+    let mut permit = Some(permit);
+    let mut yielded = false;
+    let value = db.scan_connection_cooperatively(paths, &id, priority, |changed_data| {
         dirty |= changed_data;
         if dirty && last.elapsed() >= Duration::from_millis(500) {
             changed(app);
@@ -177,7 +216,14 @@ fn scan_requested_root(app: &AppHandle, db: &Database, paths: &LibraryPaths, id:
             dirty = false;
             last = Instant::now();
         }
+    }, || {
+        let paused = yield_scan_permit(&GATE, &mut permit);
+        yielded |= paused;
+        paused
     });
+    if yielded {
+        REFRESH.lock().unwrap().roots.insert(id.clone());
+    }
     // Flush changes even when a later directory failed. Progress alone never
     // invalidates pages or forces the expensive catalog counts to run again.
     if dirty { changed(app); notifications += 1; }
@@ -192,7 +238,9 @@ fn finish_refresh(app: &AppHandle, originals: bool, result: AppResult<bool>) {
         Ok(changed) => changed,
         Err(error) => {
             if originals {
-                REFRESH.lock().unwrap().schedule.complete(Instant::now(), true);
+                let mut queue = REFRESH.lock().unwrap();
+                queue.reference_continuation = false;
+                queue.schedule.complete(Instant::now(), true);
             }
             tracing::warn!("connection refresh: {error}");
             false
@@ -239,8 +287,7 @@ fn start_refresh(
                     let (app, db, paths, priority) = (app.clone(), db.clone(), paths.clone(), priority.clone());
                     let permit = GATE.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
                     tauri::async_runtime::spawn_blocking(move || {
-                        let _permit = permit;
-                        scan_requested_root(&app, &db, &paths, id, priority.as_deref());
+                        scan_requested_root(&app, &db, &paths, id, priority.as_deref(), permit);
                     }).await.map_err(|e| AppError::Other(e.to_string()))?;
                 }
                 if originals {
@@ -627,6 +674,31 @@ mod maintenance_tests {
         assert_eq!(calls.get(), 7);
     }
 
+    #[tokio::test]
+    async fn queued_file_operation_runs_before_scan_continues_its_current_root() {
+        let gate = Arc::new(tokio::sync::Semaphore::new(1));
+        let (ready, started) = tokio::sync::oneshot::channel();
+        let (resume, checkpoint) = std::sync::mpsc::channel();
+        let scanner_gate = gate.clone();
+        let scan = tokio::task::spawn_blocking(move || {
+            let mut permit = Some(tauri::async_runtime::block_on(scanner_gate.acquire()).unwrap());
+            ready.send(()).unwrap();
+            checkpoint.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(yield_scan_permit(&scanner_gate, &mut permit));
+        });
+        started.await.unwrap();
+        let pending = mutation_permit(&gate);
+        tokio::pin!(pending);
+        tokio::select! { biased; _ = &mut pending => panic!("must queue behind the current entry"), _ = tokio::task::yield_now() => {} }
+        let started = Instant::now();
+        resume.send(()).unwrap();
+        let permit = tokio::time::timeout(Duration::from_secs(5), pending).await.unwrap().unwrap();
+        println!("foreground admission at the next scan entry: {:?}", started.elapsed());
+        assert!(!scan.is_finished());
+        drop(permit);
+        scan.await.unwrap();
+    }
+
     #[test]
     fn automatic_full_scans_share_pending_work_and_cooldown_but_manual_refresh_bypasses() {
         let now = Instant::now();
@@ -672,5 +744,26 @@ mod maintenance_tests {
         assert!(schedule.request(now + Duration::from_secs(70), true));
         schedule.complete(now + Duration::from_secs(80), false);
         assert!(!schedule.request(now + Duration::from_secs(110), false));
+    }
+
+    #[test]
+    fn legacy_reference_backlog_continues_promptly_without_restarting_the_catalog_or_skipping_confirmation() {
+        let mut queue = RefreshQueue::default();
+        assert!(queue.schedule.request(Instant::now(), false));
+        queue.advance_originals(true, true, false);
+        assert!(std::mem::take(&mut queue.originals));
+        assert!(!queue.reference_continuation);
+
+        queue.advance_originals(false, true, true);
+        assert!(std::mem::take(&mut queue.originals));
+        assert!(queue.reference_continuation);
+        assert!(queue.schedule.running);
+        queue.advance_originals(false, false, true);
+        assert!(std::mem::take(&mut queue.originals));
+        assert!(queue.reference_continuation);
+        queue.advance_originals(false, false, false);
+        assert!(!queue.has_work());
+        assert!(!queue.schedule.running);
+        assert!(queue.schedule.pending, "an outstanding original still needs a second observation");
     }
 }

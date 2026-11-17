@@ -62,6 +62,7 @@ impl Database {
         let mut stmt = conn.prepare(&format!(
             "SELECT a.*, {visible} AS frequent_visible FROM assets a
              WHERE NOT EXISTS(SELECT 1 FROM removed_missing_asset_originals m WHERE m.asset_id=a.id)
+             AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=a.id)
              AND (:project IS NULL OR a.id IN ({PROJECT_ASSET_IDS})) AND (
                 ({visible} AND a.reference_count>:threshold AND a.id NOT IN (SELECT value FROM json_each(:excluded)))
                 OR a.id IN (SELECT value FROM json_each(:pinned))
@@ -320,6 +321,11 @@ mod tests {
         assert_eq!(result.threshold, 10);
         assert_eq!(ids(&result.frequent), ["eleven"]);
         assert_eq!(ids(&result.pinned), ["ten", "manual"]);
+        fixture.db.conn.lock().unwrap().execute(
+            "INSERT INTO trashed_asset_originals(asset_id,path,fingerprint) VALUES('ten','/ten','sha')", [],
+        ).unwrap();
+        let result = fixture.db.canvas_frequent_assets(&fixture.settings.get().canvas_frequent_assets, None).unwrap();
+        assert_eq!(ids(&result.pinned), ["manual"]);
     }
 
     #[test]

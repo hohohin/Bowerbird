@@ -13,10 +13,14 @@ import { MediaPreview } from "./MediaPreview";
 import { useStore } from "../store";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { CollectionScrollArea } from "./CollectionScrollArea";
+import { originalDeletionEpoch, originalDeletionFor, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 
 /** 集合独立浏览，不写入首页素材、筛选或选中状态。 */
 export function CollectionPanel({ folder, onClose }: { folder: Folder; onClose: () => void }) {
-  const [assets, setAssets] = useState<Asset[]>([]);
+  const [rawAssets, setAssets] = useState<Asset[]>([]);
+  const readEpoch = useRef(originalDeletionEpoch());
+  usePendingOriginalDeletion();
+  const assets = rawAssets.filter(asset => !originalDeletionFor(asset.id, asset.store_path, readEpoch.current));
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -77,13 +81,13 @@ export function CollectionPanel({ folder, onClose }: { folder: Folder; onClose: 
     let unlisten: (() => void) | undefined;
     async function refresh() {
       const completeLesson = beginOnboardingOperation("collections", useStore.getState().activeProjectId);
-      const request = ++revision;
+      const request = ++revision, epoch = originalDeletionEpoch();
       setLoading(true);
       setError(false);
       try {
         const result = await api.listLibraryView({ folderId: folder.id });
         if (alive && request === revision) {
-          setAssets(result.assets);
+          readEpoch.current = epoch; setAssets(result.assets);
           if (result.assets.length) completeLesson({ collectionId: folder.id });
         }
       } catch {

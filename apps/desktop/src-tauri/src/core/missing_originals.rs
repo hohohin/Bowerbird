@@ -1,4 +1,4 @@
-//! Bounded reconciliation of missing originals; never a filesystem deletion task.
+//! Bounded reconciliation of original visibility and registered references to removed originals.
 use crate::{
     core::{external_files, material_catalog::catalog_visibility, paths::LibraryPaths},
     db::Database,
@@ -12,6 +12,45 @@ use std::{
 
 const BATCH_SIZE: usize = 128;
 const CONFIRM_AFTER: Duration = Duration::from_secs(30);
+const REFERENCE_BATCH_SIZE: usize = 16;
+
+/// Advances past rejected or offline entries as well as successful ones. A new pass is
+/// started only by the existing low-frequency originals schedule, not by a skipped file.
+#[derive(Default)]
+pub(crate) struct MarkedReferenceSweep {
+    after: String,
+}
+impl MarkedReferenceSweep {
+    pub(crate) fn check_batch(
+        &mut self, db: &Database, should_yield: impl Fn() -> bool,
+        recycle: impl Fn(&Path) -> AppResult<()>,
+    ) -> AppResult<(usize, bool)> {
+        let entries: Vec<String> = {
+            let conn = db.conn.lock().unwrap();
+            let mut stmt = conn.prepare_cached(
+                "SELECT e.id FROM connected_entries e WHERE e.is_reference=1 AND e.id>?1 AND e.asset_id IN (
+                    SELECT asset_id FROM removed_missing_asset_originals UNION SELECT asset_id FROM trashed_asset_originals
+                 ) ORDER BY e.id LIMIT ?2"
+            )?;
+            let rows = stmt.query_map(rusqlite::params![self.after, (REFERENCE_BATCH_SIZE + 1) as i64], |row| row.get(0))?
+                .collect::<Result<_,_>>()?;
+            rows
+        };
+        let mut removed = 0;
+        for id in entries.iter().take(REFERENCE_BATCH_SIZE) {
+            if should_yield() { return Ok((removed, true)); }
+            match db.recycle_marked_reference_with(id, &recycle) {
+                Ok(true) => removed += 1,
+                Ok(false) => (),
+                Err(error) => tracing::warn!(%error, "could not clean a registered reference to a removed original"),
+            }
+            self.after.clone_from(id);
+        }
+        let more = entries.len() > REFERENCE_BATCH_SIZE;
+        if !more { self.after.clear(); }
+        Ok((removed, more))
+    }
+}
 
 #[derive(Default)]
 pub struct MissingOriginalSweep {
@@ -48,12 +87,22 @@ impl MissingOriginalSweep {
         paths: &LibraryPaths,
         now: Instant,
     ) -> AppResult<MissingOriginalBatch> {
+        self.check_batch_until(db, paths, now, || false)
+    }
+    pub(crate) fn check_batch_until(
+        &mut self,
+        db: &Database,
+        paths: &LibraryPaths,
+        now: Instant,
+        should_yield: impl Fn() -> bool,
+    ) -> AppResult<MissingOriginalBatch> {
         let mut rows = candidates(db, self.after.as_deref())?;
         let extra = rows.len() > BATCH_SIZE;
         rows.truncate(BATCH_SIZE);
         let mut result = MissingOriginalBatch::default();
         let mut probe = LocalProbe::default();
         for row in &rows {
+            if should_yield() { break; }
             result.checked += 1;
             self.after = Some(row.id.clone());
             if self.check_candidate(db, paths, now, row, &mut probe, &mut result) {
@@ -549,6 +598,20 @@ mod tests {
                 .removed,
             1
         );
+    }
+
+    #[test]
+    fn pending_foreground_mutation_pauses_the_sweep_at_its_current_asset() {
+        let f = Fixture::new();
+        let mut sweep = MissingOriginalSweep::default();
+        let now = Instant::now();
+        let paused = sweep.check_batch_until(&f.db, &f.paths, now, || true).unwrap();
+        assert_eq!(paused.checked, 0);
+        assert!(paused.more);
+        assert_eq!(sweep.round, 0);
+        let resumed = sweep.check_batch(&f.db, &f.paths, now).unwrap();
+        assert!(resumed.checked > 0);
+        assert!(!resumed.more);
     }
 
     #[test]

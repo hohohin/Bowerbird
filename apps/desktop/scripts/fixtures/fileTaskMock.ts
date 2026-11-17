@@ -11,7 +11,8 @@ export function installDeletionTaskMock() {
   function start(id: string, title: string, originals: AssetOriginal[]) {
     if (tasks.has(id)) return;
     const task: FileTaskStatus = { id, title, phase: "running", total: originals.length, completed: 0,
-      succeeded: 0, skipped: 0, recycled: 0, cleaned: 0, failures: [], retryId: null };
+      succeeded: 0, skipped: 0, recycled: 0, cleaned: 0, failures: [], retryId: null,
+      deleteOriginals: originals.map(item => ({assetId:item.asset_id, path:item.path, missing:item.missing})) };
     tasks.set(id, task);
     selections.set(id, originals);
     void (async () => {

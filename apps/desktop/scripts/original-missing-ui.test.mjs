@@ -15,7 +15,7 @@ async function scenario(name, run) {
   await page.route('**/*', route => { if (new URL(route.request().url()).hostname === '127.0.0.1') return route.continue(); remote.push(route.request().url()); return route.abort(); });
   try {
     await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/original-deletion/preview.html`);
-    await page.waitForFunction(() => window.ready);
+    await page.waitForFunction(() => window.ready, undefined, {timeout:45000});
     await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
     await run(page); reports.push({ name, passed: true });
   } catch (error) { reports.push({ name, passed: false, error: error.stack }); }
@@ -24,7 +24,7 @@ async function scenario(name, run) {
 async function open(page, missingIds, kind = 'single') {
   await page.evaluate(({ missingIds, kind }) => { window.missingIds = missingIds; window.openMenu(kind); }, { missingIds, kind });
   await page.getByRole('menuitem', { name: '删除', exact: true }).click();
-  await page.getByRole('menuitem', { name: '删除原文件', exact: true }).click();
+  await page.getByRole('menuitem', { name: '删除原文件…', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.locator('[data-delete-asset-id="a1"]').waitFor();
   return dialog;
@@ -37,7 +37,8 @@ try {
     assert.equal(await dialog.getByRole('heading').textContent(), '清理失效条目');
     assert.equal(await dialog.getByRole('button', { name: '清理失效条目', exact: true }).isEnabled(), true);
     await dialog.getByText('原件已不在登记位置，将清理失效条目和画板中的对应素材卡片。标签、分析及生成历史保留。', { exact: true }).waitFor();
-    await dialog.locator('[data-delete-asset-id="a1"]').getByText('原件缺失 · 仅清理引用', { exact: true }).waitFor();
+    await dialog.locator('[data-delete-asset-id="a1"]').getByText('原件缺失', { exact: true }).waitFor();
+    await dialog.getByText(/离线文件夹恢复连接后会重新扫描/).waitFor();
     assert.equal(await dialog.getByText(/放入系统回收站/).count(), 0);
     for (const theme of ['dark', 'light']) {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
@@ -68,7 +69,7 @@ try {
     assert.equal(await dialog.getByRole('heading').textContent(), '确认删除');
     await dialog.getByText('现存原文件将放入系统回收站，失效条目和画板中的对应素材卡片一并清理。标签、分析及生成历史保留。', { exact: true }).waitFor();
     assert.equal(await dialog.locator('[data-delete-asset-id="a1"]').getByText(/原件缺失/).count(), 0);
-    await dialog.locator('[data-delete-asset-id="a2"]').getByText('原件缺失 · 仅清理引用', { exact: true }).waitFor();
+    await dialog.locator('[data-delete-asset-id="a2"]').getByText('原件缺失', { exact: true }).waitFor();
     await page.screenshot({ path: `${output}/mixed-dark.png` });
     await dialog.getByRole('button', { name: '确认删除', exact: true }).click();
     await dialog.waitFor({ state: 'detached' });

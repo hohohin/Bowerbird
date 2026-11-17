@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { originalDeletionEpoch, originalDeletionFor, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { listen } from "@tauri-apps/api/event";
 import { Check, ChevronDown, ChevronRight, Pin, Plus, RefreshCw, X } from "lucide-react";
 import { api, type CanvasFrequentAssetsResult } from "../lib/api";
@@ -15,7 +16,14 @@ import { Lightbox } from "./Lightbox";
 import "./CanvasFrequentAssets.css";
 
 export function useCanvasFrequentAssets(active: boolean, projectId: string | null) {
-  const [items, setItems] = useState<CanvasFrequentAssetsResult>({ frequent: [], pinned: [], threshold: 10 });
+  const [raw, setItems] = useState<CanvasFrequentAssetsResult>({ frequent: [], pinned: [], threshold: 10 });
+  const readEpoch = useRef(originalDeletionEpoch());
+  const pendingDeletion = usePendingOriginalDeletion();
+  const items = useMemo(() => {
+    if (!pendingDeletion.size && readEpoch.current === originalDeletionEpoch()) return raw;
+    const visible = (asset: Asset) => !originalDeletionFor(asset.id, asset.store_path, readEpoch.current);
+    return { ...raw, frequent: raw.frequent.filter(visible), pinned: raw.pinned.filter(visible) };
+  }, [raw, pendingDeletion]);
   const [scope, setScope] = useState<"project" | "global">("global");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -28,10 +36,10 @@ export function useCanvasFrequentAssets(active: boolean, projectId: string | nul
   const pendingIds = useRef(new Set<string>());
   const read = useCallback(async () => {
     if (pending.current) return;
-    const request = ++version.current, requestedScope = scopeRef.current;
+    const request = ++version.current, requestedScope = scopeRef.current, epoch = originalDeletionEpoch();
     try {
       const result = await api.canvasFrequentAssets(requestedScope);
-      if (alive.current && request === version.current && requestedScope === scopeRef.current) { setItems(result); setError(""); }
+      if (alive.current && request === version.current && requestedScope === scopeRef.current) { readEpoch.current = epoch; setItems(result); setError(""); }
     } catch (reason) {
       if (alive.current && request === version.current && requestedScope === scopeRef.current) setError(String(reason));
     } finally {
@@ -60,8 +68,9 @@ export function useCanvasFrequentAssets(active: boolean, projectId: string | nul
     pending.current++; version.current++; setBusy(true);
     // Serialize clicks so rapid additions cannot overwrite each other or get dropped.
     const task = queue.current.then(async () => {
+      const epoch = originalDeletionEpoch();
       const result = await action(requestedScope);
-      if (alive.current && requestedScope === scopeRef.current) { setItems(result); setError(""); setLoading(false); }
+      if (alive.current && requestedScope === scopeRef.current) { readEpoch.current = epoch; setItems(result); setError(""); setLoading(false); }
     }).finally(() => {
       pending.current--;
       if (alive.current && !pending.current) {

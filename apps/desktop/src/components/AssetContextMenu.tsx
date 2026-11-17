@@ -385,7 +385,7 @@ export function AssetContextMenu({ selection }: { selection?: {
         <button role="menuitem" className={itemClass} title="移除后，进入全局素材" disabled={!membershipProjectId}
           onClick={() => void removeFromProject(target.assetIds, target.removeFromCanvas)}>移出项目</button>
         <button role="menuitem" className={itemClass + " is-danger"} title="将文件放入回收箱，应用内不可见"
-          onClick={() => confirmDelete(target.assetIds)}>删除原文件</button>
+          onClick={() => confirmDelete(target.assetIds)}>删除原文件…</button>
       </>}
     </ContextSubmenu>;
   }
@@ -394,13 +394,13 @@ export function AssetContextMenu({ selection }: { selection?: {
     {canvasDeleteSubmenu(false)}
     {canvasDeleteSubmenu(true)}
   </> : <DeleteSubmenu disabled={busy}>
-    {connectionEntries?.removeReferences && <button role="menuitem" className={itemClass} onClick={() => { closeContextMenu(); connectionEntries.removeReferences!(); }}>移出该文件夹</button>}
+    {connectionEntries?.removeReferences && <button role="menuitem" className={itemClass} onClick={() => { closeContextMenu(); connectionEntries.removeReferences!(); }}>{selectedCount > 1 ? "删除所选分身" : "删除此分身"}</button>}
     {!multiIds && menu.libraryProjectId && canChangeLibraryVisibility && !asset?.library_hidden && <button role="menuitem" className={itemClass}
       disabled={!canvasLibraryAvailable} title={canvasLibraryAvailable ? "从中央和各项目素材库列表移除，保留所有画布中的图片及原文件" : "请先将图片拖到当前画布"}
       onClick={() => void setLibraryVisibility(false)}>从库中删除 · 在画布保留</button>}
     {membershipProjectId && targetIds.length > 0 && <button role="menuitem" className={itemClass} title="仅移出当前项目 · 原文件保留" onClick={() => void removeFromProject(targetIds)}>移出当前项目</button>}
     {targetIds.length > 0 && <button role="menuitem" className={itemClass + " is-danger"} onClick={() => confirmDelete(targetIds)}>
-      删除原文件
+      删除原文件…
     </button>}
     {!multiIds && groupIds && groupIds.length > 1 && <button role="menuitem" className={itemClass + " is-danger"}
       title="将这组生成图的原文件放入回收站" onClick={() => confirmDelete(groupIds)}>删除整组原文件 · {groupIds.length} 张</button>}

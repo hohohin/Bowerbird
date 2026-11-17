@@ -75,7 +75,7 @@ w.__TAURI_INTERNALS__ = {
     if (command === "preview_asset_originals") return [...new Set(args.assetIds)].map(id => { const original = w.entries.find((item: any) => item.asset_id === id)!.asset; return { asset_id: id, name: original.name, path: original.store_path, fingerprint: `fingerprint-${id}` }; });
     if (command === "trash_asset_original") {
       if (w.failOriginal) throw new Error(w.failOriginal);
-      w.entries = w.entries.filter((item: any) => item.is_reference || item.asset_id !== args.original.asset_id).map((item: any) => item.asset_id === args.original.asset_id ? { ...item, available: false } : item);
+      w.entries = w.entries.filter((item: any) => item.asset.store_path !== args.original.path);
       return;
     }
     if (command === "list_projects") return [];

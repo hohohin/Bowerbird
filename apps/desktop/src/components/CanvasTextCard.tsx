@@ -18,7 +18,8 @@ import { parseCanvasTableClipboard, pasteCanvasTable } from "../lib/canvasTableP
 
 const MIN_GRID_WEIGHT_SHARE = 0.04;
 
-export function CanvasTextCard({ value, readCurrentValue, selected, width, height, zoom, getZoom, onChange, onSelect, onResize, onConnectCell, onInput, inputLocked, onOpenPreview, onOpenGeneration, renderGeneration, onMediaContextMenu }: {
+export function CanvasTextCard({ value, readCurrentValue, hideOriginal, selected, width, height, zoom, getZoom, onChange, onSelect, onResize, onConnectCell, onInput, inputLocked, onOpenPreview, onOpenGeneration, renderGeneration, onMediaContextMenu }: {
+  hideOriginal?: (id: string, path?: string | null) => boolean;
   onMediaContextMenu?: (event: MouseEvent<HTMLElement>, asset: Asset) => void;
   renderGeneration?: (cell: CanvasTextCell) => ReactNode;
   onOpenGeneration?: (cell: CanvasTextCell) => void;
@@ -54,7 +55,7 @@ export function CanvasTextCard({ value, readCurrentValue, selected, width, heigh
   function previewImage(asset: Asset) {
     onOpenPreview?.(asset, value.cells.flat().flatMap(cell => canvasCellValue(cell).assetIds)
       .filter((id, index, ids) => ids.indexOf(id) === index)
-      .flatMap(id => { const image = referenceAssets.find(candidate => candidate.id === id); return image ? [image] : []; }));
+      .flatMap(id => { const image = referenceAssets.find(candidate => candidate.id === id); return image && !hideOriginal?.(id, image.store_path) ? [image] : []; }));
   }
   useEffect(() => {
     let current = true;
@@ -340,6 +341,7 @@ export function CanvasTextCard({ value, readCurrentValue, selected, width, heigh
           {generation || (images && !item.image_refs?.length && <div className="canvas-image-empty">连接图片输入</div>)}
           {!generation && !!canvasCellValue(item).imageRefs.length && <div className={images ? "canvas-image-content" : "canvas-cell-images"}>{canvasCellValue(item).imageRefs.map(ref => {
             const asset = referenceAssets.find(asset => asset.id === ref.asset_id);
+            if (hideOriginal?.(ref.asset_id, asset?.store_path)) return null;
             const video = isVideoPath(asset?.store_path);
             const path = asset && canvasAssetMediaPath({ storePath: asset.store_path ?? null, thumbPath: asset.thumb_path ?? null });
             const available = !!path || video;

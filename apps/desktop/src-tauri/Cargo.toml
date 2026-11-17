@@ -1,6 +1,6 @@
 [package]
 name = "bowerbird-desktop"
-version = "26.11.1705"
+version = "26.11.1706"
 description = "Bowerbird desktop app"
 authors = ["Bowerbird"]
 edition = "2021"
@@ -110,6 +110,7 @@ chrono = { version = "0.4", features = ["serde"] }
 ndarray = "0.17"
 ort = { version = "2.0.0-rc.13", default-features = false, features = ["ndarray", "load-dynamic"] }
 sha2 = "0.10"
+ring = "0.17"
 tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 keyring = { version = "3", features = [
   "apple-native",

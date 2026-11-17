@@ -47,7 +47,7 @@ try {
         assert.equal(await moveOutOfProject.getAttribute("title"), "移除后，进入全局素材");
         await moveOutOfProject.click();
       } else {
-        await page.getByRole("menuitem", { name: "删除原文件", exact: true }).click();
+        await page.getByRole("menuitem", { name: "删除原文件…", exact: true }).click();
         await page.getByRole("dialog").getByRole("button", { name: "删除原文件", exact: true }).click();
       }
     }

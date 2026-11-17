@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { catalogCache, patchConnectionProgress } from "../lib/catalogCache";
+import { originalDeletionFor, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { invalidateCatalog, observeCatalogChanges, useCatalogRevision, subscribeConnectionProgress, waitingForConnectionScan } from "../lib/useCatalogRevision";
 import { ChevronDown, ChevronRight, Folder, Link2, MoreHorizontal, Plus, RefreshCw, Unlink } from "lucide-react";
 import { api } from "../lib/api";
@@ -46,6 +47,7 @@ type Operation = { kind: "disconnect" | "trash-folder" | "move-folder"; folder: 
 const entryOf = (asset: Asset) => (asset as EntryAsset).connectionEntry;
 const entryKey = (asset: Asset) => entryOf(asset).id;
 const assetsOf = (entries: ConnectionEntry[]) => [...new Map(entries.map(entry => [entry.asset_id, entry.asset])).values()];
+const visibleEntry = (entry: ConnectionEntry) => !originalDeletionFor(entry.asset_id, entry.asset.store_path);
 const browsePositions = new Map<string, LibraryBrowsePosition>();
 
 export function ConnectedCollections({ media = "images", projectId = null, projectScope = false, positionId = "default", navigation, onClose, onNavigate, onCreateProject, onAssetsChange, toolbarActions, onInsertAsset, onOpenAsset, onAssetContextMenu }: ComponentProps<typeof CategorizedLibrary>) {
@@ -91,6 +93,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   const displayedIds = (ids: string[]) => ids.map(id => shownEntries.current.get(id) ?? id);
   const assetsChanged = useCallback((assets: Asset[]) => onAssetsChange?.([...new Map(assets.flatMap(asset => [asset, ...(asset as EntryAsset).connectionGroup ?? []]).map(asset => [asset.id, asset])).values()]), [onAssetsChange]);
   const dragSelection = useRef<ConnectionEntry[]>([]);
+  const pendingDeletion = usePendingOriginalDeletion();
   const pendingJump = useRef<string | null>(null);
   const request = useConnectedNavigation();
   const lastRequest = useRef(0);
@@ -160,7 +163,8 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   useEffect(() => {
     let current = true; dragSelection.current = [];
     const version = selectionVersion.current;
-    if (selected.size) void folderConnections.resolve([...selected]).then(entries => {
+    if (selected.size) void folderConnections.resolve([...selected]).then(rows => {
+      const entries = rows.filter(visibleEntry);
       if (!current || version !== selectionVersion.current) return;
       dragSelection.current = entries;
       if (entries.length === selected.size) return;
@@ -171,7 +175,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
       anchor.current = null;
     }).catch(() => {});
     return () => { current = false; };
-  }, [selected, revision]);
+  }, [selected, revision, pendingDeletion]);
   const reveal = useCallback((id: string) => {
     const ancestors = new Set<string>(); let parent = foldersById.get(id)?.parent_id;
     while (parent && !ancestors.has(parent)) { ancestors.add(parent); parent = foldersById.get(parent)?.parent_id; }
@@ -198,7 +202,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     finally { lock.current = false; if (alive.current) setBusy(false); }
   }
   async function resolve(ids: string[]) {
-    const entries = await folderConnections.resolve(ids);
+    const entries = (await folderConnections.resolve(ids)).filter(visibleEntry);
     if (entries.length !== ids.length) throw new Error("部分所选文件已不存在，请重新选择");
     return entries;
   }
@@ -256,7 +260,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     const entry = entryOf(asset), key = filterRef.current;
     void run(async () => {
       const entryIds = selected.has(entry.id) ? [...selected] : [entry.id];
-      const entries = entryIds.length > 1 ? await folderConnections.resolve(entryIds) : [entry];
+      const entries = (entryIds.length > 1 ? await folderConnections.resolve(entryIds) : [entry]).filter(visibleEntry);
       if (!canShowOverlay() || filterRef.current !== key) return;
       const move = () => setMoveEntries({ entryIds, entries });
       if (entries.length !== entryIds.length) {
@@ -392,7 +396,7 @@ function ConnectionOperation({ operation, folders, onClose, onSaved }: { operati
     return true;
   }
   const references = "entries" in operation && operation.entries.every(entry => entry.is_reference);
-  const title = operation.kind === "rename-entry" ? references ? "重命名分身" : "重命名原文件" : operation.kind === "disconnect" ? operation.folder.available ? "断开连接" : "删除文件夹" : moving ? "移动到文件夹" : operation.kind === "remove-references" ? "移出该文件夹" : "移到回收站";
+  const title = operation.kind === "rename-entry" ? references ? "重命名分身" : "重命名原文件" : operation.kind === "disconnect" ? operation.folder.available ? "断开连接" : "删除文件夹" : moving ? "移动到文件夹" : operation.kind === "remove-references" ? (operation.entries.length > 1 ? "删除所选分身" : "删除此分身") : "移到回收站";
   async function save() {
     if (lock.current) return; lock.current = true; setBusy(true); setError("");
     try {
@@ -411,7 +415,7 @@ function ConnectionOperation({ operation, folders, onClose, onSaved }: { operati
   }
   return <ModalShell title={title} onClose={onClose} preventClose={busy}><form className="catalog-form" onSubmit={event => { event.preventDefault(); void save(); }}>
     {operation.kind === "rename-entry" ? <label>名称<input data-modal-autofocus value={name} onChange={event => setName(event.target.value)} disabled={busy}/></label> : moving ? <fieldset className="connected-destinations" disabled={busy}><legend>目标文件夹</legend>{connectedRows(folders).filter(row => allowed(row.item)).map(({ item, depth }) => <label key={item.id} style={{ paddingLeft: depth * 16 }}><input type="radio" name="connection-destination" checked={target === item.id} onChange={() => setTarget(item.id)}/><Folder size={14}/>{item.name}</label>)}</fieldset>
-      : <><p>{"folder" in operation ? operation.folder.name : `${operation.entries.length} 项`}</p><p>{operation.kind === "disconnect" ? !operation.folder.available ? `移除该文件夹及其下级文件夹，原文件和创作资料保留。${operation.folder.parent_id ? "目录恢复可访问后，刷新会重新显示。" : ""}` : "原文件和创作资料保留。" : operation.kind === "remove-references" ? "只移除所选分身，原文件、其他文件夹中的分身和创作资料保留。" : "将文件移到回收站；原文件的其他分身将显示失联，创作资料保留。"}</p></>}
+      : <><p>{"folder" in operation ? operation.folder.name : `${operation.entries.length} 项`}</p><p>{operation.kind === "disconnect" ? !operation.folder.available ? `移除该文件夹及其下级文件夹，原文件和创作资料保留。${operation.folder.parent_id ? "目录恢复可访问后，刷新会重新显示。" : ""}` : "原文件和创作资料保留。" : operation.kind === "remove-references" ? "只删除选中的分身文件。原文件、其他分身和创作资料均保留。" : "将文件移到回收站；原文件的其他分身将显示失联，创作资料保留。"}</p></>}
     {moving && <p>移动文件，保留素材身份和创作资料。</p>}{error && <p role="alert">{error}</p>}
     <div className="connected-dialog-actions"><button type="button" disabled={busy} onClick={onClose}>取消</button><button className="app-button-accent" type="submit" disabled={busy || (moving && !target) || (operation.kind === "rename-entry" && !name.trim())}>{busy ? "处理中…" : title}</button></div>
   </form></ModalShell>;

@@ -5,6 +5,7 @@ import { LibraryDropPreview } from "./LibraryDropPreview";
 import { userErrorMessage } from "../lib/userError";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { catalogCache } from "../lib/catalogCache";
+import { hasPendingOriginalDeletions, isPendingOriginal, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { invalidateCatalog, useCatalogRevision } from "../lib/useCatalogRevision";
 import { ChevronDown, ChevronRight, Folder, MoreHorizontal, Pencil, Plus, Settings2, Trash2 } from "lucide-react";
 import { materialCatalog, type CatalogKind, type MaterialCatalog, type CatalogFilter } from "../lib/materialCatalog";
@@ -66,6 +67,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const [catalogLoading, setCatalogLoading] = useState(true);
   const loadedCatalogScope = useRef<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const pendingDeletion = usePendingOriginalDeletion();
   const [multiple, setMultiple] = useState(false);
   const [alphabetic, setAlphabetic] = useState(savedPosition?.alphabetic ?? false);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -208,7 +210,10 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
       result.push(...ids.map(id => shownGroupAssets.current.get(id) ?? id));
       if (ids.length < Math.min(2000, start + count - offset)) break;
     }
-    return result;
+    if (!hasPendingOriginalDeletions()) return result;
+    const assets = await resolveSelection(result, true);
+    const visible = new Set(assets.map(asset => asset.id));
+    return result.filter(id => visible.has(id));
   }
   async function selectAll() {
     if (working || reading) return;
@@ -220,10 +225,24 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   }
   async function resolveSelection(ids = [...selected], allowPartial = false) {
     const assets: Asset[] = [];
-    for (let i = 0; i < ids.length; i += 200) assets.push(...await api.getAssetsByIds(ids.slice(i, i + 200)));
+    for (let i = 0; i < ids.length; i += 200) {
+      const rows = await api.getAssetsByIds(ids.slice(i, i + 200));
+      assets.push(...rows.filter(asset => !isPendingOriginal(asset.id, asset.store_path)));
+    }
     if (!allowPartial && assets.length !== ids.length) throw new Error("部分所选素材已不存在，请重新选择");
     return assets;
   }
+  useEffect(() => {
+    if (!pendingDeletion.size || !selected.size) return;
+    let alive = true;
+    void resolveSelection([...selected], true).then(assets => {
+      if (!alive || assets.length === selected.size) return;
+      selectionVersion.current++;
+      setSelected(new Set(assets.map(asset => asset.id)));
+      if (!assets.length) setMultiple(false);
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [selected, pendingDeletion]);
   function select(asset: Asset, additive: boolean, range: boolean, location: CatalogLocation) {
     if (working) return;
     if (range && anchor.current) {

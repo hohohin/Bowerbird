@@ -85,7 +85,7 @@ try {
   assert.deepEqual(await page.evaluate(() => window.requests.find(r => r.command === 'start_file_task').args.request), { kind: 'add', ids: ['root-0'], folderId: 'second' });
   await context('ref-one'); await menu('重命名').click(); await dialog().getByRole('textbox').fill('新分身'); await dialog().getByRole('button', { name: '重命名分身', exact: true }).click();
   assert.equal(await page.evaluate(() => window.entries.find(e => e.id === 'root-0').name), 'root-0.png');
-  await context('ref-one'); await menu('删除').click(); await menu('移出该文件夹').click(); await dialog().getByRole('button', { name: '移出该文件夹', exact: true }).click();
+  await context('ref-one'); await menu('删除').click(); await menu('删除此分身').click(); await dialog().getByRole('button', { name: '删除此分身', exact: true }).click();
   assert.ok(await page.evaluate(() => window.entries.some(e => e.id === 'root-0') && !window.entries.some(e => e.id === 'ref-one')));
   await row('child').hover(); await plus.click(); await dialog().getByRole('textbox').fill('新集合'); await dialog().getByRole('button', { name: '保存', exact: true }).click();
   const created = await page.evaluate(() => window.folders.find(f => f.name === '新集合').id); await active(created);
