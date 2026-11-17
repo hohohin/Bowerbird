@@ -220,6 +220,23 @@
     return null;
   }
 
+  function appendCurrentProject(card) {
+    const host = document.createElement("div");
+    const row = document.createElement("div");
+    row.style.cssText = "padding:7px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#bbb;font:13px sans-serif";
+    row.textContent = "当前项目：读取中…";
+    host.attachShadow({mode:"closed"}).append(row);
+    card.append(host);
+    const unavailable = () => { row.textContent = "当前项目：暂不可用"; };
+    try {
+      chrome.runtime.sendMessage({type:"current_project"}, reply => {
+        if (chrome.runtime.lastError || !reply?.ok) return unavailable();
+        row.textContent = "当前项目：" + (reply.name || "未选择");
+        row.title = reply.name ? "采集图将进入该项目的画布中" : "未选择项目时，采集图将进入素材库";
+      });
+    } catch { unavailable(); }
+  }
+
   function openMenu() {
     closeMenu();
     closeSettings();
@@ -241,6 +258,7 @@
       "box-shadow:0 6px 20px rgba(0,0,0,0.45)",
       "z-index:2147483647",
     ].join(";");
+    appendCurrentProject(card);
     const actions = [
       ["采集本页图片", startImageScan],
       ["采集本页视频", startVideoScan],
@@ -348,6 +366,7 @@
     close.onclick = () => closeSettings({ focus: true });
     heading.append(title, close);
     card.append(heading);
+    appendCurrentProject(card);
 
     const pairLabel = document.createElement("div");
     pairLabel.textContent = "配对码";

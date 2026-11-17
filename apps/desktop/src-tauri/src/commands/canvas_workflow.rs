@@ -348,6 +348,7 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
     let mut run_ids = HashSet::new();
     let mut schedule_ids = HashSet::new();
     let mut accesses: Vec<(HashSet<&str>, HashSet<&str>)> = Vec::new();
+    let triggers: HashSet<&str> = nodes.iter().filter(|node| node["kind"] == "trigger").filter_map(|node| node["id"].as_str()).collect();
     for run in runs {
         if let Some(schedule) = run.get("scheduleId") {
             if !schedule_ids.insert(schedule.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?)
@@ -377,8 +378,10 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                 let id = id.as_str().ok_or_else(invalid)?;
                 if !reads_and_writes.contains(id) || !writes.insert(id) { return Err(invalid()); }
             }
-            if run["order"].as_array().ok_or_else(invalid)?.iter().any(|id| !writes.contains(id.as_str().unwrap()))
-                || accesses.iter().any(|(other_access, other_writes)| !writes.is_disjoint(other_access) || !other_writes.is_disjoint(&reads_and_writes)) { return Err(invalid()); }
+            if run["order"].as_array().ok_or_else(invalid)?.iter().any(|id| !writes.contains(id.as_str().unwrap())) { return Err(invalid()); }
+            writes.retain(|id| !triggers.contains(id));
+            reads_and_writes.retain(|id| !triggers.contains(id));
+            if accesses.iter().any(|(other_access, other_writes)| !writes.is_disjoint(other_access) || !other_writes.is_disjoint(&reads_and_writes)) { return Err(invalid()); }
             accesses.push((reads_and_writes, writes));
         }
     }
@@ -1128,6 +1131,17 @@ mod tests {
         doc["runs"][0]["status"] = json!("stopped");
         doc["runs"][1]["status"] = json!("done");
         assert!(db.workflow_save("p", 1, doc).is_err());
+    }
+    #[test]
+    fn trigger_can_start_a_second_target_while_first_target_runs() {
+        let mut trigger = node("start", json!({}));
+        trigger["kind"] = json!("trigger");
+        let mut doc = json!({"schema_version":1,"nodes":[trigger,node("a",json!({})),node("b",json!({}))],
+            "runs":[{"id":"one","threadId":"t1","status":"running","steps":{},"order":["start","a"]},
+                    {"id":"two","threadId":"t2","status":"running","steps":{},"order":["start","b"]}]});
+        assert!(validate(&doc).is_ok());
+        doc["runs"][1]["order"] = json!(["start","a"]);
+        assert!(validate(&doc).is_err());
     }
     #[test]
     fn parallel_readers_share_dependencies_but_reject_writes() {

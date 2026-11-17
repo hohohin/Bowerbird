@@ -88,6 +88,7 @@ function useBellDismiss(view: BellState['view'], button: RefObject<HTMLButtonEle
     };
     const escape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
+      if (view === 'latest' && !panel.current?.contains(document.activeElement)) return;
       event.preventDefault(); event.stopPropagation(); dispatch({ type: 'close' }); button.current?.focus();
     };
     document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape, true);

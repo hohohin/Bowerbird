@@ -304,7 +304,7 @@ pub async fn local_agent_find_asset_id(
     db: State<'_, Arc<Database>>,
     store_path: String,
 ) -> Result<Option<String>, AppError> {
-    ensure_preview_enabled()?;
+    // Production workflows also resolve generated image paths to library IDs here.
     let conn = db.conn.lock().unwrap();
     let mut stmt = conn.prepare("SELECT id FROM assets WHERE store_path=?1 LIMIT 1")?;
     let mut rows = stmt.query([store_path])?;

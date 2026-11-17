@@ -37,6 +37,7 @@ try {
       getURL: (path) => `chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/${path}`,
       getManifest: () => ({ version: "0.5.1" }),
       sendMessage: (message, callback) => {
+        if (message.type === "current_project") { callback({ok:true,name:"春季画册"}); return; }
         if (message.type === "button_position_get") { callback({position:null}); return; }
         if (message.type === "button_position_set") { callback({ok:true}); return; }
         if (message.type === "pairing_code_get") { callback({ok:true, code:"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.fixture-public-key"}); return; }
@@ -77,6 +78,10 @@ try {
   await button.focus();
   await page.keyboard.press("Enter");
   await menu.waitFor();
+  const cdp = await page.context().newCDPSession(page);
+  const {nodes} = await cdp.send("Accessibility.getFullAXTree");
+  assert.ok(nodes.some(node => node.name?.value === "当前项目：春季画册"));
+  await cdp.detach();
   assert.match(await menu.innerText(), /采集本页图片[\s\S]*采集本页视频[\s\S]*设置/);
   await page.keyboard.press("Escape");
   assert.equal(await menu.count(), 0);

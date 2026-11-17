@@ -20,6 +20,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     S.checkVideoSupport().then(sendResponse, () => sendResponse({ok:false}));
     return true;
   }
+  if (message?.type === "current_project") {
+    if (_sender.id !== chrome.runtime.id) return false;
+    S.currentProject().then(sendResponse, () => sendResponse({ok:false}));
+    return true;
+  }
   if (message?.type === "pairing_code_get") {
     if (_sender.id !== chrome.runtime.id) return false;
     (async () => {

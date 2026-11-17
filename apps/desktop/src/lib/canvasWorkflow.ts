@@ -715,8 +715,9 @@ export function workflowWriteNodes(nodes: WorkflowNode[], order: string[]): stri
   for (const node of nodes) if ((node.textTarget && tables.has(node.textTarget.nodeId)) || node.resultNodeIds?.some(id => tables.has(id))) ids.add(node.id);
   return [...ids];
 }
-export function workflowAccessConflict(readsAndWrites: string[], writes: string[], otherAccess: string[], otherWrites: string[]): boolean {
-  return writes.some(id => otherAccess.includes(id)) || otherWrites.some(id => readsAndWrites.includes(id));
+export function workflowAccessConflict(nodes: WorkflowNode[], readsAndWrites: string[], writes: string[], otherAccess: string[], otherWrites: string[]): boolean {
+  const sharedWrites = (left: string[], right: string[]) => left.some(id => right.includes(id) && !nodes.some(node => node.id === id && node.kind === "trigger"));
+  return sharedWrites(writes, otherAccess) || sharedWrites(otherWrites, readsAndWrites);
 }
 export function workflowNodeRun(document: CanvasWorkflow, nodeId: string): WorkflowRun | undefined {
   const runs = workflowRuns(document);

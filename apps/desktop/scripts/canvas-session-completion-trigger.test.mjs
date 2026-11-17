@@ -246,6 +246,18 @@ try {
             await live.waitForFunction(() => !JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes
               .find(n => n.id === 'listen').inputs.completion?.length);
             assert.ok(await live.evaluate(() => window.lockedTarget()), 'disconnecting the monitored source preserves the active downstream task');
+            const triggerCard = live.locator('[data-workflow-card="listen"]');
+            const actionCard = live.locator('[data-workflow-card="action"]');
+            const count = triggerCard.getByRole('spinbutton', { name: '剩余触发次数' });
+            await count.fill('3');
+            await live.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'listen').triggerCount === 3);
+            await count.fill('1');
+            await actionCard.getByRole('button', { name: '断开触发器连接' }).click({ button: 'right' });
+            await live.getByRole('menu', { name: '选择要断开的连线' }).getByRole('menuitem').click();
+            await live.waitForFunction(() => !JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'action').inputs.signal?.length);
+            await triggerCard.getByRole('button', { name: '输出：触发' }).locator('i').dragTo(actionCard.locator('header strong'));
+            await live.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'action').inputs.signal?.some(input => input.nodeId === 'listen'));
+            assert.ok(await live.evaluate(() => window.lockedTarget()), 'rewiring the trigger leaves the existing generation running');
           }
         }
         await live.evaluate(() => window.finishAction());

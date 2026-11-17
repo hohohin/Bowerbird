@@ -248,12 +248,14 @@ fn handle_blob(
             if let Some(project_id) = project_id {
                 if let Err(error) = state
                     .db
-                    .add_assets_to_project(project_id, std::slice::from_ref(&asset.id))
+                    .place_collected_image(project_id, &asset)
                 {
                     tracing::warn!(
                         "link collected asset {} to project failed: {error}",
                         asset.id
                     );
+                    let _ = state.app.emit("library://assets-changed", ());
+                    return serde_json::json!({"ok":false,"saved":true,"error":"图片已入库，但未能加入项目画布"}).to_string();
                 }
             }
             tracing::info!(
@@ -301,6 +303,10 @@ async fn handle_message(text: &str, state: &AppState) -> String {
         tracing::info!("collect ws recv: kind={kind}");
     }
     match kind {
+        "current_project" => match project_id.as_deref().map(|id| state.db.get_project(id)).transpose() {
+            Ok(project) => serde_json::json!({"ok":true,"name":project.flatten().map(|p| p.name)}).to_string(),
+            Err(_) => serde_json::json!({"ok":false,"error":"project unavailable"}).to_string(),
+        },
         "ping" => {
             let _ = state.app.emit("collect://extension-connected", ());
             serde_json::json!({"ok":true,"pong":true,"capabilities":{"video_blob":true,"video_max_bytes":video_blob::MAX_BYTES}}).to_string()
@@ -413,15 +419,7 @@ async fn save_one(
         }
     };
     if let Some(project_id) = project_id {
-        if let Err(error) = state
-            .db
-            .add_assets_to_project(project_id, std::slice::from_ref(&asset.id))
-        {
-            tracing::warn!(
-                "link collected asset {} to project failed: {error}",
-                asset.id
-            );
-        }
+        state.db.place_collected_image(project_id, &asset)?;
     }
     Ok(asset)
 }

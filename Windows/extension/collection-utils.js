@@ -25,7 +25,7 @@
     } catch { return {ok:false,code:"pair_required"}; }
   }
 
-  async function checkVideoSupport() {
+  async function queryDesktop(type, decode) {
     const access = await socketAccess();
     if (!access.ok) return access;
     return new Promise(resolve => {
@@ -34,11 +34,21 @@
       const timer=setTimeout(()=>done({ok:false,code:"desktop_unavailable"}),3000);
       try {
         ws=new WebSocket("ws://127.0.0.1:39871/ws", access.protocols);
-        ws.onopen=()=>ws.send(JSON.stringify({type:"ping"}));
-        ws.onmessage=event=>{try{const reply=JSON.parse(event.data);done(reply.capabilities?.video_blob===true ? {ok:true,maxBytes:videoLimit(reply.capabilities)} : {ok:false,code:"desktop_upgrade"});}catch{done({ok:false,code:"desktop_upgrade"});}};
+        ws.onopen=()=>ws.send(JSON.stringify({type}));
+        ws.onmessage=event=>{try{done(decode(JSON.parse(event.data)));}catch{done({ok:false,code:"desktop_upgrade"});}};
         ws.onerror=()=>done({ok:false,code:"desktop_unavailable"});ws.onclose=ws.onerror;
       } catch {done({ok:false,code:"desktop_unavailable"});}
     });
+  }
+
+  function checkVideoSupport() {
+    return queryDesktop("ping", reply => reply.capabilities?.video_blob === true
+      ? {ok:true,maxBytes:videoLimit(reply.capabilities)} : {ok:false,code:"desktop_upgrade"});
+  }
+
+  function currentProject() {
+    return queryDesktop("current_project", reply => reply.ok && (reply.name === null || typeof reply.name === "string")
+      ? {ok:true,name:reply.name} : {ok:false,code:"desktop_upgrade"});
   }
 
   function limitBatch(batch) {
@@ -206,7 +216,7 @@
 
   root.BowerbirdCollection = {
     MAX_ITEMS, MAX_IMAGE_BYTES, MAX_INLINE_BYTES, FETCH_TIMEOUT_MS, UPLOAD_TIMEOUT_MS, MESSAGE_TIMEOUT_MS,
-    VIDEO_FETCH_TIMEOUT_MS, VIDEO_UPLOAD_TIMEOUT_MS, checkVideoSupport,
+    VIDEO_FETCH_TIMEOUT_MS, VIDEO_UPLOAD_TIMEOUT_MS, checkVideoSupport, currentProject,
     limitBatch, uploadBytes, requestBackground, runBatch, failureMessage, progressMessage,
   };
 })(globalThis);

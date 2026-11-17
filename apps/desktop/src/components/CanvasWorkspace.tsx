@@ -4557,9 +4557,6 @@ export function CanvasWorkspace({
     }
     if (entry.kind === "workflow") {
       const controller = canvasWorkflowController(entry.projectId);
-      if (entry.edit.nodes.some(node => controller.isLocked(node.id))) {
-        notify("请先停止相关工作流再撤销卡片操作", "info"); return;
-      }
       if (controller.error) { notify("请先重试保存工作流，再撤销卡片操作", "info"); return; }
       const before = controller.document;
       const restored = restoreWorkflowEdit(before.nodes, entry.edit);

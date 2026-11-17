@@ -1752,6 +1752,39 @@ impl Database {
         Ok(changed > 0)
     }
 
+    pub fn place_collected_image(&self, project_id: &str, asset: &Asset) -> AppResult<()> {
+        self.ensure_project_canvas(project_id)?;
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let visible: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM canvas_nodes WHERE project_id=?1 AND asset_id=?2 AND hidden_at IS NULL)",
+            params![project_id, asset.id], |row| row.get(0),
+        )?;
+        if !visible {
+            let now = Utc::now().timestamp();
+            let snapshot = asset_snapshot(asset);
+            let rect = placement::Rect { x: 32.0, y: 32.0, width: 190.0, height: asset_node_height(&snapshot) };
+            let workflow = placement::workflow(&tx, project_id)?;
+            let occupied = placement::obstacles(&tx, project_id, &workflow, &[])?;
+            let (x, y) = placement::near(rect, &occupied, 0.0);
+            let node = NewCanvasNode {
+                id: ulid::Ulid::new().to_string(), project_id: project_id.to_owned(), thread_id: None,
+                kind: CreativeNodeKind::Asset, role: Some(CreativeNodeRole::Reference), asset_id: Some(asset.id.clone()),
+                payload_json: serde_json::to_string(&AssetNodePayloadV1 {
+                    schema_version: 1, snapshot, execution: None, workflow_source: None, workflow_generation_group: None,
+                })?,
+                x, y, width: rect.width, height: rect.height, z_index: 0, position_locked: false,
+            };
+            touch_canvas_tx(&tx, project_id, now)?;
+            insert_node_tx(&tx, &node, now)?;
+        } else {
+            tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) VALUES(?1,?2,?3)",
+                params![project_id, asset.id, Utc::now().timestamp()])?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn create_canvas_node(&self, value: &NewCanvasNode) -> AppResult<CanvasNode> {
         let now = Utc::now().timestamp();
         let conn = self.conn.lock().unwrap();
@@ -5112,6 +5145,16 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn collected_image_replay_keeps_one_visible_card() {
+        let db = reference_placement_fixture();
+        let asset = db.get_asset("a").unwrap().unwrap();
+        db.place_collected_image("p1", &asset).unwrap();
+        db.place_collected_image("p1", &asset).unwrap();
+        let nodes = db.list_canvas_nodes("p1").unwrap();
+        assert_eq!(nodes.iter().filter(|node| node.asset_id.as_deref() == Some("a")).count(), 1);
+    }
+
     fn reference_placement_fixture() -> Database {
         let db = db();
         materialize(&db, "p1");

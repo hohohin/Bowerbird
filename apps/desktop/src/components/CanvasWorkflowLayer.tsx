@@ -683,7 +683,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     automaticRef.current = dragging; setAutomatic(dragging);
   }
   function beginAutomatic(id: string, side: AutomaticGesture["side"], point: { x: number; y: number }, keyboard = false, latest = false, scope?: string) {
-    if (panReady || !controller.ready || side === "input" && controller.isLocked(id) && !controller.canEditCompletionSources(id)) return;
+    if (panReady || !controller.ready) return;
     clearAutomatic();
     setConnection(null); connectionRef.current = null; setArmed(false); setDisconnectMenu(null);
     const gesture: AutomaticGesture = { id, side, outputs: side === "output" ? automaticOutputs(id, latest) : [],
@@ -701,9 +701,10 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       ...workflowInputProducers(controller.document.nodes, binding)].some(id => id && controller.isLocked(id)));
   }
   function automaticError(outputs: AutomaticOutput[], target: AutomaticTarget) {
-    if (nodeById.get(target.nodeId ?? "")?.kind !== "trigger" && lockedOutput(outputs)) return "来源卡片正在使用";
+    const controlWire = nodeById.get(target.nodeId ?? "")?.kind === "trigger" || outputs.length > 0 && outputs.every(output => output.type === "signal");
+    if (!controlWire && lockedOutput(outputs)) return "来源卡片正在使用";
     if (target.nodeId) {
-      if (controller.isLocked(target.nodeId) && !controller.canEditCompletionSources(target.nodeId)) return "这张卡片正在运行";
+      if (controller.isLocked(target.nodeId) && !controlWire) return "这张卡片正在运行";
       return planAutomaticConnection(controller.document.nodes, outputs, target.nodeId).error;
     }
     const card = graphById.get(target.canvasNodeId ?? "");
@@ -785,7 +786,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
         if (wireKey && wireKey !== key) continue;
         if (matchesCell && (!onlyPort || onlyPort === port)) inScope.add(key);
         const ids = inputImages(binding), previous = choices.get(key);
-        const connectionLocked = () => !(port === "completion" && controller.canEditCompletionSources(node.id))
+        const connectionLocked = () => port !== "completion" && port !== "signal"
           && (controller.isLocked(node.id) || !!binding.nodeId && controller.isLocked(binding.nodeId));
         const disabled = connectionLocked();
         const source = sourceLabel(binding);
@@ -805,7 +806,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
             if (binding.autoConnect) { disconnectAutomatic(binding.autoConnect); return; }
             const remaining = (current.inputs[port] ?? []).filter(input => disconnectKey(current, port, input) !== key);
             if (remaining.length === current.inputs[port]?.length) return;
-            if (current.textTarget) handle(edit(invalidateWorkflow(controller.document.nodes, current.id).filter(item => item.id !== current.id)));
+            if (current.textTarget && port !== "signal") handle(edit(invalidateWorkflow(controller.document.nodes, current.id).filter(item => item.id !== current.id)));
             else patch(current.id, { inputs: { ...current.inputs, [port]: remaining } }, port !== "signal" && port !== "completion");
           } });
       }
@@ -855,9 +856,10 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     })());
   }
   function newConnectionError(gesture: AutomaticGesture, node: WorkflowNode) {
-    if (gesture.side === "output") return node.kind !== "trigger" && lockedOutput(gesture.outputs) ? "来源卡片正在使用"
+    if (gesture.side === "output") return node.kind !== "trigger" && gesture.outputs.some(output => output.type !== "signal") && lockedOutput(gesture.outputs) ? "来源卡片正在使用"
       : planAutomaticConnection([...controller.document.nodes, node], gesture.outputs, node.id).error;
     const outputs = canvasAutomaticOutputs(node.id, [node], [], [], []);
+    if (gesture.target.nodeId && controller.isLocked(gesture.target.nodeId) && node.kind !== "trigger") return "这张卡片正在运行";
     if (gesture.target.nodeId) return planAutomaticConnection([...controller.document.nodes, node], outputs, gesture.target.nodeId).error;
     return automaticError(outputs, gesture.target);
   }
@@ -887,7 +889,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   }
   function connect(toId: string, inputId: string) {
     const draft = connectionRef.current;
-    if (!draft || controller.isLocked(toId) && !controller.canEditCompletionSources(toId)) return;
+    if (!draft || inputId !== "*auto" && inputId !== "completion" && draft.type !== "signal" && controller.isLocked(toId)) return;
     if (inputId === "*auto") {
       connectionRef.current = null; setConnection(null);
       const { type, ...binding } = draft;
@@ -904,7 +906,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       connectionRef.current = null; setConnection(null);
       return;
     }
-    if (source.nodeId && controller.isLocked(source.nodeId)) { notifyError(null, "来源卡片正在使用"); return; }
+    if (source.type !== "signal" && source.nodeId && controller.isLocked(source.nodeId)) { notifyError(null, "来源卡片正在使用"); return; }
     const latest = source.cellId === "*latest" || source.cellId === "*latest-image";
     const producers = workflowInputProducers(nodes, source);
     const error = (latest ? [] : producers).map(producer => workflowConnectionError(nodes, producer, source.portId ?? source.type, toId, inputId)).find(Boolean)
@@ -937,11 +939,11 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   }
   function connectSignal(targetId: string, native = false) {
     const source = connectionRef.current;
-    if (source?.type !== "signal" || !source.nodeId || controller.isLocked(source.nodeId)) return;
+    if (source?.type !== "signal" || !source.nodeId) return;
     const nodes = controller.document.nodes;
     const card = native && graphNodes.find(node => node.id === targetId && node.kind === "note" && node.hiddenAt == null && ["text", "images"].includes(readCanvasNote(node).note_type));
     const target = native ? nodes.find(node => node.textSource === targetId) ?? (card ? { ...newWorkflowNode("text", card.x, card.y, ""), textSource: targetId } : null) : nodes.find(node => node.id === targetId);
-    if (!target || controller.isLocked(target.id)) return;
+    if (!target) return;
     const candidates = nodes.some(node => node.id === target.id) ? nodes : [...nodes, target];
     const error = workflowConnectionError(candidates, source.nodeId, "signal", target.id, "signal");
     if (error) { notifyError(null, error); return; }
@@ -1314,12 +1316,22 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       aria-label={side === "input" ? "添加上游" : "添加下游"}
       data-workflow-node={id} data-workflow-input={side === "input" ? "*auto" : undefined}
       onPointerDown={event => { if (event.button !== 0) return; event.stopPropagation(); event.preventDefault(); beginAutomatic(id, side, { x: event.clientX, y: event.clientY }); }}
-      onClick={event => { if (event.detail !== 0) return; const rect = event.currentTarget.getBoundingClientRect(); beginAutomatic(id, side, { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, true); }}
+      onClick={event => {
+        if (event.detail !== 0) return;
+        if (side === "input" && connectionRef.current?.type === "signal") { connectSignal(id); return; }
+        const gesture = automaticRef.current;
+        if (gesture && gesture.side !== side) {
+          commitAutomatic(side === "input" ? gesture.outputs : automaticOutputs(id), side === "input" ? automaticTarget(id) : gesture.target);
+          return;
+        }
+        const rect = event.currentTarget.getBoundingClientRect();
+        beginAutomatic(id, side, { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, true);
+      }}
       onContextMenu={event => { event.preventDefault(); event.stopPropagation(); if (side === "input") chooseDisconnect({ nodeId: id }, { x: event.clientX, y: event.clientY }); }} />;
   }
   function portButton(node: WorkflowNode, port: WorkflowPort, side: "input" | "output", _index: number) {
     const completionInput = side === "input" && node.kind === "trigger" && port.id === "completion";
-    const busy = controller.isLocked(node.id) && !(completionInput && controller.canEditCompletionSources(node.id));
+    const busy = node.kind !== "trigger" && controller.isLocked(node.id);
     return <button key={port.id} className={`workflow-port is-${side} is-${port.type}`} style={{ top: workflowPortY(node, side, port.id) - node.y - 10 }}
       aria-label={`${side === "input" ? "输入" : "输出"}：${port.label}`} title={completionInput ? "拖到上游卡片或生成会话，或点击选择来源" : port.type === "session" ? "运行后自动连接生成会话卡片" : side === "input" ? "连接输入；右键断开此端口" : "拖到输入端口，或点击后选择输入端口"}
       data-workflow-node={node.id} data-workflow-input={side === "input" ? port.id : undefined}
@@ -1336,7 +1348,9 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           beginAutomatic(node.id, side, { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }, true);
         }
         else if (side === "input") connect(node.id, port.id);
-        else { const value = { nodeId: node.id, portId: port.id, type: port.type }; connectionRef.current = value; setConnection(value); }
+        else if (automaticRef.current?.side === "input" && port.type === "signal") {
+          commitAutomatic([{ binding: { nodeId: node.id, portId: port.id }, type: port.type }], automaticRef.current.target);
+        } else { const value = { nodeId: node.id, portId: port.id, type: port.type }; connectionRef.current = value; setConnection(value); }
       }}
       onContextMenu={event => { event.preventDefault(); event.stopPropagation(); if (!busy && side === "input") chooseDisconnect({ nodeId: node.id, port: port.id }, { x: event.clientX, y: event.clientY }); }}>
       <i /><span>{node.kind === "comfy-video" && port.id === "last-frame" ? "尾帧" : port.label}</span>
@@ -1364,7 +1378,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const angle = Math.PI + i * Math.PI / 24, radius = i % 4 === 1 || i % 4 === 2 ? 20 : 16;
       return `${20 + Math.cos(angle) * radius},${24 + Math.sin(angle) * radius}`;
     });
-    return <button className="workflow-key workflow-gear" aria-label="断开触发器连接" title="触发器已连接 · 右键齿轮断开" disabled={controller.isLocked(node.id)}
+    return <button className="workflow-key workflow-gear" aria-label="断开触发器连接" title="触发器已连接 · 右键齿轮断开"
       onPointerDown={event => event.stopPropagation()}
       onContextMenu={event => { event.preventDefault(); event.stopPropagation(); chooseDisconnect({ nodeId: node.id, port: "signal" }, { x: event.clientX, y: event.clientY }); }}>
       <svg width="36" height="32" viewBox="0 0 40 32" aria-hidden="true"><path d={`M${points.join(" L")} L29,24 A9,9 0 0 0 11,24 Z`} fill="currentColor" /></svg>
@@ -1478,7 +1492,8 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const conversationId = agentChat?.id ?? node.chatConversationId;
       const starting = controller.startingAction(node.id);
       const queuedTrigger = node.kind === "trigger" && run?.status === "waiting" && !run.order.length && run.triggerQueue?.[0] === node.id;
-      const busy = creating || !!starting || queuedTrigger || controller.isLocked(node.id) || chatBusy || pendingAgentCards.has(node.id) || node.planning?.status === "waiting";
+      const triggerExecuting = node.kind === "trigger" && (run?.status === "running" || run?.status === "waiting") && run.order.includes(node.id);
+      const busy = creating || node.kind !== "trigger" && (!!starting || controller.isLocked(node.id) || chatBusy || pendingAgentCards.has(node.id) || node.planning?.status === "waiting");
       const providerIssue = (node.kind === "loop" || node.kind === "trigger" ? flowIssues.get(node.id) : providerIssues.get(node.id)) ?? null;
       const loop = node.kind === "loop" && run?.loop?.nodeId === node.id ? run.loop : undefined;
       const restartIssue = loop && run?.status === "stopped" ? loop.bodyIds.map(id => providerIssues.get(id)).find(Boolean) : null;
@@ -1537,9 +1552,9 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const readCurrentPrompt = () => controller.document.nodes.find(card => card.id === node.id)?.prompt ?? node.prompt;
       const bindings = Object.values(visibleInputs).some(bindings => bindings.length > 0) && <div className="workflow-bindings">
         {[...new Map(Object.values(visibleInputs).flat().filter(input => input.autoConnect).map(input => [input.autoConnect!, input])).entries()].map(([id, input]) =>
-          <button key={id} disabled={busy && !controller.canEditCompletionSources(node.id)} title="断开连接" onClick={() => disconnectAutomatic(id)}>{sourceLabel(input).label}<X size={11} /></button>)}
+          <button key={id} disabled={busy && input.portId !== "signal" && node.kind !== "trigger"} title="断开连接" onClick={() => disconnectAutomatic(id)}>{sourceLabel(input).label}<X size={11} /></button>)}
         {Object.entries(visibleInputs).map(([port, bindings]) => [port, bindings.filter(input => !input.autoConnect)] as const).filter(([, bindings]) => bindings.length).map(([port, bindings]) =>
-          <button key={port} disabled={busy && !(port === "completion" && controller.canEditCompletionSources(node.id))} title="断开此输入" onClick={event => chooseDisconnect({ nodeId: node.id, port }, { x: event.clientX, y: event.clientY }, true)}>{node.kind === "loop" && bindings.length === 1 ? sourceLabel(bindings[0]).label : node.kind === "voice" && port === "image" ? "参考录音" : port === "completion" ? "完成触发" : port === "signal" ? "触发器" : port === "text" ? "文本" : port === "visual-profile" ? "视觉规范" : port === "first-frame" ? node.comfyVideo?.mode === "reference" ? "参考图" : "首帧" : port === "last-frame" ? "尾帧" : portMediaLabel(bindings)}{(node.kind !== "loop" || bindings.length > 1) && ` · ${bindings.length} 个来源`} <X size={11} /></button>)}
+          <button key={port} disabled={busy && port !== "completion" && port !== "signal"} title="断开此输入" onClick={event => chooseDisconnect({ nodeId: node.id, port }, { x: event.clientX, y: event.clientY }, true)}>{node.kind === "loop" && bindings.length === 1 ? sourceLabel(bindings[0]).label : node.kind === "voice" && port === "image" ? "参考录音" : port === "completion" ? "完成触发" : port === "signal" ? "触发器" : port === "text" ? "文本" : port === "visual-profile" ? "视觉规范" : port === "first-frame" ? node.comfyVideo?.mode === "reference" ? "参考图" : "首帧" : port === "last-frame" ? "尾帧" : portMediaLabel(bindings)}{(node.kind !== "loop" || bindings.length > 1) && ` · ${bindings.length} 个来源`} <X size={11} /></button>)}
       </div>;
       const presentation = WORKFLOW_CARD_PRESENTATION[videoCard ? "comfy-video" : node.kind], CardIcon = node.kind === "trigger" ? TRIGGER_MODES.find(mode => mode.id === triggerMode)!.icon : presentation.icon;
       const running = !!starting || chatBusy || run?.status === "running" && step?.status === "running";
@@ -1771,15 +1786,16 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
             onStart={() => handle(controller.start(node.id))} onStop={() => handle(controller.stop(run?.id))}
             onContinue={() => handle(controller.continue(run?.id))} onRestart={() => run && handle(controller.restartLoop(run.id))}
             onRetry={() => run && handle(retryLoop(run.id))} />}
-          {node.kind !== "loop" && node.kind !== "planner" && (node.kind !== "voice" || busy) && (node.kind !== "trigger" || triggerMode === "manual" || busy || run?.status === "failed") && <footer>
-            <span>{agentChat ? localChatStatusLabel(agentChat.status, agentChat.turnCount) : node.kind === "comfy-video" && run?.status === "stopped" ? step?.comfyCancelled ? "已取消" : "已停止" : node.kind === "trigger" && busy ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>
-            {starting ? <button title="取消启动" onClick={() => controller.cancelStarting(node.id)}><Square size={13} />停止</button> : chatBusy && !controller.isLocked(node.id) ? <button onClick={() => handle(useLocalChatStore.getState().stop(agentChat!.id))}><Square size={13} />停止</button> : run && (queuedTrigger || controller.isLocked(node.id) && run.order.includes(node.id)) ? <>
+          {node.kind !== "loop" && node.kind !== "planner" && (node.kind !== "voice" || busy) && (node.kind !== "trigger" || triggerMode === "manual" || queuedTrigger || triggerExecuting || run?.status === "failed") && <footer>
+            <span>{agentChat ? localChatStatusLabel(agentChat.status, agentChat.turnCount) : node.kind === "comfy-video" && run?.status === "stopped" ? step?.comfyCancelled ? "已取消" : "已停止" : node.kind === "trigger" && (queuedTrigger || triggerExecuting) ? run?.status === "waiting" ? "等待继续" : "运行中" : step?.status === "pending" && run?.status === "failed" ? "因上游失败未执行" : step?.status === "pending" && run?.status === "stopped" ? "已停止，未执行" : step?.status === "done" && step.generationSubmission === "submitted" ? "已提交生成" : step ? statusLabels[step.status] : node.trigger ? "工作流起点" : "未运行"}</span>
+            {starting ? <button title="取消启动" onClick={() => controller.cancelStarting(node.id)}><Square size={13} />停止</button> : chatBusy && !controller.isLocked(node.id) ? <button onClick={() => handle(useLocalChatStore.getState().stop(agentChat!.id))}><Square size={13} />停止</button> : run && (queuedTrigger || triggerExecuting || controller.isLocked(node.id) && run.order.includes(node.id)) ? <>
               {deliveryRunIds.has(run.id) && node.id === run.startId && <button onClick={() => handle(controller.continue(run.id))}>重试写入内容卡</button>}
               {run?.status === "waiting" && !Object.values(run.steps).some(step => step.status === "failed")
                 && (run.order.find(id => run!.steps[id].status !== "done") ?? (run.triggerQueue?.length ? run.startId : null)) === node.id
                 && <button aria-label="继续工作流" onClick={() => handle(controller.continue(run?.id))}><Play size={13} />继续</button>}
               <button disabled={!!step?.comfyStopping} aria-label="停止工作流" title={node.kind === "comfy-video" ? "取消排队或中断本次生成" : "停止工作流"} onClick={() => handle(controller.stop(run?.id))}><Square size={12} /></button>
-            </> : node.kind !== "agent" && (node.kind !== "trigger" || triggerMode === "manual") && <button disabled={busy || !!providerIssue} aria-label={node.kind === "trigger" ? "触发下游" : "运行此卡片"} onClick={() => handle(controller.start(node.id, node.kind !== "trigger"))}><Play size={13} />{node.kind === "trigger" ? "触发下游" : "运行此卡片"}</button>}
+            </> : node.kind !== "agent" && node.kind !== "trigger" && <button disabled={busy || !!providerIssue} aria-label="运行此卡片" onClick={() => handle(controller.start(node.id, true))}><Play size={13} />运行此卡片</button>}
+            {node.kind === "trigger" && triggerMode === "manual" && <button disabled={creating || !!providerIssue} aria-label="触发下游" onClick={() => handle(controller.start(node.id))}><Play size={13} />触发下游</button>}
             {node.kind === "agent" && <button type="button" aria-label="运行此卡片" disabled={busy || !!providerIssue}
               onClick={() => handle(handleAgentCard(node, conversationId, "run"))}><Play size={13} />运行</button>}
           </footer>}
@@ -1788,7 +1804,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
             const run = await api.cloudAgentGet(step.agentRunId!); useStore.getState().openCloudAgentRun(run, { navigate: false }); setAgentOpen(true);
           })())}>查看技能执行 / 审批</button>}
         </div>
-        {node.kind === "trigger" ? inputPorts.map((port, index) => portButton(node, port, "input", index)) : inputPorts.length > 0 && automaticButton(node.id, "input", busy)}
+        {node.kind === "trigger" ? inputPorts.map((port, index) => portButton(node, port, "input", index)) : inputPorts.length > 0 && automaticButton(node.id, "input", creating)}
         {node.kind === "trigger" ? outputPorts.map((port, index) => portButton(node, port, "output", index)) : outputPorts.length > 0 && automaticButton(node.id, "output", creating)}
       </article>;
     })}

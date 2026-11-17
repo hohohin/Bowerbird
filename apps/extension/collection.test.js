@@ -119,6 +119,7 @@ function contentFixture({ urls = [], xhsState, remote, localResult = { ok: true 
   class Element {
     constructor(tag) { this.tagName = tag.toUpperCase(); this.style = {}; this.attributes = {}; this.listeners = {}; this.children = []; }
     append(...children) { this.children.push(...children); }
+    attachShadow() { this.shadow = new Element("div"); return this.shadow; }
     appendChild(child) { this.append(child); }
     remove() { this.removed = true; }
     setAttribute(key, value) { this.attributes[key] = value; }
@@ -164,6 +165,7 @@ function contentFixture({ urls = [], xhsState, remote, localResult = { ok: true 
     chrome: { runtime: {
       getURL: (url) => `chrome-extension://fixture/${url}`,
       sendMessage: (message, cb) => {
+        if (message.type === "current_project") { cb({ok:true,name:"春季画册"}); return; }
         if (message.type === "button_position_get") { cb({ position: null }); return; }
         if (message.type === "button_position_set") { cb({ ok: true }); return; }
         if (message.type === "collect_heartbeat" || message.type === "collect_access") { cb({ok:true,protocols:["bowerbird-v1","fixture"]}); return; }
@@ -179,7 +181,7 @@ function contentFixture({ urls = [], xhsState, remote, localResult = { ok: true 
   const startImages = async () => {
     openMenu();
     const menu = document.getElementById("__bowerbird_menu");
-    await menu.children[0].listeners.click({ isTrusted: true });
+    await menu.children.find(item => item.textContent === "采集本页图片").listeners.click({ isTrusted: true });
   };
   const confirm = async () => {
     await startImages();
@@ -323,7 +325,10 @@ test("content opens a secondary menu for image, video and settings without downl
   const menu=fixture.document.getElementById("__bowerbird_menu");
   assert.ok(menu);
   assert.equal(menu.attributes.role,"menu");
-  assert.deepEqual(menu.children.map(item=>item.textContent),["采集本页图片","采集本页视频","设置"]);
+  const project = menu.children[0].shadow.children[0];
+  assert.equal(project.textContent, "当前项目：春季画册");
+  assert.equal(project.title, "采集图将进入该项目的画布中");
+  assert.deepEqual(menu.children.slice(1).map(item=>item.textContent),["采集本页图片","采集本页视频","设置"]);
   assert.equal(fixture.messages.length,0);
   assert.equal(fixture.button.attributes["aria-expanded"],"true");
 });
