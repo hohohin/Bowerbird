@@ -287,7 +287,14 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                     continue;
                 }
                 if binding["portId"] == "signal" { return Err(invalid()); }
-                if binding["groupId"].is_string() {
+                if let Some(dimension) = binding.get("dimension") {
+                    let asset = binding["assetId"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
+                    if port != "text" || !dimension["title"].is_string() || !dimension["body"].is_string()
+                        || !(dimension["id"].is_null() || dimension["id"].is_string())
+                        || ["nodeId", "portId", "groupId", "assetIds", "canvasNodeId", "cellId"].iter().any(|key| binding.get(*key).is_some())
+                    { return Err(invalid()); }
+                    assets.insert(asset.to_owned());
+                } else if binding["groupId"].is_string() {
                     if !image_port || binding.get("nodeId").is_some() || binding.get("assetId").is_some() || binding.get("canvasNodeId").is_some() { return Err(invalid()); }
                     for asset in binding["assetIds"].as_array().ok_or_else(invalid)? {
                         assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
@@ -478,6 +485,26 @@ mod tests {
         assert!(paid_definition(&json!({"nodes":[{"id":"text","kind":"text"}]})).is_empty());
     }
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
+    #[test]
+    fn dimension_wire_roundtrips_and_accepts_another_input() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let text = json!({"assetId":"photo","assetNodeId":"card","autoConnect":"wire","dimension":{"id":null,"title":"构图","body":"中心构图"}});
+        let image = json!({"assetId":"photo","assetNodeId":"card","autoConnect":"wire"});
+        let mut doc = json!({"schema_version":1,"nodes":[node("target",json!({"text":[text],"image":[image]}))],"run":null});
+        let revision = db.workflow_save("p", 0, doc.clone()).unwrap();
+        let loaded = db.workflow_get("p").unwrap();
+        assert_eq!(loaded.document, doc);
+        doc["nodes"][0]["inputs"]["image"].as_array_mut().unwrap().push(json!({"assetId":"second"}));
+        db.workflow_save("p", revision, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+        for invalid_text in [image.clone(), json!({"dimension":{"title":"构图","body":"正文"}}),
+            json!({"assetId":"photo","dimension":{"title":"构图","body":42}})] {
+            doc["nodes"][0]["inputs"]["text"][0] = invalid_text;
+            assert!(validate(&doc).is_err());
+        }
+    }
     #[test]
     fn shared_agent_moves_and_hides_its_history_projection_atomically() {
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();

@@ -21,11 +21,33 @@ try {
   await page.getByRole("status", { name: "新通知" }).waitFor();
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   assert.equal(await hiddenCount(), initialCount);
-  const dialog = page.getByRole("button", { name: "测试弹窗" });
-  await dialog.click();
+  for (const role of ["dialog", "alertdialog", "menu", "listbox"]) {
+    const before = await hiddenCount();
+    await page.evaluate(role => {
+      const viewport = document.querySelector("[data-source-browser-viewport]").getBoundingClientRect();
+      const popup = document.createElement("div");
+      popup.id = "test-card-popup";
+      popup.setAttribute("role", role);
+      popup.style.cssText = `position:fixed;width:60px;height:40px;top:${viewport.top + 10}px;left:${viewport.right + 8}px`;
+      document.body.append(popup);
+    }, role);
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await hiddenCount(), before, role + " outside the webpage");
+    const popup = page.locator("#test-card-popup");
+    await popup.evaluate(el => el.style.left = document.querySelector("[data-source-browser-viewport]").getBoundingClientRect().left + "px");
+    await waitVisible(false);
+    await popup.evaluate(el => el.remove());
+    await waitVisible(true);
+  }
+  await page.getByRole("button", {name:"采集记录", exact:true}).click();
   await waitVisible(false);
-  await dialog.click();
+  await page.keyboard.press("Escape");
   await waitVisible(true);
+  const beforeHistory = await hiddenCount();
+  await page.getByTitle("通知", {exact:true}).click();
+  await page.getByRole("dialog", {name:"通知历史"}).waitFor();
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await hiddenCount(), beforeHistory, "notification history beside Explore keeps the webpage visible");
   console.log("PASS incoming notification keeps Explore visible, and a deliberate dialog still suspends and restores it.");
 } finally {
   await browser.close();

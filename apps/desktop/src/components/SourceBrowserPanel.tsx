@@ -156,13 +156,14 @@ export function SourceBrowserPanel({ url, onClose, onCreateProject, visible = tr
         const bounds = boundsFor(viewport);
         if (bounds.width < 240 || bounds.height < 180) return;
         const viewportRect = viewport.getBoundingClientRect();
-        const overlay = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], .caption-ring-layer, .external-drag-backdrop, .app-sidebar.is-auto-hide:not(.is-auto-hidden)'))
+        const overlay = Array.from(document.querySelectorAll('dialog[open], [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"], .caption-ring-layer, .external-drag-backdrop, .app-sidebar.is-auto-hide:not(.is-auto-hidden)'))
           .some(element => {
             if (element.getClientRects().length === 0 || getComputedStyle(element).visibility === "hidden") return false;
-            // Dialogs and the dimension ring have full-window backdrops. The
-            // native webpage must yield until they close, regardless of z-index.
-            if (element.matches('[role="dialog"], [role="alertdialog"], .caption-ring-layer, .external-drag-backdrop')) return true;
+            // Non-modal dialogs include card controls and notification popovers.
+            // Only modal interaction or a full-window veil blocks the whole page.
+            if (element.matches('[aria-modal="true"], :modal, .caption-ring-layer, .external-drag-backdrop')) return true;
             const rect = element.getBoundingClientRect();
+            if (!rect.width || !rect.height) return false;
             // Use the drawer's destination while it slides in; WebView2 must yield before it covers the controls.
             if (element.matches(".app-sidebar.is-auto-hide")) {
               const left = element.parentElement!.getBoundingClientRect().left;
@@ -190,7 +191,7 @@ export function SourceBrowserPanel({ url, onClose, onCreateProject, visible = tr
     // resizing it. Observe the layout slot too, including interrupted slides.
     document.querySelectorAll(".app-sidebar-host").forEach(host => observer.observe(host));
     const overlays = new MutationObserver(resize);
-    overlays.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["role", "hidden", "style", "class"] });
+    overlays.observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["role", "aria-modal", "open", "hidden", "style", "class"] });
     window.addEventListener("resize", resize);
     window.addEventListener("explorer:layout", resize);
 

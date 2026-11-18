@@ -9,20 +9,32 @@
   style.textContent = __BOWERBIRD_SCROLLBAR_CSS__ + `
     [data-test-id="PinBetterSaveDropdown"], [data-test-id="PinBetterSaveButton"] { display: none !important; }
     button.industrial-scrollbar { --bb-muted: var(--sema-color-text-subtle, #646464); }
-    html[data-bowerbird-pin-nav] #VerticalNavContent { width: 36px !important; min-width: 0 !important; }
-    html[data-bowerbird-pin-nav] #VerticalNavContent > div { padding-inline: 0 !important; }
+    html[data-bowerbird-pin-nav] #VerticalNavContent {
+      position: fixed !important; inset: auto !important; inset-inline-start: 8px !important;
+      top: 50% !important; transform: translateY(-50%) !important;
+      box-sizing: border-box !important; width: 36px !important; min-width: 0 !important;
+      height: fit-content !important; min-height: 0 !important; max-height: calc(100% - 16px) !important;
+      overflow-y: auto !important; scrollbar-width: none;
+      padding: 4px 0 !important; border: 1px solid var(--sema-color-border-default, #8886) !important;
+      border-radius: 12px !important; background: var(--sema-color-background-default, Canvas) !important;
+      box-shadow: 0 3px 12px #0002;
+    }
+    html[data-bowerbird-pin-nav] #VerticalNavContent > div { height: auto !important; padding: 0 !important; }
     html[data-bowerbird-pin-nav] #VerticalNavContent [data-test-id="vertical-nav-icon"] {
       width: 32px !important; max-width: 32px !important; margin-inline: auto !important;
     }
     html[data-bowerbird-pin-nav] #VerticalNavContent :is(a, button) {
       max-width: 32px !important; min-width: 0 !important; padding-inline: 4px !important; box-sizing: border-box !important;
     }
+    html[data-bowerbird-pin-nav] #VerticalNavContent :focus-visible {
+      outline: 2px solid currentColor !important; outline-offset: -2px !important;
+    }
     html[data-bowerbird-pin-nav] #VerticalNavContent svg,
     html[data-bowerbird-pin-nav] #VerticalNavContent [data-test-id="vertical-nav-icon"] img {
       width: 16px !important; height: 16px !important; flex-shrink: 0 !important; object-fit: contain !important;
     }
     html[data-bowerbird-pin-nav] [data-bowerbird-pin-inset] { padding-inline-start: var(--bowerbird-pin-inset) !important; }
-    html[data-bowerbird-pin-nav] [data-test-id="sidebar-container"] { margin-inline-start: 36px !important; }
+    html[data-bowerbird-pin-nav] [data-test-id="sidebar-container"] { margin-inline-start: 52px !important; }
   `;
   let frame = 0;
   let marked = new Set();
@@ -31,7 +43,9 @@
     // Pinterest owns the inline inset, including any expanded native sidebar.
     const inset = Number.parseFloat(parent?.style[side]);
     if (!parent || !Number.isFinite(inset) || inset < 72) return false;
-    const value = `${inset - 36}px`;
+    // The feed uses the full width. An open drawer clears the floating rail
+    // (8px gap + 36px toolbar + 8px gap) and retains its own native width.
+    const value = `${inset === 72 ? 0 : inset - 72 + 52}px`;
     if (parent.style.getPropertyValue("--bowerbird-pin-inset") !== value) parent.style.setProperty("--bowerbird-pin-inset", value);
     if (!parent.hasAttribute("data-bowerbird-pin-inset")) parent.setAttribute("data-bowerbird-pin-inset", "");
     return true;
