@@ -34,7 +34,7 @@
 | 范围 | 已记录状态 | 证据与边界 |
 |---|---|---|
 | 开发源码 | 本次审查冻结到 SQLite **0059**（对话 provider 迁移），从公开版 0056 顺序升级。并行开发工作区另有未入候选的改动；不要将整棵开发树当作公开包 | [本轮冻结范围](project_logs/2026-11-11-release-readiness.md) · [文件夹连接](dev-doc/FOLDER-MODE.md) · [项目画板](dev-doc/PROJECT-CANVAS-PLAN.md) |
-| Windows 公开包 | **26.11.1805**，源码 664c5b60，2026-11-18 14:04:41 公网复核通过 | [发布与回滚](dev-doc/DESKTOP-UPDATES.md) |
+| Windows 公开包 | **26.11.1806**，源码 82fd40db，2026-11-18 20:15:24 公网复核通过 | [发布与回滚](dev-doc/DESKTOP-UPDATES.md) |
 | macOS 公开包 | Apple Silicon **26.10.801**、Intel **26.10.1501**；ARM 1502 未切更新通道 | [桌面自动更新](dev-doc/DESKTOP-UPDATES.md)、[Mac 构建与交付](macOS/README.md)。不能将 Windows 验收计作 Mac 验收 |
 | 浏览器扩展 | **0.5.2**，显示当前项目，采集图片直接入画板，Windows 独立副本与安装包一致。更新后在浏览器重新加载 | [版本与验收](apps/extension/README.md) |
 | Worker 模型请求与计量 | 11 月 15 日 10:30 核验 0091、两个 Edge 和 VPS 四个运行文件。受控模型保留已收到的 HTTP 状态，用量缺失时保留冻结额。此前请求正文截止与取消传递已于 01:41 部署 | [结算部署、读回与回退](project_logs/2026-11-15-agent-model-settlement-deployment.md) · [先前取消链核验](project_logs/2026-11-15-deepseek-cancellation.md) |
@@ -69,7 +69,7 @@
 
 仅保留最近 3 条；验证按各条日期记录，本轮结果见最新条目。完整原文见日期日志，既有历史里程碑仍见 [进展归档](dev-doc/进展归档.md)。
 
-- **2026-11-18｜Windows 26.11.1806 发布候选。** 更新 Agent 卡片输入和模型选项、ComfyUI 服务探测及多图提示词优化规则。
+- **2026-11-18｜Windows 26.11.1806 已公开发布。** 更新 Agent 卡片输入和模型选项、ComfyUI 服务探测及多图提示词优化规则。
 
 - **2026-11-18｜Windows 26.11.1805 已公开发布。** 画板多选批量连线、图片维度快捷入口与独立断开、图片提示词优化保留引用、即梦网页参考图上传确认。
 
