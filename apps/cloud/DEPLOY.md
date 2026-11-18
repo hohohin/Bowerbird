@@ -612,3 +612,8 @@ node --env-file=.env scripts/check-agent-runtime-health.mjs
 ## 2026-11-06 Cloud 全通路与 Agent 原单恢复
 
 官网版本 `20261106-cloud-routing` 已由候选、现役、公网各 14 项检查验证；前版 `20261106-h3-agent-gateway` 保留回滚，仅代理及新契约变化，86 个其他文件保持。`agent-run` v53→v54 以下载的现役源码为底，只增加 `get_by_key` 只读恢复，保留 `verify_jwt=false`、内部用户鉴权、原计费与 FeaturePolicy；部署后源码读回一致，其他函数版本不变。没有迁移、Worker 或密钥变更，没有创建真实付费任务。Windows 26.11.602 已签名发布，2026-11-06 19:25:05（北京时间）公网复核通过，现役官网 `20261106-windows-26.11.602` 保留全部新增网关；回滚目标 `20261106-cloud-routing`。完整契约、拒绝与恢复边界、验证及回滚见 [CLOUD-TRANSPORT](../../dev-doc/CLOUD-TRANSPORT.md)，原始证据 `.tmp/cloud-routing-20261106/`。
+# 2026-11-18：个人即梦建卡选项修复
+
+北京时间 11:50，生产 `generation-worker` 以现役镜像 `39faba7d53a5` 为基线，仅更新 `/cloud/supabase/functions/_shared/chat-card-tool.json` 的 `provider` 字段，取消个人 Flash／Lite 新选项。候选在禁网容器中通过 DSH profile 工具测试，切换后核验镜像 `a4c3ff552b87`、文件 SHA-256 `c719751af7d803e2aa06ee09bd1aa5ee0a5616295169cdd23e7045ff3504057d`、运行状态、重启数 0 与 Compose 配置一致性。未部署 Edge、数据库或修改 Cloud 生图服务。
+
+现场证据在 VPS `/tmp/dream-route-cloud-20261118/cloud-active.json`，持久备份在 `/opt/bowerbird/deploy-backups/dream-route-cloud-20261118/`。如需回滚本次发布，先确认现役仍为上述镜像，再运行 `sudo python3 /tmp/dream-route-cloud-20261118/cloud.py rollback` 恢复原镜像与宿主文件。
