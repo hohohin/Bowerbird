@@ -9,19 +9,38 @@ export interface H3ImagePromptInput {
   prompt: string; ratio: string; referenceCount: number;
 }
 
-export function imageOptimizationText(prompt: string, result?: string): string {
-  const tokens = [...new Set(prompt.match(/@\[[^\]]+\]/g) ?? [])];
-  if (!tokens.length) return result?.trim() ?? prompt;
-  if (/\{\{REF_\d+\}\}/.test(prompt)) throw new Error("提示词包含与引用标记冲突的文本");
-  if (result === undefined) return prompt.replace(/@\[[^\]]+\]/g, token => `{{REF_${tokens.indexOf(token) + 1}}}`);
-  for (const [index, token] of tokens.entries()) {
-    if (result.split(`{{REF_${index + 1}}}`).length !== prompt.split(token).length)
-      throw new Error("优化结果缺少或重复了卡片引用，请保留原提示词后重试");
+const cardToken = /@\[[^\]]+\]/g;
+
+export function imageOptimizationText(prompt: string): string {
+  const tokens = [...new Set(prompt.match(cardToken) ?? [])];
+  if (tokens.length && /\{\{REF_\d+\}\}/.test(prompt)) throw new Error("提示词包含与引用标记冲突的文本");
+  return prompt.replace(cardToken, token => `{{REF_${tokens.indexOf(token) + 1}}}`);
+}
+
+export function restoreImageOptimization(prompt: string, result: string) {
+  const tokens = [...new Set(prompt.match(cardToken) ?? [])];
+  const original = { text: prompt, keptOriginal: true };
+  // Only the local reference map may introduce an editor chip.
+  if (result.match(cardToken)) return original;
+  if (!tokens.length) return { text: result.trim(), keptOriginal: false };
+  const markers = /\{\{REF_\d+\}\}/g;
+  const encoded = imageOptimizationText(prompt);
+  const known = new Map(tokens.map((token, index) => [`{{REF_${index + 1}}}`, token]));
+  if ((result.match(markers) ?? []).some(marker => !known.has(marker))) return original;
+  let restored = result.trim();
+  if ([...known.keys()].some(marker => restored.split(marker).length !== encoded.split(marker).length)) {
+    // Boundary chips have a deterministic position even if the rewriter loses them.
+    // Inline chips carry sentence-level meaning and must stay in the original wording.
+    const prefix = encoded.match(/^(?:\s*\{\{REF_\d+\}\}\s*)+/)?.[0] ?? "";
+    const rest = encoded.slice(prefix.length);
+    const suffix = rest.match(/(?:\s*\{\{REF_\d+\}\}\s*)+$/)?.[0] ?? "";
+    const middle = rest.slice(0, rest.length - suffix.length);
+    if (middle.match(markers)) return original;
+    const prose = restored.replace(markers, "").trim();
+    if (!prose) return original;
+    restored = [prefix.trim(), prose, suffix.trim()].filter(Boolean).join(" ");
   }
-  return result.trim().replace(/\{\{REF_(\d+)\}\}/g, (_, n) => {
-    if (!tokens[Number(n) - 1]) throw new Error("优化结果包含未知的卡片引用");
-    return tokens[Number(n) - 1];
-  });
+  return { text: restored.replace(markers, marker => known.get(marker)!), keptOriginal: false };
 }
 
 /** Send only generation constraints, never local endpoints, paths or asset identifiers. */

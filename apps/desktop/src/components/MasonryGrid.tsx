@@ -1,3 +1,4 @@
+import { DimensionBadge } from "./DimensionBadge";
 import { memo, useEffect, useId, useMemo, useRef, useState, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
@@ -456,12 +457,7 @@ const Thumb = memo(function Thumb({
             </span>
           )}
           {hasCaption && (
-            <span
-              className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white backdrop-blur"
-              title="已反推（有提示词描述）"
-            >
-              🏷️
-            </span>
+            <DimensionBadge assetId={shown.id} />
           )}
         </div>
       )}

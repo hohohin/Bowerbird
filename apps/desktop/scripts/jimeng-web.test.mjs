@@ -10,7 +10,7 @@ try {
   await page.setContent(`<section class="main-frame-2026"><div aria-label="提示词" contenteditable="true"></div>
     <div aria-label="创作类型">图片生成</div><div aria-label="模型">Seedream 5.5</div>
     <button aria-label="选择生成数量: 1">1张</button><button>9:16 2K</button>
-    <div data-content-generator-references></div><button aria-label="生成">生成</button></section>
+    <div data-content-generator-references><button aria-label="上传参考" aria-disabled="true"></button></div><button aria-label="生成">生成</button></section>
     <article data-generated-record-key="old"><span class="prompt-value-container-fixture">白色雏菊</span>
     <img alt="参考"><div role="button"><img data-apm-action="ai-generated-image-record-card"></div>
     <button aria-label="下载">下载</button></article>`);
@@ -32,7 +32,7 @@ try {
       const currentRefs = refs.cloneNode(false);
       refs.replaceWith(currentRefs);
       refs = currentRefs;
-      refs.addEventListener("drop", receiveFiles);
+      refs.append(upload);
       Array.from(event.dataTransfer.files).forEach((file, index) => {
         const slot = document.createElement("div");
         slot.dataset.index = String(index);
@@ -47,7 +47,8 @@ try {
         editor.append(mention);
       });
     }
-    refs.addEventListener("drop", receiveFiles);
+    const upload = refs.querySelector('[aria-label="上传参考"]');
+    setTimeout(() => { upload.setAttribute("aria-disabled", "false"); upload.addEventListener("drop", receiveFiles); }, 900);
     document.querySelector('[aria-label="生成"]').onclick = () => {
       submissions++;
       const card = document.querySelector("article").cloneNode(true);
@@ -67,9 +68,9 @@ try {
     const compose = (0,eval)(code);
     await compose(request, state);
     state.download();
-    const slots = refs.children.length;
-    refs.replaceChildren();
-    refs.addEventListener("drop", () => refs.append(refs.firstElementChild.cloneNode(true)), {once:true});
+    const slots = refs.querySelectorAll("[data-index]").length;
+    refs.replaceChildren(upload);
+    refs.addEventListener("drop", () => refs.append(refs.querySelector("[data-index]").cloneNode(true)), {once:true});
     let duplicateError;
     try { await compose(request, {}); } catch (error) { duplicateError = error.message; }
     return { downloads, submissions, phase:state.phase, slots, duplicateError };

@@ -6,7 +6,7 @@ import { isVideoPath } from "./videoGeneration";
 import { isAudioPath } from "./audioMedia";
 import type { Asset, CanvasNode } from "./types";
 
-type Material = { id: string; assetId?: string; groupId?: string; assetIds?: string[]; mediaAssetIds?: string[]; video?: boolean };
+type Material = { id: string; assetId?: string; groupId?: string; assetIds?: string[]; mediaAssetIds?: string[]; video?: boolean; audio?: boolean };
 
 /** The "image" workflow channel carries all three media types. */
 export function workflowAssetMedia(asset?: Pick<Asset, "store_path" | "ext">): AutomaticMedia | undefined {
@@ -87,6 +87,6 @@ export function canvasAutomaticOutputs(id: string, nodes: WorkflowNode[], canvas
   }
   const assetId = material?.assetId ?? card?.assetId;
   if (!assetId) return [];
-  const media = material?.video ? ["video" as const] : automaticValueMedia({ type: "image", assetIds: [assetId] }, assets);
+  const media = material?.video ? ["video" as const] : material?.audio ? ["audio" as const] : automaticValueMedia({ type: "image", assetIds: [assetId] }, assets);
   return [{ binding: { assetId, assetNodeId: material?.id ?? card?.id }, type: "image", ...(media ? { media } : {}) }];
 }

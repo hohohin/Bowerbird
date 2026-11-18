@@ -66,9 +66,23 @@ async fn read(window: &WebviewWindow, script: &str) -> AppResult<String> {
     Ok(serde_json::from_str::<String>(&value).unwrap_or_default())
 }
 
+fn fit_web_reference(bytes: Vec<u8>, format: image::ImageFormat) -> AppResult<(Vec<u8>, image::ImageFormat)> {
+    let (w, h) = image::ImageReader::with_format(std::io::Cursor::new(&bytes), format).into_dimensions()?;
+    if w <= h.saturating_mul(3) && h <= w.saturating_mul(3) { return Ok((bytes, format)); }
+    let (width, height) = (w.max(h.div_ceil(3)), h.max(w.div_ceil(3)));
+    if u64::from(width) * u64::from(height) > 32_000_000 { return Err(err("参考图留边后的尺寸过大，请缩小图片后重试")); }
+    let original = image::load_from_memory_with_format(&bytes, format)?.to_rgba8();
+    let mut canvas = image::RgbaImage::new(width, height);
+    image::imageops::replace(&mut canvas, &original, i64::from((width-w)/2), i64::from((height-h)/2));
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(canvas).write_to(&mut out, image::ImageFormat::Png)?;
+    Ok((out.into_inner(), image::ImageFormat::Png))
+}
+
 fn references(req: &CodexRequest) -> AppResult<Vec<Value>> {
     let mut files = Vec::new();
     let mut total = 0;
+    let mut upload_total = 0;
     if req.reference_images.len() > 10 {
         return Err(err("即梦网页最多支持 10 张参考图"));
     }
@@ -85,6 +99,9 @@ fn references(req: &CodexRequest) -> AppResult<Vec<Value>> {
         ) {
             return Err(err("请使用 PNG、JPEG 或 WebP 参考图"));
         }
+        let (bytes, format) = fit_web_reference(bytes, format)?;
+        upload_total += bytes.len();
+        if upload_total > 50 * 1024 * 1024 { return Err(err("即梦网页参考图总大小超过 50 MiB")); }
         files.push(json!({"name":format!("ref-{}.{}", index+1,format.extensions_str()[0]),"mime":format.to_mime_type(),"data":STANDARD.encode(bytes)}));
     }
     Ok(files)
@@ -208,6 +225,9 @@ impl GenProvider for Provider {
                 "preparing" | "submitted" => {}
                 "download" => break,
                 "error:upload" => return Err(err("即梦网页未确认全部参考图，已停止提交")),
+                "error:upload-control" => return Err(err("即梦网页的参考图上传按钮尚未就绪，本次未提交")),
+                "error:upload-login" => return Err(err("即梦网页要求重新登录才能上传参考图，请在内置浏览器登录即梦后重试；本次未提交")),
+                "error:upload-empty" => return Err(err("即梦网页未显示已上传的参考图，本次未提交")),
                 "error:existing-refs" => return Err(err("即梦编辑区已有其他参考图，本次未提交")),
                 "error:ref-count" => return Err(err("即梦收到的参考图张数与所选张数不一致，本次未提交")),
                 "error:prompt" => return Err(err("即梦编辑区中的提示词与本次输入不一致，本次未提交")),

@@ -63,21 +63,25 @@ async function composeJimeng(request, state) {
   const attached = () => [...(references()?.querySelectorAll("[data-index]") ?? [])].filter(slot => slot.querySelector("img"));
   if (attached().length) throw new Error("existing-refs");
   if (request.files.length) {
-    const refs = await wait(references, "upload");
+    const upload = await wait(() => references()?.querySelector('[aria-label="上传参考"][aria-disabled="false"]:not([aria-busy="true"])'), "upload-control", 60000);
     const transfer = new DataTransfer();
     for (const file of request.files) {
       const bytes = Uint8Array.from(atob(file.data), ch => ch.charCodeAt(0));
       transfer.items.add(new File([bytes], file.name, {type: file.mime}));
     }
     for (const type of ["dragenter", "dragover", "drop"]) {
-      refs.dispatchEvent(new DragEvent(type, {dataTransfer: transfer, bubbles: true, cancelable: true}));
+      upload.dispatchEvent(new DragEvent(type, {dataTransfer: transfer, bubbles: true, cancelable: true}));
     }
     await wait(() => {
       const slots = attached();
+      if (all(document, '[role=dialog],.lv-modal').some(el => el.innerText.includes("欢迎登录即梦"))) throw new Error("upload-login");
       if (slots.length > request.files.length) throw new Error("ref-count");
       return slots.length === request.files.length && !references()?.querySelector('[aria-busy=true]') &&
         slots.every(slot => { const img = slot.querySelector("img"); return img.complete && img.naturalWidth > 0; });
-    }, "upload", 60000);
+    }, "upload", 60000).catch(error => {
+      if (error.message === "upload" && !attached().length) throw new Error("upload-empty");
+      throw error;
+    });
   }
   const button = () => all(form, 'button[aria-label="生成"]').filter(el => !el.disabled && !el.classList.contains("lv-btn-disabled")).at(-1);
   const submit = await wait(button, "submit");

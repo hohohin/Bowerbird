@@ -1,3 +1,4 @@
+.canvas-material-selection { position:absolute; pointer-events:none; z-index:10002; outline:1px solid var(--bb-blue); }
 .canvas-drawing-tools {
   --tools-top:calc(var(--canvas-chrome-inset) + var(--canvas-chrome-height) + var(--canvas-chrome-gap));
   position:absolute; left:var(--canvas-chrome-inset); top:var(--tools-top); max-height:calc(100% - var(--tools-top) - var(--canvas-chrome-inset));

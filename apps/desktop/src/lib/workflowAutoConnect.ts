@@ -4,6 +4,8 @@ import { assertWorkflowAcyclic, workflowBindingKey, workflowConnectionError, wor
 export type AutomaticMedia = "image" | "video" | "audio";
 export interface AutomaticOutput {
   binding: WorkflowInput;
+  /** Independent wire for one member of a multi-selection drag. */
+  selectionWireId?: string;
   type: WorkflowPortType;
   /** Absent for containers whose content will be resolved at execution time. */
   media?: AutomaticMedia | AutomaticMedia[];
@@ -11,6 +13,12 @@ export interface AutomaticOutput {
 export interface AutomaticConnectionPlan {
   bindings: { inputId: string; binding: WorkflowInput }[];
   error: string | null;
+}
+
+export function contentCardAcceptsMedia(output: AutomaticOutput): boolean {
+  if (!output.media) return true;
+  const media = Array.isArray(output.media) ? output.media : [output.media];
+  return output.selectionWireId ? !media.includes("audio") : media.some(type => type !== "audio");
 }
 
 /** The legacy image pipe also transports video/audio; never use its name as MIME. */
@@ -40,12 +48,14 @@ export function planAutomaticConnection(nodes: WorkflowNode[], outputs: Automati
     const source = output.binding;
     if (source.nodeId === targetId || source.canvasNodeId && (source.canvasNodeId === target.textSource || source.canvasNodeId === target.textTarget?.nodeId))
       return fail("不能连接卡片自身");
+    if (output.selectionWireId && target.kind === "trigger") return fail("此卡片不能接收整组选中的素材");
     if (output.type === "session") continue;
     const producer = nodes.find(node => node.id === source.nodeId);
     if (source.nodeId && (!producer || !workflowOutputs(producer).some(port => port.id === source.portId && port.type === output.type)))
       return fail("来源卡片或输出已不存在");
     const knownMedia = output.media ? (Array.isArray(output.media) ? output.media : [output.media])
       : producer?.kind === "director3d" ? ["video"] : producer?.kind === "voice" ? ["audio"] : producer?.kind === "comfy-video" || producer?.kind === "generation" && producer.generation?.media === "video" ? ["video"] : undefined;
+    if (output.selectionWireId && knownMedia?.some(media => !acceptedMedia.includes(media as AutomaticMedia))) return fail("此卡片无法接收全部选中的素材类型");
     if (target.kind !== "trigger" && output.type === "image" && knownMedia && !knownMedia.some(media => acceptedMedia.includes(media as AutomaticMedia))) {
       for (const media of knownMedia) rejectedMedia.add(media);
       continue;
@@ -58,6 +68,7 @@ export function planAutomaticConnection(nodes: WorkflowNode[], outputs: Automati
     } else if (output.type === "signal" && target.kind !== "planner") {
       candidates = [{ id: "signal", label: "触发", type: "signal" }];
     }
+    if (!candidates.length && output.selectionWireId) return fail("此卡片无法接收全部选中的素材");
     if (!candidates.length) continue;
     // One image source fills one frame; reconnecting it never occupies the other.
     if (candidates.some(port => (inputs[port.id] ?? []).some(input => target.kind === "trigger"
@@ -79,7 +90,7 @@ export function planAutomaticConnection(nodes: WorkflowNode[], outputs: Automati
     }
     compatible = true;
     const { mediaFilter: _sourceMedia, ...identity } = source;
-    const binding = { ...identity, ...(["text", "image"].includes(port.type) ? { mediaFilter: [...acceptedMedia] } : {}) };
+    const binding = { ...identity, ...(output.selectionWireId && { autoConnect: output.selectionWireId }), ...(["text", "image"].includes(port.type) ? { mediaFilter: [...acceptedMedia] } : {}) };
     inputs[port.id] = [...(inputs[port.id] ?? []), binding];
     bindings.push({ inputId: port.id, binding });
     // Completion is one event per producer, regardless of its output count.

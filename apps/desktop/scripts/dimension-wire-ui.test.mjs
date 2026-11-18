@@ -13,7 +13,7 @@ try {
   await source.waitFor();
   await page.evaluate(async () => {
     const { newWorkflowNode } = await import("/src/lib/canvasWorkflow.ts");
-    const target = { ...newWorkflowNode("generation", 650, 170, "codex"), id: "receiver" };
+    const target = { ...newWorkflowNode("generation", 890, 380, "codex"), id: "receiver" };
     sessionStorage.setItem("workflow-p", JSON.stringify({revision: 0, document: {schema_version: 1, nodes: [target], run: null}}));
   });
   await page.reload();
@@ -21,10 +21,9 @@ try {
   await target.waitFor();
   await page.evaluate(async () => {
     const { useStore } = await import("/src/store.ts");
-    useStore.setState({ boardOpen: false, genEditing: null, promptedAssets: [{id: "existing", sections: [{title:"构图",body:"中心构图"}]}] });
+    useStore.setState({ boardOpen: false, genEditing: null, captionedIds: new Set(["existing"]), promptedAssets: [{id: "existing", sections: [{title:"构图",body:"中心构图"}]}] });
   });
-  await source.click({button:"right"});
-  await page.getByRole("menuitem", {name:"维度",exact:true}).click();
+  await source.getByRole("button", {name:"打开维度环",exact:true}).click();
   const label = page.locator('.caption-ring-sector-label');
   await label.waitFor();
   await page.mouse.move(1400, 950);
@@ -39,5 +38,19 @@ try {
   assert.equal(inputs.text[0].dimension.body,"中心构图");
   assert.equal(inputs.image[0].assetId,"existing");
   assert.equal(inputs.text[0].autoConnect,inputs.image[0].autoConnect);
-  console.log("PASS image menu, persistent ring, dimension drag, saved text and image");
+  const both = await page.evaluate(() => sessionStorage.getItem("workflow-p"));
+  const removeImage = target.locator('[data-workflow-reference-remove="existing"]');
+  await removeImage.locator("..").hover();
+  await removeImage.click();
+  await page.waitForFunction(() => !JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes[0].inputs.image.length);
+  assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes[0].inputs.text[0].dimension.body), "中心构图");
+  await page.evaluate(snapshot => sessionStorage.setItem("workflow-p", snapshot), both);
+  await page.reload();
+  await target.hover();
+  await target.locator('[data-canvas-connect-side="input"]:not(.canvas-cell-connection)').click({button:"right"});
+  await page.getByRole("menuitem", {name:/维度文本.*构图/}).click();
+  await page.waitForFunction(() => !JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes[0].inputs.text.length);
+  assert.equal(await page.evaluate(() => JSON.parse(sessionStorage.getItem("workflow-p")).document.nodes[0].inputs.image[0].assetId), "existing");
+  await removeImage.waitFor({state:"attached"});
+  console.log("PASS click badge, dimension drag, thumbnail and input menu detach separately");
 } finally { await browser.close(); await server.close(); }

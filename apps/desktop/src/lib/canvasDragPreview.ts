@@ -27,7 +27,7 @@ export function canvasDragPreview(plane: HTMLElement, ids: Set<string>, primary:
   for (const el of plane.children) {
     if (!(el instanceof HTMLElement)) continue;
     const data = el.dataset;
-    const id = data.canvasNodeId || data.workflowCard || data.workflowMaterial || data.cardName || data.workflowTextKey;
+    const id = data.canvasNodeId || data.workflowCard || data.workflowMaterial || data.cardName || data.workflowTextKey || data.canvasSelectionFrame;
     if (id && ids.has(id)) {
       items.push(el);
       if (data.canvasNodeId || data.workflowCard) found.add(id);

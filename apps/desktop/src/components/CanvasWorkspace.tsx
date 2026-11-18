@@ -1,3 +1,4 @@
+import { DimensionBadge } from "./DimensionBadge";
 import { replicationAnalysisNote } from "../lib/replicationAnalysisNote";
 import { optimizeComposerLocalVideo } from "../lib/composerLocalVideo";
 import { generationProgressLabel } from "../lib/generationProgress";
@@ -29,6 +30,7 @@ import { CanvasWorkflowLayer, WindingKey, type WorkflowLayerHandle, type Workflo
 import { GenerationGroupMenuItem, MergeGenerationGroupMenuItem } from "./GenerationGroupMenuItem";
 import { GALLERY_MERGED_EVENT, type GalleryMerge } from "../lib/generationGallery";
 import { canvasConversationCards, canvasConversationGroupTarget } from "../lib/canvasConversationCards";
+import { CanvasConnectionHandle } from "./CanvasConnectionHandle";
 import { CanvasConversationImages } from "./CanvasConversationImages";
 import { GenerationGroupControls } from "./GenerationGroupControls";
 import { canvasMaterialFilterState, type CanvasMaterialFilterState } from "../lib/canvasMaterialFilter";
@@ -5138,6 +5140,20 @@ export function CanvasWorkspace({
     ? [{ id: node.id, groupId: node.id, assetIds: [...new Set(node.assets.filter(asset => !isVideoPath(asset.storePath) && !isAudioPath(asset.storePath)).flatMap(asset => asset.assetId ? [asset.assetId] : []))], mediaAssetIds: [...new Set(node.assets.flatMap(asset => asset.assetId ? [asset.assetId] : []))], ...nodeRect(node) }]
     : node.kind === "asset" && node.asset.assetId ? [{ id: node.id, assetId: node.asset.assetId, video: isVideoPath(node.asset.storePath), audio: isAudioPath(node.asset.storePath), ...nodeRect(node) }] : []),
   [visibleMaterials, expandedFolderIds, showAssetNames]);
+  const materialSelection = useMemo(() => {
+    if (selectedCanvasNodeIds.size < 2) return null;
+    const members = [
+      ...workflowMaterials.filter(item => selectedCanvasNodeIds.has(item.id)),
+      ...promptGraphNodes.filter(node => selectedCanvasNodeIds.has(node.id) && imageOnlyConversationIds.has(node.id))
+        .map(node => ({ id: node.id, x: node.x, y: node.y, width: node.width, height: sessionHeights.get(node.id) ?? node.height })),
+    ];
+    if (members.length < 2) return null;
+    members.sort((a, b) => a.y - b.y || a.x - b.x || a.id.localeCompare(b.id));
+    const left = Math.min(...members.map(item => item.x)), top = Math.min(...members.map(item => item.y));
+    const width = Math.max(...members.map(item => item.x + item.width)) - left;
+    const height = Math.max(...members.map(item => item.y + item.height)) - top;
+    return { ids: members.map(item => item.id), left, top, width, height };
+  }, [selectedCanvasNodeIds, workflowMaterials, promptGraphNodes, imageOnlyConversationIds, sessionHeights]);
   type WorkflowProps = ComponentProps<typeof CanvasWorkflowLayer>;
   const workflowOnSelect = useLatestCallback<Parameters<WorkflowProps["onSelect"]>, void>((id, additive) => {
     if (additive) toggleCanvasNodeSelection(id); else setSelectedCanvasNodeIds(new Set([id]));
@@ -5606,6 +5622,20 @@ export function CanvasWorkspace({
               onDragStart={workflowOnDragStart} onDragMove={workflowOnDragMove} onDragEnd={workflowOnDragEnd} onNodeMenu={workflowOnNodeMenu}
               onRemove={workflowOnRemove} onPlaced={workflowOnPlaced}
               ensureMaterialized={workflowEnsureMaterialized} materials={workflowMaterials} />}
+            {workflowInteractive && materialSelection && <div className="canvas-material-selection" data-canvas-selection-frame={materialSelection.ids[0]}
+              style={{ left: materialSelection.left, top: materialSelection.top, width: materialSelection.width, height: materialSelection.height }}>
+              <CanvasConnectionHandle side="output" active aria-label="连接所选素材" title="连接所选素材"
+                onPointerDown={event => {
+                  if (event.button !== 0) return;
+                  event.preventDefault(); event.stopPropagation();
+                  workflowRef.current?.connectSelection(materialSelection.ids, event.clientX, event.clientY);
+                }}
+                onClick={event => {
+                  if (event.detail !== 0) return;
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  workflowRef.current?.connectSelection(materialSelection.ids, rect.left + rect.width / 2, rect.top + rect.height / 2, true);
+                }} />
+            </div>}
             {graphNodes.filter(node => node.kind === "note" && node.hiddenAt == null && !canvasChatId(node)).map(savedNode => {
               const value = resolveGenerationCells(readCanvasNote(savedNode), graphNodes);
               const minimum = value.note_type === "text" || value.note_type === "images" ? canvasTextMinSize(value.cells) : savedNode;
@@ -5975,11 +6005,7 @@ export function CanvasWorkspace({
                       <div className="pointer-events-none absolute left-1 top-1 z-10 flex items-center gap-1">
                         {node.asset.assetId && layerWorkspaceIds.has(node.asset.assetId) && <span className="rounded-full bg-black/70 px-1.5 py-1 text-white backdrop-blur" title="有分层工程" aria-label="有分层工程"><Layers size={12} /></span>}
                         {node.asset.assetId && captionedIds.has(node.asset.assetId) && (
-                          <span
-                            className="rounded-full bg-black/70 px-1.5 py-0.5 text-[10px] text-white backdrop-blur"
-                            title="已反推（有提示词描述）"
-                            aria-label="已反推（有提示词描述）"
-                          >🏷️</span>
+                          <DimensionBadge assetId={node.asset.assetId} />
                         )}
                       </div>
                       {showAssetNames && <span className="canvas-node-name">{node.asset.name}</span>}

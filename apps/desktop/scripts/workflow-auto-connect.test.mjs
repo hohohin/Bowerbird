@@ -1,3 +1,4 @@
+import { restoreImageOptimization } from '../src/lib/h3PromptOptimization.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { newWorkflowNode, generationInputNode, compileGenerationPrompt, compileAgentPrompt, workflowOrder, workflowInputValues, selectWorkflowVideoProvider } from '../src/lib/canvasWorkflow.ts';
@@ -17,6 +18,24 @@ test('a dimension wire resolves its saved text and source image for generation a
     const values = workflowInputValues([target], target);
     assert.equal(values.text[0].text, '中心构图');
     assert.deepEqual(values.image[0].assetIds, ['photo']);
+  }
+});
+test('H3 optimizer omissions preserve the dimension and image through generation compilation', () => {
+  const image = source('photo');
+  const outputs = [{ type: 'text', binding: { ...image.binding, dimension: { title: '构图', body: '中心构图' } } }, image];
+  const target = connect(node('generate'), outputs);
+  target.promptReferences = [{ id: 'dim', type: 'text', label: '构图', input: target.inputs.text[0] }];
+  for (const [prompt, result, expected, kept] of [
+    ['@[dim] 秋天', '秋天的树林', '中心构图 秋天的树林', false],
+    ['秋天 @[dim]', '树林 {{REF_1}} {{REF_1}}', '树林 中心构图', false],
+    ['用 @[dim] 描绘树林', '树林', '用 中心构图 描绘树林', true],
+    ['用 @[dim] 描绘树林', '以 {{REF_1}} 描绘森林', '以 中心构图 描绘森林', false],
+    ['@[dim] 秋天', '{{REF_2}} 秋天', '中心构图 秋天', true],
+  ]) {
+    const restored = restoreImageOptimization(prompt, result);
+    assert.equal(restored.keptOriginal, kept);
+    target.prompt = restored.text;
+    assert.deepEqual(compileGenerationPrompt(target, workflowInputValues([target], target)), {prompt: expected, assetIds: ['photo']});
   }
 });
 test('whole text table reaches the Agent through native canvas input resolution', () => {
@@ -223,4 +242,16 @@ test('completion observes video output without media filtering and deduplicates 
     { type: 'text', binding: { nodeId: 'multi', portId: 'text' } },
     { type: 'image', binding: { nodeId: 'multi', portId: 'image' } },
   ], 'trigger'), { bindings: [], error: null });
+});
+
+test('a selection preserves each material wire and rejects incompatible media atomically', () => {
+  const target = node('image-target');
+  const images = Array.from({ length: 8 }, (_, index) => ({ ...source(String(index)), selectionWireId: 'wire-' + index }));
+  const plan = planAutomaticConnection([target], images, target.id);
+  assert.equal(plan.error, null);
+  assert.deepEqual(plan.bindings.map(({ binding }) => binding.autoConnect), images.map(output => output.selectionWireId));
+  const mixed = [...images, { ...source('audio', 'audio'), selectionWireId: 'wire-audio' }];
+  const rejected = planAutomaticConnection([target], mixed, target.id);
+  assert.ok(rejected.error);
+  assert.deepEqual(rejected.bindings, []);
 });

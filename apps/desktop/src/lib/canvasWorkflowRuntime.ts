@@ -5,7 +5,7 @@ import { cloudChatEndedMessage } from "./userError";
 import { activeTriggerSchedule, advanceTriggerSchedule, triggerScheduleOccurrence, workflowTriggerMode } from "./workflowTriggerSchedule";
 import { normalizeWorkflowLocalVideo, workflowTitle, workflowCardWidth, workflowCompletionTriggers } from "./canvasWorkflow";
 import { resolveVideoCardOutputs } from "./workflowVideoFrames";
-import { automaticInputMedia, planAutomaticConnection, type AutomaticOutput } from "./workflowAutoConnect";
+import { automaticInputMedia, planAutomaticConnection, contentCardAcceptsMedia, type AutomaticOutput } from "./workflowAutoConnect";
 import { isAudioPath } from "./audioMedia";
 import { voiceApi } from "./voice";
 import { defaultVoiceSample, voiceCardClip, voiceCardPreviewKey, type VoiceCardRequest } from "./voiceCard";
@@ -38,14 +38,14 @@ import { contentTableRows } from "./contentTable";
 import { cloudAgentProfilePrompt } from "./workflowAgentProfile";
 
 import { agentOutputTargets, agentTextWriters, agentWriterValue, routeAgentOutputs } from "./workflowAgentOutputs";
-import { assertWorkflowAcyclic, rebindGenerationReferences, normalizeWorkflowInputSlots, workflowBindingKey, filterDisconnectedReferences } from "./canvasWorkflow";
+import { assertWorkflowAcyclic, rebindGenerationReferences, normalizeWorkflowInputSlots, workflowBindingKey, workflowDisconnectId, filterDisconnectedReferences } from "./canvasWorkflow";
 import { readDismissedNotices, dismissNotices } from "./dismissedNotices";
 import { ConfirmedDshTurnFailure, WorkflowNodeError, workflowDiagnostic, type WorkflowDiagnostic } from "./workflowDiagnostics";
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
 import { describeBrandImage } from "./describeBrandImage";
 import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideo, comfyVideoElapsed, comfyVideoMode, DEFAULT_COMFY_VIDEO, type ComfyVideoStatus } from "./comfyVideo";
 import { H3_IMAGE } from "./genProviders";
-import { imageOptimizationText, cleanH3OptimizedPrompt, h3OptimizationInstruction } from "./h3PromptOptimization";
+import { imageOptimizationText, restoreImageOptimization, cleanH3OptimizedPrompt, h3OptimizationInstruction } from "./h3PromptOptimization";
 import { compileAgentPrompt, compileGenerationPrompt, generationInputNode, workflowImageContainer, emptyWorkflow, newWorkflowNode, invalidateWorkflow, workflowExecutionNodes, workflowDependencies, workflowWriteNodes, workflowAccessConflict, workflowLockedNodes, workflowNodeRun, workflowRuns, workflowRunActive, workflowInputProducers, workflowInputValues, workflowOrder, WORKFLOW_SKILLS,
   type CanvasWorkflow, type WorkflowInput, type WorkflowRun, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "./canvasWorkflow";
 
@@ -716,7 +716,7 @@ export class CanvasWorkflowController {
           && plan.bindings.some(item => item.binding.canvasNodeId)
           ? canvasConversationCards(canvasNodes, useStore.getState().genJobs).aliases : undefined;
         for (const item of plan.bindings) {
-          const binding: WorkflowInput = { ...item.binding, autoConnect: connectionId };
+          const binding: WorkflowInput = { ...item.binding, autoConnect: item.binding.autoConnect ?? connectionId };
           const current = inputs[item.inputId] ?? [];
           if (current.some(input => workflowBindingKey(input) === workflowBindingKey(binding))) continue;
           const session = binding.canvasNodeId && sessionAliases?.get(binding.canvasNodeId);
@@ -755,7 +755,8 @@ export class CanvasWorkflowController {
         if (cellId && !cell) throw new Error("接收单元格已删除");
         const compatible = outputs.filter(output => (output.type === "text" || output.type === "image")
           && (!cell || output.type === (cell.content_type ?? "text")) && (note.note_type !== "images" || appendAxis || output.type === "image")
-          && (!output.media || (Array.isArray(output.media) ? output.media : [output.media]).some(type => type !== "audio")));
+          && contentCardAcceptsMedia(output));
+        if (outputs.some(output => output.selectionWireId) && compatible.length !== outputs.length) throw new Error("此位置无法接收全部选中的素材");
         if (!compatible.length) throw new Error("此卡片没有可接收的内容");
         for (const output of compatible) {
           const sameInput = (node: WorkflowNode) => node.textTarget?.nodeId === card.id
@@ -769,7 +770,7 @@ export class CanvasWorkflowController {
             && !nodes.some(node => node.textTarget?.nodeId === card.id);
           const writer: WorkflowNode = { ...newWorkflowNode("text", card.x, card.y, ""),
             textTarget: { nodeId: card.id, cellId: cellId ?? (reuseEmpty ? note.cells[0][0].id! : crypto.randomUUID()), append: !cellId, image: output.type === "image", ...(appendAxis ? { appendAxis, axisCellIds } : {}) },
-            inputs: { [output.type]: [{ ...output.binding, autoConnect: connectionId, mediaFilter: ["image", "video"] }] } };
+            inputs: { [output.type]: [{ ...output.binding, autoConnect: output.selectionWireId ?? connectionId, mediaFilter: ["image", "video"] }] } };
           nodes = nodes.map(node => node.resultNodeIds?.includes(card.id) ? { ...node, resultNodeIds: node.resultNodeIds.filter(id => id !== card.id) } : node);
           nodes.push(writer); changedIds.push(writer.id);
         }
@@ -790,11 +791,11 @@ export class CanvasWorkflowController {
     return this.withResource("canvas", async () => {
       await this.flush();
       const before = structuredClone(this.document);
-      const changed = before.nodes.filter(node => Object.values(node.inputs).flat().some(input => input.autoConnect === connectionId));
-      const dataChanges = changed.filter(node => node.kind !== "trigger" && Object.entries(node.inputs).some(([port, inputs]) => port !== "signal" && inputs.some(input => input.autoConnect === connectionId)));
+      const changed = before.nodes.filter(node => Object.values(node.inputs).flat().some(input => workflowDisconnectId(input) === connectionId));
+      const dataChanges = changed.filter(node => node.kind !== "trigger" && Object.entries(node.inputs).some(([port, inputs]) => port !== "signal" && inputs.some(input => workflowDisconnectId(input) === connectionId)));
       if (dataChanges.some(node => this.isLocked(node.id))) throw new Error("关联工作流正在运行，请先停止");
       let nodes = before.nodes.map(node => ({ ...node, inputs: Object.fromEntries(Object.entries(node.inputs).map(([port, inputs]) =>
-        [port, inputs.filter(input => input.autoConnect !== connectionId)])) }));
+        [port, inputs.filter(input => workflowDisconnectId(input) !== connectionId)])) }));
       for (const node of dataChanges) nodes = invalidateWorkflow(nodes, node.id);
       nodes = nodes.filter(node => !changed.some(item => item.id === node.id) || !node.textTarget || Object.values(node.inputs).some(inputs => inputs.length));
       if (changed.length) await this.edit(nodes);
@@ -1939,9 +1940,10 @@ export class CanvasWorkflowController {
             terminalFailure = true;
             const payload = current.snapshot.events.find(event => event.type === "text.result")?.display_payload;
             if (payload?.schemaVersion !== 1 || typeof payload.text !== "string" || !payload.text.trim() || payload.text.length > 16000) throw new Error("Cloud DSH 未返回有效的优化提示词，请检查任务结果");
-            const prompt = "referenceCount" in snapshot.input ? imageOptimizationText(snapshot.input.prompt, payload.text) : cleanH3OptimizedPrompt(payload.text);
+            const restored = "referenceCount" in snapshot.input ? restoreImageOptimization(snapshot.input.prompt, payload.text) : null;
+            const prompt = restored?.text ?? cleanH3OptimizedPrompt(payload.text);
             if (!prompt) throw new Error("Cloud DSH 未返回有效的优化提示词，请检查任务结果");
-            snapshot = { ...snapshot, result: prompt };
+            snapshot = { ...snapshot, result: prompt, keptOriginal: restored?.keptOriginal };
             // Save the result before applying it so recovery never repeats the paid request.
             await this.step(runId, id, { comfyOptimization: snapshot });
             break;
@@ -1959,7 +1961,7 @@ export class CanvasWorkflowController {
     if (halted() || !snapshot.result) return;
     assertAccount();
     const run = this.run(runId);
-    await this.saveRun({ ...run, steps: { ...run.steps, [id]: { ...run.steps[id], status: "done", error: undefined, detail: "提示词已替换" } } },
+    await this.saveRun({ ...run, steps: { ...run.steps, [id]: { ...run.steps[id], status: "done", error: undefined, detail: snapshot.keptOriginal ? "优化结果的卡片引用不完整，已保留原提示词" : "提示词已替换" } } },
       this.document.nodes.map(item => item.id === id ? { ...item, prompt: "referenceCount" in snapshot.input ? snapshot.result! : cleanH3OptimizedPrompt(snapshot.result!) } : item));
   }
 

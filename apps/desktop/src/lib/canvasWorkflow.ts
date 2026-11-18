@@ -84,7 +84,7 @@ export interface WorkflowStep {
   comfyProgress?: import("./comfyVideo").ComfyVideoProgress;
   comfyCancelled?: boolean;
   comfyStopping?: boolean;
-  comfyOptimization?: { input: import("./h3PromptOptimization").H3PromptInput | import("./h3PromptOptimization").H3ImagePromptInput; instruction: string; inputBindings?: string; createdAt?: number; submissionStarted?: boolean; result?: string };
+  comfyOptimization?: { input: import("./h3PromptOptimization").H3PromptInput | import("./h3PromptOptimization").H3ImagePromptInput; instruction: string; inputBindings?: string; createdAt?: number; submissionStarted?: boolean; keptOriginal?: boolean; result?: string };
   agentInput?: { prompt: string; source: string; assetIds: string[]; visualProfile?: import("./types").VisualProfileDetail | null };
   chatInput?: import("./localChat").LocalChatSendInput;
   chatConversationId?: string;
@@ -408,6 +408,13 @@ export function workflowPromptPreview(node: WorkflowNode, label = (ref: Workflow
     return `@${ref ? label(ref) : "输入"}`;
   });
 }
+// Dimension text and its companion image share a drawn wire, but detach independently.
+export function workflowDisconnectId(input: WorkflowInput) {
+  return input.autoConnect && input.dimension
+    ? JSON.stringify(["dimension", input.autoConnect, input.assetId, input.dimension.id ?? input.dimension.title])
+    : input.autoConnect;
+}
+
 export const workflowBindingKey = (input: WorkflowInput) => JSON.stringify([input.nodeId, input.portId, input.assetId, input.groupId, input.canvasNodeId, input.cellId, input.assetNodeId, ...(input.dimension ? [input.dimension.id ?? input.dimension.title] : [])]);
 /** An upstream card, folder or native cell owns the reference; its current images may change. */
 export const workflowImageContainer = (input: WorkflowInput) => !!(input.nodeId || input.groupId || input.canvasNodeId);
@@ -544,7 +551,7 @@ export function disconnectGenerationReference(node: WorkflowNode, values: Record
         other.autoConnect === input.autoConnect && current.image?.[i]?.assetIds?.includes(assetId) && current.image[i].assetIds!.every(id => id === assetId));
       const removedTokens = value?.imageRefs?.filter(ref => ref.asset_id === assetId).map(ref => ref.token) ?? [];
       const remainingText = value?.text?.replace(/@图片\d+/g, token => removedTokens.includes(token) ? "" : token).trim();
-      const remove = (ids.includes(assetId) || sibling) && !ids.some(id => id !== assetId) && !(port === "text" && remainingText);
+      const remove = !input.dimension && (ids.includes(assetId) || sibling) && !ids.some(id => id !== assetId) && !(port === "text" && remainingText);
       const slot = inputs[port].length + 1;
       for (const [i, ref] of promptReferences.entries()) {
         if (ref.type !== port || ref.direction === "output" || node.promptReferences?.[i].slot !== input.slot) continue;
