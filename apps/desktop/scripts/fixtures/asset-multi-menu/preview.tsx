@@ -1,3 +1,4 @@
+import { CaptionRing } from "../../../src/components/creation/CaptionRing";
 import { FileTaskStatusPanel } from "../../../src/components/FileTaskStatus";
 import { installDeletionTaskMock } from "../fileTaskMock";
 import React, { useState } from "react";
@@ -67,7 +68,7 @@ function Preview() {
       { key: "busy", label: "运行中", detail: "输入", assetIds: [], disabled: true, disconnect: () => {} },
       { key: "ready", label: "图片输入", detail: "素材", assetIds: ["a1"], disabled: false, disconnect: () => w.disconnected = true },
     ]} />}
-    <FileTaskStatusPanel /><AssetContextMenu /><ProjectContextMenu />
+    <CaptionRing /><FileTaskStatusPanel /><AssetContextMenu /><ProjectContextMenu />
   </div>;
 }
 installDeletionTaskMock();

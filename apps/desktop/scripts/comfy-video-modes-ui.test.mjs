@@ -59,8 +59,10 @@ try {
   await waitFrames('b', 'a');
   await page.reload(); await card.waitFor(); await mock();
   await waitFrames('b', 'a');
+  await card.locator('.comfy-frame-slot[aria-label="尾帧输入"]').hover();
   await card.getByRole('button', { name: /断开尾帧/ }).click();
   await waitFrames('b', null);
+  await card.locator('.comfy-frame-slot[aria-label="首帧输入"]').hover();
   await card.getByRole('button', { name: /断开首帧/ }).click();
   await waitFrames(null, null);
   await page.evaluate(async () => {

@@ -1,3 +1,4 @@
+import { CaptionRing } from "../../../src/components/creation/CaptionRing";
 import { FileTaskStatusPanel } from "../../../src/components/FileTaskStatus";
 import { installDeletionTaskMock } from "../fileTaskMock";
 import { installCatalogPagingMock } from "../catalogPagingMock";
@@ -492,7 +493,7 @@ function Fixture() {
       <Toolbar localFilesOpen={folderMode} canvasMode={toolbarCanvasMode} onCanvasModeChange={setToolbarCanvasMode} onCreateCreative={() => {}} onRefresh={async () => {}} />
       <div className="flex min-h-0 flex-1">{canvas}</div>
     </div> : explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
-    <FileTaskStatusPanel /><AssetContextMenu /><ImageAnnotator /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+    <FileTaskStatusPanel /><AssetContextMenu /><CaptionRing /><ImageAnnotator /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
   </div>;
 }
 installCatalogPagingMock(window);

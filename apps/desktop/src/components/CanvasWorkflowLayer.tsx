@@ -44,7 +44,7 @@ import { notifyError, notifySuccess } from "../lib/notify";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { workflowDiagnosticReport } from "../lib/workflowDiagnostics";
 import { removeWorkflowNodes, retryWorkflowSave } from "../lib/workflowRemoval";
-import { WORKFLOW_CARD_DRAG_TYPE, workflowBindingKey, compileGenerationPrompt, selectWorkflowVideoProvider, generationInputNode, generationReferencePreviewOrder, reorderGenerationReferences, isWorkflowGenerationResult, workflowInputValues, workflowOrder } from "../lib/canvasWorkflow";
+import { WORKFLOW_CARD_DRAG_TYPE, workflowBindingKey, compileGenerationPrompt, selectWorkflowVideoProvider, generationInputNode, generationReferencePreviewOrder, disconnectGenerationReference, reorderGenerationReferences, isWorkflowGenerationResult, workflowInputValues, workflowOrder } from "../lib/canvasWorkflow";
 import { assertWorkflowAcyclic, invalidateWorkflow, newWorkflowNode, normalizeWorkflowInputSlots, workflowNodeRun, workflowRuns, workflowInputProducers, workflowConnectionError, workflowInputs, workflowOutputs,
   workflowPortY, workflowTitle, workflowCardWidth, WORKFLOW_SKILLS, type CanvasWorkflow, type WorkflowInput, type WorkflowKind, type WorkflowLoopItem, type WorkflowNode, type WorkflowPort } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode, VisualProfileSummary } from "../lib/types";
@@ -367,10 +367,14 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     if (table) { onSelect(table.id); onPlaced(table); }
     else if (workflow) { onSelect(workflow.id); onPlaced({ ...workflow, width: workflowCardWidth(workflow), height: cardElements.current.get(id)?.offsetHeight ?? 400 }); }
   };
-  const inputImages = useCallback((input: WorkflowInput): string[] => {
+  const sourceImages = useCallback((input: WorkflowInput): string[] => {
     if (input.groupId) { const group = groupById.get(input.groupId); return (input.autoConnect ? group?.mediaAssetIds : group?.assetIds) ?? group?.assetIds ?? []; }
     return workflowBindingAssetIds(input, nodeById.get(input.nodeId ?? ""), graphById.get(input.canvasNodeId ?? ""), graphNodes);
   }, [groupById, graphById, graphNodes, nodeById]);
+  const inputImages = useCallback((input: WorkflowInput) => {
+    const ids = sourceImages(input);
+    return input.excludedAssetIds?.length ? ids.filter(id => !input.excludedAssetIds!.includes(id)) : ids;
+  }, [sourceImages]);
   function inputMediaLabel(binding: WorkflowInput) {
     return workflowSourceMediaLabel(inputImages(binding), assets, nodeById.get(binding.nodeId ?? ""));
   }
@@ -378,11 +382,20 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     const label = inputMediaLabel(bindings[0]);
     return bindings.slice(1).every(binding => inputMediaLabel(binding) === label) ? label : "素材";
   }
-  function referencePreviewValues(node: WorkflowNode) {
+  function referencePreviewValues(node: WorkflowNode, includeText = false) {
     return {
-      image: (node.inputs.image ?? []).map(input => ({ type: "image" as const, assetIds: inputImages(input) })),
-      text: (node.inputs.text ?? []).map(input => ({ type: "text" as const, assetIds: inputImages(input) })),
+      image: (node.inputs.image ?? []).map(input => ({ type: "image" as const, assetIds: sourceImages(input) })),
+      text: (node.inputs.text ?? []).map(input => {
+        const card = graphById.get(input.canvasNodeId ?? "");
+        const value = includeText ? (card ? canvasInputValue(card, input.cellId ?? "", graphNodes) : nodeById.get(input.nodeId ?? "")?.outputs[input.portId ?? ""]) : undefined;
+        return { ...value, type: "text" as const, assetIds: sourceImages(input) };
+      }),
     };
+  }
+  function disconnectReference(nodeId: string, assetId: string) {
+    const current = controller.document.nodes.find(node => node.id === nodeId);
+    if (current?.kind !== "generation" || controller.isLocked(nodeId)) return;
+    patch(nodeId, disconnectGenerationReference(current, referencePreviewValues(current, true), assetId));
   }
   function moveReference(nodeId: string, fromId: string, toId: string) {
     const current = controller.document.nodes.find(node => node.id === nodeId);
@@ -700,6 +713,26 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       if (automaticRef.current === gesture) startAutomaticDrag(gesture);
     }, 180);
   }
+  useEffect(() => {
+    function startDimension(event: Event) {
+      if (useStore.getState().activeProjectId !== projectId || panReady || !controller.ready) return;
+      const { assetId, nodeId, section, start } = (event as CustomEvent<{
+        assetId: string; nodeId?: string; section: NonNullable<WorkflowInput["dimension"]>; start: { x: number; y: number };
+      }>).detail;
+      const material = nodeId ? materialById.get(nodeId) : materialByAsset.get(assetId);
+      const assetNodeId = material?.assetId === assetId ? material.id : graphNodes.find(node => node.id === nodeId && node.assetId === assetId)?.id;
+      const binding = { assetId, assetNodeId };
+      clearAutomatic();
+      setConnection(null); connectionRef.current = null; setArmed(false); setDisconnectMenu(null);
+      startAutomaticDrag({ id: nodeId ?? assetNodeId ?? assetId, side: "output", start, dragged: true, latest: false,
+        target: {}, outputs: [{ type: "text", binding: { ...binding, dimension: section } }, { type: "image", media: "image", binding }] });
+      setCursor(start);
+      event.preventDefault();
+    }
+    window.addEventListener("bowerbird://dimension-wire", startDimension);
+    return () => window.removeEventListener("bowerbird://dimension-wire", startDimension);
+  }, [projectId, panReady, controller, materialById, materialByAsset, graphNodes]);
+
   function lockedOutput(outputs: AutomaticOutput[]) {
     return outputs.some(({ binding }) => [binding.nodeId, binding.canvasNodeId, binding.assetNodeId,
       ...workflowInputProducers(controller.document.nodes, binding)].some(id => id && controller.isLocked(id)));
@@ -1304,7 +1337,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   updateCursor.current = () => {
     const gesture = automaticRef.current;
     if (gesture && draftElement.current) {
-      const anchor = scopedPoint(gesture.id, gesture.side, gesture.scope), cursorPoint = toBoardPoint(cursor.current.x, cursor.current.y);
+      const anchor = scopedPoint(gesture.id, gesture.side, gesture.scope) ?? toBoardPoint(gesture.start.x, gesture.start.y), cursorPoint = toBoardPoint(cursor.current.x, cursor.current.y);
       if (anchor) draftElement.current.setAttribute("d", gesture.side === "output" ? path(anchor, cursorPoint) : path(cursorPoint, anchor));
     }
     const value = connectionRef.current;
@@ -1475,7 +1508,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
         return from && to && <path key={connectionId} data-auto-connection={connectionId} data-workflow-target={target.nodeId} className="is-automatic" d={path(from, to)} />;
       })}
       {connection && (() => { const from = sourcePoint(connection); return from && <path ref={draftElement} className="is-draft" d={path(from, toBoardPoint(cursor.current.x, cursor.current.y))} />; })()}
-      {automatic?.dragged && !connectionMenu && (() => { const anchor = scopedPoint(automatic.id, automatic.side, automatic.scope), point = toBoardPoint(cursor.current.x, cursor.current.y); return anchor && <path ref={draftElement} className="is-draft" d={automatic.side === "output" ? path(anchor, point) : path(point, anchor)} />; })()}
+      {automatic?.dragged && !connectionMenu && (() => { const anchor = scopedPoint(automatic.id, automatic.side, automatic.scope) ?? toBoardPoint(automatic.start.x, automatic.start.y), point = toBoardPoint(cursor.current.x, cursor.current.y); return anchor && <path ref={draftElement} className="is-draft" d={automatic.side === "output" ? path(anchor, point) : path(point, anchor)} />; })()}
     </svg>
     {document.nodes.filter(node => node.textSource && (node.trigger || node.inputs.signal?.length)).map(node => {
       const card = graphNodes.find(card => card.id === node.textSource && card.hiddenAt == null);
@@ -1536,14 +1569,14 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       if (node.kind === "generation" && node.generation?.media === "video") {
         try {
           const draft = { ...node, inputs: { text: node.inputs.text ?? [],
-            image: (node.inputs.image ?? []).map(input => input.groupId ? { ...input, assetIds: inputImages(input) } : input) } };
+            image: (node.inputs.image ?? []).map(input => input.groupId ? { ...input, assetIds: sourceImages(input) } : input) } };
           const inputNode = generationInputNode(draft, document.nodes);
           const values = workflowInputValues(document.nodes, inputNode, (id, cell) => {
             const source = graphById.get(id); return source ? canvasInputValue(source, cell, graphNodes) : undefined;
           });
           for (const [index, input] of (inputNode.inputs.image ?? []).entries()) {
             if (values.image[index]?.nodeIds?.length && isWorkflowGenerationResult(input, nodeById.get(input.nodeId ?? ""))) {
-              values.image[index] = { ...values.image[index], assetIds: inputImages(input) };
+              values.image[index] = { ...values.image[index], assetIds: sourceImages(input) };
             }
           }
           const frameIds = new Set(videoFrameInputValues(draft, values, graphNodes, document.nodes).flatMap(value => value.assetIds ?? []));
@@ -1556,10 +1589,20 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
         } catch { /* Draft references can be incomplete; execution validates them after upstream results arrive. */ }
       }
       const readCurrentPrompt = () => controller.document.nodes.find(card => card.id === node.id)?.prompt ?? node.prompt;
-      const bindings = Object.values(visibleInputs).some(bindings => bindings.length > 0) && <div className="workflow-bindings">
-        {[...new Map(Object.values(visibleInputs).flat().filter(input => input.autoConnect).map(input => [input.autoConnect!, input])).entries()].map(([id, input]) =>
+      const thumbnailIds = new Set(references.map(asset => asset.id));
+      const thumbnailWireIds = new Set<string>();
+      const labelledInputs = Object.entries(visibleInputs).map(([port, inputs]) => [port, inputs.filter(input => {
+        if (localVideo && (port === "first-frame" || port === "last-frame")) return false;
+        if (node.kind !== "generation" || (port !== "image" && port !== "text")) return true;
+        const ids = inputImages(input);
+        if (!ids.length || !ids.every(id => thumbnailIds.has(id))) return true;
+        if (input.autoConnect) thumbnailWireIds.add(input.autoConnect);
+        return false;
+      })] as const).map(([port, inputs]) => [port, inputs.filter(input => !input.autoConnect || !thumbnailWireIds.has(input.autoConnect))] as const);
+      const bindings = labelledInputs.some(([, inputs]) => inputs.length > 0) && <div className="workflow-bindings">
+        {[...new Map(labelledInputs.flatMap(([, inputs]) => inputs).filter(input => input.autoConnect).map(input => [input.autoConnect!, input])).entries()].map(([id, input]) =>
           <button key={id} disabled={busy && input.portId !== "signal" && node.kind !== "trigger"} title="断开连接" onClick={() => disconnectAutomatic(id)}>{sourceLabel(input).label}<X size={11} /></button>)}
-        {Object.entries(visibleInputs).map(([port, bindings]) => [port, bindings.filter(input => !input.autoConnect)] as const).filter(([, bindings]) => bindings.length).map(([port, bindings]) =>
+        {labelledInputs.map(([port, bindings]) => [port, bindings.filter(input => !input.autoConnect)] as const).filter(([, bindings]) => bindings.length).map(([port, bindings]) =>
           <button key={port} disabled={busy && port !== "completion" && port !== "signal"} title="断开此输入" onClick={event => chooseDisconnect({ nodeId: node.id, port }, { x: event.clientX, y: event.clientY }, true)}>{node.kind === "loop" && bindings.length === 1 ? sourceLabel(bindings[0]).label : node.kind === "voice" && port === "image" ? "参考录音" : port === "completion" ? "完成触发" : port === "signal" ? "触发器" : port === "text" ? "文本" : port === "visual-profile" ? "视觉规范" : port === "first-frame" ? node.comfyVideo?.mode === "reference" ? "参考图" : "首帧" : port === "last-frame" ? "尾帧" : portMediaLabel(bindings)}{(node.kind !== "loop" || bindings.length > 1) && ` · ${bindings.length} 个来源`} <X size={11} /></button>)}
       </div>;
       const presentation = WORKFLOW_CARD_PRESENTATION[videoCard ? "comfy-video" : node.kind], CardIcon = node.kind === "trigger" ? TRIGGER_MODES.find(mode => mode.id === triggerMode)!.icon : presentation.icon;
@@ -1744,7 +1787,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
             disabled={busy} maxLength={node.kind === "visual-profile" ? 4000 : undefined} placeholder={node.kind === "instruction" ? "留空使用当前反推要求" : node.kind === "visual-profile" ? "描述配色、构图、光线等要求；可只接图片或只填文字…" : "输入创作要求…"}
             value={node.prompt} readCurrentValue={readCurrentPrompt}
             onValueChange={prompt => patch(node.id, { prompt })} />}
-          {references.length > 0 && <WorkflowGenerationReferences assets={references} disabled={busy || panReady} onMove={(from, to) => moveReference(node.id, from, to)} />}
+          {references.length > 0 && <WorkflowGenerationReferences assets={references} disabled={busy || panReady} onMove={(from, to) => moveReference(node.id, from, to)} onDisconnect={assetId => disconnectReference(node.id, assetId)} />}
           {node.kind === "voice" || node.kind === "loop" ? null : node.kind === "comfy-video" ? <>{step && busy && run?.status === "running" ? <ComfyGenerationProgress step={step} /> : step?.detail && <p role="status" className="workflow-hint">{userErrorMessage(step.detail, "本地视频任务状态已更新。")}</p>}</> : selectedImages.length > 0 ? <div className="workflow-preview">{selectedImages.map(asset => <WorkflowMediaThumbnail key={asset.id} asset={asset} />)}</div>
             : !references.length && node.kind !== "planner" && !(node.kind === "agent" && node.skill === "hyperframes") && <p className="workflow-hint">{node.kind === "agent" ? "输入任务要求，或连接上游内容" : node.kind === "trigger" ? <>上游成功完成后，扣 1 次并触发下游；为 0 时停止自动触发。</> : <><ImagePlus size={14} />{node.kind === "visual-profile" ? "图片可选 · 规范只影响连接的下游" : "拖入图片，或连接上游卡片"}</>}</p>}
           {node.kind === "trigger" && <div className="workflow-trigger-mode" onPointerDown={event => event.stopPropagation()}>

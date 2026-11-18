@@ -1,4 +1,5 @@
 import { assignCanvasCardNames } from "./canvasCardNames";
+import { describeAssetWithNotice } from "./describeNotices";
 import { mergeWorkflowChanges } from "./workflowExternalChanges";
 import { cloudChatEndedMessage } from "./userError";
 import { activeTriggerSchedule, advanceTriggerSchedule, triggerScheduleOccurrence, workflowTriggerMode } from "./workflowTriggerSchedule";
@@ -37,7 +38,7 @@ import { contentTableRows } from "./contentTable";
 import { cloudAgentProfilePrompt } from "./workflowAgentProfile";
 
 import { agentOutputTargets, agentTextWriters, agentWriterValue, routeAgentOutputs } from "./workflowAgentOutputs";
-import { assertWorkflowAcyclic, rebindGenerationReferences, normalizeWorkflowInputSlots, workflowBindingKey } from "./canvasWorkflow";
+import { assertWorkflowAcyclic, rebindGenerationReferences, normalizeWorkflowInputSlots, workflowBindingKey, filterDisconnectedReferences } from "./canvasWorkflow";
 import { readDismissedNotices, dismissNotices } from "./dismissedNotices";
 import { ConfirmedDshTurnFailure, WorkflowNodeError, workflowDiagnostic, type WorkflowDiagnostic } from "./workflowDiagnostics";
 import { enqueueCloudAgentRunOperation } from "./cloudAgentRuntime";
@@ -947,7 +948,7 @@ export class CanvasWorkflowController {
       const automatic = this.document.nodes.find(node => recoveryScope.has(node.id) && node.kind === "instruction" && node.action === "layers"
         && (node.resultNodeIds?.includes(input.canvasNodeId!) || input.canvasNodeId!.startsWith("workflow-layers:") && input.canvasNodeId!.endsWith(`:${node.id}`)));
       const metadata = { slot: input.slot, ...(input.autoConnect ? { autoConnect: input.autoConnect } : {}), ...(input.mediaFilter ? { mediaFilter: input.mediaFilter } : {}),
-        ...(input.referenceRanks ? { referenceRanks: input.referenceRanks } : {}) };
+        ...(input.referenceRanks ? { referenceRanks: input.referenceRanks } : {}), ...(input.excludedAssetIds ? { excludedAssetIds: input.excludedAssetIds } : {}) };
       if (automatic && input.cellId === "*") return { nodeId: automatic.id, portId: "image", ...metadata };
       const writers = this.document.nodes.filter(node => node.textTarget?.nodeId === input.canvasNodeId);
       if (writers.length !== 1) return input;
@@ -2175,6 +2176,9 @@ export class CanvasWorkflowController {
       }
       const inputNode: WorkflowNode = step.localAgentSkill === "hyperframes" ? { ...node, skill: "hyperframes", agentTransport: "codex-cli" } : node;
       await filterAutomaticMediaValues(inputNode, values, this.document.nodes);
+      if ((node.kind === "generation" || node.kind === "comfy-video") && Object.values(connectedNode.inputs).some(port => port.some(input => input.excludedAssetIds?.length))) {
+        Object.assign(values, filterDisconnectedReferences(connectedNode.inputs, values));
+      }
       if (node.kind === "voice") { await this.runVoice(runId, node, halted, values); return; }
       if (node.kind === "instruction") {
         const count = (values.image ?? []).flatMap(value => value.assetIds ?? []).length;
@@ -2281,7 +2285,7 @@ export class CanvasWorkflowController {
         const results = await Promise.allSettled(assetIds.map(async (assetId, index) => {
           try {
             if (cached[index].length) return cached[index];
-            const analysisId = await api.describeAsset(assetId, instruction, provider!, jobs[index]!);
+            const analysisId = await describeAssetWithNotice(assetId, orderedAssets[index].name, instruction, provider!, jobs[index]!);
             const analysis = (await api.listAnalysesByAsset(assetId)).find(item => item.id === analysisId);
             const parts = analysis ? workflowCaptionSections(analysis.payload) : [];
             if (!parts?.length) throw new Error(`第 ${index + 1} 张图片反推未返回可用维度`);

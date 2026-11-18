@@ -125,19 +125,26 @@
 .workflow-audio-thumbnail { display:inline-grid; box-sizing:border-box; width:74px; height:74px; flex:none; grid-template:minmax(0,1fr) auto / minmax(0,1fr); padding:4px; gap:3px; background:var(--bb-surface-2); }
 .workflow-audio-thumbnail .audio-waveform-thumbnail { width:100%; height:100%; grid-template:minmax(0,1fr) / minmax(0,1fr); }
 .workflow-audio-filename { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:center; font-size:11px; line-height:15px; }
-.workflow-generation-references button {
+.workflow-reference-tile { position:relative; flex:0 0 74px; height:74px; }
+.workflow-generation-references [data-workflow-reference-asset] {
+  width:100%;
   position:relative; flex:0 0 74px; height:74px; overflow:hidden; border:0; padding:0;
   color:inherit; background:transparent; cursor:grab; touch-action:none; user-select:none;
 }
 .workflow-generation-references button > * { pointer-events:none; }
 .workflow-generation-references button:focus-visible { outline:2px solid var(--bb-blue); outline-offset:-2px; }
-.workflow-card .workflow-generation-references button:disabled { opacity:1; pointer-events:none; }
+.workflow-card .workflow-generation-references [data-workflow-reference-asset]:disabled { opacity:1; pointer-events:none; }
 .workflow-generation-references button.is-dragging { opacity:.55; cursor:grabbing; }
 .workflow-generation-references button:is(.is-drop-before,.is-drop-after)::after {
   content:""; position:absolute; top:0; bottom:0; width:3px; background:var(--bb-blue);
 }
 .workflow-generation-references button.is-drop-before::after { left:0; }
 .workflow-generation-references button.is-drop-after::after { right:0; }
+.workflow-reference-tile .workflow-reference-remove { position:absolute; top:3px; right:3px; width:24px; height:24px; padding:0; display:grid; place-items:center; border:0; border-radius:4px; color:white; background:rgb(0 0 0 / 76%); cursor:pointer; }
+@media (hover:hover) {
+  .workflow-reference-tile:not(:hover):not(:focus-within) .workflow-reference-remove,
+  .comfy-frame-slot:not(:hover):not(:focus-within) .comfy-frame-disconnect { opacity:0; pointer-events:none; }
+}
 .context-menu-surface.workflow-disconnect-menu { width:350px; }
 .workflow-disconnect-menu [data-workflow-disconnect-choice] > span:last-child { flex:none; white-space:nowrap; }
 .workflow-disconnect-menu .workflow-disconnect-source { flex:1; min-width:0; }

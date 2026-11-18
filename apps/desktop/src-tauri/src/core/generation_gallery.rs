@@ -10,6 +10,8 @@ workflow_steps AS MATERIALIZED (
   SELECT w.project_id,s.key AS source_id,s.value AS step
   FROM canvas_workflows w,json_each(COALESCE(json_extract(w.document_json,'$.runs'),json_array(json_extract(w.document_json,'$.run')))) r,
     json_each(r.value,'$.steps') s
+  -- Prompt optimization can have an agentRunId, but produces no media.
+  WHERE json_extract(s.value,'$.comfyOptimization') IS NULL
 ),
 workflow_job_roots AS (
   SELECT project_id,source_id,json_extract(step,'$.jobId') AS job_id FROM workflow_steps

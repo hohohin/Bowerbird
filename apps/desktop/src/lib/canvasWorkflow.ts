@@ -22,11 +22,12 @@ export type WorkflowAction = "describe" | "reuse" | "layers";
 export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" | "signal";
 export interface WorkflowValue { type: WorkflowPortType; text?: string; table?: ContentTable; assetIds?: string[]; referenceRanks?: number[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[]; deliveries?: Record<string, { nodeId: string; cellId: string; append: boolean; value: WorkflowValue }> }
 export interface WorkflowPort { id: string; label: string; type: WorkflowPortType }
-export interface WorkflowInput { slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string; autoConnect?: string; mediaFilter?: ("image" | "video" | "audio")[];
+export interface WorkflowInput { dimension?: { id?: string | null; title: string; body: string }; slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string; autoConnect?: string; mediaFilter?: ("image" | "video" | "audio")[];
   /** A submitted image was still rendering when this completion listener was added. */
   pendingCompletionSession?: string;
   /** Per-member position in this generation card's reference strip, set by dragging. */
   referenceRanks?: number[];
+  excludedAssetIds?: string[];
   h3TailOnly?: boolean;
 }
 export interface WorkflowPromptReference { slot?: number; id: string; type: "text" | "image"; input: WorkflowInput; assetId?: string; label: string; direction?: "output" }
@@ -407,7 +408,7 @@ export function workflowPromptPreview(node: WorkflowNode, label = (ref: Workflow
     return `@${ref ? label(ref) : "输入"}`;
   });
 }
-export const workflowBindingKey = (input: WorkflowInput) => JSON.stringify([input.nodeId, input.portId, input.assetId, input.groupId, input.canvasNodeId, input.cellId, input.assetNodeId]);
+export const workflowBindingKey = (input: WorkflowInput) => JSON.stringify([input.nodeId, input.portId, input.assetId, input.groupId, input.canvasNodeId, input.cellId, input.assetNodeId, ...(input.dimension ? [input.dimension.id ?? input.dimension.title] : [])]);
 /** An upstream card, folder or native cell owns the reference; its current images may change. */
 export const workflowImageContainer = (input: WorkflowInput) => !!(input.nodeId || input.groupId || input.canvasNodeId);
 export function activePromptReferences(node: WorkflowNode) {
@@ -507,9 +508,62 @@ function generationMentionAssets(prompt: string, resolved: Map<string, WorkflowV
   return ids;
 }
 
+export function filterDisconnectedReferences(inputs: WorkflowNode["inputs"], values: Record<string, WorkflowValue[]>) {
+  const result = { ...values };
+  for (const [port, items] of Object.entries(values)) {
+    if (!inputs[port]?.some(input => input.excludedAssetIds?.length)) continue;
+    result[port] = items.map((value, index) => {
+      const input = inputs[port]?.[index];
+      const excluded = input?.excludedAssetIds;
+      if (!excluded?.length) return value;
+      const ranks = value.referenceRanks ?? input?.referenceRanks;
+      const tokens = new Set(value.imageRefs?.filter(ref => excluded.includes(ref.asset_id)).map(ref => ref.token));
+      return { ...value, assetIds: value.assetIds?.filter(id => !excluded.includes(id)),
+        referenceRanks: ranks && value.assetIds?.flatMap((id, i) => excluded.includes(id) ? [] : [ranks[i] ?? -1]),
+        imageRefs: value.imageRefs?.filter(ref => !excluded.includes(ref.asset_id)),
+        text: value.text?.replace(/@图片\d+/g, token => tokens.has(token) ? "" : token) };
+    });
+  }
+  return result;
+}
+
+export function disconnectGenerationReference(node: WorkflowNode, values: Record<string, WorkflowValue[]>, assetId: string): Partial<WorkflowNode> {
+  node = normalizeWorkflowInputSlots(node);
+  const current = filterDisconnectedReferences(node.inputs, values);
+  const inputs = { ...node.inputs };
+  const promptReferences = [...(node.promptReferences ?? [])];
+  const removedRefs = new Set<string>();
+  for (const port of ["image", "text"] as const) {
+    const bindings = node.inputs[port];
+    if (!bindings) continue;
+    inputs[port] = [];
+    for (const [index, input] of bindings.entries()) {
+      const value = current[port]?.[index];
+      const ids = value?.assetIds ?? [];
+      const sibling = port === "text" && input.autoConnect && node.inputs.image?.some((other, i) =>
+        other.autoConnect === input.autoConnect && current.image?.[i]?.assetIds?.includes(assetId) && current.image[i].assetIds!.every(id => id === assetId));
+      const removedTokens = value?.imageRefs?.filter(ref => ref.asset_id === assetId).map(ref => ref.token) ?? [];
+      const remainingText = value?.text?.replace(/@图片\d+/g, token => removedTokens.includes(token) ? "" : token).trim();
+      const remove = (ids.includes(assetId) || sibling) && !ids.some(id => id !== assetId) && !(port === "text" && remainingText);
+      const slot = inputs[port].length + 1;
+      for (const [i, ref] of promptReferences.entries()) {
+        if (ref.type !== port || ref.direction === "output" || node.promptReferences?.[i].slot !== input.slot) continue;
+        if (remove) removedRefs.add(ref.id);
+        else promptReferences[i] = { ...ref, slot };
+      }
+      if (!remove) inputs[port].push(ids.includes(assetId)
+        ? { ...input, slot, excludedAssetIds: [...(input.excludedAssetIds ?? []), assetId] }
+        : { ...input, slot });
+    }
+  }
+  return { inputs, promptReferences: promptReferences.filter(ref => !removedRefs.has(ref.id)),
+    prompt: node.prompt.replace(/@\[([^\]]+)\]/g, (token, id: string) => removedRefs.has(id) ? "" : token) };
+}
+
 /** Connected image order determines reference numbers; mentions only place them in the prompt. */
 export function generationReferencePreviewOrder(node: WorkflowNode, values: Record<string, WorkflowValue[]>, nodes: readonly WorkflowNode[]) {
   node = rebindGenerationReferences(node);
+  values = filterDisconnectedReferences(node.inputs, values);
   const resolved = new Map<string, WorkflowValue>();
   for (const ref of activePromptReferences(node)) {
     const index = node.inputs[ref.type]?.findIndex(input => workflowReferenceMatchesInput(ref, input)) ?? -1;
@@ -528,6 +582,7 @@ export function generationReferencePreviewOrder(node: WorkflowNode, values: Reco
 export function compileGenerationPrompt(node: WorkflowNode, values: Record<string, WorkflowValue[]>, nodes: readonly WorkflowNode[] = []) {
   node = rebindGenerationReferences(node);
   const refs = activePromptReferences(node), inputs = generationInputNode(node, nodes).inputs;
+  values = filterDisconnectedReferences(inputs, values);
   const resolved = new Map<string, WorkflowValue>();
   for (const ref of refs) {
     const index = (inputs[ref.type] ?? []).findIndex(input => workflowReferenceMatchesInput(ref, input));
@@ -650,6 +705,7 @@ export function workflowInputValues(nodes: WorkflowNode[], node: WorkflowNode, c
   for (const port of workflowInputs(node)) {
     result[port.id] = (node.inputs[port.id] ?? []).map(input => {
       try {
+      if (input.dimension && port.type === "text") return { type: "text", text: input.dimension.body };
       if (input.groupId && port.type === "image") {
         if (!input.assetIds?.length) throw new Error("文件夹中没有可用图片，请添加图片后重新运行");
         return { type: "image", assetIds: input.assetIds };

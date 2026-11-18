@@ -7,12 +7,8 @@ const PEEK_EVENT = "bowerbird://board-asset-peek";
 
 /**
  * 维度环形菜单（radial menu）——全局单例（App 根挂载，store.captionRing 驱动）。
- * 唯一调起方式：任意场景长按左键瀑布流图片（MasonryGrid 派发 PEEK_EVENT）。
- *
- * 扇形（pie sector）菜单 = 以卡片为圆心的 SVG：每个维度一个扇区（角缝分隔），label 水平
- * 居中于扇区质心；hover 扇区 → 径向外侧浮层显示该维度反推正文；点扇区 → 直接插入创作板
- * （板未开则自动开板，keyword 走 store.pendingKeyword 由创作板的 useCreationEditor 消费），
- * 环保持打开可连续添加，已选扇区打 ✓ 变淡。无维度的图呼出空环并提示右键反推。
+ * 图片菜单或素材拾取打开维度环。创作框激活时可连续点选维度；
+ * 在项目画板浏览时拖动扇区，沿用画板自动连线。
  * 展开动画 = 扇区自中心旋出 + 按角度错峰绽放；收起 = 整环收拢淡出后再卸载。
  *
  * 遮罩挖两个洞（环圈 + 编辑框）：mask = 外扩视口矩形 + 两洞的 evenodd 路径经 feGaussianBlur
@@ -102,14 +98,14 @@ function buildMaskImage(g: Geometry): string {
 export function CaptionRing() {
   const openCaptionRing = useStore((s) => s.openCaptionRing);
   const assetId = useStore((s) => s.captionRing);
-  const [peekAnchor, setPeekAnchor] = useState<{ assetId: string; element: HTMLElement } | null>(null);
+  const [peekAnchor, setPeekAnchor] = useState<{ assetId: string; element?: HTMLElement; point?: { x: number; y: number } } | null>(null);
 
   useEffect(() => { if (!assetId) setPeekAnchor(null); }, [assetId]);
 
   useEffect(() => {
     const onPeek = (e: Event) => {
-      const detail = (e as CustomEvent<string | { assetId: string; anchor: HTMLElement }>).detail;
-      setPeekAnchor(typeof detail === "string" ? null : { assetId: detail.assetId, element: detail.anchor });
+      const detail = (e as CustomEvent<string | { assetId: string; anchor?: HTMLElement; point?: { x: number; y: number } }>).detail;
+      setPeekAnchor(typeof detail === "string" ? null : { assetId: detail.assetId, element: detail.anchor, point: detail.point });
       openCaptionRing(typeof detail === "string" ? detail : detail.assetId);
     };
     window.addEventListener(PEEK_EVENT, onPeek as EventListener);
@@ -117,12 +113,13 @@ export function CaptionRing() {
   }, [openCaptionRing]);
 
   if (!assetId) return null;
-  return <CaptionRingSession key={assetId} assetId={assetId} anchorElement={peekAnchor?.assetId === assetId ? peekAnchor.element : null} />;
+  return <CaptionRingSession key={assetId} assetId={assetId} point={peekAnchor?.assetId === assetId ? peekAnchor.point : undefined} anchorElement={peekAnchor?.assetId === assetId ? peekAnchor.element : null} />;
 }
 
-function CaptionRingSession({ assetId, anchorElement }: { assetId: string; anchorElement: HTMLElement | null }) {
+function CaptionRingSession({ assetId, anchorElement, point }: { assetId: string; anchorElement?: HTMLElement | null; point?: { x: number; y: number } }) {
   const closeCaptionRing = useStore((s) => s.closeCaptionRing);
-  const boardOpen = useStore((s) => s.boardOpen);
+  const boardOpen = useStore((s) => s.boardOpen || !!s.genEditing);
+  const press = useRef<{ x: number; y: number } | null>(null);
   // 维度数据：瀑布流资产 + 反推集合合并（prompted 后置覆盖补 sections），与 hook 的 assetById
   // 同源逻辑。响应式订阅——板外呼环时 openCaptionRing 补拉、开板瞬间 App.refresh 未返回时，
   // 数据到位即重算补扇区（非响应式 getState 会卡在挂载那一刻的空态）。
@@ -175,7 +172,8 @@ function CaptionRingSession({ assetId, anchorElement }: { assetId: string; ancho
       anchorElement ??
       document.getElementById(`asset-${assetId}`) ??
       document.querySelector(`[data-asset-id="${CSS.escape(assetId)}"]`);
-    const card = anchor?.getBoundingClientRect();
+    const bounds = anchor?.getBoundingClientRect();
+    const card = bounds?.width ? bounds : point && new DOMRect(point.x, point.y, 1, 1);
     if (!card || !card.width) {
       requestClose();
       return;
@@ -230,7 +228,7 @@ function CaptionRingSession({ assetId, anchorElement }: { assetId: string; ancho
         editor: edRect,
       };
     });
-  }, [assetId, anchorElement, requestClose]);
+  }, [assetId, anchorElement, point, requestClose]);
 
   useLayoutEffect(() => {
     remeasure();
@@ -279,33 +277,6 @@ function CaptionRingSession({ assetId, anchorElement }: { assetId: string; ancho
     }
   }, [requestClose, remeasure]);
 
-  // 鼠标移出环一定距离即收起。编辑框区域豁免：用户常移过去挪光标/继续输入。
-  useLayoutEffect(() => {
-    if (!geom) return;
-    const threshold = geom.outerR + 120;
-    const onMove = (e: PointerEvent) => {
-      if (closeRef.current) return;
-      // Reading or advancing the adjacent tutorial must leave its dimension target open.
-      if (e.target instanceof Element && e.target.closest(".onboarding-spotlight-card.is-ring-open")) return;
-      const dx = e.clientX - geom.cx;
-      const dy = e.clientY - geom.cy;
-      if (dx * dx + dy * dy <= threshold * threshold) return;
-      const ed = geom.editor;
-      if (
-        ed &&
-        e.clientX >= ed.x - 12 &&
-        e.clientX <= ed.x + ed.w + 12 &&
-        e.clientY >= ed.y - 12 &&
-        e.clientY <= ed.y + ed.h + 12
-      ) {
-        return;
-      }
-      requestClose();
-    };
-    window.addEventListener("pointermove", onMove);
-    return () => window.removeEventListener("pointermove", onMove);
-  }, [geom, requestClose]);
-
   const maskImage = useMemo(() => (geom ? buildMaskImage(geom) : null), [geom]);
 
   // 扇区按正上方起均布，质心放 label；相邻扇区留角缝（约 3°，随扇区数收缩）。
@@ -347,7 +318,7 @@ function CaptionRingSession({ assetId, anchorElement }: { assetId: string; ancho
   // assetId 一并传出：目标编辑器缺该图 chip 时（长按窥视不插 chip）先补插，
   // 保证插入形状是「@图片【维度】」而非孤立【维度】。
   function pick(section: CaptionSection) {
-    if (closeRef.current) return;
+    if (closeRef.current || !boardOpen) return;
     setUsed((prev) => new Set(prev).add(section.title));
     useStore.getState().pickCaptionSection(section, assetId);
   }
@@ -358,10 +329,8 @@ function CaptionRingSession({ assetId, anchorElement }: { assetId: string; ancho
   const hubHint =
     sections.length > 0 ? (
       <>
-        <div className="caption-ring-hub-title">挑选你需要的维度</div>
-        <div className="caption-ring-hub-sub">——或——</div>
-        <div className="caption-ring-hub-sub">移开鼠标 / 直接输入</div>
-        <div className="caption-ring-hub-sub">来关闭维度环</div>
+        <div className="caption-ring-hub-title">{boardOpen ? "点击维度，插入对话框" : "拖动维度，连接画板卡片"}</div>
+        <div className="caption-ring-hub-sub">点击空白处或按 Esc 关闭</div>
       </>
     ) : promptedAssetsLoaded ? (
       <>
@@ -447,6 +416,21 @@ function CaptionRingSession({ assetId, anchorElement }: { assetId: string; ancho
                 tabIndex={0}
                 role="button"
                 aria-label={`添加维度 ${section.title}`}
+                onPointerDown={event => {
+                  if (boardOpen || event.button !== 0) return;
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  press.current = { x: event.clientX, y: event.clientY };
+                }}
+                onLostPointerCapture={() => { press.current = null; }}
+                onPointerMove={event => {
+                  const start = press.current;
+                  if (!start || !(event.buttons & 1) || Math.hypot(event.clientX - start.x, event.clientY - start.y) < 5) return;
+                  press.current = null;
+                  const drag = new CustomEvent("bowerbird://dimension-wire", { cancelable: true, detail: {
+                    assetId, section, start, nodeId: anchorElement?.closest<HTMLElement>("[data-canvas-node-id]")?.dataset.canvasNodeId,
+                  } });
+                  if (!window.dispatchEvent(drag)) useStore.getState().closeCaptionRing();
+                }}
                 onClick={() => pick(section)}
                 onPointerEnter={() => {
                   if (Date.now() - openedAt.current < 600) return;

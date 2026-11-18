@@ -63,6 +63,8 @@ export class WorkflowPlannerRuntime {
               preview: `${assets.length} 张图片（未进行视觉分析）：${assets.map(asset => `${asset.name} (${asset.width}×${asset.height})`).join("、").slice(0, 600)}` });
           }
         }
+      } else if (input.dimension && type === "text") {
+        label = input.dimension.title; preview = input.dimension.body; contentKey = input.dimension.body;
       } else if (input.assetId || input.groupId) {
         if (input.groupId && !canvas.groups.some(group => group.id === input.groupId)) throw new Error("连接的素材文件夹已删除");
         if (input.assetNodeId && !canvas.nodes.some(node => node.id === input.assetNodeId && node.assetId === input.assetId && node.hiddenAt == null)) throw new Error("连接的画板图片已移除");

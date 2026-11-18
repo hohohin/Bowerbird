@@ -31,7 +31,15 @@ try {
   await mkdir('.tmp/context-menu', { recursive: true });
   await page.goto('http://127.0.0.1:1796/scripts/fixtures/asset-multi-menu/preview.html', { waitUntil: 'domcontentloaded' });
   await page.locator('#trigger').click();
+  await page.evaluate(() => window.fixtureStore.setState({ promptedAssets: [{ id: 'a1', sections: [{ title: '构图', body: '中心构图' }] }], boardOpen: true }));
   await root().getByRole('menuitem', { name: '维度', exact: true }).click();
+  const ring = page.getByRole('group', { name: '可选维度环' });
+  await ring.waitFor();
+  await page.mouse.move(1200, 780);
+  await page.waitForTimeout(250);
+  await ring.locator('.caption-ring-sector-label').click({ force: true });
+  assert.equal(await page.evaluate(() => window.fixtureStore.getState().pendingKeyword?.title), '构图');
+  await page.evaluate(() => window.fixtureStore.setState({ boardOpen: false }));
   assert.equal(await page.evaluate(async () => (await import('/src/store.ts')).useStore.getState().captionRing), 'a1');
   await page.evaluate(async () => (await import('/src/store.ts')).useStore.getState().closeCaptionRing());
   await page.locator('#trigger').click();

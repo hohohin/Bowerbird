@@ -53,7 +53,25 @@ try {
   assert.ok((await editor.innerText()).includes('继续创作的草稿'));
   await bell.click();
   const history = page.getByRole('dialog', { name: '通知历史' });
-  await history.getByRole('button', { name: /快速生成.*检查顶栏通知.*已完成/ }).waitFor();
+  await history.getByRole('button', { name: /生成 · 快速生成.*检查顶栏通知.*已完成/ }).waitFor();
+  const asset = await page.evaluate(() => {
+    const ipc = window.__TAURI_INTERNALS__;
+    const invoke = ipc.invoke;
+    ipc.invoke = (command, args) => command === 'codex_describe_asset'
+      ? new Promise(resolve => { window.finishDescribe = () => resolve('analysis'); })
+      : invoke(command, args);
+    const state = window.store.getState();
+    const asset = state.assets[0];
+    state.runDescribe(asset.id, '提取画面特征', 'codex');
+    return { id: asset.id, name: asset.name };
+  });
+  await history.getByRole('button', { name: `反推 · ${asset.name} · 反推中，查看素材` }).waitFor();
+  await page.evaluate(() => window.finishDescribe());
+  await history.getByRole('button', { name: `反推 · ${asset.name} · 已完成，查看素材` }).click();
+  assert.equal(await page.evaluate(() => window.store.getState().detailAssetId), asset.id);
+  await bell.click();
+  await history.getByRole('button', { name: `移除通知：${asset.name}` }).click();
+  assert.equal(await history.getByRole('button', { name: /^反推 ·/ }).count(), 0);
   await page.keyboard.press('Escape');
   await page.evaluate(async () => { const { notify } = await import('/src/lib/notify.ts'); notify('已保存', 'success'); notify('文件已被占用，请关闭其他程序后重试', 'error'); });
   await page.locator('.app-toast').filter({ hasText: '已保存' }).waitFor();

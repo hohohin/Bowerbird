@@ -63,7 +63,7 @@ export function WorkflowPromptEditor({ node, nodes, graphNodes, cardNames, disab
         return table ? canvasInputValue(table, cellId, graphNodes) : undefined;
       })[type][0];
       if (type === "text") return [{ reference: { type, input, slot, label: `文本 ${number}` }, preview: value.text || "（空文本）" }];
-      const assetIds = value.assetIds ?? [];
+      const assetIds = (value.assetIds ?? []).filter(id => !input.excludedAssetIds?.includes(id));
       const media = mediaLabel(assetIds);
       const count = `${assetIds.length} ${media === "图片" ? "张" : media === "素材" ? "项" : "段"}${media}`;
       const preview = !assetIds.length ? "等待上游内容" : generated ? `本次 ${count} · 重跑自动更新` : `当前 ${count} · 随来源自动更新`;

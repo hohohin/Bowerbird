@@ -1,4 +1,5 @@
 import { prepareFileWorkspace } from "./lib/fileWorkspace";
+import { describeAssetWithNotice } from "./lib/describeNotices";
 import { applyGenerationProgress } from "./lib/generationProgress";
 import { hasGenerationFailureReason } from "./lib/userError";
 import { generationProviderIssue } from "./lib/generationAvailability";
@@ -621,7 +622,7 @@ export const useStore = create<State>((set, get) => {
       describeStartedAt: Date.now(),
     });
     try {
-      const analysisId = await api.describeAsset(next.assetId, next.instruction, next.provider);
+      const analysisId = await describeAssetWithNotice(next.assetId, next.name, next.instruction, next.provider);
       next.onComplete?.(analysisId);
       next.onTutorialComplete?.();
     } catch (e) {

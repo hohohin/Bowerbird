@@ -204,4 +204,4 @@ DOCX 及表格接入同一文档类型。`textDocuments.preview` 读取有界正
 - CanvasWorkspace 的 addCollectedVideo 复用画板快照、避让落点、串行写入及失败恢复；独立采集事件与复刻 onAddVideo 共用。属于画板宿主内部实现，不跨模块直接导入。复刻先经 media 校验原件，再用 api.importFiles 的 collect 模式转存，避免画板仅依赖复刻任务副本。
 ### 本机提示的关闭记录
 
-[dismissedNotices.ts](../../apps/desktop/src/lib/dismissedNotices.ts) 提供按范围读取、批量关闭与订阅显示变化的入口。画布生成提示以项目和生成轮次标识，工作流使用诊断 ID 或旧步骤的运行与卡片 ID，通知铃铛使用任务和轮次标识。原任务仍负责运行、恢复和历史详情。
+[dismissedNotices.ts](../../apps/desktop/src/lib/dismissedNotices.ts) 提供按范围读取、批量关闭与订阅显示变化的入口。画布生成提示以项目和生成轮次标识，工作流使用诊断 ID 或旧步骤的运行与卡片 ID，通知铃铛使用任务和轮次标识。原任务仍负责运行、恢复和历史详情。素材库和工作流通过 [describeAssetWithNotice](../../apps/desktop/src/lib/describeNotices.ts) 调用单图反推，铃铛按本次执行更新状态并打开源素材。

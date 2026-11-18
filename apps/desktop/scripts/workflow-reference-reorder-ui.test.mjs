@@ -103,10 +103,33 @@ try {
     const note = JSON.parse(table.payloadJson);
     note.cells[0][0].image_refs = [{ token: '@图片1', asset_id: 'd' }, { token: '@图片2', asset_id: 'existing' }];
     await api.projectCanvasNoteUpdate(table.id, JSON.stringify(note));
+    window.save();
     window.emitChange();
   });
   await expectOrder(['existing', 'c', 'd']);
   assert.deepEqual(await generate(), [{ ids: ['existing', 'c', 'd'], prompt: '主体 @图片3 @图片1，背景 @图片2' }]);
+
+  assert.equal(await card.locator('.workflow-bindings button').count(), 0, 'image sources have no separate name chips');
+  const remove = id => card.locator(`[data-workflow-reference-remove="${id}"]`);
+  const opacity = el => getComputedStyle(el).opacity;
+  await page.mouse.move(2, 2);
+  assert.equal(await remove('existing').evaluate(opacity), '0');
+  await item('existing').hover();
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-workflow-reference-remove="existing"]')).opacity === '1');
+  await remove('existing').click();
+  await expectOrder(['c', 'd']);
+  assert.equal(await card.locator('.workflow-bindings button').count(), 0);
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    await canvasWorkflowController('p').flush();
+  });
+  await page.reload();
+  await expectOrder(['c', 'd']);
+  assert.equal(await card.locator('.workflow-bindings button').count(), 0);
+  assert.deepEqual((await generate())[0].ids, ['c', 'd'], 'disconnect affects submitted references after reload');
+  await remove('c').focus();
+  await page.keyboard.press('Enter');
+  await expectOrder(['d']);
 
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');

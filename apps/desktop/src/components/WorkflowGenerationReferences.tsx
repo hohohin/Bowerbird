@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { X } from "lucide-react";
 import { exceedsCanvasDragThreshold } from "../lib/canvasLogic";
 import type { Asset } from "../lib/types";
 import { workflowAssetMedia } from "../lib/workflowCanvasCapabilities";
@@ -18,8 +19,8 @@ export function WorkflowMediaThumbnail({ asset, draggable }: { asset: Asset; dra
     sourceWidth={asset.width} sourceHeight={asset.height} draggable={draggable} progressiveThumbnail />;
 }
 
-export function WorkflowGenerationReferences({ assets, disabled, onMove }: {
-  assets: Asset[]; disabled: boolean; onMove: (fromId: string, toId: string) => void;
+export function WorkflowGenerationReferences({ assets, disabled, onMove, onDisconnect }: {
+  assets: Asset[]; disabled: boolean; onMove: (fromId: string, toId: string) => void; onDisconnect: (assetId: string) => void;
 }) {
   const strip = useRef<HTMLDivElement>(null);
   const press = useRef<{ pointerId: number; from: string; x: number; y: number }>();
@@ -30,8 +31,8 @@ export function WorkflowGenerationReferences({ assets, disabled, onMove }: {
 
   function targetAt(x: number, y: number) {
     const hit = document.elementFromPoint(x, y);
-    const item = hit?.closest<HTMLButtonElement>("[data-workflow-reference-asset]");
-    if (item && item.parentElement === strip.current) return item.dataset.workflowReferenceAsset;
+    const tile = hit?.closest(".workflow-reference-tile");
+    if (tile && tile.parentElement === strip.current) return tile.querySelector<HTMLButtonElement>("[data-workflow-reference-asset]")?.dataset.workflowReferenceAsset;
     const row = strip.current;
     if (!row || hit !== row) return;
     // The narrow gap between thumbnails is also a valid drop target.
@@ -73,7 +74,7 @@ export function WorkflowGenerationReferences({ assets, disabled, onMove }: {
       const name = media === "audio" ? "参考音频" : media === "video" ? "参考视频" : media === "image" ? "参考图" : "参考素材";
       const selected = drag?.from === asset.id;
       const target = drag?.to === asset.id && !selected;
-      return <button key={asset.id} type="button" disabled={!movable} data-workflow-reference-asset={asset.id}
+      return <div key={asset.id} className="workflow-reference-tile"><button type="button" disabled={!movable} data-workflow-reference-asset={asset.id}
         className={selected ? "is-dragging" : target ? (index < fromIndex ? "is-drop-before" : "is-drop-after") : undefined}
         aria-label={`${name} ${index + 1}，${asset.name}`} aria-keyshortcuts={movable ? "ArrowLeft ArrowRight" : undefined}
         title={movable ? `${asset.name} · 拖动或按左右方向键调整顺序` : asset.name}
@@ -109,14 +110,19 @@ export function WorkflowGenerationReferences({ assets, disabled, onMove }: {
               const row = strip.current;
               if (!row || !row.contains(button)) return;
               button.focus({ preventScroll: true });
-              if (button.offsetLeft < row.scrollLeft) row.scrollLeft = button.offsetLeft;
-              else if (button.offsetLeft + button.offsetWidth > row.scrollLeft + row.clientWidth) row.scrollLeft = button.offsetLeft + button.offsetWidth - row.clientWidth;
+              button.scrollIntoView({ block: "nearest", inline: "nearest" });
             });
           }
         }}
         onLostPointerCapture={cancel} onPointerCancel={cancel}>
         <WorkflowMediaThumbnail asset={asset} draggable={false} />
-      </button>;
+      </button>
+        <button type="button" className="workflow-reference-remove" data-workflow-reference-remove={asset.id} disabled={disabled}
+          aria-label={`断开${name}：${asset.name}`} title={`断开${name}`}
+          onPointerDown={event => event.stopPropagation()} onClick={event => { event.stopPropagation(); onDisconnect(asset.id); }}>
+          <X size={14} />
+        </button>
+      </div>;
     })}
   </div>;
 }

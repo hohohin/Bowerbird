@@ -338,7 +338,8 @@ try {
   assert.ok(calls.every(call=>call.requestId===submitted.requestId));
   assert.ok((await page.evaluate(()=>window.environmentCalls)).every(call=>call.action!=='prepare'),'recovery only queries the original job');
   // Single-frame mode and a second explicit run get a new identity.
-  await card.getByRole('button',{name:/尾帧 · 1 个来源/}).click();
+  await card.locator('.comfy-frame-slot[aria-label="尾帧输入"]').hover();
+  await card.getByRole('button',{name:'断开尾帧',exact:true}).click();
   await page.evaluate(()=>{window.environmentPhase='ready';});
   await card.getByRole('button',{name:'运行此卡片',exact:true}).click();
   await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('comfy-calls')).filter(call=>call.action==='start').length===2);

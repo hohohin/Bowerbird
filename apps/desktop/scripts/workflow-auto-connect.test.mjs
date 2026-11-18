@@ -9,6 +9,16 @@ const documentOutputs = [
   { type: 'image', media: 'image', binding: { canvasNodeId: 'document', cellId: '*' } },
 ];
 const source = (id, media = 'image') => ({ type: 'image', media, binding: { assetId: id, assetNodeId: `card-${id}` } });
+test('a dimension wire resolves its saved text and source image for generation and agent cards', () => {
+  const image = { type: 'image', media: 'image', binding: { assetId: 'photo', assetNodeId: 'source' } };
+  const outputs = [{ type: 'text', binding: { ...image.binding, dimension: { title: '构图', body: '中心构图' } } }, image];
+  for (const kind of ['generation', 'agent']) {
+    const target = connect(node('target', kind), outputs);
+    const values = workflowInputValues([target], target);
+    assert.equal(values.text[0].text, '中心构图');
+    assert.deepEqual(values.image[0].assetIds, ['photo']);
+  }
+});
 test('whole text table reaches the Agent through native canvas input resolution', () => {
   const agent = connect(node('reader', 'agent'), documentOutputs);
   const table = { rows: [['标题', ''], ['第一屏', '内容']] };

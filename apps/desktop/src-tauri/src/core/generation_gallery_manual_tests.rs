@@ -32,6 +32,32 @@ fn merge(db: &Database, ids: &[&str]) -> GalleryMerge {
 fn filter() -> CatalogFilter { CatalogFilter { kind:"all".into(),media:"images".into(),..Default::default() } }
 
 #[test]
+fn image_card_gallery_survives_prompt_optimizer() {
+    let (_temp,db)=fixture();
+    let conn=db.conn.lock().unwrap();
+    conn.execute_batch(r#"
+      INSERT INTO canvas_nodes(id,project_id,thread_id,kind,asset_id,role,payload_json,x,y,width,height,created_at,updated_at)
+      SELECT 'gen-output:b',project_id,thread_id,kind,'b',role,'{"execution":{"job_id":"third","turn_key":"three"}}',x,y,width,height,3,3
+      FROM canvas_nodes WHERE id='gen-output:a';
+    "#).unwrap();
+    let history=serde_json::json!({"schema_version":1,"runs":[
+        {"steps":{"draw":{"jobId":"first"}}},
+        {"steps":{"draw":{"agentRunId":"optimize","comfyOptimization":{"original":"draft"}}}},
+        {"steps":{"draw":{"jobId":"second"},"another":{"jobId":"third"}}}
+    ]});
+    conn.execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p',1,?1)",[history.to_string()]).unwrap();
+    drop(conn);
+    let snapshot=db.project_canvas_snapshot("p").unwrap();
+    let group=|id:&str| {
+        let node=snapshot.nodes.iter().find(|n| n.id==id).unwrap();
+        serde_json::from_str::<serde_json::Value>(&node.payload_json).unwrap()["workflow_generation_group"].as_str().unwrap().to_owned()
+    };
+    assert_eq!(group("gen-output:a"),group("gen-output:c"));
+    assert_eq!(group("gen-output:a"),group("gen-prompt:second"));
+    assert_ne!(group("gen-output:a"),group("gen-output:b"));
+}
+
+#[test]
 fn manual_merge_preserves_provenance_and_survives_reopen_in_canvas_and_catalog() {
     let (temp,db)=fixture();
     let original=db.get_canvas_node("gen-prompt:first").unwrap().unwrap().payload_json;

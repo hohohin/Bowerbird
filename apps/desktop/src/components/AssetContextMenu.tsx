@@ -441,8 +441,7 @@ export function AssetContextMenu({ selection }: { selection?: {
         const nodeId = menu.canvasSelection?.nodeIds[0];
         const anchor = nodeId ? document.querySelector<HTMLElement>(`[data-canvas-node-id="${CSS.escape(nodeId)}"]`) : null;
         closeContextMenu();
-        if (anchor) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-peek", { detail: { assetId, anchor } }));
-        else useStore.getState().openCaptionRing(assetId);
+        window.dispatchEvent(new CustomEvent("bowerbird://board-asset-peek", { detail: { assetId, anchor, point: { x: menu.x, y: menu.y } } }));
       }}><Scan size={13} />维度</button>}
       {menu.canvasSelection && menu.canvasSelection.nodeIds.length > 0 && canChangeLibraryVisibility && <button role="menuitem" className={itemClass} disabled={busy} onClick={() => {
         window.dispatchEvent(new CustomEvent(CANVAS_ARTBOARD_FROM_IMAGE, { detail: { ...menu.canvasSelection, assetId } })); closeContextMenu();
