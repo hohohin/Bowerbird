@@ -648,7 +648,15 @@ pub async fn codex_create_image(
     };
     crate::core::generation_diagnostics::track_attempt(db.inner(), &diagnostic_id, &diagnostic_job_id, async {
     db.generation_diagnostic_phase(&diagnostic_id, &job_id, "validation", Some(&reference_images))?;
-    let dreamina_model = crate::codex::jimeng::image_model_version(dreamina_model_version.as_deref(), &dreamina_model)?;
+    let selected_cli = match provider.as_deref() {
+        Some("dreamina-web50pro") => Some("5.0Pro"),
+        Some("dreamina-web47") => Some("4.7"),
+        Some("dreamina-web40") => Some("4.0"),
+        Some("dreamina-web50flash" | "dreamina-web50lite") => return Err(AppError::Jimeng("当前即梦 CLI 不支持此模型，请重新选择".into())),
+        _ => None,
+    };
+    let provider = if selected_cli.is_some() { Some("jimeng".to_owned()) } else { provider };
+    let dreamina_model = crate::codex::jimeng::image_model_version(selected_cli.or(dreamina_model_version.as_deref()), &dreamina_model)?;
     let internal_agent = internal_agent.unwrap_or(false);
     let media = media.unwrap_or_else(|| "image".into());
     if !matches!(media.as_str(), "image" | "video") {
@@ -1411,6 +1419,7 @@ pub async fn recover_cloud_video(app: AppHandle, db: State<'_, Arc<Database>>, p
 /// 未完成生成 job 的摘要（前端启动重建 genJobs 用，Task 5 启动恢复）。
 #[derive(Debug, Clone, Serialize)]
 pub struct GenJobSummary {
+    pub dreamina_model_version: Option<String>,
     pub id: String,
     pub media: String,
     pub video_options: Option<serde_json::Value>,
@@ -1467,8 +1476,10 @@ fn running_generation_summaries(db: &Database, annotations_dir: Option<&std::pat
                     Vec::new()
                 }
             };
+            let dreamina_model_version = db.recorded_dreamina_version(&j);
             let submit_id = if j.provider == h3_image::KEY { j.submit_id.as_deref().and_then(h3_image::session) } else { j.submit_id };
             GenJobSummary {
+                dreamina_model_version,
                 turns,
                 running: matches!(
                     j.status.as_str(),
@@ -1507,6 +1518,7 @@ fn running_generation_summaries(db: &Database, annotations_dir: Option<&std::pat
 /// （面板缩略图 / 复用还原用）。
 #[derive(Debug, Clone, Serialize)]
 pub struct RecentGenSession {
+    pub dreamina_model_version: Option<String>,
     pub id: String,
     pub media: String,
     pub video_options: Option<serde_json::Value>,
@@ -1580,8 +1592,10 @@ pub async fn recent_gen_sessions(
             if j.media == "video" {
                 ref_assets = db.generation_reference_assets(&j.references, Some(&annotations_dir))?;
             }
+            let dreamina_model_version = db.recorded_dreamina_version(&j);
             let submit_id = if j.provider == h3_image::KEY { j.submit_id.as_deref().and_then(h3_image::session) } else { j.submit_id };
             out.push(RecentGenSession {
+                dreamina_model_version,
                 id: j.id,
                 media: j.media,
                 video_options: j.video_options,
@@ -1941,6 +1955,7 @@ mod generation_task_tests {
         let db = Database::open(&path).unwrap();
         db.migrate().unwrap();
         let mut job = running_job("same-job");
+        job.provider = "jimeng".into();
         job.turn_key = Some("failed-first".into());
         Task::upsert_gen_job(&db, &job).unwrap();
         Task::mark_failed(&db, &job.id, "first failure").unwrap();
@@ -1948,13 +1963,14 @@ mod generation_task_tests {
         db.finish_generation_diagnostic(&first, &job.id, Some("first failure")).unwrap();
         job.turn_key = Some("running-retry".into());
         Task::upsert_gen_job(&db, &job).unwrap();
-        db.begin_generation_diagnostic(&serde_json::json!({"jobId":job.id,"turnKey":"running-retry","prompt":"test"})).unwrap();
+        db.begin_generation_diagnostic(&serde_json::json!({"jobId":job.id,"turnKey":"running-retry","prompt":"test","provider":"jimeng","dreaminaModelVersion":"4.7"})).unwrap();
         drop(db);
         let db = Database::open(&path).unwrap();
         let summaries = super::running_generation_summaries(&db, None, None).unwrap();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, "same-job");
         assert!(summaries[0].session_id.is_none());
+        assert_eq!(summaries[0].dreamina_model_version.as_deref(), Some("4.7"));
         assert_eq!(summaries[0].turn_key.as_deref(), Some("running-retry"));
         assert_eq!(summaries[0].turns.len(), 1);
         assert_eq!(summaries[0].turns[0].error.as_deref(), Some("first failure"));

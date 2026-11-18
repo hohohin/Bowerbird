@@ -16,6 +16,11 @@ use tauri::{
 use tokio::sync::mpsc;
 
 pub fn model(key: Option<&str>) -> Option<(&'static str, &'static str)> {
+    (key == Some("dreamina-web55")).then_some(("dreamina-web55", "Seedream 5.5"))
+}
+
+// Earlier releases submitted these models via web; interrupted web jobs have no CLI submit ID.
+pub fn historical_model(key: Option<&str>) -> Option<(&'static str, &'static str)> {
     Some(match key? {
         "dreamina-web55" => ("dreamina-web55", "Seedream 5.5"),
         "dreamina-web50pro" => ("dreamina-web50pro", "Seedream 5.0 Pro"),

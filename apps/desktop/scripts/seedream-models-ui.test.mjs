@@ -33,7 +33,7 @@ const trigger = page.locator('.composer-glass .provider-choice');
 const menu = page.getByRole('dialog', { name: '图像模型', exact: true });
 const option = key => menu.locator(`[data-model-key="${key}"]`);
 const group = menu.locator('[data-model-group="即梦"]');
-const versions = ['dreamina-web55', 'dreamina-web50pro', 'dreamina-web50flash', 'dreamina-web50lite', 'dreamina-web47', 'dreamina-web40'];
+const versions = ['dreamina-web55', 'dreamina-web50pro', 'dreamina-web47', 'dreamina-web40'];
 async function openJimeng() {
   await trigger.click();
   assert.equal(await option('dreamina-web55').count(), 0);
@@ -42,7 +42,7 @@ async function openJimeng() {
 try {
   await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/canvas-reference/preview.html?source-library');
   await ready();
-  await page.evaluate(() => window.store.setState({ dreaminaHealth: null }));
+  await page.evaluate(() => window.store.setState({ dreaminaHealth: { ok: true } }));
   for (const key of versions) {
     await openJimeng();
     assert.equal(await menu.locator('[data-source="personal"] [data-model-key]').count(), versions.length);
@@ -90,7 +90,20 @@ try {
   });
   await page.waitForFunction(() => !!window.releaseDiagnostic);
   await page.evaluate(() => window.releaseDiagnostic()); await page.evaluate(() => window.generationTest);
-  assert.equal(await page.evaluate(() => window.submittedModel.provider), 'dreamina-web50pro', 'follow-up uses the newly selected version');
+  const revised = await page.evaluate(() => window.submittedModel);
+  assert.deepEqual([revised.provider, revised.dreaminaModelVersion], ['jimeng', '5.0Pro'], 'follow-up freezes the CLI route and model');
+  for (const [key, version] of [['dreamina-web50pro', '5.0Pro'], ['dreamina-web47', '4.7'], ['dreamina-web40', '4.0']]) {
+    await page.evaluate(key => {
+      window.releaseDiagnostic = null;
+      window.submittedModel = null;
+      window.generationTest = window.store.getState().startGeneration('离线路由验证', [], '1:1', key);
+    }, key);
+    await page.waitForFunction(() => !!window.releaseDiagnostic);
+    await page.evaluate(() => window.releaseDiagnostic());
+    await page.evaluate(() => window.generationTest);
+    const request = await page.evaluate(() => window.submittedModel);
+    assert.deepEqual([request.provider, request.dreaminaModelVersion], ['jimeng', version], key);
+  }
   await page.evaluate(() => {
     const state = window.store.getState();
     window.store.setState({ cloudEntitlement: { ...state.cloudEntitlement, generation_services: [
@@ -101,6 +114,22 @@ try {
       { service: 'image_lite', label: 'Seedream 5.0 Lite', credits: 8 },
     ] } });
   });
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    const recent = api.recentGenSessions, running = api.listGenJobs;
+    api.recentGenSessions = async () => [{ id:'restart-cli', media:'image', provider:'jimeng', dreamina_model_version:'4.7',
+      turn_key:'old-turn', turns:[], status:'done', prompt:'续轮', references:[], session_id:'saved', created_at:1 }];
+    api.listGenJobs = async () => [];
+    try { await window.store.getState().loadGenJobs('restart-cli'); }
+    finally { api.recentGenSessions = recent; api.listGenJobs = running; }
+    window.releaseDiagnostic = null;
+    window.generationTest = window.store.getState().sendGenRevise('restart-cli', '恢复后续轮');
+  });
+  await page.waitForFunction(() => !!window.releaseDiagnostic);
+  await page.evaluate(() => window.releaseDiagnostic());
+  await page.evaluate(() => window.generationTest);
+  const restored = await page.evaluate(() => window.submittedModel);
+  assert.deepEqual([restored.provider, restored.dreaminaModelVersion], ['jimeng', '4.7']);
   await trigger.click();
   assert.equal(await option('bowerbird-cloud-image_seedream55').count(), 0, 'Cloud versions begin inside their family');
   assert.doesNotMatch(await menu.innerText(), /\d+\s*Bcoin\s*起/i);

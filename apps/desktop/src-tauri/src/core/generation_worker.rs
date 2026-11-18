@@ -42,7 +42,7 @@ fn provider_source_tag(provider: &str) -> &'static str {
     } else {
         match provider {
             "jimeng" | "dreamina" => "jimeng",
-            key if crate::codex::jimeng_web::model(Some(key)).is_some() => "jimeng",
+            key if crate::codex::jimeng_web::historical_model(Some(key)).is_some() => "jimeng",
             crate::codex::h3_image::KEY => crate::codex::h3_image::KEY,
             _ => "codex",
         }
@@ -401,7 +401,7 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
                 job.provider.as_str(),
                 "jimeng" | "dreamina" | "bowerbird-cloud" | crate::codex::h3_image::KEY
             ) && !job.provider.starts_with("bowerbird-cloud-") {
-                let message = if crate::codex::jimeng_web::model(Some(&job.provider)).is_some() {
+                let message = if crate::codex::jimeng_web::historical_model(Some(&job.provider)).is_some() {
                     "应用重启中断了即梦网页取回，请在即梦创作记录查看结果后再试"
                 } else { "app 重启中断，codex 会话不可恢复" };
                 let _ = Task::mark_failed(&db, &job.id, message);

@@ -471,6 +471,7 @@ export interface GenTurn {
  * 后端 task_queue upsert）。`running` = 该 job 当前有一个 turn 在跑（用于派生全局 generating）。
  */
 export interface GenJob {
+  dreaminaModelVersion?: string | null;
   progress?: import("./generationProgress").GenerationProgress;
   preview?: { turnKey: string; dataUrl: string };
   media?: GenerationMedia;
@@ -688,6 +689,7 @@ export interface EntitlementSnapshot {
 
 /** 未完成生成 job 摘要（list_gen_jobs 命令返回，前端启动重建 genJobs 用）。字段对齐后端 GenJobSummary。 */
 export interface GenJobSummary {
+  dreamina_model_version?: string | null;
   turns?: GenerationHistoryTurn[];
   reference_node_ids?: Array<string | null>;
   video_options?: VideoOptions | null;
@@ -716,6 +718,7 @@ export interface GenJobSummary {
 /** 会话面板历史恢复项（recent_gen_sessions 命令返回）：终态（done/failed）生成 job +
  * 从 generation_meta 重建的各轮时间线（含产出图）。status 取 task_queue 列（权威终态）。 */
 export interface RecentGenSession {
+  dreamina_model_version?: string | null;
   reference_node_ids?: Array<string | null>;
   submit_id?: string | null;
   media?: GenerationMedia;

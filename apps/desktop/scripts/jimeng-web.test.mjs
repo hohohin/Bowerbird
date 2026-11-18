@@ -26,22 +26,28 @@ try {
       return canvas.toDataURL();
     }
     document.querySelector("article img").src = picture("blue");
-    const refs = document.querySelector("[data-content-generator-references]");
-    refs.addEventListener("drop", event => {
+    let refs = document.querySelector("[data-content-generator-references]");
+    function receiveFiles(event) {
+      // The composer may remount its reference slots when the drop changes state.
+      const currentRefs = refs.cloneNode(false);
+      refs.replaceWith(currentRefs);
+      refs = currentRefs;
+      refs.addEventListener("drop", receiveFiles);
       Array.from(event.dataTransfer.files).forEach((file, index) => {
         const slot = document.createElement("div");
         slot.dataset.index = String(index);
         const image = new Image();
         image.src = URL.createObjectURL(file);
         slot.append(image);
-        refs.append(slot);
+        currentRefs.append(slot);
         const mention = document.createElement("span");
         mention.className = "node-referenceMentionTag";
         mention.contentEditable = "false";
         mention.textContent = file.name;
         editor.append(mention);
       });
-    });
+    }
+    refs.addEventListener("drop", receiveFiles);
     document.querySelector('[aria-label="生成"]').onclick = () => {
       submissions++;
       const card = document.querySelector("article").cloneNode(true);

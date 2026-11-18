@@ -1,6 +1,6 @@
 import { canUseGenerationProvider } from "./entitlement";
 import { canUseComfyVideo } from "./comfyVideo";
-import { dreaminaWebModel, H3_IMAGE, cloudGenProviders, isCloudProvider, normalizeGenerationProvider } from "./genProviders";
+import { dreaminaWebModel, dreaminaCliVersion, H3_IMAGE, cloudGenProviders, isCloudProvider, normalizeGenerationProvider } from "./genProviders";
 import type { AuthSnapshot, CodexHealth, EntitlementSnapshot } from "./types";
 
 export interface GenerationAvailabilityState {
@@ -41,12 +41,13 @@ export function generationProviderIssue(requestedProvider: string, state: Genera
     }
     return null;
   }
-  const jimeng = provider === "jimeng";
+  if (provider === "dreamina-web50flash" || provider === "dreamina-web50lite") return { message: "当前即梦 CLI 不支持此模型，请重新选择。" };
+  const jimeng = provider === "jimeng" || !!dreaminaCliVersion(provider);
   if (!jimeng && provider !== "codex" && !dreaminaWebModel(provider)) return { message: "此生成方式不可用，请重新选择模型。" };
   if (!cloudEntitlement) return { message: "账号权益尚未就绪，请检查账号状态。", settings: "account" };
   if (!canUseGenerationProvider(cloudEntitlement, provider)) return { message: "自有订阅需要 Pro 或 Studio 权益，请检查当前账号方案。", settings: "account" };
   const health = jimeng ? state.dreaminaHealth : state.codexHealth;
-  if (dreaminaWebModel(provider)) return null;
+  if (provider === "dreamina-web55") return null;
   if (health?.ok) return null;
   const name = jimeng ? "即梦" : "ChatGPT";
   const settings = jimeng ? "jimeng" : "codex";

@@ -59,11 +59,11 @@ async function composeJimeng(request, state) {
     return normalize(copy.textContent) === normalize(request.prompt);
   };
   await wait(() => matches(editor), "prompt");
-  const refs = form.querySelector("[data-content-generator-references]");
-  const attached = () => [...(refs?.querySelectorAll("[data-index]") ?? [])].filter(slot => slot.querySelector("img"));
+  const references = () => form.querySelector("[data-content-generator-references]");
+  const attached = () => [...(references()?.querySelectorAll("[data-index]") ?? [])].filter(slot => slot.querySelector("img"));
   if (attached().length) throw new Error("existing-refs");
   if (request.files.length) {
-    if (!refs) throw new Error("upload");
+    const refs = await wait(references, "upload");
     const transfer = new DataTransfer();
     for (const file of request.files) {
       const bytes = Uint8Array.from(atob(file.data), ch => ch.charCodeAt(0));
@@ -75,7 +75,7 @@ async function composeJimeng(request, state) {
     await wait(() => {
       const slots = attached();
       if (slots.length > request.files.length) throw new Error("ref-count");
-      return slots.length === request.files.length && !refs.querySelector('[aria-busy=true]') &&
+      return slots.length === request.files.length && !references()?.querySelector('[aria-busy=true]') &&
         slots.every(slot => { const img = slot.querySelector("img"); return img.complete && img.naturalWidth > 0; });
     }, "upload", 60000);
   }

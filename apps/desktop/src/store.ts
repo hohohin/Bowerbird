@@ -45,7 +45,7 @@ import type {
   TagCount,
   VisualProfileSummary,
 } from "./lib/types";
-import { canonicalProviderKey, defaultCloudProvider, isKnownGenProvider, normalizeGenerationProvider } from "./lib/genProviders";
+import { canonicalProviderKey, restoredImageProvider, dreaminaCliVersion, defaultCloudProvider, isKnownGenProvider, normalizeGenerationProvider } from "./lib/genProviders";
 import { normalizeAnnotationPrompt } from "./lib/annotationPrompt";
 import { notifyError } from "./lib/notify";
 import { notifyGenerationComplete } from "./lib/generationNotifications";
@@ -1858,7 +1858,7 @@ export const useStore = create<State>((set, get) => {
           }));
           // 已有任务但产物被移除或历史读取失败时，仍显示真实提交，不能当作未开始。
           if (turns.length === 0 || (failed && r.turn_key && !turns.some(turn => turn.turnKey === r.turn_key))) {
-            turns.push({ id: nextGenTurnId(), turnKey: r.turn_key ?? undefined, submitId: r.submit_id, prompt: r.prompt, promptRaw: null, images: [], provider: r.provider, media: r.media, videoOptions: r.video_options, ratio: r.ratio, refs: r.references, referenceNodeIds: r.reference_node_ids, refAssets: r.ref_assets });
+            turns.push({ id: nextGenTurnId(), turnKey: r.turn_key ?? undefined, submitId: r.submit_id, prompt: r.prompt, promptRaw: null, images: [], provider: restoredImageProvider(r.provider, r.dreamina_model_version), media: r.media, videoOptions: r.video_options, ratio: r.ratio, refs: r.references, referenceNodeIds: r.reference_node_ids, refAssets: r.ref_assets });
           }
           if (failed) {
             // 最新任务终态补齐最后一轮；早期失败由持久诊断历史恢复。
@@ -1879,7 +1879,8 @@ export const useStore = create<State>((set, get) => {
             lastRefs: r.references,
             refAssets: r.ref_assets,
             lastRatio: r.ratio ?? null,
-            provider: r.provider,
+            dreaminaModelVersion: r.dreamina_model_version,
+            provider: restoredImageProvider(r.provider, r.dreamina_model_version),
             projectId: r.project_id ?? null,
             visualProfile: r.visual_profile,
             visualProfileId: r.visual_profile?.profileId ?? null,
@@ -1911,7 +1912,7 @@ export const useStore = create<State>((set, get) => {
             id: nextGenTurnId(), turnKey: j.turn_key ?? undefined, submitId: j.submit_id,
             prompt: j.prompt, appliedPrompt: j.applied_prompt ?? null,
             images: [], media: j.media === "video" ? "video" : "image", videoOptions: j.video_options,
-            ratio: j.ratio, refs: j.references, referenceNodeIds: j.reference_node_ids, provider: j.provider,
+            ratio: j.ratio, refs: j.references, referenceNodeIds: j.reference_node_ids, provider: restoredImageProvider(j.provider, j.dreamina_model_version),
           });
           persistedJobs.push({
             id: j.id,
@@ -1926,7 +1927,8 @@ export const useStore = create<State>((set, get) => {
             lastRefs: j.references ?? [],
             refAssets: [],
             lastRatio: j.ratio ?? null,
-            provider: j.provider,
+            dreaminaModelVersion: j.dreamina_model_version,
+            provider: restoredImageProvider(j.provider, j.dreamina_model_version),
             projectId: j.project_id ?? null,
             visualProfile: j.visual_profile,
             visualProfileId: j.visual_profile?.profileId ?? null,
@@ -2004,9 +2006,10 @@ export const useStore = create<State>((set, get) => {
     // 会话级分组（含普通 job：conversationId 兜底 jobId）——后端 done 入库时落
     // generation_conversations（session → conversation），重启后瀑布流分组不丢。
     const conv = conversationId ?? jobId;
+    const dreaminaModelVersion = media === "image" ? dreaminaCliVersion(prov) ?? ((prov === "jimeng" || prov === "dreamina") ? get().settings?.dreamina_model_version ?? "5.0Pro" : null) : null;
     const job: GenJob = {
       id: jobId,
-      media, videoOptions,
+      media, videoOptions, dreaminaModelVersion,
       conversationId: conv,
       turns: [{ id: nextGenTurnId(), turnKey, media, videoOptions, referenceNodeIds, ratio: sentRatio, prompt: sentPrompt, promptRaw: rawPrompt ?? null, images: [], refAssets: references, provider: prov, startedAt: Date.now() }],
       sessionId: null,
@@ -2044,7 +2047,7 @@ export const useStore = create<State>((set, get) => {
       await api.codexCreateImage({
         jobId,
         prompt: sentPrompt,
-        dreaminaModelVersion: media === "image" && (prov === "jimeng" || prov === "dreamina") ? get().settings?.dreamina_model_version ?? "5.0Pro" : null,
+        dreaminaModelVersion,
         media, videoOptions, count, transparent,
         promptRaw: rawPrompt,
         // 借用维度源图 id（图 chip 被删、只借维度）：随 generation_meta 落库，复用时回绑车牌。
@@ -2052,7 +2055,7 @@ export const useStore = create<State>((set, get) => {
         referenceImages: refPaths,
         referenceNodeIds,
         ratio: sentRatio,
-        provider: prov,
+        provider: dreaminaCliVersion(prov) ? "jimeng" : prov,
         projectId: job.projectId,
         visualProfileId: selectedVisualProfileId,
         conversationId: conv,
@@ -2103,6 +2106,7 @@ export const useStore = create<State>((set, get) => {
       .filter((p): p is string => !!p);
     const exactRefs = opts?.exactReferences;
     const media = opts?.generation?.media ?? job.media ?? "image";
+    const dreaminaModelVersion = media === "image" ? dreaminaCliVersion(prov) ?? ((prov === "jimeng" || prov === "dreamina") ? job.dreaminaModelVersion ?? get().settings?.dreamina_model_version ?? "5.0Pro" : null) : null;
     const videoReferences = (exactRefs ?? reviseRefs).map(store_path => ({
       store_path, duration: opts?.references?.find(reference => reference.store_path === store_path)?.duration ?? null,
     }));
@@ -2136,7 +2140,7 @@ export const useStore = create<State>((set, get) => {
     // 续轮复用同 jobId（同一会话）；后端 task_queue upsert 刷新回 running。
     updateJob(jobId, (j) => ({
       ...j,
-      media, videoOptions, lastRatio: sentRatio, provider: prov,
+      media, videoOptions, dreaminaModelVersion, lastRatio: sentRatio, provider: prov,
       turns: [
         ...j.turns,
         {
@@ -2160,7 +2164,7 @@ export const useStore = create<State>((set, get) => {
     try {
       await api.codexCreateImage({
         jobId,
-        dreaminaModelVersion: media === "image" && (prov === "jimeng" || prov === "dreamina") ? get().settings?.dreamina_model_version ?? "5.0Pro" : null,
+        dreaminaModelVersion,
         prompt: sentText,
         media, videoOptions, count, transparent,
         promptRaw: opts?.rawPrompt ?? null,
@@ -2174,7 +2178,7 @@ export const useStore = create<State>((set, get) => {
         // 比例只传坞内显式选档；「自动」由后端按第一参考图（续轮=上一轮产出图）吸附档位——
         // 即梦 omit --ratio 固定回退 16:9，此前续轮 auto 落 16:9 横切竖图。
         ratio: sentRatio,
-        provider: prov,
+        provider: dreaminaCliVersion(prov) ? "jimeng" : prov,
         projectId: job.projectId,
         visualProfileId: job.visualProfileId ?? job.visualProfile?.profileId ?? null,
         threadId: job.threadId ?? null,
