@@ -1,6 +1,6 @@
 import { userErrorMessage } from "../lib/userError";
 import { useProjectChatSummaries, useLocalChatStore } from "../lib/localChatStore";
-import { localChat, localChatRunning, localChatStatusLabel, type ChatProvider } from "../lib/localChat";
+import { agentChatOptions, localChat, localChatRunning, localChatStatusLabel, type ChatProvider } from "../lib/localChat";
 import { AgentChatControls } from "./AgentChatControls";
 import { createdChatTurnCards, terminalDshTurnFailure, workflowAgentProvider } from "../lib/workflowAgentChat";
 import { chatDshStatus, chatQuote } from "../lib/chatCapabilities";
@@ -395,12 +395,12 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   }
   function disconnectReference(nodeId: string, assetId: string) {
     const current = controller.document.nodes.find(node => node.id === nodeId);
-    if (current?.kind !== "generation" || controller.isLocked(nodeId)) return;
+    if (!current || (current.kind !== "generation" && current.kind !== "agent") || controller.isLocked(nodeId)) return;
     patch(nodeId, disconnectGenerationReference(current, referencePreviewValues(current, true), assetId));
   }
   function moveReference(nodeId: string, fromId: string, toId: string) {
     const current = controller.document.nodes.find(node => node.id === nodeId);
-    if (current?.kind !== "generation" || controller.isLocked(nodeId)) return;
+    if (!current || (current.kind !== "generation" && current.kind !== "agent") || controller.isLocked(nodeId)) return;
     const values = referencePreviewValues(current);
     const order = generationReferencePreviewOrder(current, values, controller.document.nodes);
     const from = order.indexOf(fromId), to = order.indexOf(toId);
@@ -517,7 +517,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const provider = action === "new" ? undefined : action;
       if (conversationId) {
         await controller.flush();
-        const options = provider ? undefined : store.drafts[conversationId]?.codexOptions ?? store.summaries[conversationId]?.codexOptions ?? node.chatCodexOptions;
+        const options = provider ? agentChatOptions(provider) : store.drafts[conversationId]?.codexOptions ?? store.summaries[conversationId]?.codexOptions ?? node.chatCodexOptions;
         const chat = await localChat.newOnCard(projectId, node.id, conversationId, options, provider);
         store.applyConversation(chat);
         if (provider && chat.id === conversationId) {
@@ -533,7 +533,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           }
         }
       } else if (provider) {
-        patch(node.id, { chatProvider: provider, chatCodexOptions: undefined, chatDshSkill: undefined });
+        patch(node.id, { chatProvider: provider, chatCodexOptions: agentChatOptions(provider), chatDshSkill: undefined });
       } else {
         await controller.flush();
       }
@@ -1574,8 +1574,9 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const height = node.kind === "voice" ? 0 : node.kind === "generation" || node.kind === "comfy-video" ? 210 : node.kind === "trigger" ? 0 : node.kind === "loop" ? 260 : Math.max(330, 130 + Math.max(inputPorts.length, outputPorts.length) * 30);
       const outputImageIds = node.kind === "generation" || node.kind === "agent" ? [] : Object.values(node.outputs).flatMap(value => value.assetIds ?? []);
       const profileId = node.profileId || node.profileCache?.profileId || step?.profileId;
-      const inputIds = node.kind === "trigger" || node.kind === "generation" ? [] : Object.values(visibleInputs).flat().flatMap(inputImages);
-      const referenceIds = node.kind === "generation" ? generationReferencePreviewOrder(node, referencePreviewValues(node), document.nodes) : [];
+      const referenceCard = node.kind === "generation" || node.kind === "agent";
+      const inputIds = node.kind === "trigger" || referenceCard ? [] : Object.values(visibleInputs).flat().flatMap(inputImages);
+      const referenceIds = referenceCard ? generationReferencePreviewOrder(node, referencePreviewValues(node), document.nodes) : [];
       const references = referenceIds.map(id => assets.find(asset => asset.id === id)).filter((asset): asset is Asset => !!asset);
       const selectedImages = [...new Set(outputImageIds.length ? outputImageIds : inputIds)].map(id => assets.find(asset => asset.id === id)).filter((asset): asset is Asset => !!asset);
       let videoOptions = resolveVideoOptions(node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS, []);
@@ -1606,7 +1607,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const thumbnailWireIds = new Set<string>();
       const labelledInputs = Object.entries(visibleInputs).map(([port, inputs]) => [port, inputs.filter(input => {
         if (localVideo && (port === "first-frame" || port === "last-frame")) return false;
-        if (node.kind !== "generation" || (port !== "image" && port !== "text")) return true;
+        if (!referenceCard || (port !== "image" && port !== "text")) return true;
         const ids = inputImages(input);
         if (!ids.length || !ids.every(id => thumbnailIds.has(id))) return true;
         if (input.autoConnect) thumbnailWireIds.add(input.autoConnect);

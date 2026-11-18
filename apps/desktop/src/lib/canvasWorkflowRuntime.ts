@@ -31,7 +31,7 @@ import { canvasInputValue, reconcileCanvasWorkflowReferences, resolveGenerationC
 import { canvasConversationCards } from "./canvasConversationCards";
 import { canvasContentInput, contentInputAxisIndex } from "./canvasContentInput";
 import { agentResultValue } from "./workflowAgentResult";
-import { localChat, localChatRunning, type ChatConversation, type ChatProvider } from "./localChat";
+import { agentChatOptions, localChat, localChatRunning, type ChatConversation, type ChatProvider } from "./localChat";
 import { ensureLocalChatEvents, useLocalChatStore } from "./localChatStore";
 import { createdChatTurnCards, terminalDshTurnFailure, workflowAgentMessage, workflowAgentProvider, workflowChatOutputs } from "./workflowAgentChat";
 import { contentTableRows } from "./contentTable";
@@ -1446,7 +1446,7 @@ export class CanvasWorkflowController {
     }
   }
 
-  private async chatResult(runId: string, node: WorkflowNode, step: WorkflowStep, halted: () => boolean): Promise<Record<string, WorkflowValue> | null> {
+  private async chatResult(runId: string, node: WorkflowNode, step: WorkflowStep, assets: Asset[], halted: () => boolean): Promise<Record<string, WorkflowValue> | null> {
     const store = useLocalChatStore.getState();
     let input = step.chatInput;
     if (!input) {
@@ -1462,8 +1462,8 @@ export class CanvasWorkflowController {
       input = { requestId: crypto.randomUUID(), projectId: this.projectId, agentNodeId: node.id,
         ...(run.manualCardRun && run.startId === node.id ? { manualCardRun: true } : {}),
         conversationId: existing?.id ?? node.chatConversationId, provider,
-        codexOptions: selectedChatOptions(provider, existing ? useLocalChatStore.getState().drafts[existing.id]?.codexOptions ?? existing.codexOptions ?? node.chatCodexOptions : node.chatCodexOptions),
-        text: workflowAgentMessage(cloudAgentProfilePrompt(snapshot.prompt, snapshot.visualProfile), snapshot.source, provider),
+        codexOptions: selectedChatOptions(provider, agentChatOptions(provider, existing ? useLocalChatStore.getState().drafts[existing.id]?.codexOptions ?? existing.codexOptions ?? node.chatCodexOptions : node.chatCodexOptions)),
+        text: workflowAgentMessage(cloudAgentProfilePrompt(snapshot.prompt, snapshot.visualProfile), snapshot.source, provider, assets.map(asset => isVideoPath(asset.store_path!) ? "视频" : "图片")),
         referenceAssetIds: snapshot.assetIds,
         cardDefaults: { provider: useStore.getState().activeGenProvider || useStore.getState().defaultProvider, videoChannel: "jimeng", videoOptions: { ...DEFAULT_VIDEO_OPTIONS } },
         placement: { x: node.x, y: node.y, width: workflowCardWidth(node), height: node.layoutSize?.height ?? 330, zIndex: Date.now() % 1000000 } };
@@ -1960,6 +1960,9 @@ export class CanvasWorkflowController {
     }
     if (halted() || !snapshot.result) return;
     assertAccount();
+    if ("referenceCount" in snapshot.input && snapshot.result.trim() === snapshot.input.prompt.trim()) {
+      throw new Error(snapshot.keptOriginal ? "优化结果未保留完整的素材引用，已保留原提示词。可点击重试优化。" : "本次优化返回了相同的提示词，已保留原文。可点击重试优化。");
+    }
     const run = this.run(runId);
     await this.saveRun({ ...run, steps: { ...run.steps, [id]: { ...run.steps[id], status: "done", error: undefined, detail: snapshot.keptOriginal ? "优化结果的卡片引用不完整，已保留原提示词" : "提示词已替换" } } },
       this.document.nodes.map(item => item.id === id ? { ...item, prompt: "referenceCount" in snapshot.input ? snapshot.result! : cleanH3OptimizedPrompt(snapshot.result!) } : item));
@@ -2194,7 +2197,7 @@ export class CanvasWorkflowController {
       const assetIds = generated?.assetIds ?? step.agentInput?.assetIds ?? agentInput?.assetIds ?? [...new Set([...(values.image ?? []), ...(values.text ?? []), ...(values["first-frame"] ?? []), ...(values["last-frame"] ?? [])].flatMap(value => value.assetIds ?? []))];
       const assets = assetIds.length ? await api.getAssetsByIds(assetIds) : [];
       const video = node.kind === "generation" && node.generation?.media === "video";
-      const acceptsVideo = video || node.kind === "agent" && (node.skill === "hyperframes" || step.localAgentSkill === "hyperframes") || node.kind === "text" && node.textTarget?.image;
+      const acceptsVideo = video || node.kind === "agent" || node.kind === "text" && node.textTarget?.image;
       if (assets.length !== assetIds.length || assets.some(asset => !asset.store_path || !acceptsVideo && (asset.duration || isVideoPath(asset.store_path)))) throw new Error("输入素材已丢失或当前卡片仅支持静态图片，请重新选择");
       const orderedAssets = assetIds.map(id => assets.find(asset => asset.id === id)!);
       const prompt = generated?.prompt ?? [...(values.text ?? []).map(value => value.text?.replace(/@图片\d+/g, token => {
@@ -2416,7 +2419,7 @@ export class CanvasWorkflowController {
         if (outputTargets.length && !step.agentOutputTargets) await this.step(runId, id, { agentOutputTargets: outputTargets });
         let outputs: Record<string, WorkflowValue>;
         if (!step.localDsRequestId && !step.agentRunId) {
-          const result = await this.chatResult(runId, node, step, halted);
+          const result = await this.chatResult(runId, node, step, orderedAssets, halted);
           if (!result) return;
           outputs = result;
         } else if (step.localDsRequestId) {

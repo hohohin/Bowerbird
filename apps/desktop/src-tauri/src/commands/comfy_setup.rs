@@ -232,9 +232,13 @@ async fn detect(root: &Path, preferred: &str, existing: Vec<Installation>, mode:
     if mode.image() { endpoints.extend([MANAGED_ENDPOINT.into(),mode.existing_service().1.into()]); }
     endpoints.extend(state.existing.iter().map(|i| i.endpoint.clone()));
     let mut seen = std::collections::HashSet::new(); endpoints.retain(|value| seen.insert(value.clone()));
-    let results = futures_util::future::join_all(endpoints.iter().map(|base| probe(&http, base, mode))).await;
-    for (base, result) in endpoints.iter().zip(&results) {
+    use futures_util::StreamExt;
+    let mut pending: futures_util::stream::FuturesOrdered<_> = endpoints.iter().map(|base| probe(&http, base, mode)).collect();
+    let mut results = Vec::with_capacity(endpoints.len());
+    for base in &endpoints {
+        let result = pending.next().await.expect("one probe per endpoint");
         if matches!(result, Some(Ok(()))) { state.phase = "ready".into(); state.endpoint = base.clone(); state.message = "本机环境已就绪 · 模型与节点可用".into(); return Ok(state); }
+        results.push(result);
     }
     if let Some((base, Some(Err(error)))) = endpoints.iter().zip(&results).find(|(base, r)| r.is_some() && (!mode.image() || base.as_str() == mode.endpoint())) {
         state.phase = "unavailable".into(); state.endpoint = base.clone();
@@ -658,7 +662,7 @@ pub(crate) async fn prepare_image(app: &AppHandle, edit: bool) -> AppResult<Stri
     let mode = if edit { Mode::Edit } else { Mode::Image };
     let mut action = "prepare";
     loop {
-        let state = comfy_video_environment(app.clone(), app.state(), app.state(), action.into(), "http://127.0.0.1:8000".into(), None, None, Some(mode)).await?;
+        let state = comfy_video_environment(app.clone(), app.state(), app.state(), action.into(), mode.endpoint().into(), None, None, Some(mode)).await?;
         match state.phase.as_str() {
             "ready" => return Ok(state.endpoint),
             "installing" | "starting" => {

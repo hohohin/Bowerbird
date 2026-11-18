@@ -30,6 +30,21 @@ export function selectChatCodexModel(options: ChatCodexOptions, model: string, m
     ? options.reasoningEffort : selected?.defaultReasoningEffort;
   return { model, ...(effort ? { reasoningEffort: effort } : {}) };
 }
+const agentDshPreference = "bowerbird.agent.dsh-local.options";
+export function rememberAgentDshOptions(options: ChatCodexOptions) {
+  localStorage.setItem(agentDshPreference, JSON.stringify(options));
+}
+export function agentChatOptions(provider: ChatProvider, options?: ChatCodexOptions) {
+  if (provider !== "dsh-local") return options;
+  let preferred = options;
+  if (!preferred?.model) {
+    try { preferred = JSON.parse(localStorage.getItem(agentDshPreference) ?? "null"); }
+    catch { preferred = undefined; }
+  }
+  const model = DSH_MODELS.find(item => item.model === preferred?.model) ?? DSH_MODELS[0];
+  return selectChatCodexModel({ reasoningEffort: options?.reasoningEffort ?? preferred?.reasoningEffort }, model.model, DSH_MODELS);
+}
+
 export function chatCodexOptionError(options: ChatCodexOptions, models: ChatCodexModel[] | null): string | null {
   if (!options.model && !options.reasoningEffort) return null;
   if (!models) return "请先读取 Codex 模型列表后发送。";

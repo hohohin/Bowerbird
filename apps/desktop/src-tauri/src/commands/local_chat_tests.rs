@@ -38,12 +38,14 @@ fn local_chat_stream_accepts_notifications_before_start_ack_and_preserves_partia
         provider_thread: Some("thread".into()),
         ..Default::default()
     };
-    state
-        .apply(
-            &json!({"method":"turn/started","params":{"threadId":"thread","turn":{"id":"turn"}}}),
-        )
-        .unwrap();
+    state.apply(&json!({"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"old","status":"completed"}}})).unwrap();
     state.apply(&json!({"method":"item/agentMessage/delta","params":{"threadId":"thread","turnId":"turn","itemId":"a","delta":"保留内容"}})).unwrap();
+    assert!(state.provider_turn.is_none());
+    assert!(state.text().is_empty());
+    state.provider_turn = Some("turn".into());
+    while let Some(value) = state.early_notifications.pop_front() {
+        assert_eq!(state.apply(&value).unwrap(), None);
+    }
     assert!(state.apply(&json!({"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"turn","status":"failed","error":{"message":"offline fixture"}}}})).is_err());
     assert_eq!(state.text(), "保留内容");
 }

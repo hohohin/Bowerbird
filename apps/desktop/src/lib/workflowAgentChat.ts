@@ -22,7 +22,11 @@ export function createdChatTurnCards(chat: ChatConversation, turnId: string) {
   return (chat.actions ?? []).filter(action => action.turnId === turnId && action.conversationId === chat.id && action.status === "created").flatMap(action => action.cards);
 }
 
-export function workflowAgentMessage(prompt: string, source: string, provider: ChatProvider): string {
+export function workflowAgentMessage(prompt: string, source: string, provider: ChatProvider, media: readonly string[]): string {
+  if (media.length) {
+    const aliases = media.map((type, i) => `第 ${i + 1} 项（${type}）= image${i + 1}`).join("、");
+    prompt += `\n\n[本轮建卡参考素材] ${aliases}。按用户任务决定每项素材的用途。文字和表格保留原文、行列及附件对应关系；引用编号表示已连接的原件。用户要求复用、传递或据此生成时，把对应别名绑定到实际使用它的卡片和输入位置，在提示词中写清用途。generation 卡用 referenceAliases；H3 按用户指定的参考图、首帧、尾帧使用对应字段。仅用于分析的资料无需传给生成卡。读取内容与传递原件是两种操作；需要观察或转写时依据实际可用的内容和工具，缺少必要信息时说明具体缺口。不要臆测不可见内容。`;
+  }
   const data: unknown = JSON.parse(source);
   if (!data || typeof data !== "object" || !Object.keys(data).length) return prompt;
   const routing = "__outputTargets" in data ? '\n最终回复仅返回 JSON：{"format":"bowerbird-deliveries","deliveries":[{"target":"output1","text":"该位置文字","inputImages":[1],"generatedImages":[]}]}。每个 __outputTargets 指定位置恰好一次；inputImages 为本轮附件的 1 起始编号，generatedImages 为本轮视频工具交付素材的 1 起始编号；图片位置省略 text。不要创建额外内容卡代替这些指定位置。' : "";

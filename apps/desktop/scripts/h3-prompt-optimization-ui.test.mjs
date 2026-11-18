@@ -302,6 +302,17 @@ try {
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === 'image-h3').prompt === '透明玻璃杯，杯沿反射窗边的柔光。');
   assert.equal(await page.evaluate(() => window.optimizeStarts.length), prior + 1, 'restoring history never submits another optimization');
   await page.keyboard.press('Escape');
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    api.cloudAgentGet = async runId => ({ runId, status: 'succeeded', snapshot: { run: {}, events: [
+      { type: 'text.result', display_payload: { schemaVersion: 1, text: window.optimizeStarts.at(-1).textRewrite.source } }] } });
+  });
+  await imageCard.getByRole('button', { name: '优化提示词', exact: true }).click();
+  await page.waitForFunction(() => {
+    const doc = JSON.parse(sessionStorage.getItem('workflow-p')).document;
+    return doc.run.status === 'failed' && doc.run.steps['image-h3'].error.includes('相同的提示词')
+      && doc.nodes.find(node => node.id === 'image-h3').prompt === '透明玻璃杯，杯沿反射窗边的柔光。';
+  });
   assert.deepEqual(errors, []);
   console.log('H3 explicit optimization: no automatic Cloud/local chain; direct replacement/edit then manual generation; three modes, entitlement, stop, account, invalid output, unknown submission and recovery passed');
 } catch (error) { console.error(error); throw error; }

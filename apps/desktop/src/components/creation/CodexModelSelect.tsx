@@ -10,8 +10,8 @@ export function useChatCodexModels() {
 }
 
 const effortLabels: Record<string, string> = { off: "关闭", max: "最高", none: "无推理", minimal: "极低", low: "低", medium: "中", high: "高", xhigh: "极高" };
-export function CodexModelSelect({ value, onChange, catalog, disabled, provider = "codex-local" }: {
-  provider?: import("../../lib/localChat").ChatProvider; value: ChatCodexOptions; onChange: (options: ChatCodexOptions) => void; catalog: ReturnType<typeof useChatCodexModels>; disabled?: boolean;
+export function CodexModelSelect({ value, onChange, catalog, disabled, allowServiceDefault = true, provider = "codex-local" }: {
+  allowServiceDefault?: boolean; provider?: import("../../lib/localChat").ChatProvider; value: ChatCodexOptions; onChange: (options: ChatCodexOptions) => void; catalog: ReturnType<typeof useChatCodexModels>; disabled?: boolean;
 }) {
   const codex = provider === "codex-local";
   const name = codex ? "Codex" : "DSH";
@@ -22,14 +22,14 @@ export function CodexModelSelect({ value, onChange, catalog, disabled, provider 
   return <div className="chat-codex-options" aria-busy={loading}>
     <TacticalSelect aria-label={name + " 模型"} title={name + " 模型"} value={value.model ?? (codex ? model?.model : "") ?? ""} disabled={disabled || loading || !models.length}
       onValueChange={next => onChange(selectChatCodexModel(value, next, models))}>
-      {!codex && <option value="">跟随服务配置</option>}
+      {allowServiceDefault && !codex && <option value="">跟随服务配置</option>}
       {!models.length && !value.model && <option value="" disabled>{loading ? "读取模型…" : "无可用模型"}</option>}
       {value.model && !model && <option value={value.model} disabled>{value.model}</option>}
       {models.map(item => <option key={item.model} value={item.model}>{item.displayName || item.model}</option>)}
     </TacticalSelect>
     <TacticalSelect aria-label={name + " 推理强度"} title={name + " 推理强度"} value={value.reasoningEffort ?? (codex || value.model ? model?.defaultReasoningEffort : "") ?? ""} disabled={disabled || loading || !efforts.length}
       onValueChange={next => onChange({ model: model?.model, reasoningEffort: next })}>
-      {!codex && !value.model && !value.reasoningEffort && <option value="" disabled>跟随服务配置</option>}
+      {allowServiceDefault && !codex && !value.model && !value.reasoningEffort && <option value="" disabled>跟随服务配置</option>}
       {!efforts.length && !value.reasoningEffort && <option value="" disabled>{loading ? "读取中…" : "无可选强度"}</option>}
       {value.reasoningEffort && !efforts.some(item => item.reasoningEffort === value.reasoningEffort) && <option value={value.reasoningEffort} disabled>{effortLabels[value.reasoningEffort] ?? value.reasoningEffort}</option>}
       {efforts.map(item => <option key={item.reasoningEffort} value={item.reasoningEffort}>{effortLabels[item.reasoningEffort] ?? item.reasoningEffort}</option>)}

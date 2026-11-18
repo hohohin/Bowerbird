@@ -1,5 +1,5 @@
 import type { WorkflowNode } from "../lib/canvasWorkflow";
-import type { ChatProvider } from "../lib/localChat";
+import { agentChatOptions, rememberAgentDshOptions, type ChatProvider } from "../lib/localChat";
 import { workflowAgentProvider } from "../lib/workflowAgentChat";
 import { ChatProviderSelect, useChatProviderAccess } from "./creation/ChatProviderSelect";
 import { CodexModelSelect, useChatCodexModels } from "./creation/CodexModelSelect";
@@ -22,8 +22,9 @@ export function AgentChatControls({ node, busy, onChange, onProviderChange, newC
       onChange={next => { if (next !== provider) onProviderChange(next); }} />
       {newChatAction}
     </div>
-    <CodexModelSelect provider={provider} value={options ?? {}} catalog={models} disabled={busy}
+    <CodexModelSelect provider={provider} allowServiceDefault={provider !== "dsh-local"} value={agentChatOptions(provider, options) ?? {}} catalog={models} disabled={busy}
       onChange={chatCodexOptions => {
+        if (provider === "dsh-local") rememberAgentDshOptions(chatCodexOptions);
         if (conversationId) useLocalChatStore.getState().setDraft(conversationId, { ...localChatDraft(conversationId), codexOptions: chatCodexOptions });
         else onChange({ chatCodexOptions });
       }} />

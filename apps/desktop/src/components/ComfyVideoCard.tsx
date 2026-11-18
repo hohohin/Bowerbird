@@ -61,6 +61,7 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
   const panelId = useId();
   const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
   const mode = imageMode ?? comfyVideoMode(options);
+  const endpoint = imageMode ? "http://127.0.0.1:18190" : options.endpoint;
   const dialog = useRef<HTMLDialogElement>(null);
   const dot = useRef<HTMLButtonElement>(null);
   const [environment, setEnvironment] = useState<ComfyEnvironment>();
@@ -88,25 +89,25 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
     const token = ++request.current;
     setChecking(true);
     const timer = window.setTimeout(() => {
-      comfyEnvironment("detect", options.endpoint, directory, undefined, mode).then(state => {
+      comfyEnvironment("detect", endpoint, directory, undefined, mode).then(state => {
         if (mounted.current && request.current === token) accept(state);
       }).catch(error => { if (mounted.current && request.current === token) setConnectionError(String(error)); })
         .finally(() => { if (mounted.current && request.current === token) setChecking(false); });
     }, 250);
     return () => { window.clearTimeout(timer); request.current++; };
-  }, [options.endpoint, directory, refresh, disabled, mode]);
+  }, [endpoint, directory, refresh, disabled, mode]);
   useEffect(() => {
     if (environment?.phase !== "installing" && environment?.phase !== "starting") return;
     let stopped = false;
     let timer: number;
     async function poll() {
-      try { const state = await comfyEnvironment("status", latest.current.options.endpoint, undefined, undefined, latest.current.mode); if (!stopped) accept(state); }
+      try { const state = await comfyEnvironment("status", endpoint, undefined, undefined, latest.current.mode); if (!stopped) accept(state); }
       catch (error) { if (!stopped) setConnectionError(String(error)); }
       if (!stopped) timer = window.setTimeout(poll, 1000);
     }
     timer = window.setTimeout(poll, 1000);
     return () => { stopped = true; window.clearTimeout(timer); };
-  }, [environment?.phase, mode]);
+  }, [environment?.phase, mode, endpoint]);
   useEffect(() => {
     let timer: number | undefined;
     const refreshEnvironment = () => {
@@ -159,7 +160,7 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
     request.current++; setChecking(false); setActing(true); setConnectionError("");
     try {
       if (needsDriver) setDriverOpening(true);
-      const state = await comfyEnvironment(needsDriver ? "driver" : environment?.canAddModels ? "install" : canPrepare ? "prepare" : "install", options.endpoint, directory, undefined, mode);
+      const state = await comfyEnvironment(needsDriver ? "driver" : environment?.canAddModels ? "install" : canPrepare ? "prepare" : "install", endpoint, directory, undefined, mode);
       if (mounted.current) {
         accept(state);
         if (needsDriver && state.driverDownload) await openExternal(state.driverDownload.url);

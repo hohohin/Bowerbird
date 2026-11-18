@@ -25,6 +25,7 @@ export function contentCardAcceptsMedia(output: AutomaticOutput): boolean {
 export function automaticInputMedia(node: WorkflowNode): AutomaticMedia[] {
   if (node.kind === "voice") return node.voice?.id ? [] : ["audio"];
   if (node.kind === "agent" && node.skill === "hyperframes" && node.agentTransport === "codex-cli") return ["image", "video", "audio"];
+  if (node.kind === "agent") return ["image", "video"];
   if (node.kind === "comfy-video" && node.comfyVideo?.mode === "text") return [];
   if (node.kind === "generation" && node.generation?.media === "video"
     && node.generation.videoOptions?.kind !== "frames2video"

@@ -653,6 +653,7 @@ struct StreamState {
     provider_thread: Option<String>,
     provider_turn: Option<String>,
     start_confirmed: bool,
+    early_notifications: std::collections::VecDeque<Value>,
     items: Vec<(String, String)>,
     last_saved: Option<Instant>,
     saved_text: String,
@@ -675,13 +676,14 @@ impl StreamState {
         let event_turn = params["turnId"]
             .as_str()
             .or_else(|| params["turn"]["id"].as_str());
-        if let Some(known) = self.provider_turn.as_deref() {
-            if event_turn != Some(known) {
-                return Ok(None);
+        let Some(event_turn) = event_turn else { return Ok(None) };
+        let Some(known) = self.provider_turn.as_deref() else {
+            if matches!(value["method"].as_str(), Some("item/agentMessage/delta" | "item/completed" | "turn/completed")) {
+                self.early_notifications.push_back(value.clone());
             }
-        } else if let Some(turn) = event_turn {
-            self.provider_turn = Some(turn.into());
-        } else {
+            return Ok(None);
+        };
+        if event_turn != known {
             return Ok(None);
         }
         match value["method"].as_str().unwrap_or("") {
@@ -894,8 +896,12 @@ async fn run_turn(
         let mut params = json!({"threadId":provider_thread,"input":input,"approvalPolicy":"never","sandboxPolicy":{"type":"readOnly","networkAccess":false}});
         if let Some(options) = &options { models::apply_turn(&mut params, options); }
         write_message(&mut writer,json!({"id":3,"method":"turn/start","params":params})).await?;
+        let mut confirmed_notifications = std::collections::VecDeque::new();
         loop {
-            let value = read_message(&mut reader).await?;
+            let value = match confirmed_notifications.pop_front() {
+                Some(value) => value,
+                None => read_message(&mut reader).await?,
+            };
             if value["method"] == "item/tool/call" && value.get("id").is_some() {
                 if value["params"]["tool"] == "hyperframes_video" {
                     let result = match card_call(&value, &stream) {
@@ -958,13 +964,6 @@ async fn run_turn(
                 let provider_turn = value["result"]["turn"]["id"]
                     .as_str()
                     .ok_or_else(|| error("Codex 未返回轮次编号"))?;
-                if stream
-                    .provider_turn
-                    .as_deref()
-                    .is_some_and(|known| known != provider_turn)
-                {
-                    return Err(error("Codex 本轮回复编号不一致"));
-                }
                 stream.provider_turn = Some(provider_turn.into());
                 // Do not replace a legacy provider thread until its history and new input
                 // have been accepted. A canceled/failed preparation can then retry migration.
@@ -985,6 +984,7 @@ async fn run_turn(
                 }
                 db.set_local_chat_provider_turn(turn, provider_turn)?;
                 stream.start_confirmed = true;
+                confirmed_notifications = std::mem::take(&mut stream.early_notifications);
             } else {
                 let result = stream.apply(&value)?;
                 stream.save(app, db, id, turn, result.is_some())?;
