@@ -123,6 +123,7 @@ export function dreaminaModelLabel(version = "5.0Pro"): string {
 /** Display names only; routing keys and stored history remain unchanged. */
 export function imageProviderLabel(provider: string | null | undefined, entitlement: EntitlementSnapshot | null = null, dreaminaVersion: string | null = "5.0Pro"): string {
   if (provider === H3_IMAGE) return H3_IMAGE_OPTION.label;
+  if (provider === "comfy-h3") return "本地 H3 视频";
   const webModel = dreaminaWebModel(provider);
   if (webModel) return webModel.label;
   if (provider === "codex" || provider === "codex-cli") return "gpt-image-2";

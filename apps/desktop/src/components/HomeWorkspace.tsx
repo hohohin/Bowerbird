@@ -52,7 +52,7 @@ export function HomeWorkspace({ active = true, shortcutsEnabled = true, onCreate
         {libraryActive && <LibraryComposer onLocalVideoStarted={registerLibraryLocalVideo} onOpenLibrary={openLibrary}/>}
       </PreservedWorkspace>
       {preview && (isVideoPath(preview.asset.store_path)
-        ? <LibraryVideoPreview path={preview.asset.store_path!} sourceKey={videoSourceKey(preview.asset)} projectId={null} onClose={creationImage.close}/>
+        ? <LibraryVideoPreview asset={preview.asset} job={preview.job} path={preview.asset.store_path!} sourceKey={videoSourceKey(preview.asset)} projectId={null} onClose={creationImage.close}/>
         : <CreationImagePreview asset={preview.asset} projectId={null} job={preview.job} onClose={creationImage.close}/>)}
     </div>
     {visitedProjects && <div className="home-workspace-page" data-suspended={!projectsActive}>

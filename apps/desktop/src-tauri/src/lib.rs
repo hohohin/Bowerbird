@@ -783,6 +783,8 @@ pub fn run() {
             commands::local_chat::local_chat_dsh_account,
             commands::local_chat::local_chat_dsh_setup,
             commands::local_chat::local_chat_recover,
+            commands::local_chat::local_chat_questions,
+            commands::local_chat::local_chat_answer_question,
             commands::local_chat::local_chat_send,
             commands::local_chat::local_chat_new_on_card,
             commands::local_chat::local_chat_stop,

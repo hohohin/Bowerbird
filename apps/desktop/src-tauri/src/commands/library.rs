@@ -1143,12 +1143,20 @@ pub async fn generation_history(
     db: State<'_, Arc<Database>>,
     asset_id: String,
     project_id: Option<String>,
+    include_local_video: Option<bool>,
 ) -> Result<GenerationHistory, AppError> {
     // 标注缓存目录：参考图反查未命中时从中合成「不入库」标注图（复用提示词不丢参考）。
-    let annotations_dir = paths.inner().root.join("annotations");
+    let root = paths.inner().root.clone();
+    let annotations_dir = root.join("annotations");
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || {
-        db.generation_history(&asset_id, project_id.as_deref(), Some(&annotations_dir))
+        let history = db.generation_history(&asset_id, project_id.as_deref(), Some(&annotations_dir))?;
+        if history.turns.is_empty() && include_local_video == Some(true) {
+            if let Some(local) = super::comfy_video::generation_history(&root, &db, &asset_id)? {
+                return Ok(local);
+            }
+        }
+        Ok(history)
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))?

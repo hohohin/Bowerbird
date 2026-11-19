@@ -78,7 +78,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
   const [moveIds, setMoveIds] = useState<string[] | null>(null);
   const [manageTags, setManageTags] = useState(false);
   const [references, setReferences] = useState(false);
-  const [preview, setPreview] = useState<{ path: string; sourceKey: string } | null>(null);
+  const [preview, setPreview] = useState<{ asset: Asset; path: string; sourceKey: string } | null>(null);
   const [working, setWorking] = useState(false);
   const [color, setColor] = useState<string | null>(savedPosition?.color ?? null);
   const revision = useCatalogRevision(media === "images" && !!color);
@@ -300,7 +300,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
     try {
       if (!asset.store_path) throw new Error("素材原文件不可用");
       const path = await externalFiles.media(asset.store_path);
-      if (canShowOverlay() && version === previewVersion.current) setPreview({ path, sourceKey: videoSourceKey(asset)! });
+      if (canShowOverlay() && version === previewVersion.current) setPreview({ asset, path, sourceKey: videoSourceKey(asset)! });
     } catch (error) { if (canShowOverlay() && version === previewVersion.current) notifyError(error, "无法预览素材"); }
   }
   function context(asset: Asset, x: number, y: number, location: CatalogLocation) {

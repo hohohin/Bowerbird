@@ -1,5 +1,35 @@
 # 对话 provider 实现记录
 
+## 2026-11-19 Codex CLI 画布待答（源码）
+
+Codex CLI 的 `item/tool/requestUserInput` 接入和本机 DSH 相同的待答气泡。桌面按对话、轮次和问题编号校验当前选项或文字，将答案发回同一个原生调用。重复提交在本机拦截。等待用户期间暂停本机执行时限，原生问题已结算且 Codex 成功结束后才交付工作流输出。短暂离开画板后可以回到仍在等待的调用。Codex 进程退出后可以接续原生会话，待答调用随原进程结束。[Codex App Server 协议](https://learn.chatgpt.com/docs/app-server#toolrequestuserinput)
+
+用托管 Codex CLI 0.170.0 和回环模拟模型核验普通与代码工具模式。未启用问答的旧会话跨进程按原 ID 接续，新一轮可原生提问并收到原调用的答案，历史由 Codex 自身恢复。画布用合成 IPC 核验关闭保留草稿和双击仅提交一次。
+
+## 2026-11-19 本机 DSH 画布待答与桌面回答（源码）
+
+本机 DSH 0.2 的新 Bowerbird 会话启用 timed 原生问答，默认无限等待。旧预设保留供原会话恢复。卡片仅展示原请求的未答工具调用。新问题自动显示气泡，× 收起并保留当前草稿，右上角「待你回答」打开同一问题。单题单选点即提交，自由答案支持输入框中的发送箭头及 Enter，中文输入法确认候选词不发送。多题或多选在整批填写后提交。
+
+桌面命令核对当前轮次、原 Session、callId 和选项。原调用存活时把答复交给原生事件，Host 重启后通过原生 `userQuestions/answer` 恢复原会话，重新挂载该轮建卡通道并观察原请求。答案排队期间保留等待提示。工作流沿原请求继续读取，全部问题结算且 Agent 成功返回结果后才允许交付。下游生图的崩溃派发验收及 Cloud DSH 的 ACP 适配仍单独跟进。
+
+验证使用真实 DSH Host 与回环模拟模型，覆盖桌面回答桥、冷恢复、正超时、并发补答与建卡回执保留。浏览器合成 IPC 覆盖关闭保留草稿、新问题打开、选项单次提交和文字输入。TypeScript 与 22 项本机 DSH 回归通过。
+
+## 2026-11-19 本机 DSH 原生提问恢复（隔离验收）
+
+桌面自动安装固定 DSH `0.2.2-rc.1`。同版本的本机实际 Host 在隔离预设中启用 `ask_user_question` 的 timed 模式，默认等待 `-1`。原调用存活时，`/api/remote.mux` 的 `$events` 流在重连后重新交付待答，答案发回 `$events/result`。Host 被终止后，原生 `userQuestions/answer` 可以按原 Session 和 callId 恢复并排队答案。以原生投影和同一 Session 的成功终态判断完成。[上游提问工具](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/interaction/tool-ask-user/README.md) · [上游问题投影](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/interaction/user-questions/src/projection.ts)
+
+本地回复读取器只跟随原请求工具调用关联的 `user-question-reply`，并在返回成功前查询该步骤是否还有未答问题。云端已记录的基线是 `0.1.1-rc.2` 与 ACP 会话桥，需要独立验收。[云端基线](../project_logs/2026-11-18-dsh-chat-resume.md)
+
+复跑入口为 `apps/desktop/src-tauri/tests/dsh-auto-host.py <Rust lib 测试二进制> --questions`。Windows 测试二进制副本使用与其它 DSH 探针相同的 Common Controls v6 清单。测试使用临时 DSH 资料目录、原生 SQLite 建卡事务和回环模拟模型。
+
+本机结果：真实 Host 的客户端重连、进程终止后补答、正超时后补答均通过。进程重启后两次并发提交只接纳一份，Session 只记录一条带原 callId 的回答，提问前已建的内容卡保留一张。正超时后模型提前结束的输出仍被未答投影拦截，回答后的新 turn 才交付最终正文。另有 22 项本机 DSH 回归通过。
+
+## 2026-11-19 Agent 卡内续聊与独立重跑（桌面源码）
+
+卡片与详情读取同一份会话和续聊草稿。卡片中段显示消息与公开工具回执，旧回复默认只显示一行，运行历史从记录区右上角打开。用户可以在卡片底部补充消息，单独通过「任务要求」修改可复用指令。「按当前输入重跑」开启新会话，并通过工作流重新读取接线和任务要求。普通建卡使用提交时用户设置的全局默认生图模型，显式指定仍由建卡服务校验。
+
+Codex 续聊保留原生 thread，已存在的会话沿用其工具定义。需采用新工具定义时可开启新对话。原生会话无法恢复时提示用户，桌面不把本地转录提交给新会话。DSH 0.2 与 Cloud DSH 同样由原生会话管理上下文。
+
 ## 2026-11-18 模型选择与建卡参数（Windows 26.11.1801 已发布）
 
 发布前复核补齐旧版普通 completion 的视频字段过滤，旧工具保持 count／rows 与原 H3 分辨率枚举。chat-proxy 部署基于现役候选只增图片／视频能力字段，保留现役区分普通聊天与 DSH 的错误响应，不用工作区整文件覆盖线上。
@@ -22,7 +52,7 @@ Agent 建卡时可按用户要求在每张图片生成卡上填写 `provider`。
 
 ## 2026-11-15 在 DSH 中继续 Agent 卡片的原对话
 
-桌面向本机 DSH 投递每轮消息时只发送当轮正文与当轮素材引用说明。桌面历史保留在对话详情中，提交时不拼接旧消息、建卡回执或历史提示语。每轮仍使用独立的工具授权与恢复身份。
+桌面向本机 DSH 投递当轮正文与素材引用说明。DSH 0.2 的手动单卡运行与详情续聊共用 Harness 会话，由 Harness 保存和恢复上下文。此前按轮次创建的旧会话保留在历史中，首次使用新版续聊时建立新的 Harness 会话。自动流程、循环及旧版 DSH 0.1 仍按轮次隔离。每轮使用独立的工具授权和请求恢复身份。
 
 DSH Web 创建 Agent 时取得会话写锁。收到 `turn/end` 只表示一轮结束，Web 宿主仍可继续持有 Agent。此时另一个 DSH 进程能看到历史，尝试发送消息时会收到 `session/writer-held`。
 

@@ -80,9 +80,39 @@ try {
   assert.equal(await card.count(), 1);
   assert.equal(await panel.locator('[data-message-role="user"] .local-chat-text').first().textContent(), openingText, 'opening message preserves both newlines');
   const id = await panel.getAttribute('data-local-chat-id');
+  await close();
+  const question = card.getByRole('group', { name: 'Agent 提问', exact: true });
+  const turnId = await page.evaluate(async conversationId => {
+    const mock = await import('/scripts/fixtures/local-chat/mock.ts');
+    const chat = mock.inspect().conversations[conversationId];
+    if (chat.provider !== 'codex-local') throw new Error('expected Codex CLI');
+    const turnId = chat.messages[0].turnId;
+    mock.setQuestions(conversationId, [{
+      turnId, callId: 'codex-native-question', questions: [{
+        id: 'audience', question: '这张海报面向谁？', options: [{ label: '亲子家庭' }], multiSelect: false,
+      }],
+    }]);
+    return turnId;
+  }, id);
+  const answer = question.getByRole('textbox', { name: /文字答案/ });
+  await answer.fill('待提交的草稿');
+  await question.getByRole('button', { name: '关闭问题气泡', exact: true }).click();
+  await question.waitFor({ state: 'hidden' });
+  await card.getByRole('button', { name: '待你回答', exact: true }).click();
+  assert.equal(await answer.inputValue(), '待提交的草稿');
+  await question.getByRole('button', { name: '亲子家庭', exact: true }).dblclick({ delay: 10 });
+  await question.waitFor({ state: 'hidden' });
+  const questionResult = await page.evaluate(async () => (await import('/scripts/fixtures/local-chat/mock.ts')).inspect());
+  assert.deepEqual(questionResult.calls.filter(call => call.command === 'local_chat_answer_question').map(call => call.args), [{
+    conversationId: id, turnId, callId: 'codex-native-question', answers: [{ id: 'audience', selected: ['亲子家庭'] }],
+  }]);
+  assert.equal(questionResult.conversations[id].status, 'running');
+  assert.equal(questionResult.conversations[id].messages.filter(message => message.role === 'user').length, 1);
+  await card.getByRole('button', { name: '查看 Agent 详情', exact: true }).click();
+  await panel.waitFor();
   await fixture('追加回复片段');
   await panel.getByText('花影入月', { exact: true }).waitFor();
-  assert.doesNotMatch(await card.textContent(), /花影入月/, 'streamed text is only shown in the conversation');
+  await card.getByText('花影入月', { exact: true }).waitFor();
   await panel.getByRole('button', { name: '停止回复', exact: true }).click();
   await panel.getByText('已停止 · 已收到的内容已保留', { exact: true }).waitFor();
   assert.equal(await panel.locator('[data-message-role="user"]').count(), 1);
@@ -96,15 +126,29 @@ try {
   assert.equal(await panel.locator('[data-message-role="user"]').count(), 1, 'reply newline keys do not send');
   await reply.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 229, ctrlKey: true, isComposing: true, bubbles: true, cancelable: true });
   assert.equal(await panel.locator('[data-message-role="user"]').count(), 1, 'IME confirmation cannot send a reply');
-  await reply.press('Control+Enter');
-  await panel.locator('[data-message-role="user"]').nth(1).waitFor();
-  assert.equal(await panel.locator('[data-message-role="user"] .local-chat-text').last().textContent(), replyText, 'reply send preserves both newlines');
   await close();
+  const inline = card.getByRole('textbox', { name: '续聊消息', exact: true });
+  assert.equal(await inline.inputValue(), replyText, 'the inspector and card share the current draft');
+  await inline.fill('一行');
+  const oneLine = await inline.evaluate(el => el.offsetHeight);
+  await inline.fill(Array.from({ length: 12 }, (_, index) => String(index)).join('\n'));
+  const tall = await inline.evaluate(el => ({ height: el.offsetHeight, scroll: el.scrollHeight, client: el.clientHeight }));
+  assert.ok(tall.height > oneLine && tall.height <= 168 && tall.scroll > tall.client, 'composer grows to eight lines and then scrolls');
+  await inline.fill(replyText);
+  await inline.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 229, isComposing: true, bubbles: true, cancelable: true });
+  assert.equal(await card.locator('.workflow-agent-message.is-user').count(), 1);
+  await inline.press('Enter');
+  await card.locator('.workflow-agent-message.is-user').nth(1).getByText(replyText, { exact: true }).waitFor();
   await fixture('追加回复片段');
   await card.locator('[data-chat-status="running"]').waitFor();
   await fixture('完成回复');
   await card.locator('[data-chat-status="idle"]').waitFor();
-  assert.doesNotMatch(await card.textContent(), /花影入月/, 'completed reply is absent even inside collapsed elements');
+  const oldAnswer = card.getByRole('button', { name: /^展开 Agent 回答/ });
+  assert.equal(await oldAnswer.count(), 1, 'older replies render only the excerpt');
+  await oldAnswer.click();
+  await card.getByRole('button', { name: '收起', exact: true }).click();
+  assert.equal(await oldAnswer.count(), 1);
+  assert.equal(await card.getByRole('button', { name: '查看运行历史', exact: true }).count(), 0, 'ordinary turns do not create separate runs');
   assert.equal(await card.locator('.workflow-text-result, .workflow-image-result').count(), 0);
   await card.getByRole('button', { name: '查看 Agent 详情', exact: true }).click(); await panel.waitFor();
   assert.equal(await panel.getAttribute('data-local-chat-id'), id);
@@ -251,7 +295,31 @@ try {
     return action?.cards.length === 4 && action.cards.every(card =>
       document.querySelector(`[data-workflow-card="${card.id}"], [data-canvas-node-id="${card.id}"]`));
   });
-  assert.doesNotMatch((await card.allTextContents()).join(' '), /已创建内容、生成、循环和触发卡片/);
+  assert.match((await card.allTextContents()).join(' '), /已创建内容、生成、循环和触发卡片/);
+  assert.match((await card.locator('.workflow-agent-tool').allTextContents()).join(' '), /已创建.*文案/);
+  await close();
+  const currentCard = card.filter({ has: page.locator(`[data-local-chat-id="${id}"]`) });
+  const cardId = await currentCard.getAttribute('data-workflow-card');
+  const rerunCard = page.locator(`[data-workflow-card="${cardId}"]`);
+  const taskPrompt = await page.evaluate(cardId => window.localChatFixture.inspect().projects.p.workflow.document.nodes.find(card => card.id === cardId).prompt, cardId);
+  let previousId = id;
+  for (let iteration = 0; iteration < 2; iteration++) {
+    await rerunCard.getByRole('button', { name: '按当前输入重跑', exact: true }).click();
+    const running = rerunCard.locator('[data-local-chat-id][data-chat-status="running"]');
+    await running.waitFor();
+    const freshId = await running.getAttribute('data-local-chat-id');
+    assert.notEqual(freshId, previousId);
+    await fixture('完成回复');
+    await rerunCard.locator('[data-chat-status="idle"]').waitFor();
+    await rerunCard.getByRole('button', { name: '按当前输入重跑', exact: true }).waitFor();
+    const current = await page.evaluate(id => window.localChatFixture.inspect().conversations[id], freshId);
+    assert.equal(current.turnCount, 1);
+    assert.ok(current.messages[0].text.startsWith(taskPrompt), 'independent rerun uses the task instruction');
+    assert.ok(!current.messages[0].text.includes(replyText), 'continuation draft never replaces the task');
+    previousId = freshId;
+  }
+  await rerunCard.getByRole('button', { name: '查看运行历史', exact: true }).click();
+  assert.equal(await rerunCard.locator('.workflow-agent-history-list > button').count(), 2);
   assert.deepEqual(errors, []);
   console.log('PASS: independent and multiline drafts, Enter/Shift+Enter newlines, Ctrl+Enter sending, IME protection, composer history, stable/removable/restorable chat card, streaming/stop/close, revision ordering, failure recovery, refresh, project isolation and delayed draft cleanup, local access gates and layouts');
 } catch (error) {

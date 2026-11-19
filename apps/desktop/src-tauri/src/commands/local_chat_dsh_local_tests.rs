@@ -43,7 +43,7 @@ async fn dsh_auto_installed_host_creates_one_card_call_and_recovers_after_restar
     assert_other_writer(&peer, &session).await;
     let other = session_id(&uuid::Uuid::new_v4().to_string());
     host.rpc(ROUTE_CREATE, json!({"request":{"sessionId":other,"agentPreset":preset,"cwd":home}})).await.unwrap();
-    let pending = Pending { version: 1, base: config.base.clone(), session: session.clone(), rpc_id: "fixture".into(), after: -1 };
+    let pending = Pending { version: 1, base: config.base.clone(), session: session.clone(), rpc_id: "fixture".into(), after: -1, questions_enabled: true };
     let accepted = host.rpc(ROUTE_PROMPT, json!({"request":{"sessionId":session,"mode":"queue","requestId":pending.rpc_id,
         "content":[{"type":"text","text":"/fixture-card Create the fixture card using the skill's title."}]}})).await.unwrap();
     assert_eq!(accepted["accepted"], true);
@@ -62,14 +62,14 @@ async fn dsh_auto_installed_host_creates_one_card_call_and_recovers_after_restar
     // Keep the initiating process alive. Another official host sharing this DSH_HOME
     // must be able to acquire the writer and continue the same durable conversation.
     let continuation = Pending { version: 1, base: peer_config.base, session: session.clone(),
-        rpc_id: "peer-continuation".into(), after: -1 };
+        rpc_id: "peer-continuation".into(), after: peer.continuation_cursor(&session).await.unwrap(), questions_enabled: true };
     let accepted = peer.rpc(ROUTE_PROMPT, json!({"request":{"sessionId":session,"mode":"queue",
         "requestId":continuation.rpc_id,"content":[{"type":"text","text":"Continue this conversation."}]}})).await.unwrap();
     assert_eq!(accepted["accepted"], true);
     tokio::time::timeout(Duration::from_secs(45), async {
         loop {
             let events = host.events(&pending).await.unwrap();
-            let next = fold_history(&events, &continuation.rpc_id, -1).unwrap();
+            let next = fold_history(&peer.events(&continuation).await.unwrap(), &continuation.rpc_id, continuation.after).unwrap();
             if next.status().unwrap() == Some("done") {
                 assert_eq!(next.text, "done");
                 assert_eq!(fold_history(&events, &pending.rpc_id, -1).unwrap().status().unwrap(), Some("done"));
@@ -103,6 +103,227 @@ async fn assert_other_writer(peer: &Host, session: &str) {
         }}}
     })).send().await.unwrap().json().await.unwrap();
     assert_eq!(busy["result"]["error"]["code"], "session/writer-held", "{busy}");
+}
+
+#[tokio::test]
+#[ignore = "requires the isolated native DSH smoke fixture"]
+async fn dsh_native_question_survives_host_crash() {
+    let fixture = PathBuf::from(std::env::var_os("BOWERBIRD_DSH_AUTO_FIXTURE").unwrap());
+    let home = PathBuf::from(std::env::var_os("DSH_HOME").unwrap());
+    assert!(fixture.starts_with(std::env::temp_dir()) && home.starts_with(&fixture));
+    assert!(crate::codex::codex_cli::app_data_dir().unwrap().starts_with(&fixture));
+    assert_eq!(std::env::var("DEEPSEEK_API_KEY").unwrap(), "fixture");
+    assert!(std::env::var("DEEPSEEK_BASE_URL").unwrap().starts_with("http://127.0.0.1:"));
+    dsh::setup("auto", None, None).await.unwrap();
+    dsh::stop_owned().await;
+
+    let profile = home.join("profiles/web");
+    let source = preset_source(&handshake_path().unwrap());
+    let module = module_name(&source);
+    let preset = "bowerbird-question-fixture";
+    let block = preset_block_template(&module, preset);
+    write_private(&profile.join(module), &source).unwrap();
+    write_private(&profile.join("cordis.patch.yml"), &block).unwrap();
+
+    for case in ["live", "cold", "deadline"] {
+        let (mut process, connection) = dsh::unmodified_peer().await.unwrap();
+        let host = Host::connect(&connection.base, connection.auth.as_deref()).await.unwrap();
+        let session = session_id(&uuid::Uuid::new_v4().to_string());
+        let (db, conversation, turn) = cloud_chat::tests::cloud_turn_for("dsh-local");
+        let db = Arc::new(db);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let (card_db, card_chat, card_turn, card_session, captured) =
+            (db.clone(), conversation.clone(), turn.clone(), session.clone(), calls.clone());
+        let server = axum::Router::new().route("/cards", axum::routing::post(
+            move |axum::Json(body): axum::Json<Value>| {
+                assert_eq!(body["sessionId"], card_session);
+                let call_id = body["callId"].as_str().unwrap();
+                card_db.create_local_chat_cards(&card_chat, &card_turn, call_id, &body["arguments"]).unwrap();
+                captured.lock().unwrap().push(call_id.to_owned());
+                async { axum::Json(json!({"status":"fixture-card-created"})) }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let cards_url = format!("http://{}/cards", listener.local_addr().unwrap());
+        let gateway = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+        handshake_add(&session, &cards_url, "fixture").unwrap();
+        let created = host.rpc(ROUTE_CREATE, json!({"request":{"sessionId":session,"agentPreset":preset,"cwd":home}})).await.unwrap();
+        assert_eq!(created["agentPreset"], preset);
+        // The desktop only connects a question stream while sending an answer.
+        let mut events = if case == "live" { None } else { Some(open_question_events(&connection).await.0) };
+        let pending = Pending { version: 1, base: connection.base.clone(), session: session.clone(), rpc_id: "question-fixture".into(), after: -1, questions_enabled: true };
+        let text = if case == "deadline" { "Bowerbird question fixture with deadline" } else { "Bowerbird question fixture" };
+        let accepted = host.rpc(ROUTE_PROMPT, json!({"request":{"sessionId":session,"mode":"queue","requestId":pending.rpc_id,
+            "content":[{"type":"text","text":text}]}})).await.unwrap();
+        assert_eq!(accepted["accepted"], true);
+        let call = "audience-call";
+        if let Some(events) = &mut events {
+            let request = read_question_event(events).await;
+            assert_eq!(request["agentId"], session);
+            assert_eq!(request["request"]["wait"]["callId"], call);
+        }
+        let bridge = questions::QuestionTurn::fixture(host.clone(), pending.clone(), turn.clone());
+        db.set_local_chat_provider_turn(&turn, &bridge.checkpoint).unwrap();
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let batches = bridge.batches().await.unwrap();
+                if batches.first().is_some_and(|batch| batch.call_id == call) { break; }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }).await.unwrap();
+        let before = host.events(&pending).await.unwrap();
+        assert!(before.iter().any(|entry| entry["event"]["type"] == "tool/call" && entry["event"]["data"]["callId"] == call));
+        let waiting = fold_history(&before, &pending.rpc_id, -1).unwrap();
+        assert_eq!(waiting.status().unwrap(), None);
+        assert!(host.has_pending_questions(&session, &waiting).await.unwrap());
+        assert_eq!(db.get_local_chat(&conversation).unwrap().unwrap().actions.len(), 1);
+        let answer = json!({"answers":[{"id":"audience","selected":["亲子家庭"]}]});
+        let answers = serde_json::from_value::<Vec<questions::Answer>>(answer["answers"].clone()).unwrap();
+        bridge.validate(call, &answers).await.unwrap();
+        if case == "cold" {
+            process.kill().await.unwrap();
+            drop(events);
+            db.finish_local_chat(&conversation, &turn, "interrupted", None).unwrap();
+            let (stored_turn, checkpoint) = db.local_chat_dsh_question_checkpoint(&conversation).unwrap().unwrap();
+            assert_eq!(stored_turn, turn);
+            let resumed = db.resume_local_dsh_question(&conversation, &stored_turn, &checkpoint).unwrap();
+            assert_eq!(resumed.summary.turn_count, 1);
+            assert_eq!(resumed.summary.status, "running");
+            let (new_process, connection) = dsh::unmodified_peer().await.unwrap();
+            process = new_process;
+            let restored = Host::connect(&connection.base, connection.auth.as_deref()).await.unwrap();
+            let args = json!({"agentId":session,"callId":call,"answer":answer});
+            let (first, second) = tokio::join!(
+                restored.rpc("userQuestions/answer", args.clone()),
+                restored.rpc("userQuestions/answer", args),
+            );
+            let accepted = [first, second].into_iter().filter(|reply| matches!(reply, Ok(value) if value == true)).count();
+            assert_eq!(accepted, 1);
+            await_question_completion(&restored, &pending).await;
+            assert_eq!(restored.rpc("userQuestions/answer", json!({"agentId":session,"callId":call,"answer":answer})).await.unwrap(), false);
+            let history = restored.events(&pending).await.unwrap();
+            assert!(history.iter().any(|entry| entry["event"]["type"] == "tool/result" &&
+                entry["event"]["data"]["message"]["toolCallId"] == call &&
+                entry["event"]["data"]["error"]["code"] == "TOOL_OUTCOME_UNKNOWN"));
+            assert_eq!(history.iter().filter(|entry| entry["event"]["type"] == "user/message" &&
+                entry["event"]["data"]["source"]["kind"] == "user-question-reply" &&
+                entry["event"]["data"]["source"]["callId"] == call).count(), 1);
+        } else if case == "live" {
+            bridge.answer(call, &answers).await.unwrap();
+            await_question_completion(&host, &pending).await;
+        } else {
+            tokio::time::timeout(Duration::from_secs(20), async {
+                loop {
+                    let events = host.events(&pending).await.unwrap();
+                    let reply = fold_history(&events, &pending.rpc_id, pending.after).unwrap();
+                    if reply.status().unwrap() == Some("done") && reply.text == "PREMATURE_OUTPUT" {
+                        assert!(host.has_pending_questions(&session, &reply).await.unwrap());
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }).await.unwrap();
+            let accepted = host.rpc("userQuestions/answer", json!({"agentId":session,"callId":call,"answer":answer})).await.unwrap();
+            assert_eq!(accepted, true);
+            await_question_completion(&host, &pending).await;
+        }
+        process.kill().await.unwrap();
+        handshake_remove(&session);
+        gateway.abort();
+        assert_eq!(&*calls.lock().unwrap(), &["content-call"]);
+        let actions = db.get_local_chat(&conversation).unwrap().unwrap().actions;
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].cards.len(), 1);
+        println!("native question: {case} answer reached original step; one content card");
+    }
+}
+
+#[test]
+fn dsh_local_history_follows_only_an_answer_to_the_original_turns_question() {
+    let mut events = vec![
+        event(1, "turn/start", json!({"turn":1})),
+        event(2, "user/message", json!({"source":{"requestId":"original"}})),
+        event(3, "tool/call", json!({"name":"ask_user_question","callId":"ours"})),
+        event(4, "turn/end", json!({"turn":1,"reason":{"kind":"interrupted"}})),
+        event(5, "turn/start", json!({"turn":2})),
+        event(6, "user/message", json!({"source":{"kind":"user-question-reply","callId":"someone-elses"}})),
+        event(7, "turn/end", json!({"turn":2,"reason":{"kind":"completed"}})),
+    ];
+    assert_eq!(fold_history(&events, "original", -1).unwrap().target, Some(1));
+    events.extend([
+        event(8, "turn/start", json!({"turn":3})),
+        event(9, "user/message", json!({"source":{"kind":"user-question-reply","callId":"ours"}})),
+        event(10, "assistant/message", json!({"turn":3,"step":1,"message":{"content":[{"type":"text","text":"最终结果"}]}})),
+        event(11, "turn/end", json!({"turn":3,"reason":{"kind":"completed"}})),
+    ]);
+    let reply = fold_history(&events, "original", -1).unwrap();
+    assert_eq!(reply.target, Some(3));
+    assert_eq!(reply.status().unwrap(), Some("done"));
+    assert_eq!(reply.text, "最终结果");
+}
+
+type QuestionSocket = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+async fn open_question_events(config: &dsh::LocalConnection) -> (QuestionSocket, String) {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::{client::IntoClientRequest, Message};
+    let auth = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).no_proxy()
+        .build().unwrap().get(config.auth.as_deref().unwrap()).send().await.unwrap();
+    assert_eq!(auth.status(), reqwest::StatusCode::SEE_OTHER);
+    let cookie = auth.headers().get_all(reqwest::header::SET_COOKIE).iter()
+        .filter_map(|header| header.to_str().ok()?.split(';').next())
+        .filter(|cookie| cookie.starts_with("dsh-auth-")).collect::<Vec<_>>().join("; ");
+    assert!(!cookie.is_empty());
+    let ws = format!("{}/api/remote.mux", config.base.replacen("http://", "ws://", 1));
+    let mut request = ws.into_client_request().unwrap();
+    request.headers_mut().insert("cookie", cookie.parse().unwrap());
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    socket.send(Message::Text(json!({"type":"open","streamId":"questions","endpoint":"$events","payload":{"args":{}}}).to_string())).await.unwrap();
+    let ready = read_question_event(&mut socket).await;
+    assert_eq!(ready["type"], "ready");
+    (socket, ready["clientId"].as_str().unwrap().to_owned())
+}
+
+async fn read_question_event(socket: &mut QuestionSocket) -> Value {
+    use futures_util::StreamExt;
+    tokio::time::timeout(Duration::from_secs(25), async {
+        loop {
+            let message = socket.next().await.unwrap().unwrap();
+            if !message.is_text() { continue; }
+            let frame: Value = serde_json::from_str(message.to_text().unwrap()).unwrap();
+            assert_ne!(frame["type"], "error");
+            let value = &frame["value"];
+            if value["type"] == "ready" || value["event"] == "user-questions/request" { return value.clone(); }
+        }
+    }).await.unwrap()
+}
+
+async fn await_question_completion(host: &Host, pending: &Pending) {
+    let until = Instant::now() + Duration::from_secs(20);
+    loop {
+        let events = host.events(pending).await.unwrap();
+        let mut final_turn = None;
+        for entry in &events {
+            let event = &entry["event"];
+            let data = &event["data"];
+            if event["type"] == "assistant/message" && data["message"]["content"].as_array().is_some_and(|blocks| {
+                blocks.iter().any(|block| block["type"] == "text" && block["text"] == "FINAL_AFTER_ANSWER")
+            }) {
+                final_turn = data["turn"].as_i64();
+            }
+            if event["type"] == "turn/end" && final_turn.is_some() && final_turn == data["turn"].as_i64() {
+                assert_eq!(data["reason"]["kind"], "completed");
+                let reply = fold_history(&events, &pending.rpc_id, pending.after).unwrap();
+                assert_eq!(reply.target, final_turn);
+                assert_eq!(reply.status().unwrap(), Some("done"));
+                assert_eq!(reply.text, "FINAL_AFTER_ANSWER");
+                assert!(!host.has_pending_questions(&pending.session, &reply).await.unwrap());
+                return;
+            }
+        }
+        assert!(Instant::now() < until, "fixture final reply not found; end reasons: {:?}",
+            events.iter().filter(|entry| entry["event"]["type"] == "turn/end").map(|entry| &entry["event"]["data"]["reason"]).collect::<Vec<_>>());
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
 }
 
 async fn authorize_fixture_account(platform: &str) {
@@ -236,7 +457,7 @@ fn dsh_local_unreadable_or_incomplete_patch_is_preserved() {
 fn dsh_local_confirmed_failure_persists_on_the_original_assistant_message() {
     let (db, id, turn) = cloud_chat::tests::cloud_turn_for("dsh-local");
     let pending = Pending { version: 1, base: "http://localhost:3080".into(),
-        session: session_id(&turn), rpc_id: "wanted".into(), after: -1 };
+        session: session_id(&turn), rpc_id: "wanted".into(), after: -1, questions_enabled: true };
     let saved = serde_json::to_string(&pending).unwrap();
     db.set_local_chat_provider_turn(&turn, &saved).unwrap();
     let reply = Reply { reason: Some("error".into()), failure: Some(("MALFORMED_RESPONSE".into(),
@@ -530,6 +751,14 @@ fn dsh_local_profile_patch_is_appended_once_and_rewritten_in_place() {
     let again = merge_patch(&merged, &block);
     assert_eq!(again, merged);
     assert!(again.starts_with(user.trim_end()));
+
+    let previous = preset_block("bowerbird-chat-older.mjs");
+    let upgraded = merge_patch(&previous, &block);
+    let previous_id = managed_preset_id(&previous).unwrap();
+    assert!(upgraded.contains(&format!("- id: preset-{previous_id}")));
+    assert_eq!(merge_patch(&upgraded, &block), upgraded);
+    let restored = merge_patch(&upgraded, &previous);
+    assert_eq!(restored.matches(&format!("        id: {previous_id}\n")).count(), 1);
 }
 
 #[test]
@@ -700,7 +929,7 @@ async fn dsh_local_live_events_page_backwards_to_the_saved_turn() {
         base: host.base.clone(),
         session: "owned".into(),
         rpc_id: "wanted".into(),
-        after: -1,
+        after: -1, questions_enabled: true
     };
     let entries = host.events(&pending).await.unwrap();
     assert_eq!(entries.len(), 2);

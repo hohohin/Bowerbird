@@ -76,10 +76,13 @@ class Model(BaseHTTPRequestHandler):
             self.server.account_messages += 1
         tool_names = {t["name"] for t in request.get("tools", [])}
         card_tool = "create_canvas_cards" in tool_names
+        if self.server.questions:
+            self.question_response(request, tool_names)
+            return
         if card_tool:
             self.server.tool_requests += 1
         if card_tool and self.server.tool_requests == 1:
-            assert tool_names == {"create_canvas_cards", "skill"}, tool_names
+            assert tool_names == {"create_canvas_cards", "skill", "ask_user_question"}, tool_names
             messages = json.dumps(request["messages"], ensure_ascii=False)
             assert "<skill_content" in messages and "Orchid-731" in messages
             block = {"type": "tool_use", "id": "original-1", "name": "create_canvas_cards", "input": {}}
@@ -90,6 +93,42 @@ class Model(BaseHTTPRequestHandler):
             block = {"type": "text", "text": ""}
             delta = {"type": "text_delta", "text": "done"}
             stop = "end_turn"
+        self.stream(block, delta, stop)
+
+    def question_response(self, request, tool_names):
+        if not tool_names:
+            self.stream({"type": "text", "text": ""}, {"type": "text_delta", "text": "Fixture title"}, "end_turn")
+            return
+        messages = json.dumps(request["messages"], ensure_ascii=False)
+        tools = {tool["name"]: tool for tool in request["tools"]}
+        assert tool_names == {"create_canvas_cards", "skill", "ask_user_question"}, tool_names
+        assert "timeout" in tools["ask_user_question"]["input_schema"]["properties"]
+        assert sum(message["role"] == "user" and "Bowerbird question fixture" in json.dumps(message)
+                   for message in request["messages"]) == 1
+        if any(message["role"] == "user" and "亲子家庭" in json.dumps(message, ensure_ascii=False)
+               for message in request["messages"]):
+            self.server.question_finishes += 1
+            self.stream({"type": "text", "text": ""}, {"type": "text_delta", "text": "FINAL_AFTER_ANSWER"}, "end_turn")
+            return
+        deadline = "with deadline" in messages
+        if deadline and any(message["role"] == "user" and "pending" in json.dumps(message)
+                            for message in request["messages"]):
+            self.stream({"type": "text", "text": ""}, {"type": "text_delta", "text": "PREMATURE_OUTPUT"}, "end_turn")
+            return
+        if "fixture-card-created" in messages:
+            arguments = {"questions": [{"id": "audience", "question": "这张海报面向谁？",
+                                       "options": [{"label": "亲子家庭"}, {"label": "年轻影迷"}]}]}
+            if deadline:
+                arguments["timeout"] = 2
+            name, call = "ask_user_question", "audience-call"
+            self.server.question_calls += 1
+        else:
+            arguments = {"cards": [{"id": "fixture", "kind": "content", "title": "fixture", "text": "prepared"}]}
+            name, call = "create_canvas_cards", "content-call"
+        self.stream({"type": "tool_use", "id": call, "name": name, "input": {}},
+                    {"type": "input_json_delta", "partial_json": json.dumps(arguments)}, "tool_use")
+
+    def stream(self, block, delta, stop):
         events = [
             ("message_start", {"message": {"usage": {"input_tokens": 3}}}),
             ("content_block_start", {"index": 0, "content_block": block}),
@@ -106,7 +145,7 @@ class Model(BaseHTTPRequestHandler):
             self.wfile.write(f"event: {event}\ndata: {data}\n\n".encode())
 
 
-def run(binary, account):
+def run(binary, account, questions=False):
     with tempfile.TemporaryDirectory(prefix="bowerbird-dsh-auto-") as directory:
         root = Path(directory).resolve()
         skill = root / "agents" / "skills" / "fixture-card" / "SKILL.md"
@@ -116,6 +155,7 @@ def run(binary, account):
         with ThreadingHTTPServer(("127.0.0.1", 0), Model) as server:
             server.tool_requests = 0
             server.account, server.exchanges, server.account_messages = account, 0, 0
+            server.questions, server.question_calls, server.question_finishes = questions, 0, 0
             threading.Thread(target=server.serve_forever, daemon=True).start()
             try:
                 env = dict(os.environ, APPDATA=str(root / "app"), HOME=str(root),
@@ -130,10 +170,14 @@ def run(binary, account):
                     env["BOWERBIRD_DSH_TEST_PRIVATE_INSTALL"] = "1"
                     env["BOWERBIRD_DSH_ACCOUNT_FIXTURE"] = env.pop("DEEPSEEK_BASE_URL")
                     env.pop("DEEPSEEK_API_KEY")
-                subprocess.run([str(binary), "dsh_auto_installed_host_creates_one_card_call", "--nocapture",
+                test = "dsh_native_question_survives_host_crash" if questions else "dsh_auto_installed_host_creates_one_card_call"
+                subprocess.run([str(binary), test, "--nocapture",
                                 "--ignored", "--test-threads=1"], cwd=root, env=env,
                                check=True, timeout=1200 if account else 180)
-                assert server.tool_requests == 2, server.tool_requests
+                if questions:
+                    assert (server.question_calls, server.question_finishes) == (3, 3)
+                else:
+                    assert server.tool_requests == 2, server.tool_requests
                 if account:
                     assert server.exchanges == 1 and server.account_messages >= 2
             finally:
@@ -142,5 +186,8 @@ def run(binary, account):
 
 if __name__ == "__main__":
     binary = Path(sys.argv[1]).resolve(strict=True)
-    run(binary, False)
-    run(binary, True)
+    if "--questions" in sys.argv[2:]:
+        run(binary, False, questions=True)
+    else:
+        run(binary, False)
+        run(binary, True)

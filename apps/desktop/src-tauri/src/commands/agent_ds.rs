@@ -76,6 +76,10 @@ fn dsh_auth_url(base: &reqwest::Url, text: &str) -> Result<reqwest::Url, String>
 }
 
 pub(crate) async fn dsh_client(base: &str, auth_text: Option<&str>) -> Result<reqwest::Client, String> {
+    dsh_client_with_cookie(base, auth_text).await.map(|(client, _)| client)
+}
+
+pub(crate) async fn dsh_client_with_cookie(base: &str, auth_text: Option<&str>) -> Result<(reqwest::Client, Option<reqwest::header::HeaderValue>), String> {
     let base = dsh_base_url(base)?;
     let builder = || {
         let builder = reqwest::Client::builder()
@@ -89,7 +93,7 @@ pub(crate) async fn dsh_client(base: &str, auth_text: Option<&str>) -> Result<re
         }
     };
     let client = builder().build().map_err(|_| "创建 DSH 连接失败".to_string())?;
-    let Some(auth_text) = auth_text else { return Ok(client); };
+    let Some(auth_text) = auth_text else { return Ok((client, None)); };
     let auth_url = dsh_auth_url(&base, auth_text)?;
     let response = client.get(auth_url).send().await
         .map_err(|_| "连接 DSH 登录入口失败，请确认本机服务已启动".to_string())?;
@@ -106,8 +110,8 @@ pub(crate) async fn dsh_client(base: &str, auth_text: Option<&str>) -> Result<re
         .map_err(|_| "DSH 认证 Cookie 格式无效".to_string())?;
     cookie.set_sensitive(true);
     let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(reqwest::header::COOKIE, cookie);
-    builder().default_headers(headers).build().map_err(|_| "创建 DSH 认证连接失败".into())
+    headers.insert(reqwest::header::COOKIE, cookie.clone());
+    builder().default_headers(headers).build().map(|client| (client, Some(cookie))).map_err(|_| "创建 DSH 认证连接失败".into())
 }
 
 fn ensure_preview_enabled() -> Result<(), AppError> {

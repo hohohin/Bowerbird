@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 use rusqlite::OptionalExtension;
 use tauri::{AppHandle, Emitter, State};
 use crate::{cloud::{AuthClient, EntitlementService}, core::{ingest, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}};
+use crate::core::library::{GenerationHistory, GenerationHistoryTurn};
 #[path = "comfy_progress.rs"]
 mod progress;
 
@@ -38,6 +39,68 @@ struct Record { account: String, project: String, input: Input, prompt_id: Optio
 #[derive(Serialize)]
 pub struct Status { #[serde(rename="originalService", skip_serializing_if="Option::is_none")] original_service: Option<(String, Mode)>, status: &'static str, message: String, asset: Option<Asset>, progress: Option<progress::Progress>, #[serde(rename = "elapsedMs")] elapsed_ms: Option<u64> }
 fn status(state: &'static str, message: &str) -> Status { Status { original_service: None, status: state, message: message.into(), asset: None, progress: None, elapsed_ms: None } }
+
+/// Old local videos predate generation_meta. Recover the frozen request by its
+/// generated source identity and only expose it for the exact completed asset.
+pub(super) fn generation_history(root: &Path, db: &Database, asset_id: &str) -> AppResult<Option<GenerationHistory>> {
+    let Some(asset) = db.get_asset(asset_id)?.filter(|asset| asset.source.as_deref() == Some("comfy-h3")) else {
+        return Ok(None);
+    };
+    let (Some(origin), Some(output)) = (asset.origin_path.as_deref(), asset.store_path) else {
+        return Ok(None);
+    };
+    let directory = root.join("comfy-video");
+    let Some(request) = Path::new(origin).file_stem().and_then(|stem| stem.to_str())
+        .and_then(|stem| uuid::Uuid::parse_str(stem).ok()) else {
+        return Ok(None);
+    };
+    if Path::new(origin) != directory.join(format!("{request}.mp4")) {
+        return Ok(None);
+    }
+    let bytes = match fs::read(directory.join(format!("{request}.json"))) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    let record: Record = serde_json::from_slice(&bytes)?;
+    if record.asset_id.as_deref() != Some(asset_id) {
+        return Ok(None);
+    }
+    let input = record.input;
+    let references = [Some(input.first_frame), input.last_frame].into_iter().flatten()
+        .filter(|id| !id.is_empty())
+        .map(|id| db.get_prompted_asset(&id))
+        .collect::<AppResult<Vec<_>>>()?.into_iter().flatten().collect::<Vec<_>>();
+    let turn = GenerationHistoryTurn {
+        error: None,
+        submit_id: None,
+        project_id: Some(record.project),
+        provider: Some("comfy-h3".into()),
+        reference_node_ids: Vec::new(),
+        prompt: input.prompt.clone(),
+        media: "video".into(),
+        video_options: None,
+        ratio: Some(input.ratio.clone()),
+        turn_key: Some(request.to_string()),
+        applied_prompt: Some(input.prompt),
+        prompt_raw: None,
+        images: vec![output],
+        references: references.iter().filter_map(|asset| asset.asset.store_path.clone()).collect(),
+        references_resolved: None,
+        ref_assets: references.clone(),
+    };
+    Ok(Some(GenerationHistory {
+        session_id: None,
+        media: "video".into(),
+        video_options: None,
+        ratio: Some(input.ratio),
+        turns: vec![turn],
+        references,
+        dimension_assets: Vec::new(),
+        provider: Some("comfy-h3".into()),
+        visual_profile: None,
+    }))
+}
 
 pub(crate) fn endpoint(value: &str) -> AppResult<String> {
     let url = reqwest::Url::parse(value).map_err(|_| error("请输入本机 ComfyUI 地址，例如 http://127.0.0.1:8000"))?;
@@ -379,6 +442,34 @@ pub async fn comfy_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: St
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn completed_local_video_history_matches_exact_asset() {
+        let workspace = tempfile::tempdir().unwrap();
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        let request = uuid::Uuid::new_v4();
+        let directory = workspace.path().join("comfy-video");
+        fs::create_dir(&directory).unwrap();
+        let origin = directory.join(format!("{request}.mp4"));
+        db.conn.lock().unwrap().execute(
+            "INSERT INTO assets(id,name,source,origin_path,store_path,created_at) VALUES('clip','影片','comfy-h3',?1,'clip.mp4',1),('other','另一素材','comfy-h3',?1,'other.mp4',1),('first','首帧','external','first.png','first.png',1)",
+            [origin.to_str().unwrap()],
+        ).unwrap();
+        let record: Record = serde_json::from_value(json!({
+            "account": "owner", "project": "original-project", "submitted": true, "asset_id": "clip",
+            "input": {"endpoint": "http://localhost:8000", "seconds": 4, "ratio": "16:9",
+                "resolution": 0.8, "firstFrame": "first", "prompt": "原始提示词"}
+        })).unwrap();
+        fs::write(directory.join(format!("{request}.json")), serde_json::to_vec(&record).unwrap()).unwrap();
+        let history = generation_history(workspace.path(), &db, "clip").unwrap().unwrap();
+        let turn = &history.turns[0];
+        assert_eq!(turn.turn_key.as_deref(), Some(request.to_string().as_str()));
+        assert_eq!(turn.prompt, "原始提示词");
+        assert_eq!(turn.references, ["first.png"]);
+        assert_eq!(turn.images, ["clip.mp4"]);
+        assert!(generation_history(workspace.path(), &db, "other").unwrap().is_none());
+    }
+
     #[test]
     fn h3_access_allows_paid_or_test_accounts_with_valid_matching_entitlement() {
         use crate::cloud::{auth::AuthSnapshot, entitlement::{EntitlementSnapshot, OfflineState}};

@@ -50,11 +50,12 @@ export async function seekVideoLastFrame(video: HTMLVideoElement): Promise<void>
 }
 
 /** Decode on demand for a connected video output, without opening the player. */
-export async function readVideoLastFrame(src: string, path: string): Promise<VideoFrame> {
+export async function readVideoBoundaryFrame(src: string, path: string, position: "first" | "last"): Promise<VideoFrame> {
   const video = document.createElement("video");
   video.crossOrigin = "anonymous";
   video.muted = true;
   video.preload = "auto";
+  const label = position === "first" ? "首帧" : "尾帧";
   try {
     await new Promise<void>((resolve, reject) => {
       const finish = (error?: Error) => {
@@ -62,17 +63,21 @@ export async function readVideoLastFrame(src: string, path: string): Promise<Vid
         video.onloadeddata = video.onerror = null;
         if (error) reject(error); else resolve();
       };
-      const timeout = window.setTimeout(() => finish(new Error("视频尾帧加载超时，请重试")), 10000);
+      const timeout = window.setTimeout(() => finish(new Error(`视频${label}加载超时，请重试`)), 10000);
       video.onloadeddata = () => finish();
-      video.onerror = () => finish(new Error("无法读取视频尾帧，请检查视频文件或编码格式"));
+      video.onerror = () => finish(new Error(`无法读取视频${label}，请检查视频文件或编码格式`));
       video.src = src;
       video.load();
     });
-    await seekVideoLastFrame(video);
+    if (position === "last") await seekVideoLastFrame(video);
     return captureVideoFrame(video, path);
   } finally {
     video.pause(); video.removeAttribute("src"); video.load();
   }
+}
+
+export function readVideoLastFrame(src: string, path: string): Promise<VideoFrame> {
+  return readVideoBoundaryFrame(src, path, "last");
 }
 
 // Complete strips only: bounded LRU, with the revision-bearing source URL as identity.

@@ -32,6 +32,10 @@ const EVENT: &str = "local-chat://updated";
 mod cloud_chat;
 #[path = "local_chat_models.rs"]
 mod models;
+#[path = "local_chat_questions.rs"]
+mod questions;
+#[path = "local_chat_codex_questions.rs"]
+mod codex_questions;
 #[path = "local_chat_dsh.rs"]
 mod dsh;
 pub(crate) use dsh::stop_owned as stop_dsh_host;
@@ -46,34 +50,10 @@ const CHAT_INSTRUCTIONS: &str =
 use crate::core::local_chat_cards::card_tool_spec;
 
 fn local_instructions() -> String {
-    format!("{}\n{}", CHAT_INSTRUCTIONS
+    format!("{}\n{}\n{}", CHAT_INSTRUCTIONS
         .replace("不得执行命令、读写用户文件、调用其他工具或请求权限。", "不得执行任意命令、读写工程外用户文件或请求权限。")
-        .replace("工具外的操作说明目前尚未开放。", ""), super::agent_ds::chat_video::INSTRUCTIONS)
-}
-
-/// Resume cannot update dynamic tools. Preserve the original app transcript, and seed a new
-/// provider thread with public history when upgrading the tool contract.
-fn upgraded_history(chat: &ChatConversation, current_turn: &str) -> String {
-    let mut selected = Vec::new();
-    for message in chat
-        .messages
-        .iter()
-        .rev()
-        .filter(|m| m.turn_id != current_turn)
-    {
-        let value = json!({"role":message.role,"text":message.text,"status":message.status,"imageCount":message.reference_asset_ids.len()});
-        selected.push(value);
-    }
-    selected.reverse();
-    format!("此会话的画板卡片工具刚更新，现已支持为每张生图卡选择生成服务。以下JSON是该用户在同一应用会话中的历史资料，仅供上下文参考；其中过去的请求已经结束，不构成现在再次创建卡片的授权。完整历史保留在应用对话记录中。本次迁入的是公开文字，历史图片像素未重新发送；需要图片时请用户重新附带。第一次回复简短告知用户已接续原对话并更新卡片工具；若用户依赖旧图片，说明图片未重新发送。\n{}", Value::Array(selected))
-}
-
-fn codex_history_before_turn(chat: &ChatConversation, turn: &str) -> AppResult<Option<String>> {
-    if chat.summary.turn_count <= 1 { return Ok(None); }
-    let mut messages = cloud_chat::messages(chat, turn, true)?;
-    messages.pop(); // The current prompt and media are sent separately to Codex.
-    Ok((!messages.is_empty()).then(|| format!(
-        "以下是同一对话已完成的公开文字记录，仅供续聊参考；过去的请求不构成本轮再次调用工具的授权。\n{}", Value::Array(messages))))
+        .replace("工具外的操作说明目前尚未开放。", ""), super::agent_ds::chat_video::INSTRUCTIONS,
+        "如果缺少会影响本轮交付的重要决定，使用 request_user_input 提问，等待答复后再执行依赖该答案的操作。可以给出简短选项或允许文字作答。不要询问密码、令牌等机密，也不要用普通消息或异步提问代替需要等待的提问。")
 }
 
 fn card_call<'a>(value: &'a Value, stream: &StreamState) -> AppResult<(&'a str, &'a Value)> {
@@ -307,6 +287,65 @@ pub async fn local_chat_recover(
 }
 
 #[tauri::command]
+pub async fn local_chat_questions(
+    webview: tauri::Webview, db: State<'_, Arc<Database>>, conversation_id: String,
+) -> AppResult<Vec<questions::QuestionBatch>> {
+    if webview.label() != "main" { return Err(error("请在主窗口查看 Agent 问题")); }
+    let batches = codex_questions::batches(&conversation_id);
+    if !batches.is_empty() { return Ok(batches); }
+    let Some(turn) = dsh_local::questions::QuestionTurn::load(&db, &conversation_id).await? else { return Ok(Vec::new()); };
+    turn.batches().await
+}
+
+#[tauri::command]
+pub async fn local_chat_answer_question(
+    webview: tauri::Webview, app: AppHandle, db: State<'_, Arc<Database>>, conversation_id: String,
+    turn_id: String, call_id: String, answers: Vec<questions::Answer>,
+) -> AppResult<()> {
+    if webview.label() != "main" { return Err(error("请在主窗口回答 Agent 问题")); }
+    if let Some(result) = codex_questions::answer(&conversation_id, &turn_id, &call_id, &answers) {
+        return result;
+    }
+    static SUBMISSION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _submission = SUBMISSION.lock().await;
+    let target = dsh_local::questions::QuestionTurn::load(&db, &conversation_id).await?
+        .filter(|target| target.turn_id == turn_id).ok_or_else(|| error("此问题已结束，请查看最新对话"))?;
+    target.validate(&call_id, &answers).await?;
+    let (cancel, stop) = watch::channel(false);
+    let (done, finished) = watch::channel(false);
+    let (existing, resumed) = {
+        let mut active = ACTIVE.lock().unwrap();
+        if db.local_chat_dsh_question_checkpoint(&conversation_id)?.as_ref().is_none_or(|(turn, saved)| turn != &turn_id || saved != &target.checkpoint) {
+            return Err(error("此问题已结束，请查看最新对话"));
+        }
+        if let Some(run) = active.get(&conversation_id) {
+            if run.turn_id != turn_id || *run.cancel.borrow() { return Err(error("此轮已停止或切换")); }
+            (Some(run.cancel.subscribe()), None)
+        } else {
+            let chat = db.resume_local_dsh_question(&conversation_id, &turn_id, &target.checkpoint)?;
+            active.insert(conversation_id.clone(), Active { turn_id: turn_id.clone(), cancel, finished });
+            (None, Some(chat))
+        }
+    };
+    if let Some(mut cancel) = existing {
+        if *cancel.borrow() { return Err(error("此轮已停止")); }
+        return tokio::select! {
+            biased;
+            _ = cancel.changed() => Err(error("此轮已停止")),
+            result = target.answer(&call_id, &answers) => result,
+        };
+    }
+    if let Some(chat) = resumed { let _ = app.emit(EVENT, chat); }
+    let (received, receipt) = tokio::sync::oneshot::channel();
+    let db = db.inner().clone();
+    tokio::spawn(async move {
+        let result = target.reattach(app.clone(), db.clone(), conversation_id.clone(), call_id, answers, stop, received).await;
+        finish_chat(&app, &db, &conversation_id, &turn_id, result, done);
+    });
+    receipt.await.map_err(|_| error("未能恢复原问答任务，请查看对话状态"))?
+}
+
+#[tauri::command]
 pub async fn local_chat_send(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
@@ -500,6 +539,8 @@ fn chat_config() -> Value {
 
 fn isolated_thread_config(effective: &Value) -> AppResult<Value> {
     let mut config = chat_config();
+    config["tools.experimental_request_user_input.enabled"] = json!(true);
+    config["features.default_mode_request_user_input"] = json!(true);
     // An empty map would retain entries during recursive merging. Keep each transport
     // definition and explicitly disable it; nested maps also preserve server names
     // containing dots (app-server config keys are split on dots, not TOML-parsed).
@@ -790,6 +831,12 @@ async fn run_turn(
     if *cancel.borrow() {
         return Ok("stopped");
     }
+    let interactive = db.local_chat_turn_uses_history(turn)?;
+    let previous = if interactive { db.local_chat_provider_thread(id)? } else { None };
+    let options = db.local_chat_turn_options(turn)?;
+    if interactive && previous.is_none() && db.local_chat_has_prior_interactive_turn(id, turn)? {
+        return Err(error("原 Codex 会话无法继续，请开启新对话或按当前输入重跑"));
+    }
     let home = codex_home().ok_or_else(|| error("Codex 资料目录不可用"))?;
     validate_chat_home(&home)?;
     let root = home.join("chat-workspaces").join(id);
@@ -815,25 +862,10 @@ async fn run_turn(
             .ok_or_else(|| error("Codex 诊断连接不可用"))?,
     ));
     let mut stream = StreamState::default();
-    let interactive = db.local_chat_turn_uses_history(turn)?;
-    let previous = if interactive { db.local_chat_provider_thread(id)? } else { None };
-    let options = db.local_chat_turn_options(turn)?;
-    let upgrading =
-        previous.is_some() && db.local_chat_provider_tool_version(id)? < CARD_TOOL_VERSION;
-    let history = if upgrading {
-        Some(upgraded_history(
-            &db.get_local_chat(id)?
-                .ok_or_else(|| error("对话已不存在"))?,
-            turn,
-        ))
-    } else if interactive && previous.is_none() {
-        let chat = db.get_local_chat(id)?.ok_or_else(|| error("对话已不存在"))?;
-        codex_history_before_turn(&chat, turn)?
-    } else {
-        None
-    };
     let (video_stop, video_cancel) = watch::channel(false);
     let mut pending_video = None;
+    let (waiting, waiting_for_user) = watch::channel(false);
+    let mut questions = codex_questions::QuestionTurn::new(id, turn, waiting);
     let execution = async {
         tokio::time::timeout(Duration::from_secs(30),rpc(&mut reader,&mut writer,1,"initialize",json!({"clientInfo":{"name":"bowerbird","title":"Bowerbird","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}))).await.map_err(|_|error("Codex 启动等待超时，请检查设置中的 CLI 安装后重试"))??;
         write_message(&mut writer, json!({"method":"initialized","params":{}})).await?;
@@ -856,7 +888,7 @@ async fn run_turn(
         .map_err(|_| error("Codex 对话权限检查超时，本轮内容尚未发送"))??;
         let mut params = json!({"cwd":root,"approvalPolicy":"never","sandbox":"read-only","config":isolated_thread_config(&effective)?,"baseInstructions":local_instructions(),"developerInstructions":local_instructions()});
         if let Some(options) = &options { models::apply_thread(&mut params, options); }
-        let method = if let Some(previous) = previous.as_ref().filter(|_| !upgrading) {
+        let method = if let Some(previous) = previous.as_ref() {
             params["threadId"] = json!(previous);
             "thread/resume"
         } else {
@@ -878,8 +910,7 @@ async fn run_turn(
             .as_str()
             .ok_or_else(|| error("Codex 未返回会话编号，请更新 CLI 后重试"))?
             .to_owned();
-        if !upgrading
-            && previous
+        if previous
                 .as_ref()
                 .is_some_and(|previous| previous != &provider_thread)
         {
@@ -887,9 +918,6 @@ async fn run_turn(
         }
         stream.provider_thread = Some(provider_thread.clone());
         let mut input = Vec::new();
-        if let Some(history) = &history {
-            input.push(json!({"type":"text","text":history,"text_elements":[]}));
-        }
         input.push(json!({"type":"text","text":text,"text_elements":[]}));
         append_chat_references(&mut input, &media_paths);
         // Pump start notifications too: some versions emit them before the RPC response.
@@ -900,8 +928,21 @@ async fn run_turn(
         loop {
             let value = match confirmed_notifications.pop_front() {
                 Some(value) => value,
-                None => read_message(&mut reader).await?,
+                None => questions.next_message(&mut reader, &mut writer).await?,
             };
+            if value["method"] == "item/tool/requestUserInput" && value.get("id").is_some() {
+                if let Err(detail) = questions.open(&value, &stream) {
+                    write_message(&mut writer, json!({"id":value["id"],"error":{"code":-32602,"message":detail.to_string()}})).await?;
+                    return Err(detail);
+                }
+                continue;
+            }
+            if value["method"] == "serverRequest/resolved"
+                && value["params"]["threadId"].as_str() == stream.provider_thread.as_deref()
+                && questions.resolved(&value["params"]["requestId"])
+            {
+                return Err(error("Codex 的问题已关闭，本轮未交付，请在原对话中继续"));
+            }
             if value["method"] == "item/tool/call" && value.get("id").is_some() {
                 if value["params"]["tool"] == "hyperframes_video" {
                     let result = match card_call(&value, &stream) {
@@ -965,20 +1006,7 @@ async fn run_turn(
                     .as_str()
                     .ok_or_else(|| error("Codex 未返回轮次编号"))?;
                 stream.provider_turn = Some(provider_turn.into());
-                // Do not replace a legacy provider thread until its history and new input
-                // have been accepted. A canceled/failed preparation can then retry migration.
-                if !interactive {
-                    // The isolated iteration is now accepted. A later interactive turn
-                    // must seed from the complete app transcript, not this one-turn thread.
-                    db.clear_local_chat_provider_thread(id)?;
-                } else if upgrading {
-                    db.replace_local_chat_provider_thread(
-                        id,
-                        previous.as_deref().unwrap(),
-                        &provider_thread,
-                        CARD_TOOL_VERSION,
-                    )?;
-                } else {
+                if interactive && previous.is_none() {
                     db.set_local_chat_provider_thread(id, &provider_thread)?;
                     db.set_local_chat_provider_tool_version(id, CARD_TOOL_VERSION)?;
                 }
@@ -987,6 +1015,9 @@ async fn run_turn(
                 confirmed_notifications = std::mem::take(&mut stream.early_notifications);
             } else {
                 let result = stream.apply(&value)?;
+                if result == Some("done") && questions.pending() {
+                    return Err(error("Codex 结束时仍有未答问题，本轮未交付，请在原对话中继续"));
+                }
                 stream.save(app, db, id, turn, result.is_some())?;
                 if let Some(status) = result {
                     return Ok(status);
@@ -995,9 +1026,12 @@ async fn run_turn(
         }
     };
     let mut result = tokio::select! {
+        biased;
         _=cancel.changed()=>Ok("stopped"),
-        result=tokio::time::timeout(Duration::from_secs(1800),execution)=>result.unwrap_or_else(|_|Err(error("本轮对话等待超时，已保留收到的内容，请查看历史后继续对话"))),
+        result=execution=>result,
+        _=codex_questions::execution_budget(waiting_for_user, Duration::from_secs(1800))=>Err(error("本轮对话等待超时，已保留收到的内容，请查看历史后继续对话")),
     };
+    drop(questions);
     let _ = video_stop.send(true);
     if let Some(task) = pending_video.take() { let _ = task.await; }
     if *cancel.borrow() {

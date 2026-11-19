@@ -22,7 +22,7 @@ interface Options {
   scope: string;
   resolve: (media: HTMLElement) => CreationImageTarget | null;
   onCapture?: () => void;
-  onCanvasVideoPreview?: (path: string, media: HTMLElement) => boolean;
+  onCanvasVideoPreview?: (path: string, media: HTMLElement, asset: Asset) => boolean;
 }
 
 interface PreviewRequest { sequence: number; route: number; projectId: string | null; scope: string }
@@ -109,7 +109,7 @@ class ImageGesture {
       const path = mediaPath({ assetId: asset.id, asset }, image.media);
       if (!path || isAudioPath(path) || isTextPath(path)) return;
       if (isVideoPath(path)) {
-        if (!this.handlesVideo(image.media) || this.options.onCanvasVideoPreview?.(path, image.media)) return;
+        if (!this.handlesVideo(image.media) || this.options.onCanvasVideoPreview?.(path, image.media, asset)) return;
         const playable = await externalFiles.media(path);
         if (this.current(request, image)) this.show({ ...asset, store_path: playable });
         return;

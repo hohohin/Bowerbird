@@ -13,6 +13,9 @@ import { userErrorMessage } from "../lib/userError";
 import { useStore } from "../store";
 import { FileMediaCard } from "./FileMediaCard";
 import { Lightbox } from "./Lightbox";
+import { LibraryVideoPreview } from "./LibraryVideoPreview";
+import { isVideoPath } from "../lib/videoGeneration";
+import { videoSourceKey } from "../lib/videoSourceKey";
 import "./CanvasFrequentAssets.css";
 
 export function useCanvasFrequentAssets(active: boolean, projectId: string | null) {
@@ -121,7 +124,8 @@ export function CanvasFrequentAssets({ library, projectId, picking, onPickingCha
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem("canvas-frequent-assets-collapsed") === "true"; } catch { return false; }
   });
-  const [preview, setPreview] = useState<string | null>(null);
+  const [preview, setPreview] = useState<{ path: string; asset: Asset } | null>(null);
+  const closePreview = () => { previewVersion.current++; setPreview(null); };
   const alive = useRef(true), previewVersion = useRef(0);
   useEffect(() => { alive.current = true; return () => { alive.current = false; previewVersion.current++; }; }, []);
   useEffect(() => { previewVersion.current++; setPreview(null); }, [picking, projectId]);
@@ -145,7 +149,7 @@ export function CanvasFrequentAssets({ library, projectId, picking, onPickingCha
     try {
       if (!asset.store_path) throw new Error("素材原文件不可用");
       const path = await externalFiles.media(asset.store_path);
-      if (alive.current && request === previewVersion.current) setPreview(path);
+      if (alive.current && request === previewVersion.current) setPreview({ path, asset });
     } catch (reason) { if (alive.current && request === previewVersion.current) notifyError(reason, "无法预览素材"); }
   }
   function openDetail(asset: Asset) {
@@ -233,6 +237,8 @@ export function CanvasFrequentAssets({ library, projectId, picking, onPickingCha
         </div>
       </div>)}
     </>}
-    {preview && <Lightbox images={[preview]} index={0} onIndexChange={() => {}} onClose={() => { previewVersion.current++; setPreview(null); }}/>}
+    {preview && (isVideoPath(preview.path)
+      ? <LibraryVideoPreview {...preview} sourceKey={videoSourceKey(preview.asset)} projectId={projectId} onClose={closePreview}/>
+      : <Lightbox images={[preview.path]} index={0} onIndexChange={() => {}} onClose={closePreview}/>)}
   </section>;
 }

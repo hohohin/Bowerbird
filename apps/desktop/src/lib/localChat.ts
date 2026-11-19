@@ -110,6 +110,14 @@ export interface ChatCardDefaults {
   videoOptions: import("./videoGeneration").VideoOptions;
 }
 export interface ChatConversation extends ChatSummary { messages: ChatMessage[]; actions?: ChatCardAction[]; submittedTurnId?: string; vpsHistoryStartTurnId?: string }
+export interface AgentQuestionBatch {
+  turnId: string;
+  callId: string;
+  state?: "open" | "continued";
+  queued?: boolean;
+  questions: { id: string; question: string; options: { label: string; description?: string | null }[]; multiSelect: boolean }[];
+}
+export interface AgentQuestionAnswer { id: string; selected: string[]; custom?: string }
 export interface LocalChatSendInput {
   projectId: string;
   dshSkill?: import("./dshSkill").DshSkill;
@@ -148,6 +156,9 @@ export const localChat = {
   send: (input: LocalChatSendInput) => invoke<ChatConversation>("local_chat_send", { input }),
   stop: (conversationId: string, turnId?: string) => invoke<ChatConversation | null>("local_chat_stop", { conversationId, turnId }),
   recover: (conversationId: string) => invoke<ChatConversation>("local_chat_recover", { conversationId }),
+  questions: (conversationId: string) => invoke<AgentQuestionBatch[]>("local_chat_questions", { conversationId }),
+  answerQuestion: (conversationId: string, turnId: string, callId: string, answers: AgentQuestionAnswer[]) =>
+    invoke<void>("local_chat_answer_question", { conversationId, turnId, callId, answers }),
   undoCards: (conversationId: string, actionId: string) => invoke<ChatConversation>("local_chat_cards_undo", { conversationId, actionId }),
 };
 

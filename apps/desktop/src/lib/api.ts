@@ -471,8 +471,8 @@ export const api = {
       filter: filter ?? null,
     }),
   // 「回看生成对话」：取某生成图所在会话的完整生成时间线（各轮 prompt + 产出图 store_path）。
-  generationHistory: (assetId: string, projectId?: string | null) =>
-    invoke<GenerationHistory>("generation_history", { assetId, projectId: projectId ?? null }),
+  generationHistory: (assetId: string, projectId?: string | null, includeLocalVideo?: boolean) =>
+    invoke<GenerationHistory>("generation_history", { assetId, projectId: projectId ?? null, includeLocalVideo }),
 
   // 标签 / 自动归类（P2）
   listTags: (source?: string, projectId?: string | null) =>

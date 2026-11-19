@@ -197,34 +197,6 @@ fn local_chat_section_tool_contract_groups_current_batch_cards_without_geometry_
 }
 
 #[test]
-fn local_chat_upgrade_preserves_public_history_without_replaying_current_request() {
-    let chat: ChatConversation = serde_json::from_value(json!({
-        "id":"chat","projectId":"project","threadId":"app-thread","nodeId":"node","title":"旧对话","provider":"codex-local","status":"running","turnCount":2,"preview":"","revision":1,"createdAt":1,"updatedAt":1,"error":null,"actions":[],
-        "messages":[
-            {"id":"user1","turnId":"old","role":"user","text":"原来的创意","referenceAssetIds":["asset"],"status":"done","createdAt":1,"updatedAt":1},
-            {"id":"reply1","turnId":"old","role":"assistant","text":"原来的回复","referenceAssetIds":[],"status":"done","createdAt":1,"updatedAt":1},
-            {"id":"user2","turnId":"current","role":"user","text":"CURRENT_REQUEST","referenceAssetIds":[],"status":"done","createdAt":2,"updatedAt":2}
-        ]
-    })).unwrap();
-    let history = upgraded_history(&chat, "current");
-    assert!(history.contains("原来的创意"));
-    assert!(history.contains("原来的回复"));
-    assert!(history.contains("\"imageCount\":1"));
-    assert!(!history.contains("CURRENT_REQUEST"));
-    assert!(!history.contains("asset"));
-    assert!(history.contains("不构成现在再次创建卡片的授权"));
-    let restored = codex_history_before_turn(&chat, "current").unwrap().unwrap();
-    assert!(restored.contains("原来的创意") && restored.contains("原来的回复"));
-    assert!(!restored.contains("CURRENT_REQUEST") && !restored.contains("asset"));
-    assert!(restored.contains("不构成本轮再次调用工具的授权"));
-    let mut long_chat = chat.clone();
-    long_chat.messages[0].text = "长".repeat(100_001);
-    let history = upgraded_history(&long_chat, "current");
-    assert!(history.contains(&long_chat.messages[0].text));
-    assert!(history.contains("原来的回复"));
-}
-
-#[test]
 fn local_chat_disables_each_inherited_mcp_entry_including_dotted_names() {
     let config=isolated_thread_config(&json!({"config":{"mcp_servers":{"workspace":{"command":"never-run"},"dotted.name":{"url":"https://unused.invalid"}}}})).unwrap();
     assert_eq!(config["mcp_servers"]["workspace"]["enabled"], false);

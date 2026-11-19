@@ -79,6 +79,9 @@ html[data-theme="light"] .creation-image-preview-backdrop { background: linear-g
 .creation-image-preview-image-head h2 { padding: 10px 14px; background: var(--bb-surface); border-left: 2px solid var(--bb-blue); pointer-events: auto; }
 .creation-image-preview .creation-image-preview-image-head > button { background: var(--bb-surface); pointer-events: auto; }
 .creation-image-preview-image-anchor { position: relative; pointer-events: auto; width: min(100%, calc((100dvh - 230px) * var(--image-ratio))); }
+.creation-image-preview.is-video-preview .creation-image-preview-image-anchor {
+  width: 100%; height: min(620px, max(240px, calc(100dvh - 230px)));
+}
 .creation-image-preview-image-depth {
   position: absolute; inset: 0; z-index: -1; pointer-events: none;
   transform: var(--preview-depth-transform); transform-style: preserve-3d;

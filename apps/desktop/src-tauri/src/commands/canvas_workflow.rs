@@ -287,6 +287,14 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                     continue;
                 }
                 if binding["portId"] == "signal" { return Err(invalid()); }
+                if let Some(frame) = binding.get("videoFrame") {
+                    let frame_asset = frame["assetId"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
+                    if !image_port || !matches!(frame["position"].as_str(), Some("first" | "last"))
+                        || binding["assetId"].as_str().is_none_or(|id| id.is_empty() || id == frame_asset)
+                        || ["nodeId", "portId", "groupId", "assetIds", "canvasNodeId", "cellId", "dimension"].iter().any(|key| binding.get(*key).is_some())
+                    { return Err(invalid()); }
+                    assets.insert(frame_asset.to_owned());
+                }
                 if let Some(dimension) = binding.get("dimension") {
                     let asset = binding["assetId"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
                     if port != "text" || !dimension["title"].is_string() || !dimension["body"].is_string()
@@ -504,6 +512,18 @@ mod tests {
             doc["nodes"][0]["inputs"]["text"][0] = invalid_text;
             assert!(validate(&doc).is_err());
         }
+    }
+    #[test]
+    fn video_frame_bindings_keep_both_source_and_frame_assets() {
+        let binding = json!({"assetId":"clip","assetNodeId":"clip-node","autoConnect":"wire","mediaFilter":["image"],
+            "videoFrame":{"position":"first","assetId":"still"}});
+        let mut document = json!({"schema_version":1,"nodes":[node("target",json!({"image":[binding]}))],"run":null});
+        assert_eq!(validate(&document).unwrap(), HashSet::from(["clip".to_owned(), "still".to_owned()]));
+        let frame = &mut document["nodes"][0]["inputs"]["image"][0]["videoFrame"];
+        frame["position"] = json!("middle");
+        assert!(validate(&document).is_err());
+        document["nodes"][0]["inputs"]["image"][0]["videoFrame"] = json!({"position":"last","assetId":"clip"});
+        assert!(validate(&document).is_err());
     }
     #[test]
     fn shared_agent_moves_and_hides_its_history_projection_atomically() {

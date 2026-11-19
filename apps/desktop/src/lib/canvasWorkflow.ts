@@ -23,6 +23,7 @@ export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" |
 export interface WorkflowValue { type: WorkflowPortType; text?: string; table?: ContentTable; assetIds?: string[]; referenceRanks?: number[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[]; deliveries?: Record<string, { nodeId: string; cellId: string; append: boolean; value: WorkflowValue }> }
 export interface WorkflowPort { id: string; label: string; type: WorkflowPortType }
 export interface WorkflowInput { dimension?: { id?: string | null; title: string; body: string }; slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string; autoConnect?: string; mediaFilter?: ("image" | "video" | "audio")[];
+  videoFrame?: { position: "first" | "last"; assetId: string };
   /** A submitted image was still rendering when this completion listener was added. */
   pendingCompletionSession?: string;
   /** Per-member position in this generation card's reference strip, set by dragging. */
@@ -216,8 +217,8 @@ export function selectWorkflowVideoProvider(node: WorkflowNode, channel: "jimeng
   const image: WorkflowInput[] = [];
   for (const input of ordered) {
     const previous = image[image.length - 1];
-    if (input.slot && previous?.slot === input.slot && !workflowImageContainer(input) && input.assetId
-      && !workflowImageContainer(previous) && (previous.assetId || previous.assetIds?.length)) {
+    if (input.slot && previous?.slot === input.slot && !input.videoFrame && !previous.videoFrame
+      && !workflowImageContainer(input) && input.assetId && !workflowImageContainer(previous) && (previous.assetId || previous.assetIds?.length)) {
       previous.assetIds = [...(previous.assetIds ?? [previous.assetId!]), input.assetId];
       delete previous.assetId;
     } else image.push(input);
@@ -415,7 +416,9 @@ export function workflowDisconnectId(input: WorkflowInput) {
     : input.autoConnect;
 }
 
-export const workflowBindingKey = (input: WorkflowInput) => JSON.stringify([input.nodeId, input.portId, input.assetId, input.groupId, input.canvasNodeId, input.cellId, input.assetNodeId, ...(input.dimension ? [input.dimension.id ?? input.dimension.title] : [])]);
+export const workflowBindingKey = (input: WorkflowInput) => JSON.stringify([input.nodeId, input.portId, input.assetId, input.groupId, input.canvasNodeId, input.cellId, input.assetNodeId,
+  ...(input.dimension ? [input.dimension.id ?? input.dimension.title] : []),
+  ...(input.videoFrame ? [{ videoFrame: input.videoFrame.position }] : [])]);
 /** An upstream card, folder or native cell owns the reference; its current images may change. */
 export const workflowImageContainer = (input: WorkflowInput) => !!(input.nodeId || input.groupId || input.canvasNodeId);
 export function activePromptReferences(node: WorkflowNode) {
@@ -717,7 +720,7 @@ export function workflowInputValues(nodes: WorkflowNode[], node: WorkflowNode, c
         if (!input.assetIds?.length) throw new Error("文件夹中没有可用图片，请添加图片后重新运行");
         return { type: "image", assetIds: input.assetIds };
       }
-      if (input.assetId && port.type === "image") return { type: "image", assetIds: [input.assetId] };
+      if (input.assetId && port.type === "image") return { type: "image", assetIds: [input.videoFrame?.assetId ?? input.assetId] };
         if (input.canvasNodeId && (port.type === "text" || port.type === "image")) {
         const text = cellText?.(input.canvasNodeId, input.cellId ?? "");
         if (text === undefined) throw new Error("来源卡片或单元格不存在，请检查来源连接");

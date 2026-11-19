@@ -65,6 +65,42 @@ try {
   assert.equal((await inspect()).conversations[await panel.getAttribute('data-local-chat-id')].provider, 'dsh-local');
   assert.equal(await panel.locator('[data-message-role="assistant"] .local-chat-message-label strong').textContent(), 'DSH');
   assert.equal(await panel.getByRole('combobox', {name: 'DSH 模型'}).count(), 1);
+  const localId = await panel.getAttribute('data-local-chat-id');
+  await panel.getByRole('button', { name: '关闭对话详情' }).click();
+  const localCard = page.locator(`.workflow-card:has([data-local-chat-id="${localId}"])`);
+  const bubble = localCard.getByRole('group', {name: 'Agent 提问', exact: true});
+  const input = bubble.getByRole('textbox', {name: /文字答案/});
+  await page.evaluate(async id => {
+    const fixture = await import('/scripts/fixtures/local-chat/mock.ts');
+    const turnId = fixture.inspect().conversations[id].messages[0].turnId;
+    fixture.setQuestions(id, [
+      { turnId, callId: 'test-question-one', questions: [{ id: 'audience', question: '这张海报面向谁？',
+        options: [{ label: '亲子家庭' }, { label: '年轻影迷' }], multiSelect: false }] },
+      { turnId, callId: 'test-question-two', questions: [{ id: 'date', question: '活动在哪天？', options: [], multiSelect: false }] },
+    ]);
+  }, localId);
+  await bubble.waitFor();
+  await input.fill('接着写的答案');
+  await bubble.getByRole('button', { name: '关闭问题气泡' }).click();
+  await bubble.waitFor({ state: 'hidden' });
+  assert.equal((await inspect()).calls.filter(call => call.command === 'local_chat_answer_question').length, 0);
+  await localCard.getByRole('button', { name: '待你回答' }).click();
+  assert.equal(await input.inputValue(), '接着写的答案');
+  await bubble.getByRole('button', { name: '亲子家庭', exact: true }).dblclick({ delay: 10 });
+  await bubble.getByText('活动在哪天？', { exact: true }).waitFor();
+  await input.fill('周六');
+  await input.dispatchEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 229, isComposing: true, bubbles: true, cancelable: true });
+  assert.equal((await inspect()).calls.filter(call => call.command === 'local_chat_answer_question').length, 1);
+  await input.press('Enter');
+  await bubble.waitFor({ state: 'hidden' });
+  const answerCalls = (await inspect()).calls.filter(call => call.command === 'local_chat_answer_question');
+  assert.deepEqual(answerCalls.map(call => [call.args.callId, call.args.answers]), [
+    ['test-question-one', [{ id: 'audience', selected: ['亲子家庭'] }]],
+    ['test-question-two', [{ id: 'date', selected: [], custom: '周六' }]],
+  ]);
+  assert.equal((await inspect()).conversations[localId].status, 'running', 'answer acceptance alone does not finish the turn');
+  await localCard.getByRole('button', { name: '查看 Agent 详情' }).click();
+  await panel.waitFor();
   await panel.getByRole('button', { name: '停止回复', exact: true }).click();
   await panel.getByRole('button', { name: '取回回复', exact: true }).click();
   await panel.getByText('花影入月', { exact: true }).waitFor();

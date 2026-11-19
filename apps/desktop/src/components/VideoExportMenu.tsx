@@ -19,7 +19,11 @@ export function VideoExportMenu({ label, icon, disabled, portal, items }: {
     {position && !disabled && <PortalTargetContext.Provider value={portal ?? inheritedPortal}>
       <ContextMenu {...position} label={label} trigger={trigger.current} onClose={() => setPosition(null)} className="video-export-popup">
         {items.map(item => <button key={item.label} role="menuitem" className="app-context-item px-2 py-1.5" disabled={item.disabled}
-          onClick={() => { setPosition(null); item.run(); }}>{item.label}</button>)}
+          onClick={() => {
+            // Saving disables the trigger, so return focus to the player before closing.
+            portal?.focus({ preventScroll: true });
+            setPosition(null); item.run();
+          }}>{item.label}</button>)}
       </ContextMenu>
     </PortalTargetContext.Provider>}
   </div>;

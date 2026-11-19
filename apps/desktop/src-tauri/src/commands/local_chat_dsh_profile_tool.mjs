@@ -44,6 +44,6 @@ export function apply(ctx) {
   });
   // A preset is the agent's ancestor scope: restrict inherited tools on this turn's agent only.
   ctx.on("agent/created", ({ agent }) => {
-    if (turn(agent.id)) agent.ctx.tools.restrict({ allow: [tool.name, "skill"] });
+    if (turn(agent.id)) agent.ctx.tools.restrict({ allow: [tool.name, "skill", "ask_user_question"] });
   });
 }

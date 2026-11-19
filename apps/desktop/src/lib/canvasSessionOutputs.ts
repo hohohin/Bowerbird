@@ -91,7 +91,7 @@ export function workflowGenerationPreviewIds(source: WorkflowNode, canvas: reado
 export function workflowBindingAssetIds(input: WorkflowInput, source: WorkflowNode | undefined, card: CanvasNode | undefined, canvas: readonly CanvasNode[]) {
   if (input.groupId) return input.assetIds ?? [];
   if (input.dimension) return [];
-  if (input.assetId) return [input.assetId];
+  if (input.assetId) return [input.videoFrame?.assetId ?? input.assetId];
   if (input.canvasNodeId) return card && card.hiddenAt == null ? canvasInputAssetIds(card, input.cellId ?? "", canvas) : [];
   if (source && isWorkflowGenerationResult(input, source)) return workflowGenerationPreviewIds(source, canvas);
   return source?.outputs[input.portId ?? ""]?.assetIds ?? [];

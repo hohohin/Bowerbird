@@ -75,7 +75,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
   const [operation, setOperation] = useState<Operation | null>(null);
   const [assign, setAssign] = useState<string[] | null>(null);
   const [moveEntries, setMoveEntries] = useState<MoveEntrySelection | null>(null);
-  const [preview, setPreview] = useState<{ path: string; sourceKey: string } | null>(null);
+  const [preview, setPreview] = useState<{ asset: Asset; path: string; sourceKey: string } | null>(null);
   const [jump, setJump] = useState<{ id: string; sequence: number } | null>(null);
   const [drop, setDrop] = useState<string | null>(null);
   const sidebarKey = `bowerbird.catalog.folderSidebarWidth${pane ? `.${pane.id}` : ""}`;
@@ -254,7 +254,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     if (!onInsertAsset && projectId && state.activeProjectId !== projectId) return;
     if (!onInsertAsset && (state.boardOpen || state.genEditing)) window.dispatchEvent(new CustomEvent("bowerbird://board-asset-picked", { detail: asset.id }));
     else if (isAudioAsset(asset)) openDetail(asset);
-    else void run(async () => { if (!asset.store_path) throw new Error("原文件暂不可用"); const path = await externalFiles.media(asset.store_path); if (canShowOverlay()) setPreview({ path, sourceKey: entryOf(asset).version ?? videoSourceKey(asset)! }); });
+    else void run(async () => { if (!asset.store_path) throw new Error("原文件暂不可用"); const path = await externalFiles.media(asset.store_path); if (canShowOverlay()) setPreview({ asset, path, sourceKey: entryOf(asset).version ?? videoSourceKey(asset)! }); });
   }
   function context(asset: Asset, x: number, y: number, location: CatalogLocation) {
     const entry = entryOf(asset), key = filterRef.current;

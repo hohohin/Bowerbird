@@ -14,7 +14,7 @@ export function templateInputValue(binding: WorkflowInput, type: "text" | "image
   }
   if (binding.nodeId) return nodes.find(node => node.id === binding.nodeId)?.outputs[binding.portId ?? type];
   if (binding.dimension && type === "text") return { type, text: binding.dimension.body };
-  if (binding.assetId) return { type: "image", assetIds: [binding.assetId] };
+  if (binding.assetId) return { type: "image", assetIds: [binding.videoFrame?.assetId ?? binding.assetId] };
   if (binding.groupId) return { type: "image", assetIds: binding.assetIds ?? [] };
 }
 

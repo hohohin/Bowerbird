@@ -27,6 +27,10 @@ const timers = new Map<string, ReturnType<typeof setInterval>>();
 const pendingReplies: Array<() => void> = [];
 let nextCallback = 0;
 export const controls = { fault: "none", hold: true, delayReply: false, authenticated: true, entitled: true, cloudAuthenticated: true };
+const questions = new Map<string, { turnId: string; callId: string; questions: unknown[] }[]>();
+export function setQuestions(conversationId: string, batches: { turnId: string; callId: string; questions: unknown[] }[]) {
+  questions.set(conversationId, batches);
+}
 export const calls: Array<{ command: string; args: any }> = [];
 export const subscribe = (listener: () => void) => { subscribers.add(listener); return () => { subscribers.delete(listener); }; };
 const changed = () => { for (const listener of subscribers) listener(); };
@@ -133,6 +137,13 @@ export async function invoke(command: string, args: any = {}) {
   if (command === "visual_profile_list") return [];
   if (command === "local_chat_list") { if (controls.fault === "read") throw new Error("synthetic database C:\\private\\chat.db failed"); return Object.values(database.conversations).filter(chat => chat.projectId === args.projectId).sort((a, b) => b.updatedAt - a.updatedAt).map(summary); }
   if (command === "local_chat_revision") return database.conversations[args.conversationId]?.revision ?? null;
+  if (command === "local_chat_questions") return clone(questions.get(args.conversationId) ?? []);
+  if (command === "local_chat_answer_question") {
+    const pending = questions.get(args.conversationId) ?? [];
+    if (!pending.some(batch => batch.turnId === args.turnId && batch.callId === args.callId)) throw new Error("此问题已结束");
+    questions.set(args.conversationId, pending.filter(batch => batch.callId !== args.callId));
+    return null;
+  }
   if (command === "local_chat_get") { if (controls.fault === "read") throw new Error("synthetic database C:\\private\\chat.db failed"); return clone(database.conversations[args.conversationId] ?? null); }
   if (command === "local_chat_new_on_card") {
     const old = database.conversations[args.conversationId];

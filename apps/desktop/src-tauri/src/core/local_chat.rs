@@ -643,6 +643,13 @@ impl Database {
             "SELECT json_extract(request_json,'$.agentNodeId') IS NULL OR json_extract(request_json,'$.manualCardRun') IS 1
              FROM local_chat_turns WHERE id=?1", [turn], |row|row.get(0))?)
     }
+    pub fn local_chat_has_prior_interactive_turn(&self, id: &str, turn: &str) -> AppResult<bool> {
+        Ok(self.conn.lock().unwrap().query_row(
+            "SELECT EXISTS(SELECT 1 FROM local_chat_turns
+             WHERE conversation_id=?1 AND id<>?2 AND provider_turn_id IS NOT NULL
+             AND (json_extract(request_json,'$.agentNodeId') IS NULL OR json_extract(request_json,'$.manualCardRun') IS 1))",
+            params![id, turn], |row| row.get(0))?)
+    }
     pub fn vps_chat_turn_message(&self, conversation: &str, turn: &str) -> AppResult<(String,usize)> {
         self.conn.lock().unwrap().query_row("SELECT m.text,json_array_length(m.reference_asset_ids)
             FROM local_chat_messages m JOIN local_chat_conversations c ON c.id=m.conversation_id
@@ -652,10 +659,6 @@ impl Database {
     }
     pub fn set_local_chat_provider_thread(&self, id: &str, provider_id: &str) -> AppResult<()> {
         self.conn.lock().unwrap().execute("UPDATE local_chat_conversations SET provider_thread_id=?2 WHERE id=?1 AND (provider_thread_id IS NULL OR provider_thread_id=?2)",params![id,provider_id])?;
-        Ok(())
-    }
-    pub fn clear_local_chat_provider_thread(&self, id: &str) -> AppResult<()> {
-        self.conn.lock().unwrap().execute("UPDATE local_chat_conversations SET provider_thread_id=NULL WHERE id=?1", [id])?;
         Ok(())
     }
     pub fn set_local_chat_provider_turn(&self, turn: &str, provider_id: &str) -> AppResult<()> {
@@ -676,6 +679,29 @@ impl Database {
         let conn = self.conn.lock().unwrap();
         conn.query_row("SELECT t.id,t.provider_turn_id FROM local_chat_turns t JOIN local_chat_conversations c ON c.id=t.conversation_id WHERE c.id=?1 AND c.provider IN ('deepseek-cloud','dsh-local','dsh-cloud') AND c.status IN ('stopped','interrupted','failed') ORDER BY t.created_at DESC,t.rowid DESC LIMIT 1",[id],|row| Ok((row.get(0)?,row.get(1)?)))
             .map_err(|_| error("此对话暂无可取回的任务"))
+    }
+    pub fn local_chat_dsh_question_checkpoint(&self, id: &str) -> AppResult<Option<(String, String)>> {
+        Ok(self.conn.lock().unwrap().query_row(
+            "SELECT t.id,t.provider_turn_id FROM local_chat_turns t JOIN local_chat_conversations c ON c.id=t.conversation_id
+             WHERE c.id=?1 AND c.provider='dsh-local' AND c.status IN ('running','interrupted','failed')
+             AND t.id=(SELECT id FROM local_chat_turns WHERE conversation_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 1)
+             AND CASE WHEN json_valid(t.provider_turn_id) THEN json_extract(t.provider_turn_id,'$.questions_enabled') IS 1 ELSE 0 END",
+            [id], |row| Ok((row.get(0)?, row.get(1)?))) .optional()?)
+    }
+
+    pub fn resume_local_dsh_question(&self, id: &str, turn: &str, checkpoint: &str) -> AppResult<ChatConversation> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let changed = tx.execute("UPDATE local_chat_turns SET status='running' WHERE id=?2 AND conversation_id=?1 AND provider_turn_id=?3
+            AND status IN ('interrupted','failed') AND ?2=(SELECT id FROM local_chat_turns WHERE conversation_id=?1 ORDER BY created_at DESC,rowid DESC LIMIT 1)
+            AND EXISTS(SELECT 1 FROM local_chat_conversations WHERE id=?1 AND provider='dsh-local' AND status IN ('interrupted','failed'))",
+            params![id,turn,checkpoint])?;
+        if changed != 1 { return Err(error("对话已有新进展，请重新打开查看")); }
+        tx.execute("UPDATE local_chat_messages SET status='running' WHERE conversation_id=?1 AND turn_id=?2 AND role='assistant'",params![id,turn])?;
+        tx.execute("UPDATE local_chat_conversations SET status='running',error=NULL,revision=revision+1 WHERE id=?1",[id])?;
+        let chat = read(&tx,id)?.ok_or_else(|| error("对话记录不存在"))?;
+        tx.commit()?;
+        Ok(chat)
     }
     pub fn local_chat_turn_has_dsh_skill(&self, turn: &str) -> AppResult<bool> {
         Ok(self.conn.lock().unwrap().query_row("SELECT json_type(request_json,'$.dshSkill')='object' FROM local_chat_turns WHERE id=?1",

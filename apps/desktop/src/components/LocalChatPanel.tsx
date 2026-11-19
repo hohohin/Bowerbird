@@ -30,7 +30,7 @@ function inlineText(text: string): ReactNode[] {
     ? <strong key={index}>{piece.slice(2, -2)}</strong>
     : piece.startsWith("`") && piece.endsWith("`") ? <code key={index}>{piece.slice(1, -1)}</code> : piece);
 }
-function MessageText({ text }: { text: string }) {
+export function MessageText({ text }: { text: string }) {
   return <div className="local-chat-text">{text.split(/(```[\s\S]*?(?:```|$))/g).map((part, index) => {
     if (part.startsWith("```")) {
       const content = part.replace(/^```[^\n]*\n?/, "").replace(/```$/, "");

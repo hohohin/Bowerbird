@@ -5,6 +5,8 @@ use crate::core::local_chat::RestoredChatOutcome;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::Path;
+#[path = "local_chat_dsh_questions.rs"]
+pub(super) mod questions;
 
 /// DSH 0.2+ 把 preset 声明固定在 profile 里：注册表不扫描目录，也不接受 preset 路径。
 /// 因此本机建卡工具作为一条 profile 补丁安装一次，每轮只登记会话级连接。
@@ -21,13 +23,15 @@ const ROUTE_PROMPT: &str = "session/prompt";
 const ROUTE_EVENTS: &str = "session/events";
 const ROUTE_CANCEL: &str = "session/cancel";
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Pending {
     version: u8,
     base: String,
     session: String,
     rpc_id: String,
     after: i64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    questions_enabled: bool,
 }
 
 fn session_id(turn: &str) -> String {
@@ -50,17 +54,19 @@ pub(super) struct Health {
     pub(super) preset: bool,
 }
 
+#[derive(Clone)]
 pub(super) struct Host {
     client: reqwest::Client,
     base: String,
+    cookie: Option<reqwest::header::HeaderValue>,
 }
 impl Host {
     pub(super) async fn connect(base: &str, auth: Option<&str>) -> AppResult<Self> {
         let base = local_base(base)?;
-        let client = super::super::agent_ds::dsh_client(&base, auth)
+        let (client, cookie) = super::super::agent_ds::dsh_client_with_cookie(&base, auth)
             .await
             .map_err(|_| error("无法连接本机 DSH，请检查服务与登录链接"))?;
-        Ok(Self { client, base })
+        Ok(Self { client, base, cookie })
     }
 
     async fn call(&self, method: &str, payload: Value, rpc_id: &str) -> AppResult<Value> {
@@ -146,6 +152,39 @@ impl Host {
     }
 
     /// DSH 0.2 history: `session/events` pages backwards from the log end through `throughSeq`.
+    async fn continuation_cursor(&self, session: &str) -> AppResult<i64> {
+        let state = self.rpc("session/state", json!({"request":{"sessionId":session}})).await?;
+        if state["running"] != false
+            || state["queue"].as_array().is_some_and(|queue| !queue.is_empty())
+            || state["pendingInput"].as_array().is_some_and(|pending| !pending.is_empty())
+        {
+            return Err(error("本机 DSH 的上一轮尚未结束，请先取回原回复"));
+        }
+        state["cursor"].as_i64().ok_or_else(|| error("无法确认本机 DSH 会话进度，本轮未发送"))
+    }
+
+    async fn has_pending_questions(&self, session: &str, reply: &Reply) -> AppResult<bool> {
+        if reply.question_calls.is_empty() {
+            return Ok(false);
+        }
+        Ok(self.question_projection(session).await?.0.iter()
+            .any(|item| item["callId"].as_str().is_some_and(|id| reply.question_calls.contains(id))))
+    }
+
+    async fn question_projection(&self, session: &str) -> AppResult<(Vec<Value>, HashSet<String>)> {
+        let mut snapshot = self.rpc("session/projections", json!({"request":{"sessionId":session}})).await?;
+        let Value::Array(active) = snapshot["values"]["userQuestions"]["active"].take() else {
+            return Err(error("本机 DSH 未返回此轮的问题状态，暂不能确认任务完成"));
+        };
+        let inbox = &snapshot["values"]["inbox"];
+        let queued = ["next-step", "next-turn"].iter().filter_map(|key| inbox[*key].as_array())
+            .flatten().filter_map(|message| {
+                let source = &message["source"];
+                (source["kind"] == "user-question-reply").then(|| source["callId"].as_str()).flatten().map(str::to_owned)
+            }).collect();
+        Ok((active, queued))
+    }
+
     async fn events(&self, pending: &Pending) -> AppResult<Vec<Value>> {
         let mut entries = BTreeMap::new();
         let mut through = None;
@@ -308,14 +347,14 @@ fn preset_block_template(module: &str, id: &str) -> String {
         }
     }
     text.push_str(&format!(
-        "          - id: skill-filesystem\n            name: '@deepseek-ai/dsh-skill-filesystem'\n          - id: tool-skill\n            name: '@deepseek-ai/dsh-tool-skill'\n          - id: bowerbird-cards\n            name: ./{module}\n{PRESET_END}\n"
+        "          - id: skill-filesystem\n            name: '@deepseek-ai/dsh-skill-filesystem'\n          - id: tool-skill\n            name: '@deepseek-ai/dsh-tool-skill'\n          - id: tool-ask-user\n            name: '@deepseek-ai/dsh-tool-ask-user'\n            config: {{ mode: timed, timeout: -1 }}\n          - id: bowerbird-cards\n            name: ./{module}\n{PRESET_END}\n"
     ));
     text
 }
 
 fn skill_instructions() -> String {
     CHAT_INSTRUCTIONS.replace("不得执行命令、读写用户文件、调用其他工具或请求权限。",
-        "可使用 skill 加载本机技能目录中适用的技能，并按其正文完成本轮任务。只在用户要求建卡时使用 create_canvas_cards。不得执行命令、读写其他用户文件或请求权限。")
+        "可使用 skill 加载本机技能目录中适用的技能，并按其正文完成本轮任务。只在用户要求建卡时使用 create_canvas_cards。只有缺少完成任务所必需的信息时才调用 ask_user_question，请省略 timeout，收到答复后继续原任务。不得执行命令、读写其他用户文件或请求权限。")
 }
 
 /// Replace our own marker block in place, otherwise append it to the user patch list.
@@ -328,12 +367,32 @@ fn merge_patch(original: &str, block: &str) -> String {
         clean.replace_range(at..at + 2, "");
         return merge_patch(&clean, block);
     }
+    let prepared;
+    let original = if let Some(id) = managed_preset_id(block) {
+        let begin = format!("# >>> bowerbird-chat retained {id}\n");
+        let end = format!("# <<< bowerbird-chat retained {id}\n");
+        if let Some((from, to)) = original.find(&begin).and_then(|start| {
+            original[start + begin.len()..].find(&end).map(|after| (start, start + begin.len() + after + end.len()))
+        }) {
+            prepared = format!("{}{}", &original[..from], &original[to..]);
+            prepared.as_str()
+        } else { original }
+    } else { original };
     if let Some(start) = original.find(PRESET_BEGIN) {
         let end = original[start..]
             .find(PRESET_END)
             .map(|offset| start + offset + PRESET_END.len());
         return match end {
-            Some(end) => format!("{}{}{}", &original[..start], block.trim_end(), &original[end..]),
+            Some(end) => {
+                let mut next = format!("{}{}{}", &original[..start], block.trim_end(), &original[end..]);
+                let old = &original[start..end];
+                if let Some(id) = managed_preset_id(old).filter(|id| Some(*id) != managed_preset_id(block)) {
+                    let prior = old.trim_start_matches(PRESET_BEGIN).trim_end_matches(PRESET_END).trim()
+                        .replacen(&format!("- id: {PRESET_ROW}"), &format!("- id: preset-{id}"), 1);
+                    next.push_str(&format!("\n\n# >>> bowerbird-chat retained {id}\n{prior}\n# <<< bowerbird-chat retained {id}\n"));
+                }
+                next
+            }
             None => format!("{}{}", &original[..start], block),
         };
     }
@@ -345,6 +404,14 @@ fn merge_patch(original: &str, block: &str) -> String {
     text.push_str("\n\n");
     text.push_str(block);
     text
+}
+
+fn managed_preset_id(block: &str) -> Option<&str> {
+    block.lines().find_map(|line| {
+        let id = line.strip_prefix("        id: ")?;
+        let hash = id.strip_prefix("bowerbird-chat-")?;
+        (hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(id)
+    })
 }
 
 fn empty_sequence_offset(patch: &str) -> Option<usize> {
@@ -575,6 +642,7 @@ struct Reply {
     reason: Option<String>,
     /// Host-reported failure code and message for an `error` turn ending.
     failure: Option<(String, String)>,
+    question_calls: HashSet<String>,
 }
 impl Reply {
     fn failure_code(&self) -> Option<&str> {
@@ -704,6 +772,26 @@ fn fold_history(entries: &[Value], rpc_id: &str, after: i64) -> AppResult<Reply>
                 if data["source"]["rpcId"] == rpc_id || data["source"]["requestId"] == rpc_id =>
             {
                 reply.target = reply.latest;
+            }
+            Some("tool/call")
+                if reply.target.is_some() && reply.target == reply.latest && data["name"] == "ask_user_question" =>
+            {
+                if let Some(call) = data["callId"].as_str() {
+                    reply.question_calls.insert(call.to_owned());
+                }
+            }
+            // After cold recovery, the native answer can enter a new turn. Follow only
+            // replies explicitly attached to a tool call from this request's turn(s).
+            Some("user/message")
+                if data["source"]["kind"] == "user-question-reply" && reply.latest.is_some()
+                    && data["source"]["callId"].as_str().is_some_and(|id| reply.question_calls.contains(id)) =>
+            {
+                if reply.target != reply.latest {
+                    parts.clear();
+                    reply.target = reply.latest;
+                    reply.reason = None;
+                    reply.failure = None;
+                }
             }
             Some("assistant/chunk")
                 if (reply.target.is_some() && data["turn"].as_i64() == reply.target)
@@ -985,10 +1073,32 @@ async fn run_live(
     if *cancel.borrow() {
         return Ok("stopped");
     }
-    let session = session_id(turn);
+    let interactive = db.local_chat_turn_uses_history(turn)?;
+    let saved = if interactive { db.local_chat_provider_thread(id)? } else { None };
+    let session = if interactive { session_id(&format!("conversation:{id}")) } else { session_id(turn) };
+    let after = if let Some(saved) = saved.as_ref() {
+        if saved != &session {
+            return Err(error("本机 DSH 对话编号不匹配，本轮未发送"));
+        }
+        host.continuation_cursor(&session).await?
+    } else { -1 };
     let gateway = Gateway::start(app, db, id, turn, &session, cancel.clone()).await?;
     handshake_add(&session, &gateway.endpoint, &gateway.token)?;
-    let result = live_turn(app, db, id, turn, host, &session, &gateway, cancel).await;
+    let result = async {
+        // The preset checks the handshake when the agent is created to restrict inherited tools.
+        if saved.is_none() {
+            let preset = current_preset_id()?;
+            let create = json!({"sessionId":session,"cwd":preset_root()?.parent(),"agentPreset":preset});
+            let created = host.rpc(ROUTE_CREATE, json!({"request": create})).await?;
+            if created["sessionId"] != session || created["agentPreset"] != preset {
+                return Err(error("本机 DSH 未确认对话编号和建卡组件，本轮未发送"));
+            }
+            if interactive {
+                db.set_local_chat_provider_thread(id, &session)?;
+            }
+        }
+        live_turn(app, db, id, turn, host, &session, after, &gateway, cancel).await
+    }.await;
     handshake_remove(&session);
     result
 }
@@ -1001,17 +1111,10 @@ async fn live_turn(
     turn: &str,
     host: &Host,
     session: &str,
+    after: i64,
     gateway: &Gateway,
     cancel: watch::Receiver<bool>,
 ) -> AppResult<&'static str> {
-    let preset = current_preset_id()?;
-    let create = json!({"sessionId":session,"cwd":preset_root()?.parent(),"agentPreset":preset});
-    let created = host
-        .rpc(ROUTE_CREATE, json!({"request": create}))
-        .await?;
-    if created["sessionId"] != session || created["agentPreset"] != preset {
-        return Err(error("本机 DSH 未启用本轮独立工具，未发送对话"));
-    }
     let chat = db
         .get_local_chat(id)?
         .ok_or_else(|| error("对话记录不存在"))?;
@@ -1033,7 +1136,8 @@ async fn live_turn(
         base: host.base.clone(),
         session: session.to_string(),
         rpc_id: uuid::Uuid::new_v4().to_string(),
-        after: -1,
+        after,
+        questions_enabled: true,
     };
     // Save before dispatch: a lost acknowledgement must never create a second model turn.
     db.set_local_chat_provider_turn(turn, &serde_json::to_string(&pending)?)?;
@@ -1054,24 +1158,43 @@ async fn live_turn(
     if accepted["accepted"] != true {
         return Err(error("本机 DSH 未确认接收，请取回原回复；未自动重发"));
     }
-    let start = Instant::now();
+    observe_live(app, db, id, turn, host, &pending, gateway, cancel).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn observe_live(
+    app: &AppHandle, db: &Database, id: &str, turn: &str, host: &Host,
+    pending: &Pending, gateway: &Gateway, cancel: watch::Receiver<bool>,
+) -> AppResult<&'static str> {
+    let session = &pending.session;
+    let mut last_active = Instant::now();
     let mut cancellation = None;
     let mut cancel_sent = false;
-    let mut saved = String::new();
+    let mut saved = db.get_local_chat(id)?.and_then(|chat| chat.messages.into_iter()
+        .find(|message| message.turn_id == turn && message.role == "assistant")).map(|message| message.text).unwrap_or_default();
     loop {
-        let reply = fold_history(&host.events(&pending).await?, &pending.rpc_id, pending.after)?;
+        let reply = fold_history(&host.events(pending).await?, &pending.rpc_id, pending.after)?;
         if reply.text != saved {
             save_stream_text(app, db, id, turn, &saved, &reply.text)?;
             saved = reply.text.clone();
         }
-        if let Some(status) = reply.observed_status(db, turn, &pending)? {
-            return Ok(status);
+        let pending_question = host.has_pending_questions(session, &reply).await?;
+        if pending_question {
+            last_active = Instant::now();
+        }
+        if !pending_question || !matches!(reply.reason.as_deref(), Some("completed" | "interrupted")) {
+            if let Some(status) = reply.observed_status(db, turn, pending)? {
+                return Ok(status);
+            }
         }
         if *cancel.borrow() {
             gateway
                 .active
                 .store(false, std::sync::atomic::Ordering::Release);
             cancellation.get_or_insert_with(Instant::now);
+            if pending_question && matches!(reply.reason.as_deref(), Some("completed" | "interrupted")) {
+                return Ok("stopped");
+            }
             if !cancel_sent && reply.target.is_some() {
                 if reply.latest != reply.target {
                     return Err(error(
@@ -1088,7 +1211,7 @@ async fn live_turn(
                 "本机 DSH 尚未确认停止，工具通道已关闭；请稍后取回原回复",
             ));
         }
-        if start.elapsed() > Duration::from_secs(1800) {
+        if last_active.elapsed() > Duration::from_secs(1800) {
             return Err(error("本机 DSH 回复等待超时，未自动重发；请取回原回复"));
         }
         tokio::time::sleep(Duration::from_millis(750)).await;
@@ -1135,6 +1258,7 @@ async fn run_legacy(
         session,
         rpc_id: uuid::Uuid::new_v4().to_string(),
         after: -1,
+        questions_enabled: false,
     };
     // Save before dispatch: a lost acknowledgement must never create a second model turn.
     db.set_local_chat_provider_turn(turn, &serde_json::to_string(&pending)?)?;
@@ -1205,7 +1329,8 @@ pub(super) async fn recover(
         serde_json::from_str(&saved).map_err(|_| error("原本机 DSH 任务记录不完整"))?;
     if pending.version != 1
         || pending.base != local_base(base)?
-        || pending.session != session_id(&turn)
+        || (pending.session != session_id(&turn)
+            && db.local_chat_provider_thread(id)?.as_deref() != Some(pending.session.as_str()))
     {
         return Err(error("本机 DSH 服务已改变，请连接原服务后取回回复"));
     }
@@ -1221,6 +1346,11 @@ pub(super) async fn recover(
         )?
     };
     let message;
+    if matches!(reply.reason.as_deref(), Some("completed" | "interrupted"))
+        && host.has_pending_questions(&pending.session, &reply).await?
+    {
+        return Err(error("本机 DSH 仍在等待此任务的问题答复"));
+    }
     let outcome = match reply.status() {
         Ok(Some("done")) => RestoredChatOutcome::Done,
         Ok(Some(_)) => RestoredChatOutcome::Interrupted,

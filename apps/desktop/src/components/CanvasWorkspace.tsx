@@ -653,7 +653,7 @@ export function CanvasWorkspace({
   const gridElement = useRef<HTMLDivElement>(null);
   const paintWindow = useRef<ReturnType<typeof canvasPaintWindow> | null>(null);
   const [selectedCanvasNodeIds, setSelectedCanvasNodeIds] = useState<Set<string>>(() => new Set());
-  const [canvasLightbox, setCanvasLightbox] = useState<{ images: string[]; index: number } | null>(null);
+  const [canvasLightbox, setCanvasLightbox] = useState<{ images: string[]; assetIds?: Array<string | null>; index: number } | null>(null);
   const videoFrameSaves = useRef(new Map<string, () => Promise<void>>());
   const videoTrimSaves = useRef(new Map<string, () => Promise<Asset>>());
   const [promptMenu, setPromptMenu] = useState<{ node: ProjectGraphNode | null; nodeIds: string[]; folder?: CanvasFolderNode; section?: { id: string; name: string } | null; x: number; y: number; point: CanvasPoint | null } | null>(null);
@@ -871,7 +871,9 @@ export function CanvasWorkspace({
     const selected = selectedConversationImage(id, conversationImages(id));
     const output = selected && (card.allOutputs.find(item => item.id === selected.id) ?? card.allOutputs.find(item => item.assetId === selected.assetId));
     const embedded = output && conversationCards.embedded.get(output.id);
-    return output ? [[id, output.id] as const, ...(embedded ? [[JSON.stringify([embedded.nodeId, embedded.cellId]), output.id] as const] : [])] : [];
+    if (!output) return [];
+    const source = { id: output.id, video: isVideoPath(selected?.storePath) };
+    return [[id, source] as const, ...(embedded ? [[JSON.stringify([embedded.nodeId, embedded.cellId]), source] as const] : [])];
   }));
   const imageOnlyConversationIds = useMemo(() => new Set([...conversationCards.cards].flatMap(([id, card]) => {
     const summary = promptNodeSummary(card.latest);
@@ -1521,6 +1523,10 @@ export function CanvasWorkspace({
     const video = parseCreativeComposerState(activeCanvasRef.current.draftJson).drafts.video?.generation;
     return { provider: state.activeGenProvider || state.defaultProvider,
       videoChannel: video?.videoChannel ?? "jimeng", videoOptions: { ...(video?.videoOptions ?? DEFAULT_VIDEO_OPTIONS) } };
+  }
+
+  function agentCardDefaults(): ChatCardDefaults {
+    return { ...chatCardDefaults(), provider: useStore.getState().defaultProvider };
   }
 
   async function undoChatCards(action: ChatCardAction) {
@@ -3599,7 +3605,7 @@ export function CanvasWorkspace({
       return;
     }
     if (isVideoPath(node.asset.storePath) && node.asset.storePath) {
-      setCanvasLightbox({ images: [node.asset.storePath], index: 0 });
+      setCanvasLightbox({ images: [node.asset.storePath], assetIds: [node.asset.assetId], index: 0 });
       return;
     }
     if (isAudioPath(node.asset.storePath)) return;
@@ -3625,6 +3631,7 @@ export function CanvasWorkspace({
     const selectedIndex = available.findIndex((candidate) => candidate.id === asset.id);
     setCanvasLightbox({
       images: available.map((candidate) => candidate.path),
+      assetIds: available.map(candidate => candidate.id),
       index: selectedIndex >= 0 ? selectedIndex : 0,
     });
   }, []);
@@ -5198,12 +5205,20 @@ export function CanvasWorkspace({
   const { gesture: creationImage, preview: creationImagePreview } = useCreationImageInteraction({
     root: workspaceRef, enabled: !loading && !loadFailed, scope: `${projectId}:${viewMode}`,
     resolve: creationImageTarget, onCapture: cancelConversationImageClick,
-    onCanvasVideoPreview: (path, media) => {
+    onCanvasVideoPreview: (path, media, asset) => {
       if (!stageRef.current?.contains(media)) return false;
-      setCanvasLightbox({ images: [path], index: 0 });
+      setCanvasLightbox({ images: [path], assetIds: [asset.id], index: 0 });
       return true;
     },
   });
+  const lightboxPath = canvasLightbox?.images[canvasLightbox.index];
+  const lightboxAssetId = canvasLightbox?.assetIds?.[canvasLightbox.index];
+  const lightboxVideo = lightboxPath && isVideoPath(lightboxPath)
+    ? (lightboxAssetId ? assetById.get(lightboxAssetId) : [...assetById.values()].find(asset => asset.store_path === lightboxPath))
+    : undefined;
+  const lightboxVideoJob = lightboxVideo && lightboxPath
+    ? Object.values(genJobs).find(job => job.turns.some(turn => turn.images.includes(lightboxPath)))
+    : undefined;
 
   if (loadFailed) {
     return (
@@ -5618,7 +5633,7 @@ export function CanvasWorkspace({
             {projectId && workflowInteractive && <CanvasWorkflowLayer key={projectId} ref={workflowRef} projectId={projectId} provisional={!activeCanvas.materialized} toBoardPoint={toBoardPoint} graphNodes={nonChatGraphNodes} visibleGraphNodeIds={visibleGraphNodeIds} conversationCards={conversationCards} selectedConversationOutputs={selectedConversationOutputs} imageOnlyConversationIds={imageOnlyConversationIds} sessionHeights={sessionHeights}
               diagnosticTarget={diagnosticTarget} selectedIds={selectedCanvasNodeIds} panReady={spacePanReady || drawingTool === "pan"} onSelect={workflowOnSelect}
               onNodesChanged={workflowOnNodesChanged} onEdited={workflowOnEdited}
-              onOpenAgent={workflowOnOpenAgent} onNewAgentChat={workflowOnNewAgentChat} onOpenGeneration={workflowOnOpenGeneration}
+              onOpenAgent={workflowOnOpenAgent} getChatCardDefaults={agentCardDefaults} onNewAgentChat={workflowOnNewAgentChat} onOpenGeneration={workflowOnOpenGeneration}
               onDragStart={workflowOnDragStart} onDragMove={workflowOnDragMove} onDragEnd={workflowOnDragEnd} onNodeMenu={workflowOnNodeMenu}
               onRemove={workflowOnRemove} onPlaced={workflowOnPlaced}
               ensureMaterialized={workflowEnsureMaterialized} materials={workflowMaterials} />}
@@ -5701,7 +5716,7 @@ export function CanvasWorkspace({
                         cancelConversationImageClick();
                         if (event.detail < 2 && session) conversationImageClickRef.current = setTimeout(() => openWorkflowGeneration(card ? card.latest : session), event.detail === 0 ? 0 : 350);
                       }}
-                      onDoubleClick={(_event, shown) => { cancelConversationImageClick(); const path = shown.storePath ?? shown.thumbPath; if (path) setCanvasLightbox({ images: [path], index: 0 }); }}
+                      onDoubleClick={(_event, shown) => { cancelConversationImageClick(); const path = shown.storePath ?? shown.thumbPath; if (path) setCanvasLightbox({ images: [path], assetIds: [shown.assetId], index: 0 }); }}
                       onContextMenu={(event, shown) => { if (shown.assetId) openCellAssetContextMenu(event, node, shown.assetId, assetById.get(shown.assetId), shown.id); }}/>
                     if (cell.image_refs?.length) return null;
                     const summary = session && promptNodeSummary(session);
@@ -5828,7 +5843,7 @@ export function CanvasWorkspace({
                     if (consumeSuppressedNodeClick(event)) return;
                     if (isVideoPath(asset.storePath) && asset.storePath) {
                       cancelConversationImageClick();
-                      setCanvasLightbox({ images: [asset.storePath], index: 0 });
+                      setCanvasLightbox({ images: [asset.storePath], assetIds: [asset.assetId], index: 0 });
                       return;
                     }
                     const activate = () => {
@@ -5852,7 +5867,7 @@ export function CanvasWorkspace({
                     cancelConversationImageClick();
                     if (!imageOnly || event.ctrlKey || event.metaKey || spacePressedRef.current || drawingTool === "pan") return;
                     const path = asset.storePath ?? asset.thumbPath;
-                    if (path) setCanvasLightbox({ images: [path], index: 0 });
+                    if (path) setCanvasLightbox({ images: [path], assetIds: [asset.assetId], index: 0 });
                   }} onContextMenu={(event, asset) => {
                     cancelConversationImageClick();
                     const material = nodes.find(item => item.kind === "asset" && item.asset.id === asset.id);
@@ -6129,7 +6144,7 @@ export function CanvasWorkspace({
           onClose={() => { setSelectedChatId(null); useStore.getState().setBoardActive(false); }}
           onSelectConversation={openLocalChat}
           onNewConversation={newLocalChat}
-          getCardDefaults={chatCardDefaults} onLocateCards={locateChatCards} onUndoCards={undoChatCards}
+          getCardDefaults={agentCardDefaults} onLocateCards={locateChatCards} onUndoCards={undoChatCards}
           onOpenLibrary={() => { openLibrary(); setCanvasLibraryOpen(true); useStore.getState().setBoardActive(true); }} />}
         {chatHistoryOpen && projectId && <div id="project-chat-history" className="canvas-chat-history"><LocalChatHistory projectId={projectId}
           activeConversationId={selectedChatId ?? undefined} onOpen={openLocalChat} onClose={() => setChatHistoryOpen(false)} /></div>}
@@ -6364,13 +6379,16 @@ export function CanvasWorkspace({
             setSelectedChatId(null); useStore.getState().setBoardActive(true); documentEditorSession.current++; setDocumentEditor(null);
           }}/></Suspense>}
         {creationImagePreview && (isVideoPath(creationImagePreview.asset.store_path)
-          ? <LibraryVideoPreview path={creationImagePreview.asset.store_path!} sourceKey={videoSourceKey(creationImagePreview.asset)} projectId={projectId ?? null} onClose={creationImage.close}/>
+          ? <LibraryVideoPreview asset={creationImagePreview.asset} job={creationImagePreview.job} path={creationImagePreview.asset.store_path!} sourceKey={videoSourceKey(creationImagePreview.asset)} projectId={projectId ?? null} onClose={creationImage.close}/>
           : <CreationImagePreview asset={creationImagePreview.asset} projectId={projectId} job={creationImagePreview.job} onClose={creationImage.close} />)}
         {canvasLightbox && (
-          <Lightbox
+          lightboxPath && lightboxVideo ? <CreationImagePreview asset={lightboxVideo} projectId={projectId} job={lightboxVideoJob}
+            onClose={() => setCanvasLightbox(null)} video={{ path: lightboxPath, sourceKey: videoSourceKey(lightboxVideo), onAddFrame: addVideoFrame, onSaveTrim: saveVideoTrim }}
+            navigation={{ index: canvasLightbox.index, count: canvasLightbox.images.length,
+              onIndexChange: index => setCanvasLightbox(current => current ? { ...current, index } : null) }}/>
+          : <Lightbox
             onAddVideoFrame={addVideoFrame}
             onSaveVideoTrim={saveVideoTrim}
-            videoSourceKey={videoSourceKey([...assetById.values()].find(asset => asset.store_path === canvasLightbox.images[canvasLightbox.index]))}
             images={canvasLightbox.images}
             index={canvasLightbox.index}
             onClose={() => setCanvasLightbox(null)}
