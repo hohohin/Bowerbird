@@ -1,0 +1,51 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { callTool } from '../core.mjs';
+import { exportSnapshot } from '../export.mjs';
+
+test('export completes literal JS and Rust dependencies and related tests without sweeping private files', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'bowerbird-coverage-'));
+  t.after(() => rm(root, { force: true, recursive: true }));
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' });
+  const write = async (name, content) => {
+    const file = path.join(root, name);
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, content);
+  };
+  await write('apps/demo/src/widget.ts', "import { helper } from './helper.js';\nexport { helper };");
+  await write('apps/demo/src-tauri/src/lib.rs', '#[path = "worker.rs"]\nmod worker;');
+  await write('.gitignore', 'ignored.ts\n');
+  git('init');
+  git('add', '.');
+  git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture');
+  await write('apps/demo/src/helper.ts', "import './nested';\nexport const helper = 1;");
+  await write('apps/demo/src/nested/index.ts', 'export const nested = 1;');
+  await write('apps/demo/src-tauri/src/worker.rs', 'pub fn example() {}');
+  await write('apps/demo/tests/widget.test.py', '# relevant mechanically associated test');
+  await write('apps/demo/tests/unrelated.test.py', '# private example');
+  await write('apps/demo/src/.env', 'private file');
+  const out = path.join(root, '.local', 'snapshot.json');
+  const report = await exportSnapshot(root, out);
+  assert.deepEqual(report.coverageCheck, { dependencyFiles: 3, relatedTests: 1, unresolvedReferences: 0 });
+  const frozen = await readFile(out, 'utf8');
+  const snapshot = JSON.parse(frozen);
+  const files = snapshot.files.map(file => file.path);
+  assert.ok(files.includes('apps/demo/src/nested/index.ts'));
+  assert.ok(files.includes('apps/demo/src-tauri/src/worker.rs'));
+  assert.ok(files.includes('apps/demo/tests/widget.test.py'));
+  assert.ok(!files.some(file => /unrelated|\.env/.test(file)));
+  assert.deepEqual(callTool(snapshot, 'project_overview').coverageCheck, report.coverageCheck);
+
+  await write('apps/demo/src/ignored.ts', 'must never be exported');
+  await write('apps/demo/src/widget.ts', "import './ignored';");
+  await assert.rejects(exportSnapshot(root, out), /coverage check failed/);
+  assert.equal(await readFile(out, 'utf8'), frozen, 'failed coverage keeps the last snapshot');
+  await write('apps/demo/src/widget.ts', "import './linked';");
+  await symlink(path.join(root, 'apps/demo/src/ignored.ts'), path.join(root, 'apps/demo/src/linked.ts'));
+  await assert.rejects(exportSnapshot(root, out), /coverage check failed/);
+  assert.equal(await readFile(out, 'utf8'), frozen);
+});

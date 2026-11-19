@@ -107,6 +107,8 @@
 
 - **入库后台分析仅走本地。** 自动命名／描述不再使用 Cloud，历史 `cloud_auto_understand` 开启值也不触发后台上传；用户主动提交的 Cloud 任务仍按明确选择处理。
 
+- **2026-11-19 Mac 复现只读 MCP。** 远端 `325f446f` 有 Gemini 上线与快照覆盖记录，所引用的本机实现未随源码同步。按记录重建 HTTP／OAuth、回环启动与 SSH 重连、静态依赖补齐，复用原 stdio 工具。Mac 隔离验证 17 项 Node 回归及 1 项 Chrome 授权回归通过，公网与 Gemini 账号验证沿用各自历史记录。[本机入口与验收](apps/code-reader-mcp/README.md)
+
 - **Gemini MCP 断线恢复、手动注册与浏览器授权（2026-11-16）。** SSH 断线保留本机 HTTP 和内存授权，每 5 秒重连；支持本机保存专用 Client ID／secret，绑定用户复制的精确 Google 回调。真实 Chrome 定位授权密码提交后 403：`no-referrer` 令原生表单发送 `Origin: null`；现仅授权 HTML 使用 `same-origin`，CSP 同时允许当前注册 Google 回调域名以放行授权码跳转，仍严格检查来源、密码、Cookie、PKCE 和精确回调。已重启，通过公网原生表单、Google 回跳放行、换码和工具发现验证，测试授权已撤销；25 项隔离及 1 项浏览器回归通过。`adminPassword` 仅在本站授权页输入；原手动凭据可继续使用，旧授权页需从 Gemini 重新打开。Google 账号连接仍待实测。操作见 [只读 MCP](apps/code-reader-mcp/README.md#上线后启动与验收)。
 
 - **只读 MCP 自动补齐依赖（2026-11-16）。** 快照以已跟踪文件及显式例外为起点，递归补齐 JS／TS 和 Rust 的静态本地引用，并发现相关未跟踪测试；源码／测试／脚本目录支持 Python。所有新增候选沿用路径、链接、容量及脱敏限制。现存核心源码依赖不可导出时更新失败，保留原快照和现役隧道；覆盖情况通过 `project_overview.coverageCheck` 与本机报告公开。动态路径、历史副本缺失引用及启发式未关联的测试仍需独立核验。实现与边界见 [只读 MCP](apps/code-reader-mcp/README.md#自动依赖补齐与覆盖检查)。

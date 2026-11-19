@@ -64,7 +64,7 @@ ChatGPT <──官方私有 HTTPS 隧道──> stdio MCP 子进程
 
 - **工具能力**：仅 `project_overview`、`list_files`、`read_file`、`search_code`；不提供 shell、文件写入、Git、网络请求或快照导出工具。所有工具声明 `readOnlyHint: true`，实际限制由实现执行。
 - **文件权限**：`run.mjs` 用 Node Permission Model 启动服务，只许可读取服务模块和固定快照；不授予文件写入、子进程、Worker 或原生 addon 权限。服务拒绝不带权限约束的直接启动。模型提供的路径只用于查内存索引，永不传给文件系统。
-- **导出范围**：固定项目根；只读当前工作区内 Git 已跟踪的文本文件（含未提交修改），另明确纳入 `dev-doc/Bowerbird开发计划.md`。未跟踪文件默认不可见；文件增加/删除后需人工检查范围。`core.mjs` 的白名单控制目录及扩展名，排除点目录、`.env`、Git 数据、密钥文件、日志、数据库、构建产物、资源及测试 fixtures。
+- **导出范围**：固定项目根；只读当前工作区内 Git 已跟踪的文本文件（含未提交修改），另明确纳入 `dev-doc/Bowerbird开发计划.md`。未跟踪文件按下方依赖与关联测试规则补齐；文件增加或删除后需人工检查范围。`core.mjs` 的白名单控制目录及扩展名，排除点目录、`.env`、Git 数据、密钥文件、日志、数据库、构建产物、资源及测试 fixtures。
 - **路径与容量**：拒绝绝对路径、`..`、反斜杠、百分号、Windows ADS；导出拒绝 symlink、junction、硬链接、二进制及单文件 >1 MiB；快照 ≤64 MiB / 10,000 文件。单次请求 ≤64 KiB，读取最多 200 行且有字符上限；搜索是字面匹配，避免正则回溯。
 - **凭据**：导出时隐藏疑似 token、带口令 URL、私钥块和常见带引号凭据赋值，保留行号。自动扫描可能漏掉自定义、拆分或未标注的敏感值；不能宣称任何代码都绝对无秘密。将特别敏感文件从白名单排除，审核快照后再授权隧道。
 - **信任边界**：Node 权限模型是可信代码的防误用限制，[不是抵御恶意本机代码的 OS 沙箱](https://nodejs.org/api/permissions.html)。本方案假设运行时、服务脚本和本机账号可信；本机管理员仍可改源码、快照或进程。导出期间应避免其他本机进程并发替换目录。需要抵御本机进程攻击时，应再用独立低权限账号/只读容器隔离。
@@ -72,11 +72,39 @@ ChatGPT <──官方私有 HTTPS 隧道──> stdio MCP 子进程
 
 ## 更新与撤销
 
-委派网页 GPT 规划前，先导出当前工作区并重载隧道，再让规划者实际调用 `project_overview`。核对返回的 `createdAt` 与本地新快照一致后再读源码。相同 HEAD 下仍可能有新的未提交改动。未跟踪文件不在常规导出范围，其行为以本机源码和测试核实。
+委派网页 GPT 规划前，先导出当前工作区并重载隧道，再让规划者实际调用 `project_overview`。核对返回的 `createdAt` 与本地新快照一致后再读源码。相同 HEAD 下仍可能有新的未提交改动。未跟踪文件只有符合依赖或关联测试规则时才进入快照。
 
 更新代码后，停止隧道（Ctrl+C），重新运行 `export.mjs`，检查快照后重新启动隧道；运行中的服务保持启动时的内存快照，GPT 无权刷新。`revision` 是导出时 HEAD，**不代表未提交修改已提交**，文件 SHA-256 对应脱敏后内容。
 
 临时停用：Ctrl+C 停隧道。长期撤销：在 ChatGPT 移除连接，并在 Platform 禁用/删除隧道或撤销专用 runtime key。快照是本机副本，可按需删除 `.local`；这不能撤回已进入聊天的文本。
+
+## 自动依赖补齐与覆盖检查
+
+从 Git 跟踪文件和显式架构入口出发，递归补齐 JS／TS 字面量相对导入与导出、Rust 外部模块和字面量 include。按同应用、相同文件名规则找关联测试，Python 仅纳入源码、测试和脚本目录。所有补齐文件通过原路径白名单、链接检查、容量和凭据脱敏；Git 忽略文件不会作为未跟踪文件自动补齐。现存且符合文件类型白名单的核心依赖如果不可读取或不适合纳入，覆盖检查会拒绝替换原快照。
+
+`project_overview.coverageCheck` 与本机报告包含补齐文件、关联测试和未解析引用数。解析是静态规则，动态路径、导入别名、历史源码或部分内联 Rust 模块可能需要人工核实。快照发布前仍要审核实际内容。
+
+## Gemini 网页端已部署账号连接待验收
+
+11 月 15–16 日现役实例的部署和验收见 [历史记录](../../project_logs/2026-11-15-gemini-code-mcp.md)。11 月 19 日在 Mac 从仓库记录复现本机源码，使用四个原只读工具、Streamable HTTP 与带 S256 PKCE 的 OAuth，以及可选 SSH 反向转发和重连。当前 Mac 的验证范围为合成数据和本机回环，不代表 Gemini 账号或公网实例由本次复现重新验收。
+
+### 本机启动
+
+在 `apps/code-reader-mcp` 用 Node 24.10+ 执行以下命令。首先审核生成的 `.local/snapshot.json`。
+
+```sh
+node export.mjs
+node setup-gemini.mjs --origin http://127.0.0.1:48731
+node run-gemini.mjs
+```
+
+`/healthz` 可检查监听状态，匿名访问 `/mcp` 返回 401。首次配置生成独立访问密码保存在受限的 `.local/gemini/config.json`。手动客户端用 `node setup-gemini.mjs --redirect-uri <Gemini 提供的精确回调>` 注册，重启后读取本机配置中的 Client ID 和 secret。密码只用于本服务授权表单。访问令牌、动态客户端和会话驻留内存，进程重启后需重新授权。
+
+### 上线后启动与验收
+
+公网接入配置使用对应的 HTTPS origin 并保留代理传入的原 Host。已有独立转发账号时，可在本机配置填入 `ssh.host`、`ssh.user`、`ssh.identityFile`、`ssh.knownHosts` 和 `ssh.remotePort` 后执行 `node run-gemini.mjs --ssh`。固定监听本机回环，VPS 远程端口也绑定回环。SSH 校验已知主机，断线 5 秒后重连，本机 HTTP 与已授权会话继续运行。实际公网部署、账号授权和工具验收见历史记录。协议参考 [Gemini OAuth 指南](https://developers.google.com/connected-apps/mcp/oauth) 与 [MCP Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)。
+
+2026-11-19 本机验证使用 `node --test test/*.test.mjs` 和 `node test/consent.browser.mjs`。后者需要 Chrome、工作区 Playwright 与 OpenSSL，在临时 HTTPS 环境验证原生表单 Origin 与精确回跳，并复现旧引用策略的 403。
 
 ## 本轮验证与限制
 
