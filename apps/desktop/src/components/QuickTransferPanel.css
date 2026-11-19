@@ -75,3 +75,8 @@ html[data-theme] .quick-transfer-panel .app-modal-body { display: flex; flex-dir
   .quick-transfer-address code { font-size: 11px; }
   .quick-transfer-network { gap: 8px; margin-left: 0; }
 }
+.quick-transfer-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--bb-line); margin-bottom: 16px; }
+.quick-transfer-tabs button { display: flex; align-items: center; gap: 6px; min-height: 40px; color: var(--bb-muted); border-bottom: 1px solid transparent; }
+.quick-transfer-tabs button[aria-selected="true"] { color: var(--bb-ink); border-bottom-color: var(--bb-ink); }
+.quick-transfer-tabs i { width: 4px; height: 4px; background: var(--bb-success); }
+.quick-transfer-pick { display: flex; align-items: center; gap: 6px; min-height: 32px; font-size: 12px; }

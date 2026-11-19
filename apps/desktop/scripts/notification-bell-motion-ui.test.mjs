@@ -5,7 +5,8 @@ import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs'
 
 const output = '.tmp/notification-bell-motion';
 await mkdir(output, { recursive: true });
-const server = await createServer({ cacheDir: `${output}/vite`, server: { host: '127.0.0.1', port: 18957, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: `${output}/vite`, optimizeDeps: { entries: ['scripts/fixtures/notifications-scrollbars/bell-test.html'] },
+  server: { host: '127.0.0.1', port: 18957, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1000, height: 700 } });

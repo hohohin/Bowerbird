@@ -63,6 +63,8 @@ export class WorkflowPlannerRuntime {
               preview: `${assets.length} 张图片（未进行视觉分析）：${assets.map(asset => `${asset.name} (${asset.width}×${asset.height})`).join("、").slice(0, 600)}` });
           }
         }
+      } else if (input.dimension && type === "text") {
+        label = input.dimension.title; preview = input.dimension.body; contentKey = input.dimension.body;
       } else if (input.assetId || input.groupId) {
         if (input.groupId && !canvas.groups.some(group => group.id === input.groupId)) throw new Error("连接的素材文件夹已删除");
         if (input.assetNodeId && !canvas.nodes.some(node => node.id === input.assetNodeId && node.assetId === input.assetId && node.hiddenAt == null)) throw new Error("连接的画板图片已移除");
@@ -70,7 +72,7 @@ export class WorkflowPlannerRuntime {
           const node = canvas.nodes.find(node => node.id === item.nodeId && node.hiddenAt == null);
           return node?.assetId ? [node.assetId] : [];
         });
-        const ids = input.assetId ? [input.assetId] : input.assetIds ?? [];
+        const ids = input.assetId ? [input.videoFrame?.assetId ?? input.assetId] : input.assetIds ?? [];
         const assets = await api.getAssetsByIds(ids);
         if (!assets.length || assets.length !== ids.length) throw new Error("连接的图片来源已失效");
         label = assets.map(asset => asset.name).join("、").slice(0, 300); preview = `${assets.length} 张图片（未进行视觉分析）`;

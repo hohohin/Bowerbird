@@ -61,9 +61,11 @@ pub async fn cloud_sync_entitlement(
 
 #[tauri::command]
 pub async fn cloud_start_pro_trial(
-    auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>,
+    auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, user_id: Option<String>,
 ) -> Result<EntitlementSnapshot, AppError> {
-    entitlement.start_trial(&auth).await
+    let user_id = user_id.or_else(|| auth.snapshot().user_id)
+        .ok_or_else(|| AppError::Cloud("请先登录 Bowerbird 账号".into()))?;
+    entitlement.start_trial(&auth, &user_id).await
 }
 
 #[tauri::command]

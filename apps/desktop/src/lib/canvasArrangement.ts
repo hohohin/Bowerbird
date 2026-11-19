@@ -1,4 +1,5 @@
 import type { CanvasPoint, CanvasSnapAnchor } from "./canvasLogic";
+import { canvasOutputGrid } from "./canvasReferencePlacement.ts";
 
 /** Arrange selected cards and their visible downstream cards in connected columns. */
 export function arrangeCanvasNodes(
@@ -54,12 +55,16 @@ export function arrangeCanvasNodes(
   for (let level = 0; level <= Math.max(...depth.values()); level++) {
     const column = moving.filter((node) => depth.get(node.id) === level);
     let y = originY;
-    for (const node of column) {
-      positions.set(node.id, { x, y });
-      y += node.rect.height + 32;
+    let width = 0;
+    const grid = level > 0 && column.every(node => !successors.get(node.id)?.size) ? canvasOutputGrid(column.map(node => node.rect)) : null;
+    for (const [index, node] of column.entries()) {
+      const point = grid ? { x: x + grid[index].x, y: originY + grid[index].y } : { x, y };
+      positions.set(node.id, point);
+      y = Math.max(y, point.y + node.rect.height + 32);
+      width = Math.max(width, point.x - x + node.rect.width);
     }
     height = Math.max(height, y - originY - 32);
-    x += Math.max(...column.map((node) => node.rect.width)) + 64;
+    x += width + 64;
   }
 
   // Shift the complete block below intersecting stationary cards, keeping its alignment.

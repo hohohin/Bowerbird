@@ -1,4 +1,5 @@
 // Closed synthetic IPC. All state belongs to this browser tab, never a user library.
+import type { ChatProvider } from "../../../src/lib/chatProvider";
 const STORAGE_KEY = "bowerbird-local-chat-fixture-v1";
 const clone = <T,>(value: T): T => structuredClone(value);
 const image = (background: string, shape: string) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="480" height="360"><rect width="480" height="360" fill="${background}"/><circle cx="240" cy="160" r="92" fill="${shape}"/><path d="M120 280 Q240 210 360 280" stroke="${shape}" stroke-width="14" fill="none"/></svg>`)}`;
@@ -8,7 +9,7 @@ export const assets = [
 ].map(asset => ({ ...asset, thumb_path: asset.store_path, width: 480, height: 360, ext: "svg", source: "imported" }));
 export const projects = ["p", "q"].map((id, index) => ({ id, name: index ? "项目 B · 包装文案" : "项目 A · 荷月礼盒", kind: "blank", workspace_path: `blank:${id}`, asset_count: 2, title_source: "manual", created_at: 1, updated_at: 1 }));
 type Message = { id: string; turnId: string; role: "user" | "assistant" | "tool"; text: string; referenceAssetIds: string[]; status: string; createdAt: number; updatedAt: number };
-type Conversation = { id: string; projectId: string; threadId: string; nodeId: string; title: string; provider: "codex-local" | "deepseek-cloud"; status: string; turnCount: number; preview: string; revision: number; createdAt: number; updatedAt: number; error: string | null; messages: Message[]; actions?: any[] };
+type Conversation = { id: string; projectId: string; threadId: string; nodeId: string; title: string; provider: ChatProvider; codexOptions?: { model?: string; reasoningEffort?: string }; status: string; turnCount: number; preview: string; revision: number; createdAt: number; updatedAt: number; error: string | null; messages: Message[]; actions?: any[] };
 type Database = { activeProjectId: string; projects: Record<string, any>; conversations: Record<string, Conversation>; requests: Record<string, string>; settings: Record<string, unknown> };
 function emptySnapshot(id: string) {
   return { canvas: { projectId: id, draftJson: "{}", createdAt: 1, updatedAt: 1 },
@@ -26,6 +27,10 @@ const timers = new Map<string, ReturnType<typeof setInterval>>();
 const pendingReplies: Array<() => void> = [];
 let nextCallback = 0;
 export const controls = { fault: "none", hold: true, delayReply: false, authenticated: true, entitled: true, cloudAuthenticated: true };
+const questions = new Map<string, { turnId: string; callId: string; questions: unknown[] }[]>();
+export function setQuestions(conversationId: string, batches: { turnId: string; callId: string; questions: unknown[] }[]) {
+  questions.set(conversationId, batches);
+}
 export const calls: Array<{ command: string; args: any }> = [];
 export const subscribe = (listener: () => void) => { subscribers.add(listener); return () => { subscribers.delete(listener); }; };
 const changed = () => { for (const listener of subscribers) listener(); };
@@ -39,7 +44,13 @@ function persistChat(chat: Conversation) {
   chat.preview = [...chat.messages].reverse().find(message => message.role === "assistant" && message.text)?.text.slice(0, 100) ?? "";
   const node = database.projects[chat.projectId].nodes.find((node: any) => node.id === chat.nodeId);
   if (node) node.updatedAt = chat.updatedAt;
+  if (chat.status === "idle") {
+    const workflow = database.projects[chat.projectId].workflow;
+    const card = workflow?.document.nodes.find((card: any) => card.id === chat.nodeId);
+    if (card) { card.outputs = { text: { type: "text", text: chat.messages.at(-1)?.text ?? "" } }; workflow.revision++; }
+  }
   save(); emit("local-chat://updated", chat);
+  if (chat.status !== "running") emit("local-chat://cards-changed", { projectId: chat.projectId, conversationId: chat.id });
 }
 function clearTimer(chat: Conversation) { const timer = timers.get(chat.id); if (timer) clearInterval(timer); timers.delete(chat.id); }
 const fullReply = "**花影入月**\n\n可以保留参考图里的粉灰色关系，把荷花的线条留在包装侧边，正面用一轮留白的月亮组织视觉重心。\n\n先确定礼盒的主色和文字层级，再把包装、海报、社交媒体图片分别整理为三条清晰的生成指令。\n\n这是一段隔离验收回复，不会调用真实模型或修改文件。";
@@ -92,17 +103,84 @@ export function setFault(value: string) { controls.fault = value; changed(); }
 export function setDelayReply(value: boolean) { controls.delayReply = value; changed(); }
 export function releaseReplies() { pendingReplies.splice(0).forEach(resolve => resolve()); changed(); }
 export async function invoke(command: string, args: any = {}) {
-  if (!command.startsWith("plugin:event")) { calls.push({ command, args: clone(args) }); if (calls.length > 100) calls.shift(); }
+  if (!command.startsWith("plugin:event")) { calls.push({ command, args: command === "local_chat_dsh_setup" ? { mode: args.mode } : clone(args) }); if (calls.length > 100) calls.shift(); }
+  if (command === "local_chat_dsh_account") return { state: "signedOut", modelConfigured: true };
+  if (command === "local_chat_dsh_status" || command === "local_chat_dsh_setup") {
+    if (controls.fault === "dsh-status") throw new Error("DSH 状态暂不可用，请重试。");
+    if (command === "local_chat_dsh_setup") {
+      await new Promise(resolve => setTimeout(resolve, 600));
+      if (controls.fault === "dsh-setup") throw new Error("DSH 连接未完成，请检查服务后重试。");
+      if (args.mode !== "local" && args.mode !== "auto") throw new Error("只支持连接本机 DSH。");
+      database.settings.dshLocalReady = true;
+      database.settings.dshLocalMode = args.mode;
+      database.settings.dshLocalUrl = args.mode === "local" ? args.url : "http://127.0.0.1:3082";
+      save();
+    }
+    const localAvailable = database.settings.dshLocalReady === true, managedAvailable = database.settings.dshManagedReady === true;
+    return { localAvailable, managedAvailable, localMode: database.settings.dshLocalMode, localReason: localAvailable ? null : "请先连接本机 DSH。", managedReason: managedAvailable ? null : "请先准备 DSH。", localUrl: database.settings.dshLocalUrl ?? "http://127.0.0.1:3080" };
+  }
+  if (command === "local_chat_models") {
+    if (controls.fault === "models") throw new Error("Codex 模型列表暂时无法读取，请重试。");
+    return [{ id: "fixture-codex", model: "fixture-codex", displayName: "Codex 测试模型", isDefault: true, defaultReasoningEffort: "medium",
+      supportedReasoningEfforts: ["low", "medium", "high", "xhigh"].map(reasoningEffort => ({ reasoningEffort, description: reasoningEffort })) },
+      { id: "fixture-fast", model: "fixture-fast", displayName: "Codex 轻量测试", isDefault: false, defaultReasoningEffort: "low",
+        supportedReasoningEfforts: [{ reasoningEffort: "low", description: "low" }] }];
+  }
   if (command === "local_chat_quote") {
     if (controls.fault === "quote") throw new Error("synthetic quote upstream error");
-    return { provider: "deepseek-cloud", service: "chat_deepseek", available: true, unit_cost: 0, currency: "Bcoin", pricing_version: 1 };
+    return { provider: "deepseek-cloud", service: "chat_deepseek", available: true, unit_cost: 0, currency: "Bcoin", pricing_version: 1,
+      dsh_vps_available: true, dsh_vps_v2_available: true, dsh_vps_skills_available: true };
   }
   if (command === "plugin:event|listen") { listeners.set(args.handler, args.event); return args.handler; }
   if (command === "plugin:event|unlisten") { listeners.delete(args.eventId); return null; }
   if (command === "plugin:event|emit") { emit(args.event, args.payload); return null; }
   if (command === "visual_profile_list") return [];
   if (command === "local_chat_list") { if (controls.fault === "read") throw new Error("synthetic database C:\\private\\chat.db failed"); return Object.values(database.conversations).filter(chat => chat.projectId === args.projectId).sort((a, b) => b.updatedAt - a.updatedAt).map(summary); }
+  if (command === "local_chat_revision") return database.conversations[args.conversationId]?.revision ?? null;
+  if (command === "local_chat_questions") return clone(questions.get(args.conversationId) ?? []);
+  if (command === "local_chat_answer_question") {
+    const pending = questions.get(args.conversationId) ?? [];
+    if (!pending.some(batch => batch.turnId === args.turnId && batch.callId === args.callId)) throw new Error("此问题已结束");
+    questions.set(args.conversationId, pending.filter(batch => batch.callId !== args.callId));
+    return null;
+  }
   if (command === "local_chat_get") { if (controls.fault === "read") throw new Error("synthetic database C:\\private\\chat.db failed"); return clone(database.conversations[args.conversationId] ?? null); }
+  if (command === "local_chat_new_on_card") {
+    const old = database.conversations[args.conversationId];
+    const project = database.projects[args.projectId];
+    const card = project.workflow.document.nodes.find((node: any) => node.id === args.nodeId);
+    if (!old || old.nodeId !== args.nodeId || card.chatConversationId !== old.id || ["running", "stopping"].includes(old.status)) throw new Error("卡片的对话已切换或仍在回复。");
+    const provider: ChatProvider = args.provider ?? old.provider;
+    const changedProvider = provider !== old.provider;
+    if (!old.turnCount && !changedProvider) return clone(old);
+    const codexOptions = provider === "codex-local" ? args.codexOptions ?? (!changedProvider ? old.codexOptions : undefined) : undefined;
+    const note = project.nodes.find((node: any) => node.id === args.nodeId);
+    if (changedProvider) { delete card.chatDshSkill; delete card.chatCodexOptions; }
+    Object.assign(card, { chatProvider: provider, chatCodexOptions: codexOptions });
+    if (!old.turnCount) {
+      Object.assign(old, { provider, codexOptions, updatedAt: Date.now(), revision: old.revision + 1 });
+      note.payloadJson = JSON.stringify({ ...JSON.parse(note.payloadJson), provider });
+      project.workflow.revision++;
+      save();
+      emit("local-chat://updated", old); emit("local-chat://cards-changed", { projectId: old.projectId, conversationId: old.id });
+      return clone(old);
+    }
+    const id = crypto.randomUUID(), now = Date.now();
+    old.nodeId = `history-${id}`;
+    old.revision++;
+    project.nodes.push({ ...clone(note), id: old.nodeId, hiddenAt: now });
+    const chat: Conversation = { ...old, id, nodeId: args.nodeId, threadId: `chat-thread-${id}`, title: "新对话", status: "idle", error: null,
+      provider, codexOptions, revision: 1, createdAt: now, updatedAt: now, turnCount: 0, messages: [], actions: [], preview: "" };
+    database.conversations[id] = chat;
+    Object.assign(note, { threadId: chat.threadId, payloadJson: JSON.stringify({schema_version: 1, note_type: "chat", text: chat.title, conversation_id: id, provider}) });
+    project.threads.push({ id: chat.threadId, projectId: chat.projectId, title: chat.title, createdAt: now, updatedAt: now, archivedAt: null });
+    card.chatConversationId = id;
+    project.workflow.revision++;
+    save();
+    emit("local-chat://updated", old); emit("local-chat://updated", chat);
+    emit("local-chat://cards-changed", { projectId: chat.projectId, conversationId: id });
+    return clone(chat);
+  }
   if (command === "local_chat_cards_undo") {
     const chat = database.conversations[args.conversationId], action = chat?.actions?.find(action => action.id === args.actionId);
     if (!action) throw new Error("找不到这次创建记录。");
@@ -120,11 +198,12 @@ export async function invoke(command: string, args: any = {}) {
   if (command === "local_chat_send") {
     const input = args.input;
     const provider = input.provider ?? "codex-local";
-    if (provider === "deepseek-cloud") { if (!controls.cloudAuthenticated) throw new Error("请先登录 Bowerbird 账号。"); }
+    if (provider === "deepseek-cloud" || provider === "dsh-cloud") { if (!controls.cloudAuthenticated) throw new Error("请先登录 Bowerbird 账号。"); }
     else {
-      if (!controls.authenticated) throw new Error("请先在设置中登录本机 Codex。");
+      if (provider === "codex-local" && !controls.authenticated) throw new Error("请先在设置中登录本机 Codex。");
       if (!controls.entitled) throw new Error("本机对话需要 Pro 或 Studio 权益。");
     }
+    if (provider === "dsh-local" && !database.settings.dshLocalReady) throw new Error("请先连接本机 DSH。");
     if (controls.fault === "send") throw new Error("synthetic IPC C:\\private\\auth.json token_missing");
     if (database.requests[input.requestId]) return clone(database.conversations[database.requests[input.requestId]]);
     if (!input.text?.trim()) throw new Error("请输入对话内容。");
@@ -136,25 +215,36 @@ export async function invoke(command: string, args: any = {}) {
     if (!chat) {
       const id = crypto.randomUUID(); const project = database.projects[input.projectId];
       if (!project) throw new Error("项目不存在。");
-      chat = { id, projectId: input.projectId, threadId: `chat-thread-${id}`, nodeId: `local-chat:${id}`, title: input.text.trim().slice(0, 30), provider, status: "idle", turnCount: 0, preview: "", revision: 0, createdAt: now, updatedAt: now, error: null, messages: [] };
+      chat = { id, projectId: input.projectId, threadId: `chat-thread-${id}`, nodeId: input.agentNodeId ?? `local-chat:${id}`, title: input.text.trim().slice(0, 30), provider, status: "idle", turnCount: 0, preview: "", revision: 0, createdAt: now, updatedAt: now, error: null, messages: [] };
       database.conversations[id] = chat;
       project.threads.push({ id: chat.threadId, projectId: chat.projectId, title: chat.title, createdAt: now, updatedAt: now, archivedAt: null });
       project.nodes.push({ id: chat.nodeId, projectId: chat.projectId, threadId: chat.threadId, kind: "note", assetId: null, role: null, x: 100, y: 310, width: 320, height: 180, zIndex: 2, ...input.placement, positionLocked: false, hiddenAt: null, createdAt: now, updatedAt: now, payloadJson: JSON.stringify({ schema_version: 1, note_type: "chat", text: chat.title, conversation_id: id, provider }) });
     }
     const turnId = crypto.randomUUID();
+    if (provider === "codex-local" && input.codexOptions !== undefined) chat.codexOptions = clone(input.codexOptions);
     const node = database.projects[chat.projectId].nodes.find((node: any) => node.id === chat.nodeId);
     if (node) node.hiddenAt = null;
     chat.messages.push({ id: crypto.randomUUID(), turnId, role: "user", text: input.text.trim(), referenceAssetIds: input.referenceAssetIds ?? [], status: "done", createdAt: now, updatedAt: now }, { id: crypto.randomUUID(), turnId, role: "assistant", text: "", referenceAssetIds: [], status: "running", createdAt: now, updatedAt: now });
     chat.turnCount++; chat.status = "running"; chat.error = null; database.requests[input.requestId] = chat.id;
+    const project = database.projects[chat.projectId];
+    project.workflow ??= { revision: 0, document: { schema_version: 1, nodes: [], run: null } };
+    let agent = project.workflow.document.nodes.find((card: any) => card.id === chat.nodeId);
+    if (!agent) {
+      agent = { id: chat.nodeId, kind: "agent", action: "describe", skill: "image-edit", prompt: input.text, ratio: null, provider: "codex", x: node.x, y: node.y, inputs: {}, outputs: {}, outputPorts: [], trigger: false };
+      project.workflow.document.nodes.push(agent);
+    }
+    Object.assign(agent, { chatConversationId: chat.id, chatProvider: chat.provider, chatCodexOptions: chat.codexOptions });
+    project.workflow.revision++;
     persistChat(chat); autoStream(chat);
-    const accepted = clone(chat);
+    emit("local-chat://cards-changed", { projectId: chat.projectId, conversationId: chat.id });
+    const accepted = { ...clone(chat), submittedTurnId: turnId };
     if (controls.delayReply) await new Promise<void>(resolve => { pendingReplies.push(resolve); changed(); });
     return accepted;
   }
   if (command === "local_chat_recover") {
     if (controls.fault === "recover") throw new Error("云端仍在处理，请稍后再次取回回复。");
     const chat = database.conversations[args.conversationId];
-    if (!chat || chat.provider !== "deepseek-cloud") throw new Error("这段对话不支持取回回复。");
+    if (!chat || chat.provider === "codex-local") throw new Error("这段对话不支持取回回复。");
     if (chat.status !== "idle") finish(chat.id);
     return clone(chat);
   }
@@ -194,6 +284,9 @@ export async function invoke(command: string, args: any = {}) {
   if (command === "canvas_workflow_save") {
     const project = database.projects[args.projectId];
     if (args.revision !== (project.workflow?.revision ?? 0)) throw new Error("工作流已被其他窗口修改，请重新打开项目");
+    for (const old of project.workflow?.document.nodes ?? []) if (old.chatConversationId && !args.document.nodes.some((card: any) => card.id === old.id)) {
+      const node = project.nodes.find((node: any) => node.id === old.id); if (node) node.hiddenAt = Date.now();
+    }
     project.workflow = { revision: args.revision + 1, document: clone(args.document) }; save(); return args.revision + 1;
   }
   if (command === "list_generation_groups") return {};

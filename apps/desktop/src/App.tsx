@@ -29,7 +29,7 @@ import { CloudAgentSession } from "./components/CloudAgentPanel";
 import { LibraryGenerationCoordinator } from "./components/LibraryGenerationCoordinator";
 import { WorkflowScheduleCoordinator } from "./components/WorkflowScheduleCoordinator";
 import { CloudAgentRuntimeCoordinator } from "./components/CloudAgentRuntimeCoordinator";
-import { COLLECTIONS_FEATURE_ENABLED, LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED } from "./lib/featureFlags";
+import { ONBOARDING_FEATURE_ENABLED, COLLECTIONS_FEATURE_ENABLED, LEGACY_CREATIVE_SESSION_FALLBACK_ENABLED } from "./lib/featureFlags";
 import { ExploreWorkspace } from "./components/ExploreWorkspace";
 import { DEFAULT_EXPLORER_URL } from "./lib/explorer";
 import { readLastSourceAddress } from "./lib/sourceDiscovery";
@@ -41,10 +41,12 @@ import { AccountOnboarding } from "./components/AccountOnboarding";
 import { beginOnboardingOperation, useOnboarding } from "./lib/onboardingStore";
 import { OnboardingTour } from "./components/OnboardingTour";
 import { ToastViewport } from "./components/ToastViewport";
+import { FileTaskStatusPanel } from "./components/FileTaskStatus";
 import { StartupUpdateDialog } from "./components/StartupUpdateDialog";
 import { FileDropImport } from "./components/FileDropImport";
 import { prepareGenerationSound } from "./lib/generationNotifications";
 import { useStore } from "./store";
+import { codexModelCatalog, startChatCapabilityChecks } from "./lib/chatCapabilities";
 import { api } from "./lib/api";
 import { prepareFileWorkspace } from "./lib/fileWorkspace";
 import { importDroppedMedia, prepareMediaImport } from "./lib/mediaImport";
@@ -61,7 +63,7 @@ import {
   resolveWorkspaceProjectId,
   shouldDiscardCreativeTarget,
 } from "./lib/workspaceRoute";
-import type { AuthSnapshot, CodexChunk, JimengOrphanTask } from "./lib/types";
+import type { AuthSnapshot, CodexChunk, CodexHealth, DreaminaHealth, JimengOrphanTask } from "./lib/types";
 import "./components/TacticalProjection.css";
 import "./components/TacticalDialogs.css";
 import "./components/CanvasSecondaryTactical.css";
@@ -86,6 +88,7 @@ function LibraryLoadingState() {
 }
 
 function App() {
+  useEffect(startChatCapabilityChecks, []);
   const [initializing, setInitializing] = useState(true);
   const localFilesOpen = useLocalFileMode(s => s.open);
   const setLocalFilesOpen = useLocalFileMode(s => s.setOpen);
@@ -739,8 +742,11 @@ function App() {
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let alive = true;
-    listen("codex://health-changed", () => {
-      api.codexHealth().then(setCodexHealth).catch(() => {});
+    listen<CodexHealth | null>("codex://health-changed", ({ payload }) => {
+      (payload ? Promise.resolve(payload) : api.codexHealth()).then(health => {
+        codexModelCatalog.check(null);
+        setCodexHealth(health);
+      }).catch(() => {});
     }).then((u) => (alive ? (unlisten = u) : u()));
     return () => {
       alive = false;
@@ -772,7 +778,7 @@ function App() {
     api
       .dreaminaHealth()
       .then(setDreaminaHealth)
-      .catch(() => setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" }));
+      .catch(() => setDreaminaHealth({ ok: false, status: "unconfirmed", reason: "即梦状态检测失败，请重新检测。" }));
   }, [setDreaminaHealth]);
 
   // dreamina 一键安装成功后端 emit `dreamina://health-changed` → 强制重取 dreaminaHealth
@@ -780,8 +786,9 @@ function App() {
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let alive = true;
-    listen("dreamina://health-changed", () => {
-      api.dreaminaHealth(true).then(setDreaminaHealth).catch(() => {});
+    listen<DreaminaHealth | null>("dreamina://health-changed", ({ payload }) => {
+      if (payload) setDreaminaHealth(payload);
+      else api.dreaminaHealth(true).then(setDreaminaHealth).catch(() => {});
     }).then((u) => (alive ? (unlisten = u) : u()));
     return () => {
       alive = false;
@@ -824,7 +831,7 @@ function App() {
     const assetIds = creativeLaunchAssetIds(blank, state.selectedIds);
     const completeLesson = beginOnboardingOperation("create-project", state.activeProjectId);
     const guide = useOnboarding.getState().guide;
-    const designerStart = guide.status === "active" && guide.role === "designer" && !guide.sessions.designer?.projectId;
+    const designerStart = ONBOARDING_FEATURE_ENABLED && guide.status === "active" && guide.role === "designer" && !guide.sessions.designer?.projectId;
     const createdProjectId = await state.beginProvisionalProject(designerStart ? "设计师 · 入门创作" : undefined);
     const route = useStore.getState();
     if (!isWorkspaceOperationCurrent(
@@ -874,6 +881,7 @@ function App() {
       <LibraryGenerationCoordinator />
       <WorkflowScheduleCoordinator />
       <ToastViewport />
+      <FileTaskStatusPanel />
       <StartupUpdateDialog ready={!initializing} />
       <FileDropImport />
       {/* 环境引导：codex/扩展/即梦由设置面板对应分区直接唤起，不再有「环境状态」总览 */}
@@ -882,7 +890,7 @@ function App() {
       <DreaminaOnboarding />
       <AccountOnboarding />
       {/* 版本化入门引导，独立保存学习进度 */}
-      <OnboardingTour />
+      {ONBOARDING_FEATURE_ENABLED && <OnboardingTour />}
       {/* 图片右键菜单（全局单实例，store.contextMenu 驱动） */}
       <AssetContextMenu />
       {/* 项目右键菜单（全局单实例，store.projectContextMenu 驱动） */}
@@ -912,7 +920,7 @@ function App() {
       <div className="relative flex flex-1 overflow-hidden">
         {COLLECTIONS_FEATURE_ENABLED && !projectWorkspaceActive && !localFilesOpen && <Sidebar />}
         <main className="app-workspace relative flex flex-1 flex-col overflow-hidden bg-canvas">
-          <ExploreWorkspace url={sourceBrowserUrl} navigationId={sourceBrowserNavigation} open={sourceBrowserOpen && !collectionAddTargetId} onClose={() => setSourceBrowserOpen(false)}>
+          <ExploreWorkspace onCreateProject={createProjectFromAssets} url={sourceBrowserUrl} navigationId={sourceBrowserNavigation} open={sourceBrowserOpen && !collectionAddTargetId} onClose={() => setSourceBrowserOpen(false)}>
           <PreservedWorkspace suspended={showDetail}>
           <div className="relative flex min-h-0 flex-1">
             <div className="home-workspace-route" data-suspended={projectWorkspaceActive}>

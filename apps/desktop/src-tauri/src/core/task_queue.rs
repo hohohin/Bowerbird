@@ -170,9 +170,9 @@ impl Task {
             rusqlite::params![job.id,job.turn_key])? == 1)
     }
     /// 取回只恢复已有提交；条件更新阻止双击或并发调用重复查询/入库。
-    pub(crate) fn claim_video_retrieval(db: &Database, job: &GenJob) -> AppResult<bool> {
-        if job.media != "video" || job.provider != "jimeng" || job.submit_id.is_none() {
-            return Err(AppError::Other("待取回的视频任务无效".into()));
+    pub(crate) fn claim_submitted_retrieval(db: &Database, job: &GenJob) -> AppResult<bool> {
+        if !((job.media == "video" && job.provider == "jimeng") || (job.media == "image" && job.provider == crate::codex::h3_image::KEY)) || job.submit_id.is_none() {
+            return Err(AppError::Other("待取回的生成任务无效".into()));
         }
         let conn = db.conn.lock().unwrap();
         let changed = conn.execute(
@@ -228,8 +228,8 @@ impl Task {
     /// 重新进入 running。前端 `GenJob` = 一个生成会话（多轮），`task_queue` 行随会话级 job_id 复用，
     /// 故续轮不能再 INSERT（主键冲突）。
     pub fn upsert_gen_job(db: &Database, job: &GenJob) -> AppResult<String> {
+        let mut job = job.clone();
         let coarse = GenJob::coarse_status(&job.status);
-        let payload = serde_json::to_string(job)?;
         let conn = db.conn.lock().unwrap();
         let tx = conn.unchecked_transaction()?;
         let existing_owner = tx
@@ -245,6 +245,14 @@ impl Task {
             )
             .optional()?;
         if let Some((project_id, thread_id)) = existing_owner {
+            // A provider may finish with the owner captured before project deletion.
+            // Retain its execution result without restoring that deleted ownership.
+            if project_id.is_none() && thread_id.is_none() {
+                if let Some(original) = job.project_id.as_deref() {
+                    let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)", [original], |r| r.get(0))?;
+                    if !exists { job.project_id = None; job.thread_id = None; job.creative_session_id = None; }
+                }
+            }
             if project_id != job.project_id || thread_id != job.thread_id {
                 return Err(AppError::Other(format!(
                     "generation job {} owner cannot change from ({project_id:?}, {thread_id:?}) to ({:?}, {:?})",
@@ -252,6 +260,7 @@ impl Task {
                 )));
             }
         }
+        let payload = serde_json::to_string(&job)?;
         tx.execute(
             "INSERT INTO task_queue (id, kind, payload, status, created_at, started_at, finished_at, provider, project_id, thread_id, creative_launch_id)
              VALUES (?1, 'generation', ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
@@ -475,6 +484,27 @@ mod tests {
     }
 
     #[test]
+    fn deleted_project_stays_detached_after_late_generation_updates() {
+        let db = db();
+        db.create_project("p", "p", "p", "p", "blank").unwrap();
+        let mut running = job("codex", "running");
+        running.project_id = Some("p".into());
+        running.session_id = Some("original-session".into());
+        Task::upsert_gen_job(&db, &running).unwrap();
+        db.delete_project("p", crate::core::projects::ProjectDeleteMode::Keep).unwrap();
+        assert!(Task::by_id(&db, &running.id).unwrap().unwrap().gen_job().unwrap().project_id.is_none());
+        for status in ["ingesting", "done"] {
+            running.status = status.into();
+            Task::upsert_gen_job(&db, &running).unwrap();
+            let saved = Task::by_id(&db, &running.id).unwrap().unwrap().gen_job().unwrap();
+            assert_eq!(saved.status, status);
+            assert!(saved.project_id.is_none());
+            assert_eq!(saved.session_id.as_deref(), Some("original-session"));
+        }
+        assert!(db.get_project("p").unwrap().is_none());
+    }
+
+    #[test]
     fn legacy_generation_payload_defaults_creative_fields() {
         let mut value = serde_json::to_value(job("codex", "running")).unwrap();
         let object = value.as_object_mut().unwrap();
@@ -638,8 +668,8 @@ mod tests {
         assert_eq!(restored.submit_id, j.submit_id);
         let mut resumed = restored;
         resumed.status = "querying".into();
-        assert!(Task::claim_video_retrieval(&db, &resumed).unwrap());
-        assert!(!Task::claim_video_retrieval(&db, &resumed).unwrap(), "second retrieval must not schedule another worker");
+        assert!(Task::claim_submitted_retrieval(&db, &resumed).unwrap());
+        assert!(!Task::claim_submitted_retrieval(&db, &resumed).unwrap(), "second retrieval must not schedule another worker");
         let mut legacy = serde_json::to_value(&j).unwrap();
         legacy.as_object_mut().unwrap().remove("media");
         assert_eq!(serde_json::from_value::<GenJob>(legacy).unwrap().media, "image");

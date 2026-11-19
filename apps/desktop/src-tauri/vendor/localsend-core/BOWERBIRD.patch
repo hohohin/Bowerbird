@@ -3,7 +3,7 @@
 @@ -47,10 +47,6 @@
  # `accept_resilience` test to lower this process' descriptor limit.
  libc = "0.2"
- 
+
 -[[example]]
 -name = "stress_send"
 -required-features = ["http"]
@@ -20,17 +20,17 @@
 --- a/src/http/server/mod.rs
 +++ b/src/http/server/mod.rs
 @@ -68,6 +68,8 @@
- 
+
  #[derive(Clone)]
  pub struct AppState {
 +    // Bowerbird's explicitly bound listener only serves its receiving surface.
 +    receive_scope: Option<SocketAddr>,
      /// Information about server's device.
      info: Arc<Mutex<ClientInfo>>,
- 
+
 @@ -125,6 +127,7 @@
          let internal = internal_config.map(|config| Arc::new(InternalState::new(config)));
- 
+
          Self {
 +            receive_scope: None,
              info,
@@ -57,13 +57,13 @@
      // Installed before returning, so that a client built right after (which
      // skips the install when a provider exists) does not race the accept task.
      let _ = rustls::crypto::ring::default_provider().install_default();
- 
+
 -    let ipv4_socket_addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), port);
 +    let ipv4_socket_addr = SocketAddr::new(bind_ip.into(), port);
      let info = Arc::new(Mutex::new(info));
 -    let state = AppState::new(info.clone(), internal_config, v2_config, web_config);
 +    let mut state = AppState::new(info.clone(), internal_config, v2_config, web_config);
- 
+
      let ipv4_listener = tokio::net::TcpListener::bind(ipv4_socket_addr).await?;
      // With port 0, the IPv6 listener must reuse the port the IPv4 listener got.
      let bound_port = ipv4_listener.local_addr()?.port();
@@ -81,11 +81,11 @@
 -    };
 +    }};
      let ipv6_bound = ipv6_listener.is_some();
- 
+
      let cancel = CancellationToken::new();
 @@ -586,10 +606,21 @@
  }
- 
+
  async fn handle_request(req: Request<Incoming>) -> Result<Response<BoxedBody>, hyper::Error> {
 -    Ok(handle_request_inner(req).await.unwrap_or_else(|err| {
 +    let scoped = req.extensions().get::<AppState>().is_some_and(|state| state.receive_scope.is_some());
@@ -105,11 +105,11 @@
 +    }
 +    Ok(response)
  }
- 
+
  async fn handle_request_inner(mut req: Request<Incoming>) -> Result<Response<BoxedBody>, AppError> {
-@@ -602,6 +633,39 @@
+@@ -602,6 +633,44 @@
      };
- 
+
      let v2_enabled = state.v2.is_some();
 +
 +    if let Some(address) = state.receive_scope {
@@ -119,12 +119,17 @@
 +            || req.headers().get(hyper::header::ORIGIN).is_some_and(|h|h.to_str().ok() != Some(origin.as_str())) {
 +            return Err(AppError::Status(StatusCode::FORBIDDEN));
 +        }
-+        if !matches!((req.method(),req.uri().path()),
++        let allowed = if state.web.is_some() {
++            matches!((req.method(),req.uri().path()),
++                (&Method::GET,"/" | "/i18n.json" | "/api/localsend/v2/download") |
++                (&Method::POST,"/api/localsend/v2/prepare-download"))
++        } else { matches!((req.method(),req.uri().path()),
 +            (&Method::GET,"/" | "/i18n.json") |
-+            (&Method::POST,"/api/localsend/v2/prepare-upload" | "/api/localsend/v2/upload" | "/api/localsend/v2/cancel")) {
++            (&Method::POST,"/api/localsend/v2/prepare-upload" | "/api/localsend/v2/upload" | "/api/localsend/v2/cancel")) };
++        if !allowed {
 +            return Err(AppError::Status(StatusCode::NOT_FOUND));
 +        }
-+        if req.method() == Method::GET && req.uri().path() == "/" {
++        if state.web.is_none() && req.method() == Method::GET && req.uri().path() == "/" {
 +            let Some(v2)=&state.v2 else {return Err(AppError::Status(StatusCode::NOT_FOUND))};
 +            let query = common::query::parse_query(req.uri().query());
 +            // The public root only contains a pairing form; no upload authority is granted.
@@ -144,13 +149,13 @@
 +            common::pin::check_pin(v2.pin.as_deref(),&v2.pin_attempts,&common::query::parse_query(req.uri().query()),client_info.ip.ip).await?;
 +        }
 +    }
- 
+
      match (req.method(), req.uri().path()) {
          (&Method::GET, "/") => Ok(web::index(&state)),
 --- a/src/http/server/common/collect_to_json.rs
 +++ b/src/http/server/common/collect_to_json.rs
 @@ -9,7 +9,9 @@
- 
+
  impl CollectToJson for Incoming {
      async fn collect_to_json<T: DeserializeOwned>(self) -> Result<T, AppError> {
 -        let bytes = self.collect().await?.to_bytes();
@@ -197,3 +202,38 @@
          match frame {
              Ok(frame) => {
                  let Ok(data) = frame.into_data() else {
+--- a/src/http/server/web.rs
++++ b/src/http/server/web.rs
+@@ -183,7 +183,7 @@
+     /// Channel on which server events are emitted to the application.
+     pub(crate) event_tx: mpsc::Sender<WebSendEvent>,
+
+-    /// Download sessions, keyed by session ID (the client's IP address).
++    /// Download sessions, keyed by unpredictable session ID.
+     pub(crate) sessions: Mutex<HashMap<String, WebSendSession>>,
+
+     /// Maps client IPs to the number of failed PIN attempts.
+@@ -280,9 +280,13 @@
+         .map(str::to_string);
+
+     // One session per IP; a new request replaces any previous session of this client.
+-    let session_id = client_info.ip.to_string();
++    let session_id = uuid::Uuid::new_v4().to_string();
+     {
+         let mut sessions = web.sessions.lock().await;
++        sessions.retain(|_, session| session.ip != client_info.ip);
++        if sessions.len() >= 200 {
++            return Err(AppError::Status(StatusCode::TOO_MANY_REQUESTS));
++        }
+         sessions.insert(
+             session_id.clone(),
+             WebSendSession {
+@@ -399,7 +403,7 @@
+     );
+     headers.insert(
+         http::header::CONTENT_DISPOSITION,
+-        http::HeaderValue::from_str(&format!("attachment; filename=\"{encoded_file_name}\""))
++        http::HeaderValue::from_str(&format!("attachment; filename=\"{encoded_file_name}\"; filename*=UTF-8''{encoded_file_name}"))
+             .map_err(|_| AppError::Status(StatusCode::INTERNAL_SERVER_ERROR))?,
+     );
+     headers.insert(http::header::CONTENT_LENGTH, http::HeaderValue::from(size));

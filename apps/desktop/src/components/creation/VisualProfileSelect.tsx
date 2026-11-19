@@ -28,7 +28,7 @@ export function VisualProfileSelect({
       title={disabled
         ? "当前模式不支持选择品牌规范"
         : profiles.length === 0
-          ? "请先打开集合，点击「视觉规范」并提炼保存。"
+          ? "请先打开文件夹，点击「视觉规范」并提炼保存。"
           : "选择已保存的品牌规范，任何创作都可复用；本次明确要求优先"}
     >
       <Palette size={12} className="shrink-0 text-accent" />

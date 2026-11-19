@@ -164,7 +164,7 @@ function ClassificationSettings({ onClose, folder, globalScope, globalPaths, sel
   const showProgress = status && sameTarget;
   const jevResults = status?.jev_progress && <JevResults key={status.jev_progress.asset.id} progress={status.jev_progress} />;
   async function ensureCloud() {
-    if (!(await local.jevConfig()).enabled) await local.saveJevConfig(true);
+    if (!(await local.jevConfig()).enabled) await useStore.getState().updateSettings({ jev_image_classification_enabled: true });
   }
   async function startClassification(options: { tagId?: string; pendingOnly?: boolean } = {}) {
     await ensureCloud();

@@ -17,7 +17,7 @@ use ulid::Ulid;
 
 use crate::cloud::EntitlementService;
 use crate::codex::codex_cli::{codex_command, codex_home, resolve_codex_binary};
-use crate::codex::resolve_gen_provider;
+use crate::codex::{h3_image, resolve_gen_provider};
 use crate::codex::types::{Chunk, CodexRequest, CodexResult};
 use crate::codex::understand::{
     resolve_entitled_understand_provider, resolve_understand_provider_with_choice,
@@ -51,6 +51,24 @@ pub struct CodexHealth {
     pub reason: String,
 }
 
+/// Recheck at the native submission boundary, including default and restored selections.
+pub(super) async fn require_generation_cli(app: &AppHandle, provider: &str) -> Result<(), AppError> {
+    if provider == "jimeng" {
+        let health = super::jimeng::dreamina_health(Some(true)).await?;
+        if !health.ok {
+            let _ = app.emit("dreamina://health-changed", &health);
+            return Err(AppError::Other(health.reason));
+        }
+    } else if matches!(provider, "codex" | "default") {
+        let health = codex_health().await?;
+        if !health.ok {
+            let _ = app.emit("codex://health-changed", &health);
+            return Err(AppError::Other(health.reason));
+        }
+    }
+    Ok(())
+}
+
 /// 检测 codex CLI 是否就绪：① CLI 可执行；② Bowerbird 独立目录内 auth.json 非空。
 /// 任一不满足返回 `ok=false` + 中文 reason。注意：免费档反推/生成走 Bowerbird Cloud，**不依赖此检测结果**——
 /// 前端「环境就绪」应按权益路由判断（见 `lib/entitlement.ts` understandReady），而非直判 codexHealth。
@@ -72,7 +90,7 @@ pub async fn codex_health() -> Result<CodexHealth, AppError> {
     if !binary_ok {
         return Ok(CodexHealth {
             ok: false,
-            reason: "未检测到 codex CLI（点「一键安装」自动下载独立版，无需 Node.js）".into(),
+            reason: "未检测到可用的 Codex CLI，请在自有订阅设置中安装。".into(),
         });
     }
     let logged_in = codex_home()
@@ -84,7 +102,7 @@ pub async fn codex_health() -> Result<CodexHealth, AppError> {
     if !logged_in {
         return Ok(CodexHealth {
             ok: false,
-            reason: "Bowerbird 的 Codex 未登录，请在设置中登录".into(),
+            reason: "Codex 自有订阅未登录，请先登录授权。".into(),
         });
     }
     Ok(CodexHealth {
@@ -430,12 +448,45 @@ pub async fn cancel_codex_describe(job_id: Option<String>) -> Result<(), AppErro
     Ok(())
 }
 
-/// 当前进行中的图像生成任务取消信号（per-job，key=job_id）。与反推 `DESCRIBE_CANCEL` 独立。
-/// Phase A（视频 spec task 2）：单槽 `Option<Sender>` → `HashMap<job_id, Sender>`，
-/// 支持多任务并行 + 各自独立取消。
-pub(crate) static GENERATE_CANCEL: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<String, tokio::sync::oneshot::Sender<()>>>,
+struct ActiveGeneration {
+    turn_key: Option<String>,
+    cancel: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+static GENERATE_CANCEL: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, ActiveGeneration>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// One owner from preflight through settlement, even when a cancelled job is unwinding.
+pub(crate) struct GenerationGuard(String);
+pub(crate) type GenerationCancellation = (GenerationGuard, tokio::sync::oneshot::Receiver<()>);
+
+impl GenerationGuard {
+    pub(crate) fn register(job_id: &str, turn_key: Option<&str>) -> Result<GenerationCancellation, AppError> {
+        let mut jobs = GENERATE_CANCEL.lock().unwrap();
+        if jobs.contains_key(job_id) {
+            return Err(AppError::Other("这段生成会话已有任务在进行，请等待结束。".into()));
+        }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        jobs.insert(job_id.into(), ActiveGeneration { turn_key: turn_key.map(String::from), cancel: Some(tx) });
+        Ok((Self(job_id.into()), rx))
+    }
+
+    fn cancel(job_id: &str, turn_key: Option<&str>) -> bool {
+        let mut jobs = GENERATE_CANCEL.lock().unwrap();
+        if let Some(job) = jobs.get_mut(job_id) {
+            if turn_key.is_none() || turn_key == job.turn_key.as_deref() {
+                if let Some(tx) = job.cancel.take() { let _ = tx.send(()); }
+                return true;
+            }
+        }
+        false
+    }
+}
+
+impl Drop for GenerationGuard {
+    fn drop(&mut self) { GENERATE_CANCEL.lock().unwrap().remove(&self.0); }
+}
 
 /// 无论 provider、下载还是入库在哪一步失败，都必须把持久化任务推进到终态；否则下一次
 /// 生成会把这条幽灵 `running` 行计入账号并发上限。
@@ -597,12 +648,21 @@ pub async fn codex_create_image(
     };
     crate::core::generation_diagnostics::track_attempt(db.inner(), &diagnostic_id, &diagnostic_job_id, async {
     db.generation_diagnostic_phase(&diagnostic_id, &job_id, "validation", Some(&reference_images))?;
-    let dreamina_model = crate::codex::jimeng::image_model_version(dreamina_model_version.as_deref(), &dreamina_model)?;
+    let selected_cli = match provider.as_deref() {
+        Some("dreamina-web50pro") => Some("5.0Pro"),
+        Some("dreamina-web47") => Some("4.7"),
+        Some("dreamina-web40") => Some("4.0"),
+        Some("dreamina-web50flash" | "dreamina-web50lite") => return Err(AppError::Jimeng("当前即梦 CLI 不支持此模型，请重新选择".into())),
+        _ => None,
+    };
+    let provider = if selected_cli.is_some() { Some("jimeng".to_owned()) } else { provider };
+    let dreamina_model = crate::codex::jimeng::image_model_version(selected_cli.or(dreamina_model_version.as_deref()), &dreamina_model)?;
     let internal_agent = internal_agent.unwrap_or(false);
     let media = media.unwrap_or_else(|| "image".into());
     if !matches!(media.as_str(), "image" | "video") {
         return Err(AppError::Other("不支持的生成媒体类型".into()));
     }
+    let web_model = crate::codex::jimeng_web::model(provider.as_deref());
     let is_video = media == "video";
     let cloud_video = provider.as_deref().is_some_and(|p| p.starts_with("bowerbird-cloud-video_seedance25_"));
     if is_video && ((!cloud_video && provider.as_deref() != Some("jimeng")) || video_options.is_none()) {
@@ -642,6 +702,7 @@ pub async fn codex_create_image(
     // 旧 payload 字段只保留在读取模型中；项目画板上线后的新任务不再写 creative_session_id。
     let _ = creative_session_id;
     let turn_key = turn_key.unwrap_or_else(|| Ulid::new().to_string());
+    let (_guard, mut cancel_rx) = GenerationGuard::register(&job_id, Some(&turn_key))?;
     // V4：同一 job 的首轮 capsule 是不可变权威。续轮即使当前 UI 改选了其他 profile，
     // 也必须继续使用启动时版本；新 job 才能选择另一个 confirmed profile。
     let persisted_profile = crate::core::task_queue::Task::by_id(db.inner(), &job_id)?
@@ -718,9 +779,9 @@ pub async fn codex_create_image(
             provider.as_deref(),
             None | Some("codex" | "default" | "codex-cli")
         );
-        let jimeng_or_cloud = matches!(provider.as_deref(), Some("jimeng" | "dreamina"))
+        let stateless_image = matches!(provider.as_deref(), Some("jimeng" | "dreamina" | h3_image::KEY)) || web_model.is_some()
             || crate::codex::is_cloud_generation_provider(provider.as_deref());
-        if jimeng_or_cloud || is_codex_provider {
+        if stateless_image || is_codex_provider {
             let db_fb = db.inner().clone();
             let sid_fb = sid.to_string();
             let (native_provider, last_provider, last_images, codex_thread) =
@@ -733,7 +794,7 @@ pub async fn codex_create_image(
                 })
                 .await
                 .map_err(|e| AppError::Other(e.to_string()))?;
-            if jimeng_or_cloud {
+            if stateless_image {
                 if !exact && !last_images.is_empty() {
                     tracing::info!(
                         "gen: 续轮合并上一轮产出图 job={} session={} last={} picked={}",
@@ -792,7 +853,7 @@ pub async fn codex_create_image(
         } else {
             Some(ratio.as_deref().map(str::trim).filter(|r| !r.is_empty()).unwrap_or("16:9").to_string())
         }
-    } else { match ratio.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+    } else if provider.as_deref() == Some(h3_image::KEY) { ratio.filter(|r| !r.is_empty()) } else { match ratio.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
         Some(r) => Some(r.to_string()),
         None => reference_images
             .first()
@@ -808,16 +869,18 @@ pub async fn codex_create_image(
     // 参考图顺序清单：≥2 张时注入「第 N 张 = 素材名」，把 prompt 里的 @名 与附件顺序显式
     // 对上（库内存储文件名是 ULID，@wai.png 与附件无任何文本映射，多图角色分配只能靠
     // 模型猜，错配即整图方向偏掉；单图无歧义不注入，减少文本污染）。反查失败不挡生成。
-    let reference_legend = if refs_for_meta.len() >= 2 {
+    let reference_names = if refs_for_meta.len() >= 2 || provider.as_deref() == Some(h3_image::KEY) {
         db.asset_names_by_store_paths(&refs_for_meta)
-            .ok()
-            .and_then(|names| reference_legend(&names))
+            .unwrap_or_else(|_| vec![None; refs_for_meta.len()])
     } else {
-        None
+        vec![]
     };
+    let reference_legend = reference_legend(&reference_names);
     // instruction：codex **新 thread**（首轮 / 非 codex 原生会话切入）需要触发 imagegen 的
     // 包装语（清单内嵌进包装句）；resume 续轮与即梦/Cloud 用用户原文 + 文末括号清单。
-    let instruction = match (is_codex && provider_resume.is_none(), reference_legend) {
+    let instruction = if provider.as_deref() == Some(h3_image::KEY) {
+        h3_image::reference_prompt(&prompt_for_provider, &reference_names)
+    } else { match (is_codex && provider_resume.is_none(), reference_legend) {
         (true, Some(legend)) => format!(
             "请使用图像生成工具，根据以下提示词和参考图生成图片（张数完全以提示词要求为准；提示词未指定张数时生成一张{ratio_clause}）。{legend}。\n\n{prompt_for_provider}"
         ),
@@ -826,7 +889,7 @@ pub async fn codex_create_image(
         ),
         (false, Some(legend)) => format!("{prompt_for_provider}\n\n（{legend}。）"),
         (false, None) => prompt_for_provider,
-    };
+    }};
     let applied_prompt = instruction.clone();
     let req = CodexRequest {
         instruction,
@@ -851,28 +914,52 @@ pub async fn codex_create_image(
     if visual_profile.is_some() && !entitlement_snapshot.policy.can_use_visual_profiles {
         return Err(AppError::Other("当前权益不支持品牌视觉规范".into()));
     }
-    if !entitlement_snapshot
+    let local_image = provider.as_deref() == Some(h3_image::KEY);
+    if !local_image && !entitlement_snapshot
         .policy
         .allows_generation_provider(provider.as_deref())
     {
-        return Err(AppError::Other(
-            "当前账号不可使用本机生成引擎；升级 Pro 解锁 Codex / 即梦 CLI".into(),
-        ));
+        let reason = if crate::codex::is_cloud_generation_provider(provider.as_deref()) {
+            "当前账号无法使用云端生成服务，请检查账号权益。"
+        } else {
+            "当前账号不可使用本机生成引擎；升级 Pro 解锁 Codex / 即梦 CLI"
+        };
+        return Err(AppError::Other(reason.into()));
     }
-    let db_for_gate = db.inner().clone();
-    let gate_job_id = job_id.clone();
-    let running_count = tokio::task::spawn_blocking(move || -> Result<usize, AppError> {
-        Ok(crate::core::task_queue::Task::list_running(&db_for_gate)?
-            .into_iter()
-            .filter_map(|task| task.gen_job())
-            .filter(|job| job.id != gate_job_id)
-            .count())
-    })
-    .await
-    .map_err(|error| AppError::Other(error.to_string()))??;
-    if !entitlement_snapshot.policy.can_start_job(running_count) {
-        return Err(AppError::Other("已达当前账号档位的并行生成上限".into()));
+    let image_owner = if local_image { Some(super::comfy_video::account(&auth_client, &entitlement).await?) } else { None };
+    tokio::select! {
+        biased;
+        _ = &mut cancel_rx => return Err(AppError::Codex("已取消".into())),
+        result = async {
+            if crate::codex::is_cloud_generation_provider(provider.as_deref()) {
+                if cloud_client.config().endpoint("generate-proxy").is_none() {
+                    return Err(AppError::Cloud("当前版本未配置云端生成服务，请切换生成方式。".into()));
+                }
+                // Can also restore a signed-in account from its credential store.
+                auth_client.access_token().await?;
+                Ok(())
+            } else if local_image || web_model.is_some() { Ok(()) } else {
+                require_generation_cli(&app, provider.as_deref().unwrap_or("codex")).await
+            }
+        } => result?,
     }
+    if !crate::codex::is_jimeng_provider(provider.as_deref()) {
+        let db_for_gate = db.inner().clone();
+        let gate_job_id = job_id.clone();
+        let running_count = tokio::task::spawn_blocking(move || -> Result<usize, AppError> {
+            Ok(crate::core::task_queue::Task::list_running(&db_for_gate)?
+                .into_iter()
+                .filter_map(|task| task.gen_job())
+                .filter(|job| job.id != gate_job_id && !crate::codex::is_jimeng_provider(Some(&job.provider)))
+                .count())
+        })
+        .await
+        .map_err(|error| AppError::Other(error.to_string()))??;
+        if !entitlement_snapshot.policy.can_start_job(running_count) {
+            return Err(AppError::Other("已达当前账号档位的并行生成上限".into()));
+        }
+    }
+    if cancel_rx.try_recv().is_ok() { return Err(AppError::Codex("已取消".into())); }
 
     // 素材被创作板调用（参考）计数：本次实际下发（合并续轮产出图后）的参考图命中资产
     // 各 +1（同次去重；库外/临时标注文件不命中）。失败仅告警，绝不挡生成。
@@ -889,6 +976,7 @@ pub async fn codex_create_image(
     let (tx, mut rx) = mpsc::channel::<Chunk>(64);
     let app_clone = app.clone();
     let job_id_for_emit = job_id.clone();
+    let turn_key_for_emit = turn_key.clone();
     tokio::spawn(async move {
         while let Some(chunk) = rx.recv().await {
             // Chunk::Submit：即梦 submit 拿到 submit_id 的瞬间 → 立即 upsert 落库（submit_id + 细粒度
@@ -902,7 +990,9 @@ pub async fn codex_create_image(
                         .and_then(|t| t.gen_job().map(|job| (job, t.status)))
                     {
                         Some((mut job, task_status)) => {
-                            job.submit_id = Some(submit_id.clone());
+                            if job.turn_key.as_ref() != Some(&turn_key_for_emit) { continue; }
+                            // H3 saves endpoint, owner and prompt UUID together before POST /prompt.
+                            if job.provider != h3_image::KEY { job.submit_id = Some(submit_id.clone()); }
                             job.status = if matches!(task_status.as_str(), "cancelled" | "failed" | "done") {
                                 task_status
                             } else { "querying".to_string() };
@@ -949,6 +1039,7 @@ pub async fn codex_create_image(
             // job_id 注入 chunk JSON 顶层（前端 c.kind/c.text 仍可用 + 新增 c.job_id 路由）。
             let mut v = serde_json::to_value(&chunk).unwrap_or(serde_json::Value::Null);
             if let serde_json::Value::Object(ref mut map) = v {
+                map.insert("turn_key".into(), turn_key_for_emit.clone().into());
                 map.insert(
                     "job_id".into(),
                     serde_json::Value::String(job_id_for_emit.clone()),
@@ -958,13 +1049,22 @@ pub async fn codex_create_image(
         }
     });
 
-    // 先解析 provider（可能出错 → ?）：必须在注册 GENERATE_CANCEL 之前，否则出错提前返回
-    // 会留下 stale cancel sender（下次 cancel_codex_create take 到它）。None → codex（默认）。
     // 即梦模型使用提交时的快照，等待串行名额期间切换模型不影响当前任务。
     db.generation_diagnostic_phase(&diagnostic_id, &job_id, "task_setup", None)?;
     let cloud_context = crate::codex::is_cloud_generation_provider(provider.as_deref())
         .then(|| (cloud_client.inner().clone(), auth_client.inner().clone()));
-    let p = resolve_gen_provider(provider.as_deref(), cloud_context, Some(&dreamina_model))?;
+    let mut image_ticket = None;
+    let p: Box<dyn crate::codex::GenProvider> = if let Some(owner) = image_owner {
+        let endpoint = tokio::select! {
+            _ = &mut cancel_rx => return Err(AppError::Codex("已取消".into())),
+            result = super::comfy_setup::prepare_image(&app, !req.reference_images.is_empty()) => result?,
+        };
+        let ticket = h3_image::Ticket::new(endpoint, owner);
+        image_ticket = Some(ticket.encode()?);
+        Box::new(h3_image::Provider { ticket, auth: auth_client.inner().clone() })
+    } else if let Some((key, model)) = web_model {
+        Box::new(crate::codex::jimeng_web::Provider { app: app.clone(), key, model })
+    } else { resolve_gen_provider(provider.as_deref(), cloud_context, Some(&dreamina_model))? };
     let provider_name = p.name().to_string();
 
     // Phase A task 2：入队 task_queue（status=running），供任务中心 / 启动恢复 / 取消引用。
@@ -991,7 +1091,7 @@ pub async fn codex_create_image(
             project_id: project_id.clone(),
             ratio: ratio.clone(),
             visual_profile: visual_profile.clone(),
-            submit_id: None,
+            submit_id: image_ticket.clone(),
             video_options: video_options.as_ref().map(serde_json::to_value).transpose()?,
             turns: serde_json::json!([]),
             error: None,
@@ -1069,6 +1169,7 @@ pub async fn codex_create_image(
             "codex://chunk",
             serde_json::json!({
                 "kind": "started",
+                "turn_key": &turn_key,
                 "job_id": &job_id,
                 "references": refs_for_meta.clone(),
                 "reference_node_ids": reference_node_ids_for_meta.clone(),
@@ -1081,24 +1182,13 @@ pub async fn codex_create_image(
         );
     }
 
-    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel::<()>();
-    GENERATE_CANCEL
-        .lock()
-        .unwrap()
-        .insert(job_id.clone(), cancel_tx);
-
-    // 即梦并发=1（spike 实测）：permit=1 Semaphore 串行化即梦 job，避免多 job 同时跑 dreamina
-    // 子进程撞 ExceedConcurrencyLimit；codex 不受限可并行。等待名额和生成均响应取消。
     let generation_result: Result<(), AppError> = async {
         // generate_image 借用 tx 推 Delta；用 block 限定借期，结束后 command 才能 reuse tx 发 Done。
         // resume 句柄用 provider_resume（非 codex 原生会话切 codex = None 开新 thread）。
         db.generation_diagnostic_phase(&diagnostic_id, &job_id, "provider", None)?;
         let outcome = {
             let gen_fut = async {
-                let _jimeng_permit = if matches!(provider_name.as_str(), "jimeng" | "dreamina") {
-                    Some(crate::core::generation_worker::JIMENG_FLY.acquire().await
-                        .map_err(|e| AppError::Other(e.to_string()))?)
-                } else { None };
+                crate::codex::progress::send(Some(&tx), crate::codex::progress::GenerationProgress::new(crate::codex::progress::GenerationStage::Submitting)).await;
                 if let Some(options) = video_options.clone() {
                     p.generate_video(req, options, &tx, provider_resume).await
                 } else {
@@ -1107,12 +1197,19 @@ pub async fn codex_create_image(
             };
             tokio::pin!(gen_fut);
             tokio::select! {
+                biased;
+                _ = &mut cancel_rx => {
+                    if let Some(ticket) = &image_ticket {
+                        h3_image::cancel(ticket, &auth_client).await?;
+                    }
+                    Err(AppError::Codex("已取消".into()))
+                },
                 res = &mut gen_fut => res,
-                _ = &mut cancel_rx => Err(AppError::Codex("已取消".into())),
             }?
         };
         // 文件已返回后进入不可取消的短暂入库阶段，防后台入库完成覆盖取消终态。
-        GENERATE_CANCEL.lock().unwrap().remove(&job_id);
+        cancel_rx.close();
+        crate::codex::progress::send(Some(&tx), crate::codex::progress::GenerationProgress::new(crate::codex::progress::GenerationStage::Saving)).await;
 
         // 簿记 session：优先请求时的会话 id（新 thread 轮也归原会话——meta/前端 sessionId/
         // 重启时间线都不裂），首轮（请求无 session）才用 provider 产出的新 id。
@@ -1191,7 +1288,9 @@ pub async fn codex_create_image(
         Ok(())
     }
     .await;
-    GENERATE_CANCEL.lock().unwrap().remove(&job_id);
+    if let Err(error) = &generation_result {
+        super::jimeng::refresh_after_auth_error(&app, error);
+    }
     settle_generation_task(db.inner(), &job_id, &generation_result);
     if let (Err(error), Some(project_id), Some(thread_id)) = (
         &generation_result,
@@ -1247,39 +1346,47 @@ pub fn generation_diagnostics(db: State<'_, Arc<Database>>, job_id: String) -> R
 pub async fn cancel_codex_create(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
+    auth_client: State<'_, crate::cloud::AuthClient>,
     job_id: String,
+    turn_key: Option<String>,
 ) -> Result<(), AppError> {
-    let Some(tx) = GENERATE_CANCEL.lock().unwrap().remove(&job_id) else { return Ok(()) };
-    let _ = tx.send(());
-    let _ = crate::core::task_queue::Task::mark_cancelled(db.inner(), &job_id);
-    if let Some(job) =
-        crate::core::task_queue::Task::by_id(db.inner(), &job_id)?.and_then(|task| task.gen_job())
-    {
-        if let (Some(project_id), Some(thread_id), Some(turn_key)) = (
-            job.project_id.as_deref(),
-            job.thread_id.as_deref().filter(|_| !job.internal_agent),
-            job.turn_key.as_deref(),
-        ) {
-            let _ = db.inner().update_project_generation_turn_status(
-                project_id,
-                thread_id,
-                &job_id,
-                turn_key,
-                "cancelled",
-                job.submit_id.as_deref(),
-            );
-            let _ = app.emit(
-                "creative://changed",
-                serde_json::json!({
-                    "projectId": project_id,
-                    "threadId": thread_id,
-                    "jobId": &job_id,
-                    "turnKey": turn_key,
-                    "status": "cancelled",
-                }),
-            );
-        }
+    // The owner settles the turn only if it actually entered the execution queue.
+    if GenerationGuard::cancel(&job_id, turn_key.as_deref()) { return Ok(()); }
+    if let Some(job) = cancel_persisted_h3_job(&db, &auth_client, &job_id, turn_key.as_deref()).await? {
+        crate::core::generation_worker::update_creative_job_status(&app, &db, &job, "cancelled", h3_image::session(job.submit_id.as_deref().unwrap()).as_deref());
+        let _ = app.emit("codex://chunk", serde_json::json!({"kind":"error", "job_id":job.id, "turn_key":job.turn_key, "message":"已取消"}));
     }
+    Ok(())
+}
+
+async fn cancel_persisted_h3_job(db: &Database, auth: &crate::cloud::AuthClient, job_id: &str, turn_key: Option<&str>) -> Result<Option<crate::core::task_queue::GenJob>, AppError> {
+    use crate::core::task_queue::Task;
+    let Some(job) = Task::by_id(db, job_id)?.filter(|task| task.status == "running").and_then(|task| task.gen_job()).filter(|job| {
+        job.provider == h3_image::KEY
+            && (turn_key.is_none() || turn_key == job.turn_key.as_deref())
+    }) else { return Ok(None); };
+    // Own this job while awaiting confirmation, so a new turn cannot replace it.
+    let (_guard, _cancel_rx) = GenerationGuard::register(&job.id, job.turn_key.as_deref())?;
+    let ticket = job.submit_id.as_deref().ok_or_else(|| AppError::Other("原 H3 图片任务缺少编号，请检查原任务状态".into()))?;
+    h3_image::cancel(ticket, auth).await?;
+    Task::mark_cancelled(db, &job.id)?;
+    Ok(Some(job))
+}
+
+/// Reconnect to the exact local prompt on its original loopback endpoint.
+#[tauri::command]
+pub async fn recover_h3_image(app: AppHandle, db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>, job_id: String) -> Result<(), AppError> {
+    use crate::core::task_queue::Task;
+    let job = Task::by_id(&db,&job_id)?.and_then(|task| task.gen_job()).filter(|job|job.provider == h3_image::KEY)
+        .ok_or_else(|| AppError::Other("原 H3 图片任务不存在".into()))?;
+    let ticket = job.submit_id.clone().ok_or_else(|| AppError::Other("原 H3 图片任务缺少编号".into()))?;
+    let auth = app.state::<crate::cloud::AuthClient>();
+    super::comfy_video::account(&auth, &app.state::<crate::cloud::EntitlementService>()).await?;
+    h3_image::verify_owner(&ticket,&auth)?;
+    let cancellation = GenerationGuard::register(&job.id,job.turn_key.as_deref())?;
+    if !Task::claim_submitted_retrieval(&db,&job)? { return Ok(()); }
+    let (db,paths)=(db.inner().clone(),paths.inner().clone());
+    tokio::spawn(async move { crate::core::generation_worker::recover_submitted_job(app,db,paths,job,ticket,cancellation).await; });
     Ok(())
 }
 
@@ -1287,6 +1394,7 @@ pub async fn cancel_codex_create(
 #[tauri::command]
 pub async fn recover_cloud_video(app: AppHandle, db: State<'_, Arc<Database>>, paths: State<'_, Arc<LibraryPaths>>, job_id: String) -> Result<(), AppError> {
     let mut job = crate::core::task_queue::Task::by_id(db.inner(),&job_id)?.and_then(|task| task.gen_job()).ok_or_else(|| AppError::Other("原视频任务不存在".into()))?;
+    let cancellation = GenerationGuard::register(&job.id, job.turn_key.as_deref())?;
     if !crate::core::task_queue::Task::claim_cloud_video_retrieval(db.inner(),&job)? { return Ok(()); }
     let cloud = app.state::<crate::cloud::CloudClient>();
     let auth = app.state::<crate::cloud::AuthClient>();
@@ -1304,13 +1412,14 @@ pub async fn recover_cloud_video(app: AppHandle, db: State<'_, Arc<Database>>, p
     job.submit_id=Some(remote.clone()); job.status="querying".into();
     crate::core::task_queue::Task::upsert_gen_job(db.inner(),&job)?;
     let (db,paths)=(db.inner().clone(),paths.inner().clone());
-    tokio::spawn(async move { crate::core::generation_worker::recover_one_cloud_job(app,db,paths,job,remote).await; });
+    tokio::spawn(async move { crate::core::generation_worker::recover_submitted_job(app,db,paths,job,remote,cancellation).await; });
     Ok(())
 }
 
 /// 未完成生成 job 的摘要（前端启动重建 genJobs 用，Task 5 启动恢复）。
 #[derive(Debug, Clone, Serialize)]
 pub struct GenJobSummary {
+    pub dreamina_model_version: Option<String>,
     pub id: String,
     pub media: String,
     pub video_options: Option<serde_json::Value>,
@@ -1341,15 +1450,19 @@ pub struct GenJobSummary {
 /// 列出未完成的生成 job（queued/running），供前端启动时重建 genJobs（恢复中 job 可见）。
 /// done/failed 不返回（已是资产或显失败）。codex job 也返回（前端展示「app 重启中断」失败态）。
 #[tauri::command]
-pub async fn list_gen_jobs(paths: State<'_, Arc<LibraryPaths>>, db: State<'_, Arc<Database>>) -> Result<Vec<GenJobSummary>, AppError> {
+pub async fn list_gen_jobs(paths: State<'_, Arc<LibraryPaths>>, db: State<'_, Arc<Database>>, job_id: Option<String>) -> Result<Vec<GenJobSummary>, AppError> {
     let dbw = db.inner().clone();
     let annotations_dir = paths.inner().root.join("annotations");
-    tokio::task::spawn_blocking(move || running_generation_summaries(&dbw, Some(&annotations_dir)))
+    tokio::task::spawn_blocking(move || running_generation_summaries(&dbw, Some(&annotations_dir), job_id.as_deref()))
         .await.map_err(|e| AppError::Other(e.to_string()))?
 }
 
-fn running_generation_summaries(db: &Database, annotations_dir: Option<&std::path::Path>) -> Result<Vec<GenJobSummary>, AppError> {
-    let tasks = crate::core::task_queue::Task::list_running(db)?;
+fn running_generation_summaries(db: &Database, annotations_dir: Option<&std::path::Path>, job_id: Option<&str>) -> Result<Vec<GenJobSummary>, AppError> {
+    use crate::core::task_queue::Task;
+    let tasks = match job_id {
+        Some(id) => Task::by_id(db, id)?.into_iter().filter(|t| matches!(t.status.as_str(), "queued" | "running")).collect(),
+        None => Task::list_running(db)?,
+    };
     Ok(tasks
         .into_iter()
         .filter_map(|t| t.gen_job())
@@ -1363,7 +1476,10 @@ fn running_generation_summaries(db: &Database, annotations_dir: Option<&std::pat
                     Vec::new()
                 }
             };
+            let dreamina_model_version = db.recorded_dreamina_version(&j);
+            let submit_id = if j.provider == h3_image::KEY { j.submit_id.as_deref().and_then(h3_image::session) } else { j.submit_id };
             GenJobSummary {
+                dreamina_model_version,
                 turns,
                 running: matches!(
                     j.status.as_str(),
@@ -1376,7 +1492,7 @@ fn running_generation_summaries(db: &Database, annotations_dir: Option<&std::pat
                 status: j.status,
                 prompt: j.prompt,
                 applied_prompt: j.applied_prompt,
-                submit_id: j.submit_id,
+                submit_id,
                 session_id: j.session_id,
                 conversation_id: j.conversation_id,
                 thread_id: j.thread_id,
@@ -1402,6 +1518,7 @@ fn running_generation_summaries(db: &Database, annotations_dir: Option<&std::pat
 /// （面板缩略图 / 复用还原用）。
 #[derive(Debug, Clone, Serialize)]
 pub struct RecentGenSession {
+    pub dreamina_model_version: Option<String>,
     pub id: String,
     pub media: String,
     pub video_options: Option<serde_json::Value>,
@@ -1433,6 +1550,7 @@ pub async fn recent_gen_sessions(
     paths: State<'_, Arc<LibraryPaths>>,
     db: State<'_, Arc<Database>>,
     limit: Option<i64>,
+    job_id: Option<String>,
 ) -> Result<Vec<RecentGenSession>, AppError> {
     let annotations_dir = paths.inner().root.join("annotations");
     let db = db.inner().clone();
@@ -1440,7 +1558,11 @@ pub async fn recent_gen_sessions(
         let limit = limit.unwrap_or(30).clamp(1, 100);
         // list_recent 是全 kind 查询（当前 task_queue 只有 generation kind），多取一批
         // 再按终态过滤、截 limit。
-        let tasks = crate::core::task_queue::Task::list_recent(&db, 200)?;
+        use crate::core::task_queue::Task;
+        let tasks = match &job_id {
+            Some(id) => Task::by_id(&db, id)?.into_iter().collect(),
+            None => Task::list_recent(&db, 200)?,
+        };
         let mut out = Vec::new();
         for t in tasks {
             if out.len() >= limit as usize {
@@ -1452,7 +1574,7 @@ pub async fn recent_gen_sessions(
             let Some(j) = t.gen_job() else {
                 continue;
             };
-            if j.internal_agent || (t.status == "cancelled" && j.media != "video") { continue; }
+            if j.internal_agent || (job_id.is_none() && t.status == "cancelled" && j.media != "video") { continue; }
             // 首轮 payload 保存于 provider 返回前，session_id 可能为空；按 job_id
             // 从产物元数据找回会话，兼容已安装版本写出的历史任务。
             let history = db.generation_history_by_job(&j.id, Some(&annotations_dir)).and_then(|history| {
@@ -1470,11 +1592,14 @@ pub async fn recent_gen_sessions(
             if j.media == "video" {
                 ref_assets = db.generation_reference_assets(&j.references, Some(&annotations_dir))?;
             }
+            let dreamina_model_version = db.recorded_dreamina_version(&j);
+            let submit_id = if j.provider == h3_image::KEY { j.submit_id.as_deref().and_then(h3_image::session) } else { j.submit_id };
             out.push(RecentGenSession {
+                dreamina_model_version,
                 id: j.id,
                 media: j.media,
                 video_options: j.video_options,
-                submit_id: j.submit_id,
+                submit_id,
                 provider: j.provider,
                 status: t.status,
                 prompt: j.prompt,
@@ -1543,11 +1668,12 @@ pub async fn jimeng_retrieve_orphan(
         }
         job.status = "querying".into();
         job.error = None;
-        if !crate::core::task_queue::Task::claim_video_retrieval(&db, &job)? {
+        let cancellation = GenerationGuard::register(&job.id, job.turn_key.as_deref())?;
+        if !crate::core::task_queue::Task::claim_submitted_retrieval(&db, &job)? {
             return Err(AppError::Other("该视频已经开始取回，无需重复操作".into()));
         }
         tokio::spawn(async move {
-            crate::core::generation_worker::recover_one_jimeng_job(app, db, paths, job, submit_id).await;
+            crate::core::generation_worker::recover_one_jimeng_job(app, db, paths, job, submit_id, cancellation).await;
         });
         return Ok(());
     }
@@ -1582,8 +1708,9 @@ pub async fn jimeng_retrieve_orphan(
         started_at: Some(now),
         finished_at: None,
     };
+    let cancellation = GenerationGuard::register(&job.id, job.turn_key.as_deref())?;
     tokio::spawn(async move {
-        crate::core::generation_worker::recover_one_jimeng_job(app, db, paths, job, submit_id)
+        crate::core::generation_worker::recover_one_jimeng_job(app, db, paths, job, submit_id, cancellation)
             .await;
     });
     Ok(())
@@ -1721,11 +1848,72 @@ mod generation_task_tests {
 
     use super::{
         generation_provider_is_codex, merge_continuation_references, nearest_ratio_key,
-        reference_legend, settle_generation_task,
+        reference_legend, settle_generation_task, GenerationGuard,
     };
     use crate::core::task_queue::{GenJob, Task};
     use crate::db::Database;
     use crate::error::AppError;
+
+    #[tokio::test]
+    async fn cancelling_preflight_keeps_the_slot_until_unwind_and_ignores_stale_turns() {
+        use tokio::sync::oneshot::error::TryRecvError;
+        let job = "preflight-cancel-test";
+        let (first, mut rx) = GenerationGuard::register(job, Some("first")).unwrap();
+        assert!(!GenerationGuard::cancel(job, Some("older")));
+        assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
+        assert!(GenerationGuard::cancel(job, Some("first")));
+        assert!(rx.await.is_ok());
+        assert!(GenerationGuard::register(job, Some("retry")).is_err());
+        drop(first);
+
+        let (_retry, mut retry_rx) = GenerationGuard::register(job, Some("retry")).unwrap();
+        GenerationGuard::cancel(job, Some("first"));
+        assert_eq!(retry_rx.try_recv(), Err(TryRecvError::Empty));
+        // Historical IPC without a turn key still targets the currently active job.
+        GenerationGuard::cancel(job, None);
+        assert!(retry_rx.await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn h3_cancel_without_memory_handle_checks_owner_turn_and_remote_confirmation() {
+        use std::sync::{Arc, atomic::{AtomicBool, AtomicUsize, Ordering}};
+        use axum::{routing::post, Json, Router};
+        use crate::{cloud::{AuthClient, CloudClient, config::CloudConfig}, codex::h3_image};
+
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let ticket = h3_image::Ticket::new(format!("http://{}", listener.local_addr().unwrap()), "test-user".into()).encode().unwrap();
+        let id = h3_image::session(&ticket).unwrap();
+        let accepted = Arc::new(AtomicBool::new(false)); let count = Arc::new(AtomicUsize::new(0));
+        let (ok, calls) = (accepted.clone(), count.clone());
+        let server = Router::new().route("/queue", axum::routing::get(|| async {
+            Json(serde_json::json!({"queue_running":[[0,"another-job"]],"queue_pending":[]}))
+        })).route(&format!("/api/jobs/{id}/cancel"), post(move || {
+            let (ok, calls) = (ok.clone(), calls.clone());
+            async move { calls.fetch_add(1, Ordering::SeqCst); Json(serde_json::json!({"cancelled":ok.load(Ordering::SeqCst)})) }
+        }));
+        let server = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+        let auth = AuthClient::with_test_session(CloudClient::new(CloudConfig::default()).unwrap());
+        let mut job = running_job(&format!("orphan-h3-{id}")); job.provider = h3_image::KEY.into();
+        job.turn_key = Some("current".into()); job.submit_id = Some(ticket);
+        Task::upsert_gen_job(&db, &job).unwrap();
+
+        assert!(super::cancel_persisted_h3_job(&db, &auth, &job.id, Some("older")).await.unwrap().is_none());
+        auth.set_test_user("other");
+        assert!(super::cancel_persisted_h3_job(&db, &auth, &job.id, Some("current")).await.is_err());
+        assert_eq!(count.load(Ordering::SeqCst), 0);
+        auth.set_test_user("test-user");
+        assert!(super::cancel_persisted_h3_job(&db, &auth, &job.id, Some("current")).await.is_err());
+        assert_eq!(Task::by_id(&db, &job.id).unwrap().unwrap().status, "running");
+        accepted.store(true, Ordering::SeqCst);
+        assert!(super::cancel_persisted_h3_job(&db, &auth, &job.id, Some("current")).await.unwrap().is_some());
+        assert_eq!(Task::by_id(&db, &job.id).unwrap().unwrap().status, "cancelled");
+        assert!(super::cancel_persisted_h3_job(&db, &auth, &job.id, None).await.unwrap().is_none());
+        let cloud = running_job("cloud-cancel-keeps-existing-behavior"); Task::upsert_gen_job(&db, &cloud).unwrap();
+        assert!(super::cancel_persisted_h3_job(&db, &auth, &cloud.id, None).await.unwrap().is_none());
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        server.abort();
+    }
 
     fn running_job(id: &str) -> GenJob {
         let now = Utc::now().timestamp();
@@ -1767,6 +1955,7 @@ mod generation_task_tests {
         let db = Database::open(&path).unwrap();
         db.migrate().unwrap();
         let mut job = running_job("same-job");
+        job.provider = "jimeng".into();
         job.turn_key = Some("failed-first".into());
         Task::upsert_gen_job(&db, &job).unwrap();
         Task::mark_failed(&db, &job.id, "first failure").unwrap();
@@ -1774,16 +1963,19 @@ mod generation_task_tests {
         db.finish_generation_diagnostic(&first, &job.id, Some("first failure")).unwrap();
         job.turn_key = Some("running-retry".into());
         Task::upsert_gen_job(&db, &job).unwrap();
-        db.begin_generation_diagnostic(&serde_json::json!({"jobId":job.id,"turnKey":"running-retry","prompt":"test"})).unwrap();
+        db.begin_generation_diagnostic(&serde_json::json!({"jobId":job.id,"turnKey":"running-retry","prompt":"test","provider":"jimeng","dreaminaModelVersion":"4.7"})).unwrap();
         drop(db);
         let db = Database::open(&path).unwrap();
-        let summaries = super::running_generation_summaries(&db, None).unwrap();
+        let summaries = super::running_generation_summaries(&db, None, None).unwrap();
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].id, "same-job");
         assert!(summaries[0].session_id.is_none());
+        assert_eq!(summaries[0].dreamina_model_version.as_deref(), Some("4.7"));
         assert_eq!(summaries[0].turn_key.as_deref(), Some("running-retry"));
         assert_eq!(summaries[0].turns.len(), 1);
         assert_eq!(summaries[0].turns[0].error.as_deref(), Some("first failure"));
+        assert_eq!(super::running_generation_summaries(&db, None, Some("same-job")).unwrap()[0].id, "same-job");
+        assert!(super::running_generation_summaries(&db, None, Some("another-job")).unwrap().is_empty());
         assert_eq!(Task::list_running(&db).unwrap().len(), 1);
         assert_eq!(db.generation_diagnostics(&job.id).unwrap().len(), 2);
         drop(db);

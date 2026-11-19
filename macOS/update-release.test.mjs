@@ -30,26 +30,43 @@ try {
   for (const directory of ["bin", "macOS", "apps/desktop/src-tauri/target/release/bundle/macos/Bowerbird.app/Contents/MacOS", "apps/desktop/src-tauri/target/release/bundle/dmg"]) {
     await mkdir(join(root, directory), { recursive: true });
   }
-  for (const name of ["release.sh", "update-manifest.mjs", "verify-update.mjs"]) {
+  for (const name of ["release.sh", "update-manifest.mjs", "verify-update.mjs", "upload_immutable.py"]) {
     await copyFile(new URL(name, import.meta.url), join(root, "macOS", name));
   }
   await writeFile(join(root, "apps/desktop/src-tauri/tauri.conf.json"), JSON.stringify({ version }));
   await writeFile(join(root, "apps/desktop/src-tauri/tauri.macos.conf.json"), JSON.stringify({ plugins: { updater: { pubkey: pub } } }));
+  // Windows Python does not execute the PATH shell stub for curl. Intercept the
+  // network transport before running the actual baseline checker there.
+  const livePayload = JSON.stringify({ version: "999.0.0", platforms: Object.fromEntries(
+    ["darwin-x86_64", "darwin-aarch64"].map(key => [key, { url: "https://example.test/a", signature: "archive-sig" }])) });
+  await writeFile(join(root, "bin/check-baseline.py"), [
+    "import os, runpy, subprocess, sys",
+    "def lookup(*args, **kwargs):",
+    "    if os.getenv('TEST_OFFLINE') == 'yes': raise OSError('offline')",
+    `    return b'${livePayload}'`,
+    "subprocess.check_output = lookup",
+    "sys.argv = sys.argv[1:]",
+    "runpy.run_path(sys.argv[0], run_name='__main__')",
+  ].join("\n"));
   const mocks = {
     rustc: 'echo "host: $TEST_HOST"',
-    curl: 'echo \'{"version":"26.9.18"}\'',
+    curl: `if [ "$TEST_OFFLINE" = yes ]; then exit 28; fi; echo '${livePayload}'`,
     plutil: `echo ${version}`,
     file: 'echo "Mach-O 64-bit executable $TEST_MACHO"',
-    hdiutil: 'exit 0',
+    hdiutil: 'exit "${TEST_DMG_STATUS:-0}"',
+    ...(process.platform === "win32" ? {
+      python3: 'if [ "$1" = macOS/upload_immutable.py ]; then exec python.exe bin/check-baseline.py "$@"; fi; exec python.exe "$@"',
+      shasum: 'shift 2; exec sha256sum "$@"',
+    } : {}),
   };
   for (const [name, body] of Object.entries(mocks)) await writeFile(join(root, "bin", name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
   const bundle = join(root, "apps/desktop/src-tauri/target/release/bundle");
   await writeFile(join(bundle, "macos/Bowerbird.app.tar.gz"), bytes);
   await writeFile(join(bundle, "macos/Bowerbird.app.tar.gz.sig"), signature);
-  function run(host, macho) {
-    return spawnSync("bash", ["macOS/release.sh"], { cwd: root, encoding: "utf8", env: {
-      ...process.env, PATH: `${join(root, "bin")}:${process.env.PATH}`, COS_SKIP_BUILD: "1", COS_SKIP_UPLOAD: "1",
-      TEST_HOST: host, TEST_MACHO: macho, COS_PUBLIC_BASE: "https://example.com",
+  function run(host, macho, env = {}) {
+    return spawnSync("bash", ["-c", 'export PATH="$PWD/bin:$PATH"; exec bash macOS/release.sh'], { cwd: root, encoding: "utf8", env: {
+      ...process.env, BOWERBIRD_MAC_CHANNEL: "local", COS_SKIP_BUILD: "1", COS_SKIP_UPLOAD: "1",
+      TEST_HOST: host, TEST_MACHO: macho, TOS_CDN_BASE: "https://example.com", ...env,
     } });
   }
   for (const [arch, host, dmg, macho] of [
@@ -59,10 +76,21 @@ try {
     await writeFile(join(bundle, `dmg/Bowerbird_${version}_${dmg}.dmg`), bytes);
     const result = run(host, macho);
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    const manifest = JSON.parse(await readFile(join(root, `macOS/dist/darwin-${arch}.json`), "utf8"));
+    const manifest = JSON.parse(await readFile(join(root, `macOS/dist/local/darwin-${arch}.json`), "utf8"));
     assert.deepEqual(Object.keys(manifest.platforms), [`darwin-${arch}`]);
     assert.equal(manifest.platforms[`darwin-${arch}`].url, `https://example.com/mac_package/Bowerbird_${version}_${arch}.app.tar.gz`);
     assert.equal(manifest.platforms[`darwin-${arch}`].signature, signature);
+    assert.notEqual(run(host, macho, { TEST_DMG_STATUS: "1" }).status, 0);
+    const noIdentity = run(host, macho, { BOWERBIRD_MAC_CHANNEL: "release", APPLE_SIGNING_IDENTITY: "" });
+    assert.notEqual(noIdentity.status, 0);
+    assert.match(noIdentity.stdout, /Developer ID/);
+    const official = { BOWERBIRD_MAC_CHANNEL: "release", APPLE_SIGNING_IDENTITY: "Developer ID Application: Fixture", BOWERBIRD_NOTARY_PROFILE: "fixture" };
+    for (const env of [official, { ...official, TEST_OFFLINE: "yes" }]) {
+      const refusal = run(host, macho, env);
+      assert.notEqual(refusal.status, 0);
+      assert.match(refusal.stderr, env.TEST_OFFLINE ? /offline|exit status 28/ : /must exceed/);
+      assert.doesNotMatch(refusal.stdout, /候选归档/);
+    }
     await rm(join(bundle, `dmg/Bowerbird_${version}_${dmg}.dmg`));
   }
   assert.notEqual(run("x86_64-unknown-linux-gnu", "x86_64").status, 0);

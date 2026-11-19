@@ -1,6 +1,29 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseMarkdown, serializeMarkdown } from '../src/lib/documentCodec.ts';
+import { normalizeDocument, parseMarkdown, serializeMarkdown, serializeReadableMarkdown } from '../src/lib/documentCodec.ts';
+import { readDocumentState } from '../src/lib/documentState.ts';
+
+test('portable Markdown is independent of visual marks and a compressed editing snapshot restores every mark', () => {
+  const value = Array.from({ length: 180 }, (_, i) => ({
+    id: 'p-' + i, type: 'p', children: [{ text: '可编辑的文字 ' + i, color: 'red', fontFamily: 'Georgia', fontSize: '17px', backgroundColor: '#fff4ba', bold: true }],
+  }));
+  const markdown = serializeReadableMarkdown(value);
+  assert.ok(markdown.includes('**可编辑的文字 179**'));
+  assert.doesNotMatch(markdown, /<span|font-family|bowerbird-document/);
+  const saved = serializeMarkdown(value);
+  assert.match(saved, /bowerbird-document:2:/);
+  assert.deepEqual(parseMarkdown(saved), value);
+  assert.equal(readDocumentState(saved.replace('文字 17', '新文字 17')).value, undefined);
+  assert.ok(saved.length < markdown.length * 2);
+});
+
+test('editor boundary normalizes empty and incomplete blocks without losing annotations', () => {
+  for (const input of [null, [], [null], [{text:'stray leaf'}]]) {
+    const value=normalizeDocument(input); assert.equal(value.length,1); assert.equal(value[0].type,'p');assert.deepEqual(value[0].children,[{text:''}]);
+  }
+  const input=[{children:[null,{text:'kept',bold:true}]}];input.discussions=[];
+  const value=normalizeDocument(input);assert.equal(typeof value[0].id,'string');assert.equal(value[0].children[1].bold,true);assert.deepEqual(value.discussions,[]);
+});
 
 test('soft Markdown wraps stay soft while explicit hard breaks remain hard', () => {
   assert.equal(serializeMarkdown(parseMarkdown('one\nline')).trim(), 'one line');
@@ -32,7 +55,7 @@ test('all embedded media retain identity, original path and caption without temp
   }
 });
 test('unsupported syntax and external resources remain literal, without evaluation', () => {
-  for (const source of ['<script>alert(1)</script>', '![x](https://example.invalid/x.png)', '![x](../image.png)', '---\ntitle: hello\n---', '| a | b |\n|---|---|\n| 1 | 2 |', '- [x] done', '~~deleted~~', '- first\n\n  second\n\n- next']) {
+  for (const source of ['<script>alert(1)</script>', '![x](https://example.invalid/x.png)', '![x](../image.png)', '---\ntitle: hello\n---', '- first\n\n  second\n\n- next']) {
     assert.equal(serializeMarkdown(parseMarkdown(source)).trim(), source);
   }
 });

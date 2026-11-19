@@ -2,6 +2,8 @@ import { deepEqual, equal, ok, rejects } from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { test } from "node:test";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import type { AgentControlClient } from "../control-plane/agent-control-client.ts";
 import type { HarnessAdapter, HarnessSession } from "../harness/contracts.ts";
 import { canonicalJson, deriveCallId, sha256Hex } from "../kernel/tool-ledger.ts";
@@ -52,13 +54,61 @@ function claimed(
   };
 }
 
-test("text rewrite uses unified DSH, denies tools and recovers saved text without another model turn", async () => {
+test("VPS text skill is frozen before model execution and restored after a crash", async () => {
+  const folder = mkdtempSync(join(tmpdir(), "h3-method-recovery-"));
+  const previous = process.env.BOWERBIRD_TEXT_SKILL_DIR;
+  const runClaim = claimed(); runClaim.artifactUrls = [];
+  let raw: Uint8Array | undefined, turns = 0;
+  try {
+    mkdirSync(join(folder, "h3-video-prompt"), { recursive: true });
+    const file = join(folder, "h3-video-prompt", "SKILL.md");
+    writeFileSync(file, new TextEncoder().encode("FROZEN_SERVER_METHOD_V1"));
+    process.env.BOWERBIRD_TEXT_SKILL_DIR = folder;
+    const goal = 'bowerbird:cloud-text-skill:v1\n' + JSON.stringify({ id: "h3-video-prompt",
+      parameters: { mode: "text", seconds: 5, ratio: "9:16", firstFrameCount: 0, lastFrameCount: 0 } });
+    const control = {
+      async loadRawCheckpoint() { return raw; },
+      async downloadVerifiedJson() { return { schemaVersion: 1, goal, textRewrite: { source: "猫站起来" } }; },
+      async saveRawCheckpoint(args: { bytes: Uint8Array; sha256: string }) {
+        raw = args.bytes; runClaim.run.checkpointHash = args.sha256; runClaim.run.snapshotSchemaVersion = 1;
+      },
+      async appendEvents() {}, async finish() {},
+    } as unknown as AgentControlClient;
+    const processor = new UnifiedPlanningRunProcessor({
+      workspaceRoot: folder, vision: { apiKey: "unused", baseUrl: "https://unused.invalid", model: "unused", mock: true },
+      createAdapter() { return { id: "dsh", async open() { return {
+        runId: runClaim.run.id, sessionId: "skill-test", async turn(prompt) {
+          turns++;
+          ok(JSON.stringify(prompt).includes("FROZEN_SERVER_METHOD_V1"));
+          ok(!JSON.stringify(prompt).includes("NEW_SERVER_METHOD_V2"));
+          ok(new TextDecoder().decode(raw).includes("FROZEN_SERVER_METHOD_V1"));
+          if (turns === 1) throw new Error("simulated_model_crash");
+          return { stopReason: "end_turn", committedContent: [{ type: "text" as const, text: '{"schemaVersion":1,"text":"猫起身站立。"}' }] };
+        }, async close() {}, async cancel() {},
+      }; } }; },
+    });
+    const context = { claimed: runClaim, control, signal: { aborted: false, cancelRequested: false, leaseLost: false, stopRequested: false } } as AgentRunContext;
+    await rejects(() => processor.process(context), /simulated_model_crash/);
+    writeFileSync(file, new TextEncoder().encode("NEW_SERVER_METHOD_V2"));
+    await processor.process(context);
+    equal(turns, 2);
+    await processor.process(context);
+    equal(turns, 2);
+  } finally {
+    if (previous === undefined) delete process.env.BOWERBIRD_TEXT_SKILL_DIR;
+    else process.env.BOWERBIRD_TEXT_SKILL_DIR = previous;
+    rmSync(folder, { recursive: true, force: true });
+  }
+});
+
+for (const repeats of [1, 24000]) test(`text rewrite (${repeats}) recovers complete saved text without another model turn`, async () => {
+  const source = "朱砂痣，左上竖排\n".repeat(repeats), edited = source.replaceAll("朱砂痣", "春山可望");
   const runClaim = claimed(); runClaim.artifactUrls = [];
   let raw: Uint8Array | undefined, turns = 0, finished = 0, failEvent = true;
   const events: Array<{type:string;displayPayload?:Record<string, unknown>}> = [];
   const control = {
     async loadRawCheckpoint() { return raw; },
-    async downloadVerifiedJson() { return {schemaVersion:1,goal:"将朱砂痣替换成春山可望",textRewrite:{source:"朱砂痣，左上竖排"}}; },
+    async downloadVerifiedJson() { return {schemaVersion:1,goal:"将朱砂痣替换成春山可望",textRewrite:{source}}; },
     async saveRawCheckpoint(args: {bytes:Uint8Array;sha256:string}) { raw = args.bytes; runClaim.run.checkpointHash = args.sha256; runClaim.run.snapshotSchemaVersion = 1; },
     async appendEvents(_run: string, _lease: string, batch: typeof events) {
       if (batch.some(event => event.type === "text.result") && failEvent) { failEvent = false; throw new Error("simulated_event_failure"); }
@@ -72,11 +122,12 @@ test("text rewrite uses unified DSH, denies tools and recovers saved text withou
     createAdapter(environment) { return { id: "dsh", async open() { return {
       runId:runClaim.run.id,sessionId:"text-session",async turn(prompt) {
         turns++; ok(JSON.stringify(prompt).includes("untrustedSource"));
+        ok(prompt.some(part => part.type === "text" && part.text.includes(JSON.stringify(source))));
         const response = await fetch(environment.BOWERBIRD_TOOL_BRIDGE_ENDPOINT, { method:"POST",
           headers:{authorization:`Bearer ${environment.BOWERBIRD_TOOL_BRIDGE_CAPABILITY}`,"content-type":"application/json"},
           body:JSON.stringify({toolName:"generate_image",arguments:{prompt:"forbidden"}}) });
         equal(response.status,409);
-        return {stopReason:"end_turn",committedContent:[{type:"text" as const,text:'{"schemaVersion":1,"text":"春山可望，左上竖排"}'}]};
+        return {stopReason:"end_turn",committedContent:[{type:"text" as const,text:JSON.stringify({schemaVersion:1,text:edited})}]};
       }, async close() {}, async cancel() {},
     }; } }; },
   });
@@ -85,7 +136,7 @@ test("text rewrite uses unified DSH, denies tools and recovers saved text withou
   equal(turns,1); equal(finished,0);
   await processor.process(context);
   equal(turns,1); equal(finished,1);
-  equal(events.find(event=>event.type==="text.result")?.displayPayload?.text,"春山可望，左上竖排");
+  equal(events.find(event=>event.type==="text.result")?.displayPayload?.text,edited);
 });
 
 for (const scenario of ["images", "html", "no-references"]) test(`v3 ${scenario} recovers invalid input and preserves crash-safe final selection`, async () => {

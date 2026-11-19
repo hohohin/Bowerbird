@@ -19,6 +19,23 @@ try {
   await page.getByRole('button', { name: '返回主页', exact: true }).click();
   await page.getByRole('navigation', { name: '首页' }).getByRole('button', { name: '素材库', exact: true }).click();
   const dock = page.locator('.library-composer .creation-dock');
+  async function assertCollapsedBackground(theme) {
+    await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
+    await page.waitForTimeout(80);
+    const collapsedMask = await dock.evaluate(async element => {
+      const surface = element.querySelector('.composer-projection-surface');
+      const field = surface.getBoundingClientRect(), box = element.getBoundingClientRect();
+      const image = new Image(); image.src = getComputedStyle(surface).maskImage.slice(5, -2); await image.decode();
+      const canvas = document.createElement('canvas'); canvas.width = field.width; canvas.height = field.height;
+      const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
+      const alpha = x => context.getImageData(Math.round(x - field.left), Math.round(box.top + box.height / 2 - field.top), 1, 1).data[3];
+      return { center: alpha(box.left + box.width / 2), nearLeft: alpha(box.left + 20), nearRight: alpha(box.right - 20) };
+    });
+    assert.ok(Object.values(collapsedMask).every(alpha => alpha > 240), `collapsed background remains visible: ${theme} ${JSON.stringify(collapsedMask)}`);
+    await page.screenshot({ path: `${output}/collapsed-${theme}.png` });
+  }
+  for (const theme of ['dark', 'light']) await assertCollapsedBackground(theme);
+  await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
   await dock.getByRole('button', { name: '展开创作描述', exact: true }).click();
   let editor = dock.locator('.ProseMirror');
   await editor.fill('');
@@ -48,18 +65,18 @@ try {
       center: alpha(writing.left + writing.width / 2 - field.left),
       tags: tags.map(box => alpha(box.left + box.width / 2 - field.left, box.top + box.height / 2 - field.top)),
       above: [railX, middleX, element.getBoundingClientRect().right - field.left - 50].map(x => alpha(x, arcY(x) - 24)),
-      atArc: alpha(middleX, arcY(middleX)),
+      atArc: alpha(middleX, arcY(middleX)), arcAbove: alpha(middleX, arcY(middleX) - 2), arcBelow: alpha(middleX, arcY(middleX) + 2),
       arcLeft: arc.getPointAtLength(0).x + field.left, arcRight: arc.getPointAtLength(arc.getTotalLength()).x + field.left,
       tagLeft: tags[0].left, dockRight: element.getBoundingClientRect().right,
       writingGap: writing.left - Math.max(...tags.slice(1).map(box => box.right)),
-      sideFade: Array.from({ length: 12 }, (_, i) => alpha(tags[0].left - field.left - 80 + i * 20)),
+      sideFade: Array.from({ length: 240 }, (_, i) => alpha(tags[0].left - field.left - 80 + i)),
       gap: parseFloat(getComputedStyle(element.querySelector('.composer-mode-picker')).gap) };
   });
-  assert.equal(projection.blur, 'blur(14.4px) saturate(0.72)', 'background blur is reduced by 20%');
+  assert.match(projection.blur, /url\("?#composer-contour-.*-dark/, 'approved contour film replaces background blur');
   assert.ok(projection.left < 8 && projection.right < 8, `materials beside the composer remain clear: ${JSON.stringify(projection)}`);
   assert.ok(projection.center > 240, 'feathering preserves the reading area');
   assert.ok(projection.above.every(alpha => alpha < 8), `blur stays below the arc: ${JSON.stringify(projection)}`);
-  assert.ok(projection.atArc > 95 && projection.atArc < 160, `feathering meets the arc without a clear gap: ${projection.atArc}`);
+  assert.ok(projection.arcAbove < 80 && projection.arcBelow > 180, `feathering meets the arc without a clear gap: ${projection.atArc}`);
   assert.ok(projection.arcLeft >= projection.tagLeft - 50 && projection.arcRight <= projection.dockRight + 40, 'HUD arc stays local to the composer');
   assert.ok(projection.writingGap >= 16 && projection.writingGap <= 48, `mode tags sit close to the input: ${projection.writingGap}`);
   assert.ok(projection.sideFade.some(alpha => alpha > 30 && alpha < 220)
@@ -127,6 +144,10 @@ try {
     assert.equal(new Set(afterMove).size, 3, 'layers move at different depths');
     await page.screenshot({ path: `${output}/${theme}.png` });
     await page.screenshot({ path: `${output}/${theme}-detail.png`, clip: { x: 0, y: 590, width: 1440, height: 310 } });
+    await dock.locator('.composer-collapse').click();
+    await dock.getByRole('button', { name: '展开创作描述', exact: true }).waitFor();
+    await assertCollapsedBackground(theme);
+    await dock.getByRole('button', { name: '展开创作描述', exact: true }).click();
   }
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.waitForTimeout(180);

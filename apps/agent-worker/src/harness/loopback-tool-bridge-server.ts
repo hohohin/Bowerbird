@@ -38,13 +38,13 @@ function authorized(request: IncomingMessage, capability: Uint8Array): boolean {
   return candidate.byteLength === capability.byteLength && timingSafeEqual(candidate, capability);
 }
 
-async function readRequest(request: IncomingMessage): Promise<unknown> {
+async function readRequest(request: IncomingMessage, maxRequestBytes: number): Promise<unknown> {
   const contentType = request.headers["content-type"];
   if (typeof contentType !== "string" || contentType.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
     throw new BridgeHttpError(415, "content_type_invalid");
   }
   const declaredLength = Number(request.headers["content-length"] ?? 0);
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_REQUEST_BYTES) {
+  if (Number.isFinite(declaredLength) && declaredLength > maxRequestBytes) {
     throw new BridgeHttpError(413, "request_too_large");
   }
 
@@ -55,7 +55,7 @@ async function readRequest(request: IncomingMessage): Promise<unknown> {
     request.on("data", (bytes) => {
       if (settled) return;
       total += bytes.byteLength;
-      if (total > MAX_REQUEST_BYTES) {
+      if (total > maxRequestBytes) {
         settled = true;
         reject(new BridgeHttpError(413, "request_too_large"));
         return;
@@ -160,6 +160,7 @@ export class LoopbackToolBridgeServer {
 
 export async function startLoopbackToolBridge(
   bridge: PlanningToolDispatchPort,
+  maxRequestBytes = MAX_REQUEST_BYTES,
 ): Promise<LoopbackToolBridgeServer> {
   const capabilityValue = Array.from(randomBytes(32), (byte) => byte.toString(16).padStart(2, "0")).join("");
   const capability = new TextEncoder().encode(capabilityValue);
@@ -180,7 +181,7 @@ export async function startLoopbackToolBridge(
     }
 
     try {
-      const call = parseBridgeRequest(await readRequest(request));
+      const call = parseBridgeRequest(await readRequest(request, maxRequestBytes));
       const result = await bridge.dispatch(call);
       sendJson(response, 200, { ok: true, value: result.value });
     } catch (error) {

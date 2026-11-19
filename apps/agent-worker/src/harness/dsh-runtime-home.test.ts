@@ -39,6 +39,24 @@ test("DSH runtime home keeps dependencies immutable and cleans only its fresh ch
     home.dispose();
     assert.equal(existsSync(home.home), false);
     assert.equal(existsSync(template), true);
+    for (const imageCardProvider of [false, true]) for (const videoCardOptions of [undefined, false, true]) {
+      const chat = createDshRuntimeHome({ templateDir: template, runtimeRoot: runtime, chat: true, imageCardProvider, videoCardOptions, chatOptions: { model: "deepseek-v4-pro", reasoningEffort: "max" } });
+      try {
+        const schema = JSON.parse(readFileSync(join(chat.home, "profiles", chat.profileName, "plugins", "chat-card-tool.json"), "utf8"));
+        const profile = readFileSync(join(chat.home, "profiles", chat.profileName, "cordis.chat.patch.yml"), "utf8");
+        assert.match(profile, /id: deepseek-v4-pro/);
+        assert.match(profile, /thinking: enabled/);
+        assert.match(profile, /reasoningEffort: max/);
+        const fields = schema.inputSchema.properties.cards.items.properties;
+        assert.equal(!!fields.videoOptions, videoCardOptions === true);
+        assert.equal(!!fields.videoChannel, videoCardOptions === true);
+        assert.equal(fields.mode.enum.includes("reference"), videoCardOptions === true);
+        assert.equal(fields.resolution.enum.includes(0.98), videoCardOptions === true);
+        const field = fields.provider;
+        if (imageCardProvider) assert.ok(field.enum.includes("dreamina-web55"));
+        else assert.equal(field, undefined);
+      } finally { chat.dispose(); }
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

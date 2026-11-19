@@ -1,6 +1,16 @@
 use super::*;
 
 #[test]
+fn local_chat_video_tool_is_available_only_to_confirmed_turn() {
+    let mut state = StreamState { provider_thread: Some("thread".into()), provider_turn: Some("turn".into()), start_confirmed: true, ..Default::default() };
+    let request = json!({"id":7,"method":"item/tool/call","params":{"threadId":"thread","turnId":"turn","callId":"video","tool":"hyperframes_video","arguments":{"action":"prepare"}}});
+    assert!(card_call(&request, &state).is_ok());
+    state.start_confirmed = false;
+    assert!(card_call(&request, &state).is_err());
+    assert!(CARD_TOOL_VERSION > 3);
+}
+
+#[test]
 fn local_chat_stream_is_scoped_deduplicates_completion_and_omits_reasoning() {
     let mut state = StreamState {
         provider_thread: Some("thread".into()),
@@ -28,12 +38,14 @@ fn local_chat_stream_accepts_notifications_before_start_ack_and_preserves_partia
         provider_thread: Some("thread".into()),
         ..Default::default()
     };
-    state
-        .apply(
-            &json!({"method":"turn/started","params":{"threadId":"thread","turn":{"id":"turn"}}}),
-        )
-        .unwrap();
+    state.apply(&json!({"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"old","status":"completed"}}})).unwrap();
     state.apply(&json!({"method":"item/agentMessage/delta","params":{"threadId":"thread","turnId":"turn","itemId":"a","delta":"保留内容"}})).unwrap();
+    assert!(state.provider_turn.is_none());
+    assert!(state.text().is_empty());
+    state.provider_turn = Some("turn".into());
+    while let Some(value) = state.early_notifications.pop_front() {
+        assert_eq!(state.apply(&value).unwrap(), None);
+    }
     assert!(state.apply(&json!({"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"turn","status":"failed","error":{"message":"offline fixture"}}}})).is_err());
     assert_eq!(state.text(), "保留内容");
 }
@@ -114,10 +126,37 @@ fn local_chat_card_tool_returns_structured_results_and_correctable_failures() {
 #[test]
 fn local_chat_tool_contract_keeps_sections_and_defers_h3() {
     let tool = card_tool_spec();
-    assert!(CARD_TOOL_VERSION >= 3);
-    assert!(tool["inputSchema"]["properties"].get("sections").is_some());
-    assert!(!tool.to_string().contains("comfy-video"));
-    assert!(!CHAT_INSTRUCTIONS.contains("H3"));
+    let cards = &tool["inputSchema"]["properties"]["cards"]["items"];
+    let kinds = cards["properties"]["kind"]["enum"].as_array().unwrap();
+    for kind in ["generation", "comfy-video", "content", "trigger", "loop"] {
+        assert!(kinds.contains(&json!(kind)), "{kind} is a selectable card kind");
+    }
+    assert_eq!(cards["required"], json!(["id", "kind", "title"]));
+    assert_eq!(cards["additionalProperties"], false);
+    let options = &cards["properties"];
+    assert_eq!(options["seconds"]["minimum"], 1);
+    assert_eq!(options["seconds"]["maximum"], 15);
+    assert_eq!(options["seconds"]["default"], 8);
+    let ratios = options["ratio"]["enum"].as_array().unwrap();
+    assert!(ratios.contains(&json!("auto")));
+    assert!(ratios.contains(&json!("9:16")));
+    assert!(ratios.contains(&json!("21:9")));
+    assert_eq!(options["resolution"]["enum"], json!([0.6, 0.8, 0.98, 1]));
+    let modes = options["mode"]["enum"].as_array().unwrap();
+    for mode in ["text", "reference", "frames"] {
+        assert!(modes.contains(&json!(mode)));
+    }
+    for slot in ["firstFrameAlias", "lastFrameAlias"] {
+        assert_eq!(options[slot]["pattern"], "^image[1-8]$");
+    }
+    assert!(options.get("endpoint").is_none());
+    assert!(options.get("workflow").is_none());
+    let inputs = tool["inputSchema"]["properties"]["connections"]["items"]["properties"]["input"]
+        ["enum"]
+        .as_array()
+        .unwrap();
+    assert!(inputs.contains(&json!("first-frame")));
+    assert!(inputs.contains(&json!("last-frame")));
 }
 
 #[test]
@@ -146,37 +185,11 @@ fn local_chat_section_tool_contract_groups_current_batch_cards_without_geometry_
     assert_eq!(members["maxItems"], 12);
     assert_eq!(members["uniqueItems"], true);
     assert_eq!(members["items"]["type"], "string");
-    let cards = schema["properties"]["cards"]["items"]["oneOf"]
+    let kinds = schema["properties"]["cards"]["items"]["properties"]["kind"]["enum"]
         .as_array()
         .unwrap();
-    assert!(cards
-        .iter()
-        .all(|card| card["properties"]["kind"]["const"] != "section"));
-}
-
-#[test]
-fn local_chat_upgrade_preserves_public_history_without_replaying_current_request() {
-    let chat: ChatConversation = serde_json::from_value(json!({
-        "id":"chat","projectId":"project","threadId":"app-thread","nodeId":"node","title":"旧对话","provider":"codex-local","status":"running","turnCount":2,"preview":"","revision":1,"createdAt":1,"updatedAt":1,"error":null,"actions":[],
-        "messages":[
-            {"id":"user1","turnId":"old","role":"user","text":"原来的创意","referenceAssetIds":["asset"],"status":"done","createdAt":1,"updatedAt":1},
-            {"id":"reply1","turnId":"old","role":"assistant","text":"原来的回复","referenceAssetIds":[],"status":"done","createdAt":1,"updatedAt":1},
-            {"id":"user2","turnId":"current","role":"user","text":"CURRENT_REQUEST","referenceAssetIds":[],"status":"done","createdAt":2,"updatedAt":2}
-        ]
-    })).unwrap();
-    let history = upgraded_history(&chat, "current");
-    assert!(history.contains("原来的创意"));
-    assert!(history.contains("原来的回复"));
-    assert!(history.contains("\"imageCount\":1"));
-    assert!(!history.contains("CURRENT_REQUEST"));
-    assert!(!history.contains("asset"));
-    assert!(history.contains("不构成现在再次创建卡片的授权"));
-    assert!(history.contains("省略：false"));
-    let mut long_chat = chat.clone();
-    long_chat.messages[0].text = "长".repeat(100_001);
-    let history = upgraded_history(&long_chat, "current");
-    assert!(history.contains("省略：true"));
-    assert!(history.contains("原来的回复"));
+    assert_eq!(kinds.len(), 5);
+    assert!(!kinds.contains(&json!("section")));
 }
 
 #[test]
@@ -250,11 +263,10 @@ async fn local_chat_rpc_reads_real_json_lines_and_declines_server_requests() {
 }
 
 #[tokio::test]
-async fn local_chat_protocol_bounds_messages_and_handles_disconnection() {
-    let oversized = vec![b'x'; MAX_RESPONSE + 1];
-    assert!(read_message(&mut BufReader::new(oversized.as_slice()))
-        .await
-        .is_err());
+async fn local_chat_protocol_accepts_long_text_and_handles_disconnection() {
+    let text = "长文".repeat(400_000);
+    let wire = format!("{}\n", json!({"text":text}));
+    assert_eq!(read_message(&mut BufReader::new(wire.as_bytes())).await.unwrap()["text"], text);
     assert!(read_message(&mut BufReader::new(b"".as_slice()))
         .await
         .is_err());

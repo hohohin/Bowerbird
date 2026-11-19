@@ -1,5 +1,5 @@
 import { readCanvasNote } from "./canvasNotes";
-import { workflowTitle, type WorkflowNode, type WorkflowInput } from "./canvasWorkflow";
+import { workflowPromptPreview, workflowTitle, type WorkflowNode, type WorkflowInput } from "./canvasWorkflow";
 import type { CanvasNode } from "./types";
 
 export interface TemplatePreviewCard { id: string; x: number; y: number; width: number; height: number; title: string; body: string; assets: string[]; kind: "workflow" | "text" | "image" }
@@ -17,7 +17,7 @@ export function templatePreview(nodes: WorkflowNode[], canvas: CanvasNode[], sel
     cards.push({ id, x: rect.x, y: rect.y, width: rect.width, height: rect.height,
       kind: workflow ? "workflow" : native?.kind === "asset" || !native ? "image" : "text",
       title: workflow ? workflowTitle(workflow) : note?.title || (native?.kind === "asset" ? "图片素材" : native ? "内容卡" : "素材组"),
-      body: workflow ? workflow.prompt.replace(/@\[([^\]]+)\]/g, (_, id) => `@${workflow.promptReferences?.find(ref => ref.id === id)?.label ?? "输入"}`) : note?.cells.flat().map(cell => cell.text).filter(Boolean).join("\n") ?? "",
+      body: workflow ? workflowPromptPreview(workflow) : note?.cells.flat().map(cell => cell.text).filter(Boolean).join("\n") ?? "",
       assets: native?.assetId ? [native.assetId] : note ? [...new Set(note.cells.flat().flatMap(cell => cell.image_refs?.map(ref => ref.asset_id) ?? []))] : (rect as { assetIds?: string[] }).assetIds ?? [] });
   }
   const links: TemplatePreviewLink[] = [];

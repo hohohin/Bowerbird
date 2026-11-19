@@ -17,8 +17,7 @@ export function ScreenshotSettings() {
     if (!settings || busy) return;
     setBusy(true); setError('');
     try {
-      await invoke('update_settings', { settings: { ...settings, screenshot_auto_save: enabled } });
-      useStore.setState(state => ({ settings: state.settings ? { ...state.settings, screenshot_auto_save: enabled } : null }));
+      await useStore.getState().updateSettings({ screenshot_auto_save: enabled });
     } catch (e) { setError(userErrorMessage(e, '设置未保存，请重试。')); }
     finally { setBusy(false); }
   }

@@ -149,6 +149,30 @@ mod tests {
     }
 
     #[test]
+    fn text_uploads_preserve_utf8_bom_empty_files_and_project_membership() {
+        let root = tempfile::tempdir().unwrap();
+        let mut paths = LibraryPaths::init(root.path().join("data")).unwrap();
+        paths.files = Some(Arc::new(crate::core::file_workspace::FileWorkspace::open(root.path().join("files.json"), root.path().join("BowerbirdLibrary")).unwrap()));
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.create_project("p", "Text", "blank:p", "blank:p", "blank").unwrap();
+        for (name, text) in [("中文.TXT", "\u{feff}# 原样文字\r\n* 不转换\r\n"), ("笔记.MARKDOWN", "# 标题\n\n**正文**"), ("空文档.md", "")] {
+            let bytes = text.as_bytes();
+            let mut upload = MediaUpload::new(name, bytes.len() as u64, Some("p".into())).unwrap();
+            let directory = upload._directory.path().to_owned();
+            for (index, chunk) in bytes.chunks(7).enumerate() { upload.append((index * 7) as u64, chunk).unwrap(); }
+            let asset = upload.finish(&paths, &db).unwrap();
+            assert!(!directory.exists());
+            let stored = PathBuf::from(asset.store_path.as_ref().unwrap());
+            assert!(stored.starts_with(root.path().join("BowerbirdLibrary").canonicalize().unwrap().join("收集箱")));
+            assert_eq!(std::fs::read(stored).unwrap(), bytes);
+            let document = crate::core::text_documents::read(&db, &asset.id).unwrap();
+            assert_eq!(document.text, text.trim_start_matches('\u{feff}'));
+            assert_eq!(document.format, if name.ends_with("TXT") { "text" } else { "markdown" });
+        }
+        assert_eq!(db.get_project("p").unwrap().unwrap().asset_count, 3);
+    }
+
+    #[test]
     fn incomplete_upload_never_enters_library() {
         let root = tempfile::tempdir().unwrap();
         let paths = LibraryPaths::init(root.path().into()).unwrap();

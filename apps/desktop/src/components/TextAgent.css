@@ -1,5 +1,5 @@
 .text-block-actions.has-agent { opacity:1; }
-.text-block-actions > .text-block-agent { position:absolute; right:28px; width:48px; font-size:11px; cursor:pointer!important; color:var(--bb-blue); }
+.text-block-actions > .text-block-agent { position:absolute; right:36px; width:48px; font-size:11px; cursor:pointer!important; color:var(--bb-blue); }
 .text-agent-bubble { position:fixed; z-index:55; width:min(400px,calc(100vw - 24px)); max-height:calc(100vh - 24px); overflow:auto; display:flex; flex-direction:column; padding:12px; gap:10px; border:1px solid var(--bb-line); background:var(--bb-surface); color:var(--bb-ink); box-shadow:0 12px 32px #0004; font-size:13px; }
 .text-agent-heading, .text-agent-footer { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .text-agent-footer { justify-content:flex-end; }

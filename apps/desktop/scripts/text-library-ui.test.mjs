@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 const server = await createServer({ server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false, watch: null }, cacheDir: '.tmp/text-library-vite' });
@@ -7,6 +7,7 @@ await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 page.setDefaultTimeout(8000);
+if(process.env.BOWERBIRD_DEMO_COVERAGE)await page.coverage.startJSCoverage({resetOnNavigation:false});
 const errors = [], remote = [];
 page.on('pageerror', error => errors.push(error.message));
 await page.route('**/*', route => { if (new URL(route.request().url()).hostname !== '127.0.0.1') { remote.push(route.request().url()); return route.abort(); } return route.continue(); });
@@ -22,17 +23,13 @@ try {
   assert.equal(await page.getByRole('button', { name: '保存', exact: true }).isDisabled(), true);
   await editor.locator('.text-document-block').last().click();
   await page.keyboard.press('End'); await page.keyboard.insertText(' 新增文字。');
-  await editor.evaluate(element => {
-    const clipboardData = new DataTransfer(); clipboardData.setData('text/html', '<img src="https://example.invalid/unconnected.png">');
-    element.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
-  });
-  await page.getByText('请使用插入素材选择原文件，已有文件只建立引用。', { exact: true }).waitFor();
-  assert.equal(await editor.locator('figure').count(), 0);
+  await page.context().grantPermissions(['clipboard-read','clipboard-write']);
+  await page.evaluate(async()=>navigator.clipboard.write([new ClipboardItem({'text/html':new Blob(['<img src="https://example.invalid/unconnected.png">'],{type:'text/html'}),'text/plain':new Blob(['External image'],{type:'text/plain'})})]));
+  await page.keyboard.press('Control+v');
+  await editor.locator('img[src="https://example.invalid/unconnected.png"]').waitFor({state:'attached'});
   await page.keyboard.press('Enter');
-  await editor.evaluate(element => {
-    const clipboardData = new DataTransfer(); clipboardData.setData('text/plain', 'https://example.invalid/reference.png');
-    element.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
-  });
+  await page.evaluate(()=>navigator.clipboard.writeText('https://example.invalid/reference.png'));
+  await page.keyboard.press('Control+v');
   await page.getByRole('button', { name: '源码', exact: true }).click();
   const source = page.getByRole('textbox', { name: 'Markdown 源码', exact: true });
   assert.match(await source.inputValue(), /新增文字/);
@@ -108,12 +105,12 @@ try {
   const calls = await page.evaluate(() => window.calls);
   assert.equal(calls.some(call => ['external_files_media', 'external_files_preview'].includes(call.command)), false);
   assert.equal(calls.some(call => /generate|local_chat_send|start_agent/.test(call.command)), false);
-  assert.deepEqual(remote, []); assert.deepEqual(errors, []);
+  assert.ok(remote.every(url=>/^https:\/\/example\.invalid\/(unconnected|reference)\.png$/.test(url))); assert.deepEqual(errors, []);
   console.log('PASS text library: existing detail layout, Plate/source, save/conflict, retained drafts, concurrent input, original media reference, plain text, dark/light, no image decoding or generation');
 } catch (error) {
   await mkdir('.tmp/text-library', { recursive: true });
   await page.screenshot({ path: '.tmp/text-library/failure.png' });
-  console.error(await page.locator('[data-text-document-editor]').innerHTML());
+
   console.error(errors);
   throw error;
-} finally { await browser.close(); await server.close(); }
+} finally { if(process.env.BOWERBIRD_DEMO_COVERAGE)await writeFile('.tmp/text-library/coverage.json',JSON.stringify((await page.coverage.stopJSCoverage()).filter(e=>e.url.includes('/src/')))); await browser.close(); await server.close(); }

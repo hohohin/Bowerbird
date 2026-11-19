@@ -1,3 +1,4 @@
+import { ControlTransport as ControlClient, ControlDeadlineError } from "../control-plane/control-transport.ts";
 import { loadBrandPrompt } from "../prompts/brand-visual.ts";
 import { declaredStandards } from "./declared-standards.ts";
 // V2 视觉设定云端提炼 · VPS 消费循环（AGENT-RUNTIME-PLAN §8.7 / §11 V2-T2）。
@@ -360,40 +361,10 @@ async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: str
   return parseInput(JSON.parse(text));
 }
 
-class ControlClient {
-  private readonly config: VisualWorkerConfig;
-  private readonly fetch: WorkerFetch;
-
-  constructor(config: VisualWorkerConfig, fetchImpl: WorkerFetch) {
-    this.config = config;
-    this.fetch = fetchImpl;
-  }
-
-  async post(body: JsonRecord): Promise<JsonRecord> {
-    const response = await this.fetch(this.config.controlUrl, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.config.workerToken}`,
-        "content-type": "application/json",
-        "x-worker-id": this.config.workerId,
-      },
-      body: JSON.stringify(body),
-    });
-    const text = await response.text();
-    let value: unknown;
-    try {
-      value = text ? JSON.parse(text) : null;
-    } catch {
-      value = null;
-    }
-    if (!response.ok || !isRecord(value)) throw new Error(`control_http_${response.status}`);
-    return value;
-  }
-}
 
 async function heartbeatLoop(control: ControlClient, jobId: string, leaseId: string, intervalMs: number, state: { stopped: boolean }): Promise<void> {
-  while (!state.stopped) {
-    await sleep(intervalMs);
+  while (!state.stopped && control.remainingMs(leaseId) > 1) {
+    await sleep(control.nextHeartbeatMs(leaseId, intervalMs));
     if (state.stopped) return;
     try {
       await control.post({ action: "heartbeat", jobId, leaseId });
@@ -419,8 +390,13 @@ async function executeClaim(
   try {
     const { cards, requirements } = await fetchInput(fetchImpl, claimed.inputUrl, claimed.job.inputManifestHash);
     declaredStandards(cards); // Validate before charging/submitting a model request.
-    const jobChat = chat ?? createVisualChat(config);
-    const workflowChat = requirements ? chat ?? createVisualChat(config, "workflow") : null;
+    const signal = { get aborted() { return control.remainingMs(leaseId) <= 1; } };
+    const guard = (call: ModelChat): ModelChat => async (content) => {
+      if (signal.aborted) throw new Error("visual_lease_lost");
+      return call(content);
+    };
+    const jobChat = guard(chat ?? createVisualChat(config, signal, "extraction"));
+    const workflowChat = requirements ? guard(chat ?? createVisualChat(config, signal, "workflow")) : null;
     await control.post({ action: "submitted", jobId, leaseId });
     submitted = true;
     const imageDraft = cards.length ? JSON.parse(await extractVisualDraft(cards, jobChat, config.maxCharsPerBatch)) as CloudVisualDraft : aggregateDraft([], []);
@@ -429,6 +405,7 @@ async function executeClaim(
     await control.post({ action: "finish", jobId, leaseId, resultText });
     console.log(JSON.stringify({ event: "visual_succeeded", job_id: jobId, cards: cards.length, chars: resultText.length }));
   } catch (error) {
+    if (control.remainingMs(leaseId) <= 1 || error instanceof ControlDeadlineError) return;
     // 首个模型请求提交后失败 → 结果未知不盲重试（与 understand/agent 同款边界）。
     const action = submitted ? "outcome_unknown" : "fail";
     const safeErrorCode = safeErrorKind(error);
@@ -446,7 +423,7 @@ async function executeClaim(
   }
 }
 
-function createVisualChat(config: VisualWorkerConfig, kind: "extraction" | "workflow" = "extraction"): ModelChat {
+function createVisualChat(config: VisualWorkerConfig, signal: { readonly aborted: boolean }, kind: "extraction" | "workflow"): ModelChat {
   const prompt = loadBrandPrompt(kind);
   const backend = new DeepSeekBackend({
     apiKey: config.deepseekApiKey,
@@ -455,15 +432,14 @@ function createVisualChat(config: VisualWorkerConfig, kind: "extraction" | "work
     timeoutMs: config.deepseekTimeoutMs,
   });
   return async (userContent) => {
-    // AbortSignalLike 只有 aborted 一个字段；DeepSeek 调用不设主动超时中断，
-    // 生命周期由租约心跳管理（生图/理解同款铁律）。
+    // The backend checks the same lease signal at its dispatch boundary.
     const result = await backend.chat(
       [
         { role: "system", content: prompt },
         { role: "user", content: userContent },
       ],
       [],
-      { aborted: false },
+      signal,
     );
     if (!result.content.trim()) throw new Error("deepseek_empty_content");
     return result.content;

@@ -1,0 +1,101 @@
+{
+  "deployedAt": "2026-11-10T15:46:29.026418151Z",
+  "timezone": "Asia/Shanghai",
+  "scope": "Three Worker files only; no desktop package, Edge, database or website deployment",
+  "candidate": {
+    "image": "sha256:cd4fd8c7093df2a34f96462ab7d42387d6a81e37d9dfd4636f4004139e2734ed",
+    "baseImage": "sha256:a18a32e25663e9ff581c7b476889ee18fd48a469fe17ea4e0186492ac7ef284a",
+    "tests": {
+      "auditPass": 3,
+      "auditFail": 0,
+      "videoPassBothImages": 8,
+      "videoPreExistingFailureBothImages": "audio-only references: video_references_required",
+      "newFailures": 0,
+      "network": "none"
+    },
+    "backup": "/opt/bowerbird/deploy-backups/seedance-resolution-20261110",
+    "files": [
+      {
+        "file": "src/main.ts",
+        "sha256": "669fe134068d4018c5d1ff49a2845fb9da89f35b713094ae721313695a64e10c"
+      },
+      {
+        "file": "src/cloud-generation/main.ts",
+        "sha256": "820d21ec2455420980d350db2c0df59b80dd6da47dc3af8f6c78299f6277d923"
+      },
+      {
+        "file": "src/cloud-generation/seedance-resolution-audit.ts",
+        "sha256": "9e6a0d186144548dabf166903bd81f87203ea168bb31f531b6ebad2e84628d10"
+      }
+    ]
+  },
+  "activation": {
+    "image": "sha256:cd4fd8c7093df2a34f96462ab7d42387d6a81e37d9dfd4636f4004139e2734ed",
+    "startedAt": "2026-11-10T15:46:29.026418151Z",
+    "running": true,
+    "restarts": 0,
+    "filesVerified": true,
+    "environmentPreserved": true,
+    "composePreserved": true,
+    "limitsPreserved": true,
+    "mountsPreserved": true,
+    "networksPreserved": true,
+    "websitePreserved": true
+  },
+  "verification": {
+    "image": "sha256:cd4fd8c7093df2a34f96462ab7d42387d6a81e37d9dfd4636f4004139e2734ed",
+    "running": true,
+    "restarts": 0,
+    "events": [
+      {
+        "event": "generation_worker_started"
+      },
+      {
+        "event": "understand_worker_started"
+      },
+      {
+        "event": "agent_worker_started"
+      },
+      {
+        "event": "visual_worker_started"
+      },
+      {
+        "event": "seedance_resolution_audit",
+        "status": "unchanged",
+        "checkedAt": 1794325589667,
+        "source": "https://docs.volcengine.com/docs/ark/seedance-2-5?lang=zh",
+        "expected": [
+          "1080p",
+          "480p",
+          "720p"
+        ],
+        "observed": [
+          "1080p",
+          "480p",
+          "720p"
+        ]
+      }
+    ],
+    "sharedContractUnchanged": true
+  },
+  "queues": {
+    "before": {
+      "agent": 0,
+      "chat": 0,
+      "generation": 0,
+      "understand": 0
+    },
+    "cutover": {
+      "agent": 0,
+      "chat": 0,
+      "generation": 0,
+      "understand": 0
+    },
+    "after": {
+      "agent": 0,
+      "chat": 0,
+      "generation": 0,
+      "understand": 0
+    }
+  }
+}

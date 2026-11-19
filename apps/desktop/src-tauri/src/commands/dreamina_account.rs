@@ -18,7 +18,7 @@ async fn read(args: &[&str]) -> AppResult<String> {
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-fn json(text: &str) -> AppResult<Value> {
+pub(super) fn json(text: &str) -> AppResult<Value> {
     let start = text.find(['{', '[']).ok_or_else(|| AppError::Jimeng("即梦未返回有效数据".into()))?;
     serde_json::Deserializer::from_str(&text[start..]).into_iter().next()
         .ok_or_else(|| AppError::Jimeng("即梦返回空数据".into()))?

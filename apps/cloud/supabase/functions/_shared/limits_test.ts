@@ -1,7 +1,7 @@
 import { assertEquals, assertRejects, assertThrows } from "jsr:@std/assert@1";
 import { DEFAULT_UNDERSTAND_UPSTREAM_TIMEOUT_MS } from "./ark.ts";
 import { ApiError } from "./errors.ts";
-import { assertReferenceImages, DEFAULT_PROXY_TIMEOUT_MS, withTimeout } from "./limits.ts";
+import { assertReferenceImages, readJsonBody, DEFAULT_PROXY_TIMEOUT_MS, withTimeout } from "./limits.ts";
 
 function encoded(bytes: number[]): string {
   return btoa(String.fromCharCode(...bytes));
@@ -45,4 +45,33 @@ Deno.test("reference validation rejects MIME and byte mismatch", () => {
     ApiError,
   );
   assertEquals(error.message, "参考图 MIME 与真实文件格式不一致");
+});
+
+Deno.test("JSON limits count streamed bytes and preserve split UTF-8 at the exact boundary", async () => {
+  const bytes = new TextEncoder().encode('{"x":"雪"}');
+  const body = new ReadableStream({ start(controller) {
+    controller.enqueue(bytes.subarray(0, 7));
+    controller.enqueue(bytes.subarray(7));
+    controller.close();
+  } });
+  const request = new Request("https://example.test", { method: "POST", body });
+  assertEquals(await readJsonBody(request, bytes.byteLength), { x: "雪" });
+});
+
+Deno.test("JSON limits cancel an oversized stream before parsing or waiting for its end", async () => {
+  let cancelled = false;
+  const body = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(5)); },
+    cancel() { cancelled = true; } });
+  const error = await assertRejects(() => readJsonBody(new Request("https://example.test", {
+    method: "POST", body, headers: { "content-length": "1" },
+  }), 4), ApiError);
+  assertEquals(error.status, 413);
+  assertEquals(cancelled, true);
+});
+
+Deno.test("malformed JSON within the byte limit is a bad request", async () => {
+  const error = await assertRejects(() => readJsonBody(new Request("https://example.test", {
+    method: "POST", body: "{",
+  }), 4), ApiError);
+  assertEquals(error.status, 400);
 });

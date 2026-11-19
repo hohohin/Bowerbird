@@ -54,8 +54,7 @@
 .vr-frame-reference img { width:62px; height:80px; object-fit:contain; }
 .vr-frame-reference p { margin:8px 0; color:var(--bb-muted); }
 .vr-frame-reference button { color:var(--bb-blue); }
-.video-replication .video-player { margin:0 auto 12px; width:min(100%,calc(clamp(220px,42vh,440px) * var(--video-ratio))); max-width:100%; max-height:none; box-shadow:none; border-radius:10px; }
-.video-replication .video-player-screen video { width:100%; height:auto; object-fit:contain; }
+.video-replication .video-player { margin:0 auto 12px; width:100%; max-width:100%; height:clamp(360px,65vh,680px); max-height:none; box-shadow:none; }
 .video-replication .video-player-controls { padding:10px; }
 .video-replication .video-player-timeline { height:42px; }
 .video-replication .video-player-toolbar { gap:4px; }
@@ -71,6 +70,5 @@
   .vr-step-nav button>span { display:none; } .vr-step-nav strong { font-size:12px; }
   .vr-fixed-video { border-right:0; border-bottom:1px solid var(--bb-line); overflow:visible; }
   .vr-step-content { overflow:visible; } .vr-video-placeholder { min-height:200px; }
-  .video-replication .video-player { width:min(100%,calc(240px * var(--video-ratio))); }
   .video-replication .app-modal .app-modal-header { padding:14px; }
 }

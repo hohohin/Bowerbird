@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer, request as httpRequest } from "node:http";
 import { once } from "node:events";
+import { createHash } from "node:crypto";
 import { createCloudProxy } from "../cloud-proxy.mjs";
 import { startServer } from "../server.mjs";
 
@@ -10,6 +11,137 @@ const CONTROL = "/functions/v1/generate-proxy";
 const UPLOAD = `/storage/v1/object/upload/sign/generation-temp/jobs/${JOB}/inputs/video-0.mp4?token=test%2Bsigned`;
 const DOWNLOAD = `/storage/v1/object/sign/generation-temp/jobs/${JOB}/outputs/result.mp4?token=test%2Bsigned`;
 const AUTH = { Authorization: "Bearer user-token" };
+
+test('understanding, visual profiles and classification preserve original requests through the gateway', async t => {
+  const { send, calls } = await fixture(t);
+  for (const name of ['understand-proxy', 'visual-profile', 'jev-proxy']) {
+    for (const action of ['create', 'get']) {
+      const body = JSON.stringify({ action, idempotency_key: 'original-key', job_id: JOB });
+      assert.equal((await send(`/functions/v1/${name}`, 'POST', body, AUTH)).status, 200);
+      assert.equal(calls.at(-1).body.toString(), body);
+      assert.equal(calls.at(-1).headers.Authorization, AUTH.Authorization);
+    }
+  }
+  assert.equal((await send('/functions/v1/future-function', 'POST', '{}', AUTH)).status, 404);
+  assert.equal(calls.length, 6);
+});
+
+test('original OCR lookup is read-only, narrow and still subject to user RLS', async t => {
+  const { send, calls } = await fixture(t);
+  const query = new URLSearchParams({ select: 'status,result_text,error_code,safe_message', idempotency_key: 'eq.original:key', limit: '1' });
+  const path = `/rest/v1/understand_jobs?${query}`;
+  assert.equal((await send(path, 'GET', undefined, AUTH)).status, 200);
+  assert.equal(calls[0].headers.Authorization, AUTH.Authorization);
+  assert.equal(calls[0].url.search, '?' + query);
+  assert.equal((await send(path)).status, 401);
+  for (const bad of [path + '&or=()', path.replace('limit=1', 'limit=2'), path.replace('select=status', 'select=*'), path.replace('understand_jobs', 'agent_runs')]) {
+    assert.ok([400, 404].includes((await send(bad, 'GET', undefined, AUTH)).status));
+  }
+  assert.equal((await send(path, 'POST', '{}', AUTH)).status, 404);
+  assert.equal(calls.length, 1);
+});
+
+test('all Agent references and local result transfers use signed bounded storage without account credentials', async t => {
+  const { send, calls } = await fixture(t);
+  for (const [object, mime] of [['inputs/reference-1', 'image/jpeg'], ['inputs/reference-8', 'image/jpeg'], ['artifacts/call.png', 'image/png'], ['artifacts/call.webp', 'image/webp'], ['artifacts/call.jpg', 'image/jpeg']]) {
+    const path = `/storage/v1/object/upload/sign/agent-temp/runs/${JOB}/${object}?token=signed%2Btoken`;
+    assert.equal((await send(path, 'PUT', 'pixels', { ...AUTH, 'Content-Type': mime, 'x-upsert': 'true' })).status, 200);
+    assert.equal(calls.at(-1).headers.Authorization, undefined);
+    assert.equal(calls.at(-1).headers['x-upsert'], 'true');
+    assert.equal(calls.at(-1).url.search, '?token=signed%2Btoken');
+    assert.equal((await send(path, 'PUT', undefined, { 'Content-Type': mime, 'Content-Length': 20971521 })).status, 413);
+  }
+  assert.equal(calls.length, 5);
+  assert.equal((await send(`/storage/v1/object/upload/sign/agent-temp/runs/${JOB}/inputs/reference-9?token=signed`, 'PUT', 'x')).status, 404);
+});
+
+test('Agent downloads preserve signed download flag and reject private diagnostics and over-limit content', async t => {
+  const { send } = await fixture(t, { fetchImpl: async () => new Response('pixels', { headers: { 'Content-Type': 'image/png' } }) });
+  const path = `/storage/v1/object/sign/agent-temp/runs/${JOB}/artifacts/${'a'.repeat(64)}-slice-0001.png?token=signed%2Btoken&download=`;
+  assert.equal((await send(path)).body.toString(), 'pixels');
+  for (const bad of [path.replace('.png?', '.json?'), path.replace('/artifacts/', '/checkpoints/'), path + 'secret.png', path + '&token=again']) {
+    assert.ok([400, 404].includes((await send(bad)).status));
+  }
+  const large = await fixture(t, { fetchImpl: async () => new Response('x', { headers: { 'Content-Type': 'image/png', 'Content-Length': '20971521' } }) });
+  assert.equal((await large.send(path)).status, 502);
+});
+
+test("Agent control and signed H3 manifest preserve authorization and never retry", async t => {
+  const { send, calls } = await fixture(t);
+  for (const action of ["create", "enqueue", "get", "cancel"]) {
+    const body = JSON.stringify({ action, runId: JOB });
+    assert.equal((await send('/functions/v1/agent-run', 'POST', body, AUTH)).status, 200);
+    assert.equal(calls.at(-1).body.toString(), body);
+    assert.equal(calls.at(-1).headers.Authorization, AUTH.Authorization);
+  }
+  const path = `/storage/v1/object/upload/sign/agent-temp/runs/${JOB}/inputs/request.json?token=test%2Bsigned`;
+  const body = JSON.stringify({ schemaVersion: 1, textRewrite: { source: '中文提示词\n'.repeat(20000) } });
+  assert.equal((await send(path, 'PUT', body, { ...AUTH, 'x-upsert': 'true' })).status, 200);
+  const upload = calls.at(-1);
+  assert.equal(upload.body.toString(), body);
+  assert.equal(upload.url.search, '?token=test%2Bsigned');
+  assert.equal(upload.headers.Authorization, undefined);
+  assert.equal(upload.headers.apikey, undefined);
+  assert.equal(upload.headers['x-upsert'], 'true');
+  assert.equal((await send(path, 'PUT', undefined, { 'Content-Type': 'application/json', 'Content-Length': 0 })).status, 413);
+  assert.equal((await send(path, 'PUT', body, { 'Content-Type': 'text/plain' })).status, 415);
+  assert.equal((await send(path.replace(/\?token=.*/, ''), 'PUT', body)).status, 401);
+  assert.equal((await send(path.replace('request.json', 'other.json'), 'PUT', body)).status, 404);
+  assert.equal((await send('/functions/v1/agent-run', 'POST', '{}')).status, 401);
+  assert.equal((await send('/functions/v1/agent-worker', 'POST', '{}', AUTH)).status, 404);
+  assert.equal(calls.length, 5);
+  const broken = await fixture(t, { fetchImpl: async () => { throw Error('ECONNRESET'); } });
+  assert.equal((await broken.send('/functions/v1/agent-run', 'POST', '{}', AUTH)).status, 502);
+});
+
+test("text control verifies the user before reading a request body or invoking the function", async t => {
+  let authCalls = 0;
+  const { port, calls } = await fixture(t, { authFetchImpl: async (url, init) => {
+    assert.equal(url.href, "https://project.supabase.co/auth/v1/user");
+    assert.equal(init.headers.Authorization, AUTH.Authorization);
+    authCalls++;
+    return Response.json({}, { status: 401 });
+  } });
+  const status = await new Promise((resolve, reject) => {
+    const req = httpRequest({ host: "127.0.0.1", port, path: "/api/cloud/functions/v1/chat-proxy",
+      method: "POST", headers: { ...AUTH, "Content-Type": "application/json", "Content-Length": 10 } },
+    res => { res.resume(); res.once("end", () => resolve(res.statusCode)); });
+    req.on("error", reject);
+    req.flushHeaders();
+  });
+  assert.equal(status, 401);
+  assert.equal(authCalls, 1);
+  assert.equal(calls.length, 0);
+});
+
+test("eight authenticated text streams return complete bytes under backpressure", async t => {
+  const edge = createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    req.pipe(res);
+  }).listen(0, "127.0.0.1");
+  await once(edge, "listening");
+  t.after(() => { edge.closeAllConnections(); return new Promise(resolve => edge.close(resolve)); });
+  const { port } = await fixture(t, { fetchImpl: (_url, init) => fetch(`http://127.0.0.1:${edge.address().port}/`, init) });
+  const chunk = Buffer.alloc(64 * 1024, "a");
+  async function* content() {
+    yield Buffer.from('{"input":"');
+    for (let i = 0; i < 400; i++) yield chunk;
+    yield Buffer.from('"}');
+  }
+  async function digest(stream) {
+    const hash = createHash("sha256");
+    for await (const part of stream) hash.update(part);
+    return hash.digest("hex");
+  }
+  const expected = await digest(content());
+  await Promise.all(Array.from({ length: 8 }, async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/api/cloud/functions/v1/chat-proxy`, {
+      method: "POST", headers: { ...AUTH, "Content-Type": "application/json" }, body: content(), duplex: "half",
+    });
+    assert.equal(response.status, 200);
+    assert.equal(await digest(response.body), expected);
+  }));
+});
 
 test("chat quote, create and recovery use the authenticated fixed Cloud gateway", async t => {
   const { send, calls } = await fixture(t);
@@ -30,7 +162,15 @@ test("chat quote, create and recovery use the authenticated fixed Cloud gateway"
 async function fixture(t, overrides = {}) {
   const calls = [];
   const proxy = createCloudProxy({ upstream: "https://project.supabase.co", publicKey: "public-key",
-    fetchImpl: async (url, options) => { calls.push({ url, ...options }); return Response.json({ ok: true }); }, ...overrides });
+    authFetchImpl: async () => Response.json({ id: "test-user" }),
+    fetchImpl: async (url, options) => {
+      if (options.body?.[Symbol.asyncIterator]) {
+        const chunks = [];
+        for await (const chunk of options.body) chunks.push(Buffer.from(chunk));
+        options = { ...options, body: Buffer.concat(chunks) };
+      }
+      calls.push({ url, ...options }); return Response.json({ ok: true });
+    }, ...overrides });
   const server = createServer(proxy).listen(0, "127.0.0.1");
   await once(server, "listening");
   t.after(() => { server.closeAllConnections(); return new Promise(resolve => server.close(resolve)); });
@@ -278,4 +418,32 @@ test("website mounts generation separately from the existing account gateway", a
   assert.equal((await response.json()).error.code, "cloud_gateway_401");
   assert.equal((await fetch(`${base}/api/account${CONTROL}`, { method: "POST" })).status, 404);
   assert.equal((await fetch(`${base}/healthz`)).status, 204);
+});
+
+
+test('Agent manifests, instructions and event responses cross former byte ceilings intact', async t => {
+  const text = '中文🙂\\"\n'.repeat(1_500_000) + '完整末尾';
+  const manifest = JSON.stringify({ schemaVersion: 1, goal: text, textRewrite: { source: text } });
+  assert.ok(Buffer.byteLength(manifest) > 20 * 1024 * 1024);
+  const result = JSON.stringify({ events: [{ type: 'text.result', displayPayload: { text } }] });
+  let forwarded;
+  const { send } = await fixture(t, { fetchImpl: async (_url, init) => {
+    const chunks = [];
+    for await (const chunk of init.body) chunks.push(Buffer.from(chunk));
+    forwarded = Buffer.concat(chunks).toString();
+    return new Response(result, { headers: { 'Content-Type': 'application/json' } });
+  } });
+  const upload = `/storage/v1/object/upload/sign/agent-temp/runs/${JOB}/inputs/request.json?token=signed`;
+  // Storage acknowledgements stay small; the long result comes from agent-run.
+  const storage = await fixture(t);
+  assert.equal((await storage.send(upload, 'PUT', manifest)).status, 200);
+  assert.equal(storage.calls[0].body.toString(), manifest);
+  const response = await send('/functions/v1/agent-run', 'POST', JSON.stringify({ action: 'create', goal: text }), AUTH);
+  assert.equal(response.status, 200); assert.equal(response.body.toString(), result);
+  assert.equal(JSON.parse(forwarded).goal, text);
+  const chat = JSON.stringify({ action: 'create', messages: [{ role: 'user', content: text + text }] });
+  assert.ok(Buffer.byteLength(chat) > 20 * 1024 * 1024);
+  const reply = await send('/functions/v1/chat-proxy', 'POST', chat, AUTH);
+  assert.equal(reply.status, 200); assert.equal(reply.body.toString(), result);
+  assert.equal(forwarded, chat);
 });

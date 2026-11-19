@@ -1,11 +1,12 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import type { CreationEditorDraft } from "./creation/useCreationEditor";
 import type { CreativePromptLoad } from "../lib/creativeLaunch";
 import type { TextWorkspaceDocument } from "../lib/documentTypes";
 import { creationDraftToDocument, documentToPromptLoad } from "../lib/documentComposer";
+import { lazyModule } from "../lib/lazyModule";
 import "./TextWorkspaceLauncher.css";
 
-const TextWorkspace = lazy(() => import("./TextWorkspace").then(module => ({ default: module.TextWorkspace })));
+const TextWorkspace = lazyModule(() => import("./TextWorkspace").then(module => ({ default: module.TextWorkspace })));
 interface WorkspaceDraft { sourceDoc: string; document: TextWorkspaceDocument }
 const drafts = new Map<string, WorkspaceDraft>();
 function parseDraft(value: unknown): WorkspaceDraft | undefined {
@@ -36,7 +37,7 @@ async function applyDocument(document: TextWorkspaceDocument, sourceDoc: string,
 }
 function remember(key: string, draft: WorkspaceDraft) {
   drafts.set(key, draft);
-  try { sessionStorage.setItem(key, JSON.stringify(draft)); } catch { /* Keep the in-session copy. */ }
+  // Durable documents live in the workspace repository; retain only the composer bridge here.
 }
 
 export function useTextWorkspace({ scopeKey, projectId, getDraft, loadPrompt, focus }: {
@@ -69,5 +70,5 @@ export function useTextWorkspace({ scopeKey, projectId, getDraft, loadPrompt, fo
     remember(key, { sourceDoc: JSON.stringify(getDraft().doc), document });
     session.current++; setActive(null); focus();
   }
-  return { openEditor, workspace: active ? <Suspense fallback={null}><TextWorkspace initialDocument={active.document} projectId={projectId} onChange={change} onClose={close} onAddToComposer={add}/></Suspense> : null };
+  return { openEditor, workspace: active ? <Suspense fallback={null}><TextWorkspace initialDocument={active.document} origin={{ key, version: active.sourceDoc }} projectId={projectId} onPendingInput={() => { revision.current++; }} onChange={change} onClose={close} onAddToComposer={add}/></Suspense> : null };
 }

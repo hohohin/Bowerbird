@@ -2,7 +2,7 @@
 //! Files are renamed before SQL commit, with a durable manifest for crash recovery.
 use super::{
     paths::LibraryPaths,
-    projects::{ensure_project_has_no_unfinished_work, ProjectDeleteResult},
+    projects::ProjectDeleteResult,
 };
 use crate::{
     db::Database,
@@ -12,7 +12,7 @@ use rusqlite::{params, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeSet, HashMap, HashSet},
     fs,
     io::Write,
     path::{Path, PathBuf},
@@ -37,11 +37,13 @@ struct Plan {
 
 // Hidden nodes and archived projects/threads deliberately participate. JSON fields are
 // checked as structured values, never LIKE matches against serialized user text.
-const CANDIDATES: &str = "SELECT a.id, a.store_path, a.thumb_path, a.origin_path FROM assets a WHERE
+const CANDIDATES: &str = "SELECT a.id, a.store_path, a.thumb_path, a.origin_path,
+ COALESCE(a.generation_session_id IN (SELECT json_extract(q.payload,'$.session_id')
+   FROM task_queue q WHERE q.project_id IS NOT ?1 AND json_valid(q.payload)),0) FROM assets a WHERE
  EXISTS(SELECT 1 FROM project_assets p WHERE p.asset_id=a.id AND p.project_id=?1)
  OR EXISTS(SELECT 1 FROM canvas_nodes n WHERE n.asset_id=a.id AND n.project_id=?1)
- OR EXISTS(SELECT 1 FROM task_queue q WHERE q.project_id=?1 AND json_valid(q.payload)
-   AND a.generation_session_id=json_extract(q.payload,'$.session_id'))
+ OR a.generation_session_id IN (SELECT json_extract(q.payload,'$.session_id')
+   FROM task_queue q WHERE q.project_id=?1 AND json_valid(q.payload))
  OR EXISTS(SELECT 1 FROM thread_generation_links l JOIN creative_threads t ON t.id=l.thread_id
    WHERE t.project_id=?1 AND (l.generation_conversation_id=a.generation_session_id OR
      EXISTS(SELECT 1 FROM generation_conversations g WHERE g.session_id=a.generation_session_id AND g.conversation_id=l.generation_conversation_id)))
@@ -49,11 +51,10 @@ const CANDIDATES: &str = "SELECT a.id, a.store_path, a.thumb_path, a.origin_path
    OR EXISTS(SELECT 1 FROM cloud_agent_artifact_assets f WHERE f.run_id=r.run_id AND f.asset_id=a.id)))
  ORDER BY a.id";
 
-fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>, check: &dyn Fn() -> AppResult<()>) -> AppResult<bool> {
-    check()?;
+fn linked(conn: &Connection, project: &str, id: &str) -> AppResult<bool> {
     // local_agent_runs.target_asset_id CASCADE would destroy execution evidence: always protect.
     // Global collections and saved prompt bindings are independent uses, not project ownership.
-    let linked: bool = conn.query_row("SELECT
+    let mut stmt = conn.prepare_cached("SELECT
       EXISTS(SELECT 1 FROM external_assets WHERE asset_id=?2) OR
       EXISTS(SELECT 1 FROM connected_entries WHERE asset_id=?2) OR
       EXISTS(SELECT 1 FROM project_assets WHERE asset_id=?2 AND project_id<>?1) OR
@@ -70,12 +71,26 @@ fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>, ch
         EXISTS(SELECT 1 FROM cloud_agent_artifact_assets f WHERE f.run_id=r.run_id AND f.asset_id=?2))) OR
       EXISTS(SELECT 1 FROM cloud_agent_runs r JOIN thread_agent_links l ON l.run_id=r.run_id
         JOIN creative_threads t ON t.id=l.thread_id WHERE t.project_id<>?1 AND (r.final_asset_id=?2 OR
-        EXISTS(SELECT 1 FROM cloud_agent_artifact_assets f WHERE f.run_id=r.run_id AND f.asset_id=?2))) OR
-      EXISTS(SELECT 1 FROM task_queue q JOIN assets a ON a.id=?2 WHERE q.project_id IS NOT ?1
-        AND json_valid(q.payload) AND a.generation_session_id=json_extract(q.payload,'$.session_id'))",
-      params![project, id], |r| r.get(0))?;
-    if linked {
-        return Ok(true);
+        EXISTS(SELECT 1 FROM cloud_agent_artifact_assets f WHERE f.run_id=r.run_id AND f.asset_id=?2)))")?;
+    let linked: bool = stmt.query_row(params![project, id], |r| r.get(0))?;
+    Ok(linked)
+}
+
+type Candidate = (String, Option<String>, Option<String>, Option<String>);
+
+#[cfg(test)]
+thread_local! { static PARSED_REFERENCE_ROWS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+fn referenced_assets(conn: &Connection, project: &str, candidates: &[Candidate],
+    check: &dyn Fn() -> AppResult<()>) -> AppResult<HashSet<String>> {
+    let mut protected = HashSet::new();
+    if candidates.is_empty() { return Ok(protected); }
+    let ids: HashSet<&str> = candidates.iter().map(|c| c.0.as_str()).collect();
+    let mut paths = HashMap::<String, Vec<&str>>::new();
+    for (id, store, _, _) in candidates {
+        if let Some(path) = store {
+            paths.entry(path_key(Path::new(path))).or_default().push(id);
+        }
     }
     // Input references in retained audit rows remain protected even inside the deleted project.
     // Other projects' payloads/snapshots/drafts may reference an asset without project_assets.
@@ -93,41 +108,44 @@ fn protected(conn: &Connection, project: &str, id: &str, store: Option<&str>, ch
         "SELECT payload FROM task_queue WHERE project_id IS NOT ?1",
         "SELECT payload FROM task_queue WHERE project_id=?1 AND NOT json_valid(payload)",
         "SELECT json_object('references',json_extract(payload,'$.references'),'parent',json_extract(payload,'$.parent_asset_path')) FROM task_queue WHERE project_id=?1 AND json_valid(payload)",
-        "SELECT payload FROM analyses WHERE kind='generation_meta' AND asset_id<>?2 AND ?1 IS NOT NULL",
+        "SELECT payload,asset_id FROM analyses WHERE kind='generation_meta' AND ?1 IS NOT NULL",
     ];
     for sql in json_sources {
         check()?;
         let mut stmt = conn.prepare(sql)?;
-        stmt.raw_bind_parameter(1, project)?;
-        if stmt.parameter_count() > 1 {
-            stmt.raw_bind_parameter(2, id)?;
-        }
-        let mut rows = stmt.raw_query();
+        let owned = stmt.column_count() == 2;
+        let mut rows = stmt.query([project])?;
         while let Some(row) = rows.next()? {
             check()?;
             let raw: String = row.get(0)?;
-            // Unknown/malformed persisted reference data is not evidence of exclusivity.
+            let owner: Option<String> = if owned { row.get(1)? } else { None };
+            #[cfg(test)]
+            PARSED_REFERENCE_ROWS.set(PARSED_REFERENCE_ROWS.get() + 1);
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
-                return Ok(true);
+                // An asset's own generation metadata is excluded even if malformed.
+                protected.extend(ids.iter().copied().filter(|id| Some(*id) != owner.as_deref()).map(str::to_owned));
+                if protected.len() == ids.len() { return Ok(protected); }
+                continue;
             };
-            fn contains(value: &serde_json::Value, id: &str, path: Option<&str>) -> bool {
+            let mut pending = vec![&value];
+            while let Some(value) = pending.pop() {
                 match value {
-                    serde_json::Value::String(s) => {
-                        s == id
-                            || path
-                                .is_some_and(|p| path_key(Path::new(s)) == path_key(Path::new(p)))
+                    serde_json::Value::String(text) => {
+                        if ids.contains(text.as_str()) && Some(text.as_str()) != owner.as_deref() {
+                            protected.insert(text.clone());
+                        }
+                        if let Some(matches) = paths.get(&path_key(Path::new(text))) {
+                            protected.extend(matches.iter().copied().filter(|id| Some(*id) != owner.as_deref()).map(str::to_owned));
+                        }
                     }
-                    serde_json::Value::Array(a) => a.iter().any(|v| contains(v, id, path)),
-                    serde_json::Value::Object(o) => o.values().any(|v| contains(v, id, path)),
-                    _ => false,
+                    serde_json::Value::Array(values) => pending.extend(values),
+                    serde_json::Value::Object(fields) => pending.extend(fields.values()),
+                    _ => {}
                 }
-            }
-            if contains(&value, id, store) {
-                return Ok(true);
             }
         }
     }
-    Ok(false)
+    Ok(protected)
 }
 
 fn path_key(path: &Path) -> String {
@@ -195,24 +213,32 @@ fn plan_with_progress(conn: &Connection, paths: &LibraryPaths, project: &str,
                 r.get::<_, Option<String>>(1)?,
                 r.get::<_, Option<String>>(2)?,
                 r.get::<_, Option<String>>(3)?,
+                r.get::<_, bool>(4)?,
             ))
         })?;
     let mut candidates = Vec::new();
+    let mut shared = 0;
     for row in candidate_rows {
         check()?;
-        candidates.push(row?);
+        let (id, store, thumb, origin, shared_session) = row?;
+        if kind == "builtin" || shared_session || linked(conn, project, &id)? {
+            shared += 1;
+        } else {
+            candidates.push((id,store,thumb,origin));
+        }
     }
     let mut out = Plan {
-        impact: ExclusiveDeleteImpact::default(),
+        impact: ExclusiveDeleteImpact { preserved_shared_count: shared, ..Default::default() },
         ids: vec![],
         files: BTreeSet::new(),
     };
     let mut path_owners: Option<HashMap<String, BTreeSet<String>>> = None;
     let total = candidates.len();
+    let references = referenced_assets(conn, project, &candidates, check)?;
     for (index, (id, store, thumb, origin)) in candidates.into_iter().enumerate() {
         check()?;
         report("assets", index, total);
-        if kind == "builtin" || protected(conn, project, &id, store.as_deref(), check)? {
+        if references.contains(&id) {
             out.impact.preserved_shared_count += 1;
             continue;
         }
@@ -379,7 +405,18 @@ impl Database {
         loop {
             check()?;
             match self.conn.try_lock() {
-                Ok(conn) => return plan_with_progress(&conn, paths, project, check, report).map(|p| p.impact),
+                Ok(conn) => {
+                    // A separate WAL read transaction pins the preview snapshot while allowing
+                    // normal queries and writes on the primary connection during the scan.
+                    if let Some(path) = conn.path().filter(|path| !path.is_empty()) {
+                        let reader = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+                        let tx = reader.unchecked_transaction()?;
+                        drop(conn);
+                        return plan_with_progress(&tx, paths, project, check, report).map(|p| p.impact);
+                    }
+                    // Private in-memory databases have no second connection to open.
+                    return plan_with_progress(&conn, paths, project, check, report).map(|p| p.impact);
+                }
                 Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_millis(20)),
                 Err(_) => return Err(AppError::Other("无法读取素材库".into())),
             }
@@ -391,7 +428,7 @@ impl Database {
         paths: &LibraryPaths,
         project: &str,
     ) -> AppResult<ExclusiveDeleteImpact> {
-        plan(&self.conn.lock().unwrap(), paths, project).map(|p| p.impact)
+        self.project_exclusive_impact_progress(paths, project, &|| Ok(()), &mut |_, _, _| {})
     }
 
     /// Run before workers start. No recursive directory removal; an interrupted operation
@@ -434,20 +471,13 @@ impl Database {
         self.delete_project_managed(paths,project,None,None)
     }
 
-    pub fn delete_project_managed(&self, paths: &LibraryPaths, project: &str, confirmation: Option<&str>, discard_pending_results: Option<&[String]>) -> AppResult<ProjectDeleteResult> {
+    pub fn delete_project_managed(&self, paths: &LibraryPaths, project: &str, confirmation: Option<&str>, _discard_pending_results: Option<&[String]>) -> AppResult<ProjectDeleteResult> {
         let _records=super::creative_files::RECORD_GATE.lock().unwrap();
         self.recover_project_deletions(paths)?;
         let mut conn = self.conn.lock().unwrap();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        if let Some(expected) = discard_pending_results {
-            let actual = super::projects::pending_agent_results(&tx, project)?;
-            let expected: std::collections::BTreeSet<_> = expected.iter().map(String::as_str).collect();
-            let actual: std::collections::BTreeSet<_> = actual.iter().map(|result| result.run_id.as_str()).collect();
-            if expected != actual {
-                return Err(AppError::Other("待入库任务已变化，请重新打开删除确认".into()));
-            }
-        }
-        ensure_project_has_no_unfinished_work(&tx, project, discard_pending_results.is_some())?;
+        // Confirming project deletion includes all unfinished work, even if its state
+        // changed after the dialog opened. The legacy result list is no longer a gate.
         let mut plan = if confirmation.is_some() {
             plan(&tx, paths, project)?
         } else {
@@ -490,9 +520,7 @@ impl Database {
         #[cfg(unix)]
         fs::File::open(&dir)?.sync_all()?;
         let execution = (|| -> AppResult<()> {
-            if discard_pending_results.is_some() {
-                super::projects::discard_project_pending_results(&tx, project)?;
-            }
+            super::projects::discard_project_pending_results(&tx, project)?;
             for (i, file) in manifest.files.iter().enumerate() {
                 safe_file(paths, file)?;
                 let dest = staged(file, &manifest.operation, i);
@@ -558,7 +586,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_pending_result_abandonment_unblocks_deletion_and_preserves_audit() {
+    fn confirmed_deletion_abandons_pending_results_and_preserves_audit() {
         let (db, paths) = fixture();
         let file = asset(&db, &paths, "already-ingested");
         {
@@ -570,12 +598,11 @@ mod tests {
         let impact = db.project_delete_impact("p").unwrap();
         assert_eq!(impact.running_agent_count, 1);
         assert_eq!(impact.pending_agent_results[0].run_id, "legacy");
-        assert!(db.delete_project_keep_managed(&paths, "p").is_err());
         // A stale physical confirmation must roll back the abandonment too.
         assert!(db.delete_project_managed(&paths, "p", Some("stale"), Some(&["legacy".into()])).is_err());
-        assert!(db.delete_project_managed(&paths, "p", None, Some(&["unreviewed".into()])).unwrap_err().to_string().contains("待入库任务已变化"));
         assert_eq!(db.project_delete_impact("p").unwrap().running_agent_count, 1);
-        let result = db.delete_project_managed(&paths, "p", None, Some(&["legacy".into()])).unwrap();
+        // An old dialog's stale list is not a new veto; confirmation deletes the project.
+        let result = db.delete_project_managed(&paths, "p", None, Some(&["unreviewed".into()])).unwrap();
         assert_eq!(result.deleted_assets, 0);
         assert!(file.is_file());
         assert!(db.get_asset("already-ingested").unwrap().is_some());
@@ -588,13 +615,37 @@ mod tests {
     }
 
     #[test]
-    fn result_abandonment_never_bypasses_active_or_unknown_agent_states() {
-        let (db, paths) = fixture();
+    fn confirmed_deletion_allows_active_and_unknown_agent_states() {
         for status in ["running", "awaiting_local_task", "awaiting_result_feedback", "cancel_requested", "future_state"] {
+            let (db, paths) = fixture();
             db.conn.lock().unwrap().execute("INSERT OR REPLACE INTO cloud_agent_runs(run_id,conversation_id,skill_id,status,intent_prompt,reference_asset_ids,project_id,snapshot_json,created_at,updated_at) VALUES('active','conversation','skill',?1,'test','[]','p','{}',1,1)", [status]).unwrap();
-            assert!(db.delete_project_managed(&paths, "p", None, Some(&[])).is_err(), "{status}");
-            assert!(db.get_project("p").unwrap().is_some());
+            db.delete_project_keep_managed(&paths, "p").unwrap();
+            assert!(db.get_project("p").unwrap().is_none());
+            let audit: (String, Option<String>, String) = db.conn.lock().unwrap().query_row("SELECT status,project_id,json_extract(snapshot_json,'$._bowerbirdResultAbandonedV1.reason') FROM cloud_agent_runs WHERE run_id='active'", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+            assert_eq!(audit, (status.into(), None, "project_deleted".into()));
         }
+    }
+
+    #[test]
+    fn confirmed_deletion_cleans_running_local_chat_and_parallel_workflow() {
+        let (db, paths) = fixture();
+        let file = asset(&db, &paths, "input");
+        {
+            let conn = db.conn.lock().unwrap();
+            conn.execute_batch("INSERT INTO creative_threads(id,project_id,title,origin,created_at,updated_at) VALUES('t','p','chat','direct',1,1);
+                INSERT INTO canvas_nodes(id,project_id,thread_id,kind,payload_json,x,y,width,height,created_at,updated_at) VALUES('n','p','t','note','{}',0,0,100,100,1,1);
+                INSERT INTO local_chat_conversations(id,project_id,thread_id,node_id,title,status,created_at,updated_at) VALUES('chat','p','t','n','chat','running',1,1);
+                INSERT INTO local_agent_runs(id,skill_id,target_asset_id,status,phase,checkpoint_json,project_id,thread_id,created_at,updated_at) VALUES('local','skill','input','running','tool','{}','p','t',1,1);
+                INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p',1,'{\"schema_version\":1,\"runs\":[{\"status\":\"running\"},{\"status\":\"waiting\"}]}');").unwrap();
+        }
+        db.delete_project_keep_managed(&paths, "p").unwrap();
+        assert!(file.is_file());
+        assert!(db.get_project("p").unwrap().is_none());
+        let conn = db.conn.lock().unwrap();
+        for table in ["canvas_nodes", "creative_threads", "local_chat_conversations", "canvas_workflows"] {
+            assert_eq!(conn.query_row(&format!("SELECT COUNT(*) FROM {table} WHERE project_id='p'"), [], |r| r.get::<_, i64>(0)).unwrap(), 0, "{table}");
+        }
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM local_agent_runs WHERE id='local' AND project_id IS NULL AND thread_id IS NULL AND status='running'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
     }
 
     #[test]
@@ -737,6 +788,63 @@ mod tests {
         assert_eq!(impact.exclusive_asset_count, 0);
         assert_eq!(impact.preserved_shared_count, 1);
     }
+    #[test]
+    #[ignore = "synthetic deletion reference-scan scaling and foreground read timing"]
+    fn deletion_preview_scales_with_reference_rows_once() {
+        use std::time::Instant;
+        let (db, paths) = fixture();
+        for i in 0..1200 {
+            db.conn.lock().unwrap().execute("INSERT INTO task_queue(id,kind,payload,status,created_at,project_id)
+                VALUES(?1,'generation','{}','done',1,'other')", [format!("task{i}")]).unwrap();
+        }
+        for (from,to) in [(0,4),(4,100)] {
+            for i in from..to { asset(&db,&paths,&format!("asset{i}")); }
+            let start = Instant::now();
+            let mut lock_ms = None;
+            let mut read_us = None;
+            PARSED_REFERENCE_ROWS.set(0);
+            let result = db.project_exclusive_impact_progress(&paths,"p",&|| Ok(()),&mut |phase,_,_| {
+                if phase == "candidates" { lock_ms = Some(start.elapsed().as_secs_f64()*1000.); }
+                if phase == "paths" && read_us.is_none() {
+                    let reading = Instant::now();
+                    db.get_asset("asset0").unwrap().unwrap();
+                    read_us = Some(reading.elapsed().as_micros());
+                }
+            }).unwrap();
+            assert_eq!(result.exclusive_asset_count,to);
+            println!("delete candidates={to} parsed_rows={} before_main_lock_release_ms={:.2} foreground_read_us={} elapsed_ms={:.2}",
+                PARSED_REFERENCE_ROWS.get(),lock_ms.unwrap(),read_us.unwrap(),start.elapsed().as_secs_f64()*1000.);
+            assert_eq!(PARSED_REFERENCE_ROWS.get(),1200);
+        }
+    }
+    #[test]
+    fn preview_uses_one_snapshot_and_rechecks_new_references_on_confirm() {
+        let (db, paths) = fixture();
+        let file = asset(&db, &paths, "late-link");
+        let mut inserted = false;
+        let impact = db.project_exclusive_impact_progress(&paths, "p", &|| Ok(()), &mut |phase, _, _| {
+            if phase == "paths" && !inserted {
+                assert!(db.conn.try_lock().is_ok(), "file checks must release the main DB connection");
+                db.add_assets_to_project("other", &["late-link".into()]).unwrap();
+                inserted = true;
+            }
+        }).unwrap();
+        assert!(inserted);
+        assert_eq!(impact.exclusive_asset_ids, ["late-link"]);
+        assert!(db.delete_project_exclusive(&paths, "p", &impact.confirmation).is_err());
+        assert!(file.exists());
+        assert_eq!(db.project_exclusive_impact(&paths, "p").unwrap().preserved_shared_count, 1);
+    }
+    #[test]
+    fn invalid_generation_meta_protects_every_asset_except_its_owner() {
+        let (db, paths) = fixture();
+        for id in ["a","b"] { asset(&db,&paths,id); }
+        db.conn.lock().unwrap().execute("INSERT INTO analyses(id,asset_id,kind,payload) VALUES('m1','a','generation_meta','broken')", []).unwrap();
+        assert_eq!(db.project_exclusive_impact(&paths,"p").unwrap().exclusive_asset_ids, ["a"]);
+        db.conn.lock().unwrap().execute("INSERT INTO analyses(id,asset_id,kind,payload) VALUES('m2','b','generation_meta','broken')", []).unwrap();
+        assert_eq!(db.project_exclusive_impact(&paths,"p").unwrap().preserved_shared_count, 2);
+    }
+
     #[test]
     fn managed_keep_preserves_exclusive_shared_and_missing_assets() {
         let (db, paths) = fixture();
@@ -914,19 +1022,17 @@ mod tests {
         );
     }
     #[test]
-    fn running_generation_and_unknown_agent_block_even_with_fresh_token() {
+    fn running_generation_and_unknown_agent_allow_confirmed_physical_deletion() {
         let (db, paths) = fixture();
         let file = asset(&db, &paths, "a");
         db.conn.lock().unwrap().execute("INSERT INTO task_queue(id,kind,payload,status,created_at,project_id) VALUES('q','generation','{}','running',1,'p')",[]).unwrap();
-        assert!(delete(&db, &paths).is_err());
-        db.conn
-            .lock()
-            .unwrap()
-            .execute("UPDATE task_queue SET status='done'", [])
-            .unwrap();
         db.conn.lock().unwrap().execute("INSERT INTO cloud_agent_runs(run_id,conversation_id,skill_id,status,intent_prompt,reference_asset_ids,project_id,snapshot_json,created_at,updated_at) VALUES('r','r','test','unknown','test','[]','p','{}',1,1)",[]).unwrap();
-        assert!(delete(&db, &paths).is_err());
-        assert!(file.exists());
+        assert_eq!(delete(&db, &paths).unwrap().deleted_assets, 1);
+        assert!(!file.exists());
+        assert!(db.get_project("p").unwrap().is_none());
+        let conn = db.conn.lock().unwrap();
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM task_queue WHERE id='q' AND project_id IS NULL AND status='running'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+        assert_eq!(conn.query_row("SELECT COUNT(*) FROM cloud_agent_runs WHERE run_id='r' AND project_id IS NULL AND status='unknown'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
     }
     #[test]
     fn inputs_drafts_collections_and_local_audit_are_protected() {

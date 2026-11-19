@@ -2,16 +2,17 @@ import { userErrorMessage } from "../lib/userError";
 import { useEffect, useId, useRef, useState, type CSSProperties } from "react";
 import { canvasCardNameError } from "../lib/canvasCardNames";
 
-export function CanvasCardName({ id, name, names, activeIds, style, disabled, onSave }: {
-  id: string; name: string; names: Record<string, string>; activeIds: Set<string>; style?: CSSProperties;
+export function CanvasCardName({ id, name, names, activeIds, nameCounts, style, disabled, onSave, sectionMenu }: {
+  id: string; name: string; names: Record<string, string>; activeIds: Set<string>; nameCounts: Map<string, number>; style?: CSSProperties;
   disabled?: boolean; onSave: (name: string) => Promise<void>;
+  sectionMenu?: (event: React.MouseEvent<HTMLElement>, id: string) => void;
 }) {
   const [draft, setDraft] = useState(name);
   const [saveError, setSaveError] = useState("");
   const saving = useRef(false);
   const messageId = useId();
   useEffect(() => { setDraft(name); setSaveError(""); }, [name]);
-  const error = canvasCardNameError(id, draft, names, activeIds) || saveError;
+  const error = canvasCardNameError(id, draft, names, activeIds, nameCounts) || saveError;
   async function commit() {
     if (error || draft.trim() === name || saving.current) return;
     saving.current = true;
@@ -19,9 +20,9 @@ export function CanvasCardName({ id, name, names, activeIds, style, disabled, on
     catch (error) { setSaveError(String(error instanceof Error ? error.message : error)); }
     finally { saving.current = false; }
   }
-  return <div className={`canvas-card-name ${error ? "is-invalid" : ""}`} data-card-name={id} style={style}
+  return <div className={`canvas-card-name ${sectionMenu ? "is-section-name" : ""} ${error ? "is-invalid" : ""}`} data-card-name={id} style={style}
     onPointerDown={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}
-    onClick={event => event.stopPropagation()} onContextMenu={event => event.stopPropagation()}>
+    onClick={event => event.stopPropagation()} onContextMenu={event => sectionMenu ? sectionMenu(event, id) : event.stopPropagation()}>
     <input aria-label="卡片名称" title={name} value={draft} maxLength={80} disabled={disabled}
       aria-invalid={!!error} aria-describedby={error ? messageId : undefined}
       style={{ width: `${Math.max(8, [...draft].reduce((width, char) => width + (char.charCodeAt(0) > 255 ? 2 : 1), 2))}ch` }}

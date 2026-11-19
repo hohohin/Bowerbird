@@ -9,6 +9,11 @@ import {
   type CloudAgentAttentionInput,
 } from "./cloudAgentRuntime.ts";
 
+/** Header shared by the generation session and links to that session. */
+export function generationSessionTitle(firstPrompt: string): string {
+  return firstPrompt.split("\n").find(line => line.trim())?.trim() || "生成会话";
+}
+
 export interface ProjectActivityInput {
   projectId: string;
   unreadThreadIds: readonly string[];

@@ -267,3 +267,58 @@ test("worker consumes v2 text-only inputs without image batches", async () => {
   const draft = JSON.parse(String(recorded.finishBody?.resultText));
   equal(draft.visualRules[0].polarity, "avoid");
 });
+
+for (const reply of ['{"facts":[]}', "invalid-json"]) {
+  test(`visual lease loss during first batch fences later calls (${reply})`, async () => {
+    const payload = JSON.stringify({ schema_version: 2, cards: CARDS, requirements: "蓝色" });
+    const { fetch, recorded } = makeFetch(payload);
+    const stop = { requested: false };
+    const firstReply = Promise.withResolvers<string>();
+    let calls = 0;
+    const control: WorkerFetch = async (url, request) => {
+      if (url === CONTROL_URL && JSON.parse(String(request?.body)).action === "heartbeat" && calls) {
+        setTimeout(() => { stop.requested = true; firstReply.resolve(reply); }, 0);
+        return { ...jsonResponse({}), ok: false, status: 409 };
+      }
+      return fetch(url, request);
+    };
+    await runVisualProfileWorker(baseConfig({ heartbeatIntervalMs: 2, maxCharsPerBatch: 40 }), async () => {
+      calls++;
+      return firstReply.promise;
+    }, control, stop);
+    equal(calls, 1);
+    deepEqual(recorded.controlActions, ["claim", "submitted"]);
+  });
+}
+
+test("a stalled submitted acknowledgement never starts or repeats a model request", async () => {
+  const fixture = makeFetch(INPUT_PAYLOAD);
+  const stop = { requested: false };
+  let modelCalls = 0;
+  let submitted = 0;
+  const fetch: WorkerFetch = async (url, request) => {
+    const action = url === CONTROL_URL ? JSON.parse(String(request?.body)).action : null;
+    if (action === "claim") {
+      const response = await fixture.fetch(url, request);
+      const claim = JSON.parse(await response.text());
+      claim.lease.leaseSeconds = 0.3;
+      return jsonResponse(claim);
+    }
+    if (action === "submitted") {
+      submitted++;
+      return new Promise((_, reject) => request!.signal!.addEventListener("abort", () => {
+        stop.requested = true;
+        reject(new Error("aborted"));
+      }, { once: true }));
+    }
+    return fixture.fetch(url, request);
+  };
+  await runVisualProfileWorker(baseConfig({}), async () => {
+    modelCalls++;
+    return "{}";
+  }, fetch, stop);
+  equal(submitted, 1);
+  equal(modelCalls, 0);
+  equal(fixture.recorded.finishBody, null);
+  equal(fixture.recorded.settleBody, null);
+});

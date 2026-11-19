@@ -1,5 +1,7 @@
 import { deepEqual, equal, notEqual, ok } from "node:assert/strict";
 import { test } from "node:test";
+import { randomBytes } from "node:crypto";
+import { Buffer } from "node:buffer";
 import {
   AgentControlError,
   type PreparedToolCall,
@@ -501,8 +503,8 @@ test("metered DeepSeek proxy classifies and preserves an empty response body", a
   await assertResponseBodyRejected("", "deepseek_response_empty");
 });
 
-test("metered DeepSeek proxy classifies and preserves a planning response body over 2 MiB", async () => {
-  await assertResponseBodyRejected("x".repeat(2 * 1024 * 1024 + 1), "deepseek_response_too_large");
+test("large malformed responses still fail protocol validation", async () => {
+  await assertResponseBodyRejected("x".repeat(2 * 1024 * 1024 + 1), "deepseek_stream_incomplete");
 });
 
 test("metered DeepSeek proxy accepts compressed planning SSE over the legacy 512 KiB limit", async () => {
@@ -617,11 +619,11 @@ test("DSH history reaches the provider intact and replays durably after proxy re
   const options = {
     runId: "run-proxy", leaseId: "lease-proxy", phase: "execute_approved_plan" as const,
     control, upstream: { apiKey: "real", baseUrl: "http://127.0.0.1:43123", model: "deepseek-v4-flash" },
-    allowInsecureLoopback: true, maxOutputTokens: 8000,
+    allowInsecureLoopback: true,
     async fetch(_url: string, init: { body: string }) {
       calls++;
       deepEqual(JSON.parse(init.body).messages, messages);
-      equal(JSON.parse(init.body).max_tokens, 8000);
+      equal(JSON.parse(init.body).max_tokens, undefined);
       return { ok: true, status: 200, async text() { return sse(); } };
     },
   };
@@ -641,7 +643,7 @@ test("large native history advances distinct identical tool reads and replays on
   const proxy = await startMeteredDeepSeekProxy({
     runId: "run-proxy", leaseId: "lease-proxy", phase: "execute_approved_plan", control,
     upstream: { apiKey: "real", baseUrl: "http://127.0.0.1:43123", model: "deepseek-v4-flash" },
-    allowInsecureLoopback: true, maxOutputTokens: 8000,
+    allowInsecureLoopback: true,
     async fetch(_url, init) {
       calls++;
       ok(new TextEncoder().encode(init.body).byteLength > 1024 * 1024);
@@ -668,7 +670,7 @@ test("authorized execution filters tool permissions without rewriting history", 
   const proxy = await startMeteredDeepSeekProxy({
     runId: "run-proxy", leaseId: "lease-proxy", phase: "execute_approved_plan", control,
     upstream: { apiKey: "real", baseUrl: "http://127.0.0.1:43123", model: "deepseek-v4-flash" },
-    allowInsecureLoopback: true, maxOutputTokens: 8000,
+    allowInsecureLoopback: true,
     allowedToolNames: ["call_tool", "read_context"],
     async fetch(_url, init) {
       upstreamCalls++;
@@ -725,4 +727,92 @@ test("metered DeepSeek proxy compresses and replays a bounded SSE larger than th
   } finally {
     await proxy.close();
   }
+});
+
+
+test("long requests and incompressible results survive persistence and lease replay without clipping", async () => {
+  const control = new FakeControl();
+  const source = "中文🙂\\\"\n".repeat(800_000) + "source-tail";
+  const content = Buffer.from(randomBytes(4 * 1024 * 1024)).toString("base64") + "result-tail";
+  const body = `data: ${JSON.stringify({ id: "long-result", choices: [{ index: 0, delta: { content }, finish_reason: "stop" }], usage: { prompt_tokens: 900000, completion_tokens: 300000 } })}\n\ndata: [DONE]\n\n`;
+  let calls = 0;
+  const options = {
+    runId: "long-run", leaseId: "lease-1", phase: "compose_plan" as const, control,
+    upstream: { apiKey: "fake", baseUrl: "http://127.0.0.1:43123", model: requestBody.model }, allowInsecureLoopback: true,
+    async fetch(_url: string, init: { body: string }) {
+      calls++;
+      ok(new TextEncoder().encode(init.body).byteLength > 8 * 1024 * 1024);
+      equal(JSON.parse(init.body).messages[0].content, source);
+      equal(JSON.parse(init.body).max_tokens, 393216);
+      return { ok: true, status: 200, async text() { return body; } };
+    },
+  };
+  const request = { ...requestBody, max_tokens: 393216, messages: [{ role: "user", content: source }] };
+  let proxy = await startMeteredDeepSeekProxy(options);
+  try {
+    let response = await proxyRequest(proxy.childEnvironment(), request);
+    equal(response.status, 200); equal(await response.text(), body);
+    ok([...control.artifacts.values()][0].bytes.byteLength > 64 * 1024);
+    await proxy.close();
+    proxy = await startMeteredDeepSeekProxy({ ...options, leaseId: "lease-2" });
+    response = await proxyRequest(proxy.childEnvironment(), request);
+    equal(response.status, 200); equal(await response.text(), body);
+    equal(calls, 1); equal(control.usage.size, 1);
+  } finally { await proxy.close(); }
+});
+
+test("provider output limit preserves metering and cannot masquerade as a complete result", async () => {
+  const control = new FakeControl(); let calls = 0;
+  const proxy = await startMeteredDeepSeekProxy({
+    runId: "limited-run", leaseId: "lease", phase: "compose_plan", control,
+    upstream: { apiKey: "fake", baseUrl: "http://127.0.0.1:43123", model: requestBody.model }, allowInsecureLoopback: true,
+    async fetch() { calls++; return { ok: true, status: 200, async text() { return sse().replace('"finish_reason":"stop"', '"finish_reason":"length"'); } }; },
+  });
+  try {
+    for (let i = 0; i < 2; i++) {
+      const response = await proxyRequest(proxy.childEnvironment()); equal(response.status, 422);
+      equal((await response.json() as {error:{code:string}}).error.code, "deepseek_output_limit");
+    }
+    equal(calls, 1); equal(control.usage.size, 1);
+  } finally { await proxy.close(); }
+});
+
+test("long model calls ignore the old wall-clock deadline and remain cancellable", async () => {
+  const control = new FakeControl(); const signal = { aborted: false };
+  let began!: () => void; const started = new Promise<void>(resolve => { began = resolve; });
+  const proxy = await startMeteredDeepSeekProxy({
+    runId: "cancel-run", leaseId: "lease", phase: "compose_plan", control, signal,
+    upstream: { apiKey: "fake", baseUrl: "http://127.0.0.1:43123", model: requestBody.model, timeoutMs: 1 }, allowInsecureLoopback: true,
+    async fetch(_url, init) {
+      began();
+      await new Promise((_, reject) => init.signal!.addEventListener("abort", () => reject(new Error("cancelled")), { once: true }));
+      throw new Error("unreachable");
+    },
+  });
+  try {
+    const pending = proxyRequest(proxy.childEnvironment()); await started;
+    await new Promise<void>(resolve => setTimeout(resolve, 25));
+    equal([...control.calls.values()][0].status, "submitted");
+    signal.aborted = true;
+    const response = await pending; equal(response.status, 502); await response.text();
+    equal(control.usage.size, 1);
+  } finally { await proxy.close(); }
+});
+
+test("provider context overflow exposes a stable reason and never private upstream text", async () => {
+  const control = new FakeControl(); let calls = 0;
+  const proxy = await startMeteredDeepSeekProxy({
+    runId: "context-run", leaseId: "lease", phase: "compose_plan", control,
+    upstream: { apiKey: "fake", baseUrl: "http://127.0.0.1:43123", model: requestBody.model }, allowInsecureLoopback: true,
+    async fetch() {
+      calls++;
+      return { ok: false, status: 400, async text() { return JSON.stringify({ error: { code: "context_length_exceeded", message: "PRIVATE_USER_SOURCE" } }); } };
+    },
+  });
+  try {
+    const response = await proxyRequest(proxy.childEnvironment());
+    equal(response.status, 502);
+    equal(await response.text(), JSON.stringify({ error: { code: "deepseek_context_limit" } }));
+    equal(proxy.lastErrorCode, "deepseek_context_limit"); equal(calls, 1);
+  } finally { await proxy.close(); }
 });

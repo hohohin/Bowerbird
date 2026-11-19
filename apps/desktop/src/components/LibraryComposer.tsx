@@ -2,10 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { Folder } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { notifySuccess } from "../lib/notify";
 import { clearSentCreativeChatDraft, parseCreativeComposerState } from "../lib/creativeDraft";
 import { useLocalChatStore } from "../lib/localChatStore";
 import { DEFAULT_VIDEO_OPTIONS } from "../lib/videoGeneration";
+import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
+import { optimizeComposerLocalVideo, startComposerLocalVideo } from "../lib/composerLocalVideo";
 import { prepareFileWorkspace } from "../lib/fileWorkspace";
+import type { ComposerLocalVideoRequest } from "../lib/comfyVideo";
 import type { ChatComposeRequest } from "../lib/localChat";
 import { CreativeComposer } from "./CreativeComposer";
 import { TacticalSelect } from "./TacticalSelect";
@@ -68,11 +72,21 @@ async function startLibraryThread(prompt: string, target?: string) {
   return { threadId: thread.id, parentNodeId: null, continuationRequestId: null };
 }
 
+async function startLibraryVideo(request: ComposerLocalVideoRequest, target?: string) {
+  const projectId = requireProject(target);
+  const controller = canvasWorkflowController(projectId);
+  await controller.load();
+  if (controller.error) throw new Error(controller.error);
+  const point = await placement(projectId);
+  point.y = Math.max(point.y, ...controller.document.nodes.map(node => node.y + 440));
+  return startComposerLocalVideo(controller, request, point);
+}
+
 async function startLibraryChat(request: ChatComposeRequest, draftJson: string, target?: string) {
   const projectId = requireProject(target);
   const state = useStore.getState();
   const video = parseCreativeComposerState(draftJson).drafts.video?.generation;
-  await useLocalChatStore.getState().send({ projectId, text: request.prompt, provider: request.provider,
+  await useLocalChatStore.getState().send({ projectId, text: request.prompt, provider: request.provider, codexOptions: request.codexOptions,
     referenceAssetIds: request.references.map(asset => asset.id),
     cardDefaults: { provider: state.activeGenProvider || state.defaultProvider, videoChannel: video?.videoChannel ?? "jimeng", videoOptions: { ...(video?.videoOptions ?? DEFAULT_VIDEO_OPTIONS) } },
     placement: { ...await placement(projectId), width: 320, height: 190, zIndex: Date.now() % 1000000 } });
@@ -98,8 +112,17 @@ function openChat(id: string) {
   if (chat) useStore.setState({ creativeNavigation: { projectId: chat.projectId, threadId: chat.threadId, nodeId: chat.nodeId } });
 }
 
+function notifySubmitted(projectId: string, threadId?: string | null, nodeId?: string | null) {
+  const project = useStore.getState().projects.find(item => item.id === projectId);
+  notifySuccess(`任务已进入「${project?.name ?? "默认项目"}」项目中`, {
+    label: "点击跳转",
+    onClick: () => useStore.setState({ creativeNavigation: { projectId, threadId: threadId ?? null, nodeId: nodeId ?? null } }),
+  });
+}
+
 /** The library draft and destination are independent of the visible project route. */
-export function LibraryComposer({ onOpenLibrary }: {
+export function LibraryComposer({ onLocalVideoStarted, onOpenLibrary }: {
+  onLocalVideoStarted?: (projectId: string, nodeId: string) => void;
   onOpenLibrary?: () => void;
 }) {
   const [selectedProjectId, setSelectedProjectId] = useState("");
@@ -118,7 +141,15 @@ export function LibraryComposer({ onOpenLibrary }: {
       header={<LibraryProjectPicker value={selectedProjectId} onChange={id => { setSelectedProjectId(id); setHistoryOpen(false); }}/>}
       onDraftChange={saveDraft} registerDraftFlush={value => { flush.current = value; }} prepareProject={prepareProject}
       onOpenLibrary={onOpenLibrary}
+      onGenerationSubmitted={notifySubmitted}
       resolveCreativeThread={(_parent, prompt, _revision, _continuation, _parentNode, target) => startLibraryThread(prompt, target)}
+      onGenerateLocalVideo={async (request, target) => {
+        const projectId = requireProject(target);
+        const node = await startLibraryVideo(request, projectId);
+        notifySubmitted(projectId, null, node.id);
+        onLocalVideoStarted?.(projectId, node.id);
+      }}
+      onOptimizeLocalVideo={optimizeComposerLocalVideo}
       onSendChat={(request, target) => startLibraryChat(request, draft.current, target)}
       onChatDraftSent={clearSent}
       onOpenChatHistory={() => setHistoryOpen(value => !value)} chatHistoryOpen={historyOpen}

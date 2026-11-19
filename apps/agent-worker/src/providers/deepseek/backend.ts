@@ -26,7 +26,7 @@ export type DeepSeekHttpRequest = {
   method: "POST";
   headers: Record<string, string>;
   body: string;
-  signal?: unknown;
+  signal: AbortSignal;
 };
 
 export type DeepSeekFetch = (
@@ -413,18 +413,34 @@ function defaultFetch(): DeepSeekFetch {
   return candidate.bind(globalThis);
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let handle: unknown;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    handle = setTimeout(
-      () => reject(new DeepSeekBackendError("deepseek_timeout", { retryable: true })),
-      timeoutMs,
-    );
-  });
+async function withRequestSignal<T>(
+  caller: AbortSignalLike,
+  timeoutMs: number,
+  request: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const interrupted = Promise.withResolvers<never>();
+  const stop = (code: "deepseek_aborted" | "deepseek_timeout") => {
+    if (controller.signal.aborted) return;
+    interrupted.reject(new DeepSeekBackendError(code, { retryable: code === "deepseek_timeout" }));
+    controller.abort();
+  };
+  const cancel = () => stop("deepseek_aborted");
+  const deadline = setTimeout(() => stop("deepseek_timeout"), timeoutMs);
+  // The worker lease is a computed getter (expiry, loss or stop), while native
+  // cancellation signals notify immediately. Release both kinds on every exit.
+  let poll: unknown;
   try {
-    return await Promise.race([promise, timeout]);
+    if (caller.addEventListener && caller.removeEventListener) caller.addEventListener("abort", cancel, { once: true });
+    else poll = setInterval(() => { if (caller.aborted) cancel(); }, 100);
+    if (caller.aborted) throw new DeepSeekBackendError("deepseek_not_dispatched");
+    const result = await Promise.race([interrupted.promise, request(controller.signal)]);
+    if (caller.aborted) throw new DeepSeekBackendError("deepseek_aborted");
+    return result;
   } finally {
-    clearTimeout(handle);
+    clearTimeout(deadline);
+    clearInterval(poll);
+    caller.removeEventListener?.("abort", cancel);
   }
 }
 
@@ -442,7 +458,7 @@ export class DeepSeekBackend implements ModelBackend {
     if (signal.aborted) {
       return { kind: "refusal", reason: "aborted", providerUsage: {} };
     }
-    const body = await this.post(buildRequestBody(this.config, request));
+    const body = await this.post(buildRequestBody(this.config, request), signal);
     return parseResponse(body);
   }
 
@@ -456,7 +472,7 @@ export class DeepSeekBackend implements ModelBackend {
     maxOutputTokens?: number,
   ): Promise<ChatTurnResult> {
     if (signal.aborted) {
-      throw new DeepSeekBackendError("deepseek_aborted");
+      throw new DeepSeekBackendError("deepseek_not_dispatched");
     }
     const body = await this.post({
       model: this.config.model,
@@ -468,7 +484,7 @@ export class DeepSeekBackend implements ModelBackend {
       thinking: { type: "disabled" },
       stream: false,
       ...(maxOutputTokens === undefined ? {} : { max_tokens: maxOutputTokens }),
-    });
+    }, signal);
     if (!isRecord(body)) throw new DeepSeekBackendError("deepseek_invalid_response");
     const usage = usageFromResponse(body);
     const choices = Array.isArray(body.choices) ? body.choices : [];
@@ -506,32 +522,36 @@ export class DeepSeekBackend implements ModelBackend {
     return { message, content, toolCalls, finishReason, usage };
   }
 
-  private async post(body: JsonRecord): Promise<unknown> {
-    let response: DeepSeekHttpResponse;
+  private async post(body: JsonRecord, caller: AbortSignalLike): Promise<unknown> {
+    let rejectedStatus: number | undefined;
+    let providerCode: string | undefined;
     try {
-      response = await withTimeout(
-        this.fetch(`${this.config.baseUrl}/chat/completions`, {
+      const result = await withRequestSignal(caller, this.config.timeoutMs, async signal => {
+        const response = await this.fetch(`${this.config.baseUrl}/chat/completions`, {
           method: "POST",
           headers: {
             authorization: `Bearer ${this.config.apiKey}`,
             "content-type": "application/json",
           },
           body: JSON.stringify(body),
-        }),
-        this.config.timeoutMs,
-      );
-    } catch (error) {
-      if (error instanceof DeepSeekBackendError) throw error;
-      throw new DeepSeekBackendError("deepseek_network_error", { retryable: true });
-    }
-    const responseBody = await response.json();
-    if (!response.ok) {
-      throw new DeepSeekBackendError("deepseek_http_error", {
-        status: response.status,
-        providerCode: safeProviderCode(responseBody),
-        retryable: response.status === 408 || response.status === 429 || response.status >= 500,
+          signal,
+        });
+        if (response.ok) return await response.json();
+        // A received HTTP rejection owns settlement even if its optional diagnostic body fails.
+        rejectedStatus = response.status;
+        providerCode = safeProviderCode(await response.json());
       });
+      if (rejectedStatus === undefined) return result;
+    } catch (error) {
+      if (rejectedStatus === undefined) {
+        if (error instanceof DeepSeekBackendError) throw error;
+        if (error instanceof SyntaxError) throw new DeepSeekBackendError("deepseek_invalid_json");
+        throw new DeepSeekBackendError("deepseek_network_error", { retryable: true });
+      }
     }
-    return responseBody;
+    const status = rejectedStatus;
+    throw new DeepSeekBackendError("deepseek_http_error", {
+      status, providerCode, retryable: status === 408 || status === 429 || status >= 500,
+    });
   }
 }

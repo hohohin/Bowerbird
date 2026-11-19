@@ -20,7 +20,7 @@ import { folderConnections } from "../lib/folderConnections";
 import { enqueueExplorerCapture } from "../lib/explorerCaptureHistory";
 import type { Asset } from "../lib/types";
 
-export function ExploreWorkspace({ url, open, navigationId = 0, onClose, children }: { url: string | null; open: boolean; navigationId?: number; onClose: () => void; children: ReactNode }) {
+export function ExploreWorkspace({ url, open, navigationId = 0, onClose, onCreateProject, children }: { url: string | null; open: boolean; navigationId?: number; onClose: () => void; onCreateProject?: (ids?: string[]) => Promise<unknown>; children: ReactNode }) {
   const [over, setOver] = useState(false);
   const [width, setWidth] = useState(460);
   const [resizing, setResizing] = useState(false);
@@ -192,7 +192,7 @@ export function ExploreWorkspace({ url, open, navigationId = 0, onClose, childre
 
   return <div ref={root} className={`explore-workspace ${open ? "is-open" : ""}`} aria-label="主工作区">
     <aside id="explore-browser-panel" className="explore-browser" style={{ width: browserWidth }} hidden={!open} aria-label="探索面板">
-      {url && <SourceBrowserPanel url={url} navigationId={navigationId} onClose={onClose} visible={open} suspended={resizing} />}
+      {url && <SourceBrowserPanel onCreateProject={onCreateProject} url={url} navigationId={navigationId} onClose={onClose} visible={open} suspended={resizing} />}
       <PanelEdgeHandle variant="overlay" className={`explore-panel-handle ${resizing ? "is-library-resizing" : ""}`} closeLabel="收起浏览器" onClose={onClose} onEscape={onClose} grip={{
         "aria-label": "调整浏览器宽度", "aria-controls": "explore-browser-panel",
         "aria-valuemin": 320, "aria-valuemax": maximumWidth, "aria-valuenow": browserWidth,

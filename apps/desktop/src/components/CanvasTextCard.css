@@ -5,3 +5,28 @@
   opacity: 0;
   pointer-events: none;
 }
+
+/* Cell sockets share gestures/glyphs, with a compact hit area at the cell edge. */
+.canvas-cell-connection.canvas-connection-handle.canvas-connection-handle {
+  width: 28px; height: 32px; clip-path: none;
+  transform: translate(-50%, -50%);
+  opacity: 0; pointer-events: none; z-index: 12;
+}
+.canvas-text-cell:hover > .canvas-cell-connection.canvas-connection-handle,
+.canvas-text-cell:has(.canvas-cell-connection:focus-visible) > .canvas-cell-connection.canvas-connection-handle,
+.canvas-text-cell[data-canvas-connection-source] > .canvas-cell-connection.canvas-connection-handle {
+  opacity: 1; pointer-events: auto;
+}
+.canvas-note:has(.canvas-text-cell:hover, .canvas-text-cell:has(.canvas-cell-connection:focus-visible), .canvas-text-cell[data-canvas-connection-source]) > .canvas-connection-handle.canvas-connection-handle {
+  opacity: 0; pointer-events: none;
+}
+.canvas-cell-connection.canvas-connection-handle:disabled { opacity: 0; pointer-events: none; }
+
+/* Column insertion stays on its visible button, leaving the cell edge for wires. */
+.canvas-note.is-content-card .canvas-text-insert.is-column { top:calc(100% + 8px); width:20px; height:20px; }
+.canvas-note.is-content-card .canvas-text-insert.is-column::before { display:none; }
+.canvas-note.is-content-card .canvas-text-insert.is-column svg { top:0; left:0; }
+
+/* Keep gallery paging inside the image, clear of the edge connection handles. */
+.canvas-text-cell > .canvas-conversation-images .previous { left:16px; }
+.canvas-text-cell > .canvas-conversation-images .next { right:16px; }

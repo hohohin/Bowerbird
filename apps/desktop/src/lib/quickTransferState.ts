@@ -9,12 +9,19 @@ export type QuickTransferFile = {
   retryable: boolean;
 };
 
+export function quickTransferFileSize(bytes: number) {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
 export type QuickTransferSnapshot = {
   revision: number;
   active: boolean;
   directory: string | null;
   url: string | null;
   transfers: QuickTransferFile[];
+  sending?: { url: string; files: { id: string; name: string; size: number }[] } | null;
 };
 
 export const EMPTY_QUICK_TRANSFER: QuickTransferSnapshot = {

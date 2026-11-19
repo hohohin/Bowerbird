@@ -1,13 +1,20 @@
-import { useEffect, useRef, type RefObject } from "react";
+import { useId, useLayoutEffect, useRef, type CSSProperties } from "react";
 
+const feather = 4;
 const depths = [-.42, .35, 1];
 const matrices = [{ columns: 5, rows: 3, size: 2.1 }, { columns: 5, rows: 3, size: 1.8 }, { columns: 3, rows: 3, size: 3.2 }];
+// Approved film: 72% contour detail, with a stable neutral reading surface.
+const films = [
+  { theme: "dark", slopes: [.1584, .1728, .1872], base: [.10, .115, .14] },
+  { theme: "light", slopes: [-.1656, -.1584, -.144], base: [.94, .95, .97] },
+];
 
 /** Decorative projection only; no draft, pointer target or generation state. */
-export function ComposerProjection({ dockRef, collapsed }: { dockRef: RefObject<HTMLElement>; collapsed: boolean }) {
+export function ComposerProjection({ collapsed }: { collapsed: boolean }) {
   const rootRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const root = rootRef.current, dock = dockRef.current;
+  const filmId = `composer-contour-${useId().replace(/:/g, "")}`;
+  useLayoutEffect(() => {
+    const root = rootRef.current, dock = root?.parentElement;
     if (!root || !dock) return;
     const canvas = root.querySelector("canvas")!;
     const context = canvas.getContext("2d")!;
@@ -66,13 +73,20 @@ export function ComposerProjection({ dockRef, collapsed }: { dockRef: RefObject<
       const arcSvg = arc.closest("svg")!;
       arcSvg.setAttribute("viewBox", `0 0 ${width} ${height}`);
       arcSvg.style.maskImage = `linear-gradient(90deg,transparent ${arcLeft}px,#000 ${arcLeft + 72}px,#000 ${arcRight - 72}px,transparent ${arcRight}px)`;
-      // Center the feather on the local arc; the elliptical field has no vertical side boundary.
+      // Center the feather on the local arc; sides fade beyond the visible controls.
       const curveY = (x: number) => { const position = (x - arcLeft) / span; return y - 4 * bow * position * (1 - position); };
       const edgeLeft = curveY(-50), edgeRight = curveY(width + 50);
       const cap = `M-50 ${edgeLeft} Q${width / 2} ${2 * curveY(width / 2) - (edgeLeft + edgeRight) / 2} ${width + 50} ${edgeRight} L${width + 50} ${height + 50} L-50 ${height + 50}Z`;
-      const cx = (arcLeft + arcRight) / 2, cy = (y - bow + height) / 2 + 20;
-      const rx = span / 2 + 110, ry = height - (y - bow) + 36;
-      const mask = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><defs><filter id="f" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="12.5"/></filter><mask id="top"><path d="${cap}" fill="white" filter="url(#f)"/></mask><radialGradient id="field" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="translate(${cx} ${cy}) scale(${rx} ${ry})"><stop stop-color="white"/><stop offset=".56" stop-color="white"/><stop offset=".78" stop-color="white" stop-opacity=".6"/><stop offset="1" stop-color="white" stop-opacity="0"/></radialGradient></defs><rect width="100%" height="100%" fill="url(#field)" mask="url(#top)"/></svg>`;
+      const cx = (arcLeft + arcRight) / 2;
+      const tags = [...dock!.querySelectorAll('.library-composer-target, .composer-mode-picker > button')]
+        .map(tag => tag.getBoundingClientRect()).filter(tag => tag.width > 0 && tag.height > 0);
+      const send = dock!.querySelector('.composer-send')?.getBoundingClientRect();
+      // Collapsed mode hides the mode rail and send button (zero-sized rects).
+      // Its static projection belongs to the whole collapsed bar instead.
+      const fadeLeft = (collapsed || !tags.length ? box.left : Math.min(...tags.map(tag => tag.left))) - left;
+      const fadeRight = (!collapsed && send?.width ? send.right : box.right) - left;
+      const fadeWidth = fadeRight - fadeLeft + 220;
+      const mask = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><defs><filter id="f" x="-20%" y="-50%" width="140%" height="200%"><feGaussianBlur stdDeviation="${feather / 4}"/></filter><mask id="top"><path d="${cap}" fill="white" filter="url(#f)"/></mask><linearGradient id="field" gradientUnits="userSpaceOnUse" x1="${fadeLeft - 110}" x2="${fadeRight + 110}"><stop stop-color="white" stop-opacity="0"/><stop offset="${110 / fadeWidth}" stop-color="white"/><stop offset="${1 - 110 / fadeWidth}" stop-color="white"/><stop offset="1" stop-color="white" stop-opacity="0"/></linearGradient></defs><rect width="100%" height="100%" fill="url(#field)" mask="url(#top)"/></svg>`;
       surface.style.maskImage = canvas.style.maskImage = `url("data:image/svg+xml,${encodeURIComponent(mask)}")`;
       hint.style.top = `${y - bow + 9}px`;
       hint.style.left = `${cx}px`;
@@ -113,8 +127,22 @@ export function ComposerProjection({ dockRef, collapsed }: { dockRef: RefObject<
       window.removeEventListener("pointermove", moved); window.removeEventListener("resize", scheduleMeasure);
       document.removeEventListener("visibilitychange", motion); reduced.removeEventListener("change", motion);
     };
-  }, [dockRef, collapsed]);
-  return <div ref={rootRef} className="composer-projection" aria-hidden="true">
+  }, [collapsed]);
+  return <div ref={rootRef} className="composer-projection" aria-hidden="true" style={{
+    "--projection-contour-dark": `url(#${filmId}-dark)`,
+    "--projection-contour-light": `url(#${filmId}-light)`,
+  } as CSSProperties}>
+    <svg width="0" height="0" className="composer-projection-filters">
+      <defs>{films.map(({ theme, slopes, base }) => <filter key={theme} id={`${filmId}-${theme}`} colorInterpolationFilters="sRGB" x="0" y="0" width="100%" height="100%">
+        <feColorMatrix type="saturate" values="0" />
+        <feConvolveMatrix order="3" kernelMatrix="0 -1 0 -1 4 -1 0 -1 0" preserveAlpha="true" edgeMode="duplicate" />
+        <feComponentTransfer>
+          <feFuncR type="linear" slope={slopes[0]} intercept={base[0]} />
+          <feFuncG type="linear" slope={slopes[1]} intercept={base[1]} />
+          <feFuncB type="linear" slope={slopes[2]} intercept={base[2]} />
+        </feComponentTransfer>
+      </filter>)}</defs>
+    </svg>
     <div className="composer-projection-surface" />
     <canvas className="composer-projection-dots" />
     {matrices.map(({ columns, rows, size }, index) => <svg key={index} className={`composer-cross-matrix depth-${index}`} width={columns * 13} height={rows * 13} viewBox={`0 0 ${columns * 13} ${rows * 13}`}>

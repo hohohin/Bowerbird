@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
-const server = await createServer({ configFile: false, root: process.cwd(),
+const server = await createServer({ cacheDir: ".tmp/canvas-card-placement-vite",
   plugins: [{ name: "placement-hidden-tools", transform(code, id) {
     if (id.endsWith("/src/lib/featureFlags.ts")) return code.replace(/(WORKFLOW_(?:SKILL|PLANNER)_ENABLED = )false/g, "$1true");
   } }], server: { host: "127.0.0.1", port: 1638, strictPort: true, hmr: false, watch: null } });
@@ -11,7 +11,7 @@ const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1800, height: 1200 } });
 const errors = []; page.on("pageerror", error => errors.push(error.message));
 const tools = [
-  ["text", "内容卡片工具"], ["bubble", "气泡便签工具"], ["instruction", "新增指令卡片"],
+  ["text", "内容卡片工具"], ["document", "文本卡片工具"], ["bubble", "气泡便签工具"], ["instruction", "新增指令卡片"],
   ["loop", "新增循环卡片"], ["generation", "新增生成卡片"], ["skill", "新增技能卡片"],
   ["planner", "新增工作流助手"], ["agent", "新增 Agent 卡片"], ["visual-profile", "新增视觉规范卡片"],
 ];
@@ -53,7 +53,7 @@ try {
     }
     return groups;
   });
-  assert.deepEqual(groups[0], ["选择工具", "抓手工具", "分区工具"]);
+  assert.deepEqual(groups[0], ["选择工具", "抓手工具", "分区工具", "画板工具"]);
   assert.deepEqual(groups[1], [...tools.map(([, label]) => label), "发条触发器"]);
 
   for (const [kind, label] of tools) {
@@ -78,7 +78,7 @@ try {
   }
   // Cancel a real drag outside the canvas, then switch tools without creating.
   const beforeCancel = await snapshot();
-  await page.getByRole("button", { name: "内容卡片工具", exact: true }).dragTo(page.locator(".canvas-source-header"));
+  await page.getByRole("button", { name: "内容卡片工具", exact: true }).dragTo(page.getByRole("textbox", { name: "项目名称" }));
   assert.deepEqual(await snapshot(), beforeCancel);
   await page.getByRole("button", { name: "新增指令卡片", exact: true }).click();
   await page.getByRole("button", { name: "抓手工具", exact: true }).click();
@@ -115,5 +115,5 @@ try {
   await page.mouse.move(triggerDrop.clientX, triggerDrop.clientY, { steps: 12 }); await page.mouse.up();
   await placed(triggerDragBefore, triggerDrop);
   assert.deepEqual(errors, []);
-  console.log("PASS: tool groups; all nine card tools select without creating, keyboard/Escape, click and real drag placement, exact overlapping coordinates, no viewport shift, canceled drag, tool switching, winding-key cancellation, pan/zoom.");
+  console.log("PASS: toolbar selection, keyboard/Escape, click and real drag placement, exact overlapping coordinates, no viewport shift, canceled drag, tool switching, winding-key cancellation, pan/zoom.");
 } finally { await browser.close(); await server.close(); }

@@ -27,6 +27,7 @@ type AcpClientCallbacks = {
 type AcpConnection = {
   initialize(args: { protocolVersion: number; clientCapabilities: Record<string, never> }): Promise<{ protocolVersion: number }>;
   newSession(args: { cwd: string; mcpServers: never[]; additionalDirectories: never[] }): Promise<{ sessionId: string }>;
+  loadSession(args: { sessionId: string; cwd: string; mcpServers: never[] }): Promise<unknown>;
   prompt(args: { sessionId: string; prompt: HarnessPromptBlock[] }): Promise<{ stopReason: string }>;
   cancel(args: { sessionId: string }): Promise<void>;
 };
@@ -46,8 +47,14 @@ export type NodeDshAcpPortOptions = {
   providerEnvironment?: Readonly<Record<string, string>>;
   parentEnvironment?: Record<string, string | undefined>;
   timeoutMs?: number;
+  /** Zero disables the task-duration deadline; initialization/cancel remain bounded. */
+  promptTimeoutMs?: number;
   activity?: ToolActivity;
-  profileMode?: "planning" | "controlled-model" | "html-execution" | "content-execution";
+  imageCardProvider?: boolean;
+  videoCardOptions?: boolean;
+  chatOptions?: import("../../../cloud/supabase/functions/_shared/chat.ts").DshChatOptionsSelection;
+  profileMode?: "planning" | "controlled-model" | "html-execution" | "content-execution" | "chat";
+  nativeSession?: { dir: string; sessionId: string };
 };
 
 export type NodeDshAcpPortDependencies = {
@@ -97,6 +104,7 @@ function exactProviderEnvironment(value: Readonly<Record<string, string>>): Reco
 }
 
 function resolvePatch(runtime: DshRuntimeHome, mode?: NodeDshAcpPortOptions["profileMode"]): string {
+  if (mode === "chat") return join("profiles", runtime.profileName, "cordis.chat.patch.yml");
   if (mode === "content-execution") return runtime.contentExecutionPatch;
   if (mode === "html-execution") return runtime.htmlExecutionPatch;
   if (mode === "controlled-model") return runtime.controlledModelPatch;
@@ -120,6 +128,11 @@ export function buildDshChildEnvironment(
   environment.DSH_PERMISSION_MODE = "read-only";
 
   if (options.providerEnvironment) Object.assign(environment, exactProviderEnvironment(options.providerEnvironment));
+  if (options.chatOptions) {
+    environment.BOWERBIRD_DSH_CHAT_MODEL = options.chatOptions.model;
+    environment.BOWERBIRD_DSH_CHAT_EFFORT = options.chatOptions.reasoningEffort;
+  }
+  if (options.nativeSession) environment.BOWERBIRD_DSH_SESSION_ID = options.nativeSession.sessionId;
   return environment;
 }
 
@@ -166,6 +179,7 @@ export class NodeDshAcpPort implements DshAcpPort {
   private readonly connection: AcpConnection;
   private readonly protocolVersion: number;
   private readonly timeoutMs: number;
+  private readonly promptTimeoutMs: number;
   private readonly activity?: ToolActivity;
   private onCommittedContent?: (content: DshAcpCommittedContent) => void;
   private disposed = false;
@@ -176,6 +190,7 @@ export class NodeDshAcpPort implements DshAcpPort {
     connection: AcpConnection;
     protocolVersion: number;
     timeoutMs: number;
+    promptTimeoutMs?: number;
     activity?: ToolActivity;
   }) {
     this.runtime = args.runtime;
@@ -183,6 +198,7 @@ export class NodeDshAcpPort implements DshAcpPort {
     this.connection = args.connection;
     this.protocolVersion = args.protocolVersion;
     this.timeoutMs = args.timeoutMs;
+    this.promptTimeoutMs = args.promptTimeoutMs ?? args.timeoutMs;
     this.activity = args.activity;
   }
 
@@ -193,6 +209,11 @@ export class NodeDshAcpPort implements DshAcpPort {
     const runtime = createDshRuntimeHome({
       templateDir: options.profileTemplateDir,
       runtimeRoot: options.runtimeRoot,
+      chat: options.profileMode === "chat",
+      imageCardProvider: options.imageCardProvider,
+      videoCardOptions: options.videoCardOptions,
+      chatOptions: options.chatOptions,
+      nativeSession: options.nativeSession,
     });
     try {
       const acp = await dependencies.loadAcp(options.profileTemplateDir);
@@ -238,6 +259,7 @@ export class NodeDshAcpPort implements DshAcpPort {
         connection,
         protocolVersion: acp.PROTOCOL_VERSION,
         timeoutMs: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        promptTimeoutMs: options.promptTimeoutMs,
         activity: options.activity,
       });
       return port;
@@ -262,6 +284,11 @@ export class NodeDshAcpPort implements DshAcpPort {
     }), "new_session", this.timeoutMs);
   }
 
+  async loadSession(sessionId: string, cwd: string) {
+    await withTimeout(this.connection.loadSession({sessionId, cwd, mcpServers: []}), "load_session", this.timeoutMs);
+    return { sessionId };
+  }
+
   async prompt(
     args: { sessionId: string; prompt: HarnessPromptBlock[] },
     onCommittedContent: (content: DshAcpCommittedContent) => void,
@@ -269,9 +296,10 @@ export class NodeDshAcpPort implements DshAcpPort {
     if (this.onCommittedContent) throw new Error("dsh_acp_prompt_concurrent");
     this.onCommittedContent = onCommittedContent;
     try {
+      if (this.promptTimeoutMs === 0) return await this.connection.prompt(args);
       return this.activity
-        ? await withToolActivityTimeout(this.connection.prompt(args), this.timeoutMs, this.activity)
-        : await withTimeout(this.connection.prompt(args), "prompt", this.timeoutMs);
+        ? await withToolActivityTimeout(this.connection.prompt(args), this.promptTimeoutMs, this.activity)
+        : await withTimeout(this.connection.prompt(args), "prompt", this.promptTimeoutMs);
     } finally {
       this.onCommittedContent = undefined;
     }

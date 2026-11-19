@@ -1,0 +1,26 @@
+@import "tailwindcss4/theme.css";
+@import "tailwindcss4/utilities.css" source(none);
+@source "../src/components/text-editor/plate";
+@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+@theme inline {
+  --color-background: var(--bb-surface);
+  --color-foreground: var(--bb-ink);
+  --color-muted: var(--bb-surface-hover);
+  --color-muted-foreground: var(--bb-muted);
+  --color-popover: var(--bb-surface);
+  --color-popover-foreground: var(--bb-ink);
+  --color-card: var(--bb-surface);
+  --color-card-foreground: var(--bb-ink);
+  --color-primary: var(--bb-blue);
+  --color-primary-foreground: var(--bb-surface);
+  --color-secondary: var(--bb-surface-2);
+  --color-secondary-foreground: var(--bb-secondary);
+  --color-accent: var(--bb-surface-hover);
+  --color-accent-foreground: var(--bb-ink);
+  --color-highlight: #f5c842;
+  --color-brand: var(--bb-blue);
+  --color-border: var(--bb-line);
+  --color-input: var(--bb-line);
+  --color-ring: var(--bb-blue);
+  --color-destructive: var(--bb-danger);
+}

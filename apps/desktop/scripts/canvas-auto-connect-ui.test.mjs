@@ -38,22 +38,37 @@ await page.route('**/fixture/document.png', route => route.fulfill({ contentType
 const state = () => page.evaluate(() => JSON.parse(sessionStorage.getItem('workflow-p')).document);
 const target = id => page.locator(`[data-workflow-card="${id}"]`);
 const card = id => page.locator(`[data-workflow-card="${id}"],[data-canvas-node-id="${id}"]`).first();
-const handle = (id, side) => page.locator(`[data-workflow-card="${id}"] [data-canvas-connect-side="${side}"],[data-canvas-node-id="${id}"] [data-canvas-connect-side="${side}"],[data-workflow-material="${id}"] [data-canvas-connect-side="${side}"]`).first();
-const output = () => page.locator('[data-canvas-node-id="script"] [data-canvas-connect-side="output"]');
+const handle = (id, side) => page.locator(`[data-workflow-card="${id}"] [data-canvas-connect-side="${side}"]:not(.canvas-cell-connection),[data-canvas-node-id="${id}"] [data-canvas-connect-side="${side}"]:not(.canvas-cell-connection),[data-workflow-material="${id}"] [data-canvas-connect-side="${side}"]:not(.canvas-cell-connection)`).first();
+async function hoverCard(id) {
+  const heading = card(id).locator('.canvas-text-handle');
+  await (await heading.count() ? heading : card(id)).hover();
+}
+const output = () => page.locator('[data-canvas-node-id="script"] [data-canvas-connect-side="output"]:not(.canvas-cell-connection)');
 async function assertHandleVisible(id, side, shown) {
   await page.waitForFunction(({ id, side, shown }) => {
-    const button = document.querySelector(`[data-workflow-card="${id}"] [data-canvas-connect-side="${side}"],[data-canvas-node-id="${id}"] [data-canvas-connect-side="${side}"],[data-workflow-material="${id}"] [data-canvas-connect-side="${side}"]`);
+    const button = document.querySelector(`[data-workflow-card="${id}"] [data-canvas-connect-side="${side}"]:not(.canvas-cell-connection),[data-canvas-node-id="${id}"] [data-canvas-connect-side="${side}"]:not(.canvas-cell-connection),[data-workflow-material="${id}"] [data-canvas-connect-side="${side}"]:not(.canvas-cell-connection)`);
     return button && getComputedStyle(button).opacity === (shown ? '1' : '0') && getComputedStyle(button).pointerEvents === 'auto';
   }, { id, side, shown });
 }
-async function clickOutput() { await card('script').hover(); await output().click(); }
+async function clickOutput() {
+  const box = await output().boundingBox();
+  await page.mouse.click(box.x + box.width / 2 + 42, box.y + box.height / 2);
+}
+async function holdOutput() {
+  const box = await output().boundingBox();
+  await page.mouse.move(box.x + box.width / 2 + 42, box.y + box.height / 2);
+  await page.mouse.down();
+  // A horizontal draft has zero bounding-box height even with a visible stroke.
+  await page.locator('.workflow-wires .is-draft').waitFor({ state: 'attached' });
+}
 async function dragHandleToCard(sourceId, side, targetId) {
-  await card(sourceId).hover();
+  await hoverCard(sourceId);
   const from = await handle(sourceId, side).boundingBox(), to = await card(targetId).boundingBox();
   assert.ok(from && to, 'real card and connection control must have geometry');
   await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
   await page.mouse.down();
   await page.mouse.move(to.x + to.width / 2, to.y + Math.min(100, to.height / 2), { steps: 16 });
+  assert.equal(await handle(sourceId, side).locator('.canvas-connection-glyph').evaluate(element => getComputedStyle(element).opacity), '0', 'dragging hides the initiating marker on native, material and workflow cards');
   const feedback = await page.locator('[data-connection-target]').getAttribute('aria-label', { timeout: 300 }).catch(() => null);
   await page.mouse.up();
   await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -86,7 +101,7 @@ try {
   await output().waitFor();
   await target('generator').waitFor();
   // The typed glyphs are replaced by one common action on a real document card.
-  assert.equal(await page.locator('[data-canvas-node-id="script"] [data-canvas-connect-side="output"]').count(), 1);
+  assert.equal(await page.locator('[data-canvas-node-id="script"] [data-canvas-connect-side="output"]:not(.canvas-cell-connection)').count(), 1);
   assert.equal(await page.locator('[data-canvas-node-id="script"]').getByRole('button', { name: '输出文档图片', exact: true }).count(), 0);
 
   await page.mouse.move(1200, 80);
@@ -99,7 +114,7 @@ try {
     await page.mouse.move(1200, 80);
     await assertHandleVisible(id, side, false);
   }
-  await card('script').hover();
+  await hoverCard('script');
   await assertHandleVisible('script', 'output', true);
   await assertHandleVisible('generator', 'input', false);
   await card('script').click({ position: { x: 60, y: 25 } });
@@ -118,15 +133,32 @@ try {
   await assertHandleVisible('generator', 'input', false);
 
   await clickOutput();
-  assert.equal(await page.getByRole('menu', { name: '添加下游', exact: true }).count(), 0, 'a short click starts a wire without requiring a hold');
+  await page.getByRole('menu', { name: '添加下游', exact: true }).waitFor();
+  await page.waitForTimeout(220);
+  assert.equal(await page.locator('.workflow-wires .is-draft').count(), 0, 'clicking the outer hot zone opens the creation menu without a draft or a delayed hold');
+  await page.keyboard.press('Escape');
+  await holdOutput();
+  await page.mouse.up();
+  await page.getByRole('menu', { name: '添加下游', exact: true }).waitFor();
+  assert.equal(await page.locator('.workflow-wires .is-draft').count(), 0, 'releasing a stationary hold in its hot zone opens the menu without a self-connection error');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-canvas-node-id="script"] .canvas-connection-glyph')).opacity === '1');
+  await page.keyboard.press('Escape');
+  await holdOutput();
+  assert.equal(await output().locator('.canvas-connection-glyph').evaluate(element => getComputedStyle(element).opacity), '0', 'holding hides the source marker');
+  const anchor = await page.locator('.workflow-wires .is-draft').evaluate(element => {
+    const point = element.getPointAtLength(0).matrixTransform(element.getScreenCTM());
+    const card = document.querySelector('[data-canvas-node-id="script"]').getBoundingClientRect();
+    return { x: point.x, y: point.y, right: card.right, middle: card.top + card.height / 2 };
+  });
+  assert.ok(Math.abs(anchor.x - anchor.right) < 1 && Math.abs(anchor.y - anchor.middle) < 1, `draft begins at the card right midpoint, not the off-center press or magnetic glyph: ${JSON.stringify(anchor)}`);
   const initialDraft = await page.locator('.workflow-wires .is-draft').getAttribute('d');
   await page.mouse.move(1200, 80);
   await assertHandleVisible('script', 'output', true);
   await assertHandleVisible('generator', 'input', false);
   const describeBox = await target('describe').boundingBox();
   await page.mouse.move(describeBox.x + describeBox.width / 2, describeBox.y + 100, { steps: 12 });
-  assert.notEqual(await page.locator('.workflow-wires .is-draft').getAttribute('d'), initialDraft, 'released pointer continues moving the wire');
-  await page.mouse.click(describeBox.x + describeBox.width / 2, describeBox.y + 100);
+  assert.notEqual(await page.locator('.workflow-wires .is-draft').getAttribute('d'), initialDraft, 'held pointer moves the wire');
+  await page.mouse.up();
   await waitInputs('describe', 1);
   let doc = await state();
   const describe = doc.nodes.find(node => node.id === 'describe');
@@ -161,9 +193,9 @@ try {
   assert.equal(Object.values(doc.nodes.find(node => node.id === 'generator').inputs).flat().length, 2, 'repeated drop is idempotent');
   assert.equal(await page.locator(`[data-auto-connection="${relation}"]`).count(), 1);
 
-  await target('generator').locator('[data-canvas-connect-side="input"]').click({ button: 'right' });
+  await target('generator').locator('[data-canvas-connect-side="input"]:not(.canvas-cell-connection)').click({ button: 'right' });
   const disconnect = page.getByRole('menu', { name: '选择要断开的连线', exact: true });
-  if (await disconnect.isVisible()) await disconnect.getByRole('menuitem').click();
+  await disconnect.getByRole('menuitem').click();
   await waitInputs('generator', 0);
   await page.keyboard.press('Control+z');
   await waitInputs('generator', 2);
@@ -175,19 +207,32 @@ try {
   assert.equal(restored.inputs.text[0].autoConnect, restored.inputs.image[0].autoConnect);
   assert.equal(await page.locator(`[data-auto-connection="${restored.inputs.image[0].autoConnect}"]`).count(), 1);
 
-  await page.locator('[data-canvas-node-id="script"]').hover();
+  await hoverCard('script');
   const beforeMenu = await state();
-  await clickOutput();
-  await target('generator').getByRole('button', { name: '运行此卡片', exact: true }).click();
+  await holdOutput();
+  await target('generator').getByRole('button', { name: '运行此卡片', exact: true }).hover();
+  await page.mouse.up();
   await page.locator('.workflow-wires .is-draft').waitFor({ state: 'detached' });
   assert.deepEqual(await state(), beforeMenu, 'finishing on a card button only connects; it does not run the card');
-  await clickOutput();
+  await holdOutput();
   await page.mouse.move(1100, 180, { steps: 10 });
   await page.mouse.click(1100, 180, { button: 'right' });
+  await page.mouse.up();
   await page.locator('.workflow-wires .is-draft').waitFor({ state: 'detached' });
   assert.equal(await page.getByRole('menu').count(), 0, 'right-click cancels without opening a canvas menu');
   assert.deepEqual(await state(), beforeMenu, 'right-click does not change any saved connection');
-  await card('script').hover();
+  await clickOutput();
+  await page.getByRole('menu', { name: '添加下游', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  const pending = await output().boundingBox();
+  await page.mouse.move(pending.x + pending.width / 2, pending.y + pending.height / 2);
+  await page.mouse.down();
+  await page.keyboard.press('Escape');
+  await page.waitForTimeout(220);
+  await page.mouse.up();
+  assert.equal(await page.locator('.workflow-wires .is-draft').count(), 0, 'cancelled pending hold cannot revive a draft');
+  assert.equal(await page.getByRole('menu').count(), 0, 'cancelled pending hold cannot open a menu on release');
+  await hoverCard('script');
   const held = await output().boundingBox();
   await page.mouse.move(held.x + held.width / 2, held.y + held.height / 2);
   await page.mouse.down();
@@ -261,10 +306,8 @@ try {
   await page.keyboard.press('Control+z');
   await waitInputs('reverse', 0);
   const beforeUpstream = await state();
-  await card('reverse').hover();
+  await hoverCard('reverse');
   await handle('reverse', 'input').click();
-  await page.mouse.move(1450, 160, { steps: 10 });
-  await page.mouse.click(1450, 160);
   const upstreamMenu = page.getByRole('menu', { name: '添加上游', exact: true });
   await upstreamMenu.waitFor();
   await assertMenuLayout(upstreamMenu);
@@ -304,7 +347,7 @@ try {
   await target('video-generator').waitFor();
   await page.mouse.move(1200, 80);
   await assertHandleVisible('movie-card', 'output', false);
-  await card('movie-card').hover();
+  await hoverCard('movie-card');
   await assertHandleVisible('movie-card', 'output', true);
   await card('movie-card').click({ modifiers: ['Control'] });
   await page.mouse.move(1200, 80);
@@ -312,9 +355,18 @@ try {
   await page.mouse.click(1200, 80);
   await assertHandleVisible('movie-card', 'output', false);
   const beforeVideo = await state();
-  assert.match(await dragHandleToCard('movie-card', 'output', 'image-only'), /没有可接收|无法接收|不支持|不能接收/);
+  await dragHandleToCard('movie-card', 'output', 'image-only');
+  const videoMenu = page.getByRole('menu', { name: '引用视频', exact: true });
+  assert.ok(await videoMenu.getByRole('menuitem', { name: '引用完整视频', exact: true }).isDisabled());
+  assert.ok(await videoMenu.getByRole('menuitem', { name: '引用首帧画面', exact: true }).isEnabled());
+  assert.ok(await videoMenu.getByRole('menuitem', { name: '引用尾帧画面', exact: true }).isEnabled());
+  await page.keyboard.press('Escape');
+  await videoMenu.waitFor({ state: 'hidden' });
+  assert.ok(await handle('movie-card', 'output').evaluate(button => document.activeElement === button));
   assert.deepEqual(await state(), beforeVideo, 'video cannot silently become an image input');
   await dragHandleToCard('movie-card', 'output', 'video-generator');
+  assert.deepEqual(await state(), beforeVideo, 'dropping the wire only opens the menu');
+  await videoMenu.getByRole('menuitem', { name: '引用完整视频', exact: true }).click();
   await waitInputs('video-generator', 1);
   const videoInput = (await state()).nodes.find(node => node.id === 'video-generator').inputs.image[0];
   assert.equal(videoInput.assetId, 'movie');
@@ -350,7 +402,7 @@ try {
   beforeRejected = await state();
   assert.match(await dragHandleToCard('a', 'output', 'b'), /运行|停止/);
   assert.deepEqual(await state(), beforeRejected, 'a running receiver refuses connection changes');
-  await card('b').hover();
+  await hoverCard('b');
   assert.ok(await handle('b', 'output').isDisabled(), 'a running source disables its connection handle');
 
   // Scoped menus retain the simple handles while allowing precise table destinations.
@@ -372,7 +424,7 @@ try {
   await page.reload();
   await card('receiver-grid').waitFor();
   const connectingPlane = page.locator('.canvas-plane[data-canvas-connecting]');
-  await card('source-grid').hover();
+  await hoverCard('source-grid');
   await openConnectionMenu(handle('source-grid', 'output'));
   let scopeMenu = page.getByRole('menu', { name: '添加下游', exact: true });
   await scopeMenu.waitFor();
@@ -395,7 +447,7 @@ try {
   await page.keyboard.press('Control+z');
   await waitInputs('scoped', 0);
 
-  await card('source-grid').hover();
+  await hoverCard('source-grid');
   await openConnectionMenu(handle('source-grid', 'output'));
   await page.getByRole('menu', { name: '添加下游', exact: true }).getByRole('menuitem', { name: '指定内容', exact: true }).click();
   await page.getByRole('menu', { name: '指定内容', exact: true }).getByRole('menuitem', { name: '第 2 行，第 2 列', exact: true }).click();
@@ -410,7 +462,7 @@ try {
     { label: '第 2 列', axis: 'column', ids: ['r12', 'r22'], writers: 2 },
     { label: '第 2 行，第 2 列', cellId: 'r22', writers: 1 },
   ]) {
-    await card('receiver-grid').hover();
+    await hoverCard('receiver-grid');
     await openConnectionMenu(handle('receiver-grid', 'input'));
     const receiveMenu = page.getByRole('menu', { name: '添加上游', exact: true });
     await receiveMenu.getByRole('menuitem', { name: '指定接收位置', exact: true }).click();
@@ -432,7 +484,7 @@ try {
     await page.waitForFunction(() => !JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(node => node.textTarget?.nodeId === 'receiver-grid'));
   }
   const beforeScopeCancel = await state();
-  await card('receiver-grid').hover();
+  await hoverCard('receiver-grid');
   await openConnectionMenu(handle('receiver-grid', 'input'));
   await connectingPlane.waitFor({ state: 'attached' });
   await page.getByRole('menu', { name: '添加上游', exact: true }).getByRole('menuitem', { name: '指定接收位置', exact: true }).click();
@@ -441,7 +493,34 @@ try {
   await page.keyboard.press('Escape');
   await connectingPlane.waitFor({ state: 'detached' });
   assert.deepEqual(await state(), beforeScopeCancel, 'Escape closes scoped menu and restores the plane without editing');
+  // At minimum zoom a fixed screen-sized socket used to cover its neighbor's body.
+  await page.evaluate(async () => {
+    const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
+    const snapshot = window.snapshot();
+    snapshot.nodes = [];
+    snapshot.view = { ...snapshot.view, zoom: .1, panX: 450, panY: 180 };
+    sessionStorage.setItem('reference-fixture', JSON.stringify(snapshot));
+    const make = (id, x) => ({ ...newWorkflowNode('generation', x, 100, 'codex'), id });
+    sessionStorage.setItem('workflow-p', JSON.stringify({ revision: 1,
+      document: { schema_version: 1, nodes: [make('right', 550), make('left', 100)], run: null } }));
+  });
+  await page.reload();
+  const right = target('right');
+  const targetBox = await right.boundingBox();
+  const centerY = targetBox.y + targetBox.height / 2;
+  const headerBox = await right.locator('header').boundingBox();
+  await page.mouse.click(headerBox.x + 3, headerBox.y + headerBox.height / 2);
+  assert.ok(await right.evaluate(el => el.classList.contains('is-selected')), 'click selects the intended neighboring card at 10%');
+  assert.equal(await page.getByRole('menu').count(), 0);
+  const out = await handle('left', 'output').boundingBox();
+  assert.ok(Math.abs(out.width - 9.216) < .1);
+  await page.mouse.move(out.x + out.width / 2, out.y + out.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(targetBox.x + targetBox.width / 2, centerY, { steps: 10 });
+  await page.mouse.up();
+  await waitInputs('right', 1);
+  assert.equal((await state()).nodes.find(node => node.id === 'right').inputs.image[0].nodeId, 'left');
   assert.deepEqual(errors, []);
   assert.equal(await page.evaluate(() => window.calls.filter(call => /^(codex_create|agent_start|dreamina_generate|cloud_generation)/.test(call.command)).length), 0);
-  console.log('PASS unified card connections: whole-card/reverse drops, type projection, automatic compile, one edge, duplicate, grouped disconnect, undo/reload, click/blank/upstream menus, atomic create+connect, text-only, true video, self/cycle/run locks, scoped output/row/column/cell menus, wheel, plane lifecycle and cancel');
+  console.log('PASS unified card connections: click menus, held/dragged wires, hidden source glyph, centered anchor, pending cancel, whole-card/reverse drops, type projection, automatic compile, one edge, duplicate, grouped disconnect, undo/reload, blank/upstream menus, atomic create+connect, true video, self/cycle/run locks, scoped menus, wheel and plane lifecycle');
 } finally { await browser.close(); await server.close(); }

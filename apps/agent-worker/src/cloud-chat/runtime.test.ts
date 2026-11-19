@@ -1,8 +1,36 @@
 import { test } from "node:test";
 import * as assert from "node:assert/strict";
-import { completeChatJob, processChatJob } from "./runtime.ts";
+import { chatUpstreamFetch, completeChatJob, consumeChatQueues, processChatJob } from "./runtime.ts";
+import { DeepSeekBackend, DeepSeekBackendError } from "../providers/deepseek/backend.ts";
 import { createHash } from "node:crypto";
-import { validateChatInput } from "../../../cloud/supabase/functions/_shared/chat.ts";
+import { chatFailure, validateChatInput } from "../../../cloud/supabase/functions/_shared/chat.ts";
+
+test("a DSH slot waiting for desktop lets the standard slot finish other jobs", async () => {
+  const stop = new AbortController(), waiting = Promise.withResolvers<void>(), served = Promise.withResolvers<void>();
+  let plain = 0, dsh = 0;
+  await consumeChatQueues(async claim => {
+    if (claim.engine) { dsh++; return { job: { id: "DSH" } }; }
+    await waiting.promise;
+    return { job: { id: "ordinary" } };
+  }, async job => {
+    if (job.id === "DSH") { waiting.resolve(); await served.promise; return; }
+    if (++plain === 2) { stop.abort(); served.resolve(); }
+  }, "dsh-vps-v2", stop.signal);
+  assert.equal(plain, 2); assert.equal(dsh, 1);
+});
+
+test("shared Agent chat preserves large input and result through the worker", async () => {
+  const content = "长文🙂\n".repeat(400_000);
+  const text = JSON.stringify({ messages: [{ role: "user", content }], tools_enabled: false });
+  const job = { id: "large", lease_id: "lease", input_url: "https://fixture.invalid/request", input_hash: createHash("sha256").update(text).digest("hex") };
+  const calls: Record<string, unknown>[] = [];
+  await processChatJob(job, async body => { calls.push(body); return {}; }, { chat: async messages => {
+    assert.equal(messages[1].content, content);
+    return { message: { role: "assistant", content }, content, toolCalls: [], finishReason: "stop", usage: { promptTokens: 1, completionTokens: 1 } };
+  } }, "fixture", async () => downloaded(text));
+  assert.equal(calls.length, 1); assert.equal(calls[0].status, "succeeded");
+  assert.equal((calls[0].result as { message: { content: string } }).message.content, content);
+});
 
 test("chat rejects images, forged tools and mismatched tool results", () => {
   assert.throws(() => validateChatInput({ messages: [{ role: "user", content: [{ type: "image_url" }] }] }));
@@ -23,6 +51,12 @@ test("one completion uses fixed tools, records usage and never executes the card
   const [messages, tools] = calls[0] as Array<Array<Record<string, unknown>>>;
   assert.equal(messages[0].role, "system");
   assert.equal(tools.length, 1);
+  const fields = (tools[0] as any).function.parameters.properties.cards.items.properties;
+  assert.equal(fields.provider, undefined);
+  assert.equal(fields.videoChannel, undefined);
+  assert.equal(fields.videoOptions, undefined);
+  assert.deepEqual(fields.mode.enum, ["count", "rows"]);
+  assert.deepEqual(fields.resolution.enum, [0.6, 0.8, 1]);
 });
 
 test("plain chat disables card tools and unknown transport is never retried", async () => {
@@ -45,6 +79,46 @@ function downloaded(text: string): Response {
   return { ok: true, status: 200, json: async () => JSON.parse(text), text: async () => text,
     body: { getReader: () => ({ read: async () => { const ended = done; done = true; return { done: ended, value: new TextEncoder().encode(text) }; }, cancel: async () => {}, releaseLock: () => {} }) } };
 }
+
+test("valid DSH input followed by startup failure is not reported as missing input", async () => {
+  const text = JSON.stringify({ engine: "dsh-vps-v2", conversation_id: "room", messages: [{ role: "user", content: "hello" }], tools_enabled: false });
+  const writes: Record<string, unknown>[] = [];
+  await processChatJob({ id: "job", lease_id: "lease", engine: "dsh-vps-v2", input_url: "fixture:", input_hash: createHash("sha256").update(text).digest("hex") },
+    async body => { writes.push(body); return {}; }, { chat: async () => { assert.fail("no upstream submission"); } }, "fixture", async () => downloaded(text));
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].status, "failed");
+  assert.equal(writes[0].error_code, "chat_dsh_start_failed");
+  assert.ok(/启动或恢复会话失败/.test(chatFailure("failed", writes[0].error_code).message));
+});
+
+test("classifies the original upstream response through Worker finish and public chat error", async () => {
+  const input = JSON.stringify({ messages: [{ role: "user", content: "hi" }] });
+  const job = { id: "sample", lease_id: "lease", input_url: "fixture:", input_hash: createHash("sha256").update(input).digest("hex") };
+  const reply = (message: unknown) => downloaded(JSON.stringify({ choices: [{ message }], usage: { prompt_tokens: 2, completion_tokens: 1 } }));
+  const cases: [() => Promise<Response>, string, string, RegExp][] = [
+    [async () => { throw Error("private bearer"); }, "outcome_unknown", "chat_upstream_connection", /连接中断/],
+    [async () => ({ ...downloaded("private body"), ok: false, status: 503 }), "outcome_unknown", "chat_upstream_http_503", /HTTP 503/],
+    [async () => ({ ...downloaded(""), ok: false, status: 429 }), "failed", "chat_upstream_http_429", /HTTP 429/],
+    [async () => downloaded("broken json"), "outcome_unknown", "chat_reply_json", /无法解析/],
+    [async () => ({ ...downloaded(""), text: async () => { throw Error("reset"); } }), "outcome_unknown", "chat_upstream_connection", /连接中断/],
+    [async () => reply({ role: "assistant", content: null }), "outcome_unknown", "chat_reply_format", /格式无效/],
+    [async () => reply({ role: "assistant", tool_calls: [{ id: "one", type: "function", function: { name: "create_canvas_cards", arguments: "{" } }] }), "outcome_unknown", "chat_reply_tool_arguments", /工具参数/],
+  ];
+  for (const [respond, status, code, reason] of cases) {
+    let requests = 0;
+    const model = new DeepSeekBackend({ apiKey: "test", baseUrl: "https://fixture.invalid", model: "deepseek-chat" }, chatUpstreamFetch(async () => { requests++; return respond(); }));
+    const writes: Record<string, unknown>[] = [];
+    await processChatJob(job, async body => { writes.push(body); return {}; }, model, "test", async () => downloaded(input));
+    assert.equal(requests, 1);
+    assert.deepEqual(writes, [{ action: "finish", job_id: job.id, lease_id: job.lease_id, status, error_code: code }]);
+    const error = chatFailure(status, writes[0].error_code);
+    assert.equal(error.code, code); assert.equal(error.recoverable, false); assert.ok(reason.test(error.message));
+    assert.ok(!/private|稍后|重试/.test(error.message));
+  }
+  await processChatJob(job, async body => { assert.equal(body.error_code, "chat_upstream_timeout"); return {}; },
+    { chat: async () => { throw new DeepSeekBackendError("deepseek_timeout"); } }, "test", async () => downloaded(input));
+  assert.deepEqual(chatFailure("outcome_unknown", "private bearer"), chatFailure("outcome_unknown", null));
+});
 
 test("worker verifies input hash, returns result and usage through settlement", async () => {
   const text = JSON.stringify({ messages: [{ role: "user", content: "hello" }] });
@@ -79,4 +153,15 @@ test("lost settlement response never reruns upstream or overwrites completion", 
     { chat: async () => { submitted++; return { message: { role: "assistant", content: "done" }, content: "done", toolCalls: [], finishReason: "stop", usage: { promptTokens: 1, completionTokens: 1 } }; } },
     "fixture", async () => downloaded(text)));
   assert.equal(submitted, 1); assert.equal(settlements, 1);
+});
+
+test("DSH model and effort are frozen in v2 job input and rejected for other queues", () => {
+  const request = { engine: "dsh-vps-v2", conversation_id: "c-a", messages: [{ role: "user", content: "hello" }] };
+  for (const model of ["deepseek-flash", "deepseek-v4-pro"]) for (const reasoningEffort of ["off", "low", "high", "max"]) {
+    const options = { model, reasoningEffort };
+    assert.deepEqual(validateChatInput({ ...request, dsh_options: options }).dsh_options, options);
+  }
+  for (const options of [{ model: "custom", reasoningEffort: "off" }, { model: "deepseek-flash", reasoningEffort: "bogus" }])
+    assert.throws(() => validateChatInput({ ...request, dsh_options: options }));
+  assert.throws(() => validateChatInput({ messages: request.messages, dsh_options: { model: "deepseek-flash", reasoningEffort: "high" } }));
 });

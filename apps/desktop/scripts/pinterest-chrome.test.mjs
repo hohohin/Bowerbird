@@ -27,7 +27,11 @@ try{
  for(const width of [320,460,900]){
   await page.setViewportSize({width,height:700});await page.waitForTimeout(200);
   const size=await page.evaluate(()=>({width:innerWidth,client:document.documentElement.clientWidth,scroll:document.documentElement.scrollWidth,nav:document.querySelector('#VerticalNavContent').getBoundingClientRect().width,inset:document.querySelector('.mainContainer').getBoundingClientRect().left}));
-  assert.deepEqual(size,{width,client:width,scroll:width,nav:36,inset:36});
+  assert.deepEqual(size,{width,client:width,scroll:width,nav:36,inset:0});
+  const toolbar = await page.locator('#VerticalNavContent').boundingBox();
+  assert.equal(toolbar.x,8);
+  assert.ok(toolbar.height < 150 && Math.abs(toolbar.y + toolbar.height / 2 - 350) < 1);
+  assert.ok(await page.evaluate(() => !document.elementFromPoint(20, 20).closest('#VerticalNavContent')), 'space above the toolbar belongs to the webpage');
   await page.evaluate(()=>window.scrollBy(0,100));await page.waitForTimeout(220);
   const rail=page.locator('body > .industrial-scrollbar[data-axis="y"]:not([hidden])');
   assert.equal(await rail.count(),1);
@@ -53,8 +57,8 @@ try{
  await page.waitForFunction(before=>scrollY>before,scrollBeforeWheel);
  await page.evaluate(()=>window.scrollTo(0,0));await page.getByRole('button',{name:'消息',exact:true}).click();
  assert.equal(await page.evaluate(()=>window.navClicks),1);
- await page.waitForFunction(()=>document.querySelector('.mainContainer').getBoundingClientRect().left===276);
- assert.equal(await page.locator('#expanded-sidebar').evaluate(n=>n.getBoundingClientRect().left),36);
+ await page.waitForFunction(()=>document.querySelector('.mainContainer').getBoundingClientRect().left===292);
+ assert.equal(await page.locator('#expanded-sidebar').evaluate(n=>n.getBoundingClientRect().left),52);
  await page.evaluate(()=>{document.querySelector('#expanded-sidebar').hidden=true;document.querySelector('#page-inset').style.paddingLeft='72px';});
  const nested=page.locator('#nested-scroll');await nested.scrollIntoViewIfNeeded();
  await page.waitForFunction(()=>window.appendCount===12);
@@ -64,6 +68,19 @@ try{
  const nestedRail=nested.locator('.industrial-scrollbar[data-axis="y"]');
  await nestedRail.focus();await page.keyboard.press('End');assert.equal(await nested.evaluate(n=>n.scrollTop+n.clientHeight),600);
  assert.equal(await nested.evaluate(n=>n.offsetWidth-n.clientWidth),2,'only the border remains, no scrollbar gutter');
+ await page.evaluate(() => {
+   const group = document.querySelector('#VerticalNavContent > div');
+   const action = group.querySelector('button').parentElement;
+   for (let i = 0; i < 7; i++) group.append(action.cloneNode(true));
+ });
+ await page.setViewportSize({width:320,height:240});
+ const buttons = page.getByRole('button',{name:'消息',exact:true});
+ await buttons.first().focus();
+ for (let i=1; i<await buttons.count(); i++) await page.keyboard.press('Tab');
+ await page.waitForFunction(() => {
+   const last = [...document.querySelectorAll('#VerticalNavContent [aria-label="消息"]')].at(-1);
+   return last === document.activeElement && last.getBoundingClientRect().bottom <= innerHeight;
+ },null,{timeout:3000});
  await page.evaluate(()=>{document.querySelector('#VerticalNavContent').remove();history.pushState({},'', '/pin/123/');});
  await page.waitForFunction(()=>!document.documentElement.hasAttribute('data-bowerbird-pin-nav'));
  assert.equal(await page.locator('#page-inset').getAttribute('style'),'padding-left: 72px;','native inset survives removal of our adaptation');
@@ -76,7 +93,7 @@ try{
  assert.equal((await page.locator('#nav-icon').boundingBox()).width,24,'other origins keep their original icon size');
  assert.equal(await page.locator('[data-test-id="PinBetterSaveDropdown"]').isVisible(),true,'other origins keep native controls');
  assert.deepEqual(errors,[]);
- console.log('PASS Pinterest zero-gutter overlay scrolling, 36px navigation, native sidebar, nested scroll and origin isolation');
+ console.log('PASS Pinterest floating toolbar, keyboard access, native sidebar, overlay scrolling and origin isolation');
 }finally{
  if(coverageOutput&&!coverageStopped)await writeFile(coverageOutput,JSON.stringify(await page.coverage.stopJSCoverage()));
  await browser.close();

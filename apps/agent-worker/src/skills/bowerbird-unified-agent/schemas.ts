@@ -13,7 +13,7 @@ import { canonicalJson, sha256Hex } from "../../kernel/tool-ledger.ts";
 export type UnifiedAgentPlanningInput = {
   schemaVersion: 1;
   goal: string;
-  /** Bounded text transformation; no image/tool authorization is implied. */
+  /** Text transformation; no image/tool authorization is implied. */
   textRewrite?: { source: string };
   references?: UnifiedAgentReference[];
   ratio?: string;
@@ -44,8 +44,8 @@ export const UNIFIED_AGENT_PLANNING_INPUT_SCHEMA = {
   type: "object",
   properties: {
     schemaVersion: { const: 1 },
-    goal: { type: "string", minLength: 1, maxLength: 4_000 },
-    textRewrite: { type: "object", properties: { source: { type: "string", minLength: 1, maxLength: 16000 } }, required: ["source"], additionalProperties: false },
+    goal: { type: "string", minLength: 1 },
+    textRewrite: { type: "object", properties: { source: { type: "string", minLength: 1 } }, required: ["source"], additionalProperties: false },
     references: {
       type: "array",
       maxItems: 8,
@@ -78,7 +78,7 @@ export function validateUnifiedAgentPlanningInput(value: unknown): UnifiedAgentP
   const record = value as Record<string, unknown>;
   const allowedKeys = new Set(["schemaVersion", "goal", "textRewrite", "references", "ratio", "htmlOutput", "visualProfileCapsule"]);
   if (Object.keys(record).some((key) => !allowedKeys.has(key)) || record.schemaVersion !== 1 ||
-      typeof record.goal !== "string" || !record.goal.trim() || record.goal.length > 4_000 ||
+      typeof record.goal !== "string" || !record.goal.trim() ||
       record.references !== undefined && (!Array.isArray(record.references) || record.references.length > 8)) {
     throw new Error("unified_agent_input_invalid");
   }
@@ -89,7 +89,7 @@ export function validateUnifiedAgentPlanningInput(value: unknown): UnifiedAgentP
   if (record.textRewrite !== undefined) {
     const rewrite = record.textRewrite as Record<string, unknown>;
     if (!rewrite || typeof rewrite !== "object" || Array.isArray(rewrite) || Object.keys(rewrite).some(key => key !== "source") ||
-        typeof rewrite.source !== "string" || !rewrite.source.trim() || rewrite.source.length > 16000 ||
+        typeof rewrite.source !== "string" || !rewrite.source.trim() ||
         (record.references as unknown[] | undefined)?.length || record.visualProfileCapsule !== undefined) throw new Error("unified_agent_text_input_invalid");
   }
   const references = (record.references as unknown[] | undefined)?.map((raw, index) => {

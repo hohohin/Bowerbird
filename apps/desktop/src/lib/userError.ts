@@ -1,12 +1,17 @@
+import type { ProviderIssue } from "./generationAvailability";
+
 const DEFAULT_MESSAGE = "操作未完成，请稍后重试。";
+export function hasGenerationFailureReason(error?: string | null): boolean {
+  return !!error?.trim() && !/^(?:生成失败|任务失败)[。！!]?$/.test(error.trim());
+}
 // English product names, keys and file formats can be useful in a Chinese instruction.
 // Everything else (including unfamiliar upstream prose) uses the caller's action-specific fallback.
-const DISPLAY_WORDS = /^(?:Bowerbird|Bcoin|Pro|Studio|Cloud|Codex|ChatGPT|ComfyUI|Jev|Jimeng|Dreamina|Seedream|Seedance|GPT|OpenAI|Agent|CLI|API|DSH|MCP|FFmpeg|Python|tar|x64|Windows|macOS|Mac|Apple|Intel|NVIDIA|AMD|GPU|CPU|RAM|H3|F\d{1,2}|Ctrl|Control|Alt|Shift|Command|Cmd|Option|Esc|Escape|Enter|Tab|Space|Backspace|Delete|PNG|JPE?G|WebP|GIF|AVIF|HEIC|SVG|PDF|PSD|MP4|MOV|WebM|MKV|MP3|WAV|ZIP|JSON|UTF|Markdown|GB|MB|MiB|KB|TB|px|fps|\d{3,4}p|x)$/i;
+const DISPLAY_WORDS = /^(?:Bowerbird|Bcoin|Pro|Studio|Cloud|Codex|ChatGPT|ComfyUI|Jev|Jimeng|Dreamina|Seedream|Seedance|GPT|OpenAI|Agent|CLI|API|DSH|MCP|FFmpeg|Python|tar|x64|Windows|macOS|Mac|Apple|Intel|NVIDIA|AMD|GPU|CPU|RAM|H3|F\d{1,2}|Ctrl|Control|Alt|Shift|Command|Cmd|Option|Esc|Escape|Enter|Tab|Space|Backspace|Delete|PNG|JPE?G|WebP|GIF|AVIF|HEIC|SVG|PDF|PSD|MP4|MOV|WebM|MKV|MP3|WAV|ZIP|JSON|UTF|Markdown|Word|DOCX|XLSX|CSV|GB|MB|MiB|KB|TB|px|fps|\d{3,4}p|x)$/i;
 
 function clearChineseMessage(message: string): boolean {
   return /[\u3400-\u9fff]/.test(message) && message.length <= 240
     && !/[\r\n\x00-\x1f{}<>]|https?:|file:|[a-z]:[\\/]|\\\\|(?:^|[\s：:（("'])\/(?:[^\s/]+\/)|\b[a-z0-9]+(?:_[a-z0-9]+)+\b|\b0x[\da-f]+\b|\b[\da-f]{8}-[\da-f-]{27,}\b|\b[a-z][a-z0-9-]*\.[a-z]{2,}(?:\b|\/)/i.test(message)
-    && (message.match(/\b\d{3,4}p\b|[a-z][a-z0-9]*/gi) ?? []).every(word => DISPLAY_WORDS.test(word));
+    && (message.replace(/\bDeepSeek(?: Harness)?\b/g, "DSH").match(/\b\d{3,4}p\b|[a-z][a-z0-9]*/gi) ?? []).every(word => DISPLAY_WORDS.test(word));
 }
 
 function errorText(error: unknown, depth = 0): string {
@@ -25,9 +30,30 @@ function errorText(error: unknown, depth = 0): string {
   return [code, errorText(value.safe_message ?? value.message ?? value.error, depth + 1)].filter(Boolean).join(": ");
 }
 
+/** A terminal chat completion has no saved reply, even if upstream billing is unresolved. */
+export function cloudChatEndedMessage(error: unknown): string | null {
+  const raw = errorText(error).trim().replace(/^Error:\s*/i, "");
+  const ended = "本轮云端任务已结束，没有可取回的回复。";
+  if (raw === "Cloud 本轮结果暂无法确认，未自动重发；请稍后查看原任务" || raw === "云端回复未完成，请重新发送。") return ended;
+  if (raw === "云端临时回复已过期，本机已保存的历史仍可查看。") return raw;
+  if (!raw.startsWith("chat_no_reply: ")) return null;
+  const message = raw.slice("chat_no_reply: ".length);
+  return clearChineseMessage(message.replace(/HTTP ([45]\d{2})/, "状态码 $1")) ? message : ended;
+}
+
 /** Presentation only: never replace raw errors used for recovery, branching or diagnostics. */
 export function userErrorMessage(error: unknown, fallback = DEFAULT_MESSAGE): string {
+  const ended = cloudChatEndedMessage(error);
+  if (ended) return ended;
   const message = errorText(error).trim();
+  // Legacy DSH builds used this provider code for several malformed-response causes.
+  if (/^(?:Error: )?本机 DSH 本轮失败[：；]/.test(message) && message.includes("MALFORMED_RESPONSE")) {
+    return "本机 DSH 本轮失败：模型回复格式异常，请核对本轮已创建的卡片后重试。";
+  }
+  if (/(?:ComfyUI|Sage Attention|aimdo)/i.test(message) && /illegal memory access|aimdo memory compile error/i.test(message)) return "本机显卡计算中断，请重新运行卡片。";
+  if (/无法连接本机 ComfyUI|error sending request for url \(http:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):1818[89]\/(?:queue|history)/i.test(message)) return "本机生成服务暂时无法响应。";
+  if (/deepseek_context_limit/.test(message)) return "本次内容超过模型可容纳的上下文，请拆分任务后再处理。原文已保留。";
+  if (/deepseek_output_limit/.test(message)) return "模型输出达到自身上限，结果不完整。请拆分任务后再处理。";
   const safeFallback = clearChineseMessage(fallback) ? fallback : DEFAULT_MESSAGE;
   if (/HotKey.*already registered|快捷键.*(注册|占用)|hot.?key.*(register|occupied)/i.test(message)) {
     return "这个快捷键暂时无法使用，可能已被其他应用占用。请换一个组合键，或关闭占用它的应用后重试。";
@@ -57,7 +83,7 @@ export function userErrorMessage(error: unknown, fallback = DEFAULT_MESSAGE): st
 }
 
 /** Generation-only presentation. Keep turn.error and persisted provider diagnostics unchanged. */
-export function generationErrorMessage(error: unknown, context: { provider?: string } = {}): string {
+function describeGenerationFailure(error: unknown, context: { provider?: string }): string | ProviderIssue {
   const message = errorText(error).trim();
   // Result uncertainty outranks any nested transport/provider failure: an original task may still exist.
   if (/视频任务成功但未下载到视频文件/.test(message)) return "视频已生成，但尚未下载到本机。请取回原视频，无需重新生成。";
@@ -72,8 +98,23 @@ export function generationErrorMessage(error: unknown, context: { provider?: str
   }
   if (/ExceedConcurrencyLimit/i.test(message)) return "即梦同时生成的任务数已达上限，请等待已有任务完成后再试。";
   if (/AigcComplianceConfirmationRequired/i.test(message)) return "即梦需要先完成视频生成授权，请前往即梦网页完成授权后重试。";
-  if (context.provider === "jimeng" && /\bunauthorized\b|please login/i.test(message)) return "即梦登录已失效，请到设置重新登录即梦后继续。";
-  if (/启动 (?:codex|dreamina) 失败/i.test(message)) return "未能启动本机生成工具，请到设置检查对应生成方式是否已安装且可用。";
+  const subscription = context.provider === "jimeng" || context.provider === "dreamina" ? "jimeng"
+    : context.provider === "codex" || context.provider === "codex-cli" ? "codex" : null;
+  if (subscription && /未检测到(?:可用的)?\s*(?:dreamina|codex|即梦)\s*CLI|未安装\s*(?:dreamina|codex|即梦)\s*CLI/i.test(message)) {
+    return { message: subscription === "jimeng" ? "即梦自有订阅的本机工具尚未安装，请先配置。"
+      : "ChatGPT 自有订阅的本机工具尚未安装，请先配置。", settings: subscription };
+  }
+  if (/启动 (?:codex|dreamina) 失败/i.test(message)) {
+    const text = "未能启动本机生成工具，请到设置检查对应生成方式是否已安装且可用。";
+    return subscription ? { message: text, settings: subscription } : text;
+  }
+  if (subscription && !/Bowerbird\s*账号|Cloud\s*账号/i.test(message)
+    && /未检测到有效登录态|未登录|尚未登陆|请先登[录陆]|登录(?:已)?(?:失效|过期)|\b(?:unauthorized|unauthenticated|not[_ ](?:logged[_ ]in|authenticated)|login[_ ]required|please (?:log\s?in|sign in)|session_expired|token[_ ]expired)\b/i.test(message)) {
+    return { message: subscription === "jimeng"
+      ? "即梦自有订阅未登录或登录已失效，请在设置中登录即梦后继续。"
+      : "ChatGPT 自有订阅未登录或登录已失效，请在设置中登录 Codex 后继续。",
+      settings: subscription };
+  }
   if (/you(?:'|’)ve hit your usage limit|usage_limit_reached/i.test(message)) {
     return context.provider === "codex" || /codex/i.test(message)
       ? "当前 ChatGPT 账号的使用额度已用完，请等待额度恢复，或切换生成方式。"
@@ -111,4 +152,13 @@ export function generationErrorMessage(error: unknown, context: { provider?: str
   // code must not discard an otherwise helpful validation/refund/recovery instruction.
   const withoutCode = message.replace(/\s+\[code: [^\]\r\n]+\]$/, "");
   return userErrorMessage(withoutCode, "生成未完成，暂时无法确定具体原因。请稍后重试；若反复出现，可复制会话诊断信息联系支持。");
+}
+
+export function generationFailure(error: unknown, context: { provider?: string } = {}): ProviderIssue {
+  const failure = describeGenerationFailure(error, context);
+  return typeof failure === "string" ? { message: failure } : failure;
+}
+
+export function generationErrorMessage(error: unknown, context: { provider?: string } = {}): string {
+  return generationFailure(error, context).message;
 }

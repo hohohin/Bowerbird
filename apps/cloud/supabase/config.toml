@@ -76,6 +76,9 @@ verify_jwt = true
 [functions.code-admin]
 verify_jwt = true
 
+[functions.comfy-download]
+verify_jwt = true
+
 [functions.chat-proxy]
 verify_jwt = true
 

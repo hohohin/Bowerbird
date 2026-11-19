@@ -1,0 +1,7 @@
+.spreadsheet-document .text-document-toolbar { flex-wrap: nowrap; }
+.spreadsheet-tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; }
+.spreadsheet-tabs button { flex-shrink: 0; white-space: nowrap; }
+.spreadsheet-tabs button[aria-selected=true] { color: var(--bb-ink); box-shadow: inset 0 -2px var(--bb-blue); }
+.spreadsheet-scroll { flex: 1; min-height: 0; overflow: auto; padding: 16px; outline-color: var(--bb-blue); }
+.spreadsheet-scroll table { border-collapse: collapse; font-size: 13px; line-height: 1.7; text-align: left; user-select: text; }
+.spreadsheet-scroll td { min-width: 100px; max-width: 400px; padding: 8px 12px; border: 1px solid var(--bb-line); white-space: pre-wrap; overflow-wrap: anywhere; vertical-align: top; }

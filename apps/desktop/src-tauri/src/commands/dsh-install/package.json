@@ -1,0 +1,7 @@
+{
+  "name": "bowerbird-local-dsh",
+  "private": true,
+  "dependencies": {
+    "@deepseek-ai/dsh": "https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.2.2-rc.1.tgz"
+  }
+}

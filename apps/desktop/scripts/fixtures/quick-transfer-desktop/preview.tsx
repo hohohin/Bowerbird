@@ -70,7 +70,12 @@ w.__TAURI_INTERNALS__ = {
       if (w.holdStatus) await new Promise<void>(resolve => { w.releaseStatus = resolve; });
       return snapshot;
     }
-    if (command === "plugin:dialog|open") return w.cancelPicker ? null : "D:\\素材\\手机快传";
+    if (command === "plugin:dialog|open") return w.cancelPicker ? null : w.pickFiles ?? "D:\\素材\\手机快传";
+    if (command === "quick_transfer_send_start") {
+      w.emit({ sending: { url: `http://${args.address}:53318/?pin=87654321`, files: args.files.map((path: string) => ({ id: path, name: path.split(/[\\/]/).pop(), size: 1234 })) } });
+      return w.snapshot;
+    }
+    if (command === "quick_transfer_send_stop") { w.emit({ sending: null }); return w.snapshot; }
     if (command === "quick_transfer_start") {
       const snapshot = { ...w.snapshot, revision: w.snapshot.revision + 1, active: true,
         directory: "D:\\BowerbirdLibrary\\快传", url: `http://${args.address}:53317/?pin=01234567` };

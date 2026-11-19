@@ -1,5 +1,13 @@
-import type { EntitlementSnapshot, FeaturePolicy } from "../lib/types";
-import { isCloudProvider } from "../lib/genProviders";
+import { hasComfyEntitlement } from "./comfyVideo";
+import { H3_IMAGE } from "./genProviders";
+import type { EntitlementSnapshot, FeaturePolicy, GenJob } from "../lib/types";
+import { isCloudProvider, normalizeGenerationProvider } from "../lib/genProviders";
+
+/** 账号界面只展示当前身份有效快照中的余额和订阅。 */
+export function accountEntitlement(snapshot: EntitlementSnapshot | null, userId?: string | null) {
+  return userId && snapshot?.user_id === userId && snapshot.offline_state !== "expired" && snapshot.offline_state !== "invalid"
+    ? snapshot : null;
+}
 
 /** 服务端派生的免费权益兜底（未同步/未登录时与 Rust FeaturePolicy::free 对齐）。 */
 export const FREE_POLICY: FeaturePolicy = {
@@ -53,6 +61,7 @@ export function canUseGenerationProvider(
   provider: string | null | undefined,
 ): boolean {
   const policy = effectivePolicy(entitlement);
+  if (provider === H3_IMAGE) return hasComfyEntitlement(entitlement);
   return isCloudProvider(provider) ? policy.can_use_cloud : policy.can_use_byo;
 }
 
@@ -66,12 +75,19 @@ export function understandProvider(
   return null;
 }
 
-/** 创作板发送时的并发闸：max_parallel_jobs 决定允许同时运行的生成任务数。 */
+/** 即梦自有订阅由供应商控制并发。其在途任务不占其他生成渠道的名额。 */
+export function countLimitedGenerationJobs(jobs: Record<string, GenJob>): number {
+  return Object.values(jobs).filter(job => job.running && normalizeGenerationProvider(job.provider) !== "jimeng").length;
+}
+
 export function canStartAnotherJob(
   entitlement: EntitlementSnapshot | null,
   runningCount: number,
+  provider: string,
 ): boolean {
-  return runningCount < effectivePolicy(entitlement).max_parallel_jobs;
+  const policy = effectivePolicy(entitlement);
+  if (normalizeGenerationProvider(provider) === "jimeng") return policy.can_use_byo;
+  return runningCount < policy.max_parallel_jobs;
 }
 
 /**

@@ -3,7 +3,7 @@ import type { ImageInput, MockScenario } from "../_shared/ark.ts";
 import { requireUser } from "../_shared/auth.ts";
 import { ensureDailyCredits } from "../_shared/billing.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
-import { assertBodySize, assertReferenceImages, corsHeaders } from "../_shared/limits.ts";
+import { assertBodySize, readJsonBody, assertReferenceImages, corsHeaders } from "../_shared/limits.ts";
 import { reserveManagedUsage } from "../_shared/usage.ts";
 import { LAYER_SERVICES, validateLayerRequest, type LayerOptions } from "../_shared/layer-contract.ts";
 import { validateVideoInput, videoService, type CloudVideoOptions, type VideoReference, type AudioReference, type VideoInput } from "../_shared/video-contract.ts";
@@ -112,7 +112,16 @@ async function ownJob(admin: SupabaseClient, userId: string, jobId: string): Pro
   return data as unknown as GenerationJob;
 }
 
+async function inspectImageUpload(admin: SupabaseClient, job: GenerationJob, enqueue = false): Promise<GenerationJob> {
+  const { data, error } = await admin.rpc("inspect_image_upload", {
+    p_job_id: job.id, p_user_id: job.user_id, p_enqueue: enqueue,
+  });
+  if (error || !data) throw new ApiError("internal_error", "读取图片上传进度失败，请按原任务恢复", true);
+  return data as GenerationJob;
+}
+
 async function jobResponse(admin: SupabaseClient, job: GenerationJob, cors: HeadersInit): Promise<Response> {
+  if (job.status === "uploading" && job.service.startsWith("image_")) job = await inspectImageUpload(admin, job);
   const common = {
     status: job.status,
     job_id: job.id,
@@ -248,8 +257,9 @@ async function createJob(
   if (job && job.input_manifest_hash !== manifestHash) {
     throw new ApiError("invalid_request", "幂等键已用于不同的生成内容", false, 409);
   }
+  if (job?.status === "uploading" && body.media === "image") job = await inspectImageUpload(admin, job);
   if (job && job.status !== "uploading") return await jobResponse(admin, job, cors);
-  if (job && Date.parse(job.content_expires_at) <= Date.now()) throw new ApiError("invalid_request", "上传已过期，请取消原任务后重新开始");
+  if (job && body.media === "video" && Date.parse(job.content_expires_at) <= Date.now()) throw new ApiError("invalid_request", "上传已过期，请取消原任务后重新开始");
 
   if (!job) {
     const requestObjectKey = `jobs/${jobId}/inputs/request.json`;
@@ -303,9 +313,13 @@ async function createJob(
       }
     }
     if (missingUploads.length) return jsonResponse({ status: "uploading", remote_task_id: job.id, reference_uploads: missingUploads }, 202, cors);
-    const { data, error } = await admin.rpc("enqueue_generation_job", { p_job_id: job.id, p_user_id: userId });
-    if (error || !data) throw new ApiError("internal_error", "云任务入队失败", true);
-    job = data as unknown as GenerationJob;
+    if (body.media === "image") {
+      job = await inspectImageUpload(admin, job, true);
+    } else {
+      const { data, error } = await admin.rpc("enqueue_generation_job", { p_job_id: job.id, p_user_id: userId });
+      if (error || !data) throw new ApiError("internal_error", "云任务入队失败", true);
+      job = data as unknown as GenerationJob;
+    }
   } catch (error) {
     try {
       await admin.rpc("fail_uploading_generation_job", { p_job_id: job.id, p_user_id: userId });
@@ -329,7 +343,7 @@ Deno.serve(async (request) => {
     assertBodySize(request);
     const { user, admin } = await requireUser(request);
     userId = user.id;
-    const raw = await request.json() as Record<string, unknown>;
+    const raw = await readJsonBody(request);
     const action = typeof raw.action === "string" ? raw.action : "";
     const jobId = typeof raw.job_id === "string"
       ? raw.job_id

@@ -2,6 +2,88 @@
 
 这里存放 Bowerbird 的 Windows 开发、构建与独立扩展加载工具。平台兼容行为已经并入项目主源码；脚本只把 canonical 项目复制到 Windows/.work，不再用整文件 override 替换源码。Windows/overrides/ 仅保留退役说明，不参与构建。
 
+## Windows 26.11.1801 已发布（2026-11-18）
+
+源码 57afb840，官网和自动更新已切换。H3 优化历史与重试、模型／推理选择、Agent 建卡参数、组图与表格连线、Markdown 拖入画板及维度入口随包发布。配套 Worker／chat-proxy 已核验。原生 1319 项、六组冻结界面及完整类型／生产构建通过；历史单项失败边界见 [验证与回滚](../dev-doc/DESKTOP-UPDATES.md#windows-26111801-已公开发布2026-11-18)。安装默认中文，可选 English。
+
+[下载 Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1801_x64-setup.exe)。
+
+## Windows 26.11.1706 已发布（2026-11-17）
+
+源码 ff14fda8。应用内更新说明：优化文件管理问题，提升使用体验；提高应用稳定性。本轮原件／分身回收即时反馈、缓存与失败恢复、关联分身补查及扫描校验优化随包发布；1316 项原生和九组冻结界面通过，旧批量菜单脚本未计通过。中文默认、English 可选，签名与 CDN 回读通过。[验证与回滚](../dev-doc/DESKTOP-UPDATES.md#windows-26111706-已公开发布2026-11-17)。
+
+[下载 Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1706_x64-setup.exe)。
+
+## Windows 26.11.1705 已发布（2026-11-17）
+
+源码 dc1b420e，已包含本轮最后补入的素材移动与目录导出修改。隐藏入门引导、画板删除分流与撤销、项目／文件夹移动及目录／ZIP 导出、视频／H3 布局、Cloud DSH 入口及支付提示同步更新。1309 项原生、十五组冻结界面、原签名与 CDN 回读通过。安装默认中文、English 可选。[验证与回滚](../dev-doc/DESKTOP-UPDATES.md#windows-26111705-已公开发布2026-11-17)。
+
+[下载 Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1705_x64-setup.exe)。
+
+## Windows 26.11.1704 已发布（2026-11-17）
+
+源码 88aca8a9。画板交互和批量建卡优化、模型收藏及 Seedream 子菜单、H3 首尾帧操作和图片提示词优化、本机 DSH 逐轮投递；配套云端视频规则已同步。原生 1301 项、九组冻结界面与图片菜单专项通过，中文默认／English、签名和 CDN 回读核验通过。完整边界与回滚见 [桌面更新](../dev-doc/DESKTOP-UPDATES.md#windows-26111704-已公开发布2026-11-17)。
+
+[下载 Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1704_x64-setup.exe)。
+
+## Windows 26.11.1703 已发布（2026-11-17）
+
+源码 a8c110fb。设置与订阅入口整理、DeepSeek 退出登录、后台更新检查、入库自动分析仅本地、通知与探索交互修正。1301 项原生与八组冻结界面通过，中文默认／English 可选、原签名及 CDN 完整下载验证通过。发布与回滚见 [桌面更新](../dev-doc/DESKTOP-UPDATES.md#windows-26111703-已公开发布2026-11-17)。
+
+[下载 Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1703_x64-setup.exe)。
+
+## Windows 26.11.1702 已发布（2026-11-17）
+
+源码 f6124a8a 已冻结推送，官网与自动更新已切换。包含运行中触发线编辑和不同目标并发、采集图片直接入当前项目画板及通知／探索交互修复。扩展 0.5.2，浏览器更新后需重新加载。1301 项原生通过、49 项跳过，四组冻结桌面专项、扩展 21 项逻辑与采集界面、2230 个输入和 80 个资源通过核验。安装器首次默认简体中文，可选 English。[完整证据与回滚](../dev-doc/DESKTOP-UPDATES.md#windows-26111702-已公开发布2026-11-17)。
+
+[下载 Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1702_x64-setup.exe)。
+
+## Windows 26.11.1701 已发布（2026-11-17）
+
+补齐最新画板缩放、拖动、悬停、连线跟随与避让、视口外绘制裁剪。冻结源码 44f6e491 已推送，官网与自动更新已切换。安装器首次默认简体中文，可选 English。类型、三组冻结界面、2229 个输入、80 个资源和 CDN 包签名验证通过。[验证范围与回滚](../dev-doc/DESKTOP-UPDATES.md#windows-26111701-已公开发布2026-11-17)。
+
+[下载 Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1701_x64-setup.exe)。
+
+## Windows 26.11.1601 已发布（2026-11-17）
+
+源码 32239f02 已推送并冻结。官网与自动更新已切换，安装器首次默认简体中文，可选 English。1299 项原生通过、49 项跳过，九组冻结界面、63 项逻辑、38 项官网、2227 个冻结输入及 80 个包资源核验通过。详见[发布范围、证据和回滚](../dev-doc/DESKTOP-UPDATES.md#windows-26111601-已公开发布2026-11-17)。
+
+[下载 Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1601_x64-setup.exe)。
+
+## Windows 26.11.1001 已发布（2026-11-10）
+
+最终源码 **b5302da2** 已存档推送并冻结签名，官网与自动更新已切换。包含角色声音、强化复刻、播放器／音轨、办公文档、统一 Agent、素材库与创作框，以及标注覆盖原图；修复索引影响原件恢复身份的问题。冻结 Rust 1207 passed／41 ignored、23 组界面、2104 输入及 76 资源、中文／English、原公钥验签与完整 CDN 下载通过。SQLite 0056；后续并行增量未纳入。
+
+[下载 Windows 安装包](https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1001_x64-setup.exe)。安装包哈希、云端配套核验、真实使用边界和保留现役网关的回滚步骤见 [桌面更新](../dev-doc/DESKTOP-UPDATES.md#windows-26111001-已发布2026-11-10)。
+
+## Windows 26.11.602 已发布（2026-11-06）
+
+Cloud 全通路网关与 Agent 原请求恢复已随签名包发布，源码 4b3c4b92；自动更新入口已切换。原签名、更新保留登录、冻结源码及完整 CDN 下载已验证；故障电脑实机升级／真实优化仍待验。证据、安装包哈希与保留新网关的回滚步骤见 [桌面自动更新](../dev-doc/DESKTOP-UPDATES.md#windows-2611602-已发布2026-11-06)。
+
+## Windows 26.11.601 已发布（2026-11-06）
+
+2026-11-06 14:05:58（北京时间）本机公网复核通过。源码 **4ae78ee6** 已与文档同次存档推送后冻结构建，发布素材库四级视图与投影控件、项目范围记忆、文本完整编辑／最近文档／本地自动保存、Codex 模型与推理选择、本机及应用托管 DSH 接入、快传原件发送、探索视频采集入口、同会话生成组图、连线与文本聚焦修复及 H3 独立提示词优化。SQLite **0053**，插件 **0.3.1**；Cloud 音频参考 0079／Edge／Worker／网关未部署，桌面在创建音频任务前检测服务端能力并拒绝不支持的请求；DeepSeek Cloud 未启用。Mac 保持 ARM 801／Intel 1501，现有视频及赠币服务和 Mock 支付保持。
+
+TypeScript／Vite、Rust 1145 passed／34 ignored、18 组桌面专项、154 项前端测试及 30 项官网回归通过；1996 个冻结输入与 Git 核对、76 个资源（含 LocalSend 许可证与修改说明）、x64／双语安装器／更新登录保留钩子、原公钥验签及篡改拒绝、包内原生媒体／等待和生产 bundle 检查通过。Rust 测试仅向独立测试 EXE 副本嵌入 Common Controls v6 清单，正式构建未修改。未替用户安装／重启应用、迁移真实素材库或调用付费模型；用户库原生升级、真手机端到端、真实站点采集和 Mac 原生仍需各自验收。
+
+安装包 `Bowerbird_26.11.601_x64-setup.exe`：**107520776 bytes**，SHA-256 `7ceff64504c8ab5939e2b4ca7237fbfe9bd9fd8ce1bb13eb1e571dacf62be514`。TOS／CDN 完整回读、Range 206、CDN 包原公钥验签通过后才切更新。候选／现役／公网三平台清单、签名、双首页下载、旧包、后台及账号／Cloud 网关拒绝边界通过。
+
+现役 `/opt/bowerbird/website-releases/20261106-windows-26.11.601`，回滚 `/opt/bowerbird/website-releases/20261105-windows-26.11.502`；只改 Windows 下载与清单相关 5 个文件，82 个其他文件保持，后台、账号／Cloud 代理、Nginx、Mac 清单及旧包保留。
+
+证据：本机 `.tmp/release-windows-26.11.601/`，VPS `/tmp/bowerbird-release-windows-26.11.601/`；`rollback.sh` 恢复 502 官网，不自动降级客户端或回退账本。
+
+## Windows 26.11.502 已发布（2026-11-05）
+
+2026-11-05 20:17:32（北京时间）本机公网复核通过。源码 **3f545a13** 已与文档同次存档推送后冻结构建，发布本机 Codex 对话内 HyperFrames 视频制作、预览、渲染与成片播放，续聊复用成功工程，旧对话工具升级及停止／中断保护；素材库生成任务提示所属项目并支持点击跳转。SQLite **0052**，插件 **0.3.1**；Cloud 音频参考 0079／Edge／Worker／网关未部署，桌面在创建音频任务前检测服务端能力并拒绝不支持的请求；DeepSeek Cloud 未启用。Mac 保持 ARM 801／Intel 1501，现有视频及赠币服务和 Mock 支付保持。
+
+TypeScript／Vite、Rust 1115 passed／33 ignored、6 组桌面专项、94 项前端测试及 30 项官网回归通过；1723 个冻结输入与 Git 核对、76 个资源（含 LocalSend 许可证与修改说明）、x64／双语安装器／更新登录保留钩子、原公钥验签及篡改拒绝、包内原生媒体／等待和生产 bundle 检查通过。Rust 测试仅向独立测试 EXE 副本嵌入 Common Controls v6 清单，正式构建未修改。未替用户安装／重启应用、迁移真实素材库或调用付费模型；用户库原生升级、真手机端到端、真实站点采集和 Mac 原生仍需各自验收。
+
+安装包 `Bowerbird_26.11.502_x64-setup.exe`：**87380290 bytes**，SHA-256 `f2ad357db8704d48993aa9c47ec3eb7312ad5880947dd08c87aff83b367ca839`。TOS／CDN 完整回读、Range 206、CDN 包原公钥验签通过后才切更新。候选／现役／公网三平台清单、签名、双首页下载、旧包、后台及账号／Cloud 网关拒绝边界通过。
+
+现役 `/opt/bowerbird/website-releases/20261105-windows-26.11.502`，回滚 `/opt/bowerbird/website-releases/20261105-windows-26.11.501`；只改 Windows 下载与清单相关 5 个文件，82 个其他文件保持，后台、账号／Cloud 代理、Nginx、Mac 清单及旧包保留。
+
+证据：本机 `.tmp/release-windows-26.11.502/`，VPS `/tmp/bowerbird-release-windows-26.11.502/`；`rollback.sh` 恢复 501 官网，不自动降级客户端或回退账本。
+
 ## Windows 26.11.501 已发布（2026-11-05）
 
 2026-11-05 12:25:34（北京时间）本机公网复核通过。源码 **7b9d8626** 已与文档同次存档推送后冻结构建，发布投影 HUD 创作框与图片预览续聊、段落 Agent／Markdown 快捷编辑与两行文档预览、共用截图标注、Pinterest／小红书采集修复、失效原件清理与标签拖放、统一加号连线和四种工作流触发模式、本机 H3 三模式及 Codex HyperFrames 视频 Skill／独立 Studio。SQLite **0052**，插件 **0.3.1**；Cloud 音频参考 0079／Edge／Worker／网关未部署，桌面在创建音频任务前检测服务端能力并拒绝不支持的请求；DeepSeek Cloud 未启用。Mac 保持 ARM 801／Intel 1501，现有视频及赠币服务和 Mock 支付保持。
@@ -143,6 +225,8 @@ cargo test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml 
 2. Node.js 22 LTS+，并启用 pnpm：`corepack enable`。
 3. Rust MSVC 工具链：`rustup default stable-x86_64-pc-windows-msvc`。
 4. Visual Studio 2022 Build Tools，勾选“使用 C++ 的桌面开发”和 Windows 10/11 SDK。
+
+   构建正式安装包还需把 7-Zip 的 `7z.exe` 加入 PATH。`build.ps1` 调用 `verify-installer.ps1` 从最终 NSIS 包读取主程序，核对安装包与主程序的产品版本及主程序的 x64 架构，再生成签名清单。
 5. AI 功能可在应用内一键安装 codex CLI（自动下载独立版，无需 Node.js）并登录 ChatGPT；不安装时素材库仍可用，AI 按项目约定降级置灰。
 6. Windows 视频封面在 2026-10-23 后续源码中优先通过独立 Media Foundation 子进程提取，常见 H.264 MP4 不再要求安装 `ffmpeg`；Windows 26.10.2301 已包含此修复，2203 及更早版本需更新。系统缺少解码器或原生提取失败时回退已有 `ffmpeg`。尺寸/时长依次尝试 MP4/MOV/M4V 内置解析、独立 Media Foundation 读取、已有可选 `ffprobe`；不随包附带或自动下载工具。分片 MP4 依据样本时序取时长，普通旋转视频按显示方向取宽高；特殊编码仍可能需要 ffprobe，裁剪/分析转码仍需要 FFmpeg。工具发现检查随附目录、PATH、Windows 注册表 Path 及常见 WinGet/Scoop/Chocolatey 安装位置，特殊安装可用 `BOWERBIRD_FFMPEG_BINARY` / `BOWERBIRD_FFPROBE_BINARY` 指定绝对路径。图片功能不依赖它们。
 
@@ -180,7 +264,9 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --lib installation
 powershell -ExecutionPolicy Bypass -File .\Windows\build.ps1 -Clean
 ```
 
-脚本先执行 TypeScript 检查和 Rust 测试，再生成 `Windows/dist/Bowerbird_*_x64-setup.exe`。仅在已单独验证时可用 `-SkipTests` 跳过测试。
+脚本先执行 TypeScript 检查和 Rust 测试，再生成 `Windows/dist/Bowerbird_*_x64-setup.exe`。清单生成器核对 updater 签名及紧邻安装包的 `<安装包>.verification.json`，要求测试通过、SHA-256、版本、平台和文件名均匹配。请从可信构建或独立 QA 批次取得记录，保存原始测试输出。需要独立记录时可在原参数后传入测试记录路径，省略发版说明时第四个参数传空字符串。
+
+`-SkipTests` 的输出在 `Windows/dist/untested/<SHA-256>/`，含安装包、签名和跳测记录。晋级须提供同一冻结输入和安装包的等效 TypeScript、Rust 通过记录，再用清单生成器验签、校验实包哈希。审核样本的 [42 项忽略用例处置](RELEASE-IGNORED-2026-11-11.md) 单独记录。发布者 Authenticode 结果和 updater 验签分别登记。
 
 ## 应用内更新
 

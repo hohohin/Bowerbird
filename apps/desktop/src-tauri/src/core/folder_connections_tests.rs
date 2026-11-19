@@ -1,6 +1,215 @@
 use super::*;
 
 #[test]
+fn create_folder_uses_current_files_root_or_picked_parent_and_refuses_collisions() {
+    let f = Fixture::new();
+    let default = f._temp.path().join("BowerbirdLibrary");
+    let files = super::super::file_workspace::FileWorkspace::open(f._temp.path().join("files.json"), default.clone()).unwrap();
+    assert!(!default.exists());
+    let first = f.db.create_connected_directory(&files, None, None, "作品", None).unwrap();
+    assert_eq!(Path::new(&f.db.connected_folder(&first).unwrap().path), directory(&default.join("作品")).unwrap());
+    assert!(!f.paths.root.join("作品").exists());
+    files.configure(&f.source).unwrap();
+    let second = f.db.create_connected_directory(&files, None, None, "作品", None).unwrap();
+    assert_eq!(Path::new(&f.db.connected_folder(&second).unwrap().path), f.source.join("作品"));
+    let picked = f.db.create_connected_directory(&files, None, Some(&f.target), "外部", None).unwrap();
+    assert_eq!(Path::new(&f.db.connected_folder(&picked).unwrap().path), f.target.join("外部"));
+    fs::write(f.target.join("外部").join("keep.txt"), "existing").unwrap();
+    assert!(f.db.create_connected_directory(&files, None, Some(&f.target), "外部", None).unwrap_err().to_string().contains("同名"));
+    assert!(f.target.join("外部").join("keep.txt").is_file());
+    assert_eq!(files.proposed_root(), f.source);
+    assert!(f.db.create_connected_directory(&files, None, Some(&f.target.join("absent")), "外部", None).unwrap_err().to_string().contains("父目录不可访问"));
+}
+
+#[test]
+fn create_folder_in_connected_tree_registers_unscanned_ancestors_and_rolls_back_failed_project_link() {
+    let f = Fixture::new();
+    let files = super::super::file_workspace::FileWorkspace::open(f._temp.path().join("files.json"), f._temp.path().join("unused")).unwrap();
+    let root = f.connect(&f.source);
+    let nested = f.source.join("unscanned").join("parent");
+    fs::create_dir_all(&nested).unwrap();
+    f.db.create_project("p", "测试", "blank:p", "blank:p", "blank").unwrap();
+    f.db.conn.lock().unwrap().execute_batch("CREATE TEMP TRIGGER fail_link BEFORE INSERT ON connected_folder_projects BEGIN SELECT RAISE(ABORT,'injected'); END;").unwrap();
+    for base in [&f.target, &nested] {
+        assert!(f.db.create_connected_directory(&files, None, Some(base), "子目录", Some("p")).is_err());
+        assert!(!base.join("子目录").exists());
+    }
+    assert_eq!(f.db.connected_root_ids().unwrap(), vec![root.clone()]);
+    assert_eq!(f.db.connection_folders(None, None).unwrap().len(), 1);
+    f.db.conn.lock().unwrap().execute_batch("DROP TRIGGER fail_link").unwrap();
+    let id = f.db.create_connected_directory(&files, None, Some(&nested), "子目录", Some("p")).unwrap();
+    let folder = f.db.connected_folder(&id).unwrap();
+    assert_eq!(folder.root_id, root);
+    let parent = f.db.connected_folder(&folder.parent_id.unwrap()).unwrap();
+    assert_eq!(Path::new(&parent.path), nested);
+    let linked: bool = f.db.conn.lock().unwrap().query_row(
+        "SELECT EXISTS(SELECT 1 FROM connected_folder_projects WHERE folder_id=?1 AND project_id='p')",
+        [&id], |row| row.get(0)).unwrap();
+    assert!(linked);
+    let child = f.db.create_connected_directory(&files, Some(&id), None, "另一个", None).unwrap();
+    assert_eq!(f.db.connected_folder(&child).unwrap().parent_id.as_deref(), Some(id.as_str()));
+    f.db.scan_connection(&f.paths, &root).unwrap();
+    assert_eq!(f.db.connected_root_ids().unwrap(), vec![root]);
+    assert_eq!(f.db.connection_folders(None, None).unwrap().len(), 5);
+}
+
+fn original_canvas_fixture() -> (Fixture, Vec<AssetOriginal>) {
+    use crate::core::{creative_session_contract::{CreativeNodeKind, CreativeNodeRole, CreativeThreadOrigin, CreativeEdgeKind}, project_canvas::{NewCanvasNode, NewCreativeThread, NewCanvasEdge}};
+    let mut f = Fixture::new();
+    f.db = Database::open(&f._temp.path().join("canvas.sqlite")).unwrap();
+    f.db.migrate().unwrap();
+    image::RgbImage::from_pixel(8, 8, image::Rgb([90, 40, 60])).save(f.source.join("two.png")).unwrap();
+    let root = f.connect(&f.source);
+    let ids: Vec<_> = f.entries(&root).into_iter().map(|entry| entry.asset_id).collect();
+    let originals = f.db.preview_asset_originals(&ids).unwrap();
+    for project in ["delete-main", "delete-other"] {
+        f.db.create_project(project, project, &format!("blank:{project}"), project, "blank").unwrap();
+        f.db.ensure_project_canvas(project).unwrap();
+        f.db.create_creative_thread(&NewCreativeThread { id: project.into(), project_id: project.into(), title: "history".into(), origin: CreativeThreadOrigin::Direct }).unwrap();
+    }
+    let prompt = NewCanvasNode { id: "delete-prompt".into(), project_id: "delete-main".into(), thread_id: Some("delete-main".into()), kind: CreativeNodeKind::Prompt, asset_id: None, role: None,
+        payload_json: r#"{"schema_version":1,"job_id":"delete-job","text":"保留生成历史","status":"done"}"#.into(),
+        x: 10., y: 20., width: 200., height: 160., z_index: 1, position_locked: false };
+    f.db.create_canvas_node(&prompt).unwrap();
+    for (index, original) in originals.iter().enumerate() {
+        let node = NewCanvasNode { id: format!("delete-output-{index}"), kind: CreativeNodeKind::Asset, asset_id: Some(original.asset_id.clone()), role: Some(CreativeNodeRole::Output),
+            payload_json: r#"{"schema_version":1,"snapshot":{"name":"generated"}}"#.into(), ..prompt.clone() };
+        f.db.create_canvas_node(&node).unwrap();
+        f.db.create_canvas_edge(&NewCanvasEdge { id: format!("delete-edge-{index}"), project_id: prompt.project_id.clone(), thread_id: "delete-main".into(),
+            from_node_id: prompt.id.clone(), to_node_id: node.id.clone(), kind: CreativeEdgeKind::Produced, ordinal: index as i64 }).unwrap();
+    }
+    // One physical file can have multiple registered identities and project instances.
+    f.db.conn.lock().unwrap().execute("INSERT INTO assets(id,name,ext,source,store_path) SELECT 'delete-alias',name,ext,source,store_path FROM assets WHERE id=?1", [&originals[0].asset_id]).unwrap();
+    f.db.create_canvas_node(&NewCanvasNode { id: "delete-copy".into(), project_id: "delete-other".into(), thread_id: None, kind: CreativeNodeKind::Asset, asset_id: Some("delete-alias".into()), role: Some(CreativeNodeRole::Reference),
+        payload_json: r#"{"schema_version":1,"snapshot":{"name":"copy"}}"#.into(), ..prompt }).unwrap();
+    (f, originals)
+}
+
+#[test]
+fn canvas_project_removal_preserves_other_projects_files_and_history() {
+    let (f, originals) = original_canvas_fixture();
+    let first = &originals[0].asset_id;
+    f.db.conn.lock().unwrap().execute("UPDATE canvas_nodes SET asset_id=?1 WHERE id='delete-copy'", [first]).unwrap();
+    f.db.add_assets_to_project("delete-other", &[first.clone()]).unwrap();
+    for (index, original) in originals.iter().enumerate() {
+        let ids = [original.asset_id.clone()];
+        f.db.add_assets_to_project("delete-main", &ids).unwrap();
+        assert_eq!(f.db.remove_assets_from_project("delete-main", &ids, true).unwrap(), 1);
+        assert!(std::path::Path::new(&original.path).exists());
+        assert!(f.db.get_canvas_node(&format!("delete-output-{index}")).unwrap().unwrap().hidden_at.is_some());
+        assert_eq!(f.db.get_canvas_node("delete-prompt").unwrap().unwrap().hidden_at.is_some(), index == 1);
+    }
+    let reopened = Database::open(&f._temp.path().join("canvas.sqlite")).unwrap();
+    assert!(reopened.get_canvas_node("delete-copy").unwrap().unwrap().hidden_at.is_none());
+    assert!(reopened.conn.lock().unwrap().query_row("SELECT EXISTS(SELECT 1 FROM project_assets WHERE project_id='delete-other' AND asset_id=?1)", [first], |row| row.get::<_, bool>(0)).unwrap());
+    let snapshot = reopened.project_canvas_snapshot("delete-main").unwrap();
+    assert!(snapshot.nodes.iter().all(|node| node.hidden_at.is_some()));
+    assert_eq!(snapshot.edges.len(), 2);
+}
+
+#[test]
+fn original_canvas_trash_hides_instances_and_last_output_but_keeps_history() {
+    let (f, originals) = original_canvas_fixture();
+    let before = f.db.list_canvas_nodes("delete-main").unwrap();
+    assert!(f.db.trash_asset_original_with(&originals[0], |_| Err(invalid("recycle failure"))).is_err());
+    assert_eq!(f.db.list_canvas_nodes("delete-main").unwrap(), before, "failed recycling rolls back canvas visibility too");
+    for (index, original) in originals.iter().enumerate() {
+        f.db.trash_asset_original_with(original, |path| { fs::remove_file(path)?; Ok(()) }).unwrap();
+        assert!(f.db.get_canvas_node(&format!("delete-output-{index}")).unwrap().unwrap().hidden_at.is_some());
+        assert_eq!(f.db.get_canvas_node("delete-prompt").unwrap().unwrap().hidden_at.is_some(), index == 1, "keep a generation card while another original remains");
+        assert!(f.db.get_asset(&original.asset_id).unwrap().is_some());
+    }
+    assert!(f.db.get_canvas_node("delete-copy").unwrap().unwrap().hidden_at.is_some(), "same-file aliases in other projects disappear too");
+    let snapshot = f.db.project_canvas_snapshot("delete-main").unwrap();
+    assert_eq!(snapshot.nodes.len(), before.len());
+    assert!(snapshot.nodes.iter().all(|node| node.hidden_at.is_some()));
+    assert_eq!(snapshot.nodes.iter().find(|node| node.id == "delete-prompt").unwrap().payload_json,
+        before.iter().find(|node| node.id == "delete-prompt").unwrap().payload_json);
+    assert_eq!(snapshot.edges.len(), 2, "history edges are retained");
+    let reopened = Database::open(&f._temp.path().join("canvas.sqlite")).unwrap();
+    assert!(reopened.project_canvas_snapshot("delete-main").unwrap().nodes.iter().all(|node| node.hidden_at.is_some()));
+}
+
+#[test]
+fn original_canvas_missing_cleanup_repairs_old_residue_and_is_idempotent() {
+    let (f, originals) = original_canvas_fixture();
+    for original in &originals {
+        fs::remove_file(&original.path).unwrap();
+        // Simulate a previous version that marked the file missing but left visible nodes.
+        f.db.conn.lock().unwrap().execute("INSERT INTO removed_missing_asset_originals(asset_id,path) VALUES(?1,?2)", params![original.asset_id, original.path]).unwrap();
+    }
+    for original in &originals {
+        let missing = f.db.preview_asset_originals(&[original.asset_id.clone()]).unwrap().remove(0);
+        f.db.trash_asset_original_with(&missing, |_| panic!("missing cleanup must not recycle files")).unwrap();
+        f.db.trash_asset_original_with(&missing, |_| panic!("repeat cleanup must not recycle files")).unwrap();
+    }
+    assert!(f.db.project_canvas_snapshot("delete-main").unwrap().nodes.iter().all(|node| node.hidden_at.is_some()));
+    assert!(f.db.get_canvas_node("delete-copy").unwrap().unwrap().hidden_at.is_some());
+    assert_eq!(f.db.project_canvas_snapshot("delete-main").unwrap().edges.len(), 2);
+}
+
+#[test]
+fn gallery_counts_pages_filters_and_members_keep_folder_entry_identity() {
+    let f = Fixture::new();
+    for (name, color) in [("a-old.png", 80), ("b-new.png", 140)] {
+        image::RgbImage::from_pixel(8, 8, image::Rgb([color, 40, 60])).save(f.source.join(name)).unwrap();
+    }
+    let root = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let entries = f.entries(&root);
+    let old = entries.iter().find(|e| e.name == "a-old.png").unwrap();
+    let new = entries.iter().find(|e| e.name == "b-new.png").unwrap();
+    let ordinary = entries.iter().find(|e| e.name == "one.png").unwrap();
+    for (entry, session, time, color) in [(old, "first", 10, "red"), (new, "second", 20, "blue")] {
+        f.db.conn.lock().unwrap().execute("UPDATE assets SET generation_session_id=?2,created_at=?3 WHERE id=?1", params![entry.asset_id, session, time]).unwrap();
+        f.db.conn.lock().unwrap().execute("INSERT INTO asset_colors(asset_id,bucket) VALUES(?1,?2)", params![entry.asset_id, color]).unwrap();
+        f.db.record_generation_conversation(session, "one-conversation").unwrap();
+    }
+    f.db.create_material_references(&f.paths, &[old.asset_id.clone()], &target).unwrap();
+    let grouped = ConnectionFilter { grouped: true, ..Default::default() };
+    let folders = f.db.connection_folders_filtered(None, Some("images"), &grouped).unwrap();
+    assert_eq!(folders.iter().find(|f| f.id == root).unwrap().count, 2);
+    assert_eq!(folders.iter().find(|f| f.id == target).unwrap().count, 1);
+    let ids = f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 1, &grouped).unwrap();
+    assert_eq!(ids, vec![new.id.clone()]); // Latest member, still sorted by filename.
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 1, 1, &grouped).unwrap(), vec![ordinary.id.clone()]);
+    let mut page = f.db.resolve_connection_entries(&ids).unwrap();
+    f.db.connection_entry_groups(&mut page, None, Some("images"), &grouped).unwrap();
+    assert_eq!(page[0].group.iter().map(|e| &e.id).collect::<Vec<_>>(), vec![&old.id, &new.id]);
+    assert!(page[0].group.iter().all(|e| e.folder_id == root));
+    let red = ConnectionFilter { color: Some("red".into()), grouped: true, ..Default::default() };
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 20, &red).unwrap(), vec![old.id.clone()]);
+    assert_eq!(f.db.connection_folders_filtered(None, Some("images"), &red).unwrap().iter().find(|f| f.id == root).unwrap().count, 1);
+    let source = ConnectionFilter { generated: Some(false), grouped: true, ..Default::default() };
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 20, &source).unwrap(), vec![ordinary.id.clone()]);
+    f.db.dissolve_generation_group(Some(&new.asset_id), None).unwrap();
+    assert_eq!(f.db.connection_folders_filtered(None, Some("images"), &grouped).unwrap().iter().find(|folder| folder.id == root).unwrap().count, 3);
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 1, &grouped).unwrap(), vec![old.id.clone()]);
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 1, 1, &grouped).unwrap(), vec![new.id.clone()]);
+    let mut separated = f.db.resolve_connection_entries(&[old.id.clone(), new.id.clone()]).unwrap();
+    f.db.connection_entry_groups(&mut separated, None, Some("images"), &grouped).unwrap();
+    assert!(separated.iter().all(|entry| entry.group.len() <= 1));
+    // The same images belong to an Agent card: each stays visible even with a
+    // shared generation conversation, and keeps its original folder entry ID.
+    f.db.create_project("agent-project", "Agent", "blank:agent", "blank:agent", "blank").unwrap();
+    let history = serde_json::json!({"schema_version":1,"nodes":[],"runs":[{"steps":{"agent":{
+        "localDsRequestId":"request","generatedAssetIds":[old.asset_id,new.asset_id]
+    }}}]});
+    f.db.conn.lock().unwrap().execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('agent-project',1,?1)", [history.to_string()]).unwrap();
+    assert_eq!(f.db.connection_folders_filtered(None, Some("images"), &grouped).unwrap().iter().find(|f| f.id == root).unwrap().count, 3);
+    let generated = ConnectionFilter { generated: Some(true), grouped: true, ..Default::default() };
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 1, &generated).unwrap(), vec![old.id.clone()]);
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 1, 1, &generated).unwrap(), vec![new.id.clone()]);
+    let mut page = f.db.resolve_connection_entries(&[old.id.clone(), new.id.clone()]).unwrap();
+    f.db.connection_entry_groups(&mut page, None, Some("images"), &generated).unwrap();
+    assert_eq!(page.iter().map(|entry| &entry.id).collect::<Vec<_>>(), vec![&old.id, &new.id]);
+    assert!(page.iter().all(|entry| entry.group.is_empty()), "standalone files have no gallery members");
+    assert_eq!(f.db.connection_entry_ids_filtered(Some(&root), None, Some("images"), 0, 20, &source).unwrap(), vec![ordinary.id.clone()]);
+    assert_eq!(f.entries(&root).len(), 3, "physical operations still enumerate every original");
+    assert!(f.source.join("a-old.png").exists() && f.source.join("b-new.png").exists());
+}
+
+#[test]
 fn original_trash_preview_resolves_registered_original_once_without_copying() {
     let f = Fixture::new();
     let root = f.connect(&f.source);
@@ -50,7 +259,7 @@ fn original_trash_preview_rejects_unknown_and_non_media_targets() {
 }
 
 #[test]
-fn original_trash_keeps_creative_identity_and_reference_files_but_marks_them_missing() {
+fn original_trash_recycles_verified_reference_files_and_keeps_creative_identity() {
     let f = Fixture::new();
     let root = f.connect(&f.source);
     let target = f.connect(&f.target);
@@ -74,14 +283,16 @@ fn original_trash_keeps_creative_identity_and_reference_files_but_marks_them_mis
             .unwrap();
     let recycled = f._temp.path().join("recycled.png");
     f.db.trash_asset_original_with(&preview[0], |path| {
-        fs::rename(path, &recycled)?;
+        assert!(f.db.conn.try_lock().is_ok(), "recycling cannot block database readers");
+        if path == Path::new(&original.path) { fs::rename(path, &recycled)?; }
+        else { assert_eq!(path, Path::new(&reference.path)); fs::rename(path, recycled.with_extension("bowerbird"))?; }
         Ok(())
     })
     .unwrap();
     assert_eq!(fs::read(&recycled).unwrap(), expected);
-    assert!(Path::new(&reference.path).is_file());
+    assert!(!Path::new(&reference.path).exists());
     assert!(f.db.get_asset(&original.asset_id).unwrap().is_some());
-    assert!(!f.entries(&target)[0].available);
+    assert!(f.entries(&target).is_empty());
     assert!(f.entries(&root).is_empty());
     let membership: i64 = f
         .db
@@ -95,6 +306,170 @@ fn original_trash_keeps_creative_identity_and_reference_files_but_marks_them_mis
         )
         .unwrap();
     assert_eq!(membership, 1);
+}
+
+#[test]
+fn original_preview_keeps_valid_items_and_reports_unavailable_records() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let selection = [entry.asset_id.clone(), "gone".into(), entry.asset_id.clone()];
+    let previews = f.db.preview_original_selection(&selection).unwrap();
+    assert!(matches!(previews.as_slice(), [OriginalPreview::Ready(_), OriginalPreview::Unavailable { asset_id, .. }] if asset_id == "gone"));
+    fs::write(&entry.path, b"replacement at the registered path").unwrap();
+    let OriginalPreview::Ready(preview) = &previews[0] else { unreachable!() };
+    assert!(f.db.trash_asset_original_with(preview, |_| panic!("replacement must stay in place")).is_err());
+    assert!(f.db.preview_asset_originals(&[entry.asset_id]).is_err(), "maintenance verifies the actual bytes");
+}
+
+#[test]
+fn original_and_missing_removal_recycle_all_verified_alias_references_and_preserve_others() {
+    for missing in [false, true] {
+        let f = Fixture::new();
+        let source = f.connect(&f.source);
+        let folder = f.connect(&f.target);
+        let entry = f.entries(&source).pop().unwrap();
+        let asset = &entry.asset_id;
+        let source_path = Path::new(&entry.path);
+        let hash = external_files::fingerprint(source_path).unwrap();
+        {
+            let conn = f.db.conn.lock().unwrap();
+            conn.execute("INSERT INTO assets(id,name,ext,store_path) SELECT 'alias',name,ext,store_path FROM assets WHERE id=?1", [asset]).unwrap();
+            conn.execute("INSERT INTO external_assets(asset_id,fingerprint) VALUES('alias',?1)", [&hash]).unwrap();
+        }
+        for id in [asset.as_str(), "alias"] {
+            assert!(f.db.add_material_reference(id, &folder).unwrap());
+        }
+        let references = f.entries(&folder);
+        assert_eq!(references.len(), 2);
+        let template = &references[0];
+        let original_json = fs::read(&template.path).unwrap();
+        let unregistered = f.target.join("personal.bowerbird");
+        fs::write(&unregistered, &original_json).unwrap();
+        let conflicting = f.target.join("new-content.bowerbird");
+        let mut wrong: serde_json::Value = serde_json::from_slice(&original_json).unwrap();
+        wrong["sha256"] = serde_json::Value::String("a".repeat(64));
+        fs::write(&conflicting, serde_json::to_vec(&wrong).unwrap()).unwrap();
+        f.db.conn.lock().unwrap().execute("INSERT INTO connected_entries(id,folder_id,asset_id,path,name,is_reference)
+            VALUES('replaced',?1,?2,?3,'new-content.bowerbird',1)", params![folder,template.asset_id,string(&conflicting)]).unwrap();
+        if missing { fs::rename(source_path, f._temp.path().join("missing.png")).unwrap(); }
+        let preview = f.db.preview_asset_originals(&[asset.clone()]).unwrap().remove(0);
+        if !missing {
+            assert!(f.db.trash_asset_original_with(&preview, |path| {
+                assert_eq!(path, source_path);
+                Err(invalid("injected original recycle failure"))
+            }).is_err());
+            assert!(references.iter().all(|r| Path::new(&r.path).is_file()));
+        }
+        let recycled = std::cell::RefCell::new(Vec::new());
+        let error = f.db.trash_asset_original_with(&preview, |path| {
+            assert!(f.db.conn.try_lock().is_ok());
+            assert_ne!(path, &conflicting);
+            assert_ne!(path, &unregistered);
+            recycled.borrow_mut().push(path.to_path_buf());
+            fs::rename(path, f._temp.path().join(id()))?;
+            Ok(())
+        }).unwrap_err();
+        assert!(matches!(error, AppError::ReferenceCleanupIncomplete(_)));
+        assert_eq!(recycled.borrow().len(), if missing { 2 } else { 3 });
+        assert!(references.iter().all(|r| !Path::new(&r.path).exists()));
+        assert!(conflicting.is_file() && unregistered.is_file());
+        assert_eq!(f.db.every_entry_id(Some(&folder)).unwrap(), vec!["replaced"]);
+    }
+}
+
+#[test]
+fn original_recycling_allows_database_reads_while_the_shell_is_busy() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let original = f.db.preview_asset_originals(&[entry.asset_id]).unwrap().pop().unwrap();
+    f.db.trash_asset_original_with(&original, |path| {
+        assert!(f.db.conn.try_lock().is_ok(), "system recycle must release the database");
+        fs::rename(path, f._temp.path().join("recycled.png"))?;
+        Ok(())
+    }).unwrap();
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "moves a generated temporary PNG to the real Windows recycle bin"]
+fn windows_recycle_temporary_original_and_verify_catalog() {
+    let f = Fixture::new();
+    fs::rename(f.source.join("one.png"), f.source.join(format!("bowerbird-recycle-test-{}.png", id()))).unwrap();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let original = f.db.preview_asset_originals(&[entry.asset_id.clone()]).unwrap().pop().unwrap();
+    let begin = std::time::Instant::now();
+    let shell_time = std::cell::Cell::new(std::time::Duration::ZERO);
+    f.db.trash_asset_original_with(&original, |path| {
+        let start = std::time::Instant::now();
+        let result = recycle(path);
+        shell_time.set(start.elapsed());
+        result
+    }).unwrap();
+    println!("Windows original recycle including record: {:?}, shell: {:?}", begin.elapsed(), shell_time.get());
+    assert!(!Path::new(&original.path).exists());
+    assert!(f.db.get_asset(&entry.asset_id).unwrap().unwrap().library_hidden);
+    assert!(f.entries(&root).is_empty());
+}
+
+#[test]
+#[ignore = "timing comparison for the original confirmation, run explicitly"]
+fn measure_registered_original_preview() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let path = Path::new(&entry.path);
+    fs::OpenOptions::new().write(true).open(path).unwrap().set_len(64 * 1024 * 1024).unwrap();
+    let fingerprint = external_files::fingerprint(path).unwrap();
+    // Compatibility with existing stored digests and all prior versions of the library.
+    use sha2::Digest;
+    assert_eq!(fingerprint, format!("{:x}", sha2::Sha256::digest(fs::read(path).unwrap())));
+    f.db.conn.lock().unwrap().execute("UPDATE external_assets SET fingerprint=?2 WHERE asset_id=?1",
+        params![entry.asset_id, fingerprint]).unwrap();
+    let ids = [entry.asset_id];
+    let start = std::time::Instant::now();
+    let verified = f.db.preview_asset_originals(&ids).unwrap();
+    let full_read = start.elapsed();
+    let start = std::time::Instant::now();
+    let displayed = f.db.preview_original_selection(&ids).unwrap();
+    let registered = start.elapsed();
+    assert!(matches!(&displayed[0], OriginalPreview::Ready(item) if item.fingerprint == verified[0].fingerprint));
+    println!("64 MiB original, full hash preview: {full_read:?}, registered preview: {registered:?}");
+}
+
+#[test]
+fn foreground_recycle_during_scan_resumes_remaining_files_and_skips_stale_cleanup() {
+    let f = Fixture::new();
+    let one = f.source.join("one.png");
+    let stale = f.source.join("stale.png");
+    image::RgbImage::from_pixel(8, 8, image::Rgb([91, 12, 55])).save(&stale).unwrap();
+    let root = f.connect(&f.source);
+    let original_id = f.entries(&root).into_iter().find(|e| Path::new(&e.path) == one).unwrap().asset_id;
+    let original = f.db.preview_asset_originals(&[original_id.clone()]).unwrap().pop().unwrap();
+    fs::remove_file(&stale).unwrap();
+    for n in 0..8 {
+        fs::write(f.source.join(format!("new-{n}.txt")), format!("item {n}")).unwrap();
+    }
+    let mut checkpoints = 0;
+    f.db.scan_connection_cooperatively(&f.paths, &root, None, |_| (), || {
+        checkpoints += 1;
+        if checkpoints == 2 {
+            f.db.trash_asset_original_with(&original, |path| { fs::rename(path, f.target.join("one.png"))?; Ok(()) }).unwrap();
+        }
+        checkpoints > 1
+    }).unwrap();
+    assert!(checkpoints >= 9);
+    let count_path = |path: &Path| f.db.conn.lock().unwrap().query_row(
+        "SELECT COUNT(*) FROM connected_entries WHERE path=?1", [string(path)], |row| row.get::<_, i64>(0),
+    ).unwrap();
+    assert_eq!(count_path(&one), 0);
+    assert_eq!(count_path(&stale), 1, "an interrupted listing must not purge cached entries");
+    for n in 0..8 { assert_eq!(count_path(&f.source.join(format!("new-{n}.txt"))), 1); }
+    f.db.scan_connection(&f.paths, &root).unwrap();
+    assert_eq!(count_path(&stale), 0);
+    assert!(f.db.get_asset(&original_id).unwrap().unwrap().library_hidden);
 }
 
 #[test]
@@ -202,7 +577,7 @@ fn original_trash_updates_all_registered_identities_for_the_same_file() {
         f.db.preview_asset_originals(&[entry.asset_id.clone()])
             .unwrap();
     f.db.trash_asset_original_with(&preview[0], |path| {
-        fs::rename(path, f._temp.path().join("recycled.png"))?;
+        fs::rename(path, f._temp.path().join(id()))?;
         Ok(())
     })
     .unwrap();
@@ -218,7 +593,7 @@ fn original_trash_updates_all_registered_identities_for_the_same_file() {
             .unwrap()
             .library_hidden
     );
-    assert!(!f.entries(&target)[0].available);
+    assert!(f.entries(&target).is_empty());
     assert_eq!(
         f.db.conn
             .lock()
@@ -344,6 +719,105 @@ fn reference_removal_can_retry_after_partial_failure_without_touching_originals(
     assert!(f.entries(&target).is_empty());
     assert!(Path::new(&original.path).is_file());
 }
+#[test]
+fn historical_reference_cleanup_is_bounded_and_recovers_only_verified_unindexed_descriptors() {
+    use crate::core::missing_originals::MarkedReferenceSweep;
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let asset = f.entries(&root).pop().unwrap();
+    let target = f.connect(&f.target);
+    f.db.create_material_references(&f.paths, &[asset.asset_id.clone()], &target).unwrap();
+    let reference = f.entries(&target).pop().unwrap();
+    let bytes = fs::read(&reference.path).unwrap();
+    // These historical copies were never seen by this database.
+    for n in 0..17 { fs::write(f.target.join(format!("old-{n}.bowerbird")), &bytes).unwrap(); }
+    let mut different = load_reference(Path::new(&reference.path)).unwrap();
+    different.sha256 = "0".repeat(64);
+    fs::write(f.target.join("unrelated.bowerbird"), serde_json::to_vec(&different).unwrap()).unwrap();
+    let replaced = Path::new(&reference.path);
+    fs::write(replaced, b"user replacement").unwrap();
+    let kept = f._temp.path().join("retained-original.png");
+    fs::rename(&asset.path, &kept).unwrap();
+    f.db.conn.lock().unwrap().execute(
+        "INSERT INTO removed_missing_asset_originals(asset_id,path) VALUES(?1,?2)", params![asset.asset_id, asset.path]).unwrap();
+    assert!(f.db.scan_connection(&f.paths, &target).is_err(), "malformed replacement is reported");
+    assert_eq!(f.db.every_entry_id(Some(&target)).unwrap().len(), 18);
+    let bin = f._temp.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let recycle = |path: &Path| -> AppResult<()> {
+        assert_eq!(path.parent(), Some(f.target.as_path()));
+        assert_eq!(fs::read(path)?, bytes);
+        fs::rename(path, bin.join(path.file_name().unwrap()))?;
+        Ok(())
+    };
+    let mut sweep = MarkedReferenceSweep::default();
+    assert_eq!(sweep.check_batch(&f.db, || true, &recycle).unwrap(), (0,true));
+    let (first, more) = sweep.check_batch(&f.db, || false, &recycle).unwrap();
+    assert!(more && first > 0 && first < 17);
+    let (rest, more) = sweep.check_batch(&f.db, || false, &recycle).unwrap();
+    assert!(!more);
+    assert_eq!(first + rest, 17);
+    assert_eq!(sweep.check_batch(&f.db, || false, &recycle).unwrap(), (0,false));
+    assert_eq!(f.db.every_entry_id(Some(&target)).unwrap(), vec![reference.id]);
+    assert_eq!(fs::read(replaced).unwrap(), b"user replacement");
+    assert!(f.target.join("unrelated.bowerbird").is_file());
+    assert!(kept.is_file());
+}
+
+#[test]
+fn historical_reference_cleanup_waits_for_online_folders_and_never_recycles_a_restored_original() {
+    use crate::core::missing_originals::MarkedReferenceSweep;
+    for (trashed, cleaned) in [(true,false),(false,true),(true,true)] {
+        let f = Fixture::new();
+        let root = f.connect(&f.source);
+        let asset = f.entries(&root).pop().unwrap();
+        let target = f.connect(&f.target);
+        f.db.create_material_references(&f.paths, &[asset.asset_id.clone()], &target).unwrap();
+        let reference = f.entries(&target).pop().unwrap();
+        let hash = external_files::fingerprint(Path::new(&asset.path)).unwrap();
+        let moved = f._temp.path().join("retained.png");
+        fs::rename(&asset.path,&moved).unwrap();
+        {
+            let conn = f.db.conn.lock().unwrap();
+            if trashed { conn.execute("INSERT INTO trashed_asset_originals(asset_id,path,fingerprint) VALUES(?1,?2,?3)", params![asset.asset_id, asset.path, hash]).unwrap(); }
+            if cleaned { conn.execute("INSERT INTO removed_missing_asset_originals(asset_id,path) VALUES(?1,?2)", params![asset.asset_id, asset.path]).unwrap(); }
+        }
+        let mut sweep = MarkedReferenceSweep::default();
+        let mut protected = || assert_eq!(sweep.check_batch(&f.db, || false, |_| panic!("unsafe reference recycle")).unwrap(), (0,false));
+        let unplugged = f._temp.path().join("offline");
+        fs::rename(&f.source, &unplugged).unwrap();
+        protected();
+        fs::rename(&unplugged, &f.source).unwrap();
+        fs::rename(&f.target, &unplugged).unwrap();
+        protected();
+        fs::rename(&unplugged, &f.target).unwrap();
+        image::RgbImage::from_pixel(8,8,image::Rgb([80u8,60,40])).save(&asset.path).unwrap();
+        protected();
+        assert!(f.db.scan_connection(&f.paths, &target).is_err());
+        assert!(f.db.scan_connection(&f.paths, &root).is_err());
+        assert!(f.db.connection_entry_ids_filtered(Some(&target), None, None, 0, 60, &ConnectionFilter::default()).unwrap().is_empty());
+        fs::remove_file(&asset.path).unwrap();
+        fs::rename(&moved, &asset.path).unwrap();
+        protected();
+        let other = f._temp.path().join("other");
+        fs::create_dir(&other).unwrap();
+        let other_root = f.connect(&other);
+        let mut foreign = load_reference(Path::new(&reference.path)).unwrap();
+        foreign.sha256 = "0".repeat(64);
+        let foreign_path = other.join("foreign.bowerbird");
+        let foreign_bytes = serde_json::to_vec(&foreign).unwrap();
+        fs::write(&foreign_path, &foreign_bytes).unwrap();
+        assert!(f.db.scan_connection(&f.paths, &other_root).is_err());
+        assert!(f.db.every_entry_id(Some(&other_root)).unwrap().is_empty());
+        assert_eq!(fs::read(&foreign_path).unwrap(), foreign_bytes);
+        assert!(f.db.connection_entry_ids_filtered(Some(&target), None, None, 0, 60, &ConnectionFilter::default()).unwrap().is_empty());
+        f.db.scan_connection(&f.paths, &target).unwrap();
+        protected();
+        assert!(Path::new(&reference.path).is_file());
+        assert_eq!(f.db.connection_entry_ids_filtered(Some(&target), None, None, 0, 60, &ConnectionFilter::default()).unwrap(), vec![reference.id]);
+    }
+}
+
 struct Fixture {
     _temp: tempfile::TempDir,
     db: Database,
@@ -441,6 +915,46 @@ fn refresh_checks_selected_directory_before_other_cached_directories() {
     assert_eq!(f.entries(&root).len(), 2);
     assert_eq!(f.entries(&selected).len(), 1);
 }
+
+#[test]
+fn unchanged_scan_does_not_rewrite_entries_or_report_catalog_changes() {
+    let f = Fixture::new();
+    fs::create_dir(f.source.join("nested")).unwrap();
+    let root = f.connect(&f.source);
+    f.db.conn.lock().unwrap().execute_batch("CREATE TABLE scan_write_audit(value INTEGER);
+        CREATE TRIGGER audit_entry_scan AFTER UPDATE ON connected_entries BEGIN INSERT INTO scan_write_audit VALUES(1); END;
+        CREATE TRIGGER audit_folder_scan AFTER UPDATE ON connected_folders BEGIN INSERT INTO scan_write_audit VALUES(1); END;").unwrap();
+    let mut changes = 0;
+    f.db.scan_connection_changes(&f.paths, &root, None, |changed| changes += usize::from(changed)).unwrap();
+    assert_eq!(changes, 0, "scan progress alone must not invalidate the catalog");
+    let writes: i64 = f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM scan_write_audit", [], |row| row.get(0)).unwrap();
+    assert_eq!(writes, 0, "unchanged entries and folders need no UPDATE");
+    fs::copy(f.source.join("one.png"), f.source.join("new.png")).unwrap();
+    f.db.scan_connection_changes(&f.paths, &root, None, |changed| changes += usize::from(changed)).unwrap();
+    assert!(changes > 0);
+    changes = 0;
+    fs::remove_file(f.source.join("new.png")).unwrap();
+    f.db.scan_connection_changes(&f.paths, &root, None, |changed| changes += usize::from(changed)).unwrap();
+    assert!(changes > 0, "completed deletion reconciliation must notify");
+}
+
+#[test]
+fn scan_reports_offline_and_restore_once_without_discarding_cached_entries() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let saved = f._temp.path().join("offline");
+    fs::rename(&f.source, &saved).unwrap();
+    let mut changes = 0;
+    assert!(f.db.scan_connection_changes(&f.paths, &root, None, |changed| changes += usize::from(changed)).is_err());
+    assert!(changes > 0);
+    changes = 0;
+    assert!(f.db.scan_connection_changes(&f.paths, &root, None, |changed| changes += usize::from(changed)).is_err());
+    assert_eq!(changes, 0, "unchanged offline state is progress, not new content");
+    fs::rename(&saved, &f.source).unwrap();
+    f.db.scan_connection_changes(&f.paths, &root, None, |changed| changes += usize::from(changed)).unwrap();
+    assert!(changes > 0);
+    assert_eq!(f.entries(&root).len(), 1);
+}
 #[test]
 fn scan_excludes_only_its_own_generated_cache_and_database_paths() {
     let f = Fixture::new();
@@ -532,6 +1046,177 @@ fn references_have_independent_entries_and_reference_deletion_preserves_original
     assert!(f.db.get_asset(&original.asset_id).unwrap().is_some());
     assert_eq!(f.entries(&target).len(), 0);
 }
+#[test]
+fn adding_a_reference_publishes_only_after_index_preflight_and_recovers_an_unindexed_copy() {
+    let f = Fixture::new();
+    let source = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let asset = f.entries(&source).pop().unwrap().asset_id;
+    let invalid_neighbor = f.target.join("unrelated.bowerbird");
+    fs::write(&invalid_neighbor, b"unrelated unreadable reference").unwrap();
+    f.db.conn.lock().unwrap().execute_batch(
+        "CREATE TEMP TRIGGER fail_new_ref BEFORE INSERT ON connected_entries BEGIN SELECT RAISE(ABORT, 'test'); END"
+    ).unwrap();
+    assert!(f.db.add_material_reference(&asset, &target).is_err());
+    assert_eq!(fs::read_dir(&f.target).unwrap().count(), 1);
+    f.db.conn.lock().unwrap().execute_batch("DROP TRIGGER fail_new_ref").unwrap();
+    assert!(f.db.add_material_reference(&asset, &target).unwrap());
+    assert!(!f.db.add_material_reference(&asset, &target).unwrap());
+    let reference = f.entries(&target).pop().unwrap();
+    f.db.conn.lock().unwrap().execute("DELETE FROM connected_entries WHERE id=?1", [&reference.id]).unwrap();
+    assert!(f.db.add_material_reference(&asset, &target).unwrap());
+    assert_eq!(f.entries(&target)[0].path, reference.path);
+    assert_eq!(fs::read_dir(&f.target).unwrap().count(), 2);
+    assert_eq!(fs::read(invalid_neighbor).unwrap(), b"unrelated unreadable reference");
+}
+
+#[test]
+fn original_move_rejects_replaced_bytes_before_and_after_reindexing() {
+    let f = Fixture::new();
+    let source = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let selected = f.entries(&source).pop().unwrap();
+    image::RgbImage::from_pixel(3, 7, image::Rgb([7, 18, 29])).save(&selected.path).unwrap();
+    for refresh in [false, true] {
+        if refresh { f.db.scan_connection(&f.paths, &source).unwrap(); }
+        assert!(f.db.move_connection_entry_verified(&selected.id, &target, selected.version.as_deref()).is_err());
+        assert!(Path::new(&selected.path).is_file());
+        assert!(!f.target.join(&selected.name).exists());
+    }
+}
+
+#[test]
+fn asset_move_indexes_an_unconnected_original_and_preserves_shared_identity_and_projects() {
+    let f = Fixture::new();
+    let source = f.source.join("one.png");
+    let asset = f.db.index_connected_file(&f.paths, &source, None).unwrap();
+    let mut alternate = asset.clone();
+    alternate.id = "same-path-second-id".into();
+    alternate.name = "另一个素材名称".into();
+    f.db.insert_asset(&alternate).unwrap();
+    f.db.create_project("existing", "existing", "existing", "existing", "project").unwrap();
+    f.db.create_project("target", "target", "target", "target", "project").unwrap();
+    f.db.conn.lock().unwrap().execute("INSERT INTO project_assets(project_id,asset_id,created_at) VALUES('existing',?1,1)",[&alternate.id]).unwrap();
+    let target = f.db.connect_directory(&f.target, Some("target")).unwrap();
+    let refs = f._temp.path().join("refs");
+    fs::create_dir(&refs).unwrap();
+    let refs = f.connect(&refs);
+    f.db.add_material_reference(&alternate.id, &refs).unwrap();
+    assert!(f.entries(&target).is_empty());
+    let selected = f.db.preview_asset_originals(std::slice::from_ref(&asset.id)).unwrap().pop().unwrap();
+    assert!(f.db.move_asset_original(&selected, &target).unwrap());
+    let dest = f.target.join("one.png");
+    assert!(!source.exists());
+    assert_eq!(f.db.get_asset(&asset.id).unwrap().unwrap().store_path.as_deref(), dest.to_str());
+    let moved = f.db.get_asset(&alternate.id).unwrap().unwrap();
+    assert_eq!(moved.store_path.as_deref(), dest.to_str());
+    assert_eq!(moved.name, alternate.name);
+    let projects: i64 = f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM project_assets WHERE asset_id=?1", [&alternate.id], |r| r.get(0)).unwrap();
+    assert_eq!(projects, 2);
+    let aliases: i64 = f.db.conn.lock().unwrap().query_row("SELECT COUNT(DISTINCT asset_id) FROM external_asset_paths WHERE path=?1", [string(&dest)], |r| r.get(0)).unwrap();
+    assert_eq!(aliases, 2);
+    assert_eq!(load_reference(Path::new(&f.entries(&refs)[0].path)).unwrap().target_path, string(&dest));
+    assert_eq!(f.entries(&target).len(), 1);
+    let refreshed = f.db.preview_asset_originals(&[alternate.id]).unwrap().pop().unwrap();
+    assert!(!f.db.move_asset_original(&refreshed, &target).unwrap());
+    assert!(f.db.move_asset_original(&selected, &target).is_err());
+}
+
+#[test]
+fn asset_move_handles_managed_files_and_refuses_alias_collisions_or_changed_originals() {
+    let f = Fixture::new();
+    let template = f.db.index_connected_file(&f.paths, &f.source.join("one.png"), None).unwrap();
+    let source = f.paths.images.join("managed.png");
+    fs::copy(f.source.join("one.png"), &source).unwrap();
+    let source = fs::canonicalize(source).unwrap();
+    let mut managed = template.clone();
+    managed.id = "managed-generated".into();
+    managed.store_path = Some(string(&source));
+    managed.origin_path = Some(string(&source));
+    f.db.insert_asset(&managed).unwrap();
+    let target = f.connect(&f.target);
+    let dest = f.target.join("managed.png");
+    let selected = f.db.preview_asset_originals(std::slice::from_ref(&managed.id)).unwrap().pop().unwrap();
+    f.db.conn.lock().unwrap().execute("INSERT INTO external_asset_paths(asset_id,path) VALUES(?1,?2)", params![template.id,string(&dest)]).unwrap();
+    assert!(f.db.move_asset_original(&selected, &target).is_err());
+    assert!(source.exists());
+    assert!(!dest.exists());
+    f.db.conn.lock().unwrap().execute("DELETE FROM external_asset_paths WHERE path=?1", [string(&dest)]).unwrap();
+    fs::write(&source, b"replaced before queued move").unwrap();
+    assert!(f.db.move_asset_original(&selected, &target).is_err());
+    assert!(source.exists());
+    fs::copy(f.source.join("one.png"), &source).unwrap();
+    assert!(f.db.move_asset_original(&selected, &target).unwrap());
+    let moved = f.db.get_asset(&managed.id).unwrap().unwrap();
+    assert_eq!(moved.store_path.as_deref(), dest.to_str());
+    assert_eq!(moved.origin_path.as_deref(), dest.to_str());
+    assert!(!f.db.is_external_asset(&managed.id).unwrap());
+    assert_eq!(f.entries(&target)[0].asset_id, managed.id);
+    assert!(!source.exists());
+}
+
+#[test]
+fn offline_original_allows_only_the_selected_reference_to_move() {
+    let f = Fixture::new();
+    let source = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let asset = f.entries(&source)[0].asset_id.clone();
+    f.db.add_material_reference(&asset, &target).unwrap();
+    let selected = f.entries(&target).pop().unwrap();
+    let offline = f._temp.path().join("saved.png");
+    fs::rename(f.source.join("one.png"), &offline).unwrap();
+    assert!(!f.entries(&target)[0].available);
+    assert!(f.db.move_connection_entry_verified(&selected.id, &source, selected.version.as_deref()).unwrap());
+    assert!(!Path::new(&selected.path).exists());
+    assert!(f.source.join("one.png.bowerbird").is_file());
+    assert!(offline.is_file());
+    assert!(!f.source.join("one.png").exists());
+    assert_eq!(f.db.get_asset(&asset).unwrap().unwrap().store_path.as_deref(), f.source.join("one.png").to_str());
+}
+
+#[test]
+fn offline_reference_rejoins_moved_original_on_refresh_without_repeating_move() {
+    let f = Fixture::new();
+    let source = f.connect(&f.source);
+    let destination = f.connect(&f.target);
+    let refs_path = f._temp.path().join("refs");
+    fs::create_dir(&refs_path).unwrap();
+    let refs = f.connect(&refs_path);
+    let original = f.entries(&source).pop().unwrap();
+    f.db.add_material_reference(&original.asset_id, &refs).unwrap();
+    let offline = f._temp.path().join("offline");
+    fs::rename(&refs_path, &offline).unwrap();
+    assert!(matches!(f.db.move_connection_entry(&original.id, &destination), Err(AppError::FileOperationNeedsReview(_))));
+    fs::rename(offline, &refs_path).unwrap();
+    f.db.scan_connection(&f.paths, &refs).unwrap();
+    assert_eq!(load_reference(&refs_path.join("one.png.bowerbird")).unwrap().target_path, string(&f.target.join("one.png")));
+    assert!(!Path::new(&original.path).exists());
+}
+
+#[test]
+fn moving_one_original_repairs_only_its_own_references_and_reports_late_failure() {
+    let f = Fixture::new();
+    fs::copy(f.source.join("one.png"), f.source.join("other.png")).unwrap();
+    let source = f.connect(&f.source);
+    let target = f.connect(&f.target);
+    let sources = f.entries(&source);
+    let original = sources.iter().find(|e| e.name == "one.png").unwrap();
+    let other = sources.iter().find(|e| e.name == "other.png").unwrap();
+    for asset in [original, other] {
+        f.db.add_material_reference(&asset.asset_id, &target).unwrap();
+    }
+    let unrelated = f.target.join("other.png.bowerbird");
+    fs::write(&unrelated, b"concurrent user edit").unwrap();
+    assert!(f.db.move_connection_entry(&original.id, &target).unwrap());
+    assert_eq!(fs::read(&unrelated).unwrap(), b"concurrent user edit");
+    let rewritten = load_reference(&f.target.join("one.png.bowerbird")).unwrap();
+    assert_eq!(rewritten.target_relative.as_deref(), Some("one.png"));
+    assert!(matches!(f.db.move_connection_entry(&other.id, &target), Err(AppError::FileOperationNeedsReview(_))));
+    assert!(f.target.join("other.png").is_file());
+    assert!(!f.source.join("other.png").exists());
+    assert_eq!(fs::read(unrelated).unwrap(), b"concurrent user edit");
+}
+
 #[test]
 fn original_moves_update_references_without_changing_creative_identity() {
     let f = Fixture::new();
@@ -790,6 +1475,34 @@ fn duplicate_path_repair_failure_rolls_back_all_relationships() {
     assert_eq!(project_folder, "duplicate-rollback");
     assert!(Path::new(&entry.path).is_file());
 }
+#[test]
+fn project_covers_follow_detach_and_recycle_across_shared_projects() {
+    let f = Fixture::new();
+    let root = f.connect(&f.source);
+    let entry = f.entries(&root).pop().unwrap();
+    let ids = vec![entry.asset_id.clone()];
+    for project in ["first", "second"] {
+        f.db.create_project(project, project, project, project, "blank").unwrap();
+        f.db.add_assets_to_project(project, &ids).unwrap();
+    }
+    let cached = f.paths.thumbnails.join("retained-cover.jpg");
+    fs::write(&cached, b"cached thumbnail").unwrap();
+    f.db.conn.lock().unwrap().execute("UPDATE assets SET thumb_path=?2 WHERE id=?1", params![entry.asset_id, string(&cached)]).unwrap();
+    assert_eq!(f.db.project_covers().unwrap()["first"].paths, vec![string(&cached)]);
+    f.db.remove_assets_from_project("first", &ids, false).unwrap();
+    let covers = f.db.project_covers().unwrap();
+    assert!(!covers.contains_key("first"));
+    assert_eq!(covers["second"].paths, vec![string(&cached)]);
+    assert_eq!(covers["second"].asset_count, 1);
+    let preview = f.db.preview_asset_originals(&ids).unwrap();
+    f.db.trash_asset_original_with(&preview[0], |path| {
+        fs::rename(path, f._temp.path().join("recycled.png"))?;
+        Ok(())
+    }).unwrap();
+    assert!(f.db.project_covers().unwrap().is_empty());
+    assert!(cached.is_file());
+}
+
 #[test]
 fn deleted_original_keeps_creative_record_and_other_references_are_missing() {
     let f = Fixture::new();
@@ -1388,6 +2101,7 @@ fn missing_original_cleanup_preserves_identity_metadata_cache_and_project_member
     assert!(f.db.list_generation_group(&entry.asset_id, Some("missing-project")).unwrap().is_empty());
     assert!(f.db.canvas_frequent_assets(&pins, None).unwrap().pinned.is_empty());
     assert_eq!(f.db.get_assets_by_ids(&[entry.asset_id.clone()]).unwrap().len(), 1);
+    assert!(!f.db.project_covers().unwrap().contains_key("missing-project"));
     let filter = CatalogFilter { kind: "all".into(), media: "images".into(), ..Default::default() };
     assert_eq!(f.db.catalog_overview(&filter, None).unwrap().total, 0);
     assert!(f.db.catalog_page(&filter, 0, 50).unwrap().is_empty());
@@ -1432,6 +2146,61 @@ fn missing_original_cleanup_rechecks_recovery_and_registered_path_before_hiding(
 }
 
 #[test]
+fn folder_display_hides_historical_removals_before_disk_cleanup() {
+    fn assert_display(db: &Database, folder: &str, reference: &str, visible: bool) {
+        let expected: Vec<String> = if visible { vec![reference.to_owned()] } else { Vec::new() };
+        for grouped in [false, true] {
+            let filter = ConnectionFilter { grouped, ..Default::default() };
+            let rows = db.connection_folders_filtered(None, Some("images"), &filter).unwrap();
+            assert_eq!(rows.iter().find(|row| row.id == folder).unwrap().count, i64::from(visible));
+            assert_eq!(db.connection_entry_ids_filtered(Some(folder), None, Some("images"), 0, 60, &filter).unwrap(), expected);
+            let all = db.connection_entry_ids_filtered(None, None, None, 0, 2000, &filter).unwrap();
+            assert_eq!(all.iter().any(|id| id == reference), visible);
+        }
+        assert_eq!(db.connected_folder(folder).unwrap().count, i64::from(visible));
+        let stale = vec![reference.to_owned()];
+        assert_eq!(db.visible_connection_entries(&stale).unwrap().len(), expected.len());
+        assert_eq!(db.resolve_visible_connection_entries(&stale).unwrap().len(), expected.len());
+        assert_eq!(db.every_entry_id(Some(folder)).unwrap(), stale);
+        assert_eq!(db.read_connection_entries(&stale).unwrap().len(), 1);
+    }
+    for (trashed, cleaned) in [(false,false), (true,false), (false,true), (true,true)] {
+        let mut f = Fixture::new();
+        f.db = Database::open(&f.paths.db).unwrap();
+        f.db.migrate().unwrap();
+        let source = f.connect(&f.source);
+        let asset = f.entries(&source).pop().unwrap();
+        let folder = f.connect(&f.target);
+        let ids = vec![asset.asset_id.clone()];
+        f.db.create_project("audit", "audit", "blank:audit", "blank:audit", "blank").unwrap();
+        f.db.add_assets_to_project("audit", &ids).unwrap();
+        f.db.create_material_references(&f.paths, &ids, &folder).unwrap();
+        let reference = f.entries(&folder).pop().unwrap();
+        let moved = f._temp.path().join("retained.png");
+        let original = f.db.preview_asset_originals(&ids).unwrap().remove(0);
+        fs::rename(&asset.path, &moved).unwrap();
+        // Model old installations: the original was processed, its reference is still on disk.
+        if trashed {
+            f.db.conn.lock().unwrap().execute("INSERT INTO trashed_asset_originals(asset_id,path,fingerprint) VALUES(?1,?2,?3)", params![asset.asset_id,original.path,original.fingerprint]).unwrap();
+        }
+        if cleaned {
+            f.db.conn.lock().unwrap().execute("INSERT INTO removed_missing_asset_originals(asset_id,path) VALUES(?1,?2)", params![asset.asset_id,original.path]).unwrap();
+        }
+        let visible = !trashed && !cleaned;
+        assert_display(&f.db, &folder, &reference.id, visible);
+        let drawer = external_files::references(&f.db, "audit").unwrap();
+        assert_eq!(drawer.len(), usize::from(visible));
+        if visible { assert_eq!(drawer[0].status, "missing"); }
+        // Unplugging the folder only changes availability. Its index is still browsable.
+        f.db.conn.lock().unwrap().execute("UPDATE connected_roots SET available=0 WHERE id=?1", [&folder]).unwrap();
+        assert_display(&f.db, &folder, &reference.id, visible);
+        f.db = Database::open(&f.paths.db).unwrap();
+        assert_display(&f.db, &folder, &reference.id, visible);
+        assert!(Path::new(&reference.path).is_file());
+    }
+}
+
+#[test]
 fn missing_original_cleanup_matches_registered_path_duplicates_and_scan_restores_original() {
     let f = Fixture::new();
     let root = f.connect(&f.source);
@@ -1447,22 +2216,26 @@ fn missing_original_cleanup_matches_registered_path_duplicates_and_scan_restores
     fs::rename(&entry.path, &moved).unwrap();
     // Confirm through an ordinary path; its verbatim spelling must be included too.
     let preview = f.db.preview_asset_originals(&["missing-duplicate".into()]).unwrap();
-    f.db.trash_asset_original_with(&preview[0], |_| panic!("missing path must not reach recycle")).unwrap();
+    let discarded_ref = f._temp.path().join("discarded.bowerbird");
+    f.db.trash_asset_original_with(&preview[0], |path| {
+        assert_eq!(path, Path::new(&reference.path), "only the verified reference is recycled");
+        fs::rename(path, &discarded_ref)?;
+        Ok(())
+    }).unwrap();
+    assert!(!f.db.trash_asset_original_with(&preview[0], |_| panic!("repeat cleanup has no files to touch")).unwrap());
     assert!(f.db.material_catalog_assets("tags", None, None).unwrap().is_empty());
     assert!(f.entries(&root).is_empty());
-    let missing_ref = f.entries(&target).pop().unwrap();
-    assert_eq!(missing_ref.id, reference.id);
-    assert!(!missing_ref.available);
-    assert!(Path::new(&reference.path).is_file());
+    assert!(f.entries(&target).is_empty());
+    assert!(discarded_ref.is_file());
+    assert!(!Path::new(&reference.path).exists());
     let removed: i64 = f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM removed_missing_asset_originals", [], |r| r.get(0)).unwrap();
     assert_eq!(removed, 2);
-    // Rename back preserves bytes/mtime. The invalidated reference stamp must force re-indexing.
+    // Source recovery restores the original identity; it does not recreate a recycled reference.
     fs::rename(&moved, &entry.path).unwrap();
-    f.db.scan_connection(&f.paths, &target).unwrap();
-    assert!(f.entries(&target)[0].available);
+    f.db.scan_connection(&f.paths, &root).unwrap();
+    assert!(f.entries(&target).is_empty());
     let restored: i64 = f.db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM removed_missing_asset_originals WHERE asset_id=?1", [&entry.asset_id], |r| r.get(0)).unwrap();
     assert_eq!(restored, 0);
-    f.db.scan_connection(&f.paths, &root).unwrap();
     assert_eq!(f.entries(&root)[0].asset_id, entry.asset_id);
 }
 
@@ -1522,7 +2295,7 @@ fn missing_original_cleanup_migration_0052_preserves_v51_identity_and_reopens() 
 }
 
 #[test]
-fn missing_original_cleanup_preserves_canvas_nodes_and_cannot_revive_on_last_node_removal() {
+fn missing_original_cleanup_hides_canvas_nodes_but_preserves_data_and_cannot_revive_on_last_node_removal() {
     use crate::core::{creative_session_contract::{CreativeNodeKind, CreativeNodeRole}, project_canvas::NewCanvasNode};
     let f = Fixture::new();
     let root = f.connect(&f.source);
@@ -1535,12 +2308,16 @@ fn missing_original_cleanup_preserves_canvas_nodes_and_cannot_revive_on_last_nod
         payload_json: r#"{"schema_version":1,"snapshot":{"name":"one"}}"#.into(),
         x: 10., y: 20., width: 100., height: 80., z_index: 1, position_locked: false,
     }).unwrap();
-    let before = serde_json::to_value(f.db.list_canvas_nodes("missing-canvas").unwrap()).unwrap();
+    let before = f.db.list_canvas_nodes("missing-canvas").unwrap();
     let moved = f.target.join("moved.png");
     fs::rename(&entry.path, &moved).unwrap();
     let preview = f.db.preview_asset_originals(&[entry.asset_id.clone()]).unwrap();
     f.db.trash_asset_original_with(&preview[0], |_| panic!("missing original cannot be recycled")).unwrap();
-    assert_eq!(serde_json::to_value(f.db.list_canvas_nodes("missing-canvas").unwrap()).unwrap(), before);
+    let mut after = f.db.list_canvas_nodes("missing-canvas").unwrap();
+    assert!(after[0].hidden_at.is_some());
+    after[0].hidden_at = before[0].hidden_at;
+    after[0].updated_at = before[0].updated_at;
+    assert_eq!(after, before, "only visibility changes; card identity, position and payload remain");
     f.db.remove_canvas_node("missing-node").unwrap();
     assert!(f.db.material_catalog_assets("tags", None, None).unwrap().is_empty());
     assert!(f.db.get_asset(&entry.asset_id).unwrap().is_some());

@@ -2,6 +2,7 @@
 
 pub mod audio;
 pub mod text_documents;
+pub mod document_state;
 pub mod autoname;
 pub mod caption;
 pub mod creative_session_contract;
@@ -11,6 +12,7 @@ pub mod library;
 pub mod library_view;
 pub mod material_catalog;
 pub mod catalog_browser;
+pub(crate) mod generation_gallery;
 pub mod canvas_library;
 pub mod canvas_frequent_assets;
 pub mod local_classification;
@@ -42,3 +44,5 @@ pub mod local_chat_cards;
 pub mod quick_transfer;
 pub mod file_intake;
 pub mod missing_originals;
+
+pub(crate) mod public_network;

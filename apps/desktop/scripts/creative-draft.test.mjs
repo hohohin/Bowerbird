@@ -4,13 +4,21 @@ import { clearSentCreativeChatDraft, isCreativeComposerDraftMeaningful, parseCre
 
 const draft = (text = '', media = 'image', refs = []) => ({ doc: { type: 'doc', content: [{ type: 'paragraph', ...(text ? { content: [{ type: 'text', text }] } : {}) }] }, refs, generation: { media, ratio: media === 'video' ? '16:9' : '1:1' } });
 
+test('Codex model choices survive mode switches and accepted chat cleanup', () => {
+  const chat = draft('发送内容');
+  const codexOptions = { model: 'fixture-model', reasoningEffort: 'high' };
+  const saved = serializeCreativeComposerState({ mode: 'video', chatProvider: 'codex-local', chatCodexOptions: codexOptions, drafts: { chat } });
+  assert.deepEqual(parseCreativeComposerState(saved).chatCodexOptions, codexOptions);
+  assert.deepEqual(parseCreativeComposerState(clearSentCreativeChatDraft(saved, JSON.stringify(chat))).chatCodexOptions, codexOptions);
+});
+
 test('chat provider survives switching modes and clearing accepted text independently of generation', () => {
   const chat = draft('已经发送');
   const state = { mode: 'video', chatProvider: 'deepseek-cloud', drafts: { chat, video: draft('视频草稿', 'video') } };
   const saved = serializeCreativeComposerState(state);
-  assert.deepEqual(parseCreativeComposerState(saved), state);
+  assert.deepEqual(parseCreativeComposerState(saved), { ...state, chatProvider: 'dsh-cloud' });
   const cleared = clearSentCreativeChatDraft(saved, JSON.stringify(chat));
-  assert.equal(parseCreativeComposerState(cleared).chatProvider, 'deepseek-cloud');
+  assert.equal(JSON.parse(cleared).chatProvider, 'dsh-cloud');
   assert.deepEqual(parseCreativeComposerState(cleared).drafts.video, state.drafts.video);
 });
 
@@ -20,6 +28,16 @@ test('old schema 1 image and video drafts keep their mode, parameters, text and 
     const saved = JSON.stringify({ schema_version: 1, composer });
     assert.deepEqual(parseCreativeComposerState(saved), { mode: media, drafts: { [media]: composer } });
     assert.deepEqual(parseCreativeComposerDraft(saved), composer);
+  }
+});
+
+test('DSH provider survives composer restart and accepted draft cleanup', () => {
+  for (const chatProvider of ['dsh-local', 'dsh-cloud']) {
+    const composer = draft('继续 DSH 对话');
+    const saved = serializeCreativeComposerState({ mode: 'chat', chatProvider, drafts: { chat: composer } });
+    assert.equal(parseCreativeComposerState(saved).chatProvider, chatProvider);
+    const cleared = clearSentCreativeChatDraft(saved, JSON.stringify(composer));
+    assert.equal(parseCreativeComposerState(cleared).chatProvider, chatProvider);
   }
 });
 

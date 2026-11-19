@@ -47,6 +47,7 @@ try {
   await page.waitForFunction(()=>document.querySelector('.is-content-card')?.querySelectorAll('.canvas-image-content img').length===5);
   await card.getByRole('cell').first().hover();
   await card.getByRole('button',{name:'输入第 1 行第 1 列',exact:true}).click({button:'right'});
+  await page.getByRole('menu', { name: '选择要断开的连线' }).getByRole('menuitem').click();
   await page.waitForFunction(()=>!JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(n=>n.textTarget?.cellId===JSON.parse(window.snapshot().nodes.find(n=>JSON.parse(n.payloadJson).note_type==='text').payloadJson).cells[0][0].id));
   assert.equal(await card.locator('.canvas-image-content img').count(),5);
   await card.getByRole('button',{name:'在第 3 行位置插入',exact:true}).click({position:{x:30,y:6}});

@@ -1,4 +1,5 @@
 import { setTheme } from "@tauri-apps/api/app";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isTauri } from "@tauri-apps/api/core";
 import type { AppTheme } from "./types";
 
@@ -24,8 +25,8 @@ export function loadCachedTheme(): AppTheme {
 export function applyTheme(theme: AppTheme): void {
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.colorScheme = theme;
-  // WebView 原生控件（select 弹层、滚动条等）跟随 Tauri 应用主题，而不只看页面 CSS。
-  if (isTauri()) {
+  // macos-titlebar grants the native theme command to the Mac main webview.
+  if (isTauri() && /Mac/i.test(navigator.platform) && getCurrentWebview().label === "main") {
     void setTheme(theme).catch((error) => console.error("set app theme failed", error));
   }
   try {

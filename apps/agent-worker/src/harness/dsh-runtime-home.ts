@@ -5,6 +5,8 @@ import {
   mkdtempSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
+  readFileSync,
 } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
@@ -48,6 +50,11 @@ function requiredPath(path: string): string {
 export function createDshRuntimeHome(options: {
   templateDir: string;
   runtimeRoot: string;
+  chat?: boolean;
+  chatOptions?: import("../../../cloud/supabase/functions/_shared/chat.ts").DshChatOptionsSelection;
+  imageCardProvider?: boolean;
+  videoCardOptions?: boolean;
+  nativeSession?: {dir: string; sessionId:string};
 }): DshRuntimeHome {
   const templateDir = resolve(options.templateDir);
   const runtimeRoot = resolve(options.runtimeRoot);
@@ -65,16 +72,62 @@ export function createDshRuntimeHome(options: {
   const home = mkdtempSync(join(runtimeRoot, "home-"));
   const profileDir = join(home, "profiles", PROFILE_NAME);
   const pluginDir = join(profileDir, "plugins");
-  mkdirSync(pluginDir, { recursive: true });
-  for (const file of DSH_PROFILE_TEMPLATE_FILES) copyFileSync(join(templateDir, file), join(profileDir, file));
-  for (const file of DSH_PROFILE_PLUGIN_FILES) copyFileSync(join(templateDir, "plugins", file), join(pluginDir, file));
-  symlinkSync(templateModules, join(profileDir, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+  let disposed = false;
+  function dispose() {
+    if (disposed) return;
+    const child = relative(runtimeRoot, home);
+    if (!child || child.startsWith("..") || isAbsolute(child)) throw new Error("dsh_runtime_home_cleanup_unsafe");
+    rmSync(home, { recursive: true, force: true });
+    disposed = true;
+  }
+  try {
+    mkdirSync(pluginDir, { recursive: true });
+    for (const file of DSH_PROFILE_TEMPLATE_FILES) copyFileSync(join(templateDir, file), join(profileDir, file));
+    for (const file of DSH_PROFILE_PLUGIN_FILES) copyFileSync(join(templateDir, "plugins", file), join(pluginDir, file));
+    if (options.chat) {
+      let chatPatch = readFileSync(join(import.meta.dirname, "../cloud-chat/cordis.chat.patch.yml"), "utf8");
+      if (options.chatOptions) {
+        const { model, reasoningEffort } = options.chatOptions;
+        chatPatch = chatPatch.replace("thinking: disabled", "thinking: " + (reasoningEffort === "off" ? "disabled" : "enabled"))
+          .replace("reasoningEffort: off", "reasoningEffort: " + reasoningEffort)
+          .replace("id: deepseek-flash", "id: " + model)
+          .replace("name: DeepSeek-V4.1-Flash", "name: " + model);
+      }
+      writeFileSync(join(profileDir, "cordis.chat.patch.yml"), chatPatch, "utf8");
+      copyFileSync(join(import.meta.dirname, "../cloud-chat/chat-cards.mjs"), join(pluginDir, "chat-cards.mjs"));
+      const cardTool = JSON.parse(readFileSync(join(import.meta.dirname, "../../../cloud/supabase/functions/_shared/chat-card-tool.json"), "utf8"));
+      if (!options.imageCardProvider) delete cardTool.inputSchema.properties.cards.items.properties.provider;
+      if (options.videoCardOptions !== true) {
+        const fields = cardTool.inputSchema.properties.cards.items.properties;
+        delete fields.videoChannel;
+        delete fields.videoOptions;
+        fields.mode.enum = ["count", "rows"];
+        fields.mode.description = "loop only: count repeats the body; rows feeds source table rows to the body.";
+        fields.resolution.enum = [0.6, 0.8, 1];
+        cardTool.description = cardTool.description
+          .replace("H3 video mode is text, reference (one image), or frames (default, first and optional last frame). ", "")
+          .replace("Frames may be omitted to create a draft; frames mode requires a first frame to run, reference mode requires one image, text mode needs none.", "Frames may be omitted to create a draft; running H3 requires a first frame.");
+      }
+
+      writeFileSync(join(pluginDir, "chat-card-tool.json"), JSON.stringify(cardTool), "utf8");
+      if (options.nativeSession) {
+        copyFileSync(join(import.meta.dirname, "../cloud-chat/native-chat-acp.mjs"), join(pluginDir, "native-chat-acp.mjs"));
+        const file = join(profileDir, "cordis.chat.patch.yml");
+        const patch = readFileSync(file, "utf8");
+        writeFileSync(file, patch + "\n- id: acp\n  disabled: true\n- insert:\n    - id: native-chat-acp\n      name: './plugins/native-chat-acp.mjs'\n" +
+          "- id: compaction-basic\n  config:\n    auto: true\n- id: session-persistence-jsonl\n  config:\n    root: " + JSON.stringify(options.nativeSession.dir) + "\n", "utf8");
+      }
+    }
+    symlinkSync(templateModules, join(profileDir, "node_modules"), process.platform === "win32" ? "junction" : "dir");
+  } catch (error) {
+    dispose();
+    throw error;
+  }
 
   const bridgePatch = join("profiles", PROFILE_NAME, "cordis.bridge.patch.yml");
   const controlledModelPatch = join("profiles", PROFILE_NAME, "cordis.controlled-model.patch.yml");
   const htmlExecutionPatch = join("profiles", PROFILE_NAME, "cordis.html-execution.patch.yml");
   const contentExecutionPatch = join("profiles", PROFILE_NAME, "cordis.content-execution.patch.yml");
-  let disposed = false;
   return {
     home,
     profileName: PROFILE_NAME,
@@ -83,12 +136,6 @@ export function createDshRuntimeHome(options: {
     controlledModelPatch,
     htmlExecutionPatch,
     contentExecutionPatch,
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      const child = relative(runtimeRoot, home);
-      if (!child || child.startsWith("..") || isAbsolute(child)) throw new Error("dsh_runtime_home_cleanup_unsafe");
-      rmSync(home, { recursive: true, force: true });
-    },
+    dispose,
   };
 }

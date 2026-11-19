@@ -1,4 +1,6 @@
 import { contentTableRows, type ContentTable } from "./contentTable.ts";
+import { comfyVideoMode, DEFAULT_COMFY_VIDEO } from "./comfyVideo.ts";
+import type { VideoOptions } from "./videoGeneration";
 import { workflowTriggerMode } from "./workflowTriggerSchedule.ts";
 
 export class WorkflowNodeError extends Error {
@@ -14,23 +16,45 @@ export class WorkflowInputError extends WorkflowNodeError {
 }
 
 /** Editable workflow wiring is independent from immutable generation history edges. */
-export type WorkflowKind = "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "visual-profile" | "text" | "trigger" | "planner" | "loop";
+export type WorkflowKind = "director3d" | "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop";
 export const WORKFLOW_CARD_DRAG_TYPE = "application/x-bowerbird-workflow-card";
 export type WorkflowAction = "describe" | "reuse" | "layers";
 export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" | "signal";
-export interface WorkflowValue { type: WorkflowPortType; text?: string; table?: ContentTable; assetIds?: string[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[]; deliveries?: Record<string, { nodeId: string; cellId: string; append: boolean; value: WorkflowValue }> }
+export interface WorkflowValue { type: WorkflowPortType; text?: string; table?: ContentTable; assetIds?: string[]; referenceRanks?: number[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[]; deliveries?: Record<string, { nodeId: string; cellId: string; append: boolean; value: WorkflowValue }> }
 export interface WorkflowPort { id: string; label: string; type: WorkflowPortType }
-export interface WorkflowInput { slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string; autoConnect?: string; mediaFilter?: ("image" | "video" | "audio")[] }
+export interface WorkflowInput { dimension?: { id?: string | null; title: string; body: string }; slot?: number; nodeId?: string; portId?: string; assetId?: string; assetNodeId?: string; groupId?: string; assetIds?: string[]; canvasNodeId?: string; cellId?: string; autoConnect?: string; mediaFilter?: ("image" | "video" | "audio")[];
+  videoFrame?: { position: "first" | "last"; assetId: string };
+  /** A submitted image was still rendering when this completion listener was added. */
+  pendingCompletionSession?: string;
+  /** Per-member position in this generation card's reference strip, set by dragging. */
+  referenceRanks?: number[];
+  excludedAssetIds?: string[];
+  h3TailOnly?: boolean;
+}
 export interface WorkflowPromptReference { slot?: number; id: string; type: "text" | "image"; input: WorkflowInput; assetId?: string; label: string; direction?: "output" }
 export interface WorkflowNode {
+  directorDocument?: unknown;
+  directorVideoId?: string;
+  directorVideoRenderKey?: string;
+  voice?: import("./voiceCard").VoiceCardSettings;
   id: string; kind: WorkflowKind; x: number; y: number;
+  /** Last measured canvas size; presentation only, saved with the next workflow change. */
+  layoutSize?: { width: number; height: number };
   action: WorkflowAction; skill: string; prompt: string; ratio: string | null; provider: string;
   generation?: import("./videoGeneration").GenerationSettings;
   comfyVideo?: import("./comfyVideo").ComfyVideoOptions;
+  /** Reversible rendering of ordinary @ mentions in the H3 text editor. */
+  videoPrompt?: { ordinary: string; local: string };
+  /** Ordinary input positions assigned to each H3 frame, including after its source is replaced. */
+  videoFrameSlots?: Pick<WorkflowInput, "slot" | "referenceRanks">[];
   promptReferences?: WorkflowPromptReference[];
   overwriteDescribe?: boolean;
   describeCache?: { instruction: string; results: { assetId: string; sections: { title: string; body: string }[] }[] };
   agentTransport?: "local-ds" | "codex-cli" | "cloud";
+  chatConversationId?: string;
+  chatProvider?: import("./chatProvider").ChatProvider;
+  chatCodexOptions?: import("./localChat").ChatCodexOptions;
+  chatDshSkill?: import("./dshSkill").DshSkill;
   loopMode?: "images" | "rows" | "count";
   loopCount?: number;
   loopStartItem?: number;
@@ -57,8 +81,19 @@ export interface WorkflowNode {
 }
 export interface WorkflowAgentEvent { id: string; kind: "message" | "tool"; text: string; status: string; at: number }
 export interface WorkflowStep {
+  voiceRequest?: import("./voiceCard").VoiceCardRequest;
+  comfyProgress?: import("./comfyVideo").ComfyVideoProgress;
+  comfyCancelled?: boolean;
+  comfyStopping?: boolean;
+  comfyOptimization?: { input: import("./h3PromptOptimization").H3PromptInput | import("./h3PromptOptimization").H3ImagePromptInput; instruction: string; inputBindings?: string; createdAt?: number; submissionStarted?: boolean; keptOriginal?: boolean; result?: string };
   agentInput?: { prompt: string; source: string; assetIds: string[]; visualProfile?: import("./types").VisualProfileDetail | null };
+  chatInput?: import("./localChat").LocalChatSendInput;
+  chatConversationId?: string;
+  chatTurnId?: string;
+  confirmedFailedChatTurnId?: string;
   agentOutputs?: Record<string, WorkflowValue>;
+  /** Actual ingested media, before routing can mix in reference assets. */
+  generatedAssetIds?: string[];
   agentProgress?: { text: string; at: number }[];
   agentOutputTargets?: import("./workflowAgentOutputs").AgentOutputTarget[];
   contentTarget?: WorkflowNode["textTarget"];
@@ -76,6 +111,8 @@ export interface WorkflowStep {
   turnKey?: string;
   /** New image cards hand off a durable session; absent means legacy result-waiting. */
   generationSubmission?: "pending" | "submitted";
+  /** The last original-video lookup found an active task. Keep it until Stop or recovery. */
+  videoJobActive?: boolean;
   detail?: string;
   status: "pending" | "running" | "waiting" | "done" | "failed";
   error?: string; jobId?: string; agentRunId?: string; assetId?: string; profileId?: string; layerRequestKey?: string;
@@ -84,6 +121,7 @@ export interface WorkflowAgentGenerationRequest { id: string; prompt: string; im
 export interface WorkflowAgentGenerationResponse { images?: string[]; error?: string; submitted?: { jobId: string; turnKey: string; sessionNodeId: string } }
 export interface WorkflowRun {
   id: string; startId: string; threadId: string; order: string[];
+  manualCardRun?: true;
   scheduleId?: string;
   accountId?: string | null;
   status: "running" | "waiting" | "done" | "failed" | "stopped";
@@ -114,11 +152,93 @@ export const WORKFLOW_SKILLS = [
   { id: "html-layout", label: "HTML 图文排版", instruction: "请读取并使用 bowerbird-html-layout-render 技能完成以下任务，交付排版截图。", image: true },
 ] as const;
 
+/** Both provider selection and older local-provider drafts use the toolbox H3 contract. */
+export function normalizeWorkflowLocalVideo(node: WorkflowNode): WorkflowNode {
+  if (node.kind !== "generation" || node.generation?.media !== "video" || !node.generation.localVideo) return node;
+  node = normalizeWorkflowInputSlots(node);
+  const images = node.inputs.image ?? [];
+  const refs = node.promptReferences ?? [];
+  const ordered: WorkflowInput[] = [];
+  for (const match of node.prompt.matchAll(/@\[([^\]]+)\]/g)) {
+    const ref = refs.find(ref => ref.id === match[1] && ref.type === "image" && ref.direction !== "output");
+    const input = ref && images.find(input => workflowReferenceMatchesInput(ref, input));
+    if (input && !ordered.includes(input)) ordered.push(input);
+  }
+  // Connected images work without mentions. Preserve extra inputs so validation can report them.
+  ordered.push(...images.filter(input => !ordered.includes(input)));
+  // H3 assigns a whole source to each named frame socket. Only transfer an order
+  // that can be expressed without splitting a multi-image source between sockets.
+  if (ordered.some(input => input.referenceRanks?.length) && ordered.every(input =>
+    (input.referenceRanks?.length ?? 0) <= 1 && (input.assetIds?.length ?? 0) <= 1)) {
+    const rank = (input: WorkflowInput) => input.referenceRanks?.[0] === undefined || input.referenceRanks[0] < 0 ? Infinity : input.referenceRanks[0];
+    ordered.sort((left, right) => rank(left) - rank(right));
+  }
+  const frames = ordered.flatMap(input => !workflowImageContainer(input) && input.assetIds?.length
+    ? input.assetIds.map(assetId => ({ ...input, assetIds: undefined, assetId })) : [input]);
+  const prompt = node.prompt.replace(/@\[([^\]]+)\]/g, (token, id: string) => {
+    const ref = refs.find(ref => ref.id === id && ref.direction !== "output");
+    if (!ref) return token;
+    if (ref.type === "text") return ""; // The H3 text port supplies its current contents at execution.
+    const index = ordered.findIndex(input => workflowReferenceMatchesInput(ref, input));
+    if (comfyVideoMode(node.generation!.localVideo) === "reference" && index === 0) return "<Picture 1>";
+    return index < 0 ? ref.label : `@图片${index + 1}`;
+  }).trim();
+  const { image: _image, ...inputs } = node.inputs;
+  const tailOnly = frames.length === 1 && frames[0].h3TailOnly;
+  return { ...node, kind: "comfy-video", comfyVideo: node.generation!.localVideo, prompt,
+    videoFrameSlots: frames.map(({ slot, referenceRanks }) => ({ slot, referenceRanks })),
+    videoPrompt: prompt === node.prompt ? undefined : { ordinary: node.prompt, local: prompt },
+    generation: { ...node.generation, localVideo: undefined },
+    inputs: { ...inputs, "first-frame": inputs["first-frame"] ?? (tailOnly ? [] : frames.slice(0, 1)), "last-frame": inputs["last-frame"] ?? (tailOnly ? frames : frames.slice(1)) } };
+}
+
+export function selectWorkflowVideoProvider(node: WorkflowNode, channel: "jimeng" | "cloud" | "h3", options?: VideoOptions): WorkflowNode {
+  if (channel === "h3") return node.kind === "comfy-video" ? node : normalizeWorkflowLocalVideo({
+    ...node, generation: { ...node.generation, media: "video", localVideo: node.comfyVideo ?? { ...DEFAULT_COMFY_VIDEO } },
+  });
+  const generation = { ...node.generation, media: "video" as const, localVideo: undefined, videoChannel: channel,
+    videoOptions: options ?? node.generation?.videoOptions };
+  if (node.kind !== "comfy-video") return { ...node, generation };
+  const { "first-frame": first = [], "last-frame": last = [], ...inputs } = node.inputs;
+  const frames = [...first, ...last];
+  const prompt = node.videoPrompt?.local === node.prompt ? node.videoPrompt.ordinary : node.prompt;
+  // Slot numbers belong to the ordinary editor. The H3 sockets can be in
+  // mention order, and a user can replace a socket's source while on H3.
+  const editedPrompt = node.videoPrompt && node.videoPrompt.local !== node.prompt;
+  const remoteInput = (input: WorkflowInput) => input.autoConnect || (node.videoFrameSlots && input.slot && !editedPrompt)
+    ? input : { ...input, autoConnect: crypto.randomUUID() };
+  const ordered = frames.map((input, index) => {
+    const previous = node.videoFrameSlots?.[first.length ? index : index + 1];
+    return { ...previous, ...remoteInput(input),
+      h3TailOnly: !first.length && index === 0 || undefined };
+  })
+    .sort((a, b) => (a.slot ?? Infinity) - (b.slot ?? Infinity));
+  // A legacy literal asset list uses one ordinary slot but occupies multiple H3 sockets.
+  const image: WorkflowInput[] = [];
+  for (const input of ordered) {
+    const previous = image[image.length - 1];
+    if (input.slot && previous?.slot === input.slot && !input.videoFrame && !previous.videoFrame
+      && !workflowImageContainer(input) && input.assetId && !workflowImageContainer(previous) && (previous.assetId || previous.assetIds?.length)) {
+      previous.assetIds = [...(previous.assetIds ?? [previous.assetId!]), input.assetId];
+      delete previous.assetId;
+    } else image.push(input);
+  }
+  return normalizeWorkflowInputSlots({ ...node, kind: "generation", generation, prompt, videoPrompt: undefined, videoFrameSlots: undefined,
+    inputs: { ...inputs, image, text: (inputs.text ?? []).map(remoteInput) } });
+}
 
 export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
+  if (node.kind === "director3d") return [{id:"image",label:"场景参考图",type:"image"}];
+  if (node.kind === "voice") return node.voice?.id
+    ? [{ id: "text", label: "台词", type: "text" }]
+    : [{ id: "image", label: "参考录音", type: "image" }];
   if (node.kind === "trigger") return [{ id: "completion", label: "完成触发", type: "signal" }];
   if (node.textSource) return [];
-  if (node.kind === "comfy-video") return [{ id: "text", label: "文本", type: "text" }, { id: "first-frame", label: "首帧", type: "image" }, { id: "last-frame", label: "尾帧（可选）", type: "image" }];
+  if (node.kind === "comfy-video") {
+    const mode = comfyVideoMode(node.comfyVideo);
+    return [...(mode !== "text" ? [{ id: "first-frame", label: mode === "reference" ? "参考图" : "首帧", type: "image" as const }] : []),
+      ...(mode === "frames" ? [{ id: "last-frame", label: "尾帧（可选）", type: "image" as const }] : []), { id: "text", label: "文本", type: "text" }];
+  }
   if (node.kind === "loop") return node.loopMode === "count" ? [] : node.loopMode === "rows" ? [{ id: "text", label: "内容行", type: "text" }] : [{ id: "image", label: "图片列表", type: "image" }];
   if (node.kind === "instruction") return [{ id: "image", label: "图片", type: "image" }];
   const ports: WorkflowPort[] = [{ id: "text", label: "文本", type: "text" }, { id: "image", label: node.kind === "generation" && node.generation?.media === "video" ? "参考素材" : "图片", type: "image" }];
@@ -126,6 +246,8 @@ export function workflowInputs(node: WorkflowNode): WorkflowPort[] {
   return ports;
 }
 export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
+  if (node.kind === "director3d") return [{id:"image",label:"MP4",type:"image"}];
+  if (node.kind === "voice") return node.voice?.id ? [{ id: "image", label: "配音", type: "image" }] : [];
   if (node.kind === "comfy-video") return [{ id: "image", label: "视频", type: "image" }];
   if (node.kind === "planner") return [];
   if (node.kind === "loop") return node.loopMode === "count" ? [{ id: "iteration", label: "当前轮次", type: "text" }] : node.loopMode === "rows"
@@ -143,8 +265,10 @@ export function workflowOutputs(node: WorkflowNode): WorkflowPort[] {
   return [{ id: "image", label: "产物", type: "image" }];
 }
 export function workflowTitle(node: WorkflowNode): string {
-  if (node.kind === "comfy-video") return "本地 H3 视频";
+  if (node.kind === "director3d") return "3D 导演台";
+  if (node.kind === "voice") return "角色声音";
   if (node.templateInstance) return `子流程 · ${node.templateInstance.template.name}`;
+  if (node.kind === "comfy-video" || node.kind === "generation" && node.generation?.media === "video") return "视频生成";
   if (node.kind === "planner") return "工作流助手";
   if (node.kind === "loop") return "循环卡片";
   if (node.kind === "agent") return "Agent 卡片";
@@ -155,7 +279,7 @@ export function workflowTitle(node: WorkflowNode): string {
 }
 export function newWorkflowNode(kind: WorkflowKind, x: number, y: number, provider: string): WorkflowNode {
   return { id: crypto.randomUUID(), kind, x, y, action: "describe", skill: "image-edit", prompt: "", ratio: null,
-    provider, inputs: {}, outputs: {}, outputPorts: [], trigger: false, ...(kind === "trigger" ? { triggerCount: 1 } : {}) };
+    provider, inputs: {}, outputs: {}, outputPorts: [], trigger: false, ...(kind === "agent" ? { chatProvider: "codex-local" as const } : {}), ...(kind === "trigger" ? { triggerCount: 1 } : {}) };
 }
 
 export function workflowConnectionError(nodes: WorkflowNode[], fromId: string, portId: string, toId: string, inputId: string): string | null {
@@ -210,7 +334,7 @@ export function invalidateWorkflow(nodes: WorkflowNode[], changedId: string): Wo
   let changed = true;
   while (changed) {
     changed = false;
-    for (const node of nodes) if (!ids.has(node.id) && Object.values(node.inputs).flat().some(input => workflowInputProducers(nodes, input).some(id => ids.has(id)))) {
+    for (const node of nodes) if (!ids.has(node.id) && Object.values(workflowExecutionInputs(node)).flat().some(input => input.portId !== "signal" && workflowInputProducers(nodes, input).some(id => ids.has(id)))) {
       ids.add(node.id); changed = true;
     }
   }
@@ -258,7 +382,7 @@ export function workflowOrder(nodes: WorkflowNode[], startId: string, single = f
 /** A text-card start reads current cells without rerunning their producers. */
 export function workflowExecutionNodes(nodes: WorkflowNode[], startId: string): WorkflowNode[] {
   nodes = nodes.filter(node => node.kind !== "planner");
-  nodes = nodes.map(node => generationInputNode({ ...node, inputs: workflowExecutionInputs(node) }));
+  nodes = nodes.map(node => generationInputNode({ ...node, inputs: workflowExecutionInputs(node) }, nodes));
   const start = nodes.find(node => node.id === startId);
   const sources = nodes.filter(node => node.textSource && (node.id === startId || (start?.kind === "trigger" && node.inputs.signal?.some(input => input.nodeId === startId))));
   if (!sources.length) return nodes;
@@ -278,21 +402,23 @@ export function workflowCompletionTriggers(nodes: WorkflowNode[], sourceId: stri
   return nodes.filter(node => node.kind === "trigger" && workflowTriggerMode(node) === "completion" && (node.triggerCount ?? 0) > 0
     && node.inputs.completion?.some(input => input.nodeId === sourceId));
 }
-/** Reserve all possible repeat targets before running; unrelated runs cannot race a repeat. */
-export function workflowTriggerScope(nodes: WorkflowNode[], order: string[]): string[] {
-  const scope = new Set(order);
-  const expanded = new Set<string>();
-  const uncached = nodes.map(node => ({ ...node, outputs: {} }));
-  for (const id of scope) for (const trigger of workflowCompletionTriggers(nodes, id)) {
-    if (expanded.has(trigger.id)) continue;
-    expanded.add(trigger.id);
-    for (const target of workflowOrder(uncached, trigger.id)) scope.add(target);
-  }
-  return [...scope];
+export const workflowReferenceToken = (id: string) => `@[${id}]`;
+export function workflowPromptPreview(node: WorkflowNode, label = (ref: WorkflowPromptReference) => ref.label): string {
+  return node.prompt.replace(/@\[([^\]]+)\]/g, (_, id) => {
+    const ref = node.promptReferences?.find(ref => ref.id === id);
+    return `@${ref ? label(ref) : "输入"}`;
+  });
+}
+// Dimension text and its companion image share a drawn wire, but detach independently.
+export function workflowDisconnectId(input: WorkflowInput) {
+  return input.autoConnect && input.dimension
+    ? JSON.stringify(["dimension", input.autoConnect, input.assetId, input.dimension.id ?? input.dimension.title])
+    : input.autoConnect;
 }
 
-export const workflowReferenceToken = (id: string) => `@[${id}]`;
-export const workflowBindingKey = (input: WorkflowInput) => JSON.stringify([input.nodeId, input.portId, input.assetId, input.groupId, input.canvasNodeId, input.cellId, input.assetNodeId]);
+export const workflowBindingKey = (input: WorkflowInput) => JSON.stringify([input.nodeId, input.portId, input.assetId, input.groupId, input.canvasNodeId, input.cellId, input.assetNodeId,
+  ...(input.dimension ? [input.dimension.id ?? input.dimension.title] : []),
+  ...(input.videoFrame ? [{ videoFrame: input.videoFrame.position }] : [])]);
 /** An upstream card, folder or native cell owns the reference; its current images may change. */
 export const workflowImageContainer = (input: WorkflowInput) => !!(input.nodeId || input.groupId || input.canvasNodeId);
 export function activePromptReferences(node: WorkflowNode) {
@@ -328,24 +454,149 @@ export function rebindGenerationReferences(node: WorkflowNode): WorkflowNode {
 }
 export const workflowReferenceMatchesInput = (ref: Pick<WorkflowPromptReference, "direction" | "slot" | "input">, input: WorkflowInput) =>
   ref.direction !== "output" && (ref.slot !== undefined ? ref.slot === input.slot : workflowBindingKey(ref.input) === workflowBindingKey(input));
-export function generationInputNode(node: WorkflowNode): WorkflowNode {
+export function isWorkflowGenerationResult(input: WorkflowInput, source?: WorkflowNode) {
+  return !!source && source.id === input.nodeId && input.portId === "image" && (source.kind === "generation" || source.kind === "comfy-video");
+}
+function implicitGenerationInput(input: WorkflowInput, nodes: readonly WorkflowNode[]) {
+  return !!input.autoConnect || (input.portId === "image" && isWorkflowGenerationResult(input, nodes.find(node => node.id === input.nodeId)));
+}
+export function generationInputNode(node: WorkflowNode, nodes: readonly WorkflowNode[] = []): WorkflowNode {
   if (node.kind === "comfy-video") return { ...node, inputs: workflowExecutionInputs(node) };
   if (node.kind !== "generation" && node.kind !== "agent") return node;
   node = rebindGenerationReferences(node);
   if (usesConnectedAgentInputs(node)) return node;
   const refs = activePromptReferences(node);
   return { ...node, inputs: { ...node.inputs, ...Object.fromEntries((["text", "image"] as const).map(type =>
-    [type, (node.inputs[type] ?? []).filter(input => input.autoConnect || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input)))])) } };
+    [type, (node.inputs[type] ?? []).filter(input => type === "image" || implicitGenerationInput(input, nodes) || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input)))])) } };
 }
 function usesConnectedAgentInputs(node: WorkflowNode) {
-  return node.kind === "agent" && node.agentTransport !== "cloud";
+  return node.kind === "agent";
 }
-export function compileGenerationPrompt(node: WorkflowNode, values: Record<string, WorkflowValue[]>) {
+function emptyCompanionPort(type: "text" | "image", index: number, inputs: WorkflowNode["inputs"], values: Record<string, WorkflowValue[]>) {
+  const wire = inputs[type]?.[index]?.autoConnect;
+  const populated = (port: "text" | "image", i: number) => port === "text" ? values.text?.[i]?.text?.trim() : values.image?.[i]?.assetIds?.length;
+  if (!wire || populated(type, index)) return false;
+  const other = type === "image" ? "text" : "image";
+  return inputs[other]?.some((binding, i) => binding.autoConnect === wire && populated(other, i));
+}
+
+/** Keep new or previously unavailable members in their original order after ranked members. */
+export function orderedGenerationReferences(inputs: WorkflowNode["inputs"], values: Record<string, WorkflowValue[]>, assetIds: string[]) {
+  const ranks = new Map<string, number>();
+  for (const type of ["text", "image"] as const) for (const [index, binding] of (inputs[type] ?? []).entries()) {
+    if (!binding.referenceRanks) continue;
+    const value = values[type]?.[index];
+    const positions = value?.referenceRanks ?? binding.referenceRanks;
+    value?.assetIds?.forEach((id, member) => {
+      const rank = positions[member];
+      if (Number.isSafeInteger(rank) && rank >= 0) ranks.set(id, Math.min(rank, ranks.get(id) ?? Infinity));
+    });
+  }
+  return ranks.size ? [...assetIds].sort((a, b) => (ranks.get(a) ?? Infinity) - (ranks.get(b) ?? Infinity)) : assetIds;
+}
+
+export function reorderGenerationReferences(node: WorkflowNode, values: Record<string, WorkflowValue[]>, orderedAssetIds: string[]): WorkflowNode["inputs"] {
+  const ranks = new Map(orderedAssetIds.map((id, index) => [id, index]));
+  const inputs = { ...node.inputs };
+  for (const type of ["text", "image"] as const) if (inputs[type]) {
+    inputs[type] = inputs[type].map((binding, index) => {
+      const positions = values[type]?.[index]?.assetIds?.map(id => ranks.get(id) ?? -1);
+      if (positions?.some(rank => rank >= 0)) return { ...binding, referenceRanks: positions };
+      if (!binding.referenceRanks) return binding;
+      const { referenceRanks: _previous, ...rest } = binding;
+      return rest;
+    });
+  }
+  return inputs;
+}
+
+function generationMentionAssets(prompt: string, resolved: Map<string, WorkflowValue>) {
+  const ids = new Set<string>();
+  for (const match of prompt.matchAll(/@\[([^\]]+)\]/g)) {
+    for (const id of resolved.get(match[1])?.assetIds ?? []) ids.add(id);
+  }
+  return ids;
+}
+
+export function filterDisconnectedReferences(inputs: WorkflowNode["inputs"], values: Record<string, WorkflowValue[]>) {
+  const result = { ...values };
+  for (const [port, items] of Object.entries(values)) {
+    if (!inputs[port]?.some(input => input.excludedAssetIds?.length)) continue;
+    result[port] = items.map((value, index) => {
+      const input = inputs[port]?.[index];
+      const excluded = input?.excludedAssetIds;
+      if (!excluded?.length) return value;
+      const ranks = value.referenceRanks ?? input?.referenceRanks;
+      const tokens = new Set(value.imageRefs?.filter(ref => excluded.includes(ref.asset_id)).map(ref => ref.token));
+      return { ...value, assetIds: value.assetIds?.filter(id => !excluded.includes(id)),
+        referenceRanks: ranks && value.assetIds?.flatMap((id, i) => excluded.includes(id) ? [] : [ranks[i] ?? -1]),
+        imageRefs: value.imageRefs?.filter(ref => !excluded.includes(ref.asset_id)),
+        text: value.text?.replace(/@图片\d+/g, token => tokens.has(token) ? "" : token) };
+    });
+  }
+  return result;
+}
+
+export function disconnectGenerationReference(node: WorkflowNode, values: Record<string, WorkflowValue[]>, assetId: string): Partial<WorkflowNode> {
+  node = normalizeWorkflowInputSlots(node);
+  const current = filterDisconnectedReferences(node.inputs, values);
+  const inputs = { ...node.inputs };
+  const promptReferences = [...(node.promptReferences ?? [])];
+  const removedRefs = new Set<string>();
+  for (const port of ["image", "text"] as const) {
+    const bindings = node.inputs[port];
+    if (!bindings) continue;
+    inputs[port] = [];
+    for (const [index, input] of bindings.entries()) {
+      const value = current[port]?.[index];
+      const ids = value?.assetIds ?? [];
+      const sibling = port === "text" && input.autoConnect && node.inputs.image?.some((other, i) =>
+        other.autoConnect === input.autoConnect && current.image?.[i]?.assetIds?.includes(assetId) && current.image[i].assetIds!.every(id => id === assetId));
+      const removedTokens = value?.imageRefs?.filter(ref => ref.asset_id === assetId).map(ref => ref.token) ?? [];
+      const remainingText = value?.text?.replace(/@图片\d+/g, token => removedTokens.includes(token) ? "" : token).trim();
+      const remove = !input.dimension && (ids.includes(assetId) || sibling) && !ids.some(id => id !== assetId) && !(port === "text" && remainingText);
+      const slot = inputs[port].length + 1;
+      for (const [i, ref] of promptReferences.entries()) {
+        if (ref.type !== port || ref.direction === "output" || node.promptReferences?.[i].slot !== input.slot) continue;
+        if (remove) removedRefs.add(ref.id);
+        else promptReferences[i] = { ...ref, slot };
+      }
+      if (!remove) inputs[port].push(ids.includes(assetId)
+        ? { ...input, slot, excludedAssetIds: [...(input.excludedAssetIds ?? []), assetId] }
+        : { ...input, slot });
+    }
+  }
+  return { inputs, promptReferences: promptReferences.filter(ref => !removedRefs.has(ref.id)),
+    prompt: node.prompt.replace(/@\[([^\]]+)\]/g, (token, id: string) => removedRefs.has(id) ? "" : token) };
+}
+
+/** Connected image order determines reference numbers; mentions only place them in the prompt. */
+export function generationReferencePreviewOrder(node: WorkflowNode, values: Record<string, WorkflowValue[]>, nodes: readonly WorkflowNode[]) {
   node = rebindGenerationReferences(node);
-  const refs = activePromptReferences(node), inputs = generationInputNode(node).inputs;
+  values = filterDisconnectedReferences(node.inputs, values);
+  const resolved = new Map<string, WorkflowValue>();
+  for (const ref of activePromptReferences(node)) {
+    const index = node.inputs[ref.type]?.findIndex(input => workflowReferenceMatchesInput(ref, input)) ?? -1;
+    const value = values[ref.type]?.[index];
+    if (value) resolved.set(ref.id, value);
+  }
+  const ids = new Set(values.image?.flatMap(value => value.assetIds ?? []) ?? []);
+  for (const id of generationMentionAssets(node.prompt, resolved)) ids.add(id);
+  for (const type of ["text", "image"] as const) for (const [index, binding] of (node.inputs[type] ?? []).entries()) {
+    if (implicitGenerationInput(binding, nodes)) for (const id of values[type]?.[index]?.assetIds ?? []) ids.add(id);
+  }
+  for (const value of Object.values(values).flat()) for (const id of value.assetIds ?? []) ids.add(id);
+  return orderedGenerationReferences(node.inputs, values, [...ids]);
+}
+
+export function compileGenerationPrompt(node: WorkflowNode, values: Record<string, WorkflowValue[]>, nodes: readonly WorkflowNode[] = []) {
+  node = rebindGenerationReferences(node);
+  const refs = activePromptReferences(node), inputs = generationInputNode(node, nodes).inputs;
+  values = filterDisconnectedReferences(inputs, values);
   const resolved = new Map<string, WorkflowValue>();
   for (const ref of refs) {
     const index = (inputs[ref.type] ?? []).findIndex(input => workflowReferenceMatchesInput(ref, input));
+    if (index < 0) throw new WorkflowInputError(`「${ref.label}」已断开，请按图片或文本的引用顺序重新连接所需来源，或在提示词中重新选择这处 @ 引用。`, node, ref.input, ref.label);
     const value = values[ref.type]?.[index];
     const dynamic = ref.type === "image" && (ref.slot !== undefined || workflowImageContainer(ref.input));
     if (!value || (ref.assetId && !dynamic && !value.assetIds?.includes(ref.assetId))) throw new WorkflowInputError(`输入管道「${ref.label}」已断开或没有可用输出，请检查当前上游连接`, node, ref.input, ref.label);
@@ -353,20 +604,22 @@ export function compileGenerationPrompt(node: WorkflowNode, values: Record<strin
     if (dynamic && !value.assetIds?.length) throw new WorkflowInputError(`上游处理结束后，引用「${ref.label}」仍没有可用图片，请检查来源卡片的输出`, node, ref.input, ref.label);
     resolved.set(ref.id, ref.type === "image" && ref.assetId && !dynamic ? { ...value, assetIds: [ref.assetId] } : value);
   }
-  const assetIds: string[] = [];
-  for (const match of node.prompt.matchAll(/@\[([^\]]+)\]/g)) for (const id of resolved.get(match[1])?.assetIds ?? []) if (!assetIds.includes(id)) assetIds.push(id);
+  const participating = new Set(values.image?.flatMap(value => value.assetIds ?? []) ?? []);
+  for (const id of generationMentionAssets(node.prompt, resolved)) participating.add(id);
   // New card-level connections are active without @. Explicit mentions still
   // control placement, so the same source is never appended a second time.
   const automaticText: WorkflowValue[] = [];
   for (const type of ["text", "image"] as const) for (const [index, input] of (inputs[type] ?? []).entries()) {
-    if (!input.autoConnect || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input))) continue;
+    if ((type !== "image" && !implicitGenerationInput(input, nodes)) || refs.some(ref => ref.type === type && workflowReferenceMatchesInput(ref, input))) continue;
     const value = values[type]?.[index];
     const label = `${type === "text" ? "文字" : "素材"}输入 ${input.slot ?? index + 1}`;
+    if (emptyCompanionPort(type, index, inputs, values)) continue;
     if (!value || (type === "text" ? !value.text?.trim() : !value.assetIds?.length))
       throw new WorkflowInputError(`已连接的${label}没有可用内容，请检查来源输出`, node, input, label);
-    for (const id of value.assetIds ?? []) if (!assetIds.includes(id)) assetIds.push(id);
+    for (const id of value.assetIds ?? []) participating.add(id);
     if (type === "text") automaticText.push(value);
   }
+  const assetIds = orderedGenerationReferences(inputs, values, [...participating]);
   const renderText = (value: WorkflowValue) => (value.text ?? "").replace(/@图片\d+/g, token => {
     const ref = value.imageRefs?.find(ref => ref.token === token);
     const index = ref ? assetIds.indexOf(ref.asset_id) : -1;
@@ -439,6 +692,7 @@ export function compileAgentPrompt(node: WorkflowNode, values: Record<string, Wo
       if (!usesConnectedAgentInputs(node) && !input.autoConnect) continue;
       const value = values[type]?.[index];
       const label = `${type === "text" ? "文字" : "图片"}输入 ${index + 1}`;
+      if (emptyCompanionPort(type, index, inputs, values)) continue;
       if (type === "image") {
         if (!value?.assetIds?.length) throw new WorkflowInputError(`已连接的${label}没有可用图片，请检查来源输出`, node, input, label);
         for (const id of value.assetIds) if (!assetIds.includes(id)) assetIds.push(id);
@@ -461,16 +715,22 @@ export function workflowInputValues(nodes: WorkflowNode[], node: WorkflowNode, c
   for (const port of workflowInputs(node)) {
     result[port.id] = (node.inputs[port.id] ?? []).map(input => {
       try {
+      if (input.dimension && port.type === "text") return { type: "text", text: input.dimension.body };
       if (input.groupId && port.type === "image") {
         if (!input.assetIds?.length) throw new Error("文件夹中没有可用图片，请添加图片后重新运行");
         return { type: "image", assetIds: input.assetIds };
       }
-      if (input.assetId && port.type === "image") return { type: "image", assetIds: [input.assetId] };
+      if (input.assetId && port.type === "image") return { type: "image", assetIds: [input.videoFrame?.assetId ?? input.assetId] };
         if (input.canvasNodeId && (port.type === "text" || port.type === "image")) {
         const text = cellText?.(input.canvasNodeId, input.cellId ?? "");
         if (text === undefined) throw new Error("来源卡片或单元格不存在，请检查来源连接");
           const value: WorkflowValue = typeof text === "string" ? { type: "text", text } : text;
           if (value.type !== port.type) throw new Error("连接的单元格类型不匹配，请重新连接");
+          // Preserve both slots until compileAgentPrompt can validate the whole wire.
+          const otherPort = port.type === "image" ? "text" : "image";
+          if ((node.kind === "agent" || node.kind === "generation") && input.autoConnect && node.inputs[otherPort]?.some(
+            sibling => sibling.autoConnect === input.autoConnect && sibling.canvasNodeId === input.canvasNodeId,
+          )) return value;
           if (value.type === "text" && !value.text?.trim() && !value.nodeIds?.length) throw new Error("来源卡片或单元格中没有可用文本");
           if (value.type === "image" && !value.assetIds?.length && !value.nodeIds?.length) throw new Error("来源卡片或单元格中没有可用图片");
           return value;
@@ -501,11 +761,15 @@ export const workflowRunActive = (run: WorkflowRun) => run.status === "running" 
 export const workflowRuns = (document: CanvasWorkflow): WorkflowRun[] => document.runs ?? (document.run ? [document.run] : []);
 export function workflowDependencies(nodes: WorkflowNode[], order: string[]): string[] {
   const ids = new Set(order);
-  for (const id of ids) for (const input of Object.values(nodes.find(node => node.id === id)?.inputs ?? {}).flat()) {
-    if (input.portId === "signal" && !order.includes(input.nodeId ?? "")) continue;
-    for (const producer of workflowInputProducers(nodes, input)) ids.add(producer);
+  for (const id of ids) {
+    const node = nodes.find(node => node.id === id);
+    if (!node || node.kind === "trigger") continue;
+    for (const input of Object.values(node.inputs).flat()) {
+      if (input.portId === "signal") continue;
+      for (const producer of workflowInputProducers(nodes, input)) ids.add(producer);
+    }
   }
-  const tables = new Set(nodes.filter(node => ids.has(node.id) || (node.textTarget && Object.values(node.inputs).flat().some(input => order.includes(input.nodeId ?? "")))).flatMap(node => [...(node.resultNodeIds ?? []), ...(node.textTarget ? [node.textTarget.nodeId] : [])]));
+  const tables = new Set(nodes.filter(node => ids.has(node.id) || (node.textTarget && Object.values(node.inputs).flat().some(input => input.portId !== "signal" && order.includes(input.nodeId ?? "")))).flatMap(node => [...(node.resultNodeIds ?? []), ...(node.textTarget ? [node.textTarget.nodeId] : [])]));
   for (const node of nodes) if ((node.textTarget && tables.has(node.textTarget.nodeId)) || node.resultNodeIds?.some(id => tables.has(id))) ids.add(node.id);
   return [...ids];
 }
@@ -515,26 +779,32 @@ export function workflowLockedNodes(document: CanvasWorkflow): Set<string> {
 /** Execution can rewrite outputs and native result tables; cached dependencies are read-only. */
 export function workflowWriteNodes(nodes: WorkflowNode[], order: string[]): string[] {
   const ids = new Set(order);
-  const tables = new Set(nodes.filter(node => ids.has(node.id) || (node.textTarget && Object.values(node.inputs).flat().some(input => order.includes(input.nodeId ?? "")))).flatMap(node => [...(node.resultNodeIds ?? []), ...(node.textTarget ? [node.textTarget.nodeId] : [])]));
+  const tables = new Set(nodes.filter(node => ids.has(node.id) || (node.textTarget && Object.values(node.inputs).flat().some(input => input.portId !== "signal" && order.includes(input.nodeId ?? "")))).flatMap(node => [...(node.resultNodeIds ?? []), ...(node.textTarget ? [node.textTarget.nodeId] : [])]));
   for (const node of nodes) if ((node.textTarget && tables.has(node.textTarget.nodeId)) || node.resultNodeIds?.some(id => tables.has(id))) ids.add(node.id);
   return [...ids];
 }
-export function workflowAccessConflict(readsAndWrites: string[], writes: string[], otherAccess: string[], otherWrites: string[]): boolean {
-  return writes.some(id => otherAccess.includes(id)) || otherWrites.some(id => readsAndWrites.includes(id));
+export function workflowAccessConflict(nodes: WorkflowNode[], readsAndWrites: string[], writes: string[], otherAccess: string[], otherWrites: string[]): boolean {
+  const sharedWrites = (left: string[], right: string[]) => left.some(id => right.includes(id) && !nodes.some(node => node.id === id && node.kind === "trigger"));
+  return sharedWrites(writes, otherAccess) || sharedWrites(otherWrites, readsAndWrites);
 }
 export function workflowNodeRun(document: CanvasWorkflow, nodeId: string): WorkflowRun | undefined {
-  const runs = workflowRuns(document).filter(run => run.steps[nodeId] || workflowRunActive(run) && run.lockedNodeIds?.includes(nodeId));
-  return runs.find(workflowRunActive) ?? runs[runs.length - 1];
+  const runs = workflowRuns(document);
+  return runs.find(run => workflowRunActive(run) && run.order.includes(nodeId))
+    ?? runs.find(run => workflowRunActive(run) && !run.order.length && run.triggerQueue?.[0] === nodeId)
+    ?? runs.find(run => workflowRunActive(run) && run.lockedNodeIds?.includes(nodeId))
+    ?? [...runs].reverse().find(run => !workflowRunActive(run) && run.steps[nodeId]);
 }
 export function workflowActiveSession(node: WorkflowNode): string | null {
   return node.activeSessionNodeId !== undefined ? node.activeSessionNodeId : node.sessionNodeIds?.[node.sessionNodeIds.length - 1] ?? null;
 }
 export const WORKFLOW_CARD_WIDTH = 320;
 export function workflowCardWidth(node: Pick<WorkflowNode, "kind">) {
-  return node.kind === "trigger" ? 196 : WORKFLOW_CARD_WIDTH;
+  return node.kind === "trigger" ? 196 : node.kind === "voice" ? WORKFLOW_CARD_WIDTH * 1.3 : WORKFLOW_CARD_WIDTH;
 }
 export function workflowPortY(node: WorkflowNode, side: "input" | "output", portId: string): number {
   if (node.kind === "trigger") return node.y + 46;
   const ports = side === "input" ? workflowInputs(node) : workflowOutputs(node);
-  return node.y + (node.kind === "comfy-video" ? 62 : 94) + Math.max(0, ports.findIndex(port => port.id === portId)) * (node.kind === "comfy-video" ? 24 : 30);
+  // H3: two 4:3 frame previews above the prompt (34px card inset, 8px gap, 10px row gap).
+  const frameRowOffset = node.kind === "comfy-video" && comfyVideoMode(node.comfyVideo) !== "text" ? (workflowCardWidth(node) - 42) * 3 / 8 + 10 : 0;
+  return node.y + frameRowOffset + (node.kind === "comfy-video" ? 74 : 94) + Math.max(0, ports.findIndex(port => port.id === portId)) * (node.kind === "comfy-video" ? 24 : 30);
 }

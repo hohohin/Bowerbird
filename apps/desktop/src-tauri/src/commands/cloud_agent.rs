@@ -27,7 +27,6 @@ const UNIFIED_SKILL_ID: &str = "bowerbird-unified-agent";
 const LEGACY_AGENT_RUNTIME: &str = "legacy_kernel";
 const DSH_AGENT_RUNTIME: &str = "dsh";
 const MAX_REFERENCES: usize = 8;
-const MAX_PROMPT_CHARS: usize = 4_000;
 const MAX_FEEDBACK_CHARS: usize = 2_000;
 const MAX_ARTIFACT_BYTES: u64 = 20 * 1024 * 1024;
 const PROJECT_AGENT_LAUNCH_SNAPSHOT_KEY: &str = "_bowerbirdProjectAgentLaunchV1";
@@ -392,26 +391,88 @@ async fn agent_action(
     body: Value,
     context: &str,
 ) -> Result<Value, AppError> {
+    // A lost create response is reconciled once by its original identity. Never
+    // replay create or mint a new key, including when the lookup itself fails.
+    let result = agent_action_once(cloud, auth, &body, context).await;
+    if result.is_err() && body.get("action").and_then(Value::as_str) == Some("create") {
+        let mut lookup = body.clone();
+        lookup["action"] = json!("get_by_key");
+        if let Ok(found) = agent_action_once(cloud, auth, &lookup, "查询原 Agent 创建请求失败").await {
+            return Ok(found);
+        }
+        if let Err(error) = result {
+            return Err(AppError::Cloud(format!("{error} [idempotencyKey={}]；原任务状态尚未确认，不会自动重发",
+                body.get("idempotencyKey").and_then(Value::as_str).unwrap_or("unknown"))));
+        }
+    }
+    result
+}
+
+async fn agent_action_once(
+    cloud: &CloudClient, auth: &AuthClient, body: &Value, context: &str,
+) -> Result<Value, AppError> {
     let endpoint = cloud
         .config()
         .endpoint("agent-run")
         .ok_or_else(|| AppError::Cloud("Bowerbird Cloud 未配置".into()))?;
     let response = auth
-        .send_authorized(cloud.http().post(endpoint).json(&body), context)
+        .send_authorized(cloud.http().post(endpoint).json(body), context)
         .await?;
     let status = response.status();
+    let gateway_id = response.headers().get("X-Bowerbird-Request-Id").and_then(|value| value.to_str().ok())
+        .filter(|value| value.len() <= 64 && value.bytes().all(|ch| ch.is_ascii_alphanumeric() || ch == b'-'))
+        .unwrap_or("unavailable").to_string();
     let text = response
         .text()
         .await
-        .map_err(|error| AppError::Cloud(format!("读取 Agent 响应失败: {error}")))?;
+        .map_err(|error| crate::cloud::client::request_error("读取 Agent 响应失败", error))?;
     if !status.is_success() {
-        return Err(AppError::Cloud(safe_cloud_message(
+        let message = safe_cloud_message(
             &text,
             &format!("{context}（HTTP {}）", status.as_u16()),
-        )));
+        );
+        return Err(AppError::Cloud(format!("{message} [HTTP {};gatewayRequestId={gateway_id}]", status.as_u16())));
     }
     serde_json::from_str(&text)
         .map_err(|error| AppError::Cloud(format!("解析 Agent 响应失败: {error}")))
+}
+
+#[cfg(test)]
+mod create_recovery_tests {
+    use super::*;
+    use axum::{routing::post, Json, Router};
+    #[tokio::test]
+    async fn lost_agent_create_response_queries_original_key_without_resubmission() {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<Value>::new()));
+        let record = seen.clone();
+        let router = Router::new().route("/functions/v1/agent-run", post(move |Json(body): Json<Value>| {
+            let record = record.clone();
+            async move {
+                record.lock().unwrap().push(body.clone());
+                if body["action"] == "create" {
+                    (axum::http::StatusCode::BAD_GATEWAY, Json(json!({"error":{"message":"response lost"}})))
+                } else {
+                    (axum::http::StatusCode::OK, Json(json!({"runId":"original-run","status":"uploading","recovered":true})))
+                }
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let cloud = CloudClient::new(crate::cloud::config::CloudConfig {
+            supabase_url: Some(format!("http://{}", listener.local_addr().unwrap())),
+            supabase_publishable_key: Some("test-public".into()), account_api_url: None,
+        }).unwrap();
+        let auth = AuthClient::with_test_session(cloud.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        let original = json!({"action":"create","idempotencyKey":"original-key","inputManifestHash":"hash"});
+        let found = agent_action(&cloud, &auth, original.clone(), "创建失败").await.unwrap();
+        server.abort();
+        assert_eq!(found["runId"], "original-run");
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 2);
+        assert_eq!(seen[0], original);
+        assert_eq!(seen[1]["action"], "get_by_key");
+        assert_eq!(seen[1]["idempotencyKey"], original["idempotencyKey"]);
+    }
 }
 
 fn run_status(snapshot: &Value) -> Result<String, AppError> {
@@ -1265,7 +1326,7 @@ fn checkpoint_created_run(
             "skill_id": skill_id,
             "skill_version": skill_version,
             "agent_runtime": agent_runtime,
-            "status": "uploading",
+            "status": created.get("status").and_then(Value::as_str).unwrap_or("uploading"),
             "progress": 0,
             "budget_credits": created.get("budgetCredits").cloned().unwrap_or(json!(default_budget)),
         },
@@ -1278,7 +1339,7 @@ fn checkpoint_created_run(
         run_id: run_id.to_string(),
         conversation_id: conversation_id.to_string(),
         skill_id: skill_id.to_string(),
-        status: "uploading".into(),
+        status: created.get("status").and_then(Value::as_str).unwrap_or("uploading").into(),
         intent_prompt: intent_prompt.to_string(),
         reference_asset_ids: reference_asset_ids.to_vec(),
         project_id: project_id.map(str::to_string),
@@ -1379,8 +1440,8 @@ fn normalize_intent_prompt(
     references: &[CloudAgentReferenceRequest],
 ) -> Result<String, AppError> {
     let mut normalized = prompt.trim().to_string();
-    if normalized.is_empty() || normalized.chars().count() > MAX_PROMPT_CHARS {
-        return Err(AppError::Other("Agent 意图须为 1–4000 个字符".into()));
+    if normalized.is_empty() {
+        return Err(AppError::Other("Agent 意图不能为空".into()));
     }
     let mut tokens: Vec<(String, String)> = references
         .iter()
@@ -1401,12 +1462,6 @@ fn normalize_intent_prompt(
     Ok(normalized)
 }
 
-fn valid_https_url(value: &str) -> bool {
-    reqwest::Url::parse(value)
-        .ok()
-        .is_some_and(|url| url.scheme() == "https" && url.host_str().is_some())
-}
-
 async fn upload_signed(
     cloud: &CloudClient,
     url: &str,
@@ -1414,9 +1469,8 @@ async fn upload_signed(
     bytes: Vec<u8>,
     label: &str,
 ) -> Result<(), AppError> {
-    if !valid_https_url(url) {
-        return Err(AppError::Cloud(format!("{label}上传地址不安全")));
-    }
+    let url = cloud.config().agent_transfer_url(url, true)
+        .ok_or_else(|| AppError::Cloud(format!("{label}上传地址不安全")))?;
     let response = cloud
         .http()
         .put(url)
@@ -1425,7 +1479,7 @@ async fn upload_signed(
         .body(bytes)
         .send()
         .await
-        .map_err(|error| AppError::Cloud(format!("{label}上传失败: {error}")))?;
+        .map_err(|error| crate::cloud::client::request_error(&format!("{label}上传失败"), error))?;
     if !response.status().is_success() {
         return Err(AppError::Cloud(format!(
             "{label}上传失败（HTTP {}）",
@@ -1613,6 +1667,10 @@ async fn start_html_layout_run(
         creative_launch.as_ref(),
         15,
     )?;
+    if created.get("recovered").and_then(Value::as_bool) == Some(true)
+        && created.get("status").and_then(Value::as_str) != Some("uploading") {
+        return refresh_record(&db, &cloud, &auth, &run_id).await;
+    }
     let transfer_result: Result<(), AppError> = async {
         let request_url = created
             .get("uploadUrl")
@@ -1721,6 +1779,14 @@ async fn start_html_layout_run(
     Ok(record)
 }
 
+// Text rewrite belongs to its source editor, not a new canvas creative session.
+fn unified_agent_presentation(prompt: &str, rewrite: Option<&AgentTextRewrite>, thread_id: Option<&str>) -> (String, Option<String>) {
+    match rewrite {
+        Some(rewrite) => (rewrite.source.clone(), None),
+        None => (prompt.to_owned(), thread_id.map(str::to_owned)),
+    }
+}
+
 async fn start_unified_agent_run(
     app: &AppHandle,
     db: &Database,
@@ -1740,8 +1806,8 @@ async fn start_unified_agent_run(
 ) -> Result<CloudAgentRunRecord, AppError> {
     let options = validate_html_layout_options(options)?;
     if let Some(rewrite) = &text_rewrite {
-        if rewrite.source.trim().is_empty() || rewrite.source.encode_utf16().count() > 16000 || !references.is_empty() || visual_profile_id.is_some() {
-            return Err(AppError::Other("文本改写需要 1–16000 字原文，不支持图片或视觉规范输入".into()));
+        if rewrite.source.trim().is_empty() || !references.is_empty() || visual_profile_id.is_some() {
+            return Err(AppError::Other("文本改写原文不能为空，不支持图片或视觉规范输入".into()));
         }
     }
     let entitlement_snapshot = entitlement.current_or_sync(auth).await;
@@ -1816,9 +1882,7 @@ async fn start_unified_agent_run(
         },
         visual_profile_capsule: visual_profile_capsule.as_ref(),
     })?;
-    if manifest.len() > 64 * 1024 {
-        return Err(AppError::Other("统一 Agent 输入清单过大".into()));
-    }
+    let (display_prompt, thread_id) = unified_agent_presentation(&normalized_prompt, text_rewrite.as_ref(), thread_id.as_deref());
     let creative_launch = begin_creative_launch(
         db,
         project_id.as_deref(),
@@ -1893,7 +1957,7 @@ async fn start_unified_agent_run(
         UNIFIED_SKILL_ID,
         "0.1.0",
         Some(DSH_AGENT_RUNTIME),
-        &normalized_prompt,
+        &display_prompt,
         &reference_ids,
         project_id.as_deref(),
         thread_id.as_deref(),
@@ -1901,6 +1965,10 @@ async fn start_unified_agent_run(
         creative_launch.as_ref(),
         30,
     )?;
+    if created.get("recovered").and_then(Value::as_bool) == Some(true)
+        && created.get("status").and_then(Value::as_str) != Some("uploading") {
+        return refresh_record(&db, &cloud, &auth, &run_id).await;
+    }
     if created.get("agentRuntime").and_then(Value::as_str) != Some(DSH_AGENT_RUNTIME) {
         let cancel_response = agent_action(
             cloud,
@@ -2013,7 +2081,7 @@ async fn start_unified_agent_run(
         conversation_id,
         skill_id: UNIFIED_SKILL_ID.into(),
         status: "queued".into(),
-        intent_prompt: normalized_prompt,
+        intent_prompt: display_prompt,
         reference_asset_ids: reference_ids,
         project_id,
         thread_id,
@@ -2144,11 +2212,7 @@ pub async fn cloud_agent_start(
     let image_provider = match image_provider.as_deref() {
         None | Some("cloud") => "cloud".to_string(),
         Some("jimeng") => {
-            if crate::codex::jimeng::resolve_dreamina_binary().is_none() {
-                return Err(AppError::Other(
-                    "未找到可用的即梦 CLI，无法使用本机生图引擎".into(),
-                ));
-            }
+            super::codex::require_generation_cli(&app, "jimeng").await?;
             "jimeng".to_string()
         }
         Some(other) => {
@@ -2309,6 +2373,10 @@ pub async fn cloud_agent_start(
         creative_launch.as_ref(),
         48,
     )?;
+    if created.get("recovered").and_then(Value::as_bool) == Some(true)
+        && created.get("status").and_then(Value::as_str) != Some("uploading") {
+        return refresh_record(&db, &cloud, &auth, &run_id).await;
+    }
     let returned_agent_runtime = created.get("agentRuntime").and_then(Value::as_str);
     if returned_agent_runtime != Some(resolved_agent_runtime) {
         let cancel_response = agent_action(
@@ -2725,15 +2793,14 @@ async fn download_artifact(
     )
     .await?;
     let url = signed.get("url").and_then(Value::as_str).unwrap_or("");
-    if !valid_https_url(url) {
-        return Err(AppError::Cloud("Agent 图片下载地址不安全".into()));
-    }
+    let url = cloud.config().agent_transfer_url(url, false)
+        .ok_or_else(|| AppError::Cloud("Agent 图片下载地址不安全".into()))?;
     let response = cloud
         .http()
         .get(url)
         .send()
         .await
-        .map_err(|error| AppError::Cloud(format!("下载 Agent 图片失败: {error}")))?;
+        .map_err(|error| crate::cloud::client::request_error("下载 Agent 图片失败", error))?;
     if !response.status().is_success() {
         return Err(AppError::Cloud(format!(
             "下载 Agent 图片失败（HTTP {}）",
@@ -3430,17 +3497,6 @@ pub async fn cloud_agent_execute_local_task(
             return Ok::<(Vec<u8>, String), AppError>(cached);
         }
 
-        // 即梦与主生成队列共用账号级串行锁；Codex provider 自己持有全局图片目录锁。
-        let _jimeng_permit = if provider_key == "jimeng" {
-            Some(
-                crate::core::generation_worker::JIMENG_FLY
-                    .acquire()
-                    .await
-                    .unwrap(),
-            )
-        } else {
-            None
-        };
         let dreamina_model =
             (provider_key == "jimeng").then(|| settings.get().dreamina_model_version);
         let provider = crate::codex::resolve_gen_provider(
@@ -3567,6 +3623,35 @@ pub async fn cloud_agent_execute_local_task(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn text_rewrite_keeps_history_without_canvas_launch_or_projection() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::open(&dir.path().join("text-rewrite.db")).unwrap();
+        db.migrate().unwrap();
+        let rewrite = super::AgentTextRewrite { source: "镜头先固定，再拉远".into() };
+        let (display, thread) = super::unified_agent_presentation("internal skill instructions", Some(&rewrite), Some("source-thread"));
+        assert_eq!(display, rewrite.source);
+        assert!(thread.is_none());
+        let launch = super::begin_creative_launch(&db, Some("source-project"), thread.as_deref(), &display,
+            "cloud", None, None, &[], &[], None, None).unwrap();
+        assert!(launch.is_none());
+        let record = super::CloudAgentRunRecord {
+            run_id: "rewrite-run".into(), conversation_id: "rewrite-conversation".into(), skill_id: "bowerbird-unified-agent".into(),
+            status: "failed".into(), intent_prompt: display, reference_asset_ids: vec![], project_id: None,
+            thread_id: thread, creative_launch_id: None, snapshot: serde_json::json!({"run":{"status":"failed"}}),
+            feedback_action: None, final_asset_id: None, created_at: 1, updated_at: 1,
+        };
+        super::save_and_project_record(&db, &record).unwrap();
+        assert_eq!(super::load_record(&db, "rewrite-run").unwrap().intent_prompt, rewrite.source);
+        let connection = db.conn.lock().unwrap();
+        for table in ["canvas_nodes", "creative_threads"] {
+            let count: i64 = connection.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| row.get(0)).unwrap();
+            assert_eq!(count, 0, "text rewrite must not create {table}");
+        }
+        let (display, thread) = super::unified_agent_presentation("ordinary creative request", None, Some("thread"));
+        assert_eq!(display, "ordinary creative request");
+        assert_eq!(thread.as_deref(), Some("thread"));
+    }
     use super::{
         agent_group_payload, cache_local_result, ensure_agent_provider_compatible,
         existing_agent_asset, ingestible_artifacts, list_records, load_cached_local_result,

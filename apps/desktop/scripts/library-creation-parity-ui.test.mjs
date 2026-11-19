@@ -166,7 +166,7 @@ try {
   assert.equal(await pickCount(), pagedPicks); assert.equal(await chipCount(), pagedChips);
   await closePreview(); await unchangedDraft();
 
-  await page.locator('.library-home').getByRole('tab',{name:'集合分类',exact:true}).click();
+  await page.locator('.library-home').getByRole('tab',{name:'文件夹',exact:true}).click();
   const connected = page.locator('[data-connection-entry="parity-entry-1"] .folder-media-card');
   await connected.waitFor();
   await singlePreview(connected); await doubleReference(connected);

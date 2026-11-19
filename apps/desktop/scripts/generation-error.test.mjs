@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { generationErrorMessage, userErrorMessage } from '../src/lib/userError.ts';
+import { generationErrorMessage, generationFailure, userErrorMessage } from '../src/lib/userError.ts';
 
 test('generation failures explain the actual cause without exposing provider diagnostics', () => {
   const cases = [
@@ -25,9 +25,11 @@ test('generation failures explain the actual cause without exposing provider dia
     ['参考视频总时长不得超过 30 秒', 'jimeng', /30 秒.*减少或裁剪/],
     ['app 重启中断，codex 会话不可恢复', 'codex', /应用重启.*中断.*当前会话中重试/],
     ['model_not_configured: GPT Image 服务暂未配置 API key', 'bowerbird-cloud', /生成方式暂时不可用.*切换/],
-    ['dreamina 退出 exit code: 1：unauthorized', 'jimeng', /即梦登录已失效.*设置重新登录/],
-    ['dreamina 退出 exit code: 1：please login', 'jimeng', /即梦登录已失效.*设置重新登录/],
+    ['dreamina 退出 exit code: 1：unauthorized', 'jimeng', /即梦自有订阅未登录.*设置中登录即梦/],
+    ['dreamina 退出 exit code: 1：please login', 'jimeng', /即梦自有订阅未登录.*设置中登录即梦/],
+    ['即梦: dreamina 提交退出 exit code: 1 | stderr: 未检测到有效登录态，请先执行 dreamina login | stdout: ', 'jimeng', /即梦自有订阅未登录.*设置中登录即梦/],
     ['启动 dreamina 失败: program not found (os error 2)', 'jimeng', /启动本机生成工具.*设置检查/],
+    ['未检测到可用的即梦 CLI，请在自有订阅设置中安装。', 'jimeng', /即梦自有订阅.*尚未安装/],
   ];
   for (const [raw, provider, expected] of cases) {
     const display = generationErrorMessage(raw, { provider });
@@ -35,6 +37,14 @@ test('generation failures explain the actual cause without exposing provider dia
     assert.doesNotMatch(display, /ExceedConcurrency|AigcCompliance|InputImageSensitive|code:|API|HTTP|generated_images|secret|private|https?:|C:\\/);
     assert.equal(userErrorMessage(display), display, 'safe text survives notification boundaries');
   }
+});
+
+test('only an identified local subscription failure links to its own login settings', () => {
+  assert.equal(generationFailure('未检测到有效登录态，请先执行 dreamina login', { provider: 'jimeng' }).settings, 'jimeng');
+  assert.equal(generationFailure('unauthorized', { provider: 'codex' }).settings, 'codex');
+  assert.equal(generationFailure('HTTP 401 unauthorized', { provider: 'bowerbird-cloud' }).settings, undefined);
+  assert.equal(generationFailure('outcome_unknown: unauthorized', { provider: 'jimeng' }).settings, undefined);
+  assert.equal(generationFailure('Bowerbird 账号未登录', { provider: 'jimeng' }).settings, undefined);
 });
 
 test('unknown outcome takes precedence over nested provider errors and never suggests a new generation', () => {

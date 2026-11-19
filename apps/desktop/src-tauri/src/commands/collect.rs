@@ -37,3 +37,10 @@ pub async fn extension_folder_path(app: AppHandle) -> Result<String, AppError> {
     };
     Ok(ext_dir.to_string_lossy().to_string())
 }
+
+/// User-confirmed replacement of the trusted browser installation.
+#[tauri::command]
+pub fn pair_extension(webview: tauri::Webview, status: State<'_, ExtensionStatus>, code: String) -> Result<(), AppError> {
+    if webview.label() != "main" { return Err(AppError::Other("请在桌面浏览器插件设置中配对".into())); }
+    status.pairing.replace(&code).map_err(AppError::Other)
+}

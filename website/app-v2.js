@@ -1,4 +1,6 @@
+import { createAccountGenerationUI, loadAccountSDK } from "./account-generation.js";
 import { reportUserError } from "./user-error.js";
+import { openAccountDialog } from "./account-dialog.js";
 import { Schema } from "prosemirror-model";
 import { EditorState } from "prosemirror-state";
 import { EditorView } from "prosemirror-view";
@@ -656,6 +658,7 @@ function addGeneratedAsset(imageUrl) {
   displayedAssetCount += 1;
   windowAssetCount.textContent = String(displayedAssetCount);
   paneAssetCount.textContent = String(displayedAssetCount);
+  return card;
 }
 
 // —— 用户导入素材（v2：拖拽到瀑布流 + 点击导入）——
@@ -820,9 +823,50 @@ function applyDownloadConfig(url) {
 // SUPABASE_URL 在服务端配置时，允许微信扫码 / 邮箱魔法链接登录，生成走共享云积分；
 // 未配置或未登录时保持每 IP 体验额度路径。
 const accountState = document.getElementById("account-state");
+const accountEntries = document.querySelectorAll("[data-account-open]");
+const signupOffer = document.getElementById("signup-offer");
+for (const bubble of document.querySelectorAll(".offer-bubble")) {
+  bubble.addEventListener("animationend", () => { bubble.dataset.introduced = ""; }, { once: true });
+}
 let supabaseClient = null;
+let accountUnavailable = false;
 let supabaseAccessToken = null;
 let supabaseEmail = null;
+const accountGenerationUI = createAccountGenerationUI({
+  button: generateButton,
+  readInput: () => {
+    const { prompt, referenceIds, referenceUploads } = serializeDoc(view.state.doc);
+    return { prompt, referenceIds, referenceUploads };
+  },
+  token: () => supabaseAccessToken,
+  cloudUrl: () => imageService.supabaseUrl,
+  show: showGenerationMessage,
+  updateGraph(state) {
+    graphOutputState = state;
+    renderCreationGraph();
+  },
+  displayImage(url) {
+    const card = addGeneratedAsset(url);
+    generatedImage.src = url;
+    generatedImage.hidden = false;
+    graphOutputImage = url;
+    renderCreationGraph();
+    return () => {
+      card.remove();
+      displayedAssetCount -= 1;
+      paneAssetCount.textContent = windowAssetCount.textContent = String(displayedAssetCount);
+      if (generatedImage.src === url) {
+        generatedImage.hidden = true;
+        generatedImage.removeAttribute("src");
+      }
+      if (graphOutputImage === url) {
+        graphOutputImage = "";
+        graphOutputState = "idle";
+        renderCreationGraph();
+      }
+    };
+  },
+});
 let supabaseDisplayName = null;
 
 function hasSupabaseAuth() {
@@ -837,13 +881,17 @@ async function initSupabaseAuth() {
       imageService.supabasePublishableKey || imageService.supabaseAnonKey || "anon",
       { auth: { persistSession: true, autoRefreshToken: true, flowType: "pkce" } },
     );
-    const { data } = await supabaseClient.auth.getSession();
+    const { data, error } = await supabaseClient.auth.getSession();
+    if (error) throw error;
     supabaseAccessToken = data.session?.access_token || null;
+    accountGenerationUI.updateOwner(data.session);
     supabaseEmail = data.session?.user?.email || null;
     supabaseDisplayName = data.session?.user?.user_metadata?.nickname || null;
     if (supabaseClient && window.supabase && supabaseClient.auth) {
       supabaseClient.auth.onAuthStateChange((_event, session) => {
+        if (Boolean(supabaseAccessToken) !== Boolean(session)) activeAccountDialog?.close();
         supabaseAccessToken = session?.access_token || null;
+        accountGenerationUI.updateOwner(session);
         supabaseEmail = session?.user?.email || null;
         supabaseDisplayName = session?.user?.user_metadata?.nickname || null;
         renderAccountState();
@@ -851,12 +899,26 @@ async function initSupabaseAuth() {
     }
     renderAccountState();
   } catch {
-    // Cloud auth unavailable: fall back to demo quota.
+    accountUnavailable = true;
+    if (accountState) {
+      accountState.hidden = false;
+      accountState.textContent = "账号会话未能恢复，请刷新页面";
+    }
     supabaseClient = null;
   }
 }
 
 function renderAccountState() {
+  if (signupOffer) signupOffer.hidden = accountUnavailable || Boolean(supabaseAccessToken);
+  for (const entry of accountEntries) {
+    if (entry.hasAttribute("data-register-incentive")) {
+      entry.hidden = Boolean(supabaseAccessToken);
+    } else {
+      entry.hidden = false;
+      entry.textContent = supabaseAccessToken ? "我的账号" : "登录 / 注册";
+    }
+    entry.onclick = () => showAccountLoginMenu("register");
+  }
   if (!accountState) return;
   if (!hasSupabaseAuth()) {
     accountState.hidden = true;
@@ -878,76 +940,30 @@ function renderAccountState() {
 
 const WECHAT_LOGIN_STATE_KEY = "bowerbird.wechatLoginState";
 const SUPABASE_FUNCTION_REGION = "ap-northeast-1";
-let accountLoginMenu = null;
+let activeAccountDialog;
 
-function closeAccountLoginMenu() {
-  if (accountLoginMenu) {
-    accountLoginMenu.remove();
-    accountLoginMenu = null;
-  }
-}
-
-function showAccountLoginMenu() {
-  closeAccountLoginMenu();
-  const menu = document.createElement("div");
-  menu.setAttribute("role", "menu");
-  Object.assign(menu.style, {
-    position: "fixed",
-    zIndex: "60",
-    minWidth: "180px",
-    padding: "6px",
-    borderRadius: "12px",
-    background: "#ffffff",
-    border: "1px solid #e3e3dd",
-    boxShadow: "0 10px 30px rgba(0,0,0,.12)",
-    display: "flex",
-    flexDirection: "column",
-    gap: "2px",
+function showAccountLoginMenu(initialMode = "login") {
+  if (activeAccountDialog?.open) return;
+  activeAccountDialog = openAccountDialog({
+    initialMode,
+    user: supabaseAccessToken ? supabaseDisplayName || supabaseEmail || "已登录" : null,
+    available: hasSupabaseAuth(),
+    sendEmail: async (email, mode) => {
+      const { error } = await supabaseClient.auth.signInWithOtp({
+        email,
+        // The original demo login accepts first-time users. In the header,
+        // creating an account is a separate, explicit choice.
+        options: { shouldCreateUser: mode === "register" || initialMode === "login", emailRedirectTo: window.location.origin },
+      });
+      if (error) throw new Error(reportUserError(error, mode === "register"
+        ? "注册邮件未能发送，请稍后重试。" : "登录邮件未能发送，请稍后重试。"));
+    },
+    startWechat: startWechatLogin,
+    signOut: async () => {
+      const { error } = await supabaseClient.auth.signOut();
+      if (error) throw new Error(reportUserError(error, "退出登录未完成，请稍后重试。"));
+    },
   });
-  const itemStyle = {
-    border: "none",
-    background: "none",
-    padding: "9px 12px",
-    borderRadius: "8px",
-    fontSize: "13px",
-    textAlign: "left",
-    cursor: "pointer",
-    color: "#1c1c1a",
-  };
-  const wechat = document.createElement("button");
-  wechat.type = "button";
-  wechat.textContent = "微信扫码登录";
-  Object.assign(wechat.style, itemStyle, { fontWeight: "600" });
-  wechat.onmouseenter = () => { wechat.style.background = "#f2f2ee"; };
-  wechat.onmouseleave = () => { wechat.style.background = "none"; };
-  wechat.onclick = () => {
-    closeAccountLoginMenu();
-    void startWechatLogin();
-  };
-  const email = document.createElement("button");
-  email.type = "button";
-  email.textContent = "邮箱魔法链接";
-  Object.assign(email.style, itemStyle, { color: "#6f6f66" });
-  email.onmouseenter = () => { email.style.background = "#f2f2ee"; };
-  email.onmouseleave = () => { email.style.background = "none"; };
-  email.onclick = () => {
-    closeAccountLoginMenu();
-    startEmailLogin();
-  };
-  menu.append(wechat, email);
-  document.body.append(menu);
-  const rect = accountState.getBoundingClientRect();
-  menu.style.top = `${Math.round(rect.bottom + 8)}px`;
-  menu.style.right = `${Math.max(8, Math.round(window.innerWidth - rect.right))}px`;
-  accountLoginMenu = menu;
-  window.setTimeout(() => {
-    document.addEventListener("mousedown", function onDown(event) {
-      if (accountLoginMenu && !accountLoginMenu.contains(event.target) && event.target !== accountState) {
-        closeAccountLoginMenu();
-        document.removeEventListener("mousedown", onDown);
-      }
-    });
-  }, 0);
 }
 
 // 微信扫码登录：state 存 sessionStorage 由 /wechat-callback 中转页校验（CSRF 防护）。
@@ -955,8 +971,7 @@ async function startWechatLogin() {
   const supabaseUrl = imageService?.supabaseUrl;
   const publishableKey = imageService?.supabasePublishableKey || imageService?.supabaseAnonKey;
   if (!supabaseUrl || !publishableKey) {
-    accountState.textContent = "微信登录暂不可用";
-    return;
+    throw new Error("微信登录暂不可用");
   }
   const random = crypto.randomUUID().replace(/-/g, "");
   const state = `web_${random}`;
@@ -965,8 +980,6 @@ async function startWechatLogin() {
   } catch {
     // 隐私模式下 sessionStorage 不可用时仍可发起，仅失去回调端校验。
   }
-  accountState.textContent = "正在打开微信登录…";
-  accountState.onclick = null;
   try {
     const response = await fetch(
       `${supabaseUrl.replace(/\/+$/, "")}/functions/v1/wechat-login?forceFunctionRegion=${SUPABASE_FUNCTION_REGION}&state=${encodeURIComponent(state)}`,
@@ -979,29 +992,10 @@ async function startWechatLogin() {
     window.location.href = payload.qrconnect_url;
   } catch (error) {
     try { window.sessionStorage.removeItem(WECHAT_LOGIN_STATE_KEY); } catch { /* 忽略 */ }
-    accountState.textContent = reportUserError(error, "微信登录暂不可用，请稍后重新扫码。");
-    accountState.onclick = () => showAccountLoginMenu();
+    throw new Error(reportUserError(error, "微信登录暂不可用，请稍后重新扫码。"));
   }
 }
 
-function startEmailLogin() {
-  const email = window.prompt("输入邮箱登录 Bowerbird：");
-  if (!email || !email.includes("@")) return;
-  (async () => {
-    try {
-      if (!supabaseClient) throw new Error("账号服务暂不可用");
-      const { error } = await supabaseClient.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: window.location.origin },
-      });
-      if (error) throw error;
-      accountState.textContent = "邮件已发送，请查收并点击验证链接";
-      accountState.onclick = null;
-    } catch (error) {
-      accountState.textContent = reportUserError(error, "登录邮件未能发送，请稍后重试。");
-    }
-  })();
-}
 
 async function loadImageService() {
   if (window.location.protocol === "file:") {
@@ -1014,10 +1008,24 @@ async function loadImageService() {
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || "生成服务不可用");
     imageService = payload;
-    if (window.supabase) initSupabaseAuth();
+    if (payload.supabaseUrl) {
+      if (!await loadAccountSDK()) {
+        accountUnavailable = true;
+        if (accountState) {
+          accountState.hidden = false;
+          accountState.textContent = "账号组件加载失败，请刷新页面";
+        }
+      }
+      await initSupabaseAuth();
+      if (accountUnavailable) return;
+    }
     applyDownloadConfig(payload.windowsDownloadUrl);
     demoDailyLimit = Number.isFinite(payload.trialLimit) ? payload.trialLimit : 3;
     demoCurrentDay = payload.trialDay || demoCurrentDay;
+    if (accountGenerationUI.owner) {
+      showGenerationMessage("Bowerbird Cloud 已就绪", "使用当前账号的云端积分生成图片", "ready");
+      return;
+    }
     if (hasCompletedDemo()) {
       showDemoLimitReached();
       return;
@@ -1032,7 +1040,8 @@ async function loadImageService() {
 }
 
 generateButton.addEventListener("click", async () => {
-  if (hasCompletedDemo()) {
+  if (accountUnavailable || accountGenerationUI.active) return;
+  if (!accountGenerationUI.owner && hasCompletedDemo()) {
     showDemoLimitReached();
     return;
   }
@@ -1042,6 +1051,10 @@ generateButton.addEventListener("click", async () => {
   }
 
   const { prompt, referenceIds, referenceUploads } = serializeDoc(view.state.doc);
+  if (accountGenerationUI.owner) {
+    await accountGenerationUI.run({ prompt, referenceIds, referenceUploads });
+    return;
+  }
   if (!prompt.trim()) {
     showGenerationMessage("先写下你的创作意图", "描述你想要的画面后再开始创作。", "error");
     view.focus();
@@ -1069,7 +1082,6 @@ generateButton.addEventListener("click", async () => {
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
-        ...(supabaseAccessToken ? { Authorization: `Bearer ${supabaseAccessToken}` } : {}),
       },
       body: JSON.stringify({ prompt, referenceIds, referenceUploads }),
       signal: controller.signal,
@@ -1164,9 +1176,8 @@ document.querySelectorAll("video[data-src]").forEach((video) => lazyVideoObserve
 window.addEventListener("resize", scheduleGraphConnections);
 
 updateDerivedUI();
-loadImageService();
-
-const supabaseScript = document.createElement("script");
-supabaseScript.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
-supabaseScript.onload = () => initSupabaseAuth();
-document.head.appendChild(supabaseScript);
+generateButton.disabled = true;
+loadImageService().finally(() => {
+  if (!hasSupabaseAuth()) renderAccountState();
+  if (!accountUnavailable && !accountGenerationUI.active && (accountGenerationUI.owner || !hasCompletedDemo())) generateButton.disabled = false;
+});

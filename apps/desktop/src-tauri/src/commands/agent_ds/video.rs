@@ -322,16 +322,21 @@ async fn serve_inner(root: &Path, prepared: &Prepared, cancel: &mut watch::Recei
                 // Claim before executing; an unknown interrupted render is never silently replayed.
                 std::fs::OpenOptions::new().write(true).create_new(true).open(path.with_extension("claimed"))
                     .map_err(|_| AppError::Other("此视频工具请求已执行或中断，请检查原任务".into()))?;
-                let mut cmd = prepared.local_command();
-                cmd.args(args);
-                let (stdout, stderr, status) = run_output(&mut cmd, cancel).await?;
-                Ok::<_, AppError>(json!({"code":status.code().unwrap_or(1),"stdout":stdout,"stderr":stderr}))
+                execute(root, prepared, &args, cancel).await
             }.await;
             write_json_atomic(&response, &result.unwrap_or_else(|error| json!({"error":error.to_string()})))?;
             if *cancel.borrow() { return Ok(()); }
         }
         tokio::select! { _ = cancel.changed() => return Ok(()), _ = tokio::time::sleep(Duration::from_millis(200)) => {} }
     }
+}
+
+/// Shared executor for the file bridge and the chat's scoped dynamic tool.
+pub(super) async fn execute(root: &Path, prepared: &Prepared, args: &[String], cancel: &mut watch::Receiver<bool>) -> Result<Value, AppError> {
+    let mut cmd = prepared.local_command();
+    cmd.args(tool_args(root, args)?);
+    let (stdout, stderr, status) = run_output(&mut cmd, cancel).await?;
+    Ok(json!({"code":status.code().unwrap_or(1),"stdout":stdout,"stderr":stderr}))
 }
 
 pub(super) fn result_paths(root: &Path, id: &str, result: &Value) -> Result<Vec<PathBuf>, AppError> {
@@ -454,6 +459,31 @@ mod tests {
             vec!["snapshot", "--describe"], vec!["render", "--output", "C:/outside/result.mp4"], vec!["snapshot", "--frames", "1000"]] {
             assert!(check(&args).is_err(), "{args:?}");
         }
+    }
+    #[tokio::test]
+    #[ignore = "isolated fixed runtime and synthetic project; no model calls"]
+    async fn hyperframes_chat_engine_checks_previews_renders_and_cancels() {
+        let (root, id, scope) = fixture();
+        request(&root, &id, &scope, &[]).unwrap();
+        let (stop, mut cancel) = watch::channel(false);
+        let runtime = PathBuf::from(std::env::var("BOWERBIRD_HYPERFRAMES_TEST_RUNTIME").unwrap());
+        let prepared = prepare_at(&root, &scope, runtime, &mut cancel).await.unwrap();
+        copy_project(Path::new(&std::env::var("BOWERBIRD_HYPERFRAMES_TEST_PROJECT").unwrap()), &prepared.project, 0, &mut 0, &mut 0).unwrap();
+        let artifacts = root.join("artifacts").join(&id); std::fs::create_dir_all(&artifacts).unwrap();
+        for command in [vec!["check".into(), "--json".into()], vec!["snapshot".into(), "--frames".into(), "3".into(), "--json".into()],
+            vec!["render".into(), "--output".into(), artifacts.join("result.mp4").to_string_lossy().into_owned(), "--quality".into(), "draft".into()]] {
+            let result = execute(&root, &prepared, &command, &mut cancel).await.unwrap();
+            assert_eq!(result["code"], 0, "{result}");
+            if command[0] == "snapshot" {
+                let result: Value = serde_json::from_str(result["stdout"].as_str().unwrap()).unwrap();
+                assert_eq!(result["frames"].as_array().unwrap().len(), 3);
+                for frame in result["frames"].as_array().unwrap() { assert!(Path::new(frame["path"].as_str().unwrap()).is_file()); }
+            }
+        }
+        let paths = result_paths(&root, &id, &json!({"videos":["result.mp4"]})).unwrap();
+        assert_eq!(crate::media::probe::probe(&paths[0]).unwrap().width, 640);
+        stop.send(true).unwrap();
+        assert!(execute(&root, &prepared, &["check".into()], &mut cancel).await.is_err());
     }
     #[cfg(windows)]
     #[tokio::test]

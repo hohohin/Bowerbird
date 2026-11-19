@@ -1,4 +1,9 @@
-.canvas-drawing-tools { position:absolute; left:var(--canvas-chrome-inset); top:calc(var(--canvas-chrome-inset) + var(--canvas-chrome-height) + var(--canvas-chrome-gap)); z-index:30; display:flex; flex-direction:column; gap:5px; padding:6px; border:1px solid var(--bb-line-strong); border-radius:var(--canvas-chrome-radius); background:var(--bb-surface); box-shadow:var(--canvas-chrome-shadow); }
+.canvas-material-selection { position:absolute; pointer-events:none; z-index:10002; outline:1px solid var(--bb-blue); }
+.canvas-drawing-tools {
+  --tools-top:calc(var(--canvas-chrome-inset) + var(--canvas-chrome-height) + var(--canvas-chrome-gap));
+  position:absolute; left:var(--canvas-chrome-inset); top:var(--tools-top); max-height:calc(100% - var(--tools-top) - var(--canvas-chrome-inset));
+  z-index:30; display:flex; flex-direction:column; gap:5px; padding:6px; border:1px solid var(--bb-line-strong); border-radius:var(--canvas-chrome-radius); background:var(--bb-surface); box-shadow:var(--canvas-chrome-shadow);
+}
 .canvas-drawing-tools button { width:34px; height:34px; display:grid; place-items:center; border-radius:7px; color:var(--bb-muted); }
 .canvas-drawing-tools button:hover, .canvas-drawing-tools button[aria-pressed=true] { background:var(--bb-blue); color:white; }
 /* 原生 title 提示延迟由系统控制且过长，改用即时可控的自定义提示。 */
@@ -16,12 +21,12 @@
 .canvas-drawing-tools hr { border:0; border-top:1px solid var(--bb-line); margin:2px 3px; }
 .canvas-assist-tools { display:flex; flex-direction:column; align-items:center; gap:4px; }
 .canvas-assist-tools > span { color:var(--bb-muted); font-size:9px; line-height:14px; }
-@media (max-height: 700px) {
+@media (max-height: 800px) {
   .canvas-drawing-tools { gap:3px; padding:5px; }
   .canvas-drawing-tools button { width:28px; height:28px; }
 }
-@media (max-height: 600px) {
-  .canvas-drawing-tools { gap:1px; padding:4px; }
+@media (max-height: 680px) {
+  .canvas-drawing-tools { --tools-divider-gap:1px; gap:0; padding:4px; }
   .canvas-drawing-tools hr { margin-block:1px; }
   .canvas-drawing-tools .canvas-assist-tools { gap:2px; }
 }
@@ -31,6 +36,33 @@
 .canvas-note.is-selected { outline:2px solid var(--bb-blue); }
 .canvas-note.is-section { background:rgba(106,143,221,.09); border:2px solid rgba(106,143,221,.4); box-shadow:none; pointer-events:none; }
 .canvas-section-heading { position:absolute; bottom:100%; left:-2px; display:flex; align-items:center; gap:6px; padding:7px 4px; pointer-events:auto; cursor:grab; color:var(--bb-ink); }
+.canvas-plane { --section-color:#69737f; }
+.canvas-note.is-section:not(.is-artboard):not([data-workflow-container]) {
+  background:transparent; border-color:transparent;
+}
+/* The frame sits below cards while its grip stays beside the editable name, above connection hit areas. */
+.canvas-note.is-section:not(.is-artboard):not([data-workflow-container])::before {
+  content:""; position:absolute; inset:-2px; z-index:-1; border:2px solid; border-radius:inherit;
+  background:color-mix(in srgb,var(--section-color) 17%,transparent);
+  border-color:color-mix(in srgb,var(--section-color) 58%,transparent);
+}
+.canvas-note.is-section:not(.is-artboard):not([data-workflow-container]) > .canvas-section-heading {
+  bottom:calc(100% + 2px); width:22px; height:26px; justify-content:center; padding:0; z-index:10002;
+  transform:scale(var(--section-title-scale)); transform-origin:bottom left;
+  background:color-mix(in srgb,var(--section-color) 84%,black); color:white; border-radius:4px 0 0 4px;
+}
+.canvas-tactical .canvas-card-name.is-section-name {
+  z-index:10002;
+  transform:translateY(-100%) scale(var(--section-title-scale)); transform-origin:bottom left;
+  font-size:16px; line-height:24px; font-weight:600;
+}
+.canvas-tactical .canvas-card-name.is-section-name input {
+  height:26px; padding:0 7px 0 3px; border-radius:0 4px 4px 0;
+  background:color-mix(in srgb,var(--section-color) 84%,black); color:white;
+}
+.canvas-tactical .canvas-card-name.is-section-name input:focus-visible { outline:2px solid var(--bb-blue); outline-offset:1px; }
+.canvas-section-swatch { width:14px; height:14px; border-radius:3px; }
+.app-context-item[aria-checked="true"] > .canvas-section-swatch { outline:1px solid currentColor; outline-offset:2px; }
 .canvas-section-edge { position:absolute; pointer-events:auto; cursor:grab; }
 .canvas-section-edge.top, .canvas-section-edge.bottom { left:0; right:0; height:8px; }
 .canvas-section-edge.top { top:-4px; } .canvas-section-edge.bottom { bottom:-4px; }
@@ -141,3 +173,16 @@
 .canvas-cell-generation small { color: var(--bb-faint); }
 .canvas-cell-generation p { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .canvas-cell-generation.is-failed { border-color: rgb(239 68 68 / 64%); }
+.canvas-note-dismiss-error {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 4;
+  padding: 3px 8px;
+  border: 1px solid var(--bb-line-strong);
+  border-radius: 4px;
+  background: var(--bb-surface);
+  color: var(--bb-ink);
+  font-size: 12px;
+  pointer-events: auto;
+}

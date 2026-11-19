@@ -42,10 +42,10 @@ try {
     };
     new MutationObserver(() => { if ([...document.querySelectorAll('[role="status"]')].some(el => el.textContent.includes('正在读取文件夹'))) window.loadFlashed = true; }).observe(document.body,{childList:true,subtree:true});
   });
-  assert.deepEqual(await page.getByRole('tab').allTextContents(),['全部','标签分类','集合分类']);
+  assert.deepEqual(await page.getByRole('tab').allTextContents(),['全部','标签分类','文件夹']);
   assert.equal(await page.locator('.library-source-key-hint').count(),0,'home has no source-switch hints');
   await page.getByRole('region',{name:'按标签浏览素材',exact:true}).waitFor();
-  for(const name of ['按集合浏览素材','平铺浏览全部图片','按标签浏览素材']) {
+  for(const name of ['按文件夹浏览素材','平铺浏览全部图片','按标签浏览素材']) {
     await page.getByRole('tab',{selected:true}).click();
     await page.getByRole('region',{name,exact:true}).waitFor();
     await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
@@ -71,9 +71,9 @@ try {
   await page.getByRole('region',{name:'按标签浏览素材',exact:true}).waitFor();
   assert.equal(await page.locator('.local-file-workspace').count(),0,'late file responses cannot replace category view');
   await tab('全局素材').focus(); await page.keyboard.press('Tab');
-  await page.getByRole('region',{name:'按集合浏览素材',exact:true}).waitFor();
+  await page.getByRole('region',{name:'按文件夹浏览素材',exact:true}).waitFor();
   await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
-  assert.equal(await page.getByRole('tab',{name:'集合分类',exact:true}).getAttribute('aria-selected'),'true');
+  assert.equal(await page.getByRole('tab',{name:'文件夹',exact:true}).getAttribute('aria-selected'),'true');
   await page.keyboard.press('Shift+Tab');
   await page.getByRole('region',{name:'平铺浏览全部图片',exact:true}).waitFor();
   await page.locator('[data-sidebar-motion]').first().waitFor({state:'detached'});
@@ -124,11 +124,11 @@ try {
   await page.waitForFunction(() => document.querySelector('.canvas-workspace')?.getAttribute('aria-busy') === 'false');
   await page.locator('.canvas-stage').focus(); await page.keyboard.press('Tab');
   const sources = page.getByRole('complementary',{name:'画板素材库'});
-  const region = kind => sources.getByRole('region',{name:kind==='tags'?'按标签浏览素材':'按集合浏览素材',exact:true});
+  const region = kind => sources.getByRole('region',{name:kind==='tags'?'按标签浏览素材':'按文件夹浏览素材',exact:true});
   await region('tags').waitFor();
   assert.deepEqual(await sources.getByRole('tab').evaluateAll(tabs=>tabs.map(tab=>tab.getAttribute('aria-label'))),['全局素材','项目素材']);
   assert.equal(await tab('全局素材').getAttribute('aria-selected'),'true','Tab opens the first source');
-  for(const [name,label] of [['按集合浏览素材','集合分类'],['平铺浏览全部图片','全部'],['按标签浏览素材','标签分类']]) {
+  for(const [name,label] of [['按文件夹浏览素材','文件夹'],['平铺浏览全部图片','全部'],['按标签浏览素材','标签分类']]) {
     await tab('全局素材').click();
     await page.getByRole('region',{name,exact:true}).waitFor();
     assert.equal(await tab('全局素材').getAttribute('aria-selected'),'true','reselecting cycles views without changing source');
@@ -172,7 +172,7 @@ try {
   const initial=await tab('项目素材').evaluate(el=>({box:el.getBoundingClientRect().toJSON(),radius:getComputedStyle(el).borderRadius}));
   await tab('项目素材').focus(); await page.keyboard.press('Tab'); await region('collections').waitFor();
   const empty=sources.locator('.catalog-empty');
-  await sources.getByText('还没有集合，点击左侧 ＋ 新建集合。',{exact:true}).waitFor();
+  await sources.getByText('还没有文件夹，点击左侧 ＋ 新建文件夹。',{exact:true}).waitFor();
   const emptyLayout=await empty.evaluate(el=>{
     const range=document.createRange(); range.selectNodeContents(el);
     const text=range.getBoundingClientRect(), area=el.closest('.catalog-gallery').getBoundingClientRect();
@@ -181,7 +181,7 @@ try {
   assert.ok(emptyLayout.dx<2 && emptyLayout.dy<2,'empty message is centered in content without top spacer');
   const feedback=sources.locator('.library-tab-feedback');
   await feedback.waitFor();
-  assert.equal(await feedback.locator('.library-tab-view-label').innerText(),'集合分类');
+  assert.equal(await feedback.locator('.library-tab-view-label').innerText(),'文件夹');
   const frames=[];
   for(const time of [180,500,900]) {
     frames.push(await feedback.evaluate((el,time)=>{

@@ -1,3 +1,4 @@
+import { readPaymentBody } from "../_shared/wechatpay.ts";
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { assertBodySize, corsHeaders } from "../_shared/limits.ts";
@@ -219,10 +220,7 @@ Deno.serve(async (request) => {
     if (request.method !== "POST") throw new ApiError("invalid_request", "仅支持 POST", false, 405);
     assertBodySize(request);
 
-    const rawBody = await request.text();
-    if (new TextEncoder().encode(rawBody).byteLength > MAX_WEBHOOK_BODY_BYTES) {
-      throw new ApiError("payload_too_large", "回调内容过大");
-    }
+    const rawBody = await readPaymentBody(request, MAX_WEBHOOK_BODY_BYTES);
     const signature = request.headers.get("x-provider-signature") ?? "";
     if (!constantTimeEqual(signature, mockWebhookSecret())) {
       throw new ApiError("unauthorized", "回调签名无效", false, 401);

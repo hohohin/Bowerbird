@@ -22,14 +22,29 @@ const media = [
   { id: 'video-reference', name: '参考视频', ext: 'mp4', store_path: '/fixture/reference.mp4', source: 'external' },
 ];
 w.calls = []; w.conflict = false; w.saveDelay = 0; w.store = useStore; w.mode = useLocalFileMode; w.snapshots = snapshots;
+w.textReads = [];
+w.addOfficeFixtures = (items: any[], documents: any[]) => {
+  assets.push(...items); documents.forEach(document => snapshots.set(document.assetId, document));
+  useStore.setState({ assets: [...assets] });
+};
 let callback = 0;
+const callbacks = new Map<number, (event: unknown) => void>();
+const listeners = new Map<string, number[]>();
+w.emit = (event: string) => listeners.get(event)?.forEach(id => callbacks.get(id)?.({ event, payload: null }));
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
-w.__TAURI_INTERNALS__ = { transformCallback: () => ++callback, convertFileSrc: (path: string) => path,
+w.__TAURI_INTERNALS__ = { transformCallback: (fn: (event: unknown) => void) => { callbacks.set(++callback, fn); return callback; }, convertFileSrc: (path: string) => path,
   invoke: async (command: string, args: any = {}) => {
     w.calls.push({ command, args });
-    if (command === 'plugin:event|listen') return args.handler;
+    if (command === 'plugin:event|listen') { listeners.set(args.event, [...listeners.get(args.event) ?? [], args.handler]); return args.handler; }
     if (['plugin:event|unlisten', 'set_setting', 'refresh_folder_connections'].includes(command)) return;
-    if (command === 'read_text_document') return { ...snapshots.get(args.assetId) };
+    if (command === 'read_text_document') { w.textReads.push(args); return { ...snapshots.get(args.assetId) }; }
+    if (command === 'read_spreadsheet_document') return w.spreadsheets[args.assetId];
+    if (command === 'save_docx_document') {
+      const old = snapshots.get(args.assetId)!;
+      if (w.conflict || old.version !== args.expectedVersion) throw new Error('原文件已被其他应用修改，请重新读取后再保存。');
+      const next = { ...old, docxData: args.data, version: `${old.version}-saved` };
+      snapshots.set(args.assetId, next); return next;
+    }
     if (command === 'save_text_document') {
       if (w.saveDelay) await new Promise(resolve => setTimeout(resolve, w.saveDelay));
       const old = snapshots.get(args.assetId)!;
@@ -41,9 +56,11 @@ w.__TAURI_INTERNALS__ = { transformCallback: () => ++callback, convertFileSrc: (
     if (command === 'plugin:dialog|open') return media.map(asset => asset.store_path);
     if (command === 'audio_waveform') return { sourceVersion: 'wave-v1', duration: 2, sampleRate: 8000, channels: 1, totalFrames: 16000, framesPerPeak: 8000, peaks: [[-.4, .4], [-.8, .8]] };
     if (command === 'get_settings') return {};
-    if (command === 'list_assets' || command === 'material_catalog_assets' || command === 'catalog_page') return assets;
-    if (command === 'catalog_ids') return assets.map(asset => asset.id);
-    if (command === 'catalog_overview') return { total: 2, untagged: 2, catalog: { tags: [], collections: [], prompts: [], tag_asset_ids: {} } };
+    const catalogAssets = args.filter?.media && !['all', 'texts'].includes(args.filter.media) ? [] : assets;
+    if (command === 'list_assets' || command === 'material_catalog_assets') return assets;
+    if (command === 'catalog_page') return catalogAssets;
+    if (command === 'catalog_ids') return catalogAssets.map(asset => asset.id);
+    if (command === 'catalog_overview') return { total: catalogAssets.length, untagged: catalogAssets.length, catalog: { tags: [], collections: [], prompts: [], tag_asset_ids: {} } };
     if (command === 'catalog_prepare_colors') return { after: null, more: false, updated: 0, failed: 0 };
     if (command === 'codex_health') return { ok: false, reason: '隔离测试' };
     if (command === 'generation_history') return { turns: [], references: [], products: [] };
@@ -53,7 +70,7 @@ w.__TAURI_INTERNALS__ = { transformCallback: () => ++callback, convertFileSrc: (
     if (command.startsWith('plugin:dialog|')) return null;
     throw new Error(`Unexpected test IPC: ${command}`);
   } };
-useStore.setState({ assets, activeProjectId: null, detailAssetId: 'md', libraryHomeView: 'library', projects: [], mode: 'browse', loading: false });
+useStore.setState({ assets, activeProjectId: null, detailAssetId: location.search.includes('catalog') ? null : 'md', libraryHomeView: 'library', projects: [], mode: 'browse', loading: false });
 function Fixture() {
   const detail = useStore(state => state.detailAssetId);
   return <div style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column' }}>

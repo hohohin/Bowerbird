@@ -15,7 +15,7 @@ for (const [name, size] of [['portrait', '720x1280'], ['square', '720x720'], ['w
   execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `color=teal:s=${size}:r=25:d=${name === 'short' ? 0.04 : 1}`,
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', `${directory}/${name}.mp4`]);
 }
-const server = await createServer({ configFile: false, root: process.cwd(), cacheDir: `${directory}/vite`,
+const server = await createServer({ configFile: false, resolve: { alias: { "@": resolve("src") } }, root: process.cwd(), cacheDir: `${directory}/vite`,
   server: { host: '127.0.0.1', port: 1647, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
@@ -24,7 +24,12 @@ const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 const dialog = page.getByRole('dialog', { name: /媒体预览/ });
 const slider = page.getByRole('slider', { name: '视频时间轴' });
-const add = page.getByRole('button', { name: '添加该帧到画板', exact: true });
+function frameAction(name) {
+  const item = page.getByRole('menuitem', { name, exact: true });
+  async function open() { if (!await item.isVisible()) await page.getByRole('button', { name: '导出帧', exact: true }).click(); }
+  return { click: async () => { await open(); await item.click(); }, isDisabled: async () => { await open(); const disabled=await item.isDisabled(); await page.keyboard.press('Escape'); return disabled; } };
+}
+const add = frameAction('添加该帧到画板');
 const imports = () => page.evaluate(() => window.calls.filter(call => call.command === 'import_image_bytes' && call.args.source === 'video-frame'));
 async function seek(value) {
   await slider.focus();
@@ -78,7 +83,7 @@ try {
   await slider.focus();
   await page.keyboard.press('Space');
   await page.waitForFunction(() => document.querySelector('.video-player video').paused);
-  const fineButton = page.getByRole('button', { name: '细调', exact: true });
+  const fineButton = page.getByRole('button', { name: '裁剪视频', exact: true });
   await fineButton.focus();
   await page.keyboard.down('Space');
   await page.waitForFunction(() => !document.querySelector('.video-player video').paused);
@@ -91,11 +96,9 @@ try {
   await seek(1.5);
   assert.ok(Math.abs(Number(await slider.getAttribute('aria-valuenow')) - 1.5) < 0.05);
   assert.equal(await dialog.count(), 1, 'slider arrow keys must not navigate to another asset');
-  await page.getByRole('button', { name: '细调', exact: true }).click();
-  await slider.focus(); await page.keyboard.press('ArrowRight');
+  await slider.focus(); await page.keyboard.press('Shift+ArrowRight');
   await page.waitForFunction(() => !document.querySelector('.video-player video').seeking);
   assert.ok(Math.abs(Number(await slider.getAttribute('aria-valuenow')) - 1.51) < 0.05);
-  await page.getByRole('button', { name: '细调', exact: true }).click();
   await page.waitForFunction(() => document.querySelectorAll('.video-player-film img').length === 12);
   await page.screenshot({ path: `${directory}/player.png` });
   // Failure after import must retry the same asset/node and report success only after persistence.
@@ -105,7 +108,7 @@ try {
   assert.equal((await imports()).length, 1);
   await page.evaluate(() => { window.failNodeSave = false; });
   await add.click();
-  await page.getByRole('button', { name: '已添加到画板', exact: true }).waitFor();
+  await page.getByRole('status').filter({ hasText: '已添加到画板' }).waitFor();
   assert.equal((await imports()).length, 1, 'retry must not import a second image');
   const saved = await page.evaluate(async () => {
     const request = window.calls.find(call => call.command === 'import_image_bytes');
@@ -123,9 +126,9 @@ try {
   await page.evaluate(() => { window.holdFrameImport = true; });
   await add.click();
   await page.waitForFunction(() => typeof window.releaseFrameImport === 'function');
-  assert.equal(await page.getByRole('button', { name: '正在添加…' }).isDisabled(), true);
+  assert.equal(await page.getByRole('button', { name: '导出帧', exact: true }).isDisabled(), true);
   await page.evaluate(() => { window.holdFrameImport = false; window.releaseFrameImport(); });
-  await page.getByRole('button', { name: '已添加到画板', exact: true }).waitFor();
+  await page.getByRole('status').filter({ hasText: '已添加到画板' }).waitFor();
   const blue = await page.evaluate(async () => {
     const call = window.calls.filter(call => call.command === 'import_image_bytes').at(-1);
     const image = new Image(); image.src = call.args.dataUrl; await image.decode();
@@ -136,7 +139,7 @@ try {
   await seek(0.2);
   await page.getByRole('button', { name: '播放', exact: true }).click();
   await page.evaluate(() => { window.failNodeSave = true; });
-  await page.getByRole('button', { name: '添加尾帧到画板', exact: true }).click();
+  await frameAction('添加尾帧到画板').click();
   await dialog.getByRole('alert').waitFor();
   assert.equal((await imports()).length, 3);
   const tail = await page.evaluate(async () => {
@@ -153,11 +156,11 @@ try {
   assert.equal(tail.paused, true);
   assert.ok(tail.time < tail.duration && tail.duration - tail.time < 0.002);
   await page.evaluate(() => { window.failNodeSave = false; });
-  await page.getByRole('button', { name: '添加尾帧到画板', exact: true }).click();
-  await page.getByRole('button', { name: '尾帧已添加', exact: true }).waitFor();
+  await frameAction('添加尾帧到画板').click();
+  await page.getByRole('status').filter({ hasText: '尾帧已添加' }).waitFor();
   assert.equal((await imports()).length, 3, 'tail save retry must reuse the imported frame');
   await seek(0.5);
-  assert.equal(await page.getByRole('button', { name: '尾帧已添加', exact: true }).isDisabled(), true);
+  assert.equal(await frameAction('添加尾帧到画板').isDisabled(), true);
   await page.setViewportSize({ width: 480, height: 800 });
   assert.ok(await page.locator('.video-player').evaluate(el => el.getBoundingClientRect().right <= innerWidth && el.scrollWidth <= el.clientWidth));
   await page.screenshot({ path: `${directory}/player-narrow.png` });
@@ -221,18 +224,19 @@ try {
       await page.waitForFunction(ratio => {
         const video = document.querySelector('.video-player video'), player = document.querySelector('.video-player');
         const frame = video.getBoundingClientRect(), box = player.getBoundingClientRect();
-        return Math.abs(frame.width / frame.height - ratio) < 0.01 && Math.abs(box.width - frame.width - 2) < 2
+        return getComputedStyle(video).objectFit === "contain" && Math.abs(video.videoWidth / video.videoHeight - ratio) < 0.01 && Math.abs(box.width - frame.width - 2) < 2
           && box.top >= 0 && box.bottom <= innerHeight && box.right <= innerWidth && player.scrollWidth <= player.clientWidth;
       }, width / height);
       await page.screenshot({ path: `${directory}/${name}-${viewport.width}.png` });
     }
     if (name === 'short') {
-      await page.getByRole('button', { name: '添加尾帧到画板', exact: true }).click();
-      await page.getByRole('button', { name: '尾帧已添加', exact: true }).waitFor();
+      await frameAction('添加尾帧到画板').click();
+      await page.getByRole('status').filter({ hasText: '尾帧已添加' }).waitFor();
       assert.ok(await dialog.locator('video').evaluate(video => video.paused && video.currentTime > 0 && video.currentTime < 0.04));
     }
     if (name === 'wide') {
       const before = (await imports()).length;
+      await page.getByRole('button', { name: '导出帧', exact: true }).click();
       await page.evaluate(async () => {
         const video = document.querySelector('.video-player video');
         const released = new Promise(resolve => video.addEventListener('emptied', resolve, { once: true }));

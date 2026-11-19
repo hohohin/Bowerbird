@@ -1,4 +1,5 @@
 //! Narrow chat-to-canvas compiler. Model arguments never contain storage IDs or execution state.
+use super::project_canvas::placement::{near, visible_obstacles, workflow_rect, Rect};
 use crate::{
     db::Database,
     error::{AppError, AppResult},
@@ -45,9 +46,22 @@ impl Default for ChatCardDefaults {
         }
     }
 }
+pub(crate) fn card_tool_spec() -> &'static Value {
+    static TOOL: std::sync::LazyLock<Value> = std::sync::LazyLock::new(|| {
+        serde_json::from_str(include_str!("../../../../cloud/supabase/functions/_shared/chat-card-tool.json"))
+            .expect("bundled card tool schema is valid JSON")
+    });
+    &TOOL
+}
+
+fn listed_image_provider(provider: &str) -> bool {
+    card_tool_spec()["inputSchema"]["properties"]["cards"]["items"]["properties"]["provider"]["enum"]
+        .as_array().expect("image provider catalog").iter().any(|key| key.as_str() == Some(provider))
+}
+
 impl ChatCardDefaults {
     pub fn validate(&self) -> AppResult<()> {
-        if !(matches!(self.provider.as_str(), "codex" | "jimeng")
+        if !(listed_image_provider(&self.provider)
             || self.provider.starts_with("bowerbird-cloud-image_"))
             || self.provider.len() > 100
             || !self
@@ -99,6 +113,10 @@ pub struct ChatCardAction {
     pub call_id: String,
     pub status: String,
     pub cards: Vec<CreatedChatCard>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_status: Option<String>,
+    #[serde(skip)]
+    pub fresh: bool,
     pub created_at: i64,
     pub undone_at: Option<i64>,
 }
@@ -106,6 +124,8 @@ pub struct ChatCardAction {
 #[serde(deny_unknown_fields)]
 struct CardBatch {
     cards: Vec<CardSpec>,
+    #[serde(rename = "runCard")]
+    run_card: Option<String>,
     #[serde(default)]
     sections: Vec<SectionSpec>,
     #[serde(default)]
@@ -127,9 +147,28 @@ enum CardSpec {
         prompt: String,
         #[serde(rename = "mediaType")]
         media_type: String,
+        provider: Option<String>,
+        #[serde(rename = "videoChannel")]
+        video_channel: Option<String>,
+        #[serde(rename = "videoOptions")]
+        video_options: Option<VideoDefaults>,
         ratio: Option<String>,
         #[serde(default, rename = "referenceAliases")]
         reference_aliases: Vec<String>,
+    },
+    #[serde(rename = "comfy-video")]
+    ComfyVideo {
+        id: String,
+        title: String,
+        prompt: String,
+        mode: Option<String>,
+        seconds: Option<u32>,
+        ratio: Option<String>,
+        resolution: Option<f64>,
+        #[serde(rename = "firstFrameAlias")]
+        first_frame_alias: Option<String>,
+        #[serde(rename = "lastFrameAlias")]
+        last_frame_alias: Option<String>,
     },
     Content {
         id: String,
@@ -141,6 +180,12 @@ enum CardSpec {
         id: String,
         title: String,
         count: Option<u32>,
+        #[serde(rename = "triggerMode")]
+        trigger_mode: Option<String>,
+        #[serde(rename = "dailyAt")]
+        daily_at: Option<String>,
+        #[serde(rename = "runAt")]
+        run_at: Option<String>,
     },
     Loop {
         id: String,
@@ -155,6 +200,7 @@ impl CardSpec {
     fn identity(&self) -> (&str, &str, &str) {
         match self {
             Self::Generation { id, title, .. } => (id, title, "generation"),
+            Self::ComfyVideo { id, title, .. } => (id, title, "comfy-video"),
             Self::Content { id, title, .. } => (id, title, "content"),
             Self::Trigger { id, title, .. } => (id, title, "trigger"),
             Self::Loop { id, title, .. } => (id, title, "loop"),
@@ -174,6 +220,27 @@ struct Compilation {
     nodes: Vec<Value>,
     notes: Vec<Value>,
     names: serde_json::Map<String, Value>,
+}
+
+// Workflow outputs start 64 units after their producer. The regular gallery is
+// 260 units wide; a local video uses a 280-unit asset card.
+fn batch_node_rect(node: &Value) -> Rect {
+    let mut rect = workflow_rect(node);
+    if node["kind"] == "generation" || node["kind"] == "comfy-video" {
+        let ratio = node["comfyVideo"]["ratio"]
+            .as_str()
+            .or(node["ratio"].as_str())
+            .and_then(|ratio| ratio.split_once(':'))
+            .and_then(|(w, h)| Some(h.parse::<f64>().ok()? / w.parse::<f64>().ok()?))
+            .filter(|aspect| aspect.is_finite() && *aspect > 0.0)
+            .unwrap_or(1.0);
+        rect.width += 64.0 + 280.0;
+        rect.height = rect.height.max(280.0 * ratio + 32.0);
+        if node["kind"] == "comfy-video" {
+            rect.height = rect.height.max(720.0);
+        }
+    }
+    rect
 }
 
 fn valid_identity(alias: &str, title: &str) -> bool {
@@ -239,6 +306,10 @@ fn place_section_groups(
                     widths[member_index % 3].max(note["width"].as_f64().unwrap());
                 heights[member_index / 3] =
                     heights[member_index / 3].max(note["height"].as_f64().unwrap());
+            } else if let Some(node) = nodes.iter().find(|n| n["id"] == *id) {
+                let rect = batch_node_rect(node);
+                widths[member_index % 3] = widths[member_index % 3].max(rect.width);
+                heights[member_index / 3] = heights[member_index / 3].max(rect.height);
             }
         }
         let width = widths.iter().sum::<f64>() + (widths.len() - 1) as f64 * 96.0 + 144.0;
@@ -352,6 +423,109 @@ fn add_input(node: &mut Value, port: &str, mut binding: Value, label: &str) {
         ));
     }
 }
+/// Fields any card kind may carry. The flat tool schema lists all of them, so a model can put a
+/// field on the wrong kind; such a field is dropped here instead of failing the batch. Keys
+/// outside this set stay and are still rejected as unknown.
+const CARD_FIELDS: &[&str] = &[
+    "id",
+    "kind",
+    "title",
+    "prompt",
+    "mediaType",
+    "videoChannel",
+    "videoOptions",
+    "provider",
+    "ratio",
+    "referenceAliases",
+    "seconds",
+    "resolution",
+    "firstFrameAlias",
+    "lastFrameAlias",
+    "text",
+    "rows",
+    "count",
+    "triggerMode",
+    "runAt",
+    "dailyAt",
+    "mode",
+    "source",
+    "body",
+];
+
+fn normalize_card_fields(args: &mut Value) {
+    let Some(cards) = args.get_mut("cards").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for card in cards {
+        let Some(map) = card.as_object_mut() else {
+            continue;
+        };
+        let kind = map
+            .get("kind")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let allowed: &[&str] = match kind.as_str() {
+            "generation" => &[
+                "id",
+                "kind",
+                "title",
+                "prompt",
+                "mediaType",
+                "videoChannel",
+                "videoOptions",
+                "provider",
+                "ratio",
+                "referenceAliases",
+            ],
+            "comfy-video" => &[
+                "id",
+                "kind",
+                "title",
+                "prompt",
+                "mode",
+                "seconds",
+                "ratio",
+                "resolution",
+                "firstFrameAlias",
+                "lastFrameAlias",
+            ],
+            "content" => &["id", "kind", "title", "text", "rows"],
+            "trigger" => &["id", "kind", "title", "count", "triggerMode", "dailyAt", "runAt"],
+            "loop" => &["id", "kind", "title", "mode", "count", "source", "body"],
+            _ => &["id", "kind", "title"],
+        };
+        map.retain(|key, _| !CARD_FIELDS.contains(&key.as_str()) || allowed.contains(&key.as_str()));
+    }
+}
+
+fn trigger_schedule(
+    mode: Option<&str>, daily_at: Option<&str>, run_at: Option<&str>, id: &str,
+    now: chrono::DateTime<chrono::Local>,
+) -> AppResult<Option<Value>> {
+    use chrono::{NaiveTime, TimeZone};
+    match (mode, daily_at, run_at) {
+        (None | Some("manual" | "completion"), None, None) => Ok(None),
+        (Some("once"), None, Some(value)) => {
+            let at = chrono::DateTime::parse_from_rfc3339(value)
+                .map_err(|_| error("单次执行时间需要包含日期、时间和时区"))?.timestamp_millis();
+            if at <= now.timestamp_millis() { return Err(error("单次执行时间须在将来")); }
+            Ok(Some(json!({"id":id,"at":at,"status":"armed"})))
+        }
+        (Some("daily"), Some(value), None) => {
+            let time = NaiveTime::parse_from_str(value, "%H:%M")
+                .map_err(|_| error("每日执行时间请使用 HH:MM"))?;
+            if time.format("%H:%M").to_string() != value { return Err(invalid()); }
+            let today = now.date_naive();
+            let at = [today, today.succ_opt().ok_or_else(invalid)?].into_iter()
+                .filter_map(|day| chrono::Local.from_local_datetime(&day.and_time(time)).earliest())
+                .find(|at| *at > now).ok_or_else(invalid)?;
+            Ok(Some(json!({"id":id,"at":at.timestamp_millis(),"dailyAt":value,"status":"armed"})))
+        }
+        _ => Err(error("请按触发方式设置时间：单次使用 runAt，每日使用 dailyAt")),
+    }
+}
+
 fn compile(
     args: &Value,
     defaults: &ChatCardDefaults,
@@ -362,7 +536,9 @@ fn compile(
     if args.to_string().len() > 64_000 {
         return Err(invalid());
     }
-    let batch: CardBatch = serde_json::from_value(args.clone()).map_err(|_| invalid())?;
+    let mut args = args.clone();
+    normalize_card_fields(&mut args);
+    let batch: CardBatch = serde_json::from_value(args).map_err(|_| invalid())?;
     if batch.cards.is_empty()
         || batch.cards.len() > 12
         || batch.sections.len() > 12
@@ -404,7 +580,9 @@ fn compile(
             let rows = match (text, rows) {
                 (Some(text), None) => vec![vec![text.clone()]],
                 (None, Some(rows)) => rows.clone(),
-                _ => return Err(invalid()),
+                // Flat tool schemas sometimes produce an empty text placeholder with a table.
+                (Some(text), Some(rows)) if text.is_empty() => rows.clone(),
+                _ => return Err(error("内容卡片须在 text 正文和 rows 表格中选一种；本批未创建卡片")),
             };
             let columns = rows.first().map_or(0, Vec::len);
             if rows.is_empty()
@@ -436,6 +614,9 @@ fn compile(
             CardSpec::Generation {
                 prompt,
                 media_type,
+                video_channel,
+                video_options,
+                provider,
                 ratio,
                 reference_aliases,
                 ..
@@ -456,22 +637,35 @@ fn compile(
                 }) {
                     return Err(invalid());
                 }
+                if let Some(provider) = provider {
+                    if media_type != "image" || !listed_image_provider(provider) {
+                        return Err(error("请为生图卡选择工具列出的图片生成服务，本批卡片未创建"));
+                    }
+                    node["provider"] = json!(provider);
+                }
                 node["prompt"] = json!(prompt.trim());
                 if media_type == "image" && ratio.as_deref() == Some("21:9") {
                     return Err(error("图片比例不受支持，请使用常用图片比例"));
                 }
                 node["ratio"] = json!(ratio);
+                if media_type == "image" && (video_channel.is_some() || video_options.is_some()) { return Err(invalid()); }
                 if media_type == "video" {
-                    let provider = if defaults.video_channel == "cloud" {
+                    let selected = ChatCardDefaults {
+                        provider: defaults.provider.clone(),
+                        video_channel: video_channel.clone().unwrap_or_else(|| defaults.video_channel.clone()),
+                        video_options: video_options.clone().unwrap_or_else(|| defaults.video_options.clone()),
+                    };
+                    selected.validate()?;
+                    let provider = if selected.video_channel == "cloud" {
                         format!(
                             "bowerbird-cloud-video_seedance25_{}",
-                            defaults.video_options.video_resolution
+                            selected.video_options.video_resolution
                         )
                     } else {
                         "jimeng".into()
                     };
                     node["provider"] = json!(provider);
-                    node["generation"] = json!({"media":"video","videoChannel":defaults.video_channel,"videoOptions":defaults.video_options,"ratio":ratio});
+                    node["generation"] = json!({"media":"video","videoChannel":selected.video_channel,"videoOptions":selected.video_options,"ratio":ratio});
                 } else {
                     node["generation"] = json!({"media":"image","ratio":ratio});
                 }
@@ -489,8 +683,50 @@ fn compile(
                     );
                 }
             }
-
-            CardSpec::Trigger { count, .. } => {
+            CardSpec::ComfyVideo {
+                mode,
+                prompt,
+                seconds,
+                ratio,
+                resolution,
+                first_frame_alias,
+                last_frame_alias,
+                ..
+            } => {
+                let mode = mode.as_deref().unwrap_or("frames");
+                let seconds = seconds.unwrap_or(8);
+                let ratio = ratio.as_deref().unwrap_or("9:16");
+                let resolution = resolution.unwrap_or(0.8);
+                if prompt.trim().is_empty()
+                    || prompt.chars().count() > 8000
+                    || prompt.contains("@[")
+                    || !(1..=15).contains(&seconds)
+                    || !matches!(ratio, "auto" | "9:16" | "16:9" | "4:3" | "3:4" | "1:1")
+                    || !matches!(mode, "text" | "reference" | "frames")
+                    || !(if mode == "frames" { &[0.6, 0.8, 1.0][..] } else { &[0.6, 0.8, 0.98, 1.0][..] }).contains(&resolution)
+                    || (mode == "text" && (first_frame_alias.is_some() || last_frame_alias.is_some()))
+                    || (mode == "reference" && last_frame_alias.is_some())
+                {
+                    return Err(invalid());
+                }
+                node["prompt"] = json!(prompt.trim());
+                node["provider"] = json!("comfy-video");
+                node["comfyVideo"] = json!({"mode":mode,"endpoint":"http://127.0.0.1:8000","seconds":seconds,"ratio":ratio,"resolution":resolution});
+                for (port, alias) in [
+                    ("first-frame", first_frame_alias),
+                    ("last-frame", last_frame_alias),
+                ] {
+                    if let Some(alias) = alias {
+                        let index = image_alias_index(alias, images)?;
+                        add_input(&mut node, port, json!({"assetId":images[index]}), "");
+                    }
+                }
+            }
+            CardSpec::Trigger { count, trigger_mode, daily_at, run_at, .. } => {
+                if let Some(mode) = trigger_mode { node["triggerMode"] = json!(mode); }
+                if let Some(schedule) = trigger_schedule(trigger_mode.as_deref(), daily_at.as_deref(), run_at.as_deref(), &id, chrono::Local::now())? {
+                    node["triggerSchedule"] = schedule;
+                }
                 if count.is_some_and(|c| c > 9999) {
                     return Err(invalid());
                 }
@@ -583,7 +819,8 @@ fn compile(
             }
             for alias in body {
                 let (target, kind) = aliases.get(alias).ok_or_else(invalid)?;
-                if kind != "generation" || !body_owners.insert(alias)
+                if !matches!(kind.as_str(), "generation" | "comfy-video")
+                    || !body_owners.insert(alias)
                 {
                     return Err(invalid());
                 }
@@ -619,7 +856,7 @@ fn compile(
         }
         let output_type = match (kind.as_str(), connection.output.as_str()) {
             ("content", "text") => "text",
-            ("generation", "image") => "image",
+            ("generation" | "comfy-video", "image") => "image",
             ("trigger", "signal") => "signal",
             ("loop", "iteration") => "text",
             ("loop", "text")
@@ -633,23 +870,31 @@ fn compile(
         };
         let valid = match (to_kind.as_str(), connection.input.as_str()) {
             ("generation", "text" | "image" | "signal") => connection.input == output_type,
-            ("trigger", "completion") => kind == "generation",
+            ("comfy-video", "text" | "signal") => connection.input == output_type,
+            ("comfy-video", "first-frame" | "last-frame") => output_type == "image" && nodes.iter().any(|node|
+                node["id"] == *to && node["comfyVideo"]["mode"] != "text"
+                    && (connection.input == "first-frame" || node["comfyVideo"]["mode"] != "reference")),
+            ("trigger", "completion") => matches!(kind.as_str(), "generation" | "comfy-video"),
             ("loop", "signal") => output_type == "signal",
             _ => false,
         };
         if !valid {
             return Err(invalid());
         }
-        let source_is_video = nodes
-            .iter()
-            .any(|n| n["id"] == *from && n["generation"]["media"] == "video");
-        if source_is_video
-            && connection.input == "image"
-            && nodes
+        let source_is_video = kind == "comfy-video"
+            || nodes
                 .iter()
-                .any(|n| n["id"] == *to && n["generation"]["media"] == "image")
+                .any(|n| n["id"] == *from && n["generation"]["media"] == "video");
+        if source_is_video
+            && (matches!(connection.input.as_str(), "first-frame" | "last-frame")
+                || connection.input == "image"
+                    && nodes
+                        .iter()
+                        .any(|n| n["id"] == *to && n["generation"]["media"] == "image"))
         {
-            return Err(error("视频输出不能直接接到图片生成，请先提取视频帧"));
+            return Err(error(
+                "视频输出不能直接接到图片生成或 H3 首尾帧，请先提取视频帧",
+            ));
         }
         let binding = if kind == "content" {
             json!({"canvasNodeId":from,"cellId":"*text"})
@@ -657,12 +902,35 @@ fn compile(
             json!({"nodeId":from,"portId":connection.output})
         };
         let target = nodes.iter_mut().find(|n| n["id"] == *to).unwrap();
+        if matches!(connection.input.as_str(), "first-frame" | "last-frame")
+            && target["inputs"][&connection.input]
+                .as_array()
+                .is_some_and(|inputs| !inputs.is_empty())
+        {
+            return Err(error(
+                "H3 的首帧和尾帧各只能连接一张图片，请移除重复的图片来源",
+            ));
+        }
         add_input(
             target,
             &connection.input,
             binding,
             &cards.iter().find(|c| c.id == *from).unwrap().title,
         );
+    }
+    for trigger in nodes.iter().filter(|node| node["kind"] == "trigger") {
+        if trigger["inputs"]["completion"].is_array() && !trigger["triggerMode"].is_null()
+            && trigger["triggerMode"] != "completion" {
+            return Err(error("完成连线需要使用完成后触发方式"));
+        }
+    }
+    if let Some(alias) = batch.run_card.as_deref() {
+        let target = aliases.get(alias).and_then(|(id, _)| nodes.iter().find(|node| node["id"] == *id))
+            .ok_or_else(|| error("运行目标须为本批创建的可执行卡片"))?;
+        if target["kind"] == "trigger" && (target["inputs"]["completion"].is_array()
+            || !target["triggerMode"].is_null() && target["triggerMode"] != "manual") {
+            return Err(error("立即触发下游请选择手动触发卡"));
+        }
     }
     if !batch.sections.is_empty() {
         place_section_groups(
@@ -679,6 +947,11 @@ fn compile(
         let mut widths = [340.0f64; 3];
         let mut heights = vec![380.0f64; (cards.len() + 2) / 3];
         for (index, card) in cards.iter().enumerate() {
+            if let Some(node) = nodes.iter().find(|n| n["id"] == card.id) {
+                let rect = batch_node_rect(node);
+                widths[index % 3] = widths[index % 3].max(rect.width);
+                heights[index / 3] = heights[index / 3].max(rect.height);
+            }
             if let Some(note) = notes.iter().find(|n| n["id"] == card.id) {
                 widths[index % 3] = widths[index % 3].max(note["width"].as_f64().unwrap());
                 heights[index / 3] = heights[index / 3].max(note["height"].as_f64().unwrap());
@@ -705,7 +978,8 @@ fn compile(
                 .unwrap_or(&[]);
             let dynamic = images.iter().any(|i| i.get("assetId").is_none());
             let count = images.len();
-            let selected = defaults.video_options.kind.as_str();
+            let selected = node["generation"]["videoOptions"]["kind"].as_str().unwrap_or("text2video").to_string();
+            let cloud = node["generation"]["videoChannel"] == "cloud";
             let mode = if count == 0 {
                 "text2video"
             } else if dynamic {
@@ -713,7 +987,7 @@ fn compile(
             } else if selected == "frames2video" && count == 2 {
                 "frames2video"
             } else if selected == "multimodal2video" {
-                selected
+                "multimodal2video"
             } else if count == 1 {
                 "image2video"
             } else {
@@ -721,7 +995,7 @@ fn compile(
             };
             let options = &mut node["generation"]["videoOptions"];
             options["kind"] = json!(mode);
-            if defaults.video_channel == "cloud" {
+            if cloud {
                 options["model_version"] = json!("seedance2.5");
                 if options["video_resolution"] == "4k" {
                     options["video_resolution"] = json!("720p");
@@ -751,7 +1025,7 @@ fn compile(
             {
                 return Err(error("当前视频模型不支持这些输入，请切换视频模型后再创建"));
             }
-            if defaults.video_channel == "cloud" {
+            if cloud {
                 node["provider"] = json!(format!(
                     "bowerbird-cloud-video_seedance25_{}",
                     node["generation"]["videoOptions"]["video_resolution"]
@@ -790,11 +1064,13 @@ fn action(row: &rusqlite::Row<'_>) -> rusqlite::Result<ChatCardAction> {
         call_id: row.get(3)?,
         status: row.get(4)?,
         cards,
+        run_status: row.get(8)?,
+        fresh: false,
         created_at: row.get(6)?,
         undone_at: row.get(7)?,
     })
 }
-const ACTION_SELECT:&str="SELECT id,conversation_id,turn_id,call_id,status,cards_json,created_at,undone_at FROM local_chat_card_actions";
+const ACTION_SELECT:&str="SELECT id,conversation_id,turn_id,call_id,status,cards_json,created_at,undone_at,json_extract(footprint_json,'$.runStatus') FROM local_chat_card_actions";
 pub(crate) fn read_actions(conn: &Connection, id: &str) -> AppResult<Vec<ChatCardAction>> {
     let mut query = conn.prepare(&format!(
         "{ACTION_SELECT} WHERE conversation_id=?1 ORDER BY created_at,id"
@@ -888,6 +1164,33 @@ fn note_snapshot(conn: &Connection, id: &str) -> AppResult<Option<Value>> {
 }
 
 impl Database {
+    /// Only one live callback may dispatch this action, including concurrent call-id replays.
+    pub fn claim_chat_card_run(&self, action: &str, account: &str) -> AppResult<Option<(String, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        let claimed = tx.execute(
+            "UPDATE local_chat_card_actions SET footprint_json=json_set(footprint_json,'$.runStatus','dispatching')
+             WHERE id=?1 AND status='created' AND json_extract(footprint_json,'$.runStatus')='requested'
+             AND json_extract(footprint_json,'$.runAccount')=?2
+             AND turn_id IN (SELECT id FROM local_chat_turns WHERE status='running')
+             AND conversation_id IN (SELECT c.id FROM local_chat_conversations c JOIN projects p ON p.id=c.project_id WHERE c.status='running' AND p.archived_at IS NULL)", params![action,account],
+        )?;
+        if claimed == 0 { return Ok(None); }
+        let target = tx.query_row("SELECT c.project_id,json_extract(a.footprint_json,'$.runTarget')
+            FROM local_chat_card_actions a JOIN local_chat_conversations c ON c.id=a.conversation_id WHERE a.id=?1",
+            [action], |row| Ok((row.get(0)?,row.get(1)?)))?;
+        tx.commit()?;
+        Ok(Some(target))
+    }
+
+    pub fn finish_chat_card_dispatch(&self, action: &str, status: &str) -> AppResult<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE local_chat_card_actions SET footprint_json=json_set(footprint_json,'$.runStatus',?2)
+             WHERE id=?1 AND json_extract(footprint_json,'$.runStatus') IN ('requested','dispatching')", params![action,status],
+        )?;
+        Ok(())
+    }
+
     pub fn replay_local_chat_card_action(
         &self,
         conversation: &str,
@@ -897,12 +1200,18 @@ impl Database {
     ) -> AppResult<Option<ChatCardAction>> {
         replay(&self.conn.lock().unwrap(), conversation, turn, call, args)
     }
-    pub fn create_local_chat_cards(
+    #[cfg(test)]
+    pub fn create_local_chat_cards(&self, conversation: &str, turn: &str, call: &str, args: &Value) -> AppResult<ChatCardAction> {
+        self.create_local_chat_cards_for_account(conversation, turn, call, args, "test-user")
+    }
+
+    pub fn create_local_chat_cards_for_account(
         &self,
         conversation: &str,
         turn: &str,
         call: &str,
         args: &Value,
+        account: &str,
     ) -> AppResult<ChatCardAction> {
         if call.is_empty() || call.len() > 200 {
             return Err(invalid());
@@ -912,8 +1221,15 @@ impl Database {
         if let Some(action) = replay(&tx, conversation, turn, call, args)? {
             return Ok(action);
         }
-        let owner:Option<(String,String,f64,f64,String)>=tx.query_row("SELECT c.project_id,c.thread_id,n.x,n.y,t.card_defaults_json FROM local_chat_conversations c JOIN local_chat_turns t ON t.conversation_id=c.id JOIN canvas_nodes n ON n.id=c.node_id JOIN projects p ON p.id=c.project_id WHERE c.id=?1 AND t.id=?2 AND c.status='running' AND t.status='running' AND p.archived_at IS NULL",params![conversation,turn],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
-        let (project, thread, x, y, raw_defaults) =
+        let owner: Option<(String, String, String, Rect, String)> = tx.query_row(
+            "SELECT c.project_id,c.thread_id,n.id,n.x,n.y,n.width,n.height,t.card_defaults_json
+             FROM local_chat_conversations c JOIN local_chat_turns t ON t.conversation_id=c.id
+             JOIN canvas_nodes n ON n.id=c.node_id JOIN projects p ON p.id=c.project_id
+             WHERE c.id=?1 AND t.id=?2 AND c.status='running' AND t.status='running' AND p.archived_at IS NULL",
+            params![conversation, turn], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?,
+                Rect { x: r.get(3)?, y: r.get(4)?, width: r.get(5)?, height: r.get(6)? }, r.get(7)?))
+        ).optional()?;
+        let (project, thread, source_id, native_rect, raw_defaults) =
             owner.ok_or_else(|| error("本轮对话已结束或项目已关闭，本次未创建卡片"))?;
         let defaults = if raw_defaults == "{}" {
             ChatCardDefaults::default()
@@ -943,27 +1259,32 @@ impl Database {
         // Batch aliases can only reference newly compiled cards. Append to the latest
         // document in this transaction, preserving every unrelated run and reservation.
         let id = ulid::Ulid::new().to_string();
-        let native_right:f64=tx.query_row("SELECT COALESCE(MAX(x+width),?2) FROM canvas_nodes WHERE project_id=?1 AND hidden_at IS NULL",params![project,x],|r|r.get(0))?;
-        let workflow_right = doc["nodes"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|n| n["x"].as_f64().map(|x| x + 340.0))
-            .fold(x, f64::max);
-        let mut compiled = compile(
-            args,
-            &defaults,
-            &images,
-            (
-                (x + 420.0)
-                    .max(native_right + 80.0)
-                    .max(workflow_right + 80.0),
-                y,
-            ),
-            &id,
-        )?;
+        let mut compiled = compile(args, &defaults, &images, (0.0, 0.0), &id)?;
+        let existing = doc["nodes"].as_array().into_iter().flatten();
+        let source = existing.clone().find(|n| n["id"] == source_id && n["kind"] == "agent")
+            .map(workflow_rect).unwrap_or(native_rect);
+        let mut occupied = visible_obstacles(&tx, &project, &doc, &[&source_id], Some(source))?;
+        occupied.push(source);
+        // Keep earlier generators' output slots clear when another tool call appends cards.
+        occupied.extend(existing.filter(|n| n["kind"] == "generation" || n["kind"] == "comfy-video")
+            .map(batch_node_rect));
+        let mut batch = Rect { x: source.x + source.width + 64.0, y: source.y, width: 0.0, height: 0.0 };
+        for rect in compiled.nodes.iter().map(batch_node_rect).chain(compiled.notes.iter().map(|note| Rect {
+            x: note["x"].as_f64().unwrap(), y: note["y"].as_f64().unwrap(),
+            width: note["width"].as_f64().unwrap(), height: note["height"].as_f64().unwrap(),
+        })) {
+            batch.width = batch.width.max(rect.x + rect.width);
+            batch.height = batch.height.max(rect.y + rect.height);
+        }
+        let (x, y) = near(batch, &occupied, f64::NEG_INFINITY);
+        for item in compiled.nodes.iter_mut().chain(&mut compiled.notes) {
+            item["x"] = json!(item["x"].as_f64().unwrap() + x);
+            item["y"] = json!(item["y"].as_f64().unwrap() + y);
+        }
         for node in &compiled.nodes {
-            let image_ports: &[&str] = if node["generation"]["media"] == "video" {
+            let image_ports: &[&str] = if node["kind"] == "comfy-video" {
+                &["first-frame", "last-frame"]
+            } else if node["generation"]["media"] == "video" {
                 &["image"]
             } else {
                 &[]
@@ -1038,7 +1359,14 @@ impl Database {
         for asset in &images {
             tx.execute("INSERT OR IGNORE INTO project_assets(project_id,asset_id,created_at) VALUES(?1,?2,?3)",params![project,asset,now/1000])?;
         }
-        let footprint = json!({"nodes":compiled.nodes,"notes":note_records,"names":compiled.names});
+        let mut footprint = json!({"nodes":compiled.nodes,"notes":note_records,"names":compiled.names});
+        let run_status = args["runCard"].as_str().map(|alias| {
+            let card = compiled.cards.iter().find(|card| card.alias == alias).expect("validated run alias");
+            footprint["runTarget"] = json!(&card.id);
+            footprint["runAccount"] = json!(account);
+            footprint["runStatus"] = json!("requested");
+            "requested".to_owned()
+        });
         let result = ChatCardAction {
             id: id.clone(),
             conversation_id: conversation.into(),
@@ -1046,6 +1374,8 @@ impl Database {
             call_id: call.into(),
             status: "created".into(),
             cards: compiled.cards,
+            run_status,
+            fresh: true,
             created_at: now,
             undone_at: None,
         };
@@ -1069,6 +1399,12 @@ impl Database {
             return Ok(());
         }
         let footprint: Value = serde_json::from_str(&raw)?;
+        if footprint["runStatus"] == "dispatching" && tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM local_chat_turns t JOIN local_chat_card_actions a ON a.turn_id=t.id WHERE a.id=?1 AND t.status='running')",
+            [action_id], |row| row.get::<_, bool>(0),
+        )? {
+            return Err(error("卡片正在启动，请稍后再撤销"));
+        }
         let (revision, mut doc) = workflow(&tx, &project)?;
         let ids: HashSet<String> = footprint["nodes"]
             .as_array()
@@ -1090,7 +1426,18 @@ impl Database {
             if !doc["nodes"]
                 .as_array()
                 .and_then(|nodes| nodes.iter().find(|n| n["id"] == original["id"]))
-                .is_some_and(|current| same_json(current, original))
+                .is_some_and(|current| {
+                    let mut current = current.clone();
+                    // Environment detection updates this application-owned address on mount.
+                    // It is not a card edit; all inputs, options and execution state still match.
+                    if original["kind"] == "comfy-video"
+                        && current["comfyVideo"]["endpoint"].is_string()
+                    {
+                        current["comfyVideo"]["endpoint"] =
+                            original["comfyVideo"]["endpoint"].clone();
+                    }
+                    same_json(&current, original)
+                })
             {
                 return Err(conflict());
             }

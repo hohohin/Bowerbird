@@ -10,13 +10,14 @@ await mkdir(directory, { recursive: true });
 const ffmpeg = process.env.BOWERBIRD_FFMPEG_BINARY || resolve('../../.tmp/video-integration/tools/local/ffmpeg.exe');
 execFileSync(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=lime:s=180x320:r=25:d=2',
   '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', `${directory}/portrait.mp4`]);
-await writeFile(`${directory}/index.html`, '<html><meta charset="utf-8"><div id="root"></div><script type="module" src="./fixture.tsx"></script></html>');
+await writeFile(`${directory}/index.html`, '<html data-theme="dark"><meta charset="utf-8"><div id="root"></div><script type="module" src="./fixture.tsx"></script></html>');
 await writeFile(`${directory}/fixture.tsx`, `
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Lightbox } from '/src/components/Lightbox';
 import { VideoPlayer } from '/src/components/VideoPlayer';
 import '/src/styles.css';
+import '/src/components/TacticalMenus.css';
 const w = window as any;
 w.__TAURI_INTERNALS__ = { convertFileSrc: (path: string) => path, invoke: async () => null };
 w.decodes = 0; w.frames = []; w.canvasFrames = [];
@@ -60,9 +61,16 @@ try {
   assert.equal(await video.evaluate(v => v.muted), true);
   await page.getByRole('button', { name: '取消静音', exact: true }).click();
   assert.equal(await video.evaluate(v => v.volume), 0.35);
-  await page.getByRole('combobox', { name: '播放速度' }).selectOption('1.5');
+  await page.getByRole('combobox', { name: '播放速度' }).click(); await page.getByRole('option', { name: '1.5×', exact: true }).click();
+  await page.getByRole('combobox', { name: '播放速度' }).click(); await page.keyboard.press('Escape');
+  assert.equal(await page.getByRole('listbox').count(), 0);
+  assert.equal(await page.getByRole('dialog').count(), 1, 'Escape closes only the speed menu');
   assert.equal(await video.evaluate(v => v.playbackRate), 1.5);
   await page.getByRole('button', { name: '全屏', exact: true }).click();
+  await page.waitForFunction(() => !!document.fullscreenElement);
+  await page.getByRole('combobox', { name: '播放速度' }).click();
+  assert.ok(await page.getByRole('listbox').evaluate(el => document.fullscreenElement?.contains(el)), 'speed menu belongs to fullscreen top layer');
+  await page.getByRole('option', { name: '1.5×', exact: true }).click();
   await page.waitForFunction(() => document.fullscreenElement?.classList.contains('video-player'));
   await page.getByRole('button', { name: '退出全屏', exact: true }).click();
   await page.waitForFunction(() => !document.fullscreenElement);
@@ -97,16 +105,17 @@ try {
   await page.evaluate(() => window.setRevision('changed')); await ready(); await strip();
   assert.ok(await page.evaluate(before => window.decodes > before, afterFill), 'an evicted revision must decode again');
   // Library frame capture remains full resolution and never calls a default importer.
-  await page.getByRole('button', { name: '保存该帧到素材库', exact: true }).click();
-  await page.getByRole('button', { name: '已保存到素材库', exact: true }).waitFor();
+  await page.getByRole('button', { name: '导出帧', exact: true }).click(); await page.getByRole('menuitem', { name: '保存该帧到素材库', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: '已保存到素材库' }).waitFor();
   assert.deepEqual(await page.evaluate(async () => { const img = new Image(); img.src = window.frames[0].dataUrl; await img.decode(); return [img.width, img.height]; }), [180, 320]);
-  assert.equal(await page.getByRole('button', { name: '添加该帧到画板', exact: true }).count(), 1, 'library and canvas are independent frame destinations');
-  await page.getByRole('button', { name: '添加该帧到画板', exact: true }).click();
-  await page.getByRole('button', { name: '已添加到画板', exact: true }).waitFor();
+  await page.getByRole('button', { name: '导出帧', exact: true }).click();
+  assert.equal(await page.getByRole('menuitem', { name: '添加该帧到画板', exact: true }).count(), 1, 'library and canvas are independent frame destinations');
+  await page.getByRole('menuitem', { name: '添加该帧到画板', exact: true }).click();
+  await page.getByRole('status').filter({ hasText: '已添加到画板' }).waitFor();
   assert.equal(await page.evaluate(() => window.canvasFrames.length), 1);
   // Native media faults are injected at the browser boundary; UI must keep raw detail out of normal text.
   await volume.fill('0.35');
-  await page.getByRole('combobox', { name: '播放速度' }).selectOption('1.5');
+  await page.getByRole('combobox', { name: '播放速度' }).click(); await page.getByRole('option', { name: '1.5×', exact: true }).click();
   await video.evaluate(v => { Object.defineProperty(v, 'error', { configurable: true, value: { code: 3, message: 'decoder-private-diagnostic' } }); v.dispatchEvent(new Event('error')); });
   assert.match(await page.getByRole('alert').textContent(), /解码|编码/);
   assert.doesNotMatch(await page.getByRole('alert').textContent(), /decoder-private/);
@@ -132,7 +141,7 @@ try {
   assert.equal(await page.getByRole('textbox', { name: '外部输入' }).inputValue(), ' ');
   assert.equal(await video.evaluate(v => v.paused), true);
   assert.equal(await page.getByRole('button', { name: '裁剪视频' }).count(), 1);
-  await page.getByRole('slider', { name: '音量', exact: true }).focus(); await page.keyboard.press('ArrowLeft');
+  await page.getByRole('combobox', { name: '播放速度', exact: true }).focus(); await page.keyboard.press('ArrowLeft');
   assert.equal(await video.evaluate(v => v.currentTime), 0, 'volume slider arrows do not seek the media');
   assert.ok(await video.evaluate(v => {
     const screen = v.parentElement.getBoundingClientRect(), picture = v.getBoundingClientRect();

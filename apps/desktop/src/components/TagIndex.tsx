@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
 import { Settings2, X } from "lucide-react";
+import { trackFocusVisibleWithin } from "../lib/focusVisibleWithin";
 
 const tagNameOrder = new Intl.Collator("zh-Hans-CN-u-co-pinyin", { numeric: true, sensitivity: "base" });
 const smoothStep = (value: number) => value * value * (3 - 2 * value);
@@ -13,6 +14,7 @@ export function TagIndex({ tags: sourceTags, active, onSelect, onManage, manageB
   const [focused, setFocused] = useState<number | null>(null);
   const [revealed, setRevealed] = useState(false);
   const barRef = useRef<HTMLElement>(null);
+  useEffect(() => barRef.current ? trackFocusVisibleWithin(barRef.current) : undefined, []);
   const center = hovered ?? focused;
   useEffect(() => {
     const bar = barRef.current;

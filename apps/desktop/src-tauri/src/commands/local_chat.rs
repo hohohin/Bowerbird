@@ -21,57 +21,49 @@ use tokio::{
 };
 
 struct Active {
+    turn_id: String,
     cancel: watch::Sender<bool>,
     finished: watch::Receiver<bool>,
 }
 static ACTIVE: LazyLock<Mutex<HashMap<String, Active>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 const EVENT: &str = "local-chat://updated";
-const MAX_RESPONSE: usize = 2_000_000;
 #[path = "local_chat_cloud.rs"]
 mod cloud_chat;
-const CARD_TOOL_VERSION: i64 = 3;
-// Keep the Mac v3 contract until the deferred H3 compiler is synchronized.
-const CHAT_INSTRUCTIONS: &str = "你是 Bowerbird 创作工作台中的对话助手。使用用户的语言交流，帮助讨论创意、分析显式附带的图片、整理文案和提示词。用户明确要求创建卡片、实装或同意一个已经讨论清楚的卡片方案时，可以调用 create_canvas_cards，在当前项目创建可编辑的生成、内容、触发、循环卡片和分区；讨论、构思或询问能力本身不授权创建。创建多张相关卡片时优先提供 sections，按镜头、用途或工作流阶段分区并简洁命名：同一镜头的首帧和视频放在一起，共享参考内容可独立成区，触发及循环放到所控制的流程区。成员按阅读或执行顺序排列，应用自动排布并计算分区大小。同一分区的成员放在同一批，只能引用本批卡片别名；分区不占每批12张卡片额度。不要把不相关流程塞入同一大区，也不要逐卡机械分区；用户明确不要分区或单卡无需归组时可省略。卡片批次须包含必要连接；循环负责控制轮次和输入，trigger信号端口名为signal。仅创建卡片，不运行工作流或生成媒体。对话本身按所选 provider 的报价计费。不得执行命令、读写用户文件、调用其他工具或请求权限。不搜寻电脑上的文件，不继承其他会话。图片只使用本轮显式附带的图片；按附带顺序引用 image1、image2 等，先前轮次图片不可作为当前工具的引用。工具成功回执才代表创建完成，失败时说明并修正参数，不宣称完成。模型、生成引擎和默认参数由应用提供，不自行猜测。需要澄清时直接在普通回复中提问，不调用 request_user_input 或 request_user_input_async。工具外的操作说明目前尚未开放。";
+#[path = "local_chat_models.rs"]
+mod models;
+#[path = "local_chat_questions.rs"]
+mod questions;
+#[path = "local_chat_codex_questions.rs"]
+mod codex_questions;
+#[path = "local_chat_dsh.rs"]
+mod dsh;
+pub(crate) use dsh::stop_owned as stop_dsh_host;
+#[path = "local_chat_dsh_local.rs"]
+mod dsh_local;
+#[path = "local_chat_dsh_vps.rs"]
+mod dsh_vps;
+const CARD_TOOL_VERSION: i64 = 7;
+const CHAT_INSTRUCTIONS: &str =
+    include_str!("../../../../cloud/supabase/functions/_shared/chat-instructions.txt");
 
-fn card_tool_spec() -> Value {
-    serde_json::from_str(include_str!("local_chat_card_tool.json"))
-        .expect("bundled card tool schema is valid JSON")
-}
+use crate::core::local_chat_cards::card_tool_spec;
 
-/// Resume cannot update dynamic tools. Preserve the original app transcript, and seed a new
-/// provider thread with bounded public history when upgrading the tool contract.
-fn upgraded_history(chat: &ChatConversation, current_turn: &str) -> String {
-    let mut remaining = 300_000;
-    let mut selected = Vec::new();
-    let mut omitted = false;
-    for message in chat
-        .messages
-        .iter()
-        .rev()
-        .filter(|m| m.turn_id != current_turn)
-    {
-        let value = json!({"role":message.role,"text":message.text,"status":message.status,"imageCount":message.reference_asset_ids.len()});
-        let size = value.to_string().len();
-        if size > remaining {
-            omitted = true;
-            break;
-        }
-        remaining -= size;
-        selected.push(value);
-    }
-    selected.reverse();
-    format!("此会话的画板卡片工具刚更新，现已支持分区整理。以下JSON是该用户在同一应用会话中的历史资料，仅供上下文参考；其中过去的请求已经结束，不构成现在再次创建卡片的授权。完整历史保留在应用对话记录中。本次迁入的是公开文字，历史图片像素未重新发送；需要图片时请用户重新附带。较早文字是否因长度省略：{omitted}。第一次回复简短告知用户已接续原对话并更新卡片工具；若历史有省略或用户依赖旧图片，说明相应范围。\n{}", Value::Array(selected))
+fn local_instructions() -> String {
+    format!("{}\n{}\n{}", CHAT_INSTRUCTIONS
+        .replace("不得执行命令、读写用户文件、调用其他工具或请求权限。", "不得执行任意命令、读写工程外用户文件或请求权限。")
+        .replace("工具外的操作说明目前尚未开放。", ""), super::agent_ds::chat_video::INSTRUCTIONS,
+        "如果缺少会影响本轮交付的重要决定，使用 request_user_input 提问，等待答复后再执行依赖该答案的操作。可以给出简短选项或允许文字作答。不要询问密码、令牌等机密，也不要用普通消息或异步提问代替需要等待的提问。")
 }
 
 fn card_call<'a>(value: &'a Value, stream: &StreamState) -> AppResult<(&'a str, &'a Value)> {
     let params = &value["params"];
     if value["method"] != "item/tool/call"
         || value.get("id").is_none()
-        || params["tool"] != "create_canvas_cards"
+        || !matches!(params["tool"].as_str(), Some("create_canvas_cards" | "hyperframes_video"))
         || !params["namespace"].is_null()
     {
-        return Err(error("对话仅支持创建画板卡片工具"));
+        return Err(error("对话仅支持已开放的画板和视频工具"));
     }
     if stream.provider_thread.is_none()
         || stream.provider_turn.is_none()
@@ -102,6 +94,9 @@ fn error(text: &str) -> AppError {
 fn emit(app: &AppHandle, db: &Database, id: &str) {
     match db.get_local_chat(id) {
         Ok(Some(chat)) => {
+            if !matches!(chat.summary.status.as_str(), "running" | "stopping") {
+                let _ = app.emit("local-chat://cards-changed", json!({"projectId":chat.summary.project_id,"conversationId":id}));
+            }
             let _ = app.emit(EVENT, chat);
         }
         Err(detail) => tracing::warn!(%detail,"could not read local chat event"),
@@ -117,6 +112,11 @@ pub fn local_chat_list(
     db.list_local_chats(&project_id)
 }
 #[tauri::command]
+pub fn local_chat_revision(db: State<'_, Arc<Database>>, conversation_id: String) -> AppResult<Option<i64>> {
+    db.local_chat_revision(&conversation_id)
+}
+
+#[tauri::command]
 pub fn local_chat_get(
     db: State<'_, Arc<Database>>,
     conversation_id: String,
@@ -124,29 +124,57 @@ pub fn local_chat_get(
     db.get_local_chat(&conversation_id)
 }
 
-/// Resolve only explicit asset IDs. No arbitrary path supplied by the webview reaches Codex.
+#[tauri::command]
+pub fn local_chat_get_by_request(db: State<'_, Arc<Database>>, request_id: String) -> AppResult<Option<ChatConversation>> {
+    db.local_chat_by_request(&request_id)
+}
+
+#[tauri::command]
+pub fn local_chat_new_on_card(
+    app: AppHandle, db: State<'_, Arc<Database>>, project_id: String, node_id: String,
+    conversation_id: String, provider: Option<ChatProvider>, codex_options: Option<crate::core::local_chat::ChatCodexOptions>,
+) -> AppResult<ChatConversation> {
+    let chat = db.new_agent_chat(&project_id, &node_id, &conversation_id, provider, codex_options)?;
+    emit(&app, &db, &conversation_id);
+    if chat.summary.id != conversation_id {
+        let _ = app.emit(EVENT, &chat);
+    }
+    Ok(chat)
+}
+
+fn chat_video_path(path: &str) -> bool {
+    std::path::Path::new(path).extension().and_then(|ext| ext.to_str()).is_some_and(crate::media::probe::is_video)
+}
+
+/// Resolve explicit library assets in selection order, which also defines the card tool aliases.
 fn reference_paths(db: &Database, ids: &[String]) -> AppResult<Vec<String>> {
     if ids.len() > 8 {
-        return Err(error("每次对话最多引用 8 张图片"));
+        return Err(error("每次对话最多引用 8 个素材"));
     }
     let mut seen = HashSet::new();
     let mut paths = Vec::new();
     let mut total = 0;
     for id in ids {
         if !seen.insert(id) {
-            return Err(error("引用图片重复，请重新选择图片"));
+            return Err(error("引用素材重复，请重新选择"));
         }
         let asset = db
             .get_asset(id)?
-            .ok_or_else(|| error("引用图片已被删除，请重新选择图片"))?;
+            .ok_or_else(|| error("引用素材已被删除，请重新选择"))?;
         let original = asset
             .store_path
-            .ok_or_else(|| error("引用图片没有可用原图，请重新选择图片"))?;
-        let resolved = db.resolve_external_image_paths(&[original])?;
+            .ok_or_else(|| error("引用素材缺少原文件，请重新选择"))?;
+        let video = chat_video_path(&original);
+        let resolved = if video { db.resolve_external_paths(&[original])? } else { db.resolve_external_image_paths(&[original])? };
         let path = PathBuf::from(&resolved[0]);
         let metadata = std::fs::metadata(&path)
-            .map_err(|_| error("引用图片无法读取，请检查文件位置后重试"))?;
-        if !metadata.is_file() || metadata.len() > 20 * 1024 * 1024 {
+            .map_err(|_| error("引用素材无法读取，请检查文件位置后重试"))?;
+        if !metadata.is_file() { return Err(error("引用素材缺少原文件，请重新选择")); }
+        if video && chat_video_path(&resolved[0]) {
+            paths.push(resolved[0].clone());
+            continue;
+        }
+        if metadata.len() > 20 * 1024 * 1024 {
             return Err(error("引用图片过大，每张图片需小于 20 MB"));
         }
         total += metadata.len();
@@ -172,6 +200,39 @@ fn reference_paths(db: &Database, ids: &[String]) -> AppResult<Vec<String>> {
     Ok(paths)
 }
 
+fn append_chat_references(input: &mut Vec<Value>, paths: &[String]) {
+    for (index, path) in paths.iter().enumerate() {
+        let alias = format!("image{}", index + 1);
+        if chat_video_path(path) {
+            input.push(json!({"type":"text","text":format!("素材 {alias} 是本轮引用的本地视频，可供建卡及视频制作工具使用。对话只收到了视频引用。"),"text_elements":[]}));
+        } else {
+            input.push(json!({"type":"text","text":format!("以下图片对应建卡素材 {alias}"),"text_elements":[]}));
+            input.push(json!({"type":"localImage","path":path}));
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn local_chat_models() -> AppResult<Vec<models::CodexChatModel>> {
+    let binary = resolve_codex_binary().ok_or_else(||error("未找到 Codex CLI，请在设置中安装并登录"))?;
+    models::load(&binary).await
+}
+
+#[tauri::command]
+pub async fn local_chat_dsh_status() -> AppResult<dsh::Status> {
+    dsh::status().await
+}
+
+#[tauri::command]
+pub async fn local_chat_dsh_account(action: String, attempt_id: Option<String>) -> AppResult<dsh::AccountStatus> {
+    dsh::account(&action, attempt_id.as_deref()).await
+}
+
+#[tauri::command]
+pub async fn local_chat_dsh_setup(mode: String, url: Option<String>, auth_url: Option<String>) -> AppResult<dsh::Status> {
+    dsh::setup(&mode, url, auth_url).await
+}
+
 #[tauri::command]
 pub async fn local_chat_quote(
     cloud: State<'_, CloudClient>,
@@ -188,10 +249,100 @@ pub async fn local_chat_recover(
     auth: State<'_, AuthClient>,
     conversation_id: String,
 ) -> AppResult<ChatConversation> {
-    cloud_chat::recover(&db, &cloud, &auth, &conversation_id).await?;
+    let chat = db.get_local_chat(&conversation_id)?.ok_or_else(|| error("对话记录不存在"))?;
+    if chat.summary.provider == "dsh-cloud" {
+        let (turn, saved) = db.local_chat_recovery(&conversation_id)?;
+        if let Some(pending) = dsh_vps::Pending::parse(&turn, &saved)? {
+            cloud_chat::ensure_account(&auth, &pending.account)?;
+            let (cancel_tx, cancel_rx) = watch::channel(false);
+            let (done, finished) = watch::channel(false);
+            let running = {
+                let mut active = ACTIVE.lock().unwrap();
+                if active.contains_key(&conversation_id) { return Err(error("这段对话正在回复")); }
+                let running = db.resume_vps_chat(&conversation_id, &turn, &saved)?;
+                active.insert(conversation_id.clone(), Active { turn_id: turn.clone(), cancel: cancel_tx, finished });
+                running
+            };
+            let _ = app.emit(EVENT,&running);
+            let (db,cloud,auth) = (db.inner().clone(),cloud.inner().clone(),auth.inner().clone());
+            tokio::spawn(async move {
+                let result = dsh_vps::run(&app,&db,&cloud,&auth,&conversation_id,&turn,pending,None,cancel_rx).await;
+                finish_chat(&app,&db,&conversation_id,&turn,result,done);
+            });
+            return Ok(running);
+        }
+    }
+    match chat.summary.provider.as_str() {
+        "dsh-cloud" => cloud_chat::recover(&db, &cloud, &auth, &conversation_id).await?,
+        "dsh-local" => {
+            let (_, saved) = db.local_chat_recovery(&conversation_id)?;
+            let config = dsh::recovery_connection(&saved).await?;
+            dsh_local::recover(&db, &conversation_id, &config.base, config.auth.as_deref()).await?;
+        }
+        _ => return Err(error("该对话服务不支持取回原请求")),
+    }
     emit(&app, &db, &conversation_id);
     db.get_local_chat(&conversation_id)?
         .ok_or_else(|| error("对话记录不存在"))
+}
+
+#[tauri::command]
+pub async fn local_chat_questions(
+    webview: tauri::Webview, db: State<'_, Arc<Database>>, conversation_id: String,
+) -> AppResult<Vec<questions::QuestionBatch>> {
+    if webview.label() != "main" { return Err(error("请在主窗口查看 Agent 问题")); }
+    let batches = codex_questions::batches(&conversation_id);
+    if !batches.is_empty() { return Ok(batches); }
+    let Some(turn) = dsh_local::questions::QuestionTurn::load(&db, &conversation_id).await? else { return Ok(Vec::new()); };
+    turn.batches().await
+}
+
+#[tauri::command]
+pub async fn local_chat_answer_question(
+    webview: tauri::Webview, app: AppHandle, db: State<'_, Arc<Database>>, conversation_id: String,
+    turn_id: String, call_id: String, answers: Vec<questions::Answer>,
+) -> AppResult<()> {
+    if webview.label() != "main" { return Err(error("请在主窗口回答 Agent 问题")); }
+    if let Some(result) = codex_questions::answer(&conversation_id, &turn_id, &call_id, &answers) {
+        return result;
+    }
+    static SUBMISSION: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _submission = SUBMISSION.lock().await;
+    let target = dsh_local::questions::QuestionTurn::load(&db, &conversation_id).await?
+        .filter(|target| target.turn_id == turn_id).ok_or_else(|| error("此问题已结束，请查看最新对话"))?;
+    target.validate(&call_id, &answers).await?;
+    let (cancel, stop) = watch::channel(false);
+    let (done, finished) = watch::channel(false);
+    let (existing, resumed) = {
+        let mut active = ACTIVE.lock().unwrap();
+        if db.local_chat_dsh_question_checkpoint(&conversation_id)?.as_ref().is_none_or(|(turn, saved)| turn != &turn_id || saved != &target.checkpoint) {
+            return Err(error("此问题已结束，请查看最新对话"));
+        }
+        if let Some(run) = active.get(&conversation_id) {
+            if run.turn_id != turn_id || *run.cancel.borrow() { return Err(error("此轮已停止或切换")); }
+            (Some(run.cancel.subscribe()), None)
+        } else {
+            let chat = db.resume_local_dsh_question(&conversation_id, &turn_id, &target.checkpoint)?;
+            active.insert(conversation_id.clone(), Active { turn_id: turn_id.clone(), cancel, finished });
+            (None, Some(chat))
+        }
+    };
+    if let Some(mut cancel) = existing {
+        if *cancel.borrow() { return Err(error("此轮已停止")); }
+        return tokio::select! {
+            biased;
+            _ = cancel.changed() => Err(error("此轮已停止")),
+            result = target.answer(&call_id, &answers) => result,
+        };
+    }
+    if let Some(chat) = resumed { let _ = app.emit(EVENT, chat); }
+    let (received, receipt) = tokio::sync::oneshot::channel();
+    let db = db.inner().clone();
+    tokio::spawn(async move {
+        let result = target.reattach(app.clone(), db.clone(), conversation_id.clone(), call_id, answers, stop, received).await;
+        finish_chat(&app, &db, &conversation_id, &turn_id, result, done);
+    });
+    receipt.await.map_err(|_| error("未能恢复原问答任务，请查看对话状态"))?
 }
 
 #[tauri::command]
@@ -204,11 +355,14 @@ pub async fn local_chat_send(
     input: ChatSendInput,
 ) -> AppResult<ChatConversation> {
     // Lost IPC acknowledgements can be retried safely, including after account downgrade.
-    if let Some(previous) = db.replay_local_chat(&input)? {
+    if let Some(mut previous) = db.replay_local_chat(&input)? {
+        previous.conversation.submitted_turn_id = Some(previous.turn_id);
         return Ok(previous.conversation);
     }
+    if input.agent_node_id.is_some() { super::canvas_workflow::require_pro(&auth, &entitlement).await?; }
     let provider = db.local_chat_provider(&input)?;
-    let binary = match provider {
+    enum Runtime { Codex(String), DshLocal(dsh::LocalConnection), DshCloud(String, bool, bool) }
+    let runtime = match provider {
         ChatProvider::CodexLocal => {
             super::codex::require_byo(&entitlement, &auth).await?;
             let binary = resolve_codex_binary()
@@ -218,24 +372,34 @@ pub async fn local_chat_send(
             }) {
                 return Err(error("Bowerbird 的 Codex 未登录，请在设置中登录"));
             }
-            Some(binary)
+            Runtime::Codex(binary)
         }
-        ChatProvider::DeepseekCloud => {
+        ChatProvider::DshCloud => {
+            let account = auth.snapshot().user_id.ok_or_else(|| error("请先登录 Bowerbird 账号"))?;
             let quote = cloud_chat::request(&cloud, &auth, json!({"action":"quote"})).await?;
-            if quote["available"] != true {
-                return Err(error("DeepSeek Cloud 暂未开放，请稍后重试"));
+            cloud_chat::ensure_account(&auth,&account)?;
+            if quote["available"] != true || quote["dsh_vps_v2_available"] != true {
+                return Err(error("云端 DSH 会话服务暂未开放"));
             }
-            None
+            if input.dsh_skill.is_some() && quote["dsh_vps_skills_available"] != true { return Err(error("云端 DSH 技能暂未开放")); }
+            Runtime::DshCloud(account, quote["image_card_provider"] == true, quote["video_card_options"] == true)
+        }
+        ChatProvider::DshLocal => {
+            super::codex::require_byo(&entitlement, &auth).await?;
+            let config = dsh::active_connection().await?;
+            dsh_local::inspect(&config.base, config.auth.as_deref()).await?;
+            Runtime::DshLocal(config)
         }
     };
-    let images = reference_paths(&db, &input.reference_asset_ids)?;
+    let media_paths = reference_paths(&db, &input.reference_asset_ids)?;
     let db = db.inner().clone();
     let cloud = cloud.inner().clone();
     let auth = auth.inner().clone();
     // Serialize process admission with durable turn admission. A second IPC cannot claim a turn
     // between its SQLite commit and registration, and stop always sees a committed active turn.
     let mut active = ACTIVE.lock().unwrap();
-    let started = db.begin_local_chat(&input)?;
+    let mut started = db.begin_local_chat(&input)?;
+    started.conversation.submitted_turn_id = Some(started.turn_id.clone());
     if !started.is_new {
         return Ok(started.conversation);
     }
@@ -246,6 +410,7 @@ pub async fn local_chat_send(
     active.insert(
         id.clone(),
         Active {
+            turn_id: turn.clone(),
             cancel: cancel_tx,
             finished: finished_rx,
         },
@@ -253,37 +418,52 @@ pub async fn local_chat_send(
     drop(active);
     let returned = started.conversation;
     emit(&app, &db, &id);
+    let _ = app.emit("local-chat://cards-changed", json!({"projectId":input.project_id,"conversationId":id}));
     tokio::spawn(async move {
-        let result = if let Some(binary) = binary {
-            run_turn(
+        let result = match runtime {
+            Runtime::Codex(binary) => run_turn(
                 &app,
                 &db,
                 &id,
                 &turn,
                 &binary,
                 &input.text,
-                images,
+                media_paths,
                 cancel_rx,
             )
-            .await
-        } else {
-            cloud_chat::run(&app, &db, &cloud, &auth, &id, &turn, cancel_rx).await
-        };
-        let (status, detail) = match result {
-            Ok(status) => (status, None),
-            Err(detail) => ("failed", Some(detail.to_string())),
-        };
-        {
-            let mut active = ACTIVE.lock().unwrap();
-            if let Err(detail) = db.finish_local_chat(&id, &turn, status, detail.as_deref()) {
-                tracing::error!(%detail,"local chat completion was not saved");
+            .await,
+            Runtime::DshCloud(account, image_card_provider, video_card_options) => {
+                let pending = dsh_vps::Pending::new(&turn,account);
+                match dsh_vps::create_body(&db, &id, &turn, &pending.key, input.dsh_skill.as_ref()) {
+                    Ok(mut body) => {
+                        if image_card_provider && input.dsh_skill.is_none() { body["image_card_provider"] = json!(true); }
+                        if video_card_options && input.dsh_skill.is_none() { body["video_card_options"] = json!(true); }
+                        dsh_vps::run(&app,&db,&cloud,&auth,&id,&turn,pending,Some(body),cancel_rx).await
+                    }
+                    Err(detail) => Err(detail),
+                }
             }
-            active.remove(&id);
-        }
-        emit(&app, &db, &id);
-        let _ = finished_tx.send(true);
+            Runtime::DshLocal(config) => dsh_local::run(&app, &db, &id, &turn, &config.base, config.auth.as_deref(), cancel_rx).await,
+        };
+        finish_chat(&app, &db, &id, &turn, result, finished_tx);
     });
     Ok(returned)
+}
+
+fn finish_chat(app: &AppHandle, db: &Database, id: &str, turn: &str, result: AppResult<&'static str>, finished: watch::Sender<bool>) {
+    let (status, detail) = match result {
+        Ok(status) => (status, None),
+        Err(detail) => ("failed", Some(detail.to_string())),
+    };
+    {
+        let mut active = ACTIVE.lock().unwrap();
+        if let Err(detail) = db.finish_local_chat(id, turn, status, detail.as_deref()) {
+            tracing::error!(%detail,"local chat completion was not saved");
+        }
+        active.remove(id);
+    }
+    emit(app, db, id);
+    let _ = finished.send(true);
 }
 
 #[tauri::command]
@@ -291,10 +471,11 @@ pub async fn local_chat_stop(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
     conversation_id: String,
+    turn_id: Option<String>,
 ) -> AppResult<Option<ChatConversation>> {
     let finished = {
         let active = ACTIVE.lock().unwrap();
-        if let Some(run) = active.get(&conversation_id) {
+        if let Some(run) = active.get(&conversation_id).filter(|run| turn_id.as_ref().is_none_or(|id| id == &run.turn_id)) {
             db.mark_local_chat_stopping(&conversation_id)?;
             let _ = run.cancel.send(true);
             Some(run.finished.clone())
@@ -358,6 +539,8 @@ fn chat_config() -> Value {
 
 fn isolated_thread_config(effective: &Value) -> AppResult<Value> {
     let mut config = chat_config();
+    config["tools.experimental_request_user_input.enabled"] = json!(true);
+    config["features.default_mode_request_user_input"] = json!(true);
     // An empty map would retain entries during recursive merging. Keep each transport
     // definition and explicitly disable it; nested maps also preserve server names
     // containing dots (app-server config keys are split on dots, not TOML-parsed).
@@ -432,9 +615,6 @@ async fn read_message(reader: &mut (impl tokio::io::AsyncBufRead + Unpin)) -> Ap
             .iter()
             .position(|byte| *byte == b'\n')
             .map_or(available.len(), |n| n + 1);
-        if bytes.len() + count > MAX_RESPONSE {
-            return Err(error("Codex 返回内容过大，已保留收到的内容"));
-        }
         let ended = available[count - 1] == b'\n';
         bytes.extend_from_slice(&available[..count]);
         reader.consume(count);
@@ -489,13 +669,35 @@ async fn rpc(
     }
 }
 
+// Preserve the complete current reply on disk for crash recovery. Only the
+// changed text crosses IPC. Offsets use JavaScript string (UTF-16) units.
+fn save_stream_text(app: &AppHandle, db: &Database, id: &str, turn: &str, previous: &str, text: &str) -> AppResult<()> {
+    if text == previous { return Ok(()); }
+    if let Some((message_id, revision, updated_at)) = db.update_local_chat_text(id, turn, text)? {
+        if text.is_empty() {
+            // The summary may now show an earlier turn's preview.
+            emit(app, db, id);
+        } else {
+            let suffix = text.strip_prefix(previous);
+            let _ = app.emit("local-chat://text", json!({
+                "conversationId": id, "messageId": message_id, "revision": revision, "updatedAt": updated_at,
+                "offset": previous.encode_utf16().count(), "replace": suffix.is_none(),
+                "text": suffix.unwrap_or(text), "preview": text.chars().take(240).collect::<String>()
+            }));
+        }
+    }
+    Ok(())
+}
+
 #[derive(Default)]
 struct StreamState {
     provider_thread: Option<String>,
     provider_turn: Option<String>,
     start_confirmed: bool,
+    early_notifications: std::collections::VecDeque<Value>,
     items: Vec<(String, String)>,
     last_saved: Option<Instant>,
+    saved_text: String,
 }
 impl StreamState {
     fn text(&self) -> String {
@@ -515,13 +717,14 @@ impl StreamState {
         let event_turn = params["turnId"]
             .as_str()
             .or_else(|| params["turn"]["id"].as_str());
-        if let Some(known) = self.provider_turn.as_deref() {
-            if event_turn != Some(known) {
-                return Ok(None);
+        let Some(event_turn) = event_turn else { return Ok(None) };
+        let Some(known) = self.provider_turn.as_deref() else {
+            if matches!(value["method"].as_str(), Some("item/agentMessage/delta" | "item/completed" | "turn/completed")) {
+                self.early_notifications.push_back(value.clone());
             }
-        } else if let Some(turn) = event_turn {
-            self.provider_turn = Some(turn.into());
-        } else {
+            return Ok(None);
+        };
+        if event_turn != known {
             return Ok(None);
         }
         match value["method"].as_str().unwrap_or("") {
@@ -561,9 +764,6 @@ impl StreamState {
             }
             _ => {}
         }
-        if self.items.iter().map(|(_, text)| text.len()).sum::<usize>() > MAX_RESPONSE {
-            return Err(error("Codex 回复过长，已保留收到的内容"));
-        }
         Ok(None)
     }
     fn save(
@@ -579,8 +779,9 @@ impl StreamState {
                 .last_saved
                 .is_none_or(|last| last.elapsed() >= Duration::from_millis(120))
         {
-            db.update_local_chat_text(id, turn, &self.text())?;
-            emit(app, db, id);
+            let text = self.text();
+            save_stream_text(app, db, id, turn, &self.saved_text, &text)?;
+            self.saved_text = text;
             self.last_saved = Some(Instant::now());
         }
         Ok(())
@@ -624,11 +825,17 @@ async fn run_turn(
     turn: &str,
     binary: &str,
     text: &str,
-    images: Vec<String>,
+    media_paths: Vec<String>,
     mut cancel: watch::Receiver<bool>,
 ) -> AppResult<&'static str> {
     if *cancel.borrow() {
         return Ok("stopped");
+    }
+    let interactive = db.local_chat_turn_uses_history(turn)?;
+    let previous = if interactive { db.local_chat_provider_thread(id)? } else { None };
+    let options = db.local_chat_turn_options(turn)?;
+    if interactive && previous.is_none() && db.local_chat_has_prior_interactive_turn(id, turn)? {
+        return Err(error("原 Codex 会话无法继续，请开启新对话或按当前输入重跑"));
     }
     let home = codex_home().ok_or_else(|| error("Codex 资料目录不可用"))?;
     validate_chat_home(&home)?;
@@ -655,21 +862,18 @@ async fn run_turn(
             .ok_or_else(|| error("Codex 诊断连接不可用"))?,
     ));
     let mut stream = StreamState::default();
-    let previous = db.local_chat_provider_thread(id)?;
-    let upgrading =
-        previous.is_some() && db.local_chat_provider_tool_version(id)? < CARD_TOOL_VERSION;
-    let history = if upgrading {
-        Some(upgraded_history(
-            &db.get_local_chat(id)?
-                .ok_or_else(|| error("对话已不存在"))?,
-            turn,
-        ))
-    } else {
-        None
-    };
+    let (video_stop, video_cancel) = watch::channel(false);
+    let mut pending_video = None;
+    let (waiting, waiting_for_user) = watch::channel(false);
+    let mut questions = codex_questions::QuestionTurn::new(id, turn, waiting);
     let execution = async {
         tokio::time::timeout(Duration::from_secs(30),rpc(&mut reader,&mut writer,1,"initialize",json!({"clientInfo":{"name":"bowerbird","title":"Bowerbird","version":env!("CARGO_PKG_VERSION")},"capabilities":{"experimentalApi":true}}))).await.map_err(|_|error("Codex 启动等待超时，请检查设置中的 CLI 安装后重试"))??;
         write_message(&mut writer, json!({"method":"initialized","params":{}})).await?;
+        let options = if let Some(options) = options.as_ref() {
+            let catalog = tokio::time::timeout(Duration::from_secs(30), models::catalog(&mut reader, &mut writer))
+                .await.map_err(|_|error("Codex 模型验证超时，本轮内容尚未发送，请重试"))??;
+            Some(models::resolve(options, &catalog)?)
+        } else { None };
         let effective = tokio::time::timeout(
             Duration::from_secs(30),
             rpc(
@@ -682,12 +886,13 @@ async fn run_turn(
         )
         .await
         .map_err(|_| error("Codex 对话权限检查超时，本轮内容尚未发送"))??;
-        let mut params = json!({"cwd":root,"approvalPolicy":"never","sandbox":"read-only","config":isolated_thread_config(&effective)?,"baseInstructions":CHAT_INSTRUCTIONS,"developerInstructions":CHAT_INSTRUCTIONS});
-        let method = if let Some(previous) = previous.as_ref().filter(|_| !upgrading) {
+        let mut params = json!({"cwd":root,"approvalPolicy":"never","sandbox":"read-only","config":isolated_thread_config(&effective)?,"baseInstructions":local_instructions(),"developerInstructions":local_instructions()});
+        if let Some(options) = &options { models::apply_thread(&mut params, options); }
+        let method = if let Some(previous) = previous.as_ref() {
             params["threadId"] = json!(previous);
             "thread/resume"
         } else {
-            params["dynamicTools"] = json!([card_tool_spec()]);
+            params["dynamicTools"] = json!([card_tool_spec(), super::agent_ds::chat_video::spec()]);
             "thread/start"
         };
         let response = tokio::time::timeout(
@@ -705,8 +910,7 @@ async fn run_turn(
             .as_str()
             .ok_or_else(|| error("Codex 未返回会话编号，请更新 CLI 后重试"))?
             .to_owned();
-        if !upgrading
-            && previous
+        if previous
                 .as_ref()
                 .is_some_and(|previous| previous != &provider_thread)
         {
@@ -714,21 +918,58 @@ async fn run_turn(
         }
         stream.provider_thread = Some(provider_thread.clone());
         let mut input = Vec::new();
-        if let Some(history) = &history {
-            input.push(json!({"type":"text","text":history,"text_elements":[]}));
-        }
         input.push(json!({"type":"text","text":text,"text_elements":[]}));
-        if !images.is_empty() {
-            input.push(json!({"type":"text","text":format!("本轮显式引用图片按以下顺序对应工具别名：{}",(1..=images.len()).map(|i|format!("image{i}")).collect::<Vec<_>>().join("、")),"text_elements":[]}));
-        }
-        for path in images {
-            input.push(json!({"type":"localImage","path":path}));
-        }
+        append_chat_references(&mut input, &media_paths);
         // Pump start notifications too: some versions emit them before the RPC response.
-        write_message(&mut writer,json!({"id":3,"method":"turn/start","params":{"threadId":provider_thread,"input":input,"approvalPolicy":"never","sandboxPolicy":{"type":"readOnly","networkAccess":false}}})).await?;
+        let mut params = json!({"threadId":provider_thread,"input":input,"approvalPolicy":"never","sandboxPolicy":{"type":"readOnly","networkAccess":false}});
+        if let Some(options) = &options { models::apply_turn(&mut params, options); }
+        write_message(&mut writer,json!({"id":3,"method":"turn/start","params":params})).await?;
+        let mut confirmed_notifications = std::collections::VecDeque::new();
         loop {
-            let value = read_message(&mut reader).await?;
+            let value = match confirmed_notifications.pop_front() {
+                Some(value) => value,
+                None => questions.next_message(&mut reader, &mut writer).await?,
+            };
+            if value["method"] == "item/tool/requestUserInput" && value.get("id").is_some() {
+                if let Err(detail) = questions.open(&value, &stream) {
+                    write_message(&mut writer, json!({"id":value["id"],"error":{"code":-32602,"message":detail.to_string()}})).await?;
+                    return Err(detail);
+                }
+                continue;
+            }
+            if value["method"] == "serverRequest/resolved"
+                && value["params"]["threadId"].as_str() == stream.provider_thread.as_deref()
+                && questions.resolved(&value["params"]["requestId"])
+            {
+                return Err(error("Codex 的问题已关闭，本轮未交付，请在原对话中继续"));
+            }
             if value["method"] == "item/tool/call" && value.get("id").is_some() {
+                if value["params"]["tool"] == "hyperframes_video" {
+                    let result = match card_call(&value, &stream) {
+                        Ok((call, args)) => {
+                            let auth = app.state::<AuthClient>();
+                            let entitlement = app.state::<EntitlementService>();
+                            match super::canvas_workflow::require_pro(&auth, &entitlement).await {
+                                Err(error) => Err(error),
+                                Ok(()) => {
+                                    let app = app.clone();
+                                    let db = app.state::<Arc<Database>>().inner().clone();
+                                    let (id, turn, call, args, media_paths, cancel) = (id.to_owned(), turn.to_owned(), call.to_owned(), args.clone(), media_paths.clone(), video_cancel.clone());
+                                    pending_video = Some(tokio::spawn(async move {
+                                        super::agent_ds::chat_video::call(&app, &db, &id, &turn, &call, &args, &media_paths, cancel).await
+                                    }));
+                                    let result = pending_video.as_mut().unwrap().await.map_err(|e|error(&format!("视频工具未完成：{e}"))).and_then(|v|v);
+                                    pending_video = None;
+                                    result
+                                }
+                            }
+                        }
+                        Err(error) => Err(error),
+                    };
+                    let response = match result { Ok(result) => json!({"id":value["id"],"result":result}), Err(error) => card_response(&value, Err(error)) };
+                    write_message(&mut writer, response).await?;
+                    continue;
+                }
                 let result = match card_call(&value, &stream) {
                     Ok((call, args)) => {
                         let auth = app.state::<AuthClient>();
@@ -764,31 +1005,19 @@ async fn run_turn(
                 let provider_turn = value["result"]["turn"]["id"]
                     .as_str()
                     .ok_or_else(|| error("Codex 未返回轮次编号"))?;
-                if stream
-                    .provider_turn
-                    .as_deref()
-                    .is_some_and(|known| known != provider_turn)
-                {
-                    return Err(error("Codex 本轮回复编号不一致"));
-                }
                 stream.provider_turn = Some(provider_turn.into());
-                // Do not replace a legacy provider thread until its history and new input
-                // have been accepted. A canceled/failed preparation can then retry migration.
-                if upgrading {
-                    db.replace_local_chat_provider_thread(
-                        id,
-                        previous.as_deref().unwrap(),
-                        &provider_thread,
-                        CARD_TOOL_VERSION,
-                    )?;
-                } else {
+                if interactive && previous.is_none() {
                     db.set_local_chat_provider_thread(id, &provider_thread)?;
                     db.set_local_chat_provider_tool_version(id, CARD_TOOL_VERSION)?;
                 }
                 db.set_local_chat_provider_turn(turn, provider_turn)?;
                 stream.start_confirmed = true;
+                confirmed_notifications = std::mem::take(&mut stream.early_notifications);
             } else {
                 let result = stream.apply(&value)?;
+                if result == Some("done") && questions.pending() {
+                    return Err(error("Codex 结束时仍有未答问题，本轮未交付，请在原对话中继续"));
+                }
                 stream.save(app, db, id, turn, result.is_some())?;
                 if let Some(status) = result {
                     return Ok(status);
@@ -797,9 +1026,14 @@ async fn run_turn(
         }
     };
     let mut result = tokio::select! {
+        biased;
         _=cancel.changed()=>Ok("stopped"),
-        result=tokio::time::timeout(Duration::from_secs(1800),execution)=>result.unwrap_or_else(|_|Err(error("本轮对话等待超时，已保留收到的内容，请查看历史后继续对话"))),
+        result=execution=>result,
+        _=codex_questions::execution_budget(waiting_for_user, Duration::from_secs(1800))=>Err(error("本轮对话等待超时，已保留收到的内容，请查看历史后继续对话")),
     };
+    drop(questions);
+    let _ = video_stop.send(true);
+    if let Some(task) = pending_video.take() { let _ = task.await; }
     if *cancel.borrow() {
         if let (Some(thread_id), Some(turn_id)) = (&stream.provider_thread, &stream.provider_turn) {
             let _=write_message(&mut writer,json!({"id":4,"method":"turn/interrupt","params":{"threadId":thread_id,"turnId":turn_id}})).await;

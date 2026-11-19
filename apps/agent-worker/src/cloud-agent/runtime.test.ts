@@ -57,11 +57,35 @@ test("Agent worker config uses dedicated credentials", () => {
   throws(() => agentConfigFromEnv({ AGENT_CONTROL_URL: "https://control" }), /AGENT_WORKER_TOKEN_missing/);
 });
 
+test("interactive Agent claims stay responsive after prolonged idle", async () => {
+  const stop = { requested: false };
+  const sleeps: number[] = [];
+  let claims = 0;
+  const control = {
+    remainingMs: () => 60_000,
+    async heartbeat() { return { status: "running", cancelRequested: false, leaseExpiresAt: null }; },
+    async claim() {
+      claims++;
+      if (claims > 9) throw new Error("unexpected_claim");
+      return claims <= 8 ? { run: null } : claim();
+    },
+  } as unknown as AgentControlClient;
+  await runAgentWorker(agentConfigFromEnv({ AGENT_CONTROL_URL: "https://control", AGENT_WORKER_TOKEN: "secret" }), {
+    async process() { stop.requested = true; },
+  }, {
+    control, stop,
+    sleep: async ms => { sleeps.push(ms); },
+  });
+  deepEqual(sleeps.slice(0, 8), [2000, 4000, 5000, 5000, 5000, 5000, 5000, 5000]);
+  equal(claims, 9);
+});
+
 test("explicit test-only claim delay creates a pre-processor crash window", async () => {
   const stop = { requested: false };
   const sleeps: number[] = [];
   let processed = 0;
   const control = {
+    remainingMs() { return 60_000; },
     async claim() { return claim(); },
     async heartbeat() { return { status: "running", cancelRequested: false, leaseExpiresAt: null }; },
   } as unknown as AgentControlClient;
@@ -169,6 +193,7 @@ test("two worker loops sharing one atomic queue process a Run exactly once", asy
   const processedBy: string[] = [];
   function control(workerId: string): AgentControlClient {
     return {
+      remainingMs() { return 60_000; },
       async claim() {
         if (!available) return { run: null };
         available = false;

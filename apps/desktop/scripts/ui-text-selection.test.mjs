@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ cacheDir: '.tmp/ui-text-selection/vite', server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: '.tmp/ui-text-selection/vite', server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
@@ -10,6 +10,7 @@ try {
   await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/creation-editor/preview.html`);
   await page.locator('.ProseMirror').waitFor();
   await page.evaluate(async () => {
+    (await import('/src/lib/textContextMenu.ts')).installTextContextMenu();
     await import('/src/components/CanvasWorkflow.css');
     document.querySelector('#root').style.height = 'auto';
     const host = document.createElement('section');

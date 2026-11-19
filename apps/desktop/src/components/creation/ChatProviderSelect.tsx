@@ -1,43 +1,35 @@
-import { useEffect, useState } from "react";
+import { useStore as useSnapshot } from "zustand";
 import { useStore } from "../../store";
-import { canUseByo, effectivePolicy } from "../../lib/entitlement";
-import { CHAT_PROVIDER_LABELS, chatProviderUnavailable, localChat, type ChatProvider, type ChatQuote } from "../../lib/localChat";
-import { userErrorMessage } from "../../lib/userError";
+import { CHAT_PROVIDERS, CHAT_PROVIDER_LABELS, chatUsesCloud, isChatProvider, type ChatProvider } from "../../lib/localChat";
+import { chatDshStatus, chatProviderAccessIssue, chatQuote, refreshChatCapabilities } from "../../lib/chatCapabilities";
+import { canUseByo } from "../../lib/entitlement";
 import { ModelSelect } from "./ModelSelect";
 
-export function useChatProviderAccess(active: boolean) {
+export function useChatProviderAccess() {
   const auth = useStore(state => state.cloudAuth);
   const entitlement = useStore(state => state.cloudEntitlement);
   const health = useStore(state => state.codexHealth);
-  const [quote, setQuote] = useState<ChatQuote | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [attempt, retry] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    setQuote(null); setError(null);
-    if (active && auth?.cloud_available && auth.logged_in) localChat.quote()
-      .then(value => { if (!cancelled) setQuote(value); })
-      .catch(reason => { if (!cancelled) setError(userErrorMessage(reason, "Cloud 对话报价暂不可用，请重试。")); });
-    return () => { cancelled = true; };
-  }, [active, auth?.cloud_available, auth?.logged_in, auth?.user_id, attempt]);
+  const quoteSnapshot = useSnapshot(chatQuote.store);
+  const dshSnapshot = useSnapshot(chatDshStatus.store);
+  const { value: quote, error } = quoteSnapshot;
+  const { value: dsh } = dshSnapshot;
   const balance = entitlement ? entitlement.balances.daily + entitlement.balances.sub + entitlement.balances.topup : 0;
-  const state = { cloudAvailable: !!auth?.cloud_available, loggedIn: !!auth?.logged_in,
-    cloudAllowed: effectivePolicy(entitlement).can_use_cloud, localAllowed: canUseByo(entitlement), codexReady: !!health?.ok, balance };
-  return { quote, error, balance: entitlement ? balance : null, loggedIn: state.loggedIn, retry: () => retry(value => value + 1),
-    reason: (provider: ChatProvider) => provider === "deepseek-cloud" && error ? error : chatProviderUnavailable(provider, state, quote) };
+  const issue = (provider: ChatProvider) => chatProviderAccessIssue(provider,
+    { cloudAuth: auth, cloudEntitlement: entitlement, codexHealth: health }, quoteSnapshot, dshSnapshot);
+  const cloudPrice = quote?.dsh_vps_v2_available && quote.available && quote.unit_cost === 0 ? `${quote.unit_cost} Bcoin` : null;
+  return { quote, cloudPrice, error, dsh, localAllowed: canUseByo(entitlement), balance: entitlement ? balance : null, loggedIn: !!auth?.logged_in, retry: refreshChatCapabilities,
+    issue, reason: (provider: ChatProvider) => issue(provider)?.message ?? null };
 }
 
 export function ChatProviderSelect({ value, onChange, access, disabled }: {
   value: ChatProvider; onChange?: (provider: ChatProvider) => void; access: ReturnType<typeof useChatProviderAccess>; disabled?: boolean;
 }) {
-  const cloud = value === "deepseek-cloud";
-  const quoted = access.quote?.available && access.quote.unit_cost === 0;
+  const cloud = chatUsesCloud(value);
   return <ModelSelect value={value} kind="对话" label={CHAT_PROVIDER_LABELS[value]} source={cloud ? "cloud" : "personal"}
-    quotaDetail={cloud ? quoted ? `${access.quote!.unit_cost} Bcoin` : "Bowerbird Bcoin" : "使用本机 Codex 的自有订阅额度"}
-    options={(["codex-local", "deepseek-cloud"] as const).map(provider => ({ key: provider, label: CHAT_PROVIDER_LABELS[provider],
-      source: provider === "deepseek-cloud" ? "cloud" : "personal", reason: disabled ? "正在发送，请稍候" : access.reason(provider) ?? undefined }))}
-    onChange={key => { if (key === "codex-local" || key === "deepseek-cloud") onChange?.(key); }}
-    cloudBalance={access.balance} cloudLoggedIn={access.loggedIn}
-    footer={access.error ? <button type="button" onClick={access.retry}>重新获取报价</button>
-      : quoted ? `DeepSeek · ${access.quote!.unit_cost} Bcoin` : undefined} />;
+    quotaDetail={cloud ? access.cloudPrice ?? "Bowerbird Bcoin" : value === "dsh-local" ? "使用本机 DSH 的登录配置" : "使用本机 Codex 的自有订阅额度"}
+    options={CHAT_PROVIDERS.map(provider => ({ key: provider, label: CHAT_PROVIDER_LABELS[provider],
+      source: chatUsesCloud(provider) ? "cloud" : "personal", reason: disabled ? "正在发送，请稍候"
+        : !onChange && provider !== value ? "此处无法切换服务" : access.reason(provider) ?? undefined }))}
+    onChange={key => { if (isChatProvider(key)) onChange?.(key); }}
+    cloudBalance={access.balance} cloudLoggedIn={access.loggedIn} />;
 }

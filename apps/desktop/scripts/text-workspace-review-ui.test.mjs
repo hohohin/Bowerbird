@@ -77,7 +77,7 @@ try {
     await button('源码').click();
     const source = page.getByRole('textbox', { name: 'Markdown 源码' });
     await source.fill('# 保存分镜\n\n**保持强调**，以及长提示词。\n\n- 第一镜\n- 第二镜\n\n<img data-bowerbird-asset="review-image-2" data-caption="参考" />\n');
-    await button('保存到集合').click(); await button('创作笔记').click();
+    await button('保存到文件夹').click(); await button('创作笔记').click();
     await page.getByRole('status').filter({ hasText: '已保存到示例集合' }).waitFor();
     await source.fill('临时替换'); await page.locator('.saved-document').click();
     assert.match(await editor().innerText(), /保持强调/);
@@ -142,7 +142,7 @@ try {
         await page.waitForTimeout(100);
         const overflow = await page.evaluate(() => ({ root: document.documentElement.scrollWidth > innerWidth, header: document.querySelector('.editor-header').scrollWidth > document.querySelector('.editor-header').clientWidth }));
         assert.deepEqual(overflow, { root: false, header: false });
-        for (const label of ['保存到集合', '保存到项目', '添加到生成对话框']) {
+        for (const label of ['保存到文件夹', '保存到项目', '添加到生成对话框']) {
           const bounds = await button(label).boundingBox(); assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width);
         }
         await page.screenshot({ path: `.tmp/text-workspace-review/editor-${theme}-${width}.png` });

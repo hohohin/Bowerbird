@@ -25,7 +25,10 @@ fn paid_definition(document: &Value) -> Vec<Value> {
         .map(|node| {
             let mut node = node.clone();
             if let Some(fields) = node.as_object_mut() {
-                for key in ["outputs","outputPorts","sessionNodeIds","activeSessionNodeId","resultNodeIds","resultGroupId","completionSeen","triggerCount","describeCache","profileCache"] { fields.remove(key); }
+                for key in ["outputs","outputPorts","sessionNodeIds","activeSessionNodeId","resultNodeIds","resultGroupId","completionSeen","triggerCount","describeCache","profileCache","layoutSize"] { fields.remove(key); }
+                if fields.get("chatConversationId").is_some_and(Value::is_string) {
+                    fields.remove("x"); fields.remove("y");
+                }
                 if let Some(schedule) = fields.get_mut("triggerSchedule").and_then(Value::as_object_mut) {
                     schedule.remove("status");
                     if schedule.get("dailyAt").is_some_and(Value::is_string) { schedule.remove("at"); }
@@ -41,6 +44,13 @@ fn has_new_run(before: &Value, after: &Value) -> bool {
             .filter_map(|r| r["id"].as_str().map(str::to_owned)).collect()
     };
     !ids(after).is_subset(&ids(before))
+}
+
+fn definition_changed(before: &Value, after: &Value) -> bool {
+    let mut previous = paid_definition(before);
+    previous.retain(|node| !(node["kind"] == "agent" && node["chatConversationId"].is_string()
+        && !after["nodes"].as_array().into_iter().flatten().any(|current| current["id"] == node["id"])));
+    previous != paid_definition(after)
 }
 
 // The schedule and the new run are claimed in the same SQLite transaction.
@@ -96,9 +106,9 @@ fn validate_binding_metadata(binding: &Value) -> AppResult<()> {
     Ok(())
 }
 
-fn control_binding_fields(binding: &Value) -> bool {
-    binding.get("mediaFilter").is_none() && binding.as_object().is_some_and(|value|
-        value.keys().filter(|key| key.as_str() != "autoConnect").count() == 2)
+fn control_binding_fields(binding: &Value, fields: &[&str]) -> bool {
+    binding.as_object().is_some_and(|value|
+        value.keys().all(|key| key == "autoConnect" || fields.contains(&key.as_str())))
 }
 
 fn validate_image_output(value: &Value, assets: &mut HashSet<String>) -> AppResult<()> {
@@ -168,7 +178,9 @@ fn validate_loop(run: &Value, nodes: &[Value], assets: &mut HashSet<String>) -> 
 }
 
 pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
-    if document["schema_version"] != 1 || document.to_string().len() > 2_000_000 { return Err(invalid()); }
+    // Local history includes frozen inputs and results from multiple runs. Its
+    // cumulative size is not a per-request limit; validate the graph below.
+    if document["schema_version"] != 1 { return Err(invalid()); }
     let nodes = document["nodes"].as_array().ok_or_else(invalid)?;
     if nodes.len() > 500 { return Err(invalid()); }
     let mut ids = HashSet::new();
@@ -176,7 +188,7 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
     let mut dependencies: HashMap<&str, Vec<&str>> = HashMap::new();
     for node in nodes {
         let id = node["id"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
-        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("instruction" | "generation" | "skill" | "agent" | "comfy-video" | "visual-profile" | "text" | "trigger" | "planner" | "loop"))
+        if !ids.insert(id) || !matches!(node["kind"].as_str(), Some("director3d" | "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop"))
             || !matches!(node["action"].as_str(), Some("describe" | "reuse" | "layers"))
             || node["x"].as_f64().filter(|v| v.is_finite()).is_none()
             || node["y"].as_f64().filter(|v| v.is_finite()).is_none()
@@ -251,13 +263,16 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                     validate_binding_metadata(binding)?;
                     if binding.get("canvasNodeId").is_some() {
                         if binding["canvasNodeId"].as_str().is_none_or(str::is_empty) || binding["cellId"] != "image"
-                            || !control_binding_fields(binding) { return Err(invalid()); }
+                            || !control_binding_fields(binding, &["canvasNodeId", "cellId"]) { return Err(invalid()); }
                         continue;
                     }
                     let producer = nodes.iter().find(|source| source["id"] == binding["nodeId"]).ok_or_else(invalid)?;
                     if matches!(producer["kind"].as_str(), Some("trigger" | "planner")) || producer.get("textSource").is_some()
                         || !matches!(binding["portId"].as_str(), Some("text" | "image" | "visual-profile" | "iteration"))
-                        || !control_binding_fields(binding) { return Err(invalid()); }
+                        || !control_binding_fields(binding, &["nodeId", "portId", "pendingCompletionSession"]) { return Err(invalid()); }
+                    if binding.get("pendingCompletionSession").is_some_and(|session|
+                        session.as_str().is_none_or(str::is_empty) || binding["portId"] != "image"
+                        || !matches!(producer["kind"].as_str(), Some("generation" | "comfy-video"))) { return Err(invalid()); }
                 }
                 continue; // Completion events do not participate in the data dependency DAG.
             }
@@ -267,12 +282,27 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                 validate_binding_metadata(binding)?;
                 if port == "signal" {
                     let producer = nodes.iter().find(|node| node["id"] == binding["nodeId"]).ok_or_else(invalid)?;
-                    if producer["kind"] != "trigger" || binding["portId"] != "signal" || !control_binding_fields(binding) { return Err(invalid()); }
+                    if producer["kind"] != "trigger" || binding["portId"] != "signal" || !control_binding_fields(binding, &["nodeId", "portId"]) { return Err(invalid()); }
                     deps.push(producer["id"].as_str().ok_or_else(invalid)?);
                     continue;
                 }
                 if binding["portId"] == "signal" { return Err(invalid()); }
-                if binding["groupId"].is_string() {
+                if let Some(frame) = binding.get("videoFrame") {
+                    let frame_asset = frame["assetId"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
+                    if !image_port || !matches!(frame["position"].as_str(), Some("first" | "last"))
+                        || binding["assetId"].as_str().is_none_or(|id| id.is_empty() || id == frame_asset)
+                        || ["nodeId", "portId", "groupId", "assetIds", "canvasNodeId", "cellId", "dimension"].iter().any(|key| binding.get(*key).is_some())
+                    { return Err(invalid()); }
+                    assets.insert(frame_asset.to_owned());
+                }
+                if let Some(dimension) = binding.get("dimension") {
+                    let asset = binding["assetId"].as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?;
+                    if port != "text" || !dimension["title"].is_string() || !dimension["body"].is_string()
+                        || !(dimension["id"].is_null() || dimension["id"].is_string())
+                        || ["nodeId", "portId", "groupId", "assetIds", "canvasNodeId", "cellId"].iter().any(|key| binding.get(*key).is_some())
+                    { return Err(invalid()); }
+                    assets.insert(asset.to_owned());
+                } else if binding["groupId"].is_string() {
                     if !image_port || binding.get("nodeId").is_some() || binding.get("assetId").is_some() || binding.get("canvasNodeId").is_some() { return Err(invalid()); }
                     for asset in binding["assetIds"].as_array().ok_or_else(invalid)? {
                         assets.insert(asset.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?.to_owned());
@@ -333,6 +363,7 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
     let mut run_ids = HashSet::new();
     let mut schedule_ids = HashSet::new();
     let mut accesses: Vec<(HashSet<&str>, HashSet<&str>)> = Vec::new();
+    let triggers: HashSet<&str> = nodes.iter().filter(|node| node["kind"] == "trigger").filter_map(|node| node["id"].as_str()).collect();
     for run in runs {
         if let Some(schedule) = run.get("scheduleId") {
             if !schedule_ids.insert(schedule.as_str().filter(|id| !id.is_empty()).ok_or_else(invalid)?)
@@ -362,8 +393,10 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                 let id = id.as_str().ok_or_else(invalid)?;
                 if !reads_and_writes.contains(id) || !writes.insert(id) { return Err(invalid()); }
             }
-            if run["order"].as_array().ok_or_else(invalid)?.iter().any(|id| !writes.contains(id.as_str().unwrap()))
-                || accesses.iter().any(|(other_access, other_writes)| !writes.is_disjoint(other_access) || !other_writes.is_disjoint(&reads_and_writes)) { return Err(invalid()); }
+            if run["order"].as_array().ok_or_else(invalid)?.iter().any(|id| !writes.contains(id.as_str().unwrap())) { return Err(invalid()); }
+            writes.retain(|id| !triggers.contains(id));
+            reads_and_writes.retain(|id| !triggers.contains(id));
+            if accesses.iter().any(|(other_access, other_writes)| !writes.is_disjoint(other_access) || !other_writes.is_disjoint(&reads_and_writes)) { return Err(invalid()); }
             accesses.push((reads_and_writes, writes));
         }
     }
@@ -399,7 +432,25 @@ impl Database {
         let current: i64 = tx.query_row("SELECT revision FROM canvas_workflows WHERE project_id=?1", [project_id], |r| r.get(0)).optional()?.unwrap_or(0);
         if current != revision { return Err(AppError::Other("工作流已被其他窗口修改，请重新打开项目".into())); }
         let previous: Option<String> = tx.query_row("SELECT document_json FROM canvas_workflows WHERE project_id=?1", [project_id], |row| row.get(0)).optional()?;
-        validate_schedule_claims(&previous.map(|json| serde_json::from_str::<Value>(&json)).transpose()?.unwrap_or(Value::Null), &document)?;
+        let previous = previous.map(|json| serde_json::from_str::<Value>(&json)).transpose()?.unwrap_or(Value::Null);
+        validate_schedule_claims(&previous, &document)?;
+        // Conversation history keeps its native row. Its single visible Agent projection
+        // owns placement and visibility, including undo of a removed card.
+        for node in document["nodes"].as_array().unwrap() {
+            if let Some(id) = node.get("chatConversationId") {
+                let id = id.as_str().ok_or_else(invalid)?;
+                let native: Option<String> = tx.query_row("SELECT node_id FROM local_chat_conversations WHERE id=?1 AND project_id=?2", params![id,project_id], |row|row.get(0)).optional()?;
+                if node["kind"] != "agent" || native.as_deref() != node["id"].as_str() { return Err(invalid()); }
+                tx.execute("UPDATE canvas_nodes SET x=?2,y=?3,width=COALESCE(?4,width),height=COALESCE(?5,height),hidden_at=NULL WHERE id=?1 AND project_id=?6", params![native.unwrap(),node["x"].as_f64(),node["y"].as_f64(),node["layoutSize"]["width"].as_f64(),node["layoutSize"]["height"].as_f64(),project_id])?;
+            }
+        }
+        for node in previous["nodes"].as_array().into_iter().flatten().filter(|node| node["chatConversationId"].is_string()) {
+            if !document["nodes"].as_array().unwrap().iter().any(|current| current["id"] == node["id"]) {
+                let running: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM local_chat_conversations WHERE id=?1 AND status IN ('running','stopping'))", [node["chatConversationId"].as_str()], |row|row.get(0))?;
+                if running { return Err(AppError::Other("请先停止 Agent，再移除卡片".into())); }
+                tx.execute("UPDATE canvas_nodes SET hidden_at=COALESCE(hidden_at,strftime('%s','now')*1000) WHERE id=?1 AND project_id=?2", params![node["id"].as_str(),project_id])?;
+            }
+        }
         if let Some(card) = created_content {
             let now = chrono::Utc::now().timestamp();
             touch_canvas_tx(&tx, project_id, now)?;
@@ -420,7 +471,7 @@ pub async fn canvas_workflow_get(db: State<'_, Arc<Database>>, project_id: Strin
 #[tauri::command]
 pub async fn canvas_workflow_save(db: State<'_, Arc<Database>>, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, project_id: String, revision: i64, document: Value, created_content: Option<NewCanvasNode>) -> AppResult<i64> {
     let before = db.workflow_get(&project_id)?.document;
-    if created_content.is_some() || paid_definition(&before) != paid_definition(&document) || (has_new_run(&before,&document) && !paid_definition(&document).is_empty()) {
+    if created_content.is_some() || definition_changed(&before, &document) || (has_new_run(&before,&document) && !paid_definition(&document).is_empty()) {
         require_pro(&auth, &entitlement).await?;
     }
     db.workflow_save_with_content(&project_id, revision, document, created_content.as_ref())
@@ -435,11 +486,106 @@ mod tests {
         let mut result=before.clone(); result["nodes"][0]["outputs"]=json!({"image":{"type":"image","assetIds":["result"]}});
         assert_eq!(paid_definition(&before),paid_definition(&result));
         assert!(!has_new_run(&before,&result));
+        result["nodes"][0]["layoutSize"]=json!({"width":320,"height":156});
+        assert_eq!(paid_definition(&before),paid_definition(&result));
         result["nodes"][0]["prompt"]=json!("changed"); assert_ne!(paid_definition(&before),paid_definition(&result));
         result["runs"]=json!([{"id":"accepted"},{"id":"new"}]); assert!(has_new_run(&before,&result));
         assert!(paid_definition(&json!({"nodes":[{"id":"text","kind":"text"}]})).is_empty());
     }
     fn node(id: &str, inputs: Value) -> Value { json!({"id":id,"kind":"generation","action":"describe","x":0,"y":0,"prompt":"test","provider":"codex","trigger":false,"inputs":inputs,"outputs":{},"outputPorts":[]}) }
+    #[test]
+    fn dimension_wire_roundtrips_and_accepts_another_input() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let text = json!({"assetId":"photo","assetNodeId":"card","autoConnect":"wire","dimension":{"id":null,"title":"构图","body":"中心构图"}});
+        let image = json!({"assetId":"photo","assetNodeId":"card","autoConnect":"wire"});
+        let mut doc = json!({"schema_version":1,"nodes":[node("target",json!({"text":[text],"image":[image]}))],"run":null});
+        let revision = db.workflow_save("p", 0, doc.clone()).unwrap();
+        let loaded = db.workflow_get("p").unwrap();
+        assert_eq!(loaded.document, doc);
+        doc["nodes"][0]["inputs"]["image"].as_array_mut().unwrap().push(json!({"assetId":"second"}));
+        db.workflow_save("p", revision, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+        for invalid_text in [image.clone(), json!({"dimension":{"title":"构图","body":"正文"}}),
+            json!({"assetId":"photo","dimension":{"title":"构图","body":42}})] {
+            doc["nodes"][0]["inputs"]["text"][0] = invalid_text;
+            assert!(validate(&doc).is_err());
+        }
+    }
+    #[test]
+    fn video_frame_bindings_keep_both_source_and_frame_assets() {
+        let binding = json!({"assetId":"clip","assetNodeId":"clip-node","autoConnect":"wire","mediaFilter":["image"],
+            "videoFrame":{"position":"first","assetId":"still"}});
+        let mut document = json!({"schema_version":1,"nodes":[node("target",json!({"image":[binding]}))],"run":null});
+        assert_eq!(validate(&document).unwrap(), HashSet::from(["clip".to_owned(), "still".to_owned()]));
+        let frame = &mut document["nodes"][0]["inputs"]["image"][0]["videoFrame"];
+        frame["position"] = json!("middle");
+        assert!(validate(&document).is_err());
+        document["nodes"][0]["inputs"]["image"][0]["videoFrame"] = json!({"position":"last","assetId":"clip"});
+        assert!(validate(&document).is_err());
+    }
+    #[test]
+    fn shared_agent_moves_and_hides_its_history_projection_atomically() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute_batch("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1); INSERT INTO project_canvases(project_id,created_at,updated_at) VALUES('p',1,1);").unwrap();
+        let input = serde_json::from_value(json!({"projectId":"p","requestId":"agent","text":"任务","referenceAssetIds":[]})).unwrap();
+        let started = db.begin_local_chat(&input).unwrap();
+        let mut snapshot = db.workflow_get("p").unwrap();
+        let mut moved = snapshot.document.clone(); moved["nodes"][0]["x"] = json!(125); moved["nodes"][0]["y"] = json!(250);
+        assert_eq!(paid_definition(&snapshot.document), paid_definition(&moved));
+        let revision = db.workflow_save("p", snapshot.revision, moved).unwrap();
+        let position: (f64,f64) = db.conn.lock().unwrap().query_row("SELECT x,y FROM canvas_nodes WHERE id=?1", [&started.conversation.summary.node_id], |row|Ok((row.get(0)?,row.get(1)?))).unwrap();
+        assert_eq!(position, (125.,250.));
+        let empty = json!({"schema_version":1,"nodes":[],"run":null});
+        assert!(!definition_changed(&snapshot.document, &empty));
+        let mut changed_task = snapshot.document.clone(); changed_task["nodes"][0]["prompt"] = json!("不同的任务");
+        assert!(definition_changed(&snapshot.document, &changed_task));
+        assert!(db.workflow_save("p", revision, empty.clone()).is_err());
+        db.finish_local_chat(&started.conversation.summary.id, &started.turn_id, "done", None).unwrap();
+        snapshot = db.workflow_get("p").unwrap();
+        let revision = db.workflow_save("p", snapshot.revision, empty).unwrap();
+        let hidden: bool = db.conn.lock().unwrap().query_row("SELECT hidden_at IS NOT NULL FROM canvas_nodes WHERE id=?1", [&started.conversation.summary.node_id], |row|row.get(0)).unwrap();
+        assert!(hidden); assert_eq!(db.list_local_chats("p").unwrap().len(), 1);
+        let mut foreign = snapshot.document.clone(); foreign["nodes"][0]["chatConversationId"] = json!("foreign");
+        assert!(db.workflow_save("p", revision, foreign).is_err());
+        db.workflow_save("p", revision, snapshot.document).unwrap();
+        let hidden: bool = db.conn.lock().unwrap().query_row("SELECT hidden_at IS NOT NULL FROM canvas_nodes WHERE id=?1", [&started.conversation.summary.node_id], |row|row.get(0)).unwrap();
+        assert!(!hidden);
+    }
+    #[test]
+    fn long_agent_history_and_start_snapshot_roundtrip_without_truncation() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let source = "长文引用😀\n\"原文\"\\".repeat(40_000);
+        let mut agent = node("agent", json!({"text":[{"canvasNodeId":"document","cellId":"*text"}]}));
+        agent["kind"] = json!("agent");
+        let history = json!({"id":"previous","threadId":"thread-old","startId":"agent","order":["agent"],"status":"done",
+            "steps":{"agent":{"status":"done","agentRunId":"accepted-cloud-run","agentInput":{"source":source},"agentOutputs":{"text":{"type":"text","text":source}}}}});
+        let run = json!({"id":"new","threadId":"thread-new","startId":"agent","order":["agent"],"status":"running",
+            "lockedNodeIds":["agent"],"writeNodeIds":["agent"],"cellTexts":{"input":source},"cellValues":{"input":{"type":"text","text":source}},
+            "steps":{"agent":{"status":"pending"}}});
+        let mut doc = json!({"schema_version":1,"nodes":[agent],"runs":[history,run],"run":run});
+        assert!(doc.to_string().len() > 2_000_000);
+        assert_eq!(db.workflow_save("p", 0, doc.clone()).unwrap(), 1);
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+        // The next checkpoint must also fit without pruning accepted request IDs
+        // or changing the frozen input needed for recovery.
+        doc["runs"][1]["status"] = json!("waiting");
+        doc["runs"][1]["steps"]["agent"] = json!({"status":"waiting","localDsRequestId":"accepted-local-request","agentInput":{"source":source}});
+        doc["run"] = doc["runs"][1].clone();
+        assert_eq!(db.workflow_save("p", 1, doc.clone()).unwrap(), 2);
+        let saved = db.workflow_get("p").unwrap();
+        assert_eq!(saved.document, doc);
+        assert_eq!(saved.document["runs"][0], history);
+        assert_eq!(saved.document["runs"][1]["cellValues"]["input"]["text"], source);
+        let mut invalid_doc = doc.clone();
+        invalid_doc["runs"][1]["lockedNodeIds"] = json!([]);
+        assert!(db.workflow_save("p", 2, invalid_doc).is_err(), "large history must still validate execution locks");
+        assert!(db.workflow_save("p", 1, doc.clone()).is_err(), "revision conflicts still reject stale writes");
+        assert_eq!(db.workflow_get("p").unwrap().revision, 2);
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+    }
     #[test]
     fn trigger_schedule_validates_time_identity_and_state() {
         let mut trigger = node("timer", json!({})); trigger["kind"] = json!("trigger");
@@ -517,6 +663,41 @@ mod tests {
         next["nodes"][0]["triggerSchedule"]["status"] = json!("fired"); assert!(validate(&next).is_err());
     }
     #[test]
+    fn director_card_roundtrips_scene_reference_and_exported_mp4() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut card = node("stage",json!({"image":[{"assetId":"photo"}]}));
+        card["kind"] = json!("director3d");
+        card["directorDocument"] = json!({"scene":{"objectList":[{"threeJsonId":"box-1"}]}});
+        card["directorVideoId"] = json!("movie");
+        card["outputs"] = json!({"image":{"type":"image","assetIds":["movie"]}});
+        let doc = json!({"schema_version":1,"nodes":[card],"run":null});
+        assert_eq!(validate(&doc).unwrap(),HashSet::from(["photo".into(),"movie".into()]));
+        db.workflow_save("p",0,doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document,doc);
+    }
+    #[test]
+    fn voice_card_persists_recording_preview_and_spoken_output() {
+        let db = Database::open_in_memory().unwrap();
+        db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut card = node("voice", json!({"image":[{"assetId":"recording"}]}));
+        card["kind"] = json!("voice");
+        card["voice"] = json!({"sampleText":"修改后的试听", "clip":{"assetId":"recording","start":1,"end":3,"name":"旁白","transcript":""}});
+        let mut doc = json!({"schema_version":1,"nodes":[card],"run":null});
+        assert_eq!(validate(&doc).unwrap(), HashSet::from(["recording".into()]));
+        db.workflow_save("p", 0, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+        doc["nodes"][0]["inputs"] = json!({});
+        doc["nodes"][0]["voice"]["id"] = json!("saved-voice");
+        doc["nodes"][0]["prompt"] = json!("角色的台词");
+        doc["nodes"][0]["outputs"] = json!({"image":{"type":"image","assetIds":["spoken-audio"]}});
+        assert_eq!(validate(&doc).unwrap(), HashSet::from(["spoken-audio".into()]));
+        db.workflow_save("p", 1, doc.clone()).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().document, doc);
+    }
+    #[test]
     fn daily_trigger_claims_each_occurrence_once_and_advances_atomically() {
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
         db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
@@ -592,7 +773,6 @@ mod tests {
         assert_eq!(validate(&doc).unwrap(), HashSet::from(["input".to_owned(),"second".to_owned(),"first-output".to_owned()]));
         db.workflow_save("p", 0, doc.clone()).unwrap();
         assert_eq!(db.workflow_get("p").unwrap().document, doc);
-        assert!(db.conn.lock().unwrap().execute("DELETE FROM projects WHERE id='p'", []).is_err());
         for patch in [json!({"index":2}),json!({"completed":[]}),json!({"bodyIds":["loop"]}),json!({"bodyIds":["missing"]}),json!({"bodyIds":["draw","draw"]})] {
             let mut invalid_doc = doc.clone();
             for (key, value) in patch.as_object().unwrap() { invalid_doc["runs"][0]["loop"][key] = value.clone(); }
@@ -610,6 +790,7 @@ mod tests {
         assert_eq!(db.workflow_get("p").unwrap().document, sessions);
         sessions["runs"][0]["loop"]["completed"][0]["outputs"]["draw"]["image"]["nodeIds"] = json!([12]);
         assert!(validate(&sessions).is_err());
+        db.conn.lock().unwrap().execute("DELETE FROM projects WHERE id='p'", []).unwrap();
     }
     #[test]
     fn loop_modes_and_unprepared_checkpoint_are_validated() {
@@ -800,16 +981,20 @@ mod tests {
     }
     #[test]
     fn completion_trigger_accepts_native_sessions_and_persists_deduplication() {
-        let mut switch = node("switch", json!({"completion":[{"canvasNodeId":"session","cellId":"image"}]}));
+        let draw = node("draw", json!({}));
+        let mut switch = node("switch", json!({"completion":[{"canvasNodeId":"session","cellId":"image"},
+            {"nodeId":"draw","portId":"image","autoConnect":"link","pendingCompletionSession":"current-turn"}]}));
         switch["kind"] = json!("trigger"); switch["triggerCount"] = json!(1);
         switch["completionSeen"] = json!(["previous-turn"]);
-        let doc = json!({"schema_version":1,"nodes":[switch],"run":null});
+        let doc = json!({"schema_version":1,"nodes":[switch,draw],"run":null});
         assert!(validate(&doc).is_ok());
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
         db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
         db.workflow_save("p", 0, doc.clone()).unwrap();
         assert_eq!(db.workflow_get("p").unwrap().document, doc);
         for binding in [json!({"canvasNodeId":"","cellId":"image"}), json!({"canvasNodeId":"session","cellId":"text"}),
+            json!({"nodeId":"draw","portId":"image","pendingCompletionSession":""}),
+            json!({"canvasNodeId":"session","cellId":"image","pendingCompletionSession":"turn"}),
             json!({"assetId":"asset"}), json!({"canvasNodeId":"session","cellId":"image","nodeId":"switch"})] {
             let mut bad = doc.clone(); bad["nodes"][0]["inputs"]["completion"] = json!([binding]); assert!(validate(&bad).is_err());
         }
@@ -929,7 +1114,7 @@ mod tests {
         assert!(validate(&doc).is_err());
     }
     #[test]
-    fn revision_and_running_delete_guard() {
+    fn revision_and_running_project_deletion() {
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
         db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
         let doc = json!({"schema_version":1,"nodes":[node("a",json!({}))],"run":null});
@@ -937,8 +1122,10 @@ mod tests {
         assert!(db.workflow_save("p", 0, doc.clone()).is_err());
         let mut running = doc; running["run"] = json!({"id":"run","threadId":"t","status":"waiting","steps":{},"order":["a"]});
         db.workflow_save("p", 1, running).unwrap();
-        assert!(db.conn.lock().unwrap().execute("DELETE FROM projects WHERE id='p'", []).is_err());
         assert_eq!(db.workflow_get("p").unwrap().revision, 2);
+        db.conn.lock().unwrap().execute("DELETE FROM projects WHERE id='p'", []).unwrap();
+        assert_eq!(db.workflow_get("p").unwrap().revision, 0);
+        assert!(db.get_project("p").unwrap().is_none());
     }
     #[test]
     fn generation_content_connection_is_atomic_with_workflow() {
@@ -976,22 +1163,32 @@ mod tests {
         assert_eq!(db.list_canvas_nodes("p").unwrap().len(), 1);
     }
     #[test]
-    fn parallel_workflow_locks_and_delete_guard() {
+    fn parallel_workflow_locks_allow_project_deletion() {
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
         db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
         let mut doc = json!({"schema_version":1,"nodes":[node("a",json!({})),node("b",json!({}))],"run":null,
             "runs":[{"id":"one","threadId":"t1","status":"running","steps":{},"order":["a"],"lockedNodeIds":["a"]},
                 {"id":"two","threadId":"t2","status":"done","steps":{},"order":["b"],"lockedNodeIds":["b"]}]});
         db.workflow_save("p", 0, doc.clone()).unwrap();
-        assert!(db.conn.lock().unwrap().execute("DELETE FROM projects WHERE id='p'", []).is_err());
+        db.conn.lock().unwrap().execute("DELETE FROM projects WHERE id='p'", []).unwrap();
         doc["runs"][1]["status"] = json!("waiting");
         assert!(validate(&doc).is_ok());
         doc["runs"][1]["lockedNodeIds"] = json!(["a"]);
         assert!(validate(&doc).is_err());
         doc["runs"][0]["status"] = json!("stopped");
         doc["runs"][1]["status"] = json!("done");
-        db.workflow_save("p", 1, doc).unwrap();
-        db.conn.lock().unwrap().execute("DELETE FROM projects WHERE id='p'", []).unwrap();
+        assert!(db.workflow_save("p", 1, doc).is_err());
+    }
+    #[test]
+    fn trigger_can_start_a_second_target_while_first_target_runs() {
+        let mut trigger = node("start", json!({}));
+        trigger["kind"] = json!("trigger");
+        let mut doc = json!({"schema_version":1,"nodes":[trigger,node("a",json!({})),node("b",json!({}))],
+            "runs":[{"id":"one","threadId":"t1","status":"running","steps":{},"order":["start","a"]},
+                    {"id":"two","threadId":"t2","status":"running","steps":{},"order":["start","b"]}]});
+        assert!(validate(&doc).is_ok());
+        doc["runs"][1]["order"] = json!(["start","a"]);
+        assert!(validate(&doc).is_err());
     }
     #[test]
     fn parallel_readers_share_dependencies_but_reject_writes() {

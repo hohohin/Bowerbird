@@ -109,7 +109,11 @@ export type ModelTurnResult =
  * 但不引入 @types/node 依赖——契约层保持纯 TS。
  * Kernel 取消时把 aborted 置 true；backend 在长上游调用中应检查它。
  */
-export type AbortSignalLike = { readonly aborted: boolean };
+export type AbortSignalLike = {
+  readonly aborted: boolean;
+  addEventListener?(event: "abort", listener: () => void, options?: { once?: boolean }): void;
+  removeEventListener?(event: "abort", listener: () => void): void;
+};
 
 /**
  * 模型后端契约。文本回合（理解素材、形成计划、选下一动作、评分）由 ModelBackend 承担；

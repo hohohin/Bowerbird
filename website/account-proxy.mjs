@@ -7,6 +7,7 @@ const ROUTES = new Map([
   ["POST /functions/v1/wechat-login", ["forceFunctionRegion"]],
   ["GET /functions/v1/entitlement", ["forceFunctionRegion"]],
   ["POST /functions/v1/redeem-code", ["forceFunctionRegion"]],
+  ["POST /functions/v1/comfy-download", ["forceFunctionRegion"]],
   ["GET /functions/v1/create-checkout", ["forceFunctionRegion"]],
   ["POST /functions/v1/create-checkout", ["forceFunctionRegion"]],
   ["POST /functions/v1/checkout-status", ["forceFunctionRegion"]],
@@ -98,7 +99,7 @@ export function createAccountProxy({
       target.search = url.search;
       if (path.startsWith("/functions/")) target.searchParams.set("forceFunctionRegion", REGION);
       const headers = { apikey: publicKey, "Content-Type": "application/json" };
-      if (["/functions/v1/entitlement", "/functions/v1/redeem-code",
+      if (["/functions/v1/entitlement", "/functions/v1/redeem-code", "/functions/v1/comfy-download",
         "/functions/v1/create-checkout", "/functions/v1/checkout-status"].includes(path)) {
         const bearer = request.headers.authorization;
         if (typeof bearer !== "string" || !/^Bearer [^\s]{1,8192}$/.test(bearer)) throw fail(401);

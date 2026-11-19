@@ -2,32 +2,28 @@ import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-shell";
-import { ArrowRight, Gift, LogOut, Moon, RefreshCw, Sun, UserRound } from "lucide-react";
+import { ChevronDown, Moon, RefreshCw, Sun } from "lucide-react";
 import { useStore, understandEngineUsable } from "../store";
 import { api } from "../lib/api";
-import { CODEX_ONBOARDING_ENABLED, DREAMINA_ONBOARDING_ENABLED, LEGACY_SETTINGS_ENABLED } from "../lib/featureFlags";
+import { ONBOARDING_FEATURE_ENABLED, CODEX_ONBOARDING_ENABLED, DREAMINA_ONBOARDING_ENABLED, LEGACY_SETTINGS_ENABLED } from "../lib/featureFlags";
 import { DEFAULT_AUTO_ANALYZE_PROMPT, WEBSITE_URL } from "../lib/constants";
-import type { MigrateProgress } from "../lib/types";
 import { useOnboarding } from "../lib/onboardingStore";
 import { ModalShell } from "./ModalShell";
 import { RedeemCodeCard } from "./RedeemCodeCard";
 import { ScreenshotSettings } from "./ScreenshotSettings";
 import { AppUpdateCard } from "./AppUpdateCard";
+import { fileWorkspace } from "../lib/fileWorkspace";
 import { FileWorkspaceMoveDialog } from "./FileWorkspaceMoveDialog";
 import { CreditDetails } from "./CreditDetails";
 import { AccountBilling } from "./AccountBilling";
+import { accountEntitlement, canUseByo } from "../lib/entitlement";
+import { DshSubscriptionCard } from "./DshSubscriptionCard";
 import { userErrorMessage } from "../lib/userError";
 
-const STAGE_LABEL: Record<string, string> = {
-  images: "复制原图",
-  thumbnails: "复制缩略图",
-  db: "整理数据库",
-};
-
-type SectionKey = "system" | "account" | "models" | "personalization" | "about" | "developer";
+type SectionKey = "system" | "account" | "credits" | "models" | "personalization" | "about" | "developer";
 
 // 仅供保存其他设置时兼容旧配置，不再在订阅卡片中选择模型版本。
-const DEFAULT_DREAMINA_MODEL_VERSION = "5.0Pro";
+
 
 /**
  * 设置项 ON/OFF 滑块开关（设置里的布尔项统一用它，右对齐在调节项右侧；不用复选框）。
@@ -88,6 +84,7 @@ function AgentModeCard({
 const SECTIONS: { key: SectionKey; label: string }[] = [
   { key: "system", label: "系统设置" },
   { key: "account", label: "账号管理" },
+  { key: "credits", label: "积分明细" },
   { key: "models", label: "模型设置" },
   { key: "personalization", label: "个性化与记忆" },
   { key: "about", label: "关于我们" },
@@ -96,20 +93,53 @@ const SECTIONS: { key: SectionKey; label: string }[] = [
 /** 开发者选项分区：仅测试账号（entitlement.is_test_account）追加在导航末尾。 */
 const DEVELOPER_SECTION = { key: "developer", label: "开发者选项" } as const;
 
+function ProTrial({ userId, available }: { userId: string; available: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  async function start() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const next = await api.cloudStartProTrial(userId);
+      const auth = useStore.getState().cloudAuth;
+      if (!auth?.logged_in || auth.user_id !== userId || next.user_id !== userId) return;
+      useStore.setState({ cloudEntitlement: next });
+      setMessage(next.tier === "pro"
+        ? "7 天 Pro 功能体验已领取；Cloud 仍按用量计费，到期不会自动扣款。"
+        : "当前没有生效的 Pro 体验，可刷新权益查看。");
+    } catch (error) {
+      setMessage(userErrorMessage(error, "暂时无法领取体验，请稍后重试。"));
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (!available && !message) return null;
+  return <div className="settings-card space-y-2 p-3">
+    {available && <>
+      <button type="button" className="app-modal-button is-primary" disabled={busy} onClick={() => void start()}>
+        {busy ? "领取中…" : "领取一次 7 天 Pro 功能体验"}
+      </button>
+      <p className="account-billing-note">每个账号可体验一次。Cloud 按用量计费，体验到期不会自动扣款。</p>
+    </>}
+    {message && <p role="status" className="text-xs text-muted">{message}</p>}
+  </div>;
+}
+
 /**
  * 设置面板（约定 13 全屏 Modal 形态）：常见两列式——左侧分区导航，右侧具体内容。
  *
  * 五分区：系统设置（外观 / 素材库位置 / 新手教程）、账号管理（账号名 / 等级与升级 / 积分明细）、
  * 模型设置（订阅授权 / 默认反推模型 / 入库自动反推）、个性化与记忆（快捷键 / 素材名称 / 完成提醒），
  * 旧版本扩展检测、Shift 引入和隐藏项目素材设置由 LEGACY_SETTINGS_ENABLED 隐藏。
- * 关于我们（当前版本 / 前往官网）。原「环境状态」总览已删除，各引导由对应分区直接唤起。
+ * 关于我们（前往官网）。原「环境状态」总览已删除，各引导由对应分区直接唤起。
  * 另有「开发者选项」分区仅测试账号可见：对话框 Agent 模式开关集中在此，关闭的模式不在
  * 创作板 / 会话编辑坞渲染（默认只开正式 Agent）。
  * 由侧栏底部账号区「设置」唤起。点背景 / ✕ 关闭。
  */
-export function SettingsDialog({ onClose, initialSection = "system" }: {
+export function SettingsDialog({ onClose, initialSection = "system", initialSubscription }: {
   onClose: () => void;
-  initialSection?: "system" | "account" | "about";
+  initialSection?: "system" | "account" | "credits" | "models" | "about";
+  initialSubscription?: "codex" | "jimeng" | "dsh";
 }) {
   const codexHealth = useStore((s) => s.codexHealth);
   const setCodexHealth = useStore((s) => s.setCodexHealth);
@@ -121,7 +151,10 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
   const startTour = useOnboarding((s) => s.open);
   const settings = useStore((s) => s.settings);
   const loadSettings = useStore((s) => s.loadSettings);
-  const updateSettings = useStore((s) => s.updateSettings);
+  const saveSettings = useStore(s => s.updateSettings);
+  const settingsSaveError = useStore(s => s.settingsSaveError);
+  const retrySettings = useStore(s => s.retrySettings);
+  const updateSettings = (patch: Parameters<typeof saveSettings>[0]) => saveSettings(patch).catch(() => {});
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudBusy = useStore((s) => s.cloudBusy);
@@ -132,9 +165,11 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
   const defaultUnderstandProvider = useStore((s) => s.defaultUnderstandProvider);
   const setDefaultUnderstandProvider = useStore((s) => s.setDefaultUnderstandProvider);
 
-  const [section, setSection] = useState<SectionKey>(initialSection);
-  const [trialBusy, setTrialBusy] = useState(false);
-  const [trialMessage, setTrialMessage] = useState("");
+  const [selectedSection, setSection] = useState<SectionKey>(initialSection);
+  const subscriptionCard = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    subscriptionCard.current?.scrollIntoView({ block: "nearest" });
+  }, [initialSubscription]);
   const [appVersion, setAppVersion] = useState<string | null>(null);
   const [checkingCodex, setCheckingCodex] = useState(true);
   const [codexLogoutBusy, setCodexLogoutBusy] = useState(false);
@@ -149,6 +184,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
   // —— dreamina「登录授权」一键流程（检测 → 安装 → 浏览器授权 → checklogin 轮询）——
   const [dreaminaAuthBusy, setDreaminaAuthBusy] = useState(false);
   const [dreaminaAuthLine, setDreaminaAuthLine] = useState<string | null>(null);
+  const [dreaminaUserCode, setDreaminaUserCode] = useState("");
   const [dreaminaAuthFailed, setDreaminaAuthFailed] = useState(false);
   const dreaminaAuthRunningRef = useRef(false);
 
@@ -161,29 +197,22 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
   const [libRoot, setLibRoot] = useState<string | null>(null);
   const [migrateTarget, setMigrateTarget] = useState<string | null>(null); // 确认迁移的旧→新
   const [fileMoveOpen, setFileMoveOpen] = useState(false);
+  const [workspaceRoot, setWorkspaceRoot] = useState("读取中…");
+  useEffect(() => {
+    if (fileMoveOpen) return;
+    let active = true;
+    void fileWorkspace.status().then(status => {
+      if (active) setWorkspaceRoot(status.proposed_root);
+    }).catch(() => { if (active) setWorkspaceRoot("无法读取当前位置"); });
+    return () => { active = false; };
+  }, [fileMoveOpen]);
+
   const [migrating, setMigrating] = useState(false);
-  const [migrateProgress, setMigrateProgress] = useState<MigrateProgress | null>(null);
   const [migrateError, setMigrateError] = useState<string | null>(null);
 
   useEffect(() => {
     api.libraryRoot().then(setLibRoot).catch(() => {});
     getVersion().then(setAppVersion).catch(() => {});
-  }, []);
-
-  // 迁移进度：后端复制大目录时逐文件推 library://migrate-progress。
-  useEffect(() => {
-    let unlisten: UnlistenFn | undefined;
-    let alive = true;
-    listen<MigrateProgress>("library://migrate-progress", (e) => {
-      setMigrateProgress(e.payload);
-    }).then((u) => {
-      if (alive) unlisten = u;
-      else u();
-    });
-    return () => {
-      alive = false;
-      unlisten?.();
-    };
   }, []);
 
   useEffect(() => {
@@ -255,27 +284,9 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
   }, [settings]);
 
   const commitSettings = (onIngest: boolean, prompt: string) => {
-    // 全量覆盖：只改自动反推两项，其余设置保持不变。
     void updateSettings({
-      theme: settings?.theme ?? "light",
       auto_analyze_on_ingest: onIngest,
       auto_analyze_prompt: prompt || DEFAULT_AUTO_ANALYZE_PROMPT,
-      library_root: settings?.library_root ?? null,
-      cloud_auto_understand: settings?.cloud_auto_understand ?? false,
-      board_shift_pick: settings?.board_shift_pick ?? false,
-      hide_project_assets: settings?.hide_project_assets ?? false,
-      canvas_show_asset_names: settings?.canvas_show_asset_names ?? false,
-      generation_completion_popup: settings?.generation_completion_popup ?? true,
-      generation_completion_sound: settings?.generation_completion_sound ?? true,
-      dreamina_model_version: settings?.dreamina_model_version ?? DEFAULT_DREAMINA_MODEL_VERSION,
-      agent_mode_enabled: settings?.agent_mode_enabled ?? true,
-      agent_a_mode_enabled: settings?.agent_a_mode_enabled ?? false,
-      agent_b_mode_enabled: settings?.agent_b_mode_enabled ?? false,
-      agent_z_mode_enabled: settings?.agent_z_mode_enabled ?? false,
-      agent_g_mode_enabled: settings?.agent_g_mode_enabled ?? false,
-      agent_ds_mode_enabled: settings?.agent_ds_mode_enabled ?? false,
-      jev_image_classification_enabled: settings?.jev_image_classification_enabled ?? false,
-      jev_api_key: settings?.jev_api_key ?? null,
     });
   };
 
@@ -283,10 +294,9 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
     if (!migrateTarget) return;
     setMigrating(true);
     setMigrateError(null);
-    setMigrateProgress(null);
     try {
+      await useStore.getState().projectCanvasFlush?.();
       await api.migrateLibraryRoot(migrateTarget);
-      // 迁移成功后立即重启：lib.rs 启动时读新根并清理旧库残留。
       await api.restartApp();
     } catch (error) {
       setMigrating(false);
@@ -378,7 +388,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       // force=true 跳过 120s TTL 缓存：手动「重新检测」要看真实登录态（后端 dreamina_health 约定）。
       setDreaminaHealth(await api.dreaminaHealth(true));
     } catch {
-      setDreaminaHealth({ ok: false, reason: "dreamina 状态检测失败" });
+      setDreaminaHealth({ ok: false, status: "unconfirmed", reason: "即梦状态检测失败，请重新检测。" });
     } finally {
       setCheckingDreamina(false);
     }
@@ -392,6 +402,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       return;
     }
     setDreaminaAuthBusy(true);
+    setDreaminaUserCode("");
     dreaminaAuthRunningRef.current = true;
     setDreaminaAuthFailed(false);
     setDreaminaAuthLine("检测环境中…");
@@ -399,11 +410,10 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       let h = await api.dreaminaHealth(true);
       setDreaminaHealth(h);
       // 未装 CLI → 先自动安装。
-      if (!h.ok && h.reason.includes("未检测到")) {
+      if (h.status === "missing") {
         setDreaminaAuthLine("准备安装 dreamina CLI…");
         const installed = await api.dreaminaInstall();
         if (!installed.ok) {
-          setDreaminaHealth(installed);
           setDreaminaAuthFailed(true);
           setDreaminaAuthLine(userErrorMessage(installed.reason, "安装未完成，请稍后重试。"));
           return;
@@ -415,16 +425,29 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
         setDreaminaAuthLine("已就绪，无需授权");
         return;
       }
+      if (h.status !== "login_required") {
+        setDreaminaAuthFailed(true);
+        setDreaminaAuthLine(h.reason || "暂时无法确认即梦订阅状态，请重新检测。");
+        return;
+      }
       // 已装未登录 → headless 拿授权链接自动开浏览器，checklogin 轮询等授权完成（约 1 分钟）。
       const flow = await api.dreaminaLoginHeadless();
+      if (!flow) {
+        const current = await api.dreaminaHealth(true);
+        setDreaminaHealth(current);
+        setDreaminaAuthFailed(!current.ok);
+        setDreaminaAuthLine(current.ok ? "已就绪，无需授权" : current.reason);
+        return;
+      }
       try {
         await open(flow.verification_uri);
       } catch {
-        setDreaminaAuthLine(`浏览器打开失败，请手动访问：${flow.verification_uri}`);
+        setDreaminaAuthFailed(true);
+        setDreaminaAuthLine("未能打开即梦授权网页，请检查系统默认浏览器后重试。");
+        return;
       }
-      setDreaminaAuthLine(
-        `请在浏览器完成即梦授权${flow.user_code ? `（授权码 ${flow.user_code}）` : ""}…`,
-      );
+      setDreaminaUserCode(flow.user_code);
+      setDreaminaAuthLine("请在浏览器完成即梦授权。");
       const r = await api.dreaminaCheckLogin(flow.device_code);
       setDreaminaHealth(r);
       setDreaminaAuthFailed(!r.ok);
@@ -438,6 +461,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       }
     } finally {
       dreaminaAuthRunningRef.current = false;
+      setDreaminaUserCode("");
       setDreaminaAuthBusy(false);
     }
   }
@@ -455,10 +479,6 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
       setDreaminaAuthLine(userErrorMessage(e, "退出即梦登录未完成，请重试。"));
     }
   }
-
-  const progress = migrateProgress
-    ? STAGE_LABEL[migrateProgress.stage] ?? migrateProgress.stage
-    : "";
 
   // 默认反推模型：非 auto 选项仅在对应引擎当下可用时可选（门控与选择浮层一致）。
   const cloudUsable = understandEngineUsable({ cloudAuth, cloudEntitlement, codexHealth }, "bowerbird-cloud");
@@ -481,10 +501,11 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
 
   const loggedIn = cloudAuth?.logged_in === true;
   const accountName = cloudAuth?.display_name || cloudAuth?.email || cloudAuth?.user_id || "";
-  const canStartTrial = loggedIn && cloudEntitlement?.tier === "free" && cloudEntitlement.offline_state !== "expired" && cloudEntitlement.offline_state !== "invalid";
   // 测试账号（bowerbird_test 标记，云端随权益快照下发）才追加「开发者选项」分区。
-  const isTestAccount = cloudEntitlement?.is_test_account === true;
-  const sections = isTestAccount ? [...SECTIONS, DEVELOPER_SECTION] : SECTIONS;
+  const current = accountEntitlement(cloudEntitlement, loggedIn ? cloudAuth?.user_id : null);
+  const isTestAccount = current?.is_test_account === true;
+  const sections = (isTestAccount ? [...SECTIONS, DEVELOPER_SECTION] : SECTIONS).filter(item => loggedIn || item.key !== "credits");
+  const section = sections.some(item => item.key === selectedSection) ? selectedSection : "account";
 
   return (
     <ModalShell
@@ -513,9 +534,13 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
         </nav>
 
         {/* 右列：具体内容（内容超出时列内滚动） */}
-        <div className="min-w-0 flex-1 space-y-3 overflow-y-auto">
+        <div key={section} className="min-w-0 flex-1 space-y-3 overflow-y-auto [scrollbar-gutter:stable]">
+          {settingsSaveError != null && <p role="alert" className="settings-card px-3 py-2 text-sm">
+            {userErrorMessage(settingsSaveError, "设置未保存，请重试。")} <button type="button" onClick={() => void retrySettings().catch(() => {})}>重试保存</button>
+          </p>}
           {section === "system" && (
             <>
+              <AppUpdateCard version={appVersion} migrating={migrating} />
               {/* 外观：后端 settings.json 持久化；夜间模式沿用原有黑色 UI。 */}
               <div className="settings-card px-3 py-2.5">
                 <div className="text-ink">外观</div>
@@ -532,7 +557,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                         type="button"
                         role="radio"
                         aria-checked={selected}
-                        onClick={() => settings && void updateSettings({ ...settings, theme: value })}
+                        onClick={() => settings && void updateSettings({ theme: value })}
                         className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-left text-xs transition-colors ${
                           selected
                             ? "border-accent bg-accent/10 text-accent"
@@ -550,9 +575,9 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
 
               {/* 素材库位置 */}
               <div className="settings-card px-3 py-2.5">
-                <div className="text-ink">资料文件夹 · BowerbirdLibrary</div>
-                <p className="mt-1 text-xs text-muted">选择项目与随图资料的保存位置，或将历史素材按项目迁入当前位置。</p>
-                <button className="app-button-secondary mt-2" onClick={() => setFileMoveOpen(true)}>选择位置并迁移…</button>
+                <div className="text-ink">资料文件夹</div>
+                <p className="mt-1 break-all text-xs text-muted">{workspaceRoot}</p>
+                <button title="选择项目与随图资料的保存位置，或将历史素材按项目迁入当前位置。" className="app-button-secondary mt-2" onClick={() => setFileMoveOpen(true)}>选择位置并迁移…</button>
               </div>
               <div className="settings-card px-3 py-2.5">
                 <div className="text-ink">历史素材索引与缓存位置</div>
@@ -576,7 +601,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 {migrateTarget && !migrating && (
                   <div className="mt-2 rounded bg-panel p-2 text-[11px]">
                     <div className="text-muted">
-                      将全部原图 / 缩略图 / 数据库复制到新位置，随后自动重启；旧位置文件在重启后清理，可释放系统盘空间。迁移期间请勿操作。
+                      应用将重启，把索引库、原图、图层和缩略图复制到新位置。校验成功后切换，旧位置保留完整副本。
                     </div>
                     <div className="mt-1.5 break-all text-ink">
                       → <span className="text-accent">{migrateTarget}</span>
@@ -606,25 +631,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
 
                 {migrating && (
                   <div className="mt-2 rounded bg-panel p-2 text-[11px] text-muted">
-                    <div>
-                      正在{progress}…
-                      {migrateProgress && migrateProgress.total > 0 && (
-                        <span className="text-ink">
-                          {" "}
-                          {migrateProgress.done} / {migrateProgress.total}
-                        </span>
-                      )}
-                    </div>
-                    {migrateProgress && migrateProgress.total > 0 && (
-                      <div className="mt-1.5 h-1 w-full overflow-hidden rounded bg-panel2">
-                        <div
-                          className="h-full bg-accent transition-[width]"
-                          style={{
-                            width: `${Math.round((migrateProgress.done / migrateProgress.total) * 100)}%`,
-                          }}
-                        />
-                      </div>
-                    )}
+                    正在保存迁移计划并重启…
                   </div>
                 )}
               </div>
@@ -658,7 +665,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
               </div>}
 
               {/* 入门引导：主线续学与按需教程 */}
-              <div className="settings-card px-3 py-2">
+              {ONBOARDING_FEATURE_ENABLED && <div className="settings-card px-3 py-2">
                 <div className="text-ink">入门引导</div>
                 <p className="mt-1 text-xs text-muted">
                     在项目画板上学习拖图、参考、图片特征与生成；可续学或查看按需教程。
@@ -672,73 +679,81 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 >
                   打开入门引导
                 </button>
-              </div>
+              </div>}
             </>
           )}
 
           {section === "account" && (
             <>
-              <div className="account-settings space-y-4">
-                <header className="flex flex-wrap items-center justify-between gap-3 border-b border-edge pb-4">
-                  <div className="flex min-w-0 items-center gap-3">
-                    <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-panel2 text-muted"><UserRound size={20} aria-hidden="true" /></span>
-                    <div className="min-w-0">
-                      <p className="text-xs text-muted">{loggedIn ? "当前账号" : "Bowerbird 账号"}</p>
-                      <h2 className="mt-1 break-all text-sm font-semibold text-ink">{loggedIn ? accountName : "登录，管理你的创作权益"}</h2>
-                    </div>
-                  </div>
-                  {loggedIn && <button type="button" onClick={() => void syncCloudEntitlement()} disabled={cloudBusy || trialBusy} className="account-action">
-                    <RefreshCw size={14} aria-hidden="true" className={cloudBusy ? "motion-safe:animate-spin" : undefined} />
-                    {cloudBusy ? "同步中…" : "刷新权益"}
-                  </button>}
-                </header>
-
-                <AccountBilling
-                  key={cloudAuth?.user_id ?? "guest"}
-                  loggedIn={loggedIn}
-                  entitlement={cloudEntitlement}
-                  trialAction={loggedIn && (canStartTrial || trialMessage) ? <>
-                    {canStartTrial && <>
-                      <button type="button" className="account-action account-action-primary mt-4" disabled={trialBusy || cloudBusy} aria-busy={trialBusy} onClick={async () => {
-                        if (trialBusy || cloudBusy) return;
-                        setTrialBusy(true); setTrialMessage("");
-                        try {
-                          const next = await api.cloudStartProTrial();
-                          useStore.setState({ cloudEntitlement: next });
-                          setTrialMessage(next.tier === "free" ? "此账号的 Pro 体验已结束，每个账号仅可领取一次。" : "7 天 Pro 功能体验已领取；Cloud 仍按用量计费，到期不会自动扣款。");
-                        } catch (error) { setTrialMessage(userErrorMessage(error, "暂时无法领取体验，请稍后重试。")); }
-                        finally { setTrialBusy(false); }
-                      }}><Gift size={16} aria-hidden="true" />{trialBusy ? "领取中…" : "领取 7 天 Pro 体验"}<ArrowRight size={15} aria-hidden="true" /></button>
-                      <p className="mt-2 text-xs text-muted">到期不会自动扣款 · Cloud 另行计费</p>
-                    </>}
-                    {trialMessage && <p role="status" className="mt-3 rounded-md bg-panel2 p-3 text-xs leading-5 text-ink">{trialMessage}</p>}
-                  </> : undefined}
-                />
-
-                {loggedIn ? <>
-                  <section aria-label="兑换权益" className="space-y-2">
-                    <RedeemCodeCard key={cloudAuth?.user_id} />
-                    <p className="px-1 text-xs leading-5 text-muted">在线购买暂未开放，已有兑换码可在上方兑换。</p>
-                  </section>
-                  <div className="settings-card p-4"><CreditDetails entitlement={cloudEntitlement?.offline_state === "expired" || cloudEntitlement?.offline_state === "invalid" ? null : cloudEntitlement} /></div>
-                  <footer className="flex justify-end border-t border-edge pt-3">
-                    <button type="button" onClick={() => void logoutCloud()} disabled={cloudBusy || trialBusy} className="account-action"><LogOut size={14} aria-hidden="true" />登出账号</button>
-                  </footer>
-                </> : <section className="settings-card p-5">
-                  <h3 className="font-medium text-ink">开启你的创作账号</h3>
-                  <p className="mt-2 text-xs leading-5 text-muted">登录后可查看 Pro 权益、兑换会员及管理 Bcoin。</p>
-                  <button type="button" onClick={() => { setAccountOnboardingForceOpen(true); onClose(); }} className="account-action account-action-primary mt-4">登录 Bowerbird 账号<ArrowRight size={15} aria-hidden="true" /></button>
-                </section>}
-              </div>
-            </>
-          )}
-
-          {section === "models" && (
-            <>
-              {/* 使用自有 ChatGPT 订阅（codex CLI）：状态 + 一键登录授权；引导弹窗入口随 CODEX_ONBOARDING_ENABLED 暂隐 */}
+              {/* 账号名 */}
               <div className="settings-card px-3 py-2.5">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-ink">使用自有ChatGPT订阅</span>
+                  <span className="min-w-0 truncate text-ink">
+                    {loggedIn ? accountName : "未登录"}
+                  </span>
+                  {loggedIn ? (
+                    <button
+                      onClick={() => void syncCloudEntitlement()}
+                      disabled={cloudBusy}
+                      className="shrink-0 text-xs text-muted hover:text-accent disabled:opacity-50"
+                    >
+                      <RefreshCw size={13} aria-hidden="true" className="mr-1 inline-block align-middle" />{cloudBusy ? "同步中…" : "刷新权益"}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => {
+                        setAccountOnboardingForceOpen(true);
+                        onClose();
+                      }}
+                      className="shrink-0 rounded-md bg-accent px-3 py-1 text-[12px] font-medium text-black hover:opacity-90"
+                    >
+                      登录 Bowerbird 账号
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {loggedIn && <section aria-label="账号概览" className="settings-card account-overview">
+                <div>
+                  <h3>当前方案</h3>
+                  <strong>{current ? { free: "免费版", pro: "Pro", studio: "Studio" }[current.tier] : "权益待同步"}</strong>
+                  {current?.tier !== "free" && current?.membership_ends_at && <p className="account-billing-note">
+                    有效期至 <time dateTime={current.membership_ends_at}>{new Date(current.membership_ends_at).toLocaleString("zh-CN", { year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}</time>
+                  </p>}
+                  {current?.policy.can_use_byo && <button type="button" className="app-modal-button" onClick={() => setSection("models")}>
+                    {codexHealth?.ok || dreaminaHealth?.ok ? "管理我的 ChatGPT / 即梦订阅" : "连接我的 ChatGPT / 即梦订阅"}
+                  </button>}
+                </div>
+                <div>
+                  <h3>可用余额</h3>
+                  <strong>{current ? (current.balances.sub + current.balances.daily + current.balances.topup).toLocaleString("zh-CN") : "—"} <small>Bcoin</small></strong>
+                  <button type="button" className="app-modal-button" onClick={() => setSection("credits")}>查看积分明细</button>
+                </div>
+              </section>}
+              {loggedIn && cloudAuth?.user_id && <ProTrial key={`trial-${cloudAuth.user_id}`} userId={cloudAuth.user_id} available={current?.tier === "free" && current.trial_available !== false} />}
+              {loggedIn && <RedeemCodeCard key={cloudAuth?.user_id} />}
+              <details className="settings-card account-plan-disclosure p-3">
+                <summary className="cursor-pointer text-ink">查看会员方案与充值<ChevronDown size={16} aria-hidden="true" /></summary>
+                <AccountBilling key={cloudAuth?.user_id ?? "guest"} loggedIn={loggedIn} entitlement={cloudEntitlement?.user_id === cloudAuth?.user_id ? cloudEntitlement : null} />
+              </details>
+              {loggedIn && <button onClick={() => void logoutCloud()} disabled={cloudBusy} className="app-modal-button">登出账号</button>}
+            </>
+          )}
+          {section === "credits" && loggedIn && <div className="settings-card p-3">
+            <CreditDetails entitlement={current} />
+            {!current && <button type="button" className="app-modal-button mt-2" disabled={cloudBusy} onClick={() => void syncCloudEntitlement()}>
+              <RefreshCw size={13} aria-hidden="true" className="mr-1 inline-block align-middle" />{cloudBusy ? "同步中…" : "刷新权益"}
+            </button>}
+          </div>}
+          {section === "models" && (
+            <>
+              <section aria-labelledby="byo-heading" className="space-y-3">
+              <h3 id="byo-heading" className="font-medium text-ink">自有订阅</h3>
+              {/* 使用自有 ChatGPT 订阅（codex CLI）：状态 + 一键登录授权；引导弹窗入口随 CODEX_ONBOARDING_ENABLED 暂隐 */}
+              <div className="settings-card px-3 py-2.5" tabIndex={-1}
+                ref={initialSubscription === "codex" ? subscriptionCard : undefined} data-modal-autofocus={initialSubscription === "codex" || undefined}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-ink">ChatGPT</span>
                   <span className="flex items-center gap-1.5">
                     <span
                       className={`rounded px-2 py-0.5 text-xs ${
@@ -748,7 +763,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                       }`}
                       title={codexHealth?.reason ? userErrorMessage(codexHealth.reason, "暂时无法使用，请重新检测或登录。") : undefined}
                     >
-                      {codexHealth?.ok ? "✓ 已登录" : "✗ 未就绪"}
+                      {codexHealth?.ok ? "✓ 就绪" : "✗ 未就绪"}
                     </span>
                     <button
                       type="button"
@@ -808,10 +823,11 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 )}
               </div>
 
-              {/* 使用自有即梦订阅（dreamina CLI）：状态 + 一键登录授权；引导弹窗入口随 DREAMINA_ONBOARDING_ENABLED 暂隐 */}
-              <div className="settings-card px-3 py-2.5">
+              {/* 即梦（dreamina CLI）：状态 + 一键登录授权；引导弹窗入口随 DREAMINA_ONBOARDING_ENABLED 暂隐 */}
+              <div className="settings-card px-3 py-2.5" tabIndex={-1}
+                ref={initialSubscription === "jimeng" ? subscriptionCard : undefined} data-modal-autofocus={initialSubscription === "jimeng" || undefined}>
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-ink">使用自有即梦订阅</span>
+                  <span className="text-ink">即梦</span>
                   <span className="flex items-center gap-1.5">
                     <span
                       className={`rounded px-2 py-0.5 text-xs ${
@@ -850,9 +866,9 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                     <button
                       onClick={() => void logoutDreamina()}
                       title="登出即梦账号（dreamina logout）"
-                      className="shrink-0 text-[11px] text-muted hover:text-red-300"
+                      className="shrink-0 rounded border border-edge px-3 py-1 text-[12px] text-ink hover:bg-edge disabled:opacity-50"
                     >
-                      登出
+                      退出登录
                     </button>
                   )}
                   {dreaminaAuthLine && (
@@ -863,6 +879,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                       title={userErrorMessage(dreaminaAuthLine, dreaminaAuthFailed ? "即梦授权未完成，请重新登录。" : "正在准备即梦授权，请稍候…")}
                     >
                       {userErrorMessage(dreaminaAuthLine, dreaminaAuthFailed ? "即梦授权未完成，请重新登录。" : "正在准备即梦授权，请稍候…")}
+                      {dreaminaUserCode && <span className="ml-1 select-text font-mono">{dreaminaUserCode}</span>}
                     </span>
                   )}
                 </div>
@@ -878,6 +895,10 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                   </button>
                 )}
               </div>
+
+              <DshSubscriptionCard allowed={canUseByo(cloudEntitlement)} cardRef={initialSubscription === "dsh" ? subscriptionCard : undefined} />
+
+              </section>
 
               {/* 默认反推模型：非 auto 时跳过每次的引擎选择浮层直接执行 */}
               <div className="settings-card px-3 py-2.5">
@@ -939,20 +960,6 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                     </p>
                   </div>
                 )}
-                {/* 云端理解授权勾选留在「入库时自动反推」里（本质是入库行为开关）。 */}
-                <div className="mt-3 flex items-start justify-between gap-2 border-t border-edge pt-2 text-[11px] text-muted">
-                  <span className="min-w-0">
-                    允许入库自动分析时，把新图片临时发送到 Bowerbird Cloud
-                    理解（默认关闭；请求结束不保存图片）
-                  </span>
-                  <Toggle
-                    checked={settings?.cloud_auto_understand ?? false}
-                    onChange={(v) =>
-                      settings && void updateSettings({ ...settings, cloud_auto_understand: v })
-                    }
-                    disabled={!cloudAuth?.cloud_available}
-                  />
-                </div>
               </div>
             </>
           )}
@@ -964,7 +971,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 <label className="flex items-center justify-between gap-3">
                   <span className="text-ink">显示画板素材名称</span>
                   <Toggle checked={settings?.canvas_show_asset_names ?? false} disabled={!settings}
-                    onChange={value => settings && void updateSettings({ ...settings, canvas_show_asset_names: value })} />
+                    onChange={value => settings && void updateSettings({ canvas_show_asset_names: value })} />
                 </label>
                 <p className="mt-1 text-xs text-muted">在画板图片和视频下方显示素材名称，默认关闭。</p>
               </div>
@@ -976,7 +983,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                   <Toggle
                     checked={settings?.generation_completion_popup ?? true}
                     disabled={!settings}
-                    onChange={(v) => settings && void updateSettings({ ...settings, generation_completion_popup: v })}
+                    onChange={(v) => settings && void updateSettings({ generation_completion_popup: v })}
                   />
                 </label>
                 <label className="mt-3 flex items-center justify-between">
@@ -984,7 +991,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                   <Toggle
                     checked={settings?.generation_completion_sound ?? true}
                     disabled={!settings}
-                    onChange={(v) => settings && void updateSettings({ ...settings, generation_completion_sound: v })}
+                    onChange={(v) => settings && void updateSettings({ generation_completion_sound: v })}
                   />
                 </label>
                 <p className="mt-2 text-xs text-muted">默认开启；可分别关闭，设置自动保存。弹窗显示在应用右上角。</p>
@@ -995,7 +1002,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                   <Toggle
                     checked={settings?.board_shift_pick ?? false}
                     onChange={(v) =>
-                      settings && void updateSettings({ ...settings, board_shift_pick: v })
+                      settings && void updateSettings({ board_shift_pick: v })
                     }
                   />
                 </div>
@@ -1012,7 +1019,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                   <Toggle
                     checked={settings?.hide_project_assets ?? false}
                     onChange={(v) =>
-                      settings && void updateSettings({ ...settings, hide_project_assets: v })
+                      settings && void updateSettings({ hide_project_assets: v })
                     }
                   />
                 </div>
@@ -1025,7 +1032,6 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
 
           {section === "about" && (
             <>
-              <AppUpdateCard version={appVersion} migrating={migrating} />
               <div className="settings-card flex items-center justify-between px-3 py-2.5">
                 <span className="text-ink">关于 Bowerbird</span>
                 <button
@@ -1053,7 +1059,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 description="正式 Bowerbird Agent（云端 Run）：先只做文字意图分析并给出可审批计划，批准后再执行。默认开启。"
                 checked={settings?.agent_mode_enabled ?? true}
                 onChange={(v) =>
-                  settings && void updateSettings({ ...settings, agent_mode_enabled: v })
+                  settings && void updateSettings({ agent_mode_enabled: v })
                 }
               />
               <AgentModeCard
@@ -1061,7 +1067,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 description="dev 方案A（子句挑选）：Agent 按意图从参考图维度原文中挑选子句，确定性拼合后再发送。默认关闭。"
                 checked={settings?.agent_a_mode_enabled ?? false}
                 onChange={(v) =>
-                  settings && void updateSettings({ ...settings, agent_a_mode_enabled: v })
+                  settings && void updateSettings({ agent_a_mode_enabled: v })
                 }
               />
               <AgentModeCard
@@ -1069,7 +1075,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 description="dev 方案B（skill 审查）：Agent 按官方 skill 审查并修复展开后的完整 prompt，再发送。默认关闭。"
                 checked={settings?.agent_b_mode_enabled ?? false}
                 onChange={(v) =>
-                  settings && void updateSettings({ ...settings, agent_b_mode_enabled: v })
+                  settings && void updateSettings({ agent_b_mode_enabled: v })
                 }
               />
               <AgentModeCard
@@ -1077,7 +1083,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 description="dev：把编辑器内容 + 参考图发到 Claude Code 终端（TUI）对话。默认关闭。"
                 checked={settings?.agent_z_mode_enabled ?? false}
                 onChange={(v) =>
-                  settings && void updateSettings({ ...settings, agent_z_mode_enabled: v })
+                  settings && void updateSettings({ agent_z_mode_enabled: v })
                 }
               />
               <AgentModeCard
@@ -1085,7 +1091,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 description="dev：把编辑器内容 + 参考图发到 codex 终端（TUI）对话。默认关闭。"
                 checked={settings?.agent_g_mode_enabled ?? false}
                 onChange={(v) =>
-                  settings && void updateSettings({ ...settings, agent_g_mode_enabled: v })
+                  settings && void updateSettings({ agent_g_mode_enabled: v })
                 }
               />
               <AgentModeCard
@@ -1093,7 +1099,7 @@ export function SettingsDialog({ onClose, initialSection = "system" }: {
                 description="dev：DeepSeek 对话 harness，回复追加到创作板编辑器。默认关闭。"
                 checked={settings?.agent_ds_mode_enabled ?? false}
                 onChange={(v) =>
-                  settings && void updateSettings({ ...settings, agent_ds_mode_enabled: v })
+                  settings && void updateSettings({ agent_ds_mode_enabled: v })
                 }
               />
             </>

@@ -12,11 +12,14 @@ use self::types::{Capabilities, Chunk, CodexRequest, CodexResult, GenOutcome};
 pub mod bowerbird_cloud;
 pub(crate) mod cloud_image;
 pub mod codex_cli;
+pub(crate) mod h3_image;
 pub mod install;
 pub mod jimeng;
+pub(crate) mod jimeng_web;
 pub mod jimeng_video;
 pub(crate) mod jimeng_diagnostics;
 pub mod openai_api;
+pub mod progress;
 pub mod types;
 pub mod understand;
 pub(crate) mod update;
@@ -95,6 +98,10 @@ pub fn resolve_gen_provider(
         }
         other => Err(AppError::Codex(format!("未知 provider: {other}").into())),
     }
+}
+
+pub fn is_jimeng_provider(provider: Option<&str>) -> bool {
+    matches!(provider, Some("jimeng" | "dreamina"))
 }
 
 /// provider key 是否为 Cloud 生图变体（Pro / Lite / Fast）。

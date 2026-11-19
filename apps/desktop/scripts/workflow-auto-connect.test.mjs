@@ -1,6 +1,7 @@
+import { restoreImageOptimization } from '../src/lib/h3PromptOptimization.ts';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { newWorkflowNode, generationInputNode, compileGenerationPrompt, compileAgentPrompt, workflowOrder, workflowInputValues } from '../src/lib/canvasWorkflow.ts';
+import { newWorkflowNode, generationInputNode, compileGenerationPrompt, compileAgentPrompt, workflowOrder, workflowInputValues, selectWorkflowVideoProvider } from '../src/lib/canvasWorkflow.ts';
 import { planAutomaticConnection } from '../src/lib/workflowAutoConnect.ts';
 
 const node = (id, kind = 'generation', rest = {}) => ({ ...newWorkflowNode(kind, 0, 0, 'codex'), id, ...rest });
@@ -9,6 +10,55 @@ const documentOutputs = [
   { type: 'image', media: 'image', binding: { canvasNodeId: 'document', cellId: '*' } },
 ];
 const source = (id, media = 'image') => ({ type: 'image', media, binding: { assetId: id, assetNodeId: `card-${id}` } });
+test('a dimension wire resolves its saved text and source image for generation and agent cards', () => {
+  const image = { type: 'image', media: 'image', binding: { assetId: 'photo', assetNodeId: 'source' } };
+  const outputs = [{ type: 'text', binding: { ...image.binding, dimension: { title: '构图', body: '中心构图' } } }, image];
+  for (const kind of ['generation', 'agent']) {
+    const target = connect(node('target', kind), outputs);
+    const values = workflowInputValues([target], target);
+    assert.equal(values.text[0].text, '中心构图');
+    assert.deepEqual(values.image[0].assetIds, ['photo']);
+  }
+});
+test('H3 optimizer omissions preserve the dimension and image through generation compilation', () => {
+  const image = source('photo');
+  const outputs = [{ type: 'text', binding: { ...image.binding, dimension: { title: '构图', body: '中心构图' } } }, image];
+  const target = connect(node('generate'), outputs);
+  target.promptReferences = [{ id: 'dim', type: 'text', label: '构图', input: target.inputs.text[0] }];
+  for (const [prompt, result, expected, kept] of [
+    ['@[dim] 秋天', '秋天的树林', '中心构图 秋天的树林', false],
+    ['秋天 @[dim]', '树林 {{REF_1}} {{REF_1}}', '树林 中心构图', false],
+    ['用 @[dim] 描绘树林', '树林', '用 中心构图 描绘树林', true],
+    ['用 @[dim] 描绘树林', '以 {{REF_1}} 描绘森林', '以 中心构图 描绘森林', false],
+    ['@[dim] 秋天', '{{REF_2}} 秋天', '中心构图 秋天', true],
+  ]) {
+    const restored = restoreImageOptimization(prompt, result);
+    assert.equal(restored.keptOriginal, kept);
+    target.prompt = restored.text;
+    assert.deepEqual(compileGenerationPrompt(target, workflowInputValues([target], target)), {prompt: expected, assetIds: ['photo']});
+  }
+});
+test('whole text table reaches the Agent through native canvas input resolution', () => {
+  const agent = connect(node('reader', 'agent'), documentOutputs);
+  const table = { rows: [['标题', ''], ['第一屏', '内容']] };
+  const values = workflowInputValues([agent], agent, (_, port) => port === '*'
+    ? { type: 'image', assetIds: [] }
+    : { type: 'text', text: JSON.stringify(table), table });
+  assert.deepEqual(Object.values(JSON.parse(compileAgentPrompt(agent, values).source))[0].rows, table.rows);
+});
+test('Agent accepts a text-only loop row on a mixed wire but still requires independent image inputs', () => {
+  const binding = { nodeId: 'loop', autoConnect: 'row', slot: 1 };
+  const target = node('reader', 'agent', { prompt: '读取当前行', inputs: {
+    text: [{ ...binding, portId: 'text' }], image: [{ ...binding, portId: 'image' }],
+  } });
+  const table = { rows: [['当前行', '']] };
+  const values = { text: [{ type: 'text', text: JSON.stringify(table), table }], image: [{ type: 'image', assetIds: [] }] };
+  const result = compileAgentPrompt(target, values);
+  assert.deepEqual(Object.values(JSON.parse(result.source))[0].rows, table.rows);
+  assert.deepEqual(result.assetIds, []);
+  target.inputs.image[0].autoConnect = 'separate';
+  assert.throws(() => compileAgentPrompt(target, values), /没有可用图片/);
+});
 const connect = (target, outputs) => {
   const plan = planAutomaticConnection([target], outputs, target.id);
   assert.equal(plan.error, null);
@@ -48,7 +98,9 @@ test('prewiring a producer without results succeeds, empty result fails at compi
   assert.equal(plan.error, null);
   assert.equal(plan.bindings.length, 2);
   const connected = connect(target, documentOutputs);
-  assert.throws(() => compileGenerationPrompt(connected, { text: [{ type: 'text', text: '' }], image: [{ type: 'image', assetIds: ['a'] }] }), /没有可用内容/);
+  assert.throws(() => compileGenerationPrompt(connected, { text: [{ type: 'text', text: '' }], image: [{ type: 'image', assetIds: [] }] }), /没有可用内容/);
+  const imageOnly = compileGenerationPrompt({ ...connected, prompt: '使用参考图' }, { text: [{ type: 'text', text: '' }], image: [{ type: 'image', assetIds: ['a'] }] });
+  assert.deepEqual(imageOnly.assetIds, ['a']);
 });
 
 test('text only receivers ignore image output without asking', () => {
@@ -103,7 +155,8 @@ test('automatic cloud Agent inputs are included once, legacy cloud references re
   const mentioned = { ...target, prompt: '@[body]', promptReferences: [{ id: 'body', type: 'text', label: '文本 1', input: target.inputs.text[0] }] };
   assert.deepEqual(JSON.parse(compileAgentPrompt(mentioned, values).source), { '引用文本 1': '正文' });
   const legacy = { ...target, inputs: { text: [{ ...documentOutputs[0].binding }] } };
-  assert.deepEqual(JSON.parse(compileAgentPrompt(legacy, {}).source), {});
+  assert.throws(() => compileAgentPrompt(legacy, {}), /没有可用文字/);
+  assert.deepEqual(JSON.parse(compileAgentPrompt(legacy, values).source), { '引用文本 1': '正文' });
 });
 
 test('video and audio match capability, never the legacy image pipe name', () => {
@@ -138,6 +191,28 @@ test('H3 fills the first free frame, repeated source is a no-op, full frames rej
   assert.match(rejected.error, /首尾帧已连接/);
 });
 
+test('switching a video card to H3 explains incompatible sources and accepts inputs for its active mode', () => {
+  const video = node('target', 'generation', { generation: { media: 'video' } });
+  const local = selectWorkflowVideoProvider(video, 'h3');
+  const movie = node('movie', 'generation', { generation: { media: 'video' } });
+  const videoOutput = { type: 'image', binding: { nodeId: 'movie', portId: 'image' } };
+  for (const mode of ['frames', 'reference', 'text']) {
+    const target = { ...local, comfyVideo: { ...local.comfyVideo, mode } };
+    const plan = (...outputs) => planAutomaticConnection([movie, target], outputs, target.id);
+    assert.deepEqual(plan(...documentOutputs).bindings.map(item => item.inputId),
+      mode === 'text' ? ['text'] : ['text', 'first-frame']);
+    if (mode === 'text') {
+      assert.match(plan(source('photo')).error, /文生视频.*单图.*首尾帧/);
+    } else {
+      assert.match(plan(videoOutput).error, /从视频中截取/);
+      assert.match(plan(source('music', 'audio')).error, /音频/);
+    }
+    const audioWithText = plan(source('music', 'audio'), documentOutputs[0]);
+    assert.equal(audioWithText.error, null);
+    assert.deepEqual(audioWithText.bindings.map(item => item.inputId), ['text']);
+  }
+});
+
 test('cycles and self-connections reject the entire planned relation', () => {
   const a = node('a', 'skill', { inputs: { image: [{ nodeId: 'b', portId: 'image' }] } });
   const b = node('b', 'skill');
@@ -167,4 +242,16 @@ test('completion observes video output without media filtering and deduplicates 
     { type: 'text', binding: { nodeId: 'multi', portId: 'text' } },
     { type: 'image', binding: { nodeId: 'multi', portId: 'image' } },
   ], 'trigger'), { bindings: [], error: null });
+});
+
+test('a selection preserves each material wire and rejects incompatible media atomically', () => {
+  const target = node('image-target');
+  const images = Array.from({ length: 8 }, (_, index) => ({ ...source(String(index)), selectionWireId: 'wire-' + index }));
+  const plan = planAutomaticConnection([target], images, target.id);
+  assert.equal(plan.error, null);
+  assert.deepEqual(plan.bindings.map(({ binding }) => binding.autoConnect), images.map(output => output.selectionWireId));
+  const mixed = [...images, { ...source('audio', 'audio'), selectionWireId: 'wire-audio' }];
+  const rejected = planAutomaticConnection([target], mixed, target.id);
+  assert.ok(rejected.error);
+  assert.deepEqual(rejected.bindings, []);
 });

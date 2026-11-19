@@ -1,4 +1,8 @@
 import { prepareFileWorkspace } from "./lib/fileWorkspace";
+import { describeAssetWithNotice } from "./lib/describeNotices";
+import { applyGenerationProgress } from "./lib/generationProgress";
+import { hasGenerationFailureReason } from "./lib/userError";
+import { generationProviderIssue } from "./lib/generationAvailability";
 import { create } from "zustand";
 import { filterAssetsByMediaType, type MediaFilter } from "./lib/mediaFilter";
 import { readThumbnailWidth, saveThumbnailWidth, type ThumbnailScope } from "./lib/thumbnailSize";
@@ -11,7 +15,7 @@ import { loadProjectOrder, reconcileProjectOrder, saveProjectOrder } from "./lib
 import { acknowledgeCreativeContinuation, generationParentLocator } from "./lib/creativeGeneration";
 import { generationPromptNodeId } from "./lib/projectNodeIds";
 import {
-  canStartAnotherJob,
+  canStartAnotherJob, countLimitedGenerationJobs,
   canUseByo,
   canUseGenerationProvider,
   understandProvider,
@@ -26,6 +30,7 @@ import type {
   CodeRedemption,
   CodexChunk,
   CodexHealth,
+  DreaminaHealth,
   ColorBucket,
   EntitlementSnapshot,
   Folder,
@@ -41,10 +46,11 @@ import type {
   TagCount,
   VisualProfileSummary,
 } from "./lib/types";
-import { canonicalProviderKey, isCloudProvider, isKnownGenProvider } from "./lib/genProviders";
+import { canonicalProviderKey, restoredImageProvider, dreaminaCliVersion, defaultCloudProvider, isKnownGenProvider, normalizeGenerationProvider } from "./lib/genProviders";
 import { normalizeAnnotationPrompt } from "./lib/annotationPrompt";
 import { notifyError } from "./lib/notify";
 import { notifyGenerationComplete } from "./lib/generationNotifications";
+import { settingsQueue } from "./lib/settingsQueue";
 import { applyTheme } from "./lib/theme";
 import { autoRatioFromReferences } from "./components/creation/ratios";
 import {
@@ -195,6 +201,9 @@ export interface DescribeFailure {
 export type DescribeTask =
   | { kind: "batch"; ids: string[]; instruction: string }
   | { kind: "single"; assetId: string; instruction: string };
+
+type CanvasDeletionTarget = { assetIds: string[]; removeFromCanvas: () => void };
+type CanvasMenuSelection = { primaryNodeId?: string; projectId: string; nodeIds: string[]; assetIds?: string[]; prepareProjectRemoval?: (assetIds: string[]) => Promise<void>; deletionTargets?: { item: CanvasDeletionTarget; group?: CanvasDeletionTarget } };
 
 interface State {
   libraryThumbnailWidth: number;
@@ -384,11 +393,14 @@ interface State {
   dreaminaOnboardingForceOpen: boolean;
   setDreaminaOnboardingForceOpen: (v: boolean) => void;
   accountOnboardingForceOpen: boolean;
+  subscriptionSettingsTarget: "jimeng" | "codex" | "dsh" | null;
   setAccountOnboardingForceOpen: (v: boolean) => void;
   // —— 应用设置（从后端 settings.json 加载）——
   settings: AppSettings | null;
   loadSettings: () => Promise<void>;
-  updateSettings: (s: AppSettings) => Promise<void>;
+  settingsSaveError: unknown;
+  retrySettings: () => Promise<void>;
+  updateSettings: (patch: Partial<AppSettings>) => Promise<void>;
   // —— Bowerbird 账号与权益（token 不进前端）——
   cloudAuth: AuthSnapshot | null;
   cloudEntitlement: EntitlementSnapshot | null;
@@ -404,8 +416,8 @@ interface State {
   setCloudAuth: (snapshot: AuthSnapshot) => void;
   setCloudError: (error: string | null) => void;
   // —— 即梦（dreamina）可用性 + 出图 provider 切换（Phase 3）——
-  dreaminaHealth: CodexHealth | null;
-  setDreaminaHealth: (h: CodexHealth | null) => void;
+  dreaminaHealth: DreaminaHealth | null;
+  setDreaminaHealth: (h: DreaminaHealth | null) => void;
   defaultProvider: string; // 全局默认出图 provider（"codex"/"jimeng"，localStorage 持久化）
   setDefaultProvider: (p: string) => void;
   // —— 默认反推引擎（设置「模型设置」可选并持久化）——
@@ -471,7 +483,7 @@ interface State {
     },
   ) => Promise<void>;
   cancelGeneration: (jobId?: string) => void; // 默认取消 activeJob
-  loadGenJobs: () => Promise<void>;
+  loadGenJobs: (jobId?: string) => Promise<void>;
   applyGenChunk: (c: CodexChunk) => void;
   // 重试 activeJob 末尾失败轮：保留失败历史，在原 job 追加轮次；provider 尚无 session 时新建 provider 会话。
   retryLastGenTurn: (assetsOverride?: Asset[]) => void;
@@ -526,19 +538,21 @@ interface State {
     y: number;
     assetId: string;
     workspaceProjectId?: string | null;
+    moveIncompleteSelection?: () => void;
     asset?: Asset;
     singleAsset?: boolean;
-    fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string> };
+    fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string>; entries?: { count: number; available: boolean; rename: () => void; move: () => void; removeReferences?: () => void } };
     libraryProjectId?: string;
     addCanvasImagesToBoard?: { count: number; run: () => void };
+    generationGroup?: { assetId?: string; groupKey?: string };
     ungroupCanvasFolder?: () => void;
-    canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[]; primaryNodeId?: string };
+    canvasSelection?: CanvasMenuSelection;
   } | null;
   openContextMenu: (
     x: number,
     y: number,
     assetId: string,
-    context?: { asset?: Asset; singleAsset?: boolean; fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string> }; libraryProjectId?: string; canvasSelection?: { projectId: string; nodeIds: string[]; assetIds?: string[]; primaryNodeId?: string }; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
+    context?: { asset?: Asset; moveIncompleteSelection?: () => void; generationGroup?: { assetId?: string; groupKey?: string }; singleAsset?: boolean; fileSelection?: { assets: Asset[]; select: () => void; onComplete?: () => void; openReferences: () => void; localPaths?: Record<string, string>; entries?: { count: number; available: boolean; rename: () => void; move: () => void; removeReferences?: () => void } }; libraryProjectId?: string; canvasSelection?: CanvasMenuSelection; addCanvasImagesToBoard?: { count: number; run: () => void }; ungroupCanvasFolder?: () => void },
   ) => void;
   closeContextMenu: () => void;
   // —— 项目右键菜单（侧栏项目行 / 收起态圆标）——
@@ -551,16 +565,11 @@ interface State {
   closeVisualProfile: () => void;
 }
 
-function normalizeGenerationProvider(provider: string): string {
-  return provider === "codex-cli" || !provider ? "codex" : provider;
-}
-
 function generationGateError(state: State, provider: string): string | null {
-  if (!canUseGenerationProvider(state.cloudEntitlement, provider)) {
-    return "当前账号不可使用本机生成引擎；升级 Pro 解锁 Codex / 即梦 CLI";
-  }
-  const runningCount = Object.values(state.genJobs).filter((job) => job.running).length;
-  if (!canStartAnotherJob(state.cloudEntitlement, runningCount)) {
+  const issue = generationProviderIssue(provider, state);
+  if (issue) return issue.message;
+  const runningCount = countLimitedGenerationJobs(state.genJobs);
+  if (!canStartAnotherJob(state.cloudEntitlement, runningCount, provider)) {
     return "已达当前账号档位的并行生成上限";
   }
   return null;
@@ -577,6 +586,11 @@ function taskErrorMessage(error: unknown): string {
 }
 
 export const useStore = create<State>((set, get) => {
+  const saves = settingsQueue(() => api.getSettings(), settings => api.updateSettings(settings),
+    () => get().settings, (settings, failure) => {
+      if (settings && settings.theme !== get().settings?.theme) applyTheme(settings.theme);
+      set({ settings, settingsSaveError: failure?.cause ?? null });
+    });
   function runProjectRoute<T>(operation: () => Promise<T>): Promise<T> {
     const requestId = ++projectRouteRequestId;
     set({ projectRoutePending: true, projectRouteRevision: requestId });
@@ -599,7 +613,7 @@ export const useStore = create<State>((set, get) => {
         cloudAuth,
         cloudEntitlement,
         cloudError: "登录已失效，请重新登录",
-        activeGenProvider: "bowerbird-cloud-image_hd",
+        activeGenProvider: defaultCloudProvider(cloudEntitlement),
       });
     } catch {
       // 原业务错误仍会展示；这里只做后端已清理会话后的前端快照对齐。
@@ -621,7 +635,7 @@ export const useStore = create<State>((set, get) => {
       describeStartedAt: Date.now(),
     });
     try {
-      const analysisId = await api.describeAsset(next.assetId, next.instruction, next.provider);
+      const analysisId = await describeAssetWithNotice(next.assetId, next.name, next.instruction, next.provider);
       next.onComplete?.(analysisId);
       next.onTutorialComplete?.();
     } catch (e) {
@@ -666,7 +680,10 @@ export const useStore = create<State>((set, get) => {
     set((s) => {
       const prev = s.genJobs[id];
       if (!prev) return {};
-      const next = fn(prev);
+      let next = fn(prev);
+      if (next.preview && (!next.running || next.preview.turnKey !== next.turns[next.turns.length - 1]?.turnKey)) {
+        next = { ...next, preview: undefined };
+      }
       const genJobs = { ...s.genJobs, [id]: next };
       return {
         genJobs,
@@ -756,7 +773,7 @@ export const useStore = create<State>((set, get) => {
   beginCollectionAdd: async (id) => {
     if (get().collectionAddBusy || get().projectRoutePending) return;
     const folder = get().folders.find((item) => item.id === id && (item.kind ?? "folder") === "folder");
-    if (!folder || id === "root") throw new Error("目标集合已不存在");
+    if (!folder || id === "root") throw new Error("目标文件夹已不存在");
     if (get().activeProjectId) await get().exitProject();
     set({ libraryHomeView: "library", collectionPanelId: null, collectionAddTargetId: id, mode: "manage",
       selectedIds: new Set(), rangeAnchorId: null, detailAssetId: null,
@@ -768,7 +785,7 @@ export const useStore = create<State>((set, get) => {
     const ids = [...state.selectedIds];
     if (!id || state.collectionAddBusy || ids.length === 0) return 0;
     if (!state.folders.some((item) => item.id === id && (item.kind ?? "folder") === "folder")) {
-      throw new Error("目标集合已不存在");
+      throw new Error("目标文件夹已不存在");
     }
     set({ collectionAddBusy: true });
     try {
@@ -1122,11 +1139,15 @@ export const useStore = create<State>((set, get) => {
       }
       return;
     }
-    if (deletingActiveProject) await get().projectCanvasFlush?.();
+    // The user is discarding this canvas; an unsaved edit must not veto deletion.
+    const { discardProjectWorkflow } = await import("./lib/canvasWorkflowRuntime");
     const result = await api.deleteProject(id, mode, confirmation, discardPendingResults);
+    discardProjectWorkflow(id);
     // Match the durable deletion's detached execution records, so a stale UI
     // snapshot cannot keep scheduling result ingestion for the deleted project.
-    set({ cloudAgentRuns: Object.fromEntries(Object.entries(get().cloudAgentRuns).map(([key, run]) => [key,
+    set({ genJobs: Object.fromEntries(Object.entries(get().genJobs).map(([key, job]) => [key,
+      job.projectId === id ? { ...job, projectId: null, threadId: null, creativeSessionId: null } : job,
+    ])), cloudAgentRuns: Object.fromEntries(Object.entries(get().cloudAgentRuns).map(([key, run]) => [key,
       run.projectId === id ? { ...run, projectId: null, threadId: null, creativeLaunchId: null } : run,
     ])) });
     if (deletingActiveProject) {
@@ -1505,33 +1526,18 @@ export const useStore = create<State>((set, get) => {
   setDreaminaOnboardingForceOpen: (dreaminaOnboardingForceOpen) =>
     set({ dreaminaOnboardingForceOpen }),
   accountOnboardingForceOpen: false,
+  subscriptionSettingsTarget: null,
   setAccountOnboardingForceOpen: (accountOnboardingForceOpen) =>
     set({ accountOnboardingForceOpen }),
   // —— 应用设置 ——
   settings: null,
+  settingsSaveError: null,
+  retrySettings: saves.retry,
   loadSettings: async () => {
-    try {
-      const settings = await api.getSettings();
-      applyTheme(settings.theme);
-      set({ settings });
-    } catch (e) {
-      console.error("loadSettings failed", e);
-    }
+    try { await saves.load(); }
+    catch (error) { console.error("loadSettings failed", error); }
   },
-  updateSettings: async (settings) => {
-    const previous = get().settings;
-    applyTheme(settings.theme);
-    set({ settings });
-    try {
-      await api.updateSettings(settings);
-    } catch (e) {
-      if (previous) {
-        applyTheme(previous.theme);
-        set({ settings: previous });
-      }
-      console.error("updateSettings failed", e);
-    }
-  },
+  updateSettings: saves.update,
   // —— Bowerbird 账号与权益 ——
   cloudAuth: null,
   cloudEntitlement: null,
@@ -1563,7 +1569,7 @@ export const useStore = create<State>((set, get) => {
         cloudEntitlement,
         activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
           ? s.defaultProvider
-          : "bowerbird-cloud-image_hd",
+          : defaultCloudProvider(cloudEntitlement),
       }));
     } catch (e) {
       set({ cloudError: typeof e === "string" ? e : "账号状态读取失败" });
@@ -1602,7 +1608,7 @@ export const useStore = create<State>((set, get) => {
         cloudEntitlement,
         activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
           ? s.defaultProvider
-          : "bowerbird-cloud-image_hd",
+          : defaultCloudProvider(cloudEntitlement),
       }));
     } catch (e) {
       const message = taskErrorMessage(e) || "权益同步失败";
@@ -1624,7 +1630,7 @@ export const useStore = create<State>((set, get) => {
         set((s) => ({
           cloudEntitlement,
           activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
-            ? s.defaultProvider : "bowerbird-cloud-image_hd",
+            ? s.defaultProvider : defaultCloudProvider(cloudEntitlement),
         }));
       }
       return result;
@@ -1648,7 +1654,7 @@ export const useStore = create<State>((set, get) => {
         cloudEntitlement,
         activeGenProvider: canUseGenerationProvider(cloudEntitlement, s.defaultProvider)
           ? s.defaultProvider
-          : "bowerbird-cloud-image_hd",
+          : defaultCloudProvider(cloudEntitlement),
       }));
     } catch {
       // 静默失败：下一次轮询或手动刷新再试。
@@ -1659,7 +1665,7 @@ export const useStore = create<State>((set, get) => {
     try {
       const cloudAuth = await api.cloudLogout();
       const cloudEntitlement = await api.cloudEntitlement();
-      set({ cloudAuth, cloudEntitlement, activeGenProvider: "bowerbird-cloud-image_hd" });
+      set({ cloudAuth, cloudEntitlement, activeGenProvider: defaultCloudProvider(cloudEntitlement) });
     } catch (e) {
       set({ cloudError: typeof e === "string" ? e : "登出失败" });
     } finally {
@@ -1828,14 +1834,14 @@ export const useStore = create<State>((set, get) => {
       return { genJobs, genJobOrder, activeJobId, generating };
     });
   },
-  loadGenJobs: async () => {
+  loadGenJobs: async (jobId) => {
     // 启动恢复：① 未完成 job（queued/running）重建 genJobs（恢复中 job 在面板可见）；
     // ② 最近终态会话（done/failed）从 generation_meta 重建时间线 —— 会话面板跨重启保留
     // （done 会话可回看续轮，failed 会话可重试；cancelled 用户显式取消过、不恢复）。
     try {
       const [jobs, recent] = await Promise.all([
-        api.listGenJobs(),
-        api.recentGenSessions().catch((): RecentGenSession[] => []), // 历史恢复失败不阻断在跑恢复
+        api.listGenJobs(jobId),
+        api.recentGenSessions(undefined, jobId).catch((): RecentGenSession[] => []), // 历史恢复失败不阻断在跑恢复
       ]);
       set((s) => {
         const genJobs = { ...s.genJobs };
@@ -1864,13 +1870,14 @@ export const useStore = create<State>((set, get) => {
             refAssets: t.ref_assets,
           }));
           // 已有任务但产物被移除或历史读取失败时，仍显示真实提交，不能当作未开始。
-          if (turns.length === 0) {
-            turns.push({ id: nextGenTurnId(), turnKey: r.turn_key ?? undefined, submitId: r.submit_id, prompt: r.prompt, promptRaw: null, images: [], provider: r.provider, media: r.media, videoOptions: r.video_options, ratio: r.ratio, refs: r.references, referenceNodeIds: r.reference_node_ids, refAssets: r.ref_assets });
+          if (turns.length === 0 || (failed && r.turn_key && !turns.some(turn => turn.turnKey === r.turn_key))) {
+            turns.push({ id: nextGenTurnId(), turnKey: r.turn_key ?? undefined, submitId: r.submit_id, prompt: r.prompt, promptRaw: null, images: [], provider: restoredImageProvider(r.provider, r.dreamina_model_version), media: r.media, videoOptions: r.video_options, ratio: r.ratio, refs: r.references, referenceNodeIds: r.reference_node_ids, refAssets: r.ref_assets });
           }
           if (failed) {
             // 最新任务终态补齐最后一轮；早期失败由持久诊断历史恢复。
-            const err = r.error ?? "生成失败";
-            turns[turns.length - 1] = { ...turns[turns.length - 1], error: err };
+            const index = r.turn_key ? turns.findIndex(turn => turn.turnKey === r.turn_key) : turns.length - 1;
+            const turn = turns[index];
+            turns[index] = { ...turn, error: hasGenerationFailureReason(turn.error) ? turn.error : r.error || turn.error || "生成失败" };
           }
           genJobs[r.id] = {
             id: r.id,
@@ -1885,7 +1892,8 @@ export const useStore = create<State>((set, get) => {
             lastRefs: r.references,
             refAssets: r.ref_assets,
             lastRatio: r.ratio ?? null,
-            provider: r.provider,
+            dreaminaModelVersion: r.dreamina_model_version,
+            provider: restoredImageProvider(r.provider, r.dreamina_model_version),
             projectId: r.project_id ?? null,
             visualProfile: r.visual_profile,
             visualProfileId: r.visual_profile?.profileId ?? null,
@@ -1901,7 +1909,7 @@ export const useStore = create<State>((set, get) => {
         for (const j of jobs) {
           // 同 session 已有另一条终态行时不重复展示；同 id 的 recover_started 占位必须
           // 继续进入 field-wise hydrate，不能因 seenSessions / 已存在而永久保留稀疏字段。
-          if (j.session_id && seenSessions.has(j.session_id) && !genJobs[j.id]) continue;
+          if (!jobId && j.session_id && seenSessions.has(j.session_id) && !genJobs[j.id]) continue;
           const turns: GenTurn[] = (j.turns ?? []).map(t => ({
             id: nextGenTurnId(), turnKey: t.turn_key ?? undefined, submitId: t.submit_id,
             prompt: t.prompt, appliedPrompt: t.applied_prompt ?? null, promptRaw: t.prompt_raw ?? null,
@@ -1917,7 +1925,7 @@ export const useStore = create<State>((set, get) => {
             id: nextGenTurnId(), turnKey: j.turn_key ?? undefined, submitId: j.submit_id,
             prompt: j.prompt, appliedPrompt: j.applied_prompt ?? null,
             images: [], media: j.media === "video" ? "video" : "image", videoOptions: j.video_options,
-            ratio: j.ratio, refs: j.references, referenceNodeIds: j.reference_node_ids, provider: j.provider,
+            ratio: j.ratio, refs: j.references, referenceNodeIds: j.reference_node_ids, provider: restoredImageProvider(j.provider, j.dreamina_model_version),
           });
           persistedJobs.push({
             id: j.id,
@@ -1932,7 +1940,8 @@ export const useStore = create<State>((set, get) => {
             lastRefs: j.references ?? [],
             refAssets: [],
             lastRatio: j.ratio ?? null,
-            provider: j.provider,
+            dreaminaModelVersion: j.dreamina_model_version,
+            provider: restoredImageProvider(j.provider, j.dreamina_model_version),
             projectId: j.project_id ?? null,
             visualProfile: j.visual_profile,
             visualProfileId: j.visual_profile?.profileId ?? null,
@@ -2010,9 +2019,10 @@ export const useStore = create<State>((set, get) => {
     // 会话级分组（含普通 job：conversationId 兜底 jobId）——后端 done 入库时落
     // generation_conversations（session → conversation），重启后瀑布流分组不丢。
     const conv = conversationId ?? jobId;
+    const dreaminaModelVersion = media === "image" ? dreaminaCliVersion(prov) ?? ((prov === "jimeng" || prov === "dreamina") ? get().settings?.dreamina_model_version ?? "5.0Pro" : null) : null;
     const job: GenJob = {
       id: jobId,
-      media, videoOptions,
+      media, videoOptions, dreaminaModelVersion,
       conversationId: conv,
       turns: [{ id: nextGenTurnId(), turnKey, media, videoOptions, referenceNodeIds, ratio: sentRatio, prompt: sentPrompt, promptRaw: rawPrompt ?? null, images: [], refAssets: references, provider: prov, startedAt: Date.now() }],
       sessionId: null,
@@ -2050,7 +2060,7 @@ export const useStore = create<State>((set, get) => {
       await api.codexCreateImage({
         jobId,
         prompt: sentPrompt,
-        dreaminaModelVersion: media === "image" && (prov === "jimeng" || prov === "dreamina") ? get().settings?.dreamina_model_version ?? "5.0Pro" : null,
+        dreaminaModelVersion,
         media, videoOptions, count, transparent,
         promptRaw: rawPrompt,
         // 借用维度源图 id（图 chip 被删、只借维度）：随 generation_meta 落库，复用时回绑车牌。
@@ -2058,7 +2068,7 @@ export const useStore = create<State>((set, get) => {
         referenceImages: refPaths,
         referenceNodeIds,
         ratio: sentRatio,
-        provider: prov,
+        provider: dreaminaCliVersion(prov) ? "jimeng" : prov,
         projectId: job.projectId,
         visualProfileId: selectedVisualProfileId,
         conversationId: conv,
@@ -2109,6 +2119,7 @@ export const useStore = create<State>((set, get) => {
       .filter((p): p is string => !!p);
     const exactRefs = opts?.exactReferences;
     const media = opts?.generation?.media ?? job.media ?? "image";
+    const dreaminaModelVersion = media === "image" ? dreaminaCliVersion(prov) ?? ((prov === "jimeng" || prov === "dreamina") ? job.dreaminaModelVersion ?? get().settings?.dreamina_model_version ?? "5.0Pro" : null) : null;
     const videoReferences = (exactRefs ?? reviseRefs).map(store_path => ({
       store_path, duration: opts?.references?.find(reference => reference.store_path === store_path)?.duration ?? null,
     }));
@@ -2142,7 +2153,7 @@ export const useStore = create<State>((set, get) => {
     // 续轮复用同 jobId（同一会话）；后端 task_queue upsert 刷新回 running。
     updateJob(jobId, (j) => ({
       ...j,
-      media, videoOptions, lastRatio: sentRatio, provider: prov,
+      media, videoOptions, dreaminaModelVersion, lastRatio: sentRatio, provider: prov,
       turns: [
         ...j.turns,
         {
@@ -2159,12 +2170,14 @@ export const useStore = create<State>((set, get) => {
         },
       ],
       streaming: "",
+      progress: undefined,
+      remoteStatus: null,
       running: true,
     }));
     try {
       await api.codexCreateImage({
         jobId,
-        dreaminaModelVersion: media === "image" && (prov === "jimeng" || prov === "dreamina") ? get().settings?.dreamina_model_version ?? "5.0Pro" : null,
+        dreaminaModelVersion,
         prompt: sentText,
         media, videoOptions, count, transparent,
         promptRaw: opts?.rawPrompt ?? null,
@@ -2178,7 +2191,7 @@ export const useStore = create<State>((set, get) => {
         // 比例只传坞内显式选档；「自动」由后端按第一参考图（续轮=上一轮产出图）吸附档位——
         // 即梦 omit --ratio 固定回退 16:9，此前续轮 auto 落 16:9 横切竖图。
         ratio: sentRatio,
-        provider: prov,
+        provider: dreaminaCliVersion(prov) ? "jimeng" : prov,
         projectId: job.projectId,
         visualProfileId: job.visualProfileId ?? job.visualProfile?.profileId ?? null,
         threadId: job.threadId ?? null,
@@ -2198,7 +2211,9 @@ export const useStore = create<State>((set, get) => {
   cancelGeneration: (jobId) => {
     const id = jobId ?? get().activeJobId;
     if (!id) return;
-    void api.cancelCodexCreate(id).catch(console.error);
+    const turns = get().genJobs[id]?.turns;
+    void api.cancelCodexCreate(id, turns?.[turns.length - 1]?.turnKey)
+      .catch(error => notifyError(error, "尚未确认停止，请检查原任务状态"));
   },
   retryLastGenTurn: (assetsOverride) => {
     const s = get();
@@ -2206,19 +2221,14 @@ export const useStore = create<State>((set, get) => {
     if (!id) return;
     const job = s.genJobs[id];
     if (!job || job.running) return;
-    const provider = normalizeGenerationProvider(job.provider);
-    const targetHealthy = isCloudProvider(provider)
-      ? !!s.cloudAuth?.cloud_available && !!s.cloudAuth.logged_in
-      : provider === "jimeng"
-        ? !!s.dreaminaHealth?.ok
-        : !!s.codexHealth?.ok;
-    if (!targetHealthy || generationGateError(s, provider)) return;
     const last = job.turns[job.turns.length - 1];
     if (!last?.error) return; // 没有失败轮可重试
-    if ((last.media ?? job.media) === "video" && job.provider.startsWith("bowerbird-cloud")) {
+    const provider = normalizeGenerationProvider(last.provider || job.provider);
+    if ((last.media ?? job.media) === "video" && provider.startsWith("bowerbird-cloud")) {
       void api.recoverCloudVideo(job.id).then(() => get().loadGenJobs()).catch(error => genHandleError(job.id, taskErrorMessage(error)));
       return;
     }
+    if (generationGateError(s, provider)) return;
     const parent = generationParentLocator(
       job.id,
       job.turns,
@@ -2245,6 +2255,18 @@ export const useStore = create<State>((set, get) => {
     }).catch(error => genHandleError(id, taskErrorMessage(error)));
   },
   applyGenChunk: (c) => {
+    if (c.kind === "preview") {
+      updateJob(c.job_id, job => {
+        if (!job.running || !c.turn_key || job.turns[job.turns.length - 1]?.turnKey !== c.turn_key
+          || !["codex", "codex-cli", "default"].includes(job.provider)) return job;
+        return { ...job, preview: { turnKey: c.turn_key, dataUrl: c.data_url } };
+      });
+      return;
+    }
+    if (c.kind === "progress") {
+      updateJob(c.job_id, job => applyGenerationProgress(job, { stage: c.stage, queue_position: c.queue_position, queue_length: c.queue_length, turnKey: c.turn_key }));
+      return;
+    }
     if (c.kind === "started") {
       if (c.job_id) generationStartupWaiters.get(c.job_id)?.();
       // started = 后端已定本轮最终参考图与比例（续轮含合并的上一轮产出图 / 自动档已按
@@ -2254,6 +2276,7 @@ export const useStore = create<State>((set, get) => {
       if (sid && (c.references || c.ratio || c.applied_prompt || c.visual_profile)) {
         updateJob(sid, (j) => {
           const last = j.turns[j.turns.length - 1];
+          if (c.turn_key && c.turn_key !== last?.turnKey) return j;
           const turns = last
             ? [
                 ...j.turns.slice(0, -1),
@@ -2269,6 +2292,7 @@ export const useStore = create<State>((set, get) => {
           return {
             ...j,
             turns,
+            progress: undefined,
             lastRatio: c.ratio !== undefined ? c.ratio : j.lastRatio,
             visualProfile: c.visual_profile ?? j.visualProfile,
             visualProfileId: c.visual_profile?.profileId ?? j.visualProfileId,
@@ -2280,7 +2304,10 @@ export const useStore = create<State>((set, get) => {
     if (c.kind === "submit") {
       // 即梦 submit_id 到（Chunk::Submit 回填）：记录到 job，纯展示（恢复续查用）。
       const sid = c.job_id;
-      if (sid) updateJob(sid, (j) => ({ ...j, submitId: c.submit_id, remoteStatus: "querying", turns: j.turns.map((turn, index) => index === j.turns.length - 1 ? { ...turn, submitId: c.submit_id } : turn) }));
+      if (sid) updateJob(sid, (j) => {
+        if (c.turn_key && c.turn_key !== j.turns[j.turns.length - 1]?.turnKey) return j;
+        return { ...applyGenerationProgress(j, { stage: "processing", turnKey: c.turn_key }), submitId: c.submit_id, remoteStatus: "querying", turns: j.turns.map((turn, index) => index === j.turns.length - 1 ? { ...turn, submitId: c.submit_id } : turn) };
+      });
       return;
     }
     if (c.kind === "recover_started") {
@@ -2290,7 +2317,7 @@ export const useStore = create<State>((set, get) => {
       set((s) => {
         if (s.genJobs[rid]) {
           const existing = s.genJobs[rid];
-          return { genJobs: { ...s.genJobs, [rid]: { ...existing, running: true, streaming: "",
+          return { genJobs: { ...s.genJobs, [rid]: { ...existing, running: true, streaming: "", progress: undefined,
             media: c.media ?? existing.media, videoOptions: c.video_options ?? existing.videoOptions,
             submitId: c.submit_id ?? existing.submitId, remoteStatus: "querying" as const,
             turns: existing.turns.map((turn, index) => index === existing.turns.length - 1 ? { ...turn, submitId: c.submit_id ?? turn.submitId, error: null } : turn),
@@ -2323,12 +2350,13 @@ export const useStore = create<State>((set, get) => {
       return;
     }
     if (c.kind === "recover_polling") {
-      // 远端仍在排队（querying）：保持 running，streaming 显示提示（下次启动再试）。
+      // querying 只能说明任务未结束，不能据此断言仍在排队。
       const rid = c.job_id;
       if (rid)
         updateJob(rid, (j) => ({
           ...j,
-          streaming: c.message ? `远端仍在排队：${c.message}` : "远端仍在排队…",
+          streaming: "原任务仍待确认，可继续查询。",
+          progress: undefined,
           remoteStatus: "querying",
         }));
       return;

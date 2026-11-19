@@ -60,6 +60,8 @@ export function useQuickTransfer() {
 
   return {
     snapshot, ready, busy, error,
+    startSend: (address: string, files: string[]) => run("quick_transfer_send_start", { address, files }, "未能开启发送，请检查文件和网络后重试。"),
+    stopSend: () => run("quick_transfer_send_stop", undefined, "暂时无法确认发送已关闭，请查看状态后重试。"),
     reconnect: () => setConnection(value => value + 1),
     start: (address: string) => run("quick_transfer_start", { address }, "未能开启接收，请检查资料目录和网络后重试。"),
     stop: () => run("quick_transfer_stop", undefined, "暂时无法确认接收已关闭，请查看状态后重试。"),

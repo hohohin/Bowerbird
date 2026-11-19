@@ -101,6 +101,10 @@ pub struct AssetExecutionRefV1 {
 pub struct AssetNodePayloadV1 {
     pub schema_version: u8,
     pub snapshot: AssetSnapshotV1,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_generation_group: Option<String>,
     #[serde(default)]
     pub execution: Option<AssetExecutionRefV1>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -119,6 +123,8 @@ pub struct VisualProfileRefV1 {
 #[serde(deny_unknown_fields)]
 pub struct PromptNodePayloadV1 {
     pub schema_version: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_generation_group: Option<String>,
     pub text: String,
     #[serde(default)]
     pub applied_prompt: Option<String>,
@@ -128,6 +134,8 @@ pub struct PromptNodePayloadV1 {
     pub provider_session_id: Option<String>,
     #[serde(default)]
     pub job_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
     #[serde(default)]
     pub turn_key: Option<String>,
     #[serde(default)]
@@ -242,6 +250,8 @@ pub struct NoteNodePayloadV1 {
     pub cells: Vec<Vec<CanvasTextCell>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub member_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artboard: Option<CanvasArtboard>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -666,6 +676,11 @@ fn parse_node_payload_value(
         }
         CreativeNodeKind::Note => {
             let note: NoteNodePayloadV1 = serde_json::from_value(value)?;
+            if note.section_color.as_ref().is_some_and(|color| note.note_type != Some(CanvasNoteType::Section)
+                || note.artboard.is_some() || color.len() != 7 || !color.starts_with('#')
+                || !color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit)) {
+                return Err(CreativeContractError::InvalidNoteGrid);
+            }
             if note.note_type == Some(CanvasNoteType::Document)
                 && (!note.cells.is_empty() || !note.member_ids.is_empty() || note.text.len() > 2 * 1024 * 1024
                     || note.text.contains('\0') || note.column_widths.is_some() || note.row_heights.is_some()) {

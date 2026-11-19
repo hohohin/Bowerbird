@@ -11,6 +11,11 @@ Local modifications:
 - `src/http/server/common/collect_to_json.rs`: cap metadata bodies at 256 KiB before deserialization.
 - `src/http/server/common/save.rs`: fail stalled bodies after 60 seconds and observe an application's failed/cancelled writer immediately, so the protocol session does not remain occupied after the writer has stopped.
 
-The Bowerbird adapter owns file admission, byte/count quotas, staged destination callbacks, durable receipt acknowledgement, progress throttling, session cancellation and idle cleanup. No LocalSend discovery, WebRTC, cloud rendezvous or download surface is started. Browser uploads use local HTTP and are not described as encrypted.
+2026-11-06 send extension:
+
+- `src/http/server/mod.rs`: explicitly bound send listeners instead allow only the public static download page/i18n and prepare-download/download routes. The receive route allowlist is unchanged. Host/Origin and response headers apply to both modes; the send file list is authenticated by prepare-download, not embedded in the public page.
+- `src/http/server/web.rs`: unpredictable UUID download tickets replace IP-shaped IDs; tickets remain bound to the client IP, re-pairing revokes its previous ticket, and sessions are capped at 200. Add UTF-8 attachment filenames for Chinese names. The combined `BOWERBIRD.patch` includes these changes and is checked against recorded upstream hashes (original CRLF bytes).
+
+The Bowerbird adapter owns file admission, byte/count quotas, staged destination callbacks, durable receipt acknowledgement, progress throttling, session cancellation and idle cleanup. An independently enabled send listener uses the existing browser download protocol for explicitly selected originals only; bounded file producers are cancelled when sending stops. No LocalSend discovery, WebRTC or cloud rendezvous is started. Browser transfers use local HTTP and are not described as encrypted.
 
 Verified with the existing Windows Rust 1.90.0 toolchain (`cargo +stable`); no global toolchain upgrade. The upstream repository selects 1.97.1, but this vendored HTTP subset compiled on 1.90.0. This does not establish a lower MSRV.

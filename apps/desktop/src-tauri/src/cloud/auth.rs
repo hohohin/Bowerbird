@@ -637,13 +637,27 @@ impl AuthClient {
         let retry = request
             .try_clone()
             .ok_or_else(|| AppError::Cloud(format!("{context}: 请求体不可重试")))?;
+        let request_id = Ulid::new().to_string();
+        let started = std::time::Instant::now();
         let token = self.access_token().await?;
         self.check_request_account(&token, user_id)?;
+        // Persist only business request identities, before bytes can leave the device.
+        // Fake/local test clients never write to the user's application directory.
+        if self.inner.cloud.config().is_available() && self.inner.cloud.config() == &crate::cloud::config::CloudConfig::official() {
+            if let Some(built) = retry.try_clone().and_then(|request| request.build().ok()) {
+                let owner = self.inner.session.read().unwrap().as_ref().and_then(|s| s.user_id.clone()).unwrap_or_default();
+                if let Some(record) = crate::cloud::submission::metadata(&built, &request_id, &owner) {
+                    let root = crate::codex::codex_cli::app_data_dir().ok_or_else(|| AppError::Cloud("无法保存云请求身份，本次尚未提交".into()))?;
+                    crate::cloud::submission::persist(&root, &record)?;
+                }
+            }
+        }
         let response = self
             .authorize_request(request, &token)?
+            .header("X-Bowerbird-Request-Id", &request_id)
             .send()
             .await
-            .map_err(|error| cloud_request_error(context, error))?;
+            .map_err(|error| cloud_request_error(&format!("{context} [requestId={request_id};elapsedMs={}]", started.elapsed().as_millis()), error))?;
         if response.status() != reqwest::StatusCode::UNAUTHORIZED {
             return Ok(response);
         }
@@ -652,9 +666,10 @@ impl AuthClient {
         self.check_request_account(&refreshed, user_id)?;
         let response = self
             .authorize_request(retry, &refreshed)?
+            .header("X-Bowerbird-Request-Id", &request_id)
             .send()
             .await
-            .map_err(|error| cloud_request_error(context, error))?;
+            .map_err(|error| cloud_request_error(&format!("{context} [requestId={request_id};elapsedMs={}]", started.elapsed().as_millis()), error))?;
         if response.status() == reqwest::StatusCode::UNAUTHORIZED {
             self.invalidate_session();
             return Err(AppError::Cloud("登录已失效，请重新登录".into()));

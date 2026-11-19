@@ -23,12 +23,14 @@ import {
   RotateCcw,
   RotateCw,
   Save,
+  FileCheck2,
   TextCursorInput,
   Undo2,
   X,
 } from "lucide-react";
 import { useStore } from "../store";
 import { api } from "../lib/api";
+import { invalidateCatalog } from "../lib/useCatalogRevision";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { notifyError, notifySuccess } from "../lib/notify";
 import { chipName } from "./creation/schema";
@@ -53,7 +55,8 @@ import type {
  * 参考图。rect → `<bbox>x1 y1 x2 y2</bbox>`，arrow → 起终点两个 `<point>`。
  *
  * 底图经 Rust 读为 data URL（asset 协议的 convertFileSrc 是跨域源，画进 canvas 会污染
- * 画布、toDataURL 抛 SecurityError）。导出 = 最终底图烧录标注 → 三个出口：
+ * 画布、toDataURL 抛 SecurityError）。导出 = 最终底图烧录标注 → 四个出口：
+ * 覆盖原文件（同身份、原格式写回并追加本次变换／标注记录）；
  * 添加到画板（保存素材与标注元数据，再创建独立图片卡片）；
  * 保存到素材库（analyses kind=annotation 记坐标）；插入创作板（临时文件 + sidecar 不入库，
  * 「标注」维度随 chip 自动注入，serialize 时展开为 `@图名 的【标注】：<bbox>…`）。
@@ -706,7 +709,7 @@ export function ImageAnnotator() {
     return { dataUrl, meta };
   }
 
-  async function saveToLibrary() {
+  async function saveToLibrary(overwrite = false) {
     if (busy) return;
     setBusy(true);
     try {
@@ -718,13 +721,20 @@ export function ImageAnnotator() {
         closeAnnotator();
         return;
       }
-      await api.saveAnnotatedImage({
+      const sourceBytes = overwrite && imgUrl ? Uint8Array.from(atob(imgUrl.split(",")[1]), char => char.charCodeAt(0)) : null;
+      const sourceHash = sourceBytes ? Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", sourceBytes)), byte => byte.toString(16).padStart(2, "0")).join("") : null;
+      const saved = await api.saveAnnotatedImage({
         dataUrl: out.dataUrl,
         fileName: `${chipName(asset!)}-标注`,
         projectId: activeProjectId,
         annotationJson: JSON.stringify(out.meta),
+        ...(sourceHash ? { overwrite: { assetId: asset!.id, sourceHash } } : {}),
       });
-      notifySuccess("标注图已保存到素材库");
+      if (overwrite) {
+        useStore.setState(state => ({ assets: state.assets.map(item => item.id === saved.id ? saved : item) }));
+        invalidateCatalog();
+      }
+      notifySuccess(overwrite ? "已覆盖原文件" : "标注图已保存到素材库");
       closeAnnotator();
     } catch (e) {
       notifyError(e, "保存标注图失败");
@@ -916,6 +926,7 @@ export function ImageAnnotator() {
   const canUndo = history.canUndo;
   // 有任一编辑（标注 / 裁剪 / 旋转 / 镜像）即可输出，无形状时没有「标注」维度。
   const hasEdits = shapes.length > 0 || ops.length > 0 || !!drawing.pending() || !!textEdit?.shape.textSource?.trim();
+  const canOverwrite = !!asset?.id && /\.(png|jpe?g|webp|bmp)$/i.test(storePath ?? "");
 
   return createPortal(
     <div
@@ -1026,6 +1037,13 @@ export function ImageAnnotator() {
 
         </div>
         <div className="annotation-toolbar-actions">
+          {!isDraft && <button type="button" aria-label="覆盖原文件"
+            disabled={!hasEdits || busy || !canOverwrite}
+            onClick={() => void saveToLibrary(true)}
+            title={canOverwrite ? "将当前结果写回原文件，保留素材身份和操作记录，并更新画板与素材库" : "此格式不能覆盖原文件，请保存到素材库"}
+            className="flex items-center gap-1.5 rounded border border-white/25 px-3 py-1.5 text-white transition-colors hover:bg-white/10 disabled:opacity-40">
+            <FileCheck2 size={14} /> <span>覆盖原文件</span>
+          </button>}
           {!isDraft && <button
             type="button"
             disabled={!hasEdits || busy || !annotator.saveToCanvas}
@@ -1040,7 +1058,7 @@ export function ImageAnnotator() {
             type="button"
             disabled={!hasEdits || busy}
             aria-label={busy ? "保存中…" : isDraft ? "保存到画板" : "保存到素材库"}
-            onClick={saveToLibrary}
+            onClick={() => void saveToLibrary()}
             title={hasEdits ? (isDraft ? "保存到画板" : "保存到素材库") : "请先画标注或裁剪/旋转"}
             className="flex items-center gap-1.5 rounded bg-accent px-3 py-1.5 font-medium text-white transition-colors hover:bg-accent/85 disabled:opacity-40"
           >

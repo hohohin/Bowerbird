@@ -47,7 +47,9 @@ declare module "node:fs" {
   export function readFileSync(path: number | string): Uint8Array;
   export function writeFileSync(path: string, data: string, encoding: "utf8"): void;
   export function writeFileSync(path: string, data: Uint8Array): void;
-  export function mkdirSync(path: string, options: { recursive: boolean }): string | undefined;
+  export function mkdirSync(path: string, options: { recursive: boolean; mode?: number }): string | undefined;
+  export function cpSync(source: string, target: string, options: { recursive: boolean }): void;
+  export function renameSync(source: string, target: string): void;
   export function mkdtempSync(prefix: string): string;
   export function copyFileSync(source: string, destination: string): void;
   export function symlinkSync(target: string, path: string, type?: "dir" | "junction"): void;
@@ -152,7 +154,10 @@ declare module "@agentclientprotocol/sdk" {
 /** html-renderer 执行器测试用的最小 node:http 形状（环回假 renderer 服务）。 */
 declare module "node:http" {
   export interface ServerResponse {
+    on(event: "close", listener: () => void): ServerResponse;
+    readonly headersSent: boolean;
     writeHead(status: number, headers?: Record<string, string>): ServerResponse;
+    write(body: string | Uint8Array): boolean;
     end(body?: string | Uint8Array): void;
     destroy(): void;
   }
@@ -183,6 +188,8 @@ interface ImportMeta {
   readonly dirname: string;
 }
 
+declare const performance: { now(): number };
+
 declare const console: {
   log(...values: unknown[]): void;
   error(...values: unknown[]): void;
@@ -199,6 +206,8 @@ declare const process: {
 
 declare function setTimeout(callback: () => void, delayMs: number): unknown;
 declare function clearTimeout(handle: unknown): void;
+declare function setInterval(callback: () => void, delayMs: number): unknown;
+declare function clearInterval(handle: unknown): void;
 
 declare class TextEncoder {
   encode(input?: string): Uint8Array;
@@ -209,7 +218,15 @@ declare class TextDecoder {
   decode(input?: Uint8Array): string;
 }
 
-interface AbortSignal {}
+interface AbortSignal {
+  readonly aborted: boolean;
+  addEventListener(event: "abort", listener: () => void, options?: { once?: boolean }): void;
+  removeEventListener(event: "abort", listener: () => void): void;
+}
+declare class AbortController {
+  readonly signal: AbortSignal;
+  abort(): void;
+}
 declare const AbortSignal: { timeout(milliseconds: number): AbortSignal };
 
 declare class URL {

@@ -25,6 +25,9 @@ use crate::error::AppError;
 mod video_frame;
 use video_frame::VideoFrameOrigin;
 
+#[path = "library_annotation.rs"]
+mod annotation;
+
 /// 「在全局素材中隐藏项目素材」：仅全局视图（project_id = None）生效——项目视图本来就只显示项目素材。
 /// 开关来自设置面板（settings.json），命令层每次现读，改设置后无需重启即生效。
 fn hide_in_global(settings: &SettingsState, project_id: &Option<String>) -> bool {
@@ -306,8 +309,16 @@ pub async fn save_annotated_image(
     file_name: String,
     project_id: Option<String>,
     annotation_json: String,
+    overwrite: Option<annotation::Overwrite>,
 ) -> Result<Asset, AppError> {
     let bytes = decode_data_url_bytes(&data_url)?;
+    if let Some(request) = overwrite {
+        let paths = paths.inner().clone();
+        let db = db.inner().clone();
+        let asset = super::folder_connections::mutation(app.clone(), move || annotation::overwrite(&paths, &db, &request, &bytes, &annotation_json)).await?;
+        let _ = app.emit("analyses://changed", serde_json::json!({ "asset_id": asset.id, "kind": "annotation" }));
+        return Ok(asset);
+    }
     let paths = Arc::new(paths.for_project(&db, project_id.as_deref())?);
     let db = db.inner().clone();
     let db_for_ingest = db.clone();
@@ -763,7 +774,7 @@ pub async fn delete_asset(
     let db = db.inner().clone();
     super::folder_connections::mutation(app.clone(), move || {
         if db.has_connected_asset(&id)? {
-            return Err(AppError::Other("请在集合视图将文件移到回收站，或断开文件夹连接".into()));
+            return Err(AppError::Other("请在文件夹视图将文件移到回收站，或断开文件夹连接".into()));
         }
         db.delete_asset(&id)
     }).await?;
@@ -811,7 +822,7 @@ pub async fn delete_asset_with_mode(
     let db = db.inner().clone();
     let result = super::folder_connections::mutation(app.clone(), move || {
         if db.has_connected_asset(&id)? && !matches!(mode, AssetDeleteMode::Keep) {
-            return Err(AppError::Other("请在集合视图将文件移到回收站，或断开文件夹连接".into()));
+            return Err(AppError::Other("请在文件夹视图将文件移到回收站，或断开文件夹连接".into()));
         }
         db.delete_asset_with_mode(&id, mode, project_id.as_deref())
     }).await?;
@@ -1061,6 +1072,43 @@ pub async fn list_generation_group(
         .map_err(|e| AppError::Other(e.to_string()))?
 }
 
+#[tauri::command]
+pub async fn dissolve_generation_group(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    asset_id: Option<String>,
+    group_key: Option<String>,
+) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.dissolve_generation_group(asset_id.as_deref(), group_key.as_deref()))
+        .await.map_err(|error| AppError::Other(error.to_string()))??;
+    let _ = app.emit("library://assets-changed", ());
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn previous_gallery_generation(db: State<'_, Arc<Database>>, project_id: Option<String>) -> Result<Option<String>, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.previous_gallery_generation(project_id.as_deref()))
+        .await.map_err(|error| AppError::Other(error.to_string()))?
+}
+
+#[tauri::command]
+pub async fn merge_generation_galleries(app: AppHandle, db: State<'_, Arc<Database>>, input: crate::core::generation_gallery::GalleryMergeInput) -> Result<crate::core::generation_gallery::GalleryMerge, AppError> {
+    let db = db.inner().clone();
+    let edit = tokio::task::spawn_blocking(move || db.merge_generation_galleries(input)).await.map_err(|error| AppError::Other(error.to_string()))??;
+    let _ = app.emit("library://assets-changed", ());
+    Ok(edit)
+}
+
+#[tauri::command]
+pub async fn undo_generation_gallery_merge(app: AppHandle, db: State<'_, Arc<Database>>, edit: crate::core::generation_gallery::GalleryMerge) -> Result<(), AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.undo_generation_gallery_merge(edit)).await.map_err(|error| AppError::Other(error.to_string()))??;
+    let _ = app.emit("library://assets-changed", ());
+    Ok(())
+}
+
 /// 批量取多资产的生成组：key=输入 asset_id，value=该资产所在组的全部图（仅生成图、且组存在）。
 /// 瀑布流缩略图轮播用：一次 invoke 拿到所有可见生成图组，免每缩略图各发一次。
 #[tauri::command]
@@ -1068,9 +1116,11 @@ pub async fn list_generation_groups(
     db: State<'_, Arc<Database>>,
     asset_ids: Vec<String>,
     project_id: Option<String>,
+    filter: Option<crate::core::catalog_browser::CatalogFilter>,
 ) -> Result<HashMap<String, Vec<Asset>>, AppError> {
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || -> Result<HashMap<String, Vec<Asset>>, AppError> {
+        if let Some(filter) = filter { return db.catalog_generation_groups(&filter, &asset_ids); }
         let mut out = HashMap::new();
         for id in &asset_ids {
             let group = db.list_generation_group(id, project_id.as_deref())?;
@@ -1093,12 +1143,20 @@ pub async fn generation_history(
     db: State<'_, Arc<Database>>,
     asset_id: String,
     project_id: Option<String>,
+    include_local_video: Option<bool>,
 ) -> Result<GenerationHistory, AppError> {
     // 标注缓存目录：参考图反查未命中时从中合成「不入库」标注图（复用提示词不丢参考）。
-    let annotations_dir = paths.inner().root.join("annotations");
+    let root = paths.inner().root.clone();
+    let annotations_dir = root.join("annotations");
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || {
-        db.generation_history(&asset_id, project_id.as_deref(), Some(&annotations_dir))
+        let history = db.generation_history(&asset_id, project_id.as_deref(), Some(&annotations_dir))?;
+        if history.turns.is_empty() && include_local_video == Some(true) {
+            if let Some(local) = super::comfy_video::generation_history(&root, &db, &asset_id)? {
+                return Ok(local);
+            }
+        }
+        Ok(history)
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))?

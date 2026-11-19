@@ -2,6 +2,7 @@ import { Channel, invoke } from "@tauri-apps/api/core";
 import type { ProjectDeleteScanProgress } from "./types";
 import { invokeGenerationWithDiagnostics } from "./generationDiagnostics";
 import type { LibraryView } from "./libraryView";
+import type { CatalogFilter } from "./materialCatalog";
 import type { WorkflowTemplate } from "./workflowTemplates";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
@@ -24,6 +25,7 @@ import type {
   CodexHealth,
   CreationPack,
   DreaminaDeviceFlow,
+  DreaminaHealth,
   EntitlementSnapshot,
   VisualProfileDetail,
   VisualProfileRuleEdit,
@@ -82,9 +84,11 @@ export interface CanvasFrequentAssetsResult {
 
 export const api = {
   exportAssetsZip: (assetIds: string[], path: string) => invoke<number>("export_assets_zip", { assetIds, path }),
+  exportAssetsToDirectory: (assetIds: string[], path: string) => invoke<number>("export_assets_to_directory", { assetIds, path }),
   videoPoster: (sourcePath: string) => invoke<string | null>("video_poster", { sourcePath }),
   canvasImagePreview: (path: string, maxSize: number) => invoke<string>("canvas_image_preview", { path, maxSize }),
   trimVideo: (request: import("./videoTrim").VideoTrimRequest, projectId?: string) => invoke<Asset>("trim_video", { ...request, projectId: projectId ?? null }),
+  extractVideoAudio: (sourcePath: string, operationId: string, projectId?: string) => invoke<Asset>("extract_video_audio", { sourcePath, operationId, projectId: projectId ?? null }),
   canvasWorkflowGet: (projectId: string) => invoke<import("./canvasWorkflow").WorkflowSnapshot>("canvas_workflow_get", { projectId }),
   workflowTemplatesList: () => invoke<WorkflowTemplate[]>("workflow_templates_list"),
   workflowEncapsulate: (projectId: string, revision: number, name: string, members: string[], bounds: { id: string; x: number; y: number; width: number; height: number }[], template: WorkflowTemplate | null) =>
@@ -199,12 +203,15 @@ export const api = {
   prepareLibraryGenerationProject: (projectId?: string | null) =>
     invoke<Project>("prepare_library_generation_project", { projectId: projectId ?? null }),
   listProjects: () => invoke<Project[]>("list_projects"),
+  projectCovers: () => invoke<Record<string, { asset_count: number; paths: string[] }>>("project_covers"),
   setActiveProject: (projectId?: string | null) =>
     invoke<void>("set_active_project", { projectId: projectId ?? null }),
   addAssetsToProject: (projectId: string, assetIds: string[]) =>
     invoke<number>("add_assets_to_project", { projectId, assetIds }),
-  removeAssetsFromProject: (projectId: string, assetIds: string[]) =>
-    invoke<number>("remove_assets_from_project", { projectId, assetIds }),
+  moveAssetsToProject: (sourceProjectId: string | null, targetProjectId: string, assetIds: string[]) =>
+    invoke<{ changed: number }>("move_assets_to_project", { sourceProjectId, targetProjectId, assetIds }),
+  removeAssetsFromProject: (projectId: string, assetIds: string[], removeCanvasInstances = false) =>
+    invoke<number>("remove_assets_from_project", { projectId, assetIds, ...(removeCanvasInstances && { removeCanvasInstances }) }),
   deleteProject: (projectId: string, mode: ProjectDeleteMode, confirmation?: string, discardPendingResults?: string[]) =>
     invoke<ProjectDeleteResult>("delete_project", { projectId, mode, confirmation: confirmation ?? null, ...(discardPendingResults ? { discardPendingResults } : {}) }),
   projectDeleteImpact: (projectId: string, includePhysical = true) =>
@@ -232,6 +239,8 @@ export const api = {
     invoke<ProjectCanvas>("project_canvas_ensure", { projectId }),
   projectCanvasGet: (projectId: string) =>
     invoke<ProjectCanvasSnapshot>("project_canvas_get", { projectId }),
+  projectCanvasVisibleNodes: (projectId: string, nodeIds: string[]) =>
+    invoke<CanvasNode[]>("project_canvas_visible_nodes", { projectId, nodeIds }),
   projectCanvasRename: (projectId: string, title: string) =>
     invoke<boolean>("project_canvas_rename", { projectId, title }),
   projectCanvasTitleFromFirstPrompt: (projectId: string, title: string) =>
@@ -303,12 +312,14 @@ export const api = {
     fileName: string;
     projectId?: string | null;
     annotationJson: string;
+    overwrite?: { assetId: string; sourceHash: string };
   }) =>
     invoke<Asset>("save_annotated_image", {
       dataUrl: req.dataUrl,
       fileName: req.fileName,
       projectId: req.projectId ?? null,
       annotationJson: req.annotationJson,
+      overwrite: req.overwrite ?? null,
     }),
   // 图片标注「插入创作板（不入库）」：落 <库根>/annotations/ 临时文件 + sidecar（name/ext/
   // annotation），返回 Asset 形对象（无 DB 行）；sidecar 供 generation_history 反查兜底合成，
@@ -431,8 +442,8 @@ export const api = {
     if (!r) return [];
     return Array.isArray(r) ? r : [r];
   },
-  pickFolder: async (defaultPath?: string): Promise<string | null> => {
-    const r = await open({ directory: true, defaultPath });
+  pickFolder: async (defaultPath?: string, title?: string): Promise<string | null> => {
+    const r = await open({ directory: true, defaultPath, title });
     return (r as string | null) ?? null;
   },
   releasePresetPack: () => invoke<string>("release_preset_pack"),
@@ -453,14 +464,21 @@ export const api = {
   // 生成图同流程合并：取某资产的整组过程图（详情轮播 / 批量取可见组）
   listGenerationGroup: (assetId: string, projectId?: string | null) =>
     invoke<Asset[]>("list_generation_group", { assetId, projectId: projectId ?? null }),
-  listGenerationGroups: (assetIds: string[], projectId?: string | null) =>
+  dissolveGenerationGroup: (target: { assetId?: string; groupKey?: string }) =>
+    invoke<void>("dissolve_generation_group", target),
+  previousGalleryGeneration: (projectId: string | null) => invoke<string | null>("previous_gallery_generation", { projectId }),
+  mergeGenerationGalleries: (input: { assetIds?: string[]; jobIds?: string[]; nodeIds?: string[]; projectId?: string | null }) =>
+    invoke<import("./generationGallery").GalleryMerge>("merge_generation_galleries", { input }),
+  undoGenerationGalleryMerge: (edit: import("./generationGallery").GalleryMerge) => invoke<void>("undo_generation_gallery_merge", { edit }),
+  listGenerationGroups: (assetIds: string[], projectId?: string | null, filter?: CatalogFilter) =>
     invoke<Record<string, Asset[]>>("list_generation_groups", {
       assetIds,
       projectId: projectId ?? null,
+      filter: filter ?? null,
     }),
   // 「回看生成对话」：取某生成图所在会话的完整生成时间线（各轮 prompt + 产出图 store_path）。
-  generationHistory: (assetId: string, projectId?: string | null) =>
-    invoke<GenerationHistory>("generation_history", { assetId, projectId: projectId ?? null }),
+  generationHistory: (assetId: string, projectId?: string | null, includeLocalVideo?: boolean) =>
+    invoke<GenerationHistory>("generation_history", { assetId, projectId: projectId ?? null, includeLocalVideo }),
 
   // 标签 / 自动归类（P2）
   listTags: (source?: string, projectId?: string | null) =>
@@ -534,10 +552,10 @@ export const api = {
   dreaminaTaskCredit: (submitId: string) => invoke<number | null>("dreamina_task_credit", { submitId }),
   dreaminaTaskDiagnostics: (submitId: string) => invoke<Record<string, unknown>>("dreamina_task_diagnostics", { submitId }),
   dreaminaVideoModels: (kind: string) => invoke<import("./videoGeneration").VideoModelCapability[]>("dreamina_video_models", { kind }),
-  dreaminaHealth: (force = false) => invoke<CodexHealth>("dreamina_health", { force }),
+  dreaminaHealth: (force = false) => invoke<DreaminaHealth>("dreamina_health", { force }),
   dreaminaLogin: () => invoke<void>("dreamina_login"),
   dreaminaCheckLogin: (deviceCode: string) =>
-    invoke<CodexHealth>("dreamina_check_login", { deviceCode }),
+    invoke<DreaminaHealth>("dreamina_check_login", { deviceCode }),
   // 拉起系统终端跑 `dreamina login`（真 TTY；app 内 spawn 非 TTY 不写 token，见后端命令注释）。
   openDreaminaLogin: () => invoke<void>("open_dreamina_login"),
   // 一键安装 dreamina CLI（app 内 reqwest 下载二进制，绕过 curl|bash 在 Windows 的坑）。
@@ -546,7 +564,7 @@ export const api = {
   cancelDreaminaSetup: () => invoke<void>("cancel_dreamina_setup"),
   dreaminaLogout: () => invoke<void>("dreamina_logout"),
   // app 内自动登录（方案 B）：spawn `login --headless` 返回 device flow 字段，前端自动开浏览器 + 展示授权码 + checklogin 补完。
-  dreaminaLoginHeadless: () => invoke<DreaminaDeviceFlow>("dreamina_login_headless"),
+  dreaminaLoginHeadless: () => invoke<DreaminaDeviceFlow | null>("dreamina_login_headless"),
   // 创作板「生成」：把最终 prompt + 参考图发 codex（codex exec --image，同反推机制）出图。
   // 流式文本经 codex://chunk（Delta）回；生成图 copy 进 library/generations 后随 Done.images 回。
   // sessionId 非空 → codex exec resume 续接同一会话（多轮迭代修改，codex 记得上一张图）。
@@ -616,19 +634,22 @@ export const api = {
       creativeRelation: req.creativeRelation ?? null,
       retryAnchorNodeId: req.retryAnchorNodeId ?? null,
     }, invoke),
-  generationDiagnostics: (jobId: string) => invoke<{ schemaVersion: number; jobId: string; attempts: unknown[]; task: unknown }>("generation_diagnostics", { jobId }),
-  cancelCodexCreate: (jobId: string) => invoke<void>("cancel_codex_create", { jobId }),
+  generationDiagnostics: (jobId: string) => invoke<{ schemaVersion: number; jobId: string;
+    attempts: { turnKey: string | null; status: string; error: string | null }[]; task: unknown }>("generation_diagnostics", { jobId }),
+  cancelCodexCreate: (jobId: string, turnKey?: string | null) => invoke<void>("cancel_codex_create", { jobId, turnKey }),
   // 启动恢复（Task 5）：列出未完成生成 job，前端挂载时拉取重建 genJobs（恢复中 job 可见）。
-  listGenJobs: () => invoke<GenJobSummary[]>("list_gen_jobs"),
+  listGenJobs: (jobId?: string) => invoke<GenJobSummary[]>("list_gen_jobs", { jobId }),
   // 会话面板跨重启：最近终态（done/failed）生成会话 + meta 重建时间线，与 listGenJobs 一起重建 genJobs。
-  recentGenSessions: (limit = 30) => invoke<RecentGenSession[]>("recent_gen_sessions", { limit }),
+  recentGenSessions: (limit = 30, jobId?: string) => invoke<RecentGenSession[]>("recent_gen_sessions", { limit, jobId }),
   // 移除已完成会话的持久记录（删 task_queue 终态行；重启恢复不再出现该会话）。
   dismissGenJob: (jobId: string) => invoke<void>("dismiss_gen_job", { jobId }),
   // 即梦孤儿任务取回（约定 23 阶段 3）：远端在跑/已完成但本地无记录的任务，用户显式取回。
   jimengRetrieveOrphan: (submitId: string, prompt: string, jobId?: string) =>
     invoke<void>("jimeng_retrieve_orphan", { submitId, prompt, jobId: jobId ?? null }),
+  recoverH3Image: (jobId: string) => invoke<void>("recover_h3_image", { jobId }),
   recoverCloudVideo: (jobId: string) => invoke<void>("recover_cloud_video", { jobId }),
   // 扩展小白化：连接状态 + 扩展文件夹路径（引导「一键复制」用，不自动打开——Windows 上不稳）。
+  pairExtension: (code: string) => invoke<void>("pair_extension", { code }),
   extensionStatus: () => invoke<boolean>("extension_status"),
   extensionFolderPath: () => invoke<string>("extension_folder_path"),
   // 设置
@@ -652,7 +673,7 @@ export const api = {
   cloudCheckoutStatus: (userId: string, orderId?: string) => invoke<{ order: CheckoutOrder | null }>("cloud_checkout_status", { userId, orderId }),
   cloudSyncEntitlement: () =>
     invoke<EntitlementSnapshot>("cloud_sync_entitlement"),
-  cloudStartProTrial: () => invoke<EntitlementSnapshot>("cloud_start_pro_trial"),
+  cloudStartProTrial: (userId: string) => invoke<EntitlementSnapshot>("cloud_start_pro_trial", { userId }),
   canvasWorkflowAuthorize: () => invoke<void>("canvas_workflow_authorize"),
   cloudRedeemCode: (code: string) =>
     invoke<CodeRedemption>("cloud_redeem_code", { code }),

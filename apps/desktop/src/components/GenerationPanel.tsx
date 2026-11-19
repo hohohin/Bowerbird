@@ -1,5 +1,9 @@
-import { generationErrorMessage, userErrorMessage } from "../lib/userError";
+import { generationFailure, hasGenerationFailureReason, userErrorMessage } from "../lib/userError";
+import { generationProviderIssue } from "../lib/generationAvailability";
+import { openProviderSettings, ProviderIssueNotice } from "./creation/ProviderIssueNotice";
 import { DreaminaTaskCredit } from "./creation/DreaminaCredits";
+import { generationProgressLabel } from "../lib/generationProgress";
+import { generationSessionTitle } from "../lib/projectActivity";
 import { DreaminaTaskDiagnostics } from "./creation/DreaminaTaskDiagnostics";
 import { GenerationSessionSurface } from "./GenerationSessionSurface";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -19,8 +23,8 @@ import {
 } from "../lib/generationIntent";
 import { PRESET_FEATURE_ENABLED } from "../lib/featureFlags";
 import { notify, notifyError, notifySuccess } from "../lib/notify";
-import { canStartAnotherJob, canUseByo, canUseGenerationProvider } from "../lib/entitlement";
-import { imageProviderLabel, canonicalProviderKey, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
+import { canStartAnotherJob, countLimitedGenerationJobs } from "../lib/entitlement";
+import { imageProviderLabel, isCloudProvider, normalizeGenerationProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import type { Asset, GenJob, GenTurn, VisualProfileCapsule, VisualProfileRuleValue } from "../lib/types";
 import { Lightbox } from "./Lightbox";
 import { videoSourceKey } from "../lib/videoSourceKey";
@@ -69,7 +73,7 @@ export function GenerationPanel({
   embedded?: boolean;
   followLatest?: boolean;
   hydratedAssets?: Asset[];
-  snapshot?: { job: GenJob; sourceJobId: string | null; selectedTurnKey: string; onReuse: (turn: GenTurn) => void };
+  snapshot?: { job: GenJob; sourceJobId: string | null; selectedTurnKey: string; diagnosticTurnKeys?: ReadonlyMap<string, string>; onReuse: (turn: GenTurn) => void };
   onAddVideoFrame?: (frame: VideoFrame) => Promise<void>;
   onSaveVideoTrim?: SaveVideoTrim;
 } = {}) {
@@ -88,7 +92,6 @@ export function GenerationPanel({
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
-  const cloudAvailable = cloudAuth?.cloud_available ?? false;
   const setGenPanelOpen = useStore((s) => s.setGenPanelOpen);
   const genEditing = useStore((s) => s.genEditing);
   const interactiveEditing = readOnly || snapshot ? null : genEditing;
@@ -102,7 +105,7 @@ export function GenerationPanel({
   const reusePromptToBoard = useStore((s) => s.reusePromptToBoard);
   const armBoardAgent = useStore((s) => s.armBoardAgent);
   const reloadPresets = useStore((s) => s.reloadPresets);
-  const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
+  const runningJobCount = useStore((s) => countLimitedGenerationJobs(s.genJobs));
 
   // 把当前会话首轮 prompt 登记为用途（preset）的 inline 起名态。
   const [savingPreset, setSavingPreset] = useState(false);
@@ -115,35 +118,46 @@ export function GenerationPanel({
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const activeJob: GenJob | null = snapshot?.job ?? (activeJobId ? genJobs[activeJobId] ?? null : null);
+  // Historical canvas turns use their node ID for scrolling and their original turn key for diagnostics.
+  const diagnosticJobId = snapshot ? snapshot.sourceJobId : activeJob?.id;
+  const diagnosticKey = (turn: GenTurn) => turn.turnKey && (snapshot?.diagnosticTurnKeys
+    ? snapshot.diagnosticTurnKeys.get(turn.turnKey) : turn.turnKey);
+  const missingKeys = JSON.stringify(activeJob?.turns.filter(turn => turn.error && !hasGenerationFailureReason(turn.error))
+    .map(diagnosticKey).filter(Boolean) ?? []);
+  const [diagnostics, setDiagnostics] = useState<{ jobId: string; keys: string; errors: Map<string, string> }>();
+  useEffect(() => {
+    if (!diagnosticJobId || missingKeys === "[]") return;
+    let current = true;
+    const errors = new Map<string, string>();
+    void api.generationDiagnostics(diagnosticJobId).then(report => {
+      if (report.jobId !== diagnosticJobId) return;
+      for (const attempt of report.attempts) {
+        if (attempt.turnKey && attempt.status === "failed" && attempt.error && hasGenerationFailureReason(attempt.error)) {
+          errors.set(attempt.turnKey, attempt.error);
+        }
+      }
+    }).catch(() => {}).finally(() => {
+      if (current) setDiagnostics({ jobId: diagnosticJobId, keys: missingKeys, errors });
+    });
+    return () => { current = false; };
+  }, [diagnosticJobId, missingKeys]);
+  function displayTurn(turn: GenTurn): GenTurn {
+    if (!turn.error || hasGenerationFailureReason(turn.error)) return turn;
+    const key = diagnosticKey(turn);
+    const recovered = diagnostics?.jobId === diagnosticJobId && diagnostics?.keys === missingKeys ? diagnostics : undefined;
+    const reason = key && recovered?.errors.get(key);
+    return { ...turn, error: reason || (diagnosticJobId && key && !recovered
+      ? "本轮生成失败，正在读取失败原因。" : "本轮生成失败，未能读取具体原因。") };
+  }
 
   // 历史任务也必须重新读取当前权益；降级后不可通过续改/重试绕过 BYO 门控。
-  const activeProvider = activeJob?.provider === "codex-cli" || !activeJob?.provider
-    ? "codex"
-    : activeJob.provider;
-  const activeProviderIsCloud = isCloudProvider(activeProvider);
-  const targetHealth = activeProvider === "jimeng"
-    ? dreaminaHealth
-    : activeProviderIsCloud
-      ? null
-      : codexHealth;
-  const cloudBalance = cloudEntitlement
-    ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup
-    : 0;
-  const policyAllowsProvider = canUseGenerationProvider(cloudEntitlement, activeProvider);
-  const targetReady = policyAllowsProvider && (activeProviderIsCloud
-    ? cloudAvailable && !!cloudAuth?.logged_in && cloudBalance > 0
-    : !!targetHealth?.ok);
-  const lockedReason = !policyAllowsProvider
-    ? "升级 Pro 解锁本机 Codex / 即梦 CLI"
-    : activeProviderIsCloud
-      ? !cloudAuth?.logged_in
-        ? "请先登录 Bowerbird Cloud"
-        : cloudBalance <= 0
-          ? "积分不足"
-          : "Bowerbird Cloud 不可用"
-      : userErrorMessage(targetHealth?.reason, "当前生成服务暂不可用，请在设置中检查登录状态。");
+  const turnProviderIssue = (turn?: GenTurn) => activeJob
+    ? generationProviderIssue(turn?.provider ?? activeJob.provider, { cloudAuth, cloudEntitlement, codexHealth, dreaminaHealth })
+    : null;
+  const firstIssue = retryAvailability(activeJob?.turns[0]);
+  const latestIssue = turnProviderIssue(activeJob?.turns[activeJob.turns.length - 1]);
   // 失败重试续轮与成功结果的新版本都遵守并行上限。
-  const canStartAnother = canStartAnotherJob(cloudEntitlement, runningJobCount);
+  const canRetryFirst = canStartAnotherJob(cloudEntitlement, runningJobCount, activeJob?.turns[0]?.provider ?? activeJob?.provider ?? "codex");
 
   const imageCount = useMemo(
     () => activeJob?.turns.reduce((n, t) => n + t.images.length, 0) ?? 0,
@@ -204,10 +218,7 @@ export function GenerationPanel({
 
   // 会话标题随内容而定：首轮编辑框原文的第一个非空行（悬停看全文）；无会话时回退默认名。
   const firstUserText = activeJob?.turns[0]?.promptRaw || activeJob?.turns[0]?.prompt || "";
-  const sessionTitle = useMemo(() => {
-    const line = firstUserText.split("\n").find((l) => l.trim());
-    return line?.trim() || "生成会话";
-  }, [firstUserText]);
+  const sessionTitle = useMemo(() => generationSessionTitle(firstUserText), [firstUserText]);
 
   // 新结果落地或新轮追加时把滚动体拉到底，让最新内容进视野。用标量作依赖——打字/流式
   // 刷字不触发；turnCount 覆盖底部对话框发送：坞内发送后回会话视图（滚动体重挂载），
@@ -251,8 +262,16 @@ export function GenerationPanel({
       && activeJob.turns[activeJob.turns.length - 1]?.id !== turn.id;
   }
 
+  // 已提交的 Cloud 视频只取回原单，无须重新购买生成额度。
+  function retryAvailability(turn?: GenTurn) {
+    if (turn?.error && activeJob && (turn.media ?? activeJob.media) === "video" && isCloudProvider(turn.provider ?? activeJob.provider)) {
+      return cloudAuth?.cloud_available && cloudAuth.logged_in ? null : turnProviderIssue(turn);
+    }
+    return turnProviderIssue(turn);
+  }
+
   function retryTurn(turn: GenTurn) {
-    if (running || !activeJob || historicalCloudVideoFailure(turn)) return;
+    if (running || !activeJob || retryAvailability(turn) || historicalCloudVideoFailure(turn)) return;
     if (activeJob && turn.error && (turn.media ?? activeJob.media) === "video" && (turn.provider ?? activeJob.provider).startsWith("bowerbird-cloud")) {
       void api.recoverCloudVideo(activeJob.id).catch(error => notifyError(error, "原视频取回失败"));
       return;
@@ -262,12 +281,7 @@ export function GenerationPanel({
       retryLastGenTurn(assets);
       return;
     }
-    const raw = turn.provider || activeJob.provider;
-    const provider = isCloudProvider(raw)
-      ? canonicalProviderKey(raw)
-      : raw === "jimeng"
-        ? "jimeng"
-        : "codex";
+    const provider = normalizeGenerationProvider(turn.provider || activeJob.provider);
     const parent = generationParentLocator(activeJob.id, activeJob.turns, assets, { beforeTurnId: turn.id });
     void sendGenRevise(activeJob.id, turn.prompt, provider, {
       generation: { media: turn.media ?? activeJob.media, videoOptions: turn.videoOptions ?? activeJob.videoOptions },
@@ -291,7 +305,7 @@ export function GenerationPanel({
   // 「重试」（首轮气泡 icon）：等价于「重新编辑」后不改内容直接发送——首轮组稿（完整 prompt +
   // 参考图 + 比例 + provider）原样重发，归入同一会话开新版本分支（会话内 ←/→ 切换、瀑布流同组轮播）。
   function retryFirstTurn() {
-    if (running || !activeJob) return;
+    if (running || !activeJob || firstIssue) return;
     const first = activeJob.turns[0];
     if (first?.error) {
       retryTurn(first);
@@ -303,12 +317,7 @@ export function GenerationPanel({
       assets,
       first ? { atTurnId: first.id } : {},
     );
-    const firstProvider = first?.provider ?? activeJob.provider;
-    const provider = isCloudProvider(firstProvider)
-      ? canonicalProviderKey(firstProvider)
-      : firstProvider === "jimeng"
-        ? "jimeng"
-        : "codex";
+    const provider = normalizeGenerationProvider(first?.provider ?? activeJob.provider);
     void startGeneration(
       first?.prompt ?? activeJob.lastPrompt,
       activeJob.refAssets,
@@ -397,15 +406,15 @@ export function GenerationPanel({
           <button
             type="button"
             onClick={retryFirstTurn}
-            disabled={!!snapshot || !targetReady || !canStartAnother || historicalCloudVideoFailure(activeJob.turns[0])}
+            disabled={!!snapshot || !!firstIssue || !canRetryFirst || historicalCloudVideoFailure(activeJob.turns[0])}
             className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent disabled:opacity-40"
             title={
               snapshot
                 ? "请复用提示词后生成"
                 : historicalCloudVideoFailure(activeJob.turns[0]) ? "旧视频任务不支持在此取回"
-                : !targetReady
-                ? lockedReason
-                : !canStartAnother
+                : firstIssue
+                ? firstIssue.message
+                : !canRetryFirst
                   ? "已达当前档位的并行生成上限"
                   : activeJob.turns[0]?.error ? "重试：在当前会话追加一轮" : "重试：首轮组稿原样重发，结果作为同一会话的新版本（←/→ 切换）"
             }
@@ -480,6 +489,7 @@ export function GenerationPanel({
       className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent"
       title="把编辑框原文 + 参考图载入创作板，可在其基础上编辑后重新生成"><Copy size={13} /></button>;
     if (running || !activeJob?.sessionId) return undefined;
+    const issue = retryAvailability(turn);
     return (
       <div className="flex items-center gap-0.5">
         <button
@@ -493,11 +503,11 @@ export function GenerationPanel({
         <button
           type="button"
           onClick={() => retryTurn(turn)}
-          disabled={!targetReady || historicalCloudVideoFailure(turn)}
+          disabled={!!issue || historicalCloudVideoFailure(turn)}
           className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-panel2 hover:text-accent disabled:opacity-40"
           title={
-            !targetReady
-              ? lockedReason
+            issue
+              ? issue.message
               : historicalCloudVideoFailure(turn) ? "旧视频任务不支持在此取回"
               : "重试：这一轮的组稿原样重发（接在会话下方，原轮保留）"
           }
@@ -534,7 +544,7 @@ export function GenerationPanel({
             job={activeJob}
             assets={assets}
             mode="edit"
-            canStart={canStartAnother}
+            runningJobCount={runningJobCount}
             recentImages={lastImageTurn?.images ?? []}
             onOpenRecent={(k) =>
               lastImageTurn && setLightbox({ images: allImages, index: lastImageTurn.offset + k })
@@ -615,13 +625,16 @@ export function GenerationPanel({
           </div>
         ) : (
           <div className="mx-auto flex max-w-3xl flex-col gap-6">
-            {turnsWithOffset.map(({ turn, imageOffset }, i) => (
-              <TurnView
+            {turnsWithOffset.map(({ turn, imageOffset }, i) => {
+              const retryIssue = retryAvailability(turn);
+              return <TurnView
                 key={turn.id}
-                turn={turn}
+                turn={displayTurn(turn)}
                 provider={turn.provider ?? activeJob.provider}
                 index={i}
                 busy={running && i === turnsWithOffset.length - 1}
+                previewUrl={activeJob.preview?.turnKey === turn.turnKey ? activeJob.preview?.dataUrl : undefined}
+                progressLabel={generationProgressLabel(activeJob)}
                 streaming={running && i === turnsWithOffset.length - 1 ? activeJob.streaming : ""}
                 imageOffset={imageOffset}
                 visualProfile={activeJob.visualProfile}
@@ -635,10 +648,10 @@ export function GenerationPanel({
                 onOpenTurnRefs={(imgs, i) => setLightbox({ images: imgs, index: i })}
                 onAgentRetry={readOnly || snapshot || (turn.media ?? activeJob.media) === "video" ? undefined : () => retryWithAgent(turn)}
                 onRetry={() => retryTurn(turn)}
-                canRetry={!readOnly && !snapshot && targetReady && !running && !historicalCloudVideoFailure(turn)}
-                retryReason={readOnly ? "旧会话回退只读；请完成迁移后在创作中继续" : historicalCloudVideoFailure(turn) ? "旧视频任务不支持在此取回" : lockedReason}
-              />
-            ))}
+                canRetry={!readOnly && !snapshot && !retryIssue && !running && !historicalCloudVideoFailure(turn)}
+                retryReason={readOnly ? "旧会话回退只读；请完成迁移后在创作中继续" : historicalCloudVideoFailure(turn) ? "旧视频任务不支持在此取回" : retryIssue?.message}
+              />;
+            })}
           </div>
         )}
       </div>
@@ -666,7 +679,7 @@ export function GenerationPanel({
             job={activeJob}
             assets={assets}
             mode="revise"
-            canStart={canStartAnother}
+            runningJobCount={runningJobCount}
             recentImages={[]}
             onOpenRecent={() => {}}
             preloadTurn={editTurnId != null ? activeJob.turns.find(turn => turn.id === editTurnId) ?? null : null}
@@ -674,7 +687,7 @@ export function GenerationPanel({
           />
         ) : activeJob?.sessionId ? (
           <div className="space-y-1">
-            {!targetReady && <div className="text-[10px] text-muted">{lockedReason}</div>}
+            {latestIssue && <ProviderIssueNotice issue={latestIssue} className="text-xs text-muted" />}
             <button
               type="button"
               onClick={() => {
@@ -689,13 +702,19 @@ export function GenerationPanel({
           </div>
         ) : (
           <div className="text-[10px] text-muted">
-            {!targetReady
-              ? lockedReason
+            {latestIssue
+              ? <ProviderIssueNotice issue={latestIssue} />
               : "🎨 在创作板点「✓ 发送」开始一个生成会话；出图后可在此继续对话迭代。"}
           </div>
         )}
+        {!readOnly && !running && activeJob?.provider === "minimax-h3-image" && activeJob.submitId && activeJob.turns[activeJob.turns.length - 1]?.error && (
+          <button type="button" className="mt-2 w-full rounded border border-accent px-3 py-2 text-xs text-accent"
+            onClick={() => void api.recoverH3Image(activeJob.id).then(() => useStore.getState().loadGenJobs()).catch(error => notifyError(error, "取回图片失败"))}>
+            取回原 H3 图片
+          </button>
+        )}
         {!readOnly && !running && activeJob?.media === "video" && (activeJob.submitId || isCloudProvider(activeJob.provider)) && activeJob.turns[activeJob.turns.length - 1]?.error && (
-          <button type="button" disabled={!targetReady} className="mt-2 w-full rounded border border-accent px-3 py-2 text-xs text-accent disabled:opacity-40"
+          <button type="button" className="mt-2 w-full rounded border border-accent px-3 py-2 text-xs text-accent"
             onClick={() => void (isCloudProvider(activeJob.provider) ? api.recoverCloudVideo(activeJob.id) : api.jimengRetrieveOrphan(activeJob.submitId!, activeJob.lastPrompt, activeJob.id))
               .then(() => useStore.getState().loadGenJobs()).catch((error) => notifyError(error, "取回视频失败"))}>
             取回已提交的视频（继续查询，不重新生成）
@@ -735,6 +754,8 @@ function TurnView({
   provider,
   index,
   busy,
+  previewUrl,
+  progressLabel,
   streaming,
   imageOffset,
   visualProfile,
@@ -753,6 +774,8 @@ function TurnView({
   provider: GenJob["provider"];
   index: number;
   busy: boolean;
+  previewUrl?: string;
+  progressLabel: string;
   streaming: string;
   imageOffset: number;
   visualProfile?: VisualProfileCapsule | null;
@@ -767,13 +790,15 @@ function TurnView({
   onAgentRetry?: () => void;
   onRetry: () => void;
   canRetry: boolean;
-  retryReason: string;
+  retryReason?: string;
 }) {
   // 用户气泡显示编辑框原文（与右键「复用生成提示词」同一数据）；实际发送的完整文本
   // （用途注入等铺开后的 prompt）收进 thinking 式折叠。只要本轮有原文 + 实际发送内容
   // 就保留折叠入口——dreamina/codex CLI 直发无铺开时二者相同，也允许核对发送给引擎的
   // 完整提示词（原条件要求二者不同才显示，直发会话会缺失该 toggle）。
   const displayText = turn.promptRaw?.trim() ? turn.promptRaw : turn.prompt;
+  const failure = turn.error ? generationFailure(turn.error, { provider }) : null;
+  const failureSettings = failure?.settings;
   const hasCompiled = !!turn.promptRaw?.trim() && !!turn.prompt.trim();
   // chip 气泡（创作板同款只读渲染）各轮一致：首轮参考图来自 job.refAssets（恢复链路完整
   // asset），续轮来自该轮组稿挑选（turn.refAssets，恢复/回看由历史 ref_assets 重建）。
@@ -982,10 +1007,11 @@ function TurnView({
                 </p>
               )}
             </>
-          ) : turn.error ? (
+          ) : failure ? (
             <div className="space-y-1.5 rounded border border-red-500/40 bg-red-500/10 p-2">
               <div className="text-[11px] font-semibold text-red-300">❌ 生成失败</div>
-              <pre role="alert" className="select-text whitespace-pre-wrap break-all text-[11px] text-red-200/90">{generationErrorMessage(turn.error, { provider })}</pre>
+              <pre role="alert" className="select-text whitespace-pre-wrap break-all text-[11px] text-red-200/90">{failure.message}</pre>
+              {failureSettings && <button type="button" className="text-xs text-ink underline" onClick={() => openProviderSettings(failureSettings)}>配置自有订阅</button>}
               {turn.media === "video" && turn.provider === "jimeng" && <DreaminaTaskDiagnostics submitId={turn.submitId} />}
               <button
                 onClick={onRetry}
@@ -998,9 +1024,10 @@ function TurnView({
             </div>
           ) : busy ? (
             <div className="space-y-2">
+              {previewUrl && <img src={previewUrl} alt="本轮生成预览" draggable={false} className="mx-auto block max-h-[320px] w-auto max-w-full object-contain" />}
               <div className="flex items-center gap-2 text-xs text-muted">
                 <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-lime" />
-                正在生成图像{elapsedLabel ? `… ${elapsedLabel}` : "…"}
+                <span role="status">{progressLabel}</span>{elapsedLabel ? ` · ${elapsedLabel}` : "…"}
               </div>
               {/* 流式过程日志（codex CLI 输出），生成期间实时滚动 */}
               {streaming && (
@@ -1124,7 +1151,7 @@ function GenEditComposer({
   job,
   assets,
   mode,
-  canStart,
+  runningJobCount,
   recentImages,
   onOpenRecent,
   preloadTurn,
@@ -1135,7 +1162,7 @@ function GenEditComposer({
   job: GenJob;
   assets: Asset[];
   mode: GenEditingMode;
-  canStart: boolean;
+  runningJobCount: number;
   // 左侧「上次结果」缩略图，组稿时对照参考：轮级编辑 = 该轮当时的基图（前一轮产出）；
   // 重新编辑 / 空白续轮 = 会话最近一次产出（最后一个有图的轮，新续轮自动带的就是它）。
   recentImages: string[];
@@ -1155,10 +1182,9 @@ function GenEditComposer({
   const [selectedVideoOptions, setVideoOptions] = useState<VideoOptions>(sourceTurn?.videoOptions ?? job.videoOptions ?? DEFAULT_VIDEO_OPTIONS);
   const [videoChannel, setVideoChannel] = useState<"jimeng" | "cloud">((sourceTurn?.provider ?? job.provider).startsWith("bowerbird-cloud") ? "cloud" : "jimeng");
   const sourceProvider = sourceTurn?.provider ?? job.provider;
-  const continuationProvider = isCloudProvider(sourceProvider)
-    ? canonicalProviderKey(sourceProvider)
-    : sourceProvider === "jimeng" ? "jimeng" : "codex";
-  const activeGenProvider = isVideo ? videoProvider(videoChannel, selectedVideoOptions) : isRevise ? continuationProvider : selectedProvider;
+  const continuationProvider = normalizeGenerationProvider(sourceProvider);
+  const [reviseProvider, setReviseProvider] = useState<string | null>(null);
+  const activeGenProvider = isVideo ? videoProvider(videoChannel, selectedVideoOptions) : isRevise ? reviseProvider ?? continuationProvider : selectedProvider;
   const setActiveGenProvider = useStore((s) => s.setActiveGenProvider);
   const defaultProvider = useStore((s) => s.defaultProvider);
   const setDefaultProvider = useStore((s) => s.setDefaultProvider);
@@ -1166,8 +1192,8 @@ function GenEditComposer({
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
+  const canStart = canStartAnotherJob(cloudEntitlement, runningJobCount, activeGenProvider);
   const settings = useStore((s) => s.settings);
-  const cloudAvailable = cloudAuth?.cloud_available ?? false;
   // 底部对话框（续轮）空编辑器开局：不预填「请参考」，避免误发送占位文字。
   const {
     hostRef,
@@ -1213,13 +1239,7 @@ function GenEditComposer({
   // provider 初值 = 该会话的 provider（进入编辑时同步当前选择，坞内可再切换；遗留 cloud key 归一化）。
   useEffect(() => {
     if (isRevise) return;
-    const sourceProvider = sourceTurn?.provider ?? job.provider;
-    const initial = isCloudProvider(sourceProvider)
-      ? canonicalProviderKey(sourceProvider)
-      : sourceProvider === "jimeng"
-        ? sourceProvider
-        : "codex";
-    setActiveGenProvider(initial);
+    setActiveGenProvider(continuationProvider);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1228,27 +1248,8 @@ function GenEditComposer({
   }, []);
 
   // 按坞内当前选中的 provider 判健康（与创作板同款门控）。
-  const cloudBalance = cloudEntitlement
-    ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup
-    : 0;
-  const cloudSelected = isCloudProvider(activeGenProvider);
-  const targetReady = cloudSelected
-    ? cloudAvailable && !!cloudAuth?.logged_in && cloudBalance > 0
-    : activeGenProvider === "jimeng"
-      ? canUseByo(cloudEntitlement) && !!dreaminaHealth?.ok
-      : canUseByo(cloudEntitlement) && !!codexHealth?.ok;
-  const lockedReason =
-    cloudSelected
-      ? !cloudAvailable
-        ? "当前版本未配置 Bowerbird Cloud"
-        : !cloudAuth?.logged_in
-          ? "请先登录 Bowerbird Cloud"
-          : cloudBalance <= 0
-            ? "积分不足"
-            : "Bowerbird Cloud 不可用"
-      : !canUseByo(cloudEntitlement)
-        ? "升级 Pro 解锁本机 Codex / 即梦 CLI"
-        : userErrorMessage(activeGenProvider === "jimeng" ? dreaminaHealth?.reason : codexHealth?.reason, "当前生成服务暂不可用，请在设置中检查登录状态。");
+  const issue = generationProviderIssue(activeGenProvider, { cloudAuth, cloudEntitlement, codexHealth, dreaminaHealth });
+  const targetReady = !issue;
 
   // 编辑坞高度 → CSS 变量：瀑布流滚动容器据此留出底部 padding，避免坞盖住最后一行素材。
   const dockRef = useRef<HTMLDivElement>(null);
@@ -1340,6 +1341,11 @@ function GenEditComposer({
       }
     }
     if (!intentIsCurrent()) return;
+    const issueAtSubmission = generationProviderIssue(activeGenProvider, useStore.getState());
+    if (issueAtSubmission) {
+      notifyError(issueAtSubmission.message, "生成方式暂不可用");
+      return;
+    }
     // 点发送立即回会话视图：生成后台跑，结果/错误由会话内对应轮展示。
     // 发送即退出创作模式（boardOpen 置 false）：关面板回瀑布流后左键恢复开详情；
     // 取消编辑不退（onExit 另有取消入口共用，创作模式保留可继续挑图）。
@@ -1420,8 +1426,8 @@ function GenEditComposer({
   );
   const annotationWarning =
     hasAnnotationDimension && !supportsAnnotationCoordinates(activeGenProvider);
-  const sendTitle = !targetReady
-    ? lockedReason
+  const sendTitle = issue
+    ? issue.message
     : !isRevise && !canStart
       ? "已达当前档位的并行生成上限"
       : isRevise
@@ -1434,8 +1440,7 @@ function GenEditComposer({
 
   // 会话指示器标题：与面板头部同源（首轮原文第一个非空行）。
   const firstUserText = job.turns[0]?.promptRaw || job.turns[0]?.prompt || "";
-  const sessionTitle =
-    firstUserText.split("\n").find((l) => l.trim())?.trim() || "生成会话";
+  const sessionTitle = generationSessionTitle(firstUserText);
 
   return (
     // 浮动卡片本体：与创作板 creation-dock 同款形态（底部浮动、上方两角圆角、毛玻璃），
@@ -1515,17 +1520,16 @@ function GenEditComposer({
       <div className="generation-toolbar flex flex-wrap items-center gap-2">
           {isVideo ? <VideoControls channel={videoChannel} options={videoOptions} onChange={(options, channel) => { if (channel) setVideoChannel(channel); setVideoOptions(options); }} ratio={ratio} onRatioChange={setRatio} /> : <>
           <RatioSelect value={ratio} onChange={setRatio} />
-          {!isRevise && <ProviderSelect
+          <ProviderSelect hasReferences={references.length > 0 || (isRevise && !!job.sessionId)}
             value={activeGenProvider}
-            onChange={setActiveGenProvider}
+            onChange={isRevise ? setReviseProvider : setActiveGenProvider}
             codexHealth={codexHealth}
             dreaminaHealth={dreaminaHealth}
-            cloudAvailable={cloudAvailable}
             cloudAuth={cloudAuth}
             cloudEntitlement={cloudEntitlement}
             defaultProvider={defaultProvider}
             onSetDefaultProvider={setDefaultProvider}
-          />}
+          />
           </>}
           {/* Agent 方案开关（A/B 互斥，与创作板同款）：本机 Agent 可用且「开发者选项」
               未关闭时渲染——release 包中 health 命令被后端门控拒绝，开关不出现。 */}
@@ -1573,11 +1577,7 @@ function GenEditComposer({
             点画板图片插入参考图，或输入 @图名
           </span>}
           <div className="ml-auto flex items-center gap-1.5">
-            {!targetReady && (
-              <span className="max-w-48 truncate text-[10px] text-muted" title={lockedReason}>
-                {lockedReason}
-              </span>
-            )}
+            {issue && <ProviderIssueNotice issue={issue} className="max-w-52 text-xs text-muted" />}
             {annotationWarning && (
               <span className="flex shrink-0 items-center text-red-400" title="该模型不支持标注参数，标注图可以被发送，但控制效果可能不及预期。">
                 <Info size={14} aria-label="该模型不支持标注参数，标注图可以被发送，但控制效果可能不及预期。" />

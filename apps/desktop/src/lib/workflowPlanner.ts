@@ -215,7 +215,7 @@ export function buildWorkflowPlan(text: string, owner: WorkflowNode, sources: Pl
   const nodes = [...aliases.values()], edges = new Set<string>(), automaticConnections = new Map<string, string>();
   const referenceBindings = new Map<string, Map<string, { type: "text" | "image"; input: WorkflowInput }>>();
   for (const raw of plan.edges) {
-    const edge = record(raw); keys(edge, ["from", "output", "to", "input", ...(mode === "template" ? ["autoConnect", "mediaFilter"] : [])]);
+    const edge = record(raw); keys(edge, ["from", "output", "to", "input", ...(mode === "template" ? ["autoConnect", "mediaFilter", "referenceRanks"] : [])]);
     const from = string(edge.from, 32), output = string(edge.output, 32), to = string(edge.to, 32), input = string(edge.input, 32);
     const target = aliases.get(to), upstream = aliases.get(from), source = sources.find(source => source.id === from);
     if (!target || from === to || (!upstream && !source)) throw new Error("连线指向未知卡片或来源");
@@ -228,7 +228,12 @@ export function buildWorkflowPlan(text: string, owner: WorkflowNode, sources: Pl
     const binding: WorkflowInput = upstream ? { nodeId: upstream.id, portId: output } : structuredClone(source!.input);
     if (mode === "template") {
       // Public material bindings never reuse a connection identity from another graph.
-      delete binding.autoConnect; delete binding.mediaFilter;
+      delete binding.autoConnect; delete binding.mediaFilter; delete binding.referenceRanks;
+      if (edge.referenceRanks !== undefined) {
+        if (target.kind !== "generation" || !["text", "image"].includes(input) || !Array.isArray(edge.referenceRanks)
+          || !edge.referenceRanks.length || edge.referenceRanks.some(rank => !Number.isSafeInteger(rank) || rank < -1)) throw new Error("模板参考图顺序无效");
+        binding.referenceRanks = [...edge.referenceRanks];
+      }
       if (edge.autoConnect !== undefined) {
         const group = string(edge.autoConnect, 32);
         if (!/^[a-zA-Z][a-zA-Z0-9_]*$/.test(group)) throw new Error("模板自动连接标识无效");

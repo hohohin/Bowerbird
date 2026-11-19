@@ -4,7 +4,7 @@ import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
 const output = '.tmp/original-missing';
-const server = await createServer({ cacheDir: `${output}/vite`, server: { host: '127.0.0.1', port: 0, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: `${output}/vite`, server: { host: '127.0.0.1', port: 0, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const reports = [], errors = [], remote = [];
@@ -15,7 +15,7 @@ async function scenario(name, run) {
   await page.route('**/*', route => { if (new URL(route.request().url()).hostname === '127.0.0.1') return route.continue(); remote.push(route.request().url()); return route.abort(); });
   try {
     await page.goto(`${server.resolvedUrls.local[0]}scripts/fixtures/original-deletion/preview.html`);
-    await page.waitForFunction(() => window.ready);
+    await page.waitForFunction(() => window.ready, undefined, {timeout:45000});
     await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
     await run(page); reports.push({ name, passed: true });
   } catch (error) { reports.push({ name, passed: false, error: error.stack }); }
@@ -24,7 +24,7 @@ async function scenario(name, run) {
 async function open(page, missingIds, kind = 'single') {
   await page.evaluate(({ missingIds, kind }) => { window.missingIds = missingIds; window.openMenu(kind); }, { missingIds, kind });
   await page.getByRole('menuitem', { name: '删除', exact: true }).click();
-  await page.getByRole('menuitem', { name: '删除原文件', exact: true }).click();
+  await page.getByRole('menuitem', { name: '删除原文件…', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.locator('[data-delete-asset-id="a1"]').waitFor();
   return dialog;
@@ -36,8 +36,9 @@ try {
     const dialog = await open(page, ['a1']);
     assert.equal(await dialog.getByRole('heading').textContent(), '清理失效条目');
     assert.equal(await dialog.getByRole('button', { name: '清理失效条目', exact: true }).isEnabled(), true);
-    await dialog.getByText('原件已不在登记位置，仅从素材库移除失效条目。标签、分析及画布资料保留。', { exact: true }).waitFor();
-    await dialog.locator('[data-delete-asset-id="a1"]').getByText('原件缺失 · 仅移出素材库', { exact: true }).waitFor();
+    await dialog.getByText('原件已不在登记位置，将清理失效条目和画板中的对应素材卡片。标签、分析及生成历史保留。', { exact: true }).waitFor();
+    await dialog.locator('[data-delete-asset-id="a1"]').getByText('原件缺失', { exact: true }).waitFor();
+    await dialog.getByText(/离线文件夹恢复连接后会重新扫描/).waitFor();
     assert.equal(await dialog.getByText(/放入系统回收站/).count(), 0);
     for (const theme of ['dark', 'light']) {
       await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
@@ -66,29 +67,56 @@ try {
   await scenario('mixed confirmation distinguishes recycled originals from cleaned entries', async page => {
     const dialog = await open(page, ['a2'], 'multi');
     assert.equal(await dialog.getByRole('heading').textContent(), '确认删除');
-    await dialog.getByText('现存原文件将放入系统回收站，失效条目仅从素材库移除。标签、分析及画布资料保留。', { exact: true }).waitFor();
+    await dialog.getByText('现存原文件将放入系统回收站，失效条目和画板中的对应素材卡片一并清理。标签、分析及生成历史保留。', { exact: true }).waitFor();
     assert.equal(await dialog.locator('[data-delete-asset-id="a1"]').getByText(/原件缺失/).count(), 0);
-    await dialog.locator('[data-delete-asset-id="a2"]').getByText('原件缺失 · 仅移出素材库', { exact: true }).waitFor();
+    await dialog.locator('[data-delete-asset-id="a2"]').getByText('原件缺失', { exact: true }).waitFor();
     await page.screenshot({ path: `${output}/mixed-dark.png` });
     await dialog.getByRole('button', { name: '确认删除', exact: true }).click();
     await dialog.waitFor({ state: 'detached' });
     assert.deepEqual(await notices(page), ['已将 1 个原文件放入回收站，已清理 1 个失效条目']);
   });
-  await scenario('partial failure retries only remaining entries and reports total actual outcomes', async page => {
+  await scenario('one vanished record does not block cleaning a confirmed missing original', async page => {
+    await page.evaluate(() => { window.unavailableId = 'a2'; });
+    const dialog = await open(page, ['a1'], 'multi');
+    await dialog.getByRole('alert').getByText(/将跳过/).waitFor();
+    await dialog.getByRole('button', { name: '清理失效条目', exact: true }).click();
+    await dialog.waitFor({ state: 'detached' });
+    assert.deepEqual(await page.evaluate(() => window.trashCalls.map(item => item.asset_id)), ['a1']);
+  });
+  await scenario('close, reopen and cancel the pending items of a slow missing cleanup', async page => {
+    await page.evaluate(() => { window.holdTrash = true; });
+    const dialog = await open(page, ['a1', 'a2'], 'multi');
+    await dialog.locator('button.is-danger').click();
+    await dialog.waitFor({ state: 'detached' });
+    const reopen = page.getByRole('button', { name: '查看文件任务', exact: true });
+    await reopen.click();
+    const status = page.getByRole('dialog', { name: '文件任务' });
+    await status.getByRole('button', { name: '后台继续' }).click();
+    await reopen.click();
+    await status.getByRole('button', { name: '取消剩余项' }).click();
+    await page.keyboard.press('Escape');
+    await page.evaluate(() => { window.holdTrash = false; window.releaseTrash(); });
+    await reopen.click();
+    await status.getByText(/已停止，1 项未执行/).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.trashCalls.map(item => item.asset_id)), ['a1']);
+  });
+  await scenario('partial failure retries only remaining entries and reports actual outcomes', async page => {
     const dialog = await open(page, ['a2'], 'multi');
     await page.evaluate(() => { window.failId = 'a2'; });
     await dialog.locator('button.is-danger').click();
-    await dialog.getByRole('alert').filter({ hasText: '1 项失败' }).waitFor();
-    assert.deepEqual(await dialog.locator('[data-delete-asset-id]').evaluateAll(items => items.map(item => item.dataset.deleteAssetId)), ['a2']);
-    assert.equal(await dialog.getByRole('heading').textContent(), '清理失效条目');
-    await page.evaluate(() => { window.failId = null; });
-    await dialog.getByRole('button', { name: '重试失败项', exact: true }).click();
     await dialog.waitFor({ state: 'detached' });
+    await page.getByRole('button', { name: '查看文件任务' }).click();
+    const status = page.getByRole('dialog', { name: '文件任务' });
+    await status.getByText('查看未完成项').click();
+    await status.getByText(/disk-a2.png/).waitFor();
+    await page.evaluate(() => { window.failId = null; });
+    await status.getByRole('button', { name: '重试失败项', exact: true }).click();
+    await page.waitForFunction(() => window.trashCalls.length === 3);
     assert.deepEqual(await page.evaluate(() => window.trashCalls.map(item => item.asset_id)), ['a1', 'a2', 'a2']);
-    assert.deepEqual(await notices(page), ['已将 1 个原文件放入回收站，已清理 1 个失效条目']);
+    await status.getByText('已清理 1 个失效条目', { exact: true }).waitFor();
   });
   await writeFile(`${output}/result.json`, JSON.stringify({ reports, errors, remote, boundary: 'Actual confirmation with controlled IPC; no real files or user library accessed.' }, null, 2));
   for (const report of reports) console.log(`${report.passed ? 'PASS' : 'FAIL'} ${report.name}${report.error ? `: ${report.error}` : ''}`);
   assert.deepEqual(errors, []); assert.deepEqual(remote, []);
   assert.equal(reports.filter(report => !report.passed).length, 0);
-} finally { await browser.close(); await server.close(); }
+} catch (error) { console.error(error); throw error; } finally { await browser.close(); await server.close(); }

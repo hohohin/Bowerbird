@@ -35,7 +35,7 @@ export function CollectionAddMode() {
   async function finish() {
     try {
       const added = await useStore.getState().finishCollectionAdd();
-      if (added) notifySuccess(`已添加 ${added} 张素材到集合`);
+      if (added) notifySuccess(`已添加 ${added} 张素材到文件夹`);
     } catch (error) {
       notifyError(error, "添加失败，已保留选择，请重试");
     }
@@ -45,7 +45,7 @@ export function CollectionAddMode() {
     <div className="collection-add-frame" aria-hidden="true" />
     <div className="collection-add-controls" role="region" aria-label="添加素材模式">
       <div className="collection-add-notch">
-        <span className="collection-add-target" title={`添加素材中-目标集合：${target.name}`}>添加素材中-目标集合：{target.name}</span>
+        <span className="collection-add-target" title={`添加素材中-目标文件夹：${target.name}`}>添加素材中-目标文件夹：{target.name}</span>
         <span className="collection-add-count" aria-live="polite">已选 {count} 张</span>
       </div>
       <div className="collection-add-actions">

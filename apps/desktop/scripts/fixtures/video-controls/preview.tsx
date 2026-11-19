@@ -21,17 +21,12 @@ w.__TAURI_INTERNALS__ = { invoke: async (command: string, args: any) => {
     if (args.submitId === "slow") return new Promise(resolve => { w.resolveSlow = resolve; });
     return w.cost;
   }
-  if (command === "dreamina_video_models") return [
-    { model_version: "seedance2.5", resolutions: ["480p", "720p", "1080p"], min_duration: 4, max_duration: 30 },
-    { model_version: "seedance2.0", resolutions: ["720p"], min_duration: 4, max_duration: 15 },
-    { model_version: "seedance2.0mini", resolutions: ["720p"], min_duration: 4, max_duration: 15 },
-    { model_version: "seedance2.0fast", resolutions: ["720p"], min_duration: 4, max_duration: 15 },
-    { model_version: "seedance2.0_vip", resolutions: ["720p", "1080p", "4k"], min_duration: 4, max_duration: 15 },
-    ...(args.kind === "image2video" ? [{ model_version: "seedance1.0fast", resolutions: ["720p"], min_duration: 5, max_duration: 10 }] : []),
-  ];
+  if (command === "dreamina_video_models") throw "建卡不应查询模型能力";
   throw `Unexpected IPC ${command}`;
 } };
 function Preview() {
+  const [mount, setMount] = useState(0);
+  w.remount = () => setMount(value => value + 1);
   const [options, setOptions] = useState(DEFAULT_VIDEO_OPTIONS);
   const [channel, setChannel] = useState<"jimeng" | "cloud">("jimeng");
   const [bill, setBill] = useState({ submitId: "first", busy: false });
@@ -40,7 +35,7 @@ function Preview() {
   w.setOptions = setOptions;
   w.channel = channel;
   return <main className="m-3 rounded border border-edge bg-panel p-3 text-ink">
-    <div className="flex flex-wrap gap-2"><VideoControls options={options} onChange={(value, nextChannel) => { setOptions(value); if (nextChannel) setChannel(nextChannel); }} channel={channel}
+    <div className="flex flex-wrap gap-2"><VideoControls key={mount} options={options} onChange={(value, nextChannel) => { setOptions(value); if (nextChannel) setChannel(nextChannel); }} channel={channel}
       ratio="16:9" onRatioChange={() => {}} /></div>
     <div className="mt-4"><DreaminaTaskCredit {...bill} /></div>
   </main>;

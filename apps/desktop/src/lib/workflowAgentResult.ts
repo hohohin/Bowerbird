@@ -43,7 +43,7 @@ function inferTable(text: string): AgentTable | undefined {
 
 /** Keep the v1 text envelope; structured tables travel inside text and retain a readable fallback. */
 export function agentResultValue(text: string): WorkflowValue {
-  if (typeof text !== "string" || !text.trim() || text.length > 16000) throw new Error("Agent 返回内容须为 1–16000 字");
+  if (typeof text !== "string" || !text.trim()) throw new Error("Agent 返回内容不能为空");
   const raw = text.trim().replace(/^```(?:json)?\s*\n([\s\S]*?)\n```$/, "$1");
   let parsed;
   try { parsed = JSON.parse(raw); } catch { /* Ordinary text, including legacy delimited tables. */ }

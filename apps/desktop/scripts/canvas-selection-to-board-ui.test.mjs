@@ -67,7 +67,7 @@ try {
   });
 
   await reset();
-  await node("old").click({ button: "right", position: { x: 30, y: 30 } });
+  await node("old").click({ button: "right", position: { x: 95, y: 50 } });
   await page.getByRole("menu").waitFor();
   assert.deepEqual(await selectedNodes(), [], "right-clicking an image does not create a selection");
   assert.deepEqual(await page.evaluate(() => window.store.getState().contextMenu.canvasSelection.nodeIds), ["old"]);
@@ -77,7 +77,7 @@ try {
   await reset();
   await marquee();
   assert.deepEqual(await chips(), [], "selection alone must not insert references");
-  await node("a").click({ button: "right", position: { x: 30, y: 30 } });
+  await node("a").click({ button: "right", position: { x: 95, y: 75 } });
   assert.deepEqual(await selectedNodes(), mixedSelection, "right-clicking inside a mixed selection preserves it");
   assert.deepEqual(await page.evaluate(() => [...window.store.getState().contextMenu.canvasSelection.nodeIds].sort()), mixedSelection, "the image menu keeps the whole selected group as its target");
   await addFromMenu("添加所选 2 张图片到对话框");
@@ -91,21 +91,21 @@ try {
 
   await reset();
   await marquee();
-  await node("prompt").click({ button: "right", position: { x: 30, y: 30 } });
+  await node("prompt").click({ button: "right", position: { x: 95, y: 50 } });
   assert.deepEqual(await selectedNodes(), mixedSelection, "the mixed-card menu does not replace the selected group");
   await addFromMenu("添加所选 2 张图片到对话框");
   assert.deepEqual(await chips(), ["existing", "a"], "mixed-selection card menu adds selected images");
 
   await reset();
   await marquee();
-  await node("outside").click({ button: "right", position: { x: 30, y: 30 } });
+  await node("outside").click({ button: "right", position: { x: 95, y: 50 } });
   assert.deepEqual(await selectedNodes(), mixedSelection, "right-clicking outside the selection does not replace it");
   assert.deepEqual(await page.evaluate(() => window.store.getState().contextMenu.canvasSelection.nodeIds), ["outside"], "the unselected image is still the sole menu target");
   await addFromMenu("添加到对话框");
   assert.deepEqual(await chips(), ["b"], "right-clicking an unselected image targets only that image");
 
   await reset();
-  await node("prompt").click({ button: "right", position: { x: 30, y: 30 } });
+  await node("prompt").click({ button: "right", position: { x: 95, y: 50 } });
   await page.getByRole("menu").waitFor();
   assert.deepEqual(await selectedNodes(), [], "right-clicking an execution card does not create a selection");
   assert.equal(await page.getByRole("menuitem", { name: /添加.*对话框/ }).count(), 0);
@@ -114,10 +114,10 @@ try {
   for (const id of ["outside", "agent"]) {
     await reset();
     await marquee();
-    await node(id).click({ button: "right", position: { x: 30, y: 30 } });
+    await node(id).click({ button: "right", position: { x: 95, y: 50 } });
     assert.deepEqual(await selectedNodes(), mixedSelection, `${id}: an outside menu preserves the mixed selection`);
-    await page.getByRole("menuitem", { name: "删除", exact: true }).click();
-    await page.getByRole("menuitem", { name: "从画布移出", exact: true }).click();
+    await page.getByRole("menuitem", { name: id === "outside" ? "删除当前项" : "删除", exact: true }).click();
+    await page.getByRole("menuitem", { name: id === "outside" ? "移出画布" : "从画布移出", exact: true }).click();
     await node(id).waitFor({ state: "detached" });
     assert.deepEqual(await selectedNodes(), mixedSelection, `${id}: removing the menu target preserves unrelated selected nodes`);
     assert.equal(await page.locator("[data-canvas-node-id]").count(), 6);
@@ -187,9 +187,9 @@ try {
     assert.equal(await page.locator("[data-canvas-node-id]").count(), 7, "Backspace cannot remove canvas content");
     // Clear the multi-selection before checking the single-node context action.
     await page.locator(".canvas-stage").click({ position: { x: 60, y: 50 } });
-    await node(id).click({ button: "right", position: { x: 30, y: 30 } });
-    await page.getByRole("menuitem", { name: "删除", exact: true }).click();
-  await page.getByRole("menuitem", { name: "从画布移出", exact: true }).click();
+    await node(id).click({ button: "right", position: { x: 95, y: 50 } });
+    await page.getByRole("menuitem", { name: id === "old" ? "删除当前项" : id === "folder" ? "删除当前组" : "删除", exact: true }).click();
+    await page.getByRole("menuitem", { name: ["old", "folder"].includes(id) ? "移出画布" : "从画布移出", exact: true }).click();
     await node(id).waitFor({ state: "detached" });
     await page.keyboard.press(`${primaryModifier}+z`);
     await node(id).waitFor();

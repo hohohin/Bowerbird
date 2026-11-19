@@ -49,7 +49,7 @@ export function FileDropImport() {
       const project = useStore.getState().projects.find(project => project.id === id);
       const collectionName = targetCollection(event)?.dataset.fileImportCollectionName;
       const canvas = event.target instanceof Element && event.target.closest("[data-canvas-stage]");
-      setHint(canvas ? "松开放到画布当前位置" : collectionName ? `松开添加到集合「${collectionName}」`
+      setHint(canvas ? "松开放到画布当前位置" : collectionName ? `松开添加到文件夹「${collectionName}」`
         : project ? `松开添加到「${project.name}」素材库` : "松开添加到全局素材库");
     }
     function clear() { setHint(null); }
@@ -68,6 +68,7 @@ export function FileDropImport() {
       const projectId = targetProject(event);
       const libraryMode = libraryPaneAt(event.target)?.mode ?? useLocalFileMode;
       const librarySource = libraryMode.getState().source;
+      const libraryProjectId = libraryMode.getState().browseProjectId;
       const collectionId = targetCollection(event)?.dataset.fileImportCollectionId;
       const revision = state.projectRouteRevision;
       const place = prepareExplorerCanvasDrop(event.target, projectId, event.clientX, event.clientY);
@@ -92,6 +93,7 @@ export function FileDropImport() {
         if (imported.length) {
           const current = useStore.getState();
           if (!place && !collectionId && libraryMode.getState().source === librarySource
+            && (librarySource !== "project" || libraryMode.getState().browseProjectId === libraryProjectId)
             && current.activeProjectId === state.activeProjectId && current.projectRouteRevision === revision && !current.projectRoutePending) {
             current.setCurrentCollection(null); current.setCurrentFolder(null);
             current.setSearchQuery(""); current.setSmartFilter(null); current.setColorFilter(null);

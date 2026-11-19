@@ -14,6 +14,12 @@ pub(crate) fn request_error(context: &str, error: reqwest::Error) -> AppError {
     } else {
         "请求未完成"
     };
+    let route = error.url().map(|url| {
+        let path = url.path();
+        let transport = if path.starts_with("/api/") { "gateway" } else { "direct" };
+        let phase = if path.contains("/storage/") { "storage" } else if path.contains("/rest/") { "lookup" } else { "control" };
+        format!("route={transport}/{phase};host={}", url.host_str().unwrap_or("unknown"))
+    }).unwrap_or_else(|| "route=unknown".into());
     let error = error.without_url();
     let mut detail = error.to_string();
     let mut source = error.source();
@@ -22,7 +28,7 @@ pub(crate) fn request_error(context: &str, error: reqwest::Error) -> AppError {
         detail.push_str(&cause.to_string());
         source = cause.source();
     }
-    AppError::Cloud(format!("{context}（{kind}）: {detail}"))
+    AppError::Cloud(format!("{context}（{kind}）: {detail} [version={};{route}]", env!("CARGO_PKG_VERSION")))
 }
 
 /// 共享云 HTTP client。构造本身不联网；只有显式业务调用才会发请求。
@@ -43,6 +49,7 @@ impl Clone for CloudClient {
 impl CloudClient {
     pub fn new(config: CloudConfig) -> Result<Self, AppError> {
         let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             // 单次 Cloud create/get 与签名产物下载的总保护。图片生成本身已由 VPS
             // 持久任务承接，不再把这个 HTTP client timeout 当作方舟生成 deadline。
             .timeout(Duration::from_secs(180))

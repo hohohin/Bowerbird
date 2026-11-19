@@ -1,5 +1,185 @@
 # 对话 provider 实现记录
 
+## 2026-11-19 Codex CLI 画布待答（源码）
+
+Codex CLI 的 `item/tool/requestUserInput` 接入和本机 DSH 相同的待答气泡。桌面按对话、轮次和问题编号校验当前选项或文字，将答案发回同一个原生调用。重复提交在本机拦截。等待用户期间暂停本机执行时限，原生问题已结算且 Codex 成功结束后才交付工作流输出。短暂离开画板后可以回到仍在等待的调用。Codex 进程退出后可以接续原生会话，待答调用随原进程结束。[Codex App Server 协议](https://learn.chatgpt.com/docs/app-server#toolrequestuserinput)
+
+用托管 Codex CLI 0.170.0 和回环模拟模型核验普通与代码工具模式。未启用问答的旧会话跨进程按原 ID 接续，新一轮可原生提问并收到原调用的答案，历史由 Codex 自身恢复。画布用合成 IPC 核验关闭保留草稿和双击仅提交一次。
+
+## 2026-11-19 本机 DSH 画布待答与桌面回答（源码）
+
+本机 DSH 0.2 的新 Bowerbird 会话启用 timed 原生问答，默认无限等待。旧预设保留供原会话恢复。卡片仅展示原请求的未答工具调用。新问题自动显示气泡，× 收起并保留当前草稿，右上角「待你回答」打开同一问题。单题单选点即提交，自由答案支持输入框中的发送箭头及 Enter，中文输入法确认候选词不发送。多题或多选在整批填写后提交。
+
+桌面命令核对当前轮次、原 Session、callId 和选项。原调用存活时把答复交给原生事件，Host 重启后通过原生 `userQuestions/answer` 恢复原会话，重新挂载该轮建卡通道并观察原请求。答案排队期间保留等待提示。工作流沿原请求继续读取，全部问题结算且 Agent 成功返回结果后才允许交付。下游生图的崩溃派发验收及 Cloud DSH 的 ACP 适配仍单独跟进。
+
+验证使用真实 DSH Host 与回环模拟模型，覆盖桌面回答桥、冷恢复、正超时、并发补答与建卡回执保留。浏览器合成 IPC 覆盖关闭保留草稿、新问题打开、选项单次提交和文字输入。TypeScript 与 22 项本机 DSH 回归通过。
+
+## 2026-11-19 本机 DSH 原生提问恢复（隔离验收）
+
+桌面自动安装固定 DSH `0.2.2-rc.1`。同版本的本机实际 Host 在隔离预设中启用 `ask_user_question` 的 timed 模式，默认等待 `-1`。原调用存活时，`/api/remote.mux` 的 `$events` 流在重连后重新交付待答，答案发回 `$events/result`。Host 被终止后，原生 `userQuestions/answer` 可以按原 Session 和 callId 恢复并排队答案。以原生投影和同一 Session 的成功终态判断完成。[上游提问工具](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/interaction/tool-ask-user/README.md) · [上游问题投影](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/interaction/user-questions/src/projection.ts)
+
+本地回复读取器只跟随原请求工具调用关联的 `user-question-reply`，并在返回成功前查询该步骤是否还有未答问题。云端已记录的基线是 `0.1.1-rc.2` 与 ACP 会话桥，需要独立验收。[云端基线](../project_logs/2026-11-18-dsh-chat-resume.md)
+
+复跑入口为 `apps/desktop/src-tauri/tests/dsh-auto-host.py <Rust lib 测试二进制> --questions`。Windows 测试二进制副本使用与其它 DSH 探针相同的 Common Controls v6 清单。测试使用临时 DSH 资料目录、原生 SQLite 建卡事务和回环模拟模型。
+
+本机结果：真实 Host 的客户端重连、进程终止后补答、正超时后补答均通过。进程重启后两次并发提交只接纳一份，Session 只记录一条带原 callId 的回答，提问前已建的内容卡保留一张。正超时后模型提前结束的输出仍被未答投影拦截，回答后的新 turn 才交付最终正文。另有 22 项本机 DSH 回归通过。
+
+## 2026-11-19 Agent 卡内续聊与独立重跑（桌面源码）
+
+卡片与详情读取同一份会话和续聊草稿。卡片中段显示消息与公开工具回执，旧回复默认只显示一行，运行历史从记录区右上角打开。用户可以在卡片底部补充消息，单独通过「任务要求」修改可复用指令。「按当前输入重跑」开启新会话，并通过工作流重新读取接线和任务要求。普通建卡使用提交时用户设置的全局默认生图模型，显式指定仍由建卡服务校验。
+
+Codex 续聊保留原生 thread，已存在的会话沿用其工具定义。需采用新工具定义时可开启新对话。原生会话无法恢复时提示用户，桌面不把本地转录提交给新会话。DSH 0.2 与 Cloud DSH 同样由原生会话管理上下文。
+
+## 2026-11-18 模型选择与建卡参数（Windows 26.11.1801 已发布）
+
+发布前复核补齐旧版普通 completion 的视频字段过滤，旧工具保持 count／rows 与原 H3 分辨率枚举。chat-proxy 部署基于现役候选只增图片／视频能力字段，保留现役区分普通聊天与 DSH 的错误响应，不用工作区整文件覆盖线上。
+
+发布原生全测发现历史工具断言仍只允许三种分辨率，已同步本次 text／reference 新增的 0.98 档位，并保留 frames 拒绝该档位的行为测试。菜单键盘回归等待初始焦点，四卡可见性回归在完成窄屏截图后恢复标准视口；冷启动导航允许 30 秒，交互超时保持原值。
+
+DSH 对话和 Agent 卡可选模型及思考程度；跟随服务配置仍可用。所选项按轮次保存，本机宿主复核实际模型回执，Cloud 沿原任务身份提交。Codex 显示并提交实际默认模型与推理程度。建卡补充 H3 的 text／reference／frames 模式、图片供应商和普通视频逐卡选项；Cloud 通过 image_card_provider／video_card_options 能力协商，旧客户端不接收未知字段。H3 提示词优化保留原文和结果、可恢复与重试；结果未知时只查询原任务。Agent 队列空闲退避上限从 60 秒调整到 5 秒，不代表模型正文生成速度已经提高。Cloud 续聊修复证据见 [续聊记录](../project_logs/2026-11-18-dsh-chat-resume.md)，本轮实际发布和回滚以 [桌面更新](DESKTOP-UPDATES.md) 为准。
+
+## Agent 按生图卡选择 provider（桌面与云端源码）
+
+Agent 建卡时可按用户要求在每张图片生成卡上填写 `provider`。例如「第一张用个人即梦 Seedream 5.5，第二张用本机 H3，只建卡」会分别选择 `dreamina-web55` 和 `minimax-h3-image`。省略时采用本轮的生图默认值。工具暴露的可选值与桌面编译器共用同一份枚举。无效值会拒绝整批。运行仍沿用生图卡的账号、环境与额度检查。
+
+本机 Codex 和 DSH 使用桌面随附的工具定义。DSH · Cloud 由 `chat-proxy` 报价声明支持，桌面在新任务中请求该能力，Worker 只对支持的客户端开放此字段。
+
+## 2026-11-15 本机 DSH 在卡片第一轮使用 Skill
+
+在 Agent 卡片选择「本机 DSH」，可直接输入 `/humanizer-zh 请润色输入文案，并把结果创建为一张内容卡`。技能名后留空格或换行。用户级技能可放在 `~/.agents/skills/<名称>/SKILL.md` 或 `$DSH_HOME/skills/<名称>/SKILL.md`。卡片会话的工作目录是 DSH 数据目录，项目级技能发现以该会话的实际工作目录为准。
+
+卡片 preset 使用官方 `dsh-skill-filesystem` 和 `dsh-tool-skill`。显式调用由 DSH 在模型请求前加载正文，模型也可用 `skill` 加载目录中匹配的技能。可调用工具为 `skill` 和 `create_canvas_cards`。需要脚本、任意文件读取或其他工具的步骤仍取决于会话的工具权限。0.2 宿主按现有 preset 指纹升级，0.1 使用当轮 preset。
+
+## 2026-11-15 在 DSH 中继续 Agent 卡片的原对话
+
+桌面向本机 DSH 投递当轮正文与素材引用说明。DSH 0.2 的手动单卡运行与详情续聊共用 Harness 会话，由 Harness 保存和恢复上下文。此前按轮次创建的旧会话保留在历史中，首次使用新版续聊时建立新的 Harness 会话。自动流程、循环及旧版 DSH 0.1 仍按轮次隔离。每轮使用独立的工具授权和请求恢复身份。
+
+DSH Web 创建 Agent 时取得会话写锁。收到 `turn/end` 只表示一轮结束，Web 宿主仍可继续持有 Agent。此时另一个 DSH 进程能看到历史，尝试发送消息时会收到 `session/writer-held`。
+
+Bowerbird 自动启动的 DSH 0.2.2-rc.1 在创建卡片专用 Agent 时保留官方 `AgentHandle`。任务结束、Agent 空闲且没有排队输入后，调用该句柄的 `dispose()`，由 DSH 完成写入并释放这一条会话。建卡工具随本轮 Agent 挂载，持久化会话保留原 ID，再打开时由接手的 DSH 加载自己的默认 preset。Bowerbird 取回结果仍按原请求 ID 区分卡片回复和后来人工追加的消息。适配按官方会话控制器的版本和文件指纹启用。手动连接的外部宿主由其自身管理会话寿命。[双宿主原生验收](../apps/desktop/src-tauri/tests/dsh-auto-host.py)
+
+## 2026-11-15 本机 DSH 登录授权与自动连接
+
+Agent 卡片和创作框切换 provider 时直接读取应用共享的可用状态。本机 DSH 自动模式在后台核对安装与模型配置，手动模式检测已保存的服务。未就绪时，菜单禁用对应选项并提供原因；登录授权和服务地址在「模型设置 → 本机 DSH」中管理。设置中的授权或连接结果会更新相同的状态。
+
+打开「模型设置」，在「本机 DSH」点击「登录授权」。桌面优先使用已安装的 DeepSeek Harness。缺少 DSH 时，桌面自动在应用资料目录安装固定版本的官方 CLI 与所需运行环境。桌面启动本机服务并准备建卡组件，调用 DSH 的账户接口，以系统浏览器打开 DeepSeek 官方授权页。授权回到发起登录的 DSH 进程，由它保管凭据、初始化默认模型。回到 Bowerbird 可以查看授权结果，创作框及 Agent 卡片可选择「本机 DSH」。
+
+已配置 API key 或自定义模型的用户可沿用原模型。手动服务入口继续支持独立运行的 DSH；历史轮次按原地址取回。安装及授权由用户点击发起，查看模型设置不会开始下载或弹出浏览器。
+
+桌面使用独立的回环端口启动官方 CLI，并将获得的登录链接留在进程内。Bowerbird 退出时关闭自己启动的 DSH。用户原有的桌面 DSH 可继续运行。对于已核验的 0.2.2-rc.1 适配器，Bowerbird 自动加载建卡参数兼容修复；识别以版本和实际文件指纹为准。其他版本使用其原生解析。[兼容范围与维护测试](../apps/desktop/dsh-patches/README.md)
+
+Windows x64 已从空应用资料目录下载并安装固定版本的 Node 与 DSH，通过真实 DSH 完成登录回调、校验当前账号、选择默认模型、发送第一条消息、建卡与重启后取回原会话。隔离验收用本地服务模拟 DeepSeek 账号和模型，核对 PKCE 校验值及模型调用使用的账号身份。另测已有 DSH 与 API key，含多余尾括号的参数只触发一次建卡。界面覆盖首次点击、取消、关闭设置后接回授权、过期重试及已有模型配置。[原生验收](../apps/desktop/src-tauri/tests/dsh-auto-host.py) · [模型设置回归](../apps/desktop/scripts/dsh-account-settings-ui.test.mjs)
+
+## 2026-11-15 本机 DSH 建卡故障回放
+
+北京时间 01:51 的工作流 `ecd0a483-c987-4825-916f-30f84c2e638d` 在同一 Agent 轮次里经历了两次不同的失败。通过卡片 ID、原请求 RPC ID 和本机 DSH 会话记录交叉核对，第一批参数是合法 JSON，包含一张表格及五张生成卡。内容卡同时携带有效的 `rows` 和 `text: ""`，桌面返回业务校验失败。随后模型重写了整批参数，在 `connections` 属性后写入等号，DSH 在进入工具前以 `MALFORMED_RESPONSE` 结束。该轮 SQLite 成功建卡回执为零，实际 `request/header` 的工具 schema 与当前共享 schema 一致。
+
+内容卡现在接受表格随附的空字符串占位，同时提供非空正文与表格仍会返回要求二选一的反馈。原始第一批参数已在内存 SQLite 中经过建卡事务，同一调用重放只返回原回执。现场第二批参数仍应由严格解析拒绝。另三条历史故障的原始字符串分别长 1468、2381、3216 个 UTF-16 码元，三条均为完整根对象后单独多出一个右花括号。
+
+桌面 0.2 桥使用包含 schema、工具模块和 persona 的 preset 指纹，创建会话时验证宿主回执。独立 DSH 0.2.2-rc.1 的 web profile 已用本地模拟上游验证从旧 preset 热升级以及最终请求头。已有成功建卡的手动对话保留历史摘要，循环下一项的完整 prompt 仅携带本轮上下文。原轮次的宿主终态及诊断码保存在原请求记录中，回复正文与报错分别显示。取回原失败轮保留终态，显式重做使用新的请求 ID。如原轮已有卡片，桌面会列出卡片供确认。定向 Chromium 回归覆盖同项独立分支、此前已完成的循环项、旧等待记录以及结果未知时的原单查询。
+
+DSH 解析补丁已在独立 0.2.2-rc.1 宿主上验证。带单个多余右花括号的本地模拟响应经 `session/prompt` 完成，工具以原 call ID 执行一次，下一次对话请求正常接收工具结果。旧版 3080 宿主仍使用官方适配器；新版桌面通过上面的自动连接入口加载兼容处理。
+
+## 2026-11-13 Agent 建卡与运行（Cloud 已部署，桌面待发包）
+
+`create_canvas_cards` 可用 `triggerMode`、`dailyAt`、`runAt` 和 `count` 配置本批触发卡。`runCard` 指定本批一张生成、H3、循环或手动触发卡，由桌面项目控制器启动。回执区分建卡与启动结果；取回中断的云端会话只读取已保存的结果。桌面与 VPS 使用同一工具定义，聊天网关允许最小回执携带 `run_status`。
+
+## 2026-11-13 云端对话统一为 DSH · Cloud
+
+卡片、创作框和详情共用三个选项：本机 Codex、本机 DSH、DSH · Cloud。旧草稿、工作流和模板中的 `deepseek-cloud` 在读取时按 `dsh-cloud` 处理。SQLite 0059 原位更新会话 provider，保留会话编号、记录与建卡回执。旧任务仍按原请求身份取回，旧消息可在详情查阅；首次使用 VPS 的轮次是新云端上下文的起点。
+
+11:36（北京时间）正式聊天网关切换为只接受 DSH v2 新请求。旧版直连和 DSH v1 新请求返回 HTTP 426 提示更新，登录账号已受理的原单仍可取回。独立 Agent Run 的新建入口此前已强制统一 Agent 与 DSH，旧执行器仅用于旧任务。[服务端发布与验证](../apps/cloud/CHAT.md)
+
+Windows x64 本地测试安装包 26.11.1301 位于 `Windows/dist/DSH-Cloud-26.11.1301-test/`，不在官网更新渠道。已验证 NSIS 包完整性、包内主程序与构建产物哈希一致。安装包 SHA-256 为 `FE364E4682AF4EBFE9AF13EFC09EA816299325B06813D9732A43E9B73D0FB56C`。13 项 Rust 专项、54 项桌面状态/工作流回归、两组 Chromium 界面及完整 TypeScript/Vite 构建通过。Mac 安装包未构建。
+
+## 2026-11-13 DSH · Cloud v2 桌面会话
+
+v2 桌面每轮仅提交一条用户消息，附当轮显式选择的素材别名。手动续聊和直接运行 Agent 单卡复用 `c-<SQLite 会话 ID>`，工作流及循环使用 `t-<本轮 ID>` 独立执行。桌面保留公开历史以供查看，不再将本地历史、旧建卡摘要或素材路径拼入请求。原卡「新对话」及切换服务后，已使用会话的历史身份保存在项目历史，新对话使用新的云端身份。
+
+旧会话首次进入 v2 手动对话时，详情在对应消息前标出云端历史的起点。此前的文字保存在本机，没有自动回填；后续续聊沿该云端会话进行。新建会话无迁移提示。发送检查 `dsh_vps_v2_available`，技能沿用 `dsh_vps_skills_available`。旧 v1 原单仍按既有 job 或幂等键取回、取消与重送已有建卡回执。
+
+Cloud 校验账号归属并串行处理同一会话。Worker 通过 DSH 的原生会话记录恢复上次成功的轮次，历史选取与压缩交给 harness。停止、断线取回或重复提交都沿用原任务身份。与本次发布及验证有关的记录见[云端会话发布记录](../project_logs/2026-11-13-dsh-native-session.md)。
+
+## 2026-11-12：DSH · Cloud 整轮移至 VPS（候选，未部署）
+
+新版桌面把普通对话、手动续聊和选定技能都交给 VPS 上的 DSH。卡片内「新对话」不会跳出应用；首次发送从空历史开始。手动续聊按完整轮次选取公开历史，流程驱动的 Agent 只发本轮输入。Cloud 能力随账号报价在应用启动时读取，并在实际提交时复核；用户不需要在本机安装 DSH 或 Node。旧客户端仍使用原协议，本机 DSH 继续使用用户自己的服务。
+
+桌面、工作流模板和建卡工具只接触用户提供的文字、素材别名、公开技能 ID 与参数，以及最终答复或需要写入画板的建卡内容。文本编辑与 H3 视频提示词由 VPS 根据账号权限加载；技能正文和内部执行步骤不随桌面分发，选用私有技能的轮次不开放建卡工具。用户自己编辑的画板和导出的模板仍然可读；需要保密的步骤应维护在 Worker 的技能中。
+
+普通对话需要建卡时，桌面按原调用 ID 在 SQLite 事务中执行并回传数量。只点「取回回复」不会补建卡；已有事务可重送原回执。停止向云端取消原任务；上游已受理且结果不明时不重发。发布顺序、功能开关、记账与回退见 [Cloud 对话](../apps/cloud/CHAT.md)。
+
+隔离验收、冻结范围与部署状态见[候选记录](../project_logs/2026-11-12-dsh-vps-chat.md)。桌面前端构建后可执行 `node scripts/check-cloud-chat-skill-bundle.mjs <产物目录>` 核验私有技能正文没有进入分发文件。
+
+2026-11-11 桌面源码支持在「对话」创作框激活时双击视频。视频和图片按用户选择顺序保存到同一轮，最多八个素材。Codex 的图片输入接收已验证的图片，视频按本地素材引用提供给建卡和 HyperFrames 制作工具。Cloud 和 DSH 沿用文字及建卡别名。对话历史可播放视频附件。行为覆盖在 `scripts/composer-video-reference-ui.test.mjs` 和 `local_chat_attachment_validation_preserves_mixed_media_and_image_input_order`。
+
+## 2026-11-12：本机 DSH 适配 DSH 0.2（源码待发布）
+
+DSH 0.2.2-rc.1 换了本机 HTTP 契约，原桥会把"服务没起"和"契约不匹配"都落到同一句提示。本轮把 `dsh-local` 改成两代并存：
+
+- **探活**：先调 `POST /api/agentPresets/list`（0.2 路由，`payload:{args:{}}`），返回 `presets` 即 0.2；否则退回 0.1 的 `agentPreset.list`（要求 `authorable`）。
+- **0.2 会话**：`session/create`、`session/prompt`（`{sessionId,mode:"queue",requestId,content}`）、`session/events`（`{address:{kind:"session",sessionId},maxMessages,throughSeq?}`，返回 `records/cursor/hasMore`）与 `session/cancel`。回复折叠沿用 `turn/start`、`assistant/chunk|message`、`turn/end`，并按 0.2 的 `agent/inbox/spliced` 关联请求身份。
+- **preset 安装**：0.2 注册表不扫描目录、也不接受 preset 路径（实测目录 preset 被 `session/create` 回 `agent-preset/not-found`）。连接时把 `bowerbird-chat` preset 作为 profile 补丁写进 `$DSH_HOME/profiles/*/cordis.patch.yml`（带起止标记，可重复执行），工具模块按内容哈希命名并与补丁同目录，按 `./bowerbird-chat-<hash>.mjs` 相对路径引用。`web` profile 即时重载；桌面 profile 无 HMR，重启 DSH 后生效。
+- **每轮握手**：preset 常驻，不再每轮生成目录。每轮以会话 ID 为键把 `{endpoint,token}` 写入 `$DSH_HOME/.bowerbird/current.json`（0600），工具执行时按 `exec.agent.id` 取连接，结束后删除；未安装 preset 时用默认 preset 纯文本降级，不静默扩大或缩窄既有工具面。
+- **提示**：状态新增 `localNote`，安装需要重启或安装失败时在 DSH 设置里说明，连接本身仍成功。
+
+验证：`cargo check --tests` 通过（仓库内 `tests/pinterest_native_fixture.rs` 的既有失败与本次无关），前端 `tsc --noEmit` 通过。用独立 `DSH_HOME` 启动同版本 `dsh web`（0.2.2-rc.1）核对登录流程、`agentPresets/list`、`session/create|prompt|events|cancel`、补丁热加载与工具模块加载（`ctx.tools.register` 与 `agent/created` 均通过，仅 `presentAs` 已移除）。**未验收**：Rust 用例未能在本机执行（测试二进制启动即 `0xC0000139`，改动前的旧二进制同样失败）、真实模型回合的工具调用、桌面 profile 重启后的实际生效、Windows 正式包。
+
+2026-11-12 实机（`dsh web`）：连接并完成一轮生成。落盘证据：`web` 与 `desktop` 两个 profile 的 `cordis.patch.yml` 均带托管标记，`web` profile 生成 `bowerbird-chat-7209f80d0d2d.mjs`，`$DSH_HOME/.bowerbird/current.json` 在轮次结束后只剩空对象，DSH 侧存在 `session-bowerbird-chat-98653c47…` 会话。会话日志显示 `tools:[{"name":"create_canvas_cards",…}]` 已随请求下发，模型按"仅显式要求才建卡"的指令判断该轮是写提示词、未调用工具——属预期行为，不是桥故障。**仍待验收**：一次显式建卡请求下的 `tool/start`／`tool/result` 与画板落卡。
+
+2026-11-12 失败原因可读化：0.2 的 `turn/end` 可能以 `kind:"error"` 结束。实测循环运行中模型流式输出的卡片工具参数不是合法 JSON，DSH 返回 `MALFORMED_RESPONSE`／`tool input is invalid JSON`；桥原先把它兜成"请检查模型配置"，现改为"本机 DSH 本轮失败：模型返回的卡片工具参数不是合法 JSON（码）；可直接重跑这张卡片"，其他错误码只带 code、不回显上游原文（沿用不泄露主机内部信息的原则）。
+
+定位证据：`dsh-llm-deepseek` 把 `input_json_delta.partial_json` 逐段拼接（`block.json += argumentsDelta`），`content_block_stop` 时整体作为 `arguments`，`message_stop` 再 `JSON.parse`；DSH 不添加任何字符。三例失败（10:17、03:26、03:19）的 `arguments` 全部以 `}}` 结尾，即模型在根对象后多写了一个 `}`，长度分别 1468/3216/2381；这组历史样本的观测数不足以估算故障率。属模型侧生成问题，桥与循环调度均不产生该字符。
+
+代码侧规避（2026-11-12）：① 自动 Agent 卡轮次不再由 Bowerbird 回放历史对话（循环逐轮驱动，手动对话仍带历史；历史是否促成这些格式错误尚未验证）；② 建卡工具 schema 去掉 5 分支 `oneOf`，改为单对象 + `kind` 枚举，简化模型选取卡片类型的规则；Rust 侧按 kind 丢弃跨类型字段、仍拒绝未知键（`endpoint` 等），`CARD_TOOL_VERSION` 升到 5。不引入自动重试。
+
+2026-11-12 审查补齐：① 本机 preset 升级改为契约同步——连接时比对 profile 补丁里的托管块与当前内容寻址模块，不一致就先移除托管块，靠 `agentPresets/list` 是否消失判断宿主会不会热加载；消失后重写、等它重新出现才判 `Active`，不消失则写回并报待重启；状态里对"已安装但不是当前版本"单独提示。② 自动轮次的 prompt 连 `[近期建卡历史]` 摘要也不带（此前只去掉了历史消息数组）。③ 失败文案去掉 `MALFORMED_RESPONSE` 等下划线码（前端会把含码文本整句替换为兜底）；仅 `tool input is invalid JSON` 说"卡片工具参数不是合法 JSON"，同码其他异常说"模型回复格式异常"；文案改为"重跑前请确认本轮已创建的卡片"，不再承诺干净重跑。④ 宿主明确失败的轮次在流程中按失败终止，不再落到"等待取回原结果"。**未完成**：DSH 解析边界的尾括号规范化必须由 DSH 侧完成——Bowerbird 收到参数时已被拒绝，Rust 无法补救。
+
+循环中的手动重做已在桌面源码实现：对照原请求、会话和轮次核实宿主失败；有已建卡片时先展示，再用同一份输入提交新轮。其余无法确定结果的轮次继续找回原请求。见[循环重试与验收](CANVAS-WORKFLOW.md)。
+
+## 2026-11-13 Agent 卡片运行与切换对话服务（桌面源码待发包）
+
+用户点击卡片右下角「运行」，以现有会话执行指令框的内容。点击卡片打开详情，也可在同一会话续聊。点击对话服务菜单右侧的「新建对话」按钮会开启新对话并显示提示。卡片保留草稿、接线、服务、模型和推理强度，用户点击「运行」后才发送当前指令。自动流程按步骤提交本轮输入。
+
+选择另一项 provider 会在原卡切换到该服务，等待下次运行。已有消息时，`local_chat_new_on_card` 在同一 SQLite 事务中保存旧会话的历史及恢复身份，再把空会话绑定到原卡。当前会话尚未发言时直接复用其 ID。旧对话可在项目历史中读取、取回或独立续聊。卡片或相关流程运行中须等本轮完成或停止后再切换。
+
+## 2026-11-09：Agent 卡片与对话统一（Cloud 已部署，桌面源码待发包）
+
+新 Agent 卡片与创作框对话统一使用 `localChatStore` / `local_chat_send`。首次发送在 SQLite 事务内创建同 nodeId 的 Agent 工作流投影；旧 note 只保留历史外键，画板不重复显示。工作流提交前保存原 requestId，再按 submittedTurnId 交付；停止、续聊、历史恢复与模型控件共用对话实现。旧 ds-inbox／VPS 任务仅恢复，不作为新发送入口。模板 v6 保存模型配置并剥离会话身份。
+
+移除对话链路原有文字字节拦截及按字节丢弃历史的逻辑，避免恢复 Agent 已取消的限制。保留原对话的消息数量、工具闭集、模型参数、媒体约束及计费／身份校验；没有新增图片像素上传或自动生图权限。经用户确认，聊天 Edge v3、VPS Worker、官网网关与 0084 已部署；真实小对话、原请求恢复和大文本完整往返通过。Cloud 现役哈希、部署证据及桌面尚未发包边界见[实施记录](../project_logs/2026-11-09-agent-chat-unification.md)。本文下方日期记录中的两套执行入口和旧文本字节限额仅描述当时状态。
+
+## 2026-11-07：Cloud 对话已上线
+
+DeepSeek · Cloud 与 DSH · Cloud 的共用后端已部署启用，测试 **0 Bcoin**，不要求用户自带 DeepSeek API key。Windows 26.11.601／602 已包含对应桌面入口；当前 602 无须重打包。官网真实用户完成短对话，原请求重放仍只有一任务、一条 confirm(0)，余额不变；非法凭据与图片输入被拒绝。临时 Auth 已清理。仅文本 completion 链路本次做真实验收，桌面 DSH 完整工具轮次与画板建卡未重验。部署、验证和回退见 [Cloud 对话](../apps/cloud/CHAT.md)；下方未部署／未发布是对应开发时点的历史记录。
+
+## 2026-11-06：本机 DSH 与 DSH · Cloud（源码待发布）
+
+- 新增 `dsh-local`／`dsh-cloud`；会话固定 provider，0053 迁移保留原 Codex／DeepSeek Cloud 身份、消息与建卡回执。两条路径共用草稿、对话历史、卡片／时间线及详情面板，Codex 参数仅用于 `codex-local`。
+- **本机 DSH** 连接用户已启动的 `dsh web`，使用其登录、默认模型和模型服务配置，不要求在 Bowerbird 重填 DeepSeek API key。设置保存本机服务地址与可选登录链接；只接受 loopback、同源登录链接，凭据不回传前端。未另配时复用既有 Agent DS 的 `BOWERBIRD_DSH_WEB_URL` 与登录文件。
+- 每轮建立独立 DSH session 和临时最小 preset，以应用公开历史续聊。复用 DSH host 的模型认证，不读取模型密钥；只开放当前轮次的 `create_canvas_cards`。短期 loopback 工具通道绑定 session／call，复用既有建卡事务、权益与撤销，支持生成、内容、触发、循环、H3 与分区。没有添加自动生成媒体权限或 HyperFrames 工具。
+- **2026-11-12：流程驱动的 Agent 卡片轮次不再附带历史 JSON。** 循环卡片逐轮执行 Agent 时，旧实现把此前轮次整体序列化进 prompt；长 JSON 会让上游模型产出非法工具参数（DeepSeek `tool input is invalid JSON`）。现在按轮次记录判断：由流程提交的 Agent 轮次只发送本轮指令与素材别名；用户在 Agent 详情里手动“继续对话”仍按公开历史续聊。其余 DSH 身份、工具闭集、停止与取回契约不变。
+- 本机 preset 位于 `DSH_HOME/.agent-presets`（默认用户 `.dsh`）。只新增本轮独立目录；Unix 权限为 0700。正常结束清理本次两份配置文件，保留 DSH 自身会话历史。应用崩溃可能留下失效 preset，工具服务随应用退出失效；不会遍历删除用户 preset。已用实际 DSH 验证删除 preset 后冷读历史不会重新启动模型。
+- **DSH · Cloud** 在应用私有目录安装锁定的 DSH `0.1.1-rc.2`，要求 Node.js 24；模型经过现有 `chat-proxy`，平台密钥和账号令牌不传给 Node 子进程。DSH 负责原生 Agent loop，桌面只桥接单次 completion 与卡片事务；未新增 Cloud runner。客户端 system、模型、工具 schema 不能覆盖服务端契约。
+- 安装使用随源码冻结的 manifest／lock 和 `npm ci --ignore-scripts --legacy-peer-deps`；固定兼容的 Cordis 依赖。每个桥文件版本使用独立目录，每轮独立临时 DSH_HOME，仅允许受控卡片工具，禁用 shell、用户文件、网页、全局配置、遥测和自动模型重试。自检只初始化 ACP 与会话，不调用模型。
+- 托管路径沿现有 `chat_deepseek` 零价报价和预留／结算，测试阶段 **0 Bcoin**，真实上游费用由平台承担；非零报价仍不能静默发送。本机路径不走 Bcoin，外部模型账户费用遵循用户已有配置。两个 DSH 入口本轮均只传文字与建卡图片别名，不上传图片像素。
+- 每轮最多 12 次托管 completion；工具调用 ID 和参数须匹配当前模型回复。发送前记录原请求，结果不明不重发。停止关闭工具通道；本机请求 DSH cancel，托管退出本地 DSH 进程树，已被 Cloud 接收的 completion 仍可能完成。显式“取回回复”只读原任务，不重复请求模型或执行工具，旧轮结果不能覆盖新轮。
+
+验证：77 项原生对话回归通过、3 项外部运行时探针默认忽略；另显式通过 Rust 内嵌桥的实际 DSH 自检。62 项前端行为、DSH 界面专项、实际托管 DSH 的 8 项协议／生命周期测试、本机实际 DSH + 模拟模型的工具隔离／冷恢复验证通过。完整 TypeScript 与独立 Vite 构建通过。CUA 合成页面确认入口、连接、换行、详情和回复终态，截图 `.tmp/dsh-chat/dsh-chat-ui.png`。完整旧 chat UI 用例受工作区既有投影 canvas 遮挡影响，未宣称通过；未修改该投影逻辑。详见[行动记录](../project_logs/2026-11-06-dsh-chat.md)。
+
+没有调用真实模型、读取用户模型密钥、迁移用户库、部署 Cloud 或发布安装包。Cloud 仍须按 [CHAT.md](../apps/cloud/CHAT.md) 配套部署和启用；本轮只完成源码接入。macOS 原生安装／进程清理与真实账户联调尚待验收。
+
+## 2026-11-06：Codex 模型与推理强度（源码待发布）
+
+- 新对话及详情续聊共用 `CodexModelSelect`，菜单复用 `TacticalSelect`；CLI `model/list` 返回型号、默认值和支持的推理强度，不硬编码可用型号。目录读取失败可重试，旧默认发送不依赖目录成功。
+- `ChatSendInput.codexOptions` 进入原有请求身份；`local_chat_turns.request_json` 另外保存继承后的参数快照，恢复及重放不会受后续选择影响，无需 SQL 迁移。省略参数继承已有选择，显式 `{}` 解析当前目录默认型号／强度并覆盖前轮值。
+- `thread/start`／`thread/resume` 传 `model` 和线程推理配置，`turn/start` 明确传 `model`／`effort`。所选组合在发送模型前按目录验证；Cloud 拒绝这些参数，工具权限与全局 CLI 配置保持。
+- 草稿保留未发送选择；续聊默认恢复上次选择，更换型号自动调整不兼容强度。发送／回复期间锁定菜单，避免显示与已提交参数不一致。
+- 验证：31 项前端行为测试、完整 TypeScript／Vite、65 项 Rust 对话回归通过；2 项真实 CLI 探针按既有规则忽略。CUA 合成 IPC 验证型号联动、参数发送、回复中禁用、刷新后续聊草稿恢复与 Escape 收起菜单。截图 `.tmp/chat-models/chat-models.jpg`，构建 `apps/desktop/.tmp/chat-model-build/`；未调用真实模型，未发布安装包。详见 [行动记录](../project_logs/2026-11-06-chat-models.md)。
+
+## 既有 provider 与工具交付
+
+2026-11-05：本机 Codex 对话增加 `hyperframes_video`，同一模型在对话内编写、检查、预览并渲染视频，成片入库并在对话消息播放。只有此受控宿主工具获得当前视频工程写入／渲染能力，普通 shell、全局 Skill、MCP 与 Cloud 工具范围保持。旧本机对话迁移至工具版本 v4，保留应用历史身份。实现与验收边界见 [VIDEO-SKILL.md](VIDEO-SKILL.md#2026-11-05对话渠道接入源码未发布)。
+
 2026-10-31。产品约定以 `PROJECT.md` 为准；本页记录本轮实现、验证和交付边界。
 
 ## 本轮范围
@@ -30,3 +210,10 @@
 - 界面证据：`apps/desktop/.tmp/local-chat/provider-selector.jpg`、`provider-cloud-recovered.jpg`。截图为合成验收数据。
 - 未部署 Cloud 迁移、Edge、官网网关或 VPS Worker，未运行真实 DeepSeek 请求。上线必须配套执行 [Cloud 对话部署顺序](../apps/cloud/CHAT.md)；测试开关默认关闭，数据库价格为 0 Bcoin。
 - 按 ub-mode 分为 Cloud 单次请求服务与桌面对话选择两批提交；只暂存本轮文件及共享文档中的本轮增量，保留工作区其他改动。未创建临时 worktree；验收服务结束后只停止本轮 17883 端口进程，保留本轮截图与构建证据。
+
+
+## 建卡模型和视频参数
+
+建卡工具的生图供应商目录包含 MiniMax-H3-Image，使用 generation、mediaType=image、provider=minimax-h3-image，可通过 referenceAliases 引入当轮参考图。普通视频卡支持逐卡 videoChannel 和完整 videoOptions，未指定时沿用应用默认值。H3 视频使用 comfy-video，支持 text、reference、frames 三模式；参考模式的 firstFrameAlias 表示参考图，0.98 分辨率仅适用于 text/reference。端口与模式不匹配时整批拒绝。
+
+2026-11-18 源码回归覆盖逐卡模型、参数、H3 三模式及无效连线。上线前需同步云端工具目录与能力声明。只读检查发现当时现役 Worker 的建卡 schema 完全没有 provider 字段，解释了云端 Agent 看不到 H3 Image 选项。

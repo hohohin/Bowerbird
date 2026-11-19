@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server = await createServer({ configFile: false, root: process.cwd(), server: { host: '127.0.0.1', port: 1590, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: '.tmp/workflow-prompt/vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, server: { host: '127.0.0.1', port: 1590, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
@@ -26,11 +26,11 @@ try {
     const { useStore } = await import('/src/store.ts');
     const { api } = await import('/src/lib/api.ts');
     window.requests = [];
+    useStore.setState({ codexHealth: { ok: true }, cloudEntitlement: { policy: { can_use_byo: true, max_parallel_jobs: 10 }, balances: { daily: 0, sub: 0, topup: 0 } } });
     api.localAgentFindAssetId = async () => 'existing';
     useStore.setState({ startGeneration: async (...args) => {
-      const [prompt, assets] = args, identity = args[12];
+      const [prompt, assets] = args;
       window.requests.push({ prompt, ids: assets.map(a => a.id) });
-      useStore.setState(state => ({ genJobs: { ...state.genJobs, [identity.jobId]: { turns: [{ turnKey: identity.turnKey, images: ['existing.png'] }] } } }));
       return { accepted: true };
     } });
     await canvasWorkflowController('p').start('gen', true);
@@ -57,10 +57,9 @@ try {
     const table = window.snapshot().nodes.find(n => n.id === 'prompt-text'), payload = JSON.parse(table.payloadJson);
     payload.cells[0][0].text = '更新后的文字'; await api.projectCanvasNoteUpdate(table.id, JSON.stringify(payload));
     api.localAgentFindAssetId = async () => 'existing';
-    window.requests = []; useStore.setState({ startGeneration: async (...args) => {
-      const [prompt, assets] = args, identity = args[12];
+    window.requests = []; useStore.setState({ codexHealth: { ok: true }, cloudEntitlement: { policy: { can_use_byo: true, max_parallel_jobs: 10 }, balances: { daily: 0, sub: 0, topup: 0 } }, startGeneration: async (...args) => {
+      const [prompt, assets] = args;
       window.requests.push({ prompt, ids: assets.map(a => a.id) });
-      useStore.setState(state => ({ genJobs: { ...state.genJobs, [identity.jobId]: { turns: [{ turnKey: identity.turnKey, images: ['existing.png'] }] } } }));
       return { accepted: true };
     } });
     const c = canvasWorkflowController('p'); await c.start('gen', true);
@@ -84,7 +83,7 @@ try {
   const textOption=list.getByRole('option').filter({hasText:'文本 1'});
   assert.equal(await textOption.isEnabled(),true);await textOption.click();
   await editor.pressSequentially(' 和 @');await list.waitFor();
-  const imageOption=list.getByRole('option').filter({hasText:'图片来源 1'});
+  const imageOption=list.getByRole('option').filter({hasText:'素材来源 1'});
   assert.equal(await imageOption.isEnabled(),true);await imageOption.click();
   const identities=await page.evaluate(async()=>{
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');

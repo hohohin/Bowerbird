@@ -11,9 +11,15 @@ w.calls = []; w.enabled = false; w.orders = {}; w.mode = "success";
 const free: any = { user_id: "user-a", tier: "free", balances: { daily: 0, sub: 200, topup: 0 }, policy: {}, recent_transactions: [], generation_services: [], prompt_configs: [] };
 w.switchAccount = (id: string) => useStore.setState({ cloudAuth: { cloud_available: true, logged_in: true, user_id: id, email: `${id}@example.test`, display_name: id, avatar_url: null, access_expires_at: null, reason: null }, cloudEntitlement: { ...free, user_id: id } });
 w.switchAccount("user-a");
+w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
+let callbackId = 0;
 w.__TAURI_INTERNALS__ = {
+  transformCallback: () => ++callbackId,
+  unregisterCallback() {},
   invoke: async (command: string, args: any) => {
     w.calls.push({ command, args });
+    if (command === "plugin:event|listen") return args.handler;
+    if (command === "plugin:event|unlisten") return;
     if (command === "cloud_checkout_capability") return { enabled: w.enabled, provider: "wechatpay", custom_max_yuan: 21474836 };
     if (command === "cloud_checkout_status") {
       if (w.mode === "query-error") throw "query failed: https://private.example/api";

@@ -103,7 +103,7 @@ export function Toolbar({
   function toggleCanvasLibrary() {
     if (canvasLibraryOpen) useLocalFileMode.getState().setOpen(false);
     else {
-      useLocalFileMode.getState().openSource("global");
+      useLocalFileMode.getState().setOpen(true);
       useStore.getState().clearSelect();
       beginOnboardingOperation("expand-source", activeProjectId)();
     }

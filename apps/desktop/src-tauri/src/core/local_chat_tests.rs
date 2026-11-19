@@ -1,4 +1,310 @@
 use super::*;
+
+fn agent_projection(db: &Database) -> serde_json::Value {
+    let source: String = db.conn.lock().unwrap().query_row("SELECT document_json FROM canvas_workflows WHERE project_id='project-a'", [], |row| row.get(0)).unwrap();
+    serde_json::from_str(&source).unwrap()
+}
+
+#[test]
+fn local_chat_projects_one_agent_and_delivers_only_the_original_turn() {
+    let db = fixture();
+    let mut request = input("large-agent");
+    request.text = "长篇输入".repeat(100_000);
+    let first = db.begin_local_chat(&request).unwrap();
+    let chat = &first.conversation.summary;
+    let projection = agent_projection(&db);
+    assert_eq!(projection["nodes"].as_array().unwrap().len(), 1);
+    let node = &projection["nodes"][0];
+    assert_eq!(node["id"], chat.node_id);
+    assert_eq!(node["kind"], "agent");
+    assert_eq!(node["chatConversationId"], chat.id);
+    assert_eq!(node["prompt"], request.text);
+    assert_eq!(first.conversation.submitted_turn_id.as_deref(), Some(first.turn_id.as_str()));
+    assert_eq!(chat.status, "running");
+    db.update_local_chat_text(&chat.id, &first.turn_id, "原轮次结果").unwrap();
+    db.finish_local_chat(&chat.id, &first.turn_id, "done", None).unwrap();
+    assert_eq!(agent_projection(&db)["nodes"][0]["outputs"]["text"]["text"], "原轮次结果");
+    let mut next = input("agent-continue");
+    next.conversation_id = Some(chat.id.clone());
+    next.agent_node_id = Some(chat.node_id.clone());
+    let second = db.begin_local_chat(&next).unwrap();
+    let replay = db.local_chat_by_request(&request.request_id).unwrap().unwrap();
+    assert_eq!(replay.submitted_turn_id.as_deref(), Some(first.turn_id.as_str()));
+    assert_eq!(replay.summary.status, "running");
+    db.finish_local_chat(&chat.id, &first.turn_id, "done", None).unwrap();
+    assert_eq!(db.get_local_chat(&chat.id).unwrap().unwrap().summary.status, "running");
+    assert_eq!(agent_projection(&db)["nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(count(&db, "local_chat_turns"), 2);
+    assert_eq!(count(&db, "canvas_nodes"), 1);
+    db.finish_local_chat(&chat.id, &second.turn_id, "stopped", None).unwrap();
+}
+
+#[test]
+fn local_chat_new_on_card_keeps_history_and_starts_each_provider_without_its_previous_context() {
+    for provider in [ChatProvider::CodexLocal, ChatProvider::DshLocal, ChatProvider::DshCloud] {
+        let db = fixture();
+        let mut first = input("old-request");
+        first.provider = Some(provider);
+        first.text = "原会话专用的文字".into();
+        let started = db.begin_local_chat(&first).unwrap();
+        let old = started.conversation.summary;
+        let restart = || db.new_agent_chat("project-a", &old.node_id, &old.id, None, None);
+        assert!(restart().is_err());
+        db.finish_local_chat(&old.id, &started.turn_id, "done", None).unwrap();
+        db.set_local_chat_provider_thread(&old.id, "old-thread").unwrap();
+        assert!(db.new_agent_chat("project-b", &old.node_id, &old.id, None, None).is_err());
+        let options = (provider == ChatProvider::CodexLocal).then(|| ChatCodexOptions {model: Some("chosen".into()), reasoning_effort: Some("high".into())});
+        let new = db.new_agent_chat("project-a", &old.node_id, &old.id, None, options.clone()).unwrap();
+        assert_ne!(old.id, new.summary.id);
+        assert_ne!(old.thread_id, new.summary.thread_id);
+        assert!(new.actions.is_empty() && new.messages.is_empty());
+        assert_eq!(new.summary.codex_options, options);
+        assert_eq!(old.node_id, new.summary.node_id);
+        assert_eq!(old.provider, new.summary.provider);
+        assert_eq!(db.local_chat_provider_thread(&new.summary.id).unwrap(), None);
+        assert!(restart().is_err(), "a delayed second click targets the previous conversation");
+        assert_eq!(db.new_agent_chat("project-a", &old.node_id, &new.summary.id, None, None).unwrap().summary.id, new.summary.id);
+        assert_eq!(count(&db, "local_chat_turns"), 1);
+        let mut next = input("fresh");
+        next.conversation_id = Some(new.summary.id.clone());
+        next.text = "新的第一条消息".into();
+        let current = db.begin_local_chat(&next).unwrap();
+        assert_eq!(current.conversation.summary.title, next.text);
+        assert_eq!(current.conversation.summary.codex_options, options);
+        assert_eq!(current.conversation.messages.len(), 2);
+        assert_eq!(current.conversation.messages[0].text, next.text);
+        let archived = db.local_chat_by_request(&first.request_id).unwrap().unwrap();
+        assert_eq!(db.local_chat_provider_thread(&old.id).unwrap().as_deref(), Some("old-thread"));
+        assert_eq!(archived.messages[0].text, first.text);
+        assert_ne!(archived.summary.node_id, old.node_id);
+        let mut continuation = input("old-continue");
+        continuation.conversation_id = Some(old.id.clone());
+        let old_continued = db.begin_local_chat(&continuation).unwrap();
+        db.update_local_chat_text(&old.id, &old_continued.turn_id, "独立历史卡的迟到回复").unwrap();
+        db.finish_local_chat(&old.id, &old_continued.turn_id, "done", None).unwrap();
+        let graph = agent_projection(&db);
+        let nodes = graph["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 2);
+        assert!(nodes.iter().any(|n| n["id"] == old.node_id && n["chatConversationId"] == new.summary.id && n["outputs"]["text"].is_null()));
+        assert!(nodes.iter().any(|n| n["id"] == archived.summary.node_id && n["chatConversationId"] == old.id && n["outputs"]["text"]["text"] == "独立历史卡的迟到回复"));
+    }
+}
+
+#[test]
+fn local_chat_switch_provider_archives_used_turns_and_reuses_the_empty_conversation() {
+    let db = fixture();
+    let mut input = input("old-codex");
+    let options = ChatCodexOptions { model: Some("fixture".into()), reasoning_effort: Some("high".into()) };
+    input.codex_options = Some(options.clone());
+    let started = db.begin_local_chat(&input).unwrap();
+    let old = started.conversation.summary;
+    let switch = |id: &str, target, options| db.new_agent_chat("project-a", &old.node_id, id, Some(target), options);
+    assert!(switch(&old.id, ChatProvider::DshCloud, None).is_err());
+    db.update_local_chat_text(&old.id, &started.turn_id, "旧产物").unwrap();
+    db.finish_local_chat(&old.id, &started.turn_id, "done", None).unwrap();
+    db.set_local_chat_provider_thread(&old.id,"old-codex-session").unwrap();
+    let mut doc = agent_projection(&db);
+    doc["nodes"][0]["inputs"] = serde_json::json!({"text":[{"nodeId":"upstream","portId":"text"}]});
+    doc["nodes"][0]["x"] = serde_json::json!(55);
+    db.conn.lock().unwrap().execute("UPDATE canvas_workflows SET document_json=?1 WHERE project_id='project-a'",[doc.to_string()]).unwrap();
+
+    // A failure saving the projection must also roll back the archived note and new thread.
+    db.conn.lock().unwrap().execute_batch("CREATE TEMP TRIGGER fail_switch BEFORE UPDATE ON canvas_workflows
+        BEGIN SELECT RAISE(ABORT,'fixture write failure'); END;").unwrap();
+    assert!(switch(&old.id, ChatProvider::DshCloud, None).is_err());
+    db.conn.lock().unwrap().execute_batch("DROP TRIGGER fail_switch").unwrap();
+    assert_eq!(db.get_local_chat(&old.id).unwrap().unwrap().summary.node_id, old.node_id);
+    assert_eq!(count(&db,"canvas_nodes"),1);
+    assert_eq!(count(&db,"creative_threads"),1);
+
+    let fresh = switch(&old.id, ChatProvider::DshCloud, Some(options.clone())).unwrap().summary;
+    assert_ne!(fresh.id, old.id);
+    assert_eq!(fresh.node_id, old.node_id);
+    assert_eq!(fresh.provider, "dsh-cloud");
+    assert!(fresh.codex_options.is_none());
+    let node = &agent_projection(&db)["nodes"][0];
+    for field in ["x","inputs","outputs","prompt"] { assert_eq!(node[field],doc["nodes"][0][field]); }
+    assert_eq!(node["chatProvider"], "dsh-cloud");
+    assert!(node.get("chatCodexOptions").is_none());
+    let history = db.local_chat_by_request(&input.request_id).unwrap().unwrap();
+    assert_eq!(history.summary.id,old.id);
+    assert_eq!(history.summary.provider, "codex-local");
+    assert_eq!(history.summary.codex_options,Some(options.clone()));
+    assert_eq!(db.local_chat_provider_thread(&old.id).unwrap().as_deref(),Some("old-codex-session"));
+    assert_ne!(history.summary.node_id, fresh.node_id);
+    assert!(switch(&old.id,ChatProvider::DshCloud,None).is_err());
+
+    let mut doc = agent_projection(&db);
+    doc["nodes"][0]["chatDshSkill"] = serde_json::json!({"id":"text-editor"});
+    db.conn.lock().unwrap().execute("UPDATE canvas_workflows SET document_json=?1 WHERE project_id='project-a'",[doc.to_string()]).unwrap();
+    assert_eq!(switch(&fresh.id,ChatProvider::DshCloud,None).unwrap().summary.revision,fresh.revision);
+    assert_eq!(agent_projection(&db)["nodes"][0]["chatDshSkill"]["id"], "text-editor");
+    let unbound = switch(&fresh.id,ChatProvider::DshLocal,None).unwrap().summary;
+    assert_eq!(unbound.id, fresh.id);
+    assert_eq!(unbound.thread_id, fresh.thread_id);
+    assert_eq!(unbound.revision, fresh.revision + 1);
+    assert_eq!(unbound.provider, "dsh-local");
+    assert!(agent_projection(&db)["nodes"][0].get("chatDshSkill").is_none());
+    let back = switch(&fresh.id,ChatProvider::CodexLocal,Some(options.clone())).unwrap().summary;
+    assert_eq!(back.id, fresh.id);
+    assert_eq!(back.codex_options,Some(options.clone()));
+    assert_eq!(db.get_local_chat(&back.id).unwrap().unwrap().summary.codex_options,Some(options));
+    assert_eq!(count(&db,"local_chat_conversations"),2);
+    assert_eq!(count(&db,"local_chat_turns"),1);
+    assert_eq!(count(&db,"canvas_nodes"),2);
+    assert_eq!(count(&db,"creative_threads"),2);
+    let mut stale = input.clone();
+    stale.request_id = "stale-empty-send".into();
+    stale.conversation_id = Some(back.id);
+    stale.provider = Some(ChatProvider::DshLocal);
+    assert!(db.begin_local_chat(&stale).is_err());
+}
+
+#[test]
+fn local_chat_binds_existing_agent_atomically_and_rejects_foreign_cards() {
+    let db = fixture();
+    let doc = serde_json::json!({"schema_version":1,"nodes":[{"id":"agent-one","kind":"agent","prompt":"卡片任务","inputs":{},"outputs":{},"x":50,"y":60}],"run":null});
+    db.conn.lock().unwrap().execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('project-a',1,?1)", [doc.to_string()]).unwrap();
+    let mut request = input("bound-agent");
+    request.agent_node_id = Some("missing".into());
+    assert!(db.begin_local_chat(&request).is_err());
+    assert_eq!(count(&db, "local_chat_turns"), 0);
+    request.agent_node_id = Some("agent-one".into());
+    let first = db.begin_local_chat(&request).unwrap();
+    assert_eq!(first.conversation.summary.node_id, "agent-one");
+    assert_eq!(agent_projection(&db)["nodes"].as_array().unwrap().len(), 1);
+    assert_eq!(agent_projection(&db)["nodes"][0]["prompt"], "卡片任务");
+    assert!(!db.begin_local_chat(&request).unwrap().is_new);
+    assert_eq!(count(&db, "local_chat_turns"), 1);
+    db.finish_local_chat(&first.conversation.summary.id, &first.turn_id, "done", None).unwrap();
+    request.request_id = "wrong-card".into();
+    request.conversation_id = Some(first.conversation.summary.id.clone());
+    request.agent_node_id = Some("different".into());
+    assert!(db.begin_local_chat(&request).is_err());
+    assert_eq!(count(&db, "local_chat_turns"), 1);
+}
+
+#[test]
+fn local_chat_only_workflow_agent_turns_skip_history_seeding() {
+    let db = fixture();
+    let chat = db.begin_local_chat(&input("plain-chat")).unwrap();
+    assert!(db
+        .local_chat_turn_uses_history(&chat.turn_id)
+        .unwrap());
+    db.finish_local_chat(
+        &chat.conversation.summary.id,
+        &chat.turn_id,
+        "done",
+        None,
+    )
+    .unwrap();
+    let mut doc = agent_projection(&db);
+    doc["nodes"].as_array_mut().unwrap().push(serde_json::json!({"id":"agent-one","kind":"agent","prompt":"循环任务","inputs":{},"outputs":{},"x":50,"y":60}));
+    db.conn.lock().unwrap().execute("UPDATE canvas_workflows SET revision=revision+1,document_json=?1 WHERE project_id='project-a'", [doc.to_string()]).unwrap();
+    let mut card = input("agent-card-run");
+    card.agent_node_id = Some("agent-one".into());
+    let run = db.begin_local_chat(&card).unwrap();
+    assert!(!db
+        .local_chat_turn_uses_history(&run.turn_id)
+        .unwrap());
+    let mut conflicting_replay = card.clone();
+    conflicting_replay.manual_card_run = true;
+    assert!(db.begin_local_chat(&conflicting_replay).is_err());
+    db.finish_local_chat(&run.conversation.summary.id, &run.turn_id, "done", None)
+        .unwrap();
+    // 手动继续同一张 Agent 卡片仍是交互式对话，保留上下文。
+    let mut manual = input("agent-card-continue");
+    manual.conversation_id = Some(run.conversation.summary.id.clone());
+    let continued = db.begin_local_chat(&manual).unwrap();
+    assert!(db
+        .local_chat_turn_uses_history(&continued.turn_id)
+        .unwrap());
+}
+
+#[test]
+fn local_chat_dsh_providers_keep_identity_and_reject_codex_options() {
+    let db = fixture();
+    for provider in ["dsh-local", "dsh-cloud"] {
+        let mut raw = serde_json::to_value(input(provider)).unwrap();
+        raw["provider"] = serde_json::json!(provider);
+        let request: ChatSendInput = serde_json::from_value(raw.clone()).expect("DSH provider accepted");
+        let started = db.begin_local_chat(&request).unwrap();
+        assert_eq!(started.conversation.summary.provider, provider);
+        db.finish_local_chat(&started.conversation.summary.id, &started.turn_id, "done", None).unwrap();
+        assert!(!db.replay_local_chat(&request).unwrap().unwrap().is_new);
+        raw["conversationId"] = serde_json::json!(started.conversation.summary.id);
+        raw["requestId"] = serde_json::json!(format!("{provider}-switch"));
+        raw["provider"] = serde_json::json!("codex-local");
+        assert!(db.begin_local_chat(&serde_json::from_value(raw.clone()).unwrap()).is_err());
+        raw["provider"] = serde_json::json!(provider);
+        raw["codexOptions"] = serde_json::json!({"model":"test"});
+        assert!(db.begin_local_chat(&serde_json::from_value(raw.clone()).unwrap()).is_err());
+        raw["codexOptions"] = serde_json::json!({"model":"deepseek-v4-pro","reasoningEffort":"max"});
+        let chosen = db.begin_local_chat(&serde_json::from_value(raw.clone()).unwrap()).unwrap();
+        assert_eq!(serde_json::to_value(db.local_chat_turn_options(&chosen.turn_id).unwrap()).unwrap(), raw["codexOptions"]);
+    }
+}
+
+#[test]
+fn local_chat_model_options_reject_cloud_and_malformed_values_without_creating_turns() {
+    let db = fixture();
+    for options in [serde_json::json!({"model":""}), serde_json::json!({"reasoningEffort":"high\n"})] {
+        let mut raw = serde_json::to_value(input("bad-model")).unwrap();
+        raw["codexOptions"] = options;
+        assert!(db.begin_local_chat(&serde_json::from_value(raw).unwrap()).is_err());
+    }
+    let mut raw = serde_json::to_value(input("cloud-model")).unwrap();
+    raw["provider"] = serde_json::json!("deepseek-cloud");
+    raw["codexOptions"] = serde_json::json!({});
+    assert!(db.begin_local_chat(&serde_json::from_value(raw).unwrap()).err().unwrap().to_string().contains("DSH"));
+    assert!(db.list_local_chats("project-a").unwrap().is_empty());
+}
+
+#[test]
+fn local_chat_model_selection_is_durable_inherited_and_part_of_request_identity() {
+    let db = fixture();
+    let mut raw = serde_json::to_value(input("model-one")).unwrap();
+    raw["codexOptions"] = serde_json::json!({"model":"fixture-model","reasoningEffort":"high"});
+    let first: ChatSendInput = serde_json::from_value(raw.clone()).unwrap();
+    let started = db.begin_local_chat(&first).unwrap();
+    let id = started.conversation.summary.id.clone();
+    assert_eq!(serde_json::to_value(&started.conversation).unwrap()["codexOptions"], raw["codexOptions"]);
+    db.finish_local_chat(&id, &started.turn_id, "done", None).unwrap();
+    let mut next = input("model-two");
+    next.conversation_id = Some(id.clone());
+    let continued = db.begin_local_chat(&next).unwrap();
+    assert_eq!(serde_json::to_value(&continued.conversation).unwrap()["codexOptions"], raw["codexOptions"]);
+    db.finish_local_chat(&id, &continued.turn_id, "done", None).unwrap();
+    raw["conversationId"] = serde_json::json!(id);
+    raw["requestId"] = serde_json::json!("reset-model");
+    raw["codexOptions"] = serde_json::json!({});
+    let reset: ChatSendInput = serde_json::from_value(raw).unwrap();
+    let reset = db.begin_local_chat(&reset).unwrap();
+    assert_eq!(serde_json::to_value(&reset.conversation).unwrap()["codexOptions"], serde_json::json!({}));
+    assert!(!db.replay_local_chat(&first).unwrap().unwrap().is_new);
+    assert!(!db.replay_local_chat(&next).unwrap().unwrap().is_new);
+    let mut conflict = serde_json::to_value(first).unwrap();
+    conflict["codexOptions"]["reasoningEffort"] = serde_json::json!("low");
+    assert!(db.replay_local_chat(&serde_json::from_value(conflict).unwrap()).is_err());
+}
+
+#[test]
+fn local_chat_video_delivery_survives_completion_and_rejects_foreign_or_stopped_turns() {
+    let db = fixture();
+    let started = db.begin_local_chat(&input("video")).unwrap();
+    let id = &started.conversation.summary.id;
+    let turn = &started.turn_id;
+    db.save_local_chat_video(id, turn, "正在渲染视频", "running", &[]).unwrap();
+    assert!(db.save_local_chat_video(id, "foreign", "bad", "running", &[]).is_err());
+    db.save_local_chat_video(id, turn, "视频已完成", "done", &["video-asset".into()]).unwrap();
+    db.finish_local_chat(id, turn, "done", None).unwrap();
+    db.recover_local_chats().unwrap();
+    let chat = db.get_local_chat(id).unwrap().unwrap();
+    let message = chat.messages.iter().find(|m|m.id.ends_with("-video")).unwrap();
+    assert_eq!(message.reference_asset_ids, ["video-asset"]);
+    assert_eq!(message.status, "done");
+    assert!(db.save_local_chat_video(id, turn, "late", "running", &[]).is_err());
+}
 use crate::core::{
     creative_session_contract::CreativeNodeKind,
     project_canvas::{
@@ -31,8 +337,10 @@ fn fixture() -> Database {
 fn input(request: &str) -> ChatSendInput {
     ChatSendInput {
         provider: None,
+        dsh_skill: None, codex_options: None,
         project_id: "project-a".into(),
         conversation_id: None,
+        agent_node_id: None, manual_card_run: false,
         request_id: request.into(),
         text: "请帮我分析这组视觉方向".into(),
         reference_asset_ids: vec![],
@@ -63,7 +371,7 @@ fn local_chat_provider_is_durable_inherited_and_part_of_request_identity() {
     value["provider"] = serde_json::json!("deepseek-cloud");
     let cloud: ChatSendInput = serde_json::from_value(value.clone()).unwrap();
     let started = db.begin_local_chat(&cloud).unwrap();
-    assert_eq!(started.conversation.summary.provider, "deepseek-cloud");
+    assert_eq!(started.conversation.summary.provider, "dsh-cloud");
     assert!(!db.begin_local_chat(&cloud).unwrap().is_new);
     value["provider"] = serde_json::json!("codex-local");
     let changed = serde_json::from_value(value).unwrap();
@@ -83,7 +391,7 @@ fn local_chat_provider_is_durable_inherited_and_part_of_request_identity() {
             .conversation
             .summary
             .provider,
-        "deepseek-cloud"
+        "dsh-cloud"
     );
     let mut mismatch = serde_json::to_value(input("cloud-mismatch")).unwrap();
     mismatch["conversationId"] = serde_json::json!(started.conversation.summary.id);
@@ -112,9 +420,10 @@ fn local_chat_explicit_codex_replays_legacy_request_and_rejects_unknown_provider
 
 #[test]
 fn local_chat_provider_migration_preserves_history_actions_and_foreign_keys() {
+    for (version, provider) in [(48, ChatProvider::CodexLocal), (52, ChatProvider::DshCloud)] {
     let db = Database::open_in_memory().unwrap();
     crate::db::migrations::migrations()
-        .to_version(&mut db.conn.lock().unwrap(), 48)
+        .to_version(&mut db.conn.lock().unwrap(), version)
         .unwrap();
     db.materialize_project_canvas(
         &ProjectCanvasMaterializeInput {
@@ -132,9 +441,15 @@ fn local_chat_provider_migration_preserves_history_actions_and_foreign_keys() {
     )
     .unwrap();
     let mut request = input("before-provider-migration");
+    request.provider = Some(ChatProvider::CodexLocal);
     request.card_defaults = Some(Default::default());
     let started = db.begin_local_chat(&request).unwrap();
-    let action = db.create_local_chat_cards(&started.conversation.summary.id, &started.turn_id,"legacy-call",&serde_json::json!({"cards":[{"id":"text","kind":"content","title":"旧卡片","text":"保留"}]})).unwrap();
+    // Seed the historical receipt directly, before current gallery tables exist.
+    let cards = serde_json::json!([{"alias":"text","id":"legacy-card","kind":"content","title":"旧卡片"}]);
+    db.conn.lock().unwrap().execute(
+        "INSERT INTO local_chat_card_actions(id,conversation_id,turn_id,call_id,args_json,cards_json,footprint_json,status,created_at) VALUES('legacy-action',?1,?2,'legacy-call','{}',?3,'{}','created',1)",
+        rusqlite::params![started.conversation.summary.id, started.turn_id, cards.to_string()],
+    ).unwrap();
     db.update_local_chat_text(&started.conversation.summary.id, &started.turn_id, "旧回复")
         .unwrap();
     db.set_local_chat_provider_thread(&started.conversation.summary.id, "legacy-codex-thread")
@@ -146,14 +461,21 @@ fn local_chat_provider_migration_preserves_history_actions_and_foreign_keys() {
         None,
     )
     .unwrap();
+    if version == 52 {
+        let conn = db.conn.lock().unwrap();
+        conn.execute("UPDATE local_chat_conversations SET provider='deepseek-cloud' WHERE id=?1", [&started.conversation.summary.id]).unwrap();
+        conn.execute("UPDATE local_chat_turns SET request_json=json_set(request_json,'$.provider','deepseek-cloud') WHERE id=?1", [&started.turn_id]).unwrap();
+        request.provider = Some(ChatProvider::DshCloud);
+    }
     db.migrate().unwrap();
     let chat = db
         .get_local_chat(&started.conversation.summary.id)
         .unwrap()
         .unwrap();
-    assert_eq!(chat.summary.provider, "codex-local");
+    assert_eq!(chat.summary.provider, provider.as_str());
     assert_eq!(chat.messages[1].text, "旧回复");
-    assert_eq!(chat.actions[0].id, action.id);
+    assert_eq!(chat.actions[0].id, "legacy-action");
+    assert_eq!(serde_json::to_value(&chat.actions[0].cards).unwrap(), cards);
     assert_eq!(
         db.local_chat_provider_thread(&chat.summary.id)
             .unwrap()
@@ -175,6 +497,7 @@ fn local_chat_provider_migration_preserves_history_actions_and_foreign_keys() {
             []
         )
         .is_err());
+    }
 }
 
 #[test]
@@ -341,26 +664,14 @@ fn local_chat_cards_hide_without_erasing_audit_and_reopen_in_place() {
 }
 
 #[test]
-fn local_chat_active_turn_blocks_project_deletion_but_terminal_turn_does_not() {
+fn local_chat_active_turn_allows_project_deletion_and_late_finish_cannot_restore_it() {
     let db = fixture();
     let started = db.begin_local_chat(&input("first")).unwrap();
     let id = &started.conversation.summary.id;
-    assert!(
-        crate::core::projects::ensure_project_has_no_unfinished_work(
-            &db.conn.lock().unwrap(),
-            "project-a",
-            false
-        )
-        .is_err()
-    );
-    db.finish_local_chat(id, &started.turn_id, "done", None)
-        .unwrap();
-    crate::core::projects::ensure_project_has_no_unfinished_work(
-        &db.conn.lock().unwrap(),
-        "project-a",
-        false,
-    )
-    .unwrap();
+    db.delete_project("project-a", crate::core::projects::ProjectDeleteMode::Keep).unwrap();
+    let _ = db.finish_local_chat(id, &started.turn_id, "done", None);
+    assert!(db.get_project("project-a").unwrap().is_none());
+    assert_eq!(db.conn.lock().unwrap().query_row("SELECT COUNT(*) FROM local_chat_conversations WHERE id=?1", [id], |r| r.get::<_, i64>(0)).unwrap(), 0);
 }
 
 #[test]

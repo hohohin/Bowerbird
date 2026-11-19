@@ -96,6 +96,7 @@ try{
   });
   await cell('one').hover();
   await cell('one').getByRole('button',{name:'输入第 1 行第 1 列图片',exact:true}).click({button:'right'});
+  await page.getByRole('menu', { name: '选择要断开的连线' }).getByRole('menuitem').click();
   await page.locator('[data-workflow-text-link="one"]').waitFor({state:'detached'});
   assert.equal((await note()).cells[0][0].image_refs[0].asset_id,'b');
 

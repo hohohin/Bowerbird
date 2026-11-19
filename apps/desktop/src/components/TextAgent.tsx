@@ -1,9 +1,9 @@
-import { createContext, useEffect, useRef, useState, type ReactNode } from "react";
+import { createContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import { ArrowUp, Square, X } from "lucide-react";
 import type { PlateEditor } from "platejs/react";
 import { useStore } from "../store";
-import { normalizeDocument, parseMarkdown, serializeMarkdown } from "../lib/documentCodec";
+import { normalizeDocument, parseMarkdown, serializeReadableMarkdown } from "../lib/documentCodec";
 import { usePortalTarget } from "../lib/portalTarget";
 import { textAgentSource, textAgentUnavailable, TEXT_AGENT_LABELS, type TextAgentMessage, type TextAgentProvider } from "../lib/textAgent";
 import { TextAgentTask, initialTextAgentTask } from "../lib/textAgentTask";
@@ -26,10 +26,10 @@ export function TextAgentScope({ editor, projectId, children }: { editor: PlateE
     const anchor = anchorFor(editor, id);
     if (anchor) setTarget({ anchor, left: rect.left, top: rect.bottom + 8 });
   };
-  return <TextAgentContext.Provider value={open}>{children}{target && <TextAgentBubble key={target.anchor.id} editor={editor} projectId={projectId} target={target} onClose={() => { setTarget(null); editor.tf.focus(); }}/>}</TextAgentContext.Provider>;
+  return <TextAgentContext.Provider value={open}>{children}{target && <TextAgentBubble key={target.anchor.id} editor={editor} projectId={projectId} target={target} onClose={(restoreFocus = true) => { setTarget(null); if (restoreFocus) editor.tf.focus(); }}/>}</TextAgentContext.Provider>;
 }
 
-function TextAgentModel({ provider, setProvider, busy }: { provider: TextAgentProvider; setProvider(value: TextAgentProvider): void; busy: boolean }) {
+export function TextAgentModel({ provider, setProvider, busy }: { provider: TextAgentProvider; setProvider(value: TextAgentProvider): void; busy: boolean }) {
   const auth = useStore(state => state.cloudAuth), entitlement = useStore(state => state.cloudEntitlement);
   useStore(state => state.codexHealth); useStore(state => state.cloudAgentRuns);
   const balance = entitlement ? entitlement.balances.daily + entitlement.balances.sub + entitlement.balances.topup : null;
@@ -63,7 +63,7 @@ function useTextAgentConversation(editor: PlateEditor, target: Target, projectId
       const node = editor.children.find(node => node.id === anchor.current.id);
       if (!node) throw new Error("原段落已删除，请在新的段落打开 Agent。");
       anchor.current = anchorFor(editor, anchor.current.id)!;
-      const source = textAgentSource(serializeMarkdown(normalizeDocument([node])), messages);
+      const source = textAgentSource(serializeReadableMarkdown(normalizeDocument([node])), messages);
       setMessages(previous => [...previous, { role: "user", text: prompt }]); setPrompt("");
       void task.run({ provider, prompt, source, projectId, sessionId: sessionId.current, requestId: crypto.randomUUID() });
     } catch (reason) { setState(previous => ({ ...previous, error: userErrorMessage(reason, "本次内容无法提交，请检查段落后重试。") })); }
@@ -112,11 +112,27 @@ function useBubblePosition(target: Target) {
   useEffect(() => { const resize = () => setPosition(place()); window.addEventListener("resize", resize); return () => window.removeEventListener("resize", resize); }, [target]);
   return position;
 }
-function TextAgentBubble({ editor, projectId, target, onClose }: { editor: PlateEditor; projectId?: string; target: Target; onClose(): void }) {
+function useAgentDismiss(root: RefObject<HTMLDivElement>, onClose: (restoreFocus?: boolean) => void) {
+  useEffect(() => {
+    const outside = (event: PointerEvent) => {
+      const node = event.target as Node;
+      if (root.current?.contains(node)) return;
+      // The model selector is a portal owned by the bubble's aria-controls trigger.
+      const controls = root.current?.querySelectorAll('[aria-controls]') ?? [];
+      for (const trigger of controls) if (document.getElementById(trigger.getAttribute('aria-controls')!)?.contains(node)) return;
+      onClose(false);
+    };
+    document.addEventListener('pointerdown', outside, true);
+    return () => document.removeEventListener('pointerdown', outside, true);
+  }, [root, onClose]);
+}
+function TextAgentBubble({ editor, projectId, target, onClose }: { editor: PlateEditor; projectId?: string; target: Target; onClose(restoreFocus?: boolean): void }) {
   const portal = usePortalTarget(), position = useBubblePosition(target), c = useTextAgentConversation(editor, target, projectId);
-  return createPortal(<div role="dialog" aria-label="段落 Agent" className="text-agent-bubble" style={position}
+  const root = useRef<HTMLDivElement>(null);
+  useAgentDismiss(root, onClose);
+  return createPortal(<div ref={root} role="dialog" aria-label="段落 Agent" className="text-agent-bubble" style={position}
     onPointerDown={event => event.stopPropagation()} onKeyDown={event => { if (event.key === "Escape" && !event.defaultPrevented) { event.stopPropagation(); onClose(); } }}>
-    <div className="text-agent-heading"><TextAgentModel provider={c.provider} setProvider={c.setProvider} busy={c.state.busy || c.state.resumable}/><button aria-label="关闭 Agent" onClick={onClose}><X size={15}/></button></div>
+    <div className="text-agent-heading"><TextAgentModel provider={c.provider} setProvider={c.setProvider} busy={c.state.busy || c.state.resumable}/><button aria-label="关闭 Agent" onClick={() => onClose()}><X size={15}/></button></div>
     <AgentHistory conversation={c}/><AgentInput conversation={c}/><AgentFooter conversation={c}/>
   </div>, portal);
 }

@@ -1,4 +1,4 @@
-//! Bounded reconciliation of missing originals; never a filesystem deletion task.
+//! Bounded reconciliation of original visibility and registered references to removed originals.
 use crate::{
     core::{external_files, material_catalog::catalog_visibility, paths::LibraryPaths},
     db::Database,
@@ -12,6 +12,45 @@ use std::{
 
 const BATCH_SIZE: usize = 128;
 const CONFIRM_AFTER: Duration = Duration::from_secs(30);
+const REFERENCE_BATCH_SIZE: usize = 16;
+
+/// Advances past rejected or offline entries as well as successful ones. A new pass is
+/// started only by the existing low-frequency originals schedule, not by a skipped file.
+#[derive(Default)]
+pub(crate) struct MarkedReferenceSweep {
+    after: String,
+}
+impl MarkedReferenceSweep {
+    pub(crate) fn check_batch(
+        &mut self, db: &Database, should_yield: impl Fn() -> bool,
+        recycle: impl Fn(&Path) -> AppResult<()>,
+    ) -> AppResult<(usize, bool)> {
+        let entries: Vec<String> = {
+            let conn = db.conn.lock().unwrap();
+            let mut stmt = conn.prepare_cached(
+                "SELECT e.id FROM connected_entries e WHERE e.is_reference=1 AND e.id>?1 AND e.asset_id IN (
+                    SELECT asset_id FROM removed_missing_asset_originals UNION SELECT asset_id FROM trashed_asset_originals
+                 ) ORDER BY e.id LIMIT ?2"
+            )?;
+            let rows = stmt.query_map(rusqlite::params![self.after, (REFERENCE_BATCH_SIZE + 1) as i64], |row| row.get(0))?
+                .collect::<Result<_,_>>()?;
+            rows
+        };
+        let mut removed = 0;
+        for id in entries.iter().take(REFERENCE_BATCH_SIZE) {
+            if should_yield() { return Ok((removed, true)); }
+            match db.recycle_marked_reference_with(id, &recycle) {
+                Ok(true) => removed += 1,
+                Ok(false) => (),
+                Err(error) => tracing::warn!(%error, "could not clean a registered reference to a removed original"),
+            }
+            self.after.clone_from(id);
+        }
+        let more = entries.len() > REFERENCE_BATCH_SIZE;
+        if !more { self.after.clear(); }
+        Ok((removed, more))
+    }
+}
 
 #[derive(Default)]
 pub struct MissingOriginalSweep {
@@ -48,12 +87,22 @@ impl MissingOriginalSweep {
         paths: &LibraryPaths,
         now: Instant,
     ) -> AppResult<MissingOriginalBatch> {
+        self.check_batch_until(db, paths, now, || false)
+    }
+    pub(crate) fn check_batch_until(
+        &mut self,
+        db: &Database,
+        paths: &LibraryPaths,
+        now: Instant,
+        should_yield: impl Fn() -> bool,
+    ) -> AppResult<MissingOriginalBatch> {
         let mut rows = candidates(db, self.after.as_deref())?;
         let extra = rows.len() > BATCH_SIZE;
         rows.truncate(BATCH_SIZE);
         let mut result = MissingOriginalBatch::default();
         let mut probe = LocalProbe::default();
         for row in &rows {
+            if should_yield() { break; }
             result.checked += 1;
             self.after = Some(row.id.clone());
             if self.check_candidate(db, paths, now, row, &mut probe, &mut result) {
@@ -141,7 +190,7 @@ fn candidates(db: &Database, after: Option<&str>) -> AppResult<Vec<Candidate>> {
     let mut stmt = conn.prepare(&format!("SELECT a.id,a.store_path,COALESCE(e.fingerprint,f.sha256,''),COALESCE(a.created_at,0),m.asset_id IS NOT NULL
         FROM assets a LEFT JOIN external_assets e ON e.asset_id=a.id LEFT JOIN creative_file_fingerprints f ON f.asset_id=a.id
         LEFT JOIN removed_missing_asset_originals m ON m.asset_id=a.id
-        WHERE a.id>?1 AND a.store_path IS NOT NULL AND NOT EXISTS(SELECT 1 FROM trashed_asset_originals t WHERE t.asset_id=a.id)
+        WHERE a.id>?1 AND a.store_path IS NOT NULL
         AND (m.asset_id IS NOT NULL OR ({global}) OR ({project} AND a.library_hidden=0 AND EXISTS(SELECT 1 FROM project_assets p WHERE p.asset_id=a.id)))
         ORDER BY a.id LIMIT ?2"))?;
     let rows = stmt
@@ -165,6 +214,9 @@ fn clean_candidate(db: &Database, candidate: &Candidate, volume: u32) -> AppResu
     // and NotFound again; this API has no route to a filesystem deletion callback.
     if !matches!(LocalProbe::default().check(Path::new(&candidate.path)), PathState::Missing(current) if current == volume)
     {
+        return Ok(0);
+    }
+    if db.original_under_offline_connection(Path::new(&candidate.path))? {
         return Ok(0);
     }
     let originals = db.preview_asset_originals(std::slice::from_ref(&candidate.id))?;
@@ -381,6 +433,29 @@ mod tests {
     }
 
     #[test]
+    fn sweep_verifies_originals_with_both_recycled_and_cleaned_markers() {
+        let f = Fixture::new();
+        let ids = [f.id.clone()];
+        let original = f.db.preview_asset_originals(&ids).unwrap().remove(0);
+        fs::rename(&f.original, &f.moved).unwrap();
+        f.db.conn.lock().unwrap().execute("INSERT INTO trashed_asset_originals(asset_id,path,fingerprint) VALUES(?1,?2,?3)",
+            rusqlite::params![f.id,original.path,original.fingerprint]).unwrap();
+        // The sweeper must not auto-clean references solely because the original was recycled.
+        assert!(candidates(&f.db,None).unwrap().is_empty());
+        let missing = f.db.preview_asset_originals(&ids).unwrap().remove(0);
+        f.db.cleanup_missing_original(&missing).unwrap();
+        let mut sweep = MissingOriginalSweep::default();
+        let now = Instant::now();
+        image::RgbImage::from_pixel(8, 8, image::Rgb([7u8,8,9])).save(&f.original).unwrap();
+        assert_eq!(sweep.check_batch(&f.db,&f.paths,now).unwrap().restored, 0);
+        assert_eq!(f.visible(), 0);
+        fs::remove_file(&f.original).unwrap();
+        fs::rename(&f.moved,&f.original).unwrap();
+        assert_eq!(sweep.check_batch(&f.db,&f.paths,now + Duration::from_secs(31)).unwrap().restored, 1);
+        assert_eq!(f.visible(), 1);
+    }
+
+    #[test]
     fn automatic_missing_cleanup_requires_separated_observations_and_restores_verified_original() {
         let f = Fixture::new();
         let before = serde_json::to_value(f.db.get_asset(&f.id).unwrap()).unwrap();
@@ -523,6 +598,20 @@ mod tests {
                 .removed,
             1
         );
+    }
+
+    #[test]
+    fn pending_foreground_mutation_pauses_the_sweep_at_its_current_asset() {
+        let f = Fixture::new();
+        let mut sweep = MissingOriginalSweep::default();
+        let now = Instant::now();
+        let paused = sweep.check_batch_until(&f.db, &f.paths, now, || true).unwrap();
+        assert_eq!(paused.checked, 0);
+        assert!(paused.more);
+        assert_eq!(sweep.round, 0);
+        let resumed = sweep.check_batch(&f.db, &f.paths, now).unwrap();
+        assert!(resumed.checked > 0);
+        assert!(!resumed.more);
     }
 
     #[test]

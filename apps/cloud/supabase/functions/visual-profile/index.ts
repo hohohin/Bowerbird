@@ -3,15 +3,13 @@
 // 幂等 hold 2 积分 → 暂存私有 bucket → 入队；get：轮询任务状态与 draft JSON 结果。
 // 长耗时模型分批在 VPS Worker 执行（visual-profile-worker），Edge 保持短请求。
 
+import { acceptTextUpload, inspectTextUpload, readableTextResult } from "../_shared/text-job-upload.ts";
 import { requireUser } from "../_shared/auth.ts";
-import { ensureDailyCredits, holdCredits, rollbackCredits } from "../_shared/billing.ts";
+import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { activeTier, policyForUser } from "../_shared/feature-policy.ts";
 import { corsHeaders } from "../_shared/limits.ts";
-import { reserveManagedUsage } from "../_shared/usage.ts";
 
-const BUCKET = "generation-temp";
-const CONTENT_TTL_MS = 24 * 60 * 60 * 1000;
 const MIN_CARDS = 1;
 const MAX_CARDS = 500;
 
@@ -39,6 +37,7 @@ interface VisualProfileJob {
   card_count: number;
   result_text: string | null;
   deleted_at: string | null;
+  content_expires_at: string;
   error_code: string | null;
   safe_message: string | null;
 }
@@ -102,12 +101,12 @@ function sanitizeCards(raw: unknown, allowEmpty = false): SanitizedCard[] {
   });
 }
 
-async function ownJob(admin: Parameters<typeof ensureDailyCredits>[0], userId: string, jobId: string): Promise<VisualProfileJob> {
+async function ownJob(admin: SupabaseClient, userId: string, jobId: string): Promise<VisualProfileJob> {
   const { data, error } = await admin.from("visual_profile_jobs").select("*")
     .eq("id", jobId).eq("user_id", userId).maybeSingle();
   if (error) throw new ApiError("internal_error", "读取视觉设定任务失败", true);
   if (!data) throw new ApiError("invalid_request", "视觉设定任务不存在", false, 404);
-  return data as unknown as VisualProfileJob;
+  return await inspectTextUpload(admin, "visual_profile_jobs", data as unknown as VisualProfileJob);
 }
 
 function jobResponse(job: VisualProfileJob, cors: HeadersInit): Response {
@@ -126,10 +125,11 @@ function jobResponse(job: VisualProfileJob, cors: HeadersInit): Response {
     return jsonResponse(common, 202, cors);
   }
   if (job.status === "succeeded") {
-    if (!job.result_text || job.deleted_at) {
+    const text = readableTextResult(job);
+    if (!text) {
       return jsonResponse({ ...common, error: { code: "content_expired", message: "提炼结果已过期" } }, 200, cors);
     }
-    return jsonResponse({ ...common, draft: JSON.parse(job.result_text) }, 200, cors);
+    return jsonResponse({ ...common, draft: JSON.parse(text) }, 200, cors);
   }
   return jsonResponse({
     ...common,
@@ -141,7 +141,7 @@ function jobResponse(job: VisualProfileJob, cors: HeadersInit): Response {
 }
 
 async function actionCreate(
-  admin: Parameters<typeof ensureDailyCredits>[0],
+  admin: SupabaseClient,
   user: { id: string; app_metadata?: unknown },
   body: Record<string, unknown>,
   cors: HeadersInit,
@@ -167,69 +167,11 @@ async function actionCreate(
   if (payload.length > 2 * 1024 * 1024) throw new ApiError("invalid_request", "反推快照过大");
   const manifestHash = await sha256Hex(payload);
 
-  await ensureDailyCredits(admin, user.id);
-  let holdId: string | undefined;
-  let jobId: string | undefined;
-  try {
-    const held = await holdCredits(admin, user.id, idempotencyKey, "visual_profile_extract");
-    holdId = held.holdId;
-    const existing = await admin.from("visual_profile_jobs").select("*")
-      .eq("hold_id", held.holdId).maybeSingle();
-    if (existing.error) throw new ApiError("internal_error", "读取幂等提炼任务失败", true);
-    let job = existing.data as unknown as VisualProfileJob | null;
-    if (job && job.input_manifest_hash !== manifestHash) {
-      throw new ApiError("invalid_request", "幂等键已用于不同的提炼内容", false, 409);
-    }
-    if (job && job.status !== "uploading") return jobResponse(job, cors);
-    if (job) jobId = job.id;
-
-    if (!job) {
-      jobId = crypto.randomUUID();
-      const inserted = await admin.from("visual_profile_jobs").insert({
-        id: jobId,
-        user_id: user.id,
-        idempotency_key: idempotencyKey,
-        status: "uploading",
-        request_object_key: `visual-profile/${jobId}/inputs/request.json`,
-        input_manifest_hash: manifestHash,
-        card_count: cards.length,
-        hold_id: held.holdId,
-        estimated_credits: held.estimated,
-        pricing_version: held.pricingVersion,
-        content_expires_at: new Date(Date.now() + CONTENT_TTL_MS).toISOString(),
-      }).select("*").single();
-      if (inserted.error || !inserted.data) throw new ApiError("internal_error", "创建提炼任务失败", true);
-      job = inserted.data as unknown as VisualProfileJob;
-      jobId = job.id;
-    }
-
-    // 云端成本预留 + 入队（与 understand 同款：桌面不参与上传，payload 由 Edge 暂存）。
-    await reserveManagedUsage(admin, user.id, held.holdId, held.estimated, true);
-    const upload = await admin.storage.from(BUCKET).upload(job.request_object_key, payload, {
-      contentType: "application/json",
-      upsert: true,
-    });
-    if (upload.error) throw new ApiError("internal_error", "暂存提炼输入失败", true);
-    const queued = await admin.from("visual_profile_jobs").update({
-      status: "queued",
-      queued_at: new Date().toISOString(),
-    }).eq("id", job.id).eq("status", "uploading").select("*").single();
-    if (queued.error || !queued.data) throw new ApiError("internal_error", "提炼任务入队失败", true);
-    return jobResponse(queued.data as unknown as VisualProfileJob, cors);
-  } catch (error) {
-    try {
-      if (holdId) await rollbackCredits(admin, holdId, error instanceof ApiError ? error.code : "queue_failed");
-      if (jobId) await admin.from("visual_profile_jobs").update({
-        status: "failed",
-        finished_at: new Date().toISOString(),
-        error_code: "queue_failed",
-        safe_message: "提炼任务入队失败，请重试",
-      }).eq("id", jobId).eq("status", "uploading");
-    } catch {
-      // Stale-hold reconciliation remains the final safety net.
-    }
-    throw error;
-  }
+  const job = await acceptTextUpload<VisualProfileJob>(admin, "visual_profile_jobs", {
+    userId: user.id, key: idempotencyKey, operation: null,
+    service: "visual_profile_extract", cards: cards.length, payload, manifestHash,
+  });
+  return jobResponse(job, cors);
 }
 
 Deno.serve(async (request) => {

@@ -17,7 +17,9 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?homepage" />
+    <link rel="stylesheet" href="./homepage-nav.css" />
+    <link rel="stylesheet" href="./account-dialog.css" />
   </head>
   <body>
     <header class="site-header">
@@ -26,16 +28,19 @@
           <span class="brand-mark"><img src="./assets/logo.png" alt="" /></span>
           <span>Bowerbird</span>
         </a>
-        <button class="menu-toggle" id="menu-toggle" type="button" aria-expanded="false" aria-label="打开导航">
+        <button class="menu-toggle" id="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav" aria-label="导航菜单">
           <span></span><span></span>
         </button>
         <nav class="site-nav" id="site-nav" aria-label="主导航">
-          <a href="#workflow">工作流</a>
-          <a href="#features">功能</a>
-          <a href="#projects">项目</a>
-          <a href="#use-cases">场景</a>
-          <a href="#faq">常见问题</a>
-          <a class="nav-download" href="#download">下载 Beta <span>↘</span></a>
+          <a href="#features">桌面功能</a>
+          <a href="#projects">项目画板</a>
+          <a href="#board-demo">在线演示</a>
+          <a href="/pricing/">订阅与充值</a>
+          <div class="signup-offer-wrap">
+            <button type="button" class="nav-account" aria-describedby="signup-offer" data-account-open hidden>登录 / 注册</button>
+            <span class="offer-bubble" id="signup-offer" hidden>新账号注册送 200 Bcoin</span>
+          </div>
+          <a class="nav-download" href="#download">下载桌面版 <span aria-hidden="true">↓</span></a>
         </nav>
       </div>
     </header>
@@ -49,7 +54,10 @@
           <div class="hero-bottom">
             <p>Bowerbird 把散落的参考图变成可搜索、可拆解、可直接交给 AI 的创作资产。你只管选图与意图，提示词交给创作板。</p>
             <div class="hero-actions">
-              <a class="button button-solid" href="#download">免费下载 <span>↘</span></a>
+              <div class="download-offer-wrap">
+                <a class="button button-solid" href="#download" aria-describedby="download-offer">免费下载 <span>↘</span></a>
+                <span class="offer-bubble" id="download-offer">下载桌面版，体验 7 天 Pro</span>
+              </div>
               <a class="button button-ghost" href="#board-demo">试试创作板</a>
             </div>
           </div>
@@ -353,9 +361,9 @@
         <div class="faq-layout">
           <div class="faq-title page-pad-side reveal"><span class="section-index">FAQ</span><h2>常见问题，<br />一次说清。</h2></div>
           <div class="faq-list reveal">
-            <details><summary>素材会上传到 Bowerbird 云端吗？<span></span></summary><p>不会。图片、缩略图、SQLite 数据库、提示词与分析结果都保存在你选择的本地素材库目录中。AI 分析和生成会通过你自己的 provider 账号联网执行。</p></details>
+            <details><summary>我的素材库保存在哪里？<span></span></summary><p>素材原件、缩略图、提示词与分析结果都保存在你选择的本地素材库目录中。</p></details>
             <details><summary>不会写提示词，也可以使用吗？<span></span></summary><p>可以。收集后的图片会被拆成可选维度；创作时只需写中文意图、选图、点维度，创作板会组装完整 prompt 和参考图。</p></details>
-            <details><summary>AI 功能需要什么账号？<span></span></summary><p>反推使用你的 ChatGPT 订阅（经 codex CLI）；生成支持 codex，也可以切换即梦。未登录时素材管理仍可正常使用。</p></details>
+            <details><summary>用 Bowerbird Cloud 和用自己的订阅有什么区别？<span></span></summary><p>使用 Bowerbird Cloud 分析、对话或生成时，所选服务会收到你为这次任务提交的指令和素材，并按任务报价扣除 Bcoin。Pro 用户也可以接入自己的 ChatGPT 或即梦订阅，账号和额度按相应服务的条款使用。</p></details>
             <details><summary>支持哪些平台？<span></span></summary><p>Windows x64 提供 26.10.2203，M 系列芯片 Mac 提供 26.10.801 下载；Intel Mac 提供 26.10.1501 下载。浏览器扩展支持 Chrome 及兼容 Manifest V3 的浏览器。</p></details>
           </div>
         </div>
@@ -369,7 +377,7 @@
           <p>本地优先 · 免费 Beta · AI 使用你自己的订阅</p>
           <div class="download-actions">
             <div class="download-option">
-              <a id="windows-download" class="button button-light" href="https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.202_x64-setup.exe">Windows x64 <span>↓</span></a>
+              <a id="windows-download" class="button button-light" href="https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1001_x64-setup.exe">Windows x64 <span>↓</span></a>
               <small>26.10.2203</small>
             </div>
             <div class="download-option">
@@ -393,6 +401,6 @@
       <div class="footer-bottom"><span>© 猫九条科技有限公司</span><span>ICP备案/许可证号：<a class="footer-record-link" href="https://beian.miit.gov.cn/" target="_blank" rel="noreferrer">粤ICP备2026118842号-1</a></span><span>园丁鸟衔来的每片灵感，都值得被收好。</span></div>
     </footer>
 
-    <script src="./app-v2.bundle.js?rev=20260918-v2-1"></script>
+    <script src="./app-v2.bundle.js?rev=433b12657869631c"></script>
   </body>
 </html>

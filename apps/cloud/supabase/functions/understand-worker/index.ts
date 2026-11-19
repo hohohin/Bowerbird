@@ -3,6 +3,7 @@
 // generation-worker: the VPS receives only a dedicated Worker Token and a
 // signed input URL; it never receives a Supabase secret/service-role key.
 
+import { cleanupTextJobs } from "../_shared/text-job-upload.ts";
 import { createClient, type SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
 import { corsHeaders } from "../_shared/limits.ts";
@@ -78,28 +79,7 @@ async function assertLease(admin: SupabaseClient, jobId: string, leaseId: string
 async function actionCleanupExpired(admin: SupabaseClient): Promise<Response> {
   const classification = await admin.rpc("cleanup_classification");
   if (classification.error) throw new ApiError("internal_error", "过期分类请求清理失败", true);
-  const now = Date.now();
-  const { data, error } = await admin.from("understand_jobs")
-    .select("id,request_object_key")
-    .lt("content_expires_at", new Date(now).toISOString())
-    .is("deleted_at", null)
-    .limit(100);
-  if (error) throw new ApiError("internal_error", "过期理解任务查询失败", true);
-  const rows = (data ?? []) as Array<{ id: string; request_object_key: string }>;
-  const keys = [...new Set(rows.map((row) => row.request_object_key))];
-  if (keys.length) {
-    const removed = await admin.storage.from(BUCKET).remove(keys);
-    if (removed.error) throw new ApiError("internal_error", "过期理解对象删除失败", true);
-  }
-  if (rows.length) {
-    const updated = await admin.from("understand_jobs").update({
-      deleted_at: new Date(now).toISOString(),
-      result_text: null,
-    })
-      .in("id", rows.map((row) => row.id)).is("deleted_at", null);
-    if (updated.error) throw new ApiError("internal_error", "过期理解任务标记失败", true);
-  }
-  return jsonResponse({ expiredJobs: rows.length, removedObjects: keys.length });
+  return jsonResponse(await cleanupTextJobs(admin, "understand_jobs"));
 }
 
 async function actionClaim(admin: SupabaseClient, workerId: string): Promise<Response> {
@@ -137,7 +117,10 @@ async function actionHeartbeat(admin: SupabaseClient, body: Record<string, unkno
     p_lease_id: leaseId,
     p_lease_seconds: LEASE_SECONDS,
   });
-  if (result.error) throw new ApiError("invalid_request", "理解任务租约已失效", false, 409);
+  if (result.error) {
+    if (["55000", "P0002"].includes(result.error.code)) throw new ApiError("invalid_request", "理解任务租约已失效", false, 409);
+    throw new ApiError("internal_error", "任务续租暂时不可用", true);
+  }
   const row = scalar(result.data) as { job_status?: string; cancel_requested?: boolean; lease_expires_at?: string } | null;
   return jsonResponse({
     status: row?.job_status ?? "unknown",

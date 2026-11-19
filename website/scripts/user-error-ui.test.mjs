@@ -27,7 +27,7 @@ try {
       if (route.request().method() === "POST") return route.fulfill({ json: { access_token: "synthetic", refresh_token: "synthetic" } });
       return route.fulfill({ status: 503, json: { error: { message: raw } } });
     }
-    if (url.hostname === "cdn.jsdelivr.net") return route.fulfill({ contentType: "application/javascript", body: `window.supabase = { createClient: () => ({ auth: {
+    if (url.pathname === "/account-sdk.js") return route.fulfill({ contentType: "application/javascript", body: `window.supabase = { createClient: () => ({ auth: {
       getSession: async () => ({ data: { session: null } }), onAuthStateChange: () => {},
       signInWithOtp: async () => ({ error: { message: ${JSON.stringify(raw)}, code: 'over_email_send_rate_limit' } }),
       setSession: async () => ({ error: { message: ${JSON.stringify(raw)} } })
@@ -42,13 +42,20 @@ try {
     await page.locator("#account-state").evaluate(el => el.scrollIntoView({ block: "center" }));
     await page.locator("#account-state").click();
     await page.getByRole("button", { name: "微信扫码登录" }).click();
-    await page.locator("#account-state").getByText("微信登录暂不可用，请稍后重新扫码。").waitFor();
+    const status = legacy ? page.locator("#account-state") : page.locator("dialog [role=status]");
+    await status.getByText("微信登录暂不可用，请稍后重新扫码。").waitFor();
     assert.ok(!(await page.locator("body").innerText()).includes(raw));
-    await page.locator("#account-state").evaluate(el => el.scrollIntoView({ block: "center" }));
-    await page.locator("#account-state").click();
-    page.once("dialog", dialog => dialog.accept("synthetic@example.test"));
-    await page.getByRole("button", { name: "邮箱魔法链接" }).click();
-    await page.locator("#account-state").getByText("操作过于频繁，请稍后再试。").waitFor();
+    if (legacy) {
+      await page.locator("#account-state").evaluate(el => el.scrollIntoView({ block: "center" }));
+      await page.locator("#account-state").click();
+      page.once("dialog", dialog => dialog.accept("synthetic@example.test"));
+      await page.getByRole("button", { name: "邮箱魔法链接" }).click();
+    } else {
+      await page.getByLabel("邮箱地址").fill("synthetic@example.test");
+      await page.getByRole("button", { name: "发送登录链接" }).click();
+    }
+    await status.getByText("操作过于频繁，请稍后再试。").waitFor();
+    if (!legacy) await page.keyboard.press("Escape");
     await page.locator("#generate-image").click();
     await page.locator("#generation-result").getByText("暂未获得生成结果", { exact: false }).waitFor();
     assert.ok(!(await page.locator("body").innerText()).includes(raw));

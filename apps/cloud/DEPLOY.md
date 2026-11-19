@@ -1,5 +1,97 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 2026-11-15 受控 DeepSeek 结算与 HTTP 状态已部署
+
+10:30:12 完成修正版 0091、`agent-worker` 65、`agent-run` 60 及 VPS 镜像 `ba9d2224f878…` 的生产核验。两个 Edge 的 18 个文件与 Worker 的四个运行文件均已读回。缺失用量的旧账未作追补，已标记新调用按冻结额及原调用凭据恢复。[数据库、运行回执与回退](../../project_logs/2026-11-15-agent-model-settlement-deployment.md)
+
+## 2026-11-15 DeepSeek 请求取消已部署
+
+VPS Worker 于北京时间 01:41:44 切换为 `cf2c2eef3d55…`，修复模型正文读取停顿时的超时与取消传递。生产候选隔离测试 79/79，01:42:31 核验通过。[文件哈希、线上核验与回退](../../project_logs/2026-11-15-deepseek-cancellation.md)
+
+## 2026-11-15 Worker 控制请求与 Edge 正文限额已部署
+
+8 个 Edge 及 VPS Worker 已按现役制品增量上线。Worker 镜像 `3a2dd891316c…` 于北京时间 01:14:33 启动，7 个运行源码及 56 个 Edge 文件哈希核验通过。部署范围、函数版本、线上探针与回退步骤见[部署记录](../../project_logs/2026-11-15-worker-control-deployment.md)。
+
+## 2026-11-13 Seedream 5.5 已部署
+
+用户明确确认后，北京时间 18:00:05 切换单文件 Worker，18:00:49 应用 0090；18:03:58 真实透明 PNG 验收完成，18:06:40 现役及单次执行复核通过。当前镜像 `243d949a5829…`，原镜像 `394ad4f896f4…`。详见[部署证据、验收边界与回退](../../project_logs/2026-11-13-seedream55.md)。
+
+- 新模型：`doubao-seedream-5-5-261028`，Worker 独立环境变量 `ARK_IMAGE_MODEL_55`；普通生成支持原生透明 PNG，不发送 Pro fast 参数。既有 Pro／Lite、Agent 与分层模型保持。
+- 数据：定向应用 `0090_seedream55.sql` 三条新服务。2K 20、1K／1.5K 10 Bcoin，第二张起参考图每张加 1，沿用 20261023 锁价与恢复；现有余额、价格、账本和旧任务保持。不要顺序推送未部署的其他迁移。
+- Worker：只给现役 `src/cloud-generation/runtime.ts` 叠加本次独立配置、三服务路由及 PNG 参数，再增加上述环境变量。开发树还包含未上线 GPT 改动，不能整文件覆盖现役。已只读下载现役生成最小候选，冻结入口 `.tmp/seedream55/prepare.mjs`，单文件候选 `.tmp/seedream55/candidate/apps/agent-worker/src/cloud-generation/runtime.ts`。
+- 顺序：备份现役镜像、文件与私有 env；核对队列空闲和基线后先部署 Worker、检查模型配置，再定向插入三条服务；通过权益列表、报价、原任务恢复及一次真实透明 PNG 生成／交付／唯一结算核验。无需部署 Edge 或官网；不发布整棵开发树。
+- 回退：先将三个 `image_seedream55*` 服务设为 inactive，等待已接受任务完成／核对未知结果，随后恢复原 Worker 镜像、源文件与 env；不删除新服务、任务或财务记录，不重发旧任务。
+- 桌面：源码复用动态模型菜单，5.5 排在 Cloud 首位；仅在服务器提供该服务时成为 Cloud 兜底，用户保存的可用默认值保留。旧安装包刷新权益可手动选择；自动默认及坐标标注随新版客户端生效。本轮未打包、发布或重启客户端。
+- 验证：开发 Worker 22 项、现役单文件候选 14 项、`bcoin-db.test.mjs` 的三档报价／0–10 参考图边界／预授权重放及旧服务逐字段保持、`seedream-models-ui.test.mjs` 的真实菜单／默认保持／Cloud 切换／深浅色／窄窗口均通过。类型检查存在原基线错误，编译器以 Git HEAD 覆盖本次改动对照：桌面 1027→1027、Worker 2→2，无新增诊断；不能记为全量类型检查通过。一笔真实 2K 透明 PNG、官网网关交付、原键恢复、同键重放及唯一 20 Bcoin 结算通过；测试 Auth 已删除。1K／1.5K 与参考图没有真实生成，上游账单待独立核对。
+
+参数来源：[官方 5.5 教程](https://console.volcengine.com/ark/region%3Acn-beijing/docs/seedream-5-5)、[图片生成 API](https://console.volcengine.com/ark/region%3Acn-beijing/docs/image-generation-api)，2026-11-13 核对。Bcoin 为本产品沿用的报价，不声明其等同上游新模型成本。
+
+## 2026-11-13 微信支付联调服务已部署
+
+0080、五个支付 Edge、官网账号和通知网关、商户 Secrets、分钟补偿及每日对账 timer 已上线。独立账号通过现役 Cloud 取得 ¥1／20 Bcoin 的真实微信二维码，公开购买能力返回关闭。线上版本、原站点目录、回退边界和验收进度见[微信支付记录](WECHATPAY.md#验证记录)。
+
+## 2026-11-11 审查第二批已部署
+
+北京时间 15:06:37 生产库读回 0087 及两项读取策略。理解服务升级至 v45，视觉服务升级至 v22。20 个运行文件逐一匹配冻结包，两个入口保留 JWT 验证。15:09:10 官网切至 `20261111-read-deadline-and-recovery`，5 个静态文件通过公网读回。生产策略的 12 项截止时间判定通过。专用测试账号已注销，使用该账号实际取回原单仍待验。[本批上线回执与回退入口](../../project_logs/2026-11-11-release-readiness.md#官网和-cloud)
+
+## 2026-11-11 工程审查云端修复已部署
+
+按用户确认，生产新增 0086，五个 Edge 已部署并完成 38 个文件的哈希读回：generate-proxy v45、understand-proxy v44、understand-worker v25、visual-profile v21、visual-profile-worker v19。原有权限和价格配置已核对。官网切至 `20261111-engineering-audit`，8 个公开文件与候选一致，已登录的公网原单查询通过。HTML Renderer 0.1.2 已从现役 Worker 完成并发渲染，队列回到空闲。生产数据库、官网、Renderer 的核验与可单独执行的回退步骤分别见 [Cloud](../../project_logs/2026-11-11-audit-cloud-deployment.md)、[官网](../../project_logs/2026-11-11-audit-site-deployment.md)、[Renderer](../../project_logs/2026-11-11-audit-renderer-deployment.md)。
+
+## 2026-11-10 强化复刻语音已部署
+
+用户批准后，0085、understand-proxy v43、VPS 语音适配和 5 Bcoin／次临时价已上线。真实词级识别、原单幂等、唯一结算和失败测试退费通过；其他价格、函数、环境及官网保持。桌面源码待发包，真实全流程成片仍待验收。[部署证据与回滚](../../project_logs/2026-11-10-enhanced-replication.md)。
+
+## 2026-11-09 Agent 卡片与对话统一配套已部署
+
+经用户明确确认，chat-proxy／chat-worker v3、VPS 聊天 Worker、官网网关及 0084 已上线，19:57:30（北京时间）核验通过。现役 Worker `sha256:27bcef4aceef9e2dfcd4b8fa2a8b31d53b819fd62d9781005e22b637c981eb0a`，官网 `/opt/bowerbird/website-releases/20261109-agent-chat-unification`；既有 Skill、环境、挂载权限、资源限制、其他云函数、JWT、RLS 和 0 Bcoin 价保持。真实小对话与原请求重放通过，26,400,065 字节输入／2,280,000 字节合成回复完整往返，大文本未调用模型。原用户任务未重提，桌面源码未发布新安装包。
+
+首次切换触发挂载数组校验后自动回退 Worker／官网；修正为按挂载目标排序、比较全部字段后，启用同一候选并复核通过。回退镜像标签 `bowerbird/generation-worker:rollback-agent-chat-20261109`、官网上一版本 `20261109-agent-capacity`，备份目录 `/opt/bowerbird/deploy-backups/agent-chat-unification-20261109` 及 `-retry`。部署文件读回、迁移全文、完整验收与回滚边界见[统一专项记录](../../project_logs/2026-11-09-agent-chat-unification.md)；下方日期条目为历史部署状态。
+
+## 2026-11-09 Agent 文本容量与 413 修复已部署
+
+2026-11-09 Agent 文本容量修复已部署：现役官网遗留 64 KiB `request.json` 限制导致 HTTP 413，现已连同 Edge、Worker／DSH、0081／0083 和 Nginx 配套更新。16:59:27（北京时间）经公网上传 26,400,257 字节合成输入成功，读回长度与 SHA-256 一致，测试对象已清理；原失败任务已取消且预授权退回，未重提或调用付费模型。桌面源码未另打安装包。[部署证据与回滚](../../project_logs/2026-11-09-agent-text-capacity.md)。
+
+## 2026-11-08 Cloud DSH Skill 服务端迁移已部署
+
+11:09:50（北京时间）在四类活动队列为空时切换 Worker 为 `sha256:5d5190c9c6768203ac96dbd57827180ed40386d6b63e730f4bd176d0fcb7624c`。H3 官方指南版和文本编辑方法由 VPS `/opt/bowerbird/agent-worker/src/skills/text/` 只读挂载加载；客户端源码改为标识与业务参数，旧 H3 请求忽略其客户端方法正文。纯文字统一 processor 在模型执行前冻结方法及哈希，恢复不漂移。部署基于现役镜像仅叠加 5 文件和两行 Compose 配置，未部署 Edge／SQL 或夹带其他本机改动。
+
+候选 22 项断网测试、卡片／底部创作框回归及桌面 TypeScript 通过；11:12 再核验现役只读挂载、5 文件哈希、原语言／官方模式、旧版兼容、registry／聊天模块和健康事件，restart 0。未调用真实付费模型、未发布桌面安装包；旧安装版仍携带旧正文，但服务端已改用 VPS 方法。[完整证据、维护及回滚边界](../../project_logs/2026-11-08-cloud-dsh-skills.md)。
+
+## 2026-11-08 H3 文字结果结算修复已部署
+
+用户明确授权后，09:08:30（北京时间）仅应用 `0082_agent_text_settlement`，补齐 `settle_agent_run` 的纯文字结果判定，修复已有 `text.result` 却因缺少图片／HTML 产物而返回 409 的问题。租约、状态转换、预算、原子计费和权限保持；未执行全量迁移或部署 Worker／Edge／客户端。隔离 SQL 先复现再通过；线上完整函数读回、0082 记录、service_role 执行权限及两条旧失败任务／hold／usage 快照保持通过。未提交模型请求，真实付费优化仍待复测。
+
+旧函数备份 `.tmp/h3-failure-20261108/settle-before.sql`，回滚只恢复函数，不重算历史任务／账本；本次服务端修复不依赖客户端更新。详见 [部署证据与边界](../../project_logs/2026-11-08-h3-text-settlement.md)。
+
+## 2026-11-07 H3 纯文本 Worker 已部署
+
+08:13（北京时间）用户授权后，在四类活动队列均为空时切换 Worker。现役镜像 **`sha256:4e732efa289246a064883e997db99bac88ccdab6c4dbbf5dff4bed2afe6ba6b3`**，基于下述聊天版仅叠加输入 schema、文字改写和统一 processor 三份文件，修复 `textRewrite` 被拒绝为 `unified_agent_input_invalid`。候选断网 16 项测试通过；现役三文件哈希、文字输入／输出和聊天模块导入通过，服务正常、重启 0、无错误日志。环境、Compose、资源与安全限制保持；没有 Edge、迁移、价格或官网变更。
+
+旧镜像标签 `bowerbird/generation-worker:rollback-h3-text-20261107`，源码备份 `/opt/bowerbird/deploy-backups/h3-text-20261107/`；回退前确认无运行任务，不重排未知结果。未重提旧失败任务或进行真实付费测试；桌面布局和零建卡修复仍待客户端发布。详见 [部署记录与回滚](../../project_logs/2026-11-07-h3-optimization-repair.md)。
+
+## 2026-11-07 Cloud 对话已部署（0 Bcoin）
+
+01:34:05（北京时间）真实链路通过。定向应用 **0077_chat_completions**；0078 及所有既有计费函数、原服务价格逐项保持，0068／0079／0080 未顺带应用。`chat-proxy v2` 保持 JWT 与内部 requireUser；`chat-worker v2` 关闭平台 JWT，内部校验专用 CHAT_WORKER_TOKEN。CHAT_ENABLED=true，聊天对所有已登录用户开放；原独立 Agent allowlist、支付 Mock 和其他模型开关保持。测试报价锁定 **0 Bcoin**，非零目录价格仍拒绝创建。
+
+本次聊天部署镜像 **`sha256:8799ba09e5de45ed620b980f844f1ed8ee99c83cb5ee3bfb359206a1760b7b8e`**（后由上方 H3 修复镜像替代），基于原 `834246b4560cc…` 镜像仅增加聊天消费循环、DeepSeek 可选输出上限和三份共享协议／提示词。两份服务器 Dockerfile 同步复制规则；原 Compose、资源限制、DSH profile、既有运行时与模型密钥保持。仅新增 CHAT_CONTROL_URL／CHAT_WORKER_TOKEN，真实 DeepSeek key 仍只在 VPS。新增 Secrets 使原 16 个 Edge 版本各加 2，但代码包 SHA、JWT 及入口逐项保持；并未重部署其他函数源码。
+
+官网仍为 `20261106-windows-26.11.602`，已有路由直接生效；没有改官网文件、下载清单或安装包。18 项线上检查通过：真实登录用户经官网 quote=0、一次 DeepSeek 文本回复、原幂等键取回／重放／冲突拒绝、唯一任务／hold／confirm(0)、余额不变，非法用户与 Worker 凭据拒绝；输入 521／输出 5 tokens，临时 Auth 已清理，审计账本保留。18 项离线运行时测试、0078 后补 0077 演练、真实库事务回滚演练、Deno 与候选断网导入通过；7 份 Edge 文件读回一致，Worker 无聊天错误。工作区全量 Worker typecheck 被既有 `video-audio-probe.test.ts` 的 node:child_process 声明错误阻断；该未部署文件未进入候选。
+
+回退先设置 **CHAT_ENABLED=false** 停止新建，保留 get、Worker 和原任务结算；不删除聊天表／hold／usage，不重排未知任务。确需回退 Worker，先等待原任务完成，再使用 `bowerbird/generation-worker:rollback-chat-20261107` 和 `/opt/bowerbird/deploy-backups/chat-20261107/` 的源码／0600 环境备份。不得撤销现用官网路由。原始证据 `.tmp/chat-deploy-20261107/`；详见 [聊天协议](CHAT.md) 与 [行动记录](../../project_logs/2026-11-07-cloud-chat.md)。
+
+## 2026-11-06 H3 提示词优化 Agent 网关修复
+
+异机错误 `创建 DSH 统一 Agent Run 失败（连接未建立）`／Windows 10054 发生在模型执行前。桌面 Agent 控制请求仍直连 Supabase；本次复用官网网关处理 `agent-run`，并为统一 Agent 的签名清单上传增加固定路由。保持 Bearer、原任务身份及签名，不自动重发；未改 Worker、Edge、数据库、权益或计费。不能凭连接错误推断实际扣费结果。
+
+**已部署：** 官网现役 `/opt/bowerbird/website-releases/20261106-h3-agent-gateway`，回滚目录 `/opt/bowerbird/website-releases/20261106-windows-26.11.601`。从现役复制，只改 `cloud-proxy.mjs`，86 个既有文件保持，配置／首页／安装包／更新清单／Nginx 不变。新文件 SHA-256 `76115109d001ce81f0496cb75a203b5f35457100cb691131df3026460db86426`，原文件 `375895f636e317659bc4ddfd0ae6d945341423a86e1d1abe740ec1a158623e0e`。未部署本地源码中另一个专项的 `chat-proxy` 路由，线上仍为 404。
+
+固定 POST `/api/cloud/functions/v1/agent-run` 要求用户 Bearer；PUT 仅接受 `/api/cloud/storage/v1/object/upload/sign/agent-temp/runs/<UUID>/inputs/request.json?token=...`，JSON MIME、至多 64 KiB、精确 Content-Length，保留签名查询及 `x-upsert: true`，不转发 Bearer／Cookie／apikey 给存储。没有任意目标代理、私钥、自动重试或请求正文日志。
+
+**验收：** 本机 30 项 Cloud／账号代理测试通过，Rust 配置 5 项通过。正在运行的 `cargo run` 占用开发目录锁，因此配置测试使用现有依赖独立编译；没有停止用户应用，未完成整应用 Rust 重建。候选、现役、服务器公网各 7 项检查通过（healthz 204、匿名及无效 Bearer 401、原生成入口保持、未开放路由 404、无效存储签名 400）；服务 active。没有真实付费任务、素材上传或 GPU 调用。证据在本机 `.tmp/h3-gateway-20261106/` 与服务器 `/tmp/bowerbird-h3-gateway-20261106/`。
+
+**客户端与回滚：** 桌面 `CloudConfig.endpoint("agent-run")` 和 `agent_request_upload_url` 已修改源码，统一 Agent 清单上传调用新地址校验；仅客户端更新后生效，本轮没有重发安装包。客户端发布前可原子恢复旧官网符号链接并重启 `bowerbird-website.service`；新客户端发布后应保留该路由，不回退数据库／账本。H3 纯文本全链路在本次范围内，其他 Agent 媒体传输仍有原直连路径。
+
 > 目标：把 `apps/cloud/` 的 Supabase 迁移 + Edge Functions 推上云端，完成 Auth/积分/算力的真实联调。
 > 前提：你已在 Supabase 控制台拿到 Project URL / publishable key / secret key，并已在 `apps/cloud/.env` 填好方舟 key 与 endpoint id。
 
@@ -516,3 +608,12 @@ node --env-file=.env scripts/check-agent-runtime-health.mjs
 - `DAILY_COST_LIMIT_CNY` 是上海自然日的全站预估成本上限；单次预估成本 = 预扣积分 × `COST_CNY_PER_CREDIT`（默认 ¥0.047）。`RATE_LIMIT_PER_USER_PER_MIN` 是同账号每分钟首次上游请求数；同一幂等键重放不重复占用额度，也不会重复提交上游。
 - `BOWERBIRD_CLOUD_MOCK` 与 `BOWERBIRD_PAYMENT_MOCK` 是两个独立开关：前者控制算力，后者控制支付。
 - 部署完成后请告诉我「已部署」，我会继续真机验收（登录 → 积分 → 生成 → 流水 → 扣费/回滚）。
+
+## 2026-11-06 Cloud 全通路与 Agent 原单恢复
+
+官网版本 `20261106-cloud-routing` 已由候选、现役、公网各 14 项检查验证；前版 `20261106-h3-agent-gateway` 保留回滚，仅代理及新契约变化，86 个其他文件保持。`agent-run` v53→v54 以下载的现役源码为底，只增加 `get_by_key` 只读恢复，保留 `verify_jwt=false`、内部用户鉴权、原计费与 FeaturePolicy；部署后源码读回一致，其他函数版本不变。没有迁移、Worker 或密钥变更，没有创建真实付费任务。Windows 26.11.602 已签名发布，2026-11-06 19:25:05（北京时间）公网复核通过，现役官网 `20261106-windows-26.11.602` 保留全部新增网关；回滚目标 `20261106-cloud-routing`。完整契约、拒绝与恢复边界、验证及回滚见 [CLOUD-TRANSPORT](../../dev-doc/CLOUD-TRANSPORT.md)，原始证据 `.tmp/cloud-routing-20261106/`。
+# 2026-11-18：个人即梦建卡选项修复
+
+北京时间 11:50，生产 `generation-worker` 以现役镜像 `39faba7d53a5` 为基线，仅更新 `/cloud/supabase/functions/_shared/chat-card-tool.json` 的 `provider` 字段，取消个人 Flash／Lite 新选项。候选在禁网容器中通过 DSH profile 工具测试，切换后核验镜像 `a4c3ff552b87`、文件 SHA-256 `c719751af7d803e2aa06ee09bd1aa5ee0a5616295169cdd23e7045ff3504057d`、运行状态、重启数 0 与 Compose 配置一致性。未部署 Edge、数据库或修改 Cloud 生图服务。
+
+现场证据在 VPS `/tmp/dream-route-cloud-20261118/cloud-active.json`，持久备份在 `/opt/bowerbird/deploy-backups/dream-route-cloud-20261118/`。如需回滚本次发布，先确认现役仍为上述镜像，再运行 `sudo python3 /tmp/dream-route-cloud-20261118/cloud.py rollback` 恢复原镜像与宿主文件。

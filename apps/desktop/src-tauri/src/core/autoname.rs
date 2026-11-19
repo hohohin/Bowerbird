@@ -11,7 +11,9 @@
 //! 让新采集的图自动成为「创作板就绪」（`list_prompted_assets` 会带上它）。
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, LazyLock, Mutex};
+use sha2::{Digest, Sha256};
 
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Semaphore;
@@ -41,6 +43,18 @@ fn build_auto_instruction(template: Option<&str>) -> String {
 /// 同时跑的 codex 子进程上限（批量采集/导入时节流）。
 const MAX_CONCURRENT: usize = 3;
 static AUTO_SEM: Semaphore = Semaphore::const_new(MAX_CONCURRENT);
+
+static ANALYSES_IN_FLIGHT: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(Mutex::default);
+
+struct AnalysisClaim(String);
+impl AnalysisClaim {
+    fn acquire(key: String) -> Option<Self> {
+        ANALYSES_IN_FLIGHT.lock().unwrap().insert(key.clone()).then(|| Self(key))
+    }
+}
+impl Drop for AnalysisClaim {
+    fn drop(&mut self) { ANALYSES_IN_FLIGHT.lock().unwrap().remove(&self.0); }
+}
 
 /// 在途的「采集即分析」codex 调用数（拿到信号量后才计）。emit 给前端顶部状态圈。
 static AUTO_ACTIVE: AtomicUsize = AtomicUsize::new(0);
@@ -101,6 +115,12 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
         return Ok(());
     }
 
+    let instruction = build_auto_instruction(Some(&settings.auto_analyze_prompt));
+    let version = serde_json::to_vec(&(&asset.id, asset.size, asset.file_mtime, &asset.phash, &instruction))
+        .map_err(|error| error.to_string())?;
+    let job_key = format!("auto-caption-{:x}", Sha256::digest(version));
+    let Some(_claim) = AnalysisClaim::acquire(job_key.clone()) else { return Ok(()); };
+
     // 已有 caption → 跳过（dHash 去重返回已有资产 / 重导入）。查失败也继续（宁多跑一次）。
     let id_for_check = asset_id.clone();
     match db_call(db, move |db| db.has_analysis(&id_for_check, "caption")).await {
@@ -119,14 +139,12 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
     // 拿到信号量（即将真正调 codex）才计入在途，emit 让前端状态圈反映导入基础分析。
     let _active = AutoActiveGuard::new(app.clone());
 
-    let instruction = build_auto_instruction(Some(&settings.auto_analyze_prompt));
-
     let req = CodexRequest {
         instruction: instruction.clone(),
         reference_images: vec![store_path.into()],
         context_prompts: vec![],
         ratio: None,
-        job_id: None,
+        job_id: Some(job_key),
         generate_num: None,
         transparent_background: None,
     };
@@ -137,7 +155,7 @@ async fn auto_analyze(app: &AppHandle, db: &Arc<Database>, asset: Asset) -> Resu
         &entitlement,
         cloud,
         auth,
-        settings.cloud_auto_understand,
+        false, // 后台入库分析仅使用本机引擎，包括旧版已开启上云的配置。
     )
     .await
     .map_err(|e| e.to_string())?;
@@ -285,7 +303,6 @@ async fn name_from_text(
     let entitlement = app.state::<EntitlementService>();
     let snapshot = entitlement.current_or_sync(&auth).await;
     // allow_cloud 恒 true：命名只上传文本、不上传图片，无需「云端理解」隐私开关
-    // （cloud_auto_understand 只管图片上云）；codex 路由不受此参数影响。
     let provider = resolve_entitled_understand_provider(&entitlement, cloud, auth, true)
         .await
         .map_err(|e| e.to_string())?;
@@ -399,6 +416,15 @@ fn extract_categories(text: &str) -> (Vec<String>, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_analyses_share_one_claim_until_completion() {
+        let first = AnalysisClaim::acquire("asset-version-1".into()).unwrap();
+        assert!(AnalysisClaim::acquire("asset-version-1".into()).is_none());
+        assert!(AnalysisClaim::acquire("asset-version-2".into()).is_some());
+        drop(first);
+        assert!(AnalysisClaim::acquire("asset-version-1".into()).is_some());
+    }
 
     #[test]
     fn custom_naming_prompt_is_preserved_when_retiring_classification() {

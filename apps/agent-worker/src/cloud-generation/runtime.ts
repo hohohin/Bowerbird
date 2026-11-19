@@ -1,3 +1,4 @@
+import { ControlTransport as ControlClient, ControlDeadlineError } from "../control-plane/control-transport.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { Buffer } from "node:buffer";
 import { IdlePollBackoff } from "../idle-poll-backoff.ts";
@@ -30,6 +31,7 @@ interface HttpRequest {
   headers?: Record<string, string>;
   body?: string | Uint8Array;
   redirect?: "error";
+  signal?: AbortSignal;
 }
 
 export type WorkerFetch = (url: string, request?: HttpRequest) => Promise<HttpResponse>;
@@ -44,6 +46,8 @@ export interface GenerationWorkerConfig {
   arkImageModel: string;
   /** Lite 模型（即官方标准版，同一模型）；image_sd 为其遗留别名，未配置时该档任务干净失败。 */
   arkImageModelLite?: string;
+  /** Seedream 5.5 独立配置，不能改写 Pro/Fast 或历史任务的模型。 */
+  arkImageModel55?: string;
   arkImageSize: string;
   /** GPT Image 两档共用的服务端凭据；缺失时不影响方舟。 */
   openaiApiKey?: string;
@@ -122,6 +126,7 @@ export function configFromEnv(env: Record<string, string | undefined>): Generati
     arkBaseUrl: (env.ARK_BASE_URL?.trim() || "https://ark.cn-beijing.volces.com/api/v3").replace(/\/+$/, ""),
     arkImageModel: required(env, "ARK_IMAGE_MODEL"),
     arkImageModelLite: env.ARK_IMAGE_MODEL_LITE?.trim() || undefined,
+    arkImageModel55: env.ARK_IMAGE_MODEL_55?.trim() || undefined,
     arkImageSize: env.ARK_IMAGE_SIZE?.trim() || "2K",
     openaiApiKey: env.OPENAI_API_KEY?.trim() || undefined,
     mock: (env.BOWERBIRD_CLOUD_MOCK ?? "false") === "true",
@@ -211,12 +216,19 @@ export function mapArkHttpError(status: number, body: string, requestIdHeader?: 
 /** service 对应的 provider、模型和方舟提示词优化档。未指定 provider 时沿用方舟。 */
 export interface ServiceModelChoice {
   model: string;
+  outputFormat?: "png";
   optimizePromptMode: "standard" | "fast" | null;
   provider?: "openai";
 }
 
 /** GPT 两档显式走 OpenAI；image_hd/image_fast=Pro，image_lite/image_sd=Lite，其余沿用方舟兜底。 */
 export function modelForService(config: GenerationWorkerConfig, service: string): ServiceModelChoice {
+  if (["image_seedream55", "image_seedream55_1k", "image_seedream55_15k"].includes(service)) {
+    if (!config.arkImageModel55) {
+      throw new KnownProviderError("model_not_configured", "Seedream 5.5 出图模型暂未配置");
+    }
+    return { model: config.arkImageModel55, optimizePromptMode: null, outputFormat: "png" };
+  }
   if (service.startsWith("image_gpt")) {
     const model = GPT_IMAGE_MODELS[service];
     if (!model) throw new KnownProviderError("model_not_configured", "GPT Image 档位尚未配置");
@@ -239,31 +251,6 @@ export function modelForService(config: GenerationWorkerConfig, service: string)
   return { model: config.arkImageModel, optimizePromptMode: null };
 }
 
-class ControlClient {
-  private readonly config: GenerationWorkerConfig;
-  private readonly fetch: WorkerFetch;
-
-  constructor(config: GenerationWorkerConfig, fetchImpl: WorkerFetch) {
-    this.config = config;
-    this.fetch = fetchImpl;
-  }
-
-  async post(body: JsonRecord): Promise<JsonRecord> {
-    const response = await this.fetch(this.config.controlUrl, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${this.config.workerToken}`,
-        "content-type": "application/json",
-        "x-worker-id": this.config.workerId,
-      },
-      body: JSON.stringify(body),
-    });
-    const text = await response.text();
-    const value = parseJson(text);
-    if (!response.ok || !isRecord(value)) throw new Error(`control_http_${response.status}`);
-    return value;
-  }
-}
 
 /** `/images/generations` 请求体：分层任务走 layerPayload；透明图层映射官方
  *  `background: "transparent"`（仅 alpha 通道格式有效，此处恒为 b64_json PNG）。 */
@@ -285,6 +272,7 @@ export function arkImageRequestBody(
     ...(input.transparent ? { background: "transparent" } : {}),
     size: input.billing?.output_size ?? config.arkImageSize,
     response_format: "b64_json",
+    ...(choice.outputFormat ? { output_format: choice.outputFormat } : {}),
     watermark: false,
   };
 }
@@ -382,8 +370,8 @@ async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: str
 }
 
 async function heartbeatLoop(control: ControlClient, jobId: string, leaseId: string, intervalMs: number, state: { stopped: boolean }): Promise<void> {
-  while (!state.stopped) {
-    await sleep(intervalMs);
+  while (!state.stopped && control.remainingMs(leaseId) > 1) {
+    await sleep(control.nextHeartbeatMs(leaseId, intervalMs));
     if (state.stopped) return;
     try {
       await control.post({ action: "heartbeat", jobId, leaseId });
@@ -456,6 +444,7 @@ async function executeClaim(
       bytes: image.bytes.byteLength,
     }));
   } catch (error) {
+    if (control.remainingMs(leaseId) <= 1 || error instanceof ControlDeadlineError) return;
     // Video execution owns its durable submission boundary and settlement. A failed
     // control-plane update must never fall through to the image refund path.
     if (videoExecutionEntered || claimed.job.upstreamTaskId) {

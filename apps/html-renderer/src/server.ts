@@ -58,7 +58,7 @@ function tokenMatches(provided: string | undefined, expected: string): boolean {
 export function startRenderServer(options: RenderServerOptions): RunningServer {
   const status: RenderServerStatus = { startedAt: Date.now(), busy: false, queued: 0, renderedCount: 0, failedCount: 0 };
   // 并发 1 + 有界等待队列：超过即 render_capacity_busy。
-  const waiting: Array<() => void> = [];
+  const waiting: Array<() => Promise<void>> = [];
 
   function enqueue(job: () => Promise<void>): boolean {
     if (status.busy) {
@@ -68,15 +68,13 @@ export function startRenderServer(options: RenderServerOptions): RunningServer {
       return true;
     }
     status.busy = true;
-    void job().finally(() => {
+    const finished = () => {
       const next = waiting.shift();
       status.queued = waiting.length;
-      if (next) {
-        void next();
-      } else {
-        status.busy = false;
-      }
-    });
+      status.busy = false;
+      if (next) enqueue(next);
+    };
+    void job().then(finished, finished);
     return true;
   }
 
@@ -88,7 +86,7 @@ export function startRenderServer(options: RenderServerOptions): RunningServer {
       return;
     }
     if (req.method === "POST" && url === "/render") {
-      handleRenderRequest(req, res, options, status, enqueue, waiting);
+      handleRenderRequest(req, res, options, status, enqueue);
       return;
     }
     res.writeHead(404, { "content-type": "application/json" });
@@ -101,7 +99,6 @@ export function startRenderServer(options: RenderServerOptions): RunningServer {
     opts: RenderServerOptions,
     st: RenderServerStatus,
     submit: (job: () => Promise<void>) => boolean,
-    queue: Array<() => void>,
   ): void {
     if (!tokenMatches(req.headers.authorization?.replace(/^Bearer\s+/i, ""), opts.token)) {
       res.writeHead(401, { "content-type": "application/json" });
@@ -144,7 +141,6 @@ export function startRenderServer(options: RenderServerOptions): RunningServer {
         }
         if (result.ok) st.renderedCount += 1;
         else st.failedCount += 1;
-        st.queued = queue.length;
         const statusCode = result.ok ? 200 : FAILURE_STATUS[result.code];
         const resHeaders = { "content-type": "application/json" };
         if (!res.headersSent) {
@@ -159,7 +155,6 @@ export function startRenderServer(options: RenderServerOptions): RunningServer {
         res.end(JSON.stringify(renderFailure("render_capacity_busy")));
         return;
       }
-      if (queue.length > 0) st.queued = queue.length;
     });
   }
 

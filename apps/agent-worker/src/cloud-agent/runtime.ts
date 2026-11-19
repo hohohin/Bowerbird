@@ -1,3 +1,4 @@
+import { ControlDeadlineError } from "../control-plane/control-transport.ts";
 import { randomUUID } from "node:crypto";
 import {
   AgentControlClient,
@@ -89,8 +90,8 @@ async function heartbeatLoop(
   intervalMs: number,
   sleep: Sleep,
 ): Promise<void> {
-  while (!mutable.stopped) {
-    await sleep(intervalMs);
+  while (!mutable.stopped && !context.signal.leaseLost) {
+    await sleep(Math.min(intervalMs, Math.max(1, Math.floor(context.control.remainingMs(context.claimed.lease.leaseId) / 3))));
     if (mutable.stopped) return;
     try {
       const heartbeat = await context.control.heartbeat(context.claimed.run.id, context.claimed.lease.leaseId);
@@ -114,30 +115,37 @@ export async function executeClaimedAgentRun(
   sleep: Sleep = defaultSleep,
 ): Promise<void> {
   if (!claimed.run || !claimed.lease?.leaseId) throw new Error("agent_claim_response_invalid");
+  const leaseId = claimed.lease.leaseId;
   const mutable = { cancelRequested: false, leaseLost: false, stopped: false };
+  const leaseLost = () => mutable.leaseLost || control.remainingMs(leaseId) <= 1;
   const context: AgentRunContext = {
     claimed: claimed as AgentRunContext["claimed"],
     control,
     signal: {
-      get aborted() { return mutable.cancelRequested || mutable.leaseLost || stop.requested; },
+      get aborted() { return mutable.cancelRequested || leaseLost() || stop.requested; },
       get cancelRequested() { return mutable.cancelRequested; },
-      get leaseLost() { return mutable.leaseLost; },
+      get leaseLost() { return leaseLost(); },
       get stopRequested() { return stop.requested; },
     },
   };
   void heartbeatLoop(context, mutable, heartbeatIntervalMs, sleep);
   try {
+    if (leaseLost()) return;
     await processor.process(context);
-    if (mutable.cancelRequested && !mutable.leaseLost) {
+    if (mutable.cancelRequested && !leaseLost()) {
       await control.cancel(claimed.run.id, claimed.lease.leaseId);
     }
   } catch (error) {
-    if (mutable.leaseLost) return;
+    if (leaseLost() || error instanceof ControlDeadlineError) return;
     try {
       if (mutable.cancelRequested) {
         await control.cancel(claimed.run.id, claimed.lease.leaseId);
       } else {
-        await control.fail(claimed.run.id, claimed.lease.leaseId, safeErrorCode(error), "Agent Run 执行失败");
+        const code = safeErrorCode(error);
+        const message = code === "deepseek_context_limit" ? "本次内容超过模型可容纳的上下文，请拆分任务后再处理。原文已保留。"
+          : code === "deepseek_output_limit" ? "模型输出达到自身上限，结果不完整。请拆分任务后再处理。"
+          : "Agent Run 执行失败";
+        await control.fail(claimed.run.id, claimed.lease.leaseId, code, message);
       }
     } catch (settlementError) {
       console.error(JSON.stringify({ event: "agent_settlement_failed", run_id: claimed.run.id, error: safeErrorCode(settlementError) }));
@@ -162,7 +170,8 @@ export async function runAgentWorker(
   const stop = options.stop ?? { requested: false };
   const sleep = options.sleep ?? defaultSleep;
   const now = options.now ?? Date.now;
-  const idleBackoff = new IdlePollBackoff(config.pollIntervalMs);
+  // Interactive text edits should start promptly even after a long idle period.
+  const idleBackoff = new IdlePollBackoff(config.pollIntervalMs, Math.max(config.pollIntervalMs, 5_000));
   let lastMaintenanceAt = Number.NEGATIVE_INFINITY;
   console.log(JSON.stringify({ event: "agent_worker_started", worker_id: config.workerId }));
   while (!stop.requested) {

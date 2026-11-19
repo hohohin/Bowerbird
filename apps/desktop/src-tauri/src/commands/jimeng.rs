@@ -19,11 +19,28 @@ use crate::commands::codex::CodexHealth;
 use crate::error::AppError;
 
 /// 即梦健康检测结果缓存（TTL 内重复检测直接复用，不重复 spawn `version`/`user_credit`——
-/// 后者是联网调用；健康状态短时间不会变，只有用户显式「重新检测」/安装/登录/登出才强制刷新）。
+/// 后者是联网调用。界面可复用结果，重新检测、授权变动和新任务提交时复查）。
 const HEALTH_TTL: Duration = Duration::from_secs(120);
-static HEALTH_CACHE: Mutex<Option<(CodexHealth, Instant)>> = Mutex::new(None);
+static HEALTH_CACHE: Mutex<Option<(DreaminaHealth, Instant)>> = Mutex::new(None);
 
-fn cached_health() -> Option<CodexHealth> {
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DreaminaStatus { Ready, Missing, LoginRequired, Unconfirmed }
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DreaminaHealth {
+    pub status: DreaminaStatus,
+    pub ok: bool,
+    pub reason: String,
+}
+
+impl DreaminaHealth {
+    fn new(status: DreaminaStatus, reason: &str) -> Self {
+        Self { status, ok: status == DreaminaStatus::Ready, reason: reason.into() }
+    }
+}
+
+fn cached_health() -> Option<DreaminaHealth> {
     let cache = HEALTH_CACHE.lock().unwrap();
     cache
         .as_ref()
@@ -31,7 +48,7 @@ fn cached_health() -> Option<CodexHealth> {
         .map(|(h, _)| h.clone())
 }
 
-fn store_health(h: CodexHealth) -> CodexHealth {
+fn store_health(h: DreaminaHealth) -> DreaminaHealth {
     *HEALTH_CACHE.lock().unwrap() = Some((h.clone(), Instant::now()));
     h
 }
@@ -40,60 +57,116 @@ fn clear_health_cache() {
     *HEALTH_CACHE.lock().unwrap() = None;
 }
 
-/// 检测 dreamina 是否可用：① CLI 可执行（`dreamina version`）；② 已登录。
-/// 登录态由 `check_dreamina_logged_in` spawn `user_credit` 动态验证（返回余额 JSON = 有效）。
+const LOGIN_REQUIRED: &str = "即梦自有订阅未登录，请先登录授权。";
+const HEALTH_UNCONFIRMED: &str = "暂时无法确认即梦自有订阅状态，请检查网络后重新检测。";
+
+fn login_required(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    ["未检测到有效登录态", "未登录", "请先登录", "unauthorized", "please login", "not logged in"]
+        .iter()
+        .any(|reason| message.contains(reason))
+}
+
+/// A queued request may outlive its authorization. Keep its original CLI diagnostics.
+pub(super) fn refresh_after_auth_error(app: &AppHandle, error: &AppError) {
+    if matches!(error, AppError::Jimeng(reason) if cli_rejected_login(reason)) {
+        let health = store_health(DreaminaHealth::new(DreaminaStatus::LoginRequired, LOGIN_REQUIRED));
+        let _ = app.emit("dreamina://health-changed", &health);
+    }
+}
+
+fn cli_rejected_login(reason: &str) -> bool {
+    // Inspect transport stderr. The stdout JSON can echo an arbitrary user prompt.
+    let stderr = if let Some((_, output)) = reason.split_once(" | stderr: ") {
+        output.split_once(" | stdout: ").map_or(output, |(err, _)| err)
+    } else if let Some(exit) = reason.strip_prefix("dreamina 退出 ") {
+        exit.split_once("：").map_or("", |(_, output)| output.lines().next().unwrap_or(""))
+    } else {
+        return false;
+    };
+    login_required(stderr)
+}
+
+/// 找不到 CLI 才提示安装。已有 CLI 直接用账号查询同时验证可执行性和登录态。
+/// 登录态由 `dreamina_login_health` spawn `user_credit` 动态验证（返回余额 JSON = 有效）。
 /// 任一不满足返回 `ok=false` + 中文 reason，前端据此置灰（约定 7）。
 /// `force=true` 跳过缓存强制重检（手动「重新检测」/安装/登录/登出后），默认吃 120s TTL 缓存。
 #[tauri::command]
-pub async fn dreamina_health(force: Option<bool>) -> Result<CodexHealth, AppError> {
+pub async fn dreamina_health(force: Option<bool>) -> Result<DreaminaHealth, AppError> {
     if force != Some(true) {
         if let Some(h) = cached_health() {
             return Ok(h);
         }
     }
-    let binary = resolve_dreamina_binary();
-    let binary_ok = if let Some(binary) = binary.as_deref() {
-        dreamina_command(binary)
-            .arg("version")
-            .output()
-            .await
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    } else {
-        false
+    let health = match resolve_dreamina_binary() {
+        Some(binary) => dreamina_login_health(&binary).await,
+        None => DreaminaHealth::new(DreaminaStatus::Missing, "未安装即梦 CLI，请在自有订阅设置中安装。"),
     };
-    if !binary_ok {
-        return Ok(store_health(CodexHealth {
-            ok: false,
-            reason:
-                "未检测到 dreamina CLI（运行 curl -s https://jimeng.jianying.com/cli | bash 安装）"
-                    .into(),
-        }));
-    }
-    let binary_str = binary.as_deref().unwrap_or("dreamina");
-    if !check_dreamina_logged_in(binary_str).await {
-        return Ok(store_health(CodexHealth {
-            ok: false,
-            reason: "Bowerbird 的即梦未登录，请在设置中登录".into(),
-        }));
-    }
-    Ok(store_health(CodexHealth {
-        ok: true,
-        reason: String::new(),
-    }))
+    Ok(store_health(health))
 }
 
-/// 检测 dreamina 登录态：spawn `user_credit`，exit 0 + stdout 含余额字段 = 已登录。
-/// dreamina 自管登录态文件（实测非 credential.json），user_credit 动态验证最准（§7.5）。
-async fn check_dreamina_logged_in(binary: &str) -> bool {
-    match dreamina_command(binary).arg("user_credit").output().await {
-        Ok(o) => {
-            o.status.success() && {
-                let s = String::from_utf8_lossy(&o.stdout);
-                s.contains("total_credit") || s.contains("user_id") || s.contains("vip_level")
-            }
-        }
-        Err(_) => false,
+fn credit_health(success: bool, stdout: &str, stderr: &str) -> DreaminaHealth {
+    let ok = success && super::dreamina_account::json(stdout).is_ok_and(|value| {
+        ["total_credit", "user_id", "vip_level"].iter()
+            .any(|field| value.get(*field).is_some_and(|v| !v.is_null()))
+    });
+    if ok {
+        DreaminaHealth::new(DreaminaStatus::Ready, "")
+    } else if login_required(stderr) || login_required(stdout) {
+        DreaminaHealth::new(DreaminaStatus::LoginRequired, LOGIN_REQUIRED)
+    } else {
+        DreaminaHealth::new(DreaminaStatus::Unconfirmed, HEALTH_UNCONFIRMED)
+    }
+}
+
+/// Check provider-owned credentials without treating a network failure as a logout.
+async fn dreamina_login_health(binary: &str) -> DreaminaHealth {
+    let result = tokio::time::timeout(
+        Duration::from_secs(30),
+        dreamina_command(binary).arg("user_credit").kill_on_drop(true).output(),
+    ).await;
+    match result {
+        Ok(Ok(o)) => credit_health(
+            o.status.success(),
+            &String::from_utf8_lossy(&o.stdout),
+            &String::from_utf8_lossy(&o.stderr),
+        ),
+        Ok(Err(_)) => DreaminaHealth::new(DreaminaStatus::Unconfirmed, "无法启动已安装的即梦 CLI，请检查程序后重新检测。"),
+        Err(_) => DreaminaHealth::new(DreaminaStatus::Unconfirmed, HEALTH_UNCONFIRMED),
+    }
+}
+
+#[cfg(test)]
+mod generation_health_tests {
+    use super::*;
+
+    #[test]
+    fn empty_balance_is_ready_but_a_missing_login_or_failed_probe_is_not() {
+        assert!(credit_health(true, r#"{"total_credit":0}"#, "").ok);
+        let reported = "未检测到有效登录态，请先执行 dreamina login";
+        assert_eq!(credit_health(false, "", reported).reason, LOGIN_REQUIRED);
+        assert_eq!(credit_health(true, reported, "").reason, LOGIN_REQUIRED);
+        assert_eq!(credit_health(false, "", "context deadline exceeded").reason, HEALTH_UNCONFIRMED);
+        assert_eq!(credit_health(true, "unexpected total_credit response", "").reason, HEALTH_UNCONFIRMED);
+        assert_eq!(credit_health(false, "", "timeout").status, DreaminaStatus::Unconfirmed);
+        assert_eq!(credit_health(false, "", reported).status, DreaminaStatus::LoginRequired);
+    }
+
+    #[test]
+    fn headless_login_accepts_existing_session_or_device_flow() {
+        assert!(parse_login_flow("已复用当前本地 OAuth 登录态。").unwrap().is_none());
+        let flow = parse_login_flow("verification_uri: https://example.test/auth\nuser_code: ABCD\ndevice_code: test-device")
+            .unwrap().unwrap();
+        assert_eq!(flow.user_code, "ABCD");
+        assert!(parse_login_flow("unexpected output").is_err());
+    }
+
+    #[test]
+    fn submission_diagnostics_refresh_only_a_confirmed_login_failure() {
+        assert!(cli_rejected_login("dreamina 提交退出 exit code: 1 | stderr: 未检测到有效登录态，请先执行 dreamina login | stdout: "));
+        assert!(cli_rejected_login("dreamina 退出 exit code: 1：unauthorized"));
+        assert!(!cli_rejected_login("启动 dreamina 失败（未安装/未登录？运行 dreamina login）"));
+        assert!(!cli_rejected_login("dreamina 提交退出 exit code: 1 | stderr: timeout | stdout: please login"));
     }
 }
 
@@ -135,7 +208,7 @@ pub async fn dreamina_login(app: AppHandle) -> Result<(), AppError> {
 /// 用户网页授权后，跑 `dreamina login checklogin --device_code=<code> --poll=60` 轮询授权完成，
 /// 再测 user_credit 返回最新 health（前端据此 setDreaminaHealth）。
 #[tauri::command]
-pub async fn dreamina_check_login(device_code: String) -> Result<CodexHealth, AppError> {
+pub async fn dreamina_check_login(device_code: String) -> Result<DreaminaHealth, AppError> {
     let binary = resolve_dreamina_binary()
         .ok_or_else(|| AppError::Jimeng("未检测到 dreamina CLI（需安装）".into()))?;
     let mut cmd = dreamina_command(&binary);
@@ -151,25 +224,12 @@ pub async fn dreamina_check_login(device_code: String) -> Result<CodexHealth, Ap
         .await
         .map_err(|_| AppError::Jimeng("dreamina checklogin 超时（90s）".into()))?
         .map_err(|e| AppError::Jimeng(format!("启动 checklogin 失败: {e}")))?;
-    if check_dreamina_logged_in(&binary).await {
-        Ok(store_health(CodexHealth {
-            ok: true,
-            reason: String::new(),
-        }))
+    let health = dreamina_login_health(&binary).await;
+    if health.status != DreaminaStatus::LoginRequired {
+        Ok(store_health(health))
     } else {
-        // 诊断：附 device_code 前 8 + checklogin exit + 输出（如「登录已过期」/未授权）。
-        let dc_head: String = device_code.chars().take(8).collect();
-        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        let diag = if !stdout.is_empty() { stdout } else { stderr };
-        let diag: String = diag.chars().take(200).collect();
-        Ok(store_health(CodexHealth {
-            ok: false,
-            reason: format!(
-                "授权未完成（device_code {dc_head}…, checklogin exit {}）| {diag}",
-                out.status
-            ),
-        }))
+        tracing::info!(exit = ?out.status.code(), "即梦授权查询结束，账号仍未登录");
+        Ok(store_health(DreaminaHealth::new(DreaminaStatus::LoginRequired, "即梦尚未确认网页授权，请重新打开授权页并完成确认。")))
     }
 }
 
@@ -468,7 +528,7 @@ pub struct DreaminaDeviceFlow {
 /// 启动 `dreamina login --headless`（app 内 spawn 即可，不依赖 TTY），解析并返回 OAuth
 /// Device Flow 字段。调用方拿到 verification_uri 后应自动打开浏览器 + 展示 user_code。
 #[tauri::command]
-pub async fn dreamina_login_headless() -> Result<DreaminaDeviceFlow, AppError> {
+pub async fn dreamina_login_headless() -> Result<Option<DreaminaDeviceFlow>, AppError> {
     let binary = resolve_dreamina_binary()
         .ok_or_else(|| AppError::Jimeng("未检测到 dreamina CLI，请先安装".into()))?;
     let mut cmd = dreamina_command(&binary);
@@ -477,24 +537,23 @@ pub async fn dreamina_login_headless() -> Result<DreaminaDeviceFlow, AppError> {
     cmd.stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    let out = tokio::time::timeout(Duration::from_secs(20), cmd.output())
+    let out = tokio::time::timeout(Duration::from_secs(45), cmd.output())
         .await
-        .map_err(|_| AppError::Jimeng("dreamina login --headless 超时（20s）".into()))?
-        .map_err(|e| AppError::Jimeng(format!("启动 dreamina login --headless 失败: {e}")))?;
+        .map_err(|_| AppError::Jimeng("获取即梦授权链接超时，请检查网络后重试。".into()))?
+        .map_err(|_| AppError::Jimeng("无法启动已安装的即梦 CLI，请检查程序后重新检测。".into()))?;
     if !out.status.success() {
-        let head: String = String::from_utf8_lossy(&out.stdout)
-            .trim()
-            .chars()
-            .take(200)
-            .collect();
-        return Err(AppError::Jimeng(format!(
-            "dreamina login --headless 退出 {} | {head}",
-            out.status
-        )));
+        tracing::info!(exit = ?out.status.code(), "即梦未返回授权链接");
+        return Err(AppError::Jimeng("未能从即梦获取授权链接，请检查网络后重试。".into()));
     }
+    parse_login_flow(&String::from_utf8_lossy(&out.stdout))
+}
+
+fn parse_login_flow(text: &str) -> Result<Option<DreaminaDeviceFlow>, AppError> {
     // spike 实测输出：`verification_uri: <uri>` / `user_code:` / `device_code:` / `poll_interval:` / `expires_at:`。
     // 已有本地登录态时仅输出「已复用当前本地 OAuth 登录态。」——让前端先 recheck 判定。
-    let text = String::from_utf8_lossy(&out.stdout);
+    if text.lines().any(|l| l.contains("已复用当前本地 OAuth 登录态")) {
+        return Ok(None);
+    }
     let uri = text
         .lines()
         .find_map(|l| {
@@ -517,11 +576,11 @@ pub async fn dreamina_login_headless() -> Result<DreaminaDeviceFlow, AppError> {
     let expires_at = text
         .lines()
         .find_map(|l| l.strip_prefix("expires_at:").map(|v| v.trim().to_string()));
-    Ok(DreaminaDeviceFlow {
+    Ok(Some(DreaminaDeviceFlow {
         verification_uri: uri,
         user_code,
         device_code,
         poll_interval_secs,
         expires_at,
-    })
+    }))
 }

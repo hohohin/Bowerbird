@@ -6,7 +6,7 @@
   "description": "Bowerbird Agent Runtime — controlled-image-edit 动态规划、可恢复 RunEngine、VPS consumer 与 durable tool ledger；新建 unified DSH 与历史任务恢复。",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --test \"src/**/*.test.ts\"",
+    "test": "node --test \"src/**/*.test.ts\" \"src/**/*.test.mjs\"",
     "worker": "node src/main.ts",
     "worker:generation": "node src/cloud-generation/main.ts",
     "worker:understand": "node src/cloud-understand/main.ts",

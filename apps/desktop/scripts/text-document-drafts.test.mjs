@@ -2,6 +2,22 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { getTextDocumentDraft, keepTextDocumentDraft, acceptTextDocumentSave, finishTextDocumentSave, subscribeTextDocumentDraft } from '../src/lib/textDocumentDrafts.ts';
 const base = {assetId:'a',path:'C:/a.md',text:'original',version:'v1',format:'markdown'};
+test('a save response captures newly typed rich text before merging its base revision', () => {
+  const key = 'pending-editor';
+  const submitted = {base, text:'submitted', mode:'body'};
+  keepTextDocumentDraft(key, submitted);
+  let pending = true;
+  const unsubscribe = subscribeTextDocumentDraft(key, () => {}, () => {
+    if (!pending) return;
+    pending = false;
+    keepTextDocumentDraft(key, {...submitted, text:'new text from editor'});
+  });
+  try {
+    const result = finishTextDocumentSave(key, submitted, {...base, text:'submitted', version:'v2'});
+    assert.equal(result.text, 'new text from editor');
+    assert.equal(result.base.version, 'v2');
+  } finally { unsubscribe(); }
+});
 test('separate drafts survive editor unmount and keep their opened version', () => {
   keepTextDocumentDraft('a',{base,text:'unsaved',mode:'source'});
   keepTextDocumentDraft('b',{base:{...base,assetId:'b'},text:'second',mode:'body'});

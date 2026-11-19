@@ -26,7 +26,7 @@ const PROVIDERS = {
   flux: { label: "FLUX.2 Klein 9B", model: () => process.env.BFL_FLUX_ENDPOINT || "flux-2-klein-9b" },
 };
 const DEFAULT_WINDOWS_DOWNLOAD_URL =
-  "https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.202_x64-setup.exe";
+  "https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1001_x64-setup.exe";
 const rateBuckets = new Map();
 
 await loadLocalEnv(join(SCRIPT_DIR, ".env.local"));
@@ -363,10 +363,14 @@ async function handleGenerate(request, response) {
 async function handleAuthenticatedGenerate(request, response, accessToken) {
   const cloudUrl = (process.env.SUPABASE_URL || "").replace(/\/+$/, "");
   if (!cloudUrl) throw httpError(503, "云端服务未配置");
-  const { prompt, referenceIds, uploads } = validateGenerationInput(await readJsonBody(request, GENERATE_BODY_LIMIT));
+  const input = await readJsonBody(request, GENERATE_BODY_LIMIT);
+  if (typeof input?.idempotency_key !== "string" || !/^[a-f0-9-]{36}$/i.test(input.idempotency_key)) {
+    throw httpError(400, "缺少生成请求标识，请刷新页面后重试");
+  }
+  const { prompt, referenceIds, uploads } = validateGenerationInput(input);
   const references = await referenceDataUris(referenceIds, uploads);
   const body = {
-    idempotency_key: crypto.randomUUID(),
+    idempotency_key: input.idempotency_key,
     media: "image",
     prompt,
     reference_images: references.map((dataUri, index) => {
@@ -385,35 +389,22 @@ async function handleAuthenticatedGenerate(request, response, accessToken) {
     method: "POST",
     headers: {
       authorization: `Bearer ${accessToken}`,
+      apikey: process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || "",
       "content-type": "application/json",
     },
     body: JSON.stringify(body),
-    // Edge waits at most 140s for Ark; keep a small envelope for its response.
+    redirect: "error",
     signal: AbortSignal.timeout(145_000),
   });
-  const payload = await upstream.json().catch(() => ({}));
-  if (!upstream.ok) {
-    const code = payload?.error?.code || "upstream_failed";
-    const message = payload?.error?.message || "云生成失败";
-    const status = code === "insufficient_credits" ? 402 : code === "rate_limited" ? 429 : 502;
-    throw httpError(status, message);
-  }
-  const image = payload?.images?.[0]?.base64;
-  if (!image) throw httpError(502, "云生成未返回图片");
-  jsonResponse(response, 200, {
-    image: `data:image/png;base64,${image}`,
-    provider: "bowerbird-cloud",
-    providerLabel: "Bowerbird Cloud",
-    model: "Seedream/Seedance",
-    charge: payload?.charge || null,
-    balance: payload?.balance || null,
-  });
+  const payload = await upstream.json();
+  jsonResponse(response, upstream.status, payload);
 }
 
 async function serveStatic(request, response, root) {
   const url = new URL(request.url, "http://localhost");
   const decoded = decodeURIComponent(url.pathname);
-  const relativePath = decoded === "/" ? "index.html" : ["/admin", "/admin/"].includes(decoded) ? "admin/index.html" : decoded.replace(/^\/+/, "");
+  const page = ["/", "/admin/", "/pricing/"].includes(decoded) ? decoded + "index.html" : decoded;
+  const relativePath = page.replace(/^\/+/, "");
   const filePath = resolve(root, relativePath);
   const normalizedRoot = resolve(root).toLowerCase();
   const normalizedFile = filePath.toLowerCase();
@@ -473,9 +464,9 @@ export function startServer(options = parseArgs(process.argv.slice(2))) {
       if (request.url.split("?", 1)[0].startsWith("/api/account/")) return await accountProxy(request, response);
       if (request.url.split("?", 1)[0].startsWith("/api/cloud/")) return await cloudProxy(request, response);
       if (request.url.split("?", 1)[0].startsWith("/api/pay/")) return await paymentProxy(request, response);
-      const pathname = new URL(request.url, "http://localhost").pathname;
-      if ((request.method === "GET" || request.method === "HEAD") && pathname === "/admin") {
-        response.writeHead(308, { Location: "/admin/", "Cache-Control": "no-store" });
+      const { pathname, search } = new URL(request.url, "http://localhost");
+      if ((request.method === "GET" || request.method === "HEAD") && ["/admin", "/pricing"].includes(pathname)) {
+        response.writeHead(308, { Location: pathname + "/" + search, "Cache-Control": "no-store" });
         return response.end();
       }
       if ((request.method === "GET" || request.method === "HEAD") && pathname === "/healthz") {

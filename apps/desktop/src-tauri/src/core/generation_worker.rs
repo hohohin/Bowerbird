@@ -6,12 +6,12 @@
 //! 「有反推」——已移除；生成图需手动反推才进创作板 @ 池 / 标 🏷️）。
 
 use std::path::PathBuf;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::Semaphore;
 use ulid::Ulid;
+use crate::commands::codex::{GenerationCancellation, GenerationGuard};
 
 use crate::codex::jimeng::{
     list_remote_tasks, poll_query_and_download, resolve_dreamina_binary, RemoteJimengTask,
@@ -23,24 +23,15 @@ use crate::core::task_queue::{GenJob, Task};
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
 
-/// 即梦同账号视频/图片并发上限 = 1（spike 实证 `ExceedConcurrencyLimit`，ret=1310）。
-/// permit=1 Semaphore 让即梦 job 在 Bowerbird 侧串行（同时只 1 个 dreamina 子进程），避免多 job
-/// 并发撞限制；codex 不受此限可并行。正常生成（`codex_create_image`）与启动恢复 worker
-///（`recover_one_jimeng_job`）共用此令牌，FIFO 公平排队（恢复轮询久时新发即梦 job 等待，可接受）。
-pub static JIMENG_FLY: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(1));
-
-/// 取消覆盖等待账号名额与远端查询，返回后不再取消同步入库。
+/// 取消当前任务的原单查询。
 async fn cancellable_jimeng_query<T>(
-    semaphore: &Semaphore,
     cancel_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
     query: impl std::future::Future<Output = AppResult<T>>,
 ) -> Option<AppResult<T>> {
     tokio::select! {
-        result = async {
-            let _permit = semaphore.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
-            query.await
-        } => Some(result),
+        biased;
         _ = async { match cancel_rx.as_mut() { Some(rx) => { let _ = rx.await; }, None => std::future::pending::<()>().await } } => None,
+        result = query => Some(result),
     }
 }
 
@@ -51,6 +42,8 @@ fn provider_source_tag(provider: &str) -> &'static str {
     } else {
         match provider {
             "jimeng" | "dreamina" => "jimeng",
+            key if crate::codex::jimeng_web::historical_model(Some(key)).is_some() => "jimeng",
+            crate::codex::h3_image::KEY => crate::codex::h3_image::KEY,
             _ => "codex",
         }
     }
@@ -60,7 +53,7 @@ fn media_from_paths(paths: &[PathBuf]) -> &'static str {
     if paths.iter().any(|p| p.extension().and_then(|e| e.to_str()).is_some_and(crate::media::probe::is_video)) { "video" } else { "image" }
 }
 
-fn update_creative_job_status(
+pub(crate) fn update_creative_job_status(
     app: &AppHandle,
     db: &Database,
     job: &GenJob,
@@ -336,7 +329,7 @@ pub async fn finalize_generation_assets(
 /// - 即梦 job 但 submit_id=None → `mark_failed`（重启前未拿到 submit_id，无法续查）；
 /// - 即梦 job + submit_id → 后台 spawn `recover_one_jimeng_job` 续查。
 ///
-/// 异步不阻塞启动；恢复 job 的 permit 与正常生成公平排队（JIMENG_FLY FIFO）。
+/// 各恢复任务按自己的 submit_id 独立查询。
 pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>) {
     tauri::async_runtime::spawn(async move {
         match Task::list_project_generation(&db) {
@@ -373,14 +366,18 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
         if let Ok(tasks) = Task::list_project_generation(&db) {
             for task in tasks {
                 if task.status != "failed" { continue; }
-                if let Some(job) = task.gen_job().filter(|job| job.media == "video" && job.provider.starts_with("bowerbird-cloud")) {
-                    if Task::claim_cloud_video_retrieval(&db,&job).unwrap_or(false) { running.push(task); }
+                if task.gen_job().is_some_and(|job| job.media == "video" && job.provider.starts_with("bowerbird-cloud")) {
+                    running.push(task);
                 }
             }
         }
         tracing::info!("启动恢复：list_running 扫到 {} 条未完成 job", running.len());
         for task in running {
             let Some(mut job) = task.gen_job() else { continue };
+            let Ok(cancellation) = GenerationGuard::register(&job.id, job.turn_key.as_deref()) else { continue };
+            if task.status == "failed" && !Task::claim_cloud_video_retrieval(&db, &job).unwrap_or(false) {
+                continue;
+            }
             tracing::info!(
                 "恢复扫描：job={} provider={} status={} submit_id={:?}",
                 job.id,
@@ -402,13 +399,16 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
             }
             if !matches!(
                 job.provider.as_str(),
-                "jimeng" | "dreamina" | "bowerbird-cloud"
+                "jimeng" | "dreamina" | "bowerbird-cloud" | crate::codex::h3_image::KEY
             ) && !job.provider.starts_with("bowerbird-cloud-") {
-                let _ = Task::mark_failed(&db, &job.id, "app 重启中断，codex 会话不可恢复");
+                let message = if crate::codex::jimeng_web::historical_model(Some(&job.provider)).is_some() {
+                    "应用重启中断了即梦网页取回，请在即梦创作记录查看结果后再试"
+                } else { "app 重启中断，codex 会话不可恢复" };
+                let _ = Task::mark_failed(&db, &job.id, message);
                 update_creative_job_status(&app, &db, &job, "failed", None);
                 let _ = app.emit(
                     "codex://chunk",
-                    serde_json::json!({ "kind": "error", "job_id": job.id, "message": "app 重启中断，codex 会话不可恢复" }),
+                    serde_json::json!({ "kind": "error", "job_id": job.id, "message": message }),
                 );
                 continue;
             }
@@ -435,31 +435,33 @@ pub fn spawn_recovery(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths
                 );
                 continue;
             };
-            if job.provider.starts_with("bowerbird-cloud") {
+            if job.provider.starts_with("bowerbird-cloud") || job.provider == crate::codex::h3_image::KEY {
                 let (app2, db2, paths2) = (app.clone(), db.clone(), paths.clone());
                 tokio::spawn(async move {
-                    recover_one_cloud_job(app2, db2, paths2, job, submit_id).await;
+                    recover_submitted_job(app2, db2, paths2, job, submit_id, cancellation).await;
                 });
                 continue;
             }
             // 即梦 job + submit_id → 后台续查（recover_started 自包含，不依赖前端 mount 顺序）。
             let (app2, db2, paths2) = (app.clone(), db.clone(), paths.clone());
             tokio::spawn(async move {
-                recover_one_jimeng_job(app2, db2, paths2, job, submit_id).await;
+                recover_one_jimeng_job(app2, db2, paths2, job, submit_id, cancellation).await;
             });
         }
     });
 }
 
-/// 续查 Bowerbird Cloud 持久任务。Cloud 任务由 VPS 独立执行，桌面重启后只需按 job_id
-/// 恢复轮询和产物下载；不会重新提交方舟请求。
-pub(crate) async fn recover_one_cloud_job(
+/// Resume an existing Cloud job or loopback H3 image and deliver through the same asset pipeline.
+pub(crate) async fn recover_submitted_job(
     app: AppHandle,
     db: Arc<Database>,
     paths: Arc<LibraryPaths>,
     mut job: GenJob,
     submit_id: String,
+    (_guard, mut cancel_rx): GenerationCancellation,
 ) {
+    let local_image = job.provider == crate::codex::h3_image::KEY;
+    let public_id = if local_image { crate::codex::h3_image::session(&submit_id) } else { Some(submit_id.clone()) };
     if !job.internal_agent {
         let _ = app.emit(
             "codex://chunk",
@@ -476,30 +478,44 @@ pub(crate) async fn recover_one_cloud_job(
                 "references": job.references,
                 "reference_node_ids": job.reference_node_ids,
                 "ratio": job.ratio,
-                "submit_id": submit_id,
+                "submit_id": public_id,
             }),
         );
     }
     job.status = "querying".into();
     let _ = Task::upsert_gen_job(&db, &job);
-    update_creative_job_status(&app, &db, &job, "querying", Some(&submit_id));
+    update_creative_job_status(&app, &db, &job, "querying", public_id.as_deref());
     let cloud = app.state::<crate::cloud::CloudClient>().inner().clone();
     let auth = app.state::<crate::cloud::AuthClient>().inner().clone();
-    let (cancel_tx, mut cancel_rx) = tokio::sync::oneshot::channel();
-    crate::commands::codex::GENERATE_CANCEL.lock().unwrap().insert(job.id.clone(),cancel_tx);
     let recovered = tokio::select! {
-        result = crate::codex::bowerbird_cloud::recover_cloud_generation(&cloud, &auth, &submit_id) => result,
+        biased;
         _ = &mut cancel_rx => {
+            if local_image {
+                if let Err(error) = crate::codex::h3_image::cancel(&submit_id,&auth).await {
+                    let message=error.to_string();
+                    let _ = Task::mark_failed(&db,&job.id,&message);
+                    update_creative_job_status(&app,&db,&job,"failed",public_id.as_deref());
+                    let _ = app.emit("codex://chunk",serde_json::json!({"kind":"error","job_id":job.id,"message":message}));
+                    return;
+                }
+            }
             let _ = Task::mark_cancelled(&db,&job.id);
-            let _ = app.emit("codex://chunk",serde_json::json!({"kind":"error","job_id":job.id,"message":"已停止等待，可按原任务取回视频"}));
+            update_creative_job_status(&app, &db, &job, "cancelled", public_id.as_deref());
+            let _ = app.emit("codex://chunk",serde_json::json!({"kind":"error","job_id":job.id,"message":if local_image { "已停止本机图片任务" } else { "已停止等待，可按原任务取回视频" }}));
             return;
         }
+        result = async {
+            if local_image {
+                crate::commands::comfy_video::account(&auth, &app.state::<crate::cloud::EntitlementService>()).await?;
+                crate::codex::h3_image::recover(&submit_id, &auth).await
+            } else { crate::codex::bowerbird_cloud::recover_cloud_generation(&cloud, &auth, &submit_id).await }
+        } => result,
     };
-    crate::commands::codex::GENERATE_CANCEL.lock().unwrap().remove(&job.id);
+    cancel_rx.close();
     match recovered {
         Ok((src_images, temp_dir)) => {
             // 会话语义（同即梦恢复）：job 死在续轮时记回会话首轮 session，不把历史撕成两段。
-            let session_for_meta = job.session_id.clone().or_else(|| Some(submit_id.clone()));
+            let session_for_meta = job.session_id.clone().or_else(|| public_id.clone());
             match finalize_generation_assets(
                 app.clone(),
                 db.clone(),
@@ -514,7 +530,7 @@ pub(crate) async fn recover_one_cloud_job(
                 job.references.clone(),
                 session_for_meta.clone(),
                 job.conversation_id.clone(),
-                Some(submit_id.clone()),
+                public_id.clone(),
                 job.provider.clone(),
                 job.project_id.clone(),
                 job.visual_profile.clone(),
@@ -557,14 +573,14 @@ pub(crate) async fn recover_one_cloud_job(
                     let _ = Task::mark_done(&db, &job.id);
                     let _ = app.emit(
                         "codex://chunk",
-                        serde_json::json!({ "kind": "done", "job_id": job.id, "images": asset_paths, "provider": "bowerbird-cloud", "session_id": session_for_meta, "text": "", "elapsed_ms": 0 }),
+                        serde_json::json!({ "kind": "done", "job_id": job.id, "images": asset_paths, "provider": job.provider, "session_id": session_for_meta, "text": "", "elapsed_ms": 0 }),
                     );
                     let _ = app.emit("library://assets-changed", ());
                 }
                 Err(error) => {
                     let message = error.to_string();
                     let _ = Task::mark_failed(&db, &job.id, &message);
-                    update_creative_job_status(&app, &db, &job, "failed", Some(&submit_id));
+                    update_creative_job_status(&app, &db, &job, "failed", public_id.as_deref());
                     let _ = app.emit(
                         "codex://chunk",
                         serde_json::json!({ "kind": "error", "job_id": job.id, "message": message }),
@@ -575,7 +591,7 @@ pub(crate) async fn recover_one_cloud_job(
         Err(error) => {
             let message = error.to_string();
             let _ = Task::mark_failed(&db, &job.id, &message);
-            update_creative_job_status(&app, &db, &job, "failed", Some(&submit_id));
+            update_creative_job_status(&app, &db, &job, "failed", public_id.as_deref());
             let _ = app.emit(
                 "codex://chunk",
                 serde_json::json!({ "kind": "error", "job_id": job.id, "message": message }),
@@ -584,7 +600,7 @@ pub(crate) async fn recover_one_cloud_job(
     }
 }
 
-/// 续查单个即梦 job：emit recover_started（前端 upsert 占位 job）→ 拿 JIMENG_FLY permit →
+/// 续查单个即梦 job：emit recover_started（前端 upsert 占位 job）→
 /// status=querying 落库 → poll_query_and_download 续查下载 → finalize_generation_assets 入库 →
 /// emit done。远端仍排队则保持 running + emit recover_polling（下次启动再试）；真失败 mark_failed。
 /// 启动恢复与孤儿取回（`jimeng_retrieve_orphan`）共用。
@@ -594,15 +610,13 @@ pub(crate) async fn recover_one_jimeng_job(
     paths: Arc<LibraryPaths>,
     job: GenJob,
     submit_id: String,
+    (_guard, cancel_rx): GenerationCancellation,
 ) {
     if job.media != "video" {
         recover_one_jimeng_job_inner(app, db, paths, job, submit_id, None).await;
         return;
     }
-    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
-    crate::commands::codex::GENERATE_CANCEL.lock().unwrap().insert(job.id.clone(), cancel_tx);
-    recover_one_jimeng_job_inner(app, db, paths, job.clone(), submit_id, Some(cancel_rx)).await;
-    crate::commands::codex::GENERATE_CANCEL.lock().unwrap().remove(&job.id);
+    recover_one_jimeng_job_inner(app, db, paths, job, submit_id, Some(cancel_rx)).await;
 }
 
 async fn recover_one_jimeng_job_inner(
@@ -633,7 +647,6 @@ async fn recover_one_jimeng_job_inner(
             }),
         );
     }
-    // ② 拿 permit（FIFO 公平，与正常即梦生成串行）。
     // ③ status=querying 落库（前端 loadGenJobs 拉到时显示「续查中」）。
     job.status = "querying".into();
     let _ = Task::upsert_gen_job(&db, &job);
@@ -641,17 +654,36 @@ async fn recover_one_jimeng_job_inner(
 
     // ④ 轮询续查下载（策略 B：bounded poll loop，向下兼容 query_result 阻塞等待）。
     let binary = resolve_dreamina_binary().unwrap_or_else(|| "dreamina".to_string());
-    let query = async {
-    if job.media == "video" {
-        crate::codex::jimeng_video::poll_video(&binary, &submit_id).await.map(|(files, dir)| (files, Some(dir)))
-    } else {
-        poll_query_and_download(&binary, &submit_id, 30, Duration::from_secs(10)).await.map(|files| {
-            let dir = files.first().and_then(|p| p.parent()).map(std::path::Path::to_path_buf);
-            (files, dir)
-        })
-    }
+    use crate::codex::{progress::{GenerationProgress, GenerationStage}, types::Chunk};
+    let emit_progress = |progress: GenerationProgress| {
+        if !job.internal_agent {
+            let mut value = serde_json::to_value(Chunk::Progress { progress }).unwrap();
+            value["job_id"] = job.id.clone().into();
+            value["turn_key"] = job.turn_key.clone().into();
+            let _ = app.emit("codex://chunk", value);
+        }
     };
-    let downloaded = match cancellable_jimeng_query(&JIMENG_FLY, &mut cancel_rx, query).await {
+    emit_progress(GenerationProgress::new(GenerationStage::Querying));
+    let (progress_tx, mut progress_rx) = tokio::sync::mpsc::channel::<Chunk>(16);
+    let query = async {
+        if job.media == "video" {
+            crate::codex::jimeng_video::poll_video_progress(&binary, &submit_id, Some(&progress_tx)).await.map(|(files, dir)| (files, Some(dir)))
+        } else {
+            poll_query_and_download(&binary, &submit_id, 30, Duration::from_secs(10), Some(&progress_tx)).await.map(|files| {
+                let dir = files.first().and_then(|p| p.parent()).map(std::path::Path::to_path_buf);
+                (files, dir)
+            })
+        }
+    };
+    let download = cancellable_jimeng_query(&mut cancel_rx, query);
+    tokio::pin!(download);
+    let result = loop {
+        tokio::select! {
+            result = &mut download => break result,
+            Some(Chunk::Progress { progress }) = progress_rx.recv() => emit_progress(progress),
+        }
+    };
+    let downloaded = match result {
         Some(result) => result,
         None => {
             let _ = Task::mark_cancelled(&db, &job.id);
@@ -660,11 +692,9 @@ async fn recover_one_jimeng_job_inner(
             return;
         }
     };
-    if job.media == "video" {
-        crate::commands::codex::GENERATE_CANCEL.lock().unwrap().remove(&job.id);
-    }
     match downloaded {
         Ok((src_images, temp_dir)) => {
+            emit_progress(GenerationProgress::new(GenerationStage::Saving));
             tracing::info!("恢复续查成功：job={} 图={} 张", job.id, src_images.len());
             // 会话语义：job 死在续轮时 task_queue 已有会话首轮 session（即梦首轮 submit_id），
             // meta/done 都要记回该 session（记成本轮自己的 submit_id 会把会话历史撕裂成两段，
@@ -856,12 +886,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn video_recovery_cancel_before_permit_never_starts_query() {
-        let semaphore = Semaphore::new(0);
+    async fn video_recovery_already_cancelled_never_starts_query() {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let mut cancel = Some(rx);
         tx.send(()).unwrap();
-        let result = cancellable_jimeng_query(&semaphore, &mut cancel, async {
+        let result = cancellable_jimeng_query(&mut cancel, async {
             panic!("query must not run while queued");
             #[allow(unreachable_code)] Ok::<(), AppError>(())
         }).await;
@@ -869,16 +898,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn video_recovery_cancel_drops_query_and_releases_permit() {
-        let semaphore = Semaphore::new(1);
+    async fn video_recovery_cancel_drops_query() {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let mut cancel = Some(rx);
-        let result = cancellable_jimeng_query(&semaphore, &mut cancel, async {
+        let result = cancellable_jimeng_query(&mut cancel, async {
             tx.send(()).unwrap();
             std::future::pending::<AppResult<()>>().await
         }).await;
         assert!(result.is_none());
-        assert_eq!(semaphore.available_permits(), 1);
     }
 
     #[test]
@@ -1110,6 +1137,8 @@ mod tests {
         }
         let payload = serde_json::to_string(&AssetNodePayloadV1 {
             draft_document_id: None,
+            workflow_source: None,
+            workflow_generation_group: None,
             schema_version: 1,
             snapshot: AssetSnapshotV1 {
                 name: "父素材".into(),

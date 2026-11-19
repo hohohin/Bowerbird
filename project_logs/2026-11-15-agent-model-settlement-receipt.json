@@ -1,0 +1,289 @@
+{
+  "revision": "e21866fa997271f2af931113b9a77c01e2ffe996",
+  "applicationBase": "21ed48ecd44ff02aaa7b78d8dbde0a9c38e0813a",
+  "timeZone": "UTC",
+  "drain": {
+    "drained": true,
+    "at": "2026-11-15T02:28:05.220424+00:00",
+    "image": "sha256:cf2c2eef3d557f76b74372de7ab922bfa5bb24af8a4236a290f25dbc490935bb",
+    "before": {
+      "agent": 0,
+      "chat": 0,
+      "generation": 0,
+      "understand": 0,
+      "visual": 0
+    },
+    "after": {
+      "agent": 0,
+      "chat": 0,
+      "generation": 0,
+      "understand": 0,
+      "visual": 0
+    }
+  },
+  "database": {
+    "name": "agent_model_usage_settlement",
+    "sha": "d1901667f5454ac46c3393a41206f943363f219a59386bf70dfb8eb132c4d77a",
+    "version": "0091",
+    "at": "2026-11-15T02:28:35.589Z",
+    "migrationCount": 88,
+    "bodies": {
+      "cancel_unleased_agent_run": "c0e3bf31972f74200b4721f6ea98c2bee044fe05fca27c8f3b47f156a33876ed",
+      "claim_agent_run": "78de39a104d128baadd38a20054f992c3290649de78bfdcde5b5e83002e1fd0e",
+      "fail_unleased_agent_run": "60d7790075fbb872d4ff557558b8b148b43d8a69cab80201e5d2888fc9e2e019",
+      "guard_agent_direct_model_call": "319f8466bccb8a14e3a15678bbd1f108b945864b8d290aee28e26daa1914e8ba",
+      "guard_agent_direct_model_usage": "21d9b22501351f8d0329ce10a610a527d27c3fde8501995b8f0ac3dbecdd6222",
+      "reconcile_agent_model_usage": "bac7125d13aa20f2d4f9ab8cdf5b9ab6126a77f0132da8de646595abaa7f2ca0",
+      "record_agent_run_billing_marker": "0b29290af3b84d9e511c209cf8e234ab1b2111fe5b871d3993d30da04913b626",
+      "settle_agent_run": "5cc920e849625227944547a32d973a9c079630b9b20b14efe7a691cd3870df78",
+      "settle_complete_agent_usage": "4282acaf1d28b10b7c9d10009a86f570bbff72890a5930de6d6983e4e83f9fe9",
+      "transition_agent_run": "c938da2d7c1c750ee43e801dac20e156a72e55a86a77e046bb89e58ac1f2d731"
+    },
+    "columns": [
+      {
+        "column_name": "direct_deepseek_v1_model",
+        "is_nullable": "YES",
+        "table_name": "agent_tool_calls"
+      },
+      {
+        "column_name": "model_review_ref",
+        "is_nullable": "YES",
+        "table_name": "agent_tool_calls"
+      },
+      {
+        "column_name": "model_write_lease",
+        "is_nullable": "YES",
+        "table_name": "agent_tool_calls"
+      },
+      {
+        "column_name": "pending_model_usage",
+        "is_nullable": "YES",
+        "table_name": "agent_tool_calls"
+      },
+      {
+        "column_name": "model_write_lease",
+        "is_nullable": "YES",
+        "table_name": "agent_usage_items"
+      }
+    ],
+    "triggers": [
+      {
+        "enabled": "O",
+        "name": "agent_runs_billing_marker"
+      },
+      {
+        "enabled": "O",
+        "name": "guard_agent_direct_model"
+      },
+      {
+        "enabled": "O",
+        "name": "guard_agent_direct_model_usage"
+      }
+    ],
+    "privileges": {
+      "anon": false,
+      "authenticated": false,
+      "service_role": true
+    },
+    "appliedAt": "2026-11-15T02:28:17.798Z",
+    "priorMigrationCount": 87,
+    "priorLatestMigration": {
+      "name": "seedream55",
+      "version": "0090"
+    },
+    "guardedTransactionSha256": "eb5698328916e4d484f59a2800ebefa4d54a6720ff5ede9f9314f1b68def5d23",
+    "previousFunctions": {
+      "cancel_unleased_agent_run": "c7d98a463077e3d62388b768b39ec4feac0d8322a120a0352172db85fec64f15",
+      "claim_agent_run": "e2cc281210e1d512743f15f43694a6b74bd14bac748e00f3a8176df6bf5cf917",
+      "fail_unleased_agent_run": "39a959fd44f26dca3e04e72f3bc80dd4d6b6f163f9599d733af9dd0bcff887ab",
+      "record_agent_run_billing_marker": "e80057753bc12f46fa3d60bd98db179d4014c588fc005ea4ead0af239ab2882c",
+      "settle_agent_run": "59e590138ba2fc5ba216ae98fc6d0d4a4c120d16b12d8a4d40f4ead9249b5136",
+      "transition_agent_run": "2576e96b358cab85329453a907e87e09255ba4cdc61b0fb790a58f62f986c498"
+    }
+  },
+  "edges": {
+    "agent-worker": {
+      "version": 65,
+      "previous": 64,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "files": 9,
+      "index": "eeef80aedb3afda7bb72c9a0e19c6c725f679cfd25c4fe3f201102dc68de32ba",
+      "verifiedAt": "2026-11-15T02:29:02.528Z",
+      "priorFiles": {
+        "_shared/agent-content-ttl.ts": "7c31385e69d42c9a1d19b1778ac373a9c831a82fd2502511dab03b028e36cc96",
+        "_shared/agent-result-artifacts.ts": "fb780450663655b4ff6da613d9b2d5929e969238b6294df065774ab4ad201aa4",
+        "_shared/agent-usage-pricing.ts": "a5dbed32f5b1b7d1eb54085a6466ff9dfa1eaca0be6da3cca136f6709b34dde6",
+        "_shared/errors.ts": "8a8fa5e9bb6ac4693f97116fc65533e096d6dccaa5504c28bc2d4b5f821076bf",
+        "_shared/image-metadata.ts": "81a08da086522e224dace8b308d2cd23a8fd23f7635b132c50df27902e16d30e",
+        "_shared/limits.ts": "1bc529f92d06e1604dcd79622bddf2c7e1f55af561bf736665f1550350a06703",
+        "_shared/task-authorization.ts": "a95228e8aa5722d7b103f5131b3b6b336b07561edb13e6ffbab4a0682b701e2e",
+        "_shared/unified-agent-plan.ts": "ac077108cc149a1a91b512acfe320921807c9cc59f276149ea5fd7dab05196c6",
+        "agent-worker/index.ts": "2e78c01e917471b73d9cd8c7b706048627ec9286c914fcf103881568cd64bd96"
+      },
+      "liveFiles": {
+        "_shared/agent-content-ttl.ts": "7c31385e69d42c9a1d19b1778ac373a9c831a82fd2502511dab03b028e36cc96",
+        "_shared/agent-result-artifacts.ts": "fb780450663655b4ff6da613d9b2d5929e969238b6294df065774ab4ad201aa4",
+        "_shared/agent-usage-pricing.ts": "a5dbed32f5b1b7d1eb54085a6466ff9dfa1eaca0be6da3cca136f6709b34dde6",
+        "_shared/errors.ts": "8a8fa5e9bb6ac4693f97116fc65533e096d6dccaa5504c28bc2d4b5f821076bf",
+        "_shared/image-metadata.ts": "81a08da086522e224dace8b308d2cd23a8fd23f7635b132c50df27902e16d30e",
+        "_shared/limits.ts": "1bc529f92d06e1604dcd79622bddf2c7e1f55af561bf736665f1550350a06703",
+        "_shared/task-authorization.ts": "a95228e8aa5722d7b103f5131b3b6b336b07561edb13e6ffbab4a0682b701e2e",
+        "_shared/unified-agent-plan.ts": "ac077108cc149a1a91b512acfe320921807c9cc59f276149ea5fd7dab05196c6",
+        "agent-worker/index.ts": "eeef80aedb3afda7bb72c9a0e19c6c725f679cfd25c4fe3f201102dc68de32ba"
+      }
+    },
+    "agent-run": {
+      "version": 60,
+      "previous": 59,
+      "status": "ACTIVE",
+      "verify_jwt": false,
+      "files": 9,
+      "index": "eccd79c1d21633fb610cabdb474328fc98031aa861486514d2ffdacf7aa31bda",
+      "verifiedAt": "2026-11-15T02:29:13.547Z",
+      "priorFiles": {
+        "_shared/agent-create-recovery.ts": "b61f4d03c00c41b6630b1096c0a25501212fa371dd6d10731af6fdde330d15c0",
+        "_shared/auth.ts": "6151f68a28ba0e0d7652279334785cdbc6f2511b84b8d47f35504c2d1114b9b6",
+        "_shared/billing.ts": "9077360e803e15cddf5a77534e298203a2e78ed2a26c46c8c1a367e6f7357389",
+        "_shared/errors.ts": "8a8fa5e9bb6ac4693f97116fc65533e096d6dccaa5504c28bc2d4b5f821076bf",
+        "_shared/feature-policy.ts": "6a091c133304be61629d5be7f0d265fef2d4f66307d18fabd9eac35f4d98942d",
+        "_shared/image-metadata.ts": "81a08da086522e224dace8b308d2cd23a8fd23f7635b132c50df27902e16d30e",
+        "_shared/limits.ts": "1bc529f92d06e1604dcd79622bddf2c7e1f55af561bf736665f1550350a06703",
+        "_shared/usage.ts": "3e9f7e31fd3e6f2041765313da7014209099fb298d2f393d42968a30c4d4c887",
+        "agent-run/index.ts": "25ea51b501134e7a1f7fc5b45bd709519d34bd4abe0b6cc2fd48dd2744eb1048"
+      },
+      "liveFiles": {
+        "_shared/agent-create-recovery.ts": "b61f4d03c00c41b6630b1096c0a25501212fa371dd6d10731af6fdde330d15c0",
+        "_shared/auth.ts": "6151f68a28ba0e0d7652279334785cdbc6f2511b84b8d47f35504c2d1114b9b6",
+        "_shared/billing.ts": "9077360e803e15cddf5a77534e298203a2e78ed2a26c46c8c1a367e6f7357389",
+        "_shared/errors.ts": "8a8fa5e9bb6ac4693f97116fc65533e096d6dccaa5504c28bc2d4b5f821076bf",
+        "_shared/feature-policy.ts": "6a091c133304be61629d5be7f0d265fef2d4f66307d18fabd9eac35f4d98942d",
+        "_shared/image-metadata.ts": "81a08da086522e224dace8b308d2cd23a8fd23f7635b132c50df27902e16d30e",
+        "_shared/limits.ts": "1bc529f92d06e1604dcd79622bddf2c7e1f55af561bf736665f1550350a06703",
+        "_shared/usage.ts": "3e9f7e31fd3e6f2041765313da7014209099fb298d2f393d42968a30c4d4c887",
+        "agent-run/index.ts": "eccd79c1d21633fb610cabdb474328fc98031aa861486514d2ffdacf7aa31bda"
+      }
+    }
+  },
+  "otherEdgeVersionsRetained": 19,
+  "worker": {
+    "baseImage": "sha256:cf2c2eef3d557f76b74372de7ab922bfa5bb24af8a4236a290f25dbc490935bb",
+    "baseFiles": {
+      "providers/deepseek/backend.ts": "69e4d08a8098bd52b48e29592686fe387f10e902b90375120a1b43ef7b25da85",
+      "providers/deepseek/metered-model-backend.ts": "c2d4e7f1037b42b600cbd3495b915b44b034195b80d2d9bff318aabb5c761cc7",
+      "kernel/durable-tool-dispatcher.ts": "02383bdd4cdd34062cbf7787af564093a3b414af358a1e4022850e897df45c50",
+      "control-plane/agent-control-client.ts": "72df06c6acdd35f52ace743353f5c4b01c416b90745ded8cae79213de55fb0a5"
+    },
+    "candidateTests": "# pass 120",
+    "skillIdentity": "bowerbird-html-layout-render 0.1.0 6a8065dc253ad1896da3a122a215ec2eafd8bf265d1e829f234032f0b8e86106",
+    "image": "sha256:ba9d2224f87819619d62d73065dc937d17be23fa728d5733fb67df6c8b7f249d",
+    "running": true,
+    "restarts": 0,
+    "started": "2026-11-15T02:29:15.664735917Z",
+    "verified": "2026-11-15T02:29:25.225746+00:00",
+    "files": {
+      "control-plane/agent-control-client.ts": "595de1ef3b2a1da692b2359ce319d319c6a50076cb66f9b2acf8656c50ca4755",
+      "kernel/durable-tool-dispatcher.ts": "2a5fb1e8cd3f0c034ddb9cf29b6304e7535ea7e382e36cee3a206aa882c440ea",
+      "providers/deepseek/backend.ts": "09c9763b0dadd83771481d57608601702b9bbe1b99cd8bbc6b01f4b2313b309c",
+      "providers/deepseek/metered-model-backend.ts": "7e81ef7838832c63a9353c8e23a8e2847d6d3bcde810b6e0829b23a303c20fd7"
+    },
+    "configurationPreserved": true
+  },
+  "probes": {
+    "at": "2026-11-15T02:29:42.834Z",
+    "liveConstraintValidated": true,
+    "syntheticConstraintTruthTable": [
+      true,
+      true,
+      false,
+      false,
+      true
+    ],
+    "literalChecks": {
+      "invalid_observation": [
+        true,
+        false,
+        false,
+        true
+      ],
+      "legacy_violations": 0,
+      "may_override_saved": [
+        false,
+        false,
+        true,
+        true,
+        false
+      ],
+      "may_override_usage": [
+        false,
+        true,
+        false
+      ],
+      "ordinary": 311
+    },
+    "handlers": {
+      "agent-worker": {
+        "OPTIONS": 204,
+        "GET": 405
+      },
+      "agent-run": {
+        "OPTIONS": 204,
+        "GET": 405
+      }
+    }
+  },
+  "samples": [
+    {
+      "at": "2026-11-15T02:29:28.053Z",
+      "image": "sha256:ba9d2224f87819619d62d73065dc937d17be23fa728d5733fb67df6c8b7f249d",
+      "running": true,
+      "restarts": 0,
+      "oom": false,
+      "pollErrors": 0,
+      "starts": [
+        "generation_worker_started",
+        "understand_worker_started",
+        "agent_worker_started",
+        "visual_worker_started"
+      ],
+      "packets": {
+        "rx": 307,
+        "tx": 172
+      },
+      "queue": {
+        "agent": 0,
+        "chat": 0,
+        "generation": 0,
+        "understand": 0,
+        "visual": 0
+      }
+    },
+    {
+      "at": "2026-11-15T02:30:12.728Z",
+      "image": "sha256:ba9d2224f87819619d62d73065dc937d17be23fa728d5733fb67df6c8b7f249d",
+      "running": true,
+      "restarts": 0,
+      "oom": false,
+      "pollErrors": 0,
+      "starts": [
+        "generation_worker_started",
+        "understand_worker_started",
+        "agent_worker_started",
+        "visual_worker_started"
+      ],
+      "packets": {
+        "rx": 413,
+        "tx": 285
+      },
+      "queue": {
+        "agent": 0,
+        "chat": 0,
+        "generation": 0,
+        "understand": 0,
+        "visual": 0
+      }
+    }
+  ],
+  "paidProviderRequestsPerformed": false,
+  "historicalAccountingWritesPerformed": false
+}

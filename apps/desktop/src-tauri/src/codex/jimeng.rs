@@ -177,7 +177,7 @@ impl GenProvider for DreaminaCliProvider {
         // ② poll query_result 下载：submit --poll 1 只拿 submit_id（dreamina 仍在云端生成），
         //    这里轮询 query_result 直到生成完成下载到图。submit_id 已落库，app 被杀也能恢复续查。
         let source_images =
-            poll_query_and_download(&self.binary, &submit_id, 30, Duration::from_secs(10)).await?;
+            poll_query_and_download(&self.binary, &submit_id, 30, Duration::from_secs(10), Some(tx)).await?;
         let temp_dir = source_images
             .first()
             .and_then(|p| p.parent().map(|x| x.to_path_buf()));
@@ -239,6 +239,7 @@ pub(crate) async fn query_and_download(
     binary: &str,
     submit_id: &str,
     download_dir: &Path,
+    tx: Option<&mpsc::Sender<Chunk>>,
 ) -> Result<Vec<PathBuf>, AppError> {
     let mut query = dreamina_command(binary);
     query
@@ -268,6 +269,11 @@ pub(crate) async fn query_and_download(
             query_out.status
         )));
     }
+    if let Ok(value) = super::jimeng_video::response(&query_out.stdout) {
+        if let Some(progress) = super::progress::GenerationProgress::dreamina(&value) {
+            super::progress::send(tx, progress).await;
+        }
+    }
     // 扫下载目录里的图（query_result 可能一次下多张）。
     let source_images = walk_images(download_dir);
     if source_images.is_empty() {
@@ -288,6 +294,7 @@ pub(crate) async fn poll_query_and_download(
     submit_id: &str,
     max_attempts: u32,
     interval: Duration,
+    tx: Option<&mpsc::Sender<Chunk>>,
 ) -> Result<Vec<PathBuf>, AppError> {
     let mut last_err: Option<AppError> = None;
     for _ in 0..max_attempts {
@@ -297,7 +304,7 @@ pub(crate) async fn poll_query_and_download(
             tokio::time::sleep(interval).await;
             continue;
         }
-        match query_and_download(binary, submit_id, &dir).await {
+        match query_and_download(binary, submit_id, &dir, tx).await {
             Ok(imgs) if !imgs.is_empty() => return Ok(imgs),
             Ok(_) => {
                 let _ = std::fs::remove_dir_all(&dir);

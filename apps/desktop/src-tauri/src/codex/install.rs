@@ -26,7 +26,7 @@ use crate::error::AppError;
 static INSTALL_LOCK: Mutex<()> = Mutex::const_new(());
 
 /// 优先官方源，仅在不可用时尝试镜像；同一次安装始终请求相同版本。
-const REGISTRIES: [&str; 2] = [
+pub(crate) const REGISTRIES: [&str; 2] = [
     "https://registry.npmjs.org",
     "https://registry.npmmirror.com",
 ];
@@ -329,7 +329,7 @@ async fn install_version(
 }
 
 /// 流式下载 tarball 到 `dest`，按 content-length 节流推进度；随时可取消。
-async fn download_tarball(
+pub(crate) async fn download_tarball(
     app: Option<&AppHandle>,
     client: &reqwest::Client,
     url: &str,

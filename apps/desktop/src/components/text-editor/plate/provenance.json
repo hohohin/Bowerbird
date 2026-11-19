@@ -1,0 +1,1173 @@
+{
+  "retrieved": "2026-11-06",
+  "license": "MIT",
+  "entries": [
+    {
+      "registry": "https://platejs.org/r/ai-api.json",
+      "sha256": "bb7b1cb05d811261bdf5ae72c666a1a76c5bd86be4c29c3064c1ba21937781bb",
+      "files": [
+        "src/registry/app/api/ai/command/utils.ts"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/ai-kit.json",
+      "sha256": "e8d92d886a644bc579e7ee24ed8ae954ebb032cc76a18e683d5b21073f6f4df4",
+      "files": [
+        "src/registry/components/editor/plugins/ai-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/ai-menu.json",
+      "sha256": "f0c30dcb6f94bf87b4e8129ee41f03facc216313b8536a452607f6cd175749d8",
+      "files": [
+        "src/registry/ui/ai-menu.tsx",
+        "src/registry/ui/ai-chat-editor.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/ai-node.json",
+      "sha256": "5861def593bc3822dfbeea0ed49edd2a62c8425ae50e721d92ab2378db94f67b",
+      "files": [
+        "src/registry/ui/ai-node.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/ai-toolbar-button.json",
+      "sha256": "0d01a94efc975bb046644730c84c2c7de27e325cb9102deb3a804f8e420bea95",
+      "files": [
+        "src/registry/ui/ai-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/align-base-kit.json",
+      "sha256": "0acb013d5fbdd4187caf5d6f31ff83f36d8b194c2e26f6372cdc26959370ec81",
+      "files": [
+        "src/registry/components/editor/plugins/align-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/align-kit.json",
+      "sha256": "a1f131b3256a66dc8b35aa8394ece880caf52b4c981608106fb51f8bb9b05607",
+      "files": [
+        "src/registry/components/editor/plugins/align-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/align-toolbar-button.json",
+      "sha256": "b44317b9a35bff47f1d5e04bdc58bf9fb531bc86d3daad381afa2f22aac3a6b7",
+      "files": [
+        "src/registry/ui/align-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/autoformat-kit.json",
+      "sha256": "451b5ec5cc61e74cd6872ab87858d0a213cdb0bde3edd96ab6c2728be1808f80",
+      "files": [
+        "src/registry/components/editor/plugins/autoformat-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/basic-blocks-base-kit.json",
+      "sha256": "3ed0102ab322b717b09e40ff3908b768e7dce97d73847c834b2002c48fd76594",
+      "files": [
+        "src/registry/components/editor/plugins/basic-blocks-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/basic-blocks-kit.json",
+      "sha256": "a9058cd9736919193e5b42d116ceca884bce0ea8577e213a04d3798f8b232668",
+      "files": [
+        "src/registry/components/editor/plugins/basic-blocks-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/basic-marks-base-kit.json",
+      "sha256": "a590d3e01b26f1048e6e62d2515a7e408a7b5dd7b7d1d167baf2adacf0f5bf18",
+      "files": [
+        "src/registry/components/editor/plugins/basic-marks-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/basic-marks-kit.json",
+      "sha256": "71a492d04f17216ebe7f2828235bb1c5aa3b636c414c68fb6bb3ca64f672345d",
+      "files": [
+        "src/registry/components/editor/plugins/basic-marks-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/basic-nodes-kit.json",
+      "sha256": "ba8b481013c6e2f9739901da428d97d9b3ba3824a286dce1ab347f9d207b896a",
+      "files": [
+        "src/registry/components/editor/plugins/basic-nodes-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/block-context-menu.json",
+      "sha256": "eef32117c8753480ff8e1e21ee9e118dd0819cb172570eeefc81a74f881a535b",
+      "files": [
+        "src/registry/ui/block-context-menu.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/block-discussion.json",
+      "sha256": "6633b7cee16a1c61cccae393c6dad261e65ad32eed675f245d47f9f9f72622d4",
+      "files": [
+        "src/registry/ui/block-discussion.tsx",
+        "src/registry/lib/block-discussion-index.ts",
+        "src/registry/ui/block-suggestion.tsx",
+        "src/registry/ui/comment.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/block-draggable.json",
+      "sha256": "be07c4c1d4734213f929dc59d1a03f5ebc355aae92a97625aebe6213324ebc8f",
+      "files": [
+        "src/registry/ui/block-draggable.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/block-list.json",
+      "sha256": "8fb73339621c270792538dd7ed56385f2a525bdb9ee706170d337a273268dc9e",
+      "files": [
+        "src/registry/ui/block-list.tsx",
+        "src/registry/ui/block-list-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/block-menu-kit.json",
+      "sha256": "629f857e811788f41a70373e9eb64e73aa51cdf291015cf6f0c658fd4ab6d15c",
+      "files": [
+        "src/registry/components/editor/plugins/block-menu-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/block-placeholder-kit.json",
+      "sha256": "a17edd5a40a1e0ce5fa0e6e3479cd8a9df25d44cd7b8a970125a04af86f6cb2d",
+      "files": [
+        "src/registry/components/editor/plugins/block-placeholder-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/block-selection-kit.json",
+      "sha256": "0704b29dc51d90fa251b39e69a03cbfbf0ffcd52935df003e1af1f67d41d233f",
+      "files": [
+        "src/registry/components/editor/plugins/block-selection-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/block-selection.json",
+      "sha256": "b9ceb29879bd0d5fc0f828883526ff3bafe40d1b3f368b8c50c515b8ca4bb187",
+      "files": [
+        "src/registry/ui/block-selection.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/blockquote-node.json",
+      "sha256": "1d8135de13545cecaf44b5ef92ff5281f10d5847623f6b7575d4e1ed80cb842a",
+      "files": [
+        "src/registry/ui/blockquote-node.tsx",
+        "src/registry/ui/blockquote-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/callout-base-kit.json",
+      "sha256": "05cfaec509a7bc09ab67f352b40870e9b601e5e17c9a755d0306f84fcc5372bc",
+      "files": [
+        "src/registry/components/editor/plugins/callout-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/callout-kit.json",
+      "sha256": "54d4f28fb8b26d3ca44a6248c752bad1c049b52c00d9748bcfa670db7ca0cd42",
+      "files": [
+        "src/registry/components/editor/plugins/callout-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/callout-node.json",
+      "sha256": "a8b62aa42efe491c9da4fdf7fb698ef3736747e23f10248c5e13581e83e3979f",
+      "files": [
+        "src/registry/ui/callout-node.tsx",
+        "src/registry/ui/callout-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/caption.json",
+      "sha256": "2e90fe26b7033bde333cda08bd5caa8518ace6490c72373d8628ca2da1fd2fee",
+      "files": [
+        "src/registry/ui/caption.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/code-block-base-kit.json",
+      "sha256": "26a1e33723f792f137bcb43ae9ba114fa8db5b84d776f4c3b68136488f85bd03",
+      "files": [
+        "src/registry/components/editor/plugins/code-block-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/code-block-kit.json",
+      "sha256": "d4521c4878b440cdfcc414ad6e102e0261da3941db1b4e211f76eb2da9a7d650",
+      "files": [
+        "src/registry/components/editor/plugins/code-block-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/code-block-node.json",
+      "sha256": "ed198dcc7fb221419e39d3b4f74a145489db1699b7a747ac24fe89fc66792018",
+      "files": [
+        "src/registry/ui/code-block-node.tsx",
+        "src/registry/ui/code-block-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/code-drawing-base-kit.json",
+      "sha256": "37832877b4d60818d5f606fca4122626cbe73053794f71c0cce3fc1142363bb6",
+      "files": [
+        "src/registry/components/editor/plugins/code-drawing-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/code-drawing-kit.json",
+      "sha256": "e42ae534f1aa19d7e7ee79c60b15a740d1c949be3098fd22d3f52a5ebf51a550",
+      "files": [
+        "src/registry/components/editor/plugins/code-drawing-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/code-drawing-node.json",
+      "sha256": "603599f451cf33b30e5d3937572fabb652983ec851264e20f804746b9c012bed",
+      "files": [
+        "src/registry/ui/code-drawing-node.tsx",
+        "src/registry/ui/code-drawing-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/code-node.json",
+      "sha256": "6eb443ae4aa4fc1deb55d15ee6b46d6ce92233b69664bc3322ad249e252eada4",
+      "files": [
+        "src/registry/ui/code-node.tsx",
+        "src/registry/ui/code-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/column-base-kit.json",
+      "sha256": "bde595bbe50f9e69314d9d052e8ac46bf83fd76f08ee1465faa8f426a9ef379a",
+      "files": [
+        "src/registry/components/editor/plugins/column-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/column-kit.json",
+      "sha256": "e048d8ee0560ed677347abbbb836354db35eb37a84b63bee10995272def4635d",
+      "files": [
+        "src/registry/components/editor/plugins/column-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/column-node.json",
+      "sha256": "a93aa59cf5b32ecb91c5be40eff73d3431328c741fedca4e7c97a42d58c824fe",
+      "files": [
+        "src/registry/ui/column-node.tsx",
+        "src/registry/ui/column-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/comment-base-kit.json",
+      "sha256": "3f70bf3541810e4c50b2a90df53a0589f62bb98b651662730cfaa368364ae8cd",
+      "files": [
+        "src/registry/components/editor/plugins/comment-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/comment-kit.json",
+      "sha256": "355eb3d83df7049d6e06683e676f922dfb7255ba0c5e2f5ffd41ac129344c2b7",
+      "files": [
+        "src/registry/components/editor/plugins/comment-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/comment-node.json",
+      "sha256": "065d9bf0178fc58ff143843faef4b03b647508c25152a66beb456bfd096e7e54",
+      "files": [
+        "src/registry/ui/comment-node.tsx",
+        "src/registry/ui/comment-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/comment-toolbar-button.json",
+      "sha256": "91adbc2a0633c345be7b37a1c264a6bb49071292c72b0131e844b5a0f7dcd31f",
+      "files": [
+        "src/registry/ui/comment-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/cursor-overlay-kit.json",
+      "sha256": "bba9bf6c6d967f3e0b2e64c93edbe292c14a7ff1020b0f720e12b7a24b4d3b2f",
+      "files": [
+        "src/registry/components/editor/plugins/cursor-overlay-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/cursor-overlay.json",
+      "sha256": "4c1e74b7719e5c0eb4f340986900d42e98e072edb58444150dbbf6ca3d6c41c3",
+      "files": [
+        "src/registry/ui/cursor-overlay.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/date-base-kit.json",
+      "sha256": "8968a308cf311c66a0ead6bea08a13f34a06a2ac615918dea5e065a3fb656f2f",
+      "files": [
+        "src/registry/components/editor/plugins/date-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/date-kit.json",
+      "sha256": "5df40a162951cb5551ef979610b2bcaa288f5f0bb7e221627fbb4092d8ae0785",
+      "files": [
+        "src/registry/components/editor/plugins/date-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/date-node.json",
+      "sha256": "c406a2b793f5188fe4ff931d2c2eeb6cb29b0c542069b9dfc94f3b7b27f81a86",
+      "files": [
+        "src/registry/ui/date-node.tsx",
+        "src/registry/ui/date-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/discussion-kit.json",
+      "sha256": "ced8d9ebe1bff40fbd63613e22f7e3c3df2f8bc5c3e4ceb78374e8f7d568df14",
+      "files": [
+        "src/registry/components/editor/plugins/discussion-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/dnd-kit.json",
+      "sha256": "d6df5bce8592fe636654f3c450ca510bc421654d401634d75df4318a3a9467ab",
+      "files": [
+        "src/registry/components/editor/plugins/dnd-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/docx-export-kit.json",
+      "sha256": "3b1a47aaabe3d800dfce8759baa70bbe48879224778321fdf1b4a28a27474093",
+      "files": [
+        "src/registry/components/editor/plugins/docx-export-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/docx-kit.json",
+      "sha256": "f062eff61ef53700a81bba6f73cf766e305590b0fef9117bf08296f4c4db3189",
+      "files": [
+        "src/registry/components/editor/plugins/docx-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/editor-base-kit.json",
+      "sha256": "e5149ab3dd115d3f8b73bdd984fd6e083493ab07463bb4afc6b4a23dc8513caa",
+      "files": [
+        "src/registry/components/editor/editor-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/editor-kit.json",
+      "sha256": "1077f7eb9751332071de562dcb0462c1e01208619dcece39590a1b1d117b6ec2",
+      "files": [
+        "src/registry/components/editor/editor-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/editor.json",
+      "sha256": "cb3cd24676bd08b0b81c4d2c7982280511b5e06f1de4433e1a5a5c45d3949f0b",
+      "files": [
+        "src/registry/ui/editor.tsx",
+        "src/registry/ui/editor-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/emoji-kit.json",
+      "sha256": "77263af78918e8be28d4560c8ac73f5e7b8dbdd24f21ccce7361d96f1fbb042a",
+      "files": [
+        "src/registry/components/editor/plugins/emoji-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/emoji-node.json",
+      "sha256": "8d06d7cc47c37be7affc67d08d871505570a34937a85aacbd45486dd1ccc6e70",
+      "files": [
+        "src/registry/ui/emoji-node.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/emoji-toolbar-button.json",
+      "sha256": "7cc71f4fd721f64be1890ea7b976999f65f21431af99c1e147d96c7ff4a5a49f",
+      "files": [
+        "src/registry/ui/emoji-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/equation-node.json",
+      "sha256": "602843e74043af6222487803471179856f57a2ef9aee6bc4d5fd53aae42dd3f9",
+      "files": [
+        "src/registry/ui/equation-node.tsx",
+        "src/registry/ui/equation-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/equation-toolbar-button.json",
+      "sha256": "59d0f832b812c0ead4831d4abe85db8e2156e785a9b54775dc943e682f6c0ef0",
+      "files": [
+        "src/registry/ui/equation-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/excalidraw-kit.json",
+      "sha256": "561f6e3361c8585a45bf9414cb81673c5e1dd7f68d497b40925417147ea9eb61",
+      "files": [
+        "src/registry/components/editor/plugins/excalidraw-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/excalidraw-node.json",
+      "sha256": "64e9d78059368738f9ee1fae48b10ced3388c7466ae0cee86b0f0dae12290a7d",
+      "files": [
+        "src/registry/ui/excalidraw-node.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/exit-break-kit.json",
+      "sha256": "24ed46a61a41cab707fae6d479f8ad22ab18f995e6d9a774026b598f92abe634",
+      "files": [
+        "src/registry/components/editor/plugins/exit-break-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/export-toolbar-button.json",
+      "sha256": "e5b2e5122001d6f07b64df916bb87df9b4684e82a17cb9322e5a17b579912a86",
+      "files": [
+        "src/registry/ui/export-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/fixed-toolbar-buttons.json",
+      "sha256": "80256b45e17e6b5b1d0cc204044a442f807d6603327b41665dc9829f12c1fbd6",
+      "files": [
+        "src/registry/ui/fixed-toolbar-buttons.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/fixed-toolbar-kit.json",
+      "sha256": "d37824525b99bb2de6597ef35967770f63c9c2429b2e7cef381d4f3217743647",
+      "files": [
+        "src/registry/components/editor/plugins/fixed-toolbar-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/fixed-toolbar.json",
+      "sha256": "8caf72e08f701d9ac2c4ca97b16606439bdca6bc90fd247cc4c94266db5ea600",
+      "files": [
+        "src/registry/ui/fixed-toolbar.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/floating-toolbar-buttons.json",
+      "sha256": "fe221e1d3a98445c0b5b0188d6f0908978b4d30f1b0407d959c016d6b3e245c8",
+      "files": [
+        "src/registry/ui/floating-toolbar-buttons.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/floating-toolbar-kit.json",
+      "sha256": "ed30750aea581d0c20ebd171fa6e94d75819e30dec801119599faab6fd2f2a64",
+      "files": [
+        "src/registry/components/editor/plugins/floating-toolbar-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/floating-toolbar.json",
+      "sha256": "a23e6bda754c47beb393a3c63c3cd67bcb4b5e7b921b3b4838be88b5b12e9656",
+      "files": [
+        "src/registry/ui/floating-toolbar.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/font-base-kit.json",
+      "sha256": "b579bdd1cf0a8db82f13491f65fef99a6eb09b5bfd41d79de9e65361fdd0d923",
+      "files": [
+        "src/registry/components/editor/plugins/font-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/font-color-toolbar-button.json",
+      "sha256": "aaca6696dce5ae8f966f09f956a44b744e9db8925b08fa36a616bd7949b36cfb",
+      "files": [
+        "src/registry/ui/font-color-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/font-kit.json",
+      "sha256": "60da3854b8a7f200205a11e0fa532be31651108478a9ba573e4bfb71cc36b149",
+      "files": [
+        "src/registry/components/editor/plugins/font-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/font-size-toolbar-button.json",
+      "sha256": "b85554a0a9e315e3342b3fd7789a35f44c22fc9c422db0509e815145df1980ee",
+      "files": [
+        "src/registry/ui/font-size-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/footnote-base-kit.json",
+      "sha256": "6c316e6076fb564d65cd294668e9199d459e5312ec189ce587d71c1e1a56d3b4",
+      "files": [
+        "src/registry/components/editor/plugins/footnote-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/footnote-kit.json",
+      "sha256": "a54512f25cc8612affbc0456b492425878e8dd88ee87fb08101878244f497d2d",
+      "files": [
+        "src/registry/components/editor/plugins/footnote-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/footnote-node.json",
+      "sha256": "3454c87b628042abc2004475d88d4122cc56beaadaac8ad736f07f4944250e8c",
+      "files": [
+        "src/registry/ui/footnote-node.tsx",
+        "src/registry/ui/footnote-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/heading-node.json",
+      "sha256": "5e97cb60ac9ad8415abb5ad5f800d2b6257ed57f4914a872667445a60004daf5",
+      "files": [
+        "src/registry/ui/heading-node.tsx",
+        "src/registry/ui/heading-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/highlight-node.json",
+      "sha256": "186c4469c4112adf3b63cd6975f43c29ca636a462306ca928186b07dd4acb7aa",
+      "files": [
+        "src/registry/ui/highlight-node.tsx",
+        "src/registry/ui/highlight-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/history-toolbar-button.json",
+      "sha256": "8e7a12e864cfcf559a1e7c8004ee1e2c485101d48efe2bddff0b36052662822b",
+      "files": [
+        "src/registry/ui/history-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/hr-node.json",
+      "sha256": "1515d39be1c65f53ff9e77faa32775bc6fa448affe81152d6d5d636778ad4e85",
+      "files": [
+        "src/registry/ui/hr-node.tsx",
+        "src/registry/ui/hr-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/import-toolbar-button.json",
+      "sha256": "915698e85def4fafae21688da388a87ac6cd242f4988ea67e8acdbfa17c2e9c3",
+      "files": [
+        "src/registry/ui/import-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/indent-base-kit.json",
+      "sha256": "11e22e655e165745c2145566a26cce0489bf38c9d0267d9260f6ab9ca5e485a8",
+      "files": [
+        "src/registry/components/editor/plugins/indent-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/indent-kit.json",
+      "sha256": "32f8c195d62a05fbb4063f80151ec711a870273913d2cbd612c641c15f2c1194",
+      "files": [
+        "src/registry/components/editor/plugins/indent-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/indent-toolbar-button.json",
+      "sha256": "21237b26432276f01546771cea5c3c4ab13264a5d5b34ac3d69edb30fe4b487b",
+      "files": [
+        "src/registry/ui/indent-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/inline-combobox.json",
+      "sha256": "a5b01330ebfbe7d9b831044e4c884285f0dc3313f5a839df830a9c80459647a0",
+      "files": [
+        "src/registry/ui/inline-combobox.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/insert-toolbar-button.json",
+      "sha256": "dda4dc8110cff7dc1602c004ae6e14c9fe1455f98a4fe0a1f4f5c6b36e449e00",
+      "files": [
+        "src/registry/ui/insert-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/kbd-node.json",
+      "sha256": "b580540289696fa69dca9cbed4e3e9f7a5bc57dbb1d0849dcfbfc668b91b039f",
+      "files": [
+        "src/registry/ui/kbd-node.tsx",
+        "src/registry/ui/kbd-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/line-height-base-kit.json",
+      "sha256": "dc8b43f708626d219406c1b4a87654eda73fb3cdf70d3251d8dc360f34ed70b7",
+      "files": [
+        "src/registry/components/editor/plugins/line-height-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/line-height-kit.json",
+      "sha256": "75c38d3ba964e5ae97fa51d05170c105e5d73ba7d6725ed80f05c19b3c65b62a",
+      "files": [
+        "src/registry/components/editor/plugins/line-height-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/line-height-toolbar-button.json",
+      "sha256": "96e7bbb0268064d68f70f3850420780cb09d199c8a2835374479291c290e196d",
+      "files": [
+        "src/registry/ui/line-height-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/link-base-kit.json",
+      "sha256": "0056f5787920e813df9774257836397acdf8a3a956dc432673a2124fd967fdc7",
+      "files": [
+        "src/registry/components/editor/plugins/link-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/link-kit.json",
+      "sha256": "3283c3b8ca8dd540b86f6400e62bc6256338751a194579a3087d80ae0d8d8486",
+      "files": [
+        "src/registry/components/editor/plugins/link-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/link-node.json",
+      "sha256": "b8a8abc44439095f368bb2a38f67607737d7d6df49c5e24f08b5b381f83e9740",
+      "files": [
+        "src/registry/ui/link-node.tsx",
+        "src/registry/ui/link-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/link-toolbar-button.json",
+      "sha256": "c7c63763ca145b93fd3c1a5e407b2a5efcf042de77d42c6ce7602216a02b0d24",
+      "files": [
+        "src/registry/ui/link-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/link-toolbar.json",
+      "sha256": "5144fbfb9ac7828cd1226efa6ac9a02363d5a77443926068672ea8d50d13d840",
+      "files": [
+        "src/registry/ui/link-toolbar.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/list-base-kit.json",
+      "sha256": "fd540e5e7d02b605e1ae58217c621cdc81ea4c77e71351cfda0ac922eb5a7a35",
+      "files": [
+        "src/registry/components/editor/plugins/list-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/list-kit.json",
+      "sha256": "1a5ffc8052c91ded62ec7e9f40668b04f629ce75adcd585d1b4b1c74831e621c",
+      "files": [
+        "src/registry/components/editor/plugins/list-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/list-toolbar-button.json",
+      "sha256": "6c97acefea31693508876c8a0aa1538b005a0303d07240fb17b5068ef806968e",
+      "files": [
+        "src/registry/ui/list-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/mark-toolbar-button.json",
+      "sha256": "5a9e785ff0eb8439f5a5c9ccbe6d066795cf5b50d678e340f055f20aa8f58a60",
+      "files": [
+        "src/registry/ui/mark-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/markdown-kit.json",
+      "sha256": "15672d3b1aa2dddd22456e8a6036dac4b3149f1b19201e24279be1481caee4a8",
+      "files": [
+        "src/registry/components/editor/plugins/markdown-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/math-base-kit.json",
+      "sha256": "9eeba9dd49e5a5165860837b7d56ab0561d5593035d09511b37fe8f16e69906c",
+      "files": [
+        "src/registry/components/editor/plugins/math-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/math-kit.json",
+      "sha256": "db5a52d189656c3c78ccd55f44bbb156a7ed57c1fa868db11247d945f29d880a",
+      "files": [
+        "src/registry/components/editor/plugins/math-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/media-audio-node.json",
+      "sha256": "91cd23d022b903f2cedee32733a8cc249478f76105ebf8f702e02067fd41ffaf",
+      "files": [
+        "src/registry/ui/media-audio-node.tsx",
+        "src/registry/ui/media-audio-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/media-base-kit.json",
+      "sha256": "8a759745df278d8f69c1c0b7e381f2639406075f98cfb377e5503180cbd156df",
+      "files": [
+        "src/registry/components/editor/plugins/media-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/media-embed-node.json",
+      "sha256": "3aab5e2276612c1a1b8799467a2f433492826f568ad360447444e6094cc954fc",
+      "files": [
+        "src/registry/ui/media-embed-node.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/media-file-node.json",
+      "sha256": "ed60b4f6d4ba46b03d22160a44617eaaf73df962378795cf481e5bf11f843e0d",
+      "files": [
+        "src/registry/ui/media-file-node.tsx",
+        "src/registry/ui/media-file-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/media-image-node.json",
+      "sha256": "abb4c398798de82d9008292e3af0d45a2c70d522a7396e95f7056aab0e2c57a8",
+      "files": [
+        "src/registry/ui/media-image-node.tsx",
+        "src/registry/ui/media-image-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/media-kit.json",
+      "sha256": "1bb80c9884ae48daf41daae3cdc90aa5756a4508f78e0e0ca557f3f79abe0cd6",
+      "files": [
+        "src/registry/components/editor/plugins/media-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/media-placeholder-node.json",
+      "sha256": "2450a998fc26be02ac19fbf678336e0d4c27ec50f740adf14f78eecbdf22a0c4",
+      "files": [
+        "src/registry/ui/media-placeholder-node.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/media-preview-dialog.json",
+      "sha256": "261f2ddee58829f6eee6b848e629952c40140637b4185f8b7e7327c2e97cc7d8",
+      "files": [
+        "src/registry/ui/media-preview-dialog.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/media-toolbar-button.json",
+      "sha256": "67199b0f5726da905229b16e2ca68b51e6a201ba87207ffc58f42edf0948c3a3",
+      "files": [
+        "src/registry/ui/media-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/media-toolbar.json",
+      "sha256": "fb9f30a3a4c59263a7a2fe69d8638aeb3a5a550b04e5f9ebeb6b06a616f0b1b5",
+      "files": [
+        "src/registry/ui/media-toolbar.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/media-upload-toast.json",
+      "sha256": "3e99ef98fa8819f22dd5b5cddfa93d55305cfe2536c5c998aef43d57e1509e6b",
+      "files": [
+        "src/registry/ui/media-upload-toast.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/media-video-node.json",
+      "sha256": "079d72afdb25578318f1fde79521160d0d5ec201d6ab173824663f31ac4f6317",
+      "files": [
+        "src/registry/ui/media-video-node.tsx",
+        "src/registry/ui/media-video-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/mention-base-kit.json",
+      "sha256": "0bef917a670772d4bb0b3fc11d0b2d0745227d4871c204aef4010a446c6d104b",
+      "files": [
+        "src/registry/components/editor/plugins/mention-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/mention-kit.json",
+      "sha256": "7ec18ea325c0e347d9aca8e36cabef6d27651c0e90d4f34182130fccacde9b50",
+      "files": [
+        "src/registry/components/editor/plugins/mention-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/mention-node.json",
+      "sha256": "f95941cd1b4d144097b4dd9908057aad75c5a354fdc42b64a3163e96f119fade",
+      "files": [
+        "src/registry/ui/mention-node.tsx",
+        "src/registry/ui/mention-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/mode-toolbar-button.json",
+      "sha256": "1dc254492c0fa45fe9ec6f1a6546d1106c28bb72b6d533820d2392a5a9ee3b37",
+      "files": [
+        "src/registry/ui/mode-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/more-toolbar-button.json",
+      "sha256": "88b58d31f406aea8d8d222fee5fc925289d6d0f3d26f8ae44e8bdcfbfef40b5c",
+      "files": [
+        "src/registry/ui/more-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/paragraph-node.json",
+      "sha256": "5b4d6377c1b1447964478c25c1585b6ab60d8a569d75e746cf7cbe711c77bf78",
+      "files": [
+        "src/registry/ui/paragraph-node.tsx",
+        "src/registry/ui/paragraph-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/resize-handle.json",
+      "sha256": "f2c197ad6d3d693294e22100046f60a7dddaf0f97688762b4bebddf54d86dd15",
+      "files": [
+        "src/registry/ui/resize-handle.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-alert-dialog.json",
+      "sha256": "7fac1627fbed45517acf027f83df785a7dd00b4954394bc2db837a1d0700f829",
+      "files": [
+        "ui/alert-dialog.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-avatar.json",
+      "sha256": "4fdcb3d39aa70de77b59e195130c3a074e785f4886514be6df50618c57420f30",
+      "files": [
+        "ui/avatar.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-button.json",
+      "sha256": "4d8f39c3bd25e630b5962667722e8707e7b18122ad6842a5c22acf8a3ff9f93a",
+      "files": [
+        "ui/button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-calendar.json",
+      "sha256": "6d58710002f57bf65b62ee80087c4d653025e9ccfdd770a2c0155f7eb332004e",
+      "files": [
+        "ui/calendar.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-checkbox.json",
+      "sha256": "e1520741b797637574f9e7533941f1c80199dbe9f617585c7965f5b9696f9d4b",
+      "files": [
+        "ui/checkbox.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-command.json",
+      "sha256": "b2800b32e6dbfb403ff7735480b69116154a8dbc933674220daece55192a8aed",
+      "files": [
+        "ui/command.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-context-menu.json",
+      "sha256": "705384f0defc41d83a0bb3611d686c5911fdfde25986454ee3f03bf5003868de",
+      "files": [
+        "ui/context-menu.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-dialog.json",
+      "sha256": "e240f8eaa9e9e626dffa1a340469c6bace9c631e78b7b10e7d0f178a32a1c71c",
+      "files": [
+        "ui/dialog.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-dropdown-menu.json",
+      "sha256": "dbd4c0a23be34f2709108597c992528659df65c39b7a0afd17e1701d3ea5c361",
+      "files": [
+        "ui/dropdown-menu.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-hover-card.json",
+      "sha256": "cd66337682527d0f858965046f02c3bba218580dbb5c3f6b6027b76ff8f3b9a0",
+      "files": [
+        "ui/hover-card.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-input.json",
+      "sha256": "4d1a3b126cc62485b225e3da32d4a56df851c95c5a24035af1f1c80f33726cfa",
+      "files": [
+        "ui/input.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-popover.json",
+      "sha256": "112f3cc3836f6b37823c55b794d3484b160bb450dd40963858874fb9ae314fd1",
+      "files": [
+        "ui/popover.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-select.json",
+      "sha256": "574c730b6dc8b37e5cfa8e19159e4a1d2ee54c17b927bd4003ff26c8b7a6edfb",
+      "files": [
+        "ui/select.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-separator.json",
+      "sha256": "01173bde1937c35da6f84f92bb85f7e882a9091064b4532a058177fe1a96d17f",
+      "files": [
+        "ui/separator.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/shadcn-tooltip.json",
+      "sha256": "aef6ec3c142b054ebcd6daaf9e0b46e67f0d50e51eefbd7b392c83845a3f1926",
+      "files": [
+        "ui/tooltip.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/slash-kit.json",
+      "sha256": "983eb7799f18238a94140b00fb5aff5e1b74c113273eaaf2d604c7609c350f41",
+      "files": [
+        "src/registry/components/editor/plugins/slash-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/slash-node.json",
+      "sha256": "f7542aa4acdd19b8c7b5c2404238aa10b6852c994b02029ed1fb883fcc0a5496",
+      "files": [
+        "src/registry/ui/slash-node.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/suggestion-base-kit.json",
+      "sha256": "eb4b008af2e3784849bf96a1b718106a829d7d14c374126819ff1bdc25eb0df7",
+      "files": [
+        "src/registry/components/editor/plugins/suggestion-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/suggestion-kit.json",
+      "sha256": "d60ce7684a8eb6f35c84e635b43d944243328ee9ba6a249b7b99f84597e2b232",
+      "files": [
+        "src/registry/components/editor/plugins/suggestion-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/suggestion-node.json",
+      "sha256": "b13f962261270c6ddfe56462ba27da9a58e7b6475f3976d40ecd178ac007109b",
+      "files": [
+        "src/registry/ui/suggestion-node.tsx",
+        "src/registry/ui/suggestion-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/suggestion-toolbar-button.json",
+      "sha256": "e178f62dcdaef2b5b7a2ebf8bc0ba2f08020832ab9ad19fb2ad1172f48a399f3",
+      "files": [
+        "src/registry/ui/suggestion-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/suggestion.json",
+      "sha256": "0e024889b4b605c7d016dcac94e63f0e3685b5ffb8c53d120b327f967384d109",
+      "files": [
+        "src/registry/lib/suggestion.ts"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/table-base-kit.json",
+      "sha256": "3455cf8678a69f7a443c475ee99110525a404f02fab92f709a697e2fad056c5f",
+      "files": [
+        "src/registry/components/editor/plugins/table-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/table-kit.json",
+      "sha256": "67aa6d1c91267f3b4dfa7422747bb760d6bf42efb153b47514e5b27625ce9224",
+      "files": [
+        "src/registry/components/editor/plugins/table-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/table-node.json",
+      "sha256": "e841ed85277a9ea99d75c0fe5e53760eefc6bdea474ff55057a2f1042c32519c",
+      "files": [
+        "src/registry/ui/table-node.tsx",
+        "src/registry/ui/table-icons.tsx",
+        "src/registry/ui/table-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/table-toolbar-button.json",
+      "sha256": "97b3639ae4f988f82f54f382372a5af9b238d299a6f90d691bc10143a3f5e14b",
+      "files": [
+        "src/registry/ui/table-toolbar-button.tsx",
+        "src/registry/ui/table-icons.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/toc-base-kit.json",
+      "sha256": "a3ffce59a0b39f96f000e176a269be9788adbf04d8befc0d0e655d0d7402f552",
+      "files": [
+        "src/registry/components/editor/plugins/toc-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/toc-kit.json",
+      "sha256": "afaa472de7121d9e19562c076fbfb2a8a18d4a12419ad04f8dda26ff655d347e",
+      "files": [
+        "src/registry/components/editor/plugins/toc-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/toc-node.json",
+      "sha256": "789039649007877374adb982913d60514e93a432028a75e065ed8ecd8f495018",
+      "files": [
+        "src/registry/ui/toc-node.tsx",
+        "src/registry/ui/toc-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/toggle-base-kit.json",
+      "sha256": "4e19577e2fbb7e731c0715edbb85ea29d69ce65e5301ccda21bb6788d474db8a",
+      "files": [
+        "src/registry/components/editor/plugins/toggle-base-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/toggle-kit.json",
+      "sha256": "9f7220303a1af98b5087fe3185cd9e6763772717db8a68b5e58e7b306824688e",
+      "files": [
+        "src/registry/components/editor/plugins/toggle-kit.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/toggle-node.json",
+      "sha256": "88eb8a950eea2e7179daac74aa4acf5e4269521a45691d88a3e06eac2fa5cce1",
+      "files": [
+        "src/registry/ui/toggle-node.tsx",
+        "src/registry/ui/toggle-node-static.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/toggle-toolbar-button.json",
+      "sha256": "4011afa7b716be1ac4f0ad39e3bf4236df004536560017da62ba5820a78f062f",
+      "files": [
+        "src/registry/ui/toggle-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/toolbar.json",
+      "sha256": "508261bce198b44d7125db75c95cbea4d021d8c1150027bd68a8b427c21ed153",
+      "files": [
+        "src/registry/ui/toolbar.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/transforms.json",
+      "sha256": "9be570a100d3f794bb682b3b2231d942802a9e456d5599adb9495e3fc537c687",
+      "files": [
+        "src/registry/components/editor/transforms.ts"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/turn-into-toolbar-button.json",
+      "sha256": "fc73964d5741785394665dd1209f32bdeddd2f80ac881bf2ad2d9107c15bbb86",
+      "files": [
+        "src/registry/ui/turn-into-toolbar-button.tsx"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/uploadthing.json",
+      "sha256": "df2e8556a16c8f39d0e661a0de589f76216cefb19f61a706a075bc422703dc2a",
+      "files": [
+        "src/registry/hooks/use-upload-file.ts"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/use-chat.json",
+      "sha256": "4eae516ca779ebf1552b4515d3a9edf43a63b0f1e7a65995dd33a0002f8615e4",
+      "files": [
+        "src/registry/components/editor/use-chat.ts"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/use-debounce.json",
+      "sha256": "1cce23035ed0a1e9098e0f3e1174852127dcf4295b5db4c74a8152e2cc3b013d",
+      "files": [
+        "src/registry/hooks/use-debounce.ts"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/use-is-touch-device.json",
+      "sha256": "217e971605949567bd0d485f98dfe241f5fbf2ee025e8349b1c841450324070c",
+      "files": [
+        "src/registry/hooks/use-is-touch-device.ts"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/use-mobile.json",
+      "sha256": "e7852388bddc89cddb2cb4e6221564002d5e02602a22e0e1bcdf970ea01884e8",
+      "files": [
+        "src/registry/hooks/use-mobile.ts"
+      ]
+    },
+    {
+      "registry": "https://platejs.org/r/use-mounted.json",
+      "sha256": "1391bf1324a400d5db17aa148360dfbb3fb808e143a8fc327add9b3ff1145ced",
+      "files": [
+        "src/registry/hooks/use-mounted.ts"
+      ]
+    }
+  ]
+}

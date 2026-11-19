@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { Focus, MessageSquare, PanelLeft, PanelLeftClose, PanelRightClose, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, ChevronRight, Focus, MessageSquare, PanelLeft, PanelLeftClose, PanelRightClose, X, ZoomIn, ZoomOut } from "lucide-react";
 import { api } from "../lib/api";
 import type { Asset, GenJob } from "../lib/types";
 import { useCompatibleImagePath } from "../lib/useCompatibleImagePath";
@@ -11,16 +11,21 @@ import { GenerationPanel } from "./GenerationPanel";
 import { AssetDetail } from "./AssetDetail";
 import { useImagePreviewHud } from "./useImagePreviewHud";
 import { ImagePreviewContinuation } from "./ImagePreviewContinuation";
+import { VideoPlayer } from "./VideoPlayer";
 import { imageHistoryJob } from "../lib/imagePreviewContinuation";
 import { useStore } from "../store";
 import "./CreationImagePreview.css";
 
-export function CreationImagePreview({ asset, projectId, job, onClose }: {
+export function CreationImagePreview({ asset, projectId, job, onClose, video, navigation }: {
   asset: Asset;
   projectId: string | null;
   job?: GenJob;
   onClose: () => void;
+  video?: Pick<ComponentProps<typeof VideoPlayer>, "path" | "sourceKey" | "frameTarget" | "onAddFrame" | "onAddFrameToCanvas" | "onSaveTrim">;
+  navigation?: { index: number; count: number; onIndexChange: (index: number) => void };
 }) {
+  const mediaDetail = video ? "视频详情" : "图片详情";
+  const localVideo = !!video && asset.source === "comfy-h3";
   const requestKey = `${projectId ?? ""}:${asset.id}`;
   const [history, setHistory] = useState<{ key: string; job: GenJob | null; error?: unknown } | null>(null);
   const [retry, setRetry] = useState(0);
@@ -51,7 +56,7 @@ export function CreationImagePreview({ asset, projectId, job, onClose }: {
   const pointerFrame = useRef(0);
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
-  const originalPath = asset.store_path ?? asset.thumb_path;
+  const originalPath = video ? null : asset.store_path ?? asset.thumb_path;
   const [conversionFailed, setConversionFailed] = useState<string | null | undefined>(null);
   const path = useCompatibleImagePath(originalPath, () => setConversionFailed(originalPath));
   const zoom = useImageZoom(path, { min: 0.1, max: 16 });
@@ -62,7 +67,7 @@ export function CreationImagePreview({ asset, projectId, job, onClose }: {
   const dimensions = asset.width && asset.height ? asset : naturalSize?.path === path ? naturalSize : null;
   const imageRatio = dimensions?.width && dimensions.height ? dimensions.width / dimensions.height : 1;
   const contentMounted = contentKey === requestKey;
-  const imageAvailable = !!path && (loadedImage === path || failedImage === path)
+  const imageAvailable = !!video || !!path && (loadedImage === path || failedImage === path)
     || !!asset.thumb_path && loadedThumbnail === asset.thumb_path || !!originalPath && conversionFailed === originalPath || !originalPath;
   const imageIntroduced = introducedKey === requestKey && imageAvailable;
   const inspectorVisible = imageIntroduced && inspectorKey === requestKey;
@@ -122,10 +127,10 @@ export function CreationImagePreview({ asset, projectId, job, onClose }: {
       clearTimeout(closeTimer.current); clearTimeout(detailsTimer.current); clearTimeout(inspectorTimer.current); closeTimer.current = undefined;
     };
   }, [requestKey]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const frame = requestAnimationFrame(() => surfaceRef.current?.querySelector<HTMLButtonElement>('[aria-label="关闭预览"]')?.focus({ preventScroll: true }));
-    return () => { cancelAnimationFrame(frame); if (previous?.isConnected) previous.focus({ preventScroll: true }); };
+    surfaceRef.current?.querySelector<HTMLElement>(video ? ".video-player" : '[aria-label="关闭预览"]')?.focus({ preventScroll: true });
+    return () => { if (previous?.isConnected) previous.focus({ preventScroll: true }); };
   }, []);
 
   useEffect(() => {
@@ -134,7 +139,7 @@ export function CreationImagePreview({ asset, projectId, job, onClose }: {
     setHistory(null);
     void (async () => {
       try {
-        let result = await api.generationHistory(asset.id, projectId);
+        let result = await api.generationHistory(asset.id, projectId, localVideo || undefined);
         // Library images can belong to another project; viewing never changes that ownership.
         if (projectId && !result.turns.length && asset.generation_session_id) result = await api.generationHistory(asset.id, null);
         if (!current) return;
@@ -147,7 +152,7 @@ export function CreationImagePreview({ asset, projectId, job, onClose }: {
       }
     })();
     return () => { current = false; };
-  }, [asset.id, asset.generation_session_id, projectId, job, requestKey, retry, contentMounted]);
+  }, [asset.id, asset.generation_session_id, projectId, job, requestKey, retry, contentMounted, localVideo]);
 
   const ready = history?.key === requestKey ? history : null;
   const source = liveJob ?? job ?? ready?.job;
@@ -160,7 +165,7 @@ export function CreationImagePreview({ asset, projectId, job, onClose }: {
       ?? previewJob.turns[previewJob.turns.length - 1];
     return { job: previewJob, sourceJobId, selectedTurnKey: selected?.turnKey ?? "", onReuse: () => {} };
   }, [source, asset.id, asset.store_path, sourceJobId, contentMounted, followLatest]);
-  const hasConversation = !!job || !!snapshot || ready?.error != null || (!ready && !!asset.generation_session_id);
+  const hasConversation = !!job || !!snapshot || ready?.error != null || (!ready && (!!asset.generation_session_id || localVideo));
   const conversationContentReady = imageIntroduced && (!!snapshot || !!ready);
   const conversationVisible = conversationContentReady && conversationKey === requestKey;
   useEffect(() => {
@@ -196,8 +201,8 @@ export function CreationImagePreview({ asset, projectId, job, onClose }: {
     return target instanceof Element && target.matches(".creation-image-preview, .creation-image-preview-backdrop, .creation-image-preview-layout");
   }
 
-  return createPortal(<div ref={surfaceRef} className={`creation-image-preview canvas-tactical${closing ? " is-closing" : ""}`}
-    role="dialog" aria-modal="true" aria-label="图片与会话预览"
+  return createPortal(<div ref={surfaceRef} className={`creation-image-preview canvas-tactical${video ? " is-video-preview" : ""}${closing ? " is-closing" : ""}`}
+    role="dialog" aria-modal="true" aria-label={video ? "视频与会话预览" : "图片与会话预览"}
     onPointerDownCapture={event => {
       blankPress.current = event.button === 0 && isBlank(event.target) ? { x: event.clientX, y: event.clientY, moved: false } : null;
       const panel = event.target instanceof Element && event.currentTarget.contains(event.target)
@@ -248,7 +253,7 @@ export function CreationImagePreview({ asset, projectId, job, onClose }: {
       // Nested media/menu portals own their keys even though React bubbles them here.
       if (event.defaultPrevented || !event.currentTarget.contains(event.target as Node) || document.querySelector(".media-lightbox")) return;
       event.stopPropagation();
-      if (event.key === "Escape") { event.preventDefault(); close(); }
+      if (event.key === "Escape" && !document.fullscreenElement) { event.preventDefault(); close(); }
       if (event.key === "Tab") {
         const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), a[href], input:not(:disabled), textarea:not(:disabled), select:not(:disabled), [tabindex="0"]'))
           .filter(item => item.getClientRects().length && !item.closest('.is-leaving, [inert], [aria-hidden="true"]'));
@@ -261,22 +266,24 @@ export function CreationImagePreview({ asset, projectId, job, onClose }: {
     <div className="creation-image-preview-projection" aria-hidden="true"/>
     <div ref={layoutRef} className="creation-image-preview-layout">
       <section className={`creation-image-preview-conversation creation-image-preview-inspector ${!inspectorOpen ? "is-collapsed" : inspectorVisible ? "is-ready" : "is-loading"}${inspectorClosing ? " is-leaving" : ""}`}
-        aria-label="图片详情" aria-hidden={!inspectorVisible || !inspectorOpen || inspectorClosing}>
+        aria-label={mediaDetail} aria-hidden={!inspectorVisible || !inspectorOpen || inspectorClosing}>
         <div className="creation-image-preview-conversation-plane" aria-hidden="true"/>
         <header className="creation-image-preview-conversation-head">
-          <h2>图片详情</h2>
-          <button type="button" onClick={toggleInspector} aria-label="收起图片详情面板" title="收起图片详情"><PanelLeftClose size={16}/></button>
+          <h2>{mediaDetail}</h2>
+          <button type="button" onClick={toggleInspector} aria-label={`收起${mediaDetail}面板`} title={`收起${mediaDetail}`}><PanelLeftClose size={16}/></button>
         </header>
         {contentMounted && <AssetDetail key={requestKey} panelOnly initialAsset={asset}
           onReady={() => setInspectorKey(requestKey)}
           selection={{ assetId: asset.id, onClose: close, onOpen: close, onNavigate: close }}/>}
         <span className="creation-image-preview-panel-mark" aria-hidden="true"/>
       </section>
-      <section className="creation-image-preview-image" aria-label="放大图片">
+      <section className="creation-image-preview-image" aria-label={video ? "播放视频" : "放大图片"}>
         <figure className="creation-image-preview-figure" style={{ "--image-ratio": imageRatio } as CSSProperties}>
-          <div ref={imageAnchorRef} className="creation-image-preview-image-anchor" style={{ ...zoom.style, cursor: zoom.dragging ? "grabbing" : "grab", "--image-scale": zoom.scale } as CSSProperties}>
+          <div ref={imageAnchorRef} className="creation-image-preview-image-anchor" style={(video
+            ? { "--image-scale": 1 }
+            : { ...zoom.style, cursor: zoom.dragging ? "grabbing" : "grab", "--image-scale": zoom.scale }) as CSSProperties & { "--image-scale": number }}>
             <div className="creation-image-preview-image-depth" aria-hidden="true"><i/><i/></div>
-            <div className="creation-image-preview-image-viewport">
+            {video ? <VideoPlayer key={`${video.path}:${video.sourceKey ?? ""}`} {...video} embedded fitContainer showTrim /> : <div className="creation-image-preview-image-viewport">
               {asset.thumb_path && asset.thumb_path !== path && loadedImage !== path && <img className="creation-image-preview-thumbnail"
                 src={convertFileSrc(asset.thumb_path)} alt="" aria-hidden="true" draggable={false}
                 onLoad={() => setLoadedThumbnail(asset.thumb_path!)}/>}
@@ -289,7 +296,7 @@ export function CreationImagePreview({ asset, projectId, job, onClose }: {
                 }}
                 onError={() => setFailedImage(path)} />
                 : <p role="status">{!originalPath || failedImage === path || conversionFailed === originalPath ? "图片暂时无法读取" : "正在读取图片…"}</p>}
-            </div>
+            </div>}
             <i className="creation-image-preview-image-mark start" aria-hidden="true"/>
             <i className="creation-image-preview-image-mark end" aria-hidden="true"/>
           </div>
@@ -304,13 +311,14 @@ export function CreationImagePreview({ asset, projectId, job, onClose }: {
         </header>
         <div className="creation-image-preview-history">
           {imageIntroduced && contentMounted && (snapshot ? <GenerationPanel embedded readOnly followLatest={followLatest} hydratedAssets={[asset, ...snapshot.job.refAssets]}
+            onAddVideoFrame={video?.onAddFrame} onSaveVideoTrim={video?.onSaveTrim}
             snapshot={snapshot} /> : <div className="creation-image-preview-info">
           {!job && !ready ? <p role="status">正在读取对话…</p> : ready?.error != null
             ? <div className="creation-image-preview-error" role="alert"><p>{userErrorMessage(ready.error, "对话详情暂时无法读取，请重试。")}</p><button type="button" onClick={() => setRetry(value => value + 1)}>重试</button></div>
             : <p>暂无生成会话</p>}
           </div>)}
         </div>
-        {imageIntroduced && contentMounted && source && <ImagePreviewContinuation key={requestKey}
+        {!video && imageIntroduced && contentMounted && source && <ImagePreviewContinuation key={requestKey}
           asset={asset} job={source} sourceJobId={sourceJobId} enabled={!closing}
           onSent={id => { setContinuationJobId(id); setFollowLatest(true); }}/>}
         <span className="creation-image-preview-panel-mark" aria-hidden="true"/>
@@ -324,12 +332,21 @@ export function CreationImagePreview({ asset, projectId, job, onClose }: {
       <footer className="creation-image-preview-image-foot">
         <span>{dimensions?.width && dimensions.height ? `${dimensions.width} × ${dimensions.height}` : ""}{asset.ext && <b>{asset.ext.toUpperCase()}</b>}</span>
         <div>
+          {navigation && navigation.count > 1 && <>
+            <button type="button" onClick={() => navigation.onIndexChange(navigation.index - 1)} disabled={navigation.index === 0}
+              aria-label="上一项媒体" title="上一项媒体"><ChevronLeft size={16}/></button>
+            <output className="creation-image-preview-scale" aria-label="媒体序号">{navigation.index + 1} / {navigation.count}</output>
+            <button type="button" onClick={() => navigation.onIndexChange(navigation.index + 1)} disabled={navigation.index === navigation.count - 1}
+              aria-label="下一项媒体" title="下一项媒体"><ChevronRight size={16}/></button>
+          </>}
+          {!video && <>
           <button type="button" onClick={() => zoom.zoomBy(1 / 1.25)} disabled={zoom.scale <= 0.1} title="缩小" aria-label="缩小图片"><ZoomOut size={16}/></button>
           <output className="creation-image-preview-scale" aria-label="图片缩放比例">{Math.round(zoom.scale * 100)}%</output>
           <button type="button" onClick={() => zoom.zoomBy(1.25)} disabled={zoom.scale >= 16} title="放大" aria-label="放大图片"><ZoomIn size={16}/></button>
           <button type="button" onClick={zoom.reset} title="适应画面" aria-label="适应画面"><Focus size={16}/></button>
+          </>}
           {inspectorVisible && <button ref={inspectorToggleRef} type="button" onClick={toggleInspector} aria-pressed={inspectorOpen && !inspectorClosing}
-            title={inspectorOpen && !inspectorClosing ? "收起图片详情" : "显示图片详情"} aria-label={inspectorOpen && !inspectorClosing ? "收起图片详情" : "显示图片详情"}><PanelLeft size={16}/></button>}
+            title={inspectorOpen && !inspectorClosing ? `收起${mediaDetail}` : `显示${mediaDetail}`} aria-label={inspectorOpen && !inspectorClosing ? `收起${mediaDetail}` : `显示${mediaDetail}`}><PanelLeft size={16}/></button>}
           {hasConversation && conversationVisible && <button ref={detailsToggleRef} type="button" onClick={toggleDetails} aria-pressed={detailsOpen && !detailsClosing}
             title={detailsOpen && !detailsClosing ? "收起会话" : "显示会话"} aria-label={detailsOpen && !detailsClosing ? "收起会话" : "显示会话"}><MessageSquare size={16}/></button>}
         </div>

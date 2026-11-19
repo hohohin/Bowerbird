@@ -1,0 +1,44 @@
+import assert from 'node:assert/strict';
+import { readFile, mkdir } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+
+const url = new URL(process.argv[2]);
+const output = fileURLToPath(new URL('../.tmp/quick-transfer-send/', import.meta.url));
+await mkdir(output, { recursive: true });
+const browser = await chromium.launch({ channel: 'chrome', headless: true });
+try {
+  const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 390, height: 780 } });
+  const page = await context.newPage(); page.setDefaultTimeout(8000);
+  const errors = [], remote = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('request', request => { if (new URL(request.url()).origin !== url.origin) remote.push(request.url()); });
+  await page.goto(url.origin);
+  assert.equal(await page.getByRole('link').count(), 0, 'unpaired page has no filenames or downloads');
+  await page.getByLabel('配对码', { exact: true }).fill(url.searchParams.get('pin'));
+  await page.getByRole('button', { name: '连接', exact: true }).click();
+  const link = page.getByRole('link', { name: '下载 照片 原件.heic', exact: true });
+  await link.waitFor();
+  const [download] = await Promise.all([page.waitForEvent('download'), link.click()]);
+  assert.equal(download.suggestedFilename(), '照片 原件.heic');
+  assert.equal(await download.failure(), null);
+  assert.deepEqual(await readFile(await download.path()), Buffer.from('original-bytes\0\xff', 'latin1'));
+  assert.match(await page.locator('#notice').innerText(), /浏览器下载/);
+  assert.ok(!(await page.locator('#notice').innerText()).includes('已保存'));
+  await page.screenshot({ path: `${output}/mobile-dark.png` });
+  await page.goto(url.href);
+  await link.waitFor();
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.setViewportSize({ width: 320, height: 700 });
+  await page.screenshot({ path: `${output}/mobile-light-320.png` });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await context.setOffline(true);
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  await page.getByText(/连接已中断/).waitFor();
+  assert.equal(await page.locator('#files a[href]').count(), 0);
+  await context.setOffline(false);
+  await page.getByRole('button', { name: '重新连接' }).click();
+  await page.locator('#files a[href]').waitFor();
+  assert.deepEqual(errors, []); assert.deepEqual(remote, []);
+  console.log('browser download: pairing, QR URL, actual original bytes/Chinese filename, offline/reconnect, 320px themes passed');
+} finally { await browser.close(); }

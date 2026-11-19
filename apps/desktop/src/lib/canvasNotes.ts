@@ -1,9 +1,12 @@
+import { documentPreviewText } from "./documentPreview.ts";
+import { readCanvasNoteSource } from "./canvasNoteSource.ts";
 import type { CanvasNode } from "./types";
 import type { CanvasRect } from "./canvasLogic";
 import { contentTableText, type ContentTable } from "./contentTable.ts";
 import { documentMediaReferences, documentWorkflowValue } from "./documentProjection.ts";
+import { TEXT_CARD_ASPECT_RATIO } from "./textMedia.ts";
 
-export function canvasDocumentHeight(text: string): number { return text.trim() ? 112 : 56; }
+export function canvasDocumentHeight(width: number): number { return width / TEXT_CARD_ASPECT_RATIO; }
 
 export interface CanvasTextCell {
   content_type?: "text" | "image";
@@ -28,6 +31,7 @@ export interface CanvasNotePayload {
   note_type: "text" | "section" | "bubble" | "images" | "document";
   cells: CanvasTextCell[][];
   member_ids: string[];
+  section_color?: string;
   workflow_container?: boolean;
   /** A compositing artboard uses the same frame interactions as a section. */
   artboard?: { base_asset_id: string | null };
@@ -43,11 +47,20 @@ export interface CanvasBubbleTail {
   position: number;
 }
 
+export const SECTION_COLORS = [
+  ["灰色", "#69737f"], ["蓝色", "#426eaa"], ["青色", "#207b88"], ["绿色", "#347b53"],
+  ["琥珀色", "#956321"], ["玫红色", "#963c68"], ["紫色", "#72559e"],
+] as const;
+
+export function canvasDocumentTextValue(markdown: string) {
+  const value = documentWorkflowValue(markdown);
+  return { ...value, text: documentPreviewText(value.text, "markdown", Infinity) };
+}
+
 export function canvasNoteValue(note: CanvasNotePayload, cellId: string) {
   if (note.note_type === "document") {
-    const value = documentWorkflowValue(note.text);
     if (cellId === "*") return { type: "image" as const, assetIds: [...new Set(documentMediaReferences(note.text).filter(ref => ref.kind === "image").map(ref => ref.assetId))] };
-    return cellId === "*text" ? value : undefined;
+    return cellId === "*text" ? canvasDocumentTextValue(note.text) : undefined;
   }
   if (cellId === "*" || cellId === "*latest-image") {
     const cells = (cellId === "*latest-image" ? note.cells.slice(-1) : note.cells).flat();
@@ -107,7 +120,7 @@ export function canvasTextMinSize(cells: CanvasTextCell[][], images = false, bub
 
 /** Fall back to equal weights unless the saved vector matches the grid and stays positive. */
 export function canvasGridWeights(saved: number[] | undefined, count: number): number[] {
-  if (!saved || saved.length !== count || saved.some(weight => !(weight > 0))) return Array.from({ length: count }, () => 1);
+  if (!saved || saved.length !== count || saved.some(weight => !Number.isFinite(weight) || !(weight > 0))) return Array.from({ length: count }, () => 1);
   return saved;
 }
 
@@ -118,20 +131,22 @@ export function canvasTextCsv(cells: CanvasTextCell[][]): string {
 }
 
 export function readCanvasNote(node: Pick<CanvasNode, "payloadJson">): CanvasNotePayload {
-  const value = JSON.parse(node.payloadJson);
+  const value = readCanvasNoteSource(node);
   return {
     schema_version: 1,
     text: value.text ?? "",
     note_type: value.note_type === "document" ? "document" : value.note_type === "images" ? "images" : value.note_type === "section" ? "section" : value.note_type === "bubble" ? "bubble" : "text",
     cells: (value.note_type === "section" || value.note_type === "document" ? [] : value.cells?.length ? value.cells : [[{ ...emptyCanvasCell(), text: value.text ?? "" }]])
       .map((row: CanvasTextCell[], r: number) => row.map((cell, c) => ({ ...cell, ...(value.note_type === "images" && !cell.content_type ? { content_type: "image" } : {}), id: cell.id ?? `cell-${r}-${c}` }))),
-    member_ids: value.member_ids ?? [],
+    member_ids: [...(value.member_ids ?? [])],
+    ...(value.note_type === "section" && typeof value.section_color === "string" && /^#[0-9a-f]{6}$/i.test(value.section_color)
+      ? { section_color: value.section_color } : {}),
     ...(value.note_type === "section" && value.workflow_container === true ? { workflow_container: true } : {}),
     ...(value.note_type === "section" && value.artboard ? { artboard: { base_asset_id: typeof value.artboard.base_asset_id === "string" ? value.artboard.base_asset_id : null } } : {}),
     line_height_percent: value.line_height_percent ?? 165,
     ...(typeof value.title === "string" ? { title: value.title } : {}),
-    ...(Array.isArray(value.column_widths) ? { column_widths: value.column_widths } : {}),
-    ...(Array.isArray(value.row_heights) ? { row_heights: value.row_heights } : {}),
+    ...(Array.isArray(value.column_widths) ? { column_widths: canvasGridWeights(value.column_widths, value.cells?.[0]?.length ?? 1) } : {}),
+    ...(Array.isArray(value.row_heights) ? { row_heights: canvasGridWeights(value.row_heights, value.cells?.length || 1) } : {}),
     ...(value.note_type === "bubble" ? { bubble_tail: value.bubble_tail ?? { side: "bottom", position: 25 } } : {}),
   };
 }

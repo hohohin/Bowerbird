@@ -1,4 +1,7 @@
 import { configFromEnv, runGenerationWorker } from "./runtime.ts";
+import { startSeedanceResolutionAudit } from "./seedance-resolution-audit.ts";
+
+startSeedanceResolutionAudit();
 
 runGenerationWorker(configFromEnv(process.env)).catch((error: unknown) => {
   const code = error instanceof Error ? error.message : "worker_failed";

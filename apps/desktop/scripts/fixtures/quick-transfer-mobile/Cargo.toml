@@ -12,6 +12,7 @@ localsend = { path = "../../../src-tauri/vendor/localsend-core", features = ["ht
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1", features = ["v4"] }
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
 bytes = "1"
 sha2 = "0.10"
 if-addrs = "0.15"

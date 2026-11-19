@@ -13,7 +13,8 @@ export function templateInputValue(binding: WorkflowInput, type: "text" | "image
     return source && canvasInputValue(source, binding.cellId ?? "", canvas);
   }
   if (binding.nodeId) return nodes.find(node => node.id === binding.nodeId)?.outputs[binding.portId ?? type];
-  if (binding.assetId) return { type: "image", assetIds: [binding.assetId] };
+  if (binding.dimension && type === "text") return { type, text: binding.dimension.body };
+  if (binding.assetId) return { type: "image", assetIds: [binding.videoFrame?.assetId ?? binding.assetId] };
   if (binding.groupId) return { type: "image", assetIds: binding.assetIds ?? [] };
 }
 

@@ -6,6 +6,7 @@
 pub mod auth;
 pub mod client;
 pub mod config;
+pub(crate) mod submission;
 #[cfg(all(target_os = "macos", debug_assertions))]
 mod dev_keychain;
 pub mod entitlement;

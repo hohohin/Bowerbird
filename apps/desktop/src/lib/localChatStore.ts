@@ -1,8 +1,11 @@
 import { create } from "zustand";
+import { useShallow } from "zustand/react/shallow";
 import { listen } from "@tauri-apps/api/event";
-import { localChat, LOCAL_CHAT_UPDATED_EVENT, localChatInputError, localChatRunning, type ChatConversation, type ChatSummary, type LocalChatSendInput } from "./localChat";
+import { selectedChatOptions } from "./chatCapabilities";
+import { parseChatProvider } from "./chatProvider";
+import { localChat, LOCAL_CHAT_UPDATED_EVENT, localChatInputError, localChatRunning, type ChatCodexOptions, type ChatConversation, type ChatSummary, type LocalChatSendInput } from "./localChat";
 
-export interface LocalChatDraft { text: string; referenceAssetIds: string[] }
+export interface LocalChatDraft { text: string; referenceAssetIds: string[]; codexOptions?: ChatCodexOptions }
 const DRAFT_STORAGE = "bowerbird.localChat.drafts.v1";
 const EMPTY_DRAFT: LocalChatDraft = { text: "", referenceAssetIds: [] };
 function readDrafts(): Record<string, LocalChatDraft> {
@@ -10,7 +13,8 @@ function readDrafts(): Record<string, LocalChatDraft> {
     const parsed: unknown = JSON.parse(localStorage.getItem(DRAFT_STORAGE) || "{}");
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     return Object.fromEntries(Object.entries(parsed).filter(([, value]) => value && typeof value.text === "string"
-      && Array.isArray(value.referenceAssetIds) && value.referenceAssetIds.every((id: unknown) => typeof id === "string")));
+      && Array.isArray(value.referenceAssetIds) && value.referenceAssetIds.every((id: unknown) => typeof id === "string"))
+      .map(([id, { text, referenceAssetIds, codexOptions }]) => [id, { text, referenceAssetIds, codexOptions }]));
   } catch { return {}; }
 }
 function saveDrafts(drafts: Record<string, LocalChatDraft>) {
@@ -30,18 +34,75 @@ interface LocalChatState {
   loadProject: (projectId: string) => Promise<void>;
   loadConversation: (conversationId: string) => Promise<ChatConversation | null>;
   send: (input: Omit<LocalChatSendInput, "requestId"> & { requestId?: string }) => Promise<ChatConversation>;
-  stop: (conversationId: string) => Promise<void>;
+  stop: (conversationId: string, turnId?: string) => Promise<void>;
   recover: (conversationId: string) => Promise<void>;
   setDraft: (conversationId: string, draft: LocalChatDraft) => void;
+}
+
+interface TextUpdate {
+  conversationId: string; messageId: string; revision: number; updatedAt: number;
+  offset: number; replace: boolean; text: string; preview: string;
+}
+const missingRevision = new Map<string, number>();
+const pinned = new Map<string, number>();
+
+export function pinLocalChat(id: string) {
+  pinned.set(id, (pinned.get(id) ?? 0) + 1);
+  return () => {
+    const count = (pinned.get(id) ?? 1) - 1;
+    if (count) pinned.set(id, count);
+    else {
+      pinned.delete(id);
+      useLocalChatStore.setState(state => ({ conversations: trimConversations(state.conversations) }));
+    }
+  };
+}
+
+function trimConversations(conversations: Record<string, ChatConversation>) {
+  const completed = Object.values(conversations).filter(chat => !pinned.has(chat.id) && !localChatRunning(chat));
+  if (completed.length <= 16) return conversations;
+  const result = { ...conversations };
+  for (const oldest of completed.slice(0, completed.length - 16)) delete result[oldest.id];
+  return result;
+}
+
+function asSummary({ messages, actions, submittedTurnId, vpsHistoryStartTurnId, ...summary }: ChatConversation): ChatSummary {
+  return summary;
+}
+
+function receiveText(update: TextUpdate) {
+  const id = update.conversationId;
+  const state = useLocalChatStore.getState();
+  const chat = state.conversations[id];
+  if (chat && chat.revision >= update.revision) return;
+  const index = chat?.messages.findIndex(message => message.id === update.messageId) ?? -1;
+  if (!chat || chat.revision + 1 !== update.revision || index < 0 || chat.messages[index].text.length !== update.offset) {
+    missingRevision.set(id, Math.max(missingRevision.get(id) ?? 0, update.revision));
+    void state.loadConversation(id).catch(() => {});
+    return;
+  }
+  const messages = chat.messages.slice();
+  const previous = messages[index];
+  messages[index] = { ...previous, updatedAt: update.updatedAt, text: update.replace ? update.text : previous.text + update.text };
+  state.applyConversation({ ...chat, messages, preview: update.preview, revision: update.revision });
+}
+
+export function useProjectChatSummaries(projectId: string | null) {
+  return useLocalChatStore(useShallow(state => Object.fromEntries((projectId ? state.projectIds[projectId] ?? [] : [])
+    .map(id => [id, state.summaries[id]] as const))));
 }
 
 let eventSubscription: Promise<void> | null = null;
 /** One subscription for the application lifetime: closing a panel must not stop a reply. */
 export function ensureLocalChatEvents(): Promise<void> {
   if (!eventSubscription) {
-    eventSubscription = listen<ChatConversation>(LOCAL_CHAT_UPDATED_EVENT, event => {
-      useLocalChatStore.getState().applyConversation(event.payload);
-    }).then(() => undefined).catch(error => { eventSubscription = null; throw error; });
+    eventSubscription = (async () => {
+      const stop = await listen<ChatConversation>(LOCAL_CHAT_UPDATED_EVENT, event => {
+        useLocalChatStore.getState().applyConversation(event.payload);
+      });
+      try { await listen<TextUpdate>("local-chat://text", event => receiveText(event.payload)); }
+      catch (error) { stop(); throw error; }
+    })().catch(error => { eventSubscription = null; throw error; });
   }
   return eventSubscription;
 }
@@ -60,8 +121,11 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
     const previous = state.conversations[conversation.id];
     const summary = state.summaries[conversation.id];
     if ((previous && previous.revision >= conversation.revision) || (summary && summary.revision > conversation.revision)) return state;
-    return { conversations: { ...state.conversations, [conversation.id]: conversation },
-      summaries: { ...state.summaries, [conversation.id]: conversation },
+    const conversations = { ...state.conversations };
+    delete conversations[conversation.id];
+    conversations[conversation.id] = conversation;
+    return { conversations: trimConversations(conversations),
+      summaries: { ...state.summaries, [conversation.id]: asSummary(conversation) },
       projectIds: addProjectId(state.projectIds, conversation), errors: { ...state.errors, [conversation.id]: null } };
   }),
   loadProject: projectId => {
@@ -95,9 +159,17 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
     const request = (async () => {
       try {
         await ensureLocalChatEvents();
-        const chat = await localChat.get(conversationId);
-        if (chat) get().applyConversation(chat);
-        return chat;
+        // A gap can arrive while a previous IPC snapshot is already on its way.
+        // Repeat only for a newly observed gap during this read.
+        let target: number;
+        let chat: ChatConversation | null;
+        do {
+          target = missingRevision.get(conversationId) ?? 0;
+          chat = await localChat.get(conversationId);
+          if (chat) get().applyConversation(chat);
+        } while ((missingRevision.get(conversationId) ?? 0) > Math.max(target, get().conversations[conversationId]?.revision ?? 0));
+        missingRevision.delete(conversationId);
+        return get().conversations[conversationId] ?? chat;
       } catch (error) {
         set(state => ({ errors: { ...state.errors, [conversationId]: error } }));
         throw error;
@@ -110,7 +182,14 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
     return request;
   },
   send: async input => {
-    const key = input.conversationId || `new:${input.projectId}`;
+    // An unaccepted workflow step may replay its saved input after a desktop upgrade.
+    const provider = parseChatProvider(input.provider);
+    if (provider && provider !== input.provider) input = { ...input, provider };
+    const key = input.conversationId || JSON.stringify(
+      input.agentNodeId ? ["card", input.projectId, input.agentNodeId] :
+      input.requestId ? ["request", input.projectId, input.requestId] : ["composer", input.projectId]
+    );
+    if (!input.requestId) input = { ...input, codexOptions: selectedChatOptions(input.provider ?? "codex-local", input.codexOptions) };
     const validation = localChatInputError(input.text, input.referenceAssetIds);
     if (validation) throw new Error(validation);
     if (get().sending[key] || (input.conversationId && localChatRunning(get().summaries[input.conversationId]))) {
@@ -121,21 +200,21 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
       await ensureLocalChatEvents();
       // Retrying an uncertain IPC result must reuse its native idempotency key.
       // An accepted response clears it so a later intentional identical message is a new turn.
-      const fingerprint = JSON.stringify([input.projectId, input.conversationId ?? null, input.provider ?? "codex-local", input.text, input.referenceAssetIds, input.cardDefaults ?? null]);
+      const fingerprint = JSON.stringify([input.projectId, input.conversationId ?? null, input.agentNodeId ?? null, input.provider ?? "codex-local", input.text, input.referenceAssetIds, input.cardDefaults ?? null, input.codexOptions ?? null, input.dshSkill ?? null, input.manualCardRun ?? false]);
       const pending = pendingSubmissions.get(key);
       const requestId = input.requestId || (pending?.fingerprint === fingerprint ? pending.requestId : crypto.randomUUID());
       pendingSubmissions.set(key, { fingerprint, requestId });
       const chat = await localChat.send({ ...input, requestId });
       get().applyConversation(chat);
       pendingSubmissions.delete(key);
-      return get().conversations[chat.id] ?? chat;
+      return { ...(get().conversations[chat.id] ?? chat), submittedTurnId: chat.submittedTurnId };
     } catch (error) {
       set(state => ({ errors: { ...state.errors, [key]: error } }));
       throw error;
     } finally { set(state => ({ sending: { ...state.sending, [key]: false } })); }
   },
-  stop: async conversationId => {
-    const chat = await localChat.stop(conversationId);
+  stop: async (conversationId, turnId) => {
+    const chat = await localChat.stop(conversationId, turnId);
     if (chat) get().applyConversation(chat);
   },
   recover: async conversationId => {
@@ -144,7 +223,7 @@ export const useLocalChatStore = create<LocalChatState>((set, get) => ({
   },
   setDraft: (conversationId, draft) => {
     const drafts = { ...get().drafts };
-    if (!draft.text && !draft.referenceAssetIds.length) delete drafts[conversationId];
+    if (!draft.text && !draft.referenceAssetIds.length && !draft.codexOptions) delete drafts[conversationId];
     else drafts[conversationId] = draft;
     saveDrafts(drafts);
     set({ drafts });

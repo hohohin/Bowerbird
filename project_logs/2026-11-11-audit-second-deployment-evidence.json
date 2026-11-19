@@ -1,0 +1,283 @@
+{
+  "release": "20261111-read-deadline-and-recovery",
+  "manifestSha256": "aaef1e54b92f4a6bbd1c866ca9d0b64dac92882c8231b2517695eceb0e4d53b0",
+  "rehearsed": {
+    "sqlHash": "fcc07131709b5dd0c7551526e3e0a53fa21801d0fc5d4bd2b09d4bd7df960719",
+    "db": {
+      "at": "2026-11-11 07:05:34.577856+00",
+      "migration_86": "c0f685b388599701d802464b22df771f4d023a260a167cc349c56631f72e63c8",
+      "migration_87": null,
+      "policies": 0
+    }
+  },
+  "applied": {
+    "sqlHash": "fcc07131709b5dd0c7551526e3e0a53fa21801d0fc5d4bd2b09d4bd7df960719",
+    "db": {
+      "at": "2026-11-11 07:06:37.831976+00",
+      "migration_86": "c0f685b388599701d802464b22df771f4d023a260a167cc349c56631f72e63c8",
+      "migration_87": "fcc07131709b5dd0c7551526e3e0a53fa21801d0fc5d4bd2b09d4bd7df960719",
+      "policies": 2
+    }
+  },
+  "edge": {
+    "understand-proxy": {
+      "previousVersion": 44,
+      "version": 45,
+      "at": "2026-11-11T07:07:28.855Z",
+      "verify_jwt": true,
+      "files": {
+        "_shared/ark.ts": "b4044eec27e42737011c728c120f3b5f0cfaf3c9beff68da10e2804042436234",
+        "_shared/auth.ts": "6151f68a28ba0e0d7652279334785cdbc6f2511b84b8d47f35504c2d1114b9b6",
+        "_shared/bcoin-text.ts": "1ebbbbfff22656f412f5a484bfb279a4e526b21929f3a857713ee6291113a479",
+        "_shared/billing.ts": "a59191680406bfe7c51c9bc544ec6e27b0e5a57e56f9b58c18534a1884fb0d63",
+        "_shared/errors.ts": "50410b40d13a4f2716b60cbb9ee8126d55f0a9ba9406156ffb8570c8f54c91d5",
+        "_shared/image-metadata.ts": "13d62c49ba7486ec487c5ced91c1fa1681d64dd2fa01c4600a8ac9e0ef0fb47c",
+        "_shared/limits.ts": "7258b996d9c5be5afb855e9d13b1061047ca154b9b0cd987d03b81a52301c248",
+        "_shared/replication-speech.ts": "96e1be75448b4ecaa85c79ddb7d043c70f39091099ebea8c70c27c7b5e00a57c",
+        "_shared/replication.ts": "0abb4f2e223c69ba6dcd483239358916aa2fecfbe6bbee29cbdb61ae63e62919",
+        "_shared/text-job-upload.ts": "4d2fc53678adb09b8b6f22017b1b35eac26f7a7f8eec79781059733f8d99504f",
+        "_shared/usage.ts": "20b044f9bc774d8b2ce840f9bf0a970f066998b9ce1403e76a149747c288dc47",
+        "understand-proxy/index.ts": "16810350ec9d30c6b12beffc43143f3d71edc811832d20fad1165ae884aa0301",
+        "understand-proxy/settlement.ts": "8af35025fe2503c4519ebe9ae50b3fb83fe55c9738e25cbb6a2bfca153f438b9"
+      },
+      "unauth": 401
+    },
+    "visual-profile": {
+      "previousVersion": 21,
+      "version": 22,
+      "at": "2026-11-11T07:08:19.868Z",
+      "verify_jwt": true,
+      "files": {
+        "_shared/auth.ts": "6151f68a28ba0e0d7652279334785cdbc6f2511b84b8d47f35504c2d1114b9b6",
+        "_shared/errors.ts": "8a8fa5e9bb6ac4693f97116fc65533e096d6dccaa5504c28bc2d4b5f821076bf",
+        "_shared/feature-policy.ts": "6a091c133304be61629d5be7f0d265fef2d4f66307d18fabd9eac35f4d98942d",
+        "_shared/limits.ts": "1bc529f92d06e1604dcd79622bddf2c7e1f55af561bf736665f1550350a06703",
+        "_shared/text-job-upload.ts": "4d2fc53678adb09b8b6f22017b1b35eac26f7a7f8eec79781059733f8d99504f",
+        "_shared/usage.ts": "20b044f9bc774d8b2ce840f9bf0a970f066998b9ce1403e76a149747c288dc47",
+        "visual-profile/index.ts": "9cc3769e898f8e92b2d4a985f1528b0f13455d3099f6e01025ca3c34f6370b98"
+      },
+      "unauth": 401
+    }
+  },
+  "totalProductionFunctions": 18,
+  "checkedAt": "2026-11-11 07:09:01.225198+00",
+  "productionPolicyCases": {
+    "at": "2026-11-11T07:07:50.115Z",
+    "authenticated_http": "not exercised by this catalog/VALUES probe",
+    "changed_rows": 0,
+    "policies": [
+      {
+        "cmd": "SELECT",
+        "forced": true,
+        "permissive": "RESTRICTIVE",
+        "policyname": "understand_jobs_result_deadline",
+        "qual": "((result_text IS NULL) OR ((deleted_at IS NULL) AND (content_expires_at > statement_timestamp())))",
+        "rls": true,
+        "roles": "{authenticated}",
+        "tablename": "understand_jobs",
+        "cases": [
+          {
+            "expected": false,
+            "label": "already_deleted_with_body",
+            "visible": false
+          },
+          {
+            "expected": false,
+            "label": "deadline",
+            "visible": false
+          },
+          {
+            "expected": true,
+            "label": "fresh",
+            "visible": true
+          },
+          {
+            "expected": true,
+            "label": "null_body",
+            "visible": true
+          },
+          {
+            "expected": false,
+            "label": "overdue",
+            "visible": false
+          },
+          {
+            "expected": true,
+            "label": "tombstone",
+            "visible": true
+          }
+        ]
+      },
+      {
+        "cmd": "SELECT",
+        "forced": true,
+        "permissive": "RESTRICTIVE",
+        "policyname": "visual_profile_jobs_result_deadline",
+        "qual": "((result_text IS NULL) OR ((deleted_at IS NULL) AND (content_expires_at > statement_timestamp())))",
+        "rls": true,
+        "roles": "{authenticated}",
+        "tablename": "visual_profile_jobs",
+        "cases": [
+          {
+            "expected": false,
+            "label": "already_deleted_with_body",
+            "visible": false
+          },
+          {
+            "expected": false,
+            "label": "deadline",
+            "visible": false
+          },
+          {
+            "expected": true,
+            "label": "fresh",
+            "visible": true
+          },
+          {
+            "expected": true,
+            "label": "null_body",
+            "visible": true
+          },
+          {
+            "expected": false,
+            "label": "overdue",
+            "visible": false
+          },
+          {
+            "expected": true,
+            "label": "tombstone",
+            "visible": true
+          }
+        ]
+      }
+    ]
+  },
+  "website": {
+    "activation": {
+      "local": {
+        "static_sha256_matches": 5,
+        "three_update_manifests_unchanged": true,
+        "health": 204,
+        "account_config": true,
+        "create_without_key": 400,
+        "unauthenticated_control": 401
+      },
+      "public": {
+        "static_sha256_matches": 5,
+        "three_update_manifests_unchanged": true,
+        "health": 204,
+        "account_config": true,
+        "create_without_key": 400,
+        "unauthenticated_control": 401
+      },
+      "previous": "/opt/bowerbird/website-releases/20261111-engineering-audit",
+      "active": "/opt/bowerbird/website-releases/20261111-read-deadline-and-recovery",
+      "pid": 1755003,
+      "preserved_files": 84,
+      "active_at": "2026-11-11T07:09:10.311560+00:00"
+    },
+    "previousPublicFiles": {
+      "dist/app-v2.bundle.js": "0e7736f26babdd5e0d2e6598883c07f9d8445432f21876aa473715d19b0d8b46",
+      "dist/app.bundle.js": "2292a6ec5ae0a7354c8f18b374c98f41169a170a8b089ac59f1b8ef9ee2921b3",
+      "dist/index-v2.html": "5ad09eeb6fe3833f3a252fa79ce504a73dfcffddefeba046480a88ee9ed80601",
+      "dist/index.html": "06dd6f622d8f1f17d640818fc96d4ebb708b58ffa768cf5279ade3765234b509",
+      "dist/user-error.js": "394cf9d393427c3f32847f6dd9276a42991172a9092f7afd51a13ab3188c0589"
+    },
+    "publicFiles": {
+      "dist/app-v2.bundle.js": "6a2707c4db252bd0a08a8b8baed6da7903c995f9665c754a958d0ed55a5347d7",
+      "dist/app.bundle.js": "d05fa029667cd2cbd2f7eb4cfce0310d58f3e47a07fc4d03f224adbb8dd711d1",
+      "dist/index-v2.html": "548348c8df4c042e066f572d7e1b030298aabed74baa8c4417ff025b9e29c7b0",
+      "dist/index.html": "f9acca7b02de45ac952cadfb7d56aed08468dc3c04e6ba980087c65cf09ea968",
+      "dist/user-error.js": "dbb525cd3dde7e4e6a609cc8650da6c80112dd08dd86e5a9c49161f4fa3941c8"
+    },
+    "sdkSha256": "04b957f2563a40dcb02b1d9d6f7a7a23973bf8ebe4c1435be5feaf24bff91134",
+    "channelManifests": {
+      "windows-x86_64": {
+        "sha256": "9e10068bedcd655431f201dbc811d212d6acf270026cbd8f58fe81f36950831e",
+        "version": "26.11.1001"
+      },
+      "darwin-x86_64": {
+        "sha256": "bf6780cfd605fb2b30f586d37de2c797bc215cc84cf7c52b559c63dd17a9c41e",
+        "version": "26.10.1501"
+      },
+      "darwin-aarch64": {
+        "sha256": "0f186688fba49462cbb2653e304cd3f53a49c6653eef04120bae79e984e0156a",
+        "version": "26.10.801"
+      }
+    },
+    "browser": {
+      "completed_at": "2026-11-11T07:11:12.965123+00:00",
+      "public_capture_at": "2026-11-11T07:09:53.119Z",
+      "prior_capture_at": "2026-11-11T07:05:31.174Z",
+      "published_site_files_verified": 5,
+      "sdk_unchanged": true,
+      "unchanged_public_channel_manifests": true,
+      "channels": {
+        "windows-x86_64": {
+          "version": "26.11.1001",
+          "sha256": "9e10068bedcd655431f201dbc811d212d6acf270026cbd8f58fe81f36950831e"
+        },
+        "darwin-x86_64": {
+          "version": "26.10.1501",
+          "sha256": "bf6780cfd605fb2b30f586d37de2c797bc215cc84cf7c52b559c63dd17a9c41e"
+        },
+        "darwin-aarch64": {
+          "version": "26.10.801",
+          "sha256": "0f186688fba49462cbb2653e304cd3f53a49c6653eef04120bae79e984e0156a"
+        }
+      },
+      "suite": "real local Chrome loaded publicly received application files, isolated owners/browser data, intercepted fixture Auth and model responses",
+      "cases": [
+        "previously accepted original transient 404: exactly one create before explicit new intent",
+        "explicit new intent: two distinct keys, stale tab cannot create third",
+        "archived original remains queryable, refresh recovers successor",
+        "corrupt artifact refused before receipt, correct image persisted before ack",
+        "session refresh, signout, per-owner visibility isolated"
+      ],
+      "bundles": [
+        {
+          "file": "app.bundle.js",
+          "sha256": "d05fa029667cd2cbd2f7eb4cfce0310d58f3e47a07fc4d03f224adbb8dd711d1",
+          "result": "pass",
+          "log": "account-generation-legacy-ui.log",
+          "log_sha256": "305a1a100c64741fd98a77e999093003cfd32f1fbebfffad9e253e261daceb05"
+        },
+        {
+          "file": "app-v2.bundle.js",
+          "sha256": "6a2707c4db252bd0a08a8b8baed6da7903c995f9665c754a958d0ed55a5347d7",
+          "result": "pass",
+          "log": "account-generation-ui.log",
+          "log_sha256": "305a1a100c64741fd98a77e999093003cfd32f1fbebfffad9e253e261daceb05"
+        }
+      ],
+      "production_model_calls": 0,
+      "production_writes_by_checker": 0
+    }
+  },
+  "registeredProductionFixtures": {
+    "at": "2026-11-11 07:07:17.664178+00",
+    "dedicated_accounts": 0,
+    "expired_tombstones": 0,
+    "expired_uncleared": 0,
+    "live": 0,
+    "understand_succeeded": 0,
+    "visual_succeeded": 0,
+    "previous_temporary_auth_closed": true,
+    "explicit_owner_token_available": false
+  },
+  "productionAuthenticatedResultRetrieval": "pending dedicated account with an existing synthetic terminal job",
+  "productionCodeLocalHttp": {
+    "environment": "Loopback Deno with isolated Auth and PostgREST fixtures",
+    "cases": [
+      "PASS offline production readback Edge HTTP understand-proxy fresh 200",
+      "PASS offline production readback Edge HTTP understand-proxy expired-uncleared 200",
+      "PASS offline production readback Edge HTTP understand-proxy expired-tombstone 200",
+      "PASS offline production readback Edge HTTP understand-proxy other-account 404",
+      "PASS offline production readback Edge HTTP visual-profile fresh 200",
+      "PASS offline production readback Edge HTTP visual-profile expired-uncleared 200",
+      "PASS offline production readback Edge HTTP visual-profile expired-tombstone 200",
+      "PASS offline production readback Edge HTTP visual-profile other-account 404"
+    ],
+    "logSha256": "379ffef73522140fc9cb809b3fd5f294fc0a841a348644e4b20ef382fcf177a2"
+  }
+}

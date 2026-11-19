@@ -183,7 +183,7 @@ pub(crate) struct WebPageState {
     /// Channel on which server events are emitted to the application.
     pub(crate) event_tx: mpsc::Sender<WebSendEvent>,
 
-    /// Download sessions, keyed by session ID (the client's IP address).
+    /// Download sessions, keyed by unpredictable session ID.
     pub(crate) sessions: Mutex<HashMap<String, WebSendSession>>,
 
     /// Maps client IPs to the number of failed PIN attempts.
@@ -280,9 +280,13 @@ pub(crate) async fn prepare_download(
         .map(str::to_string);
 
     // One session per IP; a new request replaces any previous session of this client.
-    let session_id = client_info.ip.to_string();
+    let session_id = uuid::Uuid::new_v4().to_string();
     {
         let mut sessions = web.sessions.lock().await;
+        sessions.retain(|_, session| session.ip != client_info.ip);
+        if sessions.len() >= 200 {
+            return Err(AppError::Status(StatusCode::TOO_MANY_REQUESTS));
+        }
         sessions.insert(
             session_id.clone(),
             WebSendSession {
@@ -399,7 +403,7 @@ pub(crate) async fn download(
     );
     headers.insert(
         http::header::CONTENT_DISPOSITION,
-        http::HeaderValue::from_str(&format!("attachment; filename=\"{encoded_file_name}\""))
+        http::HeaderValue::from_str(&format!("attachment; filename=\"{encoded_file_name}\"; filename*=UTF-8''{encoded_file_name}"))
             .map_err(|_| AppError::Status(StatusCode::INTERNAL_SERVER_ERROR))?,
     );
     headers.insert(http::header::CONTENT_LENGTH, http::HeaderValue::from(size));

@@ -12,7 +12,7 @@ use crate::core::ingest;
 use crate::core::paths::LibraryPaths;
 use crate::core::projects::{
     refresh_workspace_assets, ActiveProjectContext, Project, ProjectCreateResult,
-    ProjectDeleteImpact, ProjectDeleteMode, ProjectDeleteResult, ProjectRefreshResult,
+    ProjectAssetMoveResult, ProjectDeleteImpact, ProjectDeleteMode, ProjectDeleteResult, ProjectRefreshResult,
 };
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
@@ -146,6 +146,13 @@ pub async fn create_blank_project(
 }
 
 #[tauri::command]
+pub async fn project_covers(db: State<'_, Arc<Database>>) -> AppResult<HashMap<String, crate::core::projects::ProjectCover>> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || db.project_covers())
+        .await.map_err(|error| AppError::Other(error.to_string()))?
+}
+
+#[tauri::command]
 pub async fn list_projects(db: State<'_, Arc<Database>>) -> Result<Vec<Project>, AppError> {
     let db = db.inner().clone();
     tokio::task::spawn_blocking(move || db.list_projects())
@@ -231,15 +238,33 @@ pub async fn add_assets_to_project(
 }
 
 #[tauri::command]
+pub async fn move_assets_to_project(
+    app: AppHandle,
+    db: State<'_, Arc<Database>>,
+    source_project_id: Option<String>,
+    target_project_id: String,
+    asset_ids: Vec<String>,
+) -> Result<ProjectAssetMoveResult, AppError> {
+    let db = db.inner().clone();
+    let result = tokio::task::spawn_blocking(move || {
+        db.move_assets_to_project(source_project_id.as_deref(), &target_project_id, &asset_ids)
+    }).await.map_err(|error| AppError::Other(error.to_string()))??;
+    let _ = app.emit("projects://changed", ());
+    let _ = app.emit("library://assets-changed", ());
+    Ok(result)
+}
+
+#[tauri::command]
 pub async fn remove_assets_from_project(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
     project_id: String,
     asset_ids: Vec<String>,
+    remove_canvas_instances: Option<bool>,
 ) -> Result<usize, AppError> {
     let db = db.inner().clone();
     let removed =
-        tokio::task::spawn_blocking(move || db.remove_assets_from_project(&project_id, &asset_ids))
+        tokio::task::spawn_blocking(move || db.remove_assets_from_project(&project_id, &asset_ids, remove_canvas_instances.unwrap_or(false)))
             .await
             .map_err(|error| AppError::Other(error.to_string()))??;
     let _ = app.emit("projects://changed", ());
@@ -265,9 +290,8 @@ pub async fn delete_project(
     let db = db.inner().clone();
     let id_for_delete = project_id.clone();
     // Do not abandon results while a native ingest is still writing files/projections.
-    let _ingest = if discard_pending_results.is_some() {
-        Some(super::cloud_agent::RESULT_INGEST_GATE.try_write().map_err(|_| AppError::Other("Agent 结果正在入库，请稍后重试删除".into()))?)
-    } else { None };
+    // Serialize with an in-flight result write instead of rejecting the user's deletion.
+    let _ingest = super::cloud_agent::RESULT_INGEST_GATE.write().await;
     let result = tokio::task::spawn_blocking(move || {
         let _ingest = _ingest;
         db.delete_project_managed(&paths, &id_for_delete,

@@ -19,8 +19,8 @@ try {
   await page.mouse.move(1400, 300, { steps: 12 }); await page.mouse.up();
   const trigger = page.locator('.workflow-card.is-trigger'); await trigger.waitFor();
   assert.equal(await trigger.locator('textarea').count(), 0);
-  assert.equal(await trigger.getByRole('button', { name: '输入：完成触发', exact: true }).count(), 1);
-  assert.equal(await trigger.getByRole('spinbutton', { name: '剩余触发次数' }).inputValue(), '1');
+  assert.equal(await trigger.getByRole('button', { name: '输入：完成触发', exact: true }).count(), 0);
+  assert.equal(await trigger.getByRole('spinbutton', { name: '剩余触发次数' }).count(), 0);
   const progress = page.getByRole('tooltip');
   const hoverTrigger = async () => {
     await page.mouse.move(5, 5);
@@ -49,7 +49,7 @@ try {
   await page.evaluate(() => document.dispatchEvent(new PointerEvent('pointerleave')));
   await progress.waitFor({ state: 'hidden' });
   await placeWorkflowCard(page, '新增指令卡片');
-  const instruction = page.locator('.workflow-card.is-instruction'); await instruction.getByLabel('指令功能').selectOption('reuse');
+  const instruction = page.locator('.workflow-card.is-instruction'); await instruction.getByLabel('指令功能').click(); await page.getByRole('option', { name: '复用生成提示词', exact: true }).click();
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const c = canvasWorkflowController('p');
@@ -73,6 +73,7 @@ try {
   await page.evaluate(() => window.save()); await page.reload(); await trigger.waitFor();
   assert.equal(await page.locator('[data-workflow-signal-link]').count(), 1);
   await instruction.getByRole('button', { name: '断开触发器连接', exact: true }).click({ button: 'right' });
+  await page.getByRole('menu', { name: '选择要断开的连线' }).getByRole('menuitem').click();
   await page.waitForFunction(() => !document.querySelector('[data-workflow-signal-link]'));
   const keyTool = await page.getByRole('button', { name: '发条触发器', exact: true }).boundingBox();
   const cardHeader = await instruction.locator('header strong').boundingBox();
@@ -108,11 +109,17 @@ try {
   await instruction.getByRole('button', { name: '断开触发器连接', exact: true }).waitFor();
   assert.equal(await instruction.getByRole('button', { name: '上发条，运行工作流', exact: true }).count(), 0);
   await instruction.getByRole('button', { name: '断开触发器连接', exact: true }).click({ button: 'right' });
+  await page.getByRole('menu', { name: '选择要断开的连线' }).getByRole('menuitem').click();
   await page.evaluate(async () => {
     const { api } = await import('/src/lib/api.ts');
     const { CanvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const { newWorkflowNode, workflowOrder } = await import('/src/lib/canvasWorkflow.ts');
     const { useStore } = await import('/src/store.ts');
+    useStore.setState({ codexHealth: { ok: true },
+      cloudAuth: { logged_in: true, user_id: 'tester', cloud_available: true },
+      cloudEntitlement: { user_id: 'tester', tier: 'pro', offline_state: 'fresh', is_test_account: true,
+        balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_cloud: true, can_use_byo: true }, generation_services: [] } });
+
     const make = (id, kind) => ({ ...newWorkflowNode(kind, 0, 0, 'codex'), id });
     const sw = make('switch', 'trigger'), other = make('other', 'trigger');
     const a = { ...make('a', 'instruction'), action: 'reuse', inputs: { image: [{ assetId: 'existing' }], signal: [{ nodeId: 'switch', portId: 'signal' }, { nodeId: 'other', portId: 'signal' }] } };
@@ -141,3 +148,4 @@ try {
   });
   console.log('trigger: hover/focus dismissal, drag/removal/viewport cleanup, creation, direct card attachment, dedup, execution, persistence, disconnect, fanout ordering, failure, independent runs and native text relay passed');
 } finally { await browser.close(); await server.close(); }
+

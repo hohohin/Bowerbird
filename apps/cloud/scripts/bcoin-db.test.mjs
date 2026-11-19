@@ -118,6 +118,21 @@ try {
  const trial=(await q('select start_pro_feature_trial($1)::text e',[trialUser]))[0].e;
  assert.equal((await q('select start_pro_feature_trial($1)::text e',[trialUser]))[0].e,trial);
  assert.equal((await q('select count(*)::int n from credit_lots where user_id=$1',[trialUser]))[0].n,0);
- console.log('Bcoin catalogue, legacy migration, vouchers, classification, payment replay and refund checks passed');
+ const catalogueBefore55=await q('select * from service_costs order by service');
+ await migrate('0090');
+ assert.deepEqual(await q("select * from service_costs where service not like 'image_seedream55%' order by service"),catalogueBefore55);
+ for (const [service,size,cost] of [['image_seedream55','2K',20],['image_seedream55_1k','1K',10],['image_seedream55_15k','1.5K',10]]) {
+   for (const refs of [0,1,3,10]) {
+     const value=await quote(service,refs);
+     assert.equal(value.output_size,size);
+     assert.equal(value.credits,cost+Math.max(0,refs-1));
+   }
+   const key='seedream55-'+service;
+   const held=(await q('select * from credit_hold_bcoin_image($1,$2,$3,0,null)',[user,key,service]))[0];
+   assert.equal(held.estimated_amount,cost);
+   assert.equal((await q('select * from credit_hold_bcoin_image($1,$2,$3,0,null)',[user,key,service]))[0].hold_id,held.hold_id);
+   await q("select credit_rollback($1,'offline-test')",[held.hold_id]);
+ }
+ console.log('Bcoin catalogue, legacy migration, vouchers, classification, payment replay, refund and Seedream 5.5 checks passed');
 } finally { await db.close(); }
 function awaitOrderMissing(){return 'cccccccc-cccc-4ccc-cccc-cccccccccccc';}

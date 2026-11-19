@@ -7,7 +7,9 @@
   },
   "bundle": {
     "macOS": {
-      "hardenedRuntime": false,
+      "hardenedRuntime": true,
+      "entitlements": "Entitlements.plist",
+      "infoPlist": "Info.plist",
       "dmg": {
         "background": "../../../macOS/installer/background.png",
         "windowSize": { "width": 660, "height": 400 },

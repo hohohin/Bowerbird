@@ -1,4 +1,4 @@
-import { useId, useState, type ReactNode } from "react";
+import { useId, useState } from "react";
 import { Check, Coins, Sparkles } from "lucide-react";
 import type { EntitlementSnapshot } from "../lib/types";
 import { useStore } from "../store";
@@ -14,16 +14,15 @@ const PLANS = [
 const PLAN_FEATURES = [
   { name: "素材管理与普通画布", free: "支持", pro: "支持" },
   { name: "Cloud 服务", free: "按量扣 Bcoin", pro: "按量扣 Bcoin" },
-  { name: "自有订阅接入", free: "不支持", pro: "支持" },
-  { name: "工作流卡片", free: "不支持", pro: "支持" },
+  { name: "接入自己的 ChatGPT / 即梦订阅", free: "不支持", pro: "支持" },
+  { name: "用工作流卡片串联创作步骤", free: "不支持", pro: "支持" },
   { name: "本地生成", free: "不支持", pro: "支持" },
 ] as const;
 const formatNumber = (value: number) => value.toLocaleString("zh-CN");
 
-export function AccountBilling({ loggedIn, entitlement, trialAction }: {
+export function AccountBilling({ loggedIn, entitlement }: {
   loggedIn: boolean;
   entitlement: EntitlementSnapshot | null;
-  trialAction?: ReactNode;
 }) {
   const id = useId();
   const [plan, setPlan] = useState<"monthly" | "yearly">("monthly");
@@ -71,17 +70,14 @@ export function AccountBilling({ loggedIn, entitlement, trialAction }: {
             </label>
           ))}
         </fieldset>
-        <p className="account-billing-note">新注册账号赠 200 Bcoin；新订阅或续费 Pro，每订阅月赠 800 Bcoin，年付分 12 次发放。赠送积分到账后 30 天有效。</p>
         <div className="account-billing-checkout">
           <div className="account-billing-summary" aria-live="polite"><span>Pro {selectedPlan.title}</span><strong>¥{selectedPlan.price}</strong></div>
-          <button type="button" className="app-modal-button" disabled={!checkout.enabled || checkout.busy || checkout.restoring || checkout.recoveryFailed || current?.tier === "studio"} onClick={() => void checkout.begin(`pro_${plan}`)} aria-describedby={`${id}-plan-payment`}>{checkout.busy ? "正在处理…" : checkout.enabled ? "微信支付" : "购买暂未开放"}</button>
+          <button type="button" className="app-modal-button" disabled={!checkout.enabled || checkout.busy || checkout.restoring || checkout.recoveryFailed || current?.tier === "studio"} onClick={() => void checkout.begin(`pro_${plan}`)} aria-describedby={`${id}-plan-payment`}>{checkout.busy ? "正在处理…" : !loggedIn ? "登录后购买" : checkout.enabled ? `微信支付 ¥${selectedPlan.price}` : "购买暂未开放"}</button>
         </div>
         <p id={`${id}-plan-payment`} className="account-billing-note">
           {current?.tier === "studio" && "当前 Studio 权益继续保留。"}
-          {!loggedIn && "登录后可查看账号权益。"}
-          {checkout.enabled ? "一次购买对应所选周期，不自动扣款。" : "微信支付尚未开放。已有兑换码可在账号管理中兑换。"}
+          {!loggedIn ? "登录后可购买 Pro。" : checkout.enabled ? "一次购买对应所选周期，不自动扣款。" : "微信支付尚未开放。已有兑换码可在账号管理中兑换。"}
         </p>
-        {trialAction && <div className="account-billing-trial">{trialAction}</div>}
       </section>
 
       <section aria-label="Bcoin 充值" className="settings-card account-billing-section">
@@ -118,11 +114,20 @@ export function AccountBilling({ loggedIn, entitlement, trialAction }: {
             <span>支付 <strong>{amount === null ? "—" : `¥${formatNumber(amount)}`}</strong></span>
             <span>到账 <output aria-label="充值到账 Bcoin">{amount === null ? "—" : formatNumber(amount * 20)}</output> Bcoin</span>
           </div>
-          <button type="button" className="app-modal-button" disabled={!checkout.enabled || checkout.busy || checkout.restoring || checkout.recoveryFailed || amount === null} onClick={() => void checkout.begin(topup === "custom" ? "bcoin_custom" : `bcoin_${topup * 20}`, topup === "custom" ? amount! : undefined)} aria-describedby={`${id}-topup-payment`}>{checkout.busy ? "正在处理…" : checkout.enabled ? "微信充值" : "充值暂未开放"}</button>
+          <button type="button" className="app-modal-button" disabled={!checkout.enabled || checkout.busy || checkout.restoring || checkout.recoveryFailed || amount === null} onClick={() => void checkout.begin(topup === "custom" ? "bcoin_custom" : `bcoin_${topup * 20}`, topup === "custom" ? amount! : undefined)} aria-describedby={`${id}-topup-payment`}>{checkout.busy ? "正在处理…" : !loggedIn ? "登录后充值" : checkout.enabled ? amount === null ? "请输入充值金额" : `微信充值 ¥${formatNumber(amount)}` : "充值暂未开放"}</button>
         </div>
-        {!checkout.enabled && <p id={`${id}-topup-payment`} className="account-billing-note">{!loggedIn && "登录后可查看账号余额。"}微信支付尚未开放，当前可查看充值金额与到账 Bcoin。</p>}
+        {!checkout.enabled && <p id={`${id}-topup-payment`} className="account-billing-note">{loggedIn ? "微信充值暂不可用。" : "登录后可使用微信充值。"}</p>}
       </section>
-      {checkout.recoveryFailed ? <button className="app-modal-button" disabled={checkout.busy} onClick={() => void checkout.query()}>重试查询订单</button> : checkout.hasAttempt && <button className="app-modal-button" disabled={checkout.busy || checkout.restoring} onClick={() => { checkout.setOpen(true); void checkout.query(); }}>查看待支付订单</button>}
+      {checkout.recoveryFailed && <div role="status">
+        {(checkout.error || checkout.hasAttempt || checkout.enabled) && <p className="account-billing-note">
+          {checkout.error || "暂时无法确认是否有待支付订单。若已付款，请先查询支付结果。"}
+        </p>}
+        <button className="app-modal-button" disabled={checkout.busy} onClick={() => void checkout.query()}>
+          {checkout.busy ? "查询中…" : checkout.hasAttempt || checkout.enabled || checkout.error ? "重试查询订单" : "查询待支付订单"}
+        </button>
+      </div>}
+      {!checkout.recoveryFailed && checkout.hasAttempt && <button className="app-modal-button" disabled={checkout.busy || checkout.restoring}
+        onClick={() => { checkout.setOpen(true); void checkout.query(); }}>查看待支付订单</button>}
       {checkout.open && <CheckoutDialog order={checkout.order} account={auth?.display_name || auth?.email || auth?.user_id || ""} busy={checkout.busy} error={checkout.error} onClose={() => checkout.setOpen(false)} onQuery={() => void checkout.query()} onRetry={() => void checkout.begin(`pro_${plan}`)} />}
     </div>
   );

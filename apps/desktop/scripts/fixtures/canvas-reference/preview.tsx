@@ -1,3 +1,6 @@
+import { CaptionRing } from "../../../src/components/creation/CaptionRing";
+import { FileTaskStatusPanel } from "../../../src/components/FileTaskStatus";
+import { installDeletionTaskMock } from "../fileTaskMock";
 import { installCatalogPagingMock } from "../catalogPagingMock";
 import { installMediaImportMock } from "../mediaImportMock";
 import { FileDropImport } from "../../../src/components/FileDropImport";
@@ -267,6 +270,8 @@ w.__TAURI_INTERNALS__ = {
       return null;
     }
     if (command === "list_projects") return explorer ? [project, { ...project, id: "q", name: "另一个项目" }] : [project];
+    if (command === "project_canvas_visible_nodes") return structuredClone(snapshot.nodes.filter((node: any) =>
+      node.projectId === args.projectId && node.hiddenAt == null && args.nodeIds.includes(node.id)));
     if (command === "project_canvas_get") return args.projectId === "q"
       ? { ...structuredClone(snapshot), canvas: { ...canvas, projectId: "q" }, nodes: [], edges: [], groups: [], groupItems: [], threads: [], view: null }
       : structuredClone(snapshot);
@@ -346,15 +351,33 @@ w.__TAURI_INTERNALS__ = {
       w.emitAssetsChanged();
       return null;
     }
-    if (command === "preview_asset_originals") return assets.filter(asset => args.assetIds.includes(asset.id)).map(asset => ({ asset_id: asset.id, name: asset.name, path: `/synthetic/${asset.id}.png`, fingerprint: "fixture-original" }));
+    if (command === "preview_asset_originals") return assets.filter(asset => args.assetIds.includes(asset.id)).map(asset => ({ asset_id: asset.id, name: asset.name, path: `/synthetic/${asset.id}.png`, fingerprint: "fixture-original", missing: w.missingOriginalIds?.includes(asset.id) ?? false }));
     if (command === "trash_asset_original") {
       if (w.failAssetDelete) throw "模拟删除失败";
       const asset = assets.find(asset => asset.id === args.original.asset_id);
       if (!asset) throw "素材已不存在";
       Object.assign(asset, { library_hidden: true });
+      w.missingOriginalIds = [...new Set([...(w.missingOriginalIds ?? []), asset.id])];
+      w.removedOriginalIds = [...new Set([...(w.removedOriginalIds ?? []), asset.id])];
+      for (const prompt of snapshot.nodes.filter((node: any) => node.kind === "prompt" && JSON.parse(node.payloadJson).job_id)) {
+        const outputs = snapshot.edges.filter((edge: any) => edge.fromNodeId === prompt.id && edge.kind === "produced")
+          .map((edge: any) => snapshot.nodes.find((node: any) => node.id === edge.toNodeId))
+          .filter((node: any) => node?.kind === "asset" && node.role === "output");
+        if (outputs.some((node: any) => node.assetId === asset.id)
+          && !outputs.some((node: any) => !w.removedOriginalIds.includes(node.assetId))) prompt.hiddenAt = 20;
+      }
+      for (const node of snapshot.nodes) if (node.assetId === asset.id) node.hiddenAt = 20;
       useStore.setState({ assets: assets.filter((asset: any) => !asset.library_hidden) as any });
       w.emitAssetsChanged();
       return null;
+    }
+    if (command === "remove_assets_from_project") {
+      if (w.failAssetDelete) throw "模拟删除失败";
+      if (args.removeCanvasInstances) {
+        for (const node of snapshot.nodes) if (node.projectId === args.projectId && args.assetIds.includes(node.assetId)) node.hiddenAt = 20;
+      }
+      w.emitAssetsChanged();
+      return args.assetIds.length;
     }
     if (command === "delete_asset_with_mode") {
       if (w.failAssetDelete) throw "模拟删除失败";
@@ -449,6 +472,7 @@ w.__TAURI_INTERNALS__ = {
       return canvas;
     }
     if (command === "list_generation_groups") return {};
+    if (command === "project_covers") return {};
     if ((sourceLibrary || localFiles) && command === "list_library_view") {
       const filter = args.filter ?? {};
       let visible = assets.filter((asset: any) => !asset.library_hidden);
@@ -476,6 +500,7 @@ w.__TAURI_INTERNALS__ = {
     if (sourceLibrary && command === "count_assets") return assets.filter((asset: any) => !asset.library_hidden).length;
     if (command === "material_catalog") return { tags: [], collections: [], prompts: [] };
     if (command === "material_catalog_assets") return canvasLibrary ? assets.filter((asset: any) => !asset.library_hidden) : [];
+    if (command === "folder_connections" || command === "connection_entries") return [];
     if (command === "count_assets") return 0;
     if (command.startsWith("list_")) return [];
     return null;
@@ -511,10 +536,11 @@ function Fixture() {
       <Toolbar localFilesOpen={folderMode} canvasMode={toolbarCanvasMode} onCanvasModeChange={setToolbarCanvasMode} onCreateCreative={() => {}} onRefresh={async () => {}} />
       <div className="flex min-h-0 flex-1">{canvas}</div>
     </div> : explorer ? <ExploreWorkspace url="https://www.pinterest.com/" open={exploring} onClose={() => setExploring(false)}>{canvas}</ExploreWorkspace> : canvas}
-    <AssetContextMenu /><ImageAnnotator /><DraftEditor /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
+    <FileTaskStatusPanel /><AssetContextMenu /><CaptionRing /><ImageAnnotator /><ToastViewport /><VisualProfileDialog />{settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} />}
   </div>;
 }
 installCatalogPagingMock(window);
 if (mediaImport) installMediaImportMock(w, assets);
+installDeletionTaskMock();
 createRoot(document.getElementById("root")!).render(new URLSearchParams(location.search).has("strict")
   ? <React.StrictMode>{detailRoute ? <App /> : <Fixture />}</React.StrictMode> : detailRoute ? <App /> : <Fixture />);

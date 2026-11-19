@@ -39,6 +39,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
 quick-xml = "=0.41.0"
+calamine = { version = "=0.31.0", features = ["dates"] }
+csv = "=1.4.0"
+encoding_rs = "0.8"
 thiserror = "1"
 anyhow = "1"
 tracing = "0.1"
@@ -48,6 +51,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 futures-util = "0.3"
+tokio-tungstenite = "0.24"
 
 # SQLite + FTS5 + 迁移
 #   rusqlite bundled 自带 SQLite（libsqlite3-sys 0.30 bundled 模式默认启用 FTS5/JSON1）；
@@ -106,6 +110,7 @@ chrono = { version = "0.4", features = ["serde"] }
 ndarray = "0.17"
 ort = { version = "2.0.0-rc.13", default-features = false, features = ["ndarray", "load-dynamic"] }
 sha2 = "0.10"
+ring = "0.17"
 tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 keyring = { version = "3", features = [
   "apple-native",

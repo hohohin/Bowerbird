@@ -6,11 +6,23 @@ import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
 const baseline = process.argv.includes('--before');
+const native = process.argv.includes('--webview2');
 const root = process.cwd(), frozen = path.join(root, '.tmp/canvas-interaction-performance-before/src'), live = path.join(root, 'src');
 const out = '.tmp/canvas-interaction-performance'; await mkdir(out, { recursive: true });
 const slash = value => value.replaceAll('\\', '/');
 const renderedSourceHashes = {};
-const server = await createServer({ configFile: false, root, cacheDir: '.tmp/canvas-interaction-performance-vite', plugins: [{
+// The isolated Tauri host owns a read-only IPC bridge. Test modules and the prebundled
+// Tauri JS client use a distinct mock bridge, exactly as in the Chrome fixture.
+const bridge = { __TAURI_INTERNALS__: '__CANVAS_TEST_IPC__', __TAURI_EVENT_PLUGIN_INTERNALS__: '__CANVAS_TEST_EVENTS__' };
+const server = await createServer({ root, cacheDir: '.tmp/canvas-interaction-performance-vite' + (native ? '-native' : ''),
+  optimizeDeps: { entries: ['scripts/fixtures/canvas-interaction-performance/preview.html'], ...(native ? { esbuildOptions: {
+    define: Object.fromEntries(Object.entries(bridge).map(([a,b]) => ['window.' + a, 'window.' + b])),
+  } } : {}) }, plugins: [{
+  name: 'isolated-canvas-ipc', enforce: 'pre', transform(code, id) {
+    if (native && !id.includes('node_modules') && /\.[jt]sx?$/.test(id) && code.includes('__TAURI_'))
+      return code.replace(/__TAURI_INTERNALS__|__TAURI_EVENT_PLUGIN_INTERNALS__/g, key => bridge[key]);
+  },
+}, {
   name: 'interaction-instrumentation', enforce: 'pre',
   resolveId(source, importer) {
     if (!baseline || !importer || !source.startsWith('.')) return;
@@ -19,6 +31,8 @@ const server = await createServer({ configFile: false, root, cacheDir: '.tmp/can
     if (target.startsWith(path.dirname(frozen) + path.sep) && !target.startsWith(frozen + path.sep)) return this.resolve(slash(path.join(root, path.relative(path.dirname(frozen), target))), importer, { skipSelf: true });
   },
   transform(code, id) {
+    if (slash(id).endsWith('/canvasDragPreview.ts')) renderedSourceHashes.dragPreview = createHash('sha256').update(code).digest('hex');
+    if (slash(id).endsWith('/canvasPaintWindow.ts')) renderedSourceHashes.paintWindow = createHash('sha256').update(code).digest('hex');
     const kind = /\/CanvasWorkspace\.tsx$/.test(slash(id)) ? 'workspace' : /\/CanvasWorkflowLayer\.tsx$/.test(slash(id)) ? 'workflow' : null;
     if (!kind) return;
     renderedSourceHashes[kind] = createHash('sha256').update(code).digest('hex');
@@ -28,8 +42,10 @@ const server = await createServer({ configFile: false, root, cacheDir: '.tmp/can
   },
 }], server: { host: '127.0.0.1', port: 1628, strictPort: true, hmr: false, watch: null } });
 await server.listen();
-const browser = await chromium.launch({ channel: 'chrome', headless: true });
-const page = await browser.newPage({ viewport: { width: 1800, height: 1200 } });
+const host = native ? await (await import('./fixtures/canvas-interaction-performance/webview2.mjs')).openWebView(server.resolvedUrls.local[0]) : null;
+const browser = host?.browser ?? await chromium.launch({ channel: 'chrome', headless: true });
+const page = host?.page ?? await browser.newPage({ viewport: { width: 1800, height: 1200 } });
+if (native) await page.setViewportSize({ width: 1800, height: 1200 });
 page.setDefaultTimeout(15000);
 const errors = []; page.on('pageerror', error => errors.push(error.message));
 const material = page.locator('[data-canvas-node-id="material-0"]');
@@ -79,7 +95,51 @@ async function dragBurst(locator, dx, dy, cancel = false) {
   await locator.dispatchEvent(cancel ? 'pointercancel' : 'pointerup', { pointerId: 1, pointerType: 'mouse', clientX: x + dx, clientY: y + dy });
   await page.mouse.up(); await frame();
 }
-try {
+async function checkTyping() {
+  await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/canvas-interaction-performance/preview.html?typing');
+  const client = await page.context().newCDPSession(page);
+  const fields = [
+    ['content', content.locator('textarea').first()],
+    ['generation', workflow.locator('.ProseMirror')],
+    ['instruction', page.locator('[data-workflow-card="workflow-1"] textarea')],
+    ['composer', page.locator('.creation-dock .ProseMirror')],
+  ];
+  for (const [label, field] of fields) {
+    await field.focus();
+    await page.keyboard.press('End');
+    const read = () => field.evaluate(el => el.value ?? el.textContent);
+    const before = await read();
+    await resetStats();
+    await field.evaluate(el => {
+      window.inputDelays = [];
+      el.addEventListener('input', event => {
+        const start = event.timeStamp;
+        requestAnimationFrame(() => setTimeout(() => window.inputDelays.push(Math.round(performance.now() - start)), 0));
+      });
+    });
+    await page.keyboard.type('abcde', { delay: 25 });
+    await client.send('Input.imeSetComposition', { text: 'huaban', selectionStart: 6, selectionEnd: 6 });
+    await client.send('Input.insertText', { text: '画板' });
+    const expected = before + 'abcde画板';
+    assert.equal(await read(), expected, label + ' keeps the composed text and caret');
+    await frame();
+    await field.blur();
+    if (label === 'content') {
+      await page.waitForFunction(expected => JSON.parse(window.snapshot().nodes.find(n => n.id === 'content-0').payloadJson).cells[0][0].text === expected, expected);
+    } else if (label !== 'composer') {
+      const id = label === 'generation' ? 'workflow-0' : 'workflow-1';
+      await page.waitForFunction(([id, expected]) => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(n => n.id === id).prompt === expected, [id, expected]);
+    }
+    await collect(label, 7);
+    const result = samples.at(-1);
+    result.inputToNextPaintOpportunityMs = await page.evaluate(() => window.inputDelays);
+    if (label === 'content') assert.ok(result.portQueries < 100, 'Typing must not rediscover sockets on every connected card');
+    if (label === 'composer') assert.equal(result.workspaceCommits, 0, 'The dock edits locally');
+    console.log(JSON.stringify(result));
+  }
+  assert.deepEqual(errors, []);
+}
+async function checkGeometry() {
   await page.goto('http://127.0.0.1:1628/scripts/fixtures/canvas-interaction-performance/preview.html');
   await material.waitFor(); await workflow.waitFor(); await page.waitForTimeout(1200);
   assert.equal(await page.locator('.canvas-plane [data-canvas-node]').count(), 300);
@@ -210,4 +270,156 @@ try {
     checks: ['300 mounted mixed cards and 200 wires', 'pan delta accumulation', 'zoom pointer anchor', 'mixed multi-selection drag persists final geometry', 'cancel rollback', 'wire follows live moving content ports before pointerup', 'pointerup flushes an unpainted final move', 'Escape cancels an unpainted move without later drift', 'same-frame drag threshold roundtrip does not activate asset', ...(!baseline ? ['wheel then resize in one task uses live zoom'] : []), 'route flush persists latest wheel view before camera settles', 'mixed-card marquee', 'alignment snap', 'stationary workflow resize invalidates drag snap geometry'],
     renderedSourceHashes, samples };
   await writeFile(`${out}/${baseline ? 'before' : 'after'}.json`, JSON.stringify(report, null, 2)); console.log(JSON.stringify(report, null, 2));
-} finally { await browser.close(); await server.close(); }
+}
+async function checkMotion() {
+  const large = process.argv.includes('--large'), groups = large ? 334 : 100;
+  await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/canvas-interaction-performance/preview.html' + (large ? '?large' : ''));
+  await workflow.waitFor();
+  await page.waitForTimeout(1200);
+  assert.equal(await page.locator('.canvas-plane [data-canvas-node]').count(), groups * 3);
+  assert.equal(await page.locator('[data-workflow-target]').count(), groups * 2);
+  const stage = page.locator('.canvas-stage'), bounds = await stage.boundingBox();
+  async function sample(label, target, start, buttons) {
+    await resetStats();
+    const timing = await target.evaluate(async (el, { label, start, buttons }) => {
+      const times = [];
+      const media = [0, 1].map(n => document.querySelector('[data-canvas-node-id="material-' + n + '"]'));
+      for (let i = 0; i <= 48; i++) {
+        times.push(await new Promise(requestAnimationFrame));
+        if (i === 48) break;
+        const hover = label === 'hover', node = hover ? media[i % 2] : el;
+        node.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, pointerType: 'mouse', buttons,
+          clientX: start.x + i, clientY: start.y + (hover ? i % 2 * 440 : 0) }));
+      }
+      const intervals = times.slice(1).map((t,i) => t-times[i]).sort((a,b) => a-b);
+      return { medianMs: +intervals[23].toFixed(1), p95Ms: +intervals[45].toFixed(1), maxMs: +intervals[47].toFixed(1), over33ms: intervals.filter(n => n > 33.5).length };
+    }, { label, start, buttons });
+    await collect(label, 48);
+    Object.assign(samples.at(-1), timing);
+  }
+  const box = await material.boundingBox();
+  const point = { x: box.x + 30, y: box.y + 25 };
+  await sample('hover', material, point, 0);
+  assert.equal(await page.locator('[data-workflow-material="material-1"].is-hovered').count(), 1);
+  const start = { x: bounds.x + 160, y: bounds.y + 110 };
+  await page.mouse.move(start.x, start.y); await page.mouse.down();
+  await sample('marquee-empty', stage, { x: start.x + 10, y: start.y + 10 }, 1);
+  assert.equal(await page.locator('.canvas-selection-marquee:visible').count(), 1);
+  await page.mouse.up();
+  await page.keyboard.down('Control');
+  for (const card of [material, content, workflow]) {
+    const b = await card.boundingBox(); await page.mouse.click(b.x + 4, b.y + 12);
+  }
+  await page.keyboard.up('Control');
+  assert.equal(await page.locator('.canvas-plane [data-canvas-node].is-selected').count(), 3);
+  const stack = await material.evaluate(el => el.style.zIndex);
+  await page.mouse.move(point.x, point.y); await page.mouse.down();
+  await sample('multi-drag', material, { x: point.x + 12, y: point.y + 12 }, 1);
+  if (!baseline) assert.ok(await material.evaluate(el => el.classList.contains('is-moving') && !!el.closest('[data-overlay-scrollbars-suspended]') && Number(el.style.zIndex) >= 10000));
+  await material.dispatchEvent('pointercancel', { pointerId: 1 }); await page.mouse.up();
+  if (!baseline) assert.deepEqual(await material.evaluate(el => [el.style.zIndex, el.classList.contains('is-moving'), !!el.closest('[data-overlay-scrollbars-suspended]')]), [stack, false, false]);
+  assert.deepEqual(errors, []);
+  if (!baseline) {
+    assert.equal(samples[0].workflowCommits, 0, 'Hover does not render the workflow layer');
+    assert.ok(samples[1].workspaceCommits <= 1, 'Moving an empty marquee does not render cards');
+    assert.ok(samples[2].workspaceCommits <= 3 && samples[2].workflowCommits <= 1, 'Translation stays local after drag start');
+  }
+  if (large) {
+    await page.goto(server.resolvedUrls.local[0] + 'scripts/fixtures/canvas-interaction-performance/preview.html?large&overview');
+    await workflow.waitFor(); await page.waitForTimeout(1200);
+    const inView = await stage.evaluate(stage => {
+      const view = stage.getBoundingClientRect();
+      return [...stage.querySelectorAll('[data-canvas-node]')].filter(el => {
+        const r = el.getBoundingClientRect();
+        return r.left < view.right && r.right > view.left && r.top < view.bottom && r.bottom > view.top;
+      }).length;
+    });
+    assert.ok(inView >= 100, 'Dense overview must actually contain many visible cards: ' + inView);
+    const profiler = process.argv.includes('--profile') ? await page.context().newCDPSession(page) : null;
+    if (profiler) {
+      await profiler.send('Performance.enable'); await profiler.send('Profiler.enable'); await profiler.send('Profiler.start');
+      console.log('Idle dense frames', await stage.evaluate(async () => {
+        const times = []; for (let i=0;i<13;i++) times.push(await new Promise(requestAnimationFrame));
+        return times.slice(1).map((v,i)=>Math.round(v-times[i]));
+      }));
+    }
+    for (const zoom of [false, true]) {
+      await resetStats();
+      const timing = await stage.evaluate(async (el, zoom) => {
+        const frames = [], plane = el.querySelector('.canvas-plane');
+        const before = new DOMMatrix(getComputedStyle(plane).transform);
+        for (let i = 0; i <= 48; i++) {
+          frames.push(await new Promise(requestAnimationFrame));
+          if (i !== 48) el.dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true,
+            clientX: 900, clientY: 500, ctrlKey: zoom, deltaX: zoom ? 0 : 3, deltaY: zoom ? -4 : 1 }));
+        }
+        const after = new DOMMatrix(getComputedStyle(plane).transform);
+        const idle = [frames.at(-1)];
+        do { idle.push(await new Promise(requestAnimationFrame)); } while (idle.at(-1) - idle[0] < 450);
+        const settleMaxMs = +Math.max(...idle.slice(1).map((t,i) => t-idle[i])).toFixed(1);
+        const intervals = frames.slice(1).map((t,i) => t-frames[i]).sort((a,b) => a-b);
+        return { moved: zoom ? after.a > before.a : after.e < before.e, settleMaxMs, medianMs: +intervals[23].toFixed(1),
+          p95Ms: +intervals[45].toFixed(1), maxMs: +intervals[47].toFixed(1), over33ms: intervals.filter(n => n > 33.5).length };
+      }, zoom);
+      assert.ok(timing.moved);
+      await collect(zoom ? 'overview-zoom' : 'overview-pan', 48);
+      Object.assign(samples.at(-1), { initiallyInView: inView }, timing);
+      await page.waitForTimeout(350);
+    }
+    if (profiler) {
+      const { profile } = await profiler.send('Profiler.stop');
+      await writeFile(out + '/overview-cpu.json', JSON.stringify(profile));
+      console.log('Runtime metrics:', (await profiler.send('Performance.getMetrics')).metrics.filter(m => /Time|Duration|Count/.test(m.name)));
+    }
+    if (!baseline) {
+      const point = await stage.evaluate(el => {
+        const view = el.getBoundingClientRect();
+        for (const card of el.querySelectorAll('.canvas-node.is-asset')) {
+          const r = card.getBoundingClientRect(), x = Math.round(r.left + r.width / 2), y = Math.round(r.top + r.height / 2);
+          if (x < view.left || x >= view.right || y < view.top || y >= view.bottom || !card.contains(document.elementFromPoint(x,y))) continue;
+          return { x, y, id: card.dataset.canvasNodeId };
+        }
+        throw new Error('No unobstructed overview material');
+      });
+      await page.mouse.move(point.x, point.y);
+      // No automation round trip between wheel, hit-test and press: the idle timer
+      // must not quietly restore every card before we exercise the live target.
+      const hit = await stage.evaluate(async (el, p) => {
+        const target = document.elementFromPoint(p.x,p.y);
+        el.dispatchEvent(new WheelEvent('wheel', { bubbles:true, cancelable:true, clientX:p.x, clientY:p.y, deltaX:1 }));
+        await new Promise(requestAnimationFrame);
+        const original = document.elementFromPoint(p.x,p.y);
+        const offscreen = el.querySelectorAll('[data-canvas-node][data-canvas-offscreen]').length;
+        original.dispatchEvent(new PointerEvent('pointerdown', { bubbles:true, pointerType:'mouse', button:0, buttons:1, pointerId:1, clientX:p.x, clientY:p.y, ctrlKey:true }));
+        original.dispatchEvent(new PointerEvent('pointercancel', { bubbles:true, pointerType:'mouse', pointerId:1, clientX:p.x, clientY:p.y }));
+        return { culled: offscreen > 300, same: original === target, id: original.closest('[data-canvas-node-id]')?.dataset.canvasNodeId };
+      }, point);
+      assert.deepEqual(hit, { culled:true, same:true, id:point.id }, 'A press during wheel navigation reaches the native material immediately');
+      const arrived = await stage.evaluate(async el => {
+        const far = el.querySelector('[data-canvas-node-id="material-202"]');
+        const wire = el.querySelector('[data-workflow-target="workflow-202"].is-image');
+        const outside = far.hasAttribute('data-canvas-offscreen') && wire.hasAttribute('data-canvas-offscreen');
+        const card = far.getBoundingClientRect(), stage = el.getBoundingClientRect();
+        const x = Math.round(stage.left + stage.width / 3), y = Math.round(stage.top + stage.height / 3);
+        el.dispatchEvent(new WheelEvent('wheel', { bubbles:true, cancelable:true, clientX:x, clientY:y,
+          deltaX:card.left + card.width/2 - x, deltaY:card.top + card.height/2 - y }));
+        await new Promise(requestAnimationFrame);
+        if (getComputedStyle(wire).display === 'none') throw new Error('Missing visible edge: ' + wire.getAttribute('d') + ', camera ' + el.querySelector('.canvas-plane').style.transform + ', source ' + far.style.transform);
+        return { outside, card:far.contains(document.elementFromPoint(x,y)), wire:true };
+      });
+      assert.deepEqual(arrived, { outside:true, card:true, wire:true }, 'Large camera jumps reveal the real distant card and its existing edge on the same frame');
+    }
+    assert.deepEqual(errors, []);
+  }
+  const report = { environment: (native ? 'Windows WebView2 ' : 'Headless Chrome ') + browser.version() + ', Vite dev, mock IPC, ' + groups * 3 + ' cards/' + groups * 2 + ' wires. One pointer event per animation frame; interval includes browser scheduling, not physical display latency.', renderedSourceHashes, samples };
+  await writeFile(out + '/motion' + (native ? '-webview2' : '') + (large ? '-large' : '') + '.json', JSON.stringify(report, null, 2));
+  console.log(JSON.stringify(report, null, 2));
+}
+try {
+  if (process.argv.includes('--motion')) await checkMotion();
+  else if (process.argv.includes('--typing')) await checkTyping();
+  else await checkGeometry();
+} catch (error) {
+  if (errors.length) console.error('Fixture page errors:', errors);
+  throw error;
+} finally { if (host) await host.close(); else await browser.close(); await server.close(); }

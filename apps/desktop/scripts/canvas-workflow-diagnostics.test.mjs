@@ -1,13 +1,18 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
-const server = await createServer({configFile:false,root:process.cwd(),server:{host:'127.0.0.1',port:1598,strictPort:true,hmr:false,watch:null}});
+const server = await createServer({cacheDir:'.tmp/workflow-diagnostics-vite',server:{host:'127.0.0.1',port:1598,strictPort:true,hmr:false,watch:null}});
 await server.listen();
 const browser = await chromium.launch({channel:'chrome',headless:true});
 const page = await browser.newPage({viewport:{width:1500,height:1000},permissions:['clipboard-read','clipboard-write']});
+const enableTestProvider = () => page.evaluate(() => window.store.setState({
+  codexHealth: { ok: true }, cloudAuth: { logged_in: true, cloud_available: true },
+  cloudEntitlement: { policy: { can_use_byo: true }, balances: { daily: 10, sub: 0, topup: 0 } },
+}));
 try {
   await page.goto('http://127.0.0.1:1598/scripts/fixtures/canvas-reference/preview.html');
   await page.locator('[data-canvas-node-id="old"]').waitFor();
+  await enableTestProvider();
   await page.evaluate(async()=>{
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
     const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
@@ -29,7 +34,7 @@ try {
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
     const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
     const c=canvasWorkflowController('p'),input={canvasNodeId:'missing-container',cellId:'*'};
-    const gen={...newWorkflowNode('generation',5000,5000,''),id:'broken-generation',prompt:'private prompt @[ref]',inputs:{image:[input]},promptReferences:[{id:'ref',type:'image',input,label:'图片来源 1'}]};
+    const gen={...newWorkflowNode('generation',5000,5000,'codex'),id:'broken-generation',prompt:'private prompt @[ref]',inputs:{image:[input]},promptReferences:[{id:'ref',type:'image',input,label:'图片来源 1'}]};
     await c.edit([gen]);await c.start(gen.id,true);
     if(c.issue?.code!=='INPUT_UNAVAILABLE'||c.issue.referenceLabel!=='图片来源 1'||c.issue.step!==1||c.document.run.status!=='failed')throw Error('input failure must carry reference, card and step');
     if(c.error)throw Error('execution error must not appear as save failure');
@@ -42,7 +47,13 @@ try {
   assert.equal(JSON.parse(report).nodeId,'broken-generation');assert.ok(!report.includes('private prompt'));
   await page.reload();await panel.waitFor();assert.match(await panel.innerText(),/@图片来源 1/);
   await page.getByRole('button',{name:'关闭工作流问题'}).click();
-  await page.locator('[data-workflow-card="broken-generation"]').getByRole('button',{name:'查看问题'}).click();await panel.waitFor();
+  const broken = page.locator('[data-workflow-card="broken-generation"]');
+  await page.reload();await broken.waitFor();
+  assert.equal(await panel.count(),0,'acknowledged issue stays closed after reload');
+  assert.equal(await broken.locator('.workflow-error').count(),0);
+  assert.ok(!(await broken.evaluate(node=>node.classList.contains('canvas-card-error'))));
+  await broken.getByRole('button',{name:'查看问题'}).click();await panel.waitFor();
+  await enableTestProvider();
   await page.screenshot({path:'.tmp/workflow/diagnostics.png'});
   await page.evaluate(async()=>{
     const {api}=await import('/src/lib/api.ts');const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -64,6 +75,10 @@ try {
   assert.equal(await wire.count(),1);assert.equal(await wire.evaluate(node=>getComputedStyle(node).stroke),'rgb(239, 68, 68)');
   await panel.getByRole('button',{name:'定位来源'}).click();
   await page.waitForFunction(()=>document.querySelector('[data-canvas-node-id="empty-source"]')?.classList.contains('is-selected'));
+  await broken.getByRole('button',{name:'关闭提示'}).click();
+  assert.equal(await panel.count(),0,'card action closes the same occurrence in the diagnostic panel');
+  assert.equal(await wire.count(),0);
+  assert.equal(await broken.locator('.workflow-error').count(),0);
   await page.evaluate(async()=>{
     const {canvasWorkflowController}=await import('/src/lib/canvasWorkflowRuntime.ts');const c=canvasWorkflowController('p');
     const run=c.document.run,step=run.steps['broken-generation'];

@@ -1,8 +1,8 @@
 # Bowerbird 受限 HTML 离线排版与截图开发计划
 
 > 版本：v1.5
-> 日期：2026-09-02
-> 状态：决策已冻结；**H0–H5 已完成，H6 test-only 观察继续**：renderer/Worker、migration `0044`–`0046`、Edge 与桌面旧 HTML Skill 链路均已完成生产验收；U6 统一 DSH Agent 又在不改变 renderer 安全契约的前提下真实复用同一 `render_html`，migration `0052` 补齐 unified HTML 主截图原子结算。renderer `0.1.1` 生产指纹仍为 `bwr1-c0ee5722787c038aa560e4a5cbb54df2`；当前不扩大开放、不调整计费。
+> 日期：2026-09-02，现役部署核验更新于 2026-11-11。
+> 状态：决策已冻结；**H0–H5 已完成，H6 test-only 观察继续**：renderer/Worker、migration `0044`–`0046`、Edge 与桌面旧 HTML Skill 链路均已完成生产验收；U6 统一 DSH Agent 又在不改变 renderer 安全契约的前提下真实复用同一 `render_html`，migration `0052` 补齐 unified HTML 主截图原子结算。现役 renderer `0.1.2` 的生产指纹为 `bwr1-f75e299e40fc851b842b81f7336ab083`。Worker 内网已验证并发排队后可继续处理任务并恢复空闲，开放范围与计费沿用既有设置。[2026-11-11 队列修复、线上验收与回退](../project_logs/2026-11-11-audit-renderer-deployment.md)。
 > 适用范围：Bowerbird VPS Worker、Bowerbird Agent Kernel、官方内置 Skill、桌面 Agent 会话  
 > 依赖文档：[`PROJECT.md`](../PROJECT.md)、[`AGENT-RUNTIME-PLAN.md`](AGENT-RUNTIME-PLAN.md)、[`UNIFIED-AGENT-HARNESS-PLAN.md`](UNIFIED-AGENT-HARNESS-PLAN.md)
 > **2026-08-28 后续架构边界：** 本文件继续作为离线 renderer、安全容器、HTML/CSS 契约、整页/切片和旧 HTML Skill 行为的实现权威；“理解产品图、使用视觉设定、生成缺图、视觉检查与修订”不继续堆入旧 Runner，而在通用云端 Agent Harness 的 U3 纵切中实现。renderer 仍是确定性工具，不演化为浏览器 Agent。

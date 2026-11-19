@@ -8,7 +8,23 @@ export function StartupUpdateDialog({ ready }: { ready: boolean }) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
-    if (ready) void check({ startup: true });
+    if (!ready) return;
+    void check({ startup: true });
+    const interval = 5 * 60_000;
+    let lastCheck = Date.now();
+    const refresh = () => {
+      if (Date.now() - lastCheck < interval) return;
+      lastCheck = Date.now();
+      void check({ background: true });
+    };
+    const timer = window.setInterval(refresh, interval);
+    window.addEventListener("focus", refresh);
+    window.addEventListener("online", refresh);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      window.removeEventListener("online", refresh);
+    };
   }, [ready, check]);
 
   useEffect(() => {

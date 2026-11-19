@@ -34,7 +34,7 @@ Deno.serve(async (request) => {
       { data: imageServices, error: svcError },
       { data: promptConfigs, error: promptError },
     ] = await Promise.all([
-      admin.from("subscriptions").select("tier,status,current_period_end,entitlement_version").eq("user_id", user.id).maybeSingle(),
+      admin.from("subscriptions").select("tier,status,current_period_end,trial_started_at,entitlement_version").eq("user_id", user.id).maybeSingle(),
       admin.from("user_credits").select("daily_balance,sub_balance,topup_balance").eq("user_id", user.id).maybeSingle(),
       admin.from("credit_transactions").select("kind,amount,service,meta,created_at").eq("user_id", user.id).order("created_at", { ascending: false }).limit(50),
       // 桌面端动态生图档位：active 且带 label 的 image_* 服务（label/sort 由 0018 起存 parameters）。
@@ -85,6 +85,9 @@ Deno.serve(async (request) => {
     const body = {
       user_id: user.id,
       tier,
+      // Display metadata only. The existing signed policy and trial RPC enforce access.
+      membership_ends_at: tier !== "free" ? subscription?.current_period_end ?? null : null,
+      trial_available: subscription?.tier === "free" && subscription.trial_started_at == null,
       // 测试账号标记（raw_app_meta_data.bowerbird_test，与 A8-T1 小流量门控同源）：
       // 只决定桌面「设置 · 开发者选项」可见性，不参与付费门控，故不进签名载荷。
       is_test_account: accountTestMarker(user.app_metadata),

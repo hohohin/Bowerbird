@@ -1,6 +1,6 @@
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
-import { assertBodySize, corsHeaders } from "../_shared/limits.ts";
+import { corsHeaders, readJsonBody } from "../_shared/limits.ts";
 import {
   assertWechatCode,
   assertWechatLoginState,
@@ -162,9 +162,7 @@ Deno.serve(async (request) => {
     }
 
     if (request.method !== "POST") throw new ApiError("invalid_request", "仅支持 GET / POST", false, 405);
-    assertBodySize(request);
-    const body = (await request.json().catch(() => null)) as { code?: unknown; state?: unknown } | null;
-    if (!body) throw new ApiError("invalid_request", "请求体必须是 JSON");
+    const body = await readJsonBody(request);
     assertWechatCode(body.code);
     assertWechatLoginState(body.state);
     // state 仅作形状校验与日志；跨端绑定由桌面 pending 槽 / 官网 sessionStorage 各自校验。

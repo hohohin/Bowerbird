@@ -27,7 +27,7 @@ try {
   assert.equal(await page.locator(".bv-image-grid img:visible").count(), 8);
   assert.equal(await page.locator("input[type=file]:visible").count(), 0);
   assert.equal(await calls("visual_profile_cloud_extract"), 0);
-  assert.equal(await page.getByText("查看集合素材", { exact: true }).count(), 0);
+  assert.equal(await page.getByText("查看文件夹素材", { exact: true }).count(), 0);
   assert.doesNotMatch(await dialog.innerText(), /有效反推|本地基线|支持率|覆盖率|必须：|规则强度/);
   // One button handles the real serial queue, then the original paid extraction.
   await button("开始提炼").evaluate(node => { node.click(); node.click(); });

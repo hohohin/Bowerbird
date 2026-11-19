@@ -4,7 +4,7 @@ import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs'
 
 // Exercise the native-session event before the workflow's submission receipt,
 // then pause the actual cell write. No real provider or user library is used.
-const server = await createServer({ configFile: false, root: process.cwd(), cacheDir: '.tmp/contained-generation-vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, server: { host: '127.0.0.1', port: 1699, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ root: process.cwd(), cacheDir: '.tmp/contained-generation-vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, server: { host: '127.0.0.1', port: 1699, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const failures = [], observations = [];
@@ -21,14 +21,19 @@ try {
       const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
       const c = canvasWorkflowController('p'); await c.load();
       const draw = { ...newWorkflowNode('generation', 80, 100, 'codex'), id: 'draw', prompt: '生成合成测试图片' };
-      await c.edit([draw, ...(mode === 'relay' ? [{ ...newWorkflowNode('instruction', 1250, 100, ''), id: 'sink', action: 'reuse' }] : [])]);
-      if (mode === 'relay') window.receiverId = (await c.connectGenerationImage('draw', 'sink', 'image')).node.id;
-      else if (mode !== 'none') {
+      await c.edit([draw]);
+      if (mode !== 'none') {
         const base = window.snapshot().nodes[0];
         window.receiverId = 'receiver';
         await api.projectCanvasNodeCreate({ ...base, id: 'receiver', kind: 'note', assetId: null, role: null, x: 650, y: 90, width: 360, height: 280,
           payloadJson: JSON.stringify({ schema_version: 1, note_type: 'text', text: '', member_ids: [], cells: [[{ id: 'cell', text: '' }]] }) });
-        await c.bindTextInput('receiver', mode === 'column' || mode === 'row' ? `${mode}:cell` : 'cell', { nodeId: 'draw', portId: 'image' }, 'image');
+        if (mode === 'relay') {
+          await c.edit([draw, { ...newWorkflowNode('text', 650, 90, ''), id: 'legacy-writer',
+            textTarget: { nodeId: 'receiver', cellId: 'cell', image: true, append: true, automaticImageRelay: true },
+            inputs: { image: [{ nodeId: 'draw', portId: 'image' }] } },
+            { ...newWorkflowNode('instruction', 1250, 100, ''), id: 'sink', action: 'reuse',
+              inputs: { image: [{ canvasNodeId: 'receiver', cellId: '*latest-image' }] } }]);
+        } else await c.bindTextInput('receiver', mode === 'column' || mode === 'row' ? `${mode}:cell` : 'cell', { nodeId: 'draw', portId: 'image' }, 'image');
       }
       if (mode === 'completion') await c.edit([...c.document.nodes,
         { ...newWorkflowNode('trigger', 1250, 100, ''), id: 'on-complete', inputs: { completion: [{ nodeId: 'draw', portId: 'image' }] } },
@@ -51,7 +56,7 @@ try {
         for (const card of document.querySelectorAll('.canvas-prompt-node[data-canvas-node-id]')) if (card.dataset.canvasNodeId.startsWith('gen-prompt:') && !window.appeared.includes(card.dataset.canvasNodeId)) window.appeared.push(card.dataset.canvasNodeId);
       };
       new MutationObserver(watch).observe(document.body, { childList: true, subtree: true });
-      useStore.setState({ cloudEntitlement: { balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_byo: true, can_use_cloud: true, max_parallel_jobs: 100 } } });
+      useStore.setState({ codexHealth: { ok: true, reason: '' }, cloudEntitlement: { balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_byo: true, can_use_cloud: true, max_parallel_jobs: 100 } } });
       const update = api.projectCanvasNoteUpdate;
       const pausedSessions = new Set();
       api.projectCanvasNoteUpdate = async (id, json) => {
@@ -133,13 +138,14 @@ try {
     if (mode === 'cell') {
       const origin = await page.evaluate(async sessionId => {
         const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
-        const { newWorkflowNode, workflowCardWidth, workflowPortY } = await import('/src/lib/canvasWorkflow.ts');
+        const { newWorkflowNode, workflowCardWidth } = await import('/src/lib/canvasWorkflow.ts');
         const c = canvasWorkflowController('p'), draw = c.document.nodes.find(node => node.id === 'draw');
         await c.edit([...c.document.nodes, { ...newWorkflowNode('instruction', 1250, 650, ''), id: 'old-session-consumer', action: 'reuse', inputs: { image: [{ canvasNodeId: sessionId, cellId: 'image' }] } }]);
-        return `M ${draw.x + workflowCardWidth(draw)} ${workflowPortY(draw, 'output', 'image')} C `;
+        return { x: draw.x + workflowCardWidth(draw), y: draw.y + document.querySelector('[data-workflow-card="draw"]').offsetHeight / 2 };
       }, persistedSessions[0]);
       const oldSessionWire = page.locator('[data-workflow-target="old-session-consumer"]'); await oldSessionWire.waitFor();
-      assert.ok((await oldSessionWire.getAttribute('d')).startsWith(origin), 'an old session reference anchors at the visible generator instead of a hidden card');
+      const start = (await oldSessionWire.getAttribute('d')).match(/^M ([\d.-]+) ([\d.-]+)/);
+      assert.ok(start && Math.abs(Number(start[1]) - origin.x) < 1 && Math.abs(Number(start[2]) - origin.y) < 1, 'an old session reference anchors at the visible generator center instead of a hidden card');
       await page.evaluate(async () => {
         const { api } = await import('/src/lib/api.ts');
         const table = window.snapshot().nodes.find(node => node.id === 'receiver'), note = JSON.parse(table.payloadJson);

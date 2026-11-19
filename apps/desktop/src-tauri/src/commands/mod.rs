@@ -2,7 +2,10 @@
 
 pub mod agent;
 pub mod audio;
+pub mod voice;
+pub mod voice_setup;
 pub mod text_documents;
+pub mod document_attachments;
 pub mod agent_ds;
 pub mod agent_z;
 pub mod cloud;
@@ -77,13 +80,16 @@ pub mod dreamina_account;
 pub mod video_poster;
 pub mod canvas_image_preview;
 pub mod video_trim;
+pub mod video_audio;
 pub mod comfy_video;
 pub mod comfy_setup;
+mod comfy_discovery;
 pub mod video_replication;
 
 pub mod external_files;
 pub mod external_drag;
 pub mod folder_connections;
+pub mod file_tasks;
 pub mod connection_clipboard;
 pub mod file_colors;
 pub mod file_workspace;

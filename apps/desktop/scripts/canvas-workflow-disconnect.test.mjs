@@ -47,6 +47,7 @@ try {
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'target').inputs.text.length === 1);
   assert.equal((await snapshot()).nodes.find(node => node.id === 'target').inputs.text[0].nodeId, 'a');
   await socket.click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: /指令卡片 1/ }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'target').inputs.text.length === 0);
   assert.equal(await menu.count(), 0);
   // Native whole-card inputs choose exactly one hidden writer and retain cell contents.

@@ -21,9 +21,15 @@ setupAgentMock();
 let callbackId = 0;
 w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
 w.calls = []; w.saveDelay = 0; w.mediaDelay = 0; w.saveError = false; w.mediaMissing = false; w.pinnedIds = [];
+const attachments = new Map<string, string>();
 w.__TAURI_INTERNALS__ = { transformCallback: () => ++callbackId, convertFileSrc: (path: string) => path, invoke: async (command: string, args: any = {}) => {
   w.calls.push({ command, args });
   const agent = agentMock(command,args); if(agent!==undefined)return agent;
+  if (command === 'save_document_attachment') { const id = '1'.repeat(64) + '.pdf'; const path = `data:application/pdf;base64,${args.data}`; attachments.set(id, path); return { id, path }; }
+  if (command === 'resolve_document_attachment') return { id: args.id, path: attachments.get(args.id) };
+  if (command === 'video_import_begin') return 'fixture-upload';
+  if (command === 'video_import_append') return;
+  if (command === 'video_import_finish') return assets[0];
   if (command === 'generation_history' && new URLSearchParams(location.search).has('blocks')) return { turns: [{ prompt: '复用的提示词', prompt_raw: '复用的提示词' }], references: [], dimension_assets: [] };
   if (command === 'plugin:event|listen') return args.handler;
   if (command === 'plugin:event|unlisten') return;
@@ -46,7 +52,7 @@ w.__TAURI_INTERNALS__ = { transformCallback: () => ++callbackId, convertFileSrc:
 function App() {
   const [opened, setOpened] = useState(true);
   const [draft, setDraft] = useState({ title: '剧本', markdown: new URLSearchParams(location.search).has('markdown') ? '' : '# 剧本\n\n窗外的光落在桌面上。\n\n第二段内容。\n' });
-  return <><button onClick={() => setOpened(true)}>放大编辑</button>{opened && <TextWorkspace initialDocument={draft} projectId="p" onChange={next => { w.draft = next; setDraft(next); }} onClose={next => { setDraft(next); setOpened(false); }} onAddToComposer={next => { w.composer = next; setDraft(next); setOpened(false); }}/>}</>;
+  return <><button onClick={() => setOpened(true)}>放大编辑</button>{opened && <TextWorkspace initialDocument={draft} origin={new URLSearchParams(location.search).has("recents") ? { key: "fixture", version: new URLSearchParams(location.search).get("source") ?? "initial" } : undefined} projectId="p" onChange={(next, context) => { w.draft = next; if (context.isSourceDocument) { w.sourceDraft = next; setDraft(next); } }} onClose={next => { setDraft(next); setOpened(false); }} onAddToComposer={next => { w.composer = next; setDraft(next); setOpened(false); }}/>}</>;
 }
 document.documentElement.dataset.theme = 'dark';
 createRoot(document.getElementById('root')!).render(<App/>);

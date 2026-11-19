@@ -7,7 +7,7 @@ import { useStore } from "../store";
 import type { ThumbnailScope } from "./thumbnailSize";
 
 export type LibraryBrowsePosition = { active: string | null; top: number; alphabetic: boolean; color: string | null; query: string; generatedFilter: string | null };
-export function createLibraryPane(id: string, mode = createLocalFileMode()) {
+export function createLibraryPane(id: string, mode = createLocalFileMode(id)) {
   return { id, mode, positions: new Map<string, LibraryBrowsePosition>(), preferences: create<{
     width: number; setWidth: (width: number) => void;
     pins: string[]; togglePin: (id: string) => void;
@@ -22,7 +22,8 @@ export type LibraryPaneState = ReturnType<typeof createLibraryPane>;
 export function copyLibraryPane(id: string, source: LibraryPaneState) {
   const pane = createLibraryPane(id), state = source.mode.getState(), preferences = source.preferences.getState();
   pane.mode.setState({ open: true, mode: state.mode, source: state.source, media: state.media,
-    views: { ...state.views }, videoViews: { ...state.videoViews }, audioViews: { ...state.audioViews }, textViews: { ...state.textViews }, generatedFilter: state.generatedFilter, query: "" });
+    view: state.view, tagSource: state.tagSource, contextProjectId: state.contextProjectId, browseProjectId: state.browseProjectId,
+    projectPickerOpen: state.projectPickerOpen, generatedFilter: state.generatedFilter, query: "" });
   pane.preferences.setState({ width: preferences.width, pins: [...preferences.pins] });
   source.positions.forEach((position, key) => pane.positions.set(key, { ...position }));
   for (const key of ["bowerbird.localFiles.lastDirectory", "bowerbird.catalog.tagSidebarWidth"]) {

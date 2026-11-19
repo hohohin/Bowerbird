@@ -6,7 +6,7 @@ import { OverlayScrollArea } from "./CollectionScrollArea";
 
 const OPEN_MENU = "bowerbird:context-menu-open";
 const MenuContext = createContext<{ owner: string; submenu: string | null; setSubmenu: Dispatch<SetStateAction<string | null>> } | null>(null);
-const items = (menu: Element) => [...menu.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]:not(:disabled)')];
+const items = (menu: Element) => [...menu.querySelectorAll<HTMLButtonElement>('button:is([role="menuitem"], [role="menuitemradio"], [role="menuitemcheckbox"]):not(:disabled)')];
 function focusItem(item?: HTMLElement) {
   item?.focus({ preventScroll: true });
   item?.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -43,7 +43,7 @@ export function ContextMenu({ x, y, label, children, onClose, className = "", co
     const outside = (event: Event) => { if (!belongs(event.target)) close.current(); };
     const blur = () => close.current();
     const key = (event: KeyboardEvent) => {
-      if (document.querySelector('[role="dialog"], [role="alertdialog"]') && !belongs(document.activeElement)) return;
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]') && !belongs(document.activeElement) && document.activeElement !== origin.current) return;
       const active = document.activeElement as HTMLElement | null;
       const current = (belongs(active) ? active?.closest('[role="menu"]') : root.current) as HTMLElement | null;
       if (!current) return;
@@ -95,7 +95,7 @@ export function ContextMenu({ x, y, label, children, onClose, className = "", co
 }
 
 export function ContextSubmenu({ label, children, icon, disabled = false, title, menuLabel = label }: {
-  label: string; children: ReactNode; icon?: ReactNode; disabled?: boolean; title?: string; menuLabel?: string;
+  label: string; children: ReactNode | (() => ReactNode); icon?: ReactNode; disabled?: boolean; title?: string; menuLabel?: string;
 }) {
   const context = useContext(MenuContext)!;
   const portalTarget = usePortalTarget();
@@ -138,7 +138,7 @@ export function ContextSubmenu({ label, children, icon, disabled = false, title,
     {open && createPortal(<div ref={panel} id={panelId} role="menu" aria-label={menuLabel} data-context-owner={context.owner}
       className="app-context-menu context-menu-surface context-submenu" onPointerEnter={cancel} onPointerLeave={leave}
       onPointerDown={event => event.stopPropagation()} onContextMenu={event => { event.preventDefault(); event.stopPropagation(); }}>
-      <OverlayScrollArea className="context-menu-scroll" contentClassName="context-menu-content" label="子菜单滚动条">{children}</OverlayScrollArea>
+      <OverlayScrollArea className="context-menu-scroll" contentClassName="context-menu-content" label="子菜单滚动条">{typeof children === "function" ? children() : children}</OverlayScrollArea>
     </div>, portalTarget)}
   </>;
 }

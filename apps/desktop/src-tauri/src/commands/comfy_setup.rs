@@ -6,13 +6,41 @@ use tauri::{AppHandle, Manager, State};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::{cloud::{AuthClient, EntitlementService}, error::{AppError, AppResult}};
 use super::comfy_video;
+use super::comfy_video::Mode as VideoMode;
+use crate::codex::h3_image;
+use super::comfy_discovery::{self, Installation};
+#[path = "comfy_driver.rs"]
+mod driver;
 
 const MANAGED_ENDPOINT: &str = "http://127.0.0.1:18188";
 const VERSION: &str = "h3-v1-comfy-0.42.1";
+#[derive(Clone, Copy, Debug, serde::Deserialize, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode { #[default] Frames, Reference, Text, Image, Edit }
+impl Mode {
+    fn video(self) -> Option<VideoMode> {
+        match self { Self::Frames => Some(VideoMode::Frames), Self::Reference => Some(VideoMode::Reference), Self::Text => Some(VideoMode::Text), _ => None }
+    }
+    fn image(self) -> bool { self.video().is_none() }
+    fn names(self) -> &'static [&'static str] {
+        match self.video() { Some(video) => comfy_video::model_names_for_mode(video), None => h3_image::models(self == Self::Edit) }
+    }
+    fn existing_service(self) -> (&'static str, &'static str) {
+        if self.image() { ("18191", "http://127.0.0.1:18191") } else { ("18189", "http://127.0.0.1:18189") }
+    }
+    fn version(self) -> &'static str { if self.image() { "h3-image-comfy-0.45.0" } else { VERSION } }
+    fn port(self) -> &'static str { if self.image() { "18190" } else { "18188" } }
+    fn endpoint(self) -> &'static str { if self.image() { "http://127.0.0.1:18190" } else { MANAGED_ENDPOINT } }
+    async fn check(self, http: &reqwest::Client, base: &str) -> AppResult<()> {
+        match self.video() { Some(video) => comfy_video::check_for_mode(http, base, video).await, None => h3_image::check(http, base, self == Self::Edit).await }
+    }
+}
 const RESERVE: u64 = 12 * 1024 * 1024 * 1024;
-struct Download { file: &'static str, url: &'static str, size: u64, sha: &'static str }
+struct Download { file: &'static str, size: u64, sha: &'static str }
 fn label(item: &Download) -> &'static str {
     if item.file == "portable.7z" { "ComfyUI 与 Python" }
+    else if item.file.contains("image_pruned") { "图片主模型" }
+    else if item.file.contains("image_vae") { "图片解码模型" }
     else if item.file.contains("diffusion_models/") { "视频主模型" }
     else if item.file.contains("text_encoders/") { "文本理解模型" }
     else if item.file.contains("audio_vae") { "音频解码模型" }
@@ -21,63 +49,115 @@ fn label(item: &Download) -> &'static str {
 }
 // Pinned upstream revisions and LFS hashes; never substitute a similarly named LoRA.
 const DOWNLOADS: &[Download] = &[
-    Download { file: "portable.7z", url: "https://github.com/Comfy-Org/ComfyUI/releases/download/v0.42.1/ComfyUI_windows_portable_nvidia.7z", size: 2018444114, sha: "496afd18790ec685d99ebba2edf200d7371a29fbdd3a992bb0f4f52f244a6874" },
-    Download { file: "models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors", url: "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/e5eb578a89295337b8ff433a035929ce0279e0b6/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors", size: 20970379616, sha: "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a" },
-    Download { file: "models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", url: "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/e5eb578a89295337b8ff433a035929ce0279e0b6/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", size: 15687142551, sha: "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6" },
-    Download { file: "models/vae/minimax_h3_audio_vae_fp32.safetensors", url: "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/e5eb578a89295337b8ff433a035929ce0279e0b6/vae/minimax_h3_audio_vae_fp32.safetensors", size: 605254808, sha: "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48" },
-    Download { file: "models/vae/minimax_h3_video_vae_int8_convrot.safetensors", url: "https://huggingface.co/Comfy-Org/MiniMax-H3/resolve/e5eb578a89295337b8ff433a035929ce0279e0b6/vae/minimax_h3_video_vae_int8_convrot.safetensors", size: 2811065184, sha: "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e" },
-    Download { file: "models/loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors", url: "https://huggingface.co/lightx2v/Minimax-h3-Turbo/resolve/a29e57d195f80ead07c89f89e55ecf2911e893c5/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors", size: 1956193000, sha: "08cfe946033af7d27719b964b6e0a0e50c32138daabbd6ce4137e23df6bf9980" },
+    Download { file: "portable.7z", size: 2018444114, sha: "496afd18790ec685d99ebba2edf200d7371a29fbdd3a992bb0f4f52f244a6874" },
+    Download { file: "models/diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors", size: 20970379616, sha: "e889202c41dafb67b10d67b97f0d8541508036a6090af23425a5c2615d03c47a" },
+    Download { file: "models/text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", size: 15687142551, sha: "35a88d51044231fe332301d7a62aa81e3f2cba62febeb446e2c1e3e0ef76f2c6" },
+    Download { file: "models/vae/minimax_h3_audio_vae_fp32.safetensors", size: 605254808, sha: "8e505d95dd1561d47abd43d4238fd40d9bb1ae9e147ed0a4cba778d76ae4db48" },
+    Download { file: "models/vae/minimax_h3_video_vae_int8_convrot.safetensors", size: 2811065184, sha: "52a2c8c73583c86e4f41cdcce3a6ad0ea562987bc0bf3d60a0cef5f5c8e60c0e" },
+    Download { file: "models/loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors", size: 1956193000, sha: "08cfe946033af7d27719b964b6e0a0e50c32138daabbd6ce4137e23df6bf9980" },
+    Download { file: "models/diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors", size: 20970379616, sha: "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779" },
 ];
+const IMAGE_DOWNLOADS: &[Download] = &[
+    Download { file: "portable.7z", size: 2071479423, sha: "60c12e8c7af778047ad0413722dd3dc0f6ca773a41cbf5cb229ee9bc92c44a6f" },
+    Download { file: "models/diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors", size: 20979314802, sha: "83eb140f1ff95c068f8a6886e6d3f3d0d4ab2e07bb2fe6d2ef992a51146ee622" },
+    Download { file: "models/text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors", size: 27141342152, sha: "bc2ced0fbea64757fa9acddccfc0b3f4819d1dcf1da6c124d690d368be283923" },
+    Download { file: "models/vae/minimax_h3_image_vae_fp16.safetensors", size: 1168505312, sha: "d80e9c2e5cfc9844869961ff5a58c9a9e52182df6bfb30b26018dd7f348721af" },
+];
+fn downloads(mode: Mode) -> Vec<&'static Download> {
+    let names = mode.names();
+    (if mode.image() { IMAGE_DOWNLOADS } else { DOWNLOADS }).iter().filter(|item| item.file == "portable.7z" || names.contains(&item.file.rsplit('/').next().unwrap())).collect()
+}
+fn tos_available(item: &Download) -> bool { DOWNLOADS[..6].iter().any(|known| known.file == item.file) }
+fn modelscope_url(item: &Download) -> Option<String> {
+    let path = item.file.strip_prefix("models/")?;
+    if IMAGE_DOWNLOADS.iter().any(|v| v.file == item.file) {
+        return Some(format!("https://modelscope.cn/models/Comfy-Org/MiniMax-H3-Image/resolve/b8ebf14be96f02e5c58960620a101de71b0bd9f3/{path}"));
+    }
+    let (repo, revision, path) = match path {
+        "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors" => ("Comfy-Org/MiniMax-H3", "02d0e736e1112426c30683e0ed8fd7182a4e5d6d", path),
+        "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors" => ("Comfy-Org/MiniMax-H3", "d51b9ec4bf7d7af1ce11bcbbd1a809aadb38011e", path),
+        "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors" => ("Comfy-Org/MiniMax-H3", "160418ce87d04db418a33a0dbe904d5a2d774e3f", path),
+        "vae/minimax_h3_audio_vae_fp32.safetensors" => ("Comfy-Org/MiniMax-H3", "dcdcca14e93e72d8cba0b6312771cf0779e85cc1", path),
+        "vae/minimax_h3_video_vae_int8_convrot.safetensors" => ("Comfy-Org/MiniMax-H3", "28f23183b0ec49739a0c01184f04384e5470042e", path),
+        "loras/minimax_h3_fl2v_turbo_8step_v1.0_768p_comfyui_bf16.safetensors" => ("lightx2v/Minimax-h3-Turbo", "b9591d0cd28b7e64106551ac3843dcfee07d7785", path.strip_prefix("loras/").unwrap()),
+        _ => return None,
+    };
+    Some(format!("https://modelscope.cn/models/{repo}/resolve/{revision}/{path}"))
+}
+fn modelscope_redirect_allowed(url: &reqwest::Url) -> bool {
+    url.scheme() == "https" && url.port().is_none() && url.username().is_empty() && url.password().is_none()
+        && url.host_str().is_some_and(|host| host == "modelscope.cn" || host.ends_with(".modelscope.cn"))
+}
+fn modelscope_client() -> AppResult<reqwest::Client> {
+    reqwest::Client::builder().no_proxy().https_only(true)
+        .user_agent(concat!("Bowerbird/", env!("CARGO_PKG_VERSION")))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() < 5 && modelscope_redirect_allowed(attempt.url()) { attempt.follow() }
+            else { attempt.stop() }
+        }))
+        .connect_timeout(Duration::from_secs(15)).read_timeout(Duration::from_secs(30))
+        .build().map_err(|_| err("无法初始化模型下载连接"))
+}
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Environment {
+    mode: Mode, models_required: usize,
     phase: String, message: String, endpoint: String, directory: String,
-    can_install: bool, installed: bool, download_bytes: u64, required_bytes: u64,
+    can_install: bool, can_add_models: bool, installed: bool, download_bytes: u64, required_bytes: u64,
     completed_bytes: u64, total_bytes: u64,
+    existing: Vec<Installation>,
+    hardware: Option<driver::Hardware>,
+    driver_download: Option<driver::DriverDownload>,
 }
 struct Job { owner: String, state: Environment, cancel: Arc<AtomicBool> }
 static JOB: Mutex<Option<Job>> = Mutex::new(None);
 fn err(message: impl Into<String>) -> AppError { AppError::Other(message.into()) }
-fn active(state: &Environment) -> bool { state.phase == "installing" }
+fn active(state: &Environment) -> bool { matches!(state.phase.as_str(), "installing" | "starting") }
+fn retain_setup_outcome(state: &mut Environment, previous: Option<&Environment>) {
+    let Some(previous) = previous.filter(|old| old.mode == state.mode && matches!(old.phase.as_str(), "failed" | "cancelled") && old.directory == state.directory
+        && old.existing.first().map(|i| &i.path) == state.existing.first().map(|i| &i.path)) else { return; };
+    // A successful prerequisite check does not mean a previous installation/start succeeded.
+    // Prefer new readiness/blocker information; otherwise keep the failure available for retry.
+    if (state.phase == "missing" && state.can_install) || (state.phase == "stopped" && state.existing.first().is_some_and(|i| i.can_start)) {
+        state.phase = previous.phase.clone();
+        state.message = previous.message.clone();
+    }
+}
 fn progress(message: String, bytes: u64) {
     if let Some(job) = JOB.lock().unwrap().as_mut() { job.state.message = message; job.state.completed_bytes = bytes; }
 }
 fn cancelled(cancel: &AtomicBool) -> AppResult<()> {
     if cancel.load(Ordering::Relaxed) { Err(err("已取消，保留已下载文件，下次可继续")) } else { Ok(()) }
 }
-fn config(app: &AppHandle) -> AppResult<PathBuf> { Ok(app.path().app_local_data_dir().map_err(|e| err(e.to_string()))?.join("comfy-install-location.json")) }
-fn location(app: &AppHandle, directory: Option<String>) -> AppResult<PathBuf> {
+fn config(app: &AppHandle, mode: Mode) -> AppResult<PathBuf> { Ok(app.path().app_local_data_dir().map_err(|e| err(e.to_string()))?.join(if mode.image() { "comfy-image-install-location.json" } else { "comfy-install-location.json" })) }
+fn location(app: &AppHandle, directory: Option<String>, mode: Mode) -> AppResult<PathBuf> {
     if let Some(directory) = directory {
-        let parent = PathBuf::from(directory).canonicalize()?;
+        let parent = PathBuf::from(directory).canonicalize().map_err(|error| err(format!("无法访问所选安装位置：{error}。请确认磁盘已连接，并通过“安装位置”选择可访问的文件夹。")))?;
         if !parent.is_dir() { return Err(err("请选择安装文件夹")); }
-        return Ok(parent.join("Bowerbird-ComfyUI"));
+        return Ok(parent.join(if mode.image() { "Bowerbird-ComfyUI-Image" } else { "Bowerbird-ComfyUI" }));
     }
-    if let Ok(data) = std::fs::read(config(app)?) {
+    if let Ok(data) = std::fs::read(config(app, mode)?) {
         let path: PathBuf = serde_json::from_slice(&data)?;
         if path.is_absolute() { return Ok(path); }
     }
-    Ok(app.path().app_local_data_dir().map_err(|e| err(e.to_string()))?.join("Bowerbird-ComfyUI"))
+    Ok(app.path().app_local_data_dir().map_err(|e| err(e.to_string()))?.join(if mode.image() { "Bowerbird-ComfyUI-Image" } else { "Bowerbird-ComfyUI" }))
 }
 fn portable(root: &Path) -> PathBuf { root.join("ComfyUI_windows_portable") }
-fn installed(root: &Path) -> bool {
-    std::fs::read_to_string(root.join("ready.txt")).ok().as_deref() == Some(VERSION)
+fn runtime_installed(root: &Path, mode: Mode) -> bool {
+    std::fs::read_to_string(root.join("ready.txt")).ok().as_deref() == Some(mode.version())
         && portable(root).join("python_embeded/python.exe").is_file() && portable(root).join("ComfyUI/main.py").is_file()
         && root.join("models.yaml").is_file()
-        && DOWNLOADS.iter().skip(1).all(|item| std::fs::metadata(root.join(item.file)).is_ok_and(|m| m.len() == item.size))
+}
+fn installed(root: &Path, mode: Mode) -> bool {
+    runtime_installed(root, mode) && downloads(mode).iter().filter(|item| item.file != "portable.7z").all(|item| std::fs::metadata(root.join(item.file)).is_ok_and(|m| m.len() == item.size))
 }
 fn command(name: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     let mut cmd = std::process::Command::new(name);
     #[cfg(windows)] { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); }
     cmd
 }
-fn prerequisites() -> Result<(), String> {
-    if !cfg!(all(windows, target_arch = "x86_64")) { return Err("一键安装目前支持 Windows x64 + NVIDIA；其他系统请连接已有 ComfyUI".into()); }
-    let gpu = command("nvidia-smi").args(["--query-gpu=driver_version", "--format=csv,noheader"]).output().map_err(|_| "未检测到 NVIDIA 驱动，请安装显卡驱动后重新检测")?;
-    if !gpu.status.success() { return Err("NVIDIA 驱动不可用，请先安装或更新驱动".into()); }
-    // CUDA 13 Windows minimum driver branch (official portable uses cu130).
-    if !String::from_utf8_lossy(&gpu.stdout).lines().any(|line| line.trim().split('.').next().and_then(|v| v.parse::<u32>().ok()).is_some_and(|v| v >= 580)) {
-        return Err("此安装包需要 NVIDIA 580 或更新驱动，请更新驱动后重新检测".into());
-    }
+fn prerequisites(hardware: &driver::Hardware) -> Result<(), String> {
+    if let Some(issue) = &hardware.issue { return Err(issue.clone()); }
     if !command("tar.exe").arg("--version").output().is_ok_and(|out| out.status.success()) { return Err("未找到 Windows tar 解压工具，请更新 Windows 或连接已有 ComfyUI".into()); }
     Ok(())
 }
@@ -93,39 +173,123 @@ fn free_bytes(path: &Path) -> AppResult<u64> {
     }
     #[cfg(not(windows))] { let _ = path; Err(err("此平台暂不支持一键安装")) }
 }
-fn plan(root: &Path) -> Environment {
-    let download_bytes = DOWNLOADS.iter().map(|item| {
+// Read-only preflight: report directory conflicts before enabling installation.
+fn check_destination(root: &Path) -> AppResult<()> {
+    match std::fs::metadata(root) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(err(format!("无法访问安装目录 {}：{error}。请连接磁盘或通过“安装位置”选择有权限的文件夹。", root.display()))),
+        Ok(meta) if !meta.is_dir() => return Err(err(format!("安装路径 {} 已被文件占用，请通过“安装位置”选择其他文件夹。", root.display()))),
+        Ok(_) => {},
+    }
+    let mut entries = std::fs::read_dir(root).map_err(|error| err(format!("无法读取安装目录 {}：{error}。请通过“安装位置”选择有权限的文件夹。", root.display())))?;
+    if !root.join("bowerbird-setup.txt").is_file() && entries.next().transpose()?.is_some() {
+        return Err(err(format!("安装目录 {} 已有其他文件，无法安全安装。请通过“安装位置”选择其他文件夹；不会覆盖原文件。", root.display())));
+    }
+    Ok(())
+}
+fn check_disk_space(available: u64, required: u64) -> AppResult<()> {
+    if available >= required { return Ok(()); }
+    Err(err(format!("安装磁盘空间不足：需空闲 {:.1} GB，当前可用 {:.1} GB，还差 {:.1} GB。请清理磁盘或通过“安装位置”更换磁盘后重试。",
+        required as f64 / 1e9, available as f64 / 1e9, (required - available) as f64 / 1e9)))
+}
+fn plan(root: &Path, mode: Mode) -> Environment {
+    let download_bytes = downloads(mode).iter().map(|item| {
+        if item.file == "portable.7z" && runtime_installed(root, mode) { return 0; }
         let path = root.join(item.file);
         let bytes = std::fs::metadata(&path).or_else(|_| std::fs::metadata(path.with_extension("part"))).map(|m| m.len()).unwrap_or(0);
         item.size.saturating_sub(bytes.min(item.size))
     }).sum();
-    Environment { phase: "missing".into(), message: "未发现可用的本机环境".into(), endpoint: MANAGED_ENDPOINT.into(), directory: root.to_string_lossy().into(), can_install: false, installed: installed(root), download_bytes, required_bytes: download_bytes + RESERVE, completed_bytes: 0, total_bytes: DOWNLOADS.iter().map(|d| d.size).sum() }
+    Environment { mode, models_required: mode.names().len(), phase: "missing".into(), message: "未发现运行中的 ComfyUI，也未找到已登记的安装".into(), endpoint: mode.endpoint().into(), directory: root.to_string_lossy().into(), can_install: false, can_add_models: false, installed: installed(root, mode), download_bytes, required_bytes: download_bytes + RESERVE, completed_bytes: 0, total_bytes: downloads(mode).iter().map(|d| d.size).sum(), existing: Vec::new(), hardware: None, driver_download: None }
 }
-async fn detect(root: &Path, preferred: &str) -> AppResult<Environment> {
-    let preferred = comfy_video::endpoint(preferred)?;
-    let mut state = plan(root);
-    let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(4)).build().map_err(|e| err(e.to_string()))?;
-    let mut endpoints = vec![preferred, MANAGED_ENDPOINT.into(), "http://127.0.0.1:8000".into(), "http://127.0.0.1:8188".into()];
-    let mut seen = std::collections::HashSet::new(); endpoints.retain(|value| seen.insert(value.clone()));
-    let results = futures_util::future::join_all(endpoints.iter().map(|base| { let http = &http; async move {
-        let live = http.get(format!("{base}/system_stats")).send().await.ok()?.json::<serde_json::Value>().await.ok()?;
-        if !live["system"].is_object() { return None; }
-        Some(comfy_video::check(&http, base).await)
-    }})).await;
-    for (base, result) in endpoints.iter().zip(&results) {
-        if matches!(result, Some(Ok(()))) { state.phase = "ready".into(); state.endpoint = base.clone(); state.message = "本机环境已就绪 · 模型与节点可用".into(); return Ok(state); }
+async fn probe(http: &reqwest::Client, base: &str, mode: Mode) -> Option<AppResult<()>> {
+    let response = match http.get(format!("{base}/system_stats")).timeout(Duration::from_secs(8)).send().await {
+        Ok(response) => response,
+        // Windows may report an unopened loopback port as a connect timeout instead of refused.
+        // No HTTP connection was established; filesystem discovery still identifies stopped installs.
+        Err(error) if error.is_connect() => return None,
+        Err(_) => return Some(Err(err("本机服务检查超时或连接异常，请稍后重新检测；不能据此判断未安装"))),
+    };
+    let system = response.json::<serde_json::Value>().await;
+    if !system.as_ref().is_ok_and(|v| v["system"].is_object()) {
+        // Common ports can belong to unrelated apps. A generic HTTP response is not a ComfyUI installation.
+        return None;
     }
-    if let Some(Some(Err(error))) = results.iter().find(|r| r.is_some()) { state.message = format!("已发现 ComfyUI，但尚未就绪：{error}"); }
-    let support = tokio::task::spawn_blocking(prerequisites).await.map_err(|e| err(e.to_string()))?;
+    if mode.image() {
+        let version = system.as_ref().ok().and_then(|stats| stats["system"]["comfyui_version"].as_str()).unwrap_or("");
+        let mut parts = version.trim_start_matches('v').split('.');
+        let major = parts.next().and_then(|v|v.parse::<u32>().ok()).unwrap_or(0);
+        let minor = parts.next().and_then(|v|v.parse::<u32>().ok()).unwrap_or(0);
+        if (major, minor) < (0, 45) { return Some(Err(err(format!("ComfyUI {version} 需要更新到 0.45.0 或更高版本")))); }
+    }
+    Some(mode.check(http, base).await)
+}
+async fn detect(root: &Path, preferred: &str, existing: Vec<Installation>, mode: Mode) -> AppResult<Environment> {
+    let preferred = comfy_video::endpoint(preferred)?;
+    let mut state = plan(root, mode);
+    state.existing = existing;
+    let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(2)).timeout(Duration::from_secs(45)).build().map_err(|e| err(e.to_string()))?;
+    let mut endpoints = vec![preferred, mode.endpoint().into(), "http://127.0.0.1:18189".into(), "http://127.0.0.1:8000".into(), "http://127.0.0.1:8188".into()];
+    if mode.image() { endpoints.extend([MANAGED_ENDPOINT.into(),mode.existing_service().1.into()]); }
+    endpoints.extend(state.existing.iter().map(|i| i.endpoint.clone()));
+    let mut seen = std::collections::HashSet::new(); endpoints.retain(|value| seen.insert(value.clone()));
+    use futures_util::StreamExt;
+    let mut pending: futures_util::stream::FuturesOrdered<_> = endpoints.iter().map(|base| probe(&http, base, mode)).collect();
+    let mut results = Vec::with_capacity(endpoints.len());
+    for base in &endpoints {
+        let result = pending.next().await.expect("one probe per endpoint");
+        if matches!(result, Some(Ok(()))) { state.phase = "ready".into(); state.endpoint = base.clone(); state.message = "本机环境已就绪 · 模型与节点可用".into(); return Ok(state); }
+        results.push(result);
+    }
+    if let Some((base, Some(Err(error)))) = endpoints.iter().zip(&results).find(|(base, r)| r.is_some() && (!mode.image() || base.as_str() == mode.endpoint())) {
+        state.phase = "unavailable".into(); state.endpoint = base.clone();
+        state.message = format!("服务尚未通过检查（{base}）：{error}");
+        // An owned running installation can add this mode's missing model without replacing its runtime.
+        if base == mode.endpoint() && runtime_installed(root, mode) && !state.installed {
+            match free_bytes(root).and_then(|bytes| check_disk_space(bytes, state.required_bytes)) {
+                Ok(()) => { state.can_install = true; state.can_add_models = true; }
+                Err(error) => state.message = error.to_string(),
+            }
+            state.existing.clear();
+        }
+        return Ok(state);
+    }
+    if mode.image() {
+        // Prefer the isolated runtime when an older or incomplete Desktop is already responding.
+        state.existing.retain(|instance| !endpoints.iter().zip(&results).any(|(base, result)| base == &instance.endpoint && result.is_some()));
+        if let Some((base, Some(Err(issue)))) = endpoints.iter().zip(&results).find(|(_,v)|matches!(v, Some(Err(_)))) {
+            state.message = format!("已检测到 {base}：{issue}。可准备独立的 H3 图片环境。");
+        } else if !state.existing.is_empty() {
+            state.message = "已找到 ComfyUI 安装。若已配置图片模型可先启动并重新检测，或安装独立图片环境。".into();
+        }
+        state.existing.retain(|i| i.models_found == mode.names().len() && i.can_start);
+    }
+    if let Some(instance) = state.existing.first() {
+        state.phase = "stopped".into(); state.endpoint = instance.endpoint.clone();
+        state.message = if !instance.can_start {
+            format!("已找到 {}，但缺少可用的 Python 程序，暂时无法自动启动。请在 ComfyUI Desktop 中修复环境并启动，或修复该安装的 Python 后返回应用重新检测。安装目录：{}", instance.name, instance.path.display())
+        } else if instance.models_found < mode.names().len() {
+            format!("已找到 {}，磁盘检查仅定位到 {}/{} 个所需模型。可点击启动进一步检查；若仍提示缺失，请在已有 ComfyUI 中补齐模型后返回应用。", instance.name, instance.models_found, mode.names().len())
+        } else { format!("已找到 {}，但服务未启动。可直接启动已有环境，无需重新下载。", instance.name) };
+        return Ok(state);
+    }
+    let hardware = driver::detect().await;
+    let checked = hardware.clone();
+    let support = tokio::task::spawn_blocking(move || prerequisites(&checked)).await.map_err(|e| err(e.to_string()))?;
+    state.hardware = Some(hardware);
     match support {
         Ok(()) => {
+            if !state.installed {
+                if let Err(error) = check_destination(root) { state.message = error.to_string(); return Ok(state); }
+            }
             match free_bytes(root) {
-                Ok(bytes) if bytes >= state.required_bytes || state.installed => { state.can_install = true; }
-                Ok(_) => state.message.push_str("。安装磁盘空间不足，请更换位置"),
-                Err(error) => state.message.push_str(&format!("。无法检查安装磁盘：{error}")),
+                Ok(bytes) => match if state.installed { Ok(()) } else { check_disk_space(bytes, state.required_bytes) } {
+                    Ok(()) => { state.can_install = true; state.can_add_models = runtime_installed(root, mode) && !state.installed; }
+                    Err(error) => state.message = error.to_string(),
+                },
+                Err(error) => state.message = format!("无法检查安装磁盘 {}：{error}。请确认磁盘已连接，并通过“安装位置”选择可访问的磁盘。", root.display()),
             }
         }
-        Err(reason) => state.message.push_str(&format!("。{reason}")),
+        Err(reason) => state.message = reason,
     }
     Ok(state)
 }
@@ -135,7 +299,35 @@ async fn hash(path: &Path, cancel: &AtomicBool) -> AppResult<String> {
     loop { cancelled(cancel)?; let read = file.read(&mut buf).await?; if read == 0 { break; } sha.update(&buf[..read]); }
     Ok(format!("{:x}", sha.finalize()))
 }
-async fn download(http: &reqwest::Client, item: &Download, root: &Path, cancel: &AtomicBool, done: u64) -> AppResult<()> {
+#[derive(serde::Deserialize)]
+struct DownloadGrant { url: String, file: String, size: u64, sha256: String }
+fn validate_grant(grant: DownloadGrant, item: &Download) -> AppResult<String> {
+    let url = reqwest::Url::parse(&grant.url).map_err(|_| err("下载授权地址无效"))?;
+    if url.scheme() != "https" || url.host_str() != Some("bowerbird.tos-cn-guangzhou.volces.com")
+        || url.port().is_some() || !url.username().is_empty() || url.password().is_some() || url.fragment().is_some()
+        || url.path() != format!("/comfyui/{VERSION}/{}", item.file)
+        || grant.file != item.file || grant.size != item.size || grant.sha256 != item.sha {
+        return Err(err("下载授权与固定安装资源不匹配，请更新客户端"));
+    }
+    Ok(grant.url)
+}
+async fn download_grant(app: &AppHandle, http: &reqwest::Client, item: &Download, owner: &str) -> AppResult<String> {
+    let auth = app.state::<AuthClient>();
+    let entitlement = app.state::<EntitlementService>();
+    if comfy_video::account(&auth, &entitlement).await? != owner { return Err(err("账号已切换，安装已停止")); }
+    let endpoint = crate::cloud::config::CloudConfig::official().account_endpoint("comfy-download").ok_or_else(|| err("下载授权服务未配置"))?;
+    let response = auth.send_authorized(http.post(endpoint).timeout(Duration::from_secs(30))
+        .json(&serde_json::json!({"version": VERSION, "file": item.file})), "获取安装下载授权失败").await?;
+    if !response.status().is_success() {
+        return Err(err(if response.status() == reqwest::StatusCode::FORBIDDEN { "下载需要有效的 Pro／Studio 权益或测试账号资格" }
+            else { "获取下载授权失败，请稍后重试" }));
+    }
+    let grant = response.json::<DownloadGrant>().await.map_err(|_| err("下载授权响应无效"))?;
+    if auth.snapshot().user_id.as_deref() != Some(owner) { return Err(err("账号已切换，安装已停止")); }
+    validate_grant(grant, item)
+}
+async fn download<F, Fut>(http: &reqwest::Client, item: &Download, root: &Path, cancel: &AtomicBool, done: u64, mut grant: F) -> AppResult<()>
+where F: FnMut() -> Fut, Fut: std::future::Future<Output = AppResult<String>> {
     cancelled(cancel)?;
     let target = root.join(item.file); let part = target.with_extension("part");
     tokio::fs::create_dir_all(target.parent().unwrap()).await?;
@@ -146,13 +338,28 @@ async fn download(http: &reqwest::Client, item: &Download, root: &Path, cancel: 
     }
     let mut offset = tokio::fs::metadata(&part).await.map(|m| m.len()).unwrap_or(0);
     if offset > item.size { return Err(err("断点文件大小异常，请更换安装位置")); }
-    if offset < item.size {
-        let mut request = http.get(item.url);
+    let mut attempts = 0;
+    while offset < item.size {
+        cancelled(cancel)?;
+        if attempts >= 4 { return Err(err("下载暂时中断，已保留进度，点击重试可继续")); }
+        if attempts > 0 {
+            progress(format!("正在恢复{}下载…", label(item)), done + offset);
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(attempts)) => {},
+                _ = wait_cancel(cancel) => return cancelled(cancel),
+            }
+        }
+        attempts += 1;
+        let url = tokio::select! { value = grant() => value?, _ = wait_cancel(cancel) => return cancelled(cancel) };
+        // TOS grants are refreshed for each connection; ModelScope resolves its pinned revision again.
+        // Never put account credentials on resource requests or include signed URLs in errors/logs.
+        let mut request = http.get(url);
         if offset > 0 { request = request.header(reqwest::header::RANGE, format!("bytes={offset}-")); }
         let mut response = tokio::select! {
-            result = request.send() => result.map_err(|e| err(format!("下载连接失败，可重试：{e}")))?,
+            result = request.send() => match result { Ok(response) => response, Err(_) => continue },
             _ = wait_cancel(cancel) => return cancelled(cancel),
         };
+        if matches!(response.status().as_u16(), 401 | 403 | 408 | 429 | 500..=599) { continue; }
         if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
             let expected = format!("bytes {offset}-{}/{}", item.size - 1, item.size);
             if response.headers().get(reqwest::header::CONTENT_RANGE).and_then(|h| h.to_str().ok()) != Some(expected.as_str()) { return Err(err("下载服务器返回了错误的断点范围")); }
@@ -161,7 +368,7 @@ async fn download(http: &reqwest::Client, item: &Download, root: &Path, cancel: 
         let mut file = tokio::fs::OpenOptions::new().create(true).write(true).truncate(offset == 0).append(offset > 0).open(&part).await?;
         loop {
             let chunk = tokio::select! {
-                result = response.chunk() => result.map_err(|e| err(format!("下载中断，可继续：{e}")))?,
+                result = response.chunk() => match result { Ok(chunk) => chunk, Err(_) => break },
                 _ = wait_cancel(cancel) => { file.sync_all().await?; return cancelled(cancel); },
             };
             let Some(chunk) = chunk else { break; };
@@ -177,16 +384,42 @@ async fn download(http: &reqwest::Client, item: &Download, root: &Path, cancel: 
     tokio::fs::rename(part, target).await?;
     Ok(())
 }
+async fn download_resource<F, Fut>(http: &reqwest::Client, mirror: Option<(&reqwest::Client, &str)>, item: &Download, root: &Path, cancel: &AtomicBool, done: u64, grant: F) -> AppResult<()>
+where F: FnMut() -> Fut, Fut: std::future::Future<Output = AppResult<String>> {
+    // Reuse verified files without contacting either source. Both sources share the same hash and .part.
+    if !root.join(item.file).is_file() {
+        if let Some((mirror_http, url)) = mirror {
+            if download(mirror_http, item, root, cancel, done, || std::future::ready(Ok(url.to_owned()))).await.is_ok() { return Ok(()); }
+            cancelled(cancel)?;
+            progress(format!("正在切换备用下载源：{}…", label(item)), done);
+        }
+    }
+    download(http, item, root, cancel, done, grant).await
+}
 async fn wait_cancel(cancel: &AtomicBool) { while !cancel.load(Ordering::Relaxed) { tokio::time::sleep(Duration::from_millis(200)).await; } }
-async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str) -> AppResult<()> {
-    prerequisites().map_err(err)?;
-    let state = plan(root);
-    if !state.installed && free_bytes(root)? < state.required_bytes { return Err(err("安装磁盘空间不足，请更换位置后重试")); }
+async fn write_licenses(root: &Path) -> AppResult<()> {
+    let directory = root.join("licenses");
+    tokio::fs::create_dir_all(&directory).await?;
+    for (name, content) in [
+        ("MiniMax-H3-LICENSE.txt", include_str!("../../../src/assets/comfy-licenses/MiniMax-H3-LICENSE.txt")),
+        ("NOTICE.txt", include_str!("../../../src/assets/comfy-licenses/NOTICE.txt")),
+        ("Qwen3-VL-LICENSE.txt", include_str!("../../../src/assets/comfy-licenses/Qwen3-VL-LICENSE.txt")),
+        ("ComfyUI-v0.42.1-LICENSE.txt", include_str!("../../../src/assets/comfy-licenses/ComfyUI-v0.42.1-LICENSE.txt")),
+        ("Comfy-Org-MiniMax-H3-README.md", include_str!("../../../src/assets/comfy-licenses/Comfy-Org-MiniMax-H3-README.md")),
+        ("LightX2V-README.md", include_str!("../../../src/assets/comfy-licenses/LightX2V-README.md")),
+        ("sources.json", include_str!("../../../src/assets/comfy-licenses/sources.json")),
+    ] { tokio::fs::write(directory.join(name), content).await?; }
+    Ok(())
+}
+async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str, mode: Mode) -> AppResult<()> {
+    prerequisites(&driver::detect().await).map_err(err)?;
+    let state = plan(root, mode);
+    if !state.installed { check_disk_space(free_bytes(root)?, state.required_bytes)?; }
     let marker = root.join("bowerbird-setup.txt");
-    if root.exists() && !marker.is_file() && std::fs::read_dir(root)?.next().is_some() { return Err(err("此安装位置已有其他文件，请选择空文件夹")); }
+    check_destination(root)?;
     tokio::fs::create_dir_all(root).await?;
-    tokio::fs::write(&marker, VERSION).await?;
-    let location = config(app)?;
+    tokio::fs::write(&marker, mode.version()).await?;
+    let location = config(app, mode)?;
     tokio::fs::create_dir_all(location.parent().unwrap()).await?;
     tokio::fs::write(location, serde_json::to_vec(root)?).await?;
     let check_owner = || -> AppResult<()> {
@@ -195,66 +428,202 @@ async fn install(app: &AppHandle, root: &Path, cancel: &AtomicBool, owner: &str)
         Ok(())
     };
     if !state.installed {
-        let http = reqwest::Client::builder().https_only(true).connect_timeout(Duration::from_secs(30)).read_timeout(Duration::from_secs(60)).build().map_err(|e| err(e.to_string()))?;
+        let http = reqwest::Client::builder().no_proxy().https_only(true).redirect(reqwest::redirect::Policy::none()).connect_timeout(Duration::from_secs(30)).read_timeout(Duration::from_secs(60)).build().map_err(|e| err(e.to_string()))?;
+        // Separate unauthenticated client: only ModelScope downloads may follow its CDN redirects.
+        let mirror_http = modelscope_client()?;
         let mut done = 0;
-        for item in DOWNLOADS { check_owner()?; download(&http, item, root, cancel, done).await?; done += item.size; }
-        check_owner()?; progress("正在解压 ComfyUI 与 Python 环境…".into(), done);
-        let mut child = command("tar.exe").arg("-xf").arg(root.join("portable.7z")).arg("-C").arg(root).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()?;
-        loop {
-            if let Err(error) = check_owner() { let _ = child.kill(); let _ = child.wait(); return Err(error); }
-            if let Some(status) = child.try_wait()? { if !status.success() { return Err(err("解压失败，请检查磁盘空间与 Windows tar 版本后重试")); } break; }
-            tokio::time::sleep(Duration::from_millis(250)).await;
+        if mode.image() {
+            let licenses = root.join("licenses");
+            tokio::fs::create_dir_all(&licenses).await?;
+            tokio::fs::write(licenses.join("sources.txt"), "Runtime: https://github.com/Comfy-Org/ComfyUI/releases/tag/v0.45.0\nModels: https://huggingface.co/Comfy-Org/MiniMax-H3-Image/tree/0bb149f51e3156ed4b90dd45d5620346bfe1df8f\nWorkflows: https://github.com/Comfy-Org/workflow_templates/tree/main/templates\n").await?;
+            tokio::fs::write(licenses.join("MiniMax-H3-Image-LICENSE.txt"), include_str!("../../../src/assets/comfy-licenses/MiniMax-H3-Image-LICENSE.txt")).await?;
+        } else { write_licenses(root).await?; }
+        for item in downloads(mode) {
+            check_owner()?;
+            if item.file == "portable.7z" && runtime_installed(root, mode) { done += item.size; continue; }
+            if comfy_video::account(&app.state::<AuthClient>(), &app.state::<EntitlementService>()).await? != owner { return Err(err("账号已切换，安装已停止")); }
+            let mirror_url = modelscope_url(item);
+            if mode.image() {
+                let url = match item.file.strip_prefix("models/") {
+                    Some(path) => format!("https://huggingface.co/Comfy-Org/MiniMax-H3-Image/resolve/0bb149f51e3156ed4b90dd45d5620346bfe1df8f/{path}"),
+                    None => "https://github.com/Comfy-Org/ComfyUI/releases/download/v0.45.0/ComfyUI_windows_portable_nvidia.7z".into(),
+                };
+                let public = reqwest::Client::builder().https_only(true).connect_timeout(Duration::from_secs(30)).read_timeout(Duration::from_secs(60)).build().map_err(|e| err(e.to_string()))?;
+                download_resource(&public, mirror_url.as_deref().map(|url| (&mirror_http,url)), item, root, cancel, done, || std::future::ready(Ok(url.clone()))).await?;
+            } else if tos_available(item) {
+                download_resource(&http, mirror_url.as_deref().map(|url| (&mirror_http, url)), item, root, cancel, done, || download_grant(app, &http, item, owner)).await?;
+            } else {
+                // This new model is not published in the server-side TOS grant catalog.
+                let url = mirror_url.ok_or_else(|| err("此模式的模型下载源尚未配置"))?;
+                download(&mirror_http, item, root, cancel, done, || std::future::ready(Ok(url.clone()))).await?;
+            }
+            done += item.size;
         }
-        // JSON is valid YAML; a separate configuration never overwrites an existing user's config.
-        let model_config = serde_json::json!({"bowerbird": {"base_path":root.join("models"),"diffusion_models":"diffusion_models","text_encoders":"text_encoders","vae":"vae","loras":"loras"}});
-        tokio::fs::write(root.join("models.yaml"), serde_json::to_vec_pretty(&model_config)?).await?;
-        tokio::fs::write(root.join("ready.txt"), VERSION).await?;
+        if !runtime_installed(root, mode) {
+            check_owner()?; progress("正在解压 ComfyUI 与 Python 环境…".into(), done);
+            let mut child = command("tar.exe").arg("-xf").arg(root.join("portable.7z")).arg("-C").arg(root).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).spawn()?;
+            loop {
+                if let Err(error) = check_owner() { let _ = child.kill(); let _ = child.wait(); return Err(error); }
+                if let Some(status) = child.try_wait()? { if !status.success() { return Err(err("解压失败，请检查磁盘空间与 Windows tar 版本后重试")); } break; }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+            // JSON is valid YAML; a separate configuration never overwrites an existing user's config.
+            let model_config = serde_json::json!({"bowerbird": {"base_path":root.join("models"),"diffusion_models":"diffusion_models","text_encoders":"text_encoders","vae":"vae","loras":"loras"}});
+            tokio::fs::write(root.join("models.yaml"), serde_json::to_vec_pretty(&model_config)?).await?;
+            tokio::fs::write(root.join("ready.txt"), mode.version()).await?;
+        }
     }
     check_owner()?;
     // Never start over an occupied port, even if it belongs to another ComfyUI.
-    if tokio::net::TcpStream::connect("127.0.0.1:18188").await.is_ok() { return Err(err("端口 18188 已被占用，请重新检测或关闭占用该端口的程序")); }
+    if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", mode.port())).await.is_ok() {
+        let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(45)).build().map_err(|e| err(e.to_string()))?;
+        return mode.check(&http, mode.endpoint()).await;
+    }
     progress("正在启动本机环境并检查模型…".into(), state.total_bytes);
-    let log = std::fs::File::create(root.join("startup.log"))?;
-    let mut child = command(portable(root).join("python_embeded/python.exe"))
-        .current_dir(portable(root)).args(["-s", "ComfyUI/main.py", "--windows-standalone-build", "--listen", "127.0.0.1", "--port", "18188", "--disable-auto-launch", "--extra-model-paths-config"])
-        .arg(root.join("models.yaml")).stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log).spawn()?;
-    let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(4)).build().map_err(|e| err(e.to_string()))?;
+    let mut cmd = command(portable(root).join("python_embeded/python.exe"));
+    cmd.current_dir(portable(root)).args(["-s", "ComfyUI/main.py", "--windows-standalone-build", "--listen", "127.0.0.1", "--port", mode.port(), "--disable-auto-launch", "--extra-model-paths-config"])
+        .arg(root.join("models.yaml"));
+    launch(app, cmd, mode.endpoint(), &root.join("startup.log"), cancel, owner, mode).await
+}
+fn startup_log_tail(path: &Path) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let read = || -> std::io::Result<String> {
+        let mut file = std::fs::File::open(path)?;
+        file.seek(SeekFrom::End(-(file.metadata()?.len().min(65536) as i64)))?;
+        let mut bytes = Vec::new();
+        file.take(65536).read_to_end(&mut bytes)?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    };
+    read().unwrap_or_default()
+}
+fn startup_failure(log: &str, path: &Path) -> AppError {
+    let detail = log.lines().rev().find(|line| !line.trim().is_empty()).unwrap_or("进程已退出，未提供错误详情");
+    let detail: String = detail.chars().take(600).collect();
+    err(format!("ComfyUI 启动失败：{detail}。日志：{}", path.display()))
+}
+async fn launch(app: &AppHandle, mut cmd: std::process::Command, endpoint: &str, log_path: &Path, cancel: &AtomicBool, owner: &str, mode: Mode) -> AppResult<()> {
+    cancelled(cancel)?;
+    let http = reqwest::Client::builder().no_proxy().redirect(reqwest::redirect::Policy::none()).timeout(Duration::from_secs(30)).build().map_err(|e| err(e.to_string()))?;
+    let log = std::fs::File::create(log_path)?;
+    let mut child = cmd.stdin(std::process::Stdio::null()).stdout(log.try_clone()?).stderr(log).spawn()?;
     let mut reason = String::new();
     for _ in 0..120 {
-        if let Err(error) = check_owner() { let _ = child.kill(); let _ = child.wait(); return Err(error); }
-        if child.try_wait()?.is_some() { return Err(err(format!("ComfyUI 启动失败，请查看 {}", root.join("startup.log").display()))); }
-        match comfy_video::check(&http, MANAGED_ENDPOINT).await { Ok(()) => return Ok(()), Err(error) => reason = error.to_string() }
+        if cancel.load(Ordering::Relaxed) || app.state::<AuthClient>().snapshot().user_id.as_deref() != Some(owner) {
+            let _ = child.kill(); let _ = child.wait(); return Err(err("已取消本次启动"));
+        }
+        if child.try_wait()?.is_some() {
+            let log = startup_log_tail(log_path);
+            return Err(startup_failure(&log, log_path));
+        }
+        match mode.check(&http, endpoint).await { Ok(()) => return Ok(()), Err(error) => reason = error.to_string() }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     let _ = child.kill(); let _ = child.wait();
-    Err(err(format!("启动检查未通过：{reason}。日志：{}", root.join("startup.log").display())))
+    Err(err(format!("启动检查未通过：{reason}。日志：{}", log_path.display())))
+}
+async fn start_existing(app: &AppHandle, instance: &Installation, cancel: &AtomicBool, owner: &str, mode: Mode) -> AppResult<()> {
+    let python = instance.python.as_ref().ok_or_else(|| err("未找到此安装的 Python，请在 ComfyUI Desktop 中启动"))?;
+    let (port, endpoint) = mode.existing_service();
+    if tokio::net::TcpStream::connect(format!("127.0.0.1:{port}")).await.is_ok() { return Err(err(format!("已有环境启动端口 {port} 被占用，请重新检测"))); }
+    let logs = app.path().app_local_data_dir().map_err(|e| err(e.to_string()))?.join("comfy-existing");
+    tokio::fs::create_dir_all(&logs).await?;
+    let mut cmd = command(python);
+    cmd.current_dir(instance.main.parent().unwrap()).arg("-s").arg(&instance.main)
+        .args(["--listen", "127.0.0.1", "--port", port, "--disable-auto-launch"])
+        .args(existing_launch_args(&instance.launch_args, mode));
+    if !instance.model_configs.is_empty() { cmd.arg("--extra-model-paths-config").args(&instance.model_configs); }
+    launch(app, cmd, endpoint, &logs.join(if mode.image() { "image-startup.log" } else { "startup.log" }), cancel, owner, mode).await
+}
+
+fn existing_launch_args(args: &[String], mode: Mode) -> Vec<&str> {
+    args.iter().map(|arg| {
+        // Sage Attention can abort the entire service during H3 video sampling.
+        if !mode.image() && arg == "--use-sage-attention" { "--use-pytorch-cross-attention" } else { arg.as_str() }
+    }).collect()
+}
+
+// Run may start an installed environment, but must never implicitly download a new one.
+fn preparation_target(state: &Environment, action: &str) -> AppResult<Option<Installation>> {
+    if action == "start_existing" || (action == "prepare" && state.phase == "stopped") {
+        if state.phase != "stopped" { return Err(err("已有服务正在响应或检查未通过，请先核对服务状态，避免重复启动")); }
+        let instance = state.existing.first().filter(|i| i.can_start).ok_or_else(|| err("未找到可直接启动的 Python 环境，请在环境设置中选择完整安装目录，或在 ComfyUI Desktop 中启动"))?;
+        Ok(Some(instance.clone()))
+    } else {
+        if !state.can_install { return Err(err(&state.message)); }
+        if action == "prepare" && !state.installed { return Err(err("尚未安装本机环境，请先点击卡片中的“一键下载并安装”，完成后再运行")); }
+        Ok(None)
+    }
 }
 
 #[tauri::command]
-pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, action: String, endpoint: String, directory: Option<String>) -> AppResult<Environment> {
+pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>, entitlement: State<'_, EntitlementService>, action: String, endpoint: String, directory: Option<String>, existing_directory: Option<String>, mode: Option<Mode>) -> AppResult<Environment> {
     let owner = comfy_video::account(&auth, &entitlement).await?;
-    if !matches!(action.as_str(), "detect" | "status" | "install" | "cancel") { return Err(err("不支持的环境操作")); }
-    {
+    let mode = mode.unwrap_or_default();
+    if !matches!(action.as_str(), "detect" | "status" | "prepare" | "install" | "cancel" | "select_existing" | "start_existing" | "driver") { return Err(err("不支持的环境操作")); }
+    let previous = {
         let job = JOB.lock().unwrap();
         if let Some(job) = job.as_ref() {
             if active(&job.state) {
                 if job.owner != owner { return Err(err("另一个账号的环境安装正在进行")); }
+                if job.state.mode != mode { return Err(err("另一个工作流的环境准备正在进行，请完成后重新检测")); }
                 if action == "cancel" { job.cancel.store(true, Ordering::Relaxed); }
                 return Ok(job.state.clone());
             }
-            if action == "status" && job.owner == owner { return Ok(job.state.clone()); }
+            if action == "status" && job.owner == owner && job.state.mode == mode { return Ok(job.state.clone()); }
+        }
+        job.as_ref().filter(|job| job.owner == owner && job.state.mode == mode).map(|job| job.state.clone())
+    };
+    let selection_file = config(&app, mode)?.with_file_name(if mode.image() { "comfy-image-existing-location.json" } else { "comfy-existing-location.json" });
+    let saved: Option<PathBuf> = std::fs::read(&selection_file).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok());
+    let selected = existing_directory.map(PathBuf::from).or(saved);
+    let config_dirs = comfy_discovery::desktop_config_dirs();
+    let names = mode.names();
+    let mut existing = comfy_discovery::discover(&config_dirs, selected.as_deref(), names);
+    if selected.is_none() { existing.sort_by_key(|item| item.models_found < names.len()); }
+    if matches!(action.as_str(), "select_existing" | "start_existing") {
+        let first = existing.first().ok_or_else(|| err("所选文件夹未找到 ComfyUI。请选择 Desktop 安装总目录、具体实例目录或便携版目录"))?;
+        std::fs::create_dir_all(selection_file.parent().unwrap())?;
+        std::fs::write(&selection_file, serde_json::to_vec(&first.path)?)?;
+    }
+    // Older UI called this "更换位置". Never interpret an existing installation as a download destination.
+    if let Some(directory) = directory.as_deref() {
+        let located = comfy_discovery::discover(&config_dirs, Some(Path::new(directory)), &names);
+        if !located.is_empty() {
+            if action == "install" { return Err(err("所选位置是已有 ComfyUI，请使用“选择已有 ComfyUI”连接，避免重复安装")); }
+            existing = located;
         }
     }
-    let root = location(&app, directory)?;
-    let mut state = detect(&root, &endpoint).await?;
-    if action != "install" { return Ok(state); }
+    let root = location(&app, directory, mode)?;
+    let mut state = detect(&root, &endpoint, existing, mode).await?;
+    if action == "driver" {
+        if let Some(hardware) = state.hardware.as_ref().filter(|v| v.driver_required) {
+            let download = driver::lookup(hardware).await;
+            let login = auth.snapshot();
+            if !login.logged_in || login.user_id.as_deref() != Some(owner.as_str()) { return Err(err("账号已切换，请重新检测环境")); }
+            state.message = download.message.clone();
+            state.driver_download = Some(download);
+        }
+        return Ok(state);
+    }
+    if !matches!(action.as_str(), "prepare" | "install" | "start_existing") {
+        retain_setup_outcome(&mut state, previous.as_ref());
+        return Ok(state);
+    }
     if state.phase == "ready" { return Ok(state); }
-    if !state.can_install { return Err(err(&state.message)); }
+    // Prerequisites may have changed since the UI check. Return the actual blocker to the UI
+    // instead of converting it into an IPC error that invites another detection-only click.
+    if action == "install" && !state.can_install && state.existing.is_empty() { return Ok(state); }
+    let start = preparation_target(&state, &action)?;
     let cancel = Arc::new(AtomicBool::new(false));
-    state.phase = "installing".into(); state.message = "正在准备本机环境…".into();
+    state.phase = if start.is_some() || state.installed { "starting" } else { "installing" }.into();
+    state.message = if state.phase == "starting" { "正在启动已有 ComfyUI 并检查模型…" } else { "正在准备本机环境…" }.into();
     {
         let mut job = JOB.lock().unwrap();
-        if job.as_ref().is_some_and(|job| active(&job.state)) { return Err(err("环境安装已在进行")); }
+        if let Some(job) = job.as_ref().filter(|job| active(&job.state)) {
+            if job.owner == owner && job.state.mode == mode { return Ok(job.state.clone()); }
+            if job.owner == owner { return Err(err("另一个工作流的环境准备正在进行，请完成后重新检测")); }
+            return Err(err("另一个账号的环境准备正在进行"));
+        }
         *job = Some(Job { owner: owner.clone(), state: state.clone(), cancel: cancel.clone() });
     }
     tauri::async_runtime::spawn(async move {
@@ -267,20 +636,42 @@ pub async fn comfy_video_environment(app: AppHandle, auth: State<'_, AuthClient>
                 if !login.logged_in || login.user_id.as_deref() != Some(watcher_owner.as_str()) { watcher_cancel.store(true, Ordering::Relaxed); break; }
             }
         });
-        let result = install(&app, &root, &cancel, &owner).await;
+        let result = if let Some(instance) = &start { start_existing(&app, instance, &cancel, &owner, mode).await } else { install(&app, &root, &cancel, &owner, mode).await };
         watcher.abort();
         if let Some(job) = JOB.lock().unwrap().as_mut() {
-            let remaining = plan(&root);
+            let remaining = plan(&root, mode);
             job.state.download_bytes = remaining.download_bytes;
             job.state.required_bytes = remaining.required_bytes;
             job.state.installed = remaining.installed;
             match result {
-                Ok(()) => { job.state.phase = "ready".into(); job.state.endpoint = MANAGED_ENDPOINT.into(); job.state.message = "本机环境已就绪 · 可以生成视频".into(); job.state.installed = true; }
-                Err(error) => { job.state.phase = if cancel.load(Ordering::Relaxed) { "cancelled" } else { "failed" }.into(); job.state.message = error.to_string(); }
+                Ok(()) => { job.state.phase = "ready".into(); job.state.endpoint = if start.is_some() { mode.existing_service().1 } else { mode.endpoint() }.into(); job.state.message = "本机环境已就绪".into(); job.state.installed = start.is_none(); }
+                Err(error) => {
+                    job.state.phase = if cancel.load(Ordering::Relaxed) { "cancelled" } else { "failed" }.into();
+                    job.state.message = match error {
+                        AppError::Io(error) => format!("{}时无法读写所需文件：{error}。请检查安装目录权限、剩余磁盘空间及安全软件拦截后重试。", if start.is_some() { "启动已有环境" } else { "安装环境" }),
+                        other => other.to_string(),
+                    };
+                }
             }
         }
     });
     Ok(state)
+}
+
+pub(crate) async fn prepare_image(app: &AppHandle, edit: bool) -> AppResult<String> {
+    let mode = if edit { Mode::Edit } else { Mode::Image };
+    let mut action = "prepare";
+    loop {
+        let state = comfy_video_environment(app.clone(), app.state(), app.state(), action.into(), mode.endpoint().into(), None, None, Some(mode)).await?;
+        match state.phase.as_str() {
+            "ready" => return Ok(state.endpoint),
+            "installing" | "starting" => {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                action = "status";
+            }
+            _ => return Err(err(format!("{}。请在 MiniMax-H3-Image 旁打开环境设置", state.message))),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -292,18 +683,174 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap(); root
     }
     #[test]
+    fn h3_setup_detection_preserves_failure_until_retry_or_conditions_change() {
+        let root = scratch();
+        let mut previous = plan(&root, Mode::Frames);
+        previous.phase = "failed".into(); previous.message = "下载授权失败，请重试".into();
+        let mut detected = plan(&root, Mode::Frames); detected.can_install = true;
+        retain_setup_outcome(&mut detected, Some(&previous));
+        assert_eq!(detected.phase, "failed"); assert_eq!(detected.message, previous.message);
+        assert!(preparation_target(&detected, "install").unwrap().is_none());
+        detected = plan(&root, Mode::Frames); detected.message = "磁盘空间不足".into();
+        retain_setup_outcome(&mut detected, Some(&previous));
+        assert_eq!(detected.message, "磁盘空间不足"); assert_eq!(detected.phase, "missing");
+        detected.phase = "ready".into(); retain_setup_outcome(&mut detected, Some(&previous));
+        assert_eq!(detected.phase, "ready");
+        detected = plan(&root.join("different"), Mode::Frames); detected.can_install = true;
+        retain_setup_outcome(&mut detected, Some(&previous)); assert_eq!(detected.phase, "missing");
+        detected = plan(&root, Mode::Frames); detected.can_install = true; previous.phase = "cancelled".into();
+        retain_setup_outcome(&mut detected, Some(&previous)); assert_eq!(detected.phase, "cancelled");
+    }
+    #[test]
+    fn h3_setup_preflight_reports_directory_conflicts_and_disk_shortfall() {
+        let root = scratch();
+        assert!(check_destination(&root.join("not-created")).is_ok());
+        assert!(!root.join("not-created").exists(), "detection must not create files");
+        assert!(check_destination(&root).is_ok());
+        let user_file = root.join("keep.txt");
+        std::fs::write(&user_file, "keep").unwrap();
+        let reason = check_destination(&root).unwrap_err().to_string();
+        assert!(reason.contains("已有其他文件") && reason.contains("安装位置"));
+        assert!(check_destination(&user_file).unwrap_err().to_string().contains("被文件占用"));
+        assert_eq!(std::fs::read_to_string(&user_file).unwrap(), "keep");
+        std::fs::write(root.join("bowerbird-setup.txt"), VERSION).unwrap();
+        assert!(check_destination(&root).is_ok(), "managed partial install can resume");
+        let reason = check_disk_space(10_000_000_000, 56_900_000_000).unwrap_err().to_string();
+        assert!(reason.contains("56.9 GB") && reason.contains("10.0 GB") && reason.contains("46.9 GB"));
+        assert!(check_disk_space(56_900_000_000, 56_900_000_000).is_ok());
+    }
+    #[test]
+    fn h3_setup_startup_failure_reports_actual_error_from_bounded_log_tail() {
+        let log = "Traceback (most recent call last):\n  comfy_aimdo.control.init(simple_vram_headroom=simple_vram_headroom, nvml_pressure=True)\nTypeError: init() got an unexpected keyword argument 'nvml_pressure'\n";
+        let root = scratch(); let path = root.join("startup.log");
+        std::fs::write(&path, format!("{}{}", "x".repeat(70000), log)).unwrap();
+        let tail = startup_log_tail(&path);
+        assert_eq!(tail.len(), 65536);
+        assert!(tail.ends_with(log));
+        let message = startup_failure(&tail, &path).to_string();
+        assert!(message.contains("TypeError: init() got an unexpected keyword argument 'nvml_pressure'"));
+        assert!(message.contains("startup.log"));
+    }
+    #[test]
+    fn h3_setup_run_prepares_installed_environment_without_implicit_download() {
+        let mut state = plan(&scratch(), Mode::Frames); state.can_install = true;
+        assert!(preparation_target(&state, "prepare").is_err(), "run must not download a missing environment");
+        assert!(preparation_target(&state, "install").unwrap().is_none(), "explicit install remains available");
+        state.installed = true;
+        assert!(preparation_target(&state, "prepare").unwrap().is_none(), "reuse managed installation");
+        state.installed = false; state.can_install = false; state.phase = "stopped".into();
+        state.existing.push(Installation { path: "existing".into(), name: "Desktop".into(), endpoint: "http://127.0.0.1:8199".into(), can_start: true, models_found: 5,
+            python: Some("existing/python.exe".into()), main: "existing/main.py".into(), model_configs: vec!["shared-models.yaml".into()], launch_args: vec!["--use-sage-attention".into()] });
+        let instance = preparation_target(&state, "prepare").unwrap().unwrap();
+        assert_eq!(instance.path, PathBuf::from("existing"));
+        assert_eq!(instance.model_configs, vec![PathBuf::from("shared-models.yaml")]);
+        assert_eq!(instance.launch_args, vec!["--use-sage-attention"]);
+        assert_eq!(existing_launch_args(&instance.launch_args, Mode::Frames), ["--use-pytorch-cross-attention"]);
+        assert_eq!(existing_launch_args(&instance.launch_args, Mode::Image), ["--use-sage-attention"]);
+        state.phase = "unavailable".into();
+        assert!(preparation_target(&state, "prepare").is_err(), "never duplicate a responding but incompatible service");
+        state.phase = "stopped".into(); state.existing[0].can_start = false;
+        assert!(preparation_target(&state, "prepare").is_err(), "missing Python requires a usable installation");
+    }
+    #[test]
     fn h3_setup_manifest_and_empty_plan() {
-        let root = scratch(); let state = plan(&root);
+        let root = scratch(); let state = plan(&root, Mode::Frames);
         assert!(!state.installed); assert!(!root.join("ready.txt").exists());
         assert_eq!(state.download_bytes, 44_048_479_273);
-        for item in DOWNLOADS {
+        for item in downloads(Mode::Frames) {
             assert_eq!(item.sha.len(), 64);
             assert!(item.sha.chars().all(|c| c.is_ascii_hexdigit()));
-            assert!(item.url.starts_with("https://"));
+            let cloud: serde_json::Value = serde_json::from_str(include_str!("../../../../cloud/supabase/functions/_shared/comfy-download-manifest.json")).unwrap();
+            assert_eq!(cloud["version"], VERSION);
+            assert_eq!(cloud["files"].as_array().unwrap().len(), downloads(Mode::Frames).len());
+            let remote = cloud["files"].as_array().unwrap().iter().find(|f| f["file"] == item.file).unwrap();
+            assert_eq!(remote["size"], item.size); assert_eq!(remote["sha256"], item.sha);
             assert!(!Path::new(item.file).is_absolute());
         }
-        assert!(DOWNLOADS[5].url.contains("768p"));
+        assert!(DOWNLOADS[5].file.contains("768p"));
         assert_eq!(DOWNLOADS[5].sha, "08cfe946033af7d27719b964b6e0a0e50c32138daabbd6ce4137e23df6bf9980");
+    }
+    #[test]
+    fn h3_setup_reference_model_has_verified_download() {
+        let item = DOWNLOADS.iter().find(|item| item.file.contains("ref2va")).expect("reference mode must prepare its own model");
+        assert_eq!(item.size, 20_970_379_616);
+        assert_eq!(item.sha, "9255f52b6677845ad238f20dfaafa94727053694127ab7f255c048f0f9365779");
+        assert!(!tos_available(item), "new public model must not request an unpublished TOS object");
+        assert!(modelscope_url(item).unwrap().contains("/d51b9ec4bf7d7af1ce11bcbbd1a809aadb38011e/"));
+    }
+    #[test]
+    fn h3_setup_mode_plans_only_download_needed_models_and_isolate_failures() {
+        let root = scratch();
+        let frames = plan(&root, Mode::Frames);
+        let text = plan(&root, Mode::Text);
+        let mut reference = plan(&root, Mode::Reference);
+        assert_eq!(frames.download_bytes, 44_048_479_273);
+        assert_eq!(frames.download_bytes, text.download_bytes);
+        assert_eq!(reference.download_bytes, 42_092_286_273);
+        assert_eq!(reference.models_required, 4);
+        assert_eq!(text.models_required, 5);
+        for mode in [Mode::Frames, Mode::Text, Mode::Reference] {
+            let items = downloads(mode);
+            assert_eq!(items.len(), mode.names().len() + 1);
+            assert_eq!(items.iter().any(|item| item.file.contains("ref2va")), mode == Mode::Reference);
+            assert_eq!(items.iter().any(|item| item.file.contains("loras/")), mode != Mode::Reference);
+        }
+        let mut previous = frames;
+        previous.phase = "failed".into(); previous.message = "首尾帧环境准备失败".into();
+        reference.can_install = true;
+        retain_setup_outcome(&mut reference, Some(&previous));
+        assert_eq!(reference.phase, "missing", "another mode's failure must not replace this mode's status");
+        let output = serde_json::to_value(reference).unwrap();
+        assert_eq!(output["mode"], "reference"); assert_eq!(output["modelsRequired"], 4);
+    }
+    #[test]
+    fn h3_image_install_plans_use_the_validated_direct_prompt_models() {
+        let root = scratch();
+        let text = plan(&root, Mode::Image);
+        let edit = plan(&root, Mode::Edit);
+        assert_eq!(text.models_required, 3);
+        assert_eq!(text.download_bytes, 51_360_641_689);
+        assert_eq!(edit.models_required, 3);
+        assert_eq!(edit.download_bytes, text.download_bytes);
+        assert_ne!(Mode::Image.endpoint(), Mode::Frames.endpoint());
+        assert_ne!(Mode::Image.version(), Mode::Frames.version());
+        assert!(downloads(Mode::Edit).iter().skip(1).all(|d|modelscope_url(d).unwrap().contains("MiniMax-H3-Image/resolve/")));
+    }
+    #[test]
+    fn h3_setup_existing_runtime_does_not_need_portable_redownload_for_new_mode() {
+        let root = scratch();
+        for file in ["ready.txt", "models.yaml", "ComfyUI_windows_portable/python_embeded/python.exe", "ComfyUI_windows_portable/ComfyUI/main.py"] {
+            let path = root.join(file); std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, if file == "ready.txt" { VERSION } else { "fixture" }).unwrap();
+        }
+        assert!(runtime_installed(&root, Mode::Frames));
+        assert!(!root.join("portable.7z").exists());
+        assert_eq!(plan(&root, Mode::Reference).download_bytes, 42_092_286_273 - DOWNLOADS[0].size);
+    }
+    #[tokio::test]
+    async fn h3_setup_slow_server_is_detected_and_model_failure_is_not_missing_install() {
+        let server = Router::new()
+            .route("/system_stats", get(|| async {
+                tokio::time::sleep(Duration::from_millis(4200)).await;
+                axum::Json(serde_json::json!({"system":{"comfyui_version":"fixture"}}))
+            }))
+            .route("/object_info", get(|| async { axum::Json(serde_json::json!({})) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(); let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+        let http = reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(10)).build().unwrap();
+        let result = probe(&http, &format!("http://{address}"), Mode::Frames).await;
+        assert!(matches!(result, Some(Err(_))), "slow live server is recognized even if H3 nodes are unavailable");
+        assert!(result.unwrap().unwrap_err().to_string().contains("H3"));
+        task.abort();
+    }
+    #[tokio::test]
+    #[ignore = "Read-only local installation and HTTP checks; no startup, installation or generation"]
+    async fn h3_setup_local_environment_read_only() {
+        let existing = comfy_discovery::discover(&comfy_discovery::desktop_config_dirs(), None, &comfy_video::model_names());
+        assert!(!existing.is_empty());
+        let state = detect(&scratch(), "http://127.0.0.1:8000", existing, Mode::Frames).await.unwrap();
+        println!("local environment: {} | {} | {} installation(s)", state.phase, state.message, state.existing.len());
+        assert_ne!(state.phase, "missing"); assert!(!state.can_install);
     }
     #[tokio::test]
     async fn h3_setup_download_resume_hash_and_cancel() {
@@ -319,25 +866,147 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
         let sha = format!("{:x}", Sha256::digest(b"abcdef"));
-        let item = |route: &str| Download { file:"model.bin", url:Box::leak(format!("http://{address}/{route}").into_boxed_str()), size:6, sha:Box::leak(sha.clone().into_boxed_str()) };
+        let item = Download { file:"model.bin", size:6, sha:Box::leak(sha.clone().into_boxed_str()) };
+        let url = |route: &str| { let url = format!("http://{address}/{route}"); move || std::future::ready(Ok(url.clone())) };
         let http = reqwest::Client::builder().no_proxy().build().unwrap();
         let cancel = AtomicBool::new(false);
         for route in ["resume", "whole"] {
             let root = scratch(); std::fs::write(root.join("model.part"), b"abc").unwrap();
-            download(&http, &item(route), &root, &cancel, 0).await.unwrap();
+            download(&http, &item, &root, &cancel, 0, url(route)).await.unwrap();
             assert_eq!(std::fs::read(root.join("model.bin")).unwrap(), b"abcdef");
             // A complete verified file must be reused, without another HTTP request.
-            download(&http, &item("not-found"), &root, &cancel, 0).await.unwrap();
+            download(&http, &item, &root, &cancel, 0, url("not-found")).await.unwrap();
         }
         let root = scratch(); std::fs::write(root.join("model.part"), b"abc").unwrap();
-        assert!(download(&http, &item("wrong-range"), &root, &cancel, 0).await.is_err());
+        assert!(download(&http, &item, &root, &cancel, 0, url("wrong-range")).await.is_err());
         assert_eq!(std::fs::read(root.join("model.part")).unwrap(), b"abc");
         let root = scratch();
-        assert!(download(&http, &item("corrupt"), &root, &cancel, 0).await.is_err());
+        assert!(download(&http, &item, &root, &cancel, 0, url("corrupt")).await.is_err());
         assert!(!root.join("model.bin").exists()); assert!(!root.join("model.part").exists());
         cancel.store(true, Ordering::Relaxed);
-        assert!(download(&http, &item("whole"), &root, &cancel, 0).await.is_err());
+        assert!(download(&http, &item, &root, &cancel, 0, url("whole")).await.is_err());
         assert!(!root.join("model.part").exists());
+        task.abort();
+    }
+    #[test]
+    fn h3_setup_grant_is_bound_to_exact_tos_object_and_pinned_hash() {
+        let item = &DOWNLOADS[0];
+        let make = |url: String| DownloadGrant { url, file:item.file.into(), size:item.size, sha256:item.sha.into() };
+        let good = format!("https://bowerbird.tos-cn-guangzhou.volces.com/comfyui/{VERSION}/portable.7z?X-Tos-Signature=test");
+        assert!(validate_grant(make(good.clone()), item).is_ok());
+        for bad in [good.replace("https:", "http:"), good.replace("bowerbird.tos-cn-guangzhou.volces.com", "evil.example"), good.replace("portable.7z", "other.7z"), format!("{good}#fragment")] {
+            assert!(validate_grant(make(bad), item).is_err());
+        }
+        let mut wrong = make(good); wrong.sha256 = "0".repeat(64);
+        assert!(validate_grant(wrong, item).is_err());
+    }
+    #[test]
+    fn h3_setup_modelscope_sources_and_redirects_are_pinned() {
+        assert!(modelscope_url(&DOWNLOADS[0]).is_none());
+        for item in &DOWNLOADS[1..] {
+            let url = reqwest::Url::parse(&modelscope_url(item).unwrap()).unwrap();
+            assert_eq!(url.host_str(), Some("modelscope.cn"));
+            assert!(url.path().ends_with(item.file.rsplit('/').next().unwrap()));
+            let revision = url.path().split("/resolve/").nth(1).unwrap().split('/').next().unwrap();
+            assert_eq!(revision.len(), 40); assert!(revision.chars().all(|c| c.is_ascii_hexdigit()));
+            assert!(modelscope_redirect_allowed(&url));
+        }
+        assert!(modelscope_redirect_allowed(&reqwest::Url::parse("https://cdn-lfs-cn-1.modelscope.cn/file?signature=test").unwrap()));
+        for bad in ["http://modelscope.cn/file", "https://modelscope.cn.evil.example/file", "https://evilmodelscope.cn/file", "https://127.0.0.1/file", "https://modelscope.cn:8443/file", "https://user:pass@modelscope.cn/file"] {
+            assert!(!modelscope_redirect_allowed(&reqwest::Url::parse(bad).unwrap()));
+        }
+    }
+    #[tokio::test]
+    #[ignore = "Read-only ModelScope check: downloads 1 KiB per model, no installation or generation"]
+    async fn h3_setup_modelscope_pinned_downloads_read_only() {
+        let http = modelscope_client().unwrap();
+        for item in &DOWNLOADS[1..] {
+            let url = modelscope_url(item).unwrap();
+            let mut response = http.get(url).header(reqwest::header::RANGE, "bytes=0-1023").send().await.unwrap();
+            assert_eq!(response.status(), reqwest::StatusCode::PARTIAL_CONTENT, "{}", item.file);
+            assert_eq!(response.headers().get(reqwest::header::CONTENT_RANGE).unwrap().to_str().unwrap(), format!("bytes 0-1023/{}", item.size));
+            assert!(modelscope_redirect_allowed(response.url()));
+            let mut bytes = 0;
+            while let Some(chunk) = response.chunk().await.unwrap() { bytes += chunk.len(); assert!(bytes <= 1024); }
+            assert_eq!(bytes, 1024);
+        }
+    }
+    #[tokio::test]
+    async fn h3_setup_modelscope_preferred_fallback_resume_hash_and_cancel() {
+        let server = Router::new()
+            .route("/mirror", get(|headers: HeaderMap| async move {
+                assert!(headers.get("authorization").is_none()); "abcdef"
+            }))
+            .route("/corrupt", get(|| async { "broken" }))
+            .route("/partial", get(|headers: HeaderMap| async move {
+                if headers.get("range").is_some() { StatusCode::NOT_FOUND.into_response() }
+                else { "abc".into_response() }
+            }))
+            .route("/tos", get(|headers: HeaderMap| async move {
+                assert!(headers.get("authorization").is_none());
+                if let Some(range) = headers.get("range") {
+                    assert_eq!(range, "bytes=3-");
+                    (StatusCode::PARTIAL_CONTENT, [("content-range", "bytes 3-5/6")], "def").into_response()
+                } else { "abcdef".into_response() }
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let item = Download { file:"model.bin", size:6, sha:"bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721" };
+        for route in ["mirror", "missing", "partial", "corrupt"] {
+            let root = scratch(); let cancel = AtomicBool::new(false); let mut grants = 0;
+            let mirror = format!("http://{address}/{route}");
+            download_resource(&http, Some((&http, &mirror)), &item, &root, &cancel, 0, || {
+                grants += 1; std::future::ready(Ok(format!("http://{address}/tos")))
+            }).await.unwrap();
+            assert_eq!(grants, if route == "mirror" { 0 } else { 1 });
+            assert_eq!(std::fs::read(root.join(item.file)).unwrap(), b"abcdef");
+            download_resource(&http, Some((&http, &mirror)), &item, &root, &cancel, 0, || {
+                panic!("verified file must not request TOS authorization");
+                #[allow(unreachable_code)] std::future::ready(Err(err("unexpected grant")))
+            }).await.unwrap();
+        }
+        let root = scratch(); let cancel = AtomicBool::new(true); let mut grants = 0;
+        let mirror = format!("http://{address}/missing");
+        assert!(download_resource(&http, Some((&http, &mirror)), &item, &root, &cancel, 0, || {
+            grants += 1; std::future::ready(Ok(format!("http://{address}/tos")))
+        }).await.is_err());
+        assert_eq!(grants, 0); assert!(!root.join("model.part").exists());
+        // Portable has no mirror, and TOS authorization errors must not be bypassed.
+        let cancel = AtomicBool::new(false);
+        let error = download_resource(&http, None, &item, &root, &cancel, 0, || {
+            std::future::ready(Err(err("download denied")))
+        }).await.unwrap_err();
+        assert!(error.to_string().contains("download denied"));
+        task.abort();
+    }
+    #[tokio::test]
+    async fn h3_setup_refreshes_expired_grants_and_resumes_partial_streams() {
+        let server = Router::new()
+            .route("/expired", get(|| async { StatusCode::FORBIDDEN }))
+            .route("/partial", get(|| async { "abc" }))
+            .route("/resume", get(|headers: HeaderMap| async move {
+                assert!(headers.get("authorization").is_none());
+                assert_eq!(headers.get("range").unwrap(), "bytes=3-");
+                (StatusCode::PARTIAL_CONTENT, [("content-range", "bytes 3-5/6")], "def")
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+        let http = reqwest::Client::builder().no_proxy().build().unwrap();
+        let item = Download { file:"model.bin", size:6, sha:"bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721" };
+        for first in ["expired", "partial"] {
+            let root = scratch(); let cancel = AtomicBool::new(false); let mut grants = 0;
+            if first == "expired" { std::fs::write(root.join("model.part"), b"abc").unwrap(); }
+            download(&http, &item, &root, &cancel, 0, || {
+                grants += 1;
+                std::future::ready(Ok(format!("http://{address}/{}", if grants == 1 { first } else { "resume" })))
+            }).await.unwrap();
+            assert_eq!(grants, 2); assert_eq!(std::fs::read(root.join("model.bin")).unwrap(), b"abcdef");
+            write_licenses(&root).await.unwrap();
+            assert!(std::fs::read_to_string(root.join("licenses/NOTICE.txt")).unwrap().contains("MiniMax H3 Community License"));
+        }
         task.abort();
     }
     #[test]

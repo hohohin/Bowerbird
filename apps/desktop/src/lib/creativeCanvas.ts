@@ -1,5 +1,6 @@
 import type { CanvasGroupNode, CanvasPoint } from "./canvasLogic";
 import { isVideoPath } from "./videoGeneration.ts";
+import { isAudioPath } from "./audioMedia";
 import type {
   Asset,
   CanvasGroup,
@@ -27,7 +28,6 @@ export interface CanvasAssetSnapshot {
   payloadJson?: string;
 }
 
-export const CANVAS_REMOVE_NODES_EVENT = "bowerbird:canvas-remove-nodes";
 export const CANVAS_ARRANGE_NODES_EVENT = "bowerbird:canvas-arrange-nodes";
 
 export interface CanvasArrangeNodesEventDetail {
@@ -35,16 +35,52 @@ export interface CanvasArrangeNodesEventDetail {
   nodeIds: string[];
 }
 
-export interface CanvasRemoveNodesEventDetail {
-  projectId: string;
-  nodeIds: string[];
-}
-
 export type ProjectCanvasUiNode = CanvasGroupNode<CanvasAssetSnapshot>;
+
+/** Project queued deletions onto the live canvas without changing its saved graph or groups. */
+export function canvasOriginalDeletionProjection(materials: ProjectCanvasUiNode[], graph: CanvasNode[], edges: CanvasEdge[], hides: (id: string | null, path?: string | null) => boolean) {
+  const hidden = new Set<string>();
+  const shown = materials.flatMap<ProjectCanvasUiNode>(node => {
+    if (node.kind === "asset") {
+      if (!hides(node.asset.assetId, node.asset.storePath)) return [node];
+      hidden.add(node.id);
+      return [];
+    }
+    const assets = node.assets.filter(asset => {
+      if (!hides(asset.assetId, asset.storePath)) return true;
+      hidden.add(asset.id);
+      return false;
+    });
+    if (assets.length === node.assets.length) return [node];
+    if (assets.length) return [{ ...node, assets }];
+    hidden.add(node.id);
+    return [];
+  });
+  const outputs = new Set<string>();
+  for (const node of graph) {
+    if (node.kind !== "asset" || !node.assetId || node.hiddenAt != null) continue;
+    if (hides(node.assetId)) hidden.add(node.id);
+    if (node.role === "output") outputs.add(node.id);
+  }
+  if (!hidden.size) return { materials, graph, hidden };
+  const affected = new Set<string>(), surviving = new Set<string>();
+  for (const edge of edges) {
+    if (edge.kind === "produced" && outputs.has(edge.toNodeId)) {
+      (hidden.has(edge.toNodeId) ? affected : surviving).add(edge.fromNodeId);
+    }
+  }
+  for (const node of graph) {
+    if (node.kind === "prompt" && affected.has(node.id) && !surviving.has(node.id)) {
+      try { if (JSON.parse(node.payloadJson)?.job_id) hidden.add(node.id); } catch { /* A legacy prompt can lack execution data. */ }
+    }
+  }
+  return { materials: shown, graph: graph.filter(node => !hidden.has(node.id)), hidden };
+}
 
 /** Static canvas previews: preserve image alpha, but never load a video decoder for a card. */
 export function canvasAssetMediaPath(asset: Pick<CanvasAssetSnapshot, "thumbPath" | "storePath">): string | null {
   const original = asset.storePath;
+  if (isAudioPath(original)) return null;
   if (isVideoPath(original)) return asset.thumbPath && !isVideoPath(asset.thumbPath) ? asset.thumbPath : null;
   if (original && (/\.(png|webp|gif|avif|svg|ico|bmp)(?:[?#].*)?$/i.test(original)
     || /^data:image\/(png|webp|gif|avif|svg\+xml|x-icon|bmp)[;,]/i.test(original))) {

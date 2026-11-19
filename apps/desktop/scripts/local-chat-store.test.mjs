@@ -29,7 +29,7 @@ function fixture(storage = new Map()) {
     const localRequire = specifier => {
       if (specifier === '@tauri-apps/api/core') return { invoke: async (command, args) => { calls.push({ command, args: plain(args) }); const handler = handlers.get(command); if (!handler) throw new Error(`No synthetic handler for ${command}`); return handler(args); } };
       if (specifier === '@tauri-apps/api/event') return { listen: async (event, callback) => { listeners.set(event, callback); return () => listeners.delete(event); } };
-      if (specifier.startsWith('.')) return load(resolve(dirname(path), `${specifier}.ts`));
+      if (specifier.startsWith('.')) return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       return require(specifier);
     };
     const execute = vm.runInContext(`(function(require,module,exports){${compiled}\n})`, context, { filename: path });
@@ -37,22 +37,48 @@ function fixture(storage = new Map()) {
   }
   const module = load(storePath);
   return { store: module.useLocalChatStore, events: module.ensureLocalChatEvents, calls, handlers, storage, chatApi: load(resolve(dirname(storePath), 'localChat.ts')),
+    pin: module.pinLocalChat, stream: value => listeners.get('local-chat://text')?.({payload: value}),
     emit: value => listeners.get('local-chat://updated')?.({ payload: value }), draft: module.localChatDraft };
 }
 
 test('Cloud chat uses its live quote, allows zero balance at zero cost and ignores local CLI eligibility', () => {
   const { chatProviderUnavailable } = fixture().chatApi;
   const state = { cloudAvailable: true, loggedIn: true, cloudAllowed: true, localAllowed: false, codexReady: false, balance: 0 };
-  const quote = { provider: 'deepseek-cloud', service: 'chat_deepseek', available: true, unit_cost: 0, currency: 'Bcoin', pricing_version: 1 };
-  assert.equal(chatProviderUnavailable('deepseek-cloud', state, quote), null);
+  const quote = { service: 'chat_deepseek', available: true, dsh_vps_v2_available: true, unit_cost: 0, currency: 'Bcoin', pricing_version: 1 };
+  assert.equal(chatProviderUnavailable('dsh-cloud', state, quote), null);
   assert.match(chatProviderUnavailable('codex-local', state, quote), /Pro/);
-  assert.match(chatProviderUnavailable('deepseek-cloud', state, null), /报价/);
+  assert.match(chatProviderUnavailable('dsh-cloud', state, null), /报价/);
   for (const unit_cost of [1, -1, null, undefined, NaN]) {
-    assert.match(chatProviderUnavailable('deepseek-cloud', { ...state, balance: 100 }, { ...quote, unit_cost }), /开放/);
+    assert.match(chatProviderUnavailable('dsh-cloud', { ...state, balance: 100 }, { ...quote, unit_cost }), /开放/);
   }
-  assert.match(chatProviderUnavailable('deepseek-cloud', state, { ...quote, available: false, unit_cost: null, pricing_version: null }), /开放/);
-  assert.match(chatProviderUnavailable('deepseek-cloud', { ...state, loggedIn: false }, quote), /登录/);
-  assert.match(chatProviderUnavailable('deepseek-cloud', state, { ...quote, available: false }), /开放/);
+  assert.match(chatProviderUnavailable('dsh-cloud', state, { ...quote, available: false, unit_cost: null, pricing_version: null }), /开放/);
+  assert.match(chatProviderUnavailable('dsh-cloud', { ...state, loggedIn: false }, quote), /登录/);
+  assert.match(chatProviderUnavailable('dsh-cloud', state, { ...quote, available: false }), /开放/);
+});
+
+test('local DSH uses its own readiness and BYO entitlement without requiring Codex or Cloud', () => {
+  const { chatProviderUnavailable } = fixture().chatApi;
+  const state = { cloudAvailable: false, loggedIn: false, cloudAllowed: false, localAllowed: true, codexReady: false, balance: 0 };
+  const dsh = { localAvailable: true, managedAvailable: false, localReason: null, managedReason: '请先准备 DSH。' };
+  assert.equal(chatProviderUnavailable('dsh-local', state, null, dsh), null);
+  assert.match(chatProviderUnavailable('dsh-local', { ...state, localAllowed: false }, null, dsh), /Pro/);
+  assert.match(chatProviderUnavailable('dsh-local', state, null, { ...dsh, localAvailable: false, localReason: '请连接本机 DSH。' }), /连接本机 DSH/);
+  assert.match(chatProviderUnavailable('dsh-local', state, null, null), /DSH/);
+});
+
+test('VPS DSH follows the cloud capability and price independently of local DSH', () => {
+  const { chatProviderUnavailable, chatUsesCloud, chatAssistantLabel } = fixture().chatApi;
+  const state = { cloudAvailable: true, loggedIn: true, cloudAllowed: true, localAllowed: false, codexReady: false, balance: 0 };
+  const quote = { provider: 'deepseek-cloud', service: 'chat_deepseek', available: true, unit_cost: 0, currency: 'Bcoin', pricing_version: 1 };
+  const dsh = { localAvailable: false, managedAvailable: true, localReason: '请连接本机 DSH。', managedReason: null };
+  assert.equal(chatProviderUnavailable('dsh-cloud', state, { ...quote, dsh_vps_v2_available: true }, null), null);
+  assert.match(chatProviderUnavailable('dsh-cloud', state, { ...quote, dsh_vps_available: true }, dsh), /云端 DSH 会话服务暂未开放/);
+  assert.match(chatProviderUnavailable('dsh-cloud', state, { ...quote, unit_cost: 1 }, dsh), /开放/);
+  assert.match(chatProviderUnavailable('dsh-cloud', { ...state, loggedIn: false }, quote, dsh), /登录/);
+  assert.equal(chatUsesCloud('dsh-cloud'), true);
+  assert.equal(chatUsesCloud('dsh-local'), false);
+  assert.equal(chatAssistantLabel('dsh-local'), 'DSH');
+  assert.equal(chatAssistantLabel('dsh-cloud'), 'DSH');
 });
 
 test('a newer streamed event wins over an older delayed send acknowledgement', async () => {
@@ -101,12 +127,53 @@ test('switching chat provider after an uncertain send starts a distinct native r
   const f = fixture();
   f.handlers.set('local_chat_send', () => { throw new Error('connection lost'); });
   const input = { projectId: 'p', text: '同一个问题', referenceAssetIds: [] };
-  for (const provider of ['codex-local', 'deepseek-cloud', 'deepseek-cloud']) {
+  for (const provider of ['codex-local', 'deepseek-cloud', 'dsh-cloud']) {
     await assert.rejects(f.store.getState().send({ ...input, provider }), /connection lost/);
   }
   assert.notEqual(f.calls[0].args.input.requestId, f.calls[1].args.input.requestId);
   assert.equal(f.calls[1].args.input.requestId, f.calls[2].args.input.requestId);
-  assert.equal(f.calls[1].args.input.provider, 'deepseek-cloud');
+  assert.equal(f.calls[1].args.input.provider, 'dsh-cloud');
+});
+
+test('independent new cards send concurrently and retry their own original request', async () => {
+  const f = fixture();
+  const waiting = new Map();
+  f.handlers.set('local_chat_send', ({input}) => new Promise((resolve, reject) => {
+    waiting.set(input.agentNodeId, {resolve, reject, id: input.requestId});
+  }));
+  const base = { projectId: 'p', text: '相同要求', referenceAssetIds: [] };
+  const first = { ...base, agentNodeId: 'card-a', requestId: 'workflow-a' };
+  const second = { ...base, agentNodeId: 'card-b' };
+  const send = input => f.store.getState().send(input);
+  const both = Promise.allSettled([send(first), send(second)]);
+  await settle();
+  assert.equal(waiting.size, 2, 'both cards reached the native send command');
+  const originalB = waiting.get('card-b').id;
+  await assert.rejects(send({ ...first, requestId: 'another-run' }), /仍在回复/);
+  for (const attempt of waiting.values()) attempt.reject(new Error('ack lost'));
+  assert.deepEqual((await both).map(result => result.status), ['rejected','rejected']);
+  const retry = Promise.all([send(second), send(first)]);
+  await settle();
+  assert.equal(waiting.get('card-a').id, 'workflow-a');
+  assert.equal(waiting.get('card-b').id, originalB);
+  waiting.get('card-a').resolve(chat(1, 'p', 'chat-a'));
+  waiting.get('card-b').resolve(chat(1, 'p', 'chat-b'));
+  assert.deepEqual((await retry).map(value => value.id), ['chat-b','chat-a']);
+  assert.equal(f.calls.length, 4);
+});
+
+test('new sends without a node retain the ordinary composer lock and honor explicit request identity', async () => {
+  const f = fixture(), waiting = [];
+  f.handlers.set('local_chat_send', ({input}) => new Promise(resolve => waiting.push({ id: input.requestId, resolve })));
+  const base = { projectId: 'p', text: '新对话', referenceAssetIds: [] };
+  const send = input => f.store.getState().send(input);
+  const attempts = Promise.allSettled([send(base), send({ ...base, requestId: 'a' }), send({ ...base, requestId: 'b' })]);
+  await settle();
+  assert.equal(waiting.length, 3);
+  await assert.rejects(send(base), /仍在回复/);
+  await assert.rejects(send({ ...base, requestId: 'a' }), /仍在回复/);
+  for (const attempt of waiting) attempt.resolve(chat(1, 'p', attempt.id));
+  assert.ok((await attempts).every(result => result.status === 'fulfilled'));
 });
 
 test('concurrent send to the same conversation is rejected before a second IPC', async () => {
@@ -119,6 +186,33 @@ test('concurrent send to the same conversation is rejected before a second IPC',
   resolveSend(chat(2, 'p', 'chat-p', 'running')); await first;
   await assert.rejects(f.store.getState().send(input), /仍在回复/);
   assert.equal(f.calls.length, 1);
+});
+
+test('changing model or effort after uncertain send uses a new identity; retrying identical options does not', async () => {
+  const f = fixture();
+  f.handlers.set('local_chat_send', () => { throw new Error('connection lost'); });
+  for (const codexOptions of [{ model: 'a', reasoningEffort: 'low' }, { model: 'a', reasoningEffort: 'high' }, { model: 'b', reasoningEffort: 'high' }, { model: 'b', reasoningEffort: 'high' }]) {
+    await assert.rejects(f.store.getState().send({ projectId: 'p', text: '同一句话', referenceAssetIds: [], codexOptions }), /connection lost/);
+  }
+  const ids = f.calls.map(call => call.args.input.requestId);
+  assert.notEqual(ids[0], ids[1]); assert.notEqual(ids[1], ids[2]); assert.equal(ids[2], ids[3]);
+});
+
+test('model selection preserves supported effort and resets incompatible effort to model default', () => {
+  const { selectChatCodexModel, chatCodexOptionError } = fixture().chatApi;
+  const models = [{ id: 'a', model: 'a', displayName: 'A', isDefault: true, defaultReasoningEffort: 'medium', supportedReasoningEfforts: [{ reasoningEffort: 'medium' }, { reasoningEffort: 'high' }] }, { id: 'b', model: 'b', displayName: 'B', isDefault: false, defaultReasoningEffort: 'low', supportedReasoningEfforts: [{ reasoningEffort: 'low' }] }];
+  assert.deepEqual(plain(selectChatCodexModel({ model: 'a', reasoningEffort: 'high' }, 'b', models)), { model: 'b', reasoningEffort: 'low' });
+  assert.deepEqual(plain(selectChatCodexModel({ reasoningEffort: 'high' }, 'a', models)), { model: 'a', reasoningEffort: 'high' });
+  assert.deepEqual(plain(selectChatCodexModel({ model: 'b', reasoningEffort: 'low' }, '', models)), {});
+  assert.equal(chatCodexOptionError({}, null), null);
+  assert.match(chatCodexOptionError({ model: 'gone' }, models), /模型/);
+  assert.match(chatCodexOptionError({ model: 'a', reasoningEffort: 'low' }, models), /推理/);
+});
+
+test('model-only conversation drafts persist without text', () => {
+  const f = fixture();
+  f.store.getState().setDraft('chat-p', { text: '', referenceAssetIds: [], codexOptions: { model: 'a', reasoningEffort: 'high' } });
+  assert.deepEqual(plain(fixture(f.storage).draft('chat-p').codexOptions), { model: 'a', reasoningEffort: 'high' });
 });
 
 test('card options are frozen per submission and changing them after an uncertain send gets a new identity', async () => {
@@ -175,8 +269,50 @@ test('conversation drafts survive reload separately and clearing one never clear
   assert.equal(third.draft('chat-q').text, '项目 B');
 });
 
-test('invalid input never reaches native IPC and byte limit counts non-ASCII text', async () => {
+test('invalid input never reaches native IPC; long text is preserved', async () => {
   const f = fixture();
-  for (const [text, references] of [['  ', []], ['汉'.repeat(33334), []], ['内容', Array.from({ length: 9 }, (_, i) => `${i}`)]]) await assert.rejects(f.store.getState().send({ projectId: 'p', text, referenceAssetIds: references }));
+  for (const [text, references] of [['  ', []], ['内容', Array.from({ length: 9 }, (_, i) => `${i}`)]]) await assert.rejects(f.store.getState().send({ projectId: 'p', text, referenceAssetIds: references }));
   assert.equal(f.calls.length, 0);
+  f.handlers.set('local_chat_send', () => chat());
+  const text = '汉'.repeat(100001);
+  await f.store.getState().send({ projectId: 'p', text, referenceAssetIds: [] });
+  assert.equal(f.calls[0].args.input.text, text);
+});
+
+
+test('UTF-16 append, replacement, and a gap during snapshot recovery', async () => {
+  const f = fixture(); await f.events();
+  const base = chat(1, 'p', 'chat-p', 'running');
+  base.messages[1].text = '雪🌙';
+  f.emit(base);
+  const update = (revision, offset, text, replace = false) => f.stream({
+    conversationId: 'chat-p', messageId: 'assistant', revision, offset, replace, text, preview: text, updatedAt: revision,
+  });
+  update(2, 3, '好');
+  assert.equal(f.store.getState().conversations['chat-p'].messages[1].text, '雪🌙好');
+  update(3, 4, '重写', true);
+  assert.equal(f.store.getState().conversations['chat-p'].messages[1].text, '重写');
+  assert.equal('messages' in f.store.getState().summaries['chat-p'], false);
+  const reads = [];
+  f.handlers.set('local_chat_get', () => new Promise(resolve => reads.push(resolve)));
+  update(4, 8, 'bad offset'); await settle();
+  update(7, 7, 'gap'); assert.equal(reads.length, 1);
+  reads[0](chat(4, 'p', 'chat-p', 'running')); await settle();
+  assert.equal(reads.length, 2);
+  f.emit(chat(8)); reads[1](chat(7)); await settle();
+  assert.equal(f.store.getState().conversations['chat-p'].revision, 8);
+  assert.equal(f.store.getState().conversations['chat-p'].messages[1].text, '回复 8');
+});
+
+test('a mounted detail and active reply survive eviction of older completed transcripts', async () => {
+  const f = fixture(); await f.events();
+  const release = f.pin('open');
+  f.emit(chat(1, 'p', 'open')); f.emit(chat(1, 'p', 'active', 'running'));
+  for (let i = 0; i < 40; i++) f.emit(chat(1, 'q', String(i) + '-chat'));
+  const state = f.store.getState();
+  assert.ok(state.conversations.open && state.conversations.active);
+  assert.equal(Object.keys(state.conversations).length, 18);
+  assert.equal(Object.keys(state.summaries).length, 42);
+  release();
+  assert.equal(Object.keys(f.store.getState().conversations).length, 17);
 });

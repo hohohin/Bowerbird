@@ -13,7 +13,7 @@ registerHooks({
     return url.endsWith('.ts') ? { ...result, format: 'module', source: ts.transpileModule(String(result.source), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText } : result;
   },
 });
-const { canvasAutomaticOutputs } = await import('../src/lib/workflowCanvasCapabilities.ts');
+const { canvasAutomaticOutputs, workflowSourceMediaLabel } = await import('../src/lib/workflowCanvasCapabilities.ts');
 const { newWorkflowNode } = await import('../src/lib/canvasWorkflow.ts');
 const { planAutomaticConnection } = await import('../src/lib/workflowAutoConnect.ts');
 
@@ -29,6 +29,16 @@ const card = (id, cells, rest = {}) => ({ id, kind: 'note', projectId: 'p', hidd
 const outputs = (source, nodes = [], metadata = assets, latest = false) => canvasAutomaticOutputs(source.id, nodes, [source], [], metadata, latest);
 const imageOnly = node('receiver', 'instruction');
 const plan = sourceOutputs => planAutomaticConnection([imageOnly], sourceOutputs, imageOnly.id);
+
+test('source labels use registered media and distinguish unloaded or mixed material', () => {
+  const metadata = [...assets, { id: 'wav', store_path: '/cache/asset-without-extension', ext: 'WAV' }];
+  assert.equal(workflowSourceMediaLabel(['sound', 'wav'], metadata), '音频');
+  assert.equal(workflowSourceMediaLabel(['movie'], metadata), '视频');
+  assert.equal(workflowSourceMediaLabel(['photo', 'sound'], metadata), '素材');
+  assert.equal(workflowSourceMediaLabel(['photo', 'unloaded'], metadata), '素材');
+  assert.equal(workflowSourceMediaLabel([], metadata, node('speaking', 'voice')), '音频');
+  assert.equal(workflowSourceMediaLabel([], metadata, node('video', 'generation', { generation: { media: 'video' } })), '视频');
+});
 
 test('known video and audio content cards reject image-only receivers before execution', () => {
   for (const [id, media] of [['movie', 'video'], ['sound', 'audio']]) {

@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>分镜清单 · 循环取景框示意</title>
+<style>
+  :root {
+    color-scheme: dark;
+    font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    color: #dedede;
+    background: #141414;
+    --line: #404040;
+    --muted: #aaa;
+    --mono: "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  header { height: 54px; padding: 0 clamp(18px, 4vw, 70px); display: flex; align-items: center; gap: 14px; border-bottom: 1px solid #373737; background: #1b1b1b; font-size: 13px; }
+  header b { font-size: 15px; font-weight: 600; letter-spacing: .1px; }
+  header .slash { color: #707070; }
+  header small { margin-left: auto; color: var(--muted); }
+  main {
+    min-height: calc(100svh - 54px);
+    display: grid;
+    place-items: center;
+    padding: 56px clamp(15px, 5vw, 96px) 68px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='58' height='58' viewBox='0 0 58 58'%3E%3Cpath d='M28 25v6m-3-3h6' stroke='%23303030' stroke-width='1'/%3E%3C/svg%3E");
+  }
+  .board { position: relative; isolation: isolate; display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(260px, 1fr); align-items: center; gap: clamp(42px, 6vw, 96px); width: min(100%, 1100px); }
+  #wire { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 2; overflow: visible; pointer-events: none; }
+  article { min-width: 0; position: relative; isolation: isolate; padding: 0 18px 22px; box-shadow: 0 14px 25px -17px #000; }
+  article::before { content: ""; position: absolute; z-index: -1; inset: 0; background: linear-gradient(155deg,#262626,#1c1c1c 90%); clip-path: polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,0 100%); }
+  article::after { content: ""; position: absolute; z-index: -2; inset: 10px -8px -9px 10px; border-right: 1px solid #484848; border-bottom: 1px solid #484848; pointer-events: none; }
+  article .edge { position: absolute; left: 18px; top: 0; width: 32px; height: 1px; background: #a8a8a8; }
+  .caption { position: absolute; bottom: 100%; left: 1px; padding-bottom: 8px; font-size: 12px; color: #aeaeae; }
+  .title { margin: 0; height: 51px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 11px; font-size: 14px; font-weight: 550; }
+  .icon { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .title .icon { color: #b5b5b5; }
+  .title small { margin-left: auto; font: normal 12px var(--mono); color: var(--muted); }
+  .port { position: absolute; top: 50%; width: 8px; height: 8px; border: 1px solid #a1aaad; background: #242626; transform: translateY(-50%); }
+  #out { right: -4px; } #in { left: -4px; }
+  .sheet { position: relative; }
+  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+  col:first-child { width: 17%; } col:nth-child(2) { width: 22%; }
+  th, td { padding: 10px; text-align: left; }
+  th { height: 42px; color: var(--muted); font-size: 11px; font-weight: 400; }
+  td { position: relative; height: 63px; color: #d7d7d7; font-size: 14px; line-height: 1.6; }
+  td:first-child { font: 14px var(--mono); color: #b8c0c2; }
+  td:nth-child(2) { font-size: 13px; color: #bcbcbc; }
+  td::before { content: ""; position: absolute; top: 0; left: 6px; right: 6px; height: 1px; background: #3a3a3a; }
+  tr[aria-current] td { color: #f2f2ef; }
+  /* A moving hollow rim. All metal and its shadow stay outside the editable area. */
+  #frame { position: absolute; top: 0; left: -6px; right: -6px; height: 0; pointer-events: none; opacity: 0; }
+  #frame.placed { opacity: 1; }
+  #frame.travel { transition: transform 240ms cubic-bezier(.22,.68,.23,1), height 240ms ease, opacity 120ms; }
+  .loop-body { padding-top: 20px; overflow-wrap: anywhere; }
+  h2 { font-size: 19px; margin: 0 0 7px; font-weight: 600; }
+  .source { margin: 0; color: var(--muted); font-size: 12px; }
+  .current { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 15px; }
+  .meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 12px; }
+  #state { color: #ccd2d4; }
+  #state::before { content: ""; display: inline-block; width: 5px; height: 5px; margin: 0 6px 2px 0; background: #b0b5b4; }
+  body[data-state="running"] #state::before { background: #9bbbc9; }
+  .track { height: 3px; background: #454545; margin: 9px 0 13px; }
+  .track i { display: block; background: #9caeb6; height: 100%; width: 25%; transition: width 180ms; }
+  #subject { min-height: 42px; margin: 0; font-size: 14px; line-height: 1.55; }
+  #position { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+  .actions { display: flex; gap: 8px; margin-top: 17px; padding-top: 12px; border-top: 1px solid var(--line); }
+  button { padding: 9px 13px; min-height: 37px; font: 13px inherit; font-family: inherit; font-size: 13px; border: 1px solid #494949; color: #d9d9d9; background: transparent; cursor: pointer; }
+  button:hover:enabled { background: #333; }
+  button:focus-visible { outline: 2px solid #a6bec8; outline-offset: 3px; }
+  button:disabled { opacity: .4; cursor: default; }
+  #play { flex: 1; background: #ddd; color: #151515; border-color: transparent; font-weight: 600; }
+  #play:hover { background: #f1f1f1; }
+  @media(max-width:760px) {
+    main { padding: 48px 19px 32px; }
+    .board { grid-template-columns: 1fr; gap: 51px; max-width: 520px; }
+    article { padding-inline: 12px; }
+    #out { right: 28px; top: auto; bottom: -4px; transform: none; }
+    #in { left: auto; right: 28px; top: -4px; transform: none; }
+    td { height: 54px; font-size: 13px; padding-inline: 7px; }
+    .loop-body { padding-top: 13px; } .current { margin-top: 12px; }
+  }
+  #frame::before { content:""; position:absolute; inset:0; background:linear-gradient(90deg,#5debfa10,transparent 44%,#5debfa07); }
+  .scaffold { position:absolute; inset:0; width:100%; height:100%; overflow:visible; color:#adfaff; }
+  .rails { stroke:#71e7f7; stroke-width:.8; opacity:.42; }
+  .frame-index { position:absolute; right:32px; top:-6px; padding:0 6px; color:#acfbff; background:#202628; font:10px/12px var(--mono); letter-spacing:1.2px; }
+  .port { width:6px;height:6px;background:#122e35;border-color:#9bf4ff;transform:translateY(-50%) rotate(45deg); }
+  #out {right:-3px;top:50%;bottom:auto;transform:translateY(-50%) rotate(45deg);}
+  @media(min-width:761px){#in {left:-3px;top:65%;}}
+  body[data-state="done"] :is(#wire,#in) {visibility:hidden;}
+  .scan { position:absolute; inset:8px 12px; overflow:hidden; }
+  .scan::after { content:""; position:absolute; inset:0 auto 0 0; width:22%; opacity:0; background:linear-gradient(90deg,transparent,#7ee5f51e 96%,#96efff75); }
+  #frame.acquire .scan::after { animation:acquire 460ms ease-out; }
+  @keyframes acquire { 0% { transform:translateX(-100%);opacity:0; } 22% {opacity:1} 100% {transform:translateX(455%);opacity:0} }
+  @media(prefers-reduced-motion:reduce) { #frame.travel, .track i { transition: none; } #frame.acquire .scan::after { animation:none; } }
+  nav { margin-left:auto; display:flex; gap:18px; height:100%; }
+  nav a { display:grid; align-items:center; color:#aaa; border-bottom:2px solid transparent; text-decoration:none; font-size:13px; }
+  nav a[aria-current] { color:#f3f3f3; border-color:var(--signal); }
+  body { --signal:#f6b153; }
+  body[data-design="pixel"] { --signal:#a4ffae; }
+  #wire path { stroke:var(--signal); }
+  .port { border-color:var(--signal); }
+  body[data-design="armor"] .scaffold { filter:drop-shadow(0 2px 1px #000c); }
+  body[data-design="armor"] #frame::before { background:linear-gradient(90deg,#edb05d10,transparent 45%); border-block:2px solid #64696c; }
+  body[data-design="armor"] .frame-index { right:68px; top:-8px; background:#34383b; color:#ffd08c; border-top:2px solid #c2c4bf; padding:1px 10px; clip-path:polygon(6px 0,100% 0,100% 70%,calc(100% - 4px) 100%,0 100%,0 6px); }
+  body[data-design="armor"] #out { width:12px;height:8px;right:-6px;transform:translateY(-50%);border:2px solid #a8a9a3;background:#e8a04b; }
+  body[data-design="armor"] #wire path {stroke-width:2;}
+  body[data-design="armor"] .scan, body[data-design="armor"] .pixel, body[data-design="pixel"] .armor {display:none;}
+  body[data-design="pixel"] .scaffold { shape-rendering:crispEdges; filter:drop-shadow(0 0 2px #71f59048); }
+  body[data-design="pixel"] #frame::before { background:repeating-linear-gradient(0deg,transparent 0 3px,#75f9950b 3px 4px),linear-gradient(90deg,#69dd8b13,transparent 60%); }
+  body[data-design="pixel"] .frame-index { color:#b4ffbf; background:#192a20; font-weight:bold; letter-spacing:2px; }
+  body[data-design="pixel"] #out, body[data-design="pixel"] #in { transform:translateY(-50%);background:#a4ffae;border:0;box-shadow:0 0 6px #80ff9c6f; }
+  body[data-design="pixel"] .scan::after {background:linear-gradient(90deg,transparent,#78ffa519 95%,#acffb680);}
+  @media (prefers-reduced-motion:no-preference) {
+    body[data-design="pixel"] #frame.travel { transition-timing-function:steps(8,end); }
+    body[data-design="armor"] #frame.acquire .clamp { animation:latch 360ms ease-out; }
+    @keyframes latch { 0%,52%{transform:translate(-3px,-2px)} 80%{transform:translate(1px,0)} 100%{transform:none} }
+  }
+  @media(max-width:570px) { header .slash,header .project {display:none;} nav {gap:13px;} }
+  nav { align-items:stretch; gap:clamp(8px,1.5vw,22px); }
+  nav a { white-space:nowrap; }
+  @media(max-width:920px) {
+    header { height:auto; padding-block:10px 0; flex-wrap:wrap; gap:6px 12px; }
+    nav { width:100%; margin:0; height:auto; display:flex; flex-wrap:wrap; gap:0 14px; }
+    nav a { padding:8px 0; }
+  }
+  body:not([data-design="armor"]) .armor,body:not([data-design="pixel"]) .pixel,
+  body:not([data-design="hybrid"]) .hybrid,body:not([data-design="cut"]) .cut,
+  body:not([data-design="line"]) .line,body:not([data-design="metal"]) .metal {display:none;}
+  body[data-design="hybrid"] {--signal:#62baff;}
+  body[data-design="hybrid"] #frame::before { border-block:1px solid #3476a3; background:repeating-linear-gradient(0deg,transparent 0 3px,#539bff0d 3px 4px),linear-gradient(90deg,#246fb92a,transparent 46%,#387db31c); }
+  body[data-design="hybrid"] .frame-index {top:-8px;right:56px;padding:1px 8px;color:#b3e8ff;background:#142b41;border-block:1px solid #5395bd;}
+  body[data-design="hybrid"] #out {width:4px;height:4px;right:-2px;background:#d4f3ff;border:0;}
+  body[data-design="hybrid"] .scan::after {width:20%;background:linear-gradient(90deg,transparent,#4f9aff16 97%,#b8f0ffb0);}
+  .pinion {transform:rotate(var(--angle,0deg));transition:transform 380ms cubic-bezier(.22,.68,.23,1);}
+  .counter-pinion {transform:rotate(calc(15deg - var(--angle,0deg)));transition:transform 380ms cubic-bezier(.22,.68,.23,1);}
+  body:is([data-design="cut"],[data-design="line"]) #frame::before {border-block:1px solid #73bcc44d;}
+  @media(prefers-reduced-motion:reduce){.pinion,.counter-pinion{transition:none;}}
+  body:is([data-design="cut"],[data-design="line"]) {--signal:#8be8f4;}
+  body[data-design="metal"] {--signal:#acb5b6;}
+  body[data-design="metal"] :is(.frame-index,.scan) {display:none;}
+  .metal {position:absolute;inset:1px 0;border:3px solid #a5aead;border-radius:4px;box-shadow:inset 0 1px #e0e6e4,0 2px 4px #000b;}
+  .metal::before,.metal::after {content:"";position:absolute;top:50%;transform:translateY(-50%);width:7px;height:21px;border:1px solid #a6b2b1;background:repeating-linear-gradient(#576366 0 1px,#9aa3a1 1px 2px,#6c7879 2px 3px);}
+  .metal::before {left:-5px;} .metal::after {right:-5px;}
+  body:not([data-design="projection"]) .projection {display:none;}
+  body[data-design="projection"] {--signal:#66baff;}
+  body[data-design="projection"] #frame::before {
+    inset:1px 0; background:repeating-linear-gradient(0deg,transparent 0 3px,#539bff0d 3px 4px),linear-gradient(90deg,#246fb92a,transparent 46%,#387db31c);
+    clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%,0 9px);
+  }
+  .projection {fill:none;stroke-linejoin:round;stroke-linecap:round;}
+  .projected-lock {stroke:#b9e2ff;filter:drop-shadow(0 0 2px #69b2ff75);}
+  body[data-design="projection"] .scan {display:none;}
+  body[data-design="projection"] .frame-index {right:44px;top:-7px;color:#c4e6ff;background:#1a2938;font:10px/14px var(--mono);letter-spacing:1px;}
+  body[data-design="projection"] :is(#in,#out) {width:6px;height:6px;transform:translateY(-50%);background:#b7e1ff;border:1px solid #589ac6;}
+  body[data-design="projection"] .frame-index::before {content:"";position:absolute;right:100%;top:50%;width:clamp(30px,5vw,64px);height:2px;transform:translateY(-50%);background:linear-gradient(90deg,#367cb655,#83caff);}
+  @media(prefers-reduced-motion:no-preference) {
+    body[data-design="projection"] #frame.acquire :is(.projected-lock,#out) {animation:hud-contact 160ms steps(1,end) 240ms both;}
+    @keyframes hud-contact {0%,100%{opacity:1} 18%,67%{opacity:.23} 40%,84%{opacity:1}}
+  }
+</style>
+<header><b>Bowerbird</b><span class="slash">/</span><span class="project">分镜画板</span><nav aria-label="边框方案"><a href="#metal">金属看片框</a><a href="#cut">切角扫描框</a><a href="#line">细线 HUD</a><a href="#armor">A · 机甲装甲</a><a href="#pixel">B · 像素战术屏</a><a href="#projection">B2 · 全息战术屏</a><a href="#hybrid">C · 蓝色齿轮 HUD</a></nav></header>
+<main><div class="board">
+  <svg id="wire" aria-hidden="true"><path fill="none" stroke="#8be8f4" stroke-width="1.15"/></svg>
+  <article aria-labelledby="sheet-title">
+    <span class="caption">咖啡短片 · 拍摄清单</span><i class="edge"></i>
+    <h1 class="title" id="sheet-title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M3 10h18M9 10v10"/></svg>分镜清单<small>4 项</small></h1>
+    <div class="sheet">
+      <table aria-label="上游内容卡"><colgroup><col><col><col></colgroup>
+        <thead><tr><th>镜号</th><th>景别</th><th>画面</th></tr></thead>
+        <tbody>
+          <tr><td>01</td><td>全景</td><td>清晨，窗边摆着一只咖啡杯。</td></tr>
+          <tr><td>02</td><td>特写</td><td>手扶杯沿，缓缓倒入燕麦奶。</td></tr>
+          <tr><td>03</td><td>俯拍</td><td>奶流散开，杯面泛起涟漪。</td></tr>
+          <tr><td>04</td><td>中景</td><td>镜头拉远，人物端杯离开。</td></tr>
+        </tbody>
+      </table>
+      <div id="frame" aria-hidden="true">
+        <svg class="scaffold" aria-hidden="true">
+          <defs>
+            <linearGradient id="ceramic" x2=".25" y2="1"><stop stop-color="#f4f2e6"/><stop offset=".6" stop-color="#c4c8c5"/><stop offset="1" stop-color="#949b9b"/></linearGradient>
+            <g id="pauldron"><path d="M-4 24V8L7-4h78l-9 9H26l-8 8H7v11l-5 5z" fill="#383f45" stroke="#131719"/>
+              <g class="clamp"><path d="M-3 17V7L7-3h46l-8 8H18l-8 8H3v6z" fill="url(#ceramic)"/><path d="m49 5 8-8h22l-7 8z" fill="#889298"/>
+              <path d="m16-2-6 6H1" fill="none" stroke="#fff" opacity=".75"/><circle cx="22" cy="1" r="1.6" fill="#374044"/>
+              <path d="M-2 20h5v5l-5 4z" fill="#c95039"/><path d="m53 4 6-6h5l-6 6z" fill="#efb755"/></g>
+            </g>
+            <g id="pixel-bracket" fill="#acffb9"><path d="M0 18V6h3V3h3V0h18v3H8v3H4v12z"/><path d="M29 0h4v3h-4zm8 0h2v3h-2z" opacity=".54"/></g>
+            <pattern id="ticks" width="8" height="4" patternUnits="userSpaceOnUse"><rect width="2" height="2" fill="#81e29a"/></pattern>
+            <linearGradient id="gunmetal" x2=".15" y2="1"><stop stop-color="#b0c7d3"/><stop offset=".34" stop-color="#80929f"/><stop offset=".38" stop-color="#435765"/><stop offset="1" stop-color="#263846"/></linearGradient>
+            <g id="plate"><path d="M-3 23V8L8-4h71l-9 10H21l-8 9H5v8z" fill="url(#gunmetal)" stroke="#1c2934"/><path d="M1 15V9L10 0h31" fill="none" stroke="#addef9"/><path d="M49-1h20l-4 4H45z" fill="#62baff"/><circle cx="18" cy="2" r="1.6" fill="#142432"/></g>
+            <g id="gear"><path d="M11.00 0.00L10.97 0.75L13.29 1.68L12.83 3.87L10.31 3.83L9.75 5.10L9.53 5.50L9.13 6.14L10.67 8.10L9.17 9.77L7.01 8.48L5.89 9.29L5.50 9.53L4.84 9.88L5.19 12.35L3.06 13.05L1.83 10.85L0.46 10.99L0.00 11.00L-0.75 10.97L-1.68 13.29L-3.87 12.83L-3.83 10.31L-5.10 9.75L-5.50 9.53L-6.14 9.13L-8.10 10.67L-9.77 9.17L-8.48 7.01L-9.29 5.89L-9.53 5.50L-9.88 4.84L-12.35 5.19L-13.05 3.06L-10.85 1.83L-10.99 0.46L-11.00 0.00L-10.97 -0.75L-13.29 -1.68L-12.83 -3.87L-10.31 -3.83L-9.75 -5.10L-9.53 -5.50L-9.13 -6.14L-10.67 -8.10L-9.17 -9.77L-7.01 -8.48L-5.89 -9.29L-5.50 -9.53L-4.84 -9.88L-5.19 -12.35L-3.06 -13.05L-1.83 -10.85L-0.46 -10.99L-0.00 -11.00L0.75 -10.97L1.68 -13.29L3.87 -12.83L3.83 -10.31L5.10 -9.75L5.50 -9.53L6.14 -9.13L8.10 -10.67L9.77 -9.17L8.48 -7.01L9.29 -5.89L9.53 -5.50L9.88 -4.84L12.35 -5.19L13.05 -3.06L10.85 -1.83L10.99 -0.46Z" fill="#6f8799" stroke="#b5c7d4" stroke-width=".65"/><circle r="8.7" fill="#253543" stroke="#101d27"/><path d="M-6 0h12M0-6V6" stroke="#758b98" stroke-width="2.2"/><circle r="3.6" fill="#28445e" stroke="#89ccfb"/></g>
+            <g id="hair" fill="none" stroke="currentColor"><path d="M0 12V4l4-4h22" stroke-width="1.4"/><path d="M4 8V4h5" opacity=".45"/></g>
+            <g id="cut-guard"><path d="M-2 25V12L10 0H66L60 6H15L5 16V25Z" fill="#36444a" stroke="#769298"/><path d="M0 21v-8L11 2h37" fill="none" stroke="#86e6ef" stroke-width="2"/><path d="m47 6 5-5m2 5 5-5" stroke="#17232a" stroke-width="2"/></g>
+          </defs>
+          <g class="hybrid">
+            <use href="#plate"/><g transform="scale(-1,-1)"><use href="#plate" x="-100%" y="-100%"/></g>
+            <g fill="none" stroke="#7bc6ff"><path d="M0 32v-6m0-2v-3"/><svg y="100%" overflow="visible"><path d="M0-13v7l6 6h33"/></svg><svg x="100%" overflow="visible"><path d="M-39 0h31l8 8v5"/></svg></g>
+            <rect x="16%" y="0" width="43%" height="2" fill="#588db2" opacity=".75"/>
+            <svg x="100%" y="50%" overflow="visible"><path d="M-8-18h13l9 9v15l-9 10H-6l-8-8v-18z" fill="#1a2833" stroke="#4e6d85"/>
+              <g transform="translate(-11 -12) scale(.42)"><g class="counter-pinion"><use href="#gear"/></g></g>
+              <g class="pinion"><use href="#gear"/></g></svg>
+          </g>
+          <g class="line"><use href="#hair"/><g transform="scale(-1,1)"><use href="#hair" x="-100%"/></g><g transform="scale(1,-1)"><use href="#hair" y="-100%"/></g><g transform="scale(-1,-1)"><use href="#hair" x="-100%" y="-100%"/></g></g>
+          <g class="cut"><use href="#cut-guard"/><g transform="scale(-1,-1)"><use href="#cut-guard" x="-100%" y="-100%"/></g><svg x="100%" overflow="visible"><path d="M-26 2h17l8 8v11" fill="none" stroke="#9cdee4"/></svg><svg y="100%" overflow="visible"><path d="M0-18v10l8 8h20" fill="none" stroke="#9cdee4"/></svg></g>
+          <g class="armor"><use href="#pauldron"/><g transform="scale(-1,-1)"><use href="#pauldron" x="-100%" y="-100%"/></g>
+            <svg x="100%" overflow="visible"><path d="M-42-1h33l10 10v10h-4V11l-9-8h-33z" fill="#b6bdbe"/><path d="M-27-1h11l-4 4h-11z" fill="#bb513d"/></svg>
+            <svg y="100%" overflow="visible"><path d="M0-18h4v8l8 8h27l-4 4H10L0-8z" fill="#aeb4b6"/></svg>
+          </g>
+          <g class="projection">
+            <defs>
+              <linearGradient id="projection-rail"><stop stop-color="#a9dcff"/><stop offset=".24" stop-color="#5499ce"/><stop offset=".54" stop-color="#304d68"/><stop offset=".82" stop-color="#5499ce"/><stop offset="1" stop-color="#9ad6ff"/></linearGradient>
+              <g id="projection-corner"><path d="M0 22V9l9-9h45" stroke="#6ba6d4"/><path class="projected-lock" d="M3 16v-5l7-7h17" stroke-width="1.3"/></g>
+            </defs>
+            <g stroke="url(#projection-rail)" stroke-width=".85"><rect x="7%" y="0" width="86%" height="1" fill="url(#projection-rail)" stroke="none"/><svg y="100%" overflow="visible"><rect x="7%" y="-1" width="86%" height="1" fill="url(#projection-rail)" stroke="none"/></svg></g>
+            <use href="#projection-corner"/><g transform="scale(-1,-1)"><use href="#projection-corner" x="-100%" y="-100%"/></g>
+            <svg x="100%" overflow="visible"><path d="M-29 0h29v12" stroke="#74a6ce"/></svg>
+            <svg y="100%" overflow="visible"><path d="M0-12V0h29" stroke="#74a6ce"/></svg>
+            <svg y="50%" overflow="visible"><path class="projected-lock" d="m-4-4 4 4-4 4"/><path d="M5 0h6" stroke="#638cad"/></svg>
+            
+          </g>
+          <g class="pixel"><use href="#pixel-bracket"/><g transform="scale(-1,1)"><use href="#pixel-bracket" x="-100%"/></g>
+            <g transform="scale(1,-1)"><use href="#pixel-bracket" y="-100%"/></g><g transform="scale(-1,-1)"><use href="#pixel-bracket" x="-100%" y="-100%"/></g>
+            <rect x="8%" width="84%" height="2" fill="url(#ticks)" opacity=".48"/><svg y="100%" overflow="visible"><rect x="8%" y="-1" width="84%" height="1" fill="#93dfa9" opacity=".4"/></svg>
+            <svg y="50%" overflow="visible"><path d="M-2-6h3v3h3v6H1v3h-3z" fill="#adffbd"/></svg>
+          </g>
+        </svg><i class="metal"></i><i id="out" class="port"></i><i class="scan"></i><span class="frame-index"></span>
+      </div>
+    </div>
+  </article>
+  <article aria-labelledby="loop-title">
+    <span class="caption">逐条整理分镜</span><i class="edge"></i>
+    <h1 class="title" id="loop-title"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 3 4 4-4 4m4-4H7a3 3 0 0 0-3 3v2m5 9-4-4 4-4m-4 4h12a3 3 0 0 0 3-3v-2"/></svg>循环处理</h1>
+    <div class="loop-body"><h2>逐行处理内容</h2><p class="source">来自分镜清单</p>
+      <div class="current" role="status"><div class="meta"><span id="state"></span><span id="count"></span></div>
+        <div class="track" aria-hidden="true"><i></i></div><p id="subject"><span id="position"></span><span id="description"></span></p>
+      </div><div class="actions"><button id="next" type="button">下一项</button><button id="play" type="button">继续演示</button></div>
+    </div><i id="in" class="port" aria-hidden="true"></i>
+  </article>
+</div></main>
+<script>
+  const get = id => document.getElementById(id);
+  const board = document.querySelector('.board'), sheet = document.querySelector('.sheet');
+  const rows = [...sheet.querySelectorAll('tbody tr')], frame = get('frame');
+  let index = 1, state = 'paused', timer;
+  let wireFrame;
+  function drawWire() {
+    cancelAnimationFrame(wireFrame);
+    if (index === rows.length) return;
+    const rect = board.getBoundingClientRect();
+    const point = id => { const r = get(id).getBoundingClientRect(); return [r.left + r.width/2 - rect.left, r.top + r.height/2 - rect.top]; };
+    const [x,y] = point('out'), [u,v] = point('in');
+    const rail = rect.width + 10;
+    const mid = (x+u)/2, dy = v-y;
+    const bend = Math.min(Math.abs(dy)/2, (u-x)/4, 12);
+    const path = matchMedia('(max-width:760px)').matches
+      ? `M ${x} ${y} H ${rail-4} l4 4 V ${v-17} l-4 4 H ${u+5} l-5 5 V ${v}`
+      : `M ${x} ${y} H ${mid-bend} l${bend} ${Math.sign(dy)*bend} V ${v-Math.sign(dy)*bend} l${bend} ${Math.sign(dy)*bend} H ${u}`;
+    document.querySelector('#wire path').setAttribute('d', path);
+    if (frame.getAnimations().some(a => a.playState === 'running')) wireFrame = requestAnimationFrame(drawWire);
+  }
+  function place() {
+    frame.classList.toggle('placed', index < rows.length);
+    if (index < rows.length) {
+      const target = rows[index].getBoundingClientRect();
+      frame.style.transform = `translateY(${target.top-sheet.getBoundingClientRect().top}px)`;
+      frame.style.height = target.height+'px';
+    }
+    drawWire();
+  }
+  function render() {
+    const done = index === rows.length;
+    frame.style.setProperty('--angle', (index*70)+'deg');
+    if (!done) {
+      const tag = frame.querySelector('.frame-index');
+      const label = String(index+1).padStart(2,'0')+' / '+String(rows.length).padStart(2,'0');
+      if (tag.textContent !== label) {
+        tag.textContent = label;
+        frame.classList.remove('acquire');
+        void frame.offsetWidth;
+        frame.classList.add('acquire');
+      }
+    }
+    document.body.dataset.state = state;
+    rows.forEach((r,i) => i === index ? r.setAttribute('aria-current','step') : r.removeAttribute('aria-current'));
+    get('state').textContent = done ? '已完成' : state === 'running' ? '处理中' : '已暂停';
+    get('count').textContent = `已完成 ${index} / ${rows.length} 项`;
+    document.querySelector('.track i').style.width = (100 * index / rows.length)+'%';
+    get('position').textContent = done ? '' : `当前第 ${index+1} 项`;
+    get('description').textContent = done ? '4 条分镜均已处理。' : rows[index].cells[2].textContent;
+    get('play').textContent = done ? '重新演示' : state === 'running' ? '暂停演示' : '继续演示';
+    get('next').disabled = done;
+    get('next').textContent = index === rows.length - 1 ? '完成此项' : '下一项';
+    place();
+  }
+  function schedule() { clearTimeout(timer); if (state === 'running') timer = setTimeout(advance, 2300); }
+  function advance() { index = Math.min(index+1, rows.length); if (index === rows.length) state = 'done'; render(); schedule(); }
+  get('next').onclick = advance;
+  get('play').onclick = () => {
+    if (state === 'done') index = 0;
+    state = state === 'running' ? 'paused' : 'running';
+    render(); schedule();
+  };
+  new ResizeObserver(place).observe(board);
+  new ResizeObserver(place).observe(sheet);
+  function showDesign() {
+    const design = ['armor','pixel','projection','hybrid','metal','cut','line'].includes(location.hash.slice(1)) ? location.hash.slice(1) : 'projection';
+    document.body.dataset.design = design;
+    document.querySelectorAll('nav a').forEach(a => {
+      if (a.hash === '#'+design) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current');
+    });
+    place();
+  }
+  window.addEventListener('hashchange',showDesign);
+  showDesign(); render(); requestAnimationFrame(() => requestAnimationFrame(() => frame.classList.add('travel')));
+</script>
+</html>

@@ -6,15 +6,10 @@ import { createFilePreviewQueue } from "../lib/filePreviewQueue";
 import { useQuickTransferAssets, useQuickTransferThumbnail } from "../lib/quickTransferThumbnails";
 import { useMediaVisibility } from "../lib/useMediaVisibility";
 import type { QuickTransferFile } from "../lib/quickTransferState";
+import { quickTransferFileSize as fileSize } from "../lib/quickTransferState";
 import type { Asset } from "../lib/types";
 
 type PreviewQueue = ReturnType<typeof createFilePreviewQueue>;
-
-function fileSize(bytes: number) {
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
 
 function fileIcon(name: string) {
   if (/\.(?:jpg|jpeg|png|webp|gif|bmp|tiff?|heic|heif)$/i.test(name)) return Image;

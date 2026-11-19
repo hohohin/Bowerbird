@@ -3,6 +3,29 @@ import { test } from "node:test";
 
 import { configFromEnv, mapArkHttpError, modelForService, arkImageRequestBody, KnownProviderError } from "./runtime.ts";
 
+test("Seedream 5.5 is isolated from Pro/Fast and sends PNG for transparent text and image inputs", () => {
+  const env = { GENERATION_CONTROL_URL: "https://control", GENERATION_WORKER_TOKEN: "token",
+    ARK_API_KEY: "test", ARK_IMAGE_MODEL: "pro", ARK_IMAGE_MODEL_55: "doubao-seedream-5-5-261028" };
+  const config = configFromEnv(env);
+  for (const service of ["image_seedream55", "image_seedream55_1k", "image_seedream55_15k"]) {
+    const choice = modelForService(config, service);
+    equal(choice.model, env.ARK_IMAGE_MODEL_55);
+    equal(choice.optimizePromptMode, null);
+    for (const reference_images of [[], [{ mime: "image/png" as const, base64: "test" }]]) {
+      const body = arkImageRequestBody({ schema_version: 1, media: "image", prompt: "sticker",
+        reference_images, transparent: true, billing: { output_size: "1.5K" } }, choice, config);
+      equal(body.output_format, "png");
+      equal(body.background, "transparent");
+      equal(body.size, "1.5K");
+      equal(body.optimize_prompt_options, undefined);
+    }
+    throws(() => modelForService(configFromEnv({ ...env, ARK_IMAGE_MODEL_55: "" }), service),
+      (error: unknown) => error instanceof KnownProviderError && error.safeCode === "model_not_configured");
+  }
+  equal(modelForService(config, "image_hd").model, "pro");
+  equal(modelForService(config, "image_fast").optimizePromptMode, "fast");
+});
+
 test("accepted Bcoin size overrides the worker default, legacy input retains its default", () => {
   const input = { schema_version: 1, media: "image" as const, prompt: "test", reference_images: [] };
   const choice = { model: "pro", optimizePromptMode: null };

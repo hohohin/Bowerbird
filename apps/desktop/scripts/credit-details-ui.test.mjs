@@ -22,7 +22,7 @@ try {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const port = server.httpServer.address().port;
   await page.goto(`http://127.0.0.1:${port}/scripts/fixtures/redemption/preview.html`);
-  await page.getByRole('button', { name: '账号管理', exact: true }).click();
+  await page.getByRole('button', { name: '积分明细', exact: true }).click();
   const details = page.getByRole('region', { name: '积分明细', exact: true });
   const records = details.getByRole('list', { name: '最近积分记录', exact: true });
   const transactions = [

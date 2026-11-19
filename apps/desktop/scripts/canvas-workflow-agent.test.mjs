@@ -47,7 +47,7 @@ try {
     const c=new CanvasWorkflowController('agent-test');await c.load();
     const upstream={...newWorkflowNode('instruction',0,0,'codex'),id:'upstream',action:'reuse',inputs:{image:[{assetId:'existing'}]}};
     const input={nodeId:'upstream',portId:'text'};
-    const agent={...newWorkflowNode('agent',420,0,''),id:'agent',agentTransport:'cloud',prompt:'将 @[original] 中的朱砂痣替换为春山可望，其余保持',inputs:{text:[input]},promptReferences:[{id:'original',type:'text',input,label:'文本 1'}]};
+    const agent={...newWorkflowNode('agent',420,0,''),id:'agent',agentTransport:'cloud',prompt:'将 @[original] 中的朱砂痣替换为春山可望，其余保持。'+'请保留每一处文字。'.repeat(600),inputs:{text:[input]},promptReferences:[{id:'original',type:'text',input,label:'文本 1'}]};
     check(workflowInputs(agent).length===3&&workflowInputs(agent)[0].type==='text'&&workflowInputs(agent)[1].type==='image'&&workflowInputs(agent)[2].type==='visual-profile','agent accepts source text, images and visual profile');
     check(workflowOutputs(agent)[0].type==='text','agent outputs text');
     const binding={nodeId:'agent',portId:'text'};
@@ -61,7 +61,7 @@ try {
     check(requests[0].references.length===0&&requests[0].agentRuntime==='dsh','cloud DSH text mode has no image tool input');
     const target=()=>JSON.parse(window.snapshot().nodes.find(n=>n.id==='text-target').payloadJson).cells;
     check(target()[0][0].text===source.replaceAll('朱砂痣','春山可望')&&target()[0][1].text==='保留此格','connected content cell is replaced without modifying neighboring cells');
-    source='左下横排「朱砂痣」，留白';await c.start(upstream.id);
+    source='左下横排「朱砂痣」，留白\n'.repeat(6000);await c.start(upstream.id);
     check(c.document.run.status==='done'&&JSON.parse(requests[1].textRewrite.source)['引用文本 1']===source,'rerun reads new upstream text');
     check(c.document.nodes.find(n=>n.id==='gen').prompt===gen.prompt,'reusable downstream prompt remains unchanged');
     check(target()[0][0].text===source.replaceAll('朱砂痣','春山可望')&&target().length===1,'rerun updates the same target cell');

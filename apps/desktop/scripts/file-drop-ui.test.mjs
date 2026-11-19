@@ -97,7 +97,7 @@ try {
   });
   const collection = '[data-file-import-collection-id="collection"]';
   await drag(collection, ["collection.png"]);
-  await page.getByText("松开添加到集合「测试集合」", { exact: true }).waitFor();
+  await page.getByText("松开添加到文件夹「测试集合」", { exact: true }).waitFor();
   await drop(collection);
   await page.waitForFunction(() => window.calls.some(c => c.command === "create_material_references"));
   assert.equal((await imports()).length, before + 2);

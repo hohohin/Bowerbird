@@ -48,7 +48,7 @@ try {
   });
   assert.deepEqual(await page.evaluate(() => window.drops), [['image', 'offscreen']], 'same-window file drop retains internal IDs');
   assert.equal(await page.locator('[data-file-drop-overlay]').count(), 0);
-  const tree = page.getByRole('treeitem', { name: '目标集合', exact: true });
+  const tree = page.getByRole('treeitem', { name: '目标文件夹', exact: true });
   const effect = await tree.evaluate(element => {
     const dataTransfer = new DataTransfer(); dataTransfer.effectAllowed = 'copy';
     Object.defineProperty(dataTransfer, 'dropEffect', { value: 'none', writable: true });

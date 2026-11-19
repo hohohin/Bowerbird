@@ -382,6 +382,10 @@ export interface AnnotationMeta {
   image: { width: number; height: number };
   /** 裁剪/旋转/镜像过程（无变换时缺省）；供追溯与未来重编辑。 */
   transform?: AnnotationTransformOp[];
+  /** 覆盖时由本机保存层追加；各次操作独立保留在 analyses。 */
+  save_mode?: "overwrite";
+  source_sha256?: string;
+  output_sha256?: string;
   shapes: AnnotationShape[];
 }
 
@@ -398,6 +402,10 @@ export interface Analysis {
 export interface CodexHealth {
   ok: boolean;
   reason: string;
+}
+
+export interface DreaminaHealth extends CodexHealth {
+  status: "ready" | "missing" | "login_required" | "unconfirmed";
 }
 
 /** `dreamina login --headless` 的 OAuth Device Flow 字段（app 内自动登录用）。 */
@@ -463,6 +471,9 @@ export interface GenTurn {
  * 后端 task_queue upsert）。`running` = 该 job 当前有一个 turn 在跑（用于派生全局 generating）。
  */
 export interface GenJob {
+  dreaminaModelVersion?: string | null;
+  progress?: import("./generationProgress").GenerationProgress;
+  preview?: { turnKey: string; dataUrl: string };
   media?: GenerationMedia;
   videoOptions?: VideoOptions | null;
   id: string;
@@ -658,6 +669,8 @@ export interface GenerationService {
 export interface EntitlementSnapshot {
   user_id: string;
   tier: "free" | "pro" | "studio";
+  membership_ends_at?: string | null;
+  trial_available?: boolean | null;
   balances: { daily: number; sub: number; topup: number };
   policy: FeaturePolicy;
   recent_transactions: CreditTransaction[];
@@ -674,15 +687,9 @@ export interface EntitlementSnapshot {
   offline_state: "fresh" | "grace" | "expired" | "invalid" | null;
 }
 
-/** 素材库迁移进度（library://migrate-progress）。 */
-export interface MigrateProgress {
-  stage: string;
-  done: number;
-  total: number;
-}
-
 /** 未完成生成 job 摘要（list_gen_jobs 命令返回，前端启动重建 genJobs 用）。字段对齐后端 GenJobSummary。 */
 export interface GenJobSummary {
+  dreamina_model_version?: string | null;
   turns?: GenerationHistoryTurn[];
   reference_node_ids?: Array<string | null>;
   video_options?: VideoOptions | null;
@@ -711,6 +718,7 @@ export interface GenJobSummary {
 /** 会话面板历史恢复项（recent_gen_sessions 命令返回）：终态（done/failed）生成 job +
  * 从 generation_meta 重建的各轮时间线（含产出图）。status 取 task_queue 列（权威终态）。 */
 export interface RecentGenSession {
+  dreamina_model_version?: string | null;
   reference_node_ids?: Array<string | null>;
   submit_id?: string | null;
   media?: GenerationMedia;
@@ -1062,8 +1070,11 @@ export interface HtmlLayoutOptions {
 }
 
 export type CodexChunk =
+  | { kind: "preview"; job_id: string; turn_key: string; data_url: string }
+  | ({ kind: "progress"; job_id: string; turn_key: string } & Omit<import("./generationProgress").GenerationProgress, "turnKey">)
   | {
       kind: "started";
+      turn_key?: string;
       job_id: string;
       references?: string[];
   reference_node_ids?: Array<string | null>;
@@ -1072,7 +1083,7 @@ export type CodexChunk =
       visual_profile?: VisualProfileCapsule | null;
     }
   | { kind: "delta"; text: string; job_id?: string }
-  | { kind: "submit"; submit_id: string; job_id?: string }
+  | { kind: "submit"; submit_id: string; job_id?: string; turn_key?: string }
   | {
       kind: "done";
       text: string;

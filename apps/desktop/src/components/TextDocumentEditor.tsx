@@ -27,8 +27,11 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
   const [saving, setSaving] = useState(false), [inserting, setInserting] = useState(false);
   const current = useRef(draft), mounted = useRef(true), plate = useRef<TextPlateHandle>(null);
   const canonical = useRef("");
+  const pendingValue = useRef<DocumentValue>();
+  const draftTimer = useRef<ReturnType<typeof setTimeout>>();
+  const [editing, setEditing] = useState(false);
   const readEpoch = useRef(0), mediaEpoch = useRef(0);
-  const dirty = !!draft && draft.text !== draft.base.text;
+  const dirty = editing || (!!draft && draft.text !== draft.base.text);
 
   function replace(next: TextDocumentDraft) {
     readEpoch.current++;
@@ -47,8 +50,8 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
     return assets.map(documentMedia).filter((item): item is DocumentMedia => item !== null);
   }
   function loadDraft(next: TextDocumentDraft) {
-    const nextValue = next.base.format === "markdown" ? parseMarkdown(next.text) : [];
-    canonical.current = next.base.format === "markdown" ? serializeMarkdown(nextValue) : next.text;
+    const nextValue = next.base.format !== "text" ? parseMarkdown(next.text) : [];
+    canonical.current = next.base.format !== "text" ? serializeMarkdown(nextValue) : next.text;
     setValue(nextValue); replace(next);
     hydrateMedia(nextValue);
   }
@@ -59,25 +62,41 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
       if (!mounted.current) return;
       if (current.current?.text !== next.text) loadDraft(next);
       else replace(next);
-    });
+    }, captureValue);
     const cached = getTextDocumentDraft(key);
     if (cached) { loadDraft(cached); setNotice("已恢复未保存的草稿。"); }
     else void textDocuments.read(asset.id).then(base => {
       if (mounted.current && ticket === readEpoch.current) loadDraft({ base, text: base.text, mode: "body" });
     }).catch(reason => { if (mounted.current && ticket === readEpoch.current) setError(userErrorMessage(reason, "文本暂时无法打开，请检查文件后重试。")); });
-    return () => { mounted.current = false; readEpoch.current++; mediaEpoch.current++; unsubscribe(); };
+    const hidden = () => { if (document.hidden) captureValue(); };
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      captureValue(); mounted.current = false; readEpoch.current++; mediaEpoch.current++;
+      document.removeEventListener("visibilitychange", hidden); unsubscribe();
+    };
   }, [key, asset.id]);
   useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
 
   function changeText(text: string) { if (current.current) replace({ ...current.current, text }); }
   function changeValue(next: DocumentValue) {
-    setValue(next);
+    readEpoch.current++; pendingValue.current = next; setEditing(true);
+    clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(captureValue, 300);
+  }
+  function captureValue() {
+    clearTimeout(draftTimer.current);
+    const next = pendingValue.current;
+    if (!next) return;
     const text = serializeMarkdown(next);
+    pendingValue.current = undefined;
+    setValue(next); setEditing(false);
     if (text !== canonical.current) { canonical.current = text; changeText(text); }
   }
   function switchMode(mode: "body" | "source") {
-    if (!draft || draft.mode === mode) return;
     try {
+      captureValue();
+      const draft = current.current;
+      if (!draft || draft.mode === mode) return;
       if (mode === "body") {
         const next = parseMarkdown(draft.text); setValue(next); canonical.current = serializeMarkdown(next);
         hydrateMedia(next);
@@ -86,11 +105,12 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
     } catch { setError("源码暂时无法转换，请检查格式；内容仍保留在编辑区。"); }
   }
   async function save() {
+    captureValue();
     const start = current.current;
     if (!start || saving || start.text === start.base.text) return;
     setSaving(true); setError("");
     try {
-      const result = await textDocuments.save(asset.id, start.base.version, start.text);
+      const result = await textDocuments.save(asset.id, start.base.version, start.text, start.base.format);
       const next = finishTextDocumentSave(key, start, result);
       if (mounted.current && next) { current.current = next; setDraft(next); setNotice(next.text === next.base.text ? "已保存" : "已保存提交的内容，仍有新的更改。"); onSaved?.(); }
     } catch (reason) {
@@ -99,6 +119,7 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
   }
   async function reload() {
     if (saving || (dirty && !window.confirm("重新读取会放弃当前未保存的更改，是否继续？"))) return;
+    captureValue();
     const ticket = ++readEpoch.current;
     try { const base = await textDocuments.read(asset.id); if (mounted.current && ticket === readEpoch.current) { loadDraft({ base, text: base.text, mode: draft?.mode ?? "body" }); setError(""); setNotice(""); } }
     catch (reason) { if (mounted.current && ticket === readEpoch.current) setError(userErrorMessage(reason, "原文件暂时无法读取，请稍后重试。")); }
@@ -128,15 +149,16 @@ function DocumentSession({ asset, onSaved, onDirtyChange }: Props) {
   }}>
     <div className="text-document-toolbar">
       {draft?.base.format === "markdown" && <div className="text-document-modes"><button aria-pressed={draft.mode === "body"} onClick={() => switchMode("body")}>正文</button><button aria-pressed={draft.mode === "source"} onClick={() => switchMode("source")}>源码</button></div>}
-      {draft?.base.format === "markdown" && <button title="插入已有素材的原文件引用" disabled={draft.mode !== "body" || inserting} onClick={() => void insertFiles()}><Plus size={14}/>插入素材</button>}
+      {draft && draft.base.format !== "text" && <button title="插入已有素材的原文件引用" disabled={draft.mode !== "body" || inserting} onClick={() => void insertFiles()}><Plus size={14}/>插入素材</button>}
       <span className="text-document-save-state">{dirty ? "未保存" : ""}</span>
       <button aria-label="重新读取原文件" title="重新读取原文件" disabled={saving} onClick={() => void reload()}><RotateCcw size={14}/></button>
       <button disabled={!dirty || saving} onClick={() => void save()}><Save size={14}/>{saving ? "保存中…" : "保存"}</button>
     </div>
     {error && <div className="text-document-error" role="alert">{error}</div>}
     {notice && <div className="text-document-notice" role="status">{notice}</div>}
+    {draft?.base.format === "docx" && <div className="text-document-notice">保存为 Word 文档；复杂排版可能变化，正文与基础格式会保留。</div>}
     {!draft ? <div className="text-document-loading">{error ? "" : "正在读取文本…"}</div> : draft.base.format === "text" ? <textarea className="text-document-source is-plain" aria-label="文本内容" value={draft.text} onChange={event => changeText(event.target.value)} />
       : draft.mode === "source" ? <textarea className="text-document-source" aria-label="Markdown 源码" value={draft.text} spellCheck={false} onChange={event => changeText(event.target.value)} />
-      : <TextPlateEditor ref={plate} value={value} media={media} onChange={changeValue} onDropAssets={attachAssets} onRejectedPaste={() => setNotice("请使用插入素材选择原文件，已有文件只建立引用。")} />}
+      : <TextPlateEditor ref={plate} value={value} media={media} onChange={changeValue} onDropAssets={attachAssets} />}
   </section>;
 }

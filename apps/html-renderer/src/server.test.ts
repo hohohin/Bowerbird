@@ -83,7 +83,7 @@ test("stable failure codes map to http status", async () => {
   await running.close();
 });
 
-test("concurrency 1 + queue 1: third concurrent request gets render_capacity_busy", async () => {
+test("a full queue refuses work and regains capacity after a queued failure", async t => {
   let releaseFirst: () => void = () => undefined;
   const first = new Promise<void>((resolve) => {
     releaseFirst = resolve;
@@ -92,12 +92,14 @@ test("concurrency 1 + queue 1: third concurrent request gets render_capacity_bus
   const running = startMock(async () => {
     started += 1;
     if (started === 1) await first;
+    if (started === 2) throw new Error("fixture failure");
     return { ok: true, outputs: [] } as unknown as InternalRenderResult;
   });
   const port = await listen(running.server as never);
   const p1 = post(port, JSON.stringify({ requestId: "a" }));
+  await t.waitFor(() => started === 1);
   const p2 = post(port, JSON.stringify({ requestId: "b" }));
-  await new Promise((r) => setTimeout(r, 50));
+  await t.waitFor(() => running.status.queued === 1);
   const p3 = await post(port, JSON.stringify({ requestId: "c" }));
   assert.equal(p3.status, 429);
   assert.equal(p3.json.code, "render_capacity_busy");
@@ -105,7 +107,12 @@ test("concurrency 1 + queue 1: third concurrent request gets render_capacity_bus
   const r1 = await p1;
   const r2 = await p2;
   assert.equal(r1.status, 200);
-  assert.equal(r2.status, 200);
+  assert.equal(r2.status, 503);
+  assert.equal(running.status.busy, false);
+  assert.equal(running.status.queued, 0);
+  for (const requestId of ["d", "e"]) {
+    assert.equal((await post(port, JSON.stringify({ requestId }))).status, 200);
+  }
   await running.close();
 });
 

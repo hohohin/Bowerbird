@@ -1,12 +1,20 @@
+import { generationTaskNavigation, agentTaskNavigation } from "../lib/projectActivity";
 import { TacticalSelect } from "./TacticalSelect";
 import { userErrorMessage } from "../lib/userError";
 import { beginOnboardingOperation } from "../lib/onboardingStore";
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { Node as ProseMirrorNode } from "prosemirror-model";
 import { DEFAULT_VIDEO_OPTIONS, VIDEO_RATIOS, imageInputError, resolveVideoOptions, videoInputError, videoModelLabel, videoProvider, type GenerationSettings } from "../lib/videoGeneration";
 import { VideoControls } from "./creation/VideoControls";
+import { LocalVideoFrames } from "./creation/LocalVideoFrames";
+import { H3OptimizeButton } from "./creation/H3OptimizeButton";
+import { ComfyEnvironmentControl, type ComfyEnvironmentState } from "./ComfyVideoCard";
+import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, DEFAULT_COMFY_VIDEO, localVideoFrames, localVideoInputError, type ComposerLocalVideoRequest } from "../lib/comfyVideo";
 import { ProviderQuota } from "./creation/ProviderQuota";
 import { useStore } from "../store";
-import { canStartAnotherAgentRun, canStartAnotherJob, canUseAgentRun, canUseByo } from "../lib/entitlement";
+import { canStartAnotherAgentRun, canStartAnotherJob, countLimitedGenerationJobs, canUseAgentRun } from "../lib/entitlement";
+import { generationProviderIssue } from "../lib/generationAvailability";
+import { ProviderIssueNotice } from "./creation/ProviderIssueNotice";
 import { imageProviderLabel, isCloudProvider, supportsAnnotationCoordinates } from "../lib/genProviders";
 import { api } from "../lib/api";
 import {
@@ -20,6 +28,7 @@ import { AGENT_DS_ENABLED, AGENT_Z_ENABLED, PRESET_FEATURE_ENABLED } from "../li
 import { notify, notifyError, notifySuccess } from "../lib/notify";
 import { isWorkspaceOperationCurrent } from "../lib/workspaceRoute";
 import { captureGenerationSubmissionAuthority } from "../lib/generationIntent";
+import { reportGalleryMerge } from "../lib/generationGallery";
 import { DSH_AGENT_RUNTIME, UNIFIED_AGENT_SKILL } from "../lib/cloudAgentSelection";
 import type { Asset } from "../lib/types";
 import {
@@ -30,11 +39,13 @@ import {
 } from "./creation/useCreationEditor";
 import type { CreativePromptLoadRequest } from "../lib/creativeLaunch";
 import type { CreativeComposerMode } from "../lib/creativeDraft";
-import { CHAT_PROVIDER_LABELS, localChatInputError, type ChatComposeRequest, type ChatProvider } from "../lib/localChat";
+import { CHAT_PROVIDER_LABELS, chatCodexOptionError, localChatInputError, type ChatCodexOptions, type ChatComposeRequest, type ChatProvider } from "../lib/localChat";
 import { ChatProviderSelect, useChatProviderAccess } from "./creation/ChatProviderSelect";
+import { CodexModelSelect, useChatCodexModels } from "./creation/CodexModelSelect";
 import { RATIOS } from "./creation/ratios";
 import { RatioSelect } from "./creation/RatioSelect";
 import { ImageGenOptions } from "./creation/ImageGenOptions";
+import { JoinPreviousGeneration } from "./creation/JoinPreviousGeneration";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { VisualProfileSelect } from "./creation/VisualProfileSelect";
 import { BoardChipPreview } from "./creation/BoardChipPreview";
@@ -103,10 +114,15 @@ export interface CreationBoardProps {
   registerDraftFlush?: (flush: (() => void) | null) => void;
   beforeGenerate?: () => Promise<void>;
   prepareProject?: () => Promise<string>;
+  onGenerationSubmitted?: (projectId: string, threadId?: string | null, nodeId?: string | null) => void;
+  onGenerateLocalVideo?: (request: ComposerLocalVideoRequest, projectId?: string) => Promise<void>;
+  onOptimizeLocalVideo?: (request: ComposerLocalVideoRequest, projectId?: string) => Promise<string>;
   composerMode?: CreativeComposerMode;
   onComposerModeChange?: (mode: CreativeComposerMode) => void;
   onSendChat?: (request: ChatComposeRequest, projectId?: string, sentDraftJson?: string) => Promise<void>;
   chatProvider?: ChatProvider;
+  chatCodexOptions?: ChatCodexOptions;
+  onChatCodexOptionsChange?: (options: ChatCodexOptions) => void;
   onChatProviderChange?: (provider: ChatProvider) => void;
   onOpenChatHistory?: () => void;
   chatHistoryOpen?: boolean;
@@ -135,10 +151,15 @@ export function CreationBoard({
   registerDraftFlush,
   beforeGenerate,
   prepareProject,
+  onGenerationSubmitted,
+  onGenerateLocalVideo,
+  onOptimizeLocalVideo,
   composerMode,
   onComposerModeChange,
   onSendChat,
   chatProvider = "codex-local",
+  chatCodexOptions,
+  onChatCodexOptionsChange,
   onChatProviderChange,
   onOpenChatHistory,
   chatHistoryOpen,
@@ -157,19 +178,36 @@ export function CreationBoard({
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const codexHealth = useStore((s) => s.codexHealth);
   const creating = useStore((s) => s.boardOpen);
+  const activeProjectId = useStore((s) => s.activeProjectId);
+  const genJobOrder = useStore((s) => s.genJobOrder);
+  const galleryProjectId = projectId ?? activeProjectId;
+  const [joinPrevious, setJoinPrevious] = useState(false);
+  const [previousJobId, setPreviousJobId] = useState<string | null>(null);
+  const [galleryInspection, setGalleryInspection] = useState(0);
+  useEffect(() => { setJoinPrevious(false); setPreviousJobId(null); }, [galleryProjectId]);
+  useEffect(() => {
+    let current = true;
+    if (!galleryProjectId) return;
+    void api.previousGalleryGeneration(galleryProjectId).then(id => { if (current) setPreviousJobId(id); }).catch(() => {});
+    return () => { current = false; };
+  }, [galleryProjectId, genJobOrder, creating, galleryInspection]);
   const setBoardActive = useStore((s) => s.setBoardActive);
   const dreaminaHealth = useStore((s) => s.dreaminaHealth);
   const cloudAuth = useStore((s) => s.cloudAuth);
   const cloudEntitlement = useStore((s) => s.cloudEntitlement);
   const cloudAvailable = cloudAuth?.cloud_available ?? false;
   const isTestAccount = cloudEntitlement?.is_test_account === true;
-  const runningJobCount = useStore((s) => Object.values(s.genJobs).filter((j) => j.running).length);
+  const runningJobCount = useStore((s) => countLimitedGenerationJobs(s.genJobs));
   const selectedImageProvider = useStore((s) => s.activeGenProvider);
   const [generation, setGeneration] = useState<GenerationSettings>(() => initialDraft?.generation ?? { media: "image" });
   const isChat = composerMode === "chat";
-  const chatAccess = useChatProviderAccess(isChat);
+  const chatAccess = useChatProviderAccess();
+  const chatModels = useChatCodexModels();
   const isVideo = generation.media === "video";
-  const activeGenProvider = isChat ? "codex" : isVideo ? videoProvider(generation.videoChannel, generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS) : selectedImageProvider;
+  const isLocalVideo = isVideo && !!generation.localVideo;
+  const localAllowed = canUseComfyVideo(cloudAuth, cloudEntitlement);
+  const [localEnvironment, setLocalEnvironment] = useState<ComfyEnvironmentState>({ ready: false, checking: true, message: "正在检测环境…" });
+  const activeGenProvider = isChat ? "codex" : isLocalVideo ? "comfy-video" : isVideo ? videoProvider(generation.videoChannel, generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS) : selectedImageProvider;
   const draftRef = useRef<CreationEditorDraft | null>(initialDraft ?? null);
   const generationRef = useRef(generation);
   generationRef.current = generation;
@@ -225,6 +263,56 @@ export function CreationBoard({
   const textWorkspace = useTextWorkspace({ scopeKey: `${embedded ? projectId ?? "library" : "board"}:${composerMode ?? generation.media}`, projectId, getDraft, loadPrompt, focus });
   useTerminalCaret(viewRef, hostRef);
   const videoOptions = resolveVideoOptions(generation.videoOptions ?? DEFAULT_VIDEO_OPTIONS, references);
+  const localFrames = useMemo(() => localVideoFrames(references), [references]);
+  const localMode = comfyVideoMode(generation.localVideo ?? DEFAULT_COMFY_VIDEO);
+  const localFrameCount = localMode === "text" ? 0 : localMode === "reference" ? 1 : 2;
+  const [optimizingH3, setOptimizingH3] = useState(false);
+  const h3Scope = JSON.stringify([projectId, cloudAuth?.user_id, isLocalVideo, localMode, generation.localVideo?.seconds, generation.localVideo?.ratio]);
+  const h3ScopeRef = useRef(h3Scope);
+  h3ScopeRef.current = h3Scope;
+
+  async function optimizeH3Prompt() {
+    if (!onOptimizeLocalVideo || !isLocalVideo || optimizingH3 || submitting || !finalPrompt.trim()) return;
+    const origin = useStore.getState();
+    const originId = prepareProject ? origin.activeProjectId : projectId ?? origin.activeProjectId;
+    const claim = acquireCreativeSubmission(originId);
+    if (!claim) return;
+    const scope = h3Scope;
+    const request: ComposerLocalVideoRequest = { prompt: finalPrompt, options: { ...generation.localVideo! },
+      firstFrame: localMode === "text" ? "" : localFrames[0]?.id ?? "", lastFrame: localMode === "frames" ? localFrames[1]?.id : undefined };
+    const current = () => {
+      const state = useStore.getState();
+      return mounted.current && h3ScopeRef.current === scope && claim.isCurrent()
+        && state.cloudAuth?.user_id === origin.cloudAuth?.user_id
+        && (!prepareProject || state.libraryHomeView === origin.libraryHomeView)
+        && isWorkspaceOperationCurrent(originId, state.activeProjectId, state.projectRoutePending, origin.projectRouteRevision, state.projectRouteRevision);
+    };
+    setOptimizingH3(true);
+    flushDraft();
+    try {
+      if (!localAllowed) throw new Error("本地 H3 需要有效的 Pro／Studio 权益或测试账号资格");
+      if (!isTestAccount || !canUseAgentRun(origin.cloudEntitlement, UNIFIED_AGENT_SKILL)) throw new Error("当前账号尚未开放 Cloud DSH，请使用已获授权的测试账号");
+      if (request.prompt.trim().length > 16000) throw new Error("提示词不能超过 16000 字");
+      if (!current()) return;
+      const result = await onOptimizeLocalVideo(request, projectId);
+      if (current()) applyH3Prompt(result);
+    } catch (error) { if (current()) notifyError(error, "提示词优化未完成，请在任务中心查看原任务。"); }
+    finally { claim.release(); if (mounted.current) setOptimizingH3(false); }
+  }
+
+  function applyH3Prompt(result: string) {
+    const view = viewRef.current;
+    if (!view || !result.trim()) return;
+    // Preserve media identity/order, including canvas references, while replacing text.
+    const images: ProseMirrorNode[] = [];
+    view.state.doc.descendants(node => { if (node.type.name === "image") images.push(node); });
+    const { schema } = view.state;
+    const paragraphs = result.trim().split(/\r?\n/).map(line => schema.nodes.paragraph.create(null, line ? schema.text(line) : undefined));
+    if (images.length) paragraphs.push(schema.nodes.paragraph.create(null, images));
+    view.dispatch(view.state.tr.replaceWith(0, view.state.doc.content.size, paragraphs));
+    flushDraft();
+    view.focus();
+  }
 
   useEffect(() => {
     registerDraftFlush?.(flushDraft);
@@ -381,8 +469,13 @@ export function CreationBoard({
   const dockRef = useRef<HTMLDivElement>(null);
   const [collapsed, setCollapsed] = useState(true);
   const isCollapsed = !creating && collapsed;
+  // A mode mounts already expanded; only a real collapsed-to-open entry animates.
+  const [canAnimateExpansion, setCanAnimateExpansion] = useState(isCollapsed);
   useLayoutEffect(() => {
-    if (isCollapsed && editorScrollRef.current) editorScrollRef.current.scrollTop = 0;
+    if (isCollapsed) {
+      setCanAnimateExpansion(true);
+      if (editorScrollRef.current) editorScrollRef.current.scrollTop = 0;
+    }
   }, [isCollapsed]);
   useEffect(() => {
     const editor = hostRef.current?.querySelector(".ProseMirror");
@@ -410,7 +503,7 @@ export function CreationBoard({
   }, [agentMenuOpen]);
   useEffect(() => {
     function onPointerDown(event: PointerEvent) {
-      const menu = event.target instanceof Element ? event.target.closest(".model-select-menu, .tactical-select-menu, .ratio-select-menu, .image-options-menu") : null;
+      const menu = event.target instanceof Element ? event.target.closest(".model-select-menu, .composer-local-frames, .comfy-environment-panel, .tactical-select-menu, .ratio-select-menu, .image-options-menu") : null;
       const ownMenu = menu && dockRef.current?.querySelector(`[aria-controls="${menu.id}"]`);
       if (event.target instanceof Node && !dockRef.current?.contains(event.target) && !ownMenu) {
         setCollapsed(true);
@@ -508,23 +601,14 @@ export function CreationBoard({
   const cloudBalance = cloudEntitlement
     ? cloudEntitlement.balances.daily + cloudEntitlement.balances.sub + cloudEntitlement.balances.topup
     : 0;
-  const targetHealth = activeGenProvider === "jimeng" ? dreaminaHealth : codexHealth;
-  const targetCliLabel = activeGenProvider === "jimeng" ? "即梦 CLI" : "Codex CLI";
-  const targetUnavailableReason = isCloudProvider(activeGenProvider)
-    ? !cloudAvailable
-      ? "当前版本未配置 Bowerbird Cloud，请在设置中选择可用引擎。"
-      : !cloudAuth?.logged_in
-        ? "尚未登录 Bowerbird 账号，请通过左侧账号入口登录。"
-        : cloudBalance <= 0
-          ? "Bowerbird 积分不足，请补充积分后重试。"
-          : null
-    : !canUseByo(cloudEntitlement)
-      ? !cloudAuth?.logged_in
-        ? "请先登录具有自备引擎权限的 Bowerbird 账号。"
-        : "当前账号未开放自备引擎权限，请升级 Pro 后使用。"
-      : !targetHealth?.ok
-        ? `${targetCliLabel} 未就绪：${userErrorMessage(targetHealth?.reason, "尚未取得可用的检测结果")}。请前往「设置 → 模型设置」检查安装和登录状态，并重新检测。`
-        : null;
+  const providerIssue = isChat ? chatAccess.issue(chatProvider)
+    : isLocalVideo || cloudAgentMode || agentZMode || agentGMode || agentDsMode ? null
+    : generationProviderIssue(activeGenProvider, { cloudAuth, cloudEntitlement, codexHealth, dreaminaHealth });
+  const targetUnavailableReason = isLocalVideo
+    ? !localAllowed ? "本地 H3 需要有效的 Pro／Studio 权益或测试账号资格。"
+      : !onGenerateLocalVideo ? "请在项目画板中使用本地视频生成。"
+      : !localEnvironment.ready ? userErrorMessage(localEnvironment.message, "当前环境未设置好，点击配置。") : null
+    : providerIssue?.message ?? null;
   const targetReady = targetUnavailableReason === null;
   // 统一 Agent 使用云端工具；普通生成的引擎选择不改变 Agent 路线。
   const activeCloudAgentRunCount = Object.values(cloudAgentRuns).filter((run) =>
@@ -542,15 +626,15 @@ export function CreationBoard({
     cloudAvailable &&
     !!cloudAuth?.logged_in &&
     cloudBalance >= cloudAgentRequiredBalance;
-  const targetProviderLabel = isVideo ? videoModelLabel(videoOptions.model_version) : imageProviderLabel(activeGenProvider, cloudEntitlement, settings?.dreamina_model_version);
+  const targetProviderLabel = isLocalVideo ? "本地 H3" : isVideo ? videoModelLabel(videoOptions.model_version) : imageProviderLabel(activeGenProvider, cloudEntitlement, settings?.dreamina_model_version);
   const sendTooltipId = useId();
-  const referenceError = !isVideo && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode
+  const referenceError = isLocalVideo ? localVideoInputError(finalPrompt, localFrames, generation.localVideo!) : !isVideo && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode
     ? imageInputError(references) : null;
   const sendDisabledReason = isChat
-    ? submitting ? "正在发送消息，请稍候。" : chatAccess.reason(chatProvider)
-      ?? (references.some(asset => /\.(mp4|mov|webm|mkv)$/i.test(asset.store_path ?? "")) ? "对话暂时只支持图片参考，请移除视频。" : null)
+    ? submitting ? "正在发送消息，请稍候。" : providerIssue?.message
+      ?? (chatProvider === "codex-local" ? chatCodexOptionError(chatCodexOptions ?? {}, chatModels.models) : null)
       ?? localChatInputError(finalPrompt, references.map(asset => asset.id))
-    : submitting
+    : optimizingH3 ? "正在优化提示词，请等待结果后再生成。" : submitting
     ? "正在提交指令，任务启动后即可继续生成。"
     : agentZBusy
       ? "正在投递到 Agent 终端，请等待投递完成。"
@@ -577,7 +661,7 @@ export function CreationBoard({
               : agentBusy
                 ? "Agent 正在整理意图，请等待处理完成。"
                 : referenceError ?? targetUnavailableReason
-                  ?? (!canStartAnotherJob(cloudEntitlement, runningJobCount)
+                  ?? (!isLocalVideo && !canStartAnotherJob(cloudEntitlement, runningJobCount, activeGenProvider)
                     ? "已达当前档位的并行生成上限，请等待已有任务完成或取消任务。"
                     : !finalPrompt ? "请先输入创作要求或添加参考内容。" : null);
   const hasAnnotationDimension = graphSources.some((source) =>
@@ -592,6 +676,7 @@ export function CreationBoard({
   // 普通生成任务启动、会话卡片创建成功后退出创作模式，后台继续生成；
   // 校验不过或提交失败保留组稿。后续任务结算不影响用户重新开启的创作模式。
   async function send() {
+    if (providerIssue) return;
     if (isChat) {
       if (sendDisabledReason || !onSendChat) return;
       const origin = useStore.getState();
@@ -606,7 +691,8 @@ export function CreationBoard({
         const route = useStore.getState();
         if ((prepareProject && (!mounted.current || route.libraryHomeView !== origin.libraryHomeView))
           || !isWorkspaceOperationCurrent(originId, route.activeProjectId, route.projectRoutePending, origin.projectRouteRevision, route.projectRouteRevision)) return;
-        await onSendChat({ prompt: finalPrompt.trim(), references: [...references], provider: chatProvider }, targetProjectId, sentDraft);
+        await onSendChat({ prompt: finalPrompt.trim(), references: [...references], provider: chatProvider,
+          ...(chatCodexOptions !== undefined ? { codexOptions: { ...chatCodexOptions } } : {}) }, targetProjectId, sentDraft);
         const current = useStore.getState();
         if (mounted.current && (!prepareProject || current.libraryHomeView === origin.libraryHomeView)
           && claim.isCurrent() && isWorkspaceOperationCurrent(originId, current.activeProjectId, current.projectRoutePending, origin.projectRouteRevision, current.projectRouteRevision)) exitCreationMode();
@@ -614,8 +700,10 @@ export function CreationBoard({
       finally { claim.release(); setSubmitting(false); }
       return;
     }
+    if (isLocalVideo && sendDisabledReason) { notifyError(sendDisabledReason, "本地生成暂不可用"); return; }
     const originRoute = useStore.getState();
     const originProjectId = projectId ?? originRoute.activeProjectId;
+    const galleryParent = !isVideo && !cloudAgentMode && !terminalAgent && joinPrevious ? previousJobId : null;
     const routeProjectId = prepareProject ? originRoute.activeProjectId : originProjectId;
     const originRouteRevision = originRoute.projectRouteRevision;
     const submissionClaim = acquireCreativeSubmission(originProjectId);
@@ -651,6 +739,21 @@ export function CreationBoard({
     };
     if (!isCurrentSubmission()) return;
     if (referenceError) { notifyError(referenceError, "参考素材不适用"); return; }
+    if (isLocalVideo) {
+      const options = { ...generation.localVideo! };
+      const request: ComposerLocalVideoRequest = { prompt: finalPrompt, firstFrame: localMode === "text" ? "" : localFrames[0].id, lastFrame: localMode === "frames" ? localFrames[1]?.id : undefined, options };
+      await prepareSubmissionProject();
+      if (!isCurrentSubmission()) return;
+      const environment = await comfyEnvironment("detect", options.endpoint, undefined, undefined, localMode);
+      if (!isCurrentSubmission()) return;
+      const account = useStore.getState();
+      if (account.cloudAuth?.user_id !== originRoute.cloudAuth?.user_id || !canUseComfyVideo(account.cloudAuth, account.cloudEntitlement)) throw new Error("账号或本地生成权限已变化，请重新检查。");
+      if (!comfyEnvironmentReady(environment)) { setLocalEnvironment({ ready: false, checking: false, message: environment.message }); throw new Error(environment.message || "当前环境未设置好，点击配置。"); }
+      request.options.endpoint = environment.endpoint;
+      await onGenerateLocalVideo!(request, submissionProjectId);
+      if (isCurrentSubmission()) exitCreationMode();
+      return;
+    }
     if (isVideo) {
       const error = videoInputError(videoOptions, references, ratio, activeGenProvider);
       if (error) { notifyError(error, "视频参数无效"); return; }
@@ -718,6 +821,8 @@ export function CreationBoard({
             background: "opaque",
           },
         });
+        const submittedLocation = agentTaskNavigation(run);
+        if (submittedLocation) onGenerationSubmitted?.(submittedLocation.projectId, submittedLocation.threadId, submittedLocation.nodeId);
         if (continuation?.continuationRequestId) {
           ackPendingCreativeContinuation(continuation.continuationRequestId);
         }
@@ -726,7 +831,7 @@ export function CreationBoard({
           return;
         }
         updateCloudAgentRun(run);
-        notifySuccess("Agent 会话已创建，将根据目标选择所需工具");
+        if (!onGenerationSubmitted) notifySuccess("Agent 会话已创建，将根据目标选择所需工具");
         exitCreationMode();
       } catch (error) {
         if (isCurrentSubmission()) notifyError(error, "启动 Bowerbird Agent 失败");
@@ -822,7 +927,7 @@ export function CreationBoard({
       return;
     }
     if (!targetReady || !finalPrompt) return;
-    if (!canStartAnotherJob(cloudEntitlement, runningJobCount)) return;
+    if (!canStartAnotherJob(cloudEntitlement, runningJobCount, activeGenProvider)) return;
     let prompt = finalPrompt;
     if (agentMode !== "off") {
       setAgentBusy(true);
@@ -905,6 +1010,15 @@ export function CreationBoard({
       if (isCurrentSubmission()) notifyError(startedGeneration.error, "生成任务启动失败，请重试");
       return;
     }
+    const submittedJob = useStore.getState().genJobs[startedGeneration.jobId];
+    if (galleryParent && submittedJob?.projectId === originProjectId) {
+      try {
+        const edit = await api.mergeGenerationGalleries({ jobIds: [galleryParent, startedGeneration.jobId], projectId: originProjectId });
+        reportGalleryMerge(edit, originProjectId);
+      } catch (error) { notifyError(error, "生成已提交，但未能合组；结果会独立保留"); }
+    }
+    const submittedLocation = submittedJob ? generationTaskNavigation(submittedJob) : null;
+    if (submittedLocation) onGenerationSubmitted?.(submittedLocation.projectId, submittedLocation.threadId, submittedLocation.nodeId);
     if (continuation?.continuationRequestId) {
       ackPendingCreativeContinuation(continuation.continuationRequestId);
     }
@@ -985,7 +1099,6 @@ export function CreationBoard({
       {textWorkspace.workspace}
       <section
         ref={dockRef}
-        // 选择项目保持折叠态，避免 pointerdown 展开导致按钮在 click 前移位。
         onPointerDown={(e) => {
           if (e.target instanceof Element && !e.target.closest(".composer-profile")) setProfileOpen(false);
           if (!(e.target instanceof Element && e.target.closest(".creation-exit-tab, .composer-expand, .library-composer-target"))) {
@@ -999,7 +1112,7 @@ export function CreationBoard({
           if (!(event.target instanceof Element && event.target.closest(".composer-expand, .library-composer-target"))) setCollapsed(false);
         }}
         onBlurCapture={(e) => {
-          const modelMenu = e.relatedTarget instanceof Element ? e.relatedTarget.closest(".model-select-menu, .tactical-select-menu, .ratio-select-menu, .image-options-menu") : null;
+          const modelMenu = e.relatedTarget instanceof Element ? e.relatedTarget.closest(".model-select-menu, .composer-local-frames, .comfy-environment-panel, .tactical-select-menu, .ratio-select-menu, .image-options-menu") : null;
           const ownModelMenu = modelMenu && e.currentTarget.querySelector(`[aria-controls="${modelMenu.id}"]`);
           if (!e.currentTarget.contains(e.relatedTarget as Node | null) && !ownModelMenu) {
             setCollapsed(true);
@@ -1008,11 +1121,12 @@ export function CreationBoard({
           }
         }}
         aria-label="创作板"
-        className={`creation-dock composer-glass pointer-events-auto relative ${creating ? "is-creating" : ""} ${embedded ? "is-canvas-composer" : ""} ${
+        data-video-references={isVideo || isChat ? "true" : undefined}
+        className={`creation-dock composer-glass pointer-events-auto relative ${canAnimateExpansion ? "can-animate-expansion" : ""} ${creating ? "is-creating" : ""} ${embedded ? "is-canvas-composer" : ""} ${
           isCollapsed ? "is-collapsed" : ""
         }`}
       >
-        <ComposerProjection dockRef={dockRef} collapsed={isCollapsed} />
+        <ComposerProjection collapsed={isCollapsed} />
         <div className="composer-heading">
           {header}
           {header && isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
@@ -1352,6 +1466,7 @@ export function CreationBoard({
             {isCollapsed && <button type="button" className="composer-expand" aria-label="展开创作描述" title="展开创作描述" onClick={focus}><ArrowUp size={15} aria-hidden="true" /></button>}
           </div>
         </div>
+        <div className={`composer-input-area${isLocalVideo && onOptimizeLocalVideo && !isCollapsed ? " has-h3-action" : ""}`}>
         <OverlayScrollArea className="composer-editor-scroll" scrollRef={editorScrollRef} label="创作描述滚动条">
         <div
           ref={hostRef}
@@ -1374,15 +1489,21 @@ export function CreationBoard({
           className="creation-editor composer-description cursor-text text-ink"
         />
         </OverlayScrollArea>
+        {isLocalVideo && onOptimizeLocalVideo && !isCollapsed && <H3OptimizeButton disabled={submitting || !finalPrompt.trim()} busy={optimizingH3} onClick={() => void optimizeH3Prompt()} />}
+        </div>
         </div>
         {isChat && !isCollapsed && <p className="composer-chat-key-hint">Enter 换行 · Ctrl / ⌘ + Enter 发送</p>}
-        {isChat && chatProvider === "deepseek-cloud" && references.length > 0 && <p className="composer-chat-key-hint">图片仅用于建卡引用；看图分析请选择本机 Codex。</p>}
+        {isChat && chatProvider !== "codex-local" && references.length > 0 && <p className="composer-chat-key-hint">所选素材可用于建卡。图片内容分析可选择本机 Codex。</p>}
         {/* 编辑框内 image/keyword chip 的交互浮层（hover 放大图/维度正文 + 点击定位瀑布流） */}
         <BoardChipPreview hostRef={hostRef} />
-        {!isChat && referenceError && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
+        {providerIssue && <ProviderIssueNotice issue={providerIssue} className="px-3 py-1 text-xs text-muted" />}
+        {!isChat && referenceError && !isLocalVideo && <p role="alert" className="px-3 py-1 text-xs text-red-400">{referenceError}</p>}
         {/* 素材、模型参数、帮助与发送保持同一条底栏。 */}
         <div className={`generation-toolbar composer-toolbar${isVideo ? " is-video" : ""}`}>
-          {!isChat && <div className="group relative flex shrink-0 items-center composer-help">
+          {!isChat && !isVideo && !cloudAgentMode && !terminalAgent && <JoinPreviousGeneration key={galleryProjectId}
+            projectId={galleryProjectId} jobId={previousJobId} checked={joinPrevious} submitting={submitting}
+            onChange={setJoinPrevious} onInspect={() => setGalleryInspection(value => value + 1)} />}
+          {!isChat && (isVideo || cloudAgentMode || terminalAgent) && <div className="group relative flex shrink-0 items-center composer-help">
             <button
               type="button"
               className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-white/10 hover:text-ink"
@@ -1392,7 +1513,7 @@ export function CreationBoard({
             </button>
             <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden w-60 rounded-lg bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block group-focus-within:block">
               像跟 AI 输入 prompt 一样书写；<span className="text-accent">点击素材库图片</span>，将参考图插入当前光标处。也可输入 <span className="text-accent">@图名</span> 插入参考图（空格/标点后自动识别）。<span className="text-accent">长按任意图片</span>四周会出现<span className="text-accent">维度环</span>，点环上扇区即可把该维度加入创作板（创作板未打开会自动打开）；无维度数据的图会提示先右键反推。
-              {isVideo && <p className="mt-2 text-[11px] leading-4 text-muted">{videoOptions.kind === "frames2video" ? "按编辑框中的参考顺序：第 1 张为首帧，第 2 张为尾帧。" : videoOptions.kind === "multimodal2video" ? `支持图片与视频参考；参考视频每段及总时长均须为 2–${videoOptions.model_version === "seedance2.5" ? 30 : 15} 秒。` : ""}{generation.videoChannel === "cloud" ? "使用 Bowerbird Bcoin，按提交时锁定的任务报价结算。" : "使用即梦积分，模型权限以官方账号为准。"}提交后停止等待，远端任务仍可能完成并计费。</p>}
+              {isLocalVideo ? <p className="mt-2 text-[11px] leading-4 text-muted">按编辑框中的图片顺序取首帧、尾帧，其余参考素材不参与本地生成。不消耗积分，生成进度与结果在画板上显示。</p> : isVideo && <p className="mt-2 text-[11px] leading-4 text-muted">{videoOptions.kind === "frames2video" ? "按编辑框中的参考顺序：第 1 张为首帧，第 2 张为尾帧。" : videoOptions.kind === "multimodal2video" ? `支持图片与视频参考；参考视频每段及总时长均须为 2–${videoOptions.model_version === "seedance2.5" ? 30 : 15} 秒。` : ""}{generation.videoChannel === "cloud" ? "使用 Bowerbird Bcoin，按提交时锁定的任务报价结算。" : "使用即梦积分，模型权限以官方账号为准。"}提交后停止等待，远端任务仍可能完成并计费。</p>}
               {cloudAgentMode && (
                 <p className="mt-2 text-[10px] leading-4 text-muted">
                   隐私说明：本次文字和所选参考图会加密上传至 Bowerbird Cloud，仅用于规划与执行。输入和过程内容通常最长保留 24 小时，最终结果最长保留 7 天；取消会停止后续调用，已上传副本仍按上述期限清理。接受后的图片保存到本地素材库，其余素材和本地数据库不会上传。
@@ -1401,8 +1522,12 @@ export function CreationBoard({
             </div>
           </div>}
           <div className="composer-parameters">
-          {isChat ? <ChatProviderSelect value={chatProvider} onChange={onChatProviderChange} access={chatAccess} disabled={submitting} /> : <>
-          {isVideo && <VideoControls composer channel={generation.videoChannel} options={videoOptions} onChange={(options, videoChannel = generation.videoChannel) => setGeneration({ ...generation, media: "video", videoChannel, videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio} />}
+          {isChat ? <><ChatProviderSelect value={chatProvider} onChange={onChatProviderChange} access={chatAccess} disabled={submitting} />
+            <CodexModelSelect provider={chatProvider} value={chatCodexOptions ?? {}} onChange={options => onChatCodexOptionsChange?.(options)} catalog={chatModels} disabled={submitting} /></> : <>
+          {isVideo && <VideoControls composer channel={generation.videoChannel} options={videoOptions} onChange={(options, videoChannel = generation.videoChannel) => setGeneration({ ...generation, localVideo: undefined, media: "video", videoChannel, videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio}
+            local={onGenerateLocalVideo ? { options: generation.localVideo, onSelect: () => { setLocalEnvironment({ ready: false, checking: true, message: "正在检测环境…" }); setGeneration({ ...generation, localVideo: { ...DEFAULT_COMFY_VIDEO } }); }, onChange: localVideo => setGeneration({ ...generation, localVideo }) } : undefined} />}
+          {isLocalVideo && !isCollapsed && localMode !== "text" && <LocalVideoFrames mode={localMode} frames={localFrames.slice(0, localFrameCount)} ignored={references.length - Math.min(localFrameCount, localFrames.length)} />}
+          {isLocalVideo && localAllowed && <ComfyEnvironmentControl key={cloudAuth?.user_id} composer node={{ comfyVideo: generation.localVideo }} disabled={submitting} onChange={patch => { if (patch.comfyVideo) setGeneration(current => ({ ...current, localVideo: patch.comfyVideo })); }} onStatusChange={setLocalEnvironment} />}
           {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。
               flex：比例 / 生成选项两个选择器水平并排（外层缺 flex 时 block 根会竖着叠成
               两行，按钮挤在同一列）。 */}
@@ -1422,12 +1547,11 @@ export function CreationBoard({
             <ProviderQuota source="bowerbird" badge />
           ) : (
           <div>
-            <ProviderSelect
+            <ProviderSelect hasReferences={references.length > 0}
               value={activeGenProvider}
               onChange={setActiveGenProvider}
               codexHealth={codexHealth}
               dreaminaHealth={dreaminaHealth}
-              cloudAvailable={cloudAvailable}
               cloudAuth={cloudAuth}
               cloudEntitlement={cloudEntitlement}
               defaultProvider={defaultProvider}

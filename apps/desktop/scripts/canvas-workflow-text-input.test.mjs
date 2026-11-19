@@ -65,6 +65,7 @@ try {
   await imageCell.hover();
   const input = target.getByRole('button', { name: '输入第 1 行第 2 列', exact: true });
   await input.click({ button: 'right' });
+  await page.getByRole('menu', { name: '选择要断开的连线' }).getByRole('menuitem').click();
   await page.waitForFunction(() => !JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(n => n.textTarget?.cellId === 'b'));
   assert.equal(await imageCell.locator('.canvas-image-preview img').count(), 1);
   const source = page.locator('[data-canvas-node-id="source"]');

@@ -1,0 +1,57 @@
+{
+  "environment": "Headless Chrome 157.0.8103.52, Vite dev, mock IPC, 300 cards/200 wires. One pointer event per animation frame; interval includes browser scheduling, not physical display latency.",
+  "renderedSourceHashes": {
+    "workspace": "8dd3730593e852eb646713d16188b9c07195c25df088df2522bbbb5056bef078",
+    "workflow": "c0b303b0017f3d141943c2e09802d62e44c40101c698bc31c25feafd8034c611"
+  },
+  "samples": [
+    {
+      "label": "hover",
+      "inputEvents": 48,
+      "workspaceRenders": 0,
+      "workspaceCommits": 0,
+      "workflowRenders": 48,
+      "workflowCommits": 48,
+      "globalNodeQueries": 0,
+      "portQueries": 0,
+      "rectReads": 144,
+      "portRectReads": 0,
+      "stageRectReads": 0,
+      "medianMs": 33.4,
+      "p95Ms": 50.1,
+      "over33ms": 14
+    },
+    {
+      "label": "marquee-empty",
+      "inputEvents": 48,
+      "workspaceRenders": 48,
+      "workspaceCommits": 48,
+      "workflowRenders": 48,
+      "workflowCommits": 48,
+      "globalNodeQueries": 0,
+      "portQueries": 0,
+      "rectReads": 144,
+      "portRectReads": 0,
+      "stageRectReads": 144,
+      "medianMs": 66.8,
+      "p95Ms": 83.5,
+      "over33ms": 46
+    },
+    {
+      "label": "multi-drag",
+      "inputEvents": 48,
+      "workspaceRenders": 48,
+      "workspaceCommits": 48,
+      "workflowRenders": 48,
+      "workflowCommits": 48,
+      "globalNodeQueries": 0,
+      "portQueries": 0,
+      "rectReads": 193,
+      "portRectReads": 0,
+      "stageRectReads": 96,
+      "medianMs": 66.7,
+      "p95Ms": 83.6,
+      "over33ms": 46
+    }
+  ]
+}

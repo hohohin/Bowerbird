@@ -13,7 +13,7 @@ import "./ProjectDeleteDialog.css";
 export function ProjectDeleteDialog({ target, onClose, onConfirm }: {
   target: { id: string; name: string; mode: WorkspaceProjectDeleteMode };
   onClose: () => void;
-  onConfirm: (impact: ProjectDeleteImpact | null, physical: boolean, discard: boolean) => Promise<void>;
+  onConfirm: (impact: ProjectDeleteImpact | null, physical: boolean) => Promise<void>;
 }) {
   const provisional = target.mode === "discard-provisional";
   const [impact, setImpact] = useState<ProjectDeleteImpact | null>(null);
@@ -22,30 +22,28 @@ export function ProjectDeleteDialog({ target, onClose, onConfirm }: {
   const [previewError, setPreviewError] = useState("");
   const [attempt, setAttempt] = useState(0);
   const [physical, setPhysical] = useState(false);
-  const [discard, setDiscard] = useState(false);
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [scanState, setScanState] = useState<"scanning" | "stopping" | "stopped" | "complete" | "failed">(provisional ? "complete" : "scanning");
   const [progress, setProgress] = useState<ProjectDeleteScanProgress | null>(null);
   const [queued, setQueued] = useState(false);
-  const queuedIntent = useRef<{ discard: boolean } | null>(null);
+  const queuedIntent = useRef(false);
   const cancelScan = useRef<() => void>(() => {});
   const confirmRef = useRef(onConfirm); confirmRef.current = onConfirm;
   const submitting = useRef(false);
-  async function performDelete(value: ProjectDeleteImpact | null, deleteAssets: boolean, abandon: boolean) {
+  async function performDelete(value: ProjectDeleteImpact | null, deleteAssets: boolean) {
     if (submitting.current) return;
-    submitting.current = true; setBusy(true); setQueued(false); queuedIntent.current = null;
-    try { await confirmRef.current(value, deleteAssets, abandon); }
+    submitting.current = true; setBusy(true); setQueued(false); queuedIntent.current = false;
+    try { await confirmRef.current(value, deleteAssets); }
     catch (reason) {
       setError(`删除未完成：${reason instanceof Error ? reason.message : String(reason)}`);
-      setImpact(null); setAssets(null); setPhysical(false); setDiscard(false);
+      setImpact(null); setAssets(null); setPhysical(false);
     } finally { submitting.current = false; setBusy(false); }
   }
   async function deleteIfQueued(value: ProjectDeleteImpact) {
-    const intent = queuedIntent.current;
-    if (!intent) return false;
+    if (!queuedIntent.current) return false;
     setScanState("complete");
-    await performDelete(value, false, intent.discard);
+    await performDelete(value, false);
     return true;
   }
   useEffect(() => {
@@ -63,12 +61,12 @@ export function ProjectDeleteDialog({ target, onClose, onConfirm }: {
     };
     cancelScan.current = () => {
       stopped = true;
-      queuedIntent.current = null; setQueued(false); setPhysical(false);
+      queuedIntent.current = false; setQueued(false); setPhysical(false);
       setScanState(launched && !finished ? "stopping" : "stopped");
       sendCancel();
     };
-    setScanState("scanning"); setProgress(null); setQueued(false); queuedIntent.current = null;
-    setImpact(null); setAssets(null); setError(""); setPreviewError(""); setPhysical(false); setDiscard(false);
+    setScanState("scanning"); setProgress(null); setQueued(false); queuedIntent.current = false;
+    setImpact(null); setAssets(null); setError(""); setPreviewError(""); setPhysical(false);
     void api.projectDeleteImpact(target.id, false).then(async value => {
       if (!alive) return;
       setImpact(value);
@@ -84,7 +82,7 @@ export function ProjectDeleteDialog({ target, onClose, onConfirm }: {
         finished = true;
         if (!alive) return;
         if (stopped || !physicalImpact) {
-          setScanState("stopped"); setPhysical(false); setQueued(false); queuedIntent.current = null; return;
+          setScanState("stopped"); setPhysical(false); setQueued(false); queuedIntent.current = false; return;
         }
         const complete = { ...value, physical: physicalImpact };
         setImpact(complete);
@@ -103,31 +101,28 @@ export function ProjectDeleteDialog({ target, onClose, onConfirm }: {
         finished = true;
         if (alive) {
           setScanState(stopped ? "stopped" : "failed");
-          setPhysical(false); setQueued(false); queuedIntent.current = null;
+          setPhysical(false); setQueued(false); queuedIntent.current = false;
           if (!stopped) setPreviewError("未能完成独占素材检索，待执行的删除已取消。你仍可保留素材并删除项目，或重新检索。");
         }
       }
     }).catch(() => { if (alive) { setScanState("failed"); setError("暂时无法检查项目，请重试。"); } });
-    return () => { alive = false; stopped = true; queuedIntent.current = null; sendCancel(); };
+    return () => { alive = false; stopped = true; queuedIntent.current = false; sendCancel(); };
   }, [target.id, provisional, attempt]);
-  const pending = impact?.pending_agent_results ?? [];
-  const active = Math.max(0, (impact?.running_generation_count ?? 0) + (impact?.running_agent_count ?? 0) - pending.length);
-  const blocked = active > 0 || (pending.length > 0 && !discard);
   const ready = provisional || (!!impact && !error);
   const scanning = scanState === "scanning" || scanState === "stopping";
   const locked = busy || scanning || queued;
   async function remove() {
-    if (submitting.current || queuedIntent.current || !ready || blocked || scanState === "stopping") return;
-    if (scanning) { queuedIntent.current = { discard }; setPhysical(false); setQueued(true); return; }
+    if (submitting.current || queuedIntent.current || !ready || scanState === "stopping") return;
+    if (scanning) { queuedIntent.current = true; setPhysical(false); setQueued(true); return; }
     if (physical && !assets?.length) return;
-    await performDelete(impact, physical, discard);
+    await performDelete(impact, physical);
   }
   return <ModalShell title={provisional ? "丢弃未保存项目？" : "删除项目？"} width="md" className="project-delete-dialog"
     preventClose={locked} onClose={() => { if (!locked && !submitting.current) onClose(); }}
     footer={<>
       {scanning ? <button data-modal-autofocus className="app-modal-button" disabled={scanState === "stopping"} onClick={() => cancelScan.current()}>{scanState === "stopping" ? "正在停止检索…" : "停止检索"}</button>
         : <button data-modal-autofocus className="app-modal-button" disabled={busy || queued} onClick={onClose}>取消</button>}
-      <button className="app-modal-button is-danger" disabled={busy || queued || scanState === "stopping" || !ready || blocked} onClick={() => void remove()}>
+      <button className="app-modal-button is-danger" disabled={busy || queued || scanState === "stopping" || !ready} onClick={() => void remove()}>
         {busy ? "正在删除…" : queued ? "检索完成后删除项目" : provisional ? "丢弃项目" : physical && !scanning ? "删除项目及素材" : "删除项目，保留素材"}
       </button>
     </>}>
@@ -166,16 +161,6 @@ export function ProjectDeleteDialog({ target, onClose, onConfirm }: {
           {previewError && <div className="mt-3 text-xs leading-5" role="alert">{previewError}</div>}
           {(scanState === "failed" || scanState === "stopped") && <button className="app-modal-button mt-3" disabled={busy} onClick={() => setAttempt(v => v + 1)}>重新检索</button>}
         </section>}
-        {pending.length > 0 && <section className="rounded-lg border border-edge p-3 text-sm leading-6">
-          <p>有 {pending.length} 个已完成任务的结果尚未全部保存。</p>
-          <label className="mt-2 flex items-start gap-3"><input type="checkbox" className="mt-1.5" checked={discard} disabled={busy || queued} onChange={event => setDiscard(event.target.checked)} />
-            <span>放弃尚未保存的结果<span className="block text-xs text-muted">删除后无法再取回这些结果，已保存的素材按上方选项处理。</span></span>
-          </label>
-          <details className="mt-2 text-xs text-muted"><summary className="cursor-pointer">查看任务详情</summary>
-            {pending.map(result => <p key={result.run_id} className="break-all">{new Date(result.created_at * 1000).toLocaleDateString()} · {result.run_id}</p>)}
-          </details>
-        </section>}
-        {active > 0 && <p role="status" className="text-sm leading-6">还有 {active} 个任务正在运行或等待处理，结束后才能删除项目。<button className="app-modal-button mt-2 block" disabled={scanning || busy} onClick={() => setAttempt(v => v + 1)}>重新检查</button></p>}
       </>}
       {error && <div role="alert" className="break-words text-sm leading-6">{userErrorMessage(error, "删除未完成，请重新检查后重试。")}<button className="app-modal-button mt-2 block" onClick={() => setAttempt(v => v + 1)}>重新检查</button></div>}
     </OverlayScrollArea>

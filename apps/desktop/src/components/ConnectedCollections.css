@@ -12,8 +12,6 @@
 .connected-status { position: absolute; right: 12px; bottom: 58px; z-index: 5; padding: 8px 12px; display: flex; gap: 10px; align-items: center; max-width: calc(100% - 24px); background: var(--bb-surface); font-size: 11px; }
 .connected-status span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connected-status button { color: var(--bb-blue); white-space: nowrap; }
-.connected-selection { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 6; background: var(--bb-surface); padding: 8px 12px; display: flex; gap: 12px; max-width: calc(100% - 24px); flex-wrap: wrap; font-size: 11px; }
-.connected-selection button { white-space: nowrap; }
 .connected-destinations { display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow: auto; }
 .connected-destinations label { display: flex; flex-direction: row; align-items: center; gap: 8px; }
 .connected-dialog-actions { display: flex; justify-content: flex-end; gap: 12px; }

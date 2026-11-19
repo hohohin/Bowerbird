@@ -1,10 +1,11 @@
 import { TacticalSelect } from "./TacticalSelect";
 import { AssetTagPicker } from "./AssetTagPicker";
 import { userErrorMessage } from "../lib/userError";
+import { isPendingOriginal, usePendingOriginalDeletion } from "../lib/pendingOriginalDeletion";
 import { VideoPlayer } from "./VideoPlayer";
 import { AudioWaveform } from "./AudioWaveform";
 import { isAudioAsset } from "../lib/audioMedia";
-import { isTextAsset } from "../lib/textMedia";
+import { isTextAsset, isSpreadsheetPath } from "../lib/textMedia";
 import { videoDurationLabel } from "./VideoHoverPreview";
 import "./AudioFileMediaCard.css";
 import { saveVideoFrame } from "../lib/saveVideoFrame";
@@ -33,6 +34,7 @@ import {
 import { useStore } from "../store";
 import { canUseByo } from "../lib/entitlement";
 import { api } from "../lib/api";
+import { parseColors } from "../lib/assetColors";
 import { COLLECTIONS_FEATURE_ENABLED, SMART_REFINE_ENABLED } from "../lib/featureFlags";
 import { sourceDiscoveryFor } from "../lib/sourceDiscovery";
 import { canSearchPinterest, requestPinterestSearch } from "../lib/pinterestSearch";
@@ -54,19 +56,10 @@ import {
 
 const VIDEO_EXTS = ["mp4", "mov", "webm", "mkv", "avi", "m4v"];
 const TextDocumentEditor = lazy(() => import("./TextDocumentEditor").then(module => ({ default: module.TextDocumentEditor })));
+const SpreadsheetDocumentViewer = lazy(() => import("./SpreadsheetDocumentViewer").then(module => ({ default: module.SpreadsheetDocumentViewer })));
 
 function isVideo(ext?: string | null) {
   return !!ext && VIDEO_EXTS.includes(ext.toLowerCase());
-}
-
-function parseColors(c: string | null | undefined): string[] {
-  if (!c) return [];
-  try {
-    const v = JSON.parse(c);
-    return Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
 }
 
 interface CaptionSection {
@@ -207,6 +200,10 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
   const asset: Asset | undefined = group.find((a) => a.id === id) ?? listedAsset
     ?? (resolvedAsset?.id === id ? resolvedAsset : undefined)
     ?? (initialAsset?.id === id ? initialAsset : undefined);
+  const pendingDeletion = usePendingOriginalDeletion();
+  useEffect(() => {
+    if (isPendingOriginal(id, asset?.store_path)) closeDetail();
+  }, [id, asset?.store_path, pendingDeletion, closeDetail]);
   // 同流程轮播位置（生成图组内第几张；-1 = 不在组 / 非生成图）。
   const groupPos = asset ? group.findIndex((a) => a.id === asset.id) : -1;
 
@@ -672,9 +669,9 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
         >
           <Edit3 size={14} />
         </button>
-        {(asset.source === "codex" || asset.source === "jimeng" || asset.source === "bowerbird-cloud") ? (
+        {(asset.source === "minimax-h3-image" || asset.source === "codex" || asset.source === "jimeng" || asset.source === "bowerbird-cloud") ? (
           <span className="rounded bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent">
-            ✨ {asset.source === "jimeng" ? "即梦" : asset.source === "bowerbird-cloud" ? "Cloud" : "codex"} 生成
+            ✨ {asset.source === "minimax-h3-image" ? "MiniMax-H3-Image" : asset.source === "jimeng" ? "即梦" : asset.source === "bowerbird-cloud" ? "Cloud" : "codex"} 生成
           </span>
         ) : asset.source ? (
           <span className="rounded bg-edge px-1.5 py-0.5 text-[10px] uppercase text-muted">
@@ -719,13 +716,13 @@ export function AssetDetail({ onExploreSource = (url) => { void open(url); }, se
         {!panelOnly && <div className="asset-detail-stage flex flex-1 flex-col overflow-hidden bg-canvas">
           <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
             {textAsset && <Suspense fallback={<span className="text-sm text-muted">正在打开文档…</span>}>
-              <TextDocumentEditor key={asset.id} asset={asset} onSaved={() => {
+              {isSpreadsheetPath(asset.store_path) ? <SpreadsheetDocumentViewer key={asset.id} asset={asset} onNavigate={() => { closeDetail(); selection?.onNavigate?.(); }}/> : <TextDocumentEditor key={asset.id} asset={asset} onSaved={() => {
                 void api.getAssetsByIds([asset.id]).then(([saved]) => {
                   if (!saved) return;
                   setResolvedAsset(saved);
                   useStore.setState(state => ({ assets: state.assets.map(item => item.id === saved.id ? saved : item) }));
                 }).catch(error => notifyError(error, "文件已保存，素材信息暂未刷新"));
-              }}/>
+              }}/>}
             </Suspense>}
             {audioAsset && asset.store_path && <AudioWaveform assetId={asset.id} path={asset.store_path} name={asset.name}
               version={`${asset.file_mtime ?? 0}:${asset.size ?? 0}`} duration={audioDuration} onDuration={setAudioDuration} className="audio-detail-waveform"/>}

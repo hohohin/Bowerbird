@@ -2,9 +2,11 @@ import "../../../src/styles.css";
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CanvasWorkspace } from "../../../src/components/CanvasWorkspace";
+import { AccountOnboarding } from "../../../src/components/AccountOnboarding";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
 import { ToastViewport } from "../../../src/components/ToastViewport";
 import { useStore } from "../../../src/store";
+import { startChatCapabilityChecks } from "../../../src/lib/chatCapabilities";
 import { installCatalogPagingMock } from "../catalogPagingMock";
 import { advance, assets, controls, createCards, failRunning, finish, inspect, install, interrupt, projects, releaseReplies, reset, setDelayReply, setFault, setHold, staleEvent, subscribe } from "./mock";
 
@@ -18,6 +20,7 @@ useStore.setState({ projects: projects as any, activeProjectId: inspect().active
   activeGenProvider: "codex", codexHealth: { ok: true, reason: "" }, dreaminaHealth: { ok: true, reason: "" } });
 
 function Fixture() {
+  useEffect(startChatCapabilityChecks, []);
   const projectId = useStore(state => state.activeProjectId)!;
   const [snapshot, setSnapshot] = useState(inspect);
   const [authenticated, setAuthenticated] = useState(true);
@@ -57,7 +60,7 @@ function Fixture() {
         <label><input type="checkbox" checked={delayReply} onChange={event => { updateDelayReply(event.target.checked); setDelayReply(event.target.checked); }} />延迟发送回执</label>
         <button type="button" disabled={!snapshot.pendingReplies} onClick={releaseReplies}>释放发送回执（{snapshot.pendingReplies}）</button>
         <label>故障 <select aria-label="测试故障" value={fault} onChange={event => { updateFault(event.target.value); setFault(event.target.value); }}>
-          <option value="none">无</option><option value="send">发送失败</option><option value="stop">停止失败</option><option value="read">读取失败</option><option value="quote">Cloud 报价失败</option><option value="recover">云端仍处理中</option>
+          <option value="none">无</option><option value="send">发送失败</option><option value="stop">停止失败</option><option value="read">读取失败</option><option value="quote">Cloud 报价失败</option><option value="recover">云端仍处理中</option><option value="models">Codex 模型列表失败</option><option value="dsh-status">DSH 状态失败</option><option value="dsh-setup">DSH 连接失败</option>
         </select></label>
         <label><input type="checkbox" checked={authenticated} onChange={event => { const value = event.target.checked; setAuthenticated(value); controls.authenticated = value; useStore.setState({ codexHealth: { ok: value, reason: value ? "" : "尚未登录" } }); }} />Codex 已登录</label>
         <label><input type="checkbox" checked={entitled} onChange={event => { const value = event.target.checked; setEntitled(value); controls.entitled = value; useStore.setState({ cloudEntitlement: entitlement(value) as any }); }} />本机权益</label>
@@ -66,10 +69,12 @@ function Fixture() {
       <details className="chat-fixture-evidence"><summary>IPC 记录（{localCalls.length}）</summary><pre aria-label="合成 IPC 记录">{JSON.stringify(localCalls, null, 2)}</pre></details>
     </details>
     <main className="chat-fixture-workspace"><CanvasWorkspace key={projectId} projectId={projectId} /><AssetContextMenu /><ToastViewport /></main>
+    {location.search === "?settings" && <AccountOnboarding />}
   </div>;
 }
 createRoot(document.getElementById("root")!).render(<React.StrictMode><Fixture /></React.StrictMode>);
 
 import "../../../src/components/TacticalDialogs.css";
 import "../../../src/components/CanvasSecondaryTactical.css";
+import "../../../src/components/IndustrialCanvas.css";
 import "../../../src/components/MediaTactical.css";

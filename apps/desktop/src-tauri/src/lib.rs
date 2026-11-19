@@ -221,6 +221,15 @@ mod mac_auth_callback_tests {
     }
 }
 
+fn show_library_startup_error(app: &tauri::App, message: String) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+    tracing::error!("{message}");
+    if let Some(window) = app.get_webview_window("main") { let _ = window.hide(); }
+    let handle = app.handle().clone();
+    app.dialog().message(message).title("无法打开素材索引库")
+        .kind(MessageDialogKind::Error).show(move |_| handle.exit(1));
+}
+
 pub fn run() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -264,7 +273,13 @@ pub fn run() {
 
             // 设置：从 <app_data>/settings.json 加载（文件不存在则用默认值）。
             let settings_path = app_dir.join("settings.json");
-            let settings_state = core::settings::SettingsState::init(settings_path)?;
+            let settings_state = match core::settings::SettingsState::init(settings_path) {
+                Ok(settings) => settings,
+                Err(error) => {
+                    show_library_startup_error(app, format!("设置文件无法读取，请先恢复原设置后再启动。\n{error}"));
+                    return Ok(());
+                }
+            };
             let settings_snapshot = settings_state.get();
             // P9-T5：官方公开连接配置在构建时内置，不能由用户 settings.json 覆盖。
             // Mock/真实 adapter 只由 Edge Function 的 BOWERBIRD_CLOUD_MOCK Secret 决定。
@@ -279,22 +294,31 @@ pub fn run() {
             let configured_library_root = settings_snapshot
                 .library_root
                 .as_deref()
-                .map(std::path::PathBuf::from)
-                .filter(|root| root.is_dir());
+                .map(std::path::PathBuf::from);
             #[cfg(debug_assertions)]
             let debug_library_root_override = std::env::var_os("BOWERBIRD_LIBRARY_ROOT_OVERRIDE")
-                .map(std::path::PathBuf::from)
-                .filter(|root| root.is_dir());
+                .map(std::path::PathBuf::from);
             #[cfg(not(debug_assertions))]
             let debug_library_root_override: Option<std::path::PathBuf> = None;
-            let library_root = debug_library_root_override
-                .clone()
-                .or_else(|| configured_library_root.clone());
-            if let Some(root) = &debug_library_root_override {
-                tracing::warn!(
-                    "debug library override active; production settings remain unchanged: {}",
-                    root.display()
-                );
+            let (mut library_paths, opened_db, migration_notice) = if let Some(root) = &debug_library_root_override {
+                tracing::warn!("debug library override active: {}", root.display());
+                if !root.is_dir() { return Err("指定的隔离索引根目录不可用".into()); }
+                let paths = core::paths::LibraryPaths::init(root.clone())?;
+                let db = db::Database::open(&paths.db)?;
+                db.migrate()?;
+                (paths, db, None)
+            } else {
+                match core::migrate::open_authority(&app_dir, &settings_state) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        show_library_startup_error(app, format!("无法打开素材索引库，请检查原磁盘和目录后重新启动。\n{error}"));
+                        return Ok(());
+                    }
+                }
+            };
+            if let Some(message) = migration_notice {
+                use tauri_plugin_dialog::DialogExt;
+                app.dialog().message(message).title("索引迁移未完成").show(|_| {});
             }
             let file_config_root = debug_library_root_override.as_ref().unwrap_or(&app_dir);
             let default_files_root = if cfg!(debug_assertions) {
@@ -304,8 +328,6 @@ pub fn run() {
             };
             let files = Arc::new(core::file_workspace::FileWorkspace::open(
                 file_config_root.join("file-workspace.json"), default_files_root)?);
-            let mut library_paths = core::paths::LibraryPaths::init(
-                library_root.clone().unwrap_or_else(|| app_dir.clone()))?;
             library_paths.files = Some(files.clone());
             let paths = Arc::new(library_paths);
             // convertFileSrc 走 asset 协议，其 scope 默认只放行应用数据目录；
@@ -322,8 +344,7 @@ pub fn run() {
                     }
                 }
             }
-            let db = Arc::new(db::Database::open(&paths.db)?);
-            db.migrate()?;
+            let db = Arc::new(opened_db);
             db.recover_local_chats()?;
             db.initialize_classification_presets()?;
             db.recover_project_deletions(&paths)?;
@@ -336,7 +357,7 @@ pub fn run() {
                 app.asset_protocol_scope().allow_file(path)?;
             }
 
-            // 用自定义根打开成功后，清理应用数据目录里的旧库残留（迁移不删，留到此步释放系统盘）。
+            // 兼容旧版路径记录，保留可能曾被离线写入的源库。
             if configured_library_root.is_some() && debug_library_root_override.is_none() {
                 // 旧版迁移直接在 JSON 文本里替换未转义的 Windows 路径，无法命中 payload
                 // 中的 `C:\\...`。在清理旧媒体前补偿改写一次；操作幂等，后续启动为 0 行。
@@ -345,8 +366,6 @@ pub fn run() {
                 if repaired > 0 {
                     tracing::info!("repaired {repaired} migrated library path records");
                 }
-                let _ = std::fs::create_dir_all(&app_dir);
-                core::migrate::cleanup_legacy_root(&app_dir);
             }
 
             tracing::info!(
@@ -357,7 +376,7 @@ pub fn run() {
 
             // collect WS server（接收浏览器扩展采集消息，开发计划 §5.2）。
             // extension_status 共享给 extension_status command + 后台心跳超时 tick。
-            let extension_status = collect::ws_server::ExtensionStatus::new();
+            let extension_status = collect::ws_server::ExtensionStatus::open(&file_config_root.join("extension-pair.txt"))?;
             let active_project = core::projects::ActiveProjectContext::new();
             let paths_ws = paths.clone();
             let db_ws = db.clone();
@@ -400,6 +419,7 @@ pub fn run() {
 
             app.manage(extension_status);
             app.manage(quick_transfer::QuickTransfer::default());
+            app.manage(commands::file_tasks::FileTasks::default());
             app.manage(active_project);
             app.manage(settings_state);
             let screenshot_paths = paths.clone();
@@ -451,14 +471,29 @@ pub fn run() {
             commands::quick_transfer::quick_transfer_start,
             commands::quick_transfer::quick_transfer_stop,
             commands::quick_transfer::quick_transfer_retry,
+            commands::quick_transfer::quick_transfer_send_start,
+            commands::quick_transfer::quick_transfer_send_stop,
             commands::external_files::external_files_browse,
             commands::external_drag::start_external_drag,
             commands::external_drag::cancel_pending_external_drag,
             commands::external_files::external_files_media,
             commands::audio::audio_waveform,
+            commands::voice::voice_snapshot,
+            commands::voice::voice_configure,
+            commands::voice::voice_save,
+            commands::voice::voice_start,
+            commands::voice::voice_cancel,
+            commands::voice::voice_recover,
+            commands::voice::voice_manage,
+            commands::voice::voice_export,
+            commands::voice_setup::voice_environment,
             commands::text_documents::read_text_document,
+            commands::text_documents::read_spreadsheet_document,
+            commands::text_documents::save_docx_document,
             commands::text_documents::create_text_document,
             commands::text_documents::save_text_document,
+            commands::document_attachments::save_document_attachment,
+            commands::document_attachments::resolve_document_attachment,
             commands::external_files::external_files_preview,
             commands::file_colors::file_colors,
             commands::external_files::external_files_index,
@@ -488,6 +523,7 @@ pub fn run() {
             commands::projects::prepare_library_generation_project,
             commands::project_canvas::project_canvas_ensure,
             commands::project_canvas::project_canvas_get,
+            commands::project_canvas::project_canvas_visible_nodes,
             commands::project_canvas::project_canvas_rename,
             commands::project_canvas::project_canvas_title_from_first_prompt,
             commands::project_canvas::project_canvas_update_draft,
@@ -566,9 +602,11 @@ pub fn run() {
             commands::preset::release_preset_pack,
             commands::preset::create_onboarding_project,
             commands::projects::list_projects,
+            commands::projects::project_covers,
             commands::projects::refresh_project,
             commands::projects::set_active_project,
             commands::projects::add_assets_to_project,
+            commands::projects::move_assets_to_project,
             commands::projects::remove_assets_from_project,
             commands::projects::project_delete_impact,
             commands::projects::project_exclusive_scan,
@@ -595,6 +633,7 @@ pub fn run() {
             commands::media_import::video_import_finish,
             commands::media_import::video_import_cancel,
             commands::asset_archive::export_assets_zip,
+            commands::asset_archive::export_assets_to_directory,
             commands::library::import_folder,
             commands::library::import_image_bytes,
             commands::library::save_annotated_image,
@@ -624,6 +663,11 @@ pub fn run() {
             commands::material_catalog::material_catalog,
             commands::material_catalog::catalog_overview,
             commands::folder_connections::folder_connections,
+            commands::file_tasks::start_file_task,
+            commands::file_tasks::list_file_tasks,
+            commands::file_tasks::cancel_file_task,
+            commands::file_tasks::retry_file_task,
+            commands::file_tasks::dismiss_file_task,
             commands::folder_connections::connect_folder,
             commands::folder_connections::refresh_folder_connections,
             commands::folder_connections::connection_entries,
@@ -655,6 +699,7 @@ pub fn run() {
             commands::video_poster::video_poster,
             commands::canvas_image_preview::canvas_image_preview,
             commands::video_trim::trim_video,
+            commands::video_audio::extract_video_audio,
             commands::comfy_video::comfy_video,
             commands::comfy_video::comfy_video_check,
             commands::comfy_setup::comfy_video_environment,
@@ -692,6 +737,10 @@ pub fn run() {
             commands::library::rename_asset,
             commands::library::list_generation_group,
             commands::library::list_generation_groups,
+            commands::library::dissolve_generation_group,
+            commands::library::previous_gallery_generation,
+            commands::library::merge_generation_galleries,
+            commands::library::undo_generation_gallery_merge,
             commands::library::generation_history,
             commands::library::list_tags,
             commands::library::list_asset_tags,
@@ -731,10 +780,20 @@ pub fn run() {
             commands::codex::codex_health,
             commands::local_chat::local_chat_list,
             commands::local_chat::local_chat_get,
+            commands::local_chat::local_chat_revision,
+            commands::local_chat::local_chat_get_by_request,
             commands::local_chat::local_chat_quote,
+            commands::local_chat::local_chat_models,
+            commands::local_chat::local_chat_dsh_status,
+            commands::local_chat::local_chat_dsh_account,
+            commands::local_chat::local_chat_dsh_setup,
             commands::local_chat::local_chat_recover,
+            commands::local_chat::local_chat_questions,
+            commands::local_chat::local_chat_answer_question,
             commands::local_chat::local_chat_send,
+            commands::local_chat::local_chat_new_on_card,
             commands::local_chat::local_chat_stop,
+            commands::local_chat_cards::local_chat_claim_card_run,
             commands::local_chat_cards::local_chat_cards_undo,
             commands::codex::codex_generate_prompt_for_asset,
             commands::codex::codex_describe_asset,
@@ -747,6 +806,7 @@ pub fn run() {
             commands::codex::list_gen_jobs,
             commands::codex::jimeng_retrieve_orphan,
             commands::codex::recover_cloud_video,
+            commands::codex::recover_h3_image,
             commands::codex::recent_gen_sessions,
             commands::codex::dismiss_gen_job,
             commands::codex::open_codex_session,
@@ -756,6 +816,7 @@ pub fn run() {
             commands::codex::codex_logout,
             commands::codex::cancel_codex_setup,
             commands::collect::extension_status,
+            commands::collect::pair_extension,
             commands::collect::extension_folder_path,
             commands::settings::get_settings,
             commands::settings::update_settings,
@@ -808,7 +869,10 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|_app, _event| {
             if matches!(&_event, tauri::RunEvent::Exit) {
-                tauri::async_runtime::block_on(commands::agent_ds::video_studio::shutdown());
+                tauri::async_runtime::block_on(async {
+                    commands::local_chat::stop_dsh_host().await;
+                    commands::agent_ds::video_studio::shutdown().await;
+                });
             }
             #[cfg(target_os = "macos")]
             forward_opened_urls(_event, |value| forward_auth_callback(_app, value));

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { dropData } from "./trusted-drag-fixture.mjs";
 import { readFile, mkdir } from "node:fs/promises";
 import { chromium } from "../html-renderer/node_modules/playwright/index.mjs";
 const clip=await readFile(new URL("../desktop/src-tauri/tests/fixtures/media/fragmented.mp4",import.meta.url));
@@ -26,7 +27,12 @@ async function setup(url="https://fixture.test/page") {
     }
     window.fetch=(url,options)=>{window.fixture.fetches.push(url);return fetch(url,options);};
     window.chrome={runtime:{getURL:()=>icon,sendMessage:(message,callback)=>{
-      window.fixture.messages.push(message);
+      if (message.type === "button_position_get") { callback({position:null}); return; }
+      if (message.type === "button_position_set") { callback({ok:true}); return; }
+      if (message.type === "collect_access" || message.type === "collect_heartbeat") {
+          callback({ok:true,protocols:["bowerbird-v1","fixture"]}); return;
+        }
+        window.fixture.messages.push(message);
       if(window.fixture.pending)window.fixture.reply=callback;else callback({ok:true,media_kind:message.type==="save_video"?"video":undefined});
     }}};
     window.WebSocket=class {
@@ -45,37 +51,50 @@ async function setup(url="https://fixture.test/page") {
   },icon);
   for(const content of scripts)await page.addScriptTag({content});
 }
-const videoButton=page.getByRole("button",{name:"采集网页视频",exact:true});
+const entry=page.getByRole("button",{name:"Bowerbird 采集菜单",exact:true});
+const menu=page.getByRole("menu",{name:"Bowerbird 菜单"});
 const picker=page.getByRole("dialog",{name:"选择视频"});
 const toast=page.locator("#__bowerbird_toast");
+async function openVideoPicker() {
+  await entry.click();
+  await menu.waitFor();
+  await menu.getByRole("menuitem",{name:"采集本页视频",exact:true}).click();
+  await picker.waitFor();
+}
 try {
   await setup();
-  await videoButton.focus();await page.keyboard.press("Enter");
+  await entry.focus();await page.keyboard.press("Enter");
+  await menu.waitFor();
+  assert.match(await menu.innerText(),/采集本页图片[\s\S]*采集本页视频/);
+  await page.keyboard.press("Tab");await page.keyboard.press("Enter");
   await picker.waitFor();
   assert.equal(await picker.getByRole("button",{name:"采集视频",exact:true}).count(),3);
   assert.equal(await page.evaluate(()=>window.fixture.messages.length+window.fixture.uploads.length),0,'opening picker must not download videos');
   assert.match(await picker.innerText(),/演示视频/);
+  await picker.getByRole("button",{name:"采集视频",exact:true}).first().evaluate(el=>el.click());
+  assert.equal(await page.evaluate(()=>window.fixture.messages.length+window.fixture.uploads.length),0);
   await picker.getByRole("button",{name:"采集视频",exact:true}).first().click();
   await page.waitForFunction(()=>document.getElementById("__bowerbird_toast")?.textContent==="视频已保存到素材库");
   assert.equal(await page.evaluate(()=>window.fixture.messages[0].type),"save_video");
   assert.equal(await page.evaluate(()=>window.fixture.messages[0].pageUrl),"https://fixture.test/page");
-  await page.evaluate(()=>{window.fixture.pending=true;document.getElementById("remote").dispatchEvent(new MouseEvent("click",{bubbles:true,altKey:true}));});
+  await page.evaluate(()=>{window.fixture.pending=true;});
+  await page.locator("#remote").click({modifiers:["Alt"]});
   await picker.getByRole("button",{name:"采集视频",exact:true}).click();
   await page.waitForFunction(()=>typeof window.fixture.reply==="function");
-  assert.equal(await videoButton.isDisabled(),true);
-  assert.equal(await videoButton.innerText(),"采集中");
+  assert.equal(await entry.isDisabled(),true);
   assert.match(await toast.innerText(),/请保持网页打开/);
   const pendingCount=await page.evaluate(()=>window.fixture.messages.length);
-  await page.getByRole("button",{name:"采集网页图片",exact:true}).evaluate(el=>el.dispatchEvent(new MouseEvent("click",{bubbles:true})));
+  await entry.evaluate(el=>el.click());
   await page.evaluate(()=>{window.fixture.reply({ok:false,saved:true,asset_id:"saved",media_kind:"video",code:"preview_unavailable"});window.fixture.pending=false;});
   await page.waitForFunction(()=>document.getElementById("__bowerbird_toast")?.textContent.includes("已保存，预览暂不可用"));
   assert.equal(await page.evaluate(()=>window.fixture.messages.length),pendingCount,'busy entry and preview failure never resubmit a saved video');
-  await page.locator("#blob").evaluate(el=>el.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,altKey:true})));
+  await page.locator("#blob").click({modifiers:["Alt"]});
   await picker.getByRole("button",{name:"采集视频",exact:true}).click();
   await page.waitForFunction(()=>window.fixture.uploads.length===1);
   assert.deepEqual(await page.evaluate(()=>[window.fixture.uploads[0].media_kind,window.fixture.uploads[0].byte_length===window.fixture.uploads[0].size,window.fixture.uploads[0].page_url]),["video",true,"https://fixture.test/page"]);
-  await page.waitForFunction(()=>!document.querySelector('[aria-label="采集网页视频"]').disabled);
-  await page.evaluate(()=>{window.fixture.support=false;document.getElementById("blob").dispatchEvent(new MouseEvent("click",{bubbles:true,altKey:true}));});
+  await page.waitForFunction(()=>!document.querySelector('[aria-label="Bowerbird 采集菜单"]').disabled);
+  await page.evaluate(()=>{window.fixture.support=false;});
+  await page.locator("#blob").click({modifiers:["Alt"]});
   const before=await page.evaluate(()=>window.fixture.fetches.length);
   await picker.getByRole("button",{name:"采集视频",exact:true}).click();
   await page.waitForFunction(()=>document.getElementById("__bowerbird_toast")?.textContent.includes("更新并重启"));
@@ -83,26 +102,24 @@ try {
   await page.evaluate(()=>{
     window.fixture.support=true;
     const video=document.createElement("video");video.id="stream";video.src="https://fixture.test/stream.m3u8";document.body.append(video);
-    video.dispatchEvent(new MouseEvent("click",{bubbles:true,altKey:true}));
   });
+  await page.locator("#stream").click({modifiers:["Alt"]});
   await picker.getByRole("button",{name:"采集视频",exact:true}).click();
   await page.waitForFunction(()=>document.getElementById("__bowerbird_toast")?.textContent.includes("分段播放"));
-  await page.evaluate(()=>{const video=document.getElementById("stream");video.src=URL.createObjectURL(new MediaSource());video.dispatchEvent(new MouseEvent("click",{bubbles:true,altKey:true}));});
+  await page.evaluate(()=>{document.getElementById("stream").src=URL.createObjectURL(new MediaSource());});
+  await page.locator("#stream").click({modifiers:["Alt"]});
   await picker.getByRole("button",{name:"采集视频",exact:true}).click();
   await page.waitForFunction(()=>document.getElementById("__bowerbird_toast")?.textContent.includes("分段播放"));
-  await page.getByRole("button",{name:"采集网页图片",exact:true}).evaluate(el=>{
-    window.fixture.messages=[];
-    const dataTransfer=new DataTransfer();dataTransfer.setData("text/html",'<video src="https://fixture.test/drop.mp4"></video>');
-    el.dispatchEvent(new DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer}));
-  });
+  await page.evaluate(()=>{window.fixture.messages=[];});
+  await dropData(page,entry,{"text/html":'<video src="https://fixture.test/drop.mp4"></video>'});
   assert.equal(await page.evaluate(()=>window.fixture.messages.length),1,'dropping a video must collect directly without a second confirmation');
   assert.equal(await page.evaluate(()=>window.fixture.messages[0].url),"https://fixture.test/drop.mp4");
   assert.equal(await picker.count(),0);
-  await videoButton.click();await picker.waitFor();
+  await openVideoPicker();
   await page.setViewportSize({width:420,height:720});
   await page.screenshot({path:new URL("../../.tmp/video-extension/picker.png",import.meta.url).pathname.slice(1)});
   await setup("https://www.xiaohongshu.com/explore/note123");
-  await videoButton.click();await picker.waitFor();
+  await openVideoPicker();
   await picker.getByText("笔记视频",{exact:true}).waitFor();
   await picker.getByRole("button",{name:"采集视频",exact:true}).click();
   await page.waitForFunction(()=>window.fixture.messages.length===1);

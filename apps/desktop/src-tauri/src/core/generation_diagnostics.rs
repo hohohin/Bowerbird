@@ -2,7 +2,7 @@ use crate::{
     db::Database,
     error::{AppError, AppResult},
 };
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde_json::{json, Value};
 
 pub async fn track_attempt<T>(
@@ -67,6 +67,14 @@ impl Database {
             "UPDATE generation_diagnostics SET status=?3,error=?4,updated_at=?5 WHERE attempt_id=?1 AND job_id=?2 AND status IN ('received','running')",
             params![attempt, job_id, if error.is_some() {"failed"} else {"done"}, error, chrono::Utc::now().timestamp_millis()])?;
         Ok(())
+    }
+
+    pub fn recorded_dreamina_version(&self, job: &crate::core::task_queue::GenJob) -> Option<String> {
+        if job.media != "image" || !matches!(job.provider.as_str(), "jimeng" | "dreamina") { return None; }
+        self.conn.lock().unwrap().query_row(
+            "SELECT json_extract(request_json,'$.dreaminaModelVersion') FROM generation_diagnostics WHERE job_id=?1 AND turn_key=?2 AND json_extract(request_json,'$.provider') IN ('jimeng','dreamina') ORDER BY rowid DESC LIMIT 1",
+            params![job.id, job.turn_key], |row| row.get::<_, Option<String>>(0),
+        ).optional().ok().flatten().flatten()
     }
 
     pub fn generation_diagnostics(&self, job_id: &str) -> AppResult<Vec<Value>> {

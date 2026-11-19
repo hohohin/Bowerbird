@@ -3,10 +3,13 @@ import test from "node:test";
 import { startMeteredDeepSeekProxy } from "../../../../../apps/agent-worker/src/harness/metered-deepseek-proxy.ts";
 import { DshAcpHarnessAdapter } from "../../../../../apps/agent-worker/src/harness/dsh-acp-harness-adapter.ts";
 import { UnifiedPlanningHarnessRunner } from "../../../../../apps/agent-worker/src/harness/unified-planning-harness-runner.ts";
-import { NodeDshAcpPort } from "../scripts/dsh-acp-port.mjs";
-import { spikeRoot } from "../scripts/runtime.mjs";
+import { NodeDshAcpPort } from "../../../../../apps/agent-worker/src/harness/node-dsh-acp-port.ts";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
-test("real DSH survives a buffered response beyond 60s, owns compaction, and continues to delivery", async () => {
+test("real DSH preserves long context without cost-window summaries and survives a response beyond 60s", async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), "bowerbird-long-context-"));
   const calls = new Map(), artifacts = new Map(), usage = new Map();
   const control = {
     async prepareTool(args) {
@@ -32,11 +35,12 @@ test("real DSH survives a buffered response beyond 60s, owns compaction, and con
   const requests = [];
   let step = 0, summaries = 0, delivered = false;
   const proxy = await startMeteredDeepSeekProxy({ runId: "native-context", leaseId: "lease",
-    phase: "execute_approved_plan", maxModelTurns: 12, maxOutputTokens: 8000, control,
+    phase: "execute_approved_plan", maxModelTurns: 12, control,
     upstream: { apiKey: "fixture", baseUrl: "http://127.0.0.1:43123", model: "deepseek-flash" }, allowInsecureLoopback: true,
     async fetch(_url, init) {
       const request = JSON.parse(init.body); requests.push(request);
       assert.deepEqual(request.thinking, { type: "disabled" }, "profile patches replace config; preserve the explicit provider mode");
+      assert.equal(request.max_tokens, 393216);
       if (requests.length === 1) await new Promise(resolve => setTimeout(resolve, 61_000));
       const compacting = String(request.messages.at(-1)?.content).includes("You are now acting as a compaction engine");
       let delta;
@@ -59,28 +63,26 @@ test("real DSH survives a buffered response beyond 60s, owns compaction, and con
       return { ok: true, status: 200, async text() { return body; } };
     },
   });
-  const previous = Object.fromEntries(["BOWERBIRD_U1_ALLOW_NETWORK", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL"].map(key => [key, process.env[key]]));
-  Object.assign(process.env, proxy.childEnvironment(), { BOWERBIRD_U1_ALLOW_NETWORK: "1" });
   try {
     const runner = new UnifiedPlanningHarnessRunner({ runId: "native-context", async dispatch(call) {
       if (call.toolName === "read_context") return { callId: call.arguments.id,
         value: { text: `${call.arguments.id}\n${"supporting reference detail ".repeat(1100)}\n${call.arguments.id}` } };
       delivered = true;
       return { callId: "deliver", value: { terminalReason: "awaiting_result_feedback" } };
-    } }, toolBridge => new DshAcpHarnessAdapter({ cwd: spikeRoot,
-      createPort: () => new NodeDshAcpPort({ allowNetwork: true, patches: ["profiles/bowerbird-u1/cordis.bridge.patch.yml"], toolBridge }) }));
+    } }, toolBridge => new DshAcpHarnessAdapter({ cwd: runtimeRoot,
+      createPort: () => NodeDshAcpPort.create({ profileTemplateDir: resolve(import.meta.dirname, ".."), runtimeRoot,
+        childEnvironment: toolBridge, providerEnvironment: proxy.childEnvironment(), timeoutMs: 5000, promptTimeoutMs: 0 }) }));
     const result = await runner.run({ schemaVersion: 1, runId: "native-context", checkpointVersion: 0,
       phase: "execute_approved_plan", approvedPlanHash: "a".repeat(64), compactedFacts: [], completedToolResults: [] },
     [{ type: "text", text: "Deliver the authorized poster using the supplied facts." }]);
     assert.equal(result.stopReason, "end_turn");
     assert.ok(delivered);
-    assert.ok(summaries > 0, "exercise native DSH compaction, not just a short tool loop");
-    assert.ok(requests.some(request => JSON.stringify(request.messages).includes("<compacted-summary>")));
-    assert.equal(usage.size, requests.length, "native summary calls also pass through metering");
+    assert.equal(summaries, 0, "do not silently replace original material with a summary");
+    assert.ok(JSON.stringify(requests.at(-1).messages).length > 100_000);
+    assert.equal(requests.some(request => JSON.stringify(request.messages).includes("<compacted-summary>")), false);
+    assert.equal(usage.size, requests.length);
   } finally {
     await proxy.close();
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key]; else process.env[key] = value;
-    }
+    rmSync(runtimeRoot, { recursive: true, force: true });
   }
 });

@@ -587,7 +587,7 @@ mod tests {
         let f=Fixture::new(); let url=image_url(8,8); let doc=document(&url);
         let saved=f.save(doc.clone(),&url,"migrate").unwrap();
         let target=f.paths.root.parent().unwrap().join(format!("bowerbird-drafts-migrated-{}",Ulid::new()));
-        crate::core::migrate::migrate_library(&f.db,&f.paths,&target,&mut |_,_,_| {}).unwrap();
+        crate::core::migrate::migrate_library(&f.db,&f.paths,&target).unwrap();
         let moved=LibraryPaths::init(target.clone()).unwrap(); let db=Database::open(&moved.db).unwrap();
         assert_eq!(load_document(&moved,&db,&saved.id).unwrap(),Some(doc.clone()));
         assert_eq!(save_document(&moved,&db,doc,url,Some("p".into()),"migrate".into()).unwrap().id,saved.id);

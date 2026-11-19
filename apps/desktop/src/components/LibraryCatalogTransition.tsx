@@ -1,6 +1,9 @@
 import { useCallback, useLayoutEffect, useRef, useState, type ComponentProps, type RefObject } from "react";
 import { CategorizedLibrary } from "./CategorizedLibrary";
 import { ConnectedCollections } from "./ConnectedCollections";
+import { ProjectManagerPanel } from "./ProjectManagerPanel";
+import { useLibraryModeStore } from "../lib/libraryPane";
+import { useStore } from "../store";
 import type { CatalogKind } from "../lib/materialCatalog";
 import "./LibraryCatalogTransition.css";
 
@@ -10,6 +13,14 @@ const EASE = "cubic-bezier(.65,0,.35,1)";
 const at = (time: number, values: Keyframe, easing = EASE): Keyframe => ({ ...values, offset: time / DURATION, easing });
 
 export function LibraryCatalogTransition(props: Props) {
+  const mode = useLibraryModeStore();
+  const source = mode(s => s.source);
+  const browseProjectId = mode(s => s.browseProjectId);
+  const picking = mode(s => s.projectPickerOpen);
+  const projects = useStore(s => s.projects);
+  const projectScope = source === "project" && props.kind !== "collections";
+  const selectedProject = projects.find(project => project.id === browseProjectId && !project.archived_at && (!project.provisional || project.id === props.projectId));
+  const picker = projectScope && (picking || !selectedProject);
   const root = useRef<HTMLDivElement>(null);
   const [view, setView] = useState({ kind: props.kind, previous: null as CatalogKind | null, sequence: 0 });
   if (view.kind !== props.kind) {
@@ -18,11 +29,15 @@ export function LibraryCatalogTransition(props: Props) {
   }
   const finish = useCallback(() => setView(value => ({ ...value, previous: null })), []);
   return <div ref={root} className="library-catalog-transition" aria-busy={view.previous !== null}>
-    {(["all", "tags", "collections"] as const).filter(kind => kind === view.kind || kind === view.previous).map(kind => {
+    {picker ? <div className="library-catalog-layer"><section className="categorized-library library-tactical library-project-picker" data-file-import-project-id="">
+      <div className="file-view-heading">{props.navigation}</div>
+      <div className="catalog-body"><ProjectManagerPanel active selection={{ id: selectedProject?.id ?? null, onSelect: mode.getState().selectProject,
+        onCancel: selectedProject ? () => mode.getState().setProjectPickerOpen(false) : undefined }}/></div>
+    </section></div> : (["all", "tags", "collections"] as const).filter(kind => kind === view.kind || kind === view.previous).map(kind => {
       const outgoing = kind === view.previous;
-      return <div key={kind} className="library-catalog-layer" data-outgoing={outgoing || undefined} aria-hidden={outgoing || undefined}
+      return <div key={`${kind}:${projectScope ? browseProjectId : "global"}`} className="library-catalog-layer" data-outgoing={outgoing || undefined} aria-hidden={outgoing || undefined}
         ref={element => { if (element) element.inert = outgoing; }}>
-        {kind === "collections" ? <ConnectedCollections {...props} kind={kind} onAssetsChange={outgoing ? undefined : props.onAssetsChange}/> : <CategorizedLibrary {...props} kind={kind} onAssetsChange={outgoing ? undefined : props.onAssetsChange}/>}
+        {kind === "collections" ? <ConnectedCollections {...props} projectScope={false} kind={kind} onAssetsChange={outgoing ? undefined : props.onAssetsChange}/> : <CategorizedLibrary {...props} browseProjectId={browseProjectId} projectScope={projectScope} kind={kind} onAssetsChange={outgoing ? undefined : props.onAssetsChange}/>}
       </div>;
     })}
     {view.previous && <SidebarInstall key={view.sequence} root={root} onFinish={finish}/>}

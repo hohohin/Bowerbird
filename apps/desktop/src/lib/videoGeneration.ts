@@ -1,6 +1,7 @@
 import type { Asset } from "./types";
 import { isAudioPath } from "./audioMedia.ts";
 import { isTextPath } from "./textMedia.ts";
+import type { ComfyVideoOptions } from "./comfyVideo";
 
 export type GenerationMedia = "image" | "video";
 export interface VideoOptions {
@@ -10,6 +11,8 @@ export interface VideoOptions {
   video_resolution: "480p" | "720p" | "1080p" | "4k";
 }
 export interface GenerationSettings {
+  /** Canvas composer only: presence selects the local H3 workflow. */
+  localVideo?: ComfyVideoOptions;
   videoChannel?: "jimeng" | "cloud";
   media?: GenerationMedia;
   videoOptions?: VideoOptions | null;

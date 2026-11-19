@@ -1,3 +1,6 @@
+import { CaptionRing } from "../../../src/components/creation/CaptionRing";
+import { FileTaskStatusPanel } from "../../../src/components/FileTaskStatus";
+import { installDeletionTaskMock } from "../fileTaskMock";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { AssetContextMenu } from "../../../src/components/AssetContextMenu";
@@ -46,7 +49,8 @@ w.openMenu = (kind = "single", x = 100, y = 100) => {
   useStore.setState({ mode: "browse", selectedIds: new Set(["unrelated"]), activeProjectId: kind === "canvas" ? "p1" : null });
   useStore.getState().openContextMenu(x, y, target.id, {
     asset: target as any,
-    ...(kind === "canvas" ? { canvasSelection: { projectId: "p1", nodeIds: ["n1", "n2"], assetIds: ["a1", "a2"] } }
+    ...(kind === "canvas" ? { canvasSelection: { projectId: "p1", nodeIds: ["n1", "n2"], assetIds: ["a1", "a2"],
+      deletionTargets: { item: {assetIds:[target.id], removeFromCanvas: () => {}} } } }
       : kind === "multi" || kind === "mixed" ? { fileSelection: { assets: assets.filter(a => ids.includes(a.id)) as any,
         select: () => {}, openReferences: () => {}, onComplete: () => w.completed++ } } : {}),
   });
@@ -60,11 +64,12 @@ function Preview() {
     <button id="disconnect" onClick={() => setDisconnect(true)}>连线菜单</button>
     <GenerationSessionSurface jobId="job1" className="session-test">会话</GenerationSessionSurface>
     <CatalogTagIndex tags={[{ id: "tag1", name: "标签" }]} active={null} alphabetic={false} pinned={[]} onTogglePin={() => {}} onNavigate={() => {}} onLetter={() => {}} />
-    {disconnect && <WorkflowDisconnectMenu x={200} y={200} onClose={() => setDisconnect(false)} choices={[
-      { key: "busy", label: "运行中", detail: "输入", disabled: true, disconnect: () => {} },
-      { key: "ready", label: "图片输入", detail: "素材", disabled: false, disconnect: () => w.disconnected = true },
+    {disconnect && <WorkflowDisconnectMenu x={200} y={200} assets={useStore.getState().assets} onClose={() => setDisconnect(false)} choices={[
+      { key: "busy", label: "运行中", detail: "输入", assetIds: [], disabled: true, disconnect: () => {} },
+      { key: "ready", label: "图片输入", detail: "素材", assetIds: ["a1"], disabled: false, disconnect: () => w.disconnected = true },
     ]} />}
-    <AssetContextMenu /><ProjectContextMenu />
+    <CaptionRing /><FileTaskStatusPanel /><AssetContextMenu /><ProjectContextMenu />
   </div>;
 }
+installDeletionTaskMock();
 createRoot(document.getElementById("root")!).render(<Preview />);

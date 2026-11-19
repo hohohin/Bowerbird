@@ -1,0 +1,218 @@
+{
+  "deployment": {
+    "active": "/opt/bowerbird/website-releases/20261113-pricing-and-offers",
+    "previous": "/opt/bowerbird/website-releases/20261113-wechatpay-native",
+    "at": "2026-11-13T14:38:47.391199+08:00",
+    "retained": 86,
+    "manifest_sha256": "20121e468e9853c6bd51099b1bfc76271f1d40b0610f224902da951de03a88ed",
+    "nginx": "5a14126f96529e6330030f73adcb64409c404bd434f0893655ef4823c930e2d5",
+    "pid": "2573650",
+    "local": {
+      "routes": {
+        "/healthz": 204,
+        "/api/account/functions/v1/create-checkout": 401,
+        "/api/pay/wechat/notify": 405,
+        "/api/pay/wechat/refund-notify": 405
+      },
+      "update_versions": {
+        "windows-x86_64": "26.11.1001",
+        "darwin-aarch64": "26.10.801",
+        "darwin-x86_64": "26.10.1501"
+      },
+      "windows_download": "https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1001_x64-setup.exe",
+      "static": {
+        "/": "78d5b3e348990871ab4d6a95d9e77d240a5d7f0c1bdc46c2bea3b0f35beb05dd",
+        "/index-v2.html": "1e16c3ee09218163dd653db5a529a56c684d00d32b55c28409bb84c755204077",
+        "/pricing/": "2dc02a1e1fff34d7e95069c72e47c4515b1a824b3e3daab6a06ee2eccbd2b57c",
+        "/billing.js": "14b9a1292274280669db3828276cab0095b3838c42ffa358126175e27d37cabe",
+        "/app-v2.bundle.js": "433b12657869631c9088f2bca3f75892b00ed67a6732f44059a2a802dfef2469",
+        "/assets/account-dialog-CZBuZ_f8.css": "86efdde367c7e19564a5128284531c66ca12d0f98e76a9fd9e0b8f173139f786",
+        "/assets/homepage-upgrade-BYUlr8oq.css": "d3fb83dc803cd0571cdbce5ef6c7db2791f69ee5b4a5658d6c6628adf3eadf5c",
+        "/assets/index-CYFCG-l_.css": "7d06ca1dfa5a42cf5654904fd463a83ecf697522fcc2b6d44183c8bb69be6be3"
+      }
+    },
+    "public": {
+      "routes": {
+        "/healthz": 204,
+        "/api/account/functions/v1/create-checkout": 401,
+        "/api/pay/wechat/notify": 405,
+        "/api/pay/wechat/refund-notify": 405
+      },
+      "update_versions": {
+        "windows-x86_64": "26.11.1001",
+        "darwin-aarch64": "26.10.801",
+        "darwin-x86_64": "26.10.1501"
+      },
+      "windows_download": "https://cdn.bowerbird.cn/windows_package/Bowerbird_26.11.1001_x64-setup.exe",
+      "static": {
+        "/": "78d5b3e348990871ab4d6a95d9e77d240a5d7f0c1bdc46c2bea3b0f35beb05dd",
+        "/index-v2.html": "1e16c3ee09218163dd653db5a529a56c684d00d32b55c28409bb84c755204077",
+        "/pricing/": "2dc02a1e1fff34d7e95069c72e47c4515b1a824b3e3daab6a06ee2eccbd2b57c",
+        "/billing.js": "14b9a1292274280669db3828276cab0095b3838c42ffa358126175e27d37cabe",
+        "/app-v2.bundle.js": "433b12657869631c9088f2bca3f75892b00ed67a6732f44059a2a802dfef2469",
+        "/assets/account-dialog-CZBuZ_f8.css": "86efdde367c7e19564a5128284531c66ca12d0f98e76a9fd9e0b8f173139f786",
+        "/assets/homepage-upgrade-BYUlr8oq.css": "d3fb83dc803cd0571cdbce5ef6c7db2791f69ee5b4a5658d6c6628adf3eadf5c",
+        "/assets/index-CYFCG-l_.css": "7d06ca1dfa5a42cf5654904fd463a83ecf697522fcc2b6d44183c8bb69be6be3"
+      }
+    }
+  },
+  "external_browser": {
+    "origin": "https://bowerbird.cn",
+    "tested_homepages": [
+      "/",
+      "/index-v2.html"
+    ],
+    "only_first_party_get_and_head": true,
+    "copy": [
+      "下载桌面版，体验 7 天 Pro",
+      "新账号注册送 200 Bcoin"
+    ],
+    "normal_motion": {
+      "duration_ms": 280,
+      "delay_ms": 240,
+      "scale": [
+        0.94,
+        1.025,
+        1
+      ],
+      "animation": "offer-appear"
+    },
+    "reduced_motion": "No animation events, opacity 1",
+    "mobile_reopen": "No replay",
+    "network_observation": "Download animation can complete before the page script subscribes to its end event. Browser event records show it completed once.",
+    "cases": [
+      {
+        "width": 1124,
+        "reduced": false,
+        "path": "/",
+        "events": [
+          [
+            "download-offer",
+            "animationstart",
+            0
+          ],
+          [
+            "download-offer",
+            "animationend",
+            0.28
+          ],
+          [
+            "signup-offer",
+            "animationstart",
+            0
+          ],
+          [
+            "signup-offer",
+            "animationend",
+            0.28
+          ]
+        ]
+      },
+      {
+        "width": 1124,
+        "reduced": false,
+        "path": "/index-v2.html",
+        "events": [
+          [
+            "download-offer",
+            "animationstart",
+            0
+          ],
+          [
+            "download-offer",
+            "animationend",
+            0.28
+          ],
+          [
+            "signup-offer",
+            "animationstart",
+            0
+          ],
+          [
+            "signup-offer",
+            "animationend",
+            0.28
+          ]
+        ]
+      },
+      {
+        "width": 1124,
+        "reduced": true,
+        "path": "/",
+        "events": []
+      },
+      {
+        "width": 1124,
+        "reduced": true,
+        "path": "/index-v2.html",
+        "events": []
+      },
+      {
+        "width": 320,
+        "reduced": false,
+        "path": "/",
+        "events": [
+          [
+            "download-offer",
+            "animationstart",
+            0
+          ],
+          [
+            "download-offer",
+            "animationend",
+            0.28
+          ],
+          [
+            "signup-offer",
+            "animationstart",
+            0
+          ],
+          [
+            "signup-offer",
+            "animationend",
+            0.28
+          ]
+        ]
+      },
+      {
+        "width": 320,
+        "reduced": false,
+        "path": "/index-v2.html",
+        "events": [
+          [
+            "download-offer",
+            "animationstart",
+            0
+          ],
+          [
+            "download-offer",
+            "animationend",
+            0.28
+          ],
+          [
+            "signup-offer",
+            "animationstart",
+            0
+          ],
+          [
+            "signup-offer",
+            "animationend",
+            0.28
+          ]
+        ]
+      },
+      {
+        "width": 320,
+        "reduced": true,
+        "path": "/",
+        "events": []
+      },
+      {
+        "width": 320,
+        "reduced": true,
+        "path": "/index-v2.html",
+        "events": []
+      }
+    ]
+  }
+}

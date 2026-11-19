@@ -1,7 +1,7 @@
 # @bowerbird/html-renderer — Bowerbird 受限 HTML 离线 Renderer
 
 > 依据 [dev-doc/HTML-RENDER-PLAN.md](../../dev-doc/HTML-RENDER-PLAN.md)（H0-T1 镜像契约 + H1 独立 renderer）。
-> 状态：**H0–H5 完成并通过生产 VPS/控制面 E2E；H6 test-only 观察进行中。** 当前生产 renderer `0.1.1`，指纹 `bwr1-c0ee5722787c038aa560e4a5cbb54df2`。
+> 状态：**H0–H5 完成并通过生产 VPS/控制面 E2E；H6 test-only 观察进行中。** 当前生产 renderer `0.1.2`，指纹 `bwr1-f75e299e40fc851b842b81f7336ab083`。[队列修复上线验收与回退](../../project_logs/2026-11-11-audit-renderer-deployment.md)。
 
 一个**封闭、确定性的渲染工具**，不是浏览器 Agent：
 

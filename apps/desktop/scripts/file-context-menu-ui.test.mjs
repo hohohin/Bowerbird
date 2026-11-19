@@ -71,7 +71,7 @@ try {
     await first.click({ button: 'right' });
     await page.getByRole('menu', { name: '已选 2 项素材的操作', exact: true }).waitFor();
     assert.deepEqual(await page.evaluate(() => window.store.getState().contextMenu.fileSelection.assets.map(a => a.id)), ['external-original', 'external-other']);
-    assert.equal(await page.getByRole('menuitem', { name: '用选中的内容新建集合', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('menuitem', { name: '用选中的内容新建文件夹', exact: true }).count(), 0);
     await page.getByRole("menuitem", { name: "删除", exact: true }).click();
   await page.getByRole('menuitem', { name: source === '文件浏览器' ? '删除本机文件' : '移除引用 · 原文件保留', exact: true }).click();
     await page.getByRole('dialog', { name: source === '文件浏览器' ? '删除 2 个本机文件' : '移除 2 项外部引用', exact: true }).waitFor();

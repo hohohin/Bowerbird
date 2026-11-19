@@ -13,8 +13,8 @@ const requests = new Map<string, PreviewRequest>();
 let queue: Promise<unknown> = Promise.resolve();
 
 /** Share in-flight work only; native cache checks the file fingerprint on every visit. */
-export function requestCanvasImagePreview(path: string, maxSize: number) {
-  const key = `${maxSize}:${path}`;
+export function requestCanvasImagePreview(path: string, maxSize: number, version = "") {
+  const key = `${maxSize}:${path}:${version}`;
   let request = requests.get(key);
   if (!request) {
     const next: PreviewRequest = { active: 0, promise: Promise.resolve(null) };

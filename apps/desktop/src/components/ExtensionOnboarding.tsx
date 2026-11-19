@@ -45,6 +45,9 @@ function ZoomImage({ src, onClose }: { src: string; onClose: () => void }) {
 function ExtensionPanel({ onClose }: { onClose: () => void }) {
   const connected = useStore((state) => state.extensionConnected);
   const [ready, setReady] = useState(false);
+  const [pairCode, setPairCode] = useState("");
+  const [pairMessage, setPairMessage] = useState("");
+  const [pairing, setPairing] = useState(false);
   const [checking, setChecking] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
   const [showTutorial, setShowTutorial] = useState(false);
@@ -181,13 +184,31 @@ function ExtensionPanel({ onClose }: { onClose: () => void }) {
         </div>
         <button type="button" onClick={() => void checkConnection()} disabled={checking} className="app-modal-button"><RefreshCw size={14} aria-hidden />{checking ? "正在检测…" : "重新检测"}</button>
       </section>
+      <form className="setup-card" onSubmit={async event => {
+        event.preventDefault();
+        setPairing(true);
+        try {
+          await api.pairExtension(pairCode.trim());
+          setPairCode("");
+          setPairMessage("配对已保存。请刷新采集网页以检查连接。");
+        } catch (error) { setPairMessage(userErrorMessage(error, "配对未完成，请检查配对码后重试。")); }
+        finally { setPairing(false); }
+      }}>
+        <label htmlFor="extension-pair-code">浏览器配对码</label>
+        <p>点击网页中的 Bowerbird 按钮 →「设置」复制配对码；也可在扩展管理页打开「扩展选项」。确认后只允许这份插件采集。</p>
+        <div className="extension-copy-row">
+          <input id="extension-pair-code" autoComplete="off" maxLength={97} value={pairCode} onChange={event => setPairCode(event.target.value)} />
+          <button type="submit" disabled={pairing || !pairCode.trim()} className="app-modal-button">确认配对</button>
+        </div>
+        {pairMessage && <p role="status">{pairMessage}</p>}
+      </form>
       {statusError && <p className="extension-setup-error" role="alert">{userErrorMessage(statusError, "连接状态暂时无法读取，请稍后重新检测。")}</p>}
 
       {ready && <>
         <section className="extension-setup-usage" aria-label="采集使用方法">
           <h3>如何采集</h3>
-          <p>在普通网页中，点击右下角的 Bowerbird 按钮批量采集本页图片，或按住 Alt 点击单张图片。也可以将图片拖到右下角 Bowerbird 按钮。</p>
-          <p>视频也可拖到同一个 Bowerbird 按钮直接采集。请保持网页打开，等待保存完成。</p>
+          <p>在普通网页中，点击 Bowerbird 按钮，在菜单中选择「采集本页图片」，确认后批量采集；也可以按住 Alt 点击单张图片，或把图片拖到按钮。</p>
+          <p>视频同样拖到按钮直接采集；选择「采集本页视频」可先从本页候选中挑选。按钮可拖动，拖到左右边缘会吸附收起，悬停展开。请保持网页打开，等待保存完成。</p>
           <p>采集后在项目素材或收集箱查看，再按需拖入画板。内置探索浏览器仍可直接拖图，无需安装插件。</p>
         </section>
         <button type="button" className="app-modal-button extension-setup-toggle" onClick={() => setShowTutorial(value => !value)} aria-expanded={showTutorial} aria-controls="extension-install-guide">
@@ -226,9 +247,9 @@ function ExtensionPanel({ onClose }: { onClose: () => void }) {
             </li>
             <li className="setup-card">
               <h3><span>4</span>刷新网页并检查连接</h3>
-              <p>保持 Bowerbird 运行，打开或刷新普通网页，右下角会出现 Bowerbird 和「视频」按钮。浏览器新标签页和扩展管理页不支持采集。</p>
+              <p>保持 Bowerbird 运行，打开或刷新普通网页，页面会出现 Bowerbird 按钮。浏览器新标签页和扩展管理页不支持采集。</p>
               <p>返回这里查看连接状态；连接变化可能需要等待片刻，也可以点击「重新检测」。</p>
-              <Shot src={guide4} alt="网页右下角的 Bowerbird 按钮" onZoom={() => setZoom(guide4)} />
+              <Shot src={guide4} alt="网页中的 Bowerbird 按钮" onZoom={() => setZoom(guide4)} />
             </li>
           </ol>
           <section className="setup-card extension-update-guide" aria-label="更新已有插件">

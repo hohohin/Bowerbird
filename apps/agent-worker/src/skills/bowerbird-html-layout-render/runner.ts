@@ -158,9 +158,7 @@ export async function advanceHtmlLayoutRun(request: AdvanceHtmlLayoutRunRequest)
               runId: checkpoint.runId,
               input: checkpoint.input,
               model: request.model,
-              ...(request.signal
-              ? { signal: { aborted: request.signal.cancelRequested || request.signal.leaseLost || request.signal.stopRequested } }
-              : {}),
+              signal: { get aborted() { return stopped(request.signal); } },
             });
             checkpoint.pendingCompose = action;
             await request.control.saveCheckpoint(checkpoint, progressOf(checkpoint));

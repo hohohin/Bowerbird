@@ -13,42 +13,67 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const node = (id, prompt = '') => ({ id, kind: 'generation', x: 0, y: 0, action: 'describe', skill: 'image-edit', prompt, ratio: null, provider: 'codex', inputs: {}, outputs: {}, outputPorts: [], trigger: false });
 const doc = nodes => ({ schema_version: 1, nodes, run: null });
 function fixture(initial = doc([node('original')])) {
-  let saved = { revision: 1, document: clone(initial) }, fail = false, gate, readGate, assetGate, failRead = false;
+  let saved = { revision: 1, document: clone(initial) }, fail = false, gate, readGate, failRead = false;
   const interleavedChanges = [];
+  const writes = [];
   const modules = new Map();
+  const requests = new Map(), sends = [], stops = [];
+  const chatListeners = new Set(), checkpoints = new Map();
+  const reads = { checkpoints: 0, full: 0 };
+  const chatApi = { revision: async id => { reads.checkpoints++; return checkpoints.get(id); }, getByRequest: async id => clone(requests.get(id) ?? null) };
+  const chatStore = { summaries: {}, conversations: {}, drafts: {}, loadProject: async () => {},
+    applyConversation(chat) {
+      const previous = { conversations: chatStore.conversations };
+      chatStore.conversations = { ...chatStore.conversations, [chat.id]: chat };
+      for (const listener of chatListeners) listener(chatStore, previous);
+    },
+    loadConversation: async id => { reads.full++; return clone([...requests.values()].find(chat => chat.id === id) ?? null); },
+    stop: async (id, turnId) => { stops.push([id, turnId]); },
+    send: async input => {
+      assert.equal(saved.document.run.steps[input.agentNodeId].chatInput.requestId, input.requestId, 'save the request before submitting');
+      sends.push(clone(input));
+      const chat = { id: input.conversationId ?? 'chat', revision: 1, projectId: input.projectId, nodeId: input.agentNodeId, provider: input.provider, submittedTurnId: 'turn', status: 'idle', error: null,
+        messages: [{ turnId: 'turn', role: 'assistant', status: 'done', text: '原轮次输出', referenceAssetIds: [] }] };
+      requests.set(input.requestId, clone(chat)); return chat;
+    } };
   const api = {
     canvasWorkflowGet: async () => {
       const snapshot = clone(saved);
       if (readGate) { readGate.entered(); await readGate.promise; }
       if (failRead) throw new Error('synthetic read failed');
       return snapshot;
-    }, projectCanvasGet: async () => ({ nodes: [] }), canvasWorkflowAuthorize: async () => {},
-    getAssetsByIds: async ids => {
-      if (assetGate) { assetGate.entered(); await assetGate.promise; }
-      return ids.map(id => ({ id, store_path: `${id}.png` }));
-    },
+    }, projectCanvasGet: async () => ({ nodes: [] }), canvasWorkflowAuthorize: async () => {}, projectThreadCreate: async () => {},
+    getAssetsByIds: async ids => ids.map(id => ({ id, store_path: `${id}.png` })),
     canvasWorkflowSave: async (_id, revision, document) => {
       if (gate) await gate;
       if (fail) throw new Error('synthetic disk write failed');
       const change = interleavedChanges.shift();
       if (change) saved = { revision: saved.revision + 1, document: change(clone(saved.document)) };
       if (revision !== saved.revision) throw new Error('工作流已被其他窗口修改，请重新打开项目');
-      saved = { revision: revision + 1, document: clone(document) }; return saved.revision;
+      saved = { revision: revision + 1, document: clone(document) }; writes.push(saved.document); return saved.revision;
     },
   };
-  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, setTimeout, clearTimeout });
+  const context = vm.createContext({ console, crypto: webcrypto, structuredClone, TextEncoder, setTimeout, clearTimeout });
   function load(path) {
     if (modules.has(path)) return modules.get(path).exports;
     const module = { exports: {} }; modules.set(path, module);
     const output = ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
     const require = specifier => {
       if (specifier === './api') return { api };
+      if (specifier === './userError') return load(resolve(dirname(path), 'userError.ts'));
+      if (specifier === './dshSkill.ts' || specifier === './chatProvider.ts') return load(resolve(dirname(path), specifier));
+      if (specifier === './localChat') return { localChat: chatApi, localChatRunning: chat => chat && ['running', 'stopping'].includes(chat.status) };
+      if (specifier === './localChatStore') return { ensureLocalChatEvents: async () => {},
+        useLocalChatStore: { getState: () => chatStore, subscribe: listener => { chatListeners.add(listener); return () => chatListeners.delete(listener); } } };
+      if (specifier === './workflowProviderIssue') return { workflowProviderIssue: () => null };
+      if (specifier === './chatCapabilities') return { chatProviderAccessIssue: () => null };
       if (specifier === '../store') return { useStore: { getState: () => ({ genJobs: {} }) } };
       if (specifier === './workflowPlannerRuntime') return { WorkflowPlannerRuntime: class {} };
       if (specifier === './workflowVideoFrames') return { resolveVideoCardOutputs: async () => {} };
-      if (specifier === './workflowAgentOutputs') return { agentWriterValue: () => undefined };
+      if (specifier === './workflowLoop') return load(resolve(lib, 'workflowLoop.ts'));
+      if (specifier === './workflowAgentOutputs') return { agentWriterValue: () => undefined, agentOutputTargets: () => [] };
       if (specifier === './canvasSessionOutputs') return { completedCanvasSessions: () => [], reconcileCanvasWorkflowReferences: nodes => nodes };
-      if (['./workflowExternalChanges', './canvasWorkflow', './canvasCardNames', './workflowDiagnostics', './contentTable.ts'].includes(specifier)) return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
+      if (['./workflowExternalChanges', './canvasWorkflow', './canvasCardNames', './workflowDiagnostics', './workflowTriggerSchedule', './workflowTriggerSchedule.ts', './workflowAgentChat', './workflowAgentResult', './workflowAgentProfile', './workflowTemplates', './workflowPlanner', './contentTable.ts'].includes(specifier)) return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
       return {};
     };
     vm.runInContext(`(function(require,module,exports){${output}\n})`, context, { filename: path })(require, module, module.exports);
@@ -56,7 +81,7 @@ function fixture(initial = doc([node('original')])) {
   }
   const { CanvasWorkflowController } = load(resolve(lib, 'canvasWorkflowRuntime.ts'));
   const { mergeWorkflowChanges } = load(resolve(lib, 'workflowExternalChanges.ts'));
-  return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved),
+  return { controller: new CanvasWorkflowController('p'), mergeWorkflowChanges, saved: () => plain(saved), writes, requests, sends, stops, chatStore, chatApi, chatListeners, checkpoints, reads, load,
     external: document => { saved = { revision: saved.revision + 1, document: clone(document) }; },
     fail: value => { fail = value; }, failRead: value => { failRead = value; },
     interleave: (...changes) => { interleavedChanges.push(...changes); },
@@ -66,14 +91,106 @@ function fixture(initial = doc([node('original')])) {
       readGate = { entered, promise };
       return { started, release: () => { readGate = undefined; release(); } };
     },
-    holdAssets: expected => {
-      let entered, release, count = 0;
-      const started = new Promise(resolve => { entered = resolve; }), promise = new Promise(resolve => { release = resolve; });
-      assetGate = { entered: () => { if (++count === expected) entered(); }, promise };
-      return { started, release: () => { assetGate = undefined; release(); } };
-    },
     hold: () => { let release; gate = new Promise(resolve => { release = resolve; }); return () => { gate = undefined; release(); }; } };
 }
+
+test('portable Agent templates retain provider/model settings and discard conversation identity', () => {
+  const f = fixture();
+  const { captureWorkflowTemplate, instantiateWorkflowTemplate, parseWorkflowTemplate } = f.load(resolve(lib, 'workflowTemplates.ts'));
+  const trigger = { ...node('start'), kind: 'trigger' };
+  const agent = { ...node('agent', '写作'), kind: 'agent', inputs: { signal: [{ nodeId: 'start', portId: 'signal' }] }, chatProvider: 'codex-local', chatCodexOptions: { model: 'fixture', reasoningEffort: 'high' }, chatConversationId: 'must-not-copy' };
+  const template = captureWorkflowTemplate([trigger, agent], new Set(['start', 'agent']), '对话流程');
+  assert.equal(template.schemaVersion, 6); assert.ok(!JSON.stringify(template).includes('must-not-copy'));
+  const result = instantiateWorkflowTemplate(template, {}, {}, 'codex', [], 0, 0);
+  assert.equal(result[1].chatProvider, 'codex-local'); assert.deepEqual(plain(result[1].chatCodexOptions), agent.chatCodexOptions);
+  assert.equal(result[1].chatConversationId, undefined);
+  const legacy = structuredClone(template);
+  legacy.plan.nodes[1].chatProvider = 'deepseek-cloud';
+  delete legacy.plan.nodes[1].chatCodexOptions;
+  assert.equal(parseWorkflowTemplate(JSON.stringify(legacy)).plan.nodes[1].chatProvider, 'dsh-cloud');
+  assert.equal(instantiateWorkflowTemplate(legacy, {}, {}, 'codex', [], 0, 0)[1].chatProvider, 'dsh-cloud');
+  const cloudAgent = { ...agent, chatProvider: 'dsh-cloud', chatCodexOptions: undefined, chatDshSkill: { id: 'text-editor' } };
+  const remote = captureWorkflowTemplate([trigger, cloudAgent], new Set(['start','agent']), '云端文本编辑');
+  assert.equal(remote.schemaVersion, 7);
+  assert.deepEqual(plain(instantiateWorkflowTemplate(remote, {}, {}, 'codex', [], 0, 0)[1].chatDshSkill), { id: 'text-editor' });
+  remote.plan.nodes[1].chatDshSkill.instructions = 'injected template instructions';
+  assert.throws(() => parseWorkflowTemplate(JSON.stringify(remote)), /云端技能/);
+  template.plan.nodes[1].chatConversationId = 'forged';
+  assert.throws(() => parseWorkflowTemplate(JSON.stringify(template)));
+});
+
+test('Agent execution submits through chat once and resumes the exact original turn', async () => {
+  const agent = { ...node('agent', '写出说明'), kind: 'agent', chatProvider: 'deepseek-cloud' };
+  const source = '参考文字'.repeat(50000);
+  const step = { status: 'pending', agentInput: { prompt: agent.prompt, source: JSON.stringify({ source }), assetIds: [] } };
+  const run = { id: 'run', startId: agent.id, threadId: 'thread', order: [agent.id], status: 'running', steps: { [agent.id]: step } };
+  const f = fixture({ ...doc([agent]), run }); await f.controller.load();
+  const first = await f.controller.chatResult(run.id, agent, step, () => false);
+  assert.equal(first.text.text, '原轮次输出');
+  assert.equal(f.sends.length, 1);
+  assert.ok(f.sends[0].text.includes(source));
+  assert.equal(f.sends[0].provider, 'dsh-cloud');
+  assert.equal(f.sends[0].agentNodeId, agent.id);
+  assert.equal(f.sends[0].manualCardRun, undefined, 'old and automatic workflow runs retain the original isolated request');
+  const frozen = f.saved().document.run.steps[agent.id];
+  const accepted = f.requests.get(frozen.chatInput.requestId);
+  accepted.status = 'running'; accepted.messages.push({ turnId: 'later', role: 'assistant', status: 'running', text: '后续轮次', referenceAssetIds: [] });
+  const recovered = await f.controller.chatResult(run.id, agent, frozen, () => false);
+  assert.equal(recovered.text.text, '原轮次输出'); assert.equal(f.sends.length, 1);
+  accepted.messages[0].status = 'interrupted';
+  assert.equal(await f.controller.chatResult(run.id, agent, frozen, () => false), null);
+  assert.equal(f.saved().document.run.steps[agent.id].status, 'waiting');
+  assert.equal(f.sends.length, 1);
+  accepted.messages.pop(); // The original failed completion is now the latest turn again.
+  accepted.status = 'failed';
+  accepted.error = 'chat_no_reply: 上游模型服务返回 HTTP 502。本轮云端任务已结束，没有可取回的回复。';
+  await assert.rejects(() => f.controller.chatResult(run.id, agent, frozen, () => false), /HTTP 502/);
+  f.requests.delete(frozen.chatInput.requestId);
+  assert.equal(await f.controller.chatResult(run.id, agent, frozen, () => false), null);
+  assert.equal(f.sends.length, 1, 'an acknowledged turn that disappeared must never be resubmitted');
+});
+
+test('only clicking run on the Agent itself opts its saved request into bound conversation history', async () => {
+  const trigger = { ...node('signal'), kind: 'trigger' };
+  const loop = { ...node('loop'), kind: 'loop', loopMode: 'count', loopCount: 2, inputs: { signal: [{ nodeId: trigger.id, portId: 'signal' }] } };
+  const agent = { ...node('agent', '继续修改'), kind: 'agent', chatProvider: 'dsh-cloud', chatConversationId: 'bound-chat',
+    inputs: { text: [{ nodeId: loop.id, portId: 'text' }] } };
+  for (const [startId, single, expected] of [[agent.id, true, true], [trigger.id, false, undefined], [loop.id, false, undefined]]) {
+    const f = fixture(doc([trigger, loop, agent]));
+    await f.controller.load();
+    f.controller.continue = async () => {}; // Capture the real accepted run before any step is dispatched.
+    await f.controller.start(startId, single);
+    const run = f.controller.run(f.saved().document.run.id);
+    assert.equal(run.manualCardRun, expected);
+    await f.controller.step(run.id, agent.id, { agentInput: { prompt: agent.prompt, source: '{}', assetIds: [] } });
+    await f.controller.chatResult(run.id, agent, run.steps[agent.id], () => false);
+    const request = f.sends[0];
+    assert.equal(request.agentNodeId, agent.id);
+    assert.equal(request.conversationId, agent.chatConversationId);
+    assert.equal(request.manualCardRun, expected);
+    assert.deepEqual(f.saved().document.run.steps[agent.id].chatInput, plain(request));
+  }
+});
+
+test('lost chat admission response keeps the request and stops the accepted original conversation', async () => {
+  const agent = { ...node('agent', '任务'), kind: 'agent' };
+  const step = { status: 'pending', agentInput: { prompt: agent.prompt, source: '{}', assetIds: [] } };
+  const run = { id: 'run', startId: agent.id, threadId: 'thread', order: [agent.id], status: 'running', steps: { [agent.id]: step } };
+  const f = fixture({ ...doc([agent]), run }); await f.controller.load();
+  const send = f.chatStore.send;
+  f.chatStore.send = async input => { await send(input); throw new Error('IPC acknowledgement lost'); };
+  assert.equal(await f.controller.chatResult(run.id, agent, step, () => false), null);
+  const frozen = f.saved().document.run.steps[agent.id];
+  assert.equal(frozen.status, 'waiting'); assert.ok(frozen.chatInput.requestId);
+  assert.equal((await f.controller.chatResult(run.id, agent, frozen, () => false)).text.text, '原轮次输出');
+  assert.equal(f.sends.length, 1);
+  const second = fixture({ ...doc([agent]), run }); await second.controller.load();
+  let halted = false;
+  const accept = second.chatStore.send;
+  second.chatStore.send = async input => { const chat = await accept(input); halted = true; return { ...chat, status: 'running' }; };
+  assert.equal(await second.controller.chatResult(run.id, agent, step, () => halted), null);
+  assert.deepEqual(second.stops, [['chat', 'turn']]);
+});
 
 test('chat card additions survive queued edits and stale workflow revision', async () => {
   const f = fixture(), c = f.controller; await c.load(); assert.equal(c.error, '');
@@ -97,6 +214,15 @@ test('same-card conflicts and deletion of an edited card preserve local edits an
   const f = fixture(), c = f.controller; await c.load(); f.external(doc([]));
   await assert.rejects(c.save(doc([node('original', 'keep me')])), /同一卡片已有其他修改/);
   assert.equal(c.document.nodes[0].prompt, 'keep me'); assert.equal(f.saved().document.nodes.length, 0);
+});
+
+test('moving an active card retains concurrent execution checkpoints and rejects competing positions', () => {
+  const f = fixture(), original = node('source'), base = doc([original]);
+  const moved = doc([{ ...original, x: 34, y: 86 }]);
+  const updated = doc([{ ...original, activeSessionNodeId: 'session', outputs: { image: { type: 'image', assetIds: ['result'] } } }]);
+  const merged = f.mergeWorkflowChanges(base, moved, updated);
+  assert.deepEqual(plain(merged.nodes[0]), { ...updated.nodes[0], x: 34, y: 86 });
+  assert.throws(() => f.mergeWorkflowChanges(base, moved, doc([{ ...original, y: 77 }])), /同一卡片已有其他修改/);
 });
 
 test('retry after a failed write retains the unsaved edit', async () => {
@@ -147,6 +273,29 @@ async function activeFixture(kind = 'generation') {
   await f.controller.saveRun(running('b'));
   return f;
 }
+
+test('only adjacent draft edits coalesce across CAS and every run checkpoint reaches disk in order', async () => {
+  const f = await activeFixture(), c = f.controller;
+  await c.edit([...c.document.nodes, node('draft')]);
+  const edit = text => c.edit(c.document.nodes.map(n => n.id === 'draft' ? { ...n, prompt: text } : n), undefined, 'draft');
+  const release = f.hold(), first = f.writes.length;
+  const jobs = [c.step('run-a', 'a', { detail: 'before edits' }), edit('a'), edit('ab'),
+    c.step('run-a', 'a', { detail: 'between drafts' }), edit('abc'), edit('abcd')];
+  f.external({ ...f.saved().document, nodes: [...f.saved().document.nodes, node('from-other-editor')] });
+  release(); await Promise.all(jobs);
+  assert.deepEqual(f.writes.slice(first).map(d => [d.nodes.find(n => n.id === 'draft').prompt, d.runs[0].steps.a.detail]),
+    [['', 'before edits'], ['ab', 'before edits'], ['ab', 'between drafts'], ['abcd', 'between drafts']]);
+  assert.ok(f.saved().document.nodes.some(n => n.id === 'from-other-editor'));
+
+  const finish = f.hold();
+  const checkpoint = c.step('run-b', 'b', { detail: 'concurrent save' });
+  const edits = [edit('local first'), edit('local latest')];
+  f.external({ ...f.saved().document, nodes: f.saved().document.nodes.map(n => n.id === 'draft' ? { ...n, prompt: 'remote' } : n) });
+  finish(); await Promise.allSettled([checkpoint, ...edits]);
+  assert.match(c.error, /同一卡片已有其他修改/);
+  assert.equal(c.document.nodes.find(n => n.id === 'draft').prompt, 'local latest');
+  assert.equal(f.saved().document.nodes.find(n => n.id === 'draft').prompt, 'remote');
+});
 
 test('refresh joins the write queue while two active runs checkpoint and chat adds cards', async () => {
   const f = await activeFixture(), c = f.controller;
@@ -241,10 +390,17 @@ test('a refresh merge conflict keeps local progress and blocks subsequent overwr
   assert.equal(f.saved().document.runs[1].steps.b.detail, 'submitted');
 });
 
-test('two live executor loops finish after chat creates and undoes unrelated cards', async () => {
-  const f = await activeFixture('trigger'), c = f.controller, assets = f.holdAssets(2);
+test('two live executor loops finish after chat creates and undoes unrelated cards', { timeout: 5000 }, async () => {
+  const f = await activeFixture('trigger'), c = f.controller;
+  const reached = Promise.withResolvers(), gate = Promise.withResolvers(), finishing = new Set();
+  const finish = c.finish.bind(c);
+  c.finish = async (id, ...args) => {
+    finishing.add(id); if (finishing.size === 2) reached.resolve();
+    await gate.promise; return finish(id, ...args);
+  };
   const first = c.continue('run-a'), second = c.continue('run-b');
-  await assets.started;
+  await reached.promise;
+  assert.deepEqual([...finishing].sort(), ['run-a', 'run-b']);
   assert.equal(c.isLocked('a'), true); assert.equal(c.isLocked('b'), true);
   f.external({ ...f.saved().document, nodes: [...f.saved().document.nodes, node('chat-card')] });
   await c.refreshExternalCards();
@@ -252,7 +408,7 @@ test('two live executor loops finish after chat creates and undoes unrelated car
   f.external({ ...f.saved().document, nodes: f.saved().document.nodes.filter(n => n.id !== 'chat-card') });
   await c.refreshExternalCards();
   assert.equal(c.isLocked('a'), true); assert.equal(c.isLocked('b'), true);
-  assets.release(); await Promise.all([first, second]);
+  gate.resolve(); await Promise.all([first, second]);
   assert.equal(c.error, ''); assert.equal(c.issue, null);
   assert.deepEqual(f.saved().document.runs.map(r => [r.id, r.status, r.steps[r.startId].status]),
     [['run-a', 'done', 'done'], ['run-b', 'done', 'done']]);
@@ -274,23 +430,67 @@ test('live progress received during a checkpoint remains an unsaved delta for th
 test('chat card events refresh native content even when workflow refresh fails, scoped to the mounted project', async () => {
   const path = resolve(lib, '../components/CanvasWorkspace.tsx'), source = readFileSync(path, 'utf8');
   const ast = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  let callback;
+  let callback, refreshMountedWorkflow;
   const visit = node => {
     if (ts.isCallExpression(node) && node.arguments[0]?.getText(ast) === 'LOCAL_CHAT_CARDS_CHANGED_EVENT') callback = node.arguments[1];
+    if (ts.isBinaryExpression(node) && node.left.getText(ast) === 'workflowCardsChanged.current' && ts.isArrowFunction(node.right)) refreshMountedWorkflow = node.right;
     ts.forEachChild(node, visit);
   };
-  visit(ast); assert.ok(callback, 'production card listener is present');
+  visit(ast); assert.ok(callback, 'production card listener is present'); assert.ok(refreshMountedWorkflow, 'production mounted-workflow refresh is present');
   const refreshes = [], controllerCalls = [], errors = [], failure = new Error('workflow merge conflict');
-  const context = vm.createContext({ module: { exports: {} }, alive: true, projectId: 'p',
+  let retries = 0;
+  const context = vm.createContext({ module: { exports: {} }, alive: true, projectId: 'p', loadingRef: { current: false }, workflowCardsChanged: {},
     scheduleRefresh: (...args) => refreshes.push(args), reportError: error => errors.push(error),
-    canvasWorkflowController: id => ({ refreshExternalCards: () => { controllerCalls.push(id); return Promise.reject(failure); } }) });
-  const output = ts.transpileModule(`module.exports = (${callback.getText(ast)});`,
+    controller: { projectId: 'p', refreshExternalCards() { controllerCalls.push(this.projectId); return Promise.reject(failure); } }, retry: () => retries++ });
+  const output = ts.transpileModule(`workflowCardsChanged.current = (${refreshMountedWorkflow.getText(ast)}); module.exports = (${callback.getText(ast)});`,
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   vm.runInContext(output, context); const listener = context.module.exports;
   listener({ payload: { projectId: 'p' } });
   assert.deepEqual(refreshes, [['p', 40]], 'native graph refresh is scheduled independently');
   await Promise.resolve(); assert.deepEqual(errors, [failure]);
   listener({ payload: { projectId: 'other-project' } });
+  context.loadingRef.current = true;
+  listener({ payload: { projectId: 'p' } });
   context.alive = false; listener({ payload: { projectId: 'p' } });
-  assert.deepEqual(refreshes, [['p', 40]]); assert.deepEqual(controllerCalls, ['p']);
+  assert.deepEqual(refreshes, [['p', 40], ['p', 40]]); assert.deepEqual(controllerCalls, ['p']);
+  assert.equal(retries, 1, 'a matching event while the native view is loading rechecks the current project once');
+});
+
+
+test('parallel workflow waits consume only their target revisions and detach on completion or discard', async () => {
+  const f = fixture();
+  const make = id => ({ id, revision: 1, status: 'running', messages: [{turnId: id, role: 'assistant', status: 'running'}] });
+  const a = make('a'), b = make('b');
+  let halted = false;
+  const wa = f.controller.waitForChatTurn(a, 'a', () => halted);
+  const wb = f.controller.waitForChatTurn(b, 'b', () => halted);
+  await new Promise(setImmediate);
+  for (let revision = 2; revision <= 51; revision++) {
+    f.chatStore.applyConversation({ ...a, revision });
+    f.chatStore.applyConversation({ ...b, revision });
+  }
+  assert.equal(f.chatListeners.size, 2);
+  f.chatStore.applyConversation({ ...a, revision: 52, status: 'idle' });
+  assert.equal((await wa).revision, 52);
+  assert.equal(f.chatListeners.size, 1);
+  halted = true;
+  f.controller.discard();
+  assert.equal(await wb, null);
+  assert.equal(f.chatListeners.size, 0);
+  assert.deepEqual(f.reads, { checkpoints: 0, full: 0 });
+});
+
+test('a quiet workflow checks the revision only and recovers a missed terminal snapshot once', async () => {
+  const f = fixture();
+  const running = { id: 'chat', revision: 1, status: 'running', messages: [{ turnId: 'original', role: 'assistant', status: 'running' }] };
+  f.checkpoints.set('chat', 1);
+  const final = { ...running, revision: 2, status: 'idle', messages: [{turnId: 'original', role: 'assistant', status: 'done'}] };
+  f.requests.set('key', final);
+  const result = f.controller.waitForChatTurn(running, 'original', () => false);
+  await new Promise(resolve => setTimeout(resolve, 5200));
+  assert.deepEqual(f.reads, {checkpoints: 1, full: 0});
+  f.checkpoints.set('chat', 2);
+  assert.equal((await result).revision, 2);
+  assert.deepEqual(f.reads, {checkpoints: 2, full: 1});
+  assert.equal(f.chatListeners.size, 0);
 });

@@ -3,8 +3,9 @@ import { Grid2X2, LayoutGrid } from "lucide-react";
 import { useLibraryThumbnail } from "../lib/libraryPane";
 import { thumbnailWidthFromZoom, thumbnailZoomFromWidth, type ThumbnailScope } from "../lib/thumbnailSize";
 
-export function ThumbnailSizeSlider({ scope, appearance }: { scope: ThumbnailScope; appearance?: "project-manager" }) {
-  const { width: value, setWidth } = useLibraryThumbnail(scope);
+export function ThumbnailSizeSlider({ scope, appearance, size }: { scope: ThumbnailScope; appearance?: "project-manager"; size?: { width: number; setWidth: (width: number) => void } }) {
+  const sharedSize = useLibraryThumbnail(scope);
+  const { width: value, setWidth } = size ?? sharedSize;
   const zoom = thumbnailZoomFromWidth(value, scope);
   const [draft, setDraft] = useState<string | null>(null);
   const label = scope === "library" ? "主页素材大小" : scope === "projects" ? "项目卡片大小" : "项目素材大小";

@@ -6,7 +6,7 @@
 mod heic_tests;
 
 use std::fs;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -18,6 +18,7 @@ use ulid::Ulid;
 use crate::core::library::Asset;
 use crate::core::paths::LibraryPaths;
 use crate::core::preset;
+use crate::core::public_network::public_ip;
 use crate::db::Database;
 use crate::error::{AppError, AppResult};
 use crate::media;
@@ -83,6 +84,11 @@ fn exact_duplicate(db: &Database, source: &Path, size: u64) -> AppResult<Option<
     Ok(None)
 }
 
+// Keep the last identity check and insertion together. Image conversion, previews
+// and color extraction still run outside the lock. The counter avoids a second
+// byte comparison when nothing was inserted since the initial fast path.
+static INGEST_REVISION: std::sync::Mutex<u64> = std::sync::Mutex::new(0);
+
 fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, approximate: bool, automatic: bool) -> AppResult<Asset> {
     // Keep the user's HEIC untouched. All consumers receive a full-size PNG,
     // including previews, classification and providers that cannot read HEIC.
@@ -100,6 +106,7 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         Some(image::ImageReader::open(input)?.with_guessed_format()?.decode()
             .map_err(|error| AppError::Media(format!("无法解码图片 {}: {error}", source.display())))?)
     };
+    let initial_revision = *INGEST_REVISION.lock().unwrap();
     if !approximate {
         if let Some(mut existing) = exact_duplicate(db, input, meta.size)? {
             preset::recognize_and_prefill(db, source, &mut existing)?;
@@ -155,17 +162,18 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         None
     };
 
-    // 去重：pHash 命中则回滚新副本。
-    if let Some(ref h) = phash.as_ref().filter(|_| approximate) {
-        if let Some(mut existing) = db.find_asset_by_phash(h)? {
-            let _ = fs::remove_file(&store_path);
-            let _ = fs::remove_file(&thumb_path);
-            // 预设图识别也走 dedup 命中：同一张图可能先以非预设名入库（如重复文件的 hash 名
-            // 先被遍历到），此时 preset 名文件再导入会被去重拦下、走不到下方 recognize。
-            // 用现有 asset 补一次 manifest 匹配，把 caption / 生成身份写回（幂等，has_analysis 跳过已存在）。
-            preset::recognize_and_prefill(db, source, &mut existing)?;
-            return Ok(existing);
-        }
+    let mut revision = INGEST_REVISION.lock().unwrap();
+    let duplicate = if approximate && phash.as_deref().is_some_and(media::phash::is_high_entropy) {
+        db.find_asset_by_phash(phash.as_deref().unwrap())?
+    } else if approximate || *revision != initial_revision {
+        exact_duplicate(db, input, meta.size)?
+    } else { None };
+    if let Some(mut existing) = duplicate {
+        drop(revision);
+        let _ = fs::remove_file(&store_path);
+        let _ = fs::remove_file(&thumb_path);
+        preset::recognize_and_prefill(db, source, &mut existing)?;
+        return Ok(existing);
     }
 
     let now = Utc::now().timestamp();
@@ -202,6 +210,8 @@ fn ingest_file_with_dedup(paths: &LibraryPaths, db: &Database, source: &Path, ap
         library_hidden: false,
     };
     db.insert_asset_with_auto_classification(&asset, automatic)?;
+    *revision += 1;
+    drop(revision);
     link_colors(db, &asset.id, asset.colors.as_deref());
     // 预设图识别：文件名命中内置 manifest → 预填 generation 身份 + meta（不调 codex）。
     preset::recognize_and_prefill(db, source, &mut asset)?;
@@ -366,20 +376,6 @@ pub fn ingest_dir(paths: &LibraryPaths, db: &Database, dir: &Path) -> AppResult<
 /// 这条路径避免桌面端二次下载丢失 Cookie / 授权头 / 页面会话。
 const MAX_DOWNLOAD_BYTES: u64 = 50 * 1024 * 1024;
 
-pub fn download_client() -> Result<reqwest::Client, reqwest::Error> {
-    reqwest::Client::builder()
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
-        .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if attempt.previous().len() >= 5 || !is_safe_remote_url(attempt.url().as_str()) {
-                attempt.stop()
-            } else {
-                attempt.follow()
-            }
-        }))
-        .build()
-}
-
 /// 浏览器扩展已经在浏览器登录态内取到图片字节；桌面端只负责落临时文件并走标准入库。
 /// 这条路径避免桌面端二次下载丢失 Cookie / 授权头 / 系统代理（Pinterest 等站必需）。
 pub fn ingest_from_bytes(
@@ -501,28 +497,13 @@ fn uploaded_image_extension(bytes: &[u8], content_type: Option<&str>) -> AppResu
 
 /// 下载扩展采集的图，按实际内容识别格式后走统一 ingest 流水线。
 pub async fn ingest_from_url(
-    client: &reqwest::Client,
     paths: &LibraryPaths,
     db: &Database,
     url: &str,
     source_url: Option<&str>,
 ) -> AppResult<Asset> {
-    validate_remote_url(url)?;
-    let mut request = client
-        .get(url)
-        .header(
-            USER_AGENT,
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
-             (KHTML, like Gecko) Chrome/126.0 Safari/537.36 Bowerbird/0.1",
-        )
-        .header(ACCEPT, "image/avif,image/webp,image/apng,image/*,*/*;q=0.8");
-    if let Some(referer) = source_url.filter(|value| is_http_url(value)) {
-        request = request.header(REFERER, referer);
-    }
-    let resp = request
-        .send()
-        .await
-        .map_err(|e| AppError::Media(format!("download {url}: {e}")))?;
+    let resp = tokio::time::timeout(Duration::from_secs(30), download_response(url, source_url))
+        .await.map_err(|_| AppError::Media("图片下载超时，请重新采集".into()))??;
     if !resp.status().is_success() {
         return Err(AppError::Media(format!(
             "download {url} status {}",
@@ -590,6 +571,42 @@ pub async fn ingest_from_url(
     Ok(asset)
 }
 
+// Resolve, reject mixed/non-public DNS answers, and pin the entire connection to
+// the approved addresses. Repeat for each redirect; a proxy must not resolve instead.
+async fn download_response(raw: &str, source_url: Option<&str>) -> AppResult<reqwest::Response> {
+    let mut url = reqwest::Url::parse(raw).map_err(|_| AppError::Media("图片地址无效".into()))?;
+    for _ in 0..6 {
+        validate_remote_url(url.as_str())?;
+        let host = url.host_str().unwrap().trim_matches(['[', ']']);
+        let port = url.port_or_known_default().unwrap();
+        let addresses: Vec<SocketAddr> = tokio::net::lookup_host((host, port)).await?.collect();
+        if !public_addresses(&addresses) {
+            return Err(AppError::Media("图片地址未指向公网服务".into()));
+        }
+        let client = reqwest::Client::builder().no_proxy().resolve_to_addrs(host, &addresses)
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(Duration::from_secs(10)).timeout(Duration::from_secs(30))
+            .build().map_err(|error| AppError::Media(error.to_string()))?;
+        let mut request = client.get(url.clone())
+            .header(USER_AGENT, "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36 Bowerbird/0.1")
+            .header(ACCEPT, "image/avif,image/webp,image/apng,image/*,*/*;q=0.8");
+        if let Some(referer) = source_url.filter(|value| is_http_url(value)) {
+            request = request.header(REFERER, referer);
+        }
+        let response = request.send().await.map_err(|error| AppError::Media(error.without_url().to_string()))?;
+        if !response.status().is_redirection() { return Ok(response); }
+        url = response.headers().get(reqwest::header::LOCATION)
+            .and_then(|header| header.to_str().ok())
+            .and_then(|location| url.join(location).ok())
+            .ok_or_else(|| AppError::Media("图片跳转地址无效".into()))?;
+    }
+    Err(AppError::Media("图片地址跳转次数过多".into()))
+}
+
+fn public_addresses(addresses: &[SocketAddr]) -> bool {
+    !addresses.is_empty() && addresses.iter().all(|address| public_ip(address.ip()))
+}
+
 fn downloaded_image_extension(content_type: Option<&str>, bytes: &[u8]) -> AppResult<&'static str> {
     if media::heic::is_heic(bytes) { return Ok("heic"); }
     if content_type.is_some_and(|value| {
@@ -635,7 +652,7 @@ fn is_safe_remote_url(value: &str) -> bool {
     let Ok(url) = reqwest::Url::parse(value) else {
         return false;
     };
-    if !matches!(url.scheme(), "http" | "https") {
+    if !matches!(url.scheme(), "http" | "https") || !url.username().is_empty() || url.password().is_some() {
         return false;
     }
     let Some(host) = url.host_str() else {
@@ -648,38 +665,7 @@ fn is_safe_remote_url(value: &str) -> bool {
         .strip_prefix('[')
         .and_then(|value| value.strip_suffix(']'))
         .unwrap_or(host);
-    ip_host.parse::<IpAddr>().map(is_public_ip).unwrap_or(true)
-}
-
-fn is_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => is_public_ipv4(ip),
-        IpAddr::V6(ip) => is_public_ipv6(ip),
-    }
-}
-
-fn is_public_ipv4(ip: Ipv4Addr) -> bool {
-    let [a, b, ..] = ip.octets();
-    !(a == 0
-        || a == 10
-        || a == 127
-        || (a == 100 && (64..=127).contains(&b))
-        || (a == 169 && b == 254)
-        || (a == 172 && (16..=31).contains(&b))
-        || (a == 192 && b == 168)
-        || a >= 224)
-}
-
-fn is_public_ipv6(ip: Ipv6Addr) -> bool {
-    if let Some(ipv4) = ip.to_ipv4_mapped() {
-        return is_public_ipv4(ipv4);
-    }
-    let first = ip.segments()[0];
-    !(ip.is_unspecified()
-        || ip.is_loopback()
-        || ip.is_multicast()
-        || (first & 0xfe00) == 0xfc00
-        || (first & 0xffc0) == 0xfe80)
+    ip_host.parse::<IpAddr>().map(public_ip).unwrap_or(true)
 }
 
 #[cfg(test)]
@@ -748,6 +734,23 @@ mod tests {
         assert_eq!(first.origin_path, None);
         assert_eq!(std::fs::read(first.store_path.as_ref().unwrap()).unwrap(), bytes);
         assert!(Path::new(first.store_path.as_ref().unwrap()).starts_with(&paths.root));
+    }
+
+    #[test]
+    fn simultaneous_captures_resolve_to_one_analysis_target() {
+        let (_tmp, paths, db) = setup();
+        let bytes = png_bytes(64, 64, [12, 24, 36]);
+        let barrier = std::sync::Barrier::new(4);
+        std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..4).map(|_| scope.spawn(|| {
+                barrier.wait();
+                ingest_from_bytes(&paths, &db, &bytes, "https://site.test/source", Some("capture.png"),
+                    Some("image/png"), "extension").unwrap().id
+            })).collect();
+            let ids: Vec<_> = workers.into_iter().map(|worker| worker.join().unwrap()).collect();
+            assert!(ids.iter().all(|id| id == &ids[0]));
+        });
+        assert_eq!(db.count_assets(None).unwrap(), 1);
     }
 
     #[test]
@@ -929,6 +932,11 @@ mod tests {
 
     #[test]
     fn remote_url_rejects_local_targets() {
+        assert!(!public_addresses(&[]));
+        assert!(!public_addresses(&["8.8.8.8:443".parse().unwrap(), "[3fff:fff:ffff::1]:443".parse().unwrap()]));
+        assert!(!is_safe_remote_url("https://[3fff::1]/image.png"));
+        assert!(!public_addresses(&["8.8.8.8:443".parse().unwrap(), "[::ffff:127.0.0.1]:443".parse().unwrap()]));
+        assert!(public_addresses(&["8.8.8.8:443".parse().unwrap()]));
         assert!(is_safe_remote_url("https://sns-webpic-qc.xhscdn.com/a"));
         assert!(!is_safe_remote_url("file:///tmp/a.png"));
         assert!(!is_safe_remote_url("http://localhost/a.png"));

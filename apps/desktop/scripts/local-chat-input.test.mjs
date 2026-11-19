@@ -18,7 +18,7 @@ function load(path) {
   const compiled = ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const localRequire = specifier => {
     if (specifier === '@tauri-apps/api/core') return { convertFileSrc: value => value };
-    if (specifier.startsWith('.')) return load(resolve(dirname(path), `${specifier}.ts`));
+    if (specifier.startsWith('.')) return load(resolve(dirname(path), specifier.endsWith('.ts') ? specifier : `${specifier}.ts`));
     return require(specifier);
   };
   vm.runInThisContext(`(function(require,module,exports){${compiled}\n})`, { filename: path })(localRequire, module, module.exports);

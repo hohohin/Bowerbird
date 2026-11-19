@@ -457,6 +457,7 @@ mod tests {
             "::ffff:127.0.0.1",
             "fc00::1",
             "2001:db8::1",
+            "3fff::1",
         ] {
             assert!(!public_ip(ip.parse().unwrap()));
         }

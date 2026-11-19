@@ -1,8 +1,14 @@
 import { api } from "./api";
 import { useStore } from "../store";
 import { decodeLayerImage, packLayerHistory, unpackLayerHistory, type LayerWorkspace } from "./layerDocument";
+import { cloudAccountIssue } from "./generationAvailability";
 
 const activeAssets = new Set<string>();
+
+export async function layerDecompositionAvailable() {
+  const quote = await api.layerCloudRequest({ action: "layer_quote" });
+  return !!quote.services?.some(service => service.service === "image_layer_decompose" && service.available);
+}
 
 /** Same persisted request/result contract as the editor's Start decomposition button. */
 export async function workflowLayerDecompose(assetId: string, path: string, prompt: string, key: string, create: boolean, stopped: () => boolean, progress: (message: string) => void = () => {}) {
@@ -17,7 +23,8 @@ export async function workflowLayerDecompose(assetId: string, path: string, prom
       return workspace.document;
     }
     const auth = useStore.getState().cloudAuth;
-    if (!auth?.logged_in || !auth.cloud_available) throw new Error("请先登录 Bowerbird 后拆分图片");
+    const issue = cloudAccountIssue(auth);
+    if (issue || !auth) throw new Error(issue?.message ?? "请先登录 Bowerbird 后拆分图片");
     const check = () => {
       if (stopped()) throw new Error("工作流已停止，原拆分任务可从图片右键继续取回");
       if (useStore.getState().cloudAuth?.user_id !== auth.user_id) throw new Error("账号已切换，请登录原账号取回拆分结果");
@@ -28,8 +35,7 @@ export async function workflowLayerDecompose(assetId: string, path: string, prom
     check();
     if (create && !workspace.pending) {
       progress("检查拆分服务与输入图片");
-      const quote = await api.layerCloudRequest({ action: "layer_quote" });
-      if (!quote.services?.some(service => service.service === "image_layer_decompose" && service.available)) throw new Error("拆分服务暂不可用");
+      if (!await layerDecompositionAvailable()) throw new Error("拆分服务暂不可用");
       const source = await decodeLayerImage(await api.readImageDataUrl(path));
       const pixels = source.naturalWidth * source.naturalHeight, ratio = source.naturalWidth / source.naturalHeight;
       if (pixels < 262144 || pixels > 36000000 || ratio < 1 / 16 || ratio > 16) throw new Error("拆分图片需为 26 万至 3600 万像素，宽高比在 1:16 至 16:1 之间");

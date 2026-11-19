@@ -31,7 +31,7 @@ export class TextAgentTask {
     while (this.current(version)) {
       const text = await job.read();
       if (!this.current(version)) return;
-      if (text !== null) { this.job = null; this.result(text); this.update({ status: "已写入文档" }); return; }
+      if (text !== null) { this.job = null; await this.result(text); if (!this.current(version)) return; this.update({ status: "已写入文档" }); return; }
       await new Promise(resolve => setTimeout(resolve, 1200));
     }
   }

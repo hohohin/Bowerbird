@@ -10,9 +10,10 @@ export interface AssetOriginal {
 
 export const assetOriginals = {
   preview: async (assetIds: string[]) => {
-    const ids = [...new Set(assetIds)], originals: AssetOriginal[] = [];
+    type Preview = AssetOriginal | { asset_id: string; error: string };
+    const ids = [...new Set(assetIds)], originals: Preview[] = [];
     for (let offset = 0; offset < ids.length; offset += 2000) {
-      originals.push(...await invoke<AssetOriginal[]>("preview_asset_originals", { assetIds: ids.slice(offset, offset + 2000) }));
+      originals.push(...await invoke<Preview[]>("preview_asset_originals", { assetIds: ids.slice(offset, offset + 2000), allowPartial: true }));
     }
     return originals;
   },

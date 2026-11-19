@@ -62,6 +62,10 @@ pub struct AppSettings {
     /// 由「迁移素材库位置」写入；仅存指向，文件体量很小，可留在 C 盘。
     #[serde(default)]
     pub library_root: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_library_move: Option<super::migrate::PendingMove>,
 
     /// 入库自动理解是否允许把新图片临时发送到 Bowerbird Cloud。默认 false，必须显式开启。
     #[serde(default)]
@@ -138,6 +142,8 @@ impl Default for AppSettings {
             auto_analyze_on_ingest: false,
             auto_analyze_prompt: DEFAULT_AUTO_ANALYZE_PROMPT.to_string(),
             library_root: None,
+            library_id: None,
+            pending_library_move: None,
             cloud_auto_understand: false,
             board_shift_pick: false,
             hide_project_assets: false,
@@ -168,9 +174,9 @@ pub struct SettingsState {
 impl SettingsState {
     /// 从 settings.json 加载；文件不存在则用默认值。
     pub fn init(path: PathBuf) -> AppResult<Self> {
-        let (settings, had_legacy_cloud_fields) = if path.exists() {
+        let (settings, had_legacy_cloud_fields) = if path.try_exists()? {
             let json = std::fs::read_to_string(&path)?;
-            let value: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+            let value: serde_json::Value = serde_json::from_str(&json)?;
             let had_legacy = value.as_object().is_some_and(|object| {
                 [
                     "cloud_enabled",
@@ -183,14 +189,14 @@ impl SettingsState {
                 .any(|key| object.contains_key(*key))
             });
             (
-                serde_json::from_value(value).unwrap_or_default(),
+                serde_json::from_value(value)?,
                 had_legacy,
             )
         } else {
             (AppSettings::default(), false)
         };
         if had_legacy_cloud_fields {
-            std::fs::write(&path, serde_json::to_string_pretty(&settings)?)?;
+            super::file_workspace::write_json(&path, &settings)?;
         }
         Ok(Self {
             settings: RwLock::new(settings),
@@ -207,6 +213,10 @@ impl SettingsState {
     pub fn update(&self, mut new_settings: AppSettings) -> AppResult<()> {
         self.update_with(|settings| {
             new_settings.canvas_frequent_assets = settings.canvas_frequent_assets.clone();
+            new_settings.screenshot_shortcuts = settings.screenshot_shortcuts.clone();
+            new_settings.library_root = settings.library_root.clone();
+            new_settings.library_id = settings.library_id.clone();
+            new_settings.pending_library_move = settings.pending_library_move.clone();
             *settings = new_settings;
         })
     }
@@ -216,16 +226,7 @@ impl SettingsState {
         let mut current = self.settings.write().unwrap();
         let mut next = current.clone();
         change(&mut next);
-        let json = serde_json::to_string_pretty(&next)?;
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let temp = self.path.with_extension("json.tmp");
-        std::fs::write(&temp, json)?;
-        if let Err(error) = std::fs::rename(&temp, &self.path) {
-            let _ = std::fs::remove_file(temp);
-            return Err(error.into());
-        }
+        super::file_workspace::write_json(&self.path, &next)?;
         *current = next;
         Ok(())
     }

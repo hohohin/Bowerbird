@@ -295,11 +295,11 @@ function BrandVisualSession({ folder }: { folder: { id: string; name: string; pr
       } finally { adopting.current = false; if (!alive.current) releaseImage(); }
     });
   }
-  const accessHint = !cloudAuth?.logged_in ? "登录后即可提炼视觉规范。" : !cloudAuth.cloud_available ? "暂时无法连接，请稍后重试。" : !policy.can_use_visual_profiles ? "当前账号暂未开放品牌风格总结。" : !scope ? "" : scope.inFolder > 500 ? "一次最多总结 500 张图片，请将品牌作品分组后再试。" : scope.inFolder < scope.minRequired ? "这个集合还没有可提炼的图片，请先回到集合添加素材。" : "";
+  const accessHint = !cloudAuth?.logged_in ? "登录后即可提炼视觉规范。" : !cloudAuth.cloud_available ? "暂时无法连接，请稍后重试。" : !policy.can_use_visual_profiles ? "当前账号暂未开放品牌风格总结。" : !scope ? "" : scope.inFolder > 500 ? "一次最多总结 500 张图片，请将品牌作品分组后再试。" : scope.inFolder < scope.minRequired ? "这个文件夹还没有可提炼的图片，请先回到文件夹添加素材。" : "";
   const feeHint = scope?.missing.length ? `总结 2 积分 · 图片分析使用账号额度` : "总结 2 积分";
 
   return <ModalShell title={detail ? "视觉规范" : "提炼视觉规范"} width="lg" className={`visual-profile-dialog ${!detail ? "is-preparing" : ""}`}
-    description={detail ? "保存后，可在创作对话框中选择使用。" : "从这个集合的素材中提炼共同的视觉风格。"}
+    description={detail ? "保存后，可在创作对话框中选择使用。" : "从这个文件夹的素材中提炼共同的视觉风格。"}
     onClose={() => deleting ? setDeleting(null) : navigate(close)} preventClose={!!operationBusy}
     footer={deleting ? <>
       <span className="bv-footer-hint">仅删除所选规范版本</span>
@@ -334,10 +334,10 @@ function BrandVisualSession({ folder }: { folder: { id: string; name: string; pr
     {busy && <div className="bv-working" role="status"><span className="app-spinner" /><div><strong>{busy}</strong><span>{taskRunning ? "可关闭面板，在任务中心查看进度；完成后会提醒你。" : "交给 Bowerbird，稍等片刻。"}</span></div></div>}
     <fieldset className="bv-fields" disabled={!!busy || !!leave || !!deleting}>
     {!detail ? <section className="bv-source">
-      <div className="bv-collection-source"><div className="bv-brand-icon"><Palette size={23} /></div><div><h3>{folder.name}</h3><p>{scope ? scope.inFolder + " 张素材" : "正在读取集合…"}</p></div></div>
-      {images.length > 0 && <div className="bv-image-grid bv-source-preview" aria-label="集合素材">{images.map((asset) => <figure key={asset.id} title={asset.name}>{asset.thumb_path || asset.store_path ? <img loading="lazy" src={convertFileSrc(asset.thumb_path || asset.store_path!)} alt={asset.name} /> : <Palette size={24} />}</figure>)}</div>}
+      <div className="bv-collection-source"><div className="bv-brand-icon"><Palette size={23} /></div><div><h3>{folder.name}</h3><p>{scope ? scope.inFolder + " 张素材" : "正在读取文件夹…"}</p></div></div>
+      {images.length > 0 && <div className="bv-image-grid bv-source-preview" aria-label="文件夹素材">{images.map((asset) => <figure key={asset.id} title={asset.name}>{asset.thumb_path || asset.store_path ? <img loading="lazy" src={convertFileSrc(asset.thumb_path || asset.store_path!)} alt={asset.name} /> : <Palette size={24} />}</figure>)}</div>}
       {accessHint && <p className="bv-hint">{accessHint}</p>}
-      {scope && scope.missing.length > 0 && cloudAvailable && <p className="bv-disclosure">开始后将使用 Cloud 分析集合素材并提炼规范。</p>}
+      {scope && scope.missing.length > 0 && cloudAvailable && <p className="bv-disclosure">开始后将使用 Cloud 分析文件夹素材并提炼规范。</p>}
     </section> : <div className="bv-result">
       <section className="bv-brand-heading"><div className="bv-brand-icon"><Palette size={23} /></div><div><span>视觉规范 · v{detail.version}</span><h3>{detail.name}</h3></div>{draft && <button className="bv-text-button" onClick={() => setEditing(!editing)}><Pencil size={13} />{editing ? "预览" : "微调描述"}</button>}</section>
       {detail.extractor !== "shared_file" && <section className="bv-saved-sources" aria-label="提炼时的素材">

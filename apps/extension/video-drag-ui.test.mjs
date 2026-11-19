@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { dropData } from "./trusted-drag-fixture.mjs";
 import { readFile } from "node:fs/promises";
 import { chromium } from "../html-renderer/node_modules/playwright/index.mjs";
 
@@ -17,16 +18,20 @@ try {
     document.addEventListener("dragstart",()=>window.fixture.dragStarts++);
     document.getElementById("video").addEventListener("click",e=>window.fixture.clicks.push(e.defaultPrevented));
     window.chrome={runtime:{getURL:()=>"",sendMessage:(message,callback)=>{
-      window.fixture.messages.push(message);
+      if (message.type === "button_position_get") { callback({position:null}); return; }
+      if (message.type === "button_position_set") { callback({ok:true}); return; }
+      if (message.type === "collect_access" || message.type === "collect_heartbeat") {
+          callback({ok:true,protocols:["bowerbird-v1","fixture"]}); return;
+        }
+        window.fixture.messages.push(message);
       if(window.fixture.pending)window.fixture.reply=callback;
       else callback({ok:true,media_kind:message.type==="save_video"?"video":undefined});
     }}};
     window.WebSocket=class {constructor(){queueMicrotask(()=>this.onopen?.());}send(){queueMicrotask(()=>this.onmessage?.({data:'{"ok":true,"pong":true}'}));}close(){this.onclose?.();}};
   });
   for(const content of scripts)await page.addScriptTag({content});
-  const target=page.getByRole("button",{name:"采集网页图片",exact:true});
+  const target=page.getByRole("button",{name:"Bowerbird 采集菜单",exact:true});
   const video=page.locator("#video");
-  const videoTarget=page.getByRole("button",{name:"采集网页视频",exact:true});
   const rect=await video.boundingBox();const drop=await target.boundingBox();
   assert.equal(await video.getAttribute("draggable"),null);
   await page.mouse.move(rect.x+100,rect.y+40);await page.mouse.down();
@@ -51,32 +56,23 @@ try {
   assert.equal(await video.getAttribute("draggable"),"false",'a cancelled gesture restores an explicit draggable=false');
   await page.mouse.up();
   await video.evaluate(el=>el.removeAttribute("draggable"));
+  await page.evaluate(async()=>{if(document.fullscreenElement)await document.exitFullscreen();});
 
-  await videoTarget.evaluate(el=>{
-    window.fixture.pending=true;
-    const dataTransfer=new DataTransfer();dataTransfer.setData("text/uri-list","https://fixture.test/link.mp4");
-    window.fixture.transfer=dataTransfer;
-    el.dispatchEvent(new DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer}));
-  });
+  await page.evaluate(()=>{window.fixture.pending=true;});
+  await dropData(page,target,{"text/uri-list":"https://fixture.test/link.mp4"});
   await page.waitForFunction(()=>typeof window.fixture.reply==="function");
-  assert.equal(await page.evaluate(()=>window.fixture.messages.length),2,'video button also collects a dropped link directly');
-  await target.evaluate(el=>{
-    const dataTransfer=new DataTransfer();dataTransfer.setData("text/html",'<img src="https://fixture.test/image.svg">');
-    el.dispatchEvent(new DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer}));
-  });
+  assert.equal(await page.evaluate(()=>window.fixture.messages.length),2,'the main entry also collects a dropped video link directly');
+  await dropData(page,target,{"text/html":'<img src="https://fixture.test/image.svg">'});
   assert.equal(await page.evaluate(()=>window.fixture.messages.length),2,'busy guard blocks image or video re-entry');
   await page.evaluate(()=>{window.fixture.pending=false;window.fixture.reply({ok:true,media_kind:"video"});});
-  await page.waitForFunction(()=>!document.querySelector('[aria-label="采集网页视频"]').disabled);
-  await target.evaluate(el=>el.dispatchEvent(new DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer:window.fixture.transfer})));
-  assert.equal(await page.evaluate(()=>window.fixture.messages.length),2,'the same drag is not submitted twice after its immediate receipt');
-
-  await target.evaluate(el=>{
-    const dataTransfer=new DataTransfer();
-    dataTransfer.setData("text/html",'<a href="https://fixture.test/outer.mp4"><img src="https://fixture.test/image.svg"></a><video><source src="https://fixture.test/unrelated.mp4"></video>');
-    dataTransfer.setData("text/uri-list","https://fixture.test/outer.mp4");
-    el.dispatchEvent(new DragEvent("drop",{bubbles:true,cancelable:true,dataTransfer}));
+  await page.waitForFunction(()=>!document.querySelector('[aria-label="Bowerbird 采集菜单"]').disabled);
+  await target.dispatchEvent("drop",{});
+  assert.equal(await page.evaluate(()=>window.fixture.messages.length),2,'a scripted drop cannot submit a second capture');
+  await dropData(page,target,{
+    "text/html":'<a href="https://fixture.test/outer.mp4"><img src="https://fixture.test/image.svg"></a><video><source src="https://fixture.test/unrelated.mp4"></video>',
+    "text/uri-list":"https://fixture.test/outer.mp4"
   });
-  await page.waitForFunction(()=>!document.querySelector('[aria-label="采集网页图片"]').disabled);
+  await page.waitForFunction(()=>!document.querySelector('[aria-label="Bowerbird 采集菜单"]').disabled);
   assert.equal(await page.evaluate(()=>window.fixture.messages.length),3,'unrelated video sources must never join the image batch');
   assert.deepEqual(await page.evaluate(()=>[window.fixture.messages[2].type,window.fixture.messages[2].url]),["save_image","https://fixture.test/image.svg"],'dragged HTML images win over unrelated videos and outer video links');
   assert.deepEqual(errors,[]);

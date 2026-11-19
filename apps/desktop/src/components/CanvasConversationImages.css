@@ -6,6 +6,8 @@
 .canvas-conversation-images .next { right: 0; }
 .canvas-prompt-node:hover .canvas-conversation-images button, .canvas-prompt-node:focus-within .canvas-conversation-images button { opacity: 1; }
 .canvas-conversation-images button:disabled { visibility: hidden; }
+.canvas-text-cell > .canvas-conversation-images { margin: 0; width: 100%; height: 100%; min-height: 64px; }
+.canvas-text-cell:hover > .canvas-conversation-images button, .canvas-text-cell:focus-within > .canvas-conversation-images button { opacity: 1; }
 .canvas-prompt-node.has-conversation-images .canvas-prompt-content { max-height: 56px; }
 
 .canvas-prompt-node.is-image-only,
@@ -22,6 +24,26 @@
 .canvas-prompt-node.is-image-only:focus-within .canvas-conversation-count { opacity: 1; }
 .canvas-prompt-node.is-image-only.is-selected,
 .canvas-prompt-node.is-image-only:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 3px; }
+.canvas-conversation-failure {
+  position: absolute;
+  display: inline-flex;
+  align-items: stretch;
+  bottom: 8px;
+  right: 8px;
+  border: 1px solid var(--bb-danger);
+  background: var(--cs-card);
+  color: var(--cs-ink);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.3;
+}
+.canvas-conversation-failure > button { padding: 4px 7px; cursor: pointer; }
+.canvas-conversation-failure.is-acknowledged { border-color: var(--cs-muted); opacity: 0; pointer-events: none; }
+.canvas-prompt-node:hover .canvas-conversation-failure.is-acknowledged,
+.canvas-prompt-node:focus-within .canvas-conversation-failure.is-acknowledged { opacity: 1; pointer-events: auto; }
+.canvas-failure-dismiss { display: inline-grid; place-items: center; min-width: 24px; min-height: 24px; cursor: pointer; }
+.canvas-cell-generation + .canvas-failure-dismiss { position: absolute; right: 4px; bottom: 4px; }
+.canvas-conversation-failure button:focus-visible, .canvas-failure-dismiss:focus-visible { outline: 2px solid var(--bb-blue); outline-offset: 1px; }
 .workflow-material-hotspot.is-image-session .workflow-session-output { opacity: 0; }
 .workflow-material-hotspot.is-image-session.is-hovered .workflow-session-output,
 .workflow-material-hotspot.is-image-session:hover .workflow-session-output,

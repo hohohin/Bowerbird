@@ -1,4 +1,4 @@
-//! Registered UTF-8 originals; derived UI state never becomes a second writable file.
+//! Registered document originals; derived UI state never becomes a second writable file.
 use crate::{
     core::paths::LibraryPaths,
     db::Database,
@@ -18,10 +18,12 @@ const MAX_BYTES: usize = 2 * 1024 * 1024;
 #[path = "text_document_create.rs"]
 mod creation;
 pub use creation::{create, CreateTextDocument, CreatedTextDocument};
+#[path = "office_documents.rs"]
+pub mod office;
 static WRITERS: LazyLock<Mutex<HashMap<PathBuf, Weak<Mutex<()>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 pub fn is_text(ext: &str) -> bool {
-    matches!(ext.to_ascii_lowercase().as_str(), "md" | "markdown" | "txt")
+    matches!(ext.to_ascii_lowercase().as_str(), "md" | "markdown" | "txt" | "docx" | "xlsx" | "csv")
 }
 pub fn text_path(path: &Path) -> bool {
     is_text(
@@ -50,7 +52,7 @@ fn source(db: &Database, id: &str) -> AppResult<PathBuf> {
             .ok_or_else(|| invalid("原文本文件未连接"))?,
     );
     if !text_path(&path) {
-        return Err(invalid("请选择 Markdown 或纯文本文件"));
+        return Err(invalid("请选择支持的文档或表格文件"));
     }
     let metadata =
         fs::symlink_metadata(&path).map_err(|_| invalid("原文本文件无法读取，请检查连接及权限"))?;
@@ -60,12 +62,13 @@ fn source(db: &Database, id: &str) -> AppResult<PathBuf> {
     Ok(path)
 }
 fn bytes(path: &Path) -> AppResult<Vec<u8>> {
+    let limit = if office::is_office(path) { office::MAX_BYTES } else { MAX_BYTES };
     let mut result = Vec::new();
     fs::File::open(path)?
-        .take(MAX_BYTES as u64 + 1)
+        .take(limit as u64 + 1)
         .read_to_end(&mut result)?;
-    if result.len() > MAX_BYTES {
-        return Err(invalid("此文件超过 2 MB，请使用外部编辑器打开"));
+    if result.len() > limit {
+        return Err(invalid("文件过大，请使用外部编辑器打开；文本上限 2 MB，办公文档上限 20 MB"));
     }
     Ok(result)
 }
@@ -86,6 +89,7 @@ fn snapshot(id: &str, path: &Path, bytes: &[u8]) -> AppResult<TextDocument> {
         path: path.to_string_lossy().into_owned(),
         text: decode(bytes)?.into(),
         version: hash(bytes),
+        docx_data: None,
         format: if path
             .extension()
             .is_some_and(|ext| ext.eq_ignore_ascii_case("txt"))
@@ -116,15 +120,21 @@ pub struct TextDocument {
     pub text: String,
     pub version: String,
     pub format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub docx_data: Option<String>,
 }
 
 pub fn read(db: &Database, id: &str) -> AppResult<TextDocument> {
+    read_with_options(db, id, false)
+}
+pub fn read_with_options(db: &Database, id: &str, preview_only: bool) -> AppResult<TextDocument> {
     let path = source(db, id)?;
     let contents = bytes(&path)?;
     if bytes(&path)? != contents || source(db, id)? != path {
         return Err(changed());
     }
-    snapshot(id, &path, &contents)
+    if office::is_office(&path) { office::snapshot(id, &path, &contents, preview_only) }
+    else { snapshot(id, &path, &contents) }
 }
 pub fn save(
     paths: &LibraryPaths,
@@ -137,6 +147,7 @@ pub fn save(
         return Err(invalid("此文档超过 2 MB，请缩减内容后保存"));
     }
     let path = source(db, id)?;
+    if office::is_office(&path) { return Err(invalid("办公文档不能按纯文本覆盖，请使用对应的文档保存入口")); }
     let writer = source_lock(&path);
     let _guard = writer.lock().unwrap();
     let original = bytes(&path)?;
@@ -170,31 +181,38 @@ pub fn save(
     if output == original {
         return snapshot(id, &path, &original);
     }
+    replace_original(paths, db, id, &path, &original, &output)?;
+    snapshot(id, &path, &output)
+}
+
+fn replace_original(paths: &LibraryPaths, db: &Database, id: &str, path: &Path, original: &[u8], output: &[u8]) -> AppResult<()> {
+    let metadata = fs::metadata(path)?;
+    if metadata.permissions().readonly() { return Err(invalid("原文件为只读，请在系统中修改权限后重试")); }
     let parent = path
         .parent()
         .ok_or_else(|| invalid("无法确定原文本所在目录"))?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
-    temporary.write_all(&output)?;
+    temporary.write_all(output)?;
     temporary
         .as_file()
         .set_permissions(metadata.permissions())?;
     temporary.as_file().sync_all()?;
     // Recheck after preparing the replacement, immediately before atomic commit.
-    if source(db, id)? != path || bytes(&path)? != original {
+    if source(db, id)? != path || bytes(path)? != original {
         return Err(changed());
     }
-    temporary.persist(&path).map_err(|error| {
+    temporary.persist(path).map_err(|error| {
         invalid(&format!(
             "文件未保存，请检查文件占用及目录权限：{}",
             error.error
         ))
     })?;
-    if db.index_connected_file(paths, &path, None).is_err() {
+    if db.index_connected_file(paths, path, None).is_err() {
         return Err(invalid(
             "原文件已保存，但素材库索引尚未更新，请刷新素材库后重新打开",
         ));
     }
-    snapshot(id, &path, &output)
+    Ok(())
 }
 
 #[cfg(test)]

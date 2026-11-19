@@ -31,12 +31,25 @@ try {
   await mkdir('.tmp/context-menu', { recursive: true });
   await page.goto('http://127.0.0.1:1796/scripts/fixtures/asset-multi-menu/preview.html', { waitUntil: 'domcontentloaded' });
   await page.locator('#trigger').click();
-  assert.equal(await root().getByRole('menuitem', { name: '删除原文件', exact: true }).count(), 0);
+  await page.evaluate(() => window.fixtureStore.setState({ promptedAssets: [{ id: 'a1', sections: [{ title: '构图', body: '中心构图' }] }], boardOpen: true }));
+  await root().getByRole('menuitem', { name: '维度', exact: true }).click();
+  const ring = page.getByRole('group', { name: '可选维度环' });
+  await ring.waitFor();
+  await page.mouse.move(1200, 780);
+  await page.waitForTimeout(250);
+  await ring.locator('.caption-ring-sector-label').click({ force: true });
+  assert.equal(await page.evaluate(() => window.fixtureStore.getState().pendingKeyword?.title), '构图');
+  await page.evaluate(() => window.fixtureStore.setState({ boardOpen: false }));
+  assert.equal(await page.evaluate(async () => (await import('/src/store.ts')).useStore.getState().captionRing), 'a1');
+  await page.evaluate(async () => (await import('/src/store.ts')).useStore.getState().closeCaptionRing());
+  await page.locator('#trigger').click();
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  assert.equal(await root().getByRole('menuitem', { name: '删除原文件…', exact: true }).count(), 0);
   // ArrowRight never changes column. Down traverses DOM order, left column then right.
   await root().getByRole('menuitem', { name: '打开图片详情', exact: true }).focus();
   await page.keyboard.press('ArrowRight'); assert.equal(await focused(), '打开图片详情');
   const leftLast = root().locator('.asset-context-column').first().getByRole('menuitem').last();
-  await leftLast.focus(); await page.keyboard.press('ArrowDown'); assert.equal(await focused(), '添加到集合');
+  await leftLast.focus(); await page.keyboard.press('ArrowDown'); assert.equal(await focused(), '添加到文件夹');
   await page.keyboard.press('ArrowUp'); assert.equal(await focused(), (await leftLast.textContent()).trim());
   await root().getByRole('menuitem', { name: '反推提示词', exact: true }).focus();
   await page.keyboard.press('ArrowRight');
@@ -55,20 +68,22 @@ try {
   for (const kind of ['multi', 'canvas']) {
     await open(kind);
     const menu = page.getByRole('menu', { name: '已选 2 项素材的操作', exact: true });
-    for (const name of ['重命名', '打开图片详情', '反推提示词', '图片标注', '用选中的内容新建集合', '移入已有集合']) assert.equal(await menu.getByRole('menuitem', { name, exact: true }).count(), 0);
+    for (const name of ['重命名', '打开图片详情', '反推提示词', '图片标注', '用选中的内容新建文件夹', '移入已有文件夹']) assert.equal(await menu.getByRole('menuitem', { name, exact: true }).count(), 0);
     await menu.getByRole('menuitem', { name: '批量反推', exact: true }).click();
     await page.getByRole('menuitem', { name: 'Bowerbird Cloud', exact: true }).click();
     assert.deepEqual(await page.evaluate(() => window.describe.splice(0).map(v => v.id)), ['a1', 'a2']);
-    await open(kind); await menu.getByRole('menuitem', { name: '删除', exact: true }).click();
-    await deletion().getByRole('menuitem', { name: '删除原文件', exact: true }).click();
+    const deleteMenu = kind === 'canvas' ? '删除当前项' : '删除';
+    await open(kind); await menu.getByRole('menuitem', { name: deleteMenu, exact: true }).click();
+    await page.getByRole('menu', {name:deleteMenu, exact:true}).getByRole('menuitem', { name: '删除原文件…', exact: true }).click();
     await page.getByRole('dialog').waitFor();
-    assert.deepEqual(await page.locator('[data-delete-asset-id]').evaluateAll(els => els.map(el => el.dataset.deleteAssetId)), ['a1', 'a2']);
+    assert.deepEqual(await page.locator('[data-delete-asset-id]').evaluateAll(els => els.map(el => el.dataset.deleteAssetId)), kind === 'canvas' ? ['a1'] : ['a1','a2']);
     await page.getByRole('button', { name: '取消', exact: true }).click();
   }
   await page.evaluate(() => {
     window.fixtureStore.setState({ mode: 'manage', selectedIds: new Set(['a1', 'a2']) });
     window.fixtureStore.getState().openContextMenu(100, 100, 'a1', {
-      canvasSelection: { projectId: 'p1', nodeIds: ['n1'], assetIds: ['a1'] },
+      canvasSelection: { projectId: 'p1', nodeIds: ['n1'], assetIds: ['a1'],
+        deletionTargets: { item: {assetIds:['a1'],removeFromCanvas: () => {}} } },
     });
   });
   await root().waitFor();
@@ -82,8 +97,8 @@ try {
     { projectId: 'p1', nodeIds: ['n1'], direction: 1 },
     { projectId: 'p1', nodeIds: ['n1'], direction: -1 },
   ]);
-  await root().getByRole('menuitem', { name: '删除', exact: true }).click();
-  await deletion().getByRole('menuitem', { name: '删除原文件', exact: true }).click();
+  await root().getByRole('menuitem', { name: '删除当前项', exact: true }).click();
+  await page.getByRole('menu', {name:'删除当前项', exact:true}).getByRole('menuitem', { name: '删除原文件…', exact: true }).click();
   await page.getByRole('dialog').waitFor();
   assert.deepEqual(await page.locator('[data-delete-asset-id]').evaluateAll(els => els.map(el => el.dataset.deleteAssetId)), ['a1'], 'single canvas target ignores library multiselect');
   await page.getByRole('button', { name: '取消', exact: true }).click();
@@ -120,6 +135,7 @@ try {
   await page.keyboard.press('End'); assert.equal(await focused(), '删除项目 · 素材保留'); await page.keyboard.press('Escape');
   await page.locator('#disconnect').click(); await page.waitForFunction(() => document.activeElement?.textContent?.includes('图片输入')); await page.keyboard.press('Escape');
   await page.locator('.session-test').focus(); await page.keyboard.press('Shift+F10'); await page.getByRole('menu', { name: '生成会话操作' }).waitFor();
+  await page.waitForFunction(() => document.activeElement?.closest('[role="menu"][aria-label="生成会话操作"]'));
   await page.keyboard.press('End'); assert.equal(await focused(), '复制本次会话诊断信息'); await page.keyboard.press('Escape');
   await page.locator('[data-tag-id="tag1"]').click({button:'right'}); await page.getByRole('menu', {name:'标签操作'}).waitFor(); await page.keyboard.press('Escape');
   assert.equal(await page.locator('[data-tag-id="tag1"]').evaluate(el => el === document.activeElement), true);

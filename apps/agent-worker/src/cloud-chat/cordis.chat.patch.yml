@@ -1,0 +1,31 @@
+- id: u1-fixture-tool
+  disabled: true
+- id: tools
+  config:
+    mode: native
+- id: system-prompt
+  config:
+    includeRuntimeContext: false
+    persona: You are Bowerbird's conversational assistant. Answer the current user request.
+- insert:
+    - id: bowerbird-chat-cards
+      name: './plugins/chat-cards.mjs'
+- id: llm-deepseek
+  config:
+    apiKeyEnv: DEEPSEEK_API_KEY
+    thinking: disabled
+    reasoningEffort: off
+    maxTokens: 393216
+    streamIdleTimeoutMs: 300000
+    models:
+      - id: deepseek-flash
+        name: DeepSeek-V4.1-Flash
+        contextWindow: 1048576
+        maxTokens: 393216
+- id: compaction-basic
+  config:
+    auto: false
+- id: tool-result-pruner
+  disabled: true
+- id: spill-policy
+  disabled: true

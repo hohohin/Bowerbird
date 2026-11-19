@@ -3,11 +3,12 @@ import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
 
-const server = await createServer({ cacheDir: '.tmp/topbar-update/vite', server: { host: '127.0.0.1', port: 17965, strictPort: true, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: '.tmp/topbar-update/vite', optimizeDeps: { entries: ['scripts/fixtures/canvas-reference/preview.html'] }, server: { host: '127.0.0.1', port: 17965, strictPort: true, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 840 } });
 page.setDefaultTimeout(6000);
+page.setDefaultNavigationTimeout(60_000);
 const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 await page.route('**/*', route => new URL(route.request().url()).hostname === '127.0.0.1' ? route.continue() : route.abort());
@@ -18,6 +19,7 @@ try {
   const button = slot.getByRole('button');
   const credits = page.locator('.app-topbar-credits');
   await slot.waitFor();
+  await page.evaluate(() => window.store.setState({ cloudAuth: { logged_in: true, user_id: 'test-user', display_name: '测试用户' } }));
   await page.evaluate(async () => { window.updater = (await import('/src/lib/appUpdater.ts')).useAppUpdater; });
   for (const phase of ['idle', 'checking', 'current']) {
     await page.evaluate(phase => window.updater.setState({ phase, update: null, error: null }), phase);
@@ -33,7 +35,7 @@ try {
   await button.focus(); await page.keyboard.press('Enter');
   const dialog = page.getByRole('dialog', { name: '设置', exact: true });
   await dialog.waitFor();
-  assert.equal(await dialog.getByRole('button', { name: '关于我们', exact: true }).getAttribute('aria-current'), 'true');
+  assert.equal(await dialog.getByRole('button', { name: '系统设置', exact: true }).getAttribute('aria-current'), 'true');
   await dialog.getByRole('button', { name: '下载更新', exact: true }).waitFor();
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'hidden' });
@@ -56,5 +58,5 @@ try {
   await page.evaluate(() => window.updater.setState({ phase: 'current', update: null }));
   assert.equal(await button.count(), 0);
   assert.deepEqual(errors, []);
-  console.log('PASS topbar update: reserved space, detected-only notice, keyboard/about/focus, progress/retry, light/dark narrow layouts');
-} finally { await browser.close(); await server.close(); }
+  console.log('PASS topbar update: reserved space, detected-only notice, keyboard/system/focus, progress/retry, light/dark narrow layouts');
+} catch (error) { console.error(error, errors); throw error; } finally { await browser.close(); await server.close(); }

@@ -18,9 +18,11 @@ fn fixture_with_db(db: Database) -> (Database, StartedChat) {
     }
     let started = db
         .begin_local_chat(&ChatSendInput {
+            dsh_skill: None, codex_options: None,
             provider: None,
             project_id: "p".into(),
             conversation_id: None,
+            agent_node_id: None, manual_card_run: false,
             request_id: "request".into(),
             text: "请创建卡片".into(),
             reference_asset_ids: vec!["picture".into()],
@@ -31,8 +33,94 @@ fn fixture_with_db(db: Database) -> (Database, StartedChat) {
             }),
         })
         .unwrap();
+    // Existing tool tests also cover historical chats that predate Agent projections.
+    // Shared Agent + tool coexistence is exercised separately below.
+    db.conn.lock().unwrap().execute("DELETE FROM canvas_workflows WHERE project_id='p'", []).unwrap();
     (db, started)
 }
+
+#[test]
+#[ignore = "set BOWERBIRD_CARD_ARGUMENT_FIXTURE to a local tool arguments JSON file"]
+fn local_chat_cards_replay_incident_batch_in_memory() {
+    let bytes = std::fs::read(std::env::var_os("BOWERBIRD_CARD_ARGUMENT_FIXTURE").unwrap()).unwrap();
+    let args: Value = serde_json::from_slice(&bytes).unwrap();
+    let (db, started) = fixture();
+    let first = create(&db, &started, &args).unwrap();
+    let replay = create(&db, &started, &args).unwrap();
+    assert!(first.fresh && !replay.fresh);
+    assert_eq!(first.id, replay.id);
+    assert_eq!(db.get_local_chat(&started.conversation.summary.id).unwrap().unwrap().actions.len(), 1);
+}
+
+#[test]
+fn local_chat_cards_content_table_accepts_empty_placeholder_but_rejects_conflicting_text() {
+    let (db, started) = fixture();
+    let mut args = json!({"cards":[{"kind":"content","title":"表格","id":"table","rows":[["一","二"]],"text":"正文"}]});
+    assert!(create(&db, &started, &args).unwrap_err().to_string().contains("rows 表格"));
+    assert!(db.get_local_chat(&started.conversation.summary.id).unwrap().unwrap().actions.is_empty());
+    args["cards"][0]["text"] = json!("");
+    assert_eq!(create(&db, &started, &args).unwrap().cards.len(), 1);
+}
+
+#[test]
+fn local_chat_cards_keep_the_shared_agent_when_creating_and_undoing_tools() {
+    let (db, first) = fixture();
+    let id = &first.conversation.summary.id;
+    db.finish_local_chat(id, &first.turn_id, "done", None).unwrap();
+    let started = db.begin_local_chat(&ChatSendInput {
+        dsh_skill: None, codex_options: None, provider: None, project_id: "p".into(), conversation_id: Some(id.clone()), agent_node_id: None, manual_card_run: false,
+        request_id: "shared-agent".into(), text: "继续创建卡片".into(), reference_asset_ids: vec!["picture".into()], placement: None, card_defaults: None,
+    }).unwrap();
+    let original = document(&db)["nodes"][0].clone();
+    let action = create(&db, &started, &batch()).unwrap();
+    assert!(document(&db)["nodes"].as_array().unwrap().contains(&original));
+    db.undo_local_chat_cards(id, &action.id).unwrap();
+    assert_eq!(document(&db)["nodes"], json!([original]));
+}
+#[test]
+fn local_chat_cards_run_is_scoped_and_claimed_once() {
+    let (db, s) = fixture();
+    let mut args = batch();
+    for alias in ["existing-card", "copy"] {
+        args["runCard"] = json!(alias);
+        assert!(create(&db, &s, &args).is_err());
+        assert_eq!(document(&db)["nodes"], json!([]));
+    }
+    args["runCard"] = json!("start");
+    let action = create(&db, &s, &args).unwrap();
+    assert_eq!(action.run_status.as_deref(), Some("requested"));
+    assert!(db.claim_chat_card_run(&action.id, "other").unwrap().is_none());
+    let (project, target) = db.claim_chat_card_run(&action.id, "test-user").unwrap().unwrap();
+    assert_eq!(project, "p");
+    assert_eq!(target, action.cards[2].id);
+    assert!(db.claim_chat_card_run(&action.id, "test-user").unwrap().is_none());
+    db.finish_chat_card_dispatch(&action.id, "started").unwrap();
+    assert_eq!(create(&db, &s, &args).unwrap().run_status.as_deref(), Some("started"));
+}
+
+#[test]
+fn local_chat_cards_schedule_uses_native_modes_and_validates_before_creation() {
+    let (db, s) = fixture();
+    let mut args = batch();
+    args["cards"][2]["triggerMode"] = json!("daily");
+    args["cards"][2]["dailyAt"] = json!("25:00");
+    assert!(create(&db, &s, &args).is_err());
+    args["cards"][2]["dailyAt"] = json!("09:15");
+    args["runCard"] = json!("start");
+    assert!(create(&db, &s, &args).is_err());
+    args.as_object_mut().unwrap().remove("runCard");
+    let action = create(&db, &s, &args).unwrap();
+    assert!(action.run_status.is_none());
+    let doc = document(&db);
+    let node = doc["nodes"].as_array().unwrap().iter().find(|node| node["id"] == action.cards[2].id).unwrap();
+    assert_eq!(node["triggerSchedule"]["dailyAt"], "09:15");
+    assert_eq!(node["triggerSchedule"]["status"], "armed");
+    assert!(node["triggerSchedule"]["at"].as_i64().unwrap() > Utc::now().timestamp_millis());
+    let once = |at| trigger_schedule(Some("once"), None, Some(at), "id", chrono::Local::now());
+    assert!(once("2020-01-01T20:00:00+08:00").is_err());
+    assert!(once("2099-01-01T20:00:00+08:00").is_ok());
+}
+
 fn batch() -> Value {
     json!({"cards":[
     {"id":"copy","kind":"content","title":"文案","rows":[["第一行"],["第二行"]]},
@@ -41,21 +129,21 @@ fn batch() -> Value {
     {"id":"repeat","kind":"loop","title":"重复","mode":"count","count":3,"body":["draw"]}],
     "connections":[{"from":"start","to":"repeat","output":"signal","input":"signal"}]})
 }
-fn video_batch() -> Value {
+fn h3_batch() -> Value {
     json!({"cards":[
         {"id":"copy","kind":"content","title":"镜头方向","rows":[["缓慢推近"],["转向侧面"]]},
         {"id":"draw","kind":"generation","title":"首帧","prompt":"创作首帧","mediaType":"image"},
-        {"id":"still","kind":"generation","title":"视频参考","prompt":"产品缓慢旋转","mediaType":"video","referenceAliases":["image1"]},
-        {"id":"linked","kind":"generation","title":"上游视频","prompt":"镜头缓慢推近","mediaType":"video","ratio":"9:16"},
+        {"id":"still","kind":"comfy-video","title":"H3 首尾帧","prompt":"产品缓慢旋转","firstFrameAlias":"image1","lastFrameAlias":"image1"},
+        {"id":"linked","kind":"comfy-video","title":"H3 上游首帧","prompt":"镜头缓慢推近","seconds":11,"ratio":"auto","resolution":0.6,"lastFrameAlias":"image1"},
         {"id":"start","kind":"trigger","title":"开始"},
-        {"id":"repeat","kind":"loop","title":"重复视频","mode":"count","count":2,"body":["still","linked"]}],
+        {"id":"repeat","kind":"loop","title":"重复 H3","mode":"count","count":2,"body":["still","linked"]}],
         "connections":[
             {"from":"copy","to":"still","output":"text","input":"text"},
-            {"from":"draw","to":"linked","output":"image","input":"image"},
+            {"from":"draw","to":"linked","output":"image","input":"first-frame"},
             {"from":"start","to":"repeat","output":"signal","input":"signal"}]})
 }
 fn section_batch(large: bool) -> Value {
-    let mut args = video_batch();
+    let mut args = h3_batch();
     if large {
         args["cards"][0]["rows"] = json!(vec![vec!["表格内容"; 12]; 100]);
         args["cards"][1]["prompt"] = json!("产品置于柔和光线中，画面保持简洁。".repeat(160));
@@ -330,6 +418,162 @@ fn local_chat_cards_compile_four_native_kinds_without_execution() {
 }
 
 #[test]
+fn local_chat_cards_h3_drafts_use_native_defaults_and_bounded_options() {
+    let (db, s) = fixture();
+    let args =
+        json!({"cards":[{"id":"h3","kind":"comfy-video","title":"H3 草稿","prompt":"缓慢推近"}]});
+    let action = create(&db, &s, &args).unwrap();
+    assert_eq!(action.cards[0].kind, "comfy-video");
+    let doc = document(&db);
+    let h3 = &doc["nodes"][0];
+    assert_eq!(h3["provider"], "comfy-video");
+    assert_eq!(
+        h3["comfyVideo"],
+        json!({"mode":"frames","endpoint":"http://127.0.0.1:8000","seconds":8,"ratio":"9:16","resolution":0.8})
+    );
+    assert_eq!(
+        h3["inputs"],
+        json!({}),
+        "missing first frame remains an editable draft"
+    );
+    assert_eq!(h3["outputs"], json!({}));
+    assert!(h3.get("generation").is_none());
+    assert!(doc["run"].is_null());
+    assert_eq!(
+        db.conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM task_queue", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    for ratio in ["auto", "9:16", "16:9", "4:3", "3:4", "1:1"] {
+        for resolution in [0.6, 0.8, 1.0] {
+            for seconds in [1, 15] {
+                let mut args = args.clone();
+                args["cards"][0]["ratio"] = json!(ratio);
+                args["cards"][0]["resolution"] = json!(resolution);
+                args["cards"][0]["seconds"] = json!(seconds);
+                let compiled = compile(
+                    &args,
+                    &ChatCardDefaults::default(),
+                    &[],
+                    (0.0, 0.0),
+                    "options",
+                )
+                .unwrap();
+                let options = &compiled.nodes[0]["comfyVideo"];
+                assert_eq!(options["ratio"], ratio);
+                assert_eq!(options["resolution"], resolution);
+                assert_eq!(options["seconds"], seconds);
+                crate::commands::canvas_workflow::validate(
+                    &json!({"schema_version":1,"nodes":compiled.nodes,"run":null}),
+                )
+                .unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn local_chat_cards_h3_frames_text_loops_and_layout_are_native() {
+    for mode in ["count", "rows"] {
+        let (db, s) = fixture();
+        let mut args = h3_batch();
+        if mode == "rows" {
+            args["cards"][5] = json!({"id":"repeat","kind":"loop","title":"逐行 H3","mode":"rows","source":"copy","body":["still","linked"]});
+        }
+        let action = create(&db, &s, &args).unwrap();
+        let doc = document(&db);
+        let nodes = doc["nodes"].as_array().unwrap();
+        let node = |alias: &str| {
+            let id = &action.cards.iter().find(|c| c.alias == alias).unwrap().id;
+            nodes.iter().find(|n| n["id"] == *id).unwrap()
+        };
+        assert_eq!(
+            node("still")["inputs"]["first-frame"],
+            json!([{"assetId":"picture"}])
+        );
+        assert_eq!(
+            node("still")["inputs"]["last-frame"],
+            json!([{"assetId":"picture"}])
+        );
+        assert_eq!(
+            node("linked")["inputs"]["first-frame"],
+            json!([{"nodeId":node("draw")["id"],"portId":"image"}])
+        );
+        assert_eq!(
+            node("still")["inputs"]["text"][0]["portId"],
+            if mode == "rows" { "text" } else { "iteration" }
+        );
+        assert_eq!(
+            node("still")["inputs"]["text"][1]["canvasNodeId"],
+            action.cards[0].id
+        );
+        assert!(
+            node("still").get("promptReferences").is_none(),
+            "H3 consumes native text bindings directly"
+        );
+        assert_eq!(node("still")["prompt"], "产品缓慢旋转");
+        assert!(
+            node("start")["x"].as_f64().unwrap()
+                >= node("linked")["x"].as_f64().unwrap() + 320.0 + 80.0
+        );
+        assert!(
+            node("linked")["y"].as_f64().unwrap()
+                >= node("still")["y"].as_f64().unwrap() + 720.0 + 80.0
+        );
+        let next = db.create_local_chat_cards(&s.conversation.summary.id, &s.turn_id, "next", &json!({"cards":[{"id":"next","kind":"comfy-video","title":"下一张","prompt":"缓慢移动"}]})).unwrap();
+        let next_doc = document(&db);
+        let next_node = next_doc["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|n| n["id"] == next.cards[0].id)
+            .unwrap();
+        let (x, y) = (next_node["x"].as_f64().unwrap(), next_node["y"].as_f64().unwrap());
+        for old in nodes {
+            let (ox, oy) = (old["x"].as_f64().unwrap(), old["y"].as_f64().unwrap());
+            let (width, height) = if old["kind"] == "comfy-video" { (320.0, 720.0) }
+                else if old["kind"] == "trigger" { (196.0, 92.0) } else { (320.0, 330.0) };
+            assert!(x + 320.0 <= ox || x >= ox + width || y + 720.0 <= oy || y >= oy + height);
+        }
+        crate::commands::canvas_workflow::validate(&doc).unwrap();
+    }
+}
+
+#[test]
+fn local_chat_cards_h3_survives_reopen_replay_and_undo_beside_active_runs() {
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("library.sqlite");
+    let (db, s) = fixture_with_db(Database::open(&path).unwrap());
+    let before = parallel_document();
+    save_workflow(&db.conn.lock().unwrap(), "p", 0, &before).unwrap();
+    let args = h3_batch();
+    let action = create(&db, &s, &args).unwrap();
+    let saved = document(&db);
+    assert_eq!(saved["runs"], before["runs"]);
+    assert_eq!(saved["run"], before["run"]);
+    drop(db);
+    let db = Database::open(&path).unwrap();
+    assert_eq!(document(&db), saved);
+    let restored = db
+        .get_local_chat(&s.conversation.summary.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(restored.actions[0].cards[2].kind, "comfy-video");
+    db.finish_local_chat(&s.conversation.summary.id, &s.turn_id, "done", None)
+        .unwrap();
+    assert_eq!(create(&db, &s, &args).unwrap().id, action.id);
+    db.undo_local_chat_cards(&s.conversation.summary.id, &action.id)
+        .unwrap();
+    assert_eq!(document(&db), before);
+    assert_eq!(create(&db, &s, &args).unwrap().status, "undone");
+    drop(db);
+}
+
+#[test]
 fn local_chat_cards_sections_compile_native_members_names_and_grid_without_execution() {
     for large in [false, true] {
         let args = section_batch(large);
@@ -385,7 +629,7 @@ fn local_chat_cards_sections_compile_native_members_names_and_grid_without_execu
                     member["width"]
                         .as_f64()
                         .unwrap_or(if member["kind"] == "comfy-video" {
-                            416.0
+                            320.0
                         } else {
                             340.0
                         });
@@ -580,9 +824,8 @@ fn local_chat_cards_sections_limit_is_independent_and_grid_avoids_existing_secti
                 .unwrap()
         })
         .collect();
-    assert!(bounds
-        .iter()
-        .all(|note| note["x"].as_f64().unwrap() >= 19080.0));
+    assert!(bounds.iter().all(|note| note["x"].as_f64().unwrap().abs()
+        + note["width"].as_f64().unwrap() < 10000.0));
     assert_eq!(
         bounds[0]["x"], bounds[2]["x"],
         "sections wrap after two columns"
@@ -749,6 +992,288 @@ fn local_chat_cards_sections_undo_rejects_changed_frames_members_and_external_de
 }
 
 #[test]
+fn local_chat_cards_h3_undo_allows_environment_sync_but_preserves_edit_and_run_guards() {
+    for field in [
+        "endpoint",
+        "seconds",
+        "ratio",
+        "resolution",
+        "inputs",
+        "outputs",
+        "position",
+        "run",
+    ] {
+        let (db, s) = fixture();
+        let action = create(&db, &s, &h3_batch()).unwrap();
+        let id = &action.cards[2].id;
+        let mut doc = document(&db);
+        let node = doc["nodes"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|n| n["id"] == *id)
+            .unwrap();
+        node["comfyVideo"]["endpoint"] = json!("http://127.0.0.1:18189");
+        match field {
+            "endpoint" => {}
+            "seconds" => node["comfyVideo"]["seconds"] = json!(12),
+            "ratio" => node["comfyVideo"]["ratio"] = json!("1:1"),
+            "resolution" => node["comfyVideo"]["resolution"] = json!(1),
+            "inputs" => node["inputs"]["last-frame"] = json!([]),
+            "outputs" => node["outputs"] = json!({"image":{"type":"image","assetIds":["picture"]}}),
+            "position" => node["x"] = json!(node["x"].as_f64().unwrap() + 1.0),
+            "run" => {
+                doc["run"] = json!({"id":"h3-run","threadId":"thread","startId":id,"status":"done","order":[id],"steps":{id:{"status":"done"}}})
+            }
+            _ => unreachable!(),
+        }
+        crate::commands::canvas_workflow::validate(&doc).unwrap();
+        replace_document(&db, &doc);
+        let undone = db.undo_local_chat_cards(&s.conversation.summary.id, &action.id);
+        if field == "endpoint" {
+            undone.unwrap();
+            assert!(document(&db)["nodes"].as_array().unwrap().is_empty());
+            assert!(db.get_canvas_node(&action.cards[0].id).unwrap().is_none());
+        } else {
+            assert!(undone.is_err(), "{field}");
+            assert_eq!(document(&db), doc);
+        }
+    }
+}
+
+#[test]
+fn local_chat_cards_h3_rejects_invalid_options_and_frame_sources_atomically() {
+    let invalid_fields = [
+        ("seconds", json!(0)),
+        ("seconds", json!(16)),
+        ("seconds", json!(1.5)),
+        ("seconds", json!("8")),
+        ("resolution", json!(0.7)),
+        ("resolution", json!("0.8")),
+        ("ratio", json!("21:9")),
+        ("ratio", json!("2:3")),
+        ("prompt", json!(" ")),
+        ("prompt", json!("@[injected]")),
+        ("prompt", json!("x".repeat(8001))),
+        ("endpoint", json!("http://example.invalid")),
+        ("firstFrameAlias", json!("picture")),
+        ("lastFrameAlias", json!("image2")),
+        ("firstFrameAlias", json!("image01")),
+        ("firstFrameAlias", json!("image9")),
+    ];
+    for (field, value) in invalid_fields {
+        let (db, s) = fixture();
+        let mut args = h3_batch();
+        args["cards"][2][field] = value;
+        assert!(
+            create(&db, &s, &args).is_err(),
+            "{field}: {}",
+            args["cards"][2][field]
+        );
+        assert!(document(&db)["nodes"].as_array().unwrap().is_empty());
+        assert!(db
+            .get_local_chat(&s.conversation.summary.id)
+            .unwrap()
+            .unwrap()
+            .actions
+            .is_empty());
+        assert_eq!(
+            db.conn
+                .lock()
+                .unwrap()
+                .query_row("SELECT COUNT(*) FROM canvas_nodes", [], |r| r
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+    // The H3 card kind owns its provider; cross-kind hints are discarded.
+    for provider in ["jimeng", "invalid-provider"] {
+        let (db, session) = fixture();
+        let mut args = h3_batch();
+        args["cards"][2]["provider"] = json!(provider);
+        let action = create(&db, &session, &args).unwrap();
+        let doc = document(&db);
+        let card_id = &action.cards[2].id;
+        let card = doc["nodes"].as_array().unwrap().iter().find(|node| node["id"] == *card_id).unwrap();
+        assert_eq!(card["provider"], "comfy-video");
+    }
+    for ext in ["gif", "mp4", "svg"] {
+        let (db, s) = fixture();
+        db.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE assets SET ext=?1 WHERE id='picture'", [ext])
+            .unwrap();
+        assert!(create(&db, &s, &h3_batch()).is_err(), "{ext}");
+        assert!(document(&db)["nodes"].as_array().unwrap().is_empty());
+        assert!(db
+            .get_local_chat(&s.conversation.summary.id)
+            .unwrap()
+            .unwrap()
+            .actions
+            .is_empty());
+    }
+    let (db, s) = fixture();
+    db.conn.lock().unwrap().execute_batch("CREATE TRIGGER reject_h3_action BEFORE INSERT ON local_chat_card_actions BEGIN SELECT RAISE(ABORT,'injected action failure'); END;").unwrap();
+    assert!(create(&db, &s, &h3_batch()).is_err());
+    assert!(document(&db)["nodes"].as_array().unwrap().is_empty());
+    assert_eq!(
+        db.conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM canvas_nodes", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn local_chat_cards_h3_accepts_video_outputs_and_rejects_frame_conflicts() {
+    let (db, s) = fixture();
+    let mut args = h3_batch();
+    args["cards"].as_array_mut().unwrap().push(json!({"id":"video","kind":"generation","title":"视频续写","prompt":"继续视频","mediaType":"video"}));
+    args["connections"].as_array_mut().unwrap().extend([
+        json!({"from":"still","to":"video","output":"image","input":"image"}),
+        json!({"from":"still","to":"start","output":"image","input":"completion"}),
+        json!({"from":"start","to":"still","output":"signal","input":"signal"}),
+    ]);
+    let action = create(&db, &s, &args).unwrap();
+    let doc = document(&db);
+    let video = doc["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["id"] == action.cards[6].id)
+        .unwrap();
+    assert_eq!(
+        video["generation"]["videoOptions"]["kind"],
+        "multimodal2video"
+    );
+    for case in [
+        "alias-connection",
+        "two-connections",
+        "h3-frame",
+        "video-frame",
+        "h3-image",
+        "content-frame",
+        "image-port",
+    ] {
+        let (db, s) = fixture();
+        let mut args = h3_batch();
+        let wire = match case {
+            "alias-connection" => {
+                json!({"from":"draw","to":"still","output":"image","input":"first-frame"})
+            }
+            "two-connections" => {
+                args["cards"].as_array_mut().unwrap().push(json!({"id":"other","kind":"generation","title":"另一个首帧","prompt":"首帧","mediaType":"image"}));
+                json!({"from":"other","to":"linked","output":"image","input":"first-frame"})
+            }
+            "h3-frame" => {
+                json!({"from":"still","to":"linked","output":"image","input":"last-frame"})
+            }
+            "video-frame" => {
+                args["cards"][1]["mediaType"] = json!("video");
+                json!({"from":"draw","to":"still","output":"image","input":"first-frame"})
+            }
+            "h3-image" => json!({"from":"still","to":"draw","output":"image","input":"image"}),
+            "content-frame" => {
+                json!({"from":"copy","to":"still","output":"text","input":"first-frame"})
+            }
+            "image-port" => json!({"from":"draw","to":"still","output":"image","input":"image"}),
+            _ => unreachable!(),
+        };
+        args["connections"].as_array_mut().unwrap().push(wire);
+        assert!(create(&db, &s, &args).is_err(), "{case}");
+        assert!(document(&db)["nodes"].as_array().unwrap().is_empty());
+        assert!(db
+            .get_local_chat(&s.conversation.summary.id)
+            .unwrap()
+            .unwrap()
+            .actions
+            .is_empty());
+    }
+}
+
+#[test]
+fn local_chat_cards_place_by_moved_agent_and_leave_room_for_outputs() {
+    for grouped in [false, true] {
+        let (db, first) = fixture();
+        let conversation = &first.conversation.summary.id;
+        db.finish_local_chat(conversation, &first.turn_id, "done", None).unwrap();
+        let started = db.begin_local_chat(&ChatSendInput {
+            dsh_skill: None, codex_options: None, provider: None, project_id: "p".into(),
+            conversation_id: Some(conversation.clone()), agent_node_id: None, manual_card_run: false,
+            request_id: "moved-agent".into(), text: "创建生成卡".into(),
+            reference_asset_ids: vec![], placement: None, card_defaults: None,
+        }).unwrap();
+        let mut doc = document(&db);
+        doc["nodes"][0]["x"] = json!(-8000);
+        doc["nodes"][0]["y"] = json!(3500);
+        replace_document(&db, &doc);
+        let conn = db.conn.lock().unwrap();
+        for (id, x, y) in [("nearby", -7500, 3500), ("distant", 50000, 3500)] {
+            conn.execute("INSERT INTO canvas_nodes(id,project_id,kind,payload_json,x,y,width,height,created_at,updated_at) VALUES(?1,'p','note',?2,?3,?4,340,330,1,1)",
+                params![id, json!({"schema_version":1,"note_type":"text","text":id}).to_string(), x, y]).unwrap();
+        }
+        drop(conn);
+        let mut args = json!({"cards":[
+            {"id":"first","kind":"generation","title":"首图","prompt":"首图","mediaType":"image"},
+            {"id":"local","kind":"comfy-video","title":"本地视频","prompt":"推近"},
+            {"id":"last","kind":"generation","title":"尾图","prompt":"尾图","mediaType":"image"}]});
+        if grouped {
+            args["sections"] = json!([{"id":"section","title":"镜头","members":["first","local","last"]}]);
+        }
+        let action = create(&db, &started, &args).unwrap();
+        let doc = document(&db);
+        let mut previous_end = None;
+        for card in action.cards.iter().filter(|card| card.kind != "section") {
+            let node = doc["nodes"].as_array().unwrap().iter().find(|n| n["id"] == card.id).unwrap();
+            let (x, y) = (node["x"].as_f64().unwrap(), node["y"].as_f64().unwrap());
+            let (width, height, output_width) = if card.kind == "comfy-video" {
+                (320.0, 720.0, 280.0)
+            } else {
+                (320.0, 330.0, 260.0)
+            };
+            // The canvas places a result to the right of its producer.
+            let end = x + width + 64.0 + output_width;
+            if let Some(previous_end) = previous_end {
+                assert!(x >= previous_end, "next card overlaps the previous output");
+            } else {
+                assert!((x + 8000.0).abs() < 3500.0 && (y - 3500.0).abs() < 2000.0,
+                    "first card ({x}, {y}) must be near the visible Agent");
+            }
+            assert!(end <= -7500.0 || x >= -7160.0 || y + height <= 3500.0 || y >= 3830.0,
+                "card or output overlaps the existing note");
+            previous_end = Some(end);
+        }
+        if grouped {
+            let section = action.cards.iter().find(|card| card.kind == "section").unwrap();
+            let frame = db.get_canvas_node(&section.id).unwrap().unwrap();
+            assert!(frame.x + frame.width >= previous_end.unwrap());
+        }
+        let mut doc = doc;
+        let producer = doc["nodes"].as_array_mut().unwrap().iter_mut()
+            .find(|node| node["id"] == action.cards[0].id).unwrap();
+        producer["sessionNodeIds"] = json!(["gen-prompt:job:turn:0"]);
+        let result_origin = (producer["x"].as_f64().unwrap() + 320.0 + 64.0, producer["y"].as_f64().unwrap());
+        replace_document(&db, &doc);
+        let graph = db.begin_project_generation_turn(&crate::core::project_canvas::ProjectGenerationTurnInput {
+            project_id: "p".into(), thread_id: started.conversation.summary.thread_id.clone(),
+            generation_conversation_id: "layout".into(), job_id: "job".into(), turn_key: "turn".into(),
+            prompt: "首图".into(), applied_prompt: "首图".into(), provider: "test".into(),
+            provider_session_id: None, ratio: None, visual_profile: None, references: vec![],
+            reference_node_ids: vec![], parent_node_id: None, parent_asset_path: None,
+            relation: None, retry_anchor_node_id: None,
+        }).unwrap();
+        let result = db.get_canvas_node(&graph.prompt_node_id).unwrap().unwrap();
+        assert_eq!((result.x, result.y), result_origin);
+        assert_eq!(result.width, 260.0);
+    }
+}
+
+#[test]
 fn local_chat_cards_layout_uses_content_dimensions_and_video_uses_actual_inputs() {
     let (db, s) = fixture();
     let mut args = batch();
@@ -877,6 +1402,32 @@ fn local_chat_cards_call_replay_is_stable_after_finish_and_undo() {
     db.undo_local_chat_cards(&s.conversation.summary.id, &a.id)
         .unwrap();
 }
+#[test]
+fn local_chat_cards_choose_image_provider_per_card_and_reject_invalid_batches() {
+    let (db, started) = fixture();
+    let mut args = json!({"cards":[
+        {"id":"a","kind":"generation","mediaType":"image","title":"即梦","prompt":"a","provider":"dreamina-web55"},
+        {"id":"b","kind":"generation","mediaType":"image","title":"本机","prompt":"b","provider":"minimax-h3-image"},
+        {"id":"c","kind":"generation","mediaType":"image","title":"Cloud","prompt":"c","provider":"bowerbird-cloud-image_hd"},
+        {"id":"d","kind":"generation","mediaType":"image","title":"默认","prompt":"d"}
+    ]});
+    for (media, provider) in [("video","codex"), ("image","unknown"), ("image","bowerbird-cloud-image_nonexistent")] {
+        args["cards"][2]["mediaType"] = json!(media);
+        args["cards"][2]["provider"] = json!(provider);
+        assert!(create(&db, &started, &args).is_err());
+        assert_eq!(document(&db)["nodes"], json!([]));
+    }
+    args["cards"][2]["provider"] = json!("bowerbird-cloud-image_hd");
+    let action = create(&db, &started, &args).unwrap();
+    let canvas = document(&db);
+    for (card, expected) in action.cards.iter().zip(["dreamina-web55","minimax-h3-image","bowerbird-cloud-image_hd","jimeng"]) {
+        let node = canvas["nodes"].as_array().unwrap().iter().find(|node| node["id"] == card.id).unwrap();
+        assert_eq!(node["provider"], expected);
+    }
+    assert_eq!(action.cards.len(), 4);
+    assert!(action.run_status.is_none());
+}
+
 #[test]
 fn local_chat_cards_invalid_or_unowned_arguments_never_mutate_canvas() {
     let invalids = [
@@ -1037,10 +1588,10 @@ fn local_chat_cards_provider_upgrade_is_compare_and_swap_and_keeps_history() {
 fn local_chat_cards_export_review_fixtures() {
     let path = std::env::var("BOWERBIRD_CARD_FIXTURES").expect("explicit fixture output path");
     let mut examples = serde_json::Map::new();
-    for mode in ["count", "rows", "video", "sections", "sections_large"] {
+    for mode in ["count", "rows", "h3", "sections", "sections_large"] {
         let (db, s) = fixture();
         let mut args = match mode {
-            "video" => video_batch(),
+            "h3" => h3_batch(),
             "sections" | "sections_large" => section_batch(mode == "sections_large"),
             _ => batch(),
         };
@@ -1061,9 +1612,51 @@ fn local_chat_cards_export_review_fixtures() {
 }
 
 #[test]
-fn local_chat_cards_reject_deferred_h3_without_writing() {
+fn local_chat_cards_drop_other_kind_fields_and_keep_unknown_keys_for_rejection() {
+    let mut args = json!({"cards":[
+        {"id":"copy","kind":"content","title":"文案","text":"正文","seconds":8,
+         "endpoint":"http://example.invalid"},
+        {"id":"draw","kind":"generation","title":"图","prompt":"画一只贝","mediaType":"image","rows":[["x"]]},
+        {"id":"clip","kind":"comfy-video","title":"视频","prompt":"动起来","text":"其他类型"}
+    ]});
+    normalize_card_fields(&mut args);
+    assert!(args["cards"][0].get("seconds").is_none(), "content drops video options");
+    assert_eq!(args["cards"][0]["endpoint"], "http://example.invalid", "unknown keys still reach serde");
+    assert!(args["cards"][1].get("rows").is_none(), "generation drops content rows");
+    assert_eq!(args["cards"][1]["mediaType"], "image");
+    assert!(args["cards"][2].get("text").is_none(), "video drops content text");
+    assert_eq!(args["cards"][2]["prompt"], "动起来");
+}
+
+
+#[test]
+fn local_chat_cards_h3_text_reference_modes_and_frame_validation() {
+    for mode in ["text", "reference"] {
+        let (db, s) = fixture();
+        create(&db, &s, &json!({"cards":[{"id":"h3","kind":"comfy-video","title":"H3","prompt":"缓慢移动","mode":mode,"resolution":0.98}]})).unwrap();
+        assert_eq!(document(&db)["nodes"][0]["comfyVideo"]["mode"], mode);
+    }
+    for (mode, port) in [("text", "first-frame"), ("reference", "last-frame")] {
+        let (db, s) = fixture();
+        assert!(create(&db, &s, &json!({"cards":[
+            {"id":"image","kind":"generation","title":"图片","mediaType":"image","prompt":"产品","provider":"minimax-h3-image"},
+            {"id":"h3","kind":"comfy-video","title":"H3","prompt":"缓慢移动","mode":mode}
+        ],"connections":[{"from":"image","to":"h3","output":"image","input":port}]})).is_err());
+        assert_eq!(document(&db)["nodes"], json!([]));
+    }
+}
+
+#[test]
+fn local_chat_cards_video_options_are_per_card() {
     let (db, s) = fixture();
-    let before = document(&db);
-    assert!(create(&db, &s, &json!({"cards":[{"id":"h3","kind":"comfy-video","title":"本地视频","prompt":"镜头移动"}]})).is_err());
-    assert_eq!(document(&db), before);
+    create(&db, &s, &json!({"cards":[
+        {"id":"one","kind":"generation","title":"one","mediaType":"video","prompt":"a","videoChannel":"jimeng","videoOptions":{"kind":"text2video","model_version":"seedance2.5","duration":12,"video_resolution":"1080p"}},
+        {"id":"two","kind":"generation","title":"two","mediaType":"video","prompt":"b","videoChannel":"cloud","videoOptions":{"kind":"text2video","model_version":"seedance2.5","duration":5,"video_resolution":"720p"}}
+    ]})).unwrap();
+    let doc = document(&db);
+    assert_eq!(doc["nodes"][0]["generation"]["videoOptions"]["duration"], 12);
+    assert_eq!(doc["nodes"][0]["generation"]["videoChannel"], "jimeng");
+    assert_eq!(doc["nodes"][1]["generation"]["videoOptions"]["duration"], 5);
+    assert_eq!(doc["nodes"][1]["generation"]["videoChannel"], "cloud");
+    assert_eq!(doc["nodes"][1]["provider"], "bowerbird-cloud-video_seedance25_720p");
 }

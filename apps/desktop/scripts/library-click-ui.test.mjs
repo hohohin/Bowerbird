@@ -51,7 +51,7 @@ try {
   await assertBrowseClicks();
   await page.locator('[role="tab"][aria-selected="true"]').focus();
   await page.keyboard.press('Tab');
-  await page.getByRole('region', { name: '按集合浏览素材', exact: true }).waitFor();
+  await page.getByRole('region', { name: '按文件夹浏览素材', exact: true }).waitFor();
   await assertBrowseClicks();
   await page.getByRole('button', { name: '我的项目', exact: true }).click();
   await page.getByRole('button', { name: '打开项目 引用布局合成验收', exact: true }).click();

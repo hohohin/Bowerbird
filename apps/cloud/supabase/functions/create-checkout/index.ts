@@ -1,12 +1,8 @@
 import { requireUser } from "../_shared/auth.ts";
 import { ApiError, errorResponse, jsonResponse, requestId, safeLog } from "../_shared/errors.ts";
-import { assertBodySize, corsHeaders } from "../_shared/limits.ts";
+import { assertBodySize, readJsonBody, corsHeaders } from "../_shared/limits.ts";
 import { wechatCheckoutEnabled } from "../_shared/wechatpay.ts";
 import { handleWechatCheckout } from "../_shared/wechatpay-service.ts";
-
-interface CheckoutRequest {
-  product: string;
-}
 
 Deno.serve(async (request) => {
   const id = requestId(request);
@@ -25,7 +21,8 @@ Deno.serve(async (request) => {
       if (!wechatCheckoutEnabled()) throw new ApiError("not_configured", "微信支付暂未开放", false, 503);
       return jsonResponse(await handleWechatCheckout(request, { user, admin }), 201, cors);
     }
-    const body = (await request.json()) as CheckoutRequest;
+    const body = await readJsonBody(request);
+    if (typeof body.product !== "string") throw new ApiError("invalid_request", "未知商品");
     const { data: sku, error: catalogError } = await admin.from("billing_products")
       .select("product,kind,amount_minor,credits,months,pricing_version,monthly_bonus_credits,bonus_valid_days")
       .eq("product", body.product).eq("active", true).maybeSingle();

@@ -49,6 +49,46 @@ try {
   assert.deepEqual(await bounds(), narrow);
   await page.evaluate(() => { window.failViewSave = true; window.holdViewSave = false; window.releaseViewSave(); });
   await page.locator(".canvas-save-error").waitFor({ state: "visible" });
+
+  const tools = page.getByRole("toolbar", { name: "画板工具" });
+  const hand = tools.getByRole("button", { name: "抓手工具" });
+  const toolsBeforeFocus = await tools.boundingBox();
+  const handBox = await hand.boundingBox();
+  const handX = handBox.x + handBox.width / 2, handY = handBox.y + handBox.height / 2;
+  const distantCell = page.locator('[data-canvas-node-id="far"] textarea').first();
+  assert.ok((await distantCell.boundingBox()).x > page.viewportSize().width);
+  await distantCell.focus();
+  assert.equal(await distantCell.evaluate(el => document.activeElement === el), true);
+  assert.deepEqual(await tools.boundingBox(), toolsBeforeFocus, "focusing an offscreen cell must keep the left toolbar anchored");
+  // Use the original screen point: a locator click could scroll a displaced button back into view.
+  await page.mouse.click(handX, handY);
+  assert.equal(await hand.getAttribute("aria-pressed"), "true");
+  const planeTransform = () => page.locator(".canvas-plane").evaluate(el => el.style.transform);
+  const beforePan = await planeTransform();
+  await page.mouse.move(650, 380);
+  await page.mouse.down();
+  await page.mouse.move(770, 430, { steps: 5 });
+  await page.mouse.up();
+  assert.notEqual(await planeTransform(), beforePan);
+  assert.deepEqual(await tools.boundingBox(), toolsBeforeFocus);
+  const beforeZoom = await planeTransform();
+  await page.getByRole("button", { name: "放大", exact: true }).click();
+  await page.waitForFunction(previous => document.querySelector(".canvas-plane").style.transform !== previous, beforeZoom);
+  assert.deepEqual(await tools.boundingBox(), toolsBeforeFocus);
+  await page.addInitScript(() => { window.isTauri = true; });
+  await page.goto("http://127.0.0.1:1554/scripts/fixtures/canvas-reference/preview.html?source-library&detail-route&canvas-library");
+  await page.locator('[data-canvas-node-id="old"]').waitFor();
+  const snap = tools.getByRole("button", { name: "吸附对齐" });
+  for (const height of [800, 720, 601, 600]) {
+    await page.setViewportSize({ width: 900, height });
+    const stageBox = await page.locator(".canvas-stage").boundingBox();
+    const snapBox = await snap.boundingBox();
+    assert.ok(snapBox.y + snapBox.height <= stageBox.y + stageBox.height, "the bottom tool must fit inside the available canvas height");
+    assert.ok(await tools.locator("button").evaluateAll(buttons => buttons.every(el => el.getBoundingClientRect().height >= 24)), "compact drawing buttons keep a 24px hit target");
+    const pressed = await snap.getAttribute("aria-pressed");
+    await page.mouse.click(snapBox.x + snapBox.width / 2, snapBox.y + snapBox.height / 2);
+    assert.notEqual(await snap.getAttribute("aria-pressed"), pressed, "the bottom tool is reachable without scrolling the canvas");
+  }
   assert.deepEqual(errors, []);
-  console.log("PASS: stable capsule geometry during slow saves, no fast-save flash, narrow canvas, visible save errors.");
+  console.log("PASS: stable save capsules and anchored, clickable drawing tools after distant focus, pan and zoom.");
 } finally { await browser.close(); await server.close(); }

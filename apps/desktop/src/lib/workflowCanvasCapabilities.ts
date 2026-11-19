@@ -6,7 +6,33 @@ import { isVideoPath } from "./videoGeneration";
 import { isAudioPath } from "./audioMedia";
 import type { Asset, CanvasNode } from "./types";
 
-type Material = { id: string; assetId?: string; groupId?: string; assetIds?: string[]; mediaAssetIds?: string[]; video?: boolean };
+type Material = { id: string; assetId?: string; groupId?: string; assetIds?: string[]; mediaAssetIds?: string[]; video?: boolean; audio?: boolean };
+
+/** The "image" workflow channel carries all three media types. */
+export function workflowAssetMedia(asset?: Pick<Asset, "store_path" | "ext">): AutomaticMedia | undefined {
+  for (const path of [asset?.store_path, asset?.ext && `asset.${asset.ext}`]) {
+    if (!path) continue;
+    if (isAudioPath(path) || /^data:audio\//i.test(path)) return "audio";
+    if (isVideoPath(path) || /^data:video\//i.test(path)) return "video";
+    if (/\.(?:png|jpe?g|webp|gif|avif|svg|ico|bmp|tiff?|heic|heif)(?:[?#].*)?$/i.test(path) || /^data:image\//i.test(path)) return "image";
+  }
+}
+
+export function workflowSourceMediaLabel(assetIds: readonly string[], assets: readonly Asset[], source?: WorkflowNode) {
+  if (assetIds.length) {
+    let kind: AutomaticMedia | undefined;
+    for (const id of assetIds) {
+      const media = workflowAssetMedia(assets.find(asset => asset.id === id));
+      if (!media || (kind && kind !== media)) return "素材";
+      kind = media;
+    }
+    return kind === "audio" ? "音频" : kind === "video" ? "视频" : "图片";
+  }
+  if (source?.kind === "voice") return "音频";
+  if (source?.kind === "director3d" || source?.kind === "comfy-video" || source?.generation?.media === "video" || (source?.kind === "agent" && source.skill === "hyperframes")) return "视频";
+  if (source?.kind === "generation" || source?.kind === "agent" || source?.kind === "skill" || source?.kind === "instruction") return "图片";
+  return "素材";
+}
 
 export function automaticValueMedia(value: WorkflowValue | undefined, assets: Asset[], pending = false): AutomaticMedia[] | undefined {
   // Partial metadata and future outputs cannot prove that a connection is incompatible.
@@ -27,7 +53,7 @@ export function canvasAutomaticOutputs(id: string, nodes: WorkflowNode[], canvas
   if (workflow) return workflowOutputs(workflow).filter(port => port.type !== "session" && port.type !== "signal"
     && (port.id !== "iteration" || workflowOutputs(workflow).length === 1)).map(port => ({
       binding: { nodeId: id, portId: port.id }, type: port.type,
-      ...(port.type === "image" ? { media: workflow.kind === "comfy-video" || workflow.generation?.media === "video" || workflow.kind === "agent" && workflow.skill === "hyperframes" ? "video" as const : "image" as const } : {}),
+      ...(port.type === "image" ? { media: workflow.kind === "voice" ? "audio" as const : workflow.kind === "director3d" || workflow.kind === "comfy-video" || workflow.generation?.media === "video" || workflow.kind === "agent" && workflow.skill === "hyperframes" ? "video" as const : "image" as const } : {}),
     }));
   const card = canvas.find(node => node.id === id && node.hiddenAt == null);
   if (card?.kind === "note") {
@@ -61,6 +87,6 @@ export function canvasAutomaticOutputs(id: string, nodes: WorkflowNode[], canvas
   }
   const assetId = material?.assetId ?? card?.assetId;
   if (!assetId) return [];
-  const media = material?.video ? ["video" as const] : automaticValueMedia({ type: "image", assetIds: [assetId] }, assets);
+  const media = material?.video ? ["video" as const] : material?.audio ? ["audio" as const] : automaticValueMedia({ type: "image", assetIds: [assetId] }, assets);
   return [{ binding: { assetId, assetNodeId: material?.id ?? card?.id }, type: "image", ...(media ? { media } : {}) }];
 }

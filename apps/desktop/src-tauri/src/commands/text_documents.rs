@@ -26,11 +26,27 @@ pub async fn create_text_document(
 pub async fn read_text_document(
     db: State<'_, Arc<Database>>,
     asset_id: String,
+    preview_only: Option<bool>,
 ) -> Result<TextDocument, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || text_documents::read(&db, &asset_id))
+    tokio::task::spawn_blocking(move || text_documents::read_with_options(&db, &asset_id, preview_only.unwrap_or(false)))
         .await
         .map_err(|error| AppError::Other(error.to_string()))?
+}
+
+#[tauri::command]
+pub async fn read_spreadsheet_document(db: State<'_, Arc<Database>>, asset_id: String) -> Result<text_documents::office::SpreadsheetDocument, AppError> {
+    let db = db.inner().clone();
+    tokio::task::spawn_blocking(move || text_documents::office::read_spreadsheet(&db, &asset_id)).await.map_err(|error| AppError::Other(error.to_string()))?
+}
+
+#[tauri::command]
+pub async fn save_docx_document(app: AppHandle, paths: State<'_, Arc<LibraryPaths>>, db: State<'_, Arc<Database>>, asset_id: String, expected_version: String, data: String) -> Result<TextDocument, AppError> {
+    let db = db.inner().clone(); let paths = paths.inner().clone();
+    let result = tokio::task::spawn_blocking(move || text_documents::office::save_docx(&paths, &db, &asset_id, &expected_version, &data)).await.map_err(|error| AppError::Other(error.to_string()))??;
+    let _ = app.emit("library://assets-changed", ());
+    let _ = app.emit("external-files://changed", ());
+    Ok(result)
 }
 
 #[tauri::command]

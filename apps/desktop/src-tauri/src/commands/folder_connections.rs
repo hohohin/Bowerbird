@@ -1,7 +1,7 @@
 use crate::{
     core::{
-        folder_connections::{AssetOriginal, ConnectionEntry, FolderConnection},
-        missing_originals::MissingOriginalSweep,
+        folder_connections::{AssetOriginal, ConnectionEntry, ConnectionFilter, FolderConnection},
+        missing_originals::{MarkedReferenceSweep, MissingOriginalSweep},
         paths::LibraryPaths,
     },
     db::Database,
@@ -17,6 +17,30 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 // Serialize walks and physical mutations so a refresh cannot reconcile a half-finished move.
 pub(crate) static GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+static WAITING_MUTATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub(super) async fn mutation_permit(gate: &tokio::sync::Semaphore) -> Result<tokio::sync::SemaphorePermit<'_>, tokio::sync::AcquireError> {
+    use std::sync::atomic::Ordering;
+    struct Waiting;
+    impl Drop for Waiting {
+        fn drop(&mut self) { WAITING_MUTATIONS.fetch_sub(1, Ordering::SeqCst); }
+    }
+    WAITING_MUTATIONS.fetch_add(1, Ordering::SeqCst);
+    let _waiting = Waiting;
+    gate.acquire().await
+}
+
+fn mutation_waiting() -> bool {
+    WAITING_MUTATIONS.load(std::sync::atomic::Ordering::SeqCst) != 0
+}
+
+fn yield_scan_permit<'a>(gate: &'a tokio::sync::Semaphore, permit: &mut Option<tokio::sync::SemaphorePermit<'a>>) -> bool {
+    if !mutation_waiting() { return false; }
+    // Runs only on a blocking scan worker, between entries and outside any SQLite transaction.
+    drop(permit.take());
+    *permit = Some(tauri::async_runtime::block_on(gate.acquire()).expect("file operation gate stays open"));
+    true
+}
 #[path = "connection_watch.rs"]
 mod watcher;
 pub use watcher::watch;
@@ -25,14 +49,34 @@ pub use watcher::watch;
 struct RefreshQueue {
     running: bool,
     all: bool,
+    scanning_all: bool,
+    last_full_scan: Option<Instant>,
     roots: HashSet<String>,
     priority: Option<String>,
     originals: bool,
+    reference_continuation: bool,
     schedule: OriginalCheckSchedule,
 }
 impl RefreshQueue {
+    fn request_full_scan(&mut self, now: Instant, force: bool) -> bool {
+        if !force && (self.all || self.scanning_all
+            || self.last_full_scan.is_some_and(|last| now.duration_since(last) < Duration::from_secs(30))) {
+            return false;
+        }
+        self.all = true;
+        true
+    }
     fn has_work(&self) -> bool {
         self.all || !self.roots.is_empty() || self.originals
+    }
+    fn advance_originals(&mut self, catalog_more: bool, pending: bool, references_more: bool) {
+        if !self.reference_continuation { self.schedule.pending = pending; }
+        self.reference_continuation = references_more;
+        if catalog_more || references_more {
+            self.originals = true;
+        } else {
+            self.schedule.complete(Instant::now(), self.schedule.pending);
+        }
     }
 }
 #[derive(Default)]
@@ -60,16 +104,24 @@ static REFRESH: std::sync::LazyLock<Mutex<RefreshQueue>> =
     std::sync::LazyLock::new(|| Mutex::new(RefreshQueue::default()));
 static ORIGINALS: std::sync::LazyLock<Mutex<MissingOriginalSweep>> =
     std::sync::LazyLock::new(|| Mutex::new(MissingOriginalSweep::default()));
+static MARKED_REFERENCES: std::sync::LazyLock<Mutex<MarkedReferenceSweep>> =
+    std::sync::LazyLock::new(|| Mutex::new(MarkedReferenceSweep::default()));
 fn changed(app: &AppHandle) {
     let _ = app.emit("library://assets-changed", ());
     let _ = app.emit("external-files://changed", ());
+}
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConnectionProgress {
+    root_id: String,
+    scanning: bool,
+    error: Option<String>,
 }
 pub(super) async fn mutation<T: Send + 'static>(
     app: AppHandle,
     work: impl FnOnce() -> AppResult<T> + Send + 'static,
 ) -> AppResult<T> {
-    let _permit = GATE
-        .acquire()
+    let _permit = mutation_permit(&GATE)
         .await
         .map_err(|e| AppError::Other(e.to_string()))?;
     let value = tauri::async_runtime::spawn_blocking(work)
@@ -79,7 +131,7 @@ pub(super) async fn mutation<T: Send + 'static>(
     value
 }
 fn refresh(app: AppHandle, db: Arc<Database>, paths: Arc<LibraryPaths>, folder: Option<String>) {
-    queue_refresh(app, db, paths, None, folder);
+    queue_refresh(app, db, paths, None, folder, true);
 }
 fn request_originals_check(
     app: AppHandle,
@@ -100,12 +152,13 @@ fn queue_refresh(
     paths: Arc<LibraryPaths>,
     roots: Option<HashSet<String>>,
     priority: Option<String>,
+    force: bool,
 ) {
     let mut queue = REFRESH.lock().unwrap();
     if let Some(roots) = roots {
         queue.roots.extend(roots);
-    } else {
-        queue.all = true;
+    } else if !queue.request_full_scan(Instant::now(), force) {
+        return;
     }
     if priority.is_some() {
         queue.priority = priority;
@@ -116,27 +169,27 @@ fn queue_refresh(
     start_refresh(app, db, paths, queue);
 }
 fn check_originals(db: &Database, paths: &LibraryPaths) -> AppResult<bool> {
-    let batch = ORIGINALS.lock().unwrap().check_batch(db, paths, Instant::now())?;
-    let mut queue = REFRESH.lock().unwrap();
-    if batch.more {
-        queue.originals = true;
-    } else {
-        queue.schedule.complete(Instant::now(), batch.pending);
-    }
-    let changed = batch.removed + batch.restored > 0;
+    let references_only = REFRESH.lock().unwrap().reference_continuation;
+    let batch = if references_only { Default::default() } else {
+        ORIGINALS.lock().unwrap().check_batch_until(db, paths, Instant::now(), mutation_waiting)?
+    };
+    // Each continuation releases GATE. There is no complete catalog walk between reference batches.
+    let (references, more_references) = if !batch.more {
+        MARKED_REFERENCES.lock().unwrap().check_batch(db, mutation_waiting, crate::core::folder_connections::recycle)?
+    } else { (0, false) };
+    REFRESH.lock().unwrap().advance_originals(batch.more, batch.pending, more_references);
+    let changed = batch.removed + batch.restored + references > 0;
     if changed {
-        tracing::info!(removed = batch.removed, restored = batch.restored, "missing originals reconciled");
+        tracing::info!(removed = batch.removed, restored = batch.restored, references, "missing originals reconciled");
     }
     Ok(changed)
 }
-fn scan_requested_roots(
-    app: &AppHandle,
+fn requested_root_ids(
     db: &Database,
-    paths: &LibraryPaths,
     all: bool,
     requested: &HashSet<String>,
     priority: Option<&str>,
-) -> AppResult<()> {
+) -> AppResult<Vec<String>> {
     let priority_root = priority
         .and_then(|id| db.connected_folder(id).ok())
         .map(|f| f.root_id);
@@ -145,33 +198,56 @@ fn scan_requested_roots(
         ids.retain(|id| requested.contains(id));
     }
     ids.sort_by_key(|id| Some(id) != priority_root.as_ref());
-    let mut last = Instant::now() - Duration::from_secs(1);
-    for id in ids {
-        let value = db.scan_connection_prioritized(paths, &id, priority, || {
-            if last.elapsed() >= Duration::from_millis(500) {
-                changed(app);
-                last = Instant::now();
-            }
-        });
-        if let Err(error) = value {
-            tracing::warn!("connection scan {id}: {error}");
-        }
-    }
-    Ok(())
+    Ok(ids)
 }
-fn finish_refresh(app: &AppHandle, scanned_roots: bool, originals: bool, result: AppResult<bool>) {
+fn scan_requested_root(app: &AppHandle, db: &Database, paths: &LibraryPaths, id: String, priority: Option<&str>, permit: tokio::sync::SemaphorePermit<'static>) {
+    let mut last = Instant::now() - Duration::from_secs(1);
+    let started = Instant::now();
+    let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id.clone(), scanning: true, error: None });
+    let mut dirty = false;
+    let mut notifications = 0;
+    let mut permit = Some(permit);
+    let mut yielded = false;
+    let value = db.scan_connection_cooperatively(paths, &id, priority, |changed_data| {
+        dirty |= changed_data;
+        if dirty && last.elapsed() >= Duration::from_millis(500) {
+            changed(app);
+            notifications += 1;
+            dirty = false;
+            last = Instant::now();
+        }
+    }, || {
+        let paused = yield_scan_permit(&GATE, &mut permit);
+        yielded |= paused;
+        paused
+    });
+    if yielded {
+        REFRESH.lock().unwrap().roots.insert(id.clone());
+    }
+    // Flush changes even when a later directory failed. Progress alone never
+    // invalidates pages or forces the expensive catalog counts to run again.
+    if dirty { changed(app); notifications += 1; }
+    let _ = app.emit("library://connection-progress", ConnectionProgress { root_id: id, scanning: false, error: value.as_ref().err().map(ToString::to_string) });
+    tracing::debug!(elapsed_ms = started.elapsed().as_millis(), notifications, "connection scan completed");
+    if let Err(error) = value {
+        tracing::warn!("connection scan: {error}");
+    }
+}
+fn finish_refresh(app: &AppHandle, originals: bool, result: AppResult<bool>) {
     let originals_changed = match result {
         Ok(changed) => changed,
         Err(error) => {
             if originals {
-                REFRESH.lock().unwrap().schedule.complete(Instant::now(), true);
+                let mut queue = REFRESH.lock().unwrap();
+                queue.reference_continuation = false;
+                queue.schedule.complete(Instant::now(), true);
             }
             tracing::warn!("connection refresh: {error}");
             false
         }
     };
-    // A failed originals check must not swallow the final directory refresh.
-    if scanned_roots || originals_changed {
+    // Directory scans publish actual changes themselves, including before errors.
+    if originals_changed {
         changed(app);
     }
 }
@@ -192,6 +268,7 @@ fn start_refresh(
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             let (all, requested, priority, originals) = {
                 let mut queue = REFRESH.lock().unwrap();
+                queue.scanning_all = queue.all;
                 (
                     std::mem::take(&mut queue.all),
                     std::mem::take(&mut queue.roots),
@@ -199,25 +276,35 @@ fn start_refresh(
                     std::mem::take(&mut queue.originals),
                 )
             };
-            if let Ok(_permit) = GATE.acquire().await {
-                let (app2, db2, paths2) = (app.clone(), db.clone(), paths.clone());
-                let scanned_roots = all || !requested.is_empty();
-                let result = tauri::async_runtime::spawn_blocking(move || -> AppResult<bool> {
-                    if scanned_roots {
-                        scan_requested_roots(&app2, &db2, &paths2, all, &requested, priority.as_deref())?;
-                    }
-                    if originals {
-                        check_originals(&db2, &paths2)
-                    } else {
-                        Ok(false)
-                    }
-                })
-                .await
-                .map_err(|error| AppError::Other(format!("connection refresh worker: {error}")))
-                .and_then(|value| value);
-                finish_refresh(&app, scanned_roots, originals, result);
+            let result = async {
+                let (db2, priority2) = (db.clone(), priority.clone());
+                let ids = if all || !requested.is_empty() {
+                    tauri::async_runtime::spawn_blocking(move ||
+                        requested_root_ids(&db2, all, &requested, priority2.as_deref()))
+                        .await.map_err(|e| AppError::Other(e.to_string()))??
+                } else { Vec::new() };
+                for id in ids {
+                    let (app, db, paths, priority) = (app.clone(), db.clone(), paths.clone(), priority.clone());
+                    let permit = GATE.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
+                    tauri::async_runtime::spawn_blocking(move || {
+                        scan_requested_root(&app, &db, &paths, id, priority.as_deref(), permit);
+                    }).await.map_err(|e| AppError::Other(e.to_string()))?;
+                }
+                if originals {
+                    let (db, paths) = (db.clone(), paths.clone());
+                    let permit = GATE.acquire().await.map_err(|e| AppError::Other(e.to_string()))?;
+                    tauri::async_runtime::spawn_blocking(move || {
+                        let _permit = permit;
+                        check_originals(&db, &paths)
+                    }).await.map_err(|e| AppError::Other(e.to_string()))?
+                } else { Ok(false) }
+            }.await;
+            if all && result.is_ok() {
+                REFRESH.lock().unwrap().last_full_scan = Some(Instant::now());
             }
+            finish_refresh(&app, originals, result);
             let mut queue = REFRESH.lock().unwrap();
+            queue.scanning_all = false;
             if queue.has_work() {
                 continue;
             }
@@ -231,10 +318,16 @@ pub async fn folder_connections(
     db: State<'_, Arc<Database>>,
     project_id: Option<String>,
     media: Option<String>,
+    filter: Option<ConnectionFilter>,
 ) -> AppResult<Vec<FolderConnection>> {
     let db = db.inner().clone();
+    let requested = Instant::now();
     tauri::async_runtime::spawn_blocking(move || {
-        db.connection_folders(project_id.as_deref(), media.as_deref())
+        let queue_ms = requested.elapsed().as_millis();
+        let started = Instant::now();
+        let result = db.connection_folders_filtered(project_id.as_deref(), media.as_deref(), &filter.unwrap_or_default());
+        tracing::debug!(queue_ms, read_ms = started.elapsed().as_millis(), folders = result.as_ref().map_or(0, Vec::len), "catalog folder overview");
+        result
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))?
@@ -249,15 +342,19 @@ pub async fn connect_folder(
 ) -> AppResult<String> {
     let database = db.inner().clone();
     let source = PathBuf::from(path);
-    let id = mutation(app.clone(), move || {
-        database.connect_directory(&source, project_id.as_deref())
+    let (id, root_id) = mutation(app.clone(), move || {
+        let id = database.connect_directory(&source, project_id.as_deref())?;
+        let root = database.connected_folder(&id)?.root_id;
+        Ok((id, root))
     })
     .await?;
-    refresh(
+    queue_refresh(
         app,
         db.inner().clone(),
         paths.inner().clone(),
+        Some(HashSet::from([root_id])),
         Some(id.clone()),
+        true,
     );
     Ok(id)
 }
@@ -267,19 +364,41 @@ pub async fn refresh_folder_connections(
     db: State<'_, Arc<Database>>,
     paths: State<'_, Arc<LibraryPaths>>,
     folder_id: Option<String>,
+    force: Option<bool>,
 ) -> AppResult<()> {
-    refresh(app, db.inner().clone(), paths.inner().clone(), folder_id);
+    queue_refresh(app, db.inner().clone(), paths.inner().clone(), None, folder_id, force.unwrap_or(true));
     Ok(())
 }
+#[derive(Default)]
+struct CatalogFileGrants(Mutex<HashSet<(String, String)>>);
+impl CatalogFileGrants {
+    fn allow(&self, path: &str, version: Option<&str>, allow: impl FnOnce() -> AppResult<()>) -> AppResult<()> {
+        let key = version.map(|version| (path.to_owned(), version.to_owned()));
+        let mut granted = self.0.lock().unwrap();
+        if key.as_ref().is_some_and(|key| granted.contains(key)) { return Ok(()); }
+        allow()?;
+        if let Some(key) = key {
+            if granted.len() >= 16_384 { granted.clear(); }
+            granted.insert(key);
+        }
+        Ok(())
+    }
+}
 fn allow_entries(app: &AppHandle, entries: &[ConnectionEntry]) -> AppResult<()> {
-    for entry in entries {
+    if app.try_state::<CatalogFileGrants>().is_none() { app.manage(CatalogFileGrants::default()); }
+    let grants = app.state::<CatalogFileGrants>();
+    let mut pending: Vec<_> = entries.iter().collect();
+    while let Some(entry) = pending.pop() {
+        pending.extend(&entry.group);
         for path in [&entry.asset.store_path, &entry.asset.thumb_path]
             .into_iter()
             .flatten()
         {
-            app.asset_protocol_scope()
+            // Tauri canonicalizes on every allow_file, even for an existing rule.
+            // Cache only successful, versioned grants in this application session.
+            grants.allow(path, entry.version.as_deref(), || app.asset_protocol_scope()
                 .allow_file(path)
-                .map_err(|e| AppError::Other(e.to_string()))?;
+                .map_err(|e| AppError::Other(e.to_string())))?;
         }
     }
     Ok(())
@@ -292,22 +411,37 @@ pub async fn connection_entries(
     offset: i64,
     limit: i64,
     media: Option<String>,
+    filter: Option<ConnectionFilter>,
     project_id: Option<String>,
 ) -> AppResult<Vec<ConnectionEntry>> {
     let db = db.inner().clone();
+    let requested = Instant::now();
     let values = tauri::async_runtime::spawn_blocking(move || {
-        let ids = db.connection_entry_ids(
+        let queue_ms = requested.elapsed().as_millis();
+        let started = Instant::now();
+        let filter = filter.unwrap_or_default();
+        let ids = db.connection_entry_ids_filtered(
             Some(&folder_id),
             project_id.as_deref(),
             media.as_deref(),
             offset,
             limit.min(240),
+            &filter,
         )?;
-        db.resolve_connection_entries(&ids)
+        let ids_ms = started.elapsed().as_millis();
+        let hydrate = Instant::now();
+        let mut entries = db.visible_connection_entries(&ids)?;
+        let hydrate_ms = hydrate.elapsed().as_millis();
+        let groups = Instant::now();
+        db.connection_entry_groups(&mut entries, project_id.as_deref(), media.as_deref(), &filter)?;
+        tracing::debug!(queue_ms, ids_ms, hydrate_ms, groups_ms = groups.elapsed().as_millis(), count = entries.len(), "catalog folder page");
+        Ok::<_, AppError>(entries)
     })
     .await
     .map_err(|e| AppError::Other(e.to_string()))??;
+    let permissions = Instant::now();
     allow_entries(&app, &values)?;
+    tracing::debug!(permissions_ms = permissions.elapsed().as_millis(), total_ms = requested.elapsed().as_millis(), "catalog folder page returned");
     Ok(values)
 }
 #[tauri::command]
@@ -315,18 +449,20 @@ pub async fn connection_entry_ids(
     db: State<'_, Arc<Database>>,
     folder_id: Option<String>,
     media: Option<String>,
+    filter: Option<ConnectionFilter>,
     project_id: Option<String>,
     offset: Option<i64>,
     limit: Option<i64>,
 ) -> AppResult<Vec<String>> {
     let db = db.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        db.connection_entry_ids(
+        db.connection_entry_ids_filtered(
             folder_id.as_deref(),
             project_id.as_deref(),
             media.as_deref(),
             offset.unwrap_or(0),
             limit.unwrap_or(2000),
+            &filter.unwrap_or_default(),
         )
     })
     .await
@@ -339,7 +475,7 @@ pub async fn resolve_connection_entries(
     ids: Vec<String>,
 ) -> AppResult<Vec<ConnectionEntry>> {
     let db = db.inner().clone();
-    let values = tauri::async_runtime::spawn_blocking(move || db.resolve_connection_entries(&ids))
+    let values = tauri::async_runtime::spawn_blocking(move || db.resolve_visible_connection_entries(&ids))
         .await
         .map_err(|e| AppError::Other(e.to_string()))??;
     allow_entries(&app, &values)?;
@@ -349,14 +485,17 @@ pub async fn resolve_connection_entries(
 pub async fn create_connected_collection(
     app: AppHandle,
     db: State<'_, Arc<Database>>,
+    files: State<'_, Arc<crate::core::file_workspace::FileWorkspace>>,
     parent_id: Option<String>,
     name: String,
     path: Option<String>,
     project_id: Option<String>,
 ) -> AppResult<String> {
     let db = db.inner().clone();
+    let files = files.inner().clone();
     mutation(app, move || {
         db.create_connected_directory(
+            &files,
             parent_id.as_deref(),
             path.as_deref().map(std::path::Path::new),
             &name,
@@ -478,9 +617,13 @@ pub async fn trash_connection_entries(
 pub async fn preview_asset_originals(
     db: State<'_, Arc<Database>>,
     asset_ids: Vec<String>,
-) -> AppResult<Vec<AssetOriginal>> {
+    allow_partial: Option<bool>,
+) -> AppResult<Vec<crate::core::folder_connections::OriginalPreview>> {
     let db = db.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || db.preview_asset_originals(&asset_ids))
+    tauri::async_runtime::spawn_blocking(move || {
+        if allow_partial == Some(true) { db.preview_original_selection(&asset_ids) }
+        else { Ok(db.preview_asset_originals(&asset_ids)?.into_iter().map(crate::core::folder_connections::OriginalPreview::Ready).collect()) }
+    })
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }
@@ -512,6 +655,68 @@ mod maintenance_tests {
     use super::*;
 
     #[test]
+    fn catalog_grants_reuse_only_successful_same_version_in_the_same_app() {
+        let grants = CatalogFileGrants::default();
+        let calls = std::cell::Cell::new(0);
+        let allow = || { calls.set(calls.get() + 1); Ok(()) };
+        grants.allow("source", Some("v1"), allow).unwrap();
+        grants.allow("source", Some("v1"), allow).unwrap();
+        assert_eq!(calls.get(), 1);
+        grants.allow("source", Some("v2"), allow).unwrap();
+        grants.allow("renamed", Some("v2"), allow).unwrap();
+        assert_eq!(calls.get(), 3);
+        assert!(grants.allow("failed", Some("v1"), || Err(AppError::Other("failure".into()))).is_err());
+        grants.allow("failed", Some("v1"), allow).unwrap();
+        grants.allow("unversioned", None, allow).unwrap();
+        grants.allow("unversioned", None, allow).unwrap();
+        assert_eq!(calls.get(), 6);
+        CatalogFileGrants::default().allow("source", Some("v1"), allow).unwrap();
+        assert_eq!(calls.get(), 7);
+    }
+
+    #[tokio::test]
+    async fn queued_file_operation_runs_before_scan_continues_its_current_root() {
+        let gate = Arc::new(tokio::sync::Semaphore::new(1));
+        let (ready, started) = tokio::sync::oneshot::channel();
+        let (resume, checkpoint) = std::sync::mpsc::channel();
+        let scanner_gate = gate.clone();
+        let scan = tokio::task::spawn_blocking(move || {
+            let mut permit = Some(tauri::async_runtime::block_on(scanner_gate.acquire()).unwrap());
+            ready.send(()).unwrap();
+            checkpoint.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(yield_scan_permit(&scanner_gate, &mut permit));
+        });
+        started.await.unwrap();
+        let pending = mutation_permit(&gate);
+        tokio::pin!(pending);
+        tokio::select! { biased; _ = &mut pending => panic!("must queue behind the current entry"), _ = tokio::task::yield_now() => {} }
+        let started = Instant::now();
+        resume.send(()).unwrap();
+        let permit = tokio::time::timeout(Duration::from_secs(5), pending).await.unwrap().unwrap();
+        println!("foreground admission at the next scan entry: {:?}", started.elapsed());
+        assert!(!scan.is_finished());
+        drop(permit);
+        scan.await.unwrap();
+    }
+
+    #[test]
+    fn automatic_full_scans_share_pending_work_and_cooldown_but_manual_refresh_bypasses() {
+        let now = Instant::now();
+        let mut queue = RefreshQueue::default();
+        assert!(queue.request_full_scan(now, false));
+        assert!(!queue.request_full_scan(now, false));
+        queue.all = false;
+        queue.scanning_all = true;
+        assert!(!queue.request_full_scan(now + Duration::from_secs(60), false));
+        queue.scanning_all = false;
+        queue.last_full_scan = Some(now);
+        assert!(!queue.request_full_scan(now + Duration::from_secs(29), false));
+        assert!(queue.request_full_scan(now + Duration::from_secs(30), false));
+        queue.all = false;
+        assert!(queue.request_full_scan(now + Duration::from_secs(1), true));
+    }
+
+    #[test]
     fn checks_on_startup_without_roots_then_waits_between_healthy_sweeps() {
         let now = Instant::now();
         let mut queue = RefreshQueue::default();
@@ -539,5 +744,26 @@ mod maintenance_tests {
         assert!(schedule.request(now + Duration::from_secs(70), true));
         schedule.complete(now + Duration::from_secs(80), false);
         assert!(!schedule.request(now + Duration::from_secs(110), false));
+    }
+
+    #[test]
+    fn legacy_reference_backlog_continues_promptly_without_restarting_the_catalog_or_skipping_confirmation() {
+        let mut queue = RefreshQueue::default();
+        assert!(queue.schedule.request(Instant::now(), false));
+        queue.advance_originals(true, true, false);
+        assert!(std::mem::take(&mut queue.originals));
+        assert!(!queue.reference_continuation);
+
+        queue.advance_originals(false, true, true);
+        assert!(std::mem::take(&mut queue.originals));
+        assert!(queue.reference_continuation);
+        assert!(queue.schedule.running);
+        queue.advance_originals(false, false, true);
+        assert!(std::mem::take(&mut queue.originals));
+        assert!(queue.reference_continuation);
+        queue.advance_originals(false, false, false);
+        assert!(!queue.has_work());
+        assert!(!queue.schedule.running);
+        assert!(queue.schedule.pending, "an outstanding original still needs a second observation");
     }
 }

@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>生成耗时对照</title>
+<style>
+  * { box-sizing: border-box }
+  body { max-width: 1060px; margin: auto; padding: 24px; font: 16px/1.5 "Microsoft YaHei", system-ui, sans-serif; color: #182434; background: #f3f5f7 }
+  h1 { margin: 0 0 12px; font-size: 28px }
+  h2, legend { font-size: 18px; font-weight: 650 }
+  h2 { margin: 0 0 12px }
+  p { margin: 6px 0 16px }
+  fieldset, section { min-width: 0; margin: 14px 0; padding: 16px; border: 1px solid #a4b1be; background: white }
+  .columns { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 0 16px }
+  label { display: block; margin: 8px 0 }
+  input, select, button { font: inherit; min-height: 42px; border: 1px solid #73818f; padding: 5px 8px; color: inherit; background: white }
+  input, select { width: 100% }
+  button { cursor: pointer }
+  button:disabled { cursor: default; color: #66717c; border-color: #c7ced5 }
+  :focus-visible { outline: 3px solid #086ad5; outline-offset: 2px }
+  video { width: 100%; max-height: 280px; display: block; background: #151a21 }
+  .mark { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 8px; margin: 8px 0 }
+  .mark label { margin: 0 }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums }
+  th, td { padding: 7px 4px; text-align: left; border-bottom: 1px solid #d8dfe5 }
+  #save { margin-top: 16px; color: white; background: #174c85 }
+  #feedback { color: #803900 }
+  @media (max-width: 670px) { .columns { grid-template-columns: 1fr } body { padding: 12px } }
+</style>
+<main>
+  <h1>生成耗时对照</h1>
+  <p>同一组输入在两端各测一轮。回看录屏并暂停在目标画面，用“取当前时间”填入秒数，也可以手动填写录屏时间。录屏文件只在本机播放。</p>
+  <form id="comparison">
+    <fieldset><legend>配对条件</legend>
+      <div class="columns">
+        <label>供应商<select name="provider"><option>即梦</option><option>GPT</option></select></label>
+        <label>实际测试顺序<select name="order"><option>Bowerbird → 官网</option><option>官网 → Bowerbird</option></select></label>
+        <label>案例编号<input name="caseId" required placeholder="同一提示词、参考图与会话条件共用编号"></label>
+        <label>配对轮次<input name="pair" type="number" min="1" step="1" value="1" required></label>
+        <label>共享设置<input name="conditions" required placeholder="账号代号/档位、尺寸、质量、张数、网络"></label>
+        <label>模型核对<select name="matching"><option>双端显示同一模型和档位</option><option selected>实际模型或档位未能核实</option><option>已知模型或档位不同</option></select></label>
+        <label>双端原图终点<select name="originalEndpoint"><option>完整原图首次成功打开</option><option>原图下载或导出到本机完成</option></select></label>
+      </div>
+    </fieldset>
+    <div class="columns" id="runs"></div>
+    <section>
+      <h2>这一对的耗时</h2>
+      <table><thead><tr><th>从提交起</th><th>Bowerbird</th><th>官网</th><th>桌面减官网</th></tr></thead>
+        <tbody id="results"></tbody>
+      </table>
+      <p id="feedback" role="status" aria-live="polite"></p>
+      <button id="save">导出本对记录（JSON）</button>
+    </section>
+  </form>
+</main>
+<template id="run">
+  <fieldset>
+    <legend></legend>
+    <label>客户端版本及显示的模型<input data-field="version" required></label>
+    <label>提交时同账号的其他任务<select data-field="queue"><option>空闲</option><option>有在途任务</option><option selected>未知</option></select></label>
+    <label>本轮录屏<input type="file" accept="video/*"></label>
+    <video controls preload="auto" playsinline></video>
+    <label>证据文件名或录屏编号<input data-field="evidence" required></label>
+    <div class="marks"></div>
+    <label>备注<input data-field="note" placeholder="缺测、失败、已有任务类型或操作延迟"></label>
+  </fieldset>
+</template>
+<script>
+  'use strict';
+  const form = document.querySelector('form');
+  const labels = {submit: '点击提交', first: '首次看见本轮图片', original: '完整原图可用'};
+  const clients = {desktop: 'Bowerbird', web: '供应商官网'};
+  for (const [key, name] of Object.entries(clients)) {
+    const panel = document.querySelector('#run').content.firstElementChild.cloneNode(true);
+    panel.id = key;
+    panel.querySelector('legend').textContent = name;
+    const video = panel.querySelector('video');
+    const file = panel.querySelector('input[type=file]');
+    const evidence = panel.querySelector('[data-field=evidence]');
+    const markButtons = [];
+    let recording;
+    file.onchange = () => {
+      const selected = file.files[0];
+      if (!selected) return;
+      if (recording) URL.revokeObjectURL(recording);
+      recording = URL.createObjectURL(selected);
+      video.src = recording;
+      evidence.value = selected.name;
+      for (const button of markButtons) button.disabled = true;
+      for (const input of panel.querySelectorAll('[type=number]')) input.value = '';
+      render();
+    };
+    video.onloadeddata = () => { for (const button of markButtons) button.disabled = false; };
+    video.onerror = () => {
+      for (const button of markButtons) button.disabled = true;
+      document.querySelector('#feedback').textContent = name + '录屏无法播放，可在外部播放器核对时间后手填。';
+    };
+    for (const [stage, title] of Object.entries(labels)) {
+      const row = document.createElement('div');
+      row.className = 'mark';
+      const label = document.createElement('label');
+      label.textContent = title + '（录屏秒）';
+      const input = document.createElement('input');
+      Object.assign(input, {type: 'number', min: '0', step: '0.001', required: stage === 'submit'});
+      input.dataset.field = stage;
+      label.append(input);
+      const button = document.createElement('button');
+      Object.assign(button, {type: 'button', textContent: '取当前时间', disabled: true});
+      button.setAttribute('aria-label', name + '：标记' + title);
+      button.onclick = () => {
+        video.pause();
+        if (video.seeking || video.readyState < 2) return;
+        input.value = video.currentTime.toFixed(3);
+        render();
+      };
+      markButtons.push(button);
+      row.append(label, button);
+      panel.querySelector('.marks').append(row);
+    }
+    document.querySelector('#runs').append(panel);
+  }
+  function readRun(key) {
+    const panel = document.getElementById(key);
+    const fields = {};
+    for (const input of panel.querySelectorAll('[data-field]')) {
+      fields[input.dataset.field] = input.type === 'number'
+        ? (Number.isFinite(input.valueAsNumber) ? input.valueAsNumber : null)
+        : input.value.trim();
+    }
+    const {submit, first, original} = fields;
+    const duration = panel.querySelector('video').duration;
+    const invalid = [submit, first, original].some(value => value !== null && (value < 0 || (Number.isFinite(duration) && value > duration + 0.001)))
+      || (submit !== null && [first, original].some(value => value !== null && value < submit))
+      || (first !== null && original !== null && original < first);
+    const seconds = end => !invalid && submit !== null && end !== null ? +(end - submit).toFixed(3) : null;
+    return {fields, invalid, firstSeconds: seconds(first), originalSeconds: seconds(original)};
+  }
+  function render() {
+    const desktop = readRun('desktop'), web = readRun('web');
+    const results = document.querySelector('#results');
+    results.replaceChildren();
+    const difference = {};
+    for (const [key, name] of [['firstSeconds', '首图'], ['originalSeconds', '原图']]) {
+      const left = desktop[key], right = web[key];
+      difference[key] = left !== null && right !== null ? +(left - right).toFixed(3) : null;
+      const row = results.insertRow();
+      row.insertCell().textContent = name;
+      for (const value of [left, right, difference[key]]) {
+        row.insertCell().textContent = value === null ? '—' : value.toFixed(2) + ' 秒';
+      }
+    }
+    const errors = [];
+    const caveats = [];
+    for (const [key, run] of Object.entries({desktop, web})) {
+      if (run.invalid) errors.push(clients[key] + '的时间须在录屏范围内，且按提交、首图、原图排列。');
+      if (run.fields.submit !== null && [run.fields.first, run.fields.original].includes(null) && !run.fields.note) {
+        errors.push(clients[key] + '的缺测项请在备注注明原因。');
+      }
+    }
+    if (desktop.fields.queue !== web.fields.queue || desktop.fields.queue === '未知') caveats.push('两端排队条件不同或未知。');
+    if (form.elements.matching.selectedIndex !== 0) caveats.push('模型或档位未对齐。');
+    document.querySelector('#feedback').textContent = [...errors, ...caveats].join(' ');
+    return {conditions: Object.fromEntries(new FormData(form)), desktop, web, difference, errors, caveats};
+  }
+  form.oninput = render;
+  render();
+  form.onsubmit = event => {
+    event.preventDefault();
+    const result = render();
+    if (result.errors.length) return;
+    const report = {schemaVersion: 1, recordedAt: new Date().toISOString(), ...result};
+    const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], {type: 'application/json'}));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'generation-' + result.conditions.caseId.replace(/[^\p{L}\p{N}_-]/gu, '_') + '-' + result.conditions.pair + '.json';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+</script>
+</html>
