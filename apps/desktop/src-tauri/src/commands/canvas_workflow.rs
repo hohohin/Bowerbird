@@ -276,10 +276,16 @@ pub(crate) fn validate(document: &Value) -> AppResult<HashSet<String>> {
                 }
                 continue; // Completion events do not participate in the data dependency DAG.
             }
-            let image_port = port == "image" || node["kind"] == "comfy-video" && matches!(port.as_str(), "first-frame" | "last-frame");
+            let audio_port = node["kind"] == "comfy-video" && port == "reference-audio";
+            let image_port = port == "image" || audio_port || node["kind"] == "comfy-video" && matches!(port.as_str(), "first-frame" | "last-frame");
             if !image_port && !matches!(port.as_str(), "text" | "visual-profile" | "signal") { return Err(invalid()); }
-            for binding in bindings.as_array().ok_or_else(invalid)? {
+            let bindings = bindings.as_array().ok_or_else(invalid)?;
+            if audio_port && bindings.len() > 1 { return Err(invalid()); }
+            for binding in bindings {
                 validate_binding_metadata(binding)?;
+                if audio_port && (binding.get("videoFrame").is_some()
+                    || binding.get("mediaFilter").is_some_and(|filter| filter.as_array().is_none_or(|types| types.len() != 1 || types[0] != "audio"))
+                    || binding.get("portId").is_some_and(|port| port != "image")) { return Err(invalid()); }
                 if port == "signal" {
                     let producer = nodes.iter().find(|node| node["id"] == binding["nodeId"]).ok_or_else(invalid)?;
                     if producer["kind"] != "trigger" || binding["portId"] != "signal" || !control_binding_fields(binding, &["nodeId", "portId"]) { return Err(invalid()); }
@@ -931,6 +937,42 @@ mod tests {
         // Storage keeps the versioned JSON, including the automatic connection identity.
         assert_eq!(db.workflow_save("p", 0, doc.clone()).unwrap(), 1);
         assert_eq!(db.workflow_get("p").unwrap().document, doc);
+    }
+    #[test]
+    fn saves_new_image_card_on_a_board_with_h3_audio() {
+        let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
+        db.conn.lock().unwrap().execute("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','p','p','p',1)", []).unwrap();
+        let mut video = node("video", json!({"reference-audio":[{
+            "assetId":"sample","assetNodeId":"audio-card","autoConnect":"audio-wire","mediaFilter":["audio"]
+        }]}));
+        video["kind"] = json!("comfy-video");
+        let history = json!({"id":"completed","threadId":"thread","startId":"video","status":"done",
+            "order":["video"],"steps":{"video":{"status":"done","jobId":"original-job"}}});
+        let existing = json!({"schema_version":1,"nodes":[video],"run":history,"runs":[history]});
+        // Model an existing project saved by a build that already knows about the audio input.
+        db.conn.lock().unwrap().execute("INSERT INTO canvas_workflows(project_id,revision,document_json) VALUES('p',1,?1)",
+            [existing.to_string()]).unwrap();
+        let mut snapshot = db.workflow_get("p").unwrap();
+        let mut image = node("image", json!({}));
+        image["generation"] = json!({"media":"image"});
+        snapshot.document["nodes"].as_array_mut().unwrap().push(image);
+        let doc = snapshot.document;
+        assert_eq!(validate(&doc).unwrap(), HashSet::from(["sample".to_owned()]));
+        assert_eq!(db.workflow_save("p", snapshot.revision, doc.clone()).unwrap(), 2);
+        let reopened = db.workflow_get("p").unwrap();
+        assert_eq!(reopened.revision, 2);
+        assert_eq!(reopened.document, doc);
+        assert_eq!(reopened.document["nodes"][0], existing["nodes"][0]);
+        assert_eq!(reopened.document["runs"], existing["runs"]);
+        let mut invalid = doc.clone();
+        invalid["nodes"][0]["kind"] = json!("generation");
+        assert!(validate(&invalid).is_err());
+        let mut invalid = doc.clone();
+        invalid["nodes"][0]["inputs"]["reference-audio"][0]["mediaFilter"] = json!(["image"]);
+        assert!(validate(&invalid).is_err());
+        let mut invalid = doc;
+        invalid["nodes"][0]["inputs"]["reference-audio"] = json!([{"assetId":"sample"},{"assetId":"extra"}]);
+        assert!(validate(&invalid).is_err());
     }
     #[test]
     fn completion_trigger_allows_bounded_feedback_but_not_data_cycles() {

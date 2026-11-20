@@ -3,7 +3,7 @@ import { describeAssetWithNotice } from "./describeNotices";
 import { mergeWorkflowChanges } from "./workflowExternalChanges";
 import { cloudChatEndedMessage } from "./userError";
 import { activeTriggerSchedule, advanceTriggerSchedule, triggerScheduleOccurrence, workflowTriggerMode } from "./workflowTriggerSchedule";
-import { normalizeWorkflowLocalVideo, workflowTitle, workflowCardWidth, workflowCompletionTriggers } from "./canvasWorkflow";
+import { H3_VIDEO_AUDIO_PORT, normalizeWorkflowLocalVideo, workflowTitle, workflowCardWidth, workflowCompletionTriggers } from "./canvasWorkflow";
 import { resolveVideoCardOutputs } from "./workflowVideoFrames";
 import { automaticInputMedia, planAutomaticConnection, contentCardAcceptsMedia, type AutomaticOutput } from "./workflowAutoConnect";
 import { isAudioPath } from "./audioMedia";
@@ -50,6 +50,12 @@ import { compileAgentPrompt, compileGenerationPrompt, generationInputNode, workf
   type CanvasWorkflow, type WorkflowInput, type WorkflowRun, type WorkflowNode, type WorkflowStep, type WorkflowValue } from "./canvasWorkflow";
 
 const controllers = new Map<string, CanvasWorkflowController>();
+
+function assertH3AudioSupported(node: WorkflowNode) {
+  if (node.kind === "comfy-video" && node.inputs[H3_VIDEO_AUDIO_PORT]?.length) {
+    throw new WorkflowNodeError("此版本会保留该 H3 卡片的录音连接。请使用支持录音的版本运行这张卡片或优化提示词。", node);
+  }
+}
 
 /** Filter new automatic bindings using actual asset metadata, before legacy frame conversion. */
 export async function filterAutomaticMediaValues(node: WorkflowNode, values: Record<string, WorkflowValue[]>, nodes: readonly WorkflowNode[] = []) {
@@ -535,7 +541,18 @@ export class CanvasWorkflowController {
       return previous && JSON.stringify(chatLayout(previous)) === JSON.stringify(chatLayout(node));
     }) && before.every(node => after.some(candidate => candidate.id === node.id) || node.kind === "agent" && !!node.chatConversationId);
     const authorizeEdit = !projectionOnly && (before.length > 0 || after.length > 0);
-    nodes = nodes.map(node => this.isLocked(node.id) ? node : normalizeWorkflowLocalVideo(normalizeWorkflowInputSlots(node)));
+    const nodeIds = new Set(nodes.map(node => node.id));
+    const previousH3Ids = new Set(before.filter(node => node.kind === "comfy-video").map(node => node.id));
+    nodes = nodes.map(node => {
+      if (this.isLocked(node.id)) return node;
+      const normalized = normalizeWorkflowLocalVideo(normalizeWorkflowInputSlots(node));
+      if (normalized.kind !== "comfy-video" || previousH3Ids.has(node.id)) return normalized;
+      const audio = normalized.inputs[H3_VIDEO_AUDIO_PORT];
+      if (!audio?.some(binding => binding.nodeId && !nodeIds.has(binding.nodeId))) return normalized;
+      // The source can be removed while its H3 audio connection is inactive.
+      return { ...normalized, inputs: { ...normalized.inputs,
+        [H3_VIDEO_AUDIO_PORT]: audio.filter(binding => !binding.nodeId || nodeIds.has(binding.nodeId)) } };
+    });
     for (const node of this.document.nodes) if (this.isLocked(node.id)) {
       const next = nodes.find(next => next.id === node.id);
       if (JSON.stringify(node) === JSON.stringify(next)) continue;
@@ -929,6 +946,7 @@ export class CanvasWorkflowController {
     const issue = workflowProviderIssue(node, useStore.getState(), chatProvider);
     if (issue) throw new WorkflowNodeError(issue.message, node);
     if (node.kind === "comfy-video") {
+      assertH3AudioSupported(node);
       const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
       const environment = await comfyEnvironment("detect", options.endpoint, undefined, undefined, comfyVideoMode(options));
       if (!comfyEnvironmentReady(environment)) throw new WorkflowNodeError(environment.message || "本地 H3 视频环境尚未就绪。", node);
@@ -1912,6 +1930,7 @@ export class CanvasWorkflowController {
     const node = this.document.nodes.find(node => node.id === nodeId);
     const image = node?.kind === "generation" && node.provider === H3_IMAGE && node.generation?.media !== "video";
     if (!node || (!image && node.kind !== "comfy-video")) throw new Error("请选择本地 H3 生成卡片");
+    assertH3AudioSupported(node);
     if (this.encapsulating || this.isLocked(nodeId)) throw new Error("卡片正在使用，请等待当前任务结束");
     if (retryInput && image !== ("referenceCount" in retryInput)) throw new Error("卡片类型已改变，请使用当前提示词重新优化。");
     const prompt = retryInput?.prompt ?? node.prompt.trim(), options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO, mode = comfyVideoMode(options);
@@ -1953,6 +1972,7 @@ export class CanvasWorkflowController {
         let agentRunId = originalStep.agentRunId;
         if (!agentRunId) {
           if (snapshot.submissionStarted) throw new Error("提示词优化提交状态未知，请核对 Agent 任务记录；不会自动重复提交");
+          assertH3AudioSupported(this.document.nodes.find(item => item.id === id) ?? node);
           const account = assertAccount();
           if (!account.cloudEntitlement?.is_test_account || !canUseAgentRun(account.cloudEntitlement, "bowerbird-unified-agent")) throw new Error("当前账号尚未开放 Cloud DSH，请使用已获授权的测试账号");
           const active = Object.values(account.cloudAgentRuns).filter(run => !["succeeded", "failed", "cancelled"].includes(run.status)).length;
@@ -2033,6 +2053,7 @@ export class CanvasWorkflowController {
     const id = node.id, step = this.run(runId).steps[id], accountId = this.run(runId).accountId;
     const optimizedForThisRun = !!(step.comfyAutoGeneration?.input && step.comfyOptimization?.result);
     let jobId = step.jobId;
+    if (!jobId) assertH3AudioSupported(this.document.nodes.find(item => item.id === id) ?? node);
     let result: ComfyVideoStatus;
     let terminalFailure = false;
     const prepare = async (endpoint: string, mode: import("./comfyVideo").ComfyVideoMode, recovery?: { installation?: string | null }) => {
@@ -2185,6 +2206,7 @@ export class CanvasWorkflowController {
         await this.runComfyAutoGeneration(runId, node, halted, step.comfyAutoGeneration.input, start); return;
       }
       if (step.comfyOptimization) { await this.runComfyPromptOptimization(runId, node, halted, start); return; }
+      assertH3AudioSupported(storedNode);
       if (node.kind === "generation" && node.generation?.media === "video" && step.jobId) {
         await this.recoverVideoResult(runId, node, halted); return;
       }

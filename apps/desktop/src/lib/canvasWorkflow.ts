@@ -18,6 +18,7 @@ export class WorkflowInputError extends WorkflowNodeError {
 /** Editable workflow wiring is independent from immutable generation history edges. */
 export type WorkflowKind = "director3d" | "instruction" | "generation" | "skill" | "agent" | "comfy-video" | "voice" | "visual-profile" | "text" | "trigger" | "planner" | "loop";
 export const WORKFLOW_CARD_DRAG_TYPE = "application/x-bowerbird-workflow-card";
+export const H3_VIDEO_AUDIO_PORT = "reference-audio";
 export type WorkflowAction = "describe" | "reuse" | "layers";
 export type WorkflowPortType = "text" | "image" | "visual-profile" | "session" | "signal";
 export interface WorkflowValue { type: WorkflowPortType; text?: string; table?: ContentTable; assetIds?: string[]; referenceRanks?: number[]; imageRefs?: { asset_id: string; token: string }[]; profileId?: string; version?: number; summary?: string; nodeIds?: string[]; deliveries?: Record<string, { nodeId: string; cellId: string; append: boolean; value: WorkflowValue }> }
@@ -43,6 +44,8 @@ export interface WorkflowNode {
   action: WorkflowAction; skill: string; prompt: string; ratio: string | null; provider: string;
   generation?: import("./videoGeneration").GenerationSettings;
   comfyVideo?: import("./comfyVideo").ComfyVideoOptions;
+  /** A local audio connection is inactive when the card uses a remote video model. */
+  savedComfyAudio?: WorkflowInput[];
   comfyAutoOptimize?: boolean;
   /** Reversible rendering of ordinary @ mentions in the H3 text editor. */
   videoPrompt?: { ordinary: string; local: string };
@@ -189,10 +192,12 @@ export function normalizeWorkflowLocalVideo(node: WorkflowNode): WorkflowNode {
   const { image: _image, ...inputs } = node.inputs;
   const tailOnly = frames.length === 1 && frames[0].h3TailOnly;
   return { ...node, kind: "comfy-video", comfyVideo: node.generation!.localVideo, prompt,
+    savedComfyAudio: undefined,
     videoFrameSlots: frames.map(({ slot, referenceRanks }) => ({ slot, referenceRanks })),
     videoPrompt: prompt === node.prompt ? undefined : { ordinary: node.prompt, local: prompt },
     generation: { ...node.generation, localVideo: undefined },
-    inputs: { ...inputs, "first-frame": inputs["first-frame"] ?? (tailOnly ? [] : frames.slice(0, 1)), "last-frame": inputs["last-frame"] ?? (tailOnly ? frames : frames.slice(1)) } };
+    inputs: { ...inputs, "first-frame": inputs["first-frame"] ?? (tailOnly ? [] : frames.slice(0, 1)), "last-frame": inputs["last-frame"] ?? (tailOnly ? frames : frames.slice(1)),
+      ...(node.savedComfyAudio?.length ? { [H3_VIDEO_AUDIO_PORT]: node.savedComfyAudio } : {}) } };
 }
 
 export function selectWorkflowVideoProvider(node: WorkflowNode, channel: "jimeng" | "cloud" | "h3", options?: VideoOptions): WorkflowNode {
@@ -202,7 +207,7 @@ export function selectWorkflowVideoProvider(node: WorkflowNode, channel: "jimeng
   const generation = { ...node.generation, media: "video" as const, localVideo: undefined, videoChannel: channel,
     videoOptions: options ?? node.generation?.videoOptions };
   if (node.kind !== "comfy-video") return { ...node, generation };
-  const { "first-frame": first = [], "last-frame": last = [], ...inputs } = node.inputs;
+  const { "first-frame": first = [], "last-frame": last = [], [H3_VIDEO_AUDIO_PORT]: audio, ...inputs } = node.inputs;
   const frames = [...first, ...last];
   const prompt = node.videoPrompt?.local === node.prompt ? node.videoPrompt.ordinary : node.prompt;
   // Slot numbers belong to the ordinary editor. The H3 sockets can be in
@@ -227,6 +232,7 @@ export function selectWorkflowVideoProvider(node: WorkflowNode, channel: "jimeng
     } else image.push(input);
   }
   return normalizeWorkflowInputSlots({ ...node, kind: "generation", generation, prompt, videoPrompt: undefined, videoFrameSlots: undefined,
+    savedComfyAudio: audio?.length ? audio : undefined,
     inputs: { ...inputs, image, text: (inputs.text ?? []).map(remoteInput) } });
 }
 
