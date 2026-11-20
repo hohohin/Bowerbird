@@ -20,6 +20,14 @@
   background: var(--bb-surface); color: var(--bb-ink); font-weight: 500; white-space: nowrap; pointer-events: none;
 }
 .comfy-frame-placeholder { position: absolute; inset: auto 0 3px; color: var(--bb-muted); text-align: center; }
+.comfy-audio-input { display: grid; gap: 3px; min-width: 0; padding: 4px 8px; border: 1px dashed var(--bb-line); border-radius: 6px; font-size: 12px; }
+.comfy-audio-input:has(button) { border-style: solid; }
+.comfy-audio-row { display: flex; align-items: center; gap: 6px; min-height: 24px; }
+.comfy-audio-row > :not(.comfy-audio-source) { flex-shrink: 0; }
+.comfy-audio-source { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.comfy-audio-input small, .comfy-audio-source { color: var(--bb-muted); }
+.workflow-card .comfy-audio-row button { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; }
+.comfy-audio-row button:focus-visible { outline: 1px solid var(--bb-blue); outline-offset: -2px; }
 .comfy-video-card .comfy-video-options { padding-bottom: 8px; border-bottom: 1px solid var(--bb-line); }
 /* The header keeps a full button hit target around the small status dot. */
 .workflow-card > header .comfy-environment-dot { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; background: transparent; }

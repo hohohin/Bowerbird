@@ -2,16 +2,18 @@
 import { CanvasTextarea } from "./CanvasTextarea";
 import { userErrorMessage } from "../lib/userError";
 import { useEffect, useId, useRef, useState } from "react";
-import { ArrowLeftRight, Check, CircleAlert, Ellipsis, Film, Gauge, Timer, X } from "lucide-react";
+import { ArrowLeftRight, AudioLines, Check, CircleAlert, Ellipsis, Film, Gauge, Timer, X } from "lucide-react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { open as openExternal } from "@tauri-apps/plugin-shell";
-import { comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, comfyVideoOptionsForMode, DEFAULT_COMFY_VIDEO, H3_VIDEO_RESOLUTIONS, type ComfyEnvironment, type ComfyVideoOptions, type ComfyVideoMode } from "../lib/comfyVideo";
+import { comfyAudioHint, comfyAudioLabel, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, comfyVideoOptionsForMode, DEFAULT_COMFY_VIDEO, H3_IMAGE_ENDPOINT, H3_VIDEO_RESOLUTIONS, type ComfyEnvironment, type ComfyVideoOptions, type ComfyVideoMode } from "../lib/comfyVideo";
+import { isAudioAsset } from "../lib/audioMedia";
+import { api } from "../lib/api";
 import { getDragAssets } from "../lib/dragPayload";
 import { notifyError } from "../lib/notify";
 import type { Asset } from "../lib/types";
-import type { WorkflowNode, WorkflowStep } from "../lib/canvasWorkflow";
+import { H3_VIDEO_AUDIO_PORT, type WorkflowNode, type WorkflowStep } from "../lib/canvasWorkflow";
 import "./ComfyVideoCard.css";
 import { TacticalSelect } from "./TacticalSelect";
 import { RatioSelect } from "./creation/RatioSelect";
@@ -60,7 +62,7 @@ export function ComfyEnvironmentControl({ node, disabled, onChange, imageMode, c
   const panelId = useId();
   const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
   const mode = imageMode ?? comfyVideoMode(options);
-  const endpoint = imageMode ? "http://127.0.0.1:18190" : options.endpoint;
+  const endpoint = imageMode ? H3_IMAGE_ENDPOINT : options.endpoint;
   const dialog = useRef<HTMLDialogElement>(null);
   const dot = useRef<HTMLButtonElement>(null);
   const [environment, setEnvironment] = useState<ComfyEnvironment>();
@@ -241,6 +243,30 @@ export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImag
   const options = node.comfyVideo ?? DEFAULT_COMFY_VIDEO;
   const mode = comfyVideoMode(options);
   const ports = mode === "text" ? [] : mode === "reference" ? ["first-frame"] : ["first-frame", "last-frame"];
+  const audioBindings = node.inputs[H3_VIDEO_AUDIO_PORT] ?? [];
+  const audioIds = audioBindings.flatMap(inputImages);
+  const audio = assets.find(asset => audioIds.includes(asset.id) && isAudioAsset(asset));
+  const audioLabel = comfyAudioLabel(mode);
+  const latestCard = useRef({ node, disabled, onChange });
+  const audioDrop = useRef(0);
+  latestCard.current = { node, disabled, onChange };
+  useEffect(() => () => { audioDrop.current++; }, []);
+
+  async function bindAudio(ids: string[] | null) {
+    const drop = ++audioDrop.current;
+    if (ids?.length !== 1) { notifyError(null, "请拖入一段音频"); return; }
+    const previous = node.inputs[H3_VIDEO_AUDIO_PORT];
+    const current = () => drop === audioDrop.current && !latestCard.current.disabled && latestCard.current.node.inputs[H3_VIDEO_AUDIO_PORT] === previous;
+    try {
+      const asset = assets.find(item => item.id === ids[0]) ?? (await api.getAssetsByIds(ids))[0];
+      if (!current()) return;
+      if (!asset || !isAudioAsset(asset)) { notifyError(null, "请拖入一段音频"); return; }
+      latestCard.current.onChange({ inputs: { ...latestCard.current.node.inputs, [H3_VIDEO_AUDIO_PORT]: [{ assetId: asset.id }] } });
+    } catch (error) {
+      if (current()) notifyError(error, "无法读取参考录音");
+    }
+  }
+
   function update(patch: Partial<ComfyVideoOptions>) { onChange({ comfyVideo: { ...options, ...patch } }); }
   return <section className="comfy-video-card" aria-label="本地 H3 视频设置">
     <fieldset disabled={disabled} className="workflow-video-parameters comfy-video-options" aria-label="视频参数">
@@ -292,6 +318,27 @@ export function ComfyVideoCard({ node, modelControl, disabled, assets, inputImag
     <CanvasTextarea fitContent className="comfy-video-prompt" aria-label="卡片指令" disabled={disabled}
       placeholder={mode === "reference" ? "用 <Picture 1> 指代参考图主体，不固定首尾画面…" : "输入视频提示词，也可从文本端口接入…"} value={node.prompt}
       readCurrentValue={readCurrentPrompt} onValueChange={prompt => onChange({ prompt })} />
+    </div>
+    <div className="comfy-audio-input" role="group" aria-label={audioLabel}
+      onDragOver={event => {
+        if (!disabled && getDragAssets()) { event.preventDefault(); event.stopPropagation(); }
+      }}
+      onDrop={event => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!disabled) void bindAudio(getDragAssets());
+      }}>
+      <div className="comfy-audio-row">
+        <AudioLines size={14} aria-hidden="true" />
+        <span>{audioLabel}</span>
+        <span className="comfy-audio-source" title={audio?.name}>
+          {audio?.name ?? (audioBindings.length ? "等待录音" : "拖入录音或连接端口")}
+        </span>
+        {audioBindings.length > 0 && <button type="button" aria-label="断开参考录音" title="断开参考录音"
+          disabled={disabled} onPointerDown={event => event.stopPropagation()}
+          onClick={() => onChange({ inputs: { ...node.inputs, [H3_VIDEO_AUDIO_PORT]: [] } })}><X size={14} /></button>}
+      </div>
+      {audioBindings.length > 0 && <small>{comfyAudioHint(mode)}</small>}
     </div>
     <div className="comfy-prompt-actions">{optimizationActions}</div>
   </section>;

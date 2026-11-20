@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { createServer } from 'vite';
 import { chromium } from '../../html-renderer/node_modules/playwright/index.mjs';
+import { placeWorkflowCard } from './fixtures/canvas-reference/place-card.mjs';
 
 await mkdir('.tmp/h3-modes', { recursive: true });
 const server = await createServer({ optimizeDeps: { entries: ["scripts/fixtures/canvas-reference/preview.html"] }, cacheDir: '.tmp/h3-modes/vite', server: { host: '127.0.0.1', port: 1698, strictPort: true, hmr: false, watch: null } });
@@ -10,8 +11,9 @@ const browser = await chromium.launch({ channel: 'chrome', headless: true });
 const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 page.setDefaultTimeout(8000);
 const errors = []; page.on('pageerror', error => errors.push(error.message));
+const syntheticVoice = { id: 'voice', name: '合成录音.wav', ext: 'wav', store_path: '/synthetic-voice.wav', duration: 3, source: 'external' };
 async function mock() {
-  await page.evaluate(async () => {
+  await page.evaluate(async voice => {
     window.store.setState({ cloudAuth: { logged_in: true, user_id: 'tester' }, cloudEntitlement: { user_id: 'tester', tier: 'pro', offline_state: 'fresh', balances: { daily: 0, sub: 0, topup: 0 }, policy: { can_use_byo: true }, generation_services: [] } });
     const invoke = window.__TAURI_INTERNALS__.invoke;
     window.h3Calls = []; window.envCalls = []; window.h3Status = 'done';
@@ -43,14 +45,14 @@ async function mock() {
       return invoke(command, args);
     };
     const { api } = await import('/src/lib/api.ts');
-    api.getAssetsByIds = async ids => ids.map(id => id === 'h3-result' ? window.h3Asset : {
+    api.getAssetsByIds = async ids => ids.filter(id => id !== 'missing-audio').map(id => id === 'h3-result' ? window.h3Asset : id === voice.id ? voice : {
       id, store_path: '/synthetic.png', width: 256, height: 256,
       thumb_path: `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
         <rect width="256" height="256" fill="${id === 'a' ? '#395264' : '#63455a'}"/>
         <circle cx="${id === 'a' ? 150 : 96}" cy="135" r="48" fill="#c0a49a"/></svg>`)}`,
     });
     window.store.setState({ startGeneration: async () => { throw Error('Must use local H3'); } });
-  });
+  }, syntheticVoice);
 }
 try {
   await page.goto('http://127.0.0.1:1698/scripts/fixtures/canvas-reference/preview.html');
@@ -77,7 +79,7 @@ try {
   const autoOptimize = card.getByRole('checkbox', { name: '自动优化提示词' });
   assert.equal(await autoOptimize.isChecked(), false);
   await autoOptimize.check();
-  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'h3')?.comfyAutoOptimize === true);
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('canvas-settings')).h3_auto_optimize_prompt === true);
   assert.equal(await card.getByText('本机算力·不扣额度', { exact: true }).count(), 0);
   assert.equal(await card.locator('.workflow-bindings').count(), 0);
   const controls = await card.getByRole('group', { name: '视频参数' }).evaluate(group => [...group.children].map(child => {
@@ -113,6 +115,11 @@ try {
     const c = canvasWorkflowController('p');
     await c.edit(c.document.nodes.map(n => n.id === 'h3' ? { ...n, inputs: { 'first-frame': [{ assetId: 'a' }], 'last-frame': [{ assetId: 'b' }] } } : n));
   });
+  const setDragged = ids => page.evaluate(async ids => (await import('/src/lib/dragPayload.ts')).setDragAssets(ids), ids);
+  await setDragged(['voice']);
+  await card.getByRole('group', { name: '录音引导' }).dispatchEvent('drop');
+  await setDragged(null);
+  await card.getByText('合成录音.wav', { exact: true }).waitFor();
   assert.match(await card.locator('header').innerText(), /视频生成/);
   const modelTrigger = card.getByTitle('选择视频模型', { exact: true });
   const modelMenu = page.getByRole('dialog', { name: '视频模型', exact: true });
@@ -134,10 +141,12 @@ try {
   await page.evaluate(() => window.store.setState({ dreaminaHealth: { ok: true } }));
   await modelMenu.locator('[data-model-key="jimeng:seedance2.5"]').click();
   await card.getByLabel('视频时长（秒）').waitFor();
+  assert.equal(await card.getByText('合成录音.wav', { exact: true }).count(), 0);
   await card.getByTitle('选择视频模型', { exact: true }).click();
   await modelMenu.locator('[data-model-key="local:h3"]').click();
   await card.getByLabel('H3 模式', { exact: true }).click();
   await page.getByRole('option', { name: '单图', exact: true }).click();
+  await card.getByRole('group', { name: '音色参考' }).getByText('合成录音.wav').waitFor();
   assert.equal(await card.locator('.comfy-frame-slot').count(), 1);
   assert.equal(await card.getByLabel('参考图输入', { exact: true }).count(), 1);
   assert.match(await card.getByLabel('H3 时长', { exact: true }).innerText(), /5 秒/);
@@ -150,7 +159,39 @@ try {
   let input = await page.evaluate(() => window.h3Calls.find(call => call.action === 'start').input);
   assert.equal(input.mode, 'reference'); assert.equal(input.firstFrame, 'a'); assert.equal(input.lastFrame, undefined);
   assert.equal(input.resolution, .98); assert.equal(input.seconds, 5); assert.match(input.prompt, /<Picture 1>/);
+  assert.equal(input.audioAssetId, 'voice'); assert.match(input.prompt, /<Audio 1>/);
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
+
+  // A normal image-card save writes the whole board, including the existing H3 recording and run.
+  const readBoard = () => page.evaluate(() => JSON.parse(sessionStorage.getItem('workflow-p')));
+  const beforeImage = await readBoard();
+  const audioInput = beforeImage.document.nodes.find(node => node.id === 'h3').inputs['reference-audio'];
+  const oldRun = beforeImage.document.run;
+  await placeWorkflowCard(page, '新增生成卡片');
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.some(node =>
+    node.kind === 'generation' && node.generation?.media !== 'video'));
+  const withImage = await readBoard();
+  const imageCard = withImage.document.nodes.find(node => node.kind === 'generation' && node.generation?.media !== 'video');
+  assert.ok(withImage.revision > beforeImage.revision);
+  assert.deepEqual(withImage.document.nodes.find(node => node.id === 'h3').inputs['reference-audio'], audioInput);
+  assert.deepEqual(withImage.document.run, oldRun);
+  // The reloaded fixture must see the attached audio during its initial asset read.
+  await page.evaluate(voice => {
+    const drafts = JSON.parse(sessionStorage.getItem('reference-drafts') || '[]');
+    sessionStorage.setItem('reference-drafts', JSON.stringify([...drafts, voice]));
+  }, syntheticVoice);
+  await page.reload(); await card.waitFor(); await mock();
+  await page.locator(`[data-workflow-card="${imageCard.id}"]`).waitFor();
+  await card.getByRole('group', { name: '音色参考' }).getByText('合成录音.wav').waitFor();
+  assert.equal(await page.locator('.workflow-save-error').count(), 0);
+  await runButton.click();
+  await page.waitForFunction(() => window.h3Calls.some(call => call.action === 'start'));
+  assert.deepEqual(await page.evaluate(() => window.h3Calls.find(call => call.action === 'start').input), input);
+  await page.waitForFunction(runId => {
+    const run = JSON.parse(sessionStorage.getItem('workflow-p')).document.run;
+    return run.id !== runId && run.status === 'done';
+  }, oldRun.id);
+
   // Completion refreshes the canvas. Reopen if that refresh dismissed the first popup.
   const modePicker = card.getByLabel('H3 模式', { exact: true });
   const textOption = page.getByRole('option', { name: '文生视频', exact: true });
@@ -172,16 +213,52 @@ try {
   await page.waitForFunction(() => window.h3Calls.some(call => call.action === 'start'));
   input = await page.evaluate(() => window.h3Calls.find(call => call.action === 'start').input);
   assert.equal(input.mode, 'text'); assert.equal(input.firstFrame, ''); assert.equal(input.lastFrame, undefined);
+  assert.equal(input.audioAssetId, 'voice'); assert.doesNotMatch(input.prompt, /<Audio 1>/);
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done');
+  await card.getByRole('button', { name: '断开参考录音' }).click();
+  await page.waitForFunction(() => !JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'h3').inputs['reference-audio']?.length);
   const checks = await page.evaluate(async () => {
-    const { CanvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
-    const { newWorkflowNode, workflowExecutionNodes, workflowInputs } = await import('/src/lib/canvasWorkflow.ts');
+    const { CanvasWorkflowController, filterAutomaticMediaValues } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const { newWorkflowNode, selectWorkflowVideoProvider, workflowExecutionNodes, workflowInputs } = await import('/src/lib/canvasWorkflow.ts');
     const { DEFAULT_COMFY_VIDEO, comfyEnvironmentReady, comfyVideoOptionsForMode } = await import('/src/lib/comfyVideo.ts');
     const { planAutomaticConnection } = await import('/src/lib/workflowAutoConnect.ts');
     const check = (value, message) => { if (!value) throw Error(message); };
     const base = { ...newWorkflowNode('comfy-video', 0, 0, 'codex'), id: 'gen', prompt: '测试', comfyVideo: comfyVideoOptionsForMode(DEFAULT_COMFY_VIDEO, 'text'), inputs: { 'first-frame': [{ nodeId: 'missing', portId: 'image' }], 'last-frame': [{ assetId: 'stale' }] } };
+    const linkedH3 = { ...base, inputs: { 'reference-audio': [{ nodeId: 'worker', portId: 'image', mediaFilter: ['audio'] }] } };
+    const remote = selectWorkflowVideoProvider(linkedH3, 'cloud');
+    for (const hiddenDependency of [false, true]) {
+      const board = new CanvasWorkflowController(`parked-audio-${crypto.randomUUID()}`); await board.load();
+      const hiddenReader = { ...base, id: 'hidden', inputs: { 'first-frame': [{ nodeId: remote.id, portId: 'image' }] } };
+      const worker = { ...newWorkflowNode('agent', 0, 0, 'codex'), id: 'worker',
+        inputs: { image: [{ nodeId: hiddenDependency ? hiddenReader.id : remote.id, portId: 'image' }] } };
+      await board.edit([remote, worker, ...(hiddenDependency ? [hiddenReader] : [])]);
+      const readSaved = () => sessionStorage.getItem(`workflow-${board.projectId}`);
+      const prior = readSaved();
+      const state = JSON.stringify(board.document);
+      const restoreH3 = () => board.edit(board.document.nodes.map(node =>
+        node.id === remote.id ? selectWorkflowVideoProvider(node, 'h3') : node));
+      await restoreH3().then(() => { throw Error('a parked recording must not restore a circular connection'); },
+        error => check(String(error).includes('循环'), 'cycle is rejected during provider switch'));
+      check(readSaved() === prior && JSON.stringify(board.document) === state, 'failed switch leaves saved revision and current provider intact');
+      const image = newWorkflowNode('generation', 320, 0, 'codex');
+      await board.edit([...board.document.nodes, image]);
+      const saved = JSON.parse(readSaved());
+      check(saved.revision > JSON.parse(prior).revision && saved.document.nodes.some(node => node.id === image.id), 'normal image card saves after rejected switch');
+      await board.edit(board.document.nodes.filter(node => node.id === remote.id || node.id === image.id));
+      await restoreH3();
+      const restored = board.document.nodes.find(node => node.id === remote.id);
+      check(restored.kind === 'comfy-video' && !restored.inputs['reference-audio']?.length, 'missing parked source is removed when restoring H3');
+    }
     check(Object.keys(workflowExecutionNodes([base], 'gen')[0].inputs).length === 0, 'text must not resolve hidden inputs');
-    check(workflowInputs(base).map(p => p.id).join() === 'text', 'text mode has text only');
+    check(workflowInputs(base).map(p => p.id).join() === 'text,reference-audio', 'text mode has text and audio without picture ports');
     check(planAutomaticConnection([base], [{ binding: { assetId: 'a' }, type: 'image', media: 'image' }], 'gen').error, 'text mode rejects automatic image connections');
+    const mixedOutput = { binding: { canvasNodeId: 'mix', cellId: '*' }, type: 'image', media: ['image', 'audio'] };
+    const mixed = planAutomaticConnection([base], [mixedOutput], 'gen');
+    check(mixed.bindings[0]?.inputId === 'reference-audio', 'text mode projects audio from a known mixed source');
+    check(planAutomaticConnection([base], [{ ...mixedOutput, media: undefined }], 'gen').error, 'unknown sources cannot silently occupy optional audio');
+    const projected = { 'reference-audio': [{ type: 'image', assetIds: ['a', 'voice'] }] };
+    await filterAutomaticMediaValues({ ...base, inputs: { 'reference-audio': [mixed.bindings[0].binding] } }, projected);
+    check(projected['reference-audio'][0].assetIds.join() === 'voice', 'mixed source resolves one audio asset');
     check(comfyEnvironmentReady({ phase: 'stopped', modelsRequired: 4, existing: [{ canStart: true, modelsFound: 4 }] }), 'R2V readiness uses four models');
     check(!comfyEnvironmentReady({ phase: 'stopped', modelsRequired: 4, existing: [{ canStart: true, modelsFound: 3 }] }), 'missing R2V model cannot be ready');
     const c = new CanvasWorkflowController(`modes-${crypto.randomUUID()}`); await c.load();
@@ -193,6 +270,18 @@ try {
     check(restored.document.run.status === 'done', 'text task recovered');
     check(window.h3Calls.at(-1).requestId === jobId && window.h3Calls.at(-1).action === 'status', 'recovery queries original job');
     check(window.h3Calls.filter(call => call.action === 'start').length === starts, 'recovery cannot resubmit');
+    const frameAudio = new CanvasWorkflowController(`frame-audio-${crypto.randomUUID()}`); await frameAudio.load();
+    await frameAudio.edit([{ ...base, comfyVideo: comfyVideoOptionsForMode(DEFAULT_COMFY_VIDEO, 'frames'), inputs: {
+      'first-frame': [{ assetId: 'a' }], 'last-frame': [{ assetId: 'b' }], 'reference-audio': [{ assetId: 'voice' }],
+    } }]);
+    window.h3Status = 'done'; await frameAudio.start('gen', true);
+    const framesInput = window.h3Calls.findLast(call => call.action === 'start').input;
+    check((framesInput.mode ?? 'frames') === 'frames' && framesInput.firstFrame === 'a' && framesInput.lastFrame === 'b' && framesInput.audioAssetId === 'voice', 'frame endpoints and audio reach the same request');
+    const badAudio = new CanvasWorkflowController(`bad-audio-${crypto.randomUUID()}`); await badAudio.load();
+    await badAudio.edit([{ ...base, inputs: { 'reference-audio': [{ assetId: 'missing-audio' }] } }]);
+    const beforeBadAudio = window.h3Calls.filter(call => call.action === 'start').length;
+    await badAudio.start('gen', true);
+    check(window.h3Calls.filter(call => call.action === 'start').length === beforeBadAudio, 'missing audio does not submit an H3 request');
     const lost = new CanvasWorkflowController(`lost-${crypto.randomUUID()}`); await lost.load();
     await lost.edit([base]); window.h3Status = 'unknown'; await lost.start('gen', true);
     const beforeRestart = window.h3Calls.filter(call => call.action === 'start').length;
@@ -265,6 +354,6 @@ try {
   await page.getByRole('button', { name: '下载模型', exact: true }).click();
   await page.waitForFunction(() => window.envCalls.some(call => call.action === 'install' && call.mode === 'reference'));
   await page.getByRole('dialog', { name: '本地部署工作流环境设置', exact: true }).waitFor({ state: 'hidden' });
-  console.log('H3 modes UI/runtime: reference + text inputs, defaults, ports, persistence, scoped detection, invalid sources and original-task recovery passed');
+  console.log('H3 modes UI/runtime: image-card save and reopen alongside H3 audio, mode inputs, invalid sources and original-task recovery passed');
 } catch (error) { console.error('page errors', errors, 'body', (await page.locator('body').innerText()).slice(-3500)); throw error; }
 finally { await browser.close(); await server.close(); }

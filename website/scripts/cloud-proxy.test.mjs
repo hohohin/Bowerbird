@@ -66,6 +66,36 @@ test('Agent downloads preserve signed download flag and reject private diagnosti
   assert.equal((await large.send(path)).status, 502);
 });
 
+test('file speech accepts only the immutable signed MP3 upload without account credentials', async t => {
+  const { send, calls } = await fixture(t);
+  const path = `/storage/v1/object/upload/sign/generation-temp/understand/${JOB}/inputs/speech-audio.mp3?token=signed%2Btoken`;
+  const mime = { 'Content-Type': 'audio/mpeg' };
+  assert.equal((await send(path, 'PUT', 'mp3 audio', { ...mime, ...AUTH, apikey: 'key', 'x-upsert': 'true' })).status, 200);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url.search, '?token=signed%2Btoken');
+  assert.equal(calls[0].headers.Authorization, undefined);
+  assert.equal(calls[0].headers.apikey, undefined);
+  assert.equal(calls[0].headers['x-upsert'], undefined);
+  assert.equal((await send(path, 'PUT', undefined, { ...mime, 'Content-Length': 32000001 })).status, 413);
+  assert.equal((await send(path, 'PUT', 'wav', { 'Content-Type': 'audio/wav' })).status, 415);
+  assert.equal((await send(path.replace('speech-audio.mp3', 'request.json'), 'PUT', 'manifest', mime)).status, 404);
+  assert.equal((await send(path.replace('upload/sign', 'sign'), 'GET')).status, 404);
+  assert.equal(calls.length, 1);
+});
+
+test('the signed-in understanding path returns a full long transcript while other bounded routes retain their limit', async t => {
+  const result = { text: "末尾句段需要保留".repeat(62_000) };
+  const delivery = JSON.stringify({ status: "succeeded", text: JSON.stringify(result) });
+  assert.ok(Buffer.byteLength(delivery) > 1_048_576);
+  assert.ok(Buffer.byteLength(delivery) < 4_194_304);
+  const { send } = await fixture(t, { fetchImpl: async () => new Response(delivery, { headers: { 'content-type': 'application/json' } }) });
+  const recovery = JSON.stringify({ action: 'get-by-key', idempotency_key: 'file-speech:original' });
+  const restored = await send('/functions/v1/understand-proxy', 'POST', recovery, AUTH);
+  assert.equal(restored.status, 200);
+  assert.equal(restored.body.toString(), delivery);
+  assert.equal((await send('/functions/v1/visual-profile', 'POST', '{}', AUTH)).status, 502);
+});
+
 test("Agent control and signed H3 manifest preserve authorization and never retry", async t => {
   const { send, calls } = await fixture(t);
   for (const action of ["create", "enqueue", "get", "cancel"]) {

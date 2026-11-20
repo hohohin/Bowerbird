@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "jsr:@supabase/supabase-js@2";
 import { ApiError } from "./errors.ts";
 import { managedUsagePolicy } from "./usage.ts";
+import { FILE_SPEECH_OPERATION, fileSpeechAudioKey } from "./file-speech.ts";
 
 type Queue = "understand_jobs" | "visual_profile_jobs";
 interface Upload {
@@ -27,6 +28,10 @@ export async function inspectTextUpload<T extends Upload>(admin: SupabaseClient,
   return job.status === "uploading" ? await transition(admin, table, job, false) : job;
 }
 
+export async function enqueueTextUpload<T extends Upload>(admin: SupabaseClient, table: Queue, job: T): Promise<T> {
+  return await transition(admin, table, job, true);
+}
+
 interface Input {
   userId: string;
   key: string;
@@ -37,12 +42,12 @@ interface Input {
   cards: number | null;
 }
 
-function usageParameters() {
+export function usageParameters() {
   const policy = managedUsagePolicy();
   return { p_unit_cost_micros: policy.unitCostMicros, p_daily_limit: policy.dailyLimitMicros, p_per_minute: policy.perUserPerMinute };
 }
 
-function checkAcceptance(error: { details?: string } | null) {
+export function checkTextAcceptance(error: { details?: string } | null) {
   if (error?.details === "manifest_conflict") throw new ApiError("invalid_request", "幂等键已用于不同内容", false, 409);
   if (error?.details === "insufficient_credits") throw new ApiError("insufficient_credits", "积分不足");
   if (error?.details === "price_unavailable") throw new ApiError("not_configured", "此复刻能力尚未启价，暂不可提交");
@@ -54,7 +59,7 @@ function checkAcceptance(error: { details?: string } | null) {
 
 export async function beginSyncUnderstand(admin: SupabaseClient, userId: string, key: string) {
   const { data, error } = await admin.rpc("begin_sync_understand", { p_user_id: userId, p_key: key, ...usageParameters() });
-  checkAcceptance(error);
+  checkTextAcceptance(error);
   if (!data) throw new ApiError("internal_error", "未收到积分预授权", true);
   return { holdId: String(data.hold_id), estimated: Number(data.estimated_amount), pricingVersion: Number(data.pricing_version) };
 }
@@ -65,20 +70,24 @@ export async function acceptTextUpload<T extends Upload>(admin: SupabaseClient, 
     p_operation: input.operation, p_service: input.service, p_cards: input.cards,
     ...usageParameters(),
   });
-  checkAcceptance(error);
+  checkTextAcceptance(error);
   if (!data) throw new ApiError("internal_error", "云端任务受理状态未知，请按原任务恢复", true);
   const job = data as T;
   if (job.status !== "uploading") return job;
 
+  await storeTextManifest(admin, job.request_object_key, input.payload);
+  return await enqueueTextUpload(admin, table, job);
+}
+
+export async function storeTextManifest(admin: SupabaseClient, key: string, payload: string) {
   // A replay has the identical manifest bytes. Never overwrite an accepted
   // object. A duplicate means a sibling (or the interrupted caller) stored it.
-  const uploaded = await admin.storage.from(BUCKET).upload(job.request_object_key, input.payload, {
+  const uploaded = await admin.storage.from(BUCKET).upload(key, payload, {
     contentType: "application/json", upsert: false,
   });
-  if (uploaded.error && await objectPresent(admin, job.request_object_key) !== true) {
+  if (uploaded.error && await objectPresent(admin, key) !== true) {
     throw new ApiError("internal_error", "输入上传未确认，请使用原任务恢复", true);
   }
-  return await transition(admin, table, job, true);
 }
 
 // Per-job keys are immutable. Both workers verify the bytes against the
@@ -96,24 +105,32 @@ export async function cleanupTextJobs(admin: SupabaseClient, table: Queue) {
   const expired = await admin.rpc("expire_unsubmitted_text_jobs", { p_table: table });
   if (expired.error) throw new ApiError("internal_error", "过期上传任务结算失败", true);
   const now = new Date().toISOString();
-  const rows = await admin.from(table).select("id,request_object_key")
+  const query = table === "understand_jobs"
+    ? admin.from("understand_jobs").select("id,request_object_key,operation")
+    : admin.from("visual_profile_jobs").select("id,request_object_key");
+  const rows = await query
     .lt("content_expires_at", now).or("finished_at.not.is.null,upstream_submitted_at.not.is.null")
     .is("deleted_at", null).order("content_expires_at").order("id").limit(100);
   if (rows.error) throw new ApiError("internal_error", "过期任务查询失败", true);
-  const jobs = rows.data ?? [];
+  const jobs = (rows.data ?? []) as { id: string; request_object_key: string; operation?: string }[];
   if (!jobs.length) return { expiredJobs: 0, removedObjects: 0 };
   const bucket = admin.storage.from(BUCKET);
-  const removed = await bucket.remove(jobs.map(job => job.request_object_key));
+  const objects = jobs.map(job => ({
+    id: job.id,
+    keys: job.operation === FILE_SPEECH_OPERATION
+      ? [job.request_object_key, fileSpeechAudioKey(job.id)]
+      : [job.request_object_key],
+  }));
+  const removed = await bucket.remove(objects.flatMap(job => job.keys));
   if (removed.error) throw new ApiError("internal_error", "过期输入对象删除失败", true);
   const deleted = new Set((removed.data ?? []).map(object => object.name));
   const cleared: string[] = [];
-  for (const job of jobs) {
-    if (!deleted.has(job.request_object_key)) {
-      // Missing from the delete response can mean a partial delete or a retry
-      // after a crash between Storage and SQL. List this job's private folder.
-      if (await objectPresent(admin, job.request_object_key) !== false) continue;
-    }
-    cleared.push(job.id);
+  for (const job of objects) {
+    // Missing from the delete response can mean a partial delete or a retry.
+    const remains = await Promise.all(job.keys.map(async key =>
+      !deleted.has(key) && await objectPresent(admin, key) !== false
+    ));
+    if (!remains.some(Boolean)) cleared.push(job.id);
   }
   if (cleared.length) {
     const updated = await admin.from(table).update({ deleted_at: now, result_text: null })

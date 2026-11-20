@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useStore } from "../store";
 export interface ReplicationCapability { operation: "video-analysis" | "text-rewrite" | "speech-transcription"; available: boolean; credits: number | null }
-export function useReplicationCapabilities(projectId: string) {
+export function useReplicationCapabilities(projectId: string | null) {
   const [state, setState] = useState<{ services: ReplicationCapability[]; error: string; loading: boolean }>({ services: [], error: "", loading: true });
   const [revision, refresh] = useState(0);
   const identity = useStore(s => `${s.cloudAuth?.user_id}:${s.cloudAuth?.logged_in}`);
@@ -15,7 +15,7 @@ export function useReplicationCapabilities(projectId: string) {
       let delay = 30000;
       try {
         const value = await Promise.race([
-          invoke<{ services: ReplicationCapability[] }>("video_replication", { projectId, action: "capabilities", data: {} }),
+          invoke<{ services: ReplicationCapability[] }>("video_replication", { projectId: projectId ?? "", action: "capabilities", data: {} }),
           new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("读取 Cloud 价格超时")), 15000); }),
         ]);
         if (!["video-analysis", "text-rewrite"].every(operation => value?.services?.some(s => s.operation === operation && typeof s.available === "boolean" && (!s.available || typeof s.credits === "number" && s.credits > 0)))) throw new Error("Cloud 返回的服务状态不完整");

@@ -61,6 +61,10 @@ export function cloneCanvasClipboard(value: CanvasClipboard, projectId: string, 
     }
     return next;
   };
+  const remapInputs = (inputs: WorkflowInput[]) => inputs.flatMap(input => {
+    const next = remap(input);
+    return next ? [next] : [];
+  });
   const nodes: NewCanvasNode[] = value.nodes.map(node => {
     let payloadJson = node.payloadJson;
     if (node.kind === "note") {
@@ -81,7 +85,8 @@ export function cloneCanvasClipboard(value: CanvasClipboard, projectId: string, 
     resultNodeIds: node.resultNodeIds?.flatMap(id => ids.has(id) ? [ids.get(id)!] : []) ?? [],
     textSource: node.textSource ? ids.get(node.textSource) : undefined,
     textTarget: node.textTarget ? { ...node.textTarget, nodeId: ids.get(node.textTarget.nodeId)! } : undefined,
-    inputs: Object.fromEntries(Object.entries(node.inputs).map(([port, inputs]) => [port, inputs.flatMap(input => { const next = remap(input); return next ? [next] : []; })])),
+    inputs: Object.fromEntries(Object.entries(node.inputs).map(([port, inputs]) => [port, remapInputs(inputs)])),
+    savedComfyAudio: node.savedComfyAudio && remapInputs(node.savedComfyAudio),
     promptReferences: node.promptReferences?.map(ref => ({ ...ref, input: remap(ref.input) ?? ref.input })),
   }));
   // Writers without their input (e.g. external sources on another project) remain plain content cells.

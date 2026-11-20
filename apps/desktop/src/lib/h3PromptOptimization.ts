@@ -10,21 +10,25 @@ export interface H3ImagePromptInput {
 }
 
 const cardToken = /@\[[^\]]+\]/g;
+const generationToken = /@\[[^\]]+\]|@(?:图片|图|image)[1-9][0-9]*|<Picture [1-9][0-9]*>/g;
 
-export function imageOptimizationText(prompt: string): string {
-  const tokens = [...new Set(prompt.match(cardToken) ?? [])];
+export function imageOptimizationText(prompt: string, composed = false): string {
+  const pattern = composed ? generationToken : cardToken;
+  const tokens = [...new Set(prompt.match(pattern) ?? [])];
   if (tokens.length && /\{\{REF_\d+\}\}/.test(prompt)) throw new Error("提示词包含与引用标记冲突的文本");
-  return prompt.replace(cardToken, token => `{{REF_${tokens.indexOf(token) + 1}}}`);
+  return prompt.replace(pattern, token => `{{REF_${tokens.indexOf(token) + 1}}}`);
 }
 
-export function restoreImageOptimization(prompt: string, result: string) {
-  const tokens = [...new Set(prompt.match(cardToken) ?? [])];
+export function restoreImageOptimization(prompt: string, result: string, composed = false) {
+  const pattern = composed ? generationToken : cardToken;
+  const tokens = [...new Set(prompt.match(pattern) ?? [])];
   const original = { text: prompt, keptOriginal: true };
-  // Only the local reference map may introduce an editor chip.
-  if (result.match(cardToken)) return original;
-  if (!tokens.length) return { text: result.trim(), keptOriginal: false };
+  // Only the local reference map may introduce these references.
+  if (result.match(pattern)) return original;
   const markers = /\{\{REF_\d+\}\}/g;
-  const encoded = imageOptimizationText(prompt);
+  if (composed && !tokens.length && result.match(markers)) return original;
+  if (!tokens.length) return { text: result.trim(), keptOriginal: false };
+  const encoded = imageOptimizationText(prompt, composed);
   const known = new Map(tokens.map((token, index) => [`{{REF_${index + 1}}}`, token]));
   if ((result.match(markers) ?? []).some(marker => !known.has(marker))) return original;
   let restored = result.trim();
@@ -52,4 +56,9 @@ export function h3OptimizationInstruction(input: H3PromptInput | H3ImagePromptIn
 /** Strip the model's field label, never labels mentioned within dialogue or prose. */
 export function cleanH3OptimizedPrompt(text: string): string {
   return text.replace(/^[\t ]*integrated_multimodal_description[\t ]*[:：][\t ]*/gim, "").trim();
+}
+
+export function restoreH3VideoAudioReference(original: string, optimized: string): string {
+  const tags = (prompt: string) => (prompt.match(/<Audio\s+\d+>/gi) ?? []).join("\n");
+  return tags(original) === tags(optimized) ? optimized : original;
 }

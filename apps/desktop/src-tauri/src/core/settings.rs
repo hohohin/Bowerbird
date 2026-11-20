@@ -93,6 +93,10 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub generation_completion_sound: bool,
 
+    /// H3 图片和视频卡手动运行时共用的提示词优化偏好。
+    #[serde(default)]
+    pub h3_auto_optimize_prompt: bool,
+
     /// 首启预置示例图是否已注入完成。true = 不再重灌（配合 count_assets==0 双 gate）。
     #[serde(default)]
     pub samples_seeded: bool,
@@ -151,6 +155,7 @@ impl Default for AppSettings {
             canvas_frequent_assets: Default::default(),
             generation_completion_popup: true,
             generation_completion_sound: true,
+            h3_auto_optimize_prompt: false,
             samples_seeded: false,
             dreamina_model_version: DEFAULT_DREAMINA_MODEL_VERSION.to_string(),
             jev_image_classification_enabled: false,
@@ -314,6 +319,21 @@ mod tests {
         let restored = SettingsState::init(path).unwrap().get();
         assert!(!restored.generation_completion_popup);
         assert!(!restored.generation_completion_sound);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn h3_auto_optimize_defaults_off_and_persists() {
+        let old: AppSettings = serde_json::from_str("{}").unwrap();
+        assert!(!old.h3_auto_optimize_prompt);
+        let dir = std::env::temp_dir().join(format!("bb-h3-settings-{}", ulid::Ulid::new()));
+        let path = dir.join("settings.json");
+        let state = SettingsState::init(path.clone()).unwrap();
+        let mut settings = state.get();
+        assert!(!settings.h3_auto_optimize_prompt);
+        settings.h3_auto_optimize_prompt = true;
+        state.update(settings).unwrap();
+        assert!(SettingsState::init(path).unwrap().get().h3_auto_optimize_prompt);
         std::fs::remove_dir_all(dir).unwrap();
     }
 

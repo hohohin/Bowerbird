@@ -287,11 +287,15 @@ function searchError(error: unknown, fallback = "暂时无法搜索图片，请�
   }
 }
 
+export function emptySemanticResultMessage({ eligible, indexed, truncated }: Pick<SemanticSession, "eligible" | "indexed" | "truncated">) {
+  if (!eligible) return "当前范围内没有可索引的图片。";
+  if (!indexed) return "当前范围内还没有已索引的图片。";
+  return `在已索引的 ${indexed} 张图片中未找到匹配。${indexed < eligible ? `当前范围有 ${eligible} 张可索引图片。` : ""}${truncated ? "描述较长，已按部分描述搜索。" : ""}`;
+}
+
 function resultMessage(session: SemanticSession) {
-  if (!session.eligible) return "当前范围内没有可索引的图片。";
-  if (!session.indexed) return "当前范围内还没有已索引的图片。";
-  if (!session.resultCount) return "当前范围内未找到图片。";
-  return `找到 ${session.resultCount} 张图片${session.resultCount < session.indexed ? "，已显示最相关的结果" : ""}${session.indexed < session.eligible ? `。已索引 ${session.indexed} / 可索引 ${session.eligible} 张` : ""}${session.truncated ? "。描述较长，已按部分描述搜索。" : ""}`;
+  if (!session.resultCount) return emptySemanticResultMessage(session);
+  return `显示 ${session.resultCount} 张匹配图片${session.indexed < session.eligible ? `。已索引 ${session.indexed} / 可索引 ${session.eligible} 张` : ""}${session.truncated ? "。描述较长，已按部分描述搜索。" : ""}`;
 }
 
 function Progress({ status, disabled, control }: {

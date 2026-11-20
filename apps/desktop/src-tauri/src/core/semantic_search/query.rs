@@ -176,12 +176,14 @@ pub(crate) fn search(
                 if let ValueRef::Blob(bytes) = row.get_ref(2)? {
                     if let Some(vector) = Embedding::from_bytes(bytes) {
                         indexed += 1;
-                        let content_sha256 = row.get(1)?;
-                        heap.insert(RankedImage {
-                            id: last.clone(),
-                            score: text.similarity(&vector),
-                            content_sha256,
-                        });
+                        let score = text.similarity(&vector);
+                        if score >= model::SEARCH_MIN_COSINE {
+                            heap.insert(RankedImage {
+                                id: last.clone(),
+                                score,
+                                content_sha256: row.get(1)?,
+                            });
+                        }
                     } else {
                         tracing::warn!("semantic search skipped a corrupt vector");
                     }

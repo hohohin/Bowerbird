@@ -25,7 +25,7 @@ import { activeCanvasNameCounts, assignCanvasCardNames, canvasCardNameError } fr
 import { CanvasCardName } from "./CanvasCardName";
 import { CanvasConnectionHandle } from "./CanvasConnectionHandle";
 import { ContextMenu, ContextSubmenu } from "./ContextMenu";
-import { automaticValueMedia, canvasAutomaticOutputs, workflowSourceMediaLabel } from "../lib/workflowCanvasCapabilities";
+import { automaticValueMedia, canvasAutomaticOutputs, workflowAssetMedia, workflowSourceMediaLabel } from "../lib/workflowCanvasCapabilities";
 import { planAutomaticConnection, contentCardAcceptsMedia, type AutomaticOutput } from "../lib/workflowAutoConnect";
 import { TacticalSelect } from "./TacticalSelect";
 import { WorkflowDisconnectMenu, type DisconnectChoice } from "./WorkflowDisconnectMenu";
@@ -46,12 +46,13 @@ import { notifyError, notifySuccess } from "../lib/notify";
 import { canvasWorkflowController } from "../lib/canvasWorkflowRuntime";
 import { workflowDiagnosticReport } from "../lib/workflowDiagnostics";
 import { removeWorkflowNodes, retryWorkflowSave } from "../lib/workflowRemoval";
-import { WORKFLOW_CARD_DRAG_TYPE, workflowDisconnectId, workflowBindingKey, compileGenerationPrompt, selectWorkflowVideoProvider, generationInputNode, generationReferencePreviewOrder, disconnectGenerationReference, reorderGenerationReferences, isWorkflowGenerationResult, workflowInputValues, workflowOrder } from "../lib/canvasWorkflow";
+import { H3_VIDEO_AUDIO_PORT, WORKFLOW_CARD_DRAG_TYPE, workflowDisconnectId, workflowBindingKey, compileGenerationPrompt, selectWorkflowVideoProvider, generationInputNode, generationReferencePreviewOrder, h3RunReferences, lastGenerationRunInput, disconnectGenerationReference, reorderGenerationReferences, isWorkflowGenerationResult, workflowInputValues, workflowOrder } from "../lib/canvasWorkflow";
 import { assertWorkflowAcyclic, invalidateWorkflow, newWorkflowNode, normalizeWorkflowInputSlots, workflowNodeRun, workflowRuns, workflowInputProducers, workflowConnectionError, workflowInputs, workflowOutputs,
   workflowPortY, workflowTitle, workflowCardWidth, WORKFLOW_SKILLS, type CanvasWorkflow, type WorkflowInput, type WorkflowKind, type WorkflowLoopItem, type WorkflowNode, type WorkflowPort } from "../lib/canvasWorkflow";
 import type { Asset, CanvasNode, VisualProfileSummary } from "../lib/types";
 import { H3OptimizationActions } from "./creation/H3OptimizationActions";
 import { H3_IMAGE } from "../lib/genProviders";
+import { generationPromptNodeId } from "../lib/projectNodeIds";
 import { ProviderSelect } from "./creation/ProviderSelect";
 import { RatioSelect } from "./creation/RatioSelect";
 import { VideoControls } from "./creation/VideoControls";
@@ -99,6 +100,10 @@ const disconnectKey = (node: WorkflowNode, port: string, binding: WorkflowInput)
 
 function comfyCheckKey(node: WorkflowNode) {
   return JSON.stringify([node.id, node.comfyVideo?.endpoint ?? DEFAULT_COMFY_VIDEO.endpoint, comfyVideoMode(node.comfyVideo)]);
+}
+
+function isH3ImageCard(node: WorkflowNode) {
+  return node.kind === "generation" && node.generation?.media !== "video" && node.provider === H3_IMAGE;
 }
 function CardComfyEnvironment({ node, disabled, onChange, onStatus }: {
   node: WorkflowNode; disabled: boolean; onChange: (changes: Partial<WorkflowNode>) => void;
@@ -241,6 +246,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   const [assets, setAssets] = useState<Asset[]>([]);
   const [agentOpen, setAgentOpen] = useState(false);
   const [retryReview, setRetryReview] = useState<{ projectId: string; cardNames: string[]; confirm: () => Promise<void> } | null>(null);
+  const [localRunReview, setLocalRunReview] = useState<{ projectId: string; nodeId: string; single: boolean } | null>(null);
   const agentActionLocks = useRef(new Set<string>());
   const [pendingAgentCards, setPendingAgentCards] = useState<ReadonlySet<string>>(() => new Set());
   const [templateLibrary, setTemplateLibrary] = useState<{ instanceRoot?: string; importPackage?: boolean } | null>(null);
@@ -257,6 +263,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
   const document = controller.document;
   const chatSummaries = useProjectChatSummaries(projectId);
   const activeVideoJobs = useStore(state => Object.values(state.genJobs).filter(job => job.media === "video" && job.running).map(job => job.id), shallow);
+  const h3AutoOptimize = useStore(state => state.settings?.h3_auto_optimize_prompt === true);
   const quote = useSnapshot(chatQuote.store), dsh = useSnapshot(chatDshStatus.store);
   const [voiceIssue, setVoiceIssue] = useState<string | null>("正在检查本机配音环境…");
   const [comfyIssues, setComfyIssues] = useState<Record<string, string | null>>({});
@@ -389,7 +396,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     else if (workflow) { onSelect(workflow.id); onPlaced({ ...workflow, width: workflowCardWidth(workflow), height: cardElements.current.get(id)?.offsetHeight ?? 400 }); }
   };
   const sourceImages = useCallback((input: WorkflowInput): string[] => {
-    if (input.groupId) { const group = groupById.get(input.groupId); return (input.autoConnect ? group?.mediaAssetIds : group?.assetIds) ?? group?.assetIds ?? []; }
+    if (input.groupId) { const group = groupById.get(input.groupId); return (input.autoConnect || input.mediaFilter?.includes("audio") ? group?.mediaAssetIds : group?.assetIds) ?? group?.assetIds ?? []; }
     return workflowBindingAssetIds(input, nodeById.get(input.nodeId ?? ""), graphById.get(input.canvasNodeId ?? ""), graphNodes);
   }, [groupById, graphById, graphNodes, nodeById]);
   const inputImages = useCallback((input: WorkflowInput) => {
@@ -503,6 +510,34 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
 
   const [agentPromptEditors, setAgentPromptEditors] = useState<Set<string>>(() => new Set());
   const handle = (promise: Promise<unknown>) => { void promise.catch(error => notifyError(error, "工作流操作未完成")); };
+  function runCard(nodeId: string, single: boolean, confirmed = false) {
+    const board = controller.document;
+    const node = board.nodes.find(card => card.id === nodeId);
+    if (!node || controller.startingAction(nodeId) || controller.isLocked(nodeId)) return;
+    if (!confirmed && (node.kind === "comfy-video" || isH3ImageCard(node))) {
+      const others = board.nodes.filter(card => card.id !== nodeId);
+      const runs = workflowRuns(board);
+      const anotherCardRunning = others.some(card => {
+        if (card.kind !== "comfy-video" && !isH3ImageCard(card)) return false;
+        return controller.startingAction(card.id) === "run" || runs.some(run => {
+          const step = run.steps[card.id];
+          return run.status === "running" && run.order.includes(card.id)
+            && (step?.status === "running" || step?.status === "pending" && run.startId === card.id)
+            && (!step.comfyOptimization || !!step.comfyAutoGeneration);
+        });
+      });
+      // Image workflow steps hand off to the generation session before the GPU job finishes.
+      const sessions = workflowSessionIds(others);
+      const anotherImageJobRunning = Object.values(useStore.getState().genJobs).some(job =>
+        job.running && job.provider === H3_IMAGE && job.turns.some(turn =>
+          !!turn.turnKey && sessions.has(generationPromptNodeId(job.id, turn.turnKey))));
+      if (anotherCardRunning || anotherImageJobRunning) {
+        setLocalRunReview({ projectId, nodeId, single });
+        return;
+      }
+    }
+    handle(controller.start(nodeId, single));
+  }
   const retryLoop = async (runId: string, confirmedRequestIds?: string[]) => {
     const review = await controller.retryLoop(runId, confirmedRequestIds);
     if (review) setRetryReview({ projectId, cardNames: review.cardNames, confirm: () => retryLoop(runId, review.requestIds) });
@@ -584,7 +619,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     });
   }, [controller]);
   useEffect(() => { handle(controller.syncCanvasReferences(graphNodes)); }, [controller, graphNodes]);
-  useEffect(() => { setConnection(null); setArmed(false); clearAutomatic(); setAgentOpen(false); setKeyHover(null); setTemplateLibrary(null); setTemplateSelection(null); setDisconnectMenu(null); }, [projectId]);
+  useEffect(() => { setConnection(null); setArmed(false); clearAutomatic(); setAgentOpen(false); setKeyHover(null); setTemplateLibrary(null); setTemplateSelection(null); setDisconnectMenu(null); setLocalRunReview(null); }, [projectId]);
   useLayoutEffect(() => {
     const observer = new ResizeObserver(entries => {
       let changed = false;
@@ -667,9 +702,11 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     const next = invalidate && (!promptOnly || previous.some(node => Object.keys(node.outputs).length))
       ? invalidateWorkflow(nodes, id) : nodes;
     const edited = promptOnly && previous.find(node => node.id === id);
+    const lastPrompt = edited && edited.kind === "comfy-video" ? lastGenerationRunInput(controller.document, id)?.prompt : undefined;
     // Native typing paints this field. Other cards only change when an output
-    // is invalidated, or the transition to/from empty changes available actions.
+    // is invalidated, or the draft changes an available action.
     const editorOnly = !!edited && edited.kind === "comfy-video" && !!edited.prompt.trim() === !!update.prompt!.trim()
+      && (edited.prompt === lastPrompt) === (update.prompt === lastPrompt)
       && !previous.some((node, index) => node.outputs !== next[index].outputs && Object.keys(node.outputs).length > 0);
     const saved = edit(next, promptOnly ? id : undefined, editorOnly);
     handle(saved.then(() => {
@@ -1043,6 +1080,24 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
     if (error) { notifyError(null, error); return; }
     if (node.kind === "visual-profile" && node.profileId) { notifyError(null, "请先切换到从输入提炼"); return; }
     const { type: _type, ...binding } = source;
+    if (node.kind === "comfy-video" && port?.type === "image") {
+      const audioPort = inputId === H3_VIDEO_AUDIO_PORT;
+      const ids = inputImages(audioPort ? { ...binding, mediaFilter: ["audio"] } : binding);
+      const media = ids.map(id => {
+        const material = materialByAsset.get(id);
+        return material?.audio ? "audio" : material?.video ? "video" : workflowAssetMedia(assets.find(asset => asset.id === id));
+      });
+      const producerMedia = source.nodeId && automaticOutputs(source.nodeId).find(output => output.binding.portId === source.portId)?.media;
+      const knownMedia = media.length && media.every(Boolean) ? media : !media.length && producerMedia ? [producerMedia].flat() : [];
+      if (audioPort) {
+        if (binding.videoFrame || (knownMedia.length && !knownMedia.includes("audio")) || media.filter(type => type === "audio").length > 1) {
+          notifyError(null, "请选择一段音频作为参考录音"); return;
+        }
+        binding.mediaFilter = ["audio"];
+      } else if (knownMedia.length && knownMedia.every(type => type === "audio")) {
+        notifyError(null, "请将录音连接到音频输入"); return;
+      }
+    }
     if (node.kind === "voice" && inputId === "image") {
       const ids = inputImages(binding);
       if (ids.length > 1 || ids.some(id => { const asset = assets.find(item => item.id === id); return asset && !isAudioPath(asset.store_path); })) {
@@ -1511,7 +1566,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           onMouseLeave={() => setKeyHover(null)}
           onFocus={event => { if (event.currentTarget.matches(":focus-visible")) showProgress(node.id, event.currentTarget, false, true); }} onBlur={() => setKeyHover(null)}
           onDragStart={event => { event.stopPropagation(); event.dataTransfer.setData("text/plain", `bowerbird-winding-key:${node.id}`); }}
-          onClick={() => { if (!busy && !issue) handle(controller.start(node.id)); }}
+          onClick={() => { if (!busy && !issue) runCard(node.id, false); }}
           onContextMenu={event => { event.preventDefault(); event.stopPropagation(); if (!busy) patch(node.id, { trigger: false }, false); }}><WindingKey size={32} /></button>;
   }
   function gearButton(node: WorkflowNode) {
@@ -1674,12 +1729,24 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const visibleInputs = node.kind === "comfy-video" ? generationInputNode(node).inputs : node.kind === "trigger" && triggerMode !== "completion" ? {} : node.inputs;
       const localVideo = node.kind === "comfy-video";
       const videoCard = localVideo || node.kind === "generation" && node.generation?.media === "video";
+      const localImage = isH3ImageCard(node);
       const height = node.kind === "voice" ? 0 : node.kind === "generation" || node.kind === "comfy-video" ? 210 : node.kind === "trigger" ? 0 : node.kind === "loop" ? 260 : Math.max(330, 130 + Math.max(inputPorts.length, outputPorts.length) * 30);
       const outputImageIds = node.kind === "generation" || node.kind === "agent" ? [] : Object.values(node.outputs).flatMap(value => value.assetIds ?? []);
       const profileId = node.profileId || node.profileCache?.profileId || step?.profileId;
       const referenceCard = node.kind === "generation" || node.kind === "agent";
       const inputIds = node.kind === "trigger" || referenceCard ? [] : Object.values(visibleInputs).flat().flatMap(inputImages);
       const referenceIds = referenceCard ? generationReferencePreviewOrder(node, referencePreviewValues(node), document.nodes) : [];
+      const generationCard = node.kind === "generation" || localVideo;
+      const lastGenerationInput = generationCard ? lastGenerationRunInput(document, node.id) : undefined;
+      let generationAction = "运行";
+      if (lastGenerationInput?.prompt === node.prompt) {
+        const current = generationInputNode(node, document.nodes);
+        const currentReferences = localVideo
+          ? h3RunReferences(Object.fromEntries(Object.entries(current.inputs).map(([port, inputs]) =>
+            [port, inputs.map(input => ({ type: "image" as const, assetIds: inputImages(input) }))])))
+          : [generationReferencePreviewOrder(current, referencePreviewValues(current), document.nodes)];
+        if (JSON.stringify(lastGenerationInput.references) === JSON.stringify(currentReferences)) generationAction = "重试";
+      }
       const references = referenceIds.map(id => assets.find(asset => asset.id === id)).filter((asset): asset is Asset => !!asset);
       const selectedImages = [...new Set(outputImageIds.length ? outputImageIds : inputIds)].map(id => assets.find(asset => asset.id === id)).filter((asset): asset is Asset => !!asset);
       let videoOptions = resolveVideoOptions(node.generation?.videoOptions ?? DEFAULT_VIDEO_OPTIONS, []);
@@ -1709,7 +1776,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       const thumbnailIds = new Set(references.map(asset => asset.id));
       const thumbnailWireIds = new Set<string>();
       const labelledInputs = Object.entries(visibleInputs).map(([port, inputs]) => [port, inputs.filter(input => {
-        if (localVideo && (port === "first-frame" || port === "last-frame")) return false;
+        if (localVideo && (port === "first-frame" || port === "last-frame" || port === H3_VIDEO_AUDIO_PORT)) return false;
         if (!referenceCard || (port !== "image" && port !== "text")) return true;
         const ids = inputImages(input);
         if (!ids.length || !ids.every(id => thumbnailIds.has(id))) return true;
@@ -1736,7 +1803,10 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
           else patch(node.id, { generation: { ...node.generation, videoOptions: options } });
         }}
         local={{ options: localVideo ? node.comfyVideo ?? DEFAULT_COMFY_VIDEO : undefined,
-          onSelect: () => { if (!localVideo) patch(node.id, selectWorkflowVideoProvider(node, "h3"), false); } }}
+          onSelect: () => {
+            if (localVideo) return;
+            patch(node.id, selectWorkflowVideoProvider(node, "h3"), false);
+          } }}
         ratio={node.generation?.ratio ?? "16:9"} onRatioChange={ratio => patch(node.id, { generation: { ...node.generation, ratio } })} />;
       return <article key={node.id} data-canvas-node data-workflow-card={node.id} ref={element => { if (element) cardElements.current.set(node.id, element); else cardElements.current.delete(node.id); }} aria-busy={running} className={`workflow-card ${running ? "canvas-card-running" : failure && !failure.dismissed ? "canvas-card-error" : ""} is-${node.kind} ${localVideo ? "is-generation" : ""} ${selectedIds.has(node.id) ? "is-selected" : ""} ${armed ? "is-key-target" : ""}`}
         style={{ left: node.x, top: node.y, width: workflowCardWidth(node), minHeight: height, zIndex: selectedIds.has(node.id) ? 11000 : 9000 }}
@@ -1819,7 +1889,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
                 handle(controller.continue(current.id));
             }} />}
           {(node.kind === "generation" || localVideo && !!node.sessionNodeIds?.length) && <WorkflowGenerationHistory node={node} graphNodes={graphNodes} onOpen={onOpenGeneration} />}
-          {node.kind === "generation" && node.generation?.media !== "video" && node.provider === H3_IMAGE && <ComfyEnvironmentControl key={state.cloudAuth?.user_id} node={{}} imageMode={references.length ? "edit" : "image"} disabled={busy} onChange={() => {}} />}
+          {localImage && <ComfyEnvironmentControl key={state.cloudAuth?.user_id} node={{}} imageMode={references.length ? "edit" : "image"} disabled={busy} onChange={() => {}} />}
           {node.kind === "voice" && <VoiceEnvironmentControl projectId={projectId} onStatusChange={setVoiceIssue} />}
           {node.kind === "comfy-video" && <CardComfyEnvironment node={node} disabled={busy} onChange={changes => patch(node.id, changes, false)} onStatus={reportComfy} />}
           <button aria-label="复制卡片" disabled={creating} onClick={() => {
@@ -1915,8 +1985,7 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
               return next;
             })}>任务要求</button>}
           {(node.kind === "generation" || node.kind === "agent" && (!hasAgentMessages || agentPromptEditors.has(node.id))) && <WorkflowPromptEditor fitContent={videoCard} cardNames={cardNames} node={{ ...node, inputs: { ...node.inputs, image: node.inputs.image?.map(input => input.groupId ? { ...input, assetIds: inputImages(input) } : input) ?? [] } }} nodes={document.nodes} graphNodes={graphNodes} disabled={busy && !creating} readCurrentPrompt={readCurrentPrompt} onChange={(prompt, promptReferences) => patch(node.id, { prompt, promptReferences })} />}
-          {node.kind === "generation" && node.generation?.media !== "video" && node.provider === H3_IMAGE &&
-            optimizationActions}
+          {localImage && optimizationActions}
           {node.kind !== "director3d" && node.kind !== "planner" && node.kind !== "trigger" && node.kind !== "loop" && node.kind !== "generation" && node.kind !== "agent" && node.kind !== "comfy-video" && node.kind !== "voice" && !(node.kind === "instruction" && node.action !== "describe") && !(node.kind === "visual-profile" && node.profileId) && <CanvasTextarea aria-label={node.kind === "instruction" ? "反推要求" : node.kind === "visual-profile" ? "视觉要求" : "卡片指令"}
             disabled={busy} maxLength={node.kind === "visual-profile" ? 4000 : undefined} placeholder={node.kind === "instruction" ? "留空使用当前反推要求" : node.kind === "visual-profile" ? "描述配色、构图、光线等要求；可只接图片或只填文字…" : "输入创作要求…"}
             value={node.prompt} readCurrentValue={readCurrentPrompt}
@@ -1987,12 +2056,15 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
                 && <button aria-label="继续工作流" onClick={() => handle(controller.continue(run?.id))}><Play size={13} />继续</button>}
               <button disabled={!!step?.comfyStopping} aria-label="停止工作流" title={node.kind === "comfy-video" ? "取消排队或中断本次生成" : "停止工作流"} onClick={() => handle(controller.stop(run?.id))}><Square size={12} /></button>
             </> : node.kind !== "agent" && node.kind !== "trigger" && <>
-              {localVideo && <label className="workflow-video-auto-optimize" title="运行前通过 Cloud DSH 优化一次提示词，可能消耗 Bowerbird 积分。" onPointerDown={event => event.stopPropagation()}>
-                <input type="checkbox" checked={!!node.comfyAutoOptimize} disabled={busy} onChange={event => patch(node.id, { comfyAutoOptimize: event.target.checked }, false)} />
+              {(localVideo || localImage) && <label className="workflow-video-auto-optimize" title="运行前通过 Cloud DSH 优化一次提示词，可能消耗 Bowerbird 积分。" onPointerDown={event => event.stopPropagation()}>
+                <input type="checkbox" checked={h3AutoOptimize} disabled={busy} onChange={event => {
+                  void useStore.getState().updateSettings({ h3_auto_optimize_prompt: event.target.checked })
+                    .catch(error => notifyError(error, "自动优化设置未保存"));
+                }} />
                 自动优化提示词
               </label>}
-              <button disabled={busy || !!providerIssue} aria-label={videoCard ? "运行" : "运行此卡片"} title={localVideo ? "本机算力·不扣额度" : undefined}
-                onClick={() => handle(controller.start(node.id, true))}><Play size={13} aria-hidden="true" />{videoCard ? "运行" : "运行此卡片"}</button>
+              <button disabled={busy || !!providerIssue} aria-label={videoCard || generationAction === "重试" ? generationAction : "运行此卡片"} title={localVideo ? "本机算力·不扣额度" : undefined}
+                onClick={() => runCard(node.id, true)}><Play size={13} aria-hidden="true" />{generationCard ? generationAction : "运行此卡片"}</button>
             </>}
             {node.kind === "trigger" && triggerMode === "manual" && <button disabled={creating || !!providerIssue} aria-label="触发下游" onClick={() => handle(controller.start(node.id))}><Play size={13} />触发下游</button>}
             {node.kind === "agent" && <button type="button" aria-label={hasAgentMessages ? "按当前输入重跑" : "运行此卡片"} disabled={busy || !!providerIssue}
@@ -2106,6 +2178,10 @@ export const CanvasWorkflowLayer = memo(forwardRef<WorkflowLayerHandle, Props>(f
       </>}
     </ContextMenu>}
     {agentOpen && <ModalShell title="技能执行" width="lg" onClose={() => setAgentOpen(false)}><CloudAgentSession embedded /></ModalShell>}
+    {localRunReview?.projectId === projectId && <ConfirmDialog open title="是否需要继续运行当前卡片？"
+      message="目前已有运行中的本地生成卡片。同时运行当前卡片，可能会导致电脑卡顿、生成速度降低。"
+      confirmLabel="确认" onCancel={() => setLocalRunReview(null)}
+      onConfirm={() => { setLocalRunReview(null); runCard(localRunReview.nodeId, localRunReview.single, true); }} />}
     {retryReview?.projectId === projectId && <ConfirmDialog open title="重做失败步骤？" confirmLabel="保留卡片并重做"
       message={`这一步已创建：${retryReview.cardNames.join("、")}。重做会保留这些卡片，也可能再次创建相同的内容。`}
       onCancel={() => setRetryReview(null)} onConfirm={() => { setRetryReview(null); handle(retryReview.confirm()); }} />}

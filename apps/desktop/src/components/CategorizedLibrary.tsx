@@ -25,12 +25,13 @@ import type { Asset, Folder as Collection } from "../lib/types";
 import { useLibraryGlass } from "./useLibraryGlass";
 import { CatalogSelectionBar } from "./CatalogSelectionBar";
 import { LibraryCatalogControls } from "./LibraryCatalogControls";
-import { LibrarySemanticSearch, useLibrarySemanticSearch } from "./LibrarySemanticSearch";
+import { LibrarySemanticSearch, emptySemanticResultMessage, useLibrarySemanticSearch } from "./LibrarySemanticSearch";
 import { LibraryMotion } from "./LibraryMotion";
 import { LibraryTacticalBackdrop } from "./LibraryTacticalBackdrop";
 import { OverlayScrollArea } from "./CollectionScrollArea";
 import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { LibraryVideoPreview } from "./LibraryVideoPreview";
+import { VideoTranscriptBatchButton } from "./VideoTranscriptBatch";
 import { videoSourceKey } from "../lib/videoSourceKey";
 import { isAudioAsset } from "../lib/audioMedia";
 import { isTextAsset } from "../lib/textMedia";
@@ -409,6 +410,7 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
       {navigation}
       <div className="video-collection-controls">
       <LibraryCatalogControls filter={filter} onColorChange={setColor} onColorsPrepared={colorsPrepared}>{toolbarActions}
+        {flat && media === "videos" && (!projectScope || browseProjectId) && <VideoTranscriptBatchButton scope={{ projectId: projectScope ? browseProjectId : null, label: projectScope ? `项目内视频${scopedProjectName ? ` · ${scopedProjectName}` : ""}` : "全部视频" }}/>}
         {semantic.scope && <LibrarySemanticSearch key={semantic.scope} owner={root} search={semantic}
           scopeLabel={projectScope ? `项目素材${scopedProjectName ? ` / ${scopedProjectName}` : ""}` : "全部素材"}/>}
       </LibraryCatalogControls>
@@ -469,9 +471,9 @@ export function CategorizedLibrary({ kind, media = "images", projectId = null, b
       </aside>}
       <div ref={pinch} className="catalog-gallery">
         <LibraryTacticalBackdrop />
-        {flat && catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => invalidateCatalog()}>重试</button></p>}
+        {flat && !session && catalogError && <p className="catalog-error" role="alert">{userErrorMessage(catalogError, "素材列表暂时无法读取，请重试。")}<button onClick={() => invalidateCatalog()}>重试</button></p>}
         <OverlayScrollArea scrollRef={scroll} className="catalog-scroll" viewportClassName="catalog-scroller library-scroller" viewportStyle={{ paddingBottom: 0, overflowAnchor: "none" }}>
-          {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !galleryTotal && !catalogError ? <p className="catalog-hint catalog-empty">{session ? "当前范围内未找到图片。" : kind === "collections" && !currentCollection ? "还没有文件夹，点击左侧 ＋ 新建文件夹。" : query || color || generatedFilter ? "没有匹配的素材。" : kind !== "collections" ? "还没有已登记的素材。" : "文件夹还没有素材。可在素材右键菜单中选择「添加到文件夹」。"}</p> : null}
+          {reading ? <p className="catalog-hint catalog-empty" role="status">正在读取素材…</p> : !galleryTotal && (session || !catalogError) ? <p className="catalog-hint catalog-empty">{session ? emptySemanticResultMessage(session) : kind === "collections" && !currentCollection ? "还没有文件夹，点击左侧 ＋ 新建文件夹。" : query || color || generatedFilter ? "没有匹配的素材。" : kind !== "collections" ? "还没有已登记的素材。" : "文件夹还没有素材。可在素材右键菜单中选择「添加到文件夹」。"}</p> : null}
           {(session || loadedCatalogScope.current === filterKey) && <VirtualCatalog key={galleryKey} filter={filter} sections={sections} headings={!flat} width={width} revision={revision} scroll={scroll}
             selected={selected} jump={jump} pageScope={sessionId} readPage={session ? (_section, offset, limit) => semantic.readPage(session, offset, limit) : undefined}
             initialTop={session ? 0 : browseBeforeSearch.current?.key === filterKey ? browseBeforeSearch.current.top : savedPosition?.query === query && savedPosition?.color === color && savedPosition?.generatedFilter === generatedFilter ? savedPosition.top : 0}

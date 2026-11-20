@@ -88,6 +88,11 @@ html:not([data-theme="dark"]) .creation-dock.composer-glass { --composer-fill: r
 .composer-frame-empty { display: grid; place-items: center; height: 100px; font-size: 12px; color: var(--bb-muted); }
 .composer-frame-pair figcaption { display: flex; justify-content: space-between; gap: 8px; margin-top: 5px; font-size: 12px; }
 .composer-frame-pair figcaption > span:last-child { color: var(--bb-muted); }
+.composer-h3-audio { display: grid; gap: 4px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--bb-line); font-size: 12px; }
+.composer-h3-audio > div { display: flex; align-items: center; gap: 6px; }
+.composer-h3-audio strong, .composer-h3-audio svg { flex-shrink: 0; }
+.composer-h3-audio span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-h3-audio small { color: var(--bb-muted); }
 .composer-frames-warning { display: flex; align-items: flex-start; gap: 6px; margin-top: 10px; color: var(--bb-danger-strong); font-size: 12px; }
 .composer-frames-warning svg { flex-shrink: 0; margin-top: 2px; }
 @media (max-width: 1100px) {

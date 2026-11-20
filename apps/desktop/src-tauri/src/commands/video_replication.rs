@@ -4,7 +4,9 @@ mod cases;
 mod poster;
 mod local;
 mod enhanced;
+pub(crate) mod speech;
 pub mod collection;
+pub(crate) use enhanced::{stage_for_owner, stage_recovery, StageRecovery};
 use crate::{
     cloud::{AuthClient, CloudClient},
     core::paths::LibraryPaths,

@@ -4,7 +4,7 @@ import { createServer } from "vite";
 import { chromium } from "../../html-renderer/node_modules/playwright/index.mjs";
 
 const output = ".tmp/library-semantic-search-ui";
-const server = await createServer({ cacheDir: `${output}/vite`, server: { host: "127.0.0.1", port: 0, hmr: false, watch: null } });
+const server = await createServer({ cacheDir: `${output}/vite`, server: { host: "127.0.0.1", port: 0, strictPort: false, hmr: false, watch: null } });
 await server.listen();
 const browser = await chromium.launch({ channel: "chrome", headless: true });
 const page = await browser.newPage({ viewport: { width: 1120, height: 760 }, reducedMotion: "reduce" });
@@ -13,7 +13,7 @@ const errors = [];
 page.on("pageerror", error => errors.push(error.message));
 await page.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
 await page.addInitScript(() => {
-  window.total = 500;
+  window.total = 170;
   window.semanticModelState = "missing";
   window.semanticIndexState = "off";
   window.questions = new Map();
@@ -22,17 +22,18 @@ await page.addInitScript(() => {
     if (command === "semantic_status") return {
       supported: true, libraryId: "test-library", activeModelKey: "fixture", modelState: window.semanticModelState,
       indexState: window.semanticIndexState, operationId: null, indexRevision: 1, backfillComplete: false,
-      eligible: 100, indexed: 60, pending: 40, auditing: 0, unavailable: 0, unsupported: 0, failed: 0, lastError: null,
+      eligible: 170, indexed: 130, pending: 40, auditing: 0, unavailable: 0, unsupported: 0, failed: 0, lastError: null,
       downloadBytes: 1_503_000_000, installedBytes: 0, downloadedBytes: 100, totalBytes: 200,
       ...window.semanticStatusOverride,
     };
     if (command === "semantic_model_control") { window.semanticModelState = args.action === "cancel" ? "missing" : "downloading"; return { operationId: "install" }; }
     if (command === "semantic_index_control") { window.semanticIndexState = args.action === "pause" ? "paused" : "running"; return { operationId: "index" }; }
     if (command === "semantic_search_start") {
-      return new Promise(resolve => window.questions.set(args.text, ids => {
+      const scopeSize = args.filter.projectId ? Math.min(window.total, 120) : window.total;
+      return new Promise(resolve => window.questions.set(args.text, (ids, { eligible = scopeSize, indexed = eligible, truncated = false } = {}) => {
         window.answers.set(args.text, ids);
         resolve({ requestId: args.requestId, sessionId: args.text, libraryId: "test-library", modelKey: "fixture", indexRevision: 1,
-          eligible: 100, indexed: 60, resultCount: ids.length, truncated: false });
+          eligible, indexed, resultCount: ids.length, truncated });
       }));
     }
     if (command === "semantic_search_cancel") return;
@@ -71,7 +72,7 @@ async function submit(value) {
   await field().press("Enter");
   await page.waitForFunction(value => window.questions.has(value), value);
 }
-const answer = (text, ids) => page.evaluate(({ text, ids }) => window.questions.get(text)(ids), { text, ids });
+const answer = (text, ids, counts) => page.evaluate(({ text, ids, counts }) => window.questions.get(text)(ids, counts), { text, ids, counts });
 
 try {
   await mkdir(output, { recursive: true });
@@ -130,31 +131,61 @@ try {
   await showProgress({ backfillComplete: true, eligible: 1, indexed: 1, pending: 0, auditing: 1 });
   await dialog().getByText("已索引 1 / 可索引 1 张", { exact: true }).waitFor();
   await dialog().getByText("正在核对 1 张已索引图片。", { exact: true }).waitFor();
-  await showProgress(null);
+  await showProgress({ backfillComplete: true, eligible: 170, indexed: 170, pending: 0 });
 
   await field().fill("中文输入");
   await field().dispatchEvent("compositionstart");
   await field().press("Enter");
   assert.equal(await page.evaluate(() => window.questions.size), 0, "IME confirmation must not send a search");
   await field().dispatchEvent("compositionend");
+  await submit("没有可索引图片");
+  await answer("没有可索引图片", [], { eligible: 0 });
+  const noEligible = "当前范围内没有可索引的图片。";
+  await dialog().getByText(noEligible, { exact: true }).waitFor();
+  await pane().getByText(noEligible, { exact: true }).waitFor();
+  await submit("尚未索引");
+  await answer("尚未索引", [], { indexed: 0 });
+  const notIndexed = "当前范围内还没有已索引的图片。";
+  await dialog().getByText(notIndexed, { exact: true }).waitFor();
+  await pane().getByText(notIndexed, { exact: true }).waitFor();
+  await showProgress({ backfillComplete: true, eligible: 170, indexed: 120, pending: 50 });
+  await submit("部分索引时未找到匹配");
+  await answer("部分索引时未找到匹配", [], { indexed: 120, truncated: true });
+  const partialNoMatch = "在已索引的 120 张图片中未找到匹配。当前范围有 170 张可索引图片。描述较长，已按部分描述搜索。";
+  await dialog().getByText(partialNoMatch, { exact: true }).waitFor();
+  await pane().getByText(partialNoMatch, { exact: true }).waitFor();
+  await showProgress({ backfillComplete: true, eligible: 170, indexed: 170, pending: 0 });
+  await submit("小鸟");
+  await answer("小鸟", []);
+  const noMatch = "在已索引的 170 张图片中未找到匹配。";
+  await dialog().getByText(noMatch, { exact: true }).waitFor();
+  await pane().getByText(noMatch, { exact: true }).waitFor();
+  assert.equal(await pane().locator("[data-asset-id]").count(), 0, "a zero-match search must not fall back to browsing indexed images");
+  await page.evaluate(() => window.emitFixtureEvent("library://assets-changed", null));
+  await page.waitForFunction(() => window.requests.some(request => request.command === "semantic_search_ids" && request.args.sessionId === "小鸟" && request.args.limit === 1));
+  assert.equal(await pane().locator("[data-asset-id]").count(), 0, "refresh preserves the frozen empty session");
+
   await submit("先发");
   await submit("后发");
   const latest = Array.from({ length: 65 }, (_, index) => `hit-${index}`);
   await answer("后发", latest);
-  await dialog().getByText(/找到 65 张图片/).waitFor();
+  await dialog().getByText("显示 65 张匹配图片", { exact: true }).waitFor();
   await card("hit-0").waitFor();
+  assert.equal(await pane().locator('[data-asset-id^="asset-"]').count(), 0, "results contain only matching IDs");
   await answer("先发", ["slow-only"]);
   await page.waitForFunction(() => window.requests.some(request => request.command === "semantic_search_cancel" && request.args.sessionId === "先发"));
   assert.equal(await card("slow-only").count(), 0);
   await card("hit-0").focus();
   await page.keyboard.press("Control+a"); // Popup still owns keyboard shortcuts.
-  assert.equal(await page.evaluate(() => window.requests.some(request => request.command === "semantic_search_ids")), false);
+  assert.equal(await page.evaluate(() => window.requests.some(request => request.command === "semantic_search_ids" && request.args.sessionId === "后发")), false);
   await card("hit-0").click({ modifiers: ["Control"] });
   await dialog().waitFor({ state: "hidden" });
   await pane().getByRole("button", { name: "全选", exact: true }).click();
   await pane().getByText("65 项", { exact: true }).waitFor();
-  const idPages = await page.evaluate(() => window.requests.filter(request => request.command === "semantic_search_ids").map(request => request.args));
+  const idPages = await page.evaluate(() => window.requests.filter(request => request.command === "semantic_search_ids" && request.args.sessionId === "后发").map(request => request.args));
   assert.deepEqual(idPages, [{ sessionId: "后发", offset: 0, limit: 60 }, { sessionId: "后发", offset: 60, limit: 5 }]);
+  const resultPages = await page.evaluate(() => window.requests.filter(request => request.command === "semantic_search_page").map(request => request.args.sessionId));
+  assert.ok(resultPages.length > 0 && resultPages.every(id => id === "后发"), "matching cards and selection are read from the same session");
   const rankedTop = await scroller().evaluate(el => el.scrollTop);
   await page.evaluate(() => window.emitFixtureEvent("library://assets-changed", null));
   await page.waitForFunction(() => window.requests.some(request => request.command === "semantic_search_ids" && request.args.sessionId === "后发" && request.args.limit === 1));

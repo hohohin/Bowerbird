@@ -235,7 +235,9 @@ declare class URL {
   readonly hostname: string;
   readonly username: string;
   readonly password: string;
+  readonly pathname: string;
   readonly search: string;
+  readonly searchParams: { get(name: string): string | null; getAll(name: string): string[] };
   readonly hash: string;
 }
 

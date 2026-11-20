@@ -1,17 +1,19 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import { ChevronLeft, ChevronRight, Focus, MessageSquare, PanelLeft, PanelLeftClose, PanelRightClose, X, ZoomIn, ZoomOut } from "lucide-react";
+import { ChevronLeft, ChevronRight, FileText, Focus, MessageSquare, PanelLeft, PanelLeftClose, PanelRightClose, X, ZoomIn, ZoomOut } from "lucide-react";
 import { api } from "../lib/api";
 import type { Asset, GenJob } from "../lib/types";
 import { useCompatibleImagePath } from "../lib/useCompatibleImagePath";
 import { useImageZoom } from "../lib/useImageZoom";
 import { userErrorMessage } from "../lib/userError";
+import type { VideoTrimRequest } from "../lib/videoTrim";
 import { GenerationPanel } from "./GenerationPanel";
 import { AssetDetail } from "./AssetDetail";
 import { useImagePreviewHud } from "./useImagePreviewHud";
 import { ImagePreviewContinuation } from "./ImagePreviewContinuation";
 import { VideoPlayer } from "./VideoPlayer";
+import { VideoTranscriptPanel } from "./VideoTranscriptPanel";
 import { imageHistoryJob } from "../lib/imagePreviewContinuation";
 import { useStore } from "../store";
 import "./CreationImagePreview.css";
@@ -38,6 +40,9 @@ export function CreationImagePreview({ asset, projectId, job, onClose, video, na
   const [introducedKey, setIntroducedKey] = useState<string | null>(null);
   const [inspectorKey, setInspectorKey] = useState<string | null>(null);
   const [conversationKey, setConversationKey] = useState<string | null>(null);
+  const [videoPanel, setVideoPanel] = useState<{ key: string; view: "transcript" | "conversation" } | null>(null);
+  const [videoSeek, setVideoSeek] = useState<{ key: string; time: number; revision: number }>();
+  const [videoReplacement, setVideoReplacement] = useState<{ key: string; revision: number }>();
   const [followLatest, setFollowLatest] = useState(false);
   const [continuationJobId, setContinuationJobId] = useState<string | null>(null);
   const liveId = continuationJobId ?? job?.id;
@@ -168,6 +173,24 @@ export function CreationImagePreview({ asset, projectId, job, onClose, video, na
   const hasConversation = !!job || !!snapshot || ready?.error != null || (!ready && (!!asset.generation_session_id || localVideo));
   const conversationContentReady = imageIntroduced && (!!snapshot || !!ready);
   const conversationVisible = conversationContentReady && conversationKey === requestKey;
+  const hasRightPanel = !!video || hasConversation;
+  const videoKey = `${requestKey}:${video?.path}:${video?.sourceKey ?? ""}`;
+  const replacement = videoReplacement?.key === videoKey ? videoReplacement : undefined;
+  const transcriptKey = `${videoKey}:${replacement?.revision ?? 0}`;
+  const selectedView = videoPanel?.key === videoKey ? videoPanel.view : job || asset.generation_session_id || localVideo ? "conversation" : "transcript";
+  const transcriptVisible = !!video && (!hasConversation || selectedView === "transcript");
+  const rightPanelVisible = video ? imageIntroduced && contentMounted : conversationVisible;
+  const rightPanelTitle = transcriptVisible ? "转录文稿" : "会话";
+
+  async function saveVideoTrim(request: VideoTrimRequest) {
+    const result = await (video?.onSaveTrim ?? api.trimVideo)(request);
+    if (request.overwrite && result?.id === asset.id) {
+      setVideoReplacement(previous => ({
+        key: videoKey, revision: (previous?.revision ?? 0) + 1,
+      }));
+    }
+    return result;
+  }
   useEffect(() => {
     if (!conversationContentReady) return;
     // The read-only conversation builds its prompt views on mount; reveal after that commit.
@@ -283,7 +306,9 @@ export function CreationImagePreview({ asset, projectId, job, onClose, video, na
             ? { "--image-scale": 1 }
             : { ...zoom.style, cursor: zoom.dragging ? "grabbing" : "grab", "--image-scale": zoom.scale }) as CSSProperties & { "--image-scale": number }}>
             <div className="creation-image-preview-image-depth" aria-hidden="true"><i/><i/></div>
-            {video ? <VideoPlayer key={`${video.path}:${video.sourceKey ?? ""}`} {...video} embedded fitContainer showTrim /> : <div className="creation-image-preview-image-viewport">
+            {video ? <VideoPlayer key={`${video.path}:${video.sourceKey ?? ""}`} {...video}
+              onSaveTrim={video.onSaveTrim ? saveVideoTrim : undefined} seekRequest={videoSeek?.key === transcriptKey ? videoSeek : undefined}
+              embedded fitContainer showTrim /> : <div className="creation-image-preview-image-viewport">
               {asset.thumb_path && asset.thumb_path !== path && loadedImage !== path && <img className="creation-image-preview-thumbnail"
                 src={convertFileSrc(asset.thumb_path)} alt="" aria-hidden="true" draggable={false}
                 onLoad={() => setLoadedThumbnail(asset.thumb_path!)}/>}
@@ -302,22 +327,29 @@ export function CreationImagePreview({ asset, projectId, job, onClose, video, na
           </div>
         </figure>
       </section>
-      {hasConversation && <section className={`creation-image-preview-conversation ${!detailsOpen ? "is-collapsed" : conversationVisible ? "is-ready" : "is-loading"}${detailsClosing ? " is-leaving" : ""}`}
-        aria-label="独立会话面板" aria-hidden={!conversationVisible || !detailsOpen || detailsClosing}>
+      {hasRightPanel && <section className={`creation-image-preview-conversation ${!detailsOpen ? "is-collapsed" : rightPanelVisible ? "is-ready" : "is-loading"}${detailsClosing ? " is-leaving" : ""}`}
+        aria-label={transcriptVisible ? "转录文稿" : "独立会话面板"} aria-hidden={!rightPanelVisible || !detailsOpen || detailsClosing}>
         <div className="creation-image-preview-conversation-plane" aria-hidden="true"/>
         <header className="creation-image-preview-conversation-head">
-          <h2>会话</h2>{snapshot && <span>{snapshot.job.turns.length} 轮</span>}
-          <button type="button" onClick={toggleDetails} aria-label="收起会话面板" title="收起会话"><PanelRightClose size={16}/></button>
+          {video && hasConversation ? <div className="creation-image-preview-video-views" role="group" aria-label="视频面板视图">
+            <button type="button" aria-pressed={transcriptVisible} onClick={() => setVideoPanel({ key: videoKey, view: "transcript" })}>转录文稿</button>
+            <button type="button" aria-pressed={!transcriptVisible} onClick={() => setVideoPanel({ key: videoKey, view: "conversation" })}>会话</button>
+          </div> : <h2>{rightPanelTitle}</h2>}
+          {!video && snapshot && <span>{snapshot.job.turns.length} 轮</span>}
+          <button type="button" onClick={toggleDetails} aria-label={`收起${rightPanelTitle}面板`} title={`收起${rightPanelTitle}`}><PanelRightClose size={16}/></button>
         </header>
-        <div className="creation-image-preview-history">
+        {video && contentMounted && <VideoTranscriptPanel key={transcriptKey} assetId={asset.id}
+          hidden={!transcriptVisible} active={transcriptVisible && rightPanelVisible && detailsOpen && !detailsClosing}
+          onSeek={time => setVideoSeek(previous => ({ key: transcriptKey, time, revision: (previous?.revision ?? 0) + 1 }))}/>}
+        {hasConversation && <div className="creation-image-preview-history" hidden={transcriptVisible}>
           {imageIntroduced && contentMounted && (snapshot ? <GenerationPanel embedded readOnly followLatest={followLatest} hydratedAssets={[asset, ...snapshot.job.refAssets]}
-            onAddVideoFrame={video?.onAddFrame} onSaveVideoTrim={video?.onSaveTrim}
+            onAddVideoFrame={video?.onAddFrame} onSaveVideoTrim={video?.onSaveTrim ? saveVideoTrim : undefined}
             snapshot={snapshot} /> : <div className="creation-image-preview-info">
           {!job && !ready ? <p role="status">正在读取对话…</p> : ready?.error != null
             ? <div className="creation-image-preview-error" role="alert"><p>{userErrorMessage(ready.error, "对话详情暂时无法读取，请重试。")}</p><button type="button" onClick={() => setRetry(value => value + 1)}>重试</button></div>
             : <p>暂无生成会话</p>}
           </div>)}
-        </div>
+        </div>}
         {!video && imageIntroduced && contentMounted && source && <ImagePreviewContinuation key={requestKey}
           asset={asset} job={source} sourceJobId={sourceJobId} enabled={!closing}
           onSent={id => { setContinuationJobId(id); setFollowLatest(true); }}/>}
@@ -347,8 +379,10 @@ export function CreationImagePreview({ asset, projectId, job, onClose, video, na
           </>}
           {inspectorVisible && <button ref={inspectorToggleRef} type="button" onClick={toggleInspector} aria-pressed={inspectorOpen && !inspectorClosing}
             title={inspectorOpen && !inspectorClosing ? `收起${mediaDetail}` : `显示${mediaDetail}`} aria-label={inspectorOpen && !inspectorClosing ? `收起${mediaDetail}` : `显示${mediaDetail}`}><PanelLeft size={16}/></button>}
-          {hasConversation && conversationVisible && <button ref={detailsToggleRef} type="button" onClick={toggleDetails} aria-pressed={detailsOpen && !detailsClosing}
-            title={detailsOpen && !detailsClosing ? "收起会话" : "显示会话"} aria-label={detailsOpen && !detailsClosing ? "收起会话" : "显示会话"}><MessageSquare size={16}/></button>}
+          {hasRightPanel && rightPanelVisible && <button ref={detailsToggleRef} type="button" onClick={toggleDetails} aria-pressed={detailsOpen && !detailsClosing}
+            title={detailsOpen && !detailsClosing ? `收起${rightPanelTitle}` : `显示${rightPanelTitle}`} aria-label={detailsOpen && !detailsClosing ? `收起${rightPanelTitle}` : `显示${rightPanelTitle}`}>
+            {transcriptVisible ? <FileText size={16}/> : <MessageSquare size={16}/>}
+          </button>}
         </div>
       </footer>
     </div>

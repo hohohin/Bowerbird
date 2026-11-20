@@ -32,6 +32,7 @@ import { ThumbnailSizeSlider } from "./ThumbnailSizeSlider";
 import { ContextMenu } from "./ContextMenu";
 import { ModalShell } from "./ModalShell";
 import { LibraryVideoPreview } from "./LibraryVideoPreview";
+import { VideoTranscriptBatchButton } from "./VideoTranscriptBatch";
 import { videoSourceKey } from "../lib/videoSourceKey";
 import { isAudioAsset } from "../lib/audioMedia";
 import { isTextAsset } from "../lib/textMedia";
@@ -320,6 +321,7 @@ export function ConnectedCollections({ media = "images", projectId = null, proje
     {glass.definition}<LibraryMotion/>
     <div className="file-view-heading">{navigation}<div className="video-collection-controls"><LibraryCatalogControls filter={filter} onColorChange={setColor} onColorsPrepared={colorsPrepared}>
       <button className="library-filter-trigger" aria-label="刷新文件夹" title="刷新同步" onClick={refresh}><RefreshCw size={14} className={folders.some(folder => folder.scanning) ? "connected-refreshing" : undefined}/></button>{toolbarActions}
+      {media === "videos" && current?.available && <VideoTranscriptBatchButton scope={{ projectId: scope, folderId: current.id, label: `文件夹内视频 · ${current.name}` }}/>}
     </LibraryCatalogControls></div></div>
     <div className="catalog-body">
       <aside className="catalog-sidebar" aria-label="文件夹目录">

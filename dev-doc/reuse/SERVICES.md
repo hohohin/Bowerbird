@@ -59,7 +59,7 @@ Cloud 图片新增模型复用 [modelForService／arkImageRequestBody](../../app
 
 ## 保留生成任务、取消和启动恢复
 
-H3 的独立提示词优化复用 [canvasWorkflowRuntime.ts](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts) 的 `optimizeComfyPrompt` 和既有 `cloudAgentStart`／`cloudAgentGet`／`cloudAgentCancel` 文本改写协议。调用入口必须是用户明确点击的付费优化动作，不能放入普通生成、触发或循环路径。Skill 和模式指令由 [h3PromptOptimization.ts](../../apps/desktop/src/lib/h3PromptOptimization.ts) 提供，限定 H3 卡片文本；结果保存于原工作流步骤供选用，不写入图片输出，不新增 Runner。通路依旧受 Cloud DSH 测试权限与 Agent 计费限制；见 [H3 优化契约](../COMFYUI-LOCAL-VIDEO.md#2026-11-06独立提示词优化源码待发布)。
+H3 图片卡和视频卡的提示词优化复用 `CanvasWorkflowController` 及 `cloudAgentStart`／`cloudAgentGet`／`cloudAgentCancel` 文本改写协议。用户可点击独立优化，或开启默认关闭的自动优化并手动运行单卡。整条工作流、触发或循环运行跳过自动优化。`h3PromptOptimization` 提供 Skill 指令和图片引用占位符处理。优化请求身份、结果和生成输入保存在原工作流步骤，图片生成另用原生会话任务身份。调用沿用 Cloud DSH 测试权限及 Agent 计费。见 [工作流运行](../../apps/desktop/src/lib/canvasWorkflowRuntime.ts)、[Skill 指令](../../apps/desktop/src/lib/h3PromptOptimization.ts)及 [H3 优化契约](../COMFYUI-LOCAL-VIDEO.md#2026-11-06独立提示词优化源码待发布)。
 
 对话渠道的 HyperFrames 能力沿 [local_chat.rs](../../apps/desktop/src-tauri/src/commands/local_chat.rs) 的受控动态工具接入 [agent_ds/chat_video.rs](../../apps/desktop/src-tauri/src/commands/agent_ds/chat_video.rs)，与 Agent 卡片共用 `video::execute` 和工程副本／入库契约。对话模型直接编写工程，不投递第二个 Agent；进度与视频附件复用 `local_chat_messages`，UI 复用 `VideoPlayer`。工具参数不接收绝对路径或任意命令；调用必须绑定已确认的当前对话轮次，Cloud 不开放此工具。
 
@@ -72,6 +72,8 @@ H3 图片文生图／编辑共用直接提示词图谱，`h3_image::reference_pr
 本机 H3 使用独立的既有持久任务协议：前端 [comfyVideo.ts](../../apps/desktop/src/lib/comfyVideo.ts) 的 `comfyVideo`／`comfyEnvironment`，Rust [comfy_video.rs](../../apps/desktop/src-tauri/src/commands/comfy_video.rs) 的固定模式 graph 与恢复、[comfy_setup.rs](../../apps/desktop/src-tauri/src/commands/comfy_setup.rs) 的按模式环境准备。`frames`／`reference`／`text` 由显式选择确定，缺省兼容旧首尾帧；[composerLocalVideo.ts](../../apps/desktop/src/lib/composerLocalVideo.ts) 让主屏和画板先保存同一 H3 卡片再执行。模式选择复用 `comfyVideoOptionsForMode`，环境响应的 `mode`／`modelsRequired` 用于当前模式就绪判断，`canAddModels` 仅表示托管环境可以补模型。此接口限定桌面与本机 loopback，不接受任意工作流；见 [三模式契约](../COMFYUI-LOCAL-VIDEO.md)。
 
 普通 H3 视频生成使用现有 `prepare` 启动已选择的环境。取回已提交任务使用 `recover`，绑定原端口、模式与已记录的安装路径，并复用原请求 UUID 和入库记录。进程识别及崩溃恢复统一由 `comfy_setup.rs` 管理。[环境恢复](../COMFYUI-LOCAL-VIDEO.md#h3-视频环境自行恢复桌面源码)
+
+H3 视频三模式共用可选录音素材 ID 与既有媒体连线，`comfy_video.rs` 通过素材原件解析和音频解码验证后送入本机 ComfyUI。首尾帧、文生从第 0 帧加入音频引导，单图采用 Ref2VA 音色参考。入口及实机证据见 [H3 视频参考录音](../COMFYUI-LOCAL-VIDEO.md#2026-11-20-h3-视频参考录音桌面源码)。
 
 - **用途／关键词**：GenJob、jobId、submit_id、幂等、恢复、终态、入库。
 - **入口**：[task_queue.rs](../../apps/desktop/src-tauri/src/core/task_queue.rs) 的 `GenJob`／`Task::upsert_gen_job`；[generation_worker.rs](../../apps/desktop/src-tauri/src/core/generation_worker.rs) 的 `spawn_recovery`／`finalize_generation_assets`。前端沿 `startGeneration`、`api.cancelCodexCreate`、`api.listGenJobs` 接入；**Cloud 视频取回原任务用 `api.recoverCloudVideo(jobId)`** → `recover_cloud_video`，不重新创建生成。
@@ -104,8 +106,10 @@ H3 图片文生图／编辑共用直接提示词图谱，`h3_image::reference_pr
 
 - [语义搜索命令](../../apps/desktop/src-tauri/src/commands/semantic_search.rs) 供 [semanticSearch.ts](../../apps/desktop/src/lib/semanticSearch.ts) 和 [LibrarySemanticSearch](../../apps/desktop/src/components/LibrarySemanticSearch.tsx) 使用。模型按需安装，索引由用户启用、暂停或恢复。已提交的结果页和选择 ID 使用同一会话，每页最多 60 项。并发、取消和会话过期由本机处理。
 - [索引](../../apps/desktop/src-tauri/src/core/semantic_search/index.rs) 通过 [0060](../../apps/desktop/src-tauri/sql/0060_semantic_image_embeddings.sql) 接收入库和内容版本变更，后台读取原件并校验 SHA-256。连接目录的内容变更通知和显式刷新可绕过大小与修改时间快路。索引仅写入当前素材库的 SQLite，推理和文件读取在主库锁之外进行。
-- [查询](../../apps/desktop/src-tauri/src/core/semantic_search/query.rs) 复用 `CatalogFilter::sql`、目录可见性和生成来源，范围确定后逐张精确评分。读取分页或选区前复核排名内素材的范围和内容，外接原件离线按现有目录可见性保留已索引结果。分类权重、文件夹条目选择及关键词搜索沿原入口。
-- Windows x64 较早冻结源码完成隔离 WebView2、真实 IPC 和 FP32 模型验收，3 张 PNG 的中文查询均命中首位，建索引 12.37 秒，首查 18.65 秒，后两次 120 和 107 毫秒。Ryzen 7 9700X 的 debug SQLite 探针读取 1 万条合成向量，热排序中位数 533 毫秒，启用生成来源筛选时为 545 毫秒，60 项分页和选择 ID 请求中位数为 5–9 毫秒。探针计时范围为本机 SQLite 读取和排序。模型产物、预处理和样本记录见[模型说明](../../apps/desktop/src-tauri/src/core/semantic_search/model/README.md)。Apple Silicon 实机和更大资料库的验收待补。
+- [查询](../../apps/desktop/src-tauri/src/core/semantic_search/query.rs) 复用 `CatalogFilter::sql`、目录可见性和生成来源，先确定范围，再逐张精确评分。使用当前 SigLIP2 FP32 模型的余弦分数门槛，只将达标图片纳入最多 240 项的结果会话。已索引数统计参与评分的向量，结果数统计保留匹配。读取分页或选区前复核结果内素材的范围和内容，外接原件离线时按目录可见性保留有效的已索引结果。分类权重、文件夹条目选择及关键词搜索沿原入口。Windows 26.11.2001 已发布首版，相关性筛选源码待发布。
+- 当前固定模型的门槛为 **0.085**，含等于。Windows x64 校准使用 35 张随应用分发的样图、6 张 USFWS 公共领域鸟类照片和 46 条中文短查询，按图像场景拆分开发组与留出组。0.085 是保留开发组全部 12 个正例查询场景的最高 0.005 步长候选。已查看的留出组结果为 12/12 个正例查询有命中，21/22 对正例保留，2/815 对负例误收，29 个无目标场景中 28 个返回空结果。开发组有 6/29 个无目标场景误收。两组无鸟场景的「小鸟」均返回零条，最高干扰分为 0.08008，留出小鸟分数为 0.09340 和 0.09118。样本覆盖海报等难负例，留出组仍有「红雀」误匹配红胸旅鸫。原始样本来源、分组及分数保存在 `apps/desktop/src-tauri/.tmp/semantic-search-probe/bird-calibration/`。
+- 固定 0.085 后复跑此前的 26 条长描述和 35 张样图。这批描述独立于门槛拟合，沿用已有的非穷尽标注。37 对已标注匹配全部保留，另返回 50 对未标注候选，按已有标注计算的宏平均精确率为 53.08%。逐条移除已标注匹配后，7/26 条返回空结果，19/26 条仍有候选。门槛解决用弱匹配填满结果的问题，物种近邻和多条件描述的精确度仍需进一步验证。
+- Windows x64 较早冻结源码完成隔离 WebView2、真实 IPC 和 FP32 模型验收，3 张 PNG 的中文查询均命中首位，建索引 12.37 秒，首查 18.65 秒，后两次 120 和 107 毫秒。本次相关性修正的 Ryzen 7 9700X debug SQLite 探针读取 1 万条合成向量并保留 240 条，热搜索中位数 600 毫秒，启用生成来源筛选时为 633 毫秒，60 项分页和选择 ID 请求中位数为 6.5–11.0 毫秒。探针计时范围为本机 SQLite 读取和排序。模型产物、预处理和样本记录见[模型说明](../../apps/desktop/src-tauri/src/core/semantic_search/model/README.md)。Apple Silicon 实机和更大资料库的验收待补。
 
 ## 回收原件或清理缺失引用
 
@@ -114,6 +118,7 @@ H3 图片文生图／编辑共用直接提示词图谱，`h3_image::reference_pr
 
 ## 探测媒体、生成缩略图或调用 FFmpeg
 
+- 素材视频转录从 [videoTranscript.ts](../../apps/desktop/src/lib/videoTranscript.ts) 调用 [video_transcript.rs](../../apps/desktop/src-tauri/src/commands/video_transcript.rs) 的能力、核价、开始和状态接口。MP3 提取复用 [speech.rs](../../apps/desktop/src-tauri/src/commands/video_replication/speech.rs) 的媒体工具，受限传输走 Cloud 公共签名入口。豆包标准版 2.0 的提交和查询在 [file-speech.ts](../../apps/agent-worker/src/cloud-understand/file-speech.ts)，按原 Cloud 任务 UUID 恢复。批量按现有目录范围逐个核对和提交。[视频素材](../VIDEO-MEDIA.md#素材视频管理的识别路线)
 - 强化复刻（Cloud 已部署，桌面源码待发布）：`commands/video_replication/enhanced.rs`、`enhanced/{finish,markers}.rs` 经原 `video_replication` 的 `enhanced-*` 操作连接 `EnhancedReplication.tsx`；复用 reference 校验、媒体工具／probe／audio、understand 队列／计费、`codex_create_image` 即梦任务与 generation history，新增切片及分步骤回执、WAV 契约／豆包语音适配、词标记和字幕成片编排。`enhanced-frame` 沿项目／源哈希校验提取缓存中点帧，`replicationAnalysisNote` 适配原内容卡片两列 payload；正式输出复用图片入库和项目建卡接口。均为复刻内部接口，未另建 Agent runner；上线、验收和限制见 [复刻专项](../VIDEO-REPLICATION.md#强化复刻首版cloud-已部署桌面源码待发包)。
 
 - **用途／关键词**：probe、缩略图、ffprobe、FFmpeg、视频封面、二进制发现。

@@ -1,11 +1,11 @@
 //! Fixed local H3 adapter. No Cloud generation, arbitrary graph execution or global interrupt.
-use std::{collections::HashMap, fs, path::{Path, PathBuf}, sync::{Arc, LazyLock, Mutex, Weak}, time::Duration};
+use std::{collections::HashMap, fs, io::{Read, Write}, path::{Path, PathBuf}, sync::{Arc, LazyLock, Mutex, Weak}, time::Duration};
 use tokio::sync::{Mutex as AsyncMutex, watch};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use rusqlite::OptionalExtension;
 use tauri::{AppHandle, Emitter, State};
-use crate::{cloud::{AuthClient, EntitlementService}, core::{ingest, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}};
+use crate::{cloud::{AuthClient, EntitlementService}, core::{ingest, library::Asset, paths::LibraryPaths}, db::Database, error::{AppError, AppResult}, media::audio};
 use crate::core::library::{GenerationHistory, GenerationHistoryTurn};
 #[path = "comfy_progress.rs"]
 mod progress;
@@ -52,7 +52,15 @@ pub(super) fn model_names_for_mode(mode: Mode) -> &'static [&'static str] {
 fn error(message: impl Into<String>) -> AppError { AppError::Other(message.into()) }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct Input { endpoint: String, seconds: f64, ratio: String, resolution: f64, #[serde(default)] mode: Mode, #[serde(default)] first_frame: String, last_frame: Option<String>, prompt: String }
+pub struct Input {
+    endpoint: String, seconds: f64, ratio: String, resolution: f64,
+    #[serde(default)] mode: Mode,
+    #[serde(default)] first_frame: String,
+    last_frame: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audio_asset_id: Option<String>,
+    prompt: String,
+}
 #[derive(Deserialize, Serialize)]
 struct Record { #[serde(default)] installation: Option<PathBuf>, account: String, project: String, input: Input, prompt_id: Option<String>, submitted: bool, asset_id: Option<String>, failure: Option<String>, #[serde(default)] cancelled: bool, #[serde(default)] cancel_acknowledged: bool, #[serde(default)] elapsed_ms: Option<u64> }
 #[derive(Serialize)]
@@ -86,7 +94,7 @@ pub(super) fn generation_history(root: &Path, db: &Database, asset_id: &str) -> 
         return Ok(None);
     }
     let input = record.input;
-    let references = [Some(input.first_frame), input.last_frame].into_iter().flatten()
+    let references = [Some(input.first_frame), input.last_frame, input.audio_asset_id].into_iter().flatten()
         .filter(|id| !id.is_empty())
         .map(|id| db.get_prompted_asset(&id))
         .collect::<AppResult<Vec<_>>>()?.into_iter().flatten().collect::<Vec<_>>();
@@ -155,6 +163,7 @@ fn validate_options(input: &Input) -> AppResult<()> {
 fn validate_input(input: &Input) -> AppResult<()> {
     validate_options(input)?;
     if input.prompt.trim().is_empty() || input.prompt.chars().count() > 16000 { return Err(error("请填写 1–16000 字提示词")); }
+    if input.audio_asset_id.as_deref().is_some_and(|id| id.trim().is_empty()) { return Err(error("请选择有效的参考音频素材")); }
     match input.mode {
         Mode::Text if !input.first_frame.is_empty() || input.last_frame.is_some() => return Err(error("文生视频不接收图片，请移除图片或切换模式")),
         Mode::Reference if input.first_frame.is_empty() || input.last_frame.is_some() => return Err(error("单图模式需要一张参考图，不接收尾帧")),
@@ -175,7 +184,7 @@ fn dimensions(input: &Input, first_size: Option<(u32,u32)>) -> AppResult<(u32, u
     if width == 0 || height == 0 { return Err(error("首帧比例过于极端，请指定视频比例")); }
     Ok((width, height, (((input.seconds*24.0-5.0)/17.0).ceil()*17.0+5.0).max(5.0) as u32))
 }
-fn graph(input: &Input, first: &str, last: Option<&str>, seed: u64, request: &str, first_size: Option<(u32,u32)>) -> AppResult<Value> {
+fn graph(input: &Input, first: &str, last: Option<&str>, audio: Option<&str>, seed: u64, request: &str, first_size: Option<(u32,u32)>) -> AppResult<Value> {
     let (width,height,length) = dimensions(input, first_size)?;
     let mut graph = json!({
         "1":{"class_type":"UNETLoader","inputs":{"unet_name":UNET,"weight_dtype":"default"}},
@@ -212,12 +221,33 @@ fn graph(input: &Input, first: &str, last: Option<&str>, seed: u64, request: &st
     if input.mode != Mode::Frames {
         graph["15"] = json!({"class_type":"VAEDecodeTiled","inputs":{"samples":["14",0],"vae":["3",0],"tile_size":256,"overlap":64,"temporal_size":64,"temporal_overlap":8}});
     }
+    if let Some(audio) = audio {
+        graph["31"] = json!({"class_type":"LoadAudio","inputs":{"audio":audio}});
+        if input.mode == Mode::Reference {
+            graph["9"]["inputs"]["ref_audios.ref_audio_0"] = json!(["31",0]);
+        } else {
+            graph["32"] = json!({"class_type":"MiniMaxH3AddGuide","inputs":{
+                "positive":["9",0],"latent":["9",1],"audio_vae":["4",0],"audio":["31",0],"frame_idx":0
+            }});
+            graph["11"]["inputs"]["conditioning"] = json!(["32",0]);
+        }
+    }
     Ok(graph)
 }
 pub(super) async fn check_for_mode(http: &reqwest::Client, base: &str, mode: Mode) -> AppResult<()> {
+    check_workflow(http, base, mode, false).await
+}
+
+async fn check_workflow(http: &reqwest::Client, base: &str, mode: Mode, has_audio: bool) -> AppResult<()> {
     let info = json_response(http.get(format!("{base}/object_info"))).await?;
-    let sample = Input { endpoint: base.into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, mode, first_frame:"".into(), last_frame:None, prompt:"".into() };
-    for node in graph(&sample,"",None,0,"check",None)?.as_object().unwrap().values() {
+    let sample = Input { endpoint: base.into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, mode, first_frame:"".into(), last_frame:None, audio_asset_id:None, prompt:"".into() };
+    if has_audio && (!info["LoadAudio"]["input"]["required"]["audio"].is_array() || match mode {
+        Mode::Reference => info["MiniMaxH3ReferenceToVideo"]["input"]["optional"]["ref_audios"][0] != "COMFY_AUTOGROW_V3",
+        Mode::Frames | Mode::Text => info["MiniMaxH3AddGuide"]["input"]["optional"]["audio"][0] != "AUDIO",
+    }) {
+        return Err(error("当前 ComfyUI 不支持 H3 参考音频，请选择兼容的本机环境"));
+    }
+    for node in graph(&sample,"",None,has_audio.then_some(""),0,"check",None)?.as_object().unwrap().values() {
         let class = node["class_type"].as_str().unwrap();
         if !info[class].is_object() { return Err(error("本机 ComfyUI 尚不支持此 H3 工作流，需要准备兼容版本")); }
     }
@@ -271,20 +301,59 @@ pub(crate) async fn upload_image_path(http: &reqwest::Client, base: &str, path: 
         Ok((bytes.into_inner(),(image.width(),image.height())))
     }).await.map_err(|e| error(e.to_string()))??;
     let part = reqwest::multipart::Part::bytes(bytes).file_name(format!("{request}-{role}.png")).mime_str("image/png").map_err(|e| error(e.to_string()))?;
-    let result = json_response(http.post(format!("{base}/upload/image")).multipart(reqwest::multipart::Form::new().part("image",part).text("type","input").text("overwrite","true").text("subfolder","bowerbird"))).await?;
-    let name = result["name"].as_str().ok_or_else(|| error("ComfyUI 未返回上传图片名称"))?;
-    let folder = result["subfolder"].as_str().unwrap_or("");
-    Ok((if folder.is_empty() { name.into() } else { format!("{folder}/{name}") },size))
+    let name = upload_input(http, base, part, "图片").await?;
+    Ok((name, size))
 }
+
+async fn upload_input(http: &reqwest::Client, base: &str, part: reqwest::multipart::Part, media: &str) -> AppResult<String> {
+    let result = json_response(http.post(format!("{base}/upload/image")).multipart(reqwest::multipart::Form::new().part("image",part).text("type","input").text("overwrite","true").text("subfolder","bowerbird"))).await?;
+    let name = result["name"].as_str().ok_or_else(|| error(format!("ComfyUI 未返回上传{media}名称")))?;
+    let folder = result["subfolder"].as_str().unwrap_or("");
+    Ok(if folder.is_empty() { name.into() } else { format!("{folder}/{name}") })
+}
+
+async fn upload_audio(http: &reqwest::Client, base: &str, db: &Database, id: &str, request: &str, mode: Mode) -> AppResult<String> {
+    let asset = db.get_asset(id)?.ok_or_else(|| error("参考音频素材不存在，请重新选择"))?;
+    let ext = asset.ext.filter(|ext| audio::is_audio(ext)).ok_or_else(|| error("请选择 WAV、MP3、FLAC、M4A 或 OGG 音频素材"))?.to_ascii_lowercase();
+    let path = db.resolve_asset_original(id)?;
+    let (bytes, ext) = tokio::task::spawn_blocking(move || -> AppResult<_> {
+        // Bound the in-memory multipart body. 64 MiB allows high-rate uncompressed stereo clips.
+        const MAX_AUDIO_BYTES: u64 = 64 * 1024 * 1024;
+        let mut bytes = Vec::new();
+        fs::File::open(path)?.take(MAX_AUDIO_BYTES + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_AUDIO_BYTES { return Err(error("参考音频超过 64 MB，请导出短片段后重新选择")); }
+        // Decode the same bytes we send even if the user edits the connected original concurrently.
+        let mut snapshot = tempfile::Builder::new().suffix(&format!(".{ext}")).tempfile()?;
+        snapshot.write_all(&bytes)?;
+        let wave = audio::decode(snapshot.path())?;
+        if !wave.duration.is_finite() || wave.duration <= 0.0 || wave.duration > 15.0 {
+            return Err(error("参考音频时长须大于 0 秒且不超过 15 秒，请裁剪后重新选择"));
+        }
+        if mode == Mode::Reference && wave.duration < 2.0 {
+            return Err(error("单图模式的参考音频至少需要 2 秒，请重新选择"));
+        }
+        if !matches!(wave.channels, 1 | 2) {
+            return Err(error("参考音频仅支持单声道或立体声，请转换后重新选择"));
+        }
+        Ok((bytes, ext))
+    }).await.map_err(|e| error(e.to_string()))??;
+    let part = reqwest::multipart::Part::bytes(bytes).file_name(format!("{request}-audio.{ext}"));
+    upload_input(http, base, part, "音频").await
+}
+
 async fn prepare_prompt(http: &reqwest::Client, db: &Database, record: &Record, request: &str) -> AppResult<Value> {
     validate_input(&record.input)?;
     let base = endpoint(&record.input.endpoint)?;
-    check_for_mode(http,&base,record.input.mode).await?;
+    check_workflow(http, &base, record.input.mode, record.input.audio_asset_id.is_some()).await?;
+    let audio = match record.input.audio_asset_id.as_deref() {
+        Some(id) => Some(upload_audio(http, &base, db, id, request, record.input.mode).await?),
+        None => None,
+    };
     let (first,first_size) = if record.input.mode == Mode::Text { (String::new(),None) }
         else { let (name,size) = upload(http,&base,db,&record.input.first_frame,request,"first").await?; (name,Some(size)) };
     let last = match record.input.last_frame.as_deref() { Some(id) => Some(upload(http,&base,db,id,request,"last").await?.0), None => None };
     let seed = u64::from_le_bytes(uuid::Uuid::new_v4().as_bytes()[..8].try_into().unwrap()) & ((1_u64<<53)-1);
-    graph(&record.input,&first,last.as_deref(),seed,request,first_size)
+    graph(&record.input,&first,last.as_deref(),audio.as_deref(),seed,request,first_size)
 }
 
 // /prompt has no idempotency guarantee: a durable submitted marker prevents retries.
@@ -609,15 +678,16 @@ mod tests {
         fs::create_dir(&directory).unwrap();
         let origin = directory.join(format!("{request}.mp4"));
         db.conn.lock().unwrap().execute(
-            "INSERT INTO assets(id,name,source,origin_path,store_path,created_at) VALUES('clip','影片','comfy-h3',?1,'clip.mp4',1),('other','另一素材','comfy-h3',?1,'other.mp4',1),('first','首帧','external','first.png','first.png',1)",
+            "INSERT INTO assets(id,name,source,origin_path,store_path,created_at) VALUES('clip','影片','comfy-h3',?1,'clip.mp4',1),('other','另一素材','comfy-h3',?1,'other.mp4',1),('first','首帧','external','first.png','first.png',1),('sound','参考音频','external','sound.wav','sound.wav',1)",
             [origin.to_str().unwrap()],
         ).unwrap();
-        let record: Record = serde_json::from_value(json!({
+        let mut record: Record = serde_json::from_value(json!({
             "account": "owner", "project": "original-project", "submitted": true, "asset_id": "clip",
             "input": {"endpoint": "http://localhost:8000", "seconds": 4, "ratio": "16:9",
                 "resolution": 0.8, "firstFrame": "first", "prompt": "原始提示词"}
         })).unwrap();
-        fs::write(directory.join(format!("{request}.json")), serde_json::to_vec(&record).unwrap()).unwrap();
+        let path = directory.join(format!("{request}.json"));
+        save(&path, &record).unwrap();
         let history = generation_history(workspace.path(), &db, "clip").unwrap().unwrap();
         let turn = &history.turns[0];
         assert_eq!(turn.turn_key.as_deref(), Some(request.to_string().as_str()));
@@ -625,6 +695,12 @@ mod tests {
         assert_eq!(turn.references, ["first.png"]);
         assert_eq!(turn.images, ["clip.mp4"]);
         assert!(generation_history(workspace.path(), &db, "other").unwrap().is_none());
+
+        record.input.audio_asset_id = Some("sound".into());
+        save(&path, &record).unwrap();
+        let history = generation_history(workspace.path(), &db, "clip").unwrap().unwrap();
+        assert_eq!(history.turns[0].references, ["first.png", "sound.wav"]);
+        assert_eq!(history.references[1].asset.id, "sound");
     }
 
     #[test]
@@ -717,7 +793,7 @@ mod tests {
         assert_eq!(shared.posts.load(Ordering::SeqCst),3);
         server.abort(); let _=server.await; fs::remove_dir_all(root).unwrap();
     }
-    fn input() -> Input { Input { endpoint:"http://127.0.0.1:8188".into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, mode:Mode::Frames, first_frame:"first".into(), last_frame:None, prompt:"test prompt".into() } }
+    fn input() -> Input { Input { endpoint:"http://127.0.0.1:8188".into(), seconds:8.0, ratio:"9:16".into(), resolution:0.8, mode:Mode::Frames, first_frame:"first".into(), last_frame:None, audio_asset_id:None, prompt:"test prompt".into() } }
     fn mode_input(mode: &str) -> Input {
         let mut value = serde_json::to_value(input()).unwrap();
         value["mode"] = json!(mode); value["seconds"] = json!(5);
@@ -727,7 +803,7 @@ mod tests {
     #[test]
     fn h3_mode_text_has_no_image_dependency_and_uses_turbo_tiled_decode() {
         let i = mode_input("text");
-        let graph = graph(&i,"",None,42,"text",None).unwrap();
+        let graph = graph(&i,"",None,None,42,"text",None).unwrap();
         assert!(graph.as_object().unwrap().values().all(|node| node["class_type"] != "LoadImage"));
         assert!(graph["9"]["inputs"].get("first_frame").is_none());
         assert_eq!(graph["9"]["inputs"]["length"],124);
@@ -741,7 +817,7 @@ mod tests {
     #[test]
     fn h3_mode_reference_uses_independent_model_and_unanchored_image() {
         let mut i = mode_input("reference"); i.prompt = "Follow <Picture 1>".into();
-        let graph = graph(&i,"reference.png",None,42,"reference",None).unwrap();
+        let graph = graph(&i,"reference.png",None,None,42,"reference",None).unwrap();
         assert_eq!(graph["1"]["inputs"]["unet_name"],"minimax_h3_ref2va_pruned_int8_convrot.safetensors");
         assert!(graph.get("7").is_none());
         assert_eq!(graph["9"]["class_type"],"MiniMaxH3ReferenceToVideo");
@@ -767,11 +843,40 @@ mod tests {
     fn h3_mode_legacy_and_unknown_mode_contract() {
         let mut value = serde_json::to_value(input()).unwrap(); value.as_object_mut().unwrap().remove("mode");
         let legacy: Input = serde_json::from_value(value.clone()).unwrap();
-        assert_eq!(serde_json::to_value(legacy).unwrap()["mode"],"frames");
+        assert_eq!(legacy.audio_asset_id, None);
+        let saved = serde_json::to_value(legacy).unwrap();
+        assert_eq!(saved["mode"],"frames");
+        assert!(saved.get("audioAssetId").is_none());
         value["mode"] = json!("unknown");
         assert!(serde_json::from_value::<Input>(value.clone()).is_err());
         value["mode"] = json!("text"); value.as_object_mut().unwrap().remove("firstFrame");
         assert!(serde_json::from_value::<Input>(value).is_ok());
+    }
+    #[test]
+    fn h3_audio_graph_conditions_every_mode_without_changing_video_delivery() {
+        for mode in ["frames", "reference", "text"] {
+            let i = mode_input(mode);
+            let last = (i.mode == Mode::Frames).then_some("last.png");
+            let baseline = graph(&i, "first.png", last, None, 42, "r", None).unwrap();
+            let prompt = graph(&i, "first.png", last, Some("bowerbird/ref.wav"), 42, "r", None).unwrap();
+            assert_eq!(prompt["31"], json!({"class_type":"LoadAudio","inputs":{"audio":"bowerbird/ref.wav"}}));
+            assert_eq!(prompt["27"], baseline["27"]);
+            assert_eq!(prompt["26"], baseline["26"]);
+            assert_eq!(prompt["14"], baseline["14"]);
+            assert_eq!(prompt["1"], baseline["1"]);
+            if i.mode == Mode::Reference {
+                assert_eq!(prompt["9"]["inputs"]["ref_audios.ref_audio_0"], json!(["31",0]));
+                assert_eq!(prompt["9"]["inputs"]["ref_images.ref_image_0"], json!(["5",0]));
+                assert_eq!(prompt["9"]["inputs"]["audio_vae"], json!(["4",0]));
+                assert!(prompt.get("32").is_none());
+            } else {
+                assert_eq!(prompt["9"], baseline["9"]);
+                assert_eq!(prompt["32"], json!({"class_type":"MiniMaxH3AddGuide","inputs":{
+                    "positive":["9",0],"latent":["9",1],"audio_vae":["4",0],"audio":["31",0],"frame_idx":0
+                }}));
+                assert_eq!(prompt["11"]["inputs"]["conditioning"], json!(["32",0]));
+            }
+        }
     }
     #[test]
     fn h3_mode_rejects_incompatible_bindings_before_submission() {
@@ -791,7 +896,7 @@ mod tests {
         }
     }
     #[tokio::test]
-    async fn h3_mode_submit_uploads_only_expected_image_and_recovers_original_mode() {
+    async fn h3_mode_submit_uploads_only_expected_inputs_and_recovers_original_mode() {
         use axum::{Router, routing::{get,post}, Json, extract::State as AxumState};
         use std::sync::{Mutex,atomic::{AtomicUsize,Ordering}};
         struct Mock { prompt: Mutex<Option<Value>>, uploads: AtomicUsize, posts: AtomicUsize }
@@ -800,18 +905,48 @@ mod tests {
         let db = Database::open_in_memory().unwrap(); db.migrate().unwrap();
         let image = root.path().join("reference.png"); image::RgbImage::new(32,64).save(&image).unwrap();
         let asset = ingest::ingest_generated(&paths,&db,&image,None,"test").unwrap();
-        for mode in [Mode::Text,Mode::Reference] {
+        let wave = root.path().join("reference.wav");
+        audio::tests::write_wav(&wave, 16000, false);
+        let sound = ingest::ingest_generated(&paths, &db, &wave, None, "test").unwrap();
+        let wav_bytes = fs::read(wave).unwrap();
+        let short_wave = root.path().join("short.wav");
+        audio::tests::write_wav(&short_wave, 8000, true);
+        let short = ingest::ingest_generated(&paths, &db, &short_wave, None, "test").unwrap();
+        let long_wave = root.path().join("long.wav");
+        audio::tests::write_wav(&long_wave, 128000, false);
+        let long = ingest::ingest_generated(&paths, &db, &long_wave, None, "test").unwrap();
+        let http = client().unwrap();
+        let no_service = "http://127.0.0.1:0";
+        for (id, mode, expected) in [(&asset.id, Mode::Text, "请选择 WAV"), (&short.id, Mode::Reference, "至少需要 2 秒"), (&long.id, Mode::Frames, "不超过 15 秒")] {
+            let error = upload_audio(&http, no_service, &db, id, "request", mode).await.unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+        for (mode, has_audio) in [(Mode::Text,false), (Mode::Reference,false), (Mode::Text,true), (Mode::Reference,true), (Mode::Frames,true)] {
             let shared = Arc::new(Mock { prompt:Mutex::new(None),uploads:AtomicUsize::new(0),posts:AtomicUsize::new(0) });
-            let mut i = mode_input(if mode == Mode::Text { "text" } else { "reference" });
-            if mode == Mode::Reference { i.first_frame = asset.id.clone(); }
+            let mut i = match mode { Mode::Text => mode_input("text"), Mode::Reference => mode_input("reference"), Mode::Frames => input() };
+            if mode != Mode::Text { i.first_frame = asset.id.clone(); }
+            if has_audio { i.audio_asset_id = Some(sound.id.clone()); }
             let mut info = json!({});
-            for node in graph(&i,"x",None,0,"r",None).unwrap().as_object().unwrap().values() { info[node["class_type"].as_str().unwrap()] = json!({"input":{"required":{}}}); }
+            for node in graph(&i,"x",None,has_audio.then_some("x"),0,"r",None).unwrap().as_object().unwrap().values() { info[node["class_type"].as_str().unwrap()] = json!({"input":{"required":{}}}); }
             for (class,field,models) in [("UNETLoader","unet_name",vec![if mode == Mode::Reference {REFERENCE_UNET} else {UNET}]),("CLIPLoader","clip_name",vec![CLIP]),("VAELoader","vae_name",vec![VAE,AUDIO])] { info[class]["input"]["required"][field] = json!([models]); }
-            if mode == Mode::Text { info["LoraLoaderModelOnly"]["input"]["required"]["lora_name"] = json!([[LORA]]); }
+            if mode != Mode::Reference { info["LoraLoaderModelOnly"]["input"]["required"]["lora_name"] = json!([[LORA]]); }
+            if has_audio {
+                info["LoadAudio"]["input"]["required"]["audio"] = json!(["COMBO",{}]);
+                if mode == Mode::Reference { info["MiniMaxH3ReferenceToVideo"]["input"]["optional"]["ref_audios"] = json!(["COMFY_AUTOGROW_V3",{}]); }
+                else { info["MiniMaxH3AddGuide"]["input"]["optional"]["audio"] = json!(["AUDIO",{}]); }
+            }
+            let source_audio = wav_bytes.clone();
             let app = Router::new().route("/object_info",get(move || async move { Json(info) }))
-                .route("/upload/image",post(|AxumState(s): AxumState<Arc<Mock>>, body: axum::body::Bytes| async move {
-                    assert!(body.windows(8).any(|w| w == b"\x89PNG\r\n\x1a\n"));
-                    s.uploads.fetch_add(1,Ordering::SeqCst); Json(json!({"name":"reference.png","subfolder":"bowerbird"}))
+                .route("/upload/image",post(move |AxumState(s): AxumState<Arc<Mock>>, body: axum::body::Bytes| async move {
+                    let name = if body.windows(4).any(|w| w == b"RIFF") {
+                        assert!(body.windows(source_audio.len()).any(|w| w == source_audio.as_slice()));
+                        assert!(body.windows(17).any(|w| w == b"request-audio.wav"));
+                        "request-audio.wav"
+                    } else {
+                        assert!(body.windows(8).any(|w| w == b"\x89PNG\r\n\x1a\n"));
+                        "reference.png"
+                    };
+                    s.uploads.fetch_add(1,Ordering::SeqCst); Json(json!({"name":name,"subfolder":"bowerbird"}))
                 }))
                 .route("/prompt",post(|AxumState(s): AxumState<Arc<Mock>>, Json(body): Json<Value>| async move {
                     s.posts.fetch_add(1,Ordering::SeqCst); *s.prompt.lock().unwrap() = Some(body); Json(json!({"prompt_id":"original"}))
@@ -822,19 +957,20 @@ mod tests {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             i.endpoint = format!("http://{}",listener.local_addr().unwrap());
             let server = tokio::spawn(async move { axum::serve(listener,app).await.unwrap() });
-            let path = root.path().join(format!("{mode:?}.json"));
+            let path = root.path().join(format!("{mode:?}-{has_audio}.json"));
             let mut record = Record { installation: None, account:"tester".into(),project:"p".into(),input:i,prompt_id:None,submitted:false,asset_id:None,failure:None,cancelled:false,cancel_acknowledged:false,elapsed_ms:None };
-            let http = client().unwrap();
             start(&http,&db,&path,&mut record,"request",&|| Ok(())).await.unwrap();
-            assert_eq!(shared.uploads.load(Ordering::SeqCst),usize::from(mode == Mode::Reference));
+            let expected_uploads = usize::from(mode != Mode::Text) + usize::from(has_audio);
+            assert_eq!(shared.uploads.load(Ordering::SeqCst),expected_uploads);
             assert_eq!(shared.prompt.lock().unwrap().as_ref().unwrap()["extra_data"]["workflow"],mode.workflow());
             record.prompt_id = None; save(&path,&record).unwrap();
             let mut restored: Record = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
             assert_eq!(restored.input.mode,mode);
+            assert_eq!(restored.input.audio_asset_id, has_audio.then_some(sound.id.clone()));
             assert_eq!(poll(&http,&db,&paths,&path,&mut restored,"request",&|| Ok(())).await.unwrap().status,"running");
             assert_eq!(restored.prompt_id.as_deref(),Some("original"));
             assert_eq!(shared.posts.load(Ordering::SeqCst),1);
-            assert_eq!(shared.uploads.load(Ordering::SeqCst),usize::from(mode == Mode::Reference));
+            assert_eq!(shared.uploads.load(Ordering::SeqCst),expected_uploads);
             server.abort(); let _ = server.await;
         }
     }
@@ -845,7 +981,7 @@ mod tests {
             i.ratio=ratio.into();i.resolution=resolution;
             let (w,h,frames)=dimensions(&i,None).unwrap();assert_eq!((w,h),expected);assert_eq!(frames,192);
         }
-        let graph=graph(&i,"first.png",Some("last.png"),42,"request",None).unwrap();
+        let graph=graph(&i,"first.png",Some("last.png"),None,42,"request",None).unwrap();
         assert_eq!(graph["9"]["inputs"]["last_frame"],json!(["30",0]));
         assert_eq!(graph["30"]["inputs"]["image"],"last.png");
         assert_eq!(graph["10"]["inputs"]["noise_seed"],42);
@@ -854,7 +990,7 @@ mod tests {
         assert_eq!(graph["27"]["inputs"]["format.codec"],"auto");
         assert_eq!(graph.as_object().unwrap().values().filter(|v|v["class_type"]=="SaveVideo").count(),1);
         assert!(!graph.to_string().contains("Upscale"));
-        let single=super::graph(&i,"first.png",None,42,"request",None).unwrap();
+        let single=super::graph(&i,"first.png",None,None,42,"request",None).unwrap();
         assert!(single.get("30").is_none());assert!(single["9"]["inputs"].get("last_frame").is_none());
         i.seconds=11.0;assert_eq!(dimensions(&i,None).unwrap().2,277);
         for seconds in [0.0,16.0,f64::NAN] { i.seconds=seconds;assert!(dimensions(&i,None).is_err()); }
@@ -869,7 +1005,7 @@ mod tests {
             for (size,ratio) in [((600,800),"3:4"),((800,600),"4:3"),((900,900),"1:1"),((900,1600),"9:16")] {
                 let mut fixed=i.clone();fixed.ratio=ratio.into();
                 assert_eq!(dimensions(&i,Some(size)).unwrap(),dimensions(&fixed,None).unwrap());
-                let graph=graph(&i,"first",Some("different-last"),1,"auto",Some(size)).unwrap();
+                let graph=graph(&i,"first",Some("different-last"),None,1,"auto",Some(size)).unwrap();
                 let (w,h,_)=dimensions(&fixed,None).unwrap();
                 assert_eq!(graph["9"]["inputs"]["width"],w);
                 assert_eq!(graph["9"]["inputs"]["height"],h);
@@ -904,7 +1040,7 @@ mod tests {
         assert!(output.status.success(),"{}",String::from_utf8_lossy(&output.stderr));
         let shared=Arc::new(Mock { prompt:Mutex::new(None),uploads:AtomicUsize::new(0),posts:AtomicUsize::new(0),phase:AtomicUsize::new(0),video:fs::read(video).unwrap() });
         let mut info=json!({});
-        for node in graph(&input(),"x",None,0,"r",None).unwrap().as_object().unwrap().values() { info[node["class_type"].as_str().unwrap()]=json!({"input":{"required":{}}}); }
+        for node in graph(&input(),"x",None,None,0,"r",None).unwrap().as_object().unwrap().values() { info[node["class_type"].as_str().unwrap()]=json!({"input":{"required":{}}}); }
         for (class,field,models) in [("UNETLoader","unet_name",vec![UNET]),("CLIPLoader","clip_name",vec![CLIP]),("VAELoader","vae_name",vec![VAE,AUDIO]),("LoraLoaderModelOnly","lora_name",vec![LORA])] { info[class]["input"]["required"][field]=json!([models]); }
         async fn history(AxumState(s): AxumState<Arc<Mock>>) -> Json<Value> {
             let prompt=s.prompt.lock().unwrap().clone().unwrap();

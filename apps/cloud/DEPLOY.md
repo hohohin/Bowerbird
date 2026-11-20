@@ -1,5 +1,13 @@
 # Bowerbird Cloud · 部署指引（凭据已备好）
 
+## 2026-11-20 整段视频转录关闭态已部署
+
+0092、官网新签名路由、`understand-proxy` v50、`understand-worker` v30 和 VPS 理解 Worker 已核验。公网新能力返回关闭，受理被拒绝，既有能力及原键查询保持可用。部署前后整段转录任务、价格、暂存对象和预授权均为零。真实豆包联调单独确认。[部署、线上检查与回退](../../project_logs/2026-11-20-file-speech-deployment.md)
+
+获单独批准后，19:05:02 确认 0093 只为私有 `generation-temp` 追加 `audio/mpeg`。其后官网上传、豆包签名取件和原 UUID 查询在三条合成音轨通过，含实测 7200 秒片尾。测试对象均已清理，生产入口和定价没有开放。[隔离联调回执](../../project_logs/2026-11-20-file-speech-live-verification.md)
+
+获用户确认后，20:28:31 切换仅更新 `file-speech.ts` 的 Worker 镜像 `f8ac9a4bb014…`。20:29 核对了现役文件、重启与轮询状态和生产数据库。入口仍关闭，价格为零条，旧镜像 `3e326352117b…` 已保留回滚标签。[切换及只读复核](../../project_logs/2026-11-20-file-speech-live-verification.md#按静音分句生产切换)
+
 ## 2026-11-15 受控 DeepSeek 结算与 HTTP 状态已部署
 
 10:30:12 完成修正版 0091、`agent-worker` 65、`agent-run` 60 及 VPS 镜像 `ba9d2224f878…` 的生产核验。两个 Edge 的 18 个文件与 Worker 的四个运行文件均已读回。缺失用量的旧账未作追补，已标记新调用按冻结额及原调用凭据恢复。[数据库、运行回执与回退](../../project_logs/2026-11-15-agent-model-settlement-deployment.md)

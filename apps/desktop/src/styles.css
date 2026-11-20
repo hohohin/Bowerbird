@@ -2481,6 +2481,15 @@ html[data-theme="light"] .app-form-input:focus {
   }
 }
 
+/* Tailwind 的图片重置会让段末引用后的光标定位元素另起一行。 */
+.ProseMirror img.ProseMirror-separator {
+  display: inline;
+  width: 0;
+  height: 0;
+  margin: 0;
+  border: 0;
+}
+
 /*
  * 创作板 ProseMirror 编辑器
  * .ProseMirror 是 EditorView 自动创建的 contenteditable 根，需手工 reset outline/段落默认 margin。

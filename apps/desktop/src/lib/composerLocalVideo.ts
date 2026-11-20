@@ -1,5 +1,5 @@
 import { useStore } from "../store";
-import { newWorkflowNode, type WorkflowNode } from "./canvasWorkflow";
+import { H3_VIDEO_AUDIO_PORT, newWorkflowNode, type WorkflowNode } from "./canvasWorkflow";
 import type { CanvasWorkflowController } from "./canvasWorkflowRuntime";
 import { canUseComfyVideo, comfyVideoMode, type ComposerLocalVideoRequest } from "./comfyVideo";
 import { cleanH3OptimizedPrompt, h3OptimizationInstruction } from "./h3PromptOptimization";
@@ -19,7 +19,8 @@ async function createComposerLocalVideo(
   const node = { ...newWorkflowNode("comfy-video", point.x, point.y, "comfy-video"),
     prompt: request.prompt, comfyVideo: { ...request.options },
     inputs: { ...(mode !== "text" && request.firstFrame ? { "first-frame": [{ assetId: request.firstFrame }] } : {}),
-      ...(mode === "frames" && request.lastFrame ? { "last-frame": [{ assetId: request.lastFrame }] } : {}) } };
+      ...(mode === "frames" && request.lastFrame ? { "last-frame": [{ assetId: request.lastFrame }] } : {}),
+      ...(request.audioAssetId ? { [H3_VIDEO_AUDIO_PORT]: [{ assetId: request.audioAssetId }] } : {}) } };
   await edit([...controller.document.nodes, node]);
   return node;
 }

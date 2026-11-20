@@ -32,8 +32,12 @@ try {
     window.h3Calls = []; window.optimizeStarts = [];
     const calls = window.h3Calls, starts = window.optimizeStarts, cancels = [];
     let resultMode = 'succeeded';
+    let missingImageMode;
     const asset = { id: 'optimized-video', store_path: '/synthetic.mp4', ext: 'mp4', width: 768, height: 1344 };
     window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (missingImageMode && command === 'comfy_video_environment' && args.action === 'detect' && args.mode === missingImageMode) {
+        return { phase: 'missing', endpoint: args.endpoint, existing: [], installed: false, canInstall: true, message: '模拟本机图片模型缺失' };
+      }
       if (command === 'comfy_video_environment') return args.action === 'prepare' && window.h3PrepareFails
         ? { phase: 'failed', endpoint: args.endpoint, message: '模拟本机启动失败' }
         : { phase: 'ready', endpoint: args.endpoint, message: '就绪' };
@@ -188,7 +192,11 @@ try {
     const reloaded = new CanvasWorkflowController(retryCard.projectId); await reloaded.load();
     check(reloaded.document.runs.filter(run => run.steps.h3?.comfyOptimization).length === 2, 'optimization history survives reload');
 
-    const automatic = await controller({ ...node, comfyAutoOptimize: true });
+    const setAutoOptimize = enabled => window.store.setState(state => ({
+      settings: { ...state.settings, h3_auto_optimize_prompt: enabled },
+    }));
+    setAutoOptimize(true);
+    const automatic = await controller();
     const autoStartCount = starts.length, autoLocalCount = calls.length;
     let allowResult;
     const pausedResult = new Promise(resolve => { allowResult = resolve; });
@@ -202,26 +210,28 @@ try {
     } finally { allowResult(); await autoRunning; api.cloudAgentGet = get; }
     check(automatic.document.run.status === 'done' && calls.length === autoLocalCount + 1 && calls.at(-1).input.prompt === optimized,
       'one opted-in Run immediately generates video with the optimized prompt');
-    check(automatic.document.nodes[0].prompt === original, 'auto optimization only changes the text for this run');
+    check(automatic.document.nodes[0].prompt === optimized, 'auto optimization fills the card editor before generation');
 
-    const interruptedAuto = await controller({ ...node, comfyAutoOptimize: true });
+    const interruptedAuto = await controller();
     resultMode = 'offline';
     await interruptedAuto.start('h3', true);
     check(interruptedAuto.document.run.status === 'waiting' && calls.length === autoLocalCount + 1, 'auto run waits on the original optimization after a connection error');
     const autoRunId = interruptedAuto.document.run.steps.h3.agentRunId;
     const reconnect = new CanvasWorkflowController(interruptedAuto.projectId); await reconnect.load();
     resultMode = 'succeeded';
+    setAutoOptimize(false);
     await reconnect.continue();
-    check(reconnect.document.nodes[0].comfyAutoOptimize === true && reconnect.document.run.steps.h3.agentRunId === autoRunId &&
+    setAutoOptimize(true);
+    check(reconnect.document.run.steps.h3.agentRunId === autoRunId &&
       starts.length === autoStartCount + 2 && calls.length === autoLocalCount + 2 && calls.at(-1).input.prompt === optimized,
-      'reload restores the checkbox and resumes the same optimization before generating once');
+      'recovery resumes the same optimization even after disabling the global preference');
 
-    const failedAuto = await controller({ ...node, comfyAutoOptimize: true });
+    const failedAuto = await controller();
     resultMode = 'failed'; await failedAuto.start('h3', true);
     check(failedAuto.document.run.status === 'failed' && calls.length === autoLocalCount + 2, 'a failed auto optimization cannot submit a local video');
     resultMode = 'succeeded';
 
-    const stopAuto = await controller({ ...node, comfyAutoOptimize: true });
+    const stopAuto = await controller();
     const pendingCloud = Promise.withResolvers();
     api.cloudAgentStart = input => { starts.push(input); return pendingCloud.promise; };
     const autoCloudBeforeStop = starts.length;
@@ -240,12 +250,12 @@ try {
     check(cancels.includes('late-auto-cloud') && stopAuto.document.run.status === 'stopped' && calls.length === autoLocalCount + 2,
       'stop during auto optimization cancels the original Cloud receipt without generating');
 
-    const wholeWorkflow = await controller({ ...node, comfyAutoOptimize: true });
+    const wholeWorkflow = await controller();
     const beforeWorkflow = starts.length;
     await wholeWorkflow.start('h3');
     check(starts.length === beforeWorkflow && calls.at(-1).input.prompt === original,
       'only an opted-in explicit card Run starts paid optimization');
-    const environmentAuto = await controller({ ...node, comfyAutoOptimize: true });
+    const environmentAuto = await controller();
     const beforeEnvironment = calls.length;
     window.h3PrepareFails = true;
     try { await environmentAuto.start('h3', true); }
@@ -255,6 +265,129 @@ try {
     await environmentAuto.continue();
     check(environmentAuto.document.run.status === 'done' && starts.length === beforeWorkflow + 1 &&
       calls.length === beforeEnvironment + 1 && calls.at(-1).input.prompt === optimized, 'retrying local startup never repeats the Cloud request');
+
+    const sourceImage = { ...newWorkflowNode('generation', 400, 60, 'minimax-h3-image'), id: 'source-image',
+      outputs: { image: { type: 'image', assetIds: ['synthetic-upstream-image'] } } };
+    const canvasRef = { assetId: 'existing', assetNodeId: 'old' };
+    const image = { ...newWorkflowNode('generation', 800, 60, 'minimax-h3-image'), id: 'auto-image',
+      ratio: '4:3', prompt: '画一只玻璃杯，参考 @[glass-shape] 的轮廓。',
+      inputs: { image: [canvasRef, { nodeId: sourceImage.id, portId: 'image' }],
+        text: [{ autoConnect: 'lighting', dimension: { id: 'lighting', title: '光线', body: '窗光从左侧照入。' } }] },
+      promptReferences: [{ id: 'glass-shape', type: 'image', label: '杯子轮廓', assetId: canvasRef.assetId, input: canvasRef }] };
+    const imageSource = '画一只玻璃杯，参考 @图片1 的轮廓。\n\n【参考文本】\n窗光从左侧照入。';
+    const optimizedImage = imageSource.replace('一只玻璃杯', '一只透明玻璃杯');
+    const cloudImageResult = (runId, prompt) => ({ runId, status: resultMode, snapshot: { run: { safe_message: '模拟优化失败' }, events: [
+      { type: 'text.result', display_payload: { schemaVersion: 1, text: prompt } }] } });
+    const getImageResult = async runId => {
+      if (resultMode === 'offline') throw Error('网络连接失败，请继续查询原任务');
+      return cloudImageResult(runId, starts.at(-1).textRewrite.source.replace('一只玻璃杯', '一只透明玻璃杯'));
+    };
+    const imageCalls = [];
+    const { startGeneration } = window.store.getState(), getAssets = api.getAssetsByIds;
+    window.store.setState({ startGeneration: async (...args) => { imageCalls.push(args); return { accepted: true, jobId: args[12].jobId }; } });
+    api.getAssetsByIds = async ids => (await getAssets(ids)).reverse();
+    api.cloudAgentGet = getImageResult;
+    async function imageController(autoOptimize) {
+      setAutoOptimize(autoOptimize);
+      const card = await controller(sourceImage);
+      await card.edit([sourceImage, { ...image, ...(!autoOptimize ? { comfyAutoOptimize: true } : {}) }]);
+      return card;
+    }
+    function checkImageSubmit(expectedPrompt, message) {
+      const [prompt, assets, ratio, provider, rawPrompt, , , , , context, onStarted, , identity] = imageCalls.at(-1);
+      check(prompt === expectedPrompt && rawPrompt === imageSource && ratio === '4:3' && provider === 'minimax-h3-image'
+        && assets.map(asset => asset.id).join() === 'existing,synthetic-upstream-image' && context.referenceNodeIds.join() === 'old,'
+        && context.referenceNodeIds[1] === null && onStarted && identity.jobId && identity.turnKey, message);
+    }
+    try {
+      const imageCloudBefore = starts.length;
+      const defaultImage = await imageController(false);
+      await defaultImage.start(image.id, true);
+      check(starts.length === imageCloudBefore && imageCalls.length === 1, 'H3 image defaults to direct generation');
+      checkImageSubmit(imageSource, 'direct H3 image receives the compiled prompt and ordered reference origins');
+      const workflowImage = await imageController(true);
+      await workflowImage.start(image.id);
+      check(starts.length === imageCloudBefore && imageCalls.length === 2, 'a whole workflow never starts paid H3 image optimization');
+
+      for (const mode of ['image', 'edit']) {
+        missingImageMode = mode;
+        const missingImage = mode === 'edit' ? await imageController(true) : await controller({ ...image,
+          prompt: '画一只玻璃杯', inputs: {}, promptReferences: [] });
+        await missingImage.start(image.id, true);
+        check(missingImage.document.run.status === 'failed' && starts.length === imageCloudBefore && imageCalls.length === 2,
+          `missing H3 ${mode} environment prevents paid optimization and local generation`);
+      }
+      missingImageMode = undefined;
+
+      const pausedImage = await imageController(true);
+      resultMode = 'offline';
+      await pausedImage.start(image.id, true);
+      const pendingImage = pausedImage.document.run.steps[image.id];
+      check(pausedImage.document.run.status === 'waiting' && pendingImage.agentRunId && starts.length === imageCloudBefore + 1
+        && imageCalls.length === 2, `H3 image waits on the original paid request before local submission (${pendingImage.status}: ${pendingImage.error ?? ''})`);
+      const brief = starts.at(-1);
+      const skill = JSON.parse(brief.intentPrompt.split('\n')[1]);
+      check(skill.id === 'h3-image-prompt' && skill.parameters.referenceCount === 2 && skill.parameters.ratio === '4:3'
+        && brief.textRewrite.source === image.prompt.replace('@[glass-shape]', '{{REF_1}}') && brief.references.length === 0
+        && !JSON.stringify(brief).includes('synthetic-upstream-image') && !JSON.stringify(brief).includes('/synthetic.png'),
+        'only the editable text with reference placeholders and image constraints leaves the device');
+
+      const key = `workflow-${pausedImage.projectId}`;
+      const saved = JSON.parse(sessionStorage.getItem(key));
+      saved.document.nodes.find(node => node.id === sourceImage.id).outputs.image.assetIds = ['new-upstream-image'];
+      sessionStorage.setItem(key, JSON.stringify(saved));
+      resultMode = 'succeeded';
+      const reopenedImage = new CanvasWorkflowController(pausedImage.projectId);
+      await reopenedImage.load();
+      check(reopenedImage.document.nodes.find(node => node.id === sourceImage.id).outputs.image.assetIds[0] === 'new-upstream-image',
+        'the persisted upstream output changed while this run was waiting');
+      await reopenedImage.continue();
+      await reopenedImage.continue();
+      check(reopenedImage.document.run.status === 'done' && reopenedImage.document.run.steps[image.id].agentRunId === pendingImage.agentRunId
+        && starts.length === imageCloudBefore + 1 && imageCalls.length === 3, 'reopen queries the same optimization and submits the local image exactly once');
+      checkImageSubmit(optimizedImage, 'recovered H3 image preserves reference order, origins, and raw prompt for the generation session');
+      const reopenedCard = reopenedImage.document.nodes.find(node => node.id === image.id);
+      check(reopenedCard.prompt === image.prompt.replace('一只玻璃杯', '一只透明玻璃杯'),
+        'recovery fills the editor without flattening upstream text or image references');
+      check(reopenedCard.promptReferences.some(ref => ref.id === 'glass-shape'), 'the editable image reference remains connected');
+      const reopenedStep = reopenedImage.document.run.steps[image.id].comfyOptimization;
+      check(reopenedStep.input.prompt === image.prompt && reopenedStep.result === reopenedCard.prompt, 'auto optimization records both editable drafts');
+
+      const invalidImage = await imageController(true);
+      api.cloudAgentGet = async runId => cloudImageResult(runId, '一只透明玻璃杯。');
+      await invalidImage.start(image.id, true);
+      check(invalidImage.document.run.status === 'failed' && imageCalls.length === 3, 'losing an inline reference prevents image submission');
+
+      const stoppedImage = await imageController(true);
+      const receipt = Promise.withResolvers(), submitted = Promise.withResolvers();
+      api.cloudAgentStart = input => { starts.push(input); submitted.resolve(); return receipt.promise; };
+      const startingImage = stoppedImage.start(image.id, true);
+      try {
+        await Promise.race([submitted.promise, startingImage]);
+        check(stoppedImage.document.run?.status === 'running', 'image optimization reached the Cloud submission boundary');
+        const stopImage = stoppedImage.stop();
+        receipt.resolve({ runId: 'late-image-cloud' });
+        await stopImage;
+      } finally { receipt.resolve({ runId: 'late-image-cloud' }); await startingImage; }
+      check(stoppedImage.document.run.status === 'stopped' && cancels.includes('late-image-cloud') && imageCalls.length === 3,
+        'stopping an H3 image run cancels a late Cloud receipt without submitting local generation');
+
+      api.cloudAgentStart = start;
+      const backgroundImage = await imageController(true), beforeBackground = starts.length;
+      await backgroundImage.start(image.id, true, true);
+      for (let attempt = 0; backgroundImage.document.run.status === 'running' && attempt < 100; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      check(backgroundImage.document.run.status === 'done' && starts.length === beforeBackground && imageCalls.length === 4,
+        'a single image card started in the background bypasses paid optimization');
+    } finally {
+      missingImageMode = undefined;
+      api.cloudAgentStart = start;
+      api.cloudAgentGet = get;
+      api.getAssetsByIds = getAssets;
+      window.store.setState({ startGeneration });
+    }
+    setAutoOptimize(false);
     const ui = canvasWorkflowController('p'); await ui.load(); await ui.edit([{ ...node, x: 800 }]);
   });
   const card = page.locator('[data-workflow-card="h3"]');
@@ -304,6 +437,7 @@ try {
   const field = await card.locator('.comfy-video-prompt').boundingBox();
   const action = await card.getByRole('button', { name: '优化提示词', exact: true }).boundingBox();
   assert.ok(action.y >= field.y + field.height - 1 && action.x + action.width <= field.x + field.width + 1);
+  await card.getByRole('button', { name: '运行', exact: true }).waitFor();
   for (const theme of ['dark', 'light']) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
     await page.waitForFunction(theme => {
@@ -327,16 +461,30 @@ try {
   assert.equal(await page.evaluate(() => window.h3Calls.at(-1).input.prompt), '用户修改后的提示词');
   assert.equal(await page.evaluate(() => window.optimizeStarts.length), before.cloud + 1);
   assert.equal(await card.getByText('查看优化结果', { exact: true }).count(), 0);
+  const retryButton = card.getByRole('button', { name: '重试', exact: true });
+  await retryButton.waitFor();
+  await draft.fill('用户修改后的提示词，再向右看');
+  await runButton.waitFor();
+  assert.equal(await draft.evaluate(field => field === document.activeElement), true, 'H3 action updates before the textarea loses focus');
+  await draft.fill('用户修改后的提示词');
+  await retryButton.waitFor();
   const autoCheckbox = card.getByRole('checkbox', { name: '自动优化提示词', exact: true });
   assert.equal(await autoCheckbox.isChecked(), false);
   const autoBefore = await page.evaluate(() => ({ local: window.h3Calls.length, cloud: window.optimizeStarts.length }));
   await autoCheckbox.check();
-  await runButton.click();
+  await retryButton.click();
   await page.waitForFunction(({ local, cloud }) => window.h3Calls.length === local + 1 && window.optimizeStarts.length === cloud + 1 &&
     JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', autoBefore);
   assert.equal(await page.evaluate(() => window.optimizeStarts.at(-1).textRewrite.source), '用户修改后的提示词');
   assert.match(await page.evaluate(() => window.h3Calls.at(-1).input.prompt), /单一连续镜头/);
-  assert.equal(await card.getByLabel('卡片指令', { exact: true }).inputValue(), '用户修改后的提示词');
+  assert.match(await card.getByLabel('卡片指令', { exact: true }).inputValue(), /单一连续镜头/);
+  await retryButton.waitFor();
+  await card.getByRole('button', { name: '查看提示词优化历史', exact: true }).click();
+  const videoHistory = page.getByRole('dialog', { name: '提示词优化历史', exact: true });
+  await videoHistory.getByRole('button', { name: '恢复第 3 次优化结果', exact: true }).waitFor();
+  assert.match(await videoHistory.innerText(), /用户修改后的提示词/);
+  await page.keyboard.press('Escape');
+  await autoCheckbox.uncheck();
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
     const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
@@ -349,7 +497,9 @@ try {
     api.cloudAgentGet = async runId => ({ runId, status: 'succeeded', snapshot: { run: {}, events: [
       { type: 'text.result', display_payload: { schemaVersion: 1, text: '透明玻璃杯，杯沿反射窗边的柔光。' } }] } });
   });
-  assert.equal(await page.locator('[data-workflow-card="other-image"]').getByRole('button', { name: '优化提示词' }).count(), 0);
+  const otherImage = page.locator('[data-workflow-card="other-image"]');
+  assert.equal(await otherImage.getByRole('button', { name: '优化提示词' }).count(), 0);
+  assert.equal(await otherImage.getByRole('checkbox', { name: '自动优化提示词', exact: true }).count(), 0);
   await page.locator('[data-workflow-card="image-h3"]').getByRole('button', { name: '优化提示词', exact: true }).click();
   await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes
     .some(node => node.id === 'image-h3' && node.prompt === '透明玻璃杯，杯沿反射窗边的柔光。'));
@@ -393,6 +543,98 @@ try {
     return doc.run.status === 'failed' && doc.run.steps['image-h3'].error.includes('相同的提示词')
       && doc.nodes.find(node => node.id === 'image-h3').prompt === '透明玻璃杯，杯沿反射窗边的柔光。';
   });
+  const imageCheckbox = imageCard.getByRole('checkbox', { name: '自动优化提示词', exact: true });
+  assert.equal(await imageCheckbox.isChecked(), false);
+  await page.evaluate(async () => {
+    const { api } = await import('/src/lib/api.ts');
+    api.cloudAgentGet = async runId => ({ runId, status: 'succeeded', snapshot: { run: {}, events: [
+      { type: 'text.result', display_payload: { schemaVersion: 1, text: '透明玻璃杯，柔光在杯沿形成窄而清晰的高光。' } }] } });
+    window.imageDispatches = [];
+    window.store.setState({ startGeneration: async (...args) => {
+      window.imageDispatches.push({ prompt: args[0], provider: args[3], rawPrompt: args[4] });
+      return { accepted: true, jobId: args[12].jobId };
+    } });
+  });
+  const beforeImageAuto = await page.evaluate(() => window.optimizeStarts.length);
+  await imageCheckbox.check();
+  await imageCard.getByRole('button', { name: '运行此卡片', exact: true }).click();
+  await page.waitForFunction(count => {
+    const doc = JSON.parse(sessionStorage.getItem('workflow-p')).document;
+    return window.optimizeStarts.length === count + 1 && doc.run.status === 'done'
+      && JSON.parse(sessionStorage.getItem('canvas-settings')).h3_auto_optimize_prompt === true;
+  }, beforeImageAuto);
+  assert.deepEqual(await page.evaluate(() => window.imageDispatches), [{
+    provider: 'minimax-h3-image', rawPrompt: '透明玻璃杯，杯沿反射窗边的柔光。',
+    prompt: '透明玻璃杯，柔光在杯沿形成窄而清晰的高光。',
+  }]);
+  assert.equal(await imageCard.getByLabel('卡片指令', { exact: true }).innerText(), '透明玻璃杯，柔光在杯沿形成窄而清晰的高光。');
+  await imageCard.getByRole('button', { name: '重试', exact: true }).waitFor();
+  await imageCard.getByRole('button', { name: '查看提示词优化历史', exact: true }).click();
+  await history.getByRole('button', { name: '恢复第 4 次优化结果', exact: true }).waitFor();
+  assert.match(await history.innerText(), /柔光在杯沿形成窄而清晰的高光/);
+  await history.getByRole('button', { name: '恢复第 4 次用户原文', exact: true }).click();
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('workflow-p')).document.nodes.find(node => node.id === 'image-h3').prompt
+    === '透明玻璃杯，杯沿反射窗边的柔光。');
+  await imageCard.getByRole('button', { name: /^(运行|运行此卡片)$/ }).waitFor();
+  await page.keyboard.press('Escape');
+
+  const beforeConcurrentVideo = await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const { newWorkflowNode } = await import('/src/lib/canvasWorkflow.ts');
+    const { DEFAULT_COMFY_VIDEO, comfyVideoOptionsForMode } = await import('/src/lib/comfyVideo.ts');
+    const controller = canvasWorkflowController('p');
+    await controller.edit([...controller.document.nodes, {
+      ...newWorkflowNode('comfy-video', 430, 60, 'codex'), id: 'h3',
+      comfyVideo: comfyVideoOptionsForMode(DEFAULT_COMFY_VIDEO, 'text'), prompt: '玻璃杯特写。'
+    }]);
+    const image = controller.document.nodes.find(node => node.id === 'image-h3');
+    const [, id, turnKey] = image.sessionNodeIds.at(-1).split(':');
+    // The workflow finished handing off this image, but the native generation is still running.
+    window.store.setState({ genJobs: { [id]: { id, projectId: 'p', running: true, media: 'image', provider: 'minimax-h3-image',
+      turns: [{ id: 1, turnKey, prompt: '玻璃杯', images: [] }], sessionId: null, streaming: '', lastPrompt: '玻璃杯',
+      lastRefs: [], refAssets: [], lastRatio: null, createdAt: Date.now() } } });
+    return window.h3Calls.length;
+  });
+  assert.equal(await autoCheckbox.isChecked(), true, 'a new video card inherits the image card’s global choice');
+  await autoCheckbox.uncheck();
+  assert.equal(await imageCheckbox.isChecked(), false, 'changing the video checkbox also updates the image checkbox');
+  await page.waitForFunction(() => JSON.parse(sessionStorage.getItem('canvas-settings')).h3_auto_optimize_prompt === false);
+  const concurrent = page.getByRole('dialog', { name: '是否需要继续运行当前卡片？' });
+  await runButton.click();
+  await concurrent.waitFor();
+  assert.match(await concurrent.innerText(), /电脑卡顿、生成速度降低/);
+  await concurrent.getByRole('button', { name: '取消', exact: true }).and(page.locator(':focus')).waitFor();
+  await page.keyboard.press('Enter');
+  await concurrent.waitFor({ state: 'hidden' });
+  assert.equal(await page.evaluate(() => window.h3Calls.length), beforeConcurrentVideo);
+  await runButton.click();
+  await concurrent.getByRole('button', { name: '确认', exact: true }).click();
+  await page.waitForFunction(n => window.h3Calls.length === n + 1 &&
+    JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', beforeConcurrentVideo);
+
+  await page.evaluate(() => {
+    window.store.setState({ genJobs: {} });
+    const invoke = window.__TAURI_INTERNALS__.invoke;
+    const gate = Promise.withResolvers();
+    window.releaseConcurrentVideo = gate.resolve;
+    window.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command === 'comfy_video' && args.action === 'start') {
+        window.concurrentVideoRunning = true;
+        await gate.promise;
+      }
+      return invoke(command, args);
+    };
+  });
+  await retryButton.click();
+  await page.waitForFunction(() => window.concurrentVideoRunning);
+  try {
+    await imageCard.getByRole('button', { name: '运行此卡片', exact: true }).click();
+    await concurrent.getByRole('button', { name: '取消', exact: true }).click();
+    await concurrent.waitFor({ state: 'hidden' });
+    assert.equal(await page.evaluate(() => window.imageDispatches.length), 1);
+  } finally { await page.evaluate(() => window.releaseConcurrentVideo()); }
+  await page.waitForFunction(n => window.h3Calls.length === n + 2 &&
+    JSON.parse(sessionStorage.getItem('workflow-p')).document.run.status === 'done', beforeConcurrentVideo);
   assert.deepEqual(errors, []);
   console.log('H3 explicit and opted-in optimization: manual editing, chained generation, stop, account, failure and original-job recovery passed');
 } catch (error) { console.error(error); throw error; }

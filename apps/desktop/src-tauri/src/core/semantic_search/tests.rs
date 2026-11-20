@@ -15,7 +15,7 @@ use crate::{
 use super::{
     embedding::{Embedding, DIMENSIONS},
     index,
-    model::MODEL_ID,
+    model::{MODEL_ID, SEARCH_MIN_COSINE},
     query, source,
 };
 
@@ -268,6 +268,108 @@ fn search(path: &Path, filter: CatalogFilter, k: usize) -> query::SearchSnapshot
 }
 
 #[test]
+fn irrelevant_vectors_do_not_fill_the_result_limit() {
+    let temp = tempfile::tempdir().unwrap();
+    let file = temp.path().join("library.db");
+    let db = Database::open(&file).unwrap();
+    db.migrate().unwrap();
+    index::control(&db, "start").unwrap();
+    let sha = "a".repeat(64);
+    let weak = Embedding::normalize(axis(0.02, 1.0)).unwrap().to_bytes();
+    {
+        let mut conn = db.conn.lock().unwrap();
+        let tx = conn.transaction().unwrap();
+        tx.execute_batch("INSERT INTO projects(id,name,workspace_path,workspace_key,created_at) VALUES('p','P','path','key',1);
+            WITH RECURSIVE n(id) AS (VALUES(0) UNION ALL SELECT id+1 FROM n WHERE id<170)
+            INSERT INTO assets(id,name,ext,store_path)
+            SELECT printf('image-%03d',id),'Fixture','png','fixture.png' FROM n;
+            INSERT INTO project_assets(project_id,asset_id,created_at)
+            SELECT 'p',id,1 FROM assets WHERE id<'image-170';").unwrap();
+        tx.execute(
+            "UPDATE semantic_jobs SET status='ready',content_sha256=?1",
+            [&sha],
+        )
+        .unwrap();
+        tx.execute("INSERT INTO semantic_vectors(asset_id,model_key,content_sha256,dim,vec_f32le,updated_at)
+            SELECT id,?1,?2,768,?3,1 FROM assets", params![MODEL_ID,sha,weak]).unwrap();
+        tx.commit().unwrap();
+    }
+
+    let filter = query_filter(Some("p"));
+    let no_matches = search(&file, filter.clone(), 240);
+    assert_eq!(
+        (no_matches.eligible, no_matches.indexed, no_matches.len()),
+        (170, 170, 0)
+    );
+    assert!(no_matches.ids(&file, 0, 60).unwrap().is_empty());
+    assert!(no_matches.page(&file, 0, 60).unwrap().is_empty());
+
+    let strong = Embedding::normalize(axis(0.8, 0.6)).unwrap().to_bytes();
+    let out_of_scope = Embedding::normalize(axis(1.0, 0.0)).unwrap().to_bytes();
+    let at_score = |score: f32| {
+        axis(score, (1.0 - score.powi(2)).sqrt())
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect::<Vec<u8>>()
+    };
+    let at_floor = at_score(SEARCH_MIN_COSINE);
+    let just_below = at_score(f32::from_bits(SEARCH_MIN_COSINE.to_bits() - 1));
+    insert_asset(&db, "unindexed", Path::new("unindexed.png"));
+    {
+        let conn = db.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO project_assets(project_id,asset_id,created_at) VALUES('p','unindexed',1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE semantic_vectors SET vec_f32le=?1 WHERE asset_id IN ('image-000','image-001','image-002')",
+            [&strong],
+        )
+        .unwrap();
+        for (id, vector) in [
+            ("image-003", &at_floor),
+            ("image-004", &just_below),
+            ("image-170", &out_of_scope),
+        ] {
+            conn.execute(
+                "UPDATE semantic_vectors SET vec_f32le=?1 WHERE asset_id=?2",
+                params![vector, id],
+            )
+            .unwrap();
+        }
+    }
+    let retained = search(&file, filter.clone(), 240);
+    assert_eq!(
+        (retained.eligible, retained.indexed, retained.len()),
+        (171, 170, 4)
+    );
+    assert_eq!(
+        retained.ids(&file, 0, 60).unwrap(),
+        ["image-000", "image-001", "image-002", "image-003"]
+    );
+
+    let capped = search(&file, filter.clone(), 2);
+    assert_eq!(
+        (capped.eligible, capped.indexed, capped.len()),
+        (171, 170, 2)
+    );
+    assert_eq!(capped.ids(&file, 0, 60).unwrap(), ["image-000", "image-001"]);
+    let second = serde_json::to_value(capped.page(&file, 1, 1).unwrap()).unwrap();
+    assert_eq!(second[0]["asset"]["id"], "image-001");
+
+    db.conn.lock().unwrap().execute(
+        "UPDATE semantic_vectors SET vec_f32le=?1 WHERE asset_id<'image-170'",
+        [&strong],
+    ).unwrap();
+    let all_relevant = search(&file, filter, 240);
+    assert_eq!(
+        (all_relevant.eligible, all_relevant.indexed, all_relevant.len()),
+        (171, 170, 170)
+    );
+}
+
+#[test]
 fn ranking_scopes_before_top_k_retains_group_members_and_checks_all_pages() {
     let temp = tempfile::tempdir().unwrap();
     let file = temp.path().join("library.db");
@@ -419,6 +521,7 @@ fn warm_10k_rank_page_and_ids_timing() {
         filter.generated = generated;
         let warm = search(&file, filter.clone(), 240);
         assert_eq!((warm.indexed, warm.eligible), (10_000, 10_000));
+        assert_eq!(warm.len(), 240);
         warm.page(&file, 0, 60).unwrap();
         let mut ranking = Vec::new();
         let mut page = Vec::new();

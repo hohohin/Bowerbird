@@ -9,7 +9,9 @@ import { VideoControls } from "./creation/VideoControls";
 import { LocalVideoFrames } from "./creation/LocalVideoFrames";
 import { H3OptimizeButton } from "./creation/H3OptimizeButton";
 import { ComfyEnvironmentControl, type ComfyEnvironmentState } from "./ComfyVideoCard";
-import { canUseComfyVideo, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, DEFAULT_COMFY_VIDEO, localVideoFrames, localVideoInputError, type ComposerLocalVideoRequest } from "../lib/comfyVideo";
+import { canUseComfyVideo, comfyAudioLabel, comfyEnvironment, comfyEnvironmentReady, comfyVideoMode, DEFAULT_COMFY_VIDEO, localVideoFrames, localVideoInputError, type ComposerLocalVideoRequest } from "../lib/comfyVideo";
+import { isAudioAsset } from "../lib/audioMedia";
+import { restoreH3VideoAudioReference } from "../lib/h3PromptOptimization";
 import { ProviderQuota } from "./creation/ProviderQuota";
 import { useStore } from "../store";
 import { canStartAnotherAgentRun, canStartAnotherJob, countLimitedGenerationJobs, canUseAgentRun } from "../lib/entitlement";
@@ -246,6 +248,7 @@ export function CreationBoard({
     loadPrompt,
     getDraft,
     finalPrompt,
+    promptWithAssetToken,
     rawPrompt,
     references,
     referenceNodeIds,
@@ -266,19 +269,23 @@ export function CreationBoard({
   const localFrames = useMemo(() => localVideoFrames(references), [references]);
   const localMode = comfyVideoMode(generation.localVideo ?? DEFAULT_COMFY_VIDEO);
   const localFrameCount = localMode === "text" ? 0 : localMode === "reference" ? 1 : 2;
+  const localAudio = isLocalVideo ? references.filter(isAudioAsset) : [];
+  const audioAssetId = localAudio[0]?.id;
+  const audioToken = localMode === "reference" && !finalPrompt.includes("<Audio 1>") ? "<Audio 1>" : "";
+  const localPrompt = audioAssetId ? promptWithAssetToken(id => id === audioAssetId ? audioToken : undefined) : finalPrompt;
   const [optimizingH3, setOptimizingH3] = useState(false);
-  const h3Scope = JSON.stringify([projectId, cloudAuth?.user_id, isLocalVideo, localMode, generation.localVideo?.seconds, generation.localVideo?.ratio]);
+  const h3Scope = JSON.stringify([projectId, cloudAuth?.user_id, isLocalVideo, localMode, generation.localVideo?.seconds, generation.localVideo?.ratio, audioAssetId]);
   const h3ScopeRef = useRef(h3Scope);
   h3ScopeRef.current = h3Scope;
 
   async function optimizeH3Prompt() {
-    if (!onOptimizeLocalVideo || !isLocalVideo || optimizingH3 || submitting || !finalPrompt.trim()) return;
+    if (!onOptimizeLocalVideo || !isLocalVideo || optimizingH3 || submitting || !localPrompt.trim() || localAudio.length > 1) return;
     const origin = useStore.getState();
     const originId = prepareProject ? origin.activeProjectId : projectId ?? origin.activeProjectId;
     const claim = acquireCreativeSubmission(originId);
     if (!claim) return;
     const scope = h3Scope;
-    const request: ComposerLocalVideoRequest = { prompt: finalPrompt, options: { ...generation.localVideo! },
+    const request: ComposerLocalVideoRequest = { prompt: localPrompt, options: { ...generation.localVideo! },
       firstFrame: localMode === "text" ? "" : localFrames[0]?.id ?? "", lastFrame: localMode === "frames" ? localFrames[1]?.id : undefined };
     const current = () => {
       const state = useStore.getState();
@@ -295,7 +302,9 @@ export function CreationBoard({
       if (request.prompt.trim().length > 16000) throw new Error("提示词不能超过 16000 字");
       if (!current()) return;
       const result = await onOptimizeLocalVideo(request, projectId);
-      if (current()) applyH3Prompt(result);
+      if (current() && (!audioAssetId || localMode !== "reference" || restoreH3VideoAudioReference(request.prompt, result) === result)) {
+        applyH3Prompt(result);
+      }
     } catch (error) { if (current()) notifyError(error, "提示词优化未完成，请在任务中心查看原任务。"); }
     finally { claim.release(); if (mounted.current) setOptimizingH3(false); }
   }
@@ -628,7 +637,7 @@ export function CreationBoard({
     cloudBalance >= cloudAgentRequiredBalance;
   const targetProviderLabel = isLocalVideo ? "本地 H3" : isVideo ? videoModelLabel(videoOptions.model_version) : imageProviderLabel(activeGenProvider, cloudEntitlement, settings?.dreamina_model_version);
   const sendTooltipId = useId();
-  const referenceError = isLocalVideo ? localVideoInputError(finalPrompt, localFrames, generation.localVideo!) : !isVideo && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode
+  const referenceError = isLocalVideo ? localVideoInputError(localPrompt, localFrames, generation.localVideo!, localAudio) : !isVideo && !cloudAgentMode && !agentZMode && !agentGMode && !agentDsMode
     ? imageInputError(references) : null;
   const sendDisabledReason = isChat
     ? submitting ? "正在发送消息，请稍候。" : providerIssue?.message
@@ -741,7 +750,8 @@ export function CreationBoard({
     if (referenceError) { notifyError(referenceError, "参考素材不适用"); return; }
     if (isLocalVideo) {
       const options = { ...generation.localVideo! };
-      const request: ComposerLocalVideoRequest = { prompt: finalPrompt, firstFrame: localMode === "text" ? "" : localFrames[0].id, lastFrame: localMode === "frames" ? localFrames[1]?.id : undefined, options };
+      const request: ComposerLocalVideoRequest = { prompt: localPrompt, firstFrame: localMode === "text" ? "" : localFrames[0].id,
+        lastFrame: localMode === "frames" ? localFrames[1]?.id : undefined, audioAssetId, options };
       await prepareSubmissionProject();
       if (!isCurrentSubmission()) return;
       const environment = await comfyEnvironment("detect", options.endpoint, undefined, undefined, localMode);
@@ -1489,7 +1499,7 @@ export function CreationBoard({
           className="creation-editor composer-description cursor-text text-ink"
         />
         </OverlayScrollArea>
-        {isLocalVideo && onOptimizeLocalVideo && !isCollapsed && <H3OptimizeButton disabled={submitting || !finalPrompt.trim()} busy={optimizingH3} onClick={() => void optimizeH3Prompt()} />}
+        {isLocalVideo && onOptimizeLocalVideo && !isCollapsed && <H3OptimizeButton disabled={submitting || !localPrompt.trim() || localAudio.length > 1} busy={optimizingH3} onClick={() => void optimizeH3Prompt()} />}
         </div>
         </div>
         {isChat && !isCollapsed && <p className="composer-chat-key-hint">Enter 换行 · Ctrl / ⌘ + Enter 发送</p>}
@@ -1513,7 +1523,7 @@ export function CreationBoard({
             </button>
             <div className="pointer-events-none absolute bottom-full left-0 z-10 mb-1.5 hidden w-60 rounded-lg bg-panel2 p-2 text-[11px] leading-4 text-muted ring-1 ring-edge group-hover:block group-focus-within:block">
               像跟 AI 输入 prompt 一样书写；<span className="text-accent">点击素材库图片</span>，将参考图插入当前光标处。也可输入 <span className="text-accent">@图名</span> 插入参考图（空格/标点后自动识别）。<span className="text-accent">长按任意图片</span>四周会出现<span className="text-accent">维度环</span>，点环上扇区即可把该维度加入创作板（创作板未打开会自动打开）；无维度数据的图会提示先右键反推。
-              {isLocalVideo ? <p className="mt-2 text-[11px] leading-4 text-muted">按编辑框中的图片顺序取首帧、尾帧，其余参考素材不参与本地生成。不消耗积分，生成进度与结果在画板上显示。</p> : isVideo && <p className="mt-2 text-[11px] leading-4 text-muted">{videoOptions.kind === "frames2video" ? "按编辑框中的参考顺序：第 1 张为首帧，第 2 张为尾帧。" : videoOptions.kind === "multimodal2video" ? `支持图片与视频参考；参考视频每段及总时长均须为 2–${videoOptions.model_version === "seedance2.5" ? 30 : 15} 秒。` : ""}{generation.videoChannel === "cloud" ? "使用 Bowerbird Bcoin，按提交时锁定的任务报价结算。" : "使用即梦积分，模型权限以官方账号为准。"}提交后停止等待，远端任务仍可能完成并计费。</p>}
+              {isLocalVideo ? <p className="mt-2 text-[11px] leading-4 text-muted">在编辑框中加入一段录音，即可用于{comfyAudioLabel(localMode)}。生成进度与结果在画板显示。</p> : isVideo && <p className="mt-2 text-[11px] leading-4 text-muted">{videoOptions.kind === "frames2video" ? "按编辑框中的参考顺序：第 1 张为首帧，第 2 张为尾帧。" : videoOptions.kind === "multimodal2video" ? `支持图片与视频参考；参考视频每段及总时长均须为 2–${videoOptions.model_version === "seedance2.5" ? 30 : 15} 秒。` : ""}{generation.videoChannel === "cloud" ? "使用 Bowerbird Bcoin，按提交时锁定的任务报价结算。" : "使用即梦积分，模型权限以官方账号为准。"}提交后停止等待，远端任务仍可能完成并计费。</p>}
               {cloudAgentMode && (
                 <p className="mt-2 text-[10px] leading-4 text-muted">
                   隐私说明：本次文字和所选参考图会加密上传至 Bowerbird Cloud，仅用于规划与执行。输入和过程内容通常最长保留 24 小时，最终结果最长保留 7 天；取消会停止后续调用，已上传副本仍按上述期限清理。接受后的图片保存到本地素材库，其余素材和本地数据库不会上传。
@@ -1526,7 +1536,8 @@ export function CreationBoard({
             <CodexModelSelect provider={chatProvider} value={chatCodexOptions ?? {}} onChange={options => onChatCodexOptionsChange?.(options)} catalog={chatModels} disabled={submitting} /></> : <>
           {isVideo && <VideoControls composer channel={generation.videoChannel} options={videoOptions} onChange={(options, videoChannel = generation.videoChannel) => setGeneration({ ...generation, localVideo: undefined, media: "video", videoChannel, videoOptions: options, ratio })} ratio={ratio} onRatioChange={selectRatio}
             local={onGenerateLocalVideo ? { options: generation.localVideo, onSelect: () => { setLocalEnvironment({ ready: false, checking: true, message: "正在检测环境…" }); setGeneration({ ...generation, localVideo: { ...DEFAULT_COMFY_VIDEO } }); }, onChange: localVideo => setGeneration({ ...generation, localVideo }) } : undefined} />}
-          {isLocalVideo && !isCollapsed && localMode !== "text" && <LocalVideoFrames mode={localMode} frames={localFrames.slice(0, localFrameCount)} ignored={references.length - Math.min(localFrameCount, localFrames.length)} />}
+          {isLocalVideo && !isCollapsed && (localMode !== "text" || references.length > 0) && <LocalVideoFrames mode={localMode}
+            frames={localFrames.slice(0, localFrameCount)} audio={localAudio} ignored={references.length - localAudio.length - Math.min(localFrameCount, localFrames.length)} />}
           {isLocalVideo && localAllowed && <ComfyEnvironmentControl key={cloudAuth?.user_id} composer node={{ comfyVideo: generation.localVideo }} disabled={submitting} onChange={patch => { if (patch.comfyVideo) setGeneration(current => ({ ...current, localVideo: patch.comfyVideo })); }} onStatusChange={setLocalEnvironment} />}
           {/* Cloud Agent 仍接受显式比例；仅终端型 Agent 不走 Bowerbird 生图参数。
               flex：比例 / 生成选项两个选择器水平并排（外层缺 flex 时 block 根会竖着叠成

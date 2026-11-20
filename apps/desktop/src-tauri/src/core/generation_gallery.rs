@@ -7,11 +7,16 @@ pub use manual::{GalleryMerge, GalleryMergeInput};
 
 pub(crate) const WORKFLOW_GALLERY_CTE: &str = concat!(r#"
 workflow_steps AS MATERIALIZED (
-  SELECT w.project_id,s.key AS source_id,s.value AS step
+  SELECT w.project_id,s.key AS source_id,
+    CASE WHEN json_extract(s.value,'$.comfyOptimization') IS NOT NULL
+      THEN json_remove(s.value,'$.agentRunId') ELSE s.value END AS step
   FROM canvas_workflows w,json_each(COALESCE(json_extract(w.document_json,'$.runs'),json_array(json_extract(w.document_json,'$.run')))) r,
     json_each(r.value,'$.steps') s
-  -- Prompt optimization can have an agentRunId, but produces no media.
-  WHERE json_extract(s.value,'$.comfyOptimization') IS NULL
+  -- Auto-optimized images use the ordinary image job. The optimizer's agentRunId is text-only.
+  WHERE json_extract(s.value,'$.comfyOptimization') IS NULL OR (
+    json_type(s.value,'$.comfyAutoGeneration.imageInput')='object'
+    AND json_type(s.value,'$.jobId')='text' AND json_extract(s.value,'$.jobId')<>''
+  )
 ),
 workflow_job_roots AS (
   SELECT project_id,source_id,json_extract(step,'$.jobId') AS job_id FROM workflow_steps

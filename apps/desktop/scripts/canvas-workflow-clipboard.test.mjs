@@ -67,10 +67,11 @@ try {
   await page.evaluate(async()=>{
     const {captureCanvasClipboard,cloneCanvasClipboard}=await import('/src/lib/canvasClipboard.ts');const {newWorkflowNode}=await import('/src/lib/canvasWorkflow.ts');
     const native=window.snapshot().nodes.find(n=>n.id==='old'),group={id:'group',projectId:'p',name:'组',role:null,x:10,y:10,width:300,height:200,zIndex:1,createdAt:1,updatedAt:1};
-    const node={...newWorkflowNode('generation',400,10,'codex'),id:'g',prompt:'test',inputs:{image:[{groupId:'group',assetIds:['existing']},{assetId:'existing',assetNodeId:'external'}],text:[{nodeId:'external',portId:'text'}]}};
+    const node={...newWorkflowNode('generation',400,10,'codex'),id:'g',prompt:'test',inputs:{image:[{groupId:'group',assetIds:['existing']},{assetId:'existing',assetNodeId:'external'}],text:[{nodeId:'external',portId:'text'}]},savedComfyAudio:[{assetId:'recording',assetNodeId:'old'}]};
     const value=captureCanvasClipboard('p',new Set(['g','group']),[native],[group],[{projectId:'p',groupId:'group',nodeId:'old',ordinal:0}],[node]);
     const copy=cloneCanvasClipboard(value,'another',100,100);
     if(copy.workflow[0].inputs.image[0].groupId!==copy.groups[0].id||copy.items[0].nodeId!==copy.nodes[0].id||copy.workflow[0].inputs.text.length||copy.workflow[0].inputs.image[1].assetNodeId)throw Error('group/cross-project remap');
+    if(copy.workflow[0].savedComfyAudio[0].assetNodeId!==copy.nodes[0].id)throw Error('inactive H3 recording source remap');
     // One visible automatic wire can contain multiple typed inputs and prompt references.
     const text={canvasNodeId:'old',cellId:'*text',autoConnect:'automatic'},image={canvasNodeId:'old',cellId:'*',autoConnect:'automatic'};
     const automatic={...newWorkflowNode('generation',400,10,'codex'),id:'automatic-card',inputs:{text:[text],image:[image,{assetId:'existing'}]},promptReferences:[{id:'words',type:'text',input:text,label:'文本'},{id:'picture',type:'image',input:image,label:'图片'}]};

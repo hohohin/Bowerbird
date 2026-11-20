@@ -109,6 +109,24 @@ try {
   await page.waitForTimeout(80);
   assert.equal(await editor.innerText(), '你好', 'Chinese composition commits once');
   await cdp.detach();
+  await editor.fill('参考');
+  await editor.press('End');
+  const asset = page.locator('.library-home [data-asset-id]').first();
+  await asset.waitFor();
+  const reference = editor.locator(`[data-asset-id="${await asset.getAttribute('data-asset-id')}"]`);
+  await asset.dblclick();
+  await reference.waitFor();
+  await caret.waitFor({ state: 'visible' });
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const imageBox = await reference.boundingBox();
+  const caretBox = await caret.boundingBox();
+  const caretCenter = caretBox.y + caretBox.height / 2;
+  assert.ok(caretBox.x >= imageBox.x + imageBox.width - 1
+    && caretCenter >= imageBox.y && caretCenter <= imageBox.y + imageBox.height,
+  'the caret stays beside the appended image on the same line');
+  await page.keyboard.type('继续');
+  assert.equal(await reference.evaluate(node => node.nextSibling?.textContent), '继续',
+    'typing continues directly after the reference');
   await editor.fill('');
   assert.equal(await editor.evaluate(el => getComputedStyle(el, '::before').opacity), '0', 'focus hides placeholder');
   for (const theme of ['dark', 'light']) {

@@ -377,6 +377,20 @@ const ASSET_COLS_A: &str = "a.id, a.name, a.ext, a.origin_path, a.store_path, a.
     a.source_url, a.folder_id, a.created_at, a.file_mtime, a.generation_session_id, \
     a.reference_count, a.library_hidden";
 
+// Match a current, indexed video revision without opening every original during search.
+pub(super) fn video_transcript_keyword_match(pattern: &str) -> String {
+    let video = super::material_catalog::VIDEO;
+    format!("({video} AND EXISTS(SELECT 1 FROM analyses vt WHERE vt.asset_id=a.id AND vt.kind='video_transcript' \
+        AND json_extract(vt.payload,'$.current')=1 AND json_extract(vt.payload,'$.status')='completed' \
+        AND a.size IS json_extract(vt.payload,'$.assetSize') \
+        AND a.file_mtime IS json_extract(vt.payload,'$.assetModified') \
+        AND EXISTS(SELECT 1 FROM assets vta LEFT JOIN external_assets vte ON vte.asset_id=vta.id \
+            LEFT JOIN creative_file_fingerprints vtf ON vtf.asset_id=vta.id WHERE vta.id=a.id \
+            AND (COALESCE(vte.fingerprint,vtf.sha256) IS json_extract(vt.payload,'$.indexedHash') \
+                OR COALESCE(vte.fingerprint,vtf.sha256)=json_extract(vt.payload,'$.sourceHash'))) \
+        AND json_extract(vt.payload,'$.text') LIKE {pattern} ESCAPE '\\'))")
+}
+
 /// 瀑布流「同流程合并」：列表已 `ORDER BY created_at DESC` → 同 generation_session_id 的首见者
 /// 即最新一张。按 session 去重保首见、丢后续过程图；无 session（非生成图）原样全留。
 /// search_assets 同为 created_at DESC 序，行为一致。泛型：Asset 与 PromptedAsset 各传
@@ -1446,9 +1460,11 @@ impl Database {
         }
         // 每个词一个参数位 ?N；term_cond 生成该词的多维度 OR 块（正词取原式、负词包 NOT）。
         let term_cond = |p: usize| {
+            let transcript = video_transcript_keyword_match(&format!("?{p}"));
             format!(
                 "(a.name LIKE ?{p} ESCAPE '\\' \
-                  OR a.source_url LIKE ?{p} ESCAPE '\\' \
+                  OR COALESCE(a.source_url,'') LIKE ?{p} ESCAPE '\\' \
+                  OR {transcript} \
                   OR EXISTS(SELECT 1 FROM asset_tags at JOIN tags t ON t.id = at.tag_id \
                     WHERE at.asset_id = a.id AND t.name LIKE ?{p} ESCAPE '\\') \
                   OR EXISTS(SELECT 1 FROM asset_prompts ap JOIN prompts pm ON pm.id = ap.prompt_id \

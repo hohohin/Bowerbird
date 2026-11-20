@@ -4,6 +4,8 @@ import { replicationMessages, validateReplicationResult, validateReplicationVide
 import { validateReplication } from "../../../cloud/supabase/functions/_shared/replication.ts";
 import type { ReplicationSpeechInput } from "../../../cloud/supabase/functions/_shared/replication-speech.ts";
 import { recognizeSpeech } from "./speech.ts";
+import { runFileSpeechJob, type FileSpeechClaim } from "./file-speech-job.ts";
+import { FILE_SPEECH_OPERATION, parseFileSpeechAudio, type FileSpeechAudio } from "../../../cloud/supabase/functions/_shared/file-speech.ts";
 import { shortRewrite } from "../../../cloud/supabase/functions/_shared/bcoin-text.ts";
 import { createHash, randomUUID } from "node:crypto";
 import { IdlePollBackoff } from "../idle-poll-backoff.ts";
@@ -32,6 +34,7 @@ export interface UnderstandWorkerConfig {
   arkReplicationVideoModel?: string;
   arkReplicationTextModel?: string;
   doubaoSpeechApiKey?: string;
+  doubaoFileSpeechApiKey?: string;
   mock: boolean;
   pollIntervalMs: number;
   heartbeatIntervalMs: number;
@@ -45,12 +48,14 @@ interface ClaimedJob {
   job: null | { id: string; inputManifestHash: string; attempt: number };
   lease?: { leaseId: string; leaseSeconds: number };
   inputUrl?: string;
+  fileSpeech?: FileSpeechClaim;
 }
 
 interface UnderstandInput {
   schema_version: number;
-  operation: "caption" | "autoname" | "classify" | "speech-transcription" | ReplicationPayload["operation"];
+  operation: "caption" | "autoname" | "classify" | "speech-transcription" | typeof FILE_SPEECH_OPERATION | ReplicationPayload["operation"];
   audio?: ReplicationSpeechInput;
+  fileSpeechAudio?: FileSpeechAudio;
   video?: ReplicationPayload["video"];
   rewrite?: ReplicationPayload["rewrite"];
   /** null = 纯文本调用（生成图维度数据命名），图片不上云；caption/classify 必带一张图。 */
@@ -111,6 +116,7 @@ export function configFromEnv(env: Record<string, string | undefined>): Understa
     arkReplicationVideoModel: env.ARK_REPLICATION_VIDEO_MODEL?.trim(),
     arkReplicationTextModel: env.ARK_REPLICATION_TEXT_MODEL?.trim(),
     doubaoSpeechApiKey: env.DOUBAO_SPEECH_API_KEY?.trim(),
+    doubaoFileSpeechApiKey: env.DOUBAO_FILE_SPEECH_API_KEY?.trim() || env.DOUBAO_SPEECH_API_KEY?.trim(),
     mock: (env.BOWERBIRD_CLOUD_MOCK ?? "false") === "true",
     pollIntervalMs: positiveInt(env.UNDERSTAND_POLL_INTERVAL_MS, 2_000, "UNDERSTAND_POLL_INTERVAL_MS"),
     heartbeatIntervalMs: positiveInt(env.UNDERSTAND_HEARTBEAT_INTERVAL_MS, 30_000, "UNDERSTAND_HEARTBEAT_INTERVAL_MS"),
@@ -255,8 +261,14 @@ async function mockUnderstand(input: UnderstandInput): Promise<string> {
 
 function parseInput(value: unknown): UnderstandInput {
   if (!isRecord(value) || value.schema_version !== 1 ||
-      !["caption", "autoname", "classify", "video-analysis", "text-rewrite", "speech-transcription"].includes(String(value.operation))) {
+      !["caption", "autoname", "classify", "video-analysis", "text-rewrite", "speech-transcription", FILE_SPEECH_OPERATION].includes(String(value.operation))) {
     throw new Error("invalid_understand_input");
+  }
+  if (value.operation === FILE_SPEECH_OPERATION) {
+    return {
+      schema_version: 1, operation: FILE_SPEECH_OPERATION, fileSpeechAudio: parseFileSpeechAudio(value.audio),
+      image: null, instruction: null, mock_scenario: null,
+    };
   }
   // image=null 合法（纯文本命名）；带图时校验结构与编码。
   const imageOk = value.image == null ||
@@ -267,8 +279,11 @@ function parseInput(value: unknown): UnderstandInput {
   return value as unknown as UnderstandInput;
 }
 
-async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: string): Promise<UnderstandInput> {
-  const response = await fetchImpl(url, { method: "GET" });
+async function fetchInput(fetchImpl: WorkerFetch, url: string, expectedHash: string, fileSpeech: boolean): Promise<UnderstandInput> {
+  const response = await fetchImpl(url, {
+    method: "GET",
+    ...(fileSpeech ? { redirect: "error", signal: AbortSignal.timeout(45_000) } as const : {}),
+  });
   if (!response.ok) throw new Error(`input_http_${response.status}`);
   const text = await response.text();
   const actualHash = createHash("sha256").update(text).digest("hex");
@@ -295,14 +310,26 @@ async function executeClaim(
   fetchImpl: WorkerFetch,
   claimed: ClaimedJob,
 ): Promise<void> {
-  if (!claimed.job || !claimed.lease?.leaseId || !claimed.inputUrl) throw new Error("invalid_claim_response");
+  if (!claimed.job || !claimed.lease?.leaseId || (!claimed.inputUrl && !claimed.fileSpeech?.submittedAt)) {
+    throw new Error("invalid_claim_response");
+  }
   const { id: jobId, inputManifestHash } = claimed.job;
   const leaseId = claimed.lease.leaseId;
   const heartbeatState = { stopped: false };
   void heartbeatLoop(control, jobId, leaseId, config.heartbeatIntervalMs, heartbeatState);
   let submitted = false;
   try {
-    const input = await fetchInput(fetchImpl, claimed.inputUrl, inputManifestHash);
+    const speechAuth = { apiKey: config.doubaoFileSpeechApiKey, mock: config.mock };
+    if (claimed.fileSpeech?.submittedAt) {
+      await runFileSpeechJob(null, claimed.fileSpeech, { jobId, leaseId }, speechAuth, body => control.post(body), fetchImpl);
+      return;
+    }
+    const input = await fetchInput(fetchImpl, claimed.inputUrl!, inputManifestHash, !!claimed.fileSpeech);
+    if (input.operation === FILE_SPEECH_OPERATION || claimed.fileSpeech) {
+      if (!input.fileSpeechAudio || !claimed.fileSpeech) throw new Error("file_speech_claim_mismatch");
+      await runFileSpeechJob(input.fileSpeechAudio, claimed.fileSpeech, { jobId, leaseId }, speechAuth, body => control.post(body), fetchImpl);
+      return;
+    }
     if (input.operation === "video-analysis" && !config.mock) await validateReplicationVideo(input.video!);
     // Resolve once before submission; retries use the same prompt even during maintenance.
     if (input.operation === "speech-transcription" && !config.mock && !config.doubaoSpeechApiKey) throw new KnownProviderError("not_configured", "豆包语音服务尚未配置");
@@ -319,6 +346,12 @@ async function executeClaim(
     }));
   } catch (error) {
     if (control.remainingMs(leaseId) <= 1 || error instanceof ControlDeadlineError) return;
+    if (claimed.fileSpeech) {
+      // Lease recovery consults the durable submit fence. A lost control RPC
+      // response could mean that either the fence or the result was committed.
+      console.error(JSON.stringify({ event: "file_speech_claim_interrupted", job_id: jobId, error: safeErrorKind(error) }));
+      return;
+    }
     const known = error instanceof KnownProviderError;
     const action = known || !submitted ? "fail" : "outcome_unknown";
     const safeErrorCode = known ? error.safeCode : safeErrorKind(error);
@@ -356,7 +389,7 @@ export async function runUnderstandWorker(
       }
     }
     try {
-      const claimed = await control.post({ action: "claim" }) as unknown as ClaimedJob;
+      const claimed = await control.post({ action: "claim", fileSpeechCapable: true }) as unknown as ClaimedJob;
       if (claimed.job) {
         idleBackoff.reset();
         await executeClaim(config, control, ark, fetchImpl, claimed);

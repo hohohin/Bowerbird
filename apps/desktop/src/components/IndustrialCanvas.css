@@ -293,7 +293,6 @@ html[data-theme] .composer-glass .creation-editor .ProseMirror.is-empty::before 
 html[data-theme] .composer-glass .creation-editor .ProseMirror.is-empty:focus::before { opacity:0; }
 html[data-theme] .composer-glass .creation-editor .ProseMirror p:not(:has(>br:only-child)) { width:fit-content;max-width:100%;background:linear-gradient(90deg,rgb(var(--projection-tag) / .07),transparent 92%); }
 html[data-theme] .composer-glass:not(.is-collapsed) .composer-editor-scroll .collection-scroll-viewport { max-height:min(252px,28vh); }
-.composer-glass .creation-editor img.ProseMirror-separator { display:inline;width:0;height:0;margin:0;border:0; }
 .composer-description.has-terminal-caret { position:relative; }
 .composer-description.has-terminal-caret .ProseMirror { caret-color:transparent; }
 .composer-terminal-caret { position:absolute;width:4px;height:20px;background:var(--composer-ink);box-shadow:0 0 7px color-mix(in srgb,var(--composer-accent) 35%,transparent);pointer-events:none;animation:composer-caret-blink 1.1s steps(1,end) infinite; }

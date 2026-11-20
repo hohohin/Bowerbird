@@ -20,6 +20,8 @@ pub(super) use artifacts::{
 // SHA-256 of the ordered artifact hashes and the preprocessing contract below.
 pub(super) const MODEL_ID: &str =
     "siglip2-cfb1e19ef6223dd57fe414048afc78ed99f94855e5bb331aabe1cb64d2cc9e95";
+// This relevance floor is specific to the normalized outputs of this FP32 model.
+pub(super) const SEARCH_MIN_COSINE: f32 = 0.085;
 const SIDE: usize = 224;
 const TEXT_LENGTH: usize = 64;
 const PAD: i64 = 0;

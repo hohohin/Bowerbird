@@ -19,20 +19,28 @@ export interface ComfyVideoOptions {
   resolution: 0.6 | 0.8 | 0.98 | 1;
 }
 export const DEFAULT_COMFY_VIDEO: ComfyVideoOptions = { endpoint: "http://127.0.0.1:8000", seconds: 8, ratio: "9:16", resolution: 0.8 };
+export const H3_IMAGE_ENDPOINT = "http://127.0.0.1:18190";
 export const H3_VIDEO_RESOLUTIONS = [{ value: 0.6, label: "低" }, { value: 0.8, label: "中" }, { value: 0.98, label: "高" }] as const;
 export function comfyVideoMode(options?: ComfyVideoOptions): ComfyVideoMode { return options?.mode ?? "frames"; }
 export function comfyVideoOptionsForMode(options: ComfyVideoOptions, mode: ComfyVideoMode): ComfyVideoOptions {
   if (comfyVideoMode(options) === mode) return options;
   return { ...options, mode, seconds: mode === "frames" ? 8 : 5, resolution: mode === "frames" ? 0.8 : 0.98, ratio: "9:16" };
 }
-export interface ComposerLocalVideoRequest { prompt: string; firstFrame: string; lastFrame?: string; options: ComfyVideoOptions }
+export interface ComposerLocalVideoRequest { prompt: string; firstFrame: string; lastFrame?: string; audioAssetId?: string; options: ComfyVideoOptions }
 /** Match the editor's ordered image references; never submit extra images or videos. */
 export function localVideoFrames(references: Asset[]) {
   return references.filter(asset => /\.(png|jpe?g|webp|bmp)(?:[?#].*)?$/i.test(asset.store_path ?? ""));
 }
-export function localVideoInputError(prompt: string, frames: Asset[], options: ComfyVideoOptions): string | null {
+export function comfyAudioLabel(mode: ComfyVideoMode) {
+  return mode === "reference" ? "音色参考" : "录音引导";
+}
+export function comfyAudioHint(mode: ComfyVideoMode) {
+  return mode === "reference" ? "用 <Audio 1> 指代录音的音色。" : "录音从第 0 秒参与生成，超出视频时长的部分会被裁掉。";
+}
+export function localVideoInputError(prompt: string, frames: Asset[], options: ComfyVideoOptions, audio: Asset[] = []): string | null {
   const mode = comfyVideoMode(options);
   if (mode !== "text" && !frames.length) return mode === "reference" ? "请在创作描述中添加一张参考图。" : "请在创作描述中添加首帧图片。";
+  if (audio.length > 1) return "本地 H3 每次可使用一段录音，请移除多余录音。";
   if (!prompt.trim() || prompt.length > 16000) return "请填写 1–16000 字创作描述。";
   if (!Number.isInteger(options.seconds) || options.seconds < 1 || options.seconds > 15) return "本地视频时长须为 1–15 秒的整数。";
   if (![0.6, 0.8, 0.98, 1].includes(options.resolution) || !["auto", "9:16", "16:9", "4:3", "3:4", "1:1"].includes(options.ratio)) return "请选择本地视频支持的比例和分辨率。";
@@ -46,7 +54,7 @@ export function comfyVideoSize(options: ComfyVideoOptions, firstFrame?: { width?
   return { width: Math.round(w * scale / 32) * 32, height: Math.round(h * scale / 32) * 32,
     frames: Math.max(5, Math.ceil((options.seconds * 24 - 5) / 17) * 17 + 5) };
 }
-export interface ComfyVideoInput extends ComfyVideoOptions { firstFrame: string; lastFrame?: string; prompt: string }
+export interface ComfyVideoInput extends ComfyVideoOptions { firstFrame: string; lastFrame?: string; audioAssetId?: string; prompt: string }
 export interface ComfyVideoProgress { label: string; value?: number | null; max?: number | null }
 export interface ComfyVideoStatus { status: "queued" | "running" | "offline" | "unknown" | "failed" | "done" | "cancelled"; originalService?: [string, ComfyVideoMode, (string | null)?]; message: string; asset?: Asset; progress?: ComfyVideoProgress | null; elapsedMs?: number | null }
 export function comfyVideo(action: "start" | "status" | "cancel", projectId: string, requestId: string, input?: ComfyVideoInput) {

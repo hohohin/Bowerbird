@@ -10,6 +10,8 @@ const STORAGE = ROUTES.storage.map(route => ({ ...route, match: new RegExp(route
 const PREFIX = "/api/cloud";
 const PRIVATE = { "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Content-Type-Options": "nosniff" };
 const JSON_LIMIT = 20 * 1024 * 1024;
+// A bounded 4 MiB transcript can be escaped again by the understanding JSON envelope.
+const UNDERSTAND_RESULT_LIMIT = 2 * 4 * 1024 * 1024 + 4096;
 const fail = status => Object.assign(new Error("Cloud gateway request failed"), { status });
 
 async function readLimited(stream, limit) {
@@ -169,7 +171,8 @@ export function createCloudProxy({
           await pipeline(Readable.fromWeb(result.body), response, { signal: controller.signal });
           return;
         }
-        const payload = result.body ? await readLimited(result.body, 1_048_576) : Buffer.alloc(0);
+        const resultLimit = path === "/functions/v1/understand-proxy" ? UNDERSTAND_RESULT_LIMIT : 1_048_576;
+        const payload = result.body ? await readLimited(result.body, resultLimit) : Buffer.alloc(0);
         try { JSON.parse(payload.toString("utf8")); } catch { throw fail(502); }
         const retry = result.headers.get("retry-after");
         response.writeHead(result.status, { ...PRIVATE, "Content-Type": "application/json; charset=utf-8", "Content-Length": payload.length,

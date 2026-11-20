@@ -35,6 +35,9 @@ try {
   await page.reload();
 
   const card = page.locator('[data-workflow-card="draw"]');
+  const runAction = card.getByRole('button', { name: /^(运行|运行此卡片|重试)$/ });
+  const expectAction = label => runAction.filter({ hasText: new RegExp(`^${label}$`) }).waitFor({ timeout: 5000 });
+  const prompt = card.getByRole('textbox', { name: '卡片指令', exact: true });
   const item = id => card.locator(`[data-workflow-reference-asset="${id}"]`);
   const expectOrder = expected => page.waitForFunction(expected =>
     Array.from(document.querySelectorAll('[data-workflow-card="draw"] [data-workflow-reference-asset]'),
@@ -46,13 +49,13 @@ try {
     await page.mouse.move(c.x + c.width * .8, c.y + c.height / 2, { steps: 12 });
     await page.mouse.up();
   }
-  async function generate() {
-    return page.evaluate(async () => {
+  async function generate(retry = false) {
+    const priorRun = await page.evaluate(async () => {
       const { api } = await import('/src/lib/api.ts');
       const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
       const controller = canvasWorkflowController('p');
       const assets = await api.getAssetsByIds(['existing', 'a', 'b', 'c', 'd']);
-      const requests = [];
+      const requests = window.generationRequests = [];
       window.store.setState({ codexHealth: { ok: true, reason: '' },
         cloudEntitlement: { policy: { can_use_byo: true, max_parallel_jobs: 3 }, balances: { daily: 0, topup: 0, sub: 0 } } });
       api.codexCreateImage = async args => {
@@ -60,12 +63,21 @@ try {
           referenceNodeIds: args.referenceNodeIds, prompt: args.prompt });
         return null;
       };
-      await controller.start('draw', true);
-      if (controller.document.run.status !== 'done') throw Error(JSON.stringify(controller.issue));
-      return requests;
+      return controller.document.run?.id;
     });
+    if (retry) await runAction.click();
+    else await page.evaluate(async () => {
+      const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+      await canvasWorkflowController('p').start('draw', true);
+    });
+    await page.waitForFunction(previous => {
+      const run = JSON.parse(sessionStorage.getItem('workflow-p')).document.run;
+      return run?.id !== previous && run?.status === 'done';
+    }, priorRun, { timeout: 5000 });
+    return page.evaluate(() => window.generationRequests);
   }
   await expectOrder(['a', 'b', 'c']);
+  await expectAction('运行');
   const before = await card.boundingBox();
   await dragFirstToLast();
   await expectOrder(['b', 'c', 'a']);
@@ -84,6 +96,17 @@ try {
   await expectOrder(['b', 'c', 'a']);
   assert.deepEqual(await generate(), [{ ids: ['b', 'c', 'a'], referenceNodeIds: [null, 'explicit-reference', null],
     prompt: '主体 @图片3 @图片1，背景 @图片2' }], 'library references reach the provider without creating canvas nodes');
+  await expectAction('重试');
+  await prompt.press('End');
+  await prompt.pressSequentially('，暖色');
+  await expectAction('运行');
+  assert.equal(await prompt.evaluate(editor => editor === document.activeElement), true, 'the action updates during prompt editing');
+  await prompt.press(process.platform === 'darwin' ? 'Meta+z' : 'Control+z');
+  await expectAction('重试');
+  assert.equal((await generate(true)).length, 1, 'clicking retry starts one new generation');
+  await expectAction('重试');
+  await page.reload();
+  await expectAction('重试');
   // A shared template carries positions across different sources and asset identities.
   const rebound = await page.evaluate(async () => {
     const { compileGenerationPrompt, generationInputNode, workflowInputValues } = await import('/src/lib/canvasWorkflow.ts');
@@ -110,8 +133,10 @@ try {
     window.emitChange();
   });
   await expectOrder(['existing', 'c', 'd']);
+  await expectAction('运行');
   assert.deepEqual(await generate(), [{ ids: ['existing', 'c', 'd'], referenceNodeIds: [null, 'explicit-reference', null],
     prompt: '主体 @图片3 @图片1，背景 @图片2' }], 'an unbound copy does not acquire a conversation edge');
+  await expectAction('重试');
 
   assert.equal(await card.locator('.workflow-bindings button').count(), 0, 'image sources have no separate name chips');
   const remove = id => card.locator(`[data-workflow-reference-remove="${id}"]`);
@@ -122,6 +147,7 @@ try {
   await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-workflow-reference-remove="existing"]')).opacity === '1');
   await remove('existing').click();
   await expectOrder(['c', 'd']);
+  await expectAction('运行');
   assert.equal(await card.locator('.workflow-bindings button').count(), 0);
   await page.evaluate(async () => {
     const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
@@ -129,8 +155,23 @@ try {
   });
   await page.reload();
   await expectOrder(['c', 'd']);
+  await expectAction('运行');
   assert.equal(await card.locator('.workflow-bindings button').count(), 0);
   assert.deepEqual((await generate())[0].ids, ['c', 'd'], 'disconnect affects submitted references after reload');
+  await expectAction('重试');
+  await page.evaluate(async () => {
+    const { canvasWorkflowController } = await import('/src/lib/canvasWorkflowRuntime.ts');
+    const c = canvasWorkflowController('p');
+    const draw = c.document.nodes.find(node => node.id === 'draw');
+    await c.edit(c.document.nodes.map(node => node === draw
+      ? { ...node, inputs: { ...node.inputs, image: [...node.inputs.image, { assetId: 'b' }] } } : node));
+  });
+  await expectOrder(['c', 'd', 'b']);
+  await expectAction('运行');
+  await item('b').hover();
+  await remove('b').click();
+  await expectOrder(['c', 'd']);
+  await expectAction('重试');
   await remove('c').focus();
   await page.keyboard.press('Enter');
   await expectOrder(['d']);
@@ -177,8 +218,12 @@ try {
   };
   const [videoRequest] = await Promise.all([simulatedVideo, checkLock()]);
   assert.deepEqual(videoRequest, { mode: 'frames2video', ids: ['b', 'a'] });
+  await expectAction('重试');
+  await item('a').press('ArrowLeft');
+  await expectOrder(['a', 'b']);
+  await expectAction('运行');
   assert.deepEqual(errors, []);
-  console.log('PASS thumbnail drag, undo, reload, template rebinding, canvas reference origins, dynamic inputs, prompt numbering, keyboard reorder, frame order and running lock');
+  console.log('PASS thumbnail drag, undo, reload, template rebinding, canvas reference origins, dynamic inputs, prompt numbering, keyboard reorder, frame order, running lock and generation button state');
 } finally {
   await browser.close();
   await server.close();

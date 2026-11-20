@@ -911,7 +911,11 @@ pub async fn list_analyses_by_asset(
     asset_id: String,
 ) -> Result<Vec<Analysis>, AppError> {
     let db = db.inner().clone();
-    tokio::task::spawn_blocking(move || db.list_analyses_by_asset(&asset_id))
+    tokio::task::spawn_blocking(move || {
+        let mut results = db.list_analyses_by_asset(&asset_id)?;
+        results.retain(|analysis| analysis.kind != "video_transcript");
+        Ok(results)
+    })
         .await
         .map_err(|e| AppError::Other(e.to_string()))?
 }
